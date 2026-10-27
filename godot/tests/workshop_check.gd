@@ -190,6 +190,7 @@ func _run() -> void:
 	await _city()
 	await _edit_tools()
 	await _reference()
+	await _audit_tools()
 	await _side_panels()
 	await _save()
 	await _exit()
@@ -301,6 +302,184 @@ func _drag_mouse(from: Vector2, to: Vector2, alt := false) -> void:
 	release.global_position = to
 	release.alt_pressed = alt
 	root.push_input(release)
+	await _frames(2)
+
+
+func _hover(at: Vector2) -> void:
+	var motion := InputEventMouseMotion.new()
+	motion.position = at
+	motion.global_position = at
+	motion.relative = Vector2(1, 0)
+	root.push_input(motion)
+	await _frames(2)
+
+
+func _shift_drag(points: Array) -> void:
+	var first: Vector2 = points[0]
+	var press := InputEventMouseButton.new()
+	press.button_index = MOUSE_BUTTON_LEFT
+	press.pressed = true
+	press.position = first
+	press.global_position = first
+	press.shift_pressed = true
+	press.button_mask = MOUSE_BUTTON_MASK_LEFT
+	root.push_input(press)
+	await _frames(1)
+	var last := first
+	for index in range(1, points.size()):
+		var at: Vector2 = points[index]
+		var motion := InputEventMouseMotion.new()
+		motion.position = at
+		motion.global_position = at
+		motion.relative = at - last
+		motion.shift_pressed = true
+		motion.button_mask = MOUSE_BUTTON_MASK_LEFT
+		root.push_input(motion)
+		last = at
+		await _frames(1)
+	var release := InputEventMouseButton.new()
+	release.button_index = MOUSE_BUTTON_LEFT
+	release.pressed = false
+	release.position = last
+	release.global_position = last
+	release.shift_pressed = true
+	root.push_input(release)
+	await _frames(3)
+
+
+func _zones() -> Array:
+	return ((workshop.state.get("war", {}) as Dictionary).get("climateZones", []) as Array)
+
+
+func _row_toggle(panel: Node, caption: String) -> Button:
+	var label := _find_label(panel, caption)
+	if label == null:
+		return null
+	var buttons := _find_type(label.get_parent(), "Button")
+	return buttons[0] if not buttons.is_empty() else null
+
+
+func _audit_tools() -> void:
+	workshop.close_panel()
+	workshop.zoom_to(["FRA.8_1"], 6.0)
+	await _wait(1.0)
+	var centre := _screen_of_region("FRA.8_1")
+	workshop.set_tool("select")
+	await _hover(centre)
+	_check("Select shows a hand over a region", workshop.map._overlay.mouse_default_cursor_shape == Control.CURSOR_POINTING_HAND)
+	workshop.set_tool("draw")
+	await _hover(centre + Vector2(3, 0))
+	_check("drawing tools show a crosshair", workshop.map._overlay.mouse_default_cursor_shape == Control.CURSOR_CROSS)
+	workshop.set_tool("climate")
+	await _frames(2)
+	var before := _zones().size()
+	var circle: Array = []
+	var middle := centre + Vector2(140, 10)
+	for step in range(25):
+		circle.append(middle + Vector2(cos(TAU * step / 24.0), sin(TAU * step / 24.0)) * 55.0)
+	await _shift_drag(circle)
+	var made := await _until(func() -> bool: return _zones().size() == before + 1, 10.0)
+	_check("Shift-drag draws a climate zone freehand", made and ((_zones().back() as Dictionary).get("rings", [[]])[0] as Array).size() >= 10, str(_zones().size()))
+	await _frames(4)
+	if made:
+		var zone_id := str((_zones().back() as Dictionary).get("id", ""))
+		_check("the new zone is picked", str(workshop.war_selection.get("id", "")) == zone_id)
+		var ring: Array = (_zones().back() as Dictionary)["rings"][0]
+		var corner: Array = ring[3]
+		var at := workshop.map.global_position + workshop.map.screen_of(Vector2(float(corner[0]), float(corner[1])))
+		await _hover(at)
+		await _drag_mouse(at, at + Vector2(30, 22))
+		await _wait(1.0)
+		var reshaped := await _until(func() -> bool:
+			for zone in _zones():
+				if str((zone as Dictionary).get("id", "")) == zone_id:
+					var now: Array = (zone as Dictionary)["rings"][0][3]
+					return absf(float(now[0]) - float(corner[0])) > 0.0001
+			return false, 10.0)
+		_check("dragging a picked zone's point reshapes it", reshaped)
+		var edge_a: Array = ring[6]
+		var edge_b: Array = ring[7]
+		var count_before := ring.size()
+		var on_edge := workshop.map.global_position + (workshop.map.screen_of(Vector2(float(edge_a[0]), float(edge_a[1]))) + workshop.map.screen_of(Vector2(float(edge_b[0]), float(edge_b[1])))) * 0.5
+		await _hover(on_edge)
+		await _drag_mouse(on_edge, on_edge + Vector2(-18, 14))
+		await _wait(1.0)
+		var inserted := await _until(func() -> bool:
+			for zone in _zones():
+				if str((zone as Dictionary).get("id", "")) == zone_id:
+					return ((zone as Dictionary)["rings"][0] as Array).size() == count_before + 1
+			return false, 10.0)
+		_check("dragging a picked zone's edge adds a point", inserted)
+	await _shoot("ws-38-war-freehand")
+	workshop.set_tool("select")
+	workshop.close_panel()
+	await _frames(3)
+	var striped := await _until(func() -> bool: return workshop.map.region_overlays.stripes.size() > 0, 20.0)
+	_check("disputed regions are striped", striped, str(workshop.map.region_overlays.stripes.size()))
+	await workshop.request("workshop.group.create", {"name": "Testers", "selection": ["FRA.8_1", "FRA.1_1"]})
+	var outlined := await _until(func() -> bool: return workshop.map.region_overlays.outlines.size() > 0, 20.0)
+	_check("a group's area is outlined", outlined)
+	await _wait(0.8)
+	await _shoot("ws-39-overlays")
+	workshop.open_panel_named("layers")
+	await _frames(4)
+	var groups_switch := _row_toggle(workshop._panel, "Group outlines")
+	var freezing_switch := _row_toggle(workshop._panel, "Water that can freeze")
+	if groups_switch and freezing_switch:
+		groups_switch.button_pressed = false
+		freezing_switch.button_pressed = false
+		await _frames(2)
+	_check("the Group outlines and freezing switches work", groups_switch != null and not workshop.map.region_overlays.show_groups and not workshop.map.region_overlays.show_freezing and not workshop.map.region_overlays._hatch_layer.visible)
+	if groups_switch and freezing_switch:
+		groups_switch.button_pressed = true
+		freezing_switch.button_pressed = true
+		await _frames(2)
+	workshop.close_panel()
+	workshop.set_tool("move")
+	await _frames(2)
+	var target := _screen_of_region("FRA.8_1")
+	_mouse(target, true)
+	await _frames(1)
+	_drag_to(target, target + Vector2(10, 6))
+	await _frames(1)
+	_drag_to(target + Vector2(10, 6), target + Vector2(24, 14))
+	var previewing := await _until(func() -> bool: return not workshop.map.move_rings.is_empty(), 10.0)
+	_check("Move shows the region while it is dragged", previewing)
+	await _shoot("ws-40-move-preview")
+	_mouse(target + Vector2(24, 14), false)
+	await _wait(1.0)
+	workshop.undo()
+	await _wait(0.6)
+	workshop.set_tool("select")
+	var city := {}
+	for row in workshop.state.get("features", []):
+		if not bool((row as Dictionary).get("isMap", false)):
+			city = row
+	if not city.is_empty():
+		workshop.open_popup("feature", str(city.get("id", "")), centre, false)
+		await _frames(3)
+		var edits := _find_type(workshop._popup, "LineEdit")
+		if not edits.is_empty():
+			(edits[0] as LineEdit).grab_focus()
+		var escape := InputEventKey.new()
+		escape.keycode = KEY_ESCAPE
+		escape.pressed = true
+		root.push_input(escape)
+		await _frames(3)
+		_check("Escape closes a popup even while typing in it", workshop._popup == null)
+	workshop.open_panel_named("clipboard")
+	await _frames(3)
+	var simplify: CheckBox = null
+	for box in _find_type(workshop._panel, "CheckBox"):
+		if (box as CheckBox).text == "Simplify to this map's detail":
+			simplify = box
+	if simplify:
+		simplify.button_pressed = false
+		await _frames(1)
+	_check("Ctrl+V follows the panel's Simplify choice", simplify != null and not workshop.paste_simplified)
+	if simplify:
+		simplify.button_pressed = true
+	workshop.close_panel()
 	await _frames(2)
 
 
@@ -719,6 +898,127 @@ func _accept(host: Node, starts: String) -> bool:
 	return found
 
 
+func _write_vector_pmtiles(file: String) -> void:
+	var out := StreamPeerBuffer.new()
+	out.big_endian = false
+	out.put_data("PMTiles".to_ascii_buffer())
+	out.put_u8(3)
+	for value in [127, 1, 128, 0, 128, 0, 128, 0, 0, 0, 0]:
+		out.put_u64(value)
+	out.put_u8(1)
+	out.put_u8(1)
+	out.put_u8(1)
+	out.put_u8(1)
+	out.put_u8(0)
+	out.put_u8(4)
+	for value in [-1800000000, -850000000, 1800000000, 850000000]:
+		out.put_32(value)
+	out.put_u8(0)
+	out.put_32(0)
+	out.put_32(0)
+	out.put_u8(0)
+	var handle := FileAccess.open(file, FileAccess.WRITE)
+	handle.store_buffer(out.data_array)
+	handle.close()
+
+
+func _fmg(w: Workshop) -> void:
+	var root_dir := OS.get_environment("OH_NATIVE_ROOT")
+	var shown := await _until(func() -> bool: return w._fmg_tab.visible, 20.0)
+	_check("the GENERATE tab shows when the generator is served", shown)
+	if not shown:
+		return
+	w.toggle_fmg()
+	await _frames(4)
+	var drawer := w._fmg
+	_check("the Generate drawer opens", drawer != null and drawer.visible and _find_label(drawer, "Generate a world") != null and drawer._button.text == "⚙ Generate & import" and w._fmg_tab.label == "🗺 GENERATE ▸")
+	drawer.seed_text = "174920"
+	drawer.template = "continents"
+	drawer.size_id = "small"
+	drawer.states = "8"
+	var opened := root_dir.path_join("fmg-opened.txt")
+	OS.set_environment("OH_EDITOR_OPEN_LOG", opened)
+	var regions_before := w.map.ids.size()
+	drawer._button.pressed.emit()
+	await _until(func() -> bool: return FileAccess.get_file_as_string(opened).contains("oh-native-bridge.html"), 20.0)
+	OS.set_environment("OH_EDITOR_OPEN_LOG", "")
+	var url := FileAccess.get_file_as_string(opened).strip_edges().get_slice("\n", 0)
+	_check("Generate opens the bridge page in the browser", url.begins_with("http://127.0.0.1:") and url.contains("/fmg/oh-native-bridge.html#port=") and url.contains("token="), url.left(80))
+	await _shoot("ws-36-fmg-waiting")
+	var chrome := "C:/Program Files/Google/Chrome/Application/chrome.exe"
+	var pid := OS.create_process(chrome, PackedStringArray(["--headless=new", "--user-data-dir=" + root_dir.path_join("chrome-fmg"), "--no-first-run", "--disable-extensions", "--enable-unsafe-swiftshader", "--use-angle=swiftshader", "--window-size=1920,1080", url]))
+	var finished := await _until(func() -> bool: return not drawer.busy, 180.0)
+	if pid > 0:
+		OS.execute("taskkill", PackedStringArray(["/T", "/F", "/PID", str(pid)]))
+	var lines: Array = drawer.log_lines
+	var last := str(lines.back()) if not lines.is_empty() else ""
+	_check("the world arrives with React's progress lines", finished and lines.has("Loading Fantasy Map Generator…") and lines.has("Generating the world…") and lines.has("Building regions, countries and cities…") and last.begins_with("✓ Imported "), " | ".join(lines))
+	_check("the generated basemap is kept in Your basemaps", lines.has("Saved this basemap to “Your basemaps”."))
+	var rebaked := await _until(func() -> bool: return not w._rebaking and w.map.ids.size() > 10 and w.map.ids.size() != regions_before, 30.0)
+	_check("the generated regions replace the map", rebaked, "%d -> %d" % [regions_before, w.map.ids.size()])
+	await _wait(1.5)
+	await _shoot("ws-37-fmg-imported")
+	w.toggle_fmg()
+	await _frames(2)
+	_check("the drawer closes from its tab", not drawer.visible and w._fmg_tab.label == "🗺 GENERATE ◂")
+
+
+func _write_geotiff(file: String, width: int, height: int, west: float, north: float, step: float) -> void:
+	var header := 8
+	var entries := 13
+	var data := header + 2 + entries * 12 + 4
+	var bits_at := data
+	var scale_at := bits_at + 6
+	var tie_at := scale_at + 24
+	var keys_at := tie_at + 48
+	var pixels_at := keys_at + 32
+	var out := StreamPeerBuffer.new()
+	out.big_endian = false
+	out.put_data("II".to_ascii_buffer())
+	out.put_u16(42)
+	out.put_u32(header)
+	out.put_u16(entries)
+	var put := func(tag: int, type: int, count: int, value: int) -> void:
+		out.put_u16(tag)
+		out.put_u16(type)
+		out.put_u32(count)
+		if type == 3 and count == 1:
+			out.put_u16(value)
+			out.put_u16(0)
+		else:
+			out.put_u32(value)
+	put.call(256, 3, 1, width)
+	put.call(257, 3, 1, height)
+	put.call(258, 3, 3, bits_at)
+	put.call(259, 3, 1, 1)
+	put.call(262, 3, 1, 2)
+	put.call(273, 4, 1, pixels_at)
+	put.call(277, 3, 1, 3)
+	put.call(278, 3, 1, height)
+	put.call(279, 4, 1, width * height * 3)
+	put.call(284, 3, 1, 1)
+	put.call(33550, 12, 3, scale_at)
+	put.call(33922, 12, 6, tie_at)
+	put.call(34735, 3, 16, keys_at)
+	out.put_u32(0)
+	for value in [8, 8, 8]:
+		out.put_u16(value)
+	for value in [step, step, 0.0]:
+		out.put_double(value)
+	for value in [0.0, 0.0, 0.0, west, north, 0.0]:
+		out.put_double(value)
+	for value in [1, 1, 0, 3, 1024, 0, 1, 2, 1025, 0, 1, 1, 2048, 0, 1, 4326]:
+		out.put_u16(value)
+	for y in range(height):
+		for x in range(width):
+			out.put_u8(220 if x < width / 2 else 30)
+			out.put_u8(200 if y < height / 2 else 40)
+			out.put_u8(90)
+	var handle := FileAccess.open(file, FileAccess.WRITE)
+	handle.store_buffer(out.data_array)
+	handle.close()
+
+
 func _library_entry(picker: WorkshopBasemaps, name: String) -> Dictionary:
 	for entry in picker._data.get("mine", []):
 		if str((entry as Dictionary).get("name", "")) == name:
@@ -773,10 +1073,11 @@ func _projection_redraw(w: Workshop) -> void:
 	panel._type = "freeform"
 	await panel._recheck()
 	var own := _find_button(panel, "Use the picture's own shape")
-	if own:
+	var offered := own != null
+	if offered:
 		own.pressed.emit()
 		await _frames(6)
-	_check("Freeform offers the picture's own shape", own != null and panel._shape == str(panel._check.get("pictureShape", "")) and not panel._shape.is_empty(), panel._shape)
+	_check("Freeform offers the picture's own shape", offered and panel._shape == str(panel._check.get("pictureShape", "")) and not panel._shape.is_empty(), panel._shape)
 	w.close_panel()
 
 
@@ -889,11 +1190,29 @@ func _basemaps(w: Workshop) -> void:
 	_check("a KML map is read and added", not _library_entry(picker, "Coast").is_empty() and not _scenario_map(picker, "Coast").is_empty())
 	await _shoot("ws-31-maps-added")
 	var tif_file := root_dir.path_join("survey.tif")
-	FileAccess.open(tif_file, FileAccess.WRITE).store_string("II*")
+	_write_geotiff(tif_file, 64, 32, -10.0, 60.0, 0.5)
 	OS.set_environment("OH_EDITOR_PICK", "*=" + tif_file)
-	picker._add()
-	_check("a GeoTIFF is refused honestly", await _accept(w, "Could not add that map: the native Workshop cannot show GeoTIFF"))
-	await _until(func() -> bool: return not picker._busy, 10.0)
+	await picker._add()
+	var vector_tiles := root_dir.path_join("roads.pmtiles")
+	_write_vector_pmtiles(vector_tiles)
+	OS.set_environment("OH_EDITOR_PICK", "*=" + vector_tiles)
+	await picker._add()
+	_check("vector-tile .pmtiles are taken for the session and draw nothing, as in React", str(picker._notice.get("text", "")).begins_with("This GeoTIFF or PMTiles background is on the map for this session only") and w.map.map.get("_editor_session_layer") == null)
+	OS.set_environment("OH_EDITOR_PICK", "*=" + tif_file)
+	await picker._add()
+	var aid: Variant = w.map.map.get("_editor_session_layer")
+	_check("a GeoTIFF is drawn under the regions for this session", aid is WorkshopSessionRaster and (aid as WorkshopSessionRaster).texture.get_width() == 64 and (aid as WorkshopSessionRaster).get_index() == w.map.map.basemap.get_index() + 1 and str(picker._notice.get("text", "")).begins_with("This GeoTIFF or PMTiles background is on the map for this session only"))
+	picker.closed.emit()
+	await _frames(2)
+	w.locate(Vector2(6.0, 52.0))
+	await _wait(1.2)
+	await _shoot("ws-31b-geotiff")
+	w.open_basemaps()
+	await _frames(4)
+	for child in w._overlays.get_children():
+		if child is WorkshopBasemaps:
+			picker = child
+	await _until(func() -> bool: return not picker._loading, 20.0)
 	OS.set_environment("OH_EDITOR_PICK", "")
 	var reply := await w.request_raw("workshop.maps.deleteLibrary", {"basemapId": str(biomes.get("id", ""))})
 	await picker._refresh()
@@ -928,6 +1247,7 @@ func _basemaps(w: Workshop) -> void:
 	await _frames(2)
 	await _flag_community(w, opened)
 	await _projection_redraw(w)
+	await _fmg(w)
 
 
 func _import() -> void:

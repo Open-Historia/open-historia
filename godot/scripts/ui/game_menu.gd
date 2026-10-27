@@ -48,6 +48,7 @@ var _workspace_scope := "game"
 var _prompt: ApiSetupPrompt
 var _ai_setup_answered_for := "__none__"
 var _marks := {}
+var _shared_role := ""
 
 
 func _ready() -> void:
@@ -68,6 +69,21 @@ func setup(engine_link: EngineLink, setup_context: Dictionary) -> void:
 	export_dir = str(setup_context.get("export_dir", export_dir))
 	if setup_context.has("reveal_saved_files"):
 		reveal_saved_files = bool(setup_context.get("reveal_saved_files"))
+	if engine and not engine.engine_event.is_connected(_on_engine_event):
+		engine.engine_event.connect(_on_engine_event)
+
+
+func _on_engine_event(event_name: String, data: Variant) -> void:
+	if event_name != "multiplayer.shared" or not (data is Dictionary):
+		return
+	var state: Dictionary = data
+	var mode := str(state.get("mode", "off"))
+	var role := str(state.get("role", "")) if mode not in ["off", "ended"] else ""
+	if role == _shared_role:
+		return
+	_shared_role = role
+	if _open and _card.visible and tab == "tools":
+		_show_tab(tab)
 
 
 func is_open() -> bool:
@@ -411,7 +427,8 @@ func _show_tab(key: String) -> void:
 		_:
 			panel = _quick_panel("Tools", "High-frequency in-game tools should stay one click away.")
 			var grid := _grid()
-			grid.add_child(_quick_action("Cheats", "Game master tools and world editing", "⌁", "slate", func() -> void: _run_and_close(open_cheats)))
+			if _shared_role.is_empty():
+				grid.add_child(_quick_action("Cheats", "Game master tools and world editing", "⌁", "slate", func() -> void: _run_and_close(open_cheats)))
 			grid.add_child(_quick_action("Events / Timeline", "Review the current turn and world history", "◷", "blue", func() -> void: _run_and_close(open_events)))
 			grid.add_child(_quick_action("AI debug console", "Every AI call, its prompt, answer and cost", "◈", "neutral", func() -> void: _run_and_close(open_debug_console)))
 			var tiles := GridContainer.new()
@@ -656,8 +673,13 @@ class ApiSetupPrompt extends Control:
 	var error := ""
 	var show_key := false
 	var show_tutorial := true
+	var online := true
 	var _body: VBoxContainer
 	var _scroll: ScrollContainer
+	var _model_line: LineEdit
+	var _suggest_box: PanelContainer
+	var _suggest_list: VBoxContainer
+	var _online_timer: Timer
 
 	func _init(engine_link: EngineLink, setup_data: Dictionary) -> void:
 		link = engine_link
@@ -686,7 +708,90 @@ class ApiSetupPrompt extends Control:
 		card.add_child(_scroll)
 		centre.add_child(card)
 		resized.connect(_fit)
+		_suggest_box = PanelContainer.new()
+		_suggest_box.add_theme_stylebox_override("panel", UI.box(Color("#1f1f23"), Color(1, 1, 1, 0.16), 6, 1, Vector4(3, 3, 3, 3)))
+		_suggest_box.visible = false
+		_suggest_box.mouse_filter = Control.MOUSE_FILTER_STOP
+		_suggest_list = VBoxContainer.new()
+		_suggest_list.add_theme_constant_override("separation", 0)
+		_suggest_box.add_child(_suggest_list)
+		add_child(_suggest_box)
+		_online_timer = Timer.new()
+		_online_timer.wait_time = 3.0
+		_online_timer.timeout.connect(_check_online)
+		add_child(_online_timer)
 		_render()
+
+	func _ready() -> void:
+		_online_timer.start()
+		_check_online()
+
+	func _check_online() -> void:
+		if not link or not link.is_ready():
+			return
+		var reply: Dictionary = await link.request("net.online")
+		if not is_instance_valid(self) or not reply.get("ok", false):
+			return
+		var next := bool((reply.get("result", {}) as Dictionary).get("online", true))
+		if next != online:
+			online = next
+			if show_tutorial:
+				_render()
+
+	func _recent_models() -> Array:
+		var table: Variant = setup.get("recentModels", {})
+		if table is Dictionary and (table as Dictionary).get(provider) is Array:
+			return (table as Dictionary)[provider]
+		return []
+
+	func _show_suggestions() -> void:
+		if not _model_line or not is_instance_valid(_model_line) or not _model_line.has_focus():
+			_suggest_box.visible = false
+			return
+		for child in _suggest_list.get_children():
+			_suggest_list.remove_child(child)
+			child.queue_free()
+		var typed := model.strip_edges().to_lower()
+		var shown := 0
+		for entry: Variant in _recent_models():
+			var value := str(entry)
+			if value.is_empty() or value == model or (not typed.is_empty() and not value.to_lower().contains(typed)):
+				continue
+			var row := Button.new()
+			row.text = value
+			row.alignment = HORIZONTAL_ALIGNMENT_LEFT
+			row.focus_mode = Control.FOCUS_NONE
+			row.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+			row.add_theme_font_override("font", UI.font(400))
+			row.add_theme_font_size_override("font_size", 13)
+			row.add_theme_color_override("font_color", Color("#f4f4f5"))
+			row.add_theme_color_override("font_hover_color", UI.WHITE)
+			row.add_theme_stylebox_override("normal", UI.box(Color(0, 0, 0, 0), Color(0, 0, 0, 0), 4, 0, Vector4(8, 5, 8, 5)))
+			row.add_theme_stylebox_override("hover", UI.box(Color(1, 1, 1, 0.1), Color(0, 0, 0, 0), 4, 0, Vector4(8, 5, 8, 5)))
+			row.add_theme_stylebox_override("pressed", UI.box(Color(1, 1, 1, 0.1), Color(0, 0, 0, 0), 4, 0, Vector4(8, 5, 8, 5)))
+			row.pressed.connect(func() -> void:
+				model = value
+				if _model_line and is_instance_valid(_model_line):
+					_model_line.text = value
+					_model_line.caret_column = value.length()
+				_suggest_box.visible = false)
+			_suggest_list.add_child(row)
+			shown += 1
+		if shown == 0:
+			_suggest_box.visible = false
+			return
+		var origin := _model_line.get_global_rect()
+		_suggest_box.visible = true
+		_suggest_box.size = Vector2(origin.size.x, 0)
+		_suggest_box.reset_size()
+		_suggest_box.size.x = origin.size.x
+		_suggest_box.global_position = origin.position + Vector2(0, origin.size.y + 2)
+		move_child(_suggest_box, get_child_count() - 1)
+
+	func _hide_suggestions_later() -> void:
+		await get_tree().process_frame
+		if is_instance_valid(self) and _model_line and is_instance_valid(_model_line) and not _model_line.has_focus():
+			_suggest_box.visible = false
 
 	func _fit() -> void:
 		if not is_inside_tree():
@@ -806,9 +911,19 @@ class ApiSetupPrompt extends Control:
 		get_key.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		head.add_child(get_key)
 		box_column.add_child(head)
-		if show_tutorial:
+		if show_tutorial and not online:
 			var spacer := Control.new()
 			spacer.custom_minimum_size.y = 11
+			box_column.add_child(spacer)
+			var note := PanelContainer.new()
+			note.add_theme_stylebox_override("panel", UI.box(Color(0, 0, 0, 0.3), Color(0, 0, 0, 0), 10, 0, Vector4(14.4, 12.8, 14.4, 12.8)))
+			var words := UI.wrapped("The video needs an internet connection. It plays here as soon as you are back online, and so does getting a key.", 12, Color(1, 1, 1, 0.6))
+			words.add_theme_constant_override("line_spacing", 3)
+			note.add_child(words)
+			box_column.add_child(note)
+		if show_tutorial:
+			var spacer := Control.new()
+			spacer.custom_minimum_size.y = 11 if online else 6
 			box_column.add_child(spacer)
 			var video := Button.new()
 			video.focus_mode = Control.FOCUS_NONE
@@ -824,10 +939,13 @@ class ApiSetupPrompt extends Control:
 			video.add_theme_color_override("font_color", Color(1, 1, 1, 0.86))
 			video.add_theme_color_override("font_hover_color", UI.WHITE)
 			video.pressed.connect(func() -> void: OS.shell_open(TUTORIAL_VIDEO_URL))
-			box_column.add_child(video)
-			var spacer_two := Control.new()
-			spacer_two.custom_minimum_size.y = 6
-			box_column.add_child(spacer_two)
+			if online:
+				box_column.add_child(video)
+				var spacer_two := Control.new()
+				spacer_two.custom_minimum_size.y = 6
+				box_column.add_child(spacer_two)
+			else:
+				video.queue_free()
 			var links := HBoxContainer.new()
 			var watch := LinkButton.new()
 			watch.text = "Watch on YouTube ↗"
@@ -956,8 +1074,22 @@ class ApiSetupPrompt extends Control:
 		model_line.placeholder_text = _model_placeholder()
 		model_line.custom_minimum_size.y = 38
 		_input_box(model_line)
-		model_line.text_changed.connect(func(text: String) -> void: model = text)
-		model_line.text_submitted.connect(func(_text: String) -> void: _save())
+		_model_line = model_line
+		_suggest_box.visible = false
+		model_line.text_changed.connect(func(text: String) -> void:
+			model = text
+			_show_suggestions())
+		model_line.focus_entered.connect(_show_suggestions)
+		model_line.focus_exited.connect(_hide_suggestions_later)
+		model_line.gui_input.connect(func(event: InputEvent) -> void:
+			if event is InputEventMouseButton and (event as InputEventMouseButton).pressed and (event as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT:
+				_show_suggestions.call_deferred()
+			elif event is InputEventKey and (event as InputEventKey).pressed and (event as InputEventKey).keycode == KEY_ESCAPE and _suggest_box.visible:
+				_suggest_box.visible = false
+				model_line.accept_event())
+		model_line.text_submitted.connect(func(_text: String) -> void:
+			_suggest_box.visible = false
+			_save())
 		_body.add_child(model_line)
 		_gap(4.8)
 		_body.add_child(_helper("Leave blank for the default. You can add more models and backup providers later under the game menu, Settings, AI."))

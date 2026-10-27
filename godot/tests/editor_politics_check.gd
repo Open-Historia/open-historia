@@ -19,6 +19,7 @@ func _initialize() -> void:
 	shots = OS.get_environment("OH_SHOTS")
 	started = Time.get_ticks_msec()
 	main = (load("res://main.tscn") as PackedScene).instantiate()
+	root.mouse_passthrough = true
 	root.add_child(main)
 	_run.call_deferred()
 
@@ -123,6 +124,27 @@ func _on_details(details: Dictionary, source: Node) -> void:
 			panel.update_props(_props(details))
 
 
+
+func _clear_shell() -> void:
+	var shell: ShellBoot = main.get("shell") as ShellBoot
+	if shell == null:
+		return
+	var deadline := Time.get_ticks_msec() + 30000
+	while shell.door_state == "deciding" and Time.get_ticks_msec() < deadline:
+		await process_frame
+	if shell.door != null and is_instance_valid(shell.door):
+		shell.door.opened.emit()
+	if not shell.notice_updates.is_empty():
+		deadline = Time.get_ticks_msec() + 5000
+		while not (shell.notice != null and is_instance_valid(shell.notice)) and Time.get_ticks_msec() < deadline:
+			await process_frame
+		for i in range(5):
+			await process_frame
+	if shell.notice != null and is_instance_valid(shell.notice):
+		shell.notice.closed.emit()
+	for i in range(3):
+		await process_frame
+
 func _run() -> void:
 	while not main.get("menu") or not main.menu.visible:
 		if Time.get_ticks_msec() - started > 90000:
@@ -131,6 +153,7 @@ func _run() -> void:
 			return
 		await process_frame
 	_say("menu ready")
+	await _clear_shell()
 	var opened: Dictionary = await main.engine.request("editor.open", {"kind": "scenario", "id": "default"})
 	_check(opened.get("ok", false), "editor.open answered")
 	if not opened.get("ok", false):
@@ -246,6 +269,27 @@ func _run() -> void:
 	_type(_field(authoring._manager.main_body, "Head of state"), "François Hollande")
 	_type(_field(authoring._manager.main_body, "Head of government"), "Manuel Valls")
 	_choose_option(_field(authoring._manager.main_body, "Representation model"), "electoral")
+	var approval := _field(authoring._manager.main_body, "Government approval / 100") as LineEdit
+	_type(approval, "6x2.5a")
+	_check(approval.text == "62.5" and str(authoring._draft.get("approval", "")) == "62.5", "approval takes only a number, as a number input does (%s / %s)" % [approval.text, str(authoring._draft.get("approval", ""))])
+	var up := InputEventKey.new()
+	up.keycode = KEY_UP
+	up.pressed = true
+	approval.gui_input.emit(up)
+	_check(approval.text == "62.6" and str(authoring._draft.get("approval", "")) == "62.6", "Up steps approval by 0.1 (%s)" % approval.text)
+	var down := InputEventKey.new()
+	down.keycode = KEY_DOWN
+	down.pressed = true
+	_type(approval, "100")
+	approval.gui_input.emit(up)
+	_check(approval.text == "100", "Up stops at 100 (%s)" % approval.text)
+	approval.gui_input.emit(down)
+	_check(approval.text == "99.9", "Down steps back (%s)" % approval.text)
+	_type(approval, "61")
+	var stability := _field(authoring._manager.main_body, "Political stability / 100") as LineEdit
+	_type(stability, "abc")
+	_check(stability.text.is_empty() and str(authoring._draft.get("politicalStability", "")).is_empty(), "letters never reach political stability")
+	_type(stability, "47")
 	_find(authoring._manager.main_body, func(node: Node) -> bool: return node is Button and (node as Button).text.ends_with("Political traits · full supported catalog (10)")).pressed.emit()
 	await _wait(0.2)
 	var caution: Dictionary = authoring._trait_controls.get("caution", {})
@@ -274,6 +318,7 @@ func _run() -> void:
 	_check(str((saved_france.get("government", {}) as Dictionary).get("form", "")) == "Semi-presidential republic", "government form saved into world.json")
 	_check(((saved_france.get("government", {}) as Dictionary).get("rulingPartyIds", []) as Array).size() == 1, "ruling party written to rulingPartyIds")
 	_check(float((saved_france.get("traits", {}) as Dictionary).get("caution", 0)) == 64.5, "caution trait saved as 64.5")
+	_check(is_equal_approx(float((saved_france.get("government", {}) as Dictionary).get("approval", -1)), 61.0), "typed approval saved, not erased (%s)" % str((saved_france.get("government", {}) as Dictionary).get("approval", "missing")))
 	await _shoot("pol-10-authoring-saved")
 	authoring._manager.main_scroll.scroll_vertical = 2000
 	await _wait(0.3)

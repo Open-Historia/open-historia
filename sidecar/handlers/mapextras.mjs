@@ -1,7 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import zlib from "node:zlib";
 import { execFile } from "node:child_process";
 import { Worker } from "node:worker_threads";
 import { fileURLToPath } from "node:url";
@@ -25,7 +24,6 @@ const BASEMAP_OPTION_LABELS = {
   detailedNotHere: "{{name}} (detailed map, not on this device)",
 };
 const PERFORMANCE_LABELS = { constrained: "Low memory", full: "Full" };
-const IMAGE_TYPES = { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".gif": "image/gif" };
 const PICTURE_HOSTS = /^https:\/\/([a-z0-9-]+\.)*(githubusercontent\.com|github\.com|arcgisonline\.com|arcgis\.com|githubassets\.com)\//i;
 const HUB_URL = "https://github.com/Open-Historia/Open-historia-scenarios";
 
@@ -48,89 +46,6 @@ const probeReducedMotion = () => new Promise((resolve) => {
     settle(false);
   }
 });
-
-const crcTable = (() => {
-  const table = new Uint32Array(256);
-  for (let n = 0; n < 256; n += 1) {
-    let c = n;
-    for (let k = 0; k < 8; k += 1) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-    table[n] = c >>> 0;
-  }
-  return table;
-})();
-
-const crc32 = (bytes) => {
-  let c = 0xffffffff;
-  for (let i = 0; i < bytes.length; i += 1) c = crcTable[(c ^ bytes[i]) & 0xff] ^ (c >>> 8);
-  return (c ^ 0xffffffff) >>> 0;
-};
-
-const pngChunk = (type, data) => {
-  const length = Buffer.alloc(4);
-  length.writeUInt32BE(data.length);
-  const body = Buffer.concat([Buffer.from(type, "ascii"), data]);
-  const crc = Buffer.alloc(4);
-  crc.writeUInt32BE(crc32(body));
-  return Buffer.concat([length, body, crc]);
-};
-
-const encodePng = (width, height, rgba) => {
-  const rows = Buffer.alloc((width * 4 + 1) * height);
-  for (let y = 0; y < height; y += 1) {
-    rows[y * (width * 4 + 1)] = 0;
-    Buffer.from(rgba.buffer, rgba.byteOffset + y * width * 4, width * 4).copy(rows, y * (width * 4 + 1) + 1);
-  }
-  const header = Buffer.alloc(13);
-  header.writeUInt32BE(width, 0);
-  header.writeUInt32BE(height, 4);
-  header[8] = 8;
-  header[9] = 6;
-  return Buffer.concat([
-    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-    pngChunk("IHDR", header),
-    pngChunk("IDAT", zlib.deflateSync(rows)),
-    pngChunk("IEND", Buffer.alloc(0)),
-  ]);
-};
-
-const fillRingsEvenOdd = (rgba, width, height, rings, color) => {
-  const samples = 4;
-  const coverage = new Float32Array(width * height);
-  for (let y = 0; y < height; y += 1) {
-    for (let s = 0; s < samples; s += 1) {
-      const sy = y + (s + 0.5) / samples;
-      const crossings = [];
-      for (const ring of rings) {
-        for (let i = 0, j = ring.length - 1; i < ring.length; j = i, i += 1) {
-          const [ax, ay] = ring[j];
-          const [bx, by] = ring[i];
-          if ((ay > sy) === (by > sy)) continue;
-          crossings.push(ax + ((sy - ay) * (bx - ax)) / (by - ay));
-        }
-      }
-      crossings.sort((a, b) => a - b);
-      for (let k = 0; k + 1 < crossings.length; k += 2) {
-        const x0 = Math.max(0, crossings[k]);
-        const x1 = Math.min(width, crossings[k + 1]);
-        for (let x = Math.floor(x0); x < Math.ceil(x1); x += 1) {
-          const left = Math.max(x0, x);
-          const right = Math.min(x1, x + 1);
-          if (right > left) coverage[y * width + x] += (right - left) / samples;
-        }
-      }
-    }
-  }
-  const [r, g, b, a = 1] = color;
-  for (let i = 0; i < coverage.length; i += 1) {
-    const alpha = Math.min(1, coverage[i]) * a;
-    if (alpha <= 0) continue;
-    const o = i * 4;
-    rgba[o] = Math.round(rgba[o] * (1 - alpha) + r * alpha);
-    rgba[o + 1] = Math.round(rgba[o + 1] * (1 - alpha) + g * alpha);
-    rgba[o + 2] = Math.round(rgba[o + 2] * (1 - alpha) + b * alpha);
-    rgba[o + 3] = 255;
-  }
-};
 
 const polygonsOf = (geometry) => {
   if (geometry?.type === "Polygon") return [geometry.coordinates];
@@ -842,144 +757,6 @@ export const register = (ctx) => {
 
   const safeName = (name) => (clean(name) || "basemap").replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "").toLowerCase() || "basemap";
 
-  const vectorThumbnail = (geojson, maxDim = 220) => {
-    const features = list(geojson?.features);
-    let minX = Infinity;
-    let minY = Infinity;
-    let maxX = -Infinity;
-    let maxY = -Infinity;
-    for (const feature of features) {
-      for (const rings of polygonsOf(feature?.geometry)) {
-        for (const ring of rings) {
-          for (const point of list(ring)) {
-            minX = Math.min(minX, point[0]);
-            maxX = Math.max(maxX, point[0]);
-            minY = Math.min(minY, point[1]);
-            maxY = Math.max(maxY, point[1]);
-          }
-        }
-      }
-    }
-    if (!Number.isFinite(minX)) return null;
-    const w = maxX - minX || 1;
-    const h = maxY - minY || 1;
-    const scale = Math.min(maxDim / w, maxDim / h);
-    const width = Math.max(1, Math.round(w * scale));
-    const height = Math.max(1, Math.round(h * scale));
-    const rgba = new Uint8Array(width * height * 4);
-    const sea = parseRgb(BACKGROUND_SEA);
-    for (let i = 0; i < width * height; i += 1) {
-      rgba[i * 4] = sea[0];
-      rgba[i * 4 + 1] = sea[1];
-      rgba[i * 4 + 2] = sea[2];
-      rgba[i * 4 + 3] = 255;
-    }
-    for (const feature of features) {
-      const fill = parseRgb(feature?.properties?.fill) ?? parseRgb("#33435c");
-      const rings = [];
-      for (const polygon of polygonsOf(feature?.geometry)) {
-        for (const ring of polygon) rings.push(list(ring).map(([x, y]) => [(x - minX) * scale, height - (y - minY) * scale]));
-      }
-      if (rings.length) fillRingsEvenOdd(rgba, width, height, rings, [fill[0], fill[1], fill[2], 1]);
-    }
-    return `data:image/png;base64,${encodePng(width, height, rgba).toString("base64")}`;
-  };
-
-  let natgeoWorker = null;
-  let natgeoStyle = null;
-  let natgeoCall = 0;
-  const natgeoWaiting = new Map();
-  const natgeoDir = () => path.join(cacheDir, "natgeo", NATGEO_CACHE_VERSION);
-
-  const loadNatgeoStyle = async () => {
-    if (natgeoStyle) return natgeoStyle;
-    const file = path.join(natgeoDir(), "style.json");
-    let source = null;
-    if (fs.existsSync(file)) {
-      try {
-        source = JSON.parse(fs.readFileSync(file, "utf8"));
-      } catch {
-        source = null;
-      }
-    }
-    if (!source) {
-      const response = await fetch(engine.mxNatGeo.NATGEO_VECTOR_STYLE_URL);
-      if (!response.ok) throw new Error(`The National Geographic style answered ${response.status}.`);
-      source = await response.json();
-      fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.writeFileSync(file, JSON.stringify(source));
-    }
-    const built = engine.mxNatGeo.buildNatGeoDarkStyle(source);
-    const vector = Object.entries(built.sources ?? {}).find(([, value]) => value?.type === "vector");
-    const template = list(vector?.[1]?.tiles)[0] ?? "";
-    natgeoStyle = {
-      template,
-      maxzoom: Number(vector?.[1]?.maxzoom) || 16,
-      layers: list(built.layers).filter((layer) => layer?.source === vector?.[0] && ["fill", "line", "symbol"].includes(layer?.type)),
-    };
-    return natgeoStyle;
-  };
-
-  const natgeoRender = async (message) => {
-    if (!natgeoWorker) {
-      natgeoWorker = new Worker(path.join(here, "natgeo_worker.cjs"));
-      natgeoWorker.unref();
-      natgeoWorker.on("message", (reply) => {
-        const settle = natgeoWaiting.get(reply?.id);
-        if (!settle) return;
-        natgeoWaiting.delete(reply.id);
-        settle(reply);
-      });
-      natgeoWorker.on("error", (error) => {
-        for (const settle of natgeoWaiting.values()) settle({ error: String(error?.message ?? error) });
-        natgeoWaiting.clear();
-        natgeoWorker = null;
-      });
-      natgeoWorker.postMessage({ type: "style", layers: natgeoStyle.layers });
-    }
-    natgeoCall += 1;
-    const id = natgeoCall;
-    return new Promise((resolve) => {
-      natgeoWaiting.set(id, resolve);
-      natgeoWorker.postMessage({ ...message, type: "tile", id }, message.pbf ? [message.pbf] : []);
-    });
-  };
-
-  const natgeoTile = async (z, x, y) => {
-    const style = await loadNatgeoStyle();
-    const dir = path.join(natgeoDir(), String(z), String(x));
-    const base = path.join(dir, String(y));
-    if (fs.existsSync(`${base}.json`)) {
-      const read = (suffix) => (fs.existsSync(`${base}.${suffix}.png`) ? fs.readFileSync(`${base}.${suffix}.png`).toString("base64") : "");
-      return { fills: read("fills"), lines: read("lines"), labels: JSON.parse(fs.readFileSync(`${base}.json`, "utf8")) };
-    }
-    const url = style.template.replace("{z}", String(z)).replace("{x}", String(x)).replace("{y}", String(y));
-    let pbf = null;
-    try {
-      const response = await fetch(url);
-      if (response.ok) pbf = new Uint8Array(await response.arrayBuffer());
-      else if (response.status !== 404) throw new Error(`The National Geographic tiles answered ${response.status}.`);
-    } catch (error) {
-      if (!pbf) throw error;
-    }
-    let result = { fills: null, lines: null, labels: [] };
-    if (pbf && pbf.byteLength) {
-      const bytes = pbf.byteOffset === 0 && pbf.byteLength === pbf.buffer.byteLength ? pbf.buffer : pbf.slice().buffer;
-      const reply = await natgeoRender({ z, x, y, pbf: bytes });
-      if (reply?.error) throw new Error(reply.error);
-      result = reply;
-    }
-    fs.mkdirSync(dir, { recursive: true });
-    if (result.fills) fs.writeFileSync(`${base}.fills.png`, Buffer.from(result.fills));
-    if (result.lines) fs.writeFileSync(`${base}.lines.png`, Buffer.from(result.lines));
-    fs.writeFileSync(`${base}.json`, JSON.stringify(result.labels ?? []));
-    return {
-      fills: result.fills ? Buffer.from(result.fills).toString("base64") : "",
-      lines: result.lines ? Buffer.from(result.lines).toString("base64") : "",
-      labels: result.labels ?? [],
-    };
-  };
-
   return {
     "mapextras.systemMotion": async ({ fresh = false } = {}) => ({ reduced: fresh ? await refreshMotion() : systemReduced }),
     "mapextras.deviceProfile": async ({ value } = {}) => {
@@ -1045,42 +822,6 @@ export const register = (ctx) => {
     "mapextras.libraryDelete": async ({ id = "" } = {}) => {
       await engine.cmBasemapLibrary.deleteBasemap(clean(id));
       return { ok: true };
-    },
-    "mapextras.libraryAdd": async ({ file = "", name = "", thumbnail = null, aspect = null } = {}) => {
-      const target = String(file || "");
-      if (!target || !fs.existsSync(target)) throw new Error("That file could not be read.");
-      const extension = path.extname(target).toLowerCase();
-      const title = clean(name) || path.basename(target).replace(/\.[^.]+$/, "") || "My basemap";
-      if (extension === ".pmtiles") {
-        const blob = await fs.openAsBlob(target);
-        const meta = await engine.mxTiled.uploadTiledBasemap(blob, { name: title });
-        return { added: libraryEntry({ ...meta, kind: "tiled" }), kind: "tiled" };
-      }
-      if (IMAGE_TYPES[extension]) {
-        const bytes = fs.readFileSync(target);
-        const dataUrl = `data:${IMAGE_TYPES[extension]};base64,${bytes.toString("base64")}`;
-        const meta = await engine.cmBasemapLibrary.createBasemap({
-          name: title,
-          kind: "image",
-          aspect: Number(aspect) > 0 ? Number(aspect) : null,
-          thumbnail: typeof thumbnail === "string" && thumbnail.startsWith("data:image/") ? thumbnail : null,
-          contentHash: await engine.cmBasemapLibrary.sha256Hex(dataUrl),
-          payload: { dataUrl },
-        });
-        return { added: libraryEntry(meta), kind: "image" };
-      }
-      if (extension !== ".geojson" && extension !== ".json") throw new Error("That file can only be used as a reference inside the Map Editor.");
-      let geojson = JSON.parse(fs.readFileSync(target, "utf8"));
-      if (geojson?.type === "Feature") geojson = { type: "FeatureCollection", features: [geojson] };
-      if (geojson?.type !== "FeatureCollection" || !list(geojson.features).length) throw new Error("That file has no shapes in it.");
-      const meta = await engine.cmBasemapLibrary.createBasemap({
-        name: title,
-        kind: "vector",
-        thumbnail: vectorThumbnail(geojson),
-        contentHash: await engine.cmBasemapLibrary.sha256Hex(JSON.stringify(geojson)),
-        payload: { geojson },
-      });
-      return { added: libraryEntry(meta), kind: "vector" };
     },
     "mapextras.libraryPublish": async ({ id = "" } = {}) => {
       const books = list(await engine.cmBasemapLibrary.listBasemaps().catch(() => []));

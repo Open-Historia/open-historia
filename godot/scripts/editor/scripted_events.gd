@@ -58,6 +58,7 @@ var _editor_refreshers: Array[Callable] = []
 var _refreshers_by_key := {}
 var _suggest: PanelContainer
 var _suggest_list: VBoxContainer
+var _suggest_scroll: ScrollContainer
 var _suggest_owner: LineEdit
 
 
@@ -498,9 +499,13 @@ func open_manager() -> void:
 	_suggest.visible = false
 	_suggest.z_index = 10
 	_suggest.add_theme_stylebox_override("panel", UI.box(Color8(26, 27, 31, 252), Color(1, 1, 1, 0.14), 9, 1, Vector4(4, 4, 4, 4)))
+	_suggest_scroll = ScrollContainer.new()
+	_suggest_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_suggest.add_child(_suggest_scroll)
 	_suggest_list = VBoxContainer.new()
 	_suggest_list.add_theme_constant_override("separation", 0)
-	_suggest.add_child(_suggest_list)
+	_suggest_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_suggest_scroll.add_child(_suggest_list)
 	_manager.add_child(_suggest)
 	target.add_child(_manager)
 	var fit := func() -> void:
@@ -1229,22 +1234,35 @@ func _show_suggest(edit: LineEdit, options: Array, field: String, key: String, c
 	var shown := 0
 	for option in options:
 		var label := str((option as Dictionary).get("label", ""))
-		if not typed.is_empty() and not label.to_lower().contains(typed):
+		var option_id := str((option as Dictionary).get("id", ""))
+		if not typed.is_empty() and not label.to_lower().contains(typed) and not option_id.to_lower().contains(typed):
 			continue
 		if not typed.is_empty() and label.to_lower() == typed:
 			continue
 		var pick := Button.new()
-		pick.text = label
-		pick.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		pick.focus_mode = Control.FOCUS_NONE
 		pick.flat = true
-		pick.clip_text = true
 		pick.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 		pick.custom_minimum_size.y = 28
-		pick.add_theme_font_override("font", UI.font(500))
-		pick.add_theme_font_size_override("font_size", 13)
-		pick.add_theme_color_override("font_color", Color(1, 1, 1, 0.86))
-		pick.add_theme_color_override("font_hover_color", UI.WHITE)
+		pick.tooltip_text = option_id
+		var line := HBoxContainer.new()
+		line.add_theme_constant_override("separation", 10)
+		line.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		line.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		line.offset_left = 8
+		line.offset_right = -8
+		var name_label := UI.label(label, 13, Color(1, 1, 1, 0.86), 500)
+		name_label.clip_text = true
+		name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		name_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		name_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		line.add_child(name_label)
+		if option_id != label:
+			var id_label := UI.label(option_id, 11, Color(1, 1, 1, 0.42))
+			id_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+			id_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			line.add_child(id_label)
+		pick.add_child(line)
 		pick.add_theme_stylebox_override("hover", UI.box(Color(1, 1, 1, 0.08), Color(0, 0, 0, 0), 6, 1, Vector4(8, 0, 8, 0)))
 		pick.add_theme_stylebox_override("normal", UI.box(Color(0, 0, 0, 0), Color(0, 0, 0, 0), 6, 1, Vector4(8, 0, 8, 0)))
 		pick.add_theme_stylebox_override("pressed", UI.box(Color(1, 1, 1, 0.12), Color(0, 0, 0, 0), 6, 1, Vector4(8, 0, 8, 0)))
@@ -1260,17 +1278,20 @@ func _show_suggest(edit: LineEdit, options: Array, field: String, key: String, c
 			_hide_suggest())
 		_suggest_list.add_child(pick)
 		shown += 1
-		if shown >= 8:
-			break
 	if shown == 0:
 		_hide_suggest()
 		return
 	var rect := edit.get_global_rect()
+	_suggest_scroll.custom_minimum_size = Vector2(0, minf(float(shown), 8.0) * 28.0)
+	_suggest_scroll.scroll_vertical = 0
 	_suggest.custom_minimum_size = Vector2(rect.size.x, 0)
 	_suggest.size = Vector2(rect.size.x, 0)
 	_suggest.global_position = rect.position + Vector2(0, rect.size.y + 2)
 	_suggest.visible = true
 	_suggest.reset_size()
+	var tall := _suggest.get_combined_minimum_size().y
+	if rect.end.y + 2.0 + tall > edit.get_viewport_rect().size.y and rect.position.y - 2.0 - tall >= 0.0:
+		_suggest.global_position = rect.position - Vector2(0, tall + 2.0)
 
 
 func _hide_suggest() -> void:

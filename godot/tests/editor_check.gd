@@ -182,6 +182,15 @@ func _run() -> void:
 func _scenario_flow() -> void:
 	await editor.open_scenario("default")
 	_check(editor.is_open() and editor.current_kind() == "scenario", "the drawer opened on the built-in scenario")
+	var gif := ImageLoader.decode(Marshalls.base64_to_raw("R0lGODdhDAAGAIEAAP8AAAAA/wAAAAAAACwAAAAADAAGAAAIGwABCBwYoKDBgQQNFkQoUOFChg4DMAQQcWLEgAA7"))
+	var gif_image: Image = gif.get_image() if gif else null
+	_check(gif_image != null and gif_image.get_pixel(1, 1).r > 0.9 and gif_image.get_pixel(10, 4).b > 0.9, "a GIF cover is drawn, not left blank")
+	var avif_path := OS.get_user_data_dir().path_join("cover-test.avif")
+	var avif_file := FileAccess.open(avif_path, FileAccess.WRITE)
+	avif_file.store_buffer(PackedByteArray([0, 0, 0, 28, 0x66, 0x74, 0x79, 0x70, 0x61, 0x76, 0x69, 0x66, 0, 0, 0, 0]))
+	avif_file.close()
+	var avif_reply: Dictionary = await main.engine.request("editor.asset.upload", {"kind": "scenario", "id": "default", "assetKey": "cover", "path": avif_path})
+	_check(not avif_reply.get("ok", false) and str(avif_reply.get("error", "")).contains("AVIF"), "an AVIF cover is refused with a reason (%s)" % str(avif_reply.get("error", "")))
 	await _wait(1.0)
 	await _shoot("ed-01-overview")
 	_check(_label(editor._content, "On its card") != null and _label(editor._content, "Its headline") != null, "the overview shows both cards")
@@ -264,9 +273,17 @@ func _scenario_flow() -> void:
 	var men := _find_all(editor._content, func(entry: Node) -> bool: return entry is LineEdit and (entry as LineEdit).placeholder_text == "10,000", [])
 	_check(not men.is_empty(), "the war settings show Men per counter")
 	if not men.is_empty():
+		var fronts_panel: EditorFrontsPanel = null
+		for entry in editor._panels:
+			if entry.get("panel") is EditorFrontsPanel:
+				fronts_panel = entry["panel"]
+		var fronts_child: Node = fronts_panel._fronts_box.get_child(0) if fronts_panel and fronts_panel._fronts_box.get_child_count() > 0 else null
+		(men[0] as LineEdit).grab_focus()
 		_type(men[0], "7500")
 		await _wait(0.3)
 		_check(JSON.stringify(editor._form.get("warSettings")).contains("7500"), "a war setting reaches the drawer's form")
+		_check(is_instance_valid(men[0]) and (men[0] as LineEdit).has_focus(), "the war setting keeps the focus while typing")
+		_check(fronts_child == null or (is_instance_valid(fronts_child) and not fronts_child.is_queued_for_deletion() and fronts_child.get_parent() == fronts_panel._fronts_box), "the Fronts panel is not rebuilt by a war-setting keystroke")
 	editor._go_section("features")
 	await _wait(1.0)
 	var off := _button(editor._content, "Off")

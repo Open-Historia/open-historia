@@ -45,6 +45,17 @@ func setup(workshop: Workshop, popup_kind: String, id: String, fresh: bool) -> v
 		_build_city()
 
 
+func _input(event: InputEvent) -> void:
+	if not (event is InputEventKey) or not (event as InputEventKey).pressed or (event as InputEventKey).echo:
+		return
+	var key := (event as InputEventKey).keycode
+	var enter := key == KEY_ENTER or key == KEY_KP_ENTER
+	var in_text_box := get_viewport().gui_get_focus_owner() is TextEdit
+	if key == KEY_ESCAPE or (enter and not bool(_row.get("isMap", false)) and not in_text_box):
+		get_viewport().set_input_as_handled()
+		closed.emit()
+
+
 func place(anchor: Vector2, view: Vector2) -> void:
 	reset_size()
 	var width := custom_minimum_size.x

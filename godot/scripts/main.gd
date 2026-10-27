@@ -39,7 +39,18 @@ var forces: Node
 var map_extras: Node
 var shared_overlay: Node
 var shell_notices: Node
+var crash: CrashScreen
 var _extras_ready := false
+var _engine_was_ready := false
+var _fatal_message := ""
+var _reloading := false
+var _screen := "boot"
+var _shared_role := ""
+var _play_game_id := ""
+var _play_regions := ""
+var _cities_raw: Array = []
+var _minimized := false
+var _presence_timer: Timer
 
 
 func _ready() -> void:
@@ -81,11 +92,9 @@ func _ready() -> void:
 	_build_settings()
 	_build_boot()
 	_show("boot")
+	_build_crash()
 	engine.engine_ready.connect(_on_engine_ready)
-	engine.engine_stopped.connect(func(message: String) -> void:
-		shell.loading.close_now()
-		_show("boot")
-		shell.startup.set_status(message))
+	engine.engine_stopped.connect(_on_engine_stopped)
 	engine.engine_event.connect(_on_engine_event)
 	menu.play_game.connect(_open_game)
 	menu.start_scenario.connect(_start_scenario)
@@ -98,7 +107,7 @@ func _ready() -> void:
 	menu.engine = engine
 	menu.game_left.connect(func(id: String) -> void:
 		if id == game_id:
-			in_game = false)
+			_leave_game())
 	hud.exit_game.connect(_exit_game)
 	hud.open_menu.connect(func() -> void:
 		if game_menu:
@@ -115,8 +124,12 @@ func _ready() -> void:
 	background_timer.wait_time = 60.0
 	background_timer.timeout.connect(_background_tick)
 	add_child(background_timer)
-	background_timer.start()
 	last_activity = Time.get_ticks_msec()
+	_presence_timer = Timer.new()
+	_presence_timer.wait_time = 0.5
+	_presence_timer.timeout.connect(_check_minimized)
+	add_child(_presence_timer)
+	_presence_timer.start()
 	if not engine.start():
 		shell.startup.set_status("The game engine could not be started. Is Node.js installed?")
 
@@ -157,6 +170,7 @@ func _wire_overlays() -> void:
 	_hook(cheats, "open_interactive", func() -> void: _call(interactive, "open"))
 	_hook(cheats, "world_changed", _world_changed)
 	_hook(cheats, "country_changed", func(_country: String) -> void: _world_changed())
+	picker.engine = engine
 
 
 func _place_above(node: Node, anchor: Node) -> void:
@@ -210,20 +224,21 @@ func _mount_parts() -> void:
 			hud.close_drawer()
 		_call(war_room, "toggle"))
 	_hook(war_room_button, "presence_changed", func(at_war: bool) -> void: hud.set_beside_war_room(at_war))
+	_hook(forces, "world_changed", _world_changed)
 	_hook(cheats, "open_forces", func() -> void:
 		_call(cheats, "close")
 		_call(forces, "open"))
 	_hook(shared_overlay, "left", func() -> void:
-		in_game = false
+		_leave_game()
 		await _refresh_library()
 		_show("menu"))
 	_hook(editor, "library_changed", func() -> void:
 		await _refresh_library()
 		menu.refresh_trash())
-	_hook(editor, "play_game", func(id: String) -> void: _open_game(id))
+	_hook(editor, "play_game", _play_from_workshop)
 	_hook(editor, "game_deleted", func(id: String) -> void:
 		if id == game_id:
-			in_game = false)
+			_leave_game())
 	_hook(editor, "failed", func(message: String) -> void: menu.set_status(message, true))
 	_hook(editor, "scenario_update_requested", func(id: String, post_id: int) -> void: menu.update_scenario(id, post_id))
 	_hook(editor, "busy_changed", func(busy: bool) -> void: menu.set_creating(busy))
@@ -273,7 +288,12 @@ func _enter_active_game() -> void:
 
 
 func _on_setting_changed(key: String, value: Variant) -> void:
+	var redraw := key == "Globe" and in_game and _screen == "game"
+	if redraw:
+		_cover_game(_game_named(game_id))
 	_call(map_extras, "apply_map_settings", [{key: value}])
+	if redraw:
+		shell.end_game_loading()
 	if key == "ui_language":
 		await i18n.set_language(str(value))
 	elif key == "map_mode":
@@ -298,14 +318,42 @@ func _world_changed() -> void:
 	var view := await engine.request("game.view")
 	if view.get("ok", false):
 		hud.set_game(view["result"], game_name)
-		var flag := await engine.request("game.flag", {"country": str(view["result"].get("country", ""))})
-		if flag.get("ok", false):
-			hud.set_flag(UI.flag(str(flag["result"].get("flag", "")), 48))
+		await _refresh_flag(str(view["result"].get("country", "")))
 	await hud.date_widget.refresh_status()
 	hud.date_widget._render_all()
+	await hud.date_widget.reload_history()
 	hud.refresh_panels()
 	_call(game_menu, "refresh")
 	_refresh_war_parts()
+	await _load_cities()
+
+
+func _refresh_flag(country: String) -> void:
+	var flag := await engine.request("game.flag", {"country": country})
+	if flag.get("ok", false):
+		hud.set_flag_info(flag["result"])
+
+
+func _load_cities() -> void:
+	var cities := await engine.request("map.cities")
+	if cities.get("ok", false):
+		_cities_raw = cities["result"].get("cities", [])
+		_apply_city_names()
+
+
+func _apply_city_names() -> void:
+	if picker.visible and _play_game_id.is_empty():
+		return
+	var translating := i18n != null and i18n.language != "en"
+	var shown: Array = []
+	for city in _cities_raw:
+		var row: Array = (city as Array).duplicate()
+		if translating and row.size() > 7 and int(row[6]) == 0:
+			var translated: Variant = i18n.book.get_exact(str(row[7]))
+			if translated is String and not (translated as String).strip_edges().is_empty() and translated != row[7]:
+				row[0] = translated
+		shown.append(row)
+	map_view.set_cities(shown)
 
 
 func _make_node(path: String) -> Node:
@@ -328,30 +376,101 @@ func _input(event: InputEvent) -> void:
 
 
 func _background_tick() -> void:
-	if not in_game or not engine.is_ready() or not hud.visible or not get_window().has_focus():
+	if not in_game or _screen != "game" or not engine.is_ready():
+		return
+	if bool(_call(editor, "is_open")) or _minimized or not _shared_role.is_empty():
 		return
 	var present := Time.get_ticks_msec() - last_activity < 600000
 	engine.request("turn.background", {"diplomacy": present})
+
+
+func _check_minimized() -> void:
+	var minimized := DisplayServer.window_get_mode() == DisplayServer.WINDOW_MODE_MINIMIZED
+	if minimized == _minimized:
+		return
+	_minimized = minimized
+	if engine and engine.is_ready():
+		engine.request("presence", {"visible": not minimized})
 
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_CLOSE_REQUEST:
 		engine.stop()
 		get_tree().quit()
-	elif what == NOTIFICATION_APPLICATION_FOCUS_IN and engine and engine.is_ready():
-		engine.request("presence", {"visible": true})
-	elif what == NOTIFICATION_APPLICATION_FOCUS_OUT and engine and engine.is_ready():
-		engine.request("presence", {"visible": false})
+
+
+func _build_crash() -> void:
+	var layer := CanvasLayer.new()
+	layer.layer = 60
+	add_child(layer)
+	crash = CrashScreen.new()
+	layer.add_child(crash)
+	crash.reload_requested.connect(_reload_app)
+
+
+func _on_engine_stopped(message: String) -> void:
+	if _reloading:
+		return
+	shell.cancel_game_loading(true)
+	if not _engine_was_ready:
+		_show("boot")
+		shell.startup.set_status(message)
+		return
+	in_game = false
+	var first := _fatal_message if not _fatal_message.is_empty() else message.get_slice("\n", 0)
+	crash.show_crash(first, message)
+
+
+func _reload_blocked() -> bool:
+	var workshop: Variant = editor.get("_workshop") if editor else null
+	if not (workshop is Node) or not is_instance_valid(workshop):
+		return false
+	var state: Variant = (workshop as Node).get("state")
+	if not (state is Dictionary) or str((workshop as Node).get("session")).is_empty():
+		return false
+	var status: Dictionary = (state as Dictionary).get("status", {})
+	return str(status.get("saveStatus", "saved")) in ["dirty", "saving", "error"]
+
+
+func _on_reload_requested(_force: bool) -> void:
+	if crash.is_shown() or not _reload_blocked():
+		_reload_app()
+
+
+func _reload_app() -> void:
+	if _reloading:
+		return
+	_reloading = true
+	var tree := get_tree()
+	if tree.current_scene == self:
+		tree.reload_current_scene()
+		return
+	var parent := get_parent()
+	var scene := load("res://main.tscn") as PackedScene
+	if parent == null or scene == null:
+		_reloading = false
+		return
+	var index := get_index()
+	parent.remove_child(self)
+	queue_free()
+	var fresh := scene.instantiate()
+	parent.add_child(fresh)
+	parent.move_child(fresh, index)
 
 
 func _build_boot() -> void:
 	i18n = I18n.new()
 	add_child(i18n)
+	i18n.translations_changed.connect(func() -> void:
+		if in_game:
+			_apply_city_names())
 	hotkeys = Hotkeys.new()
 	add_child(hotkeys)
 	hotkeys.setup(engine)
+	hotkeys.reload_requested.connect(_on_reload_requested)
 	shell = ShellBoot.new()
 	add_child(shell)
+	shell.map_view = map_view
 	shell.setup(engine, menu.loader, hud)
 	boot = shell.startup
 
@@ -412,6 +531,7 @@ func _build_settings() -> void:
 
 
 func _show(screen: String) -> void:
+	_screen = screen
 	boot.visible = screen == "boot"
 	menu.visible = screen == "menu"
 	hud.visible = screen == "game"
@@ -431,19 +551,21 @@ func _report_presence(in_menu: bool) -> void:
 
 
 func _on_engine_ready(_data: Dictionary) -> void:
+	_engine_was_ready = true
 	_sound("setup", [engine])
 	var hello := await engine.request("hello")
 	if hello.get("ok", false):
 		info = hello["result"]
 		menu.set_origin(str(info.get("origin", "")))
 		map_view.basemap.cache_dir = str(info.get("dataRoot", "")).path_join("native-cache").path_join("tiles")
+		picker.context = {"tiles_cache": map_view.basemap.cache_dir}
 	await i18n.start(engine)
-	await _refresh_library()
-	menu.refresh_trash()
 	await shell.prepare()
 	_show("menu")
 	shell.reveal()
 	i18n.activate()
+	await _refresh_library()
+	menu.refresh_trash()
 
 
 func _refresh_library() -> void:
@@ -475,10 +597,12 @@ func _load_map() -> bool:
 	var state := await engine.request("map.state")
 	if state.get("ok", false):
 		map_view.set_state(state["result"])
-	var cities := await engine.request("map.cities")
-	if cities.get("ok", false):
-		map_view.set_cities(cities["result"].get("cities", []))
+	await _load_cities()
 	return true
+
+
+func _cover_game(entry: Dictionary) -> void:
+	shell.begin_game_loading({"gameName": str(entry.get("name", "")), "scenarioName": str(entry.get("scenarioName", "")), "countryName": str(entry.get("country", "")), "coverUrl": str(entry.get("coverImageUrl", ""))})
 
 
 func _open_game(id: String) -> void:
@@ -487,18 +611,17 @@ func _open_game(id: String) -> void:
 		_show("game")
 		return
 	in_game = false
-	var entry := _game_named(id)
-	shell.begin_game_loading({"gameName": str(entry.get("name", "")), "scenarioName": str(entry.get("scenarioName", "")), "countryName": str(entry.get("country", "")), "coverUrl": str(entry.get("coverImageUrl", ""))})
+	_cover_game(_game_named(id))
 	menu.set_status("Opening the game…")
 	var opened := await engine.request("game.open", {"id": id})
 	if not opened.get("ok", false):
 		menu.set_status(str(opened.get("error", "The game could not be opened.")), true)
 		_sound("enter_menu")
-		shell.loading.finish()
+		shell.cancel_game_loading()
 		return
 	_sound("enter_loading")
 	if not await _load_map():
-		shell.loading.finish()
+		shell.cancel_game_loading()
 		return
 	await _refresh_library()
 	game_id = id
@@ -509,11 +632,12 @@ func _open_game(id: String) -> void:
 
 func _enter_game(view: Dictionary) -> void:
 	hud.set_game(view, game_name)
-	var flag := await engine.request("game.flag", {"country": str(view.get("country", ""))})
-	if flag.get("ok", false):
-		hud.set_flag(UI.flag(str(flag["result"].get("flag", "")), 48))
+	await _refresh_flag(str(view.get("country", "")))
 	menu.set_status("")
 	in_game = true
+	_call(war_room_button, "set_in_game", [true])
+	last_activity = Time.get_ticks_msec()
+	background_timer.start()
 	_show("game")
 	map_view.focus_owner(str(view.get("country", "")))
 	hud.mount_panels(view)
@@ -544,6 +668,7 @@ func _start_scenario(scenario_id: String) -> void:
 	map_view.load_regions(str(data["map"]["file"]))
 	await map_view.baked
 	map_view.set_state(data["map"]["state"])
+	_cities_raw = []
 	map_view.set_cities([])
 	picking_scenario = scenario_id
 	picker.visible = true
@@ -553,6 +678,9 @@ func _start_scenario(scenario_id: String) -> void:
 
 
 func _on_picker_start(request: Dictionary) -> void:
+	if not _play_game_id.is_empty():
+		await _finish_play_pick(request)
+		return
 	picker.visible = false
 	map_view.select_region(-1)
 	var scenario := {}
@@ -567,12 +695,12 @@ func _on_picker_start(request: Dictionary) -> void:
 	var started := await engine.request("picker.start", args)
 	if not started.get("ok", false):
 		menu.set_status(str(started.get("error", "The game could not be created.")), true)
-		shell.loading.finish()
+		shell.cancel_game_loading()
 		_show("menu")
 		return
 	shell.refresh_game_loading(str(started["result"].get("id", "")))
 	if not await _load_map():
-		shell.loading.finish()
+		shell.cancel_game_loading()
 		_show("menu")
 		return
 	await _refresh_library()
@@ -593,16 +721,76 @@ func _on_country_chosen(country: String, difficulty: String) -> void:
 
 
 func _on_picker_cancelled() -> void:
+	if not _play_game_id.is_empty():
+		await _finish_play_pick({})
+		return
 	picker.visible = false
 	picking_scenario = ""
 	map_view.select_region(-1)
 	_show("menu")
 
 
+func _play_from_workshop(id: String) -> void:
+	await _open_game(id)
+	if not in_game or game_id != id:
+		return
+	var opened := await engine.request("picker.forGame", {"gameId": id})
+	if not opened.get("ok", false) or not in_game or game_id != id:
+		return
+	var data: Dictionary = opened["result"]
+	_play_game_id = id
+	_play_regions = ""
+	_call(war, "clear")
+	map_view.select_region(-1)
+	var file := str((data.get("map", {}) as Dictionary).get("file", ""))
+	if file != str(map_view.get("_loaded_file")):
+		_play_regions = file
+		map_view.load_regions(file)
+		await map_view.baked
+	picker.visible = true
+	picker.open(data)
+
+
+func _finish_play_pick(request: Dictionary) -> void:
+	var id := _play_game_id
+	_play_game_id = ""
+	picker.visible = false
+	map_view.select_region(-1)
+	if request.is_empty():
+		if not _play_regions.is_empty():
+			_play_regions = ""
+			await _load_map()
+		await _world_changed()
+		var country := ""
+		var view := await engine.request("game.view")
+		if view.get("ok", false):
+			country = str(view["result"].get("country", ""))
+		map_view.focus_owner(country)
+		return
+	_play_regions = ""
+	var chosen := await engine.request("picker.choose", {"gameId": id, "country": str(request.get("country", "")), "difficulty": str(request.get("difficulty", ""))})
+	if not chosen.get("ok", false):
+		menu.set_status(str(chosen.get("error", "The game could not be changed.")), true)
+	in_game = false
+	await _open_game(id)
+
+
+func _leave_game() -> void:
+	in_game = false
+	background_timer.stop()
+	_call(war_room_button, "set_in_game", [false])
+	if war_room_button:
+		war_room_button.set("visible", false)
+
+
 func _exit_game() -> void:
 	if bool(_call(war_room, "is_open")):
 		_call(war_room, "close")
 	_call(forces, "close")
+	background_timer.stop()
+	_call(war_room_button, "set_in_game", [false])
+	if war_room_button:
+		war_room_button.set("visible", false)
 	await _refresh_library()
 	_show("menu")
 
@@ -616,8 +804,17 @@ func _on_turn_landed(view: Dictionary) -> void:
 	_report_presence(not hud.visible)
 
 
-func _on_engine_event(_name: String, _data: Variant) -> void:
-	pass
+func _on_engine_event(event_name: String, data: Variant) -> void:
+	if event_name == "sidecar.fatal" and data is Dictionary:
+		_fatal_message = str((data as Dictionary).get("message", ""))
+	elif event_name == "multiplayer.shared" and data is Dictionary:
+		var state: Dictionary = data
+		var mode := str(state.get("mode", "off"))
+		var role := str(state.get("role", "")) if mode not in ["off", "ended"] else ""
+		if role != _shared_role:
+			_shared_role = role
+			if not role.is_empty():
+				_call(cheats, "close")
 
 
 func _open_settings() -> void:

@@ -107,7 +107,7 @@ const UPLOAD_TYPES = {
 };
 
 export const register = (ctx) => {
-  const { engine, plain, clean, list, cacheDir } = ctx;
+  const { engine, emit, plain, clean, list, cacheDir } = ctx;
   const lib = engine.library;
   const prompts = () => engine.edPrompts;
 
@@ -232,14 +232,15 @@ export const register = (ctx) => {
         return null;
       }),
     ]);
-    let error = "";
-    let current = details;
-    const retry = await engine.missingBasemap.retryMissingBasemap(details.scenario).catch(() => null);
-    if (retry?.restored && retry.details) current = retry.details;
-    else if (retry && !retry.restored) error = `This scenario's community basemap could not be downloaded. ${retry.reason} The game tries again the next time you start it and open the scenario.`;
-    if (statsFailed) error = "This scenario's Stats sheet could not be loaded, so Save leaves it as it is. Close the editor and open it again to edit it.";
+    const scenarioId = clean(id);
+    Promise.resolve(engine.missingBasemap.retryMissingBasemap(details.scenario)).then((retry) => {
+      if (!retry) return;
+      if (retry.restored && retry.details) emit("editor.basemap", plain({ id: scenarioId, restored: true, pack: packOf("scenario", retry.details) }));
+      else if (!retry.restored) emit("editor.basemap", { id: scenarioId, restored: false, error: `This scenario's community basemap could not be downloaded. ${retry.reason} The game tries again the next time you start it and open the scenario.` });
+    }).catch(() => {});
+    const error = statsFailed ? "This scenario's Stats sheet could not be loaded, so Save leaves it as it is. Close the editor and open it again to edit it." : "";
     const stats = normalizeStatsEditorValue(statsAsset);
-    return { ...packOf("scenario", current), stats, savedStats: stats, statsFailed, error };
+    return { ...packOf("scenario", details), stats, savedStats: stats, statsFailed, error };
   };
 
   const openGame = async (id) => {
@@ -452,7 +453,12 @@ export const register = (ctx) => {
     "editor.asset.upload": async ({ kind = "scenario", id, assetKey, path: source }) => {
       const file = clean(source);
       const buffer = fs.readFileSync(file);
-      const type = UPLOAD_TYPES[path.extname(file).slice(1).toLowerCase()] ?? "";
+      const extension = path.extname(file).slice(1).toLowerCase();
+      const avif = extension === "avif" || /^ftypavi[fs]$/.test(buffer.subarray(4, 12).toString("latin1"));
+      if (clean(assetKey) === "cover" && avif) {
+        throw new Error("This cover is an AVIF image, which the app cannot show. Choose a PNG, JPEG, WebP or GIF image instead.");
+      }
+      const type = UPLOAD_TYPES[extension] ?? "";
       const blob = new Blob([buffer], { type });
       const details = kind === "scenario"
         ? await lib.uploadScenarioAsset(clean(id), clean(assetKey), blob)

@@ -1002,3 +1002,27 @@ func war_set_marker_rects(rects: Array[Rect2]) -> void:
 	war_marker_rects = rects
 	if _cities:
 		_cities.queue_redraw()
+
+
+var _editor_session_layer: Node2D
+
+
+func editor_set_session_layer(layer: Node2D) -> void:
+	if is_instance_valid(_editor_session_layer):
+		_editor_session_layer.queue_free()
+	_editor_session_layer = layer
+	if layer == null:
+		return
+	add_child(layer)
+	move_child(layer, basemap.get_index() + 1)
+
+
+var _editor_top_layer: Node2D
+
+
+func editor_set_top_layer(layer: Node2D) -> void:
+	if is_instance_valid(_editor_top_layer):
+		_editor_top_layer.queue_free()
+	_editor_top_layer = layer
+	if layer != null:
+		add_child(layer)

@@ -95,6 +95,10 @@ var _settings_pop: PanelContainer
 var _documents: WorkshopDocuments
 var _search: WorkshopSearch
 var _fmg_tab: VerticalTab
+var _fmg: WorkshopFmg
+var _fmg_open := false
+var _fmg_info := {}
+var paste_simplified := true
 var _closing := false
 var _rebaking := false
 var _last_clean := "deep"
@@ -150,11 +154,32 @@ func open(scenario_record: Dictionary, open_options: Dictionary) -> void:
 	map.start_view()
 	hydrated = true
 	_render_sidebar()
+	_check_fmg()
+	_refresh_overlays()
 	if bool(review.get("active", false)):
 		var marked := await request_raw("workshop.review.markup")
 		if marked.get("ok", false) and marked["result"] is Dictionary:
 			_apply_markup(marked["result"])
 		open_panel_named("suggestions")
+
+
+func _check_fmg() -> void:
+	var reply := await request_raw("workshop.fmg.available")
+	if reply.get("ok", false) and reply["result"] is Dictionary and bool((reply["result"] as Dictionary).get("available", false)):
+		_fmg_info = reply["result"]
+		_fmg_tab.visible = true
+		_layout()
+
+
+func toggle_fmg() -> void:
+	_fmg_open = not _fmg_open
+	if _fmg_open and (_fmg == null or not is_instance_valid(_fmg)):
+		_fmg = WorkshopFmg.new()
+		add_child(_fmg)
+		move_child(_fmg, _sidebar.get_index())
+		_fmg.setup(self, _fmg_info)
+	_fmg_tab.label = "🗺 GENERATE ▸" if _fmg_open else "🗺 GENERATE ◂"
+	_layout()
 
 
 func request_raw(method: String, args := {}) -> Dictionary:
@@ -234,6 +259,8 @@ func apply(result: Dictionary) -> void:
 		_apply_markup(result["markup"])
 	elif parts.has("regions") and bool(review.get("active", false)) and hydrated:
 		_refresh_markup.call_deferred()
+	if hydrated and (parts.has("regions") or parts.has("doc")):
+		_refresh_overlays.call_deferred()
 	if parts.has("regions") and tool in ["modify", "border"] and not result.has("rings"):
 		_refresh_edit_rings.call_deferred()
 	map.redraw()
@@ -241,11 +268,25 @@ func apply(result: Dictionary) -> void:
 	changed.emit(parts)
 
 
+var _overlay_serial := 0
+
+
+func _refresh_overlays() -> void:
+	_overlay_serial += 1
+	var serial := _overlay_serial
+	var reply := await request_raw("workshop.regionOverlays")
+	if serial != _overlay_serial or not reply.get("ok", false) or not (reply["result"] is Dictionary) or map == null or map.region_overlays == null:
+		return
+	map.region_overlays.set_data(reply["result"])
+	map.sync_overlay_layers()
+
+
 func _apply_basemap() -> void:
 	var reply := await request_raw("workshop.basemapStyle")
 	if not reply.get("ok", false) or not (reply["result"] is Dictionary):
 		return
 	if map and map.map:
+		map.map.editor_set_session_layer(null)
 		map.map.editor_apply_basemap(reply["result"], engine)
 
 
@@ -298,8 +339,10 @@ func _build() -> void:
 	map.lasso_done.connect(_on_lasso)
 	map.box_done.connect(_on_box)
 	map.move_done.connect(_on_move)
+	map.move_started.connect(_on_move_started)
 	map.war_drawn.connect(_on_war_drawn)
 	map.war_pick.connect(func(kind: String, id: String) -> void: pick_war_shape(kind, id))
+	map.war_reshaped.connect(func(kind: String, id: String, geometry: Array) -> void: request("workshop.war.reshape", {"kind": kind, "rowId": id, "points" if kind == "fortification" else "rings": geometry}))
 	map.draw_point_requested.connect(_on_draw_point)
 	map.draw_finished.connect(_on_draw_finished)
 	map.vertex_edit.connect(_on_vertex_edit)
@@ -310,8 +353,11 @@ func _build() -> void:
 	_fmg_tab = VerticalTab.new()
 	_fmg_tab.label = "🗺 GENERATE ◂"
 	_fmg_tab.focus_mode = Control.FOCUS_NONE
+	_fmg_tab.tooltip_text = "Generate a world with the Fantasy Map Generator"
+	_fmg_tab.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	_fmg_tab.visible = false
+	_fmg_tab.pressed.connect(toggle_fmg)
 	add_child(_fmg_tab)
-	UI.set_disabled_look(_fmg_tab, "The Fantasy Map Generator runs inside a web page, and the native app has none to run it in.")
 	_sidebar = PanelContainer.new()
 	add_child(_sidebar)
 	_hide_tab = Button.new()
@@ -394,7 +440,12 @@ func _layout() -> void:
 	_hide_tab.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_hide_tab.tooltip_text = "Show" if sidebar_hidden else "Hide"
 	_fmg_tab.reset_size()
-	_fmg_tab.position = Vector2(view.x - dock_right() - _fmg_tab.size.x, view.y * 0.5 + 40.0)
+	var drawer := WorkshopFmg.WIDTH if _fmg_open else 0.0
+	_fmg_tab.position = Vector2(view.x - dock_right() - drawer - _fmg_tab.size.x, view.y * 0.5 + 40.0)
+	if _fmg and is_instance_valid(_fmg):
+		_fmg.visible = _fmg_open
+		_fmg.position = Vector2(view.x - dock_right() - WorkshopFmg.WIDTH, 0)
+		_fmg.size = Vector2(WorkshopFmg.WIDTH, view.y)
 	_place_panel()
 	_place_inspector()
 
@@ -1164,6 +1215,15 @@ func set_feature_selection(ids: Array) -> void:
 	changed.emit({"featureSelection": true})
 
 
+func _on_move_started(index: int) -> void:
+	if index < 0 or index >= map.ids.size():
+		return
+	var reply := await request_raw("workshop.edit.rings", {"ids": [map.ids[index]]})
+	if reply.get("ok", false) and map._move_line.size() == 2:
+		map.move_rings = (reply["result"] as Dictionary).get("rings", [])
+		map.redraw()
+
+
 func _on_move(index: int, from: Vector2, to: Vector2) -> void:
 	if index < 0 or index >= map.ids.size():
 		return
@@ -1515,7 +1575,7 @@ func _unhandled_key_input(event: InputEvent) -> void:
 			return
 		if key.keycode == KEY_V and not key.shift_pressed and not key.alt_pressed:
 			get_viewport().set_input_as_handled()
-			paste_clipboard(true)
+			paste_clipboard(paste_simplified)
 			return
 	if typing:
 		return

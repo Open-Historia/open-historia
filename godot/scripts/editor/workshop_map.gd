@@ -13,8 +13,10 @@ signal paint_stroke(indices: PackedInt32Array)
 signal lasso_done(ring: Array)
 signal box_done(ids: PackedStringArray, additive: bool)
 signal move_done(index: int, from: Vector2, to: Vector2)
+signal move_started(index: int)
 signal war_drawn(kind: String, coords: Array)
 signal war_pick(kind: String, id: String)
+signal war_reshaped(kind: String, id: String, geometry: Array)
 signal view_moved
 signal draw_point_requested(lonlat: Vector2, previous: Variant)
 signal draw_finished(ring: Array)
@@ -80,7 +82,12 @@ var _lasso: PackedVector2Array = []
 var _box := Rect2()
 var _sketch: Array = []
 var _sketch_kind := ""
+var _war_drag := {}
+var _war_hover: Variant = null
+var _freehand := PackedVector2Array()
 var _move_line := PackedVector2Array()
+var move_rings: Array = []
+var region_overlays: WorkshopRegionOverlays
 var _dirty_fills := false
 var _label_names := {}
 var _last_view := Vector3.ZERO
@@ -103,6 +110,8 @@ func setup(tiles_cache: String) -> void:
 	map = MapView.new()
 	_viewport.add_child(map)
 	map.input_enabled = false
+	region_overlays = WorkshopRegionOverlays.new()
+	map.editor_set_top_layer(region_overlays)
 	map.basemap.cache_dir = tiles_cache
 	map.set_overlays_visible(false)
 	map.baker.baked.connect(_on_baked_data)
@@ -184,6 +193,16 @@ func apply_fills() -> void:
 
 func set_regions_visible(on: bool) -> void:
 	map.editor_set_regions_visible(on)
+	sync_overlay_layers()
+
+
+func sync_overlay_layers() -> void:
+	if region_overlays == null:
+		return
+	region_overlays.show_regions = bool(layers.get("regions", true))
+	region_overlays.show_groups = bool(layers.get("groups", true))
+	region_overlays.show_freezing = bool(layers.get("freezing", true))
+	region_overlays.refresh()
 
 
 func set_selection(indices: Array) -> void:
@@ -218,6 +237,7 @@ func _process(_delta: float) -> void:
 		var view := Vector3(map.camera.position.x, map.camera.position.y, map.camera.zoom.x)
 		if view != _last_view:
 			_last_view = view
+			region_overlays.set_zoom(map.camera.zoom.x)
 			_overlay.queue_redraw()
 
 
@@ -376,6 +396,131 @@ func _feature_shown(row: Dictionary) -> bool:
 	var large := tags.has("capital") or pop >= 1000000.0
 	var mid := pop >= 100000.0
 	return large or (mid and zoom >= 3.5) or zoom >= 5.0
+
+
+func _war_key(kind: String) -> String:
+	return "terrainAreas" if kind == "terrain" else "fortifications" if kind == "fortification" else "climateZones"
+
+
+func _war_row(kind: String, id: String) -> Dictionary:
+	for shape in war.get(_war_key(kind), []):
+		if str((shape as Dictionary).get("id", "")) == id:
+			return shape
+	return {}
+
+
+func _war_lists(kind: String, row: Dictionary) -> Array:
+	if kind == "fortification":
+		return [row.get("points", [])]
+	return row.get("rings", [])
+
+
+func _war_handle(point: Vector2) -> Dictionary:
+	var kind := str(war_selected.get("kind", ""))
+	if kind != tool or not _sketch.is_empty():
+		return {}
+	var id := str(war_selected.get("id", ""))
+	var row := _war_row(kind, id)
+	if row.is_empty():
+		return {}
+	var lists := _war_lists(kind, row)
+	for at in range(lists.size()):
+		var list: Array = lists[at]
+		for index in range(list.size()):
+			var coord: Array = list[index]
+			var screen := screen_of(Vector2(float(coord[0]), float(coord[1])))
+			if screen.distance_to(point) <= 12.0:
+				return {"kind": kind, "id": id, "list": at, "index": index, "insert": false, "screen": screen}
+	for at in range(lists.size()):
+		var list: Array = lists[at]
+		for index in range(list.size() - 1):
+			var a: Array = list[index]
+			var b: Array = list[index + 1]
+			var closest := Geometry2D.get_closest_point_to_segment(point, screen_of(Vector2(float(a[0]), float(a[1]))), screen_of(Vector2(float(b[0]), float(b[1]))))
+			if closest.distance_to(point) <= 12.0:
+				return {"kind": kind, "id": id, "list": at, "index": index + 1, "insert": true, "screen": closest}
+	return {}
+
+
+func _move_war_vertex(point: Vector2) -> void:
+	var kind := str(_war_drag.get("kind", ""))
+	var row := _war_row(kind, str(_war_drag.get("id", "")))
+	if row.is_empty():
+		return
+	var list: Array = _war_lists(kind, row)[int(_war_drag["list"])]
+	var index := int(_war_drag["index"])
+	var lonlat := world_to_lonlat(screen_to_world(point))
+	var coord := [lonlat.x, lonlat.y]
+	list[index] = coord
+	if kind != "fortification" and list.size() > 1:
+		if index == 0:
+			list[list.size() - 1] = coord.duplicate()
+		elif index == list.size() - 1:
+			list[0] = coord.duplicate()
+	_war_hover = point
+	_overlay.queue_redraw()
+
+
+func _lean(points: PackedVector2Array) -> PackedVector2Array:
+	var tolerance := 1.5 / map.camera.zoom.x
+	var kept := points
+	while kept.size() > 1500 and tolerance < 1e7:
+		kept = _simplify_path(points, tolerance)
+		tolerance *= 2.0
+	return kept
+
+
+func _simplify_path(points: PackedVector2Array, tolerance: float) -> PackedVector2Array:
+	if points.size() < 3:
+		return points
+	var keep := PackedByteArray()
+	keep.resize(points.size())
+	keep[0] = 1
+	keep[points.size() - 1] = 1
+	var spans: Array = [[0, points.size() - 1]]
+	while not spans.is_empty():
+		var span: Array = spans.pop_back()
+		var first := int(span[0])
+		var last := int(span[1])
+		var worst := -1
+		var worst_distance := tolerance
+		for index in range(first + 1, last):
+			var distance := Geometry2D.get_closest_point_to_segment(points[index], points[first], points[last]).distance_to(points[index])
+			if distance > worst_distance:
+				worst_distance = distance
+				worst = index
+		if worst >= 0:
+			keep[worst] = 1
+			spans.append([first, worst])
+			spans.append([worst, last])
+	var out := PackedVector2Array()
+	for index in range(points.size()):
+		if keep[index] == 1:
+			out.append(points[index])
+	return out
+
+
+func _finish_freehand() -> void:
+	var kind := tool
+	var screens := _freehand
+	_freehand = PackedVector2Array()
+	_overlay.queue_redraw()
+	if not kind in ["terrain", "fortification", "climate"]:
+		return
+	var worlds := PackedVector2Array()
+	for point in screens:
+		worlds.append(screen_to_world(point))
+	worlds = _lean(worlds)
+	var coords: Array = []
+	for world in worlds:
+		var lonlat := world_to_lonlat(world)
+		coords.append([lonlat.x, lonlat.y])
+	if kind == "fortification":
+		if coords.size() >= 2:
+			war_drawn.emit(kind, coords)
+	elif coords.size() >= 3:
+		coords.append((coords[0] as Array).duplicate())
+		war_drawn.emit(kind, [coords])
 
 
 func _commit_sketch() -> void:
@@ -722,20 +867,73 @@ func _press(button: InputEventMouseButton) -> void:
 				_edit_drag["start"] = button.position
 				_edit_drag["now"] = button.position
 				_drag = "vertex"
+		"terrain", "fortification", "climate":
+			if button.shift_pressed and _sketch.is_empty():
+				_drag = "freehand"
+				_freehand = PackedVector2Array([button.position])
+				return
+			var handle := _war_handle(button.position)
+			if handle.is_empty():
+				_drag = "click"
+				return
+			var row := _war_row(str(handle["kind"]), str(handle["id"]))
+			var list: Array = _war_lists(str(handle["kind"]), row)[int(handle["list"])]
+			if bool(handle.get("insert", false)):
+				var lonlat := world_to_lonlat(screen_to_world(handle["screen"]))
+				list.insert(int(handle["index"]), [lonlat.x, lonlat.y])
+			_war_drag = handle
+			_drag = "war_vertex"
 		"move":
 			var hit := pick(button.position)
 			if hit >= 0:
 				_drag = "move"
 				_pressed_index = hit
 				_move_line = PackedVector2Array([button.position, button.position])
+				move_rings = []
+				move_started.emit(hit)
 			else:
 				_drag = "click"
 		_:
 			_drag = "click"
 
 
+func _draw_move_preview(canvas: Control) -> void:
+	var offset := _move_line[1] - _move_line[0]
+	for entry in move_rings:
+		var ring: Array = (entry as Dictionary).get("coords", [])
+		if ring.size() < 3:
+			continue
+		var points := PackedVector2Array()
+		for coord in ring:
+			points.append(screen_of(Vector2(float(coord[0]), float(coord[1]))) + offset)
+		var fill := Geometry2D.triangulate_polygon(points)
+		if fill.size() >= 3:
+			var colors := PackedColorArray()
+			colors.resize(points.size())
+			colors.fill(Color(1, 1, 1, 0.18))
+			canvas.draw_polygon(points, colors)
+		points.append(points[0])
+		canvas.draw_polyline(points, Color(1, 1, 1, 0.9), 1.5, true)
+
+
+func _update_cursor(point: Vector2) -> void:
+	var shape := Control.CURSOR_ARROW
+	if tool in ["lasso", "draw", "modify", "border", "paint", "feature-box", "terrain", "fortification", "climate"]:
+		shape = Control.CURSOR_CROSS
+	elif tool in ["feature", "marker", "delete", "unit"]:
+		if not point_at(point, ["unit", "feature"], 8.0).is_empty() or (tool == "delete" and pick(point) >= 0):
+			shape = Control.CURSOR_POINTING_HAND
+		elif tool != "delete":
+			shape = Control.CURSOR_CROSS
+	elif tool in ["select", "dissolve"] and pick(point) >= 0:
+		shape = Control.CURSOR_POINTING_HAND
+	if _overlay.mouse_default_cursor_shape != shape:
+		_overlay.mouse_default_cursor_shape = shape
+
+
 func _motion(motion: InputEventMouseMotion) -> void:
 	if _drag.is_empty():
+		_update_cursor(motion.position)
 		if tool in ["terrain", "fortification", "climate"] and not _sketch.is_empty():
 			_overlay.hover = motion.position
 			_overlay.queue_redraw()
@@ -743,6 +941,12 @@ func _motion(motion: InputEventMouseMotion) -> void:
 			_overlay.hover = motion.position
 			hover_moved.emit(world_to_lonlat(screen_to_world(motion.position)))
 			_overlay.queue_redraw()
+		elif tool in ["terrain", "fortification", "climate"]:
+			var handle := _war_handle(motion.position)
+			var hover: Variant = handle.get("screen") if not handle.is_empty() else null
+			if hover != _war_hover:
+				_war_hover = hover
+				_overlay.queue_redraw()
 		elif tool in ["modify", "border"]:
 			_edit_hover = _edit_hit(motion.position)
 			_halo = _shared_halo(motion.position)
@@ -772,6 +976,11 @@ func _motion(motion: InputEventMouseMotion) -> void:
 			_overlay.queue_redraw()
 		"reference":
 			_reference_move(motion.position)
+		"freehand":
+			_freehand.append(motion.position)
+			_overlay.queue_redraw()
+		"war_vertex":
+			_move_war_vertex(motion.position)
 	_drag_last = motion.position
 
 
@@ -810,6 +1019,7 @@ func _release(button: InputEventMouseButton) -> void:
 			var from := world_to_lonlat(screen_to_world(_move_line[0]))
 			var to := world_to_lonlat(screen_to_world(button.position))
 			_move_line = PackedVector2Array()
+			move_rings = []
 			_overlay.queue_redraw()
 			if _drag_distance >= 3.0:
 				move_done.emit(_pressed_index, from, to)
@@ -818,6 +1028,17 @@ func _release(button: InputEventMouseButton) -> void:
 				_click(button)
 		"reference":
 			_reference_drag = {}
+		"freehand":
+			_finish_freehand()
+		"war_vertex":
+			var handle := _war_drag
+			_war_drag = {}
+			_overlay.queue_redraw()
+			var row := _war_row(str(handle.get("kind", "")), str(handle.get("id", "")))
+			if not row.is_empty() and (_drag_distance >= 2.0 or bool(handle.get("insert", false))):
+				var shape_kind := str(handle["kind"])
+				var geometry: Array = row.get("points", []) if shape_kind == "fortification" else row.get("rings", [])
+				war_reshaped.emit(shape_kind, str(handle["id"]), geometry.duplicate(true))
 		"vertex":
 			var handle := _edit_drag
 			_edit_drag = {}
@@ -1002,8 +1223,14 @@ func _draw_overlay(canvas: Control) -> void:
 		canvas.draw_rect(_box, Color(1, 1, 1, 0.12), true)
 		canvas.draw_rect(_box, Color(1, 1, 1, 0.8), false, 1.0)
 	if _move_line.size() == 2:
+		_draw_move_preview(canvas)
 		canvas.draw_line(_move_line[0], _move_line[1], Color(1, 1, 1, 0.85), 2.0, true)
 		canvas.draw_circle(_move_line[1], 4.0, WorkshopUI.ACCENT_GREY)
+	if _freehand.size() >= 2:
+		canvas.draw_polyline(_freehand, Color(1, 1, 1, 0.95), 2.0, true)
+	if _war_hover is Vector2 and _sketch.is_empty() and _freehand.is_empty():
+		canvas.draw_circle(_war_hover, 6.0, Color(1, 1, 1, 0.95))
+		canvas.draw_arc(_war_hover, 6.0, 0.0, TAU, 20, Color(0.02, 0.03, 0.05, 0.9), 1.5, true)
 	if not _sketch.is_empty():
 		var line := PackedVector2Array()
 		for point in _sketch:

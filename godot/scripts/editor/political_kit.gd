@@ -100,6 +100,52 @@ static func input(value: String, placeholder := "", on_change: Callable = Callab
 	return node
 
 
+static func number_value(text: String) -> String:
+	var pattern := RegEx.create_from_string("^-?(\\d+\\.?\\d*|\\.\\d+)([eE][-+]?\\d+)?$")
+	return text if pattern.search(text) != null else ""
+
+
+static func number_input(value: String, min_value: float, max_value: float, step: float, on_change: Callable = Callable(), placeholder := "") -> LineEdit:
+	var node := input(value, placeholder)
+	node.set_meta("accepted", value)
+	node.text_changed.connect(func(text: String) -> void:
+		var kept := ""
+		for character in text:
+			if "0123456789+-.eE".contains(character):
+				kept += character
+		if kept != text:
+			var caret := node.caret_column - (text.length() - kept.length())
+			node.text = kept
+			node.caret_column = clampi(caret, 0, kept.length())
+		if str(node.get_meta("accepted", "")) == kept:
+			return
+		node.set_meta("accepted", kept)
+		if on_change.is_valid():
+			on_change.call(number_value(kept)))
+	node.gui_input.connect(func(event: InputEvent) -> void:
+		var key := event as InputEventKey
+		if key == null or not key.pressed or (key.keycode != KEY_UP and key.keycode != KEY_DOWN):
+			return
+		node.accept_event()
+		var current := number_value(node.text)
+		var number := current.to_float() if not current.is_empty() else 0.0
+		var direction := 1.0 if key.keycode == KEY_UP else -1.0
+		var steps := (number - min_value) / step
+		var aligned := absf(steps - roundf(steps)) < 0.000001
+		if not current.is_empty() and ((direction > 0.0 and number < min_value) or (direction < 0.0 and number > max_value)):
+			number = min_value if direction > 0.0 else max_value
+		elif aligned:
+			number = min_value + (roundf(steps) + direction) * step
+		else:
+			number = min_value + (floorf(steps) + (1.0 if direction > 0.0 else 0.0)) * step
+		number = clampf(snappedf(number, 0.0000001), min_value, max_value)
+		var shown := js_number(number)
+		node.text = shown
+		node.caret_column = shown.length()
+		node.text_changed.emit(shown))
+	return node
+
+
 static func area(value: String, min_height: float, on_change: Callable = Callable(), placeholder := "", mono := false, size := 12) -> TextEdit:
 	var node := TextEdit.new()
 	node.text = value

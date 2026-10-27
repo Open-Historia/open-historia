@@ -9,6 +9,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { installShims } from "./shims.js";
 import { installWorkerShim } from "./workers.js";
 import { installStandInModel } from "./standin.js";
+import { flagFile } from "./handlers/country.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.resolve(here, "..", "..");
@@ -210,6 +211,17 @@ const eventView = (event) => ({
   playerRelated: event?.playerRelated === true,
 });
 
+const countryNameOf = async (code) => {
+  const wanted = clean(code);
+  if (!wanted) return "";
+  try {
+    await engine.wrPolityNames.ensurePolityNames();
+    return clean(engine.wrPolityNames.polityDisplayName(wanted)) || wanted;
+  } catch {
+    return wanted;
+  }
+};
+
 const gameView = async () => {
   const bundle = await engine.readGameStateBundle({ force: true });
   const library = engine.getLibraryState();
@@ -217,6 +229,7 @@ const gameView = async () => {
   return {
     id: activeId,
     country: clean(bundle.game?.country),
+    countryName: await countryNameOf(bundle.game?.country),
     gameDate: clean(bundle.game?.gameDate),
     round: Number(bundle.game?.round) || 0,
     events: list(bundle.events).slice(-40).map(eventView),
@@ -377,25 +390,49 @@ const methods = {
     return true;
   },
   "game.flag": async ({ country = "" } = {}) => {
-    const catalog = await api("/api/library");
-    const wanted = clean(country);
-    const entry = Object.entries(catalog?.countryNames ?? {}).find(([, name]) => clean(name) === wanted);
-    return { flag: entry ? flagFileFor(entry[0], path.join(repo, "public", "flags")) : "" };
+    const code = clean(country);
+    if (!code) return { flag: "", emoji: "", name: "", landless: false };
+    const [world, flags, name] = await Promise.all([
+      engine.gameState.readWorldState({ force: true }).catch(() => null),
+      engine.assets.getNationFlags({ force: true }).catch(() => ({})),
+      countryNameOf(code),
+    ]);
+    const landless = Boolean(world) && engine.gameState.isPolityLandless(world, code);
+    const args = { polity: { polityKey: code, code, name: name || code }, world: world || {}, flags: flags || {} };
+    const resolved = landless ? engine.ctPolityFlags.resolveChosenPolityFlag(args) : engine.ctPolityFlags.resolvePolityFlag(args);
+    const url = landless ? resolved?.imageUrl : (resolved?.imageUrl || engine.flagImageUrlFromGid(code));
+    let file = url ? flagFile({ repo, cacheDir }, url) : "";
+    if (!file && !landless && !resolved?.imageUrl) {
+      const catalog = await api("/api/library").catch(() => null);
+      const entry = Object.entries(catalog?.countryNames ?? {}).find(([key, label]) => key === code || clean(label) === code);
+      if (entry) file = flagFileFor(entry[0], path.join(repo, "public", "flags"));
+    }
+    const emoji = landless ? "" : clean(engine.countryFlags.flagEmojiFromGid(code));
+    return { flag: file, emoji, name, landless };
   },
   "map.cities": async () => {
     const response = await fetch(engine.JSON_URLS.citiesGeojson || "/api/runtime/json/citiesGeojson");
     if (!response.ok) return { cities: [] };
     const parsed = await response.json().catch(() => null);
+    const world = await engine.gameState.readWorldState({ force: true }).catch(() => null);
+    const renames = world?.cityRenames && typeof world.cityRenames === "object" ? world.cityRenames : {};
+    const capitalOf = (props) => {
+      const value = props.capital;
+      if (value === true) return true;
+      if (typeof value === "string" && ["primary", "capital", "true", "yes", "1"].includes(value.trim().toLowerCase())) return true;
+      return Array.isArray(props.tags) && props.tags.some((tag) => String(tag).trim().toLowerCase() === "capital");
+    };
     const cities = [];
     for (const feature of list(parsed?.features)) {
       const coordinates = feature?.geometry?.coordinates;
       if (!Array.isArray(coordinates) || coordinates.length < 2) continue;
       const props = feature?.properties ?? {};
-      const name = clean(props.name ?? props.NAME ?? props.city);
+      const name = clean(props.city ?? props.name ?? props.NAME);
       if (!name) continue;
-      const capital = clean(props.capital).toLowerCase() === "primary" || props.capital === true;
+      const renamed = renames[name.toLowerCase()];
+      const label = typeof renamed === "string" && renamed.trim() ? renamed : name;
       const population = Number(props.population ?? props.POP_MAX ?? props.pop_max ?? props.pop) || 0;
-      cities.push([name, Number(coordinates[0]), Number(coordinates[1]), capital ? 1 : 0, population, Number(props.tier) || 3]);
+      cities.push([label, Number(coordinates[0]), Number(coordinates[1]), capitalOf(props) ? 1 : 0, population, Number(props.tier) || 3, label !== name ? 1 : 0, name]);
     }
     return { cities };
   },

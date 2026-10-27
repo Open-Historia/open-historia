@@ -2,7 +2,7 @@ class_name WorkshopBasemaps
 extends WorkshopOverlay
 
 const HUB_BASEMAPS_URL := "https://github.com/Open-Historia/Open-historia-scenarios/issues?q=is%3Aissue+label%3Abasemap"
-const SESSION_ONLY := "the native Workshop cannot show GeoTIFF files or .pmtiles files of vector tiles yet."
+const SESSION_NOTICE := "This GeoTIFF or PMTiles background is on the map for this session only, to draw over. It is not saved with the map or added to Your basemaps, and the game does not show it."
 const ADD_FILTERS := ["*.geojson, *.json, *.kml, *.kmz, *.zip, *.shp, *.tif, *.tiff, *.pmtiles, *.png, *.jpg, *.jpeg, *.svg ; Basemaps and detailed maps"]
 const KIND_LABELS := {"builtin": "built-in", "vector": "drawn map", "image": "picture", "plain": "plain sea", "detailed": "detailed map"}
 const CARD_WIDTH := 200.0
@@ -450,7 +450,11 @@ func _add_file(file: String) -> String:
 		if tiled.get("basemap") is Dictionary:
 			await _change("workshop.maps.addLibrary", {"basemapId": str((tiled["basemap"] as Dictionary).get("id", ""))})
 			return ""
-		return SESSION_ONLY if bool(tiled.get("vectorTiles", false)) else str(tiled.get("error", ""))
+		if not bool(tiled.get("vectorTiles", false)):
+			return str(tiled.get("error", ""))
+		host.map.map.editor_set_session_layer(null)
+		_notice = {"tone": "warn", "text": SESSION_NOTICE}
+		return ""
 	var upload := file
 	var format := ""
 	if ext == "kml" or ext == "kmz":
@@ -473,7 +477,16 @@ func _add_file(file: String) -> String:
 	if info.has("error"):
 		return str(info["error"])
 	if bool(info.get("sessionOnly", false)):
-		return SESSION_ONLY
+		var raster: Variant = info.get("raster")
+		var layer: WorkshopSessionRaster = null
+		if raster is Dictionary:
+			var spec: Dictionary = raster
+			layer = WorkshopSessionRaster.from_file(str(spec.get("file", "")), int(spec.get("width", 0)), int(spec.get("height", 0)), str(spec.get("crs", "")), spec.get("bounds", []) if spec.get("bounds") is Array else [])
+			if layer == null:
+				return "This GeoTIFF could not be read."
+		host.map.map.editor_set_session_layer(layer)
+		_notice = {"tone": "warn", "text": SESSION_NOTICE}
+		return ""
 	var thumbnail := ""
 	var aspect: Variant = null
 	if str(info.get("kind", "")) == "image":

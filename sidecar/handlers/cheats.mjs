@@ -302,11 +302,19 @@ const polityNameInUse = (world, name, mapPolities = []) => {
 };
 
 export const register = (ctx) => {
-  const { engine, api, plain, clean, list, addStandIn, standIn } = ctx;
+  const { engine, api, plain, clean, list, addStandIn, standIn, emit } = ctx;
   const gs = engine.gameState;
   const assets = engine.assets;
   const URLS = engine.JSON_URLS;
   const readJson = engine.readJson;
+  if (typeof globalThis.addEventListener === "function" && typeof emit === "function") {
+    globalThis.addEventListener("oh:world-updated", () => emit("cheats.live", { kind: "world" }));
+    globalThis.addEventListener("oh:runtime-json-updated", (event) => {
+      if (event?.detail?.url === engine.JSON_URLS.events) emit("cheats.live", { kind: "events" });
+    });
+    globalThis.addEventListener("oh:event-outreach-evaluated", () => emit("cheats.live", { kind: "events" }));
+    globalThis.addEventListener("oh:event-outreach-queue-changed", () => emit("cheats.live", { kind: "events" }));
+  }
 
   const gameDates = engine.gameDates ?? {};
   const parseDate = (value) => {
@@ -455,6 +463,23 @@ export const register = (ctx) => {
     return regionFile.features;
   };
   const featureIdOf = (feature) => clean(feature?.id ?? feature?.properties?.id ?? feature?.properties?.GID_1);
+  const ownRegionGeometry = async () => {
+    const library = engine.getLibraryState?.() ?? {};
+    const scenarioId = clean(library?.runtimeScenario?.id || library?.activeGame?.scenarioId);
+    if (!scenarioId) return false;
+    try {
+      const response = await fetch(new URL(`/api/scenarios/${encodeURIComponent(scenarioId)}/assets/regionsGeojson`, globalThis.location.origin).href);
+      const found = response.ok;
+      try {
+        await response.body?.cancel?.();
+      } catch {
+        return found;
+      }
+      return found;
+    } catch {
+      return false;
+    }
+  };
 
   const regionAt = async ({ index = -1, id = "" } = {}) => {
     const features = await regionFeatures();
@@ -1305,7 +1330,7 @@ export const register = (ctx) => {
       claimants,
       group,
       groups: Object.keys(groups).map((name) => ({ name, color: groups[name]?.color || defaultGroupColor(name) })),
-      canRename: true,
+      canRename: await ownRegionGeometry(),
     };
   };
 
@@ -1659,6 +1684,7 @@ export const register = (ctx) => {
     },
 
     "cheats.regions.rename": async ({ id, name }) => {
+      if (!(await ownRegionGeometry())) throw new Error("Stock-map region names come from immutable map tiles, so this name is read-only here.");
       const geojson = await readJson(URLS.regionsGeojson, { defaultValue: null, force: true });
       const feature = list(geojson?.features).find((entry) => featureIdOf(entry) === clean(id));
       if (!feature) throw new Error("The editable region geometry disappeared; pick the region again.");

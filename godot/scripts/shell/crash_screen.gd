@@ -92,7 +92,10 @@ func show_crash(message: String, report: String) -> void:
 	_detail.text = message
 	_detail_holder.visible = not message.strip_edges().is_empty()
 	var scroll := _detail_holder.get_meta("scroll") as ScrollContainer
-	scroll.custom_minimum_size.y = minf(8.0 * 16.0, _detail.get_combined_minimum_size().y + 2.0)
+	var font := _detail.get_theme_font("font")
+	var font_size := _detail.get_theme_font_size("font_size")
+	var block := font.get_multiline_string_size(message, HORIZONTAL_ALIGNMENT_LEFT, 30.0 * 16.0 - 26.0, font_size) if font else Vector2(0, 16)
+	scroll.custom_minimum_size.y = minf(8.0 * 16.0 - 19.2, block.y + 2.0)
 	_copy.text = COPY_IDLE
 	_copy.disabled = false
 	visible = true

@@ -55,7 +55,7 @@ copy(release, path.join(stage, "native", "godot", "bin", "oh_gdext.dll"));
 const sidecar = path.join(here, "sidecar");
 for (const name of ["main.mjs", "shims.js", "standin.js", "serverWorker.mjs", "workers.js", "workerHost.mjs"]) copy(path.join(sidecar, name), path.join(stage, "native", "sidecar", name));
 copy(path.join(sidecar, "dist"), path.join(stage, "native", "sidecar", "dist"), (file, isDir) => isDir || !file.endsWith(".map"));
-copy(path.join(sidecar, "handlers"), path.join(stage, "native", "sidecar", "handlers"), (file, isDir) => isDir || file.endsWith(".mjs"));
+copy(path.join(sidecar, "handlers"), path.join(stage, "native", "sidecar", "handlers"), (file, isDir) => isDir || file.endsWith(".mjs") || file.endsWith(".cjs"));
 
 copy(path.join(repo, "server"), path.join(stage, "server"), (file, isDir) => {
   if (isDir) return path.basename(file) !== "data";
@@ -97,6 +97,12 @@ const visit = (name, from) => {
 for (const name of wanted) visit(name, repo);
 for (const dir of seen) copy(dir, path.join(stage, path.relative(repo, dir)));
 console.log(`bundled ${seen.size} server packages`);
+
+const fmgDist = path.join(repo, "fmg", "dist");
+if (fs.existsSync(fmgDist)) {
+  copy(fmgDist, path.join(stage, "fmg", "dist"));
+  if (fs.existsSync(path.join(repo, "fmg", ".version"))) copy(path.join(repo, "fmg", ".version"), path.join(stage, "fmg", ".version"));
+}
 
 const publicDir = path.join(repo, "public");
 copy(path.join(repo, "scripts", "map-assets.json"), path.join(stage, "scripts", "map-assets.json"));

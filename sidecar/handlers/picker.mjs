@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { flagFile as flagFileOf } from "./country.mjs";
 
 const GRAND_STRATEGY_PALETTE = [
   [65, 105, 175], [175, 55, 60], [95, 135, 90], [195, 150, 60], [110, 115, 125], [75, 135, 130], [170, 90, 60], [135, 75, 115],
@@ -96,18 +97,23 @@ export const register = (ctx) => {
     return Array.isArray(match) ? match.slice(0, 3).map((value) => Math.max(0, Math.min(255, Math.round(Number(value) || 0)))) : fallbackRgb(name);
   };
 
-  return {
-    "picker.open": async ({ scenarioId }) => {
-      const id = clean(scenarioId);
+  const seedWorldOf = (world) => ({
+    ownerCodes: [...new Set(Object.values(world?.regionOwnershipOverrides ?? {}).map((owner) => clean(owner)).filter(Boolean))].sort(),
+    polityOverrides: world?.polityOverrides ?? {},
+  });
+
+  const pickerFor = async (id, { playGameId = "" } = {}) => {
       const [{ scenario, countryNames }, details, allCountries, colors] = await Promise.all([
         scenarioOf(id),
         lib.loadScenarioDetails(id).catch(() => null),
-        engine.assets.loadCountryNames().catch(() => []),
+        engine.assets.loadCountryNames().catch(() => null),
         palette(id),
       ]);
       const world = details?.data?.world ?? {};
       const base = Object.entries(countryNames ?? {}).map(([code, name]) => ({ code, name }));
-      const options = engine.newGameWorld.buildScenarioCountryOptions(world, [...base, ...list(allCountries)], scenario?.countryNameOverrides)
+      const optionWorld = playGameId ? seedWorldOf(world) : world;
+      const known = playGameId && allCountries === null ? [] : [...base, ...list(allCountries)];
+      const options = engine.newGameWorld.buildScenarioCountryOptions(optionWorld, known, scenario?.countryNameOverrides)
         .map((option) => ({ code: clean(option.code), name: clean(option.name), flag: flagFile(option), color: colorOf(option, colors, countryNames) }));
       const regions = await regionsFile(id);
       const overrides = world?.regionOwnershipOverrides ?? {};
@@ -151,13 +157,55 @@ export const register = (ctx) => {
       }
       return {
         scenario: { id, name: clean(scenario?.name), credits },
+        playGameId,
         options,
         map: { file: regions.file, sha: regions.sha, regionIds: regions.features.map((feature) => clean(feature?.id ?? feature?.properties?.id)), state: { sha: regions.sha, owners, ownerNames, ownerColors, player: "" }, palette: ownerNames.map((owner) => colorOf({ code: owner, name: owner }, colors, countryNames)) },
-        offersGroups,
+        offersGroups: playGameId ? false : offersGroups,
         groups: Object.values(groups).map((group) => ({ name: clean(group.name), color: hexToRgb(group.color), hex: clean(group.color), description: clean(group.description), regionCount: list(areas[group.name]).length })),
         difficulties: engine.DIFFICULTY_LEVELS.map((level) => ({ id: level.id, label: level.label, emoji: level.emoji, blurb: level.blurb })),
       };
+  };
+
+  const gameScenarioId = async (gameId) => {
+    const catalog = await api("/api/library");
+    const game = list(catalog?.games).find((entry) => clean(entry?.id) === clean(gameId));
+    if (!game) throw new Error("That game is not in the library any more.");
+    return clean(game.scenarioId);
+  };
+
+  return {
+    "picker.open": async ({ scenarioId }) => pickerFor(clean(scenarioId)),
+    "picker.forGame": async ({ gameId }) => pickerFor(await gameScenarioId(gameId), { playGameId: clean(gameId) }),
+    "picker.choose": async ({ gameId, country = "", difficulty = "" }) => {
+      const gamePatch = { ...(clean(country) ? { country: clean(country) } : null), ...(clean(difficulty) ? { difficulty: clean(difficulty) } : null) };
+      if (Object.keys(gamePatch).length) await lib.saveGame(clean(gameId), { gamePatch });
+      await engine.refreshLibraryCatalog({ force: true });
+      return { id: clean(gameId) };
     },
+    "picker.flags.catalog": async ({ owner = "", current = null } = {}) => {
+      const flags = engine.wsBuiltInFlags;
+      const builtIn = flags.builtInFlagChoices();
+      const suggested = flags.suggestedBuiltInFlag(builtIn, clean(owner));
+      const mine = await engine.wsFlagLibrary.listFlags().catch(() => []);
+      const withFile = (row, value) => ({ ...row, file: flagFileOf(ctx, value) });
+      return plain({
+        builtIn: builtIn.map((flag) => withFile({ code: flag.code, name: flag.name, alpha2: flag.alpha2, imageUrl: flag.imageUrl }, flag.imageUrl)),
+        suggested: suggested ? withFile({ code: suggested.code, name: suggested.name, imageUrl: suggested.imageUrl }, suggested.imageUrl) : null,
+        inThisMap: [],
+        mine: (Array.isArray(mine) ? mine : []).map((flag) => withFile({ id: flag.id, name: flag.name, code: flag.code, polity: flag.polity, dataUrl: flag.dataUrl, author: flag.author || "", community: Boolean(flag.source?.community), communityUrl: flag.source?.url || null }, flag.dataUrl)),
+        current: current || null,
+        author: "",
+      });
+    },
+    "picker.flags.save": async ({ owner = "", name = "", dataUrl = "" } = {}) => {
+      try {
+        await engine.wsFlagLibrary.saveFlag({ name: clean(name) || clean(owner) || "Flag", code: clean(owner), polity: clean(owner), author: "", dataUrl });
+      } catch (error) {
+        console.warn("[picker] could not save flag to the library:", error);
+      }
+      return { value: dataUrl, file: flagFileOf(ctx, dataUrl) };
+    },
+    "picker.flags.file": async ({ value = "" } = {}) => ({ file: flagFileOf(ctx, value) }),
     "picker.start": async ({ scenarioId, country = "", difficulty = "", faction = null, group = null }) => {
       const id = clean(scenarioId);
       const { scenario } = await scenarioOf(id);

@@ -18,7 +18,12 @@ const GROUP_TEXTS := {
 }
 
 var map_view: MapView
+var engine: EngineLink
+var context := {}
 var _data: Dictionary = {}
+var _play_game_id := ""
+var _flag_host: Control
+var _flag_overlay: Control
 var _options: Array = []
 var _groups: Array = []
 var _difficulties: Array = []
@@ -96,6 +101,7 @@ func open(data: Dictionary) -> void:
 	_groups = data.get("groups", [])
 	_difficulties = data.get("difficulties", [])
 	_offers_groups = bool(data.get("offersGroups", false))
+	_play_game_id = str(data.get("playGameId", ""))
 	var map: Dictionary = data.get("map", {})
 	_region_ids = map.get("regionIds", [])
 	var state: Dictionary = map.get("state", {})
@@ -123,8 +129,13 @@ func open(data: Dictionary) -> void:
 
 
 func _close() -> void:
+	_close_flag_picker()
 	_mode = "country"
 	cancelled.emit()
+
+
+func is_play_mode() -> bool:
+	return not _play_game_id.is_empty()
 
 
 func _size_modal() -> void:
@@ -163,7 +174,7 @@ func _render() -> void:
 		spaced.add_theme_constant_override("margin_bottom", 10)
 		spaced.add_child(block)
 		_content.add_child(spaced)
-	if _tab == "group":
+	if _tab == "group" and not is_play_mode():
 		_render_group_tab()
 		_set_mode("regions" if not _creator.is_empty() and not bool(_creator.get("landless", true)) else "country")
 		return
@@ -205,6 +216,12 @@ func _render_header() -> void:
 	titles.add_child(eyebrow)
 	titles.add_child(UI.label("Play as a group" if _tab == "group" else "Choose your country", 21, UI.WHITE, 800, "Arial", -1))
 	header.add_child(titles)
+	if is_play_mode():
+		var plain := MarginContainer.new()
+		plain.add_theme_constant_override("margin_bottom", 12)
+		plain.add_child(header)
+		_content.add_child(plain)
+		return
 	var tabs := PanelContainer.new()
 	tabs.add_theme_stylebox_override("panel", UI.box(Color(0, 0, 0, 0.35), Color(1, 1, 1, 0.1), 10, 1, Vector4(3, 3, 3, 3)))
 	tabs.size_flags_vertical = Control.SIZE_SHRINK_CENTER
@@ -236,7 +253,7 @@ func _render_footer() -> void:
 	_content.add_child(rule)
 	var row := HBoxContainer.new()
 	row.add_child(UI.spacer())
-	var cancel := EventCards.button("Cancel", Color(1, 1, 1, 0.06), Color(1, 1, 1, 0.12), UI.BUTTON_INK, 8, 14, 600, Vector4(20, 7, 20, 7))
+	var cancel := EventCards.button("Done" if is_play_mode() else "Cancel", Color(1, 1, 1, 0.06), Color(1, 1, 1, 0.12), UI.BUTTON_INK, 8, 14, 600, Vector4(20, 7, 20, 7))
 	cancel.pressed.connect(_close)
 	row.add_child(cancel)
 	var spaced := MarginContainer.new()
@@ -428,7 +445,7 @@ func _default_row() -> Button:
 	words.alignment = BoxContainer.ALIGNMENT_CENTER
 	words.add_theme_constant_override("separation", 1)
 	words.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	words.add_child(UI.label("Scenario default", 13, UI.WHITE, 700))
+	words.add_child(UI.label("Keep scenario default" if is_play_mode() else "Scenario default", 13, UI.WHITE, 700))
 	words.add_child(UI.label("Start with the scenario's designated country", 11, Color(1, 1, 1, 0.5)))
 	content.add_child(words)
 	row.add_child(content)
@@ -613,7 +630,7 @@ func _group_row(entry: Dictionary) -> Button:
 
 func _creator_form() -> Control:
 	if _creator.is_empty():
-		_creator = {"name": "", "color": Color("#a1a1aa"), "lore": "", "landless": true}
+		_creator = {"name": "", "color": Color("#a1a1aa"), "lore": "", "landless": true, "flag": null}
 	var group_mode := true
 	var form := VBoxContainer.new()
 	form.add_theme_constant_override("separation", 10)
@@ -640,12 +657,33 @@ func _creator_form() -> Control:
 	var flag_column := VBoxContainer.new()
 	flag_column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	flag_column.add_child(_field_label("Flag"))
-	var flag_row := HBoxContainer.new()
-	flag_row.add_theme_constant_override("separation", 8)
-	flag_row.add_child(UI.label("🏳️", 21, UI.WHITE, 400, "Segoe UI Emoji"))
-	var choose := _pill("Choose flag", false)
-	UI.set_disabled_look(choose, "Choosing a flag here is not in the native app yet.")
+	var flag_row := HFlowContainer.new()
+	flag_row.add_theme_constant_override("h_separation", 8)
+	flag_row.add_theme_constant_override("v_separation", 8)
+	var chosen: Variant = _creator.get("flag")
+	var has_flag := chosen is String and not (chosen as String).is_empty()
+	var preview := _flag_preview(str(_creator.get("flag_file", ""))) if has_flag else null
+	if preview:
+		flag_row.add_child(preview)
+	else:
+		var white := UI.label("🏳️", 21, UI.WHITE, 400, "Segoe UI Emoji")
+		white.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		flag_row.add_child(white)
+	var choose := _pill("Change flag" if has_flag else "Choose flag", false)
+	choose.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	if _flag_scripts().is_empty():
+		UI.set_disabled_look(choose, "The flag picker could not be loaded.")
+	else:
+		choose.pressed.connect(_open_flag_picker)
 	flag_row.add_child(choose)
+	if has_flag:
+		var remove := _pill("Remove", false)
+		remove.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		remove.pressed.connect(func() -> void:
+			_creator["flag"] = null
+			_creator["flag_file"] = ""
+			_render())
+		flag_row.add_child(remove)
 	flag_column.add_child(flag_row)
 	row.add_child(flag_column)
 	form.add_child(row)
@@ -719,7 +757,8 @@ func _create() -> void:
 			if int(index) < _region_ids.size():
 				regions.append(str(_region_ids[int(index)]))
 	var colour: Color = _creator.get("color", Color("#a1a1aa"))
-	var payload := {"name": name, "color": "#" + colour.to_html(false), "flag": null, "lore": str(_creator.get("lore", "")).strip_edges(), "regionIds": regions}
+	var chosen_flag: Variant = _creator.get("flag")
+	var payload := {"name": name, "color": "#" + colour.to_html(false), "flag": chosen_flag if chosen_flag is String and not (chosen_flag as String).is_empty() else null, "lore": str(_creator.get("lore", "")).strip_edges(), "regionIds": regions}
 	if _offers_groups:
 		payload["existing"] = false
 		_pick = {"group": payload}
@@ -728,6 +767,75 @@ func _create() -> void:
 	_creator = {}
 	_selected = {}
 	_render()
+
+
+func _flag_preview(file: String) -> Control:
+	if file.is_empty():
+		return null
+	var texture: Texture2D = UI.flag(file, 22) if file.get_extension().to_lower() == "svg" else null
+	if texture == null:
+		var image := Image.load_from_file(file)
+		if image == null or image.is_empty():
+			return null
+		texture = ImageTexture.create_from_image(image)
+	var frame := PanelContainer.new()
+	frame.add_theme_stylebox_override("panel", UI.box(Color(0, 0, 0, 0), Color(1, 1, 1, 0.25), 3, 1, Vector4(1, 1, 1, 1)))
+	frame.custom_minimum_size = Vector2(34, 22)
+	frame.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	var picture := TextureRect.new()
+	picture.texture = texture
+	picture.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	picture.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	frame.add_child(picture)
+	return frame
+
+
+func _flag_scripts() -> Array:
+	var host_script: Variant = load("res://scripts/ui/flag_choice_host.gd")
+	var picker_script: Variant = load("res://scripts/editor/workshop_flags.gd")
+	if host_script is GDScript and picker_script is GDScript and (host_script as GDScript).can_instantiate() and (picker_script as GDScript).can_instantiate():
+		return [host_script, picker_script]
+	return []
+
+
+func _open_flag_picker() -> void:
+	if not engine:
+		return
+	_close_flag_picker()
+	var scripts := _flag_scripts()
+	if scripts.is_empty():
+		return
+	_flag_host = (scripts[0] as GDScript).new()
+	_flag_host.set("engine", engine)
+	_flag_host.set("context", context)
+	_flag_host.set("current", _creator.get("flag"))
+	_flag_host.connect("chosen", _on_flag_chosen)
+	_flag_overlay = (scripts[1] as GDScript).new()
+	_flag_host.set("dialog_parent", _flag_overlay)
+	add_child(_flag_overlay)
+	_flag_overlay.connect("closed", _close_flag_picker)
+	_flag_overlay.call("setup", _flag_host, str(_creator.get("name", "")).strip_edges())
+
+
+func _on_flag_chosen(value: Variant) -> void:
+	if value is String and not (value as String).is_empty():
+		_creator["flag"] = value
+		var reply: Dictionary = await engine.request("picker.flags.file", {"value": value})
+		_creator["flag_file"] = str((reply.get("result", {}) as Dictionary).get("file", "")) if reply.get("ok", false) else ""
+	else:
+		_creator["flag"] = null
+		_creator["flag_file"] = ""
+	if _tab == "group" and _pick.is_empty():
+		_render()
+
+
+func _close_flag_picker() -> void:
+	if _flag_overlay and is_instance_valid(_flag_overlay):
+		_flag_overlay.queue_free()
+	_flag_overlay = null
+	if _flag_host and is_instance_valid(_flag_host):
+		_flag_host.queue_free()
+	_flag_host = null
 
 
 func _field_label(text: String) -> Control:

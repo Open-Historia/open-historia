@@ -14,8 +14,10 @@ const TITLE_INK := Color(1, 1, 1, 0.9)
 const DIM_INK := Color(1, 1, 1, 0.4)
 const ERROR_INK := Color("#fecaca")
 const WARN_INK := Color("#fde68a")
+const ADD_FILTERS := ["*.geojson, *.json, *.kml, *.kmz, *.zip, *.shp, *.tif, *.tiff, *.pmtiles, *.png, *.jpg, *.jpeg, *.svg ; Basemaps and detailed maps"]
+const REFERENCE_ONLY := "That file can only be used as a reference inside the Map Editor."
 const HUB_BASEMAPS_URL := "https://github.com/Open-Historia/Open-historia-scenarios/issues?q=is%3Aissue+label%3Abasemap"
-const ADD_TOOLTIP := "A basemap: a picture (.png, .jpg) or a painted map (.geojson). Or a detailed map: a .pmtiles file of picture tiles, up to 500 MB."
+const ADD_TOOLTIP := "A basemap: a picture (.png, .jpg) or a painted map (.geojson, .kml, .zip…). Or a detailed map: a .pmtiles file of picture tiles, up to 500 MB. GeoTIFF files and .pmtiles of vector tiles are shown for the current session only."
 const NO_BASEMAPS := "No basemaps of your own yet. Use “⬆ Add basemap or detailed map” to add a picture or a painted map (.png, .jpg, .geojson…); it stays here so you can reuse it on any scenario."
 const NO_DETAILED := "No detailed maps yet. Download one from the Community tab, or add your own .pmtiles file with “⬆ Add basemap or detailed map”. A detailed map is drawn on top of a scenario's basemap."
 const NO_COMMUNITY := "No community basemaps yet — share one of yours with the ⤴ button on a “Your basemaps” card in My Maps."
@@ -44,7 +46,6 @@ var _header: HBoxContainer
 var _body: VBoxContainer
 var _scroll: ScrollContainer
 var _dialog: Control
-var _file_dialog: FileDialog
 
 
 func _init() -> void:
@@ -697,40 +698,74 @@ func _publish(bm: Dictionary) -> void:
 func _pick_file() -> void:
 	if _busy:
 		return
-	if _file_dialog and is_instance_valid(_file_dialog):
-		_file_dialog.queue_free()
-	_file_dialog = FileDialog.new()
-	_file_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
-	_file_dialog.access = FileDialog.ACCESS_FILESYSTEM
-	_file_dialog.use_native_dialog = true
-	_file_dialog.title = "Add basemap or detailed map"
-	_file_dialog.filters = PackedStringArray(["*.png, *.jpg, *.jpeg, *.webp, *.gif, *.geojson, *.json, *.pmtiles ; Maps", "*.png, *.jpg, *.jpeg, *.webp, *.gif ; Pictures", "*.geojson, *.json ; Painted maps", "*.pmtiles ; Detailed maps"])
-	_file_dialog.file_selected.connect(_add_file)
-	add_child(_file_dialog)
-	_file_dialog.popup_centered_ratio(0.6)
+	var picked := await EditorKit.pick_file(self, false, "", PackedStringArray(ADD_FILTERS))
+	if picked.is_empty() or not is_inside_tree():
+		return
+	_add_file(picked)
 
 
 func _add_file(file: String) -> void:
 	_busy = true
 	_render_header()
-	var args := {"file": file, "name": file.get_file().get_basename()}
-	var extension := file.get_extension().to_lower()
-	if extension in ["png", "jpg", "jpeg", "webp", "gif"]:
-		var image := Image.load_from_file(file)
-		if image and not image.is_empty():
-			args["aspect"] = float(image.get_width()) / maxf(1.0, float(image.get_height()))
-			var scale := minf(1.0, 200.0 / maxf(image.get_width(), image.get_height()))
-			image.resize(maxi(1, roundi(image.get_width() * scale)), maxi(1, roundi(image.get_height() * scale)), Image.INTERPOLATE_BILINEAR)
-			image.convert(Image.FORMAT_RGB8)
-			args["thumbnail"] = "data:image/jpeg;base64," + Marshalls.raw_to_base64(image.save_jpg_to_buffer(0.7))
-	var reply: Dictionary = await engine.request("mapextras.libraryAdd", args)
+	var problem := await _add_upload(file)
 	if not is_inside_tree():
 		return
 	_busy = false
 	_render_header()
-	if not bool(reply.get("ok", false)):
-		await _alert("Could not add that map: %s" % str(reply.get("error", "")))
+	if not problem.is_empty():
+		await _alert("Could not add that map: %s" % problem)
 	_refresh_mine()
+
+
+func _add_upload(file: String) -> String:
+	var ext := file.get_extension().to_lower()
+	if ext == "pmtiles":
+		var sent: Dictionary = await engine.request("workshop.library.uploadTiled", {"path": file})
+		if not bool(sent.get("ok", false)):
+			return str(sent.get("error", ""))
+		var tiled: Dictionary = sent.get("result", {})
+		return "" if tiled.get("basemap") is Dictionary else str(tiled.get("error", ""))
+	var upload := file
+	var format := ""
+	if ext == "kml" or ext == "kmz":
+		var text := FileAccess.get_file_as_string(file) if ext == "kml" else WorkshopKml.kmz_text(file)
+		if ext == "kmz" and text.is_empty():
+			return "No .kml found inside the .kmz archive."
+		upload = OS.get_temp_dir().path_join("oh-basemap-%d.geojson" % Time.get_ticks_usec())
+		var out := FileAccess.open(upload, FileAccess.WRITE)
+		if out == null:
+			return error_string(FileAccess.get_open_error())
+		out.store_string(JSON.stringify(WorkshopKml.to_geojson(text)))
+		out.close()
+		format = "geojson"
+	var read: Dictionary = await engine.request("workshop.library.readUpload", {"path": upload, "name": file.get_file(), "format": format})
+	if upload != file:
+		DirAccess.remove_absolute(upload)
+	if not bool(read.get("ok", false)):
+		return str(read.get("error", ""))
+	var info: Dictionary = read.get("result", {})
+	if info.has("error"):
+		return str(info["error"])
+	if bool(info.get("sessionOnly", false)):
+		return REFERENCE_ONLY
+	var thumbnail := ""
+	var aspect: Variant = null
+	if str(info.get("kind", "")) == "image":
+		var image := Image.new()
+		var loaded := image.load_svg_from_buffer(FileAccess.get_file_as_bytes(file)) if ext == "svg" else image.load(file)
+		if loaded != OK or image.get_width() <= 0 or image.get_height() <= 0:
+			return "Could not read that image."
+		aspect = float(image.get_width()) / float(image.get_height())
+		thumbnail = WorkshopThumbnail.picture(image)
+	else:
+		thumbnail = await WorkshopThumbnail.drawn(self, info.get("thumbnail"))
+	if not is_inside_tree():
+		return ""
+	var added: Dictionary = await engine.request("workshop.library.addUpload", {"token": info.get("token", ""), "thumbnail": thumbnail, "aspect": aspect})
+	if not bool(added.get("ok", false)):
+		return str(added.get("error", ""))
+	var result: Dictionary = added.get("result", {})
+	return str(result["error"]) if result.has("error") else ""
 
 
 func _confirm(text: String) -> bool:

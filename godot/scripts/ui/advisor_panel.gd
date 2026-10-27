@@ -48,6 +48,7 @@ static var _italic_fonts := {}
 static var _mono_font: Font
 static var _svg_cache := {}
 static var _re := {}
+static var _pictures := {}
 
 var engine: EngineLink
 var context: Dictionary = {}
@@ -76,6 +77,8 @@ var _save_again := false
 var _dots := 0
 var _logging_on := true
 var _chat_dir := ""
+var _origin := ""
+var _picture_waiting := {}
 var _rows := {}
 var _states := {}
 var _live_hooks: Array = []
@@ -203,6 +206,7 @@ func setup(link: EngineLink, setup_context: Dictionary = {}) -> void:
 	if not engine.engine_event.is_connected(_on_engine_event):
 		engine.engine_event.connect(_on_engine_event)
 	_load_width()
+	_load_origin()
 
 
 func _ready() -> void:
@@ -979,6 +983,7 @@ func _message_row(message: Dictionary, view: Dictionary, index: int, retry_here:
 	_inner_hooks = []
 	var natural := 0.0
 	var full := false
+	var pictured := ""
 	var text := str(view.get("text", message.get("text", "")))
 	if user:
 		content.add_child(_rich(_escape(text), 14, UI.WHITE, 1.5))
@@ -988,6 +993,8 @@ func _message_row(message: Dictionary, view: Dictionary, index: int, retry_here:
 		var markdown := str(view.get("md", text))
 		content.add_child(_reply_body(markdown, drafts, view.get("segments", null), state))
 		natural = _markdown_width(markdown)
+		if _has_local_picture(markdown):
+			pictured = markdown
 		if not drafts.is_empty():
 			full = true
 	var streaming := bool(message.get("streaming", false))
@@ -1044,7 +1051,11 @@ func _message_row(message: Dictionary, view: Dictionary, index: int, retry_here:
 	var fixed := 100000.0 if full else natural + 28.0 + 2.0
 	var wide_when_open := role == "error" and bool(view.get("hasDetail", false))
 	_register_bubble(bubble, func() -> float:
-		return 100000.0 if wide_when_open and bool(state.get("details_open", false)) else fixed, _inner_hooks)
+		if wide_when_open and bool(state.get("details_open", false)):
+			return 100000.0
+		if not pictured.is_empty() and not full:
+			return maxf(fixed, _markdown_width(pictured) + 28.0 + 2.0)
+		return fixed, _inner_hooks)
 	_inner_hooks = []
 	var date := str(view.get("date", ""))
 	if not user and not str(message.get("time", "")).is_empty() and not date.is_empty():
@@ -1102,6 +1113,17 @@ func _markdown_width(markdown: String) -> float:
 			extra = 24.0
 			line = line.substr(1)
 		var width := extra
+		for found in _regex("!\\[([^\\]]*)\\]\\(\\s*<?([^)\\s>]*)>?(?:\\s+\"[^\"]*\")?\\s*\\)").search_all(line):
+			var picture_match := found as RegExMatch
+			var place := _origin_path(picture_match.get_string(2))
+			if picture_match.get_string(2).strip_edges().is_empty() or place.is_empty():
+				continue
+			var picture: Variant = _pictures.get(place)
+			if picture is Texture2D:
+				width += float((picture as Texture2D).get_width())
+				line = line.replace(picture_match.get_string(0), "")
+			elif picture == null:
+				line = line.replace(picture_match.get_string(0), "")
 		var bold := false
 		for piece in line.replace("__", "**").split("**"):
 			var plain := piece.replace("`", "").replace("~~", "").replace("*", "").replace("_", "")
@@ -1852,8 +1874,202 @@ func _rich(bbcode: String, size := 14, color := UI.WHITE, line_height := 0.0) ->
 		var address := str(meta)
 		if address.begins_with("http://") or address.begins_with("https://"):
 			OS.shell_open(address))
-	label.text = bbcode
+	if bbcode.contains("\u0002"):
+		label.set_meta("pictures", bbcode)
+		_fill_pictures(label)
+		label.resized.connect(_refit_pictures.bind(label))
+	else:
+		label.text = bbcode
 	return label
+
+
+func _load_origin() -> void:
+	if engine == null or not _origin.is_empty():
+		return
+	var hello: Dictionary = await engine.request("hello")
+	if hello.get("ok", false) and typeof(hello.get("result")) == TYPE_DICTIONARY:
+		_origin = str((hello["result"] as Dictionary).get("origin", "")).trim_suffix("/")
+
+
+func _has_local_picture(markdown: String) -> bool:
+	for found in _regex("!\\[([^\\]]*)\\]\\(\\s*<?([^)\\s>]*)").search_all(markdown):
+		var address := (found as RegExMatch).get_string(2)
+		if not address.strip_edges().is_empty() and not _origin_path(address).is_empty():
+			return true
+	return false
+
+
+func _origin_path(address: String) -> String:
+	var text := address.strip_edges()
+	if text.is_empty():
+		return ""
+	if text.to_lower().begins_with("data:"):
+		return text
+	text = text.replace("\\", "/")
+	if text.begins_with("//"):
+		return ""
+	var path := text
+	var scheme := _regex("^([a-zA-Z][a-zA-Z0-9+.\\-]*):").search(text)
+	if scheme:
+		var name := scheme.get_string(1).to_lower()
+		var rest := text.substr(scheme.get_end())
+		if (name != "http" and name != "https") or _origin.is_empty() or not rest.begins_with("//"):
+			return ""
+		var after := rest.substr(2)
+		var cut := after.length()
+		for mark in ["/", "?", "#"]:
+			var at := after.find(mark)
+			if at >= 0:
+				cut = mini(cut, at)
+		var authority := after.substr(0, cut).to_lower()
+		if authority.ends_with(":80") and name == "http":
+			authority = authority.trim_suffix(":80")
+		elif authority.ends_with(":443") and name == "https":
+			authority = authority.trim_suffix(":443")
+		if "%s://%s" % [name, authority] != _origin.to_lower():
+			return ""
+		path = after.substr(cut)
+	var hash_at := path.find("#")
+	if hash_at >= 0:
+		path = path.substr(0, hash_at)
+	var query := ""
+	var query_at := path.find("?")
+	if query_at >= 0:
+		query = path.substr(query_at)
+		path = path.substr(0, query_at)
+	if not path.begins_with("/"):
+		path = "/" + path
+	var parts: PackedStringArray = []
+	var segments := path.split("/")
+	for index in range(segments.size()):
+		var segment := segments[index]
+		if segment == "..":
+			if not parts.is_empty():
+				parts.remove_at(parts.size() - 1)
+		elif segment != "." and not (segment.is_empty() and index < segments.size() - 1):
+			parts.append(segment)
+	path = "/" + "/".join(parts)
+	if _regex("(?i)^/api(?:/|$)").search(path):
+		return ""
+	return path + query
+
+
+func _picture_marker(address: String, alt: String, title: String) -> String:
+	return "\u0002%s\u0002" % Marshalls.utf8_to_base64(JSON.stringify([address.strip_edges(), alt, title]))
+
+
+func _fill_pictures(label: RichTextLabel) -> void:
+	if not is_instance_valid(label):
+		return
+	var source := str(label.get_meta("pictures", ""))
+	var room := label.size.x if label.size.x > 1.0 else maxf(120.0, _width - 72.0)
+	label.set_meta("picture_room", room)
+	label.clear()
+	var parts := source.split("\u0002")
+	for index in range(parts.size()):
+		if index % 2 == 0:
+			if not parts[index].is_empty():
+				label.append_text(parts[index])
+			continue
+		var fields: Variant = JSON.parse_string(Marshalls.base64_to_utf8(parts[index]))
+		if typeof(fields) != TYPE_ARRAY or (fields as Array).size() < 3:
+			continue
+		var address := str(fields[0])
+		var alt := str(fields[1])
+		var title := str(fields[2])
+		var place := _origin_path(address)
+		var picture: Variant = _pictures.get(place)
+		if picture is Texture2D:
+			var texture := picture as Texture2D
+			var width := float(texture.get_width())
+			var height := float(texture.get_height())
+			if width > room and width > 0.0:
+				height = height * room / width
+				width = room
+			label.add_image(texture, int(round(width)), int(round(height)), Color(1, 1, 1), (INLINE_ALIGNMENT_BOTTOM_TO | INLINE_ALIGNMENT_TO_BASELINE) as InlineAlignment, Rect2(), null, false, title)
+		elif picture == false:
+			if not alt.is_empty():
+				label.append_text(_escape(alt))
+		else:
+			_want_picture(place, label)
+
+
+func _refit_pictures(label: RichTextLabel) -> void:
+	if not is_instance_valid(label) or label.size.x <= 1.0:
+		return
+	if absf(label.size.x - float(label.get_meta("picture_room", 0.0))) > 1.0:
+		_fill_pictures(label)
+
+
+func _want_picture(place: String, label: RichTextLabel) -> void:
+	if _picture_waiting.has(place):
+		var waiting: Array = _picture_waiting[place]
+		if not waiting.has(label):
+			waiting.append(label)
+		return
+	_picture_waiting[place] = [label]
+	_load_picture(place)
+
+
+func _load_picture(place: String) -> void:
+	var texture: Texture2D = null
+	if place.to_lower().begins_with("data:"):
+		texture = _decode_data_url(place)
+	else:
+		if _origin.is_empty():
+			await _load_origin()
+		if not _origin.is_empty() and is_inside_tree():
+			var request := HTTPRequest.new()
+			request.timeout = 20.0
+			add_child(request)
+			if request.request(_origin + place) == OK:
+				var result: Array = await request.request_completed
+				if int(result[0]) == HTTPRequest.RESULT_SUCCESS and int(result[1]) == 200:
+					texture = _decode_picture(result[3])
+			request.queue_free()
+	_pictures[place] = texture if texture != null else false
+	var waiting: Array = _picture_waiting.get(place, [])
+	_picture_waiting.erase(place)
+	for label in waiting:
+		if is_instance_valid(label):
+			_fill_pictures(label)
+	_relayout()
+
+
+static func _decode_data_url(address: String) -> Texture2D:
+	var comma := address.find(",")
+	if comma < 0:
+		return null
+	var head := address.substr(5, comma - 5).to_lower()
+	var payload := address.substr(comma + 1)
+	var bytes: PackedByteArray
+	if head.contains(";base64"):
+		bytes = Marshalls.base64_to_raw(payload.uri_decode().replace(" ", "").replace("\n", "").replace("\r", ""))
+	else:
+		bytes = payload.uri_decode().to_utf8_buffer()
+	return _decode_picture(bytes)
+
+
+static func _decode_picture(body: PackedByteArray) -> Texture2D:
+	if body.size() < 4:
+		return null
+	var image := Image.new()
+	var status := ERR_FILE_UNRECOGNIZED
+	if body[0] == 0x89 and body[1] == 0x50 and body[2] == 0x4E and body[3] == 0x47:
+		status = image.load_png_from_buffer(body)
+	elif body[0] == 0xFF and body[1] == 0xD8:
+		status = image.load_jpg_from_buffer(body)
+	elif body.size() >= 12 and body.slice(0, 4).get_string_from_ascii() == "RIFF" and body.slice(8, 12).get_string_from_ascii() == "WEBP":
+		status = image.load_webp_from_buffer(body)
+	elif body[0] == 0x42 and body[1] == 0x4D:
+		status = image.load_bmp_from_buffer(body)
+	else:
+		var head := body.slice(0, mini(body.size(), 512)).get_string_from_utf8().strip_edges().to_lower()
+		if head.begins_with("<svg") or (head.begins_with("<?xml") and head.contains("<svg")):
+			status = image.load_svg_from_buffer(body, 1.0)
+	if status != OK or image.is_empty():
+		return null
+	return ImageTexture.create_from_image(image)
 
 
 func _replace_matches(pattern: String, text: String, make: Callable) -> String:
@@ -1880,9 +2096,15 @@ func _inline(source: String) -> String:
 		if code.length() > 1 and code.begins_with(" ") and code.ends_with(" ") and not code.strip_edges().is_empty():
 			code = code.substr(1, code.length() - 2)
 		return hold.call("[bgcolor=#00000052][code]%s[/code][/bgcolor]" % _escape(code)))
-	text = _replace_matches("!?\\[([^\\]]*)\\]\\(\\s*<?([^)\\s>]*)>?(?:\\s+\"[^\"]*\")?\\s*\\)", text, func(match: RegExMatch) -> String:
-		var words := match.get_string(1)
-		var address := match.get_string(2)
+	text = _replace_matches("(!?)\\[([^\\]]*)\\]\\(\\s*<?([^)\\s>]*)>?(?:\\s+\"([^\"]*)\")?\\s*\\)", text, func(match: RegExMatch) -> String:
+		var words := match.get_string(2)
+		var address := match.get_string(3)
+		if not match.get_string(1).is_empty():
+			if address.strip_edges().is_empty():
+				return hold.call(_escape(words))
+			if not _origin_path(address).is_empty():
+				return hold.call(_picture_marker(address, words, match.get_string(4)))
+			return hold.call("[url=%s][color=#60a5fa]%s[/color][/url]" % [address.replace("]", "%5D"), _escape(words if not words.is_empty() else address)])
 		if words.is_empty():
 			words = address
 		return hold.call("[url=%s][color=#60a5fa]%s[/color][/url]" % [address.replace("]", "%5D"), _inline(words)]))
@@ -2302,62 +2524,158 @@ func _table(rows: Array, align: Array, inset: float) -> Control:
 
 
 func _css_color(value: Variant, fallback: Color) -> Color:
+	return AdvisorPanel.css_color(value, fallback)
+
+
+static func css_color(value: Variant, fallback: Color) -> Color:
 	if typeof(value) == TYPE_ARRAY:
-		return _css_color((value as Array)[0], fallback) if not (value as Array).is_empty() else fallback
+		return css_color((value as Array)[0], fallback) if not (value as Array).is_empty() else fallback
 	if typeof(value) != TYPE_STRING:
 		return fallback
-	var text := (value as String).strip_edges()
-	if text.begins_with("rgb"):
+	var text := (value as String).strip_edges().to_lower()
+	if text.is_empty():
+		return fallback
+	if text.begins_with("rgb") or text.begins_with("hsl"):
 		var inside := text.substr(text.find("(") + 1).trim_suffix(")")
 		var parts := inside.replace("/", ",").replace(" ", ",").split(",", false)
-		if parts.size() >= 3:
-			var alpha := float(parts[3]) if parts.size() >= 4 else 1.0
-			return Color(float(parts[0]) / 255.0, float(parts[1]) / 255.0, float(parts[2]) / 255.0, alpha)
-		return fallback
+		if parts.size() < 3:
+			return fallback
+		var alpha := 1.0
+		if parts.size() >= 4:
+			alpha = float(parts[3].trim_suffix("%")) / (100.0 if parts[3].ends_with("%") else 1.0)
+		if text.begins_with("hsl"):
+			return _hsl(float(parts[0].trim_suffix("deg")) / 360.0, float(parts[1].trim_suffix("%")) / 100.0, float(parts[2].trim_suffix("%")) / 100.0, alpha)
+		var channel := func(part: String) -> float:
+			return float(part.trim_suffix("%")) / 100.0 if part.ends_with("%") else float(part) / 255.0
+		return Color(channel.call(parts[0]), channel.call(parts[1]), channel.call(parts[2]), clampf(alpha, 0.0, 1.0))
+	if text == "transparent":
+		return Color(0, 0, 0, 0)
 	return Color.from_string(text, fallback)
+
+
+static func _hsl(hue: float, saturation: float, lightness: float, alpha: float) -> Color:
+	var q := lightness * (1.0 + saturation) if lightness < 0.5 else lightness + saturation - lightness * saturation
+	var p := 2.0 * lightness - q
+	var channel := func(t: float) -> float:
+		var u := fposmod(t, 1.0)
+		if u < 1.0 / 6.0:
+			return p + (q - p) * 6.0 * u
+		if u < 0.5:
+			return q
+		if u < 2.0 / 3.0:
+			return p + (q - p) * (2.0 / 3.0 - u) * 6.0
+		return p
+	return Color(channel.call(hue + 1.0 / 3.0), channel.call(hue), channel.call(hue - 1.0 / 3.0), clampf(alpha, 0.0, 1.0))
+
+
+func _indexed_colors(value: Variant, count: int, fallback: Color) -> Array:
+	var out: Array = []
+	for index in range(max(count, 1)):
+		if typeof(value) == TYPE_ARRAY and not (value as Array).is_empty():
+			out.append(_css_color((value as Array)[index % (value as Array).size()], fallback))
+		else:
+			out.append(_css_color(value, fallback))
+	return out
+
+
+func _indexed_numbers(value: Variant, count: int, fallback: float) -> Array:
+	var out: Array = []
+	for index in range(max(count, 1)):
+		var raw: Variant = value
+		if typeof(value) == TYPE_ARRAY:
+			raw = (value as Array)[index % (value as Array).size()] if not (value as Array).is_empty() else null
+		out.append(float(raw) if typeof(raw) == TYPE_INT or typeof(raw) == TYPE_FLOAT else fallback)
+	return out
+
+
+func _dataset_number(dataset: Dictionary, key: String, fallback: float) -> float:
+	var raw: Variant = dataset.get(key)
+	if typeof(raw) == TYPE_ARRAY:
+		raw = (raw as Array)[0] if not (raw as Array).is_empty() else null
+	return float(raw) if typeof(raw) == TYPE_INT or typeof(raw) == TYPE_FLOAT else fallback
 
 
 func _chart(config: Dictionary) -> Control:
 	var kind := str(config.get("type", "bar"))
 	var pie := kind == "pie" or kind == "doughnut"
-	var data: Dictionary = config.get("data", {})
+	var data: Dictionary = config.get("data", {}) if typeof(config.get("data")) == TYPE_DICTIONARY else {}
 	var labels: PackedStringArray = []
 	for label in data.get("labels", []):
 		labels.append(str(label))
 	var options: Dictionary = config.get("options", {}) if typeof(config.get("options")) == TYPE_DICTIONARY else {}
 	var series: Array = []
-	var raw_sets: Array = data.get("datasets", [])
+	var legend_items: Array = []
+	var raw_sets: Array = data.get("datasets", []) if typeof(data.get("datasets")) == TYPE_ARRAY else []
+	var count := labels.size()
 	for set_index in range(raw_sets.size()):
+		if typeof(raw_sets[set_index]) != TYPE_DICTIONARY:
+			continue
 		var dataset: Dictionary = raw_sets[set_index]
-		var base := Color(str(CHART_COLORS[set_index % CHART_COLORS.size()]))
-		var slices: Array = []
-		var slice_borders: Array = []
-		var own: Variant = dataset.get("backgroundColor")
-		for label_index in range(labels.size()):
-			var fallback := Color(str(CHART_COLORS[label_index % CHART_COLORS.size()]))
-			if typeof(own) == TYPE_ARRAY and label_index < (own as Array).size():
-				slices.append(_css_color((own as Array)[label_index], fallback))
-			elif typeof(own) == TYPE_STRING:
-				slices.append(_css_color(own, fallback))
-			else:
-				slices.append(fallback)
-			slice_borders.append(_css_color(dataset.get("borderColor"), Color(1, 1, 1)))
-		var stroke := _css_color(dataset.get("borderColor"), base)
-		var fill := _css_color(dataset.get("backgroundColor"), Color(base.r, base.g, base.b, 0x26 / 255.0) if kind == "line" else base)
-		series.append({"label": str(dataset.get("label", "")), "values": dataset.get("data", []), "stroke": stroke, "fill": fill, "slices": slices, "slice_borders": slice_borders})
+		var hex := str(CHART_COLORS[set_index % CHART_COLORS.size()])
+		var base := Color(hex)
+		var pie_colors: Array = []
+		for label_index in range(count):
+			pie_colors.append(str(CHART_COLORS[label_index % CHART_COLORS.size()]))
+		var background: Variant = dataset.get("backgroundColor") if dataset.has("backgroundColor") else (pie_colors if pie else (hex + "26" if kind == "line" else hex))
+		var border: Variant = dataset.get("borderColor") if dataset.has("borderColor") else (null if pie else hex)
+		var values: Array = dataset.get("data", []) if typeof(dataset.get("data")) == TYPE_ARRAY else []
+		var entry := {
+			"cutout": dataset.get("cutout"),
+			"label": str(dataset.get("label", "")),
+			"hidden": dataset.get("hidden", false) == true,
+			"values": values,
+			"fills": _indexed_colors(background, count, base),
+			"borders": _indexed_colors(border, count, Color(1, 1, 1) if pie else base),
+			"line_color": _indexed_colors(border, set_index + 1, base)[set_index],
+			"area_color": _indexed_colors(background, set_index + 1, Color(base.r, base.g, base.b, 0x26 / 255.0))[set_index],
+			"border_width": _dataset_number(dataset, "borderWidth", 2.0),
+			"bar_percentage": _dataset_number(dataset, "barPercentage", 0.9),
+			"category_percentage": _dataset_number(dataset, "categoryPercentage", 0.8),
+			"radius": _dataset_number(dataset, "borderRadius", 0.0),
+			"show_line": dataset.get("showLine", true) != false,
+			"tension": _dataset_number(dataset, "tension", 0.4 if kind == "line" else 0.0),
+			"dash": [],
+			"fill": "",
+		}
+		if kind == "line":
+			var point_background: Variant = dataset.get("pointBackgroundColor") if dataset.has("pointBackgroundColor") else background
+			var point_border: Variant = dataset.get("pointBorderColor") if dataset.has("pointBorderColor") else border
+			entry["point_fills"] = _indexed_colors(point_background, count, Color(base.r, base.g, base.b, 0x26 / 255.0))
+			entry["point_borders"] = _indexed_colors(point_border, count, base)
+			entry["point_radius"] = _indexed_numbers(dataset.get("pointRadius", 3), count, 3.0)
+			entry["point_hover"] = _indexed_numbers(dataset.get("pointHoverRadius", 5), count, 5.0)
+			entry["point_border_width"] = _indexed_numbers(dataset.get("pointBorderWidth", 1), count, 1.0)
+			var fill: Variant = dataset.get("fill", false)
+			if fill == true or str(fill) == "origin":
+				entry["fill"] = "origin"
+			elif str(fill) in ["start", "end"]:
+				entry["fill"] = str(fill)
+			if typeof(dataset.get("borderDash")) == TYPE_ARRAY:
+				for step in dataset["borderDash"]:
+					if typeof(step) == TYPE_INT or typeof(step) == TYPE_FLOAT:
+						(entry["dash"] as Array).append(maxf(0.0, float(step)))
+		series.append(entry)
+		if pie:
+			if legend_items.is_empty():
+				for label_index in range(count):
+					var swatch: Color = Color(str(CHART_COLORS[label_index % CHART_COLORS.size()]))
+					if typeof(background) == TYPE_ARRAY:
+						swatch = _css_color((background as Array)[label_index], Color(0, 0, 0, 0)) if label_index < (background as Array).size() else Color("#60a5fa")
+					legend_items.append([labels[label_index], swatch])
+		else:
+			var key_color := base
+			if typeof(border) == TYPE_ARRAY:
+				key_color = _css_color((border as Array)[0], Color(0, 0, 0, 0)) if not (border as Array).is_empty() else Color("#60a5fa")
+			elif typeof(border) == TYPE_STRING and not str(border).is_empty():
+				key_color = _css_color(border, Color(0, 0, 0, 0))
+			legend_items.append([str(dataset.get("label", "")), key_color])
 	var column := VBoxContainer.new()
 	column.add_theme_constant_override("separation", 0)
 	var legend := HFlowContainer.new()
 	legend.add_theme_constant_override("h_separation", 14)
 	legend.add_theme_constant_override("v_separation", 6)
-	if pie:
-		var first: Array = (series[0] as Dictionary).get("slices", []) if not series.is_empty() else []
-		for label_index in range(labels.size()):
-			legend.add_child(_legend_item(labels[label_index], first[label_index] if label_index < first.size() else Color(str(CHART_COLORS[label_index % CHART_COLORS.size()]))))
-	else:
-		for entry in series:
-			var item: Dictionary = entry
-			legend.add_child(_legend_item(str(item["label"]), item["stroke"]))
+	for item in legend_items:
+		legend.add_child(_legend_item(str((item as Array)[0]), (item as Array)[1]))
 	if legend.get_child_count() > 0:
 		column.add_child(legend)
 		column.add_child(_gap(8))
@@ -2365,6 +2683,7 @@ func _chart(config: Dictionary) -> Control:
 	canvas.kind = kind
 	canvas.labels = labels
 	canvas.series = series
+	canvas.options = options
 	canvas.percent = str(options.get("unit", "")) == "percent"
 	canvas.font = UI.font(400)
 	canvas.bold = UI.font(700)
@@ -2390,17 +2709,15 @@ func _legend_item(text: String, color: Color) -> Control:
 
 class AdvisorChart extends Control:
 	const DURATION := 1000.0
-	const TICK_SIZE := 10
-	const TICK_LINE := 12.0
 	const TICK_MARK := 8.0
 	const TICK_PAD := 3.0
-	const GRID := Color(1, 1, 1, 0.06)
-	const AXIS := Color(1, 1, 1, 0.08)
-	const INK := Color(1, 1, 1, 0.45)
+	const DEFAULT_INK := Color(0x66 / 255.0, 0x66 / 255.0, 0x66 / 255.0)
+	const DEFAULT_LINE := Color(0, 0, 0, 0.1)
 
 	var kind := "bar"
 	var labels: PackedStringArray = []
 	var series: Array = []
+	var options: Dictionary = {}
 	var percent := false
 	var font: Font
 	var bold: Font
@@ -2408,6 +2725,7 @@ class AdvisorChart extends Control:
 	var _hover_set := -1
 	var _hover_index := -1
 	var _hits: Array = []
+	var _horizontal := false
 
 	func _ready() -> void:
 		_born = Time.get_ticks_msec()
@@ -2467,6 +2785,11 @@ class AdvisorChart extends Control:
 			return float(value)
 		return null
 
+	func _option_number(value: Variant) -> Variant:
+		if typeof(value) == TYPE_INT or typeof(value) == TYPE_FLOAT:
+			return float(value) if is_finite(float(value)) else null
+		return null
+
 	func _js(value: float) -> String:
 		if is_zero_approx(value):
 			return "0"
@@ -2480,8 +2803,38 @@ class AdvisorChart extends Control:
 				text = text.substr(0, text.length() - 1)
 		return text
 
-	func _label_text(value: float) -> String:
-		return _js(value) + ("%" if percent else "")
+	func _grouped(value: float, places: int) -> String:
+		var negative := value < 0.0
+		var text := String.num(absf(value), places)
+		if places > 0 and not text.contains("."):
+			text += "." + "0".repeat(places)
+		elif places > 0:
+			var have := text.length() - text.find(".") - 1
+			if have < places:
+				text += "0".repeat(places - have)
+		var whole := text.get_slice(".", 0)
+		var rest := text.substr(whole.length())
+		var grouped := ""
+		var digits := 0
+		for index in range(whole.length() - 1, -1, -1):
+			grouped = whole[index] + grouped
+			digits += 1
+			if digits % 3 == 0 and index > 0:
+				grouped = "," + grouped
+		return ("-" if negative else "") + grouped + rest
+
+	func _numeric(value: float, ticks: Array) -> String:
+		if value == 0.0:
+			return "0"
+		var delta := value
+		if ticks.size() > 1:
+			delta = float(ticks[2]) - float(ticks[1]) if ticks.size() > 3 else float(ticks[1]) - float(ticks[0])
+			if absf(delta) >= 1.0 and value != floorf(value):
+				delta = value - floorf(value)
+		var places := 1
+		if delta != 0.0:
+			places = clampi(-int(floorf(log(absf(delta)) / log(10.0))), 0, 20)
+		return _grouped(value, places)
 
 	func _hover_color(color: Color) -> Color:
 		var high: float = max(color.r, max(color.g, color.b))
@@ -2518,6 +2871,8 @@ class AdvisorChart extends Control:
 		return p
 
 	func _nice(range_value: float) -> float:
+		if range_value <= 0.0:
+			return 0.0
 		var rounded: float = round(range_value)
 		var value := rounded if abs(range_value - rounded) < range_value / 1000.0 else range_value
 		var magnitude: float = pow(10.0, floorf(log(value) / log(10.0)))
@@ -2533,44 +2888,153 @@ class AdvisorChart extends Control:
 			places += 1
 		return places
 
-	func _ticks(low: float, high: float, length: float) -> Array[float]:
-		var max_ticks: int = max(2, min(11, int(ceil(length / TICK_LINE))))
-		var spaces := max_ticks - 1
-		var spacing := _nice((high - low) / float(spaces))
-		var result: Array[float] = []
-		if spacing < 1e-14:
-			result.append(low)
-			result.append(high)
-			return result
-		var count: float = ceilf(high / spacing) - floorf(low / spacing)
-		if count > spaces:
-			spacing = _nice(count * spacing / float(spaces))
-		var nice_min: float = floorf(low / spacing) * spacing
-		var nice_max: float = ceilf(high / spacing) * spacing
-		var steps: float = (nice_max - nice_min) / spacing
-		var whole: float = round(steps) if abs(steps - round(steps)) < spacing / 1000.0 else ceil(steps)
-		var factor: float = pow(10.0, float(max(_decimals(spacing), _decimals(nice_min))))
-		nice_min = round(nice_min * factor) / factor
-		nice_max = round(nice_max * factor) / factor
-		for step in range(int(whole)):
-			result.append(round((nice_min + float(step) * spacing) * factor) / factor)
-		result.append(nice_max)
-		return result
+	func _dict(value: Variant) -> Dictionary:
+		return value if typeof(value) == TYPE_DICTIONARY else {}
+
+	func _font_size(value: Variant, fallback: float) -> float:
+		var size: Variant = _option_number(_dict(value).get("size"))
+		return float(size) if size != null and float(size) > 0.0 else fallback
+
+	func _lines(value: Variant) -> PackedStringArray:
+		var out: PackedStringArray = []
+		if typeof(value) == TYPE_ARRAY:
+			for line in value:
+				out.append(str(line))
+		elif value != null:
+			out.append(str(value))
+		return out
+
+	func _padding(value: Variant, fallback: float) -> Vector2:
+		var number: Variant = _option_number(value)
+		if number != null:
+			return Vector2(float(number), float(number))
+		if typeof(value) == TYPE_DICTIONARY:
+			var top: Variant = _option_number((value as Dictionary).get("top", (value as Dictionary).get("y")))
+			var bottom: Variant = _option_number((value as Dictionary).get("bottom", (value as Dictionary).get("y")))
+			return Vector2(float(top) if top != null else 0.0, float(bottom) if bottom != null else 0.0)
+		return Vector2(fallback, fallback)
+
+	func _axis(id: String) -> Dictionary:
+		var own := _dict(_dict(options.get("scales")).get(id))
+		var axis := {"id": id}
+		axis["display"] = own.get("display", true) != false
+		axis["stacked"] = own.get("stacked", false) == true
+		axis["reverse"] = own.get("reverse", false) == true
+		var ticks_own := typeof(own.get("ticks")) == TYPE_DICTIONARY
+		var ticks := _dict(own.get("ticks"))
+		axis["tick_color"] = AdvisorPanel.css_color(ticks.get("color"), DEFAULT_INK) if ticks_own else Color(1, 1, 1, 0.45)
+		axis["tick_size"] = _font_size(ticks.get("font"), 12.0) if ticks_own else 10.0
+		axis["ticks_shown"] = ticks.get("display", true) != false
+		axis["callback"] = id == "y" and not ticks_own
+		axis["step"] = _option_number(ticks.get("stepSize"))
+		axis["limit"] = _option_number(ticks.get("maxTicksLimit"))
+		axis["precision"] = _option_number(ticks.get("precision"))
+		axis["count"] = _option_number(ticks.get("count"))
+		axis["include_bounds"] = ticks.get("includeBounds", true) != false
+		var grid_own := typeof(own.get("grid")) == TYPE_DICTIONARY
+		var grid := _dict(own.get("grid"))
+		axis["grid_color"] = AdvisorPanel.css_color(grid.get("color"), DEFAULT_LINE) if grid_own else Color(1, 1, 1, 0.06)
+		axis["grid_shown"] = grid.get("display", true) != false
+		axis["mark"] = TICK_MARK if grid.get("drawTicks", true) != false else 0.0
+		var border_own := typeof(own.get("border")) == TYPE_DICTIONARY
+		var border := _dict(own.get("border"))
+		axis["border_color"] = AdvisorPanel.css_color(border.get("color"), DEFAULT_LINE) if border_own else Color(1, 1, 1, 0.08)
+		axis["border_shown"] = border.get("display", true) != false
+		var title := _dict(own.get("title"))
+		var title_lines := _lines(title.get("text", "")) if title.get("display", false) == true else PackedStringArray()
+		axis["title"] = title_lines
+		axis["title_color"] = AdvisorPanel.css_color(title.get("color"), DEFAULT_INK)
+		axis["title_size"] = _font_size(title.get("font"), 12.0)
+		axis["title_pad"] = _padding(title.get("padding"), 4.0)
+		var pad: Vector2 = axis["title_pad"]
+		axis["title_height"] = (pad.x + pad.y + float(axis["title_size"]) * 1.2 * maxf(1.0, float(title_lines.size()))) if not title_lines.is_empty() and bool(axis["display"]) else 0.0
+		axis["min"] = _option_number(own.get("min"))
+		axis["max"] = _option_number(own.get("max"))
+		axis["suggested_min"] = _option_number(own.get("suggestedMin"))
+		axis["suggested_max"] = _option_number(own.get("suggestedMax"))
+		axis["begin_at_zero"] = own.get("beginAtZero") if typeof(own.get("beginAtZero")) == TYPE_BOOL else null
+		return axis
+
+	func _box(key: String) -> Dictionary:
+		var own := _dict(_dict(options.get("plugins")).get(key))
+		if own.get("display", false) != true:
+			return {}
+		var lines := _lines(own.get("text", ""))
+		if lines.is_empty():
+			lines.append("")
+		var size := _font_size(own.get("font"), 12.0)
+		var weight := str(_dict(own.get("font")).get("weight", "bold" if key == "title" else "normal"))
+		var pad := _padding(own.get("padding"), 10.0 if key == "title" else 0.0)
+		var box := {"lines": lines, "size": size, "bold": weight == "bold" or weight == "bolder" or weight.to_int() >= 600, "pad": pad, "color": AdvisorPanel.css_color(own.get("color"), DEFAULT_INK), "align": str(own.get("align", "center")), "position": "bottom" if str(own.get("position", "top")) == "bottom" else "top"}
+		box["height"] = pad.x + pad.y + size * 1.2 * float(lines.size())
+		return box
+
+	func _draw_box(box: Dictionary, top: float) -> void:
+		var text_size := int(box["size"])
+		var line := float(box["size"]) * 1.2
+		var face: Font = bold if bool(box["bold"]) else font
+		var pad: Vector2 = box["pad"]
+		var lines: PackedStringArray = box["lines"]
+		for index in range(lines.size()):
+			var text := lines[index]
+			var width := face.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, text_size).x
+			var x := (size.x - width) * 0.5
+			if str(box["align"]) == "start":
+				x = 0.0
+			elif str(box["align"]) == "end":
+				x = size.x - width
+			var middle := top + pad.x + line * 0.5 + line * float(index)
+			draw_string(face, Vector2(x, middle + (face.get_ascent(text_size) - face.get_descent(text_size)) * 0.5), text, HORIZONTAL_ALIGNMENT_LEFT, -1, text_size, box["color"])
 
 	func _draw() -> void:
 		_hits.clear()
 		if series.is_empty() or labels.is_empty():
 			return
+		var top := 4.0
+		var bottom := size.y - 4.0
+		for key in ["title", "subtitle"]:
+			var box := _box(key)
+			if box.is_empty():
+				continue
+			if str(box["position"]) == "top":
+				_draw_box(box, top)
+				top += float(box["height"])
+		for key in ["title", "subtitle"]:
+			var box := _box(key)
+			if box.is_empty() or str(box["position"]) != "bottom":
+				continue
+			bottom -= float(box["height"])
+			_draw_box(box, bottom)
 		if kind == "pie" or kind == "doughnut":
-			_draw_pie()
+			_draw_pie(Rect2(0, top, size.x, maxf(0.0, bottom - top)))
 		else:
-			_draw_axes()
+			_draw_axes(top, bottom)
 
-	func _draw_pie() -> void:
-		var first: Dictionary = series[0]
+	func _cutout(first: Dictionary, outer: float) -> float:
+		var raw: Variant = first.get("cutout")
+		if raw == null:
+			raw = options.get("cutout")
+		if raw == null:
+			return outer * 0.5 if kind == "doughnut" else 0.0
+		if typeof(raw) == TYPE_STRING and str(raw).ends_with("%"):
+			return outer * clampf(float(str(raw).trim_suffix("%")) / 100.0, 0.0, 1.0)
+		var number: Variant = _option_number(raw)
+		return clampf(float(number), 0.0, outer) if number != null else (outer * 0.5 if kind == "doughnut" else 0.0)
+
+	func _draw_pie(area: Rect2) -> void:
+		var first: Dictionary = {}
+		var first_set := 0
+		for set_index in range(series.size()):
+			if not bool((series[set_index] as Dictionary).get("hidden", false)):
+				first = series[set_index]
+				first_set = set_index
+				break
+		if first.is_empty():
+			return
 		var values: Array = first.get("values", [])
-		var slices: Array = first.get("slices", [])
-		var borders: Array = first.get("slice_borders", [])
+		var slices: Array = first.get("fills", [])
+		var borders: Array = first.get("borders", [])
+		var border_width := float(first.get("border_width", 2.0))
 		var total := 0.0
 		for value in values:
 			var number: Variant = _number(value)
@@ -2578,10 +3042,9 @@ class AdvisorChart extends Control:
 				total += float(number)
 		if total <= 0.0:
 			return
-		var area := Rect2(0, 4, size.x, max(0.0, size.y - 8.0))
 		var center := area.get_center()
 		var outer: float = max(0.0, min(area.size.x, area.size.y) * 0.5)
-		var inner := outer * 0.5 if kind == "doughnut" else 0.0
+		var inner := _cutout(first, outer)
 		var progress := _progress()
 		var angle := -PI * 0.5
 		var drawn: Array = []
@@ -2611,184 +3074,577 @@ class AdvisorChart extends Control:
 				var outline := points.duplicate()
 				outline.append(points[0])
 				drawn.append([outline, edge])
-			_hits.append({"shape": "arc", "set": 0, "index": index, "center": center, "outer": outer, "inner": inner, "start": angle, "sweep": sweep, "at": center + Vector2(cos(angle + sweep * 0.5), sin(angle + sweep * 0.5)) * ((outer + inner) * 0.5), "value": float(number), "color": color, "border": edge})
+			_hits.append({"shape": "arc", "set": first_set, "index": index, "center": center, "outer": outer, "inner": inner, "start": angle, "sweep": sweep, "at": center + Vector2(cos(angle + sweep * 0.5), sin(angle + sweep * 0.5)) * ((outer + inner) * 0.5), "value": float(number), "color": color, "border": edge})
 			angle += sweep
-		for entry in drawn:
-			var pair: Array = entry
-			draw_polyline(pair[0], pair[1], 2.0, true)
+		if border_width > 0.0:
+			for entry in drawn:
+				var pair: Array = entry
+				draw_polyline(pair[0], pair[1], border_width, true)
 		_draw_tooltip()
 
-	func _draw_axes() -> void:
-		var all: Array[float] = []
-		for entry in series:
-			for value in (entry as Dictionary).get("values", []):
-				var number: Variant = _number(value)
-				if number != null:
-					all.append(float(number))
-		if all.is_empty():
-			return
-		var line := kind == "line"
-		var low: float = all.min()
-		var high: float = all.max()
-		if not line:
-			if low > 0.0 and high > 0.0:
-				low = 0.0
-			elif low < 0.0 and high < 0.0:
-				high = 0.0
-		if is_equal_approx(low, high):
-			var offset: float = 1.0 if is_zero_approx(high) else absf(high * 0.05)
-			high += offset
-			if line:
+	func _almost_equals(a: float, b: float, epsilon: float) -> bool:
+		return absf(a - b) < epsilon
+
+	func _relative(value: float, min_spacing: float, horizontal_axis: bool) -> float:
+		var ratio := 0.001 if horizontal_axis else 1.0
+		var length := 0.75 * min_spacing * float(_js(value).length())
+		return minf(min_spacing / ratio, length)
+
+	func _limits(axis: Dictionary, data_low: float, data_high: float, has_data: bool, zero_default: bool) -> Vector2:
+		var user_min: Variant = axis["min"]
+		var user_max: Variant = axis["max"]
+		var min_defined := user_min != null
+		var max_defined := user_max != null
+		var low := INF
+		var high := -INF
+		if min_defined and max_defined:
+			low = float(user_min)
+			high = float(user_max)
+		else:
+			low = float(user_min) if min_defined else (float(axis["suggested_min"]) if axis["suggested_min"] != null else INF)
+			high = float(user_max) if max_defined else (float(axis["suggested_max"]) if axis["suggested_max"] != null else -INF)
+			if has_data:
+				if not min_defined:
+					low = minf(low, data_low)
+				if not max_defined:
+					high = maxf(high, data_high)
+			if max_defined and low > high:
+				low = high
+			if min_defined and low > high:
+				high = low
+			if not is_finite(low):
+				low = high
+			if not is_finite(high):
+				high = low
+		if not is_finite(low):
+			low = 0.0
+		if not is_finite(high):
+			high = 1.0
+		var zero: bool = axis["begin_at_zero"] if axis["begin_at_zero"] != null else zero_default
+		if zero:
+			if low < 0.0 and high < 0.0:
+				if not max_defined:
+					high = 0.0
+			elif low > 0.0 and high > 0.0:
+				if not min_defined:
+					low = 0.0
+		if low == high:
+			var offset := 1.0 if high == 0.0 else absf(high * 0.05)
+			if not max_defined:
+				high += offset
+			if not zero and not min_defined:
 				low -= offset
+		return Vector2(low, high)
+
+	func _tick_limit(axis: Dictionary, limits: Vector2, length: float, horizontal_axis: bool) -> int:
+		var step: Variant = axis["step"]
+		var most := 0
+		if step != null and float(step) > 0.0:
+			most = mini(1000, int(ceilf(limits.y / float(step)) - floorf(limits.x / float(step)) + 1.0))
+			if axis["limit"] != null:
+				most = mini(int(axis["limit"]), most)
+		else:
+			var line := float(axis["tick_size"]) * 1.2
+			most = int(ceilf(length / minf(40.0, line / (0.001 if horizontal_axis else 1.0))))
+			most = mini(int(axis["limit"]) if axis["limit"] != null and int(axis["limit"]) > 0 else 11, most)
+		return maxi(2, most)
+
+	func _ticks(axis: Dictionary, limits: Vector2, length: float, horizontal_axis: bool) -> Array:
+		var low := limits.x
+		var high := limits.y
+		var max_ticks := _tick_limit(axis, limits, length, horizontal_axis)
+		var step: Variant = axis["step"]
+		var unit: float = float(step) if step != null and float(step) > 0.0 else 1.0
+		var user_min: Variant = axis["min"]
+		var user_max: Variant = axis["max"]
+		var min_defined := user_min != null
+		var max_defined := user_max != null
+		var precision: Variant = axis["precision"]
+		var count_value: Variant = axis["count"]
+		var max_digits := length / (float(axis["tick_size"]) * 1.2)
+		var min_spacing := (high - low) / (max_digits + 1.0)
+		var max_spaces := float(max_ticks - 1)
+		var spacing := _nice((high - low) / max_spaces / unit) * unit
+		var result: Array = []
+		if spacing < 1e-14 and not min_defined and not max_defined:
+			return [low, high]
+		if spacing <= 0.0:
+			spacing = maxf(absf(high - low), 1.0)
+		var spaces := ceilf(high / spacing) - floorf(low / spacing)
+		if spaces > max_spaces:
+			spacing = _nice(spaces * spacing / max_spaces / unit) * unit
+		if precision != null:
+			var precise := pow(10.0, float(precision))
+			spacing = ceilf(spacing * precise) / precise
+		var nice_min := floorf(low / spacing) * spacing
+		var nice_max := ceilf(high / spacing) * spacing
+		if min_defined and max_defined and step != null and float(step) > 0.0 and absf((float(user_max) - float(user_min)) / float(step) - round((float(user_max) - float(user_min)) / float(step))) <= spacing / 1000.0:
+			spaces = round(minf((float(user_max) - float(user_min)) / spacing, float(max_ticks)))
+			spacing = (float(user_max) - float(user_min)) / maxf(spaces, 1.0)
+			nice_min = float(user_min)
+			nice_max = float(user_max)
+		elif count_value != null and float(count_value) > 1.0:
+			nice_min = float(user_min) if min_defined else nice_min
+			nice_max = float(user_max) if max_defined else nice_max
+			spaces = float(count_value) - 1.0
+			spacing = (nice_max - nice_min) / spaces
+		else:
+			spaces = (nice_max - nice_min) / spacing
+			spaces = round(spaces) if absf(spaces - round(spaces)) < spacing / 1000.0 else ceilf(spaces)
+		var places: int = max(_decimals(spacing), _decimals(nice_min))
+		var factor: float = pow(10.0, float(precision) if precision != null else float(places))
+		nice_min = round(nice_min * factor) / factor
+		nice_max = round(nice_max * factor) / factor
+		var index := 0
+		if min_defined:
+			var bound := float(user_min)
+			if bool(axis["include_bounds"]) and nice_min != bound:
+				result.append(bound)
+				if nice_min < bound:
+					index += 1
+				if _almost_equals(round((nice_min + float(index) * spacing) * factor) / factor, bound, _relative(bound, min_spacing, horizontal_axis)):
+					index += 1
+			elif nice_min < bound:
+				index += 1
+		while index < int(spaces):
+			var tick: float = round((nice_min + float(index) * spacing) * factor) / factor
+			if max_defined and tick > float(user_max):
+				break
+			result.append(tick)
+			index += 1
+		if max_defined and bool(axis["include_bounds"]) and nice_max != float(user_max):
+			if not result.is_empty() and _almost_equals(float(result[result.size() - 1]), float(user_max), _relative(float(user_max), min_spacing, horizontal_axis)):
+				result[result.size() - 1] = float(user_max)
+			else:
+				result.append(float(user_max))
+		elif not max_defined or nice_max == float(user_max):
+			result.append(nice_max)
+		return result
+
+	func _value_label(axis: Dictionary, value: float, ticks: Array) -> String:
+		if bool(axis["callback"]):
+			return _js(value) + ("%" if percent else "")
+		return _numeric(value, ticks)
+
+	func _index_label(axis: Dictionary, index: int) -> String:
+		if bool(axis["callback"]):
+			return str(index) + ("%" if percent else "")
+		return labels[index]
+
+	func _stacks(value_axis: Dictionary) -> Dictionary:
 		var count := labels.size()
-		var label_sizes: Array[float] = []
+		var starts: Array = []
+		var ends: Array = []
+		var positive: Array = []
+		var negative: Array = []
+		for index in range(count):
+			positive.append(0.0)
+			negative.append(0.0)
+		var low := INF
+		var high := -INF
+		var stacked := bool(value_axis["stacked"])
+		for set_index in range(series.size()):
+			var item: Dictionary = series[set_index]
+			var set_starts: Array = []
+			var set_ends: Array = []
+			var values: Array = item.get("values", [])
+			for index in range(count):
+				var number: Variant = _number(values[index]) if index < values.size() else null
+				if number == null or bool(item.get("hidden", false)):
+					set_starts.append(null)
+					set_ends.append(null)
+					continue
+				var start := 0.0
+				var finish := float(number)
+				if stacked:
+					if float(number) >= 0.0:
+						start = float(positive[index])
+						positive[index] = start + float(number)
+					else:
+						start = float(negative[index])
+						negative[index] = start + float(number)
+					finish = start + float(number)
+				set_starts.append(start)
+				set_ends.append(finish)
+				low = minf(low, finish)
+				high = maxf(high, finish)
+			starts.append(set_starts)
+			ends.append(set_ends)
+		return {"starts": starts, "ends": ends, "low": low, "high": high, "has": is_finite(low)}
+
+	func _draw_axes(top_edge: float, bottom_edge: float) -> void:
+		_horizontal = kind == "bar" and str(options.get("indexAxis", "x")) == "y"
+		var index_axis := _axis("y" if _horizontal else "x")
+		var value_axis := _axis("x" if _horizontal else "y")
+		var stack := _stacks(value_axis)
+		var count := labels.size()
+		var line := kind == "line"
+		var limits := _limits(value_axis, float(stack["low"]), float(stack["high"]), bool(stack["has"]), not line)
+		var value_line := float(value_axis["tick_size"]) * 1.2
+		var index_line := float(index_axis["tick_size"]) * 1.2
+		var index_labels: PackedStringArray = []
+		var index_widths: Array[float] = []
 		var widest := 0.0
-		for label in labels:
-			var width := font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, TICK_SIZE).x
-			label_sizes.append(width)
-			widest = max(widest, width)
-		var top := TICK_LINE * 0.5 + TICK_PAD
+		for index in range(count):
+			var text := _index_label(index_axis, index)
+			index_labels.append(text)
+			var width := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, int(index_axis["tick_size"])).x
+			index_widths.append(width)
+			widest = maxf(widest, width)
+		var value_shown := bool(value_axis["display"]) and bool(value_axis["ticks_shown"])
+		var index_shown := bool(index_axis["display"]) and bool(index_axis["ticks_shown"])
+		var plot := Rect2()
+		var ticks: Array = []
 		var rotation := 0.0
-		var x_height := TICK_MARK + TICK_LINE + TICK_PAD * 2.0
-		var ticks: Array[float] = _ticks(low, high, size.y - top - 4.0 - x_height)
-		var y_width := 0.0
-		for value in ticks:
-			y_width = max(y_width, font.get_string_size(_label_text(value), HORIZONTAL_ALIGNMENT_LEFT, -1, TICK_SIZE).x)
-		var left := TICK_MARK + y_width + TICK_PAD * 2.0
-		var right_pad := 0.0
-		var plot_width: float = max(10.0, size.x - left)
-		if count > 1:
-			var tick_width := plot_width / float(count) if not line else plot_width / float(count - 1)
-			if widest + 6.0 > tick_width:
-				tick_width = plot_width / (float(count) - (0.5 if not line else 1.0))
-				var max_height := (size.y - 8.0) * 0.5 - TICK_MARK - TICK_PAD
-				var diagonal := sqrt(widest * widest + TICK_LINE * TICK_LINE)
-				rotation = min(asin(clamp((TICK_LINE + 6.0) / tick_width, -1.0, 1.0)), asin(clamp(max_height / diagonal, -1.0, 1.0)) - asin(clamp(TICK_LINE / diagonal, -1.0, 1.0)))
-				rotation = clamp(rotation, 0.0, deg_to_rad(50.0))
-		if rotation > 0.0:
-			x_height = TICK_MARK + TICK_PAD * 2.0 + sin(rotation) * widest + cos(rotation) * TICK_LINE
-			right_pad = sin(rotation) * TICK_LINE + TICK_PAD
-			ticks = _ticks(low, high, size.y - top - 4.0 - x_height)
-		elif line and count > 0:
-			right_pad = label_sizes[count - 1] * 0.5 + TICK_PAD
-		elif count > 0:
-			var band := plot_width / float(count)
-			right_pad = max(label_sizes[count - 1] * 0.5 - band * 0.5 + TICK_PAD, 0.0)
-		low = ticks[0]
-		high = ticks[ticks.size() - 1]
-		var plot := Rect2(left, top, max(10.0, size.x - left - right_pad), max(10.0, size.y - top - 4.0 - x_height))
-		var to_y := func(value: float) -> float:
-			return plot.end.y - (value - low) / (high - low) * plot.size.y
-		var group := plot.size.x / float(count)
-		var x_of := func(index: int) -> float:
+		if _horizontal:
+			var left := 0.0
+			if bool(index_axis["display"]):
+				left = float(index_axis["mark"]) + float(index_axis["title_height"]) + ((widest + TICK_PAD * 2.0) if index_shown else 0.0)
+			var x_height := 0.0
+			if bool(value_axis["display"]):
+				x_height = float(value_axis["mark"]) + float(value_axis["title_height"]) + ((value_line + TICK_PAD * 2.0) if value_shown else 0.0)
+			var top := maxf(top_edge, (index_line * 0.5 + TICK_PAD) if index_shown else top_edge)
+			var bottom := bottom_edge - x_height
+			ticks = _ticks(value_axis, limits, maxf(10.0, size.x - left), true)
+			var right_pad := 0.0
+			if value_shown and not ticks.is_empty():
+				var last_width := font.get_string_size(_value_label(value_axis, float(ticks[ticks.size() - 1]), ticks), HORIZONTAL_ALIGNMENT_LEFT, -1, int(value_axis["tick_size"])).x
+				right_pad = last_width * 0.5 + TICK_PAD
+				ticks = _ticks(value_axis, limits, maxf(10.0, size.x - left - right_pad), true)
+				var first_width := font.get_string_size(_value_label(value_axis, float(ticks[0]), ticks), HORIZONTAL_ALIGNMENT_LEFT, -1, int(value_axis["tick_size"])).x
+				left = maxf(left, first_width * 0.5 + TICK_PAD)
+			plot = Rect2(left, top, maxf(10.0, size.x - left - right_pad), maxf(10.0, bottom - top))
+		else:
+			var top := maxf(top_edge, (value_line * 0.5 + TICK_PAD) if value_shown else top_edge)
+			var x_height := 0.0
+			if bool(index_axis["display"]):
+				x_height = float(index_axis["mark"]) + float(index_axis["title_height"]) + ((index_line + TICK_PAD * 2.0) if index_shown else 0.0)
+			ticks = _ticks(value_axis, limits, maxf(10.0, bottom_edge - top - x_height), false)
+			var y_width := 0.0
+			for value in ticks:
+				y_width = maxf(y_width, font.get_string_size(_value_label(value_axis, float(value), ticks), HORIZONTAL_ALIGNMENT_LEFT, -1, int(value_axis["tick_size"])).x)
+			var left := 0.0
+			if bool(value_axis["display"]):
+				left = float(value_axis["mark"]) + float(value_axis["title_height"]) + ((y_width + TICK_PAD * 2.0) if value_shown else 0.0)
+			var right_pad := 0.0
+			var plot_width: float = max(10.0, size.x - left)
+			if index_shown and count > 1:
+				var tick_width := plot_width / float(count) if not line else plot_width / float(count - 1)
+				if widest + 6.0 > tick_width:
+					tick_width = plot_width / (float(count) - (0.5 if not line else 1.0))
+					var max_height := (size.y - 8.0) * 0.5 - float(index_axis["mark"]) - TICK_PAD
+					var diagonal := sqrt(widest * widest + index_line * index_line)
+					rotation = min(asin(clamp((index_line + 6.0) / tick_width, -1.0, 1.0)), asin(clamp(max_height / diagonal, -1.0, 1.0)) - asin(clamp(index_line / diagonal, -1.0, 1.0)))
+					rotation = clamp(rotation, 0.0, deg_to_rad(50.0))
+			if rotation > 0.0:
+				x_height = float(index_axis["mark"]) + float(index_axis["title_height"]) + TICK_PAD * 2.0 + sin(rotation) * widest + cos(rotation) * index_line
+				right_pad = sin(rotation) * index_line + TICK_PAD
+				ticks = _ticks(value_axis, limits, maxf(10.0, bottom_edge - top - x_height), false)
+			elif index_shown and line and count > 0:
+				right_pad = index_widths[count - 1] * 0.5 + TICK_PAD
+			elif index_shown and count > 0:
+				var band := plot_width / float(count)
+				right_pad = max(index_widths[count - 1] * 0.5 - band * 0.5 + TICK_PAD, 0.0)
+			plot = Rect2(left, top, max(10.0, size.x - left - right_pad), max(10.0, bottom_edge - top - x_height))
+		if ticks.is_empty():
+			ticks = [limits.x, limits.y]
+		var low: float = ticks.min()
+		var high: float = ticks.max()
+		if high == low:
+			high = low + 1.0
+		var reverse_value := bool(value_axis["reverse"])
+		var reverse_index := bool(index_axis["reverse"])
+		var to_px := func(value: float) -> float:
+			var share := (value - low) / (high - low)
+			if reverse_value:
+				share = 1.0 - share
+			return plot.position.x + share * plot.size.x if _horizontal else plot.end.y - share * plot.size.y
+		var band: float = (plot.size.y if _horizontal else plot.size.x) / float(maxi(count, 1))
+		var slot := func(index: int) -> int:
+			return count - 1 - index if reverse_index else index
+		var center_of := func(index: int) -> float:
+			var at: int = slot.call(index)
 			if line:
-				return plot.position.x + (plot.size.x * float(index) / float(count - 1) if count > 1 else plot.size.x * 0.5)
-			return plot.position.x + group * (float(index) + 0.5)
-		for value in ticks:
-			var y: float = to_y.call(value)
-			draw_line(Vector2(plot.position.x - TICK_MARK, y), Vector2(plot.end.x, y), GRID, 1.0)
-		var grid_count := count + 1 if not line else count
-		for index in range(grid_count):
-			var x: float = (plot.position.x + group * float(index)) if not line else float(x_of.call(index))
-			draw_line(Vector2(x, plot.position.y), Vector2(x, plot.end.y + TICK_MARK), GRID, 1.0)
+				return plot.position.x + (plot.size.x * float(at) / float(count - 1) if count > 1 else plot.size.x * 0.5)
+			return (plot.position.y + band * (float(at) + 0.5)) if _horizontal else (plot.position.x + band * (float(at) + 0.5))
+		var value_grid: Color = value_axis["grid_color"]
+		var index_grid: Color = index_axis["grid_color"]
+		if bool(value_axis["display"]) and bool(value_axis["grid_shown"]):
+			for value in ticks:
+				var at: float = to_px.call(float(value))
+				if _horizontal:
+					draw_line(Vector2(at, plot.position.y), Vector2(at, plot.end.y + float(value_axis["mark"])), value_grid, 1.0)
+				else:
+					draw_line(Vector2(plot.position.x - float(value_axis["mark"]), at), Vector2(plot.end.x, at), value_grid, 1.0)
+		if bool(index_axis["display"]) and bool(index_axis["grid_shown"]):
+			var grid_count := count + 1 if not line else count
+			for index in range(grid_count):
+				if _horizontal:
+					var y := plot.position.y + band * float(index)
+					draw_line(Vector2(plot.position.x - float(index_axis["mark"]), y), Vector2(plot.end.x, y), index_grid, 1.0)
+				else:
+					var x: float = (plot.position.x + band * float(index)) if not line else float(center_of.call(index))
+					draw_line(Vector2(x, plot.position.y), Vector2(x, plot.end.y + float(index_axis["mark"])), index_grid, 1.0)
+		if bool(value_axis["display"]) and bool(value_axis["border_shown"]):
+			if _horizontal:
+				draw_line(Vector2(plot.position.x, plot.end.y), Vector2(plot.end.x, plot.end.y), value_axis["border_color"], 1.0)
+			else:
+				draw_line(Vector2(plot.position.x, plot.position.y), Vector2(plot.position.x, plot.end.y), value_axis["border_color"], 1.0)
+		if bool(index_axis["display"]) and bool(index_axis["border_shown"]):
+			if _horizontal:
+				draw_line(Vector2(plot.position.x, plot.position.y), Vector2(plot.position.x, plot.end.y), index_axis["border_color"], 1.0)
+			else:
+				draw_line(Vector2(plot.position.x, plot.end.y), Vector2(plot.end.x, plot.end.y), index_axis["border_color"], 1.0)
 		var progress := _progress()
 		var base_value := 0.0
 		if low > 0.0 and high > 0.0:
 			base_value = low
 		elif low < 0.0 and high < 0.0:
 			base_value = high
-		var base: float = to_y.call(base_value)
+		var base: float = to_px.call(base_value)
 		if line:
-			for set_index in range(series.size()):
-				var item: Dictionary = series[set_index]
-				var stroke: Color = item["stroke"]
-				var values: Array = item.get("values", [])
-				var points: Array = []
-				for index in range(min(count, values.size())):
-					var number: Variant = _number(values[index])
-					if number == null:
-						points.append(null)
-						continue
-					var target: float = to_y.call(float(number))
-					points.append(Vector2(x_of.call(index), lerp(base, target, progress)))
-				_draw_curve(points, stroke)
-				for index in range(points.size()):
-					if points[index] == null:
-						continue
-					var at: Vector2 = points[index]
-					var hovered := set_index == _hover_set and index == _hover_index
-					var radius := 5.0 if hovered else 3.0
-					var dot_fill: Color = item["fill"]
-					var dot_edge := stroke
-					if hovered:
-						dot_fill = _hover_color(dot_fill)
-						dot_edge = _hover_color(dot_edge)
-					draw_circle(at, radius, dot_fill)
-					draw_arc(at, radius, 0.0, TAU, 24, dot_edge, 1.0, true)
-					_hits.append({"shape": "point", "set": set_index, "index": index, "at": at, "reach": radius + 1.0, "value": float(_number(values[index])), "color": item["fill"], "border": stroke})
+			_draw_lines(stack, plot, to_px, center_of, base, progress)
 		else:
-			var sets := series.size()
-			var inner_width := group * 0.8
-			var bar := inner_width / float(sets) * 0.9
-			for set_index in range(sets):
-				var item: Dictionary = series[set_index]
-				var values: Array = item.get("values", [])
-				for index in range(min(count, values.size())):
-					var number: Variant = _number(values[index])
-					if number == null:
-						continue
-					var start := plot.position.x + group * float(index) + (group - inner_width) * 0.5 + inner_width / float(sets) * float(set_index) + (inner_width / float(sets) - bar) * 0.5
-					var target: float = to_y.call(float(number))
-					var top_y: float = lerp(base, target, progress)
-					var rect := Rect2(start, min(top_y, base), bar, abs(base - top_y))
-					var hovered := set_index == _hover_set and index == _hover_index
-					var fill: Color = item["fill"]
-					var stroke: Color = item["stroke"]
-					if hovered:
-						fill = _hover_color(fill)
-						stroke = _hover_color(stroke)
-					var border: float = min(2.0, min(rect.size.x * 0.5, rect.size.y))
-					var upward := target <= base
-					var inner := Rect2(rect.position.x + border, rect.position.y + (border if upward else 0.0), rect.size.x - border * 2.0, rect.size.y - border)
-					if border > 0.0:
-						draw_rect(rect, stroke)
-					if inner.size.x > 0.0 and inner.size.y > 0.0:
-						draw_rect(inner, fill)
-					elif border <= 0.0:
-						draw_rect(rect, fill)
-					_hits.append({"shape": "rect", "set": set_index, "index": index, "rect": Rect2(rect.position.x, min(target, base), rect.size.x, abs(base - target)), "at": Vector2(rect.get_center().x, target), "value": float(number), "color": item["fill"], "border": item["stroke"]})
-		draw_line(Vector2(plot.position.x, plot.position.y), Vector2(plot.position.x, plot.end.y), AXIS, 1.0)
-		draw_line(Vector2(plot.position.x, plot.end.y), Vector2(plot.end.x, plot.end.y), AXIS, 1.0)
-		var ascent := font.get_ascent(TICK_SIZE)
-		var middle := (font.get_ascent(TICK_SIZE) - font.get_descent(TICK_SIZE)) * 0.5
-		for value in ticks:
-			var y: float = to_y.call(value)
-			var text := _label_text(value)
-			var width := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, TICK_SIZE).x
-			draw_string(font, Vector2(plot.position.x - TICK_MARK - TICK_PAD - width, y + middle), text, HORIZONTAL_ALIGNMENT_LEFT, -1, TICK_SIZE, INK)
-		var stride := 1
-		if count > 1:
-			var w := widest + 3.0
-			var h := TICK_LINE + 3.0
-			var tick_size := w
-			if rotation > 0.0:
-				tick_size = w / cos(rotation) if h * cos(rotation) > w * sin(rotation) else h / sin(rotation)
-			var limit: int = int(floor(min(plot.size.x / max(1.0, tick_size) + (1.0 if line else 0.0), size.x / max(1.0, tick_size))))
-			limit = max(1, limit)
-			stride = int(ceil(max(float(count) / float(limit), 1.0)))
-		for index in range(0, count, stride):
-			var x: float = x_of.call(index)
-			var text := labels[index]
-			var width: float = label_sizes[index]
-			if rotation == 0.0:
-				draw_string(font, Vector2(x - width * 0.5, plot.end.y + TICK_MARK + TICK_PAD + ascent), text, HORIZONTAL_ALIGNMENT_LEFT, -1, TICK_SIZE, INK)
-			else:
-				draw_set_transform(Vector2(x, plot.end.y + TICK_MARK + TICK_PAD), -rotation, Vector2.ONE)
-				draw_string(font, Vector2(-width, middle), text, HORIZONTAL_ALIGNMENT_LEFT, -1, TICK_SIZE, INK)
-				draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+			_draw_bars(stack, plot, to_px, base, progress, band, bool(index_axis["stacked"]), slot)
+		var tick_color: Color = value_axis["tick_color"]
+		var tick_size := int(value_axis["tick_size"])
+		if value_shown:
+			var middle := (font.get_ascent(tick_size) - font.get_descent(tick_size)) * 0.5
+			var stride := 1
+			if _horizontal and ticks.size() > 1:
+				var widest_value := 0.0
+				for value in ticks:
+					widest_value = maxf(widest_value, font.get_string_size(_value_label(value_axis, float(value), ticks), HORIZONTAL_ALIGNMENT_LEFT, -1, tick_size).x)
+				var fits: int = max(1, int(floor(plot.size.x / maxf(1.0, widest_value + 3.0) + 1.0)))
+				stride = int(ceil(max(float(ticks.size()) / float(fits), 1.0)))
+			for tick_index in range(0, ticks.size(), stride):
+				var value := float(ticks[tick_index])
+				var at: float = to_px.call(value)
+				var text := _value_label(value_axis, value, ticks)
+				var width := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, tick_size).x
+				if _horizontal:
+					draw_string(font, Vector2(at - width * 0.5, plot.end.y + float(value_axis["mark"]) + TICK_PAD + font.get_ascent(tick_size)), text, HORIZONTAL_ALIGNMENT_LEFT, -1, tick_size, tick_color)
+				else:
+					draw_string(font, Vector2(plot.position.x - float(value_axis["mark"]) - TICK_PAD - width, at + middle), text, HORIZONTAL_ALIGNMENT_LEFT, -1, tick_size, tick_color)
+		if index_shown:
+			var index_color: Color = index_axis["tick_color"]
+			var index_size := int(index_axis["tick_size"])
+			var ascent := font.get_ascent(index_size)
+			var middle := (font.get_ascent(index_size) - font.get_descent(index_size)) * 0.5
+			var stride := 1
+			if count > 1:
+				var w := widest + 3.0
+				var h := index_line + 3.0
+				var tick_size_px := h if _horizontal else w
+				if not _horizontal and rotation > 0.0:
+					tick_size_px = w / cos(rotation) if h * cos(rotation) > w * sin(rotation) else h / sin(rotation)
+				var length := plot.size.y if _horizontal else plot.size.x
+				var limit: int = int(floor(min(length / max(1.0, tick_size_px) + (1.0 if line else 0.0), (size.y if _horizontal else size.x) / max(1.0, tick_size_px))))
+				limit = max(1, limit)
+				stride = int(ceil(max(float(count) / float(limit), 1.0)))
+			for index in range(0, count, stride):
+				var at: float = center_of.call(index)
+				var text := index_labels[index]
+				var width: float = index_widths[index]
+				if _horizontal:
+					draw_string(font, Vector2(plot.position.x - float(index_axis["mark"]) - TICK_PAD - width, at + middle), text, HORIZONTAL_ALIGNMENT_LEFT, -1, index_size, index_color)
+				elif rotation == 0.0:
+					draw_string(font, Vector2(at - width * 0.5, plot.end.y + float(index_axis["mark"]) + TICK_PAD + ascent), text, HORIZONTAL_ALIGNMENT_LEFT, -1, index_size, index_color)
+				else:
+					draw_set_transform(Vector2(at, plot.end.y + float(index_axis["mark"]) + TICK_PAD), -rotation, Vector2.ONE)
+					draw_string(font, Vector2(-width, middle), text, HORIZONTAL_ALIGNMENT_LEFT, -1, index_size, index_color)
+					draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+		var bottom_axis := value_axis if _horizontal else index_axis
+		var left_axis := index_axis if _horizontal else value_axis
+		_draw_axis_title(bottom_axis, Vector2(plot.get_center().x, bottom_edge), false)
+		_draw_axis_title(left_axis, Vector2(0.0, plot.get_center().y), true)
 		_draw_tooltip()
 
-	func _draw_curve(points: Array, color: Color) -> void:
+	func _draw_axis_title(axis: Dictionary, anchor: Vector2, vertical: bool) -> void:
+		var lines: PackedStringArray = axis["title"]
+		if lines.is_empty() or not bool(axis["display"]):
+			return
+		var size_px := int(axis["title_size"])
+		var line_height := float(axis["title_size"]) * 1.2
+		var pad: Vector2 = axis["title_pad"]
+		var middle := (font.get_ascent(size_px) - font.get_descent(size_px)) * 0.5
+		if vertical:
+			var x := anchor.x + line_height * 0.5 + pad.x
+			draw_set_transform(Vector2(x, anchor.y), -PI * 0.5, Vector2.ONE)
+			for index in range(lines.size()):
+				var width := font.get_string_size(lines[index], HORIZONTAL_ALIGNMENT_LEFT, -1, size_px).x
+				draw_string(font, Vector2(-width * 0.5, line_height * float(index) + middle), lines[index], HORIZONTAL_ALIGNMENT_LEFT, -1, size_px, axis["title_color"])
+			draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+		else:
+			var y := anchor.y - line_height * 0.5 - pad.y - line_height * float(lines.size() - 1)
+			for index in range(lines.size()):
+				var width := font.get_string_size(lines[index], HORIZONTAL_ALIGNMENT_LEFT, -1, size_px).x
+				draw_string(font, Vector2(anchor.x - width * 0.5, y + line_height * float(index) + middle), lines[index], HORIZONTAL_ALIGNMENT_LEFT, -1, size_px, axis["title_color"])
+
+	func _draw_bars(stack: Dictionary, plot: Rect2, to_px: Callable, base: float, progress: float, band: float, index_stacked: bool, slot: Callable) -> void:
+		var count := labels.size()
+		var shown: Array = []
+		for set_index in range(series.size()):
+			if not bool((series[set_index] as Dictionary).get("hidden", false)):
+				shown.append(set_index)
+		var lanes: int = 1 if index_stacked else maxi(1, shown.size())
+		var starts: Array = stack["starts"]
+		var ends: Array = stack["ends"]
+		for lane in range(shown.size()):
+			var set_index: int = shown[lane]
+			var item: Dictionary = series[set_index]
+			var category := clampf(float(item.get("category_percentage", 0.8)), 0.0, 1.0)
+			var bar_share := clampf(float(item.get("bar_percentage", 0.9)), 0.0, 1.0)
+			var inner_width := band * category
+			var lane_width := inner_width / float(lanes)
+			var thickness := lane_width * bar_share
+			var place := 0 if index_stacked else lane
+			var fills: Array = item.get("fills", [])
+			var borders: Array = item.get("borders", [])
+			var values: Array = item.get("values", [])
+			for index in range(count):
+				var start_value: Variant = (starts[set_index] as Array)[index]
+				var end_value: Variant = (ends[set_index] as Array)[index]
+				if end_value == null:
+					continue
+				var at: int = slot.call(index)
+				var lead := (plot.position.y if _horizontal else plot.position.x) + band * float(at) + (band - inner_width) * 0.5 + lane_width * float(place) + (lane_width - thickness) * 0.5
+				var start_px: float = to_px.call(float(start_value)) if start_value != null and float(start_value) != 0.0 else base
+				var end_px: float = to_px.call(float(end_value))
+				var from_px: float = lerp(base, start_px, progress)
+				var head_px: float = lerp(base, end_px, progress)
+				var rect := Rect2(minf(from_px, head_px), lead, absf(head_px - from_px), thickness) if _horizontal else Rect2(lead, minf(from_px, head_px), thickness, absf(head_px - from_px))
+				var full := Rect2(minf(start_px, end_px), lead, absf(end_px - start_px), thickness) if _horizontal else Rect2(lead, minf(start_px, end_px), thickness, absf(end_px - start_px))
+				var hovered := set_index == _hover_set and index == _hover_index
+				var fill: Color = fills[index] if index < fills.size() else Color("#60a5fa")
+				var edge: Color = borders[index] if index < borders.size() else fill
+				if hovered:
+					fill = _hover_color(fill)
+					edge = _hover_color(edge)
+				var raw: Variant = _number(values[index]) if index < values.size() else null
+				var forward := float(raw) >= 0.0 if raw != null else true
+				_bar(rect, fill, edge, float(item.get("border_width", 2.0)), float(item.get("radius", 0.0)), forward)
+				var tip := Vector2(end_px, full.get_center().y) if _horizontal else Vector2(full.get_center().x, end_px)
+				_hits.append({"shape": "rect", "set": set_index, "index": index, "rect": full, "at": tip, "value": float(raw) if raw != null else 0.0, "color": fills[index] if index < fills.size() else fill, "border": borders[index] if index < borders.size() else edge})
+
+	func _bar(rect: Rect2, fill: Color, edge: Color, border_width: float, radius: float, forward: bool) -> void:
+		if rect.size.x <= 0.0 or rect.size.y <= 0.0:
+			return
+		var half_w := rect.size.x * 0.5
+		var half_h := rect.size.y * 0.5
+		var top := clampf(border_width, 0.0, half_h)
+		var bottom := top
+		var left := clampf(border_width, 0.0, half_w)
+		var right := left
+		if _horizontal:
+			if forward:
+				left = 0.0
+			else:
+				right = 0.0
+		else:
+			if forward:
+				bottom = 0.0
+			else:
+				top = 0.0
+		var corner := clampf(radius, 0.0, minf(half_w, half_h))
+		if corner <= 0.0:
+			if top + bottom + left + right > 0.0:
+				draw_rect(rect, edge)
+			var inner := Rect2(rect.position.x + left, rect.position.y + top, rect.size.x - left - right, rect.size.y - top - bottom)
+			if inner.size.x > 0.0 and inner.size.y > 0.0:
+				draw_rect(inner, fill)
+			return
+		var outer_box := StyleBoxFlat.new()
+		outer_box.anti_aliasing = true
+		outer_box.bg_color = edge if top + bottom + left + right > 0.0 else fill
+		var corners := [corner, corner, corner, corner]
+		if _horizontal:
+			if forward:
+				corners = [0.0, corner, corner, 0.0]
+			else:
+				corners = [corner, 0.0, 0.0, corner]
+		else:
+			if forward:
+				corners = [corner, corner, 0.0, 0.0]
+			else:
+				corners = [0.0, 0.0, corner, corner]
+		outer_box.corner_radius_top_left = int(corners[0])
+		outer_box.corner_radius_top_right = int(corners[1])
+		outer_box.corner_radius_bottom_right = int(corners[2])
+		outer_box.corner_radius_bottom_left = int(corners[3])
+		draw_style_box(outer_box, rect)
+		if top + bottom + left + right > 0.0:
+			var inner := Rect2(rect.position.x + left, rect.position.y + top, rect.size.x - left - right, rect.size.y - top - bottom)
+			if inner.size.x > 0.0 and inner.size.y > 0.0:
+				var inner_box := StyleBoxFlat.new()
+				inner_box.anti_aliasing = true
+				inner_box.bg_color = fill
+				inner_box.corner_radius_top_left = int(maxf(0.0, float(corners[0]) - maxf(left, top)))
+				inner_box.corner_radius_top_right = int(maxf(0.0, float(corners[1]) - maxf(right, top)))
+				inner_box.corner_radius_bottom_right = int(maxf(0.0, float(corners[2]) - maxf(right, bottom)))
+				inner_box.corner_radius_bottom_left = int(maxf(0.0, float(corners[3]) - maxf(left, bottom)))
+				draw_style_box(inner_box, inner)
+
+	func _draw_lines(stack: Dictionary, plot: Rect2, to_px: Callable, center_of: Callable, base: float, progress: float) -> void:
+		var count := labels.size()
+		var ends: Array = stack["ends"]
+		for set_index in range(series.size()):
+			var item: Dictionary = series[set_index]
+			if bool(item.get("hidden", false)):
+				continue
+			var values: Array = item.get("values", [])
+			var points: Array = []
+			for index in range(count):
+				var end_value: Variant = (ends[set_index] as Array)[index]
+				if end_value == null:
+					points.append(null)
+					continue
+				var target: float = to_px.call(float(end_value))
+				points.append(Vector2(center_of.call(index), lerp(base, target, progress)))
+			var runs := _curves(points, float(item.get("tension", 0.4)), plot)
+			var fill := str(item.get("fill", ""))
+			if not fill.is_empty():
+				var low_px := plot.end.y
+				var high_px := plot.position.y
+				var edge := base
+				if fill == "start":
+					edge = low_px
+				elif fill == "end":
+					edge = high_px
+				else:
+					edge = clampf(float(to_px.call(0.0)), high_px, low_px)
+				for run in runs:
+					_fill_under(run, edge, item["area_color"])
+			if bool(item.get("show_line", true)) and float(item.get("border_width", 2.0)) > 0.0:
+				for run in runs:
+					_stroke(run, item["line_color"], float(item.get("border_width", 2.0)), item.get("dash", []))
+			var radii: Array = item.get("point_radius", [])
+			var hover_radii: Array = item.get("point_hover", [])
+			var point_widths: Array = item.get("point_border_width", [])
+			var point_fills: Array = item.get("point_fills", [])
+			var point_borders: Array = item.get("point_borders", [])
+			for index in range(points.size()):
+				if points[index] == null:
+					continue
+				var at: Vector2 = points[index]
+				var hovered := set_index == _hover_set and index == _hover_index
+				var radius := float(radii[index]) if index < radii.size() else 3.0
+				if hovered:
+					radius = float(hover_radii[index]) if index < hover_radii.size() else 5.0
+				var dot_fill: Color = point_fills[index] if index < point_fills.size() else Color(1, 1, 1)
+				var dot_edge: Color = point_borders[index] if index < point_borders.size() else Color(1, 1, 1)
+				if hovered:
+					dot_fill = _hover_color(dot_fill)
+					dot_edge = _hover_color(dot_edge)
+				if radius > 0.0:
+					draw_circle(at, radius, dot_fill)
+					var ring := float(point_widths[index]) if index < point_widths.size() else 1.0
+					if ring > 0.0:
+						draw_arc(at, radius, 0.0, TAU, 24, dot_edge, ring, true)
+				var raw: Variant = _number(values[index]) if index < values.size() else null
+				_hits.append({"shape": "point", "set": set_index, "index": index, "at": at, "reach": (float(radii[index]) if index < radii.size() else 3.0) + 1.0, "value": float(raw) if raw != null else 0.0, "color": point_fills[index] if index < point_fills.size() else dot_fill, "border": point_borders[index] if index < point_borders.size() else dot_edge})
+
+	func _curves(points: Array, tension: float, plot: Rect2) -> Array:
 		var run: Array[Vector2] = []
 		var runs: Array = []
 		for point in points:
@@ -2800,9 +3656,19 @@ class AdvisorChart extends Control:
 				run.append(point)
 		if run.size() > 0:
 			runs.append(run)
+		var out: Array = []
 		for entry in runs:
 			var pts: Array[Vector2] = entry
+			var curve := PackedVector2Array()
 			if pts.size() < 2:
+				if pts.size() == 1:
+					curve.append(pts[0])
+				out.append(curve)
+				continue
+			if tension <= 0.0:
+				for point in pts:
+					curve.append(point)
+				out.append(curve)
 				continue
 			var controls: Array = []
 			for index in range(pts.size()):
@@ -2813,23 +3679,89 @@ class AdvisorChart extends Control:
 				var d12 := current.distance_to(following)
 				var s01 := d01 / (d01 + d12) if d01 + d12 > 0.0 else 0.0
 				var s12 := d12 / (d01 + d12) if d01 + d12 > 0.0 else 0.0
-				var fa := 0.4 * s01
-				var fb := 0.4 * s12
+				var fa := tension * s01
+				var fb := tension * s12
 				controls.append([current - (following - previous) * fa, current + (following - previous) * fb])
-			var curve := PackedVector2Array()
 			curve.append(pts[0])
 			for index in range(pts.size() - 1):
 				var p0: Vector2 = pts[index]
 				var p1: Vector2 = (controls[index] as Array)[1]
 				var p2: Vector2 = (controls[index + 1] as Array)[0]
 				var p3: Vector2 = pts[index + 1]
-				p1.y = clamp(p1.y, 0.0, size.y)
-				p2.y = clamp(p2.y, 0.0, size.y)
+				p1 = Vector2(clampf(p1.x, plot.position.x, plot.end.x), clampf(p1.y, plot.position.y, plot.end.y))
+				p2 = Vector2(clampf(p2.x, plot.position.x, plot.end.x), clampf(p2.y, plot.position.y, plot.end.y))
 				for step in range(1, 17):
 					var t := float(step) / 16.0
 					var u := 1.0 - t
 					curve.append(p0 * u * u * u + p1 * 3.0 * u * u * t + p2 * 3.0 * u * t * t + p3 * t * t * t)
-			draw_polyline(curve, color, 2.0, true)
+			out.append(curve)
+		return out
+
+	func _fill_under(curve: PackedVector2Array, edge: float, color: Color) -> void:
+		for index in range(curve.size() - 1):
+			var a := curve[index]
+			var b := curve[index + 1]
+			var a_side := a.y - edge
+			var b_side := b.y - edge
+			if a_side * b_side < 0.0:
+				var share := a_side / (a_side - b_side)
+				var cross := Vector2(lerp(a.x, b.x, share), edge)
+				draw_colored_polygon(PackedVector2Array([a, cross, Vector2(a.x, edge)]), color)
+				draw_colored_polygon(PackedVector2Array([cross, b, Vector2(b.x, edge)]), color)
+			elif absf(a_side) > 0.001 or absf(b_side) > 0.001:
+				var quad := PackedVector2Array([a, b, Vector2(b.x, edge), Vector2(a.x, edge)])
+				if absf(a_side) <= 0.001:
+					quad = PackedVector2Array([a, b, Vector2(b.x, edge)])
+				elif absf(b_side) <= 0.001:
+					quad = PackedVector2Array([a, b, Vector2(a.x, edge)])
+				draw_colored_polygon(quad, color)
+
+	func _stroke(curve: PackedVector2Array, color: Color, width: float, dash: Array) -> void:
+		if curve.size() < 2:
+			return
+		var total := 0.0
+		for step in dash:
+			total += float(step)
+		if dash.is_empty() or total <= 0.0:
+			draw_polyline(curve, color, width, true)
+			return
+		var pattern: Array = dash.duplicate()
+		if pattern.size() % 2 == 1:
+			pattern.append_array(dash)
+		var slot := 0
+		var left := float(pattern[0])
+		var drawing := true
+		var piece := PackedVector2Array([curve[0]])
+		for index in range(curve.size() - 1):
+			var from := curve[index]
+			var to := curve[index + 1]
+			var length := from.distance_to(to)
+			var walked := 0.0
+			while length - walked > left:
+				walked += left
+				var at := from.lerp(to, walked / length) if length > 0.0 else to
+				if drawing:
+					piece.append(at)
+					if piece.size() >= 2:
+						draw_polyline(piece, color, width, true)
+				piece = PackedVector2Array([at])
+				drawing = not drawing
+				slot = (slot + 1) % pattern.size()
+				left = float(pattern[slot])
+				if left <= 0.0:
+					left = 0.0001
+			left -= length - walked
+			if drawing:
+				piece.append(to)
+			else:
+				piece = PackedVector2Array([to])
+		if drawing and piece.size() >= 2:
+			draw_polyline(piece, color, width, true)
+
+	func _tooltip_value(active: Dictionary) -> float:
+		if _horizontal:
+			return float(active["index"])
+		return float(active["value"])
 
 	func _draw_tooltip() -> void:
 		if _hover_set < 0 or _hover_index < 0:
@@ -2843,7 +3775,7 @@ class AdvisorChart extends Control:
 			return
 		var pie := kind == "pie" or kind == "doughnut"
 		var title := "" if pie else labels[_hover_index]
-		var body := " " + _label_text(float(active["value"]))
+		var body := " " + _js(_tooltip_value(active)) + ("%" if percent else "")
 		var pad := 10.0
 		var title_line := 14.4
 		var body_line := 14.4

@@ -2,6 +2,7 @@ class_name ForcesPanel
 extends Control
 
 signal closed
+signal world_changed
 
 const TYPE_LABEL := {"infantry": "Infantry", "armor": "Armor", "air": "Air", "naval": "Naval", "artillery": "Artillery", "garrison": "Garrison"}
 const TYPE_GLYPH := {"infantry": "🛡", "armor": "⚙", "air": "✈", "naval": "⚓", "artillery": "💥", "garrison": "🏰"}
@@ -551,6 +552,19 @@ func place_at(point: Vector2) -> void:
 			mode = armed
 			_render_banner()
 		await refresh()
+	elif kind == "structure-place":
+		if world.x < 0.0 or world.x >= MapView.WORLD_WIDTH:
+			mode = armed
+			_render_banner()
+			return
+		var reply: Dictionary = await engine.request("map.structure.move", {"id": str(armed.get("markerId", "")), "lng": lng, "lat": lat})
+		if reply.get("ok", false):
+			world_changed.emit()
+
+
+func begin_structure_place(marker_id: String) -> void:
+	mode = {"kind": "structure-place", "markerId": marker_id}
+	_render_banner()
 
 
 func _fly_to(unit: Dictionary) -> void:

@@ -345,3 +345,6 @@ export * as wsShp from "shpjs";
 export * as eventImpactKeys from "../../src/runtime/eventImpactKeys.js";
 export * as mxNatGeo from "../../src/Game/Map/natGeoDarkStyle.js";
 export * as wsProjectionImage from "../../src/Editor/projectionImage.js";
+export * as wsGeoTiff from "geotiff";
+export * as wsFmgImport from "../../src/Editor/fmg/fmgImport.js";
+export * as wsFmgDriver from "../../src/Editor/fmg/fmgDriver.js";

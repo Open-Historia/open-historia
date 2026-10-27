@@ -473,11 +473,6 @@ static func pick_file(host: Node, save: bool, default_name: String, filters: Pac
 	return str(picked[0])
 
 
-static func dim(control: Control, reason: String) -> Control:
-	UI.set_disabled_look(control, reason)
-	return control
-
-
 static func expand(control: Control) -> Control:
 	control.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	return control

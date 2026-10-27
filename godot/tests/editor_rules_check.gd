@@ -17,6 +17,7 @@ func _initialize() -> void:
 	shots = OS.get_environment("OH_SHOTS")
 	started = Time.get_ticks_msec()
 	main = (load("res://main.tscn") as PackedScene).instantiate()
+	root.mouse_passthrough = true
 	root.add_child(main)
 	_run.call_deferred()
 
@@ -158,6 +159,27 @@ func _same_json(a: Variant, b: Variant) -> bool:
 	return JSON.stringify(JSON.parse_string(JSON.stringify(a))) == JSON.stringify(JSON.parse_string(JSON.stringify(b)))
 
 
+
+func _clear_shell() -> void:
+	var shell: ShellBoot = main.get("shell") as ShellBoot
+	if shell == null:
+		return
+	var deadline := Time.get_ticks_msec() + 30000
+	while shell.door_state == "deciding" and Time.get_ticks_msec() < deadline:
+		await process_frame
+	if shell.door != null and is_instance_valid(shell.door):
+		shell.door.opened.emit()
+	if not shell.notice_updates.is_empty():
+		deadline = Time.get_ticks_msec() + 5000
+		while not (shell.notice != null and is_instance_valid(shell.notice)) and Time.get_ticks_msec() < deadline:
+			await process_frame
+		for i in range(5):
+			await process_frame
+	if shell.notice != null and is_instance_valid(shell.notice):
+		shell.notice.closed.emit()
+	for i in range(3):
+		await process_frame
+
 func _run() -> void:
 	if main.get("menu") == null:
 		_say("FAIL the main scene did not load")
@@ -170,6 +192,7 @@ func _run() -> void:
 			return
 		await process_frame
 	_say("menu ready")
+	await _clear_shell()
 	_make_host()
 	var opened: Dictionary = await main.engine.request("editor.open", {"kind": "scenario", "id": "default"})
 	_check(opened.get("ok", false), "editor.open scenario")
@@ -260,7 +283,14 @@ func _features_scenario(details: Dictionary, form: Dictionary) -> void:
 		events = (last_features as Dictionary)["worldDirection"]["scriptedEvents"]
 		conditions = ((events[0] as Dictionary)["trigger"] as Dictionary)["conditions"]
 		_check(str((conditions[0] as Dictionary).get("polityId", "")) == "United Kingdom", "polity picked by name")
+		await _type(polity, "an")
+		await _frames(2)
+		var offered := editor._suggest_list.get_child_count()
+		_check(offered > 8 and editor._suggest.visible, "the polity list offers every match, as the browser's list does (%d)" % offered)
+		await _shoot("rules-2b-polity-suggestions")
+		await _type(polity, "United Kingdom")
 		polity.release_focus()
+		editor._hide_suggest()
 	await _press(_find_button(host, "+ Add outcome", 0), "+ Add outcome")
 	await _press(_find_button(host, "+ Add outcome", 0), "+ Add outcome again")
 	var outcome_texts: Array = []

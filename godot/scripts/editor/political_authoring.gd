@@ -316,6 +316,11 @@ func _input_field(label: String, field: String, placeholder := "") -> Control:
 	return PoliticalKit.field(label, input)
 
 
+func _number_field(label: String, field: String) -> Control:
+	var input := PoliticalKit.number_input(str(_draft.get(field, "")), 0.0, 100.0, 0.1, func(value: String) -> void: _edit(field, value))
+	return PoliticalKit.field(label, input)
+
+
 func _textarea_field(label: String, field: String, placeholder := "", height := 96.0) -> Control:
 	var area := PoliticalKit.area(str(_draft.get(field, "")), height, func(value: String) -> void: _edit(field, value), placeholder)
 	return PoliticalKit.field(label, area)
@@ -348,8 +353,8 @@ func _render_sections() -> void:
 	grid.add_child(_input_field("Political system type", "politicalSystemType"))
 	grid.add_child(_select_field("Representation model", "politicalRepresentation", "Auto / unspecified", _representations))
 	grid.add_child(_select_field("Regime character", "regimeCharacter", "Unspecified", _regimes))
-	grid.add_child(_input_field("Government approval / 100", "approval"))
-	grid.add_child(_input_field("Political stability / 100", "politicalStability"))
+	grid.add_child(_number_field("Government approval / 100", "approval"))
+	grid.add_child(_number_field("Political stability / 100", "politicalStability"))
 	grid.add_child(_input_field("Public system label", "politicalSystemLabel"))
 	content.add_child(grid)
 	content.add_child(_textarea_field("Political-system notes", "politicalSystemNotes"))
@@ -443,6 +448,13 @@ func _entity_input(entity: Dictionary, label: String, field: String, on_change: 
 	return PoliticalKit.field(label, input)
 
 
+func _entity_number(entity: Dictionary, label: String, field: String) -> Control:
+	var input := PoliticalKit.number_input(str(entity.get(field, "")), 0.0, 100.0, 0.1, func(value: String) -> void:
+		entity[field] = value
+		_set_dirty())
+	return PoliticalKit.field(label, input)
+
+
 func _entity_area(entity: Dictionary, label: String, field: String) -> Control:
 	var area := PoliticalKit.area(str(entity.get(field, "")), 64, func(value: String) -> void:
 		entity[field] = value
@@ -465,8 +477,8 @@ func _render_parties() -> void:
 		var grid := PoliticalKit.AutoGrid.new(192.0, 8.0)
 		for pair in [["Name", "name"], ["Short name", "shortName"], ["Leader", "leader"], ["Ideology", "ideology"], ["Influence label", "influenceLabel"]]:
 			grid.add_child(_entity_input(party, str(pair[0]), str(pair[1]), refresh_title))
-		grid.add_child(_entity_input(party, "Support (%)", "supportPercent", Callable(func() -> void: pass)))
-		grid.add_child(_entity_input(party, "Influence (%)", "influencePercent", Callable(func() -> void: pass)))
+		grid.add_child(_entity_number(party, "Support (%)", "supportPercent"))
+		grid.add_child(_entity_number(party, "Influence (%)", "influencePercent"))
 		inner.add_child(grid)
 		var flags := HBoxContainer.new()
 		flags.add_theme_constant_override("separation", 13)
@@ -527,7 +539,7 @@ func _render_blocs() -> void:
 		var grid := PoliticalKit.AutoGrid.new(192.0, 8.0)
 		for pair in [["Name", "name"], ["Short name", "shortName"], ["Kind", "kind"], ["Status", "status"], ["Leader", "leader"], ["Ideology", "ideology"], ["Influence label", "influenceLabel"]]:
 			grid.add_child(_entity_input(bloc, str(pair[0]), str(pair[1]), refresh_title))
-		grid.add_child(_entity_input(bloc, "Influence (%)", "influencePercent", Callable(func() -> void: pass)))
+		grid.add_child(_entity_number(bloc, "Influence (%)", "influencePercent"))
 		inner.add_child(grid)
 		var texts := PoliticalKit.AutoGrid.new(256.0, 9.0)
 		texts.add_child(_entity_area(bloc, "Public description", "publicDescription"))
@@ -619,7 +631,7 @@ func _trait_card(entry: Dictionary) -> Control:
 	var slider := PoliticalKit.slider(minimum, minimum, maximum, 0.1)
 	slider.tooltip_text = "%s slider" % str(entry.get("label", ""))
 	row.add_child(slider)
-	var number := PoliticalKit.input("", "unset")
+	var number := PoliticalKit.number_input("", minimum, maximum, 0.1, Callable(), "unset")
 	number.custom_minimum_size.x = 74
 	number.size_flags_horizontal = Control.SIZE_SHRINK_END
 	number.tooltip_text = "%s value" % str(entry.get("label", ""))
@@ -634,10 +646,10 @@ func _trait_card(entry: Dictionary) -> Control:
 		if _syncing:
 			return
 		_edit_trait(key, PoliticalKit.js_number(snappedf(value, 0.1))))
-	number.text_changed.connect(func(value: String) -> void:
+	number.text_changed.connect(func(_value: String) -> void:
 		if _syncing:
 			return
-		_edit_trait(key, value, number))
+		_edit_trait(key, PoliticalKit.number_value(number.text), number))
 	_sync_trait(key)
 	return parts[0]
 

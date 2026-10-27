@@ -69,7 +69,7 @@ const UNIT_TYPE_LABELS := {
 const SCENARIO_ASSETS := [["cover", "Cover Image"], ["cities", "Cities PMTiles"], ["colors", "Colors JSON"], ["countries", "Countries PMTiles"], ["regions", "Regions PMTiles"]]
 const GAME_ASSETS := [["cover", "Cover Image"]]
 const ASSET_FILTERS := {
-	"cover": "*.avif, *.gif, *.jpeg, *.jpg, *.png, *.webp ; Images",
+	"cover": "*.gif, *.jpeg, *.jpg, *.png, *.webp ; Images",
 	"cities": "*.pmtiles ; PMTiles",
 	"colors": "*.json ; JSON",
 	"countries": "*.pmtiles ; PMTiles",
@@ -285,6 +285,8 @@ func _ready() -> void:
 func setup(link: EngineLink, extra := {}) -> void:
 	engine = link
 	context = extra
+	if not engine.engine_event.is_connected(_on_engine_event):
+		engine.engine_event.connect(_on_engine_event)
 	if extra.get("loader") is ImageLoader:
 		loader = extra["loader"]
 	else:
@@ -1417,6 +1419,18 @@ func _clear_asset(asset_key: String) -> void:
 		_show_error(str(reply.get("error", "")))
 		return
 	_adopt_details_only(reply["result"])
+
+
+func _on_engine_event(event_name: String, payload: Variant) -> void:
+	if event_name != "editor.basemap" or not payload is Dictionary:
+		return
+	var info: Dictionary = payload
+	if _kind != "scenario" or str(info.get("id", "")) != _id:
+		return
+	if bool(info.get("restored", false)) and info.get("pack") is Dictionary:
+		_adopt_details_only(info["pack"])
+	else:
+		_show_error(str(info.get("error", "")))
 
 
 func _adopt_details_only(pack: Dictionary) -> void:

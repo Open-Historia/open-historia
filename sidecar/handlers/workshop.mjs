@@ -1,9 +1,11 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { Worker, isMainThread, parentPort, workerData } from "node:worker_threads";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { FMG_BRIDGE_FILE, FMG_BRIDGE_PAGE } from "./fmg_bridge.mjs";
 
 const NEUTRAL = [130, 130, 138];
 const GROUP_TINT_ALPHA = 0.3;
@@ -431,6 +433,8 @@ export const register = (ctx) => {
   let session = null;
   let clipboard = null;
   let flagPosts = [];
+  let fmgJob = null;
+  const libraryUploads = new Map();
   try {
     const stored = JSON.parse(fs.readFileSync(clipboardFile, "utf8"));
     clipboard = engine.wsRegionClipboard.isRegionClipboard(stored) ? stored : null;
@@ -1239,6 +1243,7 @@ export const register = (ctx) => {
   const closeSession = (s) => {
     clearTimeout(s.autosaveTimer);
     clearTimeout(s.retryTimer);
+    if (fmgJob?.session === s.id) closeFmgJob();
     if (s.bakeFile) fs.rm(s.bakeFile, { force: true }, () => {});
     if (session === s) session = null;
   };
@@ -2999,6 +3004,80 @@ export const register = (ctx) => {
     worker.on("exit", () => finish(new Error(fallback)));
   });
 
+  const closeFmgJob = () => {
+    if (!fmgJob) return;
+    clearTimeout(fmgJob.watchdog);
+    fmgJob.server.close();
+    fmgJob.server.closeAllConnections?.();
+    fmgJob = null;
+  };
+
+  const fmgEmit = (s, name, data = {}) => emit(name, { session: s.id, ...data });
+
+  const startFmgListener = (s) => new Promise((resolve, reject) => {
+    closeFmgJob();
+    const origin = globalThis.location?.origin || "";
+    const token = crypto.randomBytes(24).toString("hex");
+    const job = { token, session: s.id, server: null, watchdog: null };
+    const fail = (message) => {
+      if (fmgJob !== job) return;
+      fmgEmit(s, "workshop.fmg.failed", { message });
+      closeFmgJob();
+    };
+    const touch = () => {
+      clearTimeout(job.watchdog);
+      job.watchdog = setTimeout(() => fail("The generator page stopped answering. Press Generate to try again."), 180000);
+    };
+    job.server = http.createServer((req, res) => {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Vary", "Origin");
+      const url = new URL(req.url || "/", "http://127.0.0.1");
+      if (req.method === "OPTIONS") {
+        res.writeHead(req.headers.origin === origin ? 204 : 403);
+        res.end();
+        return;
+      }
+      if (req.method !== "POST" || req.headers.origin !== origin || url.searchParams.get("token") !== job.token || fmgJob !== job) {
+        res.writeHead(403);
+        res.end();
+        return;
+      }
+      const chunks = [];
+      let size = 0;
+      req.on("data", (chunk) => {
+        size += chunk.length;
+        if (size > 512 * 1024 * 1024) req.destroy();
+        else chunks.push(chunk);
+      });
+      req.on("end", () => {
+        let body = null;
+        try {
+          body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+        } catch {
+          res.writeHead(400);
+          res.end();
+          return;
+        }
+        res.writeHead(204);
+        res.end();
+        if (session !== s || fmgJob !== job) return;
+        touch();
+        if (url.pathname === "/log") fmgEmit(s, "workshop.fmg.log", { line: clean(body?.line) });
+        else if (url.pathname === "/world") {
+          s.fmgRaw = body;
+          fmgEmit(s, "workshop.fmg.world");
+          closeFmgJob();
+        } else if (url.pathname === "/fail") fail(clean(body?.message) || "The generator failed.");
+      });
+    });
+    job.server.on("error", reject);
+    job.server.listen(0, "127.0.0.1", () => {
+      fmgJob = job;
+      touch();
+      resolve({ port: job.server.address().port, token, origin });
+    });
+  });
+
   const importProgress = (s, fraction, message) => emit("workshop.import.progress", { session: s.id, fraction, message });
 
   const runProvinceRaster = (s, payload) => new Promise((resolve, reject) => {
@@ -3080,6 +3159,58 @@ export const register = (ctx) => {
       return { kind: "vector", file, fills: features.map((feature) => fillRgb(feature?.properties?.fill) ?? fillRgb("#33435c")), bbox: [minX, minY, maxX, maxY] };
     }
     return null;
+  };
+
+  const readUploadPayload = async (file, name, format, { aid = true } = {}) => {
+    const target = clean(file);
+    const shown = clean(name) || path.basename(target);
+    const ext = (clean(format) || path.extname(target).slice(1)).toLowerCase();
+    const baseName = shown.replace(/\.[^.]+$/, "") || "Custom basemap";
+    if (ext === "tif" || ext === "tiff") return { reply: aid ? { sessionOnly: true, raster: await readGeoTiffAid(target) } : { sessionOnly: true }, upload: null };
+    if (["png", "jpg", "jpeg", "svg"].includes(ext)) {
+      const mime = ext === "svg" ? "image/svg+xml" : ext === "png" ? "image/png" : "image/jpeg";
+      return { reply: { kind: "image" }, upload: { kind: "image", dataUrl: `data:${mime};base64,${fs.readFileSync(target).toString("base64")}`, name: baseName } };
+    }
+    if (!["geojson", "json", "zip", "shp"].includes(ext)) throw new Error(`Unsupported background format: .${ext || "unknown"}`);
+    const geojson = await readUploadVector(target, ext);
+    return { reply: { kind: "vector", thumbnail: thumbnailSource({ kind: "vector", geojson }) }, upload: { kind: "vector", geojson, name: baseName } };
+  };
+
+  const normalizedUpload = (upload, aspect) => (upload.kind === "image" ? { kind: "image", dataUrl: upload.dataUrl, aspect: Number(aspect) || null } : { kind: "vector", geojson: upload.geojson });
+
+  const readGeoTiffAid = async (target) => {
+    const bytes = fs.readFileSync(target);
+    const tiff = await engine.wsGeoTiff.fromArrayBuffer(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
+    const image = await tiff.getImage(0);
+    const keys = image.getGeoKeys() || {};
+    const code = Number(keys.ProjectedCSTypeGeoKey || keys.GeographicTypeGeoKey || 0);
+    const crs = code === 4326 ? "EPSG:4326" : [3857, 3785, 900913, 102100, 102113].includes(code) ? "EPSG:3857" : "";
+    if (!crs) throw new Error(code ? `This GeoTIFF is drawn in EPSG:${code}, which the map cannot place.` : "This GeoTIFF does not say where on the Earth it lies.");
+    const fullWidth = image.getWidth();
+    const fullHeight = image.getHeight();
+    const scale = Math.min(1, 4096 / Math.max(fullWidth, fullHeight));
+    const width = Math.max(1, Math.round(fullWidth * scale));
+    const height = Math.max(1, Math.round(fullHeight * scale));
+    const rgb = await image.readRGB({ width, height, interleave: true, enableAlpha: true });
+    const channels = Math.round(rgb.length / (width * height));
+    const nodata = image.getGDALNoData();
+    const out = Buffer.alloc(width * height * 4);
+    for (let i = 0; i < width * height; i += 1) {
+      const r = rgb[i * channels];
+      const g = rgb[i * channels + (channels > 2 ? 1 : 0)];
+      const b = rgb[i * channels + (channels > 2 ? 2 : 0)];
+      let a = channels === 4 ? rgb[i * channels + 3] : 255;
+      if (nodata != null && channels === 3 && r === nodata && g === nodata && b === nodata) a = 0;
+      out[i * 4] = r;
+      out[i * 4 + 1] = g;
+      out[i * 4 + 2] = b;
+      out[i * 4 + 3] = a;
+    }
+    const dir = path.join(cacheDir, "workshop-thumbnails");
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, `${crypto.createHash("sha1").update(out).digest("hex")}.rgba`);
+    if (!fs.existsSync(file)) fs.writeFileSync(file, out);
+    return { file, width, height, crs, bounds: image.getBoundingBox() };
   };
 
   const readUploadVector = async (target, format) => {
@@ -4389,23 +4520,45 @@ export const register = (ctx) => {
     "workshop.maps.readUpload": async ({ session: id, path: file = "", name = "", format = "" } = {}) => {
       const s = need(id);
       s.upload = null;
-      const target = clean(file);
-      const shown = clean(name) || path.basename(target);
-      const ext = (clean(format) || path.extname(target).slice(1)).toLowerCase();
-      const baseName = shown.replace(/\.[^.]+$/, "") || "Custom basemap";
       try {
-        if (ext === "tif" || ext === "tiff") return { sessionOnly: true };
-        if (["png", "jpg", "jpeg", "svg"].includes(ext)) {
-          const mime = ext === "svg" ? "image/svg+xml" : ext === "png" ? "image/png" : "image/jpeg";
-          s.upload = { kind: "image", dataUrl: `data:${mime};base64,${fs.readFileSync(target).toString("base64")}`, name: baseName };
-          return { kind: "image" };
-        }
-        if (!["geojson", "json", "zip", "shp"].includes(ext)) throw new Error(`Unsupported background format: .${ext || "unknown"}`);
-        const geojson = await readUploadVector(target, ext);
-        s.upload = { kind: "vector", geojson, name: baseName };
-        return plain({ kind: "vector", thumbnail: thumbnailSource({ kind: "vector", geojson }) });
+        const { reply, upload } = await readUploadPayload(file, name, format);
+        s.upload = upload;
+        return plain(reply);
       } catch (error) {
         return { error: error?.message || String(error) };
+      }
+    },
+    "workshop.library.readUpload": async ({ path: file = "", name = "", format = "" } = {}) => {
+      try {
+        const { reply, upload } = await readUploadPayload(file, name, format, { aid: false });
+        if (!upload) return plain(reply);
+        const token = crypto.randomUUID();
+        libraryUploads.clear();
+        libraryUploads.set(token, upload);
+        return plain({ ...reply, token });
+      } catch (error) {
+        return { error: error?.message || String(error) };
+      }
+    },
+    "workshop.library.addUpload": async ({ token = "", thumbnail = "", aspect = null } = {}) => {
+      const upload = libraryUploads.get(clean(token));
+      libraryUploads.delete(clean(token));
+      if (!upload) return { error: "Choose the map again." };
+      try {
+        const meta = await createLibraryBasemap(normalizedUpload(upload, aspect), upload.name, clean(thumbnail) || null);
+        return plain({ basemap: meta });
+      } catch (error) {
+        return { error: error?.message || String(error) };
+      }
+    },
+    "workshop.library.uploadTiled": async ({ path: file = "" } = {}) => {
+      const target = clean(file);
+      try {
+        const meta = await engine.wsTiledBasemaps.uploadTiledBasemap(await fs.openAsBlob(target), { name: path.basename(target).replace(/\.pmtiles$/i, "") });
+        return plain({ basemap: meta });
+      } catch (error) {
+        const message = error?.message || String(error);
+        return { error: message, vectorTiles: /vector tiles/i.test(message) };
       }
     },
     "workshop.maps.addUpload": async ({ session: id, thumbnail = "", aspect = null } = {}) => {
@@ -4413,7 +4566,7 @@ export const register = (ctx) => {
       const upload = s.upload;
       if (!upload) return { ...delta(s, {}), error: "Choose the map again." };
       s.upload = null;
-      const normalized = upload.kind === "image" ? { kind: "image", dataUrl: upload.dataUrl, aspect: Number(aspect) || null } : { kind: "vector", geojson: upload.geojson };
+      const normalized = normalizedUpload(upload, aspect);
       let meta = null;
       let libraryError = null;
       try {
@@ -4502,6 +4655,14 @@ export const register = (ctx) => {
         for (const [key, value] of Object.entries(fields)) if (value === undefined || value === null) delete next[key];
         return next;
       }));
+      return delta(s, { war: true });
+    },
+    "workshop.war.reshape": async ({ session: id, kind = "terrain", rowId = "", rings = null, points = null } = {}) => {
+      const s = need(id);
+      const field = engine.wsWarGeography.WAR_LISTS[kind];
+      if (!field) return delta(s, {});
+      const step = undoLib.patchRowStep(s.doc[field] || [], setters(s)[field], rowId, kind === "fortification" ? { points } : { rings });
+      if (step) pushCmd(s, step);
       return delta(s, { war: true });
     },
     "workshop.war.patchItem": async ({ session: id, rowId = "", list: listName = "seasons", index = -1, fields = null, effects = null, weather = null, add = null, remove = false } = {}) => {
@@ -4957,6 +5118,158 @@ export const register = (ctx) => {
         cityImport = { count: merged.count, created: merged.created, updated: merged.updated, replaced: merged.replaced, skipped: merged.skipped };
       }
       return { ...delta(s, { all: true }), selection: [], applied: plain({ ...applied, polityImport, cityImport }), backup: backupFile };
+    },
+    "workshop.fmg.available": async () => {
+      const driver = engine.wsFmgDriver;
+      let available = false;
+      try {
+        const response = await fetch("/fmg/index.html", { cache: "no-store" });
+        available = response.ok && driver.isFmgIndexPage(await response.text());
+      } catch {
+        available = false;
+      }
+      return plain({ available, templates: ["random", ...driver.SYNC_TEMPLATES], maxCultures: driver.MAX_CULTURES });
+    },
+    "workshop.fmg.start": async ({ session: id, params = {} } = {}) => {
+      const s = need(id);
+      s.fmgRaw = null;
+      const folder = path.join(repo, "fmg", "dist");
+      if (!fs.existsSync(path.join(folder, "index.html"))) return { error: "Could not load /fmg/ — is FMG vendored and the server restarted?" };
+      const page = path.join(folder, FMG_BRIDGE_FILE);
+      if (!fs.existsSync(page) || fs.readFileSync(page, "utf8") !== FMG_BRIDGE_PAGE) fs.writeFileSync(page, FMG_BRIDGE_PAGE);
+      const { port, token, origin } = await startFmgListener(s);
+      const hash = new URLSearchParams({ port: String(port), token, params: JSON.stringify(params || {}) });
+      return { url: `${origin}/fmg/${FMG_BRIDGE_FILE}#${hash.toString()}` };
+    },
+    "workshop.fmg.stop": async () => {
+      closeFmgJob();
+      return { ok: true };
+    },
+    "workshop.fmg.apply": async ({ session: id, useProvinces = true } = {}) => {
+      const s = need(id);
+      const raw = s.fmgRaw;
+      s.fmgRaw = null;
+      if (!raw) return { ...delta(s, {}), error: "The generated world was not received." };
+      try {
+        fmgEmit(s, "workshop.fmg.log", { line: "Building regions, countries and cities…" });
+        const seed = engine.wsFmgImport.fmgToEditorSeed(raw, { groupBy: useProvinces ? "province" : "state" });
+        const feats = fmt.readFeatures(seed.regions, READ);
+        for (const f of feats) {
+          const props = f.getProperties();
+          if (f.getId() == null && props.id != null) f.setId(String(props.id));
+          if (f.get("typeId") == null) f.set("typeId", "land");
+        }
+        s.source.clear();
+        s.savedRegionHashes.clear();
+        if (feats.length) s.source.addFeatures(feats);
+        s.undo = [];
+        s.redo = [];
+        s.geometryRev += 1;
+        s.regionRev += 1;
+        setters(s).features(
+          seed.cities.features
+            .map((f) => ({
+              id: mapDoc.newId("feat"),
+              name: f.properties?.city || "",
+              type: "Coordinate",
+              symbol: "square",
+              coord: Array.isArray(f.geometry?.coordinates) ? f.geometry.coordinates.slice(0, 2) : null,
+              country: "",
+              owner: null,
+              regionId: null,
+              population: f.properties?.population || 0,
+              tags: f.properties?.capital === "primary" ? ["city", "capital"] : ["city"],
+            }))
+            .filter((f) => Array.isArray(f.coord)),
+        );
+        s.palette = { ...s.palette, ...(seed.colors || {}) };
+        const savedBg = { kind: "vector", geojson: seed.background.geojson };
+        patchMetadata(s, { customBackground: savedBg });
+        s.fmgBackground = savedBg;
+        dirty(s);
+        return { ...delta(s, { all: true }), stats: plain(seed.stats), thumbnail: plain(thumbnailSource(savedBg)) };
+      } catch (error) {
+        return { ...delta(s, {}), error: error?.message || String(error) };
+      }
+    },
+    "workshop.fmg.saveBasemap": async ({ session: id, thumbnail = "", template = "" } = {}) => {
+      const s = need(id);
+      const savedBg = s.fmgBackground;
+      s.fmgBackground = null;
+      if (!savedBg) return { saved: false };
+      try {
+        const tmpl = template && template !== "random" ? String(template) : "generated";
+        const bm = await createLibraryBasemap(savedBg, `${tmpl.charAt(0).toUpperCase()}${tmpl.slice(1)} world basemap`, clean(thumbnail) || null, { author: s.doc.metadata?.author || "" });
+        return { saved: Boolean(bm?.id) };
+      } catch (error) {
+        console.warn("[editor] save generated basemap to library failed:", error);
+        return { saved: false };
+      }
+    },
+    "workshop.regionOverlays": async ({ session: id } = {}) => {
+      const s = need(id);
+      const colors = paintColors(s);
+      const byType = typesById(s);
+      const ownerRgb = (name) => (Array.isArray(colors[name]) ? colors[name] : editorCodeToColor(name));
+      const outerRings = (f) => {
+        const geo = fmt.writeGeometryObject(f.getGeometry(), WRITE);
+        if (geo?.type === "Polygon") return [geo.coordinates[0]];
+        if (geo?.type === "MultiPolygon") return geo.coordinates.map((poly) => poly[0]);
+        return [];
+      };
+      const stripes = [];
+      for (const f of features(s)) {
+        const claimants = f.get("claimants");
+        if (!Array.isArray(claimants) || !claimants.length) continue;
+        const owner = f.get("owner") || null;
+        const names = [];
+        for (const name of owner ? [owner, ...claimants] : claimants) {
+          const trimmed = String(name ?? "").trim();
+          if (trimmed && !names.includes(trimmed)) names.push(trimmed);
+        }
+        if (names.length < 2) continue;
+        const type = byType[f.get("typeId") || "land"];
+        const alpha = owner ? (type?.opacity ?? 0.55) : (type?.unownedOpacity ?? 0.25);
+        stripes.push({ rings: outerRings(f), colors: names.map(ownerRgb), alpha: Math.max(alpha, 0.5) });
+      }
+      const hatch = [];
+      for (const rid of s.doc.freezingRegions || []) {
+        const f = s.source.getFeatureById(String(rid));
+        if (f && engine.wsRegionTypes.isWaterType(byType[f.get("typeId")])) hatch.push({ rings: outerRings(f) });
+      }
+      const groupColors = Object.fromEntries(Object.entries(groupsLib.normalizeGroups(s.doc.groups)).map(([name, group]) => [name, group.color]));
+      const members = new Map();
+      for (const f of features(s)) {
+        const group = f.get("group");
+        if (!group || !groupColors[group]) continue;
+        if (!members.has(group)) members.set(group, []);
+        members.get(group).push(f);
+      }
+      const outlines = [];
+      for (const [group, feats] of members) {
+        try {
+          const regions = {
+            type: "FeatureCollection",
+            features: feats.map((f) => ({ ...fmt.writeFeatureObject(f, WRITE), properties: { id: String(f.getId()) } })),
+          };
+          const topology = engine.mxTopology.buildPoliticalBoundaryTopology(regions);
+          const derived = engine.mxGroupAreas.deriveGroupAreas({
+            topology,
+            index: engine.mxGroupAreas.buildGroupAreaIndex(topology),
+            regions,
+            groupAreas: Object.fromEntries(feats.map((f) => [String(f.getId()), group])),
+            groups: { [group]: { color: groupColors[group] } },
+          });
+          for (const outline of derived.outlines.features) {
+            const geometry = outline.geometry;
+            const lines = geometry?.type === "LineString" ? [geometry.coordinates] : geometry?.type === "MultiLineString" ? geometry.coordinates : geometry?.type === "Polygon" ? geometry.coordinates : geometry?.type === "MultiPolygon" ? geometry.coordinates.flat() : [];
+            outlines.push({ color: outline.properties?.color || groupColors[group], lines });
+          }
+        } catch (error) {
+          console.warn("[editor] a group's outline could not be drawn:", group, error);
+        }
+      }
+      return plain({ stripes, hatch, outlines });
     },
     "workshop.documents.current": async ({ session: id } = {}) => {
       const s = need(id);

@@ -8,6 +8,7 @@ signal notice_closed
 signal history_closed
 
 const LAYER := 20
+const SETTLE_MARGIN_MS := 150
 
 var engine: EngineLink
 var overlay: Control
@@ -25,6 +26,9 @@ var parting := false
 var _notice_started := false
 var _held := false
 var _game_view: CanvasItem
+var map_view: MapView
+var _settle_serial := 0
+var _driven := false
 
 
 func _init() -> void:
@@ -51,7 +55,7 @@ func setup(link: EngineLink, image_loader: ImageLoader = null, game_view: Canvas
 
 
 func _on_game_view_changed() -> void:
-	if _game_view and _game_view.visible and loading.is_open():
+	if _game_view and _game_view.visible and loading.is_open() and not _driven:
 		end_game_loading()
 
 
@@ -190,6 +194,8 @@ func door_is_open() -> bool:
 
 
 func begin_game_loading(info: Dictionary) -> void:
+	_settle_serial += 1
+	_driven = true
 	loading.open(info)
 	overlay.move_child(loading, overlay.get_child_count() - 1)
 
@@ -214,6 +220,59 @@ func game_loading_phase(phase: String) -> void:
 func end_game_loading() -> void:
 	if not loading.is_open():
 		return
-	await get_tree().process_frame
-	await get_tree().process_frame
-	loading.finish()
+	_settle_serial += 1
+	var serial := _settle_serial
+	await _await_settled(serial)
+	if serial == _settle_serial and loading.is_open():
+		_driven = false
+		loading.finish()
+
+
+func cancel_game_loading(immediately := false) -> void:
+	_settle_serial += 1
+	_driven = false
+	if immediately:
+		loading.close_now()
+	else:
+		loading.finish()
+
+
+func _await_settled(serial: int) -> void:
+	var tree := get_tree()
+	var deadline := Time.get_ticks_msec() + int(GameLoadingScreen.LOADING_CEILING_MS)
+	var ready := false
+	var idle_since := -1
+	await tree.process_frame
+	while serial == _settle_serial and loading.is_open() and Time.get_ticks_msec() < deadline:
+		var drawn := _polities_drawn()
+		if drawn and not ready:
+			ready = true
+			loading.set_phase("settling")
+		var now := Time.get_ticks_msec()
+		if not ready or not drawn or _map_moving():
+			idle_since = -1
+		elif idle_since < 0:
+			idle_since = now
+		elif now - idle_since > SETTLE_MARGIN_MS:
+			await tree.process_frame
+			await RenderingServer.frame_post_draw
+			return
+		await tree.process_frame
+
+
+func _polities_drawn() -> bool:
+	if map_view == null or not is_instance_valid(map_view) or not map_view.visible:
+		return true
+	if not bool(map_view.get("_ready_to_draw")):
+		return false
+	var text := map_view.polity_text()
+	return text == null or not text.busy()
+
+
+func _map_moving() -> bool:
+	if map_view == null or not is_instance_valid(map_view) or not map_view.visible:
+		return false
+	var fly: Variant = map_view.get("_fly")
+	if fly is Tween and (fly as Tween).is_valid() and (fly as Tween).is_running():
+		return true
+	return map_view.basemap != null and bool(map_view.basemap.get("_loading"))

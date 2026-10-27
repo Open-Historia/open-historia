@@ -10,10 +10,6 @@ const LAYERS := [
 	["fortifications", "Fortified lines"],
 	["freezing", "Water that can freeze"],
 ]
-const UNDRAWN := {
-	"groups": "This app's map does not draw group outlines yet: a group's area shows only as its tint.",
-	"freezing": "This app's map does not draw the hatch over water that can freeze yet.",
-}
 
 var host: Workshop
 
@@ -30,9 +26,7 @@ func setup(workshop: Workshop) -> void:
 			host.map.layers[key] = on
 			if key == "regions":
 				host.map.set_regions_visible(on)
+			host.map.sync_overlay_layers()
 			host.map.redraw())
-		var line := WorkshopUI.row(str(entry[1]), toggle)
-		if UNDRAWN.has(key):
-			line.tooltip_text = str(UNDRAWN[key])
-		body.add_child(line)
+		body.add_child(WorkshopUI.row(str(entry[1]), toggle))
 	fit()

@@ -65,7 +65,8 @@ func _ready() -> void:
 	_typing_timer.timeout.connect(func() -> void:
 		_typing_dots = (_typing_dots % 3) + 1
 		if _chat_badge_label:
-			_chat_badge_label.text = ".".repeat(_typing_dots))
+			_chat_badge_label.text = ".".repeat(_typing_dots)
+			_fit_chat_badge())
 	add_child(_typing_timer)
 
 
@@ -222,8 +223,16 @@ func set_chat_badge(count: int, generating := false) -> void:
 		_typing_timer.stop()
 		_chat_badge_label.text = "9+" if count > 9 else str(count)
 	_chat_badge_label.add_theme_font_size_override("font_size", 11 if generating else 10)
-	_chat_badge.add_theme_stylebox_override("panel", UI.box(Color(0, 0, 0, 0.35) if generating else Color("#dc2626"), Color(1, 1, 1, 0.35), 999, 1, Vector4(5, 0, 5, 0) if generating else Vector4(3, 0, 3, 0)))
+	_chat_badge.add_theme_stylebox_override("panel", UI.box(Color(0, 0, 0, 0.35) if generating else Color("#dc2626"), Color(1, 1, 1, 0.35), 7 if generating else 999, 1, Vector4(5, 0, 5, 0) if generating else Vector4(3, 0, 3, 0)))
 	_launchers["chat"].tooltip_text = "Chat — diplomacy in progress" if generating else "Chat"
+	_fit_chat_badge()
+
+
+func _fit_chat_badge() -> void:
+	if not _chat_badge:
+		return
+	_chat_badge.reset_size()
+	_chat_badge.position = Vector2(52.0 - _chat_badge.size.x, 9.0)
 
 
 func toggle_dock(name: String) -> void:
@@ -287,6 +296,7 @@ func _build_bottom_right() -> void:
 	_flag_fallback = UI.label("🏳️", 24, UI.WHITE, 400, "Segoe UI Emoji")
 	_flag_fallback.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_flag_fallback.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_flag_fallback.custom_minimum_size = Vector2(48, 48)
 	_flag_fallback.visible = false
 	_flag_frame.add_child(_flag_fallback)
 	var flag_button := _flat_button("", 12)
@@ -448,7 +458,12 @@ func mount_panels(game: Dictionary) -> void:
 		_hook(map_cards, "open_chat", open_chat)
 		_hook(map_cards, "open_stats", func(name: String) -> void: show_country(name))
 		_hook(map_cards, "flag_changed", func(_key: String) -> void: _reload_flag_and_map())
-		_setup(map_cards, ctx)
+		var cards_ctx := ctx.duplicate()
+		if forces and is_instance_valid(forces) and forces.has_method("begin_structure_place"):
+			cards_ctx["move_structure"] = func(marker_id: String) -> void:
+				_invoke(map_cards, "dismiss")
+				_invoke(forces, "begin_structure_place", [marker_id])
+		_setup(map_cards, cards_ctx)
 	var chat := _make("chat_panel")
 	if chat:
 		_add_panel("chat", chat)

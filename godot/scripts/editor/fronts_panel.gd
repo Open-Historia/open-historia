@@ -43,7 +43,7 @@ func setup(engine_link: EngineLink, props: Dictionary) -> void:
 func update_props(props: Dictionary) -> void:
 	for key in props:
 		_props[key] = props[key]
-	if props.has("details") and props["details"] is Dictionary:
+	if props.has("details") and props["details"] is Dictionary and not is_same(props["details"], _details):
 		var previous := _scenario_id
 		_adopt_details(props["details"], false)
 		if _scenario_id != previous:

@@ -18,7 +18,7 @@ const ROSE := Color("#fda4af")
 const GREEN := Color("#86efac")
 const AMBER := Color("#fbbf24")
 const BLUE_LINK := Color(147 / 255.0, 197 / 255.0, 253 / 255.0, 0.82)
-const NOT_NATIVE_FORCES := "The Force Manager is not in the native app yet."
+const CE_NUMBER_FIELDS := {"populationM": [0.001, INF, 0.1], "gdpB": [0.001, INF, 0.1], "gdpGrowth": [-INF, INF, 0.1], "stability": [0.0, 100.0, 1.0], "inflation": [-1000.0, INF, 0.1], "unemployment": [0.0, 100.0, 0.1], "publicDebt": [0.0, INF, 0.1], "budgetBalance": [-INF, INF, 0.1], "sovereignty": [0.0, 100.0, 1.0], "foodAutonomy": [0.0, 100.0, 1.0], "energyAutonomy": [0.0, 100.0, 1.0], "economicIndependence": [0.0, 100.0, 1.0], "internalSecurity": [0.0, 100.0, 1.0], "internationalReputation": [0.0, 100.0, 1.0]}
 const PUPPET_KINDS := [["protectorate", "Protectorate"], ["satellite", "Puppet state"], ["client", "Client state"]]
 const PUPPET_SECRECY := [["open", "Openly known"], ["covert", "Covert"]]
 const REPRESENTATION_OPTIONS := [["electoral", "Electoral"], ["court_factions", "Court factions"], ["party_state", "Party state"], ["elite_factions", "Elite factions"], ["military_factions", "Military factions"], ["revolutionary_factions", "Revolutionary factions"], ["colonial", "Colonial"], ["none", "None"]]
@@ -111,6 +111,8 @@ var _trait_tags: Dictionary = {}
 var _trait_alias: Dictionary = {}
 var _traits_json_edit: TextEdit
 var _syncing := false
+var _live_timer: Timer
+var _live_kinds: Dictionary = {}
 
 
 func _ready() -> void:
@@ -144,6 +146,11 @@ func _ready() -> void:
 	_ticker.wait_time = 1.0
 	_ticker.timeout.connect(_on_tick)
 	add_child(_ticker)
+	_live_timer = Timer.new()
+	_live_timer.one_shot = true
+	_live_timer.wait_time = 0.3
+	_live_timer.timeout.connect(_apply_live)
+	add_child(_live_timer)
 	visible = false
 	_panel.visible = false
 	get_viewport().size_changed.connect(_fit)
@@ -152,6 +159,8 @@ func _ready() -> void:
 func setup(engine_link: EngineLink, setup_context: Dictionary) -> void:
 	engine = engine_link
 	context = setup_context
+	if engine and not engine.engine_event.is_connected(_on_engine_event):
+		engine.engine_event.connect(_on_engine_event)
 	var view: Variant = setup_context.get("map_view")
 	if view is MapView:
 		map_view = view
@@ -226,8 +235,7 @@ func open_tool(id: String) -> void:
 		if _polities.is_empty():
 			await refresh()
 	if id == "forces":
-		if bool(context.get("forces_available", false)):
-			open_forces.emit()
+		open_forces.emit()
 		return
 	await _go(id)
 
@@ -469,6 +477,43 @@ func _click_lnglat() -> Vector2:
 	return Vector2(lng, lat)
 
 
+func _on_engine_event(name: String, payload: Variant) -> void:
+	if name != "cheats.live" or not _open or typeof(payload) != TYPE_DICTIONARY:
+		return
+	var kind := str((payload as Dictionary).get("kind", ""))
+	if (kind == "world" and _tool in ["groups", "puppets"]) or (kind == "events" and _tool == "events"):
+		_live_kinds[kind] = true
+		if _live_timer.is_stopped():
+			_live_timer.start(0.3)
+
+
+func _typing_here() -> bool:
+	var focused := get_viewport().gui_get_focus_owner() if is_inside_tree() else null
+	return focused != null and (focused is LineEdit or focused is TextEdit) and _panel.is_ancestor_of(focused)
+
+
+func _apply_live() -> void:
+	if not _open or _live_kinds.is_empty():
+		_live_kinds.clear()
+		return
+	if _busy or _picking or _typing_here():
+		_live_timer.start(1.0)
+		return
+	var kinds := _live_kinds.duplicate()
+	_live_kinds.clear()
+	if kinds.has("world") and _tool in ["groups", "puppets"]:
+		var tool := _tool
+		await _load_tool()
+		if tool == _tool and _open:
+			_render()
+	if kinds.has("events") and _tool == "events":
+		if int(_s.get("ev_editing", -1)) < 0 and not bool(_s.get("ev_creating", false)):
+			await _ev_reload_list()
+		else:
+			_live_kinds["events"] = true
+			_live_timer.start(1.0)
+
+
 func _on_tick() -> void:
 	if not _open or _busy or _picking:
 		return
@@ -612,6 +657,68 @@ func _line(value: String, placeholder: String, on_change: Callable) -> LineEdit:
 	node.add_theme_color_override("font_placeholder_color", Color(1, 1, 1, 0.38))
 	node.text_changed.connect(func(text: String) -> void: on_change.call(text))
 	return node
+
+
+func _number_line(value: String, placeholder: String, min_value: float, max_value: float, step: float, on_change: Callable) -> LineEdit:
+	var holder := {"node": null}
+	var node := _line(value, placeholder, func(text: String) -> void:
+		var field: LineEdit = holder["node"]
+		var kept := ""
+		for character in text:
+			if "0123456789+-.eE".contains(character):
+				kept += character
+		if kept != text:
+			var caret := field.caret_column - (text.length() - kept.length())
+			field.text = kept
+			field.caret_column = clampi(caret, 0, kept.length())
+		if str(field.get_meta("accepted", "")) == kept:
+			return
+		field.set_meta("accepted", kept)
+		on_change.call(_number_value(kept)))
+	holder["node"] = node
+	node.set_meta("accepted", value)
+	node.gui_input.connect(func(event: InputEvent) -> void:
+		var key := event as InputEventKey
+		if key == null or not key.pressed or (key.keycode != KEY_UP and key.keycode != KEY_DOWN):
+			return
+		node.accept_event()
+		var current := _number_value(node.text)
+		var number := current.to_float() if not current.is_empty() else 0.0
+		var direction := 1.0 if key.keycode == KEY_UP else -1.0
+		var base := min_value if is_finite(min_value) else 0.0
+		var steps := (number - base) / step
+		if not current.is_empty() and ((direction > 0.0 and number < min_value) or (direction < 0.0 and number > max_value)):
+			number = min_value if direction > 0.0 else max_value
+		elif absf(steps - roundf(steps)) < 0.000001:
+			number = base + (roundf(steps) + direction) * step
+		else:
+			number = base + (floorf(steps) + (1.0 if direction > 0.0 else 0.0)) * step
+		number = clampf(snappedf(number, 0.0000001), min_value, max_value)
+		var shown := _number_text(number)
+		node.text = shown
+		node.caret_column = shown.length()
+		node.text_changed.emit(shown))
+	return node
+
+
+static func _number_value(text: String) -> String:
+	var pattern := RegEx.create_from_string("^-?(\\d+\\.?\\d*|\\.\\d+)([eE][-+]?\\d+)?$")
+	return text if pattern.search(text) != null else ""
+
+
+static func _number_text(value: float) -> String:
+	if is_equal_approx(value, roundf(value)) and absf(value) < 1e15:
+		return str(int(roundf(value)))
+	var text := String.num(value, 7)
+	if text.contains("."):
+		text = text.rstrip("0").rstrip(".")
+	return text
+
+
+func _date_line(value: String, on_change: Callable) -> Control:
+	var field := CheatsDateField.new(value)
+	field.date_changed.connect(func(next: String) -> void: on_change.call(next))
+	return field
 
 
 func _area(value: String, placeholder: String, rows: int, on_change: Callable, max_chars := 0) -> TextEdit:
@@ -838,11 +945,6 @@ func _render_home() -> void:
 			var id := str(tool_id)
 			if id == "forces":
 				var forces := _tool_tile("⚔", "Force Manager", "Deploy, inspect, edit, and repair forces on the map", "2.0", func() -> void: open_forces.emit())
-				if not bool(context.get("forces_available", false)):
-					UI.set_disabled_look(forces, NOT_NATIVE_FORCES)
-					forces.mouse_filter = Control.MOUSE_FILTER_PASS
-					forces.mouse_default_cursor_shape = Control.CURSOR_ARROW
-					forces.set_meta("dimmed", true)
 				_body.add_child(forces)
 				_body.add_child(_gap(5))
 				continue
@@ -1133,7 +1235,19 @@ func _gm_preview_box(view: Dictionary) -> Control:
 	apply.tooltip_text = "This exact transaction has already been applied." if applied else "Apply exactly the validated preview above. No second AI call."
 	_enable(apply, not _busy and not applied)
 	apply.pressed.connect(func() -> void: _gm_apply())
-	column.add_child(apply)
+	for slot in ["normal", "hover", "pressed", "disabled", "focus", "hover_pressed"]:
+		var lifted: Variant = apply.get_theme_stylebox(slot)
+		if lifted is StyleBoxFlat:
+			var shadowed := (lifted as StyleBoxFlat).duplicate() as StyleBoxFlat
+			shadowed.shadow_color = Color(8 / 255.0, 12 / 255.0, 20 / 255.0, 0.88)
+			shadowed.shadow_size = 24
+			shadowed.shadow_offset = Vector2(0, -10)
+			apply.add_theme_stylebox_override(slot, shadowed)
+	var sticky := CheatsStickyBottom.new()
+	sticky.button = apply
+	sticky.scroller = _scroll
+	sticky.limit = column
+	column.add_child(sticky)
 	column.add_child(_gap(6))
 	var footer := _note("Applied as %s. Date and round were not advanced." % str(view.get("transactionId", "")) if applied else "Apply uses this exact preview, revalidates current canon, writes through native seams, and records a persistent GM audit entry.", 10, Color(134 / 255.0, 239 / 255.0, 172 / 255.0, 0.72) if applied else Color(1, 1, 1, 0.4))
 	footer.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -1442,8 +1556,6 @@ func _render_annex() -> void:
 		_enable(start, not code.is_empty())))
 	_body.add_child(_gap(9))
 	_enable(start, not target.is_empty())
-	if not map_view:
-		UI.set_disabled_look(start, "The map is not ready.")
 	start.pressed.connect(func() -> void:
 		var owner := _sv("ax_target")
 		var label := "Click the country to annex into %s" % _name_of(owner) if whole else "Click regions to hand to %s — Done when finished" % _name_of(owner)
@@ -1635,10 +1747,15 @@ func _ce_field(label: String, key: String, refresh_label: Label = null) -> Contr
 	column.add_theme_constant_override("separation", 4)
 	column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	column.add_child(UI.label(label.to_upper(), 10, Color(1, 1, 1, 0.75), 700, "Arial", 1))
-	column.add_child(_line(_ce_value(key), "", func(text: String) -> void:
+	var on_change := func(text: String) -> void:
 		_ce_set(key, text)
 		if refresh_label and is_instance_valid(refresh_label):
-			refresh_label.text = _ce_per_capita_text()))
+			refresh_label.text = _ce_per_capita_text()
+	var limits: Array = CE_NUMBER_FIELDS.get(key, [])
+	if limits.is_empty():
+		column.add_child(_line(_ce_value(key), "", on_change))
+	else:
+		column.add_child(_number_line(_ce_value(key), "", float(limits[0]), float(limits[1]), float(limits[2]), on_change))
 	return column
 
 
@@ -2021,10 +2138,16 @@ func _render_regions() -> void:
 	var advanced: Array = _box(Color(0, 0, 0, 0.22), Color(1, 1, 1, 0.11), 9, Vector4(9, 6, 9, 6), 4)
 	var identity := _details("Advanced · region identity", "rg_identity", false, advanced[1], 11)
 	identity.add_child(_field_label("Region name", 2))
-	identity.add_child(_line(_sv("rg_name", str(state.get("name", ""))), "", func(text: String) -> void: _s["rg_name"] = text))
-	identity.add_child(_note("This scenario has editable custom region geometry. Renaming preserves the stable region ID.", 10, Color(1, 1, 1, 0.4)))
+	var can_rename := bool(state.get("canRename", false))
 	var rename := _btn("Save region name", "primary")
-	_enable(rename, not _busy)
+	var name_field := _line(_sv("rg_name", str(state.get("name", ""))), "", func(text: String) -> void:
+		_s["rg_name"] = text
+		_enable(rename, not _busy and not text.strip_edges().is_empty()))
+	name_field.editable = can_rename
+	identity.add_child(name_field)
+	identity.add_child(_note("This scenario has editable custom region geometry. Renaming preserves the stable region ID." if can_rename else "Stock-map region names come from immutable map tiles, so this name is read-only here.", 10, Color(1, 1, 1, 0.4)))
+	_enable(rename, not _busy and not _sv("rg_name", str(state.get("name", ""))).strip_edges().is_empty())
+	rename.visible = can_rename
 	rename.pressed.connect(func() -> void:
 		var name := _sv("rg_name", str(state.get("name", ""))).strip_edges()
 		if name.is_empty():
@@ -2469,7 +2592,7 @@ func _cp_field(label: String, field: Control) -> Control:
 
 
 func _cp_line(label: String, key: String) -> Control:
-	return _cp_field(label, _line(str(_cp().get(key, "")), "", func(text: String) -> void:
+	return _cp_field(label, _number_line(str(_cp().get(key, "")), "", 0.0, 100.0, 0.1, func(text: String) -> void:
 		var politics := _cp()
 		politics[key] = text))
 
@@ -2496,10 +2619,13 @@ func _cp_entry_set(list_key: String, index: int, key: String, value: Variant) ->
 func _cp_entry_line(list_key: String, index: int, label: String, key: String, on_change: Callable = Callable()) -> Control:
 	var entries: Array = _cp().get(list_key, [])
 	var entry: Dictionary = entries[index]
-	return _cp_field(label, _line(str(entry.get(key, "")), "", func(text: String) -> void:
+	var changed := func(text: String) -> void:
 		_cp_entry_set(list_key, index, key, text)
 		if on_change.is_valid():
-			on_change.call()))
+			on_change.call()
+	if key == "supportPercent" or key == "influencePercent":
+		return _cp_field(label, _number_line(str(entry.get(key, "")), "", 0.0, 100.0, 0.1, changed))
+	return _cp_field(label, _line(str(entry.get(key, "")), "", changed))
 
 
 func _cp_entry_area(list_key: String, index: int, label: String, key: String) -> Control:
@@ -2708,7 +2834,9 @@ func _render_trait_catalog(column: VBoxContainer) -> void:
 		_trait_tags[key] = tag
 		top.add_child(tag)
 		inner.add_child(top)
-		var input := _line(raw, "unset", func(text: String) -> void: _cp_trait(key, text))
+		var trait_min: float = float(entry.get("min")) if entry.get("min") != null else -INF
+		var trait_max: float = float(entry.get("max")) if entry.get("max") != null else INF
+		var input := _number_line(raw, "unset", trait_min, trait_max, 0.1, func(text: String) -> void: _cp_trait(key, text))
 		_trait_inputs[key] = input
 		inner.add_child(input)
 		inner.add_child(_note(str(entry.get("description", "")), 9, Color(1, 1, 1, 0.42)))
@@ -3256,7 +3384,7 @@ func _fe_city_card(city: Dictionary) -> Control:
 			grid.add_child(choice)
 		column.add_child(grid)
 		column.add_child(_field_label("Population"))
-		column.add_child(_line(str(fields.get("population", "")), "", func(value: String) -> void: _fe_set("population", value)))
+		column.add_child(_number_line(str(fields.get("population", "")), "", 0.0, INF, 1000.0, func(value: String) -> void: _fe_set("population", value)))
 		column.add_child(_rich("Tier controls historical-map visibility: Town → City → Major city → Capital. Capital uses the renderer's canonical [code]primary[/code] flag.", 10, Color(1, 1, 1, 0.4)))
 		var buttons := HBoxContainer.new()
 		buttons.add_theme_constant_override("separation", 6)
@@ -3343,7 +3471,7 @@ func _render_add_feature() -> void:
 			grid.add_child(choice)
 		_body.add_child(grid)
 		_body.add_child(_field_label("Population (optional)"))
-		_body.add_child(_line(str(fields.get("population", "")), "", func(text: String) -> void: _fe_set("population", text)))
+		_body.add_child(_number_line(str(fields.get("population", "")), "", 0.0, INF, 1000.0, func(text: String) -> void: _fe_set("population", text)))
 		_body.add_child(_gap(6))
 		_body.add_child(_note("This scenario already uses historical custom cities, so the new city will join that same authored layer with proper population and prominence metadata.", 10, Color("#bfdbfe")))
 	else:
@@ -3522,7 +3650,7 @@ func _ev_form_editor(form_key: String, parent: VBoxContainer, with_date_hint: bo
 		next[key] = value
 		_s[form_key] = next
 	parent.add_child(_field_label("Date", 6))
-	parent.add_child(_line(str(form.get("date", "")), "YYYY-MM-DD" if with_date_hint else "", func(text: String) -> void: setter.call("date", text)))
+	parent.add_child(_date_line(str(form.get("date", "")), func(text: String) -> void: setter.call("date", text)))
 	parent.add_child(_field_label("Title", 6))
 	parent.add_child(_line(str(form.get("title", "")), "Exact event title" if with_date_hint else "", func(text: String) -> void: setter.call("title", text)))
 	parent.add_child(_field_label("Description", 6))
@@ -4121,3 +4249,323 @@ func _render_history() -> void:
 			inner.add_child(card[0])
 		_body.add_child(holder)
 	_status_line(_body)
+
+
+class CheatsDateField extends PanelContainer:
+	signal date_changed(value: String)
+	const MONTHS := ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
+	var value := ""
+	var _month: LineEdit
+	var _day: LineEdit
+	var _year: LineEdit
+	var _popup: PopupPanel
+	var _grid: GridContainer
+	var _heading: Label
+	var _shown_year := 2000
+	var _shown_month := 1
+
+	func _init(initial := "") -> void:
+		custom_minimum_size.y = 32
+		size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		add_theme_stylebox_override("panel", UI.box(Color(0, 0, 0, 0.28), Color(1, 1, 1, 0.16), 8, 1, Vector4(9, 0, 6, 0)))
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 0)
+		add_child(row)
+		_month = _segment("mm", 2, 22.0)
+		_day = _segment("dd", 2, 22.0)
+		_year = _segment("yyyy", 6, 46.0)
+		row.add_child(_month)
+		row.add_child(_slash())
+		row.add_child(_day)
+		row.add_child(_slash())
+		row.add_child(_year)
+		var spring := Control.new()
+		spring.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		spring.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		row.add_child(spring)
+		var open := Button.new()
+		open.flat = true
+		open.focus_mode = Control.FOCUS_NONE
+		open.icon = UI.icon("calendar", 15, Color(1, 1, 1, 0.75))
+		open.tooltip_text = "Show date picker"
+		open.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+		open.pressed.connect(_open_picker)
+		row.add_child(open)
+		_assign(initial)
+
+	func _segment(hint: String, length: int, wide: float) -> LineEdit:
+		var node := LineEdit.new()
+		node.placeholder_text = hint
+		node.max_length = length
+		node.flat = true
+		node.select_all_on_focus = true
+		node.alignment = HORIZONTAL_ALIGNMENT_CENTER
+		node.custom_minimum_size = Vector2(wide, 30)
+		node.add_theme_constant_override("minimum_character_width", 0)
+		for slot in ["normal", "focus", "read_only"]:
+			node.add_theme_stylebox_override(slot, StyleBoxEmpty.new())
+		node.add_theme_font_override("font", UI.font(400))
+		node.add_theme_font_size_override("font_size", 13)
+		node.add_theme_color_override("font_color", UI.WHITE)
+		node.add_theme_color_override("font_placeholder_color", Color(1, 1, 1, 0.5))
+		node.add_theme_color_override("selection_color", Color(43 / 255.0, 193 / 255.0, 243 / 255.0, 0.45))
+		node.text_changed.connect(_typed.bind(node))
+		node.gui_input.connect(_segment_key.bind(node))
+		return node
+
+	func _slash() -> Label:
+		var mark := UI.label("/", 13, Color(1, 1, 1, 0.5))
+		mark.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		mark.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		return mark
+
+	func _assign(text: String) -> void:
+		var parts := text.strip_edges().split("-")
+		if parts.size() == 3 and parts[0].is_valid_int() and parts[1].is_valid_int() and parts[2].is_valid_int() and int(parts[0]) >= 1:
+			_year.text = "%04d" % int(parts[0])
+			_month.text = "%02d" % int(parts[1])
+			_day.text = "%02d" % int(parts[2])
+		else:
+			_year.text = ""
+			_month.text = ""
+			_day.text = ""
+		value = _compose()
+
+	func _digits(text: String) -> String:
+		var kept := ""
+		for character in text:
+			if "0123456789".contains(character):
+				kept += character
+		return kept
+
+	func _typed(text: String, node: LineEdit) -> void:
+		var kept := _digits(text)
+		if kept != text:
+			node.text = kept
+			node.caret_column = kept.length()
+		var advance := false
+		if node == _month:
+			advance = kept.length() >= 2 or (kept.length() == 1 and int(kept) > 1)
+			if advance and kept.length() == 1:
+				node.text = "0" + kept
+		elif node == _day:
+			advance = kept.length() >= 2 or (kept.length() == 1 and int(kept) > 3)
+			if advance and kept.length() == 1:
+				node.text = "0" + kept
+		if advance:
+			var next := _day if node == _month else _year
+			next.grab_focus()
+			next.select_all()
+		_emit()
+
+	func _segment_key(event: InputEvent, node: LineEdit) -> void:
+		var key := event as InputEventKey
+		if key == null or not key.pressed:
+			return
+		if key.keycode == KEY_UP or key.keycode == KEY_DOWN:
+			node.accept_event()
+			var direction := 1 if key.keycode == KEY_UP else -1
+			var current := int(node.text) if node.text.is_valid_int() else 0
+			var low := 1
+			var high := 12 if node == _month else (31 if node == _day else 275760)
+			var next := current + direction if current > 0 else (low if direction > 0 else high)
+			if node == _year and current <= 0:
+				next = Time.get_date_dict_from_system()["year"]
+			if next > high:
+				next = low
+			elif next < low:
+				next = high
+			node.text = ("%04d" % next) if node == _year else ("%02d" % next)
+			node.caret_column = node.text.length()
+			_emit()
+		elif key.keycode == KEY_SLASH or key.keycode == KEY_RIGHT and node.caret_column >= node.text.length():
+			if node != _year:
+				node.accept_event()
+				var next_node := _day if node == _month else _year
+				next_node.grab_focus()
+				next_node.select_all()
+
+	func _compose() -> String:
+		if not (_month.text.is_valid_int() and _day.text.is_valid_int() and _year.text.is_valid_int()):
+			return ""
+		var month := int(_month.text)
+		var day := int(_day.text)
+		var year := int(_year.text)
+		if year < 1 or month < 1 or month > 12 or day < 1 or day > _days_in(year, month):
+			return ""
+		return "%04d-%02d-%02d" % [year, month, day]
+
+	func _emit() -> void:
+		var next := _compose()
+		if next == value:
+			return
+		value = next
+		date_changed.emit(value)
+
+	static func _days_in(year: int, month: int) -> int:
+		if month == 2:
+			return 29 if (year % 4 == 0 and year % 100 != 0) or year % 400 == 0 else 28
+		return 30 if month in [4, 6, 9, 11] else 31
+
+	static func _weekday(year: int, month: int, day: int) -> int:
+		var table := [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4]
+		var y := year - 1 if month < 3 else year
+		return posmod(y + floori(y / 4.0) - floori(y / 100.0) + floori(y / 400.0) + int(table[month - 1]) + day, 7)
+
+	func _open_picker() -> void:
+		if not _popup:
+			_build_popup()
+		var today := Time.get_date_dict_from_system()
+		if value.is_empty():
+			_shown_year = int(today["year"])
+			_shown_month = int(today["month"])
+		else:
+			_shown_year = int(value.substr(0, value.length() - 6))
+			_shown_month = int(value.substr(value.length() - 5, 2))
+		_fill()
+		var rect := get_global_rect()
+		_popup.reset_size()
+		var at := Vector2i(int(rect.position.x), int(rect.end.y + 2.0))
+		var room := get_viewport_rect().size
+		var wanted := _popup.get_contents_minimum_size()
+		if at.y + wanted.y > room.y:
+			at.y = int(rect.position.y - wanted.y - 2.0)
+		at.x = clampi(at.x, 0, maxi(0, int(room.x - wanted.x)))
+		_popup.popup(Rect2i(at, Vector2i(wanted)))
+
+	func _build_popup() -> void:
+		_popup = PopupPanel.new()
+		_popup.add_theme_stylebox_override("panel", UI.box(Color(32 / 255.0, 33 / 255.0, 36 / 255.0, 0.99), Color(1, 1, 1, 0.16), 6, 1, Vector4(8, 8, 8, 8)))
+		add_child(_popup)
+		var column := VBoxContainer.new()
+		column.add_theme_constant_override("separation", 6)
+		_popup.add_child(column)
+		var head := HBoxContainer.new()
+		head.add_theme_constant_override("separation", 4)
+		_heading = UI.label("", 13, UI.WHITE, 700)
+		_heading.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		head.add_child(_heading)
+		for entry in [["▲", -1, "Previous month"], ["▼", 1, "Next month"]]:
+			var arrow := _plain(str(entry[0]), 11)
+			arrow.tooltip_text = str(entry[2])
+			arrow.pressed.connect(_turn.bind(int(entry[1])))
+			head.add_child(arrow)
+		column.add_child(head)
+		_grid = GridContainer.new()
+		_grid.columns = 7
+		_grid.add_theme_constant_override("h_separation", 2)
+		_grid.add_theme_constant_override("v_separation", 2)
+		column.add_child(_grid)
+		var foot := HBoxContainer.new()
+		var clear := _plain("Clear", 12)
+		clear.pressed.connect(func() -> void:
+			_assign("")
+			date_changed.emit(value)
+			_popup.hide())
+		foot.add_child(clear)
+		var spring := Control.new()
+		spring.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		foot.add_child(spring)
+		var today := _plain("Today", 12)
+		today.pressed.connect(func() -> void:
+			var now := Time.get_date_dict_from_system()
+			_pick(int(now["year"]), int(now["month"]), int(now["day"])))
+		foot.add_child(today)
+		column.add_child(foot)
+
+	func _plain(text: String, size: int) -> Button:
+		var node := Button.new()
+		node.text = text
+		node.flat = true
+		node.focus_mode = Control.FOCUS_NONE
+		node.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+		node.add_theme_font_size_override("font_size", size)
+		node.add_theme_color_override("font_color", Color(138 / 255.0, 180 / 255.0, 248 / 255.0))
+		node.add_theme_color_override("font_hover_color", UI.WHITE)
+		return node
+
+	func _turn(direction: int) -> void:
+		_shown_month += direction
+		if _shown_month > 12:
+			_shown_month = 1
+			_shown_year += 1
+		elif _shown_month < 1:
+			_shown_month = 12
+			_shown_year -= 1
+		_fill()
+
+	func _fill() -> void:
+		_heading.text = "%s %d" % [MONTHS[_shown_month - 1], _shown_year]
+		for child in _grid.get_children():
+			_grid.remove_child(child)
+			child.queue_free()
+		for name in ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"]:
+			var head := UI.label(name, 11, Color(1, 1, 1, 0.6), 600)
+			head.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+			head.custom_minimum_size = Vector2(30, 20)
+			_grid.add_child(head)
+		var lead := _weekday(_shown_year, _shown_month, 1)
+		for index in range(lead):
+			var blank := Control.new()
+			blank.custom_minimum_size = Vector2(30, 26)
+			_grid.add_child(blank)
+		var chosen := "%04d-%02d-" % [_shown_year, _shown_month]
+		var now := Time.get_date_dict_from_system()
+		for day in range(1, _days_in(_shown_year, _shown_month) + 1):
+			var cell := Button.new()
+			cell.text = str(day)
+			cell.focus_mode = Control.FOCUS_NONE
+			cell.custom_minimum_size = Vector2(30, 26)
+			cell.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+			cell.add_theme_font_size_override("font_size", 12)
+			var picked := value == chosen + ("%02d" % day)
+			var is_today := int(now["year"]) == _shown_year and int(now["month"]) == _shown_month and int(now["day"]) == day
+			var rest := UI.box(Color(138 / 255.0, 180 / 255.0, 248 / 255.0, 1.0) if picked else Color(0, 0, 0, 0), Color(138 / 255.0, 180 / 255.0, 248 / 255.0, 0.9) if is_today and not picked else Color(0, 0, 0, 0), 4, 1 if is_today else 0)
+			var lit := UI.box(Color(138 / 255.0, 180 / 255.0, 248 / 255.0, 1.0) if picked else Color(1, 1, 1, 0.1), Color(0, 0, 0, 0), 4, 0)
+			for slot in ["normal", "focus", "disabled"]:
+				cell.add_theme_stylebox_override(slot, rest)
+			for slot in ["hover", "pressed", "hover_pressed"]:
+				cell.add_theme_stylebox_override(slot, lit)
+			var ink := Color(32 / 255.0, 33 / 255.0, 36 / 255.0) if picked else Color(1, 1, 1, 0.9)
+			for slot in ["font_color", "font_hover_color", "font_pressed_color", "font_hover_pressed_color", "font_focus_color"]:
+				cell.add_theme_color_override(slot, ink)
+			cell.pressed.connect(_pick.bind(_shown_year, _shown_month, day))
+			_grid.add_child(cell)
+
+	func _pick(year: int, month: int, day: int) -> void:
+		_assign("%04d-%02d-%02d" % [year, month, day])
+		date_changed.emit(value)
+		if _popup:
+			_popup.hide()
+
+
+class CheatsStickyBottom extends Control:
+	var button: Control
+	var scroller: ScrollContainer
+	var limit: Control
+	var inset := 7.2
+
+	func _ready() -> void:
+		size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+		if button and button.get_parent() == null:
+			add_child(button)
+		button.z_index = 4
+		custom_minimum_size.y = button.get_combined_minimum_size().y
+		_place()
+
+	func _process(_delta: float) -> void:
+		if is_visible_in_tree():
+			_place()
+
+	func _place() -> void:
+		if not button or not scroller or not is_instance_valid(scroller):
+			return
+		custom_minimum_size.y = button.get_combined_minimum_size().y
+		button.size = Vector2(size.x, custom_minimum_size.y)
+		var natural := global_position.y
+		var bottom := scroller.get_global_rect().end.y
+		var offset := minf(0.0, bottom - inset - button.size.y - natural)
+		if limit and is_instance_valid(limit):
+			offset = maxf(offset, limit.get_global_rect().position.y - natural)
+		button.position = Vector2(0, offset)

@@ -47,7 +47,7 @@ func update_props(props: Dictionary) -> void:
 		_game_date = str(props["gameDate"])
 	if props.has("warSettings"):
 		_war_settings = props["warSettings"]
-	if props.has("details") and props["details"] is Dictionary:
+	if props.has("details") and props["details"] is Dictionary and not is_same(props["details"], _details):
 		_details = props["details"]
 		_scenario_id = _id_of(_details)
 		if not _running:

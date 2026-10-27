@@ -15,6 +15,7 @@ var signals_seen: PackedStringArray = []
 func _initialize() -> void:
 	shots = OS.get_environment("OH_SHOTS")
 	started = Time.get_ticks_msec()
+	root.mouse_passthrough = true
 	main = (load("res://main.tscn") as PackedScene).instantiate()
 	root.add_child(main)
 	_run.call_deferred()
@@ -119,6 +120,34 @@ func _request(method: String, args := {}) -> Variant:
 	return reply.get("result")
 
 
+func _until(condition: Callable, seconds: float) -> bool:
+	var deadline := Time.get_ticks_msec() + int(seconds * 1000.0)
+	while Time.get_ticks_msec() < deadline:
+		if condition.call():
+			return true
+		await process_frame
+	return bool(condition.call())
+
+
+func _clear_shell() -> void:
+	var shell: ShellBoot = main.get("shell") as ShellBoot
+	if shell == null:
+		return
+	await _until(func() -> bool: return shell.door_state != "deciding", 30.0)
+	if shell.door != null and is_instance_valid(shell.door):
+		shell.door.opened.emit()
+		_say("vault door opened for the test")
+	if not shell.notice_updates.is_empty():
+		await _until(func() -> bool: return shell.notice != null and is_instance_valid(shell.notice), 5.0)
+		for i in range(5):
+			await process_frame
+	if shell.notice != null and is_instance_valid(shell.notice):
+		shell.notice.closed.emit()
+		_say("update notice closed for the test")
+	for i in range(3):
+		await process_frame
+
+
 func _run() -> void:
 	while not main.menu.visible:
 		if Time.get_ticks_msec() - started > 120000:
@@ -127,6 +156,7 @@ func _run() -> void:
 			return
 		await process_frame
 	_say("main menu ready")
+	await _clear_shell()
 	var exports := shots.path_join("exports") if not shots.is_empty() else ""
 	if not exports.is_empty():
 		DirAccess.make_dir_recursive_absolute(exports)

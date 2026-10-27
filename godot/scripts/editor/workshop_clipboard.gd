@@ -4,7 +4,6 @@ extends WorkshopShell
 var host: Workshop
 var _summary: Variant = null
 var _result: Variant = null
-var _simplify := true
 
 
 func _init() -> void:
@@ -78,11 +77,11 @@ func _render() -> void:
 		paste.icon = WorkshopUI.icon("paint", 14)
 		paste.tooltip_text = "Paste these regions into this map, replacing whatever territory they overlap (Ctrl+V)"
 		paste.pressed.connect(func() -> void:
-			var reply := await host.paste_clipboard(_simplify)
+			var reply := await host.paste_clipboard(host.paste_simplified)
 			_result = reply.get("result")
 			_render())
 		body.add_child(paste)
-		body.add_child(WorkshopUI.check("Simplify to this map's detail", _simplify, func(on: bool) -> void: _simplify = on, 11.5))
+		body.add_child(WorkshopUI.check("Simplify to this map's detail", host.paste_simplified, func(on: bool) -> void: host.paste_simplified = on, 11.5))
 	else:
 		body.add_child(WorkshopUI.wrap("Nothing copied yet. Select regions (click, Shift-click, lasso, or double-click a country) and press Copy to clipboard in the selection panel, or Ctrl+C.", 11.5, Color(1, 1, 1, 0.5)))
 	if _result is Dictionary:

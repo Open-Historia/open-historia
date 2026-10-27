@@ -79,6 +79,25 @@ func _find_text(node: Node, text: String) -> bool:
 	return false
 
 
+func _find_charts(node: Node) -> Array:
+	var out: Array = []
+	if node is AdvisorPanel.AdvisorChart and (node as Control).is_visible_in_tree():
+		out.append(node)
+	for child in node.get_children():
+		out.append_array(_find_charts(child))
+	return out
+
+
+func _find_pictured(node: Node) -> RichTextLabel:
+	if node is RichTextLabel and node.has_meta("pictures") and (node as Control).is_visible_in_tree():
+		return node
+	for child in node.get_children():
+		var found := _find_pictured(child)
+		if found:
+			return found
+	return null
+
+
 func _find_chart(node: Node) -> Control:
 	if node is AdvisorPanel.AdvisorChart and (node as Control).is_visible_in_tree():
 		return node as Control
@@ -388,6 +407,61 @@ func _run() -> void:
 	panel.views.pop_back()
 	panel.messages.pop_back()
 	panel.views.pop_back()
+	panel._render()
+
+	var bars_text := "Where the money goes:\n```chart\n{\"type\":\"bar\",\"data\":{\"labels\":[\"Army\",\"Navy\",\"Air force\"],\"datasets\":[{\"label\":\"Budget\",\"data\":[42,27,31],\"backgroundColor\":[\"#34d399\",\"#f472b6\",\"#fbbf24\"]}]},\"options\":{\"indexAxis\":\"y\",\"plugins\":{\"title\":{\"display\":true,\"text\":\"Defence budget\"}},\"scales\":{\"y\":{\"title\":{\"display\":true,\"text\":\"Branch\"}}}}}\n```"
+	var line_text := "Approval since the election:\n```chart\n{\"type\":\"line\",\"data\":{\"labels\":[\"Jan\",\"Feb\",\"Mar\",\"Apr\"],\"datasets\":[{\"label\":\"Approval\",\"data\":[41,44,39,47],\"fill\":true,\"tension\":0,\"borderDash\":[6,4],\"pointRadius\":0}]},\"options\":{\"plugins\":{\"subtitle\":{\"display\":true,\"text\":\"Monthly polls\"}},\"scales\":{\"y\":{\"min\":0,\"max\":100,\"title\":{\"display\":true,\"text\":\"Per cent\"}},\"x\":{\"title\":{\"display\":true,\"text\":\"Month\"}}}}}\n```"
+	var picture_text := "Our crest: ![Crest](/icon-192.png \"The crest\") and a seal ![Seal](data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==). A stranger's ![Remote crest](https://example.org/crest.png) and ![](/api/library) stay links."
+	var option_samples := [{"role": "advisor", "text": bars_text, "time": "2016-01-08"}, {"role": "advisor", "text": line_text, "time": "2016-01-08"}, {"role": "advisor", "text": picture_text, "time": "2016-01-08"}]
+	var option_views: Dictionary = (await main.engine.request("advisor.views", {"json": JSON.stringify(option_samples, "", false, true)})).get("result", {})
+	for index in range(option_samples.size()):
+		panel.messages.append(option_samples[index])
+		panel.views.append((option_views.get("views", [{}, {}, {}]) as Array)[index])
+	panel._render()
+	await _wait(1.4)
+	var charts := _find_charts(panel)
+	var bars_chart: Control = charts[charts.size() - 2] if charts.size() >= 2 else null
+	var line_chart_2: Control = charts[charts.size() - 1] if charts.size() >= 2 else null
+	_check("charts with options beyond the unit are drawn", bars_chart != null and line_chart_2 != null)
+	if bars_chart and line_chart_2:
+		await _scroll_to(bars_chart)
+		await _wait(1.2)
+		var bar_hits: Array = bars_chart.get("_hits")
+		var colours: Array = []
+		var heights: Array = []
+		for hit in bar_hits:
+			colours.append(((hit as Dictionary)["color"] as Color).to_html(false))
+			heights.append(snappedf(((hit as Dictionary)["rect"] as Rect2).size.y, 0.1))
+		_check("a bar per label, each in its own colour", colours == ["34d399", "f472b6", "fbbf24"], str(colours))
+		_check("indexAxis y lays the bars on their side", bar_hits.size() == 3 and heights[0] == heights[1] and ((bar_hits[0] as Dictionary)["rect"] as Rect2).size.x > ((bar_hits[1] as Dictionary)["rect"] as Rect2).size.x, str(heights))
+		_check("the chart title and the axis title are read", not (bars_chart.call("_box", "title") as Dictionary).is_empty() and (bars_chart.call("_axis", "y") as Dictionary)["title"] == PackedStringArray(["Branch"]))
+		if not bar_hits.is_empty():
+			var bar_motion := InputEventMouseMotion.new()
+			bar_motion.position = ((bar_hits[0] as Dictionary)["rect"] as Rect2).get_center()
+			bars_chart._gui_input(bar_motion)
+		await _frames(3)
+		await _shoot("advisor-15b-horizontal-bars")
+		await _scroll_to(line_chart_2)
+		await _wait(1.2)
+		var y_ticks: Array = line_chart_2.call("_ticks", line_chart_2.call("_axis", "y"), Vector2(0, 100), 130.0, false)
+		_check("a y scale with min and max runs from 0 to 100", not y_ticks.is_empty() and float(y_ticks[0]) == 0.0 and float(y_ticks[y_ticks.size() - 1]) == 100.0, str(y_ticks))
+		var line_series: Dictionary = (line_chart_2.get("series") as Array)[0]
+		_check("the line keeps its fill, straight segments, dashes and hidden points", str(line_series.get("fill", "")) == "origin" and float(line_series.get("tension", -1.0)) == 0.0 and (line_series.get("dash", []) as Array).size() == 2 and float((line_series.get("point_radius", [3]) as Array)[0]) == 0.0)
+		await _shoot("advisor-15c-line-options")
+	var picture_label: RichTextLabel = _find_pictured(panel)
+	_check("a reply with pictures fills its paragraph with them", picture_label != null)
+	await _until(func() -> bool: return AdvisorPanel._pictures.get("/icon-192.png") is Texture2D, 15.0)
+	await _wait(0.4)
+	_check("a picture from the game's own address is drawn", AdvisorPanel._pictures.get("/icon-192.png") is Texture2D)
+	_check("a data: picture is drawn", AdvisorPanel._pictures.keys().any(func(key: Variant) -> bool: return str(key).begins_with("data:image/png") and AdvisorPanel._pictures[key] is Texture2D))
+	_check("pictures from elsewhere and from the API stay links, as React keeps them", picture_label != null and picture_label.get_parsed_text().contains("Remote crest") and picture_label.get_parsed_text().contains("/api/library") and not AdvisorPanel._pictures.has("/api/library"))
+	if picture_label:
+		await _scroll_to(picture_label)
+		await _wait(0.3)
+	await _shoot("advisor-15d-pictures")
+	for index in range(option_samples.size()):
+		panel.messages.pop_back()
+		panel.views.pop_back()
 	panel._render()
 
 	panel._load_failed = true
