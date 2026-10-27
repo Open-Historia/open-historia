@@ -46,6 +46,9 @@ var _fatal_message := ""
 var _reloading := false
 var _screen := "boot"
 var _shared_role := ""
+var _shared_view_ready := false
+var _shared_view_busy := false
+var _shared_view_keys := {}
 var _play_game_id := ""
 var _play_regions := ""
 var _cities_raw: Array = []
@@ -815,6 +818,57 @@ func _on_engine_event(event_name: String, data: Variant) -> void:
 			_shared_role = role
 			if not role.is_empty():
 				_call(cheats, "close")
+		var view_ready := bool(state.get("viewReady", false)) and not role.is_empty()
+		var arrived := view_ready and not _shared_view_ready
+		_shared_view_ready = view_ready
+		if arrived and role == "guest":
+			_enter_shared_game()
+	elif event_name == "multiplayer.view" and data is Dictionary:
+		var keys: Variant = (data as Dictionary).get("keys", [])
+		_on_shared_view(keys if keys is Array else [])
+	elif event_name == "multiplayer.round" and data is Dictionary:
+		_on_shared_round(data)
+
+
+func _enter_shared_game() -> void:
+	await _refresh_library()
+	var id := str(library.get("activeGameId", ""))
+	if id.is_empty() or (in_game and id == game_id):
+		return
+	await _open_game(id)
+
+
+func _on_shared_view(keys: Array) -> void:
+	if not in_game or _shared_role.is_empty():
+		return
+	for key in keys:
+		_shared_view_keys[str(key)] = true
+	if _shared_view_busy:
+		return
+	_shared_view_busy = true
+	while not _shared_view_keys.is_empty() and in_game:
+		var changed := _shared_view_keys
+		_shared_view_keys = {}
+		if changed.has("world") or changed.has("colors") or changed.has("flags"):
+			await _world_changed()
+		elif changed.has("game") or changed.has("events"):
+			var view := await engine.request("game.view")
+			if view.get("ok", false):
+				hud.set_game(view["result"], game_name)
+			await hud.date_widget.refresh_status()
+			await hud.date_widget.reload_history()
+			hud.refresh_panels()
+		else:
+			hud.refresh_panels()
+	_shared_view_keys = {}
+	_shared_view_busy = false
+
+
+func _on_shared_round(data: Dictionary) -> void:
+	if not in_game or _shared_role.is_empty():
+		return
+	await _world_changed()
+	await hud.date_widget.land_shared_round(data.get("view"))
 
 
 func _open_settings() -> void:

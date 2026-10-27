@@ -1,0 +1,8 @@
+{
+  "name": "open-historia-native-sidecar",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "node-datachannel": "^0.33.6"
+  }
+}

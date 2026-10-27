@@ -436,6 +436,15 @@ const paymentOf = (key, mine, theirs) => {
 export const answerDiplomacy = async (ctx, op, ref, terms = null) => {
   if (ctx.engine.simulationStatus.isSimulationBusy()) return { ok: false, error: TURN_RUNNING_NOTE, accepted: false, to: "" };
   try {
+    if (ctx.engine.mpBridge?.inSharedGame?.()) {
+      const answer = await ctx.engine.mpBridge.requestFromHost("peace", { op, ref, terms: terms ?? {} });
+      return {
+        ok: answer.ok === true,
+        error: answer.ok || !cleanText(answer.error) ? "" : refusalText(answer.error),
+        accepted: answer.ok === true && op !== "decline" && op !== "refuse",
+        to: "",
+      };
+    }
     const answer = await ctx.engine.gameplay.answerDiplomacy({ op, ref, terms });
     return {
       ok: answer?.ok === true,

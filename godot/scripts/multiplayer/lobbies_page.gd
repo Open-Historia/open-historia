@@ -22,8 +22,8 @@ const PRIMARY_BORDER := Color(43 / 255.0, 193 / 255.0, 243 / 255.0, 0.55)
 const PRIMARY_INK := Color("#e6f8ff")
 const JOIN_NOTE := "The host and the services that connect you (public relay servers, and Google's and Cloudflare's address-lookup servers) see your network address. The game does not show it to other players, but anyone who has the invite code could find it out."
 const HOST_NOTE := "Players connect straight to your computer: you and each player see each other's network address, and so do the services that connect you (public relay servers, and Google's and Cloudflare's address-lookup servers). The game does not show a player's address to other players, but anyone you give the invite code to could find it out, so share the code only with people you trust. Some strict networks (many mobile carriers) cannot connect this way."
-const JOIN_NEEDS_WEBRTC := "Joining needs a WebRTC connection, which the native app cannot make yet."
-const HOST_NEEDS_WEBRTC := "Hosting needs WebRTC and the shared-game engine, which the native app does not have yet."
+const NO_WEBRTC := "This device cannot make WebRTC connections."
+const NO_HOST_ENGINE := "Hosting a shared game needs the desktop app."
 const READY_SHARES := [["Half", 0.5], ["Two thirds", 2.0 / 3.0], ["Three quarters", 0.75], ["Everyone", 1.0]]
 
 var engine: EngineLink
@@ -300,7 +300,7 @@ func _restyle_join() -> void:
 	if not is_instance_valid(_join_button):
 		return
 	if not _state.get("webrtc", false):
-		UI.set_disabled_look(_join_button, JOIN_NEEDS_WEBRTC)
+		UI.set_disabled_look(_join_button, NO_WEBRTC)
 		return
 	var idle := _code.strip_edges().is_empty() or _shared_mode() != "off"
 	_join_button.disabled = idle
@@ -370,8 +370,10 @@ func _build_host() -> PanelContainer:
 	holder.add_child(buttons)
 	if has_game:
 		var open := _button("Opening…" if _host_busy else "Open the lobby", true)
-		if not (_state.get("webrtc", false) and _state.get("hostEngine", false)):
-			UI.set_disabled_look(open, HOST_NEEDS_WEBRTC)
+		if not _state.get("webrtc", false):
+			UI.set_disabled_look(open, NO_WEBRTC)
+		elif not _state.get("hostEngine", false):
+			UI.set_disabled_look(open, NO_HOST_ENGINE)
 		else:
 			open.disabled = _host_busy or _shared_mode() != "off"
 			open.pressed.connect(_open_lobby)

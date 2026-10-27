@@ -775,6 +775,16 @@ func _save_goal(text: String) -> void:
 	_goal_saving = true
 	_goal_error = ""
 	_update_goal_editor()
+	if await SharedGame.active(engine):
+		var answer: Dictionary = await SharedGame.ask(engine, "goal", {"text": text.strip_edges()})
+		_goal_saving = false
+		if not answer.get("ok", false):
+			_goal_error = GOAL_FAILED
+			_update_goal_editor()
+			return
+		_goal_editing = false
+		_render_goal()
+		return
 	var reply: Dictionary = await engine.request("actions.goal", {"text": text})
 	_goal_saving = false
 	if not reply.get("ok", false):
@@ -1032,8 +1042,25 @@ func _refresh_suggestions() -> void:
 	_render_sections()
 
 
+func _suggested_text(topic_id: String, action_id: String) -> String:
+	for topic in _view.get("suggestions", []):
+		if typeof(topic) != TYPE_DICTIONARY or str((topic as Dictionary).get("id", "")) != topic_id:
+			continue
+		for action in (topic as Dictionary).get("actions", []):
+			if typeof(action) == TYPE_DICTIONARY and str((action as Dictionary).get("id", "")) == action_id:
+				var wording := str((action as Dictionary).get("text", "")).strip_edges()
+				return wording if not wording.is_empty() else str((action as Dictionary).get("title", "")).strip_edges()
+	return ""
+
+
 func _queue_suggestion(topic_id: String, action_id: String) -> void:
 	if engine == null:
+		return
+	if await SharedGame.active(engine):
+		var wording := _suggested_text(topic_id, action_id)
+		if wording.is_empty():
+			return
+		await SharedGame.ask(engine, "order", {"text": wording})
 		return
 	var reply: Dictionary = await engine.request("actions.queue", {"topicId": topic_id, "actionId": action_id})
 	if not reply.get("ok", false):
@@ -1048,6 +1075,9 @@ func _queue_suggestion(topic_id: String, action_id: String) -> void:
 
 func _delete(entry: Dictionary) -> void:
 	if engine == null:
+		return
+	if await SharedGame.active(engine):
+		await SharedGame.ask(engine, "unorder", {"order": str(entry.get("id", ""))})
 		return
 	if bool(entry.get("movesUnit", false)) and _turn_running:
 		return
@@ -1070,6 +1100,14 @@ func _submit() -> void:
 	_is_submitting = true
 	_update_composer()
 	_render_sections()
+	if await SharedGame.active(engine):
+		var answer: Dictionary = await SharedGame.ask(engine, "order", {"text": trimmed})
+		_is_submitting = false
+		if answer.get("ok", false):
+			_composer.text = ""
+		_update_composer()
+		_render_sections()
+		return
 	var reply: Dictionary = await engine.request("actions.add", {"text": trimmed})
 	_is_submitting = false
 	if not reply.get("ok", false):

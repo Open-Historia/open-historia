@@ -546,6 +546,25 @@ export const register = (ctx) => {
     const plan = engine.advisorBlocks.planAdvisorActionEdits(current, proposal, gameState.normalizeActionEntry);
     problems.push(...plan.problems);
     if (plan.items.length === 0) return null;
+    if (engine.mpBridge.inSharedGame()) {
+      const wording = (action) => String(action?.text || action?.title || "").trim();
+      const before = new Map(current.map((action) => [String(action.id), action]));
+      const after = new Map(plan.next.map((action) => [String(action.id), action]));
+      const ask = async (request, fields, what) => {
+        const answer = await engine.mpBridge.requestFromHost(request, fields);
+        if (!answer.ok) problems.push(`the host did not ${what}: ${answer.error || "it did not answer"}`);
+      };
+      for (const [id, action] of before) {
+        const kept = after.get(id);
+        if (kept && wording(kept) === wording(action)) continue;
+        await ask("unorder", { order: id }, `withdraw "${action.title || wording(action)}"`);
+        if (kept) await ask("order", { text: wording(kept) }, `take the reworded "${kept.title || wording(kept)}"`);
+      }
+      for (const [id, action] of after) {
+        if (!before.has(id)) await ask("order", { text: wording(action) }, `take "${action.title || wording(action)}"`);
+      }
+      return plan.items;
+    }
     if (plan.reverts.length) {
       for (const revert of plan.reverts) {
         try {

@@ -92,6 +92,7 @@ var list_confirm := ""
 var visible_council := ""
 var councils: Dictionary = {}
 var conversation: Conversation
+var shared_game := false
 var _flags_pending: Dictionary = {}
 var _placed_inset := 0.0
 var _loading_data := false
@@ -192,6 +193,7 @@ func setup(engine_link: EngineLink, setup_context: Dictionary = {}) -> void:
 	_mount_tab_views()
 	engine.request("chat.start")
 	reload()
+	shared_game = await SharedGame.active(engine)
 
 
 func open() -> void:
@@ -455,7 +457,11 @@ func _on_closed() -> void:
 
 
 func _on_engine_event(event_name: String, data: Variant) -> void:
-	if event_name == "chat.changed":
+	if event_name == "multiplayer.shared":
+		shared_game = d(data).get("active", false) == true
+	elif event_name == "multiplayer.view" or event_name == "multiplayer.round":
+		shared_game = true
+	elif event_name == "chat.changed":
 		if t(d(data).get("reason", "")) == "game":
 			_reset_for_game()
 		reload()
@@ -1753,6 +1759,11 @@ func _start_chat(chosen: Array) -> void:
 	var countries: Array = []
 	for entry in chosen:
 		countries.append({"name": t(entry.get("name", "")), "code": t(entry.get("code", ""))})
+	if shared_game:
+		selector_open = false
+		_modal.visible = false
+		set_active({"id": "pending-%d" % int(Time.get_unix_time_from_system() * 1000.0), "countries": countries, "messages": [], "status": "open", "pendingShared": true})
+		return
 	var created := {"id": new_chat_id(), "countries": countries, "messages": [], "status": "open"}
 	chats.push_front(created)
 	persist("chat.create", {"chat": created})
@@ -3747,6 +3758,9 @@ class Conversation extends VBoxContainer:
 		if text.is_empty() or loading:
 			return
 		await cut_in()
+		if panel.shared_game:
+			await _say_to_host(text)
+			return
 		var id := chat_id
 		var reply := await panel.engine.request("chat.catchup", {"chat": chat, "messages": messages_ref, "player": panel.player, "gameDate": panel.game_date})
 		var catch_up := ChatPanel.d(reply.get("result", {})) if reply.get("ok", false) else {}
@@ -3779,6 +3793,27 @@ class Conversation extends VBoxContainer:
 			push_messages(failed)
 			return
 		await fetch_leader_response(counterpart, text)
+
+
+	func _say_to_host(text: String) -> void:
+		var pending: bool = chat.get("pendingShared", false) == true
+		var fields := {"thread": chat_id, "to": [], "text": text}
+		if pending:
+			var names: Array = []
+			for country in countries():
+				var name := ChatPanel.t(ChatPanel.d(country).get("name", ""))
+				if not name.is_empty() and names.size() < 8:
+					names.append(name)
+			fields = {"thread": null, "to": names, "text": text}
+		var answer: Dictionary = await SharedGame.ask(panel.engine, "say", fields)
+		if not answer.get("ok", false):
+			var failed := messages_ref.duplicate()
+			var said := str(answer.get("error", ""))
+			failed.append({"role": "error", "speaker": "System", "text": said if not said.is_empty() else SharedGame.HOST_DID_NOT_TAKE_MESSAGE, "time": panel.game_date})
+			push_messages(failed)
+			return
+		if pending:
+			panel.leave_active()
 
 
 	func push_messages(updated: Array) -> void:
@@ -3847,6 +3882,8 @@ class Conversation extends VBoxContainer:
 
 
 	func run_group_turn(text: String, next_messages: Array, options: Dictionary = {}) -> bool:
+		if panel.shared_game:
+			return await _group_turn_on_host(text, next_messages, options)
 		var id := chat_id
 		var lifecycle_response: bool = options.get("lifecycle_response", false) == true
 		var override := ChatPanel.d(options.get("chat_override", {}))
@@ -3928,6 +3965,32 @@ class Conversation extends VBoxContainer:
 			return true
 		if steps.size() > 1:
 			say_later(turn, steps.slice(1))
+		return true
+
+
+	func _group_turn_on_host(text: String, next_messages: Array, options: Dictionary) -> bool:
+		var override := ChatPanel.d(options.get("chat_override", {}))
+		var thread := ChatPanel.t(override.get("id", "")) if not override.is_empty() else chat_id
+		if options.get("lifecycle_response", false) == true and text.is_empty():
+			loading = true
+			update_composer()
+			render_messages(true)
+			var asked: Dictionary = await SharedGame.ask(panel.engine, "institution", {"call": "hearing", "args": {"thread": thread}}, 180000)
+			if not asked.get("ok", false):
+				var reason := str(asked.get("error", ""))
+				var refused := next_messages.duplicate()
+				refused.append({"role": "error", "speaker": "System", "text": reason if not reason.is_empty() else "The host did not do that.", "time": panel.game_date})
+				push_messages(refused)
+			_finish_loading()
+			return true
+		var answer: Dictionary = {"ok": false, "error": SharedGame.REFUSAL}
+		if not text.is_empty():
+			answer = await SharedGame.ask(panel.engine, "say", {"thread": thread, "to": [], "text": text})
+		if not answer.get("ok", false):
+			var said := str(answer.get("error", ""))
+			var failed := next_messages.duplicate()
+			failed.append({"role": "error", "speaker": "System", "text": said if not said.is_empty() else SharedGame.HOST_DID_NOT_TAKE_MESSAGE, "time": panel.game_date})
+			push_messages(failed)
 		return true
 
 

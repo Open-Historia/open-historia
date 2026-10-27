@@ -1236,7 +1236,7 @@ func _command(method: String, args: Dictionary) -> bool:
 		return false
 	_busy = true
 	_error = ""
-	var reply: Dictionary = await engine.request(method, args)
+	var reply: Dictionary = await _agent_request(method, args)
 	_busy = false
 	if not reply.get("ok", false):
 		_error = str(reply.get("error", ""))
@@ -1244,6 +1244,49 @@ func _command(method: String, args: Dictionary) -> bool:
 		return false
 	await refresh()
 	return true
+
+
+func _cover_story_of(spy_id: String) -> String:
+	for group in ["cases", "networks"]:
+		for entry: Variant in _model.get(group, []):
+			if typeof(entry) == TYPE_DICTIONARY and str((entry as Dictionary).get("id", "")) == spy_id:
+				return str((entry as Dictionary).get("coverStory", ""))
+	return ""
+
+
+func _agent_fields(method: String, args: Dictionary) -> Dictionary:
+	var spy := str(args.get("spyId", ""))
+	match method:
+		"intelligence.deploy":
+			return {"op": "deploy", "target": str(args.get("target", "")), "spy": "", "story": ""}
+		"intelligence.recall":
+			return {"op": "recall", "target": "", "spy": spy, "story": ""}
+		"intelligence.focus":
+			return {"op": "focus", "target": str(args.get("focus", "")), "spy": spy, "story": ""}
+		"intelligence.order":
+			var kind := str(args.get("kind", ""))
+			return {"op": "mission", "target": kind if not kind.is_empty() else "sabotage", "spy": spy, "story": str(args.get("instructions", "")).strip_edges().left(300)}
+		"intelligence.cancelOrder":
+			return {"op": "mission", "target": "", "spy": spy, "story": ""}
+		"intelligence.expel":
+			return {"op": "expel", "target": "", "spy": spy, "story": ""}
+		"intelligence.turn":
+			return {"op": "turn", "target": "", "spy": spy, "story": str(args.get("story", "")).left(300)}
+		"intelligence.story":
+			var story := str(args["story"]) if args.has("story") else _cover_story_of(spy)
+			return {"op": "story", "target": "", "spy": spy, "story": story.left(300)}
+	return {}
+
+
+func _agent_request(method: String, args: Dictionary) -> Dictionary:
+	var fields := _agent_fields(method, args)
+	if fields.is_empty() or not await SharedGame.active(engine):
+		return await engine.request(method, args)
+	var answer: Dictionary = await SharedGame.ask(engine, "agent", fields)
+	if answer.get("ok", false):
+		return {"ok": true, "result": true}
+	var said := str(answer.get("error", ""))
+	return {"ok": false, "error": said if not said.is_empty() else SharedGame.HOST_DID_NOT_TAKE_ORDER}
 
 
 func _render_reports() -> void:
@@ -1758,7 +1801,7 @@ func _confirm_deploy() -> void:
 	_pick = ""
 	_error = ""
 	_busy = true
-	var reply: Dictionary = await engine.request("intelligence.deploy", {"target": target})
+	var reply: Dictionary = await _agent_request("intelligence.deploy", {"target": target})
 	_busy = false
 	if not reply.get("ok", false):
 		_error = str(reply.get("error", ""))

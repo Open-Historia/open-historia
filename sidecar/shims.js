@@ -1161,3 +1161,20 @@ export const installShims = ({ origin, storageFile }) => {
 
   return { storage, setVisible, hidePage };
 };
+
+export const WEBRTC_NAMES = Object.freeze(["RTCPeerConnection", "RTCSessionDescription", "RTCIceCandidate", "RTCDataChannel"]);
+
+export const installWebRtc = async () => {
+  if (WEBRTC_NAMES.every((name) => typeof globalThis[name] === "function")) return true;
+  try {
+    const rtc = await import("node-datachannel/polyfill");
+    for (const name of WEBRTC_NAMES) {
+      if (typeof rtc[name] === "function") globalThis[name] = rtc[name];
+    }
+  } catch (error) {
+    process.stderr.write(`[sidecar] WebRTC is not available: ${error?.message ?? error}\n`);
+  }
+  return WEBRTC_NAMES.every((name) => typeof globalThis[name] === "function");
+};
+
+await installWebRtc();

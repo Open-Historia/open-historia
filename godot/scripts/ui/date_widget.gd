@@ -87,6 +87,7 @@ var _fronts_pending := false
 var _fronts_running := false
 var _fronts_timer: Timer
 var _offer_serial := 0
+var _shared_active := false
 
 
 func _ready() -> void:
@@ -464,6 +465,12 @@ func _on_engine_event(name: String, data: Variant) -> void:
 		return
 	if name == "interactive.changed":
 		_refresh_offer()
+		return
+	if name == "multiplayer.shared":
+		_shared_active = typeof(data) == TYPE_DICTIONARY and bool((data as Dictionary).get("active", false))
+		return
+	if name == "multiplayer.view" or name == "multiplayer.round":
+		_shared_active = true
 		return
 	if typeof(data) != TYPE_DICTIONARY or int(data.get("call", -1)) != current_call or current_call == 0:
 		return
@@ -1324,7 +1331,7 @@ func reveal_next() -> void:
 	else:
 		visible_count = min(total, visible_count + 1)
 		if not skip_in_flight:
-			engine.request("turn.seen", {"through": visible_count})
+			_mark_seen(visible_count)
 	_render_events()
 	_after_reveal_change()
 
@@ -1335,7 +1342,7 @@ func reveal_all() -> void:
 	if total > 0:
 		visible_count = total
 		if not skip_in_flight:
-			engine.request("turn.seen", {"through": total})
+			_mark_seen(total)
 	_render_events()
 	_after_reveal_change()
 
@@ -1343,6 +1350,24 @@ func reveal_all() -> void:
 func _after_reveal_change() -> void:
 	_follow_camera()
 	_stage_map()
+	if _shared_active and not skip_in_flight and engine:
+		engine.request("multiplayer.revealed")
+
+
+func _mark_seen(through: int) -> void:
+	await engine.request("turn.seen", {"through": through})
+	if _shared_active and not skip_in_flight:
+		engine.request("multiplayer.revealed")
+
+
+func land_shared_round(view: Variant) -> void:
+	if busy() or current_call != 0:
+		return
+	turn_index = 0
+	older = {}
+	await load_history()
+	await refresh_status()
+	_land(view, "history")
 
 
 func _follow_camera() -> void:
@@ -1448,6 +1473,11 @@ func _settle(panel := "") -> void:
 
 func run_jump(days: float, mode := "jump", retry_directive := "") -> void:
 	if is_loading or current_call != 0:
+		return
+	if _shared_active:
+		set_panel("skip")
+		error = SharedGame.SKIP_REFUSAL
+		_render_timeline()
 		return
 	var live := bool(status.get("liveSkipEvents", true))
 	error = ""
@@ -1692,7 +1722,7 @@ func show_event(event_id: String) -> void:
 		var through := ids.find(event_id) + 1
 		if through > visible_count:
 			visible_count = through
-			engine.request("turn.seen", {"through": through})
+			_mark_seen(through)
 	if not _category_tag(_display_record()).is_empty():
 		category = {"record": "", "tag": ""}
 	_focus_event = event_id

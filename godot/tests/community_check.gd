@@ -331,7 +331,7 @@ func _lobbies(with_game: bool) -> void:
 	await page.open()
 	await _wait(0.8)
 	_check(_has_text(page, "Join a private lobby") and _has_text(page, "Public lobbies") and _has_text(page, "Coming soon"), "lobbies page sections")
-	_check(page._join_button.disabled, "Join is dimmed without WebRTC")
+	_check(page._join_button.disabled and page._join_button.tooltip_text.is_empty(), "Join waits for an invite code")
 	if not with_game:
 		await _shoot("l01-lobbies")
 	host.pressed.emit()
@@ -340,7 +340,7 @@ func _lobbies(with_game: bool) -> void:
 	if with_game:
 		_check(_has_text(page, "ROUND LENGTH (MINUTES)") and _has_text(page, "Open the lobby"), "host form with a game open")
 		var open := _find_button(page, "Open the lobby")
-		_check(open != null and open.disabled, "Open the lobby is dimmed without WebRTC")
+		_check(open != null and not open.disabled and open.tooltip_text.is_empty(), "Open the lobby is offered with a game open")
 		await _shoot("l03-host-form")
 		main.menu._body.scroll_vertical = 600
 		await _wait(0.6)
