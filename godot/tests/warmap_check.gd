@@ -231,6 +231,70 @@ func _globe_pass() -> void:
 	await _wait(0.5)
 
 
+func _perspective_pass() -> void:
+	var view: MapView = main.map_view
+	var size := view.get_viewport_rect().size
+	await _focus([[1.0, 44.5], [10.0, 51.5]], 6.0)
+	view.bearing = 0.0
+	view.pitch = 55.0
+	view.call("_after_camera_move")
+	await _wait(1.2)
+	var near_hit: Array = []
+	var far_hit: Array = []
+	for item in war.overlay._unit_hits:
+		var hit: Array = item
+		if hit.size() < 4 or not (hit[3] is Transform2D):
+			continue
+		var at: Vector2 = hit[0]
+		if at.x < 20.0 or at.y < 20.0 or at.x > size.x - 20.0 or at.y > size.y - 20.0:
+			continue
+		if near_hit.is_empty() or at.y > (near_hit[0] as Vector2).y:
+			near_hit = hit
+		if far_hit.is_empty() or at.y < (far_hit[0] as Vector2).y:
+			far_hit = hit
+	var spread := (near_hit[0] as Vector2).y - (far_hit[0] as Vector2).y if not near_hit.is_empty() and not far_hit.is_empty() else 0.0
+	if spread < 60.0:
+		_check("unit counters lie on the tilted ground and shrink with distance, as MapLibre's map-aligned circles do", false, "%d counters on screen, %.0f px apart" % [war.overlay._unit_hits.size(), spread])
+		return
+	var near_world: Vector2 = war.overlay.unit_positions[str(near_hit[2])]
+	var far_world: Vector2 = war.overlay.unit_positions[str(far_hit[2])]
+	var near_shape: Transform2D = near_hit[3]
+	var far_shape: Transform2D = far_hit[3]
+	var wanted := view.label_depth(far_world) / view.label_depth(near_world)
+	var drawn := near_shape.x.length() / far_shape.x.length()
+	var squash := near_shape.y.length() / near_shape.x.length()
+	_check("unit counters lie on the tilted ground and shrink with distance, as MapLibre's map-aligned circles do", absf(drawn / wanted - 1.0) < 0.08 and squash < 0.8, "near/far %.3f, perspective %.3f, flattened to %.2f" % [drawn, wanted, squash])
+	var near_ratio := view.label_perspective(near_world)
+	var far_ratio := view.label_perspective(far_world)
+	_check("the flag or glyph in a counter scales by MapLibre's perspective ratio", near_ratio > far_ratio + 0.05 and absf(near_ratio - clampf(0.5 + 0.5 / view.label_depth(near_world), 0.0, 4.0)) < 0.0001, "%.2f near, %.2f far" % [near_ratio, far_ratio])
+	await _shoot("w9e-tilted-counters")
+	await _close_notice()
+	picked = ""
+	var reach: float = near_hit[1]
+	var target: Vector2 = (near_hit[0] as Vector2) + near_shape.basis_xform(Vector2(0.0, reach * 0.8))
+	var press := InputEventMouseButton.new()
+	press.button_index = MOUSE_BUTTON_LEFT
+	press.pressed = true
+	press.position = target
+	press.global_position = target
+	root.get_viewport().push_input(press)
+	var release := InputEventMouseButton.new()
+	release.button_index = MOUSE_BUTTON_LEFT
+	release.pressed = false
+	release.position = target
+	release.global_position = target
+	root.get_viewport().push_input(release)
+	await _until(func() -> bool: return not picked.is_empty(), 2.0)
+	_check("a click on the flattened edge of a tilted counter selects it", picked == str(near_hit[2]), "%s -> %s" % [str(near_hit[2]), picked])
+	var cards: Node = main.hud.map_cards
+	if cards:
+		cards.call("dismiss_all")
+	view.pitch = 0.0
+	view.bearing = 0.0
+	view.call("_after_camera_move")
+	await _wait(0.5)
+
+
 func _focus(bounds: Array, level: float) -> void:
 	main.map_view.fit_lonlat_bounds(bounds, level, 0.0)
 	await _wait(0.4)
@@ -356,6 +420,7 @@ func _run() -> void:
 	await _shoot("w9d-unit-card")
 	if cards:
 		cards.call("dismiss_all")
+	await _perspective_pass()
 	await _globe_pass()
 	var pfalz: Dictionary = await _call("warmap.test.regions", {"owner": "Germany", "near": [7.6, 49.4]})
 	await _focus([[6.4, 48.6], [9.4, 50.4]], 7.2)

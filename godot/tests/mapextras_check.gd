@@ -180,6 +180,8 @@ func _run() -> void:
 		await _trackpad_checks()
 	if _wants("touch"):
 		await _touch_checks()
+	if _wants("terrain"):
+		await _terrain_checks()
 	if _wants("settings"):
 		await _settings_checks()
 	_finish(0 if failures.is_empty() else 1)
@@ -510,8 +512,9 @@ func _globe_checks() -> void:
 	await _shoot("globe-5-turned")
 	extras.apply_map_settings({"Globe": false})
 	await _frames(3)
-	_check(not extras.globe.active and not view.is_globe(), "the globe switches off again")
-	_check(polity == null or polity.visibility_layer == 1, "the flat map's names are back on screen")
+	var lifted := extras.globe.relief_shown() or extras.globe.tilted()
+	_check(not extras.globe.globe_shown() and extras.globe.active == lifted and view.is_globe() == lifted, "the globe switches off again")
+	_check(polity == null or polity.visibility_layer == (GlobeView.MAP_LAYER_BIT if lifted else 1), "the flat map's names are back on screen")
 	await _wait(1.0)
 	await _shoot("globe-6-flat-again")
 
@@ -664,7 +667,7 @@ func _tilt_checks() -> void:
 	await _frames(3)
 	view.focus_owner("France")
 	await _frames(3)
-	_check(view.bearing == 0.0 and view.pitch == 0.0 and not extras.globe.active, "opening a game frames it facing north and flat, as React's first framing does")
+	_check(view.bearing == 0.0 and view.pitch == 0.0 and not extras.globe.globe_shown() and extras.globe.active == extras.globe.relief_shown(), "opening a game frames it facing north and flat, as React's first framing does")
 
 
 func _pan_gesture(view: MapView, at: Vector2, delta_y: float) -> void:
@@ -862,6 +865,169 @@ func _touch_checks() -> void:
 	view.bearing = 0.0
 	view.pitch = 0.0
 	view.call("_after_camera_move")
+
+
+class GroundMark extends Node2D:
+	var at := Vector2.ZERO
+	var half := 0.4
+
+	func _draw() -> void:
+		draw_rect(Rect2(at - Vector2(half, half), Vector2(half, half) * 2.0), Color(0.0, 1.0, 0.0))
+
+
+func _mark_centre(around: Vector2, reach: int) -> Variant:
+	await _close_notice()
+	await _frames(3)
+	await RenderingServer.frame_post_draw
+	var image := root.get_viewport().get_texture().get_image()
+	var total := Vector2.ZERO
+	var count := 0
+	for y in range(maxi(0, int(around.y) - reach), mini(image.get_height(), int(around.y) + reach)):
+		for x in range(maxi(0, int(around.x) - reach), mini(image.get_width(), int(around.x) + reach)):
+			var pixel := image.get_pixel(x, y)
+			if pixel.g > 0.7 and pixel.r < 0.35 and pixel.b < 0.35:
+				total += Vector2(x + 0.5, y + 0.5)
+				count += 1
+	return total / count if count >= 6 else null
+
+
+func _footprint(view: MapView, mark: GroundMark, around: Vector2, reach: int) -> Dictionary:
+	await _close_notice()
+	await _frames(3)
+	await RenderingServer.frame_post_draw
+	var image := root.get_viewport().get_texture().get_image()
+	var predicted := 0
+	var drawn := 0
+	var shared := 0
+	var predicted_sum := Vector2.ZERO
+	var drawn_sum := Vector2.ZERO
+	for y in range(maxi(0, int(around.y) - reach), mini(image.get_height(), int(around.y) + reach)):
+		for x in range(maxi(0, int(around.x) - reach), mini(image.get_width(), int(around.x) + reach)):
+			var spot := Vector2(x + 0.5, y + 0.5)
+			var world := view.screen_to_world(spot)
+			var inside := absf(world.x - mark.at.x) <= mark.half and absf(world.y - mark.at.y) <= mark.half
+			var pixel := image.get_pixel(x, y)
+			var green := pixel.g > 0.7 and pixel.r < 0.35 and pixel.b < 0.35
+			if inside:
+				predicted += 1
+				predicted_sum += spot
+			if green:
+				drawn += 1
+				drawn_sum += spot
+			if inside and green:
+				shared += 1
+	var union := predicted + drawn - shared
+	return {
+		"overlap": float(shared) / float(union) if union > 0 else 0.0,
+		"gap": (predicted_sum / predicted).distance_to(drawn_sum / drawn) if predicted > 0 and drawn > 0 else INF,
+		"predicted": predicted,
+		"drawn": drawn,
+	}
+
+
+func _settle_relief(view: MapView) -> void:
+	var globe := extras.globe
+	await _wait(0.3)
+	await _until(func() -> bool: return globe.relief.has_data and not globe.relief.busy(), 45.0)
+	await _wait(0.4)
+	view.call("_after_camera_move")
+	await _frames(3)
+
+
+func _terrain_checks() -> void:
+	var view: MapView = main.map_view
+	var globe := extras.globe
+	extras.apply_map_settings({"Globe": false, "Terrain": true})
+	view.fly_to_lonlat(6.0, 46.15, 7.0, 0.0)
+	view.bearing = 0.0
+	view.pitch = 50.0
+	view.call("_after_camera_move")
+	await _settle_relief(view)
+	_check(globe.relief_shown() and globe.relief.has_data and globe.active, "3D terrain is on by default and raises the map from the terrarium elevation tiles React uses (%d tiles)" % globe.relief.tiles.size())
+	var peak := GlobeView.world_of_lonlat(6.8652, 45.8326)
+	var peak_height := globe.height_at(peak)
+	_check(peak_height > 2000.0 * TerrainRelief.EXAGGERATION, "Mont Blanc stands on raised ground, at MapLibre's 15-times exaggeration (%.0f m from %.0f m of elevation)" % [peak_height, peak_height / TerrainRelief.EXAGGERATION])
+	var raised := view.world_to_screen(peak)
+	var plain := globe.world_to_screen_flat(peak)
+	_check(plain.y - raised.y > 20.0, "the tilted map lifts the mountain on screen (%.1f px above the sea-level plane)" % (plain.y - raised.y))
+	var mark := GroundMark.new()
+	mark.at = peak
+	mark.z_as_relative = false
+	mark.z_index = RenderingServer.CANVAS_ITEM_Z_MAX
+	view.add_child(mark)
+	var seen: Variant = await _mark_centre((raised + plain) * 0.5, int(raised.distance_to(plain) * 0.5) + 60)
+	_check(seen is Vector2 and (seen as Vector2).distance_to(raised) < (seen as Vector2).distance_to(plain) * 0.25, "the drawn map is raised with the surface, not left on the sea-level plane (%s, raised %s, plane %s)" % [str(seen), str(raised), str(plain)])
+	var footprint: Dictionary = await _footprint(view, mark, raised, 40)
+	_check(float(footprint["overlap"]) > 0.6 and float(footprint["gap"]) < 1.5, "the drawn map is draped over the raised surface where picking finds it (%.0f%% overlap, %.2f px apart, %d/%d px)" % [100.0 * float(footprint["overlap"]), float(footprint["gap"]), int(footprint["drawn"]), int(footprint["predicted"])])
+	await _shoot("terrain-1-alps")
+	var size := view.get_viewport_rect().size
+	var slope := -1
+	var slope_at := Vector2.ZERO
+	var best_gap := 0.0
+	for index in range(view.extras_region_count()):
+		var centroid := view.war_region_centroid(index)
+		var at := view.world_to_screen(centroid)
+		if at.x < 80.0 or at.y < 80.0 or at.x > size.x - 80.0 or at.y > size.y - 80.0:
+			continue
+		if view.baker.pick(centroid) != index:
+			continue
+		var gap := at.distance_to(globe.world_to_screen_flat(centroid))
+		if gap <= best_gap or view.baker.pick(globe.screen_to_world_flat(at)) == index:
+			continue
+		best_gap = gap
+		slope = index
+		slope_at = at
+	var clicked: Array[int] = []
+	var listen := func(index: int) -> void: clicked.append(index)
+	view.region_clicked.connect(listen)
+	if slope >= 0:
+		_button(view, slope_at, MOUSE_BUTTON_LEFT, true)
+		_button(view, slope_at, MOUSE_BUTTON_LEFT, false)
+		await _frames(1)
+	view.region_clicked.disconnect(listen)
+	_check(slope >= 0 and clicked.size() == 1 and clicked[0] == slope, "a click on a slope picks the region drawn there, as MapLibre's terrain picking does (%s, %.0f px off the plane, got %s)" % [view.region_name(slope), best_gap, str(clicked)])
+	var pointer := slope_at if slope >= 0 else size * 0.5 + Vector2(0.0, 120.0)
+	var grabbed := view.screen_to_world(pointer)
+	_button(view, pointer, MOUSE_BUTTON_LEFT, true)
+	for step in range(6):
+		await _frames(1)
+		pointer += Vector2(-25.0, 15.0)
+		_move(view, pointer, Vector2(-25.0, 15.0))
+	_button(view, pointer, MOUSE_BUTTON_LEFT, false)
+	extras.navigator.stop()
+	_check(view.world_to_screen(grabbed).distance_to(pointer) < 1.5, "a drag over the mountains keeps the grabbed slope under the pointer (%.2f px)" % view.world_to_screen(grabbed).distance_to(pointer))
+	var levels: Array[int] = []
+	view.pitch = 60.0
+	view.call("_after_camera_move")
+	await _settle_relief(view)
+	for level in range(TerrainRelief.LEVELS):
+		if globe.relief.level_sizes[level] != Vector2i.ONE:
+			levels.append(level)
+	_check(levels.size() >= 2 and levels.has(TerrainRelief.SOURCE_MAX_ZOOM), "near ground uses the detailed elevation tiles and distant ground coarser ones, as MapLibre's terrain tile cover does (levels %s)" % str(levels))
+	view.pitch = 50.0
+	view.call("_after_camera_move")
+	await _frames(2)
+	extras.apply_map_settings({"Terrain": false})
+	await _frames(1)
+	raised = view.world_to_screen(peak)
+	plain = globe.world_to_screen_flat(peak)
+	var flat_seen: Variant = await _mark_centre(plain, 80)
+	_check(not globe.relief_shown() and raised.distance_to(plain) < 0.01 and flat_seen is Vector2 and (flat_seen as Vector2).distance_to(plain) < 3.0, "switching 3D Terrain off flattens the map at once (%s, %s)" % [str(flat_seen), str(plain)])
+	await _shoot("terrain-2-off")
+	view.pitch = 0.0
+	view.bearing = 0.0
+	view.call("_after_camera_move")
+	await _frames(2)
+	_check(globe.tilted() or not globe.active, "a flat-facing map with terrain off draws straight, without the projector")
+	extras.apply_map_settings({"Terrain": true})
+	view.pitch = 0.0
+	view.bearing = 0.0
+	view.call("_after_camera_move")
+	await _settle_relief(view)
+	var shifted := view.world_to_screen(peak).distance_to(globe.world_to_screen_flat(peak))
+	_check(globe.active and shifted > 1.0, "the terrain comes back and raises a north-up, flat-facing map too, as MapLibre's terrain does (%.1f px)" % shifted)
+	mark.queue_free()
+	await _frames(1)
 
 
 func _finish(code: int) -> void:

@@ -60,9 +60,60 @@ uniform vec3 sky_color = vec3(0.533333, 0.776471, 0.988235);
 uniform vec3 horizon_color = vec3(1.0, 1.0, 1.0);
 uniform float horizon_y = -100000.0;
 uniform float sky_horizon_px = 360.0;
+uniform bool relief_on = false;
+uniform sampler2D dem_0 : filter_linear, repeat_disable;
+uniform sampler2D dem_1 : filter_linear, repeat_disable;
+uniform sampler2D dem_2 : filter_linear, repeat_disable;
+uniform sampler2D dem_3 : filter_linear, repeat_disable;
+uniform sampler2D dem_4 : filter_linear, repeat_disable;
+uniform sampler2D dem_5 : filter_linear, repeat_disable;
+uniform vec4 dem_rect[6];
+uniform sampler2D lod_map : filter_nearest, repeat_disable;
+uniform vec4 lod_rect = vec4(0.0, 0.0, 1.0, 0.0);
+uniform ivec2 lod_size = ivec2(0, 0);
+uniform float relief_scale = 15.0;
+uniform float relief_low = 0.0;
+uniform float relief_high = 0.0;
+uniform float relief_step = 1.0;
+uniform float centre_elevation = 0.0;
+uniform float px_per_meter = 0.0;
 
 const float PI_F = 3.14159265358979;
 const float MERC_LIMIT = 85.0511287798066;
+const float EARTH_R = 6371008.8;
+
+float dem_at(sampler2D dem, vec4 rect, vec2 w) {
+	vec2 size = vec2(textureSize(dem, 0));
+	return textureLod(dem, ((w - rect.xy) / rect.z + 0.5) / size, 0.0).r;
+}
+
+float relief_at(vec2 w) {
+	vec2 local = (w - lod_rect.xy) / lod_rect.z;
+	if (local.x < 0.0 || local.x >= float(lod_size.x)) {
+		float middle = lod_rect.x + float(lod_size.x) * lod_rect.z * 0.5;
+		w.x += world_width * floor((middle - w.x) / world_width + 0.5);
+		local = (w - lod_rect.xy) / lod_rect.z;
+	}
+	if (local.x < 0.0 || local.y < 0.0 || local.x >= float(lod_size.x) || local.y >= float(lod_size.y)) {
+		return 0.0;
+	}
+	int level = int(texelFetch(lod_map, ivec2(local), 0).r * 255.0 + 0.5);
+	float e = 0.0;
+	if (level == 0) {
+		e = dem_at(dem_0, dem_rect[0], w);
+	} else if (level == 1) {
+		e = dem_at(dem_1, dem_rect[1], w);
+	} else if (level == 2) {
+		e = dem_at(dem_2, dem_rect[2], w);
+	} else if (level == 3) {
+		e = dem_at(dem_3, dem_rect[3], w);
+	} else if (level == 4) {
+		e = dem_at(dem_4, dem_rect[4], w);
+	} else if (level == 5) {
+		e = dem_at(dem_5, dem_rect[5], w);
+	}
+	return e * relief_scale;
+}
 
 vec2 world_of(vec3 p) {
 	float lon = atan(p.x, p.z);
@@ -140,6 +191,161 @@ vec2 newton_step(vec2 w, vec2 error) {
 	return (flat_right * da + flat_up * dv) / px_per_world;
 }
 
+vec2 ray_ground(vec2 px, float t) {
+	float sx = px.x - screen_size.x * 0.5;
+	float sy = screen_size.y * 0.5 - px.y;
+	float a = t * sx;
+	float v = t * (sy * pitch_cos + focal * pitch_sin) - focal * pitch_sin;
+	return cam_world + (flat_right * a + flat_up * v) / px_per_world;
+}
+
+float ray_lift(vec2 px, float t) {
+	float sy = screen_size.y * 0.5 - px.y;
+	return t * (sy * pitch_sin - focal * pitch_cos) + focal * pitch_cos;
+}
+
+float ground_gap(vec2 px, float t) {
+	return ray_lift(px, t) - (relief_at(ray_ground(px, t)) - centre_elevation) * px_per_meter;
+}
+
+bool relief_flat(vec2 px, out vec2 hit) {
+	hit = vec2(0.0);
+	float sy = screen_size.y * 0.5 - px.y;
+	float denominator = focal * pitch_cos - sy * pitch_sin;
+	if (denominator <= 1e-3) {
+		return false;
+	}
+	float top = (relief_high - centre_elevation) * px_per_meter;
+	float bottom = (relief_low - centre_elevation) * px_per_meter;
+	float t0 = max((focal * pitch_cos - top) / denominator, 0.0);
+	float t1 = (focal * pitch_cos - bottom) / denominator;
+	if (t1 <= t0) {
+		hit = ray_ground(px, t1);
+		return true;
+	}
+	float span = distance(ray_ground(px, t0), ray_ground(px, t1)) / max(relief_step, 1e-6);
+	int steps = int(clamp(ceil(span), 1.0, 64.0));
+	float before_t = t0;
+	float before_f = ground_gap(px, t0);
+	if (before_f <= 0.0) {
+		hit = ray_ground(px, t0);
+		return true;
+	}
+	for (int i = 1; i <= 64; i++) {
+		if (i > steps) {
+			break;
+		}
+		float t = mix(t0, t1, float(i) / float(steps));
+		float f = ground_gap(px, t);
+		if (f <= 0.0) {
+			float lo = before_t;
+			float hi = t;
+			float f_lo = before_f;
+			float f_hi = f;
+			for (int k = 0; k < 5; k++) {
+				float mid = (lo + hi) * 0.5;
+				float f_mid = ground_gap(px, mid);
+				if (f_mid > 0.0) {
+					lo = mid;
+					f_lo = f_mid;
+				} else {
+					hi = mid;
+					f_hi = f_mid;
+				}
+			}
+			hit = ray_ground(px, lo + (hi - lo) * clamp(f_lo / max(f_lo - f_hi, 1e-6), 0.0, 1.0));
+			return true;
+		}
+		before_t = t;
+		before_f = f;
+	}
+	hit = ray_ground(px, t1);
+	return true;
+}
+
+vec2 near_world(vec2 w) {
+	w.x += world_width * floor((cam_world.x - w.x) / world_width + 0.5);
+	return w;
+}
+
+float shell_gap(vec3 p) {
+	return length(p) - 1.0 - relief_at(near_world(world_of(normalize(p)))) / EARTH_R;
+}
+
+bool relief_globe(vec3 origin, vec3 dir, out vec3 point) {
+	point = vec3(0.0);
+	float outer = 1.0 + max(relief_high, 0.0) / EARTH_R;
+	float inner = 1.0 + min(relief_low, 0.0) / EARTH_R;
+	float b = dot(origin, dir);
+	float c_out = dot(origin, origin) - outer * outer;
+	float disc_out = b * b - c_out;
+	if (disc_out < 0.0) {
+		return false;
+	}
+	float root = sqrt(disc_out);
+	float t0 = max(-b - root, 0.0);
+	float t1 = -b + root;
+	float c_in = dot(origin, origin) - inner * inner;
+	float disc_in = b * b - c_in;
+	if (disc_in >= 0.0 && -b - sqrt(disc_in) > t0) {
+		t1 = -b - sqrt(disc_in);
+	}
+	if (t1 <= t0) {
+		return false;
+	}
+	float angle = acos(clamp(dot(normalize(origin + dir * t0), normalize(origin + dir * t1)), -1.0, 1.0));
+	float texel_angle = max(relief_step, 1e-6) / world_width * 2.0 * PI_F;
+	int steps = int(clamp(ceil(angle / texel_angle), 1.0, 48.0));
+	float before_t = t0;
+	float before_f = shell_gap(origin + dir * t0);
+	if (before_f <= 0.0) {
+		point = origin + dir * t0;
+		return true;
+	}
+	for (int i = 1; i <= 48; i++) {
+		if (i > steps) {
+			break;
+		}
+		float t = mix(t0, t1, float(i) / float(steps));
+		float f = shell_gap(origin + dir * t);
+		if (f <= 0.0) {
+			float lo = before_t;
+			float hi = t;
+			float f_lo = before_f;
+			float f_hi = f;
+			for (int k = 0; k < 5; k++) {
+				float mid = (lo + hi) * 0.5;
+				float f_mid = shell_gap(origin + dir * mid);
+				if (f_mid > 0.0) {
+					lo = mid;
+					f_lo = f_mid;
+				} else {
+					hi = mid;
+					f_hi = f_mid;
+				}
+			}
+			point = origin + dir * (lo + (hi - lo) * clamp(f_lo / max(f_lo - f_hi, 1e-9), 0.0, 1.0));
+			return true;
+		}
+		before_t = t;
+		before_f = f;
+	}
+	return false;
+}
+
+vec2 project_mix_relief(vec2 w) {
+	float e = relief_at(w);
+	float lift = (e - centre_elevation) * px_per_meter;
+	vec2 d = wrapped_delta(w);
+	float a = dot(d, flat_right);
+	float v = dot(d, flat_up);
+	vec3 flat_c = vec3(a, v * pitch_cos + lift * pitch_sin, focal + v * pitch_sin - lift * pitch_cos);
+	vec3 q = dir_of_world(w) * (1.0 + e / EARTH_R) - cam_pos;
+	vec3 globe_c = vec3(dot(q, cam_right), dot(q, cam_up), dot(q, cam_fwd)) * radius_px;
+	vec3 c = mix(flat_c, globe_c, globeness);
+	return vec2(screen_size.x * 0.5 + focal * c.x / c.z, screen_size.y * 0.5 - focal * c.y / c.z);
+}
+
 void fragment() {
 	vec2 px = UV * screen_size;
 	vec3 dir = normalize(cam_fwd * focal + cam_right * (px.x - screen_size.x * 0.5) + cam_up * (screen_size.y * 0.5 - px.y));
@@ -150,7 +356,12 @@ void fragment() {
 	bool hit = disc_rtg >= 0.0 && b < 0.0;
 	vec4 base = vec4(0.0);
 	if (globeness >= 0.999) {
-		if (hit) {
+		if (relief_on) {
+			vec3 lifted;
+			if (relief_globe(origin, dir, lifted)) {
+				base = vec4(sample_map(world_of(normalize(lifted))), 1.0);
+			}
+		} else if (hit) {
 			float c_term = dot(origin, origin) - 1.0;
 			float q = -b + sqrt(disc_rtg);
 			float t = min(c_term / q, q);
@@ -159,6 +370,12 @@ void fragment() {
 		}
 	} else {
 		vec2 w = flat_unproject(px);
+		if (relief_on) {
+			vec2 lifted;
+			if (relief_flat(px, lifted)) {
+				w = lifted;
+			}
+		}
 		if (globeness > 0.001) {
 			if (hit) {
 				float c_term = dot(origin, origin) - 1.0;
@@ -169,7 +386,7 @@ void fragment() {
 				w = mix(w, g, globeness);
 			}
 			for (int i = 0; i < 4; i++) {
-				vec2 s = project_mix(w);
+				vec2 s = relief_on ? project_mix_relief(w) : project_mix(w);
 				w += newton_step(w, px - s);
 			}
 		}
@@ -271,7 +488,15 @@ var enabled := false
 var active := false
 var idle_rotation_disabled := false
 var rotation_paused := false
-var terrain_on := false
+var terrain_on := false:
+	set(value):
+		if terrain_on == value:
+			return
+		terrain_on = value
+		_terrain_changed()
+var relief: TerrainRelief
+var _relief_dirty := false
+var _frozen_height := NAN
 var _flat_viewport: SubViewport
 var _flat_camera: Camera2D
 var _layer: CanvasLayer
@@ -340,7 +565,82 @@ func setup(owner_extras: Node, view: MapView) -> void:
 	_light_layer.add_child(_light)
 	labels = GlobeLabels.new()
 	labels.setup(view)
+	relief = TerrainRelief.new()
+	add_child(relief)
+	relief.setup(view, self)
+	relief.changed.connect(_on_relief_changed)
 	_refresh_sun(true)
+
+
+func _relief_wanted() -> bool:
+	if not terrain_on or map_view == null:
+		return false
+	if map_view.basemap and bool(map_view.basemap.get("_offline")):
+		return false
+	return true
+
+
+func relief_shown() -> bool:
+	return relief != null and relief.enabled
+
+
+func relief_revision() -> int:
+	return relief.revision if relief else 0
+
+
+func _terrain_changed() -> void:
+	if map_view == null or relief == null:
+		return
+	_sync_active()
+	if map_view.extras_ready():
+		map_view.call("_after_camera_move")
+
+
+func relief_tile_arrived() -> void:
+	_relief_dirty = true
+
+
+func gesture_active() -> bool:
+	if held:
+		return true
+	var navigator: Variant = extras.get("navigator") if extras else null
+	return navigator is MapNavigator and (navigator as MapNavigator).busy()
+
+
+func _settle_elevation() -> void:
+	if map_view == null or not active:
+		_frozen_height = NAN
+		return
+	var frame := _compute_frame()
+	_frozen_height = NAN
+	if not bool(frame["relief"]) or float(frame["g"]) > 0.0:
+		map_view.call("_after_camera_move")
+		return
+	var size: Vector2 = frame["size"]
+	var found: Variant = _relief_pick(frame, size * 0.5)
+	var pitch: float = frame["pitch"]
+	if not (found is Vector2) or cos(pitch) < 0.001:
+		map_view.call("_after_camera_move")
+		return
+	var centre: Vector2 = found
+	var focal: float = frame["focal"]
+	var per_meter: float = frame["ppm"]
+	var altitude := float(frame["centre_h"]) + focal * cos(pitch) / per_meter
+	var distance := (altitude - relief.elevation_at(centre)) / cos(pitch)
+	if distance <= 0.0:
+		map_view.call("_after_camera_move")
+		return
+	var lat := deg_to_rad(clampf(lonlat_of_world(centre).y, -MAX_VALID_LATITUDE, MAX_VALID_LATITUDE))
+	var limits := zoom_limits()
+	var level := clampf(log(8.0 * (focal / distance) * TAU * EARTH_RADIUS_M * cos(lat) / MapView.WORLD_WIDTH) / log(2.0), limits.x, limits.y)
+	map_view.camera.position = centre
+	map_view.camera.zoom = Vector2.ONE * pow(2.0, level) / 8.0
+	map_view.call("_after_camera_move")
+
+
+func _on_relief_changed() -> void:
+	if map_view and map_view.extras_ready():
+		map_view.call("_after_camera_move")
 
 
 static func _shader_material(code: String) -> ShaderMaterial:
@@ -425,7 +725,9 @@ func mark_interaction() -> void:
 
 
 func _sync_active() -> void:
-	var want := (enabled or tilted()) and map_view != null and map_view.visible and map_view.extras_ready()
+	if relief:
+		relief.set_enabled(_relief_wanted())
+	var want := (enabled or tilted() or relief_shown()) and map_view != null and map_view.visible and map_view.extras_ready()
 	if want != active:
 		active = want
 		map_view.globe_on = active
@@ -473,6 +775,13 @@ func _process(_delta: float) -> void:
 	if not map_view:
 		return
 	_sync_active()
+	if _relief_dirty and active and relief_shown() and not _frame.is_empty():
+		_relief_dirty = false
+		relief.update(_frame, _flat.get("rect", Rect2()))
+	if not is_nan(_frozen_height) and not gesture_active():
+		_settle_elevation()
+	if relief and relief.has_held() and not gesture_active():
+		relief.release_held()
 	if not active or not enabled:
 		return
 	var now := Time.get_ticks_msec()
@@ -645,7 +954,23 @@ func _compute_frame() -> Dictionary:
 	var up := ahead * cos(pitch) + center * sin(pitch)
 	var pos := center * (1.0 + cos(pitch) * focal / radius) - ahead * (sin(pitch) * focal / radius)
 	var g := clampf(12.0 - zoom, 0.0, 1.0) if enabled else 0.0
+	var lifted := relief != null and relief.enabled and relief.has_data
+	var per_meter := MapView.WORLD_WIDTH * camera.zoom.x / (TAU * EARTH_RADIUS_M * cos(lat_r)) if lifted else 0.0
+	var centre_h := 0.0
+	if lifted:
+		if is_nan(_frozen_height) and gesture_active():
+			_frozen_height = relief.elevation_at(camera.position)
+		centre_h = _frozen_height if not is_nan(_frozen_height) else relief.elevation_at(camera.position)
+	var relief_low := minf(relief.low, 0.0) if lifted else 0.0
+	var relief_high := maxf(relief.high, 0.0) if lifted else 0.0
 	return {
+		"relief": lifted,
+		"ppm": per_meter,
+		"centre_h": centre_h,
+		"relief_low": relief_low,
+		"relief_high": relief_high,
+		"lift_low": (relief_low - centre_h) * per_meter,
+		"lift_high": (relief_high - centre_h) * per_meter,
 		"size": size,
 		"lon": lon_c,
 		"lat": lat_c,
@@ -710,18 +1035,220 @@ func _wrapped_delta(frame: Dictionary, point: Vector2) -> Vector2:
 	return delta * float(frame["px_per_world"])
 
 
-func _flat_clip(frame: Dictionary, point: Vector2) -> Vector3:
+func _flat_clip(frame: Dictionary, point: Vector2, lift := 0.0) -> Vector3:
 	var delta := _wrapped_delta(frame, point)
 	var a := delta.dot(frame["flat_right"])
 	var v := delta.dot(frame["flat_up"])
 	var pitch: float = frame["pitch"]
-	return Vector3(a, v * cos(pitch), float(frame["focal"]) + v * sin(pitch))
+	return Vector3(a, v * cos(pitch) + lift * sin(pitch), float(frame["focal"]) + v * sin(pitch) - lift * cos(pitch))
 
 
-func _globe_clip(frame: Dictionary, point: Vector2) -> Vector3:
+func _globe_clip(frame: Dictionary, point: Vector2, height := 0.0) -> Vector3:
 	var lonlat := lonlat_of_world(point)
-	var q := direction_of(lonlat.x, lonlat.y) - (frame["pos"] as Vector3)
+	var q := direction_of(lonlat.x, lonlat.y) * (1.0 + height / EARTH_RADIUS_M) - (frame["pos"] as Vector3)
 	return Vector3(q.dot(frame["right"]), q.dot(frame["up"]), q.dot(frame["fwd"])) * float(frame["radius"])
+
+
+func _height(frame: Dictionary, point: Vector2) -> float:
+	if not bool(frame.get("relief", false)):
+		return 0.0
+	var near := point
+	near.x += MapView.WORLD_WIDTH * roundf(((frame["cam_world"] as Vector2).x - point.x) / MapView.WORLD_WIDTH)
+	return relief.elevation_at(near)
+
+
+func _lift(frame: Dictionary, height: float) -> float:
+	return (height - float(frame.get("centre_h", 0.0))) * float(frame.get("ppm", 0.0))
+
+
+func _lifted_clip(frame: Dictionary, point: Vector2, height: float) -> Vector3:
+	var g: float = frame["g"]
+	var clip := _flat_clip(frame, point, _lift(frame, height))
+	if g > 0.0:
+		clip = clip.lerp(_globe_clip(frame, point, height), g)
+	return clip
+
+
+func _project_lifted(frame: Dictionary, point: Vector2, height: float) -> Vector2:
+	var clip := _lifted_clip(frame, point, height)
+	if clip.z <= 0.0:
+		return Vector2(-100000, -100000)
+	var size: Vector2 = frame["size"]
+	var focal: float = frame["focal"]
+	return Vector2(size.x * 0.5 + focal * clip.x / clip.z, size.y * 0.5 - focal * clip.y / clip.z)
+
+
+func unproject_lifted(frame: Dictionary, screen: Vector2, lift: float) -> Vector2:
+	var size: Vector2 = frame["size"]
+	var focal: float = frame["focal"]
+	var pitch: float = frame["pitch"]
+	var sx := screen.x - size.x * 0.5
+	var sy := size.y * 0.5 - screen.y
+	var denominator := maxf(focal * cos(pitch) - sy * sin(pitch), 1e-3)
+	var t := maxf((focal * cos(pitch) - lift) / denominator, 0.0)
+	var a := t * sx
+	var v := t * (sy * cos(pitch) + focal * sin(pitch)) - focal * sin(pitch)
+	return (frame["cam_world"] as Vector2) + ((frame["flat_right"] as Vector2) * a + (frame["flat_up"] as Vector2) * v) / float(frame["px_per_world"])
+
+
+func _ray_ground(frame: Dictionary, sx: float, sy: float, t: float) -> Vector2:
+	var focal: float = frame["focal"]
+	var pitch: float = frame["pitch"]
+	var a := t * sx
+	var v := t * (sy * cos(pitch) + focal * sin(pitch)) - focal * sin(pitch)
+	return (frame["cam_world"] as Vector2) + ((frame["flat_right"] as Vector2) * a + (frame["flat_up"] as Vector2) * v) / float(frame["px_per_world"])
+
+
+func _ground_gap(frame: Dictionary, sx: float, sy: float, t: float) -> float:
+	var focal: float = frame["focal"]
+	var pitch: float = frame["pitch"]
+	var lift := t * (sy * sin(pitch) - focal * cos(pitch)) + focal * cos(pitch)
+	return lift - _lift(frame, relief.elevation_at(_ray_ground(frame, sx, sy, t)))
+
+
+func _relief_flat(frame: Dictionary, screen: Vector2) -> Variant:
+	var size: Vector2 = frame["size"]
+	var focal: float = frame["focal"]
+	var pitch: float = frame["pitch"]
+	var sx := screen.x - size.x * 0.5
+	var sy := size.y * 0.5 - screen.y
+	var denominator := focal * cos(pitch) - sy * sin(pitch)
+	if denominator <= 1e-3:
+		return null
+	var t0 := maxf((focal * cos(pitch) - float(frame["lift_high"])) / denominator, 0.0)
+	var t1 := (focal * cos(pitch) - float(frame["lift_low"])) / denominator
+	if t1 <= t0:
+		return _ray_ground(frame, sx, sy, t1)
+	var span := _ray_ground(frame, sx, sy, t0).distance_to(_ray_ground(frame, sx, sy, t1)) / maxf(relief.step, 1e-6)
+	var steps := clampi(ceili(span), 1, 64)
+	var before_t := t0
+	var before_f := _ground_gap(frame, sx, sy, t0)
+	if before_f <= 0.0:
+		return _ray_ground(frame, sx, sy, t0)
+	for index in range(1, steps + 1):
+		var t := lerpf(t0, t1, float(index) / float(steps))
+		var f := _ground_gap(frame, sx, sy, t)
+		if f <= 0.0:
+			var lo := before_t
+			var hi := t
+			var f_lo := before_f
+			var f_hi := f
+			for _k in range(5):
+				var mid := (lo + hi) * 0.5
+				var f_mid := _ground_gap(frame, sx, sy, mid)
+				if f_mid > 0.0:
+					lo = mid
+					f_lo = f_mid
+				else:
+					hi = mid
+					f_hi = f_mid
+			return _ray_ground(frame, sx, sy, lo + (hi - lo) * clampf(f_lo / maxf(f_lo - f_hi, 1e-6), 0.0, 1.0))
+		before_t = t
+		before_f = f
+	return _ray_ground(frame, sx, sy, t1)
+
+
+func _shell_gap(frame: Dictionary, p: Vector3) -> float:
+	var lonlat := lonlat_of_dir(p.normalized())
+	var world := world_of_lonlat(lonlat.x, lonlat.y)
+	return p.length() - 1.0 - _height(frame, world) / EARTH_RADIUS_M
+
+
+func _relief_globe(frame: Dictionary, screen: Vector2) -> Variant:
+	var origin: Vector3 = frame["pos"]
+	var dir := _ray(frame, screen)
+	var outer := 1.0 + float(frame["relief_high"]) / EARTH_RADIUS_M
+	var inner := 1.0 + float(frame["relief_low"]) / EARTH_RADIUS_M
+	var b := origin.dot(dir)
+	var disc_out := b * b - (origin.dot(origin) - outer * outer)
+	if disc_out < 0.0:
+		return null
+	var root := sqrt(disc_out)
+	var t0 := maxf(-b - root, 0.0)
+	var t1 := -b + root
+	var disc_in := b * b - (origin.dot(origin) - inner * inner)
+	if disc_in >= 0.0 and -b - sqrt(disc_in) > t0:
+		t1 = -b - sqrt(disc_in)
+	if t1 <= t0:
+		return null
+	var angle := acos(clampf((origin + dir * t0).normalized().dot((origin + dir * t1).normalized()), -1.0, 1.0))
+	var texel_angle := maxf(relief.step, 1e-6) / MapView.WORLD_WIDTH * TAU
+	var steps := clampi(ceili(angle / texel_angle), 1, 48)
+	var before_t := t0
+	var before_f := _shell_gap(frame, origin + dir * t0)
+	if before_f <= 0.0:
+		return origin + dir * t0
+	for index in range(1, steps + 1):
+		var t := lerpf(t0, t1, float(index) / float(steps))
+		var f := _shell_gap(frame, origin + dir * t)
+		if f <= 0.0:
+			var lo := before_t
+			var hi := t
+			var f_lo := before_f
+			var f_hi := f
+			for _k in range(5):
+				var mid := (lo + hi) * 0.5
+				var f_mid := _shell_gap(frame, origin + dir * mid)
+				if f_mid > 0.0:
+					lo = mid
+					f_lo = f_mid
+				else:
+					hi = mid
+					f_hi = f_mid
+			return origin + dir * (lo + (hi - lo) * clampf(f_lo / maxf(f_lo - f_hi, 1e-9), 0.0, 1.0))
+		before_t = t
+		before_f = f
+	return null
+
+
+func _relief_pick(frame: Dictionary, screen: Vector2) -> Variant:
+	var g: float = frame["g"]
+	if g >= 0.999:
+		var lifted: Variant = _relief_globe(frame, screen)
+		if lifted == null:
+			return null
+		var lonlat := lonlat_of_dir((lifted as Vector3).normalized())
+		var on_globe := world_of_lonlat(lonlat.x, lonlat.y)
+		on_globe.x += MapView.WORLD_WIDTH * roundf(((frame["cam_world"] as Vector2).x - on_globe.x) / MapView.WORLD_WIDTH)
+		return on_globe
+	var found: Variant = _relief_flat(frame, screen)
+	if found == null:
+		return null
+	var world: Vector2 = found
+	if g > 0.0:
+		var hit := _hit(frame, screen)
+		if bool(hit["hit"]):
+			var lonlat := lonlat_of_dir(hit["point"])
+			var on_globe := world_of_lonlat(lonlat.x, lonlat.y)
+			on_globe.x += MapView.WORLD_WIDTH * roundf((world.x - on_globe.x) / MapView.WORLD_WIDTH)
+			world = world.lerp(on_globe, g)
+		for _step in range(4):
+			var s := _project_lifted(frame, world, _height(frame, world))
+			world += _newton_step(frame, world, screen - s)
+	return world
+
+
+func pick_world(screen: Vector2) -> Vector2:
+	var frame := _compute_frame()
+	if bool(frame["relief"]):
+		var found: Variant = _relief_pick(frame, screen)
+		if found is Vector2:
+			return found
+	return _flat_unproject(frame, screen)
+
+
+func pin_world(world: Vector2, screen: Vector2) -> void:
+	var camera := map_view.camera
+	for _round in range(3):
+		var frame := _compute_frame()
+		var lifted := bool(frame["relief"])
+		var lift := _lift(frame, _height(frame, world)) if lifted else 0.0
+		var under := unproject_lifted(frame, screen, lift) if lifted else _flat_unproject(frame, screen)
+		var shift := world - under
+		shift.x -= MapView.WORLD_WIDTH * roundf(shift.x / MapView.WORLD_WIDTH)
+		camera.position += shift
+		if not lifted or shift.length() * camera.zoom.x < 0.01:
+			break
 
 
 func _project_world(frame: Dictionary, point: Vector2) -> Vector2:
@@ -776,7 +1303,57 @@ func world_to_screen(point: Vector2) -> Vector2:
 		var lonlat := lonlat_of_world(point)
 		if not _visible_on_sphere(frame, direction_of(lonlat.x, lonlat.y)):
 			return Vector2(-100000, -100000)
+	if bool(frame.get("relief", false)):
+		return _project_lifted(frame, point, _height(frame, point))
 	return _project_world(frame, point)
+
+
+func world_to_screen_flat(point: Vector2) -> Vector2:
+	var frame := current_frame()
+	if float(frame["g"]) > 0.0:
+		var lonlat := lonlat_of_world(point)
+		if not _visible_on_sphere(frame, direction_of(lonlat.x, lonlat.y)):
+			return Vector2(-100000, -100000)
+	return _project_world(frame, point)
+
+
+func height_at(point: Vector2) -> float:
+	return _height(current_frame(), point)
+
+
+func anchor_visibility(point: Vector2) -> float:
+	var frame := current_frame()
+	if not bool(frame.get("relief", false)) or float(frame["g"]) > 0.0:
+		return 1.0
+	var pitch: float = frame["pitch"]
+	if pitch < 0.001:
+		return 1.0
+	var focal: float = frame["focal"]
+	var px_per_world: float = frame["px_per_world"]
+	var near := point
+	near.x += MapView.WORLD_WIDTH * roundf(((frame["cam_world"] as Vector2).x - point.x) / MapView.WORLD_WIDTH)
+	var anchor_lift := _lift(frame, relief.elevation_at(near))
+	var top := float(frame["lift_high"])
+	var camera_lift := focal * cos(pitch)
+	if anchor_lift >= top or camera_lift <= anchor_lift:
+		return 1.0
+	var camera_ground := (frame["cam_world"] as Vector2) - (frame["flat_up"] as Vector2) * (focal * sin(pitch) / px_per_world)
+	var toward := camera_ground - near
+	var length := toward.length()
+	if length <= 0.000001:
+		return 1.0
+	var reach := minf((top - anchor_lift) / (camera_lift - anchor_lift), 1.0)
+	var start := minf(1.5 * relief.step / length, reach)
+	if start >= reach:
+		return 1.0
+	var steps := clampi(ceili(length * (reach - start) / relief.step), 1, 32)
+	var hidden := 0.0
+	for index in range(1, steps + 1):
+		var along := lerpf(start, reach, float(index) / float(steps))
+		var line := anchor_lift + (camera_lift - anchor_lift) * along
+		var ground := _lift(frame, relief.elevation_at(near + toward * along))
+		hidden = maxf(hidden, ground - line)
+	return 1.0 - clampf(hidden / 4.0, 0.0, 1.0)
 
 
 func screen_hits_globe(screen: Vector2) -> bool:
@@ -787,6 +1364,16 @@ func screen_hits_globe(screen: Vector2) -> bool:
 
 
 func screen_to_world(screen: Vector2) -> Vector2:
+	var frame := current_frame()
+	if bool(frame.get("relief", false)):
+		var found: Variant = _relief_pick(frame, screen)
+		if found is Vector2:
+			var world: Vector2 = found
+			return Vector2(fposmod(world.x, MapView.WORLD_WIDTH), clampf(world.y, 0.0, MapView.WORLD_WIDTH))
+	return screen_to_world_flat(screen)
+
+
+func screen_to_world_flat(screen: Vector2) -> Vector2:
 	var frame := current_frame()
 	var g: float = frame["g"]
 	var world := _flat_unproject(frame, screen)
@@ -814,6 +1401,10 @@ func frame_at(point: Vector2) -> Transform2D:
 	var scale: float = frame["px_per_world"]
 	var origin := world_to_screen(point)
 	var step := 1.0 / scale
+	if bool(frame.get("relief", false)):
+		var height := _height(frame, point)
+		var base := _project_lifted(frame, point, height)
+		return Transform2D(_project_lifted(frame, point + Vector2(step, 0), height) - base, _project_lifted(frame, point + Vector2(0, step), height) - base, origin)
 	var along_x := _project_world(frame, point + Vector2(step, 0)) - _project_world(frame, point)
 	var along_y := _project_world(frame, point + Vector2(0, step)) - _project_world(frame, point)
 	return Transform2D(along_x, along_y, origin)
@@ -863,10 +1454,16 @@ func render_view() -> Array:
 func _plane_view(frame: Dictionary, area: Rect2, texture: Vector2, cap: float) -> Dictionary:
 	var low := Vector2(INF, INF)
 	var high := Vector2(-INF, -INF)
+	var lifted := bool(frame.get("relief", false))
 	for corner in [area.position, Vector2(area.end.x, area.position.y), area.end, Vector2(area.position.x, area.end.y)]:
 		var world := _flat_unproject(frame, corner)
 		low = low.min(world)
 		high = high.max(world)
+		if lifted:
+			for lift: float in [float(frame["lift_low"]), float(frame["lift_high"])]:
+				var raised := unproject_lifted(frame, corner, lift)
+				low = low.min(raised)
+				high = high.max(raised)
 	var span := (high - low) * (1.0 + LAT_MARGIN * 2.0) + Vector2(0.001, 0.001)
 	var center := (low + high) * 0.5
 	var density := minf(cap, minf(texture.x / span.x, texture.y / span.y))
@@ -918,7 +1515,7 @@ func _flat_view(frame: Dictionary, texture: Vector2) -> Dictionary:
 					continue
 				lonlat = lonlat_of_dir(hit["point"])
 			else:
-				lonlat = lonlat_of_world(screen_to_world(screen))
+				lonlat = lonlat_of_world(screen_to_world_flat(screen))
 			var dlon := difference_of_angles(lon_c, lonlat.x)
 			min_dlon = minf(min_dlon, dlon)
 			max_dlon = maxf(max_dlon, dlon)
@@ -1046,10 +1643,38 @@ func after_camera_move() -> void:
 	_material.set_shader_parameter("wrap_world", wrapped)
 	_material.set_shader_parameter("horizon_y", size.y * 0.5 - mercator_horizon(float(frame["focal"]), rad_to_deg(pitch)))
 	_material.set_shader_parameter("sky_horizon_px", SKY_HORIZON_BLEND * size.y * 0.5)
+	_apply_relief(frame)
 	_space.color = Color.BLACK if enabled else FLAT_SPACE
 	labels.sync(rect)
 	_stars.queue_redraw()
 	_place_sun(frame)
+
+
+func _apply_relief(frame: Dictionary) -> void:
+	if relief == null:
+		return
+	if relief.enabled:
+		relief.update(frame, _flat.get("rect", Rect2()))
+	var lifted := bool(frame.get("relief", false)) and relief.lod_texture != null
+	_material.set_shader_parameter("relief_on", lifted)
+	if not lifted:
+		return
+	var rects := PackedVector4Array()
+	for level in range(TerrainRelief.LEVELS):
+		var rect := relief.level_rects[level]
+		var size := relief.level_sizes[level]
+		rects.append(Vector4(rect.position.x, rect.position.y, rect.size.x / float(size.x), 0.0))
+		_material.set_shader_parameter("dem_%d" % level, relief.texture_for(level))
+	_material.set_shader_parameter("dem_rect", rects)
+	_material.set_shader_parameter("lod_map", relief.lod_texture)
+	_material.set_shader_parameter("lod_rect", Vector4(relief.lod_rect.position.x, relief.lod_rect.position.y, relief.lod_cell, 0.0))
+	_material.set_shader_parameter("lod_size", relief.lod_size)
+	_material.set_shader_parameter("relief_scale", TerrainRelief.EXAGGERATION)
+	_material.set_shader_parameter("relief_low", frame["relief_low"])
+	_material.set_shader_parameter("relief_high", frame["relief_high"])
+	_material.set_shader_parameter("relief_step", relief.step)
+	_material.set_shader_parameter("centre_elevation", frame["centre_h"])
+	_material.set_shader_parameter("px_per_meter", frame["ppm"])
 
 
 func _place_sun(frame: Dictionary) -> void:
@@ -1198,7 +1823,7 @@ func _globe_controls() -> bool:
 	return enabled and globeness() > 0.0
 
 
-func pan_by(delta: Vector2, around := Vector2(-1.0, -1.0)) -> void:
+func pan_by(delta: Vector2, around := Vector2(-1.0, -1.0), grabbed_place := false) -> void:
 	if not active:
 		return
 	if _globe_controls():
@@ -1206,8 +1831,11 @@ func pan_by(delta: Vector2, around := Vector2(-1.0, -1.0)) -> void:
 	else:
 		var at := around if around.x >= 0.0 else map_view.get_viewport_rect().size * 0.5
 		var frame := _compute_frame()
-		var grabbed := _flat_unproject(frame, at - delta)
-		map_view.camera.position = grabbed - (_flat_unproject(frame, at) - map_view.camera.position)
+		if grabbed_place and bool(frame["relief"]):
+			pin_world(pick_world(at - delta), at)
+		else:
+			var grabbed := _flat_unproject(frame, at - delta)
+			map_view.camera.position = grabbed - (_flat_unproject(frame, at) - map_view.camera.position)
 	_moved()
 
 
@@ -1218,11 +1846,15 @@ func zoom_around(screen: Vector2, delta_zoom: float) -> void:
 		_zoom_around(screen, delta_zoom)
 	else:
 		var frame := _compute_frame()
-		var location := _flat_unproject(frame, screen)
+		var lifted := bool(frame["relief"])
+		var location := pick_world(screen) if lifted else _flat_unproject(frame, screen)
 		var limits := zoom_limits()
 		map_view.camera.zoom = Vector2.ONE * pow(2.0, clampf(map_view.zoom_level() + delta_zoom, limits.x, limits.y)) / 8.0
-		frame = _compute_frame()
-		map_view.camera.position = location - (_flat_unproject(frame, screen) - map_view.camera.position)
+		if lifted:
+			pin_world(location, screen)
+		else:
+			frame = _compute_frame()
+			map_view.camera.position = location - (_flat_unproject(frame, screen) - map_view.camera.position)
 	_moved()
 
 
@@ -1254,6 +1886,8 @@ func depth_at(point: Vector2) -> float:
 	if not active:
 		return 1.0
 	var frame := current_frame()
+	if bool(frame.get("relief", false)):
+		return maxf(_lifted_clip(frame, point, _height(frame, point)).z, 1e-3) / float(frame["focal"])
 	var clip := _flat_clip(frame, point)
 	var g: float = frame["g"]
 	if g > 0.0:

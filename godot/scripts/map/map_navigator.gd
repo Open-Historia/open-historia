@@ -213,7 +213,7 @@ func _on_motion(motion: InputEventMouseMotion) -> bool:
 	if delta == Vector2.ZERO:
 		return true
 	_record(delta)
-	_apply_pan(delta, point)
+	_apply_pan(delta, point, true)
 	return true
 
 
@@ -502,11 +502,11 @@ func _curve(name: String, t: float) -> float:
 	return _default_easing.at(t)
 
 
-func _apply_pan(delta: Vector2, around := Vector2(-1.0, -1.0)) -> void:
+func _apply_pan(delta: Vector2, around := Vector2(-1.0, -1.0), grabbed_place := false) -> void:
 	if globe:
 		globe.sync_active()
 	if globe and globe.active:
-		globe.pan_by(delta, around)
+		globe.pan_by(delta, around, grabbed_place)
 		return
 	map_view.camera.position -= delta / map_view.camera.zoom.x
 	map_view.call("_after_camera_move")
@@ -874,7 +874,7 @@ func _world_at(at: Vector2) -> Vector2:
 			var world := GlobeView.world_of_lonlat(lonlat.x, lonlat.y)
 			world.x += MapView.WORLD_WIDTH * roundf((map_view.camera.position.x - world.x) / MapView.WORLD_WIDTH)
 			return world
-		return globe._flat_unproject(frame, at)
+		return globe.pick_world(at)
 	return map_view.camera.position + (at - map_view.get_viewport_rect().size * 0.5) / map_view.camera.zoom.x
 
 
@@ -892,6 +892,8 @@ func _pin_location(world: Vector2, at: Vector2) -> void:
 		globe.sync_active()
 	if globe and globe.active and globe._globe_controls():
 		globe._set_location_at_point(GlobeView.lonlat_of_world(world), at)
+	elif globe and globe.active:
+		globe.pin_world(world, at)
 	else:
 		var delta := world - _world_at(at)
 		delta.x -= MapView.WORLD_WIDTH * roundf(delta.x / MapView.WORLD_WIDTH)

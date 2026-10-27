@@ -670,7 +670,7 @@ class CityLayer extends Control:
 			if screen.x < -40 or screen.y < -20 or screen.x > view.x + 40 or screen.y > view.y + 20:
 				continue
 			var ratio := map.label_perspective(_points[index])
-			if ratio < MapView.LABEL_PERSPECTIVE_CUTOFF:
+			if ratio < MapView.LABEL_PERSPECTIVE_CUTOFF or map.terrain_visibility(_points[index]) < 0.5:
 				continue
 			var circle_scale := 1.0 / map.label_depth(_points[index])
 			if capital:
@@ -1070,3 +1070,39 @@ func label_plane_scale(world: Vector2) -> float:
 func label_plane_frame(world: Vector2, angle: float, scale: float) -> Transform2D:
 	var frame := screen_frame_at(world)
 	return Transform2D(frame.x, frame.y, frame.origin) * Transform2D(angle, Vector2(scale, scale), 0.0, Vector2.ZERO)
+
+
+func _relief_globe() -> GlobeView:
+	var globe_node: Variant = extras.get("globe") if extras else null
+	return globe_node as GlobeView if globe_node is GlobeView else null
+
+
+func terrain_revision() -> int:
+	var projector := _relief_globe()
+	return projector.relief_revision() if projector else 0
+
+
+func terrain_height_at(world: Vector2) -> float:
+	var projector := _relief_globe()
+	if projector == null or not globe_on:
+		return 0.0
+	return projector.height_at(world)
+
+
+func ground_disc_scale(world: Vector2) -> float:
+	var projector := _relief_globe()
+	if projector == null or not globe_on:
+		return 1.0
+	var g := projector.globeness()
+	if g <= 0.0:
+		return 1.0
+	var lat_c := deg_to_rad(GlobeView.lonlat_of_world(camera.position).y)
+	var lat := deg_to_rad(GlobeView.lonlat_of_world(world).y)
+	return lerpf(1.0, cos(lat_c) / maxf(cos(lat), 0.0001), g)
+
+
+func terrain_visibility(world: Vector2) -> float:
+	var projector := _relief_globe()
+	if projector == null or not globe_on:
+		return 1.0
+	return projector.anchor_visibility(world)
