@@ -496,7 +496,13 @@ var terrain_on := false:
 		_terrain_changed()
 var relief: TerrainRelief
 var _relief_dirty := false
-var _frozen_height := NAN
+var _elevation := 0.0
+var _elevation_frozen := false
+var _terrain_movement := false
+var _ease_centre: Variant = null
+var _ease_start := 0.0
+var _ease_target := 0.0
+var _ease_freeze := false
 var _flat_viewport: SubViewport
 var _flat_camera: Camera2D
 var _layer: CanvasLayer
@@ -600,42 +606,108 @@ func relief_tile_arrived() -> void:
 	_relief_dirty = true
 
 
-func gesture_active() -> bool:
-	if held:
+func terrain_movement_begin() -> bool:
+	if _terrain_movement:
+		return false
+	if not relief_shown():
 		return true
-	var navigator: Variant = extras.get("navigator") if extras else null
-	return navigator is MapNavigator and (navigator as MapNavigator).busy()
+	_compute_frame()
+	_terrain_movement = true
+	_elevation_frozen = true
+	return true
 
 
-func _settle_elevation() -> void:
-	if map_view == null or not active:
-		_frozen_height = NAN
+func terrain_movement_end() -> void:
+	if not _terrain_movement:
+		return
+	_terrain_movement = false
+	_recalculate_zoom_and_centre()
+	_elevation_frozen = false
+	if map_view and map_view.extras_ready():
+		map_view.call("_after_camera_move")
+
+
+func elevation_ease_begin(centre_world: Vector2, freeze := false) -> void:
+	if not relief_shown() or map_view == null:
+		return
+	_compute_frame()
+	_ease_centre = centre_world
+	_ease_start = _elevation
+	_ease_target = _ease_height()
+	_ease_freeze = freeze
+	_elevation_frozen = true
+
+
+func elevation_ease_step(k: float) -> void:
+	if not (_ease_centre is Vector2) or _ease_freeze or not relief_shown():
+		return
+	var now := _ease_height()
+	if k < 1.0 and now != _ease_target:
+		var pitch1 := _ease_target - _ease_start
+		var pitch2 := (now - (pitch1 * k + _ease_start)) / (1.0 - k)
+		_ease_start += k * (pitch1 - pitch2)
+		_ease_target = now
+	_elevation = lerpf(_ease_start, _ease_target, k)
+
+
+func elevation_ease_end() -> void:
+	if not (_ease_centre is Vector2):
+		return
+	var freeze := _ease_freeze
+	_ease_centre = null
+	_ease_freeze = false
+	if freeze and relief_shown():
+		_recalculate_zoom_and_centre()
+		_elevation_frozen = false
+		if map_view and map_view.extras_ready():
+			map_view.call("_after_camera_move")
+
+
+func _ease_height() -> float:
+	if relief == null or not relief.has_data or not (_ease_centre is Vector2):
+		return 0.0
+	var centre: Vector2 = _ease_centre
+	centre.x += MapView.WORLD_WIDTH * roundf((map_view.camera.position.x - centre.x) / MapView.WORLD_WIDTH)
+	return relief.elevation_at(centre)
+
+
+func _recalculate_zoom_and_centre() -> void:
+	if map_view == null or not active or enabled:
 		return
 	var frame := _compute_frame()
-	_frozen_height = NAN
-	if not bool(frame["relief"]) or float(frame["g"]) > 0.0:
-		map_view.call("_after_camera_move")
+	if not bool(frame["relief"]):
 		return
 	var size: Vector2 = frame["size"]
 	var found: Variant = _relief_pick(frame, size * 0.5)
-	var pitch: float = frame["pitch"]
-	if not (found is Vector2) or cos(pitch) < 0.001:
-		map_view.call("_after_camera_move")
+	var centre: Vector2 = found if found is Vector2 else map_view.camera.position
+	var height := relief.elevation_at(centre)
+	var elevation: float = frame["centre_h"]
+	if elevation - height == 0.0:
 		return
-	var centre: Vector2 = found
+	var pitch: float = frame["pitch"]
 	var focal: float = frame["focal"]
 	var per_meter: float = frame["ppm"]
-	var altitude := float(frame["centre_h"]) + focal * cos(pitch) / per_meter
-	var distance := (altitude - relief.elevation_at(centre)) / cos(pitch)
-	if distance <= 0.0:
-		map_view.call("_after_camera_move")
-		return
-	var lat := deg_to_rad(clampf(lonlat_of_world(centre).y, -MAX_VALID_LATITUDE, MAX_VALID_LATITUDE))
+	var px_per_world: float = frame["px_per_world"]
+	var ahead: Vector2 = frame["flat_up"]
+	var camera_px := map_view.camera.position * px_per_world - ahead * (focal * sin(pitch))
+	var camera_z := elevation * per_meter + focal * cos(pitch)
+	var down := -cos(pitch)
+	var above := camera_z / per_meter - height
+	var distance := 0.0
+	var clamped := height
+	if down * above >= 0.0 or absf(down) < 0.1:
+		distance = 10000.0
+		clamped = camera_z / per_meter + distance * down
+	else:
+		distance = -above / down
+	var centre_px := camera_px + ahead * (sin(pitch) * distance * per_meter)
+	var world := centre_px / px_per_world
+	var lat := deg_to_rad(clampf(lonlat_of_world(world).y, -MAX_VALID_LATITUDE, MAX_VALID_LATITUDE))
 	var limits := zoom_limits()
-	var level := clampf(log(8.0 * (focal / distance) * TAU * EARTH_RADIUS_M * cos(lat) / MapView.WORLD_WIDTH) / log(2.0), limits.x, limits.y)
-	map_view.camera.position = centre
+	var level := clampf(log(focal * TAU * EARTH_RADIUS_M * cos(lat) / (distance * 512.0)) / log(2.0), limits.x, limits.y)
+	_elevation = clamped
+	map_view.camera.position = world
 	map_view.camera.zoom = Vector2.ONE * pow(2.0, level) / 8.0
-	map_view.call("_after_camera_move")
 
 
 func _on_relief_changed() -> void:
@@ -778,10 +850,6 @@ func _process(_delta: float) -> void:
 	if _relief_dirty and active and relief_shown() and not _frame.is_empty():
 		_relief_dirty = false
 		relief.update(_frame, _flat.get("rect", Rect2()))
-	if not is_nan(_frozen_height) and not gesture_active():
-		_settle_elevation()
-	if relief and relief.has_held() and not gesture_active():
-		relief.release_held()
 	if not active or not enabled:
 		return
 	var now := Time.get_ticks_msec()
@@ -956,11 +1024,9 @@ func _compute_frame() -> Dictionary:
 	var g := clampf(12.0 - zoom, 0.0, 1.0) if enabled else 0.0
 	var lifted := relief != null and relief.enabled and relief.has_data
 	var per_meter := MapView.WORLD_WIDTH * camera.zoom.x / (TAU * EARTH_RADIUS_M * cos(lat_r)) if lifted else 0.0
-	var centre_h := 0.0
-	if lifted:
-		if is_nan(_frozen_height) and gesture_active():
-			_frozen_height = relief.elevation_at(camera.position)
-		centre_h = _frozen_height if not is_nan(_frozen_height) else relief.elevation_at(camera.position)
+	if lifted and not _elevation_frozen:
+		_elevation = relief.elevation_at(camera.position)
+	var centre_h := _elevation if lifted else 0.0
 	var relief_low := minf(relief.low, 0.0) if lifted else 0.0
 	var relief_high := maxf(relief.high, 0.0) if lifted else 0.0
 	return {
@@ -1237,20 +1303,6 @@ func pick_world(screen: Vector2) -> Vector2:
 	return _flat_unproject(frame, screen)
 
 
-func pin_world(world: Vector2, screen: Vector2) -> void:
-	var camera := map_view.camera
-	for _round in range(3):
-		var frame := _compute_frame()
-		var lifted := bool(frame["relief"])
-		var lift := _lift(frame, _height(frame, world)) if lifted else 0.0
-		var under := unproject_lifted(frame, screen, lift) if lifted else _flat_unproject(frame, screen)
-		var shift := world - under
-		shift.x -= MapView.WORLD_WIDTH * roundf(shift.x / MapView.WORLD_WIDTH)
-		camera.position += shift
-		if not lifted or shift.length() * camera.zoom.x < 0.01:
-			break
-
-
 func _project_world(frame: Dictionary, point: Vector2) -> Vector2:
 	var size: Vector2 = frame["size"]
 	var g: float = frame["g"]
@@ -1321,39 +1373,106 @@ func height_at(point: Vector2) -> float:
 	return _height(current_frame(), point)
 
 
+func centre_height() -> float:
+	return float(current_frame().get("centre_h", 0.0))
+
+
+func world_to_screen_at(point: Vector2, height: float) -> Vector2:
+	return _project_lifted(current_frame(), point, height)
+
+
 func anchor_visibility(point: Vector2) -> float:
 	var frame := current_frame()
 	if not bool(frame.get("relief", false)) or float(frame["g"]) > 0.0:
 		return 1.0
-	var pitch: float = frame["pitch"]
-	if pitch < 0.001:
+	var clip := _lifted_clip(frame, point, _height(frame, point))
+	if clip.z <= 0.0:
 		return 1.0
+	var size: Vector2 = frame["size"]
 	var focal: float = frame["focal"]
-	var px_per_world: float = frame["px_per_world"]
-	var near := point
-	near.x += MapView.WORLD_WIDTH * roundf(((frame["cam_world"] as Vector2).x - point.x) / MapView.WORLD_WIDTH)
-	var anchor_lift := _lift(frame, relief.elevation_at(near))
-	var top := float(frame["lift_high"])
-	var camera_lift := focal * cos(pitch)
-	if anchor_lift >= top or camera_lift <= anchor_lift:
+	var screen := Vector2(size.x * 0.5 + focal * clip.x / clip.z, size.y * 0.5 - focal * clip.y / clip.z)
+	var planes := _depth_planes(frame)
+	var depth := _ndc_depth(planes, clip.z)
+	var seen := _depth_opacity(frame, planes, screen, depth, clip.z)
+	if seen > 0.95:
 		return 1.0
-	var camera_ground := (frame["cam_world"] as Vector2) - (frame["flat_up"] as Vector2) * (focal * sin(pitch) / px_per_world)
-	var toward := camera_ground - near
-	var length := toward.length()
-	if length <= 0.000001:
+	return (seen + _depth_opacity(frame, planes, screen - Vector2(0.0, 0.005 * size.y), depth, clip.z)) * 0.5
+
+
+func _depth_planes(frame: Dictionary) -> Vector2:
+	var size: Vector2 = frame["size"]
+	var focal: float = frame["focal"]
+	var pitch: float = frame["pitch"]
+	var per_meter: float = frame["ppm"]
+	var elevation: float = frame["centre_h"]
+	var limited := deg_to_rad(minf(rad_to_deg(pitch), MAX_MERCATOR_HORIZON_ANGLE))
+	var sea_level := maxf(focal * 0.5, focal + elevation * per_meter / cos(limited))
+	var altitude := elevation + cos(pitch) * focal / per_meter
+	var lowest := minf(elevation, minf(relief.tile_min_at(frame["cam_world"], float(frame["zoom"])), altitude - 100.0))
+	var plane := sea_level - lowest * per_meter / cos(limited) if lowest < 0.0 else sea_level
+	var ground_angle := PI * 0.5 + pitch
+	var above := FOV * 0.5
+	var half_surface := sin(above) * plane / sin(clampf(PI - ground_angle - above, 0.01, PI - 0.01))
+	var horizon_angle := atan(mercator_horizon(focal, rad_to_deg(pitch)) / focal)
+	var least := deg_to_rad(90.0 - MAX_MERCATOR_HORIZON_ANGLE)
+	var to_horizon := horizon_angle if horizon_angle > least else least
+	var half_horizon := sin(to_horizon) * plane / sin(clampf(PI - ground_angle - to_horizon, 0.01, PI - 0.01))
+	var far := (cos(PI * 0.5 - limited) * minf(half_surface, half_horizon) + plane) * 1.01
+	return Vector2(size.y / 50.0, far)
+
+
+static func _ndc_depth(planes: Vector2, depth: float) -> float:
+	var near := planes.x
+	var far := planes.y
+	return (far + near) / (far - near) - 2.0 * far * near / ((far - near) * maxf(depth, 0.000001))
+
+
+func _depth_opacity(frame: Dictionary, planes: Vector2, screen: Vector2, depth: float, distance: float) -> float:
+	var size: Vector2 = frame["size"]
+	var focal: float = frame["focal"]
+	var pitch: float = frame["pitch"]
+	var sx := screen.x - size.x * 0.5
+	var sy := size.y * 0.5 - screen.y
+	var denominator := focal * cos(pitch) - sy * sin(pitch)
+	if denominator <= 1e-3:
 		return 1.0
-	var reach := minf((top - anchor_lift) / (camera_lift - anchor_lift), 1.0)
-	var start := minf(1.5 * relief.step / length, reach)
-	if start >= reach:
+	var t0 := maxf((focal * cos(pitch) - float(frame["lift_high"])) / denominator, 0.0)
+	var t1 := minf((focal * cos(pitch) - float(frame["lift_low"])) / denominator, distance / focal)
+	if t1 <= t0:
 		return 1.0
-	var steps := clampi(ceili(length * (reach - start) / relief.step), 1, 32)
-	var hidden := 0.0
-	for index in range(1, steps + 1):
-		var along := lerpf(start, reach, float(index) / float(steps))
-		var line := anchor_lift + (camera_lift - anchor_lift) * along
-		var ground := _lift(frame, relief.elevation_at(near + toward * along))
-		hidden = maxf(hidden, ground - line)
-	return 1.0 - clampf(hidden / 4.0, 0.0, 1.0)
+	var span := _ray_ground(frame, sx, sy, t0).distance_to(_ray_ground(frame, sx, sy, t1)) / maxf(relief.step, 1e-6)
+	var steps := clampi(ceili(span), 1, 64)
+	var before_t := t0
+	var before_f := _ground_gap(frame, sx, sy, t0)
+	var hit := -1.0
+	if before_f <= 0.0:
+		hit = t0
+	else:
+		for index in range(1, steps + 1):
+			var t := lerpf(t0, t1, float(index) / float(steps))
+			var f := _ground_gap(frame, sx, sy, t)
+			if f <= 0.0:
+				var lo := before_t
+				var hi := t
+				var f_lo := before_f
+				var f_hi := f
+				for _k in range(5):
+					var mid := (lo + hi) * 0.5
+					var f_mid := _ground_gap(frame, sx, sy, mid)
+					if f_mid > 0.0:
+						lo = mid
+						f_lo = f_mid
+					else:
+						hi = mid
+						f_hi = f_mid
+				hit = lo + (hi - lo) * clampf(f_lo / maxf(f_lo - f_hi, 1e-6), 0.0, 1.0)
+				break
+			before_t = t
+			before_f = f
+	if hit < 0.0:
+		return 1.0
+	var gap := _ndc_depth(planes, hit * focal) + 0.0001 - depth
+	return 1.0 - clampf(-gap * 500.0, 0.0, 1.0)
 
 
 func screen_hits_globe(screen: Vector2) -> bool:
@@ -1823,38 +1942,40 @@ func _globe_controls() -> bool:
 	return enabled and globeness() > 0.0
 
 
-func pan_by(delta: Vector2, around := Vector2(-1.0, -1.0), grabbed_place := false) -> void:
+func pan_by(delta: Vector2, around := Vector2(-1.0, -1.0), dragging := false) -> void:
 	if not active:
 		return
 	if _globe_controls():
+		if dragging:
+			terrain_movement_begin()
 		_pan(delta)
 	else:
-		var at := around if around.x >= 0.0 else map_view.get_viewport_rect().size * 0.5
+		var size := map_view.get_viewport_rect().size
+		var at := around if around.x >= 0.0 else size * 0.5
+		var first := terrain_movement_begin() if dragging else true
 		var frame := _compute_frame()
-		if grabbed_place and bool(frame["relief"]):
-			pin_world(pick_world(at - delta), at)
-		else:
+		if first:
 			var grabbed := _flat_unproject(frame, at - delta)
 			map_view.camera.position = grabbed - (_flat_unproject(frame, at) - map_view.camera.position)
+		else:
+			map_view.camera.position = _flat_unproject(frame, size * 0.5 - delta)
 	_moved()
 
 
-func zoom_around(screen: Vector2, delta_zoom: float) -> void:
+func zoom_around(screen: Vector2, delta_zoom: float, gesture := false) -> void:
 	if not active or absf(delta_zoom) < 1e-9:
 		return
+	if gesture:
+		terrain_movement_begin()
 	if _globe_controls():
 		_zoom_around(screen, delta_zoom)
 	else:
 		var frame := _compute_frame()
-		var lifted := bool(frame["relief"])
-		var location := pick_world(screen) if lifted else _flat_unproject(frame, screen)
+		var location := _flat_unproject(frame, screen)
 		var limits := zoom_limits()
 		map_view.camera.zoom = Vector2.ONE * pow(2.0, clampf(map_view.zoom_level() + delta_zoom, limits.x, limits.y)) / 8.0
-		if lifted:
-			pin_world(location, screen)
-		else:
-			frame = _compute_frame()
-			map_view.camera.position = location - (_flat_unproject(frame, screen) - map_view.camera.position)
+		frame = _compute_frame()
+		map_view.camera.position = location - (_flat_unproject(frame, screen) - map_view.camera.position)
 	_moved()
 
 

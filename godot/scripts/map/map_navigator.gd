@@ -110,7 +110,7 @@ func handle(event: InputEvent) -> bool:
 
 
 func stop() -> void:
-	_ease = {}
+	_end_ease()
 	_wheel_active = false
 	_wheel_frame_pending = false
 	_wheel_finish_at = -1.0
@@ -178,6 +178,7 @@ func _on_button(button: InputEventMouseButton) -> bool:
 					_fit_box(_press_at, button.position)
 				return true
 			if _moved:
+				_end_terrain_movement()
 				_start_inertia()
 			elif not cancelled:
 				_click(button.position)
@@ -198,6 +199,7 @@ func _on_motion(motion: InputEventMouseMotion) -> bool:
 		_box_overlay.hide_box()
 		if globe:
 			globe.held = false
+		_end_terrain_movement()
 		return true
 	var point := motion.position
 	if not _moved:
@@ -275,7 +277,7 @@ func _on_key(key: InputEventKey) -> bool:
 	if pitch_dir != 0:
 		ease["pitch_from"] = map_view.pitch
 		ease["pitch_to"] = clampf(map_view.pitch + pitch_dir * KEY_PITCH_STEP, MIN_PITCH, MAX_PITCH)
-	_ease = ease
+	_begin_ease(ease, map_view.camera.position, false)
 	return true
 
 
@@ -292,6 +294,25 @@ static func normalize_bearing(bearing: float, current: float) -> float:
 	if absf(target + 360.0 - current) < difference:
 		target += 360.0
 	return target
+
+
+func _begin_ease(ease: Dictionary, centre: Vector2, freeze: bool) -> void:
+	_end_ease()
+	_ease = ease
+	if globe and globe.active:
+		globe.elevation_ease_begin(centre, freeze)
+
+
+func _end_ease() -> void:
+	var had := not _ease.is_empty()
+	_ease = {}
+	if had and globe:
+		globe.elevation_ease_end()
+
+
+func _end_terrain_movement() -> void:
+	if globe:
+		globe.terrain_movement_end()
 
 
 func _record(delta: Vector2) -> void:
@@ -323,18 +344,18 @@ func _start_inertia() -> void:
 		speed = clampf(magnitude * PAN_LINEARITY / (duration / 1000.0), -PAN_MAX_SPEED, PAN_MAX_SPEED)
 	var seconds := absf(speed) / (PAN_DECELERATION * PAN_LINEARITY)
 	var amount := speed * (seconds / 2.0)
-	_ease = {
+	_begin_ease({
 		"start": Time.get_ticks_msec(),
 		"duration": seconds * 1000.0,
 		"curve": "inertia",
 		"pan": pan * (amount / magnitude),
 		"applied": Vector2.ZERO,
-	}
+	}, map_view.camera.position, true)
 
 
 func wheel_input(value: float, shift: bool, at: Vector2) -> void:
 	if not _ease.is_empty():
-		_ease = {}
+		_end_ease()
 	var now := _now()
 	var time_delta := now - _wheel_last_event_ms
 	_wheel_last_event_ms = now
@@ -423,7 +444,7 @@ func _wheel_frame() -> void:
 		_wheel_active = false
 		_wheel_finish_at = _now() + WHEEL_FINISH_MS
 	_wheel_expected = zoom
-	_apply_zoom(zoom - current, _wheel_around)
+	_apply_zoom(zoom - current, _wheel_around, true)
 
 
 func _smooth_out_easing(duration: float) -> CubicBezier:
@@ -452,15 +473,18 @@ func _process(_delta: float) -> void:
 		_wheel_finish_at = -1.0
 		_wheel_target = NAN
 		_wheel_expected = NAN
+		_end_terrain_movement()
 	if _ease.is_empty():
 		return
 	var duration := float(_ease["duration"])
 	var t := 1.0 if duration <= 0.0 else clampf((float(Time.get_ticks_msec()) - float(_ease["start"])) / duration, 0.0, 1.0)
 	var k := _curve(str(_ease["curve"]), t)
+	if globe:
+		globe.elevation_ease_step(k)
 	if _ease.has("pin"):
 		_touch_ease_step(_ease, k)
 		if t >= 1.0:
-			_ease = {}
+			_end_ease()
 		return
 	var turned := false
 	if _ease.has("bearing_to"):
@@ -488,7 +512,7 @@ func _process(_delta: float) -> void:
 	if turned and not moved:
 		map_view.call("_after_camera_move")
 	if t >= 1.0:
-		_ease = {}
+		_end_ease()
 
 
 func _curve(name: String, t: float) -> float:
@@ -502,23 +526,23 @@ func _curve(name: String, t: float) -> float:
 	return _default_easing.at(t)
 
 
-func _apply_pan(delta: Vector2, around := Vector2(-1.0, -1.0), grabbed_place := false) -> void:
+func _apply_pan(delta: Vector2, around := Vector2(-1.0, -1.0), dragging := false) -> void:
 	if globe:
 		globe.sync_active()
 	if globe and globe.active:
-		globe.pan_by(delta, around, grabbed_place)
+		globe.pan_by(delta, around, dragging)
 		return
 	map_view.camera.position -= delta / map_view.camera.zoom.x
 	map_view.call("_after_camera_move")
 
 
-func _apply_zoom(delta_zoom: float, around: Vector2) -> void:
+func _apply_zoom(delta_zoom: float, around: Vector2, gesture := false) -> void:
 	if absf(delta_zoom) < 1e-9:
 		return
 	if globe:
 		globe.sync_active()
 	if globe and globe.active:
-		globe.zoom_around(around, delta_zoom)
+		globe.zoom_around(around, delta_zoom, gesture)
 		return
 	map_view.call("_zoom_at", around, pow(2.0, delta_zoom))
 
@@ -552,11 +576,11 @@ func _fit_box(a: Vector2, b: Vector2) -> void:
 		var scale := minf(view.x / box.size.x, view.y / box.size.y)
 		ease["zoom_to_level"] = clampf(map_view.zoom_level() + log(scale) / log(2.0), limits.x, limits.y)
 		ease["centre_from"] = globe.centre_lonlat()
-		ease["centre_to"] = GlobeView.lonlat_of_world(map_view.screen_to_world(box.get_center()))
+		ease["centre_to"] = GlobeView.lonlat_of_world(globe.screen_to_world_flat(box.get_center()))
 		ease["globe"] = true
 	else:
-		var first := map_view.screen_to_world(a)
-		var second := map_view.screen_to_world(b)
+		var first := _plane_world(a)
+		var second := _plane_world(b)
 		second.x += MapView.WORLD_WIDTH * roundf((first.x - second.x) / MapView.WORLD_WIDTH)
 		var low := first.min(second)
 		var high := first.max(second)
@@ -577,7 +601,14 @@ func _fit_box(a: Vector2, b: Vector2) -> void:
 		ease["centre_from"] = map_view.camera.position
 		ease["centre_to"] = centre
 		ease["globe"] = false
-	_ease = ease
+	var target: Vector2 = GlobeView.world_of_lonlat(float((ease["centre_to"] as Vector2).x), float((ease["centre_to"] as Vector2).y)) if bool(ease["globe"]) else ease["centre_to"]
+	_begin_ease(ease, target, false)
+
+
+func _plane_world(at: Vector2) -> Vector2:
+	if globe and globe.active:
+		return globe.screen_to_world_flat(at)
+	return map_view.screen_to_world(at)
 
 
 func _apply_centre(ease: Dictionary, k: float) -> void:
@@ -649,7 +680,7 @@ func _on_touch(touch: InputEventScreenTouch) -> bool:
 	if not _touch_cancelled and not _swiping:
 		var moved := _pan_step()
 		if not moved.is_empty():
-			_apply_touch(moved["pan"], 0.0, 0.0, moved["around"])
+			_apply_touch(moved["pan"], 0.0, 0.0, moved["around"], true)
 	if not _pair.is_empty() and (not _touches.has(_pair[0]) or not _touches.has(_pair[1])):
 		_pair_reset()
 	var tapped := _tap_on_end(now)
@@ -700,7 +731,7 @@ func _flush_touch() -> void:
 	if pan == Vector2.ZERO and zoom_delta == 0.0 and bearing_delta == 0.0:
 		return
 	var around: Variant = paired.get("pinch", moved.get("around"))
-	_apply_touch(pan, zoom_delta, bearing_delta, around)
+	_apply_touch(pan, zoom_delta, bearing_delta, around, not moved.is_empty())
 
 
 func _touch_begin() -> void:
@@ -723,6 +754,7 @@ func _touch_finish(tapped: Array) -> void:
 	_pan_seen = {}
 	if globe:
 		globe.held = false
+	_end_terrain_movement()
 	var cancelled := _touch_cancelled or not bool(map_view.get("_dragging"))
 	map_view.set("_dragging", false)
 	if cancelled:
@@ -874,7 +906,7 @@ func _world_at(at: Vector2) -> Vector2:
 			var world := GlobeView.world_of_lonlat(lonlat.x, lonlat.y)
 			world.x += MapView.WORLD_WIDTH * roundf((map_view.camera.position.x - world.x) / MapView.WORLD_WIDTH)
 			return world
-		return globe.pick_world(at)
+		return globe._flat_unproject(frame, at)
 	return map_view.camera.position + (at - map_view.get_viewport_rect().size * 0.5) / map_view.camera.zoom.x
 
 
@@ -892,8 +924,6 @@ func _pin_location(world: Vector2, at: Vector2) -> void:
 		globe.sync_active()
 	if globe and globe.active and globe._globe_controls():
 		globe._set_location_at_point(GlobeView.lonlat_of_world(world), at)
-	elif globe and globe.active:
-		globe.pin_world(world, at)
 	else:
 		var delta := world - _world_at(at)
 		delta.x -= MapView.WORLD_WIDTH * roundf(delta.x / MapView.WORLD_WIDTH)
@@ -901,7 +931,7 @@ func _pin_location(world: Vector2, at: Vector2) -> void:
 	map_view.call("_after_camera_move")
 
 
-func _apply_touch(pan: Vector2, zoom_delta: float, bearing_delta: float, around: Variant) -> void:
+func _apply_touch(pan: Vector2, zoom_delta: float, bearing_delta: float, around: Variant, dragging := false) -> void:
 	var size := map_view.get_viewport_rect().size
 	var at: Vector2 = around if around is Vector2 else size * 0.5
 	_touch_record.append([Time.get_ticks_msec(), pan, zoom_delta, bearing_delta, around])
@@ -915,6 +945,18 @@ func _apply_touch(pan: Vector2, zoom_delta: float, bearing_delta: float, around:
 		if pan != Vector2.ZERO:
 			globe._pan(pan)
 		globe._moved()
+		return
+	var terrain := globe != null and globe.active and globe.relief_shown()
+	var first := true
+	if terrain and (dragging or zoom_delta != 0.0):
+		first = globe.terrain_movement_begin()
+	if terrain and not first and dragging:
+		if bearing_delta != 0.0:
+			map_view.bearing = wrap_bearing(map_view.bearing + bearing_delta)
+		if zoom_delta != 0.0:
+			_set_level(map_view.zoom_level() + zoom_delta)
+		map_view.camera.position = globe._flat_unproject(globe._compute_frame(), size * 0.5 - pan)
+		map_view.call("_after_camera_move")
 		return
 	var before := _world_at(at - pan)
 	if bearing_delta != 0.0:
@@ -974,8 +1016,12 @@ func _touch_inertia() -> void:
 		ease.erase("pan")
 		ease["pin_at"] = at
 		ease["pin"] = _world_at(at)
+		if globe and globe.active and not globe._globe_controls() and globe.relief_shown():
+			var lifted := globe.pick_world(at)
+			ease["pin"] = lifted
+			ease["pin_at"] = globe.world_to_screen_flat(lifted)
 	if ease.has("pan") or ease.has("pin"):
-		_ease = ease
+		_begin_ease(ease, map_view.camera.position, true)
 
 
 func _touch_ease_step(ease: Dictionary, k: float) -> void:

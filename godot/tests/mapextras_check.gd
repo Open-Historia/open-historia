@@ -637,19 +637,17 @@ func _tilt_checks() -> void:
 	var grab := Vector2(500, 600)
 	var grabbed := view.screen_to_world(grab)
 	var at := grab
-	_button(view, at, MOUSE_BUTTON_LEFT, true)
-	for step in range(6):
-		await _frames(1)
-		at += Vector2(30, -20)
-		_move(view, at, Vector2(30, -20))
-	_button(view, at, MOUSE_BUTTON_LEFT, false)
-	extras.navigator.stop()
-	_check(view.world_to_screen(grabbed).distance_to(at) < 1.5, "a drag keeps the grabbed place under the pointer on a turned, tilted map (%.2f px)" % view.world_to_screen(grabbed).distance_to(at))
+	var drag := await _drag_by(view, at, Vector2(30, -20), 6)
+	at = drag[0]
+	if extras.globe.relief_shown():
+		_check(float(drag[1]) < 0.5, "with 3D terrain a drag moves the map by the place under the screen centre, as MapLibre's terrain drag does, so the pointer slides (%.2f px at the centre, the grabbed place %.1f px from the pointer)" % [float(drag[1]), view.world_to_screen(grabbed).distance_to(at)])
+	else:
+		_check(view.world_to_screen(grabbed).distance_to(at) < 1.5, "a drag keeps the grabbed place under the pointer on a turned, tilted map (%.2f px)" % view.world_to_screen(grabbed).distance_to(at))
 	var wheel_at := Vector2(900, 300)
-	var under := view.screen_to_world(wheel_at)
+	var kept := _hold_place(view, wheel_at)
 	_button(view, wheel_at, MOUSE_BUTTON_WHEEL_UP, true)
 	await _wait(0.5)
-	_check(view.world_to_screen(under).distance_to(wheel_at) < 1.5, "a wheel zoom keeps the place under the pointer (%.2f px)" % view.world_to_screen(under).distance_to(wheel_at))
+	_check(_place_gap(view, kept, wheel_at) < 1.5, "a wheel zoom keeps the place under the pointer%s (%.2f px)" % [" on the camera's ground plane, as MapLibre's scroll zoom does with terrain" if extras.globe.relief_shown() else "", _place_gap(view, kept, wheel_at)])
 	await _shoot("tilt-2-tilted")
 	for step in range(5):
 		_key(view, KEY_UP, true)
@@ -668,6 +666,36 @@ func _tilt_checks() -> void:
 	view.focus_owner("France")
 	await _frames(3)
 	_check(view.bearing == 0.0 and view.pitch == 0.0 and not extras.globe.globe_shown() and extras.globe.active == extras.globe.relief_shown(), "opening a game frames it facing north and flat, as React's first framing does")
+
+
+func _hold_place(view: MapView, at: Vector2) -> Array:
+	var globe := extras.globe
+	if globe.active and globe.relief_shown() and not globe.globe_shown():
+		return [globe.screen_to_world_flat(at), globe.centre_height(), true]
+	return [view.screen_to_world(at), 0.0, false]
+
+
+func _place_gap(view: MapView, held: Array, at: Vector2) -> float:
+	if bool(held[2]):
+		return extras.globe.world_to_screen_at(held[0], float(held[1])).distance_to(at)
+	return view.world_to_screen(held[0]).distance_to(at)
+
+
+func _drag_by(view: MapView, from: Vector2, step: Vector2, count: int) -> Array:
+	var centre := view.get_viewport_rect().size * 0.5
+	var at := from
+	var gap := 0.0
+	_button(view, at, MOUSE_BUTTON_LEFT, true)
+	for index in range(count):
+		await _frames(1)
+		at += step
+		var under_centre := extras.globe.screen_to_world_flat(centre - step)
+		_move(view, at, step)
+		if index > 0:
+			gap = maxf(gap, extras.globe.world_to_screen_flat(under_centre).distance_to(centre))
+	_button(view, at, MOUSE_BUTTON_LEFT, false)
+	extras.navigator.stop()
+	return [at, gap]
 
 
 func _pan_gesture(view: MapView, at: Vector2, delta_y: float) -> void:
@@ -785,26 +813,34 @@ func _touch_checks() -> void:
 	await _wait(1.0)
 	var size := view.get_viewport_rect().size
 	var centre := size * 0.5 + Vector2(140, 60)
-	var under := view.screen_to_world(centre)
+	var under := _hold_place(view, centre)
 	var before := view.zoom_level()
 	await _pinch(view, centre)
 	_check(absf(view.zoom_level() - before - 1.0) < 0.01, "spreading two fingers zooms in by MapLibre's pinch rate (%.3f)" % (view.zoom_level() - before))
-	_check(view.world_to_screen(under).distance_to(centre) < 1.5, "the place between the fingers stays under them (%.2f px)" % view.world_to_screen(under).distance_to(centre))
+	_check(_place_gap(view, under, centre) < 1.5, "the place between the fingers stays under them (%.2f px)" % _place_gap(view, under, centre))
 	_lift(view, centre, 200.0)
 	await _wait(0.3)
-	under = view.screen_to_world(centre)
+	under = _hold_place(view, centre)
 	_touch(view, 0, centre - Vector2(100, 0), true)
 	_touch(view, 1, centre + Vector2(100, 0), true)
+	var step_gap := 0.0
+	var held := extras.globe.screen_to_world_flat(centre)
 	for step in range(1, 13):
 		await _frames(1)
+		step_gap = maxf(step_gap, extras.globe.world_to_screen_flat(held).distance_to(centre))
+		held = extras.globe.screen_to_world_flat(centre)
 		var angle := deg_to_rad(3.0 * step)
 		var arm := Vector2(cos(angle), sin(angle)) * 100.0
 		_drag(view, 0, centre - arm, Vector2.ZERO)
 		_drag(view, 1, centre + arm, Vector2.ZERO)
 	await _frames(1)
+	step_gap = maxf(step_gap, extras.globe.world_to_screen_flat(held).distance_to(centre))
 	var turned := view.bearing
 	_check(turned < -10.0 and turned > -36.0, "turning two fingers turns the map with them, as MapLibre's touch rotation does (%.1f degrees)" % turned)
-	_check(view.world_to_screen(under).distance_to(centre) < 2.0, "and the place between them stays put (%.2f px)" % view.world_to_screen(under).distance_to(centre))
+	if extras.globe.active and extras.globe.relief_shown() and not extras.globe.globe_shown():
+		_check(step_gap < 0.5, "and each turn keeps the place between them on the camera's ground plane, as MapLibre's rotation does without freezing the terrain height (%.2f px per step, %.2f px over the turn)" % [step_gap, _place_gap(view, under, centre)])
+	else:
+		_check(_place_gap(view, under, centre) < 2.0, "and the place between them stays put (%.2f px)" % _place_gap(view, under, centre))
 	var arm_end := Vector2(cos(deg_to_rad(36.0)), sin(deg_to_rad(36.0))) * 100.0
 	_touch(view, 0, centre - arm_end, false)
 	_touch(view, 1, centre + arm_end, false)
@@ -856,10 +892,10 @@ func _touch_checks() -> void:
 	view.pitch = 40.0
 	view.call("_after_camera_move")
 	await _frames(2)
-	under = view.screen_to_world(centre)
+	under = _hold_place(view, centre)
 	before = view.zoom_level()
 	await _pinch(view, centre)
-	_check(absf(view.zoom_level() - before - 1.0) < 0.01 and view.world_to_screen(under).distance_to(centre) < 1.5, "a pinch on a turned, tilted map keeps the place between the fingers (%.3f, %.2f px)" % [view.zoom_level() - before, view.world_to_screen(under).distance_to(centre)])
+	_check(absf(view.zoom_level() - before - 1.0) < 0.01 and _place_gap(view, under, centre) < 1.5, "a pinch on a turned, tilted map keeps the place between the fingers (%.3f, %.2f px)" % [view.zoom_level() - before, _place_gap(view, under, centre)])
 	_lift(view, centre, 200.0)
 	await _wait(0.2)
 	view.bearing = 0.0
@@ -942,6 +978,7 @@ func _terrain_checks() -> void:
 	view.bearing = 0.0
 	view.pitch = 50.0
 	view.call("_after_camera_move")
+	await _drag_by(view, view.get_viewport_rect().size * 0.5, Vector2(4.0, 0.0), 2)
 	await _settle_relief(view)
 	_check(globe.relief_shown() and globe.relief.has_data and globe.active, "3D terrain is on by default and raises the map from the terrarium elevation tiles React uses (%d tiles)" % globe.relief.tiles.size())
 	var peak := GlobeView.world_of_lonlat(6.8652, 45.8326)
@@ -988,14 +1025,61 @@ func _terrain_checks() -> void:
 	_check(slope >= 0 and clicked.size() == 1 and clicked[0] == slope, "a click on a slope picks the region drawn there, as MapLibre's terrain picking does (%s, %.0f px off the plane, got %s)" % [view.region_name(slope), best_gap, str(clicked)])
 	var pointer := slope_at if slope >= 0 else size * 0.5 + Vector2(0.0, 120.0)
 	var grabbed := view.screen_to_world(pointer)
-	_button(view, pointer, MOUSE_BUTTON_LEFT, true)
-	for step in range(6):
-		await _frames(1)
-		pointer += Vector2(-25.0, 15.0)
-		_move(view, pointer, Vector2(-25.0, 15.0))
-	_button(view, pointer, MOUSE_BUTTON_LEFT, false)
-	extras.navigator.stop()
-	_check(view.world_to_screen(grabbed).distance_to(pointer) < 1.5, "a drag over the mountains keeps the grabbed slope under the pointer (%.2f px)" % view.world_to_screen(grabbed).distance_to(pointer))
+	var drag := await _drag_by(view, pointer, Vector2(-25.0, 15.0), 6)
+	pointer = drag[0]
+	var slid := view.world_to_screen(grabbed).distance_to(pointer)
+	_check(float(drag[1]) < 0.5 and slid > 1.0, "a drag over the mountains moves the map by the place under the screen centre, so the pointer slides over the slope, as MapLibre's terrain drag does (%.2f px at the centre, %.1f px slide)" % [float(drag[1]), slid])
+	var occluded := 1.0
+	var behind := ""
+	view.fly_to_lonlat(9.0, 44.9, 7.6, 0.0)
+	view.bearing = 0.0
+	view.pitch = 60.0
+	view.call("_after_camera_move")
+	await _settle_relief(view)
+	for spot in [["Bern", 7.447, 46.948], ["Interlaken", 7.86, 46.69], ["Lucerne", 8.31, 47.05], ["Zurich", 8.541, 47.377], ["Basel", 7.589, 47.56]]:
+		var fade := view.terrain_visibility(GlobeView.world_of_lonlat(float(spot[1]), float(spot[2])))
+		if fade < occluded:
+			occluded = fade
+			behind = str(spot[0])
+	var open := view.terrain_visibility(GlobeView.world_of_lonlat(9.19, 45.46))
+	_check(occluded < 0.5 and open > 0.99, "a place behind the Alps fades by MapLibre's terrain depth test while one in front stays (%s %.2f, Milan %.2f)" % [behind, occluded, open])
+	await _shoot("terrain-1b-behind-alps")
+	extras.apply_map_settings({"Globe": true})
+	view.fly_to_lonlat(10.0, 46.0, 6.0, 0.0)
+	view.pitch = 40.0
+	view.bearing = 0.0
+	view.call("_after_camera_move")
+	await _settle_relief(view)
+	var globe_levels: Array[int] = []
+	for level in range(TerrainRelief.LEVELS):
+		if globe.relief.level_sizes[level] != Vector2i.ONE:
+			globe_levels.append(level)
+	_check(globe.globe_shown() and globe_levels.size() >= 2, "on the globe above zoom 4 the elevation detail varies with distance, as MapLibre's globe tile cover does (levels %s)" % str(globe_levels))
+	extras.apply_map_settings({"Globe": false})
+	await _frames(3)
+	view.fly_to_lonlat(7.2, 45.6, 7.0, 0.0)
+	view.bearing = 0.0
+	view.pitch = 50.0
+	view.call("_after_camera_move")
+	await _settle_relief(view)
+	var start_height := globe.centre_height()
+	root.gui_release_focus()
+	_key(view, KEY_RIGHT)
+	await _wait(0.5)
+	var under_height := globe.height_at(view.camera.position)
+	_check(absf(globe.centre_height() - start_height) < 0.01 and absf(under_height - start_height) > 1.0, "an arrow-key pan keeps the camera's ground height, as MapLibre's keyboard easeTo does (%.0f m kept, %.0f m under the new centre)" % [globe.centre_height(), under_height])
+	view.fit_lonlat_bounds([[7.3, 45.8], [7.9, 46.2]], 7.4, 0.6)
+	await _wait(0.3)
+	var halfway_height := globe.centre_height()
+	await _wait(0.6)
+	var landed := globe.height_at(view.camera.position)
+	_check(absf(globe.centre_height() - landed) < 1.0 and absf(halfway_height - landed) > 1.0 and absf(halfway_height - start_height) > 1.0, "a flight eases the camera's ground height to the target's, as MapLibre's flyTo does (%.0f m, %.0f m halfway, %.0f m at the end)" % [start_height, halfway_height, globe.centre_height()])
+	view.fly_to_lonlat(6.0, 46.15, 7.0, 0.0)
+	view.bearing = 0.0
+	view.pitch = 50.0
+	view.call("_after_camera_move")
+	await _drag_by(view, size * 0.5, Vector2(4.0, 0.0), 2)
+	await _settle_relief(view)
 	var levels: Array[int] = []
 	view.pitch = 60.0
 	view.call("_after_camera_move")

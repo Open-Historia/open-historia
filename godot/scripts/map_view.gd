@@ -315,11 +315,16 @@ func fit_lonlat_bounds(bounds: Array, max_level := 6.8, duration := 1.8) -> void
 		camera.zoom = Vector2.ONE * target_zoom
 		_after_camera_move()
 		return
+	var projector := _relief_globe()
+	if projector and projector.active:
+		projector.elevation_ease_begin(target_center)
 	_fly = create_tween().set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
 	_fly.tween_method(func(t: float) -> void:
 		var level := lerpf(log(start_zoom), log(target_zoom), t)
 		camera.zoom = Vector2.ONE * exp(level)
 		camera.position = start_center.lerp(target_center, t)
+		if projector and is_instance_valid(projector):
+			projector.elevation_ease_step(t)
 		_after_camera_move(), 0.0, 1.0, duration)
 
 
@@ -670,15 +675,16 @@ class CityLayer extends Control:
 			if screen.x < -40 or screen.y < -20 or screen.x > view.x + 40 or screen.y > view.y + 20:
 				continue
 			var ratio := map.label_perspective(_points[index])
-			if ratio < MapView.LABEL_PERSPECTIVE_CUTOFF or map.terrain_visibility(_points[index]) < 0.5:
+			if ratio < MapView.LABEL_PERSPECTIVE_CUTOFF:
 				continue
+			var seen := map.terrain_visibility(_points[index])
 			var circle_scale := 1.0 / map.label_depth(_points[index])
 			if capital:
 				var star_size := 13.0 * ratio
-				draw_texture_rect(star, Rect2(screen - Vector2(star_size, star_size) * 0.5, Vector2(star_size, star_size)), false)
+				draw_texture_rect(star, Rect2(screen - Vector2(star_size, star_size) * 0.5, Vector2(star_size, star_size)), false, Color(1, 1, 1, seen))
 			else:
-				draw_circle(screen, 2.6 * circle_scale, Color(0.04, 0.05, 0.07, 0.9))
-				draw_circle(screen, 1.8 * circle_scale, Color(0.98, 0.98, 0.96))
+				draw_circle(screen, 2.6 * circle_scale, Color(0.04, 0.05, 0.07, 0.9 * seen))
+				draw_circle(screen, 1.8 * circle_scale, Color(0.98, 0.98, 0.96, seen))
 			if capital or level >= needed + 0.6:
 				var size := maxi(1, roundi((11.0 if capital else 10.0) * ratio))
 				var text := str(city[0])
@@ -694,8 +700,8 @@ class CityLayer extends Control:
 					continue
 				taken.append(box)
 				own.append(box)
-				draw_string_outline(font, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, size, 4, Color(0.02, 0.03, 0.05, 0.92))
-				draw_string(font, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, size, Color(0.98, 0.98, 0.96))
+				draw_string_outline(font, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, size, 4, Color(0.02, 0.03, 0.05, 0.92 * seen))
+				draw_string(font, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, size, Color(0.98, 0.98, 0.96, seen))
 		map.city_label_rects = own
 
 
@@ -1080,13 +1086,6 @@ func _relief_globe() -> GlobeView:
 func terrain_revision() -> int:
 	var projector := _relief_globe()
 	return projector.relief_revision() if projector else 0
-
-
-func terrain_height_at(world: Vector2) -> float:
-	var projector := _relief_globe()
-	if projector == null or not globe_on:
-		return 0.0
-	return projector.height_at(world)
 
 
 func ground_disc_scale(world: Vector2) -> float:

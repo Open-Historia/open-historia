@@ -359,11 +359,12 @@ func _place_unit_names(taken: Array[Rect2]) -> Array:
 		var unit: Dictionary = entry_item
 		var id := str(unit.get("id", ""))
 		var text := str(unit.get("label", ""))
-		if text.is_empty() or not unit_positions.has(id) or _visibility(unit_positions[id]) < 0.5:
+		if text.is_empty() or not unit_positions.has(id):
 			continue
 		var ratio := _ratio(unit_positions[id])
+		var seen := _visibility(unit_positions[id])
 		for at in _copies(_screen(unit_positions[id]), 30):
-			listed.append([unit, at, text, ratio])
+			listed.append([unit, at, text, ratio, seen])
 	listed.sort_custom(func(a: Array, b: Array) -> bool: return float((a[0] as Dictionary).get("strength", 0)) > float((b[0] as Dictionary).get("strength", 0)))
 	for entry in listed:
 		var text: String = entry[2]
@@ -376,7 +377,7 @@ func _place_unit_names(taken: Array[Rect2]) -> Array:
 		if not _fits(box, taken):
 			continue
 		taken.append(box)
-		out.append([centre, text, name_size])
+		out.append([centre, text, name_size, entry[4]])
 	return out
 
 
@@ -393,7 +394,7 @@ func _place_sea_labels(taken: Array[Rect2]) -> Array:
 		var text := _wrap(str(battle.get("label", "")), size, 14.0)
 		if text.strip_edges().is_empty():
 			continue
-		var shown := 1.0 if battle.get("fresh", false) else 0.5
+		var shown := (1.0 if battle.get("fresh", false) else 0.5) * _visibility(battle["world"])
 		var tone := _tone(str(battle.get("tone", "other")))
 		var box_size := _text_size(text, size)
 		for at in _copies(_screen(battle["world"]), 40):
@@ -418,11 +419,12 @@ func _place_troop_names(taken: Array[Rect2]) -> Array:
 	var listed: Array = []
 	for entry_item in troops:
 		var entry: Array = entry_item
-		if int(entry[9]) != 1 or str(entry[11]).is_empty() or _visibility(Vector2(entry[0], entry[1])) < 0.5:
+		if int(entry[9]) != 1 or str(entry[11]).is_empty():
 			continue
 		var ratio := _ratio(Vector2(entry[0], entry[1]))
+		var seen := _visibility(Vector2(entry[0], entry[1]))
 		for at in _copies(_screen(Vector2(entry[0], entry[1])), 30):
-			listed.append([entry, at, ratio])
+			listed.append([entry, at, ratio, seen])
 	listed.sort_custom(func(a: Array, b: Array) -> bool: return float((a[0] as Array)[7]) > float((b[0] as Array)[7]))
 	for placed_item in listed:
 		var entry: Array = placed_item[0]
@@ -436,7 +438,7 @@ func _place_troop_names(taken: Array[Rect2]) -> Array:
 		if not _fits(box, taken):
 			continue
 		taken.append(box)
-		out.append([centre, text, name_size])
+		out.append([centre, text, name_size, placed_item[3]])
 	return out
 
 
@@ -491,7 +493,7 @@ func _place_markers(taken: Array[Rect2]) -> Dictionary:
 					if not _fits(box, taken):
 						continue
 					taken.append(box)
-					labels.append([centre, text, label_size, float(marker.get("opacity", 1.0))])
+					labels.append([centre, text, label_size, float(marker.get("opacity", 1.0)) * _visibility(marker["world"])])
 					break
 		for entry in placed:
 			var marker: Dictionary = entry[0]
@@ -539,7 +541,7 @@ func _draw_markers(node: Painter) -> void:
 	var halo := Color(5 / 255.0, 8 / 255.0, 12 / 255.0, 0.92)
 	for entry in shapes:
 		var marker: Dictionary = entry[0]
-		var opacity := float(marker.get("opacity", 1.0))
+		var opacity := float(marker.get("opacity", 1.0)) * _visibility(marker["world"])
 		_text(node, entry[1], str(marker.get("glyph", "")), _scaled(shape_base, float(entry[2])), WarKit.faded(marker["color"], opacity), WarKit.faded(halo, opacity), 1.8, 400)
 	for entry in placed.get("labels", []):
 		var opacity: float = entry[3]
@@ -824,7 +826,8 @@ func _draw_fronts(node: Painter) -> void:
 			for at in _copies(_screen(world), 30):
 				_text(node, at, str(entry[6]), size, WarKit.faded(white, seen), Color(0, 0, 0, 0.65 * seen), 1.0)
 	for entry in _layout.get("troops", []):
-		_text(node, entry[0], entry[1], entry[2], white, Color(0, 0, 0, 0.85), 1.2)
+		var seen: float = entry[3]
+		_text(node, entry[0], entry[1], entry[2], WarKit.faded(white, seen), Color(0, 0, 0, 0.85 * seen), 1.2)
 
 
 func _tone(name: String) -> Color:
@@ -873,27 +876,29 @@ func _draw_transports(node: Painter) -> void:
 			world = place[0]
 			bearing = place[1]
 		drawn_ids[id] = true
+		var seen := _visibility(world)
 		var tone := _tone(str(entry.get("tone", "other")))
 		var ratio := _ratio(world)
 		var count_size := _scaled(11.0, ratio)
 		for at in _copies(_screen(world), 40):
 			if what == "lost":
-				_text(node, at, "×", _scaled(WarKit.stops(level, LOST_SIZE), ratio), tone, EDGE, 2.0)
+				_text(node, at, "×", _scaled(WarKit.stops(level, LOST_SIZE), ratio), WarKit.faded(tone, seen), WarKit.faded(EDGE, seen), 2.0)
 				continue
-			_ship(node, world, at, str(entry.get("medium", "sea")), tone, bearing, icon_scale, 0.72 if what == "plan" else 1.0)
+			_ship(node, world, at, str(entry.get("medium", "sea")), tone, bearing, icon_scale, (0.72 if what == "plan" else 1.0) * seen)
 			var count := str(entry.get("count", ""))
 			if not count.is_empty():
-				_text(node, at + Vector2(0, 1.5 * count_size), count, count_size, tone, EDGE, 1.5)
+				_text(node, at + Vector2(0, 1.5 * count_size), count, count_size, WarKit.faded(tone, seen), WarKit.faded(EDGE, seen), 1.5)
 	for id in carrier_override.keys():
 		if drawn_ids.has(id):
 			continue
 		var place: Array = carrier_override[id]
+		var seen := _visibility(place[0])
 		var tone := _tone(str(place[2]))
 		var count_size := _scaled(11.0, _ratio(place[0]))
 		for at in _copies(_screen(place[0]), 40):
-			_ship(node, place[0], at, str(place[3]), tone, float(place[1]), icon_scale, 1.0)
+			_ship(node, place[0], at, str(place[3]), tone, float(place[1]), icon_scale, seen)
 			if not str(place[4]).is_empty():
-				_text(node, at + Vector2(0, 1.5 * count_size), str(place[4]), count_size, tone, EDGE, 1.5)
+				_text(node, at + Vector2(0, 1.5 * count_size), str(place[4]), count_size, WarKit.faded(tone, seen), WarKit.faded(EDGE, seen), 1.5)
 
 
 func _ship(node: Painter, world: Vector2, at: Vector2, medium: String, colour: Color, bearing: float, icon_scale: float, opacity: float) -> void:
@@ -924,16 +929,18 @@ func _draw_planes(node: Painter) -> void:
 	var shadow := Color(5 / 255.0, 8 / 255.0, 13 / 255.0, 0.55 * 0.8)
 	for entry_item in planes:
 		var plane: Array = entry_item
+		var seen := _visibility(plane[0])
 		for at in _copies(_screen(plane[0]), 30):
 			node.draw_set_transform_matrix(_icon_frame(plane[0], at + Vector2(3, 4), float(plane[1]), size))
-			node.draw_colored_polygon(shape, shadow)
+			node.draw_colored_polygon(shape, WarKit.faded(shadow, seen))
 	for entry_item in planes:
 		var plane: Array = entry_item
-		var tone := _tone(str(plane[2]))
+		var seen := _visibility(plane[0])
+		var tone := WarKit.faded(_tone(str(plane[2])), seen)
 		for at in _copies(_screen(plane[0]), 30):
 			node.draw_set_transform_matrix(_icon_frame(plane[0], at, float(plane[1]), size))
 			node.draw_colored_polygon(shape, tone)
-			node.draw_polyline(ring, EDGE, 2.4, true)
+			node.draw_polyline(ring, WarKit.faded(EDGE, seen), 2.4, true)
 	node.draw_set_transform(Vector2.ZERO)
 
 
@@ -961,6 +968,7 @@ func _sea_batches() -> Array:
 		var at := _place(battle["world"])
 		if globe and _hidden(at):
 			continue
+		shown *= _visibility(battle["world"])
 		var scale := 1.0 / maxf(map.label_depth(battle["world"]), 0.0001) if globe and map else 1.0
 		WarKit.disc(circles, at, radius * scale, pixel, Color(5 / 255.0, 8 / 255.0, 13 / 255.0, 0.6 * shown))
 		_world_ring(circles, at, (radius + stroke * 0.5) * scale, stroke * scale, WarKit.faded(tone, shown))
@@ -977,7 +985,7 @@ func _draw_seas(node: Painter) -> void:
 	var mark_size := WarKit.stops(level, BATTLE_MARK)
 	for entry_item in battles:
 		var battle: Dictionary = entry_item
-		var shown := 1.0 if battle.get("fresh", false) else 0.5
+		var shown := (1.0 if battle.get("fresh", false) else 0.5) * _visibility(battle["world"])
 		var tone := _tone(str(battle.get("tone", "other")))
 		var size := _scaled(mark_size, _ratio(battle["world"]))
 		for at in _copies(_screen(battle["world"]), 40):
@@ -988,7 +996,7 @@ func _draw_seas(node: Painter) -> void:
 	if level >= 2.0:
 		for entry_item in labels:
 			var label: Dictionary = entry_item
-			var tone := _tone(str(label.get("tone", "other")))
+			var tone := WarKit.faded(_tone(str(label.get("tone", "other"))), _visibility(label["world"]))
 			var ratio := _ratio(label["world"])
 			if ratio < MapView.LABEL_PERSPECTIVE_CUTOFF:
 				continue
@@ -1059,14 +1067,11 @@ func _draw_units(node: Painter) -> void:
 			continue
 		var world: Vector2 = unit_positions[id]
 		var seen := _visibility(world)
-		if seen <= 0.0:
-			continue
 		var style := _unit_style(unit)
 		var ratio := _ratio(world)
 		var shape: Variant = _ground_frame(world)
 		for at in _copies(_screen(world), 30):
-			if seen >= 0.5:
-				_unit_hits.append([at, float(style["radius"]) + float(style["stroke_width"]), id, shape])
+			_unit_hits.append([at, float(style["radius"]) + float(style["stroke_width"]), id, shape])
 			placed.append([unit, at, float(style["radius"]), float(style["icon"]) * seen, ratio])
 	placed.sort_custom(func(a: Array, b: Array) -> bool: return float((a[0] as Dictionary).get("strength", 0)) > float((b[0] as Dictionary).get("strength", 0)))
 	for entry in placed:
@@ -1082,7 +1087,8 @@ func _draw_units(node: Painter) -> void:
 		else:
 			_text(node, at, str(unit.get("glyph", "I")), _scaled(glyph_size, ratio), WarKit.faded(white, opacity), Color(0, 0, 0, 0.65 * opacity), 1.0)
 	for entry in _layout.get("units", []):
-		_text(node, entry[0], entry[1], entry[2], white, Color(0, 0, 0, 0.85), 1.2)
+		var seen: float = entry[3]
+		_text(node, entry[0], entry[1], entry[2], WarKit.faded(white, seen), Color(0, 0, 0, 0.85 * seen), 1.2)
 
 
 func _draw_strikes(node: Painter) -> void:

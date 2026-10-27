@@ -48,7 +48,6 @@ var _wanted := 0
 var _shown := 0
 var _building := false
 var _again: Dictionary = {}
-var _held: Dictionary = {}
 var _tasks: Array[int] = []
 
 
@@ -81,7 +80,6 @@ func set_enabled(value: bool) -> void:
 		_wanted = 0
 		_shown = 0
 		_again = {}
-		_held = {}
 		has_data = false
 		low = 0.0
 		high = 0.0
@@ -94,10 +92,6 @@ func set_enabled(value: bool) -> void:
 
 func texture_for(level: int) -> Texture2D:
 	return level_textures[level] if level >= 0 and level < level_textures.size() else _blank
-
-
-func blank() -> Texture2D:
-	return _blank
 
 
 func elevation_at(world: Vector2) -> float:
@@ -143,7 +137,7 @@ func update(frame: Dictionary, globe_rect: Rect2) -> void:
 		return
 	_tick += 1
 	var entries: Array = []
-	if float(frame.get("g", 0.0)) >= 0.999:
+	if float(frame.get("g", 0.0)) > 0.0:
 		entries = _globe_cover(frame, globe_rect)
 	else:
 		entries = _flat_cover(frame)
@@ -226,21 +220,99 @@ func _globe_cover(frame: Dictionary, rect: Rect2) -> Array:
 	var found: Array = []
 	if rect.size.x <= 0.0 or rect.size.y <= 0.0:
 		return found
-	var zoom := clampi(floori(float(frame["zoom"])), 0, RENDER_MAX_ZOOM)
-	var count := 1 << zoom
-	var span := WORLD / count
+	var level: float = frame["zoom"]
+	var zoom := clampi(floori(level), 0, RENDER_MAX_ZOOM)
 	var centre: Vector2 = frame["cam_world"]
-	var first_x := floori(rect.position.x / span)
-	var last_x := mini(floori(rect.end.x / span), first_x + count - 1)
-	var first_y := clampi(floori(rect.position.y / span), 0, count - 1)
-	var last_y := clampi(floori(rect.end.y / span), 0, count - 1)
-	for x in range(first_x, last_x + 1):
-		for y in range(first_y, last_y + 1):
-			var middle := Vector2((x + 0.5) * span, (y + 0.5) * span)
-			found.append([zoom, x, y, middle.distance_squared_to(centre)])
+	if zoom <= 4:
+		var count := 1 << zoom
+		var span := WORLD / count
+		var first_x := floori(rect.position.x / span)
+		var last_x := mini(floori(rect.end.x / span), first_x + count - 1)
+		var first_y := clampi(floori(rect.position.y / span), 0, count - 1)
+		var last_y := clampi(floori(rect.end.y / span), 0, count - 1)
+		for x in range(first_x, last_x + 1):
+			for y in range(first_y, last_y + 1):
+				var middle := Vector2((x + 0.5) * span, (y + 0.5) * span)
+				found.append([zoom, x, y, middle.distance_squared_to(centre)])
+				if found.size() >= GLOBE_TILE_LIMIT:
+					return found
+		return found
+	var size: Vector2 = frame["size"]
+	var pitch: float = frame["pitch"]
+	var focal: float = frame["focal"]
+	var world_px := WORLD * float(frame["px_per_world"])
+	var seen := globe._unproject_location(frame, size * 0.5 + Vector2(0.0, focal * tan(pitch)))
+	var camera_point := GlobeView.world_of_lonlat(seen.x, seen.y) / WORLD
+	var centre_point := centre / WORLD
+	var distance_z := cos(pitch) * focal / world_px
+	var distance_centre := Vector2(centre_point.x - camera_point.x, centre_point.y - camera_point.y).length()
+	var distance_3d := sqrt(distance_centre * distance_centre + distance_z * distance_z)
+	var behaviour := Basemap.cover_loading_behaviour()
+	var stack: Array[Array] = []
+	for wrap in range(floori(rect.position.x / WORLD), floori(rect.end.x / WORLD) + 1):
+		stack.append([0, 0, 0, wrap])
+	while not stack.is_empty():
+		var node: Array = stack.pop_back()
+		var z: int = node[0]
+		var x: int = node[1]
+		var y: int = node[2]
+		var wrap: int = node[3]
+		var count := 1 << z
+		var span := WORLD / count
+		var low := Vector2((wrap * count + x) * span, y * span)
+		if not Rect2(low, Vector2(span, span)).intersects(rect):
+			continue
+		var distance := globe_tile_distance(camera_point, x, y, z)
+		var desired := maxi(0, floori(Basemap.cover_tile_zoom(level, distance, distance_z, distance_3d, behaviour)))
+		if z >= mini(desired, RENDER_MAX_ZOOM):
+			found.append([z, x + wrap * count, y, (low + Vector2(span, span) * 0.5).distance_squared_to(centre)])
 			if found.size() >= GLOBE_TILE_LIMIT:
 				return found
+			continue
+		for child in range(4):
+			stack.append([z + 1, (x << 1) + (child % 2), (y << 1) + (child >> 1), wrap])
 	return found
+
+
+static func _tile_gap(point: float, tile: float, size: float) -> float:
+	var delta := point - tile
+	return -delta if delta < 0.0 else maxf(0.0, delta - size)
+
+
+static func _tile_gap_wrapped(point: Vector2, corner: Vector2, size: float) -> float:
+	var along := point.x - corner.x
+	var across := 0.0
+	if along < 0.0:
+		across = minf(-along, 1.0 + along - size)
+	elif along > 1.0:
+		across = minf(maxf(along - size, 0.0), 1.0 - along)
+	return maxf(across, _tile_gap(point.y, corner.y, size))
+
+
+static func globe_tile_distance(point: Vector2, x: int, y: int, z: int) -> float:
+	var scale := float(1 << z)
+	var size := 1.0 / scale
+	var corner := Vector2(x / scale, y / scale)
+	var nearest := _tile_gap_wrapped(point, corner, size)
+	nearest = minf(nearest, _tile_gap_wrapped(point, Vector2(corner.x + 0.5, -corner.y - size), size))
+	nearest = minf(nearest, _tile_gap_wrapped(point, Vector2(corner.x + 0.5, 2.0 - corner.y - size), size))
+	return nearest
+
+
+func tile_min_at(world: Vector2, level: float) -> float:
+	var dem := mini(maxi(0, floori(level)) - DELTA_ZOOM, SOURCE_MAX_ZOOM)
+	if dem < SOURCE_MIN_ZOOM:
+		return 0.0
+	var count := 1 << dem
+	var x := floori(world.x / WORLD * count)
+	var y := clampi(floori(world.y / WORLD * count), 0, count - 1)
+	for zoom in range(dem, SOURCE_MIN_ZOOM - 1, -1):
+		var key := tile_key(zoom, x, y)
+		if tiles.has(key):
+			return float((tiles[key] as Dictionary)["min"]) * EXAGGERATION
+		x = x >> 1
+		y = y >> 1
+	return 0.0
 
 
 static func tile_key(z: int, x: int, y: int) -> String:
@@ -307,6 +379,7 @@ func _plan(frame: Dictionary, entries: Array) -> Dictionary:
 	var parts: PackedStringArray = []
 	for item: Array in used:
 		parts.append("%d,%d,%d,%d,%d,%d" % item)
+	parts.sort()
 	for level in windows.keys():
 		parts.append("w%d:%s" % [level, str(windows[level])])
 	return {
@@ -457,27 +530,6 @@ func _built(result: Dictionary) -> void:
 	_reap()
 	if not enabled:
 		return
-	if has_data and globe and globe.gesture_active():
-		_held = result
-		if not _again.is_empty():
-			var plan := _again
-			_again = {}
-			if int(plan["key"]) != int(result["key"]):
-				_start(plan)
-		return
-	_held = {}
-	_apply(result)
-
-
-func has_held() -> bool:
-	return not _held.is_empty()
-
-
-func release_held() -> void:
-	if _held.is_empty() or not enabled:
-		return
-	var result := _held
-	_held = {}
 	_apply(result)
 
 

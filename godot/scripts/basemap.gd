@@ -844,6 +844,16 @@ func wrap_enabled() -> bool:
 	return _wrap
 
 
+static var _hillshade: Shader
+
+
+static func hillshade_shader() -> Shader:
+	if _hillshade == null:
+		_hillshade = Shader.new()
+		_hillshade.code = HILLSHADE_SHADER
+	return _hillshade
+
+
 class TileLayer extends Node2D:
 	var basemap: Basemap
 	var id := ""
@@ -1079,10 +1089,8 @@ class TileLayer extends Node2D:
 		sprite.z_index = min(tile_zoom, 22)
 		sprite.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST if dem else CanvasItem.TEXTURE_FILTER_LINEAR
 		if dem:
-			var shader := Shader.new()
-			shader.code = Basemap.HILLSHADE_SHADER
 			var material := ShaderMaterial.new()
-			material.shader = shader
+			material.shader = Basemap.hillshade_shader()
 			var count := float(1 << tile_zoom)
 			var parts := key.split("/")
 			var y := float(int(parts[2]))
