@@ -168,22 +168,27 @@ export const register = (ctx) => {
         const leadName = clean(lead?.name);
         const details = await lib.createGame({ name: `${leadName} — ${name}`, scenarioId: id, gamePatch: patchOf(leadName), setActive: true });
         const gameId = details.game.id;
-        const seeded = engine.newGameWorld.seededWorldOf(await lib.loadGameDetails(gameId).catch(() => null), leadName);
-        const merged = faction ? engine.newGameWorld.worldWithFaction(seeded, faction) : engine.newGameWorld.worldWithPlayerGroup(seeded, group);
-        const key = faction ? merged.name : merged.key;
-        await lib.saveGame(gameId, { world: merged.world, gamePatch: patchOf(key) });
+        let error = "";
         try {
-          const colors = await engine.readJson(engine.JSON_URLS.colors, { defaultValue: {}, force: true });
-          await engine.assets.writeJson(engine.JSON_URLS.colors, { ...colors, [key]: hexToRgb(merged.color) }, { pretty: true });
-        } catch {}
-        if (lead?.flag) {
+          const seeded = engine.newGameWorld.seededWorldOf(await lib.loadGameDetails(gameId).catch(() => null), leadName);
+          const merged = faction ? engine.newGameWorld.worldWithFaction(seeded, faction) : engine.newGameWorld.worldWithPlayerGroup(seeded, group);
+          const key = faction ? merged.name : merged.key;
+          await lib.saveGame(gameId, { world: merged.world, gamePatch: patchOf(key) });
           try {
-            const flags = await engine.readJson(engine.JSON_URLS.flags, { defaultValue: {}, force: true });
-            await engine.assets.writeJson(engine.JSON_URLS.flags, { ...flags, [key]: lead.flag }, { pretty: true });
+            const colors = await engine.readJson(engine.JSON_URLS.colors, { defaultValue: {}, force: true });
+            await engine.assets.writeJson(engine.JSON_URLS.colors, { ...colors, [key]: hexToRgb(merged.color) }, { pretty: true });
           } catch {}
+          if (lead?.flag) {
+            try {
+              const flags = await engine.readJson(engine.JSON_URLS.flags, { defaultValue: {}, force: true });
+              await engine.assets.writeJson(engine.JSON_URLS.flags, { ...flags, [key]: lead.flag }, { pretty: true });
+            } catch {}
+          }
+        } catch (failure) {
+          error = clean(failure?.message ?? failure);
         }
         await engine.refreshLibraryCatalog({ force: true });
-        return { id: clean(gameId), view: await ctx.gameView() };
+        return { id: clean(gameId), view: await ctx.gameView(), ...(error ? { error } : null) };
       }
       const details = await lib.createGame({ name: `${name} Session`, scenarioId: id, ...(Object.keys(patchOf(clean(country))).length ? { gamePatch: patchOf(clean(country)) } : null), setActive: true });
       await engine.refreshLibraryCatalog({ force: true });

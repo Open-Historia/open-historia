@@ -63,6 +63,7 @@ var _drawer_tween: Tween
 var _general_trays := {}
 var _general_tags := {}
 var _plan_trays := {}
+var rehearsal_tray: Control
 
 var _bar: PanelContainer
 var _bar_name: Label
@@ -147,11 +148,12 @@ func is_open() -> bool:
 
 
 func map_state() -> Dictionary:
-	return {"open": bool(store.value("open")), "battlefield": str(store.value("battlefield")), "side": int(store.value("side")), "highlight": int(store.value("highlight")), "selected": (store.value("selected") as Array).duplicate()}
+	var ways: Variant = store.value("transport_ways")
+	return {"open": bool(store.value("open")), "battlefield": str(store.value("battlefield")), "side": int(store.value("side")), "highlight": int(store.value("highlight")), "selected": (store.value("selected") as Array).duplicate(), "transport_ways": (ways as Dictionary).duplicate(true) if ways is Dictionary else null}
 
 
 func _announce_map_state(keys: PackedStringArray) -> void:
-	for key in ["open", "battlefield", "side", "highlight", "selected"]:
+	for key in ["open", "battlefield", "side", "highlight", "selected", "transport_ways"]:
 		if key in keys:
 			map_state_changed.emit(map_state())
 			return
@@ -517,7 +519,6 @@ func _build_frame() -> void:
 	row.add_theme_constant_override("separation", int(round(T.px(0.8))))
 	row.alignment = BoxContainer.ALIGNMENT_BEGIN
 	_bar_name = T.stencil("", 1.0, T.BONE, 0.2)
-	_bar_name.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	_bar_name.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	row.add_child(_bar_name)
 	_bar_sides = T.stencil("", 0.74, T.BONE_SOFT)
@@ -918,9 +919,9 @@ func _render_tabs() -> void:
 		var on := name == _name()
 		var tab := T.key(name, on, false)
 		tab.text = name.to_upper()
+		var natural := T.stencil_font(T.spacing_px(0.8, 0.07)).get_string_size(tab.text, HORIZONTAL_ALIGNMENT_LEFT, -1, T.font_size(0.8)).x + 2.0 * T.px(0.62) + 4.0
 		tab.clip_text = true
 		tab.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-		var natural := tab.get_combined_minimum_size().x
 		tab.custom_minimum_size.x = minf(natural, T.px(14.0))
 		var side := int(front.get("side", -1))
 		tab.pressed.connect(func() -> void: store.show_battlefield(name, side))
@@ -1159,6 +1160,8 @@ func _weather_tray(weather: Dictionary) -> Control:
 			stack.add_child(glyph)
 		var number := T.stencil(T.num(day.get("day", "")) if typeof(day.get("day")) != TYPE_STRING else str(day.get("day", "")), 0.6, T.BONE_FAINT, 0.0)
 		number.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		number.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		number.custom_minimum_size.y = roundf(T.px(0.6) * 1.15)
 		stack.add_child(number)
 		tile.add_child(stack)
 		tiles.add_child(tile)
@@ -1342,7 +1345,8 @@ func _plans_block() -> Control:
 		if not Rect2(Vector2.ZERO, block.size).has_point(block.get_local_mouse_position()):
 			store.set_values({"pointed": ""}))
 	block.add_child(T.heading("Planned movements"))
-	block.add_child(_top(_rehearsal_tray(), 0.4))
+	rehearsal_tray = _rehearsal_tray()
+	block.add_child(_top(rehearsal_tray, 0.4))
 	var planned: Array = record.get("planned", [])
 	if planned.is_empty():
 		block.add_child(_top(T.soft("None. A route you draw, an order a general takes, and an operation on your Board that sends troops at a place here all show on the map as arrows."), 0.4))

@@ -38,9 +38,6 @@ void vertex() {
 		}
 		alpha = min(1.0, land_alpha * style.g);
 	}
-	if (region == selected) {
-		c.rgb = mix(c.rgb, vec3(1.0), 0.35);
-	}
 	tint = vec4(c.rgb, c.a < 0.5 ? 0.0 : alpha);
 }
 void fragment() {
@@ -897,3 +894,54 @@ static func political_color(rgb: Array) -> Color:
 		for slot in range(3):
 			parts[slot] *= 1.0 - dim
 	return Color8(int(roundf(clampf(parts[0], 0.0, 255.0))), int(roundf(clampf(parts[1], 0.0, 255.0))), int(roundf(clampf(parts[2], 0.0, 255.0))))
+
+
+func editor_region_count() -> int:
+	return _region_count if _ready_to_draw else 0
+
+
+func editor_set_region_color(index: int, color: Color, commit := true) -> void:
+	if not _ready_to_draw or _colors_image == null or index < 0 or index >= _region_count:
+		return
+	_colors_image.set_pixel(index % COLUMNS, index / COLUMNS, color)
+	if commit:
+		_colors_texture.update(_colors_image)
+
+
+func editor_set_region_colors(colors: PackedColorArray) -> void:
+	if not _ready_to_draw or _colors_image == null:
+		return
+	for index in range(mini(colors.size(), _region_count)):
+		_colors_image.set_pixel(index % COLUMNS, index / COLUMNS, colors[index])
+	_colors_texture.update(_colors_image)
+
+
+func editor_commit_colors() -> void:
+	if _colors_texture and _colors_image:
+		_colors_texture.update(_colors_image)
+
+
+func editor_set_regions_visible(shown: bool) -> void:
+	for copy in _copies:
+		if is_instance_valid(copy):
+			copy.visible = shown
+
+
+func editor_zoom_at(screen_point: Vector2, factor: float) -> void:
+	_zoom_at(screen_point, factor)
+
+
+func editor_pan(screen_delta: Vector2) -> void:
+	camera.position -= screen_delta / camera.zoom.x
+	_after_camera_move()
+
+
+func editor_set_view(world_centre: Vector2, zoom: float) -> void:
+	camera.position = world_centre
+	camera.zoom = Vector2.ONE * clampf(zoom, MIN_ZOOM, MAX_ZOOM)
+	_after_camera_move()
+
+
+func editor_apply_basemap(style: Dictionary, link: EngineLink) -> void:
+	if basemap and basemap.has_method("apply_style"):
+		basemap.apply_style(style, link)

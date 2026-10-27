@@ -202,6 +202,10 @@ func refresh() -> void:
 
 
 func _refresh_once() -> void:
+	var stored: Dictionary = await engine.request("mapextras.settings")
+	if bool(stored.get("ok", false)) and stored.get("result") is Dictionary:
+		var values: Dictionary = stored["result"]
+		settings["gamePick"] = values.get("gamePick")
 	var reply: Dictionary = await engine.request("mapextras.world")
 	if not bool(reply.get("ok", false)) or not (reply.get("result") is Dictionary):
 		return

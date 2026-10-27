@@ -396,7 +396,7 @@ func _render_detail() -> void:
 		for region in _owned:
 			var entry: Dictionary = region
 			var region_id := str(entry.get("id", ""))
-			var button := WorkshopUI.base_button(str(entry.get("name", "")) if not str(entry.get("name", "")).is_empty() else region_id)
+			var button := WorkshopUI.base_button(str(entry.get("name", "")) if not str(entry.get("name", "")).is_empty() else "Region")
 			button.alignment = HORIZONTAL_ALIGNMENT_LEFT
 			var flat := UI.box(Color(1, 1, 1, 0.03), Color(1, 1, 1, 0.08), 6, 1, Vector4(7, 4, 7, 4))
 			WorkshopUI._flat_styles(button, flat, UI.box(Color(1, 1, 1, 0.07), Color(1, 1, 1, 0.14), 6, 1, Vector4(7, 4, 7, 4)), flat, flat)

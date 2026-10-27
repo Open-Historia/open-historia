@@ -11,6 +11,7 @@ export const register = (ctx) => {
   const PARKED_TURN_STALE_NOTE = engine.simulationStatus.PARKED_TURN_STALE_NOTE;
 
   let live = null;
+  ctx.turnLive = () => live;
   let lastStreamed = [];
   let landedBase = null;
   const stagedBases = new Map();

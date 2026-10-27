@@ -47,7 +47,7 @@ static func px(rem: float) -> float:
 
 
 static func font_size(rem: float) -> int:
-	return int(round(rem * REM))
+	return int(rem * REM + 0.35)
 
 
 static func stencil_font(spacing := 0) -> Font:
@@ -57,7 +57,7 @@ static func stencil_font(spacing := 0) -> Font:
 	var system := SystemFont.new()
 	system.font_names = PackedStringArray(STENCIL_NAMES)
 	system.font_weight = 700
-	system.font_stretch = 75
+	system.font_stretch = 87
 	system.antialiasing = TextServer.FONT_ANTIALIASING_GRAY
 	system.hinting = TextServer.HINTING_LIGHT
 	system.subpixel_positioning = TextServer.SUBPIXEL_POSITIONING_AUTO
@@ -235,13 +235,13 @@ static func links_row() -> HFlowContainer:
 	return row
 
 
-static func svg_icon(key_name: String, svg: String, size: int, color: Color) -> Texture2D:
+static func svg_icon(key_name: String, svg: String, size: int, color: Color, view_size := 24.0) -> Texture2D:
 	var cache_key := "%s:%d:%s" % [key_name, size, color.to_html()]
 	if _icons.has(cache_key):
 		return _icons[cache_key]
 	var painted := svg.replace("currentColor", "#" + color.to_html(false))
 	var image := Image.new()
-	if image.load_svg_from_string(painted, float(size) / 24.0) != OK:
+	if image.load_svg_from_string(painted, float(size) / view_size) != OK:
 		return null
 	if color.a < 1.0:
 		image.convert(Image.FORMAT_RGBA8)

@@ -16,10 +16,75 @@ var _backdrop: ColorRect
 var _column: VBoxContainer
 var _scroll: ScrollContainer
 var _page_view: Control
-var _controls: HBoxContainer
+var _controls: ControlsRow
 var _dots: Array[Button] = []
 var _dot_widths: Array[float] = []
 var _built := false
+
+
+class ControlsRow extends Container:
+	var gap := 9.6
+
+	func _init() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	func _visible_children() -> Array[Control]:
+		var items: Array[Control] = []
+		for child in get_children():
+			if child is Control and (child as Control).visible:
+				items.append(child as Control)
+		return items
+
+	func _rows() -> Array:
+		var items := _visible_children()
+		var rows: Array = []
+		var current: Array[Control] = []
+		var used := 0.0
+		for item in items:
+			var want := item.get_combined_minimum_size().x
+			if not current.is_empty() and used + gap + want > size.x:
+				rows.append(current)
+				current = []
+				used = 0.0
+			used += (gap if not current.is_empty() else 0.0) + want
+			current.append(item)
+		if not current.is_empty():
+			rows.append(current)
+		return rows
+
+	func _notification(what: int) -> void:
+		if what == NOTIFICATION_SORT_CHILDREN:
+			var rows := _rows()
+			var y := 0.0
+			for row in rows:
+				var line: Array = row
+				var height := 0.0
+				for item in line:
+					height = maxf(height, (item as Control).get_combined_minimum_size().y)
+				if line.size() == 1:
+					var only: Control = line[0]
+					var want := only.get_combined_minimum_size()
+					var at := 0.0 if bool(only.get_meta("start", false)) or rows.size() > 1 else size.x - want.x
+					fit_child_in_rect(only, Rect2(Vector2(at, y + (height - want.y) * 0.5), want))
+				else:
+					var first: Control = line[0]
+					var last: Control = line[line.size() - 1]
+					var first_want := first.get_combined_minimum_size()
+					var last_want := last.get_combined_minimum_size()
+					fit_child_in_rect(first, Rect2(Vector2(0.0, y + (height - first_want.y) * 0.5), first_want))
+					fit_child_in_rect(last, Rect2(Vector2(size.x - last_want.x, y + (height - last_want.y) * 0.5), last_want))
+				y += height + gap
+			update_minimum_size()
+
+	func _get_minimum_size() -> Vector2:
+		var total := 0.0
+		var rows := _rows()
+		for row in rows:
+			var height := 0.0
+			for item in row:
+				height = maxf(height, (item as Control).get_combined_minimum_size().y)
+			total += height
+		return Vector2(0.0, total + gap * float(maxi(0, rows.size() - 1)))
 
 
 func _init() -> void:
@@ -41,9 +106,9 @@ func _init() -> void:
 	_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_style_scrollbar(_scroll)
 	_column.add_child(_scroll)
-	_controls = HBoxContainer.new()
-	_controls.add_theme_constant_override("separation", roundi(UpdateKit.px(0.6)))
-	_controls.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_controls = ControlsRow.new()
+	_controls.gap = UpdateKit.px(0.6)
+	_controls.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_column.add_child(_controls)
 	visible = false
 
@@ -90,7 +155,15 @@ func setup(engine: EngineLink, updates: Array, prefs: Dictionary) -> void:
 	if not _still:
 		modulate.a = 0.0
 		CubicBezier.animate(self, func(t: float) -> void: modulate.a = t, 400.0, 0.0, UpdateKit.RISE)
-	if not get_viewport().size_changed.is_connected(_on_resized):
+	_watch_size()
+
+
+func _ready() -> void:
+	_watch_size()
+
+
+func _watch_size() -> void:
+	if is_inside_tree() and not get_viewport().size_changed.is_connected(_on_resized):
 		get_viewport().size_changed.connect(_on_resized)
 
 
@@ -178,8 +251,8 @@ func _build_controls() -> void:
 			dots.add_child(dot)
 		paging.add_child(dots)
 		paging.add_child(_arrow("›", last, 1, chrome.get("arrow", {})))
+		paging.set_meta("start", true)
 		_controls.add_child(paging)
-	_controls.add_child(UpdateKit.spacer_control())
 	var finish := UpdateKit.hbox(roundi(UpdateKit.px(0.8)))
 	finish.alignment = BoxContainer.ALIGNMENT_END
 	if several and not last:

@@ -43,6 +43,16 @@ const over = (topRgb, topAlpha, rgb, alpha) => {
   return [mix(0), mix(1), mix(2)];
 };
 
+const fillRgb = (value) => {
+  const text = String(value ?? "").trim();
+  const rgba = /^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)(?:\s*,\s*([\d.]+))?\s*\)$/i.exec(text);
+  if (rgba) return [Number(rgba[1]), Number(rgba[2]), Number(rgba[3]), rgba[4] === undefined ? 1 : Number(rgba[4])];
+  const hex = /^#([0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.exec(text)?.[1];
+  if (!hex) return null;
+  const full = hex.length === 3 ? hex.split("").map((part) => part + part).join("") : hex;
+  return [parseInt(full.slice(0, 2), 16), parseInt(full.slice(2, 4), 16), parseInt(full.slice(4, 6), 16), full.length === 8 ? parseInt(full.slice(6, 8), 16) / 255 : 1];
+};
+
 const normalizePolityKeyedMap = (input, polities) => {
   const out = input && typeof input === "object" && !Array.isArray(input) ? { ...input } : {};
   for (const [key, record] of Object.entries(polities || {})) {
@@ -155,6 +165,7 @@ export const register = (ctx) => {
 
   const patchMetadata = (s, patch) => {
     s.doc = { ...s.doc, metadata: { ...s.doc.metadata, ...patch } };
+    if (Object.prototype.hasOwnProperty.call(patch || {}, "customBackground") || Object.prototype.hasOwnProperty.call(patch || {}, "basemap")) s.styleRev = (s.styleRev || 0) + 1;
     dirty(s);
   };
 
@@ -523,6 +534,7 @@ export const register = (ctx) => {
       clipboardCount: clipboard?.regions?.features?.length ?? 0,
       militaryDefaults: s.initialMap?.militaryDefaults ?? null,
       freezingCount: freezingCountOf(s),
+      styleRev: s.styleRev || 0,
     };
   };
 
@@ -1365,7 +1377,16 @@ export const register = (ctx) => {
       report({ phase: "done" });
       return outcome(affectedRegions);
     };
-    return { repairTopologyEverywhere };
+    const analyzeTopology = (ids, { maxWidth = sweep.BORDER_CLEANUP.maxWidth } = {}) => {
+      const width = Math.max(1, Number(maxWidth) || sweep.BORDER_CLEANUP.maxWidth);
+      const feats = (ids || []).map((rid) => regionSource.getFeatureById(rid)).filter(Boolean);
+      if (feats.length < 2) return [];
+      const context = topologyContext(feats);
+      const gaps = assignGapTargets(geo.enclosedGapGeoms(feats.map((f) => f.getGeometry()), { maxWidth: width }), width, context);
+      const overlapsFound = findNarrowOverlaps(feats, width, context);
+      return [...gaps, ...overlapsFound];
+    };
+    return { repairTopologyEverywhere, analyzeTopology };
   };
 
   const cleanupEvent = (s, state) => {
@@ -1596,8 +1617,663 @@ export const register = (ctx) => {
     return { ok: true };
   };
 
+  const applyRegionPatch = (s, { upsert = [], remove = [], withAttributes = false } = {}) => {
+    const steps = [];
+    const defaultType = (s.doc.types || [])[0]?.id || "land";
+    for (const raw of Array.isArray(upsert) ? upsert : []) {
+      const rid = raw?.properties?.id ?? raw?.id;
+      if (rid === undefined || rid === null || !raw?.geometry) continue;
+      const key = String(rid);
+      let geometry;
+      try {
+        geometry = fmt.readGeometry(raw.geometry, READ);
+      } catch (error) {
+        console.warn("[editor] a suggested region could not be read:", key, error);
+        continue;
+      }
+      if (!/Polygon$/.test(geometry.getType())) continue;
+      const props = raw.properties || {};
+      const attrs = {
+        owner: props.owner || null,
+        name: props.name || "Region",
+        typeId: props.typeId || defaultType,
+        claimants: Array.isArray(props.claimants) && props.claimants.length ? props.claimants : null,
+        group: props.group || null,
+        gid0: props.gid0 || "",
+      };
+      const existing = s.source.getFeatureById(key);
+      if (existing) {
+        const before = { geometry: existing.getGeometry().clone(), edited: existing.get("edited"), attrs: {} };
+        if (withAttributes) for (const field of Object.keys(attrs)) before.attrs[field] = existing.get(field) ?? null;
+        steps.push({
+          undo: () => {
+            existing.setGeometry(before.geometry.clone());
+            if (before.edited) existing.set("edited", before.edited); else existing.unset("edited");
+            for (const [field, value] of Object.entries(before.attrs)) existing.set(field, value);
+          },
+          redo: () => {
+            existing.setGeometry(geometry.clone());
+            existing.set("edited", true);
+            if (withAttributes) for (const [field, value] of Object.entries(attrs)) existing.set(field, value);
+          },
+        });
+      } else {
+        const feature = new Feature({ geometry: geometry.clone() });
+        feature.setId(key);
+        feature.setProperties({ ...attrs, id: key, edited: true });
+        steps.push({ undo: () => s.source.removeFeature(feature), redo: () => s.source.addFeature(feature) });
+      }
+    }
+    for (const rid of Array.isArray(remove) ? remove : []) {
+      const feature = s.source.getFeatureById(String(rid));
+      if (!feature) continue;
+      steps.push({ undo: () => s.source.addFeature(feature), redo: () => s.source.removeFeature(feature) });
+    }
+    if (!steps.length) return { changed: 0 };
+    steps.forEach((step) => step.redo());
+    notify(s, { geometry: true });
+    pushCmd(s, {
+      undo: () => { [...steps].reverse().forEach((step) => step.undo()); s.geometryRev += 1; },
+      redo: () => { steps.forEach((step) => step.redo()); s.geometryRev += 1; },
+    });
+    return { changed: steps.length };
+  };
+
+  const retagGroup = (s, from, to = null) => {
+    const key = clean(from);
+    if (!key) return 0;
+    const touched = features(s).filter((f) => clean(f.get("group")) === key);
+    if (!touched.length) return 0;
+    const apply = (value) => touched.forEach((f) => f.set("group", value || null));
+    apply(to);
+    notify(s);
+    pushCmd(s, { undo: () => apply(key), redo: () => apply(to) });
+    return touched.length;
+  };
+
+  const convertForReview = (s, source, target, bounds = null) => {
+    const projection = engine.wsMapProjection;
+    const convert = engine.wsProjectionConvert;
+    const from = projection.normalizeProjection(source);
+    const to = projection.normalizeProjection(target);
+    if (projection.sameProjection(from, to)) {
+      patchMetadata(s, { projection: to });
+      return;
+    }
+    const moveXY = (x, y) => {
+      const [X, Y] = projection.convertPlane(from, to, x / EARTH, y / EARTH);
+      return [X * EARTH, Y * EARTH];
+    };
+    const background = s.doc.metadata?.customBackground ?? null;
+    const plan = convert.planBasemapChange({ from, to, background, keepPicture: background?.kind === "image" });
+    let nextBg = background;
+    if (plan.kind === "bounds") {
+      const lies = bounds ?? (to.type === "mercator" ? null : plan.bounds);
+      nextBg = { kind: "image", dataUrl: background.dataUrl, aspect: background.aspect, ...(lies ? { bounds: lies } : {}) };
+    } else if (plan.kind === "vector") {
+      nextBg = { ...background, geojson: projection.moveGeojson(background.geojson, (lon, lat) => projection.convertDisplayPoint(from, to, lon, lat)) };
+    } else if (plan.kind === "plain") {
+      nextBg = { kind: "plain" };
+    } else if (plan.kind === "tiles") {
+      nextBg = null;
+    }
+    const transform = (move) => (input, output, stride = 2) => {
+      const out = output ?? input;
+      for (let i = 0; i < input.length; i += stride) {
+        const [x, y] = move(input[i], input[i + 1]);
+        out[i] = x;
+        out[i + 1] = y;
+      }
+      return out;
+    };
+    for (const f of features(s)) f.getGeometry()?.applyTransform(transform(moveXY));
+    notify(s, { geometry: true });
+    setters(s).features((rows) => convert.moveFeatureCoords(rows, from, to));
+    setters(s).units((rows) => convert.moveUnits(rows, from, to));
+    setters(s).terrainAreas((rows) => convert.moveWarShapes(rows, from, to));
+    setters(s).fortifications((rows) => convert.moveWarShapes(rows, from, to));
+    setters(s).climateZones((rows) => convert.moveWarShapes(rows, from, to));
+    patchMetadata(s, {
+      projection: to,
+      ...(plan.kind === "tiles" ? { customBackground: null } : nextBg !== background ? { customBackground: nextBg } : {}),
+    });
+  };
+
+  const cloneCoords = (value) => (Array.isArray(value) ? value.map(cloneCoords) : value);
+  const closestPointOnSegment = (p, a, b) => {
+    const vx = b[0] - a[0];
+    const vy = b[1] - a[1];
+    const wx = p[0] - a[0];
+    const wy = p[1] - a[1];
+    const vv = vx * vx + vy * vy;
+    const t = vv > 0 ? Math.max(0, Math.min(1, (wx * vx + wy * vy) / vv)) : 0;
+    const point = [a[0] + t * vx, a[1] + t * vy];
+    return { point, distance: Math.hypot(p[0] - point[0], p[1] - point[1]), t };
+  };
+  const ringRefs = (geom) => {
+    if (!geom) return [];
+    const type = geom.getType?.();
+    const coords = geom.getCoordinates?.() || [];
+    if (type === "Polygon") return coords.map((ring, ringIndex) => ({ path: [ringIndex], ring }));
+    if (type === "MultiPolygon") {
+      const rows = [];
+      coords.forEach((poly, polygonIndex) => poly.forEach((ring, ringIndex) => rows.push({ path: [polygonIndex, ringIndex], ring })));
+      return rows;
+    }
+    return [];
+  };
+  const getRingAtPath = (coords, type, path) => (type === "Polygon" ? coords[path[0]] : coords[path[0]]?.[path[1]]);
+  const nearestBoundarySegment = (geom, point) => {
+    let best = null;
+    for (const row of ringRefs(geom)) {
+      const ring = row.ring || [];
+      for (let i = 0; i < ring.length - 1; i += 1) {
+        const hit = closestPointOnSegment(point, ring[i], ring[i + 1]);
+        if (!best || hit.distance < best.distance) best = { ...hit, path: row.path, index: i, a: ring[i], b: ring[i + 1] };
+      }
+    }
+    return best;
+  };
+  const sharedBorderPoint = (feats, point, tolerance) => {
+    if (!Array.isArray(feats) || feats.length !== 2 || !point) return null;
+    const a = nearestBoundarySegment(feats[0]?.getGeometry?.(), point);
+    const b = nearestBoundarySegment(feats[1]?.getGeometry?.(), point);
+    if (!a || !b || a.distance > tolerance || b.distance > tolerance) return null;
+    return { point: [(a.point[0] + b.point[0]) / 2, (a.point[1] + b.point[1]) / 2], a, b };
+  };
+  const nearestBoundaryVertex = (geom, point) => {
+    let best = null;
+    for (const row of ringRefs(geom)) {
+      const ring = row.ring || [];
+      for (let i = 0; i < Math.max(0, ring.length - 1); i += 1) {
+        const coord = ring[i];
+        const distance = Math.hypot(point[0] - coord[0], point[1] - coord[1]);
+        if (!best || distance < best.distance) best = { distance, path: row.path, index: i, coord };
+      }
+    }
+    return best;
+  };
+  const setRingVertex = (ring, index, coord) => {
+    if (!ring?.length || index < 0 || index >= ring.length) return false;
+    ring[index] = coord.slice();
+    if (index === 0) ring[ring.length - 1] = coord.slice();
+    if (index === ring.length - 1) ring[0] = coord.slice();
+    return true;
+  };
+  const weldPointIntoFeature = (feature, point, tolerance) => {
+    const geom = feature?.getGeometry?.();
+    if (!geom || !point) return false;
+    const type = geom.getType?.();
+    if (type !== "Polygon" && type !== "MultiPolygon") return false;
+    const coords = cloneCoords(geom.getCoordinates());
+    const vertex = nearestBoundaryVertex(geom, point);
+    if (vertex && vertex.distance <= tolerance * 0.38) {
+      const ring = getRingAtPath(coords, type, vertex.path);
+      if (!setRingVertex(ring, vertex.index, point)) return false;
+      geom.setCoordinates(coords);
+      feature.set("edited", true);
+      return true;
+    }
+    const segment = nearestBoundarySegment(geom, point);
+    if (!segment || segment.distance > tolerance) return false;
+    const ring = getRingAtPath(coords, type, segment.path);
+    if (!ring) return false;
+    ring.splice(segment.index + 1, 0, point.slice());
+    geom.setCoordinates(coords);
+    feature.set("edited", true);
+    return true;
+  };
+  const removeSharedVertexNear = (feature, point, tolerance) => {
+    const geom = feature?.getGeometry?.();
+    if (!geom || !point) return false;
+    const type = geom.getType?.();
+    if (type !== "Polygon" && type !== "MultiPolygon") return false;
+    const vertex = nearestBoundaryVertex(geom, point);
+    if (!vertex || vertex.distance > tolerance) return false;
+    const coords = cloneCoords(geom.getCoordinates());
+    const ring = getRingAtPath(coords, type, vertex.path);
+    if (!ring || ring.length <= 4) return false;
+    let index = vertex.index;
+    if (index === ring.length - 1) index = 0;
+    ring.splice(index, 1);
+    if (index === 0) ring[ring.length - 1] = ring[0].slice();
+    geom.setCoordinates(coords);
+    feature.set("edited", true);
+    return true;
+  };
+
+  const sameCoord = (a, b, eps = 1e-6) => Math.abs(a[0] - b[0]) < eps && Math.abs(a[1] - b[1]) < eps;
+
+  const snapPoint = (s, point, tolerance, { skip = null } = {}) => {
+    if (!(tolerance > 0)) return { point, kind: null };
+    const extent = [point[0] - tolerance, point[1] - tolerance, point[0] + tolerance, point[1] + tolerance];
+    let vertex = null;
+    let edge = null;
+    s.source.forEachFeatureIntersectingExtent(extent, (f) => {
+      for (const row of ringRefs(f.getGeometry())) {
+        const ring = row.ring || [];
+        for (let i = 0; i < ring.length; i += 1) {
+          const c = ring[i];
+          const skipped = skip && sameCoord(c, skip);
+          if (!skipped) {
+            const d = Math.hypot(point[0] - c[0], point[1] - c[1]);
+            if (d <= tolerance && (!vertex || d < vertex.distance)) vertex = { distance: d, point: [c[0], c[1]] };
+          }
+          if (i < ring.length - 1) {
+            const b = ring[i + 1];
+            if (skip && (skipped || sameCoord(b, skip))) continue;
+            const hit = closestPointOnSegment(point, c, b);
+            if (hit.distance <= tolerance && (!edge || hit.distance < edge.distance)) edge = { distance: hit.distance, point: hit.point };
+          }
+        }
+      }
+    });
+    if (vertex) return { point: vertex.point, kind: "vertex" };
+    if (edge) return { point: edge.point, kind: "edge" };
+    return { point, kind: null };
+  };
+
+  const traceAlong = (s, from, to, eps = 0.05) => {
+    const extent = [Math.min(from[0], to[0]) - eps, Math.min(from[1], to[1]) - eps, Math.max(from[0], to[0]) + eps, Math.max(from[1], to[1]) + eps];
+    let best = null;
+    const lengthOf = (path) => {
+      let total = 0;
+      let last = from;
+      for (const c of path) {
+        total += Math.hypot(c[0] - last[0], c[1] - last[1]);
+        last = c;
+      }
+      return total + Math.hypot(to[0] - last[0], to[1] - last[1]);
+    };
+    s.source.forEachFeatureIntersectingExtent(extent, (f) => {
+      for (const row of ringRefs(f.getGeometry())) {
+        const ring = row.ring || [];
+        const n = ring.length - 1;
+        if (n < 3) continue;
+        const where = (p) => {
+          let hit = null;
+          for (let i = 0; i < n; i += 1) {
+            const h = closestPointOnSegment(p, ring[i], ring[i + 1]);
+            if (h.distance <= eps && (!hit || h.distance < hit.distance)) hit = { ...h, index: i };
+          }
+          return hit;
+        };
+        const a = where(from);
+        if (!a) continue;
+        const b = where(to);
+        if (!b) continue;
+        const posA = a.index + a.t;
+        const posB = b.index + b.t;
+        const forward = [];
+        const endForward = posB >= posA ? posB : posB + n;
+        for (let k = Math.floor(posA) + 1; k < endForward && forward.length <= n; k += 1) forward.push(ring[k % n]);
+        const backward = [];
+        const endBackward = posB <= posA ? posB : posB - n;
+        for (let k = Math.ceil(posA) - 1; k > endBackward && backward.length <= n; k -= 1) backward.push(ring[((k % n) + n) % n]);
+        const tidy = (path) => path.filter((c) => !sameCoord(c, from, eps) && !sameCoord(c, to, eps)).map((c) => [c[0], c[1]]);
+        const fw = tidy(forward);
+        const bw = tidy(backward);
+        const pick = lengthOf(fw) <= lengthOf(bw) ? fw : bw;
+        if (!best || lengthOf(pick) < lengthOf(best)) best = pick;
+      }
+    });
+    return best || [];
+  };
+
+  const shapeSnapshot = (feats) => new Map(feats.map((f) => [f.getId(), { feature: f, geometry: f.getGeometry().clone(), edited: f.get("edited") }]));
+  const shapeRestore = (snapshot) => {
+    for (const row of snapshot.values()) {
+      row.feature.setGeometry(row.geometry.clone());
+      if (row.edited === undefined) row.feature.unset("edited", true);
+      else row.feature.set("edited", row.edited);
+    }
+  };
+  const editRings = (s, ids) => {
+    const out = [];
+    for (const rid of ids) {
+      const f = s.source.getFeatureById(String(rid));
+      if (!f) continue;
+      for (const row of ringRefs(f.getGeometry())) out.push({ id: String(f.getId()), path: row.path, coords: (row.ring || []).map((c) => toLonLat(c)) });
+    }
+    return out;
+  };
+  const geometryOutlines = (geom) => {
+    const out = [];
+    const type = geom?.getType?.();
+    const polys = type === "Polygon" ? [geom.getCoordinates()] : type === "MultiPolygon" ? geom.getCoordinates() : [];
+    for (const poly of polys) for (const ring of poly) out.push(ring.map((c) => toLonLat(c)));
+    return out;
+  };
+
+  const reviewApi = (s) => ({
+    getRegionSummary: (rid) => {
+      const f = s.source.getFeatureById(String(rid));
+      return f ? summarize(f) : null;
+    },
+    exportRegions: (ids) => exportRegions(s, (ids || []).map(String)),
+    queryRegions: (text = "", limit = 200) => {
+      const q = String(text || "").trim().toLowerCase();
+      const search = engine.wsRegionSearch;
+      const owners = q ? search.ownersMatchingQuery(s.doc.polities, q) : null;
+      const out = [];
+      for (const f of features(s)) {
+        if (q && !search.regionMatchesQuery({ id: f.getId(), name: f.get("name"), owner: f.get("owner") }, q, owners)) continue;
+        out.push(summarize(f));
+        if (out.length >= limit) break;
+      }
+      return out;
+    },
+    listOwnerRegions: (ownerKey) => {
+      const key = clean(ownerKey);
+      if (!key) return [];
+      return features(s).filter((f) => clean(f.get("owner")) === key).map((f) => ({ id: f.getId(), name: clean(f.get("name")), typeId: f.get("typeId") || "land" }));
+    },
+    setRegionAttrs: (ids, patch) => setRegionAttrs(s, (ids || []).map(String), patch),
+    applyRegionPatch: (args) => applyRegionPatch(s, args),
+    removeOwners: (keys) => removeOwners(s, keys),
+    renameOwner: (from, to) => renameOwner(s, from, to),
+    retagGroup: (from, to = null) => retagGroup(s, from, to),
+  });
+
+  const reviewCtx = (s) => ({
+    doc: s.doc,
+    api: reviewApi(s),
+    d: {
+      setPolities: (updater) => {
+        s.doc = { ...s.doc, polities: typeof updater === "function" ? updater(s.doc.polities || {}) : (updater || {}) };
+        dirty(s);
+      },
+      upsertPolity: (key, patch) => upsertPolity(s, key, patch),
+      removePolity: (key) => removePolitiesDoc(s, [key]),
+      renamePolity: (from, to) => renamePolityDoc(s, from, to),
+      setColorOverride: (key, rgb) => setColorOverride(s, key, rgb),
+      setFlag: (key, value) => setFlag(s, key, value),
+      setTags: (key, value) => setTags(s, key, value),
+      setGroups: setters(s).groups,
+      setFeatures: setters(s).features,
+      setUnits: setters(s).units,
+      setPuppets: setters(s).puppets,
+      setTerrainAreas: setters(s).terrainAreas,
+      setFortifications: setters(s).fortifications,
+      setClimateZones: setters(s).climateZones,
+      setFreezingRegions: setters(s).freezingRegions,
+      patchMetadata: (patch) => patchMetadata(s, patch),
+    },
+    setBackground: (saved) => patchMetadata(s, { customBackground: saved || null }),
+    convertProjection: (from, to, bounds) => convertForReview(s, from, to, bounds),
+  });
+
+  const squash = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
+  const REVIEW_SECTION_TITLES = {
+    countries: "Countries",
+    ownership: "Who owns which region",
+    borders: "Borders",
+    regions: "Region names and types",
+    claims: "Claims",
+    groups: "Groups",
+    cities: "Cities",
+    units: "Units",
+    features: "Map features",
+    puppets: "Puppet states",
+    basemaps: "Basemaps",
+    detailedMap: "Detailed map",
+    settings: "Map settings",
+  };
+  const WAR_MAP_LABELS = { terrainAreas: "Terrain", fortifications: "Fortified lines", climateZones: "Climate zones", freezingRegions: "Water that can freeze" };
+  const FIELD_CHIP_LABELS = { name: "Name", aliases: "Other names", code: "Code", note: "Note", status: "Status", color: "Colour", flag: "Flag", tags: "Tags", extra: "Other details" };
+  const reviewPolityName = (doc, key) => squash(doc?.polities?.[key]?.name) || squash(key);
+  const builtinNames = (ids) => (engine.assets.ESRI_BASEMAPS || []).filter((basemap) => ids.includes(basemap.id)).map((basemap) => basemap.label).join(", ");
+
+  const changeText = (change, doc) => {
+    const name = (key) => reviewPolityName(doc, key);
+    const ownMapName = (key) => (Array.isArray(doc?.metadata?.ownBasemaps) ? doc.metadata.ownBasemaps.find((own) => own?.id === key)?.name : "") || key;
+    switch (change.kind) {
+      case "polity-add": return `New country: ${squash(change.record?.name) || change.key}`;
+      case "polity-remove": return `Remove ${name(change.key)}`;
+      case "polity-rename": return `Rename ${name(change.from)} to ${squash(change.record?.name) || change.to}`;
+      case "polity-change": return `Edit country ${name(change.key)}`;
+      case "region-owner": return change.regionName || "Region";
+      case "borders": {
+        const regions = change.regions ?? [];
+        return regions.length === 1 ? `New borders for ${regions[0].name}` : `New borders for ${regions.length} neighbouring regions`;
+      }
+      case "region-name": return `Rename region ${change.from || "Region"} to ${change.to}`;
+      case "region-type": return `${change.regionName}: ${change.from || "land"} → ${change.to || "land"}`;
+      case "region-claims": return change.to?.length ? `${change.regionName}: claimed by ${change.to.map(name).join(", ")}` : `${change.regionName}: no longer disputed`;
+      case "region-group": return change.to ? `${change.regionName}: controlled by ${change.to}` : `${change.regionName}: no longer controlled by ${change.from}`;
+      case "group-add": return `New group: ${change.key}`;
+      case "group-remove": return `Remove group ${change.key}`;
+      case "group-change": return `Edit group ${change.key}`;
+      case "city-add": return `Add the city ${change.name}`;
+      case "city-remove": return `Remove city ${change.name}`;
+      case "city-change": return `Edit city ${change.name}`;
+      case "cities-replace": return Array.isArray(change.to) ? `Replace the cities with ${change.to.length} new ones` : "Go back to the built-in cities";
+      case "unit-add": return `Add the unit ${change.label}`;
+      case "unit-remove": return `Remove unit ${change.label}`;
+      case "unit-change": return `Edit unit ${change.label}`;
+      case "marker-add": return `New map feature: ${change.label}`;
+      case "marker-remove": return `Remove map feature ${change.label}`;
+      case "marker-change": return `Edit map feature ${change.label}`;
+      case "puppet-add": return `${name(change.to?.puppet)} becomes a puppet of ${name(change.to?.overlord)}`;
+      case "puppet-remove": return `${name(change.from?.puppet)} is no longer a puppet of ${name(change.from?.overlord)}`;
+      case "puppet-change": return `Change how ${name(change.to?.puppet)} answers to ${name(change.to?.overlord)}`;
+      case "projection": {
+        if (engine.wsMapProjection.sameProjection(change.from, change.to)) return "Change how the game shows the map (3D globe, looping)";
+        const projection = engine.wsMapProjection.PROJECTIONS.find((entry) => entry.id === change.to?.type)?.name ?? change.to?.type;
+        return `Map projection: ${projection}`;
+      }
+      case "map-field":
+        if (change.field === "author") return `Map author: ${change.to || "—"}`;
+        if (change.field === "startingMapName") return `Name the starting map: ${change.to || "—"}`;
+        return `New basemap: ${change.to || "—"}`;
+      case "war-map": return WAR_MAP_LABELS[change.field] || change.field;
+      case "background": return change.to ? "New custom basemap" : "Remove the custom basemap";
+      case "allowed-basemaps":
+        return change.to === null
+          ? "Built-in maps players can switch to: the default"
+          : change.to.length ? `Built-in maps players can switch to: ${builtinNames(change.to)}` : "Players can switch to no built-in map";
+      case "own-basemap-add":
+        return change.to?.kind === "tiled"
+          ? `Add the detailed map ${change.to?.name || change.key} to this scenario's maps`
+          : `Offer another basemap: ${change.to?.name || change.key}`;
+      case "own-basemap-remove": return `Stop offering the basemap ${change.from?.name || change.key}`;
+      case "own-basemap-change":
+        if (change.from?.name && change.to?.name && change.from.name !== change.to.name && change.from.hash === change.to.hash) {
+          return `Rename the basemap ${change.from.name} to ${change.to.name}`;
+        }
+        return change.to?.kind === "tiled"
+          ? `Change the detailed map ${change.to?.name || change.key}, shown over ${change.to.data?.over ? ownMapName(change.to.data.over) : "the starting map"}`
+          : `New version of the basemap ${change.to?.name || change.key}`;
+      case "detailed-map": {
+        if (!change.to) return change.from?.name ? `Take the detailed map ${change.from.name} off` : "Take the detailed map off";
+        const mapName = change.to.name || "a detailed map";
+        const sameMap = change.from && ((change.to.id && change.from.id === change.to.id) || (change.to.hash && change.from.hash === change.to.hash));
+        if (!sameMap) return `Detailed map: ${mapName}`;
+        if (change.to.version && change.from.version !== change.to.version) return `Use version ${change.to.version} of the detailed map ${mapName}`;
+        return `Change how strongly countries are coloured over the detailed map ${mapName}`;
+      }
+      default: return squash(change.kind);
+    }
+  };
+
+  const reviewStatuses = (s) => {
+    const r = s.review;
+    const sr = engine.wsSuggestionReview;
+    if (!r.cache || r.cacheRev !== s.regionRev) {
+      r.cache = sr.createRegionCache();
+      r.cacheRev = s.regionRev;
+    }
+    const ctx = reviewCtx(s);
+    const placed = sr.inSuggestedProjection(ctx, r.changes);
+    r.statuses = Object.fromEntries(r.changes.map((change) => [change.id, sr.mapChangeStatus(change, change.kind === "projection" ? ctx : placed, { renames: r.renames, cache: r.cache })]));
+    return r.statuses;
+  };
+
+  const reviewView = (s) => {
+    const r = s.review;
+    if (!r) return { active: false };
+    const sr = engine.wsSuggestionReview;
+    const statuses = reviewStatuses(s);
+    const decisionOf = (change) => sr.decisionOf(change, r.decisions, statuses);
+    const rows = r.changes.map((change) => {
+      const regions = change.kind === "borders" ? (change.regions ?? []) : [];
+      const lines = regions.slice(0, 8).map((region) => (region.op === "add" ? `New region: ${region.name}` : region.op === "remove" ? `Region removed: ${region.name}` : `Region redrawn: ${region.name}`));
+      if (regions.length > 8) lines.push(`and ${regions.length - 8} more`);
+      return {
+        id: change.id,
+        section: sr.sectionOfChange(change),
+        text: changeText(change, s.doc),
+        decided: r.decisions.accepted.has(change.id) ? "accepted" : r.decisions.rejected.has(change.id) ? "rejected" : "",
+        settled: Boolean(decisionOf(change)),
+        canUndo: !r.decisions.accepted.has(change.id) || r.undoers.has(change.id),
+        status: statuses[change.id] || "open",
+        chips: change.kind === "polity-change" ? Object.keys(change.fields ?? {}).map((field) => FIELD_CHIP_LABELS[field] || field) : [],
+        lines,
+        from: change.kind === "region-owner" ? (change.from ?? "") : "",
+        to: change.kind === "region-owner" ? (change.to ?? "") : "",
+      };
+    });
+    const sections = sr.REVIEW_SECTIONS.map((section) => {
+      const items = rows.filter((row) => row.section === section.id);
+      const out = { id: section.id, title: REVIEW_SECTION_TITLES[section.id] || section.id, rows: items };
+      if (section.id === "ownership") {
+        const byPair = new Map();
+        for (const row of items) {
+          const key = `${row.from}→${row.to}`;
+          if (!byPair.has(key)) byPair.set(key, { key, fromLabel: row.from ? reviewPolityName(s.doc, row.from) : "Unowned", toLabel: row.to ? reviewPolityName(s.doc, row.to) : "Unowned", ids: [] });
+          byPair.get(key).ids.push(row.id);
+        }
+        out.groups = [...byPair.values()].sort((a, b) => b.ids.length - a.ids.length);
+      }
+      return out;
+    }).filter((section) => section.rows.length);
+    return {
+      active: true,
+      by: squash(r.suggestion?.by),
+      note: String(r.suggestion?.note ?? ""),
+      total: rows.length,
+      settled: rows.filter((row) => row.settled).length,
+      sections,
+      focusId: r.focusId || "",
+    };
+  };
+
+  const reviewDecide = (r, ids, kind) => {
+    for (const cid of ids) {
+      r.decisions.accepted.delete(cid);
+      r.decisions.rejected.delete(cid);
+      if (kind === "accepted") r.decisions.accepted.add(cid);
+      if (kind === "rejected") r.decisions.rejected.add(cid);
+    }
+  };
+
+  const ringsOf = (geometry) => {
+    if (!geometry) return [];
+    if (geometry.type === "Polygon") return geometry.coordinates || [];
+    if (geometry.type === "MultiPolygon") return (geometry.coordinates || []).flat();
+    return [];
+  };
+
+  const reviewTargets = (s, change) => engine.wsSuggestionReview.changeTargets(change, { api: reviewApi(s) }, { changes: s.review.changes, renames: s.review.renames, cache: s.review.cache });
+
+  const regionOutlines = (s, ids) => {
+    const out = [];
+    for (const rid of ids.slice(0, 80)) {
+      const f = s.source.getFeatureById(String(rid));
+      if (!f) continue;
+      const geometry = f.getGeometry().simplify(1500);
+      const polygons = geometry.getType() === "Polygon" ? [geometry.getCoordinates()] : geometry.getType() === "MultiPolygon" ? geometry.getCoordinates() : [];
+      for (const polygon of polygons) {
+        const ring = polygon[0];
+        if (ring && ring.length > 2) out.push(ring.map((point) => toLonLat(point)));
+      }
+    }
+    return out;
+  };
+
+  const reviewMarkup = (s) => {
+    const r = s.review;
+    if (!r) return { regions: {}, outlines: [], shapes: [], points: [], focus: null };
+    const sr = engine.wsSuggestionReview;
+    const statuses = reviewStatuses(s);
+    const regions = {};
+    const shapes = [];
+    const points = [];
+    let focus = null;
+    for (const change of r.changes) {
+      const state = sr.decisionOf(change, r.decisions, statuses) || (statuses[change.id] === "conflict" ? "conflict" : "pending");
+      const targets = reviewTargets(s, change);
+      for (const rid of targets.regionIds) if (!(rid in regions)) regions[rid] = state;
+      if (state === "pending" || state === "conflict") for (const shape of targets.shapes) shapes.push({ rings: ringsOf(shape.geometry), state });
+      for (const point of targets.points) points.push({ coord: [Number(point[0]), Number(point[1])], state });
+      if (change.id === r.focusId) {
+        focus = {
+          state,
+          outlines: regionOutlines(s, targets.regionIds),
+          shapes: targets.shapes.map((shape) => ringsOf(shape.geometry)),
+          points: targets.points.map((point) => [Number(point[0]), Number(point[1])]),
+          regionIds: targets.regionIds,
+          bbox: Array.isArray(change.bbox) ? change.bbox : null,
+        };
+      }
+    }
+    const outlines = [];
+    for (const rid of Object.keys(regions).slice(0, 300)) {
+      for (const ring of regionOutlines(s, [rid])) outlines.push({ ring, state: regions[rid] });
+    }
+    return { regions, outlines, shapes, points, focus };
+  };
+
+  const recordReview = async (s) => {
+    const r = s.review;
+    const sr = engine.wsSuggestionReview;
+    const mapDecisions = sr.decisionsFor(r.changes, r.decisions, r.statuses || reviewStatuses(s));
+    const latest = (await lib.loadScenarioDetails(s.scenario.id)).scenario;
+    const reviews = { ...(latest?.hubReviews ?? {}) };
+    const record = reviews[r.key] ?? { status: "reviewing", accepted: [], rejected: [] };
+    const accepted = new Set(record.accepted);
+    const rejected = new Set(record.rejected);
+    const all = Array.isArray(r.suggestion?.changes) ? r.suggestion.changes : [];
+    for (const change of all) {
+      if (change.area !== "map") continue;
+      accepted.delete(change.id);
+      rejected.delete(change.id);
+    }
+    mapDecisions.accepted.forEach((cid) => accepted.add(cid));
+    mapDecisions.rejected.forEach((cid) => rejected.add(cid));
+    const everyDecided = all.every((change) => accepted.has(change.id) || rejected.has(change.id));
+    reviews[r.key] = {
+      status: everyDecided ? "done" : record.status === "dismissed" ? "dismissed" : "reviewing",
+      accepted: [...accepted],
+      rejected: [...rejected],
+      updatedAt: new Date().toISOString(),
+    };
+    await lib.saveScenario(s.scenario.id, { hubReviews: reviews });
+    return { key: r.key, ...reviews[r.key] };
+  };
+
+  const startReview = (s, review) => {
+    const suggestion = review?.suggestion && typeof review.suggestion === "object" ? review.suggestion : null;
+    if (!suggestion) {
+      s.review = null;
+      return;
+    }
+    s.review = {
+      suggestion,
+      key: clean(review.key) || clean(suggestion.id),
+      changes: (Array.isArray(suggestion.changes) ? suggestion.changes : []).filter((change) => change?.area === "map"),
+      decisions: { accepted: new Set(list(review.decisions?.accepted).map(String)), rejected: new Set(list(review.decisions?.rejected).map(String)) },
+      renames: {},
+      undoers: new Map(),
+      focusId: "",
+      cache: null,
+      cacheRev: -1,
+      statuses: null,
+    };
+  };
+
   return {
-    "workshop.open": async ({ scenarioId, world = null, gameDate = "", warSettings = null, hasWarSettings = false } = {}) => {
+    "workshop.open": async ({ scenarioId, world = null, gameDate = "", warSettings = null, hasWarSettings = false, review = null } = {}) => {
       if (session) closeSession(session);
       const details = await lib.loadScenarioDetails(clean(scenarioId));
       const scenario = details.scenario;
@@ -1609,11 +2285,265 @@ export const register = (ctx) => {
         if (session !== s) throw new Error("The map editor was closed.");
         s.initialMap = initialMap;
         await hydrate(s, initialMap);
+        startReview(s, review);
       } catch (error) {
         closeSession(s);
         throw new Error(`The map editor was closed because this scenario's map could not be loaded, so nothing was saved over it. ${error?.message || error}`);
       }
-      return { ...delta(s, { all: true }), scenario: { id: s.scenario.id, name: s.scenario.name }, bake: { file: s.bakeFile } };
+      return { ...delta(s, { all: true }), scenario: { id: s.scenario.id, name: s.scenario.name }, bake: { file: s.bakeFile }, ...(s.review ? { review: reviewView(s) } : {}) };
+    },
+    "workshop.edit.rings": async ({ session: id, ids = [] } = {}) => plain({ rings: editRings(need(id), list(ids).map(String)) }),
+    "workshop.edit.snap": async ({ session: id, at = [0, 0], resolution = 1, pixels = 10 } = {}) => {
+      const s = need(id);
+      const snapped = snapPoint(s, fromLonLat([Number(at[0]), Number(at[1])]), Math.max(0, Number(pixels) || 0) * Math.max(1e-6, Number(resolution) || 1));
+      return { point: toLonLat(snapped.point), kind: snapped.kind };
+    },
+    "workshop.draw.point": async ({ session: id, at = [0, 0], previous = null, resolution = 1 } = {}) => {
+      const s = need(id);
+      const snapped = snapPoint(s, fromLonLat([Number(at[0]), Number(at[1])]), 10 * Math.max(1e-6, Number(resolution) || 1));
+      let trace = [];
+      if (Array.isArray(previous) && previous.length >= 2 && snapped.kind) {
+        const prev = snapPoint(s, fromLonLat([Number(previous[0]), Number(previous[1])]), 0.05);
+        if (prev.kind) trace = traceAlong(s, prev.point, snapped.point);
+      }
+      return plain({ point: toLonLat(snapped.point), kind: snapped.kind, trace: trace.map((c) => toLonLat(c)) });
+    },
+    "workshop.draw.finish": async ({ session: id, ring = [] } = {}) => {
+      const s = need(id);
+      const points = list(ring).filter((p) => Array.isArray(p) && p.length >= 2).map((p) => snapPoint(s, fromLonLat([Number(p[0]), Number(p[1])]), 0.05).point);
+      const distinct = points.filter((p, i) => i === 0 || !sameCoord(p, points[i - 1]));
+      if (distinct.length > 1 && sameCoord(distinct[0], distinct[distinct.length - 1])) distinct.pop();
+      if (distinct.length < 3) return { ...delta(s, {}), refused: "" };
+      const f = new Feature({ geometry: new Polygon([[...distinct.map((p) => p.slice()), distinct[0].slice()]]) });
+      f.setId(mapDoc.newId());
+      f.setProperties({ typeId: (s.doc.types || [])[0]?.id || "land", owner: null, name: "New Region", gid0: "", country: "" });
+      const cutter = f.getGeometry();
+      const candidates = [];
+      s.source.forEachFeatureIntersectingExtent(cutter.getExtent(), (other) => {
+        if (other !== f) candidates.push(other);
+      });
+      s.source.addFeature(f);
+      const carved = [];
+      for (const other of candidates) {
+        const geom = other.getGeometry();
+        if (!geom || !geo.overlaps(geom, cutter)) continue;
+        const before = geom.clone();
+        const after = geo.subtractFrom(geom, cutter);
+        if (!after) {
+          s.source.removeFeature(other);
+          carved.push({ feature: other, before, after: null });
+        } else {
+          other.setGeometry(after);
+          other.set("edited", true);
+          carved.push({ feature: other, before, after: after.clone() });
+        }
+      }
+      notify(s, { geometry: true });
+      pushCmd(s, {
+        undo: () => {
+          s.source.removeFeature(f);
+          for (const c of carved) {
+            c.feature.setGeometry(c.before.clone());
+            if (!c.after) s.source.addFeature(c.feature);
+          }
+          s.geometryRev += 1;
+        },
+        redo: () => {
+          s.source.addFeature(f);
+          for (const c of carved) {
+            if (!c.after) s.source.removeFeature(c.feature);
+            else c.feature.setGeometry(c.after.clone());
+          }
+          s.geometryRev += 1;
+        },
+      });
+      return { ...delta(s, { regions: true }), id: String(f.getId()) };
+    },
+    "workshop.edit.vertex": async ({ session: id, ids = [], op = "move", target = "", path = [], index = -1, to = null, alt = false, resolution = 1, mode = "modify" } = {}) => {
+      const s = need(id);
+      const wanted = list(ids).map(String);
+      const feats = wanted.map((rid) => s.source.getFeatureById(rid)).filter(Boolean);
+      const owner = s.source.getFeatureById(String(target));
+      const unchanged = () => ({ ...delta(s, {}), rings: editRings(s, wanted), diagnostics: [] });
+      if (!owner || !feats.includes(owner) || (mode === "border" && feats.length !== 2)) return unchanged();
+      const res = Math.max(1e-6, Number(resolution) || 1);
+      const ownGeom = owner.getGeometry();
+      const ownRing = getRingAtPath(ownGeom.getCoordinates(), ownGeom.getType(), list(path).map(Number));
+      const i = Number(index);
+      if (!ownRing || !ownRing[i]) return unchanged();
+      const before = shapeSnapshot(feats);
+      const modified = new Set();
+      const pointer = Array.isArray(to) ? fromLonLat([Number(to[0]), Number(to[1])]) : null;
+      const editEach = (fn) => {
+        for (const f of feats) {
+          const geom = f.getGeometry();
+          const type = geom.getType();
+          if (type !== "Polygon" && type !== "MultiPolygon") continue;
+          const coords = cloneCoords(geom.getCoordinates());
+          let changed = false;
+          for (const row of ringRefs(geom)) {
+            const ring = getRingAtPath(coords, type, row.path);
+            if (ring && fn(ring)) changed = true;
+          }
+          if (changed) {
+            geom.setCoordinates(coords);
+            modified.add(f);
+          }
+        }
+      };
+      const reach = (mode === "border" ? 24 : 18) * res;
+      if (op === "move" && pointer) {
+        const from = ownRing[i].slice();
+        const dest = snapPoint(s, pointer, reach, { skip: from }).point;
+        editEach((ring) => {
+          let hit = false;
+          for (let k = 0; k < ring.length; k += 1) {
+            if (sameCoord(ring[k], from)) {
+              ring[k] = dest.slice();
+              hit = true;
+            }
+          }
+          return hit;
+        });
+      } else if (op === "insert" && pointer && ownRing[i + 1]) {
+        const a = ownRing[i].slice();
+        const b = ownRing[i + 1].slice();
+        const dest = snapPoint(s, pointer, reach).point;
+        editEach((ring) => {
+          for (let k = 0; k < ring.length - 1; k += 1) {
+            if ((sameCoord(ring[k], a) && sameCoord(ring[k + 1], b)) || (sameCoord(ring[k], b) && sameCoord(ring[k + 1], a))) {
+              ring.splice(k + 1, 0, dest.slice());
+              return true;
+            }
+          }
+          return false;
+        });
+      } else if (op === "remove") {
+        const at = ownRing[i].slice();
+        editEach((ring) => {
+          if (ring.length <= 4) return false;
+          const k = ring.findIndex((c, n) => n < ring.length - 1 && sameCoord(c, at));
+          if (k < 0) return false;
+          ring.splice(k, 1);
+          if (k === 0) ring[ring.length - 1] = ring[0].slice();
+          return true;
+        });
+      }
+      if (mode === "border" && pointer) {
+        const tolerance = Math.max(8, res * 24);
+        if (op === "remove" || alt) {
+          for (const f of feats) if (!modified.has(f)) removeSharedVertexNear(f, pointer, tolerance);
+        } else {
+          const shared = sharedBorderPoint(feats, pointer, tolerance);
+          if (shared) feats.forEach((f) => weldPointIntoFeature(f, shared.point, tolerance));
+        }
+      }
+      const touched = mode === "border" ? feats : [...modified];
+      if (!touched.length) return unchanged();
+      touched.forEach((f) => f.set("edited", true));
+      const after = shapeSnapshot(feats);
+      pushCmd(s, {
+        undo: () => { shapeRestore(before); s.geometryRev += 1; },
+        redo: () => { shapeRestore(after); s.geometryRev += 1; },
+      });
+      notify(s, { geometry: true });
+      let diagnostics = [];
+      if (mode === "border") {
+        try {
+          diagnostics = topologyTools(s).analyzeTopology(feats.map((f) => f.getId()), { maxWidth: 100 }).map((item) => ({ kind: item.kind, rings: geometryOutlines(item.geom) }));
+        } catch (error) {
+          console.warn("[editor] shared-border local topology check failed:", error);
+        }
+      }
+      return { ...delta(s, { regions: true }), rings: editRings(s, wanted), diagnostics };
+    },
+    "workshop.basemapStyle": async ({ session: id } = {}) => {
+      const s = need(id);
+      const meta = s.doc.metadata || {};
+      const background = meta.customBackground || null;
+      const basemapId = engine.assets.resolveBasemapId({ overrideId: "", scenarioId: meta.basemap || "", fallbackId: engine.assets.DEFAULT_BASEMAP_ID });
+      if (background?.kind === "plain") return { kind: "declared", basemapId, key: "plain" };
+      if (background?.kind === "image" && background.dataUrl) {
+        const match = /^data:([^;,]+)?(;base64)?,(.*)$/s.exec(String(background.dataUrl));
+        const data = match ? (match[2] ? match[3] : Buffer.from(decodeURIComponent(match[3]), "utf8").toString("base64")) : "";
+        const key = crypto.createHash("sha1").update(`${String(background.dataUrl).length}|${String(background.dataUrl).slice(-4096)}|${JSON.stringify(background.bounds ?? null)}`).digest("hex");
+        return { kind: "image", basemapId, key, image: { quad: engine.wsMapProjection.imageQuad(background.bounds, { globe: false }), data } };
+      }
+      if (background?.kind === "vector" && Array.isArray(background.geojson?.features)) {
+        const features = background.geojson.features;
+        const text = JSON.stringify({ type: "FeatureCollection", features: features.map((feature) => ({ type: "Feature", properties: {}, geometry: feature?.geometry ?? null })) });
+        const sha = crypto.createHash("sha256").update(text).digest("hex");
+        const file = path.join(cacheDir, "workshop-backgrounds", `${sha}.geojson`);
+        if (!fs.existsSync(file)) {
+          fs.mkdirSync(path.dirname(file), { recursive: true });
+          fs.writeFileSync(`${file}.tmp`, text);
+          fs.renameSync(`${file}.tmp`, file);
+        }
+        return { kind: "vector", basemapId, key: sha, vector: { file, fills: features.map((feature) => fillRgb(feature?.properties?.fill) ?? fillRgb("#33435c")) } };
+      }
+      return { kind: "builtin", basemapId, key: basemapId };
+    },
+    "workshop.review.view": async ({ session: id } = {}) => plain(reviewView(need(id))),
+    "workshop.review.markup": async ({ session: id } = {}) => plain(reviewMarkup(need(id))),
+    "workshop.review.accept": async ({ session: id, ids = [] } = {}) => {
+      const s = need(id);
+      const r = s.review;
+      if (!r) return { ...delta(s, {}), review: { active: false } };
+      const wanted = new Set(list(ids).map(String));
+      const chosen = r.changes.filter((change) => wanted.has(String(change.id)));
+      const result = engine.wsSuggestionReview.acceptMapChanges(chosen, reviewCtx(s), { changes: r.changes, accepted: r.decisions.accepted, renames: r.renames });
+      if (result.refused) return { ...delta(s, {}), review: reviewView(s), markup: reviewMarkup(s), refused: result.refused };
+      if (result.accepted.length) {
+        for (const [cid, undo] of result.undoers) r.undoers.set(cid, undo);
+        r.renames = result.renames;
+        reviewDecide(r, result.accepted, "accepted");
+      }
+      return { ...delta(s, { all: true }), review: reviewView(s), markup: reviewMarkup(s) };
+    },
+    "workshop.review.reject": async ({ session: id, ids = [] } = {}) => {
+      const s = need(id);
+      const r = s.review;
+      if (!r) return { ...delta(s, {}), review: { active: false } };
+      reviewDecide(r, list(ids).map(String), "rejected");
+      return { ...delta(s, {}), review: reviewView(s), markup: reviewMarkup(s) };
+    },
+    "workshop.review.undo": async ({ session: id, changeId = "" } = {}) => {
+      const s = need(id);
+      const r = s.review;
+      if (!r) return { ...delta(s, {}), review: { active: false } };
+      const change = r.changes.find((entry) => String(entry.id) === String(changeId));
+      if (!change) return { ...delta(s, {}), review: reviewView(s), markup: reviewMarkup(s) };
+      if (r.decisions.accepted.has(change.id)) {
+        if (!r.undoers.has(change.id)) return { ...delta(s, {}), review: reviewView(s), markup: reviewMarkup(s) };
+        const refused = engine.wsSuggestionReview.undoRefusal(change, reviewCtx(s));
+        if (refused) return { ...delta(s, {}), review: reviewView(s), markup: reviewMarkup(s), refused };
+        r.undoers.get(change.id)();
+        r.undoers.delete(change.id);
+        if (change.kind === "polity-rename") {
+          const next = { ...r.renames };
+          delete next[change.from];
+          r.renames = next;
+        }
+      }
+      reviewDecide(r, [change.id], null);
+      return { ...delta(s, { all: true }), review: reviewView(s), markup: reviewMarkup(s) };
+    },
+    "workshop.review.focus": async ({ session: id, changeId = "" } = {}) => {
+      const s = need(id);
+      const r = s.review;
+      if (!r) return { review: { active: false } };
+      r.focusId = String(changeId || "");
+      const change = r.changes.find((entry) => String(entry.id) === r.focusId);
+      let bounds = null;
+      let point = null;
+      if (change) {
+        reviewStatuses(s);
+        const targets = reviewTargets(s, change);
+        if (targets.regionIds.length) bounds = unionExtent(targets.regionIds.map((rid) => s.source.getFeatureById(String(rid))).filter(Boolean));
+        else if (targets.shapes.length && Array.isArray(change.bbox)) bounds = [[Number(change.bbox[0]), Number(change.bbox[1])], [Number(change.bbox[2]), Number(change.bbox[3])]];
+        else if (targets.points.length) point = [Number(targets.points[0][0]), Number(targets.points[0][1])];
+      }
+      return plain({ review: reviewView(s), markup: reviewMarkup(s), bounds, point });
     },
     "workshop.close": async ({ session: id } = {}) => {
       if (session && (!id || session.id === id)) closeSession(session);
@@ -2380,12 +3310,70 @@ export const register = (ctx) => {
     "workshop.maps": async ({ session: id } = {}) => {
       const s = need(id);
       const library = await engine.wsBasemapLibrary.listBasemaps().catch(() => []);
+      const hashOf = (background) => {
+        const canonical = background?.kind === "image" && background.dataUrl
+          ? background.dataUrl
+          : background?.kind === "vector" && background.geojson
+            ? JSON.stringify(background.geojson)
+            : null;
+        return canonical == null ? null : crypto.createHash("sha256").update(canonical).digest("hex");
+      };
+      const rows = mapsOf(s);
+      const books = Array.isArray(library) ? library : [];
+      const hashes = Object.fromEntries(rows.map((map) => [map.key, hashOf(map.background)]));
+      const scenarioHashes = new Set(Object.values(hashes).filter(Boolean));
+      const installedHashes = new Set(books.flatMap((bm) => [bm.contentHash, bm.source?.hash]).filter(Boolean).map((hash) => String(hash).toLowerCase()));
+      const namesDetailed = (bm, detailed) => (detailed?.id
+        ? bm.official?.id === detailed.id
+        : Boolean(detailed?.hash) && (bm.contentHash === detailed.hash || (bm.supersedes || []).includes(detailed.hash)));
+      const libraryInScenario = (bm) => scenarioHashes.has(String(bm.contentHash || "").toLowerCase())
+        || rows.some((map) => map.key === `own:${engine.wsOwnBasemaps.ownBasemapIdOfLibrary(bm)}`);
+      const maps = rows.map(({ background, ...row }) => ({
+        ...row,
+        canSaveToLibrary: Boolean(background) && !(!hashes[row.key] || installedHashes.has(hashes[row.key])),
+      }));
       return plain({
-        maps: mapsOf(s),
-        builtins: engine.wsBasemaps.EDITOR_BASEMAPS.map((b) => ({ id: b.id, label: b.label, preview: engine.wsBasemaps.esriPreviewUrl(b.service) })),
-        mine: Array.isArray(library) ? library.map((bm) => ({ id: bm.id, name: bm.name, kind: bm.kind, thumbnail: bm.thumbnail || "", bytes: bm.bytes || 0, official: bm.official || null, contentHash: bm.contentHash || "", community: Boolean(bm.source?.community) })) : [],
+        maps,
+        builtins: engine.wsBasemaps.EDITOR_BASEMAPS.map((b) => ({
+          id: b.id,
+          label: b.label,
+          preview: engine.wsBasemaps.esriPreviewUrl(b.service),
+          filter: b.previewFilter || "",
+          inScenario: rows.some((map) => map.builtinId === b.id),
+          starting: rows.some((map) => map.starting && map.builtinId === b.id),
+        })),
+        mine: books.map((bm) => ({
+          id: bm.id,
+          name: bm.name,
+          kind: bm.kind,
+          thumbnail: bm.thumbnail || "",
+          official: bm.official || null,
+          community: Boolean(bm.source?.community),
+          communityUrl: bm.source?.url || null,
+          size: engine.wsTiledBasemaps.formatBytes(bm.bytes),
+          inScenario: bm.kind === "tiled" ? rows.some((map) => map.kind === "detailed" && namesDetailed(bm, map.detailed)) : libraryInScenario(bm),
+          starting: bm.kind === "tiled" && rows.some((map) => map.starting && map.kind === "detailed" && namesDetailed(bm, map.detailed)),
+        })),
       });
     },
+    "workshop.maps.preview": async ({ url = "" } = {}) => {
+      const target = String(url || "");
+      if (!/^https:\/\/server\.arcgisonline\.com\//.test(target)) return { file: "" };
+      const dir = path.join(cacheDir, "workshop-previews");
+      const file = path.join(dir, `${crypto.createHash("sha1").update(target).digest("hex")}.tile`);
+      if (fs.existsSync(file)) return { file };
+      try {
+        const response = await fetch(target);
+        if (!response.ok) return { file: "" };
+        const bytes = Buffer.from(await response.arrayBuffer());
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(file, bytes);
+        return { file };
+      } catch {
+        return { file: "" };
+      }
+    },
+    "workshop.maps.tiledUsers": async ({ basemapId = "" } = {}) => plain({ users: await engine.wsTiledBasemaps.listTiledBasemapUsers(String(basemapId)) }),
     "workshop.maps.addBuiltin": async ({ session: id, builtinId = "" } = {}) => {
       const s = need(id);
       const result = applyMaps(s, engine.wsScenarioMaps.addBuiltinMap(s.doc.metadata, builtinId));
@@ -2763,6 +3751,7 @@ export const register = (ctx) => {
       s.action = play ? "play" : "save";
       pushStatus(s);
       const note = await cleanBorders(s, { mode });
+      let outcome;
       try {
         const authoringOps = s.polityAuthoringOps.slice();
         const seed = {
@@ -2784,15 +3773,24 @@ export const register = (ctx) => {
           });
           gameId = clean(gameDetails?.game?.id);
         }
-        return { ...delta(s, { regions: true }), note, details: plain(details), gameId };
+        let reviewRecord = null;
+        if (s.review) {
+          try {
+            reviewRecord = await recordReview(s);
+          } catch (error) {
+            console.warn("[editor] could not record the review:", error);
+          }
+        }
+        outcome = { note, details: plain(details), gameId, ...(reviewRecord ? { review: reviewRecord } : {}) };
       } catch (error) {
         console.warn("[editor] scenario save failed:", error);
-        return { ...delta(s, {}), error: `Could not save the map into the scenario: ${error?.message || error}` };
+        outcome = { error: `Could not save the map into the scenario: ${error?.message || error}` };
       } finally {
         s.action = "";
         emit("workshop.cleanup", { session: s.id, state: null });
         pushStatus(s);
       }
+      return outcome.error ? { ...delta(s, {}), error: outcome.error } : { ...delta(s, { regions: true }), ...outcome };
     },
     "workshop.stopCleanup": async ({ session: id } = {}) => {
       const s = need(id);
@@ -2832,6 +3830,7 @@ export const register = (ctx) => {
       s.geometryRev += 1;
       s.regionRev += 1;
       s.docId = null;
+      s.styleRev = (s.styleRev || 0) + 1;
       s.savedEdits = s.edits;
       s.retries = 0;
       s.saveError = "";
@@ -2863,6 +3862,7 @@ export const register = (ctx) => {
       s.geometryRev += 1;
       s.regionRev += 1;
       s.docId = opened.doc.id;
+      s.styleRev = (s.styleRev || 0) + 1;
       s.savedEdits = s.edits;
       s.retries = 0;
       s.saveError = "";

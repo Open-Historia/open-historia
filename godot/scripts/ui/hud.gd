@@ -36,6 +36,9 @@ var open_drawer := ""
 var _engine: EngineLink
 var _right_layer: Control
 var cheats: Node
+var forces: Node
+var war: Node
+var after_action: Node
 var _inset_tween: Tween
 var _map: MapView
 var _game: Dictionary = {}
@@ -436,7 +439,10 @@ func mount_panels(game: Dictionary) -> void:
 			_map.fit_lonlat_bounds([[bounds.position.x, bounds.position.y], [bounds.end.x, bounds.end.y]]))
 		_hook(country, "show_event", func(event_id: String) -> void: date_widget.show_event(event_id))
 		_hook(country, "width_changed", func(_width: float) -> void: _sync_inset())
-		_setup(country, ctx)
+		_hook(country, "open_war_report", func(battlefield: String) -> void: _invoke(after_action, "open_report", [battlefield]))
+		var country_ctx := ctx.duplicate()
+		country_ctx["war_reports"] = after_action != null and is_instance_valid(after_action)
+		_setup(country, country_ctx)
 	search = _make("search_box")
 	if search:
 		search_slot.add_child(search)
@@ -475,7 +481,7 @@ func mount_panels(game: Dictionary) -> void:
 	move_child(date_widget, get_child_count() - 1)
 	var saved := await _engine.request("hud.mapMode")
 	if saved.get("ok", false):
-		set_map_mode(str(saved["result"].get("mode", "political")))
+		set_map_mode(str(saved["result"].get("mode", "political")), true)
 	_apply_map_mode()
 
 
@@ -608,6 +614,8 @@ func _on_region_clicked(index: int) -> void:
 		return
 	if cheats and is_instance_valid(cheats) and cheats.has_method("is_picking") and cheats.call("is_picking") == true:
 		return
+	if forces and is_instance_valid(forces) and forces.has_method("is_placing") and forces.call("is_placing") == true:
+		return
 	var mouse := get_viewport().get_mouse_position()
 	if map_cards.has_method("handle_screen_click"):
 		var handled: Variant = await map_cards.call("handle_screen_click", mouse)
@@ -628,9 +636,22 @@ func _reload_flag_and_map() -> void:
 	var flag := await _engine.request("game.flag", {"country": str(_game.get("country", ""))})
 	if flag.get("ok", false):
 		set_flag(UI.flag(str(flag["result"].get("flag", "")), 48))
+	if war and is_instance_valid(war) and war.has_method("refresh"):
+		await war.call("refresh")
+		return
 	var state := await _engine.request("map.state")
 	if state.get("ok", false):
 		_map.set_state(state["result"])
+
+
+func set_war(node: Node) -> void:
+	war = node
+	date_widget.war = node
+
+
+func set_beside_war_room(at_war: bool) -> void:
+	search_slot.offset_left = 293 if at_war else 221
+	search_slot.offset_right = 331 if at_war else 259
 
 
 func _refresh_flag_badge() -> void:

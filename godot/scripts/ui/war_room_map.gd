@@ -17,7 +17,6 @@ const SHADE_COLOURS := [
 	Color(210 / 255.0, 53 / 255.0, 61 / 255.0, 0.4),
 ]
 const CASING := Color(5 / 255.0, 8 / 255.0, 13 / 255.0, 0.82)
-const HALO := Color(5 / 255.0, 8 / 255.0, 13 / 255.0, 0.92)
 const FLEET_COLOURS := {"fleet": Color("#c9a54c"), "picked": Color("#e9b949"), "course": Color("#f4f7fb")}
 
 var map: MapView
@@ -65,7 +64,9 @@ func _on_store(keys: PackedStringArray) -> void:
 func _process(_delta: float) -> void:
 	if not map or not store or not bool(store.value("open")):
 		return
-	var seen := Vector3(map.camera.position.x, map.camera.position.y, map.camera.zoom.x)
+	var view: Array = map.render_view()
+	var centre: Vector2 = view[0]
+	var seen := Vector3(centre.x, centre.y, float(view[1]))
 	if seen != _seen:
 		_seen = seen
 		queue_redraw()
@@ -75,7 +76,7 @@ func _fit_if_asked() -> void:
 	if not map or not store or not bool(store.value("open")) or record.is_empty():
 		return
 	var bounds: Array = record.get("bounds", [])
-	if bounds.size() < 2:
+	if bounds.size() < 2 or str(record.get("name", "")).to_lower() != str(store.value("battlefield")).to_lower():
 		return
 	var key := "%s|%d" % [str(store.value("battlefield")).to_lower(), int(store.value("fit"))]
 	if _fitted == key:
@@ -121,8 +122,7 @@ static func _world_to_lnglat(world: Vector2) -> Vector2:
 
 
 func screen_to_lnglat(point: Vector2) -> Vector2:
-	var half := map.get_viewport_rect().size * 0.5
-	return _world_to_lnglat(map.camera.position + (point - half) / map.camera.zoom.x)
+	return _world_to_lnglat(map.screen_to_world(point))
 
 
 static func unwrap_lng(lng: float, around: float) -> float:
@@ -132,6 +132,13 @@ static func unwrap_lng(lng: float, around: float) -> float:
 func _project_way(points: Array) -> PackedVector2Array:
 	var out := PackedVector2Array()
 	if points.is_empty():
+		return out
+	if map.is_globe():
+		for point in points:
+			var lng := float(point[0])
+			var world := MapView.CityLayer.ohproject(lng, float(point[1]))
+			world.x = (lng + 180.0) / 360.0 * MapView.WORLD_WIDTH
+			out.append(map.world_to_screen(world))
 		return out
 	var zoom := map.camera.zoom.x
 	var half := map.get_viewport_rect().size * 0.5
@@ -201,46 +208,12 @@ func _casing_width(level: int) -> float:
 
 
 func _draw_lines() -> void:
-	var font := UI.font(700)
-	var size := int(round(_zoom_value([[4, 10.0], [8, 13.0]])))
-	for mark in record.get("marks", []):
-		var entry: Dictionary = mark
-		var label := str(entry.get("label", ""))
-		if label.is_empty() or str(entry.get("what", "")) == "draft":
-			continue
-		var points := _project_way(entry.get("points", []))
-		if points.size() < 2:
-			continue
-		_draw_line_label(points, label, Color(str(entry.get("colour", "#e09440"))), font, size)
 	var draft: Variant = store.value("draft")
 	if draft is Array and (draft as Array).size() >= 2:
 		var level := int(store.value("level"))
 		var points := _project_way(draft)
 		_draw_round_polyline(points, Color(5 / 255.0, 8 / 255.0, 13 / 255.0, 0.8), _casing_width(level))
 		_draw_dots(points, WarRoomWords.line_colour(level), _line_width(level), 0.3, 1.6)
-
-
-func _draw_line_label(points: PackedVector2Array, label: String, colour: Color, font: Font, size: int) -> void:
-	var total := 0.0
-	for index in range(1, points.size()):
-		total += points[index].distance_to(points[index - 1])
-	var half := total * 0.5
-	var walked := 0.0
-	for index in range(1, points.size()):
-		var step := points[index].distance_to(points[index - 1])
-		if walked + step >= half and step > 0.0:
-			var at := points[index - 1].lerp(points[index], (half - walked) / step)
-			var angle := (points[index] - points[index - 1]).angle()
-			if angle > PI / 2.0 or angle < -PI / 2.0:
-				angle += PI
-			var width := font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, size).x
-			draw_set_transform(at, angle)
-			var spot := Vector2(-width * 0.5, -size * 1.1 + size * 0.35)
-			draw_string_outline(font, spot, label, HORIZONTAL_ALIGNMENT_LEFT, -1, size, 3, HALO)
-			draw_string(font, spot, label, HORIZONTAL_ALIGNMENT_LEFT, -1, size, colour)
-			draw_set_transform(Vector2.ZERO, 0.0)
-			return
-		walked += step
 
 
 func _draw_round_polyline(points: PackedVector2Array, colour: Color, width: float) -> void:
@@ -341,21 +314,6 @@ static func arrow_head(way: Array) -> Array:
 	return [tip, left, right]
 
 
-static func middle_of(way: Array) -> Array:
-	var half := length_of(way) / 2.0
-	var walked := 0.0
-	for index in range(1, way.size()):
-		var shrink := cos(((float(way[index][1]) + float(way[index - 1][1])) / 2.0) * RAD)
-		var dx := (float(way[index][0]) - float(way[index - 1][0])) * shrink
-		var dy := float(way[index][1]) - float(way[index - 1][1])
-		var step := sqrt(dx * dx + dy * dy)
-		if walked + step >= half and step > 0.0:
-			var part := (half - walked) / step
-			return [float(way[index - 1][0]) + (float(way[index][0]) - float(way[index - 1][0])) * part, float(way[index - 1][1]) + (float(way[index][1]) - float(way[index - 1][1])) * part]
-		walked += step
-	return way[way.size() - 1]
-
-
 func _plan_width(pointed: bool) -> float:
 	return _zoom_value([[3, 3.2 if pointed else 2.0], [8, 6.0 if pointed else 4.0]])
 
@@ -373,7 +331,6 @@ func _draw_plans() -> void:
 			drawn.append([entry, false])
 	for plan in store.value("known"):
 		drawn.append([plan, true])
-	var labels: Array = []
 	for pair in drawn:
 		var plan: Dictionary = pair[0]
 		var theirs: bool = pair[1]
@@ -389,7 +346,6 @@ func _draw_plans() -> void:
 				draw_circle(at, radius + 1.5, CASING, true, -1.0, true)
 				draw_circle(at, radius, colour, true, -1.0, true)
 			continue
-		var named := false
 		for raw in ways:
 			var way_points: Array = raw
 			if way_points.size() < 2:
@@ -412,21 +368,6 @@ func _draw_plans() -> void:
 					var outline := shape.duplicate()
 					outline.append(shape[0])
 					draw_polyline(outline, Color(5 / 255.0, 8 / 255.0, 13 / 255.0, 0.9), 1.0, true)
-			var label := ""
-			if not named and not theirs and (str(plan.get("kind", "")) == "project" or not str(plan.get("project", "")).is_empty()):
-				label = str(plan.get("name", "")).strip_edges()
-			if not label.is_empty():
-				named = true
-				labels.append([_project_way([middle_of(way)])[0], label, colour])
-	var font := UI.font(700)
-	var size := int(round(_zoom_value([[3, 10.0], [8, 13.0]])))
-	for entry in labels:
-		var at: Vector2 = entry[0]
-		var label: String = entry[1]
-		var width := font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, size).x
-		var spot := at + Vector2(-width * 0.5, -size * 1.1 + size * 0.35)
-		draw_string_outline(font, spot, label, HORIZONTAL_ALIGNMENT_LEFT, -1, size, 3, HALO)
-		draw_string(font, spot, label, HORIZONTAL_ALIGNMENT_LEFT, -1, size, entry[2])
 
 
 static func ring_around(lng: float, lat: float, km: float, count := 48) -> Array:
@@ -588,6 +529,8 @@ func _press(point: Vector2, add: bool) -> void:
 
 
 func _move(point: Vector2) -> void:
+	if _held.is_empty():
+		return
 	var way: PackedVector2Array = _held["way"]
 	var last := way[way.size() - 1]
 	if _placing():

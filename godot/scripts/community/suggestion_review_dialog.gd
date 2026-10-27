@@ -12,6 +12,8 @@ var _view := {}
 var _phase := "loading"
 var _error := ""
 var _busy := false
+var _ref_id := ""
+var _file := ""
 
 
 func _init() -> void:
@@ -21,6 +23,8 @@ func _init() -> void:
 func open_for(link: EngineLink, id: String, host: Node, ref_id := "", file := "") -> void:
 	engine = link
 	scenario_id = id
+	_ref_id = ref_id
+	_file = file
 	show_over(host)
 	_render()
 	var reply := await engine.request("community.review.open", {"scenarioId": id, "refId": ref_id, "file": file})
@@ -38,6 +42,30 @@ func close() -> void:
 	if engine and not str(_view.get("key", "")).is_empty():
 		engine.request("community.review.close", {"scenarioId": scenario_id, "key": str(_view.get("key", ""))})
 	super.close()
+
+
+func _review_map() -> void:
+	var looked := await engine.request("community.review.suggestion", {"scenarioId": scenario_id, "key": str(_view.get("key", ""))})
+	if not is_instance_valid(self) or not looked.get("ok", false):
+		return
+	var hello := await engine.request("hello")
+	var data_root := str((hello.get("result", {}) as Dictionary).get("dataRoot", "")) if hello.get("ok", false) else ""
+	var layer := CanvasLayer.new()
+	layer.layer = 60
+	get_tree().root.add_child(layer)
+	var workshop: Node = (load("res://scripts/editor/workshop.gd") as GDScript).new()
+	layer.add_child(workshop)
+	workshop.tree_exited.connect(func() -> void:
+		if is_instance_valid(layer):
+			layer.queue_free())
+	workshop.call("setup", engine, {"tiles_cache": data_root.path_join("native-cache").path_join("tiles")})
+	workshop.connect("review_saved", func(_record: Dictionary) -> void:
+		var again := await engine.request("community.review.open", {"scenarioId": scenario_id, "refId": _ref_id, "file": _file})
+		if is_instance_valid(self) and again.get("ok", false):
+			_adopt(again["result"])
+			_render()
+			changed.emit())
+	workshop.call("open", {"id": scenario_id}, {"review": looked["result"]})
 
 
 func _adopt(view: Dictionary) -> void:
@@ -171,7 +199,10 @@ func _render_ready() -> void:
 		stack.add_child(quiet("They open in the map editor, listed beside the map and marked on it, to accept or reject one by one. Save the map there to keep what you accepted."))
 		var review := button("🗺️ Review the map changes", true)
 		review.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-		UI.set_disabled_look(review, MAP_REVIEW_MISSING)
+		if load("res://scripts/editor/workshop.gd") is GDScript:
+			review.pressed.connect(_review_map)
+		else:
+			UI.set_disabled_look(review, MAP_REVIEW_MISSING)
 		stack.add_child(review)
 		card.add_child(stack)
 		body.add_child(card)

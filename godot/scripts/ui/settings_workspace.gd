@@ -78,6 +78,8 @@ var _cache: Variant = null
 var _music: Variant = null
 var _audio: Variant = null
 var _basemaps: Array = []
+var _shown_pick := ""
+var _live_basemaps := false
 var _agent_folder := ""
 var _last_error := ""
 
@@ -470,8 +472,17 @@ func _load_section_data() -> void:
 			_music = await _req("settings.music")
 		"map":
 			if _for_game():
-				var maps: Variant = await _req("settings.basemaps")
-				_basemaps = (maps as Dictionary).get("maps", []) if typeof(maps) == TYPE_DICTIONARY else []
+				var background: Variant = await _req("mapextras.background", {"globe": false})
+				_live_basemaps = typeof(background) == TYPE_DICTIONARY and typeof((background as Dictionary).get("maps")) == TYPE_ARRAY
+				if _live_basemaps:
+					_basemaps = []
+					for entry: Variant in (background as Dictionary)["maps"]:
+						if typeof(entry) == TYPE_DICTIONARY:
+							_basemaps.append({"pick": str((entry as Dictionary).get("pick", "")), "label": str((entry as Dictionary).get("name", ""))})
+					_shown_pick = str((background as Dictionary).get("shownPick", ""))
+				else:
+					var maps: Variant = await _req("settings.basemaps")
+					_basemaps = (maps as Dictionary).get("maps", []) if typeof(maps) == TYPE_DICTIONARY else []
 		"ai":
 			await _load_fallback()
 			var requests: Variant = await _req("settings.requests")
@@ -1081,9 +1092,10 @@ func _export_dir() -> String:
 
 func _build_general() -> void:
 	var language := _section("Language", "Interface language affects the UI. Chat language steers advisor and diplomatic replies.")
-	var ui_picker := _language_picker("ui", "UI language", str(_values.get("uiLanguage", "en")), func(_code: String) -> void: pass, true)
-	language.add_child(ui_picker)
-	_dim(ui_picker, NATIVE_UI_LANGUAGE)
+	language.add_child(_language_picker("ui", "UI language", str(_values.get("uiLanguage", "en")), func(code: String) -> void:
+		_values["uiLanguage"] = code
+		setting_changed.emit("ui_language", code)
+		_rerender(), true))
 	language.add_child(_language_picker("chat", "AI chat language", str(_values.get("chatLanguage", "en")), func(code: String) -> void:
 		var reply: Variant = await _req("settings.chatLanguage", {"code": code})
 		if typeof(reply) == TYPE_DICTIONARY:
@@ -1096,8 +1108,7 @@ func _build_general() -> void:
 		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN if next else DisplayServer.WINDOW_MODE_WINDOWED)
 		_req("settings.window", {"key": "Fullscreen", "value": next})
 		setting_changed.emit("fullscreen", next))
-	var vault := _add_toggle(display, "Show the vault door every time", _flag("vault_door_every_time"), func() -> void: _set_flag("vault_door_every_time", not _flag("vault_door_every_time")))
-	_dim(vault, NATIVE_NO_VAULT)
+	_add_toggle(display, "Show the vault door every time", _flag("vault_door_every_time"), func() -> void: _set_flag("vault_door_every_time", not _flag("vault_door_every_time")))
 	_add_toggle_note(display, "On: the vault door appears every time you start the game. Off: only the first time you start it after an update.")
 	var access := _section("Accessibility", "Reduce automatic camera motion and map animations without changing simulation behavior.")
 	var reduced := _flag("map_disable_idle_rotation") and _flag("map_disable_event_camera")
@@ -1110,8 +1121,7 @@ func _build_general() -> void:
 		setting_changed.emit("map_disable_event_camera", next))
 	var policy := _button("Privacy policy", func() -> void: OS.shell_open(PRIVACY_URL), "privacy")
 	var privacy := _section("Privacy", "What the game tells other services about you, and the switches for it.", policy)
-	var discord := _add_toggle(privacy, "Show what I am playing on Discord", _flag("privacy_discord_presence"), func() -> void: _set_flag("privacy_discord_presence", not _flag("privacy_discord_presence")))
-	_dim(discord, NATIVE_NO_DISCORD)
+	_add_toggle(privacy, "Show what I am playing on Discord", _flag("privacy_discord_presence"), func() -> void: _set_flag("privacy_discord_presence", not _flag("privacy_discord_presence")))
 	_add_settings_helper(privacy, "Discord shows the country you play, the scenario and the in-game date to people who can see your activity. Desktop app only.", 0)
 
 
@@ -1351,11 +1361,17 @@ func _build_map() -> void:
 		for map: Dictionary in _basemaps:
 			options.append([str(map.get("pick", "")), str(map.get("label", ""))])
 		var only := options.size() <= 1
-		group.add_child(_select(options, "", func(_value: String) -> void: pass))
+		group.add_child(_select(options, _shown_pick, func(value: String) -> void:
+			if not _live_basemaps:
+				return
+			_shown_pick = value
+			await _req("mapextras.setGamePick", {"pick": value})
+			setting_changed.emit("gamePick", value)))
 		_add_helper(group, "This scenario has one map." if only else "The maps this scenario offers. Your pick is kept for this game only, and applies at once.")
 		_gap(group, 14.4)
 		basemap.add_child(group)
-		_dim(group, NATIVE_ONE_BASEMAP)
+		if not _live_basemaps:
+			_dim(group, NATIVE_ONE_BASEMAP)
 	else:
 		var use_default := _flag("map_basemap_default_on")
 		var stored := str(_values.get("defaultBasemap", ""))
@@ -1381,12 +1397,10 @@ func _build_map() -> void:
 		_add_helper(group, "Games start on this map wherever their scenario offers it, and on the scenario's starting map elsewhere. Each game's own settings can still pick another." if use_default else "Off: every game starts on its scenario's starting map. Each game's own settings can pick another.")
 		_gap(group, 14.4)
 		basemap.add_child(group)
-		_dim(group, NATIVE_ONE_BASEMAP)
 	var detailed := _section("Detailed maps", "Large terrain maps, sharp when zoomed in. A scenario offers them among its maps, each drawn over one of its drawn maps.")
 	if not _for_game():
 		var painted := str(_values.get("scenarioTerrain", "")) == "painted"
-		var toggle := _add_toggle(detailed, "Show detailed maps", not painted, func() -> void: _set_value("map_scenario_terrain", "" if painted else "painted"))
-		_dim(toggle, NATIVE_NO_DETAILED)
+		_add_toggle(detailed, "Show detailed maps", not painted, func() -> void: _set_value("map_scenario_terrain", "" if painted else "painted"))
 		var note := _add_helper(detailed, "On: a detailed map is drawn when you have it. Off, in every game: the drawn map under it, which is lighter.", 0.0)
 		_pull_up(detailed, 0)
 		note.modulate.a = 1.0
@@ -1434,12 +1448,10 @@ func _build_map() -> void:
 	_gap(labels, 14.4)
 	_add_toggle(labels, "Hide country labels", _flag("map_hide_country_labels"), func() -> void: _set_flag("map_hide_country_labels", not _flag("map_hide_country_labels")))
 	var seasons_on := _flag("map_seasons_weather")
-	var seasons := _add_toggle(labels, "Seasons and weather", seasons_on, func() -> void: _set_flag_and_render("map_seasons_weather", not _flag("map_seasons_weather")))
-	_dim(seasons, NATIVE_NO_WEATHER)
+	_add_toggle(labels, "Seasons and weather", seasons_on, func() -> void: _set_flag_and_render("map_seasons_weather", not _flag("map_seasons_weather")))
 	_add_settings_helper(labels, "On (default): the map is tinted by the season and shows its weather. Frozen water is drawn as ice either way.")
 	if seasons_on:
-		var weather := _add_toggle(labels, "Weather effects", _flag("map_weather_effects"), func() -> void: _set_flag("map_weather_effects", not _flag("map_weather_effects")))
-		_dim(weather, NATIVE_NO_WEATHER)
+		_add_toggle(labels, "Weather effects", _flag("map_weather_effects"), func() -> void: _set_flag("map_weather_effects", not _flag("map_weather_effects")))
 		_add_settings_helper(labels, "On (default): rain, snow, frost, fog and the other weathers are drawn over the land they fall on. Off: no weather is drawn; the season's tint and the ice stay, and the advisor can still tell you the weather.")
 	var performance := VBoxContainer.new()
 	performance.add_theme_constant_override("separation", 0)
@@ -1467,16 +1479,13 @@ func _build_map() -> void:
 		_values["globe"] = next
 		_req("settings.window", {"key": "Globe", "value": next})
 		setting_changed.emit("Globe", next))
-	_dim(globe, NATIVE_FLAT)
-	var terrain := _add_toggle(three, "3D Terrain", bool(_values.get("terrain", true)), func() -> void:
+	_add_toggle(three, "3D Terrain", bool(_values.get("terrain", true)), func() -> void:
 		var next := not bool(_values.get("terrain", true))
 		_values["terrain"] = next
 		_req("settings.window", {"key": "Terrain", "value": next})
 		setting_changed.emit("Terrain", next))
-	_dim(terrain, NATIVE_FLAT)
 	var camera := _section("Camera behavior", "Fine-grained controls for automatic map movement.")
-	var idle := _add_toggle(camera, "Disable idle globe rotation", _flag("map_disable_idle_rotation"), func() -> void: _set_flag("map_disable_idle_rotation", not _flag("map_disable_idle_rotation")))
-	_dim(idle, NATIVE_NO_GLOBE)
+	_add_toggle(camera, "Disable idle globe rotation", _flag("map_disable_idle_rotation"), func() -> void: _set_flag("map_disable_idle_rotation", not _flag("map_disable_idle_rotation")))
 	_add_toggle(camera, "Disable camera movement during events", _flag("map_disable_event_camera"), func() -> void: _set_flag("map_disable_event_camera", not _flag("map_disable_event_camera")))
 
 
@@ -2405,11 +2414,10 @@ func _build_advanced() -> void:
 		if typeof(reply) == TYPE_DICTIONARY:
 			_values = reply)
 	_add_settings_helper(telemetry, "Keeps every AI call — prompt, answer, model, tokens, latency, validation verdict — in this browser for the AI debug console (200 across sessions). Off: the console sees this session only. Keys are never recorded.")
-	var rating := _add_toggle(telemetry, "Rate AI generations", bool(_values.get("rating", false)), func() -> void:
+	_add_toggle(telemetry, "Rate AI generations", bool(_values.get("rating", false)), func() -> void:
 		var reply: Variant = await _req("settings.rating", {"value": not bool(_values.get("rating", false))})
 		if typeof(reply) == TYPE_DICTIONARY:
 			_values = reply)
-	_dim(rating, NATIVE_NO_RATING)
 	_add_settings_helper(telemetry, "A small 1-10 bar after each time skip, Game Master edit and interactive event. Ratings sit beside the call in the console and its exports.", 0)
 	var network := _section("Network", "Other devices — the Android app, a browser on another computer — reach this server only while you say so.")
 	_network_sharing(network)

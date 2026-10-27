@@ -359,6 +359,7 @@ export const register = (ctx) => {
       storage.flush();
       return true;
     },
+    "shell.state": async () => ({ seen: notices.seenUpdate() ?? "", doorBuild: doorDue.readVaultDoorBuild() ?? "" }),
     "shell.updates": async () => ({ updates: list(notes.UPDATES).map(updateView) }),
     "shell.prefs": async () => prefs(),
     "shell.metal": async () => metal(),

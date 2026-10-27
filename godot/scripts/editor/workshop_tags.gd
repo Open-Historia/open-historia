@@ -29,7 +29,7 @@ func _init(start: Array = [], suggestion_list: Array = [], placeholder := "add a
 		if event is InputEventKey and (event as InputEventKey).pressed and (event as InputEventKey).keycode == KEY_BACKSPACE and _edit.text.is_empty() and not values.is_empty():
 			var next := values.duplicate()
 			next.pop_back()
-			_set(next))
+			_store(next))
 	add_child(_edit)
 	_hints = HFlowContainer.new()
 	_hints.add_theme_constant_override("h_separation", 4)
@@ -60,10 +60,10 @@ func commit(raw: String) -> void:
 		return
 	var next := values.duplicate()
 	next.append_array(parts)
-	_set(next)
+	_store(next)
 
 
-func _set(next: Array) -> void:
+func _store(next: Array) -> void:
 	values = next
 	_render()
 	tags_changed.emit(values.duplicate())
@@ -114,7 +114,7 @@ func _render() -> void:
 		remove.pressed.connect(func() -> void:
 			var next := values.duplicate()
 			next.erase(tag)
-			_set(next))
+			_store(next))
 		row.add_child(remove)
 		chip.add_child(row)
 		_chips.add_child(chip)

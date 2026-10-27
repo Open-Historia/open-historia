@@ -56,7 +56,33 @@ func _until(condition: Callable, seconds: float) -> bool:
 	return condition.call()
 
 
+func _clear_shell() -> void:
+	var shell: ShellBoot = main.get("shell") as ShellBoot
+	if shell == null:
+		return
+	await _until(func() -> bool: return shell.door_state != "deciding", 30.0)
+	if shell.door != null and is_instance_valid(shell.door):
+		shell.door.opened.emit()
+		_say("vault door opened for the test")
+	if not shell.notice_updates.is_empty():
+		await _until(func() -> bool: return shell.notice != null and is_instance_valid(shell.notice), 5.0)
+		await _frames(5)
+	if shell.notice != null and is_instance_valid(shell.notice):
+		shell.notice.closed.emit()
+		_say("update notice closed for the test")
+	await _frames(3)
+
+
+func _close_notice() -> void:
+	var shell: ShellBoot = main.get("shell") as ShellBoot
+	if shell != null and shell.notice != null and is_instance_valid(shell.notice) and shell.notice.is_visible_in_tree():
+		shell.notice.closed.emit()
+		_say("update notice closed for the test")
+		await _frames(3)
+
+
 func _shoot(name: String) -> void:
+	await _close_notice()
 	await _frames(4)
 	await RenderingServer.frame_post_draw
 	if shots.is_empty():
@@ -109,15 +135,22 @@ func _run() -> void:
 			return
 		await process_frame
 	_say("menu ready")
+	await _clear_shell()
 	await main._start_scenario("default")
 	main.picker._choose("France")
 	await main._on_country_chosen("France", "medium")
 	await _wait(1.0)
 	var view: MapView = main.map_view
-	extras = MapExtras.new()
-	main.hud.add_child(extras)
-	await extras.setup(main.engine, {"map_view": view, "game": {}})
-	await _until(func() -> bool: return not extras.world.is_empty(), 20.0)
+	extras = main.get("map_extras") as MapExtras
+	_check(extras != null, "the game mounts the map extras")
+	if extras == null:
+		extras = MapExtras.new()
+		main.hud.add_child(extras)
+		await extras.setup(main.engine, {"map_view": view, "game": {}})
+	await _until(func() -> bool: return extras.globe != null and not extras.world.is_empty(), 30.0)
+	await main.engine.request("settings.flag", {"key": "map_disable_event_camera", "value": true})
+	await main._on_setting_changed("map_disable_event_camera", true)
+	_check(view.extras == extras, "the map view talks to that one instance")
 	_check(not extras.world.is_empty(), "the world's map extras were read")
 	_check(int(extras.world.get("regionCount", 0)) == view.extras_region_count(), "the sidecar's regions match the baked map (%d)" % view.extras_region_count())
 	_check((extras.world.get("claims", []) as Array).size() > 0, "disputed regions carry stripes (%d)" % (extras.world.get("claims", []) as Array).size())
@@ -245,17 +278,37 @@ func _globe_checks() -> void:
 	var world := view.screen_to_world(centre)
 	var back := view.world_to_screen(world)
 	_check(back.distance_to(centre) < 1.5, "a point on the globe projects back where it was picked (%.2f px)" % back.distance_to(centre))
-	var corner := view.screen_to_world(Vector2(4, 4))
-	_check(not extras.globe.screen_hits_globe(Vector2(4, 4)), "the corner of the screen is space, not the globe (%s)" % str(corner))
+	_check(not extras.globe.screen_hits_globe(Vector2(4, 4)), "the corner of the screen is space, not the globe")
+	var polity := view.polity_text()
+	_check(polity != null and polity.visibility_layer == GlobeView.MAP_LAYER_BIT and extras.globe.labels.visible and extras.globe.labels.painted_items() > 0, "the country names are drawn on the globe's surface (%d names)" % extras.globe.labels.painted_items())
+	var pole := view.world_to_screen(GlobeView.world_of_lonlat(0.0, 84.0))
+	var below := view.world_to_screen(GlobeView.world_of_lonlat(0.0, 78.0))
+	if pole.x > 0.0 and below.x > 0.0:
+		var image := root.get_viewport().get_texture().get_image()
+		var near_pole := _patch_colour(image, pole, 2)
+		var further := _patch_colour(image, below, 2)
+		_check(_colour_gap(near_pole, further) < 0.12, "the polar cap shows the map's edge, not a dark hole (%s vs %s)" % [near_pole.to_html(false), further.to_html(false)])
 	view.fly_to_lonlat(2.0, 47.0, 3.5, 0.0)
 	await _wait(3.0)
 	await _shoot("globe-2-europe")
 	view.fly_to_lonlat(2.0, 47.0, 6.0, 0.0)
 	await _wait(3.0)
 	await _shoot("globe-3-close")
-	view.fly_to_lonlat(2.35, 48.85, 11.4, 0.0)
-	await _wait(3.0)
+	extras.apply_map_settings({"map_disable_idle_rotation": true})
+	view.fly_to_lonlat(2.35, 48.85, 8.0, 0.0)
+	await _wait(2.0)
+	view.camera.zoom = Vector2.ONE * pow(2.0, 11.4) / 8.0
+	view.call("_after_camera_move")
+	await _wait(2.5)
 	await _shoot("globe-4-morph")
+	var on_globe := _patch_colour(root.get_viewport().get_texture().get_image(), centre, 10)
+	extras.apply_map_settings({"Globe": false})
+	await _wait(2.5)
+	await _shoot("globe-4-flat")
+	var on_flat := _patch_colour(root.get_viewport().get_texture().get_image(), centre, 10)
+	_check(_colour_gap(on_globe, on_flat) < 0.06, "between globe and flat the map under the camera is the same (%s vs %s)" % [on_globe.to_html(false), on_flat.to_html(false)])
+	extras.apply_map_settings({"Globe": true, "map_disable_idle_rotation": false})
+	await _frames(3)
 	view.fly_to_lonlat(10.0, 30.0, 2.25, 0.0)
 	await _wait(1.0)
 	extras.globe.mark_interaction()
@@ -273,8 +326,28 @@ func _globe_checks() -> void:
 	extras.apply_map_settings({"Globe": false})
 	await _frames(3)
 	_check(not extras.globe.active and not view.is_globe(), "the globe switches off again")
+	_check(polity == null or polity.visibility_layer == 1, "the flat map's names are back on screen")
 	await _wait(1.0)
 	await _shoot("globe-6-flat-again")
+
+
+func _patch_colour(image: Image, at: Vector2, half: int) -> Color:
+	var sum := Color(0, 0, 0, 0)
+	var count := 0
+	for y in range(int(at.y) - half, int(at.y) + half + 1):
+		for x in range(int(at.x) - half, int(at.x) + half + 1):
+			if x < 0 or y < 0 or x >= image.get_width() or y >= image.get_height():
+				continue
+			var pixel := image.get_pixel(x, y)
+			sum = Color(sum.r + pixel.r, sum.g + pixel.g, sum.b + pixel.b, 1.0)
+			count += 1
+	if count == 0:
+		return Color(0, 0, 0, 1)
+	return Color(sum.r / count, sum.g / count, sum.b / count, 1.0)
+
+
+func _colour_gap(a: Color, b: Color) -> float:
+	return maxf(absf(a.r - b.r), maxf(absf(a.g - b.g), absf(a.b - b.b)))
 
 
 func _style_checks() -> void:

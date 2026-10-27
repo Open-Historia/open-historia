@@ -146,6 +146,7 @@ func _choice_button(title: String, text: String) -> Button:
 	margin.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	node.add_child(margin)
 	node.custom_minimum_size = Vector2(392, 64)
+	margin.minimum_size_changed.connect(func() -> void: node.custom_minimum_size.y = maxf(64.0, margin.get_combined_minimum_size().y))
 	return node
 
 
@@ -161,7 +162,7 @@ func begin(_mode: String) -> void:
 	var column: VBoxContainer = parts[1]
 	var head := HBoxContainer.new()
 	head.add_theme_constant_override("separation", 14)
-	_spinner = Spinner.new()
+	_spinner = CleanupSpinner.new()
 	_spinner.custom_minimum_size = Vector2(34, 34)
 	head.add_child(_spinner)
 	var titles := VBoxContainer.new()
@@ -285,7 +286,7 @@ func show_note(lines: Array) -> void:
 	_note_timer.start(9.0 + 5.0 * float(lines.size() - 1))
 
 
-class Spinner extends Control:
+class CleanupSpinner extends Control:
 	var _angle := 0.0
 
 	func _process(delta: float) -> void:

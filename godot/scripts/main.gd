@@ -7,6 +7,9 @@ var map_view: MapView
 var ui: Control
 var boot: Control
 var boot_label: Label
+var shell: ShellBoot
+var i18n: I18n
+var hotkeys: Hotkeys
 var menu: MainMenu
 var hud: Hud
 var picker: CountryPicker
@@ -27,6 +30,16 @@ var cheats: Node
 var in_game := false
 var last_activity := 0
 var background_timer: Timer
+var editor: Node
+var war: Node
+var war_room: Node
+var war_room_button: Node
+var after_action: Node
+var forces: Node
+var map_extras: Node
+var shared_overlay: Node
+var shell_notices: Node
+var _extras_ready := false
 
 
 func _ready() -> void:
@@ -70,8 +83,9 @@ func _ready() -> void:
 	_show("boot")
 	engine.engine_ready.connect(_on_engine_ready)
 	engine.engine_stopped.connect(func(message: String) -> void:
+		shell.loading.close_now()
 		_show("boot")
-		boot_label.text = message)
+		shell.startup.set_status(message))
 	engine.engine_event.connect(_on_engine_event)
 	menu.play_game.connect(_open_game)
 	menu.start_scenario.connect(_start_scenario)
@@ -92,6 +106,7 @@ func _ready() -> void:
 		else:
 			_open_settings())
 	_wire_overlays()
+	_mount_parts()
 	hud.turn_landed.connect(_on_turn_landed)
 	picker.start.connect(_on_picker_start)
 	picker.cancelled.connect(_on_picker_cancelled)
@@ -103,7 +118,7 @@ func _ready() -> void:
 	background_timer.start()
 	last_activity = Time.get_ticks_msec()
 	if not engine.start():
-		boot_label.text = "The game engine could not be started. Is Node.js installed?"
+		shell.startup.set_status("The game engine could not be started. Is Node.js installed?")
 
 
 func _mount(path: String, setup_now := true) -> Node:
@@ -144,10 +159,127 @@ func _wire_overlays() -> void:
 	_hook(cheats, "country_changed", func(_country: String) -> void: _world_changed())
 
 
+func _place_above(node: Node, anchor: Node) -> void:
+	ui.add_child(node)
+	ui.move_child(node, anchor.get_index() + 1)
+
+
+func _mount_parts() -> void:
+	war = _make_node("res://scripts/war/war_layers.gd")
+	if war:
+		war.call("setup", engine, map_view)
+		hud.set_war(war)
+		_hook(war, "unit_selected", func(id: String) -> void: _call(hud.map_cards, "show_unit", [id]))
+		hud.map_mode_changed.connect(func(mode: String) -> void: _call(war, "set_map_mode", [mode]))
+	map_extras = _make_node("res://scripts/map/map_extras.gd")
+	if map_extras:
+		hud.add_child(map_extras)
+	forces = _make_node("res://scripts/ui/forces_panel.gd")
+	if forces:
+		_place_above(forces, hud)
+		hud.forces = forces
+	war_room = _make_node("res://scripts/ui/war_room.gd")
+	if war_room:
+		_place_above(war_room, forces if forces else hud)
+	war_room_button = _make_node("res://scripts/ui/war_room_button.gd")
+	if war_room_button:
+		_place_above(war_room_button, war_room if war_room else hud)
+	shared_overlay = _make_node("res://scripts/multiplayer/shared_game_overlay.gd")
+	if shared_overlay:
+		_place_above(shared_overlay, menu)
+	editor = _make_node("res://scripts/ui/scenario_editor.gd")
+	if editor:
+		ui.add_child(editor)
+	after_action = _make_node("res://scripts/ui/after_action.gd")
+	if after_action:
+		ui.add_child(after_action)
+		hud.after_action = after_action
+	shell_notices = _make_node("res://scripts/shell/shell_notices.gd")
+	if shell_notices:
+		ui.add_child(shell_notices)
+	_hook(war_room, "shown_changed", func(open: bool) -> void:
+		if in_game:
+			hud.visible = not open
+		_call(war_room_button, "set_room_open", [open])
+		_sound("set_war_room", [open])
+		_call(map_extras, "set_rotation_paused", [open]))
+	_hook(war_room, "open_chat", func(country: String) -> void: hud.open_chat(country))
+	_hook(war_room, "map_state_changed", func(state: Dictionary) -> void: _call(war, "set_war_room", [state]))
+	_hook(war_room_button, "pressed", func() -> void:
+		if not bool(_call(war_room, "is_open")):
+			hud.close_drawer()
+		_call(war_room, "toggle"))
+	_hook(war_room_button, "presence_changed", func(at_war: bool) -> void: hud.set_beside_war_room(at_war))
+	_hook(cheats, "open_forces", func() -> void:
+		_call(cheats, "close")
+		_call(forces, "open"))
+	_hook(shared_overlay, "left", func() -> void:
+		in_game = false
+		await _refresh_library()
+		_show("menu"))
+	_hook(editor, "library_changed", func() -> void:
+		await _refresh_library()
+		menu.refresh_trash())
+	_hook(editor, "play_game", func(id: String) -> void: _open_game(id))
+	_hook(editor, "game_deleted", func(id: String) -> void:
+		if id == game_id:
+			in_game = false)
+	_hook(editor, "failed", func(message: String) -> void: menu.set_status(message, true))
+	_hook(editor, "scenario_update_requested", func(id: String, post_id: int) -> void: menu.update_scenario(id, post_id))
+	_hook(editor, "busy_changed", func(busy: bool) -> void: menu.set_creating(busy))
+	menu.edit_scenario.connect(func(id: String) -> void: _call(editor, "open_scenario", [id]))
+	menu.clone_scenario.connect(func(scenario: Dictionary) -> void: _call(editor, "clone_scenario", [scenario]))
+	menu.create_scenario.connect(func() -> void: _call(editor, "create_scenario"))
+	menu.edit_game.connect(func(id: String) -> void: _call(editor, "open_game", [id]))
+	menu.enter_active_game.connect(_enter_active_game)
+	menu.open_history.connect(func() -> void: _call(shell, "open_history"))
+	menu.scenario_imported.connect(func(id: String, note: String) -> void: _call(editor, "open_scenario", [id, note]))
+	menu.scenario_updated.connect(func(id: String) -> void:
+		if bool(_call(editor, "is_open")) and str(_call(editor, "current_id")) == id:
+			_call(editor, "open_scenario", [id]))
+	engine.engine_ready.connect(_setup_parts)
+
+
+func _setup_parts(_data: Dictionary) -> void:
+	if editor:
+		editor.call("setup", engine, {"loader": menu.loader})
+		menu.set_editing_enabled(true)
+	if forces:
+		forces.call("setup", engine, {"map_view": map_view})
+	if war_room_button:
+		war_room_button.call("setup", engine)
+	if after_action:
+		after_action.call("setup", engine)
+	if shared_overlay:
+		shared_overlay.call("setup", engine, {})
+	if shell_notices:
+		shell_notices.call("setup", engine)
+	if war_room:
+		await war_room.call("setup", engine, {"map_view": map_view})
+
+
+func _refresh_war_parts() -> void:
+	_call(war_room_button, "refresh")
+	_call(war_room, "refresh")
+	_call(after_action, "refresh")
+	_call(forces, "refresh")
+
+
+func _enter_active_game() -> void:
+	await _refresh_library()
+	var id := str(library.get("activeGameId", ""))
+	if not id.is_empty():
+		await _open_game(id)
+
+
 func _on_setting_changed(key: String, value: Variant) -> void:
-	if key == "map_mode":
+	_call(map_extras, "apply_map_settings", [{key: value}])
+	if key == "ui_language":
+		await i18n.set_language(str(value))
+	elif key == "map_mode":
 		hud.set_map_mode(str(value))
 		hud._apply_map_mode()
+		_call(war, "set_map_mode", [str(value)])
 	elif key in ["map_hide_country_labels", "map_label_font"]:
 		_call(map_view, "refresh_polity_text")
 	elif key == "map_disable_event_camera":
@@ -157,9 +289,12 @@ func _on_setting_changed(key: String, value: Variant) -> void:
 func _world_changed() -> void:
 	if not in_game:
 		return
-	var state := await engine.request("map.state")
-	if state.get("ok", false):
-		map_view.set_state(state["result"])
+	if war:
+		await war.call("refresh")
+	else:
+		var state := await engine.request("map.state")
+		if state.get("ok", false):
+			map_view.set_state(state["result"])
 	var view := await engine.request("game.view")
 	if view.get("ok", false):
 		hud.set_game(view["result"], game_name)
@@ -170,6 +305,7 @@ func _world_changed() -> void:
 	hud.date_widget._render_all()
 	hud.refresh_panels()
 	_call(game_menu, "refresh")
+	_refresh_war_parts()
 
 
 func _make_node(path: String) -> Node:
@@ -209,28 +345,15 @@ func _notification(what: int) -> void:
 
 
 func _build_boot() -> void:
-	boot = ColorRect.new()
-	(boot as ColorRect).color = UI.PAGE
-	boot.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	var centre := CenterContainer.new()
-	centre.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	var column := VBoxContainer.new()
-	column.alignment = BoxContainer.ALIGNMENT_CENTER
-	column.add_theme_constant_override("separation", 14)
-	var mark := TextureRect.new()
-	mark.texture = UI.logo()
-	mark.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	mark.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-	mark.custom_minimum_size = Vector2(96, 96)
-	column.add_child(mark)
-	boot_label = UI.label("Starting the game engine…", 13, UI.SOFT)
-	boot_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	boot_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	boot_label.custom_minimum_size.x = 520
-	column.add_child(boot_label)
-	centre.add_child(column)
-	boot.add_child(centre)
-	ui.add_child(boot)
+	i18n = I18n.new()
+	add_child(i18n)
+	hotkeys = Hotkeys.new()
+	add_child(hotkeys)
+	hotkeys.setup(engine)
+	shell = ShellBoot.new()
+	add_child(shell)
+	shell.setup(engine, menu.loader, hud)
+	boot = shell.startup
 
 
 func _build_settings() -> void:
@@ -299,6 +422,12 @@ func _show(screen: String) -> void:
 		_sound("enter_menu")
 	elif screen == "game":
 		_sound("enter_game")
+	_report_presence(screen != "game")
+
+
+func _report_presence(in_menu: bool) -> void:
+	if engine and engine.is_ready():
+		engine.request("discord.presence", {"inMenu": in_menu})
 
 
 func _on_engine_ready(_data: Dictionary) -> void:
@@ -308,9 +437,13 @@ func _on_engine_ready(_data: Dictionary) -> void:
 		info = hello["result"]
 		menu.set_origin(str(info.get("origin", "")))
 		map_view.basemap.cache_dir = str(info.get("dataRoot", "")).path_join("native-cache").path_join("tiles")
+	await i18n.start(engine)
 	await _refresh_library()
 	menu.refresh_trash()
+	await shell.prepare()
 	_show("menu")
+	shell.reveal()
+	i18n.activate()
 
 
 func _refresh_library() -> void:
@@ -331,12 +464,14 @@ func _game_named(id: String) -> Dictionary:
 
 
 func _load_map() -> bool:
+	_call(war, "clear")
 	var regions := await engine.request("map.regions")
 	if not regions.get("ok", false):
 		menu.set_status(str(regions.get("error", "The map could not be read.")), true)
 		return false
 	map_view.load_regions(str(regions["result"]["file"]))
 	await map_view.baked
+	shell.game_loading_phase("settling")
 	var state := await engine.request("map.state")
 	if state.get("ok", false):
 		map_view.set_state(state["result"])
@@ -352,19 +487,24 @@ func _open_game(id: String) -> void:
 		_show("game")
 		return
 	in_game = false
+	var entry := _game_named(id)
+	shell.begin_game_loading({"gameName": str(entry.get("name", "")), "scenarioName": str(entry.get("scenarioName", "")), "countryName": str(entry.get("country", "")), "coverUrl": str(entry.get("coverImageUrl", ""))})
 	menu.set_status("Opening the game…")
 	var opened := await engine.request("game.open", {"id": id})
 	if not opened.get("ok", false):
 		menu.set_status(str(opened.get("error", "The game could not be opened.")), true)
 		_sound("enter_menu")
+		shell.loading.finish()
 		return
 	_sound("enter_loading")
 	if not await _load_map():
+		shell.loading.finish()
 		return
 	await _refresh_library()
 	game_id = id
 	game_name = str(_game_named(id).get("name", ""))
 	await _enter_game(opened["result"])
+	shell.end_game_loading()
 
 
 func _enter_game(view: Dictionary) -> void:
@@ -377,14 +517,24 @@ func _enter_game(view: Dictionary) -> void:
 	_show("game")
 	map_view.focus_owner(str(view.get("country", "")))
 	hud.mount_panels(view)
-	_call(cheats, "setup", [engine, {"map_view": map_view, "game": view, "forces_available": false}])
+	_call(cheats, "setup", [engine, {"map_view": map_view, "game": view, "forces_available": forces != null}])
 	_call(game_menu, "refresh")
+	if war:
+		await war.call("refresh")
+	if map_extras and not _extras_ready:
+		_extras_ready = true
+		await map_extras.call("setup", engine, {"map_view": map_view, "game": view})
+	elif map_extras:
+		_call(map_extras, "refresh")
+	_refresh_war_parts()
+	_call(shell_notices, "reset_for_game")
 	await hud.enter_game()
 	_call(game_menu, "maybe_show_ai_setup", [game_id])
 
 
 func _start_scenario(scenario_id: String) -> void:
 	in_game = false
+	_call(war, "clear")
 	menu.set_status("Preparing the map…")
 	var opened := await engine.request("picker.open", {"scenarioId": scenario_id})
 	if not opened.get("ok", false):
@@ -405,6 +555,11 @@ func _start_scenario(scenario_id: String) -> void:
 func _on_picker_start(request: Dictionary) -> void:
 	picker.visible = false
 	map_view.select_region(-1)
+	var scenario := {}
+	for entry in library.get("scenarios", []):
+		if str(entry.get("id", "")) == picking_scenario:
+			scenario = entry
+	shell.begin_game_loading({"gameName": "", "scenarioName": str(scenario.get("name", "")), "countryName": str(request.get("country", "")), "coverUrl": str(scenario.get("coverImageUrl", ""))})
 	menu.set_status("Starting the game…")
 	_sound("enter_loading")
 	var args := request.duplicate()
@@ -412,16 +567,25 @@ func _on_picker_start(request: Dictionary) -> void:
 	var started := await engine.request("picker.start", args)
 	if not started.get("ok", false):
 		menu.set_status(str(started.get("error", "The game could not be created.")), true)
+		shell.loading.finish()
 		_show("menu")
 		return
+	shell.refresh_game_loading(str(started["result"].get("id", "")))
 	if not await _load_map():
+		shell.loading.finish()
 		_show("menu")
 		return
 	await _refresh_library()
 	game_id = str(started["result"].get("id", ""))
 	game_name = str(_game_named(game_id).get("name", ""))
+	var made := _game_named(game_id)
+	shell.update_game_loading({"gameName": game_name, "scenarioName": str(made.get("scenarioName", scenario.get("name", ""))), "countryName": str(made.get("country", request.get("country", ""))), "coverUrl": str(made.get("coverImageUrl", scenario.get("coverImageUrl", "")))})
 	picking_scenario = ""
 	await _enter_game(started["result"].get("view", {}))
+	shell.end_game_loading()
+	var handoff := str(started["result"].get("error", ""))
+	if not handoff.is_empty():
+		_call(editor, "open_game", [game_id, handoff])
 
 
 func _on_country_chosen(country: String, difficulty: String) -> void:
@@ -436,6 +600,9 @@ func _on_picker_cancelled() -> void:
 
 
 func _exit_game() -> void:
+	if bool(_call(war_room, "is_open")):
+		_call(war_room, "close")
+	_call(forces, "close")
 	await _refresh_library()
 	_show("menu")
 
@@ -444,7 +611,9 @@ func _on_turn_landed(view: Dictionary) -> void:
 	hud.set_game(view, game_name)
 	_call(game_menu, "refresh")
 	_sound("refresh_war")
+	_refresh_war_parts()
 	await _refresh_library()
+	_report_presence(not hud.visible)
 
 
 func _on_engine_event(_name: String, _data: Variant) -> void:

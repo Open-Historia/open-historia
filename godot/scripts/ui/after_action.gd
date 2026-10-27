@@ -47,6 +47,14 @@ func refresh() -> void:
 	reports = result.get("reports", [])
 	due = str(result.get("due", ""))
 	_show_current()
+	if bool(result.get("busy", false)) and showing.is_empty() and not reports.is_empty():
+		_retry_later(seq)
+
+
+func _retry_later(seq: int) -> void:
+	await get_tree().create_timer(1.5).timeout
+	if seq == _seq and showing.is_empty():
+		refresh()
 
 
 func open_report(battlefield: String) -> void:

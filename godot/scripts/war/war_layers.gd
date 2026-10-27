@@ -48,7 +48,6 @@ var _transport_moves: Array = []
 var _transport_started := 0
 var _transport_duration := 0.0
 var _transport_longest := 1.0
-var _transport_signature := ""
 var _air: Array = []
 var _air_ms := 0
 var _strikes_playing := false
@@ -60,6 +59,8 @@ var _serial := 0
 var _stage: Variant = null
 var _retry_full := false
 var _weather_key := ""
+var _held_map: Dictionary = {}
+var _shown_token := ""
 
 
 func setup(link: EngineLink, map_view: MapView) -> void:
@@ -87,6 +88,7 @@ func setup(link: EngineLink, map_view: MapView) -> void:
 func _on_baked(_info: Dictionary) -> void:
 	if paint == null:
 		return
+	_end_transition()
 	paint.rebuild_copies()
 	ground.rebuild_copies()
 	_camera_key = Vector3.ZERO
@@ -95,7 +97,6 @@ func _on_baked(_info: Dictionary) -> void:
 
 
 func refresh() -> void:
-	_stage = null
 	await _load()
 
 
@@ -122,20 +123,24 @@ func show_every_troop(who: String, on: bool) -> void:
 	else:
 		_askers.erase(who)
 	overlay.every_troop = not _askers.is_empty() or bool(war_room.get("open", false))
-	overlay.queue_redraw()
+	overlay.redraw_base()
 
 
 func set_war_room(state: Dictionary) -> void:
+	var before := war_room
 	war_room = {
 		"open": bool(state.get("open", false)),
 		"battlefield": str(state.get("battlefield", "")).to_lower(),
 		"side": int(state.get("side", -1)),
 		"highlight": int(state.get("highlight", -1)),
 		"selected": state.get("selected", []),
+		"transport_ways": state.get("transport_ways", {}),
 	}
 	overlay.war_room = war_room
 	overlay.every_troop = not _askers.is_empty() or bool(war_room.get("open", false))
-	overlay.queue_redraw()
+	overlay.redraw_base()
+	if bool(before.get("open", false)) != bool(war_room["open"]) or JSON.stringify(before.get("transport_ways", {})) != JSON.stringify(war_room["transport_ways"]):
+		await _load()
 
 
 func show_strikes_of_event(event_id: String) -> void:
@@ -163,6 +168,9 @@ func clear() -> void:
 	_strikes_playing = false
 	_overlay_signature = ""
 	_weather_key = ""
+	_stage = null
+	_shown_token = ""
+	_end_transition()
 	paint.clear()
 	ground.clear()
 	overlay.units = []
@@ -176,7 +184,7 @@ func clear() -> void:
 	overlay.seas = {}
 	overlay.strikes = {}
 	overlay.group_labels = []
-	overlay.queue_redraw()
+	overlay.redraw()
 
 
 func apply_map_state(state: Dictionary) -> void:
@@ -185,12 +193,18 @@ func apply_map_state(state: Dictionary) -> void:
 	_apply_owners(true)
 
 
+func _end_transition() -> void:
+	_held_map = {}
+	if paint != null and paint.transition_running():
+		paint.start_transition(null)
+
+
 func _load() -> void:
 	if engine == null or not engine.is_ready():
 		return
 	_serial += 1
 	var serial := _serial
-	var args := {"mode": mode, "have": [] if _retry_full else paint.have_runs(), "planned": bool(war_room.get("open", false)), "weatherKey": _weather_key}
+	var args := {"mode": mode, "have": [] if _retry_full else paint.have_runs(), "planned": bool(war_room.get("open", false)), "previews": war_room.get("transport_ways", {}), "weatherKey": _weather_key, "shown": _shown_token}
 	_retry_full = false
 	if _stage != null:
 		args["stage"] = _stage
@@ -214,9 +228,12 @@ func _apply(state: Dictionary, fresh: bool) -> void:
 		_units_moving = false
 		_transport_moves = []
 		_entries = []
+		_end_transition()
 		paint.clear()
 	if first and bool((state.get("weather", {}) as Dictionary).get("same", false)):
 		_weather_key = ""
+	if fresh:
+		_shown_token = str(state.get("shownToken", ""))
 	_state = state
 	reduce_motion = bool(state.get("reduceMotion", false))
 	_base_map = state.get("map", {})
@@ -229,7 +246,10 @@ func _apply(state: Dictionary, fresh: bool) -> void:
 		var run := str((front as Dictionary).get("run", ""))
 		if paint.field(run) == null and (front as Dictionary).get("paint", null) == null and not paint.have_runs().has(run):
 			_retry_full = true
-	_sync_fronts(fronts, fresh)
+	if fresh and state.get("transitions", null) is Dictionary:
+		paint.start_transition(state["transitions"])
+	_overlay_signature = "|"
+	_sync_fronts(fronts)
 	_set_units(state.get("units", []))
 	ground.set_orders(state.get("orders", []))
 	overlay.markers = _with_world(state.get("markers", []))
@@ -254,7 +274,7 @@ func _apply(state: Dictionary, fresh: bool) -> void:
 	if int(strikes.get("playing", 0)) > 0:
 		_strikes_playing = true
 	_camera_key = Vector3.ZERO
-	overlay.queue_redraw()
+	overlay.redraw()
 	if _retry_full and fresh:
 		_load()
 	state_applied.emit({"fronts": fronts.size(), "units": (state.get("units", []) as Array).size(), "game": game_id})
@@ -281,7 +301,7 @@ func _with_points(list: Array) -> Array:
 	return out
 
 
-func _sync_fronts(fronts: Array, fresh: bool) -> void:
+func _sync_fronts(fronts: Array) -> void:
 	var before := {}
 	for entry in _entries:
 		before[str(entry["name"])] = entry
@@ -358,7 +378,7 @@ func _paint_all(at_rest: bool) -> void:
 	_apply_owners(false)
 	_request_frame()
 	if at_rest:
-		overlay.queue_redraw()
+		overlay.redraw_base()
 
 
 func _settle() -> void:
@@ -378,9 +398,10 @@ func _request_frame() -> void:
 	for entry in _entries:
 		days.append([entry["name"], float(entry["day"])])
 	var level := map.zoom_level()
+	var serial := _serial
 	var reply: Dictionary = await engine.request("warmap.frame", {"days": days, "zoom": level})
 	_frame_busy = false
-	if reply.get("ok", false):
+	if reply.get("ok", false) and serial == _serial and not _entries.is_empty():
 		var frame: Dictionary = reply["result"]
 		_arrows_level = level
 		var names: Array = []
@@ -391,7 +412,7 @@ func _request_frame() -> void:
 		overlay.troop_colours = frame.get("colours", [])
 		overlay.troop_fields = names
 		ground.set_arrows(frame.get("arrows", []), frame.get("colours", []))
-		overlay.queue_redraw()
+		overlay.redraw_base()
 	if _frame_again:
 		_frame_again = false
 		_request_frame()
@@ -431,6 +452,10 @@ func _apply_owners(force: bool) -> void:
 	_overlay_signature = signature
 	if shown.is_empty() and not had and not force:
 		return
+	if paint.transition_running():
+		_held_map = _merged_map(shown)
+		return
+	_held_map = {}
 	map.set_state(_merged_map(shown))
 
 
@@ -517,7 +542,7 @@ func _place_units(progress: float) -> void:
 		var at := from + (to - from) * progress
 		positions[id] = WarKit.project(at.x, at.y)
 	overlay.unit_positions = positions
-	overlay.queue_redraw()
+	overlay.redraw_top()
 
 
 func _set_transports(transports: Dictionary, fresh: bool) -> void:
@@ -552,9 +577,9 @@ func _place_carriers(days: float) -> void:
 			continue
 		var way: Array = move.get("way", [])
 		var lng := _unwrap(float(place[0]), float((way[0] as Array)[0]))
-		placed[str(move.get("id", ""))] = [WarKit.project(lng, float(place[1])), round(float(place[2])), str(move.get("tone", "other")), str(move.get("medium", "sea")), str(move.get("count", ""))]
+		placed[str(move.get("id", ""))] = [WarKit.project(lng, float(place[1])), roundf(float(place[2])), str(move.get("tone", "other")), str(move.get("medium", "sea")), str(move.get("count", ""))]
 	overlay.carrier_override = placed
-	overlay.queue_redraw()
+	overlay.redraw_base()
 
 
 func _unwrap(lng: float, around: float) -> float:
@@ -635,7 +660,7 @@ func _strike_frame() -> void:
 	if not reply.get("ok", false):
 		_strikes_playing = false
 		overlay.strikes = {}
-		overlay.queue_redraw()
+		overlay.redraw_strikes()
 		return
 	var frame: Dictionary = reply["result"]
 	var ribbons: Array = []
@@ -661,11 +686,11 @@ func _strike_frame() -> void:
 			"alpha": entry.get("alpha", 1.0),
 		})
 	overlay.strikes = {"ribbons": ribbons, "discs": discs, "points": points}
-	overlay.queue_redraw()
+	overlay.redraw_strikes()
 	if int(frame.get("playing", 0)) <= 0:
 		_strikes_playing = false
 		overlay.strikes = {}
-		overlay.queue_redraw()
+		overlay.redraw_strikes()
 
 
 func _place_planes() -> void:
@@ -689,7 +714,7 @@ func _place_planes() -> void:
 			var world := Vector2(float(frame.get("x", 0.0)) + x * float(frame.get("cx", 1.0)), float(frame.get("y", 0.0)) + y * float(frame.get("cy", -1.0)))
 			planes.append([world, heading, str(air.get("tone", "other"))])
 	overlay.planes = planes
-	overlay.queue_redraw()
+	overlay.redraw_planes()
 
 
 func _process(_delta: float) -> void:
@@ -712,7 +737,7 @@ func _process(_delta: float) -> void:
 		overlay.zoom = map.camera.zoom.x
 		overlay.level = level
 		overlay.view = view
-		overlay.queue_redraw()
+		overlay.redraw()
 		if zoom_changed:
 			ground.set_view(level, map.camera.zoom.x)
 			paint.set_view(level, map.camera.zoom.x, map.war_fill_opacity())
@@ -746,16 +771,22 @@ func _process(_delta: float) -> void:
 		if elapsed >= _transport_duration:
 			_transport_moves = []
 			overlay.carrier_override = {}
-			overlay.queue_redraw()
+			overlay.redraw_base()
 	if not _air.is_empty() and (now - _air_ms >= AIR_STEP_MS or _air_ms == 0):
 		if not reduce_motion or _air_ms == 0:
 			_air_ms = now
 			_place_planes()
 	elif _air.is_empty() and not overlay.planes.is_empty():
 		overlay.planes = []
-		overlay.queue_redraw()
+		overlay.redraw_planes()
 	if _strikes_playing and not _strike_busy:
 		_strike_frame()
+	if paint.transition_running():
+		paint.step_transition()
+		if not paint.transition_running() and not _held_map.is_empty():
+			var held := _held_map
+			_held_map = {}
+			map.set_state(held)
 
 
 func _unhandled_input(event: InputEvent) -> void:

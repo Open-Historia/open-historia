@@ -962,5 +962,14 @@ export const register = (ctx) => {
       reviews.delete(`${clean(scenarioId)}\n${clean(key)}`);
       return true;
     },
+    "community.review.suggestion": async ({ scenarioId, key } = {}) => {
+      const review = reviews.get(`${clean(scenarioId)}\n${clean(key)}`);
+      if (!review?.suggestion) throw new Error("Open the suggestion again.");
+      return {
+        key: review.key,
+        suggestion: review.suggestion,
+        decisions: { accepted: [...review.decisions.accepted], rejected: [...review.decisions.rejected] },
+      };
+    },
   };
 };

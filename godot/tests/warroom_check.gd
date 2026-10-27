@@ -92,7 +92,21 @@ func _screen_of(place: Array) -> Vector2:
 	return main.map_view.world_to_screen(MapView.CityLayer.ohproject(float(place[0]), float(place[1])))
 
 
+func _idle() -> void:
+	for attempt in range(240):
+		var reply: Dictionary = await main.engine.request("warroom.busy")
+		if reply.get("ok", false) and not bool(reply.get("result", false)) and not room._acting:
+			return
+		await _wait(0.25)
+
+
+func _settled() -> void:
+	await _until(func() -> bool: return not room._acting, 60.0)
+	await _wait(0.6)
+
+
 func _draw_way(points: Array) -> void:
+	await _idle()
 	var layer := room.map_layer
 	layer._press(points[0], false)
 	for index in range(1, points.size()):
@@ -131,7 +145,7 @@ func _run() -> void:
 	button.setup(main.engine)
 	await button.refresh()
 	_check("no war, no war room button", not button.visible)
-	var war: Dictionary = await main.engine.request("warroom.test.war", {"against": "Germany", "name": "Rhine Front", "generals": ["Pierre de Villiers", "Bruno Dary", "Elrick Irastorza"]})
+	var war: Dictionary = await main.engine.request("warroom.test.war", {"fronts": [{"against": "Germany", "name": "Rhine Front", "generals": ["Pierre de Villiers", "Bruno Dary", "Elrick Irastorza"]}, {"against": "Italy", "name": "Alpine Front", "generals": ["Jean-Pierre Bosser"]}]})
 	_check("a war is opened through the engine", war.get("ok", false) and not ((war.get("result", {}) as Dictionary).get("fronts", []) as Array).is_empty(), str(war.get("error", "")))
 	var skip: Dictionary = await main.engine.request("skip", {"days": 7})
 	_check("a week of the war is fought (stand-in skip)", skip.get("ok", false), str(skip.get("error", "")))
@@ -158,6 +172,7 @@ func _run() -> void:
 	_check("what is known of theirs", _shows(room, "WHAT IS KNOWN OF THEIRS"))
 	_check("weather ahead", _shows(room, "WEATHER AHEAD"))
 	_check("the talk's empty state", _shows(room, "Speak to your generals. Tell them what you want done"))
+	_check("a tab a battlefield", room._tabs_holder.visible and _shows(room._tabs_row, "RHINE FRONT") and _shows(room._tabs_row, "ALPINE FRONT"))
 	_dump("drawer", room._drawer)
 	await _shoot("wr-01-open")
 	room.store.set_values({"highlight": 0})
@@ -167,6 +182,7 @@ func _run() -> void:
 	await _wait(0.4)
 	_check("picking a general's troops counts them on the rail", _shows(room.rail, "%d picked out." % (first.get("troops", []) as Array).size()))
 	await _shoot("wr-02-picked")
+	await _idle()
 	await room._order_picked("dig in")
 	await _wait(0.5)
 	_check("an order lands on the general", _shows(room, "Ordered: Dig in"), room._notice)
@@ -174,16 +190,31 @@ func _run() -> void:
 	await _shoot("wr-03-ordered")
 	room._talk_input.text = "Hold the line along the Moselle and dig in."
 	room._on_talk_changed()
+	await _idle()
 	await room._say(room._talk_input.text)
 	await _wait(0.5)
 	_check("the generals answer (stand-in)", _shows(room, "We can hold the river line"), str(room._failure))
 	_check("the order they took is said", _shows(room, "Carried out when time next passes."))
 	await _shoot("wr-04-talk")
+	await _idle()
 	await room._rehearse()
 	await _until(func() -> bool: return str(room._rehearsal.get("status", "")) != "running", 30.0)
 	_check("the week is rehearsed", str(room._rehearsal.get("status", "")) in ["done", "nothing"], str(room._rehearsal))
-	await _wait(0.3)
+	await _wait(0.4)
+	if room.rehearsal_tray:
+		room._sections_scroll.ensure_control_visible(room.rehearsal_tray)
+	await _wait(0.2)
+	_check("the rehearsal says what the week comes to", _shows(room, "with your orders as they stand"))
 	await _shoot("wr-05-rehearsed")
+	room._sections_scroll.scroll_vertical = 0
+	room.store.show_battlefield("Alpine Front", 0)
+	await _until(func() -> bool: return room._name() == "Alpine Front", 15.0)
+	await _wait(0.8)
+	_check("a tab shows its own battlefield", room._name() == "Alpine Front" and _shows(room, "Jean-Pierre Bosser"))
+	await _shoot("wr-05b-second-front")
+	room.store.show_battlefield("Rhine Front", 0)
+	await _until(func() -> bool: return room._name() == "Rhine Front", 15.0)
+	await _wait(0.8)
 	room.store.set_values({"supply": true})
 	await _wait(1.0)
 	_check("the supply key says what it shades", _shows(room.rail, "Supply: your ground in amber is stretched"))
@@ -209,8 +240,7 @@ func _run() -> void:
 	for step in range(12):
 		way.append(start + Vector2(step * 9.0, -step * 4.0))
 	await _draw_way(way)
-	await _until(func() -> bool: return not room._acting, 10.0)
-	await _wait(0.6)
+	await _settled()
 	_check("a route drawn becomes a planned movement", _shows(room, "Route"), room._notice)
 	await _shoot("wr-08-route")
 	room.store.take_tool("diversion")
@@ -218,8 +248,7 @@ func _run() -> void:
 	for step in range(12):
 		feint.append(start + Vector2(-step * 8.0, step * 5.0))
 	await _draw_way(feint)
-	await _until(func() -> bool: return not room._acting, 10.0)
-	await _wait(0.6)
+	await _settled()
 	_check("a diversion is planned", _shows(room, "Diversion") and _shows(room, "You have turned no agent of theirs"), room._notice)
 	room.store.take_tool("deploy")
 	await _wait(0.3)
@@ -229,8 +258,7 @@ func _run() -> void:
 	for step in range(10):
 		line.append(start + Vector2(-40.0 + step * 2.0, -60.0 + step * 14.0))
 	await _draw_way(line)
-	await _until(func() -> bool: return not room._acting, 10.0)
-	await _wait(0.6)
+	await _settled()
 	_check("a deployment line is drawn", _shows(room, "Deployment line") and _shows(room, "Fresh formations come in here when time next passes"), room._notice)
 	await _shoot("wr-10-deployed")
 	room.store.take_tool("fortify")
@@ -242,6 +270,7 @@ func _run() -> void:
 	_check("a drawn line waits on the fortify plate", room.plates._fortify.visible and _shows(room.plates, "FORTIFIED LINE") and _shows(room.plates, "to build"))
 	await _shoot("wr-11-fortify-plate")
 	room.plates.line_name = "Ligne Moselle"
+	await _idle()
 	await room._build_line("Ligne Moselle")
 	await _wait(0.6)
 	_check("the line is ordered built", _shows(room, "FORTIFIED LINES") and _shows(room, "Ligne Moselle"), room._notice)
@@ -253,6 +282,7 @@ func _run() -> void:
 	await _shoot("wr-13-fleets")
 	var fleets: Array = room._record.get("fleets", [])
 	if not fleets.is_empty():
+		await _idle()
 		await room._order_with("warroom.fleet", {"op": "posture", "unit": str((fleets[0] as Dictionary).get("id", "")), "posture": "holding"})
 		await _wait(0.4)
 		var after: Array = room._record.get("fleets", [])
@@ -267,10 +297,10 @@ func _run() -> void:
 	room.rail.choosing = false
 	room.store.take_tool("transport", {"medium": "land"})
 	var target := start + Vector2(-160.0, -40.0)
+	await _idle()
 	room.map_layer._press(target, false)
 	room.map_layer._release(target)
-	await _until(func() -> bool: return not room._acting, 10.0)
-	await _wait(1.2)
+	await _settled()
 	_check("a transporter is ordered", _shows(room, "TRANSPORTERS"), room._notice)
 	await _shoot("wr-15-transport")
 	room._sections_scroll.scroll_vertical = 100000
@@ -366,6 +396,15 @@ func _compare() -> void:
 	await _until(func() -> bool: return str(room._rehearsal.get("status", "")) != "running", 30.0)
 	await _wait(0.5)
 	await _shoot("cmp-06-rehearsed")
+	room.close()
+	await _wait(0.6)
+	reports = AfterActionReports.new()
+	main.ui.add_child(reports)
+	reports.setup(main.engine)
+	await reports.refresh()
+	await _wait(0.8)
+	if reports.is_showing():
+		await _shoot("cmp-07-report")
 	_finish(0)
 
 

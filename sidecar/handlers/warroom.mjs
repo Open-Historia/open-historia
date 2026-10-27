@@ -206,9 +206,9 @@ export const register = (ctx) => {
       own: plan.own === true,
       project: plan.project ?? "",
       live: plan.live === true,
-      picked: [...list(plan.picked)],
-      attacks: [...list(plan.attacks)],
-      ways: list(plan.ways).map((way) => list(way).map((point) => [...list(point)])),
+      picked: list(plan.picked),
+      attacks: list(plan.attacks),
+      ways: list(plan.ways),
       form: plan.form ?? "",
     });
     const ownPlans = plans.filter((plan) => !(plan.kind === "order" && !plan.chosen && plan.ways.length === 0));
@@ -316,7 +316,7 @@ export const register = (ctx) => {
       bounds: boundsOf(record, standing),
       frameLng,
     };
-    return JSON.parse(JSON.stringify(out));
+    return plain(out);
   };
 
   const sendOp = async (op) => {
@@ -529,7 +529,7 @@ export const register = (ctx) => {
       const reports = A.reportsFor(world?.battlefields, game.country);
       const seen = new Set(seenList());
       const due = busy() ? null : reports.find((record) => !seen.has(A.reportKey(campaign, record)) && A.isRecentReport(record, game.gameDate)) ?? null;
-      return plain({ reports: reports.map((record) => reportView(record, game.country, campaign)), due: due ? due.name : "" });
+      return plain({ reports: reports.map((record) => reportView(record, game.country, campaign)), due: due ? due.name : "", busy: busy() });
     },
     "warreport.seen": async ({ key = "" } = {}) => {
       const wanted = String(key ?? "");
@@ -588,32 +588,33 @@ export const register = (ctx) => {
   };
 
   if (standIn) {
-    methods["warroom.test.war"] = async ({ against = "Germany", name = "", generals = [] } = {}) => {
+    methods["warroom.test.war"] = async ({ against = "Germany", name = "", generals = [], fronts = null } = {}) => {
       const { game } = await read();
       const country = clean(game.country);
+      const wanted = Array.isArray(fronts) && fronts.length > 0 ? fronts : [{ against, name, generals }];
       await engine.gameState.mutateWorldState((world) => ({
         ...world,
-        scenarioFronts: [{
-          name: clean(name) || `${country} and ${clean(against)}`,
-          sides: [[country], [clean(against)]],
+        scenarioFronts: wanted.map((front) => ({
+          name: clean(front.name) || `${country} and ${clean(front.against)}`,
+          sides: [[country], [clean(front.against)]],
           war: true,
           troops: [0, 0],
           stance: ["hold", "hold"],
-          generals: [list(generals).map((entry) => clean(entry)), []],
-        }],
+          generals: [list(front.generals).map((entry) => clean(entry)), []],
+        })),
       }));
       const opened = await engine.gameplay.maybeOpenScenarioFronts();
       const after = await read();
       return plain({ opened, fronts: frontsOf(after.world, after.game.country) });
     };
-    methods["warroom.test.report"] = async ({ battlefield = "", name = "" } = {}) => {
+    methods["warroom.test.report"] = async ({ battlefield = "", name = "", chronicle = null } = {}) => {
       const { game } = await read();
       let made = false;
       await engine.gameState.mutateWorldState((world) => {
         const row = list(world?.battlefields).find((entry) => same(entry?.name, battlefield));
         if (!row) return null;
         made = true;
-        const closed = { ...row, name: clean(name), status: "closed", closedDate: game.gameDate };
+        const closed = { ...row, name: clean(name), status: "closed", closedDate: game.gameDate, ...(chronicle ? { chronicle } : {}) };
         delete closed.field;
         return { ...world, battlefields: [...list(world.battlefields), closed] };
       });

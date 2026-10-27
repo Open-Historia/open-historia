@@ -118,13 +118,15 @@ export const register = (ctx) => {
     strikesPlayed: new Map(),
     playing: [],
     stagedBases: new Map(),
+    shown: new Map(),
+    shownSerial: 0,
     world: null,
     live: null,
     game: null,
     flagFiles: new Map(),
   };
 
-  let regionIndexCache = { sha: "", index: new Map(), claimants: new Map(), count: 0 };
+  let regionIndexCache = { sha: "", index: new Map(), claimants: new Map(), count: 0, regions: null };
   const regionIndexOf = (sha) => {
     if (!sha || regionIndexCache.sha === sha) return regionIndexCache;
     const file = path.join(ctx.cacheDir, "regions", `${sha}.geojson`);
@@ -145,8 +147,338 @@ export const register = (ctx) => {
       const kept = names.map(clean).filter(Boolean);
       if (kept.length) claimants.set(at, kept);
     });
-    regionIndexCache = { sha, index, claimants, count: features.length };
+    regionIndexCache = { sha, index, claimants, count: features.length, regions: parsed && Array.isArray(parsed.features) ? parsed : { type: "FeatureCollection", features: [] } };
+    topologyCache = { sha: "", topology: null, boundary: null, records: [] };
     return regionIndexCache;
+  };
+
+  const geometryPolygons = (geometry) => {
+    if (geometry?.type === "Polygon") return [geometry.coordinates];
+    if (geometry?.type === "MultiPolygon") return geometry.coordinates;
+    return [];
+  };
+
+  const ringTerritoryArea = (ring) => {
+    const points = (Array.isArray(ring) ? ring : []).filter((point) => Array.isArray(point) && Number.isFinite(point[0]) && Number.isFinite(point[1]));
+    if (points.length < 3) return 0;
+    let minLat = Infinity;
+    let maxLat = -Infinity;
+    for (const point of points) {
+      minLat = Math.min(minLat, point[1]);
+      maxLat = Math.max(maxLat, point[1]);
+    }
+    const cosLat = Math.max(0.08, Math.cos(((((minLat + maxLat) / 2) || 0) * Math.PI) / 180));
+    const xs = [];
+    const ys = [];
+    let previousLng = Number(points[0][0]);
+    for (const point of points) {
+      let lng = Number(point[0]);
+      while (lng - previousLng > 180) lng -= 360;
+      while (lng - previousLng < -180) lng += 360;
+      xs.push(lng * cosLat);
+      ys.push(Number(point[1]));
+      previousLng = lng;
+    }
+    let twiceArea = 0;
+    for (let index = 0, previous = points.length - 1; index < points.length; previous = index, index += 1) {
+      twiceArea += xs[previous] * ys[index] - xs[index] * ys[previous];
+    }
+    return Math.abs(twiceArea) / 2;
+  };
+
+  const geometryTerritoryWeight = (geometry) => {
+    let total = 0;
+    for (const polygon of geometryPolygons(geometry)) {
+      if (!Array.isArray(polygon) || !polygon.length) continue;
+      const outer = ringTerritoryArea(polygon[0]);
+      const holes = polygon.slice(1).reduce((sum, ring) => sum + ringTerritoryArea(ring), 0);
+      total += Math.max(0, outer - holes);
+    }
+    return total;
+  };
+
+  const geometryBoundsCenter = (geometry) => {
+    let west = Infinity;
+    let east = -Infinity;
+    let south = Infinity;
+    let north = -Infinity;
+    for (const polygon of geometryPolygons(geometry)) {
+      for (const ring of polygon ?? []) {
+        for (const point of ring ?? []) {
+          const lng = Number(point?.[0]);
+          const lat = Number(point?.[1]);
+          if (!Number.isFinite(lng) || !Number.isFinite(lat)) continue;
+          west = Math.min(west, lng);
+          east = Math.max(east, lng);
+          south = Math.min(south, lat);
+          north = Math.max(north, lat);
+        }
+      }
+    }
+    return Number.isFinite(west) ? { lng: (west + east) / 2, lat: (south + north) / 2 } : null;
+  };
+
+  let topologyCache = { sha: "", topology: null, boundary: null, records: [] };
+  const topologyOf = (sha) => {
+    if (topologyCache.sha === sha && topologyCache.topology) return topologyCache;
+    const { regions } = regionIndexOf(sha);
+    const topology = engine.wmBoundaryTopology.buildPoliticalBoundaryTopology(regions);
+    const boundary = engine.wmBoundaryTopology.createPoliticalBoundaryState(topology, {});
+    const records = list(regions?.features).map((feature) => {
+      const props = feature?.properties ?? {};
+      const centroid = props?.centroid?.coordinates;
+      const boundsCenter = geometryBoundsCenter(feature?.geometry);
+      const rawLng = Number(Array.isArray(centroid) ? centroid[0] : props?.lng ?? props?.longitude);
+      const rawLat = Number(Array.isArray(centroid) ? centroid[1] : props?.lat ?? props?.latitude);
+      const lng = Number.isFinite(rawLng) ? rawLng : Number(boundsCenter?.lng);
+      const lat = Number.isFinite(rawLat) ? rawLat : Number(boundsCenter?.lat);
+      const territoryWeight = geometryTerritoryWeight(feature?.geometry);
+      return { lng: Number.isFinite(lng) ? lng : null, lat: Number.isFinite(lat) ? lat : null, territoryWeight: territoryWeight > 1e-12 ? territoryWeight : 1 };
+    });
+    topologyCache = { sha, topology, boundary, records };
+    return topologyCache;
+  };
+
+  const wrappedDelta = (fromLng, toLng) => {
+    let delta = Number(toLng) - Number(fromLng);
+    if (!Number.isFinite(delta)) return 0;
+    while (delta > 180) delta -= 360;
+    while (delta < -180) delta += 360;
+    return delta;
+  };
+
+  const transitionDirection = ({ index, regionId, toOwner, previousOwners, changed, kit: topo }) => {
+    const { topology, boundary, records } = topo;
+    const toName = engine.wmOwnerNames.toCountryName;
+    const ownerAt = (at) => toName(previousOwners[at] ?? "");
+    const target = records[index];
+    const targetLng = Number(target?.lng);
+    const targetLat = Number(target?.lat);
+    if (!Number.isFinite(targetLng) || !Number.isFinite(targetLat) || !toOwner) return { dx: 1, dy: 0, basis: "fallback", frontierSegments: [] };
+    const recipientSeeds = new Set();
+    let contactWeight = 0;
+    let contactLng = 0;
+    let contactLat = 0;
+    let inwardNormalX = 0;
+    let inwardNormalY = 0;
+    let inwardNormalWeight = 0;
+    const sharedFrontierSegments = [];
+    const precision = Number(topology?.precision ?? 0);
+    const incident = boundary?.regionToSegments?.[index] ?? [];
+    if (precision > 0 && boundary?.segments && incident.length) {
+      for (const segmentId of incident) {
+        const segment = boundary.segments.get(segmentId);
+        if (!segment) continue;
+        const recipients = (segment.regionIndexes ?? []).filter((other) => other !== index && !changed.has(other) && ownerAt(other) === toOwner);
+        if (!recipients.length) continue;
+        for (const other of recipients) recipientSeeds.add(other);
+        const ax = Number(segment.a?.[0]) / precision;
+        const ay = Number(segment.a?.[1]) / precision;
+        const bx = Number(segment.b?.[0]) / precision;
+        const by = Number(segment.b?.[1]) / precision;
+        if (![ax, ay, bx, by].every(Number.isFinite)) continue;
+        const midLng = (ax + bx) / 2;
+        const midLat = (ay + by) / 2;
+        const cosSegmentLat = Math.max(0.2, Math.cos((midLat * Math.PI) / 180));
+        const tangentX = bx - ax;
+        const tangentY = (by - ay) / cosSegmentLat;
+        const length = Math.hypot(tangentX, tangentY);
+        if (!(length > 1e-9)) continue;
+        sharedFrontierSegments.push({ a: [ax, ay], b: [bx, by], length });
+        contactWeight += length;
+        contactLng += midLng * length;
+        contactLat += midLat * length;
+        let normalX = -tangentY / length;
+        let normalY = tangentX / length;
+        const towardX = wrappedDelta(midLng, targetLng);
+        const towardY = (targetLat - midLat) / cosSegmentLat;
+        if (normalX * towardX + normalY * towardY < 0) {
+          normalX *= -1;
+          normalY *= -1;
+        }
+        inwardNormalX += normalX * length;
+        inwardNormalY += normalY * length;
+        inwardNormalWeight += length;
+      }
+    }
+    const recipientIndexes = new Set();
+    if (recipientSeeds.size && boundary?.segments) {
+      const queue = [...recipientSeeds];
+      for (const seed of queue) recipientIndexes.add(seed);
+      for (let cursor = 0; cursor < queue.length; cursor += 1) {
+        const at = queue[cursor];
+        for (const segmentId of boundary.regionToSegments?.[at] ?? []) {
+          const segment = boundary.segments.get(segmentId);
+          if (!segment) continue;
+          for (const neighbor of segment.regionIndexes ?? []) {
+            if (neighbor === at || recipientIndexes.has(neighbor) || changed.has(neighbor)) continue;
+            if (ownerAt(neighbor) !== toOwner) continue;
+            recipientIndexes.add(neighbor);
+            queue.push(neighbor);
+          }
+        }
+      }
+    } else {
+      for (let candidate = 0; candidate < records.length; candidate += 1) {
+        if (candidate === index || changed.has(candidate)) continue;
+        if (ownerAt(candidate) === toOwner) recipientIndexes.add(candidate);
+      }
+    }
+    let massX = 0;
+    let massY = 0;
+    let massWeight = 0;
+    for (const at of recipientIndexes) {
+      const candidate = records[at];
+      const lng = Number(candidate?.lng);
+      const lat = Number(candidate?.lat);
+      if (!Number.isFinite(lng) || !Number.isFinite(lat)) continue;
+      const weight = Math.max(1e-9, Number(candidate?.territoryWeight) || 1);
+      const meanLat = (targetLat + lat) / 2;
+      const cosLat = Math.max(0.2, Math.cos((meanLat * Math.PI) / 180));
+      massX += wrappedDelta(targetLng, lng) * weight;
+      massY += ((lat - targetLat) / cosLat) * weight;
+      massWeight += weight;
+    }
+    const frontierSegments = (sharedFrontierSegments.length <= 4096 ? sharedFrontierSegments : [...sharedFrontierSegments].sort((left, right) => right.length - left.length).slice(0, 4096)).map((segment) => [segment.a, segment.b]);
+    if (massWeight > 0) {
+      const dx = -massX / massWeight;
+      const dy = -massY / massWeight;
+      const length = Math.hypot(dx, dy);
+      if (length > 1e-6) return { dx: dx / length, dy: dy / length, basis: recipientSeeds.size ? "recipient-landmass-mass" : "recipient-polity-mass", frontierSegments };
+    }
+    if (inwardNormalWeight > 0) {
+      const length = Math.hypot(inwardNormalX, inwardNormalY);
+      if (length > 1e-6) return { dx: inwardNormalX / length, dy: inwardNormalY / length, basis: "shared-frontier-normal", frontierSegments };
+    }
+    const targetCosLat = Math.max(0.2, Math.cos((targetLat * Math.PI) / 180));
+    if (contactWeight > 0) {
+      const dx = wrappedDelta(contactLng / contactWeight, targetLng);
+      const dy = (targetLat - contactLat / contactWeight) / targetCosLat;
+      const length = Math.hypot(dx, dy);
+      if (length > 1e-6) return { dx: dx / length, dy: dy / length, basis: "shared-frontier-contact", frontierSegments };
+    }
+    let hash = 2166136261;
+    for (const char of String(regionId)) {
+      hash ^= char.charCodeAt(0);
+      hash = Math.imul(hash, 16777619) >>> 0;
+    }
+    const angle = ((hash % 16) * Math.PI) / 8;
+    return { dx: Math.cos(angle), dy: Math.sin(angle), basis: "deterministic-fallback", frontierSegments };
+  };
+
+  const FLOOD_FIELDS_MOST = 8;
+  const FLOOD_VERTICES_MOST = 24000;
+  const SHOWN_KEPT = 6;
+  const rememberShown = ({ map, quiet, gameId }) => {
+    const names = map.ownerNames ?? [];
+    state.shownSerial += 1;
+    const token = String(state.shownSerial);
+    state.shown.set(token, { key: `${gameId}|${map.sha}`, owners: map.owners.map((owner) => (owner >= 0 ? String(names[owner] ?? "") : "")), quiet });
+    for (const old of [...state.shown.keys()]) {
+      if (state.shown.size <= SHOWN_KEPT) break;
+      state.shown.delete(old);
+    }
+    return token;
+  };
+  const transitionsOf = ({ map, regions, quiet, mode, kit, reduceMotion, before, now }) => {
+    const current = now.owners;
+    if (!before || before.key !== now.key || reduceMotion) return null;
+    const toName = engine.wmOwnerNames.toCountryName;
+    const changedIndexes = [];
+    for (let at = 0; at < current.length; at += 1) {
+      if (quiet.has(at) || before.quiet.has(at)) continue;
+      const fromOwner = toName(before.owners[at] ?? "");
+      const toOwner = toName(current[at] ?? "");
+      if (!fromOwner || !toOwner || fromOwner === toOwner) continue;
+      changedIndexes.push(at);
+    }
+    if (!changedIndexes.length) return null;
+    const changed = new Set(changedIndexes);
+    const topo = topologyOf(map.sha);
+    const colourOf = (owner) => {
+      if (mode === "diplomatic" && kit.stances) return colours.parseColorToRgb(engine.diplomaticStance.getDiplomaticOwnerColor(owner, kit.stances)) ?? UNOWNED_RGB;
+      return kit.mapRgbOf(owner);
+    };
+    const features = [];
+    let vertices = 0;
+    for (const at of changedIndexes) {
+      const feature = regions.regions?.features?.[at];
+      const geometry = feature?.geometry;
+      if (!geometry || !["Polygon", "MultiPolygon"].includes(geometry.type)) continue;
+      const regionId = clean(feature?.id ?? feature?.properties?.id) || String(at);
+      const fromOwner = toName(before.owners[at] ?? "");
+      const toOwner = toName(current[at] ?? "");
+      const direction = transitionDirection({ index: at, regionId, toOwner, previousOwners: before.owners, changed, kit: topo });
+      for (const polygon of geometryPolygons(geometry)) for (const ring of polygon ?? []) vertices += Array.isArray(ring) ? ring.length : 0;
+      const from = colourOf(before.owners[at]);
+      const to = colourOf(current[at]);
+      features.push({
+        index: at,
+        feature: {
+          type: "Feature",
+          id: regionId,
+          geometry,
+          properties: { id: regionId, fromOwner, toOwner, sweepDx: direction.dx, sweepDy: direction.dy, sweepBasis: direction.basis, frontierSegments: direction.frontierSegments, fromColor: `rgb(${from.join(", ")})`, toColor: `rgb(${to.join(", ")})` },
+        },
+        from,
+        to,
+      });
+    }
+    if (!features.length) return null;
+    if (features.length <= FLOOD_FIELDS_MOST && vertices <= FLOOD_VERTICES_MOST) {
+      const fields = [];
+      let failed = false;
+      for (const entry of features) {
+        let made = [];
+        try {
+          made = engine.wmOwnershipTransition.buildOwnershipFloodFields(entry.feature);
+        } catch {
+          failed = true;
+          break;
+        }
+        for (const field of made) {
+          fields.push({
+            index: entry.index,
+            width: field.width,
+            height: field.height,
+            rect: [field.bounds.minX * WORLD, field.bounds.minY * WORLD, (field.bounds.maxX - field.bounds.minX) * WORLD, (field.bounds.maxY - field.bounds.minY) * WORLD],
+            data: b64(field.textureData),
+            from: entry.from,
+            to: entry.to,
+            durationMs: Math.max(1, Number(field.durationMs) || 480),
+            delayMs: Math.max(0, Number(field.delayMs) || 0),
+            feather: Math.max(0.002, Math.min(0.28, Number(field.feather) || 0.028)),
+          });
+        }
+      }
+      if (!failed && fields.length > 0 && fields.length <= FLOOD_FIELDS_MOST) return { kind: "flood", fields };
+    }
+    const sweeps = [];
+    for (const entry of features) {
+      const points = [];
+      for (const polygon of geometryPolygons(entry.feature.geometry)) for (const ring of polygon ?? []) for (const point of ring ?? []) if (Array.isArray(point) && Number.isFinite(Number(point[0])) && Number.isFinite(Number(point[1]))) points.push([Number(point[0]), Number(point[1])]);
+      if (!points.length) continue;
+      const center = points.reduce((sum, [x, y]) => [sum[0] + x, sum[1] + y], [0, 0]).map((value) => value / points.length);
+      const screen = Math.hypot(entry.feature.properties.sweepDx, entry.feature.properties.sweepDy) > 1e-9 ? [entry.feature.properties.sweepDx, entry.feature.properties.sweepDy] : [1, 0];
+      const screenLength = Math.hypot(screen[0], screen[1]);
+      const cosLat = Math.max(0.2, Math.cos(((Number.isFinite(center[1]) ? center[1] : 0) * Math.PI) / 180));
+      let dx = screen[0] / screenLength;
+      let dy = (screen[1] / screenLength) * cosLat;
+      const length = Math.hypot(dx, dy) || 1;
+      dx /= length;
+      dy /= length;
+      let minT = Infinity;
+      let maxT = -Infinity;
+      for (const [x, y] of points) {
+        const t = (x - center[0]) * dx + (y - center[1]) * dy;
+        minT = Math.min(minT, t);
+        maxT = Math.max(maxT, t);
+      }
+      const count = points.length > 20000 ? 8 : points.length > 8000 ? 12 : 20;
+      const spread = maxT - minT > 1e-9 ? maxT - minT : 1;
+      sweeps.push({ index: entry.index, center, d: [dx, dy], minT, band: spread / count, count: maxT - minT > 1e-9 ? count : 1, from: entry.from, to: entry.to });
+    }
+    return sweeps.length ? { kind: "sweep", durationMs: 680, sweeps } : null;
   };
 
   const clone = (value) => {
@@ -539,12 +871,12 @@ export const register = (ctx) => {
     return names;
   };
 
-  const transportsOf = (world, game, gameId, planned) => {
+  const transportsOf = (world, game, gameId, planned, previews = null) => {
     const transports = engine.wrTransports.normalizeTransports(world?.transports);
     const flat = world?.projection?.type === "freeform";
     const country = clean(game?.country);
     const enemies = enemiesOf(world, country);
-    const features = engine.wmTransportFeatures.transportFeatures({ transports, viewer: country, enemies, planned, previews: null, flat });
+    const features = engine.wmTransportFeatures.transportFeatures({ transports, viewer: country, enemies, planned, previews: previews && typeof previews === "object" ? previews : null, flat });
     let moves = [];
     if (state.transportsGame === gameId && state.transportsBefore) moves = engine.wmTransportFeatures.transportMoves(state.transportsBefore, transports);
     state.transportsGame = gameId;
@@ -838,7 +1170,7 @@ export const register = (ctx) => {
     return { arrows: outArrows, troops: outTroops, sides: outSides, colours: palette.list, zoom: level, ms: Math.round((performance.now() - began) * 10) / 10 };
   };
 
-  const describe = async ({ stage = null, mode = "political", have = [], planned = false, weatherKey = "" } = {}) => {
+  const describe = async ({ stage = null, mode = "political", have = [], planned = false, previews = null, weatherKey = "", shown = "" } = {}) => {
     const live = await readLive();
     const gameId = activeGameId();
     if (gameId !== state.gameId) {
@@ -846,6 +1178,7 @@ export const register = (ctx) => {
       state.known = false;
       state.fronts = new Map();
       state.stagedBases = new Map();
+      state.shown = new Map();
       state.playing = [];
       state.strikesPlayed = new Map();
     }
@@ -901,6 +1234,34 @@ export const register = (ctx) => {
     }
     const overlayColors = {};
     for (const name of overlayNames) overlayColors[name] = kit.mapRgbOf(name);
+    const quiet = new Set();
+    for (const front of outFronts) {
+      for (const [at] of front.owners.first) quiet.add(at);
+      for (const [, at] of front.owners.turns) quiet.add(at);
+      for (const [at] of front.owners.contested) quiet.add(at);
+    }
+    const reduceMotion = Boolean(engine.mapSettings.reduceMotionEnabled?.());
+    let transitions = null;
+    if (topologyCache.sha !== map.sha && !state.topologyQueued) {
+      state.topologyQueued = true;
+      const sha = map.sha;
+      setTimeout(() => {
+        state.topologyQueued = false;
+        try {
+          if (regionIndexCache.sha === sha) topologyOf(sha);
+        } catch {
+          topologyCache = { sha: "", topology: null, boundary: null, records: [] };
+        }
+      }, 2500);
+    }
+    const before = state.shown.get(clean(shown)) ?? null;
+    const shownToken = rememberShown({ map, quiet, gameId });
+    try {
+      transitions = transitionsOf({ map, regions, quiet, mode, kit, reduceMotion, before, now: state.shown.get(shownToken) });
+    } catch (error) {
+      transitions = null;
+      ctx.emit?.("log", { category: "map", message: `War map: the ownership transition could not be prepared (${clean(error?.message ?? error)}).` });
+    }
     const { units, orders } = unitsOf(shownWorld, shownFronts, kit);
     const strikes = engine.strikes.normalizeStrikes(live.world?.strikes);
     let freshStrikes = [];
@@ -925,7 +1286,7 @@ export const register = (ctx) => {
       units,
       orders,
       markers: markersOf(shownWorld, kit),
-      transports: transportsOf(live.world, live.game, gameId, planned === true),
+      transports: transportsOf(live.world, live.game, gameId, planned === true, previews),
       seas: seasOf(live.world, live.game),
       walls: wallsOf(live.world, live.game),
       weather: weatherOf(live.world, live.game, gameId, clean(weatherKey)),
@@ -934,7 +1295,9 @@ export const register = (ctx) => {
       disputed: disputedOf(shownWorld, regions, kit),
       disputedOpacity: DISPUTED_STRIPE_OPACITY,
       strikes: { started: startedStrikes, playing: state.playing.length },
-      reduceMotion: Boolean(engine.mapSettings.reduceMotionEnabled?.()),
+      reduceMotion,
+      transitions,
+      shownToken,
     };
   };
 
@@ -1026,6 +1389,14 @@ export const register = (ctx) => {
       const next = { ...world, groupAreas: areas };
       if (claimants && typeof claimants === "object") next.regionClaimants = { ...(world.regionClaimants ?? {}), ...claimants };
       await engine.gameState.writeWorldState(next);
+      return true;
+    },
+    "warmap.test.owner": async ({ ids = [], owner = "" } = {}) => {
+      if (!ctx.standIn) throw new Error("Only the stand-in model may seed a test war.");
+      const world = await engine.gameState.readWorldState({ force: true });
+      const overrides = { ...(world.regionOwnershipOverrides ?? {}) };
+      for (const id of list(ids)) overrides[clean(id)] = clean(owner);
+      await engine.gameState.writeWorldState({ ...world, regionOwnershipOverrides: overrides });
       return true;
     },
     "warmap.test.index": async ({ id = "" } = {}) => {

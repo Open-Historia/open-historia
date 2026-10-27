@@ -516,8 +516,7 @@ func place_at(point: Vector2) -> void:
 	var kind := str(mode.get("kind", "idle"))
 	if kind == "idle" or not map_view:
 		return
-	var half := map_view.get_viewport_rect().size * 0.5
-	var world := map_view.camera.position + (point - half) / map_view.camera.zoom.x
+	var world := map_view.screen_to_world(point)
 	var lng := fposmod(world.x / MapView.WORLD_WIDTH * 360.0 + 180.0, 360.0) - 180.0
 	var lat := rad_to_deg(2.0 * atan(exp((0.5 - world.y / MapView.WORLD_WIDTH) * 2.0 * PI)) - PI / 2.0)
 	var armed := mode.duplicate(true)

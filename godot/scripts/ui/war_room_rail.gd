@@ -228,7 +228,7 @@ func _render() -> void:
 	_plate.custom_minimum_size = Vector2(width, height)
 	_scroll.custom_minimum_size = Vector2(KEY_SIZE, maxf(0.0, height - T.px(0.9) - 4.0))
 	_tab.visible = shown
-	_tab.icon = T.svg_icon("rail-chevron-right" if tucked else "rail-chevron-left", CHEVRON_RIGHT if tucked else CHEVRON_LEFT, 13, T.BRASS)
+	_tab.icon = T.svg_icon("rail-chevron-right" if tucked else "rail-chevron-left", CHEVRON_RIGHT if tucked else CHEVRON_LEFT, 13, T.BRASS, 14.0)
 	_tab.tooltip_text = "Show the troop tools" if tucked else "Hide the troop tools"
 	_tab.position = Vector2(RAIL_WIDTH if out else 0.0, top + T.px(0.5))
 	_tab.size = Vector2(T.px(1.0), T.px(2.5))
@@ -252,15 +252,16 @@ func _render_carriers(choice: bool, top: float) -> void:
 		column.add_child(T.text("Nothing carries troops yet.", 0.74, T.BONE_SOFT))
 	if selected.size() > LOAD_MOST:
 		column.add_child(T.text("One dispatch carries %d formations at most: the rest stay where they are." % LOAD_MOST, 0.7, T.BONE_SOFT, 400, 1.35))
+	var view_width := get_viewport_rect().size.x if is_inside_tree() else 1440.0
+	var menu_width := minf(T.px(19.0), view_width - T.px(7.5))
+	var words_width := menu_width - T.px(1.1) - 4.0 - T.px(1.1) - 2.0 - 19.0 - T.px(0.55)
 	for entry in carriers:
 		var row: Dictionary = entry
 		var medium := str(row.get("medium", ""))
-		var button := Button.new()
-		button.focus_mode = Control.FOCUS_NONE
-		button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-		var style := T.key_style(false, Vector4(T.px(0.55), T.px(0.4), T.px(0.55), T.px(0.4)))
-		for state in ["normal", "hover", "pressed", "hover_pressed", "focus"]:
-			button.add_theme_stylebox_override(state, style)
+		var key := PanelContainer.new()
+		key.add_theme_stylebox_override("panel", T.key_style(false, Vector4(T.px(0.55), T.px(0.4), T.px(0.55), T.px(0.4))))
+		key.mouse_filter = Control.MOUSE_FILTER_STOP
+		key.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 		var line := HBoxContainer.new()
 		line.add_theme_constant_override("separation", int(round(T.px(0.55))))
 		line.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -271,20 +272,16 @@ func _render_carriers(choice: bool, top: float) -> void:
 		words.add_theme_constant_override("separation", int(round(T.px(0.14))))
 		words.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		words.add_child(T.stencil(W.carrier_word(medium), 0.76, T.BONE, 0.05))
-		words.add_child(T.text("%s · %d formations each · %d km a day" % [str(row.get("kind", "")), int(row.get("capacity", 0)), int(row.get("speed", 0))], 0.68, T.BONE_SOFT, 400, 1.2))
+		var detail := T.text("%s · %d formations each · %d km a day" % [str(row.get("kind", "")), int(row.get("capacity", 0)), int(row.get("speed", 0))], 0.68, T.BONE_SOFT, 400, 1.2)
+		detail.custom_minimum_size.x = words_width
+		words.add_child(detail)
 		line.add_child(words)
-		var holder := MarginContainer.new()
-		holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		holder.add_child(line)
-		button.add_child(holder)
-		holder.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-		for side in [["margin_left", T.px(0.55)], ["margin_right", T.px(0.55)], ["margin_top", T.px(0.4)], ["margin_bottom", T.px(0.4)]]:
-			holder.add_theme_constant_override(side[0], int(round(side[1])))
-		button.custom_minimum_size = Vector2(0, line.get_combined_minimum_size().y + T.px(0.8) + 2.0)
-		button.pressed.connect(func() -> void:
-			choosing = false
-			carrier.emit(medium))
-		column.add_child(button)
+		key.add_child(line)
+		key.gui_input.connect(func(event: InputEvent) -> void:
+			if event is InputEventMouseButton and (event as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT and not (event as InputEventMouseButton).pressed:
+				choosing = false
+				carrier.emit(medium))
+		column.add_child(key)
 	var cancel := T.link("Cancel")
 	cancel.pressed.connect(func() -> void:
 		choosing = false
@@ -293,9 +290,11 @@ func _render_carriers(choice: bool, top: float) -> void:
 	_carriers.add_child(column)
 	var view := get_viewport_rect().size if is_inside_tree() else Vector2(1440, 900)
 	var width := minf(T.px(19.0), view.x - T.px(7.5))
+	_fit_width(column, width - T.px(1.1) - 4.0)
 	_carriers.custom_minimum_size = Vector2(width, 0)
-	_carriers.size = Vector2(width, 0)
 	_carriers.position = Vector2(RAIL_WIDTH + T.px(1.5), top + T.px(9.0))
+	_carriers.reset_size()
+	_settle(_carriers)
 
 
 func _rich(size_rem := 0.74, colour := T.BONE_SOFT) -> RichTextLabel:
@@ -314,7 +313,15 @@ func _rich(size_rem := 0.74, colour := T.BONE_SOFT) -> RichTextLabel:
 	return rich
 
 
+static func add_text(rich: RichTextLabel, value: String) -> void:
+	rich.set_meta("plain", str(rich.get_meta("plain", "")) + value)
+	rich.add_text(value)
+
+
 static func add_link(rich: RichTextLabel, label_text: String, meta: String) -> void:
+	var links: Array = rich.get_meta("links", [])
+	links.append(label_text.to_upper())
+	rich.set_meta("links", links)
 	rich.push_font(T.stencil_font(T.spacing_px(0.76, 0.06)), T.font_size(0.76))
 	rich.push_color(T.AMBER)
 	rich.push_meta(meta)
@@ -418,9 +425,9 @@ func _render_hint(shown: bool, out: bool, top: float) -> void:
 		else:
 			lead = "Draw the line your new troops here are to come in on. Those called up come in on it when time next passes, and so do later levies, drafts and reinforcements. They stand on ground your side holds along it."
 	if not lead.is_empty():
-		rich.add_text(lead)
+		add_text(rich, lead)
 	if drawing and not turn_running:
-		rich.add_text(" ")
+		add_text(rich, " ")
 		add_link(rich, "Cancel", "cancel")
 	var has_lead := not lead.is_empty() or (drawing and not turn_running)
 	if has_lead:
@@ -438,13 +445,13 @@ func _render_hint(shown: bool, out: bool, top: float) -> void:
 				said += " Stretched %s km², cut off %s km²; theirs cut off %s km²." % [str(found.get("stretchedText", "")), str(found.get("cutText", "")), str(found.get("theirsCutText", ""))]
 			else:
 				said += " All your ground here is well supplied."
-		shade.add_text(said + " ")
+		add_text(shade, said + " ")
 		add_link(shade, "Hide", "hide")
 		column.add_child(shade)
 	if not turn_running and not drawing and selected.size() > 0:
 		var picked := _rich()
 		picked.meta_clicked.connect(_on_hint_meta)
-		picked.add_text("%d picked out. " % selected.size())
+		add_text(picked, "%d picked out. " % selected.size())
 		add_link(picked, "Clear", "clear")
 		column.add_child(picked)
 	if not notice.is_empty():
@@ -457,9 +464,25 @@ func _render_hint(shown: bool, out: bool, top: float) -> void:
 	var view := get_viewport_rect().size if is_inside_tree() else Vector2(1440, 900)
 	var width := minf(T.px(21.0), view.x - T.px(7.5))
 	var natural := _natural_width(column, width)
+	_fit_width(column, natural - T.px(1.2) - 4.0)
 	_hint.custom_minimum_size = Vector2(natural, 0)
-	_hint.size = Vector2(natural, 0)
 	_hint.position = Vector2((RAIL_WIDTH if out else 0.0) + T.px(1.5), top)
+	_hint.reset_size()
+	_settle(_hint)
+
+
+func _fit_width(node: Node, inner: float) -> void:
+	for child in node.get_children():
+		if child is RichTextLabel or (child is Label and (child as Label).autowrap_mode != TextServer.AUTOWRAP_OFF):
+			(child as Control).custom_minimum_size.x = maxf(0.0, inner)
+		elif child is MarginContainer or child is VBoxContainer:
+			_fit_width(child, inner)
+
+
+func _settle(panel: Control) -> void:
+	await get_tree().process_frame
+	if is_instance_valid(panel):
+		panel.reset_size()
 
 
 func _natural_width(column: VBoxContainer, most: float) -> float:
@@ -471,7 +494,11 @@ func _widest(node: Node) -> float:
 	var widest := 0.0
 	if node is RichTextLabel:
 		var rich := node as RichTextLabel
-		return UI.font(400).get_string_size(rich.get_parsed_text(), HORIZONTAL_ALIGNMENT_LEFT, -1, T.font_size(0.74)).x + 8.0
+		var width := UI.font(400).get_string_size(str(rich.get_meta("plain", "")), HORIZONTAL_ALIGNMENT_LEFT, -1, T.font_size(0.74)).x
+		var stencil := T.stencil_font(T.spacing_px(0.76, 0.06))
+		for link in rich.get_meta("links", []):
+			width += stencil.get_string_size(str(link), HORIZONTAL_ALIGNMENT_LEFT, -1, T.font_size(0.76)).x
+		return width + 2.0
 	if node is Label:
 		var label := node as Label
 		var font := label.get_theme_font("font")

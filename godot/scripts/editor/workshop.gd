@@ -6,6 +6,7 @@ signal saved(details: Dictionary)
 signal play_game(game_id: String)
 signal failed(message: String)
 signal changed(parts: Dictionary)
+signal review_saved(record: Dictionary)
 
 const SIDEBAR_WIDTH := 268.0
 const SIDE_KEY := "oh-map-editor-sidebar-side"
@@ -39,12 +40,6 @@ const TOOL_GROUPS := [
 	]},
 ]
 
-const DIMMED_TOOLS := {
-	"draw": "Drawing new regions is not in the native Workshop yet: it needs vector editing on the map that this app's map cannot do.",
-	"modify": "Editing region outlines point by point is not in the native Workshop yet: this app's map draws regions it cannot reshape.",
-	"border": "Shared border editing is not in the native Workshop yet: this app's map draws regions it cannot reshape.",
-}
-
 const WAR_TOOL_HINTS := {
 	"terrain": "Click to draw an area and double-click to finish (shift-drag draws freehand). Click an outline to pick an area, drag its points to reshape it, and press Delete to remove it.",
 	"fortification": "Click to draw a line and double-click to finish. Click a line to pick it, drag its points to reshape it, and press Delete to remove it.",
@@ -77,6 +72,8 @@ var sidebar_side := "right"
 var sidebar_hidden := false
 var war_selection := {}
 var war_tab := "terrain"
+var review := {}
+var _style_rev := -1
 var map: WorkshopMap
 var _busy_action := ""
 var _exit_ask := false
@@ -97,7 +94,7 @@ var _cleanup: WorkshopCleanup
 var _settings_pop: PanelContainer
 var _documents: WorkshopDocuments
 var _search: WorkshopSearch
-var _fmg_tab: Button
+var _fmg_tab: VerticalTab
 var _closing := false
 var _rebaking := false
 var _last_clean := "deep"
@@ -134,6 +131,8 @@ func open(scenario_record: Dictionary, open_options: Dictionary) -> void:
 	if options.has("warSettings"):
 		args["warSettings"] = options["warSettings"]
 		args["hasWarSettings"] = true
+	if options.get("review") is Dictionary:
+		args["review"] = options["review"]
 	var reply := await engine.request("workshop.open", args)
 	if not reply.get("ok", false):
 		var message := str(reply.get("error", ""))
@@ -151,6 +150,11 @@ func open(scenario_record: Dictionary, open_options: Dictionary) -> void:
 	map.start_view()
 	hydrated = true
 	_render_sidebar()
+	if bool(review.get("active", false)):
+		var marked := await request_raw("workshop.review.markup")
+		if marked.get("ok", false) and marked["result"] is Dictionary:
+			_apply_markup(marked["result"])
+		open_panel_named("suggestions")
 
 
 func request_raw(method: String, args := {}) -> Dictionary:
@@ -184,6 +188,10 @@ func apply(result: Dictionary) -> void:
 		state["doc"] = result["doc"]
 		parts["doc"] = true
 		map.polity_colors = (result["doc"] as Dictionary).get("colors", {})
+		var style_rev := int((result["doc"] as Dictionary).get("styleRev", 0))
+		if style_rev != _style_rev:
+			_style_rev = style_rev
+			_apply_basemap.call_deferred()
 	if result.has("features"):
 		state["features"] = result["features"]
 		map.features = result["features"]
@@ -219,9 +227,47 @@ func apply(result: Dictionary) -> void:
 		set_selection(result["selection"])
 	else:
 		_sync_selection()
+	if result.get("review") is Dictionary and (result["review"] as Dictionary).has("active"):
+		review = result["review"]
+		parts["review"] = true
+	if result.get("markup") is Dictionary:
+		_apply_markup(result["markup"])
+	elif parts.has("regions") and bool(review.get("active", false)) and hydrated:
+		_refresh_markup.call_deferred()
+	if parts.has("regions") and tool in ["modify", "border"] and not result.has("rings"):
+		_refresh_edit_rings.call_deferred()
 	map.redraw()
 	_render_dynamic(parts)
 	changed.emit(parts)
+
+
+func _apply_basemap() -> void:
+	var reply := await request_raw("workshop.basemapStyle")
+	if not reply.get("ok", false) or not (reply["result"] is Dictionary):
+		return
+	if map and map.map:
+		map.map.editor_apply_basemap(reply["result"], engine)
+
+
+func _refresh_markup() -> void:
+	var marked := await request_raw("workshop.review.markup")
+	if marked.get("ok", false) and marked["result"] is Dictionary:
+		_apply_markup(marked["result"])
+
+
+func _apply_markup(markup: Dictionary) -> void:
+	var tints := {}
+	var regions: Dictionary = markup.get("regions", {}) if markup.get("regions") is Dictionary else {}
+	for id in regions:
+		if map.index_of.has(str(id)):
+			tints[int(map.index_of[str(id)])] = WorkshopMap.REVIEW_COLORS.get(str(regions[id]), WorkshopMap.REVIEW_COLORS["pending"])
+	map.review_tint = tints
+	map.review_outlines = markup.get("outlines", []) if markup.get("outlines") is Array else []
+	map.review_shapes = markup.get("shapes", []) if markup.get("shapes") is Array else []
+	map.review_points = markup.get("points", []) if markup.get("points") is Array else []
+	map.review_focus = markup.get("focus", {}) if markup.get("focus") is Dictionary else {}
+	map.apply_fills()
+	map.redraw()
 
 
 func _build() -> void:
@@ -254,18 +300,16 @@ func _build() -> void:
 	map.move_done.connect(_on_move)
 	map.war_drawn.connect(_on_war_drawn)
 	map.war_pick.connect(func(kind: String, id: String) -> void: pick_war_shape(kind, id))
+	map.draw_point_requested.connect(_on_draw_point)
+	map.draw_finished.connect(_on_draw_finished)
+	map.vertex_edit.connect(_on_vertex_edit)
+	map.hover_moved.connect(_on_hover_moved)
 	map.view_moved.connect(func() -> void:
 		if _popup and is_instance_valid(_popup):
 			_close_popup())
-	_fmg_tab = Button.new()
-	_fmg_tab.text = "🗺 GENERATE ◂"
+	_fmg_tab = VerticalTab.new()
+	_fmg_tab.label = "🗺 GENERATE ◂"
 	_fmg_tab.focus_mode = Control.FOCUS_NONE
-	_fmg_tab.add_theme_stylebox_override("normal", UI.box(Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.85), Color(147 / 255.0, 197 / 255.0, 253 / 255.0, 0.4), 10, 1, Vector4(7, 14, 7, 14)))
-	_fmg_tab.add_theme_stylebox_override("disabled", UI.box(Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.85), Color(147 / 255.0, 197 / 255.0, 253 / 255.0, 0.4), 10, 1, Vector4(7, 14, 7, 14)))
-	_fmg_tab.add_theme_font_override("font", UI.font(700))
-	_fmg_tab.add_theme_font_size_override("font_size", 12)
-	_fmg_tab.add_theme_color_override("font_disabled_color", Color(1, 1, 1))
-	_fmg_tab.tooltip_text = "Generate a world with the Fantasy Map Generator"
 	add_child(_fmg_tab)
 	UI.set_disabled_look(_fmg_tab, "The Fantasy Map Generator runs inside a web page, and the native app has none to run it in.")
 	_sidebar = PanelContainer.new()
@@ -314,7 +358,6 @@ func _layout() -> void:
 	var on_right := sidebar_side != "left"
 	_map_holder.position = Vector2(dock_left(), 0)
 	_map_holder.size = Vector2(maxf(1.0, view.x - dock_left() - dock_right()), view.y)
-	map.size = _map_holder.size
 	_sidebar.visible = not sidebar_hidden
 	var border := Color(1, 1, 1, 0.08)
 	var style := StyleBoxFlat.new()
@@ -351,7 +394,7 @@ func _layout() -> void:
 	_hide_tab.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_hide_tab.tooltip_text = "Show" if sidebar_hidden else "Hide"
 	_fmg_tab.reset_size()
-	_fmg_tab.position = Vector2(view.x - dock_right() - _fmg_tab.size.x - (22.0 if on_right and not sidebar_hidden else 0.0), view.y * 0.5 + 48.0)
+	_fmg_tab.position = Vector2(view.x - dock_right() - _fmg_tab.size.x, view.y * 0.5 + 40.0)
 	_place_panel()
 	_place_inspector()
 
@@ -558,10 +601,7 @@ func _render_tools() -> void:
 			var id := str(meta["id"])
 			var button := WorkshopUI.tool_button(str(meta["icon"]), tool == id, str(meta["label"]))
 			button.custom_minimum_size = Vector2(34, 36)
-			if DIMMED_TOOLS.has(id):
-				UI.set_disabled_look(button, str(DIMMED_TOOLS[id]))
-			else:
-				button.pressed.connect(func() -> void: set_tool(id))
+			button.pressed.connect(func() -> void: set_tool(id))
 			grid.add_child(button)
 		block.add_child(grid)
 		_tools_box.add_child(block)
@@ -673,8 +713,32 @@ func _render_tool_options(inner: VBoxContainer) -> void:
 		inner.add_child(manage)
 	elif tool in ["terrain", "fortification", "climate"]:
 		inner.add_child(WorkshopUI.wrap(str(WAR_TOOL_HINTS[tool]), 12, Color(1, 1, 1, 0.7)))
+	elif tool == "modify":
+		var count := selection.size()
+		var text := "select the regions to edit first" if count == 0 else ("1 selected region · drag a vertex · drag an edge to insert · Alt-click a vertex to remove · snap magnet enabled · Ctrl/Cmd+Z undo" if count == 1 else "%d selected regions · drag a vertex · drag an edge to insert · Alt-click a vertex to remove · snap magnet enabled · Ctrl/Cmd+Z undo" % count)
+		inner.add_child(_tool_note("Manual vertex override:", text, Color(1, 1, 1, 0.7) if count > 0 else Color("#fbbf24")))
+	elif tool == "border":
+		var count := selection.size()
+		var text := "drag a border vertex or edge on either selected region; the released point is welded into BOTH regions · cyan halo = shared-border magnet · Alt-click removes the corresponding shared vertex · a 100 m topology check runs after each edit · Ctrl/Cmd+Z undo" if count == 2 else "select exactly 2 neighbouring regions first (%d selected)" % count
+		inner.add_child(_tool_note("Shared border precision:", text, Color(1, 1, 1, 0.74) if count == 2 else Color("#fbbf24")))
 	elif tool == "select":
 		inner.add_child(WorkshopUI.wrap("Click a region to select it, Shift-click to add more, and double-click to select its whole country.", 12, Color(1, 1, 1, 0.7)))
+
+
+func _tool_note(lead: String, text: String, color: Color) -> RichTextLabel:
+	var note := RichTextLabel.new()
+	note.bbcode_enabled = true
+	note.fit_content = true
+	note.scroll_active = false
+	note.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	note.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	note.add_theme_font_override("normal_font", UI.font(400))
+	note.add_theme_font_override("bold_font", UI.font(700))
+	note.add_theme_font_size_override("normal_font_size", 12)
+	note.add_theme_font_size_override("bold_font_size", 12)
+	note.add_theme_color_override("default_color", color)
+	note.text = "[b]%s[/b] %s" % [lead, text.replace("[", "[lb]")]
+	return note
 
 
 func _sync_paint() -> void:
@@ -684,11 +748,15 @@ func _sync_paint() -> void:
 
 
 func set_tool(id: String) -> void:
-	if DIMMED_TOOLS.has(id):
-		return
 	tool = id
 	map.tool = id
 	map.abort_sketch()
+	map.diagnostics = []
+	map.snap_marker = null
+	if id in ["modify", "border"]:
+		_refresh_edit_rings()
+	else:
+		map.edit_rings = []
 	if id in ["terrain", "fortification", "climate"]:
 		war_tab = id
 		if open_panel != "war":
@@ -736,7 +804,7 @@ func _render_panels_nav() -> void:
 			{"id": "reference", "icon": "image", "label": "Reference", "count": -1},
 			{"id": "projection", "icon": "globe", "label": "Projection", "count": -1},
 		]},
-		{"label": "Import", "items": [
+		{"label": "Import", "items": ([{"id": "suggestions", "icon": "review", "label": "Suggested changes", "count": int(review.get("total", 0)) - int(review.get("settled", 0))}] if bool(review.get("active", false)) else []) + [
 			{"id": "province-import", "icon": "upload", "label": "Import Map", "count": -1},
 			{"id": "clipboard", "icon": "copy", "label": "Clipboard", "count": int(doc.get("clipboardCount", 0))},
 		]},
@@ -918,8 +986,87 @@ func set_selection(ids: Array, zoom := false) -> void:
 	_inspector.refresh_selection()
 	_place_inspector()
 	changed.emit({"selection": true})
+	if tool in ["modify", "border"]:
+		map.diagnostics = []
+		_refresh_edit_rings()
+		_render_tools()
 	if zoom and not selection.is_empty():
 		zoom_to(selection)
+
+
+var _edit_serial := 0
+
+
+func _refresh_edit_rings() -> void:
+	_edit_serial += 1
+	var serial := _edit_serial
+	if selection.is_empty() or (tool == "border" and selection.size() != 2):
+		map.edit_rings = []
+		map.redraw()
+		return
+	var reply := await request_raw("workshop.edit.rings", {"ids": selection})
+	if serial != _edit_serial or not reply.get("ok", false):
+		return
+	map.edit_rings = (reply["result"] as Dictionary).get("rings", [])
+	map.redraw()
+
+
+var _draw_queue: Array = []
+var _draw_busy := false
+
+
+func _on_draw_point(lonlat: Vector2, previous: Variant) -> void:
+	_draw_queue.append([lonlat, previous])
+	if _draw_busy:
+		return
+	_draw_busy = true
+	while not _draw_queue.is_empty():
+		var job: Array = _draw_queue.pop_front()
+		var at: Vector2 = job[0]
+		var before: Variant = job[1]
+		if not map.draw_points.is_empty():
+			before = map.draw_points[map.draw_points.size() - 1]
+		var reply := await request_raw("workshop.draw.point", {"at": [at.x, at.y], "previous": before, "resolution": map.meters_per_pixel()})
+		if not reply.get("ok", false) or tool != "draw":
+			continue
+		var result: Dictionary = reply["result"]
+		var points: Array = (result.get("trace", []) as Array).duplicate()
+		points.append(result.get("point", [at.x, at.y]))
+		map.add_draw_points(points)
+	_draw_busy = false
+
+
+func _on_draw_finished(ring: Array) -> void:
+	await request("workshop.draw.finish", {"ring": ring})
+
+
+var _hover_busy := false
+var _hover_next: Variant = null
+
+
+func _on_hover_moved(lonlat: Vector2) -> void:
+	_hover_next = lonlat
+	if _hover_busy:
+		return
+	_hover_busy = true
+	while _hover_next != null:
+		var at: Vector2 = _hover_next
+		_hover_next = null
+		var reply := await request_raw("workshop.edit.snap", {"at": [at.x, at.y], "resolution": map.meters_per_pixel(), "pixels": 10})
+		if reply.get("ok", false) and tool == "draw":
+			var result: Dictionary = reply["result"]
+			var point: Array = result.get("point", [at.x, at.y])
+			map.snap_marker = Vector2(float(point[0]), float(point[1])) if result.get("kind") != null else null
+			map.redraw()
+	_hover_busy = false
+
+
+func _on_vertex_edit(op: String, target: String, path: Array, index: int, lonlat: Vector2, alt: bool) -> void:
+	var result := await request("workshop.edit.vertex", {"ids": selection, "op": op, "target": target, "path": path, "index": index, "to": [lonlat.x, lonlat.y], "alt": alt, "resolution": map.meters_per_pixel(), "mode": "border" if tool == "border" else "modify"})
+	if result.has("rings"):
+		map.edit_rings = result["rings"]
+	map.diagnostics = result.get("diagnostics", []) if result.get("diagnostics") is Array else []
+	map.redraw()
 
 
 func _sync_selection() -> void:
@@ -1158,6 +1305,9 @@ func open_panel_named(id: String) -> void:
 			shell = WorkshopReference.new()
 		"province-import":
 			shell = WorkshopImport.new()
+		"suggestions":
+			if bool(review.get("active", false)):
+				shell = WorkshopReview.new()
 	if shell == null:
 		open_panel = ""
 		_render_panels_nav()
@@ -1270,6 +1420,8 @@ func persist(play: bool, close_after: bool) -> void:
 	var details: Variant = result.get("details")
 	if details is Dictionary:
 		saved.emit(details)
+	if result.get("review") is Dictionary and not (result["review"] as Dictionary).has("active"):
+		review_saved.emit(result["review"])
 	var note: Array = result.get("note", [])
 	if play:
 		var game_id := str(result.get("gameId", ""))
@@ -1289,7 +1441,7 @@ func request_close(confirmed := false) -> void:
 			return
 	if not session.is_empty() and str(status.get("saveStatus", "saved")) in ["dirty", "saving", "error"]:
 		var reply := await request_raw("workshop.flush")
-		var ok := reply.get("ok", false) and bool((reply["result"] as Dictionary).get("ok", false))
+		var ok: bool = reply.get("ok", false) and bool((reply["result"] as Dictionary).get("ok", false))
 		if not ok and not await confirm("This map has changes that could not be saved. Close it and lose them?"):
 			return
 	_finish_close()
@@ -1343,6 +1495,15 @@ func _unhandled_key_input(event: InputEvent) -> void:
 			return
 	if typing:
 		return
+	if tool == "draw" and map.is_sketching():
+		if key.keycode == KEY_ESCAPE:
+			get_viewport().set_input_as_handled()
+			map.abort_sketch()
+			return
+		if key.keycode == KEY_BACKSPACE or key.keycode == KEY_DELETE:
+			get_viewport().set_input_as_handled()
+			map.undo_sketch_point()
+			return
 	if tool in ["terrain", "fortification", "climate"]:
 		if key.keycode == KEY_ESCAPE:
 			get_viewport().set_input_as_handled()
@@ -1378,3 +1539,29 @@ func paste_clipboard(simplify: bool) -> Dictionary:
 	if bounds is Array:
 		map.fit_bounds(bounds, 8.0)
 	return reply
+
+
+class VerticalTab extends Button:
+	var label := "":
+		set(value):
+			label = value
+			var font := UI.font(700)
+			custom_minimum_size = Vector2(font.get_height(12) + 14.0, font.get_string_size(value, HORIZONTAL_ALIGNMENT_LEFT, -1, 12).x + 28.0)
+			queue_redraw()
+
+	func _init() -> void:
+		var clear := StyleBoxEmpty.new()
+		for state_name in ["normal", "hover", "pressed", "focus", "hover_pressed", "disabled"]:
+			add_theme_stylebox_override(state_name, clear)
+
+	func _draw() -> void:
+		var style := UI.box(Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.85), Color(147 / 255.0, 197 / 255.0, 253 / 255.0, 0.4), 0, 1)
+		style.corner_radius_top_left = 10
+		style.corner_radius_bottom_left = 10
+		style.border_width_right = 0
+		draw_style_box(style, Rect2(Vector2.ZERO, size))
+		var font := UI.font(700)
+		var across := size.x * 0.5 + (font.get_descent(12) - font.get_ascent(12)) * 0.5
+		draw_set_transform(Vector2(across, 14.0), PI * 0.5)
+		draw_string(font, Vector2.ZERO, label, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(1, 1, 1))
+		draw_set_transform(Vector2.ZERO)

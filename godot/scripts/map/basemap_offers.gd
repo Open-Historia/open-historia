@@ -15,6 +15,25 @@ const FILL := Color(226 / 255.0, 232 / 255.0, 240 / 255.0, 0.86)
 const LOADING_TOAST_DELAY_MS := 700
 const LOADING_TOAST_LIMIT_MS := 8000
 const TRANSITION_WATCHDOG_MS := 20000
+const COVER_TINT := Color(8 / 255.0, 11 / 255.0, 15 / 255.0, 0.24)
+const BLUR_SHADER := """
+shader_type canvas_item;
+render_mode unshaded;
+uniform sampler2D screen_texture : hint_screen_texture, filter_linear, repeat_disable;
+uniform vec2 direction = vec2(1.0, 0.0);
+uniform float sigma = 7.0;
+uniform vec4 tint = vec4(0.0);
+void fragment() {
+	vec3 sum = vec3(0.0);
+	float total = 0.0;
+	for (int i = -21; i <= 21; i++) {
+		float w = exp(-float(i * i) / (2.0 * sigma * sigma));
+		sum += texture(screen_texture, SCREEN_UV + direction * float(i) * SCREEN_PIXEL_SIZE).rgb * w;
+		total += w;
+	}
+	COLOR = vec4(mix(sum / total, tint.rgb, tint.a), 1.0);
+}
+"""
 
 var extras: Node
 var engine: EngineLink
@@ -31,7 +50,7 @@ var _more := 0
 var _words: Dictionary = {}
 var _panel: GlassPanel
 var _panel_body: VBoxContainer
-var _cover: GlassPanel
+var _cover: Control
 var _card_bar: ColorRect
 var _card_track: Control
 var _transition_progress := 0.0
@@ -51,7 +70,6 @@ func _init() -> void:
 func setup(owner_extras: Node) -> void:
 	extras = owner_extras
 	engine = extras.get("engine")
-	_build_cover()
 	_build_toast()
 	_panel = GlassPanel.new(PANEL_BG, 12.0, Vector4(14, 12, 14, 12), PANEL_BORDER)
 	_panel.anchor_left = 0.5
@@ -63,16 +81,33 @@ func setup(owner_extras: Node) -> void:
 	_panel_body = VBoxContainer.new()
 	_panel_body.add_theme_constant_override("separation", 0)
 	_panel.add_child(_panel_body)
+	_build_cover()
 
 
 func _build_cover() -> void:
-	_cover = GlassPanel.new(Color(8 / 255.0, 11 / 255.0, 15 / 255.0, 0.24), 0.0, Vector4.ZERO, Color(0, 0, 0, 0))
+	_cover = Control.new()
 	_cover.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_cover.mouse_filter = Control.MOUSE_FILTER_STOP
 	_cover.visible = false
 	add_child(_cover)
+	var shader := Shader.new()
+	shader.code = BLUR_SHADER
+	for direction: Vector2 in [Vector2(1, 0), Vector2(0, 1)]:
+		var copy := BackBufferCopy.new()
+		copy.copy_mode = BackBufferCopy.COPY_MODE_VIEWPORT
+		_cover.add_child(copy)
+		var pass_rect := ColorRect.new()
+		pass_rect.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		pass_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var material := ShaderMaterial.new()
+		material.shader = shader
+		material.set_shader_parameter("direction", direction)
+		material.set_shader_parameter("tint", Vector4(COVER_TINT.r, COVER_TINT.g, COVER_TINT.b, COVER_TINT.a if direction.y > 0.0 else 0.0))
+		pass_rect.material = material
+		_cover.add_child(pass_rect)
 	var centre := CenterContainer.new()
 	centre.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	centre.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_cover.add_child(centre)
 	var card := PanelContainer.new()
 	card.add_theme_stylebox_override("panel", UI.box(CARD_BG, PANEL_BORDER, 12, 1, Vector4(17, 15, 17, 14)))

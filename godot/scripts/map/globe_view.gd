@@ -21,6 +21,9 @@ const MAX_TERRAIN_ELEVATION_M := 8849.0
 const TERRAIN_EXAGGERATION := 15.0
 const WHEEL_FACTOR := 1.15
 const MAP_LAYER_BIT := 2
+const LIGHT_LAYER := 3
+const FLAT_TEXTURE_SCALE := 1.75
+const LAT_MARGIN := 0.03
 
 const SPHERE_SHADER := """
 shader_type canvas_item;
@@ -33,15 +36,12 @@ uniform vec3 north_dir = vec3(0.0, 1.0, 0.0);
 uniform float cam_d = 4.0;
 uniform float tan_half = 0.3333333333;
 uniform float globeness = 1.0;
-uniform float overlay = 1.0;
-uniform vec3 sun_dir = vec3(0.0, 0.0, 1.0);
 uniform vec4 flat_rect = vec4(0.0, 0.0, 4096.0, 4096.0);
 uniform vec2 cam_world = vec2(2048.0, 2048.0);
 uniform float px_per_world = 1.0;
 uniform float radius_px = 400.0;
 uniform float cam_dist_px = 1350.0;
-uniform float render_pixel = 1.0;
-uniform float terrain_radii = 0.0;
+uniform float texel_world = 1.0;
 uniform float world_width = 4096.0;
 
 const float PI_F = 3.14159265358979;
@@ -66,7 +66,9 @@ vec3 dir_of_world(vec2 w) {
 vec2 sample_uv(vec2 w) {
 	float shift = world_width * floor((flat_rect.x + flat_rect.z * 0.5 - w.x) / world_width + 0.5);
 	w.x += shift;
-	return vec2((w.x - flat_rect.x) / flat_rect.z, (clamp(w.y, 0.0, world_width) - flat_rect.y) / flat_rect.w);
+	float edge = texel_world * 1.5;
+	float y = clamp(w.y, edge, world_width - edge);
+	return vec2((w.x - flat_rect.x) / flat_rect.z, (y - flat_rect.y) / flat_rect.w);
 }
 
 vec2 project_mix(vec2 w) {
@@ -122,6 +124,30 @@ void fragment() {
 		}
 		base = vec4(texture(flat_map, sample_uv(w)).rgb, 1.0);
 	}
+	COLOR = base;
+}
+"""
+
+const LIGHT_SHADER := """
+shader_type canvas_item;
+render_mode unshaded, blend_mix;
+uniform vec2 screen_size = vec2(1440.0, 900.0);
+uniform vec3 center_dir = vec3(0.0, 0.0, 1.0);
+uniform vec3 east_dir = vec3(1.0, 0.0, 0.0);
+uniform vec3 north_dir = vec3(0.0, 1.0, 0.0);
+uniform float cam_d = 4.0;
+uniform float tan_half = 0.3333333333;
+uniform float overlay = 1.0;
+uniform vec3 sun_dir = vec3(0.0, 0.0, 1.0);
+uniform float render_pixel = 1.0;
+uniform float terrain_radii = 0.0;
+
+void fragment() {
+	vec2 px = UV * screen_size;
+	float aspect = screen_size.x / screen_size.y;
+	vec2 ndc = vec2(px.x / screen_size.x * 2.0 - 1.0, 1.0 - px.y / screen_size.y * 2.0);
+	vec3 dir = normalize(east_dir * (ndc.x * tan_half * aspect) + north_dir * (ndc.y * tan_half) - center_dir);
+	vec3 origin = center_dir * cam_d;
 	vec4 light = vec4(0.0);
 	if (overlay > 0.0) {
 		float camera_term = dot(origin, origin) - 1.0;
@@ -179,16 +205,13 @@ void fragment() {
 			}
 		}
 	}
-	if (base.a > 0.0) {
-		COLOR = vec4(mix(base.rgb, light.rgb, light.a), 1.0);
-	} else {
-		COLOR = light;
-	}
+	COLOR = light;
 }
 """
 
 var extras: Node
 var map_view: MapView
+var labels: GlobeLabels
 var enabled := false
 var active := false
 var idle_rotation_disabled := false
@@ -197,11 +220,14 @@ var terrain_on := false
 var _flat_viewport: SubViewport
 var _flat_camera: Camera2D
 var _layer: CanvasLayer
+var _light_layer: CanvasLayer
 var _space: ColorRect
 var _stars: StarField
 var _sun: TextureRect
 var _sphere: ColorRect
+var _light: ColorRect
 var _material: ShaderMaterial
+var _light_material: ShaderMaterial
 var _last_interaction := -100000
 var _last_rotate := 0
 var _sun_lonlat := Vector2.ZERO
@@ -220,17 +246,6 @@ var _moving_until := 0
 func setup(owner_extras: Node, view: MapView) -> void:
 	extras = owner_extras
 	map_view = view
-	_flat_viewport = SubViewport.new()
-	_flat_viewport.disable_3d = true
-	_flat_viewport.transparent_bg = false
-	_flat_viewport.handle_input_locally = false
-	_flat_viewport.gui_disable_input = true
-	_flat_viewport.size = Vector2i(1024, 1024)
-	_flat_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
-	_flat_viewport.canvas_item_default_texture_filter = Viewport.DEFAULT_CANVAS_ITEM_TEXTURE_FILTER_LINEAR
-	add_child(_flat_viewport)
-	_flat_camera = Camera2D.new()
-	_flat_viewport.add_child(_flat_camera)
 	_layer = CanvasLayer.new()
 	_layer.layer = -1
 	_layer.visible = false
@@ -252,14 +267,62 @@ func setup(owner_extras: Node, view: MapView) -> void:
 	_sphere = ColorRect.new()
 	_sphere.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_sphere.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	var shader := Shader.new()
-	shader.code = SPHERE_SHADER
-	_material = ShaderMaterial.new()
-	_material.shader = shader
-	_material.set_shader_parameter("flat_map", _flat_viewport.get_texture())
+	_material = _shader_material(SPHERE_SHADER)
 	_sphere.material = _material
 	_layer.add_child(_sphere)
+	_light_layer = CanvasLayer.new()
+	_light_layer.layer = LIGHT_LAYER
+	_light_layer.visible = false
+	add_child(_light_layer)
+	_light = ColorRect.new()
+	_light.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_light.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_light_material = _shader_material(LIGHT_SHADER)
+	_light.material = _light_material
+	_light_layer.add_child(_light)
+	labels = GlobeLabels.new()
+	labels.setup(view)
 	_refresh_sun(true)
+
+
+static func _shader_material(code: String) -> ShaderMaterial:
+	var shader := Shader.new()
+	shader.code = code
+	var material := ShaderMaterial.new()
+	material.shader = shader
+	return material
+
+
+func _texture_size() -> Vector2i:
+	var size := map_view.get_viewport_rect().size
+	var step := float(FLAT_TEXTURE_STEP)
+	return Vector2i(
+		int(clampf(ceilf(size.x * FLAT_TEXTURE_SCALE / step) * step, step * 4.0, float(FLAT_TEXTURE_LIMIT))),
+		int(clampf(ceilf(size.y * FLAT_TEXTURE_SCALE / step) * step, step * 4.0, float(FLAT_TEXTURE_LIMIT))))
+
+
+func _ensure_viewport() -> void:
+	var size := _texture_size()
+	if _flat_viewport and _flat_size == size:
+		return
+	if _flat_viewport:
+		_flat_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
+		remove_child(_flat_viewport)
+		_flat_viewport.queue_free()
+	_flat_size = size
+	_flat_viewport = SubViewport.new()
+	_flat_viewport.disable_3d = true
+	_flat_viewport.transparent_bg = false
+	_flat_viewport.handle_input_locally = false
+	_flat_viewport.gui_disable_input = true
+	_flat_viewport.size = size
+	_flat_viewport.canvas_item_default_texture_filter = Viewport.DEFAULT_CANVAS_ITEM_TEXTURE_FILTER_LINEAR
+	_flat_viewport.world_2d = map_view.get_viewport().world_2d
+	_flat_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS if active else SubViewport.UPDATE_DISABLED
+	add_child(_flat_viewport)
+	_flat_camera = Camera2D.new()
+	_flat_viewport.add_child(_flat_camera)
+	_material.set_shader_parameter("flat_map", _flat_viewport.get_texture())
 
 
 func set_enabled(value: bool) -> void:
@@ -288,6 +351,7 @@ func _sync_active() -> void:
 	map_view.globe_on = active
 	var root := map_view.get_viewport()
 	if active:
+		_ensure_viewport()
 		_flat_viewport.world_2d = root.world_2d
 		_flat_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
 		map_view.visibility_layer = MAP_LAYER_BIT
@@ -295,15 +359,20 @@ func _sync_active() -> void:
 			_saved_cull_mask = root.canvas_cull_mask
 		root.canvas_cull_mask = _saved_cull_mask & ~MAP_LAYER_BIT
 		_layer.visible = true
+		_light_layer.visible = true
+		labels.set_active(true)
 		_last_interaction = Time.get_ticks_msec()
 		_last_rotate = Time.get_ticks_msec()
 	else:
-		_flat_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
+		if _flat_viewport:
+			_flat_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
 		map_view.visibility_layer = 1
 		if _saved_cull_mask >= 0:
 			root.canvas_cull_mask = _saved_cull_mask
 			_saved_cull_mask = -1
 		_layer.visible = false
+		_light_layer.visible = false
+		labels.set_active(false)
 		_sun.modulate.a = 0.0
 	if extras and extras.has_signal("globe_changed"):
 		extras.emit_signal("globe_changed", active)
@@ -635,18 +704,15 @@ func _unproject_location(frame: Dictionary, screen: Vector2) -> Vector2:
 func render_view() -> Array:
 	if not active:
 		return []
+	_ensure_viewport()
 	_frame = _compute_frame()
-	_flat = _flat_view(_frame)
-	var size: Vector2i = _flat["texture"]
-	if size != _flat_size:
-		_flat_size = size
-		_flat_viewport.size = size
+	_flat = _flat_view(_frame, Vector2(_flat_size))
 	_flat_camera.position = _flat["center"]
 	_flat_camera.zoom = Vector2.ONE * float(_flat["density"])
-	return [_flat["center"], float(_flat["density"]), Vector2(size), float(_frame["px_per_world"])]
+	return [_flat["center"], float(_flat["density"]), Vector2(_flat_size), float(_frame["px_per_world"])]
 
 
-func _flat_view(frame: Dictionary) -> Dictionary:
+func _flat_view(frame: Dictionary, texture: Vector2) -> Dictionary:
 	var size: Vector2 = frame["size"]
 	var lon_c: float = frame["lon"]
 	var lat_c: float = frame["lat"]
@@ -704,42 +770,46 @@ func _flat_view(frame: Dictionary) -> Dictionary:
 					max_lat = 90.0
 				else:
 					min_lat = -90.0
+	var cap_d: float = frame["d"]
+	var cap := rad_to_deg(acos(clampf(1.0 / cap_d, -1.0, 1.0)))
+	for side: float in [1.0, -1.0]:
+		var edge_lat := lat_c + cap * side
+		if g <= 0.0 or absf(edge_lat) >= 90.0:
+			continue
+		var edge_screen := _project_dir(frame, direction_of(lon_c, edge_lat))
+		if edge_screen.z > 0.0 and edge_screen.x > -32.0 and edge_screen.y > -32.0 and edge_screen.x < size.x + 32.0 and edge_screen.y < size.y + 32.0:
+			min_lat = minf(min_lat, edge_lat)
+			max_lat = maxf(max_lat, edge_lat)
 	var west := lon_c + min_dlon
 	var east_lon := lon_c + max_dlon
 	var span := east_lon - west
-	var margin := maxf(span * 0.02, 0.05)
+	var margin := maxf(span * LAT_MARGIN, 0.0005)
 	west -= margin
 	east_lon += margin
 	if east_lon - west > 360.0:
 		var mid := (west + east_lon) * 0.5
 		west = mid - 180.0
 		east_lon = mid + 180.0
-	var top := world_of_lonlat(0.0, minf(max_lat + 0.5, MERCATOR_LIMIT)).y
-	var bottom := world_of_lonlat(0.0, maxf(min_lat - 0.5, -MERCATOR_LIMIT)).y
+	var lat_margin := maxf((max_lat - min_lat) * LAT_MARGIN, 0.0005)
+	var top := world_of_lonlat(0.0, minf(max_lat + lat_margin, MERCATOR_LIMIT)).y
+	var bottom := world_of_lonlat(0.0, maxf(min_lat - lat_margin, -MERCATOR_LIMIT)).y
 	var x0 := (west + 180.0) / 360.0 * MapView.WORLD_WIDTH
 	var x1 := (east_lon + 180.0) / 360.0 * MapView.WORLD_WIDTH
-	var width := maxf(x1 - x0, 1.0)
-	var height := maxf(bottom - top, 1.0)
+	var width := maxf(x1 - x0, 0.001)
+	var height := maxf(bottom - top, 0.001)
 	var equator_lat := 0.0
 	if min_lat > 0.0:
 		equator_lat = min_lat
 	elif max_lat < 0.0:
 		equator_lat = -max_lat
 	var factor := clampf(cos(deg_to_rad(equator_lat)) / cos(deg_to_rad(lat_c)), 1.0, 3.0)
-	var density := float(frame["px_per_world"]) * factor
-	var needed := Vector2(width, height) * density
-	var limit := float(FLAT_TEXTURE_LIMIT)
-	if needed.x > limit or needed.y > limit:
-		density *= minf(limit / needed.x, limit / needed.y)
-	var texture := Vector2i(
-		int(clampf(ceilf(width * density / FLAT_TEXTURE_STEP) * FLAT_TEXTURE_STEP, FLAT_TEXTURE_STEP, limit)),
-		int(clampf(ceilf(height * density / FLAT_TEXTURE_STEP) * FLAT_TEXTURE_STEP, FLAT_TEXTURE_STEP, limit)))
+	var density := minf(float(frame["px_per_world"]) * factor, minf(texture.x / width, texture.y / height))
 	var center := Vector2(x0 + width * 0.5, top + height * 0.5)
-	var covered := Vector2(texture) / density
+	var covered := texture / density
 	return {
 		"center": center,
 		"density": density,
-		"texture": texture,
+		"texture": Vector2i(texture),
 		"rect": Rect2(center - covered * 0.5, covered),
 	}
 
@@ -754,23 +824,26 @@ func after_camera_move() -> void:
 	var interactive := moving or (not idle_rotation_disabled and not rotation_paused)
 	var budget := INTERACTIVE_RENDER_PIXELS if interactive else REFINED_RENDER_PIXELS
 	var scale := minf(1.0, sqrt(budget / maxf(size.x * size.y, 1.0)))
-	_material.set_shader_parameter("screen_size", size)
-	_material.set_shader_parameter("center_dir", frame["center"])
-	_material.set_shader_parameter("east_dir", frame["east"])
-	_material.set_shader_parameter("north_dir", frame["north"])
-	_material.set_shader_parameter("cam_d", frame["d"])
-	_material.set_shader_parameter("tan_half", TAN_HALF)
+	for material: ShaderMaterial in [_material, _light_material]:
+		material.set_shader_parameter("screen_size", size)
+		material.set_shader_parameter("center_dir", frame["center"])
+		material.set_shader_parameter("east_dir", frame["east"])
+		material.set_shader_parameter("north_dir", frame["north"])
+		material.set_shader_parameter("cam_d", frame["d"])
+		material.set_shader_parameter("tan_half", TAN_HALF)
 	_material.set_shader_parameter("globeness", frame["g"])
-	_material.set_shader_parameter("overlay", frame["opacity"])
-	_material.set_shader_parameter("sun_dir", _sun_dir)
 	_material.set_shader_parameter("flat_rect", Vector4(rect.position.x, rect.position.y, rect.size.x, rect.size.y))
 	_material.set_shader_parameter("cam_world", frame["cam_world"])
 	_material.set_shader_parameter("px_per_world", frame["px_per_world"])
 	_material.set_shader_parameter("radius_px", frame["radius"])
 	_material.set_shader_parameter("cam_dist_px", frame["cam_dist"])
-	_material.set_shader_parameter("render_pixel", 1.0 / scale)
-	_material.set_shader_parameter("terrain_radii", TERRAIN_EXAGGERATION * MAX_TERRAIN_ELEVATION_M / EARTH_RADIUS_M if terrain_on else 0.0)
+	_material.set_shader_parameter("texel_world", 1.0 / float(_flat["density"]))
 	_material.set_shader_parameter("world_width", MapView.WORLD_WIDTH)
+	_light_material.set_shader_parameter("overlay", frame["opacity"])
+	_light_material.set_shader_parameter("sun_dir", _sun_dir)
+	_light_material.set_shader_parameter("render_pixel", 1.0 / scale)
+	_light_material.set_shader_parameter("terrain_radii", TERRAIN_EXAGGERATION * MAX_TERRAIN_ELEVATION_M / EARTH_RADIUS_M if terrain_on else 0.0)
+	labels.sync(rect)
 	_stars.queue_redraw()
 	_place_sun(frame)
 

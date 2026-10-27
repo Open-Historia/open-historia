@@ -28,6 +28,7 @@ const CONNECTOR := Color(1, 1, 1, 0.1)
 
 var engine: EngineLink
 var map_view: MapView
+var war: Node
 var timeline: PanelFrame
 var events_panel: PanelFrame
 var status := {}
@@ -294,7 +295,18 @@ func set_panel(name: String, quiet := false) -> void:
 			_render_events()
 		_after_reveal_change()
 	if changed:
+		if _war_ready():
+			war.call("show_every_troop", "events", name == "history")
 		panel_changed.emit(name)
+
+
+func _war_ready() -> bool:
+	return war != null and is_instance_valid(war) and war.has_method("stage")
+
+
+func _watch_strikes(event: Dictionary) -> void:
+	if _war_ready():
+		war.call("replay_strikes", str(event.get("id", "")))
 
 
 func close_panels() -> void:
@@ -918,6 +930,7 @@ func _render_events() -> void:
 					"map_open": open_map_changes.has(key),
 					"on_toggle_map": _toggle_map_changes,
 					"on_focus": _focus_bounds,
+					"on_watch": _watch_strikes if _war_ready() else Callable(),
 					"footer": footer,
 				})
 				list.add_child(card)
@@ -1214,6 +1227,8 @@ func _follow_camera() -> void:
 	if id == _camera_event:
 		return
 	_camera_event = id
+	if _war_ready():
+		war.call("show_strikes_of_event", id)
 	if not bool(status.get("eventCamera", true)):
 		return
 	var focus: Variant = event.get("focus")
@@ -1240,9 +1255,16 @@ func _stage_map() -> void:
 		if not _staged:
 			return
 		_staged = false
+		if _war_ready():
+			await war.call("unstage")
+			return
 		var final := await engine.request("map.state")
 		if seq == _stage_seq and final.get("ok", false):
 			map_view.set_state(final["result"])
+		return
+	if _war_ready():
+		_staged = true
+		await war.call("stage", int(args["through"]), bool(args.get("live", false)))
 		return
 	var reply := await engine.request("turn.stage", args)
 	if seq != _stage_seq or not reply.get("ok", false) or typeof(reply.get("result")) != TYPE_DICTIONARY:

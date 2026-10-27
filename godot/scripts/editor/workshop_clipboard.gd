@@ -27,7 +27,7 @@ func _plural(count: int, word: String) -> String:
 
 
 func _ago(iso: String) -> String:
-	var then := Time.get_unix_time_from_datetime_string(iso) if not iso.is_empty() else 0.0
+	var then: float = float(Time.get_unix_time_from_datetime_string(iso)) if not iso.is_empty() else 0.0
 	if then <= 0.0:
 		return ""
 	var minutes := int(round((Time.get_unix_time_from_system() - then) / 60.0))

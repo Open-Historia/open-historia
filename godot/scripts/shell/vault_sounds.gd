@@ -1,6 +1,8 @@
 class_name VaultSounds
 extends Node
 
+signal played(name: String)
+
 const RATE := 44100
 const LEVEL := 0.5
 const ORDER := ["spin", "unlock", "open", "rattle"]
@@ -13,7 +15,8 @@ var _rattles: Array[AudioStreamWAV] = []
 var _rattle_turn := 0
 var _pending := {}
 var _players: Array[AudioStreamPlayer] = []
-var _thread: Thread
+var _threads: Array[Thread] = []
+var _noise := PackedFloat32Array()
 var _lock := Mutex.new()
 var _cancelled := false
 var _spin_seconds := 1.5
@@ -21,7 +24,7 @@ var _open_seconds := 1.8
 
 
 func prepare(spin_seconds := 1.5, open_seconds := 1.8) -> void:
-	if _thread:
+	if not _threads.is_empty():
 		return
 	_spin_seconds = spin_seconds
 	_open_seconds = open_seconds
@@ -29,14 +32,22 @@ func prepare(spin_seconds := 1.5, open_seconds := 1.8) -> void:
 		var player := AudioStreamPlayer.new()
 		add_child(player)
 		_players.append(player)
-	_thread = Thread.new()
-	_thread.start(_render_all)
+	var random := RandomNumberGenerator.new()
+	random.randomize()
+	_noise.resize(RATE)
+	for index in range(RATE):
+		_noise[index] = random.randf() * 2.0 - 1.0
+	for name in ORDER:
+		var thread := Thread.new()
+		thread.start(_render_one.bind(str(name), random.randi()))
+		_threads.append(thread)
 
 
 func _exit_tree() -> void:
 	_cancelled = true
-	if _thread and _thread.is_started():
-		_thread.wait_to_finish()
+	for thread in _threads:
+		if thread.is_started():
+			thread.wait_to_finish()
 
 
 func is_rendered() -> bool:
@@ -88,6 +99,7 @@ func _play(name: String) -> void:
 	var stream := _stream_for(name)
 	if stream:
 		_start(stream)
+		played.emit(name)
 	else:
 		_pending[name] = Time.get_ticks_msec()
 
@@ -124,16 +136,15 @@ func _landed(name: String) -> void:
 		var stream := _stream_for(name)
 		if stream:
 			_start(stream)
+			played.emit(name)
 
 
-func _render_all() -> void:
+func _render_one(name: String, seed: int) -> void:
 	var random := RandomNumberGenerator.new()
-	random.randomize()
-	var noise := PackedFloat32Array()
-	noise.resize(RATE)
-	for index in range(RATE):
-		noise[index] = random.randf() * 2.0 - 1.0
-	for name in ORDER:
+	random.seed = seed
+	var noise := _noise
+	var takes := RATTLES if name == "rattle" else 1
+	for take in range(takes):
 		if _cancelled:
 			return
 		var samples := PackedFloat32Array()
@@ -144,22 +155,17 @@ func _render_all() -> void:
 				samples = _unlock(noise, random)
 			"open":
 				samples = _open(noise, random, _open_seconds)
-			"rattle":
+			_:
 				samples = _rattle(noise, random)
 		var stream := _wav(samples)
 		_lock.lock()
-		_streams[name] = stream
+		if take == 0:
+			_streams[name] = stream
 		if name == "rattle":
 			_rattles.append(stream)
 		_lock.unlock()
-		_landed.call_deferred(name)
-	for variant in range(RATTLES - 1):
-		if _cancelled:
-			return
-		var extra := _wav(_rattle(noise, random))
-		_lock.lock()
-		_rattles.append(extra)
-		_lock.unlock()
+		if take == 0:
+			_landed.call_deferred(name)
 
 
 static func _buffer(seconds: float) -> PackedFloat32Array:
@@ -237,7 +243,7 @@ static func _coefficients(type: String, frequency: float, q: float) -> PackedFlo
 	return PackedFloat64Array([b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0])
 
 
-static func _filtered_noise(noise: PackedFloat32Array, offset: int, count: int, type: String, frequency: PackedFloat32Array, q: float) -> PackedFloat32Array:
+static func _filtered_noise(noise: PackedFloat32Array, position: float, count: int, type: String, frequency: PackedFloat32Array, q: float) -> PackedFloat32Array:
 	var out := PackedFloat32Array()
 	out.resize(count)
 	var x1 := 0.0
@@ -250,6 +256,8 @@ static func _filtered_noise(noise: PackedFloat32Array, offset: int, count: int, 
 	var a1 := 0.0
 	var a2 := 0.0
 	var length := noise.size()
+	var first := int(floorf(position))
+	var share := position - floorf(position)
 	for index in range(count):
 		if index % 128 == 0:
 			var c := _coefficients(type, frequency[index], q)
@@ -258,7 +266,8 @@ static func _filtered_noise(noise: PackedFloat32Array, offset: int, count: int, 
 			b2 = c[2]
 			a1 = c[3]
 			a2 = c[4]
-		var x := noise[(offset + index) % length]
+		var at := (first + index) % length
+		var x := noise[at] + (noise[(at + 1) % length] - noise[at]) * share
 		var y := b0 * x + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2
 		x2 = x1
 		x1 = x
@@ -324,14 +333,14 @@ static func _mix(out: PackedFloat32Array, start: int, samples: PackedFloat32Arra
 
 
 static func _hiss(out: PackedFloat32Array, noise: PackedFloat32Array, random: RandomNumberGenerator, at: float, length: float, type: String, frequency: float, q: float, peak: float, ramp: Array = []) -> PackedFloat32Array:
-	var start := int(round(at * RATE))
-	var count := int(round((at + length + 0.02) * RATE)) - start
+	var start := int(ceil(at * RATE))
+	var count := int(ceil((at + length + 0.02) * RATE)) - start
 	var gain := _envelope([[at, 0.0001, false], [at + minf(0.006, length / 4.0), peak, true], [at + length, 0.0001, true]], start, count)
 	var frequencies := _constant(frequency, count)
 	if not ramp.is_empty():
 		frequencies = _envelope(ramp, start, count)
-	var offset := int(random.randf() * 0.5 * RATE)
-	var filtered := _filtered_noise(noise, offset, count, type, frequencies, q)
+	var position := random.randf() * 0.5 * RATE + (float(start) - at * RATE)
+	var filtered := _filtered_noise(noise, position, count, type, frequencies, q)
 	return _mix(out, start, filtered, gain)
 
 
@@ -385,7 +394,7 @@ static func _open(noise: PackedFloat32Array, random: RandomNumberGenerator, seco
 	out = _hiss(out, noise, random, 0.0, 0.5, "highpass", 3200.0, 1.0, 0.16)
 	var count := int(round((seconds + 0.3) * RATE))
 	var swell := _envelope([[0.0, 0.0001, false], [seconds * 0.3, 0.9, true], [seconds * 0.85, 0.5, true], [seconds + 0.25, 0.0001, true]], 0, count)
-	var rumble := _filtered_noise(noise, 0, count, "lowpass", _constant(170.0, count), 1.0)
+	var rumble := _filtered_noise(noise, 0.0, count, "lowpass", _constant(170.0, count), 1.0)
 	out = _mix(out, 0, rumble, swell)
 	out = _hiss(out, noise, random, 0.05, seconds, "bandpass", 850.0, 2.5, 0.1, [[0.0, 850.0, false], [seconds, 520.0, true]])
 	out = _tone(out, seconds, 0.7, "sine", 78.0, 38.0, 0.85)

@@ -260,20 +260,22 @@ class RunLabel extends RichTextLabel:
 			var size_px := int(run.get("size", 16))
 			var font: Font = run.get("font")
 			var colour: Color = run.get("colour", Color.WHITE)
+			var server := TextServerManager.get_primary_interface()
 			if bool(run.get("upper", false)):
-				shown = shown.to_upper()
+				shown = server.string_to_upper(shown, TranslationServer.get_locale())
 			if bool(run.get("smallcaps", false)):
 				var small := maxi(1, roundi(float(size_px) * 0.7))
 				var chunk := ""
 				var chunk_small := false
 				for index in range(shown.length()):
 					var character := shown.substr(index, 1)
-					var is_small := character != character.to_upper()
+					var raised := server.string_to_upper(character, TranslationServer.get_locale())
+					var is_small := character != raised
 					if index > 0 and is_small != chunk_small:
 						_push(chunk, font, small if chunk_small else size_px, colour)
 						chunk = ""
 					chunk_small = is_small
-					chunk += character.to_upper() if is_small else character
+					chunk += raised if is_small else character
 				if not chunk.is_empty():
 					_push(chunk, font, small if chunk_small else size_px, colour)
 			else:

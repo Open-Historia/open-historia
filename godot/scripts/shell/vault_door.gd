@@ -46,7 +46,7 @@ void fragment() {
 			}
 		}
 	}
-	COLOR = vec4(texture(face, p / area).rgb, clamp(0.5 - d, 0.0, 1.0));
+	COLOR = COLOR * vec4(texture(face, p / area).rgb, clamp(0.5 - d, 0.0, 1.0));
 }
 """
 
@@ -104,10 +104,10 @@ func setup(engine: EngineLink, prefs: Dictionary) -> void:
 		if not engine.engine_event.is_connected(_on_engine_event):
 			engine.engine_event.connect(_on_engine_event)
 	_read_plan(metal)
+	_sounds.prepare(float(_timing["spin"]) / 1000.0, float(_timing["open"]) / 1000.0)
 	_make_metal(metal)
 	_build_layers()
 	_bake()
-	_sounds.prepare(float(_timing["spin"]) / 1000.0, float(_timing["open"]) / 1000.0)
 	_prepared = true
 	_layout()
 	_knob.grab_focus()
@@ -188,14 +188,17 @@ func _later(ms: float, then: Callable) -> void:
 func _arm_shake() -> void:
 	_shake_epoch += 1
 	_shaking_since = -1
-	if stage != "closed" or _still or not is_inside_tree():
+	if stage != "closed" or _still:
 		return
-	var epoch := _shake_epoch
-	await get_tree().create_timer(float(_timing["firstShake"]) / 1000.0).timeout
-	while is_inside_tree() and epoch == _shake_epoch and stage == "closed":
-		_shaking_since = Time.get_ticks_msec()
-		_sounds.rattle()
-		await get_tree().create_timer(float(_timing["shakeEvery"]) / 1000.0).timeout
+	_later(float(_timing["firstShake"]), _shudder.bind(_shake_epoch))
+
+
+func _shudder(epoch: int) -> void:
+	if epoch != _shake_epoch or stage != "closed":
+		return
+	_shaking_since = Time.get_ticks_msec()
+	_sounds.rattle()
+	_later(float(_timing["shakeEvery"]), _shudder.bind(epoch))
 
 
 func _on_engine_event(event_name: String, data: Variant) -> void:
@@ -451,6 +454,9 @@ func _notification(what: int) -> void:
 
 func _input(event: InputEvent) -> void:
 	if event is InputEventKey and (event as InputEventKey).pressed:
+		var key := (event as InputEventKey).keycode
+		if key in [KEY_SHIFT, KEY_CTRL, KEY_ALT, KEY_META]:
+			return
 		_key_seen = true
 		if _knob and _knob.has_focus() and stage == "closed":
 			_focus_visible = true
@@ -465,6 +471,9 @@ func _gui_input(event: InputEvent) -> void:
 		return
 	if event is InputEventMouseButton:
 		var button := event as InputEventMouseButton
+		if button.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN, MOUSE_BUTTON_WHEEL_LEFT, MOUSE_BUTTON_WHEEL_RIGHT]:
+			accept_event()
+			return
 		if button.pressed:
 			_arm_shake()
 			_press_inside = button.button_index == MOUSE_BUTTON_LEFT and _on_wheel(button.position)

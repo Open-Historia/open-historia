@@ -30,6 +30,45 @@ func _wait(seconds: float) -> void:
 	await create_timer(seconds).timeout
 
 
+func _frames(count: int) -> void:
+	for i in range(count):
+		await process_frame
+
+
+func _until(condition: Callable, seconds: float) -> bool:
+	var deadline := Time.get_ticks_msec() + int(seconds * 1000.0)
+	while Time.get_ticks_msec() < deadline:
+		if condition.call():
+			return true
+		await process_frame
+	return bool(condition.call())
+
+
+func _clear_shell() -> void:
+	var shell: ShellBoot = main.get("shell") as ShellBoot
+	if shell == null:
+		return
+	await _until(func() -> bool: return shell.door_state != "deciding", 30.0)
+	if shell.door != null and is_instance_valid(shell.door):
+		shell.door.opened.emit()
+		_say("vault door opened for the test")
+	if not shell.notice_updates.is_empty():
+		await _until(func() -> bool: return shell.notice != null and is_instance_valid(shell.notice), 5.0)
+		await _frames(5)
+	if shell.notice != null and is_instance_valid(shell.notice):
+		shell.notice.closed.emit()
+		_say("update notice closed for the test")
+	await _frames(3)
+
+
+func _close_notice() -> void:
+	var shell: ShellBoot = main.get("shell") as ShellBoot
+	if shell != null and shell.notice != null and is_instance_valid(shell.notice) and shell.notice.is_visible_in_tree():
+		shell.notice.closed.emit()
+		_say("update notice closed for the test")
+		await _frames(3)
+
+
 func _shoot(name: String) -> void:
 	for i in range(4):
 		await process_frame
@@ -48,10 +87,7 @@ func _call(method: String, args := {}) -> Dictionary:
 
 
 func _sync_map() -> void:
-	var state := await _call("map.state")
-	if state.get("ok", false):
-		main.map_view.set_state(state["result"])
-	await war.refresh()
+	await main._world_changed()
 
 
 func _skip(days: int) -> void:
@@ -73,14 +109,18 @@ func _run() -> void:
 			_finish(1)
 			return
 		await process_frame
+	await _clear_shell()
 	await main._start_scenario("default")
 	main.picker._choose("France")
 	await main._on_country_chosen("France", "medium")
 	await _wait(1.0)
-	war = WarLayers.new()
-	war.setup(main.engine, main.map_view)
+	war = main.get("war") as WarLayers
+	var mounted: int = (main.map_view.get_children() as Array).filter(func(node: Node) -> bool: return node is WarLayers).size()
+	_check("the app mounts one set of war layers", war != null and mounted == 1 and main.hud.date_widget.get("war") == war, "%d mounted" % mounted)
+	if war == null:
+		_finish(1)
+		return
 	war.unit_selected.connect(func(id: String) -> void: picked = id)
-	await war.refresh()
 	_check("the war map reads a game at peace", war._state.has("fronts"), "%d fronts, %d units" % [(war._state.get("fronts", []) as Array).size(), (war._state.get("units", []) as Array).size()])
 	await _call("warmap.test.seed", {"a": "France", "b": "Germany", "phase": "war"})
 	await _sync_map()
@@ -110,7 +150,7 @@ func _run() -> void:
 	await _wait(0.6)
 	await _shoot("w3-played-z6")
 	_check("troops are drawn", (war.overlay.troops as Array).size() > 0 or (war.overlay.sides as Array).size() > 0, "%d troops, %d sides" % [(war.overlay.troops as Array).size(), (war.overlay.sides as Array).size()])
-	await _focus([[6.2, 48.6], [8.6, 50.0]], 8.2)
+	await _focus([[6.6, 48.9], [8.0, 49.7]], 8.6)
 	await _wait(0.8)
 	await _shoot("w4-troops-z8")
 	await _focus([[5.0, 48.0], [9.5, 50.5]], 7.0)
@@ -125,9 +165,15 @@ func _run() -> void:
 		claimants[str(id)] = ["Germany"]
 	await _call("warmap.test.groups", {"group": "Rhine Liberation Front", "regions": group_regions, "claimants": claimants})
 	await _sync_map()
+	var voyage: Array = [false]
+	var watch := func(_info: Dictionary) -> void:
+		if not war._transport_moves.is_empty():
+			voyage[0] = true
+	war.state_applied.connect(watch)
 	await _call("warmap.test.seed", {"a": "France", "b": "Germany", "phase": "extras", "gone": 640})
 	await _sync_map()
-	_check("a transporter's voyage plays", not (war.overlay.carrier_override as Dictionary).is_empty())
+	war.state_applied.disconnect(watch)
+	_check("a transporter's voyage plays", bool(voyage[0]))
 	await _focus([[-3.0, 46.5], [12.0, 56.5]], 5.4)
 	await _wait(0.4)
 	await _shoot("w6-seas-transport-groups")
@@ -143,6 +189,7 @@ func _run() -> void:
 	await _focus([[3.4, 47.6], [6.4, 49.6]], 6.4)
 	await _wait(0.6)
 	await _shoot("w9b-disputed-air-wing")
+	await _close_notice()
 	var unit_id := ""
 	var target := Vector2.ZERO
 	for item in war.overlay._unit_hits:
@@ -164,27 +211,62 @@ func _run() -> void:
 		release.position = target
 		release.global_position = target
 		root.get_viewport().push_input(release)
-		await _wait(0.2)
+		await _until(func() -> bool: return not picked.is_empty(), 2.0)
 	_check("clicking a counter selects its unit", not unit_id.is_empty() and picked == unit_id, "%s -> %s" % [unit_id, picked])
-	await war.set_map_mode("diplomatic")
+	var cards: Node = main.hud.map_cards
+	await _until(func() -> bool: return cards != null and bool(cards.call("is_card_open")), 5.0)
+	_check("the unit's card opens", cards != null and bool(cards.call("is_card_open")) and str(cards.get("_floating_kind")) == "unit", str(cards.get("_floating_key")) if cards else "")
+	await _shoot("w9d-unit-card")
+	if cards:
+		cards.call("dismiss_all")
+	var pfalz: Dictionary = await _call("warmap.test.regions", {"owner": "Germany", "near": [7.6, 49.4]})
+	await _call("warmap.test.owner", {"ids": (pfalz.get("result", []) as Array).slice(0, 2), "owner": "France"})
+	await war.refresh()
+	war.paint._transition_started = Time.get_ticks_msec() + 100000
+	var transition: Variant = war._state.get("transitions", null)
+	_check("a conquest floods the region", transition is Dictionary and str((transition as Dictionary).get("kind", "")) == "flood")
+	await _focus([[6.4, 48.6], [9.4, 50.4]], 7.2)
+	war.paint._transition_started = Time.get_ticks_msec() - 160
+	await _shoot("w9c-conquest-flood")
+	war.paint._transition_started = Time.get_ticks_msec() - 100000
+	await _wait(0.4)
+	main.hud.set_map_mode("diplomatic", true)
+	await main.hud._apply_map_mode()
+	await _wait(1.2)
+	_check("the map mode toggle reaches the war layers", war.mode == "diplomatic")
 	await _focus([[4.5, 47.5], [10.0, 51.0]], 6.3)
 	await _wait(0.5)
 	await _shoot("w10-diplomatic")
-	await war.set_map_mode("political")
-	await war.stage(1)
-	await _wait(0.8)
-	_check("a staged reveal step reads", bool(war._state.get("staged", false)) or (war._state.get("fronts", []) as Array).size() > 0, "staged=%s" % str(war._state.get("staged", false)))
+	main.hud.set_map_mode("political", true)
+	await main.hud._apply_map_mode()
+	await _wait(1.0)
+	var dates: Node = main.hud.date_widget
+	await dates.call("load_history")
+	dates.set("visible_count", 1)
+	dates.call("open_events")
+	await _until(func() -> bool: return bool(war._state.get("staged", false)), 8.0)
+	var through := str((war._stage as Dictionary).get("through", "")) if war._stage is Dictionary else ""
+	_check("the Events panel stages the reveal", bool(war._state.get("staged", false)), "through %s" % through)
 	await _shoot("w11-staged-1")
+	await main._world_changed()
+	await _wait(0.6)
+	_check("a world change keeps the staged reveal", bool(war._state.get("staged", false)))
 	while war.playing():
 		await process_frame
-	await war.unstage()
-	await _wait(0.5)
+	dates.call("reveal_all")
+	await _until(func() -> bool: return war._stage == null and not bool(war._state.get("staged", true)), 8.0)
+	var shown_events := "%s of %d events shown" % [str(dates.get("visible_count")), ((dates.get("latest") as Dictionary).get("events", []) as Array).size()]
+	_check("revealing every event ends the staging", war._stage == null and not bool(war._state.get("staged", true)), shown_events)
 	await _shoot("w12-unstaged")
+	dates.call("close_panels")
 	_say("done with %d failure(s): %s" % [failures.size(), ", ".join(failures)])
 	_finish(0 if failures.is_empty() else 1)
 
 
 func _finish(code: int) -> void:
+	if war != null:
+		await _until(func() -> bool: return not war.paint.transition_running(), 3.0)
+		await _frames(3)
 	main.engine.stop()
 	await _wait(0.5)
 	quit(code)

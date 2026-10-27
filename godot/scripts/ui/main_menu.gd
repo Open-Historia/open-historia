@@ -6,6 +6,14 @@ signal start_scenario(id: String)
 signal open_settings
 signal refresh_requested
 signal game_left(id: String)
+signal edit_scenario(id: String)
+signal clone_scenario(scenario: Dictionary)
+signal create_scenario
+signal edit_game(id: String)
+signal enter_active_game
+signal scenario_imported(id: String, note: String)
+signal open_history
+signal scenario_updated(id: String)
 
 const CARD_WIDTH := 305.0
 const CARD_GAP := 16
@@ -30,6 +38,13 @@ var _game_search := ""
 var _trash: Variant = null
 var _confirm_empty := {}
 var _busy := false
+var _community: Control
+var _lobbies: Control
+var _lobby_hosting := false
+var _updates: Node
+var _suggestions: Control
+var _creating := false
+var _editing_enabled := false
 
 
 func _ready() -> void:
@@ -53,7 +68,87 @@ func set_origin(origin: String) -> void:
 
 func set_library(data: Dictionary) -> void:
 	_library = data
+	if _page == "community" and is_instance_valid(_community):
+		_community.call("refresh_library")
+		return
+	if _page == "lobbies" and is_instance_valid(_lobbies):
+		return
 	_show_page(_page)
+
+
+func set_editing_enabled(enabled: bool) -> void:
+	_editing_enabled = enabled
+	if _page in ["games", "scenarios"]:
+		_show_page(_page)
+
+
+func set_creating(busy: bool) -> void:
+	_creating = busy
+	if _page_root:
+		var grid := _page_root.get_node_or_null("LibraryGrid")
+		if grid and grid.get_child_count() > 0 and grid.get_child(0) is DashedCard:
+			(grid.get_child(0) as DashedCard).set_busy(busy)
+
+
+func _exit_tree() -> void:
+	if is_instance_valid(_suggestions) and not _suggestions.is_inside_tree():
+		_suggestions.free()
+
+
+func _instance(path: String) -> Object:
+	var script: Variant = load(path)
+	if script is Script and (script as Script).can_instantiate():
+		return (script as Script).new()
+	return null
+
+
+func _hub_updates() -> Node:
+	if _updates == null and engine != null:
+		_updates = _instance("res://scripts/community/scenario_updates.gd") as Node
+		if _updates:
+			add_child(_updates)
+			_updates.call("setup", engine)
+			_updates.connect("changed", func() -> void:
+				if _page == "scenarios":
+					_refill_recent_grid()
+					_refill_library_grid())
+			_updates.connect("library_changed", func() -> void: refresh_requested.emit())
+	return _updates
+
+
+func _suggestions_banner() -> Control:
+	if not is_instance_valid(_suggestions) and engine != null:
+		_suggestions = _instance("res://scripts/community/suggestions_banner.gd") as Control
+		if _suggestions:
+			_suggestions.call("setup", engine)
+			_suggestions.connect("open_scenario", func(id: String) -> void: edit_scenario.emit(id))
+	return _suggestions
+
+
+func _add_suggestions_banner() -> void:
+	var banner := _suggestions_banner()
+	if banner == null:
+		return
+	_page_root.add_child(banner)
+	var before: Variant = banner.get("rows")
+	var counts := str(before)
+	await banner.call("refresh", true)
+	if is_instance_valid(banner) and str(banner.get("rows")) != counts and _page == "scenarios":
+		_refill_recent_grid()
+		_refill_library_grid()
+
+
+func _suggestion_badge(scenario_id: String) -> Button:
+	if not is_instance_valid(_suggestions):
+		return null
+	var count := int(_suggestions.call("count_for", scenario_id))
+	if count <= 0:
+		return null
+	var badge: Variant = _suggestions.get_script().call("count_badge", count)
+	if badge is Button:
+		(badge as Button).pressed.connect(func() -> void: edit_scenario.emit(scenario_id))
+		return badge
+	return null
 
 
 func set_status(text: String, problem := false) -> void:
@@ -77,6 +172,8 @@ func _build_rail() -> void:
 	brand.focus_mode = Control.FOCUS_NONE
 	brand.custom_minimum_size = Vector2(86, 87)
 	brand.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	brand.tooltip_text = "Update history: every update to Open Historia"
+	brand.pressed.connect(func() -> void: open_history.emit())
 	var brand_box := VBoxContainer.new()
 	brand_box.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	brand_box.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -102,8 +199,6 @@ func _build_rail() -> void:
 	column.add_child(UI.spacer(false))
 	var settings := _rail_tile("settings", "Settings")
 	column.add_child(settings)
-	UI.set_disabled_look(_tiles["community"], "Community is not in the native app yet.")
-	UI.set_disabled_look(_tiles["lobbies"], "Lobbies are not in the native app yet.")
 
 
 func _rail_tile(key: String, text: String) -> Button:
@@ -182,38 +277,82 @@ func _build_content() -> void:
 
 
 func _show_page(key: String) -> void:
+	var entering := key != _page or _page_root == null
+	if not entering and key in ["community", "lobbies"]:
+		return
 	_page = key
 	for tile_key in _tiles:
 		if tile_key != "settings":
 			_style_tile(_tiles[tile_key], tile_key == key)
 	for child in _actions.get_children():
 		child.queue_free()
+	if is_instance_valid(_suggestions) and _suggestions.get_parent():
+		_suggestions.get_parent().remove_child(_suggestions)
 	if _page_root:
 		_body.remove_child(_page_root)
 		_page_root.queue_free()
+	_community = null
+	_lobbies = null
 	_grids.clear()
 	_page_root = VBoxContainer.new()
 	_page_root.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_page_root.add_theme_constant_override("separation", 14)
 	_body.add_child(_page_root)
-	var refresh := UI.button("Refresh", "header", "refresh")
-	refresh.pressed.connect(func() -> void:
-		refresh_trash()
-		refresh_requested.emit())
-	_actions.add_child(refresh)
-	if key == "scenarios":
-		_title.text = "Scenarios"
-		var import_scenario := UI.button("Import Scenario", "header", "import")
-		import_scenario.pressed.connect(func() -> void: _import("scenario"))
-		_actions.add_child(import_scenario)
-		_build_scenarios_page()
+	if key == "community":
+		_title.text = "Community"
+		_build_community_page()
+	elif key == "lobbies":
+		_title.text = "Lobbies"
+		_build_lobbies_page()
 	else:
-		_title.text = "Games"
-		var import_game := UI.button("Import Game", "header", "import")
-		import_game.pressed.connect(func() -> void: _import("game"))
-		_actions.add_child(import_game)
-		_build_games_page()
+		var refresh := UI.button("Refresh", "header", "refresh")
+		refresh.pressed.connect(func() -> void:
+			refresh_trash()
+			refresh_requested.emit())
+		_actions.add_child(refresh)
+		_add_suggestions_banner()
+		if key == "scenarios":
+			_title.text = "Scenarios"
+			var import_scenario := UI.button("Import Scenario", "header", "import")
+			import_scenario.pressed.connect(func() -> void: _import("scenario"))
+			_actions.add_child(import_scenario)
+			_build_scenarios_page()
+			if entering and _hub_updates():
+				_updates.call("refresh")
+		else:
+			_title.text = "Games"
+			var import_game := UI.button("Import Game", "header", "import")
+			import_game.pressed.connect(func() -> void: _import("game"))
+			_actions.add_child(import_game)
+			_build_games_page()
 	_fit_grids.call_deferred()
+
+
+func _build_community_page() -> void:
+	var page := _instance("res://scripts/community/community_page.gd") as Control
+	if page == null or engine == null:
+		return
+	_community = page
+	page.call("setup", engine, {})
+	page.connect("play_scenario", func(id: String) -> void: start_scenario.emit(id))
+	page.connect("library_changed", func() -> void: refresh_requested.emit())
+	_page_root.add_child(page)
+	page.call("open")
+
+
+func _build_lobbies_page() -> void:
+	var page := _instance("res://scripts/multiplayer/lobbies_page.gd") as Control
+	if page == null or engine == null:
+		return
+	_lobbies = page
+	page.call("setup", engine, {"hosting": _lobby_hosting})
+	page.connect("hosting_changed", func(open: bool) -> void: _lobby_hosting = open)
+	page.connect("enter_game", func() -> void: enter_active_game.emit())
+	_page_root.add_child(page)
+	var host: Variant = page.call("make_host_button")
+	if host is Control:
+		_actions.add_child(host)
+	page.call("open")
 
 
 func _touched_at(game: Dictionary) -> String:
@@ -584,7 +723,7 @@ func _empty_state() -> Control:
 	start.pressed.connect(func() -> void: _show_page("scenarios"))
 	row.add_child(start)
 	var browse := UI.button("Browse community scenarios", "hero_quiet")
-	UI.set_disabled_look(browse, "Community is not in the native app yet.")
+	browse.pressed.connect(func() -> void: _show_page("community"))
 	row.add_child(browse)
 	column.add_child(row)
 	holder.add_child(column)
@@ -597,9 +736,9 @@ func _build_scenarios_page() -> void:
 	if not recent.is_empty():
 		_page_root.add_child(_section_header("Recently Used", "The scenarios behind your latest games and edits.", "clock"))
 		var recent_grid := _grid()
-		for scenario in recent.slice(0, 4):
-			recent_grid.add_child(_scenario_card(scenario))
+		recent_grid.name = "RecentGrid"
 		_page_root.add_child(recent_grid)
+		_refill_recent_grid()
 	var header := HBoxContainer.new()
 	header.add_theme_constant_override("separation", 8)
 	header.add_child(_section_header("Scenario Library", "Everything you can start a new game from, in one place.", ""))
@@ -654,6 +793,18 @@ func _build_scenarios_page() -> void:
 		_page_root.add_child(deleted)
 
 
+func _refill_recent_grid() -> void:
+	var grid := _page_root.get_node_or_null("RecentGrid") as GridContainer
+	if not grid:
+		return
+	for child in grid.get_children():
+		child.queue_free()
+	var scenarios: Array = _library.get("scenarios", [])
+	var recent := scenarios.filter(func(scenario: Dictionary) -> bool: return int(scenario.get("games", 0)) > 0)
+	for scenario in recent.slice(0, 4):
+		grid.add_child(_scenario_card(scenario))
+
+
 func _refill_library_grid() -> void:
 	var grid := _page_root.get_node_or_null("LibraryGrid") as GridContainer
 	if not grid:
@@ -672,7 +823,7 @@ func _refill_library_grid() -> void:
 			"community":
 				return scenario.get("fromHub", false)
 			"updates":
-				return false
+				return _updates != null and not str(_updates.call("reason_for", str(scenario.get("id", "")))).is_empty()
 		return true)
 	if _sort == "name":
 		scenarios.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return str(a.get("name", "")).naturalnocasecmp_to(str(b.get("name", ""))) < 0)
@@ -725,9 +876,11 @@ func _card_frame(active: bool, accent: Color, height: float) -> PanelContainer:
 func _cover(url: String, accent: Color, glow: float) -> CoverRect:
 	var cover := CoverRect.new(accent, glow)
 	cover.custom_minimum_size = Vector2(CARD_WIDTH - 2, 154)
+	var held: WeakRef = weakref(cover)
 	loader.fetch(url, func(texture: Texture2D) -> void:
-		if is_instance_valid(cover):
-			cover.set_cover(texture))
+		var target: Variant = held.get_ref()
+		if target is CoverRect:
+			(target as CoverRect).set_cover(texture))
 	return cover
 
 
@@ -872,7 +1025,7 @@ func _open_card_menu(anchor: Button, game: Dictionary) -> void:
 	var stack := VBoxContainer.new()
 	stack.add_theme_constant_override("separation", 0)
 	stack.custom_minimum_size.x = 208
-	var items := [["Edit", "Editing a game's details is not in the native app yet."], ["Clone", ""], ["Export", ""]]
+	var items := [["Edit", "" if _editing_enabled else "Editing a game's details is not in the native app yet."], ["Clone", ""], ["Export", ""]]
 	for item in items:
 		var label: String = item[0]
 		var row := Button.new()
@@ -891,6 +1044,10 @@ func _open_card_menu(anchor: Button, game: Dictionary) -> void:
 		row.add_theme_stylebox_override("focus", UI.box(Color(0, 0, 0, 0), Color(0, 0, 0, 0), 0, 0, Vector4(13, 0, 13, 0)))
 		if not str(item[1]).is_empty():
 			UI.set_disabled_look(row, item[1])
+		elif label == "Edit":
+			row.pressed.connect(func() -> void:
+				popup.hide()
+				edit_game.emit(str(game.get("id", ""))))
 		elif label == "Clone":
 			row.pressed.connect(func() -> void:
 				popup.hide()
@@ -1037,10 +1194,21 @@ func _import(kind: String) -> void:
 	if not reply.get("ok", false):
 		set_status(str(reply.get("error", "")), true)
 		return
-	if not str(reply["result"].get("note", "")).is_empty():
-		set_status(str(reply["result"]["note"]), true)
+	var note := str(reply["result"].get("note", ""))
+	var opens_editor := kind == "scenario" and _editing_enabled and not str(reply["result"].get("id", "")).is_empty()
+	if not note.is_empty() and not opens_editor:
+		set_status(note, true)
 	_show_page("games" if kind == "game" else "scenarios")
 	refresh_requested.emit()
+	if opens_editor:
+		scenario_imported.emit(str(reply["result"]["id"]), note)
+
+
+func update_scenario(scenario_id: String, post_id := 0) -> void:
+	var updates := _hub_updates()
+	if updates:
+		await updates.call("update", scenario_id, post_id)
+		scenario_updated.emit(scenario_id)
 
 
 func _scenario_card(scenario: Dictionary) -> Control:
@@ -1064,6 +1232,10 @@ func _scenario_card(scenario: Dictionary) -> Control:
 	if scenario.get("builtIn", false):
 		badges.add_child(UI.pill("Built-In", Color(10 / 255.0, 12 / 255.0, 18 / 255.0, 0.72), Color(1, 1, 1, 0.22), UI.WHITE, true))
 	badges.add_child(UI.spacer())
+	var badge := _suggestion_badge(str(scenario.get("id", "")))
+	if badge:
+		badge.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		badges.add_child(badge)
 	var count := int(scenario.get("games", 0))
 	badges.add_child(UI.pill("%d game%s" % [count, "" if count == 1 else "s"], Color(10 / 255.0, 12 / 255.0, 18 / 255.0, 0.72), Color(1, 1, 1, 0.12), Color(1, 1, 1, 0.85)))
 	top.add_child(badges)
@@ -1084,21 +1256,34 @@ func _scenario_card(scenario: Dictionary) -> Control:
 	stack.add_child(UI.spacer(false))
 	stack.add_child(UI.label(str(scenario.get("subtitle", "")), 12, UI.FAINT))
 	var id := str(scenario.get("id", ""))
-	var start := UI.button("New Game", "accent", "plus")
-	start.pressed.connect(func() -> void: start_scenario.emit(id))
-	stack.add_child(start)
+	var primary: Variant = _updates.call("primary_button", scenario) if _updates else null
+	if primary is Button:
+		stack.add_child(primary)
+	else:
+		var start := UI.button("New Game", "accent", "plus")
+		start.pressed.connect(func() -> void: start_scenario.emit(id))
+		stack.add_child(start)
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 7)
 	var edit := UI.button("Edit", "small", "edit")
 	edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	UI.set_disabled_look(edit, "The Workshop is not in the native app yet.")
+	if _editing_enabled:
+		edit.pressed.connect(func() -> void: edit_scenario.emit(id))
+	else:
+		UI.set_disabled_look(edit, "The Workshop is not in the native app yet.")
 	row.add_child(edit)
 	var clone := UI.button("Clone Scenario", "small", "clone")
 	clone.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	clone.size_flags_stretch_ratio = 1.25
-	UI.set_disabled_look(clone, "Cloning is not in the native app yet.")
+	if _editing_enabled:
+		clone.pressed.connect(func() -> void: clone_scenario.emit(scenario))
+	else:
+		UI.set_disabled_look(clone, "Cloning is not in the native app yet.")
 	row.add_child(clone)
 	stack.add_child(row)
+	var note: Variant = _updates.call("note_for", scenario) if _updates else null
+	if note is Control:
+		stack.add_child(note)
 	body.add_child(stack)
 	column.add_child(body)
 	return card
@@ -1107,12 +1292,36 @@ func _scenario_card(scenario: Dictionary) -> Control:
 func _create_card() -> Control:
 	var card := DashedCard.new()
 	card.custom_minimum_size = Vector2(CARD_WIDTH, 363)
-	card.tooltip_text = "The Workshop is not in the native app yet."
-	card.modulate = Color(1, 1, 1, 0.55)
+	if _editing_enabled:
+		card.pressed.connect(func() -> void: create_scenario.emit())
+		card.set_busy(_creating)
+	else:
+		card.tooltip_text = "The Workshop is not in the native app yet."
+		card.modulate = Color(1, 1, 1, 0.55)
+		card.mouse_default_cursor_shape = Control.CURSOR_ARROW
 	return card
 
 
 class DashedCard extends Control:
+	signal pressed
+
+	var busy := false
+
+	func _init() -> void:
+		mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+
+	func set_busy(value: bool) -> void:
+		busy = value
+		modulate.a = 0.6 if busy else 1.0
+		mouse_default_cursor_shape = Control.CURSOR_WAIT if busy else Control.CURSOR_POINTING_HAND
+
+	func _gui_input(event: InputEvent) -> void:
+		if busy or not pressed.has_connections():
+			return
+		if event is InputEventMouseButton and (event as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT and not (event as InputEventMouseButton).pressed:
+			pressed.emit()
+			accept_event()
+
 	func _draw() -> void:
 		var rect := Rect2(Vector2(1, 1), size - Vector2(2, 2))
 		var radius := 24.0
@@ -1132,6 +1341,6 @@ class DashedCard extends Control:
 		draw_line(centre + Vector2(-13, -12), centre + Vector2(13, -12), Color(1, 1, 1, 0.85), 3.0, true)
 		draw_line(centre + Vector2(0, -25), centre + Vector2(0, 1), Color(1, 1, 1, 0.85), 3.0, true)
 		var font := UI.font(600)
-		var text := "Create Scenario"
+		var text := tr("Create Scenario")
 		var width := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, 13).x
 		draw_string(font, Vector2(centre.x - width * 0.5, centre.y + 30), text, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(1, 1, 1, 0.85))

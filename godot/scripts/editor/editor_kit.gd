@@ -444,8 +444,10 @@ static func pick_file(host: Node, save: bool, default_name: String, filters: Pac
 		var picks := forced.split("|")
 		for entry in picks:
 			var pair := entry.split("=", true, 1)
-			if pair.size() == 2 and default_name.ends_with(pair[0]):
+			if pair.size() == 2 and pair[0] != "*" and not default_name.is_empty() and default_name.ends_with(pair[0]):
 				return pair[1]
+		for entry in picks:
+			var pair := entry.split("=", true, 1)
 			if pair.size() == 2 and pair[0] == "*":
 				return pair[1].path_join(default_name) if save else pair[1]
 	var dialog := FileDialog.new()

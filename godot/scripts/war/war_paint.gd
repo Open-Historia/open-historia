@@ -603,7 +603,7 @@ func _sync_visibility() -> void:
 		(node as CanvasItem).visible = on
 		any = any or on
 	if _backbuffer:
-		_backbuffer.visible = any
+		_backbuffer.visible = any or not _transition_materials.is_empty()
 
 
 func set_view(level: float, zoom: float, strength: float) -> void:
@@ -612,6 +612,8 @@ func set_view(level: float, zoom: float, strength: float) -> void:
 	for run in _fields.keys():
 		var made: Field = _fields[run]
 		made.put_material.set_shader_parameter("strength", strength)
+	for material in _transition_materials:
+		material.set_shader_parameter("strength", strength)
 	_stripe_material.set_shader_parameter("zoom", zoom)
 
 
@@ -684,6 +686,8 @@ func rebuild_copies() -> void:
 	if fill == null:
 		return
 	for copy in map.war_copies():
+		for material in _transition_materials:
+			_insert(copy, fill, material, "")
 		if _stripes_on:
 			_insert(copy, fill, _stripe_material, "")
 		for run in _order:
@@ -720,3 +724,178 @@ func _insert(copy: Node2D, mesh: Mesh, material: Material, run: String) -> void:
 	node.set_meta("run", run)
 	map.war_insert_under_borders(copy, node)
 	_copy_nodes.append(node)
+
+
+const FLOOD_SHADER := """
+shader_type canvas_item;
+render_mode unshaded, blend_premul_alpha;
+uniform sampler2D field : filter_linear, repeat_disable;
+uniform sampler2D screen : hint_screen_texture, filter_nearest, repeat_disable;
+uniform int region = -1;
+uniform vec4 rect = vec4(0.0, 0.0, 1.0, 1.0);
+uniform vec3 from_colour = vec3(0.5);
+uniform vec3 to_colour = vec3(0.5);
+uniform float progress = 0.0;
+uniform float feather = 0.028;
+uniform float strength = 0.6;
+uniform float world_width = 4096.0;
+varying vec2 world;
+
+void vertex() {
+	world = VERTEX;
+	if (int(UV.x + 0.5) != region) {
+		VERTEX = vec2(-1000000.0, -1000000.0);
+		world = VERTEX;
+	}
+}
+
+void fragment() {
+	vec2 uv = (world - rect.xy) / rect.zw;
+	if (uv.x < 0.0) {
+		uv.x += world_width / rect.z;
+	} else if (uv.x > 1.0) {
+		uv.x -= world_width / rect.z;
+	}
+	vec4 texel = texture(field, clamp(uv, vec2(0.0), vec2(1.0)));
+	float mask = texel.a;
+	float spread = mix(feather, max(feather, 0.12), texel.g);
+	float target_mix = 1.0 - smoothstep(progress - spread, progress + spread, texel.r);
+	vec3 colour = mix(from_colour, to_colour, target_mix);
+	float alpha = smoothstep(0.04, 0.88, mask) * strength;
+	vec3 base = texture(screen, SCREEN_UV).rgb;
+	COLOR = vec4(base * (1.0 - alpha) + colour * alpha, 1.0);
+}
+"""
+
+const SWEEP_SHADER := """
+shader_type canvas_item;
+render_mode unshaded, blend_premul_alpha;
+uniform sampler2D slots : filter_nearest, repeat_disable;
+uniform sampler2D params : filter_nearest, repeat_disable;
+uniform sampler2D colours : filter_nearest, repeat_disable;
+uniform sampler2D screen : hint_screen_texture, filter_nearest, repeat_disable;
+uniform int columns = 1024;
+uniform float threshold = 0.0;
+uniform float strength = 0.6;
+uniform float world_width = 4096.0;
+varying vec2 world;
+varying float slot;
+
+void vertex() {
+	int region = int(UV.x + 0.5);
+	vec4 entry = texelFetch(slots, ivec2(region % columns, region / columns), 0);
+	slot = floor(entry.r * 255.0 + 0.5) + floor(entry.g * 255.0 + 0.5) * 256.0 - 1.0;
+	if (slot < 0.0) {
+		VERTEX = vec2(-1000000.0, -1000000.0);
+	}
+	world = VERTEX;
+}
+
+void fragment() {
+	int k = int(slot + 0.5);
+	vec4 a = texelFetch(params, ivec2(k * 2, 0), 0);
+	vec4 b = texelFetch(params, ivec2(k * 2 + 1, 0), 0);
+	float lng = world.x / world_width * 360.0 - 180.0;
+	lng += 360.0 * round((a.x - lng) / 360.0);
+	float lat = degrees(atan(sinh(3.14159265358979 * (1.0 - 2.0 * world.y / world_width))));
+	float t = (lng - a.x) * a.z + (lat - a.y) * a.w;
+	float count = max(b.z, 1.0);
+	float band = clamp(floor((t - b.x) / max(b.y, 0.000000001)), 0.0, count - 1.0);
+	float transition_t = (band + 1.0) / count;
+	vec3 from_colour = texelFetch(colours, ivec2(k * 2, 0), 0).rgb;
+	vec3 to_colour = texelFetch(colours, ivec2(k * 2 + 1, 0), 0).rgb;
+	vec3 colour = transition_t <= threshold + 0.000001 ? to_colour : from_colour;
+	vec3 base = texture(screen, SCREEN_UV).rgb;
+	COLOR = vec4(base * (1.0 - strength) + colour * strength, 1.0);
+}
+"""
+
+var _transition: Dictionary = {}
+var _transition_materials: Array[ShaderMaterial] = []
+var _transition_started := 0
+
+
+func start_transition(data: Variant) -> void:
+	_transition = {}
+	_transition_materials.clear()
+	if data is Dictionary and not (data as Dictionary).is_empty():
+		var kind := str((data as Dictionary).get("kind", ""))
+		if kind == "flood":
+			_transition = {"kind": kind, "fields": []}
+			for item in (data as Dictionary).get("fields", []):
+				var entry: Dictionary = item
+				var image := Image.create_from_data(int(entry["width"]), int(entry["height"]), false, Image.FORMAT_RGBA8, Marshalls.base64_to_raw(str(entry["data"])))
+				var material := _material(FLOOD_SHADER)
+				var rect: Array = entry.get("rect", [0, 0, 1, 1])
+				material.set_shader_parameter("field", ImageTexture.create_from_image(image))
+				material.set_shader_parameter("region", int(entry.get("index", -1)))
+				material.set_shader_parameter("rect", Vector4(float(rect[0]), float(rect[1]), maxf(float(rect[2]), 0.000001), maxf(float(rect[3]), 0.000001)))
+				var from := WarKit.color_of(entry.get("from", null))
+				var to := WarKit.color_of(entry.get("to", null))
+				material.set_shader_parameter("from_colour", Vector3(from.r, from.g, from.b))
+				material.set_shader_parameter("to_colour", Vector3(to.r, to.g, to.b))
+				material.set_shader_parameter("feather", float(entry.get("feather", 0.028)))
+				material.set_shader_parameter("strength", _strength)
+				material.set_shader_parameter("world_width", MapView.WORLD_WIDTH)
+				material.set_shader_parameter("progress", 0.0)
+				_transition_materials.append(material)
+				(_transition["fields"] as Array).append({"material": material, "duration": float(entry.get("durationMs", 480)), "delay": float(entry.get("delayMs", 0))})
+		elif kind == "sweep":
+			var sweeps: Array = (data as Dictionary).get("sweeps", [])
+			var rows := _region_rows()
+			var slots := Image.create_empty(COLUMNS, rows, false, Image.FORMAT_RGBA8)
+			var params := Image.create_empty(maxi(2, sweeps.size() * 2), 1, false, Image.FORMAT_RGBAF)
+			var colours := Image.create_empty(maxi(2, sweeps.size() * 2), 1, false, Image.FORMAT_RGBA8)
+			for slot in range(sweeps.size()):
+				var entry: Dictionary = sweeps[slot]
+				var index := int(entry.get("index", -1))
+				if index < 0:
+					continue
+				var stored := slot + 1
+				slots.set_pixel(index % COLUMNS, index / COLUMNS, Color8(stored & 255, (stored >> 8) & 255, 0, 255))
+				var centre: Array = entry.get("center", [0, 0])
+				var direction: Array = entry.get("d", [1, 0])
+				params.set_pixel(slot * 2, 0, Color(float(centre[0]), float(centre[1]), float(direction[0]), float(direction[1])))
+				params.set_pixel(slot * 2 + 1, 0, Color(float(entry.get("minT", 0.0)), float(entry.get("band", 1.0)), float(entry.get("count", 1.0)), 0.0))
+				colours.set_pixel(slot * 2, 0, WarKit.color_of(entry.get("from", null)))
+				colours.set_pixel(slot * 2 + 1, 0, WarKit.color_of(entry.get("to", null)))
+			var material := _material(SWEEP_SHADER)
+			material.set_shader_parameter("slots", ImageTexture.create_from_image(slots))
+			material.set_shader_parameter("params", ImageTexture.create_from_image(params))
+			material.set_shader_parameter("colours", ImageTexture.create_from_image(colours))
+			material.set_shader_parameter("columns", COLUMNS)
+			material.set_shader_parameter("strength", _strength)
+			material.set_shader_parameter("world_width", MapView.WORLD_WIDTH)
+			material.set_shader_parameter("threshold", 0.0)
+			_transition_materials.append(material)
+			_transition = {"kind": kind, "material": material, "duration": float((data as Dictionary).get("durationMs", 680))}
+	_transition_started = Time.get_ticks_msec()
+	rebuild_copies()
+
+
+func transition_running() -> bool:
+	return not _transition.is_empty()
+
+
+func step_transition() -> void:
+	if _transition.is_empty():
+		return
+	var elapsed := float(Time.get_ticks_msec() - _transition_started)
+	var done := true
+	if str(_transition.get("kind", "")) == "flood":
+		for item in _transition["fields"]:
+			var field: Dictionary = item
+			var raw := clampf((elapsed - float(field["delay"])) / maxf(float(field["duration"]), 1.0), 0.0, 1.0)
+			if raw < 1.0:
+				done = false
+			var eased := clampf(raw + sin(PI * raw) * 0.12, 0.0, 1.0)
+			(field["material"] as ShaderMaterial).set_shader_parameter("progress", eased)
+	else:
+		var progress := clampf(elapsed / maxf(float(_transition.get("duration", 680.0)), 1.0), 0.0, 1.0)
+		var step := mini(24, floori(progress * 24.0))
+		(_transition["material"] as ShaderMaterial).set_shader_parameter("threshold", float(step) / 24.0)
+		done = progress >= 1.0
+	if done:
+		_transition = {}
+		_transition_materials.clear()
+		rebuild_copies()

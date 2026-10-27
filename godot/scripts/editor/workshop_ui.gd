@@ -415,10 +415,30 @@ class Switch extends Control:
 		draw_circle(Vector2(x, rect.size.y * 0.5), 8.0, Color(1, 1, 1, 1), true, -1.0, true)
 
 
+static func _check_icon(on: bool, faded: bool) -> Texture2D:
+	var key := "check:%s:%s" % [on, faded]
+	if _icon_cache.has(key):
+		return _icon_cache[key]
+	var box := "<rect x='1.5' y='1.5' width='13' height='13' rx='3' fill='%s' fill-opacity='%s' stroke='%s' stroke-opacity='%s' stroke-width='1.2'/>" % ["#e7e7ea" if on else "#ffffff", "1" if on else "0.06", "#e7e7ea" if on else "#ffffff", "1" if on else "0.55"]
+	var mark := "<path d='M4.5 8.3l2.4 2.4 4.6-5.2' fill='none' stroke='#12141a' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/>" if on else ""
+	var svg := "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16' opacity='%s'>%s%s</svg>" % ["0.45" if faded else "1", box, mark]
+	var image := Image.new()
+	if image.load_svg_from_string(svg, 1.0) != OK:
+		return null
+	var texture := ImageTexture.create_from_image(image)
+	_icon_cache[key] = texture
+	return texture
+
+
 static func check(text: String, value: bool, on_change: Callable = Callable(), px := 12.0) -> CheckBox:
 	var node := CheckBox.new()
 	node.text = text
 	node.button_pressed = value
+	node.add_theme_icon_override("checked", _check_icon(true, false))
+	node.add_theme_icon_override("unchecked", _check_icon(false, false))
+	node.add_theme_icon_override("checked_disabled", _check_icon(true, true))
+	node.add_theme_icon_override("unchecked_disabled", _check_icon(false, true))
+	node.add_theme_constant_override("h_separation", 7)
 	node.focus_mode = Control.FOCUS_NONE
 	node.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	node.add_theme_font_override("font", UI.font(500))

@@ -22,6 +22,7 @@ var _timeline: VBoxContainer
 
 class Timeline extends Container:
 	var content: Control
+	var trail := 0.0
 
 	func _init() -> void:
 		mouse_filter = Control.MOUSE_FILTER_PASS
@@ -45,7 +46,7 @@ class Timeline extends Container:
 		if not content:
 			return
 		var top := UpdateKit.px(0.4)
-		draw_rect(Rect2(content.position.x + UpdateKit.px(1.06), top, 2.0, maxf(0.0, size.y - top)), LINE)
+		draw_rect(Rect2(content.position.x + UpdateKit.px(1.06), top, 2.0, maxf(0.0, size.y - top - trail)), LINE)
 
 
 class Item extends Container:
@@ -231,6 +232,7 @@ func _build() -> void:
 			_timeline.add_child(_card(updates[index], float(mini(order, 12)) * 50.0))
 	if not groups.is_empty():
 		_timeline.add_child(UpdateKit.gap(UpdateKit.px(0.9)))
+		(_timeline.get_parent() as Timeline).trail = UpdateKit.px(0.9)
 
 
 func _card(update: Dictionary, delay: float) -> Control:

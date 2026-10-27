@@ -89,13 +89,21 @@ func _fill(given: PackedVector2Array, color: Color) -> void:
 	if area < 0.0:
 		points.reverse()
 	var normals := PackedVector2Array()
+	var perimeter := 0.0
 	for index in range(count):
 		var edge := points[(index + 1) % count] - points[index]
 		var length := edge.length()
+		perimeter += length
 		normals.append(Vector2(edge.y, -edge.x) / length if length > 1e-6 else Vector2.ZERO)
+	var width := absf(area) / maxf(perimeter, 1e-6)
+	var shrink := 0.5
+	var ink := color
+	if width < 1.0:
+		shrink = 0.0
+		ink.a *= width / (width + 0.5)
 	var vertices := PackedVector2Array()
 	var colors := PackedColorArray()
-	var clear := Color(color, 0.0)
+	var clear := Color(ink, 0.0)
 	for index in range(count):
 		var before := normals[(index - 1 + count) % count]
 		var after := normals[index]
@@ -104,8 +112,8 @@ func _fill(given: PackedVector2Array, color: Color) -> void:
 		if sum.length() > 1e-6:
 			var direction := sum.normalized()
 			offset = direction * minf(0.5 / maxf(direction.dot(after), 0.25), 2.0)
-		vertices.append(points[index] - offset)
-		colors.append(color)
+		vertices.append(points[index] - offset * (shrink / 0.5))
+		colors.append(ink)
 		vertices.append(points[index] + offset)
 		colors.append(clear)
 	var indices := PackedInt32Array()

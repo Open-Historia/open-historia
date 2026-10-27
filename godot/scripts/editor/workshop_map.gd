@@ -16,10 +16,15 @@ signal move_done(index: int, from: Vector2, to: Vector2)
 signal war_drawn(kind: String, coords: Array)
 signal war_pick(kind: String, id: String)
 signal view_moved
+signal draw_point_requested(lonlat: Vector2, previous: Variant)
+signal draw_finished(ring: Array)
+signal vertex_edit(op: String, target: String, path: Array, index: int, lonlat: Vector2, alt: bool)
+signal hover_moved(lonlat: Vector2)
 
 const NEUTRAL := Color8(58, 60, 66)
 const UNIT_GLYPH := {"infantry": "I", "armor": "A", "air": "✈", "naval": "N", "artillery": "R", "garrison": "G"}
 const WORLD := 4096.0
+const REVIEW_COLORS := {"pending": Color("#f59e0b"), "conflict": Color("#f97316"), "accepted": Color("#22c55e"), "rejected": Color(148 / 255.0, 163 / 255.0, 184 / 255.0, 0.75), "proposed": Color("#38bdf8")}
 
 var map: MapView
 var tool := "select"
@@ -41,6 +46,18 @@ var layers := {"regions": true, "labels": true, "groups": true, "features": true
 var show_terrain := false
 var show_climate := false
 var war_selected := {}
+var review_tint := {}
+var review_outlines: Array = []
+var review_shapes: Array = []
+var review_points: Array = []
+var review_focus := {}
+var draw_points: Array = []
+var snap_marker: Variant = null
+var edit_rings: Array = []
+var diagnostics: Array = []
+var _edit_drag := {}
+var _edit_hover := {}
+var _halo: Variant = null
 var paint_owner := ""
 var paint_only := "*"
 var paint_color := NEUTRAL
@@ -62,6 +79,7 @@ var _sketch_kind := ""
 var _move_line := PackedVector2Array()
 var _dirty_fills := false
 var _label_names := {}
+var _last_view := Vector3.ZERO
 
 
 func setup(tiles_cache: String) -> void:
@@ -141,26 +159,27 @@ func fill_color(index: int) -> Color:
 	var color := NEUTRAL
 	if value >= 0:
 		color = Color8((value >> 16) & 255, (value >> 8) & 255, value & 255)
+	if review_tint.has(index):
+		color = color.lerp(Color(review_tint[index], 1.0), 0.15)
 	if selection.has(index):
 		color = color.lerp(Color(1, 1, 1), 0.38)
 	return color
 
 
 func apply_fills() -> void:
-	if not ready_to_draw or map._colors_image == null:
+	var count := mini(ids.size(), map.editor_region_count()) if ready_to_draw else 0
+	if count <= 0:
 		return
-	var count := mini(ids.size(), map._region_count)
-	var image := map._colors_image
+	var colors := PackedColorArray()
+	colors.resize(count)
 	for index in range(count):
-		image.set_pixel(index % MapView.COLUMNS, index / MapView.COLUMNS, fill_color(index))
-	map._colors_texture.update(image)
+		colors[index] = fill_color(index)
+	map.editor_set_region_colors(colors)
 	set_regions_visible(bool(layers.get("regions", true)))
 
 
 func set_regions_visible(on: bool) -> void:
-	for copy in map._copies:
-		if is_instance_valid(copy):
-			copy.visible = on
+	map.editor_set_regions_visible(on)
 
 
 func set_selection(indices: Array) -> void:
@@ -168,33 +187,34 @@ func set_selection(indices: Array) -> void:
 	selection = {}
 	for index in indices:
 		selection[int(index)] = true
-	if not ready_to_draw or map._colors_image == null:
+	if not ready_to_draw or map.editor_region_count() <= 0:
 		return
 	var touched := {}
 	for key in before:
 		touched[key] = true
 	for key in selection:
 		touched[key] = true
-	var image := map._colors_image
 	for key in touched:
-		var index := int(key)
-		if index < 0 or index >= map._region_count:
-			continue
-		image.set_pixel(index % MapView.COLUMNS, index / MapView.COLUMNS, fill_color(index))
-	map._colors_texture.update(image)
+		map.editor_set_region_color(int(key), fill_color(int(key)), false)
+	map.editor_commit_colors()
 
 
 func preview_paint(index: int) -> void:
-	if not ready_to_draw or index < 0 or index >= map._region_count:
+	if not ready_to_draw:
 		return
-	map._colors_image.set_pixel(index % MapView.COLUMNS, index / MapView.COLUMNS, paint_color)
+	map.editor_set_region_color(index, paint_color, false)
 	_dirty_fills = true
 
 
 func _process(_delta: float) -> void:
-	if _dirty_fills and map and map._colors_texture:
+	if _dirty_fills and map:
 		_dirty_fills = false
-		map._colors_texture.update(map._colors_image)
+		map.editor_commit_colors()
+	if map and map.camera and _overlay:
+		var view := Vector3(map.camera.position.x, map.camera.position.y, map.camera.zoom.x)
+		if view != _last_view:
+			_last_view = view
+			_overlay.queue_redraw()
 
 
 func redraw() -> void:
@@ -245,29 +265,23 @@ func fit_bounds(bounds: Array, max_level := 8.0, duration := 0.35) -> void:
 
 
 func locate(lonlat: Vector2, ol_level := 6.0) -> void:
-	var world := lonlat_to_world(lonlat)
-	map.camera.position = world
-	map.camera.zoom = Vector2.ONE * clampf(pow(2.0, ol_level) / 16.0, MapView.MIN_ZOOM, MapView.MAX_ZOOM)
-	map._after_camera_move()
+	map.editor_set_view(lonlat_to_world(lonlat), pow(2.0, ol_level) / 16.0)
 	_overlay.queue_redraw()
 	view_moved.emit()
 
 
 func start_view() -> void:
-	map.camera.position = lonlat_to_world(Vector2(0, 20))
-	map.camera.zoom = Vector2.ONE * clampf(pow(2.0, 2.1) / 16.0, MapView.MIN_ZOOM, MapView.MAX_ZOOM)
-	map._after_camera_move()
+	map.editor_set_view(lonlat_to_world(Vector2(0, 20)), pow(2.0, 2.1) / 16.0)
 
 
 func _pan(delta: Vector2) -> void:
-	map.camera.position -= delta / map.camera.zoom.x
-	map._after_camera_move()
+	map.editor_pan(delta)
 	_overlay.queue_redraw()
 	view_moved.emit()
 
 
 func _zoom(point: Vector2, factor: float) -> void:
-	map._zoom_at(point, factor)
+	map.editor_zoom_at(point, factor)
 	_overlay.queue_redraw()
 	view_moved.emit()
 
@@ -378,6 +392,11 @@ func _commit_sketch() -> void:
 
 
 func abort_sketch() -> bool:
+	if not draw_points.is_empty():
+		draw_points = []
+		snap_marker = null
+		_overlay.queue_redraw()
+		return true
 	if _sketch.is_empty():
 		return false
 	_sketch = []
@@ -387,6 +406,10 @@ func abort_sketch() -> bool:
 
 
 func undo_sketch_point() -> bool:
+	if not draw_points.is_empty():
+		draw_points.pop_back()
+		_overlay.queue_redraw()
+		return true
 	if _sketch.is_empty():
 		return false
 	_sketch.pop_back()
@@ -397,7 +420,100 @@ func undo_sketch_point() -> bool:
 
 
 func is_sketching() -> bool:
-	return not _sketch.is_empty()
+	return not _sketch.is_empty() or not draw_points.is_empty()
+
+
+func add_draw_points(points: Array) -> void:
+	for point in points:
+		if point is Array and (point as Array).size() >= 2:
+			draw_points.append([float(point[0]), float(point[1])])
+	_overlay.queue_redraw()
+
+
+func _finish_draw() -> void:
+	if draw_points.size() < 3:
+		return
+	var ring: Array = draw_points.duplicate(true)
+	draw_points = []
+	snap_marker = null
+	_overlay.queue_redraw()
+	draw_finished.emit(ring)
+
+
+func _edit_reach() -> float:
+	return 24.0 if tool == "border" else 18.0
+
+
+func _edit_hit(point: Vector2) -> Dictionary:
+	var reach := _edit_reach()
+	var best := {}
+	var best_distance := reach + 1.0
+	for entry in edit_rings:
+		var row: Dictionary = entry
+		var coords: Array = row.get("coords", [])
+		for index in range(maxi(0, coords.size() - 1)):
+			var c: Array = coords[index]
+			var at := screen_of(Vector2(float(c[0]), float(c[1])))
+			var distance := at.distance_to(point)
+			if distance <= reach and distance < best_distance:
+				best_distance = distance
+				best = {"op": "move", "target": str(row.get("id", "")), "path": row.get("path", []), "index": index, "screen": at}
+	if not best.is_empty():
+		return best
+	best_distance = reach + 1.0
+	for entry in edit_rings:
+		var row: Dictionary = entry
+		var coords: Array = row.get("coords", [])
+		for index in range(maxi(0, coords.size() - 1)):
+			var a: Array = coords[index]
+			var b: Array = coords[index + 1]
+			var sa := screen_of(Vector2(float(a[0]), float(a[1])))
+			var sb := screen_of(Vector2(float(b[0]), float(b[1])))
+			var near := Geometry2D.get_closest_point_to_segment(point, sa, sb)
+			var distance := near.distance_to(point)
+			if distance <= reach and distance < best_distance:
+				best_distance = distance
+				best = {"op": "insert", "target": str(row.get("id", "")), "path": row.get("path", []), "index": index, "screen": near}
+	return best
+
+
+func _ring_screen(row: Dictionary) -> PackedVector2Array:
+	var out := PackedVector2Array()
+	for c in row.get("coords", []):
+		out.append(screen_of(Vector2(float(c[0]), float(c[1]))))
+	return out
+
+
+func _shared_halo(point: Vector2) -> Variant:
+	if tool != "border":
+		return null
+	var ids: Array = []
+	for entry in edit_rings:
+		var id := str((entry as Dictionary).get("id", ""))
+		if not ids.has(id):
+			ids.append(id)
+	if ids.size() != 2:
+		return null
+	var reach := _edit_reach()
+	var hits: Array = []
+	for id in ids:
+		var best: Variant = null
+		var best_distance := INF
+		for entry in edit_rings:
+			var row: Dictionary = entry
+			if str(row.get("id", "")) != id:
+				continue
+			var line := _ring_screen(row)
+			for index in range(line.size() - 1):
+				var near := Geometry2D.get_closest_point_to_segment(point, line[index], line[index + 1])
+				var distance := near.distance_to(point)
+				if distance < best_distance:
+					best_distance = distance
+					best = near
+		if best == null or best_distance > reach:
+			return null
+		hits.append(best)
+	return ((hits[0] as Vector2) + (hits[1] as Vector2)) * 0.5
 
 
 func _handle(event: InputEvent) -> void:
@@ -437,6 +553,10 @@ func _press(button: InputEventMouseButton) -> void:
 	_drag_last = button.position
 	_drag_distance = 0.0
 	if button.double_click:
+		if tool == "draw":
+			_finish_draw()
+			_drag = ""
+			return
 		if tool == "select":
 			var hit := pick(button.position)
 			if hit >= 0:
@@ -459,6 +579,16 @@ func _press(button: InputEventMouseButton) -> void:
 		"feature-box":
 			_drag = "box"
 			_box = Rect2(button.position, Vector2.ZERO)
+		"modify", "border":
+			var handle := _edit_hit(button.position)
+			if handle.is_empty():
+				_drag = "click"
+			else:
+				_edit_drag = handle.duplicate()
+				_edit_drag["alt"] = button.alt_pressed
+				_edit_drag["start"] = button.position
+				_edit_drag["now"] = button.position
+				_drag = "vertex"
 		"move":
 			var hit := pick(button.position)
 			if hit >= 0:
@@ -475,6 +605,14 @@ func _motion(motion: InputEventMouseMotion) -> void:
 	if _drag.is_empty():
 		if tool in ["terrain", "fortification", "climate"] and not _sketch.is_empty():
 			_overlay.hover = motion.position
+			_overlay.queue_redraw()
+		elif tool == "draw":
+			_overlay.hover = motion.position
+			hover_moved.emit(world_to_lonlat(screen_to_world(motion.position)))
+			_overlay.queue_redraw()
+		elif tool in ["modify", "border"]:
+			_edit_hover = _edit_hit(motion.position)
+			_halo = _shared_halo(motion.position)
 			_overlay.queue_redraw()
 		return
 	_drag_distance += motion.relative.length()
@@ -494,6 +632,10 @@ func _motion(motion: InputEventMouseMotion) -> void:
 			_overlay.queue_redraw()
 		"move":
 			_move_line[1] = motion.position
+			_overlay.queue_redraw()
+		"vertex":
+			_edit_drag["now"] = motion.position
+			_halo = _shared_halo(motion.position)
 			_overlay.queue_redraw()
 	_drag_last = motion.position
 
@@ -539,6 +681,17 @@ func _release(button: InputEventMouseButton) -> void:
 		"click":
 			if _drag_distance < 5.0:
 				_click(button)
+		"vertex":
+			var handle := _edit_drag
+			_edit_drag = {}
+			_overlay.queue_redraw()
+			var moved := _drag_distance >= 2.0
+			var lonlat := world_to_lonlat(screen_to_world(button.position))
+			if bool(handle.get("alt", false)) and not moved:
+				if str(handle.get("op", "")) == "move":
+					vertex_edit.emit("remove", str(handle.get("target", "")), handle.get("path", []), int(handle.get("index", -1)), lonlat, true)
+			elif moved:
+				vertex_edit.emit(str(handle.get("op", "move")), str(handle.get("target", "")), handle.get("path", []), int(handle.get("index", -1)), lonlat, false)
 
 
 func _click(button: InputEventMouseButton) -> void:
@@ -582,6 +735,20 @@ func _click(button: InputEventMouseButton) -> void:
 				point_click.emit("unit", str(thing["id"]), point)
 				return
 			map_click.emit(world_to_lonlat(screen_to_world(point)), point, pick(point))
+		"draw":
+			if draw_points.size() >= 3:
+				var first: Array = draw_points[0]
+				if screen_of(Vector2(float(first[0]), float(first[1]))).distance_to(point) <= 12.0:
+					_finish_draw()
+					return
+			if draw_points.size() >= 2:
+				var last: Array = draw_points[draw_points.size() - 1]
+				if screen_of(Vector2(float(last[0]), float(last[1]))).distance_to(point) <= 12.0:
+					draw_points.pop_back()
+					_overlay.queue_redraw()
+					return
+			var previous: Variant = draw_points[draw_points.size() - 1] if not draw_points.is_empty() else null
+			draw_point_requested.emit(world_to_lonlat(screen_to_world(point)), previous)
 		"terrain", "fortification", "climate":
 			if _sketch.is_empty():
 				var shape := war_shape_near(point, [tool])
@@ -656,6 +823,14 @@ func _draw_overlay(canvas: Control) -> void:
 	if layers.get("fortifications", true):
 		for shape in war.get("fortifications", []):
 			_draw_shape(canvas, "fortification", shape)
+	if not review_outlines.is_empty() or not review_shapes.is_empty() or not review_points.is_empty() or not review_focus.is_empty():
+		_draw_review(canvas)
+	if not diagnostics.is_empty():
+		_draw_diagnostics(canvas)
+	if tool in ["modify", "border"] and not edit_rings.is_empty():
+		_draw_edit(canvas)
+	if tool == "draw":
+		_draw_region_sketch(canvas)
 	if layers.get("features", true) or not feature_selection.is_empty():
 		var taken_labels: Array[Rect2] = []
 		for feature in features:
@@ -701,6 +876,150 @@ func _draw_overlay(canvas: Control) -> void:
 			canvas.draw_polyline(line, Color(1, 1, 1, 0.95), 2.0, true)
 		for point in line:
 			canvas.draw_circle(point, 3.5, Color(1, 1, 1, 0.95))
+
+
+func _screen_ring(ring: Variant) -> PackedVector2Array:
+	var out := PackedVector2Array()
+	if not (ring is Array):
+		return out
+	for point in ring:
+		if point is Array and (point as Array).size() >= 2:
+			out.append(screen_of(Vector2(float(point[0]), float(point[1]))))
+	return out
+
+
+func _dashed(canvas: Control, line: PackedVector2Array, color: Color, width: float, dash: float) -> void:
+	for at in range(line.size() - 1):
+		canvas.draw_dashed_line(line[at], line[at + 1], color, width, dash, true, true)
+
+
+func _review_ring(canvas: Control, ring: Variant, color: Color, width: float, dash: float, fill: Color) -> void:
+	var line := _screen_ring(ring)
+	if line.size() < 2:
+		return
+	if fill.a > 0.0 and line.size() >= 4:
+		var area := line.slice(0, line.size() - 1)
+		if Geometry2D.triangulate_polygon(area).size() > 0:
+			canvas.draw_colored_polygon(area, fill)
+	if line[0].distance_to(line[line.size() - 1]) > 0.5:
+		line.append(line[0])
+	if dash > 0.0:
+		_dashed(canvas, line, color, width, dash)
+	else:
+		canvas.draw_polyline(line, color, width, true)
+
+
+func _review_point(canvas: Control, coord: Variant, state: String, focused: bool) -> void:
+	if not (coord is Array) or (coord as Array).size() < 2:
+		return
+	var at := screen_of(Vector2(float(coord[0]), float(coord[1])))
+	var color: Color = REVIEW_COLORS.get(state, REVIEW_COLORS["pending"])
+	var radius := 9.0 if focused else 7.0
+	canvas.draw_circle(at, radius, Color(148 / 255.0, 163 / 255.0, 184 / 255.0, 0.35) if state == "rejected" else Color(color, 0x55 / 255.0))
+	canvas.draw_arc(at, radius, 0.0, TAU, 28, Color(1, 1, 1) if focused else color, 3.0 if focused else 2.0, true)
+
+
+func _draw_diagnostics(canvas: Control) -> void:
+	for entry in diagnostics:
+		var item: Dictionary = entry
+		var gap := str(item.get("kind", "")) == "gap"
+		for ring in item.get("rings", []):
+			_review_ring(canvas, ring, Color(251 / 255.0, 191 / 255.0, 36 / 255.0) if gap else Color(248 / 255.0, 113 / 255.0, 113 / 255.0), 2.0, 0.0, Color(245 / 255.0, 158 / 255.0, 11 / 255.0, 0.42) if gap else Color(239 / 255.0, 68 / 255.0, 68 / 255.0, 0.42))
+
+
+func _vertex_handle(canvas: Control, at: Vector2) -> void:
+	canvas.draw_circle(at, 7.0, Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.95), true, -1.0, true)
+	canvas.draw_arc(at, 7.0, 0.0, TAU, 24, Color(1, 1, 1, 0.95), 2.0, true)
+
+
+func _draw_edit(canvas: Control) -> void:
+	for entry in edit_rings:
+		var line := _ring_screen(entry)
+		if line.size() >= 2:
+			canvas.draw_polyline(line, Color(1, 1, 1, 0.85), 1.5, true)
+	if not _edit_drag.is_empty():
+		var now: Vector2 = _edit_drag.get("now", Vector2.ZERO)
+		var row := {}
+		for entry in edit_rings:
+			var candidate: Dictionary = entry
+			if str(candidate.get("id", "")) == str(_edit_drag.get("target", "")) and str(candidate.get("path", [])) == str(_edit_drag.get("path", [])):
+				row = candidate
+		var coords: Array = row.get("coords", [])
+		var index := int(_edit_drag.get("index", -1))
+		var count := coords.size() - 1
+		if count >= 3 and index >= 0:
+			var a_index := index
+			var b_index := index + 1
+			if str(_edit_drag.get("op", "")) == "move":
+				a_index = (index - 1 + count) % count
+				b_index = (index + 1) % count
+			var a: Array = coords[a_index]
+			var b: Array = coords[b_index]
+			var sa := screen_of(Vector2(float(a[0]), float(a[1])))
+			var sb := screen_of(Vector2(float(b[0]), float(b[1])))
+			canvas.draw_dashed_line(sa, now, Color(1, 1, 1, 0.9), 1.5, 4.0, true, true)
+			canvas.draw_dashed_line(now, sb, Color(1, 1, 1, 0.9), 1.5, 4.0, true, true)
+		_vertex_handle(canvas, now)
+	elif not _edit_hover.is_empty():
+		_vertex_handle(canvas, _edit_hover.get("screen", Vector2.ZERO))
+	if _halo is Vector2:
+		canvas.draw_circle(_halo, 10.0, Color(34 / 255.0, 211 / 255.0, 238 / 255.0, 0.25), true, -1.0, true)
+		canvas.draw_arc(_halo, 10.0, 0.0, TAU, 28, Color("#22d3ee"), 2.5, true)
+
+
+func _draw_region_sketch(canvas: Control) -> void:
+	var line := PackedVector2Array()
+	for point in draw_points:
+		var p: Array = point
+		line.append(screen_of(Vector2(float(p[0]), float(p[1]))))
+	var hover: Vector2 = _overlay.hover if _overlay else Vector2.ZERO
+	if snap_marker is Vector2:
+		hover = screen_of(snap_marker)
+	if line.size() >= 2:
+		var area := line.duplicate()
+		if hover != Vector2.ZERO:
+			area.append(hover)
+		if area.size() >= 3 and Geometry2D.triangulate_polygon(area).size() > 0:
+			canvas.draw_colored_polygon(area, Color(1, 1, 1, 0.12))
+	if not line.is_empty():
+		var path := line.duplicate()
+		if hover != Vector2.ZERO:
+			path.append(hover)
+		if path.size() >= 2:
+			canvas.draw_polyline(path, Color(1, 1, 1, 0.95), 2.0, true)
+		if line.size() >= 2 and hover != Vector2.ZERO:
+			canvas.draw_dashed_line(hover, line[0], Color(1, 1, 1, 0.5), 1.5, 5.0, true, true)
+		for point in line:
+			canvas.draw_circle(point, 3.5, Color(1, 1, 1, 0.95))
+	if snap_marker is Vector2:
+		var at := screen_of(snap_marker)
+		canvas.draw_circle(at, 6.0, Color(1, 1, 1, 0.2), true, -1.0, true)
+		canvas.draw_arc(at, 6.0, 0.0, TAU, 20, Color(1, 1, 1, 0.95), 2.0, true)
+
+
+func _draw_review(canvas: Control) -> void:
+	for entry in review_outlines:
+		var outline: Dictionary = entry
+		var state := str(outline.get("state", "pending"))
+		var dash := 2.0 if state == "rejected" else (5.0 if state in ["pending", "conflict"] else 0.0)
+		_review_ring(canvas, outline.get("ring"), REVIEW_COLORS.get(state, REVIEW_COLORS["pending"]), 2.0, dash, Color(0, 0, 0, 0))
+	for entry in review_shapes:
+		var shape: Dictionary = entry
+		for ring in shape.get("rings", []):
+			_review_ring(canvas, ring, REVIEW_COLORS["proposed"], 2.5, 6.5, Color(56 / 255.0, 189 / 255.0, 248 / 255.0, 0.12))
+	for entry in review_points:
+		var point: Dictionary = entry
+		_review_point(canvas, point.get("coord"), str(point.get("state", "pending")), false)
+	if review_focus.is_empty():
+		return
+	var focus_state := str(review_focus.get("state", "pending"))
+	for ring in review_focus.get("outlines", []):
+		_review_ring(canvas, ring, Color(1, 1, 1), 3.5, 0.0, Color(0, 0, 0, 0))
+	for rings in review_focus.get("shapes", []):
+		for ring in rings:
+			_review_ring(canvas, ring, REVIEW_COLORS["proposed"], 3.5, 6.5, Color(56 / 255.0, 189 / 255.0, 248 / 255.0, 0.12))
+	for coord in review_focus.get("points", []):
+		_review_point(canvas, coord, focus_state, true)
 
 
 func _draw_shape(canvas: Control, kind: String, shape: Variant) -> void:
