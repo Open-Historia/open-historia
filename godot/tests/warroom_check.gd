@@ -8,6 +8,7 @@ var room: WarRoom
 var button: WarRoomButton
 var reports: AfterActionReports
 var forces: ForcesPanel
+var tilt := Vector2.ZERO
 
 
 func _initialize() -> void:
@@ -16,6 +17,7 @@ func _initialize() -> void:
 	main = (load("res://main.tscn") as PackedScene).instantiate()
 	root.mouse_passthrough = true
 	root.add_child(main)
+	_read_tilt()
 	_run.call_deferred()
 
 
@@ -71,6 +73,13 @@ func _shows(node: Node, text: String) -> bool:
 		if entry.find(text) >= 0:
 			return true
 	return false
+
+
+func _war_layers() -> WarLayers:
+	for child in main.map_view.get_children():
+		if child is WarLayers and (child as WarLayers).overlay != null:
+			return child
+	return null
 
 
 func _dump(label: String, node: Node) -> void:
@@ -373,12 +382,24 @@ func _run() -> void:
 				city_clashes += 1
 	_check("city names yield to the War Room's names", city_clashes == 0, "%d clashes, %d city names shown" % [city_clashes, main.map_view.city_label_rects.size()])
 	var saved: Array[Rect2] = main.map_view.war_label_rects.duplicate()
+	var war_layers := _war_layers()
+	var held: Array[Node] = []
+	if war_layers:
+		held = [war_layers, war_layers.overlay]
+	for node in held:
+		node.set_process(false)
 	var cover: Array[Rect2] = [Rect2(Vector2(-10000, -10000), Vector2(20000, 20000))]
 	main.map_view.war_set_label_rects(cover)
+	if war_layers:
+		war_layers.overlay._layout_dirty = false
 	room.map_layer.queue_redraw()
 	await _frames(2)
 	_check("a War Room name over a war label placed before it is hidden", room.map_layer.last_labels.is_empty(), ", ".join(room.map_layer.last_labels))
+	for node in held:
+		node.set_process(true)
 	main.map_view.war_set_label_rects(saved)
+	if war_layers:
+		war_layers.overlay.redraw_base()
 	room.map_layer.queue_redraw()
 	await _frames(2)
 	_check("the names come back when the war label goes", "Operation Black Forest" in room.map_layer.last_labels, ", ".join(room.map_layer.last_labels))
@@ -518,3 +539,21 @@ func _finish(code: int) -> void:
 	for i in range(2):
 		await process_frame
 	quit(code)
+
+
+func _read_tilt() -> void:
+	var spec := OS.get_environment("OH_MAP_TILT").split(",", false)
+	if spec.size() >= 2:
+		tilt = Vector2(float(spec[0]), float(spec[1]))
+		process_frame.connect(_keep_tilt)
+
+
+func _keep_tilt() -> void:
+	var view: Variant = main.get("map_view") if main != null and is_instance_valid(main) else null
+	if not (view is MapView):
+		return
+	var map := view as MapView
+	if map.extras_ready() and map.extras != null and is_zero_approx(map.pitch) and is_zero_approx(map.bearing):
+		map.pitch = tilt.x
+		map.bearing = tilt.y
+		map.call("_after_camera_move")

@@ -6,13 +6,16 @@ var started := 0
 var war: WarLayers
 var picked := ""
 var failures: PackedStringArray = []
+var tilt := Vector2.ZERO
 
 
 func _initialize() -> void:
 	shots = OS.get_environment("OH_SHOTS")
 	started = Time.get_ticks_msec()
 	main = (load("res://main.tscn") as PackedScene).instantiate()
+	root.mouse_passthrough = true
 	root.add_child(main)
+	_read_tilt()
 	_run.call_deferred()
 
 
@@ -404,3 +407,21 @@ func _finish(code: int) -> void:
 	main.engine.stop()
 	await _wait(0.5)
 	quit(code)
+
+
+func _read_tilt() -> void:
+	var spec := OS.get_environment("OH_MAP_TILT").split(",", false)
+	if spec.size() >= 2:
+		tilt = Vector2(float(spec[0]), float(spec[1]))
+		process_frame.connect(_keep_tilt)
+
+
+func _keep_tilt() -> void:
+	var view: Variant = main.get("map_view") if main != null and is_instance_valid(main) else null
+	if not (view is MapView):
+		return
+	var map := view as MapView
+	if map.extras_ready() and map.extras != null and is_zero_approx(map.pitch) and is_zero_approx(map.bearing):
+		map.pitch = tilt.x
+		map.bearing = tilt.y
+		map.call("_after_camera_move")

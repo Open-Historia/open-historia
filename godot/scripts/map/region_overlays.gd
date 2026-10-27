@@ -4,6 +4,7 @@ extends Node
 const COLUMNS := 1024
 const STRIPE_OPACITY := 0.22
 const GROUP_TINT_OPACITY := 0.2
+const GROUP_FADE_SECONDS := 0.3
 const WORKSHOP_ZOOM_OFFSET := 1.0
 
 const UNDER_SHADER := """
@@ -186,6 +187,9 @@ var _line_mesh: ArrayMesh
 var _labels: GroupLabels
 var _has_claims := false
 var _has_groups := false
+var _group_fade := 0.0
+var _group_tween: Tween
+var _group_data := false
 var _has_ice := false
 var _type_styles: Array = []
 var _typed: Array = []
@@ -276,7 +280,7 @@ func _mount() -> void:
 		var node := MeshInstance2D.new()
 		node.mesh = fill
 		node.material = _under_material
-		node.visible = _has_claims or _has_groups
+		node.visible = _has_claims or _group_fade > 0.0
 		(slot as Node2D).add_child(node)
 		_under_nodes.append(node)
 	for slot in extras.call("slots", "ice"):
@@ -317,7 +321,7 @@ func set_world(next: Dictionary) -> void:
 		material.set_shader_parameter("province_outlines", bool(world.get("worldKnown", false)))
 	if _has_groups:
 		_load_group_areas()
-	else:
+	elif _group_fade <= 0.0:
 		_clear_lines()
 
 
@@ -351,7 +355,7 @@ func _apply_claims(claims: Array, shown: bool) -> void:
 	_under_material.set_shader_parameter("show_stripes", _has_claims)
 	for node in _under_nodes:
 		if is_instance_valid(node):
-			node.visible = _has_claims or _has_groups
+			node.visible = _has_claims or _group_fade > 0.0
 
 
 func _apply_groups(groups: Array, members: Array, shown: bool) -> void:
@@ -374,12 +378,36 @@ func _apply_groups(groups: Array, members: Array, shown: bool) -> void:
 		_group_regions.set_pixel(index % COLUMNS, index / COLUMNS, Color(colour.r, colour.g, colour.b, 1.0))
 	_group_regions_texture.update(_group_regions)
 	_group_colors_texture.update(_group_colors)
-	_has_groups = shown and not members.is_empty() and not groups.is_empty()
-	_under_material.set_shader_parameter("show_groups", _has_groups)
+	var had_data := _group_data
+	_group_data = not members.is_empty() and not groups.is_empty()
+	_has_groups = shown and _group_data
+	_fade_groups(1.0 if _has_groups else 0.0, had_data and _group_data)
+
+
+func _fade_groups(target: float, eased: bool) -> void:
+	if _group_tween and _group_tween.is_valid():
+		_group_tween.kill()
+	if not eased or is_equal_approx(_group_fade, target) or not is_inside_tree():
+		_set_group_fade(target)
+		return
+	_group_tween = create_tween().set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
+	_group_tween.tween_method(_set_group_fade, _group_fade, target, GROUP_FADE_SECONDS)
+
+
+func _set_group_fade(value: float) -> void:
+	_group_fade = value
+	var on := value > 0.0
+	_under_material.set_shader_parameter("show_groups", on)
+	_under_material.set_shader_parameter("group_opacity", GROUP_TINT_OPACITY * value)
+	for material in [_casing_material, _outline_material]:
+		(material as ShaderMaterial).set_shader_parameter("shown", value)
 	for node in _under_nodes:
 		if is_instance_valid(node):
-			node.visible = _has_claims or _has_groups
-	_labels.visible = _has_groups
+			node.visible = _has_claims or on
+	_labels.modulate.a = value
+	_labels.visible = on
+	if not on and not _has_groups:
+		_clear_lines()
 
 
 func _apply_ice(frozen: Array) -> void:
@@ -662,8 +690,7 @@ class GroupLabels extends Control:
 			size = lerpf(12.5, 15.0, (level - 5.0) / 3.0)
 		else:
 			size = 15.0
-		var font_size := int(roundf(size))
-		var spacing := size * 0.08
+		var base_size := size
 		var view := get_viewport_rect().size
 		var taken: Array[Rect2] = []
 		var above: Array[Rect2] = []
@@ -678,6 +705,12 @@ class GroupLabels extends Control:
 			var screen := map_view.world_to_screen(point)
 			if screen.x < -200.0 or screen.y < -100.0 or screen.x > view.x + 200.0 or screen.y > view.y + 100.0:
 				continue
+			var ratio := map_view.label_perspective(point)
+			if ratio < MapView.LABEL_PERSPECTIVE_CUTOFF:
+				continue
+			size = base_size * ratio
+			var font_size := maxi(1, int(roundf(size)))
+			var spacing := size * 0.08
 			var lines := _wrap(str(label.get("group", "")).to_upper(), font_size, spacing, size * 10.0)
 			var line_height := size * 1.2
 			var widths: Array[float] = []

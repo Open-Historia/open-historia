@@ -25,6 +25,9 @@ const FLAT_TEXTURE_SCALE := 1.75
 const LAT_MARGIN := 0.03
 const NEAR_PITCH_DEG := 20.0
 const NEAR_SPLIT := 0.3
+const FLAT_SPACE := Color(11 / 255.0, 16 / 255.0, 23 / 255.0)
+const SKY_HORIZON_BLEND := 0.8
+const MAX_MERCATOR_HORIZON_ANGLE := 89.25
 
 const SPHERE_SHADER := """
 shader_type canvas_item;
@@ -52,6 +55,11 @@ uniform float texel_world = 1.0;
 uniform float near_texel_world = 1.0;
 uniform float world_width = 4096.0;
 uniform bool clamp_poles = true;
+uniform bool wrap_world = true;
+uniform vec3 sky_color = vec3(0.533333, 0.776471, 0.988235);
+uniform vec3 horizon_color = vec3(1.0, 1.0, 1.0);
+uniform float horizon_y = -100000.0;
+uniform float sky_horizon_px = 360.0;
 
 const float PI_F = 3.14159265358979;
 const float MERC_LIMIT = 85.0511287798066;
@@ -165,7 +173,13 @@ void fragment() {
 				w += newton_step(w, px - s);
 			}
 		}
-		base = vec4(sample_map(w), 1.0);
+		bool outside = !clamp_poles && (w.y < 0.0 || w.y > world_width || (!wrap_world && (w.x < 0.0 || w.x > world_width)));
+		base = outside ? vec4(0.0) : vec4(sample_map(w), 1.0);
+		float above = horizon_y - px.y;
+		if (above > 0.0) {
+			vec3 sky = above < sky_horizon_px ? mix(sky_color, horizon_color, pow(1.0 - above / sky_horizon_px, 2.0)) : sky_color;
+			base = vec4(sky, 1.0 - globeness);
+		}
 	}
 	COLOR = base;
 }
@@ -578,6 +592,10 @@ static func distance_of_angles(a: float, b: float) -> float:
 	var x := fposmod(a, TAU)
 	var y := fposmod(b, TAU)
 	return minf(absf(x - y), minf(absf(x - y + TAU), absf(x - y - TAU)))
+
+
+static func mercator_horizon(focal: float, pitch_deg: float) -> float:
+	return focal * minf(tan(deg_to_rad(90.0 - pitch_deg)) * 0.85, tan(deg_to_rad(MAX_MERCATOR_HORIZON_ANGLE - pitch_deg)))
 
 
 static func globe_radius(zoom: float, lat: float) -> float:
@@ -1022,6 +1040,13 @@ func after_camera_move() -> void:
 	_light_material.set_shader_parameter("sun_dir", _sun_dir)
 	_light_material.set_shader_parameter("render_pixel", 1.0 / scale)
 	_light_material.set_shader_parameter("terrain_radii", TERRAIN_EXAGGERATION * MAX_TERRAIN_ELEVATION_M / EARTH_RADIUS_M if terrain_on else 0.0)
+	var wrapped := true
+	if map_view.basemap and map_view.basemap.has_method("wrap_enabled"):
+		wrapped = bool(map_view.basemap.call("wrap_enabled"))
+	_material.set_shader_parameter("wrap_world", wrapped)
+	_material.set_shader_parameter("horizon_y", size.y * 0.5 - mercator_horizon(float(frame["focal"]), rad_to_deg(pitch)))
+	_material.set_shader_parameter("sky_horizon_px", SKY_HORIZON_BLEND * size.y * 0.5)
+	_space.color = Color.BLACK if enabled else FLAT_SPACE
 	labels.sync(rect)
 	_stars.queue_redraw()
 	_place_sun(frame)

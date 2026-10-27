@@ -13,6 +13,11 @@ const PLACEHOLDER_MIN_ZOOM := 9
 const DEFAULT_ID := "ocean"
 const BASE_GREY := Color8(11, 16, 23)
 const CUSTOM_SEA := Color8(11, 26, 43)
+const COVER_FOV_DEG := 36.86989764584402
+const COVER_MAX_ZOOM_LEVELS := 9.314
+const COVER_TILE_COUNT_RATIO := 3.0
+const COVER_MAX_ZOOM := 24
+const MAX_MERCATOR_HORIZON_ANGLE := 89.25
 
 const SERVICES := {
 	"atlas-relief": ["Ocean/World_Ocean_Base", 13],
@@ -173,6 +178,7 @@ var _custom: Node2D
 var _queue: Array[Array] = []
 var _active := 0
 var _view := [Vector2(2048, 2048), 0.4, Vector2(1440, 900)]
+var cover: Dictionary = {}
 var _terrain := true
 var _wrap := true
 var _offline := false
@@ -371,11 +377,152 @@ func _update_layers() -> void:
 	var view_level := level
 	if camera:
 		view_level = log(8.0 * camera.zoom.x) / log(2.0)
+	cover = _covering_tiles()
 	for layer in _layers:
 		layer.update(centre, zoom, size, view_level)
 	_line_material.set_shader_parameter("pixel_world", 1.0 / zoom)
 	_pump()
 	_report_loading()
+
+
+func _covering_tiles() -> Dictionary:
+	var map := get_parent() as MapView
+	if map == null or map.extras == null or not map.extras_ready():
+		return {}
+	var globe: Variant = map.extras.get("globe")
+	if globe is GlobeView and (globe as GlobeView).globeness() > 0.0:
+		return {}
+	var pitch_deg := map.pitch
+	var bearing_deg := map.bearing
+	var max_constant_pitch := clampf(78.5 - COVER_FOV_DEG * 0.5, 0.0, 60.0)
+	var variable := (_terrain and _style_kind() == "builtin" and not _offline) or pitch_deg > max_constant_pitch
+	if is_zero_approx(pitch_deg) and is_zero_approx(bearing_deg) and not variable:
+		return {}
+	var size := map.get_viewport_rect().size
+	if size.x <= 0.0 or size.y <= 0.0:
+		return {}
+	var centre := map.camera.position
+	var px_per_world := map.camera.zoom.x
+	var level := map.zoom_level()
+	var focal := 0.5 / GlobeView.TAN_HALF * size.y
+	var pitch := deg_to_rad(pitch_deg)
+	var bearing := deg_to_rad(bearing_deg)
+	var up := Vector2(sin(bearing), -cos(bearing))
+	var quad := PackedVector2Array()
+	for corner in [Vector2.ZERO, Vector2(size.x, 0.0), size, Vector2(0.0, size.y)]:
+		quad.append(ground_point(corner, size, centre, px_per_world, bearing_deg, pitch_deg))
+	var quad_low := quad[0]
+	var quad_high := quad[0]
+	for point in quad:
+		quad_low = quad_low.min(point)
+		quad_high = quad_high.max(point)
+	var camera_ground := (centre - up * (focal * sin(pitch) / px_per_world)) / world_width
+	var distance_z := focal * cos(pitch) / px_per_world / world_width
+	var distance_centre := focal / px_per_world / world_width
+	var requested := level + 1.0
+	var nominal := maxi(0, roundi(requested))
+	var behaviour := cover_loading_behaviour()
+	var tiles: Array = []
+	var stack: Array[Array] = []
+	if _wrap:
+		for wrap in range(1, 4):
+			stack.append([0, 0, 0, -wrap])
+			stack.append([0, 0, 0, wrap])
+	stack.append([0, 0, 0, 0])
+	while not stack.is_empty():
+		var node: Array = stack.pop_back()
+		var zoom: int = node[0]
+		var x: int = node[1]
+		var y: int = node[2]
+		var wrap: int = node[3]
+		var count := 1 << zoom
+		var low := Vector2((float(wrap) + float(x) / count) * world_width, float(y) / count * world_width)
+		var high := low + Vector2.ONE * world_width / count
+		if not quad_meets(quad, quad_low, quad_high, low, high):
+			continue
+		var desired := nominal
+		if variable:
+			var nearest := camera_ground.clamp(low / world_width, high / world_width)
+			var distance_2d := nearest.distance_to(camera_ground)
+			desired = maxi(0, roundi(cover_tile_zoom(requested, distance_2d, distance_z, distance_centre, behaviour)))
+		var target := mini(desired, COVER_MAX_ZOOM)
+		if zoom >= target:
+			var middle := (low + high) * 0.5 / world_width
+			tiles.append([zoom, x + wrap * count, y, desired, middle.distance_squared_to(centre / world_width)])
+			continue
+		for child in range(4):
+			stack.append([zoom + 1, (x << 1) + (child % 2), (y << 1) + (child >> 1), wrap])
+	tiles.sort_custom(func(a: Array, b: Array) -> bool: return float(a[4]) > float(b[4]))
+	return {"tiles": tiles, "nominal": nominal, "variable": variable}
+
+
+static func ground_point(screen: Vector2, size: Vector2, centre: Vector2, px_per_world: float, bearing_deg: float, pitch_deg: float) -> Vector2:
+	var focal := 0.5 / GlobeView.TAN_HALF * size.y
+	var pitch := deg_to_rad(pitch_deg)
+	var bearing := deg_to_rad(bearing_deg)
+	var right := Vector2(cos(bearing), sin(bearing))
+	var up := Vector2(sin(bearing), -cos(bearing))
+	var sx := screen.x - size.x * 0.5
+	var sy := size.y * 0.5 - screen.y
+	var denominator := maxf(focal * cos(pitch) - sy * sin(pitch), 1e-3)
+	var v := sy * focal / denominator
+	var a := sx * (focal + v * sin(pitch)) / focal
+	return centre + (right * a + up * v) / px_per_world
+
+
+static func quad_meets(quad: PackedVector2Array, quad_low: Vector2, quad_high: Vector2, low: Vector2, high: Vector2) -> bool:
+	if quad_high.x < low.x or quad_low.x > high.x or quad_high.y < low.y or quad_low.y > high.y:
+		return false
+	var corners := [low, Vector2(high.x, low.y), high, Vector2(low.x, high.y)]
+	for index in range(quad.size()):
+		var edge := quad[(index + 1) % quad.size()] - quad[index]
+		var axis := Vector2(-edge.y, edge.x)
+		var quad_min := INF
+		var quad_max := -INF
+		for point in quad:
+			var along := point.dot(axis)
+			quad_min = minf(quad_min, along)
+			quad_max = maxf(quad_max, along)
+		var rect_min := INF
+		var rect_max := -INF
+		for corner: Vector2 in corners:
+			var along := corner.dot(axis)
+			rect_min = minf(rect_min, along)
+			rect_max = maxf(rect_max, along)
+		if rect_max < quad_min or rect_min > quad_max:
+			return false
+	return true
+
+
+static func cover_loading_behaviour() -> float:
+	var ratio := cos(deg_to_rad(MAX_MERCATOR_HORIZON_ANGLE - COVER_FOV_DEG)) / cos(deg_to_rad(MAX_MERCATOR_HORIZON_ANGLE))
+	return 2.0 * ((COVER_MAX_ZOOM_LEVELS - 1.0) / (log(ratio) / log(2.0)) - 1.0)
+
+
+static func _cos_power_integral(power: float, from: float, to: float) -> float:
+	var steps := 10
+	var total := 0.0
+	var step := (to - from) / steps
+	for index in range(steps):
+		var at := from + (index + 0.5) / steps * (to - from)
+		total += step * pow(cos(at), power)
+	return total
+
+
+static func cover_tile_zoom(requested: float, distance_2d: float, distance_z: float, distance_centre: float, behaviour: float) -> float:
+	var half_fov := deg_to_rad(COVER_FOV_DEG * 0.5)
+	var centre_pitch := acos(clampf(distance_z / distance_centre, -1.0, 1.0))
+	var flat_count := 2.0 * _cos_power_integral(behaviour - 1.0, 0.0, half_fov)
+	var highest := minf(deg_to_rad(MAX_MERCATOR_HORIZON_ANGLE), centre_pitch + half_fov)
+	var lowest := minf(highest, centre_pitch - half_fov)
+	var tile_count := _cos_power_integral(behaviour - 1.0, lowest, highest)
+	var tile_pitch := atan(distance_2d / distance_z)
+	var distance_3d := sqrt(distance_2d * distance_2d + distance_z * distance_z)
+	var zoom := requested
+	zoom += log(distance_centre / distance_3d / maxf(0.5, cos(half_fov))) / log(2.0)
+	zoom += behaviour * (log(cos(tile_pitch)) / log(2.0)) / 2.0
+	zoom -= (log(maxf(1.0, tile_count / flat_count / COVER_TILE_COUNT_RATIO)) / log(2.0)) / 2.0
+	return zoom
 
 
 func _report_loading() -> void:
@@ -456,22 +603,24 @@ func _fetch(layer: TileLayer, key: String, url: String) -> void:
 	var request := HTTPRequest.new()
 	request.timeout = 20.0
 	add_child(request)
+	var layer_ref: WeakRef = weakref(layer)
 	request.request_completed.connect(func(result: int, code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
 		_active -= 1
 		request.queue_free()
-		if not is_instance_valid(layer):
+		var owner_layer := layer_ref.get_ref() as TileLayer
+		if owner_layer == null or not is_instance_valid(owner_layer):
 			_pump()
 			return
-		layer.pending.erase(key)
+		owner_layer.pending.erase(key)
 		var texture: Texture2D = null
 		if result == HTTPRequest.RESULT_SUCCESS and code == 200:
-			texture = _decode(layer, body)
+			texture = _decode(owner_layer, body)
 		if texture:
-			_store(layer, key, body)
-			_accept(layer, key, texture, body)
+			_store(owner_layer, key, body)
+			_accept(owner_layer, key, texture, body)
 		else:
-			layer.on_loaded(key, null, PackedByteArray())
-			if layer.fixed_zoom == 2 and layer.source == "esri" and not _offline and result != HTTPRequest.RESULT_SUCCESS:
+			owner_layer.on_loaded(key, null, PackedByteArray())
+			if owner_layer.fixed_zoom == 2 and owner_layer.source == "esri" and not _offline and result != HTTPRequest.RESULT_SUCCESS:
 				_offline = true
 				_rebuild_layers.call_deferred()
 		_pump())
@@ -731,6 +880,9 @@ class TileLayer extends Node2D:
 		if material_template:
 			material_template.set_shader_parameter("opacity", opacity)
 		visible = opacity > 0.0 or dem
+		if not basemap.cover.is_empty():
+			_update_cover(basemap.cover)
+			return
 		var tile_zoom := tile_zoom_for(zoom)
 		var overscaled := maxi(int(roundf(log(16.0 * zoom) / log(2.0))), tile_zoom)
 		var count := 1 << tile_zoom
@@ -779,6 +931,72 @@ class TileLayer extends Node2D:
 				if material:
 					material.set_shader_parameter("dem_zoom", float(overscaled))
 		current_zoom = tile_zoom
+
+	func _update_cover(cover: Dictionary) -> void:
+		var limit := fixed_zoom if fixed_zoom >= 0 else max_zoom
+		var world_width := basemap.world_width
+		var chosen := {}
+		var order: Array[String] = []
+		for entry: Array in cover["tiles"]:
+			var z := int(entry[0])
+			var x := int(entry[1])
+			var y := int(entry[2])
+			var deep := int(entry[3])
+			if z > limit:
+				x = x >> (z - limit)
+				y = y >> (z - limit)
+				z = limit
+			if z < min_zoom:
+				continue
+			var id := "%d/%d/%d" % [z, x, y]
+			if chosen.has(id):
+				var known: Array = chosen[id]
+				known[3] = maxi(int(known[3]), deep)
+				continue
+			chosen[id] = [z, x, y, deep]
+			order.append(id)
+		_wanted.clear()
+		var missing: Array[Rect2] = []
+		for id in order:
+			var item: Array = chosen[id]
+			var z: int = item[0]
+			var x: int = item[1]
+			var y: int = item[2]
+			var count := 1 << z
+			var wrapped := posmod(x, count)
+			if not _inside_bounds(z, wrapped, y):
+				continue
+			var key := "%d/%d/%d" % [z, wrapped, y]
+			var place := "%s@%d" % [key, x]
+			_wanted[place] = true
+			var span := world_width / count
+			var overscaled := maxi(int(item[3]), z)
+			if sprites.has(place):
+				if dem:
+					var material := (sprites[place] as Sprite2D).material as ShaderMaterial
+					if material:
+						material.set_shader_parameter("dem_zoom", float(overscaled))
+				continue
+			if textures.has(key) or placeholders.has(key):
+				_place(place, key, Vector2(x * span, y * span), span, z, overscaled)
+			else:
+				if not pending.has(key) and not waiting.has(key):
+					basemap.request_tile(self, key)
+				missing.append(Rect2(x * span, y * span, span, span))
+		for place in sprites.keys():
+			if _wanted.has(place):
+				continue
+			var sprite: Sprite2D = sprites[place]
+			var area := Rect2(sprite.position, Vector2.ONE * world_width / float(1 << int(sprite.get_meta("zoom"))))
+			var held := false
+			for gap in missing:
+				if gap.intersects(area):
+					held = true
+					break
+			if not held:
+				sprite.queue_free()
+				sprites.erase(place)
+		current_zoom = clampi(int(cover["nominal"]), min_zoom, limit)
 
 	func _inside_bounds(z: int, x: int, y: int) -> bool:
 		if bounds.size == Vector2.ZERO:

@@ -669,16 +669,21 @@ class CityLayer extends Control:
 			var screen := map.world_to_screen(_points[index])
 			if screen.x < -40 or screen.y < -20 or screen.x > view.x + 40 or screen.y > view.y + 20:
 				continue
+			var ratio := map.label_perspective(_points[index])
+			if ratio < MapView.LABEL_PERSPECTIVE_CUTOFF:
+				continue
+			var circle_scale := 1.0 / map.label_depth(_points[index])
 			if capital:
-				draw_texture(star, screen - Vector2(6.5, 6.5))
+				var star_size := 13.0 * ratio
+				draw_texture_rect(star, Rect2(screen - Vector2(star_size, star_size) * 0.5, Vector2(star_size, star_size)), false)
 			else:
-				draw_circle(screen, 2.6, Color(0.04, 0.05, 0.07, 0.9))
-				draw_circle(screen, 1.8, Color(0.98, 0.98, 0.96))
+				draw_circle(screen, 2.6 * circle_scale, Color(0.04, 0.05, 0.07, 0.9))
+				draw_circle(screen, 1.8 * circle_scale, Color(0.98, 0.98, 0.96))
 			if capital or level >= needed + 0.6:
-				var size := 11 if capital else 10
+				var size := maxi(1, roundi((11.0 if capital else 10.0) * ratio))
 				var text := str(city[0])
 				var width := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, size).x
-				var at := screen + Vector2(-width * 0.5, 15)
+				var at := screen + Vector2(-width * 0.5, 15.0 * ratio)
 				var box := Rect2(at - Vector2(2, size), Vector2(width + 4, size + 4))
 				var clash := false
 				for other in taken:
@@ -1040,3 +1045,28 @@ func view_pan(screen_delta: Vector2, around := Vector2(-1.0, -1.0)) -> void:
 		return
 	camera.position -= screen_delta / camera.zoom.x
 	_after_camera_move()
+
+
+const LABEL_PERSPECTIVE_CUTOFF := 0.6
+
+
+func label_depth(world: Vector2) -> float:
+	if not globe_on or extras == null:
+		return 1.0
+	var globe_node: Variant = extras.get("globe")
+	if globe_node is GlobeView and (globe_node as GlobeView).active:
+		return maxf((globe_node as GlobeView).depth_at(world), 0.000001)
+	return 1.0
+
+
+func label_perspective(world: Vector2) -> float:
+	return clampf(0.5 + 0.5 / label_depth(world), 0.0, 4.0)
+
+
+func label_plane_scale(world: Vector2) -> float:
+	return clampf(0.5 + 0.5 * label_depth(world), 0.0, 4.0)
+
+
+func label_plane_frame(world: Vector2, angle: float, scale: float) -> Transform2D:
+	var frame := screen_frame_at(world)
+	return Transform2D(frame.x, frame.y, frame.origin) * Transform2D(angle, Vector2(scale, scale), 0.0, Vector2.ZERO)

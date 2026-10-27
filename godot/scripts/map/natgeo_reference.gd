@@ -932,6 +932,7 @@ class NatGeoLabels extends Control:
 		var px_world: float = label["px_world"]
 		var paths_all: Array[PackedVector2Array] = label["paths"]
 		var projected := {}
+		var world_paths := {}
 		for anchor in label["anchors"]:
 			var path_index := int(anchor["path"])
 			var world: Vector2 = origin + (anchor["point"] as Vector2) * px_world
@@ -952,6 +953,14 @@ class NatGeoLabels extends Control:
 					var step := points_now[segment + 1] - points_now[segment]
 					angle = atan2(step.y, step.x)
 				_place_point(label, table, icon_entry, screen, angle, level, depth, bearing, by_layer)
+				continue
+			if projector:
+				if not world_paths.has(path_index):
+					var path_world := PackedVector2Array()
+					for point in paths_all[path_index]:
+						path_world.append(origin + point * px_world)
+					world_paths[path_index] = path_world
+				_place_along_plane(label, world_paths[path_index], world, int(anchor["segment"]), level, depth, by_layer)
 				continue
 			_place_along(label, points_now, screen, int(anchor["segment"]), level, depth, by_layer)
 
@@ -1054,6 +1063,71 @@ class NatGeoLabels extends Control:
 			var local := Rect2(corner * font_scale, rect.size * font_scale)
 			var placed: Array = placements[index]
 			_add_glyph(bucket, label, _quad(placed[0], local, float(placed[1])), rect, font_scale)
+		placed_count += 1
+		along_count += 1
+
+	func _place_along_plane(label: Dictionary, path: PackedVector2Array, anchor: Vector2, segment: int, level: float, depth: float, by_layer: Dictionary) -> void:
+		var shape_data: Dictionary = label["shape"]
+		var glyphs: Array = shape_data["glyphs"]
+		var zoom := map_view.camera.zoom.x
+		var size := NatGeoReference.size_at(label, level)
+		var screen_ratio := _perspective(depth, false)
+		var place_scale := size / ONE_EM / maxf(screen_ratio, 0.000001)
+		var quad_scale := size / ONE_EM * clampf(0.5 + 0.5 * depth, 0.0, 4.0)
+		var layout_scale := float(label.get("layoutSize", 16.0)) / ONE_EM * screen_ratio
+		var offset_value: Variant = label.get("offset", [0, 0])
+		var line_offset := Vector2.ZERO
+		if offset_value is Array and (offset_value as Array).size() >= 2:
+			line_offset = Vector2(float(offset_value[0]), float(offset_value[1])) * ONE_EM * place_scale / zoom
+		var offsets: Array[float] = []
+		for item in glyphs:
+			offsets.append((float(item["x"]) + float((item["g"] as Dictionary)["adv"]) / 2.0) * place_scale / zoom)
+		var flip := false
+		if bool(label.get("keepUpright", true)):
+			if glyphs.size() > 1:
+				var first := _along(path, anchor, segment, offsets[0], line_offset.x, line_offset.y, false)
+				var last := _along(path, anchor, segment, offsets[offsets.size() - 1], line_offset.x, line_offset.y, false)
+				if first.is_empty() or last.is_empty():
+					return
+				flip = map_view.world_to_screen(first[0]).x > map_view.world_to_screen(last[0]).x
+			elif segment + 1 < path.size():
+				flip = map_view.world_to_screen(anchor).x > map_view.world_to_screen(path[segment + 1]).x
+		var placements: Array = []
+		for index in range(glyphs.size()):
+			var placed := _along(path, anchor, segment, offsets[index], line_offset.x, line_offset.y, flip)
+			if placed.is_empty():
+				return
+			placements.append(placed)
+		var shape_box: Rect2 = shape_data["box"]
+		var radius := shape_box.size.y / 2.0 * layout_scale + float(label.get("padding", 2.0)) * screen_ratio
+		var boxes: Array[Rect2] = []
+		for placed in placements:
+			var centre := map_view.world_to_screen(placed[0])
+			if centre.x < -50000.0:
+				return
+			boxes.append(Rect2(centre - Vector2(radius, radius), Vector2(radius, radius) * 2.0))
+		if not bool(label.get("overlap", false)) and not _fits(boxes):
+			return
+		if not bool(label.get("ignore", false)):
+			for box in boxes:
+				_take(box)
+		var layer := int(label.get("layer", 0))
+		var bucket: Dictionary = by_layer.get(layer, {"icons": [], "halos": [], "fills": []})
+		by_layer[layer] = bucket
+		for index in range(glyphs.size()):
+			var item: Dictionary = glyphs[index]
+			var glyph: Dictionary = item["g"]
+			if not glyph.has("rect"):
+				continue
+			var rect: Rect2 = glyph["rect"]
+			var half := float(glyph["adv"]) / 2.0
+			var corner := Vector2(float(glyph["left"]) - RECT_BUFFER - half, float(item["y"]) - float(glyph["top"]) - RECT_BUFFER)
+			var local := Rect2(corner * quad_scale, rect.size * quad_scale)
+			var placed: Array = placements[index]
+			var quad := PackedVector2Array()
+			for point in _quad(Vector2.ZERO, local, float(placed[1])):
+				quad.append(map_view.world_to_screen((placed[0] as Vector2) + point / zoom))
+			_add_glyph(bucket, label, quad, rect, size / ONE_EM * screen_ratio)
 		placed_count += 1
 		along_count += 1
 

@@ -7,6 +7,7 @@ var failures: PackedStringArray = []
 var finished := false
 var extras: MapExtras
 var only := ""
+var tilt := Vector2.ZERO
 
 
 func _initialize() -> void:
@@ -16,6 +17,7 @@ func _initialize() -> void:
 	root.mouse_passthrough = true
 	main = (load("res://main.tscn") as PackedScene).instantiate()
 	root.add_child(main)
+	_read_tilt()
 	_watchdog.call_deferred()
 	_run.call_deferred()
 
@@ -176,6 +178,8 @@ func _run() -> void:
 		await _tilt_checks()
 	if _wants("trackpad"):
 		await _trackpad_checks()
+	if _wants("touch"):
+		await _touch_checks()
 	if _wants("settings"):
 		await _settings_checks()
 	_finish(0 if failures.is_empty() else 1)
@@ -387,15 +391,30 @@ func _group_checks() -> void:
 	for owner in ["Sweden", "Norway"]:
 		for index in _regions_of(owner, 8):
 			await main.engine.request("cheats.groups.ops", {"name": "Nordic Pact", "action": "toggle", "index": index})
+	var fades: Array[float] = []
+	var sample := func(_world: Dictionary) -> void: fades.append(extras.overlays._group_fade)
+	extras.world_refreshed.connect(sample)
 	await extras.refresh()
+	extras.world_refreshed.disconnect(sample)
+	_check(not fades.is_empty() and is_equal_approx(fades[0], 1.0), "a new group's area appears at once, as React's freshly mounted layers do (%s)" % str(fades))
 	_check((extras.world.get("groupRegions", []) as Array).size() > 0, "the group's regions reach the map (%d)" % (extras.world.get("groupRegions", []) as Array).size())
 	await _until(func() -> bool: return extras.overlays._line_mesh != null, 15.0)
 	_check(extras.overlays._line_mesh != null, "the group's outline was drawn from the frontier topology")
 	view.fly_to_lonlat(15.0, 62.0, 4.4, 0.0)
 	await _wait(2.5)
 	await _shoot("groups-1-nordic")
+	var overlays := extras.overlays
+	overlays._apply_groups(extras.world.get("groups", []), extras.world.get("groupRegions", []), false)
+	var start := overlays._group_fade
+	await _wait(0.15)
+	var middle := overlays._group_fade
+	await _wait(0.3)
+	_check(start > 0.99 and middle > 0.0 and middle < 1.0 and is_zero_approx(overlays._group_fade) and not overlays._labels.visible, "switching groups off fades their tint, outline and names out over MapLibre's 300 ms paint transition (%.2f, %.2f, %.2f)" % [start, middle, overlays._group_fade])
+	await extras.refresh()
+	await _until(func() -> bool: return overlays._line_mesh != null, 15.0)
 	await main.engine.request("cheats.groups.ops", {"name": "Nordic Pact", "action": "erase"})
 	await extras.refresh()
+	_check(is_zero_approx(overlays._group_fade) and overlays._line_mesh == null, "an erased group's area goes at once, as React unmounts its layers (%.2f)" % overlays._group_fade)
 
 
 func _flood_checks() -> void:
@@ -634,6 +653,7 @@ func _tilt_checks() -> void:
 		await _wait(0.6)
 	_check(is_equal_approx(view.pitch, 60.0), "the tilt stops at MapLibre's 60 degrees (%.2f)" % view.pitch)
 	await _shoot("tilt-3-steep")
+	await _steep_checks(view)
 	extras.apply_map_settings({"Globe": true})
 	await _frames(3)
 	view.fly_to_lonlat(10.0, 40.0, 3.0, 0.0)
@@ -693,9 +713,178 @@ func _trackpad_checks() -> void:
 	_check(navigator.wheel_type() == "wheel", "and is then treated as a mouse wheel")
 
 
+func _steep_checks(view: MapView) -> void:
+	var size := view.get_viewport_rect().size
+	var middle := view.label_perspective(view.screen_to_world(size * 0.5))
+	var top_ratio := view.label_perspective(view.screen_to_world(Vector2(size.x * 0.5, 40.0)))
+	var bottom_ratio := view.label_perspective(view.screen_to_world(Vector2(size.x * 0.5, size.y - 40.0)))
+	_check(absf(middle - 1.0) < 0.01 and top_ratio < 0.95 and bottom_ratio > 1.05, "names shrink toward the horizon and grow near the eye by MapLibre's perspective ratio (%.2f, %.2f, %.2f)" % [top_ratio, middle, bottom_ratio])
+	var cover: Dictionary = view.basemap.cover
+	_check(not cover.is_empty(), "a tilted map picks its tiles from the camera's view, as MapLibre's tile cover does")
+	if not cover.is_empty() and bool(cover.get("variable", false)):
+		var lowest := 99
+		var highest := -1
+		for entry: Array in cover["tiles"]:
+			lowest = mini(lowest, int(entry[0]))
+			highest = maxi(highest, int(entry[0]))
+		_check(highest > lowest, "with terrain on, distant tiles load at lower detail (zoom %d to %d)" % [lowest, highest])
+	view.fly_to_lonlat(10.0, 78.0, 3.0, 0.0)
+	await _wait(1.0)
+	await _close_notice()
+	await _frames(4)
+	await RenderingServer.frame_post_draw
+	var image := root.get_viewport().get_texture().get_image()
+	var sample := image.get_pixel(int(size.x * 0.5), 110)
+	var expected := GlobeView.FLAT_SPACE
+	_check(absf(sample.r - expected.r) < 0.02 and absf(sample.g - expected.g) < 0.02 and absf(sample.b - expected.b) < 0.02, "beyond 85°N a steep tilt shows the map's backdrop, as MapLibre's empty canvas does (%s)" % str(sample))
+	await _shoot("tilt-3b-north")
+
+
+func _touch(view: MapView, index: int, at: Vector2, pressed: bool) -> void:
+	var event := InputEventScreenTouch.new()
+	event.index = index
+	event.position = at
+	event.pressed = pressed
+	view._unhandled_input(event)
+
+
+func _drag(view: MapView, index: int, at: Vector2, relative: Vector2) -> void:
+	var event := InputEventScreenDrag.new()
+	event.index = index
+	event.position = at
+	event.relative = relative
+	view._unhandled_input(event)
+
+
+func _pinch(view: MapView, centre: Vector2) -> void:
+	_touch(view, 0, centre - Vector2(100, 0), true)
+	_touch(view, 1, centre + Vector2(100, 0), true)
+	for step in range(1, 11):
+		await _frames(1)
+		_drag(view, 0, centre - Vector2(100 + 10 * step, 0), Vector2(-10, 0))
+		_drag(view, 1, centre + Vector2(100 + 10 * step, 0), Vector2(10, 0))
+	await _frames(1)
+
+
+func _lift(view: MapView, centre: Vector2, spread: float) -> void:
+	_touch(view, 0, centre - Vector2(spread, 0), false)
+	_touch(view, 1, centre + Vector2(spread, 0), false)
+	extras.navigator.stop()
+
+
+func _touch_checks() -> void:
+	var view: MapView = main.map_view
+	var navigator: MapNavigator = extras.navigator
+	extras.apply_map_settings({"Globe": false})
+	view.bearing = 0.0
+	view.pitch = 0.0
+	view.fly_to_lonlat(10.0, 48.0, 4.5, 0.0)
+	await _wait(1.0)
+	var size := view.get_viewport_rect().size
+	var centre := size * 0.5 + Vector2(140, 60)
+	var under := view.screen_to_world(centre)
+	var before := view.zoom_level()
+	await _pinch(view, centre)
+	_check(absf(view.zoom_level() - before - 1.0) < 0.01, "spreading two fingers zooms in by MapLibre's pinch rate (%.3f)" % (view.zoom_level() - before))
+	_check(view.world_to_screen(under).distance_to(centre) < 1.5, "the place between the fingers stays under them (%.2f px)" % view.world_to_screen(under).distance_to(centre))
+	_lift(view, centre, 200.0)
+	await _wait(0.3)
+	under = view.screen_to_world(centre)
+	_touch(view, 0, centre - Vector2(100, 0), true)
+	_touch(view, 1, centre + Vector2(100, 0), true)
+	for step in range(1, 13):
+		await _frames(1)
+		var angle := deg_to_rad(3.0 * step)
+		var arm := Vector2(cos(angle), sin(angle)) * 100.0
+		_drag(view, 0, centre - arm, Vector2.ZERO)
+		_drag(view, 1, centre + arm, Vector2.ZERO)
+	await _frames(1)
+	var turned := view.bearing
+	_check(turned < -10.0 and turned > -36.0, "turning two fingers turns the map with them, as MapLibre's touch rotation does (%.1f degrees)" % turned)
+	_check(view.world_to_screen(under).distance_to(centre) < 2.0, "and the place between them stays put (%.2f px)" % view.world_to_screen(under).distance_to(centre))
+	var arm_end := Vector2(cos(deg_to_rad(36.0)), sin(deg_to_rad(36.0))) * 100.0
+	_touch(view, 0, centre - arm_end, false)
+	_touch(view, 1, centre + arm_end, false)
+	navigator.stop()
+	await _wait(0.3)
+	await _shoot("touch-1-turned")
+	var picked: Array[int] = []
+	var listen := func(index: int) -> void: picked.append(index)
+	view.region_clicked.connect(listen)
+	var spot := size * 0.5 + Vector2(-60, 20)
+	var expected := view.baker.pick(view.screen_to_world(spot))
+	_touch(view, 0, spot, true)
+	await _frames(1)
+	_touch(view, 0, spot, false)
+	await _frames(1)
+	_check(picked.size() == 1 and picked[0] == expected, "a tap picks the region under the finger (%s, wanted %d)" % [str(picked), expected])
+	var still := view.camera.position
+	var fake := InputEventMouseButton.new()
+	fake.device = InputEvent.DEVICE_ID_EMULATION
+	fake.button_index = MOUSE_BUTTON_LEFT
+	fake.position = spot
+	fake.pressed = true
+	view._unhandled_input(fake)
+	var fake_move := InputEventMouseMotion.new()
+	fake_move.device = InputEvent.DEVICE_ID_EMULATION
+	fake_move.position = spot + Vector2(80, 0)
+	fake_move.relative = Vector2(80, 0)
+	fake_move.button_mask = MOUSE_BUTTON_MASK_LEFT
+	view._unhandled_input(fake_move)
+	fake.pressed = false
+	fake.position = spot + Vector2(80, 0)
+	view._unhandled_input(fake)
+	_check(view.camera.position == still and picked.size() == 1, "the mouse the system makes from a touch is not read a second time")
+	await _wait(0.6)
+	before = view.zoom_level()
+	_touch(view, 0, spot, true)
+	_touch(view, 0, spot, false)
+	await _frames(1)
+	_touch(view, 0, spot, true)
+	for step in range(1, 9):
+		await _frames(1)
+		_drag(view, 0, spot + Vector2(0, 16 * step), Vector2(0, 16))
+	await _frames(1)
+	_check(absf(view.zoom_level() - before - 1.0) < 0.02, "a tap then a drag down zooms in, as MapLibre's tap-drag zoom does (%.3f)" % (view.zoom_level() - before))
+	_touch(view, 0, spot + Vector2(0, 128), false)
+	navigator.stop()
+	view.region_clicked.disconnect(listen)
+	view.bearing = 20.0
+	view.pitch = 40.0
+	view.call("_after_camera_move")
+	await _frames(2)
+	under = view.screen_to_world(centre)
+	before = view.zoom_level()
+	await _pinch(view, centre)
+	_check(absf(view.zoom_level() - before - 1.0) < 0.01 and view.world_to_screen(under).distance_to(centre) < 1.5, "a pinch on a turned, tilted map keeps the place between the fingers (%.3f, %.2f px)" % [view.zoom_level() - before, view.world_to_screen(under).distance_to(centre)])
+	_lift(view, centre, 200.0)
+	await _wait(0.2)
+	view.bearing = 0.0
+	view.pitch = 0.0
+	view.call("_after_camera_move")
+
+
 func _finish(code: int) -> void:
 	finished = true
 	_say("failures: %d" % failures.size())
 	main.engine.stop()
 	await _frames(2)
 	quit(code)
+
+
+func _read_tilt() -> void:
+	var spec := OS.get_environment("OH_MAP_TILT").split(",", false)
+	if spec.size() >= 2:
+		tilt = Vector2(float(spec[0]), float(spec[1]))
+		process_frame.connect(_keep_tilt)
+
+
+func _keep_tilt() -> void:
+	var view: Variant = main.get("map_view") if main != null and is_instance_valid(main) else null
+	if not (view is MapView):
+		return
+	var map := view as MapView
+	if map.extras_ready() and map.extras != null and is_zero_approx(map.pitch) and is_zero_approx(map.bearing):
+		map.pitch = tilt.x
+		map.bearing = tilt.y
+		map.call("_after_camera_move")

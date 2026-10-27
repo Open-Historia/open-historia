@@ -28,6 +28,17 @@ const KEY_EASE_MS := 300.0
 const BOX_EASE_MS := 500.0
 const BOX_FILL := Color(1, 1, 1, 0.5)
 const BOX_EDGE := Color(32 / 255.0, 32 / 255.0, 32 / 255.0, 0.5)
+const TOUCH_ZOOM_THRESHOLD := 0.1
+const TOUCH_ROTATION_THRESHOLD := 25.0
+const TAP_MAX_INTERVAL_MS := 500
+const TAP_MAX_TOUCH_MS := 500
+const TAP_MAX_DISTANCE := 30.0
+const TAP_DRAG_ZOOM_PIXELS := 128.0
+const INERTIA_LINEARITY := 0.3
+const ZOOM_INERTIA_DECELERATION := 20.0
+const ZOOM_INERTIA_MAX_SPEED := 1400.0
+const BEARING_INERTIA_DECELERATION := 1000.0
+const BEARING_INERTIA_MAX_SPEED := 360.0
 
 var extras: Node
 var map_view: MapView
@@ -70,6 +81,14 @@ func setup(owner_extras: Node, view: MapView, globe_view: GlobeView, ui: Control
 func handle(event: InputEvent) -> bool:
 	if map_view == null:
 		return false
+	if event is InputEventScreenTouch:
+		return _on_touch(event as InputEventScreenTouch)
+	if event is InputEventScreenDrag:
+		return _on_touch_drag(event as InputEventScreenDrag)
+	if (event is InputEventMouseButton or event is InputEventMouseMotion) and event.device == InputEvent.DEVICE_ID_EMULATION:
+		return true
+	if (event is InputEventMagnifyGesture or event is InputEventPanGesture) and not _touches.is_empty():
+		return true
 	if event is InputEventMouseButton:
 		return _on_button(event as InputEventMouseButton)
 	if event is InputEventMouseMotion:
@@ -100,7 +119,7 @@ func stop() -> void:
 
 
 func busy() -> bool:
-	return _pressed or _wheel_active or _wheel_frame_pending or not _ease.is_empty()
+	return _pressed or _wheel_active or _wheel_frame_pending or not _ease.is_empty() or not _touches.is_empty()
 
 
 func pan_view(delta: Vector2, around := Vector2(-1.0, -1.0)) -> void:
@@ -423,6 +442,7 @@ func _smooth_out_easing(duration: float) -> CubicBezier:
 func _process(_delta: float) -> void:
 	if map_view == null:
 		return
+	_flush_touch()
 	var now := _now()
 	if _wheel_timeout_at >= 0.0 and now >= _wheel_timeout_at:
 		_wheel_timed_out()
@@ -437,6 +457,11 @@ func _process(_delta: float) -> void:
 	var duration := float(_ease["duration"])
 	var t := 1.0 if duration <= 0.0 else clampf((float(Time.get_ticks_msec()) - float(_ease["start"])) / duration, 0.0, 1.0)
 	var k := _curve(str(_ease["curve"]), t)
+	if _ease.has("pin"):
+		_touch_ease_step(_ease, k)
+		if t >= 1.0:
+			_ease = {}
+		return
 	var turned := false
 	if _ease.has("bearing_to"):
 		map_view.bearing = wrap_bearing(lerpf(float(_ease["bearing_from"]), float(_ease["bearing_to"]), k))
@@ -567,6 +592,396 @@ func _apply_centre(ease: Dictionary, k: float) -> void:
 	var limits := _zoom_limits()
 	map_view.camera.zoom = Vector2.ONE * pow(2.0, clampf(zoom, limits.x, limits.y)) / 8.0
 	map_view.call("_after_camera_move")
+
+
+var _touches := {}
+var _touch_moved := false
+var _touch_order: Array[int] = []
+var _touch_cancelled := false
+var _touch_record: Array[Array] = []
+var _pan_seen := {}
+var _pan_sum := Vector2.ZERO
+var _pair: Array[int] = []
+var _pair_distance := 0.0
+var _pair_start_distance := 0.0
+var _pair_zooming := false
+var _pair_vector := Vector2.ZERO
+var _pair_start_vector := Vector2.ZERO
+var _pair_min_diameter := 0.0
+var _pair_turning := false
+var _pair_used := false
+var _tap_begun := -1
+var _tap_has := false
+var _tap_point := Vector2.ZERO
+var _tap_aborted := false
+var _tap_time := -1
+var _tap_spot := Vector2.ZERO
+var _swipe_index := -1
+var _swipe_point := Vector2.ZERO
+var _swiping := false
+
+
+func touch_count() -> int:
+	return _touches.size()
+
+
+func _on_touch(touch: InputEventScreenTouch) -> bool:
+	_flush_touch()
+	var now := Time.get_ticks_msec()
+	if touch.pressed:
+		if _touches.is_empty():
+			_touch_begin()
+		_touches[touch.index] = touch.position
+		if not _touch_order.has(touch.index):
+			_touch_order.append(touch.index)
+		_tap_on_start(touch.position, now)
+		_swipe_on_start(now)
+		if _touches.size() >= 2 and _pair.is_empty():
+			_pair_begin()
+		_pan_step()
+		return true
+	if not _touches.has(touch.index):
+		return true
+	_touches.erase(touch.index)
+	_touch_order.erase(touch.index)
+	if touch.canceled:
+		_touch_cancelled = true
+	if not _touch_cancelled and not _swiping:
+		var moved := _pan_step()
+		if not moved.is_empty():
+			_apply_touch(moved["pan"], 0.0, 0.0, moved["around"])
+	if not _pair.is_empty() and (not _touches.has(_pair[0]) or not _touches.has(_pair[1])):
+		_pair_reset()
+	var tapped := _tap_on_end(now)
+	if _swipe_index >= 0:
+		if _touches.is_empty():
+			_swipe_reset()
+	elif tapped.size() > 0:
+		_tap_time = now
+		_tap_spot = tapped[0]
+	if _touches.is_empty():
+		_touch_finish(tapped)
+	return true
+
+
+func _on_touch_drag(drag: InputEventScreenDrag) -> bool:
+	if not _touches.has(drag.index):
+		return true
+	_touches[drag.index] = drag.position
+	_tap_on_move(drag.position)
+	_touch_moved = true
+	return true
+
+
+func _flush_touch() -> void:
+	if not _touch_moved:
+		return
+	_touch_moved = false
+	if _touch_cancelled or _touches.is_empty():
+		return
+	if not bool(map_view.get("_dragging")):
+		_touch_cancelled = true
+		_touch_record.clear()
+		return
+	_mark()
+	var swipe := _swipe_step()
+	if _swiping:
+		_pan_seen = {}
+		_pan_sum = Vector2.ZERO
+		_pair_reset()
+		if not is_nan(swipe) and swipe != 0.0:
+			_apply_touch(Vector2.ZERO, swipe, 0.0, null)
+		return
+	var moved := _pan_step()
+	var paired := _pair_step()
+	var pan: Vector2 = moved.get("pan", Vector2.ZERO)
+	var zoom_delta := float(paired.get("zoom", 0.0))
+	var bearing_delta := float(paired.get("bearing", 0.0))
+	if pan == Vector2.ZERO and zoom_delta == 0.0 and bearing_delta == 0.0:
+		return
+	var around: Variant = paired.get("pinch", moved.get("around"))
+	_apply_touch(pan, zoom_delta, bearing_delta, around)
+
+
+func _touch_begin() -> void:
+	_mark()
+	stop()
+	map_view.extras_stop_flight()
+	map_view.get_viewport().gui_release_focus()
+	map_view.set("_dragging", true)
+	if globe:
+		globe.held = true
+	_touch_cancelled = false
+	_touch_record.clear()
+	_pan_seen = {}
+	_pan_sum = Vector2.ZERO
+	_pair_used = false
+
+
+func _touch_finish(tapped: Array) -> void:
+	_touch_order.clear()
+	_pan_seen = {}
+	if globe:
+		globe.held = false
+	var cancelled := _touch_cancelled or not bool(map_view.get("_dragging"))
+	map_view.set("_dragging", false)
+	if cancelled:
+		_touch_record.clear()
+		return
+	if tapped.size() > 0 and _pan_sum.length() < CLICK_TOLERANCE and not _pair_used:
+		_click(tapped[0])
+	_pan_sum = Vector2.ZERO
+	_touch_inertia()
+
+
+func _pan_step() -> Dictionary:
+	var point_sum := Vector2.ZERO
+	var delta_sum := Vector2.ZERO
+	var count := 0
+	for index in _touches.keys():
+		if not _pan_seen.has(index):
+			continue
+		var point: Vector2 = _touches[index]
+		point_sum += point
+		delta_sum += point - (_pan_seen[index] as Vector2)
+		count += 1
+	_pan_seen = _touches.duplicate()
+	if count < 1 or delta_sum == Vector2.ZERO:
+		return {}
+	var delta := delta_sum / count
+	_pan_sum += delta
+	if _pan_sum.length() < CLICK_TOLERANCE:
+		return {}
+	return {"pan": delta, "around": point_sum / count}
+
+
+func _pair_begin() -> void:
+	_pair = [_touch_order[0], _touch_order[1]]
+	var a: Vector2 = _touches[_pair[0]]
+	var b: Vector2 = _touches[_pair[1]]
+	_pair_start_distance = a.distance_to(b)
+	_pair_distance = _pair_start_distance
+	_pair_start_vector = a - b
+	_pair_vector = _pair_start_vector
+	_pair_min_diameter = _pair_start_distance
+	_pair_zooming = false
+	_pair_turning = false
+
+
+func _pair_reset() -> void:
+	_pair = []
+	_pair_zooming = false
+	_pair_turning = false
+
+
+func _pair_step() -> Dictionary:
+	if _pair.is_empty() or not _touches.has(_pair[0]) or not _touches.has(_pair[1]):
+		return {}
+	var a: Vector2 = _touches[_pair[0]]
+	var b: Vector2 = _touches[_pair[1]]
+	var pinch := (a + b) * 0.5
+	var out := {}
+	var last_distance := _pair_distance
+	_pair_distance = a.distance_to(b)
+	if _pair_zooming or absf(log(maxf(_pair_distance, 1e-6) / maxf(_pair_start_distance, 1e-6)) / log(2.0)) >= TOUCH_ZOOM_THRESHOLD:
+		_pair_zooming = true
+		_pair_used = true
+		out["zoom"] = log(maxf(_pair_distance, 1e-6) / maxf(last_distance, 1e-6)) / log(2.0)
+		out["pinch"] = pinch
+	var last_vector := _pair_vector
+	_pair_vector = a - b
+	if not _pair_turning:
+		_pair_min_diameter = minf(_pair_min_diameter, _pair_vector.length())
+		var threshold := TOUCH_ROTATION_THRESHOLD / maxf(PI * _pair_min_diameter, 1e-6) * 360.0
+		if absf(angle_with(_pair_vector, _pair_start_vector)) >= threshold:
+			_pair_turning = true
+	if _pair_turning:
+		_pair_used = true
+		out["bearing"] = angle_with(_pair_vector, last_vector)
+		out["pinch"] = pinch
+	return out
+
+
+static func angle_with(a: Vector2, b: Vector2) -> float:
+	return rad_to_deg(atan2(a.x * b.y - a.y * b.x, a.x * b.x + a.y * b.y))
+
+
+func _tap_on_start(point: Vector2, now: int) -> void:
+	if _tap_has or _touches.size() > 1:
+		_tap_aborted = true
+	if _tap_aborted:
+		return
+	if _tap_begun < 0:
+		_tap_begun = now
+	if _touches.size() == 1:
+		_tap_has = true
+		_tap_point = point
+
+
+func _tap_on_move(point: Vector2) -> void:
+	if _tap_aborted or not _tap_has:
+		return
+	if point.distance_to(_tap_point) > TAP_MAX_DISTANCE:
+		_tap_aborted = true
+
+
+func _tap_on_end(now: int) -> Array:
+	if not _tap_has or now - _tap_begun > TAP_MAX_TOUCH_MS:
+		_tap_aborted = true
+	if not _touches.is_empty():
+		return []
+	var found: Array = [] if _tap_aborted else [_tap_point]
+	_tap_has = false
+	_tap_begun = -1
+	_tap_aborted = false
+	return found
+
+
+func _swipe_on_start(now: int) -> void:
+	if _swipe_index >= 0 or _tap_time < 0 or _touch_order.is_empty():
+		return
+	var first: Vector2 = _touches[_touch_order[0]]
+	if now - _tap_time < TAP_MAX_INTERVAL_MS and _tap_spot.distance_to(first) < TAP_MAX_DISTANCE:
+		_swipe_index = _touch_order[0]
+		_swipe_point = first
+	else:
+		_swipe_reset()
+
+
+func _swipe_step() -> float:
+	if _swipe_index < 0 or _touch_order.is_empty() or _touch_order[0] != _swipe_index:
+		return NAN
+	var point: Vector2 = _touches[_swipe_index]
+	var distance := point.y - _swipe_point.y
+	_swipe_point = point
+	_swiping = true
+	return distance / TAP_DRAG_ZOOM_PIXELS
+
+
+func _swipe_reset() -> void:
+	_swipe_index = -1
+	_swiping = false
+	_tap_time = -1
+
+
+func _world_at(at: Vector2) -> Vector2:
+	if globe:
+		globe.sync_active()
+	if globe and globe.active:
+		var frame := globe._compute_frame()
+		if globe._globe_controls():
+			var lonlat := globe._unproject_location(frame, at)
+			var world := GlobeView.world_of_lonlat(lonlat.x, lonlat.y)
+			world.x += MapView.WORLD_WIDTH * roundf((map_view.camera.position.x - world.x) / MapView.WORLD_WIDTH)
+			return world
+		return globe._flat_unproject(frame, at)
+	return map_view.camera.position + (at - map_view.get_viewport_rect().size * 0.5) / map_view.camera.zoom.x
+
+
+func _set_level(level: float) -> void:
+	var limits := _zoom_limits()
+	var target := clampf(level, limits.x, limits.y)
+	if globe and globe.active and globe._globe_controls():
+		globe._set_zoom(target)
+	else:
+		map_view.camera.zoom = Vector2.ONE * pow(2.0, target) / 8.0
+
+
+func _pin_location(world: Vector2, at: Vector2) -> void:
+	if globe:
+		globe.sync_active()
+	if globe and globe.active and globe._globe_controls():
+		globe._set_location_at_point(GlobeView.lonlat_of_world(world), at)
+	else:
+		var delta := world - _world_at(at)
+		delta.x -= MapView.WORLD_WIDTH * roundf(delta.x / MapView.WORLD_WIDTH)
+		map_view.camera.position += delta
+	map_view.call("_after_camera_move")
+
+
+func _apply_touch(pan: Vector2, zoom_delta: float, bearing_delta: float, around: Variant) -> void:
+	var size := map_view.get_viewport_rect().size
+	var at: Vector2 = around if around is Vector2 else size * 0.5
+	_touch_record.append([Time.get_ticks_msec(), pan, zoom_delta, bearing_delta, around])
+	if globe:
+		globe.sync_active()
+	if globe and globe.active and globe._globe_controls():
+		if bearing_delta != 0.0:
+			map_view.bearing = wrap_bearing(map_view.bearing + bearing_delta)
+		if zoom_delta != 0.0:
+			globe._zoom_around(at, zoom_delta)
+		if pan != Vector2.ZERO:
+			globe._pan(pan)
+		globe._moved()
+		return
+	var before := _world_at(at - pan)
+	if bearing_delta != 0.0:
+		map_view.bearing = wrap_bearing(map_view.bearing + bearing_delta)
+	if zoom_delta != 0.0:
+		_set_level(map_view.zoom_level() + zoom_delta)
+	if at.distance_squared_to(size * 0.5) < 1e-2:
+		map_view.call("_after_camera_move")
+		return
+	_pin_location(before, at)
+
+
+static func inertia_easing(amount: float, seconds_span: float, linearity: float, deceleration: float, max_speed: float) -> Vector2:
+	var speed := clampf(amount * linearity / seconds_span, -max_speed, max_speed) if seconds_span > 0.0 else (max_speed if amount > 0.0 else -max_speed)
+	var seconds := absf(speed) / (deceleration * linearity)
+	return Vector2(speed * seconds / 2.0, seconds * 1000.0)
+
+
+func _touch_inertia() -> void:
+	var now := Time.get_ticks_msec()
+	while not _touch_record.is_empty() and now - int(_touch_record[0][0]) > INERTIA_CUTOFF_MS:
+		_touch_record.pop_front()
+	if _touch_record.size() < 2 or _reduced():
+		_touch_record.clear()
+		return
+	var pan := Vector2.ZERO
+	var zoom := 0.0
+	var bearing := 0.0
+	var around: Variant = null
+	for entry in _touch_record:
+		pan += entry[1] as Vector2
+		zoom += float(entry[2])
+		bearing += float(entry[3])
+		if entry[4] is Vector2:
+			around = entry[4]
+	var span := float(int(_touch_record[_touch_record.size() - 1][0]) - int(_touch_record[0][0])) / 1000.0
+	_touch_record.clear()
+	var ease := {"start": now, "duration": 0.0, "curve": "inertia"}
+	if pan.length() > 0.0:
+		var moved := inertia_easing(pan.length(), span, PAN_LINEARITY, PAN_DECELERATION, PAN_MAX_SPEED)
+		ease["pan"] = pan * (moved.x / pan.length())
+		ease["applied"] = Vector2.ZERO
+		ease["duration"] = maxf(float(ease["duration"]), moved.y)
+	if zoom != 0.0:
+		var zoomed := inertia_easing(zoom, span, INERTIA_LINEARITY, ZOOM_INERTIA_DECELERATION, ZOOM_INERTIA_MAX_SPEED)
+		var limits := _zoom_limits()
+		ease["zoom_from"] = map_view.zoom_level()
+		ease["zoom_to"] = clampf(map_view.zoom_level() + zoomed.x, limits.x, limits.y)
+		ease["duration"] = maxf(float(ease["duration"]), zoomed.y)
+	if bearing != 0.0:
+		var turned := inertia_easing(bearing, span, INERTIA_LINEARITY, BEARING_INERTIA_DECELERATION, BEARING_INERTIA_MAX_SPEED)
+		ease["bearing_from"] = map_view.bearing
+		ease["bearing_to"] = map_view.bearing + clampf(turned.x, -179.0, 179.0)
+		ease["duration"] = maxf(float(ease["duration"]), turned.y)
+	if zoom != 0.0 or bearing != 0.0:
+		var at: Vector2 = around if around is Vector2 else map_view.get_viewport_rect().size * 0.5
+		ease.erase("pan")
+		ease["pin_at"] = at
+		ease["pin"] = _world_at(at)
+	if ease.has("pan") or ease.has("pin"):
+		_ease = ease
+
+
+func _touch_ease_step(ease: Dictionary, k: float) -> void:
+	if ease.has("bearing_to"):
+		map_view.bearing = wrap_bearing(lerpf(float(ease["bearing_from"]), float(ease["bearing_to"]), k))
+	if ease.has("zoom_to"):
+		_set_level(lerpf(float(ease["zoom_from"]), float(ease["zoom_to"]), k))
+	_pin_location(ease["pin"], ease["pin_at"])
 
 
 class BoxOverlay extends Control:

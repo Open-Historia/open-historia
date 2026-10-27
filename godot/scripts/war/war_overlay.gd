@@ -249,7 +249,18 @@ func _icon_frame(world: Vector2, at: Vector2, bearing: float, scale: float) -> T
 		turn.origin = at
 		return turn
 	var frame := map.screen_frame_at(world)
-	return Transform2D(frame.x, frame.y, at) * turn
+	var plane := map.label_plane_scale(world)
+	return Transform2D(frame.x * plane, frame.y * plane, at) * turn
+
+
+func _ratio(world: Vector2) -> float:
+	if globe and map:
+		return map.label_perspective(world)
+	return 1.0
+
+
+func _scaled(size: float, ratio: float) -> int:
+	return maxi(1, roundi(size * ratio))
 
 
 func _text_size(text: String, size: int, weight := 700) -> Vector2:
@@ -334,7 +345,7 @@ func _place_unit_names(taken: Array[Rect2]) -> Array:
 	var out: Array = []
 	if level < 3.0 or units.is_empty():
 		return out
-	var name_size := roundi(WarKit.stops(level, UNIT_NAME_SIZE))
+	var base_size := WarKit.stops(level, UNIT_NAME_SIZE)
 	var listed: Array = []
 	for entry_item in units:
 		var unit: Dictionary = entry_item
@@ -342,13 +353,18 @@ func _place_unit_names(taken: Array[Rect2]) -> Array:
 		var text := str(unit.get("label", ""))
 		if text.is_empty() or not unit_positions.has(id):
 			continue
+		var ratio := _ratio(unit_positions[id])
 		for at in _copies(_screen(unit_positions[id]), 30):
-			listed.append([unit, at, text])
+			listed.append([unit, at, text, ratio])
 	listed.sort_custom(func(a: Array, b: Array) -> bool: return float((a[0] as Dictionary).get("strength", 0)) > float((b[0] as Dictionary).get("strength", 0)))
 	for entry in listed:
 		var text: String = entry[2]
+		var ratio: float = entry[3]
+		if ratio < MapView.LABEL_PERSPECTIVE_CUTOFF:
+			continue
+		var name_size := _scaled(base_size, ratio)
 		var centre: Vector2 = (entry[1] as Vector2) + Vector2(0, 1.35 * name_size)
-		var box := _boxed(centre, _text_size(text, name_size), 2.0)
+		var box := _boxed(centre, _text_size(text, name_size), 2.0 * ratio)
 		if not _fits(box, taken):
 			continue
 		taken.append(box)
@@ -362,19 +378,23 @@ func _place_sea_labels(taken: Array[Rect2]) -> Array:
 		return out
 	for entry_item in seas.get("battles", []):
 		var battle: Dictionary = entry_item
-		var text := _wrap(str(battle.get("label", "")), 11, 14.0)
+		var ratio := _ratio(battle["world"])
+		if ratio < MapView.LABEL_PERSPECTIVE_CUTOFF:
+			continue
+		var size := _scaled(11.0, ratio)
+		var text := _wrap(str(battle.get("label", "")), size, 14.0)
 		if text.strip_edges().is_empty():
 			continue
 		var shown := 1.0 if battle.get("fresh", false) else 0.5
 		var tone := _tone(str(battle.get("tone", "other")))
-		var box_size := _text_size(text, 11)
+		var box_size := _text_size(text, size)
 		for at in _copies(_screen(battle["world"]), 40):
-			var centre: Vector2 = at + Vector2(0, 1.4 * 11 + box_size.y * 0.5)
-			var box := _boxed(centre, box_size, 2.0)
+			var centre: Vector2 = at + Vector2(0, 1.4 * size + box_size.y * 0.5)
+			var box := _boxed(centre, box_size, 2.0 * ratio)
 			if not _fits(box, taken):
 				continue
 			taken.append(box)
-			out.append([centre, text, tone, shown])
+			out.append([centre, text, tone, shown, size])
 	return out
 
 
@@ -386,20 +406,25 @@ func _place_troop_names(taken: Array[Rect2]) -> Array:
 	var name_min := 6.0 if every_troop else 7.5
 	if level < troop_min or level < name_min:
 		return out
-	var name_size := roundi(WarKit.stops(level, TROOP_NAME_SIZE))
+	var base_size := WarKit.stops(level, TROOP_NAME_SIZE)
 	var listed: Array = []
 	for entry_item in troops:
 		var entry: Array = entry_item
 		if int(entry[9]) != 1 or str(entry[11]).is_empty():
 			continue
+		var ratio := _ratio(Vector2(entry[0], entry[1]))
 		for at in _copies(_screen(Vector2(entry[0], entry[1])), 30):
-			listed.append([entry, at])
+			listed.append([entry, at, ratio])
 	listed.sort_custom(func(a: Array, b: Array) -> bool: return float((a[0] as Array)[7]) > float((b[0] as Array)[7]))
 	for placed_item in listed:
 		var entry: Array = placed_item[0]
+		var ratio: float = placed_item[2]
+		if ratio < MapView.LABEL_PERSPECTIVE_CUTOFF:
+			continue
+		var name_size := _scaled(base_size, ratio)
 		var text := str(entry[11])
 		var centre: Vector2 = (placed_item[1] as Vector2) + Vector2(0, 1.2 * name_size)
-		var box := _boxed(centre, _text_size(text, name_size), 2.0)
+		var box := _boxed(centre, _text_size(text, name_size), 2.0 * ratio)
 		if not _fits(box, taken):
 			continue
 		taken.append(box)
@@ -417,8 +442,8 @@ func _place_markers(taken: Array[Rect2]) -> Dictionary:
 	var labels: Array = []
 	if markers.is_empty():
 		return {"shapes": shapes, "labels": labels}
-	var shape_size := roundi(WarKit.stops(level, MARKER_SHAPE_SIZE))
-	var label_size := roundi(WarKit.stops(level, MARKER_LABEL_SIZE))
+	var shape_base := WarKit.stops(level, MARKER_SHAPE_SIZE)
+	var label_base := WarKit.stops(level, MARKER_LABEL_SIZE)
 	for tier_name in ["local", "regional", "strategic"]:
 		var tier: Array = MARKER_TIERS[tier_name]
 		if level < float(tier[0]):
@@ -428,13 +453,18 @@ func _place_markers(taken: Array[Rect2]) -> Dictionary:
 		var placed: Array = []
 		for item in tiered:
 			var marker: Dictionary = item
+			var ratio := _ratio(marker["world"])
+			if ratio < MapView.LABEL_PERSPECTIVE_CUTOFF:
+				continue
 			for at in _copies(_screen(marker["world"]), 40):
-				placed.append([marker, at])
-				shapes.append([marker, at])
+				placed.append([marker, at, ratio])
+				shapes.append([marker, at, ratio])
 		if level >= float(tier[1]):
 			for entry in placed:
 				var marker: Dictionary = entry[0]
 				var at: Vector2 = entry[1]
+				var ratio: float = entry[2]
+				var label_size := _scaled(label_base, ratio)
 				var text := _wrap(str(marker.get("name", "")), label_size, 16.0, 600)
 				var box_size := _text_size(text, label_size, 600)
 				var offset := 1.2 * label_size
@@ -449,7 +479,7 @@ func _place_markers(taken: Array[Rect2]) -> Dictionary:
 							centre = at + Vector2(offset + box_size.x * 0.5, 0)
 						"right":
 							centre = at - Vector2(offset + box_size.x * 0.5, 0)
-					var box := _boxed(centre, box_size, 6.0)
+					var box := _boxed(centre, box_size, 6.0 * ratio)
 					if not _fits(box, taken):
 						continue
 					taken.append(box)
@@ -457,8 +487,10 @@ func _place_markers(taken: Array[Rect2]) -> Dictionary:
 					break
 		for entry in placed:
 			var marker: Dictionary = entry[0]
+			var ratio: float = entry[2]
+			var shape_size := _scaled(shape_base, ratio)
 			var glyph_box := _text_size(str(marker.get("glyph", "")), shape_size, 400)
-			taken.append(_boxed(entry[1], Vector2(glyph_box.x, shape_size), 3.0))
+			taken.append(_boxed(entry[1], Vector2(glyph_box.x, shape_size), 3.0 * ratio))
 	return {"shapes": shapes, "labels": labels}
 
 
@@ -495,12 +527,12 @@ func _draw_markers(node: Painter) -> void:
 	var shapes: Array = placed.get("shapes", [])
 	if shapes.is_empty():
 		return
-	var shape_size := roundi(WarKit.stops(level, MARKER_SHAPE_SIZE))
+	var shape_base := WarKit.stops(level, MARKER_SHAPE_SIZE)
 	var halo := Color(5 / 255.0, 8 / 255.0, 12 / 255.0, 0.92)
 	for entry in shapes:
 		var marker: Dictionary = entry[0]
 		var opacity := float(marker.get("opacity", 1.0))
-		_text(node, entry[1], str(marker.get("glyph", "")), shape_size, WarKit.faded(marker["color"], opacity), WarKit.faded(halo, opacity), 1.8, 400)
+		_text(node, entry[1], str(marker.get("glyph", "")), _scaled(shape_base, float(entry[2])), WarKit.faded(marker["color"], opacity), WarKit.faded(halo, opacity), 1.8, 400)
 	for entry in placed.get("labels", []):
 		var opacity: float = entry[3]
 		_text(node, entry[0], entry[1], entry[2], Color(247 / 255.0, 246 / 255.0, 240 / 255.0, 0.96 * opacity), WarKit.faded(halo, opacity), 1.35, 600)
@@ -751,23 +783,26 @@ func _draw_transports(node: Painter) -> void:
 			bearing = place[1]
 		drawn_ids[id] = true
 		var tone := _tone(str(entry.get("tone", "other")))
+		var ratio := _ratio(world)
+		var count_size := _scaled(11.0, ratio)
 		for at in _copies(_screen(world), 40):
 			if what == "lost":
-				_text(node, at, "×", roundi(WarKit.stops(level, LOST_SIZE)), tone, EDGE, 2.0)
+				_text(node, at, "×", _scaled(WarKit.stops(level, LOST_SIZE), ratio), tone, EDGE, 2.0)
 				continue
 			_ship(node, world, at, str(entry.get("medium", "sea")), tone, bearing, icon_scale, 0.72 if what == "plan" else 1.0)
 			var count := str(entry.get("count", ""))
 			if not count.is_empty():
-				_text(node, at + Vector2(0, 1.5 * 11), count, 11, tone, EDGE, 1.5)
+				_text(node, at + Vector2(0, 1.5 * count_size), count, count_size, tone, EDGE, 1.5)
 	for id in carrier_override.keys():
 		if drawn_ids.has(id):
 			continue
 		var place: Array = carrier_override[id]
 		var tone := _tone(str(place[2]))
+		var count_size := _scaled(11.0, _ratio(place[0]))
 		for at in _copies(_screen(place[0]), 40):
 			_ship(node, place[0], at, str(place[3]), tone, float(place[1]), icon_scale, 1.0)
 			if not str(place[4]).is_empty():
-				_text(node, at + Vector2(0, 1.5 * 11), str(place[4]), 11, tone, EDGE, 1.5)
+				_text(node, at + Vector2(0, 1.5 * count_size), str(place[4]), count_size, tone, EDGE, 1.5)
 
 
 func _ship(node: Painter, world: Vector2, at: Vector2, medium: String, colour: Color, bearing: float, icon_scale: float, opacity: float) -> void:
@@ -856,15 +891,19 @@ func _draw_seas(node: Painter) -> void:
 			_text(node, at, "×", mark_size, WarKit.faded(tone, shown), Color(0, 0, 0, 0), 0.0)
 	for entry in _layout.get("seas", []):
 		var shown: float = entry[3]
-		_text(node, entry[0], entry[1], 11, WarKit.faded(entry[2], shown), WarKit.faded(EDGE, shown), 1.5)
+		_text(node, entry[0], entry[1], int(entry[4]), WarKit.faded(entry[2], shown), WarKit.faded(EDGE, shown), 1.5)
 	if level >= 2.0:
 		for entry_item in labels:
 			var label: Dictionary = entry_item
 			var tone := _tone(str(label.get("tone", "other")))
+			var ratio := _ratio(label["world"])
+			if ratio < MapView.LABEL_PERSPECTIVE_CUTOFF:
+				continue
+			var size := _scaled(11.0, ratio)
 			for at in _copies(_screen(label["world"]), 60):
-				var text := _wrap(str(label.get("label", "")), 11, 14.0)
-				var box_size := _text_size(text, 11)
-				_text(node, at + Vector2(0, 2.6 * 11 + box_size.y * 0.5), text, 11, tone, EDGE, 1.5)
+				var text := _wrap(str(label.get("label", "")), size, 14.0)
+				var box_size := _text_size(text, size)
+				_text(node, at + Vector2(0, 2.6 * size + box_size.y * 0.5), text, size, tone, EDGE, 1.5)
 
 
 func _stops_column(column: int) -> Array:

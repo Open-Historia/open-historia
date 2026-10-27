@@ -168,6 +168,18 @@ func _run() -> void:
 	await sound.enter_menu()
 	var silent: Dictionary = await _snapshot("menu before the first click")
 	_check("nothing sounds before the first click", _sounding(silent).is_empty())
+	var shell: ShellBoot = main.get("shell") as ShellBoot
+	if shell != null:
+		var deadline := Time.get_ticks_msec() + 30000
+		while shell.door_state == "deciding" and Time.get_ticks_msec() < deadline:
+			await process_frame
+		if shell.door != null and is_instance_valid(shell.door):
+			shell.door.opening.emit()
+			shell.door.opened.emit()
+			_say("vault door opened by the first click")
+		await _wait(0.5)
+		if shell.notice != null and is_instance_valid(shell.notice):
+			shell.notice.closed.emit()
 	sound.unlock()
 	await _wait(3.0)
 	var menu: Dictionary = await _snapshot("menu after the first click")

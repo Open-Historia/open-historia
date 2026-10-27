@@ -245,7 +245,7 @@ func _casing_width(level: int) -> float:
 
 func _draw_lines(labels: Array) -> void:
 	for entry in labels:
-		_draw_text_at(entry[0], float(entry[1]), str(entry[2]), entry[3], int(entry[4]))
+		_draw_text_at(entry[5], str(entry[2]), entry[3], int(entry[4]))
 	var draft: Variant = store.value("draft")
 	if draft is Array and (draft as Array).size() >= 2:
 		var level := int(store.value("level"))
@@ -340,26 +340,33 @@ static func _upright(angle: float) -> float:
 	return angle + PI if angle > PI / 2.0 or angle < -PI / 2.0 else angle
 
 
-func _line_label_boxes(at: Vector2, angle: float, width: float, size: int) -> Array[Rect2]:
-	var upright := _upright(angle)
-	var along := Vector2.from_angle(upright)
-	var across := Vector2(-along.y, along.x)
+func _line_label_frame(spot: Vector2, screen: Vector2, angle: float) -> Transform2D:
+	if not map.is_globe():
+		return Transform2D(_upright(angle), screen)
+	var plane := map.screen_frame_at(spot)
+	var heading := plane.basis_xform(Vector2.from_angle(angle))
+	var turned := angle + PI if heading.x < 0.0 else angle
+	return map.label_plane_frame(spot, turned, map.label_plane_scale(spot))
+
+
+func _line_label_boxes(frame: Transform2D, width: float, size: int) -> Array[Rect2]:
+	var along := frame.basis_xform(Vector2.RIGHT)
+	var across := frame.basis_xform(Vector2.DOWN)
 	var count := maxi(1, int(ceil(width / float(size))))
-	var half := float(size) * 0.5 + TEXT_PADDING
+	var half := float(size) * 0.5 * maxf(across.length(), along.length()) + TEXT_PADDING
 	var boxes: Array[Rect2] = []
 	for index in range(count):
-		var centre := at + along * ((float(index) + 0.5) / float(count) - 0.5) * width - across * 1.1 * float(size)
+		var centre := frame.origin + along * ((float(index) + 0.5) / float(count) - 0.5) * width - across * 1.1 * float(size)
 		boxes.append(Rect2(centre - Vector2(half, half), Vector2(half, half) * 2.0))
 	return boxes
 
 
-func _draw_text_at(at: Vector2, angle: float, label: String, colour: Color, size: int) -> void:
+func _draw_text_at(frame: Transform2D, label: String, colour: Color, size: int) -> void:
 	var font := UI.font(700)
-	var upright := _upright(angle)
 	var width := font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, size).x
 	var baseline := -1.1 * size + (font.get_ascent(size) - font.get_descent(size)) * 0.5
 	last_labels.append(label)
-	draw_set_transform(at, upright)
+	draw_set_transform_matrix(frame)
 	draw_string_outline(font, Vector2(-width * 0.5, baseline), label, HORIZONTAL_ALIGNMENT_LEFT, -1, size, 3, HALO)
 	draw_string(font, Vector2(-width * 0.5, baseline), label, HORIZONTAL_ALIGNMENT_LEFT, -1, size, colour)
 	draw_set_transform(Vector2.ZERO, 0.0)
@@ -402,11 +409,12 @@ func _place_line_labels() -> Array:
 					for anchor in _anchors(local, offset, spacing, label_length, continued, false, TILE_PX):
 						var spot: Vector2 = tile.position + (anchor[0] as Vector2) / TILE_PX * tile_world
 						var screen := map.world_to_screen(spot) if map.is_globe() else (spot - map.camera.position) * map.camera.zoom.x + half_view
-						var boxes := _line_label_boxes(screen, float(anchor[1]), font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, size).x, size)
+						var frame := _line_label_frame(spot, screen, float(anchor[1]))
+						var boxes := _line_label_boxes(frame, font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, size).x, size)
 						if not _fits(boxes):
 							continue
 						_taken.append_array(boxes)
-						placed.append([screen, float(anchor[1]), label, colour, size])
+						placed.append([screen, float(anchor[1]), label, colour, size, frame])
 	return placed
 
 
@@ -584,12 +592,23 @@ func _drawn_plans() -> Array:
 	return drawn
 
 
+func _label_ratio(lnglat: Array) -> float:
+	if not map.is_globe():
+		return 1.0
+	return map.label_perspective(_lnglat_world(lnglat))
+
+
+func _lnglat_world(lnglat: Array) -> Vector2:
+	var lng := float(lnglat[0])
+	var world := MapView.CityLayer.ohproject(lng, float(lnglat[1]))
+	world.x = (lng + 180.0) / 360.0 * MapView.WORLD_WIDTH
+	return world
+
+
 func _place_plan_labels() -> Array:
 	var placed: Array = []
 	var font := UI.font(700)
-	var size := int(round(_zoom_value([[3, 10.0], [8, 13.0]])))
-	var most := 12.0 * size
-	var height := font.get_height(size)
+	var base_size := _zoom_value([[3, 10.0], [8, 13.0]])
 	for pair in _drawn_plans():
 		var plan: Dictionary = pair[0]
 		var tone := WarRoomWords.plan_tone(plan, pair[1])
@@ -606,6 +625,12 @@ func _place_plan_labels() -> Array:
 		if middle.is_empty():
 			continue
 		var at := _project_way([middle])[0]
+		var ratio := _label_ratio(middle)
+		if ratio < MapView.LABEL_PERSPECTIVE_CUTOFF:
+			continue
+		var size := maxi(1, int(round(base_size * ratio)))
+		var most := 12.0 * size
+		var height := font.get_height(size)
 		var rows: Array[String] = []
 		var row := ""
 		for word in label.split(" ", false):
