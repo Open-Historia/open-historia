@@ -120,7 +120,12 @@ func handle(event: InputEvent) -> bool:
 		_mark()
 		_wheel_type = "trackpad"
 		_wheel_last_event_ms = _now()
-		_turn_scroll(pan.delta / COCOA_PRECISE_SCALE)
+		if pan.shift_pressed:
+			_turn_scroll(pan.delta / COCOA_PRECISE_SCALE)
+		elif pan.delta.y != 0.0:
+			_wheel_delta -= pan.delta.y / COCOA_PRECISE_SCALE
+			if not _wheel_active:
+				_wheel_begin(pan.position)
 		return true
 	if event is InputEventKey:
 		return _on_key(event as InputEventKey)
@@ -452,7 +457,14 @@ func scroll_input(delta: Vector2, shift: bool, at: Vector2, kind := "") -> void:
 			held = _scroll_held
 	if _wheel_type == "trackpad":
 		_scroll_held = Vector2.ZERO
-		_turn_scroll(delta + held)
+		if shift:
+			_turn_scroll(delta + held)
+			return
+		var pinch_by := delta.y + held.y
+		if pinch_by != 0.0:
+			_wheel_delta -= pinch_by
+			if not _wheel_active:
+				_wheel_begin(at)
 		return
 	if _wheel_type != "wheel":
 		return

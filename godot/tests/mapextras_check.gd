@@ -269,8 +269,9 @@ func _move(view: MapView, at: Vector2, relative: Vector2, shift := false) -> voi
 	view._unhandled_input(event)
 
 
-func _mouse(view: MapView, at: Vector2, index: MouseButton, pressed: bool, ctrl := false, factor := 1.0) -> void:
+func _mouse(view: MapView, at: Vector2, index: MouseButton, pressed: bool, ctrl := false, factor := 1.0, shift := false) -> void:
 	var event := InputEventMouseButton.new()
+	event.shift_pressed = shift
 	event.position = at
 	event.global_position = at
 	event.button_index = index
@@ -720,8 +721,9 @@ func _drag_by(view: MapView, from: Vector2, step: Vector2, count: int) -> Array:
 	return [at, gap]
 
 
-func _pan_gesture(view: MapView, at: Vector2, delta: Vector2) -> void:
+func _pan_gesture(view: MapView, at: Vector2, delta: Vector2, shift := true) -> void:
 	var event := InputEventPanGesture.new()
+	event.shift_pressed = shift
 	event.position = at
 	event.delta = delta
 	view._unhandled_input(event)
@@ -760,7 +762,7 @@ func _trackpad_checks() -> void:
 	var place := view.camera.position
 	_pan_gesture(view, at, Vector2(0.0, 0.6))
 	await _frames(2)
-	_check(navigator.wheel_type() == "trackpad" and absf(view.pitch - 10.0) < 0.01 and absf(view.bearing) < 0.0001 and absf(view.zoom_level() - zoom) < 0.0001 and view.camera.position.distance_to(place) < 0.001, "a two-finger drag up on a trackpad tilts the map and does not zoom (%.2f degrees, zoom %+.4f)" % [view.pitch, view.zoom_level() - zoom])
+	_check(navigator.wheel_type() == "trackpad" and absf(view.pitch - 10.0) < 0.01 and absf(view.bearing) < 0.0001 and absf(view.zoom_level() - zoom) < 0.0001 and view.camera.position.distance_to(place) < 0.001, "with Shift held, a two-finger drag up on a trackpad tilts the map and does not zoom (%.2f degrees, zoom %+.4f)" % [view.pitch, view.zoom_level() - zoom])
 	_pan_gesture(view, at, Vector2(-0.3, 0.0))
 	await _frames(2)
 	_check(absf(view.bearing - 8.0) < 0.01 and absf(view.pitch - 10.0) < 0.01 and absf(view.zoom_level() - zoom) < 0.0001, "a two-finger drag sideways turns it (%.2f degrees)" % view.bearing)
@@ -772,12 +774,12 @@ func _trackpad_checks() -> void:
 	_check(is_equal_approx(view.pitch, 60.0), "the two-finger tilt stops at MapLibre's 60 degrees (%.2f)" % view.pitch)
 	await _level_view(view)
 	zoom = view.zoom_level()
-	_mouse(view, at, MOUSE_BUTTON_WHEEL_DOWN, true, false, 0.1)
-	_mouse(view, at, MOUSE_BUTTON_WHEEL_DOWN, true, false, 0.1)
+	_mouse(view, at, MOUSE_BUTTON_WHEEL_DOWN, true, false, 0.1, true)
+	_mouse(view, at, MOUSE_BUTTON_WHEEL_DOWN, true, false, 0.1, true)
 	await _frames(2)
-	_check(navigator.wheel_type() == "trackpad" and absf(view.pitch - 10.0) < 0.01 and absf(view.zoom_level() - zoom) < 0.0001, "small quick wheel steps from a precision touchpad are read as a trackpad and tilt (%.2f degrees, zoom %+.4f)" % [view.pitch, view.zoom_level() - zoom])
-	_mouse(view, at, MOUSE_BUTTON_WHEEL_RIGHT, true, false, 0.1)
-	_mouse(view, at, MOUSE_BUTTON_WHEEL_RIGHT, true, false, 0.1)
+	_check(navigator.wheel_type() == "trackpad" and absf(view.pitch - 10.0) < 0.01 and absf(view.zoom_level() - zoom) < 0.0001, "small quick wheel steps from a precision touchpad are read as a trackpad and, with Shift, tilt (%.2f degrees, zoom %+.4f)" % [view.pitch, view.zoom_level() - zoom])
+	_mouse(view, at, MOUSE_BUTTON_WHEEL_RIGHT, true, false, 0.1, true)
+	_mouse(view, at, MOUSE_BUTTON_WHEEL_RIGHT, true, false, 0.1, true)
 	await _frames(2)
 	_check(absf(view.bearing + 16.0) < 0.01 and absf(view.zoom_level() - zoom) < 0.0001, "and sideways steps turn the map (%.2f degrees)" % view.bearing)
 	await _level_view(view)
@@ -787,7 +789,22 @@ func _trackpad_checks() -> void:
 		_mouse(view, at, MOUSE_BUTTON_WHEEL_DOWN, true, false, 0.35)
 		await _frames(1)
 	await _wait(0.4)
-	_check(navigator.wheel_type() == "trackpad" and view.pitch > 1.0 and absf(view.zoom_level() - zoom) < 0.0001, "a fast two-finger scroll from a precision touchpad only tilts and never zooms (%.2f degrees, zoom %+.4f)" % [view.pitch, view.zoom_level() - zoom])
+	_check(navigator.wheel_type() == "trackpad" and view.zoom_level() < zoom - 0.05 and view.pitch == 0.0 and view.bearing == 0.0, "a two-finger scroll from a precision touchpad zooms without Shift and does not tilt (zoom %+.4f, %.2f degrees)" % [view.zoom_level() - zoom, view.pitch])
+	await _level_view(view)
+	await _wait(0.5)
+	zoom = view.zoom_level()
+	for step in range(4):
+		_mouse(view, at, MOUSE_BUTTON_WHEEL_RIGHT, true, false, 0.35)
+		await _frames(1)
+	await _wait(0.3)
+	_check(view.bearing == 0.0 and view.pitch == 0.0 and absf(view.zoom_level() - zoom) < 0.0001, "a sideways two-finger scroll without Shift neither turns nor zooms the map (%.2f degrees)" % view.bearing)
+	await _level_view(view)
+	await _wait(0.5)
+	zoom = view.zoom_level()
+	_pan_gesture(view, at, Vector2(0.0, 0.6), false)
+	await _frames(2)
+	await _wait(0.4)
+	_check(view.zoom_level() < zoom - 0.01 and view.pitch == 0.0, "a macOS two-finger pan without Shift zooms (zoom %+.4f)" % (view.zoom_level() - zoom))
 	await _level_view(view)
 	zoom = view.zoom_level()
 	_mouse(view, at, MOUSE_BUTTON_WHEEL_UP, true, true, 0.1)
