@@ -211,11 +211,7 @@ func _path_copies(world_points: PackedVector2Array) -> Array[PackedVector2Array]
 	if world_points.size() < 2:
 		return out
 	if globe and map:
-		var line := PackedVector2Array()
-		line.resize(world_points.size())
-		for index in range(world_points.size()):
-			line[index] = map.world_to_screen(world_points[index])
-		out.append(line)
+		out.append(map.world_to_screen_many(world_points))
 		return out
 	return _line_copies(_screen_line(world_points))
 
@@ -238,8 +234,7 @@ func _space_lines(line: PackedVector2Array) -> Array[PackedVector2Array]:
 		out.append(line)
 		return out
 	var piece := PackedVector2Array()
-	for p in line:
-		var s := map.world_to_screen(p)
+	for s in map.world_to_screen_many(line):
 		if _hidden(s):
 			if piece.size() >= 2:
 				out.append(piece)
@@ -707,6 +702,9 @@ func _append_shape(into: Array, local: Array, frame: Transform2D) -> void:
 	var verts: PackedVector2Array = into[0]
 	var colours: PackedColorArray = into[1]
 	var indices: PackedInt32Array = into[2]
+	into[0] = PackedVector2Array()
+	into[1] = PackedColorArray()
+	into[2] = PackedInt32Array()
 	var base := verts.size()
 	for point in (local[0] as PackedVector2Array):
 		verts.append(frame * point)
@@ -1111,6 +1109,9 @@ func _draw_strikes(node: Painter) -> void:
 			var verts: PackedVector2Array = quads[0]
 			var tints: PackedColorArray = quads[1]
 			var indices: PackedInt32Array = quads[2]
+			quads[0] = PackedVector2Array()
+			quads[1] = PackedColorArray()
+			quads[2] = PackedInt32Array()
 			for at in range(last):
 				var a := copy[at]
 				var b := copy[at + 1]
@@ -1146,6 +1147,9 @@ func _draw_strikes(node: Painter) -> void:
 			var verts: PackedVector2Array = quads[0]
 			var tints: PackedColorArray = quads[1]
 			var indices: PackedInt32Array = quads[2]
+			quads[0] = PackedVector2Array()
+			quads[1] = PackedColorArray()
+			quads[2] = PackedInt32Array()
 			for at in range(rim.size() - 1):
 				if _hidden(rim[at]) or _hidden(rim[at + 1]):
 					continue
@@ -1168,6 +1172,9 @@ func _draw_strikes(node: Painter) -> void:
 			var verts: PackedVector2Array = quads[0]
 			var tints: PackedColorArray = quads[1]
 			var indices: PackedInt32Array = quads[2]
+			quads[0] = PackedVector2Array()
+			quads[1] = PackedColorArray()
+			quads[2] = PackedInt32Array()
 			for at in range(rim_flat.size() - 1):
 				var start := verts.size()
 				verts.append_array(PackedVector2Array([centre + offset, rim_flat[at] + Vector2(shift, 0) + offset, rim_flat[at + 1] + Vector2(shift, 0) + offset]))

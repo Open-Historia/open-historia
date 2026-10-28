@@ -82,6 +82,8 @@ func setup(link: EngineLink, map_view: MapView) -> void:
 	overlay_layer.add_child(overlay)
 	if not map.baked.is_connected(_on_baked):
 		map.baked.connect(_on_baked)
+	if not map.camera_moved.is_connected(_sync_camera):
+		map.camera_moved.connect(_sync_camera)
 	_on_baked({})
 
 
@@ -662,26 +664,7 @@ func _process(_delta: float) -> void:
 		overlay_layer.visible = shown
 	ground.visible = shown
 	var now := Time.get_ticks_msec()
-	var view := get_viewport_rect().size
-	var key := Vector3(map.camera.position.x, map.camera.position.y, map.camera.zoom.x)
-	var on_globe := map.is_globe()
-	var angles := Vector2(map.bearing, map.pitch)
-	if key != _camera_key or view != _view_size or on_globe != overlay.globe or angles != _camera_angles:
-		_camera_angles = angles
-		overlay.globe = on_globe
-		var zoom_changed := key.z != _camera_key.z or _camera_key == Vector3.ZERO
-		_camera_key = key
-		_view_size = view
-		_camera_moved_ms = now
-		var level := map.zoom_level()
-		overlay.camera = map.camera.position
-		overlay.zoom = map.camera.zoom.x
-		overlay.level = level
-		overlay.view = view
-		overlay.redraw()
-		if zoom_changed:
-			ground.set_view(level, map.camera.zoom.x)
-			paint.set_view(level, map.camera.zoom.x, map.war_fill_opacity())
+	_sync_camera()
 	if not _playing and not _entries.is_empty() and absf(map.zoom_level() - _arrows_level) > 0.12 and now - _camera_moved_ms > 160:
 		_arrows_level = map.zoom_level()
 		_request_frame()
@@ -722,6 +705,32 @@ func _process(_delta: float) -> void:
 		overlay.redraw_planes()
 	if _strikes_playing and not _strike_busy:
 		_strike_frame()
+
+
+func _sync_camera() -> void:
+	if map == null or overlay == null:
+		return
+	var view := get_viewport_rect().size
+	var key := Vector3(map.camera.position.x, map.camera.position.y, map.camera.zoom.x)
+	var on_globe := map.is_globe()
+	var angles := Vector2(map.bearing, map.pitch)
+	if key == _camera_key and view == _view_size and on_globe == overlay.globe and angles == _camera_angles:
+		return
+	_camera_angles = angles
+	overlay.globe = on_globe
+	var zoom_changed := key.z != _camera_key.z or _camera_key == Vector3.ZERO
+	_camera_key = key
+	_view_size = view
+	_camera_moved_ms = Time.get_ticks_msec()
+	var level := map.zoom_level()
+	overlay.camera = map.camera.position
+	overlay.zoom = map.camera.zoom.x
+	overlay.level = level
+	overlay.view = view
+	overlay.redraw()
+	if zoom_changed:
+		ground.set_view(level, map.camera.zoom.x)
+		paint.set_view(level, map.camera.zoom.x, map.war_fill_opacity())
 
 
 func _unhandled_input(event: InputEvent) -> void:

@@ -39,6 +39,13 @@ const ZOOM_INERTIA_DECELERATION := 20.0
 const ZOOM_INERTIA_MAX_SPEED := 1400.0
 const BEARING_INERTIA_DECELERATION := 1000.0
 const BEARING_INERTIA_MAX_SPEED := 360.0
+const PITCH_INERTIA_DECELERATION := 1000.0
+const PITCH_INERTIA_MAX_SPEED := 90.0
+const ROTATE_DEGREES_PER_PX := 0.8
+const PITCH_DEGREES_PER_PX := -0.5
+const ROTATE_CENTRE_PX := 100.0
+const BEARING_SNAP := 7.0
+const RESET_NORTH_MS := 1000.0
 
 var extras: Node
 var map_view: MapView
@@ -66,6 +73,14 @@ var _wheel_around := Vector2.ZERO
 var _wheel_frame_pending := false
 var _wheel_finish_at := -1.0
 var _prev_ease: Dictionary = {}
+var _turning := false
+var _turn_button := MOUSE_BUTTON_RIGHT
+var _turn_rotates := true
+var _turn_from := Vector2.ZERO
+var _turn_last := Vector2.ZERO
+var _turn_moved := false
+var _turn_record: Array[Array] = []
+var _scroll_held := Vector2.ZERO
 var _default_easing := CubicBezier.new(0.25, 0.1, 0.25, 1.0)
 var _inertia_easing := CubicBezier.new(0.0, 0.0, 0.3, 1.0)
 
@@ -74,6 +89,7 @@ func setup(owner_extras: Node, view: MapView, globe_view: GlobeView, ui: Control
 	extras = owner_extras
 	map_view = view
 	globe = globe_view
+	process_priority = -100
 	_box_overlay = BoxOverlay.new()
 	ui.add_child(_box_overlay)
 
@@ -102,7 +118,9 @@ func handle(event: InputEvent) -> bool:
 	if event is InputEventPanGesture:
 		var pan := event as InputEventPanGesture
 		_mark()
-		wheel_input(pan.delta.y / COCOA_PRECISE_SCALE, pan.shift_pressed, pan.position)
+		_wheel_type = "trackpad"
+		_wheel_last_event_ms = _now()
+		_turn_scroll(pan.delta / COCOA_PRECISE_SCALE)
 		return true
 	if event is InputEventKey:
 		return _on_key(event as InputEventKey)
@@ -119,7 +137,7 @@ func stop() -> void:
 
 
 func busy() -> bool:
-	return _pressed or _wheel_active or _wheel_frame_pending or not _ease.is_empty() or not _touches.is_empty()
+	return _pressed or _turning or _wheel_active or _wheel_frame_pending or not _ease.is_empty() or not _touches.is_empty()
 
 
 func pan_view(delta: Vector2, around := Vector2(-1.0, -1.0)) -> void:
@@ -140,14 +158,25 @@ func _now() -> float:
 
 
 func _on_button(button: InputEventMouseButton) -> bool:
-	if button.button_index == MOUSE_BUTTON_WHEEL_UP or button.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+	var index := button.button_index
+	if index == MOUSE_BUTTON_WHEEL_UP or index == MOUSE_BUTTON_WHEEL_DOWN or index == MOUSE_BUTTON_WHEEL_LEFT or index == MOUSE_BUTTON_WHEEL_RIGHT:
 		if button.pressed:
 			_mark()
 			var notches := button.factor if button.factor > 0.0 else 1.0
 			var per_notch := COCOA_PIXELS_PER_LINE if OS.get_name() == "macOS" else WHEEL_PIXELS_PER_NOTCH
-			wheel_input(per_notch * notches * (-1.0 if button.button_index == MOUSE_BUTTON_WHEEL_UP else 1.0), button.shift_pressed, button.position)
+			var amount := per_notch * notches * (-1.0 if index == MOUSE_BUTTON_WHEEL_UP or index == MOUSE_BUTTON_WHEEL_LEFT else 1.0)
+			var vertical := index == MOUSE_BUTTON_WHEEL_UP or index == MOUSE_BUTTON_WHEEL_DOWN
+			if button.ctrl_pressed:
+				if vertical:
+					wheel_input(amount, button.shift_pressed, button.position)
+			else:
+				scroll_input(Vector2(0.0, amount) if vertical else Vector2(amount, 0.0), button.shift_pressed, button.position)
 		return true
-	if button.button_index == MOUSE_BUTTON_WHEEL_LEFT or button.button_index == MOUSE_BUTTON_WHEEL_RIGHT:
+	if _turning and index == _turn_button and not button.pressed:
+		_turn_finish(button.position)
+		return true
+	if (index == MOUSE_BUTTON_RIGHT or (index == MOUSE_BUTTON_LEFT and button.ctrl_pressed)) and button.pressed and not _pressed and not _turning:
+		_turn_begin(button)
 		return true
 	if button.button_index == MOUSE_BUTTON_LEFT:
 		if button.pressed:
@@ -191,6 +220,9 @@ func _on_button(button: InputEventMouseButton) -> bool:
 
 
 func _on_motion(motion: InputEventMouseMotion) -> bool:
+	if _turning:
+		_turn_motion(motion)
+		return true
 	if not _pressed:
 		return false
 	if not bool(map_view.get("_dragging")):
@@ -379,6 +411,166 @@ func wheel_input(value: float, shift: bool, at: Vector2) -> void:
 		_wheel_delta -= value
 		if not _wheel_active:
 			_wheel_begin(at)
+
+
+func scroll_input(delta: Vector2, shift: bool, at: Vector2) -> void:
+	if not _ease.is_empty():
+		_end_ease()
+	var value := delta.y if delta.y != 0.0 else delta.x
+	var now := _now()
+	var time_delta := now - _wheel_last_event_ms
+	_wheel_last_event_ms = now
+	var held := Vector2.ZERO
+	if value != 0.0 and fmod(value, WHEEL_ZOOM_DELTA) == 0.0:
+		_wheel_type = "wheel"
+	elif value != 0.0 and absf(value) < 4.0:
+		_wheel_type = "trackpad"
+	elif time_delta > WHEEL_NEW_ACTION_MS:
+		_wheel_type = ""
+		_wheel_last_value = delta.y
+		_scroll_held = delta
+		_wheel_timeout_at = now + WHEEL_SINGLE_EVENT_MS
+		_wheel_timeout_around = at
+	elif _wheel_type.is_empty():
+		_wheel_type = "trackpad" if absf(time_delta * value) < 200.0 else "wheel"
+		if _wheel_timeout_at >= 0.0:
+			_wheel_timeout_at = -1.0
+			held = _scroll_held
+	if _wheel_type == "trackpad":
+		_scroll_held = Vector2.ZERO
+		_turn_scroll(delta + held)
+		return
+	if _wheel_type != "wheel":
+		return
+	_scroll_held = Vector2.ZERO
+	var zoom_by := delta.y + held.y
+	if shift and zoom_by != 0.0:
+		zoom_by /= 4.0
+	_wheel_delta -= zoom_by
+	if not _wheel_active:
+		_wheel_begin(at)
+
+
+func _turn_scroll(scroll: Vector2) -> void:
+	var finger := -scroll
+	_apply_turn(finger.x * ROTATE_DEGREES_PER_PX, finger.y * PITCH_DEGREES_PER_PX)
+
+
+func _apply_turn(bearing_delta: float, pitch_delta: float) -> void:
+	if bearing_delta == 0.0 and pitch_delta == 0.0:
+		return
+	if globe:
+		globe.sync_active()
+	map_view.bearing = wrap_bearing(map_view.bearing + bearing_delta)
+	map_view.pitch = clampf(map_view.pitch + pitch_delta, MIN_PITCH, MAX_PITCH)
+	map_view.call("_after_camera_move")
+
+
+func _turn_begin(button: InputEventMouseButton) -> void:
+	_mark()
+	_turning = true
+	_turn_button = button.button_index
+	_turn_rotates = not (button.button_index == MOUSE_BUTTON_RIGHT and button.ctrl_pressed)
+	_turn_from = button.position
+	_turn_last = button.position
+	_turn_moved = false
+	_turn_record.clear()
+	if _turn_button == MOUSE_BUTTON_LEFT:
+		map_view.get_viewport().gui_release_focus()
+		map_view.set("_dragging", true)
+
+
+func _turn_motion(motion: InputEventMouseMotion) -> void:
+	var held := MOUSE_BUTTON_MASK_RIGHT if _turn_button == MOUSE_BUTTON_RIGHT else MOUSE_BUTTON_MASK_LEFT
+	if (motion.button_mask & held) == 0:
+		_turn_finish(motion.position)
+		return
+	var point := motion.position
+	if not _turn_moved:
+		if point.distance_to(_turn_from) < CLICK_TOLERANCE:
+			return
+		_turn_moved = true
+		stop()
+		map_view.extras_stop_flight()
+		if globe:
+			globe.held = true
+	var last := _turn_last
+	_turn_last = point
+	if point == last:
+		return
+	_mark()
+	var centre := map_view.get_viewport_rect().size * 0.5
+	var bearing_delta := 0.0
+	if _turn_rotates:
+		if absf(centre.y - last.y) > ROTATE_CENTRE_PX:
+			bearing_delta = angle_with(point - centre, Vector2(last.x, point.y) - centre)
+		else:
+			bearing_delta = (point.x - last.x) * ROTATE_DEGREES_PER_PX
+			if point.y < centre.y:
+				bearing_delta = -bearing_delta
+	var pitch_delta := (point.y - last.y) * PITCH_DEGREES_PER_PX
+	var now := Time.get_ticks_msec()
+	while not _turn_record.is_empty() and now - int(_turn_record[0][0]) > INERTIA_CUTOFF_MS:
+		_turn_record.pop_front()
+	_turn_record.append([now, bearing_delta, pitch_delta])
+	_apply_turn(bearing_delta, pitch_delta)
+
+
+func _turn_finish(at: Vector2) -> void:
+	_turning = false
+	if globe:
+		globe.held = false
+	var cancelled := false
+	if _turn_button == MOUSE_BUTTON_LEFT:
+		cancelled = not bool(map_view.get("_dragging"))
+		map_view.set("_dragging", false)
+	if not _turn_moved:
+		_turn_record.clear()
+		if _turn_button == MOUSE_BUTTON_LEFT and not cancelled:
+			_click(at)
+		return
+	var now := Time.get_ticks_msec()
+	while not _turn_record.is_empty() and now - int(_turn_record[0][0]) > INERTIA_CUTOFF_MS:
+		_turn_record.pop_front()
+	var ease := {}
+	if _turn_record.size() >= 2 and not _reduced():
+		var bearing := 0.0
+		var pitch := 0.0
+		for entry in _turn_record:
+			bearing += float(entry[1])
+			pitch += float(entry[2])
+		var span := float(int(_turn_record[_turn_record.size() - 1][0]) - int(_turn_record[0][0])) / 1000.0
+		ease = {"start": now, "duration": 0.0, "curve": "inertia"}
+		if bearing != 0.0:
+			var turned := inertia_easing(bearing, span, INERTIA_LINEARITY, BEARING_INERTIA_DECELERATION, BEARING_INERTIA_MAX_SPEED)
+			ease["bearing_from"] = map_view.bearing
+			ease["bearing_to"] = map_view.bearing + clampf(turned.x, -179.0, 179.0)
+			ease["duration"] = maxf(float(ease["duration"]), turned.y)
+		if pitch != 0.0:
+			var tilted := inertia_easing(pitch, span, INERTIA_LINEARITY, PITCH_INERTIA_DECELERATION, PITCH_INERTIA_MAX_SPEED)
+			ease["pitch_from"] = map_view.pitch
+			ease["pitch_to"] = map_view.pitch + tilted.x
+			ease["duration"] = maxf(float(ease["duration"]), tilted.y)
+		if not ease.has("bearing_to") and not ease.has("pitch_to"):
+			ease = {}
+	_turn_record.clear()
+	if not ease.is_empty():
+		if snaps_north(float(ease.get("bearing_to", map_view.bearing))):
+			ease["bearing_from"] = map_view.bearing
+			ease["bearing_to"] = 0.0
+		_begin_ease(ease, map_view.camera.position, true)
+	elif snaps_north(map_view.bearing):
+		_begin_ease({
+			"start": Time.get_ticks_msec(),
+			"duration": 0.0 if _reduced() else RESET_NORTH_MS,
+			"curve": "default",
+			"bearing_from": map_view.bearing,
+			"bearing_to": normalize_bearing(0.0, map_view.bearing),
+		}, map_view.camera.position, false)
+
+
+static func snaps_north(bearing: float) -> bool:
+	return bearing != 0.0 and bearing > -BEARING_SNAP and bearing < BEARING_SNAP
 
 
 func wheel_type() -> String:

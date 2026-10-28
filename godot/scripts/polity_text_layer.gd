@@ -226,6 +226,11 @@ var _projected_material: ShaderMaterial
 var _projected := false
 var _projected_rect := Rect2()
 var _projected_wrap := false
+var _view_key: Array = []
+var _view_states := PackedInt32Array()
+var _view_fading := {}
+var _view_alphas := {}
+var _view_direct: Array[int] = []
 
 
 class Painter extends Node2D:
@@ -562,21 +567,33 @@ func update_view() -> void:
 	var copies: Array[float] = []
 	if map and not _hidden and not _labels.is_empty():
 		var level := map.zoom_level()
-		for index in range(_labels.size()):
-			var label := _labels[index]
-			var opacity := opacity_at(level, float(label["min_zoom"]), float(label["max_zoom"]), float(label["fade_in"]), float(label["fade_out_start"]))
-			if opacity <= 0.002:
-				continue
-			if opacity >= 1.0:
-				states[index] = 1
-				direct.append(index)
-				continue
-			var key: String = label["fade_key"]
-			states[index] = 2
-			if not fading.has(key):
-				fading[key] = [] as Array[int]
-				alphas[key] = opacity
-			(fading[key] as Array[int]).append(index)
+		var view_key := [level, revision]
+		if view_key == _view_key and _view_states.size() == _labels.size():
+			states = _view_states
+			fading = _view_fading
+			alphas = _view_alphas
+			direct = _view_direct
+		else:
+			for index in range(_labels.size()):
+				var label := _labels[index]
+				var opacity := opacity_at(level, float(label["min_zoom"]), float(label["max_zoom"]), float(label["fade_in"]), float(label["fade_out_start"]))
+				if opacity <= 0.002:
+					continue
+				if opacity >= 1.0:
+					states[index] = 1
+					direct.append(index)
+					continue
+				var key: String = label["fade_key"]
+				states[index] = 2
+				if not fading.has(key):
+					fading[key] = [] as Array[int]
+					alphas[key] = opacity
+				(fading[key] as Array[int]).append(index)
+			_view_key = view_key
+			_view_states = states
+			_view_fading = fading
+			_view_alphas = alphas
+			_view_direct = direct
 		copies = _projected_copies() if _projected else _copies_in_view()
 	if states != _states or copies != _copies or fading.keys() != _fade_keys:
 		_states = states

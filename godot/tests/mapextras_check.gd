@@ -178,6 +178,8 @@ func _run() -> void:
 		await _tilt_checks()
 	if _wants("trackpad"):
 		await _trackpad_checks()
+	if _wants("turn"):
+		await _turn_checks()
 	if _wants("touch"):
 		await _touch_checks()
 	if _wants("terrain"):
@@ -264,6 +266,26 @@ func _move(view: MapView, at: Vector2, relative: Vector2, shift := false) -> voi
 	event.relative = relative
 	event.shift_pressed = shift
 	event.button_mask = MOUSE_BUTTON_MASK_LEFT
+	view._unhandled_input(event)
+
+
+func _mouse(view: MapView, at: Vector2, index: MouseButton, pressed: bool, ctrl := false, factor := 1.0) -> void:
+	var event := InputEventMouseButton.new()
+	event.position = at
+	event.global_position = at
+	event.button_index = index
+	event.pressed = pressed
+	event.ctrl_pressed = ctrl
+	event.factor = factor
+	view._unhandled_input(event)
+
+
+func _move_held(view: MapView, at: Vector2, relative: Vector2, mask: int) -> void:
+	var event := InputEventMouseMotion.new()
+	event.position = at
+	event.global_position = at
+	event.relative = relative
+	event.button_mask = mask
 	view._unhandled_input(event)
 
 
@@ -698,10 +720,10 @@ func _drag_by(view: MapView, from: Vector2, step: Vector2, count: int) -> Array:
 	return [at, gap]
 
 
-func _pan_gesture(view: MapView, at: Vector2, delta_y: float) -> void:
+func _pan_gesture(view: MapView, at: Vector2, delta: Vector2) -> void:
 	var event := InputEventPanGesture.new()
 	event.position = at
-	event.delta = Vector2(0.0, delta_y)
+	event.delta = delta
 	view._unhandled_input(event)
 
 
@@ -712,36 +734,195 @@ func _magnify(view: MapView, at: Vector2, factor: float) -> void:
 	view._unhandled_input(event)
 
 
+func _hold_level(on: bool) -> void:
+	if on and process_frame.is_connected(_keep_tilt):
+		process_frame.disconnect(_keep_tilt)
+	elif not on and tilt != Vector2.ZERO and not process_frame.is_connected(_keep_tilt):
+		process_frame.connect(_keep_tilt)
+
+
+func _level_view(view: MapView) -> void:
+	extras.navigator.stop()
+	view.bearing = 0.0
+	view.pitch = 0.0
+	view.fly_to_lonlat(10.0, 48.0, 4.5, 0.0)
+	await _wait(0.6)
+
+
 func _trackpad_checks() -> void:
 	var view: MapView = main.map_view
-	extras.apply_map_settings({"Globe": false})
-	view.fly_to_lonlat(10.0, 48.0, 4.5, 0.0)
-	await _wait(1.0)
 	var navigator: MapNavigator = extras.navigator
-	var before := view.zoom_level()
-	_pan_gesture(view, Vector2(720, 450), -0.06)
+	var at := Vector2(720, 450)
+	_hold_level(true)
+	extras.apply_map_settings({"Globe": false})
+	await _level_view(view)
+	var zoom := view.zoom_level()
+	var place := view.camera.position
+	_pan_gesture(view, at, Vector2(0.0, 0.6))
 	await _frames(2)
-	var expected := log(2.0 / (1.0 + exp(-2.0 / 100.0))) / log(2.0)
-	_check(navigator.wheel_type() == "trackpad" and absf(view.zoom_level() - before - expected) < 0.002, "a two-finger scroll is read as a trackpad and zooms at once (%.4f)" % (view.zoom_level() - before))
-	before = view.zoom_level()
-	_magnify(view, Vector2(720, 450), 1.1)
+	_check(navigator.wheel_type() == "trackpad" and absf(view.pitch - 10.0) < 0.01 and absf(view.bearing) < 0.0001 and absf(view.zoom_level() - zoom) < 0.0001 and view.camera.position.distance_to(place) < 0.001, "a two-finger drag up on a trackpad tilts the map and does not zoom (%.2f degrees, zoom %+.4f)" % [view.pitch, view.zoom_level() - zoom])
+	_pan_gesture(view, at, Vector2(-0.3, 0.0))
 	await _frames(2)
-	expected = log(2.0 / (1.0 + exp(-100.0 * log(1.1) / 100.0))) / log(2.0)
-	_check(absf(view.zoom_level() - before - expected) < 0.003, "a pinch zooms by MapLibre's trackpad rate (%.4f)" % (view.zoom_level() - before))
+	_check(absf(view.bearing - 8.0) < 0.01 and absf(view.pitch - 10.0) < 0.01 and absf(view.zoom_level() - zoom) < 0.0001, "a two-finger drag sideways turns it (%.2f degrees)" % view.bearing)
+	_pan_gesture(view, at, Vector2(0.15, -0.3))
+	await _frames(2)
+	_check(absf(view.bearing - 4.0) < 0.01 and absf(view.pitch - 5.0) < 0.01, "both at once turn and tilt together (%.2f, %.2f degrees)" % [view.bearing, view.pitch])
+	_pan_gesture(view, at, Vector2(0.0, 6.0))
+	await _frames(2)
+	_check(is_equal_approx(view.pitch, 60.0), "the two-finger tilt stops at MapLibre's 60 degrees (%.2f)" % view.pitch)
+	await _level_view(view)
+	zoom = view.zoom_level()
+	_mouse(view, at, MOUSE_BUTTON_WHEEL_DOWN, true, false, 0.1)
+	_mouse(view, at, MOUSE_BUTTON_WHEEL_DOWN, true, false, 0.1)
+	await _frames(2)
+	_check(navigator.wheel_type() == "trackpad" and absf(view.pitch - 10.0) < 0.01 and absf(view.zoom_level() - zoom) < 0.0001, "small quick wheel steps from a precision touchpad are read as a trackpad and tilt (%.2f degrees, zoom %+.4f)" % [view.pitch, view.zoom_level() - zoom])
+	_mouse(view, at, MOUSE_BUTTON_WHEEL_RIGHT, true, false, 0.1)
+	_mouse(view, at, MOUSE_BUTTON_WHEEL_RIGHT, true, false, 0.1)
+	await _frames(2)
+	_check(absf(view.bearing + 16.0) < 0.01 and absf(view.zoom_level() - zoom) < 0.0001, "and sideways steps turn the map (%.2f degrees)" % view.bearing)
+	await _level_view(view)
+	zoom = view.zoom_level()
+	_mouse(view, at, MOUSE_BUTTON_WHEEL_UP, true, true, 0.1)
+	_mouse(view, at, MOUSE_BUTTON_WHEEL_UP, true, true, 0.1)
+	await _frames(2)
+	var expected := log(2.0 / (1.0 + exp(-20.0 / 100.0))) / log(2.0)
+	_check(absf(view.zoom_level() - zoom - expected) < 0.003 and view.pitch == 0.0 and view.bearing == 0.0, "a touchpad pinch (Ctrl with the wheel) zooms at MapLibre's trackpad rate and does not turn (%.4f)" % (view.zoom_level() - zoom))
 	await _wait(0.6)
-	before = view.zoom_level()
-	_button(view, Vector2(720, 450), MOUSE_BUTTON_WHEEL_UP, true, false, 0.1)
-	await _frames(1)
-	_button(view, Vector2(720, 450), MOUSE_BUTTON_WHEEL_UP, true, false, 0.1)
+	zoom = view.zoom_level()
+	_magnify(view, at, 1.1)
+	_magnify(view, at, 1.1)
 	await _frames(2)
-	_check(navigator.wheel_type() == "trackpad" and view.zoom_level() > before, "small quick wheel steps from a precision touchpad are read as a trackpad")
-	await _wait(0.6)
-	before = view.zoom_level()
-	_button(view, Vector2(720, 450), MOUSE_BUTTON_WHEEL_UP, true)
+	expected = log(2.0 / (1.0 + exp(-200.0 * log(1.1) / 100.0))) / log(2.0)
+	_check(navigator.wheel_type() == "trackpad" and absf(view.zoom_level() - zoom - expected) < 0.003 and view.pitch == 0.0, "a pinch gesture zooms by MapLibre's trackpad rate (%.4f)" % (view.zoom_level() - zoom))
+	await _level_view(view)
+	zoom = view.zoom_level()
+	_mouse(view, at, MOUSE_BUTTON_WHEEL_UP, true)
 	await _frames(1)
-	_check(absf(view.zoom_level() - before) < 0.0001, "a lone wheel notch waits 40 ms to learn what it is")
+	_check(absf(view.zoom_level() - zoom) < 0.0001, "a lone wheel notch waits 40 ms to learn what it is")
 	await _wait(0.4)
-	_check(navigator.wheel_type() == "wheel", "and is then treated as a mouse wheel")
+	expected = log(2.0 / (1.0 + exp(-100.0 / 450.0))) / log(2.0)
+	_check(navigator.wheel_type() == "wheel" and absf(view.zoom_level() - zoom - expected) < 0.01 and view.pitch == 0.0 and view.bearing == 0.0, "and is then treated as a mouse wheel that zooms, as before (%.4f)" % (view.zoom_level() - zoom))
+	await _wait(0.5)
+	zoom = view.zoom_level()
+	for notch in range(3):
+		_mouse(view, at, MOUSE_BUTTON_WHEEL_DOWN, true)
+		await _frames(1)
+	await _wait(0.5)
+	_check(navigator.wheel_type() == "wheel" and view.zoom_level() < zoom - 0.2 and view.pitch == 0.0 and view.bearing == 0.0, "a spun mouse wheel keeps zooming and never turns the map (%.3f)" % (view.zoom_level() - zoom))
+	extras.apply_map_settings({"Globe": true})
+	await _frames(3)
+	view.fly_to_lonlat(10.0, 40.0, 3.0, 0.0)
+	await _wait(1.0)
+	zoom = view.zoom_level()
+	_pan_gesture(view, at, Vector2(-0.3, 0.6))
+	await _frames(2)
+	_check(extras.globe.globe_shown() and absf(view.bearing - 8.0) < 0.01 and absf(view.pitch - 10.0) < 0.01 and absf(view.zoom_level() - zoom) < 0.0001, "the globe turns and tilts with two fingers too (%.2f, %.2f degrees)" % [view.bearing, view.pitch])
+	extras.apply_map_settings({"Globe": false})
+	await _frames(3)
+	await _level_view(view)
+	_hold_level(false)
+
+
+func _turn_checks() -> void:
+	var view: MapView = main.map_view
+	_hold_level(true)
+	extras.apply_map_settings({"Globe": false})
+	await _level_view(view)
+	var centre := view.get_viewport_rect().size * 0.5
+	var from := centre + Vector2(-200.0, 60.0)
+	var place := view.camera.position
+	_mouse(view, from, MOUSE_BUTTON_RIGHT, true)
+	_mouse(view, from, MOUSE_BUTTON_RIGHT, false)
+	await _frames(3)
+	_check(view.bearing == 0.0 and view.pitch == 0.0 and view.camera.position == place, "a right-click without moving leaves the map as it was")
+	_mouse(view, from, MOUSE_BUTTON_RIGHT, true)
+	var at := from
+	for step in range(5):
+		await _frames(1)
+		at += Vector2(10.0, 0.0)
+		_move_held(view, at, Vector2(10.0, 0.0), MOUSE_BUTTON_MASK_RIGHT)
+	_check(absf(view.bearing - 40.0) < 0.01 and view.pitch == 0.0 and view.camera.position.distance_to(place) < 0.001, "a right-button drag sideways turns the map about its centre, as MapLibre's drag-rotate does (%.2f degrees)" % view.bearing)
+	for step in range(4):
+		await _frames(1)
+		at += Vector2(0.0, -10.0)
+		_move_held(view, at, Vector2(0.0, -10.0), MOUSE_BUTTON_MASK_RIGHT)
+	_check(absf(view.pitch - 20.0) < 0.01 and absf(view.bearing - 40.0) < 0.01, "and a drag up tilts it, as MapLibre's pitch-with-rotate does (%.2f degrees)" % view.pitch)
+	_mouse(view, at, MOUSE_BUTTON_RIGHT, false)
+	await _wait(1.0)
+	_check(view.pitch > 20.5 and view.pitch <= 60.0 and not extras.navigator.busy(), "the tilt carries on a little after letting go and comes to rest (%.2f degrees)" % view.pitch)
+	_mouse(view, at, MOUSE_BUTTON_RIGHT, true)
+	for step in range(12):
+		await _frames(1)
+		at += Vector2(0.0, -25.0)
+		_move_held(view, at, Vector2(0.0, -25.0), MOUSE_BUTTON_MASK_RIGHT)
+	_check(is_equal_approx(view.pitch, 60.0), "the right-button tilt stops at 60 degrees (%.2f)" % view.pitch)
+	_mouse(view, at, MOUSE_BUTTON_RIGHT, false)
+	await _wait(0.8)
+	await _level_view(view)
+	at = centre + Vector2(-200.0, -160.0)
+	_mouse(view, at, MOUSE_BUTTON_RIGHT, true)
+	for step in range(3):
+		await _frames(1)
+		at += Vector2(10.0, 0.0)
+		_move_held(view, at, Vector2(10.0, 0.0), MOUSE_BUTTON_MASK_RIGHT)
+	var expected := 0.0
+	var probe := centre + Vector2(-200.0, -160.0)
+	for step in range(3):
+		expected += MapNavigator.angle_with(probe + Vector2(10.0, 0.0) - centre, probe - centre)
+		probe += Vector2(10.0, 0.0)
+	_check(absf(view.bearing - MapNavigator.wrap_bearing(expected)) < 0.01 and view.bearing < 0.0, "far from the centre the drag turns the map around it, as MapLibre does (%.2f degrees)" % view.bearing)
+	_mouse(view, at, MOUSE_BUTTON_RIGHT, false)
+	await _wait(0.8)
+	await _level_view(view)
+	at = from
+	_mouse(view, at, MOUSE_BUTTON_RIGHT, true)
+	await _frames(1)
+	at += Vector2(5.0, 0.0)
+	_move_held(view, at, Vector2(5.0, 0.0), MOUSE_BUTTON_MASK_RIGHT)
+	var nudged := view.bearing
+	await _wait(0.3)
+	_mouse(view, at, MOUSE_BUTTON_RIGHT, false)
+	await _wait(1.3)
+	_check(absf(nudged - 4.0) < 0.01 and absf(view.bearing) < 0.001, "a turn of less than 7 degrees springs back to north, as MapLibre's bearing snap does (%.2f then %.2f)" % [nudged, view.bearing])
+	await _level_view(view)
+	at = from
+	_mouse(view, at, MOUSE_BUTTON_LEFT, true, true)
+	for step in range(3):
+		await _frames(1)
+		at += Vector2(0.0, -20.0)
+		_move_held(view, at, Vector2(0.0, -20.0), MOUSE_BUTTON_MASK_LEFT)
+	_check(absf(view.pitch - 30.0) < 0.01 and view.camera.position.distance_to(place) < 0.001, "Ctrl with a left-button drag tilts too, as MapLibre's drag-rotate does (%.2f degrees)" % view.pitch)
+	_mouse(view, at, MOUSE_BUTTON_LEFT, false, true)
+	await _wait(0.8)
+	await _level_view(view)
+	place = view.camera.position
+	at = Vector2(600, 450)
+	_button(view, at, MOUSE_BUTTON_LEFT, true)
+	for step in range(6):
+		await _frames(1)
+		at += Vector2(40.0, 0.0)
+		_move(view, at, Vector2(40.0, 0.0))
+	var moved := (place.x - view.camera.position.x) * view.camera.zoom.x
+	_button(view, at, MOUSE_BUTTON_LEFT, false)
+	extras.navigator.stop()
+	_check(absf(moved - 240.0) < 1.0 and view.bearing == 0.0 and view.pitch == 0.0, "a one-finger click and drag still pans the map with the pointer (%.1f px)" % moved)
+	extras.apply_map_settings({"Globe": true})
+	await _frames(3)
+	view.fly_to_lonlat(10.0, 40.0, 3.0, 0.0)
+	await _wait(1.0)
+	at = from
+	_mouse(view, at, MOUSE_BUTTON_RIGHT, true)
+	for step in range(5):
+		await _frames(1)
+		at += Vector2(10.0, -4.0)
+		_move_held(view, at, Vector2(10.0, -4.0), MOUSE_BUTTON_MASK_RIGHT)
+	_check(extras.globe.globe_shown() and absf(view.bearing - 40.0) < 0.01 and absf(view.pitch - 10.0) < 0.01, "the globe turns and tilts with the right button too (%.2f, %.2f degrees)" % [view.bearing, view.pitch])
+	_mouse(view, at, MOUSE_BUTTON_RIGHT, false)
+	extras.navigator.stop()
+	extras.apply_map_settings({"Globe": false})
+	await _frames(3)
+	await _level_view(view)
+	_hold_level(false)
 
 
 func _steep_checks(view: MapView) -> void:

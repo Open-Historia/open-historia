@@ -7,6 +7,8 @@ use std::thread;
 use godot::prelude::*;
 use ohmap::{BakedMap, PickIndex};
 
+mod projector;
+
 struct OpenHistoriaExtension;
 
 #[gdextension]
@@ -337,5 +339,140 @@ fn to_dictionary(map: &BakedMap) -> VarDictionary {
     result.set(&"centroids".to_variant(), &(centroids).to_variant());
     result.set(&"areas".to_variant(), &(areas).to_variant());
     result.set(&"bounds".to_variant(), &(Rect2::new(Vector2::new(map.bounds[0], map.bounds[1]), Vector2::new(map.bounds[2] - map.bounds[0], map.bounds[3] - map.bounds[1]))).to_variant());
+    result.set(&"fill_chunks".to_variant(), &fill_chunks(map).to_variant());
+    result.set(&"border_chunks".to_variant(), &border_chunks(map).to_variant());
     result
+}
+
+const CHUNK_CELLS: i64 = 8;
+
+fn chunk_cell(width: f32, x: f32, y: f32) -> usize {
+    let span = (width / CHUNK_CELLS as f32).max(1e-6);
+    let column = ((x / span).floor() as i64).clamp(0, CHUNK_CELLS - 1);
+    let row = ((y / span).floor() as i64).clamp(0, CHUNK_CELLS - 1);
+    (row * CHUNK_CELLS + column) as usize
+}
+
+fn grow(bounds: &mut [f32; 4], point: [f32; 2]) {
+    bounds[0] = bounds[0].min(point[0]);
+    bounds[1] = bounds[1].min(point[1]);
+    bounds[2] = bounds[2].max(point[0]);
+    bounds[3] = bounds[3].max(point[1]);
+}
+
+fn bounds_rect(bounds: [f32; 4]) -> Rect2 {
+    Rect2::new(Vector2::new(bounds[0], bounds[1]), Vector2::new(bounds[2] - bounds[0], bounds[3] - bounds[1]))
+}
+
+fn fill_chunks(map: &BakedMap) -> VarArray {
+    let cells = (CHUNK_CELLS * CHUNK_CELLS) as usize;
+    let mut triangles: Vec<Vec<usize>> = vec![Vec::new(); cells];
+    for triangle in 0..map.indices.len() / 3 {
+        let mut centre = [0.0f32; 2];
+        for corner in 0..3 {
+            let point = map.vertices[map.indices[triangle * 3 + corner] as usize];
+            centre[0] += point[0] / 3.0;
+            centre[1] += point[1] / 3.0;
+        }
+        triangles[chunk_cell(map.width, centre[0], centre[1])].push(triangle);
+    }
+    let mut out = VarArray::new();
+    let mut local = vec![u32::MAX; map.vertices.len()];
+    for list in triangles.iter().filter(|list| !list.is_empty()) {
+        let mut vertices = PackedVector2Array::new();
+        let mut uvs = PackedVector2Array::new();
+        let mut indices = PackedInt32Array::new();
+        let mut touched: Vec<usize> = Vec::new();
+        let mut bounds = [f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY];
+        for &triangle in list {
+            for corner in 0..3 {
+                let source = map.indices[triangle * 3 + corner] as usize;
+                if local[source] == u32::MAX {
+                    local[source] = vertices.len() as u32;
+                    touched.push(source);
+                    let point = map.vertices[source];
+                    vertices.push(Vector2::new(point[0], point[1]));
+                    uvs.push(Vector2::new(map.vertex_region[source] as f32, 0.0));
+                    grow(&mut bounds, point);
+                }
+                indices.push(local[source] as i32);
+            }
+        }
+        for source in touched {
+            local[source] = u32::MAX;
+        }
+        let mut chunk = VarDictionary::new();
+        chunk.set(&"rect".to_variant(), &bounds_rect(bounds).to_variant());
+        chunk.set(&"vertices".to_variant(), &vertices.to_variant());
+        chunk.set(&"uvs".to_variant(), &uvs.to_variant());
+        chunk.set(&"indices".to_variant(), &indices.to_variant());
+        out.push(&chunk.to_variant());
+    }
+    out
+}
+
+fn border_chunks(map: &BakedMap) -> VarArray {
+    let cells = (CHUNK_CELLS * CHUNK_CELLS) as usize;
+    let mut segments: Vec<Vec<usize>> = vec![Vec::new(); cells];
+    for segment in 0..map.border_regions.len() {
+        let a = map.border_vertices[segment * 2];
+        let b = map.border_vertices[segment * 2 + 1];
+        segments[chunk_cell(map.width, (a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5)].push(segment);
+    }
+    let mut out = VarArray::new();
+    for list in segments.iter().filter(|list| !list.is_empty()) {
+        let count = list.len();
+        let mut vertices = PackedVector2Array::new();
+        let mut uvs = PackedVector2Array::new();
+        let mut sides = PackedColorArray::new();
+        let mut indices = PackedInt32Array::new();
+        vertices.resize(count * 4);
+        uvs.resize(count * 4);
+        sides.resize(count * 4);
+        indices.resize(count * 6);
+        let mut bounds = [f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY];
+        {
+            let vertices = vertices.as_mut_slice();
+            let uvs = uvs.as_mut_slice();
+            let sides = sides.as_mut_slice();
+            let indices = indices.as_mut_slice();
+            for (slot, &segment) in list.iter().enumerate() {
+                let pair = map.border_regions[segment];
+                let a = map.border_vertices[segment * 2];
+                let b = map.border_vertices[segment * 2 + 1];
+                grow(&mut bounds, a);
+                grow(&mut bounds, b);
+                let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+                let length = (dx * dx + dy * dy).sqrt().max(1e-9);
+                let normal = Vector2::new(-dy / length, dx / length);
+                let uv = Vector2::new(pair[0] as f32, pair[1] as f32);
+                let base = slot * 4;
+                vertices[base] = Vector2::new(a[0], a[1]);
+                vertices[base + 1] = Vector2::new(a[0], a[1]);
+                vertices[base + 2] = Vector2::new(b[0], b[1]);
+                vertices[base + 3] = Vector2::new(b[0], b[1]);
+                for corner in 0..4 {
+                    uvs[base + corner] = uv;
+                    let offset = if corner % 2 == 0 { normal } else { -normal };
+                    sides[base + corner] = Color::from_rgba(offset.x * 0.5 + 0.5, offset.y * 0.5 + 0.5, if corner % 2 == 0 { 1.0 } else { 0.0 }, 1.0);
+                }
+                let first = base as i32;
+                let at = slot * 6;
+                indices[at] = first;
+                indices[at + 1] = first + 1;
+                indices[at + 2] = first + 2;
+                indices[at + 3] = first + 2;
+                indices[at + 4] = first + 1;
+                indices[at + 5] = first + 3;
+            }
+        }
+        let mut chunk = VarDictionary::new();
+        chunk.set(&"rect".to_variant(), &bounds_rect(bounds).to_variant());
+        chunk.set(&"vertices".to_variant(), &vertices.to_variant());
+        chunk.set(&"uvs".to_variant(), &uvs.to_variant());
+        chunk.set(&"sides".to_variant(), &sides.to_variant());
+        chunk.set(&"indices".to_variant(), &indices.to_variant());
+        out.push(&chunk.to_variant());
+    }
+    out
 }

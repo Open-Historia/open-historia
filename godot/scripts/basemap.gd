@@ -190,6 +190,8 @@ var _vector_baker: MapBaker
 var _vector_file := ""
 var _vector_fills: Array = []
 var _line_material: ShaderMaterial
+var _decodes: Array[int] = []
+var _decoding := 0
 
 
 func _ready() -> void:
@@ -422,8 +424,11 @@ func _covering_tiles() -> Dictionary:
 	var requested := level + 1.0
 	var nominal := maxi(0, roundi(requested))
 	var behaviour := cover_loading_behaviour()
+	var count_term := cover_count_term(distance_z, distance_centre, behaviour) if variable else 0.0
+	var axes := quad_axes(quad)
 	var tiles: Array = []
 	var stack: Array[Array] = []
+	var key := nominal * 7919 + (1 if variable else 0)
 	if _wrap:
 		for wrap in range(1, 4):
 			stack.append([0, 0, 0, -wrap])
@@ -438,22 +443,23 @@ func _covering_tiles() -> Dictionary:
 		var count := 1 << zoom
 		var low := Vector2((float(wrap) + float(x) / count) * world_width, float(y) / count * world_width)
 		var high := low + Vector2.ONE * world_width / count
-		if not quad_meets(quad, quad_low, quad_high, low, high):
+		if not quad_meets_with(axes, quad_low, quad_high, low, high):
 			continue
 		var desired := nominal
 		if variable:
 			var nearest := camera_ground.clamp(low / world_width, high / world_width)
 			var distance_2d := nearest.distance_to(camera_ground)
-			desired = maxi(0, roundi(cover_tile_zoom(requested, distance_2d, distance_z, distance_centre, behaviour)))
+			desired = maxi(0, roundi(cover_tile_zoom_with(requested, distance_2d, distance_z, distance_centre, behaviour, count_term)))
 		var target := mini(desired, COVER_MAX_ZOOM)
 		if zoom >= target:
 			var middle := (low + high) * 0.5 / world_width
 			tiles.append([zoom, x + wrap * count, y, desired, middle.distance_squared_to(centre / world_width)])
+			key = (key * 1000003 + ((zoom * 64 + desired) * 8192 + x + wrap * count + 4096) * 65536 + y) & 0x3fffffffffffffff
 			continue
 		for child in range(4):
 			stack.append([zoom + 1, (x << 1) + (child % 2), (y << 1) + (child >> 1), wrap])
 	tiles.sort_custom(func(a: Array, b: Array) -> bool: return float(a[4]) > float(b[4]))
-	return {"tiles": tiles, "nominal": nominal, "variable": variable}
+	return {"tiles": tiles, "nominal": nominal, "variable": variable, "key": key if key != 0 else 1}
 
 
 static func ground_point(screen: Vector2, size: Vector2, centre: Vector2, px_per_world: float, bearing_deg: float, pitch_deg: float) -> Vector2:
@@ -468,6 +474,35 @@ static func ground_point(screen: Vector2, size: Vector2, centre: Vector2, px_per
 	var v := sy * focal / denominator
 	var a := sx * (focal + v * sin(pitch)) / focal
 	return centre + (right * a + up * v) / px_per_world
+
+
+static func quad_axes(quad: PackedVector2Array) -> PackedFloat64Array:
+	var axes := PackedFloat64Array()
+	for index in range(quad.size()):
+		var edge := quad[(index + 1) % quad.size()] - quad[index]
+		var axis := Vector2(-edge.y, edge.x)
+		var quad_min := INF
+		var quad_max := -INF
+		for point in quad:
+			var along := point.dot(axis)
+			quad_min = minf(quad_min, along)
+			quad_max = maxf(quad_max, along)
+		axes.append_array([axis.x, axis.y, quad_min, quad_max])
+	return axes
+
+
+static func quad_meets_with(axes: PackedFloat64Array, quad_low: Vector2, quad_high: Vector2, low: Vector2, high: Vector2) -> bool:
+	if quad_high.x < low.x or quad_low.x > high.x or quad_high.y < low.y or quad_low.y > high.y:
+		return false
+	for at in range(0, axes.size(), 4):
+		var axis := Vector2(axes[at], axes[at + 1])
+		var a := low.dot(axis)
+		var b := Vector2(high.x, low.y).dot(axis)
+		var c := high.dot(axis)
+		var d := Vector2(low.x, high.y).dot(axis)
+		if maxf(maxf(a, b), maxf(c, d)) < axes[at + 2] or minf(minf(a, b), minf(c, d)) > axes[at + 3]:
+			return false
+	return true
 
 
 static func quad_meets(quad: PackedVector2Array, quad_low: Vector2, quad_high: Vector2, low: Vector2, high: Vector2) -> bool:
@@ -510,23 +545,32 @@ static func _cos_power_integral(power: float, from: float, to: float) -> float:
 
 
 static func cover_tile_zoom(requested: float, distance_2d: float, distance_z: float, distance_centre: float, behaviour: float) -> float:
+	return cover_tile_zoom_with(requested, distance_2d, distance_z, distance_centre, behaviour, cover_count_term(distance_z, distance_centre, behaviour))
+
+
+static func cover_count_term(distance_z: float, distance_centre: float, behaviour: float) -> float:
 	var half_fov := deg_to_rad(COVER_FOV_DEG * 0.5)
 	var centre_pitch := acos(clampf(distance_z / distance_centre, -1.0, 1.0))
 	var flat_count := 2.0 * _cos_power_integral(behaviour - 1.0, 0.0, half_fov)
 	var highest := minf(deg_to_rad(MAX_MERCATOR_HORIZON_ANGLE), centre_pitch + half_fov)
 	var lowest := minf(highest, centre_pitch - half_fov)
 	var tile_count := _cos_power_integral(behaviour - 1.0, lowest, highest)
+	return (log(maxf(1.0, tile_count / flat_count / COVER_TILE_COUNT_RATIO)) / log(2.0)) / 2.0
+
+
+static func cover_tile_zoom_with(requested: float, distance_2d: float, distance_z: float, distance_centre: float, behaviour: float, count_term: float) -> float:
+	var half_fov := deg_to_rad(COVER_FOV_DEG * 0.5)
 	var tile_pitch := atan(distance_2d / distance_z)
 	var distance_3d := sqrt(distance_2d * distance_2d + distance_z * distance_z)
 	var zoom := requested
 	zoom += log(distance_centre / distance_3d / maxf(0.5, cos(half_fov))) / log(2.0)
 	zoom += behaviour * (log(cos(tile_pitch)) / log(2.0)) / 2.0
-	zoom -= (log(maxf(1.0, tile_count / flat_count / COVER_TILE_COUNT_RATIO)) / log(2.0)) / 2.0
+	zoom -= count_term
 	return zoom
 
 
 func _report_loading() -> void:
-	var loading := _active > 0 or not _queue.is_empty()
+	var loading := _active > 0 or _decoding > 0 or not _queue.is_empty()
 	if loading != _loading:
 		_loading = loading
 		loading_changed.emit(loading)
@@ -582,11 +626,8 @@ func _pump() -> void:
 			continue
 		var cached := _cache_path(layer, key)
 		if not cached.is_empty() and FileAccess.file_exists(cached):
-			var bytes := FileAccess.get_file_as_bytes(cached)
-			var texture := _decode(layer, bytes)
-			if texture:
-				_accept(layer, key, texture, bytes)
-				continue
+			_decode_later(layer, key, cached, PackedByteArray())
+			continue
 		if layer.source == "pmtiles":
 			_fetch_pmtiles(layer, key, z, x, y)
 			continue
@@ -611,14 +652,10 @@ func _fetch(layer: TileLayer, key: String, url: String) -> void:
 		if owner_layer == null or not is_instance_valid(owner_layer):
 			_pump()
 			return
-		owner_layer.pending.erase(key)
-		var texture: Texture2D = null
-		if result == HTTPRequest.RESULT_SUCCESS and code == 200:
-			texture = _decode(owner_layer, body)
-		if texture:
-			_store(owner_layer, key, body)
-			_accept(owner_layer, key, texture, body)
+		if result == HTTPRequest.RESULT_SUCCESS and code == 200 and body.size() >= 4:
+			_decode_later(owner_layer, key, "", body)
 		else:
+			owner_layer.pending.erase(key)
 			owner_layer.on_loaded(key, null, PackedByteArray())
 			if owner_layer.fixed_zoom == 2 and owner_layer.source == "esri" and not _offline and result != HTTPRequest.RESULT_SUCCESS:
 				_offline = true
@@ -655,6 +692,72 @@ func _fetch_pmtiles(layer: TileLayer, key: String, z: int, x: int, y: int) -> vo
 			layer.crops[key] = [levels, int(result.get("ox", 0)), int(result.get("oy", 0))]
 		layer.on_loaded(key, texture, bytes)
 	_pump()
+
+
+func _decode_later(layer: TileLayer, key: String, path: String, body: PackedByteArray) -> void:
+	layer.pending[key] = true
+	_decoding += 1
+	var layer_ref: WeakRef = weakref(layer)
+	var dem := layer.dem
+	_decodes.append(WorkerThreadPool.add_task(func() -> void:
+		var bytes := body if path.is_empty() else FileAccess.get_file_as_bytes(path)
+		_decoded.call_deferred(layer_ref, key, decode_image(dem, bytes), bytes, path.is_empty()), false, "basemap tile"))
+
+
+static func decode_image(dem: bool, bytes: PackedByteArray) -> Image:
+	if bytes.size() < 4:
+		return null
+	var image := Image.new()
+	var status := ERR_FILE_UNRECOGNIZED
+	if dem:
+		status = image.load_png_from_buffer(bytes)
+		if status == OK:
+			image.convert(Image.FORMAT_RGBA8)
+	elif bytes[0] == 0x89 and bytes[1] == 0x50:
+		status = image.load_png_from_buffer(bytes)
+	elif bytes[0] == 0xFF and bytes[1] == 0xD8:
+		status = image.load_jpg_from_buffer(bytes)
+	elif bytes[0] == 0x52 and bytes[1] == 0x49 and not ImageLoader.is_avif(bytes):
+		status = image.load_webp_from_buffer(bytes)
+	return image if status == OK else null
+
+
+func _decoded(layer_ref: WeakRef, key: String, image: Image, bytes: PackedByteArray, fetched: bool) -> void:
+	_decoding = maxi(0, _decoding - 1)
+	var kept: Array[int] = []
+	for task in _decodes:
+		if WorkerThreadPool.is_task_completed(task):
+			WorkerThreadPool.wait_for_task_completion(task)
+		else:
+			kept.append(task)
+	_decodes = kept
+	var layer := layer_ref.get_ref() as TileLayer
+	if layer == null or not is_instance_valid(layer) or layer.is_queued_for_deletion():
+		_pump()
+		return
+	layer.pending.erase(key)
+	var texture: Texture2D = ImageTexture.create_from_image(image) if image else null
+	if texture == null and not layer.dem:
+		texture = ImageLoader.decode(bytes)
+	if texture:
+		if fetched:
+			_store(layer, key, bytes)
+		_accept(layer, key, texture, bytes)
+	elif fetched:
+		layer.on_loaded(key, null, PackedByteArray())
+	elif layer.source == "pmtiles":
+		var parts := key.split("/")
+		_fetch_pmtiles(layer, key, int(parts[0]), int(parts[1]), int(parts[2]))
+	else:
+		var parts := key.split("/")
+		_fetch(layer, key, _url_of(layer, int(parts[0]), int(parts[1]), int(parts[2])))
+	_pump()
+
+
+func _exit_tree() -> void:
+	for task in _decodes:
+		WorkerThreadPool.wait_for_task_completion(task)
+	_decodes.clear()
 
 
 func _decode(layer: TileLayer, bytes: PackedByteArray) -> Texture2D:
@@ -877,6 +980,7 @@ class TileLayer extends Node2D:
 	var current_zoom := -1
 	var _wanted := {}
 	var _last_args: Array = []
+	var _cover_key := 0
 
 	func tile_zoom_for(zoom: float) -> int:
 		var ideal := int(roundf(log(16.0 * zoom) / log(2.0)))
@@ -893,6 +997,7 @@ class TileLayer extends Node2D:
 		if not basemap.cover.is_empty():
 			_update_cover(basemap.cover)
 			return
+		_cover_key = 0
 		var tile_zoom := tile_zoom_for(zoom)
 		var overscaled := maxi(int(roundf(log(16.0 * zoom) / log(2.0))), tile_zoom)
 		var count := 1 << tile_zoom
@@ -943,6 +1048,10 @@ class TileLayer extends Node2D:
 		current_zoom = tile_zoom
 
 	func _update_cover(cover: Dictionary) -> void:
+		var cover_key := int(cover.get("key", 0))
+		if cover_key != 0 and cover_key == _cover_key:
+			return
+		_cover_key = cover_key
 		var limit := fixed_zoom if fixed_zoom >= 0 else max_zoom
 		var world_width := basemap.world_width
 		var chosen := {}
@@ -1042,6 +1151,7 @@ class TileLayer extends Node2D:
 		place_all()
 
 	func place_all() -> void:
+		_cover_key = 0
 		if _last_args.is_empty():
 			return
 		update(_last_args[0], _last_args[1], _last_args[2], _last_args[3])

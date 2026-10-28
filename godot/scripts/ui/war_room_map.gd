@@ -29,7 +29,7 @@ var record: Dictionary = {}
 var _held: Dictionary = {}
 var _draft: Variant = null
 var _fitted := ""
-var _seen := Vector3.ZERO
+var _seen: Array = []
 var last_labels := PackedStringArray()
 var label_rects: Array[Rect2] = []
 var _taken: Array[Rect2] = []
@@ -47,6 +47,8 @@ func setup(map_view: MapView, shared: WarRoomStore) -> void:
 	map = map_view
 	store = shared
 	store.changed.connect(_on_store)
+	if not map.camera_moved.is_connected(_follow_camera):
+		map.camera_moved.connect(_follow_camera)
 
 
 func set_record(value: Dictionary) -> void:
@@ -73,14 +75,20 @@ func _on_store(keys: PackedStringArray) -> void:
 func _process(_delta: float) -> void:
 	if not map or not store or not bool(store.value("open")):
 		return
-	var view: Array = map.render_view()
-	var centre: Vector2 = view[0]
-	var seen := Vector3(centre.x, centre.y, float(view[1]))
-	if seen != _seen:
-		_seen = seen
-		queue_redraw()
-	elif map.war_label_rects != _war_seen:
-		queue_redraw()
+	if not _follow_camera():
+		if map.war_label_rects != _war_seen:
+			queue_redraw()
+
+
+func _follow_camera() -> bool:
+	if not map or not store or not bool(store.value("open")):
+		return false
+	var seen := [map.camera.position, map.camera.zoom.x, map.bearing, map.pitch, map.is_globe()]
+	if seen == _seen:
+		return false
+	_seen = seen
+	queue_redraw()
+	return true
 
 
 func _fit_if_asked() -> void:

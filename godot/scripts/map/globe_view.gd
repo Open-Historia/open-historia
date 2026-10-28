@@ -28,6 +28,10 @@ const NEAR_SPLIT := 0.3
 const FLAT_SPACE := Color(11 / 255.0, 16 / 255.0, 23 / 255.0)
 const SKY_HORIZON_BLEND := 0.8
 const MAX_MERCATOR_HORIZON_ANGLE := 89.25
+const FLAT_TILT_DEG := 0.5
+const FLAT_HEADROOM := 1.08
+const FLAT_SHRINK_SLACK := 384
+const FLAT_SHRINK_MS := 1500
 
 const SPHERE_SHADER := """
 shader_type canvas_item;
@@ -530,11 +534,18 @@ var _near_camera: Camera2D
 var _near_size := Vector2i.ZERO
 var _near := {}
 var _shown := false
+var _fast = null
+var _fast_relief := -1
+var _fast_frame: Dictionary = {}
+var _flat_shrink_at := 0
 
 
 func setup(owner_extras: Node, view: MapView) -> void:
 	extras = owner_extras
 	map_view = view
+	process_priority = -100
+	if ClassDB.class_exists("TerrainProjector"):
+		_fast = ClassDB.instantiate("TerrainProjector")
 	_layer = CanvasLayer.new()
 	_layer.layer = -1
 	_layer.visible = false
@@ -731,14 +742,14 @@ func _texture_size() -> Vector2i:
 		int(clampf(ceilf(size.y * FLAT_TEXTURE_SCALE / step) * step, step * 4.0, float(FLAT_TEXTURE_LIMIT))))
 
 
-func _ensure_viewport() -> void:
-	var size := _texture_size()
+func _ensure_viewport(wanted := Vector2i.ZERO) -> void:
+	var size := wanted if wanted != Vector2i.ZERO else _texture_size()
 	if _flat_viewport and _flat_size == size:
 		return
 	if _flat_viewport:
-		_flat_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
-		remove_child(_flat_viewport)
-		_flat_viewport.queue_free()
+		_flat_size = size
+		_flat_viewport.size = size
+		return
 	_flat_size = size
 	_flat_viewport = SubViewport.new()
 	_flat_viewport.disable_3d = true
@@ -850,6 +861,8 @@ func _process(_delta: float) -> void:
 	if _relief_dirty and active and relief_shown() and not _frame.is_empty():
 		_relief_dirty = false
 		relief.update(_frame, _flat.get("rect", Rect2()))
+	if active and _flat_shrink_at != 0 and Time.get_ticks_msec() >= _flat_shrink_at and not _is_moving():
+		map_view.call("_after_camera_move")
 	if not active or not enabled:
 		return
 	var now := Time.get_ticks_msec()
@@ -1349,7 +1362,81 @@ func current_frame() -> Dictionary:
 	return _frame
 
 
+func _fast_ready() -> bool:
+	if _fast == null:
+		return false
+	var frame := current_frame()
+	if relief and relief.revision != _fast_relief:
+		_fast_relief = relief.revision
+		_fast.set_relief(relief.has_data, relief.lod_rect, relief.lod_cell, relief.lod_size, relief.lod_data, relief.level_rects, relief.level_sizes, relief.level_data, relief.step, TerrainRelief.EXAGGERATION)
+		_fast_frame = {}
+	if not is_same(frame, _fast_frame):
+		_fast_frame = frame
+		var planes := Vector2(1.0, 2.0)
+		if bool(frame.get("relief", false)) and float(frame["g"]) <= 0.0:
+			planes = _depth_planes(frame)
+		_fast.set_frame(frame, planes)
+	return true
+
+
+func world_to_screen_many(points: PackedVector2Array) -> PackedVector2Array:
+	if _fast_ready():
+		return _fast.world_to_screen_many(points)
+	var out := PackedVector2Array()
+	out.resize(points.size())
+	for index in range(points.size()):
+		out[index] = world_to_screen(points[index])
+	return out
+
+
+func depth_many(points: PackedVector2Array) -> PackedFloat64Array:
+	if active and _fast_ready():
+		return _fast.depth_many(points)
+	var out := PackedFloat64Array()
+	out.resize(points.size())
+	for index in range(points.size()):
+		out[index] = depth_at(points[index])
+	return out
+
+
+func visibility_many(points: PackedVector2Array) -> PackedFloat64Array:
+	if _fast_ready():
+		return _fast.visibility_many(points)
+	var out := PackedFloat64Array()
+	out.resize(points.size())
+	for index in range(points.size()):
+		out[index] = anchor_visibility(points[index])
+	return out
+
+
+func cull_rect(pad: Vector2) -> Variant:
+	var frame := current_frame()
+	if float(frame["g"]) > 0.0:
+		return null
+	var size: Vector2 = frame["size"]
+	var focal: float = frame["focal"]
+	var pitch: float = frame["pitch"]
+	var lifts: Array[float] = [0.0]
+	if bool(frame.get("relief", false)):
+		lifts = [float(frame["lift_low"]), float(frame["lift_high"])]
+	var low := Vector2(INF, INF)
+	var high := Vector2(-INF, -INF)
+	for corner: Vector2 in [-pad, Vector2(size.x + pad.x, -pad.y), size + pad, Vector2(-pad.x, size.y + pad.y)]:
+		var sy := size.y * 0.5 - corner.y
+		if focal * cos(pitch) - sy * sin(pitch) <= 1e-3:
+			return null
+		for lift in lifts:
+			if focal * cos(pitch) - lift <= 1e-3:
+				return null
+			var world := unproject_lifted(frame, corner, lift)
+			low = low.min(world)
+			high = high.max(world)
+	return Rect2(low, high - low).grow(1.0)
+
+
 func world_to_screen(point: Vector2) -> Vector2:
+	if _fast_ready():
+		return _fast.world_to_screen(point)
 	var frame := current_frame()
 	if float(frame["g"]) > 0.0:
 		var lonlat := lonlat_of_world(point)
@@ -1370,6 +1457,8 @@ func world_to_screen_flat(point: Vector2) -> Vector2:
 
 
 func height_at(point: Vector2) -> float:
+	if _fast_ready():
+		return _fast.height_at(point)
 	return _height(current_frame(), point)
 
 
@@ -1378,10 +1467,14 @@ func centre_height() -> float:
 
 
 func world_to_screen_at(point: Vector2, height: float) -> Vector2:
+	if _fast_ready():
+		return _fast.world_to_screen_at(point, height)
 	return _project_lifted(current_frame(), point, height)
 
 
 func anchor_visibility(point: Vector2) -> float:
+	if _fast_ready():
+		return _fast.anchor_visibility(point)
 	var frame := current_frame()
 	if not bool(frame.get("relief", false)) or float(frame["g"]) > 0.0:
 		return 1.0
@@ -1560,6 +1653,8 @@ func screen_to_world_flat(screen: Vector2) -> Vector2:
 
 
 func frame_at(point: Vector2) -> Transform2D:
+	if _fast_ready():
+		return _fast.frame_at(point)
 	var frame := current_frame()
 	var scale: float = frame["px_per_world"]
 	var origin := world_to_screen(point)
@@ -1602,8 +1697,8 @@ func _unproject_location(frame: Dictionary, screen: Vector2) -> Vector2:
 func render_view() -> Array:
 	if not active:
 		return []
-	_ensure_viewport()
 	_frame = _compute_frame()
+	_ensure_viewport(_wanted_texture(_frame))
 	if float(_frame["g"]) <= 0.0:
 		_flat = _plane_view(_frame, Rect2(Vector2.ZERO, _frame["size"]), Vector2(_flat_size), float(_frame["px_per_world"]))
 	else:
@@ -1614,7 +1709,36 @@ func render_view() -> Array:
 	return [_flat["center"], float(_flat["density"]), Vector2(_flat_size), float(_frame["px_per_world"])]
 
 
-func _plane_view(frame: Dictionary, area: Rect2, texture: Vector2, cap: float) -> Dictionary:
+func _wanted_texture(frame: Dictionary) -> Vector2i:
+	var full := _texture_size()
+	if float(frame["g"]) > 0.0 or rad_to_deg(float(frame["pitch"])) >= FLAT_TILT_DEG:
+		_flat_shrink_at = 0
+		return full
+	var span: Vector2 = _plane_span(frame, Rect2(Vector2.ZERO, frame["size"]))[0]
+	var needed := span * float(frame["px_per_world"])
+	var step := float(FLAT_TEXTURE_STEP)
+	var snug := Vector2i(
+		int(clampf(ceilf(needed.x * FLAT_HEADROOM / step) * step, step * 4.0, float(full.x))),
+		int(clampf(ceilf(needed.y * FLAT_HEADROOM / step) * step, step * 4.0, float(full.y))))
+	if _flat_viewport == null:
+		return snug
+	var current := _flat_size
+	if needed.x > current.x or needed.y > current.y:
+		_flat_shrink_at = 0
+		return snug
+	if current.x - snug.x < FLAT_SHRINK_SLACK and current.y - snug.y < FLAT_SHRINK_SLACK:
+		_flat_shrink_at = 0
+		return current
+	var now := Time.get_ticks_msec()
+	if _flat_shrink_at == 0:
+		_flat_shrink_at = now + FLAT_SHRINK_MS
+	if now < _flat_shrink_at:
+		return current
+	_flat_shrink_at = 0
+	return snug
+
+
+func _plane_span(frame: Dictionary, area: Rect2) -> Array:
 	var low := Vector2(INF, INF)
 	var high := Vector2(-INF, -INF)
 	var lifted := bool(frame.get("relief", false))
@@ -1627,8 +1751,13 @@ func _plane_view(frame: Dictionary, area: Rect2, texture: Vector2, cap: float) -
 				var raised := unproject_lifted(frame, corner, lift)
 				low = low.min(raised)
 				high = high.max(raised)
-	var span := (high - low) * (1.0 + LAT_MARGIN * 2.0) + Vector2(0.001, 0.001)
-	var center := (low + high) * 0.5
+	return [(high - low) * (1.0 + LAT_MARGIN * 2.0) + Vector2(0.001, 0.001), (low + high) * 0.5]
+
+
+func _plane_view(frame: Dictionary, area: Rect2, texture: Vector2, cap: float) -> Dictionary:
+	var measured := _plane_span(frame, area)
+	var span: Vector2 = measured[0]
+	var center: Vector2 = measured[1]
 	var density := minf(cap, minf(texture.x / span.x, texture.y / span.y))
 	var covered := texture / density
 	return {
@@ -2050,6 +2179,8 @@ func _moved() -> void:
 func depth_at(point: Vector2) -> float:
 	if not active:
 		return 1.0
+	if _fast_ready():
+		return _fast.depth_at(point)
 	var frame := current_frame()
 	if bool(frame.get("relief", false)):
 		return maxf(_lifted_clip(frame, point, _height(frame, point)).z, 1e-3) / float(frame["focal"])
@@ -2188,11 +2319,14 @@ static func star_catalogue() -> Array:
 class StarField extends Control:
 	var globe: GlobeView
 	var _stars: Array = []
+	var _directions := PackedVector3Array()
 
 	func _init() -> void:
 		mouse_filter = Control.MOUSE_FILTER_IGNORE
 		set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 		_stars = GlobeView.star_catalogue()
+		for star: Dictionary in _stars:
+			_directions.append(star["direction"])
 
 	func _draw() -> void:
 		if not globe or not globe.active:
@@ -2200,6 +2334,10 @@ class StarField extends Control:
 		var frame := globe.current_frame()
 		var opacity: float = frame["opacity"]
 		if opacity <= 0.0:
+			return
+		if globe._fast_ready():
+			for seen: Vector3 in globe._fast.visible_directions(_directions, GlobeView.CELESTIAL_RADIUS):
+				_draw_star(_stars[int(seen.z)], Vector2(seen.x, seen.y), opacity)
 			return
 		var size: Vector2 = frame["size"]
 		for star in _stars:
@@ -2212,10 +2350,13 @@ class StarField extends Control:
 				continue
 			if projected.x < -4.0 or projected.x > size.x + 4.0 or projected.y < -4.0 or projected.y > size.y + 4.0:
 				continue
-			var colour: Color = star["color"]
-			colour.a = float(star["alpha"]) * opacity
-			var radius: float = star["radius"]
-			if radius < 0.75:
-				draw_rect(Rect2(projected.x, projected.y, 0.8, 0.8), colour)
-			else:
-				draw_circle(Vector2(projected.x, projected.y), radius, colour)
+			_draw_star(star, Vector2(projected.x, projected.y), opacity)
+
+	func _draw_star(star: Dictionary, at: Vector2, opacity: float) -> void:
+		var colour: Color = star["color"]
+		colour.a = float(star["alpha"]) * opacity
+		var radius: float = star["radius"]
+		if radius < 0.75:
+			draw_rect(Rect2(at.x, at.y, 0.8, 0.8), colour)
+		else:
+			draw_circle(at, radius, colour)

@@ -1,32 +1,52 @@
 class_name WarGround
 extends Node2D
 
-const WASH_SHADER := """
+const WEATHER_SHADER := """
 shader_type canvas_item;
 render_mode unshaded;
-uniform float factor = 1.0;
-
-void fragment() {
-	COLOR = vec4(COLOR.rgb, COLOR.a * factor);
-}
-"""
-
-const PATTERN_SHADER := """
-shader_type canvas_item;
-render_mode unshaded;
-uniform sampler2D pattern : filter_nearest, repeat_enable;
+uniform sampler2D pattern_0 : filter_nearest, repeat_enable;
+uniform sampler2D pattern_1 : filter_nearest, repeat_enable;
+uniform sampler2D pattern_2 : filter_nearest, repeat_enable;
+uniform float size_0 = 97.0;
+uniform float size_1 = 97.0;
+uniform float size_2 = 97.0;
+uniform int layers = 0;
 uniform float zoom = 1.0;
-uniform float size = 97.0;
-uniform float factor = 1.0;
+uniform float wash_factor = 1.0;
+uniform float pattern_factor = 1.0;
 varying vec2 world;
+varying float strength;
 
 void vertex() {
 	world = VERTEX;
+	strength = UV.x;
+}
+
+vec4 over(vec4 top, vec4 under) {
+	float alpha = top.a + under.a * (1.0 - top.a);
+	if (alpha <= 0.0) {
+		return vec4(0.0);
+	}
+	return vec4((top.rgb * top.a + under.rgb * under.a * (1.0 - top.a)) / alpha, alpha);
+}
+
+vec4 layer(sampler2D pattern, float size) {
+	vec4 c = texture(pattern, floor(world * zoom) / size);
+	return vec4(c.rgb, c.a * strength * pattern_factor);
 }
 
 void fragment() {
-	vec4 c = texture(pattern, floor(world * zoom) / size);
-	COLOR = vec4(c.rgb, c.a * COLOR.a * factor);
+	vec4 result = vec4(COLOR.rgb, COLOR.a * wash_factor);
+	if (layers > 0) {
+		result = over(layer(pattern_0, size_0), result);
+	}
+	if (layers > 1) {
+		result = over(layer(pattern_1, size_1), result);
+	}
+	if (layers > 2) {
+		result = over(layer(pattern_2, size_2), result);
+	}
+	COLOR = result;
 }
 """
 
@@ -38,6 +58,7 @@ const PAST_WIDTH := [[4.5, 0.7], [7, 1.2], [10, 1.8]]
 const CASING := Color(5 / 255.0, 8 / 255.0, 13 / 255.0, 0.92)
 const WASH_STOPS := [[3, 1.0], [10, 0.6]]
 const PATTERN_STOPS := [[3, 0.95], [7, 0.8], [10, 0.55]]
+const WEATHER_CELLS := 8
 
 
 class Painter extends Node2D:
@@ -53,8 +74,7 @@ var level := 2.0
 var zoom := 1.0
 var _walls_painter: Painter
 var _weather_root: Node2D
-var _weather_wash: ShaderMaterial
-var _weather_patterns: Array[ShaderMaterial] = []
+var _weather_materials: Array[ShaderMaterial] = []
 var _arrows_painter: Painter
 var _orders_painter: Painter
 var _walls: Array = []
@@ -102,11 +122,10 @@ func clear() -> void:
 func set_view(next_level: float, next_zoom: float) -> void:
 	level = next_level
 	zoom = next_zoom
-	if _weather_wash:
-		_weather_wash.set_shader_parameter("factor", WarKit.stops(level, WASH_STOPS))
-	for material in _weather_patterns:
+	for material in _weather_materials:
+		material.set_shader_parameter("wash_factor", WarKit.stops(level, WASH_STOPS))
 		material.set_shader_parameter("zoom", pow(2.0, floorf(level)) / 8.0)
-		material.set_shader_parameter("factor", WarKit.stops(level, PATTERN_STOPS))
+		material.set_shader_parameter("pattern_factor", WarKit.stops(level, PATTERN_STOPS))
 	_arrow_cache = {}
 	_redraw_all()
 
@@ -140,15 +159,12 @@ func set_arrows(arrows: Array, colours: Array) -> void:
 func set_weather(weather: Dictionary) -> void:
 	for child in _weather_root.get_children():
 		child.queue_free()
-	_weather_patterns.clear()
-	_weather_wash = null
+	_weather_materials.clear()
 	var areas: Array = weather.get("areas", [])
 	if areas.is_empty():
 		return
 	var patterns: Dictionary = weather.get("patterns", {})
-	var wash_points := PackedVector2Array()
-	var wash_colours := PackedColorArray()
-	var wash_indices := PackedInt32Array()
+	var wash_cells := {}
 	var by_state := {}
 	for item in areas:
 		var area: Dictionary = item
@@ -157,60 +173,97 @@ func set_weather(weather: Dictionary) -> void:
 		points.resize(floats.size() / 2)
 		for at in range(points.size()):
 			points[at] = Vector2(floats[at * 2], floats[at * 2 + 1])
+		if points.is_empty():
+			continue
+		var cell := _weather_cell(points[0])
 		var indices := Marshalls.base64_to_raw(str(area.get("indices", ""))).to_int32_array()
 		var strength := float(area.get("strength", 0.0))
-		if area.get("wash", null) is Array:
-			var base := wash_points.size()
-			var colour := WarKit.color_of(area["wash"], float(area.get("washOpacity", 0.0)) * strength)
-			wash_points.append_array(points)
-			for _index in range(points.size()):
-				wash_colours.append(colour)
-			for value in indices:
-				wash_indices.append(base + value)
+		var washed: bool = area.get("wash", null) is Array
+		var wash := WarKit.color_of(area["wash"], float(area.get("washOpacity", 0.0)) * strength) if washed else Color(0, 0, 0, 0)
 		var state := str(area.get("weather", ""))
-		if str(area.get("pattern", "")).is_empty() or not patterns.has(state):
-			continue
-		if not by_state.has(state):
-			by_state[state] = [PackedVector2Array(), PackedColorArray(), PackedInt32Array()]
-		var bucket: Array = by_state[state]
-		var bucket_points: PackedVector2Array = bucket[0]
-		var bucket_colours: PackedColorArray = bucket[1]
-		var bucket_indices: PackedInt32Array = bucket[2]
-		var start := bucket_points.size()
-		bucket_points.append_array(points)
-		var tone := Color(1, 1, 1, strength)
-		for _index in range(points.size()):
-			bucket_colours.append(tone)
-		for value in indices:
-			bucket_indices.append(start + value)
-		bucket[0] = bucket_points
-		bucket[1] = bucket_colours
-		bucket[2] = bucket_indices
-	if not wash_indices.is_empty():
-		_weather_wash = _material(WASH_SHADER)
-		_mesh_copies(_mesh(wash_points, wash_colours, wash_indices), _weather_wash)
-	for layer in range(3):
-		for state in by_state.keys():
-			var tiles: Array = patterns[state]
-			if layer >= tiles.size():
-				continue
-			var tile: Dictionary = tiles[layer]
-			var image := Image.create_from_data(int(tile["width"]), int(tile["height"]), false, Image.FORMAT_RGBA8, Marshalls.base64_to_raw(str(tile["data"])))
-			var material := _material(PATTERN_SHADER)
-			material.set_shader_parameter("pattern", ImageTexture.create_from_image(image))
-			material.set_shader_parameter("size", float(tile["width"]))
-			_weather_patterns.append(material)
-			var bucket: Array = by_state[state]
-			_mesh_copies(_mesh(bucket[0], bucket[1], bucket[2]), material)
+		if not str(area.get("pattern", "")).is_empty() and patterns.has(state):
+			if not by_state.has(state):
+				by_state[state] = {}
+			_weather_append(by_state[state], cell, points, indices, wash, strength)
+		elif washed:
+			_weather_append(wash_cells, cell, points, indices, wash, 0.0)
+	if not wash_cells.is_empty():
+		_cell_copies(wash_cells, _weather_material([]))
+	for state in by_state.keys():
+		_cell_copies(by_state[state], _weather_material(patterns[state]))
 	set_view(level, zoom)
 
 
-func _mesh(points: PackedVector2Array, colours: PackedColorArray, indices: PackedInt32Array) -> ArrayMesh:
+func _weather_material(tiles: Array) -> ShaderMaterial:
+	var material := _material(WEATHER_SHADER)
+	var layers := mini(tiles.size(), 3)
+	material.set_shader_parameter("layers", layers)
+	for layer in range(layers):
+		var tile: Dictionary = tiles[layer]
+		var image := Image.create_from_data(int(tile["width"]), int(tile["height"]), false, Image.FORMAT_RGBA8, Marshalls.base64_to_raw(str(tile["data"])))
+		material.set_shader_parameter("pattern_%d" % layer, ImageTexture.create_from_image(image))
+		material.set_shader_parameter("size_%d" % layer, float(tile["width"]))
+	_weather_materials.append(material)
+	return material
+
+
+static func _weather_cell(point: Vector2) -> int:
+	var span := MapView.WORLD_WIDTH / float(WEATHER_CELLS)
+	var column := clampi(floori(point.x / span), 0, WEATHER_CELLS - 1)
+	var row := clampi(floori(point.y / span), 0, WEATHER_CELLS - 1)
+	return row * WEATHER_CELLS + column
+
+
+static func _weather_append(cells: Dictionary, cell: int, points: PackedVector2Array, indices: PackedInt32Array, colour: Color, strength: float) -> void:
+	if not cells.has(cell):
+		cells[cell] = [PackedVector2Array(), PackedColorArray(), PackedInt32Array(), PackedVector2Array()]
+	var bucket: Array = cells[cell]
+	var bucket_points: PackedVector2Array = bucket[0]
+	var bucket_colours: PackedColorArray = bucket[1]
+	var bucket_indices: PackedInt32Array = bucket[2]
+	var bucket_uvs: PackedVector2Array = bucket[3]
+	bucket[0] = PackedVector2Array()
+	bucket[1] = PackedColorArray()
+	bucket[2] = PackedInt32Array()
+	bucket[3] = PackedVector2Array()
+	var start := bucket_points.size()
+	bucket_points.append_array(points)
+	var tones := PackedColorArray()
+	tones.resize(points.size())
+	tones.fill(colour)
+	bucket_colours.append_array(tones)
+	var strengths := PackedVector2Array()
+	strengths.resize(points.size())
+	strengths.fill(Vector2(strength, 0.0))
+	bucket_uvs.append_array(strengths)
+	var shifted := PackedInt32Array()
+	shifted.resize(indices.size())
+	for at in range(indices.size()):
+		shifted[at] = start + indices[at]
+	bucket_indices.append_array(shifted)
+	bucket[0] = bucket_points
+	bucket[1] = bucket_colours
+	bucket[2] = bucket_indices
+	bucket[3] = bucket_uvs
+
+
+func _cell_copies(cells: Dictionary, material: Material) -> void:
+	var keys := cells.keys()
+	keys.sort()
+	for cell: int in keys:
+		var bucket: Array = cells[cell]
+		if (bucket[2] as PackedInt32Array).is_empty():
+			continue
+		_mesh_copies(_mesh(bucket[0], bucket[1], bucket[2], bucket[3]), material)
+
+
+func _mesh(points: PackedVector2Array, colours: PackedColorArray, indices: PackedInt32Array, uvs: PackedVector2Array) -> ArrayMesh:
 	var mesh := ArrayMesh.new()
 	var arrays := []
 	arrays.resize(Mesh.ARRAY_MAX)
 	arrays[Mesh.ARRAY_VERTEX] = points
 	arrays[Mesh.ARRAY_COLOR] = colours
+	arrays[Mesh.ARRAY_TEX_UV] = uvs
 	arrays[Mesh.ARRAY_INDEX] = indices
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 	return mesh
@@ -325,6 +378,9 @@ func _fill(into: Array, points: PackedVector2Array, indices: PackedInt32Array, c
 	var verts: PackedVector2Array = into[0]
 	var colours: PackedColorArray = into[1]
 	var out: PackedInt32Array = into[2]
+	into[0] = PackedVector2Array()
+	into[1] = PackedColorArray()
+	into[2] = PackedInt32Array()
 	var start := verts.size()
 	verts.append_array(points)
 	for _index in range(points.size()):

@@ -237,6 +237,9 @@ static func stroke(into: Array, line: PackedVector2Array, width: float, feather:
 	var verts: PackedVector2Array = into[0]
 	var colours: PackedColorArray = into[1]
 	var indices: PackedInt32Array = into[2]
+	into[0] = PackedVector2Array()
+	into[1] = PackedColorArray()
+	into[2] = PackedInt32Array()
 	var base := verts.size()
 	for index in range(count):
 		var incoming := Vector2.ZERO
@@ -284,6 +287,9 @@ static func disc(into: Array, centre: Vector2, radius: float, feather: float, co
 	var verts: PackedVector2Array = into[0]
 	var colours: PackedColorArray = into[1]
 	var indices: PackedInt32Array = into[2]
+	into[0] = PackedVector2Array()
+	into[1] = PackedColorArray()
+	into[2] = PackedInt32Array()
 	var base := verts.size()
 	var steps := 16
 	var inner := maxf(0.0, radius - feather * 0.5)

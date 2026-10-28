@@ -458,6 +458,10 @@ func globe_world_to_screen(point: Vector2) -> Vector2:
 	return globe.world_to_screen(point)
 
 
+func globe_world_to_screen_many(points: PackedVector2Array) -> PackedVector2Array:
+	return globe.world_to_screen_many(points)
+
+
 func globe_screen_to_world(point: Vector2) -> Vector2:
 	return globe.screen_to_world(point)
 

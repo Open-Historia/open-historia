@@ -4,6 +4,7 @@ extends Node2D
 signal region_clicked(index: int)
 signal baked(info: Dictionary)
 signal bake_failed(message: String)
+signal camera_moved
 
 const COLUMNS := 1024
 const WORLD_WIDTH := 4096.0
@@ -160,6 +161,10 @@ var _colors_texture: ImageTexture
 var _ids_image: Image
 var _ids_texture: ImageTexture
 var _copies: Array[Node2D] = []
+var _fill_mesh: ArrayMesh
+var _border_mesh: ArrayMesh
+var _fill_parts: Array[ArrayMesh] = []
+var _border_parts: Array[ArrayMesh] = []
 var _names: PackedStringArray = []
 var _centroids: PackedVector2Array = []
 var _areas: PackedFloat32Array = []
@@ -379,15 +384,17 @@ func _on_baked(result: Dictionary) -> void:
 	border_arrays[Mesh.ARRAY_INDEX] = result["border_indices"]
 	var border_mesh := ArrayMesh.new()
 	border_mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, border_arrays)
+	_fill_mesh = fill_mesh
+	_border_mesh = border_mesh
+	_fill_parts = _chunk_meshes(result.get("fill_chunks", []), false)
+	_border_parts = _chunk_meshes(result.get("border_chunks", []), true)
 
 	for offset in [-WORLD_WIDTH, 0.0, WORLD_WIDTH]:
 		var copy := Node2D.new()
 		copy.position = Vector2(offset, 0)
-		for entry in [[fill_mesh, _fill_material], [border_mesh, _shadow_material], [border_mesh, _border_material]]:
-			var instance := MeshInstance2D.new()
-			instance.mesh = entry[0]
-			instance.material = entry[1]
-			copy.add_child(instance)
+		copy.add_child(extras_region_layer("fill", _fill_material))
+		copy.add_child(extras_region_layer("border", _shadow_material))
+		copy.add_child(extras_region_layer("border", _border_material))
 		add_child(copy)
 		_copies.append(copy)
 	visible = true
@@ -544,6 +551,7 @@ func _after_camera_move() -> void:
 		material.set_shader_parameter("pixel_world", 1.0 / float(render[3] if render.size() > 3 else render[1]))
 	basemap.update_view(render[0], render[1], render[2])
 	_update_labels()
+	camera_moved.emit()
 	_cities.queue_redraw()
 	if extras:
 		extras.call("after_camera_move", level)
@@ -624,6 +632,8 @@ class CityLayer extends Control:
 	var _cities: Array = []
 	var _points: PackedVector2Array = []
 	var _order: Array[int] = []
+	var _ordered_points := PackedVector2Array()
+	var _ordered_needed := PackedFloat64Array()
 
 	func _init() -> void:
 		mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -645,6 +655,13 @@ class CityLayer extends Control:
 			if int(left[5]) != int(right[5]):
 				return int(left[5]) > int(right[5])
 			return float(left[4]) > float(right[4]))
+		_ordered_points = PackedVector2Array()
+		_ordered_needed = PackedFloat64Array()
+		for index in _order:
+			var city: Array = cities[index]
+			var tier := int(city[5])
+			_ordered_points.append(_points[index])
+			_ordered_needed.append(2.6 if int(city[3]) == 1 else (4.0 if tier >= 3 else (5.2 if tier == 2 else 6.5)))
 		queue_redraw()
 
 	static func ohproject(lon: float, lat: float) -> Vector2:
@@ -652,6 +669,14 @@ class CityLayer extends Control:
 		var x := (lon + 180.0) / 360.0 * MapView.WORLD_WIDTH
 		var y := (0.5 - log(tan(PI / 4.0 + deg_to_rad(clamped) / 2.0)) / (2.0 * PI)) * MapView.WORLD_WIDTH
 		return Vector2(x, y)
+
+	static func _near(area: Rect2, point: Vector2) -> bool:
+		if point.y < area.position.y or point.y >= area.end.y:
+			return false
+		var low := area.position.x
+		var high := area.end.x
+		var x := point.x
+		return (x >= low and x < high) or (x - MapView.WORLD_WIDTH >= low and x - MapView.WORLD_WIDTH < high) or (x + MapView.WORLD_WIDTH >= low and x + MapView.WORLD_WIDTH < high)
 
 	func _draw() -> void:
 		if not map or _cities.is_empty():
@@ -664,21 +689,49 @@ class CityLayer extends Control:
 		taken.append_array(map.room_label_rects)
 		taken.append_array(map.war_marker_rects)
 		var own: Array[Rect2] = []
-		for index in _order:
+		var area: Variant = map.cull_world_rect(Vector2(41.0, 21.0))
+		var picked: Array[int] = []
+		var places := PackedVector2Array()
+		var culled := area is Rect2
+		var bounds: Rect2 = area if culled else Rect2()
+		for slot in range(_ordered_needed.size()):
+			if level < _ordered_needed[slot]:
+				continue
+			var point := _ordered_points[slot]
+			if culled and not _near(bounds, point):
+				continue
+			picked.append(_order[slot])
+			places.append(point)
+		var screens := map.world_to_screen_many(places)
+		var shown: Array[int] = []
+		var shown_places := PackedVector2Array()
+		var shown_screens := PackedVector2Array()
+		for slot in range(picked.size()):
+			var screen := screens[slot]
+			if screen.x < -40 or screen.y < -20 or screen.x > view.x + 40 or screen.y > view.y + 20:
+				continue
+			shown.append(picked[slot])
+			shown_places.append(places[slot])
+			shown_screens.append(screen)
+		var depths := map.label_depth_many(shown_places)
+		var kept: Array[int] = []
+		var kept_places := PackedVector2Array()
+		for slot in range(shown.size()):
+			if clampf(0.5 + 0.5 / depths[slot], 0.0, 4.0) >= MapView.LABEL_PERSPECTIVE_CUTOFF:
+				kept.append(slot)
+				kept_places.append(shown_places[slot])
+		var sights := map.terrain_visibility_many(kept_places)
+		for order in range(kept.size()):
+			var slot := kept[order]
+			var index := shown[slot]
 			var city: Array = _cities[index]
 			var capital := int(city[3]) == 1
 			var tier := int(city[5])
 			var needed := 2.6 if capital else (4.0 if tier >= 3 else (5.2 if tier == 2 else 6.5))
-			if level < needed:
-				continue
-			var screen := map.world_to_screen(_points[index])
-			if screen.x < -40 or screen.y < -20 or screen.x > view.x + 40 or screen.y > view.y + 20:
-				continue
-			var ratio := map.label_perspective(_points[index])
-			if ratio < MapView.LABEL_PERSPECTIVE_CUTOFF:
-				continue
-			var seen := map.terrain_visibility(_points[index])
-			var circle_scale := 1.0 / map.label_depth(_points[index])
+			var screen := shown_screens[slot]
+			var ratio := clampf(0.5 + 0.5 / depths[slot], 0.0, 4.0)
+			var seen := sights[order]
+			var circle_scale := 1.0 / depths[slot]
 			if capital:
 				var star_size := 13.0 * ratio
 				draw_texture_rect(star, Rect2(screen - Vector2(star_size, star_size) * 0.5, Vector2(star_size, star_size)), false, Color(1, 1, 1, seen))
@@ -733,19 +786,53 @@ func war_border_mesh() -> Mesh:
 
 
 func _war_mesh_with(material: Material) -> Mesh:
-	for copy in _copies:
-		if not is_instance_valid(copy):
-			continue
-		for child in copy.get_children():
-			if child is MeshInstance2D and (child as MeshInstance2D).material == material:
-				return (child as MeshInstance2D).mesh
+	if _copies.is_empty():
+		return null
+	if material == _fill_material:
+		return _fill_mesh
+	if material == _border_material or material == _shadow_material:
+		return _border_mesh
 	return null
+
+
+func _chunk_meshes(chunks: Array, border: bool) -> Array[ArrayMesh]:
+	var out: Array[ArrayMesh] = []
+	for item: Variant in chunks:
+		var chunk: Dictionary = item
+		var arrays := []
+		arrays.resize(Mesh.ARRAY_MAX)
+		arrays[Mesh.ARRAY_VERTEX] = chunk["vertices"]
+		arrays[Mesh.ARRAY_TEX_UV] = chunk["uvs"]
+		if border:
+			arrays[Mesh.ARRAY_COLOR] = chunk["sides"]
+		arrays[Mesh.ARRAY_INDEX] = chunk["indices"]
+		var mesh := ArrayMesh.new()
+		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+		out.append(mesh)
+	return out
+
+
+func extras_region_layer(kind: String, material: Material) -> Node2D:
+	var parts := _fill_parts if kind == "fill" else _border_parts
+	if parts.is_empty():
+		var single := MeshInstance2D.new()
+		single.mesh = _fill_mesh if kind == "fill" else _border_mesh
+		single.material = material
+		return single
+	var group := Node2D.new()
+	group.material = material
+	for part in parts:
+		var piece := MeshInstance2D.new()
+		piece.mesh = part
+		piece.use_parent_material = true
+		group.add_child(piece)
+	return group
 
 
 func war_insert_under_borders(copy: Node2D, node: Node) -> void:
 	copy.add_child(node)
 	for child in copy.get_children():
-		if child is MeshInstance2D and (child as MeshInstance2D).material == _shadow_material:
+		if child is CanvasItem and (child as CanvasItem).material == _shadow_material:
 			copy.move_child(node, child.get_index())
 			return
 
@@ -832,7 +919,7 @@ func extras_meshes() -> Dictionary:
 func extras_child_index(copy: Node2D, kind: String) -> int:
 	var material: Material = _fill_material if kind == "fill" else (_shadow_material if kind == "shadow" else _border_material)
 	for child in copy.get_children():
-		if child is MeshInstance2D and (child as MeshInstance2D).material == material:
+		if child is CanvasItem and (child as CanvasItem).material == material:
 			return child.get_index()
 	return -1
 
@@ -1067,6 +1154,52 @@ func label_depth(world: Vector2) -> float:
 
 func label_perspective(world: Vector2) -> float:
 	return clampf(0.5 + 0.5 / label_depth(world), 0.0, 4.0)
+
+
+func world_to_screen_many(points: PackedVector2Array) -> PackedVector2Array:
+	if globe_on and extras:
+		return extras.call("globe_world_to_screen_many", points)
+	var out := PackedVector2Array()
+	out.resize(points.size())
+	var centre := camera.position
+	var zoom := camera.zoom.x
+	var half := get_viewport_rect().size * 0.5
+	for index in range(points.size()):
+		var adjusted := points[index]
+		adjusted.x += WORLD_WIDTH * round((centre.x - adjusted.x) / WORLD_WIDTH)
+		out[index] = (adjusted - centre) * zoom + half
+	return out
+
+
+func label_depth_many(points: PackedVector2Array) -> PackedFloat64Array:
+	var projector := _relief_globe() if globe_on else null
+	if projector == null or not projector.active:
+		var flat := PackedFloat64Array()
+		flat.resize(points.size())
+		flat.fill(1.0)
+		return flat
+	var out := projector.depth_many(points)
+	for index in range(out.size()):
+		out[index] = maxf(out[index], 0.000001)
+	return out
+
+
+func terrain_visibility_many(points: PackedVector2Array) -> PackedFloat64Array:
+	var projector := _relief_globe() if globe_on else null
+	if projector == null:
+		var flat := PackedFloat64Array()
+		flat.resize(points.size())
+		flat.fill(1.0)
+		return flat
+	return projector.visibility_many(points)
+
+
+func cull_world_rect(pad: Vector2) -> Variant:
+	if globe_on:
+		var projector := _relief_globe()
+		return projector.cull_rect(pad) if projector and projector.active else null
+	var half := (get_viewport_rect().size * 0.5 + pad) / camera.zoom.x
+	return Rect2(camera.position - half, half * 2.0).grow(1.0)
 
 
 func label_plane_scale(world: Vector2) -> float:

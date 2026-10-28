@@ -19,6 +19,7 @@ const LOD_LIMIT := 256
 const RETRY_MS := 30000
 const GLOBE_TILE_LIMIT := 1024
 const WORLD := 4096.0
+const PLAN_REFRESH_MS := 1000
 
 var map_view: MapView
 var globe: GlobeView
@@ -49,6 +50,8 @@ var _shown := 0
 var _building := false
 var _again: Dictionary = {}
 var _tasks: Array[int] = []
+var _cover_signature := 0
+var _planned_at := 0
 
 
 func setup(view: MapView, projector: GlobeView) -> void:
@@ -135,12 +138,19 @@ func sample_level(level: int, point: Vector2) -> float:
 func update(frame: Dictionary, globe_rect: Rect2) -> void:
 	if not enabled or map_view == null:
 		return
-	_tick += 1
 	var entries: Array = []
 	if float(frame.get("g", 0.0)) > 0.0:
 		entries = _globe_cover(frame, globe_rect)
 	else:
 		entries = _flat_cover(frame)
+	var signature := _signature(frame, entries)
+	var now := Time.get_ticks_msec()
+	if signature == _cover_signature and _wanted != 0 and now - _planned_at < PLAN_REFRESH_MS:
+		_pump()
+		return
+	_cover_signature = signature
+	_planned_at = now
+	_tick += 1
 	var plan := _plan(frame, entries)
 	_pump()
 	var key := int(plan["key"])
@@ -182,6 +192,8 @@ func _flat_cover(frame: Dictionary) -> Array:
 	var distance_centre := focal / px_per_world / WORLD
 	var requested := level
 	var behaviour := Basemap.cover_loading_behaviour()
+	var count_term := Basemap.cover_count_term(distance_z, distance_centre, behaviour)
+	var axes := Basemap.quad_axes(hull)
 	var wrap_world := true
 	if map_view.basemap and map_view.basemap.has_method("wrap_enabled"):
 		wrap_world = bool(map_view.basemap.call("wrap_enabled"))
@@ -201,11 +213,11 @@ func _flat_cover(frame: Dictionary) -> Array:
 		var count := 1 << zoom
 		var tile_low := Vector2((float(wrap) + float(x) / count) * WORLD, float(y) / count * WORLD)
 		var tile_high := tile_low + Vector2.ONE * WORLD / count
-		if not Basemap.quad_meets(hull, hull_low, hull_high, tile_low, tile_high):
+		if not Basemap.quad_meets_with(axes, hull_low, hull_high, tile_low, tile_high):
 			continue
 		var nearest := camera_ground.clamp(tile_low / WORLD, tile_high / WORLD)
 		var distance_2d := nearest.distance_to(camera_ground)
-		var desired := maxi(0, floori(Basemap.cover_tile_zoom(requested, distance_2d, distance_z, distance_centre, behaviour)))
+		var desired := maxi(0, floori(Basemap.cover_tile_zoom_with(requested, distance_2d, distance_z, distance_centre, behaviour, count_term)))
 		var target := mini(desired, RENDER_MAX_ZOOM)
 		if zoom >= target:
 			var middle := (tile_low + tile_high) * 0.5
@@ -248,6 +260,7 @@ func _globe_cover(frame: Dictionary, rect: Rect2) -> Array:
 	var distance_centre := Vector2(centre_point.x - camera_point.x, centre_point.y - camera_point.y).length()
 	var distance_3d := sqrt(distance_centre * distance_centre + distance_z * distance_z)
 	var behaviour := Basemap.cover_loading_behaviour()
+	var count_term := Basemap.cover_count_term(distance_z, distance_3d, behaviour)
 	var stack: Array[Array] = []
 	for wrap in range(floori(rect.position.x / WORLD), floori(rect.end.x / WORLD) + 1):
 		stack.append([0, 0, 0, wrap])
@@ -263,7 +276,7 @@ func _globe_cover(frame: Dictionary, rect: Rect2) -> Array:
 		if not Rect2(low, Vector2(span, span)).intersects(rect):
 			continue
 		var distance := globe_tile_distance(camera_point, x, y, z)
-		var desired := maxi(0, floori(Basemap.cover_tile_zoom(level, distance, distance_z, distance_3d, behaviour)))
+		var desired := maxi(0, floori(Basemap.cover_tile_zoom_with(level, distance, distance_z, distance_3d, behaviour, count_term)))
 		if z >= mini(desired, RENDER_MAX_ZOOM):
 			found.append([z, x + wrap * count, y, (low + Vector2(span, span) * 0.5).distance_squared_to(centre)])
 			if found.size() >= GLOBE_TILE_LIMIT:
@@ -272,6 +285,17 @@ func _globe_cover(frame: Dictionary, rect: Rect2) -> Array:
 		for child in range(4):
 			stack.append([z + 1, (x << 1) + (child % 2), (y << 1) + (child >> 1), wrap])
 	return found
+
+
+static func _signature(frame: Dictionary, entries: Array) -> int:
+	var centre: Vector2 = frame["cam_world"]
+	var key := entries.size() + 1
+	for level in range(LEVELS):
+		var span := WORLD / float(1 << level)
+		key = (key * 1000003 + floori(centre.x / span) * 65536 + floori(centre.y / span)) & 0x3fffffffffffffff
+	for entry: Array in entries:
+		key = (key * 1000003 + (int(entry[0]) * 16777216 + int(entry[1]) + 8388608) * 65536 + int(entry[2])) & 0x3fffffffffffffff
+	return key
 
 
 static func _tile_gap(point: float, tile: float, size: float) -> float:

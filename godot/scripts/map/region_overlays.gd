@@ -180,7 +180,7 @@ var _ice_edge_material: ShaderMaterial
 var _casing_material: ShaderMaterial
 var _outline_material: ShaderMaterial
 var _ice_patterns_loaded := false
-var _under_nodes: Array[MeshInstance2D] = []
+var _under_nodes: Array[Node2D] = []
 var _ice_nodes: Array[Node2D] = []
 var _line_nodes: Array[Node2D] = []
 var _line_mesh: ArrayMesh
@@ -277,23 +277,15 @@ func _mount() -> void:
 	if fill == null:
 		return
 	for slot in extras.call("slots", "under"):
-		var node := MeshInstance2D.new()
-		node.mesh = fill
-		node.material = _under_material
+		var node := map_view.extras_region_layer("fill", _under_material)
 		node.visible = _has_claims or _group_fade > 0.0
 		(slot as Node2D).add_child(node)
 		_under_nodes.append(node)
 	for slot in extras.call("slots", "ice"):
 		var holder := Node2D.new()
-		var ice := MeshInstance2D.new()
-		ice.mesh = fill
-		ice.material = _ice_material
-		holder.add_child(ice)
+		holder.add_child(map_view.extras_region_layer("fill", _ice_material))
 		if border:
-			var edge := MeshInstance2D.new()
-			edge.mesh = border
-			edge.material = _ice_edge_material
-			holder.add_child(edge)
+			holder.add_child(map_view.extras_region_layer("border", _ice_edge_material))
 		holder.visible = _has_ice
 		(slot as Node2D).add_child(holder)
 		_ice_nodes.append(holder)
