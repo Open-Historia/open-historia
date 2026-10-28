@@ -259,6 +259,7 @@ func _build_content() -> void:
 	margin.add_theme_constant_override("margin_left", 136)
 	margin.add_theme_constant_override("margin_right", 26)
 	margin.add_theme_constant_override("margin_top", 14)
+	margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(margin)
 	var column := VBoxContainer.new()
 	column.add_theme_constant_override("separation", 18)

@@ -59,6 +59,7 @@ func _init() -> void:
 	_content.add_theme_constant_override("separation", 0)
 	_content.modulate.a = 0.5
 	_content.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_content.set_meta("inert", true)
 	stack.add_child(_content)
 	_build_list()
 	if not _veil_shader:

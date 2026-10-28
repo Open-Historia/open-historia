@@ -709,6 +709,8 @@ class ApiSetupPrompt extends Control:
 
 	const TUTORIAL_VIDEO_URL := "https://www.youtube.com/watch?v=YdalQ8UqMR4"
 	const AI_STUDIO_KEY_URL := "https://aistudio.google.com/app/apikey"
+	const CONTENT_WIDTH := 499.0
+	const CARD_PADDING := Vector2(44.8, 40.8)
 	const ENDPOINT_PLACEHOLDERS := {"openai-compatible": "http://localhost:11434/v1", "anthropic-compatible": "https://my-proxy.example/v1"}
 	const EYE_SVG := "<svg viewBox='0 0 24 24' fill='none' stroke='#fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z'/><circle cx='12' cy='12' r='3'/></svg>"
 	const EYE_OFF_SVG := "<svg viewBox='0 0 24 24' fill='none' stroke='#fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24'/><line x1='1' y1='1' x2='23' y2='23'/></svg>"
@@ -729,6 +731,7 @@ class ApiSetupPrompt extends Control:
 	var _suggest_box: PanelContainer
 	var _suggest_list: VBoxContainer
 	var _online_timer: Timer
+	var _fit_queued := false
 
 	func _init(engine_link: EngineLink, setup_data: Dictionary) -> void:
 		link = engine_link
@@ -745,14 +748,14 @@ class ApiSetupPrompt extends Control:
 		add_child(centre)
 		var card := PanelContainer.new()
 		card.add_theme_stylebox_override("panel", UI.box(Color(32 / 255.0, 32 / 255.0, 35 / 255.0, 0.965), UI.HUD_BORDER, 16, 1, Vector4(22.4, 21.6, 22.4, 19.2)))
-		card.custom_minimum_size.x = 544
 		_scroll = ScrollContainer.new()
 		_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 		_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_NEVER
-		_scroll.custom_minimum_size = Vector2(499, 600)
+		_scroll.custom_minimum_size = Vector2(CONTENT_WIDTH, 0)
 		_body = VBoxContainer.new()
 		_body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		_body.add_theme_constant_override("separation", 0)
+		_body.minimum_size_changed.connect(_queue_fit)
 		_scroll.add_child(_body)
 		card.add_child(_scroll)
 		centre.add_child(card)
@@ -842,11 +845,20 @@ class ApiSetupPrompt extends Control:
 		if is_instance_valid(self) and _model_line and is_instance_valid(_model_line) and not _model_line.has_focus():
 			_suggest_box.visible = false
 
+	func _queue_fit() -> void:
+		if _fit_queued:
+			return
+		_fit_queued = true
+		_fit.call_deferred()
+
 	func _fit() -> void:
+		_fit_queued = false
 		if not is_inside_tree():
 			return
-		var room := get_viewport_rect().size.y - 32.0 - 40.8
-		_scroll.custom_minimum_size = Vector2(499, minf(room, _body.get_combined_minimum_size().y))
+		var view := get_viewport_rect().size
+		var width := clampf(view.x - 32.0 - CARD_PADDING.x, 240.0, CONTENT_WIDTH)
+		var room := maxf(120.0, view.y - 32.0 - CARD_PADDING.y)
+		_scroll.custom_minimum_size = Vector2(width, minf(room, _body.get_combined_minimum_size().y))
 
 	func _requirement() -> String:
 		for option: Dictionary in setup.get("providers", []):
@@ -977,7 +989,11 @@ class ApiSetupPrompt extends Control:
 			var video := Button.new()
 			video.focus_mode = Control.FOCUS_NONE
 			video.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-			video.custom_minimum_size = Vector2(0, 268)
+			video.custom_minimum_size = Vector2(0, roundf((CONTENT_WIDTH - 28.8) * 9.0 / 16.0))
+			video.resized.connect(func() -> void:
+				var tall := roundf(video.size.x * 9.0 / 16.0)
+				if video.size.x > 0.0 and absf(video.custom_minimum_size.y - tall) >= 1.0:
+					video.custom_minimum_size.y = tall)
 			video.text = "▶   Play the video (loads YouTube)"
 			video.add_theme_stylebox_override("normal", UI.box(Color(0, 0, 0, 0.5), Color(0, 0, 0, 0), 10, 0))
 			video.add_theme_stylebox_override("hover", UI.box(Color(0, 0, 0, 0.42), Color(0, 0, 0, 0), 10, 0))
@@ -1033,6 +1049,9 @@ class ApiSetupPrompt extends Control:
 		var select := OptionButton.new()
 		select.focus_mode = Control.FOCUS_NONE
 		select.custom_minimum_size.y = 38
+		select.fit_to_longest_item = false
+		select.clip_text = true
+		select.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 		_input_box(select)
 		select.add_theme_stylebox_override("hover", UI.box(Color(0, 0, 0, 0.4), Color(1, 1, 1, 0.2), 8, 1, Vector4(10.4, 8.8, 10.4, 8.8)))
 		select.add_theme_stylebox_override("pressed", UI.box(Color(0, 0, 0, 0.4), Color(1, 1, 1, 0.2), 8, 1, Vector4(10.4, 8.8, 10.4, 8.8)))
@@ -1156,7 +1175,7 @@ class ApiSetupPrompt extends Control:
 		row.add_child(save_button)
 		_body.add_child(row)
 		_refresh_save()
-		_fit.call_deferred()
+		_queue_fit()
 
 	func _refresh_save() -> void:
 		var button := _body.find_child("SaveAndPlay", true, false) as Button
