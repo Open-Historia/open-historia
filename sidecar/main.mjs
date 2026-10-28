@@ -43,7 +43,7 @@ const freePort = () => new Promise((resolve, reject) => {
 const port = await freePort();
 const origin = `http://127.0.0.1:${port}`;
 const serverWorker = new Worker(path.join(here, "serverWorker.mjs"), {
-  workerData: { repo, dataDir, assetsDir, channel: process.env.OH_CHANNEL || "native", port, discord: process.env.OH_STANDIN_MODEL !== "1" && process.env.OH_DISCORD_PRESENCE !== "0" },
+  workerData: { repo, dataDir, assetsDir, channel: process.env.OH_CHANNEL || "native", port, discord: process.env.OH_DISCORD_PRESENCE === "1" || (process.env.OH_STANDIN_MODEL !== "1" && process.env.OH_DISCORD_PRESENCE !== "0") },
   stdout: true,
   stderr: true,
 });
