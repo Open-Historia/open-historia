@@ -170,7 +170,10 @@ func _on_button(button: InputEventMouseButton) -> bool:
 				if vertical:
 					wheel_input(amount, button.shift_pressed, button.position)
 			else:
-				scroll_input(Vector2(0.0, amount) if vertical else Vector2(amount, 0.0), button.shift_pressed, button.position)
+				var kind := ""
+				if OS.get_name() != "macOS":
+					kind = "trackpad" if not vertical or not is_equal_approx(notches, roundf(notches)) else "wheel"
+				scroll_input(Vector2(0.0, amount) if vertical else Vector2(amount, 0.0), button.shift_pressed, button.position, kind)
 		return true
 	if _turning and index == _turn_button and not button.pressed:
 		_turn_finish(button.position)
@@ -416,7 +419,7 @@ func wheel_input(value: float, shift: bool, at: Vector2) -> void:
 			_wheel_begin(at)
 
 
-func scroll_input(delta: Vector2, shift: bool, at: Vector2) -> void:
+func scroll_input(delta: Vector2, shift: bool, at: Vector2, kind := "") -> void:
 	if not _ease.is_empty():
 		_end_ease()
 	var value := delta.y if delta.y != 0.0 else delta.x
@@ -424,7 +427,15 @@ func scroll_input(delta: Vector2, shift: bool, at: Vector2) -> void:
 	var time_delta := now - _wheel_last_event_ms
 	_wheel_last_event_ms = now
 	var held := Vector2.ZERO
-	if value != 0.0 and fmod(value, WHEEL_ZOOM_DELTA) == 0.0:
+	if kind == "trackpad" or (kind == "wheel" and _wheel_type == "trackpad" and time_delta <= WHEEL_NEW_ACTION_MS):
+		_wheel_type = "trackpad"
+		_wheel_timeout_at = -1.0
+		held = _scroll_held
+	elif kind == "wheel":
+		_wheel_type = "wheel"
+		_wheel_timeout_at = -1.0
+		held = _scroll_held
+	elif value != 0.0 and fmod(value, WHEEL_ZOOM_DELTA) == 0.0:
 		_wheel_type = "wheel"
 	elif value != 0.0 and absf(value) < 4.0:
 		_wheel_type = "trackpad"
