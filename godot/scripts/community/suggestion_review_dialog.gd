@@ -4,8 +4,6 @@ extends CommunityDialog
 signal changed
 signal contributor_rejected(login: String, note: String)
 
-const MAP_REVIEW_MISSING := "Reviewing map changes needs the Workshop, which is not in the native app yet."
-
 var engine: EngineLink
 var scenario_id := ""
 var _view := {}
@@ -209,10 +207,7 @@ func _render_ready() -> void:
 		stack.add_child(quiet("They open in the map editor, listed beside the map and marked on it, to accept or reject one by one. Save the map there to keep what you accepted."))
 		var review := button("🗺️ Review the map changes", true)
 		review.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-		if load("res://scripts/editor/workshop.gd") is GDScript:
-			review.pressed.connect(_review_map)
-		else:
-			UI.set_disabled_look(review, MAP_REVIEW_MISSING)
+		review.pressed.connect(_review_map)
 		stack.add_child(review)
 		card.add_child(stack)
 		body.add_child(card)

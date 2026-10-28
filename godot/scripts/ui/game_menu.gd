@@ -162,13 +162,6 @@ func close() -> void:
 	closed.emit()
 
 
-func open_section(section: String) -> void:
-	if not _open:
-		await open(section)
-		return
-	_open_workspace(section, "game", _card_rect())
-
-
 func maybe_show_ai_setup(game_id: String) -> void:
 	if game_id == _ai_setup_answered_for or _open:
 		return

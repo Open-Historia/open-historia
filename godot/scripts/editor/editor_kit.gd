@@ -206,12 +206,6 @@ static func accent_button(text: String, accent: Color) -> Button:
 	return node
 
 
-static func enable(node: BaseButton, enabled: bool) -> void:
-	node.disabled = not enabled
-	node.modulate = Color(1, 1, 1, 1.0 if enabled else 0.55)
-	node.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND if enabled else Control.CURSOR_ARROW
-
-
 static func color_button(hex: String, on_change: Callable = Callable(), height := 42.0) -> ColorPickerButton:
 	var node := ColorPickerButton.new()
 	node.color = color_of(hex, Color("#ffffff"))
@@ -389,37 +383,6 @@ static func ask(host: Node, text: String, ok_text := "OK", cancel_text := "Cance
 	if is_instance_valid(dialog):
 		dialog.queue_free()
 	return bool(answer[0])
-
-
-static func prompt_text(host: Node, text: String, value := "") -> Array:
-	var dialog := ConfirmationDialog.new()
-	dialog.title = ""
-	dialog.min_size = Vector2i(460, 0)
-	var column := VBoxContainer.new()
-	column.add_theme_constant_override("separation", 8)
-	var message := Label.new()
-	message.text = text
-	message.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	column.add_child(message)
-	var edit := LineEdit.new()
-	edit.text = value
-	column.add_child(edit)
-	dialog.add_child(column)
-	host.add_child(dialog)
-	var answer := [false, ""]
-	var finished := [false]
-	dialog.confirmed.connect(func() -> void:
-		answer[0] = true
-		answer[1] = edit.text
-		finished[0] = true)
-	dialog.canceled.connect(func() -> void: finished[0] = true)
-	dialog.popup_centered()
-	edit.grab_focus()
-	while not finished[0] and is_instance_valid(dialog):
-		await host.get_tree().process_frame
-	if is_instance_valid(dialog):
-		dialog.queue_free()
-	return answer
 
 
 static func tell(host: Node, text: String) -> void:

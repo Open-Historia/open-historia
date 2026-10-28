@@ -665,14 +665,6 @@ func _build_region(animate: bool) -> void:
 	_mount_floating(root, "region", width, 10.0, animate)
 
 
-func _dim_unless(control: Control, key: String, reason: String, arguments: Array = [], provider := Callable()) -> void:
-	var handler: Variant = context.get(key)
-	if handler is Callable and (handler as Callable).is_valid() and control is BaseButton:
-		(control as BaseButton).pressed.connect(func() -> void: (handler as Callable).callv(provider.call() if provider.is_valid() else arguments))
-	else:
-		UI.set_disabled_look(control, reason)
-
-
 func _open_country_from_region() -> void:
 	var identity: Dictionary = _region.get("identity", {})
 	var name := str(identity.get("name", _region.get("displayCountry", "")))
@@ -949,7 +941,11 @@ func _build_feature(animate: bool) -> void:
 		settle.add_child(accept)
 		var move := Country.small_button("Move", Color(1, 1, 1, 0.08), Color(1, 1, 1, 0.18), UI.WHITE, 11, 700, Vector4(8, 5, 8, 5), 6)
 		move.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		_dim_unless(move, "move_structure", "Moving a structure on the map is not in the native app yet.", [str(_feature.get("id", ""))])
+		var structure_id := str(_feature.get("id", ""))
+		move.pressed.connect(func() -> void:
+			var handler: Variant = context.get("move_structure")
+			if handler is Callable and (handler as Callable).is_valid():
+				(handler as Callable).call(structure_id))
 		settle.add_child(move)
 		inner.add_child(settle)
 	margin.add_child(inner)

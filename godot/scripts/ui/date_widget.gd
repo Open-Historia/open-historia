@@ -1067,7 +1067,7 @@ func _render_events() -> void:
 					"map_open": open_map_changes.has(key),
 					"on_toggle_map": _toggle_map_changes,
 					"on_focus": _focus_bounds,
-					"on_watch": _watch_strikes if _war_ready() else Callable(),
+					"on_watch": _watch_strikes,
 					"footer": footer,
 				})
 				list.add_child(card)

@@ -120,8 +120,12 @@ func _run() -> void:
 		await _globe_part()
 	if _want("play"):
 		await _play_part()
+	if _want("cities"):
+		await _cities_part()
 	if _want("flag"):
 		await _flag_part()
+	if _want("reload"):
+		await _reload_part()
 	if _want("crash"):
 		await _crash_part()
 	_say("failures: %d %s" % [failures.size(), ", ".join(failures)])
@@ -307,6 +311,104 @@ func _flag_part() -> void:
 	var hud: Hud = main.hud
 	_check("landless lead shows its chosen flag", (hud.get("_flag") as TextureRect).texture != null, str(hud.get("_flag_info")))
 	await _shoot("p-group-flag")
+
+
+func _shown_cities() -> Array:
+	return main.map_view.get("_cities").get("_cities")
+
+
+func _cities_part() -> void:
+	await _wait(2.0)
+	var raw: Array = main.get("_cities_raw")
+	var source := ""
+	var base: Array = []
+	for city in raw:
+		if (city as Array).size() > 7 and int(city[6]) == 0:
+			source = str(city[7])
+			base = city
+			break
+	_check("a stock city to translate", not source.is_empty())
+	if source.is_empty():
+		return
+	var renamed_row := ["Renamedville", base[1], base[2], 0, 0, 3, 1, source]
+	var with_rename := raw.duplicate()
+	with_rename.append(renamed_row)
+	main.set("_cities_raw", with_rename)
+	var i18n: Node = main.i18n
+	var kept_language := str(i18n.get("language"))
+	var kept_book: Variant = i18n.get("book")
+	var book := PhraseBook.new()
+	(book.get("exact") as Dictionary)[source] = "Nom traduit"
+	i18n.set("language", "fr")
+	i18n.set("book", book)
+	i18n.emit_signal("translations_changed")
+	var translated := ""
+	var renamed := ""
+	for city in _shown_cities():
+		if (city as Array).size() > 7 and str(city[7]) == source:
+			if int(city[6]) == 0:
+				translated = str(city[0])
+			else:
+				renamed = str(city[0])
+	_check("a language change relabels the cities from the language pack", translated == "Nom traduit", translated)
+	_check("an AI rename still wins over the translation", renamed == "Renamedville", "%s; %d of %d shown" % [renamed, _shown_cities().size(), with_rename.size()])
+	main.set("_cities_raw", raw)
+	i18n.set("language", kept_language)
+	i18n.set("book", kept_book)
+	i18n.emit_signal("translations_changed")
+	await _frames(2)
+	var back := ""
+	for city in _shown_cities():
+		if (city as Array).size() > 7 and str(city[7]) == source and int(city[6]) == 0:
+			back = str(city[0])
+	_check("switching back restores the source names", back == source, back)
+
+
+func _reload_dialog() -> ConfirmationDialog:
+	var found: Array = [null]
+	await _until(func() -> bool:
+		for child in main.get_children():
+			if child is ConfirmationDialog and (child as ConfirmationDialog).dialog_text.begins_with("Reload the app?"):
+				found[0] = child
+				return true
+		return false, 5.0)
+	return found[0] as ConfirmationDialog
+
+
+func _reload_part() -> void:
+	var old := main
+	var app_script: Script = old.get_script()
+	var fake_script := GDScript.new()
+	fake_script.source_code = "extends Control\nvar state := {\"status\": {\"saveStatus\": \"dirty\"}}\nvar session := \"reload-check\"\n"
+	fake_script.reload()
+	var fake: Control = fake_script.new()
+	var editor: Node = main.editor
+	editor.set("_workshop", fake)
+	_check("unsaved Workshop edits hold Ctrl+R", bool(main._reload_blocked()))
+	main._on_reload_requested(false)
+	var dialog := await _reload_dialog()
+	_check("Ctrl+R asks before leaving unsaved Workshop edits", dialog != null)
+	await _shoot("p-reload-confirm")
+	if dialog:
+		dialog.canceled.emit()
+	await _frames(5)
+	_check("Cancel keeps the app as it was", is_instance_valid(old) and old.get_parent() == root and not bool(old.get("_reloading")))
+	main._on_reload_requested(false)
+	dialog = await _reload_dialog()
+	if dialog:
+		dialog.confirmed.emit()
+	await _frames(5)
+	var fresh: Node = null
+	for child in root.get_children():
+		if child.get_script() == app_script and (not is_instance_valid(old) or child != old):
+			fresh = child
+	_check("Reload on yes rebuilds the app", fresh != null)
+	fake.free()
+	if fresh:
+		main = fresh
+		var back := await _until(func() -> bool: return main.menu.visible and main.engine.is_ready(), 120.0)
+		_check("the reloaded app returns to the menu", back)
+		await _clear_shell()
 
 
 func _crash_part() -> void:

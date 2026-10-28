@@ -56,6 +56,7 @@ var _play_regions := ""
 var _cities_raw: Array = []
 var _minimized := false
 var _presence_timer: Timer
+var _reload_asking := false
 
 
 func _ready() -> void:
@@ -445,6 +446,14 @@ func _reload_blocked() -> bool:
 
 func _on_reload_requested(_force: bool) -> void:
 	if crash.is_shown() or not _reload_blocked():
+		_reload_app()
+		return
+	if _reload_asking:
+		return
+	_reload_asking = true
+	var leave: bool = await EditorKit.ask(self, "Reload the app? Changes you made may not be saved.", "Reload", "Cancel")
+	_reload_asking = false
+	if leave:
 		_reload_app()
 
 

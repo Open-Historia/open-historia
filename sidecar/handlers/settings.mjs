@@ -481,7 +481,6 @@ export const register = (ctx) => {
       backgroundDailyCap: String(budget.requestSettings.backgroundDailyCap()),
       lookupCap: budget.describeJumpCost({ lookups: true }).max,
       active,
-      canCancel: typeof control?.cancelAllAiRequests === "function",
     };
   };
 
@@ -835,8 +834,7 @@ export const register = (ctx) => {
       return fallbackView();
     },
     "settings.entry.window": async ({ id, tokens = null, forget = false }) => {
-      const windows = engine.aiMain?.contextWindows;
-      if (!windows) throw new Error("The context window memory is not in the native engine yet.");
+      const windows = engine.aiMain.contextWindows;
       const entry = pc().getResolvedFallbackList().find((candidate) => candidate.id === id);
       if (!entry) throw new Error("That entry is gone.");
       const key = contextWindowKey(entry);
@@ -898,9 +896,7 @@ export const register = (ctx) => {
       return requestsView();
     },
     "settings.requests.cancelAll": async () => {
-      const control = engine.aiRequestControl;
-      if (typeof control?.cancelAllAiRequests !== "function") throw new Error("The native engine cannot cancel every AI request yet.");
-      const cancelled = control.cancelAllAiRequests();
+      const cancelled = engine.aiRequestControl.cancelAllAiRequests();
       logEvent("ai", cancelled
         ? `Player cancelled ${cancelled} active AI request${cancelled === 1 ? "" : "s"} from Settings.`
         : "Player pressed Cancel all AI requests, but none were active.");
@@ -1077,14 +1073,10 @@ export const register = (ctx) => {
       return record ? plain(detailOf(record)) : null;
     },
     "telemetry.rate": async ({ id, rating }) => {
-      const telemetry = telemetryModule();
-      if (!telemetry?.setGenerationRating) throw new Error("The native engine does not hand over its AI telemetry yet.");
-      return { ok: await telemetry.setGenerationRating(id, Number(rating)) };
+      return { ok: await telemetryModule().setGenerationRating(id, Number(rating)) };
     },
     "telemetry.clear": async () => {
-      const telemetry = telemetryModule();
-      if (!telemetry?.clearAiRecords) throw new Error("The native engine does not hand over its AI telemetry yet.");
-      await telemetry.clearAiRecords();
+      await telemetryModule().clearAiRecords();
       return { ok: true };
     },
     "telemetry.release": async () => {

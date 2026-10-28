@@ -46,7 +46,6 @@ const EYE_SVG := "<svg viewBox='0 0 24 24' fill='none' stroke='#fff' stroke-widt
 const EYE_OFF_SVG := "<svg viewBox='0 0 24 24' fill='none' stroke='#fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24'/><line x1='1' y1='1' x2='23' y2='23'/></svg>"
 const AUDIO_UNREADABLE := "The game's sound settings could not be read."
 const SYSTEM_MOTION_NOTE := "On, following your system setting for reduced motion."
-const NATIVE_NO_CANCEL := "The native engine cannot cancel every AI request yet."
 const PLACEHOLDER_VALUE := "__oh_placeholder__"
 
 var engine: EngineLink
@@ -2351,8 +2350,6 @@ func _build_requests_section() -> void:
 	cancel.add_theme_color_override("font_color", Color("#fecaca") if active > 0 else Color(1, 1, 1, 0.72))
 	cancel.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	stop_row.add_child(cancel)
-	if not bool(_requests.get("canCancel", false)):
-		_dim(cancel, NATIVE_NO_CANCEL)
 	stop_column.add_child(stop_row)
 	if not _cancel_notice.is_empty():
 		_gap(stop_column, 7.2)

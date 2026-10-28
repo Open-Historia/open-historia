@@ -47,6 +47,7 @@ var _legend_rows: Array = []
 var _tabs_fitted := true
 var _sheet_target := ""
 var _busy_timer: Timer
+var _tracking_model: Dictionary = {}
 
 
 func _init() -> void:
@@ -355,6 +356,9 @@ func _poll_busy() -> void:
 	if not reply.get("ok", false) or not is_open() or data.is_empty():
 		return
 	var busy := bool((reply.get("result", {}) as Dictionary).get("busy", false))
+	if _modal_kind == "tracking" and not _tracking_model.is_empty() and busy != bool(_tracking_model.get("turnRunning", false)):
+		_tracking_model["turnRunning"] = busy
+		await _render_tracking(_tracking_model)
 	if busy != bool(data.get("turnRunning", false)):
 		data["turnRunning"] = busy
 		if tab == "economy":
@@ -2002,6 +2006,7 @@ func _render_tracking(model_in: Variant) -> void:
 		if not reply.get("ok", false):
 			return
 		model = reply.get("result", {})
+	_tracking_model = model
 	var stack := _modal_frame(980.0, 760.0)
 	_modal_kind = "tracking"
 	var glyph := PanelContainer.new()

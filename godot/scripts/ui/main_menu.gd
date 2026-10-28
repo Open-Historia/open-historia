@@ -1115,9 +1115,7 @@ func _open_card_menu(anchor: Button, game: Dictionary) -> void:
 	var stack := VBoxContainer.new()
 	stack.add_theme_constant_override("separation", 0)
 	stack.custom_minimum_size.x = 208
-	var items := [["Edit", "" if _editing_enabled else "Editing a game's details is not in the native app yet."], ["Clone", ""], ["Export", ""]]
-	for item in items:
-		var label: String = item[0]
+	for label in ["Edit", "Clone", "Export"]:
 		var row := Button.new()
 		row.text = label
 		row.alignment = HORIZONTAL_ALIGNMENT_LEFT
@@ -1132,9 +1130,7 @@ func _open_card_menu(anchor: Button, game: Dictionary) -> void:
 		row.add_theme_stylebox_override("hover", UI.box(Color(1, 1, 1, 0.16), Color(0, 0, 0, 0), 0, 0, Vector4(13, 0, 13, 0)))
 		row.add_theme_stylebox_override("pressed", UI.box(Color(1, 1, 1, 0.16), Color(0, 0, 0, 0), 0, 0, Vector4(13, 0, 13, 0)))
 		row.add_theme_stylebox_override("focus", UI.box(Color(0, 0, 0, 0), Color(0, 0, 0, 0), 0, 0, Vector4(13, 0, 13, 0)))
-		if not str(item[1]).is_empty():
-			UI.set_disabled_look(row, item[1])
-		elif label == "Edit":
+		if label == "Edit":
 			row.pressed.connect(func() -> void:
 				popup.hide()
 				edit_game.emit(str(game.get("id", ""))))
@@ -1482,18 +1478,12 @@ func _scenario_card(scenario: Dictionary) -> Control:
 	row.add_theme_constant_override("separation", 7)
 	var edit := UI.button("Edit", "small", "edit")
 	edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	if _editing_enabled:
-		edit.pressed.connect(func() -> void: edit_scenario.emit(id))
-	else:
-		UI.set_disabled_look(edit, "The Workshop is not in the native app yet.")
+	edit.pressed.connect(func() -> void: edit_scenario.emit(id))
 	row.add_child(edit)
 	var clone := UI.button("Clone Scenario", "small", "clone")
 	clone.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	clone.size_flags_stretch_ratio = 1.25
-	if _editing_enabled:
-		clone.pressed.connect(func() -> void: clone_scenario.emit(scenario))
-	else:
-		UI.set_disabled_look(clone, "Cloning is not in the native app yet.")
+	clone.pressed.connect(func() -> void: clone_scenario.emit(scenario))
 	row.add_child(clone)
 	stack.add_child(row)
 	var note: Variant = _updates.call("note_for", scenario) if _updates else null
@@ -1507,13 +1497,8 @@ func _scenario_card(scenario: Dictionary) -> Control:
 func _create_card() -> Control:
 	var card := DashedCard.new()
 	card.custom_minimum_size = Vector2(CARD_WIDTH, 363)
-	if _editing_enabled:
-		card.pressed.connect(func() -> void: create_scenario.emit())
-		card.set_busy(_creating)
-	else:
-		card.tooltip_text = "The Workshop is not in the native app yet."
-		card.modulate = Color(1, 1, 1, 0.55)
-		card.mouse_default_cursor_shape = Control.CURSOR_ARROW
+	card.pressed.connect(func() -> void: create_scenario.emit())
+	card.set_busy(_creating)
 	return card
 
 

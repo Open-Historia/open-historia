@@ -272,8 +272,6 @@ static func card(event: Dictionary, options: Dictionary = {}) -> Control:
 			if on_watch.is_valid():
 				strike.tooltip_text = "Play this on the map again"
 				strike.pressed.connect(func() -> void: on_watch.call(event))
-			else:
-				UI.set_disabled_look(strike, "Missiles and bombing runs are not drawn on the native map yet.")
 			chips.add_child(strike)
 		for value in tags:
 			chips.add_child(tag(str(value)))
