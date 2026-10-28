@@ -480,6 +480,19 @@ func _run() -> void:
 	forces.close()
 	await _wait(0.2)
 	_check("the button shows in the game at war", button.visible)
+	var accepted := 0
+	for attempt in range(4):
+		var offer: Dictionary = await main.engine.request("warroom.test.offer")
+		var made: Dictionary = offer.get("result", {}) if offer.get("ok", false) else {}
+		if str(made.get("id", "")).is_empty():
+			break
+		await main.hud.war_cards._answer("accept", str(made["id"]))
+		accepted += 1
+	_check("an offer of peace is accepted from its card", accepted > 0)
+	var gone := await _until(func() -> bool: return not button.visible, 10.0)
+	var fronts_left: Dictionary = await main.engine.request("warroom.fronts")
+	_check("the War Room button for a war ended in peace goes away at once", gone and not bool((fronts_left.get("result", {}) as Dictionary).get("atWar", true)), str(fronts_left.get("result", {})))
+	await _shoot("wr-22-peace")
 	await main._exit_game()
 	await _wait(0.5)
 	await button.refresh()

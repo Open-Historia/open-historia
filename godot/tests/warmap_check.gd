@@ -350,6 +350,10 @@ func _run() -> void:
 	_check("front playback queues no conquest flood", _flood_token() == play_token, "%d started while playing" % (_flood_token() - play_token))
 	await _shoot("w3-played-z6")
 	_check("troops are drawn", (war.overlay.troops as Array).size() > 0 or (war.overlay.sides as Array).size() > 0, "%d troops, %d sides" % [(war.overlay.troops as Array).size(), (war.overlay.sides as Array).size()])
+	var resting := [str(war.overlay.troops), str(war.overlay.sides), str(war._entries.map(func(entry: Dictionary) -> float: return float(entry.get("day", 0.0))))]
+	await _wait(2.5)
+	var still := [str(war.overlay.troops), str(war.overlay.sides), str(war._entries.map(func(entry: Dictionary) -> float: return float(entry.get("day", 0.0))))]
+	_check("a front at rest stands still between skips", not war.playing() and still == resting, "troops %s, sides %s, days %s" % [still[0] == resting[0], still[1] == resting[1], still[2] == resting[2]])
 	await _focus([[6.6, 48.9], [8.0, 49.7]], 8.6)
 	await _wait(0.8)
 	await _shoot("w4-troops-z8")

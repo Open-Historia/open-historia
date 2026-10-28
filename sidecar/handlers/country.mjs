@@ -991,10 +991,12 @@ export const register = (ctx) => {
         const sides = [asArray(war?.sideA), asArray(war?.sideB)];
         const mine = sides.findIndex((members) => members.some((member) => fold(member) === fold(viewer)));
         const leads = [cleanText(sides[0][0]), cleanText(sides[1][0])].filter(Boolean);
-        const weary = leads
-          .map((name) => ({ name, value: Math.round(extras.warWeariness.wearinessOf(world?.warWeariness, name)) }))
-          .filter((entry) => entry.value > 0);
         const theirs = mine >= 0 ? cleanText(sides[1 - mine][0]) : "";
+        const own = mine >= 0 ? cleanText(sides[mine].find((member) => fold(member) === fold(viewer))) : "";
+        const weary = (mine >= 0 ? [own, theirs].filter(Boolean) : leads)
+          .map((name) => ({ name, value: Math.round(extras.warWeariness.wearinessOf(world?.warWeariness, name)) }))
+          .filter((entry) => entry.value > 0)
+          .map((entry) => ({ ...entry, word: cleanText(extras.warWeariness.wearinessWord(entry.value)) }));
         const fought = ["active", "ceasefire"].includes(fold(war?.status || "active"));
         const started = extras.gameDates.formatGameDateReadable(war?.startedDate, "D MMM YYYY") || cleanText(war?.startedDate);
         const opponents = (onA ? sideB : sideA).map((party) => displayName(party));
@@ -1009,7 +1011,7 @@ export const register = (ctx) => {
           cause: causeText ? `Why it began: ${causeText}` : "",
           timelineEventId,
           timelineText: timelineEventId ? (timelineIsFirst ? "See how it began on the timeline" : "See it on the timeline") : "",
-          weariness: weary.length ? weary.map((entry) => `${entry.name} ${entry.value}`).join(" · ") : "",
+          weariness: weary,
           canPropose: mine >= 0 && fought && Boolean(theirs),
           theirs,
           status: prettyToken(war.status || "active"),
@@ -1684,7 +1686,12 @@ export const register = (ctx) => {
         { id: "agr-lancaster", title: "Lancaster House Treaties", type: "military_cooperation", parties: ["France", "United Kingdom"], status: "active", startedDate: "2010-11-02" },
       ],
       wars: [
-        { id: "war-sahel", title: "Southern Border War", status: "active", sideA: ["France", "Chad"], sideB: ["Libya"], cause: "Raids on Chad from Libyan soil.", startedDate: "2015-12-14", lastUpdatedDate: date },
+        { id: "war-sahel", title: "Southern Border War", status: "active", sideA: ["Chad", "France"], sideB: ["Libya"], cause: "Raids on Chad from Libyan soil.", startedDate: "2015-12-14", lastUpdatedDate: date },
+      ],
+      warWeariness: [
+        { country: "Chad", value: 30 },
+        { country: "France", value: 45 },
+        { country: "Libya", value: 83 },
       ],
       peaceOffers: [
         { id: "offer-libya", warId: "war-sahel", from: "Libya", to: "France", terms: { territory: "as held", reparations: { payer: "Libya", receiver: "France", share: 0.01, years: 5 } }, date, round: Number(game?.round) || 1, status: "open" },

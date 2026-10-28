@@ -713,7 +713,7 @@ export const register = (ctx) => {
       title: shown.scope === "region" ? shown.regionName : shown.polity,
       dateLong: readable(open.gameDate),
       dateShort: readable(open.gameDate, "D MMM YYYY"),
-      tabs: country ? [target.regionName, country.polity] : null,
+      tabs: country ? [country.polity, target.regionName] : null,
       nationwide: Boolean(nationwide && country),
       shouldAsk: view.shouldAsk,
       waiting: view.waiting,

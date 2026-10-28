@@ -7,6 +7,50 @@ var failures: PackedStringArray = []
 var played: PackedStringArray = []
 var only := ""
 
+const NEWEST_UPDATES := ["2026-10-spies-with-reason", "2026-10-zoom-keys", "2026-10-turn-and-tilt", "2026-10-globe-and-renames"]
+
+
+func _update_ids(updates: Array) -> Array:
+	var ids := []
+	for update in updates:
+		if update is Dictionary and not ids.has(str((update as Dictionary).get("id", ""))):
+			ids.append(str((update as Dictionary).get("id", "")))
+	return ids
+
+
+func _texts(node: Node, out: PackedStringArray) -> PackedStringArray:
+	if node is Label:
+		out.append((node as Label).text)
+	elif node is Button:
+		out.append((node as Button).text)
+	elif node is RichTextLabel:
+		out.append((node as RichTextLabel).get_parsed_text())
+	for child in node.get_children():
+		_texts(child, out)
+	return out
+
+
+func _missed_updates(shell: ShellBoot) -> void:
+	await main.engine.request("shell.notice.shown", {"id": "2026-10-peace-and-weariness"})
+	shell._notice_started = false
+	await shell.prepare()
+	shell._maybe_show_notice()
+	var mounted := await _until(func() -> bool: return shell.notice != null and is_instance_valid(shell.notice) and shell.notice.page_count() > 0, 10.0)
+	var ids := _update_ids(shell.notice._pages.map(func(page: Dictionary) -> Dictionary: return page.get("update", {}))) if mounted else []
+	_check("the vault-door notice shows every update a device missed, newest first", mounted and ids.slice(0, NEWEST_UPDATES.size()) == NEWEST_UPDATES, ", ".join(PackedStringArray(ids)))
+	var found := {}
+	for index in range(shell.notice.page_count() if mounted else 0):
+		shell.notice.show_page(index)
+		await _wait(0.5)
+		for title in ["Spies with a reason", "Zoom in and out", "Turn and tilt the map", "A smoother globe"]:
+			if Array(_texts(shell.notice, PackedStringArray())).any(func(value: String) -> bool: return value.contains(title)):
+				found[title] = true
+	_check("their pages read as written", found.size() == 4, ", ".join(PackedStringArray(found.keys())))
+	await _shoot("s-10b-missed-notice")
+	await _key(KEY_ESCAPE)
+	await _frames(4)
+	_check("the missed updates' notice closes onto the menu", shell.notice == null and main.menu.visible)
+
 
 func _initialize() -> void:
 	shots = OS.get_environment("OH_SHOTS")
@@ -134,6 +178,9 @@ func _languages(shell: ShellBoot) -> void:
 	await _wait(1.0)
 	_check("German is applied", i18n.language == "de" and TranslationServer.get_locale().begins_with("de"))
 	_check("the menu reads German", tr("Scenarios") == "Szenarien" and tr("Games") == "Spiele", tr("Scenarios"))
+	var fresh := ["War weariness:", "exhausted", "war-weary", "strained", "uneasy", "A smoother globe", "Peace, weariness and the phone", "Turn and tilt the map", "Zoom in and out", "Spies with a reason"]
+	var untranslated := fresh.filter(func(value: String) -> bool: return tr(value) == value)
+	_check("the newest strings read German from the language pack", untranslated.is_empty(), ", ".join(PackedStringArray(untranslated)))
 	var reply: Dictionary = await main.engine.request("shell.language.check", {"code": "de", "samples": SAMPLES})
 	var expected: Array = reply.get("result", {}).get("results", [])
 	var differ: PackedStringArray = []
@@ -253,6 +300,24 @@ func _parts() -> void:
 	Input.parse_input_event(press)
 	await _frames(3)
 	_check("Ctrl+= zooms in one step", is_equal_approx(root.content_scale_factor, pow(1.2, 0.5)), str(root.content_scale_factor))
+	var steps := [[KEY_EQUAL, false, 1.0], [KEY_EQUAL, true, 1.5], [KEY_KP_ADD, false, 2.0], [KEY_MINUS, false, 1.5], [KEY_KP_SUBTRACT, false, 1.0]]
+	var landed: Array = []
+	for step in steps:
+		var hit := InputEventKey.new()
+		hit.keycode = step[0]
+		hit.ctrl_pressed = true
+		hit.shift_pressed = step[1]
+		hit.pressed = true
+		Input.parse_input_event(hit)
+		await _frames(2)
+		landed.append(hotkeys.zoom_level)
+	_check("Ctrl with = or +, main row or keypad, zooms in; with - it zooms out; half a level a press", landed == steps.map(func(step: Array) -> float: return float(step[2])), str(landed))
+	for i in range(14):
+		hotkeys.set_zoom(hotkeys.zoom_level + Hotkeys.ZOOM_STEP, false)
+	var most := hotkeys.zoom_level
+	for i in range(20):
+		hotkeys.set_zoom(hotkeys.zoom_level - Hotkeys.ZOOM_STEP, false)
+	_check("the zoom is held between -3 and 4 levels, as the desktop app's", is_equal_approx(most, 4.0) and is_equal_approx(hotkeys.zoom_level, -3.0), "%.1f to %.1f" % [hotkeys.zoom_level, most])
 	var reset := InputEventKey.new()
 	reset.keycode = KEY_0
 	reset.ctrl_pressed = true
@@ -307,6 +372,8 @@ func _notice_and_history(shell: ShellBoot) -> void:
 	await _wait(1.2)
 	var pages := notice.page_count()
 	_check("the notice pages through the updates", pages >= 2, str(pages))
+	var shown_ids := _update_ids(notice._pages.map(func(page: Dictionary) -> Dictionary: return page.get("update", {})))
+	_check("a first opening's notice starts on the newest update", not shown_ids.is_empty() and shown_ids[0] == NEWEST_UPDATES[0], ", ".join(PackedStringArray(shown_ids)))
 	var state: Dictionary = await main.engine.request("shell.state")
 	var remembered: Dictionary = state.get("result", {})
 	_check("the newest update is remembered the moment it shows", not str(remembered.get("seen", "")).is_empty(), str(remembered))
@@ -319,11 +386,21 @@ func _notice_and_history(shell: ShellBoot) -> void:
 	await _frames(4)
 	_check("Escape closes the notice onto the menu", shell.notice == null and main.menu.visible)
 	await _shoot("s-10-menu")
+	await _missed_updates(shell)
 	shell.open_history()
 	await _wait(1.5)
 	_check("the update history opens", shell.history != null and is_instance_valid(shell.history))
 	await _shoot("s-11-history")
 	if shell.history:
+		var history_ids := _update_ids(shell.history._updates)
+		_check("the update history lists the newest updates", (NEWEST_UPDATES + ["2026-10-peace-and-weariness"]).all(func(id: String) -> bool: return history_ids.has(id)), ", ".join(PackedStringArray(history_ids.slice(0, 6))))
+		shell.history.view("2026-10-peace-and-weariness")
+		await _wait(1.6)
+		var viewed := _texts(shell.history.viewing(), PackedStringArray()) if shell.history.viewing() else PackedStringArray()
+		_check("the history opens the peace and weariness notice", Array(viewed).any(func(value: String) -> bool: return value.contains("Peace, weariness and the phone")) and Array(viewed).any(func(value: String) -> bool: return value.contains("Listening in on a region now opens on its country's feed first.")))
+		await _shoot("s-12b-history-peace")
+		await _key(KEY_ESCAPE)
+		await _frames(4)
 		shell.history.view("2026-10-war-and-peace")
 		await _wait(1.6)
 		await _shoot("s-12-history-view")

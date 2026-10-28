@@ -418,12 +418,14 @@ const methods = {
     const emoji = landless ? "" : clean(engine.countryFlags.flagEmojiFromGid(code));
     return { flag: file, emoji, name, landless };
   },
-  "map.cities": async () => {
-    const response = await fetch(engine.JSON_URLS.citiesGeojson || "/api/runtime/json/citiesGeojson");
-    if (!response.ok) return { cities: [] };
-    const parsed = await response.json().catch(() => null);
+  "map.cities": async ({ unless = null } = {}) => {
     const world = await engine.gameState.readWorldState({ force: true }).catch(() => null);
     const renames = world?.cityRenames && typeof world.cityRenames === "object" ? world.cityRenames : {};
+    const renamesKey = JSON.stringify(renames);
+    if (typeof unless === "string" && unless === renamesKey) return { unchanged: true, renamesKey };
+    const response = await fetch(engine.JSON_URLS.citiesGeojson || "/api/runtime/json/citiesGeojson");
+    if (!response.ok) return { cities: [], renamesKey };
+    const parsed = await response.json().catch(() => null);
     const capitalOf = (props) => {
       const value = props.capital;
       if (value === true) return true;
@@ -442,7 +444,7 @@ const methods = {
       const population = Number(props.population ?? props.POP_MAX ?? props.pop_max ?? props.pop) || 0;
       cities.push([label, Number(coordinates[0]), Number(coordinates[1]), capitalOf(props) ? 1 : 0, population, Number(props.tier) || 3, label !== name ? 1 : 0, name]);
     }
-    return { cities };
+    return { cities, renamesKey };
   },
   "game.open": async ({ id }) => {
     await api("/api/games/active", { method: "PUT", body: { gameId: id } });

@@ -441,12 +441,30 @@ export const register = (ctx) => {
     }
   };
 
-  const viewOf = (message, world, unseen = null) => {
+  const sentNote = (draft, chats) => {
+    if (!Array.isArray(chats)) return "";
+    const sentOn = engine.advisorDrafts.sentLetterDate(draft, chats);
+    if (!sentOn) return "";
+    const country = String(draft?.country ?? "");
+    return sentOn === "earlier"
+      ? `Already sent to ${country}.`
+      : `Already sent to ${country} on ${dates.formatGameDateReadable(sentOn) || sentOn}.`;
+  };
+
+  const readChats = async () => {
+    try {
+      return await gameState.readChatsState({ force: true });
+    } catch {
+      return null;
+    }
+  };
+
+  const viewOf = (message, world, unseen = null, chats = null) => {
     const role = message?.role;
     if (role === "notice") return noticeView(message, world, unseen ?? unseenOf(world));
     if (role === "advisor") {
       const parsed = engine.advisorReply.parseAdvisorReply(message.text, { allowedUnitTypes: allowedTypesOf(world), streaming: Boolean(message.streaming) });
-      const drafts = parsed.messageDrafts ?? null;
+      const drafts = parsed.messageDrafts ? parsed.messageDrafts.map((draft) => ({ ...draft, sentNote: sentNote(draft, chats) })) : null;
       return {
         text: parsed.text,
         md: normalizeMarkdown(parsed.text),
@@ -478,9 +496,9 @@ export const register = (ctx) => {
   };
 
   const viewsOf = async (messages) => {
-    const world = await readWorld();
+    const [world, chats] = await Promise.all([readWorld(), readChats()]);
     const unseen = unseenOf(world);
-    return list(messages).map((message) => viewOf(message, world, unseen));
+    return list(messages).map((message) => viewOf(message, world, unseen, chats));
   };
 
   const loadMessages = async () => {
@@ -540,10 +558,12 @@ export const register = (ctx) => {
     }
   };
 
-  const applyAdvisorActions = async (proposal, problems = []) => {
+  const applyAdvisorActions = async (proposal, problems = [], round = 0) => {
     if (!Array.isArray(proposal) || proposal.length === 0) return null;
     const current = await gameState.readActionsState({ force: true });
-    const plan = engine.advisorBlocks.planAdvisorActionEdits(current, proposal, gameState.normalizeActionEntry);
+    const plan = engine.advisorBlocks.planAdvisorActionEdits(current, proposal, gameState.normalizeActionEntry, {
+      repeatOf: (queue, title) => engine.playerFocus.repeatedOrder(queue, title, { round: Number(round) || 0 }),
+    });
     problems.push(...plan.problems);
     if (plan.items.length === 0) return null;
     if (engine.mpBridge.inSharedGame()) {
@@ -796,7 +816,7 @@ export const register = (ctx) => {
         const { chartProblem, draftProblems, institutionDraftProblems, deployProblems } = engine.advisorReply.parseAdvisorReply(reply, {
           allowedUnitTypes: Array.isArray(moment.world?.allowedUnitTypes) ? moment.world.allowedUnitTypes : null,
         });
-        const actionsSummary = await applyAdvisorActions(actionsProposal, actionsProblems).catch((error) => {
+        const actionsSummary = await applyAdvisorActions(actionsProposal, actionsProblems, gameRound).catch((error) => {
           console.error("Failed to apply advisor-proposed actions:", error?.message ?? error);
           return null;
         });
@@ -832,8 +852,8 @@ export const register = (ctx) => {
           ...(projectsDetail ? { projectsDetail } : {}),
           ...(projectsExcerptText ? { projectsExcerpt: projectsExcerptText } : {}),
         };
-        const world = await readWorld();
-        return plain({ message: finalMessage, view: viewOf(finalMessage, world) });
+        const [world, chats] = await Promise.all([readWorld(), readChats()]);
+        return plain({ message: finalMessage, view: viewOf(finalMessage, world, null, chats) });
       } catch (error) {
         stopChunks();
         if (leftCampaign()) return { dropped: true };

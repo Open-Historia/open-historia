@@ -54,6 +54,7 @@ var _shared_view_keys := {}
 var _play_game_id := ""
 var _play_regions := ""
 var _cities_raw: Array = []
+var _city_renames_key := ""
 var _minimized := false
 var _presence_timer: Timer
 var _reload_asking := false
@@ -127,6 +128,7 @@ func _ready() -> void:
 	_wire_overlays()
 	_mount_parts()
 	hud.turn_landed.connect(_on_turn_landed)
+	hud.world_changed.connect(_world_changed)
 	picker.start.connect(_on_picker_start)
 	picker.cancelled.connect(_on_picker_cancelled)
 	map_view.bake_failed.connect(func(message: String) -> void: menu.set_status(message, true))
@@ -344,11 +346,18 @@ func _refresh_flag(country: String) -> void:
 		hud.set_flag_info(flag["result"])
 
 
-func _load_cities() -> void:
-	var cities := await engine.request("map.cities")
-	if cities.get("ok", false):
-		_cities_raw = cities["result"].get("cities", [])
-		_apply_city_names()
+func _load_cities(only_renamed := false) -> void:
+	var args := {"unless": _city_renames_key} if only_renamed and not _cities_raw.is_empty() else {}
+	var cities := await engine.request("map.cities", args)
+	if not cities.get("ok", false):
+		return
+	var result: Dictionary = cities["result"]
+	_city_renames_key = str(result.get("renamesKey", ""))
+	if result.get("unchanged", false):
+		return
+	_cities_raw = result.get("cities", [])
+	_call(hud.map_cards, "set_cities", [_cities_raw])
+	_apply_city_names()
 
 
 func _apply_city_names() -> void:
@@ -827,6 +836,7 @@ func _on_turn_landed(view: Dictionary) -> void:
 	_call(game_menu, "refresh")
 	_sound("refresh_war")
 	_refresh_war_parts()
+	await _load_cities(true)
 	await _refresh_library()
 	_report_presence(not hud.visible)
 

@@ -26,7 +26,7 @@ export const register = (ctx) => {
     return { world: bundle.world ?? {}, game: selectGame(bundle.game) };
   };
 
-  const frontsOf = (world, country) => engine.wrData.playerFronts(world?.battlefields, country);
+  const frontsOf = (world, country) => engine.wrData.playerFronts(world?.battlefields, country, world?.wars);
 
   const locate = (world, game, battlefield) => {
     const R = engine.wrRecord;
@@ -606,6 +606,23 @@ export const register = (ctx) => {
       const opened = await engine.gameplay.maybeOpenScenarioFronts();
       const after = await read();
       return plain({ opened, fronts: frontsOf(after.world, after.game.country) });
+    };
+    methods["warroom.test.offer"] = async () => {
+      const { world, game } = await read();
+      const country = clean(game.country);
+      const R = engine.wrRecord;
+      const warIds = new Set(list(world?.wars).filter((war) => fold(war?.status || "active") === "active").map((war) => clean(war?.id)));
+      const row = list(world?.battlefields).find((entry) => R.isOpenBattlefield(entry) && warIds.has(clean(entry?.warId)) && list(entry?.sides).some((members) => list(members).some((member) => fold(member) === fold(country))));
+      if (!row) return { id: "", warId: "" };
+      const war = list(world.wars).find((entry) => clean(entry?.id) === clean(row.warId));
+      const sides = [list(war?.sideA), list(war?.sideB)];
+      const mine = sides.findIndex((members) => members.some((member) => fold(member) === fold(country)));
+      const from = mine >= 0 ? clean(sides[1 - mine][0]) : "";
+      if (!from) return { id: "", warId: clean(row.warId) };
+      const id = `offer-test-${crypto.randomUUID().slice(0, 8)}`;
+      const offer = { id, warId: clean(row.warId), from, to: country, terms: { territory: "as held", reparations: null }, date: clean(game.gameDate), round: Number(game.round) || 1, status: "open" };
+      await engine.gameState.mutateWorldState((current) => ({ ...current, peaceOffers: [...list(current?.peaceOffers), offer] }));
+      return { id, warId: clean(row.warId), from };
     };
     methods["warroom.test.operation"] = async ({ name = "", summary = "", focus = null } = {}) => {
       const id = `test-${crypto.randomUUID()}`;

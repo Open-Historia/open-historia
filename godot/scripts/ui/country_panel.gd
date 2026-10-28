@@ -5,6 +5,7 @@ signal request_focus(bounds: Rect2)
 signal show_event(event_id: String)
 signal open_war_report(battlefield: String)
 signal width_changed(width: float)
+signal world_changed
 
 const MIN_WIDTH := 280.0
 const DEFAULT_WIDTH := 320.0
@@ -1335,13 +1336,37 @@ func _render_diplomacy() -> void:
 		body.add_child(note)
 
 
+func _weariness_line(weary: Array) -> HFlowContainer:
+	var ink := Color(1, 1, 1, 0.58)
+	var line := flow(0, 0)
+	line.add_child(UI.label("War weariness: ", 10, ink))
+	for at in range(weary.size()):
+		var entry: Dictionary = weary[at] if weary[at] is Dictionary else {}
+		var piece := HBoxContainer.new()
+		piece.add_theme_constant_override("separation", 0)
+		piece.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		if at > 0:
+			piece.add_child(UI.label(" · ", 10, ink))
+		var name_label := UI.label("%s %d" % [str(entry.get("name", "")), int(entry.get("value", 0))], 10, ink)
+		name_label.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+		piece.add_child(name_label)
+		var word := str(entry.get("word", ""))
+		if not word.is_empty():
+			piece.add_child(UI.label(" (", 10, ink))
+			piece.add_child(UI.label(word, 10, ink))
+			piece.add_child(UI.label(")", 10, ink))
+		line.add_child(piece)
+	return line
+
+
 func _peace_controls(holder: VBoxContainer, war: Dictionary, info: Dictionary) -> void:
 	var id := str(war.get("id", ""))
 	var state: Dictionary = peace.get(id, {"open": false, "territory": "restored", "money": "none", "busy": false, "said": ""})
 	peace[id] = state
 	holder.add_child(gap(3))
-	if not str(war.get("weariness", "")).is_empty():
-		holder.add_child(text("War weariness: %s" % str(war["weariness"]), 10, Color(1, 1, 1, 0.58)))
+	var weary: Variant = war.get("weariness", [])
+	if weary is Array and not (weary as Array).is_empty():
+		holder.add_child(_weariness_line(weary))
 	if war.get("canPropose", false):
 		var toggle := link("Propose peace", UI.ACCENT, 10, 700)
 		toggle.pressed.connect(func() -> void:
@@ -1383,6 +1408,7 @@ func _propose(war: Dictionary) -> void:
 	var result: Dictionary = reply.get("result", {}) if reply.get("ok", false) else {"ok": false, "said": str(reply.get("error", "That could not be done."))}
 	if result.get("ok", false):
 		state["open"] = false
+		world_changed.emit()
 		await _load(target)
 		return
 	state["said"] = str(result.get("said", ""))

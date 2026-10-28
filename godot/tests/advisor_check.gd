@@ -269,6 +269,18 @@ func _run() -> void:
 		_check("the hand-off survives a re-render of the row", _find_button(panel, "✓ In Diplomacy — press send there") != null)
 		await _wait(3.3)
 		_check("the button comes back after three seconds", _find_button(panel, "✉️ Draft to Germany") != null)
+		_check("a letter not yet sent says nothing of it", not _find_text(panel, "Already sent to Germany."))
+		var letter := "Chancellor, France proposes that our finance ministers meet before the next summit to agree a common position on the fiscal rules."
+		await main.engine.request("chat.create", {"chat": {"id": "chat-sent-germany", "title": "Germany", "countries": [{"name": "Germany"}], "status": "open", "messages": [{"id": "m-sent-1", "role": "user", "text": letter, "time": "2016-01-04"}]}})
+		await panel._refresh_views()
+		await _frames(3)
+		var note := ""
+		for view in panel.views:
+			for drafted in ((view as Dictionary).get("messageDrafts", []) if (view as Dictionary).get("messageDrafts") is Array else []):
+				if not str((drafted as Dictionary).get("sentNote", "")).is_empty():
+					note = str(drafted["sentNote"])
+		_check("a letter already sent to that country says when it went", note.begins_with("Already sent to Germany on ") and _find_text(panel, note), note)
+		await _shoot("advisor-07b-already-sent")
 
 	var place := _find_button(panel, "📍 Place Brigade de Lorraine here")
 	_check("the deployment has its button", place != null)

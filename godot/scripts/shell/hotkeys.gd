@@ -11,8 +11,8 @@ signal minimize_requested
 
 const ZOOM_STEP := 0.5
 const ZOOM_BASE := 1.2
-const ZOOM_MIN_FACTOR := 0.25
-const ZOOM_MAX_FACTOR := 5.0
+const ZOOM_LEAST := -3.0
+const ZOOM_MOST := 4.0
 
 var engine: EngineLink
 var apply_defaults := true
@@ -37,13 +37,11 @@ func setup(link: EngineLink, defaults := true) -> void:
 
 
 func zoom_factor() -> float:
-	return clampf(pow(ZOOM_BASE, zoom_level), ZOOM_MIN_FACTOR, ZOOM_MAX_FACTOR)
+	return pow(ZOOM_BASE, zoom_level)
 
 
 func set_zoom(level: float, remember := true) -> void:
-	var lowest := log(ZOOM_MIN_FACTOR) / log(ZOOM_BASE)
-	var highest := log(ZOOM_MAX_FACTOR) / log(ZOOM_BASE)
-	zoom_level = clampf(level, lowest, highest)
+	zoom_level = clampf(level, ZOOM_LEAST, ZOOM_MOST)
 	if apply_defaults and is_inside_tree():
 		get_tree().root.content_scale_factor = zoom_factor()
 	zoom_changed.emit(zoom_level, zoom_factor())

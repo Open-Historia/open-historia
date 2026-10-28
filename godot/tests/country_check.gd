@@ -223,6 +223,7 @@ func _country_panel() -> void:
 	await _wait(0.6)
 	_check(_has_text(panel, "Bilateral relations") and _has_text(panel, "Formal agreements") and _has_text(panel, "Current conflicts"), "diplomacy sections")
 	_check(_has_text(panel, "Élysée Treaty") and _has_text(panel, "vs Libya") and _has_text(panel, "Fighting alongside Chad"), "diplomacy rows")
+	_check(_has_text(panel, "War weariness: ") and _has_text(panel, "France 45") and _has_text(panel, "strained") and _has_text(panel, "Libya 83") and _has_text(panel, "exhausted") and not _has_text(panel, "Chad 30"), "war weariness: your own country beside the enemy's, a word for each")
 	await _shoot("03-country-diplomacy")
 	panel.peace["war-sahel"] = {"open": true, "territory": "restored", "money": "they-light", "busy": false, "said": ""}
 	panel._render()
@@ -382,14 +383,16 @@ func _map_cards() -> void:
 	var phone = cards._phone
 	await _until(func() -> bool: return is_instance_valid(phone) and _has_text(phone, "Camille Bernard"), 40.0)
 	await _wait(0.5)
-	_check(is_instance_valid(phone) and _has_text(phone, "Camille Bernard") and _has_text(phone, "TRENDING") and _has_text(phone, "Written by your AI model. Each new feed is one AI request."), "listen in: the region's feed")
-	await _shoot("16-listen-in-region")
-	phone.nationwide = true
+	var phone_tabs: Array = phone._tabs.get_children() if is_instance_valid(phone) else []
+	_check(is_instance_valid(phone) and phone.view.get("nationwide", false) and phone_tabs.size() == 2 and str(phone_tabs[0].text) == "France" and str(phone_tabs[1].text) == str(region.get("regionName", "")), "listen in: opens on the country's feed, its tab first")
+	_check(is_instance_valid(phone) and _has_text(phone, "Camille Bernard") and _has_text(phone, "TRENDING") and _has_text(phone, "Written by your AI model. Each new feed is one AI request."), "listen in: the whole country")
+	await _shoot("16-listen-in-country")
+	phone.nationwide = false
 	await phone.refresh_view()
 	await _until(func() -> bool: return is_instance_valid(phone) and not bool(phone.view.get("waiting", true)), 40.0)
 	await _wait(0.5)
-	_check(is_instance_valid(phone) and phone.view.get("nationwide", false) and _has_text(phone, "Camille Bernard"), "listen in: the whole country")
-	await _shoot("17-listen-in-country")
+	_check(is_instance_valid(phone) and not phone.view.get("nationwide", true) and _has_text(phone, "Camille Bernard"), "listen in: the region's feed")
+	await _shoot("17-listen-in-region")
 	phone.close()
 	await _wait(0.4)
 	await cards._open_country_from_region()

@@ -419,7 +419,7 @@ export const register = (ctx) => {
     const inWar = engine.playerAtWar.playerAtWar(world.wars, country);
     let fronts = false;
     try {
-      fronts = Boolean(engine.warRoomData.playerFrontsKey(world.battlefields, country)) && engine.gameFeatures.isActiveFeatureEnabled("fronts");
+      fronts = Boolean(engine.warRoomData.playerFrontsKey(world.battlefields, country, world.wars)) && engine.gameFeatures.isActiveFeatureEnabled("fronts");
     } catch {
       fronts = false;
     }

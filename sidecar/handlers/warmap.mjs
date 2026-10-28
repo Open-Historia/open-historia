@@ -992,6 +992,14 @@ export const register = (ctx) => {
       await engine.gameState.writeWorldState({ ...world, regionOwnershipOverrides: overrides });
       return true;
     },
+    "warmap.test.rename": async ({ name = "", newName = "", date = "" } = {}) => {
+      if (!ctx.standIn) throw new Error("Only the stand-in model may seed a test war.");
+      const world = await engine.gameState.readWorldState({ force: true });
+      const event = { id: `test-rename-${crypto.randomUUID()}`, date: clean(date), title: `${clean(name)} renamed`, description: "", importance: "minor", kind: "world", impacts: { markerOps: [{ op: "rename", name: clean(name), newName: clean(newName) }] }, source: "manual-admin" };
+      const next = engine.gameState.applyEventImpactsToWorld({ world, round: 1, events: [event] }).world;
+      await engine.gameState.writeWorldState(next);
+      return { ...(next.cityRenames ?? {}) };
+    },
     "warmap.test.index": async ({ id = "" } = {}) => {
       if (!ctx.standIn) throw new Error("Only the stand-in model may seed a test war.");
       const map = await ctx.mapState();

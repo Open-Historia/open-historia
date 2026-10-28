@@ -20,6 +20,8 @@ export * as playerTurnFailures from "../../src/Game/AI/playerTurnFailures.js";
 export * as aiMain from "../../src/Game/AI/main.jsx";
 export * as advisorReply from "../../src/Game/GameUI/advisorReply.js";
 export * as advisorBlocks from "../../src/Game/GameUI/advisorBlocks.js";
+export * as advisorDrafts from "../../src/Game/GameUI/advisorDrafts.js";
+export * as playerFocus from "../../src/Game/AI/playerFocus.js";
 export * as advisorMemory from "../../src/Game/AI/advisorMemory.js";
 export * as conversationCatchUp from "../../src/Game/AI/conversationCatchUp.js";
 export * as chatActions from "../../src/Game/AI/chatActions.js";

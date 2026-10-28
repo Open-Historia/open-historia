@@ -239,6 +239,8 @@ func set_open(open_state: bool) -> void:
 		offset_right = offset_left + _width, 0.0, 1.0, SLIDE_SECONDS)
 	if changed:
 		open_changed.emit(open_state)
+	if open_state and changed and _has_bootstrapped and not _loading:
+		_refresh_views()
 	if open_state:
 		_ensure_bootstrap()
 
@@ -1488,7 +1490,17 @@ func _draft_button(draft: Dictionary, draft_index: int, row_state: Dictionary) -
 		get_tree().create_timer(3.0).timeout.connect(func() -> void:
 			if int(st.get("until", 0)) == stamp:
 				(st["apply"] as Callable).call()))
-	return button
+	var sent := str(draft.get("sentNote", ""))
+	if sent.is_empty():
+		return button
+	var holder := VBoxContainer.new()
+	holder.add_theme_constant_override("separation", 4)
+	holder.add_child(button)
+	var note := UI.label(sent, 11, Color(253 / 255.0, 230 / 255.0, 138 / 255.0, 0.9), 400, "Segoe UI")
+	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	note.custom_minimum_size.x = 1
+	holder.add_child(note)
+	return holder
 
 
 func _hand_off(draft: Dictionary) -> void:

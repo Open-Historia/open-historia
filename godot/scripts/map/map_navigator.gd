@@ -337,9 +337,12 @@ func _begin_ease(ease: Dictionary, centre: Vector2, freeze: bool) -> void:
 
 func _end_ease() -> void:
 	var had := not _ease.is_empty()
+	var turned := _ease.has("bearing_to") or _ease.has("pitch_to")
 	_ease = {}
 	if had and globe:
 		globe.elevation_ease_end()
+	if turned:
+		_mark()
 
 
 func _end_terrain_movement() -> void:

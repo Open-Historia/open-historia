@@ -9,6 +9,7 @@ signal open_advisor
 signal map_mode_changed(mode: String)
 signal turn_landed(view: Dictionary)
 signal open_interactive
+signal world_changed
 
 const DOCK_LAUNCHERS := [["chat", "Chat", 18], ["actions", "Actions", 16], ["projects", "Projects & Operations", 18]]
 
@@ -506,6 +507,7 @@ func mount_panels(game: Dictionary) -> void:
 		_hook(country, "show_event", func(event_id: String) -> void: date_widget.show_event(event_id))
 		_hook(country, "width_changed", func(_width: float) -> void: _sync_inset())
 		_hook(country, "open_war_report", func(battlefield: String) -> void: _invoke(after_action, "open_report", [battlefield]))
+		_hook(country, "world_changed", func() -> void: world_changed.emit())
 		var country_ctx := ctx.duplicate()
 		country_ctx["war_reports"] = after_action != null and is_instance_valid(after_action)
 		_setup(country, country_ctx)
@@ -533,6 +535,7 @@ func mount_panels(game: Dictionary) -> void:
 		add_child(war_cards)
 		if map_cards:
 			move_child(war_cards, map_cards.get_index() + 1)
+		_hook(war_cards, "answered", func(_op: String, _ref: String) -> void: world_changed.emit())
 		_setup(war_cards, {"poll_seconds": 5.0, "game": game})
 	for entry in [["chat", "chat_panel"], ["actions", "actions_panel"], ["projects", "projects_panel"]]:
 		var tile: Button = _launchers.get(entry[0])

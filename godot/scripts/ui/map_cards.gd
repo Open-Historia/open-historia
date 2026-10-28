@@ -93,6 +93,10 @@ func setup(link: EngineLink, setup_context: Dictionary = {}) -> void:
 	await refresh()
 
 
+func set_cities(rows: Array) -> void:
+	_cities = rows
+
+
 func refresh() -> void:
 	if not engine:
 		return
@@ -1438,7 +1442,7 @@ class ListenPhone extends Control:
 
 	var engine: EngineLink
 	var place: Dictionary = {}
-	var nationwide := false
+	var nationwide := true
 	var session: Variant = null
 	var asked: Dictionary = {}
 	var loading: Dictionary = {}
@@ -1798,7 +1802,7 @@ class ListenPhone extends Control:
 			var names: Array = tabs
 			var whole: bool = view.get("nationwide", false)
 			for index in range(2):
-				var active := (index == 1) == whole
+				var active := (index == 0) == whole
 				var tab := Button.new()
 				tab.text = str(names[index])
 				tab.focus_mode = Control.FOCUS_NONE
@@ -1821,7 +1825,7 @@ class ListenPhone extends Control:
 				style.content_margin_bottom = 8
 				for state in ["normal", "hover", "pressed", "focus", "hover_pressed"]:
 					tab.add_theme_stylebox_override(state, style)
-				var whole_country := index == 1
+				var whole_country := index == 0
 				tab.pressed.connect(func() -> void:
 					nationwide = whole_country
 					refresh_view())
