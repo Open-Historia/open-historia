@@ -46,6 +46,7 @@ var _suggestions: Control
 var _creating := false
 var _editing_enabled := false
 var loaded := false
+var _library_stale := false
 var _missing_game := {}
 var _missing_error := ""
 var _missing_busy := false
@@ -74,12 +75,21 @@ func set_origin(origin: String) -> void:
 func set_library(data: Dictionary) -> void:
 	_library = data
 	loaded = true
+	if is_inside_tree() and not is_visible_in_tree() and _page_root != null:
+		_library_stale = true
+		return
+	_library_stale = false
 	if _page == "community" and is_instance_valid(_community):
 		_community.call("refresh_library")
 		return
 	if _page == "lobbies" and is_instance_valid(_lobbies):
 		return
 	_show_page(_page)
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_VISIBILITY_CHANGED and _library_stale and is_visible_in_tree():
+		set_library(_library)
 
 
 func set_editing_enabled(enabled: bool) -> void:

@@ -82,6 +82,10 @@ var _orders: Array = []
 var _arrows: Array = []
 var _arrow_colours: Array = []
 var _arrow_cache := {}
+var _weather_serial := 0
+var _weather_tasks: Array[int] = []
+var _pattern_textures := {}
+var _shaders := {}
 
 
 func setup(map_view: MapView) -> void:
@@ -95,8 +99,11 @@ func setup(map_view: MapView) -> void:
 
 
 func _material(code: String) -> ShaderMaterial:
-	var shader := Shader.new()
-	shader.code = code
+	var shader: Shader = _shaders.get(code)
+	if shader == null:
+		shader = Shader.new()
+		shader.code = code
+		_shaders[code] = shader
 	var material := ShaderMaterial.new()
 	material.shader = shader
 	return material
@@ -114,6 +121,7 @@ func clear() -> void:
 	_orders = []
 	_arrows = []
 	_arrow_cache = {}
+	_weather_serial += 1
 	for child in _weather_root.get_children():
 		child.queue_free()
 	_redraw_all()
@@ -157,22 +165,23 @@ func set_arrows(arrows: Array, colours: Array) -> void:
 
 
 func set_weather(weather: Dictionary) -> void:
-	for child in _weather_root.get_children():
-		child.queue_free()
-	_weather_materials.clear()
+	_weather_serial += 1
+	var serial := _weather_serial
+	_reap_weather()
 	var areas: Array = weather.get("areas", [])
-	if areas.is_empty():
-		return
 	var patterns: Dictionary = weather.get("patterns", {})
+	if areas.is_empty():
+		_weather_built(serial, {}, {}, patterns)
+		return
+	_weather_tasks.append(WorkerThreadPool.add_task(_weather_buckets.bind(serial, areas, patterns), false, "war weather"))
+
+
+func _weather_buckets(serial: int, areas: Array, patterns: Dictionary) -> void:
 	var wash_cells := {}
 	var by_state := {}
 	for item in areas:
 		var area: Dictionary = item
-		var floats := Marshalls.base64_to_raw(str(area.get("points", ""))).to_float32_array()
-		var points := PackedVector2Array()
-		points.resize(floats.size() / 2)
-		for at in range(points.size()):
-			points[at] = Vector2(floats[at * 2], floats[at * 2 + 1])
+		var points := Marshalls.base64_to_raw(str(area.get("points", ""))).to_vector2_array()
 		if points.is_empty():
 			continue
 		var cell := _weather_cell(points[0])
@@ -187,11 +196,51 @@ func set_weather(weather: Dictionary) -> void:
 			_weather_append(by_state[state], cell, points, indices, wash, strength)
 		elif washed:
 			_weather_append(wash_cells, cell, points, indices, wash, 0.0)
+	_weather_built.call_deferred(serial, wash_cells, by_state, patterns)
+
+
+func _weather_built(serial: int, wash_cells: Dictionary, by_state: Dictionary, patterns: Dictionary) -> void:
+	_reap_weather()
+	if serial != _weather_serial or not is_inside_tree():
+		return
+	for child in _weather_root.get_children():
+		child.queue_free()
+	_weather_materials.clear()
 	if not wash_cells.is_empty():
 		_cell_copies(wash_cells, _weather_material([]))
 	for state in by_state.keys():
 		_cell_copies(by_state[state], _weather_material(patterns[state]))
 	set_view(level, zoom)
+
+
+func _reap_weather() -> void:
+	var kept: Array[int] = []
+	for task in _weather_tasks:
+		if WorkerThreadPool.is_task_completed(task):
+			WorkerThreadPool.wait_for_task_completion(task)
+		else:
+			kept.append(task)
+	_weather_tasks = kept
+
+
+func _exit_tree() -> void:
+	for task in _weather_tasks:
+		WorkerThreadPool.wait_for_task_completion(task)
+	_weather_tasks.clear()
+
+
+func _pattern_texture(tile: Dictionary) -> ImageTexture:
+	var data := str(tile["data"])
+	var key := "%d|%d|%d|%d" % [int(tile["width"]), int(tile["height"]), data.length(), data.hash()]
+	var known: Variant = _pattern_textures.get(key)
+	if known is ImageTexture:
+		return known
+	var image := Image.create_from_data(int(tile["width"]), int(tile["height"]), false, Image.FORMAT_RGBA8, Marshalls.base64_to_raw(data))
+	var texture := ImageTexture.create_from_image(image)
+	if _pattern_textures.size() >= 32:
+		_pattern_textures.clear()
+	_pattern_textures[key] = texture
+	return texture
 
 
 func _weather_material(tiles: Array) -> ShaderMaterial:
@@ -200,8 +249,7 @@ func _weather_material(tiles: Array) -> ShaderMaterial:
 	material.set_shader_parameter("layers", layers)
 	for layer in range(layers):
 		var tile: Dictionary = tiles[layer]
-		var image := Image.create_from_data(int(tile["width"]), int(tile["height"]), false, Image.FORMAT_RGBA8, Marshalls.base64_to_raw(str(tile["data"])))
-		material.set_shader_parameter("pattern_%d" % layer, ImageTexture.create_from_image(image))
+		material.set_shader_parameter("pattern_%d" % layer, _pattern_texture(tile))
 		material.set_shader_parameter("size_%d" % layer, float(tile["width"]))
 	_weather_materials.append(material)
 	return material
