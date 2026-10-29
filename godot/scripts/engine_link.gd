@@ -15,9 +15,13 @@ var _next_id := 0
 var _pending := {}
 var _diagnostics: PackedStringArray = []
 var _started := false
+var _inbox: Array[Dictionary] = []
+
+const BACKGROUND_PARSE_CHARS := 262144
 
 
 func _ready() -> void:
+	set_process(false)
 	_sidecar = Sidecar.new()
 	add_child(_sidecar)
 	_sidecar.message.connect(_on_message)
@@ -94,7 +98,49 @@ func stop() -> void:
 
 
 func _on_message(line: String) -> void:
-	var parsed: Variant = JSON.parse_string(line)
+	if _inbox.is_empty() and line.length() < BACKGROUND_PARSE_CHARS:
+		_deliver(line, JSON.parse_string(line))
+		return
+	var entry := {"line": line, "parsed": null, "task": -1}
+	if line.length() >= BACKGROUND_PARSE_CHARS:
+		entry["task"] = WorkerThreadPool.add_task(_parse_into.bind(entry), false, "engine message")
+	_inbox.append(entry)
+	set_process(true)
+
+
+static func _parse_into(entry: Dictionary) -> void:
+	entry["parsed"] = JSON.parse_string(str(entry["line"]))
+
+
+func _process(_delta: float) -> void:
+	_drain(false)
+
+
+func _drain(wait: bool) -> void:
+	while not _inbox.is_empty():
+		var entry: Dictionary = _inbox[0]
+		var task := int(entry["task"])
+		var parsed: Variant = null
+		if task >= 0:
+			if not wait and not WorkerThreadPool.is_task_completed(task):
+				return
+			WorkerThreadPool.wait_for_task_completion(task)
+			parsed = entry["parsed"]
+		else:
+			parsed = JSON.parse_string(str(entry["line"]))
+		_inbox.pop_front()
+		_deliver(str(entry["line"]), parsed)
+	set_process(false)
+
+
+func _exit_tree() -> void:
+	for entry in _inbox:
+		if int(entry["task"]) >= 0:
+			WorkerThreadPool.wait_for_task_completion(int(entry["task"]))
+	_inbox.clear()
+
+
+func _deliver(line: String, parsed: Variant) -> void:
 	if typeof(parsed) != TYPE_DICTIONARY:
 		return
 	var message: Dictionary = parsed
@@ -125,6 +171,7 @@ func _on_diagnostic(line: String) -> void:
 
 
 func _on_exited(code: int) -> void:
+	_drain(true)
 	_started = false
 	for id in _pending.keys():
 		var pending: PendingCall = _pending[id]
