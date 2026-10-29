@@ -17,6 +17,11 @@ export const NATIVE_RELEASE_BASE = `https://github.com/Open-Historia/open-histor
 export const NATIVE_CHUNKS_BASE = `https://github.com/Open-Historia/open-historia/releases/download/${NATIVE_CHUNKS_TAG}/`;
 export const NATIVE_UPDATE_MANIFEST = `${NATIVE_RELEASE_BASE}/${NATIVE_MANIFEST_NAME}`;
 export const NATIVE_SETUP_URL = `${NATIVE_RELEASE_BASE}/${NATIVE_SETUP_NAME}`;
+export const NATIVE_MAC_ZIP_NAME = "Open-Historia-Native-macOS.zip";
+export const NATIVE_MAC_MANIFEST_NAME = "native-latest-mac.json";
+export const NATIVE_MAC_UPDATE_MANIFEST = `${NATIVE_RELEASE_BASE}/${NATIVE_MAC_MANIFEST_NAME}`;
+export const NATIVE_MAC_ZIP_URL = `${NATIVE_RELEASE_BASE}/${NATIVE_MAC_ZIP_NAME}`;
+export const MAC_UPDATER = "native/sidecar/macUpdater.mjs";
 export const INSTALL_MARKER = ".oh-native-install";
 export const LAUNCH_CHECK_TIMEOUT_MS = 6000;
 export const LAUNCH_FAILURE_LIMIT = 2;
@@ -53,10 +58,11 @@ const remove = (target) => {
 
 export const isLoopbackUrl = (value) => LOOPBACK.test(text(value));
 
-export const manifestUrlFor = (env = process.env) => {
+export const manifestUrlFor = (env = process.env, platform = process.platform) => {
   const override = text(env.OH_NATIVE_UPDATE_URL);
   if (override) return isLoopbackUrl(override) ? override : "";
   if (env.OH_STANDIN_MODEL === "1") return "";
+  if (platform === "darwin") return NATIVE_MAC_UPDATE_MANIFEST;
   return NATIVE_UPDATE_MANIFEST;
 };
 
@@ -170,7 +176,20 @@ export const createUpdater = ({
   now = () => Date.now(),
   stallMs = STALL_TIMEOUT_MS,
   retryDelayMs = 800,
+  nodePath = process.execPath,
+  waitPids = [process.pid, process.ppid],
 }) => {
+  const mac = platform === "darwin";
+  const updaterName = mac ? "updater.mjs" : "updater.exe";
+  const macWritable = () => {
+    if (installRoot.split(path.sep).join("/").includes("/AppTranslocation/")) return false;
+    try {
+      fs.accessSync(installRoot, fs.constants.W_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  };
   const allowLoopback = isLoopbackUrl(manifestUrl);
   const supported = Boolean(current?.build && manifestUrl && downloadDir);
   const dataDir = recordFile ? path.dirname(recordFile) : downloadDir;
@@ -193,7 +212,7 @@ export const createUpdater = ({
   let rolledBack = "";
 
   const canInstall = () => {
-    if (!supported || platform !== "win32" || !installRoot) return false;
+    if (!supported || !installRoot || (platform !== "win32" && !(mac && macWritable()))) return false;
     return exists(path.join(installRoot, INSTALL_MARKER));
   };
   const dismissed = () => {
@@ -223,7 +242,7 @@ export const createUpdater = ({
     available: available(),
     staged: ready.kind === "staged" ? ready.build : "",
     dismissed: dismissed(),
-    downloadUrl: latest?.url || NATIVE_SETUP_URL,
+    downloadUrl: latest?.url || (mac ? NATIVE_MAC_ZIP_URL : NATIVE_SETUP_URL),
     justUpdated,
     rolledBack,
     pendingRollback: pendingRollback ? pendingRollback.build : "",
@@ -284,7 +303,7 @@ export const createUpdater = ({
             log("warn", "update: the start count could not be written");
           }
           applied = { dir, build: name, boots };
-          if (boots > BOOT_LIMIT && exists(path.join(dir, "updater.exe"))) pendingRollback = applied;
+          if (boots > BOOT_LIMIT && exists(path.join(dir, updaterName))) pendingRollback = applied;
         } else {
           remove(dir);
         }
@@ -404,7 +423,7 @@ export const createUpdater = ({
 
   const fetchSetup = async (target) => {
     const folder = path.join(setupDir, target.build);
-    const file = path.join(folder, NATIVE_SETUP_NAME);
+    const file = path.join(folder, mac ? NATIVE_MAC_ZIP_NAME : NATIVE_SETUP_NAME);
     if (await verified(file, target)) return file;
     try {
       for (const name of fs.readdirSync(setupDir)) if (name !== target.build) remove(path.join(setupDir, name));
@@ -736,7 +755,9 @@ export const createUpdater = ({
   const rememberInstall = (target) => writeRecord(installedRecordFile, { build: target.build, version: text(target.version), notes: text(target.notes), at: new Date(now()).toISOString() });
 
   const start = async (file, args, cwd) => {
-    const child = spawnImpl(file, args, { cwd, detached: true, stdio: "ignore" });
+    const child = mac
+      ? spawnImpl(nodePath, [file, ...args, "--wait", waitPids.filter((pid) => Number.isSafeInteger(pid) && pid > 1).join(",")], { cwd, detached: true, stdio: "ignore" })
+      : spawnImpl(file, args, { cwd, detached: true, stdio: "ignore" });
     await new Promise((resolve, reject) => {
       child.once("spawn", resolve);
       child.once("error", reject);
@@ -756,9 +777,10 @@ export const createUpdater = ({
         set({ state: "error", error: "The downloaded update is no longer complete, so it was not applied." });
         throw new Error(status.error);
       }
-      const staged = path.join(dir, "files", ...UPDATER_EXE.split("/"));
-      const source = exists(staged) ? staged : path.join(installRoot, ...UPDATER_EXE.split("/"));
-      const updater = path.join(dir, "updater.exe");
+      const updaterFile = mac ? MAC_UPDATER : UPDATER_EXE;
+      const staged = path.join(dir, "files", ...updaterFile.split("/"));
+      const source = exists(staged) ? staged : path.join(installRoot, ...updaterFile.split("/"));
+      const updater = path.join(dir, updaterName);
       try {
         fs.copyFileSync(source, updater);
       } catch (error) {
@@ -786,9 +808,20 @@ export const createUpdater = ({
     if (atLaunch) countFailure(target);
     rememberInstall(target);
     const args = ["--update", installRoot];
+    let program = ready.file;
+    if (mac) {
+      program = path.join(path.dirname(ready.file), updaterName);
+      try {
+        fs.copyFileSync(path.join(installRoot, ...MAC_UPDATER.split("/")), program);
+      } catch (error) {
+        set({ state: "error", error: `The updater could not be prepared: ${reasonOf(error)}.` });
+        throw new Error(status.error);
+      }
+      args.push("--zip", ready.file);
+    }
     if (!relaunch) args.push("--no-relaunch");
     try {
-      const child = await start(ready.file, args, path.dirname(ready.file));
+      const child = await start(program, args, path.dirname(ready.file));
       log("info", `update ${target.build} is installing into ${installRoot}`);
       return { installing: true, kind: "full", version: target.version, build: target.build, pid: child.pid ?? 0 };
     } catch (error) {
@@ -824,7 +857,7 @@ export const createUpdater = ({
   const rollback = async ({ relaunch = true } = {}) => {
     const target = pendingRollback ?? applied;
     if (!target) throw new Error("There is no update to undo.");
-    const updater = path.join(target.dir, "updater.exe");
+    const updater = path.join(target.dir, updaterName);
     if (!exists(updater)) throw new Error("The updater that applied this update is gone, so it cannot be undone.");
     const args = ["--rollback", target.dir];
     if (!relaunch) args.push("--no-relaunch");

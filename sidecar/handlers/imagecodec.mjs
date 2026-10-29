@@ -9,11 +9,41 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const codecDir = path.resolve(here, "..", "imagecodec");
 export const IMAGE_CODEC_SOURCES = ["ImageCodec.cs", "Sequence.cs"].map((name) => path.join(codecDir, name));
 export const IMAGE_CODEC_EXE = "oh-imagecodec.exe";
-const SHIPPED = path.join(codecDir, IMAGE_CODEC_EXE);
+export const IMAGE_CODEC_MAC = "oh-imagecodec";
+export const IMAGE_CODEC_SWIFT = path.join(codecDir, "ImageCodec.swift");
+const SHIPPED = path.join(codecDir, process.platform === "darwin" ? IMAGE_CODEC_MAC : IMAGE_CODEC_EXE);
 const REQUEST_MS = 60_000;
 const IDLE_MS = 5 * 60_000;
 const NO_WINDOWS = "AVIF images are read with Windows imaging, which this system does not have.";
 const NO_CODEC = "Windows cannot open AVIF images on this computer. Install the AV1 Video Extension from the Microsoft Store.";
+const NO_MAC_READER = "The app's AVIF reader is missing from this copy of the game.";
+const NO_MAC_CODEC = "This version of macOS cannot open AVIF images. macOS 13 Ventura or later can.";
+
+export const imageCodecSwiftArgs = (target, arch) => ["swiftc", "-O", "-target", arch === "arm64" ? "arm64-apple-macos11.0" : "x86_64-apple-macos10.15", IMAGE_CODEC_SWIFT, "-o", target];
+
+const compileMac = async (cacheDir) => {
+  if (fs.existsSync(SHIPPED)) return SHIPPED;
+  if (!fs.existsSync(IMAGE_CODEC_SWIFT) || !fs.existsSync("/usr/bin/xcrun")) throw codecError(NO_MAC_READER, true);
+  const tag = crypto.createHash("sha256").update(fs.readFileSync(IMAGE_CODEC_SWIFT)).digest("hex").slice(0, 12);
+  const dir = path.join(cacheDir, "imagecodec");
+  const target = path.join(dir, `oh-imagecodec-${tag}`);
+  if (fs.existsSync(target)) return target;
+  fs.mkdirSync(dir, { recursive: true });
+  const partial = path.join(dir, `oh-imagecodec-${tag}-${process.pid}`);
+  await new Promise((resolve, reject) => {
+    execFile("/usr/bin/xcrun", imageCodecSwiftArgs(partial, process.arch), { timeout: 300_000 }, (error, stdout, stderr) => {
+      if (error) reject(codecError(`The app could not prepare its AVIF reader: ${String(stderr || stdout || error.message).trim().split(/\r?\n/).slice(-2).join(" ")}`, true));
+      else resolve();
+    });
+  });
+  try {
+    fs.renameSync(partial, target);
+  } catch (error) {
+    fs.rmSync(partial, { force: true });
+    if (!fs.existsSync(target)) throw error;
+  }
+  return target;
+};
 
 export const frameworkDir = () => path.join(process.env.SystemRoot || "C:\\Windows", "Microsoft.NET", "Framework64", "v4.0.30319");
 
@@ -59,6 +89,7 @@ const unreadable = new Map();
 const compile = (cacheDir) => {
   if (built) return built;
   built = (async () => {
+    if (process.platform === "darwin") return compileMac(cacheDir);
     if (process.platform !== "win32") throw codecError(NO_WINDOWS, true);
     if (fs.existsSync(SHIPPED)) return SHIPPED;
     if (!IMAGE_CODEC_SOURCES.every((file) => fs.existsSync(file))) throw codecError(NO_WINDOWS, true);
@@ -199,8 +230,8 @@ export const convertAvif = async ({ bytes = null, file = "", cacheDir }) => {
         return { png, sha, width, height, frames: names.map((name) => path.join(dir, name)), durations, loops, cached: false };
       }
       if (status === "missing" && isAvif(buffer)) {
-        missing = NO_CODEC;
-        throw codecError(NO_CODEC, true);
+        missing = process.platform === "darwin" ? NO_MAC_CODEC : NO_CODEC;
+        throw codecError(missing, true);
       }
       const message = rest.join(" ").trim() || "The image could not be read.";
       if (status !== "stopped") unreadable.set(sha, message);

@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 
 export const DESKTOP_APP_ID = "OpenHistoria.Native";
 export const DESKTOP_PERMISSION_KEY = "oh_native_desktop_notifications";
@@ -151,13 +151,18 @@ export const toastXml = ({ title, body, launch = "" }) => `<toast launch="${xmlT
 
 export const toastTag = (chatId) => `oh-${crypto.createHash("sha1").update(`oh-diplomacy-${chatId}`).digest("hex").slice(0, 24)}`;
 
+export const OSASCRIPT = "/usr/bin/osascript";
+
+export const macNotificationArgs = (title, body) => ["-e", "on run argv", "-e", "display notification (item 2 of argv) with title (item 1 of argv)", "-e", "end run", String(title ?? ""), String(body ?? "")];
+
 export const powershellPath = () => path.join(process.env.SystemRoot || process.env.windir || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
 
 export const toasterArgs = () => ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Mta", "-EncodedCommand", Buffer.from(TOASTER_SCRIPT, "utf16le").toString("base64")];
 
 export const register = (ctx) => {
   const { storage, emit, clean, repo, standIn, engine } = ctx;
-  const supported = process.platform === "win32" && fs.existsSync(powershellPath());
+  const macSupported = process.platform === "darwin" && fs.existsSync(OSASCRIPT);
+  const supported = (process.platform === "win32" && fs.existsSync(powershellPath())) || macSupported;
   const icon = path.join(repo, "public", "icon-192.png");
   let broken = false;
   let toaster = null;
@@ -218,7 +223,16 @@ export const register = (ctx) => {
     return state;
   };
 
+  const askMac = (request, timeoutMs) => new Promise((resolve) => {
+    if (request.op !== "show") {
+      resolve({ setting: "Enabled" });
+      return;
+    }
+    execFile(OSASCRIPT, macNotificationArgs(request.title, request.body), { timeout: timeoutMs }, (error) => resolve(error ? { error: clean(error.message) } : { shown: true, setting: "Enabled" }));
+  });
+
   const ask = (request, timeoutMs = 20_000) => {
+    if (macSupported) return askMac(request, timeoutMs);
     const state = startToaster();
     state.seq += 1;
     const seq = state.seq;
@@ -243,7 +257,7 @@ export const register = (ctx) => {
   };
 
   globalThis.document?.addEventListener?.("visibilitychange", () => {
-    if (globalThis.document?.hidden && !standIn && permission() === "granted") startToaster();
+    if (globalThis.document?.hidden && !standIn && permission() === "granted" && !macSupported) startToaster();
   });
 
   const fromSetting = (setting, fallback) => {
@@ -273,6 +287,8 @@ export const register = (ctx) => {
       if (standIn) return { shown: false, reason: "silent", wouldShow: true, permission: permission() };
       const reply = await ask({
         op: "show",
+        title: `Open Historia — ${clean(sender)}`,
+        body: clean(preview),
         xml: toastXml({ title: `Open Historia — ${clean(sender)}`, body: clean(preview), launch: `oh-diplomacy:${clean(chatId)}` }),
         tag: toastTag(clean(chatId)),
         notice: Number(notice) || 0,
