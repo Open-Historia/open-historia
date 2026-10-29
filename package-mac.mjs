@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -239,6 +240,27 @@ for (const [key, value] of [["CFBundleName", appName], ["CFBundleDisplayName", a
   const set = capture("/usr/libexec/PlistBuddy", ["-c", `Set :${key} ${value}`, plist]);
   if (set.status !== 0) run("/usr/libexec/PlistBuddy", ["-c", `Add :${key} string ${value}`, plist]);
 }
+const plistKeys = JSON.parse(capture("/usr/bin/plutil", ["-convert", "json", "-o", "-", plist]).stdout || "{}");
+for (const key of ["CFBundleShortVersionString", "CFBundleVersion", chunkKit.MAC_SHELL_KEY]) delete plistKeys[key];
+const sortedJson = (value) => (Array.isArray(value) ? `[${value.map(sortedJson).join(",")}]` : value && typeof value === "object" ? `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${sortedJson(value[key])}`).join(",")}}` : JSON.stringify(value));
+const shellParts = [`template ${await nativeUpdate.sha256File(template)}`, `plist ${sortedJson(plistKeys)}`];
+const shellWalk = (folder, prefix) => {
+  for (const entry of fs.readdirSync(folder, { withFileTypes: true }).sort((left, right) => (left.name < right.name ? -1 : 1))) {
+    const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
+    const full = path.join(folder, entry.name);
+    if (["Resources/app", "_CodeSignature", "Info.plist"].includes(relative)) continue;
+    if (entry.isSymbolicLink()) shellParts.push(`link ${relative} ${fs.readlinkSync(full)}`);
+    else if (entry.isDirectory()) shellWalk(full, relative);
+    else if (isMachO(full)) shellParts.push(`code ${relative}`);
+    else shellParts.push(`file ${relative} ${crypto.createHash("sha256").update(fs.readFileSync(full)).digest("hex")}`);
+  }
+};
+shellWalk(contents, "");
+const shell = crypto.createHash("sha256").update(shellParts.join("\n")).digest("hex").slice(0, 32);
+const shellSet = capture("/usr/libexec/PlistBuddy", ["-c", `Set :${chunkKit.MAC_SHELL_KEY} ${shell}`, plist]);
+if (shellSet.status !== 0) run("/usr/libexec/PlistBuddy", ["-c", `Add :${chunkKit.MAC_SHELL_KEY} string ${shell}`, plist]);
+fs.writeFileSync(path.join(out, "shell.txt"), `${shell}\n${shellParts.join("\n")}\n`);
+console.log(`app shell ${shell} (${shellParts.length} parts)`);
 
 const signed = [];
 for (const file of walk(stage)) {
@@ -280,7 +302,7 @@ fs.writeFileSync(path.join(out, "sidecar-smoke.json"), `${JSON.stringify({ ready
 if (smoke.failed.length) throw new Error("Every handler must load in the macOS package.");
 
 const chunkOut = path.join(out, "chunks");
-const chunkRelease = chunkKit.writeRelease({ stage, out: chunkOut, details: { build: stamp.build, version: stamp.version, commit: stamp.commit, platform: "macos" } });
+const chunkRelease = chunkKit.writeRelease({ stage, out: chunkOut, details: { build: stamp.build, version: stamp.version, commit: stamp.commit, platform: "macos", shell } });
 const megabytes = (bytes) => `${(bytes / 1048576).toFixed(1)} MB`;
 console.log(`chunks: ${chunkRelease.manifest.files.length} files, ${megabytes(chunkRelease.manifest.bytes)}, in ${chunkRelease.chunkCount} chunks (${megabytes(chunkRelease.assetBytes)} as published); file list ${chunkRelease.manifestName} ${megabytes(chunkRelease.manifestSize)}`);
 
@@ -315,7 +337,7 @@ const manifest = {
   mandatory: process.env.OH_NATIVE_MANDATORY === "1",
   chunks: chunkKit.feedChunks(chunkRelease, process.env.OH_NATIVE_CHUNKS_BASE || nativeUpdate.NATIVE_CHUNKS_BASE),
 };
-if (!nativeUpdate.parseManifest(manifest)) throw new Error("The macOS update feed could not be read back.");
+if (!nativeUpdate.parseManifest(manifest, { platform: "macos" })) throw new Error("The macOS update feed could not be read back.");
 const manifestFile = path.join(out, nativeUpdate.NATIVE_MAC_MANIFEST_NAME);
 fs.writeFileSync(manifestFile, `${JSON.stringify(manifest, null, 2)}\n`);
 console.log(`update feed ${manifestFile} (build ${manifest.build}, sha256 ${manifest.sha256})`);
