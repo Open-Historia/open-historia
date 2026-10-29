@@ -18,7 +18,7 @@ const app = path.resolve(appArg);
 const out = path.resolve(outArg);
 const minutes = Number(process.env.OH_MP_MINUTES || "30");
 fs.mkdirSync(out, { recursive: true });
-const work = path.join(out, "work");
+const work = path.join(path.dirname(out), `${path.basename(out)}-work`);
 fs.rmSync(work, { recursive: true, force: true });
 const root = path.join(work, "root");
 const home = path.join(work, "home");
@@ -92,7 +92,7 @@ for (const name of fs.readdirSync("/proc").filter((entry) => /^\d+$/.test(entry)
   } catch {
     continue;
   }
-  if (target.startsWith(`${app}/`)) {
+  if (Number(name) !== process.pid && target.startsWith(`${app}/`)) {
     try {
       process.kill(Number(name), "SIGKILL");
     } catch {}

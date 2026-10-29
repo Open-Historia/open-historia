@@ -244,7 +244,7 @@ func _duo_host() -> void:
 	await _until(func() -> bool: return bool(main.get("in_game")) and main.get("_screen") == "game", 30.0)
 	_signal("token", str(_shared().get("token", "")))
 	_say("host: invite code ready")
-	var guest_in := await _until(func() -> bool: return _has_text(overlay, "Germany"), 3000.0 if remote else 300.0)
+	var guest_in := await _until(func() -> bool: return _guest_seated() if remote else _has_text(overlay, "Germany"), 3000.0 if remote else 300.0)
 	_check("host: the guest's seat shows", guest_in)
 	_find_button(overlay, "Start the game").pressed.emit()
 	await _until(func() -> bool: return _has_text(overlay, "Round 1 · Planning"), 60.0)
@@ -291,6 +291,16 @@ func _duo_host() -> void:
 	var stopped := await _until(func() -> bool: return not overlay.visible and main.menu.visible, 60.0)
 	_check("host: stopping closes the box", stopped)
 	_signal("stopped")
+
+
+func _guest_seated() -> bool:
+	var lobby: Variant = _shared().get("lobby")
+	if typeof(lobby) != TYPE_DICTIONARY or typeof((lobby as Dictionary).get("seats")) != TYPE_ARRAY:
+		return false
+	for seat in (lobby as Dictionary)["seats"]:
+		if typeof(seat) == TYPE_DICTIONARY and str((seat as Dictionary).get("country", "")) == "Germany" and str((seat as Dictionary).get("status", "")) == "human" and not bool((seat as Dictionary).get("you", false)):
+			return true
+	return false
 
 
 func _guest_left() -> bool:
