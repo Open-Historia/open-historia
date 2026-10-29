@@ -672,3 +672,23 @@ impl<K: Clone + PartialEq, V: Clone> OrdMap<K, V> {
         self.entries.iter().map(|(key, _)| key)
     }
 }
+
+pub fn spread(value: &Val) -> Obj {
+    let mut out = Obj::new();
+    for (key, item) in entries(value) {
+        out.set(&key, item);
+    }
+    out
+}
+
+pub fn is_integer(value: &Val) -> bool {
+    matches!(value, Val::Num(n) if n.is_finite() && n.trunc() == *n)
+}
+
+pub fn side_index(value: &Val) -> Option<usize> {
+    match value {
+        Val::Num(n) if *n == 0.0 => Some(0),
+        Val::Num(n) if *n == 1.0 => Some(1),
+        _ => None,
+    }
+}

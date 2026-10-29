@@ -13,3 +13,4 @@ mod levies;
 mod field;
 mod ground;
 mod manpower;
+mod command;
