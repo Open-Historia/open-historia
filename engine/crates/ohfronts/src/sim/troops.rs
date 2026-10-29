@@ -1,3 +1,4 @@
+use super::climate::Effects;
 use super::constants::CONTROL_RADIUS_MAX_KM;
 use super::js::Val;
 
@@ -72,7 +73,7 @@ pub struct Troop {
     pub walled: Val,
     pub entry: Val,
     pub still: Val,
-    pub climate: Val,
+    pub climate: Option<Effects>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -156,7 +157,7 @@ pub fn create_troop(seed: TroopSeed) -> Troop {
         walled: Val::Undef,
         entry: Val::Undef,
         still: Val::Undef,
-        climate: Val::Undef,
+        climate: None,
     }
 }
 

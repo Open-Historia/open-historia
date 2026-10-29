@@ -25,6 +25,9 @@ const RUN_PICK = {
   militaryOf: 1,
   battles: { "*": BATTLE_PICK },
 };
+const CLIMATE_RUN = { input: { climateZones: 1, climateSeed: 1, fromDate: 1, toDate: 1, days: 1 }, seed: 1, steer: 1, zoneSkiesDate: 1, zoneSkies: 1, zoneNeighbours: 1 };
+const CLIMATE_BATTLE = { name: 1, frame: 1, arena: { frame: 1 }, field: { cols: 1, rows: 1 }, place: 1, climateFor: 1, climateLat: 1, zonesFor: 1, zones: 1, zonesDate: 1, zonesLat: 1, zonesMix: 1, climateToday: 1, sky: 1, skies: 1 };
+const climatePicks = (names) => Object.fromEntries(names.map((name) => [name, { 0: CLIMATE_RUN, 1: CLIMATE_BATTLE }]));
 const runPicks = (names, battleAt = -1) => Object.fromEntries(names.map((name) => [name, battleAt >= 0 && name.startsWith("@") ? null : { 0: RUN_PICK, ...(battleAt >= 0 ? { [battleAt]: BATTLE_PICK } : {}) }]));
 
 const MODULES = {
@@ -59,6 +62,8 @@ const MODULES = {
   "src/runtime/fronts/ground.js": { name: "ground", big: ["measure", "awayOf", "cheapestWay"], picks: { cellsOf: { 0: { cols: 1, rows: 1 } } } },
   "src/runtime/fronts/contact.js": { name: "contact" },
   "src/runtime/fronts/sectors.js": { name: "sectors" },
+  "src/runtime/fronts/climate.js": { name: "climate", picks: climatePicks(["zonesOver", "zonesToday"]) },
+  "src/runtime/fronts/weather.js": { name: "weather", picks: climatePicks(["skyOver", "skiesAhead"]) },
 };
 
 const BIG = new Set(Object.values(MODULES).flatMap((value) => (value.big ?? []).map((fn) => `${value.name}.${fn}`)));

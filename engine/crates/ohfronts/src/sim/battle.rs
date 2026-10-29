@@ -1,4 +1,5 @@
 use super::arena::Arena;
+use super::climate::{ZoneToday, ZoneWeights};
 use super::constants::{Edge, CONTROL_RADIUS_MAX_KM, DEFAULT_EFFORT};
 use super::deploy::DeployLine;
 use super::engine::Run;
@@ -9,6 +10,7 @@ use super::handicap::FAIR_EDGE;
 use super::js::{OrdMap, Val};
 use super::muster::Levy;
 use super::troops::Troop;
+use super::weather::Sky;
 use std::rc::Rc;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -118,6 +120,14 @@ pub struct Battle {
     pub lost_by: Option<[Tally; 2]>,
     pub out_by: Option<[Tally; 2]>,
     pub harsh_by: Option<[Tally; 2]>,
+    pub climate_lat: Option<f64>,
+    pub climate_today: Option<Rc<Vec<ZoneToday>>>,
+    pub sky: Option<Sky>,
+    pub skies: Option<OrdMap<String, f64>>,
+    pub zones_for: bool,
+    pub zones: Option<Rc<Vec<ZoneWeights>>>,
+    pub zones_day: Option<(String, f64)>,
+    pub zones_mix: Option<Rc<Vec<ZoneToday>>>,
 }
 
 pub struct Opening {
@@ -220,6 +230,14 @@ pub fn create_battle(run: &Run, opening: Opening) -> Battle {
         lost_by: None,
         out_by: None,
         harsh_by: None,
+        climate_lat: None,
+        climate_today: None,
+        sky: None,
+        skies: None,
+        zones_for: false,
+        zones: None,
+        zones_day: None,
+        zones_mix: None,
     }
 }
 
