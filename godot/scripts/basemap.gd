@@ -10,6 +10,8 @@ const TERRARIUM_URL := "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/
 const MAX_ZOOM := 13
 const LAND_BUDGET_USEC := 3000
 const MAX_REQUESTS := 6
+const KEEP_TEXTURES := 320
+const EVICT_SLACK := 64
 const PLACEHOLDER_MIN_ZOOM := 9
 const DEFAULT_ID := "ocean"
 const BASE_GREY := Color8(11, 16, 23)
@@ -1010,6 +1012,9 @@ class TileLayer extends Node2D:
 	var _last_args: Array = []
 	var _cover_key := 0
 	var _place_queued := false
+	var _stamp := {}
+	var _tick := 0
+	var _trimmed_at := 0
 
 	func tile_zoom_for(zoom: float) -> int:
 		var ideal := int(roundf(log(16.0 * zoom) / log(2.0)))
@@ -1019,6 +1024,7 @@ class TileLayer extends Node2D:
 
 	func update(centre: Vector2, zoom: float, viewport_size: Vector2, level: float) -> void:
 		_last_args = [centre, zoom, viewport_size, level]
+		_tick += 1
 		var opacity := Basemap.ramp_at(paint.get("ramp", []), level)
 		if material_template:
 			material_template.set_shader_parameter("opacity", opacity)
@@ -1052,6 +1058,7 @@ class TileLayer extends Node2D:
 				var key := "%d/%d/%d" % [tile_zoom, wrapped, y]
 				var place := "%s@%d" % [key, x]
 				_wanted[place] = true
+				_stamp[key] = _tick
 				if sprites.has(place):
 					continue
 				if textures.has(key) or placeholders.has(key):
@@ -1075,6 +1082,7 @@ class TileLayer extends Node2D:
 				if material:
 					material.set_shader_parameter("dem_zoom", float(overscaled))
 		current_zoom = tile_zoom
+		_trim()
 
 	func _update_cover(cover: Dictionary) -> void:
 		var cover_key := int(cover.get("key", 0))
@@ -1117,6 +1125,7 @@ class TileLayer extends Node2D:
 			var key := "%d/%d/%d" % [z, wrapped, y]
 			var place := "%s@%d" % [key, x]
 			_wanted[place] = true
+			_stamp[key] = _tick
 			var span := world_width / count
 			var overscaled := maxi(int(item[3]), z)
 			if sprites.has(place):
@@ -1145,6 +1154,34 @@ class TileLayer extends Node2D:
 				sprite.queue_free()
 				sprites.erase(place)
 		current_zoom = clampi(int(cover["nominal"]), min_zoom, limit)
+		_trim()
+
+	func _trim() -> void:
+		if textures.size() <= maxi(KEEP_TEXTURES, _trimmed_at) + EVICT_SLACK or basemap.cache_dir.is_empty() or source in ["offline", "pmtiles"]:
+			return
+		var shown := {}
+		for sprite: Sprite2D in sprites.values():
+			if is_instance_valid(sprite) and sprite.texture:
+				shown[sprite.texture.get_instance_id()] = true
+		var held: Array = []
+		for key: String in textures.keys():
+			var texture: Texture2D = textures[key]
+			if texture == null or shown.has(texture.get_instance_id()) or int(_stamp.get(key, 0)) >= _tick:
+				continue
+			held.append(key)
+		held.sort_custom(func(a: String, b: String) -> bool: return int(_stamp.get(a, 0)) < int(_stamp.get(b, 0)))
+		var excess := textures.size() - KEEP_TEXTURES
+		for key: String in held:
+			if excess <= 0:
+				break
+			textures.erase(key)
+			_stamp.erase(key)
+			excess -= 1
+		_trimmed_at = textures.size()
+		if _stamp.size() > textures.size() * 4:
+			for key: String in _stamp.keys():
+				if not textures.has(key) and int(_stamp[key]) < _tick:
+					_stamp.erase(key)
 
 	func _inside_bounds(z: int, x: int, y: int) -> bool:
 		if bounds.size == Vector2.ZERO:
@@ -1208,6 +1245,7 @@ class TileLayer extends Node2D:
 				if placeholders.has(parent_key):
 					continue
 				var candidate: Texture2D = textures.get(parent_key)
+				_stamp[parent_key] = _tick
 				if candidate == null:
 					if not textures.has(parent_key) and not pending.has(parent_key):
 						basemap.request_tile(self, parent_key)
