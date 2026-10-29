@@ -28,7 +28,7 @@ pub fn sides_of(value: &Val) -> Vec<i32> {
         .collect()
 }
 
-fn measured_of(value: &Val) -> Measured {
+pub fn measured_of(value: &Val) -> Measured {
     Measured {
         count: value.get("count").num() as usize,
         km: arg_numbers(value.get("km")),

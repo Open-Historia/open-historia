@@ -16,3 +16,4 @@ mod manpower;
 mod command;
 mod replay;
 mod climate;
+mod troops;
