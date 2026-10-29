@@ -1671,7 +1671,7 @@ func _open_workshop() -> void:
 		return
 	_stop_workshop()
 	var scenario: Dictionary = _details.get("scenario", {}) if _details.get("scenario") is Dictionary else {}
-	var workshop := Workshop.new()
+	var workshop: Variant = (load("res://scripts/editor/workshop.gd") as GDScript).new()
 	_workshop = workshop
 	add_child(workshop)
 	var tiles := _data_root.path_join("native-cache").path_join("tiles") if not _data_root.is_empty() else ""

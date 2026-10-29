@@ -1,5 +1,6 @@
 extends Node
 
+const BOOT_SCRIPTS := ["res://scripts/audio/sound_engine.gd", "res://scripts/ui/game_menu.gd", "res://scripts/ui/debug_console.gd", "res://scripts/ui/interactive_panel.gd", "res://scripts/ui/cheats_panel.gd", "res://scripts/shell/app_update.gd", "res://scripts/war/war_layers.gd", "res://scripts/map/map_extras.gd", "res://scripts/ui/forces_panel.gd", "res://scripts/ui/war_room.gd", "res://scripts/ui/war_room_button.gd", "res://scripts/multiplayer/shared_game_overlay.gd", "res://scripts/ui/scenario_editor.gd", "res://scripts/ui/after_action.gd", "res://scripts/shell/shell_notices.gd", "res://scripts/devtools/devtools.gd"]
 const PROVIDERS := {"gemini": "Gemini — Google AI Studio / Gemini API", "openai": "OpenAI", "anthropic": "Anthropic"}
 
 var engine: EngineLink
@@ -68,8 +69,10 @@ func _ready() -> void:
 	var mark := Image.load_from_file(UI.repo_path("public/icon-192.png"))
 	if mark:
 		DisplayServer.set_icon(mark)
+	Hud.warm_scripts(BOOT_SCRIPTS)
 	engine = EngineLink.new()
 	add_child(engine)
+	var engine_started := engine.start()
 	sound = _make_node("res://scripts/audio/sound_engine.gd")
 	if sound:
 		add_child(sound)
@@ -144,7 +147,7 @@ func _ready() -> void:
 	_presence_timer.timeout.connect(_check_minimized)
 	add_child(_presence_timer)
 	_presence_timer.start()
-	if not engine.start():
+	if not engine_started:
 		shell.startup.set_status("The game engine could not be started. Is Node.js installed?")
 
 
@@ -383,7 +386,7 @@ func _apply_city_names() -> void:
 
 
 func _make_node(path: String) -> Node:
-	var script: Variant = load(path)
+	var script: Variant = Hud.take_script(path)
 	if script is GDScript and (script as GDScript).can_instantiate():
 		var made: Variant = (script as GDScript).new()
 		if made is Node:
@@ -607,6 +610,7 @@ func _on_engine_ready(_data: Dictionary) -> void:
 	await shell.prepare()
 	_show("menu")
 	shell.reveal()
+	Hud.warm_panels()
 	i18n.activate()
 	await _refresh_library()
 	menu.refresh_trash()
@@ -684,16 +688,23 @@ func _enter_game(view: Dictionary) -> void:
 	background_timer.start()
 	_show("game")
 	map_view.focus_owner(str(view.get("country", "")))
+	var running := [0]
+	var together := func(job: Callable) -> void:
+		running[0] += 1
+		await job.call()
+		running[0] -= 1
+	if war:
+		together.call(func() -> void: await war.call("refresh"))
 	hud.mount_panels(view)
 	_call(cheats, "setup", [engine, {"map_view": map_view, "game": view, "forces_available": forces != null}])
 	_call(game_menu, "refresh")
-	if war:
-		await war.call("refresh")
 	if map_extras and not _extras_ready:
 		_extras_ready = true
-		await map_extras.call("setup", engine, {"map_view": map_view, "game": view})
+		together.call(func() -> void: await map_extras.call("setup", engine, {"map_view": map_view, "game": view}))
 	elif map_extras:
 		_call(map_extras, "refresh")
+	while running[0] > 0:
+		await get_tree().process_frame
 	_refresh_war_parts()
 	_call(shell_notices, "reset_for_game")
 	await hud.enter_game()

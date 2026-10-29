@@ -12,6 +12,7 @@ signal open_interactive
 signal world_changed
 
 const DOCK_LAUNCHERS := [["chat", "Chat", 18], ["actions", "Actions", 16], ["projects", "Projects & Operations", 18]]
+const PANEL_FILES := ["map_cards", "chat_panel", "actions_panel", "projects_panel", "advisor_panel", "country_panel", "search_box", "diplomatic_legend", "chat_notices", "war_peace_cards"]
 
 var date_widget: DateWidget
 var search_slot: Control
@@ -410,8 +411,33 @@ var _chat_generating := false
 var _unavailable := {}
 
 
+static func warm_scripts(paths: Array) -> void:
+	for path in paths:
+		if not ResourceLoader.has_cached(path) and ResourceLoader.load_threaded_get_status(path) == ResourceLoader.THREAD_LOAD_INVALID_RESOURCE:
+			ResourceLoader.load_threaded_request(path, "", true)
+
+
+static func warm_panels() -> void:
+	var paths := []
+	for file in PANEL_FILES:
+		paths.append("res://scripts/ui/%s.gd" % file)
+	warm_scripts(paths)
+
+
+static func take_script(path: String) -> Resource:
+	var status := ResourceLoader.load_threaded_get_status(path)
+	if status == ResourceLoader.THREAD_LOAD_INVALID_RESOURCE:
+		return load(path)
+	var deadline := Time.get_ticks_msec() + 4000
+	while status == ResourceLoader.THREAD_LOAD_IN_PROGRESS and Time.get_ticks_msec() < deadline:
+		OS.delay_usec(500)
+		status = ResourceLoader.load_threaded_get_status(path)
+	var warmed := ResourceLoader.load_threaded_get(path)
+	return warmed if warmed else load(path)
+
+
 func _make(file: String) -> Control:
-	var script: Variant = load("res://scripts/ui/%s.gd" % file)
+	var script: Variant = take_script("res://scripts/ui/%s.gd" % file)
 	if script is GDScript and (script as GDScript).can_instantiate():
 		var made: Variant = (script as GDScript).new()
 		if made is Control:
