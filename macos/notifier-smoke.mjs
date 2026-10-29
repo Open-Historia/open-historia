@@ -48,7 +48,7 @@ const until = async (check, ms) => {
   return check();
 };
 
-const session = async (label) => {
+const session = async (label, { provisional = false, post = true, wait = 45_000 } = {}) => {
   const child = spawn(helper, ["--serve"], { stdio: ["pipe", "pipe", "pipe"] });
   const waiters = new Map();
   let ready = null;
@@ -68,17 +68,21 @@ const session = async (label) => {
       clearTimeout(timer);
       resolve(reply);
     });
-    child.stdin.write(`${JSON.stringify(body)}\n`);
+    child.stdin.write(`${JSON.stringify(provisional ? { ...body, provisional } : body)}\n`);
   });
   need(await until(() => ready, 15_000), `${label}: the notifier starts and says it is ready`);
   need(ready?.bundle === notifyKit.MAC_NOTIFIER_ID, `${label}: it runs under its own bundle id`);
-  const setting = await request({ op: "setting", seq: 1 }, 45_000);
-  log(`${label} permission: ${setting ? JSON.stringify(setting) : "no answer in 45 s (the permission prompt is waiting for a person)"}`);
+  const setting = await request({ op: "setting", seq: 1 }, wait);
+  log(`${label} permission: ${setting ? JSON.stringify(setting) : `no answer in ${wait / 1000} s (the permission prompt is waiting for a person)`}`);
   need(setting === null || ["Enabled", "Disabled", "Unknown"].includes(setting.setting), `${label}: the permission answer is one the game reads`);
-  const shown = await request({ op: "show", seq: 2, title: "Open Historia — CI", body: "A notification from the macOS build check.", tag: "oh-ci-smoke", notice: 1, chatId: "ci", gameId: "" }, 45_000);
-  log(`${label} post: ${shown ? JSON.stringify(shown) : "no answer in 45 s"}`);
-  need(shown === null || typeof shown.shown === "boolean", `${label}: the post is answered in the game's terms`);
-  if (shown?.setting === "Enabled") need(shown.shown === true && !shown.error, `${label}: with permission, the notification is posted without an error`);
+  need(!setting?.unavailable, `${label}: the system lets the notifier ask (it registers itself with Launch Services)`);
+  let shown = null;
+  if (post) {
+    shown = await request({ op: "show", seq: 2, title: "Open Historia — CI", body: "A notification from the macOS build check.", tag: "oh-ci-smoke", notice: 1, chatId: "ci", gameId: "" }, wait);
+    log(`${label} post: ${shown ? JSON.stringify(shown) : `no answer in ${wait / 1000} s`}`);
+    need(shown === null || typeof shown.shown === "boolean", `${label}: the post is answered in the game's terms`);
+    if (shown?.setting === "Enabled") need(shown.shown === true && !shown.error, `${label}: with permission, the notification is posted without an error`);
+  }
   const cleared = await request({ op: "clear", seq: 3 }, 15_000);
   need(cleared?.cleared === true, `${label}: the notifier keeps answering while a permission prompt may be open`);
   child.stdin.end();
@@ -89,23 +93,25 @@ const session = async (label) => {
   return { setting, shown };
 };
 
-const first = await session("as built");
-let { setting, shown } = first;
-if (setting?.unavailable || shown?.unavailable) {
-  const lsregister = "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
-  const registered = tool(lsregister, ["-f", "-R", "-trusted", app]);
-  log(`lsregister -f -R -trusted: ${registered.status} ${registered.text}`);
-  const listed = tool("/bin/sh", ["-c", `"${lsregister}" -dump 2>/dev/null | grep -i -B2 -A2 "${notifyKit.MAC_NOTIFIER_ID}" | head -20`]);
-  log(`registered: ${listed.text || "(not listed)"}`);
-  ({ setting, shown } = await session("after lsregister"));
-}
-const usernoted = tool("/usr/bin/log", ["show", "--last", "4m", "--style", "compact", "--predicate", `subsystem == "com.apple.UserNotifications" OR process == "usernoted" OR eventMessage CONTAINS[c] "${notifyKit.MAC_NOTIFIER_ID}"`], { timeout: 90_000 });
-log(`usernoted log:\n${usernoted.text.split("\n").filter((line) => /openhistoria|notifier|not allowed|denied|authoriz/i.test(line)).slice(-40).join("\n")}`);
+const usernotedSince = (minutes) => {
+  const found = tool("/usr/bin/log", ["show", "--last", `${minutes}m`, "--style", "compact", "--predicate", `subsystem == "com.apple.UserNotifications" OR process == "usernoted"`], { timeout: 90_000 });
+  return found.text.split("\n").filter((line) => line.includes(notifyKit.MAC_NOTIFIER_ID) && /permission|Delivering|Presenting|not allowed|authoriz|Adding|request/i.test(line));
+};
+
+const asked = await session("first run", { post: false, wait: 20_000 });
+const prompt = usernotedSince(2);
+log(`usernoted:\n${prompt.slice(-12).join("\n")}`);
+need(asked.setting?.setting === "Enabled" || prompt.some((line) => /Sending request for permission/.test(line)), "the first run asks the person for permission (usernoted shows the prompt)");
+const quiet = await session("provisional permission", { provisional: true });
+need(quiet.setting?.setting === "Enabled" && quiet.shown?.shown === true, "with permission granted (quietly, as a headless runner allows), the notification is posted");
+const delivered = usernotedSince(2);
+log(`usernoted:\n${delivered.slice(-12).join("\n")}`);
+need(delivered.some((line) => /oh-ci-smoke|Delivering|Adding/i.test(line)), "usernoted takes the notification");
 
 const clicked = tool("/usr/bin/open", ["-W", "-n", bundle], { timeout: 40_000 });
 need(clicked.ok, `opened the way a click opens it, the notifier quits on its own (${clicked.status}${clicked.text ? `: ${clicked.text}` : ""})`);
 
-const summary = `notifier smoke summary: ${problems.length ? `${problems.length} failed` : "all passed"}; permission ${setting?.setting ?? "pending"}${setting?.error ? ` (${setting.error})` : ""}; posted ${shown?.shown ?? "pending"}${shown?.error ? ` (${shown.error})` : ""}`;
+const summary = `notifier smoke summary: ${problems.length ? `${problems.length} failed` : "all passed"}; first run ${asked.setting?.setting ?? "prompt shown"}; posted ${quiet.shown?.shown ?? "pending"}${quiet.shown?.error ? ` (${quiet.shown.error})` : ""}`;
 log(summary);
 fs.mkdirSync(path.dirname(logFile), { recursive: true });
 fs.writeFileSync(logFile, `${lines.join("\n")}\n`);

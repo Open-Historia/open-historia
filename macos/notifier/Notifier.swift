@@ -92,14 +92,14 @@ final class Notifier: NSObject, NSApplicationDelegate, UNUserNotificationCenterD
         say(value)
     }
 
-    func authorize(_ done: @escaping (String, String?, Bool) -> Void) {
+    func authorize(quietly: Bool = false, _ done: @escaping (String, String?, Bool) -> Void) {
         center.getNotificationSettings { settings in
             let status = settings.authorizationStatus
             if status != .notDetermined {
                 DispatchQueue.main.async { done(settingOf(status), nil, false) }
                 return
             }
-            self.center.requestAuthorization(options: [.alert, .sound]) { granted, error in
+            self.center.requestAuthorization(options: quietly ? [.alert, .sound, .provisional] : [.alert, .sound]) { granted, error in
                 guard let error = error else {
                     DispatchQueue.main.async { done(granted ? "Enabled" : "Disabled", nil, false) }
                     return
@@ -129,13 +129,14 @@ final class Notifier: NSObject, NSApplicationDelegate, UNUserNotificationCenterD
     func handle(_ line: String) {
         guard let data = line.data(using: .utf8), let message = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return }
         let seq = (message["seq"] as? NSNumber)?.intValue ?? 0
+        let quietly = (message["provisional"] as? Bool) == true
         switch text(message["op"]) {
         case "register", "setting":
-            authorize { setting, error, unavailable in
+            authorize(quietly: quietly) { setting, error, unavailable in
                 self.reply(seq, ["setting": setting], error, unavailable: unavailable)
             }
         case "show":
-            authorize { setting, error, unavailable in
+            authorize(quietly: quietly) { setting, error, unavailable in
                 guard setting == "Enabled" else {
                     self.reply(seq, ["shown": false, "setting": setting], error, unavailable: unavailable)
                     return
@@ -184,6 +185,7 @@ if CommandLine.arguments.contains("--locate") {
     exit(found == nil ? 1 : 0)
 }
 
+_ = LSRegisterURL(Bundle.main.bundleURL as CFURL, false)
 let notifier = Notifier()
 UNUserNotificationCenter.current().delegate = notifier
 let application = NSApplication.shared
