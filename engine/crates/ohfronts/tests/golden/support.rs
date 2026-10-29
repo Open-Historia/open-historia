@@ -9,9 +9,22 @@ pub struct Case {
     pub after: Option<Vec<Val>>,
     pub throws: Option<String>,
     pub callbacks: Vec<(String, Vec<(Vec<Val>, Val)>)>,
+    pub result_calls: Vec<(Vec<Val>, Val)>,
+    pub method_calls: Vec<(String, Vec<(Vec<Val>, Val)>)>,
 }
 
 impl Case {
+    pub fn methods(&self, name: &str) -> &[(Vec<Val>, Val)] {
+        self.method_calls.iter().find(|(key, _)| key == name).map(|(_, calls)| calls.as_slice()).unwrap_or(&[])
+    }
+
+    pub fn replay<F: Fn(&[Val]) -> Val>(calls: &[(Vec<Val>, Val)], call: F) -> Result<(), String> {
+        for (index, (args, want)) in calls.iter().enumerate() {
+            same(&call(args), want).map_err(|error| format!("call {index} {}: {error}", short(&Val::Arr(args.clone()))))?;
+        }
+        Ok(())
+    }
+
     pub fn arg(&self, index: usize) -> &Val {
         self.args.get(index).unwrap_or(&js::UNDEF)
     }
@@ -306,14 +319,9 @@ pub fn load(name: &str) -> Fixture {
                 .list()
                 .iter()
                 .map(|item| {
-                    let callbacks = match item.get("cb") {
-                        Some(J::Obj(map)) => map
-                            .iter()
-                            .map(|(key, calls)| {
-                                let calls = calls.list().iter().map(|call| (as_list(reader.val(&call.list()[0])), reader.val(&call.list()[1]))).collect();
-                                (key.clone(), calls)
-                            })
-                            .collect(),
+                    let calls_of = |calls: &J| -> Vec<(Vec<Val>, Val)> { calls.list().iter().map(|call| (as_list(reader.val(&call.list()[0])), reader.val(&call.list()[1]))).collect() };
+                    let named = |key: &str| match item.get(key) {
+                        Some(J::Obj(map)) => map.iter().map(|(name, calls)| (name.clone(), calls_of(calls))).collect(),
                         _ => Vec::new(),
                     };
                     Case {
@@ -321,7 +329,9 @@ pub fn load(name: &str) -> Fixture {
                         result: item.get("r").map(|value| reader.val(value)),
                         after: item.get("aa").map(|a| as_list(reader.val(a))),
                         throws: item.get("x").map(|value| value.text().to_string()),
-                        callbacks,
+                        callbacks: named("cb"),
+                        result_calls: item.get("rc").map(calls_of).unwrap_or_default(),
+                        method_calls: named("mc"),
                     }
                 })
                 .collect();

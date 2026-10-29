@@ -6,8 +6,10 @@ const FIRST = 30;
 const PER_PROCESS = 150;
 const NODES_MOST = 400000;
 const CALLS_MOST = 4000;
+const RESULT_CALLS_MOST = 60;
 const TOO_BIG = Symbol("too big");
 const made = new WeakMap();
+const methodsWrapped = new WeakSet();
 const store = new Map();
 let busy = 0;
 
@@ -208,6 +210,44 @@ export const wrap = (moduleName, name, fn, factories) => {
       if (names.some((callName) => calls[callName].overflow || calls[callName].length >= CALLS_MOST)) return result;
       if (names.length) out.cb = calls;
       entry.cases.push(out);
+      if (typeof result === "function") {
+        const inner = result;
+        const rc = [];
+        out.rc = rc;
+        result = function recorded(...values) {
+          const value = inner.apply(this, values);
+          if (rc.length < RESULT_CALLS_MOST) {
+            try {
+              rc.push([encode(values), encode(value)]);
+            } catch {
+              rc.length = rc.length;
+            }
+          }
+          return value;
+        };
+      } else if (factory && result && typeof result === "object" && !methodsWrapped.has(result)) {
+        methodsWrapped.add(result);
+        const mc = {};
+        for (const key of Object.keys(result)) {
+          const method = result[key];
+          const descriptor = Object.getOwnPropertyDescriptor(result, key);
+          if (typeof method !== "function" || !descriptor?.writable || Object.isFrozen(result)) continue;
+          const list = [];
+          mc[key] = list;
+          result[key] = function recorded(...values) {
+            const value = method.apply(this, values);
+            if (list.length < RESULT_CALLS_MOST) {
+              try {
+                list.push([encode(values), encode(value)]);
+              } catch {
+                list.length = list.length;
+              }
+            }
+            return value;
+          };
+        }
+        if (Object.keys(mc).length) out.mc = mc;
+      }
     } catch {
       entry.cases.length = entry.cases.length;
     } finally {
