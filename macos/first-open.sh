@@ -3,7 +3,7 @@ set -u
 out="${1:?usage: first-open.sh <out dir> [zip url]}"
 url="${2:-https://github.com/Open-Historia/open-historia/releases/download/native-experimental/Open-Historia-Native-macOS.zip}"
 mkdir -p "$out"
-work="$(mktemp -d "${TMPDIR:-/tmp}/oh-first-open.XXXXXX")"
+work="$(cd "$(mktemp -d "${TMPDIR:-/tmp}/oh-first-open.XXXXXX")" && pwd -P)"
 dl="$work/Downloads"
 mkdir -p "$dl"
 report="$out/first-open.txt"
@@ -57,12 +57,16 @@ since="$(date '+%Y-%m-%d %H:%M:%S')"
 launch
 sleep 20
 if running; then say "the game is running while still quarantined"; quarantined_ran=1; else say "the game did not start while quarantined"; quarantined_ran=0; fi
+held="$(pgrep -fl "AppTranslocation/.*/Open Historia Native.app/Contents/MacOS/Open Historia" 2>/dev/null)"
+if [ -n "$held" ]; then say "Gatekeeper translocated the app and holds its process behind the prompt: $held"; fi
 if kill -0 "${openers[0]}" 2>/dev/null; then say "open is still waiting after 20 s (a Gatekeeper prompt is up)"; else say "open returned: $(cat "$work"/open-*.txt 2>/dev/null | tr '\n' ' ')"; fi
 screencapture -x "$out/first-open-1-quarantined.png" 2>/dev/null || true
 show pgrep -fl "CoreServicesUIAgent|Open Historia"
 log show --start "$since" --style compact --predicate 'process == "syspolicyd" OR subsystem == "com.apple.syspolicy" OR process == "CoreServicesUIAgent"' 2>/dev/null | grep -iE "open historia|openhistoria|notari|gatekeeper|quarantine|deny|reject" | tail -25 | sed 's/^/  log: /' | tee -a "$report"
 stop_ours
-pkill -x CoreServicesUIAgent >/dev/null 2>&1 || true
+pkill -f "AppTranslocation/.*/Open Historia Native.app/Contents/" >/dev/null 2>&1 || true
+killall -9 CoreServicesUIAgent >/dev/null 2>&1 || true
+sleep 2
 if [ "$assessed" != 0 ]; then
   if [ "$quarantined_ran" = 0 ]; then need 0 "Gatekeeper holds the quarantined app back"; else say "note: the runner let the quarantined app start (Gatekeeper is relaxed on this image)"; fi
 fi

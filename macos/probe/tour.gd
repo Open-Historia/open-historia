@@ -53,7 +53,19 @@ func _click(point: Vector2) -> void:
 	await process_frame
 
 
+func _images_settled() -> bool:
+	var loader: Variant = HubImages._instance
+	if not (loader is Node) or not is_instance_valid(loader):
+		return true
+	return ((loader as Node).get("_waiting") as Dictionary).is_empty() and int((loader as Node).get("_active")) == 0
+
+
 func _shoot(name: String) -> void:
+	if name.begins_with("c-menu"):
+		var settled := await _until(_images_settled, 30.0)
+		if not settled:
+			_say("hub pictures still loading when %s was taken" % name)
+		await _wait(0.4)
 	await super._shoot(tag + name)
 	_say("SHOT %s%s" % [tag, name])
 	if screen_names.has(name) or screen_names.has("*"):
@@ -74,9 +86,29 @@ func _screen(name: String) -> void:
 func _sweep(label: String, scope: Node) -> int:
 	if label == "vault door":
 		await _shoot("t-vault-door")
+		await _door_probe(scope)
 	elif label == "update notice":
 		await _shoot("t-update-notice")
 	return await super._sweep(label, scope)
+
+
+func _door_probe(door: Node) -> void:
+	var wheel: Variant = door.get("_wheel")
+	var group: Variant = door.get("_group")
+	if not (wheel is Control) or not (group is CanvasGroup):
+		return
+	var texture: Variant = (wheel as Control).get("wheel_texture")
+	_say("DOOR baked=%s area=%s wheel=%s shadow=%s group_alpha=%.2f" % [str(door.get("_baked_size")), str((wheel as Control).get("area")), str((texture as Texture2D).get_size()) if texture is Texture2D else "none", str(((wheel as Control).get("shadow_texture") as Texture2D).get_size()) if (wheel as Control).get("shadow_texture") is Texture2D else "none", (group as CanvasGroup).self_modulate.a])
+	await _wait(3.0)
+	await _shoot("t-vault-door-later")
+	(group as CanvasGroup).remove_child(wheel)
+	door.add_child(wheel)
+	door.move_child(wheel, (group as CanvasGroup).get_index() + 1)
+	await _wait(0.5)
+	await _shoot("t-vault-door-no-group")
+	door.remove_child(wheel)
+	(group as CanvasGroup).add_child(wheel)
+	await _wait(0.3)
 
 
 func _display(when: String) -> void:
@@ -106,6 +138,7 @@ func _apply_size() -> void:
 		_check("the UI is scaled to the Retina screen", is_equal_approx(root.content_scale_factor, native), "content scale %.2f on a %.2fx screen" % [root.content_scale_factor, native])
 	elif scale > 1.0:
 		emulated = true
+		await _wait(1.5)
 		DisplayServer.window_set_size(Vector2i((base * scale).round()))
 		root.content_scale_factor = scale
 	else:
