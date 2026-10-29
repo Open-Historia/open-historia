@@ -1,3 +1,4 @@
+use super::air::BattleWings;
 use super::arena::Arena;
 use super::chronicle::Chronicle;
 use super::climate::{ZoneToday, ZoneWeights};
@@ -138,6 +139,8 @@ pub struct Battle {
     pub wall_run: bool,
     pub siege_kept: [Option<Vec<u8>>; 2],
     pub chronicle: Option<Chronicle>,
+    pub air_mission: [String; 2],
+    pub wings: Option<BattleWings>,
 }
 
 pub struct Opening {
@@ -256,6 +259,8 @@ pub fn create_battle(run: &Run, opening: Opening) -> Battle {
         wall_run: false,
         siege_kept: [None, None],
         chronicle: None,
+        air_mission: [String::new(), String::new()],
+        wings: None,
     }
 }
 

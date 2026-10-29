@@ -1,3 +1,4 @@
+use super::air::Wing;
 use super::battle::Battle;
 use super::climate::ZoneSky;
 use super::walls::WallLine;
@@ -11,7 +12,7 @@ use super::swarms::SWARM_FORM;
 use super::troops::troops_factor;
 use super::unit_motion::{era_of, ADVANCE_KM_PER_DAY, OVERLAND_KM_PER_DAY};
 use crate::jsmath;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 pub trait Hooks {
     fn controller_of(&self, _id: &str) -> Val {
@@ -139,6 +140,9 @@ pub struct Run {
     pub zone_skies: RefCell<Option<(String, Vec<ZoneSky>)>>,
     pub zone_neighbours: RefCell<Option<Vec<Vec<usize>>>>,
     pub lines: RefCell<Option<Vec<WallLine>>>,
+    pub air_day: Cell<Option<f64>>,
+    pub air_over: RefCell<Vec<(usize, [Vec<String>; 2])>>,
+    pub wings: RefCell<Option<OrdMap<String, Wing>>>,
     dated: bool,
     from_date: String,
     controller: OrdMap<String, String>,
@@ -200,6 +204,9 @@ pub fn create_run(input: Val, hooks: Box<dyn Hooks>) -> Run {
         zone_skies: RefCell::new(None),
         zone_neighbours: RefCell::new(None),
         lines: RefCell::new(None),
+        air_day: Cell::new(None),
+        air_over: RefCell::new(Vec::new()),
+        wings: RefCell::new(None),
         dated,
         from_date,
         controller: OrdMap::new(),

@@ -28,6 +28,7 @@ const RUN_PICK = {
 const LANE_TROOP = { x: 1, y: 1, strength: 1, kind: 1, depth: 1, hx: 1, hy: 1, radiusKm: 1, lane: 1, station: 1, body: 1 };
 const WALL_RUN = { lines: 1, input: { map: { flat: 1, scale: 1 }, fortifications: 1 }, mech: 1 };
 const WALL_BATTLE = { sides: 1, gone: 1, frame: 1, place: 1, field: { cols: 1, rows: 1, size: 1, play: 1 }, troops: { "*": { "*": { x: 1, y: 1, strength: 1, walled: 1 } } }, wallsFor: 1, wallSides: 1, walls: 1, wallMask: 1, wallDate: 1, wallRun: { lines: 1 }, log: 1 };
+const AIR_BATTLE = { name: 1, status: 1, sides: 1, gone: 1, frame: 1, field: { cols: 1, rows: 1 }, troops: { "*": { "*": { strength: 1, owner: 1 } } }, sky: 1, airMission: 1, wings: 1 };
 const CLIMATE_RUN = { input: { climateZones: 1, climateSeed: 1, fromDate: 1, toDate: 1, days: 1 }, seed: 1, steer: 1, zoneSkiesDate: 1, zoneSkies: 1, zoneNeighbours: 1 };
 const CLIMATE_BATTLE = { name: 1, frame: 1, arena: { frame: 1 }, field: { cols: 1, rows: 1 }, place: 1, climateFor: 1, climateLat: 1, zonesFor: 1, zones: 1, zonesDate: 1, zonesLat: 1, zonesMix: 1, climateToday: 1, sky: 1, skies: 1 };
 const climatePicks = (names) => Object.fromEntries(names.map((name) => [name, { 0: CLIMATE_RUN, 1: CLIMATE_BATTLE }]));
@@ -94,6 +95,18 @@ const MODULES = {
   "src/runtime/fronts/transports.js": { name: "transports", big: ["setOut", "interceptionOf"] },
   "src/runtime/fronts/fatigue.js": { name: "fatigue", picks: { tireDay: { 0: { advanceKm: 1, pace: 1 }, 1: { troops: { "*": { "*": { strength: 1, kind: 1, movedKm: 1, fought: 1, engaged: 1, fatigue: 1, climate: 1, dug: 1, pocket: 1, supply: 1 } } } } } } },
   "src/runtime/fronts/chronicle.js": { name: "chronicle", picks: { chronicleAfter: { 0: { chronicle: 1, log: 1, logFrom: 1, arena: { cities: 1 }, troops: { "*": { "*": { strength: 1 } } } } } } },
+  "src/runtime/fronts/air.js": {
+    name: "air",
+    big: ["skyOfWings"],
+    picks: {
+      skyOfWings: { 0: { era: 1, mech: 1, input: { map: { flat: 1, scale: 1 }, units: 1, airArms: 1 }, airDay: 1, wings: 1, battles: { "*": AIR_BATTLE } }, 1: AIR_BATTLE },
+      airStrikes: { 0: { wings: 1, troops: { "*": { "*": { strength: 1, loss: 1 } } } } },
+      wearWings: { 0: { wings: 1 }, 1: { wings: 1 } },
+      wingChanges: { 0: { wings: 1 } },
+      skyHeld: { 0: { wings: 1, airMission: 1 } },
+      airMissionOf: { 0: { airMission: 1 } },
+    },
+  },
   "src/runtime/fronts/climate.js": { name: "climate", picks: climatePicks(["zonesOver", "zonesToday"]) },
   "src/runtime/fronts/weather.js": { name: "weather", picks: climatePicks(["skyOver", "skiesAhead"]) },
 };
