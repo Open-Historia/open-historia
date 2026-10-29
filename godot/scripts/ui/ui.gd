@@ -61,6 +61,8 @@ static var _repo_root := ""
 static func repo_path(relative: String) -> String:
 	if _repo_root.is_empty():
 		_repo_root = OS.get_executable_path().get_base_dir().path_join("..") if OS.has_feature("template") else ProjectSettings.globalize_path("res://").path_join("../..")
+		if OS.get_name() == "macOS" and OS.has_feature("template"):
+			_repo_root = OS.get_executable_path().get_base_dir().path_join("../Resources/app")
 	return _repo_root.path_join(relative).simplify_path()
 
 
