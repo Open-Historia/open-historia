@@ -315,7 +315,7 @@ impl<'a> Reader<'a> {
             "Inf" => Val::Num(f64::INFINITY),
             "-Inf" => Val::Num(f64::NEG_INFINITY),
             "-0" => Val::Num(-0.0),
-            "fn" => Val::Fn,
+            "fn" | "cyc" => Val::Fn,
             "S16" => {
                 let units: Vec<u16> = v.unwrap().list().iter().map(|item| item.number() as u16).collect();
                 Val::Str(String::from_utf16_lossy(&units))
@@ -651,4 +651,15 @@ pub fn arg_numbers(value: &Val) -> Vec<f64> {
 
 pub fn arg_is_number(value: &Val) -> bool {
     matches!(value, Val::Num(_))
+}
+
+pub fn same_keys(got: &Val, want: &Val, keys: &[&str]) -> Result<(), String> {
+    for key in keys {
+        same(got.get(key), want.get(key)).map_err(|error| format!(".{key}: {error}"))?;
+    }
+    Ok(())
+}
+
+pub fn expect_keys(case: &Case, got: Val, keys: &[&str]) -> Option<Result<(), String>> {
+    case.result.as_ref().map(|want| same_keys(&got, want, keys))
 }

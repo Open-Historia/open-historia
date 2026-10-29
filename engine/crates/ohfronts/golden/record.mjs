@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -29,10 +30,14 @@ const MODULES = {
   "src/runtime/fronts/attrition.js": { name: "attrition" },
   "src/runtime/fronts/muster.js": { name: "muster" },
   "src/runtime/fronts/deploy.js": { name: "deploy" },
+  "src/runtime/fronts/field.js": { name: "field", factories: ["createField", "openField", "unpackField", "resampleField"], big: ["takeCapsule", "takeCells", "restoreCells", "rebuildFromHolders", "resampleField", "rebuildDistances"] },
   "src/runtime/fronts/line.js": { name: "line" },
   "src/runtime/fronts/contact.js": { name: "contact" },
   "src/runtime/fronts/sectors.js": { name: "sectors" },
 };
+
+const BIG = new Set(Object.values(MODULES).flatMap((value) => (value.big ?? []).map((fn) => `${value.name}.${fn}`)));
+const budgetOf = (key) => (BIG.has(key) ? BYTES_MOST * 4 : BYTES_MOST);
 
 const only = process.argv.slice(2);
 const chosen = Object.fromEntries(Object.entries(MODULES).filter(([, value]) => only.length === 0 || only.includes(value.name)));
@@ -65,16 +70,24 @@ const summary = String(run.stdout).split("\n").filter((line) => /^ℹ (tests|pas
 console.log(summary.join("\n"));
 
 const gathered = new Map();
-const parts = fs.readdirSync(out).map((name) => JSON.parse(fs.readFileSync(path.join(out, name), "utf8")));
-parts.sort((a, b) => (a.source < b.source ? -1 : a.source > b.source ? 1 : 0));
-for (const part of parts) {
+const names = fs.readdirSync(out).map((name) => [name, JSON.parse(fs.readFileSync(path.join(out, name), "utf8")).source]).sort((a, b) => (a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0));
+for (const [name] of names) {
+  const part = JSON.parse(fs.readFileSync(path.join(out, name), "utf8"));
   for (const [key, list] of Object.entries(part.cases)) {
     if (!gathered.has(key)) gathered.set(key, { seen: new Set(), cases: [] });
     const entry = gathered.get(key);
-    for (const item of list) {
+    let bytes = 0;
+    let kept = 0;
+    const stride = Math.max(1, Math.floor(list.length / 40));
+    for (let at = 0; at < list.length; at += stride) {
+      const item = list[at];
       const text = JSON.stringify(item);
-      if (entry.seen.has(text)) continue;
-      entry.seen.add(text);
+      if (text.length > budgetOf(key) / 3 || bytes > 1000000 || kept >= 40) continue;
+      bytes += text.length;
+      kept += 1;
+      const hash = createHash("sha1").update(text).digest("base64");
+      if (entry.seen.has(hash)) continue;
+      entry.seen.add(hash);
       entry.cases.push({ item, size: text.length });
     }
   }
@@ -99,8 +112,8 @@ const shapeOf = (value, depth = 0) => {
   return typeof value;
 };
 
-const pick = (all) => {
-  const fitting = all.filter((item) => item.size <= BYTES_MOST / 3);
+const pick = (all, most) => {
+  const fitting = all.filter((item) => item.size <= most / 3);
   const groups = new Map();
   for (const item of fitting) {
     const key = JSON.stringify([shapeOf(item.item.a), shapeOf(item.item.r, 1), item.item.cb ? Object.keys(item.item.cb) : 0]);
@@ -123,7 +136,7 @@ const pick = (all) => {
       if (round >= list.length || picked.length >= CASES_MOST) continue;
       any = true;
       const item = list[round];
-      if (bytes + item.size > BYTES_MOST && picked.length >= 12) continue;
+      if (bytes + item.size > most && picked.length >= 12) continue;
       picked.push(item);
       bytes += item.size;
     }
@@ -139,7 +152,7 @@ for (const value of Object.values(chosen)) {
   for (const [key, entry] of [...gathered].sort(([a], [b]) => (a < b ? -1 : 1))) {
     const [moduleName, fn] = key.split(".");
     if (moduleName !== value.name || (value.keep && !value.keep.includes(fn))) continue;
-    cases[fn] = pick(entry.cases).map((item) => item.item);
+    cases[fn] = pick(entry.cases, budgetOf(key)).map((item) => item.item);
   }
   const blobs = [];
   const blobIndex = new Map();

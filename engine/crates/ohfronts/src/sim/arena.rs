@@ -1,9 +1,10 @@
 use super::codec::hash_key;
 use super::constants::{ICE_SPEED, TERRAIN_SPEED_MAX, TERRAIN_SPEED_MIN};
-use super::frame::{cell_index_at, frame_to_cell, lat_to_y, Frame};
+use super::frame::{cell_index_at, frame_to_cell, lat_to_y, Frame, Projector};
 use super::js::{self, Val};
 use super::region_types::is_water_type;
 use crate::jsmath;
+use std::cell::OnceCell;
 use std::collections::HashMap;
 
 fn text(value: &Val) -> String {
@@ -331,6 +332,13 @@ pub struct Arena {
     pub centre_x: Vec<f64>,
     pub centre_y: Vec<f64>,
     pub cities: Vec<City>,
+    pub place: OnceCell<Projector>,
+}
+
+impl Arena {
+    pub fn projector(&self) -> &Projector {
+        self.place.get_or_init(|| Projector::of(&self.frame))
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -479,6 +487,7 @@ pub fn rasterize_arena(frame: &Frame, regions: &[Val], options: &ArenaOptions) -
         centre_x,
         centre_y,
         cities: placed,
+        place: OnceCell::new(),
     }
 }
 

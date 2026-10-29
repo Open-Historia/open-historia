@@ -7,6 +7,8 @@ const PER_PROCESS = 150;
 const NODES_MOST = 400000;
 const CALLS_MOST = 4000;
 const RESULT_CALLS_MOST = 60;
+const CASE_BYTES_MOST = 270000;
+const PROCESS_BYTES_MOST = 1500000;
 const TOO_BIG = Symbol("too big");
 const made = new WeakMap();
 const methodsWrapped = new WeakSet();
@@ -72,7 +74,7 @@ const encoder = (hooks) => {
       default: break;
     }
     if (value === null) return null;
-    if (stack.has(value)) throw TOO_BIG;
+    if (stack.has(value)) return { $: "cyc" };
     if (ArrayBuffer.isView(value)) {
       const kind = TYPED.find(([, Type]) => value instanceof Type);
       if (!kind) throw TOO_BIG;
@@ -107,7 +109,7 @@ export const encode = (value) => encoder(null)(value);
 const entryOf = (key) => {
   let entry = store.get(key);
   if (!entry) {
-    entry = { calls: 0, next: 0, cases: [] };
+    entry = { calls: 0, next: 0, bytes: 0, cases: [] };
     store.set(key, entry);
   }
   return entry;
@@ -171,7 +173,7 @@ export const wrap = (moduleName, name, fn, factories) => {
   const wrapped = function golden(...args) {
     const entry = entryOf(key);
     entry.calls += 1;
-    const take = busy === 0 && entry.cases.length < PER_PROCESS && entry.calls > entry.next;
+    const take = busy === 0 && entry.cases.length < PER_PROCESS && entry.bytes < PROCESS_BYTES_MOST && entry.calls > entry.next;
     if (!take) {
       const result = fn.apply(this, args);
       if (factory && result && typeof result === "object" && !made.has(result)) {
@@ -222,6 +224,9 @@ export const wrap = (moduleName, name, fn, factories) => {
       const names = Object.keys(calls);
       if (names.some((callName) => calls[callName].overflow || calls[callName].length >= CALLS_MOST)) return result;
       if (names.length) out.cb = calls;
+      const size = JSON.stringify(out).length;
+      if (size > CASE_BYTES_MOST) return result;
+      entry.bytes += size;
       entry.cases.push(out);
       if (typeof result === "function") {
         const inner = result;

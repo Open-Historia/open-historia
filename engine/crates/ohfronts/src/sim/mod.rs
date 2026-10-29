@@ -16,3 +16,6 @@ pub mod contact;
 pub mod deploy;
 pub mod manpower;
 pub mod muster;
+pub mod field;
+pub mod line;
+pub mod sectors;

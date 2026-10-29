@@ -82,6 +82,7 @@ pub fn arena_of(value: &Val) -> Arena {
             .iter()
             .map(|c| City { name: c.get("name").string(), x: c.get("x").num(), y: c.get("y").num(), cell: c.get("cell").num(), population: c.get("population").num(), capital: c.get("capital").is_true() })
             .collect(),
+        place: std::cell::OnceCell::new(),
     }
 }
 
