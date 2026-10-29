@@ -298,6 +298,83 @@ func _perspective_pass() -> void:
 	await _wait(0.5)
 
 
+func _differs(want: Variant, got: Variant, where: String) -> String:
+	var numeric := [TYPE_INT, TYPE_FLOAT]
+	if numeric.has(typeof(want)) and numeric.has(typeof(got)):
+		var a := float(want)
+		var b := float(got)
+		if a == b:
+			return ""
+		var geometry := where.contains(".points.") or where.contains(".line.") or where.ends_with(".alpha") or ((where.begins_with("troops.") or where.begins_with("sides.")) and (where.ends_with(".0") or where.ends_with(".1")))
+		if geometry and absf(a - b) <= 1e-9 * maxf(absf(a), absf(b)):
+			return ""
+		return "%s: %s vs %s" % [where, str(want), str(got)]
+	if typeof(want) != typeof(got):
+		return "%s: %s vs %s" % [where, type_string(typeof(want)), type_string(typeof(got))]
+	if want is Array:
+		var left: Array = want
+		var right: Array = got
+		if left.size() != right.size():
+			return "%s: %d vs %d entries" % [where, left.size(), right.size()]
+		for at in range(left.size()):
+			var wrong := _differs(left[at], right[at], ("%s.%d" % [where, at]) if not where.is_empty() else str(at))
+			if not wrong.is_empty():
+				return wrong
+		return ""
+	if want is Dictionary:
+		var left: Dictionary = want
+		var right: Dictionary = got
+		var keys := {}
+		for key in left.keys() + right.keys():
+			keys[str(key)] = true
+		keys.erase("ms")
+		for key in keys.keys():
+			if not left.has(key) or not right.has(key):
+				return "%s.%s: missing on one side" % [where, key]
+			var wrong := _differs(left[key], right[key], ("%s.%s" % [where, key]) if not where.is_empty() else str(key))
+			if not wrong.is_empty():
+				return wrong
+		return ""
+	return "" if want == got else "%s: %s vs %s" % [where, str(want), str(got)]
+
+
+func _rust_frames_pass() -> void:
+	_check("the extension provides the Rust front frames", ClassDB.class_exists("FrontFrames"))
+	_check("the war map draws its fronts from the Rust frames", war.frames_local() and war.frames_from_rust > 0 and war.frames_from_sidecar == 0, "%d Rust frames, %d from the sidecar" % [war.frames_from_rust, war.frames_from_sidecar])
+	if not war.frames_local():
+		return
+	var compared := 0
+	var wrong := ""
+	var rust_us: Array = []
+	var trip_us: Array = []
+	var inner_ms: Array = []
+	for at in range(48):
+		var days: Array = []
+		var turn := 0
+		for entry in war._entries:
+			var low := float(entry["stage_start"])
+			var high := maxf(low, float(entry["end"]))
+			var part := fposmod(float(at * 37 + turn * 11) / 47.0, 1.0)
+			days.append([entry["name"], floorf((low - 0.5 + (high - low + 1.0) * part) * 64.0) / 64.0])
+			turn += 1
+		var level := 2.5 + float(at % 41) * 0.25
+		var began := Time.get_ticks_usec()
+		var rust: Dictionary = war.local_frame(days, level)
+		rust_us.append(Time.get_ticks_usec() - began)
+		began = Time.get_ticks_usec()
+		var reply := await _call("warmap.frame", {"days": days, "zoom": level})
+		trip_us.append(Time.get_ticks_usec() - began)
+		var js: Dictionary = reply.get("result", {})
+		inner_ms.append(float(js.get("ms", 0.0)))
+		compared += 1
+		var differs := _differs(js, rust, "")
+		if not differs.is_empty() and wrong.is_empty():
+			wrong = "frame %d at zoom %.2f: %s" % [at, level, differs]
+	var mean := func(list: Array) -> float: return list.reduce(func(sum: float, value: Variant) -> float: return sum + float(value), 0.0) / maxf(1.0, float(list.size()))
+	_check("the Rust front frames match the sidecar's for the seeded war", wrong.is_empty() and compared == 48, wrong if not wrong.is_empty() else "%d frames" % compared)
+	_say("front frame timing: sidecar round trip %.3f ms (inside the sidecar %.3f ms), Rust in Godot %.3f ms" % [mean.call(trip_us) / 1000.0, mean.call(inner_ms), mean.call(rust_us) / 1000.0])
+
+
 func _focus(bounds: Array, level: float) -> void:
 	main.map_view.fit_lonlat_bounds(bounds, level, 0.0)
 	await _wait(0.4)
@@ -357,6 +434,7 @@ func _run() -> void:
 	await _wait(2.5)
 	var still := [str(war.overlay.troops), str(war.overlay.sides), str(war._entries.map(func(entry: Dictionary) -> float: return float(entry.get("day", 0.0))))]
 	_check("a front at rest stands still between skips", not war.playing() and still == resting, "troops %s, sides %s, days %s" % [still[0] == resting[0], still[1] == resting[1], still[2] == resting[2]])
+	await _rust_frames_pass()
 	await _focus([[6.6, 48.9], [8.0, 49.7]], 8.6)
 	await _wait(0.8)
 	await _shoot("w4-troops-z8")

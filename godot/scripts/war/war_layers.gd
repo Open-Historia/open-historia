@@ -61,6 +61,10 @@ var _stage: Variant = null
 var _retry_full := false
 var _weather_key := ""
 var _quiet_from: Dictionary = {}
+var _frames: RefCounted = null
+var _frames_ready := false
+var frames_from_rust := 0
+var frames_from_sidecar := 0
 
 
 func setup(link: EngineLink, map_view: MapView) -> void:
@@ -68,6 +72,8 @@ func setup(link: EngineLink, map_view: MapView) -> void:
 	map = map_view
 	if get_parent() == null:
 		map.add_child(self)
+	if _frames == null and ClassDB.class_exists("FrontFrames"):
+		_frames = ClassDB.instantiate("FrontFrames")
 	paint = WarPaint.new()
 	add_child(paint)
 	paint.setup(map)
@@ -227,6 +233,9 @@ func _apply(state: Dictionary, fresh: bool) -> void:
 	if first and bool((state.get("weather", {}) as Dictionary).get("same", false)):
 		_weather_key = ""
 	_state = state
+	if _frames != null and (fresh or first):
+		var stage_data := str(state.get("frontFrames", ""))
+		_frames_ready = not stage_data.is_empty() and bool(_frames.call("load", stage_data))
 	reduce_motion = bool(state.get("reduceMotion", false))
 	_base_map = state.get("map", {})
 	var fronts: Array = state.get("fronts", [])
@@ -372,35 +381,58 @@ func _settle() -> void:
 			_settled[str(entry["run"])] = true
 
 
+func frame_days() -> Array:
+	var days: Array = []
+	for entry in _entries:
+		days.append([entry["name"], float(entry["day"])])
+	return days
+
+
+func frames_local() -> bool:
+	return _frames_ready
+
+
+func local_frame(days: Array, level: float) -> Dictionary:
+	if not _frames_ready:
+		return {}
+	return _frames.call("frame", days, level)
+
+
 func _request_frame() -> void:
+	if _frames_ready and not _entries.is_empty():
+		var level := map.zoom_level()
+		_show_frame(local_frame(frame_days(), level), level)
+		frames_from_rust += 1
+		return
 	if _frame_busy:
 		_frame_again = true
 		return
 	if _entries.is_empty():
 		return
 	_frame_busy = true
-	var days: Array = []
-	for entry in _entries:
-		days.append([entry["name"], float(entry["day"])])
 	var level := map.zoom_level()
 	var serial := _serial
-	var reply: Dictionary = await engine.request("warmap.frame", {"days": days, "zoom": level})
+	var reply: Dictionary = await engine.request("warmap.frame", {"days": frame_days(), "zoom": level})
 	_frame_busy = false
-	if reply.get("ok", false) and serial == _serial and not _entries.is_empty():
-		var frame: Dictionary = reply["result"]
-		_arrows_level = level
-		var names: Array = []
-		for entry in _entries:
-			names.append(entry["name"])
-		overlay.troops = frame.get("troops", [])
-		overlay.sides = frame.get("sides", [])
-		overlay.troop_colours = frame.get("colours", [])
-		overlay.troop_fields = names
-		ground.set_arrows(frame.get("arrows", []), frame.get("colours", []))
-		overlay.redraw_base()
+	if reply.get("ok", false) and serial == _serial and not _entries.is_empty() and not _frames_ready:
+		_show_frame(reply["result"], level)
+		frames_from_sidecar += 1
 	if _frame_again:
 		_frame_again = false
 		_request_frame()
+
+
+func _show_frame(frame: Dictionary, level: float) -> void:
+	_arrows_level = level
+	var names: Array = []
+	for entry in _entries:
+		names.append(entry["name"])
+	overlay.troops = frame.get("troops", [])
+	overlay.sides = frame.get("sides", [])
+	overlay.troop_colours = frame.get("colours", [])
+	overlay.troop_fields = names
+	ground.set_arrows(frame.get("arrows", []), frame.get("colours", []))
+	overlay.redraw_base()
 
 
 func _shown_owners() -> Dictionary:
