@@ -32,7 +32,12 @@ const AIR_BATTLE = { name: 1, status: 1, sides: 1, gone: 1, frame: 1, field: { c
 const CLIMATE_RUN = { input: { climateZones: 1, climateSeed: 1, fromDate: 1, toDate: 1, days: 1 }, seed: 1, steer: 1, zoneSkiesDate: 1, zoneSkies: 1, zoneNeighbours: 1 };
 const CLIMATE_BATTLE = { name: 1, frame: 1, arena: { frame: 1 }, field: { cols: 1, rows: 1 }, place: 1, climateFor: 1, climateLat: 1, zonesFor: 1, zones: 1, zonesDate: 1, zonesLat: 1, zonesMix: 1, climateToday: 1, sky: 1, skies: 1 };
 const climatePicks = (names) => Object.fromEntries(names.map((name) => [name, { 0: CLIMATE_RUN, 1: CLIMATE_BATTLE }]));
-const runPicks = (names, battleAt = -1) => Object.fromEntries(names.map((name) => [name, battleAt >= 0 && name.startsWith("@") ? null : { 0: RUN_PICK, ...(battleAt >= 0 ? { [battleAt]: BATTLE_PICK } : {}) }]));
+const troopsPick = (keys) => ({ "*": { "*": Object.fromEntries(keys.map((key) => [key, 1])) } });
+const FIELD_PICK = { cols: 1, rows: 1, size: 1, holders: 1, play: 1, turns: 1 };
+const CLOSE_PICK = { size: 1, key: 1, squeezed: 1, was: 1, prey: 1, toPrey: 1, preyNear: 1, toSupplied: 1, pockets: 1, cut: 1 };
+const PHI_FIELD = { ...FIELD_PICK, phi: 1 };
+const SWARM_BATTLE = { sides: 1, swarms: 1, deploy: 1, frame: 1, radiusKm: 1, field: PHI_FIELD, troops: troopsPick(["strength", "x", "y", "owner", "command"]) };
+const runPicks =(names, battleAt = -1) => Object.fromEntries(names.map((name) => [name, battleAt >= 0 && name.startsWith("@") ? null : { 0: RUN_PICK, ...(battleAt >= 0 ? { [battleAt]: BATTLE_PICK } : {}) }]));
 
 const MODULES = {
   "src/runtime/unitMotion.js": { name: "unitMotion", keep: ["hashSeed"] },
@@ -107,10 +112,93 @@ const MODULES = {
       airMissionOf: { 0: { airMission: 1 } },
     },
   },
+  "src/runtime/fronts/staff.js": {
+    name: "staff",
+    quiet: true,
+    picks: {
+      troopWorth: { 0: { strength: 1, kind: 1, supply: 1, punch: 1 } },
+      sideIsPlayed: { 0: { sides: 1, gone: 1 } },
+      staffDecision: { 0: { troops: troopsPick(["strength", "kind", "supply", "punch", "x", "y"]), quality: 1, edge: 1, frame: 1, arena: { cities: 1, names: 1, centreX: 1, centreY: 1 } }, 2: { began: 1, key: 1, today: { line: { contour: { x: 1, y: 1 }, count: 1 }, sectors: 1 } } },
+      spearheadsOf: { 0: { homeSide: 1, arena: { region: 1 }, field: { cols: 1, rows: 1, size: 1, holders: 1 }, frame: 1, troops: troopsPick(["strength", "x", "y", "pocket"]) } },
+      breakthroughAnswer: { 0: { homeSide: 1, arena: { region: 1 }, field: { cols: 1, rows: 1, size: 1, holders: 1 }, frame: 1, quality: 1, edge: 1, troops: troopsPick(["strength", "kind", "supply", "punch", "x", "y", "pocket"]) } },
+      staffMayOrder: { 0: { orders: 1 } },
+      staffStanding: { 0: { orders: 1 } },
+    },
+  },
+  "src/runtime/fronts/closing.js": {
+    name: "closing",
+    quiet: true,
+    big: ["findPrey", "drawIn"],
+    changed: ["drawIn"],
+    picks: {
+      liveOrder: { 0: { order: 1 } },
+      findPrey: {
+        0: { field: { cols: 1, rows: 1, size: 1, holders: 1, turns: 1 }, frame: 1, close: CLOSE_PICK, takenFor: { cols: 1, rows: 1, size: 1, turns: 1 }, takenTurns: 1, takenCells: 1, pockets: 1, pocketOf: 1, homes: 1, fed: 1, bodyOf: 1, kept: 1, spared: 1, troops: troopsPick(["x", "y", "strength", "order", "squeezed", "pocket"]) },
+        result: { size: 1, key: 1 },
+      },
+      drawIn: { 0: { field: FIELD_PICK, frame: 1, close: { pockets: 1, preyNear: 1, toPrey: 1 }, sieges: 1, radiusKm: 1, troops: troopsPick(["x", "y", "strength", "kind", "pocket", "order", "dug", "rested", "hx", "hy", "fallback"]) } },
+    },
+  },
+  "src/runtime/fronts/swarms.js": {
+    name: "swarms",
+    quiet: true,
+    picks: {
+      swarmsOfRecord: { 0: { brief: { carry: { swarms: 1 } } } },
+      inSwarm: { 0: { swarms: 1 }, 2: { command: 1 } },
+      swarmsKept: { 0: { swarms: 1, troops: troopsPick(["strength", "command"]) } },
+      swarmMiddles: { 0: { swarms: 1, troops: troopsPick(["strength", "command", "x", "y", "owner"]) } },
+      freeCommand: { 0: { swarms: 1, troops: troopsPick(["strength", "command"]) } },
+      halfBlockKm: { 0: { radiusKm: 1 } },
+      placeBlock: { 0: { field: PHI_FIELD, frame: 1, radiusKm: 1, troops: troopsPick(["strength", "x", "y"]) } },
+      rearOf: { 0: { field: FIELD_PICK, frame: 1 } },
+      swarmPlaceOf: { 0: { deploy: 1, frame: 1, field: FIELD_PICK } },
+      gathersInSwarms: { 0: { deploy: 1 } },
+      gatherNewcomers: { 0: SWARM_BATTLE },
+      raiseSwarms: { 0: SWARM_BATTLE, 2: { "*": { strength: 1, x: 1, y: 1, owner: 1, command: 1 } } },
+    },
+  },
+  "src/runtime/fronts/way.js": {
+    name: "way",
+    quiet: true,
+    picks: {
+      takeOrder: { 0: { order: 1 } },
+      chanceOf: { 0: { seed: 1, name: 1 } },
+      leftOnLeg: { 1: { x: 1, y: 1 } },
+      give: { 0: { frame: 1, radiusKm: 1, seed: 1, name: 1, troops: troopsPick(["x", "y", "kind", "lag", "dug", "order", "fallback"]) } },
+      giveOut: { 0: { field: FIELD_PICK, frame: 1, troops: troopsPick(["x", "y", "hx", "hy", "lag", "dug", "order", "fallback"]) }, 1: { advanceKm: 1, pace: 1 } },
+      aimOut: { 0: { field: FIELD_PICK, frame: 1 }, 1: { advanceKm: 1, pace: 1 }, 3: { x: 1, y: 1, hx: 1, hy: 1 } },
+      waysFor: { 0: { field: FIELD_PICK, arena: { speed: 1 }, frame: 1, troops: troopsPick(["x", "y", "strength"]) }, 1: { advanceKm: 1, pace: 1 } },
+      giveRoute: { 0: { frame: 1, radiusKm: 1, name: 1, troops: troopsPick(["x", "y", "lag", "dug", "order", "fallback", "next"]) } },
+    },
+  },
+  "src/runtime/fronts/mind/troops.js": {
+    name: "mindTroops",
+    quiet: true,
+    big: ["troopView"],
+    picks: {
+      troopView: {
+        0: {
+          field: { cols: 1, rows: 1, size: 1, holders: 1, play: 1, phi: 1 },
+          frame: 1,
+          quality: 1,
+          edge: 1,
+          arena: { cities: 1 },
+          wallMask: 1,
+          walls: { cellLine: 1 },
+          wallRun: { lines: 1 },
+          levy: 1,
+          wings: { holds: 1, superiority: 1 },
+          sky: { effects: 1 },
+          troops: troopsPick(["x", "y", "strength", "kind", "supply", "punch", "pocket", "state", "dug", "order", "fatigue", "climate"]),
+        },
+      },
+    },
+  },
   "src/runtime/fronts/climate.js": { name: "climate", picks: climatePicks(["zonesOver", "zonesToday"]) },
   "src/runtime/fronts/weather.js": { name: "weather", picks: climatePicks(["skyOver", "skiesAhead"]) },
 };
 
+const CHANGED = new Set(Object.values(MODULES).flatMap((value) => (value.changed ?? []).map((fn) => `${value.name}.${fn}`)));
 const BIG = new Set(Object.values(MODULES).flatMap((value) => (value.big ?? []).map((fn) => `${value.name}.${fn}`)));
 const budgetOf = (key) => (BIG.has(key) ? BYTES_MOST * 4 : BYTES_MOST);
 
@@ -135,7 +223,7 @@ const testFiles = () => {
 };
 
 const out = fs.mkdtempSync(path.join(os.tmpdir(), "ohfronts-golden-"));
-const config = Object.fromEntries(Object.entries(chosen).map(([file, value]) => [path.join(root, file), { name: value.name, factories: value.factories ?? [], picks: value.picks ?? {} }]));
+const config = Object.fromEntries(Object.entries(chosen).map(([file, value]) => [path.join(root, file), { name: value.name, factories: value.factories ?? [], picks: value.picks ?? {}, quiet: value.quiet === true }]));
 const run = spawnSync(process.execPath, ["--import", pathToFileURL(path.join(here, "hooks.mjs")).href, "--test", ...testFiles()], {
   cwd: root,
   env: { ...process.env, GOLDEN_OUT: out, GOLDEN_MODULES: JSON.stringify(config) },
@@ -188,11 +276,11 @@ const shapeOf = (value, depth = 0) => {
   return typeof value;
 };
 
-const pick = (all, most) => {
+const pick = (all, most, name) => {
   const fitting = all.filter((item) => item.size <= most / 3);
   const groups = new Map();
   for (const item of fitting) {
-    const key = JSON.stringify([shapeOf(item.item.a), shapeOf(item.item.r, 1), item.item.cb ? Object.keys(item.item.cb) : 0]);
+    const key = JSON.stringify([shapeOf(item.item.a), shapeOf(item.item.r, 1), item.item.cb ? Object.keys(item.item.cb) : 0, CHANGED.has(name) && item.item.aa ? 1 : 0]);
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(item);
   }
@@ -228,7 +316,7 @@ for (const value of Object.values(chosen)) {
   for (const [key, entry] of [...gathered].sort(([a], [b]) => (a < b ? -1 : 1))) {
     const [moduleName, fn] = key.split(".");
     if (moduleName !== value.name || (value.keep && !value.keep.includes(fn))) continue;
-    cases[fn] = pick(entry.cases, budgetOf(key)).map((item) => item.item);
+    cases[fn] = pick(entry.cases, budgetOf(key), key).map((item) => item.item);
   }
   const blobs = [];
   const blobIndex = new Map();

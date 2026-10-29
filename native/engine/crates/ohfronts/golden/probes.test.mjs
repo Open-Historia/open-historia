@@ -17,6 +17,13 @@ import { awayOf, cellsOf, measure } from "../../../../../src/runtime/fronts/grou
 import { measureLine } from "../../../../../src/runtime/fronts/line.js";
 import { nearestVertex } from "../../../../../src/runtime/fronts/sectors.js";
 import { sideTable, syntheticMap } from "../../../../../src/runtime/fronts/syntheticMap.js";
+import { freeCommand, gatherNewcomers, gathersInSwarms, halfBlockKm, inSwarm, placeBlock, raiseSwarms, rearOf, swarmMiddles, swarmPlaceOf } from "../../../../../src/runtime/fronts/swarms.js";
+import { breakthroughAnswer, spearheadsOf, staffDecision, troopWorth } from "../../../../../src/runtime/fronts/staff.js";
+import { give, legsOf, waysFor } from "../../../../../src/runtime/fronts/way.js";
+import { troopView } from "../../../../../src/runtime/fronts/mind/troops.js";
+import { drawIn, findPrey } from "../../../../../src/runtime/fronts/closing.js";
+import { runFronts } from "../../../../../src/runtime/fronts/engine.js";
+import { frontInput } from "../../../../../src/runtime/fronts/syntheticMap.js";
 
 const SIDES = [["Aland"], ["Borduria"]];
 const legend = { A: "Aland", B: "Borduria", N: "Neutralia", "~": null };
@@ -251,4 +258,109 @@ test("golden probes for a replay carried onto a larger grid", () => {
     cases.push({ a: encode([sides, cols, rows, calls, carry, after, finish]), r: carried ? encode(carried.finish(finish)) : null });
   }
   if (process.env.GOLDEN_OUT) fs.writeFileSync(new URL("../tests/golden/carry.json", import.meta.url), JSON.stringify({ blobs: [], cases: { carryOnto: cases } }));
+});
+
+test("golden probes for swarms, a staff's sums and ways", () => {
+  for (const layout of LAYOUTS) {
+    const { frame, field } = sheet(layout);
+    if (!field) continue;
+    const place = projectorOf(frame);
+    const cellsOf = (side) => [...field.holders.keys()].filter((cell) => field.holders[cell] === side);
+    const troops = [0, 1].map((side) => {
+      const cells = cellsOf(side);
+      return Array.from({ length: cells.length ? 10 : 0 }, (_, at) => {
+        const cell = cells[Math.floor(random() * cells.length)];
+        const troop = createTroop({ x: (cell % field.cols) + random(), y: Math.floor(cell / field.cols) + random(), strength: at === 9 ? 0 : 20 + random() * 80, kind: at % 3, owner: at % 2 });
+        troop.command = at < 4 ? 5 + (at % 2) : at < 6 ? 1 : -1;
+        troop.supply = 0.5 + random() / 2;
+        troop.punch = 0.7 + random() / 3;
+        return troop;
+      });
+    });
+    const [wayLng, wayLat] = place.toLngLat(field.cols * 0.25, field.rows * 0.5);
+    const battle = {
+      name: "probe",
+      seed: "s7",
+      field,
+      frame,
+      place,
+      arena: field.arena,
+      troops,
+      quality: [1, 0.9],
+      edge: [{ power: 1.1 }, { power: 1 }],
+      homeSide: Int8Array.from(field.arena.ids, (_, region) => (region === 0 ? -1 : region % 2)),
+      swarms: [new Set([5, 6]), new Set([5])],
+      radiusKm: [12, 0],
+      sides: [["Aland", "Cyrene"], ["Borduria"]],
+      deploy: [[{ country: "Aland", way: [[wayLng, wayLat]], form: "swarm" }], [{ country: "Borduria", way: [[wayLng, wayLat], [wayLng, wayLat + 1]] }]],
+      toSide: null,
+    };
+    for (const side of [0, 1]) {
+      troopWorth(troops[side][0] ?? createTroop({ x: 0, y: 0 }));
+      for (const troop of troops[side]) inSwarm(battle, side, troop);
+      swarmMiddles(battle, side);
+      freeCommand(battle, side);
+      halfBlockKm(battle, side, 7);
+      halfBlockKm(battle, side, 0);
+      swarmPlaceOf(battle, side, "Aland");
+      swarmPlaceOf(battle, side, " borduria ");
+      for (const member of ["Aland", "Borduria", "Nobody"]) for (const form of ["front", "swarm"]) gathersInSwarms(battle, side, member, form);
+      rearOf(battle, side, field.cols / 2, field.rows / 2);
+      rearOf(battle, side, 1.5, 1.5, 60);
+      spearheadsOf(battle, side);
+      breakthroughAnswer(battle, side);
+      staffDecision(battle, side, { began: side === 0, key: `probe|${side}` });
+      if (troops[side].length) {
+        placeBlock(battle, side, [6, 7, 8], field.cols / 2, field.rows / 2);
+        give(battle, side, [0, 1, 2, 3], { day: 2, word: ["advance", "spearhead", "blitz", "flank"][side * 2 + (layout.length % 2)], way: [[field.cols / 2, field.rows / 2], [1, 1]], standing: { s: side, order: "advance" } });
+        waysFor(battle, { advanceKm: [20, 30, 15], pace: 1 }, side, [0, 1, 2], side ? "encircle" : "flank", null, 5);
+        waysFor(battle, { advanceKm: [20, 30, 15], pace: 1 }, side, [3, 4], "advance", { kind: "region", x: field.cols - 1.5, y: 1.5 }, 5);
+        troopView(battle, side);
+        const first = troops[side].length;
+        for (let at = 0; at < 3; at += 1) troops[side].push(createTroop({ x: troops[side][at].x, y: troops[side][at].y, owner: at % 2 }));
+        gatherNewcomers(battle, side, 0, first, side ? "swarm" : "front");
+        gatherNewcomers(battle, side, 1, first, "swarm");
+        const more = troops[side].length;
+        for (let at = 0; at < 5; at += 1) troops[side].push(createTroop({ x: troops[side][at].x, y: troops[side][at].y, owner: at % 2 }));
+        raiseSwarms(battle, side, troops[side].slice(more));
+      }
+    }
+    legsOf([1, 1], [[1, 1], [2, 3], [2.005, 3], [-1, 4]]);
+    legsOf([0, 0], []);
+  }
+});
+
+test("golden probes for a thrust: what a staff sees and what closes on a pocket", () => {
+  const legend2 = { A: "Aland", B: "Borduria" };
+  const world = syntheticMap({ layout: Array.from({ length: 10 }, () => "AAAAAAAABBBBBBBB"), legend: legend2, west: 20, north: 53, step: 0.5, stepLat: 0.3, key: "golden-thrust" });
+  const seen = { heads: 0, prey: 0, drawn: 0, views: 0 };
+  let lastSize = 0;
+  const policy = (battle, side) => {
+    if (spearheadsOf(battle, side).length > 0 && seen.heads < 12) {
+      seen.heads += 1;
+      breakthroughAnswer(battle, side);
+    }
+    if ((battle.pockets.length > 0 || battle.takenCells > 0) && seen.prey < 10 && battle.daysRun % 3 === side) {
+      seen.prey += 1;
+      findPrey(battle);
+    }
+    lastSize = battle.field.size;
+    if (battle.close && battle.close.pockets[side].length > 0 && seen.drawn < 14) {
+      seen.drawn += 1;
+      drawIn(battle, side, battle.daysRun);
+    }
+    if (battle.daysRun % 9 === 4 && seen.views < 4) {
+      seen.views += 1;
+      troopView(battle, side);
+    }
+    if (battle.sides[side][0] !== "Aland") return undefined;
+    const middle = battle.field.rows / 2;
+    const live = battle.troops[side].map((troop, index) => (troop.strength > 0 ? index : -1)).filter((index) => index >= 0);
+    const going = live.filter((index) => Math.abs(battle.troops[side][index].y - middle) < battle.field.rows / 4);
+    const holding = live.filter((index) => !going.includes(index));
+    return { troops: [{ order: "advance", picked: going, way: [[27.8, 51.5]] }, ...(holding.length > 0 ? [{ order: "hold", picked: holding }] : [])] };
+  };
+  policy.often = true;
+  runFronts(frontInput(world, { arenas: new Map(), staff: true, troops: 1, days: 40, strengthOf: () => 4, era: 1, mechanics: { muster: true }, staffPolicy: policy }));
+  if (process.env.GOLDEN_SEEN) console.log("seen", JSON.stringify(seen), lastSize);
 });

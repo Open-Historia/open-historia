@@ -343,7 +343,7 @@ fn sector_of(value: &Val) -> Sector {
     }
 }
 
-fn sectors_of(value: &Val) -> Sectors {
+pub fn sectors_of(value: &Val) -> Sectors {
     let cuts = match value.get("cuts") {
         Val::Map(entries) => entries.iter().map(|(key, cut)| (key.string(), Cut { x: cut.get("x").num(), y: cut.get("y").num(), from: cut.get("from").num(), to: cut.get("to").num() })).collect(),
         _ => Vec::new(),
