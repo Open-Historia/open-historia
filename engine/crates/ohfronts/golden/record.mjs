@@ -32,6 +32,7 @@ const MODULES = {
   "src/runtime/fronts/deploy.js": { name: "deploy" },
   "src/runtime/fronts/field.js": { name: "field", factories: ["createField", "openField", "unpackField", "resampleField"], big: ["takeCapsule", "takeCells", "restoreCells", "rebuildFromHolders", "resampleField", "rebuildDistances"] },
   "src/runtime/fronts/line.js": { name: "line" },
+  "src/runtime/fronts/ground.js": { name: "ground", big: ["measure", "awayOf", "cheapestWay"] },
   "src/runtime/fronts/contact.js": { name: "contact" },
   "src/runtime/fronts/sectors.js": { name: "sectors" },
 };
