@@ -66,8 +66,9 @@ impl Typed {
 #[derive(Clone, Debug, Default)]
 pub struct Obj(pub Vec<(String, Val)>);
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub enum Val {
+    #[default]
     Undef,
     Null,
     Bool(bool),
@@ -602,5 +603,15 @@ pub fn or_zero(value: f64) -> f64 {
         0.0
     } else {
         value
+    }
+}
+
+pub fn entries(value: &Val) -> Vec<(String, Val)> {
+    match value {
+        Val::Obj(obj) => obj.entries().map(|(key, item)| (key.to_string(), item.clone())).collect(),
+        Val::Arr(list) => list.iter().enumerate().map(|(at, item)| (at.to_string(), item.clone())).collect(),
+        Val::Typed(typed) => (0..typed.len()).map(|at| (at.to_string(), Val::Num(typed.at(at)))).collect(),
+        Val::Str(text) => text.encode_utf16().enumerate().map(|(at, unit)| (at.to_string(), Val::Str(String::from_utf16_lossy(&[unit])))).collect(),
+        _ => Vec::new(),
     }
 }

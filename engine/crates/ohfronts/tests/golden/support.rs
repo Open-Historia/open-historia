@@ -261,7 +261,7 @@ impl<'a> Reader<'a> {
                 self.cache.borrow_mut()[index] = Some(made.clone());
                 made
             }
-            "Map" => Val::Map(v.unwrap().list().iter().map(|pair| (self.val(&pair.list()[0]), self.val(&pair.list()[1]))).collect()),
+            "Map" => Val::Map(v.unwrap().list().iter().map(|pair| self.raw(pair)).map(|pair| (self.val(&pair.list()[0]), self.val(&pair.list()[1]))).collect()),
             "Set" => Val::Set(v.unwrap().list().iter().map(|item| self.val(item)).collect()),
             "O" => {
                 let mut out = Obj::new();

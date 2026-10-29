@@ -18,6 +18,8 @@ const MODULES = {
   "src/runtime/fronts/codec.js": { name: "codec" },
   "src/runtime/fronts/frame.js": { name: "frame", factories: ["projectorOf"] },
   "src/runtime/fronts/worldGrid.js": { name: "worldGrid", factories: ["buildWorldGrid"] },
+  "src/runtime/regionTypes.js": { name: "regionTypes", keep: ["isWaterType", "waterTypeIds"] },
+  "src/runtime/fronts/arena.js": { name: "arena", factories: ["rasterizeArena", "arenaFor"] },
   "src/runtime/fronts/mechanics.js": { name: "mechanics" },
   "src/runtime/fronts/military.js": { name: "military" },
   "src/runtime/fronts/heldRegions.js": { name: "heldRegions" },
@@ -79,16 +81,57 @@ const spread = (list, most) => {
   return picked;
 };
 
+const shapeOf = (value, depth = 0) => {
+  if (value === null) return "n";
+  if (Array.isArray(value)) return depth < 2 && value.length ? ["A", shapeOf(value[0], depth + 1)] : value.length ? "A" : "A0";
+  if (typeof value === "object") {
+    if (typeof value.$ === "string") return value.$ === "made" || value.$ === "O" ? shapeOf(value.v, depth) : value.$;
+    return depth < 2 ? Object.keys(value).sort().map((key) => [key, shapeOf(value[key], depth + 1)]) : "O";
+  }
+  return typeof value;
+};
+
+const pick = (all) => {
+  const fitting = all.filter((item) => item.size <= BYTES_MOST / 3);
+  const groups = new Map();
+  for (const item of fitting) {
+    const key = JSON.stringify([shapeOf(item.item.a), shapeOf(item.item.r, 1), item.item.cb ? Object.keys(item.item.cb) : 0]);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(item);
+  }
+  const queues = [...groups.values()].map((list) => spread(list, list.length));
+  const order = queues.map((list) => {
+    const out = [];
+    for (let step = list.length; out.length < list.length; step = Math.max(1, Math.floor(step / 2))) {
+      for (let at = 0; at < list.length && out.length < list.length; at += step) if (!out.includes(list[at])) out.push(list[at]);
+    }
+    return out;
+  });
+  const picked = [];
+  let bytes = 0;
+  for (let round = 0; picked.length < CASES_MOST; round += 1) {
+    let any = false;
+    for (const list of order) {
+      if (round >= list.length || picked.length >= CASES_MOST) continue;
+      any = true;
+      const item = list[round];
+      if (bytes + item.size > BYTES_MOST && picked.length >= 12) continue;
+      picked.push(item);
+      bytes += item.size;
+    }
+    if (!any) break;
+  }
+  if (picked.length < 12) for (const item of [...all].sort((a, b) => a.size - b.size)) if (picked.length < 12 && !picked.includes(item)) picked.push(item);
+  return picked;
+};
+
 fs.mkdirSync(fixtures, { recursive: true });
 for (const value of Object.values(chosen)) {
   const cases = {};
   for (const [key, entry] of [...gathered].sort(([a], [b]) => (a < b ? -1 : 1))) {
     const [moduleName, fn] = key.split(".");
     if (moduleName !== value.name || (value.keep && !value.keep.includes(fn))) continue;
-    let list = spread(entry.cases.filter((item) => item.size <= BYTES_MOST / 3), CASES_MOST);
-    while (list.length > 1 && list.reduce((sum, item) => sum + item.size, 0) > BYTES_MOST) list = spread(list, Math.floor(list.length * 0.8));
-    if (list.length < 12) list = [...new Set([...list, ...[...entry.cases].sort((a, b) => a.size - b.size).slice(0, 12 - list.length)])];
-    cases[fn] = list.map((item) => item.item);
+    cases[fn] = pick(entry.cases).map((item) => item.item);
   }
   const blobs = [];
   const blobIndex = new Map();
