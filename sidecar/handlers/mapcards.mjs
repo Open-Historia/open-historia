@@ -215,7 +215,7 @@ export const register = (ctx) => {
     const hitOwner = (lookupOwner !== undefined ? lookupOwner : (row ? row.owner : owner)) ?? "";
     const gid0 = cleanText(row?.gid0);
     const toCountryName = extras.ownerNames.toCountryName;
-    const name = row ? extras.regionNameFixes.resolveRegionName(id, row.name) : cleanText(regionName);
+    const name = extras.regionNameFixes.resolveRegionName(id, row ? row.name : regionName, world?.regionRenames) || cleanText(row ? row.name : regionName);
     let selection = {
       GID_0: hitOwner || (hitOwner === "" ? "" : toCountryName(gid0)),
       COUNTRY: row?.country ?? toCountryName(gid0),

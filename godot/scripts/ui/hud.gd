@@ -118,12 +118,12 @@ func _flat_button(text: String, size := 13, weight := 600, ink := UI.BUTTON_INK)
 
 
 func _build_top_left() -> void:
-	var menu := _glass(UI.HUD_BUTTON, 14, Rect2(8, 8, 64, 64))
-	var menu_button := _flat_button("☰", 24, 800, UI.WHITE)
+	var menu := _glass(UI.HUD_BUTTON, 12, Rect2(8, 8, 46, 46))
+	var menu_button := _flat_button("☰", 19, 800, UI.WHITE)
 	menu_button.tooltip_text = "Game menu"
 	menu_button.pressed.connect(func() -> void: open_menu.emit())
 	menu.add_child(menu_button)
-	var pill := _glass(UI.HUD_PILL, 13, Rect2(80, 8, 240, 45), Vector4(0, 0, 0, 0), Vector4(12, 0, 12, 0))
+	var pill := _glass(UI.HUD_PILL, 12, Rect2(61, 8, 240, 46), Vector4(0, 0, 0, 0), Vector4(12, 0, 12, 0))
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 9)
 	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -144,7 +144,7 @@ func _build_top_left() -> void:
 	text.add_child(_pill_subtitle)
 	row.add_child(text)
 	pill.add_child(row)
-	var exit := _glass(UI.HUD_PILL, 11, Rect2(328, 8, 92, 46))
+	var exit := _glass(UI.HUD_PILL, 12, Rect2(308, 8, 92, 46))
 	var exit_button := _flat_button("⌂ Exit Game", 11, 600)
 	exit_button.tooltip_text = "Leave this game and return to the main menu"
 	exit_button.pressed.connect(func() -> void: exit_game.emit())

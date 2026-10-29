@@ -228,7 +228,7 @@ func _card_rect() -> Rect2:
 
 func _grow_scale() -> Vector2:
 	var size := _card.size
-	return Vector2(64.0 / maxf(1.0, size.x), 64.0 / maxf(1.0, size.y))
+	return Vector2(45.6 / maxf(1.0, size.x), 45.6 / maxf(1.0, size.y))
 
 
 func _fit_card() -> void:
