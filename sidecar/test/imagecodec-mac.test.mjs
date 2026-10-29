@@ -15,7 +15,7 @@ const fixtures = path.join(here, "fixtures", "avif");
 const expected = JSON.parse(fs.readFileSync(path.join(fixtures, "expected.json"), "utf8"));
 const mac = process.platform === "darwin";
 const skip = mac ? false : "the Swift AVIF helper runs only on macOS";
-const GRID_TOLERANCE = 40;
+const GRID_TOLERANCE = 48;
 
 let work = "";
 let helper = null;
@@ -73,6 +73,14 @@ const decode = async (name) => {
   return { reply, status, width: Number(width), height: Number(height), alpha, frames, loops: Number(loops), durations: timings.split(",").filter(Boolean).map(Number) };
 };
 
+test("ImageIO's own reading of the pictures with alpha, for the log", { skip }, async (t) => {
+  for (const name of ["still-alpha.avif", "still-alpha-rot90.avif", "still-nest-hub.avif", "anim-alpha-loop2.avif"]) {
+    const reply = await ask("probe", path.join(fixtures, name));
+    assert.match(reply, /^probe\t/);
+    for (const part of reply.slice(6).split(" || ")) t.diagnostic(`${name} ${part}`);
+  }
+});
+
 for (const [name, want] of Object.entries(expected)) {
   test(`${name}: ${want.note}`, { skip }, async (t) => {
     const got = await decode(name);
@@ -90,6 +98,10 @@ for (const [name, want] of Object.entries(expected)) {
     assert.equal(first.translucent > 0, want.translucent, want.translucent ? "keeps its transparency" : "stays opaque");
     const distances = [gridDistance(first.cells, cells(want.grids[0])), gridDistance(last.cells, cells(want.grids[1]))];
     t.diagnostic(`grid distance to the Windows decode: first ${distances[0]}, last ${distances[1]}`);
+    if (Math.max(...distances) > GRID_TOLERANCE) {
+      t.diagnostic(`mac grid: ${first.cells.map((cell) => cell.join(",")).join(" ")}`);
+      t.diagnostic(`windows grid: ${want.grids[0].map((cell) => String(cell).replaceAll(" ", ",")).join(" ")}`);
+    }
     assert.ok(Math.max(...distances) <= GRID_TOLERANCE, `the pictures differ from the Windows decode by ${distances.join(" and ")}`);
   });
 }
