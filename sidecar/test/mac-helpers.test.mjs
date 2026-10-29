@@ -249,3 +249,141 @@ test("a Mac without osascript, and other systems, have no desktop notifications"
   const linux = await load("notify.mjs");
   assert.deepEqual(await linux.register(notifyContext())["notify.desktop.get"](), { permission: "unsupported" });
 });
+
+const fakeNotifier = (answer) => {
+  const calls = [];
+  const requests = [];
+  let child = null;
+  const spawn = (file, args) => {
+    calls.push({ file, args });
+    child = new EventEmitter();
+    child.stdin = new PassThrough();
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.kill = () => child.emit("exit", null, "SIGTERM");
+    readline.createInterface({ input: child.stdin }).on("line", (line) => {
+      const request = JSON.parse(line);
+      requests.push(request);
+      const reply = answer(request);
+      if (reply) child.stdout.write(`${JSON.stringify({ seq: request.seq, ...reply })}\n`);
+    });
+    child.stdout.write(`${JSON.stringify({ ready: true, bundle: "io.github.arkniem.openhistoria.native.notifier" })}\n`);
+    return child;
+  };
+  return { calls, requests, spawn, click: (body) => child.stdout.write(`${JSON.stringify({ event: "activated", ...body })}\n`) };
+};
+
+test("the notifier helper lives in the app's Helpers folder and builds for both Macs", async () => {
+  mock();
+  const notify = await load("notify.mjs");
+  const stage = path.join(path.sep, "Applications", "Open Historia Native.app", "Contents", "Resources", "app");
+  assert.equal(slash(notify.macNotifierPath(stage)), slash(path.resolve(path.sep, "Applications", "Open Historia Native.app", "Contents", "Helpers", "Open Historia Notifier.app", "Contents", "MacOS", "Open Historia Notifier")));
+  assert.ok(notify.MAC_NOTIFIER_ID.startsWith("io.github.arkniem.openhistoria.native."));
+  assert.deepEqual(notify.macNotifierSwiftArgs("/src/Notifier.swift", "/tmp/out", "arm64"), ["swiftc", "-O", "-target", "arm64-apple-macos11.0", "/src/Notifier.swift", "-o", "/tmp/out"]);
+  assert.deepEqual(notify.macNotifierSwiftArgs("/src/Notifier.swift", "/tmp/out", "x86_64").slice(0, 4), ["swiftc", "-O", "-target", "x86_64-apple-macos10.15"]);
+  assert.ok(real.existsSync(path.resolve(here, "..", "..", "macos", "notifier", "Notifier.swift")), "Notifier.swift ships with the macOS build files");
+});
+
+test("with the notifier in the bundle, macOS asks it for permission, posts through it and brings the game forward on a click", async () => {
+  const osascript = [];
+  const helper = fakeNotifier((request) => (request.op === "show" ? { shown: true, setting: "Enabled" } : { setting: "Enabled" }));
+  const events = [];
+  mock({
+    present: { "Contents/MacOS/Open Historia Notifier": true, "/usr/bin/osascript": true },
+    execFile: (file, args, options, callback) => {
+      osascript.push(file);
+      callback(null, "", "");
+    },
+    spawn: helper.spawn,
+  });
+  globalThis.document = { hidden: false, addEventListener: () => {} };
+  const notify = await load("notify.mjs");
+  const context = notifyContext();
+  context.emit = (name, data) => events.push([name, data]);
+  const handlers = notify.register(context);
+  assert.deepEqual(await handlers["notify.desktop.get"](), { permission: "default" });
+  const message = { sender: "Rome", preview: "We accept.", chatId: "chat-7", notice: 4 };
+  assert.deepEqual(await handlers["notify.desktop"](message), { shown: false, reason: "permission", permission: "default" });
+  assert.deepEqual(await handlers["notify.desktop.request"](), { permission: "granted" });
+  assert.equal(slash(helper.calls[0].file), slash(notify.macNotifierPath(context.repo)));
+  assert.deepEqual(helper.calls[0].args, ["--serve"]);
+  assert.equal(helper.requests[0].op, "register");
+  assert.deepEqual(await handlers["notify.desktop"](message), { shown: false, reason: "visible", permission: "granted" });
+  globalThis.document.hidden = true;
+  assert.deepEqual(await handlers["notify.desktop"](message), { shown: true, permission: "granted" });
+  const shown = helper.requests.find((request) => request.op === "show");
+  assert.deepEqual([shown.title, shown.body, shown.chatId, shown.notice, shown.gameId], ["Open Historia — Rome", "We accept.", "chat-7", 4, "game-1"]);
+  assert.equal(shown.tag, notify.toastTag("chat-7"));
+  assert.equal(helper.calls.length, 1);
+  assert.deepEqual(osascript, []);
+  helper.click({ notice: 4, chatId: "chat-7", gameId: "game-1" });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(events, [["notify.activated", { notice: 4, chatId: "chat-7", sameGame: true }]]);
+});
+
+test("a notifier turned off in System Settings records the refusal and never falls back to Script Editor", async () => {
+  const osascript = [];
+  const helper = fakeNotifier((request) => (request.op === "show" ? { shown: false, setting: "Disabled" } : { setting: "Disabled" }));
+  mock({
+    present: { "Contents/MacOS/Open Historia Notifier": true, "/usr/bin/osascript": true },
+    execFile: (file, args, options, callback) => {
+      osascript.push(file);
+      callback(null, "", "");
+    },
+    spawn: helper.spawn,
+  });
+  globalThis.document = { hidden: true, addEventListener: () => {} };
+  const notify = await load("notify.mjs");
+  const storage = memoryStorage();
+  storage.setItem(notify.DESKTOP_PERMISSION_KEY, "granted");
+  const handlers = notify.register(notifyContext(storage));
+  assert.deepEqual(await handlers["notify.desktop"]({ sender: "Rome", preview: "Hi", chatId: "c", notice: 1 }), { shown: false, permission: "denied" });
+  assert.deepEqual(await handlers["notify.desktop.request"](), { permission: "denied" });
+  assert.deepEqual(osascript, []);
+});
+
+test("a notifier the system will not run falls back to osascript", async () => {
+  const osascript = [];
+  const helper = fakeNotifier(() => ({ setting: "Unknown", error: "UNErrorDomain 1: Notifications are not allowed for this application", unavailable: true }));
+  mock({
+    present: { "Contents/MacOS/Open Historia Notifier": true, "/usr/bin/osascript": true },
+    execFile: (file, args, options, callback) => {
+      osascript.push([file, args]);
+      callback(null, "", "");
+    },
+    spawn: helper.spawn,
+  });
+  globalThis.document = { hidden: true, addEventListener: () => {} };
+  const notify = await load("notify.mjs");
+  const handlers = notify.register(notifyContext());
+  assert.deepEqual(await handlers["notify.desktop.request"](), { permission: "granted" });
+  assert.deepEqual(await handlers["notify.desktop"]({ sender: "Rome", preview: "Hi", chatId: "c", notice: 1 }), { shown: true, permission: "granted" });
+  assert.equal(helper.requests.length, 1);
+  assert.deepEqual(osascript, [[notify.OSASCRIPT, notify.macNotificationArgs("Open Historia — Rome", "Hi")]]);
+});
+
+test("a notifier that cannot start falls back to osascript", async () => {
+  const osascript = [];
+  mock({
+    present: { "Contents/MacOS/Open Historia Notifier": true, "/usr/bin/osascript": true },
+    execFile: (file, args, options, callback) => {
+      osascript.push(file);
+      callback(null, "", "");
+    },
+    spawn: () => {
+      const child = new EventEmitter();
+      child.stdin = new PassThrough();
+      child.stdout = new PassThrough();
+      child.stderr = new PassThrough();
+      setImmediate(() => child.emit("error", Object.assign(new Error("spawn EACCES"), { code: "EACCES" })));
+      return child;
+    },
+  });
+  globalThis.document = { hidden: true, addEventListener: () => {} };
+  const notify = await load("notify.mjs");
+  const storage = memoryStorage();
+  storage.setItem(notify.DESKTOP_PERMISSION_KEY, "granted");
+  const handlers = notify.register(notifyContext(storage));
+  assert.deepEqual(await handlers["notify.desktop"]({ sender: "Rome", preview: "Hi", chatId: "c", notice: 1 }), { shown: true, permission: "granted" });
+  assert.deepEqual(osascript, [notify.OSASCRIPT]);
+});

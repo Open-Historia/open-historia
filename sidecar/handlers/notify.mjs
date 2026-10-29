@@ -153,6 +153,15 @@ export const toastTag = (chatId) => `oh-${crypto.createHash("sha1").update(`oh-d
 
 export const OSASCRIPT = "/usr/bin/osascript";
 
+export const MAC_NOTIFIER_APP = "Open Historia Notifier.app";
+export const MAC_NOTIFIER_EXE = "Open Historia Notifier";
+export const MAC_NOTIFIER_ID = "io.github.arkniem.openhistoria.native.notifier";
+export const MAC_REGISTER_MS = 120_000;
+
+export const macNotifierBundle = (repo) => path.resolve(repo, "..", "..", "Helpers", MAC_NOTIFIER_APP);
+export const macNotifierPath = (repo) => path.join(macNotifierBundle(repo), "Contents", "MacOS", MAC_NOTIFIER_EXE);
+export const macNotifierSwiftArgs = (source, target, arch) => ["swiftc", "-O", "-target", arch === "arm64" ? "arm64-apple-macos11.0" : "x86_64-apple-macos10.15", source, "-o", target];
+
 const macText = (value) => String(value ?? "").replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "").replace(/[\r\n]+/g, " ").trim();
 
 export const macNotificationArgs = (title, body) => ["-e", "on run argv", "-e", "display notification (item 2 of argv) with title (item 1 of argv)", "-e", "end run", macText(title), macText(body)];
@@ -163,7 +172,12 @@ export const toasterArgs = () => ["-NoLogo", "-NoProfile", "-NonInteractive", "-
 
 export const register = (ctx) => {
   const { storage, emit, clean, repo, standIn, engine } = ctx;
-  const macSupported = process.platform === "darwin" && fs.existsSync(OSASCRIPT);
+  const onMac = process.platform === "darwin";
+  const macHelper = onMac ? macNotifierPath(repo) : "";
+  const macOsascript = onMac && fs.existsSync(OSASCRIPT);
+  let macHelperBroken = false;
+  const macHelperReady = () => onMac && !macHelperBroken && fs.existsSync(macHelper);
+  const macSupported = macOsascript || macHelperReady();
   const supported = (process.platform === "win32" && fs.existsSync(powershellPath())) || macSupported;
   const icon = path.join(repo, "public", "icon-192.png");
   let broken = false;
@@ -184,7 +198,7 @@ export const register = (ctx) => {
 
   const startToaster = () => {
     if (toaster) return toaster;
-    const child = spawn(powershellPath(), toasterArgs(), {
+    const child = onMac ? spawn(macHelper, ["--serve"], { stdio: ["pipe", "pipe", "pipe"], env: process.env }) : spawn(powershellPath(), toasterArgs(), {
       windowsHide: true,
       stdio: ["pipe", "pipe", "pipe"],
       env: { ...process.env, OH_TOAST_APP_ID: DESKTOP_APP_ID, OH_TOAST_PARENT: String(process.ppid), OH_TOAST_ICON: fs.existsSync(icon) ? icon : "" },
@@ -197,11 +211,15 @@ export const register = (ctx) => {
       if (toaster === state) toaster = null;
     };
     child.on("error", (error) => {
-      if (error?.code === "ENOENT") broken = true;
+      if (onMac) macHelperBroken = true;
+      else if (error?.code === "ENOENT") broken = true;
       process.stderr.write(`[desktop notifications] ${error?.message ?? error}\n`);
       settleAll();
     });
-    child.on("exit", settleAll);
+    child.on("exit", (code, signal) => {
+      if (onMac && (code !== 0 || signal)) macHelperBroken = true;
+      settleAll();
+    });
     child.stdin.on("error", () => {});
     child.stderr.on("data", (chunk) => process.stderr.write(`[desktop notifications] ${chunk}`));
     readline.createInterface({ input: child.stdout }).on("line", (line) => {
@@ -233,8 +251,17 @@ export const register = (ctx) => {
     execFile(OSASCRIPT, macNotificationArgs(request.title, request.body), { timeout: timeoutMs }, (error) => resolve(error ? { error: clean(error.message) } : { shown: true, setting: "Enabled" }));
   });
 
-  const ask = (request, timeoutMs = 20_000) => {
-    if (macSupported) return askMac(request, timeoutMs);
+  const ask = async (request, timeoutMs = 20_000) => {
+    if (!onMac) return askToaster(request, timeoutMs);
+    if (macHelperReady()) {
+      const reply = await askToaster(request, request.op === "show" ? timeoutMs : MAC_REGISTER_MS);
+      if (reply?.unavailable) macHelperBroken = true;
+      if (!macHelperBroken || !macOsascript) return reply;
+    }
+    return askMac(request, timeoutMs);
+  };
+
+  const askToaster = (request, timeoutMs) => {
     const state = startToaster();
     state.seq += 1;
     const seq = state.seq;
@@ -259,7 +286,7 @@ export const register = (ctx) => {
   };
 
   globalThis.document?.addEventListener?.("visibilitychange", () => {
-    if (globalThis.document?.hidden && !standIn && permission() === "granted" && !macSupported) startToaster();
+    if (globalThis.document?.hidden && !standIn && permission() === "granted" && (!onMac || macHelperReady())) startToaster();
   });
 
   const fromSetting = (setting, fallback) => {

@@ -132,6 +132,7 @@ for (const dir of seen) copy(dir, path.join(stage, path.relative(repo, dir)));
 console.log(`bundled ${seen.size} server packages`);
 
 const fmgDist = path.join(repo, "fmg", "dist");
+if (!fs.existsSync(fmgDist)) (await import(pathToFileURL(path.join(here, "fmg.mjs")).href)).ensureFmg(repo);
 if (fs.existsSync(fmgDist)) {
   copy(fmgDist, path.join(stage, "fmg", "dist"));
   if (fs.existsSync(path.join(repo, "fmg", ".version"))) copy(path.join(repo, "fmg", ".version"), path.join(stage, "fmg", ".version"));

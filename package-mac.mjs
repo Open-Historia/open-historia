@@ -18,6 +18,7 @@ const exeName = "Open Historia";
 const nativeUpdate = await import(pathToFileURL(path.join(here, "sidecar", "handlers", "update.mjs")).href);
 const chunkKit = await import(pathToFileURL(path.join(here, "sidecar", "updateChunks.mjs")).href);
 const imageCodec = await import(pathToFileURL(path.join(here, "sidecar", "handlers", "imagecodec.mjs")).href);
+const notifyKit = await import(pathToFileURL(path.join(here, "sidecar", "handlers", "notify.mjs")).href);
 const notes = String(process.env.OH_NATIVE_NOTES || "A new super-experimental build of Open Historia Native.");
 
 if (process.platform !== "darwin") throw new Error("The macOS app is built on macOS.");
@@ -179,6 +180,38 @@ for (const arch of ["arm64", "x86_64"]) {
 run("/usr/bin/lipo", ["-create", ...slices, "-output", path.join(codecDir, imageCodec.IMAGE_CODEC_MAC)]);
 fs.chmodSync(path.join(codecDir, imageCodec.IMAGE_CODEC_MAC), 0o755);
 
+const notifierSource = path.join(here, "macos", "notifier", "Notifier.swift");
+const notifierBundle = path.join(contents, "Helpers", notifyKit.MAC_NOTIFIER_APP);
+fs.mkdirSync(path.join(notifierBundle, "Contents", "MacOS"), { recursive: true });
+fs.mkdirSync(path.join(notifierBundle, "Contents", "Resources"), { recursive: true });
+const notifierSlices = [];
+for (const arch of ["arm64", "x86_64"]) {
+  const slice = path.join(out, `oh-notifier-${arch}`);
+  run("/usr/bin/xcrun", notifyKit.macNotifierSwiftArgs(notifierSource, slice, arch));
+  notifierSlices.push(slice);
+}
+run("/usr/bin/lipo", ["-create", ...notifierSlices, "-output", path.join(notifierBundle, "Contents", "MacOS", notifyKit.MAC_NOTIFIER_EXE)]);
+fs.chmodSync(path.join(notifierBundle, "Contents", "MacOS", notifyKit.MAC_NOTIFIER_EXE), 0o755);
+fs.copyFileSync(path.join(project, "mac_icon.icns"), path.join(notifierBundle, "Contents", "Resources", "AppIcon.icns"));
+const plistValue = (value) => (value === true ? "<true/>" : `<string>${String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;")}</string>`);
+const notifierInfo = {
+  CFBundleDevelopmentRegion: "en",
+  CFBundleDisplayName: appName,
+  CFBundleExecutable: notifyKit.MAC_NOTIFIER_EXE,
+  CFBundleIconFile: "AppIcon",
+  CFBundleIdentifier: notifyKit.MAC_NOTIFIER_ID,
+  CFBundleInfoDictionaryVersion: "6.0",
+  CFBundleName: appName,
+  CFBundlePackageType: "APPL",
+  CFBundleShortVersionString: "1.0",
+  CFBundleVersion: "1",
+  LSMinimumSystemVersion: "10.15",
+  LSUIElement: true,
+  NSHighResolutionCapable: true,
+};
+fs.writeFileSync(path.join(notifierBundle, "Contents", "Info.plist"), `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n<dict>\n${Object.entries(notifierInfo).map(([key, value]) => `\t<key>${key}</key>\n\t${plistValue(value)}\n`).join("")}</dict>\n</plist>\n`);
+run("/usr/bin/plutil", ["-lint", path.join(notifierBundle, "Contents", "Info.plist")]);
+
 copy(path.join(repo, "server"), path.join(stage, "server"), (file, isDir) => {
   if (isDir) return path.basename(file) !== "data";
   return !file.endsWith(".test.js");
@@ -219,13 +252,7 @@ for (const name of wanted) visit(name, repo);
 for (const dir of seen) copy(dir, path.join(stage, path.relative(repo, dir)));
 console.log(`bundled ${seen.size} server packages`);
 
-const fmgDist = path.join(repo, "fmg", "dist");
-if (fs.existsSync(fmgDist)) {
-  copy(fmgDist, path.join(stage, "fmg", "dist"));
-  if (fs.existsSync(path.join(repo, "fmg", ".version"))) copy(path.join(repo, "fmg", ".version"), path.join(stage, "fmg", ".version"));
-} else {
-  console.log("fmg/dist is not here, so the map generator is left out of this build");
-}
+const fmgStaged = await (await import(pathToFileURL(path.join(here, "fmg.mjs")).href)).stageFmg(repo, stage);
 
 const publicDir = path.join(repo, "public");
 copy(path.join(repo, "scripts", "map-assets.json"), path.join(stage, "scripts", "map-assets.json"));
@@ -256,6 +283,7 @@ const shellWalk = (folder, prefix) => {
   }
 };
 shellWalk(contents, "");
+shellParts.push(`notifier ${crypto.createHash("sha256").update(fs.readFileSync(notifierSource)).update(JSON.stringify(notifyKit.macNotifierSwiftArgs("", "", "arm64"))).digest("hex")}`);
 const shell = crypto.createHash("sha256").update(shellParts.join("\n")).digest("hex").slice(0, 32);
 const shellSet = capture("/usr/libexec/PlistBuddy", ["-c", `Set :${chunkKit.MAC_SHELL_KEY} ${shell}`, plist]);
 if (shellSet.status !== 0) run("/usr/libexec/PlistBuddy", ["-c", `Add :${chunkKit.MAC_SHELL_KEY} string ${shell}`, plist]);
@@ -274,32 +302,51 @@ for (const file of walk(path.join(contents, "Frameworks"))) {
   if (fs.lstatSync(file).isSymbolicLink() || !isMachO(file)) continue;
   run("/usr/bin/codesign", ["--force", "--sign", "-", file]);
 }
+run("/usr/bin/codesign", ["--force", "--sign", "-", "--identifier", notifyKit.MAC_NOTIFIER_ID, notifierBundle]);
+run("/usr/bin/codesign", ["--verify", "--strict", "--verbose=2", notifierBundle]);
 
 const smoke = await new Promise((resolve) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "oh-native-package-"));
   const child = spawn(path.join(stage, "runtime", "node"), [path.join(stage, "native", "sidecar", "main.mjs")], { cwd: stage, env: { ...process.env, OH_NATIVE_ROOT: root, OH_STANDIN_MODEL: "1" }, stdio: ["pipe", "pipe", "pipe"] });
   const failed = [];
   let errors = "";
+  let asked = 0;
+  let ready = false;
+  const ask = () => {
+    asked += 1;
+    child.stdin.write(`${JSON.stringify({ id: asked, method: "workshop.fmg.available" })}\n`);
+  };
   child.stderr.on("data", (chunk) => { errors += String(chunk); });
-  const timer = setTimeout(() => { child.kill(); resolve({ ready: false, failed, errors }); }, 120000);
+  const timer = setTimeout(() => { child.kill(); resolve({ ready, failed, errors, fmg: null }); }, 120000);
   readline.createInterface({ input: child.stdout }).on("line", (line) => {
     let message = null;
     try { message = JSON.parse(line); } catch { return; }
     if (message?.event === "sidecar.handlerFailed") failed.push(message.data);
     if (message?.event === "ready") {
+      ready = true;
+      ask();
+    }
+    if (message?.id && message.id === asked) {
+      const available = message.ok === true && message.result?.available === true;
+      if (!available && asked < 15) {
+        setTimeout(ask, 1000);
+        return;
+      }
       clearTimeout(timer);
       child.stdin.end();
-      resolve({ ready: true, failed, errors });
+      resolve({ ready: true, failed, errors, fmg: { available, asked, error: message.error ?? null } });
     }
   });
-  child.on("exit", () => { clearTimeout(timer); resolve({ ready: false, failed, errors }); });
+  child.on("exit", () => { clearTimeout(timer); resolve({ ready, failed, errors, fmg: null }); });
 });
 if (!smoke.ready) throw new Error(`The staged engine did not start:
 ${smoke.errors.slice(-3000)}`);
 for (const entry of smoke.failed) console.log(`WARNING handler not loaded in the package: ${entry.file}: ${entry.message}`);
 console.log(`staged engine started; ${smoke.failed.length} handler(s) failed to load`);
-fs.writeFileSync(path.join(out, "sidecar-smoke.json"), `${JSON.stringify({ ready: smoke.ready, failed: smoke.failed }, null, 2)}\n`);
+console.log(`staged map generator available: ${smoke.fmg?.available === true} (${fmgStaged.files} files, ${(fmgStaged.bytes / 1048576).toFixed(1)} MB)`);
+fs.writeFileSync(path.join(out, "sidecar-smoke.json"), `${JSON.stringify({ ready: smoke.ready, failed: smoke.failed, fmg: { ...smoke.fmg, files: fmgStaged.files, bytes: fmgStaged.bytes } }, null, 2)}\n`);
 if (smoke.failed.length) throw new Error("Every handler must load in the macOS package.");
+if (smoke.fmg?.available !== true) throw new Error(`The staged engine does not offer the map generator: ${JSON.stringify(smoke.fmg)}`);
 
 const chunkOut = path.join(out, "chunks");
 const chunkRelease = chunkKit.writeRelease({ stage, out: chunkOut, details: { build: stamp.build, version: stamp.version, commit: stamp.commit, platform: "macos", shell } });
