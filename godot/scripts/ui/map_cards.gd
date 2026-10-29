@@ -1016,6 +1016,7 @@ func _build_info_shell() -> void:
 	_info_panel = GlassPanel.new(PANEL_TINT, 16.0)
 	_info_panel.anchor_left = 1.0
 	_info_panel.anchor_right = 1.0
+	_info_panel.grow_horizontal = Control.GROW_DIRECTION_BEGIN
 	_info_panel.anchor_top = 0.0
 	_info_panel.anchor_bottom = 0.0
 	_info_panel.offset_right = -8.0

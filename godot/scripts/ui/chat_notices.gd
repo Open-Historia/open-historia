@@ -44,6 +44,7 @@ func _ready() -> void:
 	_toast_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_toast_box.anchor_left = 1.0
 	_toast_box.anchor_right = 1.0
+	_toast_box.grow_horizontal = Control.GROW_DIRECTION_BEGIN
 	_toast_box.offset_left = -12.0 - TOAST_WIDTH
 	_toast_box.offset_right = -12.0
 	_toast_box.offset_top = 70.0

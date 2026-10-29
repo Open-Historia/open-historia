@@ -21,6 +21,7 @@ var _refreshing := false
 func _init() -> void:
 	anchor_left = 1.0
 	anchor_right = 1.0
+	grow_horizontal = Control.GROW_DIRECTION_BEGIN
 	anchor_top = 0.0
 	anchor_bottom = 1.0
 	offset_right = -16.0
