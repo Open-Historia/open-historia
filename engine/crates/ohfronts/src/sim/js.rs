@@ -1,6 +1,6 @@
 use std::cmp::Ordering;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Typed {
     U8(Vec<u8>),
     U8C(Vec<u8>),
@@ -63,10 +63,10 @@ impl Typed {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Obj(pub Vec<(String, Val)>);
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub enum Val {
     #[default]
     Undef,
@@ -613,5 +613,62 @@ pub fn entries(value: &Val) -> Vec<(String, Val)> {
         Val::Typed(typed) => (0..typed.len()).map(|at| (at.to_string(), Val::Num(typed.at(at)))).collect(),
         Val::Str(text) => text.encode_utf16().enumerate().map(|(at, unit)| (at.to_string(), Val::Str(String::from_utf16_lossy(&[unit])))).collect(),
         _ => Vec::new(),
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct OrdMap<K: Clone + PartialEq, V: Clone> {
+    pub entries: Vec<(K, V)>,
+}
+
+impl<K: Clone + PartialEq, V: Clone> Default for OrdMap<K, V> {
+    fn default() -> Self {
+        OrdMap { entries: Vec::new() }
+    }
+}
+
+impl<K: Clone + PartialEq, V: Clone> OrdMap<K, V> {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn get(&self, key: &K) -> Option<&V> {
+        self.entries.iter().find(|(name, _)| name == key).map(|(_, value)| value)
+    }
+
+    pub fn get_mut(&mut self, key: &K) -> Option<&mut V> {
+        self.entries.iter_mut().find(|(name, _)| name == key).map(|(_, value)| value)
+    }
+
+    pub fn has(&self, key: &K) -> bool {
+        self.entries.iter().any(|(name, _)| name == key)
+    }
+
+    pub fn set(&mut self, key: K, value: V) {
+        match self.get_mut(&key) {
+            Some(slot) => *slot = value,
+            None => self.entries.push((key, value)),
+        }
+    }
+
+    pub fn remove(&mut self, key: &K) -> Option<V> {
+        let at = self.entries.iter().position(|(name, _)| name == key)?;
+        Some(self.entries.remove(at).1)
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    pub fn values(&self) -> impl Iterator<Item = &V> {
+        self.entries.iter().map(|(_, value)| value)
+    }
+
+    pub fn keys(&self) -> impl Iterator<Item = &K> {
+        self.entries.iter().map(|(key, _)| key)
     }
 }

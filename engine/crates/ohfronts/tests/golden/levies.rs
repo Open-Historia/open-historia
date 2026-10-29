@@ -1,7 +1,6 @@
 use crate::support::*;
 use ohfronts::sim::deploy::*;
 use ohfronts::sim::js::Val;
-use ohfronts::sim::manpower::*;
 use ohfronts::sim::muster::*;
 
 fn levy_val(levy: &Levy) -> Val {
@@ -55,32 +54,6 @@ fn deploy_matches_js() {
                 let options = case.arg(2);
                 let form = if options.get("form").is_undef() { Val::str("") } else { options.get("form").clone() };
                 expect(case, with_deploy_line(case.arg(0), case.arg(1), options.get("country"), options.get("way"), &form, options.get("call")))
-            }),
-        ],
-    );
-}
-
-#[test]
-fn manpower_matches_js() {
-    run(
-        "manpower",
-        &[
-            ("menPerFormation", &|case| expect(case, men_per_formation(case.arg(0)).map(num).unwrap_or(Val::Undef))),
-            ("shareOf", &|case| {
-                let state = case.arg(0);
-                let script = Script::new(case, "0.militaryOf");
-                let own = if state.get("mech").get("military").truthy() {
-                    let found = script.call(std::slice::from_ref(case.arg(1)));
-                    let share = found.get("manpowerShare");
-                    if share.is_nullish() {
-                        None
-                    } else {
-                        Some(share.num())
-                    }
-                } else {
-                    None
-                };
-                Some(expect(case, num(share_of(state.get("manpowerShare").num(), own)))?.and_then(|_| script.done()))
             }),
         ],
     );

@@ -12,6 +12,21 @@ const CASES_MOST = 300;
 const BYTES_MOST = 200000;
 const BLOB_FROM = 2000;
 
+const TROOP_PICK = { "*": { "*": { owner: 1, strength: 1 } } };
+const BATTLE_PICK = { status: 1, sides: 1, troops: TROOP_PICK, named: 1, gone: 1, mendedBy: 1, lostBy: 1, outBy: 1, harshBy: 1 };
+const RUN_PICK = {
+  input: { manpower: 1, authored: 1, peopleOf: 1, militaryOf: 1 },
+  mech: 1,
+  menEach: 1,
+  manpowerShare: 1,
+  manpower: 1,
+  mendDay: 1,
+  mendLeft: 1,
+  militaryOf: 1,
+  battles: { "*": BATTLE_PICK },
+};
+const runPicks = (names, battleAt = -1) => Object.fromEntries(names.map((name) => [name, battleAt >= 0 && name.startsWith("@") ? null : { 0: RUN_PICK, ...(battleAt >= 0 ? { [battleAt]: BATTLE_PICK } : {}) }]));
+
 const MODULES = {
   "src/runtime/unitMotion.js": { name: "unitMotion", keep: ["hashSeed"] },
   "src/runtime/gameDates.js": { name: "gameDates" },
@@ -26,7 +41,14 @@ const MODULES = {
   "src/runtime/fronts/heldRegions.js": { name: "heldRegions" },
   "src/runtime/fronts/handicap.js": { name: "handicap" },
   "src/runtime/fronts/invade.js": { name: "invade" },
-  "src/runtime/fronts/manpower.js": { name: "manpower", keep: ["menPerFormation", "shareOf"] },
+  "src/runtime/fronts/manpower.js": {
+    name: "manpower",
+    picks: {
+      ...runPicks(["menOf", "shareOf", "peopleOf", "levies", "draw", "giveBack", "servingOf", "formationsLeft", "partLeft", "mendBudget", "manpowerReport"]),
+      ...runPicks(["sideFormationsLeft", "sendHome"], 1),
+    },
+  },
+  "src/runtime/fronts/attrition.js": { name: "attrition", picks: { ...runPicks(["attritionReport"]), battleAttrition: { 0: BATTLE_PICK } } },
   "src/runtime/fronts/muster.js": { name: "muster" },
   "src/runtime/fronts/deploy.js": { name: "deploy", keep: ["readDeploy", "hasDeploy", "deployLinesOf", "withDeployLine"] },
   "src/runtime/fronts/field.js": { name: "field", factories: ["createField", "openField", "unpackField", "resampleField"], big: ["takeCapsule", "takeCells", "restoreCells", "rebuildFromHolders", "resampleField", "rebuildDistances"] },
@@ -59,7 +81,7 @@ const testFiles = () => {
 };
 
 const out = fs.mkdtempSync(path.join(os.tmpdir(), "ohfronts-golden-"));
-const config = Object.fromEntries(Object.entries(chosen).map(([file, value]) => [path.join(root, file), { name: value.name, factories: value.factories ?? [] }]));
+const config = Object.fromEntries(Object.entries(chosen).map(([file, value]) => [path.join(root, file), { name: value.name, factories: value.factories ?? [], picks: value.picks ?? {} }]));
 const run = spawnSync(process.execPath, ["--import", pathToFileURL(path.join(here, "hooks.mjs")).href, "--test", ...testFiles()], {
   cwd: root,
   env: { ...process.env, GOLDEN_OUT: out, GOLDEN_MODULES: JSON.stringify(config) },

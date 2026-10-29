@@ -122,6 +122,7 @@ const patchCallbacks = (args, sink) => {
     if (Array.isArray(value) || value instanceof Map || value instanceof Set) return;
     for (const key of Object.keys(value)) {
       const item = value[key];
+      if (item && typeof item === "object" && depth < 1) visit(item, [...where, key], depth + 1);
       if (typeof item !== "function") continue;
       const descriptor = Object.getOwnPropertyDescriptor(value, key);
       if (!descriptor || !descriptor.writable || !descriptor.configurable || Object.isFrozen(value)) continue;
@@ -166,7 +167,23 @@ const wrapCallbackArgs = (args, sink) => args.map((value, at) => {
   };
 });
 
-export const wrap = (moduleName, name, fn, factories) => {
+const picked = (value, spec, enc) => {
+  if (spec === 1 || !value || typeof value !== "object" || ArrayBuffer.isView(value)) return enc(value);
+  if (Array.isArray(value)) return spec["*"] ? value.map((item) => picked(item, spec["*"], enc)) : enc(value);
+  if (value instanceof Map) return spec["*"] ? { $: "Map", v: [...value].map(([key, item]) => [enc(key), picked(item, spec["*"], enc)]) } : enc(value);
+  if (value instanceof Set) return enc(value);
+  const out = {};
+  for (const key of Object.keys(spec)) if (key !== "*" && Object.hasOwn(value, key)) out[key] = picked(value[key], spec[key], enc);
+  return out;
+};
+
+const encodeArgs = (args, picks) => {
+  if (!picks) return encode(args);
+  const enc = encoder(null);
+  return args.map((value, at) => (picks[at] ? picked(value, picks[at], enc) : enc(value)));
+};
+
+export const wrap = (moduleName, name, fn, factories, picks = null) => {
   if (typeof fn !== "function") return fn;
   const key = `${moduleName}.${name}`;
   const factory = factories.includes(name);
@@ -193,7 +210,7 @@ export const wrap = (moduleName, name, fn, factories) => {
     let beforeText = "";
     busy += 1;
     try {
-      before = encode(args);
+      before = encodeArgs(args, picks);
       beforeText = JSON.stringify(before);
     } catch {
       before = null;
@@ -219,7 +236,7 @@ export const wrap = (moduleName, name, fn, factories) => {
     busy += 1;
     try {
       const out = { a: before, r: encode(result) };
-      const after = encode(args);
+      const after = encodeArgs(args, picks);
       if (JSON.stringify(after) !== beforeText) out.aa = after;
       const names = Object.keys(calls);
       if (names.some((callName) => calls[callName].overflow || calls[callName].length >= CALLS_MOST)) return result;

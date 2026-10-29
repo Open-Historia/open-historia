@@ -20,3 +20,8 @@ pub mod field;
 pub mod line;
 pub mod sectors;
 pub mod ground;
+pub mod attrition;
+pub mod battle;
+pub mod engine;
+pub mod swarms;
+pub mod troops;

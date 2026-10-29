@@ -29,7 +29,8 @@ export async function load(url, context, next) {
     `import * as orig from ${JSON.stringify(`${plain}?golden-orig`)};`,
     `import { wrap } from ${JSON.stringify(runtime)};`,
     `const factories = ${JSON.stringify(wanted.factories ?? [])};`,
+    `const picks = ${JSON.stringify(wanted.picks ?? {})};`,
   ];
-  for (const name of names) lines.push(`export const ${name} = wrap(${JSON.stringify(wanted.name)}, ${JSON.stringify(name)}, orig.${name}, factories);`);
+  for (const name of names) lines.push(`export const ${name} = wrap(${JSON.stringify(wanted.name)}, ${JSON.stringify(name)}, orig.${name}, factories, picks[${JSON.stringify(name)}] ?? null);`);
   return { format: "module", source: lines.join("\n"), shortCircuit: true };
 }
