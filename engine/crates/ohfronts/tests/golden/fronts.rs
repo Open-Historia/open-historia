@@ -44,6 +44,33 @@ fn maybe<T, F: Fn(&Val) -> T>(value: &Val, each: F) -> Option<T> {
     }
 }
 
+pub fn ghosts_of(play: &[u8], cols: usize, rows: usize) -> Vec<i32> {
+    let mut ghost = vec![-1i32; cols * rows];
+    for row in 0..rows {
+        for col in 0..cols {
+            let index = row * cols + col;
+            if play[index] != 0 {
+                ghost[index] = index as i32;
+                continue;
+            }
+            let on = |at: usize| play[at] != 0;
+            let (south, north, west, east) = (row > 0, row + 1 < rows, col > 0, col + 1 < cols);
+            let near = [
+                (south, index.wrapping_sub(cols)),
+                (west, index.wrapping_sub(1)),
+                (east, index + 1),
+                (north, index + cols),
+                (south && west, index.wrapping_sub(cols + 1)),
+                (south && east, (index + 1).wrapping_sub(cols)),
+                (north && west, (index + cols).wrapping_sub(1)),
+                (north && east, index + cols + 1),
+            ];
+            ghost[index] = near.iter().find(|(ok, at)| *ok && on(*at)).map(|(_, at)| *at as i32).unwrap_or(-1);
+        }
+    }
+    ghost
+}
+
 pub fn field_lite(value: &Val, speed: &Val) -> Field {
     let (cols, rows) = (value.get("cols").num(), value.get("rows").num());
     let mut shape = Obj::new();
@@ -59,6 +86,7 @@ pub fn field_lite(value: &Val, speed: &Val) -> Field {
     }
     if value.get("play").is_object() {
         field.play = bytes(value.get("play"));
+        field.ghost = ghosts_of(&field.play, field.cols, field.rows);
     }
     if value.get("phi").is_object() {
         field.phi = arg_numbers(value.get("phi"));

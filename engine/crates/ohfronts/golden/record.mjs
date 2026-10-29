@@ -110,6 +110,26 @@ const STEP_BATTLE = {
   troops: COMBAT_TROOP,
 };
 const CLOSE_BATTLE = { field: { cols: 1, rows: 1 }, frame: 1, place: 1, look: 1, lookFor: 1, sky: 1, exposure: 1, lostBy: 1, works: 1, pool: 1, edge: 1, mendOf: 1, mendedBy: 1, sides: 1, troops: COMBAT_TROOP };
+const BRIEF_BATTLE = {
+  field: PHI_FIELD,
+  frame: 1,
+  arena: { frame: 1, cols: 1, rows: 1, size: 1, region: 1, names: 1, ids: 1, cities: 1, iced: 1 },
+  startHolders: 1,
+  pool: 1,
+  sides: 1,
+  levy: 1,
+  pocketOf: 1,
+  pockets: 1,
+  taken: 1,
+  citiesTaken: 1,
+  wings: 1,
+  airMission: 1,
+  lostBy: 1,
+  sky: 1,
+  skies: 1,
+  troops: { "*": { "*": { x: 1, y: 1, strength: 1, owner: 1, fatigue: 1, command: 1, pocket: 1, dug: 1, order: { kind: 1, done: 1, word: 1, own: 1 } } } },
+};
+const RECORD_TEXT = { name: 1, status: 1, sides: 1, openedDate: 1, orders: 1, effort: 1, brief: { km: 1, strength: 1, weather: 1, attrition: 1, air: 1, frozen: 1, carry: { away: 1, under: 1 }, sectors: 1, since: 1, taken: 1, cities: 1, pockets: 1 } };
 const runPicks = (names, battleAt = -1) => Object.fromEntries(names.map((name) => [name, battleAt >= 0 && name.startsWith("@") ? null : { 0: RUN_PICK, ...(battleAt >= 0 ? { [battleAt]: BATTLE_PICK } : {}) }]));
 
 const MODULES = {
@@ -305,8 +325,15 @@ const MODULES = {
     name: "combat",
     quiet: true,
     big: ["stepForward"],
-    picks: { stepForward: { 0: STEP_BATTLE }, closeDay: { 0: CLOSE_BATTLE } },
+    picks: { stepForward: { 0: STEP_BATTLE, when: "args[0].troops.some((list) => list.some((troop) => troop.stepping && troop.strength > 0))" }, closeDay: { 0: CLOSE_BATTLE } },
   },
+  "src/runtime/fronts/brief.js": {
+    name: "brief",
+    quiet: true,
+    big: ["buildBrief"],
+    picks: { buildBrief: { 0: BRIEF_BATTLE }, describeSince: { 0: RECORD_TEXT }, describeBattlefield: { 0: RECORD_TEXT } },
+  },
+  "src/runtime/fronts/record.js": { name: "record", quiet: true },
   "src/runtime/fronts/scenarioFronts.js": { name: "scenarioFronts" },
   "src/runtime/fronts/climate.js": { name: "climate", picks: climatePicks(["zonesOver", "zonesToday"]) },
   "src/runtime/fronts/weather.js": { name: "weather", picks: climatePicks(["skyOver", "skiesAhead"]) },

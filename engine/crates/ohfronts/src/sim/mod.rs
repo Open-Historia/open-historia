@@ -43,3 +43,6 @@ pub mod scenario_fronts;
 pub mod dawn;
 pub mod supply;
 pub mod combat;
+pub mod brief;
+pub mod letters;
+pub mod record;

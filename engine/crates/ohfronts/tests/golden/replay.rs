@@ -29,6 +29,26 @@ fn bytes(value: &Val) -> Option<Vec<u8>> {
     }
 }
 
+pub fn read_val(read: &Read) -> Val {
+    Val::obj([
+        ("date", read.date.clone()),
+        ("days", read.days.clone()),
+        ("start", read.start.clone()),
+        ("end", read.end.clone()),
+        ("tracks", list(read.tracks.iter().map(|side| list(side.iter().map(|s| samples_val(s)).collect())).collect())),
+        (
+            "paint",
+            Val::obj([
+                ("names", read.names.clone()),
+                ("began", u8s(read.began.clone())),
+                ("ticks", Val::Typed(Typed::U32(read.paint.ticks.clone()))),
+                ("cells", Val::Typed(Typed::U16(read.paint.cells.clone()))),
+                ("states", u8s(read.paint.states.clone())),
+            ]),
+        ),
+    ])
+}
+
 fn samples_val(samples: &[Sample]) -> Val {
     list(samples.iter().map(|s| Val::obj([("day", num(s.day)), ("x", num(s.x)), ("y", num(s.y)), ("strength", num(s.strength)), ("state", num(s.state as f64))])).collect())
 }
@@ -88,26 +108,7 @@ fn replay_matches_js() {
             ("shownOwnersAt", &|case| expect(case, shown_owners_at(case.arg(0), case.arg(1).num()).map(Val::Obj).unwrap_or(Val::Null))),
             ("replayDayOn", &|case| expect(case, replay_day_on(case.arg(0), case.arg(1)).map(num).unwrap_or(Val::Null))),
             ("replayOf", &|case| {
-                let got = match replay_of(case.arg(0)) {
-                    Some(read) => Val::obj([
-                        ("date", read.date.clone()),
-                        ("days", read.days.clone()),
-                        ("start", read.start.clone()),
-                        ("end", read.end.clone()),
-                        ("tracks", list(read.tracks.iter().map(|side| list(side.iter().map(|s| samples_val(s)).collect())).collect())),
-                        (
-                            "paint",
-                            Val::obj([
-                                ("names", read.names.clone()),
-                                ("began", u8s(read.began.clone())),
-                                ("ticks", Val::Typed(Typed::U32(read.paint.ticks.clone()))),
-                                ("cells", Val::Typed(Typed::U16(read.paint.cells.clone()))),
-                                ("states", u8s(read.paint.states.clone())),
-                            ]),
-                        ),
-                    ]),
-                    None => Val::Null,
-                };
+                let got = replay_of(case.arg(0)).as_ref().map(read_val).unwrap_or(Val::Null);
                 expect(case, got)
             }),
             ("replayWindowOf", &|case| expect(case, replay_window_of(case.arg(0)).map(|(from, until)| Val::obj([("from", from), ("until", until)])).unwrap_or(Val::Null))),

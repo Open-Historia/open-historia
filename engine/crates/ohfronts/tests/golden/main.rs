@@ -32,3 +32,5 @@ mod scenario_fronts;
 mod dawn;
 mod supply;
 mod combat;
+mod brief;
+mod record;
