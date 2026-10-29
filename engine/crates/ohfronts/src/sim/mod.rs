@@ -56,3 +56,4 @@ pub mod orders;
 pub mod movement;
 pub mod accents;
 pub mod plans;
+pub mod war_room_ops;

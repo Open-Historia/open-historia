@@ -1174,5 +1174,5 @@ pub fn with_watch(record: &Val, side: &Val, plans: &Val, since: &Val) -> Val {
         Val::Undef | Val::Null => text(""),
         other => other.clone(),
     };
-    order_troops(&next, &OrderAsk { side, troops: &picked_val(&picked), order: &text("dig in"), objective: &Val::Undef, way: &Val::Undef, by: &by, since, mark: &text(WATCH_MARK) })
+    order_troops(&next, &OrderAsk { side, troops: &picked_val(&picked), order: &text("dig in"), objective: &text(""), way: &Val::Null, by: &by, since, mark: &text(WATCH_MARK) })
 }

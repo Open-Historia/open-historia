@@ -482,6 +482,7 @@ const MODULES = {
       withWatch: { 0: PLAN_RECORD, result: PLAN_RECORD },
     },
   },
+  "src/runtime/fronts/warRoomOps.js": { name: "warRoomOps", quiet: true, most: 60, bytes: { default: 300000, cleanWarRoomOp: 30000 } },
   "src/runtime/fronts/scenarioFronts.js": { name: "scenarioFronts" },
   "src/runtime/fronts/climate.js": { name: "climate", picks: climatePicks(["zonesOver", "zonesToday"]) },
   "src/runtime/fronts/weather.js": { name: "weather", picks: climatePicks(["skyOver", "skiesAhead"]) },
