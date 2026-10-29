@@ -48,8 +48,8 @@ const until = async (check, ms) => {
   return check();
 };
 
-const session = async (label, { provisional = false, post = true, wait = 45_000 } = {}) => {
-  const child = spawn(helper, ["--serve"], { stdio: ["pipe", "pipe", "pipe"] });
+const session = async (label, { provisional = false, post = true, wait = 45_000, exe = helper, id = notifyKit.MAC_NOTIFIER_ID } = {}) => {
+  const child = spawn(exe, ["--serve"], { stdio: ["pipe", "pipe", "pipe"] });
   const waiters = new Map();
   let ready = null;
   let stderr = "";
@@ -71,7 +71,7 @@ const session = async (label, { provisional = false, post = true, wait = 45_000 
     child.stdin.write(`${JSON.stringify(provisional ? { ...body, provisional } : body)}\n`);
   });
   need(await until(() => ready, 15_000), `${label}: the notifier starts and says it is ready`);
-  need(ready?.bundle === notifyKit.MAC_NOTIFIER_ID, `${label}: it runs under its own bundle id`);
+  need(ready?.bundle === id, `${label}: it runs under its own bundle id`);
   const setting = await request({ op: "setting", seq: 1 }, wait);
   log(`${label} permission: ${setting ? JSON.stringify(setting) : `no answer in ${wait / 1000} s (the permission prompt is waiting for a person)`}`);
   need(setting === null || ["Enabled", "Disabled", "Unknown"].includes(setting.setting), `${label}: the permission answer is one the game reads`);
@@ -95,18 +95,26 @@ const session = async (label, { provisional = false, post = true, wait = 45_000 
 
 const usernotedSince = (minutes) => {
   const found = tool("/usr/bin/log", ["show", "--last", `${minutes}m`, "--style", "compact", "--predicate", `subsystem == "com.apple.UserNotifications" OR process == "usernoted"`], { timeout: 90_000 });
-  return found.text.split("\n").filter((line) => line.includes(notifyKit.MAC_NOTIFIER_ID) && /permission|Delivering|Presenting|not allowed|authoriz|Adding|request/i.test(line));
+  return found.text.split("\n").filter((line) => line.includes("openhistoria") && /permission|Delivering|Presenting|not allowed|authoriz|Adding|request|processed|scheduled/i.test(line));
 };
 
-const asked = await session("first run", { post: false, wait: 20_000 });
-const prompt = usernotedSince(2);
-log(`usernoted:\n${prompt.slice(-12).join("\n")}`);
-need(asked.setting?.setting === "Enabled" || prompt.some((line) => /Sending request for permission/.test(line)), "the first run asks the person for permission (usernoted shows the prompt)");
 const quiet = await session("provisional permission", { provisional: true });
-need(quiet.setting?.setting === "Enabled" && quiet.shown?.shown === true, "with permission granted (quietly, as a headless runner allows), the notification is posted");
+need(quiet.setting?.setting === "Enabled" && quiet.shown?.shown === true && !quiet.shown?.error, "with permission granted (quietly, as a headless runner allows), the notification is posted without an error");
 const delivered = usernotedSince(2);
 log(`usernoted:\n${delivered.slice(-12).join("\n")}`);
-need(delivered.some((line) => /oh-ci-smoke|Delivering|Adding/i.test(line)), "usernoted takes the notification");
+need(delivered.some((line) => line.includes(`app:"${notifyKit.MAC_NOTIFIER_ID}"`) && /scheduled for delivery|Delivering|processed/i.test(line)), "usernoted takes the notification under the notifier's own id");
+
+const promptId = `${notifyKit.MAC_NOTIFIER_ID}.promptcheck`;
+const promptBundle = path.join(path.dirname(app), "prompt-check", notifyKit.MAC_NOTIFIER_APP);
+fs.rmSync(path.dirname(promptBundle), { recursive: true, force: true });
+need(tool("/usr/bin/ditto", [bundle, promptBundle]).ok, "a copy of the notifier with a fresh bundle id is made for the first-run check");
+tool("/usr/libexec/PlistBuddy", ["-c", `Set :CFBundleIdentifier ${promptId}`, path.join(promptBundle, "Contents", "Info.plist")]);
+need(tool("/usr/bin/codesign", ["--force", "--sign", "-", "--identifier", promptId, promptBundle]).ok, "the copy is signed ad hoc like the shipped one");
+const asked = await session("first run", { post: false, wait: 20_000, exe: path.join(promptBundle, "Contents", "MacOS", notifyKit.MAC_NOTIFIER_EXE), id: promptId });
+const prompt = usernotedSince(2).filter((line) => line.includes(promptId));
+log(`usernoted:\n${prompt.slice(-8).join("\n")}`);
+need(prompt.some((line) => /Sending request for permission/.test(line)) && prompt.some((line) => /Presenting .*askpermissions|askpermissions.*Presenting|Presenting/.test(line)), "the first run asks the person for permission (usernoted presents the prompt)");
+fs.rmSync(path.dirname(promptBundle), { recursive: true, force: true });
 
 const clicked = tool("/usr/bin/open", ["-W", "-n", bundle], { timeout: 40_000 });
 need(clicked.ok, `opened the way a click opens it, the notifier quits on its own (${clicked.status}${clicked.text ? `: ${clicked.text}` : ""})`);
