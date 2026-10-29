@@ -76,6 +76,7 @@ static func font(weight := 400, family := "Arial", spacing := 0) -> Font:
 	system.antialiasing = TextServer.FONT_ANTIALIASING_GRAY
 	system.hinting = TextServer.HINTING_LIGHT
 	system.subpixel_positioning = TextServer.SUBPIXEL_POSITIONING_AUTO
+	system.fallbacks = [emoji_font()]
 	var result: Font = system
 	if spacing != 0:
 		var variation := FontVariation.new()
@@ -84,6 +85,17 @@ static func font(weight := 400, family := "Arial", spacing := 0) -> Font:
 		result = variation
 	_fonts[key] = result
 	return result
+
+
+static func emoji_font() -> Font:
+	if _fonts.has("emoji"):
+		return _fonts["emoji"]
+	var emoji := SystemFont.new()
+	emoji.font_names = PackedStringArray(["Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", "Twemoji", "Segoe UI Symbol"])
+	emoji.antialiasing = TextServer.FONT_ANTIALIASING_GRAY
+	emoji.subpixel_positioning = TextServer.SUBPIXEL_POSITIONING_AUTO
+	_fonts["emoji"] = emoji
+	return emoji
 
 
 static func label(text: String, size := 14, color := INK, weight := 400, family := "Arial", spacing := 0) -> Label:
