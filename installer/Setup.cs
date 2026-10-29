@@ -247,21 +247,44 @@ namespace OpenHistoriaSetup
 		{
 			try
 			{
-				var godot = Path.GetFullPath(Path.Combine(folder, "runtime", "Open Historia.exe"));
+				var godot = LongPath(Path.GetFullPath(Path.Combine(folder, "runtime", "Open Historia.exe")));
 				var arguments = LaunchArguments(folder);
 				var shellType = Type.GetTypeFromProgID("WScript.Shell");
 				var shell = Activator.CreateInstance(shellType);
-				foreach (var place in new[] { Environment.GetFolderPath(Environment.SpecialFolder.Programs), Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory) })
+				var files = new List<string>();
+				var places = Environment.GetEnvironmentVariable("OH_NATIVE_SHORTCUT_DIRS");
+				if (!string.IsNullOrEmpty(places))
 				{
-					var file = Path.Combine(place, AppName + ".lnk");
-					if (!File.Exists(file)) continue;
-					var link = shellType.InvokeMember("CreateShortcut", BindingFlags.InvokeMethod, null, shell, new object[] { file });
-					var linkType = link.GetType();
-					var pointsAt = (string)linkType.InvokeMember("TargetPath", BindingFlags.GetProperty, null, link, null);
-					if (string.IsNullOrEmpty(pointsAt) || !string.Equals(Path.GetFullPath(pointsAt), godot, StringComparison.OrdinalIgnoreCase)) continue;
-					if ((string)linkType.InvokeMember("Arguments", BindingFlags.GetProperty, null, link, null) == arguments) continue;
-					linkType.InvokeMember("Arguments", BindingFlags.SetProperty, null, link, new object[] { arguments });
-					linkType.InvokeMember("Save", BindingFlags.InvokeMethod, null, link, null);
+					foreach (var place in places.Split(';'))
+					{
+						if (Directory.Exists(place)) files.AddRange(Directory.GetFiles(place, "*.lnk"));
+					}
+				}
+				else
+				{
+					foreach (var place in new[] { Environment.GetFolderPath(Environment.SpecialFolder.Programs), Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory) })
+					{
+						files.Add(Path.Combine(place, AppName + ".lnk"));
+					}
+					var pinned = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Microsoft", "Internet Explorer", "Quick Launch", "User Pinned", "TaskBar");
+					if (Directory.Exists(pinned)) files.AddRange(Directory.GetFiles(pinned, "*.lnk"));
+				}
+				foreach (var file in files)
+				{
+					try
+					{
+						if (!File.Exists(file)) continue;
+						var link = shellType.InvokeMember("CreateShortcut", BindingFlags.InvokeMethod, null, shell, new object[] { file });
+						var linkType = link.GetType();
+						var pointsAt = (string)linkType.InvokeMember("TargetPath", BindingFlags.GetProperty, null, link, null);
+						if (string.IsNullOrEmpty(pointsAt) || !string.Equals(LongPath(Path.GetFullPath(pointsAt)), godot, StringComparison.OrdinalIgnoreCase)) continue;
+						if ((string)linkType.InvokeMember("Arguments", BindingFlags.GetProperty, null, link, null) == arguments) continue;
+						linkType.InvokeMember("Arguments", BindingFlags.SetProperty, null, link, new object[] { arguments });
+						linkType.InvokeMember("Save", BindingFlags.InvokeMethod, null, link, null);
+					}
+					catch (Exception)
+					{
+					}
 				}
 			}
 			catch (Exception)
