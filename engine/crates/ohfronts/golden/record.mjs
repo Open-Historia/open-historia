@@ -130,6 +130,32 @@ const BRIEF_BATTLE = {
   troops: { "*": { "*": { x: 1, y: 1, strength: 1, owner: 1, fatigue: 1, command: 1, pocket: 1, dug: 1, order: { kind: 1, done: 1, word: 1, own: 1 } } } },
 };
 const RECORD_TEXT = { name: 1, status: 1, sides: 1, openedDate: 1, orders: 1, effort: 1, brief: { km: 1, strength: 1, weather: 1, attrition: 1, air: 1, frozen: 1, carry: { away: 1, under: 1 }, sectors: 1, since: 1, taken: 1, cities: 1, pockets: 1 } };
+const POLICY_PICKS = {
+  0: {
+    ...FEATURE_HOME,
+    name: 1,
+    status: 1,
+    gone: 1,
+    lineKm: 1,
+    pool: 1,
+    daysRun: 1,
+    quality: 1,
+    edge: 1,
+    frame: 1,
+    mind: 1,
+    field: { cols: 1, rows: 1, size: 1, holders: 1, play: 1, phi: 1 },
+    arena: { cities: 1, names: 1, centreX: 1, centreY: 1, region: 1, ids: 1 },
+    wallMask: 1,
+    walls: { cellLine: 1 },
+    wallRun: { lines: 1 },
+    levy: 1,
+    wings: { holds: 1, superiority: 1 },
+    sky: { effects: 1 },
+    troops: troopsPick(["x", "y", "strength", "kind", "supply", "punch", "pocket", "state", "dug", "order", "fatigue", "climate"]),
+  },
+  2: { began: 1, key: 1, today: { line: { contour: { x: 1, y: 1 }, count: 1 }, sectors: 1 } },
+  3: { battles: { "*": { ...FEATURE_HOME, name: 1, status: 1, gone: 1, lineKm: 1 } } },
+};
 const runPicks = (names, battleAt = -1) => Object.fromEntries(names.map((name) => [name, battleAt >= 0 && name.startsWith("@") ? null : { 0: RUN_PICK, ...(battleAt >= 0 ? { [battleAt]: BATTLE_PICK } : {}) }]));
 
 const MODULES = {
@@ -344,6 +370,16 @@ const MODULES = {
   "src/runtime/fronts/fortifyOps.js": { name: "fortifyOps", picks: { applyFortifyOp: { calls: ["2.chart.holds"] } } },
   "src/runtime/fronts/engineer.js": { name: "engineer", big: ["engineerLines", "frontLineFor"], picks: { frontLineFor: { calls: [] }, engineerLines: { calls: ["1.chart.holds"] } } },
   "src/runtime/fronts/view.js": { name: "view", quiet: true },
+  "src/runtime/fronts/mind/net.js": { name: "mindNet", most: 100, bytes: 900000 },
+  "src/runtime/fronts/mind/policy.js": {
+    name: "mindPolicy",
+    most: 40,
+    bytes: 3000000,
+    picks: {
+      createStaffPolicy: { rc: POLICY_PICKS, rcMost: 2 },
+      createTroopPolicy: { rc: POLICY_PICKS, rcMost: 2 },
+    },
+  },
   "src/runtime/fronts/scenarioFronts.js": { name: "scenarioFronts" },
   "src/runtime/fronts/climate.js": { name: "climate", picks: climatePicks(["zonesOver", "zonesToday"]) },
   "src/runtime/fronts/weather.js": { name: "weather", picks: climatePicks(["skyOver", "skiesAhead"]) },
@@ -351,7 +387,8 @@ const MODULES = {
 
 const CHANGED = new Set(Object.values(MODULES).flatMap((value) => (value.changed ?? []).map((fn) => `${value.name}.${fn}`)));
 const BIG = new Set(Object.values(MODULES).flatMap((value) => (value.big ?? []).map((fn) => `${value.name}.${fn}`)));
-const budgetOf = (key) => (BIG.has(key) ? BYTES_MOST * 4 : BYTES_MOST);
+const OWN_BYTES = new Map(Object.values(MODULES).filter((value) => value.bytes).map((value) => [value.name, value.bytes]));
+const budgetOf = (key) => OWN_BYTES.get(key.split(".")[0]) ?? (BIG.has(key) ? BYTES_MOST * 4 : BYTES_MOST);
 
 const only = process.argv.slice(2);
 const chosen = Object.fromEntries(Object.entries(MODULES).filter(([, value]) => only.length === 0 || only.includes(value.name)));
@@ -427,7 +464,7 @@ const shapeOf = (value, depth = 0) => {
   return typeof value;
 };
 
-const pick = (all, most, name) => {
+const pick = (all, most, name, count = CASES_MOST) => {
   const fitting = all.filter((item) => item.size <= most / 3);
   const groups = new Map();
   for (const item of fitting) {
@@ -445,10 +482,10 @@ const pick = (all, most, name) => {
   });
   const picked = [];
   let bytes = 0;
-  for (let round = 0; picked.length < CASES_MOST; round += 1) {
+  for (let round = 0; picked.length < count; round += 1) {
     let any = false;
     for (const list of order) {
-      if (round >= list.length || picked.length >= CASES_MOST) continue;
+      if (round >= list.length || picked.length >= count) continue;
       any = true;
       const item = list[round];
       if (bytes + item.size > most && picked.length >= 12) continue;
@@ -467,7 +504,7 @@ for (const value of Object.values(chosen)) {
   for (const [key, entry] of [...gathered].sort(([a], [b]) => (a < b ? -1 : 1))) {
     const [moduleName, fn] = key.split(".");
     if (moduleName !== value.name || (value.keep && !value.keep.includes(fn))) continue;
-    cases[fn] = pick(entry.cases, budgetOf(key), key).map((item) => item.item);
+    cases[fn] = pick(entry.cases, budgetOf(key), key, value.most ?? CASES_MOST).map((item) => item.item);
   }
   const blobs = [];
   const blobIndex = new Map();

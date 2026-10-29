@@ -156,6 +156,7 @@ pub struct Battle {
     pub exposure: Option<[f64; 2]>,
     pub mend_of: bool,
     pub look: Option<f64>,
+    pub mind: Val,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -296,6 +297,7 @@ pub fn create_battle(run: &Run, opening: Opening) -> Battle {
         exposure: None,
         mend_of: false,
         look: None,
+        mind: Val::Undef,
     }
 }
 

@@ -28,6 +28,8 @@ mod swarms;
 mod way;
 mod mind_troops;
 mod mind_features;
+mod mind_net;
+mod mind_policy;
 mod scenario_fronts;
 mod dawn;
 mod supply;
