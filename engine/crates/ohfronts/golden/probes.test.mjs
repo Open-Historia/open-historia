@@ -22,6 +22,7 @@ import { breakthroughAnswer, spearheadsOf, staffDecision, troopWorth } from "../
 import { give, legsOf, waysFor } from "../../../../../src/runtime/fronts/way.js";
 import { troopView } from "../../../../../src/runtime/fronts/mind/troops.js";
 import { drawIn, findPrey } from "../../../../../src/runtime/fronts/closing.js";
+import { groundOf, homeTableOf, staffFeatures } from "../../../../../src/runtime/fronts/mind/features.js";
 import { runFronts } from "../../../../../src/runtime/fronts/engine.js";
 import { frontInput } from "../../../../../src/runtime/fronts/syntheticMap.js";
 
@@ -333,9 +334,19 @@ test("golden probes for swarms, a staff's sums and ways", () => {
 test("golden probes for a thrust: what a staff sees and what closes on a pocket", () => {
   const legend2 = { A: "Aland", B: "Borduria" };
   const world = syntheticMap({ layout: Array.from({ length: 10 }, () => "AAAAAAAABBBBBBBB"), legend: legend2, west: 20, north: 53, step: 0.5, stepLat: 0.3, key: "golden-thrust" });
-  const seen = { heads: 0, prey: 0, drawn: 0, views: 0 };
+  const seen = { heads: 0, prey: 0, drawn: 0, views: 0, looks: 0 };
   let lastSize = 0;
-  const policy = (battle, side) => {
+  const memory = [null, null];
+  const policy = (battle, side, context, run) => {
+    if (battle.daysRun % 4 === side && seen.looks < 12) {
+      seen.looks += 1;
+      memory[side] = staffFeatures(battle, side, context, seen.looks % 3 === 0 ? null : run, memory[side]).seen;
+      staffDecision(battle, side, context);
+      if (seen.looks < 4) {
+        homeTableOf(battle, run);
+        groundOf(battle, side, run);
+      }
+    }
     if (spearheadsOf(battle, side).length > 0 && seen.heads < 12) {
       seen.heads += 1;
       breakthroughAnswer(battle, side);
