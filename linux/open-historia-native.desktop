@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Open Historia Native
+GenericName=Grand strategy game
+Comment=A native build of Open Historia. Super experimental.
+Exec="@LAUNCHER@"
+Icon=@ICON@
+Terminal=false
+Categories=Game;StrategyGame;

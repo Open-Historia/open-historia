@@ -11,7 +11,7 @@ export const IMAGE_CODEC_SOURCES = ["ImageCodec.cs", "Sequence.cs"].map((name) =
 export const IMAGE_CODEC_EXE = "oh-imagecodec.exe";
 export const IMAGE_CODEC_MAC = "oh-imagecodec";
 export const IMAGE_CODEC_SWIFT = path.join(codecDir, "ImageCodec.swift");
-const SHIPPED = path.join(codecDir, process.platform === "darwin" ? IMAGE_CODEC_MAC : IMAGE_CODEC_EXE);
+const SHIPPED = path.join(codecDir, process.platform === "darwin" || process.platform === "linux" ? IMAGE_CODEC_MAC : IMAGE_CODEC_EXE);
 const REQUEST_MS = 60_000;
 const IDLE_MS = 5 * 60_000;
 const NO_WINDOWS = "AVIF images are read with Windows imaging, which this system does not have.";
@@ -105,6 +105,10 @@ const compile = (cacheDir) => {
   if (built) return built;
   built = (async () => {
     if (process.platform === "darwin") return compileMac(cacheDir);
+    if (process.platform === "linux") {
+      if (fs.existsSync(SHIPPED)) return SHIPPED;
+      throw codecError(NO_MAC_READER, true);
+    }
     if (process.platform !== "win32") throw codecError(NO_WINDOWS, true);
     if (fs.existsSync(SHIPPED)) return SHIPPED;
     if (!IMAGE_CODEC_SOURCES.every((file) => fs.existsSync(file))) throw codecError(NO_WINDOWS, true);
@@ -252,7 +256,7 @@ export const convertAvif = async ({ bytes = null, file = "", cacheDir }) => {
         return { png, sha, width, height, frames: names.map((name) => path.join(dir, name)), durations, loops, cached: false };
       }
       if (status === "missing" && isAvif(buffer)) {
-        missing = process.platform === "darwin" ? NO_MAC_CODEC : NO_CODEC;
+        missing = process.platform === "darwin" ? NO_MAC_CODEC : process.platform === "linux" ? NO_MAC_READER : NO_CODEC;
         throw codecError(missing, true);
       }
       const message = rest.join(" ").trim() || "The image could not be read.";

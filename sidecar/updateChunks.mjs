@@ -97,7 +97,7 @@ export const packOf = (file) => {
 export const normalPath = (file) => String(file).replace(/\\/g, "/").replace(/^\.?\//, "");
 
 export const chunkAssetName = (id) => `c-${String(id).slice(0, 40)}.bin`;
-export const PLATFORM_PREFIXES = Object.freeze({ macos: "mac-" });
+export const PLATFORM_PREFIXES = Object.freeze({ macos: "mac-", linux: "linux-" });
 export const MAC_SHELL_KEY = "OHNativeShell";
 export const platformPrefix = (platform) => (Object.hasOwn(PLATFORM_PREFIXES, String(platform ?? "")) ? PLATFORM_PREFIXES[platform] : "");
 export const manifestAssetName = (hash, platform = "") => `${platformPrefix(platform)}m-${String(hash).slice(0, 40)}.json`;

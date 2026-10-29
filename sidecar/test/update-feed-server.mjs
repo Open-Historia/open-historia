@@ -21,10 +21,11 @@ export const startFeedServer = ({ dir, port = 0, log = () => {}, pause = 0 } = {
       res.end(JSON.stringify(knobs));
       return;
     }
-    const feedName = url.pathname === "/native-latest.json" || url.pathname === "/native-latest-mac.json" ? url.pathname.slice(1) : "";
+    const downloads = { "native-latest.json": "Open-Historia-Native-Setup.exe", "native-latest-mac.json": "Open-Historia-Native-macOS.zip", "native-latest-linux.json": "Open-Historia-Native-Linux-x86_64.tar.gz" };
+    const feedName = Object.hasOwn(downloads, url.pathname.slice(1)) ? url.pathname.slice(1) : "";
     if (feedName && fs.existsSync(path.join(knobs.dir, feedName))) {
       const feed = JSON.parse(fs.readFileSync(path.join(knobs.dir, feedName), "utf8"));
-      feed.url = `${base}/setup/${feedName === "native-latest-mac.json" ? "Open-Historia-Native-macOS.zip" : "Open-Historia-Native-Setup.exe"}`;
+      feed.url = `${base}/setup/${downloads[feedName]}`;
       if (feed.chunks) feed.chunks.base = `${base}/chunks/`;
       res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
       res.end(JSON.stringify(feed));
@@ -32,7 +33,7 @@ export const startFeedServer = ({ dir, port = 0, log = () => {}, pause = 0 } = {
     }
     let file = "";
     let name = "";
-    if (url.pathname === "/setup/Open-Historia-Native-Setup.exe" || url.pathname === "/setup/Open-Historia-Native-macOS.zip") {
+    if (Object.values(downloads).some((name) => url.pathname === `/setup/${name}`)) {
       file = path.join(knobs.dir, path.basename(url.pathname));
       name = "setup";
     } else {

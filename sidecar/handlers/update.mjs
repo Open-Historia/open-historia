@@ -22,6 +22,11 @@ export const NATIVE_MAC_MANIFEST_NAME = "native-latest-mac.json";
 export const NATIVE_MAC_UPDATE_MANIFEST = `${NATIVE_RELEASE_BASE}/${NATIVE_MAC_MANIFEST_NAME}`;
 export const NATIVE_MAC_ZIP_URL = `${NATIVE_RELEASE_BASE}/${NATIVE_MAC_ZIP_NAME}`;
 export const MAC_UPDATER = "native/sidecar/macUpdater.mjs";
+export const NATIVE_LINUX_ARCHIVE_NAME = "Open-Historia-Native-Linux-x86_64.tar.gz";
+export const NATIVE_LINUX_MANIFEST_NAME = "native-latest-linux.json";
+export const NATIVE_LINUX_UPDATE_MANIFEST = `${NATIVE_RELEASE_BASE}/${NATIVE_LINUX_MANIFEST_NAME}`;
+export const NATIVE_LINUX_ARCHIVE_URL = `${NATIVE_RELEASE_BASE}/${NATIVE_LINUX_ARCHIVE_NAME}`;
+export const LINUX_UPDATER = "native/sidecar/linuxUpdater.mjs";
 export const INSTALL_MARKER = ".oh-native-install";
 export const LAUNCH_CHECK_TIMEOUT_MS = 6000;
 export const LAUNCH_FAILURE_LIMIT = 2;
@@ -58,7 +63,7 @@ const remove = (target) => {
 
 export const isLoopbackUrl = (value) => LOOPBACK.test(text(value));
 
-export const feedPlatformFor = (platform = process.platform) => (platform === "darwin" ? "macos" : "windows");
+export const feedPlatformFor = (platform = process.platform) => (platform === "darwin" ? "macos" : platform === "linux" ? "linux" : "windows");
 
 export const feedPlatformOf = (raw) => text(raw?.platform).toLowerCase() || "windows";
 
@@ -67,6 +72,7 @@ export const manifestUrlFor = (env = process.env, platform = process.platform) =
   if (override) return isLoopbackUrl(override) ? override : "";
   if (env.OH_STANDIN_MODEL === "1") return "";
   if (platform === "darwin") return NATIVE_MAC_UPDATE_MANIFEST;
+  if (platform === "linux") return NATIVE_LINUX_UPDATE_MANIFEST;
   return NATIVE_UPDATE_MANIFEST;
 };
 
@@ -187,9 +193,11 @@ export const createUpdater = ({
   waitPids = [process.pid, process.ppid],
 }) => {
   const mac = platform === "darwin";
+  const linux = platform === "linux";
+  const scripted = mac || linux;
   const feedPlatform = feedPlatformFor(platform);
-  const updaterName = mac ? "updater.mjs" : "updater.exe";
-  const bundle = mac ? macBundleOf(installRoot) : "";
+  const updaterName = scripted ? "updater.mjs" : "updater.exe";
+  const bundle = mac ? macBundleOf(installRoot) : linux && installRoot ? path.resolve(installRoot) : "";
   const macWritable = () => {
     if (!bundle || bundle.split(path.sep).join("/").includes("/AppTranslocation/")) return false;
     try {
@@ -201,7 +209,7 @@ export const createUpdater = ({
   };
   const holderOk = (holder) => Boolean(bundle) && path.dirname(holder) === path.dirname(bundle) && /^\.oh-(?:previous|update|failed)-[\w-]+$/.test(path.basename(holder));
   const dropPrevious = (dir) => {
-    if (!mac) return;
+    if (!scripted) return;
     let holder = "";
     try {
       holder = text(fs.readFileSync(path.join(dir, "previous-app"), "utf8"));
@@ -232,7 +240,7 @@ export const createUpdater = ({
   let rolledBack = "";
 
   const canInstall = () => {
-    if (!supported || !installRoot || (platform !== "win32" && !(mac && macWritable()))) return false;
+    if (!supported || !installRoot || (platform !== "win32" && !(scripted && macWritable()))) return false;
     return exists(path.join(installRoot, INSTALL_MARKER));
   };
   const dismissed = () => {
@@ -262,7 +270,7 @@ export const createUpdater = ({
     available: available(),
     staged: ready.kind === "staged" ? ready.build : "",
     dismissed: dismissed(),
-    downloadUrl: latest?.url || (mac ? NATIVE_MAC_ZIP_URL : NATIVE_SETUP_URL),
+    downloadUrl: latest?.url || (mac ? NATIVE_MAC_ZIP_URL : linux ? NATIVE_LINUX_ARCHIVE_URL : NATIVE_SETUP_URL),
     justUpdated,
     rolledBack,
     pendingRollback: pendingRollback ? pendingRollback.build : "",
@@ -444,7 +452,7 @@ export const createUpdater = ({
 
   const fetchSetup = async (target) => {
     const folder = path.join(setupDir, target.build);
-    const file = path.join(folder, mac ? NATIVE_MAC_ZIP_NAME : NATIVE_SETUP_NAME);
+    const file = path.join(folder, mac ? NATIVE_MAC_ZIP_NAME : linux ? NATIVE_LINUX_ARCHIVE_NAME : NATIVE_SETUP_NAME);
     if (await verified(file, target)) return file;
     try {
       for (const name of fs.readdirSync(setupDir)) if (name !== target.build) remove(path.join(setupDir, name));
@@ -778,7 +786,7 @@ export const createUpdater = ({
   const rememberInstall = (target) => writeRecord(installedRecordFile, { build: target.build, version: text(target.version), notes: text(target.notes), at: new Date(now()).toISOString() });
 
   const start = async (file, args, cwd) => {
-    const child = mac
+    const child = scripted
       ? spawnImpl(nodePath, [file, ...args, "--wait", waitPids.filter((pid) => Number.isSafeInteger(pid) && pid > 1).join(",")], { cwd, detached: true, stdio: "ignore" })
       : spawnImpl(file, args, { cwd, detached: true, stdio: "ignore" });
     await new Promise((resolve, reject) => {
@@ -793,7 +801,7 @@ export const createUpdater = ({
     if (status.state !== "ready" || !ready.build || ready.build !== status.build) throw new Error("No downloaded update is ready to install.");
     if (!canInstall()) throw new Error("This copy of the game was not installed by its installer, so it cannot replace itself.");
     const target = ready.target && ready.target.build === ready.build ? ready.target : null;
-    if (mac && applied && !pendingRollback) {
+    if (scripted && applied && !pendingRollback) {
       try {
         fs.writeFileSync(path.join(applied.dir, "confirmed"), current.build);
       } catch {
@@ -807,7 +815,7 @@ export const createUpdater = ({
         set({ state: "error", error: "The downloaded update is no longer complete, so it was not applied." });
         throw new Error(status.error);
       }
-      const updaterFile = mac ? MAC_UPDATER : UPDATER_EXE;
+      const updaterFile = mac ? MAC_UPDATER : linux ? LINUX_UPDATER : UPDATER_EXE;
       const staged = path.join(dir, "files", ...updaterFile.split("/"));
       const source = exists(staged) ? staged : path.join(installRoot, ...updaterFile.split("/"));
       const updater = path.join(dir, updaterName);
@@ -839,15 +847,15 @@ export const createUpdater = ({
     rememberInstall(target);
     const args = ["--update", installRoot];
     let program = ready.file;
-    if (mac) {
+    if (scripted) {
       program = path.join(path.dirname(ready.file), updaterName);
       try {
-        fs.copyFileSync(path.join(installRoot, ...MAC_UPDATER.split("/")), program);
+        fs.copyFileSync(path.join(installRoot, ...(mac ? MAC_UPDATER : LINUX_UPDATER).split("/")), program);
       } catch (error) {
         set({ state: "error", error: `The updater could not be prepared: ${reasonOf(error)}.` });
         throw new Error(status.error);
       }
-      args.push("--zip", ready.file);
+      args.push(mac ? "--zip" : "--archive", ready.file);
     }
     if (!relaunch) args.push("--no-relaunch");
     try {

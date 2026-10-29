@@ -24,9 +24,13 @@ const readAssets = (file) => {
 
 const cliArgs = process.argv.slice(2);
 const mac = cliArgs.includes("--mac");
+const linux = cliArgs.includes("--linux");
+if (mac && linux) fail(["choose --mac or --linux, not both"]);
 const TARGET = mac
   ? { platform: "macos", feedName: update.NATIVE_MAC_MANIFEST_NAME, assetName: update.NATIVE_MAC_ZIP_NAME, assetUrl: update.NATIVE_MAC_ZIP_URL, stages: [path.join("Open Historia Native.app", "Contents", "Resources", "app")] }
-  : { platform: "windows", feedName: update.NATIVE_MANIFEST_NAME, assetName: update.NATIVE_SETUP_NAME, assetUrl: update.NATIVE_SETUP_URL, stages: ["stage"] };
+  : linux
+    ? { platform: "linux", feedName: update.NATIVE_LINUX_MANIFEST_NAME, assetName: update.NATIVE_LINUX_ARCHIVE_NAME, assetUrl: update.NATIVE_LINUX_ARCHIVE_URL, stages: ["Open Historia Native"] }
+    : { platform: "windows", feedName: update.NATIVE_MANIFEST_NAME, assetName: update.NATIVE_SETUP_NAME, assetUrl: update.NATIVE_SETUP_URL, stages: ["stage"] };
 
 const load = (out) => {
   const problems = [];
@@ -78,7 +82,7 @@ const load = (out) => {
   return { feed, raw, exe, size, chunkDir, wanted, manifest, problems };
 };
 
-const [mode, outArg, ...rest] = cliArgs.filter((arg) => arg !== "--mac");
+const [mode, outArg, ...rest] = cliArgs.filter((arg) => arg !== "--mac" && arg !== "--linux");
 const out = path.resolve(outArg || "");
 const release = load(out);
 
@@ -134,5 +138,5 @@ if (mode === "local") {
   if (problems.length) fail(problems);
   console.log(`the live feed names build ${release.feed.build}, and its file list downloads intact`);
 } else {
-  fail([`usage: node native/check-release.mjs local|plan|remote-chunks|remote-installer|live <out> [...] [--mac]`]);
+  fail([`usage: node native/check-release.mjs local|plan|remote-chunks|remote-installer|live <out> [...] [--mac|--linux]`]);
 }

@@ -29,7 +29,7 @@ func start() -> bool:
 	var node := OS.get_environment("OH_NODE")
 	if node.is_empty():
 		var bundled := UI.repo_path("runtime/node.exe")
-		if OS.get_name() == "macOS":
+		if OS.get_name() != "Windows":
 			bundled = UI.repo_path("runtime/node")
 		node = bundled if FileAccess.file_exists(bundled) else "node"
 	var script := UI.repo_path("native/sidecar/main.mjs")

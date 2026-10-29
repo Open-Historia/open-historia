@@ -166,6 +166,19 @@ const macText = (value) => String(value ?? "").replace(/[\u0000-\u0008\u000B\u00
 
 export const macNotificationArgs = (title, body) => ["-e", "on run argv", "-e", "display notification (item 2 of argv) with title (item 1 of argv)", "-e", "end run", macText(title), macText(body)];
 
+export const NOTIFY_SEND = "notify-send";
+
+export const notifySendArgs = (title, body, icon = "") => ["--app-name=Open Historia", ...(icon ? [`--icon=${icon}`] : []), "--", macText(title), macText(body)];
+
+export const findOnPath = (name, env = process.env) => {
+  for (const dir of String(env.PATH ?? "").split(":")) {
+    if (!dir.startsWith("/")) continue;
+    const file = path.posix.join(dir, name);
+    if (fs.existsSync(file)) return file;
+  }
+  return "";
+};
+
 export const powershellPath = () => path.join(process.env.SystemRoot || process.env.windir || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
 
 export const toasterArgs = () => ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Mta", "-EncodedCommand", Buffer.from(TOASTER_SCRIPT, "utf16le").toString("base64")];
@@ -178,7 +191,9 @@ export const register = (ctx) => {
   let macHelperBroken = false;
   const macHelperReady = () => onMac && !macHelperBroken && fs.existsSync(macHelper);
   const macSupported = macOsascript || macHelperReady();
-  const supported = (process.platform === "win32" && fs.existsSync(powershellPath())) || macSupported;
+  const onLinux = process.platform === "linux";
+  const notifySend = onLinux ? findOnPath(NOTIFY_SEND) : "";
+  const supported = (process.platform === "win32" && fs.existsSync(powershellPath())) || macSupported || Boolean(notifySend);
   const icon = path.join(repo, "public", "icon-192.png");
   let broken = false;
   let toaster = null;
@@ -251,7 +266,16 @@ export const register = (ctx) => {
     execFile(OSASCRIPT, macNotificationArgs(request.title, request.body), { timeout: timeoutMs }, (error) => resolve(error ? { error: clean(error.message) } : { shown: true, setting: "Enabled" }));
   });
 
+  const askLinux = (request, timeoutMs) => new Promise((resolve) => {
+    if (request.op !== "show") {
+      resolve({ setting: "Enabled" });
+      return;
+    }
+    execFile(notifySend, notifySendArgs(request.title, request.body, fs.existsSync(icon) ? icon : ""), { timeout: timeoutMs }, (error) => resolve(error ? { error: clean(error.message) } : { shown: true, setting: "Enabled" }));
+  });
+
   const ask = async (request, timeoutMs = 20_000) => {
+    if (onLinux) return askLinux(request, timeoutMs);
     if (!onMac) return askToaster(request, timeoutMs);
     if (macHelperReady()) {
       const reply = await askToaster(request, request.op === "show" ? timeoutMs : MAC_REGISTER_MS);
@@ -286,7 +310,7 @@ export const register = (ctx) => {
   };
 
   globalThis.document?.addEventListener?.("visibilitychange", () => {
-    if (globalThis.document?.hidden && !standIn && permission() === "granted" && (!onMac || macHelperReady())) startToaster();
+    if (globalThis.document?.hidden && !standIn && permission() === "granted" && !onLinux && (!onMac || macHelperReady())) startToaster();
   });
 
   const fromSetting = (setting, fallback) => {

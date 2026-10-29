@@ -4,16 +4,19 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 PUBLISH=0
 MAC=0
+LINUX=0
 OUT=""
 for arg in "$@"; do
   case "$arg" in
     --publish) PUBLISH=1 ;;
     --dry-run) PUBLISH=0 ;;
     --mac) MAC=1 ;;
+    --linux) LINUX=1 ;;
     *) OUT="$arg" ;;
   esac
 done
-test -n "$OUT" || { echo "usage: native/publish-release.sh <package out dir> [--mac] [--publish]   (a dry run unless --publish; --mac publishes the macOS app from a package-mac.mjs out dir)" >&2; exit 2; }
+test -n "$OUT" || { echo "usage: native/publish-release.sh <package out dir> [--mac|--linux] [--publish]   (a dry run unless --publish; --mac publishes the macOS app from a package-mac.mjs out dir, --linux the Linux app from a package-linux.mjs out dir)" >&2; exit 2; }
+if [ "$MAC" = 1 ] && [ "$LINUX" = 1 ]; then echo "choose --mac or --linux, not both" >&2; exit 2; fi
 
 REPO="Open-Historia/open-historia"
 TAG="native-experimental"
@@ -26,6 +29,12 @@ if [ "$MAC" = 1 ]; then
   EXE="$OUT/Open-Historia-Native-macOS.zip"
   FEED="$OUT/native-latest-mac.json"
   EXTRA="$OUT/Open-Historia-Native-macOS.dmg"
+elif [ "$LINUX" = 1 ]; then
+  PLATFORM="Linux"
+  CHECK_FLAGS=(--linux)
+  EXE="$OUT/Open-Historia-Native-Linux-x86_64.tar.gz"
+  FEED="$OUT/native-latest-linux.json"
+  EXTRA=""
 else
   PLATFORM="Windows"
   CHECK_FLAGS=()
@@ -87,7 +96,7 @@ else
 fi
 
 if ! gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
-  if [ "$MAC" = 1 ]; then
+  if [ "$MAC" = 1 ] || [ "$LINUX" = 1 ]; then
     echo "the $TAG release does not exist yet; publish the Windows app first, which writes its notes" >&2
     exit 1
   fi

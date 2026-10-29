@@ -1,0 +1,15 @@
+#!/bin/sh
+here="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+if [ "${OH_NO_DESKTOP_ENTRY:-0}" != 1 ] && [ -n "${HOME:-}" ]; then
+  data="${XDG_DATA_HOME:-$HOME/.local/share}"
+  case "$data" in
+    /*) ;;
+    *) data="$HOME/.local/share" ;;
+  esac
+  entry="$data/applications/io.github.arkniem.openhistoria.native.desktop"
+  wanted="$(sed -e "s|@LAUNCHER@|$here/open-historia-native|g" -e "s|@ICON@|$here/runtime/open-historia.png|g" "$here/open-historia-native.desktop" 2>/dev/null)"
+  if [ -n "$wanted" ] && [ "$(cat "$entry" 2>/dev/null)" != "$wanted" ]; then
+    mkdir -p "$data/applications" 2>/dev/null && printf '%s\n' "$wanted" > "$entry" 2>/dev/null
+  fi
+fi
+exec "$here/runtime/Open Historia.x86_64" "$@"

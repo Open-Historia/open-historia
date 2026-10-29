@@ -245,7 +245,7 @@ test("a Mac without osascript, and other systems, have no desktop notifications"
   mock({ present: { "/usr/bin/osascript": false } });
   const notify = await load("notify.mjs");
   assert.deepEqual(await notify.register(notifyContext())["notify.desktop.get"](), { permission: "unsupported" });
-  mock({ platform: "linux" });
+  mock({ platform: "linux", present: { "/notify-send": false } });
   const linux = await load("notify.mjs");
   assert.deepEqual(await linux.register(notifyContext())["notify.desktop.get"](), { permission: "unsupported" });
 });
