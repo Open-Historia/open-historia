@@ -546,7 +546,7 @@ const MODULES = {
   "src/runtime/fronts/day.js": {
     name: "day",
     most: 40,
-    bytes: { default: 200000, recordDay: 30000, simulateDay: 1500000 },
+    bytes: { default: 200000, recordDay: 30000, simulateDay: 400000 },
     picks: {
       startRecorder: { 0: DAY_BATTLE, 1: {}, calls: DAY_CALLS },
       prepare: { 0: { ...ORDER_BATTLE, even: 1, field: { ...PHI_FIELD, edits: 1 }, troops: troopsPick(["x", "y", "strength", "drawn", "drive", "depth", "lane", "lag", "radiusKm"]) }, result: { day: 1, line: { contour: { x: 1, y: 1 }, count: 1, total: 1 }, sectors: 1 }, ids: true },
@@ -555,6 +555,7 @@ const MODULES = {
       growIfNeeded: { 0: GROW_BATTLE, 1: { advanceKm: 1, pace: 1, input: { map: 1, regionTypes: 1 } }, calls: DAY_CALLS, when: "(args[0].grown ?? 0) < 6" },
       growToHold: { 0: GROW_BATTLE, 1: { advanceKm: 1, pace: 1, input: { map: 1, regionTypes: 1 } }, calls: DAY_CALLS },
       recordDay: { 0: { drawnHomes: 1, homes: 1, said: 1, recorded: 1, field: { cols: 1, rows: 1 } } },
+      simulateDay: { 0: 1, 1: { battles: 1, days: 1, era: 1, mech: 1, steer: 1, pace: 1, advanceKm: 1, braked: 1, flipsLeft: 1, lines: 1, airDay: 1, wings: 1, zoneSkies: 1, zoneSkiesDate: 1, zoneNeighbours: 1, mendDay: 1, mendLeft: 1, effort: 1, manpower: 1, menEach: 1, manpowerShare: 1, input: { fromDate: 1, toDate: 1, days: 1, regionTypes: 1, fortifications: 1, climateZones: 1, climateSeed: 1, units: 1, airArms: 1, players: 1, manpower: 1, authored: 1, map: 1 }, flips: 1, notes: 1 }, calls: ["1.groupOf", "1.controllerOf", "1.sovereignOf", "1.isGroup", "1.militaryOf", "1.musterOf", "1.strengthOf", "1.shortageOf", "1.input.peopleOf"], ids: true, when: "!Object.values(args[1].mech ?? {}).some((on) => on === true) && !args[1].steer?.readiness" },
     },
   },
   "src/runtime/fronts/scenarioFronts.js": { name: "scenarioFronts" },

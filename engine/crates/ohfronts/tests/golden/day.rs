@@ -23,6 +23,11 @@ fn opt_i8s(values: &Option<Vec<i8>>) -> Val {
 fn day_battle(run: &ohfronts::sim::engine::Run, value: &Val) -> Battle {
     let plain = shallow(value).plain();
     let mut battle = battle_from(run, &plain);
+    day_extras(&mut battle, &plain);
+    battle
+}
+
+fn day_extras(battle: &mut Battle, plain: &Val) {
     let i8s_of = |key: &str| if plain.get(key).is_object() { Some(arg_numbers(plain.get(key)).iter().map(|&n| n as i8).collect::<Vec<i8>>()) } else { None };
     battle.home_side = i8s_of("homeSide");
     battle.ice_side = i8s_of("iceSide");
@@ -58,7 +63,6 @@ fn day_battle(run: &ohfronts::sim::engine::Run, value: &Val) -> Battle {
         }
         field.arena = battle.arena.clone();
     }
-    battle
 }
 
 fn day_val(battle: &Battle) -> Val {
@@ -97,8 +101,9 @@ fn day_like(battle: &Battle, want: &Val) -> Result<(), String> {
             continue;
         }
         if key == "field" {
-            if let Val::Obj(fields) = want.get("field") {
-                for (name, value) in fields.entries() {
+            for name in ["holders", "painter", "phi", "play", "cols", "rows", "size", "turns"] {
+                let value = want.get("field").get(name);
+                if !value.is_undef() {
                     same(got.get("field").get(name), value).map_err(|error| format!("field.{name}: {error}"))?;
                 }
             }
@@ -172,6 +177,179 @@ fn grow_check<F: Fn(&mut Battle, &mut ohfronts::sim::engine::Run) -> Result<bool
         }
     }
     Some(troops_like(&battle, &want))
+}
+
+
+fn troop_whole(value: &Val) -> ohfronts::sim::troops::Troop {
+    let mut troop = troop_full(value);
+    let set = |key: &str, slot: &mut f64| {
+        if let Val::Num(n) = value.get(key) {
+            *slot = *n;
+        }
+    };
+    set("serves", &mut troop.serves);
+    set("stranded", &mut troop.stranded);
+    set("adrift", &mut troop.adrift);
+    set("gave", &mut troop.gave);
+    set("pinned", &mut troop.pinned);
+    set("spent", &mut troop.spent);
+    set("body", &mut troop.body);
+    if !value.get("slid").is_undef() {
+        troop.slid = value.get("slid").truthy();
+    }
+    if let Val::Obj(order) = &mut troop.order {
+        if let Some(resume) = order.get("resume").cloned() {
+            order.set("resume", shallow(&resume));
+        }
+    }
+    troop
+}
+
+fn whole_battle(run: &ohfronts::sim::engine::Run, value: &Val) -> Battle {
+    let value = &shallow(value);
+    let mut battle = order_battle(run, value);
+    let shaped = crate::orders::unshared(value);
+    let plain = value.plain();
+    for side in 0..2 {
+        battle.troops[side] = shaped.get("troops").at(side).array_or_empty().iter().map(troop_whole).collect();
+    }
+    if !plain.get("warId").is_undef() {
+        battle.war_id = plain.get("warId").clone();
+    }
+    battle.even = plain.get("even").is_true();
+    battle.swap = plain.get("swap").is_true();
+    battle.fresh = plain.get("fresh").is_true();
+    if plain.get("base").is_object() {
+        battle.base = [plain.get("base").at(0).num(), plain.get("base").at(1).num()];
+    }
+    if let Val::Num(km) = plain.get("lineKm") {
+        battle.line_km = *km;
+    }
+    if let Val::Map(entries) = plain.get("shown") {
+        for (key, item) in entries {
+            battle.shown.set(key.string(), item.clone());
+        }
+    }
+    if plain.get("regionSide").is_object() {
+        battle.region_side = Some(arg_numbers(plain.get("regionSide")).iter().map(|&n| n as i8).collect());
+    }
+    day_extras(&mut battle, &plain);
+    battle.plan_key = String::new();
+    battle.days_run = plain.get("daysRun").num();
+    battle.log_from = plain.get("logFrom").num();
+    battle.quiet = plain.get("quiet").num();
+    battle.away = [plain.get("away").at(0).is_true(), plain.get("away").at(1).is_true()];
+    battle.leaving = [plain.get("leaving").at(0).is_true(), plain.get("leaving").at(1).is_true()];
+    battle.out_by = crate::manpower::tally_of(plain.get("outBy"));
+    battle.harsh_by = crate::manpower::tally_of(plain.get("harshBy"));
+    battle.mend_of = false;
+    if let Some(field) = battle.field.as_mut() {
+        let given = plain.get("field");
+        if given.get("ghost").is_object() {
+            field.ghost = ints(given.get("ghost"));
+        }
+        if given.get("when").is_object() {
+            field.when = arg_numbers(given.get("when")).iter().map(|&n| n as f32).collect();
+        }
+        if given.get("marked").is_object() {
+            field.marked = bytes(given.get("marked"));
+        }
+        field.changed = arg_numbers(given.get("changed")).iter().map(|&n| n as usize).collect();
+        if let Val::Num(edits) = given.get("edits") {
+            field.edits = *edits as i64;
+        }
+    }
+    battle.to_side = match (plain.get("toSide"), plain.get("measured")) {
+        (Val::Arr(sides), Val::Num(turns)) if sides.len() == 2 => Some(ohfronts::sim::ground::ToSide { turns: *turns as i64, sides: [ints(&sides[0]), ints(&sides[1])] }),
+        _ => None,
+    };
+    battle
+}
+
+fn simulate_check(case: &Case) -> Option<Result<(), String>> {
+    let given = case.arg(1).plain();
+    let mut run = run_at(case, 1);
+    let speeds = arg_numbers(given.get("advanceKm"));
+    for at in 0..3 {
+        run.advance_km[at] = speeds.get(at).copied().unwrap_or(f64::NAN);
+    }
+    if let Val::Num(pace) = given.get("pace") {
+        run.pace = *pace;
+    }
+    if let Val::Num(days) = given.get("days") {
+        run.days = *days;
+    }
+    run.braked = given.get("braked").is_true();
+    if let Val::Num(left) = given.get("flipsLeft") {
+        run.flips_left = *left;
+    }
+    run.flips = case.arg(1).get("flips").array_or_empty().to_vec();
+    run.notes = given.get("notes").array_or_empty().to_vec();
+    let fronts = case.arg(1).get("battles").array_or_empty();
+    let me = fronts.iter().position(|front| front.same_ref(case.arg(0)))?;
+    run.battles = fronts.iter().enumerate().map(|(at, front)| if at == me { whole_battle(&run, case.arg(0)) } else { whole_battle(&run, front) }).collect();
+    let steps = match simulate_day(&mut run, me, case.arg(2).num()) {
+        Ok(steps) => steps,
+        Err(_) => return Some(Err("regions needed".into())),
+    };
+    if let Some(Err(error)) = expect(case, num(steps)) {
+        return Some(Err(error));
+    }
+    let battle = &run.battles[me];
+    let want = wanted(case, 0);
+    if let Err(error) = battle_like(battle, &want) {
+        return Some(Err(error));
+    }
+    let mut plain_want = shallow(&want_after(case, 0)).plain();
+    let was_grown = match case.arg(0).plain().get("grown") {
+        Val::Num(grown) => *grown,
+        _ => 0.0,
+    };
+    if battle.grown != was_grown {
+        if let Val::Obj(fields) = &mut plain_want {
+            fields.remove("drawnHomes");
+        }
+    }
+    if let Err(error) = day_like(battle, &plain_want) {
+        return Some(Err(error));
+    }
+    if let Err(error) = same_parts(&supply_val(battle), &plain_want, "supply") {
+        return Some(Err(error));
+    }
+    for (key, got) in [("lineKm", num(battle.line_km)), ("closing", text(&battle.closing))] {
+        if !plain_want.get(key).is_undef() {
+            if let Err(error) = same(&got, plain_want.get(key)) {
+                return Some(Err(format!("{key}: {error}")));
+            }
+        }
+    }
+    let names: Vec<String> = run.battles.iter().map(|battle| battle.name.clone()).collect();
+    let run_want = want_after(case, 1).plain();
+    let normal = |flips: &Val| {
+        list(
+            flips
+                .array_or_empty()
+                .iter()
+                .map(|flip| {
+                    let mut out = match flip.plain() {
+                        Val::Obj(obj) => obj,
+                        _ => Obj::new(),
+                    };
+                    if let Some(field) = out.get("battlefield").cloned() {
+                        out.set("battlefield", Val::obj([("name", field.get("name").clone())]));
+                    }
+                    Val::Obj(out)
+                })
+                .collect(),
+        )
+    };
+    if let Err(error) = same(&flips_val(&run.flips, &names), &normal(run_want.get("flips"))) {
+        return Some(Err(format!("flips: {error}")));
+    }
+    if let Err(error) = same(&list(run.notes.clone()), run_want.get("notes")) {
+        return Some(Err(format!("notes: {error}")));
+    }
+    Some(same(&Val::Bool(run.braked), run_want.get("braked")).map_err(|error| format!("braked: {error}")))
 }
 
 #[test]
@@ -293,6 +471,7 @@ fn day_matches_js() {
             }),
             ("growIfNeeded", &|case| grow_check(case, |battle, run| grow_if_needed(battle, run, case.arg(2).num()))),
             ("growToHold", &|case| grow_check(case, |battle, run| grow_to_hold(battle, run, case.arg(2).num(), case.arg(3).num(), case.arg(4).num()))),
+            ("simulateDay", &simulate_check),
             ("recordDay", &|case| {
                 let run = bare_run();
                 let mut battle = day_battle(&run, case.arg(0));
