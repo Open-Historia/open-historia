@@ -50,6 +50,20 @@ fn deploy_matches_js() {
             ("readDeploy", &|case| expect(case, sides_val(&read_deploy(case.arg(0))))),
             ("hasDeploy", &|case| expect(case, Val::Bool(has_deploy(case.arg(0))))),
             ("deployLinesOf", &|case| expect(case, list(deploy_lines_of(case.arg(0), case.arg(1)).iter().map(line_val).collect()))),
+            ("deployCells", &|case| {
+                let battle = case.arg(0);
+                let lines = read_deploy(battle.get("deploy"));
+                let side = case.arg(1).num() as usize;
+                let field = battle.get("field");
+                let holders: Vec<u8> = arg_numbers(field.get("holders")).iter().map(|&n| n as u8).collect();
+                let place = match battle.get("place").get("$args") {
+                    Val::Arr(args) if !args.is_empty() => ohfronts::sim::frame::Projector::of(&crate::frame::frame_of(&args[0])),
+                    _ => return None,
+                };
+                let cells: Vec<i32> = arg_numbers(case.arg(3)).iter().map(|&n| n as i32).collect();
+                let got = deploy_cells(&lines[side], &arg_text(case.arg(2)), &holders, field.get("cols").num() as usize, field.get("rows").num() as usize, battle.get("frame").get("km").num(), &place, side as u8, cells);
+                expect(case, list(got.iter().map(|&cell| num(cell as f64)).collect()))
+            }),
             ("withDeployLine", &|case| {
                 let options = case.arg(2);
                 let form = if options.get("form").is_undef() { Val::str("") } else { options.get("form").clone() };

@@ -50,12 +50,12 @@ const MODULES = {
   },
   "src/runtime/fronts/attrition.js": { name: "attrition", picks: { ...runPicks(["attritionReport"]), battleAttrition: { 0: BATTLE_PICK } } },
   "src/runtime/fronts/muster.js": { name: "muster" },
-  "src/runtime/fronts/deploy.js": { name: "deploy", keep: ["readDeploy", "hasDeploy", "deployLinesOf", "withDeployLine"] },
+  "src/runtime/fronts/deploy.js": { name: "deploy", keep: ["readDeploy", "hasDeploy", "deployLinesOf", "withDeployLine", "deployCells"], picks: { deployCells: { 0: { deploy: 1, field: { cols: 1, rows: 1, holders: 1 }, place: 1, frame: { km: 1 } } } } },
   "src/runtime/fronts/field.js": { name: "field", factories: ["createField", "openField", "unpackField", "resampleField"], big: ["takeCapsule", "takeCells", "restoreCells", "rebuildFromHolders", "resampleField", "rebuildDistances"] },
   "src/runtime/fronts/line.js": { name: "line" },
   "src/runtime/fronts/wayfinder.js": { name: "wayfinder", big: ["findWay"], picks: { findWay: { 0: { cols: 1, rows: 1, west: 1, north: 1, step: 1, wrap: 1, flat: 1, scale: 1, land: 1, region: 1, ids: 1, full: 1, stepKm: 1, rowCosine: 1, seas: 1, seaCount: 1 } } } },
   "src/runtime/fronts/command.js": { name: "command", picks: { assignCommands: { 0: { troops: { "*": { "*": { x: 1, y: 1, strength: 1, owner: 1, command: 1 } } }, swarms: 1 } } } },
-  "src/runtime/fronts/ground.js": { name: "ground", big: ["measure", "awayOf", "cheapestWay"] },
+  "src/runtime/fronts/ground.js": { name: "ground", big: ["measure", "awayOf", "cheapestWay"], picks: { cellsOf: { 0: { cols: 1, rows: 1 } } } },
   "src/runtime/fronts/contact.js": { name: "contact" },
   "src/runtime/fronts/sectors.js": { name: "sectors" },
 };
@@ -79,6 +79,7 @@ const testFiles = () => {
   for (const extra of ["src/runtime/gameDates.test.js", "src/runtime/unitMotion.test.js", "src/Game/AI/frontTurn.test.js"]) {
     if (fs.existsSync(path.join(root, extra))) found.push(extra);
   }
+  found.push(path.relative(root, path.join(here, "probes.test.mjs")).split(path.sep).join("/"));
   return found.sort();
 };
 
