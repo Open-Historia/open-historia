@@ -210,6 +210,242 @@ func box(_ type: String, _ payload: [UInt8]) -> [UInt8] {
 	return out
 }
 
+struct BitReader {
+	let data: [UInt8]
+	var bit: Int
+	let end: Int
+
+	init(_ data: [UInt8], _ from: Int, _ to: Int) {
+		self.data = data
+		bit = from * 8
+		end = min(to, data.count) * 8
+	}
+
+	mutating func read(_ count: Int) throws -> Int {
+		var value = 0
+		var index = 0
+		while index < count {
+			if bit >= end {
+				throw CodecFailure(message: "The AV1 header ended early.")
+			}
+			value = (value << 1) | Int((data[bit >> 3] >> UInt8(7 - (bit & 7))) & 1)
+			bit += 1
+			index += 1
+		}
+		return value
+	}
+
+	mutating func uvlc() throws {
+		var zeros = 0
+		while zeros < 32 {
+			if try read(1) == 1 {
+				break
+			}
+			zeros += 1
+		}
+		if zeros < 32 {
+			_ = try read(zeros)
+		}
+	}
+}
+
+struct SequenceInfo {
+	var profile = 0
+	var level = 0
+	var tier = 0
+	var high = 0
+	var twelve = 0
+	var mono = 0
+	var subX = 1
+	var subY = 1
+	var position = 0
+}
+
+func parseSequence(_ data: [UInt8], _ from: Int, _ to: Int) throws -> SequenceInfo {
+	var bits = BitReader(data, from, to)
+	var info = SequenceInfo()
+	info.profile = try bits.read(3)
+	_ = try bits.read(1)
+	let reduced = try bits.read(1) == 1
+	if reduced {
+		info.level = try bits.read(5)
+	} else {
+		let timing = try bits.read(1) == 1
+		var decoderModel = false
+		var delayLength = 0
+		if timing {
+			_ = try bits.read(32)
+			_ = try bits.read(32)
+			if try bits.read(1) == 1 {
+				try bits.uvlc()
+			}
+			decoderModel = try bits.read(1) == 1
+			if decoderModel {
+				delayLength = try bits.read(5) + 1
+				_ = try bits.read(32)
+				_ = try bits.read(5)
+				_ = try bits.read(5)
+			}
+		}
+		let initialDelay = try bits.read(1) == 1
+		let points = try bits.read(5) + 1
+		for point in 0..<points {
+			_ = try bits.read(12)
+			let level = try bits.read(5)
+			var tier = 0
+			if level > 7 {
+				tier = try bits.read(1)
+			}
+			if decoderModel {
+				if try bits.read(1) == 1 {
+					_ = try bits.read(delayLength)
+					_ = try bits.read(delayLength)
+					_ = try bits.read(1)
+				}
+			}
+			if initialDelay {
+				if try bits.read(1) == 1 {
+					_ = try bits.read(4)
+				}
+			}
+			if point == 0 {
+				info.level = level
+				info.tier = tier
+			}
+		}
+	}
+	let widthBits = try bits.read(4) + 1
+	let heightBits = try bits.read(4) + 1
+	_ = try bits.read(widthBits)
+	_ = try bits.read(heightBits)
+	if !reduced {
+		if try bits.read(1) == 1 {
+			_ = try bits.read(4)
+			_ = try bits.read(3)
+		}
+	}
+	_ = try bits.read(3)
+	if !reduced {
+		_ = try bits.read(4)
+		let orderHint = try bits.read(1) == 1
+		if orderHint {
+			_ = try bits.read(2)
+		}
+		var forceScreen = 2
+		if try bits.read(1) == 0 {
+			forceScreen = try bits.read(1)
+		}
+		if forceScreen > 0 {
+			if try bits.read(1) == 0 {
+				_ = try bits.read(1)
+			}
+		}
+		if orderHint {
+			_ = try bits.read(3)
+		}
+	}
+	_ = try bits.read(3)
+	info.high = try bits.read(1)
+	if info.profile == 2 && info.high == 1 {
+		info.twelve = try bits.read(1)
+	}
+	if info.profile != 1 {
+		info.mono = try bits.read(1)
+	}
+	var primaries = 2
+	var transfer = 2
+	var matrix = 2
+	if try bits.read(1) == 1 {
+		primaries = try bits.read(8)
+		transfer = try bits.read(8)
+		matrix = try bits.read(8)
+	}
+	if info.mono == 1 {
+		info.subX = 1
+		info.subY = 1
+		info.position = 0
+	} else if primaries == 1 && transfer == 13 && matrix == 0 {
+		info.subX = 0
+		info.subY = 0
+	} else {
+		_ = try bits.read(1)
+		if info.profile == 0 {
+			info.subX = 1
+			info.subY = 1
+		} else if info.profile == 1 {
+			info.subX = 0
+			info.subY = 0
+		} else if info.high == 1 && info.twelve == 1 {
+			info.subX = try bits.read(1)
+			info.subY = 0
+			if info.subX == 1 {
+				info.subY = try bits.read(1)
+			}
+		} else {
+			info.subX = 1
+			info.subY = 0
+		}
+		if info.subX == 1 && info.subY == 1 {
+			info.position = try bits.read(2)
+		}
+	}
+	return info
+}
+
+func sequenceInfo(_ data: [UInt8], _ from: Int, _ to: Int) -> SequenceInfo? {
+	let limit = min(to, data.count)
+	var at = max(0, from)
+	while at < limit {
+		let head = Int(data[at])
+		let type = (head >> 3) & 15
+		let extended = (head & 4) != 0
+		let sized = (head & 2) != 0
+		var cursor = at + 1 + (extended ? 1 : 0)
+		var size = limit - cursor
+		if sized {
+			size = 0
+			var shift = 0
+			while shift < 56 && cursor < limit {
+				let part = Int(data[cursor])
+				cursor += 1
+				size |= (part & 0x7F) << shift
+				if (part & 0x80) == 0 {
+					break
+				}
+				shift += 7
+			}
+		}
+		if size < 0 || cursor + size > limit {
+			return nil
+		}
+		if type == 1 {
+			return try? parseSequence(data, cursor, cursor + size)
+		}
+		at = cursor + size
+	}
+	return nil
+}
+
+func repairedConfigs(_ bytes: Bytes, _ items: Items) -> [UInt8] {
+	var copy = bytes.data
+	var done = Set<Int>()
+	for (item, links) in items.links {
+		guard let first = items.extents[item]?.first, let info = sequenceInfo(bytes.data, first.0, first.0 + first.1) else {
+			continue
+		}
+		for (property, _) in links {
+			let config = items.properties[property - 1]
+			if config.type != "av1C" || config.body + 3 > config.end || done.contains(config.start) {
+				continue
+			}
+			copy[config.body + 1] = UInt8(((info.profile & 7) << 5) | (info.level & 31))
+			copy[config.body + 2] = UInt8(((info.tier & 1) << 7) | ((info.high & 1) << 6) | ((info.twelve & 1) << 5) | ((info.mono & 1) << 4) | ((info.subX & 1) << 3) | ((info.subY & 1) << 2) | (info.position & 3))
+			done.insert(config.start)
+		}
+	}
+	return copy
+}
+
 func standaloneItem(_ bytes: Bytes, _ items: Items, _ item: Int) -> [UInt8]? {
 	guard let extents = items.extents[item], let links = items.links[item] else {
 		return nil
@@ -225,7 +461,15 @@ func standaloneItem(_ bytes: Bytes, _ items: Items, _ item: Int) -> [UInt8]? {
 		if source.type == "auxC" {
 			continue
 		}
-		kept.append(contentsOf: bytes.data[source.start..<source.end])
+		if source.type == "pixi", let first = extents.first, let info = sequenceInfo(bytes.data, first.0, first.0 + first.1) {
+			let depth = info.high == 0 ? 8 : (info.twelve == 1 ? 12 : 10)
+			var pixiPayload: [UInt8] = be32(0)
+			pixiPayload.append(UInt8(info.mono == 1 ? 1 : 3))
+			pixiPayload.append(contentsOf: [UInt8](repeating: UInt8(depth), count: info.mono == 1 ? 1 : 3))
+			kept.append(contentsOf: box("pixi", pixiPayload))
+		} else {
+			kept.append(contentsOf: bytes.data[source.start..<source.end])
+		}
 		if associations.count >= 127 {
 			return nil
 		}
@@ -785,6 +1029,7 @@ func isMask(_ mask: Raster, _ picture: Raster) -> Bool {
 	var seen = 0
 	var tinted = 0
 	var same = 0
+	var undrawn = 0
 	var at = 0
 	while at < mask.pixels.count {
 		let red = Int(mask.pixels[at])
@@ -793,13 +1038,16 @@ func isMask(_ mask: Raster, _ picture: Raster) -> Bool {
 		if abs(red - green) > 3 || abs(green - blue) > 3 {
 			tinted += 1
 		}
+		if mask.pixels[at + 3] != 255 {
+			undrawn += 1
+		}
 		if mask.pixels[at] == picture.pixels[at] && mask.pixels[at + 1] == picture.pixels[at + 1] && mask.pixels[at + 2] == picture.pixels[at + 2] {
 			same += 1
 		}
 		seen += 1
 		at += step
 	}
-	return tinted * 100 <= seen && same * 100 < seen * 98
+	return tinted * 100 <= seen && same * 100 < seen * 98 && undrawn * 100 <= seen
 }
 
 func allClear(_ picture: Raster) -> Bool {
@@ -907,8 +1155,17 @@ func planeStill(_ bytes: Bytes, _ items: Items, _ target: String) throws -> Stri
 	return "ok\t\(picture.width)\t\(picture.height)\tplane\t1\t-1\t"
 }
 
-func convertStill(_ source: CGImageSource, _ bytes: Bytes, _ target: String) throws -> String {
-	let items = readItems(bytes)
+func convertStill(_ original: CGImageSource, _ given: Bytes, _ target: String) throws -> String {
+	let items = readItems(given)
+	var bytes = given
+	var source = original
+	if let items = items {
+		let repaired = repairedConfigs(given, items)
+		if repaired != given.data, let fixed = makeSource(repaired) {
+			bytes = Bytes(data: repaired)
+			source = fixed
+		}
+	}
 	if let items = items, items.alpha != 0, let answer = try planeStill(bytes, items, target) {
 		return answer
 	}
@@ -1006,6 +1263,15 @@ func describe(_ label: String, _ source: CGImageSource?) -> String {
 	return parts.joined(separator: "; ")
 }
 
+func hex(_ bytes: Bytes, _ from: Int, _ count: Int) -> String {
+	var text = ""
+	for at in from..<(from + count) {
+		let digits = String(bytes.u8(at), radix: 16)
+		text += digits.count < 2 ? "0" + digits : digits
+	}
+	return text
+}
+
 func probe(_ sourcePath: String) -> String {
 	guard let data = FileManager.default.contents(atPath: sourcePath) else {
 		return "unreadable file"
@@ -1014,10 +1280,13 @@ func probe(_ sourcePath: String) -> String {
 	var lines = [describe("file", makeSource(bytes.data))]
 	if let items = readItems(bytes) {
 		lines.append("items primary \(items.primary) alpha \(items.alpha) transforms \(items.transforms[items.primary].map { "\($0)" } ?? "-") size \(items.sizes[items.primary].map { "\($0)" } ?? "-")")
+		let repaired = Bytes(data: repairedConfigs(bytes, items))
+		let configs = items.properties.filter { $0.type == "av1C" }.map { "\(hex(bytes, $0.body, 4))>\(hex(repaired, $0.body, 4))" }
+		lines.append("av1C \(configs.joined(separator: ","))")
+		lines.append(describe("repaired file", makeSource(repaired.data)))
 		if items.alpha != 0 {
-			lines.append("item types \(items.typeAt.keys.sorted().map { "\($0)=\(bytes.text(items.typeAt[$0] ?? -1, 4))" }.joined(separator: ","))")
-			lines.append(describe("colour item", makeSource(colorItemData(bytes, items))))
-			lines.append(describe("alpha item", makeSource(alphaItemData(bytes, items))))
+			lines.append(describe("colour item", makeSource(colorItemData(repaired, items))))
+			lines.append(describe("alpha item", makeSource(alphaItemData(repaired, items))))
 		}
 	}
 	if let animation = readAnimation(bytes), let copies = trackCopies(bytes, animation) {
