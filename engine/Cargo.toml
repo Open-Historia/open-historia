@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/ohmap", "crates/oh_gdext"]
+members = ["crates/ohmap", "crates/oh_gdext", "crates/ohweb"]
 
 [workspace.package]
 edition = "2021"

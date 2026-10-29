@@ -24,6 +24,8 @@ var _template_used := "random"
 var _button: Button
 var _log_box: VBoxContainer
 var _log_scroll: ScrollContainer
+var _page: WebPanel
+var embedded := false
 
 
 func setup(workshop: Workshop, info: Dictionary) -> void:
@@ -39,6 +41,7 @@ func setup(workshop: Workshop, info: Dictionary) -> void:
 	tree_exiting.connect(func() -> void:
 		if is_instance_valid(host) and host.engine.engine_event.is_connected(_on_engine_event):
 			host.engine.engine_event.disconnect(_on_engine_event)
+		_close_page()
 		if busy and is_instance_valid(host):
 			host.request_raw("workshop.fmg.stop"))
 	_build()
@@ -162,7 +165,40 @@ func _on_engine_event(name: String, data: Variant) -> void:
 
 func _finish(line: String) -> void:
 	busy = false
+	_close_page()
 	_log(line)
+
+
+func _close_page() -> void:
+	if _page and is_instance_valid(_page):
+		_page.queue_free()
+	_page = null
+
+
+func _open_page(url: String) -> bool:
+	if not WebPanel.is_available():
+		return false
+	_close_page()
+	_page = WebPanel.new()
+	_page.name = "GeneratorPage"
+	_page.keep_hidden = true
+	_page.top_level = true
+	_page.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_page.position = Vector2.ZERO
+	_page.size = Vector2(1920, 1080)
+	_page.background = Color(19 / 255.0, 19 / 255.0, 21 / 255.0, 1)
+	_page.allowed = "http://127.0.0.1:"
+	_page.failed.connect(func(_reason: String) -> void:
+		if busy and embedded:
+			embedded = false
+			_close_page()
+			_log("The generator runs in your web browser; keep its tab open until the world arrives here.")
+			host.open_url(url))
+	add_child(_page)
+	if not _page.open_url(url):
+		_close_page()
+		return false
+	return true
 
 
 func _generate() -> void:
@@ -195,8 +231,12 @@ func _generate() -> void:
 	if result.has("error"):
 		_finish("✗ %s" % str(result["error"]))
 		return
+	var url := str(result.get("url", ""))
+	embedded = _open_page(url)
+	if embedded:
+		return
 	_log("The generator runs in your web browser; keep its tab open until the world arrives here.")
-	host.open_url(str(result.get("url", "")))
+	host.open_url(url)
 
 
 func _import() -> void:

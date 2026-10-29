@@ -735,7 +735,8 @@ class ApiSetupPrompt extends Control:
 	signal dismissed
 	signal saved
 
-	const TUTORIAL_VIDEO_URL := "https://www.youtube.com/watch?v=YdalQ8UqMR4"
+	const TUTORIAL_VIDEO_ID := "YdalQ8UqMR4"
+	const TUTORIAL_VIDEO_URL := "https://www.youtube.com/watch?v=" + TUTORIAL_VIDEO_ID
 	const AI_STUDIO_KEY_URL := "https://aistudio.google.com/app/apikey"
 	const CONTENT_WIDTH := 499.0
 	const CARD_PADDING := Vector2(44.8, 40.8)
@@ -760,6 +761,8 @@ class ApiSetupPrompt extends Control:
 	var _suggest_list: VBoxContainer
 	var _online_timer: Timer
 	var _fit_queued := false
+	var video_playing := false
+	var _video: WebPanel
 
 	func _init(engine_link: EngineLink, setup_data: Dictionary) -> void:
 		link = engine_link
@@ -972,7 +975,89 @@ class ApiSetupPrompt extends Control:
 			return null
 		return ImageTexture.create_from_image(image)
 
+	func _video_panel() -> WebPanel:
+		if _video and is_instance_valid(_video):
+			return _video
+		_video = WebPanel.new()
+		_video.name = "TutorialVideo"
+		_video.background = Color(0, 0, 0, 1)
+		_video.allowed = "http://127.0.0.1:
+https://www.youtube-nocookie.com/"
+		_video.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		_video.mouse_filter = Control.MOUSE_FILTER_STOP
+		_video.key_pressed.connect(func(key: String) -> void:
+			if key == "Escape":
+				_stop_video())
+		_video.open_external.connect(func(url: String) -> void:
+			if url.begins_with("https://") or url.begins_with("http://"):
+				_open_outside(url))
+		_video.failed.connect(func(_reason: String) -> void: _video_failed())
+		return _video
+
+	func _video_frame() -> Control:
+		var frame := PanelContainer.new()
+		frame.name = "TutorialVideoFrame"
+		frame.add_theme_stylebox_override("panel", UI.box(Color(0, 0, 0, 0.5), Color(0, 0, 0, 0), 10, 0))
+		frame.custom_minimum_size = Vector2(0, roundf((CONTENT_WIDTH - 28.8) * 9.0 / 16.0))
+		frame.resized.connect(func() -> void:
+			var tall := roundf(frame.size.x * 9.0 / 16.0)
+			if frame.size.x > 0.0 and absf(frame.custom_minimum_size.y - tall) >= 1.0:
+				frame.custom_minimum_size.y = tall)
+		var panel := _video_panel()
+		if panel.get_parent():
+			panel.get_parent().remove_child(panel)
+		frame.add_child(panel)
+		return frame
+
+	func _open_outside(url: String) -> void:
+		var log_file := OS.get_environment("OH_OPEN_LOG")
+		if log_file.is_empty():
+			OS.shell_open(url)
+			return
+		var out := FileAccess.open(log_file, FileAccess.READ_WRITE if FileAccess.file_exists(log_file) else FileAccess.WRITE)
+		if out:
+			out.seek_end()
+			out.store_line(url)
+			out.close()
+
+	func _play_video() -> void:
+		if video_playing:
+			return
+		if not WebPanel.is_available():
+			_open_outside(TUTORIAL_VIDEO_URL)
+			return
+		video_playing = true
+		_render()
+		var reply: Dictionary = await link.request("embed.video", {"id": TUTORIAL_VIDEO_ID})
+		if not is_instance_valid(self) or not video_playing:
+			return
+		var result: Variant = reply.get("result") if reply.get("ok", false) else null
+		var url := str((result as Dictionary).get("url", "")) if result is Dictionary else ""
+		if url.is_empty() or not (_video and is_instance_valid(_video)) or not _video.open_url(url):
+			_video_failed()
+
+	func _stop_video() -> void:
+		video_playing = false
+		if _video and is_instance_valid(_video):
+			_video.focus_app()
+			_video.queue_free()
+		_video = null
+		_render()
+
+	func _video_failed() -> void:
+		var was_playing := video_playing
+		_stop_video()
+		if was_playing:
+			_open_outside(TUTORIAL_VIDEO_URL)
+
 	func _render() -> void:
+		if _video and is_instance_valid(_video) and _video.get_parent():
+			_video.get_parent().remove_child(_video)
+		if video_playing and not (show_tutorial and online):
+			video_playing = false
+			if _video and is_instance_valid(_video):
+				_video.queue_free()
+			_video = null
 		for child in _body.get_children():
 			_body.remove_child(child)
 			child.queue_free()
@@ -1031,8 +1116,14 @@ class ApiSetupPrompt extends Control:
 			video.add_theme_font_size_override("font_size", 13)
 			video.add_theme_color_override("font_color", Color(1, 1, 1, 0.86))
 			video.add_theme_color_override("font_hover_color", UI.WHITE)
-			video.pressed.connect(func() -> void: OS.shell_open(TUTORIAL_VIDEO_URL))
-			if online:
+			video.pressed.connect(_play_video)
+			if online and video_playing:
+				video.queue_free()
+				box_column.add_child(_video_frame())
+				var spacer_two := Control.new()
+				spacer_two.custom_minimum_size.y = 6
+				box_column.add_child(spacer_two)
+			elif online:
 				box_column.add_child(video)
 				var spacer_two := Control.new()
 				spacer_two.custom_minimum_size.y = 6
@@ -1045,7 +1136,7 @@ class ApiSetupPrompt extends Control:
 			watch.underline = LinkButton.UNDERLINE_MODE_ALWAYS
 			watch.add_theme_font_size_override("font_size", 11)
 			watch.add_theme_color_override("font_color", Color(147 / 255.0, 197 / 255.0, 253 / 255.0, 0.9))
-			watch.pressed.connect(func() -> void: OS.shell_open(TUTORIAL_VIDEO_URL))
+			watch.pressed.connect(func() -> void: _open_outside(TUTORIAL_VIDEO_URL))
 			links.add_child(watch)
 			links.add_child(UI.spacer())
 			var hide := Button.new()
@@ -1056,7 +1147,7 @@ class ApiSetupPrompt extends Control:
 			hide.add_theme_color_override("font_color", Color(1, 1, 1, 0.45))
 			hide.pressed.connect(func() -> void:
 				show_tutorial = false
-				_render())
+				_stop_video())
 			links.add_child(hide)
 			box_column.add_child(links)
 		else:

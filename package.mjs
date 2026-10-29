@@ -4,6 +4,7 @@ import { spawn, spawnSync } from "node:child_process";
 import os from "node:os";
 import readline from "node:readline";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { webviewLoader } from "./webview2.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.resolve(here, "..");
@@ -72,12 +73,13 @@ copy(godotSource, project, (file, isDir) => {
   return true;
 });
 copy(release, path.join(project, "bin", "oh_gdext.dll"));
+copy(webviewLoader(), path.join(project, "bin", "WebView2Loader.dll"));
 const presets = path.join(project, "export_presets.cfg");
 fs.writeFileSync(presets, fs.readFileSync(presets, "utf8").replace(/^custom_template\/release=.*$/m, `custom_template/release=${JSON.stringify(template.split(path.sep).join("/"))}`));
 run(godotExe, ["--headless", "--path", project, "--import"]);
 fs.mkdirSync(path.join(stage, "runtime"), { recursive: true });
 run(godotExe, ["--headless", "--path", project, "--export-release", "Windows Desktop", path.join(stage, "runtime", "Open Historia.exe")]);
-for (const name of ["Open Historia.exe", "Open Historia.pck", "oh_gdext.dll"]) {
+for (const name of ["Open Historia.exe", "Open Historia.pck", "oh_gdext.dll", "WebView2Loader.dll"]) {
   if (!fs.existsSync(path.join(stage, "runtime", name))) throw new Error(`The release export did not write runtime/${name}.`);
 }
 copy(process.execPath, path.join(stage, "runtime", "node.exe"));

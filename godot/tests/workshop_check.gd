@@ -15,6 +15,7 @@ func _initialize() -> void:
 	var redraw := Node2D.new()
 	root.add_child(redraw)
 	process_frame.connect(redraw.queue_redraw)
+	root.mouse_passthrough = true
 	shots = OS.get_environment("OH_SHOTS")
 	started = Time.get_ticks_msec()
 	main = (load("res://main.tscn") as PackedScene).instantiate()
@@ -964,17 +965,29 @@ func _fmg(w: Workshop) -> void:
 	var opened := root_dir.path_join("fmg-opened.txt")
 	OS.set_environment("OH_EDITOR_OPEN_LOG", opened)
 	var regions_before := w.map.ids.size()
+	var embedded := WebPanel.is_available()
 	drawer._button.pressed.emit()
-	await _until(func() -> bool: return FileAccess.get_file_as_string(opened).contains("oh-native-bridge.html"), 20.0)
+	var finished := false
+	if embedded:
+		var made := await _until(func() -> bool: return drawer._page != null and is_instance_valid(drawer._page) and drawer._page.is_open(), 20.0)
+		_check("Generate runs the generator inside the Workshop", made and drawer.embedded and not FileAccess.file_exists(opened), drawer._page.get_error() if drawer._page else "no page")
+		var live := await _until(func() -> bool: return drawer._page == null or not is_instance_valid(drawer._page) or (drawer._page.is_live() and str(drawer._page.get_current_url()).contains("/fmg/")), 20.0)
+		var page_url := str(drawer._page.get_current_url()) if drawer._page and is_instance_valid(drawer._page) else ""
+		_check("the generator page loads in the hidden web view", live and page_url.contains("/fmg/oh-native-bridge.html") and not drawer._page.is_shown(), page_url.left(80))
+		await _shoot("ws-36-fmg-waiting")
+		finished = await _until(func() -> bool: return not drawer.busy, 180.0)
+		_check("the hidden web view closes once the world is in", drawer._page == null or not is_instance_valid(drawer._page))
+	else:
+		await _until(func() -> bool: return FileAccess.get_file_as_string(opened).contains("oh-native-bridge.html"), 20.0)
+		var url := FileAccess.get_file_as_string(opened).strip_edges().get_slice("\n", 0)
+		_check("Generate opens the bridge page in the browser", url.begins_with("http://127.0.0.1:") and url.contains("/fmg/oh-native-bridge.html#port=") and url.contains("token="), url.left(80))
+		await _shoot("ws-36-fmg-waiting")
+		var chrome := "C:/Program Files/Google/Chrome/Application/chrome.exe"
+		var pid := OS.create_process(chrome, PackedStringArray(["--headless=new", "--user-data-dir=" + root_dir.path_join("chrome-fmg"), "--no-first-run", "--disable-extensions", "--enable-unsafe-swiftshader", "--use-angle=swiftshader", "--window-size=1920,1080", url]))
+		finished = await _until(func() -> bool: return not drawer.busy, 180.0)
+		if pid > 0:
+			OS.execute("taskkill", PackedStringArray(["/T", "/F", "/PID", str(pid)]))
 	OS.set_environment("OH_EDITOR_OPEN_LOG", "")
-	var url := FileAccess.get_file_as_string(opened).strip_edges().get_slice("\n", 0)
-	_check("Generate opens the bridge page in the browser", url.begins_with("http://127.0.0.1:") and url.contains("/fmg/oh-native-bridge.html#port=") and url.contains("token="), url.left(80))
-	await _shoot("ws-36-fmg-waiting")
-	var chrome := "C:/Program Files/Google/Chrome/Application/chrome.exe"
-	var pid := OS.create_process(chrome, PackedStringArray(["--headless=new", "--user-data-dir=" + root_dir.path_join("chrome-fmg"), "--no-first-run", "--disable-extensions", "--enable-unsafe-swiftshader", "--use-angle=swiftshader", "--window-size=1920,1080", url]))
-	var finished := await _until(func() -> bool: return not drawer.busy, 180.0)
-	if pid > 0:
-		OS.execute("taskkill", PackedStringArray(["/T", "/F", "/PID", str(pid)]))
 	var lines: Array = drawer.log_lines
 	var last := str(lines.back()) if not lines.is_empty() else ""
 	_check("the world arrives with React's progress lines", finished and lines.has("Loading Fantasy Map Generator…") and lines.has("Generating the world…") and lines.has("Building regions, countries and cities…") and last.begins_with("✓ Imported "), " | ".join(lines))

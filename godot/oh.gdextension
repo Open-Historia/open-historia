@@ -12,3 +12,8 @@ linux.debug.x86_64 = "res://bin/liboh_gdext.so"
 linux.release.x86_64 = "res://bin/liboh_gdext.so"
 macos.debug = "res://bin/liboh_gdext.dylib"
 macos.release = "res://bin/liboh_gdext.dylib"
+
+[dependencies]
+
+windows.x86_64 = { "res://bin/WebView2Loader.dll": "" }
+linux.x86_64 = { "res://bin/libohweb.so": "" }

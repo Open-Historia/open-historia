@@ -9,6 +9,7 @@ use ohmap::{BakedMap, PickIndex};
 
 mod mapmath;
 mod projector;
+mod webpanel;
 
 struct OpenHistoriaExtension;
 

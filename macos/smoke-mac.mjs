@@ -5,7 +5,7 @@ import { spawn, spawnSync } from "node:child_process";
 
 const [appArg, packArg, logArg, ...rest] = process.argv.slice(2);
 if (!appArg || !packArg || !logArg) {
-  console.error("usage: node native/macos/smoke-mac.mjs <Open Historia Native.app> <probe pck> <log file> [--arch x86_64] [--windowed] [--seconds N]");
+  console.error("usage: node native/macos/smoke-mac.mjs <Open Historia Native.app> <probe pck> <log file> [--arch x86_64] [--windowed] [--seconds N] [--webpanel ok|unavailable|any]");
   process.exit(2);
 }
 const option = (name, fallback) => {
@@ -14,6 +14,7 @@ const option = (name, fallback) => {
 };
 const arch = option("--arch", "");
 const windowed = rest.includes("--windowed");
+const wantWebPanel = option("--webpanel", windowed ? "ok" : "unavailable");
 const seconds = Number(option("--seconds", "420"));
 const exeName = "Open Historia";
 
@@ -67,13 +68,18 @@ for (const match of leftovers) {
   }
 }
 
+const webPanel = /WEBPANEL (\w+) ?(.*)/.exec(text);
+const webPanelState = webPanel ? webPanel[1] : "";
 const result = /RESULT (\w+) menu_ms=(-?\d+) enter_ms=(-?\d+) sidecar_ready_ms=(-?\d+) failed_handlers=(\d+) in_game=(\w+)/.exec(text);
 const summary = {
   mode: windowed ? "windowed" : "headless",
   arch: arch || process.arch,
   exitCode: code,
   seconds: Math.round((Date.now() - started) / 100) / 10,
-  ok: Boolean(result && result[1] === "ok" && code === 0),
+  ok: Boolean(result && result[1] === "ok" && code === 0 && (wantWebPanel === "any" || webPanelState === wantWebPanel)),
+  webPanel: webPanelState,
+  webPanelWanted: wantWebPanel,
+  webPanelDetail: webPanel ? webPanel[2].trim().slice(0, 400) : "",
   menuMs: result ? Number(result[2]) : null,
   enterMs: result ? Number(result[3]) : null,
   sidecarReadyMs: result ? Number(result[4]) : null,

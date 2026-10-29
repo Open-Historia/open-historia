@@ -25,11 +25,13 @@ if (process.platform !== "linux") throw new Error("The Linux app is built on Lin
 const godotEditor = process.env.OH_GODOT_EDITOR || "";
 const template = process.env.OH_GODOT_TEMPLATE || "";
 const library = path.resolve(process.env.OH_GDEXT_SO || path.join(here, "engine", "target", "release", "liboh_gdext.so"));
+const webLibrary = path.resolve(process.env.OH_OHWEB_SO || path.join(path.dirname(library), "libohweb.so"));
 const nodeBinary = path.resolve(process.env.OH_NODE_BIN || process.execPath);
 const codecBinary = path.resolve(process.env.OH_IMAGECODEC_BIN || path.join(here, "sidecar", "imagecodec", imageCodec.IMAGE_CODEC_MAC));
 if (!fs.existsSync(godotEditor)) throw new Error("Set OH_GODOT_EDITOR to the Godot 4.7.2 Linux editor (Godot_v4.7.2-stable_linux.x86_64).");
 if (!fs.existsSync(template)) throw new Error("Set OH_GODOT_TEMPLATE to Godot 4.7.2's linux_release.x86_64 export template.");
 if (!fs.existsSync(library)) throw new Error(`The engine library ${library} is missing: cargo build -p oh_gdext --release (in native/engine).`);
+if (!fs.existsSync(webLibrary)) throw new Error(`The web view library ${webLibrary} is missing: cargo build -p ohweb --release (in native/engine).`);
 if (!fs.existsSync(codecBinary)) throw new Error("Set OH_IMAGECODEC_BIN to the AVIF reader built by native/linux/build-imagecodec.sh.");
 
 const version = fs.readFileSync(path.join(here, "VERSION"), "utf8").trim();
@@ -83,6 +85,7 @@ copy(godotSource, project, (file, isDir) => {
   return true;
 });
 copy(library, path.join(project, "bin", "liboh_gdext.so"));
+copy(webLibrary, path.join(project, "bin", "libohweb.so"));
 
 const presetsFile = path.join(project, "export_presets.cfg");
 const presetsText = fs.readFileSync(presetsFile, "utf8");
@@ -103,7 +106,7 @@ fs.writeFileSync(presetsFile, presetsText.slice(0, linuxAt) + linuxPart + preset
 run(godotEditor, ["--headless", "--path", project, "--import"]);
 fs.mkdirSync(runtime, { recursive: true });
 run(godotEditor, ["--headless", "--path", project, "--export-release", "Linux", path.join(runtime, gameFile)]);
-for (const name of [gameFile, `${exeName}.pck`, "liboh_gdext.so"]) {
+for (const name of [gameFile, `${exeName}.pck`, "liboh_gdext.so", "libohweb.so"]) {
   if (!fs.existsSync(path.join(runtime, name))) throw new Error(`The Linux export did not write runtime/${name}.`);
 }
 fs.chmodSync(path.join(runtime, gameFile), 0o755);
