@@ -194,6 +194,7 @@ func _ready() -> void:
 	add_child(camera)
 	camera.make_current()
 	get_viewport().size_changed.connect(camera.force_update_scroll)
+	get_viewport().size_changed.connect(_on_view_resized)
 	basemap = Basemap.new()
 	basemap.world_width = WORLD_WIDTH
 	add_child(basemap)
@@ -632,9 +633,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		_after_camera_move()
 
 
-func _notification(what: int) -> void:
-	if what == NOTIFICATION_WM_SIZE_CHANGED and _ready_to_draw:
-		_after_camera_move()
+func _on_view_resized() -> void:
+	if _ready_to_draw:
+		_after_camera_move.call_deferred()
 
 
 class CityLayer extends Control:

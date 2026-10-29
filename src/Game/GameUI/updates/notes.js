@@ -53,6 +53,20 @@ import { PAST_UPDATES } from "./notesPast.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    id: "2026-10-native-window",
+    kind: "minor",
+    date: "2026-10-29",
+    banners: [
+      {
+        title: "A window of any size",
+        items: [
+          "Resizing the window no longer pulls the map away from its country names and cities, on the flat map, the tilted map and the globe.",
+          "The date and its skip arrow stay on screen when your country has a long name, and so do the other panels along the right edge.",
+        ],
+      },
+    ],
+  },
+  {
     id: "2026-10-native-renamed-regions",
     kind: "minor",
     date: "2026-10-29",
