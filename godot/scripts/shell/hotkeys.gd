@@ -27,6 +27,10 @@ func _init() -> void:
 func setup(link: EngineLink, defaults := true) -> void:
 	engine = link
 	apply_defaults = defaults
+	if apply_defaults and is_inside_tree():
+		_fit_screen(true)
+		if not get_tree().root.dpi_changed.is_connected(_on_dpi_changed):
+			get_tree().root.dpi_changed.connect(_on_dpi_changed)
 	if engine == null:
 		return
 	if not engine.is_ready():
@@ -36,14 +40,42 @@ func setup(link: EngineLink, defaults := true) -> void:
 		set_zoom(float(reply["result"].get("level", 0.0)), false)
 
 
+static func screen_scale() -> float:
+	if OS.get_name() != "macOS":
+		return 1.0
+	return maxf(1.0, DisplayServer.screen_get_max_scale())
+
+
 func zoom_factor() -> float:
 	return pow(ZOOM_BASE, zoom_level)
+
+
+func ui_factor() -> float:
+	return zoom_factor() * screen_scale()
+
+
+func _fit_screen(resize: bool) -> void:
+	var scale := screen_scale()
+	get_tree().root.content_scale_factor = ui_factor()
+	if not resize or scale <= 1.0 or DisplayServer.window_get_mode() != DisplayServer.WINDOW_MODE_WINDOWED:
+		return
+	var screen := DisplayServer.window_get_current_screen()
+	var usable := DisplayServer.screen_get_usable_rect(screen)
+	var wanted := Vector2(float(ProjectSettings.get_setting("display/window/size/viewport_width", 1440)), float(ProjectSettings.get_setting("display/window/size/viewport_height", 900))) * scale
+	var size := Vector2i(wanted.min(Vector2(usable.size) * 0.94).round())
+	DisplayServer.window_set_size(size)
+	DisplayServer.window_set_position(usable.position + (usable.size - size) / 2)
+
+
+func _on_dpi_changed() -> void:
+	if apply_defaults and is_inside_tree():
+		_fit_screen(false)
 
 
 func set_zoom(level: float, remember := true) -> void:
 	zoom_level = clampf(level, ZOOM_LEAST, ZOOM_MOST)
 	if apply_defaults and is_inside_tree():
-		get_tree().root.content_scale_factor = zoom_factor()
+		get_tree().root.content_scale_factor = ui_factor()
 	zoom_changed.emit(zoom_level, zoom_factor())
 	if remember and engine and engine.is_ready():
 		engine.request("shell.zoom.set", {"level": zoom_level})
