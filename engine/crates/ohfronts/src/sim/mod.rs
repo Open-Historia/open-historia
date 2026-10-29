@@ -52,3 +52,4 @@ pub mod fortify_cost;
 pub mod fortify_ops;
 pub mod view;
 pub mod engineer;
+pub mod orders;

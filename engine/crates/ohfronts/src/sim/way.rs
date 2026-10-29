@@ -437,7 +437,7 @@ pub fn ways_for(battle: &mut Battle, run: &Run, side: usize, picked: &[usize], w
 }
 
 fn route_chance(battle: &Battle, side: usize, index: usize, standing: &Val, what: &str) -> f64 {
-    let since = standing.get("since").string_or_empty();
+    let since = standing.read("since").string_or_empty();
     let text = [battle.name.clone(), "route".to_string(), since, js::number_to_string(side as f64), js::number_to_string(index as f64), what.to_string()].join("|");
     (hash_seed(&text) % 10000) as f64 / 10000.0
 }

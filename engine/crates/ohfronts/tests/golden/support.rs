@@ -223,9 +223,25 @@ fn base64(text: &str) -> Vec<u8> {
 struct Reader<'a> {
     blobs: &'a [J],
     cache: RefCell<Vec<Option<Val>>>,
+    ids: RefCell<Vec<Option<Val>>>,
+}
+
+fn holds_ref(value: &Val) -> bool {
+    match value {
+        Val::Ref(_) => true,
+        Val::Obj(obj) => obj.entries().any(|(_, item)| holds_ref(item)),
+        Val::Arr(list) | Val::Set(list) => list.iter().any(holds_ref),
+        Val::Map(entries) => entries.iter().any(|(key, item)| holds_ref(key) || holds_ref(item)),
+        _ => false,
+    }
 }
 
 impl<'a> Reader<'a> {
+    fn top(&self, value: &J) -> Val {
+        self.ids.borrow_mut().clear();
+        self.val(value)
+    }
+
     fn val(&self, value: &J) -> Val {
         match value {
             J::Null => Val::Null,
@@ -243,6 +259,18 @@ impl<'a> Reader<'a> {
                 }
                 Val::Obj(out)
             }
+        }
+    }
+
+    fn mentions_ids(&self, node: &J) -> bool {
+        match node {
+            J::Obj(entries) => match node.get("$") {
+                Some(J::Str(tag)) if tag == "id" || tag == "same" => true,
+                Some(J::Str(tag)) if tag == "ref" => self.mentions_ids(&self.blobs[node.get("k").unwrap().number() as usize]),
+                _ => entries.iter().any(|(_, item)| self.mentions_ids(item)),
+            },
+            J::Arr(list) => list.iter().any(|item| self.mentions_ids(item)),
+            _ => false,
         }
     }
 
@@ -328,11 +356,31 @@ impl<'a> Reader<'a> {
                     return done.clone();
                 }
                 let made = self.val(&self.blobs[index]);
-                self.cache.borrow_mut()[index] = Some(made.clone());
+                if !holds_ref(&made) && !self.mentions_ids(&self.blobs[index]) {
+                    self.cache.borrow_mut()[index] = Some(made.clone());
+                }
                 made
             }
             "Map" => Val::Map(v.unwrap().list().iter().map(|pair| self.raw(pair)).map(|pair| (self.val(&pair.list()[0]), self.val(&pair.list()[1]))).collect()),
             "Set" => Val::Set(v.unwrap().list().iter().map(|item| self.val(item)).collect()),
+            "id" => {
+                let n = node.get("n").unwrap().number() as usize;
+                let made = match node.get("v").map(|inner| self.val(inner)) {
+                    Some(Val::Obj(obj)) => Val::shared(obj),
+                    Some(other) => other,
+                    None => Val::Undef,
+                };
+                let mut ids = self.ids.borrow_mut();
+                while ids.len() <= n {
+                    ids.push(None);
+                }
+                ids[n] = Some(made.clone());
+                made
+            }
+            "same" => {
+                let n = node.get("n").unwrap().number() as usize;
+                self.ids.borrow().get(n).cloned().flatten().unwrap_or(Val::Undef)
+            }
             "O" => {
                 let mut out = Obj::new();
                 if let Some(J::Obj(entries)) = v {
@@ -369,11 +417,12 @@ fn as_list(value: Val) -> Vec<Val> {
 }
 
 pub fn load(name: &str) -> Fixture {
-    let path = format!("{}/tests/golden/{}.json", env!("CARGO_MANIFEST_DIR"), name);
+    let local = std::env::var("GOLDEN_DIR").ok().map(|dir| format!("{dir}/{name}.json")).filter(|path| std::path::Path::new(path).exists());
+    let path = local.unwrap_or_else(|| format!("{}/tests/golden/{}.json", env!("CARGO_MANIFEST_DIR"), name));
     let text = std::fs::read_to_string(&path).unwrap_or_else(|_| panic!("missing {path}"));
     let root = Parser { bytes: text.as_bytes(), at: 0 }.value();
     let blobs = root.get("blobs").map(|b| b.list()).unwrap_or(&[]);
-    let reader = Reader { cache: RefCell::new(vec![None; blobs.len()]), blobs };
+    let reader = Reader { cache: RefCell::new(vec![None; blobs.len()]), ids: RefCell::new(Vec::new()), blobs };
     let mut cases = Vec::new();
     if let Some(J::Obj(entries)) = root.get("cases") {
         for (fn_name, list) in entries {
@@ -381,21 +430,21 @@ pub fn load(name: &str) -> Fixture {
                 .list()
                 .iter()
                 .map(|item| {
-                    let calls_of = |calls: &J| -> Vec<(Vec<Val>, Val)> { calls.list().iter().map(|call| (as_list(reader.val(&call.list()[0])), reader.val(&call.list()[1]))).collect() };
+                    let calls_of = |calls: &J| -> Vec<(Vec<Val>, Val)> { calls.list().iter().map(|call| (as_list(reader.top(&call.list()[0])), reader.top(&call.list()[1]))).collect() };
                     let named = |key: &str| match item.get(key) {
                         Some(J::Obj(map)) => map.iter().map(|(name, calls)| (name.clone(), calls_of(calls))).collect(),
                         _ => Vec::new(),
                     };
                     Case {
-                        args: item.get("a").map(|a| as_list(reader.val(a))).unwrap_or_default(),
-                        result: item.get("r").map(|value| reader.val(value)),
-                        after: item.get("aa").map(|a| as_list(reader.val(a))),
+                        args: item.get("a").map(|a| as_list(reader.top(a))).unwrap_or_default(),
+                        result: item.get("r").map(|value| reader.top(value)),
+                        after: item.get("aa").map(|a| as_list(reader.top(a))),
                         throws: item.get("x").map(|value| value.text().to_string()),
                         callbacks: named("cb"),
                         result_calls: item.get("rc").map(calls_of).unwrap_or_default(),
-                        result_calls_after: item.get("rc").map(|calls| calls.list().iter().map(|call| call.list().get(2).map(|after| as_list(reader.val(after)))).collect()).unwrap_or_default(),
+                        result_calls_after: item.get("rc").map(|calls| calls.list().iter().map(|call| call.list().get(2).map(|after| as_list(reader.top(after)))).collect()).unwrap_or_default(),
                         method_calls: named("mc"),
-                        method_log: item.get("ml").map(|log| log.list().iter().map(|entry| (entry.list()[0].text().to_string(), as_list(reader.val(&entry.list()[1])), reader.val(&entry.list()[2]))).collect()).unwrap_or_default(),
+                        method_log: item.get("ml").map(|log| log.list().iter().map(|entry| (entry.list()[0].text().to_string(), as_list(reader.top(&entry.list()[1])), reader.top(&entry.list()[2]))).collect()).unwrap_or_default(),
                     }
                 })
                 .collect();
@@ -419,6 +468,12 @@ fn same_number(a: f64, b: f64) -> bool {
 
 fn same_at(got: &Val, want: &Val, at: &str) -> Result<(), String> {
     let fail = || Err(format!("at `{at}`: got {} want {}", short(got), short(want)));
+    if let Val::Ref(cell) = got {
+        return same_at(&Val::Obj(cell.borrow().clone()), want, at);
+    }
+    if let Val::Ref(cell) = want {
+        return same_at(got, &Val::Obj(cell.borrow().clone()), at);
+    }
     match (got, want) {
         (Val::Undef, Val::Undef) | (Val::Null, Val::Null) | (Val::Fn, Val::Fn) => Ok(()),
         (Val::Bool(a), Val::Bool(b)) if a == b => Ok(()),

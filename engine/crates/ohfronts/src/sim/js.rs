@@ -1,4 +1,6 @@
+use std::cell::RefCell;
 use std::cmp::Ordering;
+use std::rc::Rc;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Typed {
@@ -80,6 +82,7 @@ pub enum Val {
     Map(Vec<(Val, Val)>),
     Set(Vec<Val>),
     Fn,
+    Ref(Rc<RefCell<Obj>>),
 }
 
 pub fn array_index(key: &str) -> Option<u32> {
@@ -143,7 +146,7 @@ impl Obj {
     }
 }
 
-pub static UNDEF: Val = Val::Undef;
+pub const UNDEF: Val = Val::Undef;
 
 impl Val {
     pub fn obj<const N: usize>(entries: [(&str, Val); N]) -> Val {
@@ -190,11 +193,81 @@ impl Val {
     }
 
     pub fn is_object(&self) -> bool {
-        matches!(self, Val::Obj(_) | Val::Arr(_) | Val::Typed(_) | Val::Map(_) | Val::Set(_))
+        matches!(self, Val::Obj(_) | Val::Arr(_) | Val::Typed(_) | Val::Map(_) | Val::Set(_) | Val::Ref(_))
     }
 
     pub fn is_plain_object(&self) -> bool {
-        matches!(self, Val::Obj(_) | Val::Typed(_) | Val::Map(_) | Val::Set(_))
+        matches!(self, Val::Obj(_) | Val::Typed(_) | Val::Map(_) | Val::Set(_) | Val::Ref(_))
+    }
+
+    pub fn shared(obj: Obj) -> Val {
+        Val::Ref(Rc::new(RefCell::new(obj)))
+    }
+
+    pub fn share(self) -> Val {
+        match self {
+            Val::Obj(obj) => Val::shared(obj),
+            other => other,
+        }
+    }
+
+    pub fn read(&self, key: &str) -> Val {
+        match self {
+            Val::Ref(cell) => cell.borrow().get(key).cloned().unwrap_or(Val::Undef),
+            other => other.get(key).clone(),
+        }
+    }
+
+    pub fn has_key(&self, key: &str) -> bool {
+        match self {
+            Val::Ref(cell) => cell.borrow().has(key),
+            Val::Obj(obj) => obj.has(key),
+            _ => false,
+        }
+    }
+
+    pub fn write(&mut self, key: &str, value: Val) {
+        match self {
+            Val::Ref(cell) => cell.borrow_mut().set(key, value),
+            Val::Obj(obj) => obj.set(key, value),
+            _ => {}
+        }
+    }
+
+    pub fn put(&self, key: &str, value: Val) {
+        if let Val::Ref(cell) = self {
+            cell.borrow_mut().set(key, value);
+        }
+    }
+
+    pub fn unset(&mut self, key: &str) {
+        match self {
+            Val::Ref(cell) => {
+                cell.borrow_mut().remove(key);
+            }
+            Val::Obj(obj) => {
+                obj.remove(key);
+            }
+            _ => {}
+        }
+    }
+
+    pub fn same_ref(&self, other: &Val) -> bool {
+        match (self, other) {
+            (Val::Ref(a), Val::Ref(b)) => Rc::ptr_eq(a, b),
+            _ => false,
+        }
+    }
+
+    pub fn plain(&self) -> Val {
+        match self {
+            Val::Ref(cell) => Val::Obj(Obj(cell.borrow().0.iter().map(|(key, value)| (key.clone(), value.plain())).collect())),
+            Val::Obj(obj) => Val::Obj(Obj(obj.0.iter().map(|(key, value)| (key.clone(), value.plain())).collect())),
+            Val::Arr(list) => Val::Arr(list.iter().map(Val::plain).collect()),
+            Val::Map(entries) => Val::Map(entries.iter().map(|(key, value)| (key.plain(), value.plain())).collect()),
+            Val::Set(items) => Val::Set(items.iter().map(Val::plain).collect()),
+            other => other.clone(),
+        }
     }
 
     pub fn as_array(&self) -> Option<&Vec<Val>> {
