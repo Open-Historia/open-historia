@@ -15,6 +15,7 @@ use super::muster::Levy;
 use super::troops::Troop;
 use super::walls::Walls;
 use super::weather::Sky;
+use std::cell::RefCell;
 use std::rc::Rc;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -145,6 +146,7 @@ pub struct Battle {
     pub chronicle: Option<Chronicle>,
     pub air_mission: [String; 2],
     pub wings: Option<BattleWings>,
+    pub mind_homes: RefCell<Option<Vec<i8>>>,
 }
 
 pub struct Opening {
@@ -268,6 +270,7 @@ pub fn create_battle(run: &Run, opening: Opening) -> Battle {
         chronicle: None,
         air_mission: [String::new(), String::new()],
         wings: None,
+        mind_homes: RefCell::new(None),
     }
 }
 

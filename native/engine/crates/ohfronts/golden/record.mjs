@@ -37,7 +37,8 @@ const FIELD_PICK = { cols: 1, rows: 1, size: 1, holders: 1, play: 1, turns: 1 };
 const CLOSE_PICK = { size: 1, key: 1, squeezed: 1, was: 1, prey: 1, toPrey: 1, preyNear: 1, toSupplied: 1, pockets: 1, cut: 1 };
 const PHI_FIELD = { ...FIELD_PICK, phi: 1 };
 const SWARM_BATTLE = { sides: 1, swarms: 1, deploy: 1, frame: 1, radiusKm: 1, field: PHI_FIELD, troops: troopsPick(["strength", "x", "y", "owner", "command"]) };
-const runPicks =(names, battleAt = -1) => Object.fromEntries(names.map((name) => [name, battleAt >= 0 && name.startsWith("@") ? null : { 0: RUN_PICK, ...(battleAt >= 0 ? { [battleAt]: BATTLE_PICK } : {}) }]));
+const FEATURE_HOME = { field: { holders: 1 }, mindHomes: 1, homes: 1, sides: 1, arena: { region: 1, ids: 1 } };
+const runPicks = (names, battleAt = -1) => Object.fromEntries(names.map((name) => [name, battleAt >= 0 && name.startsWith("@") ? null : { 0: RUN_PICK, ...(battleAt >= 0 ? { [battleAt]: BATTLE_PICK } : {}) }]));
 
 const MODULES = {
   "src/runtime/unitMotion.js": { name: "unitMotion", keep: ["hashSeed"] },
@@ -191,6 +192,18 @@ const MODULES = {
           sky: { effects: 1 },
           troops: troopsPick(["x", "y", "strength", "kind", "supply", "punch", "pocket", "state", "dug", "order", "fatigue", "climate"]),
         },
+      },
+    },
+  },
+  "src/runtime/fronts/mind/features.js": {
+    name: "mindFeatures",
+    picks: {
+      homeTableOf: { 0: FEATURE_HOME, 1: {} },
+      groundOf: { 0: FEATURE_HOME, 2: {} },
+      staffFeatures: {
+        0: { ...FEATURE_HOME, name: 1, status: 1, gone: 1, lineKm: 1, pool: 1, daysRun: 1, quality: 1, edge: 1, frame: 1, arena: { cities: 1, names: 1, centreX: 1, centreY: 1, region: 1, ids: 1 }, troops: troopsPick(["strength", "kind", "supply", "punch", "x", "y", "pocket", "state"]) },
+        2: { began: 1, key: 1, today: { line: { contour: { x: 1, y: 1 }, count: 1 }, sectors: 1 } },
+        3: { battles: { "*": { ...FEATURE_HOME, name: 1, status: 1, gone: 1, lineKm: 1 } } },
       },
     },
   },
