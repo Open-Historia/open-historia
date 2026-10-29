@@ -213,6 +213,14 @@ fn battle_matches_js() {
                 let battle = region_battle(&run, case.arg(0));
                 expect(case, nums(&member_weights(&battle, &run, me, case.arg(2).num() as usize)))
             }),
+            ("keepStart", &crate::battle_life::keep_start_check),
+            ("raiseTroops", &crate::battle_life::raise_troops_check),
+            ("isLandFormation", &crate::battle_life::is_land_formation_check),
+            ("absorbUnit", &crate::battle_life::absorb_unit_check),
+            ("releaseNamed", &crate::battle_life::release_named_check),
+            ("loadBattle", &crate::battle_life::load_battle_check),
+            ("openBattle", &crate::battle_life::open_battle_check),
+            ("saveBattle", &crate::battle_life::save_battle_check),
         ],
     );
 }
