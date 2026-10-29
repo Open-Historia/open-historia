@@ -10,7 +10,16 @@ use super::field::{Claims, Field};
 use super::frame::{Frame, Projector};
 use super::ground::ToSide;
 use super::handicap::FAIR_EDGE;
-use super::js::{OrdMap, Val};
+use super::constants::REPAINT_BELOW;
+use super::field::{redistance, set_ground, take_cells, trace_contour, Painter};
+use super::handicap::{handicap_of, short_edge, side_shortage};
+use super::js::{self, OrdMap, Val};
+use super::line::measure_line;
+use super::military::land_worth;
+use super::muster::levy_pending;
+use super::supply::nearest_of;
+use super::troops::{live_count, side_radius_km};
+use crate::jsmath;
 use super::movement::Retreat;
 use super::muster::Levy;
 use super::orders::{HaltToday, OrderView};
@@ -161,6 +170,7 @@ pub struct Battle {
     pub mind: Val,
     pub pace: f64,
     pub retreat: Option<Retreat>,
+    pub ice_side: Option<Vec<i8>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -304,6 +314,7 @@ pub fn create_battle(run: &Run, opening: Opening) -> Battle {
         mind: Val::Undef,
         pace: f64::NAN,
         retreat: None,
+        ice_side: None,
     }
 }
 
@@ -313,4 +324,270 @@ pub fn keep_start(battle: &mut Battle) {
         battle.start_holders = Some(field.holders.clone());
         battle.city_holder = Some(battle.arena.cities.iter().map(|city| field.holders[city.cell as usize] as i8).collect());
     }
+}
+
+fn fold_name(value: &str) -> String {
+    js::fold_text(value)
+}
+
+pub fn side_of_name(battle: &Battle, name: &str) -> i64 {
+    let wanted = fold_name(name);
+    if wanted.is_empty() {
+        return -1;
+    }
+    for side in 0..2 {
+        if battle.sides[side].iter().enumerate().any(|(index, member)| fold_name(member) == wanted && !battle.gone[side].contains(&index)) {
+            return side as i64;
+        }
+    }
+    -1
+}
+
+pub fn holder_of(battle: &Battle, run: &Run, id: &str) -> String {
+    let group = run.group_of(id);
+    if !group.is_empty() && side_of_name(battle, &group) >= 0 {
+        group
+    } else {
+        run.controller_of(id)
+    }
+}
+
+pub fn read_regions(battle: &mut Battle, run: &Run) {
+    let arena = battle.arena.clone();
+    let count = arena.ids.len();
+    let mut region_side = vec![-1i8; count];
+    let mut home_side = vec![-1i8; count];
+    for index in 1..count {
+        let id = &arena.ids[index];
+        let group = side_of_name(battle, &run.group_of(id));
+        region_side[index] = if group >= 0 { group as i8 } else { side_of_name(battle, &run.controller_of(id)) as i8 };
+        home_side[index] = if group >= 0 { group as i8 } else { side_of_name(battle, &run.sovereign_of(id)) as i8 };
+        if !battle.shown.has(id) || region_side[index] < 0 {
+            let holder = holder_of(battle, run, id);
+            battle.shown.set(id.clone(), Val::Str(holder));
+        }
+    }
+    let mut home_of_region = vec![2u8; count];
+    for index in 1..count {
+        let shown = battle.shown.get(&arena.ids[index]).map(|name| name.string_or_empty()).unwrap_or_default();
+        let side = side_of_name(battle, &shown);
+        if side >= 0 {
+            home_of_region[index] = side as u8;
+        }
+    }
+    battle.homes = Some(arena.region.iter().map(|&region| home_of_region[region as usize]).collect());
+    battle.ice_side = ice_sides(&arena, &region_side);
+    battle.region_side = Some(region_side);
+    battle.home_side = Some(home_side);
+    battle.home_pieces = [None, None];
+}
+
+pub fn ice_sides(arena: &Arena, region_side: &[i8]) -> Option<Vec<i8>> {
+    let iced = arena.iced.as_ref()?;
+    let (cols, rows) = (arena.cols, arena.rows);
+    let mut side = vec![-1i8; arena.size];
+    let mut queue: Vec<usize> = Vec::new();
+    for cell in 0..arena.size {
+        if iced[cell] == 1 || !(arena.speed[cell] > 0.0) {
+            continue;
+        }
+        let own = region_side.get(arena.region[cell] as usize).copied().unwrap_or(-1);
+        if own != 0 && own != 1 {
+            continue;
+        }
+        side[cell] = own;
+        queue.push(cell);
+    }
+    let mut at = 0;
+    while at < queue.len() {
+        let cell = queue[at];
+        at += 1;
+        let col = (cell % cols) as i64;
+        let row = (cell / cols) as i64;
+        for (dx, dy) in [(1i64, 0i64), (-1, 0), (0, 1), (0, -1)] {
+            let (x, y) = (col + dx, row + dy);
+            if x < 0 || y < 0 || x >= cols as i64 || y >= rows as i64 {
+                continue;
+            }
+            let next = (y as usize) * cols + x as usize;
+            if iced[next] != 1 || side[next] >= 0 {
+                continue;
+            }
+            side[next] = side[cell];
+            queue.push(next);
+        }
+    }
+    Some(side)
+}
+
+pub fn read_region(battle: &mut Battle, run: &Run, id: &str) {
+    let Some(&index) = battle.arena.index_of.get(id) else { return };
+    if battle.region_side.is_none() {
+        return;
+    }
+    let group = side_of_name(battle, &run.group_of(id));
+    let side = if group >= 0 { group } else { side_of_name(battle, &run.controller_of(id)) };
+    battle.region_side.as_mut().unwrap()[index] = side as i8;
+    let home = if group >= 0 { group } else { side_of_name(battle, &run.sovereign_of(id)) };
+    let known = battle.home_side.as_ref().and_then(|homes| homes.get(index).copied()).map(|value| value as i64);
+    if known == Some(home) {
+        return;
+    }
+    if let Some(homes) = battle.home_side.as_mut() {
+        if index < homes.len() {
+            homes[index] = home as i8;
+        }
+    }
+    battle.home_pieces = [None, None];
+}
+
+pub fn member_index(battle: &Battle, side: usize, name: &str) -> i64 {
+    let wanted = fold_name(name);
+    if wanted.is_empty() {
+        return -1;
+    }
+    battle.sides[side].iter().position(|member| fold_name(member) == wanted).map(|at| at as i64).unwrap_or(-1)
+}
+
+pub fn paint_ground(battle: &mut Battle, run: &Run) {
+    let arena = battle.arena.clone();
+    let regions = arena.ids.len();
+    let mut shown_as = [vec![-1i64; regions], vec![-1i64; regions]];
+    let mut holder = [vec![-1i64; regions], vec![-1i64; regions]];
+    for region in 1..regions {
+        let id = &arena.ids[region];
+        let shown = battle.shown.get(id).map(|name| name.string_or_empty()).unwrap_or_default();
+        for side in 0..2 {
+            shown_as[side][region] = member_index(battle, side, &shown);
+            let group = member_index(battle, side, &run.group_of(id));
+            holder[side][region] = if group >= 0 { group } else { member_index(battle, side, &run.controller_of(id)) };
+        }
+    }
+    let troops = battle.troops.clone();
+    let homes = battle.homes.clone();
+    let field = battle.field.as_mut().unwrap();
+    for index in 0..field.size {
+        let side = field.holders[index] as usize;
+        if side != 0 && side != 1 {
+            continue;
+        }
+        let region = arena.region[index] as usize;
+        let home = homes.as_ref().and_then(|homes| homes.get(index).copied()).map(|home| home as usize);
+        let known = if home == Some(side) { jsmath::max(0.0, shown_as[side][region] as f64) as i64 } else { holder[side][region] };
+        field.painter[index] = if known >= 0 { known as u8 } else { nearest_of(&troops[side], field.cols, index) as u8 };
+    }
+}
+
+pub fn set_handicap(battle: &mut Battle, run: &Run) {
+    let sides: [Vec<Val>; 2] = [0, 1].map(|side| battle.sides[side].iter().enumerate().filter(|(at, _)| !battle.gone[side].contains(at)).map(|(_, member)| Val::Str(member.clone())).collect());
+    let both = Val::Arr(sides.iter().map(|members| Val::Arr(members.clone())).collect());
+    let edges = handicap_of(run.input.get("difficulty"), &both, run.input.get("players")).edges;
+    let shortage = |member: &Val| run.shortage_of(&member.string_or_empty());
+    let strength = |member: &Val| run.strength_of(&member.string_or_empty());
+    let short = [0, 1].map(|side| side_shortage(&sides[side], Some(&shortage), Some(&strength)));
+    battle.edge = [short_edge(edges[0], short[0]), short_edge(edges[1], short[1])];
+    battle.short = Some(short);
+    battle.worth = if run.mech.military() { Some([0, 1].map(|side| battle.sides[side].iter().map(|member| land_worth(&run.military_of(member))).collect())) } else { None };
+}
+
+pub fn line_length(battle: &mut Battle) -> f64 {
+    let field = battle.field.as_mut().unwrap();
+    let contour = trace_contour(field);
+    battle.line_km = measure_line(field, &contour).measured.total;
+    battle.line_km
+}
+
+pub fn set_radii(battle: &mut Battle) {
+    line_length(battle);
+    battle.radius_km = [0, 1].map(|side| side_radius_km(battle.line_km, live_count(&battle.troops[side]) as f64 + levy_pending(&battle.levy[side])));
+    for side in 0..2 {
+        let radius = battle.radius_km[side];
+        for troop in battle.troops[side].iter_mut() {
+            troop.radius_km = radius;
+        }
+    }
+}
+
+pub fn reconcile(battle: &mut Battle, run: &Run) -> bool {
+    read_regions(battle, run);
+    let arena = battle.arena.clone();
+    let region_side: Vec<i32> = battle.region_side.as_ref().unwrap().iter().map(|&side| side as i32).collect();
+    let ice: Option<Vec<i32>> = battle.ice_side.as_ref().map(|ice| ice.iter().map(|&side| side as i32).collect());
+    let mut changed = set_ground(battle.field.as_mut().unwrap(), &region_side, ice.as_deref());
+    let field = battle.field.as_ref().unwrap();
+    let mut held = vec![0i32; arena.ids.len()];
+    for index in 0..field.size {
+        let region = arena.region[index] as usize;
+        if field.play[index] != 0 && field.holders[index] as i32 == region_side[region] {
+            held[region] += 1;
+        }
+    }
+    let mut repaint = vec![false; arena.ids.len()];
+    let mut any = false;
+    for region in 1..arena.ids.len() {
+        if region_side[region] < 0 || arena.region_speed[region] <= 0.0 {
+            continue;
+        }
+        let whole = arena.cells[region] as f64 + arena.outside[region];
+        if (held[region] as f64 + arena.outside[region]) / whole >= REPAINT_BELOW {
+            continue;
+        }
+        repaint[region] = true;
+        any = true;
+    }
+    if any {
+        let mut cells: [Vec<usize>; 2] = [Vec::new(), Vec::new()];
+        for index in 0..field.size {
+            let region = arena.region[index] as usize;
+            if field.play[index] != 0 && repaint[region] {
+                cells[region_side[region] as usize].push(index);
+            }
+        }
+        let troops = battle.troops.clone();
+        let sides = battle.sides.clone();
+        let cols = field.cols;
+        for side in 0..2 {
+            if cells[side].is_empty() {
+                continue;
+            }
+            let mut painter = |index: usize| -> f64 {
+                let id = &arena.ids[arena.region[index] as usize];
+                let group = run.group_of(id);
+                let name = if group.is_empty() { run.controller_of(id) } else { group };
+                let wanted = fold_name(&name);
+                let named = if wanted.is_empty() { -1 } else { sides[side].iter().position(|member| fold_name(member) == wanted).map(|at| at as i64).unwrap_or(-1) };
+                if named >= 0 {
+                    named as f64
+                } else {
+                    nearest_of(&troops[side], cols, index)
+                }
+            };
+            take_cells(battle.field.as_mut().unwrap(), side as u8, &cells[side], Painter::By(&mut painter));
+        }
+        changed = true;
+    }
+    if changed {
+        redistance(battle.field.as_mut().unwrap());
+    }
+    changed
+}
+
+pub fn member_weights(battle: &Battle, run: &Run, me: Option<usize>, side: usize) -> Vec<f64> {
+    battle.sides[side]
+        .iter()
+        .enumerate()
+        .map(|(index, member)| {
+            if battle.gone[side].contains(&index) {
+                return 0.0;
+            }
+            let mut elsewhere = 0.0;
+            for (at, other) in run.battles.iter().enumerate() {
+                if Some(at) != me && other.status != "closed" && side_of_name(other, member) >= 0 {
+                    elsewhere += other.line_km;
+                }
+            }
+            let share = if battle.line_km + elsewhere > 0.0 { battle.line_km / (battle.line_km + elsewhere) } else { 1.0 };
+            jsmath::max(0.0, js::or_zero(run.strength_of(member))) * share
+        })
+        .collect()
 }

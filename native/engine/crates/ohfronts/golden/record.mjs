@@ -208,6 +208,8 @@ const MOVE_BATTLE = {
 };
 const MOVE_RUN = { input: { fromDate: 1, toDate: 1, days: 1 }, pace: 1, braked: 1, steer: 1, advanceKm: 1 };
 const PLAN_RECORD = { name: 1, asOf: 1, frame: 1, field: { mask: 1 }, sides: 1, orders: 1, troops: 1, brief: { carry: 1 } };
+const REGION_ARENA = { ids: 1, region: 1, iced: 1, speed: 1, cols: 1, rows: 1, size: 1 };
+const REGION_BATTLE = { arena: REGION_ARENA, sides: 1, gone: 1, shown: 1, regionSide: 1, homeSide: 1, homes: 1, iceSide: 1 };
 const runPicks = (names, battleAt = -1) => Object.fromEntries(names.map((name) => [name, battleAt >= 0 && name.startsWith("@") ? null : { 0: RUN_PICK, ...(battleAt >= 0 ? { [battleAt]: BATTLE_PICK } : {}) }]));
 
 const MODULES = {
@@ -483,6 +485,25 @@ const MODULES = {
     },
   },
   "src/runtime/fronts/warRoomOps.js": { name: "warRoomOps", quiet: true, most: 60, bytes: { default: 300000, cleanWarRoomOp: 30000 } },
+  "src/runtime/fronts/battle.js": {
+    name: "battle",
+    most: 40,
+    bytes: { default: 200000, sideOfName: 30000, memberIndex: 30000 },
+    keep: ["sideOfName", "holderOf", "readRegions", "iceSides", "readRegion", "memberIndex", "paintGround", "setHandicap", "lineLength", "setRadii", "reconcile", "memberWeights"],
+    picks: {
+      sideOfName: { 0: { sides: 1, gone: 1 } },
+      memberIndex: { 0: { sides: 1 } },
+      holderOf: { 0: { sides: 1, gone: 1 }, 1: {}, calls: ["1.groupOf", "1.controllerOf"] },
+      readRegions: { 0: REGION_BATTLE, 1: {}, calls: ["1.groupOf", "1.controllerOf", "1.sovereignOf"] },
+      readRegion: { 0: { ...REGION_BATTLE, arena: { ...REGION_ARENA, indexOf: 1 } }, 1: {}, calls: ["1.groupOf", "1.controllerOf", "1.sovereignOf"] },
+      paintGround: { 0: { ...REGION_BATTLE, field: { cols: 1, rows: 1, size: 1, holders: 1, painter: 1 }, troops: troopsPick(["x", "y", "strength"]) }, 1: {}, calls: ["1.groupOf", "1.controllerOf"] },
+      setHandicap: { 0: { sides: 1, gone: 1, edge: 1, short: 1, worth: 1 }, 1: { input: { difficulty: 1, players: 1 }, mech: 1 }, calls: ["1.shortageOf", "1.strengthOf", "1.militaryOf"] },
+      lineLength: { 0: { field: PHI_FIELD, arena: { frame: 1, cols: 1, rows: 1, size: 1, speed: 1 }, lineKm: 1 } },
+      setRadii: { 0: { field: PHI_FIELD, arena: { frame: 1, cols: 1, rows: 1, size: 1, speed: 1 }, lineKm: 1, levy: 1, radiusKm: 1, troops: troopsPick(["strength", "radiusKm"]) } },
+      reconcile: { 0: { ...REGION_BATTLE, arena: { ...REGION_ARENA, cells: 1, outside: 1, regionSpeed: 1 }, field: { ...PHI_FIELD, painter: 1 }, troops: troopsPick(["x", "y", "strength"]) }, 1: {}, calls: ["1.groupOf", "1.controllerOf", "1.sovereignOf"] },
+      memberWeights: { 0: { sides: 1, gone: 1, lineKm: 1, status: 1 }, 1: { battles: { "*": { sides: 1, gone: 1, lineKm: 1, status: 1 } } }, calls: ["1.strengthOf"], ids: true },
+    },
+  },
   "src/runtime/fronts/scenarioFronts.js": { name: "scenarioFronts" },
   "src/runtime/fronts/climate.js": { name: "climate", picks: climatePicks(["zonesOver", "zonesToday"]) },
   "src/runtime/fronts/weather.js": { name: "weather", picks: climatePicks(["skyOver", "skiesAhead"]) },
