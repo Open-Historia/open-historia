@@ -44,14 +44,22 @@ if [ "$assessed" != 0 ]; then need 0 "spctl rejects the un-notarised app (expect
 if command -v syspolicy_check >/dev/null 2>&1; then show syspolicy_check distribution "$app"; fi
 
 running() { pgrep -f "$app/Contents/MacOS/Open Historia" >/dev/null 2>&1; }
-stop_ours() { pkill -f "$app/Contents/" >/dev/null 2>&1; sleep 2; pkill -9 -f "$app/Contents/" >/dev/null 2>&1; true; }
+stop_ours() { pkill -f "$app/Contents/" >/dev/null 2>&1; sleep 2; pkill -9 -f "$app/Contents/" >/dev/null 2>&1; for pid in "${openers[@]}"; do kill "$pid" >/dev/null 2>&1; done; true; }
+openers=()
+launch() {
+  say "\$ open -n --env OH_STANDIN_MODEL=1 --env OH_DISCORD_PRESENCE=0 \"$app\"  (in the background: open waits while Gatekeeper asks)"
+  open -n --env OH_STANDIN_MODEL=1 --env OH_DISCORD_PRESENCE=0 "$app" > "$work/open-$#-${#openers[@]}.txt" 2>&1 &
+  openers+=($!)
+}
 
 say "== Double-click while quarantined"
 since="$(date '+%Y-%m-%d %H:%M:%S')"
-show open -n --env OH_STANDIN_MODEL=1 --env OH_DISCORD_PRESENCE=0 "$app"
+launch
 sleep 20
 if running; then say "the game is running while still quarantined"; quarantined_ran=1; else say "the game did not start while quarantined"; quarantined_ran=0; fi
+if kill -0 "${openers[0]}" 2>/dev/null; then say "open is still waiting after 20 s (a Gatekeeper prompt is up)"; else say "open returned: $(cat "$work"/open-*.txt 2>/dev/null | tr '\n' ' ')"; fi
 screencapture -x "$out/first-open-1-quarantined.png" 2>/dev/null || true
+show pgrep -fl "CoreServicesUIAgent|Open Historia"
 log show --start "$since" --style compact --predicate 'process == "syspolicyd" OR subsystem == "com.apple.syspolicy" OR process == "CoreServicesUIAgent"' 2>/dev/null | grep -iE "open historia|openhistoria|notari|gatekeeper|quarantine|deny|reject" | tail -25 | sed 's/^/  log: /' | tee -a "$report"
 stop_ours
 pkill -x CoreServicesUIAgent >/dev/null 2>&1 || true
@@ -67,7 +75,7 @@ need $? "the quarantine flag is gone"
 show spctl --assess --type execute --verbose=4 "$app"
 
 say "== Double-click after the step"
-show open -n --env OH_STANDIN_MODEL=1 --env OH_DISCORD_PRESENCE=0 "$app"
+launch
 ok=1
 for i in $(seq 1 45); do if running; then ok=0; break; fi; sleep 1; done
 need $ok "the game starts after xattr -dr com.apple.quarantine"

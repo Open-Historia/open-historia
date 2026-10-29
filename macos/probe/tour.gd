@@ -256,8 +256,8 @@ func _gesture_part() -> void:
 	await _shoot("g-2-shift-tilt")
 	var pinch_from := map.camera.zoom.x
 	var pinch := InputEventMagnifyGesture.new()
-	pinch.factor = 1.06
-	await _gesture(pinch, 16, centre)
+	pinch.factor = 1.02
+	await _gesture(pinch, 40, centre)
 	await _wait(1.2)
 	_say("GESTURE pinch %s" % _map_state())
 	_check("a pinch zooms the map in", map.camera.zoom.x > pinch_from * 1.05, _map_state())
@@ -267,7 +267,7 @@ func _gesture_part() -> void:
 	undo.delta = Vector2(-0.02, -0.09)
 	await _gesture(undo, 24, centre)
 	var out := InputEventMagnifyGesture.new()
-	out.factor = 0.94
-	await _gesture(out, 16, centre)
+	out.factor = 0.98
+	await _gesture(out, 40, centre)
 	await _wait(1.2)
 	_say("GESTURE back %s" % _map_state())

@@ -120,7 +120,8 @@ const gestures = [...text.matchAll(/GESTURE (.*)/g)].map((match) => match[1].tri
 const scriptErrors = (text.match(/SCRIPT ERROR/g) || []).length;
 const notify = /TOUR-NOTIFY title=(.*)\|body=(.*)/.exec(text);
 let notification = null;
-if (dbusLog) {
+const notifyWanted = !option("--skip", "").split(",").includes("notify") && (!option("--only", "") || option("--only", "").split(",").includes("game"));
+if (dbusLog && notifyWanted) {
   const wanted = notify ? { title: notify[1].trim(), body: notify[2].trim() } : null;
   const bus = fs.existsSync(dbusLog) ? fs.readFileSync(dbusLog, "utf8") : "";
   const calls = bus.split(/\n(?=method call|method return|signal|error)/).filter((block) => /member=Notify\b/.test(block));
