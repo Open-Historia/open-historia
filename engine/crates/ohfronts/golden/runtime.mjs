@@ -184,7 +184,7 @@ const encodeArgs = (args, picks) => {
   return args.map((value, at) => (picks[at] ? picked(value, picks[at], enc) : enc(value)));
 };
 
-export const wrap = (moduleName, name, fn, factories, picks = null) => {
+export const wrap = (moduleName, name, fn, factories, picks = null, quiet = false) => {
   if (typeof fn !== "function") return fn;
   const key = `${moduleName}.${name}`;
   const factory = factories.includes(name);
@@ -219,7 +219,7 @@ export const wrap = (moduleName, name, fn, factories, picks = null) => {
       busy -= 1;
     }
     const calls = {};
-    const restore = before ? patchCallbacks(args, calls) : () => {};
+    const restore = before && !quiet ? patchCallbacks(args, calls) : () => {};
     const passed = before ? wrapCallbackArgs(args, calls) : args;
     let result;
     try {
@@ -236,7 +236,7 @@ export const wrap = (moduleName, name, fn, factories, picks = null) => {
     if (!before) return result;
     busy += 1;
     try {
-      const out = { a: before, r: encode(result) };
+      const out = { a: before, r: picks?.result ? picked(result, picks.result, encoder(null)) : encode(result) };
       const after = encodeArgs(args, picks);
       if (JSON.stringify(after) !== beforeText) out.aa = after;
       const names = Object.keys(calls);

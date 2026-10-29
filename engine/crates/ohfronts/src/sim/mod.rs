@@ -35,3 +35,7 @@ pub mod transports;
 pub mod fatigue;
 pub mod chronicle;
 pub mod air;
+pub mod staff;
+pub mod closing;
+pub mod way;
+pub mod mind;

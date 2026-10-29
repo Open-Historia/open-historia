@@ -30,7 +30,8 @@ export async function load(url, context, next) {
     `import { wrap } from ${JSON.stringify(runtime)};`,
     `const factories = ${JSON.stringify(wanted.factories ?? [])};`,
     `const picks = ${JSON.stringify(wanted.picks ?? {})};`,
+    `const quiet = ${JSON.stringify(wanted.quiet === true)};`,
   ];
-  for (const name of names) lines.push(`export const ${name} = wrap(${JSON.stringify(wanted.name)}, ${JSON.stringify(name)}, orig.${name}, factories, picks[${JSON.stringify(name)}] ?? null);`);
+  for (const name of names) lines.push(`export const ${name} = wrap(${JSON.stringify(wanted.name)}, ${JSON.stringify(name)}, orig.${name}, factories, picks[${JSON.stringify(name)}] ?? null, quiet);`);
   return { format: "module", source: lines.join("\n"), shortCircuit: true };
 }
