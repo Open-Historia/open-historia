@@ -82,7 +82,7 @@ const summary = {
   leftovers: leftovers.length,
 };
 log.write(`\nsmoke summary ${JSON.stringify(summary)}\n`);
-log.end();
+await new Promise((resolve) => log.end(resolve));
 console.log(`smoke summary ${JSON.stringify(summary)}`);
 fs.rmSync(work, { recursive: true, force: true });
 process.exit(summary.ok ? 0 : 1);
