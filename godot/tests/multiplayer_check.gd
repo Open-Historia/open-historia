@@ -6,6 +6,8 @@ var signals := ""
 var started := 0
 var failures: PackedStringArray = []
 var _events: Array = []
+var remote := false
+const ORDER_TEXT := "Open a new rail line from Berlin to the coast."
 
 
 func _initialize() -> void:
@@ -14,6 +16,7 @@ func _initialize() -> void:
 	process_frame.connect(redraw.queue_redraw)
 	shots = OS.get_environment("OH_SHOTS")
 	signals = OS.get_environment("OH_MP_DIR")
+	remote = OS.get_environment("OH_MP_REMOTE") == "1"
 	started = Time.get_ticks_msec()
 	main = (load("res://main.tscn") as PackedScene).instantiate()
 	root.mouse_passthrough = true
@@ -50,10 +53,10 @@ func _until(condition: Callable, seconds: float) -> bool:
 
 
 func _shoot(name: String) -> void:
-	await _frames(4)
-	await RenderingServer.frame_post_draw
 	if shots.is_empty():
 		return
+	await _frames(4)
+	await RenderingServer.frame_post_draw
 	root.get_viewport().get_texture().get_image().save_png(shots.path_join(name + ".png"))
 	_say("screenshot " + name)
 
@@ -229,7 +232,7 @@ func _duo_host() -> void:
 	page.set_hosting(true)
 	await page.refresh()
 	page._host_name = "Native host"
-	page._settings["name"] = "Two windows"
+	page._settings["name"] = "Two networks" if remote else "Two windows"
 	page._settings["daysPerRound"] = 7
 	page._settings["countdownSeconds"] = 0
 	page._render()
@@ -240,15 +243,21 @@ func _duo_host() -> void:
 	_check("host: the lobby opens", lobby_open, str(_shared().get("error", "")))
 	await _until(func() -> bool: return bool(main.get("in_game")) and main.get("_screen") == "game", 30.0)
 	_signal("token", str(_shared().get("token", "")))
-	var guest_in := await _until(func() -> bool: return _has_text(overlay, "Germany"), 300.0)
+	_say("host: invite code ready")
+	var guest_in := await _until(func() -> bool: return _has_text(overlay, "Germany"), 3000.0 if remote else 300.0)
 	_check("host: the guest's seat shows", guest_in)
 	_find_button(overlay, "Start the game").pressed.emit()
 	await _until(func() -> bool: return _has_text(overlay, "Round 1 · Planning"), 60.0)
 	await _skip_refused("host")
-	var asked := await _until(func() -> bool: return _seen("requests-sent"), 300.0)
-	_check("host: the guest sent its requests", asked)
-	var order_text := _read_signal("requests-sent")
 	var queue_file := OS.get_environment("OH_NATIVE_ROOT").path_join("server/data/games").path_join(str(main.get("game_id"))).path_join("storage/actions.json")
+	var asked := false
+	if remote:
+		asked = await _until(func() -> bool: return FileAccess.get_file_as_string(queue_file).contains(ORDER_TEXT), 900.0)
+		await _wait(8.0)
+	else:
+		asked = await _until(func() -> bool: return _seen("requests-sent"), 300.0)
+	_check("host: the guest sent its requests", asked)
+	var order_text := ORDER_TEXT if remote else _read_signal("requests-sent")
 	var orders_arrived := false
 	var chat_arrived := false
 	var deadline := Time.get_ticks_msec() + 30000
@@ -273,20 +282,39 @@ func _duo_host() -> void:
 	await _wait(1.0)
 	await _shoot("duo-h01-round-landed")
 	_signal("resolved", str(after.get("gameDate", "")))
-	await _until(func() -> bool: return _seen("guest-done"), 600.0)
+	if remote:
+		var gone := await _until(_guest_left, 900.0)
+		_check("host: the guest's leaving shows on the host", gone, JSON.stringify(_shared().get("lobby", {}).get("seats", []) if typeof(_shared().get("lobby")) == TYPE_DICTIONARY else []))
+	else:
+		await _until(func() -> bool: return _seen("guest-done"), 600.0)
 	_find_button(overlay, "Stop").pressed.emit()
 	var stopped := await _until(func() -> bool: return not overlay.visible and main.menu.visible, 60.0)
 	_check("host: stopping closes the box", stopped)
 	_signal("stopped")
 
 
+func _guest_left() -> bool:
+	var lobby: Variant = _shared().get("lobby")
+	if typeof(lobby) != TYPE_DICTIONARY or typeof((lobby as Dictionary).get("seats")) != TYPE_ARRAY or ((lobby as Dictionary)["seats"] as Array).is_empty():
+		return false
+	for seat in (lobby as Dictionary)["seats"]:
+		if typeof(seat) == TYPE_DICTIONARY and str((seat as Dictionary).get("country", "")) == "Germany" and str((seat as Dictionary).get("status", "")) == "human":
+			return false
+	return true
+
+
 func _duo_guest() -> void:
-	var waited := await _until(func() -> bool: return _seen("token"), 600.0)
+	var token := OS.get_environment("OH_MP_TOKEN").strip_edges()
+	var waited := not token.is_empty()
+	if not waited:
+		waited = await _until(func() -> bool: return _seen("token"), 600.0)
 	_check("guest: the host's invite code arrives", waited)
 	var page := await _lobbies_page()
-	page._code = _read_signal("token")
-	page._join_name = "Native guest"
+	page._code = token if not token.is_empty() else _read_signal("token")
+	var join_name := OS.get_environment("OH_MP_NAME")
+	page._join_name = join_name if not join_name.is_empty() else "Native guest"
 	page._restyle_join()
+	_say("guest: join pressed")
 	page._join_button.pressed.emit()
 	var overlay := _overlay()
 	var lobby_ready := await _until(func() -> bool: return _has_text(overlay, "Choose your country…"), 180.0)
@@ -325,18 +353,18 @@ func _duo_guest() -> void:
 		var second := await _until(func() -> bool: return not _thread_with(chat, "A second line from the guest.").is_empty(), 60.0)
 		_check("guest: a line in an open thread round-trips", second)
 	await _shoot("duo-g02-chat")
+	var peace: Dictionary = await main.engine.request("country.answer", {"op": "propose", "ref": "war-that-does-not-exist", "territory": "restored", "money": "none", "theirs": "France"})
+	var said := str((peace.get("result", {}) as Dictionary).get("said", "")) if peace.get("ok", false) else str(peace.get("error", ""))
+	_check("guest: a peace request is answered by the host", said == "This is no longer open.", said)
 	main.hud.set_active_panel("actions")
 	var actions: Node = main.hud.panels.get("actions")
-	var order_text := "Open a new rail line from Berlin to the coast."
+	var order_text := ORDER_TEXT
 	(actions.get("_composer") as TextEdit).text = order_text
 	await actions.call("_submit")
 	var queued := await _until(func() -> bool: return JSON.stringify(actions.get("_view")).contains(order_text), 60.0)
 	_check("guest: the order comes back in the guest's queue", queued)
 	await _shoot("duo-g03-order")
 	main.hud.set_active_panel("")
-	var peace: Dictionary = await main.engine.request("country.answer", {"op": "propose", "ref": "war-that-does-not-exist", "territory": "restored", "money": "none", "theirs": "France"})
-	var said := str((peace.get("result", {}) as Dictionary).get("said", "")) if peace.get("ok", false) else str(peace.get("error", ""))
-	_check("guest: a peace request is answered by the host", said == "This is no longer open.", said)
 	_signal("requests-sent", order_text)
 	var revealed_before := _count("multiplayer.revealed")
 	var landed := await _until(func() -> bool: return _count("multiplayer.round") > 0, 300.0)
@@ -357,6 +385,14 @@ func _duo_guest() -> void:
 	await _wait(2.0)
 	_check("guest: the host is told the round was read, once", told and _count("multiplayer.revealed") == revealed_before + 1, "%d" % (_count("multiplayer.revealed") - revealed_before))
 	_signal("guest-done")
+	if remote:
+		var leave := _find_button(overlay, "Leave")
+		_check("guest: Leave is offered", leave != null)
+		if leave:
+			leave.pressed.emit()
+		var gone := await _until(func() -> bool: return not overlay.visible and main.menu.visible, 60.0)
+		_check("guest: leaving closes the box and shows the menu", gone)
+		return
 	var ended := await _until(func() -> bool: return _has_text(overlay, "The shared game ended"), 300.0)
 	_check("guest: the guest is told the host stopped", ended)
 	await _shoot("duo-g05-ended")
