@@ -268,7 +268,32 @@ export const wrap = (moduleName, name, fn, factories, picks = null, quiet = fals
         const inner = result;
         const rc = [];
         out.rc = rc;
-        result = function recorded(...values) {
+        if (picks?.rc) {
+          const rcMost = picks.rcMost ?? RESULT_CALLS_MOST;
+          result = function recorded(...values) {
+            if (rc.length >= rcMost) return inner.apply(this, values);
+            let before = null;
+            let text = "";
+            try {
+              before = encodeArgs(values, picks.rc);
+              text = JSON.stringify(before);
+            } catch {
+              before = null;
+            }
+            const value = inner.apply(this, values);
+            if (before) {
+              try {
+                const entry = [before, encode(value)];
+                const after = encodeArgs(values, picks.rc);
+                if (JSON.stringify(after) !== text) entry.push(after);
+                rc.push(entry);
+              } catch {
+                rc.length = rc.length;
+              }
+            }
+            return value;
+          };
+        } else result = function recorded(...values) {
           const value = inner.apply(this, values);
           if (rc.length < RESULT_CALLS_MOST) {
             try {

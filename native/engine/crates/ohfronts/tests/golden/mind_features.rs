@@ -16,7 +16,7 @@ impl Hooks for Sovereigns {
     }
 }
 
-fn feature_battle(run: &Run, value: &Val) -> Battle {
+pub fn feature_battle(run: &Run, value: &Val) -> Battle {
     let battle = pick_battle(run, value);
     if value.get("mindHomes").is_object() {
         *battle.mind_homes.borrow_mut() = Some(arg_numbers(value.get("mindHomes")).iter().map(|&n| n as i8).collect());
