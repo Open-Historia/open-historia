@@ -737,6 +737,45 @@ export const register = (ctx) => {
     return { playing: state.playing.length, ribbons, points, discs };
   };
 
+  const frontFramesOf = () => {
+    const kit = state.colourKit;
+    if (!kit) return "";
+    const owners = new Map();
+    const rgb = new Map();
+    const css = (value) => {
+      const key = String(value ?? "");
+      if (!rgb.has(key)) rgb.set(key, colours.parseColorToRgb(key) ?? UNOWNED_RGB);
+      return key;
+    };
+    const owner = (name) => {
+      const key = String(name ?? "");
+      if (owners.has(key)) return;
+      const arrow = kit.arrowColorsOf(key);
+      owners.set(key, [key, css(kit.colorOf(key)), css(arrow.top), css(arrow.side)]);
+    };
+    owner("");
+    const fronts = [];
+    for (const [name, { target }] of state.fronts) {
+      const { view } = target;
+      for (const side of list(view.sides)) for (const member of list(side)) owner(member);
+      const labels = new Map();
+      for (const entry of view.named ?? []) labels.set(`${entry.s}:${entry.i}`, entry.name);
+      const tracks = target.record?.replay?.t;
+      fronts.push({
+        name,
+        until: target.until,
+        status: view.status,
+        sides: view.sides,
+        frame: view.frame,
+        troops: [String(target.record?.troops?.[0] ?? ""), String(target.record?.troops?.[1] ?? "")],
+        named: [...labels].map(([key, label]) => [key, label ? engine.wmUnitLabels.shortUnitLabel(label) : ""]),
+        commands: view.commands,
+        replay: view.replay ? { s: view.replay.start, e: view.replay.end, n: view.replay.days, t: [String(tracks?.[0] ?? ""), String(tracks?.[1] ?? "")] } : null,
+      });
+    }
+    return JSON.stringify({ fronts, owners: [...owners.values()], rgb: [...rgb] });
+  };
+
   const frameOf = ({ days = [], zoom = 5 } = {}) => {
     const began = performance.now();
     const kit = state.colourKit;
@@ -891,10 +930,11 @@ export const register = (ctx) => {
       weather: weatherOf(live.world, live.game, gameId, clean(weatherKey)),
       strikes: { started: startedStrikes, playing: state.playing.length },
       reduceMotion,
+      frontFrames: frontFramesOf(),
     };
   };
 
-  const seedWar = async ({ a = "France", b = "Germany", phase = "war" } = {}) => {
+  const seedWar = async ({ a = "France", b = "Germany", phase = "war", id = "war-native-test", units: withUnits = true } = {}) => {
     if (!ctx.standIn) throw new Error("Only the stand-in model may seed a test war.");
     const world = await engine.gameState.readWorldState({ force: true });
     const game = await engine.readJson(engine.JSON_URLS.game, { defaultValue: {}, force: true });
@@ -902,9 +942,14 @@ export const register = (ctx) => {
     const round = Number(game?.round) || 1;
     const next = { ...world };
     if (phase === "war") {
-      next.wars = [...list(world.wars).filter((war) => war?.id !== "war-native-test"), {
-        id: "war-native-test", title: `${a}–${b} War`, status: "active", sideA: [a], sideB: [b], startedDate: date, lastUpdatedDate: date,
+      const warId = clean(id) || "war-native-test";
+      next.wars = [...list(world.wars).filter((war) => war?.id !== warId), {
+        id: warId, title: `${a}–${b} War`, status: "active", sideA: [a], sideB: [b], startedDate: date, lastUpdatedDate: date,
       }];
+      if (withUnits === false) {
+        await engine.gameState.writeWorldState(next);
+        return true;
+      }
       const units = list(world.units).filter((unit) => !String(unit?.id ?? "").startsWith("native-test-"));
       const unit = (id, owner, type, name, lng, lat, extra = {}) => ({ id: `native-test-${id}`, ownerCode: owner, type, name, strength: 80, status: "idle", lng, lat, source: "ai", ...extra });
       units.push(
