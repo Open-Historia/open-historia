@@ -207,6 +207,7 @@ const MOVE_BATTLE = {
   troops: MOVE_TROOPS,
 };
 const MOVE_RUN = { input: { fromDate: 1, toDate: 1, days: 1 }, pace: 1, braked: 1, steer: 1, advanceKm: 1 };
+const PLAN_RECORD = { name: 1, asOf: 1, frame: 1, field: { mask: 1 }, sides: 1, orders: 1, troops: 1, brief: { carry: 1 } };
 const runPicks = (names, battleAt = -1) => Object.fromEntries(names.map((name) => [name, battleAt >= 0 && name.startsWith("@") ? null : { 0: RUN_PICK, ...(battleAt >= 0 ? { [battleAt]: BATTLE_PICK } : {}) }]));
 
 const MODULES = {
@@ -460,6 +461,25 @@ const MODULES = {
     picks: {
       placeBehind: { 0: { field: FIELD_PICK, frame: 1 } },
       moveDay: { 0: MOVE_BATTLE, 1: MOVE_RUN, ids: true },
+    },
+  },
+  "src/runtime/fronts/plans.js": {
+    name: "plans",
+    quiet: true,
+    most: 60,
+    bytes: 150000,
+    picks: {
+      keptPlansOf: { 0: PLAN_RECORD },
+      withDiversion: { 0: PLAN_RECORD, result: PLAN_RECORD },
+      withProjectPlan: { 0: PLAN_RECORD, result: PLAN_RECORD },
+      withoutPlan: { 0: PLAN_RECORD, result: PLAN_RECORD },
+      operationsOn: { 0: { record: PLAN_RECORD, side: 1, projects: 1, cities: 1, player: 1, people: 1 } },
+      plansOf: { 0: PLAN_RECORD },
+      withOperationOrders: { 0: PLAN_RECORD, result: PLAN_RECORD },
+      knownPlans: { 0: { record: PLAN_RECORD, side: 1, spies: 1, projects: 1, cities: 1, player: 1, people: 1, played: 1 } },
+      hasDoubleAgent: { 0: { record: PLAN_RECORD, side: 1, spies: 1 } },
+      describePlans: { 0: PLAN_RECORD },
+      withWatch: { 0: PLAN_RECORD, result: PLAN_RECORD },
     },
   },
   "src/runtime/fronts/scenarioFronts.js": { name: "scenarioFronts" },
