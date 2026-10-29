@@ -46,3 +46,7 @@ pub mod combat;
 pub mod brief;
 pub mod letters;
 pub mod record;
+pub mod war_settings;
+pub mod war_geography;
+pub mod fortify_cost;
+pub mod fortify_ops;

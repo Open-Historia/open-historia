@@ -34,3 +34,4 @@ mod supply;
 mod combat;
 mod brief;
 mod record;
+mod fortify;
