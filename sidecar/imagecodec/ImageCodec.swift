@@ -119,6 +119,175 @@ struct Items {
 	var transforms: [Int: [(String, Int)]] = [:]
 	var sizes: [Int: (Int, Int)] = [:]
 	var typeAt: [Int: Int] = [:]
+	var properties: [Box] = []
+	var links: [Int: [(Int, Bool)]] = [:]
+	var extents: [Int: [(Int, Int)]] = [:]
+}
+
+func sized(_ bytes: Bytes, _ at: Int, _ size: Int) -> UInt64 {
+	if size == 4 {
+		return bytes.u32(at)
+	}
+	if size == 8 {
+		return bytes.u64(at)
+	}
+	return 0
+}
+
+func readExtents(_ bytes: Bytes, _ iloc: Box) -> [Int: [(Int, Int)]] {
+	var found: [Int: [(Int, Int)]] = [:]
+	let version = bytes.u8(iloc.body)
+	let offsetSize = bytes.u8(iloc.body + 4) >> 4
+	let lengthSize = bytes.u8(iloc.body + 4) & 15
+	let baseSize = bytes.u8(iloc.body + 5) >> 4
+	let indexSize = version >= 1 ? (bytes.u8(iloc.body + 5) & 15) : 0
+	var at = iloc.body + 6
+	var count = 0
+	if version < 2 {
+		count = bytes.u16(at)
+		at += 2
+	} else {
+		count = Int(bytes.u32(at))
+		at += 4
+	}
+	var index = 0
+	let limit = UInt64(bytes.data.count)
+	while index < count && at < iloc.end {
+		var id = 0
+		if version < 2 {
+			id = bytes.u16(at)
+			at += 2
+		} else {
+			id = Int(bytes.u32(at))
+			at += 4
+		}
+		var method = 0
+		if version >= 1 {
+			method = bytes.u16(at) & 15
+			at += 2
+		}
+		at += 2
+		let base = sized(bytes, at, baseSize)
+		at += baseSize
+		let extentCount = bytes.u16(at)
+		at += 2
+		var list: [(Int, Int)] = []
+		var usable = method == 0
+		var extent = 0
+		while extent < extentCount && at < iloc.end {
+			at += indexSize
+			let offset = base &+ sized(bytes, at, offsetSize)
+			at += offsetSize
+			let length = sized(bytes, at, lengthSize)
+			at += lengthSize
+			if offset > limit || length > limit - offset {
+				usable = false
+			} else {
+				list.append((Int(offset), Int(length)))
+			}
+			extent += 1
+		}
+		if usable && !list.isEmpty {
+			found[id] = list
+		}
+		index += 1
+	}
+	return found
+}
+
+func be16(_ value: Int) -> [UInt8] {
+	return [UInt8((value >> 8) & 255), UInt8(value & 255)]
+}
+
+func be32(_ value: Int) -> [UInt8] {
+	return [UInt8((value >> 24) & 255), UInt8((value >> 16) & 255), UInt8((value >> 8) & 255), UInt8(value & 255)]
+}
+
+func box(_ type: String, _ payload: [UInt8]) -> [UInt8] {
+	var out = be32(payload.count + 8)
+	out.append(contentsOf: Array(type.utf8))
+	out.append(contentsOf: payload)
+	return out
+}
+
+func standaloneItem(_ bytes: Bytes, _ items: Items, _ item: Int) -> [UInt8]? {
+	guard let extents = items.extents[item], let links = items.links[item] else {
+		return nil
+	}
+	var data: [UInt8] = []
+	for (offset, length) in extents {
+		data.append(contentsOf: bytes.data[offset..<(offset + length)])
+	}
+	var kept: [UInt8] = []
+	var associations: [UInt8] = []
+	for (property, essential) in links {
+		let source = items.properties[property - 1]
+		if source.type == "auxC" {
+			continue
+		}
+		kept.append(contentsOf: bytes.data[source.start..<source.end])
+		if associations.count >= 127 {
+			return nil
+		}
+		associations.append(UInt8(associations.count + 1) | (essential ? 0x80 : 0))
+	}
+	var ftypPayload: [UInt8] = Array("avif".utf8)
+	ftypPayload.append(contentsOf: be32(0))
+	ftypPayload.append(contentsOf: Array("avifmif1miaf".utf8))
+	let ftyp = box("ftyp", ftypPayload)
+	var hdlrPayload: [UInt8] = be32(0)
+	hdlrPayload.append(contentsOf: be32(0))
+	hdlrPayload.append(contentsOf: Array("pict".utf8))
+	hdlrPayload.append(contentsOf: [UInt8](repeating: 0, count: 13))
+	let hdlr = box("hdlr", hdlrPayload)
+	var pitmPayload: [UInt8] = be32(0)
+	pitmPayload.append(contentsOf: be16(1))
+	let pitm = box("pitm", pitmPayload)
+	var infePayload: [UInt8] = [2, 0, 0, 0]
+	infePayload.append(contentsOf: be16(1))
+	infePayload.append(contentsOf: be16(0))
+	infePayload.append(contentsOf: Array("av01".utf8))
+	infePayload.append(0)
+	var iinfPayload: [UInt8] = be32(0)
+	iinfPayload.append(contentsOf: be16(1))
+	iinfPayload.append(contentsOf: box("infe", infePayload))
+	let iinf = box("iinf", iinfPayload)
+	var ipmaPayload: [UInt8] = be32(0)
+	ipmaPayload.append(contentsOf: be32(1))
+	ipmaPayload.append(contentsOf: be16(1))
+	ipmaPayload.append(UInt8(associations.count))
+	ipmaPayload.append(contentsOf: associations)
+	var iprpPayload: [UInt8] = box("ipco", kept)
+	iprpPayload.append(contentsOf: box("ipma", ipmaPayload))
+	let iprp = box("iprp", iprpPayload)
+	let ilocSize = 22 + 8 * extents.count
+	let metaSize = 12 + hdlr.count + pitm.count + iinf.count + iprp.count + ilocSize
+	var cursor = ftyp.count + metaSize + 8
+	var ilocPayload: [UInt8] = be32(0)
+	ilocPayload.append(contentsOf: [0x44, 0x00])
+	ilocPayload.append(contentsOf: be16(1))
+	ilocPayload.append(contentsOf: be16(1))
+	ilocPayload.append(contentsOf: be16(0))
+	ilocPayload.append(contentsOf: be16(extents.count))
+	for (_, length) in extents {
+		ilocPayload.append(contentsOf: be32(cursor))
+		ilocPayload.append(contentsOf: be32(length))
+		cursor += length
+	}
+	var metaPayload: [UInt8] = be32(0)
+	metaPayload.append(contentsOf: hdlr)
+	metaPayload.append(contentsOf: pitm)
+	metaPayload.append(contentsOf: box("iloc", ilocPayload))
+	metaPayload.append(contentsOf: iinf)
+	metaPayload.append(contentsOf: iprp)
+	let meta = box("meta", metaPayload)
+	if meta.count != metaSize || cursor > Int(UInt32.max) || extents.count > 0xFFFF {
+		return nil
+	}
+	var file = ftyp
+	file.append(contentsOf: meta)
+	file.append(contentsOf: box("mdat", data))
+	return file
 }
 
 func readItems(_ bytes: Bytes) -> Items? {
@@ -144,6 +313,9 @@ func readItems(_ bytes: Bytes) -> Items? {
 				items.typeAt[Int(bytes.u32(infe.body + 4))] = infe.body + 10
 			}
 		}
+	}
+	if let iloc = bytes.find(children, "iloc") {
+		items.extents = readExtents(bytes, iloc)
 	}
 	var candidates: [Int] = []
 	if let iref = bytes.find(children, "iref") {
@@ -171,6 +343,7 @@ func readItems(_ bytes: Bytes) -> Items? {
 		return items
 	}
 	let properties = bytes.boxes(ipco.body, ipco.end)
+	items.properties = properties
 	let ipmaWide = bytes.u8(ipma.body) != 0
 	let bigIndex = (bytes.u8(ipma.body + 3) & 1) != 0
 	var cursor = ipma.body + 4
@@ -184,12 +357,15 @@ func readItems(_ bytes: Bytes) -> Items? {
 		cursor += 1
 		var association = 0
 		while association < associations {
-			let property = bigIndex ? (bytes.u16(cursor) & 0x7FFF) : (bytes.u8(cursor) & 0x7F)
+			let raw = bigIndex ? bytes.u16(cursor) : bytes.u8(cursor)
+			let property = bigIndex ? (raw & 0x7FFF) : (raw & 0x7F)
+			let essential = bigIndex ? (raw & 0x8000) != 0 : (raw & 0x80) != 0
 			cursor += bigIndex ? 2 : 1
 			association += 1
 			if property < 1 || property > properties.count {
 				continue
 			}
+			items.links[item, default: []].append((property, essential))
 			let box = properties[property - 1]
 			if (box.type == "irot" || box.type == "imir") && box.body < box.end {
 				items.transforms[item, default: []].append((box.type, bytes.u8(box.body) & (box.type == "irot" ? 3 : 1)))
@@ -210,21 +386,6 @@ func readItems(_ bytes: Bytes) -> Items? {
 		items.alpha = 0
 	}
 	return items
-}
-
-func withPrimary(_ data: [UInt8], _ items: Items, _ item: Int) -> [UInt8] {
-	var copy = data
-	if items.pitmAt < 0 {
-		return copy
-	}
-	let width = items.pitmWide ? 4 : 2
-	if items.pitmAt + width > copy.count {
-		return copy
-	}
-	for index in 0..<width {
-		copy[items.pitmAt + index] = UInt8((item >> (8 * (width - 1 - index))) & 0xFF)
-	}
-	return copy
 }
 
 final class Track {
@@ -657,8 +818,7 @@ func colorItemData(_ bytes: Bytes, _ items: Items) -> [UInt8] {
 }
 
 func alphaItemData(_ bytes: Bytes, _ items: Items) -> [UInt8] {
-	let hidden = items.typeAt[items.primary].map { [$0] } ?? []
-	return withPrimary(renamed(colorItemData(bytes, items), hidden, "xv01"), items, items.alpha)
+	return standaloneItem(bytes, items, items.alpha) ?? []
 }
 
 func trackCopies(_ bytes: Bytes, _ animation: Animation) -> (color: [UInt8], mask: [UInt8])? {
