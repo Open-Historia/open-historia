@@ -55,6 +55,7 @@ const MODULES = {
   "src/runtime/fronts/line.js": { name: "line" },
   "src/runtime/fronts/wayfinder.js": { name: "wayfinder", big: ["findWay"], picks: { findWay: { 0: { cols: 1, rows: 1, west: 1, north: 1, step: 1, wrap: 1, flat: 1, scale: 1, land: 1, region: 1, ids: 1, full: 1, stepKm: 1, rowCosine: 1, seas: 1, seaCount: 1 } } } },
   "src/runtime/fronts/command.js": { name: "command", picks: { assignCommands: { 0: { troops: { "*": { "*": { x: 1, y: 1, strength: 1, owner: 1, command: 1 } } }, swarms: 1 } } } },
+  "src/runtime/fronts/replay.js": { name: "replay", factories: ["createReplayRecorder"], big: ["createReplayRecorder"], picks: { createReplayRecorder: { methods: { record: { 1: { "*": { "*": { strength: 1, x: 1, y: 1, state: 1 } } }, 2: { holders: 1, homes: 1, painters: 1, when: 1 } } } } } },
   "src/runtime/fronts/ground.js": { name: "ground", big: ["measure", "awayOf", "cheapestWay"], picks: { cellsOf: { 0: { cols: 1, rows: 1 } } } },
   "src/runtime/fronts/contact.js": { name: "contact" },
   "src/runtime/fronts/sectors.js": { name: "sectors" },

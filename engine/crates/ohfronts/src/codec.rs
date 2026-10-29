@@ -44,7 +44,7 @@ impl<'a> BitReader<'a> {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Troop {
     pub x: f64,
     pub y: f64,
@@ -56,7 +56,7 @@ pub struct Troop {
     pub state: usize,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Sample {
     pub day: f64,
     pub x: f64,

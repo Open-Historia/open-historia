@@ -7,6 +7,7 @@ const PER_PROCESS = 150;
 const NODES_MOST = 400000;
 const CALLS_MOST = 4000;
 const RESULT_CALLS_MOST = 60;
+const ORDERED_MOST = 60;
 const CASE_BYTES_MOST = 270000;
 const PROCESS_BYTES_MOST = 1500000;
 const TOO_BIG = Symbol("too big");
@@ -263,6 +264,7 @@ export const wrap = (moduleName, name, fn, factories, picks = null) => {
       } else if (factory && result && typeof result === "object" && !methodsWrapped.has(result)) {
         methodsWrapped.add(result);
         const mc = {};
+        const ordered = picks?.methods ? [] : null;
         for (const key of Object.keys(result)) {
           const method = result[key];
           const descriptor = Object.getOwnPropertyDescriptor(result, key);
@@ -270,8 +272,23 @@ export const wrap = (moduleName, name, fn, factories, picks = null) => {
           const list = [];
           mc[key] = list;
           result[key] = function recorded(...values) {
+            const before = ordered ? (() => {
+              try {
+                return encodeArgs(values, picks.methods[key] ?? null);
+              } catch {
+                return null;
+              }
+            })() : null;
             const value = method.apply(this, values);
-            if (list.length < RESULT_CALLS_MOST) {
+            if (ordered) {
+              if (before && ordered.length < ORDERED_MOST) {
+                try {
+                  ordered.push([key, before, encode(value)]);
+                } catch {
+                  ordered.push([key, before, { $: "fn" }]);
+                }
+              } else ordered.cut = true;
+            } else if (list.length < RESULT_CALLS_MOST) {
               try {
                 list.push([encode(values), encode(value)]);
               } catch {
@@ -281,7 +298,8 @@ export const wrap = (moduleName, name, fn, factories, picks = null) => {
             return value;
           };
         }
-        if (Object.keys(mc).length) out.mc = mc;
+        if (ordered) out.ml = ordered;
+        else if (Object.keys(mc).length) out.mc = mc;
       }
     } catch {
       entry.cases.length = entry.cases.length;

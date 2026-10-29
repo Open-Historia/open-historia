@@ -11,6 +11,7 @@ pub struct Case {
     pub callbacks: Vec<(String, Vec<(Vec<Val>, Val)>)>,
     pub result_calls: Vec<(Vec<Val>, Val)>,
     pub method_calls: Vec<(String, Vec<(Vec<Val>, Val)>)>,
+    pub method_log: Vec<(String, Vec<Val>, Val)>,
 }
 
 impl Case {
@@ -392,6 +393,7 @@ pub fn load(name: &str) -> Fixture {
                         callbacks: named("cb"),
                         result_calls: item.get("rc").map(calls_of).unwrap_or_default(),
                         method_calls: named("mc"),
+                        method_log: item.get("ml").map(|log| log.list().iter().map(|entry| (entry.list()[0].text().to_string(), as_list(reader.val(&entry.list()[1])), reader.val(&entry.list()[2]))).collect()).unwrap_or_default(),
                     }
                 })
                 .collect();
