@@ -36,6 +36,8 @@ var level_rects: Array[Rect2] = []
 var level_sizes: Array[Vector2i] = []
 var level_data: Array[PackedFloat32Array] = []
 var level_textures: Array[Texture2D] = []
+var _pool := {}
+var _arrivals: Array[Callable] = []
 var low := 0.0
 var high := 0.0
 var step := 1.0
@@ -55,6 +57,7 @@ var _planned_at := 0
 
 
 func setup(view: MapView, projector: GlobeView) -> void:
+	set_process(false)
 	map_view = view
 	globe = projector
 	var image := Image.create_empty(1, 1, false, Image.FORMAT_RH)
@@ -537,7 +540,7 @@ func _build(job: Dictionary) -> void:
 		for cy in range(from_y, to_y):
 			for cx in range(from_x, to_x):
 				lod[cy * cells.x + cx] = level
-	_built.call_deferred({
+	_arrive.call_deferred(_built.bind({
 		"key": job["key"],
 		"levels": out_levels,
 		"lod": lod,
@@ -546,7 +549,20 @@ func _build(job: Dictionary) -> void:
 		"origin": origin,
 		"low": float(job["low"]) * EXAGGERATION,
 		"high": float(job["high"]) * EXAGGERATION,
-	})
+	}))
+
+
+func _arrive(job: Callable) -> void:
+	_arrivals.append(job)
+	set_process(true)
+
+
+func _process(_delta: float) -> void:
+	var jobs := _arrivals
+	_arrivals = []
+	set_process(false)
+	for job in jobs:
+		job.call()
 
 
 func _built(result: Dictionary) -> void:
@@ -566,7 +582,7 @@ func _apply(result: Dictionary) -> void:
 		level_rects[level] = spec["rect"]
 		level_sizes[level] = size
 		level_data[level] = spec["data"]
-		level_textures[level] = ImageTexture.create_from_image(spec["image"])
+		level_textures[level] = _pooled(level, spec["image"])
 		finest = minf(finest, (spec["rect"] as Rect2).size.x / float(size.x))
 	var cells: Vector2i = result["cells"]
 	lod_size = cells
@@ -575,7 +591,10 @@ func _apply(result: Dictionary) -> void:
 	lod_data = result["lod"]
 	if cells.x > 0 and cells.y > 0:
 		var image := Image.create_from_data(cells.x, cells.y, false, Image.FORMAT_R8, lod_data)
-		lod_texture = ImageTexture.create_from_image(image)
+		if lod_texture and lod_texture.get_size() == Vector2(cells) and lod_texture.get_format() == Image.FORMAT_R8:
+			lod_texture.update(image)
+		else:
+			lod_texture = ImageTexture.create_from_image(image)
 	low = float(result["low"])
 	high = float(result["high"])
 	step = finest if is_finite(finest) else 1.0
@@ -588,6 +607,16 @@ func _apply(result: Dictionary) -> void:
 		_again = {}
 		if int(plan["key"]) != _shown:
 			_start(plan)
+
+
+func _pooled(level: int, image: Image) -> ImageTexture:
+	var texture: ImageTexture = _pool.get(level)
+	if texture and texture.get_size() == Vector2(image.get_size()) and texture.get_format() == image.get_format():
+		texture.update(image)
+		return texture
+	texture = ImageTexture.create_from_image(image)
+	_pool[level] = texture
+	return texture
 
 
 func _cache_path(key: String) -> String:
@@ -656,7 +685,7 @@ func _decode_file(key: String, path: String) -> void:
 func _decode(key: String, bytes: PackedByteArray) -> void:
 	var image := Image.new()
 	if bytes.is_empty() or image.load_png_from_buffer(bytes) != OK or image.get_width() != DEM_SIZE or image.get_height() != DEM_SIZE:
-		_decoded.call_deferred(key, null, 0.0, 0.0)
+		_arrive.call_deferred(_decoded.bind(key, null, 0.0, 0.0))
 		return
 	image.convert(Image.FORMAT_RGBA8)
 	var source := image.get_data()
@@ -674,7 +703,7 @@ func _decode(key: String, bytes: PackedByteArray) -> void:
 		if value > highest:
 			highest = value
 	var heights := Image.create_from_data(DEM_SIZE, DEM_SIZE, false, Image.FORMAT_RF, values.to_byte_array())
-	_decoded.call_deferred(key, heights, lowest, highest)
+	_arrive.call_deferred(_decoded.bind(key, heights, lowest, highest))
 
 
 func _decoded(key: String, image: Image, lowest: float, highest: float) -> void:

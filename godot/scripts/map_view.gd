@@ -636,6 +636,7 @@ class CityLayer extends Control:
 	var _order: Array[int] = []
 	var _ordered_points := PackedVector2Array()
 	var _ordered_needed := PackedFloat64Array()
+	var _widths := {}
 
 	func _init() -> void:
 		mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -743,7 +744,11 @@ class CityLayer extends Control:
 			if capital or level >= needed + 0.6:
 				var size := maxi(1, roundi((11.0 if capital else 10.0) * ratio))
 				var text := str(city[0])
-				var width := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, size).x
+				var width_key := "%d|%s" % [size, text]
+				var width: float = _widths.get(width_key, -1.0)
+				if width < 0.0:
+					width = font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, size).x
+					_widths[width_key] = width
 				var at := screen + Vector2(-width * 0.5, 15.0 * ratio)
 				var box := Rect2(at - Vector2(2, size), Vector2(width + 4, size + 4))
 				var clash := false

@@ -8,6 +8,7 @@ const ETOPO_URL := "https://tiles.arcgis.com/tiles/C8EMgrsFcRFL6LrL/arcgis/rest/
 const NATGEO_PHYSICAL_URL := "https://services.arcgisonline.com/ArcGIS/rest/services/World_Physical_Map/MapServer/tile/%d/%d/%d"
 const TERRARIUM_URL := "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/%d/%d/%d.png"
 const MAX_ZOOM := 13
+const LAND_BUDGET_USEC := 3000
 const MAX_REQUESTS := 6
 const PLACEHOLDER_MIN_ZOOM := 9
 const DEFAULT_ID := "ocean"
@@ -192,6 +193,9 @@ var _vector_fills: Array = []
 var _line_material: ShaderMaterial
 var _decodes: Array[int] = []
 var _decoding := 0
+var _queued := {}
+var _landed: Array = []
+var _missing := {}
 
 
 func _ready() -> void:
@@ -207,6 +211,7 @@ func _ready() -> void:
 	line_shader.code = VECTOR_LINE_SHADER
 	_line_material = ShaderMaterial.new()
 	_line_material.shader = line_shader
+	set_process(false)
 	_rebuild_layers()
 
 
@@ -251,6 +256,7 @@ func _rebuild_layers() -> void:
 		layer.queue_free()
 	_layers.clear()
 	_queue.clear()
+	_queued.clear()
 	var kind := _style_kind()
 	if kind != "builtin":
 		_background.color = CUSTOM_SEA
@@ -577,10 +583,11 @@ func _report_loading() -> void:
 
 
 func request_tile(layer: TileLayer, key: String) -> void:
-	for entry in _queue:
-		if entry[0] == layer and entry[1] == key:
-			return
-	_queue.append([layer, key])
+	var tag := "%d|%s" % [layer.get_instance_id(), key]
+	if _queued.has(tag):
+		return
+	_queued[tag] = true
+	_queue.append([layer, key, tag])
 
 
 func _url_of(layer: TileLayer, z: int, x: int, y: int) -> String:
@@ -609,6 +616,7 @@ func _cache_path(layer: TileLayer, key: String) -> String:
 func _pump() -> void:
 	while _active < MAX_REQUESTS and not _queue.is_empty():
 		var entry: Array = _queue.pop_back()
+		_queued.erase(entry[2])
 		var layer: TileLayer = entry[0]
 		var key: String = entry[1]
 		if not is_instance_valid(layer) or layer.is_queued_for_deletion():
@@ -625,7 +633,7 @@ func _pump() -> void:
 			layer.on_loaded(key, ImageTexture.create_from_image(image) if image else null, PackedByteArray())
 			continue
 		var cached := _cache_path(layer, key)
-		if not cached.is_empty() and FileAccess.file_exists(cached):
+		if not cached.is_empty() and not _missing.has(cached):
 			_decode_later(layer, key, cached, PackedByteArray())
 			continue
 		if layer.source == "pmtiles":
@@ -701,7 +709,7 @@ func _decode_later(layer: TileLayer, key: String, path: String, body: PackedByte
 	var dem := layer.dem
 	_decodes.append(WorkerThreadPool.add_task(func() -> void:
 		var bytes := body if path.is_empty() else FileAccess.get_file_as_bytes(path)
-		_decoded.call_deferred(layer_ref, key, decode_image(dem, bytes), bytes, path.is_empty()), false, "basemap tile"))
+		_decoded.call_deferred(layer_ref, key, decode_image(dem, bytes), bytes, path), false, "basemap tile"))
 
 
 static func decode_image(dem: bool, bytes: PackedByteArray) -> Image:
@@ -722,8 +730,19 @@ static func decode_image(dem: bool, bytes: PackedByteArray) -> Image:
 	return image if status == OK else null
 
 
-func _decoded(layer_ref: WeakRef, key: String, image: Image, bytes: PackedByteArray, fetched: bool) -> void:
-	_decoding = maxi(0, _decoding - 1)
+func _decoded(layer_ref: WeakRef, key: String, image: Image, bytes: PackedByteArray, path: String) -> void:
+	_landed.append([layer_ref, key, image, bytes, path])
+	set_process(true)
+
+
+func _process(_delta: float) -> void:
+	if _landed.is_empty():
+		set_process(false)
+		return
+	var started := Time.get_ticks_usec()
+	while not _landed.is_empty() and (Time.get_ticks_usec() - started < LAND_BUDGET_USEC):
+		var entry: Array = _landed.pop_front()
+		_land(entry[0], entry[1], entry[2], entry[3], entry[4])
 	var kept: Array[int] = []
 	for task in _decodes:
 		if WorkerThreadPool.is_task_completed(task):
@@ -731,11 +750,20 @@ func _decoded(layer_ref: WeakRef, key: String, image: Image, bytes: PackedByteAr
 		else:
 			kept.append(task)
 	_decodes = kept
+	_pump()
+
+
+func _land(layer_ref: WeakRef, key: String, image: Image, bytes: PackedByteArray, path: String) -> void:
+	_decoding = maxi(0, _decoding - 1)
+	var fetched := path.is_empty()
 	var layer := layer_ref.get_ref() as TileLayer
 	if layer == null or not is_instance_valid(layer) or layer.is_queued_for_deletion():
-		_pump()
 		return
 	layer.pending.erase(key)
+	if not fetched and bytes.is_empty():
+		_missing[path] = true
+		request_tile(layer, key)
+		return
 	var texture: Texture2D = ImageTexture.create_from_image(image) if image else null
 	if texture == null and not layer.dem:
 		texture = ImageLoader.decode(bytes)
@@ -751,7 +779,6 @@ func _decoded(layer_ref: WeakRef, key: String, image: Image, bytes: PackedByteAr
 	else:
 		var parts := key.split("/")
 		_fetch(layer, key, _url_of(layer, int(parts[0]), int(parts[1]), int(parts[2])))
-	_pump()
 
 
 func _exit_tree() -> void:
@@ -831,6 +858,7 @@ func _store(layer: TileLayer, key: String, body: PackedByteArray) -> void:
 	var path := _cache_path(layer, key)
 	if path.is_empty():
 		return
+	_missing.erase(path)
 	DirAccess.make_dir_recursive_absolute(path.get_base_dir())
 	var file := FileAccess.open(path, FileAccess.WRITE)
 	if file:
@@ -981,6 +1009,7 @@ class TileLayer extends Node2D:
 	var _wanted := {}
 	var _last_args: Array = []
 	var _cover_key := 0
+	var _place_queued := false
 
 	func tile_zoom_for(zoom: float) -> int:
 		var ideal := int(roundf(log(16.0 * zoom) / log(2.0)))
@@ -1152,8 +1181,16 @@ class TileLayer extends Node2D:
 
 	func place_all() -> void:
 		_cover_key = 0
-		if _last_args.is_empty():
+		if _place_queued:
 			return
+		_place_queued = true
+		_place_now.call_deferred()
+
+	func _place_now() -> void:
+		_place_queued = false
+		if _last_args.is_empty() or not is_inside_tree():
+			return
+		_cover_key = 0
 		update(_last_args[0], _last_args[1], _last_args[2], _last_args[3])
 
 	func _place(place: String, key: String, origin: Vector2, tile: float, tile_zoom: int, overscaled: int) -> void:
