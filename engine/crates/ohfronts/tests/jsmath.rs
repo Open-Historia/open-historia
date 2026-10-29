@@ -16,6 +16,8 @@ fn check(text: &str) -> (usize, Vec<String>) {
             "exp" => jsmath::exp(x),
             "atan" => jsmath::atan(x),
             "tan" => jsmath::tan(x),
+            "sin" => jsmath::sin(x),
+            "cos" => jsmath::cos(x),
             "pow2" => jsmath::pow2(x),
             "hypot" => jsmath::hypot(x, f64::from_bits(want)),
             _ => continue,
