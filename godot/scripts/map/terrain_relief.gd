@@ -54,6 +54,7 @@ var _again: Dictionary = {}
 var _tasks: Array[int] = []
 var _cover_signature := 0
 var _planned_at := 0
+var _level_keys: Array[int] = []
 
 
 func setup(view: MapView, projector: GlobeView) -> void:
@@ -70,11 +71,13 @@ func _reset_levels() -> void:
 	level_sizes.clear()
 	level_data.clear()
 	level_textures.clear()
+	_level_keys.clear()
 	for level in range(LEVELS):
 		level_rects.append(Rect2(0, 0, 1, 1))
 		level_sizes.append(Vector2i.ONE)
 		level_data.append(PackedFloat32Array([0.0]))
 		level_textures.append(_blank)
+		_level_keys.append(0)
 
 
 func set_enabled(value: bool) -> void:
@@ -447,6 +450,7 @@ func _start(plan: Dictionary) -> void:
 		var box_high: Vector2i = window[1]
 		var span := WORLD / float(1 << int(level))
 		var placed: Array = []
+		var content := hash([int(level), box_low, box_high])
 		for tile_x in range(box_low.x, box_high.x + 1):
 			for tile_y in range(box_low.y, box_high.y + 1):
 				var key := tile_key(int(level), tile_x, tile_y)
@@ -455,13 +459,19 @@ func _start(plan: Dictionary) -> void:
 				var tile: Dictionary = tiles[key]
 				tile["used"] = _tick
 				placed.append([tile["image"], tile_x - box_low.x, tile_y - box_low.y])
+				content = hash([content, tile_x, tile_y])
 				lowest = minf(lowest, float(tile["min"]))
 				highest = maxf(highest, float(tile["max"]))
+		if content == 0:
+			content = 1
+		var reuse := _level_keys[int(level)] == content
 		levels.append({
 			"level": int(level),
+			"content": content,
+			"reuse": reuse,
 			"rect": Rect2(Vector2(box_low) * span, Vector2(box_high - box_low + Vector2i.ONE) * span),
 			"count": box_high - box_low + Vector2i.ONE,
-			"tiles": placed,
+			"tiles": [] if reuse else placed,
 		})
 	if bare or levels.is_empty():
 		lowest = minf(lowest, 0.0)
@@ -483,6 +493,9 @@ func _start(plan: Dictionary) -> void:
 func _build(job: Dictionary) -> void:
 	var out_levels: Array = []
 	for spec: Dictionary in job["levels"]:
+		if bool(spec["reuse"]):
+			out_levels.append({"level": spec["level"], "content": spec["content"], "reuse": true})
+			continue
 		var count: Vector2i = spec["count"]
 		var image := Image.create_empty(count.x * DEM_SIZE, count.y * DEM_SIZE, false, Image.FORMAT_RF)
 		var have := {}
@@ -512,6 +525,8 @@ func _build(job: Dictionary) -> void:
 		readable.convert(Image.FORMAT_RF)
 		out_levels.append({
 			"level": spec["level"],
+			"content": spec["content"],
+			"reuse": false,
 			"rect": spec["rect"],
 			"size": Vector2i(image.get_width(), image.get_height()),
 			"image": image,
@@ -574,16 +589,34 @@ func _built(result: Dictionary) -> void:
 
 
 func _apply(result: Dictionary) -> void:
+	var old_rects := level_rects.duplicate()
+	var old_sizes := level_sizes.duplicate()
+	var old_data := level_data.duplicate()
+	var old_textures := level_textures.duplicate()
+	var old_keys := _level_keys.duplicate()
+	for spec: Dictionary in result["levels"]:
+		if bool(spec["reuse"]) and old_keys[int(spec["level"])] != int(spec["content"]):
+			_wanted = 0
+			_again = {}
+			if globe:
+				globe.relief_tile_arrived()
+			return
 	_reset_levels()
 	var finest := INF
 	for spec: Dictionary in result["levels"]:
 		var level := int(spec["level"])
-		var size: Vector2i = spec["size"]
-		level_rects[level] = spec["rect"]
-		level_sizes[level] = size
-		level_data[level] = spec["data"]
-		level_textures[level] = _pooled(level, spec["image"])
-		finest = minf(finest, (spec["rect"] as Rect2).size.x / float(size.x))
+		if bool(spec["reuse"]):
+			level_rects[level] = old_rects[level]
+			level_sizes[level] = old_sizes[level]
+			level_data[level] = old_data[level]
+			level_textures[level] = old_textures[level]
+		else:
+			level_rects[level] = spec["rect"]
+			level_sizes[level] = spec["size"]
+			level_data[level] = spec["data"]
+			level_textures[level] = _pooled(level, spec["image"])
+		_level_keys[level] = int(spec["content"])
+		finest = minf(finest, level_rects[level].size.x / float(level_sizes[level].x))
 	var cells: Vector2i = result["cells"]
 	lod_size = cells
 	lod_cell = float(result["cell"])

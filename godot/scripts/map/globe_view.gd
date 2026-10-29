@@ -538,6 +538,8 @@ var _fast = null
 var _fast_relief := -1
 var _fast_frame: Dictionary = {}
 var _flat_shrink_at := 0
+var _relief_pending := false
+var _relief_pending_frame := 0
 
 
 func setup(owner_extras: Node, view: MapView) -> void:
@@ -722,6 +724,10 @@ func _recalculate_zoom_and_centre() -> void:
 
 
 func _on_relief_changed() -> void:
+	if active and _is_moving():
+		_relief_pending = true
+		_relief_pending_frame = Engine.get_process_frames()
+		return
 	if map_view and map_view.extras_ready():
 		map_view.call("_after_camera_move")
 
@@ -866,6 +872,8 @@ func _process(_delta: float) -> void:
 		_relief_dirty = false
 		relief.update(_frame, _flat.get("rect", Rect2()))
 	if active and _flat_shrink_at != 0 and Time.get_ticks_msec() >= _flat_shrink_at and not _is_moving():
+		map_view.call("_after_camera_move")
+	if _relief_pending and active and Engine.get_process_frames() - _relief_pending_frame >= 2 and map_view.extras_ready():
 		map_view.call("_after_camera_move")
 	if not active or not enabled:
 		return
@@ -1895,6 +1903,7 @@ func _flat_view(frame: Dictionary, texture: Vector2) -> Dictionary:
 
 
 func after_camera_move() -> void:
+	_relief_pending = false
 	if not active or _flat.is_empty():
 		return
 	var frame := _frame
