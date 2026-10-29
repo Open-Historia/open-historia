@@ -86,29 +86,9 @@ func _screen(name: String) -> void:
 func _sweep(label: String, scope: Node) -> int:
 	if label == "vault door":
 		await _shoot("t-vault-door")
-		await _door_probe(scope)
 	elif label == "update notice":
 		await _shoot("t-update-notice")
 	return await super._sweep(label, scope)
-
-
-func _door_probe(door: Node) -> void:
-	var wheel: Variant = door.get("_wheel")
-	var group: Variant = door.get("_group")
-	if not (wheel is Control) or not (group is CanvasGroup):
-		return
-	var texture: Variant = (wheel as Control).get("wheel_texture")
-	_say("DOOR baked=%s area=%s wheel=%s shadow=%s group_alpha=%.2f" % [str(door.get("_baked_size")), str((wheel as Control).get("area")), str((texture as Texture2D).get_size()) if texture is Texture2D else "none", str(((wheel as Control).get("shadow_texture") as Texture2D).get_size()) if (wheel as Control).get("shadow_texture") is Texture2D else "none", (group as CanvasGroup).self_modulate.a])
-	await _wait(3.0)
-	await _shoot("t-vault-door-later")
-	(group as CanvasGroup).remove_child(wheel)
-	door.add_child(wheel)
-	door.move_child(wheel, (group as CanvasGroup).get_index() + 1)
-	await _wait(0.5)
-	await _shoot("t-vault-door-no-group")
-	door.remove_child(wheel)
-	(group as CanvasGroup).add_child(wheel)
-	await _wait(0.3)
 
 
 func _display(when: String) -> void:
