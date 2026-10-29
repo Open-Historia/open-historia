@@ -91,6 +91,7 @@ const MODULES = {
       linesChanged: { 0: { lines: 1 } },
     },
   },
+  "src/runtime/fronts/transports.js": { name: "transports", big: ["setOut", "interceptionOf"] },
   "src/runtime/fronts/climate.js": { name: "climate", picks: climatePicks(["zonesOver", "zonesToday"]) },
   "src/runtime/fronts/weather.js": { name: "weather", picks: climatePicks(["skyOver", "skiesAhead"]) },
 };

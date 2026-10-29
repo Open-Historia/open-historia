@@ -8,6 +8,7 @@ import { climateAt, freezesAt, oddsAt, zonesOver, zonesToday } from "../../../..
 import { WEATHER_ODDS, skiesAhead, skyOver } from "../../../../../src/runtime/fronts/weather.js";
 import { linesChanged, raiseWalls, readLines, wallAhead, wallsOf, wearWall } from "../../../../../src/runtime/fronts/walls.js";
 import { createTroop } from "../../../../../src/runtime/fronts/troops.js";
+import { boundFor, huntTransport, interceptionOf, moveOn, normalizeTransport, orderTransport, struck, transportTitle } from "../../../../../src/runtime/fronts/transports.js";
 import { projectorOf } from "../../../../../src/runtime/fronts/frame.js";
 import { awayOf, cellsOf, measure } from "../../../../../src/runtime/fronts/ground.js";
 import { measureLine } from "../../../../../src/runtime/fronts/line.js";
@@ -164,5 +165,42 @@ test("golden probes for fortified lines", () => {
     battle.gone[1].add(0);
     wallsOf(run, battle);
     linesChanged(run);
+  }
+});
+
+test("golden probes for transporters", () => {
+  const raw = [
+    { id: " t1 ", medium: "sea", owner: "Aland", to: { lng: 12.25, lat: 0.25 }, load: [[50, 1], { strength: 120, kind: 2 }, [0, 1], ["30", "1"]], speed: "500", capacity: 3, hunters: ["Borduria", "borduria ", " Cyrene"], attacks: ["X", "Y", "Z"], km: 900.4, gone: 10.6, way: [[10, 50], [11, 51], ["a", 2], [12, 52]], status: "moving", at: [10.12345, 50.98765] },
+    { id: "t2", medium: "air", owner: "Borduria", to: { name: "Port  Nowhere" }, raise: 12.6, embark: { battlefield: "Front", side: 1, troops: [3, 3, -0, 2.5, "4", -1] } },
+    { id: "t3", medium: "land", owner: "Aland", to: { lng: -3.75, lat: -0.05, name: "" }, from: [1, 2], embark: { battlefield: "", side: 0, troops: [1] }, speed: 99999, capacity: 0 },
+    { id: "t4", medium: "rail", owner: "Aland", to: { lng: 1, lat: 2 } },
+    { id: "t5", medium: "sea", owner: "", to: { lng: 1, lat: 2 } },
+    { id: "t6", medium: "sea", owner: "Aland", to: { lng: 1, lat: 95 } },
+    [1, 2],
+    null,
+  ];
+  const kept = raw.map(normalizeTransport).filter(Boolean);
+  for (const transport of kept) {
+    boundFor(transport);
+    transportTitle(transport);
+    for (const draw of [0, 0.3, 0.99, 2]) struck(transport, draw, "1940-01-01");
+    moveOn(transport, { flat: true, scale: 100 });
+    interceptionOf(transport, [10.5, 50.5], {
+      units: [
+        { type: "naval", ownerCode: "Borduria", lng: 10.6, lat: 50.4, strength: 80, name: "Fleet" },
+        { type: "air", ownerCode: "Cyrene", lng: 12, lat: 51, strength: 150, name: "Wing" },
+        { type: "air", ownerCode: "Aland", lng: 10.4, lat: 50.5, strength: 60, name: "Cover" },
+        { type: "naval", ownerCode: "Borduria", lng: "x", lat: 50, strength: 80 },
+        { type: "army", ownerCode: "Borduria", lng: 10, lat: 50, strength: 80 },
+        { type: "air", ownerCode: "Borduria", lng: 10, lat: 50, strength: 80, committedTo: "elsewhere" },
+      ],
+      enemy: (name) => name !== "Aland",
+      ally: (name) => name === "Aland",
+    });
+  }
+  huntTransport(kept, "t1", "Cyrene", false);
+  huntTransport(kept, "t1", "Dacia");
+  for (const spec of [{ medium: "sea", owner: "Aland", to: { lng: 3, lat: 4 }, load: [[40, 0]] }, { medium: "air", owner: "Aland", to: { lng: 3, lat: 4 }, raise: 2 }, { medium: "air", kind: "zeppelin", speed: 300, owner: "Aland", to: { lng: 3, lat: 4 }, raise: 2 }, { medium: "sea", owner: "Aland", to: { lng: 3, lat: 4 } }]) {
+    for (const year of [1700, 1900, 1950, null]) orderTransport(kept, spec, { date: "1900-01-01", year });
   }
 });
