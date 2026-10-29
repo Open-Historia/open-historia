@@ -30,3 +30,4 @@ pub mod command;
 pub mod replay;
 pub mod climate;
 pub mod weather;
+pub mod walls;

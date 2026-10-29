@@ -26,6 +26,8 @@ const RUN_PICK = {
   battles: { "*": BATTLE_PICK },
 };
 const LANE_TROOP = { x: 1, y: 1, strength: 1, kind: 1, depth: 1, hx: 1, hy: 1, radiusKm: 1, lane: 1, station: 1, body: 1 };
+const WALL_RUN = { lines: 1, input: { map: { flat: 1, scale: 1 }, fortifications: 1 }, mech: 1 };
+const WALL_BATTLE = { sides: 1, gone: 1, frame: 1, place: 1, field: { cols: 1, rows: 1, size: 1, play: 1 }, troops: { "*": { "*": { x: 1, y: 1, strength: 1, walled: 1 } } }, wallsFor: 1, wallSides: 1, walls: 1, wallMask: 1, wallDate: 1, wallRun: { lines: 1 }, log: 1 };
 const CLIMATE_RUN = { input: { climateZones: 1, climateSeed: 1, fromDate: 1, toDate: 1, days: 1 }, seed: 1, steer: 1, zoneSkiesDate: 1, zoneSkies: 1, zoneNeighbours: 1 };
 const CLIMATE_BATTLE = { name: 1, frame: 1, arena: { frame: 1 }, field: { cols: 1, rows: 1 }, place: 1, climateFor: 1, climateLat: 1, zonesFor: 1, zones: 1, zonesDate: 1, zonesLat: 1, zonesMix: 1, climateToday: 1, sky: 1, skies: 1 };
 const climatePicks = (names) => Object.fromEntries(names.map((name) => [name, { 0: CLIMATE_RUN, 1: CLIMATE_BATTLE }]));
@@ -74,6 +76,19 @@ const MODULES = {
       controlRadius: { 0: { radiusKm: 1, y: 1 } },
       standOff: { 0: { kind: 1, depth: 1, y: 1 } },
       drawTraits: { 0: { drive: 1, depth: 1, lane: 1, lag: 1, drawn: 1 } },
+    },
+  },
+  "src/runtime/fronts/walls.js": {
+    name: "walls",
+    big: ["raiseWalls", "wallsOf", "wallAhead"],
+    picks: {
+      readLines: { 0: WALL_RUN },
+      wallsOf: { 0: WALL_RUN, 1: WALL_BATTLE },
+      raiseWalls: { 0: WALL_RUN, 1: WALL_BATTLE },
+      wallAhead: { 0: { walls: 1, wallRun: { lines: 1 }, wallDate: 1, field: { cols: 1, rows: 1 } } },
+      wearWall: { 0: { walls: { sides: 1 }, wallRun: { lines: 1 }, wallDate: 1, log: 1 } },
+      keptWith: { 0: { siegeKept: 1, wallMask: 1 } },
+      linesChanged: { 0: { lines: 1 } },
     },
   },
   "src/runtime/fronts/climate.js": { name: "climate", picks: climatePicks(["zonesOver", "zonesToday"]) },

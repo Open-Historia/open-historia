@@ -17,3 +17,4 @@ mod command;
 mod replay;
 mod climate;
 mod troops;
+mod walls;

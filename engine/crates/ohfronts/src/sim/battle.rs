@@ -10,6 +10,7 @@ use super::handicap::FAIR_EDGE;
 use super::js::{OrdMap, Val};
 use super::muster::Levy;
 use super::troops::Troop;
+use super::walls::Walls;
 use super::weather::Sky;
 use std::rc::Rc;
 
@@ -128,6 +129,13 @@ pub struct Battle {
     pub zones: Option<Rc<Vec<ZoneWeights>>>,
     pub zones_day: Option<(String, f64)>,
     pub zones_mix: Option<Rc<Vec<ZoneToday>>>,
+    pub walls_for: bool,
+    pub wall_sides: String,
+    pub walls: Option<Rc<Walls>>,
+    pub wall_mask: [Option<Vec<u8>>; 2],
+    pub wall_date: Option<String>,
+    pub wall_run: bool,
+    pub siege_kept: [Option<Vec<u8>>; 2],
 }
 
 pub struct Opening {
@@ -238,6 +246,13 @@ pub fn create_battle(run: &Run, opening: Opening) -> Battle {
         zones: None,
         zones_day: None,
         zones_mix: None,
+        walls_for: false,
+        wall_sides: String::new(),
+        walls: None,
+        wall_mask: [None, None],
+        wall_date: None,
+        wall_run: false,
+        siege_kept: [None, None],
     }
 }
 

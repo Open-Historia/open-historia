@@ -1,5 +1,6 @@
 use super::battle::Battle;
 use super::climate::ZoneSky;
+use super::walls::WallLine;
 use super::constants::MAX_SIDE_MEMBERS;
 use super::game_dates::add_game_days;
 use super::js::{self, OrdMap, Val};
@@ -137,6 +138,7 @@ pub struct Run {
     pub mend: RefCell<Mend>,
     pub zone_skies: RefCell<Option<(String, Vec<ZoneSky>)>>,
     pub zone_neighbours: RefCell<Option<Vec<Vec<usize>>>>,
+    pub lines: RefCell<Option<Vec<WallLine>>>,
     dated: bool,
     from_date: String,
     controller: OrdMap<String, String>,
@@ -197,6 +199,7 @@ pub fn create_run(input: Val, hooks: Box<dyn Hooks>) -> Run {
         mend: RefCell::new(Mend::default()),
         zone_skies: RefCell::new(None),
         zone_neighbours: RefCell::new(None),
+        lines: RefCell::new(None),
         dated,
         from_date,
         controller: OrdMap::new(),

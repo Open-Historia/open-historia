@@ -6,6 +6,8 @@ import { openField, rebuildFromHolders, restoreCells, takeCapsule, traceContour 
 import { addGameDays } from "../../../../../src/runtime/gameDates.js";
 import { climateAt, freezesAt, oddsAt, zonesOver, zonesToday } from "../../../../../src/runtime/fronts/climate.js";
 import { WEATHER_ODDS, skiesAhead, skyOver } from "../../../../../src/runtime/fronts/weather.js";
+import { linesChanged, raiseWalls, readLines, wallAhead, wallsOf, wearWall } from "../../../../../src/runtime/fronts/walls.js";
+import { createTroop } from "../../../../../src/runtime/fronts/troops.js";
 import { projectorOf } from "../../../../../src/runtime/fronts/frame.js";
 import { awayOf, cellsOf, measure } from "../../../../../src/runtime/fronts/ground.js";
 import { measureLine } from "../../../../../src/runtime/fronts/line.js";
@@ -128,5 +130,39 @@ test("golden probes for a battlefield's climate zones and weather", () => {
         oddsAt(today, cell, WEATHER_ODDS.continental.autumn);
       }
     }
+  }
+});
+
+test("golden probes for fortified lines", () => {
+  for (const layout of LAYOUTS) {
+    const { frame, field } = sheet(layout);
+    if (!field) continue;
+    const place = projectorOf(frame);
+    const [west, east] = [frame.lng0, frame.lng0 + frame.cols * frame.cell];
+    const middle = (west + east) / 2;
+    const fortifications = [
+      { id: "w1", name: "The Aland  wall ss", owner: "Aland", level: 6, points: [[middle - 0.3, 50], [middle - 0.3, 51], [middle - 0.2, 52.2]], breaches: [[2, 4]], wear: [[3, 0.4], [7.6, 0.2]] },
+      { id: "w2", name: "", owner: " borduria ", level: 3.6, points: [[middle + 0.4, 50.1], [middle + 0.5, 51.9]], building: { since: "1914-07-20", days: 5 } },
+      { id: "w3", name: "Paper", owner: "Aland", level: 2, points: [[middle, 50], [middle, 51]] },
+      { id: "w4", owner: "Nobody", level: 9, points: [[west, 50], [east, 51]] },
+      { id: "w5", owner: "Aland", level: 10, points: [[middle - 1, 50.5], ["x", 51], [middle - 1, 51.5]] },
+    ];
+    const run = { input: { fortifications, map: {} }, mech: { walls: true } };
+    readLines(run);
+    const troops = [0, 1].map((side) => Array.from({ length: 6 }, (_, at) => createTroop({ x: random() * field.cols, y: random() * field.rows, strength: at === 5 ? 0 : 50, owner: 0 })));
+    const battle = { sides: SIDES.map((members) => members.slice()), gone: [new Set(), new Set()], field, frame, place, troops, log: [] };
+    wallsOf(run, battle);
+    for (const date of ["1914-07-22", "1914-07-28", "1914-08-03"]) {
+      raiseWalls(run, battle, date);
+      for (let round = 0; round < 30; round += 1) {
+        const side = round % 2;
+        const ahead = wallAhead(battle, side, random() * field.cols, random() * field.rows);
+        if (ahead) wearWall(battle, ahead, random() * 4, round % 3 === 0, 0.5 + random());
+      }
+      for (let piece = 0; piece < 6; piece += 1) wearWall(battle, { line: 0, piece }, 3, true, 2);
+    }
+    battle.gone[1].add(0);
+    wallsOf(run, battle);
+    linesChanged(run);
   }
 });
