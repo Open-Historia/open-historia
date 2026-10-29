@@ -188,6 +188,25 @@ const ORDER_BATTLE = {
 };
 const ORDER_RUN = { days: 1, input: { players: 1, map: { structures: 1 } }, advanceKm: 1, pace: 1 };
 const ORDER_TODAY = { day: 1, date: 1, line: { contour: { x: 1, y: 1 }, count: 1 }, sectors: 1, run: ORDER_RUN };
+const MOVE_TROOPS = troopsPick(["x", "y", "strength", "kind", "owner", "state", "hx", "hy", "order", "fallback", "pocket", "besieged", "dug", "dig", "spent", "pinned", "adrift", "stranded", "gave", "slid", "drive", "depth", "radiusKm", "movedKm", "stepping", "reducing", "plant", "paceFactor", "axisX", "axisY", "gx", "gy", "rested"]);
+const MOVE_BATTLE = {
+  name: 1,
+  seed: 1,
+  frame: 1,
+  arena: ORDER_ARENA,
+  field: PHI_FIELD,
+  close: CLOSE_PICK,
+  sieges: 1,
+  radiusKm: 1,
+  orders: 1,
+  views: 1,
+  haltsToday: 1,
+  anchors: 1,
+  homes: 1,
+  log: 1,
+  troops: MOVE_TROOPS,
+};
+const MOVE_RUN = { input: { fromDate: 1, toDate: 1, days: 1 }, pace: 1, braked: 1, steer: 1, advanceKm: 1 };
 const runPicks = (names, battleAt = -1) => Object.fromEntries(names.map((name) => [name, battleAt >= 0 && name.startsWith("@") ? null : { 0: RUN_PICK, ...(battleAt >= 0 ? { [battleAt]: BATTLE_PICK } : {}) }]));
 
 const MODULES = {
@@ -433,6 +452,16 @@ const MODULES = {
       applyOrder: { 0: ORDER_BATTLE, 2: ORDER_TODAY, ids: true },
     },
   },
+  "src/runtime/fronts/move.js": {
+    name: "move",
+    quiet: true,
+    most: 30,
+    bytes: { default: 480000, placeBehind: 60000 },
+    picks: {
+      placeBehind: { 0: { field: FIELD_PICK, frame: 1 } },
+      moveDay: { 0: MOVE_BATTLE, 1: MOVE_RUN, ids: true },
+    },
+  },
   "src/runtime/fronts/scenarioFronts.js": { name: "scenarioFronts" },
   "src/runtime/fronts/climate.js": { name: "climate", picks: climatePicks(["zonesOver", "zonesToday"]) },
   "src/runtime/fronts/weather.js": { name: "weather", picks: climatePicks(["skyOver", "skiesAhead"]) },
@@ -562,7 +591,7 @@ for (const value of Object.values(chosen)) {
   for (const [key, entry] of [...gathered].sort(([a], [b]) => (a < b ? -1 : 1))) {
     const [moduleName, fn] = key.split(".");
     if (moduleName !== value.name || (value.keep && !value.keep.includes(fn))) continue;
-    cases[fn] = pick(entry.cases, budgetOf(key) * (process.env.GOLDEN_WIDE ? 8 : 1), key, process.env.GOLDEN_WIDE ? CASES_MOST : value.most ?? CASES_MOST).map((item) => item.item);
+    cases[fn] = pick(entry.cases, budgetOf(key) * (process.env.GOLDEN_WIDE ? Number(process.env.GOLDEN_WIDE) || 8 : 1), key, process.env.GOLDEN_WIDE ? CASES_MOST : value.most ?? CASES_MOST).map((item) => item.item);
   }
   const blobs = [];
   const blobIndex = new Map();
