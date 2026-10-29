@@ -1,4 +1,7 @@
+import fs from "node:fs";
 import test from "node:test";
+import { encode } from "./runtime.mjs";
+import { createReplayRecorder } from "../../../../../src/runtime/fronts/replay.js";
 import { rasterizeArena } from "../../../../../src/runtime/fronts/arena.js";
 import { decodeFourMask, encodeMask } from "../../../../../src/runtime/fronts/codec.js";
 import { deployCells, readDeploy } from "../../../../../src/runtime/fronts/deploy.js";
@@ -203,4 +206,49 @@ test("golden probes for transporters", () => {
   for (const spec of [{ medium: "sea", owner: "Aland", to: { lng: 3, lat: 4 }, load: [[40, 0]] }, { medium: "air", owner: "Aland", to: { lng: 3, lat: 4 }, raise: 2 }, { medium: "air", kind: "zeppelin", speed: 300, owner: "Aland", to: { lng: 3, lat: 4 }, raise: 2 }, { medium: "sea", owner: "Aland", to: { lng: 3, lat: 4 } }]) {
     for (const year of [1700, 1900, 1950, null]) orderTransport(kept, spec, { date: "1900-01-01", year });
   }
+});
+
+test("golden probes for a replay carried onto a larger grid", () => {
+  const cases = [];
+  const ground = (cols, rows, salt) => {
+    const size = cols * rows;
+    return {
+      holders: Uint8Array.from({ length: size }, (_, at) => ((at * 7 + salt) % 11 === 0 ? 3 : (at + salt) % 3 === 0 ? 1 : 0)),
+      painters: Uint8Array.from({ length: size }, (_, at) => (at + salt) % 2),
+      homes: Uint8Array.from({ length: size }, (_, at) => ((at + salt) % 5 === 0 ? 0 : 9)),
+      when: Float32Array.from({ length: size }, (_, at) => ((at * 13 + salt) % 10) / 10),
+    };
+  };
+  const troops = (day) => [0, 1].map((side) => Array.from({ length: 3 + side }, (_, at) => ({ strength: Math.max(0, 80 - day * 9 * at), x: 1 + at + day * 0.3, y: 1 + side + day * 0.2, state: ["holding", "advancing", "encircled"][(day + at) % 3] })));
+  for (const [sides, nowSides, shiftX, shiftY, days] of [
+    [[["Aland", "Cyrene"], ["Borduria"]], [["Aland", "Cyrene"], ["Borduria"]], 2, 1, 4],
+    [[["Aland"], ["Borduria", "Dacia"]], [["Aland"], ["Borduria", "Dacia"]], 0, 3, 6],
+    [[["Aland"], ["Borduria"]], [["Aland"], ["Borduria", "Dacia"]], 1, 1, 2],
+    [[["Aland"], []], [["Aland"], []], 3, 0, 3],
+  ]) {
+    const [cols, rows, toCols, toRows] = [6, 4, 6 + 2 * shiftX + 1, 4 + 2 * shiftY];
+    const calls = [];
+    const recorder = createReplayRecorder({ sides, cols, rows });
+    for (let day = 0; day < days; day += 1) {
+      const args = [day, troops(day), ground(cols, rows, day)];
+      calls.push(["record", args]);
+      recorder.record(...args);
+      if (day === 1) {
+        const shown = [day, "r1", "Cyrene", "Aland"];
+        calls.push(["shown", shown]);
+        recorder.shown(...shown);
+      }
+    }
+    const carry = { sides: nowSides, cols: toCols, rows: toRows, shiftX, shiftY, ground: ground(toCols, toRows, 5), day: days };
+    const carried = recorder.carryOnto({
+      ...carry,
+      cellOf: (cell) => (cell === 3 ? -1 : (Math.floor(cell / cols) + shiftY) * toCols + (cell % cols) + shiftX),
+      pointOf: (x, y) => [x + shiftX, y + shiftY],
+    });
+    const after = [days + 1, troops(days + 1), ground(toCols, toRows, 7)];
+    if (carried) carried.record(...after);
+    const finish = { date: "1914-09-01", days: days + 1 };
+    cases.push({ a: encode([sides, cols, rows, calls, carry, after, finish]), r: carried ? encode(carried.finish(finish)) : null });
+  }
+  if (process.env.GOLDEN_OUT) fs.writeFileSync(new URL("../tests/golden/carry.json", import.meta.url), JSON.stringify({ blobs: [], cases: { carryOnto: cases } }));
 });

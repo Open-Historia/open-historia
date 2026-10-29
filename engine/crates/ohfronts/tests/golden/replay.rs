@@ -123,3 +123,59 @@ fn replay_matches_js() {
         ],
     );
 }
+
+fn replay_call(recorder: &mut ReplayRecorder, name: &str, args: &[Val]) {
+    let arg = |at: usize| args.get(at).cloned().unwrap_or(Val::Undef);
+    match name {
+        "record" => {
+            let troops: Vec<Vec<TrackIn>> = (0..2).map(|side| arg(1).at(side).array_or_empty().iter().map(|t| TrackIn { strength: t.get("strength").num(), x: t.get("x").num(), y: t.get("y").num(), state: state_index(t.get("state")) }).collect()).collect();
+            let ground_val = arg(2);
+            let holders = bytes(ground_val.get("holders"));
+            let homes = bytes(ground_val.get("homes"));
+            let painters = bytes(ground_val.get("painters"));
+            let when = if ground_val.get("when").is_nullish() { None } else { Some(arg_numbers(ground_val.get("when"))) };
+            let ground = holders.as_ref().filter(|_| ground_val.get("holders").truthy()).map(|holders| Ground { holders, homes: homes.as_deref(), painters: painters.as_deref(), when: when.as_deref() });
+            recorder.record(arg(0).num(), &troops, ground.as_ref());
+        }
+        "shown" => {
+            let was = arg(3);
+            recorder.shown(arg(0).num(), &arg(1), &arg(2), if was.is_undef() { None } else { Some(&was) });
+        }
+        _ => {}
+    }
+}
+
+#[test]
+fn carry_onto_matches_js() {
+    run(
+        "carry",
+        &[("carryOnto", &|case| {
+            let (cols, rows) = (case.arg(1).num(), case.arg(2).num());
+            let mut recorder = create_replay_recorder(case.arg(0), cols, rows);
+            for call in case.arg(3).array_or_empty() {
+                replay_call(&mut recorder, &call.at(0).string_or_empty(), call.at(1).array_or_empty());
+            }
+            let carry = case.arg(4);
+            let (to_cols, to_rows) = (carry.get("cols").num(), carry.get("rows").num());
+            let (shift_x, shift_y) = (carry.get("shiftX").num(), carry.get("shiftY").num());
+            let cell_of = |cell: usize| if cell == 3 { -1.0 } else { ((cell as f64 / cols).floor() + shift_y) * to_cols + (cell as f64 % cols) + shift_x };
+            let point_of = |x: f64, y: f64| [x + shift_x, y + shift_y];
+            let ground_val = carry.get("ground");
+            let holders = bytes(ground_val.get("holders")).unwrap_or_default();
+            let homes = bytes(ground_val.get("homes"));
+            let painters = bytes(ground_val.get("painters"));
+            let when = arg_numbers(ground_val.get("when"));
+            let ground = Ground { holders: &holders, homes: homes.as_deref(), painters: painters.as_deref(), when: Some(&when) };
+            let carried = recorder.carry_onto(carry.get("sides"), to_cols, to_rows, cell_of, point_of, &ground, carry.get("day").num());
+            let got = match carried {
+                Some(mut carried) => {
+                    replay_call(&mut carried, "record", case.arg(5).array_or_empty());
+                    let finish = case.arg(6);
+                    finished_val(&carried.finish(finish.get("date"), finish.get("days")))
+                }
+                None => Val::Null,
+            };
+            expect(case, got)
+        })],
+    );
+}
