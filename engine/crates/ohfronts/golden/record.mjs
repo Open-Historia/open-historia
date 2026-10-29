@@ -334,6 +334,14 @@ const MODULES = {
     picks: { buildBrief: { 0: BRIEF_BATTLE }, describeSince: { 0: RECORD_TEXT }, describeBattlefield: { 0: RECORD_TEXT } },
   },
   "src/runtime/fronts/record.js": { name: "record", quiet: true },
+  "src/runtime/warOutcomes.js": { name: "warOutcomes", quiet: true, keep: ["normalizeWarOutcomes"] },
+  "src/runtime/warSettings.js": { name: "warSettings", quiet: true, keep: ["normalizeEra", "normalizeMusterPoints", "normalizeWarfare", "normalizeWarSettings", "warSettingsOf"] },
+  "src/runtime/warGeography.js": { name: "warGeography", quiet: true, keep: ["normalizeFortifications"] },
+  "src/runtime/populationFigure.js": { name: "populationFigure", quiet: true, keep: ["readPopulationFigure", "populationFigureOf"] },
+  "src/runtime/militaryFunding.js": { name: "militaryFunding", quiet: true, keep: ["treasuryFactor", "militaryFunding", "fundingPerHead", "middleFundingPerHead", "fundingFactor"] },
+  "src/runtime/militaryStats.js": { name: "militaryStats", quiet: true, keep: ["normalizeMilitaryStats", "militaryLookup"] },
+  "src/runtime/fortifyCost.js": { name: "fortifyCost", quiet: true },
+  "src/runtime/fronts/fortifyOps.js": { name: "fortifyOps", picks: { applyFortifyOp: { calls: ["2.chart.holds"] } } },
   "src/runtime/fronts/scenarioFronts.js": { name: "scenarioFronts" },
   "src/runtime/fronts/climate.js": { name: "climate", picks: climatePicks(["zonesOver", "zonesToday"]) },
   "src/runtime/fronts/weather.js": { name: "weather", picks: climatePicks(["skyOver", "skiesAhead"]) },
@@ -356,7 +364,7 @@ const testFiles = () => {
     }
   };
   walk(path.join(root, "src/runtime/fronts"));
-  for (const extra of ["src/runtime/gameDates.test.js", "src/runtime/unitMotion.test.js", "src/Game/AI/frontTurn.test.js"]) {
+  for (const extra of ["src/runtime/gameDates.test.js", "src/runtime/unitMotion.test.js", "src/Game/AI/frontTurn.test.js", "src/runtime/fortifyCost.test.js", "src/runtime/warGeography.test.js", "src/runtime/warSettings.test.js", "src/runtime/warOutcomes.test.js"]) {
     if (fs.existsSync(path.join(root, extra))) found.push(extra);
   }
   for (const name of fs.readdirSync(here).filter((name) => name.endsWith(".test.mjs")).sort()) found.push(path.relative(root, path.join(here, name)).split(path.sep).join("/"));

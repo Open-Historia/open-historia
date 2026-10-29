@@ -570,7 +570,7 @@ pub fn battlefields_as_seen(battlefields: &Val, date: &Val, from_date: &Val) -> 
     seen
 }
 
-fn frame_from(value: &Val) -> Frame {
+pub fn frame_from(value: &Val) -> Frame {
     let n = |key: &str| value.get(key).num();
     Frame { lng0: n("lng0"), lat0: n("lat0"), cell: n("cell"), cols: n("cols"), rows: n("rows"), km: n("km"), flat: value.get("flat").truthy(), scale: if value.get("scale").is_undef() { 0.0 } else { n("scale") } }
 }
@@ -589,4 +589,36 @@ pub fn holder_at(battlefield: &Val, lng: f64, lat: f64) -> Val {
     }
     let cells = decode_mask(&mask.string_or_empty(), frame.cols * frame.rows);
     cells.get(index as usize).map(|&holder| Val::Num(holder as f64)).unwrap_or(Val::Undef)
+}
+
+pub struct Holders {
+    frame: Option<Frame>,
+    place: Option<Projector>,
+    cells: Vec<u8>,
+}
+
+impl Holders {
+    pub fn of(battlefield: &Val) -> Holders {
+        let frame = battlefield.get("frame");
+        let mask = battlefield.get("field").get("mask");
+        if !frame.truthy() || !mask.truthy() {
+            return Holders { frame: None, place: None, cells: Vec::new() };
+        }
+        let frame = frame_from(frame);
+        let cells = decode_mask(&mask.string_or_empty(), frame.cols * frame.rows);
+        Holders { place: Some(Projector::of(&frame)), frame: Some(frame), cells }
+    }
+
+    pub fn at(&self, lng: f64, lat: f64) -> Val {
+        let (frame, place) = match (&self.frame, &self.place) {
+            (Some(frame), Some(place)) => (frame, place),
+            _ => return Val::Num(HOLDER_WALL),
+        };
+        let [x, y] = place.to_cell(lng, lat);
+        let index = cell_index_at(frame, x, y);
+        if index < 0.0 {
+            return Val::Num(HOLDER_WALL);
+        }
+        self.cells.get(index as usize).map(|&holder| Val::Num(holder as f64)).unwrap_or(Val::Undef)
+    }
 }
