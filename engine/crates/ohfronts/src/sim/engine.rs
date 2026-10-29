@@ -12,7 +12,9 @@ use super::swarms::SWARM_FORM;
 use super::troops::troops_factor;
 use super::unit_motion::{era_of, ADVANCE_KM_PER_DAY, OVERLAND_KM_PER_DAY};
 use crate::jsmath;
+use super::arena::Arena;
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 
 pub trait Hooks {
     fn controller_of(&self, _id: &str) -> Val {
@@ -152,6 +154,7 @@ pub struct Run {
     pub air_day: Cell<Option<f64>>,
     pub air_over: RefCell<Vec<(usize, [Vec<String>; 2])>>,
     pub wings: RefCell<Option<OrdMap<String, Wing>>>,
+    pub arenas: HashMap<String, Arena>,
     dated: bool,
     from_date: String,
     controller: OrdMap<String, String>,
@@ -216,6 +219,7 @@ pub fn create_run(input: Val, hooks: Box<dyn Hooks>) -> Run {
         air_day: Cell::new(None),
         air_over: RefCell::new(Vec::new()),
         wings: RefCell::new(None),
+        arenas: HashMap::new(),
         dated,
         from_date,
         controller: OrdMap::new(),

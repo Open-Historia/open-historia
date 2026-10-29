@@ -80,7 +80,7 @@ fn input_of(case: &Case, at: usize, given: &Val) -> Val {
     Val::Obj(input)
 }
 
-fn run_at(case: &Case, at: usize) -> Run {
+pub fn run_at(case: &Case, at: usize) -> Run {
     let given = case.arg(at).plain();
     let mut run = create_run(input_of(case, at, &given), hooked(case, at));
     fill_run(&mut run, &given);
@@ -133,7 +133,7 @@ fn set_of(values: &[usize]) -> Val {
     Val::Set(values.iter().map(|&value| num(value as f64)).collect())
 }
 
-fn battle_from(run: &Run, value: &Val) -> Battle {
+pub fn battle_from(run: &Run, value: &Val) -> Battle {
     let value = shallow(value).plain();
     let mut battle = pick_battle(run, &value);
     if !value.get("warId").is_undef() {

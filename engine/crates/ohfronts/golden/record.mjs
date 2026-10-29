@@ -228,6 +228,20 @@ const SAVE_BATTLE = {
   troops: troopsPick(["x", "y", "strength", "kind", "owner", "named", "dig", "state", "command", "fatigue", "order"]),
 };
 const SAVE_RUN = { ...CLIMATE_RUN, mech: 1, input: { ...CLIMATE_RUN.input } };
+const DAY_ARENA = { key: 1, frame: 1, cols: 1, rows: 1, size: 1, region: 1, ids: 1, names: 1, cells: 1, outside: 1, centreX: 1, centreY: 1, cities: 1, indexOf: 1, speed: 1, iced: 1, regionSpeed: 1 };
+const DAY_BATTLE = {
+  ...Object.fromEntries(["name", "status", "sides", "gone", "shown", "regionSide", "homeSide", "homes", "iceSide", "said", "drawnHomes", "settledTurns", "lastFlip", "cityHolder", "citiesTaken", "taken", "log", "frame", "kept", "spared", "grown", "recorded", "planKey"].map((key) => [key, 1])),
+  arena: DAY_ARENA,
+  field: { ...PHI_FIELD, painter: 1 },
+  troops: troopsPick(["x", "y", "strength", "owner"]),
+};
+const DAY_RUN = { braked: 1, flipsLeft: 1, input: { fromDate: 1, toDate: 1, days: 1 }, flips: { "*": { day: 1, date: 1, regionId: 1, from: 1, to: 1, kind: 1, battlefield: { name: 1 } } }, notes: 1, battles: { "*": { name: 1, status: 1, sides: 1, gone: 1, regionSide: 1, homeSide: 1, planKey: 1, arena: { ids: 1, indexOf: 1 } } } };
+const DAY_CALLS = ["1.groupOf", "1.controllerOf", "1.sovereignOf", "1.isGroup"];
+const GROW_BATTLE = {
+  ...DAY_BATTLE,
+  ...Object.fromEntries(["seed", "radiusKm", "startPhi", "startHolders", "anchors", "pockets", "sieges", "siegeKey", "supplyTurns", "pocketTurns"].map((key) => [key, 1])),
+  troops: troopsPick(["x", "y", "strength", "owner", "order", "fallback", "station"]),
+};
 const runPicks = (names, battleAt = -1) => Object.fromEntries(names.map((name) => [name, battleAt >= 0 && name.startsWith("@") ? null : { 0: RUN_PICK, ...(battleAt >= 0 ? { [battleAt]: BATTLE_PICK } : {}) }]));
 
 const MODULES = {
@@ -527,6 +541,20 @@ const MODULES = {
       loadBattle: { 0: LOAD_RUN, result: LOAD_RESULT, calls: RUN_CALLS.map((name) => `0.${name}`) },
       openBattle: { 0: { ...LOAD_RUN, input: { ...LOAD_RUN.input, map: { regions: 1 } } }, result: LOAD_RESULT, calls: RUN_CALLS.map((name) => `0.${name}`) },
       saveBattle: { 0: SAVE_BATTLE, 1: SAVE_RUN, calls: ["0.recorder.finish", "1.groupOf", "1.controllerOf"], ids: true },
+    },
+  },
+  "src/runtime/fronts/day.js": {
+    name: "day",
+    most: 40,
+    bytes: { default: 200000, recordDay: 30000, simulateDay: 1500000 },
+    picks: {
+      startRecorder: { 0: DAY_BATTLE, 1: {}, calls: DAY_CALLS },
+      prepare: { 0: { ...ORDER_BATTLE, even: 1, field: { ...PHI_FIELD, edits: 1 }, troops: troopsPick(["x", "y", "strength", "drawn", "drive", "depth", "lane", "lag", "radiusKm"]) }, result: { day: 1, line: { contour: { x: 1, y: 1 }, count: 1, total: 1 }, sectors: 1 }, ids: true },
+      mopUp: { 0: DAY_BATTLE, 1: { braked: 1 }, calls: DAY_CALLS },
+      settleRegions: { 0: DAY_BATTLE, 1: DAY_RUN, calls: DAY_CALLS, ids: true },
+      growIfNeeded: { 0: GROW_BATTLE, 1: { advanceKm: 1, pace: 1, input: { map: 1, regionTypes: 1 } }, calls: DAY_CALLS, when: "(args[0].grown ?? 0) < 6" },
+      growToHold: { 0: GROW_BATTLE, 1: { advanceKm: 1, pace: 1, input: { map: 1, regionTypes: 1 } }, calls: DAY_CALLS },
+      recordDay: { 0: { drawnHomes: 1, homes: 1, said: 1, recorded: 1, field: { cols: 1, rows: 1 } } },
     },
   },
   "src/runtime/fronts/scenarioFronts.js": { name: "scenarioFronts" },

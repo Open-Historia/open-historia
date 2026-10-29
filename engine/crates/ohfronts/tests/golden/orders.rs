@@ -144,7 +144,7 @@ pub fn line_of(today: &Val) -> Line {
     }
 }
 
-fn view_val(view: &OrderView) -> Val {
+pub fn view_val(view: &OrderView) -> Val {
     Val::obj([
         ("order", view.order.clone()),
         ("word", view.word.clone()),
@@ -182,7 +182,7 @@ pub fn orders_like(battle: &Battle, want: &Val) -> Result<(), String> {
     Ok(())
 }
 
-fn battle_like(battle: &Battle, want: &Val) -> Result<(), String> {
+pub fn battle_like(battle: &Battle, want: &Val) -> Result<(), String> {
     troops_like(battle, want)?;
     orders_like(battle, want)?;
     let got = Val::obj([

@@ -43,6 +43,7 @@ use super::muster::{head_start_of, levy_owed, muster_share, musters_for, read_le
 use super::orders::standing_of;
 use super::record::{chronicle_record, frame_from, frame_record};
 use super::replay::Finished;
+use super::sectors::Sectors;
 use super::scenario_fronts::{authored_forms, authored_troops};
 use super::swarms::{raise_swarms, read_swarms, swarms_kept, SWARM_FORM};
 use super::troops::{create_troop, draw_traits, drop_the_dead, is_attack, is_live, kinds_for, plan_lanes, share_out, size_sides, stand_at_places, stand_off, stands, troops_least, TroopSeed, KIND_ARMOUR, KIND_ARTILLERY, KIND_INFANTRY};
@@ -117,7 +118,13 @@ pub struct Battle {
     pub to_side: Option<ToSide>,
     pub fed: Option<[Vec<u8>; 2]>,
     pub body_of: Option<[Vec<i32>; 2]>,
-    pub drawn_homes: Val,
+    pub drawn_homes: Option<Vec<u8>>,
+    pub sectors: Option<Rc<Sectors>>,
+    pub sectors_for: Option<Rc<Contour>>,
+    pub grown: f64,
+    pub within: f64,
+    pub within_for: Option<Rc<Arena>>,
+    pub recorded: f64,
     pub served: bool,
     pub generals: [Vec<String>; 2],
     pub swarms: [Vec<usize>; 2],
@@ -263,7 +270,13 @@ pub fn create_battle(run: &Run, opening: Opening) -> Battle {
         to_side: None,
         fed: None,
         body_of: None,
-        drawn_homes: Val::Null,
+        drawn_homes: None,
+        sectors: None,
+        sectors_for: None,
+        grown: 0.0,
+        within: 0.0,
+        within_for: None,
+        recorded: f64::NAN,
         served: false,
         generals: [Vec::new(), Vec::new()],
         swarms: [Vec::new(), Vec::new()],
