@@ -10,6 +10,9 @@ var map_targets: Array[Vector3] = []
 
 
 func _initialize() -> void:
+	var redraw := Node2D.new()
+	root.add_child(redraw)
+	process_frame.connect(redraw.queue_redraw)
 	shots = OS.get_environment("OH_SHOTS")
 	downloads = OS.get_environment("OH_NATIVE_DOWNLOADS")
 	started = Time.get_ticks_msec()

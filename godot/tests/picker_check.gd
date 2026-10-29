@@ -6,6 +6,9 @@ var started := 0
 
 
 func _initialize() -> void:
+	var redraw := Node2D.new()
+	root.add_child(redraw)
+	process_frame.connect(redraw.queue_redraw)
 	shots = OS.get_environment("OH_SHOTS")
 	started = Time.get_ticks_msec()
 	main = (load("res://main.tscn") as PackedScene).instantiate()

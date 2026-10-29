@@ -9,6 +9,9 @@ var _events: Array = []
 
 
 func _initialize() -> void:
+	var redraw := Node2D.new()
+	root.add_child(redraw)
+	process_frame.connect(redraw.queue_redraw)
 	shots = OS.get_environment("OH_SHOTS")
 	signals = OS.get_environment("OH_MP_DIR")
 	started = Time.get_ticks_msec()

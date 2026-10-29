@@ -8,6 +8,9 @@ var failures: PackedStringArray = []
 
 
 func _initialize() -> void:
+	var redraw := Node2D.new()
+	root.add_child(redraw)
+	process_frame.connect(redraw.queue_redraw)
 	root.mouse_passthrough = true
 	shots = OS.get_environment("OH_SHOTS")
 	only = OS.get_environment("OH_PARITY_ONLY")

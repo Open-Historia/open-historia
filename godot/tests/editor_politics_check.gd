@@ -16,6 +16,9 @@ var form: Dictionary = {}
 
 
 func _initialize() -> void:
+	var redraw := Node2D.new()
+	root.add_child(redraw)
+	process_frame.connect(redraw.queue_redraw)
 	if OS.get_environment("OH_EDITOR_PICK").is_empty():
 		OS.set_environment("OH_EDITOR_PICK", "*=" + ProjectSettings.globalize_path("res://").path_join("../../public/icon-192.png").simplify_path())
 	shots = OS.get_environment("OH_SHOTS")

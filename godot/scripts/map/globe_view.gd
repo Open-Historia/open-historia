@@ -762,7 +762,9 @@ func _ensure_viewport(wanted := Vector2i.ZERO) -> void:
 	_flat_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS if active else SubViewport.UPDATE_DISABLED
 	add_child(_flat_viewport)
 	_flat_camera = Camera2D.new()
+	_flat_camera.process_mode = Node.PROCESS_MODE_DISABLED
 	_flat_viewport.add_child(_flat_camera)
+	_flat_viewport.size_changed.connect(_flat_camera.force_update_scroll)
 	_material.set_shader_parameter("flat_map", _flat_viewport.get_texture())
 
 
@@ -785,7 +787,9 @@ func _ensure_near_viewport() -> void:
 	_near_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
 	add_child(_near_viewport)
 	_near_camera = Camera2D.new()
+	_near_camera.process_mode = Node.PROCESS_MODE_DISABLED
 	_near_viewport.add_child(_near_camera)
+	_near_viewport.size_changed.connect(_near_camera.force_update_scroll)
 	_material.set_shader_parameter("near_map", _near_viewport.get_texture())
 
 

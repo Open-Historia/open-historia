@@ -189,8 +189,10 @@ func _ready() -> void:
 	camera = Camera2D.new()
 	camera.position = Vector2(WORLD_WIDTH * 0.5, WORLD_WIDTH * 0.42)
 	camera.zoom = Vector2.ONE * 0.4
+	camera.process_mode = Node.PROCESS_MODE_DISABLED
 	add_child(camera)
 	camera.make_current()
+	get_viewport().size_changed.connect(camera.force_update_scroll)
 	basemap = Basemap.new()
 	basemap.world_width = WORLD_WIDTH
 	add_child(basemap)

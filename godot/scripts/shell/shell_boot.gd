@@ -255,6 +255,8 @@ func _await_settled(serial: int) -> void:
 			idle_since = now
 		elif now - idle_since > SETTLE_MARGIN_MS:
 			await tree.process_frame
+			if map_view and is_instance_valid(map_view):
+				map_view.queue_redraw()
 			await RenderingServer.frame_post_draw
 			return
 		await tree.process_frame

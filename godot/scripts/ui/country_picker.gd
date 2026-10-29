@@ -90,7 +90,9 @@ func _build_map() -> void:
 	_viewport.transparent_bg = false
 	_viewport.handle_input_locally = false
 	_camera = Camera2D.new()
+	_camera.process_mode = Node.PROCESS_MODE_DISABLED
 	_viewport.add_child(_camera)
+	_viewport.size_changed.connect(_camera.force_update_scroll)
 	_container.add_child(_viewport)
 	_map_frame.add_child(_container)
 
