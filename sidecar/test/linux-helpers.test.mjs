@@ -143,8 +143,8 @@ const notifyContext = (storage = memoryStorage(), repo = tempDir()) => ({
 test("Linux notification text goes to notify-send as arguments after --", async () => {
   mock();
   const notify = await load("notify.mjs");
-  assert.deepEqual(notify.notifySendArgs("Open Historia — -Rome", "Line one\r\nline two\u0000", "/icon.png"), ["--app-name=Open Historia", "--icon=/icon.png", "--", "Open Historia — -Rome", "Line one line two"]);
-  assert.deepEqual(notify.notifySendArgs("t", "b"), ["--app-name=Open Historia", "--", "t", "b"]);
+  assert.deepEqual(notify.notifySendArgs("Open Historia — -Rome", "Line one\r\nline two\u0000", "/icon.png"), ["--app-name=Open Historia", "--icon=/icon.png", "--hint=string:desktop-entry:io.github.arkniem.openhistoria.native", "--", "Open Historia — -Rome", "Line one line two"]);
+  assert.deepEqual(notify.notifySendArgs("t", "b"), ["--app-name=Open Historia", "--hint=string:desktop-entry:io.github.arkniem.openhistoria.native", "--", "t", "b"]);
   assert.equal(notify.findOnPath("notify-send", { PATH: "relative:/nowhere" }), "");
 });
 

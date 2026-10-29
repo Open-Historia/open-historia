@@ -168,7 +168,9 @@ export const macNotificationArgs = (title, body) => ["-e", "on run argv", "-e", 
 
 export const NOTIFY_SEND = "notify-send";
 
-export const notifySendArgs = (title, body, icon = "") => ["--app-name=Open Historia", ...(icon ? [`--icon=${icon}`] : []), "--", macText(title), macText(body)];
+export const LINUX_DESKTOP_ENTRY = "io.github.arkniem.openhistoria.native";
+
+export const notifySendArgs = (title, body, icon = "") => ["--app-name=Open Historia", ...(icon ? [`--icon=${icon}`] : []), `--hint=string:desktop-entry:${LINUX_DESKTOP_ENTRY}`, "--", macText(title), macText(body)];
 
 export const findOnPath = (name, env = process.env) => {
   for (const dir of String(env.PATH ?? "").split(":")) {
@@ -184,7 +186,8 @@ export const powershellPath = () => path.join(process.env.SystemRoot || process.
 export const toasterArgs = () => ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Mta", "-EncodedCommand", Buffer.from(TOASTER_SCRIPT, "utf16le").toString("base64")];
 
 export const register = (ctx) => {
-  const { storage, emit, clean, repo, standIn, engine } = ctx;
+  const { storage, emit, clean, repo, engine } = ctx;
+  const standIn = ctx.standIn && process.env.OH_NOTIFY_LIVE !== "1";
   const onMac = process.platform === "darwin";
   const macHelper = onMac ? macNotifierPath(repo) : "";
   const macOsascript = onMac && fs.existsSync(OSASCRIPT);

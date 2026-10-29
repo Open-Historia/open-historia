@@ -8,3 +8,4 @@ Exec="@LAUNCHER@"
 Icon=@ICON@
 Terminal=false
 Categories=Game;StrategyGame;
+StartupWMClass=Open Historia

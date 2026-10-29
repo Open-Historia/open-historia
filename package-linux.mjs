@@ -241,6 +241,7 @@ if (withProbe) {
   const probeProject = path.join(out, "probe-project");
   copy(project, probeProject, (file, isDir) => !(isDir && path.basename(file) === ".godot"));
   copy(path.join(here, "macos", "probe"), path.join(probeProject, "probes"));
+  fs.copyFileSync(path.join(here, "godot", "tests", "click_check.gd"), path.join(probeProject, "probes", "click_check.gd"));
   let probeSettings = fs.readFileSync(path.join(probeProject, "project.godot"), "utf8");
   probeSettings = probeSettings.replace(/^run\/main_scene=.*$/m, "run/main_scene=\"res://probes/empty.tscn\"\nrun/main_loop_type=\"OhProbe\"");
   fs.writeFileSync(path.join(probeProject, "project.godot"), probeSettings);
@@ -249,6 +250,11 @@ if (withProbe) {
   fs.mkdirSync(path.dirname(probePack), { recursive: true });
   run(godotEditor, ["--headless", "--path", probeProject, "--export-pack", "Linux", probePack]);
   console.log(`probe pack ${probePack} ${megabytes(fs.statSync(probePack).size)}`);
+  fs.writeFileSync(path.join(probeProject, "project.godot"), probeSettings.replace(/^run\/main_loop_type=.*$/m, "run/main_loop_type=\"OhTour\""));
+  const tourPack = path.join(out, "tour", `${exeName}.pck`);
+  fs.mkdirSync(path.dirname(tourPack), { recursive: true });
+  run(godotEditor, ["--headless", "--path", probeProject, "--export-pack", "Linux", tourPack]);
+  console.log(`tour pack ${tourPack} ${megabytes(fs.statSync(tourPack).size)}`);
 }
 
 console.log(`app ${stage}`);
