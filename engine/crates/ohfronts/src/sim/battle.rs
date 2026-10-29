@@ -1,4 +1,5 @@
 use super::arena::Arena;
+use super::chronicle::Chronicle;
 use super::climate::{ZoneToday, ZoneWeights};
 use super::constants::{Edge, CONTROL_RADIUS_MAX_KM, DEFAULT_EFFORT};
 use super::deploy::DeployLine;
@@ -136,6 +137,7 @@ pub struct Battle {
     pub wall_date: Option<String>,
     pub wall_run: bool,
     pub siege_kept: [Option<Vec<u8>>; 2],
+    pub chronicle: Option<Chronicle>,
 }
 
 pub struct Opening {
@@ -253,6 +255,7 @@ pub fn create_battle(run: &Run, opening: Opening) -> Battle {
         wall_date: None,
         wall_run: false,
         siege_kept: [None, None],
+        chronicle: None,
     }
 }
 

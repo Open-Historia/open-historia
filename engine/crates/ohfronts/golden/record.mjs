@@ -92,6 +92,8 @@ const MODULES = {
     },
   },
   "src/runtime/fronts/transports.js": { name: "transports", big: ["setOut", "interceptionOf"] },
+  "src/runtime/fronts/fatigue.js": { name: "fatigue", picks: { tireDay: { 0: { advanceKm: 1, pace: 1 }, 1: { troops: { "*": { "*": { strength: 1, kind: 1, movedKm: 1, fought: 1, engaged: 1, fatigue: 1, climate: 1, dug: 1, pocket: 1, supply: 1 } } } } } } },
+  "src/runtime/fronts/chronicle.js": { name: "chronicle", picks: { chronicleAfter: { 0: { chronicle: 1, log: 1, logFrom: 1, arena: { cities: 1 }, troops: { "*": { "*": { strength: 1 } } } } } } },
   "src/runtime/fronts/climate.js": { name: "climate", picks: climatePicks(["zonesOver", "zonesToday"]) },
   "src/runtime/fronts/weather.js": { name: "weather", picks: climatePicks(["skyOver", "skiesAhead"]) },
 };

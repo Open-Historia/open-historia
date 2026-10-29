@@ -19,3 +19,4 @@ mod climate;
 mod troops;
 mod walls;
 mod transports;
+mod chronicle;

@@ -174,7 +174,7 @@ const picked = (value, spec, enc) => {
   if (value instanceof Map) return spec["*"] ? { $: "Map", v: [...value].map(([key, item]) => [enc(key), picked(item, spec["*"], enc)]) } : enc(value);
   if (value instanceof Set) return enc(value);
   const out = {};
-  for (const key of Object.keys(spec)) if (key !== "*" && Object.hasOwn(value, key)) out[key] = picked(value[key], spec[key], enc);
+  for (const key of Object.keys(spec)) if (key !== "*" && key in value) out[key] = picked(value[key], spec[key], enc);
   return out;
 };
 
