@@ -121,6 +121,7 @@ func _ready() -> void:
 	_panel = GlassPanel.new(Color(24 / 255.0, 24 / 255.0, 27 / 255.0, 0.96), 18.0, Vector4(14, 14, 12, 14), Color(1, 1, 1, 0.1))
 	_panel.anchor_left = 1.0
 	_panel.anchor_right = 1.0
+	_panel.grow_horizontal = Control.GROW_DIRECTION_BEGIN
 	_panel.offset_top = PANEL_TOP
 	add_child(_panel)
 	_root_box = VBoxContainer.new()

@@ -138,6 +138,7 @@ func _build_pill() -> void:
 	pill.offset_right = -8
 	pill.offset_top = 8
 	pill.offset_bottom = 64
+	pill.grow_horizontal = Control.GROW_DIRECTION_BEGIN
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 4)
 	_back_button = _arrow("«", "Events")
