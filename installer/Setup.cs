@@ -46,6 +46,10 @@ namespace OpenHistoriaSetup
 		public static bool Updating;
 		public static bool Relaunch = true;
 		public static int ExitCode;
+		public static string StageDir = "";
+		public static string StageMode = "";
+		public static List<string[]> Plan = new List<string[]>();
+		const int WatchSeconds = 180;
 		readonly Label status;
 		readonly Bar bar;
 		readonly string target;
@@ -79,7 +83,7 @@ namespace OpenHistoriaSetup
 			title.Location = new Point(24, 22);
 			Controls.Add(title);
 			status = new Label();
-			status.Text = Updating ? "Getting the update ready…" : "Getting ready…";
+			status.Text = StageMode == "rollback" ? "Putting back the version you had…" : Updating ? "Getting the update ready…" : "Getting ready…";
 			status.ForeColor = Color.FromArgb(178, 178, 182);
 			status.AutoSize = false;
 			status.AutoEllipsis = true;
@@ -90,7 +94,11 @@ namespace OpenHistoriaSetup
 			bar.Size = new Size(412, 6);
 			bar.Location = new Point(24, 118);
 			Controls.Add(bar);
-			Shown += delegate { new Thread(Updating ? (ThreadStart)RunUpdate : Run) { IsBackground = true }.Start(); };
+			ThreadStart work = Run;
+			if (StageMode == "apply") work = RunApply;
+			else if (StageMode == "rollback") work = RunRollback;
+			else if (Updating) work = RunUpdate;
+			Shown += delegate { new Thread(work) { IsBackground = true }.Start(); };
 		}
 
 		[DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
@@ -229,18 +237,271 @@ namespace OpenHistoriaSetup
 			}
 		}
 
-		static void Launch(string folder)
+		static Process Launch(string folder)
 		{
 			var start = new ProcessStartInfo(Path.Combine(folder, "runtime", "Open Historia.exe"), "--path \"" + Path.Combine(folder, "native", "godot") + "\"");
 			start.WorkingDirectory = folder;
 			start.UseShellExecute = false;
-			Process.Start(start);
+			return Process.Start(start);
+		}
+
+		static List<string[]> ReadPlan(string stage)
+		{
+			var rows = new List<string[]>();
+			foreach (var line in File.ReadAllLines(Path.Combine(stage, "apply.txt"), Encoding.UTF8))
+			{
+				var tab = line.IndexOf('\t');
+				if (tab <= 0) continue;
+				rows.Add(new[] { line.Substring(0, tab), line.Substring(tab + 1) });
+			}
+			return rows;
+		}
+
+		static string PlanValue(string key)
+		{
+			foreach (var row in Plan) if (row[0] == key) return row[1];
+			return "";
+		}
+
+		static string Inside(string root, string relative)
+		{
+			var clean = relative.Replace('/', Path.DirectorySeparatorChar);
+			if (clean.Length == 0 || Path.IsPathRooted(clean) || clean.IndexOf(':') >= 0) throw new InvalidOperationException("The update names a file outside the game's folder: " + relative);
+			foreach (var part in clean.Split(Path.DirectorySeparatorChar))
+			{
+				if (part.Length == 0 || part == "." || part == "..") throw new InvalidOperationException("The update names a file outside the game's folder: " + relative);
+			}
+			return root + Path.DirectorySeparatorChar + clean;
+		}
+
+		void Persist(Action step, HashSet<string> names)
+		{
+			Exception last = null;
+			for (var attempt = 0; attempt < 12; attempt++)
+			{
+				try
+				{
+					step();
+					return;
+				}
+				catch (IOException error)
+				{
+					last = error;
+				}
+				catch (UnauthorizedAccessException error)
+				{
+					last = error;
+				}
+				StopRunning(target, names);
+				Thread.Sleep(500);
+			}
+			throw last;
+		}
+
+		void MoveOver(string from, string to, HashSet<string> names)
+		{
+			Directory.CreateDirectory(Path.GetDirectoryName(to));
+			Persist(delegate
+			{
+				if (File.Exists(to)) File.Delete(to);
+				File.Move(from, to);
+			}, names);
+		}
+
+		void Undo(string stage, HashSet<string> names)
+		{
+			var journal = Path.Combine(stage, "journal.txt");
+			if (!File.Exists(journal)) return;
+			var previous = Path.Combine(stage, "previous");
+			var lines = File.ReadAllLines(journal, Encoding.UTF8);
+			for (var index = lines.Length - 1; index >= 0; index--)
+			{
+				var tab = lines[index].IndexOf('\t');
+				if (tab <= 0) continue;
+				var verb = lines[index].Substring(0, tab);
+				var relative = lines[index].Substring(tab + 1);
+				var installed = Inside(io, relative);
+				var kept = Inside(previous, relative);
+				if (verb == "moved" || verb == "removed")
+				{
+					if (File.Exists(kept)) MoveOver(kept, installed, names);
+				}
+				else if (verb == "added" && File.Exists(installed))
+				{
+					Persist(delegate { File.Delete(installed); }, names);
+				}
+				Say("Putting back the version you had… " + (lines.Length - index) + " of " + lines.Length, 1f - (lines.Length - index) / (float)lines.Length);
+			}
+			File.Delete(journal);
+		}
+
+		static string Mark(string stage, string name)
+		{
+			return Path.Combine(stage, name);
+		}
+
+		void RolledBack(string stage)
+		{
+			File.WriteAllText(Mark(stage, "rolled-back"), PlanValue("build"));
+			if (File.Exists(Mark(stage, "applied"))) File.Delete(Mark(stage, "applied"));
+		}
+
+		void Watch(string stage, Process game, HashSet<string> names)
+		{
+			Invoke((MethodInvoker)Hide);
+			var deadline = DateTime.UtcNow.AddSeconds(WatchSeconds);
+			while (DateTime.UtcNow < deadline)
+			{
+				if (File.Exists(Mark(stage, "confirmed")) || !File.Exists(Mark(stage, "applied"))) return;
+				if (game.HasExited)
+				{
+					if (game.ExitCode == 0) return;
+					ExitCode = 1;
+					Invoke((MethodInvoker)Show);
+					Say("The new version did not start, so the version you had is being put back…", 1f);
+					if (!WaitForClose(target, names, 5000)) StopRunning(target, names);
+					Undo(stage, names);
+					RolledBack(stage);
+					Say("Starting the version you had…", 0f);
+					Launch(target);
+					Thread.Sleep(1500);
+					return;
+				}
+				Thread.Sleep(500);
+			}
+		}
+
+		void RunApply()
+		{
+			var stage = Extended(LongPath(Path.GetFullPath(StageDir).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)));
+			var names = ExeNames(io);
+			try
+			{
+				if (!File.Exists(Path.Combine(io, Marker)))
+				{
+					FailUpdate("The folder " + target + " is not an installation of " + AppName + ", so it was left alone.", false);
+					return;
+				}
+				if (!File.Exists(Mark(stage, "ready")) || File.Exists(Mark(stage, "applied")))
+				{
+					FailUpdate("The downloaded update is not complete, or was applied already.", true);
+					return;
+				}
+				Say("Waiting for the game to close…", 0.05f);
+				if (!WaitForClose(target, names, 15000))
+				{
+					Say("Closing the running game…", 0.08f);
+					StopRunning(target, names);
+				}
+				Undo(stage, names);
+				var previous = Path.Combine(stage, "previous");
+				var files = Path.Combine(stage, "files");
+				var total = 0;
+				foreach (var row in Plan) if (row[0] == "put" || row[0] == "remove") total++;
+				var done = 0;
+				try
+				{
+					using (var journal = new StreamWriter(Path.Combine(stage, "journal.txt"), false, new UTF8Encoding(false)))
+					{
+						journal.AutoFlush = true;
+						foreach (var row in Plan)
+						{
+							if (row[0] != "put" && row[0] != "remove") continue;
+							var relative = row[1];
+							var installed = Inside(io, relative);
+							var kept = Inside(previous, relative);
+							if (row[0] == "put")
+							{
+								var source = Inside(files, relative);
+								if (!File.Exists(source)) throw new FileNotFoundException("The update is missing " + relative);
+								if (File.Exists(installed))
+								{
+									journal.WriteLine("moved\t" + relative);
+									MoveOver(installed, kept, names);
+								}
+								else
+								{
+									journal.WriteLine("added\t" + relative);
+								}
+								Directory.CreateDirectory(Path.GetDirectoryName(installed));
+								Persist(delegate { File.Copy(source, installed, true); }, names);
+							}
+							else if (File.Exists(installed))
+							{
+								journal.WriteLine("removed\t" + relative);
+								MoveOver(installed, kept, names);
+							}
+							done++;
+							Say("Putting the new files in place… " + done + " of " + total, 0.1f + 0.85f * done / Math.Max(1, total));
+						}
+					}
+				}
+				catch (Exception error)
+				{
+					Undo(stage, names);
+					RolledBack(stage);
+					FailUpdate("The update could not be applied (" + error.Message + "), so the version you had was kept.", true);
+					return;
+				}
+				File.WriteAllText(Mark(stage, "applied"), PlanValue("build"));
+				if (Relaunch)
+				{
+					Say("Starting " + AppName + "…", 1f);
+					Watch(stage, Launch(target), names);
+				}
+				else
+				{
+					Say("Updated. The game opens on the new version next time.", 1f);
+					Thread.Sleep(1200);
+				}
+				Invoke((MethodInvoker)Close);
+			}
+			catch (Exception error)
+			{
+				FailUpdate("The update could not be applied: " + error.Message, true);
+			}
+		}
+
+		void RunRollback()
+		{
+			var stage = Extended(LongPath(Path.GetFullPath(StageDir).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)));
+			var names = ExeNames(io);
+			try
+			{
+				if (!File.Exists(Path.Combine(io, Marker)))
+				{
+					FailUpdate("The folder " + target + " is not an installation of " + AppName + ", so it was left alone.", false);
+					return;
+				}
+				Say("Waiting for the game to close…", 0f);
+				if (!WaitForClose(target, names, 15000)) StopRunning(target, names);
+				Undo(stage, names);
+				RolledBack(stage);
+				if (Relaunch)
+				{
+					Say("Starting the version you had…", 0f);
+					Launch(target);
+					Thread.Sleep(900);
+				}
+				else
+				{
+					Say("The version you had is back.", 0f);
+					Thread.Sleep(1200);
+				}
+				Invoke((MethodInvoker)Close);
+			}
+			catch (Exception error)
+			{
+				FailUpdate("The previous version could not be put back: " + error.Message, false);
+			}
 		}
 
 		void Extract(string destination, float from, float span, string verb)
 		{
 			Directory.CreateDirectory(destination);
 			using (var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("app.zip"))
+			{
+			if (stream == null) throw new InvalidOperationException("This copy of the updater carries no game files. Run Open-Historia-Native-Setup.exe instead.");
 			using (var zip = new ZipArchive(stream, ZipArchiveMode.Read))
 			{
 				var total = zip.Entries.Count;
@@ -267,6 +528,7 @@ namespace OpenHistoriaSetup
 					}
 					if (done % 40 == 0 || done == total) Say(verb + " " + done + " of " + total + " files", from + span * (done / (float)total));
 				}
+			}
 			}
 		}
 
@@ -514,6 +776,26 @@ namespace OpenHistoriaSetup
 				{
 					Relaunch = false;
 				}
+				else if ((args[index] == "--apply-staged" || args[index] == "--rollback") && index + 1 < args.Length)
+				{
+					StageMode = args[index] == "--rollback" ? "rollback" : "apply";
+					StageDir = args[++index];
+				}
+			}
+			if (StageMode.Length > 0)
+			{
+				try
+				{
+					Plan = ReadPlan(StageDir);
+				}
+				catch (Exception error)
+				{
+					MessageBox.Show(AppName + " could not be updated.\n\n" + error.Message, AppName + " Update", MessageBoxButtons.OK, MessageBoxIcon.Error);
+					return 1;
+				}
+				TargetOverride = PlanValue("install");
+				Updating = true;
+				if (TargetOverride.Length == 0) return 1;
 			}
 			Application.EnableVisualStyles();
 			Application.SetCompatibleTextRenderingDefault(false);

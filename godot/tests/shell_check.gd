@@ -92,7 +92,19 @@ func _until(condition: Callable, seconds: float) -> bool:
 
 func _shoot(name: String) -> void:
 	await _frames(2)
-	await RenderingServer.frame_post_draw
+	var drawn := [false]
+	var mark := func() -> void: drawn[0] = true
+	RenderingServer.frame_post_draw.connect(mark)
+	var deadline := Time.get_ticks_msec() + 5000
+	while not drawn[0] and Time.get_ticks_msec() < deadline:
+		OS.low_processor_usage_mode = false
+		if main.has_method("_stay_awake"):
+			main.call("_stay_awake")
+		await process_frame
+	RenderingServer.frame_post_draw.disconnect(mark)
+	if not drawn[0]:
+		_say("screenshot %s skipped: no frame was drawn" % name)
+		return
 	if shots.is_empty():
 		return
 	root.get_viewport().get_texture().get_image().save_png(shots.path_join(name + ".png"))

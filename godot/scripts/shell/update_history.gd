@@ -209,6 +209,10 @@ func setup(engine: EngineLink, prefs: Dictionary) -> void:
 	var state: Variant = told.get("result")
 	if bool(told.get("ok", false)) and state is Dictionary and is_instance_valid(_version):
 		_version.text = str((state as Dictionary).get("versionText", ""))
+		var current: Variant = (state as Dictionary).get("current")
+		var notes := str((current as Dictionary).get("notes", "")) if current is Dictionary else ""
+		if not notes.is_empty() and not _version.text.is_empty():
+			_version.text += " — " + notes
 		_version.visible = not _version.text.is_empty()
 
 

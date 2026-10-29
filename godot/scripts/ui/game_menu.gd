@@ -49,6 +49,7 @@ var _ai_setup_answered_for := "__none__"
 var _marks := {}
 var _shared_role := ""
 var _update_check := {}
+var _update_live := {}
 var _version_text := ""
 var _version_loading := false
 
@@ -77,9 +78,13 @@ func setup(engine_link: EngineLink, setup_context: Dictionary) -> void:
 
 func _on_engine_event(event_name: String, data: Variant) -> void:
 	if event_name == "update.state" and data is Dictionary:
+		var before := _update_check_text()
+		_update_live = data
 		var told := str((data as Dictionary).get("versionText", ""))
 		if not told.is_empty() and told != _version_text:
 			_version_text = told
+			_refresh_help()
+		elif _update_check_text() != before:
 			_refresh_help()
 		return
 	if event_name != "multiplayer.shared" or not (data is Dictionary):
@@ -459,14 +464,37 @@ func _update_check_text() -> String:
 		"checking":
 			return "Checking the release channel right now…"
 		"available":
-			return "Update available — use the update banner above to install it."
+			return _update_available_text()
 		"current":
 			return "You are up to date."
 		"unsupported":
 			return "This build does not support in-app update checks."
 		"error":
+			var reason := str(_update_check.get("reason", "")).strip_edges()
+			if not reason.is_empty():
+				return "Could not check for updates: %s. Try again." % reason.trim_suffix(".")
 			return "Could not check for updates. Try again."
 	return "Check the installed app for a newer build right now."
+
+
+func _update_available_text() -> String:
+	var build := str(_update_check.get("build", ""))
+	var full := float(_update_check.get("fullBytes", 0))
+	var live_build := str(_update_live.get("build", ""))
+	var phase := str(_update_live.get("state", ""))
+	if live_build == build and phase == "downloading":
+		var line := "Downloading the update — " + AppUpdate.progress_text(_update_live)
+		if str(_update_live.get("kind", "")) == "chunks" and full > 0.0:
+			line += " (the full installer is %s)" % AppUpdate.megabytes(full)
+		return line + "."
+	if (live_build == build and phase == "ready") or bool(_update_check.get("ready", false)):
+		return "Downloaded — use Restart now in the update banner above to install it."
+	if live_build == build and phase == "error":
+		return AppUpdate.describe_failure(str(_update_live.get("error", ""))) + " Try Update now in the banner above."
+	var want := float(_update_check.get("downloadBytes", 0))
+	if str(_update_check.get("kind", "")) == "chunks" and full > 0.0:
+		return "Update available — %s to download of %s. Use the update banner above to install it." % [AppUpdate.megabytes(want), AppUpdate.megabytes(full)]
+	return "Update available — use the update banner above to install it."
 
 
 func _check_for_updates() -> void:

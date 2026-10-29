@@ -7,11 +7,16 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.resolve(here, "..");
-const out = path.resolve(process.argv[2] || path.join(here, "out"));
+const cli = process.argv.slice(2);
+const positional = cli.filter((arg) => !arg.startsWith("--"));
+const out = path.resolve(positional[0] || path.join(here, "out"));
+const skipBuild = cli.includes("--no-build");
 const godotExe = process.env.OH_GODOT_EXE || "";
 const stage = path.join(out, "stage");
 const appName = "Open Historia Native";
 const nativeUpdate = await import(pathToFileURL(path.join(here, "sidecar", "handlers", "update.mjs")).href);
+const chunkKit = await import(pathToFileURL(path.join(here, "sidecar", "updateChunks.mjs")).href);
+const notes = String(process.env.OH_NATIVE_NOTES || "A new super-experimental build of Open Historia Native.");
 
 if (process.platform !== "win32") throw new Error("The installer is built on Windows.");
 if (!fs.existsSync(godotExe)) throw new Error("Set OH_GODOT_EXE to the Godot 4.7 windowed executable (Godot_v4.7.2-stable_win64.exe).");
@@ -24,6 +29,7 @@ const stamp = {
   version,
   build: stampedAt.toISOString().replace(/\D/g, "").slice(0, 14),
   commit: head.status === 0 ? head.stdout.trim() : "",
+  notes,
 };
 console.log(`stamping ${appName} ${stamp.version} build ${stamp.build} (${stamp.commit || "no commit"})`);
 
@@ -46,8 +52,13 @@ const copy = (from, to, filter = () => true) => {
 
 const release = path.join(here, "engine", "target", "release", "oh_gdext.dll");
 if (!fs.existsSync(release)) throw new Error("Build the release library first: cargo build -p oh_gdext --release (in native/engine).");
-run(process.execPath, [path.join(here, "sidecar", "build.mjs")]);
-run(godotExe, ["--headless", "--path", path.join(here, "godot"), "--import"]);
+if (skipBuild) {
+  if (!fs.existsSync(path.join(here, "sidecar", "dist"))) throw new Error("--no-build needs an existing native/sidecar/dist.");
+  console.log("--no-build: using the existing sidecar build; Godot imports inside the stage, not the source tree");
+} else {
+  run(process.execPath, [path.join(here, "sidecar", "build.mjs")]);
+  run(godotExe, ["--headless", "--path", path.join(here, "godot"), "--import"]);
+}
 
 fs.rmSync(out, { recursive: true, force: true });
 fs.mkdirSync(stage, { recursive: true });
@@ -63,10 +74,15 @@ copy(godotSource, path.join(stage, "native", "godot"), (file, isDir) => {
   return !relative.startsWith("tests/");
 });
 copy(release, path.join(stage, "native", "godot", "bin", "oh_gdext.dll"));
+if (skipBuild) {
+  const stagedGodot = path.join(stage, "native", "godot");
+  run(godotExe, ["--headless", "--path", stagedGodot, "--import"]);
+  for (const name of ["editor", "shader_cache", "imported"]) fs.rmSync(path.join(stagedGodot, ".godot", name), { recursive: true, force: true });
+}
 fs.writeFileSync(path.join(stage, "native", "godot", "version.json"), `${JSON.stringify(stamp, null, 2)}\n`);
 
 const sidecar = path.join(here, "sidecar");
-for (const name of ["main.mjs", "shims.js", "standin.js", "serverWorker.mjs", "workers.js", "workerHost.mjs"]) copy(path.join(sidecar, name), path.join(stage, "native", "sidecar", name));
+for (const name of ["main.mjs", "shims.js", "standin.js", "serverWorker.mjs", "workers.js", "workerHost.mjs", "updateChunks.mjs"]) copy(path.join(sidecar, name), path.join(stage, "native", "sidecar", name));
 copy(path.join(sidecar, "dist"), path.join(stage, "native", "sidecar", "dist"), (file, isDir) => isDir || !file.endsWith(".map"));
 copy(path.join(sidecar, "handlers"), path.join(stage, "native", "sidecar", "handlers"), (file, isDir) => isDir || file.endsWith(".mjs") || file.endsWith(".cjs"));
 if (fs.existsSync(path.join(sidecar, "node_modules"))) copy(path.join(sidecar, "node_modules"), path.join(stage, "native", "sidecar", "node_modules"));
@@ -148,6 +164,20 @@ const imageCodecTarget = path.join(stage, "native", "sidecar", "imagecodec", ima
 fs.mkdirSync(path.dirname(imageCodecTarget), { recursive: true });
 run(path.join(framework, "csc.exe"), imageCodec.imageCodecCompileArgs(imageCodecTarget));
 fs.writeFileSync(path.join(stage, ".oh-native-install"), `${new Date().toISOString()}\n`);
+const compileSetup = (target, resource = "") => run(path.join(framework, "csc.exe"), [
+  "/nologo",
+  "/target:winexe",
+  "/optimize+",
+  `/out:${target}`,
+  `/win32icon:${path.join(stage, "runtime", "open-historia.ico")}`,
+  ...(resource ? [`/resource:${resource},app.zip`] : []),
+  "/reference:System.IO.Compression.dll",
+  "/reference:System.IO.Compression.FileSystem.dll",
+  "/reference:System.Windows.Forms.dll",
+  "/reference:System.Drawing.dll",
+  path.join(here, "installer", "Setup.cs"),
+]);
+compileSetup(path.join(stage, ...chunkKit.UPDATER_EXE.split("/")));
 
 const launcher = [
   "@echo off",
@@ -180,34 +210,30 @@ ${smoke.errors.slice(-3000)}`);
 for (const entry of smoke.failed) console.log(`WARNING handler not loaded in the package: ${entry.file}: ${entry.message}`);
 console.log(`staged engine started; ${smoke.failed.length} handler(s) failed to load`);
 
+const chunkOut = path.join(out, "chunks");
+const chunkRelease = chunkKit.writeRelease({ stage, out: chunkOut, details: { build: stamp.build, version: stamp.version, commit: stamp.commit } });
+const megabytes = (bytes) => `${(bytes / 1048576).toFixed(1)} MB`;
+console.log(`chunks: ${chunkRelease.manifest.files.length} files, ${megabytes(chunkRelease.manifest.bytes)}, in ${chunkRelease.chunkCount} chunks (${megabytes(chunkRelease.assetBytes)} as published); file list ${chunkRelease.manifestName} ${megabytes(chunkRelease.manifestSize)}`);
+
 const zip = path.join(out, "app.zip");
 run(path.join(process.env.SystemRoot || "C:\\Windows", "System32", "tar.exe"), ["-a", "-c", "-f", zip, "-C", stage, "."]);
 console.log(`app.zip ${(fs.statSync(zip).size / 1048576).toFixed(1)} MB`);
 
 const target = path.join(out, nativeUpdate.NATIVE_SETUP_NAME);
-run(path.join(framework, "csc.exe"), [
-  "/nologo",
-  "/target:winexe",
-  "/optimize+",
-  `/out:${target}`,
-  `/win32icon:${path.join(stage, "runtime", "open-historia.ico")}`,
-  `/resource:${zip},app.zip`,
-  "/reference:System.IO.Compression.dll",
-  "/reference:System.IO.Compression.FileSystem.dll",
-  "/reference:System.Windows.Forms.dll",
-  "/reference:System.Drawing.dll",
-  path.join(here, "installer", "Setup.cs"),
-]);
+compileSetup(target, zip);
 console.log(`installer ${target} ${(fs.statSync(target).size / 1048576).toFixed(1)} MB`);
 const manifest = {
   ...stamp,
   sha256: await nativeUpdate.sha256File(target),
   size: fs.statSync(target).size,
   url: nativeUpdate.NATIVE_SETUP_URL,
-  notes: String(process.env.OH_NATIVE_NOTES || "A new super-experimental build of Open Historia Native."),
+  notes,
   published: stampedAt.toISOString(),
+  mandatory: process.env.OH_NATIVE_MANDATORY === "1",
+  chunks: chunkKit.feedChunks(chunkRelease, process.env.OH_NATIVE_CHUNKS_BASE || nativeUpdate.NATIVE_CHUNKS_BASE),
 };
 const manifestFile = path.join(out, nativeUpdate.NATIVE_MANIFEST_NAME);
 fs.writeFileSync(manifestFile, `${JSON.stringify(manifest, null, 2)}\n`);
 console.log(`update feed ${manifestFile} (build ${manifest.build}, sha256 ${manifest.sha256})`);
+console.log(`update chunks ${chunkOut} (${chunkRelease.chunkCount} chunks, file list ${chunkRelease.manifestName})`);
 console.log(`unpacked app ${path.join(stage, `${appName}.cmd`)}`);

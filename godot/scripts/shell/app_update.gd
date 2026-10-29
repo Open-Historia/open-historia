@@ -4,7 +4,7 @@ extends CanvasLayer
 signal launch_step
 
 const LAYER := 55
-const CHECK_INTERVAL := 180.0
+const CHECK_INTERVAL := 3.0 * 3600.0
 const INSTALL_DELAY := 0.6
 const PAGE := Color("#131315")
 const INK := Color(244 / 255.0, 244 / 255.0, 245 / 255.0, 1.0)
@@ -14,16 +14,27 @@ const LINE := Color(1, 1, 1, 0.14)
 const TRACK := Color(244 / 255.0, 244 / 255.0, 245 / 255.0, 0.12)
 const CARD_WIDTH := 472.0
 const SETTLED := ["ready", "error", "none"]
+const BUSY := ["checking", "available", "downloading"]
 const COVER_TITLE := "Updating Open Historia"
 const LEDE_VERSION := "Version %s of the super-experimental native build is downloading. The game opens on it as soon as it is installed — your games are kept."
 const LEDE_BUILD := "A new super-experimental native build is downloading. The game opens on it as soon as it is installed — your games are kept."
+const LEDE_STAGED := "The update is downloaded. It installs now and the game reopens on it — your games are kept."
+const LEDE_ROLLBACK := "The last update did not start properly, so the version you had before is being put back — your games are kept."
 const PLAY_NOW := "Or play on this version now: the update then installs when you close the game."
 const OPEN_NOW := "Open the game now"
 const OPENING := "Opening the game…"
 const FAILED_OPENING := "The update did not download. Opening the game…"
 const NOT_INSTALLED_OPENING := "The update did not install. Opening the game…"
+const NOT_ROLLED_BACK := "The previous version could not be put back. Opening the game…"
 const INSTALLING := "Installing — the game reopens by itself in a few seconds."
+const ROLLING_BACK := "Putting back the previous version — the game reopens by itself."
 const HEADLINE := "A new super-experimental native build of Open Historia is ready."
+const UPDATED_VERSION := "Open Historia Native was updated to version %s."
+const UPDATED_BUILD := "Open Historia Native was updated."
+const ROLLED_BACK := "The last update did not start properly, so the version you had was put back."
+const ROLLED_BACK_SUB := "It is offered again as a full download — your games are kept."
+const TOAST_TITLE := "Update ready"
+const TOAST_BODY := "The new version of Open Historia Native is downloaded. Restart to finish — your games are kept."
 
 var engine: EngineLink
 var state := {}
@@ -38,6 +49,7 @@ var _cover_update: VBoxContainer
 var _cover_later: Button
 var _banner_head: Label
 var _banner_sub: Label
+var _banner_notes: Label
 var _banner_button: Button
 var _banner_close: Button
 var _timer: Timer
@@ -47,6 +59,11 @@ var _opening := false
 var _checks_started := false
 var _launch_build := ""
 var _restart_ready := false
+var _auto_build := ""
+var _toasted := ""
+var _last_phase := ""
+var _confirmed := false
+var _news_closed := false
 
 
 class Bar extends Control:
@@ -179,6 +196,12 @@ func _build_banner() -> void:
 	_banner_sub.clip_text = true
 	_banner_sub.mouse_filter = Control.MOUSE_FILTER_PASS
 	texts.add_child(_banner_sub)
+	_banner_notes = UI.label("", 12, FAINT, 400)
+	_banner_notes.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	_banner_notes.clip_text = true
+	_banner_notes.mouse_filter = Control.MOUSE_FILTER_PASS
+	_banner_notes.visible = false
+	texts.add_child(_banner_notes)
 	_banner_button = UI.button("Update now", "accent")
 	_banner_button.add_theme_font_size_override("font_size", 13)
 	_banner_button.custom_minimum_size = Vector2(0, 31)
@@ -217,6 +240,26 @@ func _quiet_button(text: String) -> Button:
 	return button
 
 
+static func megabytes(bytes: float) -> String:
+	var value := maxf(0.0, bytes) / 1048576.0
+	if value >= 100.0:
+		return "%d MB" % roundi(value)
+	return "%.1f MB" % value
+
+
+static func progress_text(data: Dictionary) -> String:
+	var percent := clampi(int(data.get("percent", 0)), 0, 100)
+	var phase := str(data.get("phase", ""))
+	if phase == "reading":
+		return "Comparing your files with the update…"
+	if phase == "building":
+		return "Putting the update together…"
+	var want := float(data.get("downloadBytes", 0))
+	if want <= 0.0:
+		return "%d%%" % percent
+	return "%d%% · %s of %s" % [percent, megabytes(float(data.get("receivedBytes", 0))), megabytes(want)]
+
+
 func _on_engine_event(event_name: String, data: Variant) -> void:
 	if event_name != "update.state" or not (data is Dictionary):
 		return
@@ -224,10 +267,33 @@ func _on_engine_event(event_name: String, data: Variant) -> void:
 	var phase := str(state.get("state", ""))
 	if not launching and not _tracking and phase in ["downloading", "ready"]:
 		_tracking = true
+	if phase == "ready" and _last_phase != "ready" and not launching:
+		_notify_ready()
+	_last_phase = phase
 	if launching:
 		_refresh_cover()
 	_refresh_banner()
 	launch_step.emit()
+
+
+func _notify_ready() -> void:
+	var build := str(state.get("build", ""))
+	if engine == null or build.is_empty() or build == _toasted or not bool(state.get("canInstall", false)):
+		return
+	_toasted = build
+	engine.request("notify.desktop", {"sender": TOAST_TITLE, "preview": TOAST_BODY, "chatId": ""})
+
+
+func _show_cover(lede: String, can_wait: bool) -> void:
+	_cover_title.text = COVER_TITLE
+	_cover_lede.text = lede
+	_cover_pct.text = "0%"
+	_cover_bar.fraction = 0.0
+	_cover_bar.queue_redraw()
+	_cover_update.visible = can_wait
+	_cover_later.disabled = false
+	cover.visible = true
+	banner.visible = false
 
 
 func run_launch() -> bool:
@@ -237,6 +303,8 @@ func run_launch() -> bool:
 	var result: Dictionary = {}
 	if bool(reply.get("ok", false)) and reply.get("result") is Dictionary:
 		result = reply["result"]
+	if bool(result.get("rollback", false)):
+		return await _run_rollback()
 	if not bool(result.get("update", false)):
 		_start_checks()
 		return false
@@ -245,15 +313,10 @@ func run_launch() -> bool:
 	_launch_build = str(result.get("build", ""))
 	var current: Dictionary = result.get("current", {}) if result.get("current") is Dictionary else {}
 	var version := str(result.get("version", ""))
-	_cover_title.text = COVER_TITLE
-	_cover_lede.text = LEDE_VERSION % version if not version.is_empty() and version != str(current.get("version", "")) else LEDE_BUILD
-	_cover_pct.text = "0%"
-	_cover_bar.fraction = 0.0
-	_cover_bar.queue_redraw()
-	_cover_update.visible = true
-	_cover_later.disabled = false
-	cover.visible = true
-	banner.visible = false
+	var staged := bool(result.get("staged", false))
+	var mandatory := bool(result.get("mandatory", false))
+	var lede := LEDE_STAGED if staged else (LEDE_VERSION % version if not version.is_empty() and version != str(current.get("version", "")) else LEDE_BUILD)
+	_show_cover(lede, not staged and not mandatory)
 	var started: Dictionary = await engine.request("update.download", {"launch": true})
 	if not bool(started.get("ok", false)):
 		return await _open_game(FAILED_OPENING)
@@ -277,14 +340,31 @@ func run_launch() -> bool:
 	return true
 
 
+func _run_rollback() -> bool:
+	launching = true
+	_later = false
+	_show_cover(LEDE_ROLLBACK, false)
+	_cover_bar.show_fraction(1.0)
+	_cover_pct.text = ROLLING_BACK
+	await get_tree().create_timer(INSTALL_DELAY).timeout
+	var reply: Dictionary = await engine.request("update.rollback")
+	if not bool(reply.get("ok", false)):
+		return await _open_game(NOT_ROLLED_BACK)
+	_quit_for_update()
+	return true
+
+
 func _refresh_cover() -> void:
 	if not cover.visible or _later:
 		return
 	var phase := str(state.get("state", ""))
-	if phase == "downloading" or phase == "available" or phase == "checking":
+	if phase in BUSY:
 		var percent := clampi(int(state.get("percent", 0)), 0, 100)
 		_cover_bar.show_fraction(percent / 100.0)
-		_cover_pct.text = "%d%%" % percent
+		var note := str(state.get("note", ""))
+		_cover_pct.text = progress_text(state)
+		if not note.is_empty() and str(state.get("kind", "")) == "full":
+			_cover_pct.text = "The full installer is downloading instead · " + _cover_pct.text
 
 
 func _on_later() -> void:
@@ -324,6 +404,9 @@ func install_on_quit() -> void:
 
 
 func _start_checks() -> void:
+	if not _confirmed and engine:
+		_confirmed = true
+		engine.request("update.confirm")
 	if _checks_started:
 		_refresh_banner()
 		return
@@ -343,6 +426,23 @@ func _probe() -> void:
 		_on_engine_event("update.state", answer["result"])
 		if not bool(state.get("supported", false)):
 			_timer.stop()
+			return
+	_auto_download()
+
+
+func _auto_download() -> void:
+	var offer := _offer()
+	if offer.is_empty() or engine == null or not bool(state.get("canInstall", false)):
+		return
+	var build := str(offer.get("build", ""))
+	var phase := str(state.get("state", ""))
+	if build.is_empty() or build == _auto_build or phase in BUSY:
+		return
+	if phase == "ready" and str(state.get("build", "")) == build:
+		return
+	_auto_build = build
+	_tracking = true
+	await engine.request("update.download")
 
 
 func _offer() -> Dictionary:
@@ -377,7 +477,10 @@ func _status_line(auto: bool, phase: String, matches: bool) -> String:
 	if phase == "ready":
 		return "A newer update is available. Download it before restarting."
 	if phase == "downloading":
-		return "Downloading the update… %d%%" % int(state.get("percent", 0))
+		var line := "Downloading the update… " + progress_text(state)
+		if str(state.get("kind", "")) == "full" and not str(state.get("note", "")).is_empty():
+			line = "Downloading the full installer… " + progress_text(state)
+		return line
 	if phase == "checking" or phase == "available":
 		return "Fetching the update…"
 	return "Installs itself in the background — your games are kept."
@@ -387,14 +490,36 @@ func is_banner_ready() -> bool:
 	return banner.visible and _restart_ready
 
 
+func _news() -> Dictionary:
+	if _news_closed:
+		return {}
+	if not str(state.get("rolledBack", "")).is_empty():
+		return {"head": ROLLED_BACK, "sub": ROLLED_BACK_SUB}
+	var done: Variant = state.get("justUpdated")
+	if done is Dictionary and not str((done as Dictionary).get("build", "")).is_empty():
+		var version := str((done as Dictionary).get("version", ""))
+		var notes := str((done as Dictionary).get("notes", ""))
+		return {"head": UPDATED_VERSION % version if not version.is_empty() else UPDATED_BUILD, "sub": notes if not notes.is_empty() else "Your games are kept."}
+	return {}
+
+
 func _refresh_banner() -> void:
 	var offer := _offer()
 	var build := str(offer.get("build", ""))
-	var shown := not launching and not offer.is_empty() and str(state.get("dismissed", "")) != build
+	var news := _news() if offer.is_empty() else {}
+	var shown := not launching and ((not offer.is_empty() and str(state.get("dismissed", "")) != build) or not news.is_empty())
 	banner.visible = shown
 	_restart_ready = false
 	if not shown:
 		return
+	if not news.is_empty():
+		_banner_head.text = str(news["head"])
+		_banner_sub.text = str(news["sub"])
+		_banner_sub.tooltip_text = _banner_sub.text
+		_banner_notes.visible = false
+		_banner_button.visible = false
+		return
+	_banner_button.visible = true
 	var auto := bool(state.get("canInstall", false))
 	var phase := _phase()
 	var matches := str(state.get("build", "")) == build
@@ -404,6 +529,10 @@ func _refresh_banner() -> void:
 	var line := _status_line(auto, phase, matches)
 	_banner_sub.text = line
 	_banner_sub.tooltip_text = line if phase == "error" else ""
+	var notes := str(offer.get("notes", ""))
+	_banner_notes.text = notes
+	_banner_notes.tooltip_text = notes
+	_banner_notes.visible = not notes.is_empty()
 	_restart_ready = ready
 	if ready:
 		_banner_button.text = "Restart now"
@@ -455,6 +584,12 @@ func _on_restart() -> void:
 
 
 func _on_dismiss() -> void:
+	if _offer().is_empty():
+		_news_closed = true
+		_refresh_banner()
+		if engine:
+			engine.request("update.seen")
+		return
 	var build := str(_offer().get("build", ""))
 	state["dismissed"] = build
 	_refresh_banner()

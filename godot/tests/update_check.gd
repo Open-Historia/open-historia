@@ -37,9 +37,22 @@ func _wait(seconds: float) -> void:
 
 
 func _shoot(name: String) -> void:
-	for i in range(4):
+	var drawn := [false]
+	var mark := func() -> void: drawn[0] = true
+	RenderingServer.frame_post_draw.connect(mark)
+	var deadline := Time.get_ticks_msec() + 5000
+	var frames := 0
+	while (frames < 4 or not drawn[0]) and Time.get_ticks_msec() < deadline:
+		OS.low_processor_usage_mode = false
+		if main.has_method("_stay_awake"):
+			main.call("_stay_awake")
+		root.get_viewport().get_texture()
 		await process_frame
-	await RenderingServer.frame_post_draw
+		frames += 1
+	RenderingServer.frame_post_draw.disconnect(mark)
+	if not drawn[0]:
+		_say("screenshot %s skipped: no frame was drawn" % name)
+		return
 	if shots.is_empty():
 		return
 	root.get_viewport().get_texture().get_image().save_png(shots.path_join(name + ".png"))
@@ -93,6 +106,8 @@ func _run() -> void:
 		return
 	if mode == "equal":
 		await _run_equal(updater)
+	elif mode == "chunks":
+		await _run_chunks(updater)
 	else:
 		await _run_newer(updater)
 	_finish()
@@ -107,7 +122,7 @@ func _run_newer(updater: AppUpdate) -> void:
 	await _wait(0.4)
 	_check("its title", updater._cover_title.text == "Updating Open Historia", updater._cover_title.text)
 	_check("its text says this is the super-experimental native build", updater._cover_lede.text.contains("super-experimental native build"), updater._cover_lede.text)
-	_check("it shows the download's progress", updater._cover_pct.text.ends_with("%") and updater._cover_bar.fraction > 0.0, "%s, bar %.2f" % [updater._cover_pct.text, updater._cover_bar.fraction])
+	_check("it shows the download's progress", updater._cover_pct.text.contains("%") and updater._cover_bar.fraction > 0.0, "%s, bar %.2f" % [updater._cover_pct.text, updater._cover_bar.fraction])
 	_check("it offers Open the game now", updater._cover_update.visible and updater._cover_later.text == "Open the game now")
 	await _shoot("u1-launch-update")
 	updater._cover_later.pressed.emit()
@@ -182,6 +197,54 @@ func _run_equal(updater: AppUpdate) -> void:
 	_check("still no banner", not updater.banner.visible)
 	await _wait(0.3)
 	await _shoot("u7-equal-up-to-date")
+
+
+func _run_chunks(updater: AppUpdate) -> void:
+	var appeared := await _until(func() -> bool: return updater.cover.visible, 120.0)
+	_check("the Updating Open Historia screen appears for a chunked update", appeared and not main.menu.visible)
+	if not appeared:
+		return
+	var moving := await _until(func() -> bool: return str(updater.state.get("kind", "")) == "chunks" and int(updater.state.get("receivedBytes", 0)) > 0, 30.0)
+	await _wait(0.3)
+	_check("it fetches only the changed pieces", moving, str(updater.state))
+	_check("the screen says how much of how much", updater._cover_pct.text.contains(" MB of ") and updater._cover_pct.text.contains("%"), updater._cover_pct.text)
+	var want := float(updater.state.get("downloadBytes", 0))
+	var full := float(updater.state.get("fullBytes", 0))
+	_check("the pieces are far smaller than the installer", want > 0.0 and want < full / 2.0, "%d of %d bytes" % [int(want), int(full)])
+	await _shoot("c1-launch-chunks")
+	updater._cover_later.pressed.emit()
+	var menu_up := await _until(func() -> bool: return main.menu.visible and not updater.cover.visible, 120.0)
+	_check("Open the game now opens the game", menu_up)
+	await _clear_shell()
+	var menu_node: Node = main.get("game_menu")
+	await menu_node.call("open")
+	menu_node.call("_show_tab", "help")
+	await _wait(0.3)
+	if str(updater.state.get("state", "")) == "downloading":
+		await menu_node.call("_check_for_updates")
+		await _wait(0.2)
+		var told := str(menu_node.call("_update_check_text"))
+		_check("Check for updates shows the download's progress and the installer's size", told.begins_with("Downloading the update — ") and told.contains(" MB of ") and told.contains("the full installer is"), told)
+		await _shoot("c2-menu-check-downloading")
+	var ready := await _until(func() -> bool: return updater.is_banner_ready(), 60.0)
+	_check("the banner offers Restart now once the pieces are put together", ready and updater._banner_button.text == "Restart now", updater._banner_button.text)
+	_check("the feed's notes are shown in the banner", updater._banner_notes.visible and updater._banner_notes.text == "B brings a changed script.", updater._banner_notes.text)
+	_check("the ready update was announced to the desktop", updater._toasted == str(updater.state.get("build", "")) and not updater._toasted.is_empty(), updater._toasted)
+	await menu_node.call("_check_for_updates")
+	await _wait(0.2)
+	_check("Check for updates then says it is downloaded", str(menu_node.call("_update_check_text")).begins_with("Downloaded — use Restart now"), str(menu_node.call("_update_check_text")))
+	await _shoot("c3-banner-ready")
+	await menu_node.call("close")
+	var staged := str(updater.state.get("staged", ""))
+	_check("the update is staged, not an installer", not staged.is_empty(), staged)
+	var install := OS.get_environment("OH_NATIVE_INSTALL_DIR")
+	var marker := OS.get_environment("OH_NATIVE_ROOT").path_join("native-cache/updates/staged").path_join(staged).path_join("applied")
+	await updater.install_on_quit()
+	var applied := await _until(func() -> bool: return FileAccess.file_exists(marker), 60.0)
+	await _wait(1.5)
+	var version: Variant = JSON.parse_string(FileAccess.get_file_as_string(install.path_join("native/godot/version.json")))
+	_check("closing the game applies the staged files", applied and version is Dictionary and str((version as Dictionary).get("build", "")) == staged, str(version))
+	_check("the replaced files are kept until the new start is confirmed", DirAccess.dir_exists_absolute(marker.get_base_dir().path_join("previous")))
 
 
 func _finish() -> void:
