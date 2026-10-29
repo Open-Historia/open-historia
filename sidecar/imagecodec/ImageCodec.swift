@@ -118,6 +118,7 @@ struct Items {
 	var auxlAt: [Int] = []
 	var transforms: [Int: [(String, Int)]] = [:]
 	var sizes: [Int: (Int, Int)] = [:]
+	var typeAt: [Int: Int] = [:]
 }
 
 func readItems(_ bytes: Bytes) -> Items? {
@@ -133,6 +134,17 @@ func readItems(_ bytes: Bytes) -> Items? {
 	items.pitmWide = bytes.u8(pitm.body) != 0
 	items.pitmAt = pitm.body + 4
 	items.primary = items.pitmWide ? Int(bytes.u32(items.pitmAt)) : bytes.u16(items.pitmAt)
+	if let iinf = bytes.find(children, "iinf") {
+		let first = iinf.body + (bytes.u8(iinf.body) == 0 ? 6 : 8)
+		for infe in bytes.boxes(first, iinf.end) where infe.type == "infe" {
+			let version = bytes.u8(infe.body)
+			if version == 2 && infe.body + 12 <= infe.end {
+				items.typeAt[bytes.u16(infe.body + 4)] = infe.body + 8
+			} else if version == 3 && infe.body + 14 <= infe.end {
+				items.typeAt[Int(bytes.u32(infe.body + 4))] = infe.body + 10
+			}
+		}
+	}
 	var candidates: [Int] = []
 	if let iref = bytes.find(children, "iref") {
 		let refWide = bytes.u8(iref.body) != 0
@@ -603,6 +615,52 @@ func withMask(_ picture: Raster, _ mask: Raster) -> Raster? {
 	return out
 }
 
+func isMask(_ mask: Raster, _ picture: Raster) -> Bool {
+	if mask.width != picture.width || mask.height != picture.height || mask.pixels.isEmpty {
+		return false
+	}
+	let pixels = mask.pixels.count / 4
+	let step = max(1, pixels / 20_000) * 4
+	var seen = 0
+	var tinted = 0
+	var same = 0
+	var at = 0
+	while at < mask.pixels.count {
+		let red = Int(mask.pixels[at])
+		let green = Int(mask.pixels[at + 1])
+		let blue = Int(mask.pixels[at + 2])
+		if abs(red - green) > 3 || abs(green - blue) > 3 {
+			tinted += 1
+		}
+		if mask.pixels[at] == picture.pixels[at] && mask.pixels[at + 1] == picture.pixels[at + 1] && mask.pixels[at + 2] == picture.pixels[at + 2] {
+			same += 1
+		}
+		seen += 1
+		at += step
+	}
+	return tinted * 100 <= seen && same * 100 < seen * 98
+}
+
+func allClear(_ picture: Raster) -> Bool {
+	var at = 3
+	while at < picture.pixels.count {
+		if picture.pixels[at] != 0 {
+			return false
+		}
+		at += 4
+	}
+	return true
+}
+
+func colorItemData(_ bytes: Bytes, _ items: Items) -> [UInt8] {
+	return renamed(bytes.data, items.auxlAt, "xuxl")
+}
+
+func alphaItemData(_ bytes: Bytes, _ items: Items) -> [UInt8] {
+	let hidden = items.typeAt[items.primary].map { [$0] } ?? []
+	return withPrimary(renamed(colorItemData(bytes, items), hidden, "xv01"), items, items.alpha)
+}
+
 func trackCopies(_ bytes: Bytes, _ animation: Animation) -> (color: [UInt8], mask: [UInt8])? {
 	guard let alpha = animation.alpha, alpha.handlerAt >= 0, animation.color.handlerAt >= 0 else {
 		return nil
@@ -622,6 +680,16 @@ func convertAnimation(_ source: CGImageSource, _ bytes: Bytes, _ animation: Anim
 	if let copies = trackCopies(bytes, animation), let colorOnly = makeSource(copies.color), let maskOnly = makeSource(copies.mask), CGImageSourceGetCount(colorOnly) == count, CGImageSourceGetCount(maskOnly) == count {
 		frames = colorOnly
 		masks = maskOnly
+	}
+	if let maskSource = masks {
+		var usable = false
+		if let colorImage = decodeFrame(frames, 0), let color = raster(colorImage), let maskImage = decodeFrame(maskSource, 0), let mask = raster(maskImage) {
+			usable = isMask(mask, color)
+		}
+		if !usable {
+			frames = source
+			masks = nil
+		}
 	}
 	guard let firstImage = decodeFrame(frames, 0), let first = raster(firstImage) else {
 		throw CodecFailure(message: "The picture sequence has no pictures in it.")
@@ -663,23 +731,20 @@ func convertAnimation(_ source: CGImageSource, _ bytes: Bytes, _ animation: Anim
 	return "ok\t\(width)\t\(height)\t\(alphaState)\t\(timings.count)\t\(animation.loops())\t" + timings.joined(separator: ",")
 }
 
-func planeStill(_ bytes: Bytes, _ items: Items, _ target: String) throws -> String? {
-	let colorData = renamed(bytes.data, items.auxlAt, "xuxl")
-	guard let colorSource = makeSource(colorData), let colorImage = decodeFrame(colorSource, 0), var picture = raster(colorImage) else {
+func colorItem(_ bytes: Bytes, _ items: Items) -> (CGImageSource, Raster)? {
+	guard let source = makeSource(colorItemData(bytes, items)), let image = decodeFrame(source, 0), let picture = raster(image) else {
 		return nil
 	}
-	var alpha = "unreadable"
-	if let maskSource = makeSource(withPrimary(colorData, items, items.alpha)), let maskImage = decodeFrame(maskSource, 0), let mask = raster(maskImage) {
-		if let applied = withMask(picture, mask) {
-			picture = applied
-			alpha = "plane"
-		} else {
-			alpha = "none"
-		}
+	return (source, picture)
+}
+
+func planeStill(_ bytes: Bytes, _ items: Items, _ target: String) throws -> String? {
+	guard let color = colorItem(bytes, items), let maskSource = makeSource(alphaItemData(bytes, items)), let maskImage = decodeFrame(maskSource, 0), let mask = raster(maskImage), isMask(mask, color.1), let joined = withMask(color.1, mask) else {
+		return nil
 	}
-	picture = oriented(picture, orientationSteps(items, colorSource, picture.width, picture.height))
+	let picture = oriented(joined, orientationSteps(items, color.0, joined.width, joined.height))
 	try writePng(picture, target)
-	return "ok\t\(picture.width)\t\(picture.height)\t\(alpha)\t1\t-1\t"
+	return "ok\t\(picture.width)\t\(picture.height)\tplane\t1\t-1\t"
 }
 
 func convertStill(_ source: CGImageSource, _ bytes: Bytes, _ target: String) throws -> String {
@@ -687,10 +752,14 @@ func convertStill(_ source: CGImageSource, _ bytes: Bytes, _ target: String) thr
 	if let items = items, items.alpha != 0, let answer = try planeStill(bytes, items, target) {
 		return answer
 	}
-	guard let image = decodeFrame(source, 0), let decoded = raster(image) else {
+	guard let image = decodeFrame(source, 0), var decoded = raster(image) else {
 		throw CodecFailure(message: "The image has no pictures in it.")
 	}
-	let alpha = (properties(source, 0)["HasAlpha"] as? Bool ?? hasAlpha(image)) ? "own" : "none"
+	var alpha = (properties(source, 0)["HasAlpha"] as? Bool ?? hasAlpha(image)) ? "own" : "none"
+	if let items = items, items.alpha != 0, allClear(decoded), let color = colorItem(bytes, items), color.1.width == decoded.width, color.1.height == decoded.height {
+		decoded = color.1
+		alpha = "unreadable"
+	}
 	let picture = oriented(decoded, orientationSteps(items, source, decoded.width, decoded.height))
 	try writePng(picture, target)
 	return "ok\t\(picture.width)\t\(picture.height)\t\(alpha)\t1\t-1\t"
@@ -786,9 +855,9 @@ func probe(_ sourcePath: String) -> String {
 	if let items = readItems(bytes) {
 		lines.append("items primary \(items.primary) alpha \(items.alpha) transforms \(items.transforms[items.primary].map { "\($0)" } ?? "-") size \(items.sizes[items.primary].map { "\($0)" } ?? "-")")
 		if items.alpha != 0 {
-			let colorData = renamed(bytes.data, items.auxlAt, "xuxl")
-			lines.append(describe("colour item", makeSource(colorData)))
-			lines.append(describe("alpha item", makeSource(withPrimary(colorData, items, items.alpha))))
+			lines.append("item types \(items.typeAt.keys.sorted().map { "\($0)=\(bytes.text(items.typeAt[$0] ?? -1, 4))" }.joined(separator: ","))")
+			lines.append(describe("colour item", makeSource(colorItemData(bytes, items))))
+			lines.append(describe("alpha item", makeSource(alphaItemData(bytes, items))))
 		}
 	}
 	if let animation = readAnimation(bytes), let copies = trackCopies(bytes, animation) {
