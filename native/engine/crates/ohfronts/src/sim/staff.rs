@@ -242,20 +242,20 @@ pub fn breakthrough_answer(battle: &Battle, side: usize) -> Option<Answer> {
 }
 
 fn standing_of(battle: &Battle, side: usize) -> impl Iterator<Item = &Val> {
-    battle.orders.iter().filter(move |order| matches!(order.get("s"), Val::Num(s) if *s == side as f64) && !order.get("chosen").truthy())
+    battle.orders.iter().filter(move |order| matches!(order.read("s"), Val::Num(s) if s == side as f64) && !order.read("chosen").truthy())
 }
 
 pub fn staff_may_order(battle: &Battle, side: usize) -> bool {
-    if standing_of(battle, side).any(|order| matches!(order.get("mark"), Val::Str(mark) if mark == SCENARIO_MARK)) {
+    if standing_of(battle, side).any(|order| matches!(order.read("mark"), Val::Str(mark) if mark == SCENARIO_MARK)) {
         return false;
     }
-    standing_of(battle, side).all(|order| matches!(order.get("mark"), Val::Str(mark) if mark == STAFF_MARK) || js::or_zero(order.get("age").num()) > STAFF_STORY_ORDER_DAYS)
+    standing_of(battle, side).all(|order| matches!(order.read("mark"), Val::Str(mark) if mark == STAFF_MARK) || js::or_zero(order.read("age").num()) > STAFF_STORY_ORDER_DAYS)
 }
 
 pub fn staff_standing(battle: &Battle, side: usize) -> String {
     let mut words: Vec<Val> = standing_of(battle, side)
-        .filter(|order| matches!(order.get("mark"), Val::Str(mark) if mark == STAFF_MARK))
-        .map(|order| Val::Str(format!("{}|{}", js::to_string(order.get("order")), fold_value(order.get("sector")))))
+        .filter(|order| matches!(order.read("mark"), Val::Str(mark) if mark == STAFF_MARK))
+        .map(|order| Val::Str(format!("{}|{}", js::to_string(&order.read("order")), fold_value(&order.read("sector")))))
         .collect();
     js::default_sort(&mut words);
     words.iter().map(|word| word.string()).collect::<Vec<_>>().join(";")

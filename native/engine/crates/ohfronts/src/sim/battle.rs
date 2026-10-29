@@ -12,6 +12,7 @@ use super::ground::ToSide;
 use super::handicap::FAIR_EDGE;
 use super::js::{OrdMap, Val};
 use super::muster::Levy;
+use super::orders::{HaltToday, OrderView};
 use super::troops::Troop;
 use super::walls::Walls;
 use super::weather::Sky;
@@ -67,8 +68,8 @@ pub struct Battle {
     pub orders_changed: f64,
     pub halts: Vec<Val>,
     pub levy: [Vec<Levy>; 2],
-    pub halts_today: Vec<Val>,
-    pub views: [Vec<Val>; 2],
+    pub halts_today: Vec<HaltToday>,
+    pub views: [Vec<OrderView>; 2],
     pub plans: Val,
     pub deploy: Option<[Vec<DeployLine>; 2]>,
     pub plan_key: String,

@@ -58,7 +58,28 @@ const packTyped = (tag, value) => {
   return { $: tag, b: Buffer.from(value.buffer, value.byteOffset, value.byteLength).toString("base64") };
 };
 
-const encoder = (hooks) => {
+const plainTrack = (value, build) => build();
+
+const tracker = (marks) => {
+  const counts = new Map();
+  const given = new Map();
+  const track = (value, build) => {
+    if (marks === "count") {
+      const count = counts.get(value) ?? 0;
+      counts.set(value, count + 1);
+      return count > 0 ? { $: "u" } : build();
+    }
+    if (!marks.has(value)) return build();
+    if (given.has(value)) return { $: "same", n: given.get(value) };
+    const n = given.size;
+    given.set(value, n);
+    return { $: "id", n, v: build() };
+  };
+  track.counts = counts;
+  return track;
+};
+
+const encoder = (hooks, track = plainTrack) => {
   let nodes = 0;
   const stack = new Set();
   const enc = (value, where) => {
@@ -76,6 +97,10 @@ const encoder = (hooks) => {
     }
     if (value === null) return null;
     if (stack.has(value)) return { $: "cyc" };
+    if (!ArrayBuffer.isView(value)) return track(value, () => body(value, where));
+    return body(value, where);
+  };
+  const body = (value, where) => {
     if (ArrayBuffer.isView(value)) {
       const kind = TYPED.find(([, Type]) => value instanceof Type);
       if (!kind) throw TOO_BIG;
@@ -102,7 +127,9 @@ const encoder = (hooks) => {
       stack.delete(value);
     }
   };
-  return (value, where = null) => enc(value, where);
+  const run = (value, where = null) => enc(value, where);
+  run.track = track;
+  return run;
 };
 
 export const encode = (value) => encoder(null)(value);
@@ -171,6 +198,10 @@ const wrapCallbackArgs = (args, sink) => args.map((value, at) => {
 
 const picked = (value, spec, enc) => {
   if (spec === 1 || !value || typeof value !== "object" || ArrayBuffer.isView(value)) return enc(value);
+  return (enc.track ?? plainTrack)(value, () => pickedBody(value, spec, enc));
+};
+
+const pickedBody = (value, spec, enc) => {
   if (Array.isArray(value)) return spec["*"] ? value.map((item) => picked(item, spec["*"], enc)) : enc(value);
   if (value instanceof Map) return spec["*"] ? { $: "Map", v: [...value].map(([key, item]) => [enc(key), picked(item, spec["*"], enc)]) } : enc(value);
   if (value instanceof Set) return enc(value);
@@ -179,10 +210,18 @@ const picked = (value, spec, enc) => {
   return out;
 };
 
+const encodeWith = (args, picks, track) => {
+  const enc = encoder(null, track);
+  return args.map((value, at) => (picks[at] ? picked(value, picks[at], enc) : enc(value)));
+};
+
 const encodeArgs = (args, picks) => {
   if (!picks) return encode(args);
-  const enc = encoder(null);
-  return args.map((value, at) => (picks[at] ? picked(value, picks[at], enc) : enc(value)));
+  if (!picks.ids) return encodeWith(args, picks, plainTrack);
+  const counting = tracker("count");
+  encodeWith(args, picks, counting);
+  const marks = new Set([...counting.counts].filter(([, count]) => count > 1).map(([value]) => value));
+  return encodeWith(args, picks, tracker(marks));
 };
 
 export const wrap = (moduleName, name, fn, factories, picks = null, quiet = false) => {

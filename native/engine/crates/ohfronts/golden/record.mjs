@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "../../../../..");
-const fixtures = path.join(here, "../tests/golden");
+const fixtures = process.env.GOLDEN_DIR ? path.resolve(process.env.GOLDEN_DIR) : path.join(here, "../tests/golden");
 const CASES_MOST = 300;
 const BYTES_MOST = 200000;
 const BLOB_FROM = 2000;
@@ -156,6 +156,38 @@ const POLICY_PICKS = {
   2: { began: 1, key: 1, today: { line: { contour: { x: 1, y: 1 }, count: 1 }, sectors: 1 } },
   3: { battles: { "*": { ...FEATURE_HOME, name: 1, status: 1, gone: 1, lineKm: 1 } } },
 };
+const ORDER_ARENA = { frame: 1, cols: 1, rows: 1, size: 1, region: 1, names: 1, ids: 1, cities: 1, centreX: 1, centreY: 1, speed: 1 };
+const ORDER_TROOPS = troopsPick(["x", "y", "strength", "kind", "owner", "dug", "dig", "state", "pocket", "order", "fallback", "lag", "hx", "hy", "next", "radiusKm", "sealed", "besieged", "supply"]);
+const ORDER_BATTLE = {
+  ...SUPPLY_BATTLE,
+  name: 1,
+  seed: 1,
+  status: 1,
+  sides: 1,
+  gone: 1,
+  frame: 1,
+  arena: ORDER_ARENA,
+  field: PHI_FIELD,
+  radiusKm: 1,
+  named: 1,
+  orders: 1,
+  halts: 1,
+  ordersChanged: 1,
+  effort: 1,
+  pool: 1,
+  edge: 1,
+  anchors: 1,
+  log: 1,
+  planKey: 1,
+  startPhi: 1,
+  closing: 1,
+  sieges: 1,
+  spared: 1,
+  siegeKey: 1,
+  troops: ORDER_TROOPS,
+};
+const ORDER_RUN = { days: 1, input: { players: 1, map: { structures: 1 } }, advanceKm: 1, pace: 1 };
+const ORDER_TODAY = { day: 1, date: 1, line: { contour: { x: 1, y: 1 }, count: 1 }, sectors: 1, run: ORDER_RUN };
 const runPicks = (names, battleAt = -1) => Object.fromEntries(names.map((name) => [name, battleAt >= 0 && name.startsWith("@") ? null : { 0: RUN_PICK, ...(battleAt >= 0 ? { [battleAt]: BATTLE_PICK } : {}) }]));
 
 const MODULES = {
@@ -380,6 +412,27 @@ const MODULES = {
       createTroopPolicy: { rc: POLICY_PICKS, rcMost: 2 },
     },
   },
+  "src/runtime/fronts/orders.js": {
+    name: "orders",
+    keep: ["memberOf", "readSieges", "readOrders", "ageOrders", "takesOrder", "setStandingOrder", "assignOrder", "standingOf", "servingOf", "giveWay", "putAshore", "landCarried", "applyOrder"],
+    most: 30,
+    bytes: { default: 90000, applyOrder: 240000, landCarried: 300000, giveWay: 100000 },
+    picks: {
+      memberOf: { 0: { sides: 1, gone: 1 } },
+      readSieges: { 0: { orders: 1, arena: ORDER_ARENA, field: { cols: 1, rows: 1, holders: 1 }, frame: 1, sieges: 1, spared: 1, siegeKey: 1 }, ids: true },
+      readOrders: { 0: { orders: 1, arena: ORDER_ARENA, field: { cols: 1, rows: 1, holders: 1 }, frame: 1, halts: 1, sieges: 1, spared: 1, siegeKey: 1, views: 1, haltsToday: 1 }, 1: { contour: { x: 1, y: 1 }, count: 1 }, ids: true },
+      ageOrders: { 0: { orders: 1, halts: 1, ordersChanged: 1 }, ids: true },
+      takesOrder: { 0: { sides: 1, gone: 1, orders: 1, arena: ORDER_ARENA, frame: 1 }, 1: { input: { players: 1 } }, 3: { line: { contour: { x: 1, y: 1 }, count: 1 }, sectors: 1 }, ids: true },
+      setStandingOrder: { 0: { sides: 1, gone: 1, orders: 1, ordersChanged: 1 }, ids: true },
+      assignOrder: { 0: ORDER_BATTLE, 1: ORDER_RUN, 3: ORDER_TODAY, ids: true },
+      standingOf: { 0: { orders: 1 }, ids: true },
+      servingOf: { 0: { orders: 1 }, ids: true },
+      giveWay: { 0: { field: FIELD_PICK, arena: ORDER_ARENA, frame: 1, log: 1, troops: ORDER_TROOPS } },
+      putAshore: { 0: { field: FIELD_PICK, frame: 1, pool: 1, edge: 1, planKey: 1, troops: ORDER_TROOPS } },
+      landCarried: { 0: { field: PHI_FIELD, frame: 1, pool: 1, edge: 1, planKey: 1, anchors: 1, troops: ORDER_TROOPS } },
+      applyOrder: { 0: ORDER_BATTLE, 2: ORDER_TODAY, ids: true },
+    },
+  },
   "src/runtime/fronts/scenarioFronts.js": { name: "scenarioFronts" },
   "src/runtime/fronts/climate.js": { name: "climate", picks: climatePicks(["zonesOver", "zonesToday"]) },
   "src/runtime/fronts/weather.js": { name: "weather", picks: climatePicks(["skyOver", "skiesAhead"]) },
@@ -388,7 +441,12 @@ const MODULES = {
 const CHANGED = new Set(Object.values(MODULES).flatMap((value) => (value.changed ?? []).map((fn) => `${value.name}.${fn}`)));
 const BIG = new Set(Object.values(MODULES).flatMap((value) => (value.big ?? []).map((fn) => `${value.name}.${fn}`)));
 const OWN_BYTES = new Map(Object.values(MODULES).filter((value) => value.bytes).map((value) => [value.name, value.bytes]));
-const budgetOf = (key) => OWN_BYTES.get(key.split(".")[0]) ?? (BIG.has(key) ? BYTES_MOST * 4 : BYTES_MOST);
+const ownBytes = (key) => {
+  const [moduleName, fn] = key.split(".");
+  const own = OWN_BYTES.get(moduleName);
+  return own && typeof own === "object" ? own[fn] ?? own.default : own;
+};
+const budgetOf = (key) => ownBytes(key) ?? (BIG.has(key) ? BYTES_MOST * 4 : BYTES_MOST);
 
 const only = process.argv.slice(2);
 const chosen = Object.fromEntries(Object.entries(MODULES).filter(([, value]) => only.length === 0 || only.includes(value.name)));
@@ -504,7 +562,7 @@ for (const value of Object.values(chosen)) {
   for (const [key, entry] of [...gathered].sort(([a], [b]) => (a < b ? -1 : 1))) {
     const [moduleName, fn] = key.split(".");
     if (moduleName !== value.name || (value.keep && !value.keep.includes(fn))) continue;
-    cases[fn] = pick(entry.cases, budgetOf(key), key, value.most ?? CASES_MOST).map((item) => item.item);
+    cases[fn] = pick(entry.cases, budgetOf(key) * (process.env.GOLDEN_WIDE ? 8 : 1), key, process.env.GOLDEN_WIDE ? CASES_MOST : value.most ?? CASES_MOST).map((item) => item.item);
   }
   const blobs = [];
   const blobIndex = new Map();

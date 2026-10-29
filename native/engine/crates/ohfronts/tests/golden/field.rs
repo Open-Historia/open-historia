@@ -327,7 +327,7 @@ fn cut_val(cut: &Cut) -> Val {
     Val::obj([("x", num(cut.x)), ("y", num(cut.y)), ("from", num(cut.from)), ("to", num(cut.to))])
 }
 
-fn sector_val(sector: &Sector) -> Val {
+pub fn sector_val(sector: &Sector) -> Val {
     match sector {
         Sector::All => Val::obj([("kind", text("all"))]),
         Sector::Cut { word, cut } => Val::obj([("kind", text("cut")), ("word", text(word)), ("x", num(cut.x)), ("y", num(cut.y)), ("from", num(cut.from)), ("to", num(cut.to))]),
@@ -335,7 +335,7 @@ fn sector_val(sector: &Sector) -> Val {
     }
 }
 
-fn sector_of(value: &Val) -> Sector {
+pub fn sector_of(value: &Val) -> Sector {
     match value.get("kind").as_str() {
         Some("all") => Sector::All,
         Some("cut") => Sector::Cut { word: value.get("word").string_or_empty(), cut: Cut { x: value.get("x").num(), y: value.get("y").num(), from: value.get("from").num(), to: value.get("to").num() } },
@@ -351,7 +351,7 @@ pub fn sectors_of(value: &Val) -> Sectors {
     Sectors { axis: value.get("axis").string_or_empty(), names: value.get("names").array_or_empty().iter().map(|n| n.string()).collect(), cuts }
 }
 
-fn place_val(place: &Place) -> Val {
+pub fn place_val(place: &Place) -> Val {
     let mut out = Val::obj([("kind", text(place.kind)), ("name", text(&place.name)), ("x", num(place.x)), ("y", num(place.y))]);
     if let Val::Obj(obj) = &mut out {
         if let Some(cell) = place.cell {
