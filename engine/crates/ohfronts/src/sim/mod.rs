@@ -13,3 +13,6 @@ pub mod invade;
 pub mod mechanics;
 pub mod military;
 pub mod contact;
+pub mod deploy;
+pub mod manpower;
+pub mod muster;

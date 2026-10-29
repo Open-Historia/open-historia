@@ -25,7 +25,7 @@ const MODULES = {
   "src/runtime/fronts/heldRegions.js": { name: "heldRegions" },
   "src/runtime/fronts/handicap.js": { name: "handicap" },
   "src/runtime/fronts/invade.js": { name: "invade" },
-  "src/runtime/fronts/manpower.js": { name: "manpower" },
+  "src/runtime/fronts/manpower.js": { name: "manpower", keep: ["menPerFormation", "shareOf"] },
   "src/runtime/fronts/attrition.js": { name: "attrition" },
   "src/runtime/fronts/muster.js": { name: "muster" },
   "src/runtime/fronts/deploy.js": { name: "deploy" },
