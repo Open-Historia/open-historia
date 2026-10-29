@@ -153,7 +153,9 @@ export const toastTag = (chatId) => `oh-${crypto.createHash("sha1").update(`oh-d
 
 export const OSASCRIPT = "/usr/bin/osascript";
 
-export const macNotificationArgs = (title, body) => ["-e", "on run argv", "-e", "display notification (item 2 of argv) with title (item 1 of argv)", "-e", "end run", String(title ?? ""), String(body ?? "")];
+const macText = (value) => String(value ?? "").replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "").replace(/[\r\n]+/g, " ").trim();
+
+export const macNotificationArgs = (title, body) => ["-e", "on run argv", "-e", "display notification (item 2 of argv) with title (item 1 of argv)", "-e", "end run", macText(title), macText(body)];
 
 export const powershellPath = () => path.join(process.env.SystemRoot || process.env.windir || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
 

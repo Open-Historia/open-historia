@@ -21,13 +21,28 @@ const NO_MAC_CODEC = "This version of macOS cannot open AVIF images. macOS 13 Ve
 
 export const imageCodecSwiftArgs = (target, arch) => ["swiftc", "-O", "-target", arch === "arm64" ? "arm64-apple-macos11.0" : "x86_64-apple-macos10.15", IMAGE_CODEC_SWIFT, "-o", target];
 
+export const swiftCompilerIn = (developerDir) => {
+  const dir = String(developerDir ?? "").trim();
+  if (!dir) return "";
+  return [path.join(dir, "usr", "bin", "swiftc"), path.join(dir, "Toolchains", "XcodeDefault.xctoolchain", "usr", "bin", "swiftc")].find((file) => fs.existsSync(file)) ?? "";
+};
+
+const swiftReady = () => new Promise((resolve) => {
+  if (!fs.existsSync("/usr/bin/xcrun") || !fs.existsSync("/usr/bin/xcode-select")) {
+    resolve(false);
+    return;
+  }
+  execFile("/usr/bin/xcode-select", ["-p"], { timeout: 10_000 }, (error, stdout) => resolve(!error && Boolean(swiftCompilerIn(stdout))));
+});
+
 const compileMac = async (cacheDir) => {
   if (fs.existsSync(SHIPPED)) return SHIPPED;
-  if (!fs.existsSync(IMAGE_CODEC_SWIFT) || !fs.existsSync("/usr/bin/xcrun")) throw codecError(NO_MAC_READER, true);
+  if (!fs.existsSync(IMAGE_CODEC_SWIFT)) throw codecError(NO_MAC_READER, true);
   const tag = crypto.createHash("sha256").update(fs.readFileSync(IMAGE_CODEC_SWIFT)).digest("hex").slice(0, 12);
   const dir = path.join(cacheDir, "imagecodec");
   const target = path.join(dir, `oh-imagecodec-${tag}`);
   if (fs.existsSync(target)) return target;
+  if (!(await swiftReady())) throw codecError(NO_MAC_READER, true);
   fs.mkdirSync(dir, { recursive: true });
   const partial = path.join(dir, `oh-imagecodec-${tag}-${process.pid}`);
   await new Promise((resolve, reject) => {
@@ -128,6 +143,13 @@ const settleIdle = (state) => {
     state.child.stdin.end();
   }, IDLE_MS);
   idle.unref?.();
+};
+
+export const stopImageCodec = () => {
+  clearTimeout(idle);
+  const state = helper;
+  helper = null;
+  state?.child.stdin.end();
 };
 
 const start = async (cacheDir) => {
