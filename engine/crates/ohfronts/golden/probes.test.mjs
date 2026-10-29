@@ -23,6 +23,7 @@ import { give, legsOf, waysFor } from "../../../../../src/runtime/fronts/way.js"
 import { troopView } from "../../../../../src/runtime/fronts/mind/troops.js";
 import { drawIn, findPrey } from "../../../../../src/runtime/fronts/closing.js";
 import { groundOf, homeTableOf, staffFeatures } from "../../../../../src/runtime/fronts/mind/features.js";
+import { authoredForms, authoredName, authoredTroops, blankScenarioFront, normalizeScenarioFronts, scenarioFrontOrders, scenarioFrontWars, withScenarioGenerals } from "../../../../../src/runtime/fronts/scenarioFronts.js";
 import { runFronts } from "../../../../../src/runtime/fronts/engine.js";
 import { frontInput } from "../../../../../src/runtime/fronts/syntheticMap.js";
 
@@ -374,4 +375,35 @@ test("golden probes for a thrust: what a staff sees and what closes on a pocket"
   policy.often = true;
   runFronts(frontInput(world, { arenas: new Map(), staff: true, troops: 1, days: 40, strengthOf: () => 4, era: 1, mechanics: { muster: true }, staffPolicy: policy }));
   if (process.env.GOLDEN_SEEN) console.log("seen", JSON.stringify(seen), lastSize);
+});
+
+test("golden probes for a scenario's fronts", () => {
+  const raw = [
+    { name: "  The  Western   Front ", sides: [["Aland", " aland ", "Cyrene"], ["Borduria", "ALAND", "Dacia"]], troops: [12.5, "40"], stance: ["Advance", "dig  in"], generals: [["Hans", "  Fritz  "], []], forms: ["swarm", "line"] },
+    { sides: [["Aland"], ["Borduria"]], war: false, stance: ["advance", "hold"], troops: [-3, 9999] },
+    { sides: [["Erewhon"], []] },
+    null,
+    [1, 2],
+    "text",
+    { name: "Eastern", sides: { 0: ["Dacia"], 1: ["Cyrene"] }, troops: [null, 7], stance: [5, "advance"], generals: [["One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine"], ["Zed"]], forms: ["", "swarm"] },
+    ...Array.from({ length: 9 }, (_, at) => ({ name: `Front ${at}`, sides: [[`North ${at}`], [`South ${at}`]] })),
+  ];
+  const fronts = normalizeScenarioFronts(raw);
+  normalizeScenarioFronts(raw, { draft: true });
+  normalizeScenarioFronts("nothing");
+  blankScenarioFront();
+  const wars = [{ sideA: ["borduria"], sideB: ["aland"], status: "active" }, { sideA: ["Dacia"], sideB: ["Cyrene"], status: " Ended " }];
+  scenarioFrontWars(fronts, wars, " 1914-08-01 ");
+  scenarioFrontWars(fronts, [], "1939-09-01");
+  scenarioFrontWars([], wars, null);
+  scenarioFrontOrders(fronts);
+  scenarioFrontOrders([]);
+  for (const sides of [[["Aland"], ["Borduria"]], [["Borduria"], ["Aland"]], [["Cyrene"], ["Dacia"]], [["Nobody"], ["Aland"]], null]) {
+    authoredTroops(fronts, sides);
+    authoredForms(fronts, sides);
+    authoredName(fronts, sides);
+  }
+  const record = (sides, status = "active") => ({ name: "r", status, sides, troops: ["", ""], brief: { carry: { command: [[0, 1], [0]] } } });
+  withScenarioGenerals([record([["Aland"], ["Borduria"]]), record([["Borduria"], ["Aland"]]), record([["Dacia"], ["Cyrene"]]), record([["Aland"], ["Borduria"]], "closed"), null, { name: "bare" }], fronts);
+  withScenarioGenerals(null, fronts);
 });

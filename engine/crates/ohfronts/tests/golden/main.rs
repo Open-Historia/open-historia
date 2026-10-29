@@ -28,3 +28,4 @@ mod swarms;
 mod way;
 mod mind_troops;
 mod mind_features;
+mod scenario_fronts;

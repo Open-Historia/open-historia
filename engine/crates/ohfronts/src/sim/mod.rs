@@ -39,3 +39,4 @@ pub mod staff;
 pub mod closing;
 pub mod way;
 pub mod mind;
+pub mod scenario_fronts;
