@@ -11,6 +11,7 @@ crate-type = ["cdylib"]
 [dependencies]
 godot.workspace = true
 ohmap = { path = "../ohmap" }
+ohfronts = { path = "../ohfronts" }
 
 [target.'cfg(not(target_os = "linux"))'.dependencies]
 ohweb = { path = "../ohweb" }

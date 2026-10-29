@@ -1267,8 +1267,16 @@ version = "0.1.0"
 dependencies = [
  "godot",
  "libloading",
+ "ohfronts",
  "ohmap",
  "ohweb",
+]
+
+[[package]]
+name = "ohfronts"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]

@@ -7,6 +7,7 @@ use std::thread;
 use godot::prelude::*;
 use ohmap::{BakedMap, PickIndex};
 
+mod frontframes;
 mod mapmath;
 mod projector;
 mod webpanel;
