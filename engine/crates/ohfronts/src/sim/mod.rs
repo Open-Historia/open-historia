@@ -25,3 +25,4 @@ pub mod battle;
 pub mod engine;
 pub mod swarms;
 pub mod troops;
+pub mod wayfinder;

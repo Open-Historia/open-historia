@@ -53,6 +53,7 @@ const MODULES = {
   "src/runtime/fronts/deploy.js": { name: "deploy", keep: ["readDeploy", "hasDeploy", "deployLinesOf", "withDeployLine"] },
   "src/runtime/fronts/field.js": { name: "field", factories: ["createField", "openField", "unpackField", "resampleField"], big: ["takeCapsule", "takeCells", "restoreCells", "rebuildFromHolders", "resampleField", "rebuildDistances"] },
   "src/runtime/fronts/line.js": { name: "line" },
+  "src/runtime/fronts/wayfinder.js": { name: "wayfinder", big: ["findWay"], picks: { findWay: { 0: { cols: 1, rows: 1, west: 1, north: 1, step: 1, wrap: 1, flat: 1, scale: 1, land: 1, region: 1, ids: 1, full: 1, stepKm: 1, rowCosine: 1, seas: 1, seaCount: 1 } } } },
   "src/runtime/fronts/ground.js": { name: "ground", big: ["measure", "awayOf", "cheapestWay"] },
   "src/runtime/fronts/contact.js": { name: "contact" },
   "src/runtime/fronts/sectors.js": { name: "sectors" },

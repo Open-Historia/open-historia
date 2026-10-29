@@ -146,3 +146,59 @@ fn world_grid_matches_js() {
         ],
     );
 }
+
+fn way_val(way: &ohfronts::sim::wayfinder::Way) -> Val {
+    use ohfronts::sim::wayfinder::Way;
+    match way {
+        Way::Error(error) => Val::obj([("error", text(error))]),
+        Way::Found { way, km, start, start_km, end, landing, arrived } => Val::obj([
+            ("way", list(way.iter().map(|p| nums(p)).collect())),
+            ("km", num(*km)),
+            ("start", nums(start)),
+            ("startKm", num(*start_km)),
+            ("end", nums(end)),
+            ("landing", nums(landing)),
+            ("arrived", Val::Bool(*arrived)),
+        ]),
+    }
+}
+
+#[test]
+fn wayfinder_matches_js() {
+    use ohfronts::sim::wayfinder::{find_way, Ask};
+    run(
+        "wayfinder",
+        &[("findWay", &|case| {
+            let options = case.arg(1);
+            if !case.arg(0).truthy() {
+                return None;
+            }
+            let mut grid = grid_of(case.arg(0));
+            let holder = Script::new(case, "1.holderOf");
+            let friendly = Script::new(case, "1.friendly");
+            let hostile = Script::new(case, "1.hostile");
+            let point = |value: &Val| value.as_array().map(|_| [value.element(0).num(), value.element(1).num()]);
+            let has = |key: &str| matches!(options.get(key), Val::Fn);
+            let holder_of = |id: &str| if has("holderOf") { holder.call(&[text(id)]).string_or_empty() } else { String::new() };
+            let is_friendly = |name: &str| has("friendly") && friendly.call(&[text(name)]).truthy();
+            let is_hostile = |name: &str| has("hostile") && hostile.call(&[text(name)]).truthy();
+            let medium = if options.get("medium").is_undef() { "sea".to_string() } else { options.get("medium").string() };
+            let found = find_way(
+                &mut grid,
+                &Ask {
+                    medium: &medium,
+                    from: point(options.get("from")),
+                    to: point(options.get("to")),
+                    holder_of: &holder_of,
+                    friendly: &is_friendly,
+                    hostile: &is_hostile,
+                    year: match options.get("year") {
+                        Val::Num(n) => Some(*n),
+                        _ => None,
+                    },
+                },
+            );
+            Some(expect(case, way_val(&found))?.and_then(|_| holder.done()).and_then(|_| friendly.done()).and_then(|_| hostile.done()))
+        })],
+    );
+}
