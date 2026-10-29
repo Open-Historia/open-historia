@@ -35,3 +35,4 @@ mod combat;
 mod brief;
 mod record;
 mod fortify;
+mod engineer;
