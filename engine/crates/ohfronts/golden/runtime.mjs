@@ -42,6 +42,19 @@ const number = (value) => {
   return value;
 };
 
+const packTyped = (tag, value) => {
+  if (value.length < 48) return { $: tag, v: Array.from(value, number) };
+  const runs = [];
+  for (let at = 0; at < value.length && runs.length <= value.length / 2; ) {
+    let end = at + 1;
+    while (end < value.length && Object.is(value[end], value[at])) end += 1;
+    runs.push(number(value[at]), end - at);
+    at = end;
+  }
+  if (runs.length <= value.length / 2) return { $: tag, r: runs };
+  return { $: tag, b: Buffer.from(value.buffer, value.byteOffset, value.byteLength).toString("base64") };
+};
+
 const encoder = (hooks) => {
   let nodes = 0;
   const stack = new Set();
@@ -65,7 +78,7 @@ const encoder = (hooks) => {
       if (!kind) throw TOO_BIG;
       nodes += value.length;
       if (nodes > NODES_MOST) throw TOO_BIG;
-      return { $: kind[0], v: Array.from(value, number) };
+      return packTyped(kind[0], value);
     }
     stack.add(value);
     try {

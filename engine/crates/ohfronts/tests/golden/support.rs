@@ -190,6 +190,34 @@ impl<'a> Parser<'a> {
     }
 }
 
+fn base64(text: &str) -> Vec<u8> {
+    let value = |byte: u8| -> u32 {
+        match byte {
+            b'A'..=b'Z' => (byte - b'A') as u32,
+            b'a'..=b'z' => (byte - b'a') as u32 + 26,
+            b'0'..=b'9' => (byte - b'0') as u32 + 52,
+            b'+' => 62,
+            _ => 63,
+        }
+    };
+    let clean: Vec<u8> = text.bytes().filter(|&b| b != b'=').collect();
+    let mut out = Vec::with_capacity(clean.len() * 3 / 4);
+    for chunk in clean.chunks(4) {
+        let mut bits = 0u32;
+        for (at, &byte) in chunk.iter().enumerate() {
+            bits |= value(byte) << (18 - 6 * at);
+        }
+        out.push((bits >> 16) as u8);
+        if chunk.len() > 2 {
+            out.push((bits >> 8) as u8);
+        }
+        if chunk.len() > 3 {
+            out.push(bits as u8);
+        }
+    }
+    out
+}
+
 struct Reader<'a> {
     blobs: &'a [J],
     cache: RefCell<Vec<Option<Val>>>,
@@ -239,6 +267,46 @@ impl<'a> Reader<'a> {
         node
     }
 
+    fn typed(&self, tag: &str, node: &J) -> Typed {
+        if let Some(J::Str(packed)) = node.get("b") {
+            let bytes = base64(packed);
+            return match tag {
+                "U8" => Typed::U8(bytes),
+                "U8C" => Typed::U8C(bytes),
+                "I8" => Typed::I8(bytes.iter().map(|&b| b as i8).collect()),
+                "U16" => Typed::U16(bytes.chunks(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect()),
+                "I16" => Typed::I16(bytes.chunks(2).map(|c| i16::from_le_bytes([c[0], c[1]])).collect()),
+                "U32" => Typed::U32(bytes.chunks(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()),
+                "I32" => Typed::I32(bytes.chunks(4).map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()),
+                "F32" => Typed::F32(bytes.chunks(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()),
+                _ => Typed::F64(bytes.chunks(8).map(|c| f64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]])).collect()),
+            };
+        }
+        let values: Vec<f64> = if let Some(runs) = node.get("r").map(|r| self.raw(r)) {
+            let flat = self.numbers(Some(runs));
+            let mut out = Vec::new();
+            for pair in flat.chunks(2) {
+                for _ in 0..pair[1] as usize {
+                    out.push(pair[0]);
+                }
+            }
+            out
+        } else {
+            self.numbers(node.get("v").map(|v| self.raw(v)))
+        };
+        match tag {
+            "U8" => Typed::U8(values.iter().map(|&n| n as u8).collect()),
+            "U8C" => Typed::U8C(values.iter().map(|&n| n as u8).collect()),
+            "I8" => Typed::I8(values.iter().map(|&n| n as i8).collect()),
+            "U16" => Typed::U16(values.iter().map(|&n| n as u16).collect()),
+            "I16" => Typed::I16(values.iter().map(|&n| n as i16).collect()),
+            "U32" => Typed::U32(values.iter().map(|&n| n as u32).collect()),
+            "I32" => Typed::I32(values.iter().map(|&n| n as i32).collect()),
+            "F32" => Typed::F32(values.iter().map(|&n| n as f32).collect()),
+            _ => Typed::F64(values),
+        }
+    }
+
     fn tagged(&self, tag: &str, node: &J) -> Val {
         let v = node.get("v").map(|v| self.raw(v));
         match tag {
@@ -281,15 +349,7 @@ impl<'a> Reader<'a> {
                 out.set("$args", node.get("a").map(|a| self.val(a)).unwrap_or(Val::Null));
                 Val::Obj(out)
             }
-            "U8" => Val::Typed(Typed::U8(self.numbers(v).iter().map(|&n| n as u8).collect())),
-            "U8C" => Val::Typed(Typed::U8C(self.numbers(v).iter().map(|&n| n as u8).collect())),
-            "I8" => Val::Typed(Typed::I8(self.numbers(v).iter().map(|&n| n as i8).collect())),
-            "U16" => Val::Typed(Typed::U16(self.numbers(v).iter().map(|&n| n as u16).collect())),
-            "I16" => Val::Typed(Typed::I16(self.numbers(v).iter().map(|&n| n as i16).collect())),
-            "U32" => Val::Typed(Typed::U32(self.numbers(v).iter().map(|&n| n as u32).collect())),
-            "I32" => Val::Typed(Typed::I32(self.numbers(v).iter().map(|&n| n as i32).collect())),
-            "F32" => Val::Typed(Typed::F32(self.numbers(v).iter().map(|&n| n as f32).collect())),
-            "F64" => Val::Typed(Typed::F64(self.numbers(v))),
+            "U8" | "U8C" | "I8" | "U16" | "I16" | "U32" | "I32" | "F32" | "F64" => Val::Typed(self.typed(tag, node)),
             other => panic!("unknown tag {other}"),
         }
     }

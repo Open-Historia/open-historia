@@ -8,7 +8,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "../../../../..");
 const fixtures = path.join(here, "../tests/golden");
 const CASES_MOST = 300;
-const BYTES_MOST = 150000;
+const BYTES_MOST = 200000;
 const BLOB_FROM = 2000;
 
 const MODULES = {
@@ -25,6 +25,13 @@ const MODULES = {
   "src/runtime/fronts/heldRegions.js": { name: "heldRegions" },
   "src/runtime/fronts/handicap.js": { name: "handicap" },
   "src/runtime/fronts/invade.js": { name: "invade" },
+  "src/runtime/fronts/manpower.js": { name: "manpower" },
+  "src/runtime/fronts/attrition.js": { name: "attrition" },
+  "src/runtime/fronts/muster.js": { name: "muster" },
+  "src/runtime/fronts/deploy.js": { name: "deploy" },
+  "src/runtime/fronts/line.js": { name: "line" },
+  "src/runtime/fronts/contact.js": { name: "contact" },
+  "src/runtime/fronts/sectors.js": { name: "sectors" },
 };
 
 const only = process.argv.slice(2);
@@ -73,6 +80,7 @@ for (const part of parts) {
   }
 }
 fs.rmSync(out, { recursive: true, force: true });
+if (process.env.GOLDEN_STATS) for (const [key, entry] of gathered) console.log("stat", key, entry.cases.length, Math.min(...entry.cases.map((c) => c.size)), Math.max(...entry.cases.map((c) => c.size)));
 
 const spread = (list, most) => {
   if (list.length <= most) return list;
