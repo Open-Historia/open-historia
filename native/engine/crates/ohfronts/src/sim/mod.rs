@@ -53,3 +53,4 @@ pub mod fortify_ops;
 pub mod view;
 pub mod engineer;
 pub mod orders;
+pub mod movement;

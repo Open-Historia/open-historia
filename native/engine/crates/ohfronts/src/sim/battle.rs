@@ -11,6 +11,7 @@ use super::frame::{Frame, Projector};
 use super::ground::ToSide;
 use super::handicap::FAIR_EDGE;
 use super::js::{OrdMap, Val};
+use super::movement::Retreat;
 use super::muster::Levy;
 use super::orders::{HaltToday, OrderView};
 use super::troops::Troop;
@@ -158,6 +159,8 @@ pub struct Battle {
     pub mend_of: bool,
     pub look: Option<f64>,
     pub mind: Val,
+    pub pace: f64,
+    pub retreat: Option<Retreat>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -299,6 +302,8 @@ pub fn create_battle(run: &Run, opening: Opening) -> Battle {
         mend_of: false,
         look: None,
         mind: Val::Undef,
+        pace: f64::NAN,
+        retreat: None,
     }
 }
 
