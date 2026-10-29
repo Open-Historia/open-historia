@@ -237,9 +237,42 @@ namespace OpenHistoriaSetup
 			}
 		}
 
+		static string LaunchArguments(string folder)
+		{
+			var project = Path.Combine(folder, "native", "godot");
+			return File.Exists(Path.Combine(project, "project.godot")) ? "--path \"" + project + "\"" : "";
+		}
+
+		static void RefreshShortcuts(string folder)
+		{
+			try
+			{
+				var godot = Path.GetFullPath(Path.Combine(folder, "runtime", "Open Historia.exe"));
+				var arguments = LaunchArguments(folder);
+				var shellType = Type.GetTypeFromProgID("WScript.Shell");
+				var shell = Activator.CreateInstance(shellType);
+				foreach (var place in new[] { Environment.GetFolderPath(Environment.SpecialFolder.Programs), Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory) })
+				{
+					var file = Path.Combine(place, AppName + ".lnk");
+					if (!File.Exists(file)) continue;
+					var link = shellType.InvokeMember("CreateShortcut", BindingFlags.InvokeMethod, null, shell, new object[] { file });
+					var linkType = link.GetType();
+					var pointsAt = (string)linkType.InvokeMember("TargetPath", BindingFlags.GetProperty, null, link, null);
+					if (string.IsNullOrEmpty(pointsAt) || !string.Equals(Path.GetFullPath(pointsAt), godot, StringComparison.OrdinalIgnoreCase)) continue;
+					if ((string)linkType.InvokeMember("Arguments", BindingFlags.GetProperty, null, link, null) == arguments) continue;
+					linkType.InvokeMember("Arguments", BindingFlags.SetProperty, null, link, new object[] { arguments });
+					linkType.InvokeMember("Save", BindingFlags.InvokeMethod, null, link, null);
+				}
+			}
+			catch (Exception)
+			{
+			}
+		}
+
 		static Process Launch(string folder)
 		{
-			var start = new ProcessStartInfo(Path.Combine(folder, "runtime", "Open Historia.exe"), "--path \"" + Path.Combine(folder, "native", "godot") + "\"");
+			RefreshShortcuts(folder);
+			var start = new ProcessStartInfo(Path.Combine(folder, "runtime", "Open Historia.exe"), LaunchArguments(folder));
 			start.WorkingDirectory = folder;
 			start.UseShellExecute = false;
 			return Process.Start(start);
@@ -451,6 +484,7 @@ namespace OpenHistoriaSetup
 				}
 				else
 				{
+					RefreshShortcuts(target);
 					Say("Updated. The game opens on the new version next time.", 1f);
 					Thread.Sleep(1200);
 				}
@@ -658,6 +692,7 @@ namespace OpenHistoriaSetup
 				}
 				else
 				{
+					RefreshShortcuts(target);
 					Say("Updated. The game opens on the new version next time.", 1f);
 				}
 				try
@@ -707,7 +742,6 @@ namespace OpenHistoriaSetup
 				}
 				Say("Adding shortcuts…", 1f);
 				var godot = Path.Combine(target, "runtime", "Open Historia.exe");
-				var project = Path.Combine(target, "native", "godot");
 				var icon = Path.Combine(target, "runtime", "open-historia.ico");
 				var shellType = Type.GetTypeFromProgID("WScript.Shell");
 				var shell = Activator.CreateInstance(shellType);
@@ -716,7 +750,7 @@ namespace OpenHistoriaSetup
 					var link = shellType.InvokeMember("CreateShortcut", BindingFlags.InvokeMethod, null, shell, new object[] { Path.Combine(folder, AppName + ".lnk") });
 					var linkType = link.GetType();
 					linkType.InvokeMember("TargetPath", BindingFlags.SetProperty, null, link, new object[] { godot });
-					linkType.InvokeMember("Arguments", BindingFlags.SetProperty, null, link, new object[] { "--path \"" + project + "\"" });
+					linkType.InvokeMember("Arguments", BindingFlags.SetProperty, null, link, new object[] { LaunchArguments(target) });
 					linkType.InvokeMember("WorkingDirectory", BindingFlags.SetProperty, null, link, new object[] { target });
 					linkType.InvokeMember("IconLocation", BindingFlags.SetProperty, null, link, new object[] { icon });
 					linkType.InvokeMember("Description", BindingFlags.SetProperty, null, link, new object[] { AppName });

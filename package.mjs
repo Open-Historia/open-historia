@@ -52,33 +52,36 @@ const copy = (from, to, filter = () => true) => {
 
 const release = path.join(here, "engine", "target", "release", "oh_gdext.dll");
 if (!fs.existsSync(release)) throw new Error("Build the release library first: cargo build -p oh_gdext --release (in native/engine).");
+const template = process.env.OH_GODOT_TEMPLATE || path.join(path.dirname(godotExe), "templates", "windows_release_x86_64.exe");
+if (!fs.existsSync(template)) throw new Error("Set OH_GODOT_TEMPLATE to Godot 4.7.2's official release export template (windows_release_x86_64.exe from the export templates).");
 if (skipBuild) {
   if (!fs.existsSync(path.join(here, "sidecar", "dist"))) throw new Error("--no-build needs an existing native/sidecar/dist.");
-  console.log("--no-build: using the existing sidecar build; Godot imports inside the stage, not the source tree");
+  console.log("--no-build: using the existing sidecar build");
 } else {
   run(process.execPath, [path.join(here, "sidecar", "build.mjs")]);
-  run(godotExe, ["--headless", "--path", path.join(here, "godot"), "--import"]);
 }
 
 fs.rmSync(out, { recursive: true, force: true });
 fs.mkdirSync(stage, { recursive: true });
 
-copy(godotExe, path.join(stage, "runtime", "Open Historia.exe"));
-copy(process.execPath, path.join(stage, "runtime", "node.exe"));
-
 const godotSource = path.join(here, "godot");
-copy(godotSource, path.join(stage, "native", "godot"), (file, isDir) => {
+const project = path.join(out, "project");
+copy(godotSource, project, (file, isDir) => {
   const relative = path.relative(godotSource, file).split(path.sep).join("/");
-  if (isDir) return !["tests", ".godot/editor", ".godot/shader_cache", ".godot/imported"].includes(relative);
-  if (relative.startsWith("bin/")) return false;
-  return !relative.startsWith("tests/");
+  if (isDir) return ![".godot", "tests", "bin"].includes(relative);
+  return true;
 });
-copy(release, path.join(stage, "native", "godot", "bin", "oh_gdext.dll"));
-if (skipBuild) {
-  const stagedGodot = path.join(stage, "native", "godot");
-  run(godotExe, ["--headless", "--path", stagedGodot, "--import"]);
-  for (const name of ["editor", "shader_cache", "imported"]) fs.rmSync(path.join(stagedGodot, ".godot", name), { recursive: true, force: true });
+copy(release, path.join(project, "bin", "oh_gdext.dll"));
+const presets = path.join(project, "export_presets.cfg");
+fs.writeFileSync(presets, fs.readFileSync(presets, "utf8").replace(/^custom_template\/release=.*$/m, `custom_template/release=${JSON.stringify(template.split(path.sep).join("/"))}`));
+run(godotExe, ["--headless", "--path", project, "--import"]);
+fs.mkdirSync(path.join(stage, "runtime"), { recursive: true });
+run(godotExe, ["--headless", "--path", project, "--export-release", "Windows Desktop", path.join(stage, "runtime", "Open Historia.exe")]);
+for (const name of ["Open Historia.exe", "Open Historia.pck", "oh_gdext.dll"]) {
+  if (!fs.existsSync(path.join(stage, "runtime", name))) throw new Error(`The release export did not write runtime/${name}.`);
 }
+copy(process.execPath, path.join(stage, "runtime", "node.exe"));
+fs.mkdirSync(path.join(stage, "native", "godot"), { recursive: true });
 fs.writeFileSync(path.join(stage, "native", "godot", "version.json"), `${JSON.stringify(stamp, null, 2)}\n`);
 
 const sidecar = path.join(here, "sidecar");
@@ -181,7 +184,7 @@ compileSetup(path.join(stage, ...chunkKit.UPDATER_EXE.split("/")));
 
 const launcher = [
   "@echo off",
-  "start \"\" \"%~dp0runtime\\Open Historia.exe\" --path \"%~dp0native\\godot\"",
+  "start \"\" \"%~dp0runtime\\Open Historia.exe\"",
   "",
 ].join("\r\n");
 fs.writeFileSync(path.join(stage, `${appName}.cmd`), launcher);

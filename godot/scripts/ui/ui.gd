@@ -55,8 +55,13 @@ static var _flags := {}
 static var _logo: Texture2D
 
 
+static var _repo_root := ""
+
+
 static func repo_path(relative: String) -> String:
-	return ProjectSettings.globalize_path("res://").path_join("../..").path_join(relative).simplify_path()
+	if _repo_root.is_empty():
+		_repo_root = OS.get_executable_path().get_base_dir().path_join("..") if OS.has_feature("template") else ProjectSettings.globalize_path("res://").path_join("../..")
+	return _repo_root.path_join(relative).simplify_path()
 
 
 static func font(weight := 400, family := "Arial", spacing := 0) -> Font:
