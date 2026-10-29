@@ -174,6 +174,7 @@ var _owners: PackedInt32Array = []
 var _owner_names: PackedStringArray = []
 var _owner_anchor: Array[Vector2] = []
 var _owner_area: PackedFloat32Array = []
+var _map_math: RefCounted
 var _labels_layer: Control
 var _labels_text: PolityTextLayer
 var _labels_engine: EngineLink
@@ -464,6 +465,13 @@ func set_state(state: Dictionary) -> void:
 
 
 func _place_owner_anchors() -> void:
+	if _map_math == null and ClassDB.class_exists("MapMath"):
+		_map_math = ClassDB.instantiate("MapMath")
+	if _map_math != null:
+		var placed: Array = _map_math.owner_anchors(_owners, _adjacency, _areas, _centroids, _owner_names.size(), WORLD_WIDTH)
+		_owner_anchor.assign(placed[0])
+		_owner_area = placed[1]
+		return
 	var parent: Array[int] = []
 	parent.resize(_region_count)
 	for index in range(_region_count):
