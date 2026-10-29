@@ -37,6 +37,7 @@ pub struct BattleWings {
     pub superiority: f64,
     pub flying: [Vec<String>; 2],
     pub strike: Option<f64>,
+    pub detached: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -226,7 +227,7 @@ pub fn sky_of_wings(run: &Run, index: usize, day: f64) -> (Option<BattleWings>, 
     }
     out.legs[1 - holds] = 1.0 - AIR_INTERDICT * edge;
     let flying = [0, 1].map(|side| if air_mission_of(battle, side) == "grounded" { Vec::new() } else { lists[side].clone() });
-    (Some(BattleWings { holds, weight, superiority, flying, strike: if striking { Some(edge) } else { None } }), Some(out))
+    (Some(BattleWings { holds, weight, superiority, flying, strike: if striking { Some(edge) } else { None }, detached: false }), Some(out))
 }
 
 pub fn air_strikes(battle: &mut Battle) {
@@ -247,8 +248,8 @@ pub fn air_strikes(battle: &mut Battle) {
 
 pub fn wear_wings(run: &Run, battle: &Battle) {
     let sky = match &battle.wings {
-        Some(sky) => sky,
-        None => return,
+        Some(sky) if !sky.detached => sky,
+        _ => return,
     };
     let total = sky.weight[0] + sky.weight[1];
     let mut wings = run.wings.borrow_mut();

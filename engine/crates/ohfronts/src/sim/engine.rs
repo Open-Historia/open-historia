@@ -87,6 +87,15 @@ pub struct Mend {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct Effort {
+    pub name: String,
+    pub advanced: f64,
+    pub troop_days: f64,
+    pub war_days: f64,
+    pub last_day: f64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct War {
     pub id: String,
     pub title: String,
@@ -116,7 +125,7 @@ pub struct Run {
     pub men_each: f64,
     pub manpower_share: f64,
     pub manpower: RefCell<OrdMap<String, ManEntry>>,
-    pub effort: OrdMap<String, Val>,
+    pub effort: OrdMap<String, Effort>,
     pub pace: f64,
     pub steer: Val,
     pub advance_km: [f64; 3],

@@ -3,7 +3,7 @@ use crate::frame::frame_of;
 use crate::support::*;
 use ohfronts::sim::battle::{create_battle, Battle, Opening};
 use ohfronts::sim::climate::*;
-use ohfronts::sim::engine::{create_run, NoHooks, Run};
+use ohfronts::sim::engine::{create_run, Hooks, NoHooks, Run};
 use ohfronts::sim::field::create_field;
 use ohfronts::sim::js::{self, Obj, OrdMap, Typed, Val};
 use ohfronts::sim::troops::{create_troop, Troop, TroopSeed};
@@ -159,8 +159,12 @@ fn zone_skies_of(zones: &[Val], value: &Val) -> Vec<ZoneSky> {
         .collect()
 }
 
-fn climate_run(value: &Val) -> Run {
-    let mut run = create_run(value.get("input").clone(), Box::new(NoHooks));
+pub fn climate_run(value: &Val) -> Run {
+    climate_run_hooked(value, Box::new(NoHooks))
+}
+
+pub fn climate_run_hooked(value: &Val, hooks: Box<dyn Hooks>) -> Run {
+    let mut run = create_run(value.get("input").clone(), hooks);
     run.seed = value.get("seed").string_or_empty();
     run.steer = value.get("steer").clone();
     let zones = run.input.get("climateZones").array_or_empty().to_vec();
@@ -180,6 +184,11 @@ fn climate_battle(run: &Run, value: &Val) -> Battle {
         Opening { name: value.get("name").string_or_empty(), war_id: Val::Undef, sides: [Vec::new(), Vec::new()], frame: frame_of(value.get("frame")), arena: arena.clone(), opened_date: Val::Undef, opened_day: Val::Undef },
     );
     battle.field = Some(create_field(arena));
+    set_climate(run, &mut battle, value);
+    battle
+}
+
+pub fn set_climate(run: &Run, battle: &mut Battle, value: &Val) {
     let zones = run.input.get("climateZones").array_or_empty().to_vec();
     let place = value.get("place");
     if value.get("climateFor").is_object() && same(value.get("climateFor"), place).is_ok() {
@@ -206,7 +215,6 @@ fn climate_battle(run: &Run, value: &Val) -> Battle {
         }
         battle.skies = Some(book);
     }
-    battle
 }
 
 fn absent(want: &Val) -> Val {
@@ -215,6 +223,25 @@ fn absent(want: &Val) -> Val {
     } else {
         Val::Null
     }
+}
+
+pub fn climate_after(want: &Val, battle: &Battle) -> Result<(), String> {
+    let got = climate_got(want, battle);
+    same_keys(&got, want, &["climateToday", "sky", "skies"]).map_err(|error| format!("battle after: {error}"))
+}
+
+fn climate_got(want: &Val, battle: &Battle) -> Val {
+    let got = Val::obj([
+        ("climateLat", battle.climate_lat.map(num).unwrap_or(Val::Undef)),
+        ("zones", if battle.zones_for { battle.zones.as_ref().map(|zones| zones_val(zones)).unwrap_or(Val::Null) } else { Val::Undef }),
+        ("zonesDate", battle.zones_day.as_ref().map(|(date, _)| text(date)).unwrap_or(Val::Undef)),
+        ("zonesLat", battle.zones_day.as_ref().map(|(_, lat)| num(*lat)).unwrap_or(Val::Undef)),
+        ("zonesMix", battle.zones_mix.as_ref().map(|today| today_val(today)).unwrap_or(Val::Undef)),
+        ("climateToday", battle.climate_today.as_ref().map(|today| today_val(today)).unwrap_or_else(|| absent(want.get("climateToday")))),
+        ("sky", battle.sky.as_ref().map(sky_val).unwrap_or_else(|| absent(want.get("sky")))),
+        ("skies", battle.skies.as_ref().map(|skies| { let mut out = Obj::new(); for (state, count) in &skies.entries { out.set(state, num(*count)); } Val::Obj(out) }).unwrap_or(Val::Undef)),
+    ]);
+    got
 }
 
 fn battle_after(case: &Case, battle: &Battle) -> Result<(), String> {

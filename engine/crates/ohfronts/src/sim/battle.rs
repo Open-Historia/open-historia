@@ -3,7 +3,7 @@ use super::arena::Arena;
 use super::chronicle::Chronicle;
 use super::closing::{Books, Pocket};
 use super::climate::{ZoneToday, ZoneWeights};
-use super::constants::{Edge, CONTROL_RADIUS_MAX_KM, DEFAULT_EFFORT};
+use super::constants::{Edge, Works, CONTROL_RADIUS_MAX_KM, DEFAULT_EFFORT};
 use super::deploy::DeployLine;
 use super::engine::Run;
 use super::field::{Claims, Field};
@@ -96,8 +96,10 @@ pub struct Battle {
     pub spared: [Vec<f64>; 2],
     pub siege_key: String,
     pub kept: [Option<Vec<u8>>; 2],
-    pub supplied: [Val; 2],
-    pub supply: Val,
+    pub supplied: [Option<Vec<u8>>; 2],
+    pub supply: Option<[Vec<f32>; 2]>,
+    pub home_pieces: [Option<Rc<HomePieces>>; 2],
+    pub pocket_sieges: Option<String>,
     pub supply_turns: f64,
     pub anchors: Vec<Val>,
     pub log: Vec<Val>,
@@ -147,6 +149,20 @@ pub struct Battle {
     pub air_mission: [String; 2],
     pub wings: Option<BattleWings>,
     pub mind_homes: RefCell<Option<Vec<i8>>>,
+    pub worth: Option<[Vec<f64>; 2]>,
+    pub short: Option<[f64; 2]>,
+    pub works: Option<Works>,
+    pub corridors: bool,
+    pub exposure: Option<[f64; 2]>,
+    pub mend_of: bool,
+    pub look: Option<f64>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct HomePieces {
+    pub size: usize,
+    pub piece: Vec<i32>,
+    pub count: usize,
 }
 
 pub struct Opening {
@@ -220,8 +236,10 @@ pub fn create_battle(run: &Run, opening: Opening) -> Battle {
         spared: [Vec::new(), Vec::new()],
         siege_key: String::new(),
         kept: [None, None],
-        supplied: [Val::Null, Val::Null],
-        supply: Val::Null,
+        supplied: [None, None],
+        supply: None,
+        home_pieces: [None, None],
+        pocket_sieges: None,
         supply_turns: -1.0,
         anchors: Vec::new(),
         log: Vec::new(),
@@ -271,6 +289,13 @@ pub fn create_battle(run: &Run, opening: Opening) -> Battle {
         air_mission: [String::new(), String::new()],
         wings: None,
         mind_homes: RefCell::new(None),
+        worth: None,
+        short: None,
+        works: None,
+        corridors: false,
+        exposure: None,
+        mend_of: false,
+        look: None,
     }
 }
 

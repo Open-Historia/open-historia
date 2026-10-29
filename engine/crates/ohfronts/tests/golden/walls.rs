@@ -60,13 +60,13 @@ fn lines_val(run: &Run) -> Val {
     }
 }
 
-fn set_lines(run: &Run, value: &Val) {
+pub fn set_lines(run: &Run, value: &Val) {
     if let Some(list) = value.as_array() {
         *run.lines.borrow_mut() = Some(list.iter().map(line_of).collect());
     }
 }
 
-fn wall_run(value: &Val) -> Run {
+pub fn wall_run(value: &Val) -> Run {
     let mut run = create_run(Val::Obj(Obj::new()), Box::new(NoHooks));
     run.input = value.get("input").clone();
     run.mech = read_mechanics(value.get("mech"));
@@ -74,11 +74,11 @@ fn wall_run(value: &Val) -> Run {
     run
 }
 
-fn walls_val(walls: &Walls) -> Val {
+pub fn walls_val(walls: &Walls) -> Val {
     Val::obj([("cellLine", Val::Typed(Typed::I16(walls.cell_line.clone()))), ("cellKm", Val::Typed(Typed::F32(walls.cell_km.clone()))), ("sides", list(walls.sides.iter().map(|&side| num(side as f64)).collect()))])
 }
 
-fn mask_val(mask: &Option<Vec<u8>>) -> Val {
+pub fn mask_val(mask: &Option<Vec<u8>>) -> Val {
     mask.as_ref().map(|mask| u8s(mask.clone())).unwrap_or(Val::Null)
 }
 
@@ -117,6 +117,13 @@ fn wall_battle(run: &Run, value: &Val) -> Battle {
                 troop
             })
             .collect();
+    }
+    set_walls(run, &mut battle, value);
+    battle
+}
+
+pub fn set_walls(run: &Run, battle: &mut Battle, value: &Val) {
+    for side in 0..2 {
         battle.wall_mask[side] = mask_of(value.get("wallMask").at(side));
     }
     if value.get("wallsFor").is_object() && same(value.get("wallsFor"), value.get("place")).is_ok() {
@@ -139,7 +146,6 @@ fn wall_battle(run: &Run, value: &Val) -> Battle {
         set_lines(run, value.get("wallRun").get("lines"));
     }
     battle.log = value.get("log").array_or_empty().to_vec();
-    battle
 }
 
 fn battle_after(case: &Case, at: usize, battle: &Battle) -> Result<(), String> {

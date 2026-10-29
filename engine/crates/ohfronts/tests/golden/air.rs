@@ -11,7 +11,7 @@ use ohfronts::sim::js::{Obj, OrdMap, Val};
 use ohfronts::sim::mechanics::read_mechanics;
 use std::rc::Rc;
 
-struct Figures(Vec<(Vec<Val>, Val)>);
+pub struct Figures(pub Vec<(Vec<Val>, Val)>);
 
 impl Hooks for Figures {
     fn military_of(&self, name: &str) -> Val {
@@ -48,7 +48,7 @@ fn wing_val(wing: &Wing) -> Val {
     Val::Obj(out)
 }
 
-fn set_wings(run: &Run, value: &Val) {
+pub fn set_wings(run: &Run, value: &Val) {
     if let Val::Map(entries) = value {
         let mut book = OrdMap::new();
         for (id, wing) in entries {
@@ -58,14 +58,14 @@ fn set_wings(run: &Run, value: &Val) {
     }
 }
 
-fn wings_val(run: &Run) -> Val {
+pub fn wings_val(run: &Run) -> Val {
     match &*run.wings.borrow() {
         Some(book) => Val::Map(book.entries.iter().map(|(id, wing)| (text(id), wing_val(wing))).collect()),
         None => Val::Undef,
     }
 }
 
-fn battle_wings_of(value: &Val) -> Option<BattleWings> {
+pub fn battle_wings_of(value: &Val) -> Option<BattleWings> {
     if !value.is_object() {
         return None;
     }
@@ -79,10 +79,11 @@ fn battle_wings_of(value: &Val) -> Option<BattleWings> {
             Val::Num(n) => Some(*n),
             _ => None,
         },
+        detached: false,
     })
 }
 
-fn battle_wings_val(run: &Run, wings: &Option<BattleWings>) -> Val {
+pub fn battle_wings_val(run: &Run, wings: &Option<BattleWings>) -> Val {
     let wings = match wings {
         Some(wings) => wings,
         None => return Val::Null,
@@ -100,7 +101,7 @@ fn battle_wings_val(run: &Run, wings: &Option<BattleWings>) -> Val {
     Val::Obj(out)
 }
 
-fn air_battle(run: &Run, value: &Val) -> Battle {
+pub fn air_battle(run: &Run, value: &Val) -> Battle {
     let sides = |at: usize| -> Vec<String> { value.get("sides").at(at).array_or_empty().iter().map(|m| m.string_or_empty()).collect() };
     let field = value.get("field");
     let (cols, rows) = (field.get("cols").num(), field.get("rows").num());

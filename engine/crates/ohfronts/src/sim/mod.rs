@@ -40,3 +40,6 @@ pub mod closing;
 pub mod way;
 pub mod mind;
 pub mod scenario_fronts;
+pub mod dawn;
+pub mod supply;
+pub mod combat;

@@ -29,7 +29,7 @@ impl Hooks for Recorded {
     }
 }
 
-fn tally_of(value: &Val) -> Option<[Tally; 2]> {
+pub fn tally_of(value: &Val) -> Option<[Tally; 2]> {
     if !value.is_object() {
         return None;
     }
