@@ -50,3 +50,5 @@ pub mod war_settings;
 pub mod war_geography;
 pub mod fortify_cost;
 pub mod fortify_ops;
+pub mod view;
+pub mod engineer;

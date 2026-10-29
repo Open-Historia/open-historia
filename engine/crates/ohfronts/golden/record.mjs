@@ -342,6 +342,8 @@ const MODULES = {
   "src/runtime/militaryStats.js": { name: "militaryStats", quiet: true, keep: ["normalizeMilitaryStats", "militaryLookup"] },
   "src/runtime/fortifyCost.js": { name: "fortifyCost", quiet: true },
   "src/runtime/fronts/fortifyOps.js": { name: "fortifyOps", picks: { applyFortifyOp: { calls: ["2.chart.holds"] } } },
+  "src/runtime/fronts/engineer.js": { name: "engineer", big: ["engineerLines", "frontLineFor"], picks: { frontLineFor: { calls: [] }, engineerLines: { calls: ["1.chart.holds"] } } },
+  "src/runtime/fronts/view.js": { name: "view", quiet: true },
   "src/runtime/fronts/scenarioFronts.js": { name: "scenarioFronts" },
   "src/runtime/fronts/climate.js": { name: "climate", picks: climatePicks(["zonesOver", "zonesToday"]) },
   "src/runtime/fronts/weather.js": { name: "weather", picks: climatePicks(["skyOver", "skiesAhead"]) },
