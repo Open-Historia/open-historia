@@ -38,7 +38,7 @@ fn chronicle_val(chronicle: &Chronicle) -> Val {
     ])
 }
 
-fn chronicle_of(value: &Val) -> Option<Chronicle> {
+pub fn chronicle_of(value: &Val) -> Option<Chronicle> {
     if !value.is_object() {
         return None;
     }

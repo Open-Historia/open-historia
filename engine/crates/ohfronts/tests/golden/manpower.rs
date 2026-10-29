@@ -70,7 +70,7 @@ pub fn battle_of(run: &Run, value: &Val) -> Battle {
         .get("named")
         .array_or_empty()
         .iter()
-        .map(|entry| Named { s: entry.get("s").num() as usize, i: entry.get("i").num() as usize, name: entry.get("name").string_or_empty(), unit_id: entry.get("unitId").clone() })
+        .map(|entry| Named { s: entry.get("s").num() as usize, i: entry.get("i").num() as usize, name: entry.get("name").string_or_empty(), unit_id: entry.get("unitId").clone(), reported: entry.get("reported").is_true() })
         .collect();
     battle.lost_by = tally_of(value.get("lostBy"));
     battle.out_by = tally_of(value.get("outBy"));

@@ -133,7 +133,7 @@ pub fn troop_of(value: &Val) -> Troop {
 }
 
 pub fn named_of(value: &Val) -> Vec<Named> {
-    value.array_or_empty().iter().map(|entry| Named { s: entry.get("s").num() as usize, i: entry.get("i").num() as usize, name: entry.get("name").string_or_empty(), unit_id: entry.get("unitId").clone() }).collect()
+    value.array_or_empty().iter().map(|entry| Named { s: entry.get("s").num() as usize, i: entry.get("i").num() as usize, name: entry.get("name").string_or_empty(), unit_id: entry.get("unitId").clone(), reported: entry.get("reported").is_true() }).collect()
 }
 
 pub fn named_val(named: &[Named]) -> Val {
