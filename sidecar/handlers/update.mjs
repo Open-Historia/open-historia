@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const chunkKit = await import(pathToFileURL(path.resolve(here, "..", "updateChunks.mjs")).href);
-const { INSTALLED_MANIFEST, UPDATER_EXE, chunkAssetName, confirmLocalParts, indexInstalled, isHash, manifestAssetName, planUpdate, readManifest, readSlice, unpackChunk, wireSize } = chunkKit;
+const { INSTALLED_MANIFEST, UPDATER_EXE, chunkAssetName, confirmLocalParts, indexInstalled, isHash, macBundleOf, manifestAssetName, planUpdate, readMacShell, readManifest, readSlice, unpackChunk, wireSize } = chunkKit;
 
 export const NATIVE_UPDATE_TAG = "native-experimental";
 export const NATIVE_CHUNKS_TAG = "native-experimental-chunks";
@@ -58,6 +58,10 @@ const remove = (target) => {
 
 export const isLoopbackUrl = (value) => LOOPBACK.test(text(value));
 
+export const feedPlatformFor = (platform = process.platform) => (platform === "darwin" ? "macos" : "windows");
+
+export const feedPlatformOf = (raw) => text(raw?.platform).toLowerCase() || "windows";
+
 export const manifestUrlFor = (env = process.env, platform = process.platform) => {
   const override = text(env.OH_NATIVE_UPDATE_URL);
   if (override) return isLoopbackUrl(override) ? override : "";
@@ -86,19 +90,21 @@ export const describeVersion = (current) => {
   return `Open Historia Native ${text(current.version) || "?"} · super experimental · built ${built}`;
 };
 
-export const parseChunks = (raw, { allowLoopback = false } = {}) => {
+export const parseChunks = (raw, { allowLoopback = false, platform = "windows" } = {}) => {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
   if (raw.format !== chunkKit.FORMAT) return null;
   const base = text(raw.base);
   if (!base.endsWith("/") || !(base.startsWith("https://") || (allowLoopback && isLoopbackUrl(base)))) return null;
   const named = raw.manifest;
-  if (!named || !isHash(named.sha256) || !Number.isSafeInteger(named.size) || named.size <= 0 || named.size > MANIFEST_BYTES_LIMIT || named.name !== manifestAssetName(named.sha256)) return null;
+  if (!named || !isHash(named.sha256) || !Number.isSafeInteger(named.size) || named.size <= 0 || named.size > MANIFEST_BYTES_LIMIT || named.name !== manifestAssetName(named.sha256, platform)) return null;
   const count = (value) => (Number.isSafeInteger(value) && value > 0 ? value : 0);
   return { format: raw.format, base, manifest: { name: named.name, size: named.size, sha256: named.sha256 }, bytes: count(raw.bytes), files: count(raw.files), count: count(raw.count) };
 };
 
-export const parseManifest = (raw, { allowLoopback = false } = {}) => {
+export const parseManifest = (raw, { allowLoopback = false, platform = "" } = {}) => {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const feedPlatform = feedPlatformOf(raw);
+  if (platform && feedPlatform !== platform) return null;
   const build = text(raw.build);
   const sha256 = text(raw.sha256).toLowerCase();
   const url = text(raw.url);
@@ -115,7 +121,8 @@ export const parseManifest = (raw, { allowLoopback = false } = {}) => {
     notes: text(raw.notes),
     published: text(raw.published),
     mandatory: raw.mandatory === true,
-    chunks: parseChunks(raw.chunks, { allowLoopback }),
+    platform: feedPlatform,
+    chunks: parseChunks(raw.chunks, { allowLoopback, platform: feedPlatform }),
   };
 };
 
@@ -180,15 +187,28 @@ export const createUpdater = ({
   waitPids = [process.pid, process.ppid],
 }) => {
   const mac = platform === "darwin";
+  const feedPlatform = feedPlatformFor(platform);
   const updaterName = mac ? "updater.mjs" : "updater.exe";
+  const bundle = mac ? macBundleOf(installRoot) : "";
   const macWritable = () => {
-    if (installRoot.split(path.sep).join("/").includes("/AppTranslocation/")) return false;
+    if (!bundle || bundle.split(path.sep).join("/").includes("/AppTranslocation/")) return false;
     try {
-      fs.accessSync(installRoot, fs.constants.W_OK);
+      for (const folder of [installRoot, bundle, path.dirname(bundle)]) fs.accessSync(folder, fs.constants.W_OK);
       return true;
     } catch {
       return false;
     }
+  };
+  const holderOk = (holder) => Boolean(bundle) && path.dirname(holder) === path.dirname(bundle) && /^\.oh-(?:previous|update|failed)-[\w-]+$/.test(path.basename(holder));
+  const dropPrevious = (dir) => {
+    if (!mac) return;
+    let holder = "";
+    try {
+      holder = text(fs.readFileSync(path.join(dir, "previous-app"), "utf8"));
+    } catch {
+      return;
+    }
+    if (holder && holderOk(holder) && remove(holder)) log("info", `update: the previous app at ${holder} was removed`);
   };
   const allowLoopback = isLoopbackUrl(manifestUrl);
   const supported = Boolean(current?.build && manifestUrl && downloadDir);
@@ -305,6 +325,7 @@ export const createUpdater = ({
           applied = { dir, build: name, boots };
           if (boots > BOOT_LIMIT && exists(path.join(dir, updaterName))) pendingRollback = applied;
         } else {
+          dropPrevious(dir);
           remove(dir);
         }
         continue;
@@ -328,7 +349,7 @@ export const createUpdater = ({
     try {
       const response = await fetchImpl(manifestUrl, { cache: "no-store", signal: AbortSignal.timeout(timeoutMs) });
       if (!response.ok) throw new Error(`The update feed answered ${response.status}`);
-      const parsed = parseManifest(await response.json(), { allowLoopback });
+      const parsed = parseManifest(await response.json(), { allowLoopback, platform: feedPlatform });
       if (!parsed) throw new Error("The update feed could not be read");
       latest = parsed;
       checkedAt = now();
@@ -515,6 +536,8 @@ export const createUpdater = ({
     const { manifest, error } = readManifest(JSON.parse(bytes.toString("utf8")));
     if (!manifest) throw new Error(`the update's file list cannot be used: ${error}`);
     if (text(manifest.build) !== target.build) throw new Error("the update's file list describes another build than its feed");
+    if (feedPlatformOf(manifest) !== feedPlatform) throw new Error("the update's file list is for another system");
+    if (mac && text(manifest.shell) && readMacShell(bundle) !== text(manifest.shell)) throw new Error("the app around the game's files changed in this update");
     const installed = await indexInstalled(installRoot);
     const plan = confirmLocalParts(planUpdate(manifest, installed), manifest);
     planned = { build: target.build, sha256: named.sha256, plan, manifest, manifestText: bytes.toString("utf8"), installedBuild: text(installed.manifest?.build) };
@@ -770,6 +793,13 @@ export const createUpdater = ({
     if (status.state !== "ready" || !ready.build || ready.build !== status.build) throw new Error("No downloaded update is ready to install.");
     if (!canInstall()) throw new Error("This copy of the game was not installed by its installer, so it cannot replace itself.");
     const target = ready.target && ready.target.build === ready.build ? ready.target : null;
+    if (mac && applied && !pendingRollback) {
+      try {
+        fs.writeFileSync(path.join(applied.dir, "confirmed"), current.build);
+      } catch {
+        log("warn", "update: the start could not be confirmed before the next update");
+      }
+    }
     if (ready.kind === "staged") {
       const dir = ready.dir;
       if (!target || !exists(path.join(dir, "ready")) || !exists(path.join(dir, "apply.txt"))) {
@@ -838,6 +868,7 @@ export const createUpdater = ({
       log("warn", "update: the start could not be confirmed");
     }
     const dir = applied.dir;
+    dropPrevious(dir);
     let tries = 0;
     const sweep = () => {
       tries += 1;

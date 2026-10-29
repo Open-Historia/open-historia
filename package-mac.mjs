@@ -157,7 +157,8 @@ fs.mkdirSync(path.join(stage, "native", "godot"), { recursive: true });
 fs.writeFileSync(path.join(stage, "native", "godot", "version.json"), `${JSON.stringify(stamp, null, 2)}\n`);
 
 const sidecar = path.join(here, "sidecar");
-for (const name of ["main.mjs", "shims.js", "standin.js", "serverWorker.mjs", "workers.js", "workerHost.mjs", "updateChunks.mjs", "macUpdater.mjs"]) copy(path.join(sidecar, name), path.join(stage, "native", "sidecar", name));
+const sidecarTools = new Set(["build.mjs", "smoke.mjs", "engine.js"]);
+for (const name of fs.readdirSync(sidecar).filter((entry) => /\.(?:mjs|cjs|js)$/.test(entry) && !sidecarTools.has(entry))) copy(path.join(sidecar, name), path.join(stage, "native", "sidecar", name));
 copy(path.join(sidecar, "dist"), path.join(stage, "native", "sidecar", "dist"), (file, isDir) => isDir || !file.endsWith(".map"));
 copy(path.join(sidecar, "handlers"), path.join(stage, "native", "sidecar", "handlers"), (file, isDir) => isDir || file.endsWith(".mjs") || file.endsWith(".cjs"));
 if (fs.existsSync(path.join(sidecar, "node_modules"))) copy(path.join(sidecar, "node_modules"), path.join(stage, "native", "sidecar", "node_modules"));

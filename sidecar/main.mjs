@@ -10,6 +10,7 @@ import { installShims } from "./shims.js";
 import { installWorkerShim } from "./workers.js";
 import { installStandInModel } from "./standin.js";
 import { flagFile } from "./handlers/country.mjs";
+import { nativeDataPaths } from "./dataPaths.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.resolve(here, "..", "..");
@@ -21,13 +22,12 @@ for (const method of ["log", "info", "debug", "warn"]) {
 const send = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
 const emit = (event, data = null) => send({ event, data });
 
-const appData = process.env.APPDATA
-  || (process.platform === "darwin" ? path.join(process.env.HOME ?? "", "Library", "Application Support") : path.join(process.env.HOME ?? "", ".config"));
-const dataRoot = path.resolve(process.env.OH_NATIVE_ROOT || path.join(appData, "Open Historia Native"));
+const paths = nativeDataPaths();
+const dataRoot = path.resolve(paths.dataRoot);
 const dataDir = path.join(dataRoot, "server", "data");
 const nativeDir = path.join(dataRoot, "native");
 const cacheDir = path.join(dataRoot, "native-cache");
-const stableAssets = path.join(appData, "open-historia", "public", "assets");
+const stableAssets = paths.stableAssets;
 const assetsDir = path.resolve(process.env.OH_NATIVE_ASSETS || (fs.existsSync(stableAssets) ? stableAssets : path.join(dataRoot, "public", "assets")));
 for (const dir of [dataDir, nativeDir, cacheDir]) fs.mkdirSync(dir, { recursive: true });
 

@@ -1,13 +1,11 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { nativeDataPaths } from "../dataPaths.mjs";
 
 const CHAT_SOUND_KEY = "oh:chat-notification-sound-v1";
 const REMOTE = /^(\/api\/|https?:\/\/)/i;
 const SCENES = new Set(["menu", "loading", "game"]);
-
-const appDataDir = () => process.env.APPDATA
-  || (process.platform === "darwin" ? path.join(process.env.HOME ?? "", "Library", "Application Support") : path.join(process.env.HOME ?? "", ".config"));
 
 const LEDGER_WAIT_MS = 5000;
 
@@ -46,7 +44,7 @@ export const register = (ctx) => {
   const clock = () => performance.now();
   const serverMusicDir = path.join(dataRoot, "server", "data", "music");
   const fallbackDir = path.join(cacheDir, "audio");
-  const ownRoots = [path.join(repo, "public"), path.join(appDataDir(), "open-historia", "public")];
+  const ownRoots = [path.join(repo, "public"), nativeDataPaths().stablePublic];
 
   const ownFile = (file) => {
     const relative = clean(file).replace(/^\/+/, "");

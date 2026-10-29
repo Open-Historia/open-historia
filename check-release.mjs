@@ -22,16 +22,22 @@ const readAssets = (file) => {
   return new Map(list.map((asset) => [String(asset.name), Number(asset.size)]));
 };
 
+const cliArgs = process.argv.slice(2);
+const mac = cliArgs.includes("--mac");
+const TARGET = mac
+  ? { platform: "macos", feedName: update.NATIVE_MAC_MANIFEST_NAME, assetName: update.NATIVE_MAC_ZIP_NAME, assetUrl: update.NATIVE_MAC_ZIP_URL, stages: [path.join("Open Historia Native.app", "Contents", "Resources", "app")] }
+  : { platform: "windows", feedName: update.NATIVE_MANIFEST_NAME, assetName: update.NATIVE_SETUP_NAME, assetUrl: update.NATIVE_SETUP_URL, stages: ["stage"] };
+
 const load = (out) => {
   const problems = [];
-  const feedFile = path.join(out, update.NATIVE_MANIFEST_NAME);
-  const exe = path.join(out, update.NATIVE_SETUP_NAME);
+  const feedFile = path.join(out, TARGET.feedName);
+  const exe = path.join(out, TARGET.assetName);
   if (!fs.existsSync(feedFile)) fail([`missing ${feedFile}`]);
   if (!fs.existsSync(exe)) fail([`missing ${exe}`]);
   const raw = readJson(feedFile);
-  const feed = update.parseManifest(raw);
-  if (!feed) fail([`${feedFile} is not a feed the app can read`]);
-  if (feed.url !== update.NATIVE_SETUP_URL) problems.push(`url ${feed.url} is not ${update.NATIVE_SETUP_URL}`);
+  const feed = update.parseManifest(raw, { platform: TARGET.platform });
+  if (!feed) fail([`${feedFile} is not a ${TARGET.platform} feed the app can read`]);
+  if (feed.url !== TARGET.assetUrl) problems.push(`url ${feed.url} is not ${TARGET.assetUrl}`);
   if (!/^\d{14}$/.test(feed.build)) problems.push(`build ${feed.build} is not a UTC stamp`);
   const size = fs.statSync(exe).size;
   if (feed.size !== size) problems.push(`size ${feed.size} is not the installer's ${size}`);
@@ -51,6 +57,7 @@ const load = (out) => {
       if (!read.manifest) problems.push(`${named.name}: ${read.error}`);
       manifest = read.manifest;
       if (manifest && String(manifest.build) !== feed.build) problems.push(`${named.name} describes build ${manifest.build}, the feed ${feed.build}`);
+      if (manifest && update.feedPlatformOf(manifest) !== TARGET.platform) problems.push(`${named.name} is a ${update.feedPlatformOf(manifest)} file list, the feed is for ${TARGET.platform}`);
       wanted.set(named.name, named.size);
     }
     if (manifest) {
@@ -62,14 +69,16 @@ const load = (out) => {
         if (!fs.existsSync(file)) problems.push(`missing chunk ${name}`);
         else if (fs.statSync(file).size !== size) problems.push(`chunk ${name} is ${fs.statSync(file).size} bytes, the file list says ${size}`);
       }
-      const installed = path.join(out, "stage", kit.INSTALLED_MANIFEST);
-      if (fs.existsSync(installed) && sha256(installed) !== named.sha256) problems.push("the staged app carries another file list than the feed names");
+      for (const stage of TARGET.stages) {
+        const installed = path.join(out, stage, kit.INSTALLED_MANIFEST);
+        if (fs.existsSync(installed) && sha256(installed) !== named.sha256) problems.push("the staged app carries another file list than the feed names");
+      }
     }
   }
   return { feed, raw, exe, size, chunkDir, wanted, manifest, problems };
 };
 
-const [mode, outArg, ...rest] = process.argv.slice(2);
+const [mode, outArg, ...rest] = cliArgs.filter((arg) => arg !== "--mac");
 const out = path.resolve(outArg || "");
 const release = load(out);
 
@@ -77,7 +86,7 @@ if (mode === "local") {
   if (release.problems.length) fail(release.problems);
   const { feed, wanted } = release;
   const chunkBytes = [...wanted.values()].reduce((sum, size) => sum + size, 0);
-  console.log(`${update.NATIVE_MANIFEST_NAME}: ${feed.version} build ${feed.build} (${feed.commit || "no commit"}), installer ${megabytes(feed.size)}, sha256 ${feed.sha256}`);
+  console.log(`${TARGET.feedName}: ${feed.version} build ${feed.build} (${feed.commit || "no commit"}), ${TARGET.assetName} ${megabytes(feed.size)}, sha256 ${feed.sha256}`);
   console.log(`chunks: ${wanted.size - 1} pieces and the file list ${feed.chunks.manifest.name}, ${megabytes(chunkBytes)} in all`);
 } else if (mode === "plan") {
   if (release.problems.length) fail(release.problems);
@@ -107,11 +116,11 @@ if (mode === "local") {
   console.log(`every one of the ${release.wanted.size} chunk files the feed needs is on the chunk release`);
 } else if (mode === "remote-installer") {
   const remote = readAssets(rest[0]);
-  if (remote.get(update.NATIVE_SETUP_NAME) !== release.size) fail([`${update.NATIVE_SETUP_NAME} on the release is ${remote.get(update.NATIVE_SETUP_NAME) ?? "missing"}, here ${release.size} bytes`]);
-  console.log(`${update.NATIVE_SETUP_NAME} on the release is ${release.size} bytes, as the feed says`);
+  if (remote.get(TARGET.assetName) !== release.size) fail([`${TARGET.assetName} on the release is ${remote.get(TARGET.assetName) ?? "missing"}, here ${release.size} bytes`]);
+  console.log(`${TARGET.assetName} on the release is ${release.size} bytes, as the feed says`);
 } else if (mode === "live") {
   const [liveFeed, liveManifest] = rest;
-  const live = update.parseManifest(readJson(liveFeed));
+  const live = update.parseManifest(readJson(liveFeed), { platform: TARGET.platform });
   const problems = [];
   if (!live) problems.push("the live feed cannot be read by the app");
   else {
@@ -125,5 +134,5 @@ if (mode === "local") {
   if (problems.length) fail(problems);
   console.log(`the live feed names build ${release.feed.build}, and its file list downloads intact`);
 } else {
-  fail([`usage: node native/check-release.mjs local|plan|remote-chunks|remote-installer|live <out> [...]`]);
+  fail([`usage: node native/check-release.mjs local|plan|remote-chunks|remote-installer|live <out> [...] [--mac]`]);
 }

@@ -59,6 +59,11 @@ func _run() -> void:
 	_say("os=%s arch=%s template=%s debug=%s renderer=%s display=%s" % [OS.get_name(), Engine.get_architecture_name(), OS.has_feature("template"), OS.is_debug_build(), RenderingServer.get_current_rendering_driver_name(), DisplayServer.get_name()])
 	if main.get("engine") == null:
 		_watch_engine()
+	var boot := await _until(func() -> bool: return main.get("engine") != null and bool(main.engine.is_ready()), 180.0)
+	if boot and not engine_ready:
+		engine_ready = true
+		ready_ms = Time.get_ticks_msec() - started
+		_say("sidecar ready at %d ms" % ready_ms)
 	var menu := await _until(func() -> bool: return main.menu != null and main.menu.visible, 180.0)
 	var menu_ms := Time.get_ticks_msec() - started
 	_say("menu visible=%s at %d ms" % [menu, menu_ms])
@@ -73,6 +78,15 @@ func _run() -> void:
 	var enter_ms := Time.get_ticks_msec() - t0
 	_say("in game=%s after %d ms screen=%s" % [entered, enter_ms, str(main.get("_screen"))])
 	await _wait(float(OS.get_environment("OH_PROBE_HOLD")) if OS.get_environment("OH_PROBE_HOLD") != "" else 10.0)
+	var link: Variant = main.get("engine")
+	if link != null and not engine_ready and bool((link as Node).call("is_ready")):
+		engine_ready = true
+		_say("sidecar ready (seen through is_ready)")
+	if link != null:
+		for line in str((link as Node).call("recent_diagnostics", 400)).split("\n"):
+			if line.contains("was not loaded") and not handler_failures.has(line):
+				handler_failures.append(line)
+				_say("handler failed %s" % line)
 	var failed := handler_failures.size()
 	_say("RESULT %s menu_ms=%d enter_ms=%d sidecar_ready_ms=%d failed_handlers=%d in_game=%s" % ["ok" if entered and failed == 0 and engine_ready else "fail", menu_ms, enter_ms, ready_ms, failed, entered])
 	_finish(0 if entered and failed == 0 and engine_ready else 1)

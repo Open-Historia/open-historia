@@ -1,12 +1,24 @@
 import fs from "node:fs";
 import path from "node:path";
-import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 export const APP_NAME = "Open Historia Native";
 export const MARKER = ".oh-native-install";
 export const WATCH_SECONDS = 180;
 export const CLOSE_WAIT_MS = 15000;
+export const FIND_MS = 20000;
+export const QUARANTINE = "com.apple.quarantine";
+
+export const TOOLS = Object.freeze({
+  codesign: "/usr/bin/codesign",
+  xattr: "/usr/bin/xattr",
+  plutil: "/usr/bin/plutil",
+  ditto: "/usr/bin/ditto",
+  cp: "/bin/cp",
+  open: "/usr/bin/open",
+  ps: "/bin/ps",
+});
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const exists = (file) => {
@@ -17,6 +29,7 @@ const exists = (file) => {
     return false;
   }
 };
+const messageOf = (error) => String(error?.message ?? error);
 
 export const parseArgs = (argv) => {
   const options = { mode: "", stage: "", install: "", zip: "", relaunch: true, wait: [] };
@@ -56,32 +69,19 @@ export const inside = (root, relative) => {
 };
 
 export const appBundleOf = (root) => {
-  const match = /^(.*\.app)\/Contents\/Resources\/app\/?$/.exec(path.resolve(root).split(path.sep).join("/"));
+  const match = /^(.*\.app)\/Contents\/Resources\/app\/?$/.exec(path.resolve(String(root ?? "")).split(path.sep).join("/"));
   return match ? match[1].split("/").join(path.sep) : "";
 };
 
-export const executableOf = (app) => {
-  const plist = path.join(app, "Contents", "Info.plist");
-  if (process.platform === "darwin" && exists(plist)) {
-    try {
-      const name = execFileSync("/usr/bin/plutil", ["-extract", "CFBundleExecutable", "raw", "-o", "-", plist], { encoding: "utf8" }).trim();
-      if (name && exists(path.join(app, "Contents", "MacOS", name))) return path.join(app, "Contents", "MacOS", name);
-    } catch {
-      void 0;
-    }
-  }
-  try {
-    const names = fs.readdirSync(path.join(app, "Contents", "MacOS")).filter((name) => !name.startsWith("."));
-    if (names.length) return path.join(app, "Contents", "MacOS", names.sort()[0]);
-  } catch {
-    void 0;
-  }
-  return "";
-};
+export const appRootOf = (app) => path.join(app, "Contents", "Resources", "app");
+
+export const holderOf = (app, kind, tag) => path.join(path.dirname(app), `.oh-${kind}-${String(tag).replace(/[^\w-]/g, "")}`);
+
+export const isHolderName = (name) => /^\.oh-(?:previous|update|failed)-[\w-]+$/.test(name);
 
 const MACHO = new Set(["feedface", "feedfacf", "cefaedfe", "cffaedfe", "cafebabe", "bebafeca"]);
 
-export const looksExecutable = (file) => {
+const headOf = (file) => {
   try {
     const handle = fs.openSync(file, "r");
     const head = Buffer.alloc(4);
@@ -90,16 +90,33 @@ export const looksExecutable = (file) => {
     } finally {
       fs.closeSync(handle);
     }
-    return MACHO.has(head.toString("hex")) || head.subarray(0, 2).toString("latin1") === "#!";
+    return head;
   } catch {
-    return false;
+    return Buffer.alloc(0);
   }
 };
 
-export const createMacUpdater = ({ log = () => {}, alert = () => {}, platform = process.platform } = {}) => {
+export const isMachO = (file) => MACHO.has(headOf(file).toString("hex"));
+
+export const looksExecutable = (file) => isMachO(file) || headOf(file).subarray(0, 2).toString("latin1") === "#!";
+
+const buildOf = (root) => {
+  try {
+    return String(JSON.parse(fs.readFileSync(path.join(root, "native", "godot", "version.json"), "utf8")).build ?? "");
+  } catch {
+    return "";
+  }
+};
+
+export const createMacUpdater = ({ log = () => {}, alert = () => {}, platform = process.platform, tools = TOOLS, launchApp = null, watchSeconds = WATCH_SECONDS, findMs = FIND_MS } = {}) => {
+  const tool = (name, args) => {
+    const result = spawnSync(tools[name], args, { encoding: "utf8" });
+    return { ok: result.status === 0, text: String(result.stderr || result.stdout || result.error?.message || "").trim() };
+  };
+
   const listProcesses = () => {
     if (platform === "win32") return [];
-    const result = spawnSync("/bin/ps", ["-axww", "-o", "pid=,args="], { encoding: "utf8" });
+    const result = spawnSync(tools.ps, ["-axww", "-o", "pid=,args="], { encoding: "utf8" });
     if (result.status !== 0) return [];
     return result.stdout.split("\n").map((line) => {
       const match = /^\s*(\d+)\s+(.*)$/.exec(line);
@@ -116,24 +133,32 @@ export const createMacUpdater = ({ log = () => {}, alert = () => {}, platform = 
     }
   };
 
-  const running = (folder, pids) => {
-    const prefix = `${folder}${path.sep}`;
+  const real = (file) => {
+    try {
+      return fs.realpathSync(file);
+    } catch {
+      return path.resolve(file);
+    }
+  };
+
+  const running = (app, pids) => {
+    const prefixes = [...new Set([path.resolve(app), real(app)])].map((folder) => `${folder}${path.sep}`);
     const found = new Set(pids.filter((pid) => pid !== process.pid && alive(pid)));
-    if (folder) for (const entry of listProcesses()) if (entry.pid !== process.pid && entry.args.startsWith(prefix)) found.add(entry.pid);
+    for (const entry of listProcesses()) if (entry.pid !== process.pid && prefixes.some((prefix) => entry.args.startsWith(prefix))) found.add(entry.pid);
     return [...found];
   };
 
-  const waitForClose = async (folder, pids, ms) => {
+  const waitForClose = async (app, pids, ms) => {
     const deadline = Date.now() + ms;
     for (;;) {
-      if (!running(folder, pids).length) return true;
+      if (!running(app, pids).length) return true;
       if (Date.now() >= deadline) return false;
       await sleep(250);
     }
   };
 
-  const stopRunning = async (folder, pids) => {
-    const found = running(folder, pids);
+  const stopRunning = async (app, pids) => {
+    const found = running(app, pids);
     for (const pid of found) {
       try {
         process.kill(pid, "SIGTERM");
@@ -152,58 +177,36 @@ export const createMacUpdater = ({ log = () => {}, alert = () => {}, platform = 
     }
   };
 
-  const persist = async (step, folder, pids) => {
-    let last = null;
-    for (let attempt = 0; attempt < 12; attempt += 1) {
-      try {
-        step();
-        return;
-      } catch (error) {
-        last = error;
-      }
-      await stopRunning(folder, pids);
-      await sleep(500);
-    }
-    throw last;
+  const closeApp = async (app, pids) => {
+    if (!(await waitForClose(app, pids, CLOSE_WAIT_MS))) await stopRunning(app, pids);
   };
 
-  const rename = (from, to) => {
+  const findPid = async (app, ms) => {
+    const exe = `${path.join(real(app), "Contents", "MacOS")}${path.sep}`;
+    const loose = `/${path.basename(app)}/Contents/MacOS/`;
+    const deadline = Date.now() + ms;
+    while (Date.now() < deadline) {
+      const found = listProcesses().find((entry) => entry.pid !== process.pid && (entry.args.startsWith(exe) || entry.args.includes(loose)));
+      if (found) return found.pid;
+      await sleep(250);
+    }
+    return 0;
+  };
+
+  const openApp = async (app, { find = true } = {}) => {
+    const opened = tool("open", ["-n", app]);
+    if (!opened.ok) throw new Error(`the app could not be opened (${opened.text})`);
+    return find ? findPid(app, findMs) : 0;
+  };
+
+  const start = (app, options) => (launchApp ? launchApp(app, options) : openApp(app, options));
+
+  const reopen = async (app) => {
     try {
-      fs.renameSync(from, to);
+      await start(app, { find: false });
     } catch (error) {
-      if (error?.code !== "EXDEV") throw error;
-      fs.cpSync(from, to, { recursive: true, verbatimSymlinks: true, preserveTimestamps: true });
-      fs.rmSync(from, { recursive: true, force: true });
+      log(`the game could not be reopened: ${messageOf(error)}`);
     }
-  };
-
-  const moveOver = async (from, to, folder, pids) => {
-    fs.mkdirSync(path.dirname(to), { recursive: true });
-    await persist(() => {
-      if (exists(to)) fs.rmSync(to, { force: true });
-      rename(from, to);
-    }, folder, pids);
-  };
-
-  const undo = async (stage, root, folder, pids) => {
-    const journal = path.join(stage, "journal.txt");
-    if (!exists(journal)) return;
-    const previous = path.join(stage, "previous");
-    const lines = fs.readFileSync(journal, "utf8").split("\n").filter(Boolean);
-    for (let index = lines.length - 1; index >= 0; index -= 1) {
-      const tab = lines[index].indexOf("\t");
-      if (tab <= 0) continue;
-      const verb = lines[index].slice(0, tab);
-      const relative = lines[index].slice(tab + 1);
-      const installed = inside(root, relative);
-      const kept = inside(previous, relative);
-      if (verb === "moved" || verb === "removed") {
-        if (exists(kept)) await moveOver(kept, installed, folder, pids);
-      } else if (verb === "added" && exists(installed)) {
-        await persist(() => fs.rmSync(installed, { force: true }), folder, pids);
-      }
-    }
-    fs.rmSync(journal, { force: true });
   };
 
   const mark = (stage, name) => path.join(stage, name);
@@ -213,225 +216,307 @@ export const createMacUpdater = ({ log = () => {}, alert = () => {}, platform = 
     fs.rmSync(mark(stage, "applied"), { force: true });
   };
 
-  const reseal = (root) => {
-    const app = appBundleOf(root);
-    if (!app || platform !== "darwin") return;
-    const plist = path.join(app, "Contents", "Info.plist");
-    try {
-      const stamp = JSON.parse(fs.readFileSync(path.join(root, "native", "godot", "version.json"), "utf8"));
-      if (stamp?.version) spawnSync("/usr/bin/plutil", ["-replace", "CFBundleShortVersionString", "-string", String(stamp.version), plist]);
-      if (stamp?.build) spawnSync("/usr/bin/plutil", ["-replace", "CFBundleVersion", "-string", String(stamp.build), plist]);
-    } catch (error) {
-      log(`the app's version could not be stamped: ${error?.message ?? error}`);
-    }
-    const signed = spawnSync("/usr/bin/codesign", ["--force", "--sign", "-", app], { encoding: "utf8" });
-    if (signed.status !== 0) log(`the app could not be signed again: ${String(signed.stderr || signed.error?.message || "").trim()}`);
-  };
-
-  const launch = (root) => {
-    const app = appBundleOf(root);
-    const exe = app ? executableOf(app) : "";
-    if (!exe) throw new Error(`No ${APP_NAME} app was found around ${root}`);
-    const child = spawn(exe, [], { cwd: path.dirname(exe), detached: true, stdio: "ignore" });
-    child.on("error", (error) => log(`the game could not be started: ${error?.message ?? error}`));
-    return child;
-  };
-
-  const exited = (child) => new Promise((resolve) => {
-    if (child.exitCode !== null) resolve(child.exitCode);
-    else child.once("exit", (code, signal) => resolve(code ?? (signal ? 128 : 0)));
-  });
-
-  const watch = async (stage, root, child, folder, pids, build) => {
-    const ended = exited(child);
-    let code = null;
-    ended.then((value) => {
-      code = value;
-    });
-    const deadline = Date.now() + WATCH_SECONDS * 1000;
-    while (Date.now() < deadline) {
-      if (exists(mark(stage, "confirmed")) || !exists(mark(stage, "applied"))) break;
-      if (code !== null) {
-        if (code === 0) break;
-        log(`the new version stopped with code ${code}, so the version you had is being put back`);
-        if (!(await waitForClose(folder, pids, 5000))) await stopRunning(folder, pids);
-        await undo(stage, root, folder, pids);
-        rolledBack(stage, build);
-        reseal(root);
-        launch(root).unref();
-        break;
-      }
-      await sleep(250);
-    }
-    child.unref();
-  };
-
-  const failUpdate = (root, message, reopen) => {
+  const failUpdate = async (app, message, reopenApp) => {
     log(message);
     alert(message);
-    if (!reopen) return 1;
-    try {
-      launch(root).unref();
-    } catch (error) {
-      log(`the game could not be reopened: ${error?.message ?? error}`);
-    }
+    if (reopenApp && app && exists(app)) await reopen(app);
     return 1;
   };
 
-  const folderOf = (root) => appBundleOf(root) || root;
-
-  const restoreMode = (installed, kept) => {
-    let mode = 0o644;
-    try {
-      if (kept && exists(kept)) mode = fs.statSync(kept).mode & 0o777;
-      else if (looksExecutable(installed)) mode = 0o755;
-    } catch {
-      mode = 0o644;
-    }
-    if (looksExecutable(installed)) mode |= 0o111;
-    fs.chmodSync(installed, mode);
-  };
-
-  const apply = async ({ stage, relaunch, wait }) => {
-    const plan = readPlan(stage);
-    const root = planValue(plan, "install");
-    const build = planValue(plan, "build");
-    if (!root) throw new Error("The update names no installation.");
-    const folder = folderOf(root);
-    if (!exists(path.join(root, MARKER))) return failUpdate(root, `The folder ${root} is not an installation of ${APP_NAME}, so it was left alone.`, false);
-    if (!exists(mark(stage, "ready")) || exists(mark(stage, "applied"))) return failUpdate(root, "The downloaded update is not complete, or was applied already.", relaunch);
-    if (!(await waitForClose(folder, wait, CLOSE_WAIT_MS))) await stopRunning(folder, wait);
-    await undo(stage, root, folder, wait);
-    const previous = path.join(stage, "previous");
-    const files = path.join(stage, "files");
-    try {
-      const journal = fs.openSync(path.join(stage, "journal.txt"), "w");
-      try {
-        for (const [verb, relative] of plan) {
-          if (verb !== "put" && verb !== "remove") continue;
-          const installed = inside(root, relative);
-          const kept = inside(previous, relative);
-          if (verb === "put") {
-            const source = inside(files, relative);
-            if (!exists(source)) throw new Error(`The update is missing ${relative}`);
-            let had = false;
-            if (exists(installed)) {
-              fs.writeSync(journal, `moved\t${relative}\n`);
-              await moveOver(installed, kept, folder, wait);
-              had = true;
-            } else {
-              fs.writeSync(journal, `added\t${relative}\n`);
-            }
-            fs.mkdirSync(path.dirname(installed), { recursive: true });
-            await persist(() => fs.copyFileSync(source, installed), folder, wait);
-            restoreMode(installed, had ? kept : "");
-          } else if (exists(installed)) {
-            fs.writeSync(journal, `removed\t${relative}\n`);
-            await moveOver(installed, kept, folder, wait);
-          }
-        }
-      } finally {
-        fs.closeSync(journal);
-      }
-    } catch (error) {
-      await undo(stage, root, folder, wait);
-      rolledBack(stage, build);
-      reseal(root);
-      return failUpdate(root, `The update could not be applied (${error?.message ?? error}), so the version you had was kept.`, relaunch);
-    }
-    fs.writeFileSync(mark(stage, "applied"), build);
-    reseal(root);
-    log(`update ${build} applied`);
-    if (relaunch) await watch(stage, root, launch(root), folder, wait, build);
-    return 0;
-  };
-
-  const rollback = async ({ stage, relaunch, wait }) => {
-    const plan = readPlan(stage);
-    const root = planValue(plan, "install");
-    const build = planValue(plan, "build");
-    const folder = folderOf(root);
-    if (!exists(path.join(root, MARKER))) return failUpdate(root, `The folder ${root} is not an installation of ${APP_NAME}, so it was left alone.`, false);
-    if (!(await waitForClose(folder, wait, CLOSE_WAIT_MS))) await stopRunning(folder, wait);
-    await undo(stage, root, folder, wait);
-    rolledBack(stage, build);
-    reseal(root);
-    log(`update ${build} was rolled back`);
-    if (relaunch) launch(root).unref();
-    return 0;
-  };
-
-  const removeLeftovers = (app) => {
-    const parent = path.dirname(app);
-    const name = path.basename(app);
+  const removeHolders = (app, kinds, keep = "") => {
     let entries = [];
     try {
-      entries = fs.readdirSync(parent);
+      entries = fs.readdirSync(path.dirname(app));
     } catch {
       return;
     }
     for (const entry of entries) {
-      if (entry.startsWith(`${name}.update-`) || entry.startsWith(`${name}.previous-`)) {
+      if (!isHolderName(entry) || !kinds.some((kind) => entry.startsWith(`.oh-${kind}-`))) continue;
+      const holder = path.join(path.dirname(app), entry);
+      if (holder === keep) continue;
+      try {
+        fs.rmSync(holder, { recursive: true, force: true });
+      } catch {
+        void 0;
+      }
+    }
+  };
+
+  const cloneApp = (app, holder) => {
+    fs.rmSync(holder, { recursive: true, force: true });
+    fs.mkdirSync(holder, { recursive: true });
+    const copy = path.join(holder, path.basename(app));
+    const cloned = tool("cp", ["-cRp", app, copy]);
+    if (cloned.ok) return copy;
+    log(`the app could not be cloned (${cloned.text}); copying it instead`);
+    fs.rmSync(copy, { recursive: true, force: true });
+    const copied = tool("ditto", [app, copy]);
+    if (!copied.ok) throw new Error(`the app could not be copied (${copied.text})`);
+    return copy;
+  };
+
+  const putFiles = (plan, stage, root) => {
+    const files = path.join(stage, "files");
+    const put = [];
+    for (const [verb, relative] of plan) {
+      if (verb !== "put" && verb !== "remove") continue;
+      const installed = inside(root, relative);
+      if (verb === "remove") {
+        fs.rmSync(installed, { force: true });
+        continue;
+      }
+      const source = inside(files, relative);
+      if (!exists(source)) throw new Error(`The update is missing ${relative}`);
+      let mode = 0o644;
+      try {
+        mode = fs.statSync(installed).mode & 0o777;
+        fs.rmSync(installed, { force: true });
+      } catch {
+        mode = 0o644;
+      }
+      fs.mkdirSync(path.dirname(installed), { recursive: true });
+      fs.copyFileSync(source, installed);
+      fs.chmodSync(installed, looksExecutable(installed) ? mode | 0o755 : mode);
+      put.push(installed);
+    }
+    return put;
+  };
+
+  const stamp = (app) => {
+    const plist = path.join(app, "Contents", "Info.plist");
+    try {
+      const version = JSON.parse(fs.readFileSync(path.join(appRootOf(app), "native", "godot", "version.json"), "utf8"));
+      if (version?.version) tool("plutil", ["-replace", "CFBundleShortVersionString", "-string", String(version.version), plist]);
+      if (version?.build) tool("plutil", ["-replace", "CFBundleVersion", "-string", String(version.build), plist]);
+    } catch (error) {
+      log(`the app's version could not be stamped: ${messageOf(error)}`);
+    }
+  };
+
+  const seal = (app, changed = []) => {
+    for (const file of changed) {
+      if (!isMachO(file) || tool("codesign", ["--verify", file]).ok) continue;
+      const signed = tool("codesign", ["--force", "--sign", "-", file]);
+      if (!signed.ok) throw new Error(`${path.basename(file)} could not be signed (${signed.text})`);
+    }
+    const signed = tool("codesign", ["--force", "--sign", "-", app]);
+    if (!signed.ok) throw new Error(`the app could not be signed (${signed.text})`);
+    const verified = tool("codesign", ["--verify", "--deep", "--strict", app]);
+    if (!verified.ok) throw new Error(`the app's signature does not check out (${verified.text})`);
+  };
+
+  const unquarantine = (app) => {
+    tool("xattr", ["-dr", QUARANTINE, app]);
+    if (tool("xattr", ["-p", QUARANTINE, app]).ok) throw new Error("the app is still marked as downloaded from the internet");
+  };
+
+  const swap = (app, fresh, holder) => {
+    fs.mkdirSync(holder, { recursive: true });
+    const kept = path.join(holder, path.basename(app));
+    fs.renameSync(app, kept);
+    try {
+      fs.renameSync(fresh, app);
+    } catch (error) {
+      fs.renameSync(kept, app);
+      throw error;
+    }
+    const now = new Date();
+    try {
+      fs.utimesSync(app, now, now);
+    } catch {
+      void 0;
+    }
+    return kept;
+  };
+
+  const previousOf = (stage) => {
+    try {
+      const holder = fs.readFileSync(mark(stage, "previous-app"), "utf8").trim();
+      return holder && isHolderName(path.basename(holder)) ? holder : "";
+    } catch {
+      return "";
+    }
+  };
+
+  const revert = (stage, app, build) => {
+    const holder = previousOf(stage);
+    const kept = holder ? path.join(holder, path.basename(app)) : "";
+    if (!kept || !exists(kept)) throw new Error("the version you had is no longer kept beside the app");
+    const failed = holderOf(app, "failed", build);
+    fs.rmSync(failed, { recursive: true, force: true });
+    if (exists(app)) {
+      fs.mkdirSync(failed, { recursive: true });
+      fs.renameSync(app, path.join(failed, path.basename(app)));
+    }
+    fs.renameSync(kept, app);
+    for (const folder of [failed, holder]) {
+      try {
+        fs.rmSync(folder, { recursive: true, force: true });
+      } catch {
+        void 0;
+      }
+    }
+    fs.rmSync(mark(stage, "previous-app"), { force: true });
+    rolledBack(stage, build);
+  };
+
+  const watch = async (stage, app, build) => {
+    let pid = 0;
+    try {
+      pid = await start(app, { find: true });
+    } catch (error) {
+      log(`the new version could not be opened: ${messageOf(error)}`);
+    }
+    const deadline = Date.now() + watchSeconds * 1000;
+    let failed = !pid && !exists(mark(stage, "confirmed"));
+    while (!failed && Date.now() < deadline) {
+      if (exists(mark(stage, "confirmed")) || !exists(mark(stage, "applied"))) return 0;
+      if (!alive(pid)) {
+        await sleep(500);
+        if (exists(mark(stage, "confirmed")) || !exists(mark(stage, "applied"))) return 0;
+        failed = true;
+        break;
+      }
+      await sleep(250);
+    }
+    if (!failed) return 0;
+    log("the new version closed before it finished starting, so the version you had is being put back");
+    await closeApp(app, []);
+    revert(stage, app, build);
+    await reopen(app);
+    return 1;
+  };
+
+  const recover = (stage, app, build) => {
+    const holder = previousOf(stage);
+    if (!holder) return "";
+    const kept = path.join(holder, path.basename(app));
+    if (!exists(kept)) {
+      fs.rmSync(mark(stage, "previous-app"), { force: true });
+      return "";
+    }
+    if (!exists(app)) {
+      fs.renameSync(kept, app);
+      fs.rmSync(holder, { recursive: true, force: true });
+      fs.rmSync(mark(stage, "previous-app"), { force: true });
+      return "";
+    }
+    if (buildOf(appRootOf(app)) === build) return "swapped";
+    fs.rmSync(holder, { recursive: true, force: true });
+    fs.rmSync(mark(stage, "previous-app"), { force: true });
+    return "";
+  };
+
+  const apply = async ({ stage, relaunch = true, wait = [] }) => {
+    const plan = readPlan(stage);
+    const root = planValue(plan, "install");
+    const build = planValue(plan, "build");
+    if (!root) throw new Error("The update names no installation.");
+    const app = appBundleOf(root);
+    if (!app) return failUpdate("", `The folder ${root} is not inside an app, so it was left alone.`, false);
+    if (!exists(path.join(root, MARKER)) && !previousOf(stage)) return failUpdate("", `The folder ${root} is not an installation of ${APP_NAME}, so it was left alone.`, false);
+    if (!exists(mark(stage, "ready")) || exists(mark(stage, "applied"))) return failUpdate(app, "The downloaded update is not complete, or was applied already.", relaunch);
+    await closeApp(app, wait);
+    if (recover(stage, app, build) !== "swapped") {
+      removeHolders(app, ["update", "failed"]);
+      const work = holderOf(app, "update", build);
+      try {
+        const fresh = cloneApp(app, work);
+        const changed = putFiles(plan, stage, appRootOf(fresh));
+        stamp(fresh);
+        seal(fresh, changed);
+        unquarantine(fresh);
+        await closeApp(app, wait);
+        const holder = holderOf(app, "previous", build);
+        fs.rmSync(holder, { recursive: true, force: true });
+        fs.writeFileSync(mark(stage, "previous-app"), holder);
+        swap(app, fresh, holder);
+      } catch (error) {
+        const left = previousOf(stage);
         try {
-          fs.rmSync(path.join(parent, entry), { recursive: true, force: true });
+          if (left && !exists(app) && exists(path.join(left, path.basename(app)))) fs.renameSync(path.join(left, path.basename(app)), app);
+          if (left && exists(app)) fs.rmSync(left, { recursive: true, force: true });
+          fs.rmSync(mark(stage, "previous-app"), { force: true });
+          fs.rmSync(work, { recursive: true, force: true });
         } catch {
           void 0;
         }
+        rolledBack(stage, build);
+        return failUpdate(app, `The update could not be applied (${messageOf(error)}), so the version you had was kept.`, relaunch);
       }
+      fs.rmSync(work, { recursive: true, force: true });
     }
+    fs.writeFileSync(mark(stage, "applied"), build);
+    log(`update ${build} applied to ${app}; the version it replaced is kept until the new one starts`);
+    if (relaunch) return watch(stage, app, build);
+    return 0;
+  };
+
+  const rollback = async ({ stage, relaunch = true, wait = [] }) => {
+    const plan = readPlan(stage);
+    const root = planValue(plan, "install");
+    const build = planValue(plan, "build");
+    const app = appBundleOf(root);
+    if (!app) return failUpdate("", `The folder ${root} is not inside an app, so it was left alone.`, false);
+    await closeApp(app, wait);
+    try {
+      revert(stage, app, build);
+    } catch (error) {
+      return failUpdate(app, `The previous version could not be put back: ${messageOf(error)}`, false);
+    }
+    log(`update ${build} was rolled back`);
+    if (relaunch) await reopen(app);
+    return 0;
   };
 
   const unpack = (zip, destination) => {
+    fs.rmSync(destination, { recursive: true, force: true });
     fs.mkdirSync(destination, { recursive: true });
-    const result = platform === "darwin"
-      ? spawnSync("/usr/bin/ditto", ["-x", "-k", zip, destination], { encoding: "utf8" })
-      : spawnSync("unzip", ["-q", zip, "-d", destination], { encoding: "utf8" });
-    if (result.status !== 0) throw new Error(`the update could not be unpacked (${String(result.stderr || result.error?.message || "").trim()})`);
+    const result = tool("ditto", ["-x", "-k", zip, destination]);
+    if (!result.ok) throw new Error(`the update could not be unpacked (${result.text})`);
     const found = fs.readdirSync(destination).find((entry) => entry.endsWith(".app"));
     if (!found) throw new Error("the update holds no app");
     const app = path.join(destination, found);
-    if (!exists(path.join(app, "Contents", "Resources", "app", MARKER))) throw new Error("the update is not an Open Historia Native app");
+    if (!exists(path.join(appRootOf(app), MARKER))) throw new Error(`the update is not an ${APP_NAME} app`);
     return app;
   };
 
-  const update = async ({ install, zip, relaunch, wait }) => {
+  const update = async ({ install, zip, relaunch = true, wait = [] }) => {
     const root = path.resolve(install);
     const app = appBundleOf(root);
-    if (!app || !exists(path.join(root, MARKER))) return failUpdate(root, `The folder ${root} is not an installation of ${APP_NAME}, so it was left alone.`, false);
-    const stamp = String(process.pid);
-    const staging = `${app}.update-${stamp}`;
-    const previous = `${app}.previous-${stamp}`;
+    if (!app || !exists(path.join(root, MARKER))) return failUpdate("", `The folder ${root} is not an installation of ${APP_NAME}, so it was left alone.`, false);
+    const tag = `${Date.now()}-${process.pid}`;
+    const work = holderOf(app, "update", tag);
+    const holder = holderOf(app, "previous", tag);
     try {
-      removeLeftovers(app);
-      const fresh = unpack(zip, staging);
-      if (!(await waitForClose(app, wait, CLOSE_WAIT_MS))) await stopRunning(app, wait);
-      await persist(() => fs.renameSync(app, previous), app, wait);
-      try {
-        fs.renameSync(fresh, app);
-      } catch (error) {
-        fs.renameSync(previous, app);
-        throw error;
-      }
-      log(`the app at ${app} was replaced`);
-      if (relaunch) launch(root).unref();
-      try {
-        fs.rmSync(previous, { recursive: true, force: true });
-        fs.rmSync(staging, { recursive: true, force: true });
-      } catch {
-        void 0;
-      }
-      return 0;
+      removeHolders(app, ["update", "failed"]);
+      const fresh = unpack(zip, work);
+      unquarantine(fresh);
+      const verified = tool("codesign", ["--verify", "--deep", "--strict", fresh]);
+      if (!verified.ok) throw new Error(`the downloaded app's signature does not check out (${verified.text})`);
+      await closeApp(app, wait);
+      swap(app, fresh, holder);
     } catch (error) {
       try {
-        fs.rmSync(staging, { recursive: true, force: true });
+        fs.rmSync(work, { recursive: true, force: true });
       } catch {
         void 0;
       }
-      return failUpdate(root, `The update could not be installed: ${error?.message ?? error}`, relaunch);
+      return failUpdate(app, `The update could not be installed: ${messageOf(error)}`, relaunch);
     }
+    log(`the app at ${app} was replaced`);
+    for (const folder of [work, holder]) {
+      try {
+        fs.rmSync(folder, { recursive: true, force: true });
+      } catch {
+        void 0;
+      }
+    }
+    if (relaunch) await reopen(app);
+    return 0;
   };
 
-  return { apply, rollback, update, waitForClose, stopRunning, launch };
+  return { apply, rollback, update, waitForClose, stopRunning, openApp, running };
 };
 
 const main = async () => {
@@ -463,7 +548,7 @@ const main = async () => {
     return 2;
   } catch (error) {
     log(`${APP_NAME} could not be updated: ${error?.stack ?? error}`);
-    alert(String(error?.message ?? error));
+    alert(messageOf(error));
     return 1;
   }
 };

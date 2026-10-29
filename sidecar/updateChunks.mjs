@@ -97,8 +97,26 @@ export const packOf = (file) => {
 export const normalPath = (file) => String(file).replace(/\\/g, "/").replace(/^\.?\//, "");
 
 export const chunkAssetName = (id) => `c-${String(id).slice(0, 40)}.bin`;
-export const manifestAssetName = (hash) => `m-${String(hash).slice(0, 40)}.json`;
+export const PLATFORM_PREFIXES = Object.freeze({ macos: "mac-" });
+export const MAC_SHELL_KEY = "OHNativeShell";
+export const platformPrefix = (platform) => (Object.hasOwn(PLATFORM_PREFIXES, String(platform ?? "")) ? PLATFORM_PREFIXES[platform] : "");
+export const manifestAssetName = (hash, platform = "") => `${platformPrefix(platform)}m-${String(hash).slice(0, 40)}.json`;
 export const isHash = (value) => typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
+
+export const macBundleOf = (root) => {
+  const match = /^(.*\.app)\/Contents\/Resources\/app\/?$/.exec(path.resolve(String(root ?? "")).split(path.sep).join("/"));
+  return match ? match[1].split("/").join(path.sep) : "";
+};
+
+export const readMacShell = (app) => {
+  try {
+    const plist = fs.readFileSync(path.join(app, "Contents", "Info.plist"), "utf8");
+    const found = new RegExp(`<key>${MAC_SHELL_KEY}</key>\\s*<string>([^<]*)</string>`).exec(plist);
+    return found ? found[1].trim() : "";
+  } catch {
+    return "";
+  }
+};
 
 export const wireSize = (manifest, id) => manifest.packed?.[id] ?? manifest.chunks[id];
 
@@ -396,7 +414,7 @@ export const writeRelease = ({ stage, out, details = {}, reuse = null }) => {
     fs.writeFileSync(file, data);
     written += 1;
   }
-  const manifestName = manifestAssetName(manifestHash);
+  const manifestName = manifestAssetName(manifestHash, details.platform);
   fs.writeFileSync(path.join(out, manifestName), manifestText);
   fs.writeFileSync(path.join(stage, INSTALLED_MANIFEST), manifestText);
   const had = reuse ? new Set(Object.keys(reuse.chunks ?? {})) : null;
