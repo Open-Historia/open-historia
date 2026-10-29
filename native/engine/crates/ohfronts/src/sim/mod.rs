@@ -54,3 +54,5 @@ pub mod view;
 pub mod engineer;
 pub mod orders;
 pub mod movement;
+pub mod accents;
+pub mod plans;
