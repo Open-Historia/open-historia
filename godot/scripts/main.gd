@@ -63,6 +63,8 @@ var _reload_asking := false
 func _ready() -> void:
 	get_tree().auto_accept_quit = false
 	get_window().title = "Open Historia"
+	_plain_title.call_deferred()
+	get_window().title_changed.connect(_plain_title)
 	var mark := Image.load_from_file(UI.repo_path("public/icon-192.png"))
 	if mark:
 		DisplayServer.set_icon(mark)
@@ -299,6 +301,10 @@ func _enter_active_game() -> void:
 		await _open_game(id)
 
 
+func _plain_title() -> void:
+	DisplayServer.window_set_title("Open Historia")
+
+
 func _on_setting_changed(key: String, value: Variant) -> void:
 	var redraw := key == "Globe" and in_game and _screen == "game"
 	if redraw:
@@ -308,6 +314,7 @@ func _on_setting_changed(key: String, value: Variant) -> void:
 		shell.end_game_loading()
 	if key == "ui_language":
 		await i18n.set_language(str(value))
+		_plain_title()
 	elif key == "map_mode":
 		hud.set_map_mode(str(value))
 		hud._apply_map_mode()
@@ -404,6 +411,7 @@ func _background_tick() -> void:
 
 
 func _check_minimized() -> void:
+	_plain_title()
 	var minimized := DisplayServer.window_get_mode() == DisplayServer.WINDOW_MODE_MINIMIZED
 	if minimized == _minimized:
 		return
