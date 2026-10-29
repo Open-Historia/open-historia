@@ -116,7 +116,7 @@ const entryOf = (key) => {
   return entry;
 };
 
-const patchCallbacks = (args, sink) => {
+const patchCallbacks = (args, sink, only = null) => {
   const undo = [];
   const visit = (value, where, depth) => {
     if (!value || typeof value !== "object" || depth > 2 || ArrayBuffer.isView(value) || made.has(value)) return;
@@ -128,6 +128,7 @@ const patchCallbacks = (args, sink) => {
       const descriptor = Object.getOwnPropertyDescriptor(value, key);
       if (!descriptor || !descriptor.writable || !descriptor.configurable || Object.isFrozen(value)) continue;
       const name = [...where, key].join(".");
+      if (only && !only.has(name)) continue;
       const calls = [];
       sink[name] = calls;
       const original = item;
@@ -188,7 +189,24 @@ export const wrap = (moduleName, name, fn, factories, picks = null, quiet = fals
   if (typeof fn !== "function") return fn;
   const key = `${moduleName}.${name}`;
   const factory = factories.includes(name);
+  let when = null;
+  if (picks?.when) {
+    try {
+      when = new Function("args", `return (${picks.when});`);
+    } catch {
+      when = null;
+    }
+  }
   const wrapped = function golden(...args) {
+    if (when && busy === 0 && !factory) {
+      let wanted = false;
+      try {
+        wanted = Boolean(when(args));
+      } catch {
+        wanted = false;
+      }
+      if (!wanted) return fn.apply(this, args);
+    }
     const entry = entryOf(key);
     entry.calls += 1;
     const take = busy === 0 && entry.cases.length < PER_PROCESS && entry.bytes < PROCESS_BYTES_MOST && entry.calls > entry.next;
@@ -219,7 +237,7 @@ export const wrap = (moduleName, name, fn, factories, picks = null, quiet = fals
       busy -= 1;
     }
     const calls = {};
-    const restore = before && !quiet ? patchCallbacks(args, calls) : () => {};
+    const restore = before && !quiet ? patchCallbacks(args, calls, picks?.calls ? new Set(picks.calls) : null) : () => {};
     const passed = before ? wrapCallbackArgs(args, calls) : args;
     let result;
     try {

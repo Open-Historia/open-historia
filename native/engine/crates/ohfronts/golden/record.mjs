@@ -38,6 +38,78 @@ const CLOSE_PICK = { size: 1, key: 1, squeezed: 1, was: 1, prey: 1, toPrey: 1, p
 const PHI_FIELD = { ...FIELD_PICK, phi: 1 };
 const SWARM_BATTLE = { sides: 1, swarms: 1, deploy: 1, frame: 1, radiusKm: 1, field: PHI_FIELD, troops: troopsPick(["strength", "x", "y", "owner", "command"]) };
 const FEATURE_HOME = { field: { holders: 1 }, mindHomes: 1, homes: 1, sides: 1, arena: { region: 1, ids: 1 } };
+const DAWN_TROOP = troopsPick(["x", "y", "strength", "owner", "kind", "fatigue", "still", "climate", "punch", "guard", "legs", "walled", "dug", "pocket", "supply", "movedKm", "fought", "engaged", "walkedToday", "loss"]);
+const DAWN_RUN = {
+  ...CLIMATE_RUN,
+  input: { ...CLIMATE_RUN.input, ...WALL_RUN.input, units: 1, airArms: 1 },
+  lines: 1,
+  mech: 1,
+  era: 1,
+  steer: 1,
+  airDay: 1,
+  wings: 1,
+  battles: { "*": AIR_BATTLE },
+};
+const DAWN_BATTLE = { ...CLIMATE_BATTLE, ...WALL_BATTLE, ...AIR_BATTLE, field: { cols: 1, rows: 1, size: 1, play: 1 }, worth: 1, short: 1, works: 1, corridors: 1, exposure: 1, outBy: 1, harshBy: 1, lostBy: 1, kept: 1, siegeKept: 1, troops: DAWN_TROOP };
+const DAWN_WHEN = "Object.values(args[0].mech ?? {}).some((on) => on === true) || Boolean(args[0].steer?.readiness)";
+const DUSK_RUN = { mech: 1, advanceKm: 1, pace: 1, effort: 1, wings: 1, mendDay: 1, mendLeft: 1 };
+const DUSK_BATTLE = { sides: 1, sky: 1, wings: 1, mendOf: 1, troops: DAWN_TROOP };
+const SUPPLY_BATTLE = {
+  field: FIELD_PICK,
+  frame: 1,
+  arena: { frame: 1, cols: 1, rows: 1, size: 1, region: 1, names: 1, ids: 1, cities: 1 },
+  homeSide: 1,
+  homePieces: 1,
+  pocketTurns: 1,
+  pocketSieges: 1,
+  siegeKey: 1,
+  pocketOf: 1,
+  pockets: 1,
+  sieges: 1,
+  anchors: 1,
+  siegeKept: 1,
+  wallMask: 1,
+  kept: 1,
+  supplied: 1,
+  bodyOf: 1,
+  fed: 1,
+  supply: 1,
+  supplyTurns: 1,
+  corridors: 1,
+  log: 1,
+  troops: { "*": { "*": { x: 1, y: 1, strength: 1, owner: 1, order: { kind: 1, done: 1 }, fallback: { kind: 1 }, pocket: 1, sealed: 1, besieged: 1, supply: 1 } } },
+};
+const SUPPLY_TAKES = { ...SUPPLY_BATTLE, field: PHI_FIELD };
+const COMBAT_TROOP = {
+  "*": {
+    "*": {
+      ...Object.fromEntries(["x", "y", "strength", "kind", "owner", "dig", "dug", "state", "radiusKm", "drive", "gx", "gy", "axisX", "axisY", "paceFactor", "stepping", "walkedToday", "flank", "flankMoment", "faceX", "faceY", "movedKm", "loss", "engaged", "fought", "reducing", "plant", "pocket", "sealed", "squeezed", "besieged", "supply", "fatigue", "punch", "guard", "legs", "walled", "entry"].map((key) => [key, 1])),
+      order: { kind: 1, done: 1 },
+      fallback: { kind: 1 },
+    },
+  },
+};
+const STEP_BATTLE = {
+  field: PHI_FIELD,
+  frame: 1,
+  place: 1,
+  look: 1,
+  lookFor: 1,
+  arena: { frame: 1, cols: 1, rows: 1, size: 1, speed: 1 },
+  claims: 1,
+  toSide: 1,
+  spared: 1,
+  kept: 1,
+  quality: 1,
+  edge: 1,
+  works: 1,
+  walls: 1,
+  wallRun: { lines: 1 },
+  wallDate: 1,
+  log: 1,
+  troops: COMBAT_TROOP,
+};
+const CLOSE_BATTLE = { field: { cols: 1, rows: 1 }, frame: 1, place: 1, look: 1, lookFor: 1, sky: 1, exposure: 1, lostBy: 1, works: 1, pool: 1, edge: 1, mendOf: 1, mendedBy: 1, sides: 1, troops: COMBAT_TROOP };
 const runPicks = (names, battleAt = -1) => Object.fromEntries(names.map((name) => [name, battleAt >= 0 && name.startsWith("@") ? null : { 0: RUN_PICK, ...(battleAt >= 0 ? { [battleAt]: BATTLE_PICK } : {}) }]));
 
 const MODULES = {
@@ -207,6 +279,34 @@ const MODULES = {
       },
     },
   },
+  "src/runtime/fronts/dawn.js": {
+    name: "dawn",
+    picks: {
+      dawnsOn: { 0: { mech: 1, steer: 1 } },
+      dawn: { 0: DAWN_RUN, 1: DAWN_BATTLE, when: DAWN_WHEN, calls: ["0.militaryOf"] },
+      dusk: { 0: DUSK_RUN, 1: DUSK_BATTLE, when: DAWN_WHEN, calls: [] },
+    },
+  },
+  "src/runtime/fronts/supply.js": {
+    name: "supply",
+    quiet: true,
+    big: ["settlePockets", "surrenderPocket"],
+    picks: {
+      nearestOwner: { 0: { field: { cols: 1 }, troops: troopsPick(["x", "y", "strength", "owner"]) } },
+      findPockets: { 0: SUPPLY_BATTLE, when: "!(args[0].pocketTurns === args[0].field.turns && args[0].pocketSieges === args[0].siegeKey && args[0].pocketOf)" },
+      markPockets: { 0: SUPPLY_BATTLE },
+      settlePockets: { 0: SUPPLY_TAKES },
+      surrenderPocket: { 0: SUPPLY_TAKES },
+      refreshSupply: { 0: SUPPLY_BATTLE, when: "!(args[0].supply && (args[1] % 3 !== 0 || args[0].supplyTurns === args[0].field.turns))" },
+      markSupply: { 0: SUPPLY_BATTLE },
+    },
+  },
+  "src/runtime/fronts/combat.js": {
+    name: "combat",
+    quiet: true,
+    big: ["stepForward"],
+    picks: { stepForward: { 0: STEP_BATTLE }, closeDay: { 0: CLOSE_BATTLE } },
+  },
   "src/runtime/fronts/scenarioFronts.js": { name: "scenarioFronts" },
   "src/runtime/fronts/climate.js": { name: "climate", picks: climatePicks(["zonesOver", "zonesToday"]) },
   "src/runtime/fronts/weather.js": { name: "weather", picks: climatePicks(["skyOver", "skiesAhead"]) },
@@ -232,7 +332,7 @@ const testFiles = () => {
   for (const extra of ["src/runtime/gameDates.test.js", "src/runtime/unitMotion.test.js", "src/Game/AI/frontTurn.test.js"]) {
     if (fs.existsSync(path.join(root, extra))) found.push(extra);
   }
-  found.push(path.relative(root, path.join(here, "probes.test.mjs")).split(path.sep).join("/"));
+  for (const name of fs.readdirSync(here).filter((name) => name.endsWith(".test.mjs")).sort()) found.push(path.relative(root, path.join(here, name)).split(path.sep).join("/"));
   return found.sort();
 };
 

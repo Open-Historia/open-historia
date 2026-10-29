@@ -1,16 +1,19 @@
 use crate::arena::arena_of;
-use crate::climate::{effects_from, sky_from};
+use crate::climate::{effects_from, effects_val, sky_from};
 use crate::frame::frame_of;
 use crate::support::*;
 use crate::troops::{troop_of, troop_val};
 use crate::walls::line_of;
 use ohfronts::sim::air::BattleWings;
-use ohfronts::sim::battle::{create_battle, Battle, Opening};
+use ohfronts::sim::battle::{create_battle, Battle, HomePieces, Opening};
 use ohfronts::sim::closing::{Books, Pocket, Prey};
 use ohfronts::sim::constants::Edge;
 use ohfronts::sim::deploy::DeployLine;
 use ohfronts::sim::engine::{create_run, NoHooks, Run};
-use ohfronts::sim::field::{create_field, Field};
+use ohfronts::sim::field::{create_field, Claims, Field};
+use ohfronts::sim::ground::ToSide;
+use ohfronts::sim::constants::Works;
+use crate::manpower::tally_of;
 use ohfronts::sim::js::{Obj, Typed, Val};
 use ohfronts::sim::muster::Levy;
 use ohfronts::sim::troops::Troop;
@@ -74,22 +77,66 @@ pub fn troop_full(value: &Val) -> Troop {
         }
     };
     set("punch", &mut troop.punch);
+    set("guard", &mut troop.guard);
+    set("legs", &mut troop.legs);
     set("rested", &mut troop.rested);
     set("command", &mut troop.command);
     set("next", &mut troop.next);
+    set("movedKm", &mut troop.moved_km);
+    set("loss", &mut troop.loss);
+    set("gx", &mut troop.gx);
+    set("gy", &mut troop.gy);
+    set("axisX", &mut troop.axis_x);
+    set("axisY", &mut troop.axis_y);
+    set("paceFactor", &mut troop.pace_factor);
+    set("flank", &mut troop.flank);
+    set("flankMoment", &mut troop.flank_moment);
+    set("faceX", &mut troop.face_x);
+    set("faceY", &mut troop.face_y);
+    let flag = |key: &str, slot: &mut bool| {
+        if !value.get(key).is_undef() {
+            *slot = value.get(key).truthy();
+        }
+    };
+    flag("squeezed", &mut troop.squeezed);
+    flag("sealed", &mut troop.sealed);
+    flag("besieged", &mut troop.besieged);
+    flag("fought", &mut troop.fought);
+    flag("engaged", &mut troop.engaged);
+    flag("walkedToday", &mut troop.walked_today);
+    flag("stepping", &mut troop.stepping);
+    flag("plant", &mut troop.plant);
+    flag("reducing", &mut troop.reducing);
     if !value.get("order").is_undef() {
         troop.order = value.get("order").clone();
     }
     if !value.get("fallback").is_undef() {
         troop.fallback = value.get("fallback").clone();
     }
-    if !value.get("squeezed").is_undef() {
-        troop.squeezed = value.get("squeezed").truthy();
+    if !value.get("still").is_undef() {
+        troop.still = value.get("still").clone();
+    }
+    if !value.get("entry").is_undef() {
+        troop.entry = value.get("entry").clone();
+    }
+    if let Val::Num(level) = value.get("walled") {
+        troop.walled = Some(*level);
     }
     if value.get("climate").truthy() {
         troop.climate = Some(effects_from(value.get("climate")));
     }
     troop
+}
+
+pub fn troop_more(troop: &Troop, want: &Val) -> Val {
+    let mut got = troop_val(troop);
+    if let Val::Obj(out) = &mut got {
+        out.set("still", troop.still.clone());
+        out.set("walled", troop.walled.map(num).unwrap_or(Val::Undef));
+        out.set("climate", match troop.climate { Some(climate) => effects_val(&climate), None => if want.get("climate").is_undef() { Val::Undef } else { Val::Null } });
+        out.set("entry", troop.entry.clone());
+    }
+    got
 }
 
 fn edge_of(value: &Val) -> Edge {
@@ -279,10 +326,133 @@ pub fn pick_battle(run: &Run, value: &Val) -> Battle {
     }
     let wings = value.get("wings");
     if wings.is_object() {
-        battle.wings = Some(BattleWings { holds: wings.get("holds").num() as usize, weight: [0.0, 0.0], superiority: wings.get("superiority").num(), flying: [Vec::new(), Vec::new()], strike: None });
+        battle.wings = Some(BattleWings { holds: wings.get("holds").num() as usize, weight: [0.0, 0.0], superiority: wings.get("superiority").num(), flying: [Vec::new(), Vec::new()], strike: None, detached: false });
     }
     battle.sky = sky_from(value.get("sky"));
+    supply_parts(&mut battle, value);
     battle
+}
+
+fn f32s_of(value: &Val) -> Vec<f32> {
+    arg_numbers(value).iter().map(|&n| n as f32).collect()
+}
+
+pub fn supply_parts(battle: &mut Battle, value: &Val) {
+    if let Val::Num(turns) = value.get("pocketTurns") {
+        battle.pocket_turns = *turns;
+    }
+    if let Val::Str(key) = value.get("pocketSieges") {
+        battle.pocket_sieges = Some(key.clone());
+    }
+    if let Val::Str(key) = value.get("siegeKey") {
+        battle.siege_key = key.clone();
+    }
+    battle.anchors = value.get("anchors").array_or_empty().to_vec();
+    if value.get("siegeKept").is_object() {
+        battle.siege_kept = [0, 1].map(|side| maybe(value.get("siegeKept").at(side), bytes));
+    }
+    if value.get("supplied").is_object() {
+        battle.supplied = [0, 1].map(|side| maybe(value.get("supplied").at(side), bytes));
+    }
+    battle.supply = pair(value.get("supply"), f32s_of);
+    if let Val::Num(turns) = value.get("supplyTurns") {
+        battle.supply_turns = *turns;
+    }
+    battle.corridors = value.get("corridors").is_true();
+    if let Some(log) = value.get("log").as_array() {
+        battle.log = log.clone();
+    }
+    let claims = value.get("claims");
+    if claims.is_object() {
+        battle.claims = Claims { stamp: ints(claims.get("stamp")), power: f32s_of(claims.get("power")), moment: claims.get("moment").num() };
+    }
+    if value.get("toSide").is_object() {
+        battle.to_side = Some(ToSide { turns: battle.field.as_ref().map(|field| field.turns).unwrap_or(0), sides: [ints(value.get("toSide").at(0)), ints(value.get("toSide").at(1))] });
+    }
+    let works = value.get("works");
+    if works.is_object() {
+        battle.works = Some(Works { defence: works.get("defence").num(), loss: works.get("loss").num(), per_day: works.get("perDay").num(), most: works.get("most").num(), assault: works.get("assault").num() });
+    }
+    let walls = value.get("walls");
+    if walls.is_object() && walls.get("cellKm").is_object() {
+        battle.walls = Some(Rc::new(Walls {
+            cell_line: arg_numbers(walls.get("cellLine")).iter().map(|&n| n as i16).collect(),
+            cell_km: f32s_of(walls.get("cellKm")),
+            sides: arg_numbers(walls.get("sides")).iter().map(|&n| n as i32).collect(),
+        }));
+    }
+    if let Val::Str(date) = value.get("wallDate") {
+        battle.wall_date = Some(date.clone());
+    }
+    if value.get("pool").is_object() {
+        battle.pool = [value.get("pool").at(0).num(), value.get("pool").at(1).num()];
+    }
+    if value.get("mendedBy").is_object() {
+        battle.mended_by = [0, 1].map(|side| value.get("mendedBy").at(side).array_or_empty().iter().map(|entry| if let Val::Num(n) = entry { Some(*n) } else { None }).collect());
+    }
+    if value.get("exposure").is_object() {
+        battle.exposure = Some([value.get("exposure").at(0).get("short").num(), value.get("exposure").at(1).get("short").num()]);
+    }
+    battle.lost_by = tally_of(value.get("lostBy"));
+    battle.mend_of = matches!(value.get("mendOf"), Val::Fn);
+    if value.get("lookFor").is_object() && same(value.get("lookFor"), value.get("place")).is_ok() {
+        battle.look = Some(value.get("look").num());
+    }
+    if let (Val::Arr(pieces), Some(home)) = (value.get("homePieces"), value.get("homeSide").typed()) {
+        for side in 0..2.min(pieces.len()) {
+            let entry = &pieces[side];
+            if !entry.is_object() || entry.get("homeSide").typed().map(|typed| typed.values()) != Some(home.values()) {
+                continue;
+            }
+            battle.home_pieces[side] = Some(Rc::new(HomePieces { size: entry.get("size").num() as usize, piece: ints(entry.get("piece")), count: entry.get("count").num() as usize }));
+        }
+    }
+}
+
+pub fn supply_val(battle: &Battle) -> Val {
+    let pair_of = |slot: &[Option<Vec<u8>>; 2]| list(slot.iter().map(|mask| mask.as_ref().map(|mask| u8s(mask.clone())).unwrap_or(Val::Null)).collect());
+    let pockets = list(battle.pockets.iter().map(pocket_val).collect());
+    Val::obj([
+        ("pocketTurns", num(battle.pocket_turns)),
+        ("pocketSieges", battle.pocket_sieges.as_ref().map(|key| text(key)).unwrap_or(Val::Undef)),
+        ("pocketOf", battle.pocket_of.as_ref().map(|both| list(both.iter().map(|side| i32s(side.clone())).collect())).unwrap_or(Val::Null)),
+        ("pockets", pockets),
+        ("siegeKept", pair_of(&battle.siege_kept)),
+        ("kept", pair_of(&battle.kept)),
+        ("supplied", pair_of(&battle.supplied)),
+        ("bodyOf", battle.body_of.as_ref().map(|both| list(both.iter().map(|side| i32s(side.clone())).collect())).unwrap_or(Val::Null)),
+        ("fed", battle.fed.as_ref().map(|both| list(both.iter().map(|side| u8s(side.clone())).collect())).unwrap_or(Val::Null)),
+        ("supply", battle.supply.as_ref().map(|both| list(both.iter().map(|side| Val::Typed(Typed::F32(side.clone()))).collect())).unwrap_or(Val::Null)),
+        ("supplyTurns", num(battle.supply_turns)),
+        ("log", list(battle.log.clone())),
+    ])
+}
+
+pub fn pocket_val(pocket: &Pocket) -> Val {
+    let mut out = Obj::new();
+    out.set("s", num(pocket.s as f64));
+    out.set("cell", num(pocket.cell));
+    out.set("days", num(pocket.days));
+    out.set("km2", num(pocket.km2));
+    for (key, value) in [("cells", pocket.cells), ("cx", pocket.cx), ("cy", pocket.cy)] {
+        if let Some(value) = value {
+            out.set(key, num(value));
+        }
+    }
+    out.set("siege", text(&pocket.siege));
+    out.set("told", Val::Bool(pocket.told));
+    Val::Obj(out)
+}
+
+pub fn same_parts(got: &Val, want: &Val, prefix: &str) -> Result<(), String> {
+    if let (Val::Obj(mine), Val::Obj(keys)) = (got, want) {
+        for (key, value) in keys.entries() {
+            if let Some(have) = mine.get(key) {
+                same(have, value).map_err(|error| format!("{prefix}.{key}: {error}"))?;
+            }
+        }
+    }
+    Ok(())
 }
 
 pub fn want_after(case: &Case, at: usize) -> Val {
@@ -296,7 +466,7 @@ pub fn troops_like(battle: &Battle, want: &Val) -> Result<(), String> {
             return Err(format!("side {side}: {} troops want {}", battle.troops[side].len(), wanted.len()));
         }
         for (index, (troop, want)) in battle.troops[side].iter().zip(wanted).enumerate() {
-            let got = troop_val(troop);
+            let got = troop_more(troop, want);
             if let Val::Obj(keys) = want {
                 for (key, value) in keys.entries() {
                     same(got.get(key), value).map_err(|error| format!("troop {side}/{index}.{key}: {error}"))?;
