@@ -8,13 +8,10 @@ on:
         required: true
         type: string
       app_run:
-        description: The Native app (Linux) run whose app to use (empty for the newest green one)
+        description: The Native app run whose app to use (empty for the newest green one)
         required: false
         type: string
         default: ""
-  push:
-    branches: [native-linux]
-    paths: [.github/workflows/native-mp-guest.yml]
 
 permissions:
   contents: read
@@ -51,7 +48,7 @@ jobs:
         run: |
           run="$APP_RUN"
           if [ -z "$run" ]; then
-            run=$(gh run list -R "$GITHUB_REPOSITORY" --workflow native-linux.yml --branch native-linux --status success -L 1 --json databaseId -q '.[0].databaseId')
+            run=$(gh run list -R "$GITHUB_REPOSITORY" --workflow native-release.yml --branch native/godot-app --status success -L 1 --json databaseId -q '.[0].databaseId')
           fi
           echo "app from run $run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$run"
           gh run view -R "$GITHUB_REPOSITORY" "$run" --json headSha,displayTitle -q '"built from " + .headSha + " (" + .displayTitle + ")"'

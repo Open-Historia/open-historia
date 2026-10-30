@@ -1,0 +1,996 @@
+name: Native app
+
+on:
+  push:
+    branches: [native/godot-app]
+  workflow_dispatch:
+    inputs:
+      tours:
+        description: Run the windowed tours, the first-open check and the Intel Mac smoke test (slow; macOS minutes count 10x)
+        required: false
+        type: boolean
+        default: false
+      publish:
+        description: Publish to Open-Historia/open-historia when the release token is set (clear for a dry run)
+        required: false
+        type: boolean
+        default: true
+      notes:
+        description: The release note the apps show for this build
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-release-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GODOT_VERSION: 4.7.2-stable
+  GODOT_BASE: https://github.com/godotengine/godot-builds/releases/download/4.7.2-stable
+  NODE_VERSION: 24.18.0
+  NODE_LINUX_SHA256: 55aa7153f9d88f28d765fcdad5ae6945b5c0f98a36881703817e4c450fa76742
+  RUST_TOOLCHAIN: 1.99.1
+  AVIF_SAMPLES: https://raw.githubusercontent.com/AOMediaCodec/av1-avif/bf4c18d1f3971069b75e87d6ee469790589f4f09/testFiles
+  OH_NATIVE_NOTES: ${{ inputs.notes || 'A new super-experimental build of Open Historia Native.' }}
+
+jobs:
+  windows:
+    name: Build the Windows app
+    runs-on: windows-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install the Rust toolchain (GNU, with LLVM's tools)
+        run: |
+          rustup set default-host x86_64-pc-windows-gnu
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component llvm-tools
+          cd native/engine
+          rustup show
+          rustc -vV
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native/engine -> target
+          key: windows-gnu
+          cache-on-failure: true
+
+      - name: Read the Godot checksums
+        id: godot
+        run: |
+          curl -fsSL "$GODOT_BASE/SHA512-SUMS.txt" -o "$RUNNER_TEMP/godot-sums.txt"
+          editor=$(awk '$2 == "Godot_v4.7.2-stable_win64.exe.zip" {print $1}' "$RUNNER_TEMP/godot-sums.txt")
+          templates=$(awk '$2 == "Godot_v4.7.2-stable_export_templates.tpz" {print $1}' "$RUNNER_TEMP/godot-sums.txt")
+          test ${#editor} -eq 128 && test ${#templates} -eq 128
+          echo "editor=$editor" >> "$GITHUB_OUTPUT"
+          echo "templates=$templates" >> "$GITHUB_OUTPUT"
+          echo "key=godot-windows-4.7.2-${editor:0:16}-${templates:0:16}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Godot from the cache
+        id: godot-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/godot-cache
+          key: ${{ steps.godot.outputs.key }}
+
+      - name: Download Godot and its Windows template (sha512 checked)
+        if: steps.godot-cache.outputs.cache-hit != 'true'
+        env:
+          EDITOR_SHA: ${{ steps.godot.outputs.editor }}
+          TEMPLATES_SHA: ${{ steps.godot.outputs.templates }}
+        run: |
+          mkdir -p ~/godot-cache "$RUNNER_TEMP/godot-dl"
+          cd "$RUNNER_TEMP/godot-dl"
+          curl -fsSL --retry 3 "$GODOT_BASE/Godot_v4.7.2-stable_win64.exe.zip" -o editor.zip
+          echo "$EDITOR_SHA  editor.zip" | sha512sum -c -
+          curl -fsSL --retry 3 "$GODOT_BASE/Godot_v4.7.2-stable_export_templates.tpz" -o templates.tpz
+          echo "$TEMPLATES_SHA  templates.tpz" | sha512sum -c -
+          7z x -y -bso0 editor.zip -o"$(cygpath -w ~/godot-cache)"
+          7z e -y -bso0 templates.tpz templates/windows_release_x86_64.exe templates/version.txt -o"$(cygpath -w ~/godot-cache)"
+          cat ~/godot-cache/version.txt
+          cd "$RUNNER_TEMP"
+          rm -rf "$RUNNER_TEMP/godot-dl"
+
+      - name: Save Godot to the cache
+        if: steps.godot-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/godot-cache
+          key: ${{ steps.godot.outputs.key }}
+
+      - name: Check the Godot tools
+        run: |
+          ls -la ~/godot-cache
+          echo "OH_GODOT_EXE=$(cygpath -w ~/godot-cache/Godot_v4.7.2-stable_win64.exe)" >> "$GITHUB_ENV"
+          echo "OH_GODOT_TEMPLATE=$(cygpath -w ~/godot-cache/windows_release_x86_64.exe)" >> "$GITHUB_ENV"
+          ~/godot-cache/Godot_v4.7.2-stable_win64_console.exe --headless --version
+
+      - name: Install the server packages and the map generator
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          node scripts/fetch-fmg.mjs --required
+
+      - name: Install the sidecar packages
+        working-directory: native/sidecar
+        run: |
+          npm ci --no-audit --no-fund
+          ls node_modules/@node-datachannel
+
+      - name: Build the engine library and the front engine
+        run: |
+          node native/build.mjs --release
+          ls -la native/engine/target/release/oh_gdext.dll native/engine/target/release/ohfronts-host.exe native/godot/bin
+          echo '{"t":"ping","id":1}' | native/engine/target/release/ohfronts-host.exe | grep -q '"t":"pong"'
+
+      - name: Build and package the app
+        run: node native/package.mjs "$RUNNER_TEMP/out" 2>&1 | tee "$RUNNER_TEMP/package.log"; test "${PIPESTATUS[0]}" = 0
+
+      - name: Inspect the package
+        run: |
+          out="$RUNNER_TEMP/out"
+          ls -la "$out" "$out/stage/runtime" "$out/stage/native/sidecar/ohfronts"
+          du -sh "$out/stage" "$out/chunks" "$out/Open-Historia-Native-Setup.exe"
+          ls "$out/chunks" | wc -l
+          cat "$out/native-latest.json"
+          node native/check-release.mjs local "$out"
+
+      - name: Upload the app
+        uses: actions/upload-artifact@v4
+        with:
+          name: Open-Historia-Native-Windows
+          path: |
+            ${{ runner.temp }}/out/Open-Historia-Native-Setup.exe
+            ${{ runner.temp }}/out/native-latest.json
+          compression-level: 0
+          retention-days: 3
+          if-no-files-found: error
+
+      - name: Upload the update chunks
+        uses: actions/upload-artifact@v4
+        with:
+          name: Open-Historia-Native-Windows-chunks
+          path: ${{ runner.temp }}/out/chunks
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: Upload the package log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Open-Historia-Native-Windows-logs
+          path: ${{ runner.temp }}/package.log
+          retention-days: 7
+          if-no-files-found: warn
+
+  macos:
+    name: Build, sign and smoke-test the macOS app
+    runs-on: macos-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install the Rust targets
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --target aarch64-apple-darwin,x86_64-apple-darwin
+          rustup show
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native/engine -> target
+          key: macos-universal
+          cache-on-failure: true
+
+      - name: Build the engine library for both Macs and join them
+        working-directory: native/engine
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "11.0"
+        run: |
+          cargo build -p oh_gdext --release --target aarch64-apple-darwin
+          cargo build -p oh_gdext --release --target x86_64-apple-darwin
+          mkdir -p target/universal-apple-darwin/release
+          lipo -create target/aarch64-apple-darwin/release/liboh_gdext.dylib target/x86_64-apple-darwin/release/liboh_gdext.dylib -output target/universal-apple-darwin/release/liboh_gdext.dylib
+          lipo -info target/universal-apple-darwin/release/liboh_gdext.dylib
+          ls -la target/aarch64-apple-darwin/release/liboh_gdext.dylib target/x86_64-apple-darwin/release/liboh_gdext.dylib target/universal-apple-darwin/release/liboh_gdext.dylib
+          otool -L target/universal-apple-darwin/release/liboh_gdext.dylib | grep -E "WebKit|AppKit"
+
+      - name: Build the front engine for both Macs and join them
+        working-directory: native/engine
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "11.0"
+        run: |
+          cargo build -p ohfronts --bin ohfronts-host --release --target aarch64-apple-darwin
+          cargo build -p ohfronts --bin ohfronts-host --release --target x86_64-apple-darwin
+          mkdir -p target/universal-apple-darwin/release
+          lipo -create target/aarch64-apple-darwin/release/ohfronts-host target/x86_64-apple-darwin/release/ohfronts-host -output target/universal-apple-darwin/release/ohfronts-host
+          lipo -info target/universal-apple-darwin/release/ohfronts-host
+          echo '{"t":"ping","id":1}' | arch -arm64 target/universal-apple-darwin/release/ohfronts-host | grep -q '"t":"pong"'
+          echo '{"t":"ping","id":1}' | arch -x86_64 target/universal-apple-darwin/release/ohfronts-host | grep -q '"t":"pong"' || echo "::warning::the x86_64 slice of the front engine could not be run here"
+
+      - name: Read the Godot checksums
+        id: godot
+        run: |
+          curl -fsSL "$GODOT_BASE/SHA512-SUMS.txt" -o "$RUNNER_TEMP/godot-sums.txt"
+          editor=$(awk '$2 == "Godot_v4.7.2-stable_macos.universal.zip" {print $1}' "$RUNNER_TEMP/godot-sums.txt")
+          templates=$(awk '$2 == "Godot_v4.7.2-stable_export_templates.tpz" {print $1}' "$RUNNER_TEMP/godot-sums.txt")
+          test ${#editor} -eq 128 && test ${#templates} -eq 128
+          echo "editor=$editor" >> "$GITHUB_OUTPUT"
+          echo "templates=$templates" >> "$GITHUB_OUTPUT"
+          echo "key=godot-4.7.2-${editor:0:16}-${templates:0:16}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Godot from the cache
+        id: godot-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/godot-cache
+          key: ${{ steps.godot.outputs.key }}
+
+      - name: Download Godot and its macOS template (sha512 checked)
+        if: steps.godot-cache.outputs.cache-hit != 'true'
+        env:
+          EDITOR_SHA: ${{ steps.godot.outputs.editor }}
+          TEMPLATES_SHA: ${{ steps.godot.outputs.templates }}
+        run: |
+          mkdir -p ~/godot-cache "$RUNNER_TEMP/godot-dl"
+          cd "$RUNNER_TEMP/godot-dl"
+          curl -fsSL --retry 3 "$GODOT_BASE/Godot_v4.7.2-stable_macos.universal.zip" -o editor.zip
+          echo "$EDITOR_SHA  editor.zip" | shasum -a 512 -c -
+          curl -fsSL --retry 3 "$GODOT_BASE/Godot_v4.7.2-stable_export_templates.tpz" -o templates.tpz
+          echo "$TEMPLATES_SHA  templates.tpz" | shasum -a 512 -c -
+          ditto -x -k editor.zip ~/godot-cache
+          unzip -q -j templates.tpz templates/macos.zip templates/version.txt -d ~/godot-cache
+          cat ~/godot-cache/version.txt
+          rm -rf "$RUNNER_TEMP/godot-dl"
+
+      - name: Save Godot to the cache
+        if: steps.godot-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/godot-cache
+          key: ${{ steps.godot.outputs.key }}
+
+      - name: Check the Godot tools
+        run: |
+          ls ~/godot-cache
+          echo "OH_GODOT_EDITOR=$HOME/godot-cache/Godot.app/Contents/MacOS/Godot" >> "$GITHUB_ENV"
+          echo "OH_GODOT_TEMPLATE=$HOME/godot-cache/macos.zip" >> "$GITHUB_ENV"
+          "$HOME/godot-cache/Godot.app/Contents/MacOS/Godot" --version
+
+      - name: Download node for both Macs (sha256 checked) and join them
+        run: |
+          mkdir -p "$RUNNER_TEMP/node" && cd "$RUNNER_TEMP/node"
+          curl -fsSL "https://nodejs.org/dist/v$NODE_VERSION/SHASUMS256.txt" -o SHASUMS256.txt
+          for arch in arm64 x64; do
+            name="node-v$NODE_VERSION-darwin-$arch.tar.gz"
+            curl -fsSL --retry 3 "https://nodejs.org/dist/v$NODE_VERSION/$name" -o "$name"
+            grep "  $name\$" SHASUMS256.txt | shasum -a 256 -c -
+            tar -xzf "$name"
+          done
+          lipo -create "node-v$NODE_VERSION-darwin-arm64/bin/node" "node-v$NODE_VERSION-darwin-x64/bin/node" -output node-universal
+          lipo -info node-universal
+          codesign --verify --verbose=2 node-universal
+          ./node-universal --version
+          echo "OH_NODE_BIN=$RUNNER_TEMP/node/node-universal" >> "$GITHUB_ENV"
+
+      - name: Install the server packages
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Fetch the Fantasy Map Generator (the pinned, prepared copy the desktop installers ship)
+        run: node scripts/fetch-fmg.mjs --required
+
+      - name: Install the sidecar packages with both darwin node-datachannel builds
+        working-directory: native/sidecar
+        run: |
+          npm ci --no-audit --no-fund
+          version=$(node -p 'require("./package-lock.json").packages["node_modules/@node-datachannel/darwin-x64"].version')
+          integrity=$(node -p 'require("./package-lock.json").packages["node_modules/@node-datachannel/darwin-x64"].integrity')
+          for arch in arm64 x64; do
+            target="node_modules/@node-datachannel/darwin-$arch"
+            if [ ! -f "$target/node_datachannel.node" ]; then
+              tarball=$(npm pack "@node-datachannel/darwin-$arch@$version" --pack-destination "$RUNNER_TEMP" --silent)
+              want=$(node -p "require('./package-lock.json').packages['node_modules/@node-datachannel/darwin-$arch'].integrity")
+              got="sha512-$(openssl dgst -sha512 -binary "$RUNNER_TEMP/$tarball" | base64)"
+              test "$got" = "$want" || { echo "integrity mismatch for darwin-$arch"; exit 1; }
+              mkdir -p "$target"
+              tar -xzf "$RUNNER_TEMP/$tarball" -C "$target" --strip-components=1
+            fi
+            file "$target/node_datachannel.node"
+          done
+          echo "lockfile darwin-x64 $version $integrity"
+
+      - name: Run the sidecar tests
+        id: tests
+        continue-on-error: true
+        run: |
+          mkdir -p "$RUNNER_TEMP/out"
+          for test in native/sidecar/test/*.test.mjs; do
+            echo "::group::$test"
+            node --test --test-reporter=spec "$test" 2>&1 | tee -a "$RUNNER_TEMP/sidecar-tests.log"
+            echo "::endgroup::"
+          done
+          grep -E "^ℹ (tests|pass|fail|skipped)|^✔|^✖|﹣" "$RUNNER_TEMP/sidecar-tests.log" | tail -60 || true
+
+      - name: Build, sign and package the app
+        run: node native/package-mac.mjs "$RUNNER_TEMP/out" --probe 2>&1 | tee "$RUNNER_TEMP/package.log"; test "${PIPESTATUS[0]}" = 0
+
+      - name: Inspect the bundle
+        run: |
+          app="$RUNNER_TEMP/out/Open Historia Native.app"
+          plutil -p "$app/Contents/Info.plist"
+          ls -la "$app/Contents/MacOS" "$app/Contents/Frameworks" "$app/Contents/Resources"
+          for bin in "$app/Contents/MacOS/Open Historia" "$app/Contents/Resources/app/runtime/node" "$app/Contents/Resources/app/runtime/liboh_gdext.dylib" "$app/Contents/Resources/app/native/sidecar/imagecodec/oh-imagecodec" "$app/Contents/Resources/app/native/sidecar/ohfronts/ohfronts-host" "$app/Contents/Helpers/Open Historia Notifier.app/Contents/MacOS/Open Historia Notifier"; do lipo -info "$bin"; done
+          fmg="$app/Contents/Resources/app/fmg/dist"
+          grep -q "open-historia: prepared copy" "$fmg/index.html"
+          test -f "$fmg/oh-native-bridge.html"
+          echo "map generator: $(find "$fmg" -type f | wc -l | tr -d ' ') files, $(du -sh "$fmg" | cut -f1), $(cat "$app/Contents/Resources/app/fmg/.version")"
+          codesign --display --verbose=2 "$app" 2>&1
+          codesign --verify --deep --strict --verbose=2 "$app"
+          du -sh "$app" "$RUNNER_TEMP/out/chunks" "$RUNNER_TEMP"/out/*.zip "$RUNNER_TEMP"/out/*.dmg
+
+      - name: Post a notification with the bundled notifier
+        run: |
+          app="$RUNNER_TEMP/out/Open Historia Native.app"
+          node native/macos/notifier-smoke.mjs "$app" "$RUNNER_TEMP/out/notifier-smoke.log"
+          codesign --verify --deep --strict --verbose=2 "$app"
+
+      - name: Read the AVIF samples with the shipped helper
+        run: |
+          mkdir -p "$RUNNER_TEMP/avif" && cd "$RUNNER_TEMP/avif"
+          curl -fsSL "$AVIF_SAMPLES/Link-U/kimono.avif" -o kimono.avif
+          curl -fsSL "$AVIF_SAMPLES/Link-U/kimono.rotate90.avif" -o kimono.rotate90.avif
+          curl -fsSL "$AVIF_SAMPLES/Microsoft/bbb_alpha_inverted.avif" -o bbb_alpha_inverted.avif
+          curl -fsSL "$AVIF_SAMPLES/Netflix/avis/alpha_video.avif" -o alpha_video.avif
+          shasum -a 256 -c - <<'SUMS'
+          c2da5892f6a72b509c702b1e42d89946708f1cbc60d9bd392edfebfb58612e9f  kimono.avif
+          e609c14b5915c0bcfd8f041e2bc6e5df755c8a83c9ad2f95ca0b576625d730e9  kimono.rotate90.avif
+          83d68084a93f043a89d10373f0ca26dafc988eec811b8076cabb2ff1580c1817  bbb_alpha_inverted.avif
+          493d6325d1981f7c98074266f91c5119599271396f6e9a0670c16904ead9113d  alpha_video.avif
+          SUMS
+          stage="$RUNNER_TEMP/out/Open Historia Native.app/Contents/Resources/app"
+          "$stage/runtime/node" "$GITHUB_WORKSPACE/native/macos/avif-smoke.mjs" "$stage" "$RUNNER_TEMP/avif" | tee "$RUNNER_TEMP/out/avif-smoke.log"
+
+      - name: Smoke-test the app headless (Apple Silicon)
+        run: |
+          node native/macos/smoke-mac.mjs "$RUNNER_TEMP/out/Open Historia Native.app" "$RUNNER_TEMP/out/probe/Open Historia.pck" "$RUNNER_TEMP/out/smoke-arm64-headless.log"
+
+      - name: Smoke-test the app headless (Intel slice under Rosetta)
+        continue-on-error: true
+        run: |
+          /usr/bin/pgrep -q oahd || softwareupdate --install-rosetta --agree-to-license
+          node native/macos/smoke-mac.mjs "$RUNNER_TEMP/out/Open Historia Native.app" "$RUNNER_TEMP/out/probe/Open Historia.pck" "$RUNNER_TEMP/out/smoke-x86_64-rosetta.log" --arch x86_64
+
+      - name: Smoke-test the app in a window
+        continue-on-error: true
+        run: |
+          node native/macos/smoke-mac.mjs "$RUNNER_TEMP/out/Open Historia Native.app" "$RUNNER_TEMP/out/probe/Open Historia.pck" "$RUNNER_TEMP/out/smoke-arm64-windowed.log" --windowed
+
+      - name: Give the runner's screen room for a 1440x900 window
+        id: screen
+        if: inputs.tours
+        continue-on-error: true
+        run: |
+          mkdir -p "$RUNNER_TEMP/tour"
+          brew install displayplacer >/dev/null 2>&1 || brew install jakehilborn/jakehilborn/displayplacer >/dev/null 2>&1 || true
+          displayplacer list | tee "$RUNNER_TEMP/tour/displayplacer-runner.txt"
+          node native/macos/display-setup.mjs physical 1920x1080 | tee "$RUNNER_TEMP/tour/display-setup-1x.txt"; test "${PIPESTATUS[0]}" = 0
+          system_profiler SPDisplaysDataType | tee "$RUNNER_TEMP/tour/displays-1x.txt"
+
+      - name: Tour the windowed app with real input (1440x900)
+        id: tour
+        if: inputs.tours
+        continue-on-error: true
+        run: node native/macos/tour.mjs "$RUNNER_TEMP/out/Open Historia Native.app" "$RUNNER_TEMP/out/tour/Open Historia.pck" "$RUNNER_TEMP/tour/1x"
+
+      - name: Add a virtual Retina display (1600x1000 points at 2x) and make it the main one
+        id: retina
+        if: inputs.tours
+        continue-on-error: true
+        run: |
+          clang -fobjc-arc -O2 -framework Foundation -framework CoreGraphics native/macos/hidpi-display.m -o "$RUNNER_TEMP/hidpi-display"
+          nohup "$RUNNER_TEMP/hidpi-display" 1600 1000 > "$RUNNER_TEMP/tour/hidpi-display.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/hidpi-display.pid"
+          sleep 5
+          cat "$RUNNER_TEMP/tour/hidpi-display.log"
+          displayplacer list | tee "$RUNNER_TEMP/tour/displayplacer-retina.txt"
+          node native/macos/display-setup.mjs retina 1600x1000 | tee "$RUNNER_TEMP/tour/display-setup-2x.txt"; test "${PIPESTATUS[0]}" = 0
+          system_profiler SPDisplaysDataType | tee "$RUNNER_TEMP/tour/displays-2x.txt"
+
+      - name: Tour again on the Retina display (or at an emulated 2x if no Retina display could be made)
+        id: tour2x
+        if: inputs.tours
+        continue-on-error: true
+        run: |
+          if [ "${{ steps.retina.outcome }}" = success ]; then
+            node native/macos/tour.mjs "$RUNNER_TEMP/out/Open Historia Native.app" "$RUNNER_TEMP/out/tour/Open Historia.pck" "$RUNNER_TEMP/tour/2x" --tag x2- --only menu,settings,history,game,gestures --skip notify,war --screens c-menu-games,c-hud,c-settings-general,c-ai-setup,g-2-shift-tilt
+          else
+            node native/macos/tour.mjs "$RUNNER_TEMP/out/Open Historia Native.app" "$RUNNER_TEMP/out/tour/Open Historia.pck" "$RUNNER_TEMP/tour/2x" --tag x2- --scale 2 --size 960x500 --only menu,settings,history,game --skip notify,war --screens c-menu-games,c-hud,c-settings-general
+          fi
+
+      - name: Remove the virtual display
+        if: always() && inputs.tours
+        continue-on-error: true
+        run: |
+          if [ -f "$RUNNER_TEMP/hidpi-display.pid" ]; then kill "$(cat "$RUNNER_TEMP/hidpi-display.pid")" 2>/dev/null || true; fi
+          sleep 2
+          displayplacer list 2>/dev/null | grep -E "^(Persistent screen id|Type|Resolution|Scaling):" || true
+
+      - name: Read the notifications usernoted delivered
+        if: always() && inputs.tours
+        continue-on-error: true
+        run: |
+          log show --last 90m --style compact --predicate 'subsystem == "com.apple.UserNotifications" OR process == "usernoted"' 2>/dev/null | grep -i "openhistoria" | grep -iE "Adding|Added|Delivering|Presenting|scheduled|Authorization|Requested" | tail -60 | tee "$RUNNER_TEMP/tour/usernotifications.txt"
+          grep -h "usernoted\|notifier smoke" "$RUNNER_TEMP/out/notifier-smoke.log" | tail -30 | tee "$RUNNER_TEMP/tour/notifier-smoke-usernoted.txt" || true
+
+      - name: First open of the published zip (quarantine, Gatekeeper, the documented step)
+        id: firstopen
+        if: inputs.tours
+        continue-on-error: true
+        timeout-minutes: 15
+        run: bash native/macos/first-open.sh "$RUNNER_TEMP/tour/first-open"
+
+      - name: The self-updater leaves no quarantine behind (the updater tests on a real .app)
+        id: updaterquarantine
+        if: inputs.tours
+        continue-on-error: true
+        run: |
+          node --test --test-reporter=spec --test-name-pattern "tools build|unquarantined" native/sidecar/test/update-mac.test.mjs 2>&1 | tee "$RUNNER_TEMP/tour/first-open/updater-quarantine.txt"; test "${PIPESTATUS[0]}" = 0
+          grep -E "^ℹ (tests|pass|fail|skipped)" "$RUNNER_TEMP/tour/first-open/updater-quarantine.txt"
+          ! grep -qE "^ℹ (pass 0|fail [1-9])" "$RUNNER_TEMP/tour/first-open/updater-quarantine.txt"
+
+      - name: Compose the contact sheets
+        if: always() && inputs.tours
+        continue-on-error: true
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv" && "$RUNNER_TEMP/venv/bin/pip" install --quiet pillow
+          for pass in 1x 2x; do
+            if [ -d "$RUNNER_TEMP/tour/$pass/shots" ]; then "$RUNNER_TEMP/venv/bin/python" native/macos/contact-sheet.py "$RUNNER_TEMP/tour/$pass/shots" "$RUNNER_TEMP/tour/contact-sheet-$pass.png" "macOS $(sw_vers -productVersion) $(uname -m) tour $pass"; fi
+          done
+          cat "$RUNNER_TEMP"/tour/*/tour-*summary.json 2>/dev/null || true
+
+      - name: Upload the tour
+        if: always() && inputs.tours
+        uses: actions/upload-artifact@v4
+        with:
+          name: Open-Historia-Native-macOS-tour
+          path: ${{ runner.temp }}/tour
+          retention-days: 7
+          if-no-files-found: warn
+
+      - name: Gather the smoke logs
+        if: always()
+        run: |
+          mkdir -p "$RUNNER_TEMP/logs"
+          cp "$RUNNER_TEMP"/out/*.log "$RUNNER_TEMP"/out/sidecar-smoke.json "$RUNNER_TEMP"/out/shell.txt "$RUNNER_TEMP/package.log" "$RUNNER_TEMP/sidecar-tests.log" "$RUNNER_TEMP/logs/" 2>/dev/null || true
+          grep -h "smoke summary\|avif smoke\|notifier smoke" "$RUNNER_TEMP"/logs/*.log 2>/dev/null | tee "$RUNNER_TEMP/logs/summary.txt" || true
+          ls -la "$RUNNER_TEMP"/out || true
+
+      - name: Stop here if the sidecar tests failed
+        if: steps.tests.outcome == 'failure'
+        run: |
+          echo "::error::the sidecar tests failed; see sidecar-tests.log in the smoke logs"
+          exit 1
+
+      - name: Upload the app
+        uses: actions/upload-artifact@v4
+        with:
+          name: Open-Historia-Native-macOS
+          path: |
+            ${{ runner.temp }}/out/Open-Historia-Native-macOS.zip
+            ${{ runner.temp }}/out/Open-Historia-Native-macOS.dmg
+            ${{ runner.temp }}/out/native-latest-mac.json
+          compression-level: 0
+          retention-days: 3
+          if-no-files-found: error
+
+      - name: Upload the update chunks
+        uses: actions/upload-artifact@v4
+        with:
+          name: Open-Historia-Native-macOS-chunks
+          path: ${{ runner.temp }}/out/chunks
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: Upload the probe pack
+        uses: actions/upload-artifact@v4
+        with:
+          name: Open-Historia-Native-macOS-probe
+          path: ${{ runner.temp }}/out/probe
+          retention-days: 3
+          if-no-files-found: error
+
+      - name: Upload the smoke logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Open-Historia-Native-macOS-smoke-logs
+          path: ${{ runner.temp }}/logs
+          retention-days: 7
+          if-no-files-found: warn
+
+      - name: Stop here if a desktop check failed
+        if: always() && inputs.tours
+        run: |
+          echo "tour 1x: ${{ steps.tour.outcome }}"
+          echo "tour 2x: ${{ steps.tour2x.outcome }}"
+          echo "first open: ${{ steps.firstopen.outcome }}"
+          echo "updater quarantine: ${{ steps.updaterquarantine.outcome }}"
+          test "${{ steps.tour.outcome }}" = success && test "${{ steps.tour2x.outcome }}" = success && test "${{ steps.firstopen.outcome }}" = success && test "${{ steps.updaterquarantine.outcome }}" = success
+
+  intel:
+    name: Smoke-test on an Intel Mac
+    needs: macos
+    if: inputs.tours
+    runs-on: macos-15-intel
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: native/macos
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: Open-Historia-Native-macOS
+          path: ${{ runner.temp }}/app
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: Open-Historia-Native-macOS-probe
+          path: ${{ runner.temp }}/probe
+
+      - name: Unpack the app
+        run: |
+          ditto -x -k "$RUNNER_TEMP/app/Open-Historia-Native-macOS.zip" "$RUNNER_TEMP/unpacked"
+          codesign --verify --deep --strict --verbose=2 "$RUNNER_TEMP/unpacked/Open Historia Native.app"
+
+      - name: Smoke-test the app headless (Intel)
+        run: |
+          mkdir -p "$RUNNER_TEMP/logs"
+          "$RUNNER_TEMP/unpacked/Open Historia Native.app/Contents/Resources/app/runtime/node" native/macos/smoke-mac.mjs "$RUNNER_TEMP/unpacked/Open Historia Native.app" "$RUNNER_TEMP/probe/Open Historia.pck" "$RUNNER_TEMP/logs/smoke-intel-headless.log"
+
+      - name: Upload the smoke log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Open-Historia-Native-macOS-smoke-intel
+          path: ${{ runner.temp }}/logs
+          retention-days: 7
+          if-no-files-found: warn
+
+  linux:
+    name: Build and smoke-test the Linux app
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install the build and display tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq meson ninja-build nasm cmake pkg-config zlib1g-dev xvfb xauth libgl1 libgl1-mesa-dri libglx-mesa0 libegl1 libxcursor1 libxinerama1 libxrandr2 libxi6 libxkbcommon0 libxkbcommon-x11-0 libxext6 libxrender1 libdbus-1-3 fontconfig fonts-dejavu-core libfontconfig1 libwebkit2gtk-4.1-dev patchelf openbox dunst libnotify-bin dbus-x11 x11-utils xdotool imagemagick desktop-file-utils xdg-utils python3-venv fonts-liberation fonts-noto-color-emoji >/dev/null
+          meson --version; ninja --version; nasm --version; cmake --version | head -1; ldd --version | head -1
+
+      - name: Install the Rust toolchain
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+          rustup show
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native/engine -> target
+          key: linux-x86_64
+          cache-on-failure: true
+
+      - name: Build the engine library
+        working-directory: native/engine
+        run: |
+          cargo build -p oh_gdext -p ohweb --release
+          cargo build -p ohfronts --bin ohfronts-host --release
+          file target/release/ohfronts-host
+          echo '{"t":"ping","id":1}' | target/release/ohfronts-host | grep -q '"t":"pong"'
+          file target/release/liboh_gdext.so target/release/libohweb.so
+          objdump -T target/release/liboh_gdext.so | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1
+          objdump -p target/release/liboh_gdext.so | grep NEEDED
+          objdump -p target/release/libohweb.so | grep NEEDED
+          if objdump -p target/release/liboh_gdext.so | grep NEEDED | grep -qiE 'webkit|gtk|soup'; then echo "::error::liboh_gdext.so must not link WebKitGTK; the web view lives in libohweb.so"; exit 1; fi
+          ls -la target/release/liboh_gdext.so target/release/libohweb.so
+
+      - name: Restore the AVIF reader's libraries from the cache
+        id: codec-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/imagecodec-build/prefix
+          key: imagecodec-${{ runner.os }}-22.04-${{ hashFiles('native/linux/build-imagecodec.sh') }}
+
+      - name: Build the AVIF reader (dav1d and libavif pinned by commit, linked in)
+        run: |
+          bash native/linux/build-imagecodec.sh "$HOME/imagecodec-build" "$RUNNER_TEMP/imagecodec/oh-imagecodec"
+          echo "OH_IMAGECODEC_BIN=$RUNNER_TEMP/imagecodec/oh-imagecodec" >> "$GITHUB_ENV"
+
+      - name: Save the AVIF reader's libraries to the cache
+        if: steps.codec-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/imagecodec-build/prefix
+          key: imagecodec-${{ runner.os }}-22.04-${{ hashFiles('native/linux/build-imagecodec.sh') }}
+
+      - name: Read the Godot checksums
+        id: godot
+        run: |
+          curl -fsSL "$GODOT_BASE/SHA512-SUMS.txt" -o "$RUNNER_TEMP/godot-sums.txt"
+          editor=$(awk '$2 == "Godot_v4.7.2-stable_linux.x86_64.zip" {print $1}' "$RUNNER_TEMP/godot-sums.txt")
+          templates=$(awk '$2 == "Godot_v4.7.2-stable_export_templates.tpz" {print $1}' "$RUNNER_TEMP/godot-sums.txt")
+          test ${#editor} -eq 128 && test ${#templates} -eq 128
+          echo "editor=$editor" >> "$GITHUB_OUTPUT"
+          echo "templates=$templates" >> "$GITHUB_OUTPUT"
+          echo "key=godot-linux-4.7.2-${editor:0:16}-${templates:0:16}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Godot from the cache
+        id: godot-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/godot-cache
+          key: ${{ steps.godot.outputs.key }}
+
+      - name: Download Godot and its Linux template (sha512 checked)
+        if: steps.godot-cache.outputs.cache-hit != 'true'
+        env:
+          EDITOR_SHA: ${{ steps.godot.outputs.editor }}
+          TEMPLATES_SHA: ${{ steps.godot.outputs.templates }}
+        run: |
+          mkdir -p ~/godot-cache "$RUNNER_TEMP/godot-dl"
+          cd "$RUNNER_TEMP/godot-dl"
+          curl -fsSL --retry 3 "$GODOT_BASE/Godot_v4.7.2-stable_linux.x86_64.zip" -o editor.zip
+          echo "$EDITOR_SHA  editor.zip" | sha512sum -c -
+          curl -fsSL --retry 3 "$GODOT_BASE/Godot_v4.7.2-stable_export_templates.tpz" -o templates.tpz
+          echo "$TEMPLATES_SHA  templates.tpz" | sha512sum -c -
+          unzip -q -o editor.zip -d ~/godot-cache
+          unzip -q -j templates.tpz templates/linux_release.x86_64 templates/version.txt -d ~/godot-cache
+          chmod +x ~/godot-cache/Godot_v4.7.2-stable_linux.x86_64 ~/godot-cache/linux_release.x86_64
+          cat ~/godot-cache/version.txt
+          rm -rf "$RUNNER_TEMP/godot-dl"
+
+      - name: Save Godot to the cache
+        if: steps.godot-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/godot-cache
+          key: ${{ steps.godot.outputs.key }}
+
+      - name: Check the Godot tools
+        run: |
+          ls -la ~/godot-cache
+          echo "OH_GODOT_EDITOR=$HOME/godot-cache/Godot_v4.7.2-stable_linux.x86_64" >> "$GITHUB_ENV"
+          echo "OH_GODOT_TEMPLATE=$HOME/godot-cache/linux_release.x86_64" >> "$GITHUB_ENV"
+          "$HOME/godot-cache/Godot_v4.7.2-stable_linux.x86_64" --headless --version
+
+      - name: Download node for Linux (sha256 checked)
+        run: |
+          mkdir -p "$RUNNER_TEMP/node" && cd "$RUNNER_TEMP/node"
+          name="node-v$NODE_VERSION-linux-x64.tar.xz"
+          curl -fsSL "https://nodejs.org/dist/v$NODE_VERSION/SHASUMS256.txt" -o SHASUMS256.txt
+          curl -fsSL --retry 3 "https://nodejs.org/dist/v$NODE_VERSION/$name" -o "$name"
+          grep "  $name\$" SHASUMS256.txt | sha256sum -c -
+          echo "$NODE_LINUX_SHA256  $name" | sha256sum -c -
+          tar -xJf "$name"
+          "./node-v$NODE_VERSION-linux-x64/bin/node" --version
+          echo "OH_NODE_BIN=$RUNNER_TEMP/node/node-v$NODE_VERSION-linux-x64/bin/node" >> "$GITHUB_ENV"
+
+      - name: Install the server packages and the map generator
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          node scripts/fetch-fmg.mjs --required
+
+      - name: Install the sidecar packages and check the linux-x64 node-datachannel build against the lockfile
+        working-directory: native/sidecar
+        run: |
+          npm ci --no-audit --no-fund
+          target="node_modules/@node-datachannel/linux-x64-gnu"
+          version=$(node -p 'require("./package-lock.json").packages["node_modules/@node-datachannel/linux-x64-gnu"].version')
+          want=$(node -p 'require("./package-lock.json").packages["node_modules/@node-datachannel/linux-x64-gnu"].integrity')
+          tarball=$(npm pack "@node-datachannel/linux-x64-gnu@$version" --pack-destination "$RUNNER_TEMP" --silent)
+          got="sha512-$(openssl dgst -sha512 -binary "$RUNNER_TEMP/$tarball" | base64 -w0)"
+          test "$got" = "$want" || { echo "integrity mismatch for linux-x64-gnu: $got"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/ndc" && tar -xzf "$RUNNER_TEMP/$tarball" -C "$RUNNER_TEMP/ndc" --strip-components=1
+          cmp "$RUNNER_TEMP/ndc/node_datachannel.node" "$target/node_datachannel.node"
+          file "$target/node_datachannel.node"
+          ls node_modules/@node-datachannel
+          echo "lockfile linux-x64-gnu $version $want"
+
+      - name: Run the sidecar tests
+        id: tests
+        continue-on-error: true
+        run: |
+          cp "$OH_IMAGECODEC_BIN" native/sidecar/imagecodec/oh-imagecodec
+          for test in native/sidecar/test/*.test.mjs; do
+            echo "::group::$test"
+            node --test --test-reporter=spec "$test" 2>&1 | tee -a "$RUNNER_TEMP/sidecar-tests.log"
+            echo "::endgroup::"
+          done
+          rm -f native/sidecar/imagecodec/oh-imagecodec
+          grep -E "^ℹ (tests|pass|fail|skipped)|^✔|^✖|﹣" "$RUNNER_TEMP/sidecar-tests.log" | tail -80 || true
+          ! grep -qE "^ℹ fail [1-9]" "$RUNNER_TEMP/sidecar-tests.log"
+
+      - name: Build and package the app
+        run: node native/package-linux.mjs "$RUNNER_TEMP/out" --probe 2>&1 | tee "$RUNNER_TEMP/package.log"; test "${PIPESTATUS[0]}" = 0
+
+      - name: Inspect the package
+        run: |
+          app="$RUNNER_TEMP/out/Open Historia Native"
+          ls -la "$app" "$app/runtime" "$app/native/sidecar/imagecodec"
+          for bin in "$app/runtime/Open Historia.x86_64" "$app/runtime/liboh_gdext.so" "$app/runtime/libohweb.so" "$app/runtime/node" "$app/native/sidecar/imagecodec/oh-imagecodec" "$app/native/sidecar/ohfronts/ohfronts-host" "$app/native/sidecar/node_modules/@node-datachannel/linux-x64-gnu/node_datachannel.node"; do
+            file "$bin"
+            echo "  needs $(objdump -T "$bin" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)"
+          done
+          head -3 "$app/open-historia-native"
+          cat "$app/open-historia-native.desktop"
+          cat "$app/native/godot/version.json"
+          du -sh "$app" "$RUNNER_TEMP/out/chunks" "$RUNNER_TEMP"/out/*.tar.gz "$RUNNER_TEMP/out/probe"
+          ls "$RUNNER_TEMP/out/chunks" | wc -l
+          cat "$RUNNER_TEMP/out/native-latest-linux.json"
+
+      - name: Unpack the archive as a player would and check the launcher
+        run: |
+          mkdir -p "$RUNNER_TEMP/unpacked" "$RUNNER_TEMP/launcher-home"
+          tar -xzf "$RUNNER_TEMP/out/Open-Historia-Native-Linux-x86_64.tar.gz" -C "$RUNNER_TEMP/unpacked"
+          app="$RUNNER_TEMP/unpacked/Open Historia Native"
+          test -x "$app/open-historia-native" && test -x "$app/runtime/Open Historia.x86_64" && test -x "$app/runtime/node" && test -x "$app/native/sidecar/imagecodec/oh-imagecodec" && test -x "$app/native/sidecar/ohfronts/ohfronts-host"
+          HOME="$RUNNER_TEMP/launcher-home" XDG_DATA_HOME="$RUNNER_TEMP/launcher-home/share" timeout 60 "$app/open-historia-native" --headless --version
+          cat "$RUNNER_TEMP/launcher-home/share/applications/io.github.arkniem.openhistoria.native.desktop"
+          grep -q "^Exec=\"$app/open-historia-native\"$" "$RUNNER_TEMP/launcher-home/share/applications/io.github.arkniem.openhistoria.native.desktop"
+          if command -v desktop-file-validate >/dev/null; then desktop-file-validate "$RUNNER_TEMP/launcher-home/share/applications/io.github.arkniem.openhistoria.native.desktop"; fi
+
+      - name: Read the AVIF samples with the shipped helper
+        run: |
+          mkdir -p "$RUNNER_TEMP/avif" && cd "$RUNNER_TEMP/avif"
+          curl -fsSL "$AVIF_SAMPLES/Link-U/kimono.avif" -o kimono.avif
+          curl -fsSL "$AVIF_SAMPLES/Link-U/kimono.rotate90.avif" -o kimono.rotate90.avif
+          curl -fsSL "$AVIF_SAMPLES/Microsoft/bbb_alpha_inverted.avif" -o bbb_alpha_inverted.avif
+          curl -fsSL "$AVIF_SAMPLES/Netflix/avis/alpha_video.avif" -o alpha_video.avif
+          sha256sum -c - <<'SUMS'
+          c2da5892f6a72b509c702b1e42d89946708f1cbc60d9bd392edfebfb58612e9f  kimono.avif
+          e609c14b5915c0bcfd8f041e2bc6e5df755c8a83c9ad2f95ca0b576625d730e9  kimono.rotate90.avif
+          83d68084a93f043a89d10373f0ca26dafc988eec811b8076cabb2ff1580c1817  bbb_alpha_inverted.avif
+          493d6325d1981f7c98074266f91c5119599271396f6e9a0670c16904ead9113d  alpha_video.avif
+          SUMS
+          stage="$RUNNER_TEMP/out/Open Historia Native"
+          "$stage/runtime/node" "$GITHUB_WORKSPACE/native/macos/avif-smoke.mjs" "$stage" "$RUNNER_TEMP/avif" | tee "$RUNNER_TEMP/out/avif-smoke.log"; test "${PIPESTATUS[0]}" = 0
+
+      - name: Smoke-test the app headless
+        run: |
+          node native/linux/smoke-linux.mjs "$RUNNER_TEMP/out/Open Historia Native" "$RUNNER_TEMP/out/probe/Open Historia.pck" "$RUNNER_TEMP/out/smoke-headless.log"
+
+      - name: Smoke-test the app in a window under Xvfb
+        run: |
+          LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a -s "-screen 0 1440x900x24" node native/linux/smoke-linux.mjs "$RUNNER_TEMP/out/Open Historia Native" "$RUNNER_TEMP/out/probe/Open Historia.pck" "$RUNNER_TEMP/out/smoke-windowed.log" --windowed
+
+      - name: Smoke-test the browser fallback when WebKitGTK is missing
+        run: |
+          mkdir -p "$RUNNER_TEMP/nowebkit"
+          cp "$RUNNER_TEMP/out/Open Historia Native/runtime/libohweb.so" "$RUNNER_TEMP/nowebkit/libohweb.so"
+          patchelf --replace-needed libwebkit2gtk-4.1.so.0 libwebkit2gtk-4.1-not-installed.so.0 "$RUNNER_TEMP/nowebkit/libohweb.so"
+          objdump -p "$RUNNER_TEMP/nowebkit/libohweb.so" | grep NEEDED | grep webkit
+          OH_PROBE_HOLD=2 OH_WEBPANEL_LIB="$RUNNER_TEMP/nowebkit/libohweb.so" LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a -s "-screen 0 1440x900x24" node native/linux/smoke-linux.mjs "$RUNNER_TEMP/out/Open Historia Native" "$RUNNER_TEMP/out/probe/Open Historia.pck" "$RUNNER_TEMP/out/smoke-no-webkit.log" --windowed --webpanel unavailable
+          grep "WEBPANEL" "$RUNNER_TEMP/out/smoke-no-webkit.log"
+
+      - name: Check the desktop entry the launcher writes, and its icon
+        id: desktop
+        continue-on-error: true
+        run: |
+          mkdir -p "$RUNNER_TEMP/tour"
+          entry="$RUNNER_TEMP/launcher-home/share/applications/io.github.arkniem.openhistoria.native.desktop"
+          {
+            echo "\$ desktop-file-validate $(basename "$entry")"
+            desktop-file-validate "$entry" 2>&1; echo "(exit $?)"
+            echo
+            cat "$entry"
+            echo
+            icon=$(sed -n 's/^Icon=//p' "$entry")
+            echo "Icon=$icon"
+            file "$icon"
+            identify "$icon" 2>/dev/null || true
+          } | tee "$RUNNER_TEMP/tour/desktop-entry.txt"
+          desktop-file-validate "$entry"
+          test -z "$(desktop-file-validate "$entry" 2>&1 | grep -i 'error')"
+          icon=$(sed -n 's/^Icon=//p' "$entry")
+          case "$icon" in /*) test -s "$icon" && file "$icon" | grep -q "PNG image data, 512 x 512" ;; *) XDG_DATA_HOME="$RUNNER_TEMP/launcher-home/share" python3 -c "import sys,gi; gi.require_version('Gtk','3.0'); from gi.repository import Gtk; i=Gtk.IconTheme.get_default().lookup_icon(sys.argv[1],512,0); print(i.get_filename()); sys.exit(0 if i else 1)" "$icon" ;; esac
+          grep -q "^StartupWMClass=Open Historia$" "$entry"
+
+      - name: Tour the windowed app with real input and a real notification (Xvfb, openbox, dunst, dbus-monitor)
+        id: tour
+        if: inputs.tours
+        continue-on-error: true
+        run: |
+          LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a -s "-screen 0 1600x1000x24" dbus-run-session -- bash native/linux/tour-session.sh "$RUNNER_TEMP/out/Open Historia Native" "$RUNNER_TEMP/out/tour/Open Historia.pck" "$RUNNER_TEMP/tour/1x"
+
+      - name: Tour again at 2x (Retina-style, emulated)
+        id: tour2x
+        if: inputs.tours
+        continue-on-error: true
+        run: |
+          LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a -s "-screen 0 3000x1900x24" dbus-run-session -- bash native/linux/tour-session.sh "$RUNNER_TEMP/out/Open Historia Native" "$RUNNER_TEMP/out/tour/Open Historia.pck" "$RUNNER_TEMP/tour/2x" --tag x2- --scale 2 --only menu,settings,history,game --skip notify,war,gestures --screens c-menu-games,c-hud,c-settings-general
+
+      - name: Compose the contact sheets
+        if: always() && inputs.tours
+        continue-on-error: true
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv" && "$RUNNER_TEMP/venv/bin/pip" install --quiet pillow
+          for pass in 1x 2x; do
+            if [ -d "$RUNNER_TEMP/tour/$pass/shots" ]; then "$RUNNER_TEMP/venv/bin/python" native/macos/contact-sheet.py "$RUNNER_TEMP/tour/$pass/shots" "$RUNNER_TEMP/tour/contact-sheet-$pass.png" "Ubuntu 22.04 Xvfb tour $pass"; fi
+          done
+          cat "$RUNNER_TEMP"/tour/*/tour-*summary.json "$RUNNER_TEMP"/tour/1x/notification-*evidence.txt 2>/dev/null || true
+
+      - name: Upload the tour
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Open-Historia-Native-Linux-tour
+          path: ${{ runner.temp }}/tour
+          retention-days: 7
+          if-no-files-found: warn
+
+      - name: Gather the logs
+        if: always()
+        run: |
+          mkdir -p "$RUNNER_TEMP/logs"
+          cp "$RUNNER_TEMP"/out/*.log "$RUNNER_TEMP"/out/sidecar-smoke.json "$RUNNER_TEMP/package.log" "$RUNNER_TEMP/sidecar-tests.log" "$RUNNER_TEMP/logs/" 2>/dev/null || true
+          grep -h "smoke summary\|avif smoke" "$RUNNER_TEMP"/logs/*.log 2>/dev/null | tee "$RUNNER_TEMP/logs/summary.txt" || true
+          ls -la "$RUNNER_TEMP"/out || true
+
+      - name: Stop here if the sidecar tests failed
+        if: steps.tests.outcome == 'failure'
+        run: |
+          echo "::error::the sidecar tests failed; see sidecar-tests.log in the logs"
+          exit 1
+
+      - name: Upload the app
+        uses: actions/upload-artifact@v4
+        with:
+          name: Open-Historia-Native-Linux
+          path: |
+            ${{ runner.temp }}/out/Open-Historia-Native-Linux-x86_64.tar.gz
+            ${{ runner.temp }}/out/native-latest-linux.json
+          compression-level: 0
+          retention-days: 3
+          if-no-files-found: error
+
+      - name: Upload the update chunks
+        uses: actions/upload-artifact@v4
+        with:
+          name: Open-Historia-Native-Linux-chunks
+          path: ${{ runner.temp }}/out/chunks
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: Upload the probe pack
+        uses: actions/upload-artifact@v4
+        with:
+          name: Open-Historia-Native-Linux-probe
+          path: ${{ runner.temp }}/out/probe
+          retention-days: 3
+          if-no-files-found: error
+
+      - name: Upload the logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Open-Historia-Native-Linux-logs
+          path: ${{ runner.temp }}/logs
+          retention-days: 7
+          if-no-files-found: warn
+
+      - name: Stop here if a desktop check failed
+        if: always()
+        run: |
+          echo "desktop entry: ${{ steps.desktop.outcome }}"
+          echo "tour 1x: ${{ steps.tour.outcome }}"
+          echo "tour 2x: ${{ steps.tour2x.outcome }}"
+          test "${{ steps.desktop.outcome }}" = success
+          if [ "${{ inputs.tours }}" = true ]; then test "${{ steps.tour.outcome }}" = success && test "${{ steps.tour2x.outcome }}" = success; fi
+
+  publish:
+    name: Publish to Open-Historia/open-historia
+    needs: [windows, macos, linux]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: native
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: Open-Historia-Native-Windows
+          path: ${{ runner.temp }}/windows
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: Open-Historia-Native-Windows-chunks
+          path: ${{ runner.temp }}/windows/chunks
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: Open-Historia-Native-macOS
+          path: ${{ runner.temp }}/macos
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: Open-Historia-Native-macOS-chunks
+          path: ${{ runner.temp }}/macos/chunks
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: Open-Historia-Native-Linux
+          path: ${{ runner.temp }}/linux
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: Open-Historia-Native-Linux-chunks
+          path: ${{ runner.temp }}/linux/chunks
+
+      - name: Publish the Windows, macOS and Linux apps (a dry run without the release token)
+        env:
+          RELEASE_TOKEN: ${{ secrets.OH_PUBLIC_RELEASE_TOKEN }}
+          LAB_TOKEN: ${{ github.token }}
+          WANTED: ${{ github.event_name == 'push' || inputs.publish }}
+        run: |
+          ls -la "$RUNNER_TEMP/windows" "$RUNNER_TEMP/macos" "$RUNNER_TEMP/linux"
+          mode=--dry-run
+          if [ -z "$RELEASE_TOKEN" ]; then
+            echo "::notice::OH_PUBLIC_RELEASE_TOKEN is not set in this repository; a dry run, nothing is published"
+            export GH_TOKEN="$LAB_TOKEN"
+          elif [ "$GITHUB_REF" != refs/heads/native/godot-app ]; then
+            echo "::notice::only native/godot-app publishes; a dry run for $GITHUB_REF"
+            export GH_TOKEN="$RELEASE_TOKEN"
+          elif [ "$WANTED" != true ]; then
+            echo "::notice::publishing was turned off for this run; a dry run"
+            export GH_TOKEN="$RELEASE_TOKEN"
+          else
+            export GH_TOKEN="$RELEASE_TOKEN"
+            mode=--publish
+          fi
+          echo "::group::Windows"
+          bash native/publish-release.sh "$RUNNER_TEMP/windows" "$mode"
+          echo "::endgroup::"
+          echo "::group::macOS"
+          bash native/publish-release.sh "$RUNNER_TEMP/macos" --mac "$mode"
+          echo "::endgroup::"
+          echo "::group::Linux"
+          bash native/publish-release.sh "$RUNNER_TEMP/linux" --linux "$mode"
+          echo "::endgroup::"
