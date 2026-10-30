@@ -87,10 +87,16 @@ fs.mkdirSync(path.join(stage, "native", "godot"), { recursive: true });
 fs.writeFileSync(path.join(stage, "native", "godot", "version.json"), `${JSON.stringify(stamp, null, 2)}\n`);
 
 const sidecar = path.join(here, "sidecar");
-for (const name of ["main.mjs", "shims.js", "standin.js", "serverWorker.mjs", "workers.js", "workerHost.mjs", "updateChunks.mjs", "dataPaths.mjs"]) copy(path.join(sidecar, name), path.join(stage, "native", "sidecar", name));
+for (const name of ["main.mjs", "shims.js", "standin.js", "serverWorker.mjs", "workers.js", "workerHost.mjs", "updateChunks.mjs", "dataPaths.mjs", "rustFronts.mjs"]) copy(path.join(sidecar, name), path.join(stage, "native", "sidecar", name));
 copy(path.join(sidecar, "dist"), path.join(stage, "native", "sidecar", "dist"), (file, isDir) => isDir || !file.endsWith(".map"));
 copy(path.join(sidecar, "handlers"), path.join(stage, "native", "sidecar", "handlers"), (file, isDir) => isDir || file.endsWith(".mjs") || file.endsWith(".cjs"));
 if (fs.existsSync(path.join(sidecar, "node_modules"))) copy(path.join(sidecar, "node_modules"), path.join(stage, "native", "sidecar", "node_modules"));
+run(process.execPath, [path.join(here, "webview2.mjs"), "build", "-p", "ohfronts", "--bin", "ohfronts-host", "--release"]);
+const frontsKit = await import(pathToFileURL(path.join(sidecar, "rustFronts.mjs")).href);
+const frontsHost = path.join(stage, "native", "sidecar", frontsKit.FRONTS_HOST_DIR, frontsKit.FRONTS_HOST);
+copy(path.join(here, "engine", "target", "release", frontsKit.FRONTS_HOST), frontsHost);
+if (!frontsKit.frontsHostAnswers(frontsHost)) throw new Error("The staged Rust front engine does not answer.");
+console.log(`staged ${frontsKit.FRONTS_HOST} ${(fs.statSync(frontsHost).size / 1048576).toFixed(1)} MB`);
 
 copy(path.join(repo, "server"), path.join(stage, "server"), (file, isDir) => {
   if (isDir) return path.basename(file) !== "data";
