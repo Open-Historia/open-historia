@@ -36,7 +36,7 @@ use super::walls::lines_changed;
 use super::world_grid::{build_world_grid, km_between, place_along, world_sheet_key, GridOptions, Surface, WorldGrid};
 use crate::frame::KM_PER_DEGREE;
 use crate::jsmath;
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 type Flow<T> = Result<T, RegionsNeeded>;
 
@@ -183,9 +183,10 @@ fn peace_of(owner: &str, others: Vec<String>) -> War {
 }
 
 fn arena_at(run: &mut Run, frame: &Frame) -> Option<Rc<Arena>> {
-    let map = run.input.get("map").clone();
-    let types = run.input.get("regionTypes").clone();
-    arena_for(&mut run.arenas, &map, frame, &types).map(|arena| Rc::new(arena.into_owned()))
+    let input = run.input.clone();
+    let map = input.get("map");
+    let types = input.get("regionTypes");
+    arena_for(&mut run.arenas, map, frame, types)
 }
 
 fn name_for(run: &Run, battle: &mut Battle) -> String {
@@ -269,8 +270,9 @@ fn owner_of_unit(unit: &Val) -> Val {
 }
 
 fn absorb_units(run: &mut Run, battle: &mut Battle, at: usize) {
-    let units = run.input.get("units").array_or_empty().to_vec();
-    for unit in &units {
+    let input = run.input.clone();
+    let units = input.get("units").array_or_empty();
+    for unit in units {
         let id = clean(unit.get("id"), 120);
         if id.is_empty() || !clean(unit.get("committedTo"), 120).is_empty() || run.taken.contains(&id) {
             continue;
@@ -449,7 +451,8 @@ fn land_where_troops_stand(run: &mut Run, war: &War, day: f64) -> Flow<()> {
     if standing.is_empty() {
         return Ok(());
     }
-    let map = run.input.get("map").clone();
+    let input = run.input.clone();
+    let map = input.get("map");
     let surface = surface_of(&map);
     let near = |a: &(String, f64, f64), b: &(String, f64, f64)| km_between(a.1, a.2, b.1, b.2, surface) <= STANDING_REACH_KM;
     let mut best = 0;
@@ -486,7 +489,8 @@ fn examine_war(run: &mut Run, id: &str, day: f64) -> Flow<()> {
         return Ok(());
     }
     let Some(regions) = land_regions_of(run) else { return Err(RegionsNeeded) };
-    let map = run.input.get("map").clone();
+    let input = run.input.clone();
+    let map = input.get("map");
     let contacts = find_contacts(&regions, |region| side_or_none(war_side_of(run, &war, region)), &map);
     for contact in contacts {
         if run.battles.iter().any(|battle| is_of_war(battle, &war.id) && battle.status != "closed" && point_in_frame(&battle.frame, contact.lng, contact.lat)) {
@@ -935,7 +939,8 @@ fn holder_side(run: &Run, id: &str, first: &str, second: &str) -> Option<usize> 
 
 fn lands_touch(run: &mut Run, first: &str, second: &str) -> Flow<bool> {
     let Some(regions) = land_regions_of(run) else { return Err(RegionsNeeded) };
-    let map = run.input.get("map").clone();
+    let input = run.input.clone();
+    let map = input.get("map");
     Ok(!find_contacts(&regions, |id| holder_side(run, id, first, second), &map).is_empty())
 }
 
@@ -1125,7 +1130,8 @@ fn open_landing_at(run: &mut Run, war: &War, side_name: &str, lng: f64, lat: f64
         return Ok(None);
     }
     let Some(regions) = regions else { return Err(RegionsNeeded) };
-    let map = run.input.get("map").clone();
+    let input = run.input.clone();
+    let map = input.get("map");
     let contact = contact_at(&regions, |id| side_or_none(war_side_of(run, war, id)), &map, lng, lat);
     let Some(frame) = contact.and_then(|contact| frame_for_contact(contact.bounds, &map)) else { return Ok(None) };
     let Some(arena) = arena_at(run, &frame) else { return Ok(None) };
@@ -1514,7 +1520,8 @@ fn apply_border_moment(run: &mut Run, moment: &Val, day: f64, first: &str, secon
             return Ok(());
         }
         let Some(regions) = land_regions_of(run) else { return Err(RegionsNeeded) };
-        let map = run.input.get("map").clone();
+        let input = run.input.clone();
+        let map = input.get("map");
         let contacts = find_contacts(&regions, |id| holder_side(run, id, first, second), &map);
         let mut opened = None;
         for contact in contacts {
@@ -2254,7 +2261,8 @@ fn invade_where_sent(run: &mut Run, at: usize, day: f64) -> Flow<()> {
 }
 
 fn world_grid_of(run: &mut Run) -> Flow<Option<String>> {
-    let map = run.input.get("map").clone();
+    let input = run.input.clone();
+    let map = input.get("map");
     let water = water_type_ids(run.input.get("regionTypes"));
     let map_key = clean(map.get("key"), 120);
     let key = world_sheet_key(&map_key, Some(&water));
@@ -2801,7 +2809,8 @@ fn must_have_regions(run: &Run) -> bool {
 }
 
 fn begin(run: &mut Run) -> Flow<()> {
-    let map = run.input.get("map").clone();
+    let input = run.input.clone();
+    let map = input.get("map");
     let list_key = format!("regions|{}", clean(map.get("key"), 120));
     if let Some(regions) = regions_of(run) {
         let ids: Vec<Val> = regions.iter().map(|region| clean(region.get("id"), 120)).filter(|id| !id.is_empty()).map(|id| text(&id)).collect();
@@ -2857,7 +2866,8 @@ fn begin(run: &mut Run) -> Flow<()> {
         assign_standing(run, at);
         mark_attacks(run, at);
     }
-    for unit in run.input.get("units").array_or_empty().to_vec() {
+    let input = run.input.clone();
+    for unit in input.get("units").array_or_empty().iter().cloned() {
         let committed = clean(unit.get("committedTo"), 120);
         let id = clean(unit.get("id"), 120);
         if committed.is_empty() || id.is_empty() {

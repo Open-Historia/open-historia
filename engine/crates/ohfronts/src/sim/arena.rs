@@ -4,7 +4,8 @@ use super::frame::{cell_index_at, frame_to_cell, lat_to_y, Frame, Projector};
 use super::js::{self, Val};
 use super::region_types::is_water_type;
 use crate::jsmath;
-use std::cell::OnceCell;
+use std::sync::OnceLock as OnceCell;
+use std::sync::Arc as Rc;
 use std::collections::HashMap;
 
 fn text(value: &Val) -> String {
@@ -569,16 +570,15 @@ pub fn options_of(map: &Val, region_types: &Val) -> ArenaOptions {
     }
 }
 
-pub fn arena_for<'a>(cache: &'a mut HashMap<String, Arena>, map: &Val, frame: &Frame, region_types: &Val) -> Option<std::borrow::Cow<'a, Arena>> {
+pub fn arena_for(cache: &mut HashMap<String, Rc<Arena>>, map: &Val, frame: &Frame, region_types: &Val) -> Option<Rc<Arena>> {
     let key = if text(map.get("key")).is_empty() { String::new() } else { cache_key(map, frame, region_types) };
-    if !key.is_empty() && cache.contains_key(&key) {
-        return cache.get(&key).map(std::borrow::Cow::Borrowed);
+    if let Some(known) = cache.get(&key).filter(|_| !key.is_empty()) {
+        return Some(known.clone());
     }
     let regions = map.get("regions").as_array()?;
-    let arena = rasterize_arena(frame, regions, &options_of(map, region_types));
-    if key.is_empty() {
-        return Some(std::borrow::Cow::Owned(arena));
+    let arena = Rc::new(rasterize_arena(frame, regions, &options_of(map, region_types)));
+    if !key.is_empty() {
+        cache.insert(key, arena.clone());
     }
-    cache.insert(key.clone(), arena);
-    cache.get(&key).map(std::borrow::Cow::Borrowed)
+    Some(arena)
 }

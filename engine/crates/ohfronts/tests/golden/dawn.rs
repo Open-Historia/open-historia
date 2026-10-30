@@ -12,7 +12,7 @@ use ohfronts::sim::engine::{Effort, Run};
 use ohfronts::sim::field::create_field;
 use ohfronts::sim::js::{Obj, OrdMap, Val};
 use ohfronts::sim::mechanics::read_mechanics;
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 fn masks_of(value: &Val) -> [Option<Vec<u8>>; 2] {
     [0, 1].map(|side| if value.at(side).is_object() { Some(bytes(value.at(side))) } else { None })

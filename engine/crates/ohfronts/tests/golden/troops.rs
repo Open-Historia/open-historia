@@ -7,7 +7,7 @@ use ohfronts::sim::js::{self, Obj, Val};
 use ohfronts::sim::line::Line;
 use ohfronts::sim::military::Mix;
 use ohfronts::sim::troops::*;
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 pub fn station_val(station: &Option<Station>) -> Val {
     match station {

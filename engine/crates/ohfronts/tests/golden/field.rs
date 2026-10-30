@@ -5,8 +5,8 @@ use ohfronts::sim::field::*;
 use ohfronts::sim::js::{Typed, Val};
 use ohfronts::sim::line::{draw_line, measure, Measured};
 use ohfronts::sim::sectors::*;
-use std::cell::OnceCell;
-use std::rc::Rc;
+use std::sync::OnceLock as OnceCell;
+use std::sync::Arc as Rc;
 
 const CONTOUR_KEYS: [&str; 9] = ["strands", "x", "y", "cellA", "cellB", "segments", "from", "to", "square"];
 

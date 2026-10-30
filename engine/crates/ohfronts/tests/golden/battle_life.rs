@@ -12,7 +12,7 @@ use ohfronts::sim::engine::{create_run, Hooks, ManEntry, Run, War};
 use ohfronts::sim::js::{Obj, OrdMap, Typed, Val};
 use ohfronts::sim::mechanics::read_mechanics;
 use ohfronts::sim::record::chronicle_record;
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 pub struct Called {
     calls: Vec<(String, Vec<(Vec<Val>, Val)>)>,

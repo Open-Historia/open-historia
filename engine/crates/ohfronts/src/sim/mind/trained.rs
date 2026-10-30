@@ -3,7 +3,7 @@ use crate::sim::battle::Battle;
 use crate::sim::engine::{Asked, Run, Said, StaffHook};
 use crate::sim::js::{self, Val};
 use crate::sim::war_settings::normalize_war_outcomes;
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 pub const COMMANDER_OF_DIFFICULTY: [(&str, &str); 6] = [("very-easy", "plainer"), ("easy", "plainer"), ("medium", "trained"), ("hard", "thorough"), ("very-hard", "thorough"), ("impossible", "thorough")];
 

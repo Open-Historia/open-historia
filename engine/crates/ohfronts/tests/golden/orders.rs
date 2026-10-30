@@ -8,7 +8,7 @@ use ohfronts::sim::field::Contour;
 use ohfronts::sim::js::{Obj, Val};
 use ohfronts::sim::orders::*;
 use ohfronts::sim::sectors::Sectors;
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 pub fn shallow(value: &Val) -> Val {
     match value {
@@ -124,7 +124,7 @@ pub fn order_run(value: &Val) -> Run {
     let mut input = Obj::new();
     input.set("players", value.get("input").get("players").clone());
     input.set("map", value.get("input").get("map").clone());
-    run.input = std::rc::Rc::new(Val::Obj(input));
+    run.input = std::sync::Arc::new(Val::Obj(input));
     run
 }
 

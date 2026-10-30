@@ -5,7 +5,7 @@ use super::game_dates::parse_game_date;
 use super::js::{self, Val};
 use super::weather::{climate_of, season_of, weather_draw, weather_on, world_odds, Day, Odds, WEATHER_STATES};
 use crate::jsmath;
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 const MONTH_START: [f64; 12] = [0.0, 31.0, 59.0, 90.0, 120.0, 151.0, 181.0, 212.0, 243.0, 273.0, 304.0, 334.0];
 const YEAR: f64 = 365.0;

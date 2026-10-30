@@ -8,7 +8,7 @@ use ohfronts::sim::field::create_field;
 use ohfronts::sim::js::{self, Obj, OrdMap, Typed, Val};
 use ohfronts::sim::troops::{create_troop, Troop, TroopSeed};
 use ohfronts::sim::weather::*;
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 pub fn odds_val(odds: &Odds) -> Val {
     let mut out = Obj::new();

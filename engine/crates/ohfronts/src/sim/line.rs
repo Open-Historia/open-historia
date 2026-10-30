@@ -1,7 +1,7 @@
 use super::codec::Strand;
 use super::constants::LINE_SIMPLIFY_CELLS;
 use super::field::{Contour, Field};
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Measured {

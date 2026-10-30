@@ -15,7 +15,7 @@ use crate::jsmath;
 use super::arena::Arena;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 use super::transports::Transport;
 use super::world_grid::WorldGrid;
 
@@ -197,7 +197,7 @@ pub struct Run {
     pub air_day: Cell<Option<f64>>,
     pub air_over: RefCell<Vec<(usize, [Vec<String>; 2])>>,
     pub wings: RefCell<Option<OrdMap<String, Wing>>>,
-    pub arenas: HashMap<String, Arena>,
+    pub arenas: HashMap<String, Rc<Arena>>,
     pub cache_on: bool,
     pub kept_flags: HashSet<String>,
     pub kept_lists: HashMap<String, Val>,
