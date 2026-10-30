@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { Worker as NodeWorker } from "node:worker_threads";
 import { fileURLToPath } from "node:url";
+import { frontsHostPath, rustFrontsMode } from "./rustFronts.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -11,7 +12,16 @@ export const WORKER_ENTRIES = Object.freeze({
   "politicalBackgroundWorker.js": "../../src/runtime/politicalBackgroundWorker.js",
   "frontWorker.js": "../../src/Game/AI/frontWorker.js",
   "rehearserWorker.js": "../../src/Game/AI/rehearserWorker.js",
+  "rustFrontWorker.js": "./rustFrontWorker.js",
 });
+
+export const frontsRoute = ({ env = process.env, distDir = path.join(here, "dist", "workers") } = {}) => {
+  const mode = rustFrontsMode(env);
+  if (!fs.existsSync(path.join(distDir, "rustFrontWorker.mjs"))) return null;
+  if (mode === "off") return env.OH_FRONTS_TIMING === "1" ? { mode: "js", host: "" } : null;
+  const host = frontsHostPath({ env });
+  return host ? { mode, host } : null;
+};
 
 const nameOf = (url) => {
   const text = url instanceof URL ? url.href : String(url ?? "");
@@ -31,13 +41,15 @@ export const installWorkerShim = ({ origin, distDir = path.join(here, "dist", "w
       this.onmessage = null;
       this.onerror = null;
       this.onmessageerror = null;
-      const name = nameOf(url);
+      const asked = nameOf(url);
+      const fronts = asked === "frontWorker.js" ? frontsRoute({ distDir }) : null;
+      const name = fronts ? "rustFrontWorker.js" : asked;
       const bundle = path.join(distDir, name.replace(/\.js$/, ".mjs"));
       if (!WORKER_ENTRIES[name] || !fs.existsSync(bundle)) {
         throw new Error(`The native engine has no build of the ${name} worker.`);
       }
       this.#worker = new NodeWorker(path.join(here, "workerHost.mjs"), {
-        workerData: { entry: bundle, origin, distDir },
+        workerData: { entry: bundle, origin, distDir, ...(fronts ? { fronts } : {}) },
         name: String(options?.name ?? name),
         stdout: true,
         stderr: true,
