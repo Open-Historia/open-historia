@@ -27,6 +27,7 @@ import {
   withoutPrehistoryUpdate,
 } from "../../runtime/scenarioPrehistory.js";
 import { generateScenarioPrehistory } from "../AI/gameplayLazy.js";
+import { formatGameDateReadable } from "../../runtime/gameDates.js";
 
 const buttonStyle = {
   alignItems: "center",
@@ -98,7 +99,7 @@ const ProblemLine = ({ problem, startDate }) => {
     ? "Give this event a title."
     : problem === "date"
       ? "Give this event a date as YYYY-MM-DD; a negative year is BC."
-      : `This event must come before the start date, ${startDate}.`;
+      : `This event must come before the start date, ${(formatGameDateReadable(startDate) || startDate)}.`;
   return <div style={{ color: "#fca5a5", fontSize: "0.68rem", lineHeight: 1.45 }}>{text}</div>;
 };
 
@@ -352,7 +353,7 @@ const PrehistoryPanel = ({ details, onDetailsChange }) => {
           <div style={{ ...sectionTitleStyle, marginBottom: 0 }}>{eventCount === 1 ? "1 event" : `${eventCount} events`}</div>
           <button className="oh-tap" disabled={eventCount >= MAX_PREHISTORY_EVENTS} onClick={addEvent} style={touchFit(buttonStyle, touch)} type="button">+ Add event</button>
         </div>
-        {startDate ? <div style={{ ...hintStyle, marginBottom: "0.55rem" }}>{`Every event is dated before the start date, ${startDate}, and they are kept oldest first.`}</div> : null}
+        {startDate ? <div style={{ ...hintStyle, marginBottom: "0.55rem" }}>{`Every event is dated before the start date, ${(formatGameDateReadable(startDate) || startDate)}, and they are kept oldest first.`}</div> : null}
         {!eventCount ? <div style={hintStyle}>No pre-history events yet.</div> : null}
         <div style={{ display: "grid", gap: "0.6rem" }}>
           {draft.events.map((event, index) => (

@@ -66,7 +66,20 @@ const simplifyChain = (ids, xs, ys, squared) => {
   return kept;
 };
 
-export const simplifyShared = (geometries, { tolerance, movable = null, toleranceAt = null }) => {
+// Reshapes the rings of `geometries` one chain at a time, where a chain is a run
+// of edges shared by the same rings, so a border two regions share is reshaped
+// once and both sides keep it. `changes(owners)` says whether a chain whose edges
+// belong to those geometries may change; `reshape(chain, xs, ys, { closed,
+// attempt })` answers the chain's new points as [x, y], its two ends left where
+// they are unless the chain is a whole ring (`closed`), or null to leave it as
+// it was. `validRing(points)`, when given, turns down a ring: its chains are
+// asked again with the next `attempt` (0 first), up to `attempts` times, and
+// then put back as they were. `moveJunction(x, y, dx, dy, length)`, when given,
+// may move a point where chains that change meet one chain that does not (a
+// coast meeting the border of two land regions): (dx, dy) is the way along that
+// chain, `length` its first edge; it answers the point's new [x, y], or null.
+// The point moves in every ring that has it, so the rings still meet.
+export const reshapeShared = (geometries, { changes, reshape, validRing = null, attempts = 1, moveJunction = null }) => {
   const byX = new Map();
   const xs = [];
   const ys = [];
@@ -120,12 +133,10 @@ export const simplifyShared = (geometries, { tolerance, movable = null, toleranc
     const list = users.get(rings[id].edges[edge]) || [id];
     return list.map((ring) => rings[ring].owner);
   };
-  const done = new Map();
-  const canMove = (owner) => !movable || movable[owner] === true;
-  const result = rings.map((ring, id) => {
+  const chainsOf = rings.map((ring, id) => {
     const { ids } = ring;
     const n = ids.length;
-    if (n < 3) return ids;
+    if (n < 3) return null;
     const nodes = [];
     for (let i = 0; i < n; i += 1) {
       if (others(id, (i - 1 + n) % n) !== others(id, i)) nodes.push(i);
@@ -139,7 +150,7 @@ export const simplifyShared = (geometries, { tolerance, movable = null, toleranc
       }
       nodes.push(least);
     }
-    const out = [];
+    const chains = [];
     for (let k = 0; k < nodes.length; k += 1) {
       const from = nodes[k];
       const to = nodes[(k + 1) % nodes.length];
@@ -149,38 +160,119 @@ export const simplifyShared = (geometries, { tolerance, movable = null, toleranc
         if (i === to && chain.length > 1) break;
         if (chain.length > n + 1) break;
       }
-      let simple = chain;
-      if (ownersOf(id, from).some(canMove)) {
-        const last = chain.length - 1;
-        const forward = `${chain[0]},${chain[1]},${chain[last]},${chain.length}`;
-        const backward = `${chain[last]},${chain[last - 1]},${chain[0]},${chain.length}`;
-        const cached = done.get(forward) ?? (done.has(backward) ? done.get(backward).slice().reverse() : null);
-        if (cached) simple = cached;
-        else {
-          const local = toleranceAt ? toleranceAt(ys[chain[0]]) : tolerance;
-          simple = simplifyChain(chain, xs, ys, local * local);
-          done.set(forward, simple);
+      const last = chain.length - 1;
+      chains.push({
+        chain,
+        movable: changes(ownersOf(id, from)),
+        closed: nodes.length === 1,
+        forward: `${chain[0]},${chain[1]},${chain[last]},${chain.length}`,
+        backward: `${chain[last]},${chain[last - 1]},${chain[0]},${chain.length}`,
+      });
+    }
+    return chains;
+  });
+  if (moveJunction) {
+    // Each end of a chain: whether a chain that changes ends there, and the
+    // chains that do not, each once (a chain two rings share is one).
+    const ends = new Map();
+    const note = (vertex, next, movable, key) => {
+      let end = ends.get(vertex);
+      if (!end) {
+        end = { movable: false, fixed: new Map() };
+        ends.set(vertex, end);
+      }
+      if (movable) end.movable = true;
+      else end.fixed.set(key, next);
+    };
+    for (const chains of chainsOf) {
+      for (const { chain, movable, closed, forward, backward } of chains || []) {
+        if (closed) continue;
+        const key = forward < backward ? forward : backward;
+        note(chain[0], chain[1], movable, key);
+        note(chain[chain.length - 1], chain[chain.length - 2], movable, key);
+      }
+    }
+    const moves = [];
+    for (const [vertex, { movable, fixed }] of ends) {
+      if (!movable || fixed.size !== 1) continue;
+      const [next] = fixed.values();
+      const length = Math.hypot(xs[next] - xs[vertex], ys[next] - ys[vertex]);
+      if (!length) continue;
+      const moved = moveJunction(xs[vertex], ys[vertex], (xs[next] - xs[vertex]) / length, (ys[next] - ys[vertex]) / length, length);
+      if (moved) moves.push([vertex, moved]);
+    }
+    for (const [vertex, [x, y]] of moves) {
+      xs[vertex] = x;
+      ys[vertex] = y;
+    }
+  }
+  const pointsOf = (chain) => chain.map((at) => [xs[at], ys[at]]);
+  const done = new Map();
+  // How many times a chain's reshape was turned down, by either direction's key.
+  const refusals = new Map();
+  const refusedOf = (forward, backward) => Math.max(refusals.get(forward) || 0, refusals.get(backward) || 0);
+  const walk = () => rings.map((ring, id) => {
+    const chains = chainsOf[id];
+    if (!chains) return { points: pointsOf(ring.ids), moved: false };
+    const out = [];
+    let moved = false;
+    for (const { chain, movable, closed, forward, backward } of chains) {
+      let points = null;
+      const attempt = refusedOf(forward, backward);
+      if (movable && attempt < attempts) {
+        const ahead = `${forward}#${attempt}`;
+        const behind = `${backward}#${attempt}`;
+        points = done.has(ahead) ? done.get(ahead) : done.has(behind) ? done.get(behind)?.slice().reverse() ?? null : undefined;
+        if (points === undefined) {
+          points = reshape(chain, xs, ys, { closed, attempt });
+          done.set(ahead, points);
         }
       }
-      for (let i = 0; i < simple.length - 1; i += 1) out.push([xs[simple[i]], ys[simple[i]]]);
+      if (points) moved = true;
+      else points = pointsOf(chain);
+      for (let i = 0; i < points.length - 1; i += 1) out.push(points[i]);
     }
-    return out;
+    return { points: out, moved };
   });
+  let result = walk();
+  for (let pass = 0; validRing && pass < attempts + 2; pass += 1) {
+    let refused = false;
+    result.forEach(({ points, moved }, id) => {
+      if (!moved || points.length < 3 || validRing(points)) return;
+      for (const { forward, backward, movable } of chainsOf[id]) {
+        if (!movable) continue;
+        const next = refusedOf(forward, backward) + 1;
+        refusals.set(forward, next);
+        refusals.set(backward, next);
+      }
+      refused = true;
+    });
+    if (!refused) break;
+    result = walk();
+  }
   return geometries.map((geometry, owner) => {
     if (!geometry || !shape[owner].length) return geometry;
     const polygons = [];
     for (const polygon of shape[owner]) {
-      const kept = [];
+      const rings = [];
       polygon.forEach((id, at) => {
-        const points = result[id];
-        if (points.length >= 3) kept.push([...points, points[0]]);
-        else if (at === 0) kept.length = 0;
+        const { points } = result[id];
+        if (points.length >= 3) rings.push([...points, points[0]]);
+        else if (at === 0) rings.length = 0;
       });
-      if (kept.length && result[polygon[0]].length >= 3) polygons.push(kept);
+      if (rings.length && result[polygon[0]].points.length >= 3) polygons.push(rings);
     }
     if (!polygons.length) return geometry;
     return geometry.getType() === "Polygon" && polygons.length === 1 ? new Polygon(polygons[0]) : new MultiPolygon(polygons);
   });
 };
+
+export const simplifyShared = (geometries, { tolerance, movable = null, toleranceAt = null }) => reshapeShared(geometries, {
+  changes: (owners) => owners.some((owner) => !movable || movable[owner] === true),
+  reshape: (chain, xs, ys) => {
+    const local = toleranceAt ? toleranceAt(ys[chain[0]]) : tolerance;
+    return simplifyChain(chain, xs, ys, local * local).map((at) => [xs[at], ys[at]]);
+  },
+});
 
 export const toleranceAtLatitude = (meters) => (y) => meters / Math.max(0.05, groundScale(y));

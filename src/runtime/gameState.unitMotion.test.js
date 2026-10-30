@@ -331,6 +331,36 @@ test("a patrol repositions each round but stays on station", () => {
   }
 });
 
+// The coast runs north-south at lng -30: the sea is west of it.
+const westIsSea = (lng) => lng < -30;
+const patrolling = (type) => ({
+  units: normalizeUnits([unit({ type, lng: -30, lat: 50 })]),
+  pendingUnitOrders: normalizePendingUnitOrders([
+    { id: "o1", unitId: "unit-1", kind: "patrol", toLng: -30, toLat: 50, radiusKm: 250 },
+  ]),
+});
+
+test("a fleet's patrol keeps to the sea and an army's to the land", () => {
+  for (let round = 1; round <= 12; round += 1) {
+    const fleet = advanceStandingOrders(patrolling("naval"), { fromDate: "2024-01-01", toDate: "2024-02-01", round, onWater: westIsSea });
+    assert.ok(westIsSea(fleet.units[0].lng), `round ${round}: the fleet stood ashore at ${fleet.units[0].lng}`);
+    const army = advanceStandingOrders(patrolling("infantry"), { fromDate: "2024-01-01", toDate: "2024-02-01", round, onWater: westIsSea });
+    assert.ok(!westIsSea(army.units[0].lng) || army.units[0].lng === -30, `round ${round}: the army stood in the sea at ${army.units[0].lng}`);
+  }
+});
+
+test("a patrol with no point of its ring on its ground stays on its station", () => {
+  const world = advanceStandingOrders(patrolling("naval"), { fromDate: "2024-01-01", toDate: "2024-02-01", round: 3, onWater: () => false });
+  assert.equal(world.units[0].lng, -30);
+  assert.equal(world.units[0].lat, 50);
+});
+
+test("an air patrol ignores the coast", () => {
+  const drawn = advanceStandingOrders(patrolling("air"), { fromDate: "2024-01-01", toDate: "2024-02-01", round: 3 });
+  const tested = advanceStandingOrders(patrolling("air"), { fromDate: "2024-01-01", toDate: "2024-02-01", round: 3, onWater: () => false });
+  assert.deepEqual(tested.units[0], { ...drawn.units[0], updatedAt: tested.units[0].updatedAt });
+});
+
 test("a patrol is reproducible for the same round and idle tick", () => {
   const world = {
     units: normalizeUnits([unit({ type: "naval", lng: -30, lat: 50 })]),

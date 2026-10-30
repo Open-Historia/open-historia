@@ -552,7 +552,11 @@ export const institutionLifecycleCasesForPolity = (world = {}, polityInput = "",
   return rows.sort((a, b) => compareGameDatesNewestFirst(clean(a.case.updatedDate || a.case.createdDate), clean(b.case.updatedDate || b.case.createdDate)));
 };
 
-export const institutionPortfolioForPolity = (world = {}, polityInput = "", { viewerPolity = "", includePrivate = false } = {}) => {
+export const institutionPortfolioForPolity = (worldInput = {}, polityInput = "", { viewerPolity = "", includePrivate = false } = {}) => {
+  // A screen asks before its world has arrived (useRuntimeState gives null
+  // then): no world, no institutions, rather than a crash that takes the
+  // Diplomacy panel's Intelligence tab down with it.
+  const world = worldInput ?? {};
   const polity = canonicalPolity(polityInput, world);
   const viewer = canonicalPolity(viewerPolity, world);
   if (!polity) return [];

@@ -109,6 +109,21 @@ export const createSeatBook = ({
       return true;
     },
 
+    // A person's people founded a country of their own (host/foundings.js): the
+    // seat follows them to it, with its player and where they are. The new
+    // country was not on the list when the game opened, and is from now on.
+    move(from, to) {
+      const seat = seats.get(String(from));
+      const key = String(to ?? "");
+      if (!seat || !key || seat.status === SEAT_STATUS.AI) return false;
+      const there = seats.get(key);
+      if (there && there.status !== SEAT_STATUS.AI) return false;
+      choosable.add(key);
+      seats.delete(seat.country);
+      seats.set(key, { ...seat, country: key, since: now() });
+      return true;
+    },
+
     start() {
       started = true;
     },

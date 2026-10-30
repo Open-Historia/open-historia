@@ -22,6 +22,7 @@ import { copyToClipboard } from "../../runtime/clipboard.js";
 import { isSameRegionSelection, regionControlStatus, useCardScreenPos } from "./mapCards.js";
 import { regionInfoFor } from "./regionInfo.js";
 import { getWorldPlaceIndex } from "../../runtime/placeSearch.js";
+import { resolveRegionName } from "../../runtime/regionNameFixes.js";
 
 let _setSelection = null;
 let _currentSelection = null;
@@ -92,6 +93,13 @@ const resolveLiveSelectionProps = async (props) => {
         }
     }
 
+    const resolvedName = resolveRegionName(
+        regionId,
+        props.NAME_1 ?? props.name ?? "",
+        world?.regionRenames,
+    );
+    const withName = resolvedName ? { ...props, NAME_1: resolvedName } : props;
+
     const overrides =
         world?.regionOwnershipOverrides &&
         typeof world.regionOwnershipOverrides === "object"
@@ -99,7 +107,7 @@ const resolveLiveSelectionProps = async (props) => {
             : {};
 
     if (!Object.prototype.hasOwnProperty.call(overrides, regionId)) {
-        return props;
+        return withName;
     }
 
     const rawController = cleanSelectionValue(overrides[regionId]);
@@ -119,7 +127,7 @@ const resolveLiveSelectionProps = async (props) => {
     );
 
     return {
-        ...props,
+        ...withName,
         // Current controller/owner is authoritative for every normal consumer.
         COUNTRY: resolvedController,
         GID_0: resolvedController,
@@ -362,6 +370,7 @@ const RegionPopup = () => {
         regionClaimants: {},
         regionOwnershipOverrides: {},
         regionSovereigntyOverrides: {},
+        regionRenames: {},
         groups: {},
         groupAreas: {},
     });
@@ -386,6 +395,7 @@ const RegionPopup = () => {
                 regionClaimants: withMapClaims(world, getPrimedScenarioRegionCatalog())?.regionClaimants ?? {},
                 regionOwnershipOverrides: world?.regionOwnershipOverrides ?? {},
                 regionSovereigntyOverrides: world?.regionSovereigntyOverrides ?? {},
+                regionRenames: world?.regionRenames ?? {},
                 ...groupsOf(world),
             });
         };
@@ -577,6 +587,11 @@ const RegionPopup = () => {
 
     const { COUNTRY, NAME_1 } = selection;
     const regionId = selection.GID_1 || "";
+    const displayRegionName = resolveRegionName(
+        regionId,
+        NAME_1,
+        territoryState.regionRenames || worldState?.regionRenames || getWorldStateSnapshot()?.regionRenames,
+    ) || NAME_1;
     const controllerCode = regionId
         ? territoryState.regionOwnershipOverrides?.[regionId] ?? selection.GID_0 ?? selection.owner ?? ""
         : selection.GID_0 ?? selection.owner ?? "";
@@ -785,10 +800,10 @@ const RegionPopup = () => {
 
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "6px", minHeight: "22px" }}>
         <span style={{ color: "rgba(255,255,255,0.65)", fontSize: "12px", minWidth: 0, wordBreak: "break-word" }}>
-        {NAME_1}
+        {displayRegionName}
         </span>
         <div style={{ display: "flex", gap: "4px", flexShrink: 0 }}>
-        <CopyNameBtn title="Copy region name" text={NAME_1} />
+        <CopyNameBtn title="Copy region name" text={displayRegionName} />
         <IconBtn title="Region info" expanded={showRegionInfo} onClick={() => setShowRegionInfo((open) => !open)}>{"\u24D8"}</IconBtn>
         </div>
         </div>

@@ -130,10 +130,14 @@ export const foldGeneratedChatsIntoStorage = (storageChats, builtChats, { stampT
       created.push({ ...built, messages: stamp(built.messages) });
       continue;
     }
+    // A shared game's thread is one person's (chat.player, blank for the
+    // host's): the same governments writing to another person is another thread.
     const key = chatParticipantKey(built.countries);
+    const owner = clean(built.player).toLowerCase();
     const existingIdx = key ? chats.findIndex((chat) =>
       chat.status !== "closed"
       && !isLifecycleNegotiationChat(chat)
+      && clean(chat.player).toLowerCase() === owner
       && chatParticipantKey(chat.countries) === key) : -1;
     if (existingIdx !== -1) {
       if (dropEchoes && built.messages.some((msg) =>
@@ -149,7 +153,9 @@ export const foldGeneratedChatsIntoStorage = (storageChats, builtChats, { stampT
       continue;
     }
     const createdIdx = key ? created.findIndex((chat) =>
-      !isLifecycleNegotiationChat(chat) && chatParticipantKey(chat.countries) === key) : -1;
+      !isLifecycleNegotiationChat(chat)
+      && clean(chat.player).toLowerCase() === owner
+      && chatParticipantKey(chat.countries) === key) : -1;
     if (createdIdx !== -1) {
       logGeneratedChat(built, "merged into another note from the same turn");
       created[createdIdx] = { ...created[createdIdx], messages: [...created[createdIdx].messages, ...stamp(built.messages)] };

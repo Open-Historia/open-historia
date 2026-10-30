@@ -6,9 +6,11 @@ import { cityPopulationOverridesByTileName } from "../../runtime/cityPopulation.
 // has it (cityPopulationExpr): a population the AI or the GM set decides
 // whether a city shows, as it decides its size and colour, so a town grown
 // into a city appears where cities do and an emptied city leaves.
-export const populationFilter = (pop) => [
+const STOCK_CAPITAL = ["==", ["get", "capital"], "primary"];
+
+export const populationFilter = (pop, capital = STOCK_CAPITAL) => [
     "any",
-    ["==", ["get", "capital"], "primary"],
+    capital,
     [
         ">",
         pop,
@@ -26,9 +28,9 @@ export const populationFilter = (pop) => [
 // City labels are intentionally stricter than markers. A regional map can carry
 // a useful constellation of settlements without asking the eye to read every
 // one of their names at once. Capitals always win; smaller labels arrive later.
-export const populationLabelFilter = (pop) => [
+export const populationLabelFilter = (pop, capital = STOCK_CAPITAL) => [
     "any",
-    ["==", ["get", "capital"], "primary"],
+    capital,
     [
         ">",
         pop,
@@ -42,6 +44,20 @@ export const populationLabelFilter = (pop) => [
         ],
     ],
 ];
+
+// Whether a city is a capital: `base` (the map's own capitals) or a city a
+// country's figures now name its capital (`names`, world.countryStats[...]
+// .capital in lower case, useWorldState.js capitalNames). A capital named by
+// its new name (world.cityRenames) is matched back to the name on the tile.
+export const capitalExpr = (names, renames = null, base = STOCK_CAPITAL) => {
+    const wanted = new Set((Array.isArray(names) ? names : []).map((name) => String(name ?? "").trim().toLowerCase()).filter(Boolean));
+    if (!wanted.size) return base;
+    for (const [from, to] of Object.entries(renames && typeof renames === "object" ? renames : {})) {
+        if (wanted.has(String(to ?? "").trim().toLowerCase())) wanted.add(String(from ?? "").trim().toLowerCase());
+    }
+    const tileName = ["downcase", ["coalesce", ["get", "city"], ["get", "name"], ""]];
+    return ["any", base, ["in", tileName, ["literal", [...wanted].sort()]]];
+};
 
 // A stock city's population: world.cityPopulations over the tile's own figure.
 // The tiles keep the original "city" name, so a figure set under a city's new

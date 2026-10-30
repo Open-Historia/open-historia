@@ -8,7 +8,7 @@ folder.
 **Chosen setup:** app on **Cloudflare Pages**, with the map data inside the site. The
 build downloads the six map files pinned in `scripts/map-assets.web.json` from the
 `map-data` GitHub Release, verifies each one, and lays them under `dist-web/assets/`.
-There is no content node to run and nothing to sign.
+There is nothing else to run and nothing to sign.
 
 Prerequisites: a free Cloudflare account and Node.js 22 LTS or newer (the client build
 runs on Vite 7; see the README).
@@ -28,16 +28,12 @@ from the **open-historia-admin** repo:
 ```bash
 cd registry
 npx wrangler d1 create oh-accounts         # paste the returned id into wrangler.toml
-npx wrangler d1 execute oh-accounts --remote --file schema.sql   # nodes, accounts, presence
-npx wrangler kv namespace create NODES     # still used for small hot keys; paste the id in
+npx wrangler d1 execute oh-accounts --remote --file schema.sql   # the Worker's tables
+npx wrangler kv namespace create NODES     # small hot keys; paste the id in
 npx wrangler secret put ADMIN_TOKEN        # a long random token
 npx wrangler deploy                        # note the URL, e.g.
                                            #   https://open-historia-registry.<you>.workers.dev
 ```
-
-> The node registry lives in **D1** (`nodes` table), not KV — KV's 1,000 writes/day free
-> tier could not absorb node heartbeats. `schema.sql` also creates the accounts and
-> presence tables.
 
 ## 2. Build the game for the web
 
@@ -75,18 +71,15 @@ Add a custom domain in the Cloudflare Pages dashboard if you want.
 
 ## 4. The map (nothing to run)
 
-The map is part of the site you deployed in step 3. No content node, node directory or
-signed manifest is involved, and the admin panel is not needed for it.
+The map is part of the site you deployed in step 3; the admin panel is not needed for it.
 
-The host must answer byte-range requests for static files, which Cloudflare Pages does.
-To host the site somewhere else, use a server that does too: nginx, Caddy, Apache,
-Netlify and GitHub Pages all do.
+The website reads each map archive once, whole, and keeps it in the browser, so any static
+host works: Cloudflare Pages answers a byte-range request on a large file with the whole
+file, and the game does not rely on ranges there.
 
 The site carries the map because a browser cannot fetch it from GitHub at run time:
 neither the release download nor the API route sends an `Access-Control-Allow-Origin`
-header on a release asset. The content-node software
-([Open-Historia/open-historia-node](https://github.com/Open-Historia/open-historia-node))
-still exists as a separate project, but the game no longer loads map data from it.
+header on a release asset.
 
 ## 5. Play
 

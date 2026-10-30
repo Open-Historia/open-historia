@@ -17,7 +17,14 @@ import {
   shouldRetryProviderFailure,
   toolStreamRefusalError,
   describeHtmlErrorPage,
+  isTemperatureRefusal,
 } from "./providerErrors.js";
+
+test("Anthropic's refusal of a temperature beside thinking is a temperature refusal", () => {
+  assert.equal(isTemperatureRefusal("`temperature` may only be set to 1 when thinking is enabled or in adaptive mode. Please consult our documentation at https://platform.claude.com/docs/en/build-with-claude/extended-thinking"), true);
+  assert.equal(isTemperatureRefusal('{"type":"error","error":{"type":"invalid_request_error","message":"`temperature` is deprecated for this model."}}'), true);
+  assert.equal(isTemperatureRefusal("max_tokens: 200000 > 128000, which is the maximum allowed"), false);
+});
 import {
     contextWindowMessage,
     isContextWindowErrorPayload,

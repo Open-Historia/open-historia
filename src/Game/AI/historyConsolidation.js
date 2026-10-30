@@ -194,6 +194,8 @@ export const applyHistoryDocumentUpdate = (worldLike, {
 // the events the skip itself writes are never part of it. The field is
 // HISTORY_FIELD (gameplaySchemas.js, beside the contract that declares it).
 const historyJobFence = (edge) => `########## ${edge} OF A SEPARATE JOB: THE HISTORY DOCUMENT ##########`;
+// The job's two fences, for what reads the assembled prompt (promptDedupe.js collapseRepeatsInsideJob).
+export const HISTORY_JOB_FENCES = Object.freeze({ begin: historyJobFence("BEGINNING"), end: historyJobFence("END") });
 
 // `brief`: the system prompt the consolidator's own request would have carried.
 export const buildSkipHistoryJob = (brief) => {

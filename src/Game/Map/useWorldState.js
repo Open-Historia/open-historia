@@ -160,6 +160,17 @@ export const withoutHeldDisputes = (claimants, state, owners) => {
   return next;
 };
 
+// The capitals countries name in their figures, lower case and one a line; a
+// dissolved country's no longer counts.
+export const capitalNamesOf = (state) => {
+  const stats = state?.countryStats && typeof state.countryStats === "object" ? state.countryStats : {};
+  const gone = (name) => String(state?.polityOverrides?.[name]?.status ?? "").toLowerCase() === "dissolved";
+  return [...new Set(Object.entries(stats)
+    .filter(([name]) => !gone(name))
+    .map(([, sheet]) => String(sheet?.capital ?? "").trim().toLowerCase())
+    .filter(Boolean))].sort().join("\n");
+};
+
 const deriveMapState = (state) => ({
   worldState: state,
   worldKnown: Boolean(state && Object.keys(state).length > 0),
@@ -210,6 +221,10 @@ const deriveMapState = (state) => ({
     : EMPTY_REGION_TYPES,
   cityRenames: state?.cityRenames ?? EMPTY_OBJECT,
   cityPopulations: state?.cityPopulations ?? EMPTY_OBJECT,
+  // The cities countries name their capitals now (world.countryStats), in
+  // lower case, for the city layers' stars (Cities.jsx). A string, so a
+  // republish that names the same ones is the same value.
+  capitalNames: capitalNamesOf(state),
   labelFont: state?.labelFont ?? "",
   labelHaloColor: state?.labelHaloColor ?? "",
   labelTextColor: state?.labelTextColor ?? "",
@@ -242,6 +257,7 @@ const sameMapState = (prev, next) =>
   prev.regionTypes === next.regionTypes &&
   prev.cityRenames === next.cityRenames &&
   prev.cityPopulations === next.cityPopulations &&
+  prev.capitalNames === next.capitalNames &&
   prev.groups === next.groups &&
   prev.groupAreas === next.groupAreas &&
   prev.polityOverrides === next.polityOverrides;

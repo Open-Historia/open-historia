@@ -83,8 +83,8 @@ test("single player's orders read exactly as they always have; a shared game's n
   assert.equal(buildActionHistoryText(owned), "- (action, France) Talks: Open talks with Spain\n- (action, Germany) Fleet: Send the fleet to Kiel");
   assert.equal(formatActionsForPrompt(owned), "- (France) Talks: Open talks with Spain\n- (Germany) Fleet: Send the fleet to Kiel");
   assert.equal(joinPolityNames(["France"]), "France");
-  assert.equal(joinPolityNames(["France", "Germany"]), "France and Germany");
-  assert.equal(joinPolityNames(["France", "Germany", "Italy"]), "France, Germany and Italy");
+  assert.equal(joinPolityNames(["France", "Germany"]), "France or Germany");
+  assert.equal(joinPolityNames(["France", "Germany", "Italy"]), "France, Germany or Italy");
 });
 
 test("the player's focus lists every person's orders under the polity that gave them", async () => {
@@ -104,4 +104,8 @@ test("the simulator is told who plays only when several people do", async () => 
   assert.match(directive, /^\[Shared Game/);
   assert.match(directive, /one each: France; Germany\./);
   assert.match(directive, /never make another player's polity choose/);
+  // A secret's outcome is marked for those who know of it, and the answer's events can carry that mark.
+  assert.match(directive, /lists in its audience the polities that know of it/);
+  const { JUMP_FORWARD_TOOL } = await import("./gameplaySchemas.js");
+  assert.equal(JUMP_FORWARD_TOOL.schema.properties.events.items.properties.audience.type, "array");
 });

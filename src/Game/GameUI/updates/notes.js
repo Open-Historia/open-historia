@@ -53,6 +53,50 @@ import { PAST_UPDATES } from "./notesPast.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    id: "2026-10-community-dates",
+    kind: "minor",
+    date: "2026-10-29",
+    banners: [
+      {
+        title: "Find scenarios by date",
+        items: [
+          "The Community tab's start and end date filters now find scenarios by the date they begin. Before, any date range showed nothing.",
+          "Set only a start or only an end to see everything after or before it; scenarios set before the common era count too.",
+        ],
+      },
+    ],
+  },
+  {
+    id: "2026-10-discord-invites",
+    kind: "minor",
+    date: "2026-10-29",
+    banners: [
+      {
+        title: "Invite friends from Discord",
+        items: [
+          "In a shared game, your Discord status shows the game as joinable: invite a friend from Discord and they get a popup in their game asking them to join.",
+          "When someone asks to join your shared game from your Discord profile, you get a popup to accept or decline.",
+          "In the desktop app, with Show what I am playing on Discord switched on.",
+        ],
+      },
+    ],
+  },
+  {
+    id: "2026-10-renamed-regions",
+    kind: "minor",
+    date: "2026-10-28",
+    channel: "beta",
+    banners: [
+      {
+        title: "Renamed regions and a tidier top bar",
+        items: [
+          "A region renamed by an event shows its new name on its place card and in each country's list of territory, for every player in a shared game.",
+          "On a computer, the menu button at the top left is now the same height as the game's name and the Exit Game button beside it.",
+        ],
+      },
+    ],
+  },
+  {
     id: "2026-10-fixes-from-reports",
     kind: "minor",
     date: "2026-10-28",
@@ -100,6 +144,30 @@ const NEW_UPDATES = [
         items: [
           "Foreign agents in your country now come from those with a reason to send them: your enemies and rivals, and powers with a real stake in your affairs.",
           "A country with no interest in you, or no spy service to speak of, no longer plants agents in your country.",
+        ],
+      },
+    ],
+  },
+  {
+    // The time skip was never shown the regions nobody rules, so an order to take the wild land next door could not
+    // be carried out; and a week's reason for a change to a country replaced that country's whole description
+    // (Discord spike, 2026-10-28). Then (2026-10-29): wild land one sea away counts as within reach by ship, a
+    // patrol keeps to its own ground (a fleet was drifting onto the coast), and in a shared game a player's letter
+    // carries the game date, a letter to an AI government waits while a week is played, and each player has an
+    // advisor of their own government who brings them its secrets.
+    id: "2026-10-unruled-land",
+    kind: "minor",
+    date: "2026-10-29",
+    banners: [
+      {
+        title: "Wild land and a confidant",
+        items: [
+          "On maps with land no country rules, the story now knows which of it lies beside each country, or across a strait or a bay from its coast, so an order to settle or take it can be carried out.",
+          "A country's description from the scenario now stays as written when the story changes something about it, instead of being replaced by a one-line note.",
+          "Fleets on patrol now stay at sea, and armies on patrol stay on land, instead of drifting onto the coast or into the water.",
+          "In shared games, each player has an advisor from their own government, who brings them in Diplomacy what it learns in secret.",
+          "In shared games, letters between players now show the game date.",
+          "In shared games, letters to countries the AI plays, and new goals, can't be sent while a week is being played: send them once its news is in. Letters between players still go through.",
         ],
       },
     ],
@@ -154,6 +222,62 @@ const NEW_UPDATES = [
     ],
   },
   {
+    // A shared game's players whose groups founded countries stayed seated on the groups, so the AI played the new
+    // countries' armies and wars and their secrets reached no one; every AI letter went to the host's seat; and a
+    // capital a country named was never starred on the map; and the time skip's prompt named every player's
+    // polity together as if one ("Northreach and Eastwatch is played by a human") (Discord spike, 2026-10-27).
+    id: "2026-10-founded-countries",
+    kind: "minor",
+    date: "2026-10-27",
+    banners: [
+      {
+        title: "Your country, your mail",
+        items: [
+          "In a shared game, when your people found a country of their own and hand it their land, you now play that new country from then on.",
+          "Its armies, its wars and what only its government knows are yours, along with your queued orders and conversations. Before, the AI took the new country over.",
+          "The new country's leader, government and goals are written from your story, as for any country the world founds.",
+          "In a shared game, each letter a government writes now reaches the player it was written to. Before, every letter went to the host.",
+          "A city a country makes its capital now gets the capital's gold star on the map.",
+          "In a shared game, the AI now treats each player's country as a country of its own, with its own aims, even when two players are at war. Before, it could read them as one.",
+        ],
+      },
+    ],
+  },
+  {
+    // A few panels showed a game date as stored (0354-02-19), and the time skip's troop orders with a mistyped year
+    // (2354 for 0354) were moved to the week's first day (Discord spike, 2026-10-27).
+    id: "2026-10-dates-and-orders",
+    kind: "minor",
+    date: "2026-10-27",
+    banners: [
+      {
+        title: "Dates as you read them",
+        items: [
+          "Dates in the institutions, projects, unit, place and country panels now read as 19 February 354, as the rest of the game writes them.",
+          "A troop order given for a day of the week is now carried out on that day, even when its year came out wrong in the order.",
+        ],
+      },
+    ],
+  },
+  {
+    // The Workshop's selection gained a Fit to background slider: the selected regions' coasts are pulled onto
+    // the shore the background picture, reference image or basemap shows (2026-10-27).
+    id: "2026-10-fit-to-background",
+    kind: "minor",
+    date: "2026-10-27",
+    banners: [
+      {
+        title: "Coasts that follow the map",
+        items: [
+          "In the map editor, select regions and slide Fit to background: their coasts move onto the shoreline your background picture shows.",
+          "It works on your own map picture and the reference image you trace, and on the built-in basemaps where your regions already cover the land.",
+          "The further you slide, the further a coast may move to find the shore. Slide back to Off to put it back, or undo it like any edit.",
+          "Only coasts move: a border between two land regions keeps its line, and only its end slides onto the shore, so neighbours still meet.",
+        ],
+      },
+    ],
+  },
+  {
     id: "2026-10-peace-and-weariness",
     kind: "minor",
     date: "2026-10-26",
@@ -165,6 +289,53 @@ const NEW_UPDATES = [
           "Calls to arms in a war that has ended lapse, so leaving one unanswered no longer costs you reputation.",
           "Peace terms show your own country's war weariness beside your enemy's, with a word for how weary each is.",
           "Listening in on a region now opens on its country's feed first.",
+        ],
+      },
+    ],
+  },
+  {
+    // Claude Opus 5.5 and Sonnet 5.5 refused forced tool choice and temperature (test sessions, 2026-10-26).
+    id: "2026-10-newer-claude",
+    kind: "minor",
+    date: "2026-10-26",
+    banners: [
+      {
+        title: "Newer Claude models",
+        items: [
+          "Claude Opus 5.5 and Sonnet 5.5 now answer every task: time skips and country sheets no longer fail when they turn down settings older models took.",
+        ],
+      },
+    ],
+  },
+  {
+    // Every time skip event was shown to every player of a shared game, so a covert order's outcome reached its
+    // targets and rivals (Discord spike, 2026-10-26).
+    id: "2026-10-shared-secrets",
+    kind: "minor",
+    date: "2026-10-26",
+    banners: [
+      {
+        title: "Secrets stay secret in shared games",
+        items: [
+          "When several people play, what your government does in secret is now told to you alone: the other players no longer read the outcome of your covert orders.",
+          "Anyone in on the secret, or who uncovers it, is told too.",
+          "What others could see happen, such as ships sailing or a minister dismissed, can still reach them as news of its own.",
+        ],
+      },
+    ],
+  },
+  {
+    // A scenario whose oceans are regions of their own put a new fleet past the map's bottom edge: the placer took
+    // the sea for "where no region is" (Discord spike, fantasy scenario, 2026-10-26).
+    id: "2026-10-fleets-at-sea",
+    kind: "minor",
+    date: "2026-10-26",
+    banners: [
+      {
+        title: "Fleets set sail on the right water",
+        items: [
+          "On maps where the seas are drawn as regions of their own, a new or moved fleet could be put past the edge of the map, where no one could see it.",
+          "Fleets now go to the water off their coast, inside the map, and sea regions count as sea when the game places ships and armies.",
         ],
       },
     ],

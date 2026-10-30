@@ -144,6 +144,9 @@ export const WORLD_DEFAULTS = {
   // lowercased original city name -> new display name. world.markers cities are
   // renamed in place by applyMarkerOps; this is the override layer for the rest.
   cityRenames: {},
+  // AI renames of map regions/provinces (stock regions live in PMTiles level 1):
+  // lowercased original region name or GADM id -> new display name.
+  regionRenames: {},
   // AI changes to a city's POPULATION, same override shape as cityRenames and for
   // the same reason: stock cities live in PMTiles and cannot be edited in place.
   // Lowercased original city name -> number. Applies to authored cities too, so a
@@ -3209,13 +3212,35 @@ export const applyUnitOpBatch = (units, orders, ops, context = {}) => {
   return { units: survivors, orders: pruneSatisfiedUnitOrders(survivors, nextOrders) };
 };
 
+// A patrol's next point, on the ground its unit works: a fleet's at sea, a land
+// formation's ashore. A fleet patrolling 250 km round a station off a coast was
+// put down on land a week later (a fantasy scenario's Discord game,
+// 2026-10-28): the ring took no notice of the map. Up to eight points of the
+// ring are tried; when none is on its ground the unit stays on its station,
+// which was placed on it. An air unit flies over both; without `onWater` the
+// ring is used as drawn. The tries go round the ring an eighth at a time.
+const PATROL_TRIES = 8;
+const patrolPointOnItsGround = (unit, order, seed, onWater) => {
+  const station = { lng: order.toLng, lat: order.toLat };
+  const radius = order.radiusKm || DEFAULT_PATROL_RADIUS_KM[unit.type] || 0;
+  const wantsWater = unit.type === "naval" ? true : unit.type === "air" ? null : false;
+  if (typeof onWater !== "function" || wantsWater === null) return patrolPoint(station, radius, seed);
+  for (let attempt = 0; attempt < PATROL_TRIES; attempt += 1) {
+    const point = patrolPoint(station, radius, seed, { turn: attempt });
+    if (onWater(point.lng, point.lat) === wantsWater) return point;
+  }
+  return patrolPoint(station, 0, seed);
+};
+
 // Advance every standing order by the time that has passed. This is what makes
 // units move realistically turn after turn without a single token being spent:
 // a move order steps toward its destination at the unit's own pace, and a patrol
 // order repositions deterministically around its station.
+//   onWater(lng, lat)  whether a point is at sea (gameplay.js waterTestFor), so a
+//                      patrol keeps to its own ground; without it, as drawn
 export const advanceStandingOrders = (
   world,
-  { fromDate, toDate, round = 0, tick = 0, skipUnitIds = [], movedAt = null } = {},
+  { fromDate, toDate, round = 0, tick = 0, skipUnitIds = [], movedAt = null, onWater = null } = {},
 ) => {
   const units = normalizeUnits(world?.units);
   const orders = normalizePendingUnitOrders(world?.pendingUnitOrders);
@@ -3255,11 +3280,7 @@ export const advanceStandingOrders = (
     if (lastMoved.has(unit.id) && unitElapsed <= 0) return unit;
 
     if (order.kind === "patrol") {
-      const point = patrolPoint(
-        { lng: order.toLng, lat: order.toLat },
-        order.radiusKm || DEFAULT_PATROL_RADIUS_KM[unit.type] || 0,
-        `${unit.id}|${round}|${tick}`,
-      );
+      const point = patrolPointOnItsGround(unit, order, `${unit.id}|${round}|${tick}`, onWater);
       return { ...unit, lng: point.lng, lat: point.lat, posture: "patrol", updatedAt: stamp };
     }
 
@@ -3523,10 +3544,13 @@ const normalizeCreatedChat = (entry, index) => {
   if (!chat) return null;
   const openingMessage = normalizeOptionalString(entry?.openingMessage);
   const speaker = normalizeOptionalString(entry?.speaker);
+  // A shared game's letter names the person it is written to (AI/sharedLetters.js).
+  const to = normalizeOptionalString(entry?.to);
   return {
     ...chat,
     ...(openingMessage ? { openingMessage } : {}),
     ...(speaker ? { speaker } : {}),
+    ...(to ? { to } : {}),
   };
 };
 
@@ -4540,6 +4564,11 @@ export const normalizeWorldState = (world) => {
     } : {}),
     cityRenames: Object.fromEntries(
       Object.entries(nextWorld.cityRenames && typeof nextWorld.cityRenames === "object" ? nextWorld.cityRenames : {})
+        .map(([key, value]) => [normalizeString(key).toLowerCase(), normalizeString(value)])
+        .filter(([key, value]) => key && value),
+    ),
+    regionRenames: Object.fromEntries(
+      Object.entries(nextWorld.regionRenames && typeof nextWorld.regionRenames === "object" ? nextWorld.regionRenames : {})
         .map(([key, value]) => [normalizeString(key).toLowerCase(), normalizeString(value)])
         .filter(([key, value]) => key && value),
     ),
@@ -5641,7 +5670,11 @@ const applyPolityAndTerritoryImpacts = ({
       ...(aliases.length > 0 || change.aliases?.length > 0 ? { aliases } : {}),
       ...(change.color ? { color: change.color } : {}),
       name: code,
-      ...(change.note ? { note: change.note } : {}),
+      // A change's note is its REASON (polityChangeSchema: "Brief reason."). It
+      // is the description of a polity that has none yet, a new breakaway, and
+      // never replaces one it has: a week's "Provision sent to the Order" wiped
+      // a scenario's whole description of Brightdale.
+      ...(change.note && !normalizeOptionalString(current.note) ? { note: change.note } : {}),
     };
 
     if (change.color) {
@@ -6002,16 +6035,23 @@ export const applyEventImpactsToWorld = ({
         eventId: event.id,
         gameDate: event.date || "",
       });
-      // A rename that matched no existing structure is a STOCK-map city rename (stock
-      // cities live in PMTiles, not world.markers) — record it as an override layer so
-      // the label layer can show the new name (see Cities.jsx / cityRenames).
+      // A rename that matched no existing structure is a STOCK-map city or region rename (stock
+      // cities and regions live in PMTiles, not world.markers) — record it as an override layer so
+      // the label layer and region inspector show the new name (see Cities.jsx and regionNameFixes.js).
       for (const raw of normalizeArray(event.impacts.markerOps)) {
         const op = normalizeMarkerOp(raw);
         if (!op || !op.name) continue;
         const matched = before.some((m) =>
           op.markerId ? m.id === op.markerId : m.name.toLowerCase() === op.name.toLowerCase());
         if (op.op === "rename" && !matched) {
-          nextWorld.cityRenames = { ...(nextWorld.cityRenames || {}), [op.name.toLowerCase()]: op.newName };
+          const rawName = String(op.name).trim();
+          const isRegion = /^region:\s*/i.test(rawName);
+          const cleanName = rawName.replace(/^region:\s*/i, "").trim().toLowerCase();
+          if (isRegion) {
+            nextWorld.regionRenames = { ...(nextWorld.regionRenames || {}), [cleanName]: op.newName };
+          } else {
+            nextWorld.cityRenames = { ...(nextWorld.cityRenames || {}), [cleanName]: op.newName };
+          }
         }
         // Population is recorded in the override for EVERY city, matched or not.
         // A built marker keeps its own population field, but the map reads the

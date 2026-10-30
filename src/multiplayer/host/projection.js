@@ -33,13 +33,17 @@
 //   seat; other seats get none of them.
 // - The AI's suggested orders are each device's own, asked with that player's
 //   own key and kept on that device (client/seatWrites.js): no view carries any.
+//   The advice the week itself brings each player (world.seatAdvice) is theirs
+//   alone, and so is their advisor's thread of secrets (advisorDesk.js).
 
+import { advisorThreadFor } from "./advisorDesk.js";
 import { normalizeWorldState } from "../../runtime/gameState.js";
 import { normalizeReports } from "../../runtime/reports.js";
 import { visiblePuppetsFor } from "../../runtime/puppets.js";
 import { buildPublicPoliticalView } from "../../runtime/politicalKnowledge.js";
 import { battlefieldsForViewer } from "../../runtime/fronts/view.js";
 import { polityMatches, spyAsSeenBy, viewerAudience } from "../../Game/AI/audience.js";
+import { formerNamesOf } from "./foundings.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const fold = (value) => clean(value).toLocaleLowerCase();
@@ -58,7 +62,7 @@ export const PUBLIC_WORLD_KEYS = Object.freeze([
   "groupAreas", "groups", "internationalReputation", "labelFont", "labelHaloColor",
   "labelTextColor", "language", "lastJumpMode", "lastJumpTargetDate", "mapCredit", "markers",
   "ownBasemaps", "ownerCodes", "ownerSchema", "polityOverrides", "powerStatus", "regionClaimants",
-  "regionOwnershipOverrides", "regionSovereigntyOverrides", "settledRegionClaims",
+  "regionOwnershipOverrides", "regionRenames", "regionSovereigntyOverrides", "settledRegionClaims",
   "simulationRules", "startingTimelineText", "unitSystem", "wars", "agreements",
   // Transporters are seen as fleets are: what crosses the sea is not hidden.
   "transports",
@@ -202,10 +206,12 @@ const FILTERED_WORLD_KEYS = Object.freeze({
 
   // Documents: the public ones, the ones on the viewer's distribution list, and
   // the ones it stole. Who else stole a copy is never said.
-  reports: (world, viewer) => normalizeReports(world.reports)
+  // A seat that founded a country of its own still holds what its government
+  // held before (`readers`, foundings.js formerNamesOf).
+  reports: (world, viewer, { readers = [viewer] } = {}) => normalizeReports(world.reports)
     .filter((report) => report.visibleTo === null
-      || list(report.visibleTo).some((entry) => same(entry, viewer))
-      || list(report.interceptedBy).some((entry) => same(entry, viewer)))
+      || list(report.visibleTo).some((entry) => readers.some((name) => same(entry, name)))
+      || list(report.interceptedBy).some((entry) => readers.some((name) => same(entry, name))))
     .map((report) => {
       const { interceptedBy, receivedFrom, ...rest } = report;
       const stolen = list(interceptedBy).some((entry) => same(entry, viewer));
@@ -232,6 +238,9 @@ const FILTERED_WORLD_KEYS = Object.freeze({
       ? rating
       : Math.max(0, Math.min(100, Math.round(Number(rating) / 10) * 10))])),
   playerGoals: (world, viewer) => Object.fromEntries(Object.entries(isRecord(world.playerGoals) ? world.playerGoals : {})
+    .filter(([country]) => same(country, viewer))),
+  // A player's advisor and the orders they suggest (AI/seatAdvice.js): theirs alone.
+  seatAdvice: (world, viewer) => Object.fromEntries(Object.entries(isRecord(world.seatAdvice) ? world.seatAdvice : {})
     .filter(([country]) => same(country, viewer))),
 
   // Its own government in full; every other only as the public sees it.
@@ -264,11 +273,11 @@ export const FILTERED_WORLD_KEY_NAMES = Object.freeze([...Object.keys(FILTERED_W
 
 // `hiddenEventIds`: the events this viewer is not shown (eventsHiddenFrom), so
 // a turn's record does not count them either.
-export const projectWorld = (world, viewer, { host = "", hiddenEventIds = new Set() } = {}) => {
+export const projectWorld = (world, viewer, { host = "", hiddenEventIds = new Set(), readers = [viewer] } = {}) => {
   const full = normalizeWorldState(world);
   const out = {};
   for (const key of PUBLIC_WORLD_KEYS) if (full[key] !== undefined) out[key] = full[key];
-  for (const [key, filter] of Object.entries(FILTERED_WORLD_KEYS)) out[key] = filter(full, viewer, { host, hiddenEventIds });
+  for (const [key, filter] of Object.entries(FILTERED_WORLD_KEYS)) out[key] = filter(full, viewer, { host, hiddenEventIds, readers });
   if (same(host, viewer)) for (const key of HOST_SEAT_WORLD_KEYS) if (full[key] !== undefined) out[key] = full[key];
   return copy(out);
 };
@@ -292,9 +301,12 @@ const mentions = (event, viewer) => {
 // runtime/spycraft.js resolveEspionage when several people play): its own
 // counter-intelligence catching an agent, its own doubts about one of its
 // agents. Nobody else is shown the event at all.
+// `viewer` may be a list: a seat and the names its government had before it
+// founded a country of its own (foundings.js formerNamesOf).
 const readableBy = (event, viewer) => {
   const audience = list(event?.audience).map(clean).filter(Boolean);
-  return !audience.length || audience.some((polity) => same(polity, viewer));
+  const names = Array.isArray(viewer) ? viewer : [viewer];
+  return !audience.length || audience.some((polity) => names.some((name) => same(polity, name)));
 };
 export const eventsHiddenFrom = (events, viewer) => new Set(list(events)
   .filter((event) => isRecord(event) && !readableBy(event, viewer))
@@ -303,7 +315,7 @@ export const eventsHiddenFrom = (events, viewer) => new Set(list(events)
 
 // `unitOwner(unitId)` names a unit's owner (from the host's world); a move is a
 // march order, and only its owner reads where it is going.
-export const projectEvents = (events, viewer, { ownOrderIds = new Set(), unitOwner = () => "", host = "" } = {}) => list(events).filter((event) => !isRecord(event) || readableBy(event, viewer)).map((event) => {
+export const projectEvents = (events, viewer, { ownOrderIds = new Set(), unitOwner = () => "", host = "", readers = [viewer] } = {}) => list(events).filter((event) => !isRecord(event) || readableBy(event, readers)).map((event) => {
   if (!isRecord(event)) return event;
   // The narrator's provenance, NPC-reaction bookkeeping and storyline links stay
   // with the host, and so does who else an event was for.
@@ -453,11 +465,16 @@ export const projectForViewer = ({ world, game, events, chat, actions, intercept
   const ownActions = projectActions(actions, seat, { host });
   const ownOrderIds = new Set(ownActions.map((action) => clean(action?.id)).filter(Boolean));
   const owners = new Map(list(world?.units).map((unit) => [clean(unit?.id), clean(unit?.ownerCode)]));
+  const readers = formerNamesOf(game, seat);
+  const seenEvents = projectEvents(events, seat, { ownOrderIds, host, readers, unitOwner: (id) => owners.get(clean(id)) || "" });
+  const shown = new Set(list(seenEvents).map((event) => clean(event?.id)));
   return {
-    world: projectWorld(world ?? {}, seat, { host, hiddenEventIds: eventsHiddenFrom(events, seat) }),
+    world: projectWorld(world ?? {}, seat, { host, readers, hiddenEventIds: eventsHiddenFrom(events, readers) }),
     game: copy({ ...(isRecord(game) ? game : {}), country: seat }),
-    events: copy(projectEvents(events, seat, { ownOrderIds, host, unitOwner: (id) => owners.get(clean(id)) || "" })),
-    chat: copy(projectChats(chat, seat, { host })),
+    events: copy(seenEvents),
+    // Their advisor's conversation, with the secrets their government keeps
+    // (advisorDesk.js): made for this view, never stored.
+    chat: copy([...projectChats(chat, seat, { host }), ...[advisorThreadFor({ world, events }, seat, { readers, shown })].filter(Boolean)]),
     actions: copy(ownActions),
     intercepts: same(host, seat) && isRecord(intercepts) ? copy(intercepts) : {},
     colors: copy(isRecord(colors) ? colors : {}),

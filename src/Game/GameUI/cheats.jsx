@@ -3118,7 +3118,7 @@ const PuppetStatesView = ({ meta, header, busy, status, game, polities, runBusy,
                         <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem", marginTop: "0.4rem" }}>
                             {rows.ended.map((row, index) => (
                                 <div key={`${keyOf(row)}-${index}`} style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.68rem", overflowWrap: "anywhere" }}>
-                                    {`${row.overlord} → ${row.puppet} · ${capitalize(row.status)}${row.endedDate ? ` · ${row.endedDate}` : ""}`}
+                                    {`${row.overlord} → ${row.puppet} · ${capitalize(row.status)}${row.endedDate ? ` · ${(formatGameDateReadable(row.endedDate) || row.endedDate)}` : ""}`}
                                 </div>
                             ))}
                         </div>

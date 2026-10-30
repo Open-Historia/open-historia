@@ -278,8 +278,11 @@ export const DEFAULT_PATROL_RADIUS_KM = {
 // gives the same point, so re-reading world.json never jitters the map and the
 // staged event reveal reproduces a patrol exactly. Callers seed with
 // `${unit.id}|${round}|${tick}` so the position changes per turn and per idle
-// pulse, but never at random.
-export const patrolPoint = (station, radiusKm, seed) => {
+// pulse, but never at random. `turn`: eighths of a circle added to the
+// bearing, for a caller looking round the ring for a point on its unit's own
+// ground (gameState.js patrolPointOnItsGround): seeds that differ by a suffix
+// hash to nearly the same bearing, so they cannot do that.
+export const patrolPoint = (station, radiusKm, seed, { turn = 0 } = {}) => {
   const centreLat = Number(station?.lat) || 0;
   const centreLng = Number(station?.lng) || 0;
   const radius = Math.max(0, Number(radiusKm) || 0);
@@ -288,7 +291,7 @@ export const patrolPoint = (station, radiusKm, seed) => {
   }
 
   const hash = hashSeed(seed);
-  const bearing = ((hash % 3600) / 3600) * Math.PI * 2;
+  const bearing = ((hash % 3600) / 3600 + (Number(turn) || 0) / 8) * Math.PI * 2;
   // Bias outward (0.55..1.0 of the radius) so a patrol reads as working its
   // station rather than loitering on top of the centre point.
   const spread = 0.55 + ((Math.floor(hash / 3600) % 1000) / 1000) * 0.45;

@@ -1080,3 +1080,16 @@ test("the model is told it can place by a vector", () => {
     assert.match(PLACEMENT_DIRECTIVE, /bearing of 045/);
     assert.match(PLACEMENT_DIRECTIVE, /80 km from city: Kyiv, country: Ukraine toward city: Kharkiv, country: Ukraine/);
 });
+
+// A map whose oceans are regions of their own, with a coast along its southern
+// edge: past the edge no region is, and a fleet was put there, below the bottom
+// of the map (a fantasy scenario's Discord game, 2026-10-26). Off the map is
+// never sea; with no open water in reach there is no point at all.
+test("a fleet is never put in the sea past the map's edge", () => {
+    const allLand = { regionAt: (point) => (Math.abs(point[1]) < 85.0511 ? { id: "land" } : null) };
+    assert.equal(nearestSea([100, -84.5], allLand), null);
+    // Open water inside the map is still found, even by a coast at the edge.
+    const strait = { regionAt: (point) => (Math.abs(point[1]) < 85.0511 && !(point[0] > 100.2 && point[0] < 101) ? { id: "land" } : null) };
+    const at = nearestSea([100, -84.5], strait);
+    assert.ok(at && Math.abs(at[1]) < 85.0511 && !strait.regionAt(at), JSON.stringify(at));
+});

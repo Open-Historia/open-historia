@@ -1,6 +1,7 @@
 /*! Open Historia — Country political overview / party landscape */
 import React, { useEffect, useMemo, useState } from "react";
 import { buildGovernmentPartyPresentation, buildPoliticalLandscape } from "../../runtime/politicalPresentation.js";
+import { formatGameDateReadable } from "../../runtime/gameDates.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const list = (value) => (Array.isArray(value) ? value.map(clean).filter(Boolean) : (clean(value) ? [clean(value)] : []));
@@ -358,7 +359,7 @@ const InstitutionPortfolio = ({ rows = [] }) => {
                 <Badge tone={entry?.member ? "rgba(34,197,94,0.1)" : "rgba(148,163,184,0.09)"} border={entry?.member ? "rgba(34,197,94,0.23)" : "rgba(148,163,184,0.18)"} color={entry?.member ? "#86efac" : "rgba(255,255,255,0.55)"}>{lifecycleLabel(entry)}</Badge>
               </div>
               <div style={{ color: "rgba(255,255,255,0.36)", fontSize: "0.58rem", lineHeight: 1.4, marginTop: "0.22rem" }}>
-                {[entry?.member?.sinceDate ? `since ${entry.member.sinceDate}` : "", pending.length ? `${pending.length} pending lifecycle matter${pending.length === 1 ? "" : "s"}` : "", recent?.date && !entry?.member ? `last change ${recent.date}` : ""].filter(Boolean).join(" · ") || (institution.kind || "institution")}
+                {[entry?.member?.sinceDate ? `since ${(formatGameDateReadable(entry.member.sinceDate) || entry.member.sinceDate)}` : "", pending.length ? `${pending.length} pending lifecycle matter${pending.length === 1 ? "" : "s"}` : "", recent?.date && !entry?.member ? `last change ${(formatGameDateReadable(recent.date) || recent.date)}` : ""].filter(Boolean).join(" · ") || (institution.kind || "institution")}
               </div>
               {pending.slice(0, 2).map((item) => <div key={item.id} style={{ color: "var(--oh-grey-muted)", fontSize: "0.56rem", marginTop: "0.24rem" }}>• {item.kind} · {item.status}{item.requestedStatus ? ` · ${item.requestedStatus}` : ""}</div>)}
             </div>

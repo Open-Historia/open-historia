@@ -1747,34 +1747,39 @@ const SocialLinks = ({ discordUrl, redditUrl, githubUrl }) => {
     );
 };
 
-// Same corner and size as always (the top bar's session pill is laid out from
-// it), in the glass finish and with the menu glyph.
+// Same corner and size as the top bar (the session pill and Exit Game button
+// are laid out from it with matching 2.85rem height and 12px corners on desktop),
+// in the glass finish and with the menu glyph.
 // `hidden` while the menu is open: the menu grows out of this button and
 // shrinks back into it, so the button itself steps aside meanwhile.
-const SettingsButton = ({ onToggle, topOffset = "0.5rem", hidden = false }) => (
-    <button
-    type="button"
-    aria-label="Open game menu"
-    title="Game menu"
-    onClick={onToggle}
-    style={{
-        ...baseStyle,
-        top: topOffset,
-        left: `calc(0.5rem + ${SAFE_LEFT})`,
-        height: "4rem",
-        width: "4rem",
-        cursor: "pointer",
-        fontSize: "1.5rem",
-        fontWeight: 800,
-        background: "rgba(35,35,39,0.53)",
-        opacity: hidden ? 0 : 1,
-        pointerEvents: hidden ? "none" : "auto",
-        transition: "opacity 180ms ease 40ms",
-    }}
-    >
-    ☰
-    </button>
-);
+const SettingsButton = ({ onToggle, topOffset = "0.5rem", hidden = false }) => {
+    const isMobile = useIsMobile();
+    return (
+        <button
+        type="button"
+        aria-label="Open game menu"
+        title="Game menu"
+        onClick={onToggle}
+        style={{
+            ...baseStyle,
+            top: topOffset,
+            left: `calc(0.5rem + ${SAFE_LEFT})`,
+            height: isMobile ? "4rem" : "2.85rem",
+            width: isMobile ? "4rem" : "2.85rem",
+            cursor: "pointer",
+            fontSize: isMobile ? "1.5rem" : "1.2rem",
+            fontWeight: 800,
+            borderRadius: isMobile ? "14px" : "12px",
+            background: "rgba(35,35,39,0.53)",
+            opacity: hidden ? 0 : 1,
+            pointerEvents: hidden ? "none" : "auto",
+            transition: "opacity 180ms ease 40ms",
+        }}
+        >
+        ☰
+        </button>
+    );
+};
 
 // --- Network: let other devices connect -------------------------------------
 // The server binds loopback by default, which is right for the desktop app and
@@ -3292,8 +3297,9 @@ const SettingsMenu = ({
         if (!el) return;
         const rect = el.getBoundingClientRect();
         if (!rect.width || !rect.height) return;
-        el.style.setProperty("--oh-grow-x", (64 / rect.width).toFixed(4));
-        el.style.setProperty("--oh-grow-y", (64 / rect.height).toFixed(4));
+        const buttonDim = isMobile ? 64 : 45.6;
+        el.style.setProperty("--oh-grow-x", (buttonDim / rect.width).toFixed(4));
+        el.style.setProperty("--oh-grow-y", (buttonDim / rect.height).toFixed(4));
     });
     // Relief tiles or the painted vector map, for scenarios that ship both.
     const scenarioTerrain = useMapSettingValue(MAP_SETTING_KEYS.scenarioTerrain) === SCENARIO_TERRAIN_PAINTED ? SCENARIO_TERRAIN_PAINTED : "";

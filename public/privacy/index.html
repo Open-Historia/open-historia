@@ -40,7 +40,7 @@
     <img class="logo" src="/logo.png" alt="Open Historia logo" width="64" height="64" />
 
     <h1>Privacy Policy</h1>
-    <p class="tagline">Last updated and in effect from 25 October 2026</p>
+    <p class="tagline">Last updated and in effect from 29 October 2026</p>
 
     <p>Open Historia is a free, open-source strategy game. It runs on your own device: in the browser at openhistoria.com, as a desktop app for Windows, macOS and Linux, and as an Android app. This policy covers all of them, in their stable and beta versions. It explains what the game keeps on your device, what it sends elsewhere and to whom, what the project itself holds about you, and the rights you have.</p>
     <p><strong>Who is responsible.</strong> "We" means Nicholas Krol, an individual in the United States who runs the Open Historia project and its servers, and who is the data controller for what this policy describes. You can reach us at <a href="mailto:nichojkrol@gmail.com">nichojkrol@gmail.com</a>. Open Historia is a non-commercial project: it has no advertising, sells nothing and has no paid accounts.</p>
@@ -125,7 +125,7 @@
           <tr><td>Map imagery (Esri ArcGIS Online, United States) and terrain (Amazon Web Services' open terrain tiles, United States)</td><td>When the game starts and whenever the map is shown, while you are online</td><td>Which parts of the map you look at. A map-editor document made in an old version may also load OpenStreetMap's tiles</td></tr>
           <tr><td>World map data on the website</td><td>Website only, while you play</td><td>See The World Map below</td></tr>
           <tr><td>Community hub (GitHub, United States)</td><td>When you open the Community, Flags or Basemaps browsers, when you download a detailed map (beta versions, desktop app), and in the background when you have scenarios from the hub, have published one, or play in a language other than English</td><td>Nothing beyond the request. Post images and avatars load from GitHub</td></tr>
-          <tr><td>Hub downloads on the website and Android (our own Cloudflare Worker)</td><td>When you import, update or preview a scenario, flag or basemap, or suggest changes to one</td><td>Which hub file you asked for. Our code keeps no record of it; the Worker fetches the file from GitHub for you. On the stable website the content node you are using is asked for the file first (see The World Map). In the desktop app the file is fetched from GitHub by the app itself</td></tr>
+          <tr><td>Hub downloads on the website and Android (our own Cloudflare Worker)</td><td>When you import, update or preview a scenario, flag or basemap, or suggest changes to one</td><td>Which hub file you asked for. Our code keeps no record of it; the Worker fetches the file from GitHub for you. In the desktop app the file is fetched from GitHub by the app itself</td></tr>
           <tr><td>Update checks and downloads (GitHub; the website checks openhistoria.com)</td><td>At launch and every few minutes while the game is open. The desktop app also downloads the map from GitHub on its first launch, and downloads an update it finds when it starts. The beta Android app downloads an update when there is one; the stable Android app opens the download in your browser when you tap Update. The check cannot be switched off</td><td>Nothing beyond the request</td></tr>
           <tr><td>Place search (Komoot's Photon, Germany)</td><td>When you type in the map's place search</td><td>The text you type</td></tr>
           <tr><td>Setup video (YouTube, in its privacy-enhanced mode; Google, United States)</td><td>Only when you press Play on the AI setup prompt's tutorial video</td><td>Nothing beyond the request until you press Play; after that, what YouTube's player collects</td></tr>
@@ -143,8 +143,7 @@
     <p>When the Discord app is running on the same computer, the desktop app (and a copy of the game's server you start yourself) tells it what you are playing: the country you lead, the scenario and the in-game date, with how long you have been playing and a link to openhistoria.com. Discord shows this on your profile to people who can see your activity. This passes between the two apps on your computer and never reaches us; Discord's own privacy policy covers what it shows and keeps. To stop it, switch off "Show what I am playing on Discord" under Settings → General → Privacy, or turn off activity sharing in Discord (User Settings → Activity Privacy). In versions without that setting, only Discord's own switch stops it.</p>
 
     <h3>The World Map (website only)</h3>
-    <p>On the website, the world map is downloaded while you play. In the stable version it comes from our Cloudflare Worker and from <strong>content nodes</strong>: computers run by volunteers that keep copies of the map files, so that we do not have to serve them all. When the game opens, it asks the Worker for the list of nodes, checks which of them answer, and then keeps in touch with the one it uses about every 20 seconds while you play. Each node it contacts sees your IP address and your browser type; map files may be loaded from any of them, and the node you use sees which map and hub files you load. Nodes are not run by us and their operators are not vetted. The map files they serve are checked against the project's signature before the game uses them, so a node cannot change the map; a community file fetched through a node is not checked in that way. The node software we publish keeps the addresses of its current visitors in memory for about two minutes to count them, and writes nothing down.</p>
-    <p>The beta versions do not contact content nodes at all: there the map is part of the site or of the app, and comes from wherever the site is hosted.</p>
+    <p>On the website, the world map is part of the site: its files are loaded from openhistoria.com itself, like the rest of the page, and nothing else is contacted for them.</p>
 
     <h3>Import Counts</h3>
     <p>The hub shows how many times each scenario's file has been downloaded. GitHub counts that itself when the game downloads the file from the hub, and the count is public. The game reports nothing of its own.</p>
@@ -174,9 +173,6 @@
     <h2>Old Website Accounts</h2>
     <p>Earlier versions of the website offered an optional account, through an email link or Google sign-in, to sync games between devices. That feature has been removed, and the game deletes what an old sign-in left in your browser the next time it opens. If you made an account, we still hold on our server: your email address, the copies of what you synced, and a record of which content node you last used. The synced copies are encrypted, but the key can be recovered by us (that is how an account could be recovered), so we are technically able to read them. We don't. Email us from the address you signed up with and we will delete everything tied to it, or send you a copy first if you ask.</p>
 
-    <h2>Running a Content Node</h2>
-    <p>If you run a content node, our registry records its id, address, public key, capabilities, region, software version, capacity, when it was first and last seen, and the optional operator name you give. The public directory lists the id, address and status; the operator name is shown only to us. We keep the record until the node is removed; email us to have yours removed. As an operator you see the IP addresses of the players your node serves: use them for nothing but serving the files, and keep no record of them.</p>
-
     <h2>Contributing Code</h2>
     <p>Contributions to the code need a signed Contributor License Agreement, collected through cla-assistant.io with your GitHub account. It records your name, email address and, if you sign for one, your organisation. Commits you make are public on GitHub with the name and email address you gave them.</p>
 
@@ -201,7 +197,6 @@
           <tr><td>How many times each hub file was downloaded</td><td>GitHub (public)</td><td>While the hub shows them</td></tr>
           <tr><td>Hashed IP addresses from the old import counter</td><td>Our import counter on Cloudflare</td><td>Up to 365 days from when each was written; no new ones are written</td></tr>
           <tr><td>Old account data, if you had an account</td><td>Our server on Cloudflare</td><td>Until you ask us to delete it, or until we delete all of it, whichever comes first</td></tr>
-          <tr><td>Content node records</td><td>Our server on Cloudflare</td><td>Until the node is removed</td></tr>
           <tr><td>Your hub posts, comments and likes</td><td>GitHub (public)</td><td>Until you or we remove them</td></tr>
           <tr><td>Contributor License Agreements</td><td>cla-assistant.io and GitHub</td><td>For as long as the project uses the contribution</td></tr>
           <tr><td>Emails you send us</td><td>Our inbox</td><td>As long as needed to answer them and to keep a record of what we did about a request</td></tr>
@@ -220,12 +215,12 @@
         <tbody>
           <tr><td>Counting visits with Google Analytics and Umami, and the cookies Google Analytics sets</td><td><strong>Your consent.</strong> You can take it back at any time, as easily as you gave it</td></tr>
           <tr><td>Playing the setup video from YouTube</td><td><strong>Your consent,</strong> given by pressing Play</td></tr>
-          <tr><td>Serving the website and the game's files, keeping them secure and available (Cloudflare, content nodes)</td><td><strong>Our legitimate interest</strong> in running the site you asked to visit, safely</td></tr>
+          <tr><td>Serving the website and the game's files, keeping them secure and available (Cloudflare)</td><td><strong>Our legitimate interest</strong> in running the site you asked to visit, safely</td></tr>
           <tr><td>Drawing the map, flags and emblems, place search, hub browsing and downloads, update checks and downloads</td><td><strong>Our legitimate interest</strong> in providing the features of the game you are using; each sends no more than the request itself</td></tr>
           <tr><td>Connecting a shared game</td><td><strong>Our legitimate interest</strong> in connecting you to the players you chose to play with, at your request</td></tr>
           <tr><td>Showing what you play in Discord</td><td><strong>Our legitimate interest</strong> in a feature of the app; it happens on your computer and you can switch it off</td></tr>
           <tr><td>Old account data</td><td>Kept only so that you can ask for it or have it deleted (<strong>legitimate interest</strong>); it is used for nothing</td></tr>
-          <tr><td>Content node records and Contributor License Agreements</td><td><strong>Our legitimate interest</strong> in running the node directory and in being able to show that the project may use the code it was given</td></tr>
+          <tr><td>Contributor License Agreements</td><td><strong>Our legitimate interest</strong> in being able to show that the project may use the code it was given</td></tr>
           <tr><td>Answering your emails and acting on your requests</td><td><strong>Our legitimate interest</strong> in answering you, and <strong>legal obligation</strong> where the law requires us to act</td></tr>
         </tbody>
       </table>
@@ -247,7 +242,7 @@
     <h3>In the United States</h3>
     <p>This section is the notice that the laws of California and of other US states ask for, whether or not those laws apply to a project of this size.</p>
     <ul>
-      <li><strong>What we collect.</strong> Identifiers and internet activity: your IP address and what you request, seen by the services listed above when you use them; and, only if you said yes, the visit information described under Counting Visits, from which the counters estimate a rough location (a city at most). For old website accounts: an email address. For content node operators and code contributors: the details listed in their sections. We collect no sensitive personal information.</li>
+      <li><strong>What we collect.</strong> Identifiers and internet activity: your IP address and what you request, seen by the services listed above when you use them; and, only if you said yes, the visit information described under Counting Visits, from which the counters estimate a rough location (a city at most). For old website accounts: an email address. For code contributors: the details listed in their section. We collect no sensitive personal information.</li>
       <li><strong>Where it comes from.</strong> From you and your device.</li>
       <li><strong>Why.</strong> To run the game and its website, to count visits, and to answer you.</li>
       <li><strong>Who receives it.</strong> The service providers named in this policy, each for the purpose given beside it. <strong>We do not sell personal information, and we do not share it for cross-context behavioural advertising.</strong> We have not done either in the past 12 months, and we do not knowingly do it with the information of anyone under 16.</li>
@@ -258,7 +253,7 @@
     </ul>
 
     <h2>Where Data Is Processed</h2>
-    <p>We are based in the United States, and so are most of the services above: Cloudflare, Google, Umami, GitHub, Esri, Amazon, Discord and most AI providers. Komoot is in Germany. The relay servers shared games use, and content nodes, are run by their own operators in various countries. Your data may therefore be processed in the United States and other countries whose laws differ from yours.</p>
+    <p>We are based in the United States, and so are most of the services above: Cloudflare, Google, Umami, GitHub, Esri, Amazon, Discord and most AI providers. Komoot is in Germany. The relay servers shared games use are run by their own operators in various countries. Your data may therefore be processed in the United States and other countries whose laws differ from yours.</p>
     <p>For personal data from the European Economic Area, the United Kingdom and Switzerland, these transfers rest on the European Commission's and the UK's adequacy decisions for US companies certified under the Data Privacy Framework, where the provider is certified, and otherwise on standard contractual clauses in the provider's terms, or on the fact that the transfer is needed to do what you asked for, such as connecting a shared game or fetching a file. Email us if you would like to know which applies to a particular provider.</p>
 
     <h2>Children</h2>

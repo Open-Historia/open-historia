@@ -7,6 +7,7 @@ const MapEditor = lazy(() => import("./Editor/MapEditor.jsx"));
 // A shared game's lobby and round bar (multiplayer/): outside the game's UI, so
 // it survives the UI remounting when the page switches to the shared game.
 const SharedGameOverlay = lazy(() => import("./multiplayer/ui/SharedGameOverlay.jsx"));
+const DiscordInvites = lazy(() => import("./multiplayer/ui/DiscordInvites.jsx"));
 // Lazy too: the map and MapLibre with it (over 1 MB) are fetched and parsed
 // only when a game is opened (runtime/gameEntry.js), never for the main menu,
 // and the editor never loads them. Nothing outside Game/Map imports maplibre-gl.
@@ -300,6 +301,7 @@ function App() {
       </ErrorBoundary>
       <Suspense fallback={null}>
         <SharedGameOverlay />
+        <DiscordInvites />
       </Suspense>
     </>
   );

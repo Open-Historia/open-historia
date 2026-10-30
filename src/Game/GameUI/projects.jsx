@@ -64,6 +64,7 @@ import {
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { uiString } from "../../runtime/translator.js";
 import { TAG_SEARCH_FROM, searchTags, stepTagFocus, tickedFirst } from "./projectTagMenu.js";
+import { formatGameDateReadable } from "../../runtime/gameDates.js";
 
 // The seed the empty state and the per-card button hand to the advisor. Both
 // pre-fill the input and never send — the player edits and presses send, which is
@@ -527,7 +528,7 @@ const ProjectCard = memo(({ project, gameDate, round, eventTitles, expanded, bus
       {flags.nextMilestone && (
         <div style={{ color: "rgba(255,255,255,0.6)", fontSize: "0.7rem", marginTop: "0.45rem" }}>
           {flags.nextMilestone.repeat ? "↻" : "▸"} Next: {flags.nextMilestone.title}
-          {flags.nextMilestone.date ? ` — ${flags.nextMilestone.date}` : ""}
+          {flags.nextMilestone.date ? ` — ${(formatGameDateReadable(flags.nextMilestone.date) || flags.nextMilestone.date)}` : ""}
           {flags.nextMilestone.repeat && (
             <span style={{ color: "rgba(255,255,255,0.35)" }}>
               {" "}({flags.nextMilestone.repeat}

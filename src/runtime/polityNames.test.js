@@ -119,7 +119,8 @@ test("a game switch during the first read still ends with the new game's names",
   });
   globalThis.fetch = async (url, init = {}) => {
     if (String(init.method || "GET").toUpperCase() !== "GET") return new Response("", { status: 404 });
-    if (String(url).includes("v=old-save")) {
+    // Only the world read is held: the country tiles are read under the same save too.
+    if (String(url).includes("v=old-save") && /\/api\/runtime\/json\/world/.test(String(url))) {
       return new Promise((resolve) => { releaseOldRead = () => resolve(answer({ RUR: { code: "RUR", name: "Kingdom of Ruritania" } })); });
     }
     if (String(url).includes("v=new-save")) return answer({ BOR: { code: "BOR", name: "Borduria" } });

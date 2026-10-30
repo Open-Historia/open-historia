@@ -7,7 +7,7 @@ import { buildMilitaryFeasibilityText } from "./militaryFeasibility.js";
 import { looksLikeChatRequest } from "./chatHints.js";
 import { FALLBACK_SUGGESTION_TOPICS, fallbackTurnText } from "../../runtime/fallbackTurnText.js";
 import { describePuppetBriefing, puppetBriefingFor } from "../../runtime/puppets.js";
-import { regionTypeRules, regionTypesHaveRules } from "../../runtime/regionTypes.js";
+import { regionTypeRules, regionTypesHaveRules, waterTypeIds } from "../../runtime/regionTypes.js";
 import { answerableDemandOf, demandCheckContext, demandCheckPrompt, interpretDemandCheck, openDemandOf } from "../../runtime/demandCheck.js";
 import { NATIVE_GAME_MASTER_PROMPT, normalizePromptPack } from "./gameplayPrompts.js";
 import {
@@ -166,7 +166,7 @@ import {
   planJumpSegments,
   segmentEventRange,
 } from "./jumpSegments.js";
-import { collapseRepeatedWorldContext, templateAlreadySays } from "./promptDedupe.js";
+import { collapseRepeatedWorldContext, collapseRepeatsInsideJob, templateAlreadySays } from "./promptDedupe.js";
 import {
   HIGH_PRIORITY_ASSESSMENT_MARKER,
   HIGH_PRIORITY_ASSESSMENT_RULE,
@@ -181,6 +181,7 @@ import { eventReactionAfterFailure, reactionSpeakerWithContext } from "./eventRe
 import { formalAgendaProposals } from "./formalAgenda.js";
 import { abandonWorkerJob, createWorkerFailureStreak } from "./statsWorkerJobs.js";
 import { chatParticipantKey, foldGeneratedChatsIntoStorage, isLifecycleNegotiationChat, logGeneratedChat } from "./chatFold.js";
+import { sharedLetterOf } from "./sharedLetters.js";
 import { extractJsonPayload, parseWithoutTrailingFields, unwrapMimickedToolCall } from "./jsonSalvage.js";
 import { OUTPUT_LIMIT_MESSAGE, REASONING_ONLY_MESSAGE, REASONING_ONLY_NOTE, isUnreachableError } from "./providerErrors.js";
 import { isCancelAllAbort } from "./aiRequestControl.js";
@@ -232,7 +233,7 @@ import { EVENT_PLACES_RULE, findEventPlace, findEventPlaces, readEventPlace } fr
 import { normalizeEventPlaces } from "../../runtime/eventPlaces.js";
 import { describeTravelPace, eraOf, seaShareOf } from "../../runtime/unitMotion.js";
 import { eraSettingOf } from "../../runtime/warSettings.js";
-import { PLACEMENT_DIRECTIVE, describeApproximatePlacement, describeOtherKind, distanceKm as placementDistanceKm, hashText as placementHash, homeWaters, nearestInteriorPoint, nearestSea, pointInGeometry, regionWithinContainer, resolvePlacement, resolveRegionPlacement, seasForMap } from "./placement.js";
+import { PLACEMENT_DIRECTIVE, describeApproximatePlacement, describeOtherKind, distanceKm as placementDistanceKm, hashText as placementHash, homeWaters, isOpenSea, nearestInteriorPoint, nearestSea, pointInGeometry, regionWithinContainer, resolvePlacement, resolveRegionPlacement, seasForMap } from "./placement.js";
 import { loadWorldCities } from "./worldCities.js";
 import { FOOTPRINT_KM, obstaclesOf, spaceOut } from "../../runtime/featureSpacing.js";
 import { LOOKUP_DIRECTIVE, buildLookupContext, executeLookup, lookupToolsFor, placesNamedIn } from "./lookupTools.js";
@@ -289,10 +290,12 @@ import {
   resolveHelperValues,
 } from "./promptContext.js";
 import { SHARED_WORLD_TASKS } from "./sharedGameDirective.js";
+import { SEAT_ADVICE_FIELD, mergeSeatAdvice, withSeatAdvice } from "./seatAdvice.js";
 import {
   HISTORY_CONSOLIDATION,
   applyHistoryDocumentUpdate,
   buildHistoryDocumentDirective,
+  HISTORY_JOB_FENCES,
   buildSkipHistoryJob,
   countWords,
   deferredConsolidationStillDue,
@@ -1738,13 +1741,19 @@ function lazyLookupContext(bundle, { audience = SIMULATION_AUDIENCE, renderedReg
             readJson(JSON_URLS.citiesGeojson, { defaultValue: null }).catch(() => null),
           ]);
         const geometryById = new Map();
+        // And each drawn region's type, which the catalog does not keep: the
+        // placer tells a scenario's water regions from its land by it.
+        const typeById = new Map();
         for (const feature of normalizeArray(renderedGeojson?.features)) {
           const props = feature?.properties ?? {};
           const id = normalizeString(props.id ?? props.GID_1 ?? props.gid_1 ?? props.HASC_1 ?? feature?.id);
           if (id && feature?.geometry) geometryById.set(id, feature.geometry);
+          if (id && normalizeString(props.typeId)) typeById.set(id, normalizeString(props.typeId));
         }
         const catalog = filterToRenderedRegions(catalogRows, world).map((region) => (
-          geometryById.has(region.id) ? { ...region, geometry: geometryById.get(region.id) } : region
+          geometryById.has(region.id)
+            ? { ...region, geometry: geometryById.get(region.id), ...(typeById.has(region.id) ? { typeId: typeById.get(region.id) } : {}) }
+            : region
         ));
         const cities = normalizeArray(citiesGeojson?.features).map((feature) => {
           const props = feature?.properties ?? {};
@@ -1915,6 +1924,14 @@ const buildPlacementGazetteer = (context, world) => {
   const units = normalizeArray(world?.units).filter((unit) => Number.isFinite(unit?.lng) && Number.isFinite(unit?.lat));
   const markers = normalizeArray(world?.markers).filter((marker) => Number.isFinite(marker?.lng) && Number.isFinite(marker?.lat));
   const withGeometry = context.rows.filter((row) => row.geometry && row.bbox);
+  // Water a scenario draws as regions of its own (a type marked water,
+  // regionTypes.js) is sea here, as the open sea between regions is: a fleet is
+  // put in it and an army ashore out of it. On a map whose oceans are all
+  // regions, "where no region is" was only past the map's edge, and a new fleet
+  // at the Greyport yards was put there, below the bottom of the map (a fantasy
+  // scenario's Discord game, 2026-10-26). Its regions are still found by name.
+  const water = waterTypeIds(world?.regionTypes);
+  const landRows = water.size ? withGeometry.filter((row) => !water.has(normalizeString(row.typeId))) : withGeometry;
   const asRegion = (row) => ({ id: row.id, name: row.name, owner: row.owner, geometry: row.geometry });
 
   // Which country a token names, as this map knows it: the owner label its
@@ -2110,7 +2127,7 @@ const buildPlacementGazetteer = (context, world) => {
   };
 
   const regionAt = (point) => {
-    const row = withGeometry.find((candidate) => point[0] >= candidate.bbox[0] && point[0] <= candidate.bbox[2]
+    const row = landRows.find((candidate) => point[0] >= candidate.bbox[0] && point[0] <= candidate.bbox[2]
       && point[1] >= candidate.bbox[1] && point[1] <= candidate.bbox[3]
       && pointInGeometry(point, candidate.geometry));
     return row ? asRegion(row) : null;
@@ -2124,7 +2141,7 @@ const buildPlacementGazetteer = (context, world) => {
     // another's coast, and ranking by it put a division ashore on the far side.
     // Of the regions whose bbox is in reach, the one whose land is nearest wins.
     let best = null; let bestKm = maxKm;
-    for (const row of withGeometry) {
+    for (const row of landRows) {
       const clamped = [Math.min(Math.max(point[0], row.bbox[0]), row.bbox[2]), Math.min(Math.max(point[1], row.bbox[1]), row.bbox[3])];
       if (placementDistanceKm(point, clamped) >= bestKm) continue;
       const ashore = nearestInteriorPoint(row.geometry, point);
@@ -3410,6 +3427,9 @@ This live instruction supersedes older frozen country-stat prompts and all earli
   // reach them ONLY through the world summary - removing them there would take
   // them from those tasks entirely.
   systemPrompt = collapseRepeatedWorldContext(systemPrompt, variables);
+  // A skip carrying the history fold: what the fold's brief repeats of the
+  // skip's own event history and document is given once (promptDedupe.js).
+  if (jumpTask) systemPrompt = collapseRepeatsInsideJob(systemPrompt, HISTORY_JOB_FENCES);
 
   // Lookup functions: tell the model they exist and what they are for. Last,
   // so it stands next to the output contract rather than under the campaign.
@@ -3430,7 +3450,19 @@ This live instruction supersedes older frozen country-stat prompts and all earli
   if (SHARED_WORLD_TASKS.has(taskKey)) {
     const sharedDirective = normalizeString(variables?.sharedGameDirective);
     if (sharedDirective) systemPrompt = `${systemPrompt}\n\n${sharedDirective}`;
+    // The prompt's role line, written for one player, says from its first
+    // words that several people play; the rest of the prompt names them
+    // together (joinPolityNames), as the directive explains.
+    const together = normalizeString(variables?.playerPolity);
+    const polities = normalizeString(variables?.sharedPolities);
+    if (sharedDirective && together && polities) {
+      systemPrompt = systemPrompt.replace(`The player is playing as the polity of ${together}.`, `Several people play this game, one polity each: ${polities}.`);
+    }
   }
+  // Each player's advisor and their three orders (seatAdvice.js): a time skip
+  // of a game a host shares, one person playing or several.
+  const seatAdviceDirective = JUMP_TASK_KEYS.has(taskKey) ? normalizeString(variables?.seatAdviceDirective) : "";
+  if (seatAdviceDirective) systemPrompt = `${systemPrompt}\n\n${seatAdviceDirective}`;
 
   // The scenario author's priority rules (worldDirection.js), for every task
   // that writes the world or speaks for a polity; a time skip has them, with the
@@ -3630,9 +3662,11 @@ const runJsonTask = async (taskKey, {
     { idleMs, firstByteMs: idleMs ? AI_FIRST_BYTE_TIMEOUT_MS : 0 },
     () => controller.abort(timeoutError),
   );
-  const taskTool = forActiveFeatures(customFullStatSheet
+  const featureTool = forActiveFeatures(customFullStatSheet
     ? getGameplayToolForCustomStatSheet(taskKey, customStatRows, { custom: true })
     : getGameplayToolForStatIndices(taskKey, statIndexRows, { custom: customStatIndices }));
+  // The players' advice, asked of the time skip whose prompt asks for it.
+  const taskTool = JUMP_TASK_KEYS.has(taskKey) && normalizeString(variables?.seatAdviceDirective) ? withSeatAdvice(featureTool) : featureTool;
   // A first reading's sheet can carry the service's rating, in the same request
   // (generateCountryStatSheet rateIntelligence, gameplaySchemas.js
   // withIntelligenceRating).
@@ -3955,7 +3989,7 @@ const runJsonTask = async (taskKey, {
       // second request for a turn already in hand. Before the output-limit
       // check below, so a cut that fell inside a rider is not a lost turn.
       if (!parsed && rawText && JUMP_TASK_KEYS.has(taskKey)) {
-        const rescued = parseWithoutTrailingFields(rawText, [AGENT_REPORTS_FIELD, HISTORY_FIELD]);
+        const rescued = parseWithoutTrailingFields(rawText, [AGENT_REPORTS_FIELD, HISTORY_FIELD, SEAT_ADVICE_FIELD]);
         if (rescued) {
           parsed = rescued.value;
           console.warn(`[ai] task "${taskKey}": the end of the answer could not be read; kept the turn without ${rescued.dropped.join(" and ")}.`);
@@ -8871,6 +8905,20 @@ export const sendAdvisorDraftedMessage = async ({ countryName, text }) => {
   }
 };
 
+// Whether a point is at sea on this game's map, for the patrols that drift
+// between skips (gameState.js advanceStandingOrders): a fleet keeps to the
+// water and an army to the land. null when the map could not be read; the
+// patrols are then drawn as before. Exported for the headless engine's checks.
+export const waterTestFor = async (world) => {
+  try {
+    const gazetteer = buildPlacementGazetteer(await lazyLookupContext({ world })(), world);
+    return (lng, lat) => isOpenSea([lng, lat], gazetteer);
+  } catch (error) {
+    console.warn("[placement] the map could not be read; patrols keep to their rings as drawn.", error);
+    return null;
+  }
+};
+
 // `projects` opts this turn into the Projects & Operations board task. It runs
 // HERE rather than in the caller because the board's whole job is to move with
 // the events, and espionage does not produce its events until partway through
@@ -9264,6 +9312,10 @@ const applySimulationResult = async ({
       // in progress and clears a leftover one, and a scene resolving is this.
       activeInteractive: null,
       actionSuggestions: [],
+      // Each player's advisor and their orders to consider (seatAdvice.js).
+      ...(Array.isArray(result.seatAdvice)
+        ? { seatAdvice: mergeSeatAdvice(baseWorld?.seatAdvice, result.seatAdvice, { people: humanCountriesOf(baseGame), round: nextGame.round }) }
+        : null),
       lastJumpMode: normalizeString(result.mode),
       lastJumpSummary: normalizeString(result.summary),
       lastJumpTargetDate: nextGame.gameDate,
@@ -9421,6 +9473,7 @@ const applySimulationResult = async ({
         toDate: nextGame.gameDate,
         round: nextGame.round,
         movedAt: movedThisTurn,
+        onWater: await waterTestFor(impactedWorld),
       },
     ), result.clearActions ? plannedActionSnapshot : [], { queuedActions: result.clearActions ? plannedActionSnapshot : null }),
     { playerCode: baseGame.country, playerCodes: humanCountriesOf(baseGame) },
@@ -9932,26 +9985,23 @@ const applySimulationResult = async ({
   const lastTurnEventId = normalizeString(normalizeArray(worldWithImpacts.simulationHistory?.[0]?.eventIds).at(-1));
 
   // In a shared game (runtime/humanPolities.js) a thread the turn opens is
-  // written to the host's own player, and its opening lines are the AI's. A
-  // country another person plays is never one of the governments speaking in
-  // it: that person writes their own lines, in a thread they open themselves.
-  const otherPeople = new Set(humanCountriesOf(baseGame).map(regionKey).filter((key) => key !== regionKey(baseGame.country)));
-  const withoutOtherPeople = (chatLike) => {
-    if (!otherPeople.size) return chatLike;
-    const countries = normalizeArray(chatLike?.countries)
-      .filter((country) => !otherPeople.has(regionKey(normalizeString(typeof country === "string" ? country : country?.name || country?.code))));
-    return countries.length ? { ...chatLike, countries } : null;
+  // written to one of the people, and its opening lines are the AI's
+  // (sharedLetterOf): the person it names in `to`, the host's own player when it
+  // names none. A country a person plays is never one of the governments
+  // speaking in it: that person writes their own lines.
+  const people = humanCountriesOf(baseGame);
+  const routed = (chatLike) => sharedLetterOf(chatLike, { people, host: baseGame.country });
+  const opening = async (chatLike, linkEventId, options) => {
+    const letter = routed(chatLike);
+    if (!letter) return null;
+    const built = await buildGeneratedChat(letter.chat, linkEventId, worldWithImpacts, { ...options, playerName: letter.to });
+    // A thread names its owner when it is not the host's (multiplayer/host/projection.js).
+    return built && letter.owner ? { ...built, player: letter.owner } : built;
   };
 
   for (const event of freshEvents) {
     for (const createdChat of event.impacts.createdChats) {
-      const opened = withoutOtherPeople(createdChat);
-      if (!opened) continue;
-      const nextChat = await buildGeneratedChat(opened, event.id, worldWithImpacts, {
-        fallbackTitle: event.title,
-        playerName: baseGame.country,
-        revealWith: event.id,
-      });
+      const nextChat = await opening(createdChat, event.id, { fallbackTitle: event.title, revealWith: event.id });
       if (nextChat) { nextChats.unshift(nextChat); generatedChats.push(nextChat); }
     }
   }
@@ -9959,11 +10009,8 @@ const applySimulationResult = async ({
   // Unprompted outreach: polities reaching out on their own initiative during
   // the simulated period, not tied to any event (treaty feelers, summit
   // invitations). Same chat machinery, no linked event.
-  for (const chatLike of normalizeArray(result.outreach).map(withoutOtherPeople).filter(Boolean)) {
-    const nextChat = await buildGeneratedChat({ ...chatLike, source: "outreach" }, "", worldWithImpacts, {
-      playerName: baseGame.country,
-      revealWith: lastTurnEventId,
-    });
+  for (const chatLike of normalizeArray(result.outreach)) {
+    const nextChat = await opening({ ...chatLike, source: "outreach" }, "", { revealWith: lastTurnEventId });
     if (nextChat) { nextChats.unshift(nextChat); generatedChats.unshift(nextChat); }
   }
 
@@ -17060,6 +17107,12 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
         if (state.folded && segmentGeneration?.source !== "fallback") state.foldedAgentAnswer = payload[AGENT_REPORTS_FIELD];
         delete payload[AGENT_REPORTS_FIELD];
       }
+      // And the players' advice (seatAdvice.js): the last segment's, kept on the
+      // world as the turn is written (applySimulationResult).
+      if (payload && typeof payload === "object" && SEAT_ADVICE_FIELD in payload) {
+        if (segmentGeneration?.source !== "fallback" && Array.isArray(payload[SEAT_ADVICE_FIELD])) state.seatAdvice = payload[SEAT_ADVICE_FIELD];
+        delete payload[SEAT_ADVICE_FIELD];
+      }
       // And the history fold, the same way (judged in foldedTurnReview).
       if (payload && typeof payload === "object" && HISTORY_FIELD in payload) {
         if (state.folded && historyJob && segmentGeneration?.source !== "fallback") state.foldedHistoryAnswer = payload[HISTORY_FIELD];
@@ -18089,6 +18142,7 @@ const finishTimelineJump = async ({ context, signal, state }) => {
     // that period was fought again with (frontOrderFunction.js).
     frontsGiven: normalizeArray(context.variables?.frontsForecast?.given),
     storylineUpdates: merged.storylineUpdates,
+    seatAdvice: state.seatAdvice ?? null,
     breadthRepairContext: selectBreadthRepairContext(state, context),
     generation: state.generation,
     hiddenEvents: state.hiddenEvents,
@@ -20972,7 +21026,7 @@ const idlePulseBackoff = createIdlePulseBackoff();
 // the player deployed a unit, while the model was thinking, and a world built on
 // the stale snapshot would undo it. The caller passes the world as it stands
 // inside the write queue (mutateWorldState).
-const applyIdlePulseUnitOps = (freshWorld, bundle, unitOps) => {
+const applyIdlePulseUnitOps = (freshWorld, bundle, unitOps, { onWater = null } = {}) => {
   const tick = (Number(freshWorld.idlePulseTick) || 0) + 1;
   const gameDate = normalizeString(bundle.game?.gameDate);
   const round = Number(bundle.game?.round) || 0;
@@ -20990,6 +21044,7 @@ const applyIdlePulseUnitOps = (freshWorld, bundle, unitOps) => {
     toDate: gameDate,
     round,
     tick,
+    onWater,
   });
   return enforceUnitVolume(
     { ...drifted, idlePulseTick: tick },
@@ -21122,13 +21177,14 @@ export const maybeSendIdleDiplomacy = async () => {
       }
       try {
         let moved = false;
+        const onWater = await waterTestFor(bundle.world);
         await mutateWorldState((latest) => {
           // Re-checked at the write itself, exactly as the chat half does: a
           // jump that started while the model was thinking owns the world now,
           // and a campaign the player has left is not this pulse's to move.
           if (isSimulationBusy() || leftCampaign(campaign)) return null;
           moved = true;
-          return applyIdlePulseUnitOps(latest, bundle, unitOps);
+          return applyIdlePulseUnitOps(latest, bundle, unitOps, { onWater });
         });
         if (moved && payload.sighting && !isSimulationBusy()) {
           await appendSightingEvent(bundle, payload.sighting, unitOps, campaign);

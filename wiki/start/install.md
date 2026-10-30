@@ -130,8 +130,8 @@ What is different in the browser:
 
 - Games and scenarios are stored in your browser's storage, not in files. Clearing site data
   clears your campaigns. The game will ask for persistent storage permission — grant it.
-- The map is served by community-run content nodes rather than downloaded whole. If no node is
-  reachable you get a blank map; see [Troubleshooting](/wiki/troubleshooting/).
+- The map files come with the site and download the first time you play, about 35 MB; your
+  browser keeps them after that. If the map stays blank, see [Troubleshooting](/wiki/troubleshooting/).
 - There is no account and no sync: your games stay in this browser. To play one somewhere else,
   export it and import it there; see [saves and rollback](/wiki/saves/).
 - Providers that refuse direct browser requests need a relay, which the browser build does not

@@ -1028,7 +1028,7 @@ const WorldMap = ({ isGlobe = false }) => {
         regionId,
         gid0,
         owner: owner ?? "",
-        regionName: resolveRegionName(regionId, props.NAME_1 ?? props.name ?? ""),
+        regionName: resolveRegionName(regionId, props.NAME_1 ?? props.name ?? "", getWorldStateSnapshot()?.regionRenames),
         country: props.COUNTRY ?? toCountryName(gid0),
         lngLat: event.lngLat,
       };

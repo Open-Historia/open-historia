@@ -243,16 +243,16 @@ It takes effect when this `worker.js` is on `main` and the site is deployed (§6
 
 ### 7.2 Node registry — `open-historia-admin/registry/`
 
-The web-mode control plane (source of truth: the admin repo). Serves the signed node directory, proxies map content, and hosts hub + accounts. Worker name `open-historia-registry`. The game itself no longer calls the account, sync or presence routes: accounts were removed from the web build (see [web-build.md §10](web-build.md#10-accounts-and-sync-removed)). Nor does it call the `/content` map proxy or read the node directory: the website carries its own map (see [web-build.md §8](web-build.md)). The one route the game still calls is `/hub/file`, the community hub proxy, because community bundles are files on GitHub and a browser cannot read those itself.
+The web-mode control plane (source of truth: the admin repo). Hosts the community hub proxy and accounts. Worker name `open-historia-registry`. The game itself no longer calls the account, sync or presence routes: accounts were removed from the web build (see [web-build.md §10](web-build.md#10-accounts-and-sync-removed)). Nor does it call the `/content` map proxy: the website carries its own map (see [web-build.md §8](web-build.md)). The one route the game still calls is `/hub/file`, the community hub proxy, because community bundles are files on GitHub and a browser cannot read those itself.
 
 | Binding | Kind | Purpose |
 |---|---|---|
 | `NODES` | KV | Small hot keys + TTL items (magic-link tokens, sessions via `acct:`/`magic:`/`sess:` prefixes) |
-| `OH_ACCOUNTS` | D1 (`oh-accounts`) | Nodes table, users, sessions, wrapped account keys, encrypted sync blobs; schema in `registry/schema.sql` |
+| `OH_ACCOUNTS` | D1 (`oh-accounts`) | Users, sessions, wrapped account keys, encrypted sync blobs; schema in `registry/schema.sql` |
 | `IMPORT_COUNTER` | Service binding → `oh-import-counter` | For the older builds' `/hub/import-log` and `/hub/import-counts` (§7.1; this build calls neither). A direct binding because a Worker can't reach another same-account Worker via its public `workers.dev` URL (subrequest silently never arrives) |
 | `EMAIL` | Email Sending | Magic-link emails, sent by the Worker itself |
 
-The **admin panel** (`open-historia-admin/panel/server.js`) is the human interface to the registry: it lists nodes, accepts/pauses/bans/rate-limits/redirects them, and after **any** change rebuilds the node directory, signs it with the offline root key (`oh-root.key.pem`), and POSTs it to the registry, which serves it live (`panel/server.js`). The game no longer reads the directory, so a directory change does not reach players.
+The **admin panel** (`open-historia-admin/panel/server.js`) is the human interface to the registry. Nothing the game needs at run time goes through it.
 
 The web game points at the registry through build-time env (`.env.web`), for the hub proxy only:
 
@@ -274,7 +274,7 @@ The ~200 MB world-map binaries left Git LFS (whose free 1 GB/mo org-wide bandwid
 - **Name namespaces:** the manifest maps a *versioned* release asset name to a *stable* local path — e.g. `regions-seed-z8-clean.geojson` (release) → `public/assets/regions-seed.geojson` (tree), and `default-regions-names-clean.geojson` → `server/data/stock/regions.geojson` (the stock world every scenario without a map of its own renders on; it used to be the built-in scenario's file). The client always reads the stable path. The built-in scenario's own map is not on the release at all: it ships in the app as `server/seed/default/regions.geojson` (see [Assets](assets-and-data.md) §3).
 - **Callers:** the desktop app on launch (`electron/main.cjs`, `--ensure`) and anyone running from a clone call it in place of `git lfs pull`. **Never re-add these files to Git LFS.**
 - **The web builds' list and stager:** the website and the Android app are the same bundle and carry the same six files, pinned in `scripts/map-assets.web.json` (each entry: `asset`, the release name; `path`, the stable name under the build; `bytes`; `sha256`): the z8 archives, `cities.pmtiles`, `cities-seed.json` and the web-sized world files, about 69 MB. `scripts/stage-map-assets.mjs` downloads them into `map-cache/` at the repo root (gitignored), verifies each, and lays them into a build: `dist-web/assets/` for `build:web` / `build:site`, the files `public/` lacks for `dev:web`, and `mobile/www/assets/` through `mobile/scripts/stage-www.mjs` (§9). Unlike the fetcher it **exits non-zero** when a file cannot be had. Every file must stay under Cloudflare Pages' 25 MiB a file. See [Assets](assets-and-data.md) §3.
-- **Why the website carries its copy:** a browser cannot read a GitHub release asset, because GitHub sends no `Access-Control-Allow-Origin` header on the download. The website used to go through a Worker proxy and community content nodes to get around that; it no longer does. See [web-build.md §8](web-build.md).
+- **Why the website carries its copy:** a browser cannot read a GitHub release asset, because GitHub sends no `Access-Control-Allow-Origin` header on the download. The website used to go through a Worker proxy to get around that; it no longer does. See [web-build.md §8](web-build.md).
 
 When a map file changes: upload the new asset to the `map-data` Release, then update its `sha256` + `bytes` in `scripts/map-assets.json`, and in `scripts/map-assets.web.json` when the web builds carry it. The desktop fetches the change at its next launch; the website and the Android app get it when they are next built.
 
@@ -320,7 +320,6 @@ It reads only from `server/seed/default`, which **is** committed (map included),
 | **Website** | `main` | `dist-site/` | Admin-panel 🚀 button → clean `upstream/main` worktree → `build:site` → `wrangler pages deploy` (or legacy `deploy-site.yml`) | Nothing — the next page load reloads onto it (§11.1) |
 | **Import counter Worker** | `main` | `tools/import-counter/worker.js` | Rides the admin-panel site deploy from the same worktree | — |
 | **Registry Worker** | admin repo | `registry/worker.js` | Rides the site deploy from the admin repo dir | — |
-| **Node directory** | *runtime data* | signed JSON | Admin panel re-signs + POSTs to the registry on any node change | None: the game no longer reads it |
 | **Map binaries** | *manual* | Release assets | Uploaded to `map-data`; fetched by `fetch-map-assets.mjs` when the desktop app launches, and laid into the website and the APK by `scripts/stage-map-assets.mjs` when they are built | Desktop: downloaded on first run. Website and Android: nothing, the map is part of the build |
 
 Key asymmetries a newcomer should internalize:

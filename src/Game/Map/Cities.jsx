@@ -8,7 +8,7 @@ import {
     readJson,
 } from "../../runtime/assets.js";
 import { ensurePmtilesProtocol } from "./mapLibreSetup.js";
-import { cityPopulationExpr, populationFilter, populationLabelFilter } from "./cityLayerExpressions.js";
+import { capitalExpr, cityPopulationExpr, populationFilter, populationLabelFilter } from "./cityLayerExpressions.js";
 import { useWorldState } from "./useWorldState.js";
 import { withPopulationsForYear } from "../../runtime/cityPopulation.js";
 import { gameDateYear } from "../../runtime/gameDates.js";
@@ -61,43 +61,41 @@ const customLabelFilter = [
     [">=", ["zoom"], 8.0],
 ];
 
-const customSortKey = (pop) => [
+const customSortKey = (pop, capital) => [
     "-",
     ["+",
         ["*", ["coalesce", ["get", "_ohTier"], ["get", "tier"], 0], 1000000000],
-        ["*", ["case", ["==", ["get", "_ohCapital"], true], 1, 0], 5000000000],
+        ["*", ["case", capital, 1, 0], 5000000000],
         ["coalesce", pop, 0],
     ],
 ];
 
+// Which cities are capitals: the map's own, and any a country's figures now
+// name its capital (cityLayerExpressions.js capitalExpr, from the world state).
 const isStockCapital = ["==", ["get", "capital"], "primary"];
 // The stock cities populationLabelFilter can ever label: the capitals, and the
 // rest above its lowest threshold.
 const stockLabelledCities = ["any", isStockCapital, [">", ["get", "population"], 250000]];
-const isCustomCapital = [
-    "any",
-    ["==", ["get", "_ohCapital"], true],
-    ["==", ["get", "capital"], "primary"],
-];
+const AUTHORED_CAPITAL = ["==", ["get", "_ohCapital"], true];
 const customTier = ["coalesce", ["get", "_ohTier"], ["get", "tier"], 0];
 
-const stockCircleSortKey = (pop) => [
+const stockCircleSortKey = (pop, capital) => [
     "+",
-    ["case", isStockCapital, 5000000000, 0],
+    ["case", capital, 5000000000, 0],
     ["coalesce", pop, 0],
 ];
 
-const customCircleSortKey = (pop) => [
+const customCircleSortKey = (pop, capital) => [
     "+",
     ["*", customTier, 1000000000],
-    ["*", ["case", isCustomCapital, 1, 0], 5000000000],
+    ["*", ["case", capital, 1, 0], 5000000000],
     ["coalesce", pop, 0],
 ];
 
 // Stock/custom city labels come from the immutable PMTiles/geojson "city" property.
 // AI renames (world.cityRenames) and the language pack's names are applied as
 // client-side match overrides (cityLabelExpression) without touching the tiles.
-const StockCities = ({ label, pop }) => (
+const StockCities = ({ label, pop, capital }) => (
     <Source id="cities-source" type="vector" url={PMTILES_PROTOCOL_URLS.cities}>
     <Layer
     id="cities-shapes"
@@ -105,9 +103,9 @@ const StockCities = ({ label, pop }) => (
     source-layer="cities"
     beforeId="country-curved-labels"
     minzoom={3.4}
-    filter={["all", populationFilter(pop), ["!", isStockCapital]]}
+    filter={["all", populationFilter(pop, capital), ["!", capital]]}
     layout={{
-        "circle-sort-key": stockCircleSortKey(pop),
+        "circle-sort-key": stockCircleSortKey(pop, capital),
     }}
     paint={{
         "circle-radius": [
@@ -149,7 +147,7 @@ const StockCities = ({ label, pop }) => (
     source-layer="cities"
     beforeId="country-curved-labels"
     minzoom={3.4}
-    filter={isStockCapital}
+    filter={capital}
     layout={{
         "text-field": "★",
         "text-font": ["Open Sans Semibold", "Arial Unicode MS Bold"],
@@ -176,7 +174,7 @@ const StockCities = ({ label, pop }) => (
     source-layer="cities"
     beforeId="country-curved-labels"
     minzoom={3.7}
-    filter={populationLabelFilter(pop)}
+    filter={populationLabelFilter(pop, capital)}
     layout={{
         "symbol-sort-key": ["-", pop],
         "text-field": label,
@@ -187,14 +185,14 @@ const StockCities = ({ label, pop }) => (
             "interpolate", ["linear"], ["zoom"],
             3.7, [
                 "case",
-                isStockCapital, 11.6,
+                capital, 11.6,
                 [">=", pop, 2500000], 10.2,
                 [">=", pop, 1000000], 9.4,
                 8.2,
             ],
             10, [
                 "case",
-                isStockCapital, 13.4,
+                capital, 13.4,
                 [">=", pop, 2500000], 11.8,
                 [">=", pop, 1000000], 10.8,
                 10.0,
@@ -207,11 +205,11 @@ const StockCities = ({ label, pop }) => (
     paint={{
         "text-color": "rgba(247,246,240,0.96)",
         "text-halo-color": "rgba(8,12,18,0.90)",
-        "text-halo-width": ["case", isStockCapital, 1.5, 1.1],
+        "text-halo-width": ["case", capital, 1.5, 1.1],
         "text-halo-blur": 0.45,
         "text-opacity": [
             "case",
-            isStockCapital, 1,
+            capital, 1,
             [">=", pop, 2500000], 0.96,
             [">=", pop, 1000000], 0.88,
             0.74,
@@ -223,16 +221,16 @@ const StockCities = ({ label, pop }) => (
 
 // Same visual language as the stock layers (ranked city circles + haloed labels), but
 // fed from the scenario's cities.geojson and gated by the authored tier.
-const CustomCities = ({ data, label, pop }) => (
+const CustomCities = ({ data, label, pop, capital }) => (
     <Source id="cities-source" type="geojson" data={data}>
     <Layer
     id="cities-shapes"
     type="circle"
     beforeId="country-curved-labels"
     minzoom={2.65}
-    filter={["all", customTierFilter, ["!", isCustomCapital]]}
+    filter={["all", customTierFilter, ["!", capital]]}
     layout={{
-        "circle-sort-key": customCircleSortKey(pop),
+        "circle-sort-key": customCircleSortKey(pop, capital),
     }}
     paint={{
         "circle-radius": [
@@ -281,7 +279,7 @@ const CustomCities = ({ data, label, pop }) => (
     type="symbol"
     beforeId="country-curved-labels"
     minzoom={2.65}
-    filter={isCustomCapital}
+    filter={capital}
     layout={{
         "text-field": "★",
         "text-font": ["Open Sans Semibold", "Arial Unicode MS Bold"],
@@ -307,9 +305,9 @@ const CustomCities = ({ data, label, pop }) => (
     type="symbol"
     beforeId="country-curved-labels"
     minzoom={3.0}
-    filter={customLabelFilter}
+    filter={["any", capital, customLabelFilter]}
     layout={{
-        "symbol-sort-key": customSortKey(pop),
+        "symbol-sort-key": customSortKey(pop, capital),
         "text-field": label,
         "text-font": ["Open Sans Semibold", "Arial Unicode MS Bold"],
         "text-padding": 4,
@@ -318,12 +316,12 @@ const CustomCities = ({ data, label, pop }) => (
             "interpolate", ["linear"], ["zoom"],
             3, [
                 "case",
-                isCustomCapital, 12.0,
+                capital, 12.0,
                 ["match", customTier, 4, 11.1, 3, 10.0, 2, 8.9, 8.0],
             ],
             10, [
                 "case",
-                isCustomCapital, 13.4,
+                capital, 13.4,
                 [">=", customTier, 4], 12.2,
                 [">=", customTier, 3], 11.4,
                 [">=", customTier, 2], 10.3,
@@ -337,11 +335,11 @@ const CustomCities = ({ data, label, pop }) => (
     paint={{
         "text-color": "rgba(250,249,244,0.99)",
         "text-halo-color": "rgba(7,10,14,0.94)",
-        "text-halo-width": ["case", isCustomCapital, 1.6, 1.2],
+        "text-halo-width": ["case", capital, 1.6, 1.2],
         "text-halo-blur": 0.32,
         "text-opacity": [
             "case",
-            isCustomCapital, 1,
+            capital, 1,
             [">=", customTier, 4], 0.98,
             [">=", customTier, 3], 0.92,
             [">=", customTier, 2], 0.78,
@@ -443,13 +441,16 @@ const Cities = () => {
     // world.customCities marks scenarios whose maps carry their own era-accurate
     // city set (presets, editor maps). Consumed from the shared world-state hook,
     // which follows world writes, rather than a read of its own.
-    const { customCities: customFlag, cityRenames, cityPopulations } = useWorldState();
+    const { customCities: customFlag, cityRenames, cityPopulations, capitalNames } = useWorldState();
     const [customData, setCustomData] = useState(null);
     // Whether the asset arrived, not whether it held any cities.
     const [customRead, setCustomRead] = useState(false);
     const [cityEditorEpoch, setCityEditorEpoch] = useState(0);
     const citiesGeojsonUrl = JSON_URLS.citiesGeojson;
     const pop = React.useMemo(() => cityPopulationExpr(cityPopulations, cityRenames), [cityPopulations, cityRenames]);
+    // A city a country has made its capital is starred as the map's own are.
+    const stockCapital = React.useMemo(() => capitalExpr(capitalNames ? capitalNames.split("\n") : [], cityRenames, isStockCapital), [capitalNames, cityRenames]);
+    const customCapital = React.useMemo(() => capitalExpr(capitalNames ? capitalNames.split("\n") : [], cityRenames, ["any", AUTHORED_CAPITAL, isStockCapital]), [capitalNames, cityRenames]);
     // Each city's population for the year, where the scenario gives it by year;
     // a population the AI set (cityPopulations, in `pop`) still wins.
     const gameYear = useGameYear();
@@ -524,8 +525,8 @@ const Cities = () => {
     const translations = useCityNameTranslations(source, customData);
     const label = React.useMemo(() => cityLabelExpression(cityRenames, translations), [cityRenames, translations]);
     if (source === "loading") return null;
-    if (source === "custom") return <CustomCities data={datedData} label={label} pop={pop} />;
-    return <StockCities label={label} pop={pop} />;
+    if (source === "custom") return <CustomCities data={datedData} label={label} pop={pop} capital={customCapital} />;
+    return <StockCities label={label} pop={pop} capital={stockCapital} />;
 };
 
 export default Cities;
