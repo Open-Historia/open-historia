@@ -1,0 +1,724 @@
+<!doctype html>
+<html lang="en" class="no-js">
+<head>
+<meta charset="utf-8" />
+<!-- Visit counters: asked for first, loaded only after a yes (consent.js). -->
+<script defer src="/consent.js"></script>
+<script>document.documentElement.classList.replace("no-js", "js");</script>
+
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Open Historia — Play AI-driven alternate history</title>
+<!-- A temporary preview of the landing page's redesign, shared by direct link only:
+     kept out of search engines and linked from nowhere. -->
+<meta name="robots" content="noindex, nofollow, noarchive" />
+<meta name="theme-color" content="#0d0d0f" />
+<link rel="icon" type="image/png" href="/favicon.png" />
+<link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+<link rel="stylesheet" href="/fonts/fonts.css" />
+<link rel="stylesheet" href="/scrollytellingbetasite/story/story.css" />
+<script defer src="/scrollytellingbetasite/story/map-data.js"></script>
+<script defer src="/scrollytellingbetasite/story/story.js"></script>
+<script defer src="/scrollytellingbetasite/story/site.js"></script>
+</head>
+<body>
+
+<aside class="community" aria-label="Join the community">
+  <div class="community-in">
+    <span>Ask questions, share scenarios, and hear about updates &mdash; <b>come say hello.</b></span>
+    <span class="community-links">
+      <a class="community-btn" href="https://discord.gg/QaqAK7fQAg" target="_blank" rel="noopener">Discord</a>
+      <a class="community-btn" href="https://www.reddit.com/r/OpenHistoria" target="_blank" rel="noopener">r/OpenHistoria</a>
+      <a class="community-btn" href="https://x.com/open_historia" target="_blank" rel="noopener" aria-label="Follow Open Historia on X">X</a>
+    </span>
+  </div>
+</aside>
+
+<header class="site-head">
+  <div class="head-in">
+    <a class="brand" href="#top"><img src="/play/icon-192.png" alt="" width="28" height="28" fetchpriority="high" /> Open Historia <span class="brand-sub">Est. MMXXVI</span></a>
+    <nav class="nav" aria-label="Site">
+      <a href="#story">The story</a>
+      <a href="#eras">Eras</a>
+      <a href="#features">Features</a>
+      <a href="#download">Download</a>
+      <a class="nav-keep" href="/wiki/">Wiki</a>
+      <a href="https://github.com/Open-Historia/open-historia" target="_blank" rel="noopener">GitHub</a>
+      <a class="nav-play" href="/play/">▶ Play</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+
+<!-- ====================================================================== -->
+<section class="hero" id="top">
+  <svg class="hero-map" id="heroMap" aria-hidden="true" preserveAspectRatio="xMidYMid slice"></svg>
+  <div class="hero-veil" aria-hidden="true"></div>
+
+  <!-- The astrolabe behind the scales: rings of degrees, turning slowly. -->
+  <svg class="astrolabe" viewBox="-400 -400 800 800" aria-hidden="true">
+    <defs>
+      <path id="ringText" d="M0 -318 A318 318 0 1 1 -0.1 -318" />
+      <path id="ringText2" d="M0 -246 A246 246 0 1 1 -0.1 -246" />
+    </defs>
+    <g class="ring r1">
+      <circle r="360" /><circle r="350" />
+      <g class="ticks" id="astroTicks"></g>
+    </g>
+    <g class="ring r2">
+      <circle r="332" /><circle r="304" />
+      <text class="ring-words"><textPath href="#ringText">BELLUM · PAX · BELLUM · PAX · BELLUM · PAX · BELLUM · PAX · BELLUM · PAX · BELLUM · PAX · BELLUM · PAX · BELLUM · PAX ·</textPath></text>
+    </g>
+    <g class="ring r3">
+      <circle r="262" /><circle r="232" class="dash" />
+      <text class="ring-words small"><textPath href="#ringText2">MDCCCXV · MCMXIV · MCMXXXIX · MCMXLV · MMXVI · ANNO DOMINI · ANTE CHRISTUM · MMCDLIII ·</textPath></text>
+      <path class="spoke" d="M0 -232 V232 M-232 0 H232 M-164 -164 L164 164 M164 -164 L-164 164" />
+    </g>
+  </svg>
+
+  <!-- Slips of history drifting about the title: events from other games. -->
+  <div class="slips" aria-hidden="true">
+    <div class="slip war" data-depth="0.35" data-rot="-4" style="left:4%;top:16%"><b>1914</b> · War declared at Sarajevo<i>Dispatch Nº 211</i></div>
+    <div class="slip peace" data-depth="0.18" data-rot="3" style="left:7%;top:58%"><b>1648</b> · The Peace of Westphalia, signed twice<i>Archive · Münster</i></div>
+    <div class="slip war" data-depth="0.5" data-rot="5" style="left:2%;top:80%"><b>1588</b> · The Armada lands at Kent<i>Telegram · Dover</i></div>
+    <div class="slip peace" data-depth="0.28" data-rot="-3" style="right:4%;top:14%"><b>1815</b> · A congress at Vienna, without Austria<i>Minutes, p. 3</i></div>
+    <div class="slip war" data-depth="0.42" data-rot="4" style="right:6%;top:46%"><b>1939</b> · Poland and Lithuania stand together<i>Order of battle</i></div>
+    <div class="slip peace" data-depth="0.22" data-rot="-5" style="right:3%;top:76%"><b>1453</b> · Constantinople holds; the Sultan sues for peace<i>Chronicle, vol. II</i></div>
+  </div>
+
+  <div class="hero-in">
+    <p class="kicker"><span class="orn">✦</span> A free, open-source strategy game · AI-driven alternate history <span class="orn">✦</span></p>
+
+    <!-- The scales of history: the sword in one pan, the olive branch in the other. -->
+    <svg class="scales" id="scales" viewBox="0 0 400 250" aria-hidden="true">
+      <rect class="base" x="140" y="232" width="120" height="10" rx="5" />
+      <rect class="base2" x="160" y="224" width="80" height="10" rx="4" />
+      <rect class="post" x="196" y="62" width="8" height="166" rx="3" />
+      <g class="beam">
+        <rect class="beam-bar" x="40" y="58" width="320" height="8" rx="4" />
+        <circle class="beam-end" cx="40" cy="62" r="6" /><circle class="beam-end" cx="360" cy="62" r="6" />
+        <g class="hang-l">
+          <line class="chain" x1="54" y1="62" x2="20" y2="156" />
+          <line class="chain" x1="54" y1="62" x2="88" y2="156" />
+          <line class="chain" x1="54" y1="62" x2="54" y2="156" />
+          <path class="pan" d="M10 156 H98 Q92 182 54 184 Q16 182 10 156 Z" />
+          <g transform="translate(54 150) rotate(-62)">
+            <rect class="sword-steel" x="-3" y="-70" width="6" height="58" rx="1" />
+            <path class="sword-steel" d="M-3 -70 L0 -80 L3 -70 Z" />
+            <rect class="sword" x="-15" y="-13" width="30" height="5" rx="2" />
+            <rect class="sword" x="-2.5" y="-8" width="5" height="14" rx="1.5" />
+            <circle class="sword" cx="0" cy="9" r="4" />
+          </g>
+        </g>
+        <g class="hang-r">
+          <line class="chain" x1="346" y1="62" x2="312" y2="156" />
+          <line class="chain" x1="346" y1="62" x2="380" y2="156" />
+          <line class="chain" x1="346" y1="62" x2="346" y2="156" />
+          <path class="pan" d="M302 156 H390 Q384 182 346 184 Q308 182 302 156 Z" />
+          <g transform="translate(346 152)">
+            <path class="olive" d="M-34 0 Q-6 -6 30 -34" />
+            <ellipse class="leaf" cx="-18" cy="-10" rx="8" ry="3.4" transform="rotate(-38 -18 -10)" />
+            <ellipse class="leaf" cx="-14" cy="3" rx="8" ry="3.4" transform="rotate(20 -14 3)" />
+            <ellipse class="leaf" cx="-2" cy="-17" rx="8" ry="3.4" transform="rotate(-62 -2 -17)" />
+            <ellipse class="leaf" cx="4" cy="-4" rx="8" ry="3.4" transform="rotate(4 4 -4)" />
+            <ellipse class="leaf" cx="12" cy="-27" rx="8" ry="3.4" transform="rotate(-78 12 -27)" />
+            <ellipse class="leaf" cx="18" cy="-15" rx="8" ry="3.4" transform="rotate(-20 18 -15)" />
+            <circle class="leaf" cx="27" cy="-24" r="3.2" />
+          </g>
+        </g>
+      </g>
+      <circle class="pivot" cx="200" cy="62" r="11" />
+      <circle class="pivot-in" cx="200" cy="62" r="4" />
+      <path class="finial" d="M200 34 L206 48 L200 44 L194 48 Z" />
+    </svg>
+
+    <h1 class="title">
+      <span class="t-small"><span class="rule-l"></span>Open Historia<span class="rule-r"></span></span>
+      <span class="t-big"><span class="w-war">War</span><span class="w-or">or</span><span class="w-peace">Peace</span></span>
+    </h1>
+    <p class="lede">Lead any nation on a living world map. Say what it does in your own words, and an AI plays out the rest of the world. <em>The history you make is yours.</em></p>
+    <div class="cta-row">
+      <a id="primaryDownload" class="btn btn-primary" href="#download"><span class="i">⬇</span> <span id="primaryLabel">Download for Desktop</span></a>
+      <a id="betaDownload" class="btn btn-ghost" href="#download"><span class="i">⬇</span> <span id="betaLabel">Download the Beta</span></a>
+      <a class="btn btn-ghost" href="/play/"><span class="i">▶</span> Demo in your browser</a>
+    </div>
+    <p class="hero-note" id="heroNote">The browser version is a demo — it streams the world map over the network, so expect lag. The <a href="#download">desktop app</a> runs locally and is how the game is meant to be played.</p>
+    <ul class="seals" aria-label="At a glance">
+      <li><b>Free</b><span>no price, no ads</span></li>
+      <li><b>AGPL</b><span>open source</span></li>
+      <li><b>22</b><span>languages</span></li>
+      <li><b>Offline</b><span>runs on your machine</span></li>
+    </ul>
+  </div>
+
+  <!-- A ruler of years along the foot of the hero. -->
+  <div class="ruler" aria-hidden="true">
+    <span style="left:2%">3000 BC</span><span style="left:12%">753 BC</span><span style="left:22%">AD 1</span><span style="left:32%">476</span><span style="left:42%">1066</span><span style="left:52%">1453</span><span style="left:62%">1648</span><span style="left:70%">1815</span><span style="left:77%">1914</span><span style="left:83%">1939</span><span style="left:90%">2016</span><span style="left:97%">∞</span>
+  </div>
+  <a class="scroll-cue" href="#story">Begin the chronicle</a>
+</section>
+
+<!-- Two rivers of headlines from other players' worlds, running opposite ways. -->
+<div class="marquee" aria-hidden="true">
+  <div class="mq war"><div class="mq-track">
+    <span>⚔ 1914 · The Kaiser's ultimatum expires at noon</span><span>⚔ 1870 · Metz besieged</span><span>⚔ 1588 · Spanish tercios land in Kent</span><span>⚔ 1941 · The Caucasus front breaks</span><span>⚔ 1453 · The walls of Theodosius hold another day</span><span>⚔ 2016 · Ten tracks over the Arctic</span><span>⚔ 1805 · A fleet lost off Trafalgar</span><span>⚔ 216 BC · Hannibal turns on Rome</span>
+    <span>⚔ 1914 · The Kaiser's ultimatum expires at noon</span><span>⚔ 1870 · Metz besieged</span><span>⚔ 1588 · Spanish tercios land in Kent</span><span>⚔ 1941 · The Caucasus front breaks</span><span>⚔ 1453 · The walls of Theodosius hold another day</span><span>⚔ 2016 · Ten tracks over the Arctic</span><span>⚔ 1805 · A fleet lost off Trafalgar</span><span>⚔ 216 BC · Hannibal turns on Rome</span>
+  </div></div>
+  <div class="mq peace"><div class="mq-track">
+    <span>✦ 1648 · Bells ring across Westphalia</span><span>✦ 1815 · A congress dances at Vienna</span><span>✦ 1919 · A league with teeth</span><span>✦ 2017 · The Congress of Strasbourg</span><span>✦ 1494 · The world divided at Tordesillas</span><span>✦ 1955 · Austria walks free</span><span>✦ 1713 · The Spanish succession settled at Utrecht</span><span>✦ 2031 · An African Union of fifty-five</span>
+    <span>✦ 1648 · Bells ring across Westphalia</span><span>✦ 1815 · A congress dances at Vienna</span><span>✦ 1919 · A league with teeth</span><span>✦ 2017 · The Congress of Strasbourg</span><span>✦ 1494 · The world divided at Tordesillas</span><span>✦ 1955 · Austria walks free</span><span>✦ 1713 · The Spanish succession settled at Utrecht</span><span>✦ 2031 · An African Union of fifty-five</span>
+  </div></div>
+</div>
+
+<div class="notice-band">
+  <p class="notice" role="note"><b>Open Historia is an independent, open-source project</b> and is not affiliated with, endorsed, sponsored, approved, or authorized by Pax Historia. Pax Historia has no involvement in the development, operation, or distribution of Open Historia. Pax Historia™ and all associated trademarks, trade names, and logos are the exclusive property of Pax Historia.</p>
+</div>
+
+<!-- ====================================================================== -->
+<section class="tally" aria-label="Open Historia in numbers">
+  <div class="tally-in">
+    <div class="fig rise"><b>~200</b><span>nations on the built-in map</span><i>Modern Day, 2016</i></div>
+    <div class="fig rise"><b>3,662</b><span>regions to hold, lose and win back</span><i>each with a name</i></div>
+    <div class="fig rise"><b>1</b><span>AI request per time skip</span><i>however long the skip</i></div>
+    <div class="fig rise"><b>22</b><span>languages, translated in full</span><i>Arabic to Vietnamese</i></div>
+    <div class="fig rise"><b>0</b><span>accounts, stores or sign-ups</span><i>download and play</i></div>
+    <div class="fig rise"><b>∞</b><span>histories</span><i>yours among them</i></div>
+  </div>
+</section>
+
+<!-- ====================================================================== -->
+<!-- The chronicle: one campaign, told on the game's own map. The stage stays
+     put while the chapters scroll over it (story/story.js). -->
+<section class="chronicle" id="story" aria-label="The story of one year">
+  <div class="stage" id="stage" data-step="world" aria-hidden="true">
+    <canvas class="stage-canvas" id="stageCanvas"></canvas>
+
+    <!-- The map's frame: a double rule, ornaments at the corners, where the camera is. -->
+    <div class="frame">
+      <span class="corner tl"></span><span class="corner tr"></span><span class="corner bl"></span><span class="corner br"></span>
+      <span class="coords" id="coords"></span>
+    </div>
+
+    <svg class="compass" id="compass" viewBox="-60 -60 120 120">
+      <circle r="56" class="c-ring" /><circle r="50" class="c-ring thin" /><circle r="30" class="c-ring thin" />
+      <g class="c-rose">
+        <path class="c-pt dark" d="M0 -48 L7 -7 L0 0 Z" /><path class="c-pt light" d="M0 -48 L-7 -7 L0 0 Z" />
+        <path class="c-pt dark" d="M48 0 L7 7 L0 0 Z" /><path class="c-pt light" d="M48 0 L7 -7 L0 0 Z" />
+        <path class="c-pt dark" d="M0 48 L-7 7 L0 0 Z" /><path class="c-pt light" d="M0 48 L7 7 L0 0 Z" />
+        <path class="c-pt dark" d="M-48 0 L-7 -7 L0 0 Z" /><path class="c-pt light" d="M-48 0 L-7 7 L0 0 Z" />
+        <path class="c-pt small" d="M24 -24 L4 -2 L2 -4 Z M24 24 L2 4 L4 2 Z M-24 24 L-4 2 L-2 4 Z M-24 -24 L-2 -4 L-4 -2 Z" />
+        <circle r="3.5" class="c-hub" />
+      </g>
+      <text y="-40" class="c-n">N</text>
+    </svg>
+
+    <div class="cartouche">
+      <div class="c-top"><span id="cartouchePlate">Plate I</span><span>Atlas</span></div>
+      <div class="c-title" id="cartoucheTitle">The World · Political</div>
+      <div class="c-scale"><span class="bar" id="scaleBar"></span><span id="scaleText">1,000 km</span></div>
+      <div class="c-foot">Mercator projection · the game's own Modern Day map</div>
+    </div>
+
+    <div class="hud" id="hud">
+      <div class="hud-row">
+        <span class="hud-date" id="hudDate">1 January 2016</span>
+        <span class="hud-sep"></span>
+        <span class="hud-turn" id="hudTurn">Turn 1</span>
+        <span class="hud-sep"></span>
+        <span class="hud-balance"><span class="p">Peace</span><span class="hud-track"><span class="hud-mid"></span><span class="hud-knob"></span></span><span class="w">War</span></span>
+      </div>
+      <div class="hud-row hud-stats">
+        <span class="stat"><span>Stability</span><span class="sbar"><i id="hud-stability"></i></span></span>
+        <span class="stat"><span>Treasury</span><span class="sbar"><i id="hud-treasury"></i></span></span>
+        <span class="stat"><span>Manpower</span><span class="sbar"><i id="hud-manpower"></i></span></span>
+        <span class="progress"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
+      </div>
+    </div>
+
+    <div class="ticker"><span class="ticker-tag">Wire</span><div class="ticker-in"><div class="ticker-track" id="tickerTrack"></div></div></div>
+
+    <!-- II: the launch, tracked. -->
+    <div class="ov ov-right ov-telemetry" data-on="launch">
+      <div class="tm-head"><span>◉ Strategic tracking</span><span class="blink">Live</span></div>
+      <div class="tm-counts"><span><b id="tmFlying">0</b>In flight</span><span><b id="tmStopped">0</b>Intercepted</span><span><b id="tmHit">0</b>Impacts</span></div>
+      <ol class="tm-tracks" id="tmTracks">
+        <li><span>T-01</span>Malmstrom → Plesetsk<b>Holding</b></li>
+        <li><span>T-02</span>Minot → Kozelsk<b>Holding</b></li>
+        <li><span>T-03</span>F. E. Warren → Tatishchevo<b>Holding</b></li>
+        <li><span>T-04</span>Malmstrom → Moscow<b>Holding</b></li>
+        <li><span>T-05</span>Malmstrom → Yasny<b>Holding</b></li>
+        <li><span>T-06</span>F. E. Warren → Kozelsk<b>Holding</b></li>
+        <li><span>T-07</span>Malmstrom → Tatishchevo<b>Holding</b></li>
+        <li><span>T-08</span>Minot → Plesetsk<b>Holding</b></li>
+        <li><span>T-09</span>F. E. Warren → Moscow<b>Holding</b></li>
+        <li><span>T-10</span>Minot → Yasny<b>Holding</b></li>
+      </ol>
+      <div class="tm-foot">Great-circle tracks over the Arctic · interceptors from Sofrino, Severomorsk, Kaliningrad and Orenburg</div>
+    </div>
+
+    <!-- III: the front, reported. -->
+    <div class="ov ov-right ov-front" data-on="korea">
+      <div class="wr-head"><span>⚔ Front report</span><span>Korean peninsula</span></div>
+      <div class="fr-body">
+        <div class="fr-count"><b id="frontCount">0 / 17</b><span>southern regions taken</span></div>
+        <h6>Fallen, newest first</h6>
+        <ol class="fallen" id="frontFallen"><li>The line holds at the 38th parallel</li></ol>
+        <div class="fr-units"><span class="chip n">KPA</span> 6 formations on the line <span class="chip s">ROK</span> 6 formations falling back</div>
+      </div>
+      <div class="tools"><span class="on">Attack</span><span>Route</span><span>Hold</span><span>Dig in</span><span>Fortify</span><span>Deploy</span></div>
+    </div>
+
+    <div class="ov ov-right ov-card" data-on="choose">
+      <span class="flag" aria-hidden="true"><i style="background:#1f4b8f"></i><i style="background:#ece4d2"></i><i style="background:#b8322a"></i></span>
+      <h4>France</h4>
+      <span class="you">◆ You play this country</span>
+      <dl>
+        <dt>Capital</dt><dd>Paris</dd>
+        <dt>Government</dt><dd>Semi-presidential republic</dd>
+        <dt>Seat</dt><dd>Permanent, Security Council</dd>
+        <dt>Population</dt><dd>66.8 million</dd>
+        <dt>Army</dt><dd>11 formations</dd>
+        <dt>Fleet</dt><dd>3 squadrons</dd>
+      </dl>
+      <div class="bars">
+        <span>Economy</span><span class="sbar"><i style="width:72%"></i></span>
+        <span>Military</span><span class="sbar"><i style="width:64%"></i></span>
+        <span>Stability</span><span class="sbar"><i style="width:58%"></i></span>
+      </div>
+      <div class="rel"><span>United States</span><b class="warm">Allied</b><span>Russia</span><b class="cold">Tense</b><span>China</span><b class="warm">Cordial</b></div>
+    </div>
+
+    <div class="ov ov-right ov-command" data-on="order">
+      <div class="label"><span>◆ Your orders this turn</span><span class="count">2 of 3</span></div>
+      <ol class="queue">
+        <li class="done">Put the forces of deterrence on alert <em>queued</em></li>
+      </ol>
+      <div class="typed"><span id="typed"></span><span class="caret"></span></div>
+      <div class="advice" id="advice"><b>Advisor ·</b> Washington will come if Moscow does. Beijing is the only capital Pyongyang still listens to.</div>
+    </div>
+
+    <div class="ov ov-right ov-events" data-on="skip">
+      <article class="paper">
+        <header><span>Vol. CXII · No. 1</span><span>Sunday, 1 January 2017</span><span>Price 2 €</span></header>
+        <h3>The Paris Herald</h3>
+        <h4>The world comes to Strasbourg</h4>
+        <p class="deck">Washington and Moscow accept · Beijing to bring Pyongyang · the guns fall quiet in Busan</p>
+        <div class="cols">
+          <p><b>PARIS.</b> The Quai d'Orsay confirmed last night that every government invited has said yes. The congress opens in February in the Palais de l'Europe.</p>
+          <p><b>BUSAN.</b> A ceasefire holds for a fourth day. The North's flags fly over the city hall.</p>
+          <p><b>MOSCOW.</b> Fires still burn at Tatishchevo. The Kremlin speaks of "a moment for the grown-ups".</p>
+        </div>
+      </article>
+      <div class="telegram"><span class="where">WASHINGTON · 22 DEC —</span> President accepts Strasbourg stop delegation named stop</div>
+      <div class="telegram"><span class="where">BEIJING · 29 DEC —</span> Pyongyang will attend stop seating to be agreed stop</div>
+    </div>
+
+    <div class="ov ov-right ov-letters" data-on="talks">
+      <div class="letter fr">
+        <span class="stamp-post"><b>FR</b>2,80</span>
+        <span class="postmark">PARIS<br />14·I·17</span>
+        <div class="from">From Paris to Moscow</div>
+        <p>The fires at Tatishchevo will not be the last unless we sit down. France offers Strasbourg, and its word that Washington will be at the table.</p>
+        <div class="sign">— The Élysée Palace</div>
+        <span class="seal">FR</span>
+      </div>
+      <div class="letter de">
+        <span class="stamp-post de"><b>RU</b>45</span>
+        <span class="postmark">MOSCOW<br />17·I·17</span>
+        <div class="from">From Moscow to Paris</div>
+        <p>We will come to Strasbourg. Let it be understood that we come as the injured party, and that inspectors go to Montana as well as to Plesetsk.</p>
+        <div class="sign">— The Kremlin</div>
+        <span class="seal">RU</span>
+      </div>
+    </div>
+
+    <div class="ov ov-right ov-parliament" data-on="parliament">
+      <div class="wr-head peace"><span>🏛 Assemblée nationale</span><span>Vote of the day</span></div>
+      <svg class="hemi" id="hemicycle" viewBox="-130 -125 260 130"></svg>
+      <div class="motion">Motion: to authorise the Government to sign the Final Act of the Congress of Strasbourg</div>
+      <div class="tally-row"><span class="for"><b>341</b>For</span><span class="against"><b>156</b>Against</span><span class="abst"><b>80</b>Abstained</span></div>
+      <div class="factions"><span><i style="background:#5aa0c8"></i>Majority</span><span><i style="background:#2c4f8f"></i>Republicans</span><span><i style="background:#b8322a"></i>Socialists</span><span><i style="background:#e6a23c"></i>Centre</span><span><i style="background:#d8657a"></i>Ecologists</span><span><i style="background:#7a2a22"></i>Communists</span></div>
+    </div>
+
+    <div class="ov ov-right ov-treaty" data-on="congress">
+      <svg class="olive-mark" viewBox="0 0 80 40" aria-hidden="true">
+        <path d="M6 30 Q34 26 74 6" fill="none" stroke="#5d6b37" stroke-width="2.6" stroke-linecap="round" />
+        <ellipse cx="22" cy="23" rx="8" ry="3.2" fill="#5d6b37" transform="rotate(-40 22 23)" />
+        <ellipse cx="28" cy="33" rx="8" ry="3.2" fill="#5d6b37" transform="rotate(18 28 33)" />
+        <ellipse cx="42" cy="15" rx="8" ry="3.2" fill="#5d6b37" transform="rotate(-60 42 15)" />
+        <ellipse cx="48" cy="25" rx="8" ry="3.2" fill="#5d6b37" transform="rotate(4 48 25)" />
+        <ellipse cx="60" cy="7" rx="7" ry="3" fill="#5d6b37" transform="rotate(-76 60 7)" />
+      </svg>
+      <p class="pre">The Final Act of</p>
+      <h4>The Congress of Strasbourg</h4>
+      <p class="done">Done at Strasbourg, the second of March 2017, in six originals</p>
+      <ol>
+        <li>An armistice in Korea along the line held on the day of signature.</li>
+        <li>No missile shall be launched by any party for ten years.</li>
+        <li>Inspectors shall visit every silo field, in Montana as in Plesetsk.</li>
+        <li>A standing conference shall meet at Strasbourg each spring.</li>
+      </ol>
+      <div class="sigs four">
+        <div class="sig"><svg viewBox="0 0 160 44"><path pathLength="1" d="M6 30 C18 6 26 40 36 22 S52 10 58 28 C64 40 70 14 82 22 C92 30 98 18 112 24 C124 28 134 16 152 20" /></svg><small>United States</small></div>
+        <div class="sig"><svg viewBox="0 0 160 44"><path pathLength="1" d="M8 26 C14 10 22 10 24 26 C26 36 34 8 44 18 C52 26 50 34 62 26 L76 14 C84 30 96 30 104 20 C112 12 122 28 134 22 C142 18 148 22 154 18" /></svg><small>Russian Federation</small></div>
+        <div class="sig"><svg viewBox="0 0 160 44"><path pathLength="1" d="M6 22 C20 30 30 6 44 18 C56 30 60 30 72 18 C84 6 92 34 106 26 C118 18 130 14 152 24" /></svg><small>The two Koreas</small></div>
+        <div class="sig"><svg viewBox="0 0 160 44"><path pathLength="1" d="M10 30 C24 8 34 30 46 16 C58 4 64 34 78 24 C90 16 104 30 118 20 C130 12 140 24 152 16" /></svg><small>French Republic, host</small></div>
+      </div>
+      <span class="wax">✦</span>
+    </div>
+
+    <!-- Doves over the peace. -->
+    <div class="doves" data-on="congress" aria-hidden="true"></div>
+  </div>
+
+  <div class="steps">
+    <article class="step" data-step="world" data-date="1 January 2016" data-balance="-0.15" data-turn="Turn 1" data-stability="72" data-treasury="64" data-manpower="58" data-plate="Plate I" data-map="The World · Political" data-news="Markets open the year steady in London and Tokyo|The Security Council meets on the Sahel|Oil holds at forty dollars a barrel|Snowstorms close Moscow's airports|Brazil's Senate debates the budget">
+      <div class="chapter">
+        <div class="dossier"><span>File Nº 01</span><span>A Year in the World</span><span>1 / 10</span></div>
+        <div class="num">Chapter I</div>
+        <h2>The world, as it stands</h2>
+        <p class="drop"><strong>1 January 2016.</strong> Some two hundred nations, every border where it lies. Start in the present, in 1939, in an age long gone, or in a world someone drew from scratch.</p>
+        <p>You lead one country. An AI plays every other, each with its own leaders, aims and memory. Scroll on, and watch what they do with a year.</p>
+        <span class="stamp">Archive</span>
+        <p class="fn"><sup>1</sup> The built-in Modern Day map: 3,662 regions, every one with a name and an owner. <sup>2</sup> A scenario can begin on any date, even before Christ.</p>
+      </div>
+    </article>
+
+    <article class="step tall" data-step="launch" data-tone="war" data-date="9 August 2016" data-balance="1" data-turn="Turn 8" data-stability="55" data-treasury="57" data-manpower="63" data-plate="Plate II" data-map="The Arctic Route · In Pursuit" data-news="Launch detected at Malmstrom|Ten tracks over the Arctic|Interceptors away from Sofrino|Impacts reported at Tatishchevo, Kozelsk and Yasny|The Security Council meets in emergency session">
+      <div class="chapter">
+        <div class="dossier"><span>File Nº 02</span><span>A Year in the World</span><span>2 / 10</span></div>
+        <div class="num">Chapter II</div>
+        <h2>The world does not wait</h2>
+        <p class="drop">Every turn, the AI plays the other nations at once. Most of them argue. Some of them arm. And one August night, <strong>two of them fire</strong>.</p>
+        <p>Ten missiles leave Montana, North Dakota and Wyoming on the great circles over the Arctic. Most are caught in the air. Some are not.</p>
+        <p>The story says what flew, what was stopped and what got through, and the map remembers where it fell.</p>
+        <span class="stamp red">Flash traffic</span>
+        <p class="fn"><sup>3</sup> The rest of the world is played in the same AI request as your own country: one per time skip.</p>
+      </div>
+    </article>
+
+    <article class="step tall" data-step="korea" data-tone="war" data-date="2 September 2016" data-balance="0.95" data-turn="Turn 9" data-stability="52" data-treasury="54" data-manpower="70" data-plate="Plate III" data-map="The Korean Peninsula · Facing South" data-news="The North crosses the line at dawn|Seoul encircled|Daejeon falls|The Nakdong line breaks|Busan's harbour under fire">
+      <div class="chapter">
+        <div class="dossier"><span>File Nº 03</span><span>A Year in the World</span><span>3 / 10</span></div>
+        <div class="num">Chapter III <span class="beta">Beta</span></div>
+        <h2>The front moves</h2>
+        <p class="drop">In the confusion, Pyongyang moves. Where two countries at war share a border <strong>a front forms</strong>, and the game fights it region by region, troop by troop, before the story is told.</p>
+        <p>Keep scrolling and the line comes south: Seoul, Daejeon, Daegu, and at last Busan.</p>
+        <span class="stamp red">War declared</span>
+        <p class="fn"><sup>4</sup> Battlefields, the War Room and seasons on the front come to the beta first.</p>
+      </div>
+    </article>
+
+    <article class="step" data-step="choose" data-date="1 December 2016" data-balance="0.6" data-turn="Turn 12" data-stability="58" data-treasury="52" data-manpower="64" data-plate="Plate IV" data-map="Western Europe" data-news="Paris: the cabinet meets through the night|Berlin calls for calm|Brussels: NATO ministers in session|London backs a conference|Markets close lower for a sixth week">
+      <div class="chapter">
+        <div class="dossier"><span>File Nº 04</span><span>A Year in the World</span><span>4 / 10</span></div>
+        <div class="num">Chapter IV</div>
+        <h2>Choose a nation</h2>
+        <p class="drop">None of that was yours. You are <strong>France</strong>: a permanent seat at the Security Council, an army, a voice. Its card shows what you answer for.</p>
+        <p>Every other country has a card of its own. Read the others before you deal with them.</p>
+        <span class="stamp blue">Selected</span>
+        <p class="fn"><sup>5</sup> In the game: click any country on the map to open its card.</p>
+      </div>
+    </article>
+
+    <article class="step" data-step="order" data-date="1 December 2016" data-balance="0.5" data-turn="Turn 12" data-stability="58" data-treasury="52" data-manpower="64" data-plate="Plate V" data-map="Paris · Orders" data-news="Ambassadors summoned to the Quai d'Orsay|Strasbourg named as a venue|An envoy flies to Beijing|The Élysée on the telephone all night|Silence from Pyongyang">
+      <div class="chapter">
+        <div class="dossier"><span>File Nº 05</span><span>A Year in the World</span><span>5 / 10</span></div>
+        <div class="num">Chapter V</div>
+        <h2>Speak, and it is done</h2>
+        <p class="drop">There's no menu of three hundred buttons. <strong>Write your orders the way a head of state would give them</strong>, in your own words and your own language.</p>
+        <p>Your advisor reads them first and tells you what they'll cost.</p>
+        <span class="stamp">Orders</span>
+        <p class="fn"><sup>6</sup> Orders wait in a queue and are carried out by the next time skip.</p>
+      </div>
+    </article>
+
+    <article class="step" data-step="skip" data-date="1 January 2017" data-from="1 December 2016" data-balance="0.4" data-turn="Turn 13" data-stability="61" data-treasury="50" data-manpower="62" data-plate="Plate VI" data-map="Europe and the East · December" data-news="Washington accepts Strasbourg|Moscow accepts Strasbourg|Beijing to bring Pyongyang|A ceasefire holds in Busan|The congress to open in February">
+      <div class="chapter">
+        <div class="dossier"><span>File Nº 06</span><span>A Year in the World</span><span>6 / 10</span></div>
+        <div class="num">Chapter VI</div>
+        <h2>Then the world moves</h2>
+        <p class="drop">Press <strong>time skip</strong> and weeks go by at once. The AI plays out the whole world for the period: crises, markets, elections, wars far away. Every event is dated, placed on the map and remembered.</p>
+        <p>This month, the capitals answer you.</p>
+        <span class="stamp red">Dispatch</span>
+        <p class="fn"><sup>7</sup> A time skip is one request to your AI, however long the period it plays.</p>
+      </div>
+    </article>
+
+    <article class="step" data-step="talks" data-date="14 January 2017" data-balance="0.1" data-turn="Turn 14" data-stability="63" data-treasury="49" data-manpower="60" data-plate="Plate VII" data-map="Paris, Washington, Moscow, Beijing · Correspondence" data-news="Letters cross between Paris and Moscow|Washington names its delegation|Inspectors: the sticking point|Swiss offer to help with the seating|Strasbourg's hotels fill">
+      <div class="chapter">
+        <div class="dossier"><span>File Nº 07</span><span>A Year in the World</span><span>7 / 10</span></div>
+        <div class="num">Chapter VII</div>
+        <h2>Words before weapons</h2>
+        <p class="drop">Write to any government in your own words, and it <strong>writes back in its own voice</strong>. Propose a treaty, offer a deal, apologise, threaten.</p>
+        <p>They remember what you said, and so does everyone they tell.</p>
+        <span class="stamp">Diplomatic pouch</span>
+        <p class="fn"><sup>8</sup> Each government answers from what it knows, in the language you play in.</p>
+      </div>
+    </article>
+
+    <article class="step" data-step="parliament" data-tone="peace" data-date="9 February 2017" data-balance="-0.3" data-turn="Turn 15" data-stability="57" data-treasury="47" data-manpower="58" data-plate="Plate VIII" data-map="Paris · The Assemblée" data-news="The Assemblée debates the congress|The opposition calls it 'a gift to Moscow'|341 for, 156 against|Protests on the Place de la Concorde|The Senate to vote on Tuesday">
+      <div class="chapter">
+        <div class="dossier"><span>File Nº 08</span><span>A Year in the World</span><span>8 / 10</span></div>
+        <div class="num">Chapter VIII <span class="beta">Beta</span></div>
+        <h2>Answer to your people</h2>
+        <p class="drop">Governments answer to parliaments, factions and voters. <strong>The Assemblée must let you sign</strong>, and the opposition will make you pay for every concession.</p>
+        <p>Leaders change, factions rise and fall, and institutions debate and vote in their councils.</p>
+        <span class="stamp">Order of the day</span>
+        <p class="fn"><sup>9</sup> The Political World: leaders, political forces, institutions and puppet states.</p>
+      </div>
+    </article>
+
+    <article class="step" data-step="congress" data-tone="peace" data-date="2 March 2017" data-balance="-0.95" data-turn="Turn 16" data-stability="70" data-treasury="46" data-manpower="55" data-plate="Plate IX" data-map="Strasbourg · The Congress" data-news="The Final Act is signed|An armistice in Korea|Ten years without a launch|Inspectors to Montana and Plesetsk|Bells ring in Strasbourg cathedral">
+      <div class="chapter">
+        <div class="dossier"><span>File Nº 09</span><span>A Year in the World</span><span>9 / 10</span></div>
+        <div class="num">Chapter IX</div>
+        <h2>The table</h2>
+        <p class="drop">Wars end at a table. <strong>Armistices are drawn, ground and reparations settled</strong>, and old enemies can leave as allies.</p>
+        <p>Or nobody comes, and the fighting goes on. It's your chronicle.</p>
+        <span class="stamp green">Ratified</span>
+        <p class="fn"><sup>10</sup> Alliances, defence pacts and guarantees call their members in when war comes again.</p>
+      </div>
+    </article>
+
+    <article class="step" data-step="yours" data-date="Your turn" data-balance="0" data-turn="Turn ∞" data-stability="70" data-treasury="50" data-manpower="50" data-plate="Plate X" data-map="The World · Your Turn" data-news="Every game writes its own history|1453 · Constantinople holds|1588 · The Armada lands|1815 · Napoleon wins at Waterloo|2017 · The Congress of Strasbourg">
+      <div class="chapter">
+        <div class="dossier"><span>File Nº 10</span><span>Your Chronicle</span><span>10 / 10</span></div>
+        <div class="num">Chapter X</div>
+        <h2>The next chapter is yours</h2>
+        <p class="drop">That was one year of one campaign. Every game writes its own: the pins on the map are a few that others have dreamed up. <strong>Yours may never fire a shot.</strong></p>
+        <div class="cta-row">
+          <a class="btn btn-primary" href="#download"><span class="i">⬇</span> Download</a>
+          <a class="btn btn-ghost" href="/play/"><span class="i">▶</span> Try the demo</a>
+        </div>
+        <span class="stamp green">Your move</span>
+      </div>
+    </article>
+  </div>
+</section>
+
+<!-- ====================================================================== -->
+<section class="section eras" id="eras">
+  <div class="section-in">
+    <p class="eyebrow rise">Any year on the calendar</p>
+    <h2 class="rise">Pick an age, or make one</h2>
+    <p class="lead rise">The map and the calendar are the scenario's. Begin on the real world as it is today, on any date in its past, or on a world drawn in the editor. Scenarios from other players are a click away in the Community tab.</p>
+    <div class="timeline rise" aria-hidden="true"><span class="axis"></span></div>
+    <div class="era-row">
+      <article class="era rise"><span class="yr">3000 BC — AD 476</span><h3>Antiquity</h3><p>City-states, legions and pharaohs. The calendar runs before Christ.</p><span class="em">🏛</span></article>
+      <article class="era rise"><span class="yr">476 — 1453</span><h3>The Middle Ages</h3><p>Kingdoms by marriage, crusades by letter, empires by accident.</p><span class="em">🏰</span></article>
+      <article class="era rise"><span class="yr">1453 — 1815</span><h3>Sail &amp; Empire</h3><p>Fleets for the Indies, wars for a throne, congresses for the peace.</p><span class="em">⛵</span></article>
+      <article class="era rise"><span class="yr">1914 — 1918</span><h3>The Great War</h3><p>Trenches, ultimatums and the alliances that drag everyone in.</p><span class="em">🪖</span></article>
+      <article class="era rise"><span class="yr">1939 — 1945</span><h3>The Second World War</h3><p>Europe on the globe, 1939: the screenshot below is one of these.</p><span class="em">✈️</span></article>
+      <article class="era rise"><span class="yr">1947 — 1991</span><h3>The Cold War</h3><p>Proxy wars, spies, blocs and the long peace of deterrence.</p><span class="em">🛰</span></article>
+      <article class="era rise"><span class="yr">2016 →</span><h3>Modern Day</h3><p>Built in: the real world's borders, its 3,662 regions and its tensions.</p><span class="em">🌐</span></article>
+      <article class="era rise"><span class="yr">Any year</span><h3>Worlds of your own</h3><p>Draw continents, paint nations, set the date, and press Apply &amp; Play.</p><span class="em">🖌</span></article>
+    </div>
+  </div>
+</section>
+
+<!-- ====================================================================== -->
+<section class="section" id="screens">
+  <div class="section-in">
+    <p class="eyebrow rise">Seen in the game</p>
+    <h2 class="rise">Not a mock-up. The game.</h2>
+    <p class="lead rise">The map you just read is the map you play on. Click a photograph to see it full size.</p>
+    <div class="reel" id="reel">
+      <figure class="shot rise"><span class="tape"></span><img src="/play/screenshots/screenshot.webp" alt="Open Historia gameplay — a strategic world map with events and nations" loading="lazy" decoding="async" /><figcaption><span class="no">Exhibit A</span>A world at play: events, nations and the map they change</figcaption></figure>
+      <figure class="shot rise"><span class="tape"></span><img src="/play/screenshots/screenshot2.webp" alt="Europe on the globe in a World War II — 1939 campaign" loading="lazy" decoding="async" /><figcaption><span class="no">Exhibit B</span>Europe on the globe, 1939</figcaption></figure>
+      <figure class="shot rise"><span class="tape"></span><img src="/play/screenshots/scenarios.webp" alt="The Community tab: scenarios players have shared, ready to import" loading="lazy" decoding="async" /><figcaption><span class="no">Exhibit C</span>The Community tab: scenarios players have shared</figcaption></figure>
+      <figure class="shot rise"><span class="tape"></span><img src="/play/screenshots/economics.webp" alt="Advanced Statistics: a country's inflation charted over the years" loading="lazy" decoding="async" /><figcaption><span class="no">Exhibit D</span>Advanced Statistics: a country's economy over the years</figcaption></figure>
+    </div>
+  </div>
+</section>
+
+<!-- ====================================================================== -->
+<section class="section" id="features">
+  <div class="section-in">
+    <p class="eyebrow rise">What you can do</p>
+    <h2 class="rise">Two ledgers, one world</h2>
+    <p class="lead rise">Everything on the table, sorted the way a head of state would sort it. Features marked <b style="color:var(--gold-l)">Beta</b> come to the beta app first.</p>
+
+    <div class="ledger">
+      <div class="ledger-col war rise">
+        <svg class="watermark" viewBox="0 0 200 200" aria-hidden="true"><g transform="translate(100 100) rotate(45)"><rect x="-8" y="-90" width="16" height="118" /><path d="M-8 -90 L0 -106 L8 -90 Z" /><rect x="-38" y="28" width="76" height="12" rx="5" /><rect x="-6" y="40" width="12" height="34" /><circle cx="0" cy="80" r="10" /></g></svg>
+        <h3><svg viewBox="0 0 40 40" aria-hidden="true"><g transform="translate(20 20) rotate(45)"><rect x="-2" y="-18" width="4" height="24" fill="#d9d2c1" /><path d="M-2 -18 L0 -22 L2 -18 Z" fill="#d9d2c1" /><rect x="-9" y="5" width="18" height="3.4" rx="1.5" fill="#c4432c" /><rect x="-1.6" y="8" width="3.2" height="8" fill="#c4432c" /><circle cx="0" cy="17.5" r="2.6" fill="#c4432c" /></g></svg> War</h3>
+        <p>When it comes to it.</p>
+        <div class="item"><span class="ic">⚔️</span><h4><span class="no">01</span>Battlefields &amp; the War Room <span class="beta">BETA</span></h4><p>Where two sides meet, the game fights the land war itself, troop by troop. Talk to your generals, draw routes, dig in, fortify, deploy.</p></div>
+        <div class="item"><span class="ic">♟️</span><h4><span class="no">02</span>An enemy that plans <span class="beta">BETA</span></h4><p>Every few days the other side rehearses several plans on a copy of the battle and picks one. The difficulty decides how sharp a commander you face.</p></div>
+        <div class="item"><span class="ic">⚓</span><h4><span class="no">03</span>War at sea <span class="beta">BETA</span></h4><p>Fleets patrol, blockade, escort, seek battle or withdraw. A blockade cuts into the enemy's economy.</p></div>
+        <div class="item"><span class="ic">🕵️</span><h4><span class="no">04</span>Espionage <span class="beta">BETA</span></h4><p>Sabotage, recruit a source or assassinate, with the odds and the risk of capture shown first. An operation never traced is never tied to you.</p></div>
+        <div class="item"><span class="ic">❄️</span><h4><span class="no">05</span>Seasons &amp; weather <span class="beta">BETA</span></h4><p>Rain, mud, snow, frost, heat and fog slow armies down and wear troops out. Lakes and seas can freeze hard enough to cross.</p></div>
+        <div class="item"><span class="ic">🎖️</span><h4><span class="no">06</span>Troops on the map</h4><p>Deploy and move armies and fleets. The AI resolves fronts, and the borders follow.</p></div>
+      </div>
+
+      <div class="ledger-col peace rise">
+        <svg class="watermark" viewBox="0 0 200 200" aria-hidden="true"><path d="M20 170 Q100 150 180 30" fill="none" stroke-width="10" stroke-linecap="round" /><ellipse cx="60" cy="140" rx="28" ry="11" transform="rotate(-40 60 140)" /><ellipse cx="74" cy="168" rx="28" ry="11" transform="rotate(20 74 168)" /><ellipse cx="104" cy="100" rx="28" ry="11" transform="rotate(-62 104 100)" /><ellipse cx="122" cy="128" rx="28" ry="11" transform="rotate(0 122 128)" /><ellipse cx="140" cy="62" rx="26" ry="10" transform="rotate(-76 140 62)" /><ellipse cx="160" cy="88" rx="26" ry="10" transform="rotate(-20 160 88)" /></svg>
+        <h3><svg viewBox="0 0 40 40" aria-hidden="true"><path d="M4 30 Q20 26 36 6" fill="none" stroke="#a3b26b" stroke-width="2.4" stroke-linecap="round" /><ellipse cx="12" cy="23" rx="6" ry="2.6" fill="#a3b26b" transform="rotate(-40 12 23)" /><ellipse cx="16" cy="31" rx="6" ry="2.6" fill="#a3b26b" transform="rotate(20 16 31)" /><ellipse cx="24" cy="14" rx="6" ry="2.6" fill="#a3b26b" transform="rotate(-62 24 14)" /><ellipse cx="28" cy="22" rx="6" ry="2.6" fill="#a3b26b" transform="rotate(0 28 22)" /></svg> Peace</h3>
+        <p>For as long as it lasts.</p>
+        <div class="item"><span class="ic">✉️</span><h4><span class="no">07</span>Diplomacy in your own words</h4><p>Click any country to negotiate, threaten or ally through open conversation. Every government answers in its own voice.</p></div>
+        <div class="item"><span class="ic">🕊️</span><h4><span class="no">08</span>Peace &amp; alliances <span class="beta">BETA</span></h4><p>Losses and blockades wear a country down until it asks for terms. Alliances, defence pacts and guarantees call their members in.</p></div>
+        <div class="item"><span class="ic">🏛️</span><h4><span class="no">09</span>The Political World <span class="beta">BETA</span></h4><p>Governments with their own leaders and factions, institutions whose councils debate and vote, puppets that answer to an overlord.</p></div>
+        <div class="item"><span class="ic">📜</span><h4><span class="no">10</span>Events the AI writes</h4><p>Every time skip plays out the world: crises, elections, markets, discoveries. Some come to you as a scene to play out or let pass.</p></div>
+        <div class="item"><span class="ic">📋</span><h4><span class="no">11</span>Projects &amp; operations</h4><p>Your government's long efforts, from research programmes to covert operations, moved along by events and your advisor.</p></div>
+        <div class="item"><span class="ic">🦉</span><h4><span class="no">12</span>An advisor at your side</h4><p>Guidance, economic analysis and briefings whenever you ask.</p></div>
+      </div>
+    </div>
+
+    <div class="archive rise">
+      <div class="archive-head"><span>✦ And the rest of the archive ✦</span></div>
+      <div class="item"><span class="ic">🖌️</span><h4><span class="no">13</span>Draw your own world</h4><p>A full map editor: draw regions, paint owners, place cities, then Apply &amp; Play.</p></div>
+      <div class="item"><span class="ic">🌐</span><h4><span class="no">14</span>A hub of scenarios</h4><p>Import community scenarios in the game or publish your own, all under CC BY 4.0.</p></div>
+      <div class="item"><span class="ic">👥</span><h4><span class="no">15</span>Play together <span class="beta">BETA</span></h4><p>Host a lobby from the desktop app and share its code. Each friend leads a country.</p></div>
+      <div class="item"><span class="ic">🌍</span><h4><span class="no">16</span>Twenty-two languages</h4><p>The whole game is translated, from Arabic to Vietnamese.</p></div>
+      <div class="item"><span class="ic">🤖</span><h4><span class="no">17</span>Your own AI</h4><p>Gemini, OpenAI, Anthropic, any compatible service, or a model on your own computer.</p></div>
+      <div class="item"><span class="ic">🔒</span><h4><span class="no">18</span>Runs on your machine</h4><p>Local-first: your saves and scenarios stay with you.</p></div>
+      <div class="item"><span class="ic">⚖️</span><h4><span class="no">19</span>Free &amp; open source</h4><p>AGPL-3.0 and built by its community. Fork it, mod it, ship it.</p></div>
+      <div class="item"><span class="ic">🎵</span><h4><span class="no">20</span>A score for every campaign <span class="beta">BETA</span></h4><p>Music by Scott Buckley, from the menu to the War Room.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ====================================================================== -->
+<section class="section" id="play">
+  <div class="section-in">
+    <p class="eyebrow rise">Up and running in minutes</p>
+    <h2 class="rise">Three steps to the table</h2>
+    <p class="lead rise">No accounts, no store, no build tools. Download the app for your system, open it, and play.</p>
+    <div class="steps3">
+      <div class="s3 rise"><div class="n">I</div><h3>Download</h3><p>Pick the download for your system: an installer on Windows, a zip on macOS, a .deb package on Linux (AppImage below it for everything else).</p></div>
+      <div class="s3 rise"><div class="n">II</div><h3>Open it</h3><p>Run the installer on Windows, or drag the app to Applications on macOS. Nothing else to set up — the app brings everything it needs with it.</p></div>
+      <div class="s3 rise"><div class="n">III</div><h3>Play</h3><p>Open Historia opens in its own window. The world map downloads once, with a progress bar, then you connect an AI, pick a scenario and start reshaping history.</p></div>
+    </div>
+    <div class="runbox rise" aria-label="Launcher instructions by operating system">
+      <div class="tabs" role="tablist">
+        <button class="tab" role="tab" data-os="windows" aria-selected="true">Windows</button>
+        <button class="tab" role="tab" data-os="mac" aria-selected="false">macOS</button>
+        <button class="tab" role="tab" data-os="linux" aria-selected="false">Linux</button>
+      </div>
+      <div class="tab-body on" data-os="windows">Run <b>Open-Historia-Setup.exe</b> and follow the installer, then open <b>Open Historia</b> from the Start Menu. If Windows SmartScreen warns, choose <span class="kbd">More info → Run anyway</span> — the installer isn't code-signed yet.</div>
+      <div class="tab-body" data-os="mac">Unzip the download and drag <b>Open Historia</b> into your Applications folder. The first time, right-click it and choose <span class="kbd">Open</span> — the app isn't code-signed yet, so macOS asks for confirmation once. If it says the app is <b>damaged</b> instead, macOS quarantined the download — clear it with <span class="kbd">xattr -dr com.apple.quarantine "/Applications/Open Historia.app"</span> and open it again.</div>
+      <div class="tab-body" data-os="linux">On Debian, Ubuntu and derivatives install the <b>.deb</b> (<span class="kbd">sudo apt install ./Open-Historia-amd64.deb</span>) — it lands in your applications menu like any other program. Otherwise use the AppImage: <span class="kbd">chmod +x Open-Historia-x86_64.AppImage</span> and run it, nothing installed system-wide.</div>
+    </div>
+  </div>
+</section>
+
+<!-- ====================================================================== -->
+<section class="section" id="download">
+  <div class="section-in">
+    <p class="eyebrow rise">Downloads</p>
+    <h2 class="rise">Pick your platform</h2>
+    <p class="lead rise">Desktop is the full experience. The Android app plays on its own — nothing to run alongside it.</p>
+    <div class="dl">
+      <!-- data-os-card drives the "Recommended" badge and the primary button:
+           story/site.js moves both onto the visitor's own platform. The
+           markup ships with Windows marked so a no-JS visitor still sees one. -->
+      <div class="card feature" data-os-card="windows">
+        <span class="tag">Recommended</span>
+        <div class="ic">🪟</div>
+        <h3>Windows</h3>
+        <div class="meta">Windows 10 &amp; 11 · <span data-size="Open-Historia-Setup.exe">~136 MB</span></div>
+        <p>An ordinary installer. Run it and Open Historia lands in your Start Menu like any other app — no Node.js, no setup script, no terminal window. The world map downloads itself the first time you open it.</p>
+        <a class="btn btn-primary" href="https://github.com/Open-Historia/open-historia/releases/download/desktop-stable/Open-Historia-Setup.exe">⬇ Download Installer</a>
+        <div class="beta-line"><b>Beta</b> · the newest features first. A separate app with its own saves.</div>
+        <a class="btn btn-ghost" data-beta href="https://github.com/Open-Historia/open-historia/releases/download/desktop-beta/Open-Historia-Beta-Setup.exe">⬇ Beta Installer</a>
+      </div>
+      <div class="card" data-os-card="mac">
+        <div class="ic">🍎</div>
+        <h3>macOS</h3>
+        <div class="meta">Apple Silicon or Intel · <span data-size="Open-Historia-mac-arm64.zip|Open-Historia-mac-x64.zip">~163–169 MB</span></div>
+        <p>Unzip and drag Open Historia to your Applications folder. First launch: right-click it and choose <b>Open</b> — the app isn't code-signed yet, so macOS asks once.</p>
+        <a class="btn btn-ghost" href="https://github.com/Open-Historia/open-historia/releases/download/desktop-stable/Open-Historia-mac-arm64.zip">⬇ Apple Silicon</a>
+        <a class="btn btn-ghost" href="https://github.com/Open-Historia/open-historia/releases/download/desktop-stable/Open-Historia-mac-x64.zip">⬇ Intel</a>
+        <div class="beta-line"><b>Beta</b> · the newest features first. A separate app with its own saves.</div>
+        <a class="btn btn-ghost" data-beta href="https://github.com/Open-Historia/open-historia/releases/download/desktop-beta/Open-Historia-Beta-mac-arm64.zip">⬇ Beta · Apple Silicon</a>
+        <a class="btn btn-ghost" data-beta href="https://github.com/Open-Historia/open-historia/releases/download/desktop-beta/Open-Historia-Beta-mac-x64.zip">⬇ Beta · Intel</a>
+      </div>
+      <div class="card" data-os-card="linux">
+        <div class="ic">🐧</div>
+        <h3>Linux</h3>
+        <div class="meta">.deb for Debian &amp; Ubuntu · x86_64 · AppImage for other distros · <span data-size="Open-Historia-amd64.deb|Open-Historia-x86_64.AppImage">~125–161 MB</span></div>
+        <p>The .deb installs like any other package on Debian, Ubuntu and their derivatives. The AppImage is one portable file for every other distribution: make it executable and launch it — nothing to install, no packages to add.</p>
+        <a class="btn btn-ghost" href="https://github.com/Open-Historia/open-historia/releases/download/desktop-stable/Open-Historia-amd64.deb">⬇ Download .deb</a>
+        <a class="btn btn-ghost" href="https://github.com/Open-Historia/open-historia/releases/download/desktop-stable/Open-Historia-x86_64.AppImage">⬇ Download .AppImage</a>
+        <div class="beta-line"><b>Beta</b> · the newest features first. A separate app with its own saves.</div>
+        <a class="btn btn-ghost" data-beta href="https://github.com/Open-Historia/open-historia/releases/download/desktop-beta/Open-Historia-Beta-amd64.deb">⬇ Beta .deb</a>
+        <a class="btn btn-ghost" data-beta href="https://github.com/Open-Historia/open-historia/releases/download/desktop-beta/Open-Historia-Beta-x86_64.AppImage">⬇ Beta .AppImage</a>
+      </div>
+      <div class="card" data-os-card="android">
+        <div class="ic">📱</div>
+        <h3>Android app</h3>
+        <div class="meta">Everything on the device · <span data-size="open-historia.apk">~65 MB</span></div>
+        <p>Install it and play, even offline. Your games, the scenario workshop and the whole world map are on the phone — no server to run, no download after install, nothing to set up.</p>
+        <a class="btn btn-ghost" href="https://github.com/Open-Historia/open-historia/releases/download/android/open-historia.apk">⬇ Download APK</a>
+        <div class="beta-line"><b>Beta</b> · the newest features first. A separate app with its own saves.</div>
+        <a class="btn btn-ghost" data-beta href="https://github.com/Open-Historia/open-historia/releases/download/android-beta/open-historia-beta.apk">⬇ Beta APK</a>
+      </div>
+    </div>
+    <p class="dl-note">Already installed? The app updates itself (see <a href="#faq">How do I update later?</a>). Installing the newest download over the top works too — your saves and scenarios are kept. · <a href="https://github.com/Open-Historia/open-historia/releases" target="_blank" rel="noopener">All releases</a></p>
+  </div>
+</section>
+
+<!-- ====================================================================== -->
+<section class="section" id="faq">
+  <div class="section-in">
+    <p class="eyebrow center rise">Good to know</p>
+    <h2 class="center rise">Questions &amp; requirements</h2>
+    <div class="faq">
+      <details><summary>Do I need to install anything else?</summary><p>No. The desktop app and the Android app bring everything they need: no Node.js, no setup script, no terminal. The desktop app downloads the world map the first time it opens, and the Android app carries it inside. The one thing you supply is an AI — see <a href="/wiki/ai-setup/">Connecting an AI Provider</a>.</p></details>
+      <details><summary>Is it really free?</summary><p>Yes. Open Historia is free and open source under the GNU AGPL v3. The AI features connect to an AI provider you choose — see <a href="/wiki/ai-setup/">Connecting an AI Provider</a> or ask in <a href="https://discord.gg/QaqAK7fQAg" target="_blank" rel="noopener">Discord</a> for setup help.</p></details>
+      <details><summary>Which AI can I use?</summary><p>Gemini, OpenAI or Anthropic with your own key; any service that speaks OpenAI's or Anthropic's API, such as OpenRouter; or a model running on your own computer through Ollama or LM Studio. A Fallback list of backup models takes over when one is busy or out of allowance. In the beta's desktop app, your own Agent (Claude Code, Codex, OpenCode or Antigravity CLI) can answer what you start instead. More in <a href="/wiki/ai-providers/">AI Providers and Models</a>.</p></details>
+      <details><summary>Where does it run — is my data uploaded?</summary><p>On your own device: the desktop app in its own window, the Android app on your phone, the browser version in your browser. Your saves and scenarios stay on your device, and your AI key goes only to the AI provider you choose. Visits are counted only if you say yes. The <a href="/privacy/">privacy policy</a> lists everything the game contacts.</p></details>
+      <details><summary>What licence are shared scenarios under?</summary><p>Every scenario made in Open Historia that is posted or shared in any way is released under the <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">Creative Commons Attribution 4.0 International</a> licence (<b>CC BY 4.0</b>). The game says so before you publish and writes it into the file.</p></details>
+      <details><summary>How do I update later?</summary><p>The desktop app updates itself. When it opens, it installs a waiting update first — only the parts of the app that changed, or the whole installer when a release needs it — and restarts on the new version; choose <b>Open the game now</b> instead and the update installs when you close the game. An update that comes out while you play shows as a banner at the top: <b>Update now</b>, then <b>Restart now</b>. Your saves, scenarios and map are kept. On macOS, where the app is not code-signed yet, an update that needs the whole app is offered as a download instead. The Android app shows the same banner and fetches the new version for you to install, and the browser version reloads onto it. The beta is a separate app that updates itself the same way, from its own releases. A copy run from the source code updates the way it was installed: pull the newest code, then run <code>npm install</code> and <code>npm run build</code> again.</p></details>
+      <details><summary>What is the beta?</summary><p>The game's newest version, ahead of the stable one and less tested. It is a separate app, <b>Open Historia Beta</b>, with its own saves, and installs beside the stable app on Windows, macOS, Linux and Android. Battlefields and the War Room, war at sea, Espionage Part 2, seasons and weather, and shared games come to the beta first. Its download sits under each stable one above, and the stable desktop app offers it after it is installed and after each update.</p></details>
+      <details><summary>What about mobile?</summary><p>Download the Android APK and open it — that is the whole setup. Your games live on the phone and the whole world map is inside the app, so it plays even in airplane mode, with no server to run and nothing to point it at. The beta Android app installs beside it. On iPhone and iPad, play the browser version in Safari.</p></details>
+    </div>
+  </div>
+</section>
+
+<!-- ====================================================================== -->
+<section class="section finale">
+  <svg class="finale-rose" viewBox="-60 -60 120 120" aria-hidden="true"><circle r="56" /><circle r="44" /><path d="M0 -54 L8 -8 L54 0 L8 8 L0 54 L-8 8 L-54 0 L-8 -8 Z" /><path d="M38 -38 L5 -5 L38 38 L5 5 L-38 38 L-5 5 L-38 -38 L-5 -5 Z" /></svg>
+  <div class="section-in">
+    <div class="split rise"><span class="w">⚔ War</span><span class="p">Peace ✦</span></div>
+    <h2 class="rise">The next page is blank.</h2>
+    <p class="lead rise">Download once, open it, and you're playing.</p>
+    <div class="cta-row rise">
+      <a id="bandDownload" class="btn btn-primary" href="#download"><span class="i">⬇</span> <span id="bandLabel">Download Open Historia</span></a>
+      <a class="btn btn-ghost" href="/play/"><span class="i">▶</span> Play now in your browser</a>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer class="foot">
+  <div class="foot-in">
+    <div class="foot-top">
+      <div class="foot-brand"><img src="/play/icon-192.png" alt="" width="22" height="22" loading="lazy" /> <span><b>Open Historia</b> · AGPL-3.0 licensed · built by <a href="https://github.com/Open-Historia/open-historia/graphs/contributors" target="_blank" rel="noopener">contributors</a></span></div>
+      <nav class="fnav" aria-label="Footer">
+        <a href="#download">Download</a>
+        <a href="/wiki/">Wiki</a>
+        <a href="https://github.com/Open-Historia/open-historia" target="_blank" rel="noopener">GitHub</a>
+        <a href="https://discord.gg/QaqAK7fQAg" target="_blank" rel="noopener">Discord</a>
+        <a href="https://www.reddit.com/r/OpenHistoria" target="_blank" rel="noopener">Reddit</a>
+        <a href="https://x.com/open_historia" target="_blank" rel="noopener">X</a>
+        <a href="https://github.com/Open-Historia/open-historia/releases" target="_blank" rel="noopener">Releases</a>
+        <a href="/privacy/">Privacy</a>
+        <a href="/privacy/#choices" data-consent-open>Privacy choices</a>
+      </nav>
+    </div>
+    <p class="colophon">Colophon · Set in Cinzel and EB Garamond, served from this site. The story's map is the game's own Modern Day map, drawn in the Mercator projection. The campaign told above is an illustration of play: no real government was consulted.</p>
+    <p class="foot-legal">Open Historia is an independent, open-source project and is not affiliated with, endorsed, sponsored, approved, or authorized by Pax Historia. Pax Historia has no involvement in the development, operation, or distribution of Open Historia. Pax Historia™ and all associated trademarks, trade names, and logos are the exclusive property of Pax Historia.</p>
+  </div>
+</footer>
+
+<!-- Screenshot viewer, opened by story/site.js. -->
+<div class="lb" id="lightbox" hidden tabindex="-1" role="dialog" aria-modal="true" aria-label="Screenshot viewer">
+  <button class="lb-close" id="lbClose" type="button" aria-label="Close screenshot">✕</button>
+  <button class="lb-prev" id="lbPrev" type="button" aria-label="Previous screenshot">‹</button>
+  <figure><img id="lbImg" src="" alt="" /><figcaption id="lbCap"></figcaption></figure>
+  <button class="lb-next" id="lbNext" type="button" aria-label="Next screenshot">›</button>
+</div>
+</body>
+</html>
