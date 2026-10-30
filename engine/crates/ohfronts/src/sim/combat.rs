@@ -3,7 +3,7 @@ use super::constants::*;
 use super::engine::Run;
 use super::field::{own_cell, take_capsule, How};
 use super::ground::downhill;
-use super::manpower::{mend_left, mend_spend};
+use super::manpower::{mend_left_with, mend_spend};
 use super::troops::{control_radius, is_live, reach_cells, step_along, Troop, KIND_ARTILLERY, STATE_ADVANCING, STATE_DUG_IN, STATE_ENCIRCLED, STATE_HOLDING, STATE_SPENT};
 use super::walls::{wall_ahead, wear_wall, WALL_ASSAULT_COST, WALL_DEFENCE_PER_LEVEL, WALL_ODDS};
 use super::weather::weather_loss;
@@ -508,6 +508,14 @@ pub fn close_day(run: &Run, battle: &mut Battle) {
             let mend = battle.edge[side].mend;
             let works = battle.works;
             let name = battle.sides[side].get(battle.troops[side][index].owner as usize).cloned().unwrap_or_default();
+            let left = {
+                let troop = &battle.troops[side][index];
+                if battle.mend_of && troop.strength > 0.0 && !troop.pocket && troop.strength < 100.0 && battle.pool[side] > 0.0 {
+                    mend_left_with(run, &name, Some(&*battle))
+                } else {
+                    f64::NAN
+                }
+            };
             let troop = &mut battle.troops[side][index];
             if troop.strength > 0.0 {
                 let busy = !matches!(troop.order, Val::Null) && !troop.order.get("done").truthy();
@@ -521,7 +529,7 @@ pub fn close_day(run: &Run, battle: &mut Battle) {
                 }
                 if !troop.pocket && troop.strength < 100.0 && battle.pool[side] > 0.0 {
                     let sent = if battle.mend_of {
-                        jsmath::min(jsmath::min(jsmath::min(REINFORCE_PER_DAY * mend, 100.0 - troop.strength), battle.pool[side]), mend_left(run, &name))
+                        jsmath::min(jsmath::min(jsmath::min(REINFORCE_PER_DAY * mend, 100.0 - troop.strength), battle.pool[side]), left)
                     } else {
                         jsmath::min(jsmath::min(REINFORCE_PER_DAY * mend, 100.0 - troop.strength), battle.pool[side])
                     };

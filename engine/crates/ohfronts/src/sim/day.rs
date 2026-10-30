@@ -732,16 +732,15 @@ pub fn simulate_day(run: &mut Run, index: usize, day: f64) -> Result<f64, Region
     };
     run.battles = battles;
     dusk(run, index, day);
-    let mut battles = std::mem::take(&mut run.battles);
-    {
-        let battle = &mut battles[index];
-        close_day(run, battle);
-        if mop_up(battle, run) {
-            redistance(battle.field.as_mut().unwrap());
-        }
-        age_orders(battle);
-        refresh_supply(battle, day, run.era);
+    let mut battle = run.lend(index);
+    close_day(run, &mut battle);
+    if mop_up(&mut battle, run) {
+        redistance(battle.field.as_mut().unwrap());
     }
+    age_orders(&mut battle);
+    refresh_supply(&mut battle, day, run.era);
+    run.give(index, battle);
+    let mut battles = std::mem::take(&mut run.battles);
     settle_regions(run, &mut battles, index, day);
     let grown = grow_if_needed(&mut battles[index], run, day);
     run.battles = battles;

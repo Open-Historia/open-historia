@@ -84,9 +84,13 @@ fn is_named(battle: &Battle, side: usize, at: usize) -> bool {
 }
 
 pub fn serving_of(run: &Run, name: &str) -> f64 {
+    serving_with(run, name, None, None)
+}
+
+pub fn serving_with(run: &Run, name: &str, skip: Option<usize>, extra: Option<&Battle>) -> f64 {
     let wanted = fold_text(name);
     let mut strength = 0.0;
-    for battle in &run.battles {
+    for battle in run.battles.iter().enumerate().filter(|(index, _)| Some(*index) != skip).map(|(_, battle)| battle).chain(extra) {
         if battle.status == "closed" {
             continue;
         }
@@ -107,6 +111,10 @@ pub fn serving_of(run: &Run, name: &str) -> f64 {
 }
 
 pub fn formations_left(run: &Run, name: &str) -> f64 {
+    formations_left_with(run, name, None, None)
+}
+
+pub fn formations_left_with(run: &Run, name: &str, skip: Option<usize>, extra: Option<&Battle>) -> f64 {
     if !levies(run) {
         return f64::INFINITY;
     }
@@ -114,10 +122,14 @@ pub fn formations_left(run: &Run, name: &str) -> f64 {
     if people == 0.0 {
         return f64::INFINITY;
     }
-    jsmath::max(0.0, ((share_of(run, name) * people - serving_of(run, name)) / men_of(run, name)).floor())
+    jsmath::max(0.0, ((share_of(run, name) * people - serving_with(run, name, skip, extra)) / men_of(run, name)).floor())
 }
 
 pub fn part_left(run: &Run, name: &str) -> f64 {
+    part_left_with(run, name, None, None)
+}
+
+pub fn part_left_with(run: &Run, name: &str, skip: Option<usize>, extra: Option<&Battle>) -> f64 {
     if !run.mech.military() || !levies(run) {
         return 0.0;
     }
@@ -125,7 +137,7 @@ pub fn part_left(run: &Run, name: &str) -> f64 {
     if people == 0.0 {
         return 0.0;
     }
-    let men = share_of(run, name) * people - serving_of(run, name);
+    let men = share_of(run, name) * people - serving_with(run, name, skip, extra);
     if !(men > 0.0) {
         return 0.0;
     }
@@ -139,10 +151,14 @@ pub fn part_left(run: &Run, name: &str) -> f64 {
 }
 
 pub fn side_formations_left(run: &Run, battle: &Battle, side: usize) -> f64 {
+    side_formations_left_with(run, battle, side, None, None)
+}
+
+pub fn side_formations_left_with(run: &Run, battle: &Battle, side: usize, skip: Option<usize>, extra: Option<&Battle>) -> f64 {
     let mut left = 0.0;
     for (at, member) in battle.sides[side].iter().enumerate() {
         if !battle.gone[side].contains(&at) {
-            left += formations_left(run, member);
+            left += formations_left_with(run, member, skip, extra);
         }
     }
     left
@@ -156,24 +172,28 @@ pub fn mend_budget(run: &Run, day: f64) {
     }
 }
 
-fn mend_key(run: &Run, name: &str) -> String {
+fn mend_key(run: &Run, name: &str, extra: Option<&Battle>) -> String {
     let key = fold_text(name);
     if !run.mend.borrow().left.has(&key) {
         let people = if levies(run) { people_of(run, name) } else { 0.0 };
-        let left = if people == 0.0 { f64::INFINITY } else { jsmath::max(0.0, ((share_of(run, name) * people - serving_of(run, name)) / men_of(run, name)) * 100.0) };
+        let left = if people == 0.0 { f64::INFINITY } else { jsmath::max(0.0, ((share_of(run, name) * people - serving_with(run, name, None, extra)) / men_of(run, name)) * 100.0) };
         run.mend.borrow_mut().left.set(key.clone(), left);
     }
     key
 }
 
 pub fn mend_left(run: &Run, name: &str) -> f64 {
-    let key = mend_key(run, name);
+    mend_left_with(run, name, None)
+}
+
+pub fn mend_left_with(run: &Run, name: &str, extra: Option<&Battle>) -> f64 {
+    let key = mend_key(run, name, extra);
     let left = run.mend.borrow().left.get(&key).copied().unwrap_or(f64::NAN);
     left
 }
 
 pub fn mend_spend(run: &Run, name: &str, points: f64) {
-    let key = mend_key(run, name);
+    let key = mend_key(run, name, None);
     let mut mend = run.mend.borrow_mut();
     let left = mend.left.get(&key).copied().unwrap_or(f64::NAN);
     mend.left.set(key, left - points);
