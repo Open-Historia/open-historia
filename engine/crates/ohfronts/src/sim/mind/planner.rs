@@ -7,6 +7,7 @@ use crate::sim::front_run::{rehearsal, rehearse_day, rehearse_orders};
 use crate::sim::js::{self, Val};
 use crate::sim::troops::{is_live, Troop};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 pub const EVAL_NAMES: [&str; 8] = ["ground", "towns", "capitals", "strength", "cut off", "wear", "supply", "in its works"];
 pub const DEFAULT_EVAL: [f64; 8] = [0.25, 4.0, 15.0, 1.0, 1.5, -1.0, 1.0, 0.3];
@@ -528,10 +529,63 @@ pub fn said_of(job: &Job) -> String {
     out
 }
 
-pub type Weigher = dyn Fn(&Run, &mut Battle, &Look, &[Job]) -> Vec<f64>;
+pub fn rehearser_count() -> usize {
+    if let Some(count) = std::env::var("OHFRONTS_REHEARSERS").ok().and_then(|text| text.parse::<usize>().ok()) {
+        return count.max(1);
+    }
+    std::thread::available_parallelism().map_or(1, |count| count.get().saturating_sub(2)).max(1)
+}
 
-pub fn weigh_one_by_one(run: &Run, battle: &mut Battle, look: &Look, jobs: &[Job]) -> Vec<f64> {
-    jobs.iter().map(|job| weigh_steps(run, battle, look, job)).collect()
+struct Apart(Run);
+
+unsafe impl Send for Apart {}
+
+pub fn weigh_apart(run: &Run, battle: &mut Battle, look: &Look, jobs: &[Job], cores: usize) -> Vec<f64> {
+    let workers = cores.min(jobs.len());
+    if workers <= 1 {
+        return jobs.iter().map(|job| weigh_steps(run, battle, look, job)).collect();
+    }
+    let bases: Vec<Apart> = (1..workers).map(|_| Apart(rehearsal(run, battle))).collect();
+    let next = AtomicUsize::new(0);
+    let mut values = vec![f64::NAN; jobs.len()];
+    let mut taken: Vec<(usize, f64)> = Vec::new();
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = bases
+            .into_iter()
+            .map(|base| {
+                let next = &next;
+                scope.spawn(move || {
+                    let base = base;
+                    let mut stub = base.0;
+                    let mut copy = stub.lend(0);
+                    let mut done: Vec<(usize, f64)> = Vec::new();
+                    loop {
+                        let at = next.fetch_add(1, Ordering::Relaxed);
+                        if at >= jobs.len() {
+                            break;
+                        }
+                        done.push((at, weigh_steps(&stub, &mut copy, look, &jobs[at])));
+                    }
+                    Apart(stub);
+                    done
+                })
+            })
+            .collect();
+        loop {
+            let at = next.fetch_add(1, Ordering::Relaxed);
+            if at >= jobs.len() {
+                break;
+            }
+            taken.push((at, weigh_steps(run, battle, look, &jobs[at])));
+        }
+        for handle in handles {
+            taken.extend(handle.join().expect("a rehearser"));
+        }
+    });
+    for (at, value) in taken {
+        values[at] = value;
+    }
+    values
 }
 
 pub struct Planner {
@@ -542,7 +596,7 @@ pub struct Planner {
     pub refine: usize,
     pub replies: bool,
     pub air_control: bool,
-    pub together: Option<Box<Weigher>>,
+    pub cores: usize,
 }
 
 #[derive(Default)]
@@ -574,7 +628,7 @@ pub fn create_planner(options: PlannerOptions) -> Planner {
         refine: options.refine.map_or(REFINE_BODIES, |refine| if refine > 0.0 { refine.trunc() as usize } else { 0 }),
         replies: options.replies,
         air_control: options.air_control.unwrap_or(true),
-        together: None,
+        cores: rehearser_count(),
     }
 }
 
@@ -594,7 +648,9 @@ struct Weighed {
 
 impl Planner {
     fn weigh_together(&self, run: &Run, battle: &mut Battle, look: &Look, weighed: &mut Weighed, list: Vec<Job>) {
-        let Some(together) = &self.together else { return };
+        if self.cores <= 1 {
+            return;
+        }
         let mut jobs = Vec::new();
         let mut saids: Vec<String> = Vec::new();
         for job in list {
@@ -608,7 +664,7 @@ impl Planner {
         if jobs.len() < 2 {
             return;
         }
-        let values = together(run, battle, look, &jobs);
+        let values = weigh_apart(run, battle, look, &jobs, self.cores);
         for (said, value) in saids.into_iter().zip(values) {
             weighed.values.insert(said, value);
         }
@@ -686,6 +742,27 @@ impl Planner {
                     }
                 });
                 largest.truncate(self.refine);
+                if self.cores > 1 {
+                    let missions = self.missions_for(run, battle, side, at);
+                    let mut ahead: Vec<Job> = Vec::new();
+                    let mut variants: Vec<Vec<Body>> = vec![current.clone()];
+                    for first in 0..largest.len() {
+                        let Some(once) = turned(&current, largest[first].0) else { continue };
+                        for second in first + 1..largest.len() {
+                            if let Some(twice) = turned(&once, largest[second].0) {
+                                ahead.push(Job { bodies: Some(twice), air: None });
+                            }
+                        }
+                        ahead.push(Job { bodies: Some(once.clone()), air: None });
+                        variants.push(once);
+                    }
+                    for bodies in &variants {
+                        for mission in &missions {
+                            ahead.push(Job { bodies: Some(bodies.clone()), air: Some(mission.to_string()) });
+                        }
+                    }
+                    self.weigh_together(run, battle, &look, &mut weighed, ahead);
+                }
                 for index in 0..largest.len() {
                     let Some(other) = turned(&current, largest[index].0) else { continue };
                     if !weighed.values.contains_key(&said_of(&Job { bodies: Some(other.clone()), air: None })) {
@@ -702,9 +779,8 @@ impl Planner {
             }
         }
         let mut air: Option<String> = None;
-        let flying = run.air_over.borrow().iter().find(|(battle, _)| *battle == at).map_or(0, |(_, lists)| lists[side].len());
-        if self.air_control && flying > 0 {
-            let missions: Vec<&str> = AIR_MISSIONS.iter().copied().filter(|mission| *mission != air_mission_of(battle, side)).collect();
+        let missions = self.missions_for(run, battle, side, at);
+        if !missions.is_empty() {
             self.weigh_together(run, battle, &look, &mut weighed, missions.iter().map(|mission| Job { bodies: orders.clone(), air: Some(mission.to_string()) }).collect());
             for mission in missions {
                 let value = self.weigh(run, battle, &look, &mut weighed, Job { bodies: orders.clone(), air: Some(mission.to_string()) });
@@ -720,6 +796,16 @@ impl Planner {
         let orders = orders.unwrap();
         let aim = aim_of(&orders);
         Own { troops: Some(orders), plan: Some(PLAN_NAMES[chosen as usize].to_string()), aim: aim.map(|aim| aim.to_vec()), air, ..Own::default() }
+    }
+}
+
+impl Planner {
+    fn missions_for(&self, run: &Run, battle: &Battle, side: usize, at: usize) -> Vec<&'static str> {
+        let flying = run.air_over.borrow().iter().find(|(battle, _)| *battle == at).map_or(0, |(_, lists)| lists[side].len());
+        if !self.air_control || flying == 0 {
+            return Vec::new();
+        }
+        AIR_MISSIONS.iter().copied().filter(|mission| *mission != air_mission_of(battle, side)).collect()
     }
 }
 
