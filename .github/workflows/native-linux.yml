@@ -56,6 +56,9 @@ jobs:
         working-directory: native/engine
         run: |
           cargo build -p oh_gdext -p ohweb --release
+          cargo build -p ohfronts --bin ohfronts-host --release
+          file target/release/ohfronts-host
+          echo '{"t":"ping","id":1}' | target/release/ohfronts-host | grep -q '"t":"pong"'
           file target/release/liboh_gdext.so target/release/libohweb.so
           objdump -T target/release/liboh_gdext.so | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1
           objdump -p target/release/liboh_gdext.so | grep NEEDED
@@ -188,7 +191,7 @@ jobs:
         run: |
           app="$RUNNER_TEMP/out/Open Historia Native"
           ls -la "$app" "$app/runtime" "$app/native/sidecar/imagecodec"
-          for bin in "$app/runtime/Open Historia.x86_64" "$app/runtime/liboh_gdext.so" "$app/runtime/libohweb.so" "$app/runtime/node" "$app/native/sidecar/imagecodec/oh-imagecodec" "$app/native/sidecar/node_modules/@node-datachannel/linux-x64-gnu/node_datachannel.node"; do
+          for bin in "$app/runtime/Open Historia.x86_64" "$app/runtime/liboh_gdext.so" "$app/runtime/libohweb.so" "$app/runtime/node" "$app/native/sidecar/imagecodec/oh-imagecodec" "$app/native/sidecar/ohfronts/ohfronts-host" "$app/native/sidecar/node_modules/@node-datachannel/linux-x64-gnu/node_datachannel.node"; do
             file "$bin"
             echo "  needs $(objdump -T "$bin" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)"
           done
@@ -204,7 +207,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/unpacked" "$RUNNER_TEMP/launcher-home"
           tar -xzf "$RUNNER_TEMP/out/Open-Historia-Native-Linux-x86_64.tar.gz" -C "$RUNNER_TEMP/unpacked"
           app="$RUNNER_TEMP/unpacked/Open Historia Native"
-          test -x "$app/open-historia-native" && test -x "$app/runtime/Open Historia.x86_64" && test -x "$app/runtime/node" && test -x "$app/native/sidecar/imagecodec/oh-imagecodec"
+          test -x "$app/open-historia-native" && test -x "$app/runtime/Open Historia.x86_64" && test -x "$app/runtime/node" && test -x "$app/native/sidecar/imagecodec/oh-imagecodec" && test -x "$app/native/sidecar/ohfronts/ohfronts-host"
           HOME="$RUNNER_TEMP/launcher-home" XDG_DATA_HOME="$RUNNER_TEMP/launcher-home/share" timeout 60 "$app/open-historia-native" --headless --version
           cat "$RUNNER_TEMP/launcher-home/share/applications/io.github.arkniem.openhistoria.native.desktop"
           grep -q "^Exec=\"$app/open-historia-native\"$" "$RUNNER_TEMP/launcher-home/share/applications/io.github.arkniem.openhistoria.native.desktop"

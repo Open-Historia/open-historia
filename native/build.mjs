@@ -29,6 +29,12 @@ if (process.platform === "linux") {
   fs.copyFileSync(path.join(here, "engine", "target", profile, "libohweb.so"), path.join(bin, "libohweb.so"));
   console.log(`copied ${profile} libohweb.so into native/godot/bin`);
 }
+run(cargoCommand(), ["build", "-p", "ohfronts", "--bin", "ohfronts-host", ...(release ? ["--release"] : [])], path.join(here, "engine"), env);
+const host = process.platform === "win32" ? "ohfronts-host.exe" : "ohfronts-host";
+const hosts = path.join(here, "sidecar", "ohfronts");
+fs.mkdirSync(hosts, { recursive: true });
+fs.copyFileSync(path.join(here, "engine", "target", profile, host), path.join(hosts, host));
+console.log(`copied ${profile} ${host} into native/sidecar/ohfronts`);
 if (process.platform === "win32") {
   fs.copyFileSync(webviewLoader(), path.join(bin, "WebView2Loader.dll"));
   console.log("copied WebView2Loader.dll into native/godot/bin");

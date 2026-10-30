@@ -81,4 +81,5 @@ dist-wiki-preview/
 /native/engine/target/
 /native/godot/.godot/
 /native/godot/bin/
+/native/sidecar/ohfronts/
 /native/out/

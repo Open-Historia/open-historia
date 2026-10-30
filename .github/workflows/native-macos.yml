@@ -58,6 +58,19 @@ jobs:
           ls -la target/aarch64-apple-darwin/release/liboh_gdext.dylib target/x86_64-apple-darwin/release/liboh_gdext.dylib target/universal-apple-darwin/release/liboh_gdext.dylib
           otool -L target/universal-apple-darwin/release/liboh_gdext.dylib | grep -E "WebKit|AppKit"
 
+      - name: Build the front engine for both Macs and join them
+        working-directory: native/engine
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "11.0"
+        run: |
+          cargo build -p ohfronts --bin ohfronts-host --release --target aarch64-apple-darwin
+          cargo build -p ohfronts --bin ohfronts-host --release --target x86_64-apple-darwin
+          mkdir -p target/universal-apple-darwin/release
+          lipo -create target/aarch64-apple-darwin/release/ohfronts-host target/x86_64-apple-darwin/release/ohfronts-host -output target/universal-apple-darwin/release/ohfronts-host
+          lipo -info target/universal-apple-darwin/release/ohfronts-host
+          echo '{"t":"ping","id":1}' | arch -arm64 target/universal-apple-darwin/release/ohfronts-host | grep -q '"t":"pong"'
+          echo '{"t":"ping","id":1}' | arch -x86_64 target/universal-apple-darwin/release/ohfronts-host | grep -q '"t":"pong"' || echo "::warning::the x86_64 slice of the front engine could not be run here"
+
       - name: Read the Godot checksums
         id: godot
         run: |
@@ -171,7 +184,7 @@ jobs:
           app="$RUNNER_TEMP/out/Open Historia Native.app"
           plutil -p "$app/Contents/Info.plist"
           ls -la "$app/Contents/MacOS" "$app/Contents/Frameworks" "$app/Contents/Resources"
-          for bin in "$app/Contents/MacOS/Open Historia" "$app/Contents/Resources/app/runtime/node" "$app/Contents/Resources/app/runtime/liboh_gdext.dylib" "$app/Contents/Resources/app/native/sidecar/imagecodec/oh-imagecodec" "$app/Contents/Helpers/Open Historia Notifier.app/Contents/MacOS/Open Historia Notifier"; do lipo -info "$bin"; done
+          for bin in "$app/Contents/MacOS/Open Historia" "$app/Contents/Resources/app/runtime/node" "$app/Contents/Resources/app/runtime/liboh_gdext.dylib" "$app/Contents/Resources/app/native/sidecar/imagecodec/oh-imagecodec" "$app/Contents/Resources/app/native/sidecar/ohfronts/ohfronts-host" "$app/Contents/Helpers/Open Historia Notifier.app/Contents/MacOS/Open Historia Notifier"; do lipo -info "$bin"; done
           fmg="$app/Contents/Resources/app/fmg/dist"
           grep -q "open-historia: prepared copy" "$fmg/index.html"
           test -f "$fmg/oh-native-bridge.html"

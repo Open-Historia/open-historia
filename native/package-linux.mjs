@@ -27,11 +27,13 @@ const template = process.env.OH_GODOT_TEMPLATE || "";
 const library = path.resolve(process.env.OH_GDEXT_SO || path.join(here, "engine", "target", "release", "liboh_gdext.so"));
 const webLibrary = path.resolve(process.env.OH_OHWEB_SO || path.join(path.dirname(library), "libohweb.so"));
 const nodeBinary = path.resolve(process.env.OH_NODE_BIN || process.execPath);
+const frontsHostBinary = path.resolve(process.env.OH_FRONTS_HOST_BIN || path.join(path.dirname(library), "ohfronts-host"));
 const codecBinary = path.resolve(process.env.OH_IMAGECODEC_BIN || path.join(here, "sidecar", "imagecodec", imageCodec.IMAGE_CODEC_MAC));
 if (!fs.existsSync(godotEditor)) throw new Error("Set OH_GODOT_EDITOR to the Godot 4.7.2 Linux editor (Godot_v4.7.2-stable_linux.x86_64).");
 if (!fs.existsSync(template)) throw new Error("Set OH_GODOT_TEMPLATE to Godot 4.7.2's linux_release.x86_64 export template.");
 if (!fs.existsSync(library)) throw new Error(`The engine library ${library} is missing: cargo build -p oh_gdext --release (in native/engine).`);
 if (!fs.existsSync(webLibrary)) throw new Error(`The web view library ${webLibrary} is missing: cargo build -p ohweb --release (in native/engine).`);
+if (!fs.existsSync(frontsHostBinary)) throw new Error(`The front engine ${frontsHostBinary} is missing: cargo build -p ohfronts --bin ohfronts-host --release (in native/engine).`);
 if (!fs.existsSync(codecBinary)) throw new Error("Set OH_IMAGECODEC_BIN to the AVIF reader built by native/linux/build-imagecodec.sh.");
 
 const version = fs.readFileSync(path.join(here, "VERSION"), "utf8").trim();
@@ -117,7 +119,7 @@ fs.mkdirSync(path.join(stage, "native", "godot"), { recursive: true });
 fs.writeFileSync(path.join(stage, "native", "godot", "version.json"), `${JSON.stringify(stamp, null, 2)}\n`);
 
 const sidecar = path.join(here, "sidecar");
-const sidecarTools = new Set(["build.mjs", "smoke.mjs", "engine.js"]);
+const sidecarTools = new Set(["build.mjs", "smoke.mjs", "engine.js", "rustFrontWorker.js", "rustFrontsFight.js"]);
 for (const name of fs.readdirSync(sidecar).filter((entry) => /\.(?:mjs|cjs|js)$/.test(entry) && !sidecarTools.has(entry))) copy(path.join(sidecar, name), path.join(stage, "native", "sidecar", name));
 copy(path.join(sidecar, "dist"), path.join(stage, "native", "sidecar", "dist"), (file, isDir) => isDir || !file.endsWith(".map"));
 copy(path.join(sidecar, "handlers"), path.join(stage, "native", "sidecar", "handlers"), (file, isDir) => isDir || file.endsWith(".mjs") || file.endsWith(".cjs"));
@@ -129,6 +131,12 @@ const codecTarget = path.join(stage, "native", "sidecar", "imagecodec", imageCod
 fs.mkdirSync(path.dirname(codecTarget), { recursive: true });
 fs.copyFileSync(codecBinary, codecTarget);
 fs.chmodSync(codecTarget, 0o755);
+const frontsKit = await import(pathToFileURL(path.join(sidecar, "rustFronts.mjs")).href);
+const frontsHost = path.join(stage, "native", "sidecar", frontsKit.FRONTS_HOST_DIR, frontsKit.FRONTS_HOST);
+fs.mkdirSync(path.dirname(frontsHost), { recursive: true });
+fs.copyFileSync(frontsHostBinary, frontsHost);
+fs.chmodSync(frontsHost, 0o755);
+if (!frontsKit.frontsHostAnswers(frontsHost)) throw new Error("The staged Rust front engine does not answer.");
 
 copy(path.join(repo, "server"), path.join(stage, "server"), (file, isDir) => {
   if (isDir) return path.basename(file) !== "data";

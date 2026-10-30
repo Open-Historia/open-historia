@@ -25,10 +25,12 @@ if (process.platform !== "darwin") throw new Error("The macOS app is built on ma
 const godotEditor = process.env.OH_GODOT_EDITOR || "";
 const template = process.env.OH_GODOT_TEMPLATE || "";
 const library = path.resolve(process.env.OH_GDEXT_DYLIB || path.join(here, "engine", "target", "universal-apple-darwin", "release", "liboh_gdext.dylib"));
+const frontsHostBinary = path.resolve(process.env.OH_FRONTS_HOST_BIN || path.join(here, "engine", "target", "universal-apple-darwin", "release", "ohfronts-host"));
 const nodeBinary = path.resolve(process.env.OH_NODE_BIN || process.execPath);
 if (!fs.existsSync(godotEditor)) throw new Error("Set OH_GODOT_EDITOR to the Godot 4.7.2 editor binary (Godot.app/Contents/MacOS/Godot).");
 if (!fs.existsSync(template)) throw new Error("Set OH_GODOT_TEMPLATE to Godot 4.7.2's macos.zip export template.");
 if (!fs.existsSync(library)) throw new Error(`The universal library ${library} is missing: build both targets and join them with lipo.`);
+if (!fs.existsSync(frontsHostBinary)) throw new Error(`The universal front engine ${frontsHostBinary} is missing: build ohfronts-host for both targets and join them with lipo.`);
 
 const version = fs.readFileSync(path.join(here, "VERSION"), "utf8").trim();
 if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error("native/VERSION must hold a version such as 0.1.0.");
@@ -159,7 +161,7 @@ fs.mkdirSync(path.join(stage, "native", "godot"), { recursive: true });
 fs.writeFileSync(path.join(stage, "native", "godot", "version.json"), `${JSON.stringify(stamp, null, 2)}\n`);
 
 const sidecar = path.join(here, "sidecar");
-const sidecarTools = new Set(["build.mjs", "smoke.mjs", "engine.js"]);
+const sidecarTools = new Set(["build.mjs", "smoke.mjs", "engine.js", "rustFrontWorker.js", "rustFrontsFight.js"]);
 for (const name of fs.readdirSync(sidecar).filter((entry) => /\.(?:mjs|cjs|js)$/.test(entry) && !sidecarTools.has(entry))) copy(path.join(sidecar, name), path.join(stage, "native", "sidecar", name));
 copy(path.join(sidecar, "dist"), path.join(stage, "native", "sidecar", "dist"), (file, isDir) => isDir || !file.endsWith(".map"));
 copy(path.join(sidecar, "handlers"), path.join(stage, "native", "sidecar", "handlers"), (file, isDir) => isDir || file.endsWith(".mjs") || file.endsWith(".cjs"));
@@ -179,6 +181,13 @@ for (const arch of ["arm64", "x86_64"]) {
 }
 run("/usr/bin/lipo", ["-create", ...slices, "-output", path.join(codecDir, imageCodec.IMAGE_CODEC_MAC)]);
 fs.chmodSync(path.join(codecDir, imageCodec.IMAGE_CODEC_MAC), 0o755);
+
+const frontsKit = await import(pathToFileURL(path.join(sidecar, "rustFronts.mjs")).href);
+const frontsHost = path.join(stage, "native", "sidecar", frontsKit.FRONTS_HOST_DIR, frontsKit.FRONTS_HOST);
+copy(frontsHostBinary, frontsHost);
+fs.chmodSync(frontsHost, 0o755);
+run("/usr/bin/lipo", ["-info", frontsHost]);
+if (!frontsKit.frontsHostAnswers(frontsHost)) throw new Error("The staged Rust front engine does not answer.");
 
 const notifierSource = path.join(here, "macos", "notifier", "Notifier.swift");
 const notifierBundle = path.join(contents, "Helpers", notifyKit.MAC_NOTIFIER_APP);
