@@ -53,6 +53,21 @@ import { PAST_UPDATES } from "./notesPast.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    id: "2026-10-native-faster-wars",
+    kind: "minor",
+    date: "2026-10-29",
+    banners: [
+      {
+        title: "Faster wars",
+        items: [
+          "The battles fought during a time skip are now worked out by the native engine, about three to four times faster: a month of war that took several seconds now takes about two.",
+          "Your army staff rehearse their plans on several processor cores at once.",
+          "If the native engine ever cannot fight a turn, the game fights it the old way, with the same result.",
+        ],
+      },
+    ],
+  },
+  {
     id: "2026-10-native-window",
     kind: "minor",
     date: "2026-10-29",
