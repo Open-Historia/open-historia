@@ -1,5 +1,5 @@
 use super::air::Wing;
-use super::battle::Battle;
+use super::battle::{create_battle, Battle, Opening};
 use super::climate::ZoneSky;
 use super::walls::WallLine;
 use super::constants::MAX_SIDE_MEMBERS;
@@ -14,7 +14,10 @@ use super::unit_motion::{era_of, ADVANCE_KM_PER_DAY, OVERLAND_KM_PER_DAY};
 use crate::jsmath;
 use super::arena::Arena;
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
+use super::transports::Transport;
+use super::world_grid::WorldGrid;
 
 pub trait Hooks {
     fn controller_of(&self, _id: &str) -> Val {
@@ -137,7 +140,7 @@ pub struct Run {
     pub flips: Vec<Val>,
     pub joins: Vec<Val>,
     pub starts: Vec<Val>,
-    pub transports: Vec<Val>,
+    pub transports: Vec<Transport>,
     pub voyages: Vec<Val>,
     pub unit_changes: Vec<Val>,
     pub notes: Vec<Val>,
@@ -155,6 +158,13 @@ pub struct Run {
     pub air_over: RefCell<Vec<(usize, [Vec<String>; 2])>>,
     pub wings: RefCell<Option<OrdMap<String, Wing>>>,
     pub arenas: HashMap<String, Arena>,
+    pub cache_on: bool,
+    pub kept_flags: HashSet<String>,
+    pub kept_lists: HashMap<String, Val>,
+    pub grids: HashMap<String, WorldGrid>,
+    pub land_regions: Option<Rc<Vec<Val>>>,
+    pub captures_refused: Vec<String>,
+    pub spare: Option<Battle>,
     dated: bool,
     from_date: String,
     controller: OrdMap<String, String>,
@@ -220,6 +230,13 @@ pub fn create_run(input: Val, hooks: Box<dyn Hooks>) -> Run {
         air_over: RefCell::new(Vec::new()),
         wings: RefCell::new(None),
         arenas: HashMap::new(),
+        cache_on: false,
+        kept_flags: HashSet::new(),
+        kept_lists: HashMap::new(),
+        grids: HashMap::new(),
+        land_regions: None,
+        captures_refused: Vec::new(),
+        spare: None,
         dated,
         from_date,
         controller: OrdMap::new(),
@@ -232,6 +249,21 @@ pub fn create_run(input: Val, hooks: Box<dyn Hooks>) -> Run {
     };
     if run.flips_left <= 0.0 {
         run.braked = true;
+    }
+    if let Val::Map(entries) = input.get("arenas") {
+        run.cache_on = true;
+        for (key, value) in entries {
+            let Val::Str(key) = key else { continue };
+            match value {
+                Val::Bool(true) => {
+                    run.kept_flags.insert(key.clone());
+                }
+                Val::Arr(_) => {
+                    run.kept_lists.insert(key.clone(), value.clone());
+                }
+                _ => {}
+            }
+        }
     }
     for war in input.get("wars").array_or_empty() {
         let id = clean(war.get("id"), 120);
@@ -356,6 +388,24 @@ impl Run {
         let kept = if curve.truthy() && curve.get("table").as_array().is_some() { curve } else { Val::Null };
         self.curves.borrow_mut().set(key, kept.clone());
         kept
+    }
+
+    pub fn lend(&mut self, at: usize) -> Battle {
+        let hollow = match self.spare.take() {
+            Some(hollow) => hollow,
+            None => {
+                let model = &self.battles[at];
+                let mut hollow = create_battle(self, Opening { name: String::new(), war_id: Val::Null, sides: [Vec::new(), Vec::new()], frame: model.frame.clone(), arena: model.arena.clone(), opened_date: Val::Null, opened_day: Val::Null });
+                hollow.status = "closed".to_string();
+                hollow
+            }
+        };
+        std::mem::replace(&mut self.battles[at], hollow)
+    }
+
+    pub fn give(&mut self, at: usize, battle: Battle) {
+        let hollow = std::mem::replace(&mut self.battles[at], battle);
+        self.spare = Some(hollow);
     }
 
     pub fn spend_flip(&mut self) {

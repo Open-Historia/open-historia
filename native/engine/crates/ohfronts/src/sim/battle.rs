@@ -36,7 +36,7 @@ use super::deploy::{has_lines, line_val, read_deploy};
 use super::field::{nearest_held, nearest_on_contour, open_field, own_cell, pack_field, unpack_field, Contour};
 use super::game_dates::{add_game_days, diff_game_days};
 use super::ground::{away_of, cell_at, downhill, measure};
-use super::manpower::{draw, formations_left, men_of, part_left, side_formations_left};
+use super::manpower::{draw, formations_left_with, men_of, part_left_with, side_formations_left_with};
 use super::military::mix_of;
 use super::movement::place_behind;
 use super::muster::{head_start_of, levy_owed, muster_share, musters_for, read_levy, spread_pick};
@@ -204,6 +204,12 @@ pub struct Battle {
     pub pace: f64,
     pub retreat: Option<Retreat>,
     pub ice_side: Option<Vec<i8>>,
+    pub touched: bool,
+    pub begun: bool,
+    pub begun_by: Option<usize>,
+    pub opened_for: bool,
+    pub led_by_own: Option<[bool; 2]>,
+    pub answering: Option<[f64; 2]>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -356,6 +362,12 @@ pub fn create_battle(run: &Run, opening: Opening) -> Battle {
         pace: f64::NAN,
         retreat: None,
         ice_side: None,
+        touched: false,
+        begun: false,
+        begun_by: None,
+        opened_for: false,
+        led_by_own: None,
+        answering: None,
     }
 }
 
@@ -737,10 +749,10 @@ pub fn raise_troops(battle: &mut Battle, run: &Run, me: Option<usize>, only: i64
         let military = run.mech.military();
         let count = battle.sides[side].len();
         let raises = |at: usize| !(battle.gone[side].contains(&at) || land_worth(&run.military_of(&battle.sides[side][at])) == 0.0);
-        let wholes: Vec<f64> = if military { (0..count).map(|at| if raises(at) { formations_left(run, &battle.sides[side][at]) } else { 0.0 }).collect() } else { Vec::new() };
-        let parts: Vec<f64> = if military { (0..count).map(|at| if raises(at) { part_left(run, &battle.sides[side][at]) } else { 0.0 }).collect() } else { Vec::new() };
+        let wholes: Vec<f64> = if military { (0..count).map(|at| if raises(at) { formations_left_with(run, &battle.sides[side][at], me, Some(&*battle)) } else { 0.0 }).collect() } else { Vec::new() };
+        let parts: Vec<f64> = if military { (0..count).map(|at| if raises(at) { part_left_with(run, &battle.sides[side][at], me, Some(&*battle)) } else { 0.0 }).collect() } else { Vec::new() };
         let caps: Vec<f64> = wholes.iter().zip(&parts).map(|(&whole, &part)| whole + if part > 0.0 { 1.0 } else { 0.0 }).collect();
-        let left = if military { sum_of(&caps) } else { side_formations_left(run, battle, side) };
+        let left = if military { sum_of(&caps) } else { side_formations_left_with(run, battle, side, me, Some(&*battle)) };
         let room = jsmath::max(0.0, jsmath::min(jsmath::min(counts[side], MAX_TROOPS_PER_SIDE - battle.troops[side].len() as f64), left));
         battle.base[side] = round3(sum_of(&members[side]));
         battle.pool[side] += room * POOL_PER_TROOP * battle.edge[side].reserves;

@@ -58,3 +58,4 @@ pub mod accents;
 pub mod plans;
 pub mod war_room_ops;
 pub mod day;
+pub mod front_run;
