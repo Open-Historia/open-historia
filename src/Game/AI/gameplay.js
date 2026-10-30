@@ -506,7 +506,7 @@ import {
 } from "../../runtime/politicalActors.js";
 import { buildPublicPoliticalView, normalizePoliticalIntelligenceAssessment } from "../../runtime/politicalKnowledge.js";
 import { listenInFeedLanguage, listenInPlace, normalizeListenInPosts, normalizeListenInTrends } from "../../runtime/listenIn.js";
-import { getStoredLanguage, languageDisplayName } from "../../runtime/i18n.js";
+import { getStoredLanguage, languageDisplayName, readingLanguageName } from "../../runtime/i18n.js";
 import { describeListenInPlace, listenInPlaceLabel, listenInRequest } from "./listenInContext.js";
 import { buildRealHistoryDirective } from "./futureHistoryBoundary.js";
 import {
@@ -16710,7 +16710,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
       state.scriptedEventPending = scriptedPlan.pendingState;
       const scriptedBeats = scriptedPlan.eligible;
       // The language the player reads the game in (promptContext.js "language"): the beats are told in it.
-      const scriptedLanguage = normalizeString(bundle.world?.language || bundle.game?.language) || "English";
+      const scriptedLanguage = readingLanguageName(normalizeString(bundle.world?.language || bundle.game?.language));
       const scriptedPoliticalRequirements = scriptedPoliticalImpactRequirements(scriptedBeats, { world: ledgerWorld });
       const scriptedPoliticalInstruction = buildScriptedPoliticalImpactInstruction(scriptedPoliticalRequirements, { world: ledgerWorld });
       state.structuralScriptedFallbackBlocked = scriptedPoliticalRequirements.length > 0;

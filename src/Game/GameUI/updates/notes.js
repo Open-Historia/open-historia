@@ -53,6 +53,21 @@ import { PAST_UPDATES } from "./notesPast.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    id: "2026-10-ai-in-your-language",
+    kind: "minor",
+    date: "2026-10-29",
+    banners: [
+      {
+        title: "Suggestions in your language",
+        items: [
+          "The suggested actions in the Actions panel are written in the language you play in again, not in English.",
+          "Interactive events, intelligence briefings, country statistics and scripted events follow your language the same way.",
+          "When you play in English, a scenario set to another language is still written in that language.",
+        ],
+      },
+    ],
+  },
+  {
     id: "2026-10-community-dates",
     kind: "minor",
     date: "2026-10-29",

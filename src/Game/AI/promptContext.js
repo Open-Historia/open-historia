@@ -29,6 +29,7 @@ import { hostingSharedGame, humanCountriesOf, sharedGameHostCountry } from "../.
 import { SHARED_WORLD_TASKS, buildSharedGameDirective, joinPolityNames } from "./sharedGameDirective.js";
 import { buildSeatAdviceDirective } from "./seatAdvice.js";
 import { unitsOffBattlefields } from "./frontsGate.js";
+import { readingLanguageName } from "../../runtime/i18n.js";
 
 const normalizeString = (value) => String(value ?? "").trim();
 const normalizeArray = (value) => (Array.isArray(value) ? value : []);
@@ -1785,7 +1786,7 @@ export const buildWorldSummary = async (bundle, regionCatalog = null, {
     `Player polity: ${bundle.game.country || "Unknown polity"}${playerTags.length ? ` (${playerTags.join(", ")})` : ""}`,
     `Current round: ${bundle.game.round || 1}`,
     `Current date: ${bundle.game.gameDate || "unknown"}`,
-    `Language: ${world.language || bundle.game.language || "English"}`,
+    `Language: ${readingLanguageName(world.language || bundle.game.language, { chat: conversation })}`,
     `Difficulty: ${bundle.game.difficulty || "standard"}`,
     `World before round one: ${world.startingTimelineText || "No world briefing provided."}`,
     `Simulation rules: ${world.simulationRules || "No extra simulation rules were provided."}`,
@@ -2122,7 +2123,9 @@ export const buildPromptContext = async (bundle, {
     );
   }
   put("gameMasterRequest", gameMasterRequest);
-  put("language", bundle.world.language || bundle.game.language || "English");
+  // The language the player reads, the save's own for one who reads English
+  // (i18n.js readingLanguageName).
+  put("language", readingLanguageName(bundle.world.language || bundle.game.language, { chat: conversation }));
   if (wants("markersSummary")) {
     const markerAttention = buildMarkerAttentionEvidence(bundle, { chat });
     result.markersSummary = buildMarkersSummaryText(bundle.world, {
