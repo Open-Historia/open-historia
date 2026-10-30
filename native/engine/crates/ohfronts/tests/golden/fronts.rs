@@ -18,7 +18,7 @@ use ohfronts::sim::js::{Obj, Typed, Val};
 use ohfronts::sim::muster::Levy;
 use ohfronts::sim::troops::Troop;
 use ohfronts::sim::walls::Walls;
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 pub fn ints(value: &Val) -> Vec<i32> {
     arg_numbers(value).iter().map(|&n| n as i32).collect()

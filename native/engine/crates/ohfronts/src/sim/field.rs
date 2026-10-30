@@ -5,8 +5,8 @@ use super::frame::Projector;
 use super::js::{self, Val};
 use super::line::Measured;
 use crate::jsmath;
-use std::cell::OnceCell;
-use std::rc::Rc;
+use std::sync::OnceLock as OnceCell;
+use std::sync::Arc as Rc;
 
 const LEAST: f64 = 1.0 / 1024.0;
 const ROUGH: f64 = 0.5;

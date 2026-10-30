@@ -1,7 +1,8 @@
 use super::battle::Battle;
 use super::constants::*;
 use super::ground::{cell_at, distance_from, downhill, nearest_of, FAR_THIRDS};
-use super::js::{OrdMap, Val};
+use super::js::Val;
+use std::collections::HashMap;
 use super::troops::{is_live, or_else, Troop, KIND_ARTILLERY};
 use crate::jsmath;
 
@@ -124,8 +125,8 @@ fn squeeze(battle: &Battle, books: &mut Books, side: usize) {
     let homes = battle.homes.as_ref().unwrap();
     let home = |cell: usize| homes.get(cell).map(|&home| home as f64).unwrap_or(f64::NAN);
     let body_of = battle.body_of.as_ref().unwrap();
-    let squeezed_now = books.squeezed[side].clone();
-    books.was[side].copy_from_slice(&squeezed_now);
+    let (was, squeezed) = (&mut books.was, &books.squeezed);
+    was[side].copy_from_slice(&squeezed[side]);
     books.squeezed[side].fill(0);
     {
         let was_other = &books.was[other];
@@ -176,16 +177,17 @@ fn squeeze(battle: &Battle, books: &mut Books, side: usize) {
         }
         parts.push((id, body_of[side][start], count));
     }
-    let mut body: OrdMap<i32, usize> = OrdMap::new();
+    let mut body: HashMap<i32, usize> = HashMap::new();
     for &(id, piece, count) in &parts {
         let larger = match body.get(&piece) {
             Some(&known) => count > parts[known].2,
             None => true,
         };
         if larger {
-            body.set(piece, id);
+            body.insert(piece, id);
         }
     }
+    let main: Vec<bool> = parts.iter().map(|&(id, piece, _)| body.get(&piece) == Some(&id)).collect();
     let mut head = 0;
     while head < queue.len() {
         let cell = queue[head];
@@ -208,8 +210,7 @@ fn squeeze(battle: &Battle, books: &mut Books, side: usize) {
     hanging.fill(0);
     let mut any = false;
     for &cell in &queue {
-        let (id, piece, _) = parts[part[cell] as usize];
-        if body.get(&piece) != Some(&id) || (grip[cell] as f64 <= neck && steps[cell] as f64 > strand) {
+        if !main[part[cell] as usize] || (grip[cell] as f64 <= neck && steps[cell] as f64 > strand) {
             hanging[cell] = 1;
             any = true;
         }
@@ -217,7 +218,7 @@ fn squeeze(battle: &Battle, books: &mut Books, side: usize) {
     if !any {
         return;
     }
-    let mut standing: OrdMap<i64, [f64; 2]> = OrdMap::new();
+    let mut standing: HashMap<i64, [f64; 2]> = HashMap::new();
     for troop in &battle.troops[side] {
         if !is_live(troop) {
             continue;
@@ -229,7 +230,7 @@ fn squeeze(battle: &Battle, books: &mut Books, side: usize) {
         let order = live_order(troop);
         let mut entry = standing.get(&here).copied().unwrap_or([0.0, 0.0]);
         entry[if order.is_some() && !kind_is(order, &["breakout", "fallback", "withdraw"]) { 1 } else { 0 }] += 1.0;
-        standing.set(here, entry);
+        standing.insert(here, entry);
     }
     let near = (SQUEEZED_NEAR_KM * 3.0) / cell_km;
     let mut squeezed_cells: Vec<usize> = Vec::new();

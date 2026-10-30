@@ -7,7 +7,7 @@ use ohfronts::sim::engine::{create_run, NoHooks, Run};
 use ohfronts::sim::js::{Obj, OrdMap, Typed, Val};
 use ohfronts::sim::mechanics::read_mechanics;
 use ohfronts::sim::walls::*;
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 fn pairs_of(value: &Val) -> Vec<[f64; 2]> {
     value.array_or_empty().iter().map(|pair| [pair.element(0).num(), pair.element(1).num()]).collect()
@@ -68,7 +68,7 @@ pub fn set_lines(run: &Run, value: &Val) {
 
 pub fn wall_run(value: &Val) -> Run {
     let mut run = create_run(Val::Obj(Obj::new()), Box::new(NoHooks));
-    run.input = std::rc::Rc::new(value.get("input").clone());
+    run.input = std::sync::Arc::new(value.get("input").clone());
     run.mech = read_mechanics(value.get("mech"));
     set_lines(&run, value.get("lines"));
     run

@@ -1,6 +1,6 @@
 use std::cell::RefCell;
 use std::cmp::Ordering;
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Typed {

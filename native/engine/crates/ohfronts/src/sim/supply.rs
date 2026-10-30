@@ -8,7 +8,7 @@ use super::sectors::describe_point;
 use super::troops::{is_live, Troop};
 use super::walls::kept_with;
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 fn cell_of(cols: usize, rows: usize, x: f64, y: f64) -> i64 {
     if x >= 0.0 && y >= 0.0 && x < cols as f64 && y < rows as f64 {

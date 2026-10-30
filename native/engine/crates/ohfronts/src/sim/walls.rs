@@ -6,7 +6,7 @@ use super::ground::cell_at;
 use super::js::{self, OrdMap, Val};
 use super::world_grid::{km_between, Surface};
 use crate::jsmath;
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 pub const WALL_PIECE_KM: f64 = 5.0;
 pub const WALL_DAYS: [f64; 11] = [f64::INFINITY, f64::INFINITY, f64::INFINITY, 3.0, 6.0, 10.0, 15.0, 22.0, 32.0, 50.0, f64::INFINITY];

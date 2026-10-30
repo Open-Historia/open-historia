@@ -8,7 +8,7 @@ use ohfronts::sim::chronicle::*;
 use ohfronts::sim::engine::{create_run, NoHooks, Run};
 use ohfronts::sim::fatigue::*;
 use ohfronts::sim::js::{Obj, Val};
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 fn bare_battle(run: &Run, arena: &Val) -> Battle {
     create_battle(run, Opening { name: String::new(), war_id: Val::Undef, sides: [Vec::new(), Vec::new()], frame: frame_of(&Val::Null), arena: Rc::new(arena_of(arena)), opened_date: Val::Undef, opened_day: Val::Undef })

@@ -1,4 +1,4 @@
-use super::arena::{arena_for, Arena};
+use super::arena::arena_for;
 use super::battle::{holder_of, member_index, paint_ground, read_region, read_regions, side_of_name, Battle};
 use super::closing::find_prey;
 use super::combat::{close_day, step_forward};
@@ -18,7 +18,7 @@ use super::supply::{mark_pockets, mark_supply, refresh_supply, settle_pockets};
 use super::troops::{draw_traits, is_live, live_count, stands};
 use crate::frame::{lat_to_y, y_to_lat};
 use crate::jsmath;
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RegionsNeeded;
@@ -601,11 +601,11 @@ fn grow_frame(battle: &mut Battle, run: &mut Run, day: f64, grow: [bool; 4], wit
     if frame.cols == battle.frame.cols && frame.rows == battle.frame.rows && frame.cell == battle.frame.cell {
         return Ok(false);
     }
-    let arena: Arena = match arena_for(&mut run.arenas, run.input.get("map"), &frame, run.input.get("regionTypes")) {
-        Some(arena) => arena.into_owned(),
+    let input = run.input.clone();
+    let arena = match arena_for(&mut run.arenas, input.get("map"), &frame, input.get("regionTypes")) {
+        Some(arena) => arena,
         None => return Err(RegionsNeeded),
     };
-    let arena = Rc::new(arena);
     let carry = carrier(&battle.frame, &frame);
     let was = battle.frame.clone();
     let old = battle.field.take().unwrap();

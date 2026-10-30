@@ -5,7 +5,7 @@ use ohfronts::sim::mind::net::Shape;
 use ohfronts::sim::mind::planner::{create_plainer_planner, create_planner, PlannerOptions};
 use ohfronts::sim::mind::policy::{create_staff_policy, create_troop_policy};
 use ohfronts::sim::mind::trained::{lab_staff_policy, trained_staff_policy};
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 use ohfronts::sim::js::{self, Val};
 use std::collections::HashMap;
 

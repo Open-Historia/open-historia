@@ -8,7 +8,7 @@ use super::js::{self, OrdMap, Val};
 use super::troops::Troop;
 use super::unit_motion::hash_seed;
 use crate::jsmath;
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 pub const WEATHER_STATES: [&str; 9] = ["clear", "rain", "storm", "mud", "snow", "blizzard", "frost", "heat", "fog"];
 pub const SEASONS: [&str; 4] = ["winter", "spring", "summer", "autumn"];

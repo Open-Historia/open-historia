@@ -51,7 +51,7 @@ use super::way::{left_on_leg, Leg};
 use super::weather::{skies_ahead, FORECAST_DAYS};
 use super::js::Obj;
 use std::cell::RefCell;
-use std::rc::Rc;
+use std::sync::Arc as Rc;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Named {
