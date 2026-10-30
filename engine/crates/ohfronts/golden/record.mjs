@@ -543,6 +543,17 @@ const MODULES = {
       saveBattle: { 0: SAVE_BATTLE, 1: SAVE_RUN, calls: ["0.recorder.finish", "1.groupOf", "1.controllerOf"], ids: true },
     },
   },
+  "src/runtime/fronts/engine.js": {
+    name: "engine",
+    factories: ["createFrontRun"],
+    keep: ["createFrontRun", "runFronts"],
+    most: 40,
+    bytes: { default: 1500000 },
+    picks: {
+      createFrontRun: { distinct: true, keepCalls: true, caseBytes: 2000000, methods: {} },
+      runFronts: { distinct: true, caseBytes: 2000000 },
+    },
+  },
   "src/runtime/fronts/day.js": {
     name: "day",
     most: 40,
@@ -603,6 +614,7 @@ const run = spawnSync(process.execPath, ["--import", pathToFileURL(path.join(her
 });
 const summary = String(run.stdout).split("\n").filter((line) => /^ℹ (tests|pass|fail)/.test(line));
 console.log(summary.join("\n"));
+if (process.env.GOLDEN_FAILS) console.log(String(run.stdout).split("\n").filter((line) => /✖/.test(line)).join("\n"));
 
 const gathered = new Map();
 const names = fs.readdirSync(out).map((name) => [name, JSON.parse(fs.readFileSync(path.join(out, name), "utf8")).source]).sort((a, b) => (a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0));
