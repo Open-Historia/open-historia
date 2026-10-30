@@ -1592,7 +1592,7 @@ fn order_on_border(run: &mut Run, at: usize, moment: &Val, day: f64) -> Flow<()>
 fn border_names(value: &Val) -> Option<(String, String)> {
     let full = value.string_or_empty();
     let body = full.trim_start_matches(js::is_js_whitespace);
-    if body.len() < 6 || !body[..6].eq_ignore_ascii_case("border") {
+    if !body.get(..6).is_some_and(|head| head.eq_ignore_ascii_case("border")) {
         return None;
     }
     let rest = body[6..].trim_start_matches(js::is_js_whitespace);
