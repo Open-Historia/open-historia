@@ -143,7 +143,8 @@ peace. One period can add at most 35.
 
 Past 50 it tells on a country's armies: they come back up to strength more slowly, with fewer
 reserves, and fight and move a little worse. The story is told who is weary, so it shows at home.
-Weariness is what makes peace possible: see below.
+Each government at war is told its own weariness, with the rest of its war, whenever it talks
+diplomacy: a weary one may seek peace, but nothing forces it to (see below).
 
 You can read it under each war in the **🤝 Diplomacy** tab of your country panel (open it from your flag), under **Current
 conflicts** (**War weariness:** and each side's leading country with its figure), and on a
@@ -154,28 +155,33 @@ country's **⚔ Military** card. See [national statistics](/wiki/statistics/).
 <p class="beta-note"><b>Beta channel only.</b></p>
 
 On the stable build a war ends when the story ends it. On beta a war can also end **on terms**,
-which the game works out and carries out itself. Terms are two things:
+which the game carries out itself. Terms are two things:
 
 | | |
 |---|---|
 | **The ground** | **Each side keeps the ground it holds**: what was taken is ceded. Or **the old borders**: every region goes back to whose it lawfully was. |
 | **Reparations** | One side pays the other a share of its economy every year for a number of years, out of its public finances. Or nobody pays. |
 
-**Peace offered to you.** A country nobody plays that is at war with you offers peace once its
-weariness reaches 60, or once your side holds a quarter of its land and it is losing. A **Peace
-offered** card shows the terms: **Accept** or **Decline**. It offers what its position is worth:
-a country that is losing cedes what it lost and pays, one about even offers the old borders and no payment,
-and one that is winning but weary keeps what it holds. An offer you decline is not made again for
-three turns, and an open one lapses after four.
+**Peace offered to you.** A country nobody plays that is at war with you offers peace when it
+decides to, never at a fixed weariness: its leader writes to you in your diplomatic chat with it,
+and the terms are shown on that message with **Accept** and **Decline**. A weary or losing country
+may still fight on, and one that is winning may still want peace. Its leader may also offer peace
+in a reply when you are talking to it. An open offer lapses after four turns, or when a new one
+takes its place.
 
-**Peace you propose.** Under each of your wars in the **🤝 Diplomacy** tab of your country panel,
-**Propose peace** opens two choices, the ground and the reparations (nobody pays, or 1% a year
-for 5 years, or 3% a year for 10, either way round), and **Put these terms**. A country nobody
-plays answers at once, by how the war stands for it and how weary it is. A fresh enemy that is not
-losing refuses even a white peace. A war fought against another player is ended by talking to them.
+**Peace you propose.** In your chat with an enemy, **Peace** opens two choices, the ground and the
+reparations (nobody pays, or 1% a year for 5 years, or 3% a year for 10, either way round), and
+**Send terms**. They are sent as your message, and the enemy's leader answers them in its reply:
+it accepts, declines or offers other terms of its own. **Propose peace in the chat**, under each of
+your wars in the **🤝 Diplomacy** tab, opens that chat. A war fought against another player is ended
+by talking to them.
 
-**Between countries nobody plays**, a war ends when one side is nearly spent (weariness 80) or is
-losing its ground, and the other will take its terms.
+**Between countries nobody plays**, a war ends on terms when the story says the two made peace.
+
+**What each side knows.** A government at war is told its own war whenever it talks diplomacy, in
+a time skip, in a reply to you or in a group chat: how weary it is, its supplies, the ground each
+side holds, how its battlefields go, a blockade, its allies and calls to arms, and the terms on the
+table. It decides what to do with them: one running short may ask its allies, or you, for help.
 
 A peace made ends the war in the ledger at once. Its battlefields close when time next passes, so
 the map shows them until then. The reparations a country is paying or being paid, and for how

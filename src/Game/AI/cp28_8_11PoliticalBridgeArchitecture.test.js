@@ -46,7 +46,8 @@ test("polity rename re-keys Political Actors and the pre-existing 28k schema gua
   // Raised once on purpose, with its reason beside it, for spiesOnPlayer (2026-10-28).
   // And by 100 for events[].audience, secrets in shared games (2026-10-26).
   // And by about 230 for a chat's `to`, each shared game's letter reaching its own player.
-  assert.match(schemaGuard, /assert\.ok\(jumpChars < 28650,/);
+  // And by about 560 for a letter's peaceOffer and the peaceTreaties lines: peace when the skip says so (2026-10-30).
+  assert.match(schemaGuard, /assert\.ok\(jumpChars < 29250,/);
   assert.doesNotMatch(schemaGuard, /jumpChars < 3[01]000|jumpChars < 32000/, "CP28.8.11 must not silently raise the separate pre-existing schema-size guard");
 });
 

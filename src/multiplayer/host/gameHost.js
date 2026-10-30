@@ -509,7 +509,9 @@ export const createGameHost = ({
     },
     // War and peace (Game/AI/warAndPeace.js): the seat's own answer to an
     // offer of peace or a call to arms, or terms of its own put to an enemy
-    // nobody plays. Whose answer it is is the seat's country and nothing the
+    // nobody plays, which wait for that enemy's leader to answer them in the
+    // seat's chat with it (the host's own table turn, runChatActionBatch, reads
+    // the answer). Whose answer it is is the seat's country and nothing the
     // message says. Not while a round is being resolved: the round would
     // write over it.
     peace: async (connection, { op, ref, terms }, seat) => {
@@ -519,10 +521,6 @@ export const createGameHost = ({
         const outcome = playerDiplomacy(world, { op, ref, terms, country: seat.country, players: humanCountriesOf(game), date: clean(game?.gameDate), round: game?.round });
         if (outcome.error) {
           refusal = outcome.error === "not-yours" ? "This is not yours to answer." : outcome.error === "played" ? "That side is led by another player: make peace with them in a chat." : "This is no longer open.";
-          return null;
-        }
-        if (op === "propose" && !outcome.accepted) {
-          refusal = "They refuse these terms.";
           return null;
         }
         return { world: outcome.world };

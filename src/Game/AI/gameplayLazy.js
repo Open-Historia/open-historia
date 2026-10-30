@@ -99,6 +99,10 @@ export const declineInteractiveOffer = hostOnly(async (...args) => (await gamepl
 // to arms answered, or terms put to an enemy. A guest's goes to the host as a
 // request (GameUI/warAndPeace.jsx).
 export const answerDiplomacy = hostOnly(async (...args) => (await gameplay()).answerDiplomacy(...args));
+// What a leader's chat reply decided of peace with the player, carried out
+// (AI/warAndPeace.js answerPeaceProposal). In a shared game the host's table
+// turn reads it from its own answer instead.
+export const answerPeaceInChat = hostOnly(async (...args) => (await gameplay()).answerPeaceInChat(...args));
 export const advanceActiveInteractive = hostOnly(async (...args) => (await gameplay()).advanceActiveInteractive(...args));
 export const rewindActiveInteractive = hostOnly(async (...args) => (await gameplay()).rewindActiveInteractive(...args));
 export const endActiveInteractive = hostOnly(async (...args) => (await gameplay()).endActiveInteractive(...args));

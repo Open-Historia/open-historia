@@ -53,6 +53,24 @@ import { PAST_UPDATES } from "./notesPast.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // Peace offered through the diplomatic chats, when the AI decides it, with each country's war in its diplomacy (2026-10-30).
+    id: "2026-10-peace-in-the-chats",
+    kind: "minor",
+    date: "2026-10-30",
+    channel: "beta",
+    banners: [
+      {
+        title: "Peace at the table",
+        items: [
+          "An enemy offers peace in its diplomatic chat with you, in its leader's own words, with the terms to accept or decline right there.",
+          "Peace is offered only when a country decides to, not at a fixed weariness: a weary country may still fight on, a strong one may still want peace.",
+          "Put your own terms with Peace in the chat with an enemy, and its leader answers them in the reply: accepts, declines or offers other terms.",
+          "Countries at war know their own war in diplomacy: weariness, supplies, ground, battlefields and allies. One running short may ask you for help.",
+        ],
+      },
+    ],
+  },
+  {
     id: "2026-10-ai-in-your-language",
     kind: "minor",
     date: "2026-10-29",

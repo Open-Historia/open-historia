@@ -6,7 +6,14 @@
 // The rules are in three small files that know nothing of the game's world
 // (runtime/warWeariness.js, runtime/peaceTerms.js, runtime/alliances.js). This
 // is where they meet it: the war ledger, who holds what, the sheets of
-// statistics, reputations and agreements. No model is asked for any of it.
+// statistics, reputations and agreements.
+//
+// Whether a country wants peace, and on what terms, is the AI's to say ("it
+// should not be fully deterministic anymore", the owner, 2026-10-30): the time
+// skip writes it (a letter offering a person peace, a peace two countries
+// nobody plays have made), and so does a leader in a chat (an offer, or its
+// answer to terms a person put). The game checks what it is told and carries
+// it out.
 //
 // AT THE END OF EVERY TURN (turnWarAndPeace, called by the turn after the
 // ledgers the story wrote are merged), in this order:
@@ -16,13 +23,15 @@
 //                 whoever was attacked: countries nobody plays come in or break
 //                 the treaty, and a person is asked
 //   weariness     every country's is moved by what the turn did to it
-//   peace         two sides nobody plays settle when one is spent and the
-//                 other will take its terms; a country nobody plays that is
-//                 weary or beaten offers a person peace
+//   peace         the peaces the skip says two sides nobody plays made are
+//                 made; offers whose war is over, or that stood too long,
+//                 lapse. The offers the skip's letters carry are added as the
+//                 letters are written (offerPeace)
 //
 // BETWEEN TURNS a person answers: an offer of peace (acceptPeaceOffer,
 // declinePeaceOffer), a call to arms (answerCallToArms), or puts terms of
-// their own to an enemy nobody plays, which answers at once (proposePeace).
+// their own to an enemy nobody plays (proposePeace), which its leader answers
+// in the chat (answerPeaceProposal).
 //
 // A PEACE MADE (makePeace) ends the war in the ledger, settles the ground the
 // two sides hold of each other's as its terms say, begins any reparations, and
@@ -41,12 +50,13 @@ import {
   normalizePeaceTreaties,
   normalizeReparations,
   normalizeTerms,
+  offerFromAi,
+  openOfferBetween,
   reparationsDue,
   reparationsOf,
-  settledBetweenOthers,
-  standingOf,
+  treatyFromSkip,
+  withOffer,
   withTurnPeaceOffers,
-  wouldAccept,
 } from "../../runtime/peaceTerms.js";
 import { startingWearinessOf } from "../../runtime/militaryStats.js";
 import { landWeightsOf } from "../../runtime/militaryPower.js";
@@ -290,7 +300,11 @@ const withReparationsPaid = (world, days) => {
 //   players     the countries people play
 //   fronts      what the land and sea war came to (frontTurn.js runTurnFronts), or null
 //   held        how many regions each country holds now (regionHoldingsFromWorld, or the map's count)
-export const turnWarAndPeace = ({ world = {}, baseWorld = {}, days = 0, date = "", round = 0, players = [], fronts = null, held = null } = {}) => {
+//   treaties    the peaces the skip says two countries nobody plays made:
+//               [{ from, to, terms }] (peaceTerms.js readTreatyLines), each
+//               checked before it is made
+//   onRefused   (treaty with its `reason`) => anything, for each one refused
+export const turnWarAndPeace = ({ world = {}, baseWorld = {}, days = 0, date = "", round = 0, players = [], fronts = null, held = null, treaties = [], onRefused = null } = {}) => {
   const holdings = held instanceof Map ? held : regionHoldingsFromWorld(world);
   const turn = Math.max(0, Math.round(figure(round)));
   let next = withReparationsPaid(world, days);
@@ -381,11 +395,17 @@ export const turnWarAndPeace = ({ world = {}, baseWorld = {}, days = 0, date = "
   }
 
   // ---- peace ----
-  const wearyOf = (name) => wearinessOf(weariness, name);
-  for (const settled of settledBetweenOthers({ wars: next.wars, players, wearinessOf: wearyOf, groundOf: groundReader(next, holdings) })) {
-    next = makePeace(next, { ...settled, date, round: turn, by: "settled" });
+  // Only what the skip says was made. Weariness is a figure the AI is told
+  // (warStatsPrompt.js), never what makes a peace.
+  for (const told of list(treaties)) {
+    const checked = treatyFromSkip({ ...told, wars: next.wars, players });
+    if (!checked.treaty) {
+      if (typeof onRefused === "function") onRefused({ ...told, reason: checked.reason });
+      continue;
+    }
+    next = makePeace(next, { ...checked.treaty, date, round: turn, by: "settled" });
   }
-  next = { ...next, peaceOffers: withTurnPeaceOffers(next.peaceOffers, { wars: next.wars, players, wearinessOf: wearyOf, groundOf: groundReader(next, holdings), round: turn, date }) };
+  next = { ...next, peaceOffers: withTurnPeaceOffers(next.peaceOffers, { wars: next.wars, round: turn }) };
   return next;
 };
 
@@ -413,26 +433,89 @@ export const declinePeaceOffer = (world, offerId, { round = 0 } = {}) => {
   return { ...world, peaceOffers: offers.map((entry) => (entry.id === clean(offerId, 80) ? { ...entry, status: "declined", answeredRound: Math.max(1, Math.round(figure(round))) } : entry)) };
 };
 
-// A person puts terms to the other side of a war. Its first country answers
-// at once by how the war stands for it and how weary it is (wouldAccept).
+// An offer of peace an AI makes a person: a letter of the time skip's, or a
+// leader's chat reply. Checked by peaceTerms.js offerFromAi; an open offer
+// between the two in that war gives way to it.
+//   from, to            the AI's country, the person's
+//   terms               as the AI wrote them
+//   players             the countries people play
+//   source              "skip" | "chat" | "counter"
+//   chatId, messageId   the thread and the message that carry it
+// Returns { world, offer, reason }: `reason` says why nothing was offered ("" when it was).
+export const offerPeace = (world, { from = "", to = "", terms = null, players = [], date = "", round = 0, source = "skip", chatId = "", messageId = "" } = {}) => {
+  const made = offerFromAi({ from, to, terms, wars: world?.wars, players, round, date, source, chatId, messageId });
+  if (!made.offer) return { world, offer: null, reason: made.reason };
+  return { world: { ...world, peaceOffers: withOffer(world?.peaceOffers, made.offer) }, offer: made.offer, reason: "" };
+};
+
+// A person puts terms to the other side of a war. Nothing is decided here: the
+// terms wait, open, for the leader of the other side's first country to answer
+// in the chat (answerPeaceProposal).
 //   from      the country proposing (a person's)
 //   players   the countries people play: a side with one of them on it is theirs to answer, and is not answered here
-//   held      how many regions each country holds
-// Returns { world, accepted, to, reason }: `reason` says why nothing happened ("" when the terms were put).
-export const proposePeace = (world, { warId = "", from = "", terms = null, players = [], date = "", round = 0, held = null } = {}) => {
+//   chatId, messageId   the thread and the person's message that put them, where known
+// Returns { world, offer, to, reason }: `reason` says why nothing happened ("" when the terms were put).
+export const proposePeace = (world, { warId = "", from = "", terms = null, players = [], date = "", round = 0, chatId = "", messageId = "" } = {}) => {
   const war = list(world?.wars).find((entry) => clean(entry?.id) === clean(warId));
-  if (!war || !settleable(war)) return { world, accepted: false, to: "", reason: "no-war" };
+  if (!war || !settleable(war)) return { world, offer: null, to: "", reason: "no-war" };
   const sides = sidesOf(war);
   const mine = sides.findIndex((members) => members.some((member) => fold(member) === fold(from)));
-  if (mine < 0) return { world, accepted: false, to: "", reason: "not-in-war" };
+  if (mine < 0) return { world, offer: null, to: "", reason: "not-in-war" };
   const to = sides[1 - mine][0];
   const played = new Set(list(players).map(fold));
-  if (!to || sides[1 - mine].some((member) => played.has(fold(member)))) return { world, accepted: false, to: to ?? "", reason: "played" };
-  const read = normalizeTerms(terms);
-  const ground = groundReader(world, held)(warId, to);
-  const accepted = wouldAccept({ terms: read, country: to, standing: standingOf(ground), weariness: wearinessOf(world?.warWeariness, to) });
-  if (!accepted) return { world, accepted: false, to, reason: "" };
-  return { world: makePeace(world, { warId, from, to, terms: read, date, round, by: "proposal" }), accepted: true, to, reason: "" };
+  if (!to || sides[1 - mine].some((member) => played.has(fold(member)))) return { world, offer: null, to: to ?? "", reason: "played" };
+  const turn = Math.max(0, Math.round(figure(round)));
+  const own = sides[mine].find((member) => fold(member) === fold(from)) ?? clean(from);
+  const [offer] = normalizePeaceOffers([{
+    id: `peace:${clean(warId)}:${fold(own)}:${turn}`,
+    warId: clean(warId),
+    from: own,
+    to,
+    terms: normalizeTerms(terms),
+    date: clean(date),
+    round: turn,
+    status: "open",
+    source: "player",
+    chatId,
+    messageId,
+  }]);
+  return { world: { ...world, peaceOffers: withOffer(world?.peaceOffers, offer) }, offer, to, reason: "" };
+};
+
+// What a leader nobody plays says of peace in a chat with a person: it answers
+// the terms that person put to it (accept, decline, counter), or it offers
+// peace of its own. Nothing the leader did not say is done: a reply that says
+// nothing of the terms leaves them open.
+//   from        the leader's country
+//   to          the person's
+//   verdict     { verdict: "accept" | "decline" | "counter" | "offer", terms? } (peaceTerms.js readPeaceVerdict)
+//   players     the countries people play
+//   chatId, messageId   the thread and the leader's message
+// Returns { world, outcome, reason }: outcome "peace" | "declined" | "offered" | "", `reason` when nothing was done.
+export const answerPeaceProposal = (world, { from = "", to = "", verdict = null, players = [], date = "", round = 0, chatId = "", messageId = "" } = {}) => {
+  const word = clean(verdict?.verdict).toLowerCase();
+  const turn = Math.max(1, Math.round(figure(round)));
+  const open = openOfferBetween(world?.peaceOffers, from, to);
+  const put = open && fold(open.from) === fold(to) && fold(open.to) === fold(from) ? open : null;
+  const marked = (offers, status) => normalizePeaceOffers(list(offers).map((entry) => (entry?.id === put.id ? { ...entry, status, answeredRound: turn } : entry)));
+  if (word === "accept") {
+    if (!put) return { world, outcome: "", reason: "nothing put" };
+    const made = makePeace(world, { warId: put.warId, from: put.from, to: put.to, terms: put.terms, date, round, by: "proposal" });
+    if (made === world) return { world, outcome: "", reason: "no-war" };
+    return { world: { ...made, peaceOffers: marked(made.peaceOffers, "accepted") }, outcome: "peace", reason: "" };
+  }
+  if (word === "decline") {
+    if (!put) return { world, outcome: "", reason: "nothing put" };
+    return { world: { ...world, peaceOffers: marked(world.peaceOffers, "declined") }, outcome: "declined", reason: "" };
+  }
+  if (word === "counter" || word === "offer") {
+    // A counter turns down what was put and offers other terms; an offer is made fresh.
+    const base = put ? { ...world, peaceOffers: marked(world.peaceOffers, "declined") } : world;
+    const made = offerPeace(base, { from, to, terms: verdict?.terms, players, date, round, source: put ? "counter" : "chat", chatId, messageId });
+    if (!made.offer) return put ? { world: base, outcome: "declined", reason: made.reason } : { world, outcome: "", reason: made.reason };
+    return { world: made.world, outcome: "offered", reason: "" };
+  }
+  return { world, outcome: "", reason: "unread" };
 };
 
 // A world with a call to arms answered.
@@ -461,12 +544,15 @@ export const answerCallToArms = (world, callId, honour, { date = "", round = 0 }
 
 // One thing a person does about a war between turns, whoever's screen it came from.
 //   op        "accept" | "decline" (an offer of peace, by its id), "honour" | "refuse"
-//             (a call to arms, by its id), "propose" (terms of their own, for a war by its id)
+//             (a call to arms, by its id), "propose" (terms of their own, for a war by
+//             its id, which wait for the other side's leader to answer in the chat)
 //   ref       the offer's, call's or war's id
 //   country   who is doing it: the offer or call must be theirs
-// Returns { world, error, accepted, to }: `error` is a word for why nothing was
-// done ("" when something was), `accepted` whether terms put were taken.
-export const playerDiplomacy = (world, { op = "", ref = "", terms = null, country = "", players = [], date = "", round = 0, held = null } = {}) => {
+// Returns { world, error, accepted, to, offerId }: `error` is a word for why
+// nothing was done ("" when something was), `accepted` whether an offer or a
+// call was taken, `offerId` the terms a "propose" put.
+//   chatId, messageId   for "propose": the thread and the message that put the terms
+export const playerDiplomacy = (world, { op = "", ref = "", terms = null, country = "", players = [], date = "", round = 0, chatId = "", messageId = "" } = {}) => {
   const who = fold(country);
   const nothing = (error) => ({ world, error, accepted: false, to: "" });
   if (!who) return nothing("nobody");
@@ -484,8 +570,8 @@ export const playerDiplomacy = (world, { op = "", ref = "", terms = null, countr
     return { world: answerCallToArms(world, call.id, op === "honour", { date, round }), error: "", accepted: op === "honour", to: call.defender };
   }
   if (op === "propose") {
-    const put = proposePeace(world, { warId: ref, from: country, terms, players, date, round, held });
-    return { world: put.world, error: put.reason, accepted: put.accepted, to: put.to };
+    const put = proposePeace(world, { warId: ref, from: country, terms, players, date, round, chatId, messageId });
+    return { world: put.world, error: put.reason, accepted: false, to: put.to, offerId: put.offer?.id ?? "" };
   }
   return nothing("unknown");
 };

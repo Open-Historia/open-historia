@@ -15,16 +15,18 @@ import { fileURLToPath } from "node:url";
 
 import { TREATY_BROKEN_REPUTATION } from "../../runtime/alliances.js";
 import { normalizeWorldState } from "../../runtime/gameState.js";
-import { PEACE_OFFER_WEARINESS, TERRITORY_AS_HELD, TERRITORY_RESTORED } from "../../runtime/peaceTerms.js";
+import { TERRITORY_AS_HELD, TERRITORY_RESTORED } from "../../runtime/peaceTerms.js";
 import { WEARINESS_A_YEAR, wearinessOf } from "../../runtime/warWeariness.js";
 import { PUBLIC_WORLD_KEYS } from "../../multiplayer/host/projection.js";
 import { playerFronts } from "../GameUI/warRoomData.js";
 import {
   acceptPeaceOffer,
   answerCallToArms,
+  answerPeaceProposal,
   declinePeaceOffer,
   groundReader,
   makePeace,
+  offerPeace,
   peaceImpacts,
   playerDiplomacy,
   proposePeace,
@@ -116,51 +118,80 @@ test("an offer of peace is taken or turned down by the country it was made to", 
   assert.equal(act("accept", "Cisland").world, state);
 });
 
-test("a person may put terms of their own, and an enemy nobody plays answers at once by how it stands and how weary it is", () => {
-  const put = (terms, weariness, players = ["Aland"]) => proposePeace(world({ warWeariness: weariness }), { warId: "war-1", from: "Aland", terms, players, date: "1915-01-10", round: 8 });
-  // Borduria has lost a third of its country. Fresh, it will not sign that away; worn down, it will.
+test("a person puts terms of their own, and they wait, open, for the enemy's leader to answer in the chat", () => {
+  const put = (terms, players = ["Aland"]) => proposePeace(world(), { warId: "war-1", from: "Aland", terms, players, date: "1915-01-10", round: 8, chatId: "chat-b", messageId: "msg-terms" });
   const cede = { territory: TERRITORY_AS_HELD };
-  assert.deepEqual([put(cede, []).accepted, put(cede, []).to, put(cede, []).reason], [false, "Borduria", ""]);
-  const signed = put(cede, [{ country: "Borduria", value: 70 }]);
-  assert.deepEqual([signed.accepted, war(signed.world).status, signed.world.peaceTreaties[0].by], [true, "ended", "proposal"]);
-  // The old borders are a gift to it at any time.
-  assert.equal(put({ territory: TERRITORY_RESTORED }, []).accepted, true);
-  // Tribute on top of the ground is more than it will bear until it is spent.
-  const tribute = { territory: TERRITORY_AS_HELD, reparations: { payer: "Borduria", receiver: "Aland", share: 0.04, years: 12 } };
-  assert.equal(put(tribute, [{ country: "Borduria", value: 70 }]).accepted, false);
-  assert.equal(put(tribute, [{ country: "Borduria", value: 100 }]).accepted, false);
+  const waiting = put(cede);
+  assert.deepEqual([waiting.reason, waiting.to, war(waiting.world).status], ["", "Borduria", "active"], "nothing is decided by the numbers");
+  assert.deepEqual(waiting.offer, { id: "peace:war-1:aland:8", warId: "war-1", from: "Aland", to: "Borduria", terms: { territory: TERRITORY_AS_HELD, reparations: null }, date: "1915-01-10", round: 8, status: "open", source: "player", chatId: "chat-b", messageId: "msg-terms" });
   // An enemy a person plays is theirs to answer, and is not answered here.
-  assert.equal(put(cede, [{ country: "Borduria", value: 100 }], ["Aland", "Borduria"]).reason, "played");
+  assert.equal(put(cede, ["Aland", "Borduria"]).reason, "played");
   assert.equal(proposePeace(world(), { warId: "war-1", from: "Cisland", terms: cede }).reason, "not-in-war");
   assert.equal(proposePeace(world({ wars: [{ ...WAR, status: "ended" }] }), { warId: "war-1", from: "Aland", terms: cede }).reason, "no-war");
-  assert.equal(playerDiplomacy(world({ warWeariness: [{ country: "Borduria", value: 70 }] }), { op: "propose", ref: "war-1", terms: cede, country: "Aland", players: ["Aland"], date: "1915-01-10", round: 8 }).accepted, true);
+  const door = playerDiplomacy(world({ warWeariness: [{ country: "Borduria", value: 99 }] }), { op: "propose", ref: "war-1", terms: cede, country: "Aland", players: ["Aland"], date: "1915-01-10", round: 8 });
+  assert.deepEqual([door.error, door.accepted, door.offerId, war(door.world).status], ["", false, "peace:war-1:aland:8", "active"], "however spent the enemy, it is its leader who answers");
+
+  // Its leader's reply: accept, and the war ends on the player's terms.
+  const answer = (verdict, state = waiting.world) => answerPeaceProposal(state, { from: "Borduria", to: "Aland", verdict, players: ["Aland"], date: "1915-01-12", round: 8, chatId: "chat-b", messageId: "msg-reply" });
+  const yes = answer({ verdict: "accept" });
+  assert.deepEqual([yes.outcome, war(yes.world).status, yes.world.peaceOffers[0].status, yes.world.peaceTreaties[0].by, holder(yes.world, "b9"), sovereign(yes.world, "b9")], ["peace", "ended", "accepted", "proposal", "Aland", "Aland"]);
+  // Decline: the war goes on, and the terms are answered.
+  const no = answer({ verdict: "decline" });
+  assert.deepEqual([no.outcome, war(no.world).status, no.world.peaceOffers[0].status], ["declined", "active", "declined"]);
+  // Counter: the player's terms are turned down, and its own put before the player, on its reply.
+  const counter = answer({ verdict: "counter", terms: { territory: TERRITORY_RESTORED } });
+  assert.deepEqual([counter.outcome, war(counter.world).status], ["offered", "active"]);
+  assert.deepEqual(counter.world.peaceOffers.map((offer) => [offer.from, offer.to, offer.status, offer.source ?? "", offer.messageId ?? ""]), [["Aland", "Borduria", "declined", "player", "msg-terms"], ["Borduria", "Aland", "open", "counter", "msg-reply"]]);
+  // A reply that says nothing of the terms leaves them open; an accept with nothing put does nothing.
+  assert.equal(answer(null).outcome, "");
+  assert.equal(answer({ verdict: "accept" }, world()).outcome, "");
+  assert.equal(war(answer({ verdict: "accept" }, world()).world).status, "active");
+  // Unasked, a leader may offer peace itself in its reply.
+  const offered = answer({ verdict: "offer", terms: { territory: TERRITORY_AS_HELD } }, world());
+  assert.deepEqual(offered.world.peaceOffers.map((offer) => [offer.from, offer.to, offer.source]), [["Borduria", "Aland", "chat"]]);
 });
 
 const turn = (state, extra = {}) => turnWarAndPeace({ world: state, baseWorld: state, days: 30, date: "1915-02-01", round: 9, players: ["Aland"], fronts: null, ...extra });
 
-test("a turn moves weariness, and a country nobody plays that is weary enough offers the player peace", () => {
+test("a turn moves weariness, and nobody offers peace or settles a war unless the skip says so", () => {
   const quiet = turn(world());
   assert.ok(wearinessOf(quiet.warWeariness, "Aland") > 0 && wearinessOf(quiet.warWeariness, "Borduria") > 0, "a month at war");
-  assert.deepEqual(quiet.peaceOffers.map((offer) => [offer.from, offer.to, offer.terms.territory, offer.status]), [["Borduria", "Aland", TERRITORY_AS_HELD, "open"]], "it has lost a third of its country: it sues, ceding the ground");
-  assert.ok(quiet.peaceOffers[0].terms.reparations.share > 0);
-  // Holding its own, it offers only once it is weary.
-  const level = { regionOwnershipOverrides: { ...regions("a", "Aland", 10), ...regions("b", "Borduria", 10) }, regionSovereigntyOverrides: {} };
-  assert.deepEqual(turn(world(level)).peaceOffers, []);
-  const weary = turn(world({ ...level, warWeariness: [{ country: "Borduria", value: PEACE_OFFER_WEARINESS }] }));
-  assert.deepEqual(weary.peaceOffers.map((offer) => [offer.from, offer.terms.territory, offer.terms.reparations]), [["Borduria", TERRITORY_RESTORED, null]]);
+  // Weariness 90, a third of its country lost: still no offer. That is the AI's to make.
+  const spent = turn(world({ warWeariness: [{ country: "Borduria", value: 90 }] }));
+  assert.deepEqual(spent.peaceOffers, []);
+  assert.equal(war(spent).status, "active");
   // What the turn did to it is counted: men called up, ground lost, a blockade.
+  const level = { regionOwnershipOverrides: { ...regions("a", "Aland", 10), ...regions("b", "Borduria", 10) }, regionSovereigntyOverrides: {} };
   const hard = turn(world(level), { fronts: { manpower: [{ name: "Borduria", drawn: 400000, returned: 0 }], flips: [{ kind: "control", regionId: "b1", from: "Borduria", to: "Aland" }], sea: { blockades: [{ country: "Borduria", pressure: 0.8 }] } } });
   assert.ok(wearinessOf(hard.warWeariness, "Borduria") > wearinessOf(quiet.warWeariness, "Borduria") + 10, String(wearinessOf(hard.warWeariness, "Borduria")));
   // The same turn applied twice is the same world.
   assert.deepEqual(turn(world()), quiet);
-  // A war nobody plays in: the beaten side sues, and a half-weary winner takes it. The game ends that war itself.
-  const others = turn(world({ warWeariness: [{ country: "Aland", value: 55 }] }), { players: ["Cisland"] });
-  assert.deepEqual([war(others).status, others.peaceTreaties.map((entry) => [entry.from, entry.to, entry.by]), others.peaceOffers], ["ended", [["Borduria", "Aland", "settled"]], []]);
-  assert.deepEqual([holder(others, "b9"), sovereign(others, "b9")], ["Aland", "Aland"]);
-  // A fresh winner would rather fight on.
-  assert.equal(war(turn(world(), { players: ["Cisland"] })).status, "active");
+  // A war nobody plays in, both sides spent: it goes on until the skip reports a treaty.
+  const worn = world({ warWeariness: [{ country: "Aland", value: 95 }, { country: "Borduria", value: 95 }] });
+  assert.equal(war(turn(worn, { players: ["Cisland"] })).status, "active", "no formula settles it");
+  const refused = [];
+  const settled = turn(worn, { players: ["Cisland"], treaties: [{ from: "Borduria", to: "Aland", terms: { territory: TERRITORY_AS_HELD, reparations: { payer: "Borduria", share: 0.02, years: 5 } } }], onRefused: (entry) => refused.push(entry) });
+  assert.deepEqual([war(settled).status, settled.peaceTreaties.map((entry) => [entry.from, entry.to, entry.by]), settled.reparations.map((entry) => [entry.payer, entry.receiver])], ["ended", [["Borduria", "Aland", "settled"]], [["Borduria", "Aland"]]]);
+  assert.deepEqual([holder(settled, "b9"), sovereign(settled, "b9")], ["Aland", "Aland"]);
+  // A treaty in a war a person is in, or between countries not at war, is refused and said why.
+  const mine = turn(worn, { treaties: [{ from: "Borduria", to: "Aland", terms: {} }, { from: "Cisland", to: "Aland", terms: {} }], onRefused: (entry) => refused.push(entry) });
+  assert.equal(war(mine).status, "active");
+  assert.deepEqual(refused.map((entry) => entry.reason), ["a person is in that war: their peace is theirs to make", "Cisland and Aland are not at war"]);
   assert.equal(turnDays({ gameDate: "1915-01-02" }, { gameDate: "1915-02-01" }), 30);
   assert.equal(turnDays({}, { gameDate: "1915-02-01" }), 0);
+});
+
+test("a skip's letter offering a player peace is kept with the war, on the letter's own message", () => {
+  const sent = offerPeace(world(), { from: "Borduria", to: "Aland", terms: { territory: TERRITORY_AS_HELD, reparations: { payer: "Borduria", share: 0.02, years: 5 } }, players: ["Aland"], date: "1915-02-01", round: 9, source: "skip", chatId: "chat-b", messageId: "msg-peace-9-borduria" });
+  assert.deepEqual(sent.offer, { id: "peace:war-1:borduria:9", warId: "war-1", from: "Borduria", to: "Aland", terms: { territory: TERRITORY_AS_HELD, reparations: { payer: "Borduria", receiver: "Aland", share: 0.02, years: 5 } }, date: "1915-02-01", round: 9, status: "open", source: "skip", chatId: "chat-b", messageId: "msg-peace-9-borduria" });
+  // Accepted from the chat, the war ends; declined, it goes on.
+  const accepted = playerDiplomacy(sent.world, { op: "accept", ref: sent.offer.id, country: "Aland", players: ["Aland"], date: "1915-02-03", round: 9 });
+  assert.deepEqual([accepted.error, war(accepted.world).status, accepted.world.reparations.length], ["", "ended", 1]);
+  const declined = playerDiplomacy(sent.world, { op: "decline", ref: sent.offer.id, country: "Aland", players: ["Aland"], date: "1915-02-03", round: 9 });
+  assert.deepEqual([declined.error, war(declined.world).status, declined.world.peaceOffers[0].status], ["", "active", "declined"]);
+  // To a country nobody plays, or by one not at war with it: not kept.
+  assert.equal(offerPeace(world(), { from: "Borduria", to: "Aland", players: [] }).offer, null);
+  assert.equal(offerPeace(world(), { from: "Cisland", to: "Aland", players: ["Aland"] }).offer, null);
 });
 
 test("a country goes to war as weary as its own military figures say, where the game holds none for it yet", () => {
@@ -269,7 +300,7 @@ test("the world keeps all of it, every player is shown it, and the turn and a pe
   assert.ok(gameplay.includes("worldWithImpacts = turnWarAndPeace({\n    world: worldWithImpacts,\n    baseWorld,\n    days: turnDays(baseGame, nextGame),"));
   assert.ok(gameplay.indexOf("worldWithImpacts = turnWarAndPeace({") < gameplay.indexOf("const pruned = pruneWarUnits({"), "before the units of a war that has ended leave the map");
   assert.ok(gameplay.indexOf("worldWithImpacts = turnWarAndPeace({") > gameplay.indexOf("const diplomaticMerge = applyDiplomaticUpdates({"), "after the agreements the story wrote");
-  const answer = gameplay.slice(gameplay.indexOf("export const answerDiplomacy = "), gameplay.indexOf("// A scene the player is in the middle of."));
+  const answer = gameplay.slice(gameplay.indexOf("export const answerDiplomacy = "), gameplay.indexOf("// What a leader nobody plays decided of peace with the player"));
   assert.ok(answer.includes("if (isSimulationBusy()) throw new Error(\"A turn is being generated; wait for it to finish.\");"), "never while a turn is being written: the turn would overwrite it");
   assert.ok(answer.includes("await mutateWorldState((world) => {"));
   assert.equal(answer.includes("callAI"), false, "no model is asked");

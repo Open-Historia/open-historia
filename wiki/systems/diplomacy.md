@@ -152,21 +152,21 @@ other countries do among themselves.
 
 <p class="beta-note"><b>Beta channel only.</b></p>
 
-On beta two decisions do come as cards to accept or decline. They sit over the map until you
-answer them (**Fold away** shrinks them to a button that counts what is waiting):
+On beta two decisions come with buttons to accept or decline:
 
-- **Peace offered.** A country at war with you that is weary enough, or losing its own ground,
-  offers terms — the ground as each side holds it or restored to the old borders, and any
-  reparations — and you **Accept** or **Decline**. A declined offer is not made again for three
-  turns.
-- **Call to arms.** When an ally you are bound to defend is attacked, it calls on you:
-  **Honour the alliance** and you are at war beside it, or **Break the treaty**, which ends it and
-  costs you 15 reputation. A call left unanswered for two turns counts as broken.
+- **Peace offered.** A country at war with you that decides to seek peace writes to you in your
+  diplomatic chat with it, and its terms (the ground as each side holds it or restored to the old
+  borders, and any reparations) are shown on that message: you **Accept** or **Decline** there.
+- **Call to arms.** When an ally you are bound to defend is attacked, it calls on you, in a card
+  over the map until you answer (**Fold away** shrinks it to a button): **Honour the alliance** and
+  you are at war beside it, or **Break the treaty**, which ends it and costs you 15 reputation. A
+  call left unanswered for two turns counts as broken.
 
-You can make the first move too: under each of your wars on the **🤝 Diplomacy** tab of a stat
-sheet, **Propose peace** lets you set the ground and the reparations and **Put these terms**. A
-country nobody plays answers at once, by how the war stands for it and how weary it is; a fresh
-enemy that is not losing refuses. See [alliances that bind](/wiki/war/#alliances-that-bind) and
+You can make the first move too: in your chat with an enemy, **Peace** lets you set the ground and
+the reparations and **Send terms**. Its leader answers in the reply, accepting, declining or
+offering other terms. A government at war knows its own war in every conversation (its weariness,
+supplies, ground and allies) and decides by them. See
+[alliances that bind](/wiki/war/#alliances-that-bind) and
 [peace on terms](/wiki/war/#ending-a-war-peace-on-terms).
 
 ## Turning talk into outcomes

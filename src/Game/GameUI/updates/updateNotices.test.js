@@ -45,7 +45,7 @@ test("each update is shown once a device; one that missed several is shown all o
   // Only the updates written as notices, never the history before them: "make sure people ONLY see the update popup
   // things for the updates that are actually being added (plus the music one), not for every update in the history"
   // (the owner, 2026-10-16).
-  assert.deepEqual(firstLook, ["2026-10-ai-in-your-language", "2026-10-espionage-part-2", "2026-10-swarms", "2026-10-wars-and-fronts-2"]);
+  assert.deepEqual(firstLook, ["2026-10-peace-in-the-chats", "2026-10-espionage-part-2", "2026-10-swarms", "2026-10-wars-and-fronts-2"]);
   const past = new Set(PAST_UPDATES.map((update) => update.id));
   for (const seen of [null, "gone", ...past]) {
     assert.deepEqual(pendingUpdates({ seen, keeps: true }).filter((update) => past.has(update.id)), [], `seen ${seen}: no history entry`);

@@ -7,7 +7,10 @@ import { useBackToClose } from "../../runtime/backToClose.js";
 import { dedupeByName, landHolderNames, pickableCountries } from "../../runtime/countryList.js";
 import ReactDOM from "react-dom";
 import { sendDiplomaticMessage, startDiplomaticChat, loadDiplomaticHistory } from "../AI/main.jsx";
-import { SharedGameRefusal, checkDemandReply, ensureCountryAssessed, processPendingEventOutreach, runChatActionBatch } from "../AI/gameplayLazy.js";
+import { SharedGameRefusal, answerPeaceInChat, checkDemandReply, ensureCountryAssessed, processPendingEventOutreach, runChatActionBatch } from "../AI/gameplayLazy.js";
+import { PeaceOfferCard, PeaceTermsForm, sendPeaceAnswer } from "./warAndPeace.jsx";
+import { describeTerms, warBetween } from "../../runtime/peaceTerms.js";
+import { peaceOffersForThread, placePeaceOffers } from "./peacePlacement.js";
 import { createPlayerPollEvent, eventsFromLegacyChat, projectChatThread } from "../../runtime/chatThreads.js";
 import { openDemandOf, placeDemandCards, playerAnswerEvent, playerDemandEvent } from "../../runtime/demandCheck.js";
 import { describeChatCutIn, planChatReveal, randomChatRevealPauseMs } from "../AI/chatActions.js";
@@ -1144,6 +1147,11 @@ const useTouchDisarm = (armed, setArmed) => {
     }, [armed, canHover, setArmed]);
 };
 
+// Peace in a chat (warAndPeace.jsx): read live from the world, where an answer lands.
+const NO_PEACE_ROWS = Object.freeze([]);
+const selectPeaceOffers = (world) => (Array.isArray(world?.peaceOffers) ? world.peaceOffers : NO_PEACE_ROWS);
+const selectWars = (world) => (Array.isArray(world?.wars) ? world.wars : NO_PEACE_ROWS);
+
 const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete, onBack, onMessagesUpdate, onThreadUpdate, unread = false, onToggleRead, draft = "", onDraftApplied, onInstitutionNavigate, onLifecycleResult, onInstitutionBusinessOpened, embeddedInstitution = false, puppetMarkers = {} }) => {    // Two-step delete, matching the list row. Disarms on blur so a half-pressed
     // delete never sits waiting to catch a later click.
     const [confirmingDelete, setConfirmingDelete] = useState(false);
@@ -1307,6 +1315,23 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
     // its own Puppet; an Overlord's demands of the player arrive on their own.
     const canDemand = theyAre === "puppet";
     const [makeDemand, setMakeDemand] = useState(false);
+    // PEACE, in a chat with a country at war with the player (warAndPeace.jsx):
+    // the offers this thread holds (peacePlacement.js), and in a one-on-one
+    // thread with the enemy the player's own terms, put from the composer.
+    const peaceOffersAll = useRuntimeState("world", selectPeaceOffers);
+    const warsAll = useRuntimeState("world", selectWars);
+    const peaceCounterpart = oneOnOne && !isAdvisorDesk ? counterparts[0] ?? null : null;
+    const peaceWar = peaceCounterpart ? warBetween(warsAll, playerCountry, peaceCounterpart.name) : null;
+    const threadOffers = useMemo(() => peaceOffersForThread({
+        offers: peaceOffersAll,
+        player: playerCountry,
+        chatId: String(chat?.id ?? ""),
+        messageIds: presentedMessages.map((msg) => String(msg?.id ?? "")),
+        counterpart: peaceCounterpart?.name ?? "",
+    }), [peaceOffersAll, presentedMessages, playerCountry, chat?.id, peaceCounterpart]);
+    const myOpenTerms = threadOffers.some((offer) => offer.status === "open" && String(offer.from).trim().toLowerCase() === String(playerCountry ?? "").trim().toLowerCase());
+    const canProposePeace = Boolean(peaceWar) && !myOpenTerms;
+    const [peaceFormOpen, setPeaceFormOpen] = useState(false);
     const [demandBusy, setDemandBusy] = useState(false);
     const newThreadId = (prefix) => `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 
@@ -1582,7 +1607,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             const asked = [...messagesRef.current].reverse().find((msg) => msg.role === "user" && msg.text === playerMessage);
             const repliedOn = asked?.time || gameDate;
             try {
-                const { reply, reaction, memorySummary } = await sendDiplomaticMessage(playerMessage, country.name, countries, { chatId: chat.id, catchUp: asked?.catchUp || "" });
+                const { reply, reaction, memorySummary, peace } = await sendDiplomaticMessage(playerMessage, country.name, countries, { chatId: chat.id, catchUp: asked?.catchUp || "" });
                 // The thread's rolling durable memory rides on the reply that
                 // produced it, so a reopened thread, the advisor's one-off sends
                 // and the world director read the same continuity. Its id is set
@@ -1622,6 +1647,13 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                     })
                         .then((events) => appendThreadEvents(events))
                         .catch((error) => logDebugEvent("diplomacy", `Demand check on ${country.name}'s reply failed; nothing recorded.`, error));
+                }
+                // What the leader decided of peace with the player, its reply's
+                // hidden PEACE line: carried out by the game, its offer shown on
+                // this reply. No request: the line came with the reply.
+                if (peace && !isGroup) {
+                    void answerPeaceInChat({ speaker: country.name, line: peace, chatId: chat.id, messageId: leaderMessage.id })
+                        .catch((error) => logDebugEvent("diplomacy", `${country.name}'s word on peace could not be carried out.`, error));
                 }
             } catch (err) {
                 pushMessages([...messagesRef.current, {
@@ -1945,6 +1977,20 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             }
         };
 
+        // The player's terms of peace (PeaceTermsForm): kept with the war first,
+        // so the leader's prompt has them, then said in the thread, which asks
+        // for the leader's reply as any message does. Resolves "" once they are
+        // put, else why not.
+        const proposePeaceHere = async (terms) => {
+            if (!peaceWar || isLoading) return "no-war";
+            const messageId = newThreadId("msg");
+            const put = await sendPeaceAnswer("propose", peaceWar.id, terms, { chatId: chat.id, messageId });
+            if (!put.ok) return put.error || "That could not be done.";
+            setPeaceFormOpen(false);
+            await submitPlayerText(uiString("We propose peace on these terms: {{terms}}.", { terms: describeTerms(terms) }), { id: messageId });
+            return "";
+        };
+
         const handlePlayerSubmit = async () => {
             const text = playerInput.trim();
             if (!text || isLoading) return;
@@ -1974,7 +2020,9 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
         // path, and the demand card's, so a button press is answered exactly as a
         // typed message is. `onSent` runs once the line is on the thread, with its
         // id — which is what a demand made by this line is attached to.
-        const submitPlayerText = async (text, { onSent = null } = {}) => {
+        // `id`: the message's own, when something already points at it (the
+        // player's terms of peace, kept with the war, name it).
+        const submitPlayerText = async (text, { onSent = null, id = "" } = {}) => {
             if (!text || isLoading) return;
             // Speaking while the table is still talking cuts it off.
             cutIn();
@@ -1997,7 +2045,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             // buildThreadCatchUp), dated from the moment the player is looking at.
             const moment = await readSeenChatMoment(gameDate);
             const catchUp = buildLeaderCatchUp(messagesRef.current, chat, playerCountry, moment);
-            const messageId = newThreadId("msg");
+            const messageId = id || newThreadId("msg");
             const nextMessages = [...messagesRef.current, {
                 id: messageId, role: "user", speaker: playerCountry, text, time: moment.date || gameDate,
                 ...(catchUp.text ? { catchUp: catchUp.text, catchUpLabel: catchUp.label } : {}),
@@ -2114,6 +2162,13 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             demands: chat.demands,
             isGroup,
         });
+        // PEACE: each offer on the message that made it (peacePlacement.js).
+        const { byMessage: peaceByMessage, stranded: strandedPeace } = placePeaceOffers({
+            offers: threadOffers,
+            drawnIds: visibleEntries.map(({ msg }) => String(msg?.id ?? "")),
+            waitingIds: presentedMessages.filter((msg) => unseen.has(String(msg?.eventId ?? ""))).map((msg) => String(msg?.id ?? "")),
+        });
+        const renderPeaceCard = (offer) => <PeaceOfferCard key={offer.id} offer={offer} viewer={playerCountry} />;
         const renderDemandCard = (demand) => (
             <DemandCard
                 key={demand.id}
@@ -2233,6 +2288,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                         : <MessageBubble msg={msg} compact={compact} showTime={!groupedWithNext}
                             onRetry={msg.retry && !isLoading && index === messages.length - 1 ? () => handleRetry(index) : undefined} />}
                     {(demandsByMessage.get(msg.id) ?? []).map(renderDemandCard)}
+                    {(peaceByMessage.get(String(msg.id ?? "")) ?? []).map(renderPeaceCard)}
                     </React.Fragment>
                 );
             })}
@@ -2253,6 +2309,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                 never tied to one, still has to be answerable: it sits at the
                 foot of the thread rather than nowhere. */}
             {strandedDemands.map(renderDemandCard)}
+            {strandedPeace.map(renderPeaceCard)}
             {isLoading && lifecycleGroupThinking
                 ? <LifecycleThinkingBubble count={lifecycleState.responseCases.length || countries.length} />
                 : isLoading && ordinaryGroupThinking
@@ -2298,7 +2355,11 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                         <button type="button" className="oh-tap-row" onClick={handlePlayerCreatePoll} disabled={isLoading} style={{ border: "1px solid rgba(59,130,246,.35)", borderRadius: 8, background: "rgba(59,130,246,.13)", color: "#bfdbfe", padding: ".3rem .52rem", fontSize: ".58rem", fontWeight: 780, cursor: isLoading ? "wait" : "pointer" }}>Open vote</button>
                     </div>
                 </div>}
+                {canProposePeace && peaceFormOpen && <PeaceTermsForm viewer={playerCountry} enemy={peaceCounterpart?.name} busy={isLoading} onSend={proposePeaceHere} onCancel={() => setPeaceFormOpen(false)} />}
                 <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                    {canProposePeace && (
+                        <button type="button" className="oh-tap" onClick={() => setPeaceFormOpen((open) => !open)} aria-pressed={peaceFormOpen} title={`Propose peace to ${peaceCounterpart?.name}`} style={{ background: peaceFormOpen ? "rgba(43,193,243,.16)" : "rgba(255,255,255,0.05)", border: `1px solid ${peaceFormOpen ? "rgba(43,193,243,.6)" : "rgba(255,255,255,0.15)"}`, borderRadius: "10px", color: peaceFormOpen ? "#2bc1f3" : "rgba(255,255,255,0.7)", cursor: "pointer", flexShrink: 0, fontFamily: "sans-serif", fontSize: ".68rem", fontWeight: 760, height: "2.5rem", padding: "0 .62rem" }}>Peace</button>
+                    )}
                     {canCallChatVote && (
                         <button type="button" className="oh-tap" onClick={() => { setPollComposerOpen((open) => !open); setPollError(""); }} aria-pressed={pollComposerOpen} title="Call a binding conversational vote in this group chat" style={{ background: pollComposerOpen ? "rgba(59,130,246,.2)" : "rgba(255,255,255,0.05)", border: `1px solid ${pollComposerOpen ? "rgba(96,165,250,.6)" : "rgba(255,255,255,0.15)"}`, borderRadius: "10px", color: pollComposerOpen ? "#bfdbfe" : "rgba(255,255,255,0.7)", cursor: "pointer", flexShrink: 0, fontFamily: "sans-serif", fontSize: ".68rem", fontWeight: 760, height: "2.5rem", padding: "0 .62rem" }}>Vote</button>
                     )}
