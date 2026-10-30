@@ -12,6 +12,7 @@ const CASE_BYTES_MOST = 270000;
 const PROCESS_BYTES_MOST = 1500000;
 const TOO_BIG = Symbol("too big");
 const made = new WeakMap();
+const described = new WeakMap();
 const methodsWrapped = new WeakSet();
 const store = new Map();
 let busy = 0;
@@ -90,7 +91,11 @@ const encoder = (hooks, track = plainTrack) => {
       case "number": return number(value);
       case "boolean": return value;
       case "string": return lone(value) ? { $: "S16", v: Array.from({ length: value.length }, (_, at) => value.charCodeAt(at)) } : value;
-      case "function": return hooks?.fn ? hooks.fn(value, where) : { $: "fn" };
+      case "function": {
+        const tag = described.get(value);
+        if (tag) return { $: "fn", by: tag.by, a: tag.a };
+        return hooks?.fn ? hooks.fn(value, where) : { $: "fn" };
+      }
       case "bigint":
       case "symbol": throw TOO_BIG;
       default: break;
@@ -249,7 +254,7 @@ export const wrap = (moduleName, name, fn, factories, picks = null, quiet = fals
       when = null;
     }
   }
-  const wrapped = function golden(...args) {
+  const inner = function golden(...args) {
     if (when && busy === 0 && !factory) {
       let wanted = false;
       try {
@@ -317,7 +322,7 @@ export const wrap = (moduleName, name, fn, factories, picks = null, quiet = fals
       if (size > (picks?.caseBytes ?? CASE_BYTES_MOST)) return result;
       entry.bytes += size;
       entry.cases.push(out);
-      if (typeof result === "function") {
+      if (typeof result === "function" && !picks?.norc) {
         const inner = result;
         const rc = [];
         out.rc = rc;
@@ -357,6 +362,7 @@ export const wrap = (moduleName, name, fn, factories, picks = null, quiet = fals
           }
           return value;
         };
+        Object.assign(result, inner);
       } else if (factory && result && typeof result === "object" && !methodsWrapped.has(result)) {
         methodsWrapped.add(result);
         const mc = {};
@@ -401,6 +407,22 @@ export const wrap = (moduleName, name, fn, factories, picks = null, quiet = fals
       entry.cases.length = entry.cases.length;
     } finally {
       busy -= 1;
+    }
+    return result;
+  };
+  const wrapped = function golden(...args) {
+    const result = inner.apply(this, args);
+    if (factory && typeof result === "function" && !described.has(result)) {
+      let a = null;
+      busy += 1;
+      try {
+        a = encode(args);
+      } catch {
+        a = null;
+      } finally {
+        busy -= 1;
+      }
+      described.set(result, { by: key, a });
     }
     return result;
   };

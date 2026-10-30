@@ -374,7 +374,9 @@ pub fn settle_regions(run: &mut Run, battles: &mut [Battle], index: usize, day: 
         if arena.names[region] != id {
             battles[index].taken[taker].push(Val::str(&arena.names[region]));
         }
-        region_changed(battles, run, &id);
+        if !run.rehearsing {
+            region_changed(battles, run, &id);
+        }
         run.spend_flip();
         let shown = battles[index].shown.get(&id).cloned().unwrap_or(Val::Undef);
         say(&mut battles[index], day, &id, shown, None);

@@ -68,7 +68,7 @@ pub fn set_lines(run: &Run, value: &Val) {
 
 pub fn wall_run(value: &Val) -> Run {
     let mut run = create_run(Val::Obj(Obj::new()), Box::new(NoHooks));
-    run.input = value.get("input").clone();
+    run.input = std::rc::Rc::new(value.get("input").clone());
     run.mech = read_mechanics(value.get("mech"));
     set_lines(&run, value.get("lines"));
     run

@@ -48,6 +48,44 @@ pub trait Hooks {
 
 pub struct NoHooks;
 
+pub enum Said {
+    Undefined,
+    Null,
+    Own(Own),
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Own {
+    pub air: Option<String>,
+    pub plan: Option<String>,
+    pub aim: Option<Vec<f64>>,
+    pub keep: bool,
+    pub troops: Option<Vec<Body>>,
+    pub order: Val,
+    pub sector: Val,
+    pub draft: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Body {
+    pub order: String,
+    pub picked: Vec<usize>,
+    pub way: Option<Vec<[f64; 2]>>,
+}
+
+pub struct Asked<'a> {
+    pub began: bool,
+    pub today: &'a super::day::Today,
+    pub key: String,
+    pub regular: bool,
+    pub at: usize,
+}
+
+pub trait StaffHook {
+    fn often(&self) -> bool;
+    fn decide(&self, run: &Run, battle: &mut Battle, side: usize, asked: &Asked) -> Said;
+}
+
 impl Hooks for NoHooks {}
 
 pub fn clean(value: &Val, max: usize) -> String {
@@ -117,8 +155,10 @@ pub struct Moment {
 }
 
 pub struct Run {
-    pub input: Val,
-    pub hooks: Box<dyn Hooks>,
+    pub input: Rc<Val>,
+    pub hooks: Rc<dyn Hooks>,
+    pub staff_policy: Option<Rc<dyn StaffHook>>,
+    pub rehearsing: bool,
     pub days: f64,
     pub day: f64,
     pub steps: f64,
@@ -169,7 +209,7 @@ pub struct Run {
     from_date: String,
     controller: OrdMap<String, String>,
     group: OrdMap<String, String>,
-    areas: Val,
+    areas: Rc<Val>,
     figures: RefCell<OrdMap<String, Military>>,
     curves: RefCell<OrdMap<String, Val>>,
 }
@@ -241,11 +281,13 @@ pub fn create_run(input: Val, hooks: Box<dyn Hooks>) -> Run {
         from_date,
         controller: OrdMap::new(),
         group: OrdMap::new(),
-        areas,
+        areas: Rc::new(areas),
         figures: RefCell::new(OrdMap::new()),
         curves: RefCell::new(OrdMap::new()),
-        input: Val::Null,
-        hooks,
+        input: Rc::new(Val::Null),
+        hooks: Rc::from(hooks),
+        staff_policy: None,
+        rehearsing: false,
     };
     if run.flips_left <= 0.0 {
         run.braked = true;
@@ -296,7 +338,7 @@ pub fn create_run(input: Val, hooks: Box<dyn Hooks>) -> Run {
         }
     });
     run.moments = moments;
-    run.input = input;
+    run.input = Rc::new(input);
     run
 }
 
@@ -408,7 +450,72 @@ impl Run {
         self.spare = Some(hollow);
     }
 
+    pub fn stub(&self, copy: Battle) -> Run {
+        Run {
+            input: self.input.clone(),
+            hooks: self.hooks.clone(),
+            staff_policy: None,
+            rehearsing: true,
+            days: self.days,
+            day: self.day,
+            steps: 0.0,
+            era: self.era,
+            mech: self.mech,
+            warfare: self.warfare.clone(),
+            seed: self.seed.clone(),
+            troops: self.troops,
+            men_each: self.men_each,
+            manpower_share: self.manpower_share,
+            manpower: RefCell::new(self.manpower.borrow().clone()),
+            effort: OrdMap::new(),
+            pace: self.pace,
+            steer: self.steer.clone(),
+            advance_km: self.advance_km,
+            overland_km: self.overland_km,
+            battles: vec![copy],
+            wars: self.wars.clone(),
+            flips: Vec::new(),
+            joins: Vec::new(),
+            starts: Vec::new(),
+            transports: self.transports.clone(),
+            voyages: Vec::new(),
+            unit_changes: Vec::new(),
+            notes: Vec::new(),
+            taken: self.taken.clone(),
+            cursor: self.cursor,
+            flips_left: f64::INFINITY,
+            braked: false,
+            region_ids: Val::Null,
+            moments: Vec::new(),
+            mend: RefCell::new(self.mend.borrow().clone()),
+            zone_skies: RefCell::new(self.zone_skies.borrow().clone()),
+            zone_neighbours: RefCell::new(self.zone_neighbours.borrow().clone()),
+            lines: RefCell::new(self.lines.borrow().clone()),
+            air_day: Cell::new(None),
+            air_over: RefCell::new(Vec::new()),
+            wings: RefCell::new(self.wings.borrow().clone()),
+            arenas: HashMap::new(),
+            cache_on: self.cache_on,
+            kept_flags: HashSet::new(),
+            kept_lists: HashMap::new(),
+            grids: HashMap::new(),
+            land_regions: self.land_regions.clone(),
+            captures_refused: Vec::new(),
+            spare: None,
+            dated: self.dated,
+            from_date: self.from_date.clone(),
+            controller: self.controller.clone(),
+            group: self.group.clone(),
+            areas: self.areas.clone(),
+            figures: RefCell::new(self.figures.borrow().clone()),
+            curves: RefCell::new(self.curves.borrow().clone()),
+        }
+    }
+
     pub fn spend_flip(&mut self) {
+        if self.rehearsing {
+            return;
+        }
         self.flips_left -= 1.0;
         if self.flips_left > 0.0 || self.braked {
             return;

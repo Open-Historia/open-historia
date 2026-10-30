@@ -30,6 +30,7 @@ mod mind_troops;
 mod mind_features;
 mod mind_net;
 mod mind_policy;
+mod mind_planner;
 mod scenario_fronts;
 mod dawn;
 mod supply;

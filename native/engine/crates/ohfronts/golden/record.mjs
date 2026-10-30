@@ -213,6 +213,8 @@ const REGION_BATTLE = { arena: REGION_ARENA, sides: 1, gone: 1, shown: 1, region
 const RAISE_TROOP_KEYS = ["x", "y", "strength", "kind", "owner", "named", "dig", "state", "dug", "drive", "depth", "lane", "lag", "drawn", "radiusKm", "command", "station", "body", "hx", "hy"];
 const RAISE_BATTLE = { name: 1, warId: 1, seed: 1, even: 1, swap: 1, status: 1, sides: 1, gone: 1, effort: 1, quality: 1, edge: 1, pool: 1, base: 1, levy: 1, lineKm: 1, planKey: 1, swarms: 1, deploy: 1, radiusKm: 1, frame: 1, arena: { frame: 1, cols: 1, rows: 1, size: 1, region: 1, ids: 1, speed: 1 }, field: PHI_FIELD, troops: troopsPick(RAISE_TROOP_KEYS) };
 const RAISE_RUN = { troops: 1, era: 1, seed: 1, mech: 1, warfare: 1, day: 1, menEach: 1, manpowerShare: 1, manpower: 1, input: { authored: 1, gameBegan: 1, fromDate: 1, toDate: 1, days: 1, manpower: 1 }, wars: 1, battles: { "*": { sides: 1, gone: 1, lineKm: 1, status: 1 } } };
+const PLANNER_BATTLE = { frame: 1, homeSide: 1, field: { cols: 1, rows: 1, size: 1, holders: 1 }, arena: { region: 1, cities: 1 }, troops: troopsPick(["x", "y", "strength", "pocket", "fatigue", "supply", "dug"]) };
+const PRINT_BATTLE = { daysRun: 1, orders: 1, field: { holders: 1 }, troops: troopsPick(["x", "y", "strength", "dig", "state", "hx", "hy", "fatigue", "dug", "serves", "order"]) };
 const RUN_CALLS = ["groupOf", "controllerOf", "sovereignOf", "shortageOf", "strengthOf", "militaryOf"];
 const LOAD_RUN = { seed: 1, steer: 1, mech: 1, input: { difficulty: 1, players: 1, fromDate: 1, toDate: 1, days: 1 } };
 const LOAD_RESULT = {
@@ -457,8 +459,30 @@ const MODULES = {
   "src/runtime/fronts/engineer.js": { name: "engineer", big: ["engineerLines", "frontLineFor"], picks: { frontLineFor: { calls: [] }, engineerLines: { calls: ["1.chart.holds"] } } },
   "src/runtime/fronts/view.js": { name: "view", quiet: true },
   "src/runtime/fronts/mind/net.js": { name: "mindNet", most: 100, bytes: 900000 },
+  "src/runtime/fronts/mind/planner.js": {
+    name: "mindPlanner",
+    factories: ["createPlanner", "createPlainerPlanner"],
+    keep: ["standing", "valueFeatures", "battlePrint", "withLateEval", "plainPlanner"],
+    most: 3,
+    bytes: 1300000,
+    picks: {
+      createPlanner: { norc: true },
+      createPlainerPlanner: { norc: true },
+      standing: { 0: PLANNER_BATTLE, caseBytes: 1200000 },
+      valueFeatures: { 0: PLANNER_BATTLE, caseBytes: 1200000 },
+      battlePrint: { 0: PRINT_BATTLE },
+    },
+  },
+  "src/runtime/fronts/mind/trained.js": {
+    name: "mindTrained",
+    factories: ["labStaffPolicy", "trainedStaffPolicy"],
+    keep: ["shippedPlannerParams"],
+    picks: { labStaffPolicy: { norc: true }, trainedStaffPolicy: { norc: true } },
+  },
+  "src/runtime/fronts/mind/commanders.js": { name: "mindCommanders", keep: ["commanderOf"] },
   "src/runtime/fronts/mind/policy.js": {
     name: "mindPolicy",
+    factories: ["createStaffPolicy", "createTroopPolicy"],
     most: 40,
     bytes: 3000000,
     picks: {
@@ -552,6 +576,11 @@ const MODULES = {
     picks: {
       createFrontRun: { distinct: true, keepCalls: true, caseBytes: 2000000, methods: {} },
       runFronts: { distinct: true, caseBytes: 2000000 },
+      rehearsal: { when: "false" },
+      rehearseOrders: { when: "false" },
+      rehearseDay: { when: "false" },
+      rehearsalPacket: { when: "false" },
+      rehearsalBase: { when: "false" },
     },
   },
   "src/runtime/fronts/day.js": {
@@ -653,7 +682,7 @@ const shapeOf = (value, depth = 0) => {
   if (value === null) return "n";
   if (Array.isArray(value)) return depth < 2 && value.length ? ["A", shapeOf(value[0], depth + 1)] : value.length ? "A" : "A0";
   if (typeof value === "object") {
-    if (typeof value.$ === "string") return value.$ === "made" || value.$ === "O" ? shapeOf(value.v, depth) : value.$;
+    if (typeof value.$ === "string") return value.$ === "made" || value.$ === "O" ? shapeOf(value.v, depth) : value.$ === "fn" && value.by ? `fn ${value.by}` : value.$;
     return depth < 2 ? Object.keys(value).sort().map((key) => [key, shapeOf(value[key], depth + 1)]) : "O";
   }
   return typeof value;
@@ -667,7 +696,9 @@ const pick = (all, most, name, count = CASES_MOST) => {
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(item);
   }
-  const queues = [...groups.values()].map((list) => spread(list, list.length));
+  const led = [...groups.keys()].filter((key) => key.includes('"fn mind'));
+  const queues = [...led, ...[...groups.keys()].filter((key) => !led.includes(key))].map((key) => spread(groups.get(key), groups.get(key).length));
+  count += led.length;
   const order = queues.map((list) => {
     const out = [];
     for (let step = list.length; out.length < list.length; step = Math.max(1, Math.floor(step / 2))) {

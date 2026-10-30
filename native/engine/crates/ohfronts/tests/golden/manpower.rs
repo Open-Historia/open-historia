@@ -82,7 +82,7 @@ pub fn run_of(case: &Case, value: &Val) -> Run {
     let military = case.calls("0.militaryOf").or_else(|| case.calls("0.input.militaryOf")).cloned().unwrap_or_default();
     let people = case.calls("0.input.peopleOf").cloned().unwrap_or_default();
     let mut run = create_run(Val::Obj(js::Obj::new()), Box::new(Recorded { people, military }));
-    run.input = value.get("input").clone();
+    run.input = std::rc::Rc::new(value.get("input").clone());
     run.mech = read_mechanics(value.get("mech"));
     run.men_each = value.get("menEach").num();
     run.manpower_share = value.get("manpowerShare").num();

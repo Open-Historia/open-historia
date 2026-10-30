@@ -85,6 +85,20 @@ pub enum Val {
     Ref(Rc<RefCell<Obj>>),
 }
 
+#[derive(Default)]
+pub struct Fresh(pub std::collections::HashMap<usize, Val>);
+
+pub fn holds_refs(value: &Val) -> bool {
+    match value {
+        Val::Ref(_) => true,
+        Val::Obj(obj) => obj.0.iter().any(|(_, value)| holds_refs(value)),
+        Val::Arr(list) => list.iter().any(holds_refs),
+        Val::Map(entries) => entries.iter().any(|(key, value)| holds_refs(key) || holds_refs(value)),
+        Val::Set(items) => items.iter().any(holds_refs),
+        _ => false,
+    }
+}
+
 pub fn array_index(key: &str) -> Option<u32> {
     if key.is_empty() || (key.len() > 1 && key.starts_with('0')) || !key.bytes().all(|b| b.is_ascii_digit()) {
         return None;
@@ -256,6 +270,27 @@ impl Val {
         match (self, other) {
             (Val::Ref(a), Val::Ref(b)) => Rc::ptr_eq(a, b),
             _ => false,
+        }
+    }
+
+    pub fn fresh(&self, seen: &mut Fresh) -> Val {
+        match self {
+            Val::Ref(cell) => {
+                let key = Rc::as_ptr(cell) as usize;
+                if let Some(made) = seen.0.get(&key) {
+                    return made.clone();
+                }
+                let made = Rc::new(RefCell::new(Obj::new()));
+                seen.0.insert(key, Val::Ref(made.clone()));
+                let inner = Obj(cell.borrow().0.iter().map(|(key, value)| (key.clone(), value.fresh(seen))).collect());
+                *made.borrow_mut() = inner;
+                Val::Ref(made)
+            }
+            Val::Obj(obj) if holds_refs(self) => Val::Obj(Obj(obj.0.iter().map(|(key, value)| (key.clone(), value.fresh(seen))).collect())),
+            Val::Arr(list) if holds_refs(self) => Val::Arr(list.iter().map(|value| value.fresh(seen)).collect()),
+            Val::Map(entries) if holds_refs(self) => Val::Map(entries.iter().map(|(key, value)| (key.fresh(seen), value.fresh(seen))).collect()),
+            Val::Set(items) if holds_refs(self) => Val::Set(items.iter().map(|value| value.fresh(seen)).collect()),
+            other => other.clone(),
         }
     }
 

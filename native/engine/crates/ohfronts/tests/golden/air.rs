@@ -152,7 +152,7 @@ fn air_matches_js() {
                 }
                 let figures = case.calls("0.militaryOf").cloned().unwrap_or_default();
                 let mut run = create_run(Val::Obj(Obj::new()), Box::new(Figures(figures)));
-                run.input = value.get("input").clone();
+                run.input = std::rc::Rc::new(value.get("input").clone());
                 run.mech = read_mechanics(value.get("mech"));
                 run.era = value.get("era").num() as usize;
                 set_wings(&run, value.get("wings"));
