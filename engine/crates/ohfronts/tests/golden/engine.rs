@@ -200,6 +200,7 @@ fn engine_matches_js() {
 #[ignore]
 fn engine_timing() {
     let rounds: usize = std::env::var("ROUNDS").ok().and_then(|text| text.parse().ok()).unwrap_or(5);
+    let only_led = std::env::var("PLANNER").is_ok();
     let fixture = load("engine");
     let mut rows: Vec<(usize, f64)> = Vec::new();
     for (name, cases) in &fixture.cases {
@@ -207,7 +208,7 @@ fn engine_timing() {
             continue;
         }
         for (index, case) in cases.iter().enumerate() {
-            if !replayable(&input_of(case)) {
+            if !replayable(&input_of(case)) || (only_led && policy_of(input_of(case).get("staffPolicy")).ok().flatten().is_none()) {
                 continue;
             }
             let mut best = f64::INFINITY;
