@@ -226,3 +226,35 @@ impl TroopPolicy {
         Some(TroopChoice { troops, said })
     }
 }
+
+fn context_of<'a>(asked: &'a crate::sim::engine::Asked, today: &'a Today<'a>) -> Context<'a> {
+    Context { began: asked.began, today: Some(today), key: &asked.key }
+}
+
+impl crate::sim::engine::StaffHook for StaffPolicy {
+    fn often(&self) -> bool {
+        false
+    }
+
+    fn decide(&self, run: &Run, battle: &mut Battle, side: usize, asked: &crate::sim::engine::Asked) -> crate::sim::engine::Said {
+        let today = Today { contour: &asked.today.line.contour, count: asked.today.line.count(), sectors: Some(&asked.today.sectors) };
+        match StaffPolicy::decide(self, battle, side, &context_of(asked, &today), Some(run), Some(asked.at)) {
+            Some(choice) => crate::sim::engine::Said::Own(crate::sim::engine::Own { order: Val::Str(choice.order), sector: Val::Str(choice.sector), draft: choice.draft, ..Default::default() }),
+            None => crate::sim::engine::Said::Undefined,
+        }
+    }
+}
+
+impl crate::sim::engine::StaffHook for TroopPolicy {
+    fn often(&self) -> bool {
+        false
+    }
+
+    fn decide(&self, run: &Run, battle: &mut Battle, side: usize, asked: &crate::sim::engine::Asked) -> crate::sim::engine::Said {
+        let today = Today { contour: &asked.today.line.contour, count: asked.today.line.count(), sectors: Some(&asked.today.sectors) };
+        match TroopPolicy::decide(self, battle, side, &context_of(asked, &today), Some(run), Some(asked.at)) {
+            Some(choice) => crate::sim::engine::Said::Own(crate::sim::engine::Own { troops: Some(choice.troops.into_iter().map(|body| crate::sim::engine::Body { order: body.order, picked: body.picked, way: body.way }).collect()), ..Default::default() }),
+            None => crate::sim::engine::Said::Undefined,
+        }
+    }
+}

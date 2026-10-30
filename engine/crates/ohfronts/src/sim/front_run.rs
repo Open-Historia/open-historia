@@ -10,7 +10,7 @@ use super::contact::{contact_at, find_contacts, frame_for_contact, middle_of};
 use super::dawn::dawn;
 use super::day::{grow_to_hold, prepare, record_day, settle_regions, simulate_day, start_recorder, RegionsNeeded, Today};
 use super::deploy::{deploy_cells, Call, Last, DEPLOY_WHY};
-use super::engine::{clean, clean_text, create_run, fold, fold_text, member_list, Hooks, Run, War};
+use super::engine::{clean, clean_text, create_run, fold, fold_text, member_list, Asked, Body, Hooks, Own, Run, Said, StaffHook, War};
 use super::field::{redistance, take_capsule, trace_contour, Field, How};
 use super::frame::{point_in_frame, Frame};
 use super::game_dates::{compare_game_dates, diff_game_days, game_date_year};
@@ -2943,11 +2943,7 @@ fn assign_standing(run: &mut Run, at: usize) {
     give(run, at, battle);
 }
 
-pub struct MindBody {
-    pub order: String,
-    pub picked: Vec<usize>,
-    pub way: Option<Vec<[f64; 2]>>,
-}
+pub type MindBody = Body;
 
 fn end_of(order: &Option<Val>) -> String {
     let Some(order) = order else { return String::new() };
@@ -3076,18 +3072,44 @@ fn review_staff(run: &mut Run, at: usize, day: f64, regular: bool) {
         if live_count(&battle.troops[side]) == 0 {
             continue;
         }
-        let answer = if any_of(&run.mech) { breakthrough_answer(&battle, side) } else { None };
+        let policy = run.staff_policy.clone();
+        let asks = policy.as_ref().is_some_and(|policy| regular || policy.often());
+        let led_by_own = policy.is_some() && !asks && battle.led_by_own.is_some_and(|led| led[side]);
+        let answer = if any_of(&run.mech) && !led_by_own { breakthrough_answer(&battle, side) } else { None };
         let answering = battle.answering.map_or(-1.0, |answering| answering[side]);
         let idle = !battle.troops[side].iter().any(|troop| is_live(troop) && troop.order.truthy() && !troop.order.read("done").truthy() && word_is(&troop.order.read("standing").read("mark"), MIND_MARK));
         let answers = answer.is_some() && (answering < 0.0 || regular || (battle.days_run - answering >= BREAKTHROUGH_LOOK_DAYS && idle));
-        if !regular && !answers {
+        if !regular && !asks && !answers {
             continue;
         }
         if today.is_none() {
             today = Some(prepare(&mut battle, day));
         }
+        let began = battle_side(&battle, side) == 0;
+        let key = format!("{}|{}|{}|{}", run.seed, battle.name, side, date);
+        let own = match &policy {
+            Some(policy) if asks => policy.decide(run, &mut battle, side, &Asked { began, today: today.as_ref().unwrap(), key: key.clone(), regular, at }),
+            _ => Said::Undefined,
+        };
+        if let Said::Own(own) = &own {
+            if let Some(air) = &own.air {
+                set_air_mission(&mut battle, side, air);
+            }
+            if own.plan.is_some() {
+                note_staff_plan(run, &mut battle, side, own, day);
+            }
+        }
+        if asks {
+            let mut led = battle.led_by_own.unwrap_or([false, false]);
+            led[side] = !matches!(own, Said::Undefined);
+            battle.led_by_own = Some(led);
+        }
+        if matches!(&own, Said::Own(own) if own.keep) {
+            continue;
+        }
         let lead = lead_of(&battle, side);
-        if answers {
+        let undefined = matches!(own, Said::Undefined);
+        if undefined && answers {
             let answer = answer.unwrap();
             let mut book = battle.answering.unwrap_or([-1.0, -1.0]);
             book[side] = battle.days_run;
@@ -3100,29 +3122,48 @@ fn review_staff(run: &mut Run, at: usize, day: f64, regular: bool) {
             order_troops_by_mind(run, &mut battle, side, &bodies, day, today.as_ref().unwrap(), &lead);
             continue;
         }
-        if !regular || answer.is_some() {
+        if undefined && (!regular || answer.is_some()) {
             continue;
         }
-        if answering >= 0.0 {
+        if undefined && answering >= 0.0 {
             let mut book = battle.answering.unwrap();
             book[side] = -1.0;
             battle.answering = Some(book);
             battle.orders.retain(|order| order.read("s").num() != side as f64 || !word_is(&order.read("mark"), MIND_MARK));
         }
-        let key = format!("{}|{}|{}|{}", run.seed, battle.name, side, date);
-        let Some(decided) = staff_decision(&battle, side, battle_side(&battle, side) == 0, today.as_ref().map(|today| super::staff::Today { contour: &today.line.contour, count: today.line.count(), sectors: Some(&today.sectors) }).as_ref(), &key) else { continue };
-        let wanted = format!("{}|{}", decided.order, fold_text(&decided.sector));
+        let decided: Own = match own {
+            Said::Own(own) => own,
+            Said::Null => continue,
+            Said::Undefined => {
+                let Some(decided) = staff_decision(&battle, side, began, today.as_ref().map(|today| super::staff::Today { contour: &today.line.contour, count: today.line.count(), sectors: Some(&today.sectors) }).as_ref(), &key) else { continue };
+                Own { order: text(decided.order), sector: text(&decided.sector), ..Own::default() }
+            }
+        };
+        if let Some(bodies) = &decided.troops {
+            order_troops_by_mind(run, &mut battle, side, bodies, day, today.as_ref().unwrap(), &lead);
+            continue;
+        }
+        if decided.draft && !lead.is_empty() {
+            give(run, at, battle);
+            let said = run.notes.len();
+            reinforce_on_front(run, at, &Val::obj([("side", text(&lead)), ("sector", decided.sector.clone()), ("given", Val::Bool(true))]), day);
+            run.notes.truncate(said);
+            battle = lend(run, at);
+            today = Some(prepare(&mut battle, day));
+        }
+        let sector_word = js::to_string(&decided.sector);
+        let wanted = format!("{}|{}", js::to_string(&decided.order), fold(&decided.sector));
         let stands = staff_standing(&battle, side);
-        if stands == wanted || (decided.order == "hold" && stands.is_empty() && !battle.orders.iter().any(|order| order.read("s").num() == side as f64 && !order.read("chosen").truthy())) {
+        if stands == wanted || (word_is(&decided.order, "hold") && stands.is_empty() && !battle.orders.iter().any(|order| order.read("s").num() == side as f64 && !order.read("chosen").truthy())) {
             continue;
         }
         battle.orders.retain(|order| order.read("s").num() != side as f64 || order.read("chosen").truthy());
-        let mut order = set_standing_order(&mut battle, side, &Val::obj([("sector", text(&decided.sector)), ("order", text(decided.order)), ("since", text(&date)), ("age", num(0.0)), ("by", text(&lead)), ("mark", text(STAFF_MARK))]));
+        let mut order = set_standing_order(&mut battle, side, &Val::obj([("sector", decided.sector.clone()), ("order", decided.order.clone()), ("since", text(&date)), ("age", num(0.0)), ("by", text(&lead)), ("mark", text(STAFF_MARK))]));
         assign_order(&mut battle, run, &mut order, &order_day(today.as_ref().unwrap(), &date), None, false);
         battle.touched = true;
         battle.plan_key = String::new();
-        if decided.order == "advance" && !stands.starts_with("advance") {
-            let place = if decided.sector == "all" { "the whole line".to_string() } else { decided.sector.clone() };
+        if word_is(&decided.order, "advance") && !stands.starts_with("advance") {
+            let place = if word_is(&decided.sector, "all") { "the whole line".to_string() } else { sector_word.clone() };
             battle.log.push(Val::obj([("d", text(&date)), ("k", text("offensive")), ("s", num(side as f64)), ("at", text(&place))]));
         }
     }
@@ -3142,7 +3183,7 @@ fn step_day(run: &mut Run) -> Flow<()> {
             dawn(run, index, day);
             let battle = &run.battles[index];
             let regular = battle.begun || battle.days_run == 0.0 || battle.days_run % STAFF_REVIEW_DAYS == 0.0;
-            if regular || any_of(&run.mech) {
+            if regular || run.staff_policy.as_ref().is_some_and(|policy| policy.often()) || any_of(&run.mech) {
                 review_staff(run, index, day, regular);
             }
             run.steps += simulate_day(run, index, day)?;
@@ -3327,4 +3368,117 @@ impl FrontRun {
 
 pub fn run_fronts(input: Val, hooks: Box<dyn Hooks>) -> Val {
     create_front_run(input, hooks).finish()
+}
+
+pub fn set_air_mission(battle: &mut Battle, side: usize, mission: &str) {
+    if !super::air::AIR_MISSIONS.contains(&mission) {
+        return;
+    }
+    for other in 0..2 {
+        if battle.air_mission[other].is_empty() {
+            battle.air_mission[other] = "support".to_string();
+        }
+    }
+    battle.air_mission[side] = mission.to_string();
+}
+
+fn note_staff_plan(run: &Run, battle: &mut Battle, side: usize, said: &Own, day: f64) {
+    let aim = said.aim.as_ref().filter(|aim| aim.len() == 2).map(|aim| battle.place.to_cell(aim[0], aim[1]));
+    let at = match aim {
+        Some([x, y]) if x.is_finite() && y.is_finite() => describe_point(&battle.arena, x, y),
+        _ => String::new(),
+    };
+    let mut sent = 0.0;
+    for body in said.troops.iter().flatten() {
+        if body.order == "advance" {
+            sent += body.picked.len() as f64;
+        }
+    }
+    if battle.staff_plans.as_array().is_none() {
+        battle.staff_plans = Val::Arr(vec![Val::Null, Val::Null]);
+    }
+    let mut plan = Obj::new();
+    plan.set("plan", text(said.plan.as_deref().unwrap_or("")));
+    if !at.is_empty() {
+        plan.set("at", text(&at));
+    }
+    plan.set("since", text(&run.date_of(day)));
+    plan.set("n", num(sent));
+    if let Val::Arr(list) = &mut battle.staff_plans {
+        while list.len() <= side {
+            list.push(Val::Undef);
+        }
+        list[side] = Val::Obj(plan);
+    }
+}
+
+pub fn rehearsal_copy(battle: &mut Battle) -> Battle {
+    let recorder = battle.recorder.take();
+    let mut copy = battle.clone();
+    battle.recorder = recorder;
+    let mut seen = js::Fresh::default();
+    copy.orders = copy.orders.iter().map(|order| order.fresh(&mut seen)).collect();
+    copy.halts = copy.halts.iter().map(|halt| halt.fresh(&mut seen)).collect();
+    for views in copy.views.iter_mut() {
+        for view in views.iter_mut() {
+            view.order = view.order.fresh(&mut seen);
+            view.word = view.word.fresh(&mut seen);
+            view.age = view.age.fresh(&mut seen);
+        }
+    }
+    for troops in copy.troops.iter_mut() {
+        for troop in troops.iter_mut() {
+            troop.order = troop.order.fresh(&mut seen);
+            troop.fallback = troop.fallback.fresh(&mut seen);
+            troop.entry = troop.entry.fresh(&mut seen);
+            troop.still = troop.still.fresh(&mut seen);
+        }
+    }
+    copy.plans = copy.plans.fresh(&mut seen);
+    copy.sieges = copy.sieges.iter().map(|siege| siege.fresh(&mut seen)).collect();
+    copy.anchors = copy.anchors.iter().map(|anchor| anchor.fresh(&mut seen)).collect();
+    copy.watch = false;
+    copy.mend_of = false;
+    copy.grown = 6.0;
+    copy
+}
+
+pub fn rehearsal(run: &Run, battle: &mut Battle) -> Run {
+    let copy = rehearsal_copy(battle);
+    run.stub(copy)
+}
+
+pub fn rehearse_orders(stub: &mut Run, side: usize, bodies: &[Body], day: f64, air: Option<&str>) {
+    let mut battle = lend(stub, 0);
+    if let Some(air) = air {
+        set_air_mission(&mut battle, side, air);
+    }
+    if !bodies.is_empty() && live_count(&battle.troops[side]) > 0 {
+        let today = prepare(&mut battle, day);
+        let lead = lead_of(&battle, side);
+        order_troops_by_mind(stub, &mut battle, side, bodies, day, &today, &lead);
+    }
+    give(stub, 0, battle);
+}
+
+pub fn rehearse_day(stub: &mut Run, day: f64, morning: bool) -> bool {
+    if stub.battles[0].status != "active" || !stub.battles[0].closing.is_empty() {
+        return false;
+    }
+    if morning {
+        muster_day(stub, 0, day);
+        dawn(stub, 0, day);
+    }
+    let steps = simulate_day(stub, 0, day).unwrap_or(0.0);
+    stub.steps += steps;
+    stub.battles[0].days_run += 1.0;
+    stub.battles[0].closing.is_empty()
+}
+
+pub fn create_front_run_led(input: Val, hooks: Box<dyn Hooks>, policy: Option<Rc<dyn StaffHook>>) -> FrontRun {
+    let input = if input.is_nullish() { Val::Obj(Obj::new()) } else { input };
+    let mut run = create_run(input, hooks);
+    run.staff_policy = policy;
+    let needs_regions = begin(&mut run).is_err();
+    FrontRun { run, needs_regions }
 }

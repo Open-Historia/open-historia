@@ -1,6 +1,11 @@
 use crate::support::*;
-use ohfronts::sim::engine::Hooks;
-use ohfronts::sim::front_run::{create_front_run, run_fronts, FrontRun};
+use ohfronts::sim::engine::{Hooks, StaffHook};
+use ohfronts::sim::front_run::{create_front_run_led, FrontRun};
+use ohfronts::sim::mind::net::Shape;
+use ohfronts::sim::mind::planner::{create_plainer_planner, create_planner, PlannerOptions};
+use ohfronts::sim::mind::policy::{create_staff_policy, create_troop_policy};
+use ohfronts::sim::mind::trained::{lab_staff_policy, trained_staff_policy};
+use std::rc::Rc;
 use ohfronts::sim::js::{self, Val};
 use std::collections::HashMap;
 
@@ -61,8 +66,61 @@ fn kept_shapes(input: &Val) -> bool {
     }
 }
 
+fn options_of(given: &Val) -> PlannerOptions {
+    let number = |key: &str| match given.get(key) {
+        Val::Num(n) => Some(*n),
+        _ => None,
+    };
+    let params = match given.get("params") {
+        Val::Undef => None,
+        other => Some(arg_numbers(other)),
+    };
+    let plans = match given.get("plans") {
+        Val::Arr(list) => Some(list.iter().map(js::to_string).collect()),
+        _ => None,
+    };
+    let late = match given.get("late") {
+        Val::Arr(list) => Some(list.iter().map(js::to_number).collect()),
+        _ => None,
+    };
+    PlannerOptions {
+        params,
+        look: number("look"),
+        ahead: number("ahead"),
+        plans,
+        refine: number("refine"),
+        replies: given.get("replies").truthy(),
+        air_control: match given.get("airControl") {
+            Val::Undef => None,
+            other => Some(other.truthy()),
+        },
+        late,
+    }
+}
+
+pub fn policy_of(value: &Val) -> Result<Option<Rc<dyn StaffHook>>, ()> {
+    match value {
+        Val::Fn => Err(()),
+        Val::Obj(obj) if obj.has("$fn") => {
+            let args = value.get("$args");
+            let given = args.at(0);
+            let made: Rc<dyn StaffHook> = match value.get("$fn").string_or_empty().as_str() {
+                "mindPlanner.createPlanner" => Rc::new(create_planner(options_of(given))),
+                "mindPlanner.createPlainerPlanner" => Rc::new(create_plainer_planner(options_of(given))),
+                "mindTrained.labStaffPolicy" => Rc::new(lab_staff_policy(given)),
+                "mindTrained.trainedStaffPolicy" => Rc::new(trained_staff_policy()),
+                "mindPolicy.createStaffPolicy" => Rc::new(create_staff_policy(Shape::of(given.get("shape")), arg_numbers(given.get("params")), if given.get("prior").is_undef() { 0.0 } else { given.get("prior").num() }, given.get("drafts").is_true())),
+                "mindPolicy.createTroopPolicy" => Rc::new(create_troop_policy(Shape::of(given.get("shape")), arg_numbers(given.get("params")))),
+                _ => return Err(()),
+            };
+            Ok(Some(made))
+        }
+        _ => Ok(None),
+    }
+}
+
 pub fn replayable(input: &Val) -> bool {
-    if matches!(input.get("staffPolicy"), Val::Fn) || !input.get("rehearsers").is_nullish() {
+    if policy_of(input.get("staffPolicy")).is_err() {
         return false;
     }
     !(kept_shapes(input) && input.get("map").get("regions").as_array().is_none())
@@ -72,13 +130,28 @@ fn input_of(case: &Case) -> Val {
     case.arg(0).plain()
 }
 
+pub fn led(input: Val) -> (Val, Option<Rc<dyn StaffHook>>) {
+    let policy = policy_of(input.get("staffPolicy")).ok().flatten();
+    let mut input = input;
+    if let Val::Obj(obj) = &mut input {
+        obj.remove("staffPolicy");
+        obj.remove("rehearsers");
+    }
+    (input, policy)
+}
+
+pub fn run_led(input: Val, hooks: Box<dyn Hooks>) -> Val {
+    let (input, policy) = led(input);
+    create_front_run_led(input, hooks, policy).finish()
+}
+
 fn run_fronts_check(case: &Case) -> Option<Result<(), String>> {
     let input = input_of(case);
     if !replayable(&input) {
         return None;
     }
     let want = case.result.as_ref()?;
-    let got = run_fronts(input, Box::new(Told::of(case)));
+    let got = run_led(input, Box::new(Told::of(case)));
     Some(same(&got, want))
 }
 
@@ -105,7 +178,8 @@ fn create_front_run_check(case: &Case) -> Option<Result<(), String>> {
     if !replayable(&input) || case.method_log.is_empty() {
         return None;
     }
-    let mut run = create_front_run(input, Box::new(Told::of(case)));
+    let (input, policy) = led(input);
+    let mut run = create_front_run_led(input, Box::new(Told::of(case)), policy);
     for (index, (name, args, want)) in case.method_log.iter().enumerate() {
         if let Some(got) = method(&mut run, name, args) {
             if let Err(error) = same(&got, want) {
@@ -141,7 +215,7 @@ fn engine_timing() {
                 let input = input_of(case);
                 let hooks = Box::new(Told::of(case));
                 let started = std::time::Instant::now();
-                let _ = run_fronts(input, hooks);
+                let _ = run_led(input, hooks);
                 best = best.min(started.elapsed().as_secs_f64() * 1000.0);
             }
             rows.push((index, best));

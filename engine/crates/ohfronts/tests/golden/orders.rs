@@ -124,7 +124,7 @@ pub fn order_run(value: &Val) -> Run {
     let mut input = Obj::new();
     input.set("players", value.get("input").get("players").clone());
     input.set("map", value.get("input").get("map").clone());
-    run.input = Val::Obj(input);
+    run.input = std::rc::Rc::new(Val::Obj(input));
     run
 }
 

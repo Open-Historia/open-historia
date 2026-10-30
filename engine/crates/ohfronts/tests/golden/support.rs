@@ -345,6 +345,12 @@ impl<'a> Reader<'a> {
             "Inf" => Val::Num(f64::INFINITY),
             "-Inf" => Val::Num(f64::NEG_INFINITY),
             "-0" => Val::Num(-0.0),
+            "fn" if node.get("by").is_some() => {
+                let mut out = Obj::new();
+                out.set("$fn", Val::Str(node.get("by").map(|by| by.text()).unwrap_or("").to_string()));
+                out.set("$args", node.get("a").map(|a| self.val(a)).unwrap_or(Val::Null));
+                Val::Obj(out)
+            }
             "fn" | "cyc" => Val::Fn,
             "S16" => {
                 let units: Vec<u16> = v.unwrap().list().iter().map(|item| item.number() as u16).collect();
