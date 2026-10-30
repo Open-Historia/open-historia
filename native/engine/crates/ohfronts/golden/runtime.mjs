@@ -143,7 +143,7 @@ const entryOf = (key) => {
   return entry;
 };
 
-const patchCallbacks = (args, sink, only = null) => {
+const patchCallbacks = (args, sink, only = null, distinct = false) => {
   const undo = [];
   const visit = (value, where, depth) => {
     if (!value || typeof value !== "object" || depth > 2 || ArrayBuffer.isView(value) || made.has(value)) return;
@@ -159,9 +159,21 @@ const patchCallbacks = (args, sink, only = null) => {
       const calls = [];
       sink[name] = calls;
       const original = item;
+      const seen = distinct ? new Set() : null;
       value[key] = function recorded(...inner) {
         const result = original.apply(this, inner);
-        if (calls.length < CALLS_MOST) {
+        if (seen) {
+          try {
+            const args = encode(inner);
+            const text = JSON.stringify(args);
+            if (!seen.has(text)) {
+              seen.add(text);
+              calls.push([args, encode(result)]);
+            }
+          } catch {
+            calls.overflow = true;
+          }
+        } else if (calls.length < CALLS_MOST) {
           try {
             calls.push([encode(inner), encode(result)]);
           } catch {
@@ -170,6 +182,7 @@ const patchCallbacks = (args, sink, only = null) => {
         } else calls.overflow = true;
         return result;
       };
+      Object.assign(value[key], original);
       undo.push(() => {
         value[key] = original;
       });
@@ -276,7 +289,8 @@ export const wrap = (moduleName, name, fn, factories, picks = null, quiet = fals
       busy -= 1;
     }
     const calls = {};
-    const restore = before && !quiet ? patchCallbacks(args, calls, picks?.calls ? new Set(picks.calls) : null) : () => {};
+    const patched = before && !quiet ? patchCallbacks(args, calls, picks?.calls ? new Set(picks.calls) : null, picks?.distinct === true) : () => {};
+    const restore = picks?.keepCalls ? () => {} : patched;
     const passed = before ? wrapCallbackArgs(args, calls) : args;
     let result;
     try {
@@ -300,7 +314,7 @@ export const wrap = (moduleName, name, fn, factories, picks = null, quiet = fals
       if (names.some((callName) => calls[callName].overflow || calls[callName].length >= CALLS_MOST)) return result;
       if (names.length) out.cb = calls;
       const size = JSON.stringify(out).length;
-      if (size > CASE_BYTES_MOST) return result;
+      if (size > (picks?.caseBytes ?? CASE_BYTES_MOST)) return result;
       entry.bytes += size;
       entry.cases.push(out);
       if (typeof result === "function") {
