@@ -36,6 +36,7 @@ use super::walls::lines_changed;
 use super::world_grid::{build_world_grid, km_between, place_along, world_sheet_key, GridOptions, Surface, WorldGrid};
 use crate::frame::KM_PER_DEGREE;
 use crate::jsmath;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc as Rc;
 
 type Flow<T> = Result<T, RegionsNeeded>;
@@ -3491,4 +3492,43 @@ pub fn create_front_run_led(input: Val, hooks: Box<dyn Hooks>, policy: Option<Rc
     run.staff_policy = policy;
     let needs_regions = begin(&mut run).is_err();
     FrontRun { run, needs_regions }
+}
+
+#[derive(Default)]
+pub struct Kept {
+    pub arenas: HashMap<String, Rc<Arena>>,
+    pub grids: HashMap<String, WorldGrid>,
+    pub flags: HashSet<String>,
+    pub lists: HashMap<String, Val>,
+}
+
+pub fn create_front_run_kept(input: Val, hooks: Box<dyn Hooks>, policy: Option<Rc<dyn StaffHook>>, kept: Kept) -> FrontRun {
+    let input = if input.is_nullish() { Val::Obj(Obj::new()) } else { input };
+    let mut run = create_run(input, hooks);
+    run.staff_policy = policy;
+    if run.cache_on {
+        for (key, arena) in kept.arenas {
+            run.arenas.entry(key).or_insert(arena);
+        }
+        for (key, grid) in kept.grids {
+            run.grids.entry(key).or_insert(grid);
+        }
+        run.kept_flags.extend(kept.flags);
+        for (key, list) in kept.lists {
+            run.kept_lists.entry(key).or_insert(list);
+        }
+    }
+    let needs_regions = begin(&mut run).is_err();
+    FrontRun { run, needs_regions }
+}
+
+impl FrontRun {
+    pub fn take_kept(&mut self) -> Option<Kept> {
+        if !self.run.cache_on {
+            return None;
+        }
+        let mut grids = std::mem::take(&mut self.run.grids);
+        grids.remove(OWN_GRID);
+        Some(Kept { arenas: std::mem::take(&mut self.run.arenas), grids, flags: std::mem::take(&mut self.run.kept_flags), lists: std::mem::take(&mut self.run.kept_lists) })
+    }
 }
