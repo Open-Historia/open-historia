@@ -3408,6 +3408,41 @@ const WAR_ROOM_SCHEMA = {
 // Only the tool shown to the model changes: the field is a transport field,
 // taken off the answer before the sheet is validated, and no other request
 // carries it.
+// Who may read an event (`audience`) is a shared game's: the tool sent
+// carries it only in one, and after the event's warId and combatants. Sent in
+// every game, just before combatants, it had Gemini leave combatants empty on
+// the battles of a war its skip started, so the war was dropped and no front
+// opened (2026-10-30, two answers against one with it left out). The answer is
+// still read against the whole schema, so a shared game's audience is kept.
+export const withEventAudience = (tool, shared = false) => {
+  let changed = false;
+  const visit = (node) => {
+    if (!node || typeof node !== "object") return node;
+    if (Array.isArray(node)) {
+      const next = node.map(visit);
+      return next.some((entry, index) => entry !== node[index]) ? next : node;
+    }
+    let out = node;
+    for (const [key, value] of Object.entries(node)) {
+      const next = visit(value);
+      if (next !== value) {
+        out = out === node ? { ...node } : out;
+        out[key] = next;
+      }
+    }
+    const properties = out.properties;
+    if (properties && typeof properties === "object" && properties.audience && properties.combatants) {
+      const { audience, ...rest } = properties;
+      out = { ...out, properties: shared ? { ...rest, audience } : rest };
+      if (Array.isArray(out.required)) out.required = shared ? out.required : out.required.filter((name) => name !== "audience");
+      changed = true;
+    }
+    return out;
+  };
+  const schema = visit(tool?.schema);
+  return changed ? { ...tool, schema } : tool;
+};
+
 export const INTELLIGENCE_RATING_FIELD = "intelligenceService";
 export const withIntelligenceRating = (tool) => {
   if (!tool?.schema?.properties) return tool;

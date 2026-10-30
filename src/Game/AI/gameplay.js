@@ -204,6 +204,7 @@ import {
   INTELLIGENCE_RATING_FIELD,
   normalizeGameplayPayload,
   validateGameplayPayload,
+  withEventAudience,
   withFrontOrders,
   withIntelligenceRating,
   withoutGroupOps,
@@ -2707,7 +2708,8 @@ const JUMP_LIVE_STATE_BANNER = [
 // Fronts on (frontsGate.js): a time skip's tool with the battlefields' orders
 // in it (gameplaySchemas.js withFrontOrders).
 const forActiveFeatures = (tool) => {
-  const shown = isActiveFeatureEnabled("groups") ? tool : withoutGroupOps(tool);
+  const grouped = isActiveFeatureEnabled("groups") ? tool : withoutGroupOps(tool);
+  const shown = withEventAudience(grouped, hostingSharedGame());
   return frontsOn() ? withFrontOrders(shown) : shown;
 };
 let gameMasterPromptNoGroups = null;
