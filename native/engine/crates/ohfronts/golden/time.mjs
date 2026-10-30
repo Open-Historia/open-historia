@@ -6,6 +6,29 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "../../../../..");
 const fixtures = process.env.GOLDEN_DIR ? path.resolve(process.env.GOLDEN_DIR) : path.join(here, "../tests/golden");
 const { runFronts } = await import(pathToFileURL(path.join(root, "src/runtime/fronts/engine.js")).href);
+const planner = await import(pathToFileURL(path.join(root, "src/runtime/fronts/mind/planner.js")).href);
+const trained = await import(pathToFileURL(path.join(root, "src/runtime/fronts/mind/trained.js")).href);
+const policies = await import(pathToFileURL(path.join(root, "src/runtime/fronts/mind/policy.js")).href);
+const { commanderOf } = await import(pathToFileURL(path.join(root, "src/runtime/fronts/mind/commanders.js")).href);
+const labStaff = (config = {}) => {
+  const lead = { trained: planner.createPlanner({ params: trained.shippedPlannerParams() }), plainer: planner.createPlainerPlanner(), thorough: planner.createPlanner({ params: trained.shippedPlannerParams(), replies: true }) };
+  const leadOf = (battle, side) => lead[commanderOf({ sides: battle?.sides, side, outcomes: config.outcomes ?? [], difficulty: config.difficulty ?? "medium", players: config.players ?? [] })];
+  const policy = (battle, side, context, run) => leadOf(battle, side)(battle, side, context, run);
+  policy.steps = function* steps(battle, side, context, run) {
+    return yield* leadOf(battle, side).steps(battle, side, context, run);
+  };
+  policy.often = true;
+  return policy;
+};
+const MADE = {
+  "mindPlanner.createPlanner": (options) => planner.createPlanner({ ...(options ?? {}), memo: null }),
+  "mindPlanner.createPlainerPlanner": (options) => planner.createPlainerPlanner({ ...(options ?? {}), memo: null }),
+  "mindTrained.labStaffPolicy": labStaff,
+  "mindTrained.trainedStaffPolicy": () => planner.createPlanner({ params: trained.shippedPlannerParams() }),
+  "mindPolicy.createStaffPolicy": policies.createStaffPolicy,
+  "mindPolicy.createTroopPolicy": policies.createTroopPolicy,
+};
+const ONLY_LED = Boolean(process.env.PLANNER);
 const file = JSON.parse(fs.readFileSync(path.join(fixtures, "engine.json"), "utf8"));
 const TYPED = { U8: Uint8Array, U8C: Uint8ClampedArray, I8: Int8Array, U16: Uint16Array, I16: Int16Array, U32: Uint32Array, I32: Int32Array, F32: Float32Array, F64: Float64Array };
 const blobs = new Map();
@@ -20,7 +43,7 @@ const decode = (node, ids) => {
     case "Inf": return Infinity;
     case "-Inf": return -Infinity;
     case "-0": return -0;
-    case "fn": return () => undefined;
+    case "fn": return node.by && MADE[node.by] ? MADE[node.by](...(decode(node.a ?? [], ids) ?? [])) : () => undefined;
     case "cyc": return null;
     case "S16": return String.fromCharCode(...node.v);
     case "ref": {
@@ -59,8 +82,11 @@ cases.forEach((item, index) => {
   const plain = () => {
     const input = decode(item.a, new Map())[0];
     const kept = input.arenas instanceof Map && [...input.arenas.values()].some((value) => value !== true && !Array.isArray(value));
-    if (typeof input.staffPolicy === "function" || (input.rehearsers ?? null) !== null || (kept && !Array.isArray(input.map?.regions))) return null;
-    for (const key of Object.keys(input)) if (typeof input[key] === "function") delete input[key];
+    const by = raw(raw(raw(item.a)?.[0])?.staffPolicy);
+    const led = Boolean(by && by.$ === "fn" && by.by && MADE[by.by]);
+    if ((typeof input.staffPolicy === "function" && !led) || (kept && !Array.isArray(input.map?.regions)) || (ONLY_LED && !led)) return null;
+    for (const key of Object.keys(input)) if (typeof input[key] === "function" && key !== "staffPolicy") delete input[key];
+    delete input.rehearsers;
     if (input.arenas instanceof Map) input.arenas = new Map([...input.arenas].filter(([, value]) => value === true || Array.isArray(value)));
     for (const reader of READERS) {
       const calls = item.cb?.[`0.${reader}`];
