@@ -716,6 +716,7 @@ export const createGameHost = ({
       pause: () => round.pause(),
       resume: () => round.resume(),
       resolveNow: () => round.resolveNow(),
+      setRoundMinutes: (minutes) => round.setRoundMinutes(minutes),
       kick(country) {
         const seat = seats.list().find((entry) => same(entry.country, country));
         if (!seat || same(seat.country, hostCountry)) return null;
