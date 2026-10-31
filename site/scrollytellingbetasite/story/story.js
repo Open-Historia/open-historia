@@ -1,11 +1,12 @@
 /*! Open Historia — the landing page's story © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // The chronicle: a sticky stage and ten chapters that scroll over it. The map
-// is drawn on a canvas by a small camera of its own: a point it looks at, a
-// zoom, a heading (which way is up) and a tilt (how far it leans back), with
-// perspective. The camera follows the scroll: each chapter is a stretch of
-// "story time", and inside a chapter the scroll also drives what happens on
-// the map (the missiles' flight, the North's advance). The map is the game's
-// own (map-data.js, built by scripts/build-site-story-map.mjs).
+// is the game's: MapLibre on Esri's Ocean basemap over 3D terrain, with the
+// game's own countries (map-data.js, built by scripts/build-site-story-map.mjs).
+// A camera of the story's own (a point it looks at, a zoom, a heading and a
+// tilt) follows the scroll and is handed to the map every frame; each chapter
+// is a stretch of "story time", and inside a chapter the scroll also drives
+// what happens on the map (the missiles' flight, the North's advance), drawn
+// on a canvas over it. The game's interface over both is game-ui.js.
 (function () {
   "use strict";
 
@@ -141,17 +142,9 @@
     });
     return out;
   }
-  var COLOURS = ["#3d5a6c", "#6b4f3a", "#4f5d3a", "#6c6a3d", "#3a5d55", "#7a4a3a", "#56653f", "#2f5263", "#7a6338", "#5a3f33", "#3f5f4a", "#6a5a46"];
-  var world = data.countries.map(function (country, index) {
-    return { n: country.n, rings: rings(country.d), colour: COLOURS[(index * 7 + country.n.length) % COLOURS.length] };
-  });
-  var europe = data.europe.map(function (region) { return { id: region.id, o: region.o, rings: rings(region.d) }; });
   var korea = data.korea.regions.map(function (region) { return { id: region.id, o: region.o, n: region.n, rings: rings(region.d) }; });
   var koreaFronts = data.korea.fronts.map(rings);
   var koreaOrder = data.korea.order;
-  var gratWorld = rings(data.graticule.world);
-  var gratFine = rings(data.graticule.europe).concat(rings(data.graticule.korea));
-  var rivers = data.rivers.map(function (river) { return { n: river.n, rings: rings(river.d), at: river.at }; });
   var missiles = data.missiles.map(function (flight, index) {
     var p = flight.p;
     var len = 0;
@@ -162,113 +155,181 @@
   korea.forEach(function (region) { regionNames[region.id] = region.n; });
 
   // ---- the camera ----------------------------------------------------------------------------
-  // It looks at a point (x, y, and z, a height above the map), from a distance
-  // set by the zoom, turned by the heading and leaned back by the tilt. Leaned
-  // far back it looks along the ground to a horizon, so anything that passes
-  // behind the eye is cut off where it does.
-  var canvas, ctx, W = 0, H = 0, dpr = 1;
+  // The story's camera, in the Mercator units of map-data.js: a point (x, y,
+  // and z, a height above the map), a zoom, a heading and a tilt, and where on
+  // the screen the point sits. Each frame it is handed to MapLibre; the canvas
+  // over the map places what it draws with the map's own projection.
+  var canvas, ctx, map = null, W = 0, H = 0, dpr = 1;
   var cam = { x: 800, y: 600, z: 0, ls: 0, h: 0, t: 0, ax: 0.5, ay: 0.5 };
-  var P = { cosA: 1, sinA: 0, cosT: 1, sinT: 0, s: 1, D: 1000, near: 100, cx: 0, cy: 0 };
+  var P = { s: 1, sinT: 0, cx: 0, cy: 0, horizon: -1e5 };
+  var WORLD = 2 * Math.PI * data.merc.k;   // the map's width in its own units
+  var MAX_PITCH = 80;
+  var lastCamera = "";
+  function latOfY(y) { return (2 * Math.atan(Math.exp((data.merc.y0 - y) / data.merc.k)) - Math.PI / 2) * 180 / Math.PI; }
+  function lonOfX(x) { return (x - data.merc.x0) / data.merc.k * 180 / Math.PI; }
+  function lngLat(x, y) { return [lonOfX(x), Math.max(-85, Math.min(85, latOfY(y)))]; }
   function setCamera(c) {
     cam = c;
-    var a = -c.h * Math.PI / 180;
-    var t = c.t * Math.PI / 180;
-    P.cosA = Math.cos(a); P.sinA = Math.sin(a);
-    P.cosT = Math.cos(t); P.sinT = Math.sin(t);
     P.s = Math.pow(2, c.ls);
-    P.D = Math.max(W, H) * 1.05;
-    P.near = P.D * 0.1;
+    var pitch = Math.min(MAX_PITCH, c.t);
+    P.sinT = Math.sin(pitch * Math.PI / 180);
     P.cx = c.ax * W;
     P.cy = c.ay * H;
+    // MapLibre's eye stands 1.5 screen heights from the point it looks at.
+    P.horizon = pitch > 1 ? P.cy - 1.5 * H / Math.tan(pitch * Math.PI / 180) : -1e5;
+    if (!map) return;
+    // Only when the camera has moved: the map then rests and finishes its tiles.
+    var key = [c.x.toFixed(3), c.y.toFixed(3), c.ls.toFixed(4), c.h.toFixed(2), pitch.toFixed(2), c.ax.toFixed(3), c.ay.toFixed(3), W, H].join();
+    if (key === lastCamera) return;
+    lastCamera = key;
+    map.jumpTo({
+      center: lngLat(c.x, c.y),
+      zoom: Math.log(WORLD * P.s / 512) / Math.LN2,
+      bearing: c.h,
+      pitch: pitch,
+      padding: { left: Math.max(0, (2 * c.ax - 1) * W), right: Math.max(0, (1 - 2 * c.ax) * W), top: Math.max(0, (2 * c.ay - 1) * H), bottom: Math.max(0, (1 - 2 * c.ay) * H) }
+    });
   }
-  // A point on the map (x, y in map units, z = height above it) in the eye's
-  // terms: across the screen, down it, and how far in front of the eye.
-  var C = [0, 0, 0];
-  function toCam(x, y, z, out) {
-    var u = (x - cam.x) * P.s;
-    var v = (y - cam.y) * P.s;
-    var w = (z - (cam.z || 0)) * P.s;
-    var v2 = u * P.sinA + v * P.cosA;
-    out[0] = u * P.cosA - v * P.sinA;
-    out[1] = v2 * P.cosT - w * P.sinT;
-    out[2] = P.D - (v2 * P.sinT + w * P.cosT);
-    return out;
-  }
-  // ...and on the screen: [sx, sy, perspective factor]. The factor is -1 for
-  // a point behind the eye, which is then put far off the screen.
+  // A point on the map (x, y in map units, z = a height above it) on the
+  // screen: [sx, sy, how big things are drawn there against the middle]. The
+  // last is -1 for a point past the horizon or behind the eye.
   function project(x, y, z, out) {
-    toCam(x, y, z || 0, C);
-    if (C[2] < P.near) { out[0] = -1e5; out[1] = -1e5; out[2] = -1; return out; }
-    var k = P.D / C[2];
-    out[0] = P.cx + C[0] * k;
-    out[1] = P.cy + C[1] * k;
-    out[2] = k;
+    if (!map) { out[0] = -1e5; out[1] = -1e5; out[2] = -1; return out; }
+    var p = map.project(lngLat(x, y));
+    if (!(p.y > P.horizon + 2) || !isFinite(p.x)) { out[0] = -1e5; out[1] = -1e5; out[2] = -1; return out; }
+    var q = map.project(lngLat(x + 0.5, y));
+    var scale = Math.hypot(q.x - p.x, q.y - p.y) * 2;
+    out[0] = p.x;
+    out[1] = p.y - (z || 0) * scale * P.sinT;
+    out[2] = scale / P.s;
     return out;
   }
-  function visible(box) {
-    var left = 0, right = 0, above = 0, below = 0, behind = 0;
-    for (var i = 0; i < 4; i += 1) {
-      toCam(i & 1 ? box[2] : box[0], i & 2 ? box[3] : box[1], 0, C);
-      if (C[2] < P.near) { behind += 1; continue; }
-      var k = P.D / C[2];
-      var sx = P.cx + C[0] * k;
-      var sy = P.cy + C[1] * k;
-      if (sx < -60) left += 1; else if (sx > W + 60) right += 1;
-      if (sy < -60) above += 1; else if (sy > H + 60) below += 1;
-    }
-    if (behind === 4) return false;
-    return behind > 0 || (left < 4 && right < 4 && above < 4 && below < 4);
-  }
-  // A run of points (x, y pairs on the map, or x, y, z triples) as a path, cut
-  // where it passes behind the eye. A closed ring stays closed: it runs along
-  // the cut between where it leaves and where it comes back.
-  var CA = [0, 0, 0];
-  var CB = [0, 0, 0];
-  function put(target, u, v, depth, move) {
-    var k = P.D / depth;
-    if (move) target.moveTo(P.cx + u * k, P.cy + v * k);
-    else target.lineTo(P.cx + u * k, P.cy + v * k);
-  }
+  // A run of points (x, y pairs, or x, y, z triples) as a path, broken where it leaves the view.
+  var LA = [0, 0, 0];
   function line3(target, pts, stride, closed) {
     var n = Math.floor(pts.length / stride);
-    if (n < 2) return;
-    var near = P.near;
-    toCam(pts[0], pts[1], stride === 3 ? pts[2] : 0, CA);
-    var pen = CA[2] >= near;
-    if (pen) put(target, CA[0], CA[1], CA[2], true);
-    var count = closed ? n + 1 : n;
-    for (var i = 1; i < count; i += 1) {
+    var pen = false;
+    for (var i = 0; i < (closed ? n + 1 : n); i += 1) {
       var o = (i % n) * stride;
-      toCam(pts[o], pts[o + 1], stride === 3 ? pts[o + 2] : 0, CB);
-      var inA = CA[2] >= near;
-      var inB = CB[2] >= near;
-      if (inA !== inB) {
-        var r = (near - CA[2]) / (CB[2] - CA[2]);
-        put(target, CA[0] + (CB[0] - CA[0]) * r, CA[1] + (CB[1] - CA[1]) * r, near, !pen);
-        pen = closed || inB;
-      }
-      if (inB) { put(target, CB[0], CB[1], CB[2], !pen); pen = true; }
-      CA[0] = CB[0]; CA[1] = CB[1]; CA[2] = CB[2];
-    }
-    if (closed && pen) target.closePath();
-  }
-  function trace(target, list) {
-    for (var r = 0; r < list.length; r += 1) {
-      var ring = list[r];
-      if (visible(ring.box)) line3(target, ring.pts, 2, ring.closed);
+      project(pts[o], pts[o + 1], stride === 3 ? pts[o + 2] : 0, LA);
+      if (LA[2] <= 0) { pen = false; continue; }
+      if (pen) target.lineTo(LA[0], LA[1]); else target.moveTo(LA[0], LA[1]);
+      pen = true;
     }
   }
-  // Where the ground meets the sky on the screen (it never does looking straight down).
-  function horizonY() { return P.sinT > 0.02 ? P.cy - P.D * P.cosT / P.sinT : -1e5; }
+
+  // ---- the map: the game's basemap, terrain and countries ------------------------------------------
+  var BASEMAP = "https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Base/MapServer/tile/{z}/{y}/{x}";
+  var TERRAIN = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png";
+  var COLOURS = ["#c0392b", "#2e86de", "#27ae60", "#e67e22", "#16a085", "#d4ac0d", "#2874a6", "#a04000", "#1e8449", "#b03a2e", "#117a65", "#ca6f1e", "#5d6d7e", "#7d8b2b"];
+  var NATION_COLOURS = { France: "#2b6cd8", Russia: "#b8322a", China: "#d4a017", "United States": "#3f7fbf" };
+  function lngLatRing(pts) {
+    var out = [];
+    for (var i = 0; i < pts.length; i += 2) out.push(lngLat(pts[i], pts[i + 1]));
+    out.push(out[0]);
+    return out;
+  }
+  function polygons(d) { return rings(d).filter(function (r) { return r.closed; }).map(function (r) { return [lngLatRing(r.pts)]; }); }
+  function lines(list) {
+    return list.map(function (r) {
+      var out = [];
+      for (var i = 0; i < r.pts.length; i += 2) out.push(lngLat(r.pts[i], r.pts[i + 1]));
+      return out;
+    });
+  }
+  function koreaData(step) {
+    var taken = {};
+    koreaOrder.slice(0, step).forEach(function (id) { taken[id] = 1; });
+    return { type: "FeatureCollection", features: data.korea.regions.map(function (region) {
+      return { type: "Feature", properties: { side: region.o === "North Korea" || taken[region.id] ? "n" : "s" }, geometry: { type: "MultiPolygon", coordinates: polygons(region.d) } };
+    }) };
+  }
+  function frontData(step) {
+    var front = koreaFronts[Math.min(step, koreaFronts.length - 1)] || [];
+    return { type: "FeatureCollection", features: front.length ? [{ type: "Feature", properties: {}, geometry: { type: "MultiLineString", coordinates: lines(front) } }] : [] };
+  }
+  function buildMap(container) {
+    if (!window.maplibregl || !container) return null;
+    var countries = { type: "FeatureCollection", features: data.countries.map(function (country, index) {
+      return { type: "Feature", properties: { n: country.n, c: NATION_COLOURS[country.n] || COLOURS[(index * 7 + country.n.length) % COLOURS.length] }, geometry: { type: "MultiPolygon", coordinates: polygons(country.d) } };
+    }) };
+    var m;
+    try {
+      m = new window.maplibregl.Map({
+        container: container,
+        interactive: false,
+        attributionControl: { compact: true },
+        renderWorldCopies: false,
+        maxPitch: 85,
+        centerClampedToGround: false,
+        fadeDuration: 0,
+        style: {
+          version: 8,
+          sources: {
+            base: { type: "raster", tiles: [BASEMAP], tileSize: 256, maxzoom: 13, attribution: "Basemap: Esri, GEBCO, NOAA, National Geographic, Garmin, HERE, Geonames.org" },
+            dem: { type: "raster-dem", tiles: [TERRAIN], tileSize: 256, maxzoom: 14, encoding: "terrarium", attribution: "Terrain: Mapzen, AWS Open Data" },
+            countries: { type: "geojson", data: countries },
+            korea: { type: "geojson", data: koreaData(0) },
+            front: { type: "geojson", data: frontData(0) }
+          },
+          layers: [
+            { id: "sea", type: "background", paint: { "background-color": "#0b1520" } },
+            { id: "base", type: "raster", source: "base", paint: { "raster-brightness-max": 0.82, "raster-saturation": -0.15 } },
+            { id: "countries", type: "fill", source: "countries", paint: { "fill-color": ["get", "c"], "fill-opacity": 0.42 } },
+            { id: "borders", type: "line", source: "countries", paint: { "line-color": "rgba(255, 255, 255, 0.5)", "line-width": 0.8 } },
+            { id: "korea", type: "fill", source: "korea", paint: { "fill-color": ["match", ["get", "side"], "n", "#c4432c", "#2f6fb0"], "fill-opacity": 0.62 } },
+            { id: "korea-lines", type: "line", source: "korea", paint: { "line-color": "rgba(10, 12, 16, 0.6)", "line-width": 0.8 } },
+            { id: "france", type: "line", source: "countries", filter: ["==", ["get", "n"], "France"], layout: { visibility: "none" }, paint: { "line-color": "#2bc1f3", "line-width": 2.6 } },
+            { id: "front-bed", type: "line", source: "front", layout: { "line-join": "round" }, paint: { "line-color": "rgba(13, 13, 15, 0.9)", "line-width": 8 } },
+            { id: "front", type: "line", source: "front", layout: { "line-join": "round" }, paint: { "line-color": "#e0662f", "line-width": 3.2, "line-dasharray": [2, 1] } }
+          ],
+          terrain: { source: "dem", exaggeration: 1.6 },
+          sky: { "sky-color": "#0f1820", "horizon-color": "#24303b", "fog-color": "#111a22", "sky-horizon-blend": 0.5, "horizon-fog-blend": 0.6, "fog-ground-blend": 0.8, "atmosphere-blend": 0 }
+        }
+      });
+    } catch (error) {
+      return null;   // no WebGL: the chapters and the interface still tell the story
+    }
+    m.on("load", function () {
+      mapState.loaded = true;
+      mapState.step = -1;
+      mapState.france = null;
+      // The credits stay one tap away rather than lying open over the map.
+      var credits = container.querySelector(".maplibregl-ctrl-attrib");
+      if (credits) credits.classList.remove("maplibregl-compact-show");
+    });
+    return m;
+  }
+  // What the map shows that changes with the story: the North's regions and the front, France picked out.
+  var mapState = { loaded: false, step: -1, france: null };
+  function syncMap(T, kStep) {
+    if (!map || !mapState.loaded) return;
+    if (kStep !== mapState.step) {
+      mapState.step = kStep;
+      map.getSource("korea").setData(koreaData(kStep));
+      map.getSource("front").setData(frontData(kStep));
+    }
+    var france = T > 2.7 && T < 9.3;
+    if (france !== mapState.france) {
+      mapState.france = france;
+      map.setLayoutProperty("france", "visibility", france ? "visible" : "none");
+    }
+  }
 
   // ---- where the camera is at each moment of the story ---------------------------------------
   var STEPS = ["world", "launch", "korea", "choose", "order", "skip", "talks", "parliament", "congress", "yours"];
   var EDGE = 0.22;   // the part of a chapter at each end given to moving to the next
 
   function narrow() { return W < 860; }
-  // A flat view of a frame: the zoom that fits it in the part of the screen left beside the chapter.
+  // The part of the screen the map shows through: between the chapter cards
+  // on the left and the game's side panel on the right.
+  function freeLeft() { return narrow() ? 0 : Math.min(W * 0.4, 500); }
+  // The game's drawer is 320 px, and its flag and advisor buttons stand beside it.
+  function freeRight() { return narrow() ? W : W - 320 - 80; }
+  function freeMiddle() { return (freeLeft() + freeRight()) / 2 / W; }
+  // A flat view of a frame: the zoom that fits it in that part of the screen.
   function fit(frame, extra) {
-    var areaW = narrow() ? W - 24 : W - Math.min(W * 0.46, 560) - 40;
+    var areaW = narrow() ? W - 24 : freeRight() - freeLeft() - 40;
     var areaH = narrow() ? H * 0.42 : H - 220;
     var s = Math.min(areaW / (frame[2] - frame[0]), areaH / (frame[3] - frame[1])) * (extra || 1);
     return Math.log(s) / Math.LN2;
@@ -280,8 +341,8 @@
       ls: fit(frame, extra),
       h: 0,
       t: tilt || 0,
-      ax: narrow() ? 0.5 : (Math.min(W * 0.46, 560) + (W - 40)) / 2 / W,
-      ay: narrow() ? 0.36 : 0.56
+      ax: narrow() ? 0.5 : freeMiddle(),
+      ay: narrow() ? 0.66 : 0.56
     };
   }
   function pointOn(flight, m) {
@@ -300,8 +361,8 @@
       case "order": { var c = flatCam(data.frames.europe, 1.6, 22); c.x = data.places.France[0]; c.y = data.places.France[1]; return c; }
       case "skip": return flatCam(data.frames.skip, 1, 26);
       case "talks": return flatCam(data.frames.talks, 1, 30);
-      case "parliament": { var pc = flatCam(data.frames.europe, 2.6, 34); pc.x = data.places.Paris[0]; pc.y = data.places.Paris[1]; pc.h = -8; if (!narrow()) pc.ax = 0.52; return pc; }
-      case "congress": { var cc = flatCam(data.frames.europe, 1.3, 26); cc.x = data.places.Strasbourg[0]; cc.y = data.places.Strasbourg[1]; if (!narrow()) cc.ax = 0.5; return cc; }
+      case "parliament": { var pc = flatCam(data.frames.europe, 2.6, 34); pc.x = data.places.Paris[0]; pc.y = data.places.Paris[1]; pc.h = -8; return pc; }
+      case "congress": { var cc = flatCam(data.frames.europe, 1.3, 26); cc.x = data.places.Strasbourg[0]; cc.y = data.places.Strasbourg[1]; return cc; }
       default: return flatCam(data.frames.world, 1, 0);
     }
   }
@@ -509,7 +570,7 @@
     if (hold > 0) h += (((180 - h) % 360 + 540) % 360 - 180) * hold;
     var c = clamp01(profile(u / UC));
     var ls, t, ay;
-    var ax = narrow() ? 0.5 : 0.6;
+    var ax = narrow() ? 0.5 : freeMiddle();
     if (u <= UX) {
       ls = chaseZoom(c); t = chaseTilt(c); ay = narrow() ? 0.6 : 0.66;
     } else if (u <= UB) {
@@ -763,22 +824,10 @@
   function drawKorea(p, now) {
     var step = koreaStep(p);
     var front = koreaFronts[Math.min(step, koreaFronts.length - 1)];
-    // The front: a dark bed, then the line itself, its dashes marching south;
-    // thinner seen from far off.
+    // The front itself is a layer of the map; here, what stands and burns along it.
     var mid = frontMiddle(Math.min(step, koreaFronts.length - 1));
     project(mid[0], mid[1], 0, A);
     if (A[2] <= 0) return step;
-    var z = Math.max(0.3, Math.min(1.4, A[2]));
-    ctx.lineJoin = "round";
-    ctx.strokeStyle = "rgba(13, 13, 15, 0.9)";
-    ctx.lineWidth = 9 * z;
-    ctx.beginPath(); trace(ctx, front); ctx.stroke();
-    ctx.strokeStyle = "#e0662f";
-    ctx.lineWidth = 3.5 * z;
-    ctx.setLineDash([12 * z, 6 * z]);
-    ctx.lineDashOffset = -now / 40;
-    ctx.beginPath(); trace(ctx, front); ctx.stroke();
-    ctx.setLineDash([]);
     // Counters on both sides of it, bursts along it.
     var points = frontPoints(front, 4);
     points.forEach(function (pt, i) {
@@ -859,102 +908,15 @@
   [1, 1.9, 2.8, 3.7, 4.6].forEach(function (reach) {
     [[1, -1], [-1, -1], [1, 1], [-1, 1]].forEach(function (side) { PIN_SPOTS.push([side[0], side[1], reach]); });
   });
-  var SEA = "#0b1015";
-  var SKY = "#121a21";
-  var LAND = "#22252b";
 
   function draw(now) {
     var T = state.T;
     var step = STEPS[Math.max(0, Math.min(STEPS.length - 1, Math.floor(T)))];
     setCamera(cameraAt(T));
-    var s = P.s;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.fillStyle = SEA;
-    ctx.fillRect(0, 0, W, H);
-
-    // The sea's engraving: a grid of degrees, finer close in.
-    ctx.strokeStyle = "rgba(236, 228, 210, 0.07)";
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    if (s < 16) trace(ctx, gratWorld);
-    if (s > 2.5) trace(ctx, gratFine);
-    ctx.stroke();
-
-    // The land: echoed coasts, then the countries.
-    var colourful = T > STEPS.indexOf("yours") - 0.3;
-    var land = new Path2D();
-    world.forEach(function (country) { trace(land, country.rings); });
-    ctx.lineJoin = "round";
-    [[10, 0.04], [6, 0.06], [2.6, 0.1]].forEach(function (echo) {
-      ctx.lineWidth = echo[0];
-      ctx.strokeStyle = "rgba(160, 190, 205," + echo[1] + ")";
-      ctx.stroke(land);
-    });
-    if (colourful) {
-      world.forEach(function (country) {
-        ctx.fillStyle = country.colour;
-        ctx.beginPath(); trace(ctx, country.rings); ctx.fill();
-      });
-    } else {
-      ctx.fillStyle = LAND;
-      ctx.fill(land);
-    }
-    ctx.lineWidth = 0.8;
-    ctx.strokeStyle = "rgba(236, 228, 210, 0.24)";
-    ctx.stroke(land);
-
-    // Western Europe and Korea, region by region, when close enough.
-    var franceOn = T > 2.7 && T < 9.3;
-    if (s > 1.6) {
-      europe.forEach(function (region) {
-        if (region.o !== "France" || !franceOn) return;
-        ctx.fillStyle = "rgba(43, 193, 243, 0.2)";
-        ctx.beginPath(); trace(ctx, region.rings); ctx.fill();
-      });
-      ctx.strokeStyle = "rgba(236, 228, 210, 0.16)";
-      ctx.lineWidth = 0.7;
-      ctx.beginPath(); europe.forEach(function (region) { trace(ctx, region.rings); }); ctx.stroke();
-      if (franceOn) {
-        ctx.strokeStyle = "#2bc1f3";
-        ctx.lineWidth = 2.2;
-        ctx.beginPath(); europe.forEach(function (region) { if (region.o === "France") trace(ctx, region.rings); }); ctx.stroke();
-      }
-    }
+    ctx.clearRect(0, 0, W, H);
     var kp = koreaProgress(T);
-    var kStep = koreaStep(kp);
-    var taken = {};
-    koreaOrder.slice(0, kStep).forEach(function (id) { taken[id] = 1; });
-    if (s > 3) {
-      korea.forEach(function (region) {
-        var north = region.o === "North Korea" || taken[region.id];
-        ctx.fillStyle = north ? "#5e2015" : "#1d4656";
-        ctx.beginPath(); trace(ctx, region.rings); ctx.fill();
-      });
-      ctx.strokeStyle = "rgba(11, 15, 18, 0.8)";
-      ctx.lineWidth = 1;
-      ctx.beginPath(); korea.forEach(function (region) { trace(ctx, region.rings); }); ctx.stroke();
-    }
-
-    // Rivers.
-    if (s > 2.2) {
-      ctx.strokeStyle = "rgba(92, 132, 150, 0.85)";
-      ctx.lineWidth = 1.3;
-      ctx.beginPath(); rivers.forEach(function (river) { trace(ctx, river.rings); }); ctx.stroke();
-    }
-
-    // Names: regions, rivers, towns.
-    if (s > 9) {
-      data.regionLabels.forEach(function (r) { label(r.n, r.at[0], r.at[1], { size: 11, align: "center", alpha: 0.6, font: "italic EB Garamond, Georgia, serif", weight: "400" }); });
-    }
-    if (s > 4) {
-      rivers.forEach(function (river) { label(river.n, river.at[0], river.at[1], { size: 11, alpha: 0.75, colour: "#8fb2c2", font: "italic EB Garamond, Georgia, serif", weight: "400" }); });
-    }
-    if (s > 1.6) {
-      data.towns.forEach(function (town) {
-        if (town.t === 2 && s < 7) return;
-        label(town.n, town.at[0], town.at[1], { size: town.t === 1 ? 12 : 10.5, dot: "rgba(236, 228, 210, 0.8)", r: town.t === 1 ? 2.4 : 1.8, alpha: 0.82, font: "EB Garamond, Georgia, serif", weight: town.t === 1 ? "600" : "400" });
-      });
-    }
+    syncMap(T, koreaStep(kp));
 
     // What happens in each chapter.
     if (step === "world") {
@@ -1015,16 +977,16 @@
         project(at[0], at[1], 0, A);
         if (A[2] > 0) pins.push({ x: A[0], y: A[1], text: entry[1], w: ctx.measureText(entry[1]).width });
       });
-      var minX = narrow() ? 8 : Math.min(W * 0.46, 560) + 8;
-      var maxY = narrow() ? H * 0.47 : H - 50;   // on a phone the card takes the lower half
+      var minX = freeLeft() + 8;
+      var maxY = narrow() ? H * 0.47 : H - 80;   // on a phone the card takes the lower half
       var boxes = [];
       var clash = function (b) {
-        if (b[0] < minX || b[2] > W - 24 || b[1] < 70 || b[3] > maxY) return true;
+        if (b[0] < minX || b[2] > freeRight() - 16 || b[1] < 120 || b[3] > maxY) return true;
         for (var k = 0; k < boxes.length; k += 1) if (b[0] < boxes[k][2] + 6 && b[2] > boxes[k][0] - 6 && b[1] < boxes[k][3] + 3 && b[3] > boxes[k][1] - 3) return true;
         return pins.some(function (q) { return q.x > b[0] - 5 && q.x < b[2] + 5 && q.y > b[1] - 5 && q.y < b[3] + 5; });
       };
       // The pins nearest the right edge first, their notes turned inward.
-      var middle = (minX + W) / 2;
+      var middle = (minX + freeRight()) / 2;
       pins.sort(function (a, b) { return b.x - a.x; });
       pins.forEach(function (pin) {
         var spot = null;
@@ -1055,121 +1017,6 @@
         ctx.fillText(pin.text, spot.tx, spot.ty);
       });
     }
-
-    // Haze toward the horizon when the map leans back: flat bands, thicker
-    // further off. Leaned far enough, the sky above the horizon.
-    if (cam.t > 8) {
-      var strength = Math.min(1, cam.t / 60);
-      var horizon = horizonY();
-      var top = Math.max(0, horizon);
-      for (var b = 0; b < 7; b += 1) {
-        ctx.fillStyle = "rgba(11, 16, 21," + (0.11 * strength) + ")";
-        ctx.fillRect(0, top, W, H * (0.3 - b * 0.04));
-      }
-      if (horizon > 0) {
-        ctx.fillStyle = SKY;
-        ctx.fillRect(0, 0, W, horizon);
-        for (var band = 1; band <= 4; band += 1) {
-          ctx.fillStyle = "rgba(160, 190, 205," + (0.035 * (5 - band) / 4) + ")";
-          ctx.fillRect(0, horizon - band * 9, W, 9);
-        }
-        ctx.fillStyle = "rgba(236, 228, 210, 0.16)";
-        ctx.fillRect(0, horizon - 0.5, W, 1);
-      }
-    }
-  }
-
-  // ---- HTML that changes inside a chapter: the telemetry and the front report ----------------------------
-  var lastCounts = "";
-  var lastKorea = -1;
-  function liveOverlays() {
-    var counts = state.counts;
-    if (counts && state.step === "launch") {
-      var key = counts.flying + "/" + counts.stopped + "/" + counts.hit;
-      if (key !== lastCounts) {
-        lastCounts = key;
-        var set = function (id, value) { var el = document.getElementById(id); if (el) el.textContent = value; };
-        set("tmFlying", counts.flying);
-        set("tmStopped", counts.stopped);
-        set("tmHit", counts.hit);
-        var rows = document.querySelectorAll("#tmTracks li");
-        var clock = missileClock(journeyU(state.T));
-        Array.prototype.forEach.call(rows, function (row, i) {
-          var m = clock.each[i];
-          var status = m <= 0 ? "Holding" : STOPPED[i] ? (m >= MEET ? "Intercepted" : m >= RISE ? "Engaged" : "In flight") : (m >= 1 ? "Impact" : "In flight");
-          row.setAttribute("data-status", status.toLowerCase().replace(" ", "-"));
-          row.querySelector("b").textContent = status;
-        });
-      }
-    }
-    if (state.step === "korea" && state.korea !== lastKorea) {
-      lastKorea = state.korea;
-      var list = document.getElementById("frontFallen");
-      if (list) {
-        var fallen = koreaOrder.slice(0, state.korea).map(function (id) { return regionNames[id]; }).reverse();
-        list.innerHTML = fallen.slice(0, 6).map(function (name, i) { return "<li" + (i === 0 ? " class=\"new\"" : "") + ">" + name + "</li>"; }).join("") || "<li>The line holds at the 38th parallel</li>";
-      }
-      var count = document.getElementById("frontCount");
-      if (count) count.textContent = state.korea + " / " + koreaOrder.length;
-    }
-  }
-
-  // ---- chapters: the overlays and the wire -----------------------------------------------------------------
-  function showWire(element) {
-    var ticker = document.getElementById("tickerTrack");
-    var news = element.getAttribute("data-news");
-    if (ticker && news) {
-      var items = news.split("|").map(function (item) { return "<span>" + item + "</span>"; }).join("");
-      ticker.innerHTML = items + items;
-    }
-  }
-  var ORDER = "Summon the American and Russian ambassadors. Offer Strasbourg for a peace congress, and ask Beijing to bring Pyongyang.";
-  var typeTimer = 0;
-  function typeOrder(on) {
-    var out = document.getElementById("typed");
-    var advice = document.getElementById("advice");
-    clearInterval(typeTimer);
-    if (!out) return;
-    if (!on) { out.textContent = ""; advice.classList.remove("on"); return; }
-    if (calm) { out.textContent = ORDER; advice.classList.add("on"); return; }
-    var i = 0;
-    out.textContent = "";
-    advice.classList.remove("on");
-    typeTimer = setInterval(function () {
-      i += 1;
-      out.textContent = ORDER.slice(0, i);
-      if (i >= ORDER.length) {
-        clearInterval(typeTimer);
-        setTimeout(function () { advice.classList.add("on"); }, 400);
-      }
-    }, 28);
-  }
-  // The Assemblée, seat by seat, for the parliament chapter.
-  function hemicycle() {
-    var svg = document.getElementById("hemicycle");
-    if (!svg || svg.childNodes.length) return;
-    var BLOCS = [["#7a2a22", 17], ["#b8322a", 73], ["#d8657a", 30], ["#e6a23c", 42], ["#5aa0c8", 314], ["#2c4f8f", 101]];
-    var seats = [];
-    var rows = 12;
-    for (var r = 0; r < rows; r += 1) {
-      var radius = 40 + r * 7;
-      var count = Math.round(Math.PI * radius / 7.6);
-      for (var i = 0; i < count; i += 1) {
-        var a = Math.PI - Math.PI * (i + 0.5) / count;
-        seats.push({ a: a, x: Math.cos(a) * radius, y: -Math.sin(a) * radius });
-      }
-    }
-    seats.sort(function (p, q) { return q.a - p.a; });
-    var blocIndex = 0;
-    var left = BLOCS[0][1];
-    var total = BLOCS.reduce(function (sum, b) { return sum + b[1]; }, 0);
-    var scale = seats.length / total;
-    left = Math.round(BLOCS[0][1] * scale);
-    seats.forEach(function (seat) {
-      while (left <= 0 && blocIndex < BLOCS.length - 1) { blocIndex += 1; left = Math.round(BLOCS[blocIndex][1] * scale); }
-      left -= 1;
-      svgNode("circle", { cx: seat.x.toFixed(1), cy: seat.y.toFixed(1), r: 2.6, fill: BLOCS[blocIndex][0] }, svg);
-    });
   }
 
   function show(name, element) {
@@ -1181,10 +1028,6 @@
     Array.prototype.forEach.call(stage.querySelectorAll("[data-on]"), function (ov) {
       ov.classList.toggle("on", (" " + ov.getAttribute("data-on") + " ").indexOf(" " + name + " ") >= 0);
     });
-    typeOrder(name === "order");
-    if (name === "parliament") hemicycle();
-    if (name === "korea") lastKorea = -1;
-    if (element) showWire(element);
   }
 
   // ---- the loop: scroll → story time → a frame ------------------------------------------------------------
@@ -1214,6 +1057,19 @@
     dpr = Math.min(2, window.devicePixelRatio || 1);
     canvas.width = Math.round(W * dpr);
     canvas.height = Math.round(H * dpr);
+    if (map) {
+      map.resize();
+      var credits = document.querySelector("#stageMap .maplibregl-ctrl-attrib");
+      if (credits) credits.classList.remove("maplibregl-compact-show");
+    }
+  }
+  // Brings chapter i to the middle of the screen, a little way in (the game's skip arrows).
+  function goTo(i) {
+    var step = steps[Math.max(0, Math.min(steps.length - 1, i))];
+    if (!step) return;
+    var box = step.getBoundingClientRect();
+    var into = step.classList.contains("tall") ? 0.08 : 0.35;
+    window.scrollTo({ top: box.top + window.scrollY + box.height * into - window.innerHeight / 2, behavior: calm ? "auto" : "smooth" });
   }
   function measure() {
     heights = steps.map(function (step) { return step.offsetHeight || 1; });
@@ -1230,7 +1086,7 @@
     var gap = state.target - state.T;
     state.T = calm || Math.abs(gap) < 0.0005 ? state.target : state.T + gap * Math.min(1, dt * 5);
     draw(now);
-    liveOverlays();
+    if (window.OH_GAME_UI) window.OH_GAME_UI.update(state.T, state.step, { korea: state.korea, counts: state.counts });
   }
 
   function start() {
@@ -1242,7 +1098,9 @@
     canvas = document.getElementById("stageCanvas");
     if (!canvas || !canvas.getContext) return;
     ctx = canvas.getContext("2d");
+    map = buildMap(document.getElementById("stageMap"));
     steps = Array.prototype.slice.call(document.querySelectorAll(".step[data-step]"));
+    if (window.OH_GAME_UI) window.OH_GAME_UI.init({ steps: STEPS, goTo: goTo, regionNames: regionNames, order: koreaOrder });
     resize();
     measure();
     readScroll();

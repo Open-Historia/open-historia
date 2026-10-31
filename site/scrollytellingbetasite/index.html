@@ -15,8 +15,12 @@
 <link rel="icon" type="image/png" href="/favicon.png" />
 <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
 <link rel="stylesheet" href="/fonts/fonts.css" />
+<link rel="stylesheet" href="/scrollytellingbetasite/story/vendor/maplibre-gl.css" />
 <link rel="stylesheet" href="/scrollytellingbetasite/story/story.css" />
+<link rel="stylesheet" href="/scrollytellingbetasite/story/game-ui.css" />
+<script defer src="/scrollytellingbetasite/story/vendor/maplibre-gl.js"></script>
 <script defer src="/scrollytellingbetasite/story/map-data.js"></script>
+<script defer src="/scrollytellingbetasite/story/game-ui.js"></script>
 <script defer src="/scrollytellingbetasite/story/story.js"></script>
 <script defer src="/scrollytellingbetasite/story/site.js"></script>
 </head>
@@ -190,140 +194,13 @@
 <!-- The chronicle: one campaign, told on the game's own map. The stage stays
      put while the chapters scroll over it (story/story.js). -->
 <section class="chronicle" id="story" aria-label="The story of one year">
-  <div class="stage" id="stage" data-step="world" aria-hidden="true">
-    <canvas class="stage-canvas" id="stageCanvas"></canvas>
+  <div class="stage" id="stage" data-step="world">
+    <!-- The map, as in the game: MapLibre on Esri's Ocean basemap over 3D terrain. -->
+    <div class="stage-map" id="stageMap" aria-hidden="true"></div>
+    <canvas class="stage-canvas" id="stageCanvas" aria-hidden="true"></canvas>
 
-    <div class="ticker"><span class="ticker-tag">Wire</span><div class="ticker-in"><div class="ticker-track" id="tickerTrack"></div></div></div>
-
-    <!-- II: the launch, tracked. -->
-    <div class="ov ov-right ov-telemetry" data-on="launch">
-      <div class="tm-head"><span>◉ Strategic tracking</span><span class="blink">Live</span></div>
-      <div class="tm-counts"><span><b id="tmFlying">0</b>In flight</span><span><b id="tmStopped">0</b>Intercepted</span><span><b id="tmHit">0</b>Impacts</span></div>
-      <ol class="tm-tracks" id="tmTracks">
-        <li><span>T-01</span>Malmstrom → Plesetsk<b>Holding</b></li>
-        <li><span>T-02</span>Minot → Kozelsk<b>Holding</b></li>
-        <li><span>T-03</span>F. E. Warren → Tatishchevo<b>Holding</b></li>
-        <li><span>T-04</span>Malmstrom → Moscow<b>Holding</b></li>
-        <li><span>T-05</span>Malmstrom → Yasny<b>Holding</b></li>
-        <li><span>T-06</span>F. E. Warren → Kozelsk<b>Holding</b></li>
-        <li><span>T-07</span>Malmstrom → Tatishchevo<b>Holding</b></li>
-        <li><span>T-08</span>Minot → Plesetsk<b>Holding</b></li>
-        <li><span>T-09</span>F. E. Warren → Moscow<b>Holding</b></li>
-        <li><span>T-10</span>Minot → Yasny<b>Holding</b></li>
-      </ol>
-      <div class="tm-foot">Great-circle tracks over the Arctic · interceptors from Sofrino, Severomorsk, Kaliningrad and Orenburg</div>
-    </div>
-
-    <!-- III: the front, reported. -->
-    <div class="ov ov-right ov-front" data-on="korea">
-      <div class="wr-head"><span>⚔ Front report</span><span>Korean peninsula</span></div>
-      <div class="fr-body">
-        <div class="fr-count"><b id="frontCount">0 / 17</b><span>southern regions taken</span></div>
-        <h6>Fallen, newest first</h6>
-        <ol class="fallen" id="frontFallen"><li>The line holds at the 38th parallel</li></ol>
-        <div class="fr-units"><span class="chip n">KPA</span> 6 formations on the line <span class="chip s">ROK</span> 6 formations falling back</div>
-      </div>
-      <div class="tools"><span class="on">Attack</span><span>Route</span><span>Hold</span><span>Dig in</span><span>Fortify</span><span>Deploy</span></div>
-    </div>
-
-    <div class="ov ov-right ov-card" data-on="choose">
-      <span class="flag" aria-hidden="true"><i style="background:#1f4b8f"></i><i style="background:#ece4d2"></i><i style="background:#b8322a"></i></span>
-      <h4>France</h4>
-      <span class="you">◆ You play this country</span>
-      <dl>
-        <dt>Capital</dt><dd>Paris</dd>
-        <dt>Government</dt><dd>Semi-presidential republic</dd>
-        <dt>Seat</dt><dd>Permanent, Security Council</dd>
-        <dt>Population</dt><dd>66.8 million</dd>
-        <dt>Army</dt><dd>11 formations</dd>
-        <dt>Fleet</dt><dd>3 squadrons</dd>
-      </dl>
-      <div class="bars">
-        <span>Economy</span><span class="sbar"><i style="width:72%"></i></span>
-        <span>Military</span><span class="sbar"><i style="width:64%"></i></span>
-        <span>Stability</span><span class="sbar"><i style="width:58%"></i></span>
-      </div>
-      <div class="rel"><span>United States</span><b class="warm">Allied</b><span>Russia</span><b class="cold">Tense</b><span>China</span><b class="warm">Cordial</b></div>
-    </div>
-
-    <div class="ov ov-right ov-command" data-on="order">
-      <div class="label"><span>◆ Your orders this turn</span><span class="count">2 of 3</span></div>
-      <ol class="queue">
-        <li class="done">Put the forces of deterrence on alert <em>queued</em></li>
-      </ol>
-      <div class="typed"><span id="typed"></span><span class="caret"></span></div>
-      <div class="advice" id="advice"><b>Advisor ·</b> Washington will come if Moscow does. Beijing is the only capital Pyongyang still listens to.</div>
-    </div>
-
-    <div class="ov ov-right ov-events" data-on="skip">
-      <article class="paper">
-        <header><span>Vol. CXII · No. 1</span><span>Sunday, 1 January 2017</span><span>Price 2 €</span></header>
-        <h3>The Paris Herald</h3>
-        <h4>The world comes to Strasbourg</h4>
-        <p class="deck">Washington and Moscow accept · Beijing to bring Pyongyang · the guns fall quiet in Busan</p>
-        <div class="cols">
-          <p><b>PARIS.</b> The Quai d'Orsay confirmed last night that every government invited has said yes. The congress opens in February in the Palais de l'Europe.</p>
-          <p><b>BUSAN.</b> A ceasefire holds for a fourth day. The North's flags fly over the city hall.</p>
-          <p><b>MOSCOW.</b> Fires still burn at Tatishchevo. The Kremlin speaks of "a moment for the grown-ups".</p>
-        </div>
-      </article>
-      <div class="telegram"><span class="where">WASHINGTON · 22 DEC —</span> President accepts Strasbourg stop delegation named stop</div>
-      <div class="telegram"><span class="where">BEIJING · 29 DEC —</span> Pyongyang will attend stop seating to be agreed stop</div>
-    </div>
-
-    <div class="ov ov-right ov-letters" data-on="talks">
-      <div class="letter fr">
-        <span class="stamp-post"><b>FR</b>2,80</span>
-        <span class="postmark">PARIS<br />14·I·17</span>
-        <div class="from">From Paris to Moscow</div>
-        <p>The fires at Tatishchevo will not be the last unless we sit down. France offers Strasbourg, and its word that Washington will be at the table.</p>
-        <div class="sign">— The Élysée Palace</div>
-        <span class="seal">FR</span>
-      </div>
-      <div class="letter de">
-        <span class="stamp-post de"><b>RU</b>45</span>
-        <span class="postmark">MOSCOW<br />17·I·17</span>
-        <div class="from">From Moscow to Paris</div>
-        <p>We will come to Strasbourg. Let it be understood that we come as the injured party, and that inspectors go to Montana as well as to Plesetsk.</p>
-        <div class="sign">— The Kremlin</div>
-        <span class="seal">RU</span>
-      </div>
-    </div>
-
-    <div class="ov ov-right ov-parliament" data-on="parliament">
-      <div class="wr-head peace"><span>🏛 Assemblée nationale</span><span>Vote of the day</span></div>
-      <svg class="hemi" id="hemicycle" viewBox="-130 -125 260 130"></svg>
-      <div class="motion">Motion: to authorise the Government to sign the Final Act of the Congress of Strasbourg</div>
-      <div class="tally-row"><span class="for"><b>341</b>For</span><span class="against"><b>156</b>Against</span><span class="abst"><b>80</b>Abstained</span></div>
-      <div class="factions"><span><i style="background:#5aa0c8"></i>Majority</span><span><i style="background:#2c4f8f"></i>Republicans</span><span><i style="background:#b8322a"></i>Socialists</span><span><i style="background:#e6a23c"></i>Centre</span><span><i style="background:#d8657a"></i>Ecologists</span><span><i style="background:#7a2a22"></i>Communists</span></div>
-    </div>
-
-    <div class="ov ov-right ov-treaty" data-on="congress">
-      <svg class="olive-mark" viewBox="0 0 80 40" aria-hidden="true">
-        <path d="M6 30 Q34 26 74 6" fill="none" stroke="#5d6b37" stroke-width="2.6" stroke-linecap="round" />
-        <ellipse cx="22" cy="23" rx="8" ry="3.2" fill="#5d6b37" transform="rotate(-40 22 23)" />
-        <ellipse cx="28" cy="33" rx="8" ry="3.2" fill="#5d6b37" transform="rotate(18 28 33)" />
-        <ellipse cx="42" cy="15" rx="8" ry="3.2" fill="#5d6b37" transform="rotate(-60 42 15)" />
-        <ellipse cx="48" cy="25" rx="8" ry="3.2" fill="#5d6b37" transform="rotate(4 48 25)" />
-        <ellipse cx="60" cy="7" rx="7" ry="3" fill="#5d6b37" transform="rotate(-76 60 7)" />
-      </svg>
-      <p class="pre">The Final Act of</p>
-      <h4>The Congress of Strasbourg</h4>
-      <p class="done">Done at Strasbourg, the second of March 2017, in six originals</p>
-      <ol>
-        <li>An armistice in Korea along the line held on the day of signature.</li>
-        <li>No missile shall be launched by any party for ten years.</li>
-        <li>Inspectors shall visit every silo field, in Montana as in Plesetsk.</li>
-        <li>A standing conference shall meet at Strasbourg each spring.</li>
-      </ol>
-      <div class="sigs four">
-        <div class="sig"><svg viewBox="0 0 160 44"><path pathLength="1" d="M6 30 C18 6 26 40 36 22 S52 10 58 28 C64 40 70 14 82 22 C92 30 98 18 112 24 C124 28 134 16 152 20" /></svg><small>United States</small></div>
-        <div class="sig"><svg viewBox="0 0 160 44"><path pathLength="1" d="M8 26 C14 10 22 10 24 26 C26 36 34 8 44 18 C52 26 50 34 62 26 L76 14 C84 30 96 30 104 20 C112 12 122 28 134 22 C142 18 148 22 154 18" /></svg><small>Russian Federation</small></div>
-        <div class="sig"><svg viewBox="0 0 160 44"><path pathLength="1" d="M6 22 C20 30 30 6 44 18 C56 30 60 30 72 18 C84 6 92 34 106 26 C118 18 130 14 152 24" /></svg><small>The two Koreas</small></div>
-        <div class="sig"><svg viewBox="0 0 160 44"><path pathLength="1" d="M10 30 C24 8 34 30 46 16 C58 4 64 34 78 24 C90 16 104 30 118 20 C130 12 140 24 152 16" /></svg><small>French Republic, host</small></div>
-      </div>
-      <span class="wax">✦</span>
-    </div>
+    <!-- The game's own interface over it (story/game-ui.js builds it as the game does), driven by the scroll; every button works. -->
+    <div class="gx" id="gameUi"></div>
 
     <!-- Doves over the peace. -->
     <div class="doves" data-on="congress" aria-hidden="true"></div>
