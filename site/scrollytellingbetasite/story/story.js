@@ -182,9 +182,10 @@
     var key = [c.x.toFixed(3), c.y.toFixed(3), c.ls.toFixed(4), c.h.toFixed(2), pitch.toFixed(2), c.ax.toFixed(3), c.ay.toFixed(3), W, H].join();
     if (key === lastCamera) return;
     lastCamera = key;
+    var zoom = Math.log(WORLD * P.s / 512) / Math.LN2;
     map.jumpTo({
       center: lngLat(c.x, c.y),
-      zoom: Math.log(WORLD * P.s / 512) / Math.LN2,
+      zoom: zoom,
       bearing: c.h,
       pitch: pitch,
       padding: { left: Math.max(0, (2 * c.ax - 1) * W), right: Math.max(0, (1 - 2 * c.ax) * W), top: Math.max(0, (2 * c.ay - 1) * H), bottom: Math.max(0, (1 - 2 * c.ay) * H) }
@@ -284,7 +285,8 @@
           version: 8,
           sources: {
             base: { type: "raster", tiles: [BASEMAP], tileSize: 256, maxzoom: 13, attribution: "Basemap: Esri, GEBCO, NOAA, National Geographic, Garmin, HERE, Geonames.org" },
-            dem: { type: "raster-dem", tiles: [TERRAIN], tileSize: 256, maxzoom: 11, encoding: "terrarium", attribution: "Terrain: Mapzen, AWS Open Data" },
+            // As the game's World.jsx has it: one DEM to zoom 5, for the 3D mesh and the hillshade both.
+            dem: { type: "raster-dem", tiles: [TERRAIN], tileSize: 256, maxzoom: 5, encoding: "terrarium", attribution: "Terrain: Mapzen, AWS Open Data" },
             // Cut into tiles only to the zoom their detail needs; closer in they are scaled, not cut again.
             countries: { type: "geojson", data: countries, maxzoom: 6, tolerance: 0.5 },
             korea: { type: "geojson", data: koreaData(0), maxzoom: 9 },
@@ -293,6 +295,7 @@
           layers: [
             { id: "sea", type: "background", paint: { "background-color": "#0b1520" } },
             { id: "base", type: "raster", source: "base", paint: { "raster-brightness-max": 0.82, "raster-saturation": -0.15 } },
+            { id: "hills", type: "hillshade", source: "dem", paint: { "hillshade-exaggeration": 0.1, "hillshade-shadow-color": "#000" } },
             { id: "countries", type: "fill", source: "countries", paint: { "fill-color": ["get", "c"], "fill-opacity": 0.42 } },
             { id: "borders", type: "line", source: "countries", paint: { "line-color": "rgba(255, 255, 255, 0.5)", "line-width": 0.8 } },
             { id: "korea", type: "fill", source: "korea", paint: { "fill-color": ["match", ["get", "side"], "n", "#c4432c", "#2f6fb0"], "fill-opacity": 0.62 } },
@@ -301,7 +304,7 @@
             { id: "front-bed", type: "line", source: "front", layout: { "line-join": "round" }, paint: { "line-color": "rgba(13, 13, 15, 0.9)", "line-width": 8 } },
             { id: "front", type: "line", source: "front", layout: { "line-join": "round" }, paint: { "line-color": "#e0662f", "line-width": 3.2, "line-dasharray": [2, 1] } }
           ],
-          terrain: { source: "dem", exaggeration: 1.6 },
+          terrain: { source: "dem", exaggeration: 15 },
           sky: { "sky-color": "#0f1820", "horizon-color": "#24303b", "fog-color": "#111a22", "sky-horizon-blend": 0.5, "horizon-fog-blend": 0.6, "fog-ground-blend": 0.8, "atmosphere-blend": 0 }
         }
       });
@@ -310,6 +313,7 @@
     }
     m.on("load", function () {
       mapState.loaded = true;
+      lastCamera = "";
       mapState.step = -1;
       mapState.france = null;
       // The credits stay one tap away rather than lying open over the map.
@@ -375,12 +379,12 @@
       case "world": return flatCam(data.frames.world, 1, 0);
       case "launch": return journeyCam(p * 0.5);
       case "korea": return journeyCam(0.5 + p * 0.5);
-      case "choose": return flatCam(data.frames.europe, 1.05, 18);
-      case "order": { var c = flatCam(data.frames.europe, 1.6, 22); c.x = data.places.France[0]; c.y = data.places.France[1]; return c; }
-      case "skip": return flatCam(data.frames.skip, 1, 26);
-      case "talks": return flatCam(data.frames.talks, 1, 30);
-      case "parliament": { var pc = flatCam(data.frames.europe, 2.6, 34); pc.x = data.places.Paris[0]; pc.y = data.places.Paris[1]; pc.h = -8; return pc; }
-      case "congress": { var cc = flatCam(data.frames.europe, 1.3, 26); cc.x = data.places.Strasbourg[0]; cc.y = data.places.Strasbourg[1]; return cc; }
+      case "choose": return flatCam(data.frames.europe, 1.05, 42);
+      case "order": { var c = flatCam(data.frames.europe, 1.6, 50); c.x = data.places.France[0]; c.y = data.places.France[1]; return c; }
+      case "skip": return flatCam(data.frames.skip, 1, 40);
+      case "talks": return flatCam(data.frames.talks, 1, 38);
+      case "parliament": { var pc = flatCam(data.frames.europe, 2.6, 56); pc.x = data.places.Paris[0]; pc.y = data.places.Paris[1]; pc.h = -8; return pc; }
+      case "congress": { var cc = flatCam(data.frames.europe, 1.3, 48); cc.x = data.places.Strasbourg[0]; cc.y = data.places.Strasbourg[1]; return cc; }
       default: return flatCam(data.frames.world, 1, 0);
     }
   }
@@ -452,7 +456,8 @@
     var base = narrow() ? 3 : 4.5;
     return Math.log(base * (1 + 0.6 * Math.exp(-c * 12) + 0.25 * smooth(clamp01((c - 0.7) / 0.3)))) / Math.LN2;
   }
-  function chaseTilt(c) { return 76 - 6 * Math.exp(-c * 10); }
+  // Leaned back, but not so far that the map must draw half the planet out to the horizon.
+  function chaseTilt(c) { return 70 - 5 * Math.exp(-c * 10); }
   function koreaZoom() { return Math.log(narrow() ? 28 : 46) / Math.LN2; }
   var KOREA_TILT = 63;
   function unit(dx, dy) { var l = Math.hypot(dx, dy) || 1; return [dx / l, dy / l]; }
