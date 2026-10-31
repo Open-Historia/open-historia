@@ -193,13 +193,27 @@
   // A point on the map (x, y in map units, z = a height above it) on the
   // screen: [sx, sy, how big things are drawn there against the middle]. The
   // last is -1 for a point past the horizon or behind the eye.
-  function project(x, y, z, out) {
+  // Projected with the map's camera alone: map.project() also looks up the
+  // terrain's height under every point, which for the thousands of points a
+  // frame draws here cost more than everything else together. What is drawn
+  // over the map is in the air or at a scale where the hills do not show.
+  var LngLatOf = window.maplibregl && window.maplibregl.LngLat;
+  var SP = { x: 0, y: 0 };
+  function screenOf(x, y) {
+    var ll = lngLat(x, y);
+    var transform = map.transform;
+    if (LngLatOf && transform && transform.locationToScreenPoint) return transform.locationToScreenPoint(new LngLatOf(ll[0], ll[1]));
+    return map.project(ll);
+  }
+  // `flat` skips finding how big things are drawn there (only where on the screen is wanted).
+  function project(x, y, z, out, flat) {
     if (!map) { out[0] = -1e5; out[1] = -1e5; out[2] = -1; return out; }
-    var p = map.project(lngLat(x, y));
+    var p = screenOf(x, y);
     if (!(p.y > P.horizon + 2) || !isFinite(p.x)) { out[0] = -1e5; out[1] = -1e5; out[2] = -1; return out; }
-    var q = map.project(lngLat(x + 0.5, y));
-    var scale = Math.hypot(q.x - p.x, q.y - p.y) * 2;
     out[0] = p.x;
+    if (flat && !z) { out[1] = p.y; out[2] = 1; return out; }
+    var q = screenOf(x + 0.5, y);
+    var scale = Math.hypot(q.x - p.x, q.y - p.y) * 2;
     out[1] = p.y - (z || 0) * scale * P.sinT;
     out[2] = scale / P.s;
     return out;
@@ -211,7 +225,7 @@
     var pen = false;
     for (var i = 0; i < (closed ? n + 1 : n); i += 1) {
       var o = (i % n) * stride;
-      project(pts[o], pts[o + 1], stride === 3 ? pts[o + 2] : 0, LA);
+      project(pts[o], pts[o + 1], stride === 3 ? pts[o + 2] : 0, LA, true);
       if (LA[2] <= 0) { pen = false; continue; }
       if (pen) target.lineTo(LA[0], LA[1]); else target.moveTo(LA[0], LA[1]);
       pen = true;
@@ -263,14 +277,18 @@
         maxPitch: 85,
         centerClampedToGround: false,
         fadeDuration: 0,
+        // Sharp enough, and a quarter of the work of drawing 3D terrain at a phone's full density.
+        pixelRatio: Math.min(1.5, window.devicePixelRatio || 1),
+        refreshExpiredTiles: false,
         style: {
           version: 8,
           sources: {
             base: { type: "raster", tiles: [BASEMAP], tileSize: 256, maxzoom: 13, attribution: "Basemap: Esri, GEBCO, NOAA, National Geographic, Garmin, HERE, Geonames.org" },
-            dem: { type: "raster-dem", tiles: [TERRAIN], tileSize: 256, maxzoom: 14, encoding: "terrarium", attribution: "Terrain: Mapzen, AWS Open Data" },
-            countries: { type: "geojson", data: countries },
-            korea: { type: "geojson", data: koreaData(0) },
-            front: { type: "geojson", data: frontData(0) }
+            dem: { type: "raster-dem", tiles: [TERRAIN], tileSize: 256, maxzoom: 11, encoding: "terrarium", attribution: "Terrain: Mapzen, AWS Open Data" },
+            // Cut into tiles only to the zoom their detail needs; closer in they are scaled, not cut again.
+            countries: { type: "geojson", data: countries, maxzoom: 6, tolerance: 0.5 },
+            korea: { type: "geojson", data: koreaData(0), maxzoom: 9 },
+            front: { type: "geojson", data: frontData(0), maxzoom: 9 }
           },
           layers: [
             { id: "sea", type: "background", paint: { "background-color": "#0b1520" } },
@@ -625,8 +643,8 @@
       var end = stopped ? Math.min(m, MEET) : Math.min(m, 1);
       var pts = [];
       // The ground track, faint and dashed: where it would fall.
-      for (var g = 0; g <= 48; g += 1) {
-        var gp = pointOn(flight, g / 48);
+      for (var g = 0; g <= 32; g += 1) {
+        var gp = pointOn(flight, g / 32);
         pts.push(gp[0], gp[1], 0);
       }
       ctx.setLineDash([4, 6]);
@@ -636,19 +654,21 @@
       ctx.setLineDash([]);
       // The flight itself: a contrail along its arc, a soft wake under a bright line.
       pts = [];
-      var steps = Math.max(2, Math.round(end * 72));
+      var steps = Math.max(2, Math.round(end * 48));
       for (var s = 0; s <= steps; s += 1) {
         var mm = end * s / steps;
         var pt = pointOn(flight, mm);
         pts.push(pt[0], pt[1], altitude(flight, mm));
       }
+      var trail = new Path2D();
+      line3(trail, pts, 3, false);
       ctx.lineCap = "round";
       ctx.strokeStyle = "rgba(242, 238, 228, 0.1)";
       ctx.lineWidth = i === LEAD ? 9 : 6;
-      ctx.beginPath(); line3(ctx, pts, 3, false); ctx.stroke();
+      ctx.stroke(trail);
       ctx.strokeStyle = "rgba(242, 238, 228, 0.85)";
       ctx.lineWidth = i === LEAD ? 2.6 : 1.8;
-      ctx.beginPath(); line3(ctx, pts, 3, false); ctx.stroke();
+      ctx.stroke(trail);
       ctx.lineCap = "butt";
       // Its shadow on the ground, under the head.
       var head = pointOn(flight, end);

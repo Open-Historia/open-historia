@@ -75,7 +75,7 @@
 .gx-date-day { color: rgba(255, 255, 255, 0.94); flex-shrink: 0; font-size: 0.95rem; letter-spacing: 0.02em; white-space: nowrap; }
 
 /* time.jsx PanelChrome: the Events panel, and the dock's windows in the same frame */
-.gx-panel { position: absolute; left: 0.5rem; bottom: 4.9rem; width: min(26.25rem, calc(100% - 1rem)); height: min(calc(100% - var(--gx-top) - 9rem), 30rem); min-height: 10rem; display: flex; flex-direction: column; background-color: var(--oh-hud-bg-strong); backdrop-filter: var(--oh-hud-blur); -webkit-backdrop-filter: var(--oh-hud-blur); border: 1px solid var(--oh-hud-border); border-radius: 18px; box-shadow: var(--oh-hud-shadow); color: white; overflow: hidden; z-index: 8; }
+.gx-panel { position: absolute; left: 0.5rem; bottom: 4.9rem; width: min(26.25rem, calc(100% - 1rem)); height: min(calc(100% - var(--gx-top) - 9rem), 30rem); min-height: 10rem; display: flex; flex-direction: column; background-color: rgba(17, 17, 19, 0.86); border: 1px solid var(--oh-hud-border); border-radius: 18px; box-shadow: var(--oh-hud-shadow); color: white; overflow: hidden; z-index: 8; }
 .gx-panel-head { border-bottom: 1px solid rgba(255, 255, 255, 0.07); flex-shrink: 0; padding: 1rem 1.25rem 0.75rem; display: flex; align-items: center; justify-content: space-between; }
 .gx-panel-title { color: rgba(255, 255, 255, 0.96); font-size: 1rem; font-weight: 700; }
 .gx-panel-sub { color: rgba(255, 255, 255, 0.45); font-size: 0.75rem; line-height: 1.45; margin-top: 0.12rem; }
@@ -129,7 +129,7 @@
 .gx.war-open .gx-war-btn { left: 1.1rem; bottom: 1.1rem; box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.85), 0 3px 12px rgba(0, 0, 0, 0.55); z-index: 12; }
 
 /* advisor.jsx AdvisorPanel and countryPanel.jsx: the right drawers */
-.gx-drawer { position: absolute; top: var(--gx-top); bottom: 0; right: 0; width: var(--gx-drawer); transform: translateX(100%); border-left: 1px solid rgba(255, 255, 255, 0.1); background-color: rgba(24, 24, 27, 0.95); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); box-shadow: none; transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.35s cubic-bezier(0.4, 0, 0.2, 1); display: flex; flex-direction: column; color: white; font-family: sans-serif; overflow: hidden; z-index: 7; }
+.gx-drawer { position: absolute; top: var(--gx-top); bottom: 0; right: 0; width: var(--gx-drawer); transform: translateX(100%); border-left: 1px solid rgba(255, 255, 255, 0.1); background-color: rgba(24, 24, 27, 0.95); box-shadow: none; transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.35s cubic-bezier(0.4, 0, 0.2, 1); display: flex; flex-direction: column; color: white; font-family: sans-serif; overflow: hidden; z-index: 7; }
 .gx-drawer.open { transform: translateX(0); box-shadow: -4px 0 24px rgba(0, 0, 0, 0.4); }
 .gx-grip { position: absolute; left: 0; top: 0; bottom: 0; width: 10px; display: flex; align-items: center; justify-content: center; }
 .gx-grip::after { content: ""; width: 3px; height: 42px; border-radius: 2px; background-color: rgba(255, 255, 255, 0.22); }
@@ -299,7 +299,7 @@
 .gx.war-open .gx-hud { display: none !important; }
 
 /* ---- the chapters, as the game's event cards (time.jsx EventCard) ---- */
-.chapter { font-family: sans-serif; color: white; background-color: var(--oh-hud-bg-strong); backdrop-filter: var(--oh-hud-blur); -webkit-backdrop-filter: var(--oh-hud-blur); border: 1px solid var(--oh-hud-border); border-radius: 18px; box-shadow: var(--oh-hud-shadow); padding: 0; max-width: 26.25rem; overflow: hidden; }
+.chapter { font-family: sans-serif; color: white; background-color: rgba(17, 17, 19, 0.86); border: 1px solid var(--oh-hud-border); border-radius: 18px; box-shadow: var(--oh-hud-shadow); padding: 0; max-width: 26.25rem; overflow: hidden; }
 .step[data-tone] .chapter { border-color: var(--oh-hud-border); }
 .chapter::before, .chapter .dossier, .chapter .num, .chapter .stamp, .chapter .fn { display: none; }
 .chapter > .gx-card-head { border-radius: 0; }
