@@ -1077,39 +1077,6 @@
         ctx.fillRect(0, horizon - 0.5, W, 1);
       }
     }
-    instruments();
-  }
-
-  // ---- the HTML instruments that follow the camera --------------------------------------------------
-  var NICE = [10, 20, 50, 100, 200, 500, 1000, 2000, 5000];
-  // Back from Mercator to degrees.
-  function latOfY(y) { return (2 * Math.atan(Math.exp((data.merc.y0 - y) / data.merc.k)) - Math.PI / 2) * 180 / Math.PI; }
-  function lonOfX(x) { return (x - data.merc.x0) / data.merc.k * 180 / Math.PI; }
-  function deg(value, pos, neg) {
-    var a = Math.abs(value);
-    var d = Math.floor(a);
-    var m = Math.round((a - d) * 60);
-    if (m === 60) { d += 1; m = 0; }
-    return d + "°" + (m < 10 ? "0" : "") + m + "′" + (value >= 0 ? pos : neg);
-  }
-  var lastScale = "";
-  function instruments() {
-    var bar = document.getElementById("scaleBar");
-    var barText = document.getElementById("scaleText");
-    var lat = latOfY(cam.y);
-    if (bar && barText) {
-      // A map unit is 6371 / k km at the equator, less by the cosine of the latitude.
-      var kmPerPx = 6371 * Math.cos(lat * Math.PI / 180) / data.merc.k / P.s;
-      var km = NICE[0];
-      for (var i = 0; i < NICE.length; i += 1) if (NICE[i] / kmPerPx <= 150) km = NICE[i];
-      var label = km.toLocaleString("en") + " km";
-      bar.style.width = Math.round(km / kmPerPx) + "px";
-      if (label !== lastScale) { barText.textContent = label; lastScale = label; }
-    }
-    var compass = document.getElementById("compass");
-    if (compass) compass.style.transform = "rotate(" + (-cam.h).toFixed(1) + "deg)";
-    var coords = document.getElementById("coords");
-    if (coords) coords.textContent = deg(lat, "N", "S") + "  " + deg(lonOfX(cam.x), "E", "W") + "  ·  heading " + Math.round(((cam.h % 360) + 360) % 360) + "°  ·  tilt " + Math.round(cam.t) + "°";
   }
 
   // ---- HTML that changes inside a chapter: the telemetry and the front report ----------------------------
@@ -1144,56 +1111,11 @@
       }
       var count = document.getElementById("frontCount");
       if (count) count.textContent = state.korea + " / " + koreaOrder.length;
-      // The date runs on with the front.
-      var date = document.getElementById("hudDate");
-      if (date) {
-        var day = new Date(Date.UTC(2016, 8, 2) + state.korea * 5.3 * 86400000);
-        date.textContent = day.getUTCDate() + " " + MONTHS[day.getUTCMonth()] + " " + day.getUTCFullYear();
-      }
     }
   }
 
-  // ---- chapters: the HUD, the overlays, the figures -----------------------------------------------------
-  var MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
-  var dateTimer = 0;
-  function parseDate(value) {
-    var m = /^(\d{1,2}) (\w+) (\d{4})$/.exec(value || "");
-    if (!m) return null;
-    var month = MONTHS.indexOf(m[2]);
-    return month < 0 ? null : new Date(Date.UTC(+m[3], month, +m[1]));
-  }
-  function showDate(value, from) {
-    var out = document.getElementById("hudDate");
-    clearInterval(dateTimer);
-    var a = parseDate(from);
-    var b = parseDate(value);
-    if (!a || !b || calm) { out.textContent = value; return; }
-    var day = a.getTime();
-    dateTimer = setInterval(function () {
-      day += 86400000;
-      var d = new Date(day);
-      out.textContent = d.getUTCDate() + " " + MONTHS[d.getUTCMonth()] + " " + d.getUTCFullYear();
-      if (day >= b.getTime()) { clearInterval(dateTimer); out.textContent = value; }
-    }, 1700 / Math.max(1, (b - a) / 86400000));
-  }
-  function showFigures(element) {
-    var hud = document.getElementById("hud");
-    var balance = parseFloat(element.getAttribute("data-balance")) || 0;
-    hud.style.setProperty("--balance", balance);
-    hud.setAttribute("data-lean", balance > 0.25 ? "war" : balance < -0.25 ? "peace" : "even");
-    var turn = document.getElementById("hudTurn");
-    if (turn) turn.textContent = element.getAttribute("data-turn") || "";
-    ["stability", "treasury", "manpower"].forEach(function (key) {
-      var bar = document.getElementById("hud-" + key);
-      var value = parseFloat(element.getAttribute("data-" + key));
-      if (bar && isFinite(value)) {
-        bar.style.width = value + "%";
-        bar.parentNode.setAttribute("data-low", value < 40 ? "1" : "0");
-      }
-    });
-    var set = function (id, attr) { var el = document.getElementById(id); if (el) el.textContent = element.getAttribute(attr) || ""; };
-    set("cartoucheTitle", "data-map");
-    set("cartouchePlate", "data-plate");
+  // ---- chapters: the overlays and the wire -----------------------------------------------------------------
+  function showWire(element) {
     var ticker = document.getElementById("tickerTrack");
     var news = element.getAttribute("data-news");
     if (ticker && news) {
@@ -1261,13 +1183,8 @@
     });
     typeOrder(name === "order");
     if (name === "parliament") hemicycle();
-    if (element) {
-      if (name !== "korea") showDate(element.getAttribute("data-date"), element.getAttribute("data-from"));
-      else lastKorea = -1;
-      showFigures(element);
-      var index = STEPS.indexOf(name);
-      Array.prototype.forEach.call(document.querySelectorAll(".progress i"), function (dot, i) { dot.classList.toggle("on", i <= index); });
-    }
+    if (name === "korea") lastKorea = -1;
+    if (element) showWire(element);
   }
 
   // ---- the loop: scroll → story time → a frame ------------------------------------------------------------

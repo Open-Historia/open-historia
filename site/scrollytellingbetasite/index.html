@@ -193,48 +193,6 @@
   <div class="stage" id="stage" data-step="world" aria-hidden="true">
     <canvas class="stage-canvas" id="stageCanvas"></canvas>
 
-    <!-- The map's frame: a double rule, ornaments at the corners, where the camera is. -->
-    <div class="frame">
-      <span class="corner tl"></span><span class="corner tr"></span><span class="corner bl"></span><span class="corner br"></span>
-      <span class="coords" id="coords"></span>
-    </div>
-
-    <svg class="compass" id="compass" viewBox="-60 -60 120 120">
-      <circle r="56" class="c-ring" /><circle r="50" class="c-ring thin" /><circle r="30" class="c-ring thin" />
-      <g class="c-rose">
-        <path class="c-pt dark" d="M0 -48 L7 -7 L0 0 Z" /><path class="c-pt light" d="M0 -48 L-7 -7 L0 0 Z" />
-        <path class="c-pt dark" d="M48 0 L7 7 L0 0 Z" /><path class="c-pt light" d="M48 0 L7 -7 L0 0 Z" />
-        <path class="c-pt dark" d="M0 48 L-7 7 L0 0 Z" /><path class="c-pt light" d="M0 48 L7 7 L0 0 Z" />
-        <path class="c-pt dark" d="M-48 0 L-7 -7 L0 0 Z" /><path class="c-pt light" d="M-48 0 L-7 7 L0 0 Z" />
-        <path class="c-pt small" d="M24 -24 L4 -2 L2 -4 Z M24 24 L2 4 L4 2 Z M-24 24 L-4 2 L-2 4 Z M-24 -24 L-2 -4 L-4 -2 Z" />
-        <circle r="3.5" class="c-hub" />
-      </g>
-      <text y="-40" class="c-n">N</text>
-    </svg>
-
-    <div class="cartouche">
-      <div class="c-top"><span id="cartouchePlate">Plate I</span><span>Atlas</span></div>
-      <div class="c-title" id="cartoucheTitle">The World · Political</div>
-      <div class="c-scale"><span class="bar" id="scaleBar"></span><span id="scaleText">1,000 km</span></div>
-      <div class="c-foot">Mercator projection · the game's own Modern Day map</div>
-    </div>
-
-    <div class="hud" id="hud">
-      <div class="hud-row">
-        <span class="hud-date" id="hudDate">1 January 2016</span>
-        <span class="hud-sep"></span>
-        <span class="hud-turn" id="hudTurn">Turn 1</span>
-        <span class="hud-sep"></span>
-        <span class="hud-balance"><span class="p">Peace</span><span class="hud-track"><span class="hud-mid"></span><span class="hud-knob"></span></span><span class="w">War</span></span>
-      </div>
-      <div class="hud-row hud-stats">
-        <span class="stat"><span>Stability</span><span class="sbar"><i id="hud-stability"></i></span></span>
-        <span class="stat"><span>Treasury</span><span class="sbar"><i id="hud-treasury"></i></span></span>
-        <span class="stat"><span>Manpower</span><span class="sbar"><i id="hud-manpower"></i></span></span>
-        <span class="progress"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
-      </div>
-    </div>
-
     <div class="ticker"><span class="ticker-tag">Wire</span><div class="ticker-in"><div class="ticker-track" id="tickerTrack"></div></div></div>
 
     <!-- II: the launch, tracked. -->
