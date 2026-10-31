@@ -216,6 +216,7 @@ import { offPageAvailable } from "./frontWorkerClient.js";
 import { applyTurnFronts, citiesFollowCountries, withFrontManpower, withBlockadeEconomy, turnBlockades, regionHoldingsOf, forecastTurnFronts, frontsListBlock, frontPlansBlock, frontPowers, frontRegionTest, frontWarJoins, frontWarStarts, frontsLiveBlock, openScenarioFronts, routesIntoOthers, transportWaysFor, readFrontCities, scenarioFrontsPending, warRoomChartFor, warRoomIntelText, withFrontUnits, withoutFrontPowers } from "./frontApply.js";
 import { withTurnStrikes } from "../../runtime/strikes.js";
 import { answerPeaceProposal, offerPeace, playerDiplomacy, turnDays, turnWarAndPeace } from "./warAndPeace.js";
+import { holdPlayersWars } from "./playersWarsHold.js";
 import { PEACE_BLOCK_HEADING, buildPeaceBlock } from "./peacePrompt.js";
 import { readPeaceVerdict, readTreatyLines, termsOfLetter } from "../../runtime/peaceTerms.js";
 import { PEACE_ANSWERS_FIELD, buildWarStatsBlock, describePeaceTalk, warsOf } from "./warStatsPrompt.js";
@@ -9175,8 +9176,19 @@ const applySimulationResult = async ({
       `integrity kept ${repairScreened.events.length}; curator kept ${repairCuratedEvents.length}.`,
     );
   }
+  // A war a player fights ends only by a peace that player makes or accepts
+  // (playersWarsHold.js): the skip's end, ceasefire or a player's leaving is
+  // refused, with the events that told it and what they changed on the map.
+  const playersWars = holdPlayersWars({ updates: result.warUpdates, events: curatedEvents, wars: baseWorld?.wars, players: humanCountriesOf(baseGame) });
+  if (playersWars.refused.length) {
+    curatedEvents = playersWars.events;
+    for (const update of playersWars.refused) {
+      logDebugEvent("turn", `The skip's ${update.op} for ${update.id} was refused: a war a player fights ends only by a peace that player makes or accepts.`, update);
+      noteReceipt(receipt, "dropped", `"${update.op}" for ${update.id}, and the events that told it: a war a player fights ends only by a peace that player makes or accepts. To bring them to peace, offer it in a letter.`);
+    }
+  }
   // A ledger record bound to an event the curator removed goes with it.
-  const keptWarUpdates = filterBoundLedgerUpdatesToKeptEvents(result.warUpdates, dedupedEvents, curatedEvents);
+  const keptWarUpdates = filterBoundLedgerUpdatesToKeptEvents(playersWars.updates, dedupedEvents, curatedEvents);
   const keptRelationUpdates = filterBoundLedgerUpdatesToKeptEvents(result.relationUpdates, dedupedEvents, curatedEvents);
   const keptAgreementUpdates = filterBoundLedgerUpdatesToKeptEvents(result.agreementUpdates, dedupedEvents, curatedEvents);
   const keptPuppetUpdates = filterBoundLedgerUpdatesToKeptEvents(result.puppetUpdates, dedupedEvents, curatedEvents);
