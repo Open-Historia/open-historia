@@ -69,6 +69,7 @@ import { normalizeTransports } from "./fronts/transports.js";
 import { normalizeStrikes } from "./strikes.js";
 import { battlefieldHeldClaimants } from "./fronts/heldRegions.js";
 import { sharedGameHostCountry } from "./humanPolities.js";
+import { normalizePartyOp, normalizePolitics } from "./politics.js";
 
 export const GAME_DEFAULTS = {
   country: "",
@@ -103,6 +104,9 @@ export const WORLD_DEFAULTS = {
   // intercepted exchange the player can read — and how much of the player's own
   // traffic a rival can.
   intelligence: {},
+  // Per-polity government and parties for the Stats pane's Politics tab
+  // (runtime/politics.js), name-keyed; absent until the player asks for one.
+  politics: {},
   // Every spy in the world, both directions: [{ id, owner, target, deployedAt,
   // status, turnedAt, exposedAt, coverStory, suspected }] — see spycraft.js for
   // the statuses. What the player's spies bring back lives in the intercepts
@@ -3607,6 +3611,7 @@ const normalizeEventImpacts = (value, event = null) => {
       groupOps: [],
       institutionLifecycleOps: [],
       markerOps: [],
+      partyOps: [],
       polityChanges: [],
       politicalActorOps: [],
       projectOps: [],
@@ -3627,6 +3632,8 @@ const normalizeEventImpacts = (value, event = null) => {
     groupOps: normalizeArray(value.groupOps).map(normalizeGroupOp).filter(Boolean),
     institutionLifecycleOps: normalizeArray(value.institutionLifecycleOps).map(normalizeInstitutionLifecycleImpactOp).filter(Boolean),
     markerOps: normalizeArray(value.markerOps).map(normalizeMarkerOp).filter(Boolean),
+    // Changes to a polity's tracked parties (runtime/politics.js).
+    partyOps: normalizeArray(value.partyOps).map(normalizePartyOp).filter(Boolean),
     polityChanges: normalizeArray(value.polityChanges).map(normalizePolityChange).filter(Boolean),
     politicalActorOps: normalizeArray(value.politicalActorOps).map(normalizePoliticalActorImpactOp).filter(Boolean),
     projectOps: normalizeArray(value.projectOps).map(normalizeProjectOp).filter(Boolean),
@@ -4446,6 +4453,7 @@ export const normalizeWorldState = (world) => {
     historyDocument: normalizeHistoryDocument(nextWorld.historyDocument),
     internationalReputation,
     intelligence,
+    politics: normalizePolitics(nextWorld.politics),
     spies,
     spySeal,
     gmAudit: normalizeGameMasterAudit(nextWorld.gmAudit),

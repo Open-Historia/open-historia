@@ -162,7 +162,7 @@ test("to and from freeform the sheet is stretched, not sent round a globe", () =
 
 test("a picture's bounds: read, refused, and what an image source is given", () => {
   assert.deepEqual(normalizeImageBounds({ west: -180, south: -66.5, east: 180, north: 66.5 }), { west: -180, south: -66.5, east: 180, north: 66.5 });
-  assert.deepEqual(normalizeImageBounds({ west: -500, south: -99, east: 500, north: 99 }), { west: -180, south: -MERCATOR_MAX_LAT, east: 180, north: MERCATOR_MAX_LAT });
+  assert.deepEqual(normalizeImageBounds({ west: -500, south: -99, east: 500, north: 99 }), { west: -360, south: -MERCATOR_MAX_LAT, east: 360, north: MERCATOR_MAX_LAT });
   for (const value of [null, undefined, [], "x", {}, { west: 1, south: 0, east: 1, north: 5 }, { west: 0, south: 5, east: 9, north: 5 }, { west: "a", south: 0, east: 1, north: 1 }]) {
     assert.equal(normalizeImageBounds(value), null, JSON.stringify(value));
   }
@@ -340,4 +340,31 @@ test("a bundle converted to another projection is the bundle a file declaring it
   assert.ok(near(back.data.world.units, plain.data.world.units));
   assert.deepEqual(bundleProjection(plain), { type: "mercator" });
   assert.deepEqual(bundleProjection(bundleOf({ projection: { type: "freeform", aspect: 2, wrap: false, laidOut: true } })), { type: "freeform", aspect: 2, wrap: false });
+});
+
+test("geoBoxOnSheet: a picture cropped by latitude lies on that part of its sheet", async () => {
+  const { geoBoxOnSheet, geoToDisplay, sheetBounds } = await import("./mapProjection.js");
+  // The whole globe is the whole sheet.
+  assert.deepEqual(geoBoxOnSheet("equirectangular", { west: -180, south: -90, east: 180, north: 90 }), sheetBounds("equirectangular"));
+  // A Q-BAM-style crop: the top edge is where 83°N lies on the sheet, the bottom where 60°S does.
+  const box = geoBoxOnSheet("robinson", { west: -180, south: -60, east: 180, north: 83 });
+  assert.equal(box.north, geoToDisplay("robinson", 0, 83)[1]);
+  assert.equal(box.south, geoToDisplay("robinson", 0, -60)[1]);
+  assert.equal(box.west, -180);
+  assert.equal(box.east, 180);
+});
+
+test("a projection centred off Greenwich keeps its centre and puts that longitude down the middle", () => {
+  const spec = normalizeProjection({ type: "robinson", centre: 10.75 });
+  assert.equal(spec.centre, 10.75);
+  assert.equal(normalizeProjection({ type: "robinson", centre: 0 }).centre, undefined, "0 is not written");
+  assert.equal(sameProjection(spec, "robinson"), false);
+  assert.deepEqual(geoToDisplay(spec, 10.75, 0), [0, 0]);
+  // 180° from the centre is the sheet's edge, and the round trip comes back.
+  assert.equal(Math.abs(geoToDisplay(spec, -169.25, 0)[0]), 180);
+  const [lon, lat] = displayToGeo(spec, ...geoToDisplay(spec, 15.98, 45.81));
+  assert.ok(Math.abs(lon - 15.98) < 1e-4 && Math.abs(lat - 45.81) < 1e-4, `${lon}, ${lat}`);
+  // Converting from Greenwich-centred Robinson moves a place sideways by the centre.
+  const [x] = convertDisplayPoint("robinson", spec, ...geoToDisplay("robinson", 10.75, 0));
+  assert.ok(Math.abs(x) < 1e-4);
 });

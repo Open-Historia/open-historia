@@ -783,3 +783,17 @@ test("the repair drops a join that cannot be made and keeps the war it was joini
   assert.deepEqual(repair.droppedIds, ["war-yemen-2015"]);
   assert.equal(repair.strippedEvents, 0);
 });
+
+test("a join goes against the opponents it names, whatever its letter says (#892)", () => {
+  const atWar = { polityOverrides: {}, wars: [{ id: "war-ukraine", status: "active", sideA: ["Russia"], sideB: ["Ukraine"], startedDate: "2022-02-24" }] };
+  const join = (record) => applyWarUpdates({ world: atWar, updates: decodeWarUpdates(record), events: [], stopDate: "2026-02-01", round: 3 }).wars[0];
+  // The letter backwards: "join-a" with Russia, side A, named as the enemy.
+  const backwards = join("war-ukraine~join-a~United Kingdom~Russia~~UK enters the war");
+  assert.deepEqual(backwards.sideA, ["Russia"]);
+  assert.deepEqual(backwards.sideB, ["Ukraine", "United Kingdom"]);
+  // No opponents named: the letter is all there is.
+  assert.deepEqual(join("war-ukraine~join-b~United Kingdom~~~").sideB, ["Ukraine", "United Kingdom"]);
+  assert.deepEqual(join("war-ukraine~join-a~Belarus~~~").sideA, ["Russia", "Belarus"]);
+  // Opponents on both sides say nothing: the letter again.
+  assert.deepEqual(join("war-ukraine~join-a~Belarus~Ukraine,Russia~~").sideA, ["Russia", "Belarus"]);
+});

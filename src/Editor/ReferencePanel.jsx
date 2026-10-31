@@ -78,6 +78,9 @@ const ReferencePanel = ({ refImage, setRefImage, onRecenter, onClose }) => {
           <Row label="Visible">
             <Toggle value={refImage.visible !== false} onChange={(v) => setRefImage({ ...refImage, visible: v })} />
           </Row>
+          <Row label="Lock in place">
+            <Toggle value={refImage.locked === true} onChange={(v) => setRefImage({ ...refImage, locked: v })} />
+          </Row>
           <div style={{ display: "flex", gap: 8, margin: "10px 0" }}>
             <button
               type="button"
@@ -95,9 +98,10 @@ const ReferencePanel = ({ refImage, setRefImage, onRecenter, onClose }) => {
             </button>
           </div>
           <div style={{ fontSize: 11, lineHeight: 1.5, color: "rgba(255,255,255,0.55)" }}>
-            Drag inside the image to move it; drag a corner to resize (free
-            stretch, so you can match the map projection). Close this panel to
-            draw and edit through the image.
+            {refImage.locked
+              ? "Locked: dragging moves the map. Unlock to move or resize the image."
+              : "Drag inside the image to move it; drag a corner to resize (free stretch, so you can match the map projection; hold Shift to keep its shape)."}{" "}
+            Close this panel to draw and edit through the image.
           </div>
         </>
       ) : null}

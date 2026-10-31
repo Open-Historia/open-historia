@@ -54,7 +54,8 @@ import { loadBackgroundFile, rebuildPersistedBackground, vectorLayerToGeoJSON } 
 import ProjectionPanel from "./ProjectionPanel.jsx";
 import { DETAILED_MAP_CONVERSION_MESSAGE, hasDetailedMap, moveFeatureCoords, moveUnits, moveWarShapes, planBasemapChange } from "./projectionConvert.js";
 import { reprojectPicture } from "./projectionImage.js";
-import { convertPlane, normalizeProjection, sameProjection } from "../../server/mapProjection.js";
+import { FREEFORM, convertPlane, geoToDisplay, normalizeProjection, sameProjection } from "../../server/mapProjection.js";
+import PictureSetupPanel from "./PictureSetupPanel.jsx";
 import { addBackgroundToLibrary, getBasemapPayload } from "../runtime/basemapLibrary.js";
 import { saveDocument, loadDocument, downloadJson } from "./documentIO.js";
 import { createSaveRunner, isUnsavedStatus, saveRetryDelay, settleUnsavedWork } from "./documentSaving.js";
@@ -499,15 +500,67 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   // added to Your basemaps, not shown by the game); { added } once it is one of
   // the scenario's maps; and { libraryError } when Your basemaps would not take
   // it.
+  // A picture first asks how it is drawn (PictureSetupPanel): its projection
+  // and where it lies, and whether the provinces move with it.
   const uploadBasemap = async (file) => {
     if (!file) return null;
     const bg = await loadBackgroundFile(file);
+    const name = file.name ? file.name.replace(/\.[^.]+$/, "") : "Custom basemap";
+    if (bg.kind === "image") {
+      setPictureSetupError("");
+      setPendingPicture({ bg, name });
+      setBasemapPickerOpen(false);
+      return { pictureSetup: true };
+    }
+    return addUploadedBackground(bg, name);
+  };
+
+  const [pendingPicture, setPendingPicture] = useState(null);
+  const [pictureSetupBusy, setPictureSetupBusy] = useState(false);
+  const [pictureSetupError, setPictureSetupError] = useState("");
+  // The picture kept as it is, laid on `bounds`; the map takes its projection.
+  // The provinces, cities, units and war shapes move into that projection with
+  // it, or the provinces, cities and units are deleted. Not an undo step, as
+  // converting the projection is not.
+  const applyPictureSetup = async ({ projection, bounds, deleteProvinces }) => {
+    if (!pendingPicture || !api) return;
+    const { bg, name } = pendingPicture;
+    setPictureSetupBusy(true);
+    setPictureSetupError("");
+    try {
+      const from = normalizeProjection(d.metadata?.projection);
+      // How the game shows the map (globe, looping) stays as it was.
+      const to = { ...projection, ...(from.globe === false ? { globe: false } : {}), ...(from.wrap === false ? { wrap: false } : {}) };
+      let movedOwnBasemaps = null;
+      if (deleteProvinces) {
+        api.loadRegions({ type: "FeatureCollection", features: [] });
+        d.setFeatures([]);
+        d.setUnits([]);
+      } else if (!sameProjection(from, to)) {
+        moveMapPlaces(from, to);
+        moveWarGeography(from, to);
+        movedOwnBasemaps = moveOwnBasemapsBetween(d.doc?.metadata?.ownBasemaps, from, to);
+      }
+      d.patchMetadata({ projection: to, ...(movedOwnBasemaps ? { ownBasemaps: movedOwnBasemaps } : {}) });
+      setPendingPicture(null);
+      const picture = rebuildPersistedBackground({ kind: "image", dataUrl: bg.dataUrl, aspect: bg.aspect, bounds }, { persisted: false });
+      await addUploadedBackground(picture, name);
+      api.fitToData?.();
+    } catch (e) {
+      setPictureSetupError(e?.message || String(e));
+    } finally {
+      setPictureSetupBusy(false);
+    }
+  };
+
+  // A new basemap saved to Your basemaps for reuse and added to the scenario's
+  // maps; what uploadBasemap answers the picker.
+  const addUploadedBackground = async (bg, name) => {
     const normalized = normalizeBackground(bg);
     if (!normalized) {
       setCustomBg(bg);
       return { sessionOnly: true };
     }
-    const name = file.name ? file.name.replace(/\.[^.]+$/, "") : "Custom basemap";
     let meta = null;
     let libraryError = null;
     try {
@@ -541,6 +594,24 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     image.src = customBg.dataUrl;
     return () => { alive = false; };
   }, [customBg]);
+  // The regions, cities and features, and starting units moved from one
+  // projection's sheet to another's.
+  const moveMapPlaces = (from, to) => {
+    const EARTH = 6378137; // the map's units are metres on the Mercator plane
+    // A new centre moves the map's edge to the meridian opposite it. On a
+    // cylindrical map that meridian is a straight line: cut the regions there.
+    const cylindrical = ["mercator", "equirectangular", "miller", "gall-peters"].includes(from.type);
+    const seamLon = (to.centre ?? 0) - 180;
+    const seamX = cylindrical && to.type !== FREEFORM && (to.centre ?? 0) !== (from.centre ?? 0)
+      ? geoToDisplay(from, seamLon, 0)[0] * (Math.PI / 180) * EARTH
+      : null;
+    api.transformRegions((x, y) => {
+      const [X, Y] = convertPlane(from, to, x / EARTH, y / EARTH);
+      return [X * EARTH, Y * EARTH];
+    }, { seamX });
+    d.setFeatures((list) => moveFeatureCoords(list, from, to));
+    d.setUnits((list) => moveUnits(list, from, to));
+  };
   const [projectionBusy, setProjectionBusy] = useState(false);
   const [projectionError, setProjectionError] = useState("");
   // A detailed map cannot be converted with the map (projectionConvert.js).
@@ -592,9 +663,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
       } else if (plan.kind === "tiles") {
         nextBg = null;
       }
-      api.transformRegions(moveXY);
-      d.setFeatures((list) => moveFeatureCoords(list, from, to));
-      d.setUnits((list) => moveUnits(list, from, to));
+      moveMapPlaces(from, to);
       moveWarGeography(from, to);
       // The scenario's other drawn basemaps move with it; a picture fills the
       // sheet in any projection and stays as it is.
@@ -1551,6 +1620,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         onWarShapeCreate={createWarShape}
         onWarShapeChange={changeWarShape}
         onWarShapeRemove={removeWarShape}
+        onReferenceSnapped={() => setRefImage((current) => (current ? { ...current, locked: true } : current))}
       />
       </div>
 
@@ -1960,6 +2030,20 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         onRemoveMap={removeFromMaps}
         onShownOver={showDetailedOver}
       />
+      {pendingPicture && (
+        <PictureSetupPanel
+          name={pendingPicture.name}
+          aspect={pendingPicture.bg.aspect}
+          busy={pictureSetupBusy}
+          error={pictureSetupError}
+          onApply={applyPictureSetup}
+          onChooseAnother={() => {
+            setPendingPicture(null);
+            setBasemapPickerOpen(true);
+          }}
+          onClose={() => setPendingPicture(null)}
+        />
+      )}
 
       <BorderCleanupNote lines={cleanupNote} top={12} />
       <BorderCleanupChoice choice={cleanChoice} onChoose={answerClean} />

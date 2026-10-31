@@ -188,7 +188,16 @@ export const isWorldProjection = (type) => Object.hasOwn(MATH, String(type));
 // it is switched off: `globe: false` (the game never wraps this map round a 3D
 // globe: a flat sheet is not one) and `wrap: false` (the map does not repeat
 // sideways when the player pans past its edge).
+//
+// A world projection may be centred off Greenwich: `centre` is the longitude
+// down the middle of the sheet (Q-BAM's Robinson is centred on 10.75°E),
+// written only when it is not 0.
 const viewFlags = (raw) => ({ ...(raw.globe === false ? { globe: false } : {}), ...(raw.wrap === false ? { wrap: false } : {}) });
+const wrapLon = (lon) => ((((lon + 180) % 360) + 360) % 360) - 180;
+const centreOf = (raw) => {
+  const centre = wrapLon(Number(raw.centre) || 0);
+  return centre ? { centre } : {};
+};
 export const normalizeProjection = (value) => {
   const raw = typeof value === "string" ? { type: value } : value && typeof value === "object" && !Array.isArray(value) ? value : {};
   const type = String(raw.type ?? "").trim().toLowerCase().replace(/[\s_]+/g, "-");
@@ -196,7 +205,7 @@ export const normalizeProjection = (value) => {
     const aspect = Number(raw.aspect);
     return { type: FREEFORM, aspect: Number.isFinite(aspect) && aspect > 0 ? clamp(aspect, 0.05, 20) : 2, ...viewFlags(raw) };
   }
-  return { type: isWorldProjection(type) ? type : DEFAULT_PROJECTION, ...viewFlags(raw) };
+  return { type: isWorldProjection(type) ? type : DEFAULT_PROJECTION, ...centreOf(raw), ...viewFlags(raw) };
 };
 
 // What the game map is told of them.
@@ -209,7 +218,7 @@ export const mapViewOf = (projection) => {
 // switches on is what a map is when it says nothing.
 export const projectionIsDefault = (projection) => {
   const spec = normalizeProjection(projection);
-  return spec.type === DEFAULT_PROJECTION && spec.globe !== false && spec.wrap !== false;
+  return spec.type === DEFAULT_PROJECTION && !spec.centre && spec.globe !== false && spec.wrap !== false;
 };
 
 // Whether world.projection is a map already laid out (the game's own record)
@@ -219,7 +228,8 @@ export const projectionIsLaidOut = (value) => Boolean(value && typeof value === 
 export const sameProjection = (a, b) => {
   const left = normalizeProjection(a);
   const right = normalizeProjection(b);
-  return left.type === right.type && (left.type !== FREEFORM || abs(left.aspect - right.aspect) < 1e-6);
+  return left.type === right.type && abs((left.centre ?? 0) - (right.centre ?? 0)) < 1e-9
+    && (left.type !== FREEFORM || abs(left.aspect - right.aspect) < 1e-6);
 };
 
 // ---------------------------------------------------------------------------
@@ -261,19 +271,22 @@ export const sheetBounds = (projection) => {
   return { west: -east, south: -north, east, north };
 };
 
-// True longitude and latitude (degrees) to the plane, for a world projection.
-const geoToPlane = (type, lon, lat) => {
-  const [x, y] = MATH[type].forward(clamp(Number(lon) || 0, -180, 180) * RAD, clamp(Number(lat) || 0, -90, 90) * RAD);
+// True longitude and latitude (degrees) to the plane, for a world projection
+// (`spec` from normalizeProjection, so with its centre).
+const geoToPlane = ({ type, centre = 0 }, lon, lat) => {
+  const local = centre ? wrapLon((Number(lon) || 0) - centre) : clamp(Number(lon) || 0, -180, 180);
+  const [x, y] = MATH[type].forward(local * RAD, clamp(Number(lat) || 0, -90, 90) * RAD);
   return [x * SCALE[type], y * SCALE[type]];
 };
 
 // And back. A spot outside the projection's outline (the corners of a
 // Robinson or Mollweide sheet) has no place on the globe: it is given the
 // nearest one, on the edge.
-const planeToGeo = (type, X, Y) => {
+const planeToGeo = ({ type, centre = 0 }, X, Y) => {
   const half = HALF_HEIGHT[type];
   const [lambda, phi] = MATH[type].inverse(X / SCALE[type], clamp(Y, -half, half) / SCALE[type]);
-  return [clamp(lambda, -PI, PI) / RAD, clamp(phi, -PI / 2, PI / 2) / RAD];
+  const lon = clamp(lambda, -PI, PI) / RAD;
+  return [centre ? wrapLon(lon + centre) : lon, clamp(phi, -PI / 2, PI / 2) / RAD];
 };
 
 // One spot of the plane, moved from one projection's sheet to another's.
@@ -283,9 +296,9 @@ export const convertPlane = (from, to, X, Y) => {
   const source = normalizeProjection(from);
   const target = normalizeProjection(to);
   if (source.type !== FREEFORM && target.type !== FREEFORM) {
-    if (source.type === target.type) return [X, Y];
-    const [lon, lat] = planeToGeo(source.type, X, Y);
-    return geoToPlane(target.type, lon, lat);
+    if (sameProjection(source, target)) return [X, Y];
+    const [lon, lat] = planeToGeo(source, X, Y);
+    return geoToPlane(target, lon, lat);
   }
   const a = sheetHalf(source);
   const b = sheetHalf(target);
@@ -328,8 +341,22 @@ export const geoToDisplay = (projection, lon, lat) => {
     const Y = (clamp(Number(lat) || 0, -90, 90) / 90) * hy;
     return [round((X / PI) * 180), round(planeToLatDeg(Y))];
   }
-  const [X, Y] = geoToPlane(spec.type, lon, lat);
+  const [X, Y] = geoToPlane(spec, lon, lat);
   return [round((X / PI) * 180), round(planeToLatDeg(Y))];
+};
+
+// Where a picture drawn in a world projection lies on that projection's sheet
+// when it shows only part of the globe ({ west, south, east, north } in
+// degrees, west and east measured from the sheet's centre): bounds as stored.
+// Its sides are read on the equator and the central meridian, which is exact
+// for a crop by latitude in every projection here.
+export const geoBoxOnSheet = (projection, box) => {
+  const { type } = normalizeProjection(projection);
+  const [west] = geoToDisplay(type, box.west, 0);
+  const [east] = geoToDisplay(type, box.east, 0);
+  const [, north] = geoToDisplay(type, 0, box.north);
+  const [, south] = geoToDisplay(type, 0, box.south);
+  return normalizeImageBounds({ west, south, east, north });
 };
 
 // A stored place of a map in `projection`, back as its true longitude and
@@ -342,7 +369,7 @@ export const displayToGeo = (projection, lon, lat) => {
     const { hx, hy } = sheetHalf(spec);
     return [round(clamp(X / hx, -1, 1) * 180), round(clamp(Y / hy, -1, 1) * 90)];
   }
-  const [geoLon, geoLat] = planeToGeo(spec.type, X, Y);
+  const [geoLon, geoLat] = planeToGeo(spec, X, Y);
   return [round(geoLon), round(geoLat)];
 };
 
@@ -359,10 +386,12 @@ export const normalizeImageBounds = (value) => {
   const east = Number(value.east);
   const north = Number(value.north);
   if (![west, south, east, north].every(Number.isFinite)) return null;
+  // A little past ±180 is allowed: a hand-made world picture (Q-BAM) can draw
+  // its globe narrower than its frame, so the frame reaches past the edges.
   const bounds = {
-    west: clamp(west, -180, 180),
+    west: clamp(west, -360, 360),
     south: clamp(south, -MERCATOR_MAX_LAT, MERCATOR_MAX_LAT),
-    east: clamp(east, -180, 180),
+    east: clamp(east, -360, 360),
     north: clamp(north, -MERCATOR_MAX_LAT, MERCATOR_MAX_LAT),
   };
   if (!(bounds.east - bounds.west > 1e-6) || !(bounds.north - bounds.south > 1e-6)) return null;

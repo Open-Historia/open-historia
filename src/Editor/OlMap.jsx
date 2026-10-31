@@ -60,6 +60,9 @@ import { detailToleranceMeters, simplifyShared, toleranceAtLatitude } from "./si
 import { buildLandField, fitToImage } from "./fitToImage.js";
 import { readBackgroundPixels } from "./backgroundPixels.js";
 import { createEmpty as emptyExtent, extend as extendExtent } from "ol/extent";
+import { defaults as defaultInteractions } from "ol/interaction/defaults";
+import MouseWheelZoom from "ol/interaction/MouseWheelZoom";
+import ImageCanvasSource from "ol/source/ImageCanvas";
 import { buildPoliticalBoundaryTopology } from "../Game/Map/vnext/politicalBoundaryTopology.js";
 import { buildGroupAreaIndex, deriveGroupAreas } from "../Game/Map/vnext/groupAreas.js";
 import { getMarkerPresentation } from "../Game/Map/vnext/presentationPolicy.js";
@@ -83,7 +86,9 @@ import {
   unionAllGeoms,
   weldRegions,
   weldedGeometry,
+  splitAtX,
 } from "./geometry.js";
+import { crispWhenMagnified } from "./crispWhenMagnified.js";
 
 
 const BASEMAP_BG = {
@@ -602,9 +607,10 @@ const OlMap = ({
   onReady,
   customBackground = null,
   onCustomBackgroundSave,
-  // Tracing aid: { dataUrl, aspect, opacity, visible } — session-only, never
-  // exported. referenceAdjust turns on the move/resize frame; bumping
-  // referencePlaceNonce re-centers the image on the current view.
+  // Tracing aid: { dataUrl, aspect, opacity, visible, locked } — session-only,
+  // never exported. referenceAdjust turns on the move/resize frame; bumping
+  // referencePlaceNonce re-centers the image on the current view;
+  // onReferenceSnapped is told when it is laid exactly on the basemap.
   referenceImage = null,
   referenceAdjust = false,
   referencePlaceNonce = 0,
@@ -625,6 +631,7 @@ const OlMap = ({
   onWarShapeCreate,
   onWarShapeChange,
   onWarShapeRemove,
+  onReferenceSnapped,
 }) => {
   const containerRef = useRef(null);
   const mapRef = useRef(null);
@@ -666,6 +673,13 @@ const OlMap = ({
   const fitBackgroundsRef = useRef({ reference: null, picture: null, tiles: null });
   const referenceImageRef = useRef(referenceImage);
   referenceImageRef.current = referenceImage;
+  const refPlaceNonceSeenRef = useRef(referencePlaceNonce);
+  const refImageSourceRef = useRef(null);
+  const onReferenceSnappedRef = useRef(onReferenceSnapped);
+  onReferenceSnappedRef.current = onReferenceSnapped;
+  // Where the basemap picture lies and its shape, for laying a reference of
+  // the same map exactly on it.
+  const basemapPictureRef = useRef(null);
   const interactionsRef = useRef([]);
   const regionSnapRef = useRef(null);
   const undoStackRef = useRef([]);
@@ -1070,9 +1084,18 @@ const OlMap = ({
       (region) => isWaterType(typesByIdRef.current[region.get("typeId") || "land"]),
     );
 
+    // OpenLayers zooms a third of a level per mouse-wheel notch (300 wheel units
+    // a level; a notch is 100), so getting from the world to a province took
+    // about seventeen notches. One level a notch, as most map apps do, and the
+    // same rate the game map's MapLibre uses for a trackpad.
+    // shortcut: deltaPerZoom_ is private (OpenLayers has no option for it); if a
+    // later OpenLayers renames it, the wheel falls back to its own rate.
+    const wheelZoom = new MouseWheelZoom({ maxDelta: 2, duration: 180 });
+    wheelZoom.deltaPerZoom_ = 100;
     const map = new Map({
       target: containerRef.current,
       controls: defaultControls({ rotate: false }),
+      interactions: defaultInteractions({ mouseWheelZoom: false }).extend([wheelZoom]),
       layers: [regionLayer, regionOverlayLayer, ...war.layers, groupOutlineLayer, labelLayer, pointLayer, unitLayer, importPreviewLayer, paintPreviewLayer, topologyLayer, borderAssistLayer],
       view: new View({ center: fromLonLat([0, 20]), zoom: 2.1, minZoom: 1, maxZoom: 20 }),
     });
@@ -3038,9 +3061,12 @@ const OlMap = ({
       // (MapEditor convertProjection). `moveXY` takes and answers a spot in this
       // map's own units. It is not an undo step: the cities, the units and the
       // basemap move with it outside this stack, so the history is cleared.
-      transformRegions: (moveXY) => {
+      // `seamX`: where the move puts the map's edge, if it moves it. Regions
+      // across it are cut there first, so their two sides stay apart.
+      transformRegions: (moveXY, { seamX = null } = {}) => {
         const features = regionSource.getFeatures();
         for (const f of features) {
+          if (seamX != null && f.getGeometry()) f.setGeometry(splitAtX(f.getGeometry(), seamX));
           f.getGeometry()?.applyTransform((input, output, stride = 2) => {
             const out = output ?? input;
             for (let i = 0; i < input.length; i += stride) {
@@ -3985,19 +4011,29 @@ const OlMap = ({
     const imageExtent = imageBounds && !boundsFillSquare(imageBounds)
       ? transformExtent([imageBounds.west, imageBounds.south, imageBounds.east, imageBounds.north], "EPSG:4326", "EPSG:3857")
       : WORLD_EXTENT_3857;
-    const imageLayer = new ImageLayer({
+    const imageLayer = crispWhenMagnified(new ImageLayer({
       source: new ImageStatic({ url: bg.url, imageExtent, projection: "EPSG:3857" }),
-    });
+    }), imageExtent, bg.url);
     imageLayer.setZIndex(5);
     map.addLayer(imageLayer);
     const fitBackgrounds = fitBackgroundsRef.current;
     fitBackgrounds.picture = { kind: "image", url: bg.url, extent: imageExtent };
+    // Its shape is read from the picture: one restored from a saved map does
+    // not carry it.
+    const placed = { extent: imageExtent, aspect: null };
+    basemapPictureRef.current = placed;
+    const probe = new Image();
+    probe.onload = () => {
+      if (probe.naturalHeight) placed.aspect = probe.naturalWidth / probe.naturalHeight;
+    };
+    probe.src = bg.url;
     // Only fresh uploads write back into the document; a restored (persisted)
     // background is already in the doc/scenario, so don't re-dirty it on open.
     if (!bg.persisted) onCustomBackgroundSaveRef.current?.({ kind: "image", dataUrl: bg.dataUrl, ...(imageBounds ? { bounds: imageBounds } : {}) });
     return () => {
       map.removeLayer(imageLayer);
       fitBackgrounds.picture = null;
+      basemapPictureRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [customBackground]);
@@ -4014,9 +4050,21 @@ const OlMap = ({
       return undefined;
     }
 
-    // Place (or re-place, when the nonce bumps) at the view centre, spanning
-    // 60% of the visible width at the image's own aspect ratio.
-    if (!refImageExtentRef.current || referencePlaceNonce > 0) {
+    // A picture the same shape as the basemap picture (another Q-BAM) is a
+    // version of the same map: it is laid exactly on the basemap. Otherwise,
+    // or when "Center on view" bumps the nonce, it is placed at the view
+    // centre, spanning 60% of the visible width at its own aspect ratio.
+    const recentre = referencePlaceNonce !== refPlaceNonceSeenRef.current;
+    refPlaceNonceSeenRef.current = referencePlaceNonce;
+    const basemap = basemapPictureRef.current;
+    const sameShape = basemap?.aspect && referenceImage.aspect
+      && Math.abs(referenceImage.aspect / basemap.aspect - 1) < 0.01;
+    if (sameShape && !recentre) {
+      refImageExtentRef.current = [...basemap.extent];
+      // Laid exactly on the basemap: locked, so dragging pans the map instead
+      // of knocking it out of place (the player can unlock it in the panel).
+      if (referenceImage.locked === undefined) onReferenceSnappedRef.current?.();
+    } else if (!refImageExtentRef.current || referencePlaceNonce > 0) {
       const view = map.getView();
       const center = view.getCenter();
       const resolution = view.getResolution();
@@ -4031,9 +4079,32 @@ const OlMap = ({
       ];
     }
 
-    const layer = new ImageLayer({
-      source: new ImageStatic({ url: dataUrl, imageExtent: refImageExtentRef.current, projection: "EPSG:3857" }),
+    // Drawn from one decoded copy of the picture into whatever the map shows,
+    // so moving or resizing it only redraws: a new ImageStatic per mouse move
+    // decoded the whole picture again (a 5000px Q-BAM, dozens of times a
+    // second). Crisp when zoomed past its own pixels, as the basemap is.
+    const picture = new Image();
+    const source = new ImageCanvasSource({
+      projection: "EPSG:3857",
+      canvasFunction: (extent, _resolution, _pixelRatio, size) => {
+        const canvas = document.createElement("canvas");
+        canvas.width = size[0];
+        canvas.height = size[1];
+        const placed = refImageExtentRef.current;
+        if (!placed || !picture.naturalWidth) return canvas;
+        const scale = size[0] / (extent[2] - extent[0]);
+        const width = (placed[2] - placed[0]) * scale;
+        const height = (placed[3] - placed[1]) * scale;
+        const context = canvas.getContext("2d");
+        context.imageSmoothingEnabled = width <= picture.naturalWidth;
+        context.drawImage(picture, (placed[0] - extent[0]) * scale, (extent[3] - placed[3]) * scale, width, height);
+        return canvas;
+      },
     });
+    picture.onload = () => source.changed();
+    picture.src = dataUrl;
+    refImageSourceRef.current = source;
+    const layer = new ImageLayer({ source });
     layer.setZIndex(40);
     layer.setOpacity(referenceImage.visible === false ? 0 : (referenceImage.opacity ?? 0.5));
     map.addLayer(layer);
@@ -4051,6 +4122,7 @@ const OlMap = ({
       map.removeLayer(layer);
       refImageLayerRef.current = null;
       fitBackgrounds.reference = null;
+      refImageSourceRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [referenceImage?.dataUrl, referencePlaceNonce]);
@@ -4063,15 +4135,21 @@ const OlMap = ({
 
   // The adjust frame: a dashed outline + corner handles, and a pointer
   // interaction where dragging a corner resizes (opposite corner anchored,
-  // free aspect so a distorted source map can still be aligned) and dragging
-  // inside moves. Mounted only while the Reference panel is open, and added
-  // last so it wins the event race over the editing interactions.
+  // free aspect so a distorted source map can still be aligned; Shift keeps
+  // the picture's shape) and dragging inside moves. Mounted only while the
+  // Reference panel is open, and added last so it wins the event race over
+  // the editing interactions. Locked, it is only an outline and every drag
+  // pans the map: a reference laid over the whole basemap covers the whole
+  // map, and unlocked it caught every drag.
   useEffect(() => {
     const map = mapRef.current;
     const dataUrl = referenceImage?.dataUrl;
     if (!map || !dataUrl || !referenceAdjust) return undefined;
+    const locked = referenceImage?.locked === true;
 
-    const frameSource = new VectorSource();
+    // wrapX off, as every other editor layer: otherwise the frame is drawn
+    // again on the world copy beside it.
+    const frameSource = new VectorSource({ wrapX: false });
     refImageFrameSourceRef.current = frameSource;
     const frameLayer = new VectorLayer({
       source: frameSource,
@@ -4102,38 +4180,43 @@ const OlMap = ({
       frameSource.clear();
       if (!extent) return;
       frameSource.addFeature(new Feature({ geometry: polygonFromExtent(extent) }));
+      if (locked) return;
       for (const corner of cornersOf(extent)) {
         frameSource.addFeature(new Feature({ geometry: new Point(corner) }));
       }
     };
-    const refreshImage = () => {
-      refImageLayerRef.current?.setSource(
-        new ImageStatic({ url: dataUrl, imageExtent: refImageExtentRef.current, projection: "EPSG:3857" }),
-      );
-    };
     redrawFrame();
 
-    let drag = null; // { mode: "move", last } | { mode: "resize", anchor }
+    // What a pointer at `pixel` would grab: a corner (to resize) or the
+    // picture (to move), or nothing.
+    const grabAt = (pixel, coordinate) => {
+      const extent = refImageExtentRef.current;
+      if (!extent || locked) return null;
+      const corners = cornersOf(extent);
+      for (let index = 0; index < corners.length; index += 1) {
+        const corner = map.getPixelFromCoordinate(corners[index]);
+        if (Math.hypot(corner[0] - pixel[0], corner[1] - pixel[1]) <= 12) return { mode: "resize", index };
+      }
+      const [x, y] = coordinate;
+      return x >= extent[0] && x <= extent[2] && y >= extent[1] && y <= extent[3] ? { mode: "move" } : null;
+    };
+    // Corners 0 and 2 are bottom-left and top-right; 1 and 3 the other diagonal.
+    const cursorFor = (grab) => (grab.mode === "move" ? "move" : grab.index % 2 === 0 ? "nesw-resize" : "nwse-resize");
+
+    let drag = null; // { mode: "move", last } | { mode: "resize", anchor, aspect }
     const interaction = new PointerInteraction({
       handleDownEvent: (event) => {
+        const grab = grabAt(event.pixel, event.coordinate);
+        if (!grab) return false;
         const extent = refImageExtentRef.current;
-        if (!extent) return false;
-        const corners = cornersOf(extent);
-        for (let index = 0; index < corners.length; index += 1) {
-          const pixel = map.getPixelFromCoordinate(corners[index]);
-          const dx = pixel[0] - event.pixel[0];
-          const dy = pixel[1] - event.pixel[1];
-          if (Math.sqrt(dx * dx + dy * dy) <= 11) {
-            drag = { mode: "resize", anchor: corners[(index + 2) % 4] };
-            return true;
-          }
-        }
-        const [x, y] = event.coordinate;
-        if (x >= extent[0] && x <= extent[2] && y >= extent[1] && y <= extent[3]) {
-          drag = { mode: "move", last: event.coordinate };
-          return true;
-        }
-        return false;
+        drag = grab.mode === "move"
+          ? { mode: "move", last: event.coordinate }
+          : {
+              mode: "resize",
+              anchor: cornersOf(extent)[(grab.index + 2) % 4],
+              aspect: (extent[2] - extent[0]) / (extent[3] - extent[1]),
+            };
+        return true;
       },
       handleDragEvent: (event) => {
         const extent = refImageExtentRef.current;
@@ -4146,19 +4229,20 @@ const OlMap = ({
         } else {
           const [ax, ay] = drag.anchor;
           const [cx, cy] = event.coordinate;
-          // A collapsed extent breaks ImageStatic — enforce a minimum edge.
+          // A collapsed extent draws nothing: enforce a minimum edge.
           const minEdge = map.getView().getResolution() * 8;
-          const x1 = Math.min(ax, cx);
-          const y1 = Math.min(ay, cy);
-          refImageExtentRef.current = [
-            x1,
-            y1,
-            Math.max(Math.max(ax, cx), x1 + minEdge),
-            Math.max(Math.max(ay, cy), y1 + minEdge),
-          ];
+          let width = Math.max(Math.abs(cx - ax), minEdge);
+          let height = Math.max(Math.abs(cy - ay), minEdge);
+          if (event.originalEvent?.shiftKey) {
+            if (width / height > drag.aspect) width = height * drag.aspect;
+            else height = width / drag.aspect;
+          }
+          const x2 = ax + (cx >= ax ? width : -width);
+          const y2 = ay + (cy >= ay ? height : -height);
+          refImageExtentRef.current = [Math.min(ax, x2), Math.min(ay, y2), Math.max(ax, x2), Math.max(ay, y2)];
         }
         redrawFrame();
-        refreshImage();
+        refImageSourceRef.current?.changed();
       },
       handleUpEvent: () => {
         drag = null;
@@ -4167,13 +4251,24 @@ const OlMap = ({
     });
     map.addInteraction(interaction);
 
+    // Added after the map's own pointermove (which sets the tool's cursor), so
+    // over the picture this one has the last word.
+    const showCursor = (event) => {
+      if (event.dragging) return;
+      const grab = grabAt(event.pixel, event.coordinate);
+      if (grab) map.getTargetElement().style.cursor = cursorFor(grab);
+    };
+    map.on("pointermove", showCursor);
+
     return () => {
+      map.un("pointermove", showCursor);
+      map.getTargetElement().style.cursor = "";
       map.removeInteraction(interaction);
       map.removeLayer(frameLayer);
       refImageFrameSourceRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [referenceAdjust, referenceImage?.dataUrl]);
+  }, [referenceAdjust, referenceImage?.dataUrl, referenceImage?.locked]);
 
   return <div ref={containerRef} style={{ position: "absolute", inset: 0 }} />;
 };

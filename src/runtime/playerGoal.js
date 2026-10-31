@@ -27,6 +27,28 @@ export const PLAYER_GOAL_MAX_CHARS = 600;
 const asText = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const fold = (value) => asText(value).toLowerCase();
 
+// How far the goal has come (gameplay.js assessGoalProgress): a 0-100 reading
+// with what was reached, what is in the way and what to do next, dated, so
+// the panel can say how old it is. The previous score is kept for the trend.
+const lines = (value, max) => (Array.isArray(value) ? value : []).map((line) => asText(line).slice(0, 200)).filter(Boolean).slice(0, max);
+export const normalizeGoalProgress = (value) => {
+  if (!value || typeof value !== "object") return null;
+  const score = Number(value.progress);
+  if (!Number.isFinite(score)) return null;
+  const previous = Number(value.previous);
+  const round = Number(value.round);
+  return {
+    progress: Math.max(0, Math.min(100, Math.round(score))),
+    ...(Number.isFinite(previous) ? { previous: Math.max(0, Math.min(100, Math.round(previous))) } : {}),
+    summary: asText(value.summary).slice(0, 600),
+    achieved: lines(value.achieved, 5),
+    obstacles: lines(value.obstacles, 4),
+    nextSteps: lines(value.nextSteps, 3),
+    asOf: asText(value.asOf),
+    ...(Number.isFinite(round) && round > 0 ? { round } : {}),
+  };
+};
+
 export const normalizePlayerGoals = (value) => {
   const out = {};
   if (!value || typeof value !== "object" || Array.isArray(value)) return out;
@@ -35,13 +57,33 @@ export const normalizePlayerGoals = (value) => {
     const text = asText(typeof entry === "string" ? entry : entry?.text).slice(0, PLAYER_GOAL_MAX_CHARS);
     if (!name || !text) continue;
     const round = Number(entry?.round);
+    const progress = normalizeGoalProgress(entry?.progress);
     out[name] = {
       text,
       ...(Number.isFinite(round) && round > 0 ? { round } : {}),
       ...(asText(entry?.date) ? { date: asText(entry.date) } : {}),
+      ...(progress ? { progress } : {}),
     };
   }
   return out;
+};
+
+// The player's goal record ({ text, progress? }), or null.
+export const playerGoalEntryOf = (world, player) => {
+  const goals = normalizePlayerGoals(world?.playerGoals);
+  const key = Object.keys(goals).find((name) => fold(name) === fold(player));
+  return key ? goals[key] : null;
+};
+
+// The world with a new reading on the player's goal. A reading for a goal
+// that has since been reworded is dropped: it judged something else.
+export const withGoalProgress = (world, player, goalText, reading) => {
+  const goals = normalizePlayerGoals(world?.playerGoals);
+  const key = Object.keys(goals).find((name) => fold(name) === fold(player));
+  if (!key || goals[key].text !== asText(goalText)) return world;
+  const progress = normalizeGoalProgress({ ...reading, previous: goals[key].progress?.progress });
+  if (!progress) return world;
+  return { ...world, playerGoals: { ...goals, [key]: { ...goals[key], progress } } };
 };
 
 // The goal the player's polity is steering toward, or "".
@@ -59,7 +101,9 @@ export const withPlayerGoal = (world, player, text, { round = 0, date = "" } = {
   const key = Object.keys(goals).find((existing) => fold(existing) === fold(name)) ?? name;
   const wording = asText(text).slice(0, PLAYER_GOAL_MAX_CHARS);
   const next = { ...goals };
-  if (wording) next[key] = { text: wording, ...(round > 0 ? { round } : {}), ...(asText(date) ? { date: asText(date) } : {}) };
+  // The same goal keeps its reading; a reworded one starts again.
+  const kept = goals[key]?.text === wording && goals[key]?.progress ? { progress: goals[key].progress } : {};
+  if (wording) next[key] = { text: wording, ...(round > 0 ? { round } : {}), ...(asText(date) ? { date: asText(date) } : {}), ...kept };
   else delete next[key];
   return { ...world, playerGoals: next };
 };

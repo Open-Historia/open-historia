@@ -2151,6 +2151,9 @@ export const buildPromptContext = async (bundle, {
   if (hostingSharedGame() && (taskKey === "jumpForward" || taskKey === "autoJumpForward")) {
     result.seatAdviceDirective = buildSeatAdviceDirective(humanCountriesOf(bundle.game), bundle.world);
   }
+  // Some polity's parties are tracked (runtime/politics.js): the turn may move
+  // them, so its tool asks for partyOps (gameplaySchemas.js withPartyOps).
+  if (Object.keys(bundle.world?.politics && typeof bundle.world.politics === "object" ? bundle.world.politics : {}).length) result.partiesTracked = "yes";
   if (wants("playerPolityRegions")) {
     result.playerPolityRegions = await buildPlayerPolityRegionsText(
       bundle,

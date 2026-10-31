@@ -206,6 +206,7 @@ import {
   validateGameplayPayload,
   withEventAudience,
   withFrontOrders,
+  withPartyOps,
   withIntelligenceRating,
   withoutGroupOps,
 } from "./gameplaySchemas.js";
@@ -233,7 +234,7 @@ import { editDistance, foldRegionKey, matchRegionName, stripRegionAffixes } from
 import { describeUndeployedPost, isMilitaryPost, postWantsFormation } from "./militaryPosts.js";
 import { findUnitByRef, newestTwinByRef, readNameRef, stripKindTags } from "./nameRefs.js";
 import { areaRegionsFor, buildAreaIndex, findArea, readAreaName } from "./namedAreas.js";
-import { CAPTURE_REACH_KM, findNarratedCaptures, mayNarrateCapture } from "./narratedCapture.js";
+import { CAPTURE_REACH_KM, findNarratedCaptures, mayNarrateCapture, statedAnnexations, statesCapture } from "./narratedCapture.js";
 import { EVENT_PLACES_RULE, findEventPlace, findEventPlaces, readEventPlace } from "./eventPlaces.js";
 import { normalizeEventPlaces } from "../../runtime/eventPlaces.js";
 import { describeTravelPace, eraOf, seaShareOf } from "../../runtime/unitMotion.js";
@@ -277,6 +278,7 @@ import {
   unassessedHighPriorityEntries,
 } from "../../runtime/projects.js";
 import { activeSpies, applySpyOps, espionageBrief, intelligenceOf, isIntelligenceRated, normalizeIntelligenceRating, normalizeIntercepts, normalizeSpies, planCovertOperations, redactText, resolveEspionage, signalClarity } from "../../runtime/spycraft.js";
+import { applyPartyOps, describePoliticsForPrompt, ideologyListText, leadersAfterGovernmentChange, normalizePoliticalLandscape } from "../../runtime/politics.js";
 import { buildSpyOrdersDirective } from "./spyOrdersDirective.js";
 import { collectionOrders, covertOperationsBlock, untracedTargets } from "./covertOperationsDirective.js";
 import { AGENT_REPORT_EVERY_ROUNDS, agentsDueToReport, agentsReportingWithSkip } from "./agentReports.js";
@@ -487,7 +489,7 @@ import {
 import { resolveInstitutionRecord } from "../../runtime/institutions.js";
 import { buildOpenInstitutionalMandatesBlock, consumeEventInstitutionMandates } from "../../runtime/institutionalAuthority.js";
 import { gmChangesForRound, normalizeReminders, recordGmChange, renderGmChangeNarration, renderReminders } from "../../runtime/gmChanges.js";
-import { describeGoalForSimulation, describeGoalForSuggestions, playerGoalOf } from "../../runtime/playerGoal.js";
+import { describeGoalForSimulation, describeGoalForSuggestions, playerGoalEntryOf, playerGoalOf, withGoalProgress } from "../../runtime/playerGoal.js";
 import { createSkipPhases, describeReviewJobs, formatSkipPhases } from "./skipPhases.js";
 import { createStreamedEventReader } from "./streamedEvents.js";
 import { deliveryEventId, documentExchange, documentNote, documentNotices, isDocumentExchange, markIntercepted, planReportDeliveries, withoutOrphanedDocuments, withoutOrphanedNotices } from "../../runtime/reportDelivery.js";
@@ -649,7 +651,7 @@ const buildWarLedgerDirective = (variables) => {
   return `[Wars]
 ${canonicalWarContext || "No wars are recorded."}
 Only this ledger makes polities belligerents: tension or a mobilisation does not, and an alliance does only through the game, which itself enters here those bound to defend a country that is attacked (see ${PEACE_BLOCK_HEADING} below). A war real history holds begins here only when you open it, with a warUpdates record and the event that starts it. Every battle, offensive, invasion, bombardment, siege or front carries event.warId and event.combatants naming both sides. If you write fighting, open the war in the same answer: a declaration, an entry, an exit, a ceasefire, a resumption or a peace each needs a warUpdates record and an event carrying the same warId, or the engine strips the war from the fighting and records peace. Two sides genuinely trading blows are at war; if you cannot say who is fighting whom, it is unrest, a raid or a deployment, so write it as that. A polity at peace does not live under war conditions — rationing, war taxes, mobilisation — because others are fighting, unless the war reaches it through something concrete (lost imports, refugees, sanctions). Nobody may join a war on ${playerName}'s behalf; another power declaring war on ${playerName} is that power's decision, and yours to write.
-warUpdates is one string, one record per line, fields separated by ~ (never inside a field): warId~op~actorsCSV~opponentsCSV~eventNumbersCSV~note. op is start, join-a, join-b, leave, ceasefire, resume or end; for start the actors are side A and the opponents side B; for join and leave the actors are the polities joining or leaving; eventNumbersCSV may be blank. A start's note may open with the war's name, as Title: <name>; then its cause. Give a war a stable id (war-france-germany-1914) and reuse it. An empty string when nothing changes.`;
+warUpdates is one string, one record per line, fields separated by ~ (never inside a field): warId~op~actorsCSV~opponentsCSV~eventNumbersCSV~note. op is start, join-a, join-b, leave, ceasefire, resume or end; for start the actors are side A and the opponents side B; for join and leave the actors are the polities joining or leaving, and for a join the opponents are the polities it fights (join-a joins SIDE A, against SIDE B); eventNumbersCSV may be blank. A start's note may open with the war's name, as Title: <name>; then its cause. Give a war a stable id (war-france-germany-1914) and reuse it. An empty string when nothing changes.`;
 };
 
 const buildDiplomaticLedgerDirective = (variables) => {
@@ -668,6 +670,8 @@ A relation is the lasting political climate between two polities — friendly, c
 relationUpdates is one string, one record per line: A~B~score~status~eventNumbersCSV~summary — the new absolute score from -100 to 100, status blank to derive it from the score — only when an event changes the climate, never because time passed. agreementUpdates is one string, one record per line: agreementId~op~type~partiesCSV~eventNumbersCSV~title~terms, where op is start, update, suspend, resume, end or expire, and type is alliance, mutual_defense, guarantee, non_aggression, friendship_consultation, trade_economic, military_cooperation, military_access, neutrality, peace_settlement or other; give it a stable id (franco-russian-alliance-1894) and reuse it; only start needs the type, parties and title. Every record needs an event that causes it; eventNumbersCSV may be blank.
 puppetUpdates is one string, one record per line: op~overlord~puppet~kind~loyalty~secrecy~eventNumbersCSV~note, for one polity directing another's will while it stays a separate country with its own land. op is install, reclassify (a new kind), loyalty (move the score), reveal (covert becomes open, for good), release, annex, revolt (thrown off) or suppress (a rising crushed; loyalty forced up, the overlord's reputation down). kind is protectorate (surrenders foreign policy), satellite (formal sovereignty, no real independence) or client (a bought or installed government) — which powers the overlord holds, not how tightly; loyalty is 0-100; secrecy is open or covert; only install needs kind, loyalty and secrecy. A polity has one overlord at most, and a puppet holds no puppets of its own. A puppet is a separate country with its own interests: it may refuse its overlord, loyalty says how likely that is, and a puppet whose loyalty has collapsed may rise (revolt) or be crushed (suppress) — unrest an overlord with an agent inside it or a strong service would see coming. The engine already charges an overlord's reputation for annexing its own puppet and a puppet's loyalty for refusing a demand in a chat; do not charge either again. A covert puppet acts as a fully independent country toward everyone outside the arrangement.
 Any event that makes one polity the puppet, vassal, protectorate, satellite, client state or tributary of another — by treaty, surrender terms, an installed government, a forced submission, or the player's own order succeeding — carries the matching install line, with that event's number; a polity founded in the same event as someone's puppet is installed there too. An event that frees, annexes or sees a puppet throw off its overlord carries release, annex or revolt the same way. Without the line the story says it and the world never records it: the overlord has no puppet.
+A deal both sides accepted in a chat is an agreement from the moment it is made: the event that reports it carries an agreementUpdates start, unless the ledger above already has it, with the terms written out in full — what each side does and by when. Chats fade from view after a while; the ledger does not, so a deal left out of it is forgotten.
+The terms of an active agreement are commitments. One that promises something still to happen (a hand-over or annexation, a withdrawal, a payment, a delivery, a vote, a meeting) happens when it falls due, in an event with the operations that make it real (a regionTransfers entry for land, a unitOps move for troops), or an event says why it did not and the agreement is suspended or ended with a record. Never let a due term pass in silence. Once every term is carried out, an update records it in the terms.
 Empty strings when nothing changes.`;
 };
 
@@ -2711,9 +2715,9 @@ const JUMP_LIVE_STATE_BANNER = [
 // Master's contract without the lines that teach them, built once.
 // Fronts on (frontsGate.js): a time skip's tool with the battlefields' orders
 // in it (gameplaySchemas.js withFrontOrders).
-const forActiveFeatures = (tool) => {
+const forActiveFeatures = (tool, { parties = false } = {}) => {
   const grouped = isActiveFeatureEnabled("groups") ? tool : withoutGroupOps(tool);
-  const shown = withEventAudience(grouped, hostingSharedGame());
+  const shown = withPartyOps(withEventAudience(grouped, hostingSharedGame()), parties);
   return frontsOn() ? withFrontOrders(shown) : shown;
 };
 let gameMasterPromptNoGroups = null;
@@ -2880,6 +2884,9 @@ ${brief}`);
 Write spiesOnPlayer: the polities, by exact name and comma-separated, that would really try to place an agent in ${spiedOn} this period. Choose them as the world stands: enemies and rivals, powers with a real stake in ${spiedOn}'s affairs, a patron keeping watch on a client. A polity with no reason to, no reach, or no intelligence service to speak of sends nobody. An empty string when none would.`);
     }
   }
+
+  const parties = describePoliticsForPrompt(world.politics, { date: normalizeString(game?.gameDate) });
+  if (parties) blocks.push(parties);
 
   try {
     const reportsOnFile = describeReportsForPrompt(world.reports);
@@ -3619,7 +3626,7 @@ const runJsonTask = async (taskKey, {
   if (!sync && typeof onBatchResult === "function" && batchBackgroundTasksEnabled()) {
     const batchTool = forActiveFeatures(customFullStatSheet
       ? getGameplayToolForCustomStatSheet(taskKey, customStatRows, { custom: true })
-      : getGameplayToolForStatIndices(taskKey, statIndexRows, { custom: customStatIndices }));
+      : getGameplayToolForStatIndices(taskKey, statIndexRows, { custom: customStatIndices }), { parties: Boolean(variables?.partiesTracked) });
     if (batchTool && providerSupportsBatch(taskKey)) {
       const customId = `oh_${taskKey}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`.slice(0, 64);
       const submitted = await submitAIBatch({
@@ -3670,7 +3677,7 @@ const runJsonTask = async (taskKey, {
   );
   const featureTool = forActiveFeatures(customFullStatSheet
     ? getGameplayToolForCustomStatSheet(taskKey, customStatRows, { custom: true })
-    : getGameplayToolForStatIndices(taskKey, statIndexRows, { custom: customStatIndices }));
+    : getGameplayToolForStatIndices(taskKey, statIndexRows, { custom: customStatIndices }), { parties: Boolean(variables?.partiesTracked) });
   // The players' advice, asked of the time skip whose prompt asks for it.
   const taskTool = JUMP_TASK_KEYS.has(taskKey) && normalizeString(variables?.seatAdviceDirective) ? withSeatAdvice(featureTool) : featureTool;
   // A first reading's sheet can carry the service's rating, in the same request
@@ -7553,6 +7560,49 @@ const completeNarratedCaptures = async (containers, world, { receipt = null, ren
   return added;
 };
 
+// A whole polity an event says was annexed ("Indonesia formally annexes
+// Timor-Leste"), with no transfer written for it (#798). A time skip is one
+// request and is never sent back, so the transfer the words state is written
+// here, as a wholeCountry transfer the resolver below expands to every region
+// the annexed polity holds. Both must be powers on the map, and the event must
+// carry no transfer of its own from the annexed one. Mutates the events'
+// impacts; returns how many were added.
+const completeNarratedAnnexations = async (containers, { receipt = null, lookupContext } = {}) => {
+  const pending = normalizeArray(containers).filter(({ event, impacts }) => impacts && typeof impacts === "object"
+    && /\b(annex|incorporated|absorbed)/i.test(normalizeString(event?.description)));
+  if (!pending.length) return 0;
+  let context;
+  try {
+    context = await lookupContext();
+  } catch (error) {
+    console.warn("[narrated annexation] the map could not be read; nothing was added.", error);
+    return 0;
+  }
+  const powers = [...context.ownerRows.keys()];
+  let added = 0;
+  for (const { event, impacts, path } of pending) {
+    for (const { annexer, annexed, sentence } of statedAnnexations(normalizeString(event?.description), powers)) {
+      const from = context.resolveOwner(annexed);
+      const to = context.resolveOwner(annexer);
+      if (!from || !to || !context.ownerRows.get(from)?.length) continue;
+      const already = normalizeArray(impacts.regionTransfers).some((transfer) =>
+        [transfer?.fromCode, transfer?.regionId].some((value) => context.resolveOwner(normalizeString(value).replace(/^country:\s*/i, "")) === from));
+      if (already) continue;
+      impacts.regionTransfers = [...normalizeArray(impacts.regionTransfers), {
+        regionId: `country: ${from}`, fromCode: from, toCode: to, wholeCountry: true, basis: "annexation",
+        note: `Annexed, as the event tells: ${from} into ${to}.`,
+      }];
+      added += 1;
+      const title = normalizeString(event?.title);
+      noteReceipt(receipt, "adjusted",
+        `${title ? `Event "${title}": ` : ""}the text says ${to} annexed ${from}, but it carried no transfer, so every region ${from} held was given to ${to}. `
+        + "Write the regionTransfers entry yourself for every annexation an event tells of.");
+      console.info(`[narrated annexation] ${path}: ${from} -> ${to}, from "${sentence}".`);
+    }
+  }
+  return added;
+};
+
 // A REGION AN EVENT SAYS WAS TAKEN, AWAY FROM ANY BATTLEFIELD. "make sure the
 // simulation ai is able to say that a region is taken by an army which causes
 // the nearest troops to move accordingly so when that event happens, the region
@@ -7963,6 +8013,14 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
 
   // The map read at most once for the whole pass (createRenderedRegionsReader).
   const renderedRegions = createRenderedRegionsReader();
+  // The map's names, read at most once for everything below that asks.
+  const lookupContext = lazyLookupContext({ world }, { renderedRegions });
+  // An annexation the text states and no transfer carries is written before the
+  // transfers are resolved, so it is expanded like any other. Only on the answer
+  // that is kept: an attempt that can still be sent back is told instead.
+  if (!strict && captureGuard && !resolvedRegionIdsOnly && Array.isArray(candidate?.events)) {
+    await completeNarratedAnnexations(containers, { receipt, lookupContext });
+  }
   const unresolvedTransfers = await resolveRegionTransfers(containers, world, {
     ownershipMode: "sovereignty",
     exactRegionIdsOnly: resolvedRegionIdsOnly,
@@ -7995,8 +8053,6 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
   // that cannot be found is said in the receipt, and the operation keeps any
   // coordinates it came with. Not on the Game Master's apply-time pass, which
   // may not reopen the map's geometry: its preview already placed everything.
-  // The map's names, read at most once for everything below that asks.
-  const lookupContext = lazyLookupContext({ world }, { renderedRegions });
   if (!resolvedRegionIdsOnly) await resolvePlacements(containers, world, { receipt, renderedRegions, lookupContext });
   // A capture the text states and the event's own formation shows, with no
   // control operation written for it, is finished here. Only on the answer
@@ -8052,6 +8108,31 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
       const legalEvent = candidate.events.find((event) => LEGAL_TRANSFER_LANGUAGE.test(text(event)));
       if (legalEvent) {
         return `Your events describe a legal territorial settlement (e.g. "${normalizeString(legalEvent.title) || "an event"}") but the payload contains ZERO impacts.regionTransfers. Either add the matching legal transfers (one per region as "region: <name>", or regionId "country: <name>" for a total annexation/unification) or rewrite the event so that no sovereignty changed.`;
+      }
+    }
+    // The same, event by event: one event's operations do not cover another
+    // event that states a capture or an annexation and carries none (#893,
+    // #798). Read on the description only, which states it as a fact.
+    for (const { event, impacts } of containers) {
+      const title = normalizeString(event?.title) || "an event";
+      const description = normalizeString(event?.description);
+      const ownTerritory = normalizeArray(impacts?.regionControlOps).length + normalizeArray(impacts?.regionTransfers).length
+        + normalizeArray(impacts?.groupOps).filter((op) => normalizeArray(op?.regionIds).length).length;
+      const captured = ownTerritory === 0 ? statesCapture(description) : null;
+      if (captured) {
+        return `The event "${title}" states a capture ("${captured}") but carries no territory operation of its own. Either add the regionControlOps control entry to THAT event (regionId "region: <name>" as the map spells it, fromCode = the current controller) or rewrite the sentence so that no place changed hands.`;
+      }
+      if (normalizeArray(impacts?.regionTransfers).length === 0 && /\b(annex|incorporated|absorbed)/i.test(description)) {
+        let powers = [];
+        try {
+          powers = [...(await lookupContext()).ownerRows.keys()];
+        } catch {
+          powers = [];
+        }
+        const annexation = statedAnnexations(description, powers)[0];
+        if (annexation) {
+          return `The event "${title}" states that ${annexation.annexer} annexed ${annexation.annexed} but carries no regionTransfers. Either add the transfer to THAT event (regionId "country: ${annexation.annexed}", fromCode "${annexation.annexed}", toCode "${annexation.annexer}", wholeCountry true, basis "annexation") or rewrite it so that no sovereignty changed.`;
+        }
       }
     }
   }
@@ -9778,6 +9859,22 @@ const applySimulationResult = async ({
     for (const entry of outcome.applied) {
       if (entry.op === "deploy") void ensureCountryAssessed(entry.target, { reason: "agent deployed by order" });
     }
+  }
+  // The parties' changes, carried by the events that made them
+  // (impacts.partyOps, runtime/politics.js). Only compiled lists move.
+  const partyOps = normalizeArray(freshEvents).flatMap((event) => normalizeArray(event?.impacts?.partyOps));
+  if (partyOps.length) {
+    const outcome = applyPartyOps(worldWithImpacts.politics, partyOps, { date: nextGame.gameDate });
+    const leaders = leadersAfterGovernmentChange(worldWithImpacts.politics, outcome.politics, worldWithImpacts.countryStats);
+    worldWithImpacts.politics = outcome.politics;
+    if (leaders.changed.length) {
+      worldWithImpacts.countryStats = leaders.countryStats;
+      logDebugEvent("politics", `Stat sheet leader updated: ${leaders.changed.map((entry) => `${entry.polity} ${entry.from} -> ${entry.to}`).join(", ")}`);
+    }
+    if (outcome.applied.length) {
+      logDebugEvent("politics", `Party changes applied: ${outcome.applied.map((entry) => `${entry.op} ${entry.party || entry.changes?.nameEn || ""} (${entry.polity})`).join(", ")}`);
+    }
+    for (const skipped of outcome.rejected) logDebugEvent("politics", `Party change skipped: ${skipped.reason}`, { op: skipped.op });
   }
   const spySync = [
     // Order matters: provenance first, so an entry stamped this turn can be
@@ -14361,6 +14458,88 @@ export const pendingCountryStatSheet = (target) => {
 // asks on its own when the sheet's answer did not carry a usable rating.
 export const ensureCountryAssessed = (target, options = {}) =>
   ensureCountryStatSheet(target, { ...options, rateIntelligence: true }).then(() => ensureIntelligenceRated(target, options));
+
+// The Politics tab's government and parties for one polity, asked for by the
+// player (runtime/politics.js). It replaces whatever entry the polity had: a
+// refresh is a fresh reading; between readings turns move it (impacts.partyOps).
+export const assessPoliticalLandscape = async (target, { signal } = {}) => {
+  const name = normalizeString(target);
+  if (!name) return null;
+  const campaign = activeCampaignId();
+  await waitForSimulationIdle({ signal });
+  const bundle = await readGameStateBundle({ force: true });
+  const world = normalizeWorldState(bundle.world);
+  const variables = {
+    ...(await buildTemplateVariables(bundle, { taskKey: "politicalLandscape" })),
+    targetPolity: name,
+  };
+  const dossier = await buildTargetDossier(bundle, name, world);
+  const era = normalizeString(world.simulationRules).slice(0, 700);
+  const sheet = world.countryStats?.[name];
+  const previous = world.politics?.[name];
+  const { payload } = await runJsonTask("politicalLandscape", {
+    signal,
+    userMessage: [
+      `Describe the government and the main parties of ${name} as they stand on ${variables.date || "the current date"}.`,
+      era ? `ERA & WORLD RULES:\n${era}` : "",
+      `TARGET DOSSIER:\n${dossier || "(nothing recorded)"}`,
+      sheet ? `STAT SHEET: government ${normalizeString(sheet.government) || "unknown"}; leader ${normalizeString(sheet.leader) || "unknown"}; stability ${sheet.stability ?? "unknown"}/100.` : "",
+      previous ? `PREVIOUS READING (${previous.asOf || "undated"}; keep what the events since have not changed):\n${JSON.stringify(previous.parties.map(({ nameEn, ideology, subideology, leader, role, seats, support }) => ({ nameEn, ideology, subideology, leader, role, seats, support })))}` : "",
+      `IDEOLOGIES AND THEIR SUBIDEOLOGIES:\n${ideologyListText()}`,
+    ].filter(Boolean).join("\n\n"),
+    variables,
+  });
+  const entry = normalizePoliticalLandscape({ ...payload, asOf: variables.date || "" });
+  if (!entry) throw new Error("The answer named no government and no parties.");
+  // Re-read at write time, as assessIntelligenceService does: a turn may have
+  // run, and the campaign in front of the player may have changed.
+  await waitForSimulationIdle({ signal });
+  throwIfAborted(signal);
+  if (activeCampaignId() !== campaign) throw new Error("The campaign changed while the parties were being compiled.");
+  await mutateWorldState((latest) => ({ ...latest, politics: { ...(latest?.politics ?? {}), [name]: entry } }));
+  return entry;
+};
+
+// How far the player's standing goal has come (runtime/playerGoal.js), read on
+// demand from the Actions panel and kept with the goal. Out of turn, like the
+// parties above: it waits for the simulation and re-reads before it writes.
+export const assessGoalProgress = async ({ signal } = {}) => {
+  const campaign = activeCampaignId();
+  await waitForSimulationIdle({ signal });
+  const bundle = await readGameStateBundle({ force: true });
+  const world = normalizeWorldState(bundle.world);
+  const player = normalizeString(bundle.game?.country);
+  const goal = playerGoalEntryOf(world, player);
+  if (!goal) throw new Error("There is no standing goal to assess.");
+  const variables = {
+    ...(await buildTemplateVariables(bundle, { taskKey: "goalProgress" })),
+    goalText: goal.text,
+  };
+  const dossier = await buildTargetDossier(bundle, player, world);
+  const sheet = world.countryStats?.[player];
+  const previous = goal.progress;
+  const { payload } = await runJsonTask("goalProgress", {
+    signal,
+    userMessage: [
+      `Assess how far ${player} has come toward its standing goal on ${variables.date || "the current date"}: "${goal.text}".`,
+      `${player.toUpperCase()} DOSSIER:\n${dossier || "(nothing recorded)"}`,
+      sheet ? `STAT SHEET:\n${JSON.stringify(sheet).slice(0, 2500)}` : "",
+      previous ? `PREVIOUS READING (${previous.asOf || "undated"}): ${previous.progress}/100. ${previous.summary}` : "",
+    ].filter(Boolean).join("\n\n"),
+    variables,
+  });
+  await waitForSimulationIdle({ signal });
+  throwIfAborted(signal);
+  if (activeCampaignId() !== campaign) throw new Error("The campaign changed while the goal was being assessed.");
+  let next = null;
+  await mutateWorldState((latest) => {
+    const fresh = normalizeWorldState(latest);
+    next = withGoalProgress(fresh, player, goal.text, { ...payload, asOf: variables.date || "", round: bundle.game?.round });
+    return next === fresh ? latest : next;
+  });
+  if (!next || playerGoalEntryOf(next, player)?.progress == null) throw new Error("The goal was changed while it was being assessed.");
+  return playerGoalEntryOf(next, player)?.progress ?? null;
+};
 
 const generateScenarioCustomStatSheet = async ({
   bundle,

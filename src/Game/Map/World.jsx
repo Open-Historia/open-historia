@@ -20,6 +20,7 @@ import {
   DEFAULT_BASEMAP_ID,
   TERRAIN_TILE_TEMPLATE,
   basemapMaxZoom,
+  basemapSeaColour,
   basemapProtocolTemplate,
   buildBasemapRenderKey,
   decodeAllowedBasemaps,
@@ -329,7 +330,9 @@ const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe, terra
       layers: [
         // Solid base beneath the image so no edge/pole ever shows a transparent hole.
         { id: "custom-bg-base", type: "background", paint: { "background-color": "#0b1a2b" } },
-        { id: "custom-bg-layer", type: "raster", source: "custom-bg", paint: { "raster-fade-duration": 0 } },
+        // "nearest" only when zoomed past the picture's own pixels (MapLibre
+        // still mipmaps it smoothly zoomed out), so a pixel map stays crisp.
+        { id: "custom-bg-layer", type: "raster", source: "custom-bg", paint: { "raster-fade-duration": 0, "raster-resampling": "nearest" } },
       ],
       sky: { "atmosphere-blend": 0 },
     };
@@ -414,11 +417,13 @@ const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe, terra
   const darkPhysicalVariant = basemapId === "ocean-dark"
     || basemapId === "atlas-relief-dark"
     || basemapId === "midnight-terrain";
+  // Under a light basemap, its own sea colour: a tile still on its way, or one
+  // that failed, then reads as sea instead of a black hole in it.
   const physicalBackground = basemapId === "midnight-terrain"
     ? "#000205"
     : darkPhysicalVariant
       ? (basemapId === "ocean-dark" ? "#030a14" : "#050609")
-      : "#0b1017";
+      : basemapSeaColour(renderedBasemapId) ?? "#0b1017";
 
   // THE BLACK TILES. The renderer before vNext put a second raster layer UNDER
   // the basemap: "satellite-lowres", z0-2 only, levels that always have real

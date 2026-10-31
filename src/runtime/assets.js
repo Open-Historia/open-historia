@@ -96,7 +96,9 @@ export const JSON_URLS = {
 
 // ESRI / ArcGIS Online basemaps — all public and token-free. `service` is the
 // path under .../rest/services/; `maxZoom` is that layer's deepest native level
-// (past it MapLibre overscales instead of requesting tiles that 404).
+// (past it MapLibre overscales instead of requesting tiles that 404). `sea`
+// is its open-sea colour (measured at z8), painted under the tiles so a tile
+// that has not arrived yet, or failed, reads as sea instead of black.
 export const ESRI_BASEMAPS = [
   // Relief-first political canvas: World Ocean Base carries ocean bathymetry
   // plus shaded land relief; World.jsx applies a darker dedicated grade.
@@ -106,23 +108,23 @@ export const ESRI_BASEMAPS = [
   // composes this from World Terrain Base + ETOPO relief, so no baked country
   // names or modern political borders sit underneath live OpenHistoria canon.
   { id: "midnight-terrain", label: "Midnight Terrain", service: "World_Terrain_Base", maxZoom: 13 },
-  { id: "imagery", label: "Satellite", service: "World_Imagery", maxZoom: 19 },
-  { id: "streets", label: "Streets", service: "World_Street_Map", maxZoom: 19 },
-  { id: "topo", label: "Topographic", service: "World_Topo_Map", maxZoom: 19 },
-  { id: "terrain", label: "Terrain", service: "World_Terrain_Base", maxZoom: 13 },
-  { id: "shaded", label: "Shaded Relief", service: "World_Shaded_Relief", maxZoom: 13 },
-  { id: "physical", label: "Physical", service: "World_Physical_Map", maxZoom: 8 },
-  { id: "natgeo", label: "National Geographic", service: "NatGeo_World_Map", maxZoom: 16 },
+  { id: "imagery", label: "Satellite", service: "World_Imagery", maxZoom: 19, sea: "#0a2836" },
+  { id: "streets", label: "Streets", service: "World_Street_Map", maxZoom: 19, sea: "#99d9f2" },
+  { id: "topo", label: "Topographic", service: "World_Topo_Map", maxZoom: 19, sea: "#bbe8ff" },
+  { id: "terrain", label: "Terrain", service: "World_Terrain_Base", maxZoom: 13, sea: "#bde6e0" },
+  { id: "shaded", label: "Shaded Relief", service: "World_Shaded_Relief", maxZoom: 13, sea: "#9ebcd8" },
+  { id: "physical", label: "Physical", service: "World_Physical_Map", maxZoom: 8, sea: "#7bb6de" },
+  { id: "natgeo", label: "National Geographic", service: "NatGeo_World_Map", maxZoom: 16, sea: "#74abd8" },
   // Promotional/screenshot variant. Runtime World.jsx replaces this registry
   // entry with the official NatGeo World_Basemap_v2 vector style, darkened and
   // stripped of political/place labels while preserving physical/water labels.
   // The raster service remains here as a semantic/fallback source and keeps the
   // built-in basemap registry/editor contract simple.
   { id: "natgeo-dark", label: "National Geographic - Dark", service: "NatGeo_World_Map", maxZoom: 16 },
-  { id: "ocean", label: "Ocean", service: "Ocean/World_Ocean_Base", maxZoom: 13 },
+  { id: "ocean", label: "Ocean", service: "Ocean/World_Ocean_Base", maxZoom: 13, sea: "#94b9e6" },
   { id: "ocean-dark", label: "Ocean - Dark", service: "Ocean/World_Ocean_Base", maxZoom: 13 },
-  { id: "light-gray", label: "Light Gray Canvas", service: "Canvas/World_Light_Gray_Base", maxZoom: 16 },
-  { id: "dark-gray", label: "Dark Gray Canvas", service: "Canvas/World_Dark_Gray_Base", maxZoom: 16 },
+  { id: "light-gray", label: "Light Gray Canvas", service: "Canvas/World_Light_Gray_Base", maxZoom: 16, sea: "#d0cfd4" },
+  { id: "dark-gray", label: "Dark Gray Canvas", service: "Canvas/World_Dark_Gray_Base", maxZoom: 16, sea: "#232227" },
 ];
 export const DEFAULT_BASEMAP_ID = "ocean";
 // Mirror runtime/basemapPick.js's keys (it imports this module); the last is
@@ -242,6 +244,7 @@ const esriServiceTemplate = (service) =>
 // cache-warming. The high-zoom source goes through basemapProtocolTemplate().
 export const esriTileTemplate = (id) => esriServiceTemplate(basemapById(id).service);
 export const basemapMaxZoom = (id) => basemapById(id).maxZoom;
+export const basemapSeaColour = (id) => basemapById(id).sea ?? null;
 // The high-res source goes through this protocol, with the basemap id baked in
 // so switching styles refetches, and so ESRI's "Map Data Not Yet Available"
 // placeholders can be swapped for an upscaled crop of the nearest real ancestor.
@@ -857,13 +860,28 @@ export const registerPmtilesArchive = (url) => {
 const PLACEHOLDER_MIN_ZOOM = 9;
 const placeholderRefByService = new Map();
 
+// A tile that fails on a busy connection is asked for twice more before it is
+// given up on: MapLibre does not ask again for a failed tile until it leaves
+// the view, and until then the gap shows the colour under the map.
+const TILE_RETRIES = 2;
 const fetchBasemapTileBytes = async (service, z, y, x, signal) => {
   const url = buildTileUrl(esriServiceTemplate(service), { x, y, z });
-  const response = await fetch(url, { cache: "force-cache", signal });
-  if (!response.ok) {
-    throw new Error(`Failed to load basemap tile ${z}/${y}/${x}: HTTP ${response.status}`);
+  for (let attempt = 0; ; attempt += 1) {
+    let response = null;
+    try {
+      response = await fetch(url, { cache: "force-cache", signal });
+    } catch (error) {
+      if (signal?.aborted || attempt >= TILE_RETRIES) throw error;
+    }
+    if (response?.ok) return response.arrayBuffer();
+    // A 4xx (other than rate limiting) will not change on asking again.
+    const retryable = !response || response.status >= 500 || response.status === 429;
+    if (response && (!retryable || attempt >= TILE_RETRIES)) {
+      throw new Error(`Failed to load basemap tile ${z}/${y}/${x}: HTTP ${response.status}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 400 * (attempt + 1)));
+    if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
   }
-  return response.arrayBuffer();
 };
 
 const bytesEqual = (a, b) => {

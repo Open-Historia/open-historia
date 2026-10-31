@@ -53,6 +53,25 @@ import { PAST_UPDATES } from "./notesPast.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // PR #916 (DupliM2001), rebuilt on beta: the Politics tab, goal progress, picture basemaps, deals and annexations kept (2026-10-31).
+    id: "2026-10-politics-and-goals",
+    kind: "minor",
+    date: "2026-10-31",
+    channel: "beta",
+    banners: [
+      {
+        title: "Parties, goals and promises kept",
+        items: [
+          "A Politics tab beside Diplomacy and Economy shows a country's government and its main parties, with their ideologies, leaders, seats and support. Ask for it once; the story moves it from then on.",
+          "Under your standing goal, Assess progress says how far it has come: what is done, what stands in the way and what to do next.",
+          "A deal agreed in a diplomatic chat is now kept as an agreement, and its terms are carried out when they fall due.",
+          "An annexation an event tells of now happens on the map, and a country joining a war takes the side against the countries it names.",
+          "In the map editor, a picture of a map asks how it is drawn and where it lies, stays sharp when you zoom in, and the mouse wheel zooms a whole level a notch.",
+        ],
+      },
+    ],
+  },
+  {
     // Group diplomacy: countries added to a conversation, conversations renamed, members tagged (PR #917, 2026-10-31).
     id: "2026-10-group-diplomacy",
     kind: "minor",

@@ -39,5 +39,5 @@ test("an answer that carries an audience is still read", () => {
 
 test("every request's tool goes through it", () => {
   const source = fs.readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
-  assert.match(source, /const shown = withEventAudience\(grouped, hostingSharedGame\(\)\);/);
+  assert.match(source, /withEventAudience\(grouped, hostingSharedGame\(\)\)/);
 });

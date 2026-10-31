@@ -523,8 +523,16 @@ const applyUpdateToWarMap = ({ map, update, date = "", round = 0, linkedEvents =
     if (!joiners.length) return { error: `War ${id} ${op} requires at least one joining polity.` };
     const sideA = [...prior.sideA];
     const sideB = [...prior.sideB];
-    const own = op === "join-a" ? sideA : sideB;
-    const enemy = op === "join-a" ? sideB : sideA;
+    // The letter is easy to get backwards (#892: the UK "joined" Russia's side
+    // of the Ukraine war); whom the joiner fights is not. When the opponents
+    // named all stand on one side, the joiner takes the other, whatever the
+    // letter said.
+    const opponentKeys = new Set(uniquePolities(update.opponents).map(polityKey));
+    const againstA = prior.sideA.some((entry) => opponentKeys.has(polityKey(entry)));
+    const againstB = prior.sideB.some((entry) => opponentKeys.has(polityKey(entry)));
+    const joinsA = againstA !== againstB ? againstB : op === "join-a";
+    const own = joinsA ? sideA : sideB;
+    const enemy = joinsA ? sideB : sideA;
     const enemyKeys = new Set(enemy.map(polityKey));
     for (const joiner of joiners) {
       if (enemyKeys.has(polityKey(joiner))) return { error: `${joiner} is already on the opposing side of war ${id}.` };

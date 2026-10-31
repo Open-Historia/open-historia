@@ -14,6 +14,7 @@ import { LISTEN_IN_MAX_TRENDS } from "../../runtime/listenIn.js";
 import { WAR_ROOM_ORDERS, WAR_ROOM_STANCES } from "../../runtime/fronts/constants.js";
 import { FRONT_ORDERS_FIELD } from "./nativeFrontLedger.js";
 import { SEAT_ADVICE_ANSWER_SCHEMA, SEAT_ADVICE_FIELD } from "./seatAdvice.js";
+import { IDEOLOGIES, PARTY_OPS, PARTY_ROLES } from "../../runtime/politics.js";
 const textSchema = (description) => ({
   type: "string",
   description,
@@ -936,6 +937,44 @@ const groupOpSchema = {
   additionalProperties: false,
 };
 
+// A change to a polity's tracked parties (runtime/politics.js applyPartyOps).
+const partyOpSchema = {
+  type: "object",
+  properties: {
+    polity: nonEmptyTextSchema("A polity listed under [Political Parties], exactly as listed."),
+    op: { type: "string", enum: PARTY_OPS, description: "update a party, add a new one, remove one, or change the government." },
+    party: textSchema("For update and remove: the party's listed name or abbreviation."),
+    changes: {
+      type: "object",
+      description: "Only the fields that changed (the whole party for add). A rename sets all four names: nameEn, nameNative, abbrEn and abbrNative.",
+      properties: {
+        nameEn: textSchema("Name in English."),
+        nameNative: textSchema("Name as native speakers write it: correct grammar, real words, that language's capitalisation."),
+        abbrEn: textSchema("English abbreviation."),
+        abbrNative: textSchema("Native abbreviation."),
+        ideology: { type: "string", enum: IDEOLOGIES.map((ideology) => ideology.name), description: "One of the ten ideologies." },
+        subideology: textSchema("A subideology listed under that ideology."),
+        leader: textSchema("New leader."),
+        role: { type: "string", enum: PARTY_ROLES },
+        seats: { type: "integer", minimum: 0 },
+        support: { type: "integer", minimum: 0, maximum: 100 },
+        founded: textSchema("Year founded."),
+        description: textSchema("One short line."),
+        colour: textSchema("#RRGGBB."),
+        government: textSchema("Form of government."),
+        headOfState: textSchema("Head of state's name and title."),
+        headOfGovernment: textSchema("Head of government's name and title."),
+        legislature: textSchema("Legislature's name."),
+        legislatureSeats: { type: "integer", minimum: 0 },
+        nextElection: textSchema("Next election date or year, or why there is none."),
+      },
+      additionalProperties: false,
+    },
+  },
+  required: ["polity", "op"],
+  additionalProperties: false,
+};
+
 const impactsSchema = {
   type: "object",
   description: "World-state effects; include only the arrays that apply.",
@@ -1023,6 +1062,11 @@ const impactsSchema = {
         + "operation, a sustained political campaign - so the board matches the "
         + "story. Prefer updating a running project over starting a duplicate.",
       items: projectOpSchema,
+    },
+    partyOps: {
+      type: "array",
+      description: "Changes to the parties of a polity listed under [Political Parties]: an election, a new leader, a split, a ban, a new government. See [Political Parties].",
+      items: partyOpSchema,
     },
   },
   additionalProperties: false,
@@ -3344,6 +3388,65 @@ const INTELLIGENCE_ASSESSMENT_SCHEMA = {
 // author and the text is optional, and the list carries no count to fail: an
 // answer two posts long, or twenty, still shows (runtime/listenIn.js keeps what
 // a feed holds), where a bound here would cost the player the whole request.
+// A polity's government and its parties (or factions) for the Stats pane's
+// Politics tab; normalized and stored by runtime/politics.js.
+const POLITICAL_LANDSCAPE_SCHEMA = {
+  type: "object",
+  description: "The government of one polity and its main political parties, or its factions where it has no parties, as they stand on the current date.",
+  properties: {
+    government: nonEmptyTextSchema("Form of government, e.g. Constitutional monarchy, One-party state, Military junta."),
+    headOfState: nonEmptyTextSchema("Head of state's name and title."),
+    headOfGovernment: textSchema("Head of government's name and title, blank where the head of state also governs."),
+    legislature: textSchema("The legislature's name, blank where there is none."),
+    legislatureSeats: { type: "integer", minimum: 0, description: "Total seats in the (lower) house; 0 where there is no legislature." },
+    nextElection: textSchema("Date or year of the next national election, or why there is none (\"Suspended\", \"No elections\")."),
+    kind: { type: "string", enum: ["parties", "factions"], description: "factions where the polity has no political parties (court, army, clergy, guilds...)." },
+    parties: {
+      type: "array",
+      minItems: 1,
+      maxItems: 12,
+      items: {
+        type: "object",
+        properties: {
+          nameEn: nonEmptyTextSchema("Name in English."),
+          nameNative: nonEmptyTextSchema("Name in the polity's own language; the English name again only where that is the language."),
+          abbrEn: textSchema("English abbreviation, blank where none is used."),
+          abbrNative: textSchema("Native abbreviation, blank where none is used."),
+          ideology: { type: "string", enum: IDEOLOGIES.map((ideology) => ideology.name), description: "One of the ten ideologies." },
+          subideology: nonEmptyTextSchema("A subideology listed under that ideology."),
+          leader: nonEmptyTextSchema("Current leader's name."),
+          colour: textSchema("The party's colour as #RRGGBB, blank to use its ideology's."),
+          role: { type: "string", enum: PARTY_ROLES, description: "Its place in the system now." },
+          seats: { type: "integer", minimum: 0, description: "Seats held in the legislature; 0 where there is none or it holds none." },
+          support: { type: "integer", minimum: 0, maximum: 100, description: "Estimated popular support or, for a faction, influence, in percent." },
+          founded: textSchema("Year founded, blank if unknown."),
+          description: textSchema("One short line: who it speaks for and where it is strong."),
+        },
+        required: ["nameEn", "nameNative", "ideology", "subideology", "leader", "role", "support"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["government", "headOfState", "kind", "parties"],
+  additionalProperties: false,
+};
+
+// How far the player's standing goal has come, for the Actions panel;
+// normalized and stored by runtime/playerGoal.js.
+const GOAL_PROGRESS_SCHEMA = {
+  type: "object",
+  description: "An honest reading of how far the player's government has come toward its standing goal, on the current date.",
+  properties: {
+    progress: { type: "integer", minimum: 0, maximum: 100, description: "0 = nothing done, 100 = the goal is achieved. Judge what is true in the world, not what was ordered." },
+    summary: nonEmptyTextSchema("Two or three sentences: where things stand and why."),
+    achieved: { type: "array", maxItems: 5, items: textSchema("A milestone already reached, one short line.") },
+    obstacles: { type: "array", maxItems: 4, items: textSchema("What stands in the way, one short line.") },
+    nextSteps: { type: "array", maxItems: 3, items: textSchema("A concrete step that would bring the goal nearer, one short line.") },
+  },
+  required: ["progress", "summary", "achieved", "obstacles", "nextSteps"],
+  additionalProperties: false,
+};
+
 const LISTEN_IN_SCHEMA = {
   type: "object",
   description: "The posts ordinary people in one place are writing today, and what the place is talking about.",
@@ -3444,6 +3547,45 @@ const WAR_ROOM_SCHEMA = {
 // the battles of a war its skip started, so the war was dropped and no front
 // opened (2026-10-30, two answers against one with it left out). The answer is
 // still read against the whole schema, so a shared game's audience is kept.
+// A polity's parties (impacts.partyOps, runtime/politics.js) are asked for
+// only where the world tracks some polity's parties: in any other game the
+// tool sent is what it was before the Politics tab, and its size guard
+// (projectOpSchema.test.js) holds. Where they are asked for, after every other
+// impact. The answer is read against the whole schema either way.
+const PARTY_OPS_FIELD = impactsSchema.properties.partyOps;
+const isImpacts = (properties) => Boolean(properties?.polityChanges && properties?.spyOps);
+export const withPartyOps = (tool, tracked = false) => {
+  let changed = false;
+  const visit = (node) => {
+    if (!node || typeof node !== "object") return node;
+    if (Array.isArray(node)) {
+      const next = node.map(visit);
+      return next.some((entry, index) => entry !== node[index]) ? next : node;
+    }
+    let out = node;
+    for (const [key, value] of Object.entries(node)) {
+      const next = visit(value);
+      if (next !== value) {
+        out = out === node ? { ...node } : out;
+        out[key] = next;
+      }
+    }
+    if (isImpacts(out.properties)) {
+      const { partyOps, ...rest } = out.properties;
+      if (tracked && !partyOps) {
+        out = { ...out, properties: { ...rest, partyOps: PARTY_OPS_FIELD } };
+        changed = true;
+      } else if (!tracked && partyOps) {
+        out = { ...out, properties: rest };
+        changed = true;
+      }
+    }
+    return out;
+  };
+  const schema = visit(tool?.schema);
+  return changed ? { ...tool, schema } : tool;
+};
+
 export const withEventAudience = (tool, shared = false) => {
   let changed = false;
   const visit = (node) => {
@@ -3536,6 +3678,8 @@ export const withFrontOrders = (tool) => {
 export const GAMEPLAY_SCHEMAS = Object.freeze({
   spyIntercept: SPY_INTERCEPT_SCHEMA,
   intelligenceAssessment: INTELLIGENCE_ASSESSMENT_SCHEMA,
+  politicalLandscape: POLITICAL_LANDSCAPE_SCHEMA,
+  goalProgress: GOAL_PROGRESS_SCHEMA,
   listenIn: LISTEN_IN_SCHEMA,
   warRoom: WAR_ROOM_SCHEMA,
   actions: ACTIONS_SCHEMA,
@@ -3759,6 +3903,18 @@ export const SPY_INTERCEPT_TOOL = makeTool(
   SPY_INTERCEPT_SCHEMA,
 );
 
+export const POLITICAL_LANDSCAPE_TOOL = makeTool(
+  "submit_political_landscape",
+  "Submit the target polity's government and its main parties or factions.",
+  POLITICAL_LANDSCAPE_SCHEMA,
+);
+
+export const GOAL_PROGRESS_TOOL = makeTool(
+  "submit_goal_progress",
+  "Submit the reading of how far the standing goal has come.",
+  GOAL_PROGRESS_SCHEMA,
+);
+
 export const INTELLIGENCE_ASSESSMENT_TOOL = makeTool(
   "submit_intelligence_assessment",
   "Submit the assessment of the target polity's intelligence service.",
@@ -3777,9 +3933,11 @@ export const WAR_ROOM_TOOL = makeTool(
   WAR_ROOM_SCHEMA,
 );
 
-export const GAMEPLAY_TOOLS = Object.freeze({
+const GAMEPLAY_TOOLS_WITH_PARTIES = Object.freeze({
   spyIntercept: SPY_INTERCEPT_TOOL,
   intelligenceAssessment: INTELLIGENCE_ASSESSMENT_TOOL,
+  politicalLandscape: POLITICAL_LANDSCAPE_TOOL,
+  goalProgress: GOAL_PROGRESS_TOOL,
   listenIn: LISTEN_IN_TOOL,
   warRoom: WAR_ROOM_TOOL,
   actions: ACTIONS_TOOL,
@@ -3804,6 +3962,11 @@ export const GAMEPLAY_TOOLS = Object.freeze({
   pregameHistory: PREGAME_HISTORY_TOOL,
   projects: PROJECTS_TOOL,
 });
+
+// As sent by default: without partyOps (withPartyOps adds it back where the world tracks parties).
+export const GAMEPLAY_TOOLS = Object.freeze(Object.fromEntries(
+  Object.entries(GAMEPLAY_TOOLS_WITH_PARTIES).map(([key, tool]) => [key, withPartyOps(tool, false)]),
+));
 
 export const getGameplayTool = (taskKey) => GAMEPLAY_TOOLS[taskKey] ?? null;
 
@@ -4327,6 +4490,7 @@ const PAYLOAD_IMPACT_ARRAYS = [
   "unitOps",
   "markerOps",
   "projectOps",
+  "partyOps",
 ];
 
 const flattenImpactWrappers = (value) => {
@@ -4380,6 +4544,7 @@ const normalizeEventShape = (entry) => {
       unitOps: ["units", "unitOperations"],
       markerOps: ["markers", "markerOperations"],
       spyOps: ["spies", "spyOperations", "espionageOps", "agentOps"],
+      partyOps: ["parties", "partyChanges"],
       createdChats: ["chats", "diplomaticChats"],
       projectOps: ["projects", "projectOperations"],
     };

@@ -7,7 +7,7 @@ import dayjs from "dayjs";
 import advancedFormat from "dayjs/plugin/advancedFormat";
 import { logDebugEvent } from "../../runtime/debugLog.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
-import { generateActionSuggestions, refinePlayerAction } from "../AI/gameplayLazy.js";
+import { assessGoalProgress, generateActionSuggestions, refinePlayerAction } from "../AI/gameplayLazy.js";
 import { revertUnitOrder } from "../Map/unitsController.js";
 import {
     buildActionDisplayText,
@@ -16,7 +16,7 @@ import {
     writeActionsState,
     writeWorldState,
 } from "../../runtime/gameState.js";
-import { PLAYER_GOAL_MAX_CHARS, playerGoalOf, withPlayerGoal } from "../../runtime/playerGoal.js";
+import { PLAYER_GOAL_MAX_CHARS, playerGoalEntryOf, playerGoalOf, withPlayerGoal } from "../../runtime/playerGoal.js";
 import { TURN_RUNNING_NOTE, isSimulationBusy } from "../AI/simulationStatus.js";
 import { useTurnRunning } from "./useTurnRunning.js";
 import { formatGameDateReadable } from "../../runtime/gameDates.js";
@@ -344,6 +344,85 @@ const goalButtonStyle = (enabled, tone = "neutral") => ({
     padding: "0.3rem 0.7rem",
 });
 
+// How far the goal has come (gameplay.js assessGoalProgress): read on demand,
+// since every reading is a request, and marked when a turn has passed since.
+const GoalProgress = ({ country, round, turnRunning }) => {
+    const stored = useRuntimeState("world", (world) => JSON.stringify(playerGoalEntryOf(world, country)?.progress ?? null), country);
+    const progress = React.useMemo(() => JSON.parse(stored || "null"), [stored]);
+    const [busy, setBusy] = React.useState(false);
+    const [error, setError] = React.useState("");
+    const [open, setOpen] = React.useState(false);
+
+    const assess = async () => {
+        if (busy || turnRunning) return;
+        setBusy(true);
+        setError("");
+        try {
+            const reading = await assessGoalProgress();
+            logDebugEvent("action", `Goal progress assessed: ${reading?.progress ?? "?"}/100`);
+        } catch (assessError) {
+            console.error("Failed to assess goal progress:", assessError);
+            setError(String(assessError?.message || "The goal could not be assessed. Try again."));
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const muted = { color: "rgba(255,255,255,0.55)", fontSize: "0.72rem" };
+    if (!progress) {
+        return (
+            <div style={{ alignItems: "center", display: "flex", gap: "0.5rem", justifyContent: "space-between" }}>
+            <span style={muted}>{error || "How far has it come?"}</span>
+            <button type="button" className="oh-tap-row" disabled={busy || turnRunning} onClick={() => void assess()} style={goalButtonStyle(!busy && !turnRunning)}>
+            {busy ? "Assessing…" : "Assess progress"}
+            </button>
+            </div>
+        );
+    }
+
+    const change = Number.isFinite(progress.previous) ? progress.progress - progress.previous : 0;
+    const stale = progress.round && round && round > progress.round;
+    const list = (title, items) => items.length > 0 && (
+        <div>
+        <span style={{ ...muted, fontWeight: 700 }}>{title}</span>
+        <ul style={{ color: "rgba(255,255,255,0.78)", fontSize: "0.74rem", lineHeight: "1.45", margin: "0.15rem 0 0", paddingLeft: "1.1rem" }}>
+        {items.map((item) => <li key={item}>{item}</li>)}
+        </ul>
+        </div>
+    );
+    return (
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
+        <div style={{ alignItems: "center", display: "flex", gap: "0.5rem" }}>
+        <div role="progressbar" aria-label="Goal progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress.progress}
+        style={{ background: "rgba(255,255,255,0.1)", borderRadius: "999px", flex: 1, height: "6px", overflow: "hidden" }}>
+        <div style={{ background: "#7dd3fc", height: "100%", width: `${progress.progress}%` }} />
+        </div>
+        <span style={{ color: "rgba(255,255,255,0.9)", fontSize: "0.76rem", fontWeight: 700 }}>{progress.progress}%</span>
+        {change !== 0 && <span style={{ color: change > 0 ? "#86efac" : "#fca5a5", fontSize: "0.72rem" }}>{change > 0 ? `+${change}` : change}</span>}
+        <button type="button" className="oh-tap" disabled={busy || turnRunning} onClick={() => void assess()}
+        title={turnRunning ? "A turn is running." : "Assess again"} aria-label="Assess progress again"
+        style={{ background: "none", border: "none", color: "rgba(255,255,255,0.45)", cursor: busy || turnRunning ? "not-allowed" : "pointer", fontSize: "0.8rem", padding: 0 }}>
+        {busy ? "…" : "↻"}
+        </button>
+        </div>
+        <button type="button" className="oh-tap" onClick={() => setOpen((value) => !value)} aria-expanded={open}
+        style={{ background: "none", border: "none", color: "rgba(255,255,255,0.78)", cursor: "pointer", fontSize: "0.74rem", lineHeight: "1.45", padding: 0, textAlign: "left" }}>
+        {progress.summary}
+        </button>
+        {open && (
+            <>
+            {list("Reached", progress.achieved)}
+            {list("In the way", progress.obstacles)}
+            {list("Next steps", progress.nextSteps)}
+            </>
+        )}
+        <span style={muted}>
+        {error || `As of ${progress.asOf || "an earlier turn"}${stale ? " — a turn has passed since; ↻ to update" : ""}. ${open ? "" : "Click the summary for details."}`}
+        </span>
+        </div>
+    );
+};
+
 // The player's standing goal (runtime/playerGoal.js): the direction behind the
 // orders. The advisor, the time skip and the suggestions are told it; a foreign
 // leader never is. Locked while a turn runs, because the turn writes the world
@@ -523,6 +602,7 @@ const StandingGoal = ({ country, round, gameDate, isOpen }) => {
         <span title={goal} style={{ color: "rgba(255,255,255,0.82)", display: "-webkit-box", fontSize: "0.8rem", lineHeight: "1.45", overflow: "hidden", WebkitBoxOrient: "vertical", WebkitLineClamp: 3 }}>
         {"\u{1F3AF} "}{goal}
         </span>
+        <GoalProgress country={country} round={round} turnRunning={turnRunning} />
         </div>
     );
 };

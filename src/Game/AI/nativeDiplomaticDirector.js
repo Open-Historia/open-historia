@@ -2429,7 +2429,7 @@ const agreementDisplay = (agreement, world) => {
     ? ` | guarantor ${diplomaticDisplayName(world, agreement.guarantor)} → ${diplomaticDisplayName(world, agreement.beneficiary)}`
     : "";
   return `- ${agreement.id} | ${String(agreement.status || "active").toUpperCase()} | ${agreement.type} | ${agreement.title} | parties: ${parties.join(", ")}${role}` +
-    (clean(agreement.terms) ? ` | terms: ${clean(agreement.terms).slice(0, 280)}` : "");
+    (clean(agreement.terms) ? ` | terms: ${clean(agreement.terms).slice(0, 600)}` : "");
 };
 
 const puppetDisplay = (row, world) => {

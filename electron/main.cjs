@@ -835,6 +835,37 @@ const createMainWindow = () => {
     return { action: "deny" };
   });
 
+  // On Windows, after the page's alert/confirm/prompt closes, the window has
+  // focus but the page gets no keyboard input (a chat cannot be typed into)
+  // until the window is focused again, which is what Alt+Tab fixes. The page is
+  // given wrappers that log a marker when such a dialog closes, and the window
+  // is refocused on it. Done from here, not a preload: this window has none, on
+  // purpose (see the build id above).
+  if (process.platform === "win32") {
+    const DIALOG_CLOSED = "__oh_dialog_closed__";
+    win.webContents.on("dom-ready", () => {
+      win.webContents.executeJavaScript(`(() => {
+        for (const name of ["alert", "confirm", "prompt"]) {
+          const original = window[name];
+          if (typeof original !== "function" || original.ohRefocus) continue;
+          const wrapped = function (...args) {
+            try { return original.apply(window, args); } finally { console.debug(${JSON.stringify(DIALOG_CLOSED)}); }
+          };
+          wrapped.ohRefocus = true;
+          window[name] = wrapped;
+        }
+      })();`).catch(() => {});
+    });
+    win.webContents.on("console-message", (...args) => {
+      // Electron passes one details object; older versions passed (event, level, message).
+      const message = typeof args[2] === "string" ? args[2] : args[0]?.message;
+      if (message !== DIALOG_CLOSED || win.isDestroyed()) return;
+      win.blur();
+      win.focus();
+      win.webContents.focus();
+    });
+  }
+
   // Keep the game IN the game window. This window has no address bar, no back
   // button and an auto-hidden menu, so a link that navigates it away strands the
   // player on a page they cannot leave — and hands anything that can render a
