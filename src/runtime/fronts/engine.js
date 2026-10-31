@@ -81,7 +81,7 @@ import { downhill } from "./ground.js";
 import { pointInFrame, projectorOf } from "./frame.js";
 import { landWithin, othersOnWay } from "./invade.js";
 import { draw, formationsLeft, manpowerReport, menOf, menPerFormation, partLeft, sendHome } from "./manpower.js";
-import { applyOrder, assignOrder, giveWay, landCarried, putAshore, readSieges, setStandingOrder, standingOf } from "./orders.js";
+import { applyOrder, assignOrder, fallBackOverland, giveWay, landCarried, putAshore, readSieges, setStandingOrder, standingOf } from "./orders.js";
 import { foldBattlefieldName, isWarIdName, normalizeBattlefields } from "./record.js";
 import { authoredName } from "./scenarioFronts.js";
 import { breakthroughAnswer, sideIsPlayed, staffDecision, staffMayOrder, staffStanding } from "./staff.js";
@@ -1451,8 +1451,8 @@ const captureRefused = (battles, regionId, taker) => {
 // side (reconcile has painted it theirs), as many of that side's troops as the
 // region's size asks (constants.js takersFor) stand in it, the nearest within
 // STORY_TAKER_REACH_KM first, counting those already there; and the
-// other side's troops left on what is now the taker's ground fall back to their
-// own side's nearest (orders.js giveWay), as after a breakthrough, without loss.
+// other side's troops left on what is now the taker's ground fall back overland
+// to the nearest of their own they can reach (orders.js fallBackOverland), without loss.
 const marchInto = (run, battle, region, taker, day) => {
   const side = sideOfName(battle, taker);
   if (side < 0 || !(region > 0)) return;
@@ -1487,7 +1487,7 @@ const marchInto = (run, battle, region, taker, day) => {
     }
     if (nearest.length > 0) battle.log.push({ d: run.dateOf(day), k: "whole", s: side, at: `region: ${arena.names[region] || arena.ids[region]}` });
   }
-  giveWay(battle, 1 - side, 0, run.dateOf(day), field.cols + field.rows);
+  fallBackOverland(battle, 1 - side, run.dateOf(day), region, field.cols + field.rows);
 };
 
 // Applies every moment dated up to a day, in the order they were given.
