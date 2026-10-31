@@ -220,7 +220,7 @@ const AdvisorDockIcon = () => (
   </svg>
 );
 
-const AdvisorButton = ({ isAdvisorOpen, dockStyle, onToggle }) => (
+const AdvisorButton = ({ isAdvisorOpen, isMobile, dockStyle, onToggle }) => (
   <button
     type="button"
     title="Advisor"
@@ -230,12 +230,15 @@ const AdvisorButton = ({ isAdvisorOpen, dockStyle, onToggle }) => (
       ...baseStyle,
       ...dockStyle,
       // Above the map switch at the foot of the stack (MapModeSelector.jsx).
-      bottom: `calc(3rem + ${SAFE_BOTTOM})`,
+      bottom: `calc(${isMobile ? "3.6rem" : "3rem"} + ${SAFE_BOTTOM})`,
       // Rides beside the advisor drawer, so a wide drawer carries it over the
       // Actions/Projects/chat panels (9998); an open panel stays on top.
       zIndex: 9997,
-      height: "4rem", width: "4rem",
-      cursor: "pointer", fontSize: "1.5rem",
+      height: isMobile ? "3.2rem" : "4rem",
+      width: isMobile ? "3.2rem" : "4rem",
+      cursor: "pointer",
+      fontSize: isMobile ? "1.25rem" : "1.5rem",
+      borderRadius: isMobile ? "12px" : "14px",
       background: isAdvisorOpen
         ? "rgba(255,255,255,0.085)"
         : "rgba(35,35,39,0.53)",
@@ -267,7 +270,9 @@ const WarRoomIcon = () => (
 
 // How far in from the corner it stands while the war room is open: clear of the frame's strips.
 const WAR_ROOM_OPEN_INSET_REM = 1.1;
-const WarRoomButton = ({ open, isMobile, onToggle }) => (
+const WarRoomButton = ({ open, isMobile, onToggle }) => {
+  const buttonSize = isMobile ? "3rem" : `${WAR_ROOM_BUTTON_REM}rem`;
+  return (
   <button
     type="button"
     title="War room"
@@ -280,8 +285,8 @@ const WarRoomButton = ({ open, isMobile, onToggle }) => (
       // While the war room is open the dock it stood beside is out of sight, so
       // it goes to the corner of the screen, inside the frame round the map.
       left: `calc(${open ? `${WAR_ROOM_OPEN_INSET_REM}rem` : isMobile ? `${DOCK_LEFT_REM}rem` : BESIDE_DOCK_LEFT} + ${SAFE_LEFT})`,
-      bottom: `calc(${open ? WAR_ROOM_OPEN_INSET_REM : isMobile ? DOCK_BOTTOM_REM + DOCK_HEIGHT_REM + 0.5 : DOCK_BOTTOM_REM}rem + ${SAFE_BOTTOM})`,
-      height: `${WAR_ROOM_BUTTON_REM}rem`, width: `${WAR_ROOM_BUTTON_REM}rem`,
+      bottom: `calc(${open ? WAR_ROOM_OPEN_INSET_REM : isMobile ? DOCK_BOTTOM_REM + DOCK_HEIGHT_REM + 0.35 : DOCK_BOTTOM_REM}rem + ${SAFE_BOTTOM})`,
+      height: buttonSize, width: buttonSize,
       borderRadius: "50%",
       cursor: "pointer",
       backdropFilter: "none",
@@ -302,7 +307,8 @@ const WarRoomButton = ({ open, isMobile, onToggle }) => (
   >
     <WarRoomIcon />
   </button>
-);
+  );
+};
 
 // The wrapper round the HUD's own controls: nothing of its own to lay out
 // while they show, and all of them gone with it while the war room is open.
@@ -823,6 +829,7 @@ const Main = ({
             />
             <AdvisorButton
               isAdvisorOpen={isAdvisorOpen}
+              isMobile={isMobile}
               dockStyle={advisorDockStyle}
               onToggle={() => {
                 setIsWarRoomOpen(false);

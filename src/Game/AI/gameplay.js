@@ -217,6 +217,7 @@ import { applyTurnFronts, citiesFollowCountries, withFrontManpower, withBlockade
 import { withTurnStrikes } from "../../runtime/strikes.js";
 import { answerPeaceProposal, offerPeace, playerDiplomacy, turnDays, turnWarAndPeace } from "./warAndPeace.js";
 import { holdPlayersWars } from "./playersWarsHold.js";
+import { chatMessageTags } from "./chatTags.js";
 import { PEACE_BLOCK_HEADING, buildPeaceBlock } from "./peacePrompt.js";
 import { readPeaceVerdict, readTreatyLines, termsOfLetter } from "../../runtime/peaceTerms.js";
 import { PEACE_ANSWERS_FIELD, buildWarStatsBlock, describePeaceTalk, warsOf } from "./warStatsPrompt.js";
@@ -15353,10 +15354,16 @@ export const runChatActionBatch = async ({
     ...(threadOwner && regionKey(threadOwner) !== regionKey(player) ? [threadOwner] : []),
     ...memberNames.filter((name) => peopleKeys.has(regionKey(name))),
   ].filter((name, index, rows) => rows.findIndex((other) => regionKey(other) === regionKey(name)) === index);
-  const aiParticipants = memberNames
+  const answering = memberNames
     .filter((name) => !otherPeople.some((person) => regionKey(person) === regionKey(name)))
     .filter((name) => !(lifecycleResponseRequested && institutionLifecyclePrompt) || lifecycleResponseActors.has(regionKey(name)))
     .filter((name) => !formalBusinessRequested || autonomousBallotActors.has(regionKey(name)));
+  // A player's message that tags members (@Country, chat.jsx) is answered by
+  // those it tags. A tag is a member's whole, exact name: "@Niger" is not
+  // "@Nigeria". One that tags none of the governments that answer (another
+  // player, say) is answered as any other.
+  const taggedAnswering = answering.filter((name) => chatMessageTags(playerMessage, name));
+  const aiParticipants = taggedAnswering.length ? taggedAnswering : answering;
   if (!aiParticipants.length) return { events: [], applied: [], rejected: [], actions: [] };
 
   // What this polity has heard in its OTHER threads since it last spoke here —
