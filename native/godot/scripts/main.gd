@@ -1,6 +1,6 @@
 extends Node
 
-const BOOT_SCRIPTS := ["res://scripts/audio/sound_engine.gd", "res://scripts/ui/game_menu.gd", "res://scripts/ui/debug_console.gd", "res://scripts/ui/interactive_panel.gd", "res://scripts/ui/cheats_panel.gd", "res://scripts/shell/app_update.gd", "res://scripts/war/war_layers.gd", "res://scripts/map/map_extras.gd", "res://scripts/ui/forces_panel.gd", "res://scripts/ui/war_room.gd", "res://scripts/ui/war_room_button.gd", "res://scripts/multiplayer/shared_game_overlay.gd", "res://scripts/ui/scenario_editor.gd", "res://scripts/ui/after_action.gd", "res://scripts/shell/shell_notices.gd", "res://scripts/devtools/devtools.gd"]
+const BOOT_SCRIPTS := ["res://scripts/audio/sound_engine.gd", "res://scripts/ui/game_menu.gd", "res://scripts/ui/debug_console.gd", "res://scripts/ui/interactive_panel.gd", "res://scripts/ui/cheats_panel.gd", "res://scripts/shell/app_update.gd", "res://scripts/war/war_layers.gd", "res://scripts/map/map_extras.gd", "res://scripts/ui/forces_panel.gd", "res://scripts/ui/war_room.gd", "res://scripts/ui/war_room_button.gd", "res://scripts/multiplayer/shared_game_overlay.gd", "res://scripts/multiplayer/discord_invites.gd", "res://scripts/ui/scenario_editor.gd", "res://scripts/ui/after_action.gd", "res://scripts/shell/shell_notices.gd", "res://scripts/devtools/devtools.gd"]
 const PROVIDERS := {"gemini": "Gemini — Google AI Studio / Gemini API", "openai": "OpenAI", "anthropic": "Anthropic"}
 
 var engine: EngineLink
@@ -39,6 +39,7 @@ var after_action: Node
 var forces: Node
 var map_extras: Node
 var shared_overlay: Node
+var discord_invites: Node
 var shell_notices: Node
 var devtools: Node
 var crash: CrashScreen
@@ -218,6 +219,9 @@ func _mount_parts() -> void:
 	shared_overlay = _make_node("res://scripts/multiplayer/shared_game_overlay.gd")
 	if shared_overlay:
 		_place_above(shared_overlay, menu)
+	discord_invites = _make_node("res://scripts/multiplayer/discord_invites.gd")
+	if discord_invites:
+		ui.add_child(discord_invites)
 	editor = _make_node("res://scripts/ui/scenario_editor.gd")
 	if editor:
 		ui.add_child(editor)
@@ -245,6 +249,7 @@ func _mount_parts() -> void:
 	_hook(cheats, "open_forces", func() -> void:
 		_call(cheats, "close")
 		_call(forces, "open"))
+	_hook(discord_invites, "joined", _enter_active_game)
 	_hook(shared_overlay, "left", func() -> void:
 		_leave_game()
 		await _refresh_library()
@@ -284,6 +289,9 @@ func _setup_parts(_data: Dictionary) -> void:
 		after_action.call("setup", engine)
 	if shared_overlay:
 		shared_overlay.call("setup", engine, {})
+	if discord_invites:
+		ui.move_child(discord_invites, -1)
+		discord_invites.call("setup", engine, {})
 	if shell_notices:
 		shell_notices.call("setup", engine)
 	if war_room:
