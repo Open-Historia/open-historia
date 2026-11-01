@@ -1815,7 +1815,7 @@ export const register = (ctx) => {
           title: `${row.overlord} → ${row.puppet}`,
           meta: `${kindName(row.kind)} · ${row.secrecy === "covert" ? "Covert" : "Openly known"} · Loyalty ${loyalty(row.loyalty)}`,
         })),
-        ended: list(rows.ended).map((row) => `${row.overlord} → ${row.puppet} · ${capitalize(row.status)}${row.endedDate ? ` · ${row.endedDate}` : ""}`),
+        ended: list(rows.ended).map((row) => `${row.overlord} → ${row.puppet} · ${capitalize(row.status)}${row.endedDate ? ` · ${readable(row.endedDate) || row.endedDate}` : ""}`),
       };
     },
 
