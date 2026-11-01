@@ -53,6 +53,39 @@ import { PAST_UPDATES } from "./notesPast.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // A suggestion's border changes are groups of neighbouring regions; now it says how many regions (2026-11-01).
+    id: "2026-11-suggestion-regions",
+    kind: "minor",
+    date: "2026-11-01",
+    channel: "beta",
+    banners: [
+      {
+        title: "Suggestions count their regions",
+        items: [
+          "When you suggest changes to a community scenario, the Borders line now says how many regions you merged into others, reshaped or added.",
+          "Each border change is a group of neighbouring regions that is accepted or rejected together, so many merges can be a few changes.",
+        ],
+      },
+    ],
+  },
+  {
+    // The desktop app packs only what it runs (2026-11-01).
+    id: "2026-11-lighter-desktop",
+    kind: "minor",
+    date: "2026-11-01",
+    channel: "beta",
+    banners: [
+      {
+        title: "A lighter desktop app",
+        items: [
+          "The desktop app is a smaller download: about 40 MB less on Windows.",
+          "It takes up about 100 MB less space once installed.",
+          "Updates have far fewer files to put in place, so they finish sooner.",
+        ],
+      },
+    ],
+  },
+  {
     // Group diplomacy: countries added to a conversation, conversations renamed, members tagged (PR #917, 2026-10-31).
     id: "2026-10-group-diplomacy",
     kind: "minor",
