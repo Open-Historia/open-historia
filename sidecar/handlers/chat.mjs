@@ -497,7 +497,75 @@ export const register = (ctx) => {
     "chat.reply": async ({ chatId = "", text = "", counterpart = "", countries = [], catchUp = "" }) => {
       log(`Player sent in chat #${chatId}; one-on-one counterpart: ${counterpart}.`, undefined, { verbose: true });
       const answer = await engine.aiMain.sendDiplomaticMessage(text, counterpart, list(countries), { chatId, catchUp });
-      return { reply: String(answer?.reply ?? ""), reaction: answer?.reaction ?? null, memorySummary: answer?.memorySummary ?? "" };
+      return { reply: String(answer?.reply ?? ""), reaction: answer?.reaction ?? null, memorySummary: answer?.memorySummary ?? "", peace: String(answer?.peace ?? "") };
+    },
+    "chat.peaceAnswer": async ({ speaker = "", line = "", chatId = "", messageId = "" } = {}) => {
+      if (!clean(speaker) || !clean(line)) return { outcome: "", reason: "unread" };
+      try {
+        const answer = await engine.gameplay.answerPeaceInChat({ speaker: clean(speaker), line: String(line), chatId: clean(chatId), messageId: clean(messageId) });
+        return { outcome: clean(answer?.outcome), reason: clean(answer?.reason) };
+      } catch (error) {
+        log(`${clean(speaker)}'s word on peace could not be carried out.`, error);
+        return { outcome: "", reason: "failed" };
+      }
+    },
+    "chat.peace": async ({ chatId = "", messageIds = [], counterpart = "", player = "" } = {}) => {
+      const peace = engine.ctPeaceTerms;
+      const placement = engine.chPeacePlacement;
+      const [world, game] = await Promise.all([
+        gs.readWorldState({ force: false }).catch(() => ({})),
+        readGame().catch(() => ({ player: "" })),
+      ]);
+      const me = clean(player) || clean(game?.player);
+      const enemy = clean(counterpart);
+      const war = enemy && me ? peace.warBetween(list(world?.wars), me, enemy) : null;
+      const offers = placement.peaceOffersForThread({
+        offers: list(world?.peaceOffers),
+        player: me,
+        chatId: clean(chatId),
+        messageIds: list(messageIds).map((id) => clean(id)),
+        counterpart: enemy,
+      });
+      const statusText = { accepted: "Accepted: the war is over", declined: "Declined", lapsed: "No longer on the table" };
+      const shown = offers.map((offer) => {
+        const mine = same(offer.from, me);
+        const toMe = same(offer.to, me);
+        const open = offer.status === "open";
+        const payment = offer.terms?.reparations ?? null;
+        const share = payment ? Math.round(payment.share * 1000) / 10 : 0;
+        return {
+          id: clean(offer.id),
+          messageId: clean(offer.messageId),
+          status: offer.status,
+          open,
+          mine,
+          toMe,
+          heading: mine ? "Your terms of peace" : "Peace offered",
+          party: mine ? clean(offer.to) : clean(offer.from),
+          state: open ? (mine ? "Waiting for their answer" : "") : statusText[offer.status] ?? "",
+          terms: [
+            offer.terms?.territory === peace.TERRITORY_AS_HELD ? "Each side keeps the ground it holds." : "Every region goes back to whose it was before the war.",
+            payment ? `${payment.payer} pays ${payment.receiver} reparations: ${share}% of its economy a year for ${payment.years} years.` : "Nobody pays reparations.",
+          ],
+        };
+      });
+      const myOpenTerms = shown.some((offer) => offer.open && offer.mine);
+      return {
+        offers: shown,
+        war: war ? { id: clean(war.id), enemy } : null,
+        canPropose: Boolean(war) && !myOpenTerms,
+        territoryChoices: [
+          { key: peace.TERRITORY_RESTORED, label: "The old borders: every region goes back" },
+          { key: peace.TERRITORY_AS_HELD, label: "Each side keeps the ground it holds" },
+        ],
+        reparationChoices: [
+          { key: "none", label: "Nobody pays" },
+          { key: "they-light", label: "They pay 1% a year for 5 years" },
+          { key: "they-heavy", label: "They pay 3% a year for 10 years" },
+          { key: "we-light", label: "We pay 1% a year for 5 years" },
+          { key: "we-heavy", label: "We pay 3% a year for 10 years" },
+        ],
+      };
     },
     "chat.demandCheck": async ({ id, chat = {}, speaker = "", reply = "", answering = "", messageId = "", time = "" }) => {
       try {

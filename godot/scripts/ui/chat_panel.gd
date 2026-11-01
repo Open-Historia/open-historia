@@ -5,6 +5,7 @@ signal open_requested
 signal unread_changed(count: int)
 signal generating_changed(generating: bool)
 signal active_chat_changed(chat_id: String)
+signal world_changed
 
 const PANEL_MAX_WIDTH := 928.0
 const PANEL_MAX_HEIGHT := 800.0
@@ -51,6 +52,8 @@ const ICONS := {
 	"contacts": "<svg viewBox='0 0 24 24' fill='none' stroke='#fff' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4Z'/><path d='M8 9h8M8 13h5'/></svg>",
 	"institutions": "<svg viewBox='0 0 24 24' fill='none' stroke='#fff' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='M3 21h18'/><path d='M5 21V10h14v11'/><path d='M4 10 12 4l8 6'/><path d='M8 13v5M12 13v5M16 13v5'/></svg>",
 	"intelligence": "<svg viewBox='0 0 24 24' fill='none' stroke='#fff' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6S2.5 12 2.5 12Z'/><circle cx='12' cy='12' r='2.5'/></svg>",
+	"pencil": "<svg viewBox='0 0 24 24' fill='none' stroke='#fff' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'><path d='M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z'/><path d='m15 5 4 4'/></svg>",
+	"plus": "<svg viewBox='0 0 24 24' fill='none' stroke='#fff' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'><line x1='12' y1='5' x2='12' y2='19'/><line x1='5' y1='12' x2='19' y2='12'/></svg>",
 	"search": "<svg viewBox='0 0 24 24' fill='none' stroke='#fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='11' cy='11' r='8'/><path d='m21 21-4.35-4.35'/></svg>",
 }
 
@@ -86,6 +89,7 @@ var roster_loaded := false
 var pickable: Array = []
 var pickable_loading := false
 var selector_open := false
+var selector_mode := "start"
 var selected: Array = []
 var list_hover := ""
 var list_confirm := ""
@@ -125,6 +129,8 @@ var _intelligence_host: VBoxContainer
 var _institutions_view: Control
 var _intelligence_view: Control
 var _modal: PanelContainer
+var _modal_title: Label
+var _modal_subtitle: Label
 var _modal_selected_label: Label
 var _modal_selected_flow: HFlowContainer
 var _modal_search: LineEdit
@@ -1698,8 +1704,11 @@ func leave_active() -> void:
 	render_all()
 
 
-func _open_selector() -> void:
+func _open_selector(mode := "start") -> void:
 	selector_open = true
+	selector_mode = mode
+	_modal_title.text = "Add Countries to Chat" if mode == "add" else "Start New Diplomatic Chat"
+	_modal_subtitle.text = "Select one or more countries to join this diplomatic group" if mode == "add" else "Select countries to invite to the conversation"
 	selected = []
 	_modal_search.text = ""
 	_modal.visible = true
@@ -1788,8 +1797,10 @@ func _build_modal() -> void:
 	var titles := VBoxContainer.new()
 	titles.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	titles.add_theme_constant_override("separation", 3)
-	titles.add_child(UI.label("Start New Diplomatic Chat", 17, UI.WHITE, 700))
-	titles.add_child(UI.label("Select countries to invite to the conversation", 12, Color(1, 1, 1, 0.4)))
+	_modal_title = UI.label("Start New Diplomatic Chat", 17, UI.WHITE, 700)
+	titles.add_child(_modal_title)
+	_modal_subtitle = UI.label("Select countries to invite to the conversation", 12, Color(1, 1, 1, 0.4))
+	titles.add_child(_modal_subtitle)
 	title_row.add_child(titles)
 	var close := text_button("✕", 18, Color(1, 1, 1, 0.5), UI.WHITE, 400, Color(1, 1, 1, 0.08))
 	close.tooltip_text = "Close"
@@ -1877,8 +1888,15 @@ func _build_modal() -> void:
 	for state in ["font_color", "font_hover_color", "font_pressed_color", "font_disabled_color", "font_hover_pressed_color", "font_focus_color"]:
 		_modal_start.add_theme_color_override(state, UI.WHITE)
 	_modal_start.pressed.connect(func() -> void:
-		if not selected.is_empty():
-			_start_chat(selected))
+		if selected.is_empty():
+			return
+		if selector_mode == "add":
+			var chosen := selected.duplicate()
+			_close_selector()
+			if conversation and not conversation.chat_id.is_empty():
+				conversation.add_members(chosen)
+			return
+		_start_chat(selected))
 	foot_row.add_child(_modal_start)
 	foot.add_child(foot_row)
 	column.add_child(foot)
@@ -1900,7 +1918,7 @@ func _render_modal() -> void:
 			chip.add_child(UI.label(t(entry.get("name", "")) + ("," if index < selected.size() - 1 else ""), 12, Color(1, 1, 1, 0.35)))
 			_modal_selected_flow.add_child(chip)
 	var count := selected.size()
-	_modal_start.text = "Chat with %d %s" % [count, "country" if count == 1 else "countries"]
+	_modal_start.text = ("Add %d %s" if selector_mode == "add" else "Chat with %d %s") % [count, "country" if count == 1 else "countries"]
 	var enabled := count > 0
 	_modal_start.disabled = not enabled
 	_modal_start.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND if enabled else Control.CURSOR_FORBIDDEN
@@ -1920,6 +1938,9 @@ func _render_modal_grid() -> void:
 	clear(_modal_grid)
 	var query := _modal_search.text.to_lower()
 	var names_seen := {}
+	if selector_mode == "add" and conversation:
+		for member in conversation.countries():
+			names_seen[t(d(member).get("name", "")).to_lower()] = true
 	for entry in pickable:
 		var entry_name := t(entry.get("name", ""))
 		if entry_name.is_empty() or names_seen.has(entry_name.to_lower()):
@@ -2996,12 +3017,34 @@ class Conversation extends VBoxContainer:
 	var lifecycle_reveal := false
 	var staged_speaker: Dictionary = {}
 	var lifecycle_token := 0
+	var peace_info: Dictionary = {}
+	var peace_form_open := false
+	var peace_busy: Dictionary = {}
+	var peace_errors: Dictionary = {}
+	var peace_territory := "restored"
+	var peace_money := "none"
+	var peace_said := ""
+	var peace_sending := false
+	var editing_title := false
+	var _peace_loading := false
+	var _peace_again := false
+	var _peace_accepted: Dictionary = {}
 	var _last_thread_signature := ""
 	var _rendered_signature := ""
 	var _header: PanelContainer
 	var _header_flags: HBoxContainer
 	var _title: Label
+	var _title_row: HBoxContainer
+	var _title_editor: HBoxContainer
+	var _title_input: LineEdit
+	var _pencil: Button
+	var _add_country: Button
 	var _subtitle: Label
+	var _advisor_note: PanelContainer
+	var _tag_holder: MarginContainer
+	var _tag_flow: HFlowContainer
+	var _peace_holder: MarginContainer
+	var _peace_button: Button
 	var _envelope: Button
 	var _trash: Button
 	var _scroll: ScrollContainer
@@ -3059,7 +3102,20 @@ class Conversation extends VBoxContainer:
 		_terminal.add_theme_stylebox_override("panel", terminal_style)
 		_terminal.visible = false
 		add_child(_terminal)
+		_advisor_note = PanelContainer.new()
+		var note_style: StyleBoxFlat = terminal_style.duplicate()
+		_advisor_note.add_theme_stylebox_override("panel", note_style)
+		_advisor_note.add_child(UI.wrapped("Your advisor brings you what your government learns in secret. Act on it with your orders.", 11, Color(1, 1, 1, 0.5)))
+		_advisor_note.visible = false
+		add_child(_advisor_note)
 		_build_composer()
+		var peace_timer := Timer.new()
+		peace_timer.wait_time = 5.0
+		peace_timer.autostart = true
+		peace_timer.timeout.connect(func() -> void:
+			if is_visible_in_tree() and not chat_id.is_empty():
+				refresh_peace())
+		add_child(peace_timer)
 
 
 	func _build_header() -> void:
@@ -3088,15 +3144,66 @@ class Conversation extends VBoxContainer:
 		var titles := VBoxContainer.new()
 		titles.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		titles.add_theme_constant_override("separation", 2)
+		_title_row = HBoxContainer.new()
+		_title_row.add_theme_constant_override("separation", 6)
 		_title = UI.label("", 15, Color(1, 1, 1, 0.95), 750)
 		_title.clip_text = true
 		_title.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-		titles.add_child(_title)
+		_title.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+		_title_row.add_child(_title)
+		_pencil = ChatPanel.icon_button("pencil", 11, Color(1, 1, 1, 0.4), Color(0, 0, 0, 0), Color(0, 0, 0, 0))
+		for state in ["icon_hover_color", "icon_pressed_color", "icon_hover_pressed_color"]:
+			_pencil.add_theme_color_override(state, UI.WHITE)
+		ChatPanel.style_flat(_pencil, Color(0, 0, 0, 0), Color(0, 0, 0, 0), 4, Vector4(2, 2, 2, 2), Color(0, 0, 0, 0))
+		_pencil.tooltip_text = "Edit group title"
+		_pencil.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		_pencil.pressed.connect(begin_title_edit)
+		_title_row.add_child(_pencil)
+		titles.add_child(_title_row)
+		_title_editor = HBoxContainer.new()
+		_title_editor.add_theme_constant_override("separation", 6)
+		_title_input = LineEdit.new()
+		_title_input.max_length = 60
+		_title_input.custom_minimum_size = Vector2(0, 26)
+		_title_input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_title_input.add_theme_stylebox_override("normal", UI.box(Color(0, 0, 0, 0.35), Color(1, 1, 1, 0.25), 6, 1, Vector4(7, 3, 7, 3)))
+		_title_input.add_theme_stylebox_override("focus", UI.box(Color(0, 0, 0, 0.35), Color(1, 1, 1, 0.25), 6, 1, Vector4(7, 3, 7, 3)))
+		_title_input.add_theme_font_override("font", UI.font(700))
+		_title_input.add_theme_font_size_override("font_size", 14)
+		_title_input.add_theme_color_override("font_color", UI.WHITE)
+		_title_input.text_submitted.connect(func(_text: String) -> void: save_title())
+		_title_input.focus_exited.connect(func() -> void:
+			if editing_title:
+				save_title())
+		_title_input.gui_input.connect(func(event: InputEvent) -> void:
+			if event is InputEventKey and (event as InputEventKey).pressed and (event as InputEventKey).keycode == KEY_ESCAPE:
+				_title_input.accept_event()
+				editing_title = false
+				refresh_chrome())
+		var input_cap := MarginContainer.new()
+		input_cap.custom_minimum_size.x = 288
+		input_cap.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+		input_cap.add_child(_title_input)
+		_title_editor.add_child(input_cap)
+		var save := ChatPanel.solid_button("Save", 10, ChatPanel.SKY, 700, Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.25), Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.5), Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.32), Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.6), 6, Vector4(7, 3, 7, 3))
+		save.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		save.pressed.connect(save_title)
+		_title_editor.add_child(save)
+		_title_editor.visible = false
+		titles.add_child(_title_editor)
 		_subtitle = UI.label("", 10, Color(1, 1, 1, 0.34))
 		_subtitle.clip_text = true
 		_subtitle.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 		titles.add_child(_subtitle)
 		row.add_child(titles)
+		_add_country = ChatPanel.icon_text_button("Add Country", "plus", 11, Color(1, 1, 1, 0.85), Color(1, 1, 1, 0.06), Color(1, 1, 1, 0.14), 7, Vector4(8, 4, 8, 4))
+		_add_country.add_theme_font_override("font", UI.font(700))
+		for state in ["font_hover_color", "font_pressed_color", "font_hover_pressed_color", "icon_hover_color", "icon_pressed_color", "icon_hover_pressed_color"]:
+			_add_country.add_theme_color_override(state, UI.WHITE)
+		_add_country.tooltip_text = "Add country to conversation"
+		_add_country.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		_add_country.pressed.connect(func() -> void: panel._open_selector("add"))
+		row.add_child(_add_country)
 		_envelope = ChatPanel.icon_button("envelope", 14, Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.7), Color(0, 0, 0, 0), Color(0, 0, 0, 0))
 		_envelope.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		_envelope.pressed.connect(func() -> void:
@@ -3201,8 +3308,34 @@ class Conversation extends VBoxContainer:
 		_poll_holder.add_child(_poll_box)
 		_poll_holder.visible = false
 		column.add_child(_poll_holder)
+		_tag_holder = MarginContainer.new()
+		_tag_holder.add_theme_constant_override("margin_bottom", 7)
+		_tag_flow = HFlowContainer.new()
+		_tag_flow.add_theme_constant_override("h_separation", 6)
+		_tag_flow.add_theme_constant_override("v_separation", 6)
+		_tag_holder.add_child(_tag_flow)
+		_tag_holder.visible = false
+		column.add_child(_tag_holder)
+		_peace_holder = MarginContainer.new()
+		_peace_holder.add_theme_constant_override("margin_bottom", 8)
+		_peace_holder.visible = false
+		column.add_child(_peace_holder)
 		var row := HBoxContainer.new()
 		row.add_theme_constant_override("separation", 8)
+		_peace_button = Button.new()
+		_peace_button.text = "Peace"
+		_peace_button.focus_mode = Control.FOCUS_NONE
+		_peace_button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+		_peace_button.custom_minimum_size = Vector2(0, 40)
+		_peace_button.size_flags_vertical = Control.SIZE_SHRINK_END
+		_peace_button.add_theme_font_override("font", UI.font(760))
+		_peace_button.add_theme_font_size_override("font_size", 11)
+		_peace_button.pressed.connect(func() -> void:
+			peace_form_open = not peace_form_open
+			peace_said = ""
+			update_composer())
+		_peace_button.visible = false
+		row.add_child(_peace_button)
 		_vote_button = Button.new()
 		_vote_button.text = "Vote"
 		_vote_button.focus_mode = Control.FOCUS_NONE
@@ -3301,6 +3434,7 @@ class Conversation extends VBoxContainer:
 		if thread_changed and not rendered:
 			render_messages(false)
 		refresh_chrome()
+		refresh_peace()
 
 
 	func _thread_signature(source: Dictionary) -> String:
@@ -3332,12 +3466,23 @@ class Conversation extends VBoxContainer:
 		staged_speaker = {}
 		lifecycle_token += 1
 		lifecycle_base = {}
+		peace_info = {}
+		peace_form_open = false
+		peace_busy = {}
+		peace_errors = {}
+		peace_territory = "restored"
+		peace_money = "none"
+		peace_said = ""
+		peace_sending = false
+		_peace_accepted = {}
+		editing_title = false
 		_composer.text = ""
 		fit_composer()
 		_load_history(true)
 		refresh_chrome()
 		render_messages(true)
 		world_changed()
+		refresh_peace()
 
 
 	func leave() -> void:
@@ -3520,8 +3665,15 @@ class Conversation extends VBoxContainer:
 			ChatPanel.clear(_header_flags)
 			_header_flags.add_child(panel.flag_stack(shown, Vector2(24, 16), -6))
 			_header_flags.custom_minimum_size.x = 40 if shown.size() > 1 else 25
-			var title := ChatPanel.t(chat.get("title", ""))
-			_title.text = title if not title.is_empty() else ChatPanel.summarize(counterparts)
+			_title.text = display_title()
+			var title_font := _title.get_theme_font("font")
+			var title_width := title_font.get_string_size(_title.text, HORIZONTAL_ALIGNMENT_LEFT, -1, _title.get_theme_font_size("font_size")).x if title_font else 200.0
+			_title.custom_minimum_size.x = minf(ceilf(title_width) + 2.0, 440.0)
+			var renamable := not is_institutional() and not is_lifecycle_conversation()
+			_pencil.visible = renamable
+			_add_country.visible = renamable
+			_title_row.visible = not editing_title
+			_title_editor.visible = editing_title
 			if is_lifecycle_conversation():
 				_subtitle.text = "Institution membership negotiation · concluded" if lifecycle_concluded() else "Institution membership negotiation"
 			elif counterparts.size() > 1:
@@ -3554,7 +3706,11 @@ class Conversation extends VBoxContainer:
 		if terminal:
 			ChatPanel.clear(_terminal)
 			_terminal.add_child(_lifecycle_outcome_panel(true))
-		_composer_panel.visible = not terminal and not loading
+		var advisor := not terminal and is_advisor_desk()
+		_advisor_note.visible = advisor
+		_composer_panel.visible = not terminal and not advisor and not loading
+		_update_tags()
+		_update_peace_composer()
 		var council := is_council()
 		(_council_bar.get_parent() as Control).visible = council
 		_council_bar.visible = council
@@ -3754,7 +3910,7 @@ class Conversation extends VBoxContainer:
 			await submit_player_text(text)
 
 
-	func submit_player_text(text: String, on_sent := Callable()) -> void:
+	func submit_player_text(text: String, on_sent := Callable(), forced_id := "") -> void:
 		if text.is_empty() or loading:
 			return
 		await cut_in()
@@ -3769,7 +3925,7 @@ class Conversation extends VBoxContainer:
 		var date := ChatPanel.t(catch_up.get("date", ""))
 		if date.is_empty():
 			date = panel.game_date
-		var message_id := ChatPanel.thread_id("msg")
+		var message_id := forced_id if not forced_id.is_empty() else ChatPanel.thread_id("msg")
 		var message := {"id": message_id, "role": "user", "speaker": panel.player, "text": text, "time": date}
 		if not ChatPanel.t(catch_up.get("text", "")).is_empty():
 			message["catchUp"] = ChatPanel.t(catch_up.get("text", ""))
@@ -3865,6 +4021,13 @@ class Conversation extends VBoxContainer:
 			speaking = {}
 			update_composer()
 			render_messages(true)
+			var peace_line := ChatPanel.t(answer.get("peace", ""))
+			if not peace_line.is_empty() and not is_group():
+				var settled := await panel.engine.request("chat.peaceAnswer", {"speaker": ChatPanel.t(country.get("name", "")), "line": peace_line, "chatId": id, "messageId": ChatPanel.t(leader.get("id", ""))})
+				if settled.get("ok", false) and ChatPanel.t(ChatPanel.d(settled.get("result", {})).get("outcome", "")) == "peace":
+					panel.world_changed.emit()
+				if id == chat_id:
+					refresh_peace()
 			if not is_group() and not they_are().is_empty():
 				var check_chat: Dictionary = chat.duplicate()
 				check_chat["messages"] = messages_ref
@@ -3999,6 +4162,7 @@ class Conversation extends VBoxContainer:
 		speaking = {}
 		refresh_chrome()
 		render_messages(true)
+		refresh_peace()
 
 
 	func _present_lifecycle_replies(full: Array, plan: Array) -> void:
@@ -4298,6 +4462,334 @@ class Conversation extends VBoxContainer:
 		await fetch_leader_response(ChatPanel.d(plan.get("country", {})), ChatPanel.t(plan.get("playerMessage", "")))
 
 
+	func is_advisor_desk() -> bool:
+		return ChatPanel.t(chat.get("source", "")) == "advisor"
+
+
+	func display_title() -> String:
+		var title := ChatPanel.t(chat.get("title", ""))
+		return title if not title.is_empty() else ChatPanel.summarize(panel.counterparts_of(countries()))
+
+
+	func begin_title_edit() -> void:
+		editing_title = true
+		_title_input.text = display_title()
+		refresh_chrome()
+		if is_inside_tree():
+			await get_tree().process_frame
+			_title_input.grab_focus()
+			_title_input.select_all()
+
+
+	func save_title() -> void:
+		if not editing_title:
+			return
+		var trimmed := _title_input.text.strip_edges()
+		editing_title = false
+		refresh_chrome()
+		if trimmed.is_empty() or trimmed == display_title():
+			return
+		await _append_events([{"id": ChatPanel.thread_id("title"), "kind": "title_changed", "time": panel.game_date, "by": panel.player, "title": trimmed}])
+
+
+	func add_members(chosen: Array) -> void:
+		var events: Array = []
+		for entry in chosen:
+			var country := ChatPanel.d(entry)
+			events.append({"id": ChatPanel.thread_id("join"), "kind": "member_joined", "time": panel.game_date, "by": panel.player, "member": {"name": ChatPanel.t(country.get("name", "")), "code": ChatPanel.t(country.get("code", ""))}})
+		if not events.is_empty():
+			await _append_events(events)
+
+
+	func _append_events(events: Array) -> void:
+		if panel.engine == null or chat_id.is_empty():
+			return
+		var id := chat_id
+		var reply := await panel.engine.request("chat.append", {"id": id, "events": events, "messages": messages_ref})
+		panel.adopt_chat_result(reply, id)
+		if id == chat_id:
+			refresh_chrome()
+
+
+	func _update_tags() -> void:
+		var counterparts := panel.counterparts_of(countries())
+		var show := is_group() and not is_institutional() and not is_lifecycle_conversation() and not counterparts.is_empty()
+		_tag_holder.visible = show
+		ChatPanel.clear(_tag_flow)
+		if not show:
+			return
+		var caption := UI.label("Tag:", 9, Color(1, 1, 1, 0.38), 700)
+		caption.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		_tag_flow.add_child(caption)
+		for country in counterparts:
+			_tag_flow.add_child(_tag_chip(ChatPanel.t(ChatPanel.d(country).get("name", ""))))
+
+
+	func _tag_chip(country_name: String) -> Control:
+		var chip := PanelContainer.new()
+		var normal := UI.box(Color(1, 1, 1, 0.06), Color(1, 1, 1, 0.12), 999, 1, Vector4(7, 3, 7, 3))
+		var hover := UI.box(Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.2), Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.5), 999, 1, Vector4(7, 3, 7, 3))
+		chip.add_theme_stylebox_override("panel", normal)
+		chip.mouse_filter = Control.MOUSE_FILTER_STOP
+		chip.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+		chip.tooltip_text = "Direct message to %s in this group" % country_name
+		var line := HBoxContainer.new()
+		line.add_theme_constant_override("separation", 3)
+		line.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		line.add_child(UI.label("@", 9, ChatPanel.BLUE_SOFT, 700))
+		var name_label := UI.label(country_name, 9, Color(1, 1, 1, 0.85))
+		name_label.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+		line.add_child(name_label)
+		chip.add_child(line)
+		chip.mouse_entered.connect(func() -> void: chip.add_theme_stylebox_override("panel", hover))
+		chip.mouse_exited.connect(func() -> void: chip.add_theme_stylebox_override("panel", normal))
+		chip.gui_input.connect(func(event: InputEvent) -> void:
+			if event is InputEventMouseButton and (event as InputEventMouseButton).pressed and (event as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT:
+				chip.accept_event()
+				tag(country_name))
+		return chip
+
+
+	func tag(country_name: String) -> void:
+		var tag_text := "@%s " % country_name
+		var current := _composer.text
+		if not current.contains(tag_text.strip_edges()):
+			_composer.text = ("%s %s" % [current, tag_text]) if not current.is_empty() else tag_text
+		fit_composer()
+		if not _composer.is_inside_tree():
+			return
+		_composer.grab_focus()
+		_composer.set_caret_line(_composer.get_line_count() - 1)
+		_composer.set_caret_column(_composer.get_line(_composer.get_line_count() - 1).length())
+
+
+	func peace_enemy() -> String:
+		var war := ChatPanel.d(peace_info.get("war", {}))
+		return ChatPanel.t(war.get("enemy", ""))
+
+
+	func can_propose_peace() -> bool:
+		return peace_info.get("canPropose", false) == true and not peace_enemy().is_empty()
+
+
+	func _update_peace_composer() -> void:
+		var can := can_propose_peace()
+		if not can:
+			peace_form_open = false
+		_peace_button.visible = can
+		_peace_button.tooltip_text = "Propose peace to %s" % peace_enemy()
+		var open_now := can and peace_form_open
+		var accent := UI.ACCENT
+		ChatPanel.style_flat(_peace_button, Color(accent, 0.16) if open_now else Color(1, 1, 1, 0.05), Color(accent, 0.6) if open_now else Color(1, 1, 1, 0.15), 10, Vector4(10, 0, 10, 0), Color(accent, 0.16) if open_now else Color(1, 1, 1, 0.08), Color(accent, 0.6) if open_now else Color(1, 1, 1, 0.22))
+		for state_name in ["font_color", "font_hover_color", "font_pressed_color", "font_hover_pressed_color", "font_focus_color"]:
+			_peace_button.add_theme_color_override(state_name, accent if open_now else Color(1, 1, 1, 0.7))
+		ChatPanel.clear(_peace_holder)
+		_peace_holder.visible = open_now
+		if open_now:
+			_peace_holder.add_child(_peace_form())
+
+
+	func _peace_form() -> Control:
+		var box := PanelContainer.new()
+		box.add_theme_stylebox_override("panel", UI.box(Color(1, 1, 1, 0.03), Color(1, 1, 1, 0.1), 10, 1, Vector4(10, 9, 10, 9)))
+		var column := VBoxContainer.new()
+		column.add_theme_constant_override("separation", 6)
+		column.add_child(UI.label("Propose peace", 9, ChatPanel.GREY_TEXT, 820))
+		column.add_child(UI.wrapped("Your terms are sent in this chat. Their leader answers them in the reply: accepts, declines or offers other terms.", 8, Color(1, 1, 1, 0.38)))
+		var ground := _peace_field(ChatPanel.a(peace_info.get("territoryChoices", [])), peace_territory)
+		ground.tooltip_text = "The ground"
+		ground.item_selected.connect(func(index: int) -> void: peace_territory = str(ground.get_item_metadata(index)))
+		column.add_child(ground)
+		var money := _peace_field(ChatPanel.a(peace_info.get("reparationChoices", [])), peace_money)
+		money.tooltip_text = "Reparations"
+		money.item_selected.connect(func(index: int) -> void: peace_money = str(money.get_item_metadata(index)))
+		column.add_child(money)
+		if not peace_said.is_empty():
+			column.add_child(UI.wrapped(peace_said, 9, ChatPanel.RED_SOFT))
+		var buttons := HBoxContainer.new()
+		buttons.alignment = BoxContainer.ALIGNMENT_END
+		buttons.add_theme_constant_override("separation", 6)
+		var cancel := ChatPanel.solid_button("Cancel", 9, Color(1, 1, 1, 0.58), 400, Color(0, 0, 0, 0), Color(1, 1, 1, 0.1), Color(1, 1, 1, 0.05), Color(1, 1, 1, 0.16), 8, Vector4(8, 5, 8, 5))
+		cancel.pressed.connect(func() -> void:
+			peace_form_open = false
+			peace_said = ""
+			update_composer())
+		buttons.add_child(cancel)
+		var send := ChatPanel.solid_button("Send terms", 9, Color("#04141a"), 800, UI.ACCENT, UI.ACCENT, UI.ACCENT.lightened(0.08), UI.ACCENT, 8, Vector4(8, 5, 8, 5))
+		send.disabled = peace_sending or loading
+		send.mouse_default_cursor_shape = Control.CURSOR_WAIT if peace_sending or loading else Control.CURSOR_POINTING_HAND
+		send.pressed.connect(propose_peace)
+		buttons.add_child(send)
+		column.add_child(buttons)
+		box.add_child(column)
+		return box
+
+
+	func _peace_field(options: Array, chosen: String) -> OptionButton:
+		var node := OptionButton.new()
+		node.focus_mode = Control.FOCUS_NONE
+		node.fit_to_longest_item = false
+		node.clip_text = true
+		node.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		node.custom_minimum_size = Vector2(1, 26)
+		node.add_theme_font_override("font", UI.font(400))
+		node.add_theme_font_size_override("font_size", 11)
+		node.add_theme_color_override("font_color", Color8(231, 233, 234))
+		var style := UI.box(Color(0, 0, 0, 0.35), Color(1, 1, 1, 0.16), 6, 1, Vector4(6, 3, 6, 3))
+		for state in ["normal", "hover", "pressed", "focus"]:
+			node.add_theme_stylebox_override(state, style)
+		for option in options:
+			var entry := ChatPanel.d(option)
+			node.add_item(ChatPanel.t(entry.get("label", "")))
+			node.set_item_metadata(node.item_count - 1, ChatPanel.t(entry.get("key", "")))
+			if ChatPanel.t(entry.get("key", "")) == chosen:
+				node.select(node.item_count - 1)
+		return node
+
+
+	func propose_peace() -> void:
+		if peace_sending or loading:
+			return
+		var war := ChatPanel.d(peace_info.get("war", {}))
+		if ChatPanel.t(war.get("id", "")).is_empty():
+			peace_said = "That war is over."
+			update_composer()
+			return
+		peace_sending = true
+		peace_said = ""
+		update_composer()
+		var id := chat_id
+		var message_id := ChatPanel.thread_id("msg")
+		var reply := await panel.engine.request("country.answer", {"op": "propose", "ref": ChatPanel.t(war.get("id", "")), "territory": peace_territory, "money": peace_money, "theirs": ChatPanel.t(war.get("enemy", "")), "chatId": id, "messageId": message_id})
+		peace_sending = false
+		if id != chat_id:
+			return
+		var result := ChatPanel.d(reply.get("result", {})) if reply.get("ok", false) else {"ok": false, "said": str(reply.get("error", "That could not be done."))}
+		if not result.get("ok", false):
+			peace_said = ChatPanel.t(result.get("said", ""))
+			if peace_said.is_empty():
+				peace_said = "That could not be done."
+			update_composer()
+			return
+		peace_form_open = false
+		update_composer()
+		await submit_player_text(I18n.ui("We propose peace on these terms: {{terms}}.", {"terms": ChatPanel.t(result.get("terms", ""))}), Callable(), message_id)
+		refresh_peace()
+
+
+	func refresh_peace() -> void:
+		if panel.engine == null or chat_id.is_empty():
+			return
+		if _peace_loading:
+			_peace_again = true
+			return
+		_peace_loading = true
+		var asked_for := chat_id
+		var ids: Array = []
+		for message in presented():
+			var message_id := ChatPanel.t(ChatPanel.d(message).get("id", ""))
+			if not message_id.is_empty():
+				ids.append(message_id)
+		var counterpart := ""
+		if one_on_one() and not is_advisor_desk():
+			var others := panel.counterparts_of(countries())
+			if not others.is_empty():
+				counterpart = ChatPanel.t(ChatPanel.d(others[0]).get("name", ""))
+		var reply := await panel.engine.request("chat.peace", {"chatId": asked_for, "messageIds": ids, "counterpart": counterpart, "player": panel.player})
+		_peace_loading = false
+		if asked_for == chat_id and reply.get("ok", false):
+			var next := ChatPanel.d(reply.get("result", {}))
+			if JSON.stringify(next) != JSON.stringify(peace_info):
+				var first := peace_info.is_empty()
+				var ended := false
+				for offer in ChatPanel.a(next.get("offers", [])):
+					var entry := ChatPanel.d(offer)
+					var offer_id := ChatPanel.t(entry.get("id", ""))
+					if ChatPanel.t(entry.get("status", "")) == "accepted" and not _peace_accepted.has(offer_id):
+						_peace_accepted[offer_id] = true
+						ended = ended or not first
+				peace_info = next
+				update_composer()
+				render_messages(false)
+				if ended:
+					panel.world_changed.emit()
+		if _peace_again:
+			_peace_again = false
+			refresh_peace()
+
+
+	func _peace_card(offer: Dictionary) -> Control:
+		var id := ChatPanel.t(offer.get("id", ""))
+		var open: bool = offer.get("open", false) == true
+		var to_me: bool = offer.get("toMe", false) == true
+		var card := PanelContainer.new()
+		card.add_theme_stylebox_override("panel", UI.box(Color(1, 1, 1, 0.04), Color(UI.ACCENT, 0.55) if open and to_me else Color(1, 1, 1, 0.14), 12, 1, Vector4(14, 11, 14, 11)))
+		if not open:
+			card.modulate.a = 0.72
+		var column := VBoxContainer.new()
+		column.add_theme_constant_override("separation", 6)
+		var heading := HFlowContainer.new()
+		heading.add_theme_constant_override("h_separation", 0)
+		heading.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var ink := Color(1, 1, 1, 0.55)
+		var pieces: Array[Label] = [UI.label(ChatPanel.t(offer.get("heading", "")), 10, ink, 800, "Arial", 1), UI.label(" · ", 10, ink, 800, "Arial", 1)]
+		var party := UI.label(ChatPanel.t(offer.get("party", "")), 10, ink, 800, "Arial", 1)
+		party.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+		pieces.append(party)
+		var state := ChatPanel.t(offer.get("state", ""))
+		if not state.is_empty():
+			pieces.append(UI.label(" · ", 10, ink, 800, "Arial", 1))
+			pieces.append(UI.label(state, 10, ink, 800, "Arial", 1))
+		for piece in pieces:
+			piece.uppercase = true
+			heading.add_child(piece)
+		column.add_child(heading)
+		var terms := VBoxContainer.new()
+		terms.add_theme_constant_override("separation", 1)
+		for line in ChatPanel.a(offer.get("terms", [])):
+			terms.add_child(UI.wrapped(ChatPanel.t(line), 12, Color(1, 1, 1, 0.85)))
+		column.add_child(terms)
+		var error := ChatPanel.t(peace_errors.get(id, ""))
+		if not error.is_empty():
+			column.add_child(UI.wrapped(error, 12, ChatPanel.RED_SOFT))
+		if open and to_me:
+			var busy: bool = peace_busy.get(id, false)
+			var buttons := HBoxContainer.new()
+			buttons.add_theme_constant_override("separation", 8)
+			var accept := ChatPanel.solid_button("Accept", 12, Color("#04141a"), 800, UI.ACCENT, UI.ACCENT, UI.ACCENT.lightened(0.08), UI.ACCENT, 8, Vector4(10, 6, 10, 6))
+			var decline := ChatPanel.solid_button("Decline", 12, Color8(231, 233, 234), 800, Color(1, 1, 1, 0.06), Color(1, 1, 1, 0.18), Color(1, 1, 1, 0.1), Color(1, 1, 1, 0.26), 8, Vector4(10, 6, 10, 6))
+			for button in [accept, decline]:
+				button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+				button.custom_minimum_size.y = 37
+				button.disabled = busy
+				buttons.add_child(button)
+			accept.pressed.connect(func() -> void: answer_peace(offer, "accept"))
+			decline.pressed.connect(func() -> void: answer_peace(offer, "decline"))
+			column.add_child(buttons)
+		card.add_child(column)
+		return card
+
+
+	func answer_peace(offer: Dictionary, op: String) -> void:
+		var id := ChatPanel.t(offer.get("id", ""))
+		if id.is_empty() or peace_busy.get(id, false):
+			return
+		peace_busy[id] = true
+		peace_errors.erase(id)
+		render_messages(false)
+		var reply := await panel.engine.request("country.answer", {"op": op, "ref": id})
+		peace_busy.erase(id)
+		var result := ChatPanel.d(reply.get("result", {})) if reply.get("ok", false) else {"ok": false, "said": str(reply.get("error", "That could not be done."))}
+		if not result.get("ok", false):
+			peace_errors[id] = ChatPanel.t(result.get("said", "That could not be done."))
+			render_messages(false)
+			return
+		if op == "accept":
+			_peace_accepted[id] = true
+			panel.world_changed.emit()
+		await refresh_peace()
+
+
 	func render_messages(scroll_down: bool) -> void:
 		if chat_id.is_empty() or _box == null:
 			return
@@ -4350,6 +4842,25 @@ class Conversation extends VBoxContainer:
 					by_message[message_id] = placed
 				elif status == "open" or status == "countered":
 					stranded.append(record)
+		var peace_by_message := {}
+		var peace_stranded: Array = []
+		var drawn := {}
+		for entry in window_entries:
+			drawn[ChatPanel.t(ChatPanel.d(entry["msg"]).get("id", ""))] = true
+		var waiting := {}
+		for message in source:
+			var entry := ChatPanel.d(message)
+			if panel.unseen.has(ChatPanel.t(entry.get("eventId", ""))):
+				waiting[ChatPanel.t(entry.get("id", ""))] = true
+		for offer in ChatPanel.a(peace_info.get("offers", [])):
+			var record := ChatPanel.d(offer)
+			var message_id := ChatPanel.t(record.get("messageId", ""))
+			if not message_id.is_empty() and drawn.has(message_id):
+				var placed: Array = peace_by_message.get(message_id, [])
+				placed.append(record)
+				peace_by_message[message_id] = placed
+			elif record.get("open", false) == true and not (not message_id.is_empty() and waiting.has(message_id)):
+				peace_stranded.append(record)
 		var area := _area_width()
 		for i in range(window_entries.size()):
 			var message := ChatPanel.d(window_entries[i]["msg"])
@@ -4381,10 +4892,14 @@ class Conversation extends VBoxContainer:
 					_box.add_child(bubble)
 			for demand in ChatPanel.a(by_message.get(ChatPanel.t(message.get("id", "")), [])):
 				_box.add_child(_demand_card(ChatPanel.d(demand)))
+			for offer in ChatPanel.a(peace_by_message.get(ChatPanel.t(message.get("id", "")), [])):
+				_box.add_child(_peace_card(ChatPanel.d(offer)))
 		for poll in ChatPanel.a(chat.get("polls", [])):
 			_box.add_child(_poll_card(ChatPanel.d(poll)))
 		for demand in stranded:
 			_box.add_child(_demand_card(ChatPanel.d(demand)))
+		for offer in peace_stranded:
+			_box.add_child(_peace_card(ChatPanel.d(offer)))
 		var list := countries()
 		var lifecycle_thinking := is_lifecycle_conversation() and loading and speaking.is_empty() and staged_speaker.is_empty() and list.size() > 1
 		var group_thinking := is_group() and not is_lifecycle_conversation() and loading and speaking.is_empty()

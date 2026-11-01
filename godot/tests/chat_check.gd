@@ -282,6 +282,7 @@ func _run() -> void:
 		_check("the player's vote is cast once", not after.is_empty() and ((after[0] as Dictionary).get("votes", {}) as Dictionary).has("France"))
 		await _shoot("chat-8-poll-voted")
 
+	await _group_diplomacy()
 	panel.leave_active()
 	await _wait(0.3)
 	var long_thread: Array = []
@@ -403,7 +404,144 @@ func _run() -> void:
 				await _until(func() -> bool: return council.get("loading") == false, 60.0)
 				await _wait(2.0)
 				await _shoot("chat-18-council-reply")
+	await _peace_in_chat()
 	_finish()
+
+
+func _close_notice() -> void:
+	var shell: ShellBoot = main.get("shell") as ShellBoot
+	if shell != null and shell.notice != null and is_instance_valid(shell.notice):
+		shell.notice.closed.emit()
+		await _frames(3)
+
+
+func _group_diplomacy() -> void:
+	await _close_notice()
+	panel.leave_active()
+	await _wait(0.3)
+	var table := []
+	for wanted in ["Spain", "Italy"]:
+		for entry in panel.pickable:
+			if str(entry.get("name", "")) == wanted:
+				table.append({"name": wanted, "code": str(entry.get("code", ""))})
+	panel._start_chat(table)
+	await _until(func() -> bool: return panel.conversation_visible(), 10.0)
+	await _wait(0.5)
+	var view := panel.conversation
+	var chips: Array = view._tag_flow.get_children().filter(func(node: Node) -> bool: return node is PanelContainer)
+	_check("a group offers a tag chip for each country", view._tag_holder.visible and chips.size() == 2 and _labels(view._tag_flow).has("Tag:") and _labels(view._tag_flow).has("Spain"), "%d chips" % chips.size())
+	_check("a group can be renamed and joined", view._pencil.visible and view._add_country.visible and view._add_country.text == "Add Country")
+	view.tag("Spain")
+	view.tag("Spain")
+	_check("a tag puts the country in the message once", view._composer.text == "@Spain ", view._composer.text)
+	await _shoot("chat-6b-group-tags")
+	view._composer.text = ""
+	view.fit_composer()
+	await view.begin_title_edit()
+	await _wait(0.2)
+	_check("the pencil opens the title for editing", view._title_editor.visible and not view._title_row.visible and view._title_input.text == view.display_title(), view._title_input.text)
+	view._title_input.text = "Iberian Summit"
+	await _shoot("chat-6c-title-edit")
+	await view.save_title()
+	await _until(func() -> bool: return ChatPanel.t(view.chat.get("title", "")) == "Iberian Summit", 10.0)
+	await _wait(0.3)
+	_check("the new title is kept", view._title.text == "Iberian Summit" and view._title_row.visible, view._title.text)
+	panel._open_selector("add")
+	await _until(func() -> bool: return not panel.pickable_loading, 30.0)
+	await _wait(0.3)
+	var listed := _labels(panel._modal_grid)
+	_check("Add Country lists the countries not yet in the conversation", panel._modal_title.text == "Add Countries to Chat" and not listed.has("Spain") and not listed.has("Italy") and listed.has("Portugal"), panel._modal_title.text)
+	for entry in panel.pickable:
+		if str(entry.get("name", "")) == "Portugal":
+			panel.selected.append({"name": "Portugal", "code": str(entry.get("code", ""))})
+	panel._render_modal()
+	await _wait(0.2)
+	_check("the confirm button says what it adds", panel._modal_start.text == "Add 1 country", panel._modal_start.text)
+	await _shoot("chat-6d-add-country")
+	panel._modal_start.pressed.emit()
+	await _until(func() -> bool: return view.countries().size() == 3, 10.0)
+	await _wait(0.4)
+	_check("the country joins the conversation", view.countries().size() == 3 and view._subtitle.text == "4-party diplomatic channel" and _labels(view._tag_flow).has("Portugal"), view._subtitle.text)
+	await _shoot("chat-6e-country-added")
+	panel.leave_active()
+	await _wait(0.3)
+	panel._open_selector()
+	await _wait(0.2)
+	_check("the new chat selector is titled as before", panel._modal_title.text == "Start New Diplomatic Chat")
+	panel._close_selector()
+	await _wait(0.3)
+
+
+func _peace_in_chat() -> void:
+	await _close_notice()
+	var seeded: Dictionary = await main.engine.request("country.standin_seed")
+	_check("the stand-in war is seeded", seeded.get("ok", false))
+	panel.open()
+	panel._set_view("chats")
+	panel.open_chat("Libya", "")
+	await _until(func() -> bool: return panel.conversation_visible() and not panel.conversation.peace_info.is_empty(), 15.0)
+	await _wait(0.6)
+	var view := panel.conversation
+	var labels := _labels(view._box)
+	_check("Libya's offer of peace is in the chat with it", labels.has("Peace offered") and labels.has("Libya") and labels.has("Each side keeps the ground it holds."), ", ".join(labels.slice(0, 8)))
+	_check("the offer is answered on the card", _button(view._box, "Accept") != null and _button(view._box, "Decline") != null)
+	_check("the chat with an enemy offers Peace", view._peace_button.visible and view._peace_button.tooltip_text == "Propose peace to Libya", view._peace_button.tooltip_text)
+	await _shoot("chat-19-peace-offered")
+	view._peace_button.pressed.emit()
+	await _wait(0.3)
+	var form := _labels(view._peace_holder)
+	_check("Peace opens the terms form", view._peace_holder.visible and form.has("Propose peace") and form.has("Your terms are sent in this chat. Their leader answers them in the reply: accepts, declines or offers other terms.") and _button(view._peace_holder, "Send terms") != null)
+	await _shoot("chat-20-peace-terms-form")
+	view.peace_money = "they-light"
+	await view.propose_peace()
+	await _until(func() -> bool: return not view.loading, 60.0)
+	await _until(func() -> bool: return _labels(view._box).has("Your terms of peace"), 15.0)
+	await _wait(0.6)
+	var said := view.messages.any(func(message: Variant) -> bool: return str((message as Dictionary).get("text", "")).begins_with("We propose peace on these terms: every region goes back to whose it was before the war; Libya pays France reparations"))
+	_check("the terms are said as the player's message", said)
+	labels = _labels(view._box)
+	_check("the player's terms wait under it", labels.has("Your terms of peace") and labels.has("Waiting for their answer"), ", ".join(labels.slice(0, 12)))
+	_check("Peace is not offered while the player's terms wait", not view._peace_button.visible)
+	await _shoot("chat-21-peace-terms-sent")
+	var leader := {}
+	for message in view.messages:
+		if str((message as Dictionary).get("role", "")) == "leader":
+			leader = message
+	var settled: Dictionary = await main.engine.request("chat.peaceAnswer", {"speaker": "Libya", "line": "accept", "chatId": view.chat_id, "messageId": str(leader.get("id", ""))})
+	var outcome := str((settled.get("result", {}) as Dictionary).get("outcome", "")) if settled.get("ok", false) else str(settled.get("error", ""))
+	_check("the leader's word on peace is carried out", outcome == "peace", outcome)
+	await view.refresh_peace()
+	await _until(func() -> bool: return _labels(view._box).has("Accepted: the war is over"), 10.0)
+	await _wait(0.4)
+	_check("the player's terms read as accepted, and Peace is gone with the war", _labels(view._box).has("Accepted: the war is over") and not view._peace_button.visible)
+	await _shoot("chat-22-peace-accepted")
+	panel.leave_active()
+	await _wait(0.3)
+	await main.engine.request("country.standin_seed")
+	panel.open_chat("Libya", "")
+	await _until(func() -> bool: return panel.conversation_visible() and _button(panel.conversation._box, "Decline") != null, 15.0)
+	view = panel.conversation
+	var offer := {}
+	for entry in ChatPanel.a(view.peace_info.get("offers", [])):
+		if ChatPanel.t(ChatPanel.d(entry).get("id", "")) == "offer-libya":
+			offer = ChatPanel.d(entry)
+	_check("a new offer waits in the same chat", offer.get("open", false) == true)
+	await view.answer_peace(offer, "decline")
+	await _wait(0.6)
+	_check("a declined offer is answered and leaves the foot of the chat", _button(view._box, "Accept") == null and not _labels(view._box).has("Peace offered"))
+	await _shoot("chat-23-peace-declined")
+	panel.leave_active()
+	await _wait(0.3)
+
+
+func _button(node: Node, text: String) -> Button:
+	if node is Button and (node as Button).text == text and (node as Button).is_visible_in_tree():
+		return node
+	for child in node.get_children():
+		var found := _button(child, text)
+		if found:
+			return found
+	return null
 
 
 func _finish() -> void:
