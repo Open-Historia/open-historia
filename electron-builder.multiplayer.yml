@@ -34,11 +34,14 @@ productName: Open Historia Multiplayer
 files:
   - LICENSE
   - dist/**
+  - "!dist/screenshots/**"
+  - "!dist/screenshot.png"
   - server/**
+  - "!server/data/**"
+  - "!server/**/*.test.js"
   - electron/**
   - scripts/fetch-map-assets.mjs
   - scripts/map-assets.json
-  - public/lang/**
   - fmg/dist/**
   - package.json
   - "!**/*.map"
@@ -63,6 +66,8 @@ win:
   artifactName: Open-Historia-Multiplayer-Setup-${os}.${ext}
 
 nsis:
+  # The app turns differential downloads off, and building for them costs the installer its compression.
+  differentialPackage: false
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true
