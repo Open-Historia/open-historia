@@ -399,9 +399,35 @@ func _run() -> void:
 				_check("the scene ends in the record", typeof(panel._finished) == TYPE_DICTIONARY, panel._error)
 				await _shoot("m65-interactive-finished")
 	panel.close()
+	await _discord_invites()
 	_say("signals: %s" % ", ".join(signals_seen))
 	_say("failures: %d %s" % [failures.size(), ", ".join(failures)])
 	_finish()
+
+
+func _discord_invites() -> void:
+	var invites: Variant = main.get("discord_invites")
+	_check("the Discord invitations are mounted above the menu and the game", invites is DiscordInvites and (invites as Node).get_index() > main.menu.get_index() and (invites as Node).get_index() > main.hud.get_index() and (invites as Node).get_index() > main.shared_overlay.get_index())
+	if not invites is DiscordInvites:
+		return
+	var card := invites as DiscordInvites
+	var inbox: Variant = await _request("discord.inbox")
+	_check("the inbox is empty while the presence is off", inbox is Dictionary and (inbox as Dictionary).get("join") == null and ((inbox as Dictionary).get("requests", []) as Array).is_empty(), str(inbox))
+	_check("nothing shows without an invitation", not card.visible)
+	card.invite = {"token": "oh1-test"}
+	card._render()
+	await _wait(0.3)
+	_check("a friend's invitation asks to join", card.visible and _all_text(card).contains("A friend invited you to a shared game") and _all_text(card).contains("You were invited on Discord. You will need the lobby's scenario in your library.") and _all_text(card).contains("Not now") and _all_text(card).contains("Join"))
+	await _shoot("m70-discord-invite")
+	card.invite = {}
+	card.requests = [{"id": "123456789", "name": "Aster"}]
+	card._render()
+	await _wait(0.3)
+	_check("a request to join asks the host", card.visible and _all_text(card).contains("Aster asks to join your shared game") and _all_text(card).contains("Accept, and Discord sends them your invitation.") and _all_text(card).contains("Decline"))
+	await _shoot("m71-discord-request")
+	card._answer(card.requests[0], false)
+	await _wait(0.2)
+	_check("an answered request leaves", not card.visible)
 
 
 func _finish() -> void:
