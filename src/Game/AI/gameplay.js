@@ -21137,13 +21137,29 @@ export const maybeSendIdleDiplomacy = async () => {
         + "\n\nReturn JSON only.",
       validatePayload: async (candidate, { finalAttempt } = {}) => {
         if (candidate?.chat == null) return "";
-        const countries = await resolveInvitees(candidate.chat.countries, bundle.world);
+        const countries = withoutPlayerParticipant(
+          await resolveInvitees(candidate.chat.countries, bundle.world),
+          bundle.game.country,
+        );
         if (countries.length === 0) {
-          return "$.chat.countries must contain at least one known polity (or chat must be null).";
+          return "$.chat.countries must contain at least one known non-player polity (or chat must be null).";
         }
         const speaker = normalizeString(candidate.chat.speaker) || normalizeString(countries[0]?.name || countries[0]?.code);
-        if (!idleDiplomacySpeakerHasContext(bundle.world, speaker, politicalDecisionSet)) {
-          return "$.chat.speaker must be one of the governments supplied in PRIVATE POLITICAL DECISION CONTEXT, or chat must be null.";
+        const hasContext = (name) => idleDiplomacySpeakerHasContext(bundle.world, name, politicalDecisionSet);
+        if (!hasContext(speaker)) {
+          if (!finalAttempt) {
+            return "$.chat.speaker must be one of the governments supplied in PRIVATE POLITICAL DECISION CONTEXT, or chat must be null.";
+          }
+          const stand = reactionSpeakerWithContext(
+            speaker,
+            countries.map((country) => normalizeString(country?.name || country?.code)),
+            hasContext,
+          );
+          if (!stand) {
+            candidate.chat = null;
+            return "";
+          }
+          candidate.chat.speaker = stand;
         }
         const requestedInstitution = normalizeString(candidate.chatInstitutionId);
         if (requestedInstitution) {

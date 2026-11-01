@@ -75,3 +75,39 @@ test("idle Political World context prioritizes the player's own overlord", () =>
   const decisionSet = buildIdleDiplomacyPoliticalDecisionSet(bundle, { maxActors: 1 });
   assert.deepEqual(selectedActors(decisionSet), ["Overlord"]);
 });
+
+test("idle Political World context prioritizes major and regional powers over arbitrary alphabetical actors", () => {
+  const bundle = {
+    game: { country: "Player" },
+    chats: [],
+    world: {
+      politicalActors: {
+        schemaVersion: 6,
+        byPolity: {
+          Player: actor("Player"),
+          Albania: actor("Albania"),
+          Brazil: actor("Brazil"),
+          China: actor("China"),
+          Russia: actor("Russia"),
+        },
+      },
+      powerStatus: {
+        schemaVersion: 1,
+        byPolity: {
+          China: { tier: "major-power" },
+          Russia: { tier: "major-power" },
+          Brazil: { tier: "regional-power" },
+          Albania: { tier: "minor-power" },
+        },
+      },
+      institutions: { byId: {} },
+      relations: [],
+      agreements: [],
+      wars: [],
+      puppets: [],
+    },
+  };
+
+  const decisionSet = buildIdleDiplomacyPoliticalDecisionSet(bundle, { maxActors: 2 });
+  assert.deepEqual(selectedActors(decisionSet), ["China", "Russia"]);
+});

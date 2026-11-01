@@ -3,6 +3,7 @@ import { getPoliticalProfile } from "../../runtime/politicalActors.js";
 import { livePuppetsFor } from "../../runtime/puppets.js";
 import { buildBoundedPoliticalDecisionContextSet } from "./politicalDecisionContext.js";
 import { sharedInstitutionRoutesForPlayer } from "./institutionIdleRouting.js";
+import { powerTierForPolity } from "../../runtime/powerStatus.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const list = (value) => Array.isArray(value) ? value : [];
@@ -88,7 +89,14 @@ export const buildIdleDiplomacyPoliticalDecisionSet = (
     if (sideA.some((party) => lower(party) === lower(player))) addList(sideB);
     if (sideB.some((party) => lower(party) === lower(player))) addList(sideA);
   }
-  if (candidates.length < maxActors) Object.keys(world?.politicalActors?.byPolity || {}).forEach(add);
+  if (candidates.length < maxActors) {
+    const allPolities = Object.keys(world?.politicalActors?.byPolity || {});
+    const majors = allPolities.filter((p) => powerTierForPolity(world, p) === "major-power");
+    const regionals = allPolities.filter((p) => powerTierForPolity(world, p) === "regional-power");
+    majors.forEach(add);
+    regionals.forEach(add);
+    allPolities.forEach(add);
+  }
 
   const selected = candidates.slice(0, Math.max(0, Number(maxActors) || 0));
   return buildBoundedPoliticalDecisionContextSet(world, {
