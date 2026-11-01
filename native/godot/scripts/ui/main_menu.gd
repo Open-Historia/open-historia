@@ -988,7 +988,7 @@ func _cover(url: String, accent: Color, glow: float) -> CoverRect:
 
 func _info_tile(title: String, value: String) -> PanelContainer:
 	var tile := PanelContainer.new()
-	tile.add_theme_stylebox_override("panel", UI.box(Color(1, 1, 1, 0.04), Color(1, 1, 1, 0.07), 10, 1, Vector4(9, 6, 9, 7)))
+	tile.add_theme_stylebox_override("panel", UI.box(Color(1, 1, 1, 0.04), Color(1, 1, 1, 0.07), 10, 1, Vector4(9, 5, 9, 6)))
 	tile.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	var column := VBoxContainer.new()
 	column.add_theme_constant_override("separation", 1)
@@ -1067,9 +1067,7 @@ func _game_card(game: Dictionary, active: bool) -> Control:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 6)
 	var date_text := str(game.get("gameDate", ""))
-	var date := _info_tile("Date", date_text if not date_text.is_empty() else "No date")
-	date.size_flags_stretch_ratio = 1.66
-	row.add_child(date)
+	row.add_child(_info_tile("Date", date_text if not date_text.is_empty() else "No date"))
 	row.add_child(_info_tile("Round", str(max(1, int(game.get("round", 1))))))
 	stack.add_child(row)
 	var description_text := str(game.get("description", ""))
