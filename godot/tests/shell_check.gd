@@ -7,7 +7,7 @@ var failures: PackedStringArray = []
 var played: PackedStringArray = []
 var only := ""
 
-const NEWEST_UPDATES := ["2026-10-native-faster-wars", "2026-10-native-window", "2026-10-native-renamed-regions", "2026-10-native-retina"]
+const NEWEST_UPDATES := ["2026-11-lighter-desktop", "2026-10-group-diplomacy", "2026-10-phone-layout", "2026-10-peace-in-the-chats"]
 
 
 func _update_ids(updates: Array) -> Array:
@@ -42,7 +42,7 @@ func _missed_updates(shell: ShellBoot) -> void:
 	for index in range(shell.notice.page_count() if mounted else 0):
 		shell.notice.show_page(index)
 		await _wait(0.5)
-		for title in ["Faster wars", "A window of any size", "Renamed regions and a tidier top bar", "Fixes from your reports"]:
+		for title in ["A lighter desktop app", "Group diplomacy", "A tidier phone layout", "Peace at the table"]:
 			if Array(_texts(shell.notice, PackedStringArray())).any(func(value: String) -> bool: return value.contains(title)):
 				found[title] = true
 	_check("their pages read as written", found.size() == 4, ", ".join(PackedStringArray(found.keys())))
