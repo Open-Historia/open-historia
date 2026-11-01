@@ -5,7 +5,7 @@ signal request_focus(bounds: Rect2)
 signal show_event(event_id: String)
 signal open_war_report(battlefield: String)
 signal width_changed(width: float)
-signal world_changed
+signal open_chat(country: String)
 
 const MIN_WIDTH := 280.0
 const DEFAULT_WIDTH := 320.0
@@ -31,7 +31,6 @@ var selected_party := ""
 var hovered_party := ""
 var institutions_all := false
 var findings_all := false
-var peace: Dictionary = {}
 var tracking_search := ""
 var chart_keys: Array = []
 var chart_range := "all"
@@ -86,7 +85,6 @@ func show_country(name := "") -> void:
 		refresh_step = ""
 		selected_party = ""
 		hovered_party = ""
-		peace.clear()
 		institutions_all = false
 		findings_all = false
 		sheet_status = "idle"
@@ -498,27 +496,6 @@ static func small_button(value: String, bg: Color, border: Color, ink: Color, si
 	for state in [["normal", normal], ["focus", normal], ["disabled", normal], ["hover", hover], ["pressed", hover], ["hover_pressed", hover]]:
 		node.add_theme_stylebox_override(state[0], state[1])
 	node.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-	return node
-
-
-static func field(options: Array, selected: String) -> OptionButton:
-	var node := OptionButton.new()
-	node.focus_mode = Control.FOCUS_NONE
-	node.fit_to_longest_item = false
-	node.clip_text = true
-	node.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	node.custom_minimum_size = Vector2(1, 26)
-	node.add_theme_font_size_override("font_size", 10)
-	node.add_theme_color_override("font_color", Color8(231, 233, 234))
-	var style := UI.box(Color(0, 0, 0, 0.35), Color(1, 1, 1, 0.16), 6, 1, Vector4(6, 3, 6, 3))
-	for state in ["normal", "hover", "pressed", "focus"]:
-		node.add_theme_stylebox_override(state, style)
-	for option in options:
-		var entry: Dictionary = option
-		node.add_item(str(entry.get("label", "")))
-		node.set_item_metadata(node.item_count - 1, str(entry.get("key", "")))
-		if str(entry.get("key", "")) == selected:
-			node.select(node.item_count - 1)
 	return node
 
 
@@ -1303,7 +1280,7 @@ func _render_diplomacy() -> void:
 			var timeline := link(str(war.get("timelineText", "")), UI.ACCENT, 10, 700)
 			timeline.pressed.connect(func() -> void: show_event.emit(str(war["timelineEventId"])))
 			words.add_child(timeline)
-		_peace_controls(words, war, info)
+		_peace_controls(words, war)
 		line.add_child(words)
 		line.add_child(badge(str(war.get("status", "")), tone(str(war.get("tone", "")))))
 		inner.add_child(line)
@@ -1359,60 +1336,15 @@ func _weariness_line(weary: Array) -> HFlowContainer:
 	return line
 
 
-func _peace_controls(holder: VBoxContainer, war: Dictionary, info: Dictionary) -> void:
-	var id := str(war.get("id", ""))
-	var state: Dictionary = peace.get(id, {"open": false, "territory": "restored", "money": "none", "busy": false, "said": ""})
-	peace[id] = state
+func _peace_controls(holder: VBoxContainer, war: Dictionary) -> void:
 	holder.add_child(gap(3))
 	var weary: Variant = war.get("weariness", [])
 	if weary is Array and not (weary as Array).is_empty():
 		holder.add_child(_weariness_line(weary))
 	if war.get("canPropose", false):
-		var toggle := link("Propose peace", UI.ACCENT, 10, 700)
-		toggle.pressed.connect(func() -> void:
-			state["open"] = not bool(state["open"])
-			_render())
-		holder.add_child(toggle)
-	if state["open"] and war.get("canPropose", false):
-		var form := column(6)
-		form.add_child(gap(2))
-		var ground := field(info.get("territoryChoices", []), str(state["territory"]))
-		ground.tooltip_text = "The ground"
-		ground.item_selected.connect(func(index: int) -> void: state["territory"] = str(ground.get_item_metadata(index)))
-		form.add_child(ground)
-		var money := field(info.get("reparationChoices", []), str(state["money"]))
-		money.tooltip_text = "Reparations"
-		money.item_selected.connect(func(index: int) -> void: state["money"] = str(money.get_item_metadata(index)))
-		form.add_child(money)
-		form.add_child(text("They answer at once, by how the war stands for them and how weary they are. A fresh enemy that is not losing will refuse.", 10, Color(1, 1, 1, 0.45)))
-		if not str(state["said"]).is_empty():
-			form.add_child(text(str(state["said"]), 10, Color("#fca5a5")))
-		var put := small_button("Put these terms", UI.ACCENT, UI.ACCENT, Color("#04141a"), 12, 800, Vector4(10, 6, 10, 6), 8)
-		put.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		put.custom_minimum_size.y = 32
-		put.disabled = bool(state["busy"])
-		put.pressed.connect(_propose.bind(war))
-		form.add_child(put)
-		holder.add_child(form)
-
-
-func _propose(war: Dictionary) -> void:
-	var id := str(war.get("id", ""))
-	var state: Dictionary = peace.get(id, {})
-	if state.get("busy", false):
-		return
-	state["busy"] = true
-	state["said"] = ""
-	var reply: Dictionary = await engine.request("country.answer", {"op": "propose", "ref": id, "territory": str(state.get("territory", "restored")), "money": str(state.get("money", "none")), "theirs": str(war.get("theirs", ""))})
-	state["busy"] = false
-	var result: Dictionary = reply.get("result", {}) if reply.get("ok", false) else {"ok": false, "said": str(reply.get("error", "That could not be done."))}
-	if result.get("ok", false):
-		state["open"] = false
-		world_changed.emit()
-		await _load(target)
-		return
-	state["said"] = str(result.get("said", ""))
-	_render()
+		var to_chat := link("Propose peace in the chat", UI.ACCENT, 10, 700)
+		to_chat.pressed.connect(func() -> void: open_chat.emit(str(war.get("theirs", ""))))
+		holder.add_child(to_chat)
 
 
 func _render_economy() -> void:

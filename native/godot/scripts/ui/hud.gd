@@ -493,6 +493,7 @@ func mount_panels(game: Dictionary) -> void:
 	var chat := _make("chat_panel")
 	if chat:
 		_add_panel("chat", chat)
+		_hook(chat, "world_changed", func() -> void: world_changed.emit())
 		_hook(chat, "unread_changed", func(count: int) -> void:
 			_chat_unread = count
 			set_chat_badge(_chat_unread, _chat_generating))
@@ -533,7 +534,7 @@ func mount_panels(game: Dictionary) -> void:
 		_hook(country, "show_event", func(event_id: String) -> void: date_widget.show_event(event_id))
 		_hook(country, "width_changed", func(_width: float) -> void: _sync_inset())
 		_hook(country, "open_war_report", func(battlefield: String) -> void: _invoke(after_action, "open_report", [battlefield]))
-		_hook(country, "world_changed", func() -> void: world_changed.emit())
+		_hook(country, "open_chat", func(enemy: String) -> void: open_chat(enemy))
 		var country_ctx := ctx.duplicate()
 		country_ctx["war_reports"] = after_action != null and is_instance_valid(after_action)
 		_setup(country, country_ctx)

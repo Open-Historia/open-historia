@@ -418,14 +418,6 @@ const refusalText = (error) => {
   return cleanText(error) || "That could not be done.";
 };
 
-const REPARATION_CHOICES = Object.freeze([
-  { key: "none", label: "Nobody pays" },
-  { key: "they-light", label: "They pay 1% a year for 5 years" },
-  { key: "they-heavy", label: "They pay 3% a year for 10 years" },
-  { key: "we-light", label: "We pay 1% a year for 5 years" },
-  { key: "we-heavy", label: "We pay 3% a year for 10 years" },
-]);
-
 const paymentOf = (key, mine, theirs) => {
   if (!key || key === "none") return null;
   const heavy = key.endsWith("heavy");
@@ -433,7 +425,7 @@ const paymentOf = (key, mine, theirs) => {
   return { payer, receiver, share: heavy ? 0.03 : 0.01, years: heavy ? 10 : 5 };
 };
 
-export const answerDiplomacy = async (ctx, op, ref, terms = null) => {
+export const answerDiplomacy = async (ctx, op, ref, terms = null, where = {}) => {
   if (ctx.engine.simulationStatus.isSimulationBusy()) return { ok: false, error: TURN_RUNNING_NOTE, accepted: false, to: "" };
   try {
     if (ctx.engine.mpBridge?.inSharedGame?.()) {
@@ -441,11 +433,11 @@ export const answerDiplomacy = async (ctx, op, ref, terms = null) => {
       return {
         ok: answer.ok === true,
         error: answer.ok || !cleanText(answer.error) ? "" : refusalText(answer.error),
-        accepted: answer.ok === true && op !== "decline" && op !== "refuse",
+        accepted: answer.ok === true && (op === "accept" || op === "honour"),
         to: "",
       };
     }
-    const answer = await ctx.engine.gameplay.answerDiplomacy({ op, ref, terms });
+    const answer = await ctx.engine.gameplay.answerDiplomacy({ op, ref, terms, chatId: cleanText(where?.chatId), messageId: cleanText(where?.messageId) });
     return {
       ok: answer?.ok === true,
       error: answer?.error ? refusalText(answer.error) : "",
@@ -457,15 +449,6 @@ export const answerDiplomacy = async (ctx, op, ref, terms = null) => {
   }
 };
 
-const termsLines = (extras, terms) => {
-  const payment = terms?.reparations ?? null;
-  const share = payment ? Math.round(payment.share * 1000) / 10 : 0;
-  return [
-    terms?.territory === extras.peaceTerms.TERRITORY_AS_HELD ? "Each side keeps the ground it holds." : "Every region goes back to whose it was before the war.",
-    payment ? `${payment.payer} pays ${payment.receiver} reparations: ${share}% of its economy a year for ${payment.years} years.` : "Nobody pays reparations.",
-  ];
-};
-
 export const warPeaceState = async (ctx) => {
   const extras = await loadExtras(ctx);
   const [world, game] = await Promise.all([
@@ -473,13 +456,12 @@ export const warPeaceState = async (ctx) => {
     ctx.engine.gameState.readGameData({ force: false }).catch(() => ({})),
   ]);
   const country = cleanText(game?.country);
-  if (!country) return { country: "", waiting: 0, calls: [], offers: [] };
-  const offers = extras.peaceTerms.openOffersFor(asArray(world?.peaceOffers), country);
+  if (!country) return { country: "", waiting: 0, calls: [] };
   const calls = extras.alliances.openCallsFor(asArray(world?.callsToArms), country);
   const reputation = extras.alliances.TREATY_BROKEN_REPUTATION;
   return {
     country,
-    waiting: offers.length + calls.length,
+    waiting: calls.length,
     calls: calls.map((call) => ({
       id: cleanText(call.id),
       title: "Call to arms",
@@ -491,18 +473,6 @@ export const warPeaceState = async (ctx) => {
         { text: `${call.defender} has been attacked by ${asArray(call.attackers).join(", ") || "an enemy"} and calls on you to defend it.`, tone: "main" },
         ...(call.via?.title ? [{ text: `You are bound by ${call.via.title}.`, tone: "soft" }] : []),
         { text: `Honouring it puts you at war. Breaking the treaty costs ${reputation} of your reputation, and ends it. Left unanswered, it counts as broken.`, tone: "soft", gap: true },
-      ],
-    })),
-    offers: offers.map((offer) => ({
-      id: cleanText(offer.id),
-      title: "Peace offered",
-      yes: "Accept",
-      no: "Decline",
-      yesOp: "accept",
-      noOp: "decline",
-      lines: [
-        { text: `${offer.from} offers you peace.`, tone: "main" },
-        ...termsLines(extras, offer.terms).map((text, index) => ({ text, tone: "terms", gap: index === 0 })),
       ],
     })),
   };
@@ -845,7 +815,7 @@ export const register = (ctx) => {
       name: cleanText(institution.name || institution.id),
       member: Boolean(current),
       label,
-      detail: [current?.sinceDate ? `since ${current.sinceDate}` : "", pending.length ? `${pending.length} pending lifecycle matter${pending.length === 1 ? "" : "s"}` : "", recent?.date && !current ? `last change ${recent.date}` : ""].filter(Boolean).join(" · ") || (institution.kind || "institution"),
+      detail: [current?.sinceDate ? `since ${engine.gameDates.formatGameDateReadable(current.sinceDate) || current.sinceDate}` : "", pending.length ? `${pending.length} pending lifecycle matter${pending.length === 1 ? "" : "s"}` : "", recent?.date && !current ? `last change ${engine.gameDates.formatGameDateReadable(recent.date) || recent.date}` : ""].filter(Boolean).join(" · ") || (institution.kind || "institution"),
       pending: pending.slice(0, 2).map((item) => `• ${item.kind} · ${item.status}${item.requestedStatus ? ` · ${item.requestedStatus}` : ""}`),
     };
   });
@@ -1089,11 +1059,6 @@ export const register = (ctx) => {
       wars,
       reports,
       reparations,
-      territoryChoices: [
-        { key: extras.peaceTerms.TERRITORY_RESTORED, label: "The old borders: every region goes back" },
-        { key: extras.peaceTerms.TERRITORY_AS_HELD, label: "Each side keeps the ground it holds" },
-      ],
-      reparationChoices: REPARATION_CHOICES.map((choice) => ({ ...choice })),
     };
   };
 
@@ -1761,13 +1726,14 @@ export const register = (ctx) => {
       await persistTracking(extras, player, { ...current, trackedPolities: nextTracked });
       return trackingView({ target, search });
     },
-    "country.answer": async ({ op = "", ref = "", territory = "", money = "none", theirs = "" } = {}) => {
+    "country.answer": async ({ op = "", ref = "", territory = "", money = "none", theirs = "", chatId = "", messageId = "" } = {}) => {
       if (op === "propose") {
         const player = await readPlayer();
-        const answer = await answerDiplomacy(ctx, "propose", ref, { territory, reparations: paymentOf(money, player.code, cleanText(theirs)) });
-        if (answer.error) return { ok: false, said: answer.error };
-        if (!answer.accepted) return { ok: false, said: "They refuse these terms." };
-        return { ok: true, said: "" };
+        const terms = { territory, reparations: paymentOf(money, player.code, cleanText(theirs)) };
+        const answer = await answerDiplomacy(ctx, "propose", ref, terms, { chatId, messageId });
+        if (!answer.ok || answer.error) return { ok: false, said: answer.error || "That could not be done." };
+        const extras = await loadExtras(ctx);
+        return { ok: true, said: "", terms: extras.peaceTerms.describeTerms(terms) };
       }
       const answer = await answerDiplomacy(ctx, op, ref);
       return { ok: answer.ok, said: answer.ok ? "" : refusalText(answer.error) };

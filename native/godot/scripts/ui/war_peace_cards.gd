@@ -100,8 +100,6 @@ func _render() -> void:
 	_column.add_child(fold)
 	for item in state.get("calls", []):
 		_column.add_child(_decision(item))
-	for item in state.get("offers", []):
-		_column.add_child(_decision(item))
 
 
 func _pill_button(value: String, bg: Color, border: Color, ink: Color, size: int, weight: int, pad: Vector4, radius: int) -> Button:

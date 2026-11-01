@@ -96,6 +96,16 @@ func _tracking_button(panel: Node) -> Variant:
 	return found[0] if not found.is_empty() else null
 
 
+func _press(node: Node, wanted: String) -> bool:
+	if node is Button and (node as Button).text == wanted:
+		(node as Button).pressed.emit()
+		return true
+	for child in node.get_children():
+		if _press(child, wanted):
+			return true
+	return false
+
+
 func _has_text(node: Node, wanted: String) -> bool:
 	if node == null:
 		return false
@@ -228,13 +238,25 @@ func _country_panel() -> void:
 	_check(_has_text(panel, "Élysée Treaty") and _has_text(panel, "vs Libya") and _has_text(panel, "Fighting alongside Chad"), "diplomacy rows")
 	_check(_has_text(panel, "War weariness: ") and _has_text(panel, "France 45") and _has_text(panel, "strained") and _has_text(panel, "Libya 83") and _has_text(panel, "exhausted") and not _has_text(panel, "Chad 30"), "war weariness: your own country beside the enemy's, a word for each")
 	await _shoot("03-country-diplomacy")
-	panel.peace["war-sahel"] = {"open": true, "territory": "restored", "money": "they-light", "busy": false, "said": ""}
-	panel._render()
-	await _wait(0.3)
 	panel.scroll.scroll_vertical = 560
 	await _wait(0.2)
-	_check(_has_text(panel, "Put these terms") and _has_text(panel, "They pay 1% a year for 5 years"), "peace controls open")
+	_check(_has_text(panel, "Propose peace in the chat") and not _has_text(panel, "Put these terms"), "peace is proposed in the chat")
 	await _shoot("04-country-diplomacy-peace")
+	var opened: Array = []
+	panel.open_chat.connect(func(enemy: String) -> void: opened.append(enemy), CONNECT_ONE_SHOT)
+	var pressed := _press(panel, "Propose peace in the chat")
+	var chat: Variant = main.hud.panels.get("chat")
+	var talking := func() -> String:
+		if not chat is ChatPanel:
+			return ""
+		var countries: Array = ChatPanel.a((chat as ChatPanel).active.get("countries", []))
+		return ChatPanel.t(ChatPanel.d(countries[0]).get("name", "")) if not countries.is_empty() else ""
+	await _until(func() -> bool: return talking.call() == "Libya", 10.0)
+	await _wait(0.6)
+	_check(pressed and opened == ["Libya"] and (chat as ChatPanel).is_open() and talking.call() == "Libya", "Propose peace in the chat opens the chat with the enemy (pressed %s, signal %s, open %s, with %s)" % [str(pressed), str(opened), str(chat is ChatPanel and (chat as ChatPanel).is_open()), talking.call()])
+	await _shoot("04b-country-peace-chat")
+	main.hud.set_active_panel("")
+	await _wait(0.4)
 
 	await panel.set_tab("economy")
 	var ready: bool = await _until(func() -> bool: return panel.sheet_status == "ready" or panel.sheet_status == "error", 120.0)
@@ -476,19 +498,15 @@ func _war_and_peace() -> void:
 	var cards_wp = main.hud.war_cards
 	await cards_wp.refresh()
 	await _wait(0.5)
-	_check(cards_wp.visible and _has_text(cards_wp, "Honour the alliance") and _has_text(cards_wp, "PEACE OFFERED"), "war and peace cards")
+	_check(cards_wp.visible and _has_text(cards_wp, "Honour the alliance") and _has_text(cards_wp, "CALL TO ARMS") and not _has_text(cards_wp, "PEACE OFFERED"), "the cards over the map hold the call to arms, not the offer of peace")
 	await _shoot("25-war-peace")
 	cards_wp.folded = true
 	cards_wp._render()
 	await _wait(0.3)
-	_check(_has_text(cards_wp, "Waiting for your answer: 2"), "folded")
+	_check(_has_text(cards_wp, "Waiting for your answer: 1"), "folded")
 	await _shoot("26-war-peace-folded")
 	cards_wp.folded = false
 	cards_wp._render()
-	await cards_wp._answer("decline", "offer-libya")
-	await _wait(0.5)
-	_check(not _has_text(cards_wp, "PEACE OFFERED") and _has_text(cards_wp, "CALL TO ARMS"), "declined offer leaves")
-	await _shoot("27-war-peace-after-decline")
 
 
 func _finish(code: int) -> void:
