@@ -87,6 +87,7 @@ const rgbOf = (css) => {
 
 export const register = (ctx) => {
   const { engine, emit } = ctx;
+  const readableDate = (value) => (cleanText(value) ? engine.gameDates.formatGameDateReadable(cleanText(value)) || cleanText(value) : "");
   let regionIndex = { key: "", rows: [] };
   let cityRows = null;
   let unitsStarted = false;
@@ -329,7 +330,7 @@ export const register = (ctx) => {
       return {
         id: cleanText(event.id),
         title: cleanText(event.title),
-        date: cleanText(event.date),
+        date: readableDate(event.date),
         importance: String(event.importance ?? "").toLowerCase(),
         description: description.length > 220 ? `${description.slice(0, 220)}…` : description,
         search: `${event.title} ${event.description}`.toLowerCase(),
@@ -441,7 +442,7 @@ export const register = (ctx) => {
         ...(orderText ? [["Orders", orderText]] : []),
         ...(!posture ? [["Status", cleanText(unit.status)]] : []),
         ["Location", `${Number(unit.lat).toFixed(1)}, ${Number(unit.lng).toFixed(1)}`],
-        ...(origin ? [["Detected", `${origin.date ? `${origin.date} — ` : ""}${origin.title}`]] : []),
+        ...(origin ? [["Detected", `${origin.date ? `${readableDate(origin.date)} — ` : ""}${origin.title}`]] : []),
       ],
       isOwn: unit.ownerCode === controller.getPlayerCode(),
       turnRunning: engine.simulationStatus.isSimulationBusy(),
@@ -472,7 +473,7 @@ export const register = (ctx) => {
     if (feature.foundedAt) rows.push(["Founded", cleanText(feature.foundedAt)]);
     if (!isCity && feature.updatedDate && feature.updatedDate !== feature.foundedAt) rows.push(["Last changed", cleanText(feature.updatedDate)]);
     if (!isCity && Array.isArray(feature.aliases) && feature.aliases.length > 0) rows.push(["Formerly", feature.aliases.join(", ")]);
-    if (!isCity && sourceEvents.length > 0) rows.push(["Events", sourceEvents.map((event) => (event.date ? `${event.date} — ${event.title}` : event.title)).join("\n")]);
+    if (!isCity && sourceEvents.length > 0) rows.push(["Events", sourceEvents.map((event) => (event.date ? `${readableDate(event.date)} — ${event.title}` : event.title)).join("\n")]);
     let note = "";
     if (approximate) {
       note = approximate.unnamed

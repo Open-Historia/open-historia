@@ -45,6 +45,7 @@ const ballotTone = (choice) => {
 };
 
 export const register = ({ engine, emit, plain }) => {
+  const readableDate = (value) => (clean(value) ? engine.gameDates.formatGameDateReadable(clean(value)) || clean(value) : "");
   const found = new Map();
   const exported = (name, kind = "function") => {
     if (found.has(name)) return found.get(name);
@@ -213,7 +214,7 @@ export const register = ({ engine, emit, plain }) => {
       tally: [["yes", "For"], ["no", "Against"], ["abstain", "Abstain"], ["veto", "Veto"]]
         .filter(([choice]) => choice !== "veto" || tally.veto > 0)
         .map(([choice, label]) => ({ choice, label, count: tally[choice] })),
-      ballots: ballots.map((ballot) => ({ polity: ballot.polity, choice: ballot.choice, tone: ballotTone(ballot.choice), government: ballot.government || "", reason: ballot.reason || "", date: ballot.date || "" })),
+      ballots: ballots.map((ballot) => ({ polity: ballot.polity, choice: ballot.choice, tone: ballotTone(ballot.choice), government: ballot.government || "", reason: ballot.reason || "", date: readableDate(ballot.date) })),
     };
   };
 
@@ -229,7 +230,7 @@ export const register = ({ engine, emit, plain }) => {
       tone: ["accepted", "resolved"].includes(status) ? "good"
         : ["rejected", "expired"].includes(status) ? "bad"
           : ["pending", "pending-approval", "negotiating"].includes(status) ? "live" : "neutral",
-      line: `${entry?.polity ? `${entry.polity}${entry.requestedStatus ? ` · ${humanize(entry.requestedStatus)}` : ""}` : clean(institution?.name)}${entry?.initiatedBy ? ` · initiated by ${entry.initiatedBy}` : ""}${entry?.effectiveDate ? ` · effective ${entry.effectiveDate}` : ""}`,
+      line: `${entry?.polity ? `${entry.polity}${entry.requestedStatus ? ` · ${humanize(entry.requestedStatus)}` : ""}` : clean(institution?.name)}${entry?.initiatedBy ? ` · initiated by ${entry.initiatedBy}` : ""}${entry?.effectiveDate ? ` · effective ${readableDate(entry.effectiveDate)}` : ""}`,
       reason: clean(entry?.reason),
       terms: clean(entry?.terms),
       canRespond: lower(entry?.polity) === lower(player) && ["invitation", "founding-invitation"].includes(kind) && ["pending", "negotiating"].includes(status),
@@ -285,7 +286,7 @@ export const register = ({ engine, emit, plain }) => {
       status: clean(institution.status || "active"),
       statusTone: status === "active" ? "good" : "neutral",
       dissolved: status === "dissolved",
-      sub: `${clean(institution.kind || "institution").replace(/[-_]/g, " ")}${institution.foundedDate ? ` · founded ${institution.foundedDate}` : ""}`,
+      sub: `${clean(institution.kind || "institution").replace(/[-_]/g, " ")}${institution.foundedDate ? ` · founded ${readableDate(institution.foundedDate)}` : ""}`,
       purpose: overviewPurpose,
       emblem: emblem(institution),
       facts: [
@@ -316,7 +317,7 @@ export const register = ({ engine, emit, plain }) => {
           : { kind: "none", title: "No active formal business", text: "There are no debates, ballots or membership cases currently requiring attention." },
       businessStrong: Boolean(active.length || pendingLifecycle.length),
       hasPendingLifecycle: pendingLifecycle.length > 0,
-      recentActivity,
+      recentActivity: recentActivity.map((entry) => ({ ...entry, date: readableDate(entry.date) })),
       showFormalRecord: (list(view.decisionHistory).length || history.length) > recentActivity.length,
       proposals: active.map((proposal) => proposalView(proposal, view)),
       unresolvedNpcNote: list(view.openBallots).some((proposal) => proposal.unresolvedNpcVoters > 0),
@@ -346,7 +347,7 @@ export const register = ({ engine, emit, plain }) => {
       })),
       history: [...history].reverse().slice(0, 24).map((entry) => ({
         line: `${entry.polity ? `${entry.polity} · ` : ""}${humanize(entry.action)}${entry.reason ? ` · ${entry.reason}` : ""}`,
-        date: clean(entry.date),
+        date: readableDate(entry.date),
       })),
       historyCount: history.length,
       charter: {

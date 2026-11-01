@@ -421,7 +421,16 @@ const methods = {
   "map.cities": async ({ unless = null } = {}) => {
     const world = await engine.gameState.readWorldState({ force: true }).catch(() => null);
     const renames = world?.cityRenames && typeof world.cityRenames === "object" ? world.cityRenames : {};
-    const renamesKey = JSON.stringify(renames);
+    const stats = world?.countryStats && typeof world.countryStats === "object" ? world.countryStats : {};
+    const named = [...new Set(Object.entries(stats)
+      .filter(([polity]) => String(world?.polityOverrides?.[polity]?.status ?? "").toLowerCase() !== "dissolved")
+      .map(([, sheet]) => String(sheet?.capital ?? "").trim().toLowerCase())
+      .filter(Boolean))].sort();
+    const capitals = new Set(named);
+    for (const [from, to] of Object.entries(renames)) {
+      if (capitals.has(String(to ?? "").trim().toLowerCase())) capitals.add(String(from ?? "").trim().toLowerCase());
+    }
+    const renamesKey = JSON.stringify([renames, named]);
     if (typeof unless === "string" && unless === renamesKey) return { unchanged: true, renamesKey };
     const response = await fetch(engine.JSON_URLS.citiesGeojson || "/api/runtime/json/citiesGeojson");
     if (!response.ok) return { cities: [], renamesKey };
@@ -442,7 +451,7 @@ const methods = {
       const renamed = renames[name.toLowerCase()];
       const label = typeof renamed === "string" && renamed.trim() ? renamed : name;
       const population = Number(props.population ?? props.POP_MAX ?? props.pop_max ?? props.pop) || 0;
-      cities.push([label, Number(coordinates[0]), Number(coordinates[1]), capitalOf(props) ? 1 : 0, population, Number(props.tier) || 3, label !== name ? 1 : 0, name]);
+      cities.push([label, Number(coordinates[0]), Number(coordinates[1]), capitalOf(props) || capitals.has(name.toLowerCase()) ? 1 : 0, population, Number(props.tier) || 3, label !== name ? 1 : 0, name]);
     }
     return { cities, renamesKey };
   },

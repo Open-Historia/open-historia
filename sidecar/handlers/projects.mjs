@@ -186,7 +186,7 @@ export const register = (ctx) => {
       },
       nextMilestone: next ? {
         title: clean(next.title),
-        date: clean(next.date),
+        date: clean(next.date) ? engine.gameDates.formatGameDateReadable(clean(next.date)) || clean(next.date) : "",
         repeat: clean(next.repeat),
         completedCount: Number(next.completedCount) || 0,
       } : null,
