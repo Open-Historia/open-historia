@@ -331,12 +331,21 @@ const isMutableRuntimeJsonUrl = (url) =>
 // Registered with MapLibre by Map/mapLibreSetup.js; archives are added to it
 // here (registerPmtilesArchive) whether or not the map has loaded yet.
 export const pmtilesProtocol = new Protocol();
+// Where map archives are read whole, never over Range: the Android app, whose
+// local server cannot serve a Range (see wholeFileSource.js), and the website,
+// whose host answers a Range on a file of a megabyte or more with the whole
+// file (Cloudflare Pages, measured 2026-10-28: a 16 KB read of the 21 MB
+// regions archive came back as a 200 of 21,106,005 bytes, and pmtiles refused
+// it: "Server returned no content-length header or content-length exceeding
+// request"). The desktop's own server serves ranges and keeps reading them.
+// (Read where import.meta.env may be missing: plain Node, under the tests.)
+const BUILD_ENV = import.meta.env ?? {};
+const READ_ARCHIVES_WHOLE = Boolean(BUILD_ENV.VITE_OH_NATIVE || BUILD_ENV.VITE_OH_WEB);
 // MapLibre asks this protocol for archives by URL, and one it has not been
-// handed yet it opens itself — as a FetchSource, over Range, which the Android
-// app cannot serve (see wholeFileSource.js). There, every archive MapLibre asks
-// for is opened through getPmtilesArchive instead, so it is read whole.
-// Guarded: `tiles` is internal to the pmtiles package.
-if (isNativeBuild() && pmtilesProtocol.tiles instanceof Map) {
+// handed yet it opens itself — as a FetchSource, over Range. Where archives are
+// read whole, every archive MapLibre asks for is opened through
+// getPmtilesArchive instead. Guarded: `tiles` is internal to the pmtiles package.
+if ((isNativeBuild() || READ_ARCHIVES_WHOLE) && pmtilesProtocol.tiles instanceof Map) {
   const opened = pmtilesProtocol.tiles;
   const lookup = opened.get.bind(opened);
   opened.get = (url) => lookup(url) ?? getPmtilesArchive(url);
@@ -808,9 +817,8 @@ class MemorySource {
   }
 }
 
-// The Android app never range-reads an archive: Capacitor's local server
-// ignores the end of a Range (see wholeFileSource.js). Its reads wait for the
-// one whole-file load the warm makes and slice that.
+// The Android app and the website never range-read an archive (READ_ARCHIVES_WHOLE,
+// above). Their reads wait for the one whole-file load the warm makes and slice that.
 const loadWholeArchive = async (url) => {
   await warmPmtilesArchive(url);
   const buffer = binaryValueCache.get(url);
@@ -823,7 +831,7 @@ const loadWholeArchive = async (url) => {
 const createPmtilesArchive = (url) => {
   const source = binaryValueCache.has(url)
     ? new MemorySource(url, binaryValueCache.get(url))
-    : import.meta.env.VITE_OH_NATIVE
+    : READ_ARCHIVES_WHOLE
       ? new WholeFileSource(url, loadWholeArchive)
       : url;
 

@@ -114,6 +114,8 @@ const setup = (options = {}) => {
       if (options.holdResolve) await options.holdResolve;
       resolved.push({ ...info, game: structuredClone(store.docs.game) });
       store.docs.events.push({ id: `round-${info.round}`, title: "The round's events", description: "", date: "2014-05-01" });
+      // What else the round wrote into the game.
+      options.roundWrites?.(store.docs, info);
     },
     replyTo: async (info) => {
       replies.push(info);
@@ -125,6 +127,7 @@ const setup = (options = {}) => {
     },
     ...(options.readChart ? { readChart: options.readChart } : {}),
     ...(options.institution ? { institution: options.institution } : {}),
+    ...(options.onSeatsMoved ? { onSeatsMoved: options.onSeatsMoved } : {}),
     now: clock.now,
     timers: clock.timers,
   });
@@ -528,6 +531,90 @@ test("a round: everyone ready resolves it, with everyone who plays written into 
   assert.equal(s.to(s.guest, "round").at(-1).phase, "revealing");
 });
 
+// A people founding a country of their own, as the time skip writes it: the
+// polity created, the order it resolves, and the founder's land handed to it.
+const founding = ({ id: eventId, from, to, order }) => ({
+  id: eventId, date: "2014-04-20", title: `${from} founds ${to}`, description: "",
+  impacts: {
+    actionIds: [order],
+    polityChanges: [{ operation: "create", code: to, name: to }],
+    regionTransfers: [{ regionId: "reg-1", fromCode: from, toCode: to, basis: "independence" }],
+  },
+});
+
+test("a player whose people found a country plays it from then on, with their queued orders and threads; the host's game country follows", async () => {
+  const BALTIC = "Baltic Union";
+  const PSKOV = "Pskov Republic";
+  const moved = [];
+  const s = setup({
+    onSeatsMoved: (moves) => moved.push(...moves),
+    roundWrites: (docs) => {
+      // The host's order (no owner) and the guest's both found a country.
+      docs.actions = docs.actions.map((action) => ({ ...action, status: "resolved" }));
+      docs.actions.push(
+        { id: "order-ru-found", status: "resolved", ownerCode: RUSSIA, text: "Found the Pskov Republic" },
+        { id: "order-ru-later", status: "planned", ownerCode: RUSSIA, text: "Raise a militia" },
+      );
+      docs.events.push(
+        founding({ id: "ev-baltic", from: LATVIA, to: BALTIC, order: "order-lv" }),
+        founding({ id: "ev-pskov", from: RUSSIA, to: PSKOV, order: "order-ru-found" }),
+      );
+      docs.chat.push({ id: "chat-ru", player: RUSSIA, countries: [{ code: ESTONIA, name: ESTONIA }], messages: [] });
+      // What only the old government knew, and an agent of its own.
+      docs.events.push({ id: "ev-ru-secret", date: "2014-04-02", title: "A mole is found in Pskov", description: "", audience: [RUSSIA] });
+      docs.world = { ...docs.world, spies: [{ id: "spy-ru", owner: RUSSIA, target: ESTONIA, status: "active" }] };
+    },
+  });
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  await s.request(s.hostPlayer, { t: "ready", id: id(2), value: true });
+  await s.request(s.guest, { t: "ready", id: id(3), value: true });
+  await s.clock.flush();
+  assert.deepEqual(moved, [{ from: LATVIA, to: BALTIC, host: true }, { from: RUSSIA, to: PSKOV, host: false }]);
+  assert.equal(s.store.docs.game.country, BALTIC);
+  assert.deepEqual(s.store.docs.game.humanCountries, [BALTIC, PSKOV]);
+  assert.equal(s.shown(s.guest).game.country, PSKOV);
+  assert.equal(s.store.docs.actions.find((action) => action.id === "order-ru-later").ownerCode, PSKOV);
+  assert.equal(s.store.docs.actions.find((action) => action.id === "order-ru-found").ownerCode, RUSSIA, "what was done stays done by who did it");
+  assert.equal(s.store.docs.chat.find((chat) => chat.id === "chat-ru").player, PSKOV);
+  assert.match(s.to(s.guest, "notice").at(-1).text, /you now play Pskov Republic/);
+  assert.ok(!s.to(s.hostPlayer, "notice").some((notice) => /Pskov/.test(notice.text)), "the notice is the moved player's");
+  assert.ok(s.shown(s.guest).events.some((event) => event.id === "ev-ru-secret"), "what the old government knew is still theirs");
+  assert.ok(!s.shown(s.hostPlayer).events.some((event) => event.id === "ev-ru-secret"));
+  assert.equal(s.store.docs.world.spies[0].owner, PSKOV);
+  assert.equal(s.store.docs.actions.find((action) => action.id === "order-lv").ownerCode, LATVIA, "the host's past order stays the old name's");
+  assert.deepEqual(s.store.docs.game.seatFoundings, [{ from: LATVIA, to: BALTIC }, { from: RUSSIA, to: PSKOV }]);
+  const lobby = s.to(s.guest, "lobby").at(-1);
+  assert.deepEqual(lobby.seats.map((seat) => [seat.country, seat.you]), [[BALTIC, false], [PSKOV, true]]);
+});
+
+test("a player who founds a country without giving it their own land keeps their seat", async () => {
+  const s = setup({
+    roundWrites: (docs) => {
+      docs.actions.push({ id: "order-ru-puppet", status: "resolved", ownerCode: RUSSIA, text: "Set up a republic in Narva" });
+      docs.events.push({
+        id: "ev-puppet", date: "2014-04-20", title: "A republic is proclaimed in Narva", description: "",
+        impacts: {
+          actionIds: ["order-ru-puppet"],
+          polityChanges: [{ operation: "create", code: "Narva Republic" }],
+          regionTransfers: [{ regionId: "reg-narva", fromCode: ESTONIA, toCode: "Narva Republic" }],
+        },
+      });
+    },
+  });
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  await s.request(s.hostPlayer, { t: "ready", id: id(2), value: true });
+  await s.request(s.guest, { t: "ready", id: id(3), value: true });
+  await s.clock.flush();
+  assert.deepEqual(s.store.docs.game.humanCountries, [LATVIA, RUSSIA]);
+  assert.equal(s.store.docs.game.country, LATVIA);
+});
+
 test("a leaver's country waits, goes to the AI, and comes back with its player; the host's never lapses", async () => {
   const s = setup();
   s.host.join(s.hostPlayer);
@@ -713,6 +800,34 @@ test("orders given while a round's events are read are the next round's; while i
   // And taken back, while the events are still read.
   await s.request(s.guest, { t: "unorder", id: id(6), order: queued.id });
   assert.equal(s.ack(s.guest, id(6)).ok, true);
+});
+
+test("while a round is resolved, letters to the AI's governments and goals wait; people still write to each other, every line dated by the game", async () => {
+  let release;
+  const s = setup({ holdResolve: new Promise((resolve) => { release = resolve; }) });
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  await s.request(s.hostPlayer, { t: "ready", id: id(2), value: true });
+  await s.request(s.guest, { t: "ready", id: id(3), value: true });
+  assert.equal(s.to(s.guest, "round").at(-1).phase, "resolving");
+  // Estonia is the AI's: a new thread, and the AI's thread the host owns.
+  await s.request(s.guest, { t: "say", id: id(4), thread: null, to: [ESTONIA], text: "Moscow to Tallinn." });
+  assert.match(s.ack(s.guest, id(4)).error, /being resolved/);
+  await s.request(s.hostPlayer, { t: "say", id: id(5), thread: "chat-lv-est", to: [], text: "Riga again." });
+  assert.match(s.ack(s.hostPlayer, id(5)).error, /being resolved/);
+  await s.request(s.guest, { t: "goal", id: id(6), text: "Take Narva" });
+  assert.match(s.ack(s.guest, id(6)).error, /being resolved/);
+  // Latvia is the host's: people write to each other at any time.
+  await s.request(s.guest, { t: "say", id: id(7), thread: null, to: [LATVIA], text: "Moscow to Riga." });
+  assert.equal(s.ack(s.guest, id(7)).ok, true);
+  const thread = s.store.docs.chat.find((chat) => chat.player === RUSSIA);
+  assert.equal(thread.messages[0].time, "2014-04-01");
+  release();
+  await s.clock.flush();
+  await s.request(s.guest, { t: "say", id: id(8), thread: null, to: [ESTONIA], text: "Moscow to Tallinn." });
+  assert.equal(s.ack(s.guest, id(8)).ok, true);
 });
 
 test("an institution's business goes to the host's desk for the asker's seat, and what it made comes back with the ack", async () => {

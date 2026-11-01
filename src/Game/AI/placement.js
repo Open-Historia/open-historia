@@ -497,12 +497,20 @@ const targetOf = (thing, from) => {
     return regions.reduce((best, region) => (distanceKm(centreOf(region), from) < distanceKm(centreOf(best), from) ? region : best)).geometry;
 };
 
+// Open sea: where no land region is (the gazetteer counts a region of a water
+// type as sea), and on the map. Past the Mercator square's top or bottom no
+// region is either, and a fleet put there stood below the bottom of the map: a
+// coast that runs along the map's southern edge stepped out over it (a fantasy
+// scenario's Discord game, 2026-10-26).
+const MAP_EDGE_LAT = 85.0511;
+export const isOpenSea = (point, gazetteer) => Math.abs(point[1]) < MAP_EDGE_LAT && !gazetteer.regionAt(point);
+
 // Is this stretch of a region's edge the sea? Step outward from it; on this map
-// the sea is simply where no region is.
+// the sea is where no land region is (isOpenSea).
 const seawardPoint = (region, vertex, inner, gazetteer, km) => {
     const bearing = (Math.atan2((vertex[0] - inner[0]) * kmPerDegLng(vertex[1]), (vertex[1] - inner[1]) * KM_PER_DEG_LAT) * 180) / Math.PI;
     const out = offsetPoint(vertex, bearing, km);
-    return gazetteer.regionAt(out) ? null : out;
+    return isOpenSea(out, gazetteer) ? out : null;
 };
 
 const coastOf = (region, gazetteer, { toward = null, seed = 0 } = {}) => {
@@ -1297,14 +1305,14 @@ const SEA_PART = /^(?:the\s+)?(?:far\s+)?(?:(?:north|south)(?:[- ]?(?:east|west)
 // to a port by its name moved about on land.
 const SEA_RINGS_KM = [8, 16, 25, 35, 50, 70, 100, 140, 200, 300, 400];
 export const nearestSea = (point, gazetteer, { seed = 0, maxKm = 400 } = {}) => {
-    if (!gazetteer.regionAt(point)) return point;
+    if (isOpenSea(point, gazetteer)) return point;
     for (const km of SEA_RINGS_KM.filter((ring) => ring <= maxKm)) {
         for (let step = 0; step < 16; step += 1) {
             const bearing = (seed + step * 22.5) % 360;
             const out = offsetPoint(point, bearing, km);
-            if (gazetteer.regionAt(out)) continue;
+            if (!isOpenSea(out, gazetteer)) continue;
             const further = offsetPoint(point, bearing, km + 12);
-            return gazetteer.regionAt(further) ? out : further;
+            return isOpenSea(further, gazetteer) ? further : out;
         }
     }
     return null;

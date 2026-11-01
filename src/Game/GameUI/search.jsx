@@ -361,9 +361,9 @@ const Search = memo(({ mapRef, besideWarRoom = false }) => {
 
   const hasSuggestions = expanded && suggestions.length > 0;
   const phoneBar = expanded && isMobile;
-  const size = phoneBar ? PHONE_BAR_SIZE : isTouch ? TOUCH_SIZE : COMPACT_SIZE;
+  const size = phoneBar ? PHONE_BAR_SIZE : isMobile ? "3.2rem" : isTouch ? TOUCH_SIZE : COMPACT_SIZE;
   // Up from the home indicator and in from a notch, with the dock (0 elsewhere).
-  const bottom = `calc(${phoneBar ? `${DOCK_BOTTOM_REM + DOCK_HEIGHT_REM + 0.5}rem` : DOCK_BUTTON_BOTTOM} + ${SAFE_BOTTOM})`;
+  const bottom = `calc(${phoneBar ? `${DOCK_BOTTOM_REM + DOCK_HEIGHT_REM + 0.5}rem` : isMobile ? `${DOCK_BOTTOM_REM + (DOCK_HEIGHT_REM - 3.2) / 2}rem` : DOCK_BUTTON_BOTTOM} + ${SAFE_BOTTOM})`;
 
   return (
     <div
@@ -384,7 +384,7 @@ const Search = memo(({ mapRef, besideWarRoom = false }) => {
         display: "flex",
         alignItems: "center",
         zIndex: 9999,
-        borderRadius: hasSuggestions ? "0 0 10px 10px" : "10px",
+        borderRadius: hasSuggestions ? "0 0 12px 12px" : "12px",
         backgroundColor: "var(--oh-hud-bg)",
         backdropFilter: "var(--oh-hud-blur)",
         border: "1px solid var(--oh-hud-border)",

@@ -25,6 +25,7 @@ import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { useBackToClose } from "../../runtime/backToClose.js";
 import Markdown, { MarkdownStyleInjector } from "./markdown.jsx";
 import { institutionMembershipDisplayLabel } from "./institutionMembershipPresentation.js";
+import { formatGameDateReadable } from "../../runtime/gameDates.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const lower = (value) => clean(value).toLowerCase();
@@ -169,7 +170,7 @@ const DecisionCard = ({ proposal }) => {
           </div>
           {ballot.government && <div style={{ marginTop: ".16rem", fontSize: ".58rem", color: "rgba(255,255,255,.3)" }}>{ballot.government}</div>}
           <div style={{ marginTop: ".38rem", fontSize: ".62rem", lineHeight: 1.45, color: ballot.reason ? "rgba(255,255,255,.62)" : "rgba(255,255,255,.3)", fontStyle: ballot.reason ? "normal" : "italic" }}>{ballot.reason || "No recorded public rationale."}</div>
-          {ballot.date && <div style={{ marginTop: ".32rem", fontSize: ".58rem", color: "rgba(255,255,255,.25)" }}>{ballot.date}</div>}
+          {ballot.date && <div style={{ marginTop: ".32rem", fontSize: ".58rem", color: "rgba(255,255,255,.25)" }}>{(formatGameDateReadable(ballot.date) || ballot.date)}</div>}
         </div>)}
       </div>}
     </div>}
@@ -235,7 +236,7 @@ const LifecycleCaseCard = ({ entry, institutionName = "", canRespond = false, ca
     <div style={{ marginTop: ".28rem", fontSize: ".61rem", color: "rgba(255,255,255,.48)", lineHeight: 1.45 }}>
       {entry?.polity ? `${entry.polity}${entry.requestedStatus ? ` · ${humanize(entry.requestedStatus)}` : ""}` : institutionName}
       {entry?.initiatedBy ? ` · initiated by ${entry.initiatedBy}` : ""}
-      {entry?.effectiveDate ? ` · effective ${entry.effectiveDate}` : ""}
+      {entry?.effectiveDate ? ` · effective ${(formatGameDateReadable(entry.effectiveDate) || entry.effectiveDate)}` : ""}
     </div>
     {entry?.reason && <div style={{ marginTop: ".34rem", fontSize: ".62rem", lineHeight: 1.45, color: "rgba(255,255,255,.58)" }}>{entry.reason}</div>}
     {entry?.terms && <div style={{ marginTop: ".28rem", fontSize: ".6rem", lineHeight: 1.4, color: "var(--oh-grey-muted)" }}>Terms: {entry.terms}</div>}
@@ -729,7 +730,7 @@ export default function InstitutionsWorkspace({ panelOpen = true, world = {}, pl
       <Emblem institution={institution} size={compact ? 42 : 56} />
       <div style={{ minWidth: 0, flex: 1 }}>
         <div style={{ display: "flex", gap: ".5rem", alignItems: "center", flexWrap: "wrap" }}><strong style={{ fontSize: compact ? ".9rem" : "1.04rem", lineHeight: 1.2, ...(compact ? { overflowWrap: "anywhere" } : { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }) }}>{institution.name || institution.id}</strong><SmallPill tone={lower(institution.status || "active") === "active" ? "good" : "neutral"}>{institution.status || "active"}</SmallPill></div>
-        <div style={{ marginTop: ".2rem", fontSize: ".65rem", color: "rgba(255,255,255,.45)" }}>{clean(institution.kind || "institution").replace(/[-_]/g, " ")}{institution.foundedDate ? ` · founded ${institution.foundedDate}` : ""}</div>
+        <div style={{ marginTop: ".2rem", fontSize: ".65rem", color: "rgba(255,255,255,.45)" }}>{clean(institution.kind || "institution").replace(/[-_]/g, " ")}{institution.foundedDate ? ` · founded ${(formatGameDateReadable(institution.foundedDate) || institution.foundedDate)}` : ""}</div>
         {overviewPurpose && !compact && <div style={{ marginTop: ".3rem", maxWidth: "44rem", fontSize: ".7rem", lineHeight: 1.4, color: "rgba(255,255,255,.62)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{overviewPurpose}</div>}
       </div>    </div>
     <div data-institution-facts="persistent" style={{ padding: compact ? ".4rem .7rem .45rem" : ".65rem 1rem .7rem", flexShrink: 0 }}><Facts view={selectedView} compact={compact} /></div>
@@ -770,7 +771,7 @@ export default function InstitutionsWorkspace({ panelOpen = true, world = {}, pl
           {recentActivity.length ? <div style={{ marginTop: ".65rem", display: "flex", flexDirection: "column" }}>{recentActivity.map((entry, index) => <div key={entry.id} style={{ display: "grid", gridTemplateColumns: "auto minmax(0,1fr) auto", gap: ".6rem", alignItems: "start", padding: ".48rem 0", borderTop: index ? "1px solid rgba(255,255,255,.055)" : 0 }}>
             <span style={{ width: ".5rem", height: ".5rem", marginTop: ".28rem", borderRadius: 999, background: entry.tone === "good" ? "#4ade80" : entry.tone === "bad" ? "#f87171" : "rgba(255,255,255,.35)" }} />
             <div style={{ minWidth: 0 }}><div style={{ fontSize: ".68rem", fontWeight: 710, color: "rgba(255,255,255,.82)" }}>{entry.title}</div>{entry.detail && <div style={{ marginTop: ".12rem", fontSize: ".64rem", lineHeight: 1.4, color: "rgba(255,255,255,.4)" }}>{entry.detail}</div>}</div>
-            {entry.date && <span style={{ fontSize: ".61rem", color: "rgba(255,255,255,.28)", whiteSpace: "nowrap" }}>{entry.date}</span>}
+            {entry.date && <span style={{ fontSize: ".61rem", color: "rgba(255,255,255,.28)", whiteSpace: "nowrap" }}>{(formatGameDateReadable(entry.date) || entry.date)}</span>}
           </div>)}</div> : <div style={{ padding: "1rem .1rem .4rem", fontSize: ".66rem", color: "rgba(255,255,255,.34)" }}>No formal activity has been recorded yet.</div>}
         </div>
       </div>}
@@ -831,7 +832,7 @@ export default function InstitutionsWorkspace({ panelOpen = true, world = {}, pl
           </div>)}</div>
         </section>
 
-        {selectedHistory.length > 0 && <details style={{ ...panel, padding: ".72rem .8rem" }}><summary style={{ cursor: "pointer", fontSize: ".69rem", fontWeight: 730, color: "rgba(255,255,255,.68)" }}>Membership history ({selectedHistory.length})</summary><div style={{ marginTop: ".5rem", display: "flex", flexDirection: "column" }}>{[...selectedHistory].reverse().slice(0, 24).map((entry, index) => <div key={entry.id} style={{ padding: ".42rem .05rem", display: "flex", alignItems: "center", gap: ".5rem", borderTop: index ? "1px solid rgba(255,255,255,.055)" : 0 }}><span style={{ flex: 1, minWidth: 0, fontSize: ".62rem", color: "rgba(255,255,255,.58)" }}>{entry.polity ? `${entry.polity} · ` : ""}{humanize(entry.action)}{entry.reason ? ` · ${entry.reason}` : ""}</span>{entry.date && <span style={{ fontSize: ".6rem", color: "rgba(255,255,255,.27)" }}>{entry.date}</span>}</div>)}</div></details>}
+        {selectedHistory.length > 0 && <details style={{ ...panel, padding: ".72rem .8rem" }}><summary style={{ cursor: "pointer", fontSize: ".69rem", fontWeight: 730, color: "rgba(255,255,255,.68)" }}>Membership history ({selectedHistory.length})</summary><div style={{ marginTop: ".5rem", display: "flex", flexDirection: "column" }}>{[...selectedHistory].reverse().slice(0, 24).map((entry, index) => <div key={entry.id} style={{ padding: ".42rem .05rem", display: "flex", alignItems: "center", gap: ".5rem", borderTop: index ? "1px solid rgba(255,255,255,.055)" : 0 }}><span style={{ flex: 1, minWidth: 0, fontSize: ".62rem", color: "rgba(255,255,255,.58)" }}>{entry.polity ? `${entry.polity} · ` : ""}{humanize(entry.action)}{entry.reason ? ` · ${entry.reason}` : ""}</span>{entry.date && <span style={{ fontSize: ".6rem", color: "rgba(255,255,255,.27)" }}>{(formatGameDateReadable(entry.date) || entry.date)}</span>}</div>)}</div></details>}
       </div>}
       {section === "charter" && <div data-institution-charter-workspace="true" style={{ display: "flex", flexDirection: "column", gap: ".75rem", maxWidth: "56rem", margin: "0 auto" }}>
         <div style={{ ...panel, padding: ".9rem 1rem" }}>

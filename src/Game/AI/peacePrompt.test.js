@@ -10,7 +10,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { PEACE_BLOCK_HEADING, PEACE_BLOCK_MAX, buildPeaceBlock } from "./peacePrompt.js";
+import { PEACE_BLOCK_HEADING, PEACE_BLOCK_MAX, PEACE_TREATIES_FIELD, buildPeaceBlock } from "./peacePrompt.js";
+import { WAR_STATS_HEADING, WAR_STATS_RULE } from "./warStatsPrompt.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const read = (relative) => fs.readFileSync(path.join(here, relative), "utf8").split("\r\n").join("\n");
@@ -32,16 +33,26 @@ test("a world at peace with no alliance in it is told nothing; one with an allia
   assert.deepEqual(lines.slice(2), ["Bound to defend:", "- Borduria is defended by Cisland."], "a war that begins in this answer will bring the ally in: the story is told who");
 });
 
-test("in a war the skip is told the rules, who is bound to whom, and how weary each side is", () => {
+test("in a war the skip is told the rules, who is bound to whom, and each side's own war to judge its diplomacy by", () => {
   const block = buildPeaceBlock({ world: world(), game: { round: 8 }, players: ["Aland"] });
   for (const rule of [
     "Write no join for them.",
     "An ally that will not come breaks the treaty: tell that in an event and end or suspend the agreement in the same answer, and the game takes it off the breaker's reputation.",
     "A country a person plays is asked by the game and answers for itself.",
     "The game keeps how weary of its war each country is, from 0 (fresh) to 100 (spent)",
-    "A war can end on terms, and the game makes them:",
+    // "it should not be fully deterministic anymore" (the owner, 2026-10-30).
+    "The game carries out a peace on terms, but never decides one: whether a country wants peace, when, and on what terms is yours to judge",
+    "A weary or losing country may still fight on, and a strong one may still want peace.",
+    "A country nobody plays that offers a player peace does it in a letter: an entry of diplomaticOutreach from that country to the player, its leader's own words in openingMessage, with peaceOffer holding the terms",
+    `a line in ${PEACE_TREATIES_FIELD} for each, offering country | accepting country | terms`,
   ]) assert.ok(block.includes(rule), rule);
-  assert.ok(block.endsWith("Bound to defend:\n- Borduria is defended by Cisland.\nWar weariness:\n- Borduria 64, war-weary\n- Aland 22, uneasy"), "the weary are told, the wearier first, and a country hardly touched is not");
+  assert.equal(block.includes("when one is spent"), false, "no formula is described");
+  assert.ok(block.includes("Bound to defend:\n- Borduria is defended by Cisland.\n"));
+  // Each side's own war, the player first, then its enemy: weariness is told there.
+  const situation = block.slice(block.lastIndexOf(`\n${WAR_STATS_HEADING}\n`) + 1);
+  assert.ok(situation.startsWith(`${WAR_STATS_HEADING}\n${WAR_STATS_RULE}\nAland:\n- The Border War: against Borduria, alone;`), situation);
+  assert.ok(situation.includes("Borduria:\n- The Border War: against Aland, alone; it holds 0 of the enemy's regions and the enemy holds 0 of its own; weariness 64 (war-weary), Aland's 22 (uneasy)."));
+  assert.equal(block.includes("War weariness:"), false, "a country at war has its weariness in its own lines, and one hardly touched is not told");
   assert.ok(block.length <= PEACE_BLOCK_MAX);
 });
 
@@ -52,7 +63,7 @@ test("what the game did since the last period is told once, and what waits for a
       { id: "t-new", warId: "war-0", title: "The Southern War", date: "1915-01-10", round: 8, from: "Dorland", to: "Aland", terms: { territory: "restored" }, by: "settled" },
       { id: "t-old", warId: "war-9", title: "An Older War", date: "1914-06-01", round: 5, from: "Eland", to: "Aland", terms: {}, by: "offer" },
     ],
-    peaceOffers: [{ id: "o1", warId: "war-1", from: "Borduria", to: "Aland", terms, round: 8, status: "open" }, { id: "o2", warId: "war-1", from: "Borduria", to: "Aland", terms, round: 4, status: "declined" }],
+    peaceOffers: [{ id: "o1", warId: "war-1", from: "Borduria", to: "Aland", terms, round: 8, status: "open" }, { id: "o2", warId: "war-1", from: "Borduria", to: "Aland", terms, round: 4, status: "declined", answeredRound: 7 }],
     callsToArms: [{ id: "c1", warId: "war-1", ally: "Cisland", defender: "Borduria", attackers: ["Aland"], via: { kind: "agreement", id: "pact-1", title: "The Northern Pact" }, round: 8, status: "open" }],
     reparations: [{ id: "r1", warId: "war-9", payer: "Eland", receiver: "Aland", share: 0.02, since: "1914-06-01", days: 1825, paidDays: 365 }],
   });
@@ -60,7 +71,8 @@ test("what the game did since the last period is told once, and what waits for a
   assert.ok(block.includes("- The Southern War: Dorland and Aland made peace on 1915-01-10; every region goes back to whose it was before the war; nobody pays reparations."));
   assert.equal(block.includes("An Older War"), false, "a peace already told is not told again");
   assert.ok(block.includes("(the war is already ended in the ledger: tell each early in this answer as an event, write no warUpdates for it, and tell no fighting in that war after it)"));
-  assert.ok(block.includes("Offers of peace that wait for a player's answer (the answer is theirs: write none, and the war goes on meanwhile):\n- Borduria has offered Aland peace: each side keeps the ground it holds; Borduria pays Aland reparations of 2% of its economy a year for 5 years."));
+  assert.ok(block.includes("Offers of peace that wait for an answer (the answer is theirs: write none, and the war goes on meanwhile):\n- Borduria has offered Aland peace: each side keeps the ground it holds; Borduria pays Aland reparations of 2% of its economy a year for 5 years."));
+  assert.ok(block.includes("Offers of peace turned down lately:\n- Aland turned down Borduria's offer of peace (each side keeps the ground it holds; Borduria pays Aland reparations of 2% of its economy a year for 5 years)."), "a country that offered knows before it offers again");
   assert.ok(block.includes("Calls to arms that wait for a player's answer (theirs to give):\n- Cisland is called on to defend Borduria against Aland, under The Northern Pact."));
   assert.ok(block.includes("- Eland pays Aland 2% of its economy a year in reparations, for 4 more years."));
   // Names, never ids.

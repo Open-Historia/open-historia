@@ -3,7 +3,7 @@
 // have war weariness, wars that end with terms and reparations."
 //
 // A war used to end when the story said so, and that was all an ending was.
-// Now a war can end ON TERMS, and the game works them out; no model is asked.
+// Now a war can end ON TERMS, and the game carries them out.
 //
 // TERMS are two things:
 //
@@ -13,23 +13,24 @@
 //   reparations     one side pays the other a share of its economy a year,
 //                   for so many years (world.reparations); or nobody pays
 //
-// WHO OFFERS WHAT is read from how the war stands for the country offering
-// (standingOf): the share of its own ground the enemy holds, the share of the
-// enemy's it holds, and how weary each is (runtime/warWeariness.js).
+// WHO OFFERS PEACE, AND WHEN, is the AI's to decide, never a formula's: "make
+// it so it only happens when the simulation says the country sends a peace
+// treaty, it should not be fully deterministic anymore" (the owner,
+// 2026-10-30). The game only checks what it is told and keeps it:
 //
-//   it is losing     it offers to cede what it has lost and to pay: the worse
-//                    it stands, the more and the longer
-//   about even       a white peace: the old borders, nobody pays
-//   it is winning    and weary all the same: it keeps what it holds, and
-//                    asks nothing more
+//   an offer        (world.peaceOffers) a country nobody plays offers a
+//                   person peace in a letter of the time skip's
+//                   (offerFromSkip), or a leader does in a chat reply; a
+//                   person puts terms to an enemy in that enemy's chat, and
+//                   its leader's reply accepts, declines or counters. Each
+//                   offer is shown in the chat it was made in, with its terms
+//   a treaty        two countries nobody plays make peace when the skip says
+//                   they did (treatyFromSkip)
 //
-// AN OFFER (world.peaceOffers) is made by a country nobody plays to a country
-// a person plays, once it is weary enough or is losing its own ground; the
-// person accepts or declines. Declined, it is not made again for
-// PEACE_COOLDOWN_ROUNDS. A person may also propose terms of their own, and a
-// country nobody plays answers at once by how it stands (wouldAccept). Two
-// countries nobody plays make peace between themselves the same way when one
-// of them is spent.
+// The figures below (standingOf, termsWorth, wouldAccept, termsOffered) no
+// longer decide anything: they are what the game reckons the terms are worth
+// to a country, told to the model beside its war's other figures
+// (AI/warStatsPrompt.js), whose decision it stays.
 //
 // REPARATIONS are paid turn by turn out of the payer's economy: on the
 // backend of its sheet (runtime/statsBackend.js) the payer's public debt
@@ -43,17 +44,10 @@ export const TERRITORY_RESTORED = "restored";
 export const PEACE_TERRITORIES = Object.freeze([TERRITORY_AS_HELD, TERRITORY_RESTORED]);
 export const OFFER_STATUSES = Object.freeze(["open", "accepted", "declined", "lapsed"]);
 
-// When a country nobody plays offers peace: it is this weary, or the enemy
-// holds this share of its own ground and it holds none of theirs to speak of.
-export const PEACE_OFFER_WEARINESS = 60;
-export const PEACE_OFFER_GROUND_LOST = 0.25;
-// Two countries nobody plays settle between themselves only when one is nearly spent (or is losing its ground).
-export const PEACE_SETTLE_WEARINESS = 80;
 // What a fresh country expects to better its standing by if it fights on, and
 // a spent one to worsen it by: at half-weary it expects the war to end as it stands.
 export const PEACE_HOPE = 0.2;
-// How long a declined offer keeps its maker from offering again, in turns, and how long an open one stands.
-export const PEACE_COOLDOWN_ROUNDS = 3;
+// How long an open offer stands, in turns.
 export const PEACE_OFFER_STANDS_ROUNDS = 4;
 // How far apart two sides' standings must be for one to be "losing".
 export const STANDING_EVEN = 0.08;
@@ -62,7 +56,12 @@ export const REPARATIONS_SHARE_MOST = 0.04;
 export const REPARATIONS_SHARE_LEAST = 0.005;
 export const REPARATIONS_YEARS_LEAST = 3;
 export const REPARATIONS_YEARS_MOST = 12;
+// The most reparations terms an AI may write: a share of the payer's GDP a year, and years.
+export const REPARATIONS_SHARE_CAP = 0.1;
+export const REPARATIONS_YEARS_CAP = 20;
 export const OFFERS_KEPT_MOST = 24;
+// Who made an offer: a time skip's letter, a leader's chat reply, a person's own terms, a leader's counter to them.
+export const OFFER_SOURCES = Object.freeze(["skip", "chat", "player", "counter"]);
 export const REPARATIONS_KEPT_MOST = 24;
 
 const clean = (value, most = 120) => String(value ?? "").replace(/\s+/g, " ").trim().slice(0, most).trim();
@@ -154,9 +153,12 @@ export const describeTerms = (terms) => {
   return `${ground}; ${payment.payer} pays ${payment.receiver} reparations of ${round(payment.share * 100, 1)}% of its economy a year for ${payment.years} ${payment.years === 1 ? "year" : "years"}`;
 };
 
-// ---- offers ---------------------------------------------------------------------------------
+/// ---- offers ---------------------------------------------------------------------------------
 
-// world.peaceOffers: { id, warId, from, to, terms, date, round, status, answeredRound? }
+// world.peaceOffers: { id, warId, from, to, terms, date, round, status, answeredRound?, source?, chatId?, messageId? }
+//   source      who made it (OFFER_SOURCES)
+//   chatId      the thread it was made in, where it is known
+//   messageId   the message that carries it there, where it is known
 export const normalizePeaceOffer = (raw) => {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
   const id = clean(raw.id, 80);
@@ -166,6 +168,8 @@ export const normalizePeaceOffer = (raw) => {
   if (!id || !warId || !from || !to || fold(from) === fold(to)) return null;
   const status = OFFER_STATUSES.includes(raw.status) ? raw.status : "open";
   const answered = Math.round(figure(raw.answeredRound));
+  const chatId = clean(raw.chatId, 120);
+  const messageId = clean(raw.messageId, 120);
   return {
     id,
     warId,
@@ -176,6 +180,9 @@ export const normalizePeaceOffer = (raw) => {
     round: Math.max(0, Math.round(figure(raw.round))),
     status,
     ...(status !== "open" && answered > 0 ? { answeredRound: answered } : {}),
+    ...(OFFER_SOURCES.includes(raw.source) ? { source: raw.source } : {}),
+    ...(chatId ? { chatId } : {}),
+    ...(messageId ? { messageId } : {}),
   };
 };
 
@@ -191,86 +198,174 @@ export const normalizePeaceOffers = (value) => {
 // The offers that wait for an answer from one country ("" for anybody's).
 export const openOffersFor = (offers, country = "") => normalizePeaceOffers(offers).filter((offer) => offer.status === "open" && (!fold(country) || fold(offer.to) === fold(country)));
 
+// The open offer between two countries, made by either: null for none.
+export const openOfferBetween = (offers, a, b) => normalizePeaceOffers(offers).find((offer) => offer.status === "open" && ((fold(offer.from) === fold(a) && fold(offer.to) === fold(b)) || (fold(offer.from) === fold(b) && fold(offer.to) === fold(a)))) ?? null;
+
 const sidesOf = (war) => [list(war?.sideA).map((name) => clean(name)).filter(Boolean), list(war?.sideB).map((name) => clean(name)).filter(Boolean)];
-const active = (war) => fold(war?.status || "active") === "active";
 const settleable = (war) => ["active", "ceasefire"].includes(fold(war?.status || "active"));
 
-// The offers a turn brings: for every active war with a played country on one
-// side and none on the other, the first country of the other side offers
-// peace when it is weary enough or is losing its own ground, unless an offer
-// of its own already stands or one was declined too lately. Offers whose war
-// is over, or that have stood too long, lapse.
-//   offers       world.peaceOffers as the turn ends
-//   wars         the war ledger as the turn ends
-//   players      the countries people play
-//   wearinessOf  (name) => 0 to 100
-//   groundOf     (warId, name) => { lost, taken } for that country in that war
-//   round, date  the turn it now is
-// Returns the list to keep.
-export const withTurnPeaceOffers = (offers, { wars = [], players = [], wearinessOf = null, groundOf = null, round = 0, date = "" } = {}) => {
-  const played = new Set(list(players).map(fold).filter(Boolean));
+// The war two countries fight on opposite sides of, still to be settled: null for none.
+export const warBetween = (wars, a, b) => list(wars).find((war) => {
+  if (!clean(war?.id) || !settleable(war)) return false;
+  const [first, second] = sidesOf(war).map((members) => new Set(members.map(fold)));
+  return (first.has(fold(a)) && second.has(fold(b))) || (first.has(fold(b)) && second.has(fold(a)));
+}) ?? null;
+
+// Terms an AI wrote, held to what the game allows: whoever pays is one of the
+// two making peace and the other receives, at most REPARATIONS_SHARE_CAP of its
+// economy a year for REPARATIONS_YEARS_CAP years. Reparations naming anyone
+// else are dropped, never guessed onto somebody.
+export const clampTerms = (raw, { from = "", to = "" } = {}) => {
+  const parties = [clean(from), clean(to)];
+  // A payer named with nobody to receive: the other of the two.
+  const named = raw?.reparations && typeof raw.reparations === "object" ? raw.reparations : null;
+  const filled = named && !clean(named.receiver)
+    ? { ...raw, reparations: { ...named, receiver: parties.find((name) => name && fold(name) !== fold(named.payer)) ?? "" } }
+    : raw;
+  const read = normalizeTerms(filled);
+  const payment = read.reparations;
+  if (!payment) return read;
+  const payer = parties.find((name) => name && fold(name) === fold(payment.payer));
+  const receiver = parties.find((name) => name && fold(name) !== fold(payer));
+  if (!payer || !receiver) return { ...read, reparations: null };
+  return { ...read, reparations: { payer, receiver, share: round(within(payment.share, 0, REPARATIONS_SHARE_CAP), 4), years: Math.min(REPARATIONS_YEARS_CAP, payment.years) } };
+};
+
+// Terms as a line an AI writes: the ground, then the money.
+//   "as held; Borduria pays 2% for 5 years"   "restored; none"   "restored"
+// `from` and `to` are the two making peace: a payer named is one of them, and
+// the other receives. Ground it cannot read is the old borders.
+export const readTermsLine = (text, { from = "", to = "" } = {}) => {
+  const line = clean(text, 400);
+  const lower = line.toLowerCase();
+  const territory = /\bas\s*held\b|\bkeeps?\b|\bheld\b|\bcede/.test(lower) && !/\brestor|old borders|status quo|white peace/.test(lower) ? TERRITORY_AS_HELD : TERRITORY_RESTORED;
+  const paid = line.match(/([^;|,]+?)\s+pays?\b[^0-9]*?(\d+(?:\.\d+)?)\s*%[^0-9]*?(\d+)\s*years?/i);
+  let reparations = null;
+  if (paid) {
+    const named = fold(paid[1]);
+    const payer = [clean(from), clean(to)].find((name) => name && (named === fold(name) || named.endsWith(` ${fold(name)}`)));
+    reparations = { payer: payer ?? clean(paid[1]), receiver: "", share: Number(paid[2]) / 100, years: Number(paid[3]) };
+    reparations.receiver = [clean(from), clean(to)].find((name) => name && fold(name) !== fold(reparations.payer)) ?? "";
+  }
+  return clampTerms({ territory, reparations }, { from, to });
+};
+
+// What an AI answers about peace in a chat, read from one line:
+//   "accept"   "decline"   "offer as held; Borduria pays 2% for 5 years"   "counter restored; none"
+// Returns { verdict, terms } (terms only for an offer or a counter), or null for nothing it can read.
+//   from, to   the AI's country and the person's: who pays is read against them
+export const PEACE_VERDICTS = Object.freeze(["accept", "decline", "offer", "counter"]);
+export const readPeaceVerdict = (text, { from = "", to = "" } = {}) => {
+  const line = clean(text, 400);
+  const word = line.toLowerCase().match(/^(accept(?:s|ed)?|declin(?:e|es|ed)|refus(?:e|es|ed)|reject(?:s|ed)?|offer(?:s|ed)?|counter(?:-?offers?|s|ed)?)\b/);
+  if (!word) return null;
+  const head = word[1];
+  const verdict = head.startsWith("accept") ? "accept" : head.startsWith("offer") ? "offer" : head.startsWith("counter") ? "counter" : "decline";
+  if (verdict === "accept" || verdict === "decline") return { verdict };
+  return { verdict, terms: readTermsLine(line.slice(word[0].length).replace(/^[\s:,-]+/, ""), { from, to }) };
+};
+
+// The open offers as a turn ends: those whose war is over, or that have stood
+// too long, lapse. A turn makes no offer of its own: the AI does (offerFromAi).
+//   offers   world.peaceOffers as the turn ends
+//   wars     the war ledger as the turn ends
+//   round    the turn it now is
+export const withTurnPeaceOffers = (offers, { wars = [], round = 0 } = {}) => {
   const now = Math.max(0, Math.round(figure(round)));
   const warsById = new Map(list(wars).map((war) => [clean(war?.id), war]));
-  const kept = normalizePeaceOffers(offers).map((offer) => {
+  return normalizePeaceOffers(offers).map((offer) => {
     if (offer.status !== "open") return offer;
     const war = warsById.get(offer.warId);
     const stale = !war || !settleable(war) || now - offer.round >= PEACE_OFFER_STANDS_ROUNDS;
     return stale ? { ...offer, status: "lapsed", answeredRound: now } : offer;
   });
-  const next = [...kept];
-  for (const war of list(wars)) {
-    const warId = clean(war?.id);
-    if (!warId || !settleable(war)) continue;
-    const sides = sidesOf(war);
-    const has = sides.map((members) => members.some((member) => played.has(fold(member))));
-    // (A war with people on both sides is theirs to end between themselves; one with none is settled below.)
-    if (has[0] === has[1]) continue;
-    const theirs = has[0] ? 1 : 0;
-    const from = sides[theirs][0];
-    const to = sides[1 - theirs].find((member) => played.has(fold(member)));
-    if (!from || !to) continue;
-    const mine = next.filter((offer) => offer.warId === warId && fold(offer.from) === fold(from));
-    if (mine.some((offer) => offer.status === "open")) continue;
-    if (mine.some((offer) => offer.status === "declined" && now - (offer.answeredRound ?? offer.round) < PEACE_COOLDOWN_ROUNDS)) continue;
-    const weariness = typeof wearinessOf === "function" ? figure(wearinessOf(from)) : 0;
-    const ground = typeof groundOf === "function" ? groundOf(warId, from) ?? {} : {};
-    const standing = standingOf(ground);
-    const losing = figure(ground.lost) >= PEACE_OFFER_GROUND_LOST && standing <= -STANDING_EVEN;
-    if (!(weariness >= PEACE_OFFER_WEARINESS) && !losing) continue;
-    next.push({ id: `peace:${warId}:${fold(from)}:${now}`, warId, from, to, terms: termsOffered({ offerer: from, receiver: to, standing, weariness }), date: clean(date, 40), round: now, status: "open" });
-  }
-  return normalizePeaceOffers(next);
 };
 
-// The wars two sides nobody plays end between themselves this turn: a side
-// whose first country is nearly spent (PEACE_SETTLE_WEARINESS), or is losing
-// its own ground, offers, and the other takes what wouldAccept says it would.
-// Returns [{ warId, from, to, terms }].
-export const settledBetweenOthers = ({ wars = [], players = [], wearinessOf = null, groundOf = null } = {}) => {
+// An offer of peace an AI makes a person, checked: a war between the AI's
+// country and the person's, the AI's side played by nobody, the person's
+// country played. Returns { offer } or { reason } in words.
+//   from, to     the AI's country, the person's
+//   terms        { territory, reparations } as the AI wrote them (clampTerms)
+//   wars         the war ledger
+//   players      the countries people play
+//   source       who made it (OFFER_SOURCES)
+//   chatId, messageId   where it was made, where that is known
+export const offerFromAi = ({ from = "", to = "", terms = null, wars = [], players = [], round = 0, date = "", source = "skip", chatId = "", messageId = "" } = {}) => {
   const played = new Set(list(players).map(fold).filter(Boolean));
-  const settled = [];
-  for (const war of list(wars)) {
-    const warId = clean(war?.id);
-    if (!warId || !active(war)) continue;
-    const sides = sidesOf(war);
-    if (sides[0].length === 0 || sides[1].length === 0) continue;
-    if (sides.some((members) => members.some((member) => played.has(fold(member))))) continue;
-    for (const side of [0, 1]) {
-      const from = sides[side][0];
-      const to = sides[1 - side][0];
-      const weariness = typeof wearinessOf === "function" ? figure(wearinessOf(from)) : 0;
-      const ground = typeof groundOf === "function" ? groundOf(warId, from) ?? {} : {};
-      const standing = standingOf(ground);
-      const losing = figure(ground.lost) >= PEACE_OFFER_GROUND_LOST && standing <= -STANDING_EVEN;
-      if (!(weariness >= PEACE_SETTLE_WEARINESS) && !losing) continue;
-      const terms = termsOffered({ offerer: from, receiver: to, standing, weariness });
-      const theirGround = typeof groundOf === "function" ? groundOf(warId, to) ?? {} : {};
-      if (!wouldAccept({ terms, country: to, standing: standingOf(theirGround), weariness: typeof wearinessOf === "function" ? figure(wearinessOf(to)) : 0 })) continue;
-      settled.push({ warId, from, to, terms });
-      break;
-    }
+  if (!clean(from) || !clean(to)) return { reason: "nobody named" };
+  if (!played.has(fold(to))) return { reason: `${clean(to)} is played by nobody` };
+  const war = warBetween(wars, from, to);
+  if (!war) return { reason: `${clean(from)} and ${clean(to)} are not at war` };
+  const theirs = sidesOf(war).find((members) => members.some((member) => fold(member) === fold(from)));
+  if (theirs.some((member) => played.has(fold(member)))) return { reason: `${clean(from)}'s side is led by a person` };
+  const now = Math.max(0, Math.round(figure(round)));
+  const offer = normalizePeaceOffer({
+    id: `peace:${clean(war.id)}:${fold(from)}:${now}`,
+    warId: war.id,
+    from: clean(from),
+    to: clean(to),
+    terms: clampTerms(terms, { from, to }),
+    date,
+    round: now,
+    status: "open",
+    source,
+    chatId,
+    messageId,
+  });
+  return offer ? { offer } : { reason: "unreadable" };
+};
+
+// A world's offers with one added. An open offer between the same two in the
+// same war gives way to it: a new offer replaces the one on the table.
+export const withOffer = (offers, offer) => {
+  const read = normalizePeaceOffer(offer);
+  if (!read) return normalizePeaceOffers(offers);
+  const pair = (entry) => [fold(entry.from), fold(entry.to)].sort().join("|");
+  const sameTable = (entry) => entry.status === "open" && entry.warId === read.warId && pair(entry) === pair(read);
+  const kept = normalizePeaceOffers(offers)
+    .filter((entry) => entry.id !== read.id)
+    .map((entry) => (sameTable(entry) ? { ...entry, status: "lapsed", answeredRound: Math.max(1, read.round) } : entry));
+  return normalizePeaceOffers([...kept, read]);
+};
+
+// A peace two countries nobody plays made, as a time skip tells it, checked:
+// they fight on opposite sides of a war, and no person is on either side.
+// Returns { treaty: { warId, from, to, terms } } or { reason } in words.
+export const treatyFromSkip = ({ from = "", to = "", terms = null, wars = [], players = [] } = {}) => {
+  const played = new Set(list(players).map(fold).filter(Boolean));
+  const war = warBetween(wars, from, to);
+  if (!war) return { reason: `${clean(from) || "nobody"} and ${clean(to) || "nobody"} are not at war` };
+  if (sidesOf(war).some((members) => members.some((member) => played.has(fold(member))))) return { reason: "a person is in that war: their peace is theirs to make" };
+  return { treaty: { warId: clean(war.id), from: clean(from), to: clean(to), terms: clampTerms(terms, { from, to }) } };
+};
+
+// The terms a time skip's letter offering peace carries (AI/gameplaySchemas.js
+// peaceOfferSchema: territory, reparationsPayer, reparationsPercent,
+// reparationsYears), as terms are kept here. Who receives any reparations is
+// the other of the two making peace (clampTerms).
+export const termsOfLetter = (offer) => {
+  const payer = clean(offer?.reparationsPayer);
+  const percent = figure(offer?.reparationsPercent);
+  const years = Math.round(figure(offer?.reparationsYears));
+  return {
+    territory: fold(offer?.territory) === TERRITORY_AS_HELD ? TERRITORY_AS_HELD : TERRITORY_RESTORED,
+    reparations: payer && percent > 0 && years > 0 ? { payer, receiver: "", share: percent / 100, years } : null,
+  };
+};
+
+// The peace lines of a time skip's answer (its peaceTreaties field), one a line:
+//   offering country | accepting country | terms (readTermsLine)
+// Returns [{ from, to, terms }]; a line it cannot read is left out.
+export const readTreatyLines = (value) => {
+  const lines = Array.isArray(value) ? value : String(value ?? "").split(/\r?\n/);
+  const read = [];
+  for (const raw of lines) {
+    const parts = String(raw ?? "").replace(/^\s*[-*]\s*/, "").split("|").map((part) => clean(part, 400));
+    if (parts.length < 2 || !parts[0] || !parts[1]) continue;
+    const [from, to] = parts;
+    read.push({ from, to, terms: readTermsLine(parts.slice(2).join("; "), { from, to }) });
   }
-  return settled;
+  return read;
 };
 
 // ---- reparations ----------------------------------------------------------------------------

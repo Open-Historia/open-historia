@@ -437,7 +437,6 @@
       <a href="#play">How it works</a>
       <a href="#features">Features</a>
       <a class="nav-keep" href="/wiki/">Wiki</a>
-      <a href="#host">Host a node</a>
       <a href="#download">Download</a>
       <a href="https://github.com/Open-Historia/open-historia" target="_blank" rel="noopener">GitHub</a>
       <a class="nav-cta" href="/play/">▶ Play</a>
@@ -610,35 +609,6 @@
     </div>
   </section>
 
-  <section id="host">
-    <p class="eyebrow">Grow the network</p>
-    <h2>Host a server node</h2>
-    <div class="rule"></div>
-    <p class="lead">Run a small node on your own device to help players of the browser version load the world map faster. A node only serves read-only files: the world map, which players check byte-for-byte against the project's signed checksums, and the community scenarios they download. It never touches anyone's games, accounts, or AI keys, and never runs their code.</p>
-    <div class="steps">
-      <div class="step">
-        <div class="n">I</div>
-        <h3>Install in one click</h3>
-        <p>Download the node and run <code>install.bat</code> (Windows) or <code>install.sh</code> (macOS/Linux). It sets everything up and downloads the verified map content for you.</p>
-      </div>
-      <div class="step">
-        <div class="n">II</div>
-        <h3>Put it online</h3>
-        <p>Expose it over HTTPS — a free <b>Cloudflare Tunnel</b> is easiest (no open ports, hides your IP). The README walks you through it step by step.</p>
-      </div>
-      <div class="step">
-        <div class="n">III</div>
-        <h3>You're live</h3>
-        <p>Your node registers itself and starts serving straight away — no waiting, no extra steps on your side. An admin can pause or ban any node at any time through the project's signed directory, and players stop using it.</p>
-      </div>
-    </div>
-    <div class="cta-row" style="margin-top:36px">
-      <a class="btn btn-primary" href="https://github.com/Open-Historia/open-historia-node" target="_blank" rel="noopener"><span>🖥️</span> Host a server</a>
-      <a class="btn btn-ghost" href="https://github.com/Open-Historia/open-historia-node#readme" target="_blank" rel="noopener">Read the setup guide</a>
-    </div>
-    <p class="hero-note" style="text-align:center;margin-top:8px">For the map, trust is in the checksum and the project's signature — never in the node itself.</p>
-  </section>
-
   <section id="faq">
     <p class="eyebrow">Good to know</p>
     <h2>Questions &amp; requirements</h2>
@@ -652,7 +622,6 @@
       <details><summary>How do I update later?</summary><p>The desktop app updates itself. When it opens, it installs a waiting update first — only the parts of the app that changed, or the whole installer when a release needs it — and restarts on the new version; choose <b>Open the game now</b> instead and the update installs when you close the game. An update that comes out while you play shows as a banner at the top: <b>Update now</b>, then <b>Restart now</b>. Your saves, scenarios and map are kept. On macOS, where the app is not code-signed yet, an update that needs the whole app is offered as a download instead. The Android app shows the same banner and fetches the new version for you to install, and the browser version reloads onto it. The beta is a separate app that updates itself the same way, from its own releases. A copy run from the source code updates the way it was installed: pull the newest code, then run <code>npm install</code> and <code>npm run build</code> again.</p></details>
       <details><summary>What is the beta?</summary><p>The game's newest version, ahead of the stable one and less tested. It is a separate app, <b>Open Historia Beta</b>, with its own saves, and installs beside the stable app on Windows, macOS, Linux and Android. Battlefields and the War Room, war at sea, Espionage Part 2, seasons and weather, and shared games come to the beta first. Its download sits under each stable one above, and the stable desktop app offers it after it is installed and after each update.</p></details>
       <details><summary>What about mobile?</summary><p>Download the Android APK and open it — that is the whole setup. Your games live on the phone and the whole world map is inside the app, so it plays even in airplane mode, with no server to run and nothing to point it at. The beta Android app installs beside it. On iPhone and iPad, play the browser version in Safari.</p></details>
-      <details><summary>Can I help by hosting a server?</summary><p>Yes! Running a <a href="https://github.com/Open-Historia/open-historia-node" target="_blank" rel="noopener">content node</a> caches the game's map data and serves it to players of the browser version, so they load faster. It's a one-click install, and a node only serves read-only files — checksum-verified map files and the community scenarios players download — and never touches games, accounts, or API keys. See <a href="#host">Host a server node</a>.</p></details>
     </div>
   </section>
 
@@ -674,7 +643,6 @@
     <div class="fnav">
       <a href="#download">Download</a>
       <a href="/wiki/">Wiki</a>
-      <a href="https://github.com/Open-Historia/open-historia-node" target="_blank" rel="noopener">Host a node</a>
       <a href="https://github.com/Open-Historia/open-historia" target="_blank" rel="noopener">GitHub</a>
       <a href="https://discord.gg/QaqAK7fQAg" target="_blank" rel="noopener">Discord</a>
       <a href="https://www.reddit.com/r/OpenHistoria" target="_blank" rel="noopener">Reddit</a>

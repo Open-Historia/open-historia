@@ -236,7 +236,6 @@ Gameplay writes flow: **AI turn / cheat / UI action → `gameState.js` write →
 |---|---|---|
 | **Map editor** | `?editor=1` route, OpenLayers, authors custom region/city/basemap maps, exports scenario bundles; can run the vendored FMG generator | [Map editor](map-editor.md) |
 | **Community hub** | Scenario/basemap sharing via GitHub issues; server/Worker proxies downloads and counts imports | [Community hub](runtime-services.md) |
-| **Content nodes** | [Open-Historia/open-historia-node](https://github.com/Open-Historia/open-historia-node) (a separate repository) — anyone-runnable, hash-addressed, read-only file server. The website used to load its map through these nodes. It now carries its own copy, and nothing in this repository talks to a node: the client side (`src/runtime/web/nodeConnect.js`, `contentTrust.js`) is removed | [Web build §8](web-build.md) |
 | **Web saves** | No accounts and no sync: games and scenarios stay in this browser (IndexedDB) and move with game export/import (web build only) | [Web build](web-build.md) |
 | **i18n** | shipped language packs translate the interface (22 languages); the AI translates only content, once, into the server's pack; the prompts' guidance ships translated | [Languages & Translation](i18n.md) |
 

@@ -34,7 +34,7 @@ import {
 } from "./contextWindow.js";
 import { endpointIsLocal, isLocalHostname } from "./localEndpoint.js";
 import { createKoboldCppMemory, endpointOriginOf, isKoboldCppModelName, saysKoboldCpp } from "./koboldCpp.js";
-import { splitSystemPromptForCache } from "./promptLayout.js";
+import { MIN_CACHEABLE_PREFIX_CHARS, splitSystemPromptForCache } from "./promptLayout.js";
 import { looksLikeModelFilePath, resolveServedModelId } from "./modelIds.js";
 import { RELAY_CUT_OFF_MESSAGE, isRelayRefusal, isRelayUnreachable, relayUnreachableReason, withRelayCutoffHint } from "./relayResponse.js";
 import { attachLookupRound, attachCallMetrics, attachRequestOutcome, finishAiRecord, isTelemetryEnabled, startAiRecord  } from "./telemetry.js";
@@ -84,6 +84,8 @@ import { ANSWER_SENTINEL_DIRECTIVE } from "./jsonSalvage.js";
 import { unmarkedEndVerdict } from "./toolResponsePayload.js";
 import { createModeObserver, nextStructuredMode, startingStructuredMode } from "./structuredMode.js";
 import { createTemperatureMemory, temperatureBody, temperatureRefusalKey } from "./sampling.js";
+import { isForcedToolChoiceRefusal, refusesForcedToolChoice, structuredToolChoice, toolCallReminder, withToolCallReminder } from "./anthropicToolChoice.js";
+import { isEnabledThinkingRefusal, thinkingFor, thinksAdaptive } from "./anthropicThinking.js";
 import { nativeHttpAvailable, nativeHttpFetch } from "../../runtime/native/http.js";
 import { createRelayOnlyOrigins } from "./relayOrigins.js";
 import { createFirstByteTimer, createStreamUsage, normalizeUsage, sumUsage } from "./usageStats.js";
@@ -150,6 +152,7 @@ import { buildDiplomaticPoliticalContext } from "./diplomaticPoliticalContext.js
 import { buildAdvisorPoliticalDiplomacyContext } from "./advisorPoliticalDiplomacyContext.js";
 import { describeWeatherForAdvisor } from "./advisorWeather.js";
 import { describeLeaderStanding, describeOurFigures, describeTerritoryForConversation } from "./standingContext.js";
+import { OWN_WARS_HEADING, buildWarStatsBlock, describePeaceTalk } from "./warStatsPrompt.js";
 import { beginAiRequestScope } from "./aiRequestControl.js";
 
 // A time skip the player's Agent was answering is over once the game stops
@@ -1503,6 +1506,17 @@ const REASONING_HEADROOM_TOKENS = 8192;
 // that starts accepting it again should get it back after a reload.
 const streamingRefusals = new Set();
 const streamingRefusalKey = (samplingKey, withTools) => `${samplingKey}|${withTools ? "tools" : "plain"}`;
+// Anthropic models that refused a forced tool_choice, for the session, keyed like
+// the temperature refusals. The known ones never send it (anthropicToolChoice.js);
+// these are the ones learned from their first 400.
+const forcedToolChoiceRefusals = new Set();
+// The models that refused a thinking budget this session (anthropicThinking.js):
+// asked to think "adaptive" from then on.
+const adaptiveThinkingLearned = new Set();
+const forcesToolChoice = (model, refusalKey) => !refusesForcedToolChoice(model) && !forcedToolChoiceRefusals.has(refusalKey);
+// Custom parameters that turn thinking on ({"thinking": {"type": "adaptive"}}):
+// the Messages API then refuses any temperature but 1, so none is sent.
+const customParamsThink = (customParams) => ["enabled", "adaptive"].includes(String(customParams?.thinking?.type ?? "").trim().toLowerCase());
 
 async function callOpenAIStyleChatCompletions({
     endpoint,
@@ -2125,14 +2139,26 @@ const anthropicModelMax = new Map(); // model -> learned output ceiling
 // cache_control breakpoint, and the per-turn tail uncached. Within an
 // auto-jump chain or a retry the prefix is byte-identical, so every
 // consecutive call reads it from the cache at a fraction of the input price.
-// One breakpoint is enough (the API allows four); a prompt with no usable
-// boundary goes out as the plain string it always was.
-function buildAnthropicSystemContent(systemPrompt, staticPrefixEnd) {
+// A prompt with no usable boundary goes out as the plain string it always was.
+//
+// `followUp`: the request offers a function that answers back (a time skip's
+// order_troops, frontOrderFunction.js; the advisor's lookups), so a second call
+// with this same system prompt is likely within minutes, its history one round
+// longer. Then the tail is pinned too (a second breakpoint; the API allows
+// four), and that call reads the WHOLE prompt from the cache instead of paying
+// full price for the per-turn tail again: on a time skip that is most of it,
+// some 70,000 tokens on a long campaign (a Discord test game, 2026-10-27). A
+// request with no such function is answered in one call, and writing its tail
+// to the cache would only cost more.
+function buildAnthropicSystemContent(systemPrompt, staticPrefixEnd, { followUp = false } = {}) {
     const split = splitSystemPromptForCache(systemPrompt, staticPrefixEnd);
-    if (!split) return systemPrompt;
+    const pinned = followUp ? { cache_control: { type: "ephemeral" } } : {};
+    if (!split) return followUp && String(systemPrompt ?? "").length >= MIN_CACHEABLE_PREFIX_CHARS
+        ? [{ type: "text", text: systemPrompt, ...pinned }]
+        : systemPrompt;
     return [
         { type: "text", text: split.prefix, cache_control: { type: "ephemeral" } },
-        { type: "text", text: split.tail },
+        { type: "text", text: split.tail, ...pinned },
     ];
 }
 
@@ -2180,10 +2206,8 @@ async function callAnthropic(systemPrompt, history, {
         signal,
     });
     onModel?.(model);
-    const streamingKey = streamingRefusalKey(
-        temperatureRefusalKey({ provider: "Anthropic", endpoint: ANTHROPIC_API_ENDPOINT, model }),
-        Boolean(tool) || isLookupChat(tool, onChunk, lookupTools),
-    );
+    const samplingKey = temperatureRefusalKey({ provider: "Anthropic", endpoint: ANTHROPIC_API_ENDPOINT, model });
+    const streamingKey = streamingRefusalKey(samplingKey, Boolean(tool) || isLookupChat(tool, onChunk, lookupTools));
     streamingDisabled = streamingRefusals.has(streamingKey);
 
     const headers = {
@@ -2203,6 +2227,9 @@ async function callAnthropic(systemPrompt, history, {
         ? Number(maxTokens)
         : Math.max(Number(customParams.max_tokens) || 0, anthropicModelMax.get(model) || ANTHROPIC_MAX_OUTPUT);
     delete customParams.max_tokens;
+    // A temperature goes only to a model that takes one: never beside thinking
+    // the custom parameters turn on, and never to one that refused it before.
+    let temperatureRefused = customParamsThink(customParams) || temperatureRefusals.refuses(samplingKey);
 
     let chatToolsRefused = false;
     for (let attempt = 1; attempt <= retries; attempt++) {
@@ -2224,12 +2251,16 @@ async function callAnthropic(systemPrompt, history, {
         // no thinking blocks.
         const chatTools = chatLookupsFor(tool, onChunk, lookupTools, chatToolsRefused);
         const thinks = reasoning && !tool && !chatTools.length;
+        // A model that refuses a forced tool_choice is asked for the call in words.
+        const forceTool = forcesToolChoice(model, samplingKey);
+        const lookupsAllowed = lookupDeclarations.length > 0 && !requireOutputTool;
+        const messages = toAnthropicMessages(chatToolsRefused ? flattenLookupRounds(history) : history);
         const body = {
             model,
-            system: buildAnthropicSystemContent(systemPrompt, staticPrefixEnd),
+            system: buildAnthropicSystemContent(systemPrompt, staticPrefixEnd, { followUp: lookupsAllowed || chatTools.length > 0 }),
             max_tokens: requestedMaxTokens,
-            ...(thinks ? { thinking: { type: "enabled", budget_tokens: 4096 } } : {}),
-            ...temperatureBody(taskKey, { enabled: !thinks }),
+            ...(thinks ? { thinking: thinkingFor({ adaptive: thinksAdaptive(model) || adaptiveThinkingLearned.has(samplingKey) }) } : {}),
+            ...temperatureBody(taskKey, { enabled: !thinks && !temperatureRefused }),
             // Streamed for BOTH the advisor (onChunk, tokens to the UI) and tool
             // calls. A tool call must stream because the Messages API refuses a
             // non-streaming request whose max_tokens implies a long generation —
@@ -2237,7 +2268,9 @@ async function callAnthropic(systemPrompt, history, {
             // purpose — so a timeline jump could be rejected before generating a
             // single token. readAnthropicStreamedResponse rebuilds the envelope.
             ...(streamThisRequest ? { stream: true } : {}),
-            messages: toAnthropicMessages(chatToolsRefused ? flattenLookupRounds(history) : history),
+            messages: tool && !forceTool
+                ? withToolCallReminder(messages, toolCallReminder({ toolName: tool.name, lookupsAllowed }))
+                : messages,
             ...customParams,
             ...(chatTools.length ? {
                 tools: chatTools.map((entry) => ({ name: entry.name, description: entry.description, input_schema: entry.schema })),
@@ -2251,7 +2284,7 @@ async function callAnthropic(systemPrompt, history, {
                 ],
                 // "any" while lookups are allowed (the model picks a lookup or
                 // the answer); the answer alone once the round budget is spent.
-                tool_choice: lookupDeclarations.length && !requireOutputTool ? { type: "any" } : { type: "tool", name: tool.name },
+                tool_choice: structuredToolChoice({ forced: forceTool, toolName: tool.name, lookupsAllowed }),
             } : {}),
         };
         // The request goes out now: the skip's progress row starts its count
@@ -2286,6 +2319,29 @@ async function callAnthropic(systemPrompt, history, {
                 && Number(capMatch[1]) < requestedMaxTokens && attempt < retries) {
                 anthropicModelMax.set(model, Number(capMatch[1]));
                 requestedMaxTokens = Number(capMatch[1]);
+                continue;
+            }
+            // A model this game did not know refuses forced tool calls: ask with
+            // "auto" and the reminder, now and for the rest of the session.
+            if (response.status === 400 && tool && forceTool && isForcedToolChoiceRefusal(message) && attempt < retries) {
+                forcedToolChoiceRefusals.add(samplingKey);
+                console.warn(`[ai] Anthropic: ${model} refuses a forced tool_choice; asking with "auto" from now on.`);
+                continue;
+            }
+            // The model takes no thinking budget: it thinks "adaptive". Ask so,
+            // now and for the rest of the session (anthropicThinking.js).
+            if (response.status === 400 && body.thinking?.type === "enabled" && isEnabledThinkingRefusal(message) && attempt < retries) {
+                adaptiveThinkingLearned.add(samplingKey);
+                console.warn(`[ai] Anthropic: ${model} refuses a thinking budget; asking it to think adaptively from now on.`);
+                continue;
+            }
+            // The model takes no temperature (or none beside thinking): ask at its
+            // own, and remember, as the OpenAI-compatible path does.
+            if (response.status === 400 && !temperatureRefused && body.temperature !== undefined && customParams.temperature === undefined
+                && isTemperatureRefusal(message) && attempt < retries) {
+                temperatureRefused = true;
+                temperatureRefusals.learn(samplingKey);
+                console.warn(`[ai] Anthropic: ${model} refused the requested temperature; retrying at the model's own, and remembering.`);
                 continue;
             }
             // The OTHER max_tokens complaint, and the one that used to cost a
@@ -2443,10 +2499,8 @@ async function callAnthropicCompatible(systemPrompt, history, {
         signal,
     });
     onModel?.(model);
-    const streamingKey = streamingRefusalKey(
-        temperatureRefusalKey({ provider: "Anthropic Compatible", endpoint, model }),
-        Boolean(tool) || isLookupChat(tool, onChunk, lookupTools),
-    );
+    const samplingKey = temperatureRefusalKey({ provider: "Anthropic Compatible", endpoint, model });
+    const streamingKey = streamingRefusalKey(samplingKey, Boolean(tool) || isLookupChat(tool, onChunk, lookupTools));
     streamingDisabled = streamingRefusals.has(streamingKey);
 
     // Self-hosted proxy: tried directly first, falling back to the local relay
@@ -2466,6 +2520,8 @@ async function callAnthropicCompatible(systemPrompt, history, {
         ? Number(maxTokens)
         : Math.max(Number(customParams.max_tokens) || 0, anthropicModelMax.get(model) || ANTHROPIC_MAX_OUTPUT);
     delete customParams.max_tokens;
+    // A temperature goes only to a model that takes one (see callAnthropic).
+    let temperatureRefused = customParamsThink(customParams) || temperatureRefusals.refuses(samplingKey);
 
     // This is a SELF-HOSTED PROXY, not Anthropic — the same risk the
     // OpenAI-compatible path carries, and the reason both exist as separate
@@ -2513,12 +2569,16 @@ async function callAnthropicCompatible(systemPrompt, history, {
         // it renders tokens and therefore streamed. Nothing downstream changes: the
         // readers reassemble the provider's normal envelope.
         const streamThisRequest = !streamingDisabled;
+        // A model that refuses a forced tool_choice is asked for the call in words.
+        const forceTool = forcesToolChoice(model, samplingKey);
+        const lookupsAllowed = lookupDeclarations.length > 0 && !requireOutputTool;
+        const messages = toAnthropicMessages(chatToolsRefused ? flattenLookupRounds(history) : history);
         const body = {
             model,
-            system: buildAnthropicSystemContent(requestSystemPrompt, staticPrefixEnd),
+            system: buildAnthropicSystemContent(requestSystemPrompt, staticPrefixEnd, { followUp: lookupsAllowed || chatTools.length > 0 }),
             max_tokens: requestedMaxTokens,
-            ...(thinks ? { thinking: { type: "enabled", budget_tokens: 4096 } } : {}),
-            ...temperatureBody(taskKey, { enabled: !thinks }),
+            ...(thinks ? { thinking: thinkingFor({ adaptive: thinksAdaptive(model) || adaptiveThinkingLearned.has(samplingKey) }) } : {}),
+            ...temperatureBody(taskKey, { enabled: !thinks && !temperatureRefused }),
             // Streamed for BOTH the advisor (onChunk, tokens to the UI) and tool
             // calls. A tool call must stream because the Messages API refuses a
             // non-streaming request whose max_tokens implies a long generation —
@@ -2526,7 +2586,9 @@ async function callAnthropicCompatible(systemPrompt, history, {
             // purpose — so a timeline jump could be rejected before generating a
             // single token. readAnthropicStreamedResponse rebuilds the envelope.
             ...(streamThisRequest ? { stream: true } : {}),
-            messages: toAnthropicMessages(chatToolsRefused ? flattenLookupRounds(history) : history),
+            messages: useToolChannel && !forceTool
+                ? withToolCallReminder(messages, toolCallReminder({ toolName: tool.name, lookupsAllowed }))
+                : messages,
             ...customParams,
             ...(chatTools.length ? {
                 tools: chatTools.map((entry) => ({ name: entry.name, description: entry.description, input_schema: entry.schema })),
@@ -2538,7 +2600,7 @@ async function callAnthropicCompatible(systemPrompt, history, {
                     { name: tool.name, description: tool.description, input_schema: tool.schema },
                     ...lookupDeclarations.map((entry) => ({ name: entry.name, description: entry.description, input_schema: entry.schema })),
                 ],
-                tool_choice: lookupDeclarations.length && !requireOutputTool ? { type: "any" } : { type: "tool", name: tool.name },
+                tool_choice: structuredToolChoice({ forced: forceTool, toolName: tool.name, lookupsAllowed }),
             } : {}),
         };
         // The request goes out now: the skip's progress row starts its count
@@ -2565,6 +2627,27 @@ async function callAnthropicCompatible(systemPrompt, history, {
                 && Number(capMatch[1]) < requestedMaxTokens && attempt < retries) {
                 anthropicModelMax.set(model, Number(capMatch[1]));
                 requestedMaxTokens = Number(capMatch[1]);
+                continue;
+            }
+            // A model this game did not know refuses forced tool calls: ask with
+            // "auto" and the reminder, now and for the rest of the session.
+            if (response.status === 400 && useToolChannel && forceTool && isForcedToolChoiceRefusal(message) && attempt < retries) {
+                forcedToolChoiceRefusals.add(samplingKey);
+                console.warn(`[ai] Anthropic-compatible: ${model} refuses a forced tool_choice; asking with "auto" from now on.`);
+                continue;
+            }
+            // The model takes no thinking budget: it thinks "adaptive". Ask so,
+            // now and for the rest of the session (anthropicThinking.js).
+            if (response.status === 400 && body.thinking?.type === "enabled" && isEnabledThinkingRefusal(message) && attempt < retries) {
+                adaptiveThinkingLearned.add(samplingKey);
+                console.warn(`[ai] Anthropic-compatible: ${model} refuses a thinking budget; asking it to think adaptively from now on.`);
+                continue;
+            }
+            if (response.status === 400 && !temperatureRefused && body.temperature !== undefined && customParams.temperature === undefined
+                && isTemperatureRefusal(message) && attempt < retries) {
+                temperatureRefused = true;
+                temperatureRefusals.learn(samplingKey);
+                console.warn(`[ai] Anthropic-compatible: ${model} refused the requested temperature; retrying at the model's own, and remembering.`);
                 continue;
             }
             // The OTHER max_tokens complaint, and the one that used to cost a
@@ -3931,9 +4014,18 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry, spea
         ? describePuppetBriefing(puppetBriefingFor(worldData, speaker, { present: [...countries, playerCountry || gameData?.country] }), speaker)
         : "";
 
+    // A leader whose country is at war knows its own war (warStatsPrompt.js):
+    // its weariness, supplies, ground, battlefields, allies and what peace is
+    // on the table, to ask for help or seek peace or press on as it judges.
+    // And at war with the player, what it decides of peace it says on a hidden
+    // PEACE line (describePeaceTalk), which the panel carries out.
+    const playerName = playerCountry || gameData?.country || "";
+    const wars = speaker ? buildWarStatsBlock({ world: worldData, countries: [speaker], heading: OWN_WARS_HEADING, max: 1800 }) : "";
+    const peaceTalk = speaker && playerName ? describePeaceTalk({ world: worldData, speaker, player: playerName, form: "line" }) : "";
+
     // How softly or firmly a leader bargains at the chosen difficulty is in its
     // template (${DIFFICULTY_DESCRIPTION_CHATS}, the diplomacy directive), once.
-    return `${rendered}${politicalSection}${espionage}${standing ? `\n\n${standing}` : ""}${territory ? `\n\n${territory}` : ""}${playerGroupText ? `\n\n${playerGroupText}` : ""}${subordinations ? `\n\n${subordinations}` : ""}${papers ? `\n\n${papers}` : ""}${reminders ? `\n\n${reminders}` : ""}`;
+    return `${rendered}${politicalSection}${espionage}${standing ? `\n\n${standing}` : ""}${territory ? `\n\n${territory}` : ""}${wars ? `\n\n${wars}` : ""}${peaceTalk ? `\n\n${peaceTalk}` : ""}${playerGroupText ? `\n\n${playerGroupText}` : ""}${subordinations ? `\n\n${subordinations}` : ""}${papers ? `\n\n${papers}` : ""}${reminders ? `\n\n${reminders}` : ""}`;
 }
 
 let advisorHistory = [];
@@ -4151,7 +4243,7 @@ export async function sendDiplomaticMessage(playerMessage, speakingAs, countries
 
     try {
         const raw = await callAI(freshPrompt, historyWithInstruction, { ...opts, languageMode: "chat", logLabel: `diplomacy → ${speakingAs}`, taskKey: "diplomacy", agentKind: "diplomacy" });
-        const { reply, reaction, memorySummary: generatedMemorySummary } = parseDiplomaticEnvelope(raw);
+        const { reply, reaction, memorySummary: generatedMemorySummary, peace } = parseDiplomaticEnvelope(raw);
         // A reply that dropped the memory line keeps the last one; the
         // thread never forgets what it knew because one answer was terse.
         const memorySummary = generatedMemorySummary || priorMemory;
@@ -4169,7 +4261,9 @@ export async function sendDiplomaticMessage(playerMessage, speakingAs, countries
             { reply, rawChars: String(raw ?? "").length, reaction: reaction || "(none)" },
             { verbose: true });
         if (stillOpen) diplomaticHistory.push({ role: "model", parts: [{ text: `[${speakingAs}]: ${reply}` }] });
-        return { reply, reaction, memorySummary };
+        // `peace`: what the leader decided of peace with the player, its hidden
+        // PEACE line, "" for nothing (the panel carries it out: gameplay.js answerPeaceInChat).
+        return { reply, reaction, memorySummary, peace };
     } catch (err) {
         if (diplomaticConversation.isCurrent(conversation)) removeEntry(diplomaticHistory, asked);
         logDebugEvent("diplomacy", `${speakingAs} failed to reply after ${elapsedSeconds(startedAt)} — the message was rolled back off the history.`, err);
@@ -4322,15 +4416,20 @@ export async function submitAIBatch({ customId, systemPrompt, history, taskKey, 
 
     // The synchronous tool call's parameters minus the interactive knobs
     // (streaming, thinking, the learned-ceiling retry) that need a round trip.
+    const samplingKey = temperatureRefusalKey({ provider: "Anthropic", endpoint: ANTHROPIC_API_ENDPOINT, model });
+    const forceTool = forcesToolChoice(model, samplingKey);
+    const messages = toAnthropicMessages(history);
     const params = {
         model,
         max_tokens: Math.max(anthropicModelMax.get(model) || ANTHROPIC_MAX_OUTPUT, 1024),
-        messages: toAnthropicMessages(history),
+        messages: tool && !forceTool
+            ? withToolCallReminder(messages, toolCallReminder({ toolName: tool.name, lookupsAllowed: false }))
+            : messages,
         system: systemPrompt,
-        ...temperatureBody(taskKey),
+        ...temperatureBody(taskKey, { enabled: !temperatureRefusals.refuses(samplingKey) }),
         ...(tool ? {
             tools: [{ name: tool.name, description: tool.description, input_schema: tool.schema }],
-            tool_choice: { type: "tool", name: tool.name },
+            tool_choice: structuredToolChoice({ forced: forceTool, toolName: tool.name, lookupsAllowed: false }),
         } : {}),
     };
 

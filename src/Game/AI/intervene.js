@@ -37,6 +37,7 @@ export const journalTurn = ({
     stopDate = "",
     summary = "",
     outreach = [],
+    peaceTreaties = [],
     clearActions = true,
     mode = "jump",
     receipt = null,
@@ -56,6 +57,8 @@ export const journalTurn = ({
         stopDate: asText(stopDate),
         summary: asText(summary),
         outreach: asArray(outreach),
+        // The peaces the skip said two countries nobody plays made (peaceTerms.js readTreatyLines).
+        peaceTreaties: asArray(peaceTreaties),
         clearActions: clearActions !== false,
         mode: asText(mode) || "jump",
         // What the turn's answer lost on its way in (runtime/applicationReceipt.js):
@@ -120,6 +123,7 @@ export const truncateTurn = (journal, keptCount, { originDate = "", minimumDate 
             stopDate: closingDate,
             summary: asText(journal?.summary),
             outreach: asArray(journal?.outreach),
+            peaceTreaties: asArray(journal?.peaceTreaties),
             clearActions: journal?.clearActions !== false,
             mode: asText(journal?.mode) || "jump",
             covertOperations: asArray(journal?.covertOperations),

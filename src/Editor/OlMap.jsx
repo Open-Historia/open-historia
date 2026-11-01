@@ -57,6 +57,8 @@ import { defaults as defaultControls } from "ol/control/defaults";
 import { makeRegionLook, makeRegionOverlayStyle, makeRegionStyle } from "./olStyle.js";
 import { createRegionDisplay } from "./regionDisplay.js";
 import { detailToleranceMeters, simplifyShared, toleranceAtLatitude } from "./simplifyRegions.js";
+import { buildLandField, fitToImage } from "./fitToImage.js";
+import { readBackgroundPixels } from "./backgroundPixels.js";
 import { createEmpty as emptyExtent, extend as extendExtent } from "ol/extent";
 import { buildPoliticalBoundaryTopology } from "../Game/Map/vnext/politicalBoundaryTopology.js";
 import { buildGroupAreaIndex, deriveGroupAreas } from "../Game/Map/vnext/groupAreas.js";
@@ -658,6 +660,12 @@ const OlMap = ({
   const refImageLayerRef = useRef(null);
   const refImageExtentRef = useRef(null);
   const refImageFrameSourceRef = useRef(null);
+  // The backgrounds Fit to background can read (backgroundPixels.js): the
+  // reference image, the map's own picture and the tile basemap, each null
+  // while it is not on the map.
+  const fitBackgroundsRef = useRef({ reference: null, picture: null, tiles: null });
+  const referenceImageRef = useRef(referenceImage);
+  referenceImageRef.current = referenceImage;
   const interactionsRef = useRef([]);
   const regionSnapRef = useRef(null);
   const undoStackRef = useRef([]);
@@ -2144,6 +2152,13 @@ const OlMap = ({
       claimants: f.get("claimants") || [],
       group: f.get("group") || "",
     });
+    // Fit to background: the background whose pixels a fit reads, the
+    // reference image first (it is what the author traces), or null.
+    const pickFitBackground = () => {
+      const { reference, picture, tiles } = fitBackgroundsRef.current;
+      if (reference?.extent && referenceImageRef.current?.visible !== false) return reference;
+      return picture || tiles || null;
+    };
     onReady?.({
       map,
       regionSource,
@@ -2355,6 +2370,86 @@ const OlMap = ({
         apply(true);
         pushCmd({ undo: () => apply(false), redo: () => apply(true) });
         return changes.length;
+      },
+      fitBackground: pickFitBackground,
+      // Reads the background around the selected regions and answers a fit
+      // session: preview(reach) shows their coasts pulled up to `reach` pixels
+      // onto its edges, from where they were when it began; commit() makes what
+      // is shown one undo step. Both answer false, and current() false, once
+      // the regions were changed by something else (an undo): the session is spent.
+      fitToBackground: async (ids) => {
+        const background = pickFitBackground();
+        const isArea = (f) => /Polygon$/.test(f?.getGeometry()?.getType() || "");
+        const chosen = (ids || []).map((id) => regionSource.getFeatureById(id)).filter(isArea);
+        if (!background || !chosen.length) return null;
+        const box = emptyExtent();
+        for (const f of chosen) extendExtent(box, f.getGeometry().getExtent());
+        const pixels = await readBackgroundPixels(background, box);
+        const picked = new Set(chosen);
+        const nearby = [];
+        regionSource.forEachFeatureIntersectingExtent(pixels.extent, (f) => {
+          if (!picked.has(f) && isArea(f)) nearby.push(f);
+        });
+        const all = [...chosen, ...nearby];
+        const base = all.map((f) => f.getGeometry());
+        const selected = all.map((_, at) => at < chosen.length);
+        const water = all.map((f) => isWaterType(typesByIdRef.current[f.get("typeId") || "land"]));
+        // Land colours are the ones inside the land regions around.
+        const field = buildLandField(pixels.rgba, pixels.width, pixels.height, pixels.extent, base.filter((_, at) => !water[at]));
+        if (!field) throw Object.assign(new Error(), { code: "no-shore" });
+        let shown = base;
+        let committed = base;
+        const stale = () => all.some((f, at) => f.getGeometry() !== shown[at]);
+        const show = (next) => {
+          all.forEach((f, at) => {
+            if (next[at] !== shown[at]) f.setGeometry(next[at]);
+          });
+          shown = next;
+          restyleRegions();
+          labelLayer.changed();
+        };
+        const same = (a, b) => {
+          if (a === b) return true;
+          const x = a.getFlatCoordinates();
+          const y = b.getFlatCoordinates();
+          if (x.length !== y.length) return false;
+          for (let i = 0; i < x.length; i += 1) if (x[i] !== y[i]) return false;
+          return true;
+        };
+        const center = (box[1] + box[3]) / 2;
+        const metersPerPixel = ((field.extent[2] - field.extent[0]) / field.width) * Math.cos(2 * Math.atan(Math.exp(center / 6378137)) - Math.PI / 2);
+        let shownReach = 0;
+        return {
+          metersPerPixel,
+          current: () => !stale(),
+          preview: (reach) => {
+            if (stale()) return false;
+            if (reach !== shownReach) show(reach > 0 ? fitToImage(base, { field, reach, selected, water }) : base);
+            shownReach = reach;
+            return true;
+          },
+          commit: () => {
+            if (stale()) return false;
+            const changes = [];
+            all.forEach((f, at) => {
+              if (!same(committed[at], shown[at])) changes.push({ feature: f, before: committed[at], after: shown[at], edited: f.get("edited") });
+            });
+            committed = shown;
+            if (!changes.length) return true;
+            const apply = (forward) => {
+              for (const change of changes) {
+                change.feature.setGeometry(forward ? change.after : change.before);
+                change.feature.set("edited", forward ? true : change.edited);
+              }
+              restyleRegions();
+              labelLayer.changed();
+              notifyRegions();
+            };
+            apply(true);
+            pushCmd({ undo: () => apply(false), redo: () => apply(true) });
+            return true;
+          },
+        };
       },
       copyRegions: (ids) => {
         const res = map.getView().getResolution() || 1;
@@ -3816,6 +3911,13 @@ const OlMap = ({
     const customActive = customBackground?.kind === "image" || customBackground?.kind === "vector" || customBackground?.kind === "plain";
     const esri = customActive ? null : editorBasemapById(basemap);
     let base = null;
+    fitBackgroundsRef.current.tiles = esri && !online
+      ? { kind: "tiles", template: "/offline-relief/{z}/{y}/{x}.jpg", maxZoom: 3 }
+      : esri
+        ? { kind: "tiles", template: esriXyzUrl(esri.service), maxZoom: esri.maxZoom }
+        : !customActive && basemap === "osm"
+          ? { kind: "tiles", template: "https://tile.openstreetmap.org/{z}/{x}/{y}.png", maxZoom: 19 }
+          : null;
     if (esri && !online) {
       base = new TileLayer({
         source: new XYZ({ url: "/offline-relief/{z}/{y}/{x}.jpg", maxZoom: 3 }),
@@ -3888,11 +3990,14 @@ const OlMap = ({
     });
     imageLayer.setZIndex(5);
     map.addLayer(imageLayer);
+    const fitBackgrounds = fitBackgroundsRef.current;
+    fitBackgrounds.picture = { kind: "image", url: bg.url, extent: imageExtent };
     // Only fresh uploads write back into the document; a restored (persisted)
     // background is already in the doc/scenario, so don't re-dirty it on open.
     if (!bg.persisted) onCustomBackgroundSaveRef.current?.({ kind: "image", dataUrl: bg.dataUrl, ...(imageBounds ? { bounds: imageBounds } : {}) });
     return () => {
       map.removeLayer(imageLayer);
+      fitBackgrounds.picture = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [customBackground]);
@@ -3933,9 +4038,19 @@ const OlMap = ({
     layer.setOpacity(referenceImage.visible === false ? 0 : (referenceImage.opacity ?? 0.5));
     map.addLayer(layer);
     refImageLayerRef.current = layer;
+    const fitBackgrounds = fitBackgroundsRef.current;
+    fitBackgrounds.reference = {
+      kind: "image",
+      url: dataUrl,
+      // Read when a fit starts: the frame moves the image without this effect.
+      get extent() {
+        return refImageExtentRef.current;
+      },
+    };
     return () => {
       map.removeLayer(layer);
       refImageLayerRef.current = null;
+      fitBackgrounds.reference = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [referenceImage?.dataUrl, referencePlaceNonce]);

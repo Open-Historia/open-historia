@@ -245,7 +245,8 @@ test("each page has a header of its own on a wide screen: its name and its actio
   assert.match(menu, /<h1 style=\{\{[^}]*\}\}>\s+\{MENU_TABS\.find\(\(tab\) => tab\.id === activeTab\)\?\.label \?\? ""\}\s+<\/h1>/);
   assert.match(menu, /\{tabActions\.map\(\(\{ icon, label, run \}\) => \(/);
   // A phone: the pages across the top, the actions heading the page by name.
-  assert.match(menu, /\{isMobile \? \(\s+<div style=\{\{ borderBottom: "1px solid rgba\(255,255,255,0\.08\)", flexShrink: 0 \}\}>/);
+  // A phone's header stands on a solid backdrop, so its row of pages reads over the library scrolling under it.
+  assert.match(menu, /\{isMobile \? \(\s+<div style=\{\{ background: "rgba\(15,15,17,0\.92\)", backdropFilter: "blur\(14px\)", borderBottom: "1px solid rgba\(255,255,255,0\.08\)", flexShrink: 0 \}\}>/);
   assert.match(menu, /\{isMobile && \(typeof onOpenSettings === "function" \|\| tabActions\.length > 0\) && \(/);
   // The Lobbies page reads from the left edge like the others; the Community
   // page's controls stay together on the right of its help.

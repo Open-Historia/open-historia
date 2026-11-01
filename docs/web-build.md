@@ -47,7 +47,7 @@ The one URL left points at the **registry Worker** (`open-historia-registry.nich
 | `VITE_OH_WEB` | `1` | Master flag; gates all web-mode code + dynamic imports. | `main.jsx`, `assets.js`, `libraryBar.jsx`, `settings.jsx` |
 | `VITE_OH_HUB_URL` | Worker root | Community-hub GitHub proxy (`/hub/file`), because GitHub attachments and release assets send no CORS header. | `router.js` |
 
-`VITE_OH_PMTILES_URL`, `VITE_OH_DIRECTORY_URL` and `VITE_OH_MANIFEST_URL` no longer exist. They named a content origin, a node directory and a signed manifest, and the build has none of the three (§8).
+`VITE_OH_PMTILES_URL`, `VITE_OH_DIRECTORY_URL` and `VITE_OH_MANIFEST_URL` no longer exist. They named where the map used to be fetched from at run time and how it was checked, and the build has none of that (§8).
 
 ---
 
@@ -281,9 +281,9 @@ The host must answer byte-range requests for static files: an archive is read by
 
 ### What it replaced
 
-The website used to fetch the archives and the two world files at run time from a content origin (`VITE_OH_PMTILES_URL`: the registry Worker's `/content` proxy in front of the `map-data` release), try community content nodes first (a signed node directory, `VITE_OH_DIRECTORY_URL`), and check the bytes against a signed manifest. The proxy and the nodes existed only to get around the limit above, and none of it is in the game any more: `src/runtime/web/nodeConnect.js`, `contentTrust.js` and `trust.js`, `public/content-manifest.json` and `public/node-directory.json` with their signatures, `scripts/build-content-manifest.mjs`, `server/contentManifest.test.js` and the tests workflow's manifest-expiry step are removed.
+The website used to fetch the archives and the two world files at run time from a content origin (`VITE_OH_PMTILES_URL`: the registry Worker's `/content` proxy in front of the `map-data` release) and check the bytes against a signed manifest. The proxy existed only to get around the limit above, and none of it is in the game any more: the client code that fetched and checked the files, the signed manifest with its build script and test, and the tests workflow's manifest-expiry step are removed.
 
-The signing tools that went with them (`scripts/sign-release.mjs`, `scripts/gen-signing-key.mjs`, `server/trust.js`, `trust/` and the `@noble/ed25519` dependency) are removed too. The content-node software ([Open-Historia/open-historia-node](https://github.com/Open-Historia/open-historia-node), a separate repository) and the Worker's `/content` route still exist; the game does not use them for map data.
+The signing tools that went with them (`scripts/sign-release.mjs`, `scripts/gen-signing-key.mjs`, `server/trust.js`, `trust/` and the `@noble/ed25519` dependency) are removed too. The Worker's `/content` route still exists; the game does not use it for map data.
 
 Community hub downloads still go through the Worker (`VITE_OH_HUB_URL`, `/hub/file`, §3): community bundles are files on GitHub, and the same limit applies to them.
 

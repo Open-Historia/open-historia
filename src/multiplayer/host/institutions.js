@@ -90,12 +90,14 @@ const idOf = (value) => text(value, 160);
 //   lifecycle, negotiation, channel, proposal, voteRequest, governance,
 //   message, chatTurn({ chat, seat, ...flags }), readChats(), updateChats(fn)
 // Resolves { institutionId, proposalId, proposalStatus, chatId }.
-export const createInstitutionDesk = ({ host = "", game }) => {
+// `host` is the host's own country, or a function giving it as it is now.
+export const createInstitutionDesk = ({ host: hostOf = "", game }) => {
+  const host = () => (typeof hostOf === "function" ? hostOf() : hostOf);
   // A thread this call made, for a guest: the guest's. Only the one the call
   // names, and only if it was not there before it: a thread anyone else made
   // meanwhile, or the host's own Council the guest now speaks in, keeps its owner.
   const ownership = async (seat, before, chatId) => {
-    if (!chatId || same(seat, host) || before.has(chatId)) return;
+    if (!chatId || same(seat, host()) || before.has(chatId)) return;
     await game.updateChats((chats) => {
       let changed = false;
       const next = list(chats).map((chat) => {
@@ -110,7 +112,7 @@ export const createInstitutionDesk = ({ host = "", game }) => {
   const threadFor = async (seat, threadId) => {
     const chat = list(await game.readChats()).find((entry) => clean(entry?.id) === threadId);
     if (!chat) throw new Error("That conversation is not there.");
-    const owner = clean(chat.player) || host;
+    const owner = clean(chat.player) || host();
     const member = list(chat.countries).some((entry) => same(typeof entry === "object" && entry ? entry.name ?? entry.code : entry, seat));
     if (!same(owner, seat) && !member) throw new Error("You are not in that conversation.");
     return chat;

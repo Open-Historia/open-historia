@@ -1,4 +1,4 @@
-import { addGameDays, compareGameDates, diffGameDays, formatGameDate, gameDateDaysInMonth, parseGameDate, shiftGameYear } from "./gameDates.js";
+import { addGameDays, compareGameDates, diffGameDays, formatGameDate, formatGameDateReadable, gameDateDaysInMonth, parseGameDate, shiftGameYear } from "./gameDates.js";
 
 /*! Open Historia — portions (projects & operations board: derived status, sorting, filtering) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Everything the Projects & Operations board can work out for ITSELF, with no AI
@@ -591,7 +591,7 @@ export const spyIntelDoubtOps = (spies, projects, { playerPolity = "", date = ""
       name: asText(project.name),
       verification: "doubted",
       status: "stalled",
-      lastUpdate: `Our analysts no longer trust how we came by this${date ? ` (as of ${date})` : ""}.`
+      lastUpdate: `Our analysts no longer trust how we came by this${date ? ` (as of ${formatGameDateReadable(date) || date})` : ""}.`
         + " It stands unconfirmed until someone else can look.",
     });
   }

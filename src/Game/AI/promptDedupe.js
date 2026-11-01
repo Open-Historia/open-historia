@@ -107,3 +107,55 @@ export const collapseRepeatedWorldContext = (prompt, variables) => collapseRepea
     variables?.simulationRules,
     SIMULATION_RULES_POINTER,
 );
+
+// ---------------------------------------------------------------------------
+// What a fenced job inside the prompt repeats from before it
+// ---------------------------------------------------------------------------
+//
+// A time skip that carries the history fold (historyConsolidation.js
+// buildSkipHistoryJob) pastes the consolidator's whole prompt in at its end:
+// the events to fold, word for word, the current history document, the orders.
+// The skip's own prompt shows most of that already, earlier: the events not yet
+// folded are its event history, and the document opens it. On a seven-week
+// Discord test game (2026-10-27) the fold job was 61,116 characters, of which
+// 23,623 were lines the same prompt had already given.
+//
+// Inside the job's fences, a line long enough that a repeat is certainly the
+// same text (an event's paragraph, a line of the document) and present word for
+// word earlier in the prompt becomes a pointer to it; a run of them, one
+// pointer. Short lines - an event's date and title - stay, so the job still
+// names everything it covers. Nothing outside the fences changes, and nothing
+// the prompt does not already say earlier is touched.
+export const JOB_REPEAT_MIN_LINE_CHARS = 200;
+export const EARLIER_TEXT_POINTER = "(Given word for word earlier in this prompt; read it there.)";
+
+export const collapseRepeatsInsideJob = (prompt, { begin, end, minChars = JOB_REPEAT_MIN_LINE_CHARS, pointer = EARLIER_TEXT_POINTER } = {}) => {
+    const text = String(prompt ?? "");
+    const start = begin ? text.indexOf(begin) : -1;
+    if (start === -1) return text;
+    const stop = end ? text.indexOf(end, start + begin.length) : -1;
+    if (stop === -1) return text;
+    const earlier = text.slice(0, start);
+    const out = [];
+    let blanks = [];
+    let collapsing = false;
+    for (const line of text.slice(start, stop).split("\n")) {
+        const content = line.trim();
+        if (!content) {
+            blanks.push(line);
+            continue;
+        }
+        if (content.length >= minChars && earlier.includes(content)) {
+            // Blank lines between two repeated paragraphs go with them.
+            if (!collapsing) out.push(...blanks, `${line.slice(0, line.length - line.trimStart().length)}${pointer}`);
+            blanks = [];
+            collapsing = true;
+            continue;
+        }
+        out.push(...blanks, line);
+        blanks = [];
+        collapsing = false;
+    }
+    out.push(...blanks);
+    return text.slice(0, start) + out.join("\n") + text.slice(stop);
+};

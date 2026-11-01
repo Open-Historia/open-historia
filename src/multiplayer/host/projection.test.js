@@ -425,3 +425,29 @@ test("the game keeps who an event is for across a save, and adds nothing to an e
   assert.deepEqual(marked.audience, [RUSSIA]);
   assert.equal("audience" in open, false);
 });
+
+test("a player's advisor brings them their government's secrets, in a thread of their own; their advice is theirs alone", () => {
+  const docs = state();
+  docs.events = [...docs.events, {
+    id: "e-caught", date: "2014-03-30", title: "Counter-intelligence uncovers a CANARY-CAUGHT agent",
+    description: "The agent is in custody.", importance: "minor", kind: "world", source: "espionage", audience: [RUSSIA],
+  }];
+  docs.world.seatAdvice = {
+    [RUSSIA]: { advisor: { name: "Nikolai Patrushev-Volkov", title: "Secretary of the Security Council" }, suggestions: ["CANARY-RU-ADVICE"], round: 3 },
+    [LATVIA]: { advisor: { name: "Ilze Kalnina", title: "Chief of the Constitution Protection Bureau" }, suggestions: ["CANARY-LV-ADVICE"], round: 3 },
+  };
+
+  const ru = projectForViewer(docs, RUSSIA);
+  const desk = ru.chat.find((chat) => chat.source === "advisor");
+  assert.equal(desk.title, "Nikolai Patrushev-Volkov, Secretary of the Security Council");
+  // The agent caught, and the Riga memo its agents stole; never its own memo.
+  assert.deepEqual(desk.messages.map((message) => message.id).sort(), ["advisor-e-caught", "advisor-rep-lv"]);
+  assert.ok(desk.messages.every((message) => message.role === "leader" && message.speaker === "Nikolai Patrushev-Volkov"));
+  assert.deepEqual(Object.keys(ru.world.seatAdvice), [RUSSIA]);
+
+  const lv = projectForViewer(docs, LATVIA);
+  assert.equal(lv.chat.some((chat) => chat.source === "advisor"), false, "Latvia keeps no secret here");
+  assert.deepEqual(Object.keys(lv.world.seatAdvice), [LATVIA]);
+  assert.equal(JSON.stringify(lv).includes("CANARY-RU-ADVICE"), false);
+  assert.equal(JSON.stringify(projectForViewer(docs, ESTONIA)).includes("CANARY-CAUGHT"), false);
+});

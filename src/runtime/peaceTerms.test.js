@@ -8,28 +8,34 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  PEACE_COOLDOWN_ROUNDS,
-  PEACE_OFFER_GROUND_LOST,
   PEACE_OFFER_STANDS_ROUNDS,
-  PEACE_OFFER_WEARINESS,
-  PEACE_SETTLE_WEARINESS,
+  REPARATIONS_SHARE_CAP,
   REPARATIONS_SHARE_MOST,
+  REPARATIONS_YEARS_CAP,
   REPARATIONS_YEARS_LEAST,
   REPARATIONS_YEARS_MOST,
   TERRITORY_AS_HELD,
   TERRITORY_RESTORED,
+  clampTerms,
   describeReparation,
   describeTerms,
   normalizePeaceOffers,
   normalizeReparations,
   normalizeTerms,
+  offerFromAi,
+  openOfferBetween,
   openOffersFor,
+  readPeaceVerdict,
+  readTermsLine,
+  readTreatyLines,
   reparationsDue,
   reparationsOf,
-  settledBetweenOthers,
   standingOf,
   termsOffered,
   termsWorth,
+  treatyFromSkip,
+  warBetween,
+  withOffer,
   withTurnPeaceOffers,
   wouldAccept,
 } from "./peaceTerms.js";
@@ -71,6 +77,7 @@ test("terms are told in a line", () => {
   assert.ok(describeTerms({ territory: TERRITORY_AS_HELD, reparations: { payer: "B", receiver: "A", share: 0.01, years: 1 } }).endsWith("for 1 year"));
 });
 
+// No longer what decides: what the game reckons, told to the model (AI/warStatsPrompt.js).
 test("a country nobody plays takes terms no worse than the war promises it, and the wearier it is the worse it takes", () => {
   const cede = { territory: TERRITORY_AS_HELD, reparations: null };
   const white = { territory: TERRITORY_RESTORED, reparations: null };
@@ -98,64 +105,70 @@ test("a country nobody plays takes terms no worse than the war promises it, and 
 });
 
 const stand = (table) => (warId, name) => table[name] ?? { lost: 0, taken: 0 };
-const weary = (table) => (name) => table[name] ?? 0;
 
-test("a country nobody plays offers a person peace once it is weary enough or is losing its own ground", () => {
-  const turn = (offers, extra = {}) => withTurnPeaceOffers(offers, { wars: [WAR], players: ["Aland"], wearinessOf: weary({ Borduria: PEACE_OFFER_WEARINESS }), groundOf: stand({}), round: 7, date: "1915-03-01", ...extra });
-  const [offer] = turn([]);
-  assert.deepEqual(offer, { id: "peace:war-1:borduria:7", warId: "war-1", from: "Borduria", to: "Aland", terms: { territory: TERRITORY_RESTORED, reparations: null }, date: "1915-03-01", round: 7, status: "open" });
-  // Fresh and holding its own: nothing.
-  assert.deepEqual(turn([], { wearinessOf: weary({ Borduria: PEACE_OFFER_WEARINESS - 1 }) }), []);
-  // Fresh, but the player holds a third of its country: it offers, ceding the ground.
-  const losing = turn([], { wearinessOf: weary({}), groundOf: stand({ Borduria: { lost: PEACE_OFFER_GROUND_LOST + 0.1, taken: 0 } }) });
-  assert.deepEqual([losing.length, losing[0].terms.territory], [1, TERRITORY_AS_HELD]);
-  assert.ok(losing[0].terms.reparations.share > 0);
-  // Losing ground while taking as much is no reason to sue.
-  assert.deepEqual(turn([], { wearinessOf: weary({}), groundOf: stand({ Borduria: { lost: 0.4, taken: 0.4 } }) }), []);
-  // One offer at a time: while it stands, no second.
-  assert.equal(turn([offer], { round: 8 }).length, 1);
-  // The player is the one who is asked: nobody offers on the player's behalf, and a war between people is theirs to end.
-  assert.deepEqual(turn([], { players: ["Borduria"], wearinessOf: weary({ Aland: 99 }) }).map((entry) => [entry.from, entry.to]), [["Aland", "Borduria"]]);
-  assert.deepEqual(turn([], { players: ["Aland", "Borduria"] }), []);
-  assert.deepEqual(turn([], { players: [] }), [], "(a war nobody plays in is settled between its sides: settledBetweenOthers)");
-  assert.deepEqual(openOffersFor([offer], "aland").length, 1);
-  assert.deepEqual(openOffersFor([offer], "Borduria"), []);
-});
-
-test("an offer declined is not made again for a few turns; one left unanswered lapses, and so does one whose war is over", () => {
-  const base = { wars: [WAR], players: ["Aland"], wearinessOf: weary({ Borduria: 80 }), groundOf: stand({}), date: "1915-03-01" };
-  const declined = [{ id: "peace:war-1:borduria:7", warId: "war-1", from: "Borduria", to: "Aland", terms: {}, round: 7, status: "declined", answeredRound: 8 }];
-  assert.equal(withTurnPeaceOffers(declined, { ...base, round: 8 + PEACE_COOLDOWN_ROUNDS - 1 }).filter((offer) => offer.status === "open").length, 0);
-  const again = withTurnPeaceOffers(declined, { ...base, round: 8 + PEACE_COOLDOWN_ROUNDS });
-  assert.deepEqual(again.map((offer) => offer.status), ["declined", "open"]);
-  const open = [{ id: "peace:war-1:borduria:7", warId: "war-1", from: "Borduria", to: "Aland", terms: {}, round: 7, status: "open" }];
-  assert.equal(withTurnPeaceOffers(open, { ...base, round: 7 + PEACE_OFFER_STANDS_ROUNDS - 1 })[0].status, "open");
-  // Unanswered too long: it lapses (and, weary as ever, its maker offers afresh).
-  assert.deepEqual(withTurnPeaceOffers(open, { ...base, round: 7 + PEACE_OFFER_STANDS_ROUNDS }).map((offer) => offer.status), ["lapsed", "open"]);
-  assert.deepEqual(withTurnPeaceOffers(open, { ...base, wars: [{ ...WAR, status: "ended" }], round: 8 }).map((offer) => offer.status), ["lapsed"]);
+// "make it so it only happens when the simulation says the country sends a
+// peace treaty, it should not be fully deterministic anymore" (the owner, 2026-10-30).
+test("a turn offers nobody peace by itself, however weary a country is: open offers only lapse", () => {
+  const open = { id: "peace:war-1:borduria:7", warId: "war-1", from: "Borduria", to: "Aland", terms: {}, round: 7, status: "open", source: "skip", chatId: "chat-1", messageId: "msg-peace-7-borduria" };
+  assert.deepEqual(withTurnPeaceOffers([], { wars: [WAR], round: 9 }), [], "no offer is made: the AI makes them");
+  const kept = withTurnPeaceOffers([open], { wars: [WAR], round: 7 + PEACE_OFFER_STANDS_ROUNDS - 1 });
+  assert.deepEqual(kept, [{ ...open, date: "", terms: { territory: TERRITORY_RESTORED, reparations: null } }], "where it was made is kept with it");
+  assert.deepEqual(withTurnPeaceOffers([open], { wars: [WAR], round: 7 + PEACE_OFFER_STANDS_ROUNDS }).map((offer) => offer.status), ["lapsed"]);
+  assert.deepEqual(withTurnPeaceOffers([open], { wars: [{ ...WAR, status: "ended" }], round: 8 }).map((offer) => offer.status), ["lapsed"]);
   // What the world keeps is checked: an offer with nobody in it is none.
   assert.deepEqual(normalizePeaceOffers([{ id: "x", warId: "w", from: "A", to: "A" }, { id: "", warId: "w", from: "A", to: "B" }, null]), []);
+  assert.deepEqual(openOffersFor([open], "aland").length, 1);
+  assert.deepEqual(openOffersFor([open], "Borduria"), []);
+  assert.equal(openOfferBetween([open], "aland", "BORDURIA").id, open.id, "either way round");
 });
 
-test("two countries nobody plays make peace between themselves when one is spent and the other will take what it offers", () => {
-  const settle = (extra) => settledBetweenOthers({ wars: [WAR], players: [], wearinessOf: weary({}), groundOf: stand({}), ...extra });
-  assert.deepEqual(settle({}), [], "both fresh and level: they fight on");
-  // Borduria is nearly spent and offers the old borders; Aland, level and weary itself, takes them.
-  assert.deepEqual(settle({ wearinessOf: weary({ Borduria: PEACE_SETTLE_WEARINESS - 1, Aland: 55 }) }), [], "not spent enough to sue");
-  assert.deepEqual(settle({ wearinessOf: weary({ Borduria: 85, Aland: 20 }) }), [], "a fresh enemy would rather fight on");
-  const white = settle({ wearinessOf: weary({ Borduria: 85, Aland: 55 }) });
-  assert.deepEqual(white, [{ warId: "war-1", from: "Borduria", to: "Aland", terms: { territory: TERRITORY_RESTORED, reparations: null } }]);
-  // Aland holds a third of Borduria: Borduria offers the ground and money. A fresh Aland wants more than that
-  // and fights on; half-weary, it takes it.
-  const beatenGround = stand({ Borduria: { lost: 0.35, taken: 0 }, Aland: { lost: 0, taken: 0.35 } });
-  assert.deepEqual(settle({ groundOf: beatenGround }), []);
-  const beaten = settle({ groundOf: beatenGround, wearinessOf: weary({ Aland: 50 }) });
-  assert.deepEqual([beaten[0].from, beaten[0].to, beaten[0].terms.territory, beaten[0].terms.reparations.payer], ["Borduria", "Aland", TERRITORY_AS_HELD, "Borduria"]);
-  // Whichever side is the one beaten is the one that sues.
-  assert.deepEqual(settle({ wearinessOf: weary({ Borduria: 50 }), groundOf: stand({ Aland: { lost: 0.3, taken: 0 }, Borduria: { lost: 0, taken: 0.3 } }) }).map((entry) => entry.from), ["Aland"]);
-  // A war a person is in is never settled for them.
-  assert.deepEqual(settle({ players: ["Cisland"], wearinessOf: weary({ Borduria: 99, Aland: 99 }) }), []);
-  assert.deepEqual(settle({ wars: [{ ...WAR, status: "ceasefire" }], wearinessOf: weary({ Borduria: 99 }) }), []);
+test("an AI's offer to a person is checked: their war, the person's country played, the AI's side nobody's", () => {
+  const made = offerFromAi({ from: "Borduria", to: "Aland", terms: { territory: TERRITORY_AS_HELD, reparations: { payer: "Borduria", share: 0.5, years: 99 } }, wars: [WAR], players: ["Aland"], round: 7, date: "1915-03-01", chatId: "chat-1", messageId: "m1" });
+  assert.deepEqual(made.offer, {
+    id: "peace:war-1:borduria:7", warId: "war-1", from: "Borduria", to: "Aland",
+    terms: { territory: TERRITORY_AS_HELD, reparations: { payer: "Borduria", receiver: "Aland", share: REPARATIONS_SHARE_CAP, years: REPARATIONS_YEARS_CAP } },
+    date: "1915-03-01", round: 7, status: "open", source: "skip", chatId: "chat-1", messageId: "m1",
+  }, "the terms are held to what the game allows, and the receiver is the other side");
+  assert.match(offerFromAi({ from: "Borduria", to: "Aland", wars: [WAR], players: [] }).reason, /played by nobody/);
+  assert.match(offerFromAi({ from: "Dorland", to: "Aland", wars: [WAR], players: ["Aland"] }).reason, /not at war/);
+  assert.match(offerFromAi({ from: "Borduria", to: "Aland", wars: [WAR], players: ["Aland", "Cisland"] }).reason, /led by a person/);
+  assert.match(offerFromAi({ from: "Borduria", to: "Aland", wars: [{ ...WAR, status: "ended" }], players: ["Aland"] }).reason, /not at war/);
+  // Reparations by somebody outside the peace are dropped, never guessed onto a side.
+  assert.equal(clampTerms({ territory: TERRITORY_RESTORED, reparations: { payer: "Dorland", receiver: "Aland", share: 0.02, years: 5 } }, { from: "Borduria", to: "Aland" }).reparations, null);
+  // A new offer between the same two in the same war takes the place of the last.
+  const first = made.offer;
+  const second = offerFromAi({ from: "Borduria", to: "Aland", terms: {}, wars: [WAR], players: ["Aland"], round: 8 }).offer;
+  assert.deepEqual(withOffer([first], second).map((offer) => [offer.id, offer.status]), [[first.id, "lapsed"], [second.id, "open"]]);
+});
+
+test("the AI writes terms and answers in words, and the game reads them", () => {
+  const parties = { from: "Borduria", to: "Aland" };
+  assert.deepEqual(readTermsLine("as held; Borduria pays 2% for 5 years", parties), { territory: TERRITORY_AS_HELD, reparations: { payer: "Borduria", receiver: "Aland", share: 0.02, years: 5 } });
+  assert.deepEqual(readTermsLine("restored; none", parties), { territory: TERRITORY_RESTORED, reparations: null });
+  assert.deepEqual(readTermsLine("each side keeps what it holds; Aland pays 1.5% of its economy a year for 3 years", parties).reparations, { payer: "Aland", receiver: "Borduria", share: 0.015, years: 3 });
+  assert.deepEqual(readTermsLine("the old borders", parties), { territory: TERRITORY_RESTORED, reparations: null });
+  assert.deepEqual(readPeaceVerdict("accept", parties), { verdict: "accept" });
+  assert.deepEqual(readPeaceVerdict("Declined.", parties), { verdict: "decline" });
+  assert.deepEqual(readPeaceVerdict("refuse", parties), { verdict: "decline" });
+  assert.deepEqual(readPeaceVerdict("counter: restored; none", parties), { verdict: "counter", terms: { territory: TERRITORY_RESTORED, reparations: null } });
+  assert.deepEqual(readPeaceVerdict("offer as held; Borduria pays 1% for 4 years", parties).terms.reparations.years, 4);
+  assert.equal(readPeaceVerdict("we will think about it", parties), null, "nothing it can read is nothing done");
+  // The skip's peaceTreaties lines.
+  assert.deepEqual(readTreatyLines("Borduria | Aland | as held; Borduria pays 2% for 5 years\n- Eland | Fenland | restored\nnonsense"), [
+    { from: "Borduria", to: "Aland", terms: { territory: TERRITORY_AS_HELD, reparations: { payer: "Borduria", receiver: "Aland", share: 0.02, years: 5 } } },
+    { from: "Eland", to: "Fenland", terms: { territory: TERRITORY_RESTORED, reparations: null } },
+  ]);
+  assert.deepEqual(readTreatyLines(""), []);
+  assert.deepEqual(readTreatyLines(undefined), []);
+});
+
+test("two countries nobody plays make peace only when the skip says so, and never in a war a person is in", () => {
+  assert.deepEqual(treatyFromSkip({ from: "Borduria", to: "Aland", terms: { territory: TERRITORY_RESTORED }, wars: [WAR], players: [] }).treaty, { warId: "war-1", from: "Borduria", to: "Aland", terms: { territory: TERRITORY_RESTORED, reparations: null } });
+  assert.match(treatyFromSkip({ from: "Borduria", to: "Aland", wars: [WAR], players: ["Cisland"] }).reason, /person is in that war/);
+  assert.match(treatyFromSkip({ from: "Borduria", to: "Cisland", wars: [WAR], players: [] }).reason, /not at war/, "two on the same side are not at war with each other");
+  assert.equal(warBetween([WAR], "cisland", "ALAND").id, "war-1");
+  assert.equal(warBetween([{ ...WAR, status: "ceasefire" }], "Borduria", "Aland").id, "war-1", "a war under an armistice can still be settled");
+  void stand;
 });
 
 test("reparations are paid a period at a time out of the payer's economy, until they have run their years", () => {

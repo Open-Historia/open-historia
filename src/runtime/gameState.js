@@ -3212,13 +3212,35 @@ export const applyUnitOpBatch = (units, orders, ops, context = {}) => {
   return { units: survivors, orders: pruneSatisfiedUnitOrders(survivors, nextOrders) };
 };
 
+// A patrol's next point, on the ground its unit works: a fleet's at sea, a land
+// formation's ashore. A fleet patrolling 250 km round a station off a coast was
+// put down on land a week later (a fantasy scenario's Discord game,
+// 2026-10-28): the ring took no notice of the map. Up to eight points of the
+// ring are tried; when none is on its ground the unit stays on its station,
+// which was placed on it. An air unit flies over both; without `onWater` the
+// ring is used as drawn. The tries go round the ring an eighth at a time.
+const PATROL_TRIES = 8;
+const patrolPointOnItsGround = (unit, order, seed, onWater) => {
+  const station = { lng: order.toLng, lat: order.toLat };
+  const radius = order.radiusKm || DEFAULT_PATROL_RADIUS_KM[unit.type] || 0;
+  const wantsWater = unit.type === "naval" ? true : unit.type === "air" ? null : false;
+  if (typeof onWater !== "function" || wantsWater === null) return patrolPoint(station, radius, seed);
+  for (let attempt = 0; attempt < PATROL_TRIES; attempt += 1) {
+    const point = patrolPoint(station, radius, seed, { turn: attempt });
+    if (onWater(point.lng, point.lat) === wantsWater) return point;
+  }
+  return patrolPoint(station, 0, seed);
+};
+
 // Advance every standing order by the time that has passed. This is what makes
 // units move realistically turn after turn without a single token being spent:
 // a move order steps toward its destination at the unit's own pace, and a patrol
 // order repositions deterministically around its station.
+//   onWater(lng, lat)  whether a point is at sea (gameplay.js waterTestFor), so a
+//                      patrol keeps to its own ground; without it, as drawn
 export const advanceStandingOrders = (
   world,
-  { fromDate, toDate, round = 0, tick = 0, skipUnitIds = [], movedAt = null } = {},
+  { fromDate, toDate, round = 0, tick = 0, skipUnitIds = [], movedAt = null, onWater = null } = {},
 ) => {
   const units = normalizeUnits(world?.units);
   const orders = normalizePendingUnitOrders(world?.pendingUnitOrders);
@@ -3258,11 +3280,7 @@ export const advanceStandingOrders = (
     if (lastMoved.has(unit.id) && unitElapsed <= 0) return unit;
 
     if (order.kind === "patrol") {
-      const point = patrolPoint(
-        { lng: order.toLng, lat: order.toLat },
-        order.radiusKm || DEFAULT_PATROL_RADIUS_KM[unit.type] || 0,
-        `${unit.id}|${round}|${tick}`,
-      );
+      const point = patrolPointOnItsGround(unit, order, `${unit.id}|${round}|${tick}`, onWater);
       return { ...unit, lng: point.lng, lat: point.lat, posture: "patrol", updatedAt: stamp };
     }
 
@@ -3526,10 +3544,13 @@ const normalizeCreatedChat = (entry, index) => {
   if (!chat) return null;
   const openingMessage = normalizeOptionalString(entry?.openingMessage);
   const speaker = normalizeOptionalString(entry?.speaker);
+  // A shared game's letter names the person it is written to (AI/sharedLetters.js).
+  const to = normalizeOptionalString(entry?.to);
   return {
     ...chat,
     ...(openingMessage ? { openingMessage } : {}),
     ...(speaker ? { speaker } : {}),
+    ...(to ? { to } : {}),
   };
 };
 
@@ -5649,7 +5670,11 @@ const applyPolityAndTerritoryImpacts = ({
       ...(aliases.length > 0 || change.aliases?.length > 0 ? { aliases } : {}),
       ...(change.color ? { color: change.color } : {}),
       name: code,
-      ...(change.note ? { note: change.note } : {}),
+      // A change's note is its REASON (polityChangeSchema: "Brief reason."). It
+      // is the description of a polity that has none yet, a new breakaway, and
+      // never replaces one it has: a week's "Provision sent to the Order" wiped
+      // a scenario's whole description of Brightdale.
+      ...(change.note && !normalizeOptionalString(current.note) ? { note: change.note } : {}),
     };
 
     if (change.color) {

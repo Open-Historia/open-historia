@@ -273,7 +273,9 @@ const boot = async () => {
     if (!checked.ok) throw new Error(checked.error);
     const settings = checked.settings;
     const docs = await store.read();
-    const host = clean(docs.game?.country);
+    // The host's own country; it changes if the host's people found one of
+    // their own (host/foundings.js).
+    let host = clean(docs.game?.country);
     if (!host) throw new Error("Open a game with a country before sharing it.");
     // The game and its scenario, as the library knows them: a player must open
     // the same scenario to see the same map.
@@ -336,7 +338,7 @@ const boot = async () => {
       replyTo,
       // A player's institution business, run here for their country.
       institution: createInstitutionDesk({
-        host,
+        host: () => host,
         game: {
           lifecycle: (args) => commitInstitutionLifecycleCommand(args),
           negotiation: (args) => ensureInstitutionLifecycleNegotiationChat(args),
@@ -356,6 +358,13 @@ const boot = async () => {
       onStatus: (status) => {
         hostStatus = status;
         report();
+      },
+      // The host's people founded a country: the engine plays it as the host's.
+      onSeatsMoved: (moves) => {
+        const mine = moves.find((move) => move.host);
+        if (!mine) return;
+        host = mine.to;
+        setHostingSharedGame(true, { host });
       },
       log: (level, text, detail) => console[level === "warn" ? "warn" : "info"](`[shared game] ${text}`, detail ?? ""),
     });

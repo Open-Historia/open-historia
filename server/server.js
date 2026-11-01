@@ -279,8 +279,8 @@ app.use((req, res, next) => {
   next();
 });
 
-// Per-IP fixed-window rate limit for requests that arrive over the network, the
-// same shape the content node already uses. Loopback is exempt: the game itself
+// Per-IP fixed-window rate limit for requests that arrive over the network.
+// Loopback is exempt: the game itself
 // polls runtime state briskly and it is not the traffic this is here for. Only
 // meaningful when OH_HOST opens the server up at all, which is exactly when an
 // unauthenticated API benefits from a ceiling on how fast it can be hammered.
@@ -629,6 +629,19 @@ const discordPresence = createDiscordPresence({
 app.post("/api/presence", jsonParser, (req, res) => {
   if (isLoopbackAddress(req.socket?.remoteAddress)) discordPresence.update(normalizePresence(req.body));
   res.status(204).end();
+});
+
+// A shared game a friend invited this player to on Discord, and requests from
+// Discord to join this player's shared game (server/discordPresence.js). This
+// computer's player only.
+app.get("/api/presence/inbox", (req, res) => {
+  if (!isLoopbackAddress(req.socket?.remoteAddress)) return res.json({ join: null, requests: [] });
+  res.json(discordPresence.takeInbox?.() ?? { join: null, requests: [] });
+});
+app.post("/api/presence/answer", jsonParser, (req, res) => {
+  if (!isLoopbackAddress(req.socket?.remoteAddress)) return res.status(204).end();
+  const sent = discordPresence.answer?.(req.body?.userId, req.body?.accept === true) ?? false;
+  res.json({ sent });
 });
 
 // Which application this is: the desktop app (and whether it is the stable one,

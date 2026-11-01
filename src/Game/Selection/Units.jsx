@@ -32,6 +32,7 @@ import { useBackToClose } from "../../runtime/backToClose.js";
 import { TURN_RUNNING_NOTE } from "../AI/simulationStatus.js";
 import { useTurnRunning } from "../GameUI/useTurnRunning.js";
 import { useCardScreenPos } from "./mapCards.js";
+import { formatGameDateReadable } from "../../runtime/gameDates.js";
 
 let _setSelection = null;
 let _currentSelection = null;
@@ -470,7 +471,7 @@ const UnitPopup = () => {
           </InfoRow>
           {originEvent && (
             <InfoRow label="Detected">
-              {originEvent.date ? `${originEvent.date} — ` : ""}
+              {originEvent.date ? `${(formatGameDateReadable(originEvent.date) || originEvent.date)} — ` : ""}
               {originEvent.title}
             </InfoRow>
           )}

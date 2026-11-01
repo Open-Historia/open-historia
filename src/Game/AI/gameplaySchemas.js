@@ -13,6 +13,7 @@ import { extractJsonArray } from "./jsonSalvage.js";
 import { LISTEN_IN_MAX_TRENDS } from "../../runtime/listenIn.js";
 import { WAR_ROOM_ORDERS, WAR_ROOM_STANCES } from "../../runtime/fronts/constants.js";
 import { FRONT_ORDERS_FIELD } from "./nativeFrontLedger.js";
+import { SEAT_ADVICE_ANSWER_SCHEMA, SEAT_ADVICE_FIELD } from "./seatAdvice.js";
 const textSchema = (description) => ({
   type: "string",
   description,
@@ -64,10 +65,32 @@ const createdChatSchema = {
     },
     openingMessage: nonEmptyTextSchema("The initiator's own first message, in its leader's voice, TO the player: never the player's words."),
     speaker: nonEmptyTextSchema("The polity sending the opening message. Never the player's."),
+    to: textSchema("When several people play: the player polity it is written to. Otherwise empty."),
     linkedEventId: textSchema("The event that caused it, when one did."),
   },
   required: ["countries", "title", "speaker", "openingMessage"],
   additionalProperties: false,
+};
+
+// A time skip's letter that offers the player peace carries its terms
+// (Game/AI/warAndPeace.js offerPeace): only in the skip's own outreach, where
+// the [War Weariness, Peace and Alliances] block teaches it. Flat, each field
+// a line, as the jump's size guard asks (projectOpSchema.test.js).
+const peaceOfferSchema = {
+  type: "object",
+  description: "Only in a letter offering the player peace: its terms.",
+  properties: {
+    territory: { type: "string", enum: ["as held", "restored"] },
+    reparationsPayer: textSchema("Who pays; empty for nobody."),
+    reparationsPercent: { type: "number", description: "% of the payer's GDP a year." },
+    reparationsYears: { type: "integer" },
+  },
+  required: ["territory"],
+  additionalProperties: false,
+};
+const outreachChatSchema = {
+  ...createdChatSchema,
+  properties: { ...createdChatSchema.properties, peaceOffer: peaceOfferSchema },
 };
 
 // Field descriptions are kept to a line. The jump's schema rides on every
@@ -1178,6 +1201,14 @@ const eventSchema = {
       type: "boolean",
       description: "Whether it directly concerns the player polity.",
     },
+    // Who may read it in a shared game (multiplayer/host/projection.js
+    // readableBy); absent, as on everything public, it is everybody's.
+    audience: {
+      type: "array",
+      description: "Secret only: the polities that know it.",
+      maxItems: 6,
+      items: { type: "string" },
+    },
     warId: textSchema(
       "Canonical world.wars id for this event when it declares/joins/ends a war or depicts actual combat. Blank for non-war events.",
     ),
@@ -1271,7 +1302,13 @@ export const JUMP_FORWARD_SCHEMA = {
     diplomaticOutreach: {
       type: "array",
       description: "Independent outreach to the player; empty when none.",
-      items: createdChatSchema,
+      items: outreachChatSchema,
+    },
+    // The peaces two countries nobody plays made (peacePrompt.js
+    // PEACE_TREATIES_FIELD), a line each, read by peaceTerms.js readTreatyLines.
+    peaceTreaties: {
+      type: "string",
+      description: "Peace between countries nobody plays; format in prompt. Empty if none.",
     },
     // The canonical ledgers (nativeWarLedger.js, nativeDiplomaticDirector.js)
     // travel as compact text lines rather than nested objects: a large nested
@@ -1308,6 +1345,10 @@ export const JUMP_FORWARD_SCHEMA = {
       type: "string",
       description: "Fronts; format in prompt. Empty if none.",
     },
+    // Each player's advisor and three orders to consider, in a game a host
+    // shares (seatAdvice.js). SENT only then, in full (withSeatAdvice); read
+    // either way, loosely, so a malformed piece of advice never costs the turn.
+    [SEAT_ADVICE_FIELD]: SEAT_ADVICE_ANSWER_SCHEMA,
     // A folded skip's agents' reports (see "The folded time skip" above). Loose
     // here on purpose: each report is checked against the agents' own schema
     // (SPY_INTERCEPT_SCHEMA) when it is filed, so a malformed one costs that
@@ -1352,6 +1393,7 @@ const JUMP_FORWARD_LEAN_SCHEMA = (() => {
     [AGENT_REPORTS_FIELD]: _agentReports,
     [HISTORY_FIELD]: _history,
     [FRONT_ORDERS_FIELD]: _frontOrders,
+    [SEAT_ADVICE_FIELD]: _seatAdvice,
     ...properties
   } = JUMP_FORWARD_SCHEMA.properties;
   return {
@@ -1935,6 +1977,9 @@ export const CHAT_ACTIONS_SCHEMA = {
       items: chatActionSchema,
     },
     memorySummary: textSchema("The thread's rolling memory, rewritten: what has been agreed, threatened, offered and left unresolved. Two or three sentences."),
+    // What a government at war with the player decides of peace, where a [Peace]
+    // block asks for it (AI/warStatsPrompt.js describePeaceTalk).
+    peaceAnswers: textSchema("Only where a [Peace] block asks: each government's decision on peace, a line each. Empty otherwise."),
     lifecycleResponsesJson: textSchema(`Institution invitation/application decisions as JSON array text. Each object: {actorName, caseId, decision, reason?, terms?}. decision is ${INSTITUTION_LIFECYCLE_DECISIONS.slice(0, -1).join(", ")}, or ${INSTITUTION_LIFECYCLE_DECISIONS.at(-1)}. Use [] when this is not a lifecycle negotiation.`),
   },
   required: ["actions"],
@@ -3393,6 +3438,41 @@ const WAR_ROOM_SCHEMA = {
 // Only the tool shown to the model changes: the field is a transport field,
 // taken off the answer before the sheet is validated, and no other request
 // carries it.
+// Who may read an event (`audience`) is a shared game's: the tool sent
+// carries it only in one, and after the event's warId and combatants. Sent in
+// every game, just before combatants, it had Gemini leave combatants empty on
+// the battles of a war its skip started, so the war was dropped and no front
+// opened (2026-10-30, two answers against one with it left out). The answer is
+// still read against the whole schema, so a shared game's audience is kept.
+export const withEventAudience = (tool, shared = false) => {
+  let changed = false;
+  const visit = (node) => {
+    if (!node || typeof node !== "object") return node;
+    if (Array.isArray(node)) {
+      const next = node.map(visit);
+      return next.some((entry, index) => entry !== node[index]) ? next : node;
+    }
+    let out = node;
+    for (const [key, value] of Object.entries(node)) {
+      const next = visit(value);
+      if (next !== value) {
+        out = out === node ? { ...node } : out;
+        out[key] = next;
+      }
+    }
+    const properties = out.properties;
+    if (properties && typeof properties === "object" && properties.audience && properties.combatants) {
+      const { audience, ...rest } = properties;
+      out = { ...out, properties: shared ? { ...rest, audience } : rest };
+      if (Array.isArray(out.required)) out.required = shared ? out.required : out.required.filter((name) => name !== "audience");
+      changed = true;
+    }
+    return out;
+  };
+  const schema = visit(tool?.schema);
+  return changed ? { ...tool, schema } : tool;
+};
+
 export const INTELLIGENCE_RATING_FIELD = "intelligenceService";
 export const withIntelligenceRating = (tool) => {
   if (!tool?.schema?.properties) return tool;
@@ -4418,6 +4498,8 @@ const normalizeChatActionsShape = (value) => {
   if (Array.isArray(lifecycleAlias)) candidate.lifecycleResponsesJson = JSON.stringify(lifecycleAlias);
   else if (candidate.lifecycleResponsesJson === undefined && typeof lifecycleAlias === "string") candidate.lifecycleResponsesJson = lifecycleAlias;
   delete candidate.lifecycleResponses;
+  // Decisions on peace written as a list rather than lines are the same lines.
+  if (Array.isArray(candidate.peaceAnswers)) candidate.peaceAnswers = candidate.peaceAnswers.map((line) => String(line ?? "").trim()).filter(Boolean).join("\n");
 
   return candidate;
 };
@@ -4603,6 +4685,19 @@ export const normalizeGameplayPayload = (taskKey, value) => {
 
   if (Array.isArray(candidate.events)) candidate.events = candidate.events.map(normalizeEventShape);
   if (Array.isArray(candidate.diplomaticOutreach)) candidate.diplomaticOutreach = normalizeChatList(candidate.diplomaticOutreach);
+  // A letter offering peace is the skip's own outreach (peacePrompt.js). One
+  // written into an event's createdChats instead is moved there, with the event
+  // it belongs to, rather than costing the turn a retry.
+  if (Array.isArray(candidate.events)) {
+    const letters = [];
+    candidate.events = candidate.events.map((event) => {
+      const chats = event?.impacts?.createdChats;
+      if (!Array.isArray(chats) || !chats.some((chat) => isPlainRecord(chat?.peaceOffer))) return event;
+      letters.push(...chats.filter((chat) => isPlainRecord(chat?.peaceOffer)).map((chat) => ({ ...chat, ...(typeof event.id === "string" && event.id ? { linkedEventId: event.id } : {}) })));
+      return { ...event, impacts: { ...event.impacts, createdChats: chats.filter((chat) => !isPlainRecord(chat?.peaceOffer)) } };
+    });
+    if (letters.length) candidate.diplomaticOutreach = [...(Array.isArray(candidate.diplomaticOutreach) ? candidate.diplomaticOutreach : []), ...normalizeChatList(letters)];
+  }
   return candidate;
 };
 

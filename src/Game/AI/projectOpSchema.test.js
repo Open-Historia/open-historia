@@ -207,7 +207,16 @@ test("the board no longer costs the jump anything", () => {
   // story, not in a re-rating request of their own.
   // spiesOnPlayer raised it by 100, on purpose (~90 chars): the skip names the
   // polities that would plant an agent in the player, which asks nothing more.
-  assert.ok(jumpChars < 28300, `the jump schema grew back to ${jumpChars} chars`);
+  // The Discord spike raised it by 100 for events[].audience: a covert act's outcome
+  // is shown only to the polities that know of it, not to every player of a shared game.
+  // Shared games' letters raised it by about 230 for a chat's `to` (in createdChats
+  // and diplomaticOutreach alike): each letter reaches the player it was written
+  // to, where every one used to go to the host's.
+  // Peace through the diplomatic chats raised it by about 560, on purpose: a
+  // letter's peaceOffer (its terms, four flat fields) and the peaceTreaties line
+  // field, so that a country offers peace when the skip says so, in the skip's
+  // one request, and never by a formula of the game's.
+  assert.ok(jumpChars < 29250, `the jump schema grew back to ${jumpChars} chars`);
 
   // ...and the game master, which has no second pass to hand the board to, keeps
   // it on its authored events (the provider sees a shallow transport; the

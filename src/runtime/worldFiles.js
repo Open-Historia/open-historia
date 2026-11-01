@@ -11,7 +11,7 @@
 //
 // Which bytes are behind a name is decided by those two pinned lists and by
 // nothing at run time. The website used to ask a content origin instead (a
-// proxy in front of the release, and community nodes in front of that), because
+// proxy in front of the release), because
 // a browser cannot read a release asset itself: GitHub sends no CORS header on
 // the download. Carrying its own copy, as the app does, needs none of it.
 //

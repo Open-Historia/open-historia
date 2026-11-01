@@ -16,7 +16,7 @@
 // accident. Alt-history needs countries that do not exist yet, and the map is
 // where an author has the territory in front of them.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Panel from "./Panel.jsx";
 import Icon from "./Icon.jsx";
 import { inputStyle, pillButton } from "./editorStyles.js";
@@ -30,6 +30,7 @@ import { bundledFlagUrl } from "../runtime/countryFlags.js";
 import MilitaryFields from "./MilitaryFields.jsx";
 import { rateMilitaryFigures } from "../Game/AI/militaryRating.js";
 import { militaryScaleOf } from "./militaryForm.js";
+import { MAX_REACH } from "./fitToImage.js";
 
 const commonOr = (arr, blank = "") => {
   if (!arr.length) return blank;
@@ -52,6 +53,113 @@ const Field = ({ label, title, children }) => (
     {children}
   </div>
 );
+
+// Fit to background: a slider that pulls the selection's coasts onto the shore
+// the background shows, as far as it reaches. Dragging previews the fit; letting
+// go keeps it as one undo step. The fit always starts from the outlines the
+// selection had when the slider was first touched, so sliding back to Off puts
+// them back. A new selection, or an undo, starts afresh.
+const FitToBackground = ({ api, selection, regionEpoch }) => {
+  const [reach, setReach] = useState(0);
+  const [metersPerPixel, setMetersPerPixel] = useState(null);
+  const [status, setStatus] = useState("");
+  const sessionRef = useRef(null);
+  const frameRef = useRef(0);
+  const reachRef = useRef(0);
+
+  const reset = () => {
+    cancelAnimationFrame(frameRef.current);
+    sessionRef.current = null;
+    reachRef.current = 0;
+    setReach(0);
+    setMetersPerPixel(null);
+  };
+  // Mounted afresh for each selection (keyed on it); what is shown is kept.
+  useEffect(() => () => {
+    cancelAnimationFrame(frameRef.current);
+    sessionRef.current?.session?.commit();
+    sessionRef.current = null;
+  }, []);
+  useEffect(() => {
+    const session = sessionRef.current?.session;
+    if (session && !session.current()) reset();
+  }, [regionEpoch]);
+
+  const start = () => {
+    if (!sessionRef.current) {
+      const entry = { session: null };
+      setStatus("Reading the background…");
+      entry.promise = api.fitToBackground(selection).then(
+        (session) => {
+          if (sessionRef.current !== entry) return null;
+          entry.session = session;
+          setMetersPerPixel(session?.metersPerPixel ?? null);
+          setStatus(session ? "" : "There is no background picture here to fit to.");
+          return session;
+        },
+        // A background that could not be read is not read again for this
+        // selection on every move of the slider; a new selection tries afresh.
+        (error) => {
+          if (sessionRef.current === entry) {
+            setStatus(
+              error?.code === "outside"
+                ? "These regions are not over the background picture."
+                : error?.code === "no-shore"
+                  ? "The background here shows no shore to fit to."
+                  : error?.code === "closed"
+                    ? "This background does not let the editor read its colours."
+                    : "The background could not be read.",
+            );
+          }
+          return null;
+        },
+      );
+      sessionRef.current = entry;
+    }
+    return sessionRef.current.promise;
+  };
+  const preview = (value) => {
+    reachRef.current = value;
+    setReach(value);
+    start().then((session) => {
+      cancelAnimationFrame(frameRef.current);
+      frameRef.current = requestAnimationFrame(() => {
+        if (session && !session.preview(value)) reset();
+      });
+    });
+  };
+  const keep = () => {
+    const value = reachRef.current;
+    sessionRef.current?.promise.then((session) => {
+      cancelAnimationFrame(frameRef.current);
+      if (session && !(session.preview(value) && session.commit())) reset();
+    });
+  };
+
+  const km = metersPerPixel ? (reach * metersPerPixel) / 1000 : null;
+  const shown = reach === 0 ? "Off" : km === null ? `${reach} px` : `${km < 10 ? km.toFixed(1) : Math.round(km)} km`;
+  return (
+    <Field label="Fit to background" title="Pull the coasts of these regions onto the shore the background picture shows. Borders between two land regions stay where they are.">
+      <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <input
+          type="range"
+          min="0"
+          max={MAX_REACH}
+          step="1"
+          value={reach}
+          aria-label="How far a coast may move to reach the shore"
+          onChange={(e) => preview(Number(e.target.value))}
+          onPointerUp={keep}
+          onKeyUp={keep}
+          onBlur={keep}
+          style={{ flex: 1, minWidth: 0 }}
+        />
+        <span style={{ minWidth: 48, textAlign: "right", color: "rgba(255,255,255,0.72)", fontSize: 12 }}>{shown}</span>
+      </span>
+      {status && <span style={{ color: "rgba(255,255,255,0.55)", fontSize: 11, lineHeight: 1.4 }}>{status}</span>}
+    </Field>
+  );
+};
 
 // freezingRegions / onSetFreezing(ids, on): the water regions that can freeze
 // (warGeographyDoc.js), offered for a selection that is all water.
@@ -430,6 +538,7 @@ const SelectionInspector = ({ api, selection, types, colors, colorOverrides, set
             <Icon name="trash" size={13} /> Delete
           </button>
         </div>
+        {api?.fitBackground?.() && <FitToBackground key={selection.join(",")} api={api} selection={selection} regionEpoch={regionEpoch} />}
       </InspectorSection>
     </Panel>
   );

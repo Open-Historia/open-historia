@@ -116,7 +116,7 @@ const MAX_DETAIL_CHARS_VERBOSE = 20_000;
 // enough to actually walk a call path.
 const STACK_FRAMES = 1;
 const STACK_FRAMES_VERBOSE = 8;
-// Repeat collapsing. A failing basemap host or a dead content node produces the
+// Repeat collapsing. A failing basemap or map-file host produces the
 // same fetch error dozens of times a second, and left alone one bad tile URL
 // evicts the entire campaign from the buffer — the exact entries the log exists
 // for. So an entry identical to a recent one bumps that entry's counter

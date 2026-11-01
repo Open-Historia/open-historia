@@ -101,6 +101,35 @@ test("everyone ready ends the round at once", async () => {
   assert.deepEqual(resolved, [1]);
 });
 
+test("a new round length moves this round's deadline and holds for the next", async () => {
+  const { clock, round, resolved } = machine();
+  round.setPlayers(["a", "b", "c"]);
+  round.start();
+  await clock.advance(4 * 60 * 1000);
+  assert.equal(round.setRoundMinutes(30), 30);
+  await clock.advance(20 * 60 * 1000);
+  assert.deepEqual(resolved, [], "10 minutes was the old length; 30 counts from the start");
+  await clock.advance(6 * 60 * 1000);
+  assert.deepEqual(resolved, [1]);
+  // After the reveal, the next round plans for the new length.
+  await clock.advance(60 * 1000);
+  assert.equal(round.status().phase, "planning");
+  assert.equal(round.status().round, 2);
+  assert.equal(round.status().remainingMs, 30 * 60 * 1000);
+});
+
+test("a shorter round length never ends the round sooner than a minute from now", async () => {
+  const { clock, round, resolved } = machine({ roundMinutes: 60 });
+  round.setPlayers(["a", "b"]);
+  round.start();
+  await clock.advance(30 * 60 * 1000);
+  round.setRoundMinutes(5);
+  await clock.advance(59 * 1000);
+  assert.deepEqual(resolved, []);
+  await clock.advance(1000);
+  assert.deepEqual(resolved, [1]);
+});
+
 test("readiness dropping below the share stops the countdown; the round length still ends it", async () => {
   const { clock, round, resolved } = machine();
   round.setPlayers(["a", "b", "c"]);

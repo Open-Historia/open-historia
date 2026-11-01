@@ -84,3 +84,18 @@ test("the host can release a country from a player", () => {
   assert.equal(seats.list()[0].status, SEAT_STATUS.AI);
   assert.equal(seats.list()[0].device, null, "released for good: the device cannot reclaim it");
 });
+
+test("a seat follows its people to a country they founded, which no one else may then take", () => {
+  const { seats } = book();
+  seats.claim("France", { device: "a", name: "Ana" });
+  seats.claim("Spain", { device: "b", name: "Ben" });
+  seats.start();
+  assert.equal(seats.move("France", "Spain"), false, "never onto a country someone plays");
+  assert.equal(seats.move("France", "Burgundy"), true);
+  assert.equal(seats.seatOf("a").country, "Burgundy");
+  assert.equal(seats.seatOf("a").status, SEAT_STATUS.HUMAN);
+  assert.deepEqual(seats.humanCountries(), ["Spain", "Burgundy"]);
+  assert.deepEqual(seats.claim("Burgundy", { device: "b", name: "Ben" }), { ok: false, reason: "taken" });
+  // The country left behind is the AI's, and free to take.
+  assert.equal(seats.claim("France", { device: "c", name: "Cy" }).ok, true);
+});

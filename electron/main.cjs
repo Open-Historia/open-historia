@@ -1070,9 +1070,25 @@ const reportFatalBootError = (error) => {
 
 // One instance only: a second launch would hit EADDRINUSE on the server port and
 // die, which reads to the player as "the app is broken".
+// Discord starts the game through this protocol when the player presses Join
+// on a friend's invitation to a shared game and the game is not running; once
+// it is, Discord hands over the game to join (server/discordPresence.js). The
+// id is the server's DISCORD_APPLICATION_ID. Installed builds only: a
+// development run would register the bare Electron binary.
+const DISCORD_APPLICATION_ID = "1529270119916896326";
+const registerDiscordLaunch = () => {
+  if (!app.isPackaged || String(process.env.OH_DISCORD_PRESENCE ?? "1") === "0") return;
+  try {
+    app.setAsDefaultProtocolClient(`discord-${DISCORD_APPLICATION_ID}`);
+  } catch {
+    // Without it Discord can still hand a join to a running game.
+  }
+};
+
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
+  registerDiscordLaunch();
   app.on("second-instance", () => {
     if (mainWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore();

@@ -47,7 +47,9 @@ test("a failed load fails the read instead of answering with nothing", async () 
 test("the Android build opens archives through it, and only the Android build", () => {
   const assets = fs.readFileSync(new URL("./assets.js", import.meta.url), "utf8");
   const body = assets.slice(assets.indexOf("const createPmtilesArchive"), assets.indexOf("export const registerPmtilesArchive"));
-  assert.match(body, /import\.meta\.env\.VITE_OH_NATIVE\s*\?\s*new WholeFileSource\(url, loadWholeArchive\)\s*:\s*url/);
+  // The Android app and, since 2026-10-28, the website (wholeArchivesOnWeb.test.js).
+  assert.match(body, /READ_ARCHIVES_WHOLE\s*\?\s*new WholeFileSource\(url, loadWholeArchive\)\s*:\s*url/);
+  assert.match(assets, /const READ_ARCHIVES_WHOLE = Boolean\(BUILD_ENV\.VITE_OH_NATIVE \|\| BUILD_ENV\.VITE_OH_WEB\);/);
   assert.match(assets, /const loadWholeArchive = async \(url\) => \{\s*await warmPmtilesArchive\(url\);\s*const buffer = binaryValueCache\.get\(url\);/);
   assert.match(assets, /if \(!buffer\) throw new Error\(`\$\{url\} was released while it was being read\.`\);\s*return buffer;/);
 });
@@ -55,7 +57,7 @@ test("the Android build opens archives through it, and only the Android build", 
 test("on Android an archive MapLibre asks for first is still opened here, not by pmtiles over Range", () => {
   // pmtiles' Protocol opens any URL it was not handed as its own FetchSource.
   const assets = fs.readFileSync(new URL("./assets.js", import.meta.url), "utf8");
-  assert.match(assets, /if \(isNativeBuild\(\) && pmtilesProtocol\.tiles instanceof Map\) \{\s*const opened = pmtilesProtocol\.tiles;\s*const lookup = opened\.get\.bind\(opened\);\s*opened\.get = \(url\) => lookup\(url\) \?\? getPmtilesArchive\(url\);/);
+  assert.match(assets, /if \(\(isNativeBuild\(\) \|\| READ_ARCHIVES_WHOLE\) && pmtilesProtocol\.tiles instanceof Map\) \{\s*const opened = pmtilesProtocol\.tiles;\s*const lookup = opened\.get\.bind\(opened\);\s*opened\.get = \(url\) => lookup\(url\) \?\? getPmtilesArchive\(url\);/);
   const protocol = fs.readFileSync(new URL("../../node_modules/pmtiles/dist/esm/index.js", import.meta.url), "utf8");
   assert.match(protocol, /this\.tiles\.get\(/, "pmtiles still looks archives up in Protocol.tiles");
 });
