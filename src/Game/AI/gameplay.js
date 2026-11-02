@@ -177,7 +177,7 @@ import { filterBoundLedgerUpdatesToKeptEvents } from "./ledgerEventBinding.js";
 import { createTurnReplay, replayAnswer } from "./heldTurnReplay.js";
 import { parkedTurnRecord, restoreParkedTurn } from "./parkedTurn.js";
 import { applyBoardCarriers } from "./boardPassApply.js";
-import { eventReactionAfterFailure, reactionSpeakerWithContext } from "./eventReactionRetry.js";
+import { eventReactionAfterFailure } from "./eventReactionRetry.js";
 import { formalAgendaProposals } from "./formalAgenda.js";
 import { abandonWorkerJob, createWorkerFailureStreak } from "./statsWorkerJobs.js";
 import { chatParticipantKey, foldGeneratedChatsIntoStorage, isLifecycleNegotiationChat, logGeneratedChat } from "./chatFold.js";
@@ -475,7 +475,9 @@ import {
 } from "./institutionAutonomy.js";
 import { buildIdleInstitutionRoutingContext, resolveIdleInstitutionRoute } from "./institutionIdleRouting.js";
 import {
+  GOVERNMENT_BACKGROUND_FUNCTION,
   buildIdleDiplomacyPoliticalDecisionSet,
+  idleDiplomacyLookups,
   idleDiplomacyPoliticalContextText,
   idleDiplomacySpeakerHasContext,
 } from "./idlePoliticalDiplomacyContext.js";
@@ -3444,7 +3446,8 @@ This live instruction supersedes older frozen country-stat prompts and all earli
 
   // Lookup functions: tell the model they exist and what they are for. Last,
   // so it stands next to the output contract rather than under the campaign.
-  if (!jumpTask && Array.isArray(lookups?.tools) && lookups.tools.length) {
+  // (government_background is no lookup: the list of governments says what it is for.)
+  if (!jumpTask && Array.isArray(lookups?.tools) && lookups.tools.some((tool) => tool?.name !== GOVERNMENT_BACKGROUND_FUNCTION)) {
     systemPrompt = `${systemPrompt}\n\n${LOOKUP_DIRECTIVE}`;
   }
 
@@ -20142,8 +20145,14 @@ export const processPendingEventOutreach = async ({ debug = false } = {}) => {
       "If you write to a polity already in an open thread, the note is appended there. Reply to what was actually said; never restart the conversation or parrot an existing message.",
     ].join("\n");
 
-    const politicalDecisionSet = buildIdleDiplomacyPoliticalDecisionSet(bundle, { event, maxActors: 6 });
-    const politicalDecisionContext = idleDiplomacyPoliticalContextText(politicalDecisionSet);
+    // Every government that may write, the most relevant first with their
+    // background; any other's is fetched with government_background
+    // (idlePoliticalDiplomacyContext.js).
+    const politicalDecisionSet = buildIdleDiplomacyPoliticalDecisionSet(bundle, { event });
+    const reactionLookups = idleDiplomacyLookups(buildTaskLookups(bundle), { world: bundle.world, decisionSet: politicalDecisionSet, canFetch: !savingRequests() });
+    const politicalDecisionContext = idleDiplomacyPoliticalContextText(politicalDecisionSet, {
+      canFetch: Boolean(reactionLookups?.tools?.some((tool) => tool?.name === GOVERNMENT_BACKGROUND_FUNCTION)),
+    });
     const variables = {
       ...(await buildTemplateVariables(bundle, { taskKey: "idleDiplomacy", lookups: true })),
       eventDiplomaticReactionContext: eventReactionPromptText(event, bundle.game?.country),
@@ -20152,7 +20161,7 @@ export const processPendingEventOutreach = async ({ debug = false } = {}) => {
     let payload;
     try {
       ({ payload } = await runJsonTask("idleDiplomacy", {
-        lookups: buildTaskLookups(bundle),
+        lookups: reactionLookups,
         userMessage:
           "Evaluate the supplied canonical event once. Decide whether one AI-controlled polity or a genuinely joint small group would naturally send the player a diplomatic note about it right now, or whether silence is the natural outcome. Return unitOps as an empty array and no sighting."
           + `\n\n${noteVoiceText(normalizeString(bundle.game?.country))}`
@@ -20166,24 +20175,15 @@ export const processPendingEventOutreach = async ({ debug = false } = {}) => {
             return "$.chat.countries must contain at least one known non-player polity (or chat must be null).";
           }
           const speaker = normalizeString(candidate.chat.speaker) || normalizeString(countries[0]?.name || countries[0]?.code);
-          const hasContext = (name) => idleDiplomacySpeakerHasContext(bundle.world, name, politicalDecisionSet);
-          if (!hasContext(speaker)) {
+          // A government writes only with its background, in the list or fetched with
+          // government_background in this request. On the last attempt one without
+          // it sends nothing: the letter is never put under another government's name.
+          if (!idleDiplomacySpeakerHasContext(bundle.world, speaker, politicalDecisionSet)) {
             if (!finalAttempt) {
-              return "$.chat.speaker must be one of the governments supplied in PRIVATE POLITICAL DECISION CONTEXT, or chat must be null.";
+              return `$.chat.speaker must be a government whose background the list gives or that you fetched with ${GOVERNMENT_BACKGROUND_FUNCTION}, or chat must be null.`;
             }
-            // The last chance: an invited government that has its context
-            // speaks instead, and with none the reaction is silence rather than
-            // one more failed request (eventReactionRetry.js).
-            const stand = reactionSpeakerWithContext(
-              speaker,
-              countries.map((country) => normalizeString(country?.name || country?.code)),
-              hasContext,
-            );
-            if (!stand) {
-              candidate.chat = null;
-              return "";
-            }
-            candidate.chat.speaker = stand;
+            candidate.chat = null;
+            return "";
           }
           return finalAttempt ? "" : validateChatOpener(candidate.chat, "$.chat");
         },
@@ -21232,8 +21232,14 @@ export const maybeSendIdleDiplomacy = async () => {
     if (Math.random() >= idlePulseBackoff.share(fingerprint)) return null;
     const variables = await buildTemplateVariables(bundle, { taskKey: "idleDiplomacy", lookups: true });
     const institutionRoutingContext = buildIdleInstitutionRoutingContext(bundle.world, bundle.game.country);
-    const politicalDecisionSet = buildIdleDiplomacyPoliticalDecisionSet(bundle, { maxActors: 6 });
-    const politicalDecisionContext = idleDiplomacyPoliticalContextText(politicalDecisionSet);
+    // Every government that may write, the most relevant first with their
+    // background; any other's is fetched with government_background
+    // (idlePoliticalDiplomacyContext.js).
+    const politicalDecisionSet = buildIdleDiplomacyPoliticalDecisionSet(bundle);
+    const pulseLookups = idleDiplomacyLookups(buildTaskLookups(bundle), { world: bundle.world, decisionSet: politicalDecisionSet, canFetch: !savingRequests() });
+    const politicalDecisionContext = idleDiplomacyPoliticalContextText(politicalDecisionSet, {
+      canFetch: Boolean(pulseLookups?.tools?.some((tool) => tool?.name === GOVERNMENT_BACKGROUND_FUNCTION)),
+    });
     // The wars of the player's enemies and of those fighting beside it, by their
     // own figures (warStatsPrompt.js): an ally running short may write to ask
     // for help, a beaten enemy to seek terms. No request of its own.
@@ -21267,7 +21273,7 @@ export const maybeSendIdleDiplomacy = async () => {
       + " write, return {\"chat\": null}.",
     ].join("\n");
     const { payload } = await runJsonTask("idleDiplomacy", {
-      lookups: buildTaskLookups(bundle),
+      lookups: pulseLookups,
       requestKind: BACKGROUND_REQUEST,
       userMessage: "A quiet moment between rounds. Decide whether any single polity would send the player a short diplomatic note right now, and whether any forces would visibly move."
         + `\n\n${noteVoiceText(bundle.game.country)}`
@@ -21278,13 +21284,23 @@ export const maybeSendIdleDiplomacy = async () => {
         + "\n\nReturn JSON only.",
       validatePayload: async (candidate, { finalAttempt } = {}) => {
         if (candidate?.chat == null) return "";
-        const countries = await resolveInvitees(candidate.chat.countries, bundle.world);
+        const countries = withoutPlayerParticipant(
+          await resolveInvitees(candidate.chat.countries, bundle.world),
+          bundle.game.country,
+        );
         if (countries.length === 0) {
-          return "$.chat.countries must contain at least one known polity (or chat must be null).";
+          return "$.chat.countries must contain at least one known non-player polity (or chat must be null).";
         }
         const speaker = normalizeString(candidate.chat.speaker) || normalizeString(countries[0]?.name || countries[0]?.code);
+        // A government writes only with its background, in the list or fetched with
+        // government_background in this request. On the last attempt one without
+        // it sends nothing: the letter is never put under another government's name.
         if (!idleDiplomacySpeakerHasContext(bundle.world, speaker, politicalDecisionSet)) {
-          return "$.chat.speaker must be one of the governments supplied in PRIVATE POLITICAL DECISION CONTEXT, or chat must be null.";
+          if (!finalAttempt) {
+            return `$.chat.speaker must be a government whose background the list gives or that you fetched with ${GOVERNMENT_BACKGROUND_FUNCTION}, or chat must be null.`;
+          }
+          candidate.chat = null;
+          return "";
         }
         const requestedInstitution = normalizeString(candidate.chatInstitutionId);
         if (requestedInstitution) {
