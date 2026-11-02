@@ -22,6 +22,7 @@ uniform bool styled = false;
 uniform int columns = 1024;
 uniform int selected = -1;
 uniform float land_alpha = 0.5;
+uniform bool editor = false;
 varying vec4 tint;
 vec3 unpack_rgb(float packed) {
 	float value = floor(packed + 0.5);
@@ -39,7 +40,7 @@ void vertex() {
 		}
 		alpha = min(1.0, land_alpha * style.g);
 	}
-	tint = vec4(c.rgb, c.a < 0.5 ? 0.0 : alpha);
+	tint = editor ? c : vec4(c.rgb, c.a < 0.5 ? 0.0 : alpha);
 }
 void fragment() {
 	COLOR = tint;
@@ -58,11 +59,15 @@ uniform int columns = 1024;
 uniform float zoom_level = 2.0;
 uniform float pixel_world = 1.0;
 uniform bool shadow = false;
+uniform bool editor = false;
+uniform sampler2D editor_style : filter_nearest;
+uniform int editor_rows = 1;
 varying vec4 tint;
 varying float edge;
 varying float core;
 varying float soft;
 varying float outset;
+varying float twice;
 vec3 owner_of(int region) {
 	return texelFetch(owner_ids, ivec2(region % columns, region / columns), 0).rgb;
 }
@@ -93,6 +98,12 @@ float shadow_blur(float z) {
 	if (z <= 12.0) return mix(1.15, 1.5, (z - 6.0) / 6.0);
 	return 1.5;
 }
+float editor_rank(vec4 look) {
+	if (look.a < 0.5) return -1.0e9;
+	if (look.b > 1.5) return 3.0e6;
+	if (look.b > 0.5) return 2.0e6;
+	return look.g;
+}
 float stops5(float z, float a, float b, float c, float d, float e) {
 	if (z <= 1.0) return a;
 	if (z <= 3.0) return mix(a, b, (z - 1.0) / 2.0);
@@ -109,8 +120,31 @@ void vertex() {
 	float width = 0.0;
 	tint = vec4(0.0);
 	soft = 1.0;
-	bool country = b >= 0 && distance(owner_of(a), owner_of(b)) > 0.001;
-	if (country) {
+	twice = 0.0;
+	bool country = !editor && b >= 0 && distance(owner_of(a), owner_of(b)) > 0.001;
+	if (editor) {
+		if (!shadow) {
+			vec4 look = texelFetch(editor_style, ivec2(a % columns, a / columns + editor_rows), 0);
+			vec4 stroke = texelFetch(editor_style, ivec2(a % columns, a / columns), 0);
+			float rank = editor_rank(look);
+			if (b >= 0) {
+				vec4 other_look = texelFetch(editor_style, ivec2(b % columns, b / columns + editor_rows), 0);
+				float other_rank = editor_rank(other_look);
+				if (rank > -1.0e8 && other_rank > -1.0e8 && look.b < 0.5 && other_look.b < 0.5) {
+					twice = 1.0;
+				}
+				if (other_rank > rank) {
+					look = other_look;
+					stroke = texelFetch(editor_style, ivec2(b % columns, b / columns), 0);
+					rank = other_rank;
+				}
+			}
+			if (rank > -1.0e8) {
+				width = look.r;
+				tint = stroke;
+			}
+		}
+	} else if (country) {
 		if (shadow) {
 			width = stops5(zoom_level, 1.8, 2.5, 3.6, 4.7, 5.8);
 			tint = vec4(1.0 / 255.0, 4.0 / 255.0, 8.0 / 255.0, 0.72 * 0.52);
@@ -146,6 +180,9 @@ void vertex() {
 void fragment() {
 	float d = abs(edge);
 	float coverage = clamp((outset - d) / soft, 0.0, 1.0);
+	if (twice > 0.5) {
+		coverage = 1.0 - (1.0 - coverage) * (1.0 - coverage);
+	}
 	COLOR = vec4(tint.rgb, tint.a * coverage);
 }
 """
@@ -312,7 +349,7 @@ func fit_lonlat_bounds(bounds: Array, max_level := 6.8, duration := 1.8) -> void
 	var padding := clampf(roundf(short_side * 0.12), 16.0, 80.0) if short_side > 0.0 else 40.0
 	var span := (bottom_right - top_left).abs()
 	var fit := minf((view.x - 2.0 * padding) / maxf(span.x, 0.0001), (view.y - 2.0 * padding) / maxf(span.y, 0.0001))
-	var target_zoom: float = clamp(minf(fit, pow(2.0, max_level) / 8.0), MIN_ZOOM, MAX_ZOOM)
+	var target_zoom: float = clamp(minf(fit, pow(2.0, max_level) / 8.0), zoom_floor(), zoom_ceiling())
 	var target_center := (top_left + bottom_right) * 0.5
 	var start_center := camera.position
 	target_center.x += WORLD_WIDTH * round((start_center.x - target_center.x) / WORLD_WIDTH)
@@ -371,6 +408,8 @@ func _on_baked(result: Dictionary) -> void:
 	for material in [_border_material, _shadow_material]:
 		material.set_shader_parameter("owner_ids", _ids_texture)
 		material.set_shader_parameter("columns", COLUMNS)
+	if editor_mode:
+		_editor_make_style()
 
 	var fill_arrays := []
 	fill_arrays.resize(Mesh.ARRAY_MAX)
@@ -552,6 +591,8 @@ func _update_labels() -> void:
 func _after_camera_move() -> void:
 	camera.position.x = fposmod(camera.position.x, WORLD_WIDTH)
 	camera.position.y = clamp(camera.position.y, 0.0, WORLD_WIDTH)
+	if editor_mode:
+		_editor_constrain()
 	if extras:
 		extras.call("constrain_camera")
 	var level := zoom_level()
@@ -586,7 +627,7 @@ func _fill_opacity(level: float) -> float:
 func _zoom_at(screen_point: Vector2, factor: float) -> void:
 	var half := get_viewport_rect().size * 0.5
 	var before := camera.position + (screen_point - half) / camera.zoom.x
-	var next_zoom: float = clamp(camera.zoom.x * factor, MIN_ZOOM, MAX_ZOOM)
+	var next_zoom: float = clamp(camera.zoom.x * factor, zoom_floor(), zoom_ceiling())
 	camera.zoom = Vector2.ONE * next_zoom
 	var after := camera.position + (screen_point - half) / next_zoom
 	camera.position += before - after
@@ -1021,25 +1062,72 @@ func editor_region_count() -> int:
 	return _region_count if _ready_to_draw else 0
 
 
-func editor_set_region_color(index: int, color: Color, commit := true) -> void:
-	if not _ready_to_draw or _colors_image == null or index < 0 or index >= _region_count:
-		return
-	_colors_image.set_pixel(index % COLUMNS, index / COLUMNS, color)
-	if commit:
-		_colors_texture.update(_colors_image)
-
-
-func editor_set_region_colors(colors: PackedColorArray) -> void:
-	if not _ready_to_draw or _colors_image == null:
-		return
-	for index in range(mini(colors.size(), _region_count)):
-		_colors_image.set_pixel(index % COLUMNS, index / COLUMNS, colors[index])
-	_colors_texture.update(_colors_image)
-
-
 func editor_commit_colors() -> void:
 	if _colors_texture and _colors_image:
 		_colors_texture.update(_colors_image)
+	if _editor_style_texture and _editor_style_image:
+		_editor_style_texture.update(_editor_style_image)
+
+
+const EDITOR_MIN_ZOOM := 0.125
+const EDITOR_MAX_ZOOM := 65536.0
+var editor_mode := false
+var _editor_style_image: Image
+var _editor_style_texture: ImageTexture
+var _editor_rows := 1
+
+
+func editor_enable() -> void:
+	editor_mode = true
+	_fill_material.set_shader_parameter("editor", true)
+	for material in [_border_material, _shadow_material]:
+		material.set_shader_parameter("editor", true)
+	if basemap and basemap.has_method("set_editor_plain"):
+		basemap.set_editor_plain(true)
+	if _ready_to_draw:
+		_editor_make_style()
+
+
+func _editor_make_style() -> void:
+	_editor_rows = maxi(1, int(ceil(float(maxi(_region_count, 1)) / COLUMNS)))
+	_editor_style_image = Image.create_empty(COLUMNS, _editor_rows * 2, false, Image.FORMAT_RGBAF)
+	_editor_style_image.fill(Color(0, 0, 0, 0))
+	_editor_style_texture = ImageTexture.create_from_image(_editor_style_image)
+	for material in [_border_material, _shadow_material]:
+		material.set_shader_parameter("editor_style", _editor_style_texture)
+		material.set_shader_parameter("editor_rows", _editor_rows)
+
+
+func editor_set_region_style(index: int, fill: Color, stroke: Color, look: Color) -> void:
+	if not _ready_to_draw or _colors_image == null or _editor_style_image == null or index < 0 or index >= _region_count:
+		return
+	var x := index % COLUMNS
+	var y := index / COLUMNS
+	_colors_image.set_pixel(x, y, fill)
+	_editor_style_image.set_pixel(x, y, stroke)
+	_editor_style_image.set_pixel(x, y + _editor_rows, look)
+
+
+func zoom_floor() -> float:
+	if not editor_mode:
+		return MIN_ZOOM
+	var view := get_viewport_rect().size
+	return maxf(EDITOR_MIN_ZOOM, maxf(view.x, view.y) / WORLD_WIDTH)
+
+
+func zoom_ceiling() -> float:
+	return EDITOR_MAX_ZOOM if editor_mode else MAX_ZOOM
+
+
+func _editor_constrain() -> void:
+	var zoom := clampf(camera.zoom.x, zoom_floor(), zoom_ceiling())
+	if zoom != camera.zoom.x:
+		camera.zoom = Vector2.ONE * zoom
+	var half := get_viewport_rect().size.y * 0.5 / zoom
+	if half * 2.0 >= WORLD_WIDTH:
+		camera.position.y = WORLD_WIDTH * 0.5
+	else:
+		camera.position.y = clampf(camera.position.y, half, WORLD_WIDTH - half)
 
 
 func editor_set_regions_visible(shown: bool) -> void:
@@ -1059,7 +1147,7 @@ func editor_pan(screen_delta: Vector2) -> void:
 
 func editor_set_view(world_centre: Vector2, zoom: float) -> void:
 	camera.position = world_centre
-	camera.zoom = Vector2.ONE * clampf(zoom, MIN_ZOOM, MAX_ZOOM)
+	camera.zoom = Vector2.ONE * clampf(zoom, zoom_floor(), zoom_ceiling())
 	_after_camera_move()
 
 

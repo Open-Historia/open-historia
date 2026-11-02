@@ -23,7 +23,35 @@ signal draw_finished(ring: Array)
 signal vertex_edit(op: String, target: String, path: Array, index: int, lonlat: Vector2, alt: bool)
 signal hover_moved(lonlat: Vector2)
 
-const NEUTRAL := Color8(58, 60, 66)
+const NEUTRAL := Color8(130, 130, 138)
+const ACCENT_STROKE := Color8(231, 231, 234)
+const GROUP_TINT_ALPHA := 0.3
+const FALLBACK_TYPE := {"id": "land", "opacity": 0.55, "unownedOpacity": 0.25, "zIndex": 1, "strokeWidth": 1.5, "strokeColor": [0, 0, 0], "strokeOpacity": 1.0, "zoomSettings": [{"minZoom": 0, "maxZoom": 24}]}
+const PAINT_STROKE := Color(1, 1, 1, 0.88)
+const PAINT_FILL_ERASE := Color(15 / 255.0, 23 / 255.0, 42 / 255.0, 0.72)
+const PAINT_FILL_UNCOLOURED := Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.68)
+const PAINT_FILL_ALPHA := 0.70
+const LABEL_MIN_ZOOM := 4.0
+const SKETCH_BLUE := Color8(0, 153, 255)
+const SKETCH_FILL := Color(1, 1, 1, 0.5)
+const BOX_FILL := Color(1, 1, 1, 0.75)
+const WHEEL_DELTA_PER_ZOOM := 300.0
+const WHEEL_TIMEOUT_MS := 80
+const ZOOM_DURATION_MS := 250
+const BOX_ZOOM_DURATION_MS := 200
+const KINETIC_DECAY := -0.005
+const KINETIC_MIN_VELOCITY := 0.05
+const KINETIC_DELAY_MS := 100
+const KINETIC_DURATION_MS := 500
+const BOX_ZOOM_TOOLS := ["select", "pan", "dissolve", "delete", "feature", "marker", "unit", "modify", "border", "move"]
+const MARKER_GLYPHS := [
+	["\\b(capital|city|town|settlement|metropolis|municipality)\\b", "●"],
+	["\\b(military|army|naval|defen[cs]e|command|headquarters|hq|base|fort|fortress|bunker|silo|garrison|missile|radar|airfield|airbase|barracks|outpost|citadel|arsenal|testing range)\\b", "▲"],
+	["\\b(lithium|resource|basin|mine|mining|deposit|oil ?field|gas ?field|coal ?field|ore ?field|quarry|well)\\b", "◆"],
+	["\\b(port|harbou?r|terminal|logistics|rail|railway|station|airport|bridge|canal|corridor|transit|pipeline|grid|storage|hub)\\b", "■"],
+	["\\b(factory|plant|works|industrial|manufactur|laborator|laboratory|research|science|scientific|technology|institute|university|energy|power|reactor)\\b", "✦"],
+	["\\b(embassy|consulate|mission|secretariat|liaison|administration|diplomatic)\\b", "◇"],
+]
 const UNIT_GLYPH := {"infantry": "I", "armor": "A", "air": "✈", "naval": "N", "artillery": "R", "garrison": "G"}
 const WORLD := 4096.0
 const REVIEW_COLORS := {"pending": Color("#f59e0b"), "conflict": Color("#f97316"), "accepted": Color("#22c55e"), "rejected": Color(148 / 255.0, 163 / 255.0, 184 / 255.0, 0.75), "proposed": Color("#38bdf8")}
@@ -36,6 +64,19 @@ var centroids: PackedVector2Array = []
 var areas: PackedFloat32Array = []
 var index_of := {}
 var fills: Array = []
+var group_fills: Array = []
+var type_index: Array = []
+var type_keys: Array = []
+var types_by_id := {}
+var label_points: Array = []
+var _painted := {}
+var _band_key := ""
+var _wheel_total := 0.0
+var _wheel_started := -1
+var _wheel_anchor := Vector2.ZERO
+var _anim := {}
+var _kinetic: Array = []
+var _zoom_box: PanelContainer
 var owner_index: Array = []
 var owner_keys: Array = []
 var selection := {}
@@ -66,7 +107,7 @@ var _edit_hover := {}
 var _halo: Variant = null
 var paint_owner := ""
 var paint_only := "*"
-var paint_color := NEUTRAL
+var paint_color := PAINT_FILL_ERASE
 var ready_to_draw := false
 var _container: SubViewportContainer
 var _viewport: SubViewport
@@ -111,6 +152,7 @@ func setup(tiles_cache: String) -> void:
 	map = MapView.new()
 	_viewport.add_child(map)
 	map.input_enabled = false
+	map.editor_enable()
 	region_overlays = WorkshopRegionOverlays.new()
 	map.editor_set_top_layer(region_overlays)
 	map.basemap.cache_dir = tiles_cache
@@ -126,6 +168,38 @@ func setup(tiles_cache: String) -> void:
 	_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
 	_overlay.focus_mode = Control.FOCUS_CLICK
 	add_child(_overlay)
+	_build_zoom_box()
+
+
+func _build_zoom_box() -> void:
+	_zoom_box = PanelContainer.new()
+	_zoom_box.add_theme_stylebox_override("panel", UI.box(Color(18 / 255.0, 20 / 255.0, 26 / 255.0, 0.75), Color(1, 1, 1, 0.12), 8, 1, Vector4(4, 4, 4, 4)))
+	_zoom_box.position = Vector2(12, 12)
+	_zoom_box.mouse_filter = Control.MOUSE_FILTER_STOP
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 4)
+	_zoom_box.add_child(column)
+	for spec in [["+", "Zoom in", 1.0], ["–", "Zoom out", -1.0]]:
+		var button := Button.new()
+		button.text = str(spec[0])
+		button.tooltip_text = str(spec[1])
+		button.focus_mode = Control.FOCUS_NONE
+		button.custom_minimum_size = Vector2(28, 28)
+		button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+		var idle := UI.box(Color(1, 1, 1, 0.08), Color(0, 0, 0, 0), 6, 0, Vector4(0, 0, 0, 0))
+		var hover := UI.box(Color(1, 1, 1, 0.22), Color(0, 0, 0, 0), 6, 0, Vector4(0, 0, 0, 0))
+		for state in ["normal", "focus", "disabled"]:
+			button.add_theme_stylebox_override(state, idle)
+		for state in ["hover", "pressed", "hover_pressed"]:
+			button.add_theme_stylebox_override(state, hover)
+		button.add_theme_font_override("font", UI.font(700))
+		button.add_theme_font_size_override("font_size", 18)
+		for state in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_hover_pressed_color"]:
+			button.add_theme_color_override(state, Color(1, 1, 1))
+		var delta := float(spec[2])
+		button.pressed.connect(func() -> void: zoom_by(delta, Vector2(-1, -1), ZOOM_DURATION_MS))
+		column.add_child(button)
+	add_child(_zoom_box)
 
 
 func load_regions(path: String) -> void:
@@ -163,34 +237,149 @@ func set_regions(part: Dictionary) -> void:
 	owner_index = part.get("ownerIndex", [])
 	owner_keys = part.get("owners", [])
 	fills = part.get("fills", [])
+	group_fills = part.get("groupFills", [])
+	type_index = part.get("typeIndex", [])
+	type_keys = part.get("typeKeys", [])
+	_painted = {}
 	map.set_state({"owners": owner_index, "ownerNames": part.get("owners", []), "ownerColors": part.get("ownerColors", [])})
 	set_names(part.get("names", {}))
 	apply_fills()
 
 
-func fill_color(index: int) -> Color:
+func set_types(types: Array) -> void:
+	var by_id := {}
+	for entry in types:
+		if entry is Dictionary:
+			by_id[str((entry as Dictionary).get("id", ""))] = entry
+	if by_id == types_by_id:
+		return
+	types_by_id = by_id
+	_band_key = ""
+	apply_fills()
+	_overlay.queue_redraw()
+
+
+func set_label_points(points: Array) -> void:
+	label_points = points
+	_overlay.queue_redraw()
+
+
+func region_type(index: int) -> Dictionary:
+	var at := int(type_index[index]) if index >= 0 and index < type_index.size() and type_index[index] != null else -1
+	var key := str(type_keys[at]) if at >= 0 and at < type_keys.size() else "land"
+	var found: Variant = types_by_id.get(key)
+	return found if found is Dictionary else FALLBACK_TYPE
+
+
+static func _number(row: Dictionary, key: String, fallback: float) -> float:
+	var value: Variant = row.get(key)
+	return float(value) if (value is float or value is int) else fallback
+
+
+static func zoom_band(type: Dictionary, zoom: float) -> Variant:
+	var bands: Variant = type.get("zoomSettings")
+	if not (bands is Array) or (bands as Array).is_empty():
+		return {}
+	for entry in bands:
+		var band: Dictionary = entry if entry is Dictionary else {}
+		if zoom >= _number(band, "minZoom", 0.0) and zoom <= _number(band, "maxZoom", 24.0):
+			return band
+	return null
+
+
+static func _rgb(value: Variant, fallback: Color) -> Color:
+	if value is Array and (value as Array).size() >= 3:
+		return Color8(int(value[0]), int(value[1]), int(value[2]))
+	return fallback
+
+
+static func _packed(value: int) -> Color:
+	return Color8((value >> 16) & 255, (value >> 8) & 255, value & 255)
+
+
+static func over(top: Color, bottom: Color) -> Color:
+	var alpha := top.a + bottom.a * (1.0 - top.a)
+	if alpha <= 0.0:
+		return Color(bottom.r, bottom.g, bottom.b, 0.0)
+	var mix := func(a: float, b: float) -> float: return (a * top.a + b * bottom.a * (1.0 - top.a)) / alpha
+	return Color(mix.call(top.r, bottom.r), mix.call(top.g, bottom.g), mix.call(top.b, bottom.b), alpha)
+
+
+func region_shown(index: int) -> bool:
+	if index < 0 or index >= fills.size() or fills[index] == null or int(fills[index]) < 0:
+		return false
+	return zoom_band(region_type(index), ol_zoom()) != null
+
+
+func region_look(index: int) -> Array:
+	var hidden := [Color(0, 0, 0, 0), Color(0, 0, 0, 0), Color(0, 0, 0, 0)]
 	var value := int(fills[index]) if index < fills.size() and fills[index] != null else -1
-	var color := NEUTRAL
-	if value >= 0:
-		color = Color8((value >> 16) & 255, (value >> 8) & 255, value & 255)
+	if value < 0:
+		return hidden
+	var type := region_type(index)
+	var found: Variant = zoom_band(type, ol_zoom())
+	if found == null:
+		return hidden
+	var band: Dictionary = found
+	var owned := index < owner_index.size() and owner_index[index] != null and int(owner_index[index]) >= 0
+	var base := _packed(value)
+	var alpha := _number(band, "opacity", _number(type, "opacity", 0.55)) if owned else _number(type, "unownedOpacity", 0.25)
+	var tinted := base
 	if review_tint.has(index):
-		color = color.lerp(Color(review_tint[index], 1.0), 0.15)
+		tinted = base.lerp(Color(review_tint[index], 1.0), 0.15)
+	var fill := Color(tinted, alpha)
+	var group := int(group_fills[index]) if index < group_fills.size() and group_fills[index] != null else -1
+	if group >= 0:
+		fill = over(Color(_packed(group), GROUP_TINT_ALPHA), fill)
+	var stroke_opacity := _number(type, "strokeOpacity", 1.0)
+	var stroke := Color(_rgb(type.get("strokeColor"), Color(0, 0, 0)), stroke_opacity)
+	var width := _number(band, "strokeWidth", _number(type, "strokeWidth", 1.5))
+	var state := 0.0
+	if striped.has(index):
+		fill.a = 0.0
 	if selection.has(index):
-		color = color.lerp(Color(1, 1, 1), 0.38)
-	elif striped.has(index):
-		color.a = 0.0
-	return color
+		var a := clampf(alpha, 0.0, 1.0)
+		var lifted := 0.0 if a >= 1.0 else maxf(0.0, 1.0 - (1.0 - minf(1.0, a + 0.22)) / (1.0 - a))
+		if not striped.has(index):
+			fill = over(Color(base, lifted), fill)
+		stroke = Color(ACCENT_STROKE, stroke_opacity)
+		width = maxf(2.25, width + 1.0)
+		state = 1.0
+	if _painted.has(index):
+		fill = over(paint_color, fill)
+		stroke = PAINT_STROKE
+		width = 1.25
+		state = 2.0
+	return [fill, stroke, Color(width, _number(type, "zIndex", 1.0), state, 1.0)]
+
+
+func fill_color(index: int) -> Color:
+	return region_look(index)[0]
+
+
+func _put(index: int) -> void:
+	var look := region_look(index)
+	map.editor_set_region_style(index, look[0], look[1], look[2])
+
+
+func _band_signature() -> String:
+	var zoom := ol_zoom()
+	var parts: PackedStringArray = []
+	for key in type_keys:
+		var found: Variant = types_by_id.get(str(key))
+		var band: Variant = zoom_band(found if found is Dictionary else FALLBACK_TYPE, zoom)
+		parts.append("-" if band == null else JSON.stringify(band))
+	return "|".join(parts)
 
 
 func apply_fills() -> void:
 	var count := mini(ids.size(), map.editor_region_count()) if ready_to_draw else 0
 	if count <= 0:
 		return
-	var colors := PackedColorArray()
-	colors.resize(count)
+	_band_key = _band_signature()
 	for index in range(count):
-		colors[index] = fill_color(index)
-	map.editor_set_region_colors(colors)
+		_put(index)
+	map.editor_commit_colors()
 	set_regions_visible(bool(layers.get("regions", true)))
 
 
@@ -221,14 +410,15 @@ func set_selection(indices: Array) -> void:
 	for key in selection:
 		touched[key] = true
 	for key in touched:
-		map.editor_set_region_color(int(key), fill_color(int(key)), false)
+		_put(int(key))
 	map.editor_commit_colors()
 
 
 func preview_paint(index: int) -> void:
 	if not ready_to_draw:
 		return
-	map.editor_set_region_color(index, paint_color, false)
+	_painted[index] = true
+	_put(index)
 	_dirty_fills = true
 
 
@@ -236,6 +426,16 @@ func _process(_delta: float) -> void:
 	if _dirty_fills and map:
 		_dirty_fills = false
 		map.editor_commit_colors()
+	if _wheel_started >= 0 and Time.get_ticks_msec() - _wheel_started >= WHEEL_TIMEOUT_MS:
+		var levels := -clampf(_wheel_total, -WHEEL_DELTA_PER_ZOOM, WHEEL_DELTA_PER_ZOOM) / WHEEL_DELTA_PER_ZOOM
+		var anchor := _wheel_anchor
+		_wheel_total = 0.0
+		_wheel_started = -1
+		zoom_by(levels, anchor, ZOOM_DURATION_MS)
+	if not _anim.is_empty():
+		_step_animation()
+	if ready_to_draw and not type_keys.is_empty() and _band_signature() != _band_key:
+		apply_fills()
 	if map and map.camera and _overlay:
 		var view := Vector3(map.camera.position.x, map.camera.position.y, map.camera.zoom.x)
 		if view != _last_view:
@@ -273,7 +473,10 @@ func screen_of(lonlat: Vector2) -> Vector2:
 func pick(point: Vector2) -> int:
 	if not ready_to_draw:
 		return -1
-	return int(map.baker.pick(screen_to_world(point)))
+	var index := int(map.baker.pick(screen_to_world(point)))
+	if index >= 0 and not type_keys.is_empty() and not region_shown(index):
+		return -1
+	return index
 
 
 func ol_zoom() -> float:
@@ -285,16 +488,27 @@ func meters_per_pixel() -> float:
 
 
 func fit_bounds(bounds: Array, max_level := 8.0, duration := 0.35) -> void:
-	if bounds.size() < 2:
+	if bounds.size() < 2 or not ready_to_draw:
 		return
-	map.fit_lonlat_bounds(bounds, max_level - 1.0, duration)
-	_overlay.queue_redraw()
+	var south_west: Array = bounds[0]
+	var north_east: Array = bounds[1]
+	var west := float(south_west[0])
+	var east := float(north_east[0])
+	if east < west:
+		east += 360.0
+	var top_left := lonlat_to_world(Vector2(west, float(north_east[1])))
+	var bottom_right := lonlat_to_world(Vector2(east, float(south_west[1])))
+	if east > 180.0:
+		bottom_right.x = (east + 180.0) / 360.0 * WORLD
+	var view := Vector2(_viewport.size)
+	var span := (bottom_right - top_left).abs()
+	var fit := minf((view.x - 160.0) / maxf(span.x, 0.0001), (view.y - 160.0) / maxf(span.y, 0.0001))
+	var zoom := minf(maxf(fit, 0.0001), pow(2.0, max_level) / 16.0)
+	_animate((top_left + bottom_right) * 0.5, zoom, int(duration * 1000.0), false)
 
 
-func locate(lonlat: Vector2, ol_level := 6.0) -> void:
-	map.editor_set_view(lonlat_to_world(lonlat), pow(2.0, ol_level) / 16.0)
-	_overlay.queue_redraw()
-	view_moved.emit()
+func locate(lonlat: Vector2, ol_level := 6.0, duration_ms := 0) -> void:
+	_animate(lonlat_to_world(lonlat), pow(2.0, ol_level) / 16.0, duration_ms, false)
 
 
 func start_view() -> void:
@@ -308,9 +522,76 @@ func _pan(delta: Vector2) -> void:
 
 
 func _zoom(point: Vector2, factor: float) -> void:
+	_anim = {}
 	map.editor_zoom_at(point, factor)
 	_overlay.queue_redraw()
 	view_moved.emit()
+
+
+func zoom_by(levels: float, anchor: Vector2, duration_ms: int) -> void:
+	if not ready_to_draw or levels == 0.0:
+		return
+	var target := clampf(map.camera.zoom.x * pow(2.0, levels), map.zoom_floor(), map.zoom_ceiling())
+	_animate(map.camera.position, target, duration_ms, true, anchor)
+
+
+func _animate(center: Vector2, zoom: float, duration_ms: int, ease_out: bool, anchor := Vector2(-1, -1)) -> void:
+	_anim = {}
+	var target_zoom := clampf(zoom, map.zoom_floor(), map.zoom_ceiling())
+	var from := map.camera.position
+	var to := center
+	to.x += WORLD * round((from.x - to.x) / WORLD)
+	if duration_ms <= 0:
+		if anchor.x >= 0.0:
+			var held := screen_to_world(anchor)
+			to = held - (anchor - Vector2(_viewport.size) * 0.5) / target_zoom
+		map.editor_set_view(to, target_zoom)
+		_after_view()
+		return
+	_anim = {"start": Time.get_ticks_msec(), "duration": float(duration_ms), "from": from, "to": to, "from_res": 1.0 / map.camera.zoom.x, "to_res": 1.0 / target_zoom, "ease_out": ease_out, "anchor": anchor, "held": screen_to_world(anchor) if anchor.x >= 0.0 else Vector2.ZERO}
+
+
+func _step_animation() -> void:
+	var t := clampf(float(Time.get_ticks_msec() - int(_anim["start"])) / float(_anim["duration"]), 0.0, 1.0)
+	var e := 1.0 - pow(1.0 - t, 3.0) if bool(_anim["ease_out"]) else t * t * (3.0 - 2.0 * t)
+	var zoom := 1.0 / lerpf(float(_anim["from_res"]), float(_anim["to_res"]), e)
+	var anchor: Vector2 = _anim["anchor"]
+	var center: Vector2 = (_anim["from"] as Vector2).lerp(_anim["to"], e)
+	if anchor.x >= 0.0:
+		center = (_anim["held"] as Vector2) - (anchor - Vector2(_viewport.size) * 0.5) / zoom
+	if t >= 1.0:
+		_anim = {}
+	map.editor_set_view(center, zoom)
+	_after_view()
+
+
+func _after_view() -> void:
+	_overlay.queue_redraw()
+	view_moved.emit()
+
+
+func _kinetic_glide() -> void:
+	var now := Time.get_ticks_msec()
+	var count := _kinetic.size()
+	if count < 2:
+		return
+	var last: Array = _kinetic[count - 1]
+	if int(last[2]) < now - KINETIC_DELAY_MS:
+		return
+	var first := count - 2
+	while first > 0 and int((_kinetic[first] as Array)[2]) > now - KINETIC_DELAY_MS:
+		first -= 1
+	var start: Array = _kinetic[first]
+	var duration := float(int(last[2]) - int(start[2]))
+	if duration < 1000.0 / 60.0:
+		return
+	var moved := Vector2(float(last[0]) - float(start[0]), float(last[1]) - float(start[1]))
+	var velocity := moved.length() / duration
+	if velocity <= KINETIC_MIN_VELOCITY:
+		return
+	var distance := (KINETIC_MIN_VELOCITY - velocity) / KINETIC_DECAY
+	var target := map.camera.position - moved.normalized() * distance / map.camera.zoom.x
+	_animate(target, map.camera.zoom.x, KINETIC_DURATION_MS, true)
 
 
 func neighbour_of(point: Vector2, index: int) -> int:
@@ -799,14 +1080,17 @@ func _handle(event: InputEvent) -> void:
 		return
 	if event is InputEventMouseButton:
 		var button := event as InputEventMouseButton
-		if button.button_index == MOUSE_BUTTON_WHEEL_UP and button.pressed:
-			_zoom(button.position, 1.15)
-			return
-		if button.button_index == MOUSE_BUTTON_WHEEL_DOWN and button.pressed:
-			_zoom(button.position, 1.0 / 1.15)
+		if (button.button_index == MOUSE_BUTTON_WHEEL_UP or button.button_index == MOUSE_BUTTON_WHEEL_DOWN) and button.pressed:
+			_wheel(button)
 			return
 		if button.button_index == MOUSE_BUTTON_RIGHT or button.button_index == MOUSE_BUTTON_MIDDLE:
-			_drag = "pan" if button.pressed else ""
+			if button.pressed:
+				_anim = {}
+				_kinetic = [[button.position.x, button.position.y, Time.get_ticks_msec()]]
+				_drag = "pan"
+			elif _drag == "pan":
+				_drag = ""
+				_kinetic_glide()
 			_drag_last = button.position
 			return
 		if button.button_index != MOUSE_BUTTON_LEFT:
@@ -823,30 +1107,60 @@ func _handle(event: InputEvent) -> void:
 		_zoom(magnify.position, magnify.factor)
 	elif event is InputEventPanGesture:
 		var gesture := event as InputEventPanGesture
-		_pan(-gesture.delta * 12.0)
+		_anim = {}
+		map.editor_zoom_at(gesture.position, pow(2.0, -gesture.delta.y * 12.0 / WHEEL_DELTA_PER_ZOOM))
+		_after_view()
+
+
+func _wheel(button: InputEventMouseButton) -> void:
+	var notches := button.factor if button.factor > 0.0 else 1.0
+	var delta := (-100.0 if button.button_index == MOUSE_BUTTON_WHEEL_UP else 100.0) * notches
+	if absf(delta) < 4.0:
+		_anim = {}
+		map.editor_zoom_at(button.position, pow(2.0, -delta / WHEEL_DELTA_PER_ZOOM))
+		_after_view()
+		return
+	if _wheel_started < 0:
+		_wheel_started = Time.get_ticks_msec()
+	_wheel_total += delta
+	_wheel_anchor = button.position
 
 
 func _press(button: InputEventMouseButton) -> void:
 	_drag_start = button.position
 	_drag_last = button.position
 	_drag_distance = 0.0
+	_anim = {}
+	_kinetic = [[button.position.x, button.position.y, Time.get_ticks_msec()]]
 	if reference_adjust and _reference_press(button.position):
 		_drag = "reference"
 		return
 	if button.double_click:
+		_drag = ""
 		if tool == "draw":
 			_finish_draw()
-			_drag = ""
+			return
+		if tool in ["terrain", "fortification", "climate"]:
+			_commit_sketch()
+			return
+		if tool == "lasso":
 			return
 		if tool == "select":
 			var hit := pick(button.position)
 			if hit >= 0:
 				region_double_click.emit(hit)
-			_drag = ""
-			return
-		if tool in ["terrain", "fortification", "climate"]:
-			_commit_sketch()
-			_drag = ""
+				return
+		zoom_by(-1.0 if button.shift_pressed else 1.0, button.position, ZOOM_DURATION_MS)
+		return
+	if button.shift_pressed and tool in BOX_ZOOM_TOOLS:
+		var blocked := false
+		if tool in ["modify", "border"]:
+			blocked = not _edit_hit(button.position).is_empty()
+		elif tool == "move":
+			blocked = pick(button.position) >= 0
+		if not blocked:
+			_drag = "zoombox"
+			_box = Rect2(button.position, Vector2.ZERO)
 			return
 	match tool:
 		"paint":
@@ -957,11 +1271,12 @@ func _motion(motion: InputEventMouseMotion) -> void:
 		return
 	_drag_distance += motion.relative.length()
 	match _drag:
-		"pan":
+		"pan", "click":
+			_kinetic.append([motion.position.x, motion.position.y, Time.get_ticks_msec()])
 			_pan(motion.relative)
-		"click":
-			if _drag_distance >= 5.0:
-				_pan(motion.relative)
+		"zoombox":
+			_box = Rect2(_drag_start, motion.position - _drag_start).abs()
+			_overlay.queue_redraw()
 		"paint":
 			_touch_segment(_drag_last, motion.position)
 		"lasso":
@@ -1029,6 +1344,20 @@ func _release(button: InputEventMouseButton) -> void:
 		"click":
 			if _drag_distance < 5.0:
 				_click(button)
+			else:
+				_kinetic_glide()
+		"zoombox":
+			var area := _box
+			_box = Rect2()
+			_overlay.queue_redraw()
+			if _drag_distance < 5.0:
+				_click(button)
+			elif area.size.x * area.size.y >= 64.0:
+				var corner_a := screen_to_world(area.position)
+				var corner_b := screen_to_world(area.end)
+				var span := (corner_b - corner_a).abs()
+				var view := Vector2(_viewport.size)
+				_animate((corner_a + corner_b) * 0.5, minf(view.x / maxf(span.x, 0.0001), view.y / maxf(span.y, 0.0001)), BOX_ZOOM_DURATION_MS, true)
 		"reference":
 			_reference_drag = {}
 		"freehand":
@@ -1151,32 +1480,10 @@ func _draw_overlay(canvas: Control) -> void:
 		return
 	var view := canvas.size
 	var zoom := ol_zoom()
-	var font := UI.font(600)
+	var font := UI.font(700)
 	var bold := UI.font(700)
 	_draw_import_preview(canvas)
 	_draw_reference(canvas)
-	if layers.get("labels", true) and zoom >= 4.0:
-		var taken: Array[Rect2] = []
-		for index in range(mini(ids.size(), centroids.size())):
-			var text := region_name(index)
-			if text.is_empty():
-				continue
-			var screen := map.world_to_screen(centroids[index])
-			if screen.x < -60 or screen.y < -20 or screen.x > view.x + 60 or screen.y > view.y + 20:
-				continue
-			var width := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, 12).x
-			var box := Rect2(screen - Vector2(width * 0.5 + 2, 9), Vector2(width + 4, 16))
-			var clash := false
-			for other in taken:
-				if other.intersects(box):
-					clash = true
-					break
-			if clash:
-				continue
-			taken.append(box)
-			var at := screen + Vector2(-width * 0.5, 4)
-			canvas.draw_string_outline(font, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, 3, Color(0, 0, 0, 0.85))
-			canvas.draw_string(font, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(1, 1, 1, 0.95))
 	if show_terrain:
 		for shape in war.get("terrainAreas", []):
 			_draw_shape(canvas, "terrain", shape)
@@ -1186,16 +1493,15 @@ func _draw_overlay(canvas: Control) -> void:
 	if layers.get("fortifications", true):
 		for shape in war.get("fortifications", []):
 			_draw_shape(canvas, "fortification", shape)
-	if not review_outlines.is_empty() or not review_shapes.is_empty() or not review_points.is_empty() or not review_focus.is_empty():
-		_draw_review(canvas)
-	if not diagnostics.is_empty():
-		_draw_diagnostics(canvas)
-	if tool in ["modify", "border"] and not edit_rings.is_empty():
-		_draw_edit(canvas)
-	if tool == "draw":
-		_draw_region_sketch(canvas)
+	var taken: Array[Rect2] = []
+	if layers.get("units", true):
+		for unit in units:
+			var row: Dictionary = unit
+			var screen := screen_of(Vector2(float(row.get("lng", 0)), float(row.get("lat", 0))))
+			if screen.x < -30 or screen.y < -30 or screen.x > view.x + 30 or screen.y > view.y + 30:
+				continue
+			_draw_unit(canvas, row, screen, zoom, bold, taken)
 	if layers.get("features", true) or not feature_selection.is_empty():
-		var taken_labels: Array[Rect2] = []
 		for feature in features:
 			var row: Dictionary = feature
 			var coord: Variant = row.get("coord")
@@ -1208,43 +1514,114 @@ func _draw_overlay(canvas: Control) -> void:
 			if screen.x < -30 or screen.y < -30 or screen.x > view.x + 30 or screen.y > view.y + 30:
 				continue
 			if bool(row.get("isMap", false)):
-				_draw_map_feature(canvas, row, screen, zoom, selected, bold, font, taken_labels)
+				_draw_map_feature(canvas, row, screen, zoom, selected, bold, font, taken)
 			else:
-				_draw_city(canvas, row, screen, zoom, selected, bold, font, taken_labels)
-	if layers.get("units", true):
-		for unit in units:
-			var row: Dictionary = unit
-			var screen := screen_of(Vector2(float(row.get("lng", 0)), float(row.get("lat", 0))))
-			if screen.x < -30 or screen.y < -30 or screen.x > view.x + 30 or screen.y > view.y + 30:
-				continue
-			_draw_unit(canvas, row, screen, zoom, bold)
+				_draw_city(canvas, row, screen, zoom, selected, bold, font, taken)
+	if layers.get("labels", true) and zoom > LABEL_MIN_ZOOM:
+		_draw_region_labels(canvas, view, font, taken)
+	if not review_outlines.is_empty() or not review_shapes.is_empty() or not review_points.is_empty() or not review_focus.is_empty():
+		_draw_review(canvas)
+	if not diagnostics.is_empty():
+		_draw_diagnostics(canvas)
+	if tool in ["modify", "border"] and not edit_rings.is_empty():
+		_draw_edit(canvas)
+	if tool == "draw":
+		_draw_region_sketch(canvas)
 	if _lasso.size() > 1:
-		var closed := _lasso.duplicate()
-		closed.append(_lasso[0])
-		canvas.draw_polyline(closed, Color(1, 1, 1, 0.9), 1.5, true)
+		_sketch_shape(canvas, _lasso, true, _lasso[_lasso.size() - 1])
 	if _box.size != Vector2.ZERO:
-		canvas.draw_rect(_box, Color(1, 1, 1, 0.12), true)
-		canvas.draw_rect(_box, Color(1, 1, 1, 0.8), false, 1.0)
+		canvas.draw_rect(_box, BOX_FILL, true)
+		canvas.draw_rect(_box.grow(-0.75), Color(1, 1, 1), false, 1.5)
 	if _move_line.size() == 2:
 		_draw_move_preview(canvas)
 		canvas.draw_line(_move_line[0], _move_line[1], Color(1, 1, 1, 0.85), 2.0, true)
 		canvas.draw_circle(_move_line[1], 4.0, WorkshopUI.ACCENT_GREY)
 	if _freehand.size() >= 2:
-		canvas.draw_polyline(_freehand, Color(1, 1, 1, 0.95), 2.0, true)
+		_sketch_shape(canvas, _freehand, tool != "fortification", _freehand[_freehand.size() - 1])
 	if _war_hover is Vector2 and _sketch.is_empty() and _freehand.is_empty() and tool in ["terrain", "fortification", "climate"]:
-		canvas.draw_circle(_war_hover, 6.0, Color(1, 1, 1, 0.95))
-		canvas.draw_arc(_war_hover, 6.0, 0.0, TAU, 20, Color(0.02, 0.03, 0.05, 0.9), 1.5, true)
+		_vertex_handle(canvas, _war_hover)
 	if not _sketch.is_empty():
 		var line := PackedVector2Array()
 		for point in _sketch:
 			var p: Array = point
 			line.append(screen_of(Vector2(float(p[0]), float(p[1]))))
+		var hover := Vector2(-1, -1)
 		if canvas is Overlay and (canvas as Overlay).hover != Vector2.ZERO:
-			line.append((canvas as Overlay).hover)
-		if line.size() > 1:
-			canvas.draw_polyline(line, Color(1, 1, 1, 0.95), 2.0, true)
-		for point in line:
-			canvas.draw_circle(point, 3.5, Color(1, 1, 1, 0.95))
+			hover = (canvas as Overlay).hover
+			line.append(hover)
+		_sketch_shape(canvas, line, _sketch_kind != "fortification", hover)
+
+
+func _sketch_shape(canvas: Control, points: PackedVector2Array, area: bool, cursor: Vector2) -> void:
+	if area and points.size() >= 3 and Geometry2D.triangulate_polygon(points).size() > 0:
+		canvas.draw_colored_polygon(points, SKETCH_FILL)
+	if points.size() >= 2:
+		canvas.draw_polyline(points, Color(1, 1, 1), 5.0, true)
+		canvas.draw_polyline(points, SKETCH_BLUE, 3.0, true)
+	if cursor.x >= 0.0:
+		_sketch_point(canvas, cursor)
+
+
+func _sketch_point(canvas: Control, at: Vector2) -> void:
+	canvas.draw_circle(at, 6.0, SKETCH_BLUE, true, -1.0, true)
+	canvas.draw_arc(at, 6.0, 0.0, TAU, 24, Color(1, 1, 1), 1.5, true)
+
+
+static func _free(taken: Array[Rect2], box: Rect2) -> bool:
+	for other in taken:
+		if other.intersects(box):
+			return false
+	return true
+
+
+static func _text_box(font: Font, text: String, size: int, centre: Vector2) -> Rect2:
+	var width := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, size).x + 3.0
+	var height := font.get_height(size) + 3.0
+	return Rect2(centre - Vector2(width, height) * 0.5, Vector2(width, height))
+
+
+static func _text(canvas: Control, font: Font, text: String, size: int, centre: Vector2, fill: Color, stroke: Color) -> void:
+	var width := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, size).x
+	var at := Vector2(centre.x - width * 0.5, centre.y + (font.get_ascent(size) - font.get_descent(size)) * 0.5)
+	canvas.draw_string_outline(font, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, size, 5, stroke)
+	canvas.draw_string(font, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, size, fill)
+
+
+static func _square(canvas: Control, at: Vector2, radius: float, fill: Color, stroke: Color, stroke_width: float) -> void:
+	var half := radius / sqrt(2.0)
+	var corners := PackedVector2Array([at + Vector2(-half, -half), at + Vector2(half, -half), at + Vector2(half, half), at + Vector2(-half, half)])
+	canvas.draw_colored_polygon(corners, fill)
+	corners.append(corners[0])
+	canvas.draw_polyline(corners, stroke, stroke_width, true)
+
+
+func _draw_region_labels(canvas: Control, view: Vector2, font: Font, taken: Array[Rect2]) -> void:
+	var scale := map.camera.zoom.x
+	for index in range(ids.size()):
+		var text := region_name(index)
+		if text.is_empty() or not region_shown(index):
+			continue
+		if bool(region_type(index).get("includedInLabels", true)) == false:
+			continue
+		var places: Array = label_points[index] if index < label_points.size() and label_points[index] is Array else []
+		var fits := not places.is_empty()
+		if places.is_empty() and index < centroids.size():
+			places = [[centroids[index].x, centroids[index].y, 0.0]]
+		var label_width := -1.0
+		for place in places:
+			var spot: Array = place
+			var screen := map.world_to_screen(Vector2(float(spot[0]), float(spot[1])))
+			if screen.x < -80 or screen.y < -20 or screen.x > view.x + 80 or screen.y > view.y + 20:
+				continue
+			if label_width < 0.0:
+				label_width = font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, 12).x + 3.0
+			if fits and float(spot[2]) * scale < label_width:
+				continue
+			var box := _text_box(font, text, 12, screen)
+			if not _free(taken, box):
+				continue
+			taken.append(box)
+			_text(canvas, font, text, 12, screen, Color(1, 1, 1, 0.95), Color(0, 0, 0, 0.85))
 
 
 func _screen_ring(ring: Variant) -> PackedVector2Array:
@@ -1302,10 +1679,6 @@ func _vertex_handle(canvas: Control, at: Vector2) -> void:
 
 
 func _draw_edit(canvas: Control) -> void:
-	for entry in edit_rings:
-		var line := _ring_screen(entry)
-		if line.size() >= 2:
-			canvas.draw_polyline(line, Color(1, 1, 1, 0.85), 1.5, true)
 	if not _edit_drag.is_empty():
 		var now: Vector2 = _edit_drag.get("now", Vector2.ZERO)
 		var row := {}
@@ -1326,44 +1699,28 @@ func _draw_edit(canvas: Control) -> void:
 			var b: Array = coords[b_index]
 			var sa := screen_of(Vector2(float(a[0]), float(a[1])))
 			var sb := screen_of(Vector2(float(b[0]), float(b[1])))
-			canvas.draw_dashed_line(sa, now, Color(1, 1, 1, 0.9), 1.5, 4.0, true, true)
-			canvas.draw_dashed_line(now, sb, Color(1, 1, 1, 0.9), 1.5, 4.0, true, true)
+			canvas.draw_polyline(PackedVector2Array([sa, now, sb]), ACCENT_STROKE, 2.5, true)
 		_vertex_handle(canvas, now)
 	elif not _edit_hover.is_empty():
 		_vertex_handle(canvas, _edit_hover.get("screen", Vector2.ZERO))
 	if _halo is Vector2:
-		canvas.draw_circle(_halo, 10.0, Color(34 / 255.0, 211 / 255.0, 238 / 255.0, 0.25), true, -1.0, true)
-		canvas.draw_arc(_halo, 10.0, 0.0, TAU, 28, Color("#22d3ee"), 2.5, true)
+		canvas.draw_circle(_halo, 9.0, Color(34 / 255.0, 211 / 255.0, 238 / 255.0, 0.20), true, -1.0, true)
+		canvas.draw_arc(_halo, 9.0, 0.0, TAU, 28, Color("#22d3ee"), 2.5, true)
 
 
 func _draw_region_sketch(canvas: Control) -> void:
-	var line := PackedVector2Array()
+	var path := PackedVector2Array()
 	for point in draw_points:
 		var p: Array = point
-		line.append(screen_of(Vector2(float(p[0]), float(p[1]))))
-	var hover: Vector2 = _overlay.hover if _overlay else Vector2.ZERO
+		path.append(screen_of(Vector2(float(p[0]), float(p[1]))))
+	var cursor: Vector2 = _overlay.hover if _overlay else Vector2.ZERO
 	if snap_marker is Vector2:
-		hover = screen_of(snap_marker)
-	if line.size() >= 2:
-		var area := line.duplicate()
-		if hover != Vector2.ZERO:
-			area.append(hover)
-		if area.size() >= 3 and Geometry2D.triangulate_polygon(area).size() > 0:
-			canvas.draw_colored_polygon(area, Color(1, 1, 1, 0.12))
-	if not line.is_empty():
-		var path := line.duplicate()
-		if hover != Vector2.ZERO:
-			path.append(hover)
-		if path.size() >= 2:
-			canvas.draw_polyline(path, Color(1, 1, 1, 0.95), 2.0, true)
-		if line.size() >= 2 and hover != Vector2.ZERO:
-			canvas.draw_dashed_line(hover, line[0], Color(1, 1, 1, 0.5), 1.5, 5.0, true, true)
-		for point in line:
-			canvas.draw_circle(point, 3.5, Color(1, 1, 1, 0.95))
-	if snap_marker is Vector2:
-		var at := screen_of(snap_marker)
-		canvas.draw_circle(at, 6.0, Color(1, 1, 1, 0.2), true, -1.0, true)
-		canvas.draw_arc(at, 6.0, 0.0, TAU, 20, Color(1, 1, 1, 0.95), 2.0, true)
+		cursor = screen_of(snap_marker)
+	if cursor == Vector2.ZERO:
+		cursor = Vector2(-1, -1)
+	else:
+		path.append(cursor)
+	_sketch_shape(canvas, path, true, cursor)
 
 
 func _draw_review(canvas: Control) -> void:
@@ -1419,31 +1776,26 @@ func _draw_city(canvas: Control, row: Dictionary, screen: Vector2, zoom: float, 
 	var large := tags.has("capital") or pop >= 1000000.0
 	var mid := pop >= 100000.0
 	var radius := 6.0 if large else (4.5 if mid else 3.5)
+	var ring := 9.0 if large else (7.5 if mid else 6.5)
+	var image_size := (2.0 * ring + 2.5) if selected else (2.0 * radius + 1.0)
+	var image_box := Rect2(screen - Vector2.ONE * image_size * 0.5, Vector2.ONE * image_size)
+	var show := selected or zoom >= 6.0 or (large and zoom >= 4.3) or (mid and zoom >= 5.3)
+	var text := str(row.get("name", "")) if show else ""
+	var face := bold if selected else font
+	var text_centre := screen + Vector2(0, -13.0 if selected else -11.0)
+	var text_box := _text_box(face, text, 11, text_centre) if not text.is_empty() else Rect2()
+	if not _free(taken, image_box) or (not text.is_empty() and not _free(taken, text_box)):
+		return
+	taken.append(image_box)
+	if not text.is_empty():
+		taken.append(text_box)
 	if selected:
-		var ring := 9.0 if large else (7.5 if mid else 6.5)
-		canvas.draw_circle(screen, ring, Color("#facc15", 0.35))
+		canvas.draw_circle(screen, ring, Color("#facc15", 0.35), true, -1.0, true)
 		canvas.draw_arc(screen, ring, 0.0, TAU, 24, Color("#facc15"), 2.5, true)
 	else:
-		var diamond := PackedVector2Array([screen + Vector2(0, -radius), screen + Vector2(radius, 0), screen + Vector2(0, radius), screen + Vector2(-radius, 0)])
-		canvas.draw_colored_polygon(diamond, Color("#ffd54a"))
-		diamond.append(diamond[0])
-		canvas.draw_polyline(diamond, Color(0, 0, 0), 1.0, true)
-	var show := selected or zoom >= 6.0 or (large and zoom >= 4.3) or (mid and zoom >= 5.3)
-	if not show:
-		return
-	var text := str(row.get("name", ""))
-	if text.is_empty():
-		return
-	var face := bold if selected else font
-	var width := face.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, 11).x
-	var at := screen + Vector2(-width * 0.5, -(13.0 if selected else 11.0) + 4)
-	var box := Rect2(at - Vector2(2, 11), Vector2(width + 4, 14))
-	for other in taken:
-		if other.intersects(box):
-			return
-	taken.append(box)
-	canvas.draw_string_outline(face, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, 3, Color(0, 0, 0, 0.85))
-	canvas.draw_string(face, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("#fef3c7") if selected else Color(1, 1, 1))
+		_square(canvas, screen, radius, Color("#ffd54a"), Color(0, 0, 0), 1.0)
+	if not text.is_empty():
+		_text(canvas, face, text, 11, text_centre, Color("#fef3c7") if selected else Color(1, 1, 1), Color(0, 0, 0, 0.9) if selected else Color(0, 0, 0, 0.85))
 
 
 func _draw_map_feature(canvas: Control, row: Dictionary, screen: Vector2, zoom: float, selected: bool, bold: Font, font: Font, taken: Array[Rect2]) -> void:
@@ -1457,44 +1809,61 @@ func _draw_map_feature(canvas: Control, row: Dictionary, screen: Vector2, zoom: 
 		color.a = 0.55
 	if selected:
 		color = Color("#facc15")
-	var glyph := "◆"
+	var glyph := marker_glyph(str(row.get("kind", "")), str(row.get("name", "")))
 	var size := 17 if selected else 15
-	var width := bold.get_string_size(glyph, HORIZONTAL_ALIGNMENT_LEFT, -1, size).x
-	var at := screen + Vector2(-width * 0.5, size * 0.35)
-	canvas.draw_string_outline(bold, at, glyph, HORIZONTAL_ALIGNMENT_LEFT, -1, size, 3, Color(0, 0, 0, 0.9))
-	canvas.draw_string(bold, at, glyph, HORIZONTAL_ALIGNMENT_LEFT, -1, size, color)
+	var glyph_box := _text_box(bold, glyph, size, screen)
+	if _free(taken, glyph_box):
+		taken.append(glyph_box)
+		_text(canvas, bold, glyph, size, screen, color, Color(0, 0, 0, 0.9))
 	if selected or zoom >= 4.5:
 		var text := str(row.get("name", ""))
-		var text_width := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, 11).x
-		var label_at := screen + Vector2(-text_width * 0.5, -10)
-		var box := Rect2(label_at - Vector2(2, 11), Vector2(text_width + 4, 14))
-		for other in taken:
-			if other.intersects(box):
-				return
+		if text.is_empty():
+			return
+		var centre := screen + Vector2(0, -14)
+		var box := _text_box(font, text, 11, centre)
+		if not _free(taken, box):
+			return
 		taken.append(box)
-		canvas.draw_string_outline(font, label_at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, 3, Color(0, 0, 0, 0.85))
-		canvas.draw_string(font, label_at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("#fef3c7") if selected else Color(1, 1, 1))
+		_text(canvas, font, text, 11, centre, Color("#fef3c7") if selected else Color(1, 1, 1), Color(0, 0, 0, 0.85))
 
 
-func _draw_unit(canvas: Control, row: Dictionary, screen: Vector2, zoom: float, bold: Font) -> void:
+static var _marker_patterns: Array = []
+
+
+static func marker_glyph(kind: String, name: String) -> String:
+	if _marker_patterns.is_empty():
+		for rule in MARKER_GLYPHS:
+			var pattern := RegEx.new()
+			pattern.compile(str(rule[0]))
+			_marker_patterns.append([pattern, str(rule[1])])
+	var clean := RegEx.create_from_string("[^a-z0-9]+")
+	var searchable := ("%s %s" % [clean.sub((kind if not kind.is_empty() else "landmark").to_lower(), " ", true).strip_edges(), clean.sub(name.to_lower(), " ", true).strip_edges()]).strip_edges()
+	for rule in _marker_patterns:
+		if (rule[0] as RegEx).search(searchable) != null:
+			return str(rule[1])
+	return "•"
+
+
+func _draw_unit(canvas: Control, row: Dictionary, screen: Vector2, zoom: float, bold: Font, taken: Array[Rect2]) -> void:
 	var owner := str(row.get("ownerCode", ""))
 	var color := Color8(110, 110, 120)
 	if polity_colors.has(owner):
 		color = WorkshopUI.rgb_color(polity_colors[owner])
-	var diamond := PackedVector2Array([screen + Vector2(0, -9), screen + Vector2(9, 0), screen + Vector2(0, 9), screen + Vector2(-9, 0)])
-	canvas.draw_colored_polygon(diamond, color)
-	diamond.append(diamond[0])
-	canvas.draw_polyline(diamond, Color(0, 0, 0, 0.9), 1.5, true)
 	var glyph := str(UNIT_GLYPH.get(str(row.get("type", "infantry")), "?"))
 	var text := glyph
 	var offset := 0.0
 	if zoom >= 4.5 and not str(row.get("name", "")).is_empty():
 		text = "%s %s" % [glyph, str(row.get("name", ""))]
 		offset = -15.0
-	var width := bold.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, 11).x
-	var at := screen + Vector2(-width * 0.5, offset + 4)
-	canvas.draw_string_outline(bold, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, 3, Color(0, 0, 0, 0.9))
-	canvas.draw_string(bold, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(1, 1, 1))
+	var image_box := Rect2(screen - Vector2.ONE * 9.75, Vector2.ONE * 19.5)
+	var centre := screen + Vector2(0, offset)
+	var text_box := _text_box(bold, text, 11, centre)
+	if not _free(taken, image_box) or not _free(taken, text_box):
+		return
+	taken.append(image_box)
+	taken.append(text_box)
+	_square(canvas, screen, 9.0, color, Color(0, 0, 0, 0.9), 1.5)
+	_text(canvas, bold, text, 11, centre, Color(1, 1, 1), Color(0, 0, 0, 0.9))
 
 
 class Overlay extends Control:

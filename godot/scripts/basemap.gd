@@ -40,6 +40,26 @@ const SERVICES := {
 	"dark-gray": ["Canvas/World_Dark_Gray_Base", 16],
 }
 
+const EDITOR_BASEMAPS := {
+	"ocean": ["Ocean/World_Ocean_Base", 13, 1.0, ""],
+	"ocean-dark": ["Ocean/World_Ocean_Base", 13, 0.46, "#030a14"],
+	"atlas-relief": ["Ocean/World_Ocean_Base", 13, 1.0, ""],
+	"atlas-relief-dark": ["Ocean/World_Ocean_Base", 13, 0.38, "#050609"],
+	"midnight-terrain": ["World_Terrain_Base", 13, 0.27, "#000205"],
+	"imagery": ["World_Imagery", 19, 1.0, ""],
+	"streets": ["World_Street_Map", 19, 1.0, ""],
+	"topo": ["World_Topo_Map", 19, 1.0, ""],
+	"terrain": ["World_Terrain_Base", 13, 1.0, ""],
+	"shaded": ["World_Shaded_Relief", 13, 1.0, ""],
+	"natgeo": ["NatGeo_World_Map", 16, 1.0, ""],
+	"natgeo-dark": ["NatGeo_World_Map", 16, 0.44, "#111418"],
+	"physical": ["World_Physical_Map", 8, 1.0, ""],
+	"light-gray": ["Canvas/World_Light_Gray_Base", 16, 1.0, ""],
+	"dark-gray": ["Canvas/World_Dark_Gray_Base", 16, 1.0, ""],
+}
+const EDITOR_BACKGROUND := Color("#131315")
+const EDITOR_OFFLINE_OPACITY := 0.72
+
 const PAINTS := {
 	"satellite": {"saturation": -0.08, "contrast": 0.02, "low": 0.04, "high": 0.72},
 	"atlas": {"saturation": 0.08, "contrast": 0.20, "low": 0.05, "high": 0.98},
@@ -224,6 +244,40 @@ func set_terrain(enabled: bool) -> void:
 	_rebuild_layers()
 
 
+var editor_plain := false
+
+
+func set_editor_plain(enabled: bool) -> void:
+	if editor_plain == enabled:
+		return
+	editor_plain = enabled
+	_rebuild_layers()
+
+
+func _rebuild_editor_layers() -> void:
+	var id := str(style.get("basemapId", DEFAULT_ID))
+	var spec: Array = EDITOR_BASEMAPS.get(id, [])
+	_background.color = Color(str(spec[3])) if not spec.is_empty() and not str(spec[3]).is_empty() else EDITOR_BACKGROUND
+	if spec.is_empty():
+		_update_layers()
+		return
+	if _offline:
+		var relief := _add_layer("offline-relief", "offline", "plain", 0, 3, -1, -50)
+		relief.paint = {"ramp": [[0.0, EDITOR_OFFLINE_OPACITY]]}
+		_update_layers()
+		return
+	var service := str(spec[0])
+	var opacity := float(spec[2])
+	var lowres := _add_layer(service + "#low", "esri", "plain", 0, 2, 2, -55)
+	lowres.service = service
+	lowres.paint = {"ramp": [[0.0, 1.0 if opacity >= 1.0 else 0.0]]}
+	var detail := _add_layer(service, "esri", "plain", 0, int(spec[1]), -1, -50)
+	detail.service = service
+	detail.placeholder = true
+	detail.paint = {"ramp": [[0.0, opacity]]}
+	_update_layers()
+
+
 func set_wrap(enabled: bool) -> void:
 	if _wrap == enabled:
 		return
@@ -271,6 +325,9 @@ func _rebuild_layers() -> void:
 			if bounds is Array and (bounds as Array).size() == 4:
 				layer.bounds = Rect2(Vector2(float(bounds[0]), float(bounds[1])), Vector2(float(bounds[2]) - float(bounds[0]), float(bounds[3]) - float(bounds[1])))
 		_update_layers()
+		return
+	if editor_plain:
+		_rebuild_editor_layers()
 		return
 	if _offline:
 		_background.color = BASE_GREY
