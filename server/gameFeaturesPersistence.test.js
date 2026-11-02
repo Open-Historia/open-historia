@@ -22,7 +22,8 @@ import { OWNER_SCHEMA } from "./ownerMigration.js";
 const WORLD_DIRECTION_DEFAULTS = { enabled: true, eventPace: 100, worldShare: 35, priorityRules: "", scriptedEvents: [], territoryTempo: 0 };
 const PLAYER_FOCUS_DEFAULTS = { enabled: true, level: "balanced" };
 const GROUPS_DEFAULTS = { enabled: true };
-const FRONTS_DEFAULTS = { enabled: true, pace: 100 };
+// (Wars: the fronts feature with a switch each for battlefields, air units and navies, all on.)
+const FRONTS_DEFAULTS = { enabled: true, battlefields: true, air: true, navies: true, pace: 100 };
 const LISTEN_IN_DEFAULTS = { enabled: true };
 const PREGAME_HISTORY_DEFAULTS = { enabled: true };
 
