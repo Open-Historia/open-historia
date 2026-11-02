@@ -103,7 +103,7 @@ if (mode === "local") {
   }
   if (wrong.length) fail(wrong);
   const after = new Set([...remote.keys(), ...missing]).size;
-  if (after > ASSET_LIMIT) fail([`the chunk release would hold ${after} files, over ${ASSET_LIMIT}; prune it before publishing`]);
+  if (after > ASSET_LIMIT) fail([`the chunk release would hold ${after} files, over ${ASSET_LIMIT}; remove the pieces no feed names first: node native/prune-chunks.mjs (a dry run), then node native/prune-chunks.mjs --prune`]);
   const bytes = missing.reduce((sum, name) => sum + release.wanted.get(name), 0);
   process.stderr.write(`${missing.length} of ${release.wanted.size} chunk files to upload (${megabytes(bytes)}); ${release.wanted.size - missing.length} are on the release already; it will hold ${after} files\n`);
   const listFile = rest[1];
