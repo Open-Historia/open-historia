@@ -13,7 +13,7 @@ The whole web backend is behind one Vite mode flag. `.env.web` sets `VITE_OH_WEB
 | Step | Location | What happens |
 |---|---|---|
 | Gate | `src/main.jsx` | `if (import.meta.env.VITE_OH_WEB)` dynamically `import("./runtime/web/index.js")`, calls `installWebBackend()`, then `mount()`s the React app. Non-web builds just `mount()`. |
-| Entry | `src/runtime/web/index.js` | `installWebBackend()` — seed → install interceptor → drop a retired sign-in → home page. |
+| Entry | `src/runtime/web/index.js` | `installWebBackend()` — seed → install interceptor → drop a retired sign-in → demo notice. |
 | Map files | `src/runtime/worldFiles.js`, `src/runtime/assets.js` (`warmPmtilesArchive`) | Every map file is read from the build's own `/assets` folder (`ASSETS_BASE`, `worldFileUrl`, `mapArchiveUrl`). `warmPmtilesArchive` downloads an archive once through `fetchWithPersistence` and keeps it in memory. There is no node to try first and no manifest to hold the bytes to (§8). |
 | Worker fetches | `src/runtime/assets.js` (`prepareWorkerFetchableUrl`) | Workers never see the `window.fetch` patch, so the scenario's regions GeoJSON reaches MapLibre's `custom-regions-source` and the cartography worker through a `blob:` copy (`Nations.jsx` via `useWorkerFetchableUrl`); the runtime URL stays the epoch/cache key. |
 
@@ -22,7 +22,7 @@ The whole web backend is behind one Vite mode flag. `.env.web` sets `VITE_OH_WEB
 1. `await ensureSeeded()` — write the default scenario into IndexedDB before any `/api` call (`libraryStore.js`).
 2. `installWebApiRouter()` — monkey-patch `window.fetch` (`router.js`).
 3. `forgetRetiredAccount()` (`retiredAccount.js`) — best-effort, not awaited: deletes the kv rows a sign-in from before accounts were removed left behind (`account:session`, `account:email`, `account:dek`, `sync:versions`). Nothing reads them any more.
-4. On the website, if `shouldShowHome()` (not yet "entered" this tab session) → `showHomePage()`. Nothing is looked up or connected to first: the map is under the build's own `/assets`. The Android app has no home page; its boot screen (`nativeBoot.js`), painted before step 1, settles here.
+4. On the website, if `shouldShowDemoNotice()` (not yet dismissed this tab session) → `showDemoNotice()` over the game. There is no entry screen: the site's Play the demo button leads straight to the game. Nothing is looked up or connected to first: the map is under the build's own `/assets`. The Android app shows no notice; its boot screen (`nativeBoot.js`), painted before step 1, settles here.
 
 Build scripts (`package.json`):
 
@@ -289,16 +289,13 @@ Community hub downloads still go through the Worker (`VITE_OH_HUB_URL`, `/hub/fi
 
 ---
 
-## 9. Home screen (`homePage.js`)
+## 9. Demo notice (`demoNotice.js`)
 
-A full-screen parchment/Roman overlay injected over the already-mounted game on first entry per tab session (`sessionStorage["oh:entered"]`). Pure DOM (no React), scoped under `.oh-home`. It shows the wordmark, what the game is and the way in. There is nothing to connect to first, so it has no connection card and Enter is available at once. Its text, the demo notice's and the Android boot screen's come from `bootTexts.js`, looked up in the player's shipped language pack (see [i18n.md](i18n.md)).
+The website has no entry screen any more: the site's Play the demo button leads to `/play/`, and the game mounts at once. Over it, once per tab session (`sessionStorage["oh:demo-ack"]`), comes the demo notice: this is a demo, the desktop app is the way to play, and the browser version lags. Pure DOM (no React), scoped under `.oh-demo-modal`. "Play the demo anyway" (or Esc) dismisses it; "Get the desktop app" opens the stable release. Its text and the Android boot screen's come from `bootTexts.js`, looked up in the player's shipped language pack (see [i18n.md](i18n.md)).
 
-| Control | Behavior |
-|---|---|
-| **⚔ Enter Open Historia** | Shows the demo notice once per tab session, then `enter()` sets the `oh:entered` flag and removes the overlay. |
-| Footer links | GitHub, Discord, Privacy. |
+The entry screen it replaced ("Enter Open Historia", `homePage.js`) was there to connect to a content node before the game could start. Nodes are gone (§8), so it had nothing left to do but stand between the site's button and the game.
 
-The Android app never shows this page. Its boot screen (`nativeBoot.js`) says "Getting the world ready…" while the library is seeded, then "Everything is on this device", and comes down after `BOOT_DEADLINE_MS` (8 s) at the latest.
+The Android app never shows the notice. Its boot screen (`nativeBoot.js`) says "Getting the world ready…" while the library is seeded, then "Everything is on this device", and comes down after `BOOT_DEADLINE_MS` (8 s) at the latest.
 
 ---
 
@@ -351,7 +348,7 @@ The interceptor also answers these through the same `ctx` handler pattern (retur
 | `src/runtime/web/util.js` | response builders, base64, SHA-256, range serving |
 | `src/runtime/web/retiredAccount.js` | one-time boot cleanup of a pre-removal sign-in |
 | `src/runtime/web/coverUrls.js` | covers as cached `blob:` object URLs |
-| `src/runtime/web/homePage.js` | the website's entry overlay |
+| `src/runtime/web/demoNotice.js` | the website's demo notice, over the game |
 | `src/runtime/web/nativeBoot.js` | the Android app's boot screen |
 | `src/runtime/web/bootTexts.js` | the first screens' text, looked up in the player's language pack |
 | `src/runtime/worldFiles.js` | where a build reads its map files: `ASSETS_BASE`, `worldFileUrl`, `mapArchiveUrl` |

@@ -34,8 +34,8 @@ test("no file under src/ names Google's font hosts", () => {
   assert.deepEqual(naming, []);
 });
 
-test("the website's entry screen takes its fonts from the bundle", () => {
-  const home = readFileSync(path.join(root, "runtime", "web", "homePage.js"), "utf8");
+test("the website's demo notice takes its fonts from the bundle", () => {
+  const home = readFileSync(path.join(root, "runtime", "web", "demoNotice.js"), "utf8");
   assert.match(home, /import "\.\.\/\.\.\/assets\/fonts\/fonts\.css";/);
   // It adds one <style> of its own and no stylesheet from anywhere.
   assert.doesNotMatch(home, /rel:\s*"stylesheet"|el\("link"/);

@@ -53,6 +53,22 @@ import { PAST_UPDATES } from "./notesPast.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // The website's entry screen ("Enter Open Historia") removed: the demo notice comes up over the game (2026-11-02).
+    id: "2026-11-straight-into-the-demo",
+    kind: "minor",
+    date: "2026-11-02",
+    channel: "beta",
+    banners: [
+      {
+        title: "Straight into the demo",
+        items: [
+          "On the website, Play the demo now opens the game itself: the entry page that stood in front of it is gone.",
+          "The note that the browser version is a demo comes up over the game instead, once a visit.",
+        ],
+      },
+    ],
+  },
+  {
     // A turn no longer reads the whole map for patrols it does not have, the land war reads it off the page, and the
     // map's names and catalog are not worked out twice as a game opens (2026-11-02).
     id: "2026-11-faster-turns",
