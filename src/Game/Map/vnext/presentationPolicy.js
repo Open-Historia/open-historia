@@ -50,6 +50,30 @@ export const POLITICAL_FILL_OPACITY_STOPS = Object.freeze([
   [14.0, 0.84],
 ].map((stop) => Object.freeze(stop)));
 
+// The borders between polities (Nations.jsx polity-boundaries and its shadow),
+// in px by zoom: one list for those lines and the border a battlefield's ground
+// draws where its holders meet (frontGroundLayer.js), which carries them on
+// across the battlefield.
+export const POLITY_BOUNDARY_WIDTH_STOPS = Object.freeze([[1, 0.58], [3, 0.92], [6, 1.34], [9, 1.72], [12, 2.08]].map((stop) => Object.freeze(stop)));
+export const POLITY_BOUNDARY_SHADOW_WIDTH_STOPS = Object.freeze([[1, 1.8], [3, 2.5], [6, 3.6], [9, 4.7], [12, 5.8]].map((stop) => Object.freeze(stop)));
+export const POLITY_BOUNDARY_SHADOW_BLUR_STOPS = Object.freeze([[1, 0.7], [6, 1.15], [12, 1.5]].map((stop) => Object.freeze(stop)));
+
+// A value at a zoom, as MapLibre's linear interpolate reads its stops (clamped
+// to the end stops outside them), for a layer that draws it by hand.
+export const zoomStopValue = (stops, zoom) => {
+  const z = Number(zoom) || 0;
+  if (z <= stops[0][0]) return stops[0][1];
+  for (let index = 1; index < stops.length; index += 1) {
+    const [z1, a1] = stops[index];
+    const [z0, a0] = stops[index - 1];
+    if (z <= z1) {
+      const t = (z - z0) / Math.max(1e-9, z1 - z0);
+      return a0 + ((a1 - a0) * t);
+    }
+  }
+  return stops.at(-1)[1];
+};
+
 // The fill strength at a zoom, as MapLibre's linear interpolate reads the stops
 // (clamped to the end stops outside them), for a layer that draws it by hand.
 export const politicalFillOpacityAtZoom = (zoom) => {

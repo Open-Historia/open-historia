@@ -59,7 +59,13 @@ import {
 } from "./ownerColors.js";
 import GroupAreaLayers from "./GroupAreaLayers.jsx";
 import { EMPTY_GROUP_AREA_DATA } from "./vnext/groupAreas.js";
-import { POLITICAL_FILL_OPACITY_STOPS, V_NEXT_MARKER_SHAPE_LAYER_IDS } from "./vnext/presentationPolicy.js";
+import {
+  POLITICAL_FILL_OPACITY_STOPS,
+  POLITY_BOUNDARY_SHADOW_BLUR_STOPS,
+  POLITY_BOUNDARY_SHADOW_WIDTH_STOPS,
+  POLITY_BOUNDARY_WIDTH_STOPS,
+  V_NEXT_MARKER_SHAPE_LAYER_IDS,
+} from "./vnext/presentationPolicy.js";
 import { resolvePolityLabelNames } from "./vnext/polityNaming.js";
 import PolityTextLayer, {
   isPolityTextPtr0Enabled,
@@ -3366,8 +3372,8 @@ const WorldMap = ({ isGlobe = false }) => {
           layout={{ "line-cap": "round", "line-join": "round" }}
           paint={{
             "line-color": "rgba(1, 4, 8, 0.72)",
-            "line-width": ["interpolate", ["linear"], ["zoom"], 1, 1.8, 3, 2.5, 6, 3.6, 9, 4.7, 12, 5.8],
-            "line-blur": ["interpolate", ["linear"], ["zoom"], 1, 0.7, 6, 1.15, 12, 1.5],
+            "line-width": ["interpolate", ["linear"], ["zoom"], ...POLITY_BOUNDARY_SHADOW_WIDTH_STOPS.flat()],
+            "line-blur": ["interpolate", ["linear"], ["zoom"], ...POLITY_BOUNDARY_SHADOW_BLUR_STOPS.flat()],
             "line-opacity": customActive && worldKnown ? 0.52 : 0,
           }}
         />
@@ -3378,14 +3384,7 @@ const WorldMap = ({ isGlobe = false }) => {
           layout={{ "line-cap": "round", "line-join": "round" }}
           paint={{
             "line-color": "rgba(5, 8, 13, 0.96)",
-            "line-width": [
-              "interpolate", ["linear"], ["zoom"],
-              1, 0.58,
-              3, 0.92,
-              6, 1.34,
-              9, 1.72,
-              12, 2.08,
-            ],
+            "line-width": ["interpolate", ["linear"], ["zoom"], ...POLITY_BOUNDARY_WIDTH_STOPS.flat()],
             "line-opacity": customActive && worldKnown ? 0.94 : 0,
           }}
         />

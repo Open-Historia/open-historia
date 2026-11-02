@@ -2,11 +2,14 @@
 import { toCountryName } from "../../../runtime/ownerNames.js";
 import {
   affectedOwnersForRegionChanges,
+  battlefieldSegmentIds,
   buildPoliticalBoundaryTopology,
-  createPoliticalBoundaryState,
+  createPoliticalBoundaryState as createBoundaryState,
   politicalBoundaryStateCollection,
+  setExcludedBoundarySegments,
   updatePoliticalBoundaryState,
 } from "./politicalBoundaryTopology.js";
+import { groundMesh, regionsInAreas } from "./battlefieldGround.js";
 import {
   aggregatePolityGeometry,
   aggregatePolityGeometryForOwners,
@@ -34,6 +37,17 @@ let renderRepairGeometryById = new Map();
 // on the first request after the regions load.
 let groupAreaIndex = null;
 let groupLabelPoints = null;
+// Battlefields' ground ("battlefield-ground"): the border segments their own
+// layer draws, which every boundary state made here leaves out, and the shapes
+// the meshes were cut from (counted up whenever those change).
+let battlefieldExcluded = new Set();
+let groundShapesRevision = 0;
+let groundRegionIndex = null;
+
+// Every boundary state is made with the battlefields' borders left out.
+const createPoliticalBoundaryState = (topology, ownershipOverrides = {}) => (
+  createBoundaryState(topology, ownershipOverrides, { excluded: battlefieldExcluded })
+);
 
 const cancelRenderRepairBuild = () => {
   renderRepairGeneration += 1;
@@ -54,6 +68,7 @@ const scheduleRegionRenderRepair = ({ requestId, geometryEpoch, regions }) => {
     renderRepairGeometryById = new Map(
       (result.data.features ?? []).map((feature) => [String(feature?.properties?.id ?? ""), feature?.geometry]),
     );
+    groundShapesRevision += 1;
     self.postMessage({
       messageType: "render-repair-ready",
       requestId,
@@ -307,6 +322,10 @@ const resetDerivedCaches = () => {
   renderRepairGeometryById = new Map();
   groupAreaIndex = null;
   groupLabelPoints = null;
+  // Segment ids are the topology's: a new one has none of the old.
+  battlefieldExcluded = new Set();
+  groundShapesRevision += 1;
+  groundRegionIndex = null;
 };
 
 const loadRegionsFromUrl = async (url) => {
@@ -956,6 +975,85 @@ const answerGroupAreas = ({ requestId, geometryEpoch, groupAreas, groups }) => {
   });
 };
 
+// Which regions each battlefield's own layer draws (its sides' land in its
+// frame, by whose each region is now), cut into triangles, and the borders
+// between them left out of the map's (FrontLayers.jsx, frontGround.js). A
+// mesh the asker already holds (`known`, by its id) is not sent again; the
+// borders are worked out again only when the regions are not the ones they
+// were, unless `force`d (Nations.jsx asks so after it has published a
+// boundary patch made before this answer).
+const hashOf = (text) => {
+  let hash = 2166136261;
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+};
+const answerBattlefieldGround = ({ requestId, geometryEpoch, areas = [], known = [], force = false }) => {
+  const startedAt = performance.now();
+  ensureTopology();
+  if (!groundRegionIndex) {
+    const boxes = new Map((cachedMetadata?.records ?? []).map((record) => [record.id, record.bounds]));
+    groundRegionIndex = [];
+    for (const feature of cachedRegions?.features ?? []) {
+      const props = feature?.properties ?? {};
+      const id = props.id != null ? String(props.id) : props.GID_1 != null ? String(props.GID_1) : "";
+      const box = boxes.get(id);
+      if (id && box) groundRegionIndex.push({ id, feature, box: [box[0][0], box[0][1], box[1][0], box[1][1]] });
+    }
+  }
+  const ownerOf = (id) => {
+    const index = cachedTopology?.regionIndexById?.get(String(id));
+    return index == null ? "" : regionOwnerAtIndex(index, currentOwnershipOverrides);
+  };
+  const picked = regionsInAreas({
+    regions: groundRegionIndex,
+    areas,
+    ownerOf,
+    boxOf: (region) => region.box,
+  });
+  const holding = new Set((known ?? []).map(String));
+  const transfer = [];
+  let byId = null;
+  const answer = picked.map(({ key, regionIds }, index) => {
+    const bounds = areas[index]?.bounds ?? [0, 0, 0, 0];
+    const anchorLng = (Number(bounds[0]) + Number(bounds[2])) / 2;
+    const meshId = hashOf(`${groundShapesRevision}|${anchorLng}|${regionIds.join("")}`) + `.${regionIds.length}`;
+    const out = { key, regionIds, owners: regionIds.map(ownerOf), meshId };
+    if (!holding.has(meshId)) {
+      byId ??= new Map(groundRegionIndex.map((region) => [region.id, region]));
+      const mesh = groundMesh({
+        regions: regionIds.map((id) => ({ id, geometry: renderRepairGeometryById.get(id) ?? byId.get(id)?.feature?.geometry })),
+        regionIds,
+        anchorLng,
+      });
+      out.positions = mesh.positions;
+      out.regionOf = mesh.regionOf;
+      transfer.push(mesh.positions.buffer, mesh.regionOf.buffer);
+    }
+    return out;
+  });
+
+  let boundaryPatch = null;
+  if (boundaryState) {
+    const segments = battlefieldSegmentIds(boundaryState, picked.map(({ regionIds }, index) => ({ regionIds, bounds: areas[index]?.bounds })));
+    const same = segments.size === battlefieldExcluded.size && [...segments].every((id) => battlefieldExcluded.has(id));
+    if (force || !same) {
+      boundaryPatch = setExcludedBoundarySegments(boundaryState, segments, currentOwnershipOverrides, { force }).patch;
+    }
+    battlefieldExcluded = boundaryState.excluded;
+  }
+  self.postMessage({
+    messageType: "battlefield-ground-result",
+    requestId,
+    geometryEpoch,
+    areas: answer,
+    boundaryPatch,
+    stats: { elapsedMs: performance.now() - startedAt, regionCount: answer.reduce((sum, area) => sum + area.regionIds.length, 0) },
+  }, transfer);
+};
+
 self.onmessage = async ({ data: message }) => {
   const {
     requestId,
@@ -970,6 +1068,20 @@ self.onmessage = async ({ data: message }) => {
     forceFullSnapshot = false,
   } = message ?? {};
   if (!requestId) return;
+
+  if (type === "battlefield-ground") {
+    try {
+      answerBattlefieldGround({ requestId, geometryEpoch, areas: message.areas ?? [], known: message.known ?? [], force: message.force === true });
+    } catch (error) {
+      self.postMessage({
+        messageType: "battlefield-ground-result",
+        requestId,
+        geometryEpoch,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return;
+  }
 
   if (type === "group-areas") {
     try {
