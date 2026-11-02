@@ -922,6 +922,8 @@ jobs:
     needs: [windows, macos, linux]
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    outputs:
+      published: ${{ steps.publish.outputs.published }}
     defaults:
       run:
         shell: bash
@@ -965,6 +967,7 @@ jobs:
           path: ${{ runner.temp }}/linux/chunks
 
       - name: Publish the Windows, macOS and Linux apps (a dry run without the release token)
+        id: publish
         env:
           RELEASE_TOKEN: ${{ secrets.OH_PUBLIC_RELEASE_TOKEN }}
           LAB_TOKEN: ${{ github.token }}
@@ -994,3 +997,24 @@ jobs:
           echo "::group::Linux"
           bash native/publish-release.sh "$RUNNER_TEMP/linux" --linux "$mode"
           echo "::endgroup::"
+          if [ "$mode" = --publish ]; then echo "published=true" >> "$GITHUB_OUTPUT"; fi
+
+  prune-chunks:
+    name: Remove the update pieces no feed names
+    needs: publish
+    if: ${{ needs.publish.outputs.published == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: native
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Remove the pieces and file lists no system's feed leads to
+        env:
+          GH_TOKEN: ${{ secrets.OH_PUBLIC_RELEASE_TOKEN }}
+        run: node native/prune-chunks.mjs --prune
