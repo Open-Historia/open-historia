@@ -83,7 +83,7 @@ export const pictureMesh = (coordinates, steps = MESH_STEPS) => {
   return out;
 };
 
-const compile = (gl, type, source) => {
+export const compile = (gl, type, source) => {
   const shader = gl.createShader(type);
   gl.shaderSource(shader, source);
   gl.compileShader(shader);
@@ -104,8 +104,8 @@ vec4 projectTileWithElevation(vec2 p, float elevation) {
   return u_projection_matrix * vec4(p, elevation, 1.0);
 }`,
 });
-const shaderDataOf = (args) => (typeof args?.shaderData?.vertexShaderPrelude === "string" && args.shaderData.variantName ? { define: "", ...args.shaderData } : PLAIN);
-const projectionOf = (args) => {
+export const shaderDataOf = (args) => (typeof args?.shaderData?.vertexShaderPrelude === "string" && args.shaderData.variantName ? { define: "", ...args.shaderData } : PLAIN);
+export const projectionOf = (args) => {
   const data = args?.defaultProjectionData;
   if (data?.mainMatrix) return data;
   const mainMatrix = args?.modelViewProjectionMatrix ?? (Array.isArray(args) || ArrayBuffer.isView(args) ? args : null);

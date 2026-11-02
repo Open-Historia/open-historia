@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { groundMesh, mercatorX, mercatorY, regionBox, regionsInAreas } from "./battlefieldGround.js";
+import { GROUND_MESH_LONGEST, groundMesh, mercatorX, mercatorY, regionBox, regionsInAreas } from "./battlefieldGround.js";
 import {
   battlefieldSegmentIds,
   buildPoliticalBoundaryTopology,
@@ -65,6 +65,12 @@ test("the ground mesh covers each region with triangles marked by region", () =>
   const outer = (mercatorX(4) - mercatorX(0)) * (mercatorY(0) - mercatorY(4));
   const hole = (mercatorX(3) - mercatorX(1)) * (mercatorY(1) - mercatorY(3));
   assert.ok(Math.abs(area - (outer - hole)) < 1e-6, `area ${area} vs ${outer - hole}`);
+  // No triangle left long enough to sink under a globe's curve.
+  for (let i = 0; i < mesh.positions.length; i += 6) {
+    const [ax, ay, bx, by, cx, cy] = mesh.positions.slice(i, i + 6);
+    const longest = Math.max(Math.hypot(bx - ax, by - ay), Math.hypot(cx - bx, cy - by), Math.hypot(ax - cx, ay - cy));
+    assert.ok(longest <= GROUND_MESH_LONGEST + 1e-6, `a side ${longest} long`);
+  }
 });
 
 test("a region across the date line is one piece near the battlefield", () => {

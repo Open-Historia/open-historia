@@ -81,11 +81,35 @@ export const mercatorY = (lat) => {
 // A longitude moved by whole turns to lie nearest `anchor`.
 const near = (lng, anchor) => lng + 360 * Math.round((anchor - lng) / 360);
 
+// On a globe a triangle is drawn flat, a chord under the curve, and a long one
+// would sink away from the map's own shapes beside it: none is left longer than
+// this on the flat sheet (about a degree) or split more than this many times.
+export const GROUND_MESH_LONGEST = 1 / 360;
+const MOST_SPLITS = 6;
+
+const putTriangle = (out, regionOf, regionIndex, ax, ay, bx, by, cx, cy, longest, depth) => {
+  const ab = (bx - ax) ** 2 + (by - ay) ** 2;
+  const bc = (cx - bx) ** 2 + (cy - by) ** 2;
+  const ca = (ax - cx) ** 2 + (ay - cy) ** 2;
+  if (depth < MOST_SPLITS && Math.max(ab, bc, ca) > longest * longest) {
+    const [mx, my] = [(ax + bx) / 2, (ay + by) / 2];
+    const [nx, ny] = [(bx + cx) / 2, (by + cy) / 2];
+    const [ox, oy] = [(cx + ax) / 2, (cy + ay) / 2];
+    putTriangle(out, regionOf, regionIndex, ax, ay, mx, my, ox, oy, longest, depth + 1);
+    putTriangle(out, regionOf, regionIndex, mx, my, bx, by, nx, ny, longest, depth + 1);
+    putTriangle(out, regionOf, regionIndex, ox, oy, nx, ny, cx, cy, longest, depth + 1);
+    putTriangle(out, regionOf, regionIndex, mx, my, nx, ny, ox, oy, longest, depth + 1);
+    return;
+  }
+  out.push(ax, ay, bx, by, cx, cy);
+  regionOf.push(regionIndex, regionIndex, regionIndex);
+};
+
 // The regions cut into triangles on the map's flat sheet, near `anchorLng` (the
 // battlefield's middle, so a region across the date line is one piece):
 // `positions` two numbers a corner, three corners a triangle; `regionOf` the
 // region (its place in `regionIds`) each corner belongs to.
-export const groundMesh = ({ regions = [], regionIds = [], anchorLng = 0 } = {}) => {
+export const groundMesh = ({ regions = [], regionIds = [], anchorLng = 0, longest = GROUND_MESH_LONGEST } = {}) => {
   const byId = new Map(regions.map((region) => [String(region?.id ?? region?.properties?.id ?? ""), region]));
   const positions = [];
   const regionOf = [];
@@ -104,9 +128,9 @@ export const groundMesh = ({ regions = [], regionIds = [], anchorLng = 0 } = {})
       }
       if (flat.length < 6) continue;
       const triangles = earcut(flat, holes.length ? holes : undefined, 2);
-      for (const corner of triangles) {
-        positions.push(flat[corner * 2], flat[corner * 2 + 1]);
-        regionOf.push(regionIndex);
+      for (let at = 0; at < triangles.length; at += 3) {
+        const [a, b, c] = [triangles[at] * 2, triangles[at + 1] * 2, triangles[at + 2] * 2];
+        putTriangle(positions, regionOf, regionIndex, flat[a], flat[a + 1], flat[b], flat[b + 1], flat[c], flat[c + 1], longest, 0);
       }
     }
   });
