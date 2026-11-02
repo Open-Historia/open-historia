@@ -62,6 +62,7 @@ import { startingWearinessOf } from "../../runtime/militaryStats.js";
 import { landWeightsOf } from "../../runtime/militaryPower.js";
 import { populationFigureOf } from "../../runtime/populationFigure.js";
 import { normalizeWarWeariness, wearinessGoingIn, wearinessOf, withTurnWeariness } from "../../runtime/warWeariness.js";
+import { wearinessFromStrikes } from "../../runtime/fronts/airStrike.js";
 import { economyRate, withTurnResources } from "../../runtime/warResources.js";
 import { withTurnAttrition } from "../../runtime/attrition.js";
 import { middleFundingPerHead } from "../../runtime/militaryFunding.js";
@@ -367,6 +368,8 @@ export const turnWarAndPeace = ({ world = {}, baseWorld = {}, days = 0, date = "
     blockades: fronts?.sea?.blockades,
     // (And what attrition took, where the scenario's wars count it: runtime/fronts/attrition.js.)
     attrition: fronts?.attrition,
+    // (And what the war room's air strikes on its cities did: runtime/fronts/airStrike.js.)
+    bombed: wearinessFromStrikes(fronts?.airStrikes),
   });
   next = { ...next, warWeariness: weariness };
   // What attrition has cost each country at war (runtime/attrition.js).

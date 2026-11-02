@@ -28,6 +28,8 @@
 // spectacle every time it is played.
 
 import { fliesAsAircraft, isNuclear } from "../../runtime/strikes.js";
+import { mapKm, mapOffset } from "../../../server/mapDistance.js";
+import { currentMapMeasure } from "../../runtime/mapMeasure.js";
 
 const RAD = Math.PI / 180;
 const EARTH_KM = 6371;
@@ -136,13 +138,21 @@ const unit = (vector) => {
 const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
 // A longitude as the nearest of its turns to another.
 const unwrap = (lng, near) => lng + 360 * Math.round((near - lng) / 360);
+// (On a map that is not plain Mercator both go by its own measure: server/mapDistance.js.)
 export const rangeKm = (from, to) => {
+  const measure = currentMapMeasure();
+  if (!measure.plain) return mapKm(measure, from[0], from[1], to[0], to[1]);
   const a = toVector(from[0], from[1]);
   const b = toVector(to[0], to[1]);
   return EARTH_KM * Math.acos(clamp(a[0] * b[0] + a[1] * b[1] + a[2] * b[2], -1, 1));
 };
 // The place a distance from another, the way a bearing points (degrees clockwise from north).
 export const placeFrom = ([lng, lat], bearing, km) => {
+  const measure = currentMapMeasure();
+  if (!measure.plain) {
+    const [x, y] = mapOffset(measure, lng, lat, bearing, km);
+    return [measure.flat ? x : unwrap(x, lng), y];
+  }
   const angle = km / EARTH_KM;
   const phi = lat * RAD;
   const there = Math.asin(clamp(Math.sin(phi) * Math.cos(angle) + Math.cos(phi) * Math.sin(angle) * Math.cos(bearing * RAD), -1, 1));

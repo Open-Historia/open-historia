@@ -21,6 +21,8 @@ import { isAtTheFront, startFrontsSync, subscribeFronts } from "./frontsControll
 import { shortUnitLabel } from "./unitLabels.js";
 import { resolveUnitFlagUrl, syncUnitFlagIcons } from "./unitFlagIcons.js";
 import { useWorldState } from "./useWorldState.js";
+import { mapRing } from "../../../server/mapDistance.js";
+import { currentMapMeasure } from "../../runtime/mapMeasure.js";
 import { createOwnerRgbResolver, ownerDisplayCss } from "./ownerColors.js";
 
 export { shortUnitLabel };
@@ -89,6 +91,9 @@ const UNOWNED_UNIT_COLOR = "rgb(120, 120, 120)";
 // on a circle layer's radius, which is measured in screen pixels and would grow
 // and shrink with the zoom instead of marking a fixed patch of ocean.
 const stationRing = (lng, lat, radiusKm) => {
+  // (A map that is not plain Mercator draws it by its own measure: server/mapDistance.js.)
+  const measure = currentMapMeasure();
+  if (!measure.plain) return mapRing(measure, lng, lat, radiusKm, STATION_RING_POINTS);
   const toRad = (deg) => (deg * Math.PI) / 180;
   const toDeg = (rad) => (rad * 180) / Math.PI;
   const delta = radiusKm / EARTH_RADIUS_KM;

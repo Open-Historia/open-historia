@@ -7,6 +7,7 @@ import { isFictionalWorld } from "../../runtime/scenarioCanon.js";
 import { normalizeRegionTypes } from "../../runtime/regionTypes.js";
 import { battlefieldHeldClaimants } from "../../runtime/fronts/heldRegions.js";
 import { mapViewOf, projectionIsDefault, sheetBounds } from "../../../server/mapProjection.js";
+import { noteMapMeasure } from "../../runtime/mapMeasure.js";
 
 // Map-facing world store — R5.0 event-driven edition.
 //
@@ -313,6 +314,8 @@ const stabilizeMapStateReferences = (prev, next) => {
 const publish = ({ force = false } = {}) => {
   const state = effectiveState();
   if (!state) return;
+  // What the map measures distances by (runtime/mapMeasure.js), for what it draws in kilometres.
+  noteMapMeasure(state);
   const rawNext = deriveMapState(state);
   const startedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
   const next = force

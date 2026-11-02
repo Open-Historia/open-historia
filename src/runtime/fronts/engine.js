@@ -34,6 +34,7 @@ import { levyOwed, musterShare } from "./muster.js";
 import { DEPLOY_USUAL, DEPLOY_WHY, deployCells } from "./deploy.js";
 import { linesChanged } from "./walls.js";
 import { AIR_MISSIONS, wingChanges } from "./air.js";
+import { bombTroops } from "./airStrike.js";
 import { MILITARY_NEUTRAL, airWorth, landWorth, mixOf, readMilitary, seaWorth } from "./military.js";
 import { absorbUnit, holderOf, isLandFormation, keepStart, lineLength, loadBattle, memberIndex, memberWeights, openBattle, paintGround, raiseTroops, readRegion, reconcile, releaseNamed, saveBattle, setHandicap, setRadii, sideOfName } from "./battle.js";
 import { buildBrief } from "./brief.js";
@@ -90,7 +91,7 @@ import { SWARM_FORM, gatherNewcomers } from "./swarms.js";
 import { TRANSPORT_ENDED, boundFor, interceptionOf, loadOf, moveOn, normalizeTransports, setOut, struck, transportChance } from "./transports.js";
 import { describePoint, findPlace, inSector, resolveSector } from "./sectors.js";
 import { STATE_HOLDING, createTroop, isLive, kindsFor, liveCount, troopsCap, troopsFactor, troopsLeast, troopsWanted } from "./troops.js";
-import { buildWorldGrid, kmBetween, placeAlong, worldSheetKey } from "./worldGrid.js";
+import { buildWorldGrid, kmBetween, measureOptions, placeAlong, worldSheetKey } from "./worldGrid.js";
 
 const clean = (value, max = 120) => String(value ?? "").replace(/\s+/g, " ").trim().slice(0, max).trim();
 const fold = (value) => clean(value).toLowerCase();
@@ -408,7 +409,7 @@ const landWhereTroopsStand = (run, war, day) => {
   }
   if (standing.length === 0) return;
   const map = run.input.map;
-  const near = (a, b) => kmBetween(a.lng, a.lat, b.lng, b.lat, { flat: map?.flat === true, scale: map?.scale }) <= STANDING_REACH_KM;
+  const near = (a, b) => kmBetween(a.lng, a.lat, b.lng, b.lat, measureOptions(map)) <= STANDING_REACH_KM;
   let best = null;
   let most = 0;
   for (const entry of standing) {
@@ -1498,6 +1499,8 @@ const applyMoments = (run, day) => {
     if (moment.type === "order") applyOrderMoment(run, moment, day);
     else if (moment.type === "war") applyWarMoment(run, moment, day);
     else if (moment.type === "reinforce") applyReinforce(run, moment);
+    // An air strike the war room ordered, flown before the period (airStrike.js): its bombs on whoever stands there.
+    else if (moment.type === "airstrike") bombTroops(run, moment, day);
     else if (moment.type === "control") {
       // Someone other than the engine changed who controls a region: the world wins.
       const id = clean(moment.regionId);
@@ -1766,7 +1769,7 @@ const worldGridOf = (run) => {
   if (run.worldGrid) return run.worldGrid;
   const regions = regionsOf(run);
   if (!regions) throw REGIONS_NEEDED;
-  const grid = buildWorldGrid(regions, { flat: map.flat === true, scale: map.scale, water });
+  const grid = buildWorldGrid(regions, { ...measureOptions(map), water });
   if (grid && clean(map.key) && run.cache) run.cache.set(key, grid);
   run.worldGrid = grid;
   return grid;
@@ -1790,10 +1793,10 @@ const holderAtPoint = (run, grid, war, lng, lat) => {
   return mark ? clean(holderIn(run, war, grid.ids[mark])) : "";
 };
 const cityNear = (run, lng, lat, withinKm) => {
-  const flat = run.input.map?.flat === true;
+  const measure = measureOptions(run.input.map);
   let best = null;
   for (const city of Array.isArray(run.input.map?.cities) ? run.input.map.cities : []) {
-    const far = kmBetween(lng, lat, Number(city.lng), Number(city.lat), { flat, scale: run.input.map?.scale });
+    const far = kmBetween(lng, lat, Number(city.lng), Number(city.lat), measure);
     if (far <= withinKm && (!best || far < best.far)) best = { far, name: clean(city.name) };
   }
   return best ? `city: ${best.name}` : "";
@@ -1843,13 +1846,13 @@ const seatOf = (run, grid, war, wanted) => {
 // cities, the nearest to where it is sent first (a ship from a country whose
 // capital is far inland sails from its nearest port).
 const originsOf = (run, grid, war, transport) => {
-  const flat = run.input.map?.flat === true;
+  const measure = measureOptions(run.input.map);
   const mine = [];
   for (const city of Array.isArray(run.input.map?.cities) ? run.input.map.cities : []) {
     const lng = Number(city.lng);
     const lat = Number(city.lat);
     if (!Number.isFinite(lng + lat) || fold(holderAtPoint(run, grid, war, lng, lat)) !== fold(transport.owner)) continue;
-    mine.push({ lng, lat, name: `city: ${clean(city.name)}`, far: kmBetween(lng, lat, transport.to.lng, transport.to.lat, { flat, scale: run.input.map?.scale }) });
+    mine.push({ lng, lat, name: `city: ${clean(city.name)}`, far: kmBetween(lng, lat, transport.to.lng, transport.to.lat, measure) });
   }
   mine.sort((a, b) => a.far - b.far || a.name.localeCompare(b.name));
   return mine.slice(0, 8);
@@ -2042,7 +2045,7 @@ const beginTransports = (run) => {
 // reach it may catch it, and at the end of its way it puts its troops down.
 const moveTransports = (run, day) => {
   const map = run.input.map ?? {};
-  const options = { flat: map.flat === true, scale: map.scale };
+  const options = measureOptions(map);
   const date = run.dateOf(day);
   for (let index = 0; index < run.transports.length; index += 1) {
     const before = run.transports[index];

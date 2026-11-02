@@ -51,6 +51,7 @@ test("the game's screen plays the at-war music for a war in the ledger, battlefi
   assert.ok(screen.includes("const inWar = useRuntimeState(\"world\", (world) => playerAtWar(world?.wars, playerCountry), playerCountry);"));
   assert.ok(screen.includes("atWar: atWar || inWar, war: battlefieldShown });"));
   // The war room's button is still the battlefields' alone.
-  assert.ok(screen.includes("const atWar = Boolean(warFronts) && isActiveFeatureEnabled(\"fronts\");"));
+  // (Battlefields being on is the Wars feature's Fronts switch.)
+  assert.ok(screen.includes("const atWar = Boolean(warFronts) && activeWars().battlefields;"));
   assert.ok(screen.includes("{(atWar || isWarRoomOpen) && ("));
 });

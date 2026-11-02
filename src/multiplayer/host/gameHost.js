@@ -31,6 +31,8 @@ import { acceptStructure, canSettleStructure, moveStructure } from "../../runtim
 import { applyWarRoomOp, cleanWarRoomOp } from "../../runtime/fronts/warRoomOps.js";
 import { applyFortifyOp, cleanFortifyOp } from "../../runtime/fronts/fortifyOps.js";
 import { applyFleetOp, cleanFleetOp } from "../../runtime/naval/fleetOps.js";
+import { applyAirStrikeOp, cleanAirStrikeOp } from "../../runtime/fronts/airStrikeOps.js";
+import { activeWars } from "../../runtime/gameFeatures.js";
 import { eraSettingOf } from "../../runtime/warSettings.js";
 import { humanCountriesOf } from "../../runtime/humanPolities.js";
 import { playerDiplomacy } from "../../Game/AI/warAndPeace.js";
@@ -455,6 +457,26 @@ export const createGameHost = ({
       let refusal = "";
       await store.updateForces(({ world, game }) => {
         const result = applyFleetOp(world, sent, { player: seat.country, date: clean(game?.gameDate), round: game?.round, chart, at: new Date(now()).toISOString() });
+        if (result.error) {
+          refusal = result.error;
+          return null;
+        }
+        return { world: result.world };
+      });
+      round.touch(seat.country);
+      return refusal;
+    },
+    // The war room's air strikes (runtime/fronts/airStrikeOps.js), by the same
+    // rule: the air unit must be the seat's country's, and a city struck is held
+    // to the host's own map. Flown when the round is resolved.
+    airstrike: async (connection, { op }, seat) => {
+      if (round.status().phase === "resolving") return "The round is being resolved: order it once it has landed.";
+      const sent = cleanAirStrikeOp(op);
+      if (!sent) return "Nothing was asked.";
+      const chart = sent.op === "airstrike" && sent.kind === "city" ? await Promise.resolve().then(readChart).catch(() => null) : null;
+      let refusal = "";
+      await store.updateForces(({ world, game }) => {
+        const result = applyAirStrikeOp(world, sent, { player: seat.country, date: clean(game?.gameDate), round: game?.round, chart, air: activeWars().air });
         if (result.error) {
           refusal = result.error;
           return null;

@@ -9,7 +9,7 @@ import { GameLoadingScreen, LOADING_CEILING_MS, useGameLoading } from "./gameLoa
 import { setOpenGameCountry, useLibraryState } from "../../runtime/library.js";
 import { playerAtWar } from "../../runtime/playerAtWar.js";
 import { enterGame, useGameEntered } from "../../runtime/gameEntry.js";
-import { useActiveFeatures, isActiveFeatureEnabled } from "../../runtime/gameFeatures.js";
+import { useActiveFeatures, activeWars } from "../../runtime/gameFeatures.js";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
 import { brushedMetalUrl } from "./brushedMetal.js";
 import { playerFrontsKey } from "./warRoomData.js";
@@ -670,7 +670,7 @@ const Main = ({
   // Nobody is playing a game that has not been opened: no country, so no war.
   const playerCountry = gameEntered ? activeGame?.country || "" : "";
   const warFronts = useRuntimeState("world", (world) => playerFrontsKey(world?.battlefields, playerCountry, world?.wars), playerCountry);
-  const atWar = Boolean(warFronts) && isActiveFeatureEnabled("fronts");
+  const atWar = Boolean(warFronts) && activeWars().battlefields;
   // For the music, at war is wider than the war room's button: the player's
   // country on a side of a war being fought (the war ledger), whether or not
   // there is a battlefield for it or fronts are switched on.

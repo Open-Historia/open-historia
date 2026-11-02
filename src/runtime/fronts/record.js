@@ -137,7 +137,8 @@ const normalizeOrder = (raw) => {
 // "pocket", "siege", "taken", "destroyed", "assault", "invaded" for a
 // country a side sent its troops into, "attacked" for one it went to war with
 // by attacking, and "withdrew" and "returned" for a side that took its troops
-// off the battlefield and brought them back.)
+// off the battlefield and brought them back, and "bombed" for an air strike
+// the war room ordered: fronts/airStrike.js.)
 const normalizeOrders = (value) => {
   const kept = [];
   const count = [0, 0];

@@ -36,7 +36,9 @@
 // Pure, and loads in plain Node.
 
 import { MANPOWER_SHARE } from "./fronts/constants.js";
-import { kmBetween } from "./fronts/worldGrid.js";
+import { kmBetween, measureOptions } from "./fronts/worldGrid.js";
+import { engineMapOf, worldMeasureOf } from "../../server/mapDistance.js";
+import { currentMapMeasure } from "./mapMeasure.js";
 import { fundingFactor, middleFundingPerHead } from "./militaryFunding.js";
 import { militaryLookup } from "./militaryStats.js";
 import { populationFigureOf } from "./populationFigure.js";
@@ -84,14 +86,16 @@ export const buildDays = ({ km = 0, level = FORTIFY_LEVEL_USUAL, funding = 1, me
   return Math.max(BUILD_DAYS_LEAST, Math.min(BUILD_DAYS_MOST, Math.round(days)));
 };
 
-// How long a line is, in kilometres, measured as the engine measures it (fronts/walls.js readLines).
-export const lineKm = (points) => {
+// How long a line is, in kilometres, measured as the engine measures it (fronts/walls.js readLines),
+// on the map whose measure is given (server/mapDistance.js), by default the one being played.
+export const lineKm = (points, measure = currentMapMeasure()) => {
   const line = Array.isArray(points) ? points : [];
+  const options = measureOptions(engineMapOf(measure));
   let total = 0;
   for (let index = 1; index < line.length; index += 1) {
     const [lngA, latA] = line[index - 1] ?? [];
     const [lngB, latB] = line[index] ?? [];
-    if ([lngA, latA, lngB, latB].every(Number.isFinite)) total += kmBetween(lngA, latA, lngB, latB);
+    if ([lngA, latA, lngB, latB].every(Number.isFinite)) total += kmBetween(lngA, latA, lngB, latB, options);
   }
   return total;
 };
@@ -148,8 +152,9 @@ export const fortifyCostReckoner = (world, country) => {
   const funding = fundingOf(world, country);
   const people = peopleOf(world, country);
   const men = people > 0 ? Math.round(people * manpowerShareOf(world, country)) : 0;
+  const measure = worldMeasureOf(world);
   return (points, level) => {
-    const km = lineKm(points);
+    const km = lineKm(points, measure);
     const height = fortifyLevelOf(level);
     return {
       km: Math.round(km * 10) / 10,

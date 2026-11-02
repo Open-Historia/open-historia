@@ -16,6 +16,7 @@
 
 import { lazy } from "react";
 
+import { AIR_RAID_CHROME } from "./airRaidChrome.js";
 import { CHRONICLE_CHROME } from "./chronicleChrome.js";
 import { ESPIONAGE_2_CHROME } from "./espionage2Chrome.js";
 import { MUSIC_CHROME } from "./musicChrome.js";
@@ -24,6 +25,7 @@ import { SWARMS_CHROME } from "./swarmsChrome.js";
 import { WARS_AND_FRONTS_2_CHROME } from "./warsAndFronts2Chrome.js";
 
 export const THEMES = Object.freeze({
+  airRaid: { Page: lazy(() => import("./AirRaid.jsx")), chrome: AIR_RAID_CHROME },
   espionage2: { Page: lazy(() => import("./Espionage2.jsx")), chrome: ESPIONAGE_2_CHROME },
   swarms: { Page: lazy(() => import("./Swarms.jsx")), chrome: SWARMS_CHROME },
   warsAndFronts2: { Page: lazy(() => import("./WarsAndFronts2.jsx")), chrome: WARS_AND_FRONTS_2_CHROME },

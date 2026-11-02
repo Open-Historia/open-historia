@@ -54,7 +54,9 @@ import { loadBackgroundFile, rebuildPersistedBackground, vectorLayerToGeoJSON } 
 import ProjectionPanel from "./ProjectionPanel.jsx";
 import { DETAILED_MAP_CONVERSION_MESSAGE, hasDetailedMap, moveFeatureCoords, moveUnits, moveWarShapes, planBasemapChange } from "./projectionConvert.js";
 import { reprojectPicture } from "./projectionImage.js";
-import { convertPlane, normalizeProjection, sameProjection } from "../../server/mapProjection.js";
+import { convertPlane, convertScaleLine, normalizeProjection, sameProjection } from "../../server/mapProjection.js";
+import { mapKm, mapMeasureOf } from "../../server/mapDistance.js";
+import { SCALE_TOOL, scaleLabelOf } from "./scaleLineLayer.js";
 import { addBackgroundToLibrary, getBasemapPayload } from "../runtime/basemapLibrary.js";
 import { saveDocument, loadDocument, downloadJson } from "./documentIO.js";
 import { createSaveRunner, isUnsavedStatus, saveRetryDelay, settleUnsavedWork } from "./documentSaving.js";
@@ -542,6 +544,33 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     return () => { alive = false; };
   }, [customBg]);
   const [projectionBusy, setProjectionBusy] = useState(false);
+  // The Projection panel's scale line (ProjectionPanel.jsx): one just drawn
+  // with the Scale line tool and waiting for its distance, { from, to }.
+  const [scaleDraft, setScaleDraft] = useState(null);
+  const projectionNow = d.metadata?.projection;
+  const savedScale = useMemo(() => normalizeProjection(projectionNow).scale ?? null, [projectionNow]);
+  // What a line measures on the map as it is now (server/mapDistance.js).
+  const kmOfLine = useCallback((from, to) => mapKm(mapMeasureOf(projectionNow), from[0], from[1], to[0], to[1]), [projectionNow]);
+  const leaveScaleTool = () => {
+    setScaleDraft(null);
+    if (d.activeTool === SCALE_TOOL) d.setActiveTool("select");
+  };
+  const patchScale = (scale) => {
+    const next = { ...normalizeProjection(d.metadata?.projection) };
+    if (scale) next.scale = scale;
+    else delete next.scale;
+    d.patchMetadata({ projection: next });
+  };
+  // Shown on the map while the panel is open: the line just drawn, else the saved one.
+  const shownScale = openPanel === "projection" ? (scaleDraft ?? savedScale) : null;
+  const shownScaleLabel = !shownScale ? "" : scaleDraft ? scaleLabelOf(kmOfLine(scaleDraft.from, scaleDraft.to), { about: true }) : scaleLabelOf(savedScale.km);
+  // The panel closed some other way (its chip in the bottom bar): the Scale line tool is put down too.
+  useEffect(() => {
+    if (openPanel === "projection") return;
+    setScaleDraft(null);
+    if (d.activeTool === SCALE_TOOL) d.setActiveTool("select");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openPanel]);
   const [projectionError, setProjectionError] = useState("");
   // A detailed map cannot be converted with the map (projectionConvert.js).
   const mapHasDetailedMap = hasDetailedMap(d.doc);
@@ -553,6 +582,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     const from = normalizeProjection(d.metadata?.projection);
     const to = normalizeProjection(target);
     if (sameProjection(from, to)) return;
+    setScaleDraft(null);
     setProjectionBusy(true);
     setProjectionError("");
     try {
@@ -599,8 +629,10 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
       // The scenario's other drawn basemaps move with it; a picture fills the
       // sheet in any projection and stays as it is.
       const movedOwnBasemaps = moveOwnBasemapsBetween(d.doc?.metadata?.ownBasemaps, from, to);
-      // The two switches about how the game shows the map stay as they were.
-      d.patchMetadata({ projection: { ...to, ...(from.globe === false ? { globe: false } : {}), ...(from.wrap === false ? { wrap: false } : {}) }, ...(plan.kind === "tiles" ? { customBackground: null } : {}), ...(movedOwnBasemaps ? { ownBasemaps: movedOwnBasemaps } : {}) });
+      // The two switches about how the game shows the map stay as they were,
+      // and the scale line goes where its two ends go.
+      const scale = from.scale ? convertScaleLine(from, to, from.scale) : null;
+      d.patchMetadata({ projection: { ...to, ...(from.globe === false ? { globe: false } : {}), ...(from.wrap === false ? { wrap: false } : {}), ...(scale ? { scale } : {}) }, ...(plan.kind === "tiles" ? { customBackground: null } : {}), ...(movedOwnBasemaps ? { ownBasemaps: movedOwnBasemaps } : {}) });
       if (nextBg !== customBg) {
         setCustomBg(nextBg);
         // A redrawn picture is no longer the one in Your basemaps.
@@ -1551,6 +1583,13 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         onWarShapeCreate={createWarShape}
         onWarShapeChange={changeWarShape}
         onWarShapeRemove={removeWarShape}
+        scaleLine={shownScale}
+        scaleLabel={shownScaleLabel}
+        scaleSketchLabel={(from, to) => scaleLabelOf(kmOfLine(from, to), { about: true })}
+        // The tool stays out until the distance is set or the line is cancelled:
+        // put down at once, the click that ended the line would also pick the
+        // region under it. Another line drawn meanwhile replaces this one.
+        onScaleLineDraw={(from, to) => setScaleDraft({ from, to })}
       />
       </div>
 
@@ -1707,7 +1746,27 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
             }
             d.patchMetadata({ projection: next });
           }}
-          onClose={() => setOpenPanel(null)}
+          scaleDraft={scaleDraft}
+          draftKm={scaleDraft ? kmOfLine(scaleDraft.from, scaleDraft.to) : 0}
+          drawingScale={d.activeTool === SCALE_TOOL}
+          onDrawScale={() => {
+            setScaleDraft(null);
+            d.setActiveTool(SCALE_TOOL);
+          }}
+          onCancelScale={leaveScaleTool}
+          onSetScale={(km) => {
+            if (!scaleDraft) return;
+            patchScale({ from: scaleDraft.from, to: scaleDraft.to, km });
+            leaveScaleTool();
+          }}
+          onClearScale={() => {
+            patchScale(null);
+            leaveScaleTool();
+          }}
+          onClose={() => {
+            leaveScaleTool();
+            setOpenPanel(null);
+          }}
         />
       )}
       {openPanel === "reference" && (

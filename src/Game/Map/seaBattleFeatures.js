@@ -14,6 +14,8 @@
 
 import { NAVAL_REACH_KM } from "../../runtime/naval/engine.js";
 import { eraOf } from "../../runtime/unitMotion.js";
+import { mapRing } from "../../../server/mapDistance.js";
+import { currentMapMeasure } from "../../runtime/mapMeasure.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const fold = (value) => clean(value).toLowerCase();
@@ -60,6 +62,9 @@ const KM_A_DEGREE = 111.32;
 
 // A ring `km` round a place, as a closed line.
 const ringOf = (lng, lat, km) => {
+  // (A map that is not plain Mercator draws it by its own measure: server/mapDistance.js.)
+  const measure = currentMapMeasure();
+  if (!measure.plain) return mapRing(measure, lng, lat, km, BLOCKADE_RING_POINTS);
   const across = Math.max(0.05, Math.cos((Math.min(85, Math.abs(lat)) * Math.PI) / 180));
   const points = [];
   for (let step = 0; step <= BLOCKADE_RING_POINTS; step += 1) {

@@ -51,7 +51,7 @@ test("the war room is the player's when his troops are on a battlefield with a w
 
 test("the button is there only while there is a war, beside the dock where Search otherwise is", () => {
   assert.match(main, /const warFronts = useRuntimeState\("world", \(world\) => playerFrontsKey\(world\?\.battlefields, playerCountry, world\?\.wars\), playerCountry\);/);
-  assert.match(main, /const atWar = Boolean\(warFronts\) && isActiveFeatureEnabled\("fronts"\);/);
+  assert.match(main, /const atWar = Boolean\(warFronts\) && activeWars\(\)\.battlefields;/);
   assert.match(main, /\{\(atWar \|\| isWarRoomOpen\) && \(\s*<WarRoomButton open=\{warRoomShown\} isMobile=\{isMobile\} onToggle=\{toggleWarRoom\} \/>\s*\)\}/);
   // It takes Search's place, and Search begins beyond it.
   assert.match(main, /<Search mapRef=\{mapRef\} besideWarRoom=\{atWar\} \/>/);
@@ -152,8 +152,9 @@ test("the war room writes through its own seam and asks one request a message", 
 
 test("a scenario's fronts are authored in the Workshop and built when its game is first entered", () => {
   const library = read("libraryBar.jsx");
-  assert.match(library, /\? \["overview", "world", "history", "fronts", "politics"/);
-  assert.match(library, /\{editorSection === "fronts" && kind === "scenario" && \(\s*<ScenarioFrontsPanel/);
+  // Under the Wars feature in the Features tab, which was the War tab (2026-11-01).
+  assert.match(library, /\? \["overview", "world", "history", "politics"/);
+  assert.match(library, /extras=\{kind === "scenario" \? \{\s*fronts: \([\s\S]*?<ScenarioFrontsPanel/);
   assert.match(read("ScenarioFrontsPanel.jsx"), /await saveScenario\(scenarioId, \{ worldPatch: \{ scenarioFronts: fronts \} \}\);\s*onDetailsChange\?\.\(nextDetails\);/);
   const time = read("time.jsx");
   assert.match(time, /maybeOpenScenarioFronts\(\)\s*\.then\(\(outcome\) => \{\s*if \(outcome === "later"\) scenarioFrontsAttemptedRef\.current = false;/);

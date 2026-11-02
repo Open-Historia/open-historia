@@ -58,17 +58,21 @@ import {
   DEFAULT_PATROL_RADIUS_KM,
   daysBetweenDates,
   haversineKm,
+  kmOnMap,
   maxTravelKm,
   patrolPoint,
   stepToward,
   wrapLng,
 } from "./unitMotion.js";
+import { noteMapMeasure } from "./mapMeasure.js";
 import { compareGameDates, normalizeGameDate } from "./gameDates.js";
 import { normalizeBattlefields, withWarIdFrontsRenamed } from "./fronts/record.js";
 import { normalizeTransports } from "./fronts/transports.js";
 import { normalizeStrikes } from "./strikes.js";
+import { normalizeAirStrikeOrders, normalizeAirStrikes } from "./fronts/airStrike.js";
 import { battlefieldHeldClaimants } from "./fronts/heldRegions.js";
 import { sharedGameHostCountry } from "./humanPolities.js";
+import { activeWars } from "./gameFeatures.js";
 
 export const GAME_DEFAULTS = {
   country: "",
@@ -271,6 +275,10 @@ export const WORLD_DEFAULTS = {
   // The missiles and bombing runs the last turns' events told of, for the map
   // to play (strikes.js). They change nothing by themselves.
   strikes: [],
+  // The air strikes the war room ordered, waiting for time to pass, and those
+  // of the last turns as they went (fronts/airStrike.js).
+  airStrikeOrders: [],
+  airStrikes: [],
   // The battles the last turns' fleets fought (naval/record.js), for the map to
   // mark. What a battle did to the fleets is on the fleets.
   seaBattles: [],
@@ -1353,7 +1361,7 @@ export const normalizeUnits = (units) =>
 // re-exported here because promptContext.js and the order pruning below have
 // always imported it from this module. There used to be two copies of this
 // function (here and unitCombat.js's `distanceKm`); now there is one.
-export { haversineKm };
+export { haversineKm, kmOnMap };
 
 const PENDING_ORDER_KIND_SET = new Set(["move", "patrol"]);
 
@@ -1431,7 +1439,7 @@ export const pruneSatisfiedUnitOrders = (units, orders) => {
     // it there left a division 59 km short of its destination reading "moving" with
     // nothing to move it. The radius is for a unit already standing near.
     if (unit.status === "moving") return true;
-    return haversineKm(unit.lat, unit.lng, order.toLat, order.toLng) > PENDING_ORDER_ARRIVAL_KM;
+    return kmOnMap(unit.lat, unit.lng, order.toLat, order.toLng) > PENDING_ORDER_ARRIVAL_KM;
   });
 };
 
@@ -2914,7 +2922,7 @@ export const buildOwnerFootprint = (world, ownerCode, extraAnchors = []) => {
 const nearestKm = (point, anchors) => {
   let best = Infinity;
   for (const anchor of anchors) {
-    const distance = haversineKm(point.lat, point.lng, anchor.lat, anchor.lng);
+    const distance = kmOnMap(point.lat, point.lng, anchor.lat, anchor.lng);
     if (distance < best) best = distance;
   }
   return best;
@@ -3044,6 +3052,11 @@ export const applyUnitOpBatch = (units, orders, ops, context = {}) => {
       // marked his oil and gas sites with units ("GSI Arzew", "Hub Sud"), and
       // each skip that told of them raised a twin beside or far from it.
       if (sameFormationOnMap(next, op.unit)) continue;
+      // Nor of a kind the scenario fights without (the Wars feature): no air unit with air units off, no fleet
+      // with navies off. (A story ship is no fleet: it is drawn, and guards nothing.)
+      const wars = activeWars();
+      const spawnType = String(op.unit?.type ?? "").toLowerCase();
+      if ((!wars.air && spawnType === "air") || (!wars.navies && spawnType === "naval" && !op.unit?.storyVessel)) continue;
 
       const unit = { ...op.unit };
       // A story ship is a ship whatever the model called it, unlisted because
@@ -3120,7 +3133,7 @@ export const applyUnitOpBatch = (units, orders, ops, context = {}) => {
               posture,
               era,
               seaShare: op.seaShare ?? null,
-              remainingKm: haversineKm(unit.lat, unit.lng, op.toLat, op.toLng),
+              remainingKm: kmOnMap(unit.lat, unit.lng, op.toLat, op.toLng),
             });
         const step = stepToward(unit, { lng: op.toLng, lat: op.toLat }, budget);
 
@@ -3292,7 +3305,7 @@ export const advanceStandingOrders = (
         posture: unit.posture,
         era: eraSettingOf(world),
         seaShare: order.seaShare ?? null,
-        remainingKm: haversineKm(unit.lat, unit.lng, order.toLat, order.toLng),
+        remainingKm: kmOnMap(unit.lat, unit.lng, order.toLat, order.toLng),
       }),
     );
     if (step.arrived && unit.posture === "patrol") stations.set(unit.id, { lng: step.lng, lat: step.lat, type: unit.type });
@@ -4588,6 +4601,8 @@ export const normalizeWorldState = (world) => {
     battlefields: normalizeBattlefields(nextWorld.battlefields),
     transports: normalizeTransports(nextWorld.transports),
     strikes: normalizeStrikes(nextWorld.strikes),
+    airStrikeOrders: normalizeAirStrikeOrders(nextWorld.airStrikeOrders),
+    airStrikes: normalizeAirStrikes(nextWorld.airStrikes),
     seaBattles: normalizeSeaBattles(nextWorld.seaBattles),
     naviesRaised: normalizeNaviesRaised(nextWorld.naviesRaised),
     blockades: normalizeBlockades(nextWorld.blockades),
@@ -4770,14 +4785,18 @@ export const readWorldStateView = async ({ force = false } = {}) => {
   worldViewRaw = raw;
   worldViewCatalog = catalog;
   worldViewNormalized = normalized;
+  noteMapMeasure(normalized);
   return normalized;
 };
 
-export const readWorldState = async ({ force = false } = {}) =>
-  withMapClaims(
+export const readWorldState = async ({ force = false } = {}) => {
+  const world = withMapClaims(
     normalizeWorldState(await readJson(JSON_URLS.world, { defaultValue: WORLD_DEFAULTS, force })),
     getPrimedScenarioRegionCatalog(),
   );
+  noteMapMeasure(world);
+  return world;
+};
 
 // Same-tab cache agreement after a country Stats commit.
 //
@@ -4847,6 +4866,7 @@ export const primeCountryStatsWorkerCommit = async ({
 
 export const writeWorldState = async (world, options = {}) => {
   const normalized = normalizeWorldState(world);
+  noteMapMeasure(normalized);
   // Polity names, aliases and notes written during play are not queued for
   // translation: the AI writes them in the player's language already, and the
   // player types theirs in it. A scenario's own polities are content, queued

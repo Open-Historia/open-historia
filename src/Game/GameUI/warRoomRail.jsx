@@ -5,6 +5,8 @@
 // keeps what is read (the generals, the plans, the talk). At its foot, two that
 // are not for troops: Fortify, a line drawn to be built (warRoomFortify.jsx),
 // and Fleets, the plate that commands the player's fleets (warRoomFleets.jsx).
+// Beside Deploy, Aircraft: the plate that sends an air unit to strike
+// (warRoomAircraft.jsx).
 //
 // Beside the rail, a small plate says what the tool in hand wants done, how
 // many troops are picked out, and why nothing can be ordered when it cannot.
@@ -65,6 +67,8 @@ const CarrierWord = ({ medium }) => {
 const DiversionIcon = () => <Icon dashed><path d="M4 18c2-7 6-9 14-10" /><path d="M14.5 4.6L18.4 8l-3.2 3.9" strokeDasharray="0" /></Icon>;
 // A line with three counters standing on it.
 const DeployIcon = () => <Icon><path d="M3 19h18" /><path d="M4.5 11h4v4h-4z" /><path d="M10 11h4v4h-4z" /><path d="M15.5 11h4v4h-4z" /></Icon>;
+// An aircraft from above, and what it drops.
+const AircraftIcon = () => <Icon><path d="M12 2.5l1.2 5.5 6.8 4v1.7l-6.8-1.9-.4 3.6 2.2 1.6v1.2L12 17.5l-3 .7V17l2.2-1.6-.4-3.6L4 13.7V12l6.8-4z" /><path d="M7 20.5h.01M12 21.5h.01M17 20.5h.01" strokeWidth="2.6" /></Icon>;
 // A wall and its battlements.
 const FortifyIcon = () => <Icon><path d="M3.5 20.5v-11h3v-3h3v3h5v-3h3v3h3v11z" /><path d="M10 20.5v-4.5h4v4.5" /></Icon>;
 // A hull and its sail, from the side.
@@ -126,16 +130,20 @@ const Rule = () => <div aria-hidden="true" style={{ background: STEEL.seam, boxS
 //   onReturn     a side that withdrew is sent back
 //   canFortify   fortified lines are part of this scenario's wars, so one may be drawn
 //   drafted      a line has been drawn and waits for its level (warRoomFortify.jsx)
+//   navies       the scenario's wars have navies (the Wars feature): without them there is no Fleets key
 //   fleets       how many fleets the player has; fleetsOut, the fleets' plate is out (warRoomFleets.jsx)
 //   onFleets     the fleets' plate is put out, or away
 //   station      what a click orders for the fleet picked out, while the fleet tool is in hand
 //   deployCount  how many fresh formations it calls up as typed, "" for a usual draft (runtime/fronts/deploy.js);
 //                onDeployCount, typed
 //   deployForm   what the Deploy tool deploys, "front" or "swarm" (runtime/fronts/swarms.js); onDeployForm, chosen
+//   aircraft     the scenario's wars have air units (the Wars feature): without them there is no Aircraft key
+//   wings        how many air units the player has; aircraftOut, the aircraft's plate is out (warRoomAircraft.jsx);
+//                onAircraft, the plate is put out, or away
 //   supply       the map shades how well supplied the ground is (Map/warRoomCells.js); onSupply, shown or not;
 //                supplyAreas, how much of it is stretched and cut off, in km²
 //   foot         how much of the screen's foot the drawer covers, in px (a phone's folded drawer): the rail ends above it
-const WarRoomRail = ({ shown, top, isMobile, tool, selected, locked, turnRunning, notice, carriers = [], own = 0, away = false, onTool, onOrder, onRelease, onClear, onCarrier, onWithdraw, onReturn, canFortify = false, drafted = false, fleets = 0, fleetsOut = false, onFleets = () => {}, station = "", deployForm = "front", onDeployForm = () => {}, deployCount = "", onDeployCount = () => {}, supply = false, onSupply = () => {}, supplyAreas = null, foot = 0 }) => {
+const WarRoomRail = ({ shown, top, isMobile, tool, selected, locked, turnRunning, notice, carriers = [], own = 0, away = false, onTool, onOrder, onRelease, onClear, onCarrier, onWithdraw, onReturn, canFortify = false, drafted = false, navies = true, fleets = 0, fleetsOut = false, onFleets = () => {}, station = "", deployForm = "front", onDeployForm = () => {}, aircraft = true, wings = 0, aircraftOut = false, onAircraft = () => {}, deployCount = "", onDeployCount = () => {}, supply = false, onSupply = () => {}, supplyAreas = null, foot = 0 }) => {
   const none = selected.length === 0;
   const drawing = tool !== "pan";
   // The choice of carrier, open beside the rail.
@@ -240,10 +248,12 @@ const WarRoomRail = ({ shown, top, isMobile, tool, selected, locked, turnRunning
         <RailKey label="Transport" title="Transport: carry these troops by ship, rail or air to a place your side has no border with" on={tool === "transport" || choice} disabled={locked || none} onClick={() => (tool === "transport" ? onTool("pan") : setChoosing((value) => !value))}><ShipIcon /></RailKey>
         <RailKey label="Diversion" title="Draw a diversion: a movement you want the other side to believe" on={tool === "diversion"} disabled={locked} onClick={() => onTool("diversion")}><DiversionIcon /></RailKey>
         <RailKey label="Deploy" title="Deploy: choose where your new troops on this battlefield come in, along a front or as a swarm" on={tool === "deploy"} disabled={locked} onClick={() => onTool("deploy")}><DeployIcon /></RailKey>
+        {/* Deploy Aircraft: an air unit sent to strike troops, a structure or a city when time next passes. */}
+        {aircraft && <RailKey label="Aircraft" title="Deploy Aircraft: send an air unit to strike troops, a structure or a city" on={aircraftOut || tool === "aircraft"} disabled={wings === 0} onClick={onAircraft}><AircraftIcon /></RailKey>}
         <Rule />
         {/* What is built and what sails: a fortified line drawn on the map (its level is chosen once it is drawn), and the fleets. */}
         <RailKey label="Fortify" title="Fortify: draw a line to be built, then choose how strong it is to be" on={tool === "fortify" || drafted} disabled={locked || !canFortify} onClick={() => onTool("fortify")}><FortifyIcon /></RailKey>
-        <RailKey label="Fleets" title="Fleets: command your fleets at sea" on={fleetsOut || tool === "fleet"} disabled={fleets === 0} onClick={onFleets}><FleetIcon /></RailKey>
+        {navies && <RailKey label="Fleets" title="Fleets: command your fleets at sea" on={fleetsOut || tool === "fleet"} disabled={fleets === 0} onClick={onFleets}><FleetIcon /></RailKey>}
         {/* How well supplied the ground is, shaded on the map. */}
         <RailKey label="Supply" title="Supply: shade how well supplied the ground is" on={supply} onClick={onSupply}><SupplyIcon /></RailKey>
         <span aria-hidden="true" style={rivetStyle({ left: `calc(0.16rem + ${SAFE_LEFT})`, top: "0.16rem" }, "0.34rem")} />
@@ -413,6 +423,7 @@ const WarRoomRail = ({ shown, top, isMobile, tool, selected, locked, turnRunning
           {!turnRunning && tool === "replan" && <>Draw the operation’s way anew.</>}
           {!turnRunning && tool === "transport" && <>Click the place the {selected.length} picked out are to be carried to. Drag to move the map. They board when time next passes.</>}
           {!turnRunning && tool === "fortify" && <>Draw the fortified line on the map. You choose how strong it is to be once it is drawn.</>}
+          {!turnRunning && tool === "aircraft" && <>Click what the air unit is to strike. Its bombs fall inside the ring, on your own troops there too. Drag to move the map.</>}
           {!turnRunning && tool === "fleet" && station === "patrol" && <>Click the place at sea the fleet is to patrol. Drag to move the map.</>}
           {!turnRunning && tool === "fleet" && station !== "patrol" && <>Click the place at sea the fleet is to sail to. Drag to move the map.</>}
           {!turnRunning && !drawing && supply && (

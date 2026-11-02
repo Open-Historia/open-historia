@@ -10,8 +10,10 @@
 //     fortified line to be built (Fortify);
 //   - with a placing tool, a click names a place: where the troops picked out
 //     are to be carried (Transport), where the fleet picked out is to sail or
-//     patrol (Fleet), or where the player's new troops gather as a swarm
-//     (Deploy, as a swarm). A drag moves the map and names nothing.
+//     patrol (Fleet), where the player's new troops gather as a swarm
+//     (Deploy, as a swarm), or what the air unit picked out is to strike
+//     (Deploy Aircraft: a ring the size of where its bombs fall follows the
+//     pointer). A drag moves the map and names nothing.
 //
 // While a tool is in hand a sheet lies over the map and takes the pointer, so
 // the map does not pan under a drag and a region is not opened by the click
@@ -130,6 +132,8 @@ const WarRoomTools = () => {
   }, [standing, own]);
   // What is being drawn: a box ({ x0, y0, x1, y1 }) or a way ([[x, y]...]), in px of the map.
   const [draft, setDraft] = useState(null);
+  // Where an air strike would fall if the pointer were clicked: { x, y, r } in px of the map, or null.
+  const [aim, setAim] = useState(null);
   const sheetRef = useRef(null);
 
   // The battlefield fitted into what the drawer leaves of the map: when the war
@@ -179,7 +183,7 @@ const WarRoomTools = () => {
     const sheet = sheetRef.current;
     if (!drawing || !sheet || !map) return undefined;
     // The tools that name a place with a click, and move the map with a drag.
-    const placing = tool === "transport" || tool === "fleet" || (tool === "deploy" && deployForm === "swarm");
+    const placing = tool === "transport" || tool === "fleet" || tool === "aircraft" || (tool === "deploy" && deployForm === "swarm");
     let held = null;
     const at = (event) => {
       const box = sheet.getBoundingClientRect();
@@ -202,6 +206,18 @@ const WarRoomTools = () => {
       });
       return best;
     };
+    // The ring where the bombs of a strike there would fall: as far as they fall (the store's `blast`, km), in px.
+    const ringAt = ([x, y]) => {
+      const km = Number(getWarRoom().blast);
+      if (!(km > 0)) return null;
+      try {
+        const place = map.unproject([x, y]);
+        const east = map.project([place.lng + km / (111.32 * Math.max(0.05, Math.cos((place.lat * Math.PI) / 180))), place.lat]);
+        return { x, y, r: Math.max(4, Math.sqrt((east.x - x) * (east.x - x) + (east.y - y) * (east.y - y))) };
+      } catch {
+        return null;
+      }
+    };
     const down = (event) => {
       if (event.button !== undefined && event.button !== 0) return;
       event.preventDefault();
@@ -211,6 +227,8 @@ const WarRoomTools = () => {
       setDraft(tool === "select" ? { x0: point[0], y0: point[1], x1: point[0], y1: point[1] } : placing ? null : [point]);
     };
     const move = (event) => {
+      // (With Deploy Aircraft in hand, the ring follows the pointer.)
+      if (tool === "aircraft") setAim(ringAt(at(event)));
       if (!held || event.pointerId !== held.id) return;
       const point = at(event);
       if (placing) {
@@ -275,6 +293,15 @@ const WarRoomTools = () => {
         reportWarRoomWay("deploy", [place], { form: "swarm" });
         return;
       }
+      if (tool === "aircraft") {
+        if ((done.moved ?? 0) >= CLICK_PX) return;
+        const place = map.unproject(point);
+        // (Read from the store now: which air unit, and what it is to strike.)
+        const { wing, strikeKind } = getWarRoom();
+        takeTool("pan");
+        reportWarRoomWay("aircraft", [[unwrapLng(place.lng, 0), place.lat]], { wing, kind: strikeKind });
+        return;
+      }
       if (tool === "fleet") {
         if ((done.moved ?? 0) >= CLICK_PX) return;
         const place = map.unproject(point);
@@ -303,6 +330,7 @@ const WarRoomTools = () => {
       held = null;
       setDraft(null);
     };
+    const leave = () => setAim(null);
     // The wheel, and a right-button press, are handed to the map under the
     // sheet (mapGestures.js passToMap): a mouse wheel or a pinch zooms about
     // the pointer, two fingers on a trackpad turn and tilt the map, and a
@@ -320,6 +348,7 @@ const WarRoomTools = () => {
     sheet.addEventListener("pointermove", move);
     sheet.addEventListener("pointerup", up);
     sheet.addEventListener("pointercancel", cancel);
+    sheet.addEventListener("pointerleave", leave);
     sheet.addEventListener("wheel", wheel, { passive: false });
     sheet.addEventListener("mousedown", button);
     sheet.addEventListener("mouseup", button);
@@ -329,12 +358,14 @@ const WarRoomTools = () => {
       sheet.removeEventListener("pointermove", move);
       sheet.removeEventListener("pointerup", up);
       sheet.removeEventListener("pointercancel", cancel);
+      sheet.removeEventListener("pointerleave", leave);
       sheet.removeEventListener("wheel", wheel);
       sheet.removeEventListener("mousedown", button);
       sheet.removeEventListener("mouseup", button);
       sheet.removeEventListener("contextmenu", menu);
       // A tool put down in the middle of a drag leaves nothing half drawn.
       setDraft(null);
+      setAim(null);
     };
   }, [drawing, map, tool, side, replan, medium, deployForm]);
 
@@ -360,6 +391,12 @@ const WarRoomTools = () => {
             strokeWidth="1.5"
             strokeDasharray="6 4"
           />
+        )}
+        {tool === "aircraft" && aim && (
+          <g data-oh-war-room-aim="">
+            <circle cx={aim.x} cy={aim.y} r={aim.r} fill="rgba(43, 193, 243, 0.14)" stroke={ACCENT} strokeWidth="1.6" strokeDasharray="5 4" />
+            <path d={`M${aim.x - 7} ${aim.y}H${aim.x + 7}M${aim.x} ${aim.y - 7}V${aim.y + 7}`} stroke={ACCENT} strokeWidth="1.6" />
+          </g>
         )}
         {Array.isArray(draft) && draft.length > 1 && (
           <>

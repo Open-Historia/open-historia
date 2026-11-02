@@ -52,6 +52,7 @@ import { closeDay, stepForward } from "./combat.js";
 import { dusk } from "./dawn.js";
 import { countHolders, redistance, resampleField, takeCells, traceContour } from "./field.js";
 import { createFrame, frameBounds, latToY, projectorOf, yToLat } from "./frame.js";
+import { measureOptions } from "./worldGrid.js";
 import { measure } from "./ground.js";
 import { measureLine } from "./line.js";
 import { moveDay } from "./move.js";
@@ -421,7 +422,7 @@ const largerFrame = (frame, grow, map, within) => {
   const [, highLat] = projectorOf(frame).toLngLat(0, rows - south);
   return createFrame(
     { west: bounds.west - west * frame.cell, east: bounds.west + (cols - west) * frame.cell, south: lowLat, north: highLat },
-    { flat: map.flat === true, scale: map.scale },
+    measureOptions(map),
   );
 };
 
