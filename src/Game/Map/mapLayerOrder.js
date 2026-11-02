@@ -22,16 +22,19 @@ export const MAP_LAYER_ORDER = [
   "custom-regions-repair-fill",
   "ownership-transition-flood",
   "ownership-transition-sweep-fill",
+  // A battlefield draws its sides' regions itself, in place of their fills, with
+  // the border where their holders meet (frontGroundLayer.js): with the fills,
+  // as the hand-over flood is, under the regions' hairlines and the stripes of
+  // a dispute.
+  "fronts-ground",
   "custom-regions-local-outline",
   "custom-regions-repair-local-outline",
   "custom-regions-disputed-vnext",
   // Over every political fill: where a battlefield's ground is painted, the
   // bare map is put back, so the territory's colour behind the paint is seen
-  // through (frontBasemapLayer.js). That pair is the fallback: where it can, a
-  // battlefield draws its sides' regions itself, here, in place of their
-  // fills, with the border where their holders meet (frontGroundLayer.js).
+  // through (frontBasemapLayer.js). That pair is the fallback for the
+  // battlefields' own ground (above).
   "fronts-basemap-put",
-  "fronts-ground",
   // A group's area tints the land it controls, over every fill and stripe.
   "group-areas-tint",
   // The ground a battlefield's troops have taken, painted in their colour

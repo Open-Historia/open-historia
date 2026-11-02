@@ -127,6 +127,9 @@ uniform vec4 u_casing;
 out vec4 colour;
 
 const int STEPS = 6;
+// Two colours this far apart (squared) are two holders'; nearer, one holder's
+// seen through the soft edge of its own paint.
+const float CHANGE = 0.0064;
 
 // (The field read between a coast pixel and the sea is the land's colour weighed
 // by how much land there is: its colour is had back whole, or a coast would
@@ -162,6 +165,23 @@ float halfway(vec2 uv, vec2 way, float stride, vec3 a, vec3 d, float dd, float h
   return best;
 }
 
+// Along one way across the screen: the colours a reach either side; where
+// they are two holders', how far (px) this pixel is from the nearest place
+// halfway between them, or very far where they are one holder's. Each way is
+// read with its own two colours, so a pixel and the one beside it never read
+// the same edge by different pairs.
+float edgeAlong(vec2 uv, vec4 centre, vec2 way, float reach) {
+  vec4 low = holder(uv - way * reach);
+  vec4 high = holder(uv + way * reach);
+  if (low.a < 0.5 || high.a < 0.5) return 1e6;
+  vec3 d = high.rgb - low.rgb;
+  float dd = dot(d, d);
+  if (dd < CHANGE) return 1e6;
+  float here = along(centre, low.rgb, d, dd, 0.5);
+  if (here == 0.5) return 0.0;
+  return halfway(uv, way, reach / float(STEPS), low.rgb, d, dd, here);
+}
+
 vec4 over(vec3 rgb, float alpha, vec4 under) {
   return vec4(rgb * alpha, alpha) + under * (1.0 - alpha);
 }
@@ -174,29 +194,16 @@ void main() {
   vec4 result = vec4((v_own * (1.0 - paint.a) + paint.rgb) * u_strength, u_strength);
   float reach = 0.5 * u_line.y + 0.5 * u_line.z + 1.0;
   if (inside && u_line.y > 0.0) {
-    vec4 left = holder(v_uv - dx * reach);
-    vec4 right = holder(v_uv + dx * reach);
-    vec4 below = holder(v_uv - dy * reach);
-    vec4 above = holder(v_uv + dy * reach);
-    vec3 across = right.rgb - left.rgb;
-    vec3 up = above.rgb - below.rgb;
-    float sx = left.a > 0.5 && right.a > 0.5 ? dot(across, across) : 0.0;
-    float sy = below.a > 0.5 && above.a > 0.5 ? dot(up, up) : 0.0;
-    float dd = max(sx, sy);
-    if (dd > 0.0016) {
-      vec3 a = sx >= sy ? left.rgb : below.rgb;
-      vec3 d = sx >= sy ? across : up;
-      float here = along(holder(v_uv), a, d, dd, 0.5);
-      float stride = reach / float(STEPS);
-      float ex = here == 0.5 ? 0.0 : halfway(v_uv, dx, stride, a, d, dd, here);
-      float ey = here == 0.5 ? 0.0 : halfway(v_uv, dy, stride, a, d, dd, here);
-      float far = ex < 1e5 && ey < 1e5 ? ex * ey / max(1e-6, sqrt(ex * ex + ey * ey)) : min(ex, ey);
-      if (far < 1e5) {
-        float casing = 1.0 - smoothstep(0.5 * (u_line.y - u_line.z) - 0.5, 0.5 * (u_line.y + u_line.z) + 0.5, far);
-        float core = 1.0 - smoothstep(0.5 * u_line.x - 0.5, 0.5 * u_line.x + 0.5, far);
-        result = over(u_casing.rgb, u_casing.a * casing, result);
-        result = over(u_core.rgb, u_core.a * core, result);
-      }
+    vec4 centre = holder(v_uv);
+    float ex = edgeAlong(v_uv, centre, dx, reach);
+    float ey = edgeAlong(v_uv, centre, dy, reach);
+    // Across a straight edge, from how far it is each way.
+    float far = ex < 1e5 && ey < 1e5 ? ex * ey / max(1e-6, sqrt(ex * ex + ey * ey)) : min(ex, ey);
+    if (far < 1e5) {
+      float casing = 1.0 - smoothstep(0.5 * (u_line.y - u_line.z) - 0.5, 0.5 * (u_line.y + u_line.z) + 0.5, far);
+      float core = 1.0 - smoothstep(0.5 * u_line.x - 0.5, 0.5 * u_line.x + 0.5, far);
+      result = over(u_casing.rgb, u_casing.a * casing, result);
+      result = over(u_core.rgb, u_core.a * core, result);
     }
   }
   colour = result;

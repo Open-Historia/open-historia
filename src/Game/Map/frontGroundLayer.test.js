@@ -43,14 +43,13 @@ import { mercatorX, mercatorY } from "./vnext/battlefieldGround.js";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const read = (relative) => fs.readFileSync(path.join(here, relative), "utf8").replace(/\r\n/g, "\n");
 
-test("the ground is drawn over every fill it stands in for, under the paint, the groups' tint and the borders", () => {
+test("the ground is drawn with the fills it stands in for, as the hand-over flood is, under the hairlines, the stripes of a dispute and the borders", () => {
   const at = (id) => MAP_LAYER_ORDER.indexOf(id);
   assert.ok(at(FRONT_GROUND_LAYER_ID) > 0);
-  for (const fill of ["custom-regions-fill-far", "regions-fill", "custom-regions-fill", "custom-regions-repair-fill", "ownership-transition-flood", "custom-regions-disputed-vnext"]) {
+  for (const fill of ["custom-regions-fill-far", "regions-fill", "custom-regions-fill", "custom-regions-repair-fill", "ownership-transition-flood", "ownership-transition-sweep-fill"]) {
     assert.ok(at(fill) < at(FRONT_GROUND_LAYER_ID), fill);
   }
-  assert.equal(at(FRONT_GROUND_LAYER_ID), at(FRONT_BASEMAP_PUT_LAYER_ID) + 1, "in the fallback's place");
-  for (const over of ["group-areas-tint", "fronts-paint-0", "polity-boundaries-shadow", "polity-boundaries"]) {
+  for (const over of ["custom-regions-local-outline", "custom-regions-disputed-vnext", FRONT_BASEMAP_PUT_LAYER_ID, "group-areas-tint", "fronts-paint-0", "polity-boundaries-shadow", "polity-boundaries"]) {
     assert.ok(at(FRONT_GROUND_LAYER_ID) < at(over), over);
   }
 });
