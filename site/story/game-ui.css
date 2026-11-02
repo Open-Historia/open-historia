@@ -683,6 +683,86 @@ button.gx-date-country { background: none; border: 0; padding: 0; font-family: i
 .wr-sides { display: none; }
 .wr-fold { display: none; }
 
+/* ---- the Actions panel (actions.jsx) ---- */
+.ac { width: 26.25rem; max-width: calc(100% - 1rem); height: min(calc(100% - var(--gx-top) - 9rem), max(calc(100% - var(--gx-top) - 16rem), 30rem)); }
+.ac-head { align-items: center; border-bottom: 1px solid rgba(255, 255, 255, 0.07); display: flex; justify-content: space-between; padding: 1rem 1.25rem 0.75rem; flex-shrink: 0; }
+.ac-head span { font-size: 1rem; font-weight: 700; letter-spacing: 0.01em; }
+.ac-body { display: flex; flex-direction: column; gap: 0.875rem; padding: 0.875rem 1.25rem; flex: 1; min-height: 0; overflow: hidden; }
+.ac-body > * { flex-shrink: 0; }
+.ac-setgoal { background: none; border: 1px dashed rgba(255, 255, 255, 0.2); border-radius: 10px; color: #e4e4e7; cursor: pointer; font-family: sans-serif; font-size: 0.78rem; padding: 0.5rem 0.9rem; text-align: left; width: 100%; }
+.ac-goal { background: rgba(255, 255, 255, 0.08); border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 10px; display: flex; flex-direction: column; gap: 0.3rem; padding: 0.55rem 0.75rem; }
+.ac-goal.editing { border-color: rgba(255, 255, 255, 0.18); gap: 0.45rem; padding: 0.6rem 0.75rem; }
+.ac-goal-row { align-items: center; display: flex; justify-content: space-between; }
+.ac-goal-label { color: rgba(255, 255, 255, 0.9); font-size: 0.72rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
+.ac-goal-edit { background: none; border: none; color: rgba(255, 255, 255, 0.28); cursor: pointer; font-family: sans-serif; font-size: 0.74rem; padding: 0; }
+.ac-goal-edit:hover { color: rgba(255, 255, 255, 0.6); }
+.ac-goal-text { color: rgba(255, 255, 255, 0.82); display: -webkit-box; font-size: 0.8rem; line-height: 1.45; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
+.ac-goal textarea { background: rgba(0, 0, 0, 0.25); border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 8px; color: white; font-family: sans-serif; font-size: 0.8rem; line-height: 1.45; outline: none; padding: 0.5rem 0.65rem; resize: vertical; width: 100%; }
+.ac-goal-btns { align-items: center; display: flex; gap: 0.4rem; justify-content: flex-end; }
+.ac-gbtn { background: none; border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 8px; color: rgba(255, 255, 255, 0.9); cursor: pointer; font-family: sans-serif; font-size: 0.74rem; font-weight: 600; padding: 0.3rem 0.7rem; }
+.ac-gbtn.primary { background: rgba(255, 255, 255, 0.1); border-color: rgba(255, 255, 255, 0.28); }
+.ac-gbtn.primary.off { background: rgba(255, 255, 255, 0.07); color: rgba(255, 255, 255, 0.4); cursor: not-allowed; }
+.ac-pair { display: flex; gap: 0.5rem; }
+.ac-brain, .ac-suggest { flex: 1 1 0; min-width: 0; border-radius: 10px; cursor: pointer; font-family: sans-serif; transition: background 0.15s, border-color 0.15s; }
+.ac-brain { background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.2); color: #e4e4e7; font-size: 0.82rem; font-weight: 500; letter-spacing: 0.01em; padding: 0.55rem 1rem; }
+.ac-brain:hover { background: rgba(255, 255, 255, 0.1); border-color: rgba(255, 255, 255, 0.28); }
+.ac-suggest { align-items: center; background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.12); color: rgba(255, 255, 255, 0.82); display: flex; font-size: 0.8rem; gap: 0.5rem; justify-content: center; padding: 0.52rem 1rem; }
+.ac-suggest:hover { background: rgba(255, 255, 255, 0.09); border-color: rgba(255, 255, 255, 0.18); }
+.ac-spin { animation: ac-spin 0.7s linear infinite; }
+@keyframes ac-spin { to { transform: rotate(360deg); } }
+.ac-sec { display: flex; flex-direction: column; min-height: 0; }
+.ac-body > .ac-sec.open { flex: 1; overflow: hidden; flex-shrink: 1; }
+.ac-section { align-items: center; background: none; border: none; color: rgba(255, 255, 255, 0.9); cursor: pointer; display: flex; flex-shrink: 0; gap: 0.5rem; padding: 0.3rem 0; text-align: left; width: 100%; font-family: sans-serif; }
+.ac-section .tri { color: rgba(255, 255, 255, 0.5); display: inline-block; font-size: 0.7rem; transition: transform 0.15s; }
+.ac-section .tri.on { transform: rotate(90deg); }
+.ac-section .ti { flex: 1; font-size: 0.78rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
+.ac-section span:last-child { color: rgba(255, 255, 255, 0.45); font-size: 0.72rem; }
+.ac-title { color: rgba(255, 255, 255, 0.9); font-size: 0.78rem; font-weight: 700; letter-spacing: 0.06em; margin: 0 0 0.5rem; text-transform: uppercase; }
+.ac-list { display: flex; flex-direction: column; gap: 0.4rem; flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: none; }
+.ac-list.wide { gap: 0.5rem; }
+.ac-list > * { flex-shrink: 0; }
+.ac-none { color: rgba(255, 255, 255, 0.35); font-size: 0.8rem; font-style: italic; margin: 0; }
+.ac-item { align-items: center; background-color: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 10px; color: rgba(255, 255, 255, 0.85); display: flex; gap: 0.5rem; justify-content: space-between; line-height: 1.75; padding: 0.55rem 0.85rem; transition: background 0.15s; }
+.ac-item:hover { background-color: rgba(255, 255, 255, 0.08); }
+.ac-item-text { flex: 1; min-width: 0; }
+.ac-item .t { color: rgba(255, 255, 255, 0.95); font-size: 0.78rem; font-weight: 700; margin-bottom: 0.15rem; }
+.ac-item .l { color: rgba(255, 255, 255, 0.82); font-size: 0.82rem; white-space: pre-wrap; word-break: break-word; }
+.ac-item .k { color: rgba(255, 255, 255, 0.38); font-size: 0.68rem; letter-spacing: 0.06em; margin-top: 0.25rem; text-transform: uppercase; }
+.ac-del { align-items: center; background: none; border: none; border-radius: 6px; color: rgba(239, 68, 68, 0.8); cursor: pointer; display: flex; flex-shrink: 0; font-size: 1rem; line-height: 1; opacity: 0; padding: 0.18rem 0.3rem; pointer-events: none; transition: opacity 0.15s, color 0.15s, background 0.15s; }
+.ac-item:hover .ac-del { opacity: 1; pointer-events: auto; background: rgba(239, 68, 68, 0.1); color: rgba(239, 68, 68, 0.95); }
+@media (hover: none) { .ac-del { opacity: 1; pointer-events: auto; } }
+.ac-topic { background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 12px; display: flex; flex-direction: column; gap: 0.55rem; padding: 0.7rem 0.8rem; }
+.ac-topic .t { color: rgba(255, 255, 255, 0.94); font-size: 0.8rem; font-weight: 700; }
+.ac-topic .d { color: rgba(255, 255, 255, 0.55); font-size: 0.76rem; line-height: 1.5; margin-top: 0.2rem; }
+.ac-topic-acts { display: flex; flex-direction: column; gap: 0.4rem; }
+.ac-sugg { background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 10px; color: rgba(255, 255, 255, 0.9); cursor: pointer; font-family: sans-serif; padding: 0.55rem 0.7rem; text-align: left; }
+.ac-sugg.queued { background: rgba(34, 197, 94, 0.12); border-color: rgba(74, 222, 128, 0.35); cursor: default; }
+.ac-sugg .t { font-size: 0.76rem; font-weight: 700; color: inherit; }
+.ac-sugg .x { color: rgba(255, 255, 255, 0.62); font-size: 0.74rem; line-height: 1.45; margin-top: 0.18rem; }
+.ac-compose { align-items: center; background-color: rgba(0, 0, 0, 0.2); border-top: 1px solid rgba(255, 255, 255, 0.07); display: flex; gap: 0.5rem; padding: 0.75rem 1rem; flex-shrink: 0; }
+.ac-box { align-items: stretch; display: flex; flex: 1; position: relative; }
+.ac-composer { background: rgba(0, 0, 0, 0.2); border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 10px; color: white; font-family: sans-serif; font-size: 0.82rem; outline: none; padding: 0.7rem 2.8rem 0.7rem 0.85rem; resize: vertical; transition: border-color 0.2s; min-height: 3rem; line-height: 1.45; overflow-y: auto; width: 100%; }
+.ac-composer:focus { border-color: rgba(255, 255, 255, 0.25); }
+.ac-composer::placeholder { color: rgba(255, 255, 255, 0.4); }
+.ac-improve { align-items: center; background: none; border: none; border-radius: 8px; color: rgba(255, 255, 255, 0.45); cursor: default; display: flex; height: 1.8rem; justify-content: center; padding: 0; position: absolute; right: 0.45rem; top: 0.55rem; width: 1.8rem; }
+.ac-improve.on { color: #e4e4e7; cursor: pointer; }
+.ac-send { align-items: center; background: rgba(59, 130, 246, 0.3); border: none; border-radius: 10px; color: white; cursor: not-allowed; display: flex; flex-shrink: 0; height: 2.2rem; justify-content: center; transition: background 0.15s; width: 2.2rem; }
+.ac-send.on { background: #3b82f6; cursor: pointer; }
+.ac-send.on:hover { background: #2563eb; }
+@media (max-width: 700px) {
+  .ac { width: calc(100% - 1rem); max-width: none; }
+  /* scrollAsOne: on a phone the whole body scrolls. */
+  .ac-body { overflow-y: auto; scrollbar-width: none; }
+  .ac-body > .ac-sec.open { flex: 0 0 auto; overflow: visible; }
+  .ac-list { flex: 0 0 auto; overflow: visible; }
+}
+@media (pointer: coarse) {
+  .ac-composer { padding: 0.7rem 3rem 0.7rem 0.85rem; }
+  .ac-improve { right: 0.125rem; top: 0.125rem; min-width: 44px; min-height: 44px; }
+  .ac-send, .ac-del { min-width: 44px; min-height: 44px; }
+  .ac-brain, .ac-suggest, .ac-section, .ac-setgoal, .ac-gbtn { min-height: 44px; }
+}
+
 /* ---- a phone (useIsMobile, max-width 700px): the game's phone layout ---- */
 @media (max-width: 700px) {
   .gx { --gx-drawer: 100%; }

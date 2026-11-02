@@ -306,6 +306,8 @@
       '<button type="button" class="gx-x" id="gxPanelClose" aria-label="Close">' + X_ICON + '</button></div><div class="gx-panel-body" id="gxPanelBody"></div></div>' +
       // chat.jsx: the Diplomacy panel
       '<div class="dp gx-hud" id="gxDip" hidden></div>' +
+      // actions.jsx ActionsPanel
+      '<div class="gx-panel dock-panel ac gx-hud" id="gxActions" hidden></div>' +
       // chat.jsx Toolbar
       '<div class="gx-base gx-dock gx-hud" role="toolbar" aria-label="Game windows">' +
       '<button type="button" class="gx-launch" data-pop="chat" title="Chat" aria-label="Diplomacy"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4Z"/><path d="M8 9h8"/><path d="M8 13h5"/></svg><span class="gx-badge" id="gxChatBadge" hidden></span></button>' +
@@ -759,16 +761,6 @@
       html = shown.length ? shown.slice().reverse().map(eventCard).join("") : '<div class="gx-empty-box">No world events were recorded for this time skip.</div>';
       html += '<button type="button" class="gx-ghost" data-go="next"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m6 9 6 6 6-6"/></svg>Next event</button>';
       if (later) html += '<button type="button" class="gx-ghost" data-go="end" style="min-height:1.9rem;opacity:0.75">Skip to end (' + later + " more)</button>";
-    } else if (which === "actions") {
-      title = "Actions";
-      sub = "Carried out when time next passes";
-      var done = T >= 5;
-      var items = [];
-      if (T >= 1.3) items.push(["Put the forces of deterrence on alert", done ? "Carried out" : "Queued"]);
-      if (T >= 4.15) items.push([typed(ORDER, 4.15, 0.22, T), done ? "Carried out" : T >= 4.4 ? "Queued" : "Writing…"]);
-      html = items.length ? items.map(function (item) {
-        return '<div class="gx-action"><p>' + esc(item[0]) + (item[1] === "Writing…" ? '<span class="gx-caret"></span>' : "") + '</p><small class="' + (item[1] === "Carried out" ? "ok" : "") + '">' + item[1] + "</small></div>";
-      }).join("") : '<div class="gx-empty-box">Nothing ordered this turn. Write what France does, in your own words.</div>';
     } else if (which === "projects") {
       title = "Projects & Operations";
       sub = "What France is working at, turn by turn";
@@ -783,6 +775,131 @@
     el.panelSub.textContent = sub;
     el.panelBody.innerHTML = html;
   }
+  // ---- the Actions panel (actions.jsx ActionsPanel, StandingGoal, ActionItem, SuggestionCard) ----------
+  var SPARKLE = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2L13.5 9.5L21 11L13.5 12.5L12 20L10.5 12.5L3 11L10.5 9.5L12 2Z"/></svg>';
+  var SEND = '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>';
+  var SPINNER = '<svg class="ac-spin" width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="8" stroke="rgba(255,255,255,0.2)" stroke-width="2.2"/><path d="M12 4a8 8 0 0 1 8 8" stroke="rgba(255,255,255,0.88)" stroke-width="2.2" stroke-linecap="round"/></svg>';
+  var GOAL = "Keep France out of the war, and bring the powers to one table.";
+  // The orders the story gives: [T queued, text]. The time skip carries them out and empties the queue.
+  var STORY_ACTIONS = [[1.3, "Put the forces of deterrence on alert"], [4.4, ORDER]];
+  var SUGGESTIONS = [
+    { title: "Keep the war in Korea from spreading", description: "The South is falling back on Busan and Moscow is still counting its dead. France can speak where others cannot.", actions: [
+      { id: "s1", title: "Call the Security Council", text: "Ask for an emergency session on Korea and table a ceasefire resolution." },
+      { id: "s2", title: "Reassure Seoul", text: "Send the Foreign Minister to Busan with a field hospital and medical aid." }
+    ] },
+    { title: "Steady the home front", description: "The unions are restless and the right calls any talk with Moscow weakness.", actions: [
+      { id: "s3", title: "Meet the unions", text: "Invite the union leaders to the Élysée before the strikes spread." }
+    ] }
+  ];
+  var acts = { user: [], deleted: {}, asked: false, suggesting: false, open: "submitted", queued: {}, editing: false, goal: null };
+  function goalAt(T) { return acts.goal != null ? acts.goal : T >= 4.1 ? GOAL : ""; }
+  function submittedAt(T) {
+    var list = T >= 5 ? [] : STORY_ACTIONS.filter(function (a) { return a[0] <= T; }).map(function (a, i) { return { id: "story" + i, text: a[1] }; });
+    return list.concat(acts.user).filter(function (a) { return !acts.deleted[a.id]; });
+  }
+  function actionItem(a) {
+    return '<div class="ac-item"><div class="ac-item-text">' + (a.title ? '<div class="t">' + esc(a.title) + "</div>" : "") + '<div class="l">' + esc(a.text) + '</div><div class="k">action • planned</div></div><button type="button" class="ac-del" data-ac="delete" data-id="' + a.id + '" title="Delete action" aria-label="Delete action">✕</button></div>';
+  }
+  function sectionHeader(title, count, open, which) {
+    return '<button type="button" class="ac-section" data-ac="section" data-open="' + which + '" aria-expanded="' + open + '"><span class="tri' + (open ? " on" : "") + '">▶</span><span class="ti">' + title + "</span><span>" + count + "</span></button>";
+  }
+  function renderActions(T) {
+    if (state.pop !== "actions") return;
+    var goal = goalAt(T);
+    var list = submittedAt(T);
+    var html = '<div class="ac-head"><span>Actions</span><button type="button" class="dp-x" data-ac="close" aria-label="Close actions">✕</button></div><div class="ac-body">';
+    if (acts.editing) {
+      html += '<div class="ac-goal editing"><span class="ac-goal-label">Standing goal</span><textarea class="ac-input" rows="2" data-field="ac-goal" aria-label="Standing goal" placeholder="What is your government steering toward? e.g. Keep out of the war and grow the economy"></textarea>' +
+        '<div class="ac-goal-btns">' + (goal ? '<button type="button" class="ac-gbtn" data-ac="goal-clear" style="margin-right:auto">Clear goal</button>' : "") + '<button type="button" class="ac-gbtn" data-ac="goal-cancel">Cancel</button><button type="button" class="ac-gbtn primary" data-ac="goal-save">Save</button></div></div>';
+    } else if (!goal) html += '<button type="button" class="ac-setgoal" data-ac="goal-edit" title="Your advisor, the time skip and the AI suggestions steer by it. Foreign leaders never see it.">🎯 Set a standing goal</button>';
+    else html += '<div class="ac-goal"><div class="ac-goal-row"><span class="ac-goal-label">Standing goal</span><button type="button" class="ac-goal-edit" data-ac="goal-edit" title="Change or clear the goal">Edit</button></div><span class="ac-goal-text">🎯 ' + esc(goal) + "</span></div>";
+    html += '<div class="ac-pair"><button type="button" class="ac-brain" data-ac="brainstorm">Brainstorm</button><button type="button" class="ac-suggest" data-ac="suggest">' + (acts.suggesting ? SPINNER : "") + "<span>AI Suggestions</span></button></div>";
+    var showSuggested = acts.asked;
+    var suggestedOpen = showSuggested && acts.open === "suggested";
+    if (showSuggested) {
+      html += '<div class="ac-sec' + (suggestedOpen ? " open" : "") + '">' + sectionHeader("Suggested Actions", acts.suggesting ? 0 : SUGGESTIONS.length, suggestedOpen, suggestedOpen ? "submitted" : "suggested");
+      if (suggestedOpen) html += '<div class="ac-list wide">' + (acts.suggesting ? "" : SUGGESTIONS.map(function (topic) {
+        return '<div class="ac-topic"><div><div class="t">' + esc(topic.title) + '</div><div class="d">' + esc(topic.description) + '</div></div><div class="ac-topic-acts">' + topic.actions.map(function (a) {
+          var queued = acts.queued[a.id];
+          return '<button type="button" class="ac-sugg' + (queued ? " queued" : "") + '" data-ac="queue" data-id="' + a.id + '"' + (queued ? " disabled" : "") + '><div class="t">' + (queued ? "✓ Queued — " : "") + esc(a.title) + '</div><div class="x">' + esc(a.text) + "</div></button>";
+        }).join("") + "</div></div>";
+      }).join("")) + "</div>";
+      html += "</div>";
+    }
+    var submittedOpen = !suggestedOpen;
+    html += '<div class="ac-sec' + (submittedOpen ? " open" : "") + '">' + (showSuggested ? sectionHeader("Your Submitted Actions", list.length, submittedOpen, submittedOpen ? "suggested" : "submitted") : '<p class="ac-title">Your Submitted Actions</p>');
+    if (submittedOpen) html += '<div class="ac-list">' + (list.length ? list.map(actionItem).join("") : '<p class="ac-none">No actions submitted yet.</p>') + "</div>";
+    html += "</div></div>";
+    var touch = window.matchMedia && window.matchMedia("(pointer: coarse)").matches;
+    html += '<div class="ac-compose"><div class="ac-box"><textarea class="ac-input ac-composer" data-field="ac-input" aria-label="Enter your action" placeholder="' + (touch ? "Enter your action…" : "Enter your action…  (Shift+Enter for a new line)") + '"></textarea><button type="button" class="ac-improve" data-ac="improve" title="Improve action text" aria-label="Improve action text">' + SPARKLE + '</button></div><button type="button" class="ac-send" data-ac="submit" aria-label="Submit action">' + SEND + "</button></div>";
+    // The story's order is written into the box, a letter at a time, before it is queued.
+    var storyTyping = T >= 4.15 && T < 4.4 && !fields["ac-input"] ? typed(ORDER, 4.15, 0.22, T) : "";
+    if (!changed("actions", html + "|" + storyTyping)) return;
+    var focus = document.activeElement && el.actions.contains(document.activeElement) ? document.activeElement.getAttribute("data-field") : null;
+    var caret = focus ? document.activeElement.selectionStart : 0;
+    var scroll = el.actions.querySelector(".ac-body") ? el.actions.querySelector(".ac-body").scrollTop : 0;
+    el.actions.innerHTML = html;
+    if (acts.editing && fields["ac-goal"] == null) fields["ac-goal"] = goal;
+    Array.prototype.forEach.call(el.actions.querySelectorAll("[data-field]"), function (input) {
+      var key = input.getAttribute("data-field");
+      input.value = key === "ac-input" && storyTyping ? storyTyping : fields[key] || "";
+      if (key === focus) { input.focus(); try { input.setSelectionRange(caret, caret); } catch (error) { /* no caret */ } }
+    });
+    el.actions.querySelector(".ac-body").scrollTop = scroll;
+    syncSend();
+  }
+  function syncSend() {
+    var box = el.actions.querySelector(".ac-composer");
+    if (!box) return;
+    var has = !!box.value.trim();
+    el.actions.querySelector(".ac-send").classList.toggle("on", has);
+    el.actions.querySelector(".ac-improve").classList.toggle("on", has);
+    var save = el.actions.querySelector('[data-ac="goal-save"]');
+    if (save) save.classList.toggle("off", (fields["ac-goal"] || "").trim() === goalAt(state.T));
+  }
+  function submitAction() {
+    var text = (fields["ac-input"] || "").trim();
+    if (!text) return;
+    acts.user.push({ id: "user" + acts.user.length + "-" + Date.now(), text: text });
+    fields["ac-input"] = "";
+    acts.open = "submitted";
+  }
+  function actionsClick(event) {
+    var act = event.target.closest("[data-ac]");
+    if (!act) return;
+    var what = act.getAttribute("data-ac");
+    state.manual.pop = "actions";
+    if (what === "close") { setPop(null, true); return; }
+    if (what === "delete") { acts.deleted[act.getAttribute("data-id")] = true; delete acts.queued[act.getAttribute("data-id")]; }
+    else if (what === "section") acts.open = act.getAttribute("data-open");
+    else if (what === "goal-edit") { acts.editing = true; fields["ac-goal"] = goalAt(state.T); }
+    else if (what === "goal-cancel") acts.editing = false;
+    else if (what === "goal-clear") { acts.goal = ""; acts.editing = false; }
+    else if (what === "goal-save") { if ((fields["ac-goal"] || "").trim() === goalAt(state.T)) return; acts.goal = (fields["ac-goal"] || "").trim(); acts.editing = false; }
+    else if (what === "submit") submitAction();
+    else if (what === "improve") {
+      var text = (fields["ac-input"] || "").trim();
+      if (!text) return;
+      fields["ac-input"] = text.charAt(0).toUpperCase() + text.slice(1).replace(/\s*$/, "") + (/[.!?]$/.test(text) ? "" : ".") + " Have the Foreign Ministry brief our allies first, and announce it from the Élysée.";
+    } else if (what === "brainstorm") {
+      setDrawer("advisor", true);
+      var input = el.ask.querySelector("textarea");
+      input.value = "Let's brainstorm a plan of concrete actions for this round. Ask me what I'm trying to accomplish, then propose specific ones we can queue.";
+      input.focus();
+      return;
+    } else if (what === "suggest") {
+      acts.asked = true;
+      acts.suggesting = true;
+      acts.open = "suggested";
+      setTimeout(function () { acts.suggesting = false; state.keys.actions = ""; renderActions(state.T); }, 1300);
+    } else if (what === "queue") {
+      var id = act.getAttribute("data-id");
+      SUGGESTIONS.forEach(function (topic) { topic.actions.forEach(function (a) { if (a.id === id && !acts.queued[id]) { acts.queued[id] = true; delete acts.deleted[id]; acts.user = acts.user.filter(function (u) { return u.id !== id; }); acts.user.push({ id: id, title: a.title, text: a.text }); } }); });
+    } else return;
+    state.keys.actions = "";
+    renderActions(state.T);
+  }
+
   // ---- the Diplomacy panel (chat.jsx: the workspace, ChatListItem, ConversationView) ----------------
   var BACK = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>';
   var CONTACTS = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>';
@@ -1262,7 +1379,9 @@
     state.pop = which;
     state.keys.panel = "";
     state.keys.dip = "";
-    el.panel.hidden = !which || which === "chat";
+    el.panel.hidden = !which || which === "chat" || which === "actions";
+    el.actions.hidden = which !== "actions";
+    state.keys.actions = "";
     el.panel.classList.toggle("dock-panel", which === "actions" || which === "projects");
     el.dip.hidden = which !== "chat";
     if (which === "chat" && !byHand && state.step === "talks") { dip.view = "thread"; dip.thread = CHATS.length - 1; }
@@ -1272,6 +1391,7 @@
     Array.prototype.forEach.call(el.root.querySelectorAll("[data-pop]"), function (b) { b.classList.toggle("on", b.getAttribute("data-pop") === which); });
     renderPanel(state.T);
     renderDip(state.T);
+    renderActions(state.T);
   }
   function setDrawer(which, byHand) {
     if (byHand) state.manual.drawer = which || "none";
@@ -1405,6 +1525,7 @@
     if (state.drawer === "country") renderCountry(T);
     renderPanel(T);
     renderDip(T);
+    renderActions(T);
     var unread = CHATS.filter(function (c, i) { return threadUnread(i, T); }).length;
     el.chatBadge.hidden = !unread;
     el.chatBadge.textContent = unread > 9 ? "9+" : String(unread);
@@ -1477,6 +1598,18 @@
       input.focus();
     });
     search.querySelector("input").addEventListener("blur", function (event) { if (!event.target.value) { search.classList.remove("open"); event.target.hidden = true; } });
+    el.actions = $("gxActions");
+    el.actions.addEventListener("click", actionsClick);
+    el.actions.addEventListener("input", function (event) {
+      var key = event.target.getAttribute("data-field");
+      if (key) { fields[key] = event.target.value; syncSend(); }
+    });
+    el.actions.addEventListener("keydown", function (event) {
+      var key = event.target.getAttribute && event.target.getAttribute("data-field");
+      if (!key || event.key !== "Enter" || event.shiftKey || (window.matchMedia && window.matchMedia("(pointer: coarse)").matches)) return;
+      event.preventDefault();
+      actionsClick({ target: el.actions.querySelector(key === "ac-goal" ? '[data-ac="goal-save"]' : '[data-ac="submit"]') });
+    });
     el.dip = $("gxDip");
     el.dip.addEventListener("click", dipClick);
     el.dip.addEventListener("submit", dipSend);
