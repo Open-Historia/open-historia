@@ -1104,8 +1104,8 @@ function World({ mapRef, projection: requestedProjection, terrainEnabled, onInit
     };
   }, [handleBasemapTileLoading, handleSourceLoaded, mapInstanceKey, mapRef, stopLoadingToast]);
 
-  // Two fingers on a trackpad turn and tilt the map, and a mouse wheel still
-  // zooms (mapGestures.js). Put on each map instance, as the listeners above.
+  // Two fingers on a trackpad zoom, and with Shift held turn and tilt the map;
+  // a mouse wheel zooms (mapGestures.js). Put on each map instance, as the listeners above.
   React.useEffect(() => {
     let disposed = false;
     let frame = 0;

@@ -72,7 +72,7 @@ The AI section opens on a list headed **Models**. Each entry is a model on a **c
 | On an entry | |
 |---|---|
 | **Model** | The model name. Suggestions come from the models you have used recently. |
-| **This model only** | Custom parameters for this model alone; **How the AI answers** — the structured-output method to try first; and **Context window (tokens)**, which shows what the game has learned about how much the model can take, or holds your own figure. **Forget this window** clears it — for a local model you have restarted with a bigger window. |
+| **This model only** | Custom parameters for this model alone; **How the AI answers** — the structured-output method to try first. |
 
 Several entries can share one connection, and the list is tried from the top: when one model runs
 out or cannot answer, the next one takes over. See [backup models](/wiki/ai-setup/#backup-models).

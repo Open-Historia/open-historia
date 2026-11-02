@@ -53,6 +53,31 @@ import { PAST_UPDATES } from "./notesPast.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // "add camera controls (press shift to tilt or turn) to beta" (the owner, 2026-11-02): as the native app has them.
+    id: "2026-11-shift-to-turn",
+    kind: "minor",
+    date: "2026-11-02",
+    channel: "beta",
+    banners: [
+      {
+        title: "Hold Shift to turn and tilt",
+        items: [
+          "On a trackpad, dragging with two fingers now zooms the map, as pinching does.",
+          "Hold Shift while you drag with two fingers to turn and tilt the map: sideways turns it, up and down tilts it.",
+          "A right-button drag still turns and tilts the map, Shift with the arrow keys still does too, and Shift with a mouse wheel zooms in finer steps.",
+        ],
+      },
+      {
+        // "remove the context window ai setting from the settings" (the owner, 2026-11-02).
+        title: "One AI setting fewer",
+        items: [
+          "Settings → AI no longer has a Context window field for each model.",
+          "The game still learns how much a model can take from the model's own refusals, and tries it again by itself after a while.",
+        ],
+      },
+    ],
+  },
+  {
     // The website's entry screen ("Enter Open Historia") removed: the demo notice comes up over the game (2026-11-02).
     id: "2026-11-straight-into-the-demo",
     kind: "minor",

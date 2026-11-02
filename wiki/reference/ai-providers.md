@@ -111,9 +111,8 @@ with a long history, so a model loaded with a 32K window cannot take it. A cloud
 refuses a request for its size is remembered, and the game does not send it one too big again but
 moves to the next model in your list. A model on your own machine or network is different: its
 window is whatever you loaded it with, so nothing learned from its refusals is held against it,
-and loading it again with a bigger window takes effect at once. Settings → AI → the model's entry
-→ **This model only** → **Context window (tokens)** shows what the game knows, takes a figure of
-your own, and **Forget this window** clears what it learned.
+and loading it again with a bigger window takes effect at once. What the game learned about a
+cloud model lapses by itself: a week after a refusal, or a month after the model stated its window.
 
 ## Expert controls
 
