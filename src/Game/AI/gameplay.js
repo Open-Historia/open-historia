@@ -88,11 +88,14 @@ import {
   gameMasterPolityKey,
   gameMasterStateFingerprint,
   normalizeGameMasterPolityLifecycle,
+  settleGameMasterBreakawaySovereignty,
+  settleGameMasterChronology,
   validateGameMasterBreakawaySovereignty,
   validateGameMasterChronology,
   validateGameMasterPolityLifecycle,
   verifyGameMasterTerritoryPostconditions,
 } from "./gameMasterValidation.js";
+import { gameMasterWarNames, settleGameMasterWars } from "./gameMasterWars.js";
 import { buildCuratorInput, candidatesWorthJudging, curateGeneratedEventsWithHidden } from "./nativeTimelineCurator.js";
 import {
   applyWorldStorylineUpdates,
@@ -395,6 +398,7 @@ import {
   bindWarUpdatesToEvents,
   buildCanonicalWarContext,
   decodeWarUpdates,
+  interpretWarLedger,
   normalizeWorldWarEventLinks,
   reconcileCombatWarState,
   repairWarLedgerPayload,
@@ -415,6 +419,7 @@ import {
   decodeAgreementUpdates,
   decodeRelationUpdates,
   migrateLegacyDiplomaticState,
+  reconcileRelationScoresWithStatus,
   salvageDiplomaticLedgerPayload,
   validateDiplomaticLedgerPayload,
 } from "./nativeDiplomaticDirector.js";
@@ -850,6 +855,11 @@ const validateSegmentLedgers = (candidate, { world, strict, segmentIndex = 0, re
   if (warProse.length) {
     logDebugEvent("ai", `warUpdates: ${warProse.length} line(s) that are not war records were ignored.`, { lines: warProse });
   }
+
+  // What the answer tells of its wars and does not spell out (a record's event,
+  // a side, the war's id on its events, the combatants), worked out before
+  // anything is checked, in whatever language the events are written.
+  interpretWarLedger(candidate, { world, authority: "skip" });
 
   // Combat the model narrated but did not bind: attach it to the one matching
   // active war, resume the one matching ceasefire, or start a war from two
@@ -18835,78 +18845,6 @@ const normalizeGameMasterStatPatches = (patches, world) => {
   });
 };
 
-// Bind obvious war metadata from the transaction's own linked warUpdates before
-// canonical validation. The AI occasionally emits a correct START/JOIN record
-// linked to event 0 but forgets to repeat that war id on the event. That
-// relationship is deterministic, so preview normalization may repair it without
-// another AI call or any world mutation. For a START event the opposing sides
-// also provide an unambiguous combatants fallback. Ambiguous multi-war links are
-// left untouched so the canonical validator still fails closed.
-const normalizeGameMasterWarEventBindings = (candidate) => {
-  const events = normalizeArray(candidate?.events);
-  const updates = decodeWarUpdates(candidate?.warUpdates);
-  if (!events.length || !updates.length) return candidate;
-
-  const eventIndexById = new Map(
-    events
-      .map((event, index) => [normalizeString(event?.id), index])
-      .filter(([id]) => Boolean(id)),
-  );
-  const updatesByEventIndex = new Map();
-
-  const link = (index, update) => {
-    if (!Number.isInteger(index) || index < 0 || index >= events.length) return;
-    if (!updatesByEventIndex.has(index)) updatesByEventIndex.set(index, []);
-    updatesByEventIndex.get(index).push(update);
-  };
-
-  for (const update of updates) {
-    for (const index of normalizeArray(update?.eventIndexes)) {
-      link(Number(index), update);
-    }
-    for (const eventId of normalizeArray(update?.eventIds)) {
-      const index = eventIndexById.get(normalizeString(eventId));
-      if (Number.isInteger(index)) link(index, update);
-    }
-  }
-
-  for (const [eventIndex, linkedUpdates] of updatesByEventIndex.entries()) {
-    const event = events[eventIndex];
-    if (!event || typeof event !== "object") continue;
-
-    const warIds = [...new Set(
-      linkedUpdates
-        .map((update) => normalizeString(update?.id))
-        .filter(Boolean),
-    )];
-
-    if (!normalizeString(event.warId) && warIds.length === 1) {
-      event.warId = warIds[0];
-    }
-
-    const eventWarId = normalizeString(event.warId);
-    if (!eventWarId || normalizeArray(event.combatants).length >= 2) continue;
-
-    const startUpdate = linkedUpdates.find((update) =>
-      normalizeString(update?.id) === eventWarId &&
-      normalizeString(update?.op).toLowerCase() === "start"
-    );
-    if (!startUpdate) continue;
-
-    const combatants = [...new Set([
-      ...normalizeArray(startUpdate.actors),
-      ...normalizeArray(startUpdate.opponents),
-    ]
-      .map((value) => normalizeString(value))
-      .filter(Boolean))]
-      .slice(0, 8);
-
-    if (combatants.length >= 2) event.combatants = combatants;
-  }
-
-  return candidate;
-};
-
 const normalizeGameMasterIsoDate = (value) => normalizeGameDate(value);
 
 const GAME_MASTER_REQUEST_MONTHS = Object.freeze({
@@ -18973,23 +18911,7 @@ const gameMasterRequestedDates = (candidate, request) => {
   return date ? [date] : [];
 };
 
-const validateGameMasterRequestedExactDate = (candidate, { mode, request }) => {
-  if (mode !== "exact-event") return "";
-  const requestedDates = gameMasterRequestedDates(candidate, request);
-  // Only enforce when the administrator supplied one unambiguous explicit date.
-  // Requests that mention several historical dates need semantic interpretation.
-  if (requestedDates.length !== 1) return "";
-
-  const expectedDate = requestedDates[0];
-  const eventDate = normalizeGameMasterIsoDate(normalizeArray(candidate?.events)[0]?.date);
-  if (eventDate === expectedDate) return "";
-
-  return `The administrator explicitly requested the Exact Event date ${expectedDate}, but $.events[0].date is ${eventDate || "blank/invalid"}. Exact Event preview must preserve the requested date.`;
-};
-
-const GAME_MASTER_PERSISTENT_PROCESS_HINT = /\b(?:crisis|collapse|revolution|uprising|insurgency|civil\s+war|succession|regime\s+rupture|banking\s+emergency|sovereign\s+debt|mass\s+unrest|nationwide\s+strike|general\s+strike|standoff|confrontation|instability|tension|escalat(?:e|es|ed|ing|ion)|de-escalat(?:e|es|ed|ing|ion)|prolonged|ongoing)\b/i;
-
-const validateGameMasterStorylineUpdates = async (candidate, { mode, world, game, request = "" } = {}) => {
+const validateGameMasterStorylineUpdates = async (candidate, { mode, world, game, finalAttempt = false, approved = false, notes = [] } = {}) => {
   // Native semantic binding owns the causal event links; model-supplied indexes are
   // hints. This mutates only the preview candidate and therefore remains visible
   // before Apply can ever persist it.
@@ -19010,11 +18932,10 @@ const validateGameMasterStorylineUpdates = async (candidate, { mode, world, game
   if (validationError) return validationError;
 
   const updates = decodeWorldStorylineUpdates(candidate?.storylineUpdates);
-  // The answer's requestedOngoingProcess reads the request in any language; the
-  // English hint is the fallback for an answer without it.
-  const ongoingProcess = typeof candidate?.requestedOngoingProcess === "boolean"
-    ? candidate.requestedOngoingProcess
-    : GAME_MASTER_PERSISTENT_PROCESS_HINT.test(normalizeString(request));
+  // The answer's requestedOngoingProcess reads the request in any language. An
+  // answer without it is not held to an English reading of the request, and
+  // the model is asked again for a storyline once at most.
+  const ongoingProcess = candidate?.requestedOngoingProcess === true && !finalAttempt && !approved;
   if (mode === "world-intervention" && ongoingProcess && !updates.length) {
     return "World Intervention describes an unresolved or changing multi-turn process, but $.storylineUpdates is empty. Persist that crisis/process in canonical world.storylines (or update/resolve the existing storyline) so the normal World Director inherits it on later turns.";
   }
@@ -19056,11 +18977,18 @@ const validateGameMasterStorylineUpdates = async (candidate, { mode, world, game
       });
       const resolved = normalizeString(resolution?.resolved || raw);
       const canonical = currentPolities.get(resolved.toLowerCase()) || currentPolities.get(raw.toLowerCase()) || "";
+      if (!canonical && !finalAttempt) {
+        return `"${raw}", named in the storyline "${normalizeString(update?.title)}", is not a country in this world. Name each participant by the exact name of a current country, or one this transaction creates.`;
+      }
       if (!canonical) {
-        return `$.storylineUpdates record ${index + 1} participant ${participantIndex + 1} could not resolve to a current or same-transaction canonical polity: "${raw}".`;
+        const entry = receiptPlayerNote("gmStorylineCountryLeftOut", { name: raw, title: normalizeString(update?.title) });
+        if (entry && !notes.includes(entry.text)) notes.push(entry.text);
+        update.participants[participantIndex] = "";
+        continue;
       }
       update.participants[participantIndex] = canonical;
     }
+    update.participants = normalizeArray(update.participants).filter(Boolean);
   }
 
   candidate.storylineUpdates = updates;
@@ -19241,6 +19169,45 @@ const expandGameMasterTerritorialScopes = async (candidate, {
   return "";
 };
 
+// A ledger row tied to no event is tied to the transaction's first: the Game
+// Master's one event, or the first of its intervention. Asking the model again
+// for an index it left out was a request spent on bookkeeping.
+const linkGameMasterLedgerRows = (candidate) => {
+  if (!normalizeArray(candidate?.events).length) return;
+  for (const field of ["relationUpdates", "agreementUpdates", "puppetUpdates", "storylineUpdates"]) {
+    for (const row of normalizeArray(candidate?.[field])) {
+      if (!row || typeof row !== "object" || Array.isArray(row)) continue;
+      if (normalizeArray(row.eventIds).length || normalizeArray(row.eventIndexes).length) continue;
+      row.eventIndexes = [0];
+    }
+  }
+};
+
+// The first sentence of a description, for an event the model left untitled.
+const gameMasterTitleFrom = (description) => {
+  const sentence = normalizeString(description).split(/(?<=[.!?。！？])\s/u)[0] || "";
+  return sentence.length > 90 ? `${sentence.slice(0, 87).trimEnd()}…` : sentence;
+};
+
+// The Game Master's transaction, checked before the administrator sees it and
+// again, unchanged, before Apply writes it.
+//
+// What the engine can tell from the answer itself is done here, not asked of
+// the model again: the mode it was asked in, a missing date, title or
+// description, the date the administrator named, a date after today (Apply
+// happens today), a create of a country that exists, a breakaway given legal
+// title by the power it is fighting, a ledger row tied to no event, and what
+// the war records mean (gameMasterWars.js). What is left is integrity: names
+// that must be exact and exist, a war with two sides, changes that apply to
+// the world as it stands. While a second answer can be asked for, the first
+// such problem goes back to the model; on the last answer (`finalAttempt`) the
+// part it concerns is left out, `notes` gets the administrator's sentence for
+// it (receiptPlayerNotes.js), and the rest is previewed. It used to be one
+// rule broken, the whole transaction refused.
+//
+// `approved`: Apply's revalidation of a preview the administrator approved.
+// What the request asked for was settled when it was previewed; only the world
+// is checked again.
 const validateGameMasterPreviewPayload = async (candidate, {
   mode,
   world,
@@ -19248,20 +19215,25 @@ const validateGameMasterPreviewPayload = async (candidate, {
   request = "",
   resolvedRegionIdsOnly = false,
   baseGeographyCatalog = null,
+  finalAttempt = false,
+  approved = false,
+  notes = [],
 }) => {
   if (!candidate || typeof candidate !== "object") return "The GM did not return a transaction object.";
   if (!GAME_MASTER_MODE_SET.has(mode)) return `Unsupported GM mode "${mode}".`;
+  const note = (entry) => {
+    if (entry?.text && !notes.includes(entry.text)) notes.push(entry.text);
+  };
 
   // Preview normalization only: this mutates the in-memory candidate the
   // administrator is about to inspect; no save/world writes happen here.
   // Present-state activity comes from the live map, not from stock names.
   const activePolities = await buildGameMasterActivePolitySet(world);
   normalizeGameMasterPolityLifecycle(candidate, world, activePolities);
-  normalizeGameMasterWarEventBindings(candidate);
+  interpretWarLedger(candidate, { world, authority: "gm" });
+  linkGameMasterLedgerRows(candidate);
 
-  if (normalizeString(candidate.mode) !== mode) {
-    return `$.mode must echo the selected GM mode "${mode}".`;
-  }
+  if (normalizeString(candidate.mode) !== mode) candidate.mode = mode;
 
   const events = normalizeArray(candidate.events);
   if (mode === "exact-event" && events.length !== 1) {
@@ -19271,15 +19243,26 @@ const validateGameMasterPreviewPayload = async (candidate, {
     return "World Intervention mode requires at least one authored event so the intervention has canonical historical context.";
   }
 
+  const today = normalizeString(game?.gameDate || game?.startDate);
   for (let index = 0; index < events.length; index += 1) {
     const event = events[index];
-    if (!normalizeString(event?.date)) return `$.events[${index}].date must not be blank.`;
-    if (!normalizeString(event?.title)) return `$.events[${index}].title must not be blank.`;
-    if (!normalizeString(event?.description)) return `$.events[${index}].description must not be blank.`;
+    if (!event || typeof event !== "object") return `$.events[${index}] must be an event object.`;
+    if (!normalizeString(event.title) && !normalizeString(event.description)) {
+      return `$.events[${index}] has neither a title nor a description. Say what happens.`;
+    }
+    if (!normalizeString(event.date) && today) event.date = today;
+    if (!normalizeString(event.title)) event.title = gameMasterTitleFrom(event.description);
+    if (!normalizeString(event.description)) event.description = normalizeString(event.title);
+    if (!normalizeString(event.date)) return `$.events[${index}].date must not be blank.`;
   }
 
-  const requestedDateError = validateGameMasterRequestedExactDate(candidate, { mode, request });
-  if (requestedDateError) return requestedDateError;
+  if (mode === "exact-event" && !approved) {
+    const requestedDates = gameMasterRequestedDates(candidate, request);
+    if (requestedDates.length === 1 && normalizeGameMasterIsoDate(events[0]?.date) !== requestedDates[0]) {
+      events[0].date = requestedDates[0];
+    }
+  }
+  settleGameMasterChronology(candidate, game);
 
   const chronologyError = validateGameMasterChronology(candidate, game);
   if (chronologyError) return chronologyError;
@@ -19295,6 +19278,7 @@ const validateGameMasterPreviewPayload = async (candidate, {
   });
   if (territorialScopeError) return territorialScopeError;
 
+  settleGameMasterBreakawaySovereignty(candidate);
   const breakawaySovereigntyError = validateGameMasterBreakawaySovereignty(candidate);
   if (breakawaySovereigntyError) return breakawaySovereigntyError;
 
@@ -19314,41 +19298,57 @@ const validateGameMasterPreviewPayload = async (candidate, {
   const statError = validateGameMasterStatPatches(candidate.countryStatPatches, world, candidate.events);
   if (statError) return statError;
 
-  const normalizedEvents = normalizeArray(candidate.events)
+  const ledgerEvents = (list) => normalizeArray(list)
     .map((entry, index) => normalizeGeneratedEvent({
       ...entry,
       source: entry?.source || "game-master-preview",
     }, index))
     .filter(Boolean);
 
-  const warUpdates = bindWarUpdatesToEvents(decodeWarUpdates(candidate.warUpdates), normalizedEvents);
-  const warError = validateCanonicalWarEvents({
-    events: normalizedEvents,
-    updates: warUpdates,
+  const wars = settleGameMasterWars(candidate, {
     world,
+    names: gameMasterWarNames(candidate, { world, active: activePolities }),
+    finalAttempt,
+    ledgerEvents,
   });
-  if (warError) return `[canonical war-state] ${warError}`;
+  wars.notes.forEach((text) => note({ text }));
+  if (wars.error) return `[canonical war-state] ${wars.error}`;
 
-  const relationUpdates = bindRelationUpdatesToEvents(decodeRelationUpdates(candidate.relationUpdates), normalizedEvents);
-  const agreementUpdates = bindAgreementUpdatesToEvents(decodeAgreementUpdates(candidate.agreementUpdates), normalizedEvents);
-  const diplomaticError = validateDiplomaticLedgerPayload({
+  const normalizedEvents = ledgerEvents(candidate.events);
+
+  // A status that disagrees with its score is the model writing a change for
+  // the new value: the score is made to agree with the status it named.
+  const scores = reconcileRelationScoresWithStatus(candidate.relationUpdates);
+  if (scores.repaired.length) candidate.relationUpdates = scores.records;
+  const diplomacy = () => validateDiplomaticLedgerPayload({
     events: normalizedEvents,
-    relationUpdates,
-    agreementUpdates,
+    relationUpdates: bindRelationUpdatesToEvents(decodeRelationUpdates(candidate.relationUpdates), normalizedEvents),
+    agreementUpdates: bindAgreementUpdatesToEvents(decodeAgreementUpdates(candidate.agreementUpdates), normalizedEvents),
   }, { world });
+  let diplomaticError = diplomacy();
+  if (diplomaticError && finalAttempt) {
+    const playerNotes = [];
+    salvageDiplomaticLedgerPayload(candidate, { world, playerNotes });
+    playerNotes.forEach(note);
+    diplomaticError = diplomacy();
+  }
   if (diplomaticError) return `[canonical diplomatic-state] ${diplomaticError}`;
 
   // The request itself is part of GM validation. If the administrator explicitly
   // asked to install a puppet/satellite/protectorate/client, prose plus a friendly
   // relation or treaty is not a substitute for the canonical world.puppets row.
-  // Fail closed so runJsonTask can correct the incomplete plan before Preview.
-  const puppetCompletenessError = validateGameMasterRequestedPuppetCompleteness(candidate, { request });
-  if (puppetCompletenessError) return `[canonical subordination-state] ${puppetCompletenessError}`;
+  // The model is asked again once; on its last answer the administrator is told
+  // that the subordination is not in the preview.
+  if (!approved) {
+    const puppetCompletenessError = validateGameMasterRequestedPuppetCompleteness(candidate, { request });
+    if (puppetCompletenessError && !finalAttempt) return `[canonical subordination-state] ${puppetCompletenessError}`;
+    if (puppetCompletenessError) note(receiptPlayerNote("gmSubordinationMissing"));
+  }
 
   // Subordinations, tried against the live world exactly as Apply will run
-  // them: every change must apply, or the preview is refused with the reason.
-  // A skip may drop a bad line; the GM may not, because a player who asks for
-  // a puppet and silently gets none is the bug this closes.
+  // them. A change that cannot be made is refused with the reason while the
+  // model can answer again, and on its last answer left out with the
+  // administrator told which: never silently, which was the bug this closes.
   const puppetUpdates = bindPuppetUpdatesToEvents(decodePuppetUpdates(candidate.puppetUpdates), normalizedEvents);
   if (puppetUpdates.length) {
     const trial = applyPuppetUpdates({
@@ -19359,11 +19359,24 @@ const validateGameMasterPreviewPayload = async (candidate, {
       stopDate: normalizeString(game?.gameDate || game?.startDate),
       round: Number(game?.round) || 0,
     });
-    const [first] = normalizeArray(trial.dropped);
-    if (first) return `[canonical subordination-state] puppetUpdates[${first.index}]: ${first.reason}`;
+    const dropped = normalizeArray(trial.dropped);
+    if (dropped.length && !finalAttempt) {
+      return `[canonical subordination-state] puppetUpdates[${dropped[0].index}]: ${dropped[0].reason}`;
+    }
+    if (dropped.length) {
+      const rowKey = (row) => [row?.op, row?.overlord, row?.puppet].map((value) => normalizeString(value).toLowerCase()).join("|");
+      const refused = new Set();
+      for (const entry of dropped) {
+        const row = puppetUpdates[Number(entry.index)];
+        if (!row) continue;
+        refused.add(rowKey(row));
+        note(receiptPlayerNote("gmSubordinationLeftOut", { overlord: normalizeString(row.overlord), puppet: normalizeString(row.puppet) }));
+      }
+      candidate.puppetUpdates = normalizeArray(candidate.puppetUpdates).filter((row) => !refused.has(rowKey(row)));
+    }
   }
 
-  const storylineError = await validateGameMasterStorylineUpdates(candidate, { mode, world, game, request });
+  const storylineError = await validateGameMasterStorylineUpdates(candidate, { mode, world, game, request, finalAttempt, approved, notes });
   if (storylineError) return `[canonical storyline-state] ${storylineError}`;
 
   return "";
@@ -19534,6 +19547,9 @@ export const previewGameMasterCommand = async (requestText, { mode = "world-inte
       readJson(JSON_URLS.colors, { defaultValue: {}, force: true }),
     ]);
     const baseGeographyCatalog = await loadGameMasterBaseGeographyCatalog(bundle.world);
+    // What could not be made and was left out of the preview, in the
+    // administrator's words (validateGameMasterPreviewPayload).
+    let notes = [];
     const variables = {
       ...(await buildTemplateVariables(bundle, { taskKey: "gameMaster", gameMasterRequest: request, lookups: true })),
       gameMasterMode: selectedMode,
@@ -19544,13 +19560,19 @@ export const previewGameMasterCommand = async (requestText, { mode = "world-inte
       agentKind: "gameMaster",
       lookups: buildTaskLookups(bundle),
       userMessage: `Generate a ${selectedMode} GM transaction preview for the administrator request. Do not apply anything.`,
-      validatePayload: (candidate) => validateGameMasterPreviewPayload(candidate, {
-        mode: selectedMode,
-        world: bundle.world,
-        game: bundle.game,
-        request,
-        baseGeographyCatalog,
-      }),
+      // Each answer's notes are its own: the last one checked is the one kept.
+      validatePayload: (candidate, { finalAttempt } = {}) => {
+        notes = [];
+        return validateGameMasterPreviewPayload(candidate, {
+          mode: selectedMode,
+          world: bundle.world,
+          game: bundle.game,
+          request,
+          baseGeographyCatalog,
+          finalAttempt: finalAttempt === true,
+          notes,
+        });
+      },
       variables,
     });
 
@@ -19580,6 +19602,7 @@ export const previewGameMasterCommand = async (requestText, { mode = "world-inte
       round: bundle.game.round || 0,
       baseFingerprint: gameMasterStateFingerprint({ game: bundle.game, world: bundle.world, events: bundle.events, colors }),
       summary: normalizeString(payload?.summary),
+      notes,
       transaction: {
         id: transactionId,
         mode: selectedMode,
@@ -19645,6 +19668,7 @@ export const applyGameMasterPreview = async (preview) => {
       game: bundle.game,
       request: preview.request,
       resolvedRegionIdsOnly: true,
+      approved: true,
     });
     if (validationError) throw new Error(`GM transaction is no longer valid: ${validationError}`);
     if (JSON.stringify(candidate) !== candidateBeforeValidation) {
