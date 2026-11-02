@@ -3245,6 +3245,11 @@ const patrolPointOnItsGround = (unit, order, seed, onWater) => {
   return patrolPoint(station, 0, seed);
 };
 
+// Whether advanceStandingOrders could ask `onWater` of this world: only a patrol does, and few worlds have one, so a
+// caller with none to ask need not read the map for it (gameplay.js).
+export const standingOrdersAskWater = (world) =>
+  normalizePendingUnitOrders(world?.pendingUnitOrders).some((order) => order.kind === "patrol");
+
 // Advance every standing order by the time that has passed. This is what makes
 // units move realistically turn after turn without a single token being spent:
 // a move order steps toward its destination at the unit's own pace, and a patrol

@@ -43,7 +43,7 @@ import { getFrontTargets, settleFront, startFrontsSync, subscribeFronts } from "
 import { arrowDetailAt, frontArrowFeatures, frontArrowRgb, frontAt, frontShownOn, frontTroopFeatures, stageOf } from "./frontGeometry.js";
 import { PAINT_WALL } from "../../runtime/fronts/codec.js";
 import { createFrontField, createPaintPlayer, paintPixels, paintScaleFor, pictureCorners, pictureFits, touchedCells, writeFrontField } from "./frontPaint.js";
-import { FRONT_BASEMAP_PUT_LAYER_ID, FRONT_BASEMAP_TAKE_LAYER_ID, createFrontBasemapLayers } from "./frontBasemapLayer.js";
+import { FRONT_BASEMAP_PUT_LAYER_ID, FRONT_BASEMAP_TAKE_LAYER_ID, createFrontBasemapLayers, markPicturePainted, picturePaintedTimes } from "./frontBasemapLayer.js";
 import { FRONT_GROUND_LAYER_ID, createFrontGroundLayer } from "./frontGroundLayer.js";
 import { getGroundHeldIds, getGroundMeshes, setGroundAreas, setGroundWantedIds, subscribeGroundHeldIds, subscribeGroundMeshes } from "./frontGround.js";
 import { contestedOwnersOf, setFrontShownOwners } from "./frontOwnership.js";
@@ -181,11 +181,6 @@ const isFrontProbeEnabled = () => {
 // for every run was never shown: the map kept the last turn's picture, and the
 // ground the troops took in a turn that landed while the game was open stayed
 // unpainted until the page was loaded again.
-// How often each canvas has been painted: the ground layer takes a picture up
-// again only when it has been painted anew.
-const paintings = new WeakMap();
-const markPainted = (canvas) => paintings.set(canvas, (paintings.get(canvas) ?? 0) + 1);
-
 const makePicture = (view, onto = null) => {
   const { frame } = view;
   const { toLngLat, toCell } = projectorOf(frame);
@@ -196,8 +191,10 @@ const makePicture = (view, onto = null) => {
     canvas.height = frame.rows * scale;
   }
   const context = onto?.context ?? canvas.getContext("2d");
-  if (onto) context.clearRect(0, 0, canvas.width, canvas.height);
-  markPainted(canvas);
+  if (onto) {
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    markPicturePainted(canvas);
+  }
   const [west, north] = toLngLat(0, frame.rows);
   const [east, south] = toLngLat(frame.cols, 0);
   let rowOf = null;
@@ -364,7 +361,7 @@ const FrontLayers = () => {
             whole = area.regionIds.every((id) => held.has(id));
             ready.set(area.key, whole);
           }
-          return { ...area, version: paintings.get(area.canvas) ?? 0, ready: whole };
+          return { ...area, version: picturePaintedTimes(area.canvas), ready: whole };
         });
       },
       strength: politicalFillOpacityAtZoom,
@@ -586,14 +583,14 @@ const FrontLayers = () => {
           const area = paintPixels(player, picture.palette, target);
           if (area && area.width > 0 && area.height > 0) {
             context.putImageData(target.pixels, 0, 0, area.x, area.y, area.width, area.height);
-            markPainted(picture.canvas);
+            markPicturePainted(picture.canvas);
           }
           // The front's field at this day, for the border the ground's own layer draws.
           if (groundOnRef.current) writeFrontField(player, picture.front, true);
           picture.blank = false;
         } else if (!picture.blank) {
           context.clearRect(0, 0, target.width, target.height);
-          markPainted(picture.canvas);
+          markPicturePainted(picture.canvas);
           if (groundOnRef.current) writeFrontField(player, picture.front, false);
           picture.blank = true;
         }

@@ -14,7 +14,7 @@ import { normalizeEvents } from "../../runtime/gameState.js";
 import { createFrontRun } from "../../runtime/fronts/engine.js";
 import { labStaffPolicy } from "../../runtime/fronts/mind/trained.js";
 import { enlarge, syntheticMap } from "../../runtime/fronts/syntheticMap.js";
-import { runTurnFronts } from "./frontTurn.js";
+import { engineRegionsOf, runTurnFronts } from "./frontTurn.js";
 import { AWAY_KEYS, awayInputOf, fightAway, pageAnswersOf } from "./frontWorkerCore.js";
 import { eventNarratesHardCombat } from "./nativeWarLedger.js";
 
@@ -119,4 +119,90 @@ test("a run fought away is the run fought on the page: the same war, its map's f
   assert.doesNotThrow(() => structuredClone(away));
   // The page asked for something it does not answer: the run is told so, rather than left waiting.
   await assert.rejects(page("anything else"), /does not answer/);
+});
+
+// The map's shapes as the page has them (frontApply.js turnRunInput): its regions file through engineRegionsOf, with
+// the names the map gives them, and where that file is. Here a stand-in fetch serves it. (`key` names a map of its own:
+// the ground drawn for a map is kept here between runs.)
+const FILE_URL = "blob:the-regions-file";
+const withRegionsFile = ({ args, asked }, map, key) => {
+  const file = { type: "FeatureCollection", features: map.regions.map((region) => ({ type: "Feature", properties: { id: region.id, name: `file ${region.id}` }, geometry: region.geometry })) };
+  const names = map.regions.slice(0, 4).map((region) => [region.id, `named ${region.id}`]);
+  return {
+    file,
+    args: {
+      ...args,
+      readMap: async () => {
+        const read = await args.readMap();
+        return { ...read, map: { ...read.map, key } };
+      },
+      loadRegions: async () => {
+        asked.loadRegions += 1;
+        return engineRegionsOf(structuredClone(file), { nameOf: (id) => new Map(names).get(id) });
+      },
+      regionsFile: async () => ({ url: FILE_URL, names }),
+    },
+  };
+};
+const serving = (file, { ok = true } = {}) => {
+  const fetched = [];
+  const before = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    fetched.push(String(url));
+    return ok ? new Response(JSON.stringify(file)) : new Response("", { status: 500 });
+  };
+  return { fetched, restore: () => { globalThis.fetch = before; } };
+};
+const fightThere = async (args) => {
+  const page = pageAnswersOf(args);
+  const said = [];
+  const result = await fightAway(structuredClone(awayInputOf(args)), {
+    ask: async (name, value) => {
+      said.push(name);
+      return structuredClone(await page(name, value));
+    },
+    pause: async () => {},
+  });
+  return { result, said: said.filter((name, index) => said.indexOf(name) === index).sort() };
+};
+
+test("a run fought away reads the map's shapes from their file itself, and they are the shapes the page would give", async () => {
+  const map = sheet();
+  const world = worldOn(map);
+  const here = turnArgs(map, world);
+  const onPage = await runTurnFronts(withRegionsFile(here, map, "read away").args);
+  assert.equal(here.asked.loadRegions, 1);
+  const there = turnArgs(map, world);
+  const { args, file } = withRegionsFile(there, map, "read away");
+  assert.equal(awayInputOf(args).findsRegionsFile, true);
+  const served = serving(file);
+  try {
+    const { result, said } = await fightThere(args);
+    assert.deepEqual(said, ["readMap", "regionsFile"]);
+    assert.equal(there.asked.loadRegions, 0, "the page never read the shapes");
+    assert.deepEqual(served.fetched, [FILE_URL]);
+    assert.ok(onPage.battlefields?.length > 0);
+    assert.equal(JSON.stringify(result.battlefields), JSON.stringify(onPage.battlefields));
+    assert.equal(JSON.stringify(result.events), JSON.stringify(onPage.events));
+    assert.equal(JSON.stringify(result.flips), JSON.stringify(onPage.flips));
+  } finally {
+    served.restore();
+  }
+});
+
+test("a file that cannot be read away from the page has the page read the shapes, as before", async () => {
+  const map = sheet();
+  const world = worldOn(map);
+  const onPage = await runTurnFronts(withRegionsFile(turnArgs(map, world), map, "read on the page").args);
+  const there = turnArgs(map, world);
+  const { args, file } = withRegionsFile(there, map, "read on the page");
+  const served = serving(file, { ok: false });
+  try {
+    const { result, said } = await fightThere(args);
+    assert.deepEqual(said, ["loadRegions", "readMap", "regionsFile"]);
+    assert.equal(there.asked.loadRegions, 1);
+    assert.equal(JSON.stringify(result.battlefields), JSON.stringify(onPage.battlefields));
+  } finally {
+    served.restore();
+  }
 });

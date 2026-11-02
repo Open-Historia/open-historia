@@ -14,7 +14,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { FRONT_BASEMAP_PUT_LAYER_ID, FRONT_BASEMAP_TAKE_LAYER_ID, MESH_STEPS, createFrontBasemapLayers, pictureMesh } from "./frontBasemapLayer.js";
+import { FRONT_BASEMAP_PUT_LAYER_ID, FRONT_BASEMAP_TAKE_LAYER_ID, MESH_STEPS, createFrontBasemapLayers, markPicturePainted, pictureMesh } from "./frontBasemapLayer.js";
 import { MAP_LAYER_ORDER } from "./mapLayerOrder.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -64,6 +64,158 @@ test("with nothing painted nothing is copied or drawn, and the pair says when it
   const painted = createFrontBasemapLayers({ pictures: () => [{ key: "a", canvas: {}, coordinates: [[20, 52], [28, 52], [28, 46], [20, 46]] }], onState: (working) => states.push(working) });
   painted.put.render({}, {});
   assert.deepEqual(states, [false]);
+});
+
+// Each picture went to the GPU on every frame, painted or not: 16% of the page's time while panning a war.
+const countingGl = () => {
+  const calls = {};
+  const counted = (name, result) => (...args) => {
+    calls[name] = (calls[name] ?? 0) + 1;
+    return typeof result === "function" ? result(...args) : result;
+  };
+  const named = new Set(["TEXTURE_2D", "NO_ERROR", "TEXTURE0", "TEXTURE1", "RGBA", "ARRAY_BUFFER"]);
+  const gl = new Proxy({ drawingBufferWidth: 800, drawingBufferHeight: 600, NO_ERROR: 0 }, {
+    get(target, name) {
+      if (name in target) return target[name];
+      if (typeof name === "string" && /^[A-Z0-9_]+$/.test(name)) return named.has(name) ? name : 1;
+      if (["createTexture", "createBuffer", "createProgram", "createShader"].includes(name)) return counted(name, () => ({}));
+      if (name === "getError") return counted(name, () => target.errorNow ?? 0);
+      if (name === "getShaderParameter" || name === "getProgramParameter") return counted(name, true);
+      if (name === "getAttribLocation") return counted(name, 0);
+      if (name === "getUniformLocation") return counted(name, {});
+      if (name === "getParameter") return counted(name, false);
+      return counted(name);
+    },
+    set(target, name, value) {
+      target[name] = value;
+      return true;
+    },
+  });
+  return { gl, calls };
+};
+const ARGS = { defaultProjectionData: { mainMatrix: new Array(16).fill(0) } };
+const framesWith = (list) => {
+  const states = [];
+  const layers = createFrontBasemapLayers({ pictures: () => list, onState: (working) => states.push(working) });
+  const { gl, calls } = countingGl();
+  layers.put.onAdd({ getBounds: () => null, getZoom: () => 5 });
+  const frame = () => {
+    layers.take.render(gl);
+    layers.put.render(gl, ARGS);
+  };
+  return { gl, calls, frame, states, layers };
+};
+const CORNERS = [[20, 52], [28, 52], [28, 46], [20, 46]];
+
+test("a picture goes to the GPU when it has been painted, and not on every frame", () => {
+  const canvas = {};
+  const { calls, frame } = framesWith([{ key: "a", canvas, coordinates: CORNERS }]);
+  frame();
+  frame();
+  frame();
+  assert.equal(calls.texImage2D, 1);
+  assert.equal(calls.bufferData, 1, "its mesh never changes");
+  assert.equal(calls.drawArrays, 3);
+  markPicturePainted(canvas);
+  frame();
+  frame();
+  assert.equal(calls.texImage2D, 2);
+  assert.equal(calls.drawArrays, 5);
+});
+
+test("each battlefield's canvas is counted apart, and marked wherever the map draws on it", () => {
+  const painted = {};
+  const still = {};
+  const { calls, frame } = framesWith([{ key: "a", canvas: painted, coordinates: CORNERS }, { key: "b", canvas: still, coordinates: CORNERS }]);
+  frame();
+  assert.equal(calls.texImage2D, 2);
+  markPicturePainted(painted);
+  frame();
+  assert.equal(calls.texImage2D, 3);
+  const layers = read("./FrontLayers.jsx");
+  assert.equal(layers.split("context.putImageData(").length - 1, 1);
+  assert.equal(layers.split("context.clearRect(0, 0, canvas.width, canvas.height);\n    markPicturePainted(canvas);").length - 1, 1);
+  assert.match(layers, /context\.putImageData\(target\.pixels, 0, 0, area\.x, area\.y, area\.width, area\.height\);\n\s+markPicturePainted\(picture\.canvas\);/);
+  assert.match(layers, /context\.clearRect\(0, 0, target\.width, target\.height\);\n\s+markPicturePainted\(picture\.canvas\);/);
+  // The other drawing the file does is on the mask, which only reaches the picture through a paint.
+  assert.equal(layers.split("clearRect(").length - 1, 3);
+});
+
+test("the copy of the map is made once and refreshed, and getError is not asked every frame", () => {
+  const { gl, calls, frame, states } = framesWith([{ key: "a", canvas: {}, coordinates: CORNERS }]);
+  frame();
+  frame();
+  frame();
+  assert.equal(calls.copyTexImage2D, 1);
+  assert.equal(calls.copyTexSubImage2D, 2);
+  assert.equal(calls.getError, 1, "it waits on the GPU process");
+  assert.deepEqual(states, [true]);
+  // Another size is another copy, checked again.
+  gl.drawingBufferWidth = 1024;
+  frame();
+  assert.equal(calls.copyTexImage2D, 2);
+  assert.equal(calls.getError, 2);
+});
+
+test("a copy the map refuses is tried again each frame, and the pair falls back meanwhile", () => {
+  const { gl, calls, frame, states } = framesWith([{ key: "a", canvas: {}, coordinates: CORNERS }]);
+  gl.errorNow = 1282;
+  frame();
+  frame();
+  assert.equal(calls.copyTexImage2D, 2);
+  assert.equal(calls.copyTexSubImage2D ?? 0, 0);
+  assert.deepEqual(states, [false]);
+  gl.errorNow = 0;
+  frame();
+  frame();
+  assert.equal(calls.copyTexSubImage2D, 1);
+  assert.deepEqual(states, [false, true]);
+});
+
+test("a new canvas under the same key goes to the GPU, whatever its count", () => {
+  const list = [{ key: "a", canvas: {}, coordinates: CORNERS }];
+  const { calls, frame } = framesWith(list);
+  frame();
+  // Another run's picture, drawn on a canvas of its own as often as the last one was.
+  list[0] = { key: "a", canvas: {}, coordinates: CORNERS };
+  frame();
+  assert.equal(calls.texImage2D, 2);
+});
+
+test("after the GPU gives the context back, everything is made again", () => {
+  const canvas = new EventTarget();
+  const states = [];
+  const pictures = [{ key: "a", canvas: {}, coordinates: CORNERS }];
+  const layers = createFrontBasemapLayers({ pictures: () => pictures, onState: (working) => states.push(working) });
+  const { gl, calls } = countingGl();
+  layers.put.onAdd({ getBounds: () => null, getZoom: () => 5, getCanvas: () => canvas });
+  const frame = () => {
+    layers.take.render(gl);
+    layers.put.render(gl, ARGS);
+  };
+  frame();
+  frame();
+  assert.deepEqual([calls.createProgram, calls.createTexture, calls.createBuffer, calls.texImage2D, calls.copyTexImage2D], [1, 2, 1, 1, 1]);
+  canvas.dispatchEvent(new Event("webglcontextrestored"));
+  frame();
+  assert.deepEqual([calls.createProgram, calls.createTexture, calls.createBuffer, calls.texImage2D, calls.copyTexImage2D], [2, 4, 2, 2, 2]);
+  assert.equal(calls.getError, 2, "and the copy is checked again");
+  layers.put.onRemove({}, gl);
+  canvas.dispatchEvent(new Event("webglcontextrestored"));
+  frame();
+  assert.equal(calls.createProgram, 3, "a removed layer no longer listens");
+});
+
+test("a battlefield that is gone gives back its picture and its mesh", () => {
+  const list = [{ key: "a", canvas: {}, coordinates: CORNERS }];
+  const { calls, frame } = framesWith(list);
+  frame();
+  list.length = 0;
+  list.push({ key: "b", canvas: {}, coordinates: CORNERS });
+  frame();
+  assert.equal(calls.deleteTexture, 1);
+  assert.equal(calls.deleteBuffer, 1);
+  assert.equal(calls.texImage2D, 2);
 });
 
 // The same player, on the same battlefield (its frame told a whole turn of longitude off the map's

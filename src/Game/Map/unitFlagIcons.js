@@ -17,6 +17,7 @@
 
 import { bundledFlagUrl } from "../../runtime/countryFlags.js";
 import { resolvePolityFlag } from "../../runtime/polityFlags.js";
+import { buildPolityIdentityIndex } from "../../runtime/polityIdentity.js";
 
 // Rasterised at 64px and scaled down by icon-size. Comfortably above the largest
 // counter (16px radius => a ~26px disc at z12), so the flag stays supersampled
@@ -43,15 +44,18 @@ const rasterFlagUrl = (url) => {
 // counters fell back to the unit-type letters while its panel showed the flag.
 // The shared resolver follows the polity's identity: its aliases, its map
 // references and its stock country.
-export const resolveUnitFlagUrl = (ownerCode, customFlags, polities) => {
+// `identityIndex`: unitFlagIdentityIndex(polities), for a caller resolving every owner at once.
+export const resolveUnitFlagUrl = (ownerCode, customFlags, polities, identityIndex = null) => {
   if (!ownerCode) return null;
   const { imageUrl } = resolvePolityFlag({
     polity: { name: ownerCode, code: ownerCode },
     world: { polityOverrides: polities ?? {} },
     flags: customFlags ?? {},
+    identityIndex,
   });
   return imageUrl ? rasterFlagUrl(imageUrl) : null;
 };
+export const unitFlagIdentityIndex = (polities) => buildPolityIdentityIndex({ polityOverrides: polities ?? {} });
 
 // ownerCode + URL -> ImageData, or null once that exact URL has failed. Stable
 // polity identity deliberately does NOT change when the display name or regime

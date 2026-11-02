@@ -9,7 +9,7 @@
 import COUNTRY_NAMES from "./generated/countryNames.js";
 import { JSON_URLS, readJson, writeJson } from "./assets.js";
 import { flagImageUrlFromGid } from "./countryFlags.js";
-import { resolvePolityIdentity, resolveStockCountryCode } from "./polityIdentity.js";
+import { buildPolityIdentityIndex, resolvePolityIdentity, resolveStockCountryCode } from "./polityIdentity.js";
 
 const str = (value) => String(value ?? "").trim();
 const norm = (value) => str(value).toLowerCase();
@@ -40,7 +40,7 @@ const flagIndex = (flags) => {
   return index;
 };
 
-const uniqueResolvedIdentity = (polity, world) => {
+const uniqueResolvedIdentity = (polity, world, givenIdentityIndex = null) => {
   const input = typeof polity === "string" ? { name: polity } : (polity || {});
   const directKey = str(input.polityKey || input.identityKey);
   if (directKey && world?.polityOverrides?.[directKey]) return directKey;
@@ -49,12 +49,16 @@ const uniqueResolvedIdentity = (polity, world) => {
     .map(str)
     .filter(Boolean);
   const found = new Set();
+  // (One index for both names: building it reads every region's owner.)
+  let identityIndex = givenIdentityIndex;
   for (const token of tokens) {
+    identityIndex ??= buildPolityIdentityIndex(world);
     const result = resolvePolityIdentity(token, world, {
       allowUnknown: false,
       requireActive: false,
       allowCoreMatch: true,
       allowStockBase: true,
+      identityIndex,
     });
     if (result.resolved) found.add(result.resolved);
   }
@@ -115,9 +119,10 @@ const customFlagForCandidates = (flags, candidates) => {
   return null;
 };
 
-export const resolvePolityFlag = ({ polity, world, flags = {} } = {}) => {
+// `identityIndex`: the world's (polityIdentity.js buildPolityIdentityIndex), for a caller resolving many flags at once.
+export const resolvePolityFlag = ({ polity, world, flags = {}, identityIndex = null } = {}) => {
   const input = typeof polity === "string" ? { name: polity } : (polity || {});
-  const polityKey = uniqueResolvedIdentity(input, world);
+  const polityKey = uniqueResolvedIdentity(input, world, identityIndex);
   const record = polityKey ? world?.polityOverrides?.[polityKey] : null;
 
   const custom = customFlagForCandidates(flags, [

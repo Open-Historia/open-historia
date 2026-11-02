@@ -22,6 +22,7 @@ import {
   normalizeUnits,
   normalizeWorldState,
   pruneSatisfiedUnitOrders,
+  standingOrdersAskWater,
 } from "./gameState.js";
 import { haversineKm } from "./unitMotion.js";
 
@@ -347,6 +348,30 @@ test("a fleet's patrol keeps to the sea and an army's to the land", () => {
     const army = advanceStandingOrders(patrolling("infantry"), { fromDate: "2024-01-01", toDate: "2024-02-01", round, onWater: westIsSea });
     assert.ok(!westIsSea(army.units[0].lng) || army.units[0].lng === -30, `round ${round}: the army stood in the sea at ${army.units[0].lng}`);
   }
+});
+
+// A turn reads the map for where the sea is only when a standing order could ask it (gameplay.js): with no patrol,
+// the orders move exactly as they do with the map read.
+test("only a patrol asks where the sea is, and orders without one move the same without the map", () => {
+  assert.equal(standingOrdersAskWater(patrolling("naval")), true);
+  assert.equal(standingOrdersAskWater(patrolling("air")), true);
+  assert.equal(standingOrdersAskWater({ units: [], pendingUnitOrders: [{ unitId: "unit-1", kind: "Patrol", toLng: 0, toLat: 1 }] }), true);
+  assert.equal(standingOrdersAskWater({}), false);
+  const moving = {
+    units: normalizeUnits([unit({ type: "naval", lng: -40, lat: 50 }), unit({ id: "unit-2", type: "infantry", lng: -20, lat: 50 })]),
+    pendingUnitOrders: normalizePendingUnitOrders([
+      { id: "o1", unitId: "unit-1", kind: "move", toLng: -35, toLat: 45 },
+      { id: "o2", unitId: "unit-2", kind: "attack", toLng: -10, toLat: 52 },
+    ]),
+  };
+  assert.equal(standingOrdersAskWater(moving), false);
+  let asked = 0;
+  const withMap = advanceStandingOrders(moving, { fromDate: "2024-01-01", toDate: "2024-01-08", round: 3, onWater: (lng) => { asked += 1; return westIsSea(lng); } });
+  const without = advanceStandingOrders(moving, { fromDate: "2024-01-01", toDate: "2024-01-08", round: 3, onWater: null });
+  assert.equal(asked, 0);
+  const placed = (world) => world.units.map(({ id, lng, lat, status, posture }) => ({ id, lng, lat, status, posture }));
+  assert.deepEqual(placed(without), placed(withMap));
+  assert.deepEqual(without.pendingUnitOrders, withMap.pendingUnitOrders);
 });
 
 test("a patrol with no point of its ring on its ground stays on its station", () => {

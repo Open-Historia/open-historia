@@ -1,5 +1,5 @@
 /*! Open Historia — first-screen text © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-// What the website's home page, its demo notice and the Android boot screen say.
+// What the website's demo notice and the Android boot screen say.
 // Those screens are built with plain DOM calls before the game mounts, so the
 // string extractor (scripts/i18n/) could not see their text and the shipped
 // language packs never carried it: a player's first screen, and on Android the
@@ -17,11 +17,6 @@ export const BOOT_TEXTS = Object.freeze({
   // The Android boot screen.
   bootLocal: "Everything is on this device",
   bootPreparing: "Getting the world ready…",
-  // The website's home page.
-  homeBadge: "Free & open source · community-hosted alternative to Pax Historia",
-  homeTagline: "An AI-driven alternate-history strategy game. Lead any nation on a living world map and reshape history.",
-  homeEnter: "Enter Open Historia",
-  homePrivacy: "Privacy",
   // The website's demo notice.
   demoTitle: "This is a demo of the game",
   demoDesktop: "Open Historia is meant to be played in the desktop app, which runs the world map from your own machine.",
