@@ -222,6 +222,10 @@ const turnRunInput = ({ world, game, campaignId, loadRegions, signal, round, fro
     loadRegions: typeof loadRegions === "function"
       ? async () => engineRegionsOf(await loadRegions(), { nameOf: (id) => front?.names.get(id) })
       : null,
+    // The same shapes for a run fought away from the page, which reads the file itself (frontWorkerCore.js).
+    regionsFile: typeof loadRegions?.file === "function"
+      ? async () => ({ url: await loadRegions.file(), names: [...(front?.names ?? [])] })
+      : null,
     pause: pauseFor(signal),
     pace: frontsPace(),
     tempoAllowance: (days) => (direction?.territoryTempo > 0 ? territoryTempoAllowance(direction.territoryTempo, Math.max(1, days)) : null),

@@ -329,11 +329,13 @@ import {
   buildRegionCatalogForMap,
   primeCustomRegionCatalog,
   primeCustomRegionCatalogEntries,
+  prepareWorkerFetchableUrl,
   readJson,
   writeJson,
 } from "../../runtime/assets.js";
 import {
   advanceStandingOrders,
+  standingOrdersAskWater,
   applyEventImpactsToWorld,
   applyProjectOpsToWorld,
   confirmResolvedDeployments,
@@ -5741,7 +5743,7 @@ const IMPLICIT_WHOLE_COUNTRY_LIMIT = 3;
 // validateGeneratedWorldChanges shares one reader across all three.
 const createRenderedRegionsReader = () => {
   let read = null;
-  return () => {
+  const reader = () => {
     read ??= readJson(JSON_URLS.regionsGeojson, {
       defaultValue: null,
       force: true,
@@ -5749,6 +5751,9 @@ const createRenderedRegionsReader = () => {
     }).catch(() => null);
     return read;
   };
+  // Where the file is, for a worker to read it itself (frontApply.js turnRunInput).
+  reader.file = () => prepareWorkerFetchableUrl(JSON_URLS.regionsGeojson);
+  return reader;
 };
 
 // `requests` is the time skip this resolution belongs to (createJumpRequests), so
@@ -9511,7 +9516,8 @@ const applySimulationResult = async ({
         toDate: nextGame.gameDate,
         round: nextGame.round,
         movedAt: movedThisTurn,
-        onWater: await waterTestFor(impactedWorld),
+        // (Reading the map for it took about a second of every turn, most of them with no patrol to ask it.)
+        onWater: standingOrdersAskWater(impactedWorld) ? await waterTestFor(impactedWorld) : null,
       },
     ), result.clearActions ? plannedActionSnapshot : [], { queuedActions: result.clearActions ? plannedActionSnapshot : null }),
     { playerCode: baseGame.country, playerCodes: humanCountriesOf(baseGame) },

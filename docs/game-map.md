@@ -314,6 +314,8 @@ The old stock pipeline labelled *modern* countries, which was wrong on scenario 
 
 The worker returns `labelData` (one row per polity), `pointLabelData` / `lineLabelData` for the MapLibre layers, and `ptrLabelData` (every label site with its territorial envelope) for PTR.
 
+Placing a name tests thousands of points against its territory's outlines (`pointInRingStateTile`), and visiting every edge for every point was most of the labels' time. An outline of 48 edges or more is tested through bands of its edges, sorted once by height and kept with the outline (`ringBandsOf`): a point visits only its own band's. Each edge sits in every band its height reaches, widened by three times the segment test's epsilon, so every point gets the answer the whole outline gave it (`polityLabels.ringBands.test.js` checks that against the old full scan). On the modern-day map with a played session, the labels went from 4.6 s to 2.4 s in the worker, with identical output.
+
 ### The polity-name renderer (PTR) — `src/Game/Map/labels/`
 
 PTR is the default renderer for live polity labels: one WebGL custom layer, `polity-text-renderer`, that draws each name as a raster ribbon bent along a single arc across the territory. `Nations.jsx` mounts it through `PolityTextLayer.jsx` whenever a game's own map has live labels and country labels are not hidden.
