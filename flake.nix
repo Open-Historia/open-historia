@@ -10,7 +10,7 @@
     in
     {
       packages = forAllSystems (pkgs: rec {
-        open-historia = pkgs.callPackage ./nix/package.nix { };
+        open-historia = pkgs.callPackage ./default.nix { };
         default = open-historia;
       });
 
