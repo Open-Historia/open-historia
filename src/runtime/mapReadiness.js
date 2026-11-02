@@ -78,6 +78,13 @@ const currentRecord = () => {
 
 export const politiesReady = () => Boolean(currentRecord());
 
+// A game is being opened and its map has not yet published its polities: the border worker is reading the regions file.
+export const mapIsOpening = () => {
+  if (typeof window === "undefined") return false;
+  const opening = store().opening;
+  return Boolean(opening && opening.gameId === (store().gameId ?? "") && !currentRecord());
+};
+
 // This game's map fell back to the simpler borders and labels
 // (GameUI/bordersFallbackNotice.jsx tells the player).
 export const politiesFailed = () => Boolean(currentRecord()?.failed);

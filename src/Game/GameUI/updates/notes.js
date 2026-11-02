@@ -53,6 +53,25 @@ import { PAST_UPDATES } from "./notesPast.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // A turn no longer reads the whole map for patrols it does not have, the land war reads it off the page, and the
+    // map's names and catalog are not worked out twice as a game opens (2026-11-02).
+    id: "2026-11-faster-turns",
+    kind: "minor",
+    date: "2026-11-02",
+    channel: "beta",
+    banners: [
+      {
+        title: "Faster games and turns",
+        items: [
+          "Games open sooner: the borders and country names come up earlier, above all on large maps.",
+          "Turns end sooner, and the pauses as each one finishes are about half as long.",
+          "A turn that draws a new battlefield no longer holds up the screen while it reads the map.",
+          "Nothing about how the game plays has changed: only the work behind it.",
+        ],
+      },
+    ],
+  },
+  {
     // Terrain and front work kept instead of redone each frame, and borders worked out off the page (2026-11-02).
     id: "2026-11-smoother-map",
     kind: "minor",

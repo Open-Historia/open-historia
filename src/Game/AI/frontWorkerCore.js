@@ -20,7 +20,7 @@
 
 import { createFrontRun } from "../../runtime/fronts/engine.js";
 import { labStaffPolicy, trainedStaffPolicy } from "../../runtime/fronts/mind/trained.js";
-import { runTurnFronts } from "./frontTurn.js";
+import { engineRegionsOf, runTurnFronts } from "./frontTurn.js";
 import { eventNarratesHardCombat } from "./nativeWarLedger.js";
 import { territoryTempoAllowance } from "./worldDirection.js";
 
@@ -39,9 +39,10 @@ const arenasFor = (key) => {
 //   narrates      whether the turn's events are read for combat they tell of (nativeWarLedger.js)
 //   strikes       which of the places of strikes the page may be asked for: "find", "origin", "seat"
 //   readsMap      whether the page reads the map's facts (readMap); readsRegions, its shapes (loadRegions)
-export const AWAY_KEYS = Object.freeze(["staff", "tempo", "narrates", "strikes", "readsMap", "readsRegions"]);
+//   findsRegionsFile  whether the page can say where those shapes' file is (regionsFile), for them to be read here
+export const AWAY_KEYS = Object.freeze(["staff", "tempo", "narrates", "strikes", "readsMap", "readsRegions", "findsRegionsFile"]);
 // What a run is handed that is the page's own to do, and never sent.
-export const PAGE_KEYS = Object.freeze(["createFrontRun", "readMap", "loadRegions", "pause", "tempoAllowance", "staffPolicy", "narratesCombat", "strikePlaces", "arenas", "staffConfig", "tempo"]);
+export const PAGE_KEYS = Object.freeze(["createFrontRun", "readMap", "loadRegions", "regionsFile", "pause", "tempoAllowance", "staffPolicy", "narratesCombat", "strikePlaces", "arenas", "staffConfig", "tempo"]);
 
 // A run's input as it is sent away: its data, and what is not said as data. (`staffConfig` and `tempo` are what
 // frontApply.js turnRunInput adds beside the staff and the allowance it hands a run fought on the page.)
@@ -57,6 +58,7 @@ export const awayInputOf = (args = {}) => {
     strikes: ["find", "origin", "seat"].filter((name) => typeof places?.[name] === "function"),
     readsMap: typeof args?.readMap === "function",
     readsRegions: typeof args?.loadRegions === "function",
+    findsRegionsFile: typeof args?.regionsFile === "function",
   };
 };
 
@@ -70,6 +72,7 @@ export const pageAnswersOf = (args = {}) => {
       return read ? { map: read.map, baseOwners: read.baseOwners, regionIds: read.regionIds } : read;
     }
     if (name === "loadRegions") return typeof args.loadRegions === "function" ? args.loadRegions() : null;
+    if (name === "regionsFile") return typeof args.regionsFile === "function" ? args.regionsFile() : null;
     if (name === "strike.find") return typeof places?.find === "function" ? places.find(value) : null;
     if (name === "strike.origin") return typeof places?.origin === "function" ? places.origin(value) : null;
     if (name === "strike.seat") return typeof places?.seat === "function" ? places.seat(value) : null;
@@ -77,11 +80,27 @@ export const pageAnswersOf = (args = {}) => {
   };
 };
 
+// The map's shapes read here from the file the page names ({ url, names }), as its loadRegions would give them. The
+// page reading them itself and copying them across held it for about a second. Null where they cannot be read here.
+const regionsReadHere = async (ask) => {
+  try {
+    const file = await ask("regionsFile");
+    if (!file?.url || typeof fetch !== "function") return null;
+    const response = await fetch(file.url, { cache: "no-store", credentials: "same-origin" });
+    if (!response.ok) return null;
+    const names = new Map(Array.isArray(file.names) ? file.names : []);
+    const regions = engineRegionsOf(await response.json(), { nameOf: (id) => names.get(id) });
+    return regions.length > 0 ? regions : null;
+  } catch {
+    return null;
+  }
+};
+
 // The run fought here: `data` as awayInputOf gave it; `ask(name, value)` asks the page; `pause` is called between
 // slices of the run (frontTurn.js runFrontTurn), and stops it by throwing; `rehearsers`, the cores its staff's plans
 // may be fought on together (runtime/fronts/mind/rehearsers.js).
 export const fightAway = (data = {}, { ask, pause = null, rehearsers = null } = {}) => {
-  const { staff = null, tempo = 0, narrates = false, strikes = [], readsMap = false, readsRegions = false, ...rest } = data ?? {};
+  const { staff = null, tempo = 0, narrates = false, strikes = [], readsMap = false, readsRegions = false, findsRegionsFile = false, ...rest } = data ?? {};
   const asks = Array.isArray(strikes) ? strikes : [];
   return runTurnFronts({
     ...rest,
@@ -92,7 +111,7 @@ export const fightAway = (data = {}, { ask, pause = null, rehearsers = null } = 
         return read ? { ...read, arenas: arenasFor(String(read.map?.key ?? "")) } : read;
       },
     } : {}),
-    ...(readsRegions ? { loadRegions: () => ask("loadRegions") } : {}),
+    ...(readsRegions ? { loadRegions: async () => (findsRegionsFile ? await regionsReadHere(ask) : null) ?? ask("loadRegions") } : {}),
     ...(typeof pause === "function" ? { pause } : {}),
     ...(tempo > 0 ? { tempoAllowance: (days) => territoryTempoAllowance(tempo, Math.max(1, days)) } : {}),
     ...(staff && trainedStaffPolicy() ? { staffPolicy: labStaffPolicy(staff), ...(rehearsers ? { rehearsers } : {}) } : {}),

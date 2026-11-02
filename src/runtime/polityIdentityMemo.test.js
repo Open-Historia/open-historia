@@ -39,3 +39,20 @@ test("many distinct names, past what the store keeps, still resolve", () => {
   assert.equal(ask("Spain"), "Kingdom of Spain");
   assert.equal(ask("Brasil"), "Empire of Brazil");
 });
+
+// The index counts every region's owner once, for its own counts and its polities' (whether one holds land is
+// what keeps a lapsed name active: a polity with regions is current whatever its status says).
+test("an index's polities are counted from the same regions as the index", () => {
+  const held = {
+    polityOverrides: {
+      Aland: { name: "Aland", status: "active" },
+      "Old Aland": { name: "Old Aland", status: "dissolved" },
+      Borduria: { name: "Borduria", status: "dissolved" },
+    },
+    regionOwnershipOverrides: { R1: "Aland", R2: " Aland ", R3: "Borduria", R4: "", R5: "Syldavia" },
+  };
+  const index = buildPolityIdentityIndex(held);
+  assert.deepEqual([...index.ownershipCounts], [["Aland", 2], ["Borduria", 1], ["Syldavia", 1]]);
+  const declared = Object.fromEntries(index.declared.map((entry) => [entry.canonical, [entry.ownedRegions, entry.active]]));
+  assert.deepEqual(declared, { Aland: [2, true], "Old Aland": [0, false], Borduria: [1, true] });
+});
