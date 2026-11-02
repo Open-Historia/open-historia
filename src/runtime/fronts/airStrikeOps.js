@@ -30,7 +30,8 @@ import { AIR_REACH_KM } from "./air.js";
 import { AIR_BLAST_KM, AIR_STRIKE_KINDS, AIR_STRIKE_ORDERS_MOST, enemiesIn, fightersShareOf, normalizeAirStrikeOrders } from "./airStrike.js";
 import { pointInFrame } from "./frame.js";
 import { foldBattlefieldName, isOpenBattlefield, normalizeBattlefields } from "./record.js";
-import { kmBetween } from "./worldGrid.js";
+import { kmBetween, measureOptions } from "./worldGrid.js";
+import { engineMapOf, worldMeasureOf } from "../../../server/mapDistance.js";
 
 export const AIR_STRIKE_OPS = Object.freeze(["airstrike", "unairstrike"]);
 // What of world.markers can be struck: what stands.
@@ -163,7 +164,7 @@ export const applyAirStrikeOp = (world, op, { player = "", date = "", round = 0,
       people = Math.max(0, Math.round(Number(op.people) || 0));
     }
   }
-  const far = kmBetween(Number(unit.lng), Number(unit.lat), to[0], to[1]);
+  const far = kmBetween(Number(unit.lng), Number(unit.lat), to[0], to[1], measureOptions(engineMapOf(worldMeasureOf(world))));
   if (!(far <= reach)) return { error: `That is beyond ${clean(unit.name) || "the air unit"}'s reach: ${Math.round(far).toLocaleString("en-US")} km, and it reaches ${reach.toLocaleString("en-US")} km.` };
   if (others.filter((order) => fold(order.owner) === fold(owner)).length >= AIR_STRIKE_ORDERS_MOST) return { error: REFUSED.many };
   const order = normalizeAirStrikeOrders([{

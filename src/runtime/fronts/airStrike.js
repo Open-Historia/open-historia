@@ -70,7 +70,7 @@ import { AIR_REACH_KM } from "./air.js";
 import { DUG_IN_LOSS } from "./constants.js";
 import { airWorth, readMilitary } from "./military.js";
 import { isLive } from "./troops.js";
-import { kmBetween } from "./worldGrid.js";
+import { kmBetween, measureOptions } from "./worldGrid.js";
 
 export const AIR_STRIKE_KINDS = Object.freeze(["troops", "structure", "city"]);
 export const AIR_STRIKE_OUTCOMES = Object.freeze(["unopposed", "through", "partly", "turned back", "out of reach", "gone"]);
@@ -257,7 +257,7 @@ export const enemiesIn = (wars, name) => {
 //   wars          the war ledger as the period begins
 //   seed          the turn's own (frontApply.js turnRunInput): the same strikes give the same result
 //   era           0 to 3 (unitMotion.js eraOf)
-//   flat, scale   the map's (worldGrid.js kmBetween)
+//   flat, scale   the map's (worldGrid.js kmBetween); `measure`, when given, is its whole measure (worldGrid.js measureOptions)
 //   militaryOf    (name) => its military figures, where the scenario weighs them; null for none
 //   markers       world.markers: what a strike on a structure finds standing
 //   peopleOf      (name) => a country's people, for a city whose own the page did not know; null for none
@@ -268,7 +268,7 @@ export const enemiesIn = (wars, name) => {
 //                 which the engine reports (bombTroops) and withTroopHits puts on
 //   moments       [{ type: "airstrike", day: 0, ref, owner, lng, lat, km, hit, at }] for the engine
 //   unitChanges   [{ unitId, strength } | { unitId, remove: true }] for the air units that flew or rose
-export const resolveAirStrikes = ({ orders = [], units = [], wars = [], seed = "", era = 3, flat = false, scale = undefined, militaryOf = null, markers = [], peopleOf = null, date = "", round = 0 } = {}) => {
+export const resolveAirStrikes = ({ orders = [], units = [], wars = [], seed = "", era = 3, flat = false, scale = undefined, measure = null, militaryOf = null, markers = [], peopleOf = null, date = "", round = 0 } = {}) => {
   const waiting = normalizeAirStrikeOrders(orders);
   if (waiting.length === 0) return { strikes: [], moments: [], unitChanges: [] };
   const reach = AIR_REACH_KM[era] ?? 0;
@@ -277,7 +277,8 @@ export const resolveAirStrikes = ({ orders = [], units = [], wars = [], seed = "
   const flak = era >= 3 ? AIR_FLAK_MODERN : 1;
   const worthOf = (name) => (typeof militaryOf === "function" ? airWorth(readMilitary(militaryOf(name))) : 1);
   const roll = (...parts) => (hashSeed([seed, "air", ...parts].join("|")) % 10000) / 10000;
-  const far = (aLng, aLat, bLng, bLat) => kmBetween(aLng, aLat, bLng, bLat, { flat, ...(scale ? { scale } : {}) });
+  const options = measure ?? { flat, ...(scale ? { scale } : {}) };
+  const far = (aLng, aLat, bLng, bLat) => kmBetween(aLng, aLat, bLng, bLat, options);
   // The air units as the strikes leave them, by id: their strength.
   const air = new Map();
   for (const unit of list(units)) {
@@ -414,8 +415,7 @@ export const bombTroops = (run, moment, day) => {
   const km = Number(moment?.km);
   const hit = Number(moment?.hit);
   if (!Number.isFinite(lng) || !Number.isFinite(lat) || !(km > 0) || !(hit > 0)) return;
-  const flat = run.input?.map?.flat === true;
-  const scale = run.input?.map?.scale;
+  const measure = measureOptions(run.input?.map);
   const owner = fold(moment.owner);
   for (const battle of run.battles) {
     if (battle.status !== "active" || !battle.place || !battle.field) continue;
@@ -428,7 +428,7 @@ export const bombTroops = (run, moment, day) => {
       for (const troop of battle.troops[side]) {
         if (!isLive(troop)) continue;
         const [tLng, tLat] = battle.place.toLngLat(troop.x, troop.y);
-        const distance = kmBetween(lng, lat, tLng, tLat, { flat, ...(scale ? { scale } : {}) });
+        const distance = kmBetween(lng, lat, tLng, tLat, measure);
         if (distance > km) continue;
         const sheltered = troop.dug ? (battle.works ? battle.works.loss : DUG_IN_LOSS) : 1;
         const cut = Math.min(troop.strength, hit * (1 - (AIR_BLAST_FALLOFF * distance) / km) * sheltered);

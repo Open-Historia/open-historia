@@ -36,7 +36,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { generateWarRoomReply, warRoomChart, warRoomRouteAttacks, warRoomTransportWays } from "../AI/gameplayLazy.js";
 import { normalizeAirStrikeOrders, normalizeAirStrikes } from "../../runtime/fronts/airStrike.js";
 import { airReachOf, airUnitsOf, strikableStructures } from "../../runtime/fronts/airStrikeOps.js";
-import { kmBetween } from "../../runtime/fronts/worldGrid.js";
+import { kmBetween, measureOptions } from "../../runtime/fronts/worldGrid.js";
+import { engineMapOf } from "../../../server/mapDistance.js";
 import { warRoomIntel, warRoomPlans } from "../AI/frontPlans.js";
 import { isSimulationBusy } from "../AI/simulationStatus.js";
 import { closeWarRoom, getWarRoom, onWarRoomWay, openWarRoom, setWarRoom, showBattlefield, takeTool, useWarRoom } from "../Map/warRoomStore.js";
@@ -556,7 +557,7 @@ const WarRoomPanel = ({ open, onClose, width, onResize, onResizeEnd }) => {
   // enemy's structure nearest it, or the city nearest it with whoever holds it (the map's own chart says).
   const strikeAt = async (unit, kind, [lng, lat]) => {
     const near = (list) => list
-      .map((entry) => ({ entry, km: kmBetween(lng, lat, Number(entry.lng), Number(entry.lat)) }))
+      .map((entry) => ({ entry, km: kmBetween(lng, lat, Number(entry.lng), Number(entry.lat), measureOptions(engineMapOf(currentMapMeasure()))) }))
       .filter((item) => item.km <= STRIKE_SNAP_KM)
       .sort((a, b) => a.km - b.km)[0]?.entry ?? null;
     if (kind === "structure") {

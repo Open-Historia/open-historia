@@ -263,3 +263,12 @@ test("the war room's orders: only the asker's own air units, at what an enemy ha
   assert.deepEqual(cleanAirStrikeOp({ op: "airstrike", unit: "u", kind: "city", to: [1, 2, 3], target: "T", extra: 1, people: -5 }), { op: "airstrike", unit: "u", kind: "city", to: [1, 2], target: "T" });
   assert.equal(cleanAirStrikeOp({ op: "bomb" }), null);
 });
+
+test("strikes measure by the map's projection, as the rest of the engine does", async () => {
+  const fs = await import("node:fs");
+  const read = (file) => fs.readFileSync(new URL(file, import.meta.url), "utf8");
+  assert.match(read("../../Game/AI/frontTurn.js"), /measure: measureOptions\(map\),/);
+  assert.match(read("./airStrike.js"), /const measure = measureOptions\(run\.input\?\.map\);/);
+  assert.match(read("./airStrikeOps.js"), /measureOptions\(engineMapOf\(worldMeasureOf\(world\)\)\)/);
+  assert.match(read("../../Game/GameUI/warRoom.jsx"), /measureOptions\(engineMapOf\(currentMapMeasure\(\)\)\)/);
+});
