@@ -47,6 +47,7 @@
 
 import { toCountryName } from "../../runtime/ownerNames.js";
 import { baseCountryOf, splitTerritories } from "./namedAreas.js";
+import { nextTask } from "../../runtime/nextTask.js";
 
 const norm = (value) => String(value ?? "").trim();
 const lower = (value) => norm(value).toLowerCase();
@@ -137,9 +138,7 @@ export const ROSTER_INTRO =
 // for water: a sea's box covers half the map. Map of id -> Set of ids; a map
 // whose regions share no points gives an empty one. Kept per features array.
 const touchingCache = new WeakMap();
-export const regionTouchingMap = (features) => {
-  if (!Array.isArray(features)) return new Map();
-  if (touchingCache.has(features)) return touchingCache.get(features);
+function* touchingSteps(features) {
   const byPoint = new Map();
   for (const feature of features) {
     const id = norm(feature?.properties?.id);
@@ -159,8 +158,10 @@ export const regionTouchingMap = (features) => {
         }
       }
     }
+    yield;
   }
   const shared = new Map();
+  let borderPoints = 0;
   for (const ids of byPoint.values()) {
     if (ids.length < 2) continue;
     for (const a of ids) {
@@ -170,10 +171,49 @@ export const regionTouchingMap = (features) => {
         shared.get(a).set(b, (shared.get(a).get(b) || 0) + 1);
       }
     }
+    borderPoints += 1;
+    if (borderPoints % 2048 === 0) yield;
   }
-  const touching = new Map([...shared].map(([id, counts]) => [id, new Set([...counts].filter(([, n]) => n >= 2).map(([other]) => other))]));
-  touchingCache.set(features, touching);
-  return touching;
+  return new Map([...shared].map(([id, counts]) => [id, new Set([...counts].filter(([, n]) => n >= 2).map(([other]) => other))]));
+}
+
+export const regionTouchingMap = (features) => {
+  if (!Array.isArray(features)) return new Map();
+  if (touchingCache.has(features)) return touchingCache.get(features);
+  const steps = touchingSteps(features);
+  let step = steps.next();
+  while (!step.done) step = steps.next();
+  touchingCache.set(features, step.value);
+  return step.value;
+};
+
+// The same answer a slice at a time: on a 6,000 region map it is two seconds' work, and the map is drawing.
+const TOUCHING_SLICE_MS = 8;
+const touchingInProgress = new WeakMap();
+export const regionTouchingMapSliced = (features, { between = nextTask } = {}) => {
+  if (!Array.isArray(features)) return Promise.resolve(new Map());
+  if (touchingCache.has(features)) return Promise.resolve(touchingCache.get(features));
+  if (touchingInProgress.has(features)) return touchingInProgress.get(features);
+  const work = (async () => {
+    try {
+      const steps = touchingSteps(features);
+      let started = performance.now();
+      let step = steps.next();
+      while (!step.done) {
+        if (performance.now() - started >= TOUCHING_SLICE_MS) {
+          await between();
+          started = performance.now();
+        }
+        step = steps.next();
+      }
+      touchingCache.set(features, step.value);
+      return step.value;
+    } finally {
+      touchingInProgress.delete(features);
+    }
+  })();
+  touchingInProgress.set(features, work);
+  return work;
 };
 
 // The land no power rules, by the powers it borders. The lists above are of
@@ -191,6 +231,9 @@ export const regionTouchingMap = (features) => {
 //   perOwnerCap  how many a power is listed with at most, by land and by sea each
 //   touching     the map's shared borders (regionTouchingMap), a function giving
 //                them (called only when some land is unruled), or null
+export const hasUnruledLand = (regionCatalog, overrides, { waterTypes = new Set() } = {}) => (Array.isArray(regionCatalog) ? regionCatalog : [])
+  .some((region) => norm(region?.id) && !regionOwnerName(region, overrides) && !waterTypes.has(norm(region.typeId)) && !waterTypes.has(norm(region.type)));
+
 export const buildUnruledBordersText = (regionCatalog, overrides, { waterTypes = new Set(), perOwnerCap = 30, touching = null } = {}) => {
   const catalog = (Array.isArray(regionCatalog) ? regionCatalog : []).filter((region) => norm(region?.id));
   const water = (region) => waterTypes.has(norm(region.typeId)) || waterTypes.has(norm(region.type));
