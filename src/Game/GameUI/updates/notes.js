@@ -67,6 +67,14 @@ const NEW_UPDATES = [
           "A right-button drag still turns and tilts the map, Shift with the arrow keys still does too, and Shift with a mouse wheel zooms in finer steps.",
         ],
       },
+      {
+        // "remove the context window ai setting from the settings" (the owner, 2026-11-02).
+        title: "One AI setting fewer",
+        items: [
+          "Settings → AI no longer has a Context window field for each model.",
+          "The game still learns how much a model can take from the model's own refusals, and tries it again by itself after a while.",
+        ],
+      },
     ],
   },
   {
