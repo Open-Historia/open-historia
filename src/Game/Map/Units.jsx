@@ -19,7 +19,7 @@ import { getNationColors, getNationFlags } from "../../runtime/assets.js";
 import { subscribeUnits, getUnits, getPendingUnitOrders, startUnitsSync } from "./unitsController.js";
 import { isAtTheFront, startFrontsSync, subscribeFronts } from "./frontsController.js";
 import { shortUnitLabel } from "./unitLabels.js";
-import { resolveUnitFlagUrl, syncUnitFlagIcons } from "./unitFlagIcons.js";
+import { resolveUnitFlagUrl, syncUnitFlagIcons, unitFlagIdentityIndex } from "./unitFlagIcons.js";
 import { useWorldState } from "./useWorldState.js";
 import { mapRing } from "../../../server/mapDistance.js";
 import { currentMapMeasure } from "../../runtime/mapMeasure.js";
@@ -341,11 +341,13 @@ const Units = () => {
       const mapInstance = map?.getMap?.() ?? map;
       const { customFlags, polities } = flagSourcesRef.current;
       const owners = [...new Set(unitsRef.current.map((unit) => unit.ownerCode).filter(Boolean))];
+      // (One index of the polities for every owner: this runs again as each flag arrives.)
+      const identityIndex = owners.length > 0 ? unitFlagIdentityIndex(polities) : null;
       flagIconsRef.current = syncUnitFlagIcons(
         mapInstance,
         owners.map((ownerCode) => ({
           ownerCode,
-          url: resolveUnitFlagUrl(ownerCode, customFlags, polities),
+          url: resolveUnitFlagUrl(ownerCode, customFlags, polities, identityIndex),
         })),
         // A flag that arrives later has to be folded in and repainted, because
         // the icon id only reaches the bucket through setData. A tween already

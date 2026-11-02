@@ -9,6 +9,7 @@ import { resolvePolityIdentity, resolveStockCountryCode } from "./polityIdentity
 import { mergeStockAndDeclaredPolities } from "./countryList.js";
 import { WholeFileSource } from "./wholeFileSource.js";
 import { isNativeBuild } from "./native/bridge.js";
+import { MAP_POLITIES_READY_EVENT, mapIsOpening } from "./mapReadiness.js";
 
 // v2: v1 could serve a stale archive forever (no freshness check), which
 // left months-old map data — countries missing their names — in every
@@ -1825,6 +1826,31 @@ export const getPrimedScenarioRegionCatalog = ({ url = JSON_URLS.regionsGeojson 
   return null;
 };
 
+// While a game opens, its map's border worker is already reading the regions file and hands its
+// catalog over (Nations.jsx). A catalog asked for meanwhile waits for that copy: reading the same
+// 50 MB on the page as well held the page for over a second, and twice the memory, as the game opened.
+const MAP_CATALOG_WAIT_MS = 60_000;
+const mapRegionCatalogSoon = (url) => {
+  const primed = () => (primedCustomRegionCatalog && primedCustomRegionCatalogKey === String(url || "") ? primedCustomRegionCatalog : null);
+  if (primed() || typeof window === "undefined" || !mapIsOpening()) return Promise.resolve(primed());
+  return new Promise((resolve) => {
+    let timer = 0;
+    const finish = () => {
+      clearTimeout(timer);
+      window.removeEventListener("oh:region-catalog-primed", onPrimed);
+      window.removeEventListener(MAP_POLITIES_READY_EVENT, finish);
+      resolve(primed());
+    };
+    const onPrimed = () => {
+      if (primed()) finish();
+    };
+    timer = setTimeout(finish, MAP_CATALOG_WAIT_MS);
+    window.addEventListener("oh:region-catalog-primed", onPrimed);
+    // The map gave up on its borders, or finished without priming: read the file after all.
+    window.addEventListener(MAP_POLITIES_READY_EVENT, finish);
+  });
+};
+
 export const loadScenarioRegionCatalog = async ({ force = false } = {}) => {
   if (
     !force &&
@@ -1832,6 +1858,10 @@ export const loadScenarioRegionCatalog = async ({ force = false } = {}) => {
     primedCustomRegionCatalogKey === JSON_URLS.regionsGeojson
   ) {
     return primedCustomRegionCatalog;
+  }
+  if (!force) {
+    const fromMap = await mapRegionCatalogSoon(JSON_URLS.regionsGeojson);
+    if (fromMap) return fromMap;
   }
 
   // Cold-start compatibility only. In normal gameplay Nations has already loaded
@@ -2013,11 +2043,9 @@ export const loadRegionCatalog = async ({ force = false } = {}) => {
       let customRegionsResolved = true;
       try {
         let customEntries = null;
-        if (
-          primedCustomRegionCatalog &&
-          primedCustomRegionCatalogKey === JSON_URLS.regionsGeojson
-        ) {
-          customEntries = primedCustomRegionCatalog;
+        const fromMap = await mapRegionCatalogSoon(JSON_URLS.regionsGeojson);
+        if (fromMap) {
+          customEntries = fromMap;
         } else {
           // Cold-start fallback only. Once Nations loads the custom map, the
           // compact primer makes this giant geometry read disappear thereafter.

@@ -43,7 +43,7 @@ import { getFrontTargets, settleFront, startFrontsSync, subscribeFronts } from "
 import { arrowDetailAt, frontArrowFeatures, frontArrowRgb, frontAt, frontShownOn, frontTroopFeatures, stageOf } from "./frontGeometry.js";
 import { PAINT_WALL } from "../../runtime/fronts/codec.js";
 import { createPaintPlayer, paintPixels, paintScaleFor, pictureCorners, pictureFits } from "./frontPaint.js";
-import { FRONT_BASEMAP_PUT_LAYER_ID, FRONT_BASEMAP_TAKE_LAYER_ID, createFrontBasemapLayers } from "./frontBasemapLayer.js";
+import { FRONT_BASEMAP_PUT_LAYER_ID, FRONT_BASEMAP_TAKE_LAYER_ID, createFrontBasemapLayers, markPicturePainted } from "./frontBasemapLayer.js";
 import { contestedOwnersOf, setFrontShownOwners } from "./frontOwnership.js";
 import { shownOwnersAt } from "../../runtime/fronts/replay.js";
 import { shortUnitLabel } from "./unitLabels.js";
@@ -185,7 +185,10 @@ const makePicture = (view, onto = null) => {
     canvas.height = frame.rows * scale;
   }
   const context = onto?.context ?? canvas.getContext("2d");
-  if (onto) context.clearRect(0, 0, canvas.width, canvas.height);
+  if (onto) {
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    markPicturePainted(canvas);
+  }
   const [west, north] = toLngLat(0, frame.rows);
   const [east, south] = toLngLat(frame.cols, 0);
   let rowOf = null;
@@ -429,10 +432,14 @@ const FrontLayers = () => {
           player.seek(entry.day);
           target.data = target.pixels.data;
           const area = paintPixels(player, picture.palette, target);
-          if (area && area.width > 0 && area.height > 0) context.putImageData(target.pixels, 0, 0, area.x, area.y, area.width, area.height);
+          if (area && area.width > 0 && area.height > 0) {
+            context.putImageData(target.pixels, 0, 0, area.x, area.y, area.width, area.height);
+            markPicturePainted(picture.canvas);
+          }
           picture.blank = false;
         } else if (!picture.blank) {
           context.clearRect(0, 0, target.width, target.height);
+          markPicturePainted(picture.canvas);
           picture.blank = true;
         }
         if (!handOver(entry, !atRest)) waiting = true;

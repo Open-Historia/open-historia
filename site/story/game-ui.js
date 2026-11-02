@@ -1497,8 +1497,16 @@
   }
 
   // ---- each frame -------------------------------------------------------------------------------------------
+  // Called every frame the story draws. When nothing has moved since the last call it does nothing but
+  // let the advisor's "Thinking…" dots tick, four times a second; the reader's own clicks redraw at once.
+  var lastUpdate = { key: "", at: 0 };
   function update(T, step, extra) {
     if (!el.root) return;
+    var key = T.toFixed(4) + step + (extra ? extra.korea : "");
+    var now = Date.now();
+    if (key === lastUpdate.key && now - lastUpdate.at < 250) return;
+    lastUpdate.key = key;
+    lastUpdate.at = now;
     state.T = T;
     state.korea = extra && extra.korea >= 0 ? extra.korea : 0;
     if (step !== state.step) {

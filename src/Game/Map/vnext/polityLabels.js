@@ -253,19 +253,80 @@ const pointOnSegmentTile = (point, a, b, epsilon = 1e-5) => {
   return dot <= lengthSquared + epsilon;
 };
 
-// 1 = inside, 0 = boundary, -1 = outside.
-const pointInRingStateTile = (point, ring) => {
-  if (!Array.isArray(ring) || ring.length < 3) return -1;
-  let inside = false;
-  for (let index = 0, previous = ring.length - 1; index < ring.length; previous = index, index += 1) {
+const ringEdgeState = (point, a, b, state) => {
+  if (pointOnSegmentTile(point, a, b)) return 0;
+  if ((a[1] > point[1]) === (b[1] > point[1])) return state;
+  const x = a[0] + ((point[1] - a[1]) * (b[0] - a[0])) / (b[1] - a[1]);
+  return x > point[0] ? -state : state;
+};
+
+// Placing one name tests thousands of points against outlines of thousands of edges, and every edge
+// was visited for every point: most of the time a country's name took. A ring's edges are sorted
+// once into horizontal bands, and a point visits only its own band's. An edge is in every band its
+// height reaches, widened by 3 epsilon (over its length when that is under 1), twice the furthest
+// pointOnSegmentTile could accept a point, so no edge that could cross the point's ray or carry the
+// point is ever left out: the answer is the same. (A ring with a coordinate that is not a finite
+// number is not banded, and is scanned whole as before.)
+const RING_BAND_MIN_EDGES = 48;
+const ringBands = new WeakMap();
+const ringBandsOf = (ring) => {
+  let bands = ringBands.get(ring);
+  if (bands !== undefined) return bands;
+  const count = ring.length;
+  const low = new Float64Array(count);
+  const high = new Float64Array(count);
+  const edges = [];
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (let index = 0, previous = count - 1; index < count; previous = index, index += 1) {
     const a = ring[previous];
     const b = ring[index];
-    if (pointOnSegmentTile(point, a, b)) return 0;
-    if ((a[1] > point[1]) === (b[1] > point[1])) continue;
-    const x = a[0] + ((point[1] - a[1]) * (b[0] - a[0])) / (b[1] - a[1]);
-    if (x > point[0]) inside = !inside;
+    if (![a?.[0], a?.[1], b?.[0], b?.[1]].every(Number.isFinite)) {
+      ringBands.set(ring, null);
+      return null;
+    }
+    const dx = b[0] - a[0];
+    const dy = b[1] - a[1];
+    const lengthSquared = dx * dx + dy * dy;
+    const reach = lengthSquared <= 1e-10 ? 3e-5 : 3e-5 * Math.max(1, 1 / Math.sqrt(lengthSquared));
+    low[index] = Math.min(a[1], b[1]) - reach;
+    high[index] = Math.max(a[1], b[1]) + reach;
+    if (low[index] < minY) minY = low[index];
+    if (high[index] > maxY) maxY = high[index];
+    edges.push(index);
   }
-  return inside ? 1 : -1;
+  const size = Math.max(1, Math.min(4096, Math.ceil(edges.length / 8)));
+  const height = (maxY - minY) / size || 1;
+  const lists = Array.from({ length: size }, () => []);
+  for (const index of edges) {
+    const first = Math.max(0, Math.min(size - 1, Math.floor((low[index] - minY) / height)));
+    const last = Math.max(0, Math.min(size - 1, Math.floor((high[index] - minY) / height)));
+    for (let band = first; band <= last; band += 1) lists[band].push(index);
+  }
+  bands = { minY, maxY, size, height, lists };
+  ringBands.set(ring, bands);
+  return bands;
+};
+
+// 1 = inside, 0 = boundary, -1 = outside.
+export const pointInRingStateTile = (point, ring) => {
+  if (!Array.isArray(ring) || ring.length < 3) return -1;
+  let state = -1;
+  const bands = ring.length < RING_BAND_MIN_EDGES || !Number.isFinite(point[0]) || !Number.isFinite(point[1]) ? null : ringBandsOf(ring);
+  if (!bands) {
+    for (let index = 0, previous = ring.length - 1; index < ring.length; previous = index, index += 1) {
+      state = ringEdgeState(point, ring[previous], ring[index], state);
+      if (state === 0) return 0;
+    }
+    return state;
+  }
+  if (point[1] < bands.minY || point[1] > bands.maxY) return -1;
+  const band = Math.max(0, Math.min(bands.size - 1, Math.floor((point[1] - bands.minY) / bands.height)));
+  for (const index of bands.lists[band]) {
+    state = ringEdgeState(point, ring[index === 0 ? ring.length - 1 : index - 1], ring[index], state);
+    if (state === 0) return 0;
+  }
+  return state;
 };
 
 const pointInPolygonTile = (point, polygonRings) => {

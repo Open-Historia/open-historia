@@ -1,7 +1,7 @@
 /*! Open Historia — unit counter flag resolution tests © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { resolveUnitFlagUrl } from "./unitFlagIcons.js";
+import { resolveUnitFlagUrl, unitFlagIdentityIndex } from "./unitFlagIcons.js";
 
 // Seen in a live game (2026-09-21): the United Kingdom was reconstituted as the
 // British Empire, the country panel kept showing the Union flag, and every one
@@ -26,4 +26,15 @@ test("a stock country still gets its raster flag", () => {
 test("an owner with no flag anywhere falls back to the type glyph", () => {
   assert.equal(resolveUnitFlagUrl("Nowhere In Particular", {}, {}), null);
   assert.equal(resolveUnitFlagUrl("", {}, {}), null);
+});
+
+// The map resolves every owner's flag against one index of the polities (Units.jsx refreshFlagIcons).
+test("every owner's flag is the same resolved against one shared index of the polities", () => {
+  const polities = { ...britishEmpire, Borduria: { name: "Borduria", code: "BRD", aliases: ["Bordurian Republic"], status: "active" } };
+  const custom = { "Bordurian Republic": "data:image/png;base64,BBBB" };
+  const index = unitFlagIdentityIndex(polities);
+  for (const owner of ["British Empire", "United Kingdom", "Borduria", "Bordurian Republic", "BRD", "Argentina", "Nowhere In Particular", ""]) {
+    assert.equal(resolveUnitFlagUrl(owner, custom, polities, index), resolveUnitFlagUrl(owner, custom, polities), owner);
+  }
+  assert.equal(resolveUnitFlagUrl("Borduria", custom, polities, index), "data:image/png;base64,BBBB");
 });

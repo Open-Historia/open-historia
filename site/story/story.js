@@ -160,6 +160,59 @@
   // the screen the point sits. Each frame it is handed to MapLibre; the canvas
   // over the map places what it draws with the map's own projection.
   var canvas, ctx, map = null, W = 0, H = 0, dpr = 1;
+
+  // ---- how much this device can draw smoothly --------------------------------------------------------
+  // Tier 0 draws everything; tier 1 draws the map and the overlay at one pixel per CSS pixel and drops the
+  // blur behind the interface; tier 2 also drops the 3D terrain and its shading. A device starts where its
+  // memory, cores and data saver say, and steps down (never back up) when its frames are seen to be slow.
+  var quality = { tier: 0, times: [], span: 0, since: 0, sampling: false };
+  function startingTier() {
+    var memory = navigator.deviceMemory || 8;
+    var cores = navigator.hardwareConcurrency || 8;
+    var connection = navigator.connection || {};
+    var touch = window.matchMedia && window.matchMedia("(pointer: coarse)").matches;
+    if (connection.saveData || memory <= 2 || cores <= 2) return 2;
+    if (memory <= 4 || cores <= 4 || (touch && (window.devicePixelRatio || 1) >= 2.5)) return 1;
+    return 0;
+  }
+  function mapPixelRatio() { return quality.tier >= 1 ? 1 : Math.min(1.5, window.devicePixelRatio || 1); }
+  function overlayRatio() { return quality.tier >= 1 ? 1 : Math.min(2, window.devicePixelRatio || 1); }
+  function applyTier(tier) {
+    quality.tier = tier;
+    quality.times.length = 0;
+    quality.span = 0;
+    quality.since = performance.now();
+    document.documentElement.classList.toggle("oh-lite", tier >= 1);
+    if (canvas) resize(true);
+    if (!map) return;
+    if (map.setPixelRatio) map.setPixelRatio(mapPixelRatio());
+    if (tier >= 2 && mapState.loaded) dropTerrain();
+  }
+  function dropTerrain() {
+    try {
+      map.setTerrain(null);
+      map.setLayoutProperty("hills", "visibility", "none");
+    } catch (error) { /* the style is not ready: buildMap leaves them out at tier 2 */ }
+  }
+  // One frame's length. Judged by the 90 frames or the second and a half, whichever comes first: more than
+  // one in eight past 40ms (under 25 frames a second) is a stutter the reader sees, so one step down, then
+  // three seconds for the lighter tier to settle before it is judged.
+  function sampleFrame(ms) {
+    if (!quality.sampling || quality.tier >= 2 || document.hidden) return;
+    var times = quality.times;
+    times.push(ms);
+    quality.span += ms;
+    // (a very slow device fills neither: three frames in a second and a half, or any four seconds, will do)
+    if (times.length < 90 && (quality.span < 1500 || times.length < 3) && quality.span < 4000) return;
+    var slow = 0;
+    for (var i = 0; i < times.length; i += 1) if (times[i] > 40) slow += 1;
+    var judged = times.length;
+    times.length = 0;
+    quality.span = 0;
+    if (slow / judged > 0.125 && performance.now() - quality.since > 3000) applyTier(quality.tier + 1);
+  }
+  quality.tier = startingTier();
+  document.documentElement.classList.toggle("oh-lite", quality.tier >= 1);
   var cam = { x: 800, y: 600, z: 0, ls: 0, h: 0, t: 0, ax: 0.5, ay: 0.5 };
   var P = { s: 1, sinT: 0, cx: 0, cy: 0, horizon: -1e5 };
   var WORLD = 2 * Math.PI * data.merc.k;   // the map's width in its own units
@@ -279,7 +332,7 @@
         centerClampedToGround: false,
         fadeDuration: 0,
         // Sharp enough, and a quarter of the work of drawing 3D terrain at a phone's full density.
-        pixelRatio: Math.min(1.5, window.devicePixelRatio || 1),
+        pixelRatio: mapPixelRatio(),
         refreshExpiredTiles: false,
         style: {
           version: 8,
@@ -295,7 +348,7 @@
           layers: [
             { id: "sea", type: "background", paint: { "background-color": "#0b1520" } },
             { id: "base", type: "raster", source: "base", paint: { "raster-brightness-max": 0.82, "raster-saturation": -0.15 } },
-            { id: "hills", type: "hillshade", source: "dem", paint: { "hillshade-exaggeration": 0.1, "hillshade-shadow-color": "#000" } },
+            { id: "hills", type: "hillshade", source: "dem", layout: { visibility: quality.tier >= 2 ? "none" : "visible" }, paint: { "hillshade-exaggeration": 0.1, "hillshade-shadow-color": "#000" } },
             { id: "countries", type: "fill", source: "countries", paint: { "fill-color": ["get", "c"], "fill-opacity": 0.42 } },
             { id: "borders", type: "line", source: "countries", paint: { "line-color": "rgba(255, 255, 255, 0.5)", "line-width": 0.8 } },
             { id: "korea", type: "fill", source: "korea", paint: { "fill-color": ["match", ["get", "side"], "n", "#c4432c", "#2f6fb0"], "fill-opacity": 0.62 } },
@@ -314,6 +367,7 @@
     }
     m.on("load", function () {
       mapState.loaded = true;
+      if (quality.tier >= 2) dropTerrain();
       lastCamera = "";
       mapState.step = -1;
       mapState.france = null;
@@ -1076,11 +1130,15 @@
     state.target = T;
     show(active.getAttribute("data-step"), active);
   }
-  function resize() {
+  // A phone's address bar showing or hiding fires resize while the stage (100svh) keeps its size:
+  // nothing is reallocated unless the stage or the pixel density did change.
+  function resize(force) {
     var box = canvas.getBoundingClientRect();
-    W = box.width || window.innerWidth;
-    H = box.height || window.innerHeight;
-    dpr = Math.min(2, window.devicePixelRatio || 1);
+    var w = box.width || window.innerWidth, h = box.height || window.innerHeight, ratio = overlayRatio();
+    if (!force && w === W && h === H && ratio === dpr) return;
+    W = w;
+    H = h;
+    dpr = ratio;
     canvas.width = Math.round(W * dpr);
     canvas.height = Math.round(H * dpr);
     if (map) {
@@ -1103,14 +1161,20 @@
   }
   var live = false;
   var last = 0;
+  var drawn = 0;
   function frame(now) {
     if (!live) { last = 0; return; }
     requestAnimationFrame(frame);
     var dt = last ? Math.min(0.1, (now - last) / 1000) : 0.016;
+    if (last) sampleFrame(now - last);
     last = now;
     // The camera eases toward where the scroll says it should be.
     var gap = state.target - state.T;
-    state.T = calm || Math.abs(gap) < 0.0005 ? state.target : state.T + gap * Math.min(1, dt * 5);
+    var moving = Math.abs(gap) >= 0.0005;
+    state.T = calm || !moving ? state.target : state.T + gap * Math.min(1, dt * 5);
+    // At rest only the pulses and the doves move: a lighter device draws them at half the rate.
+    if (!moving && quality.tier >= 1 && now - drawn < 31) return;
+    drawn = now;
     draw(now);
     if (window.OH_GAME_UI) window.OH_GAME_UI.update(state.T, state.step, { korea: state.korea, counts: state.counts });
   }
@@ -1150,7 +1214,11 @@
     }
     var queued = 0;
     window.addEventListener("scroll", function () { if (!queued) queued = requestAnimationFrame(function () { queued = 0; readScroll(); }); }, { passive: true });
-    window.addEventListener("resize", function () { resize(); measure(); readScroll(); });
+    // Frames are judged from four seconds in, not while the page is still putting itself together.
+    setTimeout(function () { quality.sampling = true; quality.since = performance.now() - 3000; }, 4000);
+    document.addEventListener("visibilitychange", function () { last = 0; quality.times.length = 0; quality.span = 0; });
+    var sized = 0;
+    window.addEventListener("resize", function () { if (!sized) sized = requestAnimationFrame(function () { sized = 0; resize(); measure(); readScroll(); }); });
     // The map's fonts arrive after the first frame.
     if (document.fonts && document.fonts.ready) document.fonts.ready.then(function () { if (!live) draw(performance.now()); });
     draw(performance.now());

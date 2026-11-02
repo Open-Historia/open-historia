@@ -53,6 +53,59 @@ import { PAST_UPDATES } from "./notesPast.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // The website's entry screen ("Enter Open Historia") removed: the demo notice comes up over the game (2026-11-02).
+    id: "2026-11-straight-into-the-demo",
+    kind: "minor",
+    date: "2026-11-02",
+    channel: "beta",
+    banners: [
+      {
+        title: "Straight into the demo",
+        items: [
+          "On the website, Play the demo now opens the game itself: the entry page that stood in front of it is gone.",
+          "The note that the browser version is a demo comes up over the game instead, once a visit.",
+        ],
+      },
+    ],
+  },
+  {
+    // A turn no longer reads the whole map for patrols it does not have, the land war reads it off the page, and the
+    // map's names and catalog are not worked out twice as a game opens (2026-11-02).
+    id: "2026-11-faster-turns",
+    kind: "minor",
+    date: "2026-11-02",
+    channel: "beta",
+    banners: [
+      {
+        title: "Faster games and turns",
+        items: [
+          "Games open sooner: the borders and country names come up earlier, above all on large maps.",
+          "Turns end sooner, and the pauses as each one finishes are about half as long.",
+          "A turn that draws a new battlefield no longer holds up the screen while it reads the map.",
+          "Nothing about how the game plays has changed: only the work behind it.",
+        ],
+      },
+    ],
+  },
+  {
+    // Terrain and front work kept instead of redone each frame, and borders worked out off the page (2026-11-02).
+    id: "2026-11-smoother-map",
+    kind: "minor",
+    date: "2026-11-02",
+    channel: "beta",
+    banners: [
+      {
+        title: "A smoother map",
+        items: [
+          "Moving, zooming and turning the map is far smoother, above all with 3D terrain on and wars on the map.",
+          "Slower computers gain the most.",
+          "The freeze of a few seconds that could strike mid-game, as a country got ready to write to you, is now a brief hitch at most.",
+          "The map looks just as it did: only the work behind it has changed.",
+        ],
+      },
+    ],
+  },
+  {
     // "in features rename the fronts section to wars and make it so you can toggle fronts, air troops, and navies for a
     // scenario", "make it so in the war room you can Deploy Aircraft", "make it so they can be intercepted and if they
     // are, the "fighters" in the air unit have a simulated battle" (the owner, 2026-11-01).

@@ -831,3 +831,9 @@ button.gx-date-country { background: none; border: 0; padding: 0; font-family: i
   .gx-arrow, .gx-x, .dp-x, .dp-back, .gx-hbtn { min-width: 44px; min-height: 44px; }
   .dp-tab, .sp-tab, .in-tab, .gx-subtab { min-height: 44px; }
 }
+
+/* A lighter device (story.js quality tier 1+): no blur of the moving map behind the interface, which is
+   worked out again for every frame the map draws; the surfaces are a little more opaque instead. */
+.oh-lite .gx-base, .oh-lite .gx-surface, .oh-lite .gx-menu, .oh-lite .as-back { backdrop-filter: none; -webkit-backdrop-filter: none; }
+.oh-lite .gx-base, .oh-lite .gx-surface { background-color: rgba(22, 22, 25, 0.82); }
+.oh-lite .gx-war-btn { background-color: #a8181e; }

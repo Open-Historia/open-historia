@@ -973,14 +973,16 @@ export function getPoliticalProfile(world, polityKey) {
         // own right never borrows the actor of ANOTHER polity just because both
         // names map to the same stock country ("Russia" founded next to the
         // "Russian Federation" gets its own actor, not the Federation's).
-        const ownPolities = ownPolityNames(world);
+        // (Those names read every region's owner: only gathered once an actor of that stock country is found.)
+        let ownPolities = null;
+        const ownPolity = (token) => (ownPolities ??= ownPolityNames(world)).has(clean(token));
         const requested = clean(polityKey);
-        const isOtherPolity = (token) => clean(token) !== requested && ownPolities.has(clean(token));
-        const requestedIsOwnPolity = ownPolities.has(requested);
+        const isOtherPolity = (token) => clean(token) !== requested && ownPolity(token);
         for (const [actorKey, actor] of Object.entries(byPolity)) {
-            if (requestedIsOwnPolity && [actorKey, actor?.polityKey].some((token) => token && isOtherPolity(token))) continue;
             const actorTokens = [actorKey, actor?.polityKey, actor?.name].filter(Boolean);
-            if (actorTokens.some((token) => resolveStockCountryCode(token) === stockCode)) return actor;
+            if (!actorTokens.some((token) => resolveStockCountryCode(token) === stockCode)) continue;
+            if (ownPolity(requested) && [actorKey, actor?.polityKey].some((token) => token && isOtherPolity(token))) continue;
+            return actor;
         }
     }
 
