@@ -214,3 +214,32 @@ test("the idle pulse and the event reaction send nothing rather than re-attribut
   assert.equal((gameplay.match(/idleDiplomacyLookups\(buildTaskLookups\(bundle\)/g) || []).length, 2);
   assert.match(gameplay, /const countries = withoutPlayerParticipant\(\s*await resolveInvitees\(candidate\.chat\.countries, bundle\.world\),\s*bundle\.game\.country,\s*\);/);
 });
+
+test("every country in any chat with the player is relevant: a group chat with no dated messages, a closed chat, an institution's channel", () => {
+  const bundle = {
+    game: { country: "Eldoria" },
+    world: fantasy(["Eldoria", "Aquilonia", "Borduria", "Carpathia", "Drakmor", "Elbonia", "Zembla"]),
+    events: [{ id: "e1", date: "1201-06-01", title: "Drakmor crowns a king", impacts: {} }],
+    chats: [
+      { id: "g1", countries: [{ name: "Eldoria" }, { name: "Aquilonia" }, { name: "Borduria" }], messages: [{ text: "Welcome." }] },
+      { id: "c1", status: "closed", countries: [{ name: "Carpathia" }], messages: [{ text: "Farewell.", time: "1201-02-01" }] },
+      { id: "institution-channel-league", institutionId: "league", countries: ["Eldoria", "Elbonia"], messages: [], createdRound: 3 },
+    ],
+  };
+  const ranked = rankRelevantPolities(bundle).map((entry) => entry.name);
+  // Dated first (newest first), then by round, then the undated; Zembla, untouched, is not relevant.
+  assert.deepEqual(ranked, ["Drakmor", "Carpathia", "Elbonia", "Aquilonia", "Borduria"]);
+  const set = buildIdleDiplomacyPoliticalDecisionSet(bundle);
+  assert.deepEqual(set.listed, ["Drakmor", "Carpathia", "Elbonia", "Aquilonia", "Borduria", "Zembla"]);
+  assert.equal(set.contexts.length, 5, "every chat member carries its background, above the country nobody dealt with");
+});
+
+test("a chat dated by its own date when its messages carry none", () => {
+  const bundle = {
+    game: { country: "Eldoria" },
+    world: fantasy(["Eldoria", "Aquilonia", "Borduria"], { relations: [{ a: "Eldoria", b: "Borduria", lastUpdatedDate: "1201-01-01" }] }),
+    events: [],
+    chats: [{ id: "c1", countries: ["Aquilonia"], lastUpdatedDate: "1201-05-01", messages: [{ text: "Hello." }] }],
+  };
+  assert.deepEqual(rankRelevantPolities(bundle).map((entry) => entry.name), ["Aquilonia", "Borduria"]);
+});

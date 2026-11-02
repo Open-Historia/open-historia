@@ -125,12 +125,17 @@ export const rankRelevantPolities = (bundle, { event = null } = {}) => {
   const names = eligiblePolities(world, player);
   const nameOf = exactNamer(world, names);
   const byLength = [...names].sort((a, b) => b.length - a.length);
+  // Each polity's latest: { date, round }. A date first; with none, the round;
+  // with neither it still counts, after every dated one.
   const latest = new Map();
-  const note = (value, date) => {
+  const roundOf = (value) => (Number.isFinite(Number(value)) && value !== "" && value !== null ? Number(value) : -1);
+  const newer = (a, b) => compareGameDatesNewestFirst(a.date, b.date) || b.round - a.round;
+  const note = (value, date, round = -1) => {
     const name = nameOf(value);
     if (!name) return;
+    const next = { date: clean(date), round: roundOf(round) };
     const known = latest.get(name);
-    if (known === undefined || compareGameDatesNewestFirst(clean(date), known) < 0) latest.set(name, clean(date));
+    if (known === undefined || newer(next, known) < 0) latest.set(name, next);
   };
   const isPlayer = (value) => lower(value?.name || value?.code || value) === lower(player);
 
@@ -145,9 +150,15 @@ export const rankRelevantPolities = (bundle, { event = null } = {}) => {
   for (const { entry } of events) for (const name of polityNamesInEvent(entry, world, nameOf, byLength)) note(name, entry?.date);
 
   // What passed between them and the player.
+  // Every chat with the player is a dealing: one-on-one or group, open or
+  // closed, an institution's channel too (those sit among the chats). Dated by
+  // its latest dated message; else by its own date or round; else undated.
   for (const chat of list(bundle?.chats)) {
     const dates = list(chat?.messages).map((message) => clean(message?.time)).filter(Boolean).sort(compareGameDatesNewestFirst);
-    for (const country of list(chat?.countries)) if (!isPlayer(country)) note(country, dates[0] || "");
+    const ownDate = [chat?.lastUpdatedDate, chat?.updatedDate, chat?.date, chat?.startedDate, chat?.createdDate].map(clean).find(Boolean) || "";
+    const round = [chat?.updatedRound, chat?.round, chat?.createdRound].find((value) => roundOf(value) >= 0);
+    const members = [...list(chat?.countries), ...list(chat?.participants), ...list(chat?.members)];
+    for (const country of members) if (!isPlayer(country)) note(country, dates[0] || ownDate, round);
   }
   for (const war of list(world?.wars)) {
     const parties = [...list(war?.sideA), ...list(war?.sideB)];
@@ -179,9 +190,9 @@ export const rankRelevantPolities = (bundle, { event = null } = {}) => {
 
   const ranked = [...latest.entries()]
     .filter(([name]) => !first.includes(name))
-    .map(([name, date], order) => ({ name, date, order }))
-    .sort((a, b) => compareGameDatesNewestFirst(a.date, b.date) || a.order - b.order)
-    .map(({ name, date }) => ({ name, date }));
+    .map(([name, when], order) => ({ name, when, order }))
+    .sort((a, b) => newer(a.when, b.when) || a.order - b.order)
+    .map(({ name, when }) => ({ name, date: when.date }));
   return [...first.map((name) => ({ name, date: clean(event?.date) })), ...ranked];
 };
 
