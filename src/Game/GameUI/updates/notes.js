@@ -53,6 +53,25 @@ import { PAST_UPDATES } from "./notesPast.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // The Game Master reads a request for what it means; wars open in any language; typed text is not translated (2026-11-02).
+    id: "2026-11-game-master-wars",
+    kind: "minor",
+    date: "2026-11-02",
+    channel: "beta",
+    banners: [
+      {
+        title: "The Game Master does what you ask",
+        items: [
+          "The Game Master no longer turns down a declaration of war over its wording: a war you ask for is made, in any language.",
+          "What a request leaves unsaid, such as who fights in a battle or which war an event belongs to, the game now works out itself instead of asking the AI again.",
+          "When part of a request cannot be made, such as a war with a country that does not exist, the preview says so plainly and shows the rest.",
+          "Wars that break out in a time skip are no longer lost when its events are written in a language other than English.",
+          "Your orders and the Game Master's preview are no longer changed by the translation of the game's interface.",
+        ],
+      },
+    ],
+  },
+  {
     // "add camera controls (press shift to tilt or turn) to beta" (the owner, 2026-11-02): as the native app has them.
     id: "2026-11-shift-to-turn",
     kind: "minor",

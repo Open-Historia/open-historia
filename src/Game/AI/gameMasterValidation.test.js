@@ -12,6 +12,8 @@ import {
   gameMasterPolityKey,
   gameMasterStateFingerprint,
   normalizeGameMasterPolityLifecycle,
+  settleGameMasterBreakawaySovereignty,
+  settleGameMasterChronology,
   validateGameMasterBreakawaySovereignty,
   validateGameMasterChronology,
   validateGameMasterPolityLifecycle,
@@ -177,4 +179,26 @@ test("the state fingerprint changes when anything the preview read changes", () 
     events: [...events, { id: "e2", date: "1915-06-01", title: "New", description: "" }],
   }), base, "an event was added");
   assert.notEqual(gameMasterStateFingerprint({ game: { ...game, gameDate: "1915-06-02" }, world, events }), base, "the date moved");
+});
+
+// What these checks ask is done instead of asked for (2026-11-02): each answer
+// the Game Master had to give again cost a request.
+test("what the checks ask is done: a date moved to today, a create of a live country updated, a breakaway's title made control", () => {
+  const game = { gameDate: "1915-06-01" };
+  const future = { events: [{ date: "1915-09-01", impacts: { unitOps: [{}] } }, { date: "1916-01-01", impacts: {} }] };
+  assert.equal(settleGameMasterChronology(future, game), 1);
+  assert.deepEqual(future.events.map((event) => event.date), ["1915-06-01", "1916-01-01"], "a note with no effects keeps its date");
+  assert.equal(validateGameMasterChronology(future, game), "");
+
+  const base = active("Russian Empire", "German Empire");
+  const created = withChanges(polityChange("create", "German Empire", { color: "#555555" }));
+  normalizeGameMasterPolityLifecycle(created, world1915, base);
+  assert.deepEqual(created.events[0].impacts.polityChanges[0], { operation: "update", code: "German Empire", color: "#555555" });
+  assert.equal(validateGameMasterPolityLifecycle(created, world1915, base), "");
+
+  const rising = breakaway({ regionId: "DEU.1_1", fromCode: "German Empire", toCode: "Free Silesia", note: "rising" });
+  assert.equal(settleGameMasterBreakawaySovereignty(rising), 1);
+  assert.deepEqual(rising.events[0].impacts.regionTransfers, []);
+  assert.deepEqual(rising.events[0].impacts.regionControlOps, [{ op: "control", regionId: "DEU.1_1", fromCode: "German Empire", toCode: "Free Silesia", note: "rising" }]);
+  assert.equal(validateGameMasterBreakawaySovereignty(rising), "");
 });

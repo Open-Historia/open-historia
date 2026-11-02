@@ -204,12 +204,13 @@ const ActionItem = ({ action, onDelete, locked = false }) => {
         }}
         >
         <div style={{ flex: 1, minWidth: 0 }}>
+        {/* The player's own order, as typed: never the interface's to translate. */}
         {showTitle && (
-            <div style={{ color: "rgba(255,255,255,0.95)", fontSize: "0.78rem", fontWeight: 700, marginBottom: "0.15rem" }}>
+            <div data-no-translate style={{ color: "rgba(255,255,255,0.95)", fontSize: "0.78rem", fontWeight: 700, marginBottom: "0.15rem" }}>
             {normalized.title}
             </div>
         )}
-        <div style={{ color: "rgba(255,255,255,0.82)", fontSize: "0.82rem", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+        <div data-no-translate style={{ color: "rgba(255,255,255,0.82)", fontSize: "0.82rem", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
         {label}
         </div>
         <div

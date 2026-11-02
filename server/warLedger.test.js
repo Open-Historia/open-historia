@@ -14,6 +14,7 @@ import {
   applyWarUpdates,
   decodeWarUpdates,
   eventNarratesHardCombat,
+  interpretWarLedger,
   normalizeWorldWarEventLinks,
   reconcileCombatWarState,
   repairWarLedgerPayload,
@@ -36,17 +37,18 @@ const record = (id, op, actors, opponents, eventNumbers, note = "") =>
 
 const world = {};
 
-test("a supplied event number survives when no event carries the warId, so the validator names the real defect", () => {
+test("a supplied event number survives when no event carries the warId, and the record's event is its war's", () => {
   const candidate = {
     events: [event("e1", "Mexico declares war on the cartel state")],
     warUpdates: record("mexican-pacification-2016", "start", "Mexico", "Cartel State", "1"),
   };
   normalizeWorldWarEventLinks(candidate);
   assert.deepEqual(candidate.warUpdates[0].eventIndexes, [0], "the model's own number is kept, not blanked");
-
-  const error = validateWarLedgerPayload(candidate, { world });
-  assert.match(error, /missing event\.warId="mexican-pacification-2016"/, "the event, not the number, is what is missing");
-  assert.doesNotMatch(error, /must reference the event number/);
+  // The war's id was asked for on the event, a second request for what the
+  // record already said (2026-11-02): the event a record is tied to is its war's.
+  assert.equal(validateWarLedgerPayload(candidate, { world }), "");
+  interpretWarLedger(candidate, { world });
+  assert.equal(candidate.events[0].warId, "mexican-pacification-2016", "and the engine writes the id on it");
 });
 
 test("the engine still rebinds a wrong number to the one event carrying the warId", () => {
@@ -78,7 +80,7 @@ test("repair: the record's own number declares the link, so its event is stamped
     warUpdates: record("mexican-pacification-2016", "start", "Mexico", "Cartel State", "1", "pacification campaign"),
   };
   normalizeWorldWarEventLinks(candidate);
-  assert.match(validateWarLedgerPayload(candidate, { world }), /missing event\.warId/);
+  assert.equal(validateWarLedgerPayload(candidate, { world }), "");
 
   const repair = repairWarLedgerPayload(candidate, { world });
   assert.deepEqual(repair, { stamped: 1, anchored: 0, droppedIds: [], strippedEvents: 0, residual: "" });
@@ -91,11 +93,12 @@ test("repair: a record that cannot bind is dropped with its event's war bindings
   const candidate = {
     events: [
       event("e1", "Ruritania declares war on Borduria"),
-      event("e2", "Ruritania and Syldavia sign a trade pact", { kind: "economic", combatants: ["Ruritania", "Syldavia"] }),
+      event("e2", "Ruritania and Syldavia hold joint naval exercises", { combatants: ["Ruritania", "Syldavia"] }),
     ],
     warUpdates: [
       record("rur-bor", "start", "Ruritania", "Borduria", "1"),
-      // A trade pact cannot start a canonical war, whatever the record says.
+      // An exercise opens no war, whatever the record says: the one wording a
+      // time skip's record is not opened on.
       record("rur-syl", "start", "Ruritania", "Syldavia", "2"),
     ].join("\n"),
   };
@@ -125,7 +128,7 @@ test("repair: when nothing binds, the records go, the events stay as narrative, 
   assert.equal(repair.stamped, 1);
   assert.deepEqual(repair.droppedIds, ["rur-bor"]);
   assert.equal(repair.strippedEvents, 1);
-  assert.match(repair.residual, /no matching warUpdates record/);
+  assert.equal(repair.residual, "", "a title that reads like a declaration is narrative without a record");
   assert.deepEqual(candidate.warUpdates, []);
   assert.equal(candidate.events[0].warId, "");
   assert.equal(candidate.events[0].title, "Ruritania declares war on Borduria", "the event itself is untouched");
@@ -138,7 +141,7 @@ test("repair: an event of a war that already exists keeps its binding when anoth
   const candidate = {
     events: [
       event("e1", "Ruritanian artillery bombardment of Bordurian lines", { warId: "old-war", combatants: ["Ruritania", "Borduria"] }),
-      event("e2", "Syldavia opens a consulate", { kind: "diplomatic" }),
+      event("e2", "Syldavian troops hold a drill near the Bordurian frontier"),
     ],
     warUpdates: record("syl-bor", "start", "Syldavia", "Borduria", "2"),
   };
@@ -209,15 +212,15 @@ test("the merged-turn check reads a round as one period, so it does not flag wha
   assert.equal(validateCanonicalWarEvents({ events: candidate.events, updates, world, startsInForce: true }), "");
 });
 
-test("a start sitting on an event that cannot open a war moves to the event of that war that can", () => {
+test("a start sitting on an exercise moves to the event of that war that opens it", () => {
   const candidate = {
     events: [
       event("e1", "Swedish Armed Forces Cross the Norwegian Border in Shock Mobilization", {
         description: "Mechanised brigades roll out of Jämtland before dawn.",
         warId: "war-sweden-norway-2016",
       }),
-      event("e2", "Norway Mobilises Its Home Guard", {
-        description: "Oslo calls up reservists across Trøndelag.",
+      event("e2", "Norway's Home Guard Holds a Snap Exercise", {
+        description: "Oslo calls up reservists across Trøndelag for a drill.",
         warId: "war-sweden-norway-2016",
       }),
     ],
@@ -239,14 +242,14 @@ test("a start sitting on an event that cannot open a war moves to the event of t
 test("a start the batch cannot open anywhere is still dropped, with its events kept as narrative", () => {
   const candidate = {
     events: [
-      event("e1", "Swedish and Norwegian staffs hold joint readiness talks", { warId: "war-sweden-norway-2016" }),
-      event("e2", "Norway Mobilises Its Home Guard", { warId: "war-sweden-norway-2016" }),
+      event("e1", "Swedish and Norwegian staffs hold a joint readiness exercise", { warId: "war-sweden-norway-2016" }),
+      event("e2", "Norway's Home Guard Holds a Snap Drill", { warId: "war-sweden-norway-2016" }),
     ],
     warUpdates: record("war-sweden-norway-2016", "start", "Sweden", "Norway", "2"),
   };
   const repair = repairWarLedgerPayload(candidate, { world });
   assert.equal(repair.anchored, 0);
-  assert.deepEqual(repair.droppedIds, ["war-sweden-norway-2016"], "no event narrates the opening, so no war is made");
+  assert.deepEqual(repair.droppedIds, ["war-sweden-norway-2016"], "every event of it is an exercise, so no war is made");
   assert.equal(candidate.events.length, 2);
   assert.equal(candidate.events[0].warId, "");
 });
@@ -266,8 +269,11 @@ test("the words that open a war include their other forms and a border crossing;
   ]) {
     assert.equal(opens(title, description), "", title);
   }
-  assert.match(opens("Ruritanian and Bordurian staffs agree a deployment plan"), /cannot create a canonical war/, "cooperation is still no war");
-  assert.match(opens("Ruritanian Army holds combat-readiness drills near the border"), /cannot create a canonical war/, "a drill near a border is not a crossing");
+  // The record is what says the war began; the event's words are not asked to
+  // say it again, in English or any language (2026-11-02).
+  assert.equal(opens("Ruritanian and Bordurian staffs agree a deployment plan"), "", "the record opens the war");
+  assert.equal(opens("La Ruritania dichiara guerra alla Borduria", "Scaduto l'ultimatum dell'ONU, Ruritania apre le ostilità."), "", "in Italian too");
+  assert.match(opens("Ruritanian Army holds combat-readiness drills near the border"), /describes an exercise or drill/, "a drill is the one wording that opens none");
 
   // The detector that decides whether an event must belong to a war at all is
   // not loosened: a government that "battles wildfires" fights no one.
@@ -308,4 +314,26 @@ test("a unit called a Combat Wing or a battle group is a formation, not a battle
     title: "Ecuadorian and Colombian troops locked in combat near Ipiales",
     description: "",
   }), true, "real combat still reads as combat");
+});
+
+// Since the skip writes its events in the player's own language (2026-10-30),
+// a battle told in Italian reads as prose to the English word lists that tell
+// combat, and reconciliation cleared the combatants of every such event: the
+// war's fronts had no one named to fight.
+test("a war's event told in Italian keeps its combatants, and an opening names both sides", () => {
+  const worldAtWar = { wars: [{ id: "war-it-at", status: "active", sideA: ["Italy"], sideB: ["Austria"], startedDate: "1915-05-24" }] };
+  const candidate = {
+    events: [
+      event("e1", "Battaglia dell'Isonzo", { warId: "war-it-at", combatants: ["Italy", "Austria", "Vatican City"] }),
+      event("e2", "La Romania dichiara guerra all'Austria", { kind: "diplomacy" }),
+    ],
+    warUpdates: record("war-it-at", "join-a", "Romania", "", "2"),
+  };
+  interpretWarLedger(candidate, { world: worldAtWar });
+  reconcileCombatWarState(candidate, { world: worldAtWar });
+  assert.deepEqual(candidate.events[0].combatants, ["Italy", "Austria"], "the war's own belligerents, and only them");
+  assert.equal(candidate.events[1].warId, "war-it-at");
+  assert.deepEqual(candidate.events[1].combatants, ["Romania", "Austria"], "the joiner and the side it fights");
+  normalizeWorldWarEventLinks(candidate);
+  assert.equal(validateWarLedgerPayload(candidate, { world: worldAtWar }), "");
 });

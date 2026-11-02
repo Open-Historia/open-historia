@@ -3478,6 +3478,8 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
         const relationUpdates = Array.isArray(transaction?.relationUpdates) ? transaction.relationUpdates : [];
         const agreementUpdates = Array.isArray(transaction?.agreementUpdates) ? transaction.agreementUpdates : [];
         const puppetUpdates = Array.isArray(transaction?.puppetUpdates) ? transaction.puppetUpdates : [];
+        // What could not be made and was left out, in the administrator's words.
+        const gmNotes = Array.isArray(gmPreview?.notes) ? gmPreview.notes : [];
         const outreach = Array.isArray(transaction?.diplomaticOutreach) ? transaction.diplomaticOutreach : [];
         // Every impact family is counted and listed (gmPreviewOps.js): one
         // with no section of its own goes under "Other operations". Control
@@ -3697,9 +3699,19 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                             </span>
                         </div>
 
-                        <div style={{ color: "rgba(255,255,255,0.82)", fontSize: "0.75rem", lineHeight: 1.45, marginTop: "0.55rem" }}>
+                        {/* The model's words, already in the player's language: not the interface's to translate. */}
+                        <div data-no-translate={gmPreview.summary ? "" : undefined} style={{ color: "rgba(255,255,255,0.82)", fontSize: "0.75rem", lineHeight: 1.45, marginTop: "0.55rem" }}>
                             {gmPreview.summary || "No summary returned."}
                         </div>
+
+                        {gmNotes.length > 0 && (
+                            <div style={{ border: "1px solid rgba(255,255,255,0.14)", borderRadius: 8, marginTop: "0.55rem", padding: "0.45rem 0.55rem" }}>
+                                <div style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.6rem", fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase" }}>Left out of this preview</div>
+                                {gmNotes.map((text) => (
+                                    <div key={text} style={{ color: "rgba(255,255,255,0.78)", fontSize: "0.7rem", lineHeight: 1.4, marginTop: "0.25rem" }}>{text}</div>
+                                ))}
+                            </div>
+                        )}
 
                         <div style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem", marginTop: "0.6rem" }}>
                             {countChip("events", events.length)}
@@ -3747,8 +3759,8 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                                                     }}>{badge}</span>
                                                 ))}
                                             </div>
-                                            <div style={{ color: "rgba(255,255,255,0.9)", fontSize: "0.74rem", fontWeight: 650, marginTop: "0.22rem" }}>{event.title}</div>
-                                            <div style={{ color: "rgba(255,255,255,0.54)", fontSize: "0.68rem", lineHeight: 1.35, marginTop: "0.2rem" }}>{event.description}</div>
+                                            <div data-no-translate style={{ color: "rgba(255,255,255,0.9)", fontSize: "0.74rem", fontWeight: 650, marginTop: "0.22rem" }}>{event.title}</div>
+                                            <div data-no-translate style={{ color: "rgba(255,255,255,0.54)", fontSize: "0.68rem", lineHeight: 1.35, marginTop: "0.2rem" }}>{event.description}</div>
                                             {Array.isArray(event.combatants) && event.combatants.length > 0 ? (
                                                 <div style={{ color: "rgba(255,255,255,0.38)", fontSize: "0.61rem", marginTop: "0.24rem" }}>Combatants: {event.combatants.join(" · ")}</div>
                                             ) : null}
