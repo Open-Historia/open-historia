@@ -12,7 +12,6 @@ import {
     LOCAL_OUTPUT_LIMIT_TOKENS,
     contextWindowKey,
     createContextWindowMemory,
-    describeRememberedWindow,
     estimateTokens,
     nothingFitsMessage,
     outputLimitFor,
@@ -112,30 +111,37 @@ test("a refusal that states nothing still teaches that THIS size did not fit", (
     assert.equal(memory.get(key).source, "stated");
 });
 
-test("what was learned is forgotten in time; what the player declared is not", () => {
+test("what was learned is forgotten in time", () => {
     let at = 0;
     const memory = createContextWindowMemory(memoryStorage(), { now: () => at });
     memory.learn("stated", { limitTokens: 32768 });
     memory.learn("seen", { limitTokens: null, requestTokens: 40000 });
-    memory.declare("declared", 32768);
     at = 8 * 24 * 60 * 60 * 1000;
     assert.notEqual(memory.refusal("stated", 47000), "", "a stated limit holds for a month");
     assert.equal(memory.refusal("seen", 47000), "", "a size merely seen to fail is forgotten after a week");
     at = 31 * 24 * 60 * 60 * 1000;
     assert.equal(memory.refusal("stated", 47000), "", "...and after a month the stated one is tried again");
-    assert.notEqual(memory.refusal("declared", 47000), "", "the player's own word stands");
-});
-
-test("a declared window beats what was learned, and declaring nothing forgets it", () => {
-    const memory = createContextWindowMemory(memoryStorage());
-    memory.learn("k", { limitTokens: 32768 });
-    memory.declare("k", 200000);
-    assert.equal(memory.refusal("k", 47000), "");
-    assert.equal(memory.get("k").source, "declared");
-    memory.declare("k", 0);
-    assert.equal(memory.get("k"), null);
     memory.learn("k", { limitTokens: null, requestTokens: null });
     assert.equal(memory.get("k"), null, "nothing learned from nothing");
+});
+
+test("a window the player declared in an earlier build is ignored, on any server", () => {
+    // Settings → AI no longer has the Context window (tokens) field, so a figure
+    // typed there before must not keep a request from being sent unseen.
+    const storage = memoryStorage();
+    storage.setItem("ai_context_windows", JSON.stringify({
+        mine: { limitTokens: 16000, source: "declared", learnedAt: 1000 },
+        local: { limitTokens: 16000, source: "declared", learnedAt: 1000 },
+    }));
+    const memory = createContextWindowMemory(storage, { now: () => 2000 });
+    assert.equal(memory.get("mine"), null);
+    assert.equal(memory.refusal("mine", 38000), "", "sent: only the model's own refusal counts");
+    assert.equal(memory.refusal("local", 38000, { trustLearned: false }), "");
+    assert.equal("declare" in memory, false, "nothing sets a window by hand any more");
+    // A refusal learned afterwards replaces the old figure.
+    memory.learn("mine", { limitTokens: 32768 });
+    assert.deepEqual(memory.get("mine"), { limitTokens: 32768, source: "stated", learnedAt: 2000 });
+    assert.match(memory.refusal("mine", 47000), /model's window is 33K/);
 });
 
 test("the memory survives a storage that refuses to write", () => {
@@ -145,41 +151,12 @@ test("the memory survives a storage that refuses to write", () => {
     assert.equal(memory.refusal("k", 5000), "");
 });
 
-test("a window the player set is named as theirs when it refuses a request", () => {
+test("a refusal names the model's window, and forgetting it lets the next request go", () => {
     const memory = createContextWindowMemory(memoryStorage());
-    memory.declare("mine", 32768);
     memory.learn("learned", { limitTokens: 32768 });
-    assert.equal(memory.refusal("mine", 47000), "this request is about 47K tokens and the window you set for this model is 33K");
     assert.equal(memory.refusal("learned", 47000), "this request is about 47K tokens and the model's window is 33K");
-});
-
-test("Settings is told what is remembered, until when, and nothing once it lapsed", () => {
-    let at = 1000;
-    const memory = createContextWindowMemory(memoryStorage(), { now: () => at });
-    const formatDate = (ms) => `day ${Math.floor(ms / (24 * 60 * 60 * 1000))}`;
-    assert.equal(memory.remembered("k"), null);
-    assert.match(describeRememberedWindow(null, { formatDate }), /learns this model's window from its own refusal/);
-
-    memory.learn("k", { limitTokens: 32768 });
-    assert.equal(describeRememberedWindow(memory.remembered("k"), { formatDate }),
-        "The model said its window is 33K tokens. A request too big for it is not sent to it until day 30.");
-
-    memory.learn("seen", { limitTokens: null, requestTokens: 47000 });
-    assert.equal(describeRememberedWindow(memory.remembered("seen"), { formatDate }),
-        "The model refused a request of about 47K tokens. One that big is not sent to it until day 7.");
-
-    memory.declare("mine", 200000);
-    assert.equal(memory.remembered("mine").until, null);
-    assert.equal(describeRememberedWindow(memory.remembered("mine"), { formatDate }),
-        "You set this model's window to 200K tokens. A request too big for it is not sent to it.");
-
-    at = 8 * 24 * 60 * 60 * 1000;
-    assert.equal(memory.remembered("seen"), null, "lapsed, as the preflight treats it");
-    assert.notEqual(memory.remembered("k"), null);
-
-    memory.forget("k");
-    assert.equal(memory.remembered("k"), null);
-    assert.equal(memory.refusal("k", 470000), "", "forgotten: the next request is sent");
+    memory.forget("learned");
+    assert.equal(memory.refusal("learned", 470000), "", "forgotten: the next request is sent");
 });
 
 test("a window learned from a server whose window is a setting is not held against it", () => {
@@ -190,22 +167,11 @@ test("a window learned from a server whose window is a setting is not held again
     memory.learn(key, parseContextWindowError("the model is loaded with context length of only 40000 tokens"));
     assert.match(memory.refusal(key, 38000), /38K tokens.*window is 40K/, "as a hosted model's would be");
     assert.equal(memory.refusal(key, 38000, { trustLearned: false }), "", "sent: the server says what its window is now");
-    assert.equal(memory.remembered(key, { trustLearned: false }), null, "and Settings shows nothing in force");
-    assert.notEqual(memory.remembered(key), null);
 
     // A size merely seen to fail is no more binding.
     memory.learn("seen", { limitTokens: null, requestTokens: 38000 });
     assert.notEqual(memory.refusal("seen", 38000), "");
     assert.equal(memory.refusal("seen", 38000, { trustLearned: false }), "");
-    assert.equal(memory.remembered("seen", { trustLearned: false }), null);
-});
-
-test("a window the player declared counts on any server", () => {
-    const memory = createContextWindowMemory(memoryStorage(), { now: () => 1000 });
-    memory.declare("local", 16000);
-    assert.match(memory.refusal("local", 38000, { trustLearned: false }), /window you set for this model is 16K/);
-    assert.equal(memory.refusal("local", 8000, { trustLearned: false }), "");
-    assert.deepEqual(memory.remembered("local", { trustLearned: false }), { limitTokens: 16000, source: "declared", learnedAt: 1000, until: null });
 });
 
 test("when nothing fits, the message names every entry and what to do", () => {
@@ -214,7 +180,8 @@ test("when nothing fits, the message names every entry and what to do", () => {
     assert.match(message, /small \(Local\): this request/);
     assert.match(message, /was not sent/);
     assert.match(message, /Settings → AI/);
-    assert.match(message, /forget its window/);
+    assert.match(message, /tries it again by itself/);
+    assert.doesNotMatch(message, /forget its window/, "there is no such button any more");
 });
 
 // --- the output limit KoboldCpp is asked for ---
