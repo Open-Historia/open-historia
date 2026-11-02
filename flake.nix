@@ -28,7 +28,7 @@
       });
 
       overlays.default = final: _prev: {
-        open-historia = final.callPackage ./nix/package.nix { };
+        open-historia = final.callPackage ./package.nix { };
       };
     };
 }
