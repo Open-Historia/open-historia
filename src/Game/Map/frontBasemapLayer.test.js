@@ -244,9 +244,12 @@ test("the battlefield layer uses the pair, and clears to grey only where the map
   // disappearing irregularly while reading through events."
   assert.ok(layers.includes("if (added) enforceMapLayerOrder(mapInstance);"));
   assert.equal(layers.split("mapInstance.addLayer(put);\n        enforceMapLayerOrder(mapInstance);").length, 1);
-  // So the map's own two picture layers are drawn only where the map cannot be copied.
-  assert.match(layers, /"raster-opacity": seenThrough \? 0 : PAINT_CLEAR_OPACITY,/);
-  assert.match(layers, /"raster-opacity": seenThrough \? 0 : PAINT_OPACITY,/);
+  // So the map's own two picture layers are drawn only where neither the ground's own layer
+  // (frontGroundLayer.js) can draw nor the map be copied.
+  assert.match(layers, /"raster-opacity": seenThrough \|\| !groundFailed \? 0 : PAINT_CLEAR_OPACITY,/);
+  assert.match(layers, /"raster-opacity": seenThrough \|\| !groundFailed \? 0 : PAINT_OPACITY,/);
+  // The pair is the fallback: there only once the ground's own layer has said it cannot draw.
+  assert.ok(layers.includes("const painted = anyPainted && groundFailed;"));
   assert.match(layers, /const PAINT_OPACITY = \["interpolate", \["linear"\], \["zoom"\], \.\.\.POLITICAL_FILL_OPACITY_STOPS\.flat\(\)\];/);
   const shader = read("./frontBasemapLayer.js");
   // The taker's colour over the bare map at the strength of a country's fill, as solid as the picture is there.

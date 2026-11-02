@@ -149,8 +149,10 @@ test("country fills are written again when MapLibre rebuilds the sources holding
   assert.match(nations, /mapInstance\.on\("styledata", schedule\)/);
   assert.match(nations, /if \(!mapInstance\.style\) return;/);
   assert.match(nations, /seen\.custom && seen\.custom !== next\.custom\) \|\| \(seen\.repair && seen\.repair !== next\.repair/);
-  assert.match(nations, /appliedCustomFillStateRef\.current = new Map\(\);\s*setCustomFillSourceEpoch/);
-  assert.match(nations, /if \(seen\.tiles && seen\.tiles !== next\.tiles\) \{\s*appliedTileFillStateRef\.current = new Map\(\);\s*setTileFillSourceEpoch/);
+  // The hidden fills (frontGround.js) written to a replaced source are forgotten with it.
+  assert.match(nations, /appliedCustomFillStateRef\.current = new Map\(\);\s*for \(const \[key, target\] of hiddenFillRef\.current\.written\) \{\s*if \(target\.source === CUSTOM_FILL_SOURCE \|\| target\.source === REPAIR_FILL_SOURCE\) hiddenFillRef\.current\.written\.delete\(key\);\s*\}\s*setCustomFillSourceEpoch/);
+  assert.match(nations, /if \(seen\.tiles && seen\.tiles !== next\.tiles\) \{\s*appliedTileFillStateRef\.current = new Map\(\);\s*for \(const \[key, target\] of hiddenFillRef\.current\.written\) \{\s*if \(target\.source === TILE_FILL_SOURCE\) hiddenFillRef\.current\.written\.delete\(key\);\s*\}\s*setTileFillSourceEpoch/);
+  assert.match(nations, /useEffect\(\(\) => \{\s*writeHiddenFillsRef\.current\(\);\s*\}, \[customFillSourceEpoch, tileFillSourceEpoch, repairedRegionIdSet\]\);/);
   assert.match(nations, /\}, \[\s*customFillSourceEpoch,\s*customFlag,/);
   assert.match(nations, /shouldMountStockRegions, tileFillSourceEpoch\]\);/);
   // A pass still slicing when its ledger was reset must not put the old one back.
@@ -370,9 +372,15 @@ test("political fill opacity expressions keep zoom at MapLibre top level", () =>
     /const buildPoliticalFillOpacity = \(hiddenExpression = null\) => \[\s*"interpolate", \["linear"\], \["zoom"\]/,
   );
   assert.match(nations, /const POLITICAL_FILL_OPACITY = buildPoliticalFillOpacity\(\)/);
+  assert.match(nations, /const FILL_HIDDEN = \["boolean", \["feature-state", "ownershipTransitionHidden"\], false\];/);
   assert.match(
     nations,
-    /const transitionAwareFillOpacity = useMemo\([\s\S]*?buildPoliticalFillOpacity\(\[\s*"boolean",[\s\S]*?"ownershipTransitionHidden"/,
+    /const transitionAwareFillOpacity = useMemo\([\s\S]*?buildPoliticalFillOpacity\(FILL_HIDDEN\)/,
+  );
+  // The stock tiles' fill too: a battlefield's ground hides its regions there as well.
+  assert.match(
+    nations,
+    /const stockRegionsFillPaint = useMemo\([\s\S]*?"fill-opacity": reliefFillStops \? buildScenarioReliefFillOpacity\(reliefFillStops, FILL_HIDDEN\) : buildPoliticalFillOpacity\(FILL_HIDDEN\),/,
   );
   assert.doesNotMatch(
     nations,

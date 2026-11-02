@@ -145,11 +145,10 @@ the id unchanged and the server's own "not found" message tells you what it offe
 ### Context windows
 
 A model that refuses a request as too long for it teaches the game its context window, and the
-game then keeps from sending it a request it cannot fit. Each entry shows what is known under
-**This model only → Context window (tokens)**: type your own figure there, which beats what was
-learned, or press **Forget this window** after a provider raises its limit. For a model on your
-own machine or network only your own figure counts, so reloading a local model with a bigger
-window needs nothing from you.
+game then keeps from sending it a request it cannot fit, until what it learned lapses: a week
+after a refusal, or a month after the model stated its window. Nothing learned counts for a model
+on your own machine or network, so reloading a local model with a bigger window needs nothing
+from you.
 
 ### Be realistic about model size
 

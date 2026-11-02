@@ -49,9 +49,9 @@ stripes and labels mean.
 
 <p class="beta-note"><b>On beta the map also turns and tilts.</b> With a mouse, drag with the
 right button: sideways turns the map, up and down tilts it, and the wheel still zooms. On a
-trackpad, click and drag to pan, pinch to zoom, and drag with two fingers to turn and tilt the map,
-both at once. Shift with the arrow keys turns and tilts it too, and all of this works in the War
-Room as well.</p>
+trackpad, click and drag to pan, and pinch or drag with two fingers to zoom; hold Shift while you
+drag with two fingers to turn and tilt the map, both at once. Shift with the arrow keys turns and
+tilts it too, and all of this works in the War Room as well.</p>
 
 ## The date pill and time
 

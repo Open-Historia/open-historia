@@ -108,7 +108,7 @@ const GlobeEffects = ({ active }) => {
       autoRotationActive = false;
     };
     // The ends too: a turn of the globe (a right-button drag, or two fingers on
-    // a trackpad, Map/mapGestures.js) can outlast the grace, and the spin
+    // a trackpad with Shift held, Map/mapGestures.js) can outlast the grace, and the spin
     // should wait out the grace after it, not set off the moment it ends.
     const interactionEvents = ["dragstart", "zoomstart", "rotatestart", "pitchstart", "rotateend", "pitchend", "wheel"];
     for (const event of interactionEvents) mapInstance.on(event, markInteraction);

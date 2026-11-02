@@ -363,6 +363,137 @@ export const paintPixels = (player, palette, target, only = null) => {
   return { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
 };
 
+// ---- the front, as the map draws its border ----------------------------------
+//
+// Where one side's ground meets the other's, the map draws a border
+// (frontGroundLayer.js), traced from the same thing the colour's edge is: how
+// far each cell is one side's or the other's at the day shown, evened out with
+// the cells round it. Read between the cells' middles that is a smooth field,
+// and the border is where it is half-way. Only the two sides' ground has a say
+// in it: sea and land that is nobody's in this war take the value of the land
+// beside them, so no border is drawn along a coast or against a neutral's
+// land, and none along the frame's edge.
+
+// The cells the run paints at any time (as it began, or as it changes), with
+// the cells within `reach` of them: where the border is the battlefield's to
+// draw, and the map's own borders give way to it. Elsewhere in the frame the
+// sides' ground lies as it always has, and the map's own border runs there.
+export const touchedCells = (view, reach = 2) => {
+  const { cols, rows } = view.frame;
+  const size = cols * rows;
+  const out = new Uint8Array(size);
+  const paint = view.replay?.paint ?? null;
+  if (!paint) return out;
+  const touched = [];
+  for (let cell = 0; cell < size && cell < paint.began.length; cell += 1) if (isPaint(paint.began[cell])) touched.push(cell);
+  for (let index = 0; index < paint.cells.length; index += 1) if (paint.cells[index] < size) touched.push(paint.cells[index]);
+  for (const cell of touched) {
+    const col = cell % cols;
+    const row = (cell - col) / cols;
+    for (let r = Math.max(0, row - reach); r <= Math.min(rows - 1, row + reach); r += 1) {
+      for (let c = Math.max(0, col - reach); c <= Math.min(cols - 1, col + reach); c += 1) out[r * cols + c] = 1;
+    }
+  }
+  return out;
+};
+
+// The field as a picture: a pixel a cell (north up), or for a frame whose rows
+// are not even on the map (`rowOf`, as the battlefield's picture has it) a
+// pixel row for each of the picture's. Red is how far the ground is side 1's
+// (0 to 255), green 255 where the border may be drawn (`touched`, and only on
+// a day the battlefield is shown), blue 255 on the two sides' ground.
+export const createFrontField = (cols, rows, rowOf = null, touched = null) => {
+  const height = rowOf ? rowOf.length : rows;
+  return {
+    data: new Uint8Array(cols * height * 4),
+    width: cols,
+    height,
+    rows,
+    rowOf,
+    touched: touched ?? new Uint8Array(cols * rows),
+    share: new Float32Array(cols * rows),
+    even: new Float32Array(cols * rows),
+    version: 0,
+  };
+};
+
+// The field at the player's day, written into `front` (createFrontField).
+export const writeFrontField = (player, front, shown = true) => {
+  const { cols, rows, state, was, since, day, sideOf } = player;
+  const { data, width, height, rowOf, touched, share, even } = front;
+  const size = cols * rows;
+  // How far each cell is side 1's, on its way from one side to the other as it is taken.
+  for (let cell = 0; cell < size; cell += 1) {
+    const now = state[cell];
+    if (now === PAINT_WALL) {
+      share[cell] = -1;
+      continue;
+    }
+    const before = was[cell];
+    const part = (day - since[cell]) / FILL_DAYS;
+    const turned = before !== PAINT_WALL && sideOf(before) !== sideOf(now) && part < 1 ? Math.max(0, part) : 1;
+    share[cell] = sideOf(now) === 1 ? turned : 1 - turned;
+  }
+  // Evened out with the eight round it, the land only; sea and others' land
+  // take the land's beside them.
+  for (let row = 0; row < rows; row += 1) {
+    for (let col = 0; col < cols; col += 1) {
+      const cell = row * cols + col;
+      const wall = share[cell] < 0;
+      let sum = wall ? 0 : share[cell] * 4;
+      let weight = wall ? 0 : 4;
+      for (let dy = -1; dy <= 1; dy += 1) {
+        const r = row + dy;
+        if (r < 0 || r >= rows) continue;
+        for (let dx = -1; dx <= 1; dx += 1) {
+          const c = col + dx;
+          if ((dx === 0 && dy === 0) || c < 0 || c >= cols) continue;
+          const value = share[r * cols + c];
+          if (value < 0) continue;
+          const part = dx === 0 || dy === 0 ? 2 : 1;
+          sum += value * part;
+          weight += part;
+        }
+      }
+      even[cell] = weight > 0 ? sum / weight : -1;
+    }
+  }
+  // Sea with no land beside it takes what lies before it along its row, so it
+  // never reads as either side's against land a cell away.
+  for (let row = 0; row < rows; row += 1) {
+    let last = -1;
+    for (let col = 0; col < cols; col += 1) {
+      const cell = row * cols + col;
+      if (even[cell] >= 0) last = even[cell];
+      else if (last >= 0) even[cell] = last;
+    }
+    for (let col = cols - 1; col >= 0; col -= 1) {
+      const cell = row * cols + col;
+      if (even[cell] >= 0) last = even[cell];
+      else even[cell] = last >= 0 ? last : 0.5;
+    }
+  }
+  for (let y = 0; y < height; y += 1) {
+    // The frame row this pixel row shows (from the south, in cells, a cell's middle at +0.5).
+    const v = rowOf ? rowOf[y] : rows - y - 0.5;
+    const rowA = Math.max(0, Math.min(rows - 1, Math.floor(v - 0.5)));
+    const rowB = Math.min(rows - 1, rowA + 1);
+    const f = rowOf ? Math.max(0, Math.min(1, v - 0.5 - rowA)) : 0;
+    for (let x = 0; x < width; x += 1) {
+      const a = rowA * cols + x;
+      const b = rowB * cols + x;
+      const value = even[a] * (1 - f) + even[b] * f;
+      const at = (y * width + x) * 4;
+      data[at] = Math.round(Math.max(0, Math.min(1, value)) * 255);
+      data[at + 1] = shown && (touched[a] || touched[b]) ? 255 : 0;
+      data[at + 2] = share[a] >= 0 ? 255 : 0;
+      data[at + 3] = 255;
+    }
+  }
+  front.version += 1;
+  return front;
+};
+
 // The four corners of a picture as the map is given them ([west, north] round
 // to [west, south]), its middle within the map's own copy of the world. A
 // battlefield's frame may be told in longitudes a whole turn off (one that

@@ -34,8 +34,7 @@
 // next game is not opened in its place, and waits for a Play like the first.
 // Leaving a game for the menu keeps that game loaded behind the menu.
 // It lives in this module and nowhere else (no storage), so every page load
-// starts on the menu again. Not to be confused with the website's entry screen
-// (web/homePage.js `markEntered`), which is about the site, not a game.
+// starts on the menu again.
 import { useSyncExternalStore } from "react";
 
 let entered = false;

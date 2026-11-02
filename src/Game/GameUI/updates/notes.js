@@ -72,6 +72,47 @@ const NEW_UPDATES = [
     ],
   },
   {
+    // "add camera controls (press shift to tilt or turn) to beta" (the owner, 2026-11-02): as the native app has them.
+    id: "2026-11-shift-to-turn",
+    kind: "minor",
+    date: "2026-11-02",
+    channel: "beta",
+    banners: [
+      {
+        title: "Hold Shift to turn and tilt",
+        items: [
+          "On a trackpad, dragging with two fingers now zooms the map, as pinching does.",
+          "Hold Shift while you drag with two fingers to turn and tilt the map: sideways turns it, up and down tilts it.",
+          "A right-button drag still turns and tilts the map, Shift with the arrow keys still does too, and Shift with a mouse wheel zooms in finer steps.",
+        ],
+      },
+      {
+        // "remove the context window ai setting from the settings" (the owner, 2026-11-02).
+        title: "One AI setting fewer",
+        items: [
+          "Settings → AI no longer has a Context window field for each model.",
+          "The game still learns how much a model can take from the model's own refusals, and tries it again by itself after a while.",
+        ],
+      },
+    ],
+  },
+  {
+    // The website's entry screen ("Enter Open Historia") removed: the demo notice comes up over the game (2026-11-02).
+    id: "2026-11-straight-into-the-demo",
+    kind: "minor",
+    date: "2026-11-02",
+    channel: "beta",
+    banners: [
+      {
+        title: "Straight into the demo",
+        items: [
+          "On the website, Play the demo now opens the game itself: the entry page that stood in front of it is gone.",
+          "The note that the browser version is a demo comes up over the game instead, once a visit.",
+        ],
+      },
+    ],
+  },
+  {
     // A turn no longer reads the whole map for patrols it does not have, the land war reads it off the page, and the
     // map's names and catalog are not worked out twice as a game opens (2026-11-02).
     id: "2026-11-faster-turns",
@@ -166,6 +207,25 @@ const NEW_UPDATES = [
           },
         ],
         button: "To the airfield",
+      },
+    ],
+  },
+  {
+    // "battlefield ground drawn the way the ownership hand-over animation is, plus a moving front border"
+    // (the owner, 2026-11-01): the battlefield draws its sides' regions itself, with the border where the
+    // holders meet (Map/frontGroundLayer.js).
+    id: "2026-11-moving-fronts",
+    kind: "minor",
+    date: "2026-11-01",
+    channel: "beta",
+    banners: [
+      {
+        title: "Fronts that move",
+        items: [
+          "Ground taken on a battlefield now looks just like the land of the country that holds it, on every basemap.",
+          "The border moves with the fighting: it is drawn where the ground changes hands, not along the old border.",
+          "Battlefields are quicker to draw, so the map stays smooth while a turn plays.",
+        ],
       },
     ],
   },
