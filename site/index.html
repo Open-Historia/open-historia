@@ -1,14 +1,15 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" class="no-js">
 <head>
 <meta charset="utf-8" />
 <!-- Visit counters: asked for first, loaded only after a yes (consent.js). -->
 <script defer src="/consent.js"></script>
+<script>document.documentElement.classList.replace("no-js", "js");</script>
 
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Open Historia — Play AI-driven alternate history</title>
 <meta name="description" content="Open Historia is a free, open-source AI turn-based history strategy game. Download once, run it, and reshape history. A community-built alternative to Pax Historia." />
-<meta name="theme-color" content="#111113" />
+<meta name="theme-color" content="#0d0d0f" />
 <link rel="icon" type="image/png" href="/favicon.png" />
 <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
 <meta property="og:type" content="website" />
@@ -72,459 +73,439 @@
   }
 }
 </script>
-<link rel="preload" as="image" href="/play/screenshots/screenshot.webp" fetchpriority="high" />
 <link rel="stylesheet" href="/fonts/fonts.css" />
-<style>
-  :root{
-    --parch:#111113; --parch2:#17171a; --marble:#1a1a1f; --marble2:#212128;
-    --ink:#ece4d2; --sepia:#a4987f; --sepia2:#877c66;
-    --line:rgba(233,220,192,.14); --line2:rgba(233,220,192,.26);
-    --bronze:#c9932f; --bronze-d:#a57a22; --gold:#c9932f; --gold-l:#dcb954;
-    --red:#a8394a; --red-d:#7a1e2b; --green:#5d9149;
-    --grad-gold:linear-gradient(100deg,#a7761f 0%,#e0b44a 52%,#b98f2e 100%);
-    --shadow:0 1.125rem 2.625rem -1.375rem rgba(0,0,0,.8);
-    --radius:0.875rem;
-    --serif:'EB Garamond',Georgia,'Times New Roman',serif;
-    --display:'Cinzel',Georgia,'Times New Roman',serif;
-  }
-  *{box-sizing:border-box}
-  @media(prefers-reduced-motion: no-preference){html{scroll-behavior:smooth}}
-  html{
-    scroll-padding-top:5.5rem;
-    /* Fluid root size: everything below is rem, so this scales the page as one.
-       Clamped to 1rem at/below ~90rem, so nothing changes on a laptop. */
-    font-size:clamp(1rem, 0.536vw + 0.51812rem, 1.5rem);
-  }
-  body{
-    margin:0; color:var(--ink); font-family:var(--serif); font-size:1.125rem; line-height:1.62;
-    -webkit-font-smoothing:antialiased; position:relative;
-    background:
-      radial-gradient(75rem 33.75rem at 50% -12%, rgba(201,147,47,.14), transparent 60%),
-      radial-gradient(62.5rem 35rem at 100% 2%, rgba(168,57,74,.08), transparent 55%),
-      repeating-linear-gradient(112deg, rgba(233,220,192,.02) 0 0.125rem, transparent 0.125rem 0.4375rem),
-      var(--parch);
-    overflow-x:hidden;
-  }
-  a{color:inherit;text-decoration:none}
-  .wrap{max-width:65rem;margin:0 auto;padding:0 1.5rem}
-  h1,h2,h3,.brand,.eyebrow,.tab,.btn,.step .n,.tag{font-family:var(--display)}
-  .muted{color:var(--sepia)}
-
-/* ---------- header ---------- */
-  header{position:sticky;top:0;z-index:50;backdrop-filter:blur(0.5rem);
-    background:color-mix(in srgb,var(--parch) 82%,transparent);border-bottom:1px solid var(--line)}
-  .nav{display:flex;align-items:center;justify-content:space-between;height:4rem}
-  .brand{display:flex;align-items:center;gap:0.625rem;font-weight:700;font-size:1.12rem;letter-spacing:.04em;color:var(--ink)}
-  /* Icon instead of an emoji: same glyph cross-platform, stays in palette. */
-  .mark{width:1.75rem;height:1.75rem;display:block;border-radius:0.375rem;object-fit:contain;flex:none}
-  .mark-sm{width:1.1rem;height:1.1rem;border-radius:0.25rem;display:inline-block;vertical-align:-0.18em;margin-right:0.125rem}
-  .foot .mark{width:1.35rem;height:1.35rem;display:inline-block;vertical-align:-0.3em;margin-right:0.25rem}
-  .nav-links{display:flex;align-items:center;gap:1.75rem;font-size:1.02rem}
-  .nav-links a{color:var(--sepia);transition:color .15s}
-  .nav-links a:hover{color:var(--ink)}
-  /* Matches the hero's primary button so both play entry points read as one action. */
-  .nav-cta{font-family:var(--display);font-size:.86rem;letter-spacing:.08em;text-transform:uppercase;font-weight:700;
-    padding:0.5625rem 1.125rem;border-radius:0.5rem;
-    background:linear-gradient(180deg,#98283a,var(--red-d));color:#f7eccf;
-    border:1px solid rgba(255,222,160,.4);
-    box-shadow:0 0.375rem 0.875rem -0.375rem rgba(0,0,0,.8);
-    transition:background .2s,box-shadow .2s}
-  .nav-cta:hover{background:linear-gradient(180deg,#a12b3e,#7a1e2b)}
-  /* No hamburger menu: below 720px the nav collapses to the Play button plus anything marked
-     .nav-keep. The wiki is the only place a new player can look things up, so it has to
-     survive on a phone — the in-page anchors do not. */
-  @media(max-width:720px){.nav-links a:not(.nav-cta):not(.nav-keep){display:none}
-    .nav-links{gap:1rem}}
-
-  /* ---------- community bar ---------- */
-  /* Above the sticky header, so it scrolls away once someone is reading and the
-     nav keeps the top of the screen. Carbon fibre in the page's own greys: a
-     woven texture built from hard-edged stripes, with no fade and no colour, so
-     the strip belongs to the dark page and still reads apart from the flat header. */
-  .community{position:relative;z-index:51;font-size:1rem;color:var(--sepia);
-    background-color:#131315;
-    background-image:
-      linear-gradient(27deg,#161618 5px,transparent 5px),
-      linear-gradient(207deg,#161618 5px,transparent 5px),
-      linear-gradient(27deg,#232327 5px,transparent 5px),
-      linear-gradient(207deg,#232327 5px,transparent 5px),
-      linear-gradient(90deg,#1c1c1f 10px,transparent 10px),
-      linear-gradient(#1e1e21 25%,#1a1a1d 25%,#1a1a1d 50%,transparent 50%,transparent 75%,#252529 75%,#252529);
-    background-position:0 5px,10px 0,0 10px,10px 5px,0 0,0 0;
-    background-size:20px 20px;
-    border-bottom:1px solid var(--line2)}
-  .community-in{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;
-    gap:0.5rem 1.125rem;min-height:2.875rem;padding:0.5rem 1.5rem;text-align:center}
-  .community-say b{color:var(--ink);font-weight:500}
-  .community-links{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:0.5625rem}
-  /* The site's display type (Cinzel, uppercase, tracked) on a solid pill, so the
-     weave never runs behind the letters. Gold lettering, the page's accent, marks
-     them as links without competing with the red Play and Download. */
-  .community-btn{display:inline-flex;align-items:center;padding:0.375rem 0.9375rem;border-radius:999px;
-    font-family:var(--display);font-size:.72rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;
-    white-space:nowrap;color:var(--gold-l);background:var(--parch);border:1px solid var(--line2);
-    transition:background .15s,border-color .15s,color .15s,transform .12s}
-  .community-btn:hover{color:#fff4d4;background:var(--marble);border-color:var(--gold-l);transform:translateY(-0.0625rem)}
-  .community-btn:focus-visible{outline:2px solid var(--gold-l);outline-offset:2px}
-  /* On a narrow screen the buttons ARE the message; the sentence is what goes,
-     and the words before each name with it, so three buttons stay on one row. */
-  @media(max-width:560px){.community-in{gap:0.5rem;padding:0.4375rem 0.75rem;min-height:2.625rem}
-    .community-say,.community-more{display:none}
-    .community-btn{font-size:.68rem;letter-spacing:.06em;padding:0.375rem 0.75rem}}
-  @media(prefers-reduced-motion: reduce){.community-btn{transition:none}.community-btn:hover{transform:none}}
-
-  /* ---------- hero ---------- */
-  .hero{padding:0 0 1.875rem;text-align:center}
-  /* Full-bleed screenshot behind the badge and headline only. */
-  .hero-banner{position:relative;padding:4.25rem 1.5rem 3.75rem;margin-bottom:0.25rem}
-  .hero-banner h1{text-shadow:0 0.125rem 1.25rem rgba(0,0,0,.85),0 0.0625rem 0.25rem rgba(0,0,0,.7)}
-  /* Pale gold ramp; the page-wide gold runs too dark against the screenshot.
-     drop-shadow rather than text-shadow because the glyphs are transparent. */
-  .hero-banner .grad{
-    background:linear-gradient(100deg,#e5c684 0%,#fff4d4 46%,#f3dba4 74%,#e0be72 100%);
-    -webkit-background-clip:text;background-clip:text;color:transparent;
-    filter:drop-shadow(0 0.125rem 0.5rem rgba(0,0,0,.85)) drop-shadow(0 0 1.5rem rgba(0,0,0,.6));
-  }
-  .hero-banner .badge{background:rgba(17,17,19,.72);backdrop-filter:blur(0.375rem);color:var(--ink)}
-  .hero-banner .sub{color:#cfc4ad;text-shadow:0 0.0625rem 0.75rem rgba(0,0,0,.9),0 0.0625rem 0.1875rem rgba(0,0,0,.8)}
-  .hero-banner .cta-row{margin-bottom:0}
-  /* Opaque panel: the ghost button sits on the image here. */
-  .hero-banner .btn-ghost{background:rgba(26,26,31,.82);backdrop-filter:blur(0.375rem)}
-  .hero-banner .btn-ghost:hover{background:rgba(33,33,40,.92)}
-  /* Two layers so the blur lands on the screenshot and not on the tint:
-     ::before is the blurred image, ::after the gradient wash over it. */
-  .hero-banner::before,
-  .hero-banner::after{
-    content:"";position:absolute;pointer-events:none;
-  }
-  /* Grown 1rem past the banner then clipped back: blur() paints outside the
-     box and samples transparency at the edges. clip-path runs after the
-     filter, so it cuts off both the spill and the faded rim. */
-  .hero-banner::before{
-    top:-1rem;bottom:-1rem;left:calc(50% - 50vw - 1rem);width:calc(100vw + 2rem);
-    z-index:-2;
-    background:url("/play/screenshots/screenshot.webp") center/cover no-repeat;
-    filter:blur(0.1875rem);
-    clip-path:inset(1rem);
-  }
-  .hero-banner::after{
-    top:0;bottom:0;left:calc(50% - 50vw);width:100vw;
-    z-index:-1;
-    /* 2px oversized and centred so the tint always overhangs; otherwise a
-       fractional viewport width leaves a hairline of un-tinted screenshot. */
-    background-image:
-      linear-gradient(180deg, rgba(17,17,19,1) 0%, rgba(17,17,19,.6) 10%, rgba(17,17,19,.14) 38%, rgba(17,17,19,.28) 70%, rgba(17,17,19,.88) 92%, rgba(17,17,19,1) 100%),
-      linear-gradient(90deg, rgba(17,17,19,1) 0%, rgba(17,17,19,.3) 22%, rgba(17,17,19,.18) 50%, rgba(17,17,19,.3) 78%, rgba(17,17,19,1) 100%);
-    background-size:calc(100% + 4px) calc(100% + 4px);
-    background-position:center;
-    background-repeat:no-repeat;
-  }
-  @media(max-width:720px){.hero-banner{padding:3rem 1rem 2.5rem}}
-  .badge{display:inline-flex;align-items:center;gap:0.5rem;padding:0.4375rem 1rem;border:1px solid var(--line2);
-    border-radius:999px;font-size:.92rem;color:var(--sepia);background:var(--marble)}
-  .badge b{color:#d4677a;font-weight:600}
-  h1{font-size:clamp(2.6rem,6.4vw,4.6rem);line-height:1.04;letter-spacing:.01em;margin:1.5rem 0 0;font-weight:800;color:var(--ink)}
-  .grad{background:var(--grad-gold);-webkit-background-clip:text;background-clip:text;color:transparent}
-  .sub{font-size:clamp(1.15rem,2.3vw,1.4rem);color:var(--sepia);max-width:40rem;margin:1.375rem auto 0}
-  .cta-row{display:flex;flex-wrap:wrap;gap:0.875rem;justify-content:center;margin:2.125rem 0 0.625rem}
-  .btn{display:inline-flex;align-items:center;gap:0.625rem;padding:0.9375rem 1.75rem;border-radius:0.6875rem;font-weight:700;
-    font-size:.94rem;letter-spacing:.05em;text-transform:uppercase;border:1px solid transparent;
-    transition:transform .12s ease,box-shadow .2s,background .2s;cursor:pointer}
-  .btn:hover{transform:translateY(-0.125rem)}
-  .btn-primary{background:linear-gradient(180deg,#98283a,var(--red-d));color:#f7eccf;
-    border-color:rgba(255,222,160,.4);box-shadow:0 0.75rem 1.875rem -0.75rem rgba(0,0,0,.8)}
-  .btn-primary:hover{background:linear-gradient(180deg,#a12b3e,#7a1e2b)}
-  .btn-ghost{background:var(--marble);border-color:var(--line2);color:var(--ink)}
-  .btn-ghost:hover{background:var(--marble2)}
-  /* The beta's button: gold, so it stands beside the red one instead of behind it. */
-  .btn-beta,.hero-banner .btn-beta{background:var(--gold-l);border-color:#f3dc92;color:#2a1c05;
-    box-shadow:0 0 0 0.1875rem rgba(220,185,84,.22),0 0.75rem 1.875rem -0.75rem rgba(0,0,0,.8)}
-  .btn-beta:hover,.hero-banner .btn-beta:hover{background:#e8c967}
-  .hero-note{font-size:.96rem;color:var(--sepia2);margin-top:0.5rem;font-style:italic}
-  #heroNote{max-width:40rem;margin-left:auto;margin-right:auto}
-  .hero-note a{color:var(--bronze);border-bottom:1px solid rgba(201,147,47,.45)}
-  /* The independence notice: under the hero, where the page names the other
-     game, and again in the footer. Plain to read, quiet enough not to compete
-     with the headline. */
-  .notice{max-width:46rem;margin:1.375rem auto 0;padding:0.75rem 1.125rem;border:1px solid var(--line);border-radius:var(--radius);
-    background:rgba(17,17,19,.55);color:var(--sepia);font-size:.86rem;line-height:1.55;text-align:left}
-  .notice b{color:var(--ink);font-weight:600}
-  @media(max-width:560px){.notice{font-size:.8rem;padding:0.625rem 0.875rem}}
-
-  /* Screenshot gallery. It drifts on its own when idle, scrollable and infinite */
-  .gallery{position:relative;margin:3.125rem 0 0;
-    width:100vw;margin-left:calc(50% - 50vw);
-    /* Fade both ends into the page instead of cutting the strip off. Deep, and
-       eased rather than linear: a straight ramp gives back most of its opacity
-       in the first few px, which reads as an edge rather than a dissolve. */
-    -webkit-mask-image:linear-gradient(90deg,transparent 0,rgba(0,0,0,.15) 6rem,rgba(0,0,0,.6) 12rem,#000 20rem,#000 calc(100% - 20rem),rgba(0,0,0,.6) calc(100% - 12rem),rgba(0,0,0,.15) calc(100% - 6rem),transparent 100%);
-    mask-image:linear-gradient(90deg,transparent 0,rgba(0,0,0,.15) 6rem,rgba(0,0,0,.6) 12rem,#000 20rem,#000 calc(100% - 20rem),rgba(0,0,0,.6) calc(100% - 12rem),rgba(0,0,0,.15) calc(100% - 6rem),transparent 100%)}
-  /* A narrow viewport has no room for a 20rem ramp at each end. */
-  @media(max-width:900px){
-    .gallery{
-      -webkit-mask-image:linear-gradient(90deg,transparent 0,rgba(0,0,0,.5) 3rem,#000 8rem,#000 calc(100% - 8rem),rgba(0,0,0,.5) calc(100% - 3rem),transparent 100%);
-      mask-image:linear-gradient(90deg,transparent 0,rgba(0,0,0,.5) 3rem,#000 8rem,#000 calc(100% - 8rem),rgba(0,0,0,.5) calc(100% - 3rem),transparent 100%)}
-  }
-  .gtrack{display:flex;gap:1rem;overflow-x:auto;padding:0.25rem 1rem 0.5rem;
-    -webkit-overflow-scrolling:touch;
-    /* The bar would sit under a strip that moves by itself, which looks broken.
-       Scrolling still works; only the indicator is hidden. */
-    scrollbar-width:none;-ms-overflow-style:none}
-  .gtrack::-webkit-scrollbar{display:none}
-  .gcard{flex:0 0 auto;height:min(23.75rem,48.75vw);max-width:88vw;position:relative;
-    border:1px solid var(--line2);border-radius:var(--radius);overflow:hidden;
-    background:var(--marble);box-shadow:var(--shadow)}
-  .gcard img{height:100%;width:auto;max-width:88vw;display:block;object-fit:cover;
-    aspect-ratio:16/10;background:var(--parch2);
-    -webkit-user-drag:none;user-select:none}
-  .gcard img.loaded{aspect-ratio:auto}
-  .gcard .shot-tag{position:absolute;right:0.625rem;bottom:0.625rem;z-index:1;pointer-events:none;
-    font-family:var(--display);font-size:.62rem;font-weight:700;letter-spacing:.14em;text-transform:uppercase;
-    color:var(--sepia);background:rgba(17,17,19,.78);backdrop-filter:blur(0.25rem);
-    border:1px solid var(--line2);border-radius:999px;padding:0.25rem 0.625rem}
-  /* The cards are click targets now. */
-  .gcard:focus-visible{outline:2px solid var(--gold-l);outline-offset:3px}
-  .gtrack:focus-visible{outline:2px solid var(--gold-l);outline-offset:2px}
-  /* Desktop drag-to-scroll: the cursor is the affordance, so it has to say the
-     strip is grabbable before anyone tries. */
-  .gtrack{cursor:grab}
-  .gtrack.dragging{cursor:grabbing;user-select:none}
-
-  /* ---------- screenshot viewer ---------- */
-  .lb{position:fixed;inset:0;z-index:100;display:flex;align-items:center;justify-content:center;
-    padding:clamp(1rem,4vw,3.5rem);
-    background:rgba(9,9,11,.88);backdrop-filter:blur(0.5rem);
-    opacity:0;transition:opacity .18s ease}
-  .lb.on{opacity:1}
-  /* After the display:flex, or [hidden] does nothing. */
-  .lb[hidden]{display:none}
-  .lb-figure{margin:0;display:flex;flex-direction:column;align-items:center;gap:0.875rem;
-    max-width:100%;max-height:100%;
-    transform:scale(.99);transition:transform .18s ease}
-  .lb.on .lb-figure{transform:none}
-  .lb-figure img{display:block;max-width:100%;max-height:82vh;width:auto;height:auto;
-    border:1px solid var(--line2);border-radius:var(--radius);background:var(--parch2);
-    box-shadow:0 1.75rem 4rem -1.5rem rgba(0,0,0,.9);
-    -webkit-user-drag:none;user-select:none}
-  .lb-cap{font-family:var(--display);font-size:.68rem;font-weight:700;letter-spacing:.14em;text-transform:uppercase;
-    color:var(--sepia)}
-  /* Glyph only; the shadow carries it over a pale screenshot. */
-  .lb-close,.lb-nav{position:absolute;display:grid;place-items:center;cursor:pointer;
-    font-family:var(--display);line-height:1;color:var(--ink);
-    background:none;border:0;border-radius:999px;padding:0;
-    text-shadow:0 0.0625rem 0.5rem rgba(0,0,0,.9),0 0 1.25rem rgba(0,0,0,.7);
-    transition:color .15s,opacity .15s;opacity:.8}
-  .lb-close:hover,.lb-nav:hover{color:var(--gold-l);opacity:1}
-  .lb-close:focus-visible,.lb-nav:focus-visible{outline:2px solid var(--gold-l);outline-offset:2px}
-  /* Focus lands here on open, so: no ring. */
-  .lb:focus,.lb:focus-visible{outline:none}
-  .lb-close{top:1rem;right:1rem;width:2.75rem;height:2.75rem;font-size:1.5rem;padding-bottom:.16em}
-  .lb-nav{top:50%;transform:translateY(-50%);width:3rem;height:3rem;font-size:1.9rem;padding-bottom:.14em}
-  .lb-prev{left:1rem}
-  .lb-next{right:1rem}
-  .lb-nav[hidden]{display:none}
-  @media(max-width:720px){
-    .lb-nav{width:2.5rem;height:2.5rem;font-size:1.5rem}
-    .lb-prev{left:0.5rem}
-    .lb-next{right:0.5rem}
-    .lb-close{top:0.5rem;right:0.5rem;width:2.5rem;height:2.5rem}
-    .lb-figure img{max-height:70vh}
-  }
-  @media(prefers-reduced-motion: reduce){
-    .lb,.lb-figure{transition:none}
-  }
-
-  /* ---------- sections ---------- */
-  section{padding:3.875rem 0}
-  .eyebrow{color:var(--bronze);font-weight:600;font-size:.82rem;letter-spacing:.22em;text-transform:uppercase;text-align:center}
-  h2{font-size:clamp(1.9rem,3.8vw,2.7rem);letter-spacing:.02em;text-align:center;margin:0.75rem 0 0;font-weight:700;color:var(--ink)}
-  .lead{color:var(--sepia);text-align:center;max-width:38.75rem;margin:1rem auto 0;font-size:1.12rem}
-
-  .rule{width:7.5rem;height:0.125rem;margin:1.25rem auto 0;background:linear-gradient(90deg,transparent,var(--bronze),transparent)}
-
-  /* steps */
-  .steps{display:grid;grid-template-columns:repeat(3,1fr);gap:1.125rem;margin-top:2.625rem}
-  .step{background:var(--marble);border:1px solid var(--line);border-radius:var(--radius);padding:1.625rem 1.5rem;box-shadow:var(--shadow)}
-  .step .n{width:2.875rem;height:2.875rem;border-radius:0.5625rem;background:var(--marble2);border:1px solid var(--line2);
-    display:grid;place-items:center;font-weight:700;color:var(--bronze);font-size:1.25rem;letter-spacing:.02em}
-  .step h3{margin:1rem 0 0.375rem;font-size:1.22rem;letter-spacing:.02em;color:var(--ink);font-weight:600}
-  .step p{margin:0;color:var(--sepia);font-size:1.02rem}
-  .step code{background:var(--parch);border:1px solid var(--line);padding:1px 0.4375rem;border-radius:0.3125rem;font-size:.86em;font-family:ui-monospace,Consolas,monospace}
-  @media(max-width:760px){.steps{grid-template-columns:1fr}}
-
-  /* os tabs */
-  .runbox{margin-top:1.5rem;background:var(--marble);border:1px solid var(--line2);border-radius:var(--radius);overflow:hidden;box-shadow:var(--shadow)}
-  .tabs{display:flex;border-bottom:1px solid var(--line)}
-  .tab{flex:1;padding:0.9375rem;background:none;border:0;color:var(--sepia);font-weight:600;font-size:.92rem;letter-spacing:.04em;
-    cursor:pointer;border-bottom:0.1875rem solid transparent;transition:.15s}
-  .tab[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--red);background:var(--marble2)}
-  .tab-body{padding:1.375rem 1.625rem;display:none;font-size:1.05rem;color:var(--sepia)}
-  .tab-body.on{display:block}
-  .tab-body b{color:var(--ink);font-weight:600}
-  .kbd{background:var(--parch);border:1px solid var(--line2);border-bottom-width:0.125rem;border-radius:0.375rem;padding:0.125rem 0.5625rem;
-    font-family:ui-monospace,Consolas,monospace;font-size:.82em;color:var(--ink);white-space:nowrap}
-
-  /* download cards */
-  #download{
-    position:relative;
-    width:min(84rem, 100vw - 3rem);
-    left:50%;
-    transform:translateX(-50%);
-  }
-  .dl{display:grid;grid-template-columns:repeat(4,1fr);gap:1.125rem;margin-top:2.625rem;align-items:stretch}
-  .card{position:relative;background:var(--marble);border:1px solid var(--line);border-radius:var(--radius);padding:1.625rem 1.5rem;display:flex;flex-direction:column;box-shadow:var(--shadow)}
-  .card.feature{border-color:var(--bronze);box-shadow:0 0 0 1px rgba(201,147,47,.3) inset,var(--shadow)}
-  .card .ic{font-size:1.8rem}
-  .card h3{margin:0.875rem 0 0.125rem;font-size:1.3rem;letter-spacing:.02em;color:var(--ink);font-weight:600}
-  .card .meta{color:var(--sepia2);font-size:.92rem;font-style:italic}
-  .card p{color:var(--sepia);font-size:1.02rem;margin:0.75rem 0 1.25rem;flex:1}
-  .card .btn{width:100%;justify-content:center;padding:0.8125rem}
-  .card .btn + .btn{margin-top:0.625rem}
-  .card .beta-line{margin:1.125rem 0 0.625rem;padding-top:0.875rem;border-top:1px solid var(--line);color:var(--sepia2);font-size:.9rem}
-  .card .beta-line b{color:var(--ink);letter-spacing:.04em}
-  .tag{position:absolute;top:1rem;right:1rem;font-size:.66rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;
-    color:#3b2707;background:linear-gradient(180deg,#e6c469,#c99a2e);padding:0.3125rem 0.6875rem;border-radius:999px;border:1px solid rgba(120,80,15,.4)}
-  @media(max-width:1100px){.dl{grid-template-columns:1fr 1fr}}
-  @media(max-width:640px){.dl{grid-template-columns:1fr}}
-
-  /* features */
-  .feats{display:grid;grid-template-columns:repeat(3,1fr);gap:1rem;margin-top:2.625rem}
-  .feat{background:var(--marble);border:1px solid var(--line);border-radius:0.75rem;padding:1.375rem}
-  .feat .fi{font-size:1.55rem}
-  .feat h4{margin:0.625rem 0 0.3125rem;font-size:1.12rem;letter-spacing:.02em;color:var(--ink);font-family:var(--display);font-weight:600}
-  .feat p{margin:0;color:var(--sepia);font-size:.98rem}
-  @media(max-width:820px){.feats{grid-template-columns:1fr 1fr}}
-  @media(max-width:520px){.feats{grid-template-columns:1fr}}
-
-  /* faq */
-  .faq{max-width:47.5rem;margin:2.375rem auto 0}
-  details{background:var(--marble);border:1px solid var(--line);border-radius:0.6875rem;padding:0.125rem 1.375rem;margin-bottom:0.75rem}
-  details[open]{border-color:var(--line2)}
-  summary{cursor:pointer;padding:1.0625rem 0;font-weight:600;font-size:1.1rem;list-style:none;display:flex;justify-content:space-between;align-items:center;color:var(--ink)}
-  summary::-webkit-details-marker{display:none}
-  summary::after{content:"+";color:var(--bronze);font-size:1.4rem;transition:transform .2s}
-  details[open] summary::after{transform:rotate(45deg)}
-  details p{margin:0 0 1.125rem;color:var(--sepia);font-size:1.04rem}
-  details a{color:var(--bronze);border-bottom:1px solid rgba(201,147,47,.45)}
-
-  /* cta band + footer */
-  .band{background:var(--marble);border:1px solid var(--line2);border-radius:1.25rem;padding:3.25rem 1.875rem;text-align:center;margin-top:1.25rem;
-    background-image:radial-gradient(45rem 18.75rem at 50% -40%,rgba(201,147,47,.18),transparent),linear-gradient(var(--marble),var(--marble));box-shadow:var(--shadow)}
-  footer{border-top:1px solid var(--line);margin-top:4.375rem;padding:2.125rem 0 3.75rem;color:var(--sepia);font-size:.98rem}
-  .foot{display:flex;flex-wrap:wrap;gap:1rem;justify-content:space-between;align-items:center}
-  .foot a{color:var(--sepia)}.foot a:hover{color:var(--ink)}
-  .fnav{display:flex;gap:1.5rem;flex-wrap:wrap}
-  .foot-legal{flex-basis:100%;margin:0.25rem 0 0;font-size:.82rem;line-height:1.55;color:var(--sepia2)}
-</style>
+<link rel="stylesheet" href="/story/vendor/maplibre-gl.css?v=761a1130f0" />
+<link rel="stylesheet" href="/story/story.css?v=699fa321c8" />
+<link rel="stylesheet" href="/story/game-ui.css?v=24b2435ae5" />
+<script defer src="/story/vendor/maplibre-gl.js?v=28ab0f7e9d"></script>
+<script defer src="/story/map-data.js?v=b0c663183f"></script>
+<script defer src="/story/game-ui.js?v=80687bc1fb"></script>
+<script defer src="/story/story.js?v=45e2038cc1"></script>
+<script defer src="/story/site.js?v=c3bb6b8e82"></script>
 </head>
 <body>
 
 <aside class="community" aria-label="Join the community">
   <div class="community-in">
-    <span class="community-say">Ask questions, share scenarios, and hear about updates &mdash; <b>come say hello.</b></span>
+    <span>Ask questions, share scenarios, and hear about updates &mdash; <b>come say hello.</b></span>
     <span class="community-links">
-      <a class="community-btn" href="https://discord.gg/QaqAK7fQAg" target="_blank" rel="noopener"><span class="community-more">Join the&nbsp;</span>Discord</a>
+      <a class="community-btn" href="https://discord.gg/QaqAK7fQAg" target="_blank" rel="noopener">Discord</a>
       <a class="community-btn" href="https://www.reddit.com/r/OpenHistoria" target="_blank" rel="noopener">r/OpenHistoria</a>
-      <a class="community-btn" href="https://x.com/open_historia" target="_blank" rel="noopener" aria-label="Follow Open Historia on X"><span class="community-more">Follow on&nbsp;</span>X</a>
+      <a class="community-btn" href="https://x.com/open_historia" target="_blank" rel="noopener" aria-label="Follow Open Historia on X">X</a>
     </span>
   </div>
 </aside>
 
-<header>
-  <div class="wrap nav">
-    <a class="brand" href="#top"><img class="mark" src="/play/icon-192.png" alt="" width="28" height="28" fetchpriority="high" /> Open Historia</a>
-    <nav class="nav-links">
-      <a href="#play">How it works</a>
+<header class="site-head">
+  <div class="head-in">
+    <a class="brand" href="#top"><img src="/play/icon-192.png" alt="" width="28" height="28" fetchpriority="high" /> Open Historia <span class="brand-sub">Est. MMXXVI</span></a>
+    <nav class="nav" aria-label="Site">
+      <a href="#story">The story</a>
+      <a href="#eras">Eras</a>
       <a href="#features">Features</a>
-      <a class="nav-keep" href="/wiki/">Wiki</a>
       <a href="#download">Download</a>
+      <a class="nav-keep" href="/wiki/">Wiki</a>
       <a href="https://github.com/Open-Historia/open-historia" target="_blank" rel="noopener">GitHub</a>
-      <a class="nav-cta" href="/play/">▶ Play</a>
+      <a class="nav-play" href="/play/">▶ Play</a>
     </nav>
   </div>
 </header>
 
-<a id="top"></a>
-<main class="wrap">
+<main>
 
-  <section class="hero">
-    <div class="hero-banner">
-      <span class="badge"><img class="mark mark-sm" src="/play/icon-192.png" alt="" width="18" height="18" /> Free &amp; open source · a community alternative to <b>Pax Historia</b></span>
-      <h1>Rewrite history,<br><span class="grad">one decision at a time.</span></h1>
-      <p class="sub">Open Historia is an AI-driven turn-based strategy game. Lead any nation on a living world map, act in plain language, and watch an AI simulate the consequences — wars, diplomacy, and borders that actually shift.</p>
-      <div class="cta-row">
-        <a id="primaryDownload" class="btn btn-primary" href="#download">
-          <span>⬇</span> <span id="primaryLabel">Download for Desktop</span>
-        </a>
-        <a id="betaDownload" class="btn btn-beta" href="#download">
-          <span>⬇</span> <span id="betaLabel">Download the Beta</span>
-        </a>
-        <a class="btn btn-ghost" href="/play/"><span>▶</span> Demo in your browser</a>
-      </div>
+<!-- ====================================================================== -->
+<section class="hero" id="top">
+  <svg class="hero-map" id="heroMap" aria-hidden="true" preserveAspectRatio="xMidYMid slice"></svg>
+  <div class="hero-veil" aria-hidden="true"></div>
+
+  <!-- The astrolabe behind the scales: rings of degrees, turning slowly. -->
+  <svg class="astrolabe" viewBox="-400 -400 800 800" aria-hidden="true">
+    <defs>
+      <path id="ringText" d="M0 -318 A318 318 0 1 1 -0.1 -318" />
+      <path id="ringText2" d="M0 -246 A246 246 0 1 1 -0.1 -246" />
+    </defs>
+    <g class="ring r1">
+      <circle r="360" /><circle r="350" />
+      <g class="ticks" id="astroTicks"></g>
+    </g>
+    <g class="ring r2">
+      <circle r="332" /><circle r="304" />
+      <text class="ring-words"><textPath href="#ringText">BELLUM · PAX · BELLUM · PAX · BELLUM · PAX · BELLUM · PAX · BELLUM · PAX · BELLUM · PAX · BELLUM · PAX · BELLUM · PAX ·</textPath></text>
+    </g>
+    <g class="ring r3">
+      <circle r="262" /><circle r="232" class="dash" />
+      <text class="ring-words small"><textPath href="#ringText2">MDCCCXV · MCMXIV · MCMXXXIX · MCMXLV · MMXVI · ANNO DOMINI · ANTE CHRISTUM · MMCDLIII ·</textPath></text>
+      <path class="spoke" d="M0 -232 V232 M-232 0 H232 M-164 -164 L164 164 M164 -164 L-164 164" />
+    </g>
+  </svg>
+
+  <!-- Slips of history drifting about the title: events from other games. -->
+  <div class="slips" aria-hidden="true">
+    <div class="slip war" data-depth="0.35" data-rot="-4" style="left:4%;top:16%"><b>1914</b> · War declared at Sarajevo<i>Dispatch Nº 211</i></div>
+    <div class="slip peace" data-depth="0.18" data-rot="3" style="left:7%;top:58%"><b>1648</b> · The Peace of Westphalia, signed twice<i>Archive · Münster</i></div>
+    <div class="slip war" data-depth="0.5" data-rot="5" style="left:2%;top:80%"><b>1588</b> · The Armada lands at Kent<i>Telegram · Dover</i></div>
+    <div class="slip peace" data-depth="0.28" data-rot="-3" style="right:4%;top:14%"><b>1815</b> · A congress at Vienna, without Austria<i>Minutes, p. 3</i></div>
+    <div class="slip war" data-depth="0.42" data-rot="4" style="right:6%;top:46%"><b>1939</b> · Poland and Lithuania stand together<i>Order of battle</i></div>
+    <div class="slip peace" data-depth="0.22" data-rot="-5" style="right:3%;top:76%"><b>1453</b> · Constantinople holds; the Sultan sues for peace<i>Chronicle, vol. II</i></div>
+  </div>
+
+  <div class="hero-in">
+    <p class="kicker"><span class="orn">✦</span> A free, open-source strategy game · AI-driven alternate history <span class="orn">✦</span></p>
+
+    <!-- The scales of history: the sword in one pan, the olive branch in the other. -->
+    <svg class="scales" id="scales" viewBox="0 0 400 250" aria-hidden="true">
+      <rect class="base" x="140" y="232" width="120" height="10" rx="5" />
+      <rect class="base2" x="160" y="224" width="80" height="10" rx="4" />
+      <rect class="post" x="196" y="62" width="8" height="166" rx="3" />
+      <g class="beam">
+        <rect class="beam-bar" x="40" y="58" width="320" height="8" rx="4" />
+        <circle class="beam-end" cx="40" cy="62" r="6" /><circle class="beam-end" cx="360" cy="62" r="6" />
+        <g class="hang-l">
+          <line class="chain" x1="54" y1="62" x2="20" y2="156" />
+          <line class="chain" x1="54" y1="62" x2="88" y2="156" />
+          <line class="chain" x1="54" y1="62" x2="54" y2="156" />
+          <path class="pan" d="M10 156 H98 Q92 182 54 184 Q16 182 10 156 Z" />
+          <g transform="translate(54 150) rotate(-62)">
+            <rect class="sword-steel" x="-3" y="-70" width="6" height="58" rx="1" />
+            <path class="sword-steel" d="M-3 -70 L0 -80 L3 -70 Z" />
+            <rect class="sword" x="-15" y="-13" width="30" height="5" rx="2" />
+            <rect class="sword" x="-2.5" y="-8" width="5" height="14" rx="1.5" />
+            <circle class="sword" cx="0" cy="9" r="4" />
+          </g>
+        </g>
+        <g class="hang-r">
+          <line class="chain" x1="346" y1="62" x2="312" y2="156" />
+          <line class="chain" x1="346" y1="62" x2="380" y2="156" />
+          <line class="chain" x1="346" y1="62" x2="346" y2="156" />
+          <path class="pan" d="M302 156 H390 Q384 182 346 184 Q308 182 302 156 Z" />
+          <g transform="translate(346 152)">
+            <path class="olive" d="M-34 0 Q-6 -6 30 -34" />
+            <ellipse class="leaf" cx="-18" cy="-10" rx="8" ry="3.4" transform="rotate(-38 -18 -10)" />
+            <ellipse class="leaf" cx="-14" cy="3" rx="8" ry="3.4" transform="rotate(20 -14 3)" />
+            <ellipse class="leaf" cx="-2" cy="-17" rx="8" ry="3.4" transform="rotate(-62 -2 -17)" />
+            <ellipse class="leaf" cx="4" cy="-4" rx="8" ry="3.4" transform="rotate(4 4 -4)" />
+            <ellipse class="leaf" cx="12" cy="-27" rx="8" ry="3.4" transform="rotate(-78 12 -27)" />
+            <ellipse class="leaf" cx="18" cy="-15" rx="8" ry="3.4" transform="rotate(-20 18 -15)" />
+            <circle class="leaf" cx="27" cy="-24" r="3.2" />
+          </g>
+        </g>
+      </g>
+      <circle class="pivot" cx="200" cy="62" r="11" />
+      <circle class="pivot-in" cx="200" cy="62" r="4" />
+      <path class="finial" d="M200 34 L206 48 L200 44 L194 48 Z" />
+    </svg>
+
+    <h1 class="title">
+      <span class="t-small"><span class="rule-l"></span>Open Historia<span class="rule-r"></span></span>
+      <span class="t-big"><span class="w-war">War</span><span class="w-or">or</span><span class="w-peace">Peace</span></span>
+    </h1>
+    <p class="lede">Lead any nation on a living world map. Say what it does in your own words, and an AI plays out the rest of the world. <em>The history you make is yours.</em></p>
+    <div class="cta-row">
+      <a id="primaryDownload" class="btn btn-primary" href="#download"><span class="i">⬇</span> <span id="primaryLabel">Download for Desktop</span></a>
+      <a id="betaDownload" class="btn btn-ghost" href="#download"><span class="i">⬇</span> <span id="betaLabel">Download the Beta</span></a>
+      <a class="btn btn-ghost" href="/play/"><span class="i">▶</span> Demo in your browser</a>
     </div>
     <p class="hero-note" id="heroNote">The browser version is a demo — it streams the world map over the network, so expect lag. The <a href="#download">desktop app</a> runs locally and is how the game is meant to be played.</p>
-    <p class="notice" role="note"><b>Open Historia is an independent, open-source project</b> and is not affiliated with, endorsed, sponsored, approved, or authorized by Pax Historia. Pax Historia has no involvement in the development, operation, or distribution of Open Historia. Pax Historia™ and all associated trademarks, trade names, and logos are the exclusive property of Pax Historia.</p>
-    <div class="gallery">
-      <div class="gtrack" id="gtrack" tabindex="0" role="group" aria-label="Screenshots">
-        <div class="gcard">
-          <img src="/play/screenshots/screenshot.webp" alt="Open Historia gameplay — a strategic world map with events and nations" decoding="async" />
+    <ul class="seals" aria-label="At a glance">
+      <li><b>Free</b><span>no price, no ads</span></li>
+      <li><b>AGPL</b><span>open source</span></li>
+      <li><b>22</b><span>languages</span></li>
+      <li><b>Offline</b><span>runs on your machine</span></li>
+    </ul>
+  </div>
+
+  <!-- A ruler of years along the foot of the hero. -->
+  <div class="ruler" aria-hidden="true">
+    <span style="left:2%">3000 BC</span><span style="left:12%">753 BC</span><span style="left:22%">AD 1</span><span style="left:32%">476</span><span style="left:42%">1066</span><span style="left:52%">1453</span><span style="left:62%">1648</span><span style="left:70%">1815</span><span style="left:77%">1914</span><span style="left:83%">1939</span><span style="left:90%">2016</span><span style="left:97%">∞</span>
+  </div>
+  <a class="scroll-cue" href="#story">Begin the chronicle</a>
+</section>
+
+<!-- Two rivers of headlines from other players' worlds, running opposite ways. -->
+<div class="marquee" aria-hidden="true">
+  <div class="mq war"><div class="mq-track">
+    <span>⚔ 1914 · The Kaiser's ultimatum expires at noon</span><span>⚔ 1870 · Metz besieged</span><span>⚔ 1588 · Spanish tercios land in Kent</span><span>⚔ 1941 · The Caucasus front breaks</span><span>⚔ 1453 · The walls of Theodosius hold another day</span><span>⚔ 2016 · Ten tracks over the Arctic</span><span>⚔ 1805 · A fleet lost off Trafalgar</span><span>⚔ 216 BC · Hannibal turns on Rome</span>
+    <span>⚔ 1914 · The Kaiser's ultimatum expires at noon</span><span>⚔ 1870 · Metz besieged</span><span>⚔ 1588 · Spanish tercios land in Kent</span><span>⚔ 1941 · The Caucasus front breaks</span><span>⚔ 1453 · The walls of Theodosius hold another day</span><span>⚔ 2016 · Ten tracks over the Arctic</span><span>⚔ 1805 · A fleet lost off Trafalgar</span><span>⚔ 216 BC · Hannibal turns on Rome</span>
+  </div></div>
+  <div class="mq peace"><div class="mq-track">
+    <span>✦ 1648 · Bells ring across Westphalia</span><span>✦ 1815 · A congress dances at Vienna</span><span>✦ 1919 · A league with teeth</span><span>✦ 2017 · The Congress of Strasbourg</span><span>✦ 1494 · The world divided at Tordesillas</span><span>✦ 1955 · Austria walks free</span><span>✦ 1713 · The Spanish succession settled at Utrecht</span><span>✦ 2031 · An African Union of fifty-five</span>
+    <span>✦ 1648 · Bells ring across Westphalia</span><span>✦ 1815 · A congress dances at Vienna</span><span>✦ 1919 · A league with teeth</span><span>✦ 2017 · The Congress of Strasbourg</span><span>✦ 1494 · The world divided at Tordesillas</span><span>✦ 1955 · Austria walks free</span><span>✦ 1713 · The Spanish succession settled at Utrecht</span><span>✦ 2031 · An African Union of fifty-five</span>
+  </div></div>
+</div>
+
+<div class="notice-band">
+  <p class="notice" role="note"><b>Open Historia is an independent, open-source project</b> and is not affiliated with, endorsed, sponsored, approved, or authorized by Pax Historia. Pax Historia has no involvement in the development, operation, or distribution of Open Historia. Pax Historia™ and all associated trademarks, trade names, and logos are the exclusive property of Pax Historia.</p>
+</div>
+
+<!-- ====================================================================== -->
+<section class="tally" aria-label="Open Historia in numbers">
+  <div class="tally-in">
+    <div class="fig rise"><b>~200</b><span>nations on the built-in map</span><i>Modern Day, 2016</i></div>
+    <div class="fig rise"><b>3,662</b><span>regions to hold, lose and win back</span><i>each with a name</i></div>
+    <div class="fig rise"><b>1</b><span>AI request per time skip</span><i>however long the skip</i></div>
+    <div class="fig rise"><b>22</b><span>languages, translated in full</span><i>Arabic to Vietnamese</i></div>
+    <div class="fig rise"><b>0</b><span>accounts, stores or sign-ups</span><i>download and play</i></div>
+    <div class="fig rise"><b>∞</b><span>histories</span><i>yours among them</i></div>
+  </div>
+</section>
+
+<!-- ====================================================================== -->
+<!-- The chronicle: one campaign, told on the game's own map. The stage stays
+     put while the chapters scroll over it (story/story.js). -->
+<section class="chronicle" id="story" aria-label="The story of one year">
+  <div class="stage" id="stage" data-step="world">
+    <!-- The map, as in the game: MapLibre on Esri's Ocean basemap over 3D terrain. -->
+    <div class="stage-map" id="stageMap" aria-hidden="true"></div>
+    <canvas class="stage-canvas" id="stageCanvas" aria-hidden="true"></canvas>
+
+    <!-- The game's own interface over it (story/game-ui.js builds it as the game does), driven by the scroll; every button works. -->
+    <div class="gx" id="gameUi"></div>
+
+    <!-- Doves over the peace. -->
+    <div class="doves" data-on="congress" aria-hidden="true"></div>
+  </div>
+
+  <div class="steps">
+    <article class="step" data-step="world" data-date="1 January 2016" data-balance="-0.15" data-turn="Turn 1" data-stability="72" data-treasury="64" data-manpower="58" data-plate="Plate I" data-map="The World · Political" data-news="Markets open the year steady in London and Tokyo|The Security Council meets on the Sahel|Oil holds at forty dollars a barrel|Snowstorms close Moscow's airports|Brazil's Senate debates the budget">
+      <div class="chapter">
+        <div class="dossier"><span>File Nº 01</span><span>A Year in the World</span><span>1 / 10</span></div>
+        <div class="num">Chapter I</div>
+        <h2>The world, as it stands</h2>
+        <p class="drop"><strong>1 January 2016.</strong> Some two hundred nations, every border where it lies. Start in the present, in 1939, in an age long gone, or in a world someone drew from scratch.</p>
+        <p>You lead one country. An AI plays every other, each with its own leaders, aims and memory. Scroll on, and watch what they do with a year.</p>
+        <span class="stamp">Archive</span>
+        <p class="fn"><sup>1</sup> The built-in Modern Day map: 3,662 regions, every one with a name and an owner. <sup>2</sup> A scenario can begin on any date, even before Christ.</p>
+      </div>
+    </article>
+
+    <article class="step tall" data-step="launch" data-tone="war" data-date="9 August 2016" data-balance="1" data-turn="Turn 8" data-stability="55" data-treasury="57" data-manpower="63" data-plate="Plate II" data-map="The Arctic Route · In Pursuit" data-news="Launch detected at Malmstrom|Ten tracks over the Arctic|Interceptors away from Sofrino|Impacts reported at Tatishchevo, Kozelsk and Yasny|The Security Council meets in emergency session">
+      <div class="chapter">
+        <div class="dossier"><span>File Nº 02</span><span>A Year in the World</span><span>2 / 10</span></div>
+        <div class="num">Chapter II</div>
+        <h2>The world does not wait</h2>
+        <p class="drop">Every turn, the AI plays the other nations at once. Most of them argue. Some of them arm. And one August night, <strong>two of them fire</strong>.</p>
+        <p>Ten missiles leave Montana, North Dakota and Wyoming on the great circles over the Arctic. Most are caught in the air. Some are not.</p>
+        <p>The story says what flew, what was stopped and what got through, and the map remembers where it fell.</p>
+        <span class="stamp red">Flash traffic</span>
+        <p class="fn"><sup>3</sup> The rest of the world is played in the same AI request as your own country: one per time skip.</p>
+      </div>
+    </article>
+
+    <article class="step tall" data-step="korea" data-tone="war" data-date="2 September 2016" data-balance="0.95" data-turn="Turn 9" data-stability="52" data-treasury="54" data-manpower="70" data-plate="Plate III" data-map="The Korean Peninsula · Facing South" data-news="The North crosses the line at dawn|Seoul encircled|Daejeon falls|The Nakdong line breaks|Busan's harbour under fire">
+      <div class="chapter">
+        <div class="dossier"><span>File Nº 03</span><span>A Year in the World</span><span>3 / 10</span></div>
+        <div class="num">Chapter III <span class="beta">Beta</span></div>
+        <h2>The front moves</h2>
+        <p class="drop">In the confusion, Pyongyang moves. Where two countries at war share a border <strong>a front forms</strong>, and the game fights it region by region, troop by troop, before the story is told.</p>
+        <p>Keep scrolling and the line comes south: Seoul, Daejeon, Daegu, and at last Busan.</p>
+        <span class="stamp red">War declared</span>
+        <p class="fn"><sup>4</sup> Battlefields, the War Room and seasons on the front come to the beta first.</p>
+      </div>
+    </article>
+
+    <article class="step" data-step="choose" data-date="1 December 2016" data-balance="0.6" data-turn="Turn 12" data-stability="58" data-treasury="52" data-manpower="64" data-plate="Plate IV" data-map="Western Europe" data-news="Paris: the cabinet meets through the night|Berlin calls for calm|Brussels: NATO ministers in session|London backs a conference|Markets close lower for a sixth week">
+      <div class="chapter">
+        <div class="dossier"><span>File Nº 04</span><span>A Year in the World</span><span>4 / 10</span></div>
+        <div class="num">Chapter IV</div>
+        <h2>Choose a nation</h2>
+        <p class="drop">None of that was yours. You are <strong>France</strong>: a permanent seat at the Security Council, an army, a voice. Its card shows what you answer for.</p>
+        <p>Every other country has a card of its own. Read the others before you deal with them.</p>
+        <span class="stamp blue">Selected</span>
+        <p class="fn"><sup>5</sup> In the game: click any country on the map to open its card.</p>
+      </div>
+    </article>
+
+    <article class="step" data-step="order" data-date="1 December 2016" data-balance="0.5" data-turn="Turn 12" data-stability="58" data-treasury="52" data-manpower="64" data-plate="Plate V" data-map="Paris · Orders" data-news="Ambassadors summoned to the Quai d'Orsay|Strasbourg named as a venue|An envoy flies to Beijing|The Élysée on the telephone all night|Silence from Pyongyang">
+      <div class="chapter">
+        <div class="dossier"><span>File Nº 05</span><span>A Year in the World</span><span>5 / 10</span></div>
+        <div class="num">Chapter V</div>
+        <h2>Speak, and it is done</h2>
+        <p class="drop">There's no menu of three hundred buttons. <strong>Write your orders the way a head of state would give them</strong>, in your own words and your own language.</p>
+        <p>Your advisor reads them first and tells you what they'll cost.</p>
+        <span class="stamp">Orders</span>
+        <p class="fn"><sup>6</sup> Orders wait in a queue and are carried out by the next time skip.</p>
+      </div>
+    </article>
+
+    <article class="step" data-step="skip" data-date="1 January 2017" data-from="1 December 2016" data-balance="0.4" data-turn="Turn 13" data-stability="61" data-treasury="50" data-manpower="62" data-plate="Plate VI" data-map="Europe and the East · December" data-news="Washington accepts Strasbourg|Moscow accepts Strasbourg|Beijing to bring Pyongyang|A ceasefire holds in Busan|The congress to open in February">
+      <div class="chapter">
+        <div class="dossier"><span>File Nº 06</span><span>A Year in the World</span><span>6 / 10</span></div>
+        <div class="num">Chapter VI</div>
+        <h2>Then the world moves</h2>
+        <p class="drop">Press <strong>time skip</strong> and weeks go by at once. The AI plays out the whole world for the period: crises, markets, elections, wars far away. Every event is dated, placed on the map and remembered.</p>
+        <p>This month, the capitals answer you.</p>
+        <span class="stamp red">Dispatch</span>
+        <p class="fn"><sup>7</sup> A time skip is one request to your AI, however long the period it plays.</p>
+      </div>
+    </article>
+
+    <article class="step" data-step="talks" data-date="14 January 2017" data-balance="0.1" data-turn="Turn 14" data-stability="63" data-treasury="49" data-manpower="60" data-plate="Plate VII" data-map="Paris, Washington, Moscow, Beijing · Correspondence" data-news="Letters cross between Paris and Moscow|Washington names its delegation|Inspectors: the sticking point|Swiss offer to help with the seating|Strasbourg's hotels fill">
+      <div class="chapter">
+        <div class="dossier"><span>File Nº 07</span><span>A Year in the World</span><span>7 / 10</span></div>
+        <div class="num">Chapter VII</div>
+        <h2>Words before weapons</h2>
+        <p class="drop">Write to any government in your own words, and it <strong>writes back in its own voice</strong>. Propose a treaty, offer a deal, apologise, threaten.</p>
+        <p>They remember what you said, and so does everyone they tell.</p>
+        <span class="stamp">Diplomatic pouch</span>
+        <p class="fn"><sup>8</sup> Each government answers from what it knows, in the language you play in.</p>
+      </div>
+    </article>
+
+    <article class="step" data-step="parliament" data-tone="peace" data-date="9 February 2017" data-balance="-0.3" data-turn="Turn 15" data-stability="57" data-treasury="47" data-manpower="58" data-plate="Plate VIII" data-map="Paris · The Assemblée" data-news="The Assemblée debates the congress|The opposition calls it 'a gift to Moscow'|341 for, 156 against|Protests on the Place de la Concorde|The Senate to vote on Tuesday">
+      <div class="chapter">
+        <div class="dossier"><span>File Nº 08</span><span>A Year in the World</span><span>8 / 10</span></div>
+        <div class="num">Chapter VIII <span class="beta">Beta</span></div>
+        <h2>Answer to your people</h2>
+        <p class="drop">Governments answer to parliaments, factions and voters. <strong>The Assemblée must let you sign</strong>, and the opposition will make you pay for every concession.</p>
+        <p>Leaders change, factions rise and fall, and institutions debate and vote in their councils.</p>
+        <span class="stamp">Order of the day</span>
+        <p class="fn"><sup>9</sup> The Political World: leaders, political forces, institutions and puppet states.</p>
+      </div>
+    </article>
+
+    <article class="step" data-step="congress" data-tone="peace" data-date="2 March 2017" data-balance="-0.95" data-turn="Turn 16" data-stability="70" data-treasury="46" data-manpower="55" data-plate="Plate IX" data-map="Strasbourg · The Congress" data-news="The Final Act is signed|An armistice in Korea|Ten years without a launch|Inspectors to Montana and Plesetsk|Bells ring in Strasbourg cathedral">
+      <div class="chapter">
+        <div class="dossier"><span>File Nº 09</span><span>A Year in the World</span><span>9 / 10</span></div>
+        <div class="num">Chapter IX</div>
+        <h2>The table</h2>
+        <p class="drop">Wars end at a table. <strong>Armistices are drawn, ground and reparations settled</strong>, and old enemies can leave as allies.</p>
+        <p>Or nobody comes, and the fighting goes on. It's your chronicle.</p>
+        <span class="stamp green">Ratified</span>
+        <p class="fn"><sup>10</sup> Alliances, defence pacts and guarantees call their members in when war comes again.</p>
+      </div>
+    </article>
+
+    <article class="step" data-step="yours" data-date="Your turn" data-balance="0" data-turn="Turn ∞" data-stability="70" data-treasury="50" data-manpower="50" data-plate="Plate X" data-map="The World · Your Turn" data-news="Every game writes its own history|1453 · Constantinople holds|1588 · The Armada lands|1815 · Napoleon wins at Waterloo|2017 · The Congress of Strasbourg">
+      <div class="chapter">
+        <div class="dossier"><span>File Nº 10</span><span>Your Chronicle</span><span>10 / 10</span></div>
+        <div class="num">Chapter X</div>
+        <h2>The next chapter is yours</h2>
+        <p class="drop">That was one year of one campaign. Every game writes its own: the pins on the map are a few that others have dreamed up. <strong>Yours may never fire a shot.</strong></p>
+        <div class="cta-row">
+          <a class="btn btn-primary" href="#download"><span class="i">⬇</span> Download</a>
+          <a class="btn btn-ghost" href="/play/"><span class="i">▶</span> Try the demo</a>
         </div>
-        <div class="gcard">
-          <img src="/play/screenshots/screenshot2.webp" alt="Europe on the globe in a World War II — 1939 campaign" loading="lazy" decoding="async" />
-        </div>
-        <div class="gcard">
-          <img src="/play/screenshots/scenarios.webp" alt="The Community tab: scenarios players have shared, ready to import" loading="lazy" decoding="async" />
-        </div>
-        <div class="gcard">
-          <img src="/play/screenshots/economics.webp" alt="Advanced Statistics: a country's inflation charted over the years" loading="lazy" decoding="async" />
-        </div>
+        <span class="stamp green">Your move</span>
+      </div>
+    </article>
+  </div>
+</section>
+
+<!-- ====================================================================== -->
+<section class="section eras" id="eras">
+  <div class="section-in">
+    <p class="eyebrow rise">Any year on the calendar</p>
+    <h2 class="rise">Pick an age, or make one</h2>
+    <p class="lead rise">The map and the calendar are the scenario's. Begin on the real world as it is today, on any date in its past, or on a world drawn in the editor. Scenarios from other players are a click away in the Community tab.</p>
+    <div class="timeline rise" aria-hidden="true"><span class="axis"></span></div>
+    <div class="era-row">
+      <article class="era rise"><span class="yr">3000 BC — AD 476</span><h3>Antiquity</h3><p>City-states, legions and pharaohs. The calendar runs before Christ.</p><span class="em">🏛</span></article>
+      <article class="era rise"><span class="yr">476 — 1453</span><h3>The Middle Ages</h3><p>Kingdoms by marriage, crusades by letter, empires by accident.</p><span class="em">🏰</span></article>
+      <article class="era rise"><span class="yr">1453 — 1815</span><h3>Sail &amp; Empire</h3><p>Fleets for the Indies, wars for a throne, congresses for the peace.</p><span class="em">⛵</span></article>
+      <article class="era rise"><span class="yr">1914 — 1918</span><h3>The Great War</h3><p>Trenches, ultimatums and the alliances that drag everyone in.</p><span class="em">🪖</span></article>
+      <article class="era rise"><span class="yr">1939 — 1945</span><h3>The Second World War</h3><p>Europe on the globe, 1939: the screenshot below is one of these.</p><span class="em">✈️</span></article>
+      <article class="era rise"><span class="yr">1947 — 1991</span><h3>The Cold War</h3><p>Proxy wars, spies, blocs and the long peace of deterrence.</p><span class="em">🛰</span></article>
+      <article class="era rise"><span class="yr">2016 →</span><h3>Modern Day</h3><p>Built in: the real world's borders, its 3,662 regions and its tensions.</p><span class="em">🌐</span></article>
+      <article class="era rise"><span class="yr">Any year</span><h3>Worlds of your own</h3><p>Draw continents, paint nations, set the date, and press Apply &amp; Play.</p><span class="em">🖌</span></article>
+    </div>
+  </div>
+</section>
+
+<!-- ====================================================================== -->
+<section class="section" id="screens">
+  <div class="section-in">
+    <p class="eyebrow rise">Seen in the game</p>
+    <h2 class="rise">Not a mock-up. The game.</h2>
+    <p class="lead rise">The map you just read is the map you play on. Click a photograph to see it full size.</p>
+    <div class="reel" id="reel">
+      <figure class="shot rise"><span class="tape"></span><img src="/play/screenshots/screenshot.webp" alt="Open Historia gameplay — a strategic world map with events and nations" loading="lazy" decoding="async" /><figcaption><span class="no">Exhibit A</span>A world at play: events, nations and the map they change</figcaption></figure>
+      <figure class="shot rise"><span class="tape"></span><img src="/play/screenshots/screenshot2.webp" alt="Europe on the globe in a World War II — 1939 campaign" loading="lazy" decoding="async" /><figcaption><span class="no">Exhibit B</span>Europe on the globe, 1939</figcaption></figure>
+      <figure class="shot rise"><span class="tape"></span><img src="/play/screenshots/scenarios.webp" alt="The Community tab: scenarios players have shared, ready to import" loading="lazy" decoding="async" /><figcaption><span class="no">Exhibit C</span>The Community tab: scenarios players have shared</figcaption></figure>
+      <figure class="shot rise"><span class="tape"></span><img src="/play/screenshots/economics.webp" alt="Advanced Statistics: a country's inflation charted over the years" loading="lazy" decoding="async" /><figcaption><span class="no">Exhibit D</span>Advanced Statistics: a country's economy over the years</figcaption></figure>
+    </div>
+  </div>
+</section>
+
+<!-- ====================================================================== -->
+<section class="section" id="features">
+  <div class="section-in">
+    <p class="eyebrow rise">What you can do</p>
+    <h2 class="rise">Two ledgers, one world</h2>
+    <p class="lead rise">Everything on the table, sorted the way a head of state would sort it. Features marked <b style="color:var(--gold-l)">Beta</b> come to the beta app first.</p>
+
+    <div class="ledger">
+      <div class="ledger-col war rise">
+        <svg class="watermark" viewBox="0 0 200 200" aria-hidden="true"><g transform="translate(100 100) rotate(45)"><rect x="-8" y="-90" width="16" height="118" /><path d="M-8 -90 L0 -106 L8 -90 Z" /><rect x="-38" y="28" width="76" height="12" rx="5" /><rect x="-6" y="40" width="12" height="34" /><circle cx="0" cy="80" r="10" /></g></svg>
+        <h3><svg viewBox="0 0 40 40" aria-hidden="true"><g transform="translate(20 20) rotate(45)"><rect x="-2" y="-18" width="4" height="24" fill="#d9d2c1" /><path d="M-2 -18 L0 -22 L2 -18 Z" fill="#d9d2c1" /><rect x="-9" y="5" width="18" height="3.4" rx="1.5" fill="#c4432c" /><rect x="-1.6" y="8" width="3.2" height="8" fill="#c4432c" /><circle cx="0" cy="17.5" r="2.6" fill="#c4432c" /></g></svg> War</h3>
+        <p>When it comes to it.</p>
+        <div class="item"><span class="ic">⚔️</span><h4><span class="no">01</span>Battlefields &amp; the War Room <span class="beta">BETA</span></h4><p>Where two sides meet, the game fights the land war itself, troop by troop. Talk to your generals, draw routes, dig in, fortify, deploy.</p></div>
+        <div class="item"><span class="ic">♟️</span><h4><span class="no">02</span>An enemy that plans <span class="beta">BETA</span></h4><p>Every few days the other side rehearses several plans on a copy of the battle and picks one. The difficulty decides how sharp a commander you face.</p></div>
+        <div class="item"><span class="ic">⚓</span><h4><span class="no">03</span>War at sea <span class="beta">BETA</span></h4><p>Fleets patrol, blockade, escort, seek battle or withdraw. A blockade cuts into the enemy's economy.</p></div>
+        <div class="item"><span class="ic">🕵️</span><h4><span class="no">04</span>Espionage <span class="beta">BETA</span></h4><p>Sabotage, recruit a source or assassinate, with the odds and the risk of capture shown first. An operation never traced is never tied to you.</p></div>
+        <div class="item"><span class="ic">❄️</span><h4><span class="no">05</span>Seasons &amp; weather <span class="beta">BETA</span></h4><p>Rain, mud, snow, frost, heat and fog slow armies down and wear troops out. Lakes and seas can freeze hard enough to cross.</p></div>
+        <div class="item"><span class="ic">🎖️</span><h4><span class="no">06</span>Troops on the map</h4><p>Deploy and move armies and fleets. The AI resolves fronts, and the borders follow.</p></div>
+      </div>
+
+      <div class="ledger-col peace rise">
+        <svg class="watermark" viewBox="0 0 200 200" aria-hidden="true"><path d="M20 170 Q100 150 180 30" fill="none" stroke-width="10" stroke-linecap="round" /><ellipse cx="60" cy="140" rx="28" ry="11" transform="rotate(-40 60 140)" /><ellipse cx="74" cy="168" rx="28" ry="11" transform="rotate(20 74 168)" /><ellipse cx="104" cy="100" rx="28" ry="11" transform="rotate(-62 104 100)" /><ellipse cx="122" cy="128" rx="28" ry="11" transform="rotate(0 122 128)" /><ellipse cx="140" cy="62" rx="26" ry="10" transform="rotate(-76 140 62)" /><ellipse cx="160" cy="88" rx="26" ry="10" transform="rotate(-20 160 88)" /></svg>
+        <h3><svg viewBox="0 0 40 40" aria-hidden="true"><path d="M4 30 Q20 26 36 6" fill="none" stroke="#a3b26b" stroke-width="2.4" stroke-linecap="round" /><ellipse cx="12" cy="23" rx="6" ry="2.6" fill="#a3b26b" transform="rotate(-40 12 23)" /><ellipse cx="16" cy="31" rx="6" ry="2.6" fill="#a3b26b" transform="rotate(20 16 31)" /><ellipse cx="24" cy="14" rx="6" ry="2.6" fill="#a3b26b" transform="rotate(-62 24 14)" /><ellipse cx="28" cy="22" rx="6" ry="2.6" fill="#a3b26b" transform="rotate(0 28 22)" /></svg> Peace</h3>
+        <p>For as long as it lasts.</p>
+        <div class="item"><span class="ic">✉️</span><h4><span class="no">07</span>Diplomacy in your own words</h4><p>Click any country to negotiate, threaten or ally through open conversation. Every government answers in its own voice.</p></div>
+        <div class="item"><span class="ic">🕊️</span><h4><span class="no">08</span>Peace &amp; alliances <span class="beta">BETA</span></h4><p>Losses and blockades wear a country down until it asks for terms. Alliances, defence pacts and guarantees call their members in.</p></div>
+        <div class="item"><span class="ic">🏛️</span><h4><span class="no">09</span>The Political World <span class="beta">BETA</span></h4><p>Governments with their own leaders and factions, institutions whose councils debate and vote, puppets that answer to an overlord.</p></div>
+        <div class="item"><span class="ic">📜</span><h4><span class="no">10</span>Events the AI writes</h4><p>Every time skip plays out the world: crises, elections, markets, discoveries. Some come to you as a scene to play out or let pass.</p></div>
+        <div class="item"><span class="ic">📋</span><h4><span class="no">11</span>Projects &amp; operations</h4><p>Your government's long efforts, from research programmes to covert operations, moved along by events and your advisor.</p></div>
+        <div class="item"><span class="ic">🦉</span><h4><span class="no">12</span>An advisor at your side</h4><p>Guidance, economic analysis and briefings whenever you ask.</p></div>
       </div>
     </div>
-  </section>
 
-  <section id="play">
-    <p class="eyebrow">Up and running in minutes</p>
-    <h2>Three steps to play</h2>
-    <div class="rule"></div>
-    <p class="lead">No accounts, no store, no build tools to wrangle. Download the app for your system, open it, and play.</p>
-    <div class="steps">
-      <div class="step">
-        <div class="n">I</div>
-        <h3>Download</h3>
-        <p>Pick the download for your system: an installer on Windows, a zip on macOS, a .deb package on Linux (AppImage below it for everything else).</p>
-      </div>
-      <div class="step">
-        <div class="n">II</div>
-        <h3>Open it</h3>
-        <p>Run the installer on Windows, or drag the app to Applications on macOS. Nothing else to set up — the app brings everything it needs with it.</p>
-      </div>
-      <div class="step">
-        <div class="n">III</div>
-        <h3>Play</h3>
-        <p>Open Historia opens in its own window. The world map downloads once, with a progress bar, then you connect an AI, pick a scenario and start reshaping history.</p>
-      </div>
+    <div class="archive rise">
+      <div class="archive-head"><span>✦ And the rest of the archive ✦</span></div>
+      <div class="item"><span class="ic">🖌️</span><h4><span class="no">13</span>Draw your own world</h4><p>A full map editor: draw regions, paint owners, place cities, then Apply &amp; Play.</p></div>
+      <div class="item"><span class="ic">🌐</span><h4><span class="no">14</span>A hub of scenarios</h4><p>Import community scenarios in the game or publish your own, all under CC BY 4.0.</p></div>
+      <div class="item"><span class="ic">👥</span><h4><span class="no">15</span>Play together <span class="beta">BETA</span></h4><p>Host a lobby from the desktop app and share its code. Each friend leads a country.</p></div>
+      <div class="item"><span class="ic">🌍</span><h4><span class="no">16</span>Twenty-two languages</h4><p>The whole game is translated, from Arabic to Vietnamese.</p></div>
+      <div class="item"><span class="ic">🤖</span><h4><span class="no">17</span>Your own AI</h4><p>Gemini, OpenAI, Anthropic, any compatible service, or a model on your own computer.</p></div>
+      <div class="item"><span class="ic">🔒</span><h4><span class="no">18</span>Runs on your machine</h4><p>Local-first: your saves and scenarios stay with you.</p></div>
+      <div class="item"><span class="ic">⚖️</span><h4><span class="no">19</span>Free &amp; open source</h4><p>AGPL-3.0 and built by its community. Fork it, mod it, ship it.</p></div>
+      <div class="item"><span class="ic">🎵</span><h4><span class="no">20</span>A score for every campaign <span class="beta">BETA</span></h4><p>Music by Scott Buckley, from the menu to the War Room.</p></div>
     </div>
+  </div>
+</section>
 
-    <div class="runbox" aria-label="Launcher instructions by operating system">
+<!-- ====================================================================== -->
+<section class="section" id="play">
+  <div class="section-in">
+    <p class="eyebrow rise">Up and running in minutes</p>
+    <h2 class="rise">Three steps to the table</h2>
+    <p class="lead rise">No accounts, no store, no build tools. Download the app for your system, open it, and play.</p>
+    <div class="steps3">
+      <div class="s3 rise"><div class="n">I</div><h3>Download</h3><p>Pick the download for your system: an installer on Windows, a zip on macOS, a .deb package on Linux (AppImage below it for everything else).</p></div>
+      <div class="s3 rise"><div class="n">II</div><h3>Open it</h3><p>Run the installer on Windows, or drag the app to Applications on macOS. Nothing else to set up — the app brings everything it needs with it.</p></div>
+      <div class="s3 rise"><div class="n">III</div><h3>Play</h3><p>Open Historia opens in its own window. The world map downloads once, with a progress bar, then you connect an AI, pick a scenario and start reshaping history.</p></div>
+    </div>
+    <div class="runbox rise" aria-label="Launcher instructions by operating system">
       <div class="tabs" role="tablist">
-        <button class="tab" role="tab" data-os="windows" aria-selected="true">🪟 Windows</button>
-        <button class="tab" role="tab" data-os="mac" aria-selected="false">🍎 macOS</button>
-        <button class="tab" role="tab" data-os="linux" aria-selected="false">🐧 Linux</button>
+        <button class="tab" role="tab" data-os="windows" aria-selected="true">Windows</button>
+        <button class="tab" role="tab" data-os="mac" aria-selected="false">macOS</button>
+        <button class="tab" role="tab" data-os="linux" aria-selected="false">Linux</button>
       </div>
       <div class="tab-body on" data-os="windows">Run <b>Open-Historia-Setup.exe</b> and follow the installer, then open <b>Open Historia</b> from the Start Menu. If Windows SmartScreen warns, choose <span class="kbd">More info → Run anyway</span> — the installer isn't code-signed yet.</div>
       <div class="tab-body" data-os="mac">Unzip the download and drag <b>Open Historia</b> into your Applications folder. The first time, right-click it and choose <span class="kbd">Open</span> — the app isn't code-signed yet, so macOS asks for confirmation once. If it says the app is <b>damaged</b> instead, macOS quarantined the download — clear it with <span class="kbd">xattr -dr com.apple.quarantine "/Applications/Open Historia.app"</span> and open it again.</div>
       <div class="tab-body" data-os="linux">On Debian, Ubuntu and derivatives install the <b>.deb</b> (<span class="kbd">sudo apt install ./Open-Historia-amd64.deb</span>) — it lands in your applications menu like any other program. Otherwise use the AppImage: <span class="kbd">chmod +x Open-Historia-x86_64.AppImage</span> and run it, nothing installed system-wide.</div>
     </div>
-  </section>
+  </div>
+</section>
 
-  <section id="download">
-    <p class="eyebrow">Downloads</p>
-    <h2>Pick your platform</h2>
-    <div class="rule"></div>
-    <p class="lead">Desktop is the full experience. The Android app plays on its own — nothing to run alongside it.</p>
+<!-- ====================================================================== -->
+<section class="section" id="download">
+  <div class="section-in">
+    <p class="eyebrow rise">Downloads</p>
+    <h2 class="rise">Pick your platform</h2>
+    <p class="lead rise">Desktop is the full experience. The Android app plays on its own — nothing to run alongside it.</p>
     <div class="dl">
       <!-- data-os-card drives the "Recommended" badge and the primary button:
-           the script below moves both onto the visitor's own platform. The
+           story/site.js moves both onto the visitor's own platform. The
            markup ships with Windows marked so a no-JS visitor still sees one. -->
       <div class="card feature" data-os-card="windows">
         <span class="tag">Recommended</span>
@@ -568,51 +549,15 @@
         <a class="btn btn-ghost" data-beta href="https://github.com/Open-Historia/open-historia/releases/download/android-beta/open-historia-beta.apk">⬇ Beta APK</a>
       </div>
     </div>
-    <p class="hero-note" style="text-align:center;margin-top:22px">Already installed? The app updates itself (see <a href="#faq">How do I update later?</a>). Installing the newest download over the top works too — your saves and scenarios are kept. · <a href="https://github.com/Open-Historia/open-historia/releases" target="_blank" rel="noopener">All releases</a></p>
-  </section>
+    <p class="dl-note">Already installed? The app updates itself (see <a href="#faq">How do I update later?</a>). Installing the newest download over the top works too — your saves and scenarios are kept. · <a href="https://github.com/Open-Historia/open-historia/releases" target="_blank" rel="noopener">All releases</a></p>
+  </div>
+</section>
 
-  <section id="features">
-    <p class="eyebrow">What you can do</p>
-    <h2>A whole world to run</h2>
-    <div class="rule"></div>
-    <div class="feats">
-      <div class="feat"><div class="fi">🗺️</div><h4>Living world map</h4><p>Watch territory, borders, and nations shift turn by turn as history unfolds.</p></div>
-      <div class="feat"><div class="fi">📜</div><h4>AI-generated events</h4><p>Dynamic events shaped by your decisions and the real state of the world.</p></div>
-      <div class="feat"><div class="fi">🤝</div><h4>Natural-language diplomacy</h4><p>Click any country to negotiate, threaten, or ally through open-ended chat.</p></div>
-      <div class="feat"><div class="fi">🎖️</div><h4>Troops &amp; warfare</h4><p>Deploy and maneuver armies; the AI resolves fronts and moves the borders.</p></div>
-      <div class="feat"><div class="fi">🖌️</div><h4>Built-in map editor</h4><p>Draw regions, paint owners, place cities — build a world and hit Apply &amp; Play.</p></div>
-      <div class="feat"><div class="fi">🌐</div><h4>Scenario hub</h4><p>Browse and import community scenarios in-game, or publish your own. Every shared scenario is released under CC BY 4.0.</p></div>
-      <div class="feat"><div class="fi">🦉</div><h4>Strategy advisor</h4><p>Consult an AI advisor for guidance, economic analysis, and situation briefings.</p></div>
-      <div class="feat"><div class="fi">🔒</div><h4>Runs on your machine</h4><p>Self-hostable and local-first — it runs at localhost, with your own AI backend.</p></div>
-      <div class="feat"><div class="fi">⚖️</div><h4>Free &amp; open source</h4><p>AGPL-3.0 licensed and community-built. Fork it, mod it, ship it — as long as your changes stay open too.</p></div>
-      <div class="feat"><div class="fi">🎭</div><h4>Step into the story</h4><p>Now and then a time skip offers an event about you as a scene: Play it out, or Let it pass. Intervene here stops a skip where you want to act.</p></div>
-      <div class="feat"><div class="fi">📋</div><h4>Projects &amp; Operations</h4><p>A board of your government's long efforts, from research programmes to covert operations, moved on by events and your advisor.</p></div>
-      <div class="feat"><div class="fi">🌍</div><h4>Your language</h4><p>The whole game ships translated into 22 languages, from Arabic to Vietnamese, so playing in yours costs no AI request.</p></div>
-    </div>
-  </section>
-
-  <section id="beta">
-    <p class="eyebrow">New in the beta</p>
-    <h2>War, spies and seasons</h2>
-    <div class="rule"></div>
-    <p class="lead">These come to the beta first: a separate app with its own saves that installs beside the stable one. Its download sits under each stable download above.</p>
-    <div class="feats">
-      <div class="feat"><div class="fi">⚔️</div><h4>Battlefields &amp; the War Room</h4><p>Where two sides at war meet, the game fights the land war itself, troop by troop, before the story is told. In the War Room, talk to your generals, draw routes, dig in, fortify a line or deploy fresh troops.</p></div>
-      <div class="feat"><div class="fi">♟️</div><h4>An enemy that plans</h4><p>Every few days the other side draws up several plans and rehearses each on a copy of the battle before it chooses. The difficulty decides how sharp a commander you face.</p></div>
-      <div class="feat"><div class="fi">⚓</div><h4>War at sea</h4><p>Send your fleets to patrol, blockade, escort, seek battle or withdraw. Hostile fleets in reach fight battles of their own, and a blockade cuts into the enemy's economy.</p></div>
-      <div class="feat"><div class="fi">🕊️</div><h4>Peace &amp; alliances</h4><p>Losses, call-ups, lost ground and blockades wear a country down until it asks for terms: the ground and reparations are settled at the table. Alliances, defence pacts and guarantees call their members in.</p></div>
-      <div class="feat"><div class="fi">🕵️</div><h4>Espionage, Part 2</h4><p>Order your networks to sabotage, recruit a source or assassinate, with the odds of success and the risk of capture shown first. An operation never traced is never tied to you.</p></div>
-      <div class="feat"><div class="fi">❄️</div><h4>Seasons &amp; weather</h4><p>Climate zones give every front its seasons. Rain, mud, snow, frost, heat and fog slow armies and wear troops down, and lakes and seas can freeze hard enough to cross.</p></div>
-      <div class="feat"><div class="fi">🏛️</div><h4>The Political World</h4><p>Governments with their own leaders and political forces, institutions whose councils debate and vote, and puppet states that answer to an overlord.</p></div>
-      <div class="feat"><div class="fi">👥</div><h4>Play together</h4><p>Host a lobby from the desktop app and share its invite code: your friends join, and each leads a country of their own.</p></div>
-      <div class="feat"><div class="fi">🎵</div><h4>A score for every campaign</h4><p>Music by Scott Buckley follows you from the menu to the War Room, and scenario designers can choose tracks of their own from the community hub.</p></div>
-    </div>
-  </section>
-
-  <section id="faq">
-    <p class="eyebrow">Good to know</p>
-    <h2>Questions &amp; requirements</h2>
-    <div class="rule"></div>
+<!-- ====================================================================== -->
+<section class="section" id="faq">
+  <div class="section-in">
+    <p class="eyebrow center rise">Good to know</p>
+    <h2 class="center rise">Questions &amp; requirements</h2>
     <div class="faq">
       <details><summary>Do I need to install anything else?</summary><p>No. The desktop app and the Android app bring everything they need: no Node.js, no setup script, no terminal. The desktop app downloads the world map the first time it opens, and the Android app carries it inside. The one thing you supply is an AI — see <a href="/wiki/ai-setup/">Connecting an AI Provider</a>.</p></details>
       <details><summary>Is it really free?</summary><p>Yes. Open Historia is free and open source under the GNU AGPL v3. The AI features connect to an AI provider you choose — see <a href="/wiki/ai-setup/">Connecting an AI Provider</a> or ask in <a href="https://discord.gg/QaqAK7fQAg" target="_blank" rel="noopener">Discord</a> for setup help.</p></details>
@@ -623,499 +568,51 @@
       <details><summary>What is the beta?</summary><p>The game's newest version, ahead of the stable one and less tested. It is a separate app, <b>Open Historia Beta</b>, with its own saves, and installs beside the stable app on Windows, macOS, Linux and Android. Battlefields and the War Room, war at sea, Espionage Part 2, seasons and weather, and shared games come to the beta first. Its download sits under each stable one above, and the stable desktop app offers it after it is installed and after each update.</p></details>
       <details><summary>What about mobile?</summary><p>Download the Android APK and open it — that is the whole setup. Your games live on the phone and the whole world map is inside the app, so it plays even in airplane mode, with no server to run and nothing to point it at. The beta Android app installs beside it. On iPhone and iPad, play the browser version in Safari.</p></details>
     </div>
-  </section>
+  </div>
+</section>
 
-  <section>
-    <div class="band">
-      <h2 style="margin:0">Ready to change history?</h2>
-      <p class="lead" style="margin-top:12px">Download once, open it, and you're playing.</p>
-      <div class="cta-row" style="margin-bottom:0">
-        <a class="btn btn-primary" href="/play/"><span>▶</span> Play now</a>
-        <a id="bandDownload" class="btn btn-ghost" href="#download"><span>⬇</span> <span id="bandLabel">Download Open Historia</span></a>
-      </div>
+<!-- ====================================================================== -->
+<section class="section finale">
+  <svg class="finale-rose" viewBox="-60 -60 120 120" aria-hidden="true"><circle r="56" /><circle r="44" /><path d="M0 -54 L8 -8 L54 0 L8 8 L0 54 L-8 8 L-54 0 L-8 -8 Z" /><path d="M38 -38 L5 -5 L38 38 L5 5 L-38 38 L-5 5 L-38 -38 L-5 -5 Z" /></svg>
+  <div class="section-in">
+    <div class="split rise"><span class="w">⚔ War</span><span class="p">Peace ✦</span></div>
+    <h2 class="rise">The next page is blank.</h2>
+    <p class="lead rise">Download once, open it, and you're playing.</p>
+    <div class="cta-row rise">
+      <a id="bandDownload" class="btn btn-primary" href="#download"><span class="i">⬇</span> <span id="bandLabel">Download Open Historia</span></a>
+      <a class="btn btn-ghost" href="/play/"><span class="i">▶</span> Play now in your browser</a>
     </div>
-  </section>
+  </div>
+</section>
 </main>
 
-<footer>
-  <div class="wrap foot">
-    <div><img class="mark" src="/play/icon-192.png" alt="" width="22" height="22" loading="lazy" /> <b>Open Historia</b> · AGPL-3.0 licensed · built by <a href="https://github.com/Open-Historia/open-historia/graphs/contributors" target="_blank" rel="noopener">contributors</a></div>
-    <div class="fnav">
-      <a href="#download">Download</a>
-      <a href="/wiki/">Wiki</a>
-      <a href="https://github.com/Open-Historia/open-historia" target="_blank" rel="noopener">GitHub</a>
-      <a href="https://discord.gg/QaqAK7fQAg" target="_blank" rel="noopener">Discord</a>
-      <a href="https://www.reddit.com/r/OpenHistoria" target="_blank" rel="noopener">Reddit</a>
-      <a href="https://x.com/open_historia" target="_blank" rel="noopener">X</a>
-      <a href="https://github.com/Open-Historia/open-historia/releases" target="_blank" rel="noopener">Releases</a>
-      <a href="/privacy/">Privacy</a>
-      <a href="/privacy/#choices" data-consent-open>Privacy choices</a>
+<footer class="foot">
+  <div class="foot-in">
+    <div class="foot-top">
+      <div class="foot-brand"><img src="/play/icon-192.png" alt="" width="22" height="22" loading="lazy" /> <span><b>Open Historia</b> · AGPL-3.0 licensed · built by <a href="https://github.com/Open-Historia/open-historia/graphs/contributors" target="_blank" rel="noopener">contributors</a></span></div>
+      <nav class="fnav" aria-label="Footer">
+        <a href="#download">Download</a>
+        <a href="/wiki/">Wiki</a>
+        <a href="https://github.com/Open-Historia/open-historia" target="_blank" rel="noopener">GitHub</a>
+        <a href="https://discord.gg/QaqAK7fQAg" target="_blank" rel="noopener">Discord</a>
+        <a href="https://www.reddit.com/r/OpenHistoria" target="_blank" rel="noopener">Reddit</a>
+        <a href="https://x.com/open_historia" target="_blank" rel="noopener">X</a>
+        <a href="https://github.com/Open-Historia/open-historia/releases" target="_blank" rel="noopener">Releases</a>
+        <a href="/privacy/">Privacy</a>
+        <a href="/privacy/#choices" data-consent-open>Privacy choices</a>
+      </nav>
     </div>
+    <p class="colophon">Colophon · Set in Cinzel and EB Garamond, served from this site. The story's map is the game's own Modern Day map, drawn in the Mercator projection. The campaign told above is an illustration of play: no real government was consulted.</p>
     <p class="foot-legal">Open Historia is an independent, open-source project and is not affiliated with, endorsed, sponsored, approved, or authorized by Pax Historia. Pax Historia has no involvement in the development, operation, or distribution of Open Historia. Pax Historia™ and all associated trademarks, trade names, and logos are the exclusive property of Pax Historia.</p>
   </div>
 </footer>
 
-<!-- Screenshot viewer. Filled in and opened by the gallery script below. -->
+<!-- Screenshot viewer, opened by story/site.js. -->
 <div class="lb" id="lightbox" hidden tabindex="-1" role="dialog" aria-modal="true" aria-label="Screenshot viewer">
   <button class="lb-close" id="lbClose" type="button" aria-label="Close screenshot">✕</button>
-  <button class="lb-nav lb-prev" id="lbPrev" type="button" aria-label="Previous screenshot">‹</button>
-  <figure class="lb-figure" id="lbFigure">
-    <img id="lbImg" src="" alt="" />
-    <figcaption class="lb-cap" id="lbCap"></figcaption>
-  </figure>
-  <button class="lb-nav lb-next" id="lbNext" type="button" aria-label="Next screenshot">›</button>
+  <button class="lb-prev" id="lbPrev" type="button" aria-label="Previous screenshot">‹</button>
+  <figure><img id="lbImg" src="" alt="" /><figcaption id="lbCap"></figcaption></figure>
+  <button class="lb-next" id="lbNext" type="button" aria-label="Next screenshot">›</button>
 </div>
-
-<script>
-(function(){
-  var ua = navigator.userAgent || "";
-  var os = "desktop";
-  if (/Android/i.test(ua)) os = "android";
-  else if (/iPhone|iPad|iPod/i.test(ua)) os = "ios";
-  else if (/Windows/i.test(ua)) os = "windows";
-  else if (/Mac OS X|Macintosh/i.test(ua)) os = "mac";
-  else if (/Linux/i.test(ua)) os = "linux";
-
-  var APK = "https://github.com/Open-Historia/open-historia/releases/download/android/open-historia.apk";
-
-  var label = { windows:"Download for Windows", mac:"Download for macOS", linux:"Download for Linux",
-                android:"Download the Android app", ios:"Download the Desktop app", desktop:"Download for Desktop" }[os];
-  // The desktop app is a real installed application on all three platforms now, so
-  // the button points at a per-OS build instead of one universal zip. Mac is the
-  // exception: Apple Silicon and Intel need different builds and the user agent
-  // can't tell them apart, so it goes to the downloads section to pick.
-  var WIN = "https://github.com/Open-Historia/open-historia/releases/download/desktop-stable/Open-Historia-Setup.exe";
-  // The .deb: it installs to /opt with a root-owned chrome-sandbox, so Chromium's
-  // sandbox works instead of being switched off (the AppImage cannot, see #658).
-  var LINUX = "https://github.com/Open-Historia/open-historia/releases/download/desktop-stable/Open-Historia-amd64.deb";
-  var href = (os === "android") ? APK
-           : (os === "windows") ? WIN
-           : (os === "linux") ? LINUX
-           : "#download";
-
-  // The beta sits beside it: the same platform's beta build, the newest features first.
-  var BETA = "https://github.com/Open-Historia/open-historia/releases/download/";
-  var betaLabel = { windows:"Beta for Windows", mac:"Beta for macOS", linux:"Beta for Linux",
-                    android:"Beta Android app", ios:"Download the Beta", desktop:"Download the Beta" }[os];
-  var betaHref = (os === "android") ? BETA + "android-beta/open-historia-beta.apk"
-               : (os === "windows") ? BETA + "desktop-beta/Open-Historia-Beta-Setup.exe"
-               : (os === "linux") ? BETA + "desktop-beta/Open-Historia-Beta-amd64.deb"
-               : "#download";
-  var btl = document.getElementById("betaLabel"); if (btl) btl.textContent = betaLabel;
-  var btd = document.getElementById("betaDownload"); if (btd) btd.href = betaHref;
-
-  var pl = document.getElementById("primaryLabel"); if (pl) pl.textContent = label;
-  var pd = document.getElementById("primaryDownload"); if (pd) pd.href = href;
-  var bl = document.getElementById("bandLabel"); if (bl) bl.textContent = label;
-  var bd = document.getElementById("bandDownload"); if (bd) bd.href = href;
-  if (os === "ios"){
-    var n = document.getElementById("heroNote");
-    if (n) n.innerHTML = "On iPhone &amp; iPad, tap <b>Demo</b> to try it in Safari — expect lag, and add it to your Home Screen for fullscreen.";
-  }
-
-  // ---------- recommend the visitor's own platform ----------
-  // Change recommended platform install based on visitor's own platform
-  (function recommendPlatform(){
-    var want = ["windows","mac","linux","android"].indexOf(os) >= 0 ? os : "windows";
-    var cards = Array.prototype.slice.call(document.querySelectorAll(".dl .card[data-os-card]"));
-    if (!cards.length) return;
-
-    cards.forEach(function(card){
-      var isTarget = card.getAttribute("data-os-card") === want;
-      card.classList.toggle("feature", isTarget);
-
-      var tag = card.querySelector(".tag");
-      if (isTarget && !tag){
-        tag = document.createElement("span");
-        tag.className = "tag";
-        tag.textContent = "Recommended";
-        card.insertBefore(tag, card.firstChild);
-      } else if (!isTarget && tag){
-        tag.parentNode.removeChild(tag);
-      }
-
-      var btns = card.querySelectorAll(".btn");
-      Array.prototype.forEach.call(btns, function(b, i){
-        var primary = isTarget && i === 0;
-        b.classList.toggle("btn-primary", primary);
-        b.classList.toggle("btn-ghost", !primary);
-      });
-    });
-  })();
-
-  // ---------- download sizes, read from the GitHub releases API ----------
-  // auto update file sizes with github API
-  var GH_REPO = "Open-Historia/open-historia";
-  var GH_TAGS = ["desktop-stable", "android"];   // the rolling tags the cards link to
-  var SIZE_KEY = "oh:asset-sizes:v1";            // bump v1 to invalidate early
-  var SIZE_TTL = 6 * 60 * 60 * 1000;
-
-  function fmtSize(bytes){
-    var mb = bytes / 1048576;
-    if (mb >= 1024) return (Math.round(mb / 102.4) / 10) + " GB";
-    // A tenth of a MB is noise on a 260 MB installer but not on a 21 MB APK.
-    return (mb >= 100 ? Math.round(mb) : Math.round(mb * 10) / 10) + " MB";
-  }
-
-  function sizeLabel(spec, sizes){
-    var vals = [];
-    spec.split("|").forEach(function(name){
-      var v = sizes[name.trim()];
-      if (typeof v === "number") vals.push(v);
-    });
-    if (!vals.length) return null;
-    var lo = fmtSize(Math.min.apply(null, vals));
-    var hi = fmtSize(Math.max.apply(null, vals));
-    if (lo === hi) return lo;
-    // Drop the repeated unit ("270–285 MB"), keep both when they differ.
-    var loU = lo.split(" ")[1], hiU = hi.split(" ")[1];
-    return (loU === hiU ? lo.split(" ")[0] : lo) + "–" + hi;
-  }
-
-  function applySizes(sizes){
-    var nodes = document.querySelectorAll("[data-size]");
-    Array.prototype.forEach.call(nodes, function(el){
-      var text = sizeLabel(el.getAttribute("data-size") || "", sizes);
-      if (text) el.textContent = text;   // missing asset: the fallback stands
-    });
-  }
-
-  function readSizes(){
-    try {
-      var c = JSON.parse(localStorage.getItem(SIZE_KEY) || "null");
-      if (!c || !c.t || (Date.now() - c.t) > SIZE_TTL) return null;
-      return c.s;
-    } catch(e){ return null; }
-  }
-  function writeSizes(sizes){
-    try { localStorage.setItem(SIZE_KEY, JSON.stringify({ t: Date.now(), s: sizes })); } catch(e){}
-  }
-
-  // Unauthenticated GitHub allows 60 requests per hour per IP and this costs two,
-  // so the result is cached; repeat visits inside the TTL hit no network at all.
-  (function loadSizes(){
-    if (!document.querySelector("[data-size]")) return;
-    var cached = readSizes();
-    if (cached){ applySizes(cached); return; }
-    if (!window.fetch || !window.Promise) return;
-
-    Promise.all(GH_TAGS.map(function(tag){
-      return fetch("https://api.github.com/repos/" + GH_REPO + "/releases/tags/" + tag,
-                   { headers: { "Accept": "application/vnd.github+json" } })
-        .then(function(r){ return r.ok ? r.json() : null; })
-        .catch(function(){ return null; });   // one dead tag must not sink the rest
-    })).then(function(releases){
-      var sizes = {};
-      releases.forEach(function(rel){
-        if (!rel || !rel.assets) return;
-        rel.assets.forEach(function(a){ sizes[a.name] = a.size; });
-      });
-      if (Object.keys(sizes).length){ writeSizes(sizes); applySizes(sizes); }
-    });
-  })();
-
-// Gallery drift. The set is tripled and the scroll position kept in the middle
-  // copy so that a full set sits to either side and the seam never shows-aka it's infinite.
-  var track = document.getElementById("gtrack");
-  if (track){
-    var setSize = track.children.length;
-    var originals = Array.prototype.slice.call(track.children);
-
-    // Read before the strip is tripled, and data-shot set here so the clones
-    // carry it: a click on copy three opens the same image as copy one.
-    var shots = originals.map(function(card, i){
-      var img = card.querySelector("img");
-      var tag = card.querySelector(".shot-tag");
-      card.setAttribute("data-shot", i);
-      return {
-        src: img ? img.getAttribute("src") : "",
-        alt: img ? (img.getAttribute("alt") || "") : "",
-        tag: tag ? tag.textContent.trim() : ""
-      };
-    });
-
-    for (var copy = 0; copy < 2; copy++){
-      originals.forEach(function(c){
-        var clone = c.cloneNode(true);
-        clone.setAttribute("aria-hidden", "true");
-        // A clone must never compete with the real first image for priority.
-        var img = clone.querySelector("img");
-        if (img){ img.setAttribute("alt",""); img.setAttribute("loading","lazy"); img.removeAttribute("fetchpriority"); }
-        track.appendChild(clone);
-      });
-    }
-
-    // Originals only: twelve tab stops for four images would be a trap.
-    originals.forEach(function(card, i){
-      card.setAttribute("tabindex", "0");
-      card.setAttribute("role", "button");
-      card.setAttribute("aria-label", "View screenshot " + (i + 1) + " full size");
-    });
-
-    var SPEED = 22;        // px per second
-    var RESUME = 2500;     // ms of idleness before the drift picks up again
-    var SEG = 0;           // width of one copy of the set, in px
-    var pos = 0, last = 0, idle = 0, held = false, dragging = false, off = false, raf = 0, lbOpen = false;
-
-    // Measured from the DOM, not scrollWidth/3: the track's padding and one
-    // fewer gap put that a few px off. The first-card-to-first-clone offset is
-    // exact by construction.
-    function measure(){
-      var a = track.children[0], b = track.children[setSize];
-      if (!a || !b) return;
-      var w = b.offsetLeft - a.offsetLeft;
-      if (w > 0 && Math.abs(w - SEG) > 0.5){
-        SEG = w;
-        pos = SEG;
-        track.scrollLeft = SEG;
-      }
-    }
-
-    // Pull the position back into the middle copy. The 1px slack is load-bearing:
-    // scrollLeft rounds to device pixels, so a bare `< SEG` test can read back a
-    // hair under and fire every frame, adding a copy each time - which looks like
-    // a strip standing perfectly still.
-    function wrap(){
-      if (SEG <= 0) return;
-      var sl = track.scrollLeft;
-      if (sl >= SEG * 2){ track.scrollLeft = sl - SEG; pos -= SEG; }
-      else if (sl < SEG - 1){ track.scrollLeft = sl + SEG; pos += SEG; }
-    }
-
-    function pause(){
-      held = true;
-      clearTimeout(idle);
-      idle = setTimeout(function(){ held = false; pos = track.scrollLeft; }, RESUME);
-    }
-
-    function tick(now){
-      raf = requestAnimationFrame(tick);
-      if (!SEG){ measure(); return; }
-      if (!last) last = now;
-      var dt = Math.min((now - last) / 1000, 0.1);   // clamp: a backgrounded tab
-      last = now;                                    // must not lurch on return
-      // Deliberately ignores prefers-reduced-motion: slow and non-essential, and
-      // touching the strip stops it. Re-add `calm.matches` here to respect it.
-      if (off || held || dragging || lbOpen) return; // lbOpen: viewer is up
-      pos += SPEED * dt;
-      // Wrap the tracked float, never a value read back out of the DOM, so
-      // rounding cannot feed back into the position.
-      if (pos >= SEG * 2) pos -= SEG;
-      track.scrollLeft = pos;
-    }
-
-    // A vertical wheel is the page scrolling past a full-width band, not
-    // interaction with the strip; treating it as such would pause near-permanently.
-    ["touchstart","keydown"].forEach(function(evt){
-      track.addEventListener(evt, pause, { passive:true });
-    });
-
-    track.addEventListener("wheel", function(e){
-      if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) pause();
-    }, { passive:true });
-
-    // ---------- click a screenshot to open it full size ----------
-    // A press counts as a click only while the pointer stays put, past CLICK_SLOP px it is a drag
-    var CLICK_SLOP = 6;
-    var press = null;
-
-    var lb = document.getElementById("lightbox");
-    var lbImg = document.getElementById("lbImg");
-    var lbCap = document.getElementById("lbCap");
-    var lbFigure = document.getElementById("lbFigure");
-    var lbCloseBtn = document.getElementById("lbClose");
-    var lbPrevBtn = document.getElementById("lbPrev");
-    var lbNextBtn = document.getElementById("lbNext");
-    var lbIndex = 0, lbFade = 0, lbReturn = null, lbOverflow = "", lbPad = "";
-
-    // closest(), stopping at the track so it can't return a card outside it.
-    function cardFrom(node){
-      while (node && node !== track){
-        if (node.classList && node.classList.contains("gcard")) return node;
-        node = node.parentNode;
-      }
-      return null;
-    }
-    function shotIndex(card){
-      var i = card ? parseInt(card.getAttribute("data-shot"), 10) : NaN;
-      return isNaN(i) ? -1 : i;
-    }
-
-    function lbRender(i){
-      if (!lb || !shots.length) return;
-      lbIndex = ((i % shots.length) + shots.length) % shots.length;
-      var s = shots[lbIndex];
-      if (lbImg.getAttribute("src") !== s.src) lbImg.src = s.src;   // the strip's file: cached
-      lbImg.alt = s.alt || ("Open Historia screenshot " + (lbIndex + 1));
-      lbCap.textContent = (s.tag ? s.tag + " · " : "") + (lbIndex + 1) + " / " + shots.length;
-      var many = shots.length > 1;
-      lbPrevBtn.hidden = !many;
-      lbNextBtn.hidden = !many;
-    }
-
-    function lbOpenAt(i){
-      if (!lb || lbOpen || i < 0) return;
-      lbReturn = document.activeElement;
-      lbRender(i);
-      clearTimeout(lbFade);
-      lb.hidden = false;
-      // Two frames: it must be laid out before the class can animate.
-      requestAnimationFrame(function(){
-        requestAnimationFrame(function(){ lb.classList.add("on"); });
-      });
-      lbOpen = true;        // tick() reads this every frame: the drift stops
-      clearTimeout(idle);   // and no pending timer may restart it
-      // Hold the page still; pad for the scrollbar so nothing shifts.
-      var bar = window.innerWidth - document.documentElement.clientWidth;
-      lbOverflow = document.body.style.overflow;
-      lbPad = document.body.style.paddingRight;
-      document.body.style.overflow = "hidden";
-      if (bar > 0) document.body.style.paddingRight = bar + "px";
-      document.addEventListener("keydown", lbKey, true);
-      lb.focus();
-    }
-
-    function lbClose(){
-      if (!lbOpen) return;
-      lbOpen = false;
-      lb.classList.remove("on");
-      clearTimeout(lbFade);
-      lbFade = setTimeout(function(){ lb.hidden = true; }, 220);   // after the fade
-      document.removeEventListener("keydown", lbKey, true);
-      document.body.style.overflow = lbOverflow;
-      document.body.style.paddingRight = lbPad;
-      // Resume from wherever the strip sits, after the usual idle delay.
-      last = 0;
-      pos = track.scrollLeft;
-      pause();
-      if (lbReturn && lbReturn.focus) lbReturn.focus();
-      lbReturn = null;
-    }
-
-    function lbKey(e){
-      if (!lbOpen) return;
-      var k = e.key;
-      if (k === "Escape" || k === "Esc"){ e.preventDefault(); lbClose(); }
-      else if (k === "ArrowRight"){ e.preventDefault(); lbRender(lbIndex + 1); }
-      else if (k === "ArrowLeft"){ e.preventDefault(); lbRender(lbIndex - 1); }
-      else if (k === "Tab"){
-        // Keep tab inside the dialog.
-        var stops = [lbPrevBtn, lbNextBtn, lbCloseBtn].filter(function(b){ return b && !b.hidden; });
-        if (!stops.length) return;
-        var at = stops.indexOf(document.activeElement);
-        var next = at === -1 ? (e.shiftKey ? stops.length - 1 : 0) : (e.shiftKey ? at - 1 : at + 1);
-        e.preventDefault();
-        stops[(next + stops.length) % stops.length].focus();
-      }
-    }
-
-    if (lb){
-      lbCloseBtn.addEventListener("click", lbClose);
-      lbPrevBtn.addEventListener("click", function(){ lbRender(lbIndex - 1); });
-      lbNextBtn.addEventListener("click", function(){ lbRender(lbIndex + 1); });
-      // Anywhere off the image closes it.
-      lb.addEventListener("click", function(e){
-        if (e.target === lb || e.target === lbFigure || e.target === lbCap) lbClose();
-      });
-    }
-
-    // Enter and Space do what a click does.
-    track.addEventListener("keydown", function(e){
-      if (e.key !== "Enter" && e.key !== " " && e.key !== "Spacebar") return;
-      var card = cardFrom(e.target);
-      if (!card) return;
-      e.preventDefault();        // Space would page the document down
-      lbOpenAt(shotIndex(card));
-    });
-
-    // Drag to scroll for mice. Touch is left alone - the browser's own panning
-    // has momentum and rubber banding a reimplementation would not match.
-    var startX = 0, startLeft = 0;
-    track.addEventListener("pointerdown", function(e){
-      // Every pointer type: a tap opens the viewer on a phone too, where the drag path below never runs.
-      var card = cardFrom(e.target);
-      press = card ? { id:e.pointerId, x:e.clientX, y:e.clientY, card:card } : null;
-
-      if (e.pointerType === "touch" || e.button !== 0) return;
-      dragging = true;
-      startX = e.clientX;
-      startLeft = track.scrollLeft;
-      clearTimeout(idle);
-      track.classList.add("dragging");
-      track.setPointerCapture(e.pointerId);
-      e.preventDefault();          // otherwise the browser starts an image drag
-    });
-    track.addEventListener("pointermove", function(e){
-      if (press && e.pointerId === press.id &&
-          (Math.abs(e.clientX - press.x) > CLICK_SLOP || Math.abs(e.clientY - press.y) > CLICK_SLOP)){
-        press = null;              // too far: a drag, not a click
-      }
-      if (!dragging) return;
-      track.scrollLeft = startLeft - (e.clientX - startX);
-      wrap();
-      // wrap() may have shifted a whole copy; re-anchor so the card stays under
-      // the cursor.
-      startLeft = track.scrollLeft + (e.clientX - startX);
-      pos = track.scrollLeft;
-    });
-    function endDrag(e){
-      if (!dragging) return;
-      dragging = false;
-      track.classList.remove("dragging");
-      if (e && e.pointerId != null && track.hasPointerCapture(e.pointerId)) track.releasePointerCapture(e.pointerId);
-      pos = track.scrollLeft;
-      pause();                     // drift picks up again after the idle delay
-    }
-    track.addEventListener("pointerup", function(e){
-      var card = (press && press.id === e.pointerId) ? press.card : null;
-      press = null;
-      endDrag(e);
-      if (card) lbOpenAt(shotIndex(card));
-    });
-    // A touch that became a scroll lands here, not at pointerup - which is how
-    // a swipe is told apart from a tap.
-    track.addEventListener("pointercancel", function(e){
-      press = null;
-      endDrag(e);
-    });
-
-    track.addEventListener("scroll", function(){
-      if (held || dragging){ wrap(); pos = track.scrollLeft; }
-    }, { passive:true });
-
-    // Card width is viewport-relative, so a resize changes the copy width.
-    window.addEventListener("resize", function(){ SEG = 0; measure(); });
-    window.addEventListener("load", measure);
-
-    // Idle off screen rather than cancelling the loop: one missed callback left
-    // the strip stuck for good.
-    if ("IntersectionObserver" in window){
-      new IntersectionObserver(function(entries){
-        entries.forEach(function(e){ off = !e.isIntersecting; if (!off) last = 0; });
-      }, { threshold:0 }).observe(track);
-    }
-
-    measure();
-    raf = requestAnimationFrame(tick);
-  }
-  Array.prototype.forEach.call(track.querySelectorAll("img"), function(img){
-  if (img.complete && img.naturalWidth){ img.classList.add("loaded"); return; }
-    img.addEventListener("load", function(){
-      img.classList.add("loaded");
-      SEG = 0; measure();
-    }, { once:true });
-  });
-  SEG = 0; measure();
-
-  var tabs = Array.prototype.slice.call(document.querySelectorAll(".tab"));
-  var bodies = Array.prototype.slice.call(document.querySelectorAll(".tab-body"));
-  function select(name){
-    tabs.forEach(function(t){ t.setAttribute("aria-selected", t.dataset.os === name); });
-    bodies.forEach(function(b){ b.classList.toggle("on", b.dataset.os === name); });
-  }
-  tabs.forEach(function(t){ t.addEventListener("click", function(){ select(t.dataset.os); }); });
-  if (["windows","mac","linux"].indexOf(os) >= 0) select(os);
-})();
-</script>
 </body>
 </html>
