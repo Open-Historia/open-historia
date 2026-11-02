@@ -16,6 +16,7 @@ import React, { useMemo } from "react";
 import { Layer, Source, useMap } from "react-map-gl/maplibre";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
 import { warSettingsOf } from "../../runtime/warSettings.js";
+import { worldMeasureOf } from "../../../server/mapDistance.js";
 import { useLayerOrder } from "./useLayerOrder.js";
 import { fortificationFeatures } from "./warGeographyFeatures.js";
 
@@ -23,7 +24,8 @@ const WALLS = "war-walls-source";
 const LAYERS = ["war-walls-rubble", "war-walls-planned", "war-walls-progress", "war-walls-casing", "war-walls-core", "war-walls-teeth"];
 const NONE = Object.freeze([]);
 const selectLines = (world) => (warSettingsOf(world).mechanics.walls && Array.isArray(world?.fortifications) ? world.fortifications : NONE);
-const selectFlat = (world) => world?.projection?.type === "freeform";
+// How the map measures (server/mapDistance.js): the same object for the same projection.
+const selectMeasure = (world) => worldMeasureOf(world);
 const selectDate = (game) => String(game?.gameDate || game?.startDate || "");
 
 const WALL = "#1d1915";
@@ -41,9 +43,9 @@ const WarGeographyLayers = () => {
   const { current: mapRef } = useMap();
   const map = mapRef?.getMap?.() ?? mapRef ?? null;
   const lines = useRuntimeState("world", selectLines);
-  const flat = useRuntimeState("world", selectFlat);
+  const measure = useRuntimeState("world", selectMeasure);
   const date = useRuntimeState("game", selectDate);
-  const walls = useMemo(() => fortificationFeatures({ lines, date, flat }), [lines, date, flat]);
+  const walls = useMemo(() => fortificationFeatures({ lines, date, measure }), [lines, date, measure]);
   const walled = walls.features.length > 0;
   useLayerOrder(map, LAYERS, walled);
 

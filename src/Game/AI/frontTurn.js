@@ -43,7 +43,7 @@ import { anyMechanic } from "../../runtime/fronts/mechanics.js";
 import { pointInFrame } from "../../runtime/fronts/frame.js";
 import { foldBattlefieldName, normalizeBattlefields } from "../../runtime/fronts/record.js";
 import { TRANSPORT_LOAD_USUAL, TRANSPORT_ORDERS, isUnderWay, normalizeTransports, orderTransport } from "../../runtime/fronts/transports.js";
-import { buildWorldGrid, distanceTo, seasOf, worldSheetKey } from "../../runtime/fronts/worldGrid.js";
+import { buildWorldGrid, distanceTo, measureOptions, seasOf, worldSheetKey } from "../../runtime/fronts/worldGrid.js";
 import { waterTypeIds } from "../../runtime/regionTypes.js";
 import { chooseFleetPostures } from "../../runtime/naval/admiral.js";
 import { runNaval } from "../../runtime/naval/engine.js";
@@ -1104,7 +1104,7 @@ export const runTurnFronts = async ({
       let sheet = clean(map?.key) && arenas ? arenas.get(key) ?? null : null;
       if (!sheet) {
         const shapes = await readRegions();
-        sheet = shapes ? buildWorldGrid(shapes, { flat: map?.flat === true, scale: map?.scale, water }) : null;
+        sheet = shapes ? buildWorldGrid(shapes, { ...measureOptions(map), water }) : null;
         if (sheet && clean(map?.key) && arenas) arenas.set(key, sheet);
       }
       for (const strike of adrift) {
@@ -1273,7 +1273,7 @@ export const runTurnFronts = async ({
       let sheet = clean(map?.key) && arenas ? arenas.get(key) ?? null : null;
       if (!sheet) {
         const shapes = await readRegions();
-        sheet = shapes ? buildWorldGrid(shapes, { flat: map?.flat === true, scale: map?.scale, water }) : null;
+        sheet = shapes ? buildWorldGrid(shapes, { ...measureOptions(map), water }) : null;
         if (sheet && clean(map?.key) && arenas) arenas.set(key, sheet);
       }
       const seaInput = {
@@ -1287,8 +1287,7 @@ export const runTurnFronts = async ({
         grid: sheet,
         cities: asArray(map?.cities),
         seas: asArray(world?.seas).map((entry) => ({ name: clean(entry?.name), lng: Number(entry?.point?.[0] ?? entry?.lng), lat: Number(entry?.point?.[1] ?? entry?.lat) })),
-        flat: map?.flat === true,
-        scale: map?.scale,
+        ...measureOptions(map),
         caps: unitCaps ?? {},
         raised: asArray(world?.naviesRaised),
         era: Number.isInteger(era) ? era : null,

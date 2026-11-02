@@ -64,8 +64,12 @@ const besideOf = (grid, cell) => {
 // null without a sheet.
 export const chartOf = ({ grid = null, controllerOf = null, groupOf = null, locate = null } = {}) => {
   if (!grid || typeof controllerOf !== "function") return null;
-  // How long a cell's side is, north to south.
-  const cellKm = Math.max(0.001, grid.step * (grid.flat ? Number(grid.scale) || 111.2 : 111.2));
+  // How long a cell's side is, north to south: on a sheet that measures row by
+  // row (a flat one, a world projection's), its middle row's.
+  const rowsKm = grid.stepKm?.downRow;
+  const cellKm = rowsKm?.length
+    ? Math.max(0.001, rowsKm[rowsKm.length >> 1])
+    : Math.max(0.001, grid.step * (grid.flat ? Number(grid.scale) || 111.2 : 111.2) * (Number(grid.factor) > 0 ? grid.factor : 1));
   const cellsFor = (km) => Math.max(1, Math.ceil(km / cellKm));
   const holders = new Map();
   const holderOfRegion = (id) => {

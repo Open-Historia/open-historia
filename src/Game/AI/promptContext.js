@@ -4,8 +4,8 @@ import { resolveAllCountryTags, resolveCountryTags } from "../../runtime/country
 import { buildOwnerAliasMap, canonicalOwnerName, toCountryName } from "../../runtime/ownerNames.js";
 import {
   buildActionDisplayText,
-  haversineKm,
   isPolityLandless,
+  kmOnMap,
   normalizeActionEntry,
   normalizeActions,
   normalizeChats,
@@ -1236,7 +1236,7 @@ export const buildPendingUnitOrdersText = (world) => {
   return orders.map((order) => {
     const unit = unitById.get(order.unitId);
     if (!unit) return null;
-    const remaining = Math.round(haversineKm(unit.lat, unit.lng, order.toLat, order.toLng));
+    const remaining = Math.round(kmOnMap(unit.lat, unit.lng, order.toLat, order.toLng));
     if (order.kind === "patrol") {
       return `- ${handles.get(unit.id) || unit.name} (${unit.type}, owner ${unit.ownerCode}) is working a ` +
         `${Math.round(order.radiusKm)} km station centred on lat ${order.toLat.toFixed(2)}, lng ${order.toLng.toFixed(2)}.`;

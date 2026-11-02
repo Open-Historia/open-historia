@@ -40,7 +40,7 @@ import { normalizeBattlefields } from "../../runtime/fronts/record.js";
 import { isUnderWay, normalizeTransports } from "../../runtime/fronts/transports.js";
 import { AIR_CITY_GDP, airStrikesBlock, normalizeAirStrikes, withTurnAirStrikes } from "../../runtime/fronts/airStrike.js";
 import { findWay } from "../../runtime/fronts/wayfinder.js";
-import { buildWorldGrid, worldSheetKey } from "../../runtime/fronts/worldGrid.js";
+import { buildWorldGrid, measureOptions, worldSheetKey } from "../../runtime/fronts/worldGrid.js";
 import { regionLocatorOf } from "../../runtime/regionLocator.js";
 import { waterTypeIds } from "../../runtime/regionTypes.js";
 import { chartOf } from "../../runtime/warRoomChart.js";
@@ -49,7 +49,7 @@ import { createFrontRun } from "../../runtime/fronts/engine.js";
 import { getActiveWorldDirection, isActiveFeatureEnabled } from "../../runtime/gameFeatures.js";
 import { normalizeDifficulty } from "../../runtime/difficulty.js";
 import { humanCountriesOf } from "../../runtime/humanPolities.js";
-import { FREEFORM, normalizeProjection } from "../../../server/mapProjection.js";
+import { engineMapOf, worldMeasureOf } from "../../../server/mapDistance.js";
 import { stolenPlansBlock, turnPlanned, warRoomIntel } from "./frontPlans.js";
 import { battlefieldPowers, buildFrontsBlock } from "./frontPrompt.js";
 import { buildScenarioFronts, scenarioFrontsPending } from "./frontScenario.js";
@@ -119,7 +119,10 @@ const readFrontMap = async (world, game, campaignId) => {
   const structures = asArray(world?.markers)
     .map((marker) => ({ name: clean(marker?.name), kind: clean(marker?.kind), owner: clean(marker?.ownerCode), lng: Number(marker?.lng), lat: Number(marker?.lat) }))
     .filter((entry) => entry.name && Number.isFinite(entry.lng) && Number.isFinite(entry.lat));
-  const projection = normalizeProjection(world?.projection);
+  // How the map measures (server/mapDistance.js): nothing for plain Mercator,
+  // a flat sheet's scale for a freeform map, a world projection's table and its
+  // scale line otherwise. Part of the key, so a map measured anew is a new sheet.
+  const measure = worldMeasureOf(world);
   const key = [
     clean(campaignId) || "game",
     regionIds.length,
@@ -127,14 +130,15 @@ const readFrontMap = async (world, game, campaignId) => {
     hashOf([...names.values()].join("\u0002")),
     cities.length,
     hashOf(JSON.stringify(renames)),
+    ...(measure.plain ? [] : [hashOf(measure.key)]),
   ].join(":");
   return {
     baseOwners,
     names,
     regionIds,
-    // A flat sheet is a map with no globe behind it; nothing in the game says
-    // how many kilometres its degree is, so it is the world's.
-    map: { key, cities, structures, flat: projection.type === FREEFORM },
+    // A flat sheet is a map with no globe behind it: its scale line (the
+    // Workshop's Projection panel) says how many kilometres its degree is.
+    map: { key, cities, structures, ...engineMapOf(measure) },
   };
 };
 
@@ -469,7 +473,7 @@ export const citiesFollowCountries = async ({ world = {}, baseWorld = null, game
       const regions = shapes ? engineRegionsOf(shapes, { nameOf: (id) => front.names.get(id) }) : null;
       // (The map could not be read: nothing is moved and nothing is noted, so it is tried again next turn.)
       if (asArray(regions).length === 0) return world;
-      grid = buildWorldGrid(regions, { flat: front.map.flat === true, scale: front.map.scale, water });
+      grid = buildWorldGrid(regions, { ...measureOptions(front.map), water });
       if (grid) kept.set(sheet, grid);
     }
     if (!grid) return world;
@@ -734,7 +738,7 @@ export const transportWaysFor = async ({ world = {}, game = {}, campaignId = "",
       const shapes = typeof loadRegions === "function" ? await loadRegions() : null;
       const regions = shapes ? engineRegionsOf(shapes, { nameOf: (id) => front.names.get(id) }) : null;
       if (asArray(regions).length === 0) return found;
-      grid = buildWorldGrid(regions, { flat: front.map.flat === true, scale: front.map.scale, water });
+      grid = buildWorldGrid(regions, { ...measureOptions(front.map), water });
       if (grid) kept.set(sheet, grid);
     }
     if (!grid) return found;
@@ -806,7 +810,7 @@ export const warRoomChartFor = async ({ world = {}, game = {}, campaignId = "", 
       const regions = shapes ? engineRegionsOf(shapes, { nameOf: (id) => front.names.get(id) }) : null;
       if (asArray(regions).length === 0) return null;
       if (!grid) {
-        grid = buildWorldGrid(regions, { flat: front.map.flat === true, scale: front.map.scale, water });
+        grid = buildWorldGrid(regions, { ...measureOptions(front.map), water });
         if (grid) kept.set(sheet, grid);
       }
       if (!grid) return null;

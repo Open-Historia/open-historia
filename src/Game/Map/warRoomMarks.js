@@ -18,6 +18,8 @@
 
 import { addGameDays, compareGameDates } from "../../runtime/gameDates.js";
 import { arrowHead } from "./warRoomGeometry.js";
+import { mapRing } from "../../../server/mapDistance.js";
+import { currentMapMeasure } from "../../runtime/mapMeasure.js";
 
 export const LINE_COLOURS = Object.freeze({ 3: "#d8c27a", 4: "#d9ad4f", 5: "#e09440", 6: "#e07a36", 7: "#d95f30", 8: "#c9452c", 9: "#b02d2a", 10: "#f4f7fb" });
 export const FLEET_COLOURS = Object.freeze({ fleet: "#c9a54c", picked: "#e9b949", course: "#f4f7fb" });
@@ -73,6 +75,9 @@ export const lineFeatures = ({ lines = [], draft = null, level = 5, player = "",
 
 // A ring of `km` round a place on the globe, as [lng, lat] points, closed.
 export const ringAround = (lng, lat, km, points = RING_POINTS) => {
+  // (A map that is not plain Mercator draws it by its own measure: server/mapDistance.js.)
+  const measure = currentMapMeasure();
+  if (!measure.plain) return mapRing(measure, lng, lat, Math.max(0, Number(km) || 0), points);
   const delta = Math.max(0, Number(km) || 0) / EARTH_KM;
   const phi = lat * RAD;
   const lambda = lng * RAD;

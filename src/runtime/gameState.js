@@ -58,11 +58,13 @@ import {
   DEFAULT_PATROL_RADIUS_KM,
   daysBetweenDates,
   haversineKm,
+  kmOnMap,
   maxTravelKm,
   patrolPoint,
   stepToward,
   wrapLng,
 } from "./unitMotion.js";
+import { noteMapMeasure } from "./mapMeasure.js";
 import { compareGameDates, normalizeGameDate } from "./gameDates.js";
 import { normalizeBattlefields, withWarIdFrontsRenamed } from "./fronts/record.js";
 import { normalizeTransports } from "./fronts/transports.js";
@@ -1359,7 +1361,7 @@ export const normalizeUnits = (units) =>
 // re-exported here because promptContext.js and the order pruning below have
 // always imported it from this module. There used to be two copies of this
 // function (here and unitCombat.js's `distanceKm`); now there is one.
-export { haversineKm };
+export { haversineKm, kmOnMap };
 
 const PENDING_ORDER_KIND_SET = new Set(["move", "patrol"]);
 
@@ -1437,7 +1439,7 @@ export const pruneSatisfiedUnitOrders = (units, orders) => {
     // it there left a division 59 km short of its destination reading "moving" with
     // nothing to move it. The radius is for a unit already standing near.
     if (unit.status === "moving") return true;
-    return haversineKm(unit.lat, unit.lng, order.toLat, order.toLng) > PENDING_ORDER_ARRIVAL_KM;
+    return kmOnMap(unit.lat, unit.lng, order.toLat, order.toLng) > PENDING_ORDER_ARRIVAL_KM;
   });
 };
 
@@ -2920,7 +2922,7 @@ export const buildOwnerFootprint = (world, ownerCode, extraAnchors = []) => {
 const nearestKm = (point, anchors) => {
   let best = Infinity;
   for (const anchor of anchors) {
-    const distance = haversineKm(point.lat, point.lng, anchor.lat, anchor.lng);
+    const distance = kmOnMap(point.lat, point.lng, anchor.lat, anchor.lng);
     if (distance < best) best = distance;
   }
   return best;
@@ -3131,7 +3133,7 @@ export const applyUnitOpBatch = (units, orders, ops, context = {}) => {
               posture,
               era,
               seaShare: op.seaShare ?? null,
-              remainingKm: haversineKm(unit.lat, unit.lng, op.toLat, op.toLng),
+              remainingKm: kmOnMap(unit.lat, unit.lng, op.toLat, op.toLng),
             });
         const step = stepToward(unit, { lng: op.toLng, lat: op.toLat }, budget);
 
@@ -3303,7 +3305,7 @@ export const advanceStandingOrders = (
         posture: unit.posture,
         era: eraSettingOf(world),
         seaShare: order.seaShare ?? null,
-        remainingKm: haversineKm(unit.lat, unit.lng, order.toLat, order.toLng),
+        remainingKm: kmOnMap(unit.lat, unit.lng, order.toLat, order.toLng),
       }),
     );
     if (step.arrived && unit.posture === "patrol") stations.set(unit.id, { lng: step.lng, lat: step.lat, type: unit.type });
@@ -4783,14 +4785,18 @@ export const readWorldStateView = async ({ force = false } = {}) => {
   worldViewRaw = raw;
   worldViewCatalog = catalog;
   worldViewNormalized = normalized;
+  noteMapMeasure(normalized);
   return normalized;
 };
 
-export const readWorldState = async ({ force = false } = {}) =>
-  withMapClaims(
+export const readWorldState = async ({ force = false } = {}) => {
+  const world = withMapClaims(
     normalizeWorldState(await readJson(JSON_URLS.world, { defaultValue: WORLD_DEFAULTS, force })),
     getPrimedScenarioRegionCatalog(),
   );
+  noteMapMeasure(world);
+  return world;
+};
 
 // Same-tab cache agreement after a country Stats commit.
 //
@@ -4860,6 +4866,7 @@ export const primeCountryStatsWorkerCommit = async ({
 
 export const writeWorldState = async (world, options = {}) => {
   const normalized = normalizeWorldState(world);
+  noteMapMeasure(normalized);
   // Polity names, aliases and notes written during play are not queued for
   // translation: the AI writes them in the player's language already, and the
   // player types theirs in it. A scenario's own polities are content, queued

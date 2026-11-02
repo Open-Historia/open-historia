@@ -222,7 +222,6 @@ import { chatMessageTags } from "./chatTags.js";
 import { PEACE_BLOCK_HEADING, buildPeaceBlock } from "./peacePrompt.js";
 import { readPeaceVerdict, readTreatyLines, termsOfLetter } from "../../runtime/peaceTerms.js";
 import { PEACE_ANSWERS_FIELD, buildWarStatsBlock, describePeaceTalk, warsOf } from "./warStatsPrompt.js";
-import { kmBetween } from "../../runtime/fronts/worldGrid.js";
 import { takersFor } from "../../runtime/fronts/constants.js";
 import { pointInFrame } from "../../runtime/fronts/frame.js";
 import { normalizeBattlefields } from "../../runtime/fronts/record.js";
@@ -237,7 +236,9 @@ import { areaRegionsFor, buildAreaIndex, findArea, readAreaName } from "./namedA
 import { CAPTURE_REACH_KM, findNarratedCaptures, mayNarrateCapture } from "./narratedCapture.js";
 import { EVENT_PLACES_RULE, findEventPlace, findEventPlaces, readEventPlace } from "./eventPlaces.js";
 import { normalizeEventPlaces } from "../../runtime/eventPlaces.js";
-import { describeTravelPace, eraOf, seaShareOf } from "../../runtime/unitMotion.js";
+import { describeTravelPace, eraOf, kmOnMap, seaShareOf } from "../../runtime/unitMotion.js";
+import { kmPerDegreeAt } from "../../../server/mapDistance.js";
+import { currentMapMeasure } from "../../runtime/mapMeasure.js";
 import { eraSettingOf } from "../../runtime/warSettings.js";
 import { PLACEMENT_DIRECTIVE, describeApproximatePlacement, describeOtherKind, distanceKm as placementDistanceKm, hashText as placementHash, homeWaters, isOpenSea, nearestInteriorPoint, nearestSea, pointInGeometry, regionWithinContainer, resolvePlacement, resolveRegionPlacement, seasForMap } from "./placement.js";
 import { loadWorldCities } from "./worldCities.js";
@@ -7662,19 +7663,23 @@ const marchCapturersIn = async (containers, world, { receipt = null, renderedReg
 };
 
 // A region's area in km², near enough: each ring's own shoelace on a plane
-// scaled to the ring's latitude, holes taken off.
+// scaled to the ring's latitude (by the map's measure, server/mapDistance.js,
+// where it is not plain Mercator), holes taken off.
 const geometryAreaKm2 = (geometry) => {
   const polygons = geometry?.type === "Polygon" ? [geometry.coordinates] : geometry?.type === "MultiPolygon" ? geometry.coordinates : [];
   const ringKm2 = (ring) => {
     const points = normalizeArray(ring);
     if (points.length < 3) return 0;
     const lat = points.reduce((sum, point) => sum + Number(point?.[1] || 0), 0) / points.length;
-    const kx = 111.32 * Math.cos((lat * Math.PI) / 180);
+    const measure = currentMapMeasure();
+    const per = measure.plain ? null : kmPerDegreeAt(measure, points.reduce((sum, point) => sum + Number(point?.[0] || 0), 0) / points.length, lat);
+    const kx = per ? per.x : 111.32 * Math.cos((lat * Math.PI) / 180);
+    const ky = per ? per.y : 110.57;
     let twice = 0;
     for (let index = 0; index < points.length; index += 1) {
       const [x1, y1] = points[index];
       const [x2, y2] = points[(index + 1) % points.length];
-      twice += (x1 * kx) * (y2 * 110.57) - (x2 * kx) * (y1 * 110.57);
+      twice += (x1 * kx) * (y2 * ky) - (x2 * kx) * (y1 * ky);
     }
     return Math.abs(twice) / 2;
   };
@@ -7751,7 +7756,7 @@ const createStrikePlaceReader = (world) => {
       if (!map) return null;
       const seat = seatOf(map, owner);
       if (!to || !Number.isFinite(to.lng) || !Number.isFinite(to.lat)) return seat;
-      const far = (place) => kmBetween(place.lng, place.lat, to.lng, to.lat);
+      const far = (place) => kmOnMap(place.lat, place.lng, to.lat, to.lng);
       if (weapon === "silo missile" && seat && far(seat) >= STRIKE_LAUNCH_KM_LEAST) return seat;
       const key = foldRegionKey(map.context.resolveOwner(owner) || owner);
       const mine = map.context.cityRows

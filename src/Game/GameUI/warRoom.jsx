@@ -56,6 +56,8 @@ import { useLibraryState } from "../../runtime/library.js";
 import { SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP } from "../../runtime/mobileUi.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
+import { kmOnMap } from "../../runtime/unitMotion.js";
+import { currentMapMeasure } from "../../runtime/mapMeasure.js";
 import { convoysOf, enemiesOf, fleetsOf } from "../../runtime/naval/fleetOps.js";
 import { sendAirStrikeOp, sendFleetOp, sendFortifyOp, sendWarRoomOp } from "../../runtime/warRoomWrites.js";
 import { warSettingsOf, warfareOf } from "../../runtime/warSettings.js";
@@ -460,10 +462,12 @@ const WarRoomPanel = ({ open, onClose, width, onResize, onResizeEnd }) => {
   // transporter is told where it is bound in words as well.
   const placeNear = (lng, lat) => {
     let best = null;
+    // (By the map's own measure where it is not plain Mercator: server/mapDistance.js.)
+    const measure = currentMapMeasure();
     for (const city of cities) {
       const across = (Number(city.lng) - lng) * Math.cos((lat * Math.PI) / 180) * 111;
       const down = (Number(city.lat) - lat) * 111;
-      const far = Math.sqrt(across * across + down * down);
+      const far = measure.plain ? Math.sqrt(across * across + down * down) : kmOnMap(lat, lng, Number(city.lat), Number(city.lng), measure);
       if (far <= 70 && (!best || far < best.far)) best = { far, name: city.name };
     }
     // (The place with its kind, as the engine names places: put together here, it is no words of the interface.)

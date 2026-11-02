@@ -203,7 +203,11 @@ export const seaLaunchPlace = (grid, { to = null, near = null, seasOf, distanceT
   }
   const open = (cell) => seas[cell] > 0 && grid.land[cell] === 0;
   // How many cells each cell is from land, up to as many as "well offshore" is: once a sheet.
-  const cellKm = grid.flat ? grid.step * grid.scale : grid.step * 111.2;
+  // (A sheet that measures row by row, a flat one or a world projection's, by its middle row.)
+  const rowsKm = grid.stepKm?.downRow;
+  const cellKm = rowsKm?.length
+    ? Math.max(0.001, rowsKm[rowsKm.length >> 1])
+    : (grid.flat ? grid.step * grid.scale : grid.step * 111.2) * (Number(grid.factor) > 0 ? grid.factor : 1);
   const deep = Math.max(1, Math.min(60, Math.round(SEA_LAUNCH_KM.offshore / cellKm)));
   if (!grid.offshore || grid.offshore.deep !== deep) {
     const { cols, rows, wrap } = grid;

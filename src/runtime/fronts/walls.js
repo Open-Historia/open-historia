@@ -33,7 +33,7 @@
 
 import { addGameDays, compareGameDates } from "../gameDates.js";
 import { cellAt } from "./ground.js";
-import { kmBetween } from "./worldGrid.js";
+import { kmBetween, measureOptions } from "./worldGrid.js";
 
 export const WALL_PIECE_KM = 5;
 export const WALL_DAYS = Object.freeze([Infinity, Infinity, Infinity, 3, 6, 10, 15, 22, 32, 50, Infinity]);
@@ -49,12 +49,11 @@ const list = (value) => (Array.isArray(value) ? value : []);
 // far along it each of its points lies, and what is worn and broken of it.
 export const readLines = (run) => {
   if (run.lines) return run.lines;
-  const flat = run.input?.map?.flat === true;
-  const scale = run.input?.map?.scale;
+  const measure = measureOptions(run.input?.map);
   run.lines = (run.mech?.walls ? list(run.input?.fortifications) : []).map((line) => {
     const points = list(line?.points).filter((point) => Array.isArray(point) && Number.isFinite(point[0]) && Number.isFinite(point[1]));
     const at = [0];
-    for (let index = 1; index < points.length; index += 1) at.push(at[index - 1] + kmBetween(points[index - 1][0], points[index - 1][1], points[index][0], points[index][1], { flat, scale }));
+    for (let index = 1; index < points.length; index += 1) at.push(at[index - 1] + kmBetween(points[index - 1][0], points[index - 1][1], points[index][0], points[index][1], measure));
     return {
       id: String(line?.id ?? ""),
       // (Its name, for what is told of it: a breach.)

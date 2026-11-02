@@ -70,6 +70,7 @@ import { mergeRegionFeatures, trackMove } from "./shapeEdits.js";
 import { resolvePastedIds } from "./regionClipboard.js";
 import { createWarGeographyLayers, drawTypeOf, pointsOfLine, ringsOfPolygon, shapeNear, syncShapes } from "./warGeographyLayers.js";
 import { isWarTool, mostCommon } from "./warGeographyDoc.js";
+import { SCALE_TOOL, createScaleLineLayer, endsOfLine, scaleCursorStyle, scaleLineStyles, showScaleLine } from "./scaleLineLayer.js";
 import { isWaterType } from "../runtime/regionTypes.js";
 import {
   unionGeoms,
@@ -625,6 +626,14 @@ const OlMap = ({
   onWarShapeCreate,
   onWarShapeChange,
   onWarShapeRemove,
+  // The Projection panel's scale line (scaleLineLayer.js): the line to show
+  // ({ from, to } in [lng, lat], or null) and what is written beside it; what
+  // a line being drawn with the Scale line tool measures as it is drawn,
+  // (from, to) => text; and the line drawn, (from, to).
+  scaleLine = null,
+  scaleLabel = "",
+  scaleSketchLabel = null,
+  onScaleLineDraw,
 }) => {
   const containerRef = useRef(null);
   const mapRef = useRef(null);
@@ -720,6 +729,11 @@ const OlMap = ({
   onWarShapeChangeRef.current = onWarShapeChange;
   const onWarShapeRemoveRef = useRef(onWarShapeRemove);
   onWarShapeRemoveRef.current = onWarShapeRemove;
+  const scaleLayerRef = useRef(null);
+  const scaleSketchLabelRef = useRef(scaleSketchLabel);
+  scaleSketchLabelRef.current = scaleSketchLabel;
+  const onScaleLineDrawRef = useRef(onScaleLineDraw);
+  onScaleLineDrawRef.current = onScaleLineDraw;
 
   typesByIdRef.current = toTypesById(types);
   colorsRef.current = colors || {};
@@ -1064,6 +1078,9 @@ const OlMap = ({
       selectedId: (kind) => (warSelectionRef.current?.kind === kind ? String(warSelectionRef.current.id) : null),
     });
     warLayersRef.current = war;
+    // The Projection panel's scale line, over everything (scaleLineLayer.js).
+    const scale = createScaleLineLayer();
+    scaleLayerRef.current = scale;
     rebuildFreezingRef.current = () => war.rebuildHatch(
       regionSource,
       freezingRef.current,
@@ -1073,7 +1090,7 @@ const OlMap = ({
     const map = new Map({
       target: containerRef.current,
       controls: defaultControls({ rotate: false }),
-      layers: [regionLayer, regionOverlayLayer, ...war.layers, groupOutlineLayer, labelLayer, pointLayer, unitLayer, importPreviewLayer, paintPreviewLayer, topologyLayer, borderAssistLayer],
+      layers: [regionLayer, regionOverlayLayer, ...war.layers, groupOutlineLayer, labelLayer, pointLayer, unitLayer, importPreviewLayer, paintPreviewLayer, topologyLayer, borderAssistLayer, scale.layer],
       view: new View({ center: fromLonLat([0, 20]), zoom: 2.1, minZoom: 1, maxZoom: 20 }),
     });
 
@@ -3151,6 +3168,7 @@ const OlMap = ({
       rebuildGroupOutlinesRef.current = null;
       rebuildFreezingRef.current = null;
       warLayersRef.current = null;
+      scaleLayerRef.current = null;
       window.removeEventListener("resize", onResize);
       window.removeEventListener("keydown", onKeyDown);
       map.setTarget(null);
@@ -3203,6 +3221,10 @@ const OlMap = ({
   useEffect(() => {
     warLayersRef.current?.showWorkingOn({ terrain: showTerrain, climate: showClimate });
   }, [showTerrain, showClimate]);
+  useEffect(() => {
+    const scale = scaleLayerRef.current;
+    if (scale) showScaleLine(scale.source, scaleLine, scaleLabel);
+  }, [scaleLine, scaleLabel]);
 
   // ---- mount/remove editing interactions when the active tool changes ------
   useEffect(() => {
@@ -3776,6 +3798,26 @@ const OlMap = ({
       // Snap last so it sees events first: a new outline can follow its
       // neighbours' points and edges.
       added.push(new Snap({ source: own, pixelTolerance: 10 }));
+    } else if (activeTool === SCALE_TOOL) {
+      // The Projection panel's scale line: two clicks, the line's two ends,
+      // with what it measures now written beside it as it is drawn. The line
+      // goes to the panel (onScaleLineDraw), which asks what distance it is.
+      const draw = new Draw({
+        features: new Collection(),
+        type: "LineString",
+        maxPoints: 2,
+        style: (feature) => {
+          const geometry = feature.getGeometry();
+          if (geometry?.getType?.() !== "LineString") return scaleCursorStyle;
+          const ends = endsOfLine(geometry);
+          return scaleLineStyles(geometry, ends ? scaleSketchLabelRef.current?.(ends[0], ends[1]) || "" : "");
+        },
+      });
+      draw.on("drawend", (e) => {
+        const ends = endsOfLine(e.feature.getGeometry());
+        if (ends) onScaleLineDrawRef.current?.(ends[0], ends[1]);
+      });
+      added.push(draw);
     } else if (activeTool === "lasso") {
       // freehand circle/lasso: drag to enclose an area, release to select the
       // land regions inside it.

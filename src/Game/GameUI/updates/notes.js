@@ -114,6 +114,24 @@ const NEW_UPDATES = [
     ],
   },
   {
+    // Distances follow the map's projection; the Workshop's scale line; the Flat Earth projection (2026-11-01).
+    id: "2026-11-map-distances",
+    kind: "minor",
+    date: "2026-11-01",
+    channel: "beta",
+    banners: [
+      {
+        title: "Distances that follow the map",
+        items: [
+          "Troops, fleets, transports and aircraft measure their distances by the map's projection, so every map is as far across as the world it shows.",
+          "On a freeform map every distance is a straight line, at the same scale everywhere.",
+          "In the Workshop's Projection panel, draw a scale line and say how long it is: the whole map and its scenario are measured by it.",
+          "A new Flat Earth projection shows the world as a round map with the North Pole at its centre.",
+        ],
+      },
+    ],
+  },
+  {
     // A suggestion's border changes are groups of neighbouring regions; now it says how many regions (2026-11-01).
     id: "2026-11-suggestion-regions",
     kind: "minor",
