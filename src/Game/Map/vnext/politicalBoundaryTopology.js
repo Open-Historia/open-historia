@@ -313,6 +313,15 @@ const segmentOwners = (segment, topology, ownershipOverrides = {}) => {
   return owners;
 };
 
+// The group a segment is drawn in: its owners, or none when it has fewer than
+// two or lies on a battlefield whose own picture draws the border between its
+// sides (state.excluded, setExcludedBoundarySegments).
+const segmentKeyOf = (state, segment, ownershipOverrides = {}) => {
+  if (state?.excluded?.has(segment.id)) return "";
+  const owners = segmentOwners(segment, state.topology, ownershipOverrides);
+  return owners.length >= 2 ? owners.join("\u001f") : "";
+};
+
 const boundaryFeatureForGroup = (ownerKey, group, precision) => {
   if (!group?.segments?.size) return null;
   const owners = ownerKey.split("\u001f").filter(Boolean);
@@ -379,8 +388,9 @@ const buildTopologySegments = (topology) => {
  * revisions. Runtime updates therefore touch segments incident to changed
  * regions instead of rescanning the entire authored map.
  */
-export const createPoliticalBoundaryState = (topology, ownershipOverrides = {}) => {
+export const createPoliticalBoundaryState = (topology, ownershipOverrides = {}, { excluded = null } = {}) => {
   const { segments, regionToSegments } = buildTopologySegments(topology);
+  const excludedIds = new Set([...(excluded ?? [])].filter((id) => segments.has(id)));
   const groups = new Map();
   const segmentGroupKey = new Map();
   const features = new Map();
@@ -395,9 +405,8 @@ export const createPoliticalBoundaryState = (topology, ownershipOverrides = {}) 
   };
 
   for (const segment of segments.values()) {
-    const owners = segmentOwners(segment, topology, ownershipOverrides);
-    if (owners.length < 2) continue;
-    const key = owners.join("\u001f");
+    const key = segmentKeyOf({ topology, excluded: excludedIds }, segment, ownershipOverrides);
+    if (!key) continue;
     segmentGroupKey.set(segment.id, key);
     addToGroup(key, segment);
   }
@@ -414,6 +423,7 @@ export const createPoliticalBoundaryState = (topology, ownershipOverrides = {}) 
     groups,
     segmentGroupKey,
     features,
+    excluded: excludedIds,
   };
 };
 
@@ -457,13 +467,28 @@ export const updatePoliticalBoundaryState = (
     for (const segmentId of state.regionToSegments[regionIndex] ?? []) segmentIds.add(segmentId);
   }
 
-  const changedGroups = new Set();
+  const result = regroupSegments(state, segmentIds, ownershipOverrides);
+  return {
+    patch: result.patch,
+    stats: {
+      changedSegmentCount: segmentIds.size,
+      changedGroupCount: result.changedGroupCount,
+      boundaryGroupCount: state.features.size,
+    },
+  };
+};
+
+// Moves each of these segments to the group its owners (and whether it is left
+// out) now give it, and rebuilds the groups that changed: the patch for the
+// source. `alsoGroups` are rebuilt whether or not a segment moved.
+const regroupSegments = (state, segmentIds, ownershipOverrides = {}, alsoGroups = []) => {
+  const forced = new Set(alsoGroups);
+  const changedGroups = new Set(forced);
   for (const segmentId of segmentIds) {
     const segment = state.segments.get(segmentId);
     if (!segment) continue;
     const previousKey = state.segmentGroupKey.get(segmentId) ?? "";
-    const owners = segmentOwners(segment, state.topology, ownershipOverrides);
-    const nextKey = owners.length >= 2 ? owners.join("\u001f") : "";
+    const nextKey = segmentKeyOf(state, segment, ownershipOverrides);
     if (previousKey === nextKey) continue;
 
     if (previousKey) {
@@ -493,7 +518,9 @@ export const updatePoliticalBoundaryState = (
     if (!group?.segments?.size) {
       state.groups.delete(key);
       state.features.delete(key);
-      if (oldFeature?.id != null) removeIds.push(String(oldFeature.id));
+      // (A forced group the worker no longer has may still be drawn: its id goes too.)
+      const goneId = oldFeature?.id ?? (forced.has(key) ? stableId("polity-boundary", key) : null);
+      if (goneId != null) removeIds.push(String(goneId));
       continue;
     }
     const feature = boundaryFeatureForGroup(key, group, state.topology.precision);
@@ -506,12 +533,68 @@ export const updatePoliticalBoundaryState = (
     upsert.push(feature);
   }
 
-  return {
-    patch: { removeIds, upsert },
-    stats: {
-      changedSegmentCount: segmentIds.size,
-      changedGroupCount: changedGroups.size,
-      boundaryGroupCount: state.features.size,
-    },
-  };
+  return { patch: { removeIds, upsert }, changedGroupCount: changedGroups.size };
+};
+
+// The segments a battlefield's own picture draws the border on: those between
+// two of the regions it paints (`regionIds`, its sides' land in its frame)
+// whose ends both lie inside its frame (`bounds`: [west, south, east, north],
+// the frame's longitudes as the map is given them). A segment with an end
+// outside the frame stays the map's: past the frame there is no picture, and
+// the border runs on there as ever.
+export const battlefieldSegmentIds = (state, areas = []) => {
+  const out = new Set();
+  const topology = state?.topology;
+  if (!topology || !state?.segments) return out;
+  const precision = topology.precision || 1;
+  for (const area of areas ?? []) {
+    const indexes = new Set();
+    for (const id of area?.regionIds ?? []) {
+      const index = topology.regionIndexById?.get(String(id));
+      if (index != null) indexes.add(index);
+    }
+    const [west, south, east, north] = Array.isArray(area?.bounds) ? area.bounds.map(Number) : [];
+    if (!indexes.size || ![west, south, east, north].every(Number.isFinite)) continue;
+    const inside = ([x, y]) => {
+      const lat = y / precision;
+      if (lat < south || lat > north) return false;
+      const lng = x / precision;
+      return [lng, lng - 360, lng + 360].some((value) => value >= west && value <= east);
+    };
+    for (const regionIndex of indexes) {
+      for (const segmentId of state.regionToSegments[regionIndex] ?? []) {
+        if (out.has(segmentId)) continue;
+        const segment = state.segments.get(segmentId);
+        if (!segment || !segment.regionIndexes.every((index) => indexes.has(index))) continue;
+        if (inside(segment.a) && inside(segment.b)) out.add(segmentId);
+      }
+    }
+  }
+  return out;
+};
+
+// Leaves these segments out of the boundaries (and gives back those no longer
+// listed): the patch for the source. With `force`, every group a left-out
+// segment (now or before) belongs to by its owners is sent whole, so a patch
+// made before and shown after (Nations.jsx publishOwnershipPresentation)
+// cannot leave one drawn.
+export const setExcludedBoundarySegments = (state, segmentIds = [], ownershipOverrides = {}, { force = false } = {}) => {
+  if (!state?.segments) return { patch: { removeIds: [], upsert: [] }, changedSegmentCount: 0 };
+  const next = new Set([...(segmentIds ?? [])].filter((id) => state.segments.has(id)));
+  const before = state.excluded ?? new Set();
+  const touched = new Set();
+  for (const id of before) if (!next.has(id)) touched.add(id);
+  for (const id of next) if (!before.has(id)) touched.add(id);
+  state.excluded = next;
+  const alsoGroups = [];
+  if (force) {
+    for (const id of new Set([...before, ...next])) {
+      const segment = state.segments.get(id);
+      if (!segment) continue;
+      const owners = segmentOwners(segment, state.topology, ownershipOverrides);
+      if (owners.length >= 2) alsoGroups.push(owners.join("\u001f"));
+    }
+  }
+  const result = regroupSegments(state, touched, ownershipOverrides, alsoGroups);
+  return { patch: result.patch, changedSegmentCount: touched.size };
 };
