@@ -213,6 +213,8 @@ func apply(result: Dictionary) -> void:
 		state["doc"] = result["doc"]
 		parts["doc"] = true
 		map.polity_colors = (result["doc"] as Dictionary).get("colors", {})
+		var doc_types: Variant = (result["doc"] as Dictionary).get("types")
+		map.set_types(doc_types if doc_types is Array else [])
 		var style_rev := int((result["doc"] as Dictionary).get("styleRev", 0))
 		if style_rev != _style_rev:
 			_style_rev = style_rev
@@ -244,6 +246,7 @@ func apply(result: Dictionary) -> void:
 			map.load_regions(file)
 			await map.baked_map
 			_rebaking = false
+			_refresh_label_points.call_deferred()
 	if result.has("regions"):
 		state["regions"] = result["regions"]
 		map.set_regions(result["regions"])
@@ -287,6 +290,19 @@ func _refresh_overlays() -> void:
 	if striped != map.striped:
 		map.striped = striped
 		map.apply_fills()
+
+
+var _label_serial := 0
+
+
+func _refresh_label_points() -> void:
+	_label_serial += 1
+	var serial := _label_serial
+	var reply := await request_raw("workshop.labelPoints", {"worldWidth": WorkshopMap.WORLD})
+	if serial != _label_serial or not reply.get("ok", false) or not (reply["result"] is Dictionary) or map == null:
+		return
+	var points: Variant = (reply["result"] as Dictionary).get("points")
+	map.set_label_points(points if points is Array else [])
 
 
 func _apply_basemap() -> void:
@@ -803,7 +819,13 @@ func _tool_note(lead: String, text: String, color: Color) -> RichTextLabel:
 func _sync_paint() -> void:
 	map.paint_owner = paint_owner
 	map.paint_only = paint_only
-	map.paint_color = WorkshopMap.NEUTRAL if paint_owner.is_empty() else polity_color(paint_owner)
+	var colors: Dictionary = (state.get("doc", {}) as Dictionary).get("colors", {})
+	if paint_owner.is_empty():
+		map.paint_color = WorkshopMap.PAINT_FILL_ERASE
+	elif colors.get(paint_owner) is Array:
+		map.paint_color = Color(WorkshopUI.rgb_color(colors[paint_owner]), WorkshopMap.PAINT_FILL_ALPHA)
+	else:
+		map.paint_color = WorkshopMap.PAINT_FILL_UNCOLOURED
 
 
 func set_tool(id: String) -> void:
@@ -1163,7 +1185,7 @@ func import_regions(args: Dictionary) -> Dictionary:
 
 
 func locate(lonlat: Vector2) -> void:
-	map.locate(lonlat, 6.0)
+	map.locate(lonlat, 6.0, 350)
 
 
 func _on_region_click(index: int, additive: bool) -> void:

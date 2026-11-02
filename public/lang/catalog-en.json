@@ -257,6 +257,7 @@
  "A change to the project \"{{name}}\" was not applied: nothing on the board has that name.",
  "A city a country makes its capital now gets the capital's gold star on the map.",
  "A claim marks the region disputed — striped in the claimant's colour — without moving the border.",
+ "A clearer map in the map editor",
  "A conversation was not opened: none of its participants is a country on this map.",
  "A copy of this scenario is in your Scenarios tab.",
  "A country without a complete Stats sheet is skipped by the automatic refresh. Assessing it opens its Stats, which builds the first sheet with one request.",

@@ -53,6 +53,23 @@ import { PAST_UPDATES } from "./notesPast.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    id: "2026-11-native-editor-map",
+    kind: "minor",
+    date: "2026-11-01",
+    banners: [
+      {
+        title: "A clearer map in the map editor",
+        items: [
+          "The map in the map editor now looks and works as it does in the desktop app: every region is outlined, filled as its region type says, over the plain basemap you chose.",
+          "Zoom out until the whole world fills the window, or much closer in, with the + and − buttons in the corner, a double-click, or a box drawn with Shift held.",
+          "Each turn of the mouse wheel zooms a third of a level, smoothly, and the map glides on for a moment after you drag it.",
+          "Region names show only where they fit inside their region, and crowded cities and units make room for each other instead of piling up.",
+          "A selected region gets a light outline, and a paint stroke shows each region in the colour it is about to take.",
+        ],
+      },
+    ],
+  },
+  {
     // The desktop app packs only what it runs (2026-11-01).
     id: "2026-11-lighter-desktop",
     kind: "minor",

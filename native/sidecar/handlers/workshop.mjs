@@ -8,7 +8,6 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { FMG_BRIDGE_FILE, FMG_BRIDGE_PAGE } from "./fmg_bridge.mjs";
 
 const NEUTRAL = [130, 130, 138];
-const GROUP_TINT_ALPHA = 0.3;
 const EARTH = 6378137;
 
 const fallbackColorCache = new Map();
@@ -39,13 +38,6 @@ const hexToRgb = (value) => {
   if (!m) return null;
   const hex = m[1];
   return [Number.parseInt(hex.slice(0, 2), 16), Number.parseInt(hex.slice(2, 4), 16), Number.parseInt(hex.slice(4, 6), 16)];
-};
-
-const over = (topRgb, topAlpha, rgb, alpha) => {
-  const out = topAlpha + alpha * (1 - topAlpha);
-  if (out <= 0) return [rgb[0], rgb[1], rgb[2]];
-  const mix = (i) => Math.round((topRgb[i] * topAlpha + rgb[i] * alpha * (1 - topAlpha)) / out);
-  return [mix(0), mix(1), mix(2)];
 };
 
 const fillRgb = (value) => {
@@ -800,13 +792,25 @@ export const register = (ctx) => {
     const ownerIndexOf = new Map();
     const ownerIndex = new Array(s.baked.length);
     const fills = new Array(s.baked.length);
+    const groupFills = new Array(s.baked.length);
+    const typeIndex = new Array(s.baked.length);
+    const typeKeys = [];
+    const typeIndexOf = new Map();
     for (let i = 0; i < s.baked.length; i += 1) {
       const f = s.baked[i];
+      groupFills[i] = -1;
+      typeIndex[i] = -1;
       if (!f) {
         ownerIndex[i] = -1;
         fills[i] = -1;
         continue;
       }
+      const typeKey = String(f.get("typeId") || "land");
+      if (!typeIndexOf.has(typeKey)) {
+        typeIndexOf.set(typeKey, typeKeys.length);
+        typeKeys.push(typeKey);
+      }
+      typeIndex[i] = typeIndexOf.get(typeKey);
       const owner = f.get("owner") || null;
       if (owner) {
         if (!ownerIndexOf.has(owner)) {
@@ -822,14 +826,9 @@ export const register = (ctx) => {
       const base = type?.overrideColor ? (Array.isArray(type.overrideColor) ? type.overrideColor : NEUTRAL) : owner ? ownerRgb(owner) : null;
       const group = f.get("group") || "";
       const groupRgb = group ? hexRgb(groupColors[group]) : null;
-      if (!base && !groupRgb) {
-        fills[i] = -1;
-        continue;
-      }
       const baseRgb = base || NEUTRAL;
-      const alpha = owner ? (type?.opacity ?? 0.55) : (type?.unownedOpacity ?? 0.25);
-      const rgb = groupRgb ? over(groupRgb, GROUP_TINT_ALPHA, baseRgb, alpha) : baseRgb;
-      fills[i] = ((rgb[0] & 255) << 16) | ((rgb[1] & 255) << 8) | (rgb[2] & 255);
+      fills[i] = ((baseRgb[0] & 255) << 16) | ((baseRgb[1] & 255) << 8) | (baseRgb[2] & 255);
+      if (groupRgb) groupFills[i] = ((groupRgb[0] & 255) << 16) | ((groupRgb[1] & 255) << 8) | (groupRgb[2] & 255);
     }
     const ownerColors = ownerKeys.map((key) => {
       const rgb = Array.isArray(colors[key]) ? colors[key] : editorCodeToColor(key);
@@ -840,7 +839,7 @@ export const register = (ctx) => {
       const index = s.bakedIndex.get(id);
       if (index !== undefined) names[index] = name;
     }
-    return { rev: s.regionRev, ownerIndex, owners: ownerKeys, ownerNames: ownerKeys.map((key) => String(s.doc.polities?.[key]?.name || key)), ownerColors, fills, names, count: features(s).length };
+    return { rev: s.regionRev, ownerIndex, owners: ownerKeys, ownerNames: ownerKeys.map((key) => String(s.doc.polities?.[key]?.name || key)), ownerColors, fills, groupFills, typeIndex, typeKeys, names, count: features(s).length };
   };
 
   const docPart = (s) => {
@@ -5205,6 +5204,27 @@ export const register = (ctx) => {
         console.warn("[editor] save generated basemap to library failed:", error);
         return { saved: false };
       }
+    },
+    "workshop.labelPoints": async ({ session: id, worldWidth = 4096 } = {}) => {
+      const s = need(id);
+      const half = 20037508.342789244;
+      const scale = Number(worldWidth) / 2 / half;
+      const points = new Array(s.baked.length);
+      for (let i = 0; i < s.baked.length; i += 1) {
+        const geometry = s.baked[i]?.getGeometry?.();
+        const type = geometry?.getType?.();
+        let found = [];
+        try {
+          if (type === "Polygon") found = [geometry.getInteriorPoint().getCoordinates()];
+          else if (type === "MultiPolygon") found = geometry.getInteriorPoints().getCoordinates();
+        } catch {
+          found = [];
+        }
+        points[i] = found
+          .filter((c) => Number.isFinite(c?.[0]) && Number.isFinite(c?.[1]))
+          .map((c) => [(c[0] + half) * scale, (half - c[1]) * scale, Number.isFinite(c[2]) ? c[2] * scale : 0]);
+      }
+      return { points };
     },
     "workshop.regionOverlays": async ({ session: id } = {}) => {
       const s = need(id);
