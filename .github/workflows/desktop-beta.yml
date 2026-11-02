@@ -146,7 +146,7 @@ jobs:
       # productName, icon, artifact names and update feed. It REPLACES package.json's
       # `build` block rather than extending it.
       - name: Build the installer
-        run: npx electron-builder ${{ matrix.args }} --config electron-builder.beta.yml --publish never
+        run: node scripts/package-desktop.mjs ${{ matrix.args }} --config electron-builder.beta.yml --publish never
         env:
           # No code-signing certificate. Without this electron-builder tries to
           # discover one and fails the build rather than skipping signing.
@@ -253,8 +253,7 @@ jobs:
           # beta ships with a feed URL that resolves to nothing: the banner still
           # appears — that comes from latest.json below — but pressing update fails
           # and falls back to a manual download, with no failing build to notice.
-          # The .blockmap only makes the download differential; missing, it degrades.
-          files=(release/*.exe release/*.exe.blockmap release/*-mac-*.zip release/*.AppImage release/*.deb)
+          files=(release/*.exe release/*-mac-*.zip release/*.AppImage release/*.deb)
           feeds=(release/latest*.yml)
           # Only the Windows job writes latest.json, so three racing jobs cannot each
           # publish a different view of the same release. The filenames here must

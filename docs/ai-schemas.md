@@ -230,7 +230,8 @@ Also used for `autoJumpForward`. This is the largest task.
 | `stopDate` | string | Date the simulation stops | **yes** |
 | `summary` | string | Concise period summary | **yes** |
 | `clearActions` | boolean | Were queued player actions resolved | **yes** |
-| `diplomaticOutreach` | `createdChatSchema[]` | Polities reaching out on their own initiative, not tied to any event | no |
+| `diplomaticOutreach` | `createdChatSchema[]` + `peaceOffer` | Polities reaching out on their own initiative, not tied to any event. A letter offering the player peace carries `peaceOffer` (`territory`, `reparationsPayer`, `reparationsPercent`, `reparationsYears`), kept by `warAndPeace.js offerPeace` and shown on the letter's message | no |
+| `peaceTreaties` | string | The peaces two countries nobody plays made, a line each: `offering | accepting | terms` (`peaceTerms.js readTreatyLines`) | no |
 
 `eventSchema`: `id`, `date`* , `title`* , `description`* , `importance`, `kind`, `places` (below), `notable` (bool), `playerRelated` (bool), `impacts` (`impactsSchema`).
 

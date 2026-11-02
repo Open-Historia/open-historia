@@ -53,6 +53,91 @@ import { PAST_UPDATES } from "./notesPast.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // A suggestion's border changes are groups of neighbouring regions; now it says how many regions (2026-11-01).
+    id: "2026-11-suggestion-regions",
+    kind: "minor",
+    date: "2026-11-01",
+    channel: "beta",
+    banners: [
+      {
+        title: "Suggestions count their regions",
+        items: [
+          "When you suggest changes to a community scenario, the Borders line now says how many regions you merged into others, reshaped or added.",
+          "Each border change is a group of neighbouring regions that is accepted or rejected together, so many merges can be a few changes.",
+        ],
+      },
+    ],
+  },
+  {
+    // The desktop app packs only what it runs (2026-11-01).
+    id: "2026-11-lighter-desktop",
+    kind: "minor",
+    date: "2026-11-01",
+    channel: "beta",
+    banners: [
+      {
+        title: "A lighter desktop app",
+        items: [
+          "The desktop app is a smaller download: about 40 MB less on Windows.",
+          "It takes up about 100 MB less space once installed.",
+          "Updates have far fewer files to put in place, so they finish sooner.",
+        ],
+      },
+    ],
+  },
+  {
+    // Group diplomacy: countries added to a conversation, conversations renamed, members tagged (PR #917, 2026-10-31).
+    id: "2026-10-group-diplomacy",
+    kind: "minor",
+    date: "2026-10-31",
+    channel: "beta",
+    banners: [
+      {
+        title: "Group diplomacy",
+        items: [
+          "Add countries to a diplomatic conversation with Add Country in its header.",
+          "Rename a conversation with the pencil beside its title.",
+          "In a group conversation, tag countries with the @ chips above the message box: only the countries you tag answer.",
+        ],
+      },
+    ],
+  },
+  {
+    // The phone layout: the main menu, the library's cards and the in-game buttons (PR #918, 2026-10-31).
+    id: "2026-10-phone-layout",
+    kind: "minor",
+    date: "2026-10-31",
+    channel: "beta",
+    banners: [
+      {
+        title: "A tidier phone layout",
+        items: [
+          "On a phone, the main menu's tabs and buttons line up evenly, and searching and sorting the library take a row each.",
+          "Game cards in the library are more compact on small screens.",
+          "In a game on a phone, the menu, date and search buttons match in size, the advisor's button sits clear of the map switch, and the War Room button is smaller.",
+        ],
+      },
+    ],
+  },
+  {
+    // Peace offered through the diplomatic chats, when the AI decides it, with each country's war in its diplomacy (2026-10-30).
+    id: "2026-10-peace-in-the-chats",
+    kind: "minor",
+    date: "2026-10-30",
+    channel: "beta",
+    banners: [
+      {
+        title: "Peace at the table",
+        items: [
+          "An enemy offers peace in its diplomatic chat with you, in its leader's own words, with the terms to accept or decline right there.",
+          "Peace is offered only when a country decides to, not at a fixed weariness: a weary country may still fight on, a strong one may still want peace.",
+          "Put your own terms with Peace in the chat with an enemy, and its leader answers them in the reply: accepts, declines or offers other terms.",
+          "Countries at war know their own war in diplomacy: weariness, supplies, ground, battlefields and allies. One running short may ask you for help.",
+        ],
+      },
+    ],
+  },
+  {
     id: "2026-10-ai-in-your-language",
     kind: "minor",
     date: "2026-10-29",

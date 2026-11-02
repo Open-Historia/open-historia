@@ -1338,6 +1338,31 @@ export const countChanges = (changes) => {
   return counts;
 };
 
+// The regions inside the border changes. A border change is a group of
+// neighbouring regions accepted together (a merge is regions taken out and the
+// ones beside them grown), so a suggestion of many merges is few changes: this
+// says how many regions they touch.
+export const borderRegionCounts = (changes) => {
+  const counts = { merged: 0, reshaped: 0, added: 0 };
+  for (const change of Array.isArray(changes) ? changes : []) {
+    if (change?.kind !== "borders") continue;
+    for (const region of Array.isArray(change.regions) ? change.regions : []) {
+      if (region?.op === "remove") counts.merged += 1;
+      else if (region?.op === "reshape") counts.reshaped += 1;
+      else if (region?.op === "add") counts.added += 1;
+    }
+  }
+  return counts;
+};
+
+// "28 regions merged into others, 17 reshaped, 2 new": what a suggestion's
+// border changes do, in words.
+export const describeBorderRegions = ({ merged = 0, reshaped = 0, added = 0 } = {}) => [
+  merged ? `${merged === 1 ? "1 region" : `${merged} regions`} merged into others` : "",
+  reshaped ? `${reshaped} reshaped` : "",
+  added ? `${added} new` : "",
+].filter(Boolean).join(", ");
+
 const plural = (count, one, many) => `${count} ${count === 1 ? one : many}`;
 const FIELD_NAMES = {
   "meta.name": "Name", "meta.eyebrow": "Eyebrow", "meta.accentColor": "Accent colour", "meta.subtitle": "Subtitle",
@@ -1373,7 +1398,10 @@ export const summarizeChangesForComment = (changes, { maxLines = 14 } = {}) => {
   if (byKind.music) lines.push("Music changed");
   if (byKind.cover) lines.push("New cover image");
   if (byKind["region-owner"]) lines.push(`${plural(byKind["region-owner"], "region changes", "regions change")} owner`);
-  if (byKind.borders) lines.push(`${plural(byKind.borders, "border change", "border changes")}`);
+  if (byKind.borders) {
+    const regions = describeBorderRegions(borderRegionCounts(list));
+    lines.push(`${plural(byKind.borders, "border change", "border changes")}${regions ? ` (${regions})` : ""}`);
+  }
   if (byKind["polity-add"]) lines.push(`${plural(byKind["polity-add"], "new country", "new countries")}`);
   if (byKind["polity-remove"]) lines.push(`${plural(byKind["polity-remove"], "country removed", "countries removed")}`);
   if (byKind["polity-rename"]) lines.push(`${plural(byKind["polity-rename"], "country renamed", "countries renamed")}`);

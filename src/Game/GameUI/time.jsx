@@ -3957,11 +3957,12 @@ const DateWidget = ({
             ...widgetSurface,
             ...dockStyle,
             top: topOffset,
+            height: isMobile ? "3.2rem" : "3.5rem",
             // The player's country sits beside the date. On phones the standalone
             // pill would cover the date, so stretch the widget; on desktop cap the
             // width so a long fantasy country name ellipsizes instead of sprawling.
             ...(isMobile
-                ? { width: "min(24rem, calc(100vw - 5.75rem))" }
+                ? { width: "min(24rem, calc(100vw - 4.5rem))", borderRadius: "12px" }
                 : playerCountry
                 ? { maxWidth: "min(28rem, calc(100vw - 8rem))" }
                 : null),

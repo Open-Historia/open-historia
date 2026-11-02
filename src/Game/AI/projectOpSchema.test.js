@@ -212,7 +212,11 @@ test("the board no longer costs the jump anything", () => {
   // Shared games' letters raised it by about 230 for a chat's `to` (in createdChats
   // and diplomaticOutreach alike): each letter reaches the player it was written
   // to, where every one used to go to the host's.
-  assert.ok(jumpChars < 28650, `the jump schema grew back to ${jumpChars} chars`);
+  // Peace through the diplomatic chats raised it by about 560, on purpose: a
+  // letter's peaceOffer (its terms, four flat fields) and the peaceTreaties line
+  // field, so that a country offers peace when the skip says so, in the skip's
+  // one request, and never by a formula of the game's.
+  assert.ok(jumpChars < 29250, `the jump schema grew back to ${jumpChars} chars`);
 
   // ...and the game master, which has no second pass to hand the board to, keeps
   // it on its authored events (the provider sees a shallow transport; the
