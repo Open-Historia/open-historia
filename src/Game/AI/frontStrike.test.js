@@ -258,8 +258,9 @@ test("the world keeps its strikes, every player's map is given them, and the tur
   assert.deepEqual(kept, [{ id: "s1", eventId: "", date: "", round: 4, owner: "Aland", weapon: "bombing run", count: 12, down: 2, from: null, to: { name: "city: Brod", lng: 51, lat: 45 } }]);
   assert.ok(PUBLIC_WORLD_KEYS.includes("strikes"));
   const gameplay = read("./gameplay.js");
-  assert.match(gameplay, /strikes: withTurnStrikes\(baseWorld\?\.strikes, turnFronts\.strikes, nextGame\.round\)/);
+  assert.match(gameplay, /strikes: withTurnStrikes\(baseWorld\?\.strikes, \[\.\.\.turnFronts\.strikes, \.\.\.airStrikeVisuals\(turnFronts\.airStrikes\)\], nextGame\.round\)/);
   assert.match(gameplay, /import \{ withTurnStrikes \} from "\.\.\/\.\.\/runtime\/strikes\.js";/);
   // A run that could not be made tells of no strike rather than of none it knows.
-  assert.match(read("./frontApply.js"), /voyages: \[\], strikes: \[\] \}/);
+  // (Nor of the war room's air strikes: they wait to be flown.)
+  assert.match(read("./frontApply.js"), /voyages: \[\], strikes: \[\], airStrikes: null \}/);
 });

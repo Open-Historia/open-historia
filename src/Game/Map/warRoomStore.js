@@ -5,7 +5,7 @@
 // different parts of the tree, so what they share is kept here, outside React:
 // which battlefield is open, which tool is in hand, which troops are picked,
 // which general's troops are lit, the plans to draw, a fortified line drawn
-// and waiting to be ordered built, and the fleet picked out.
+// and waiting to be ordered built, the fleet picked out, and the air unit.
 //
 // Nothing here is saved, and nothing here writes the game: a way that has been
 // drawn is handed to whoever is listening (onWay), which is the panel.
@@ -22,7 +22,8 @@ import { useSyncExternalStore } from "react";
 //   fleet      click where the fleet picked out (`fleet`) is to sail, or to patrol (`station`)
 //   deploy     draw the line the player's new troops on the battlefield are to come in on (runtime/fronts/deploy.js),
 //              or, with `deployForm` "swarm", click the place they are to gather at as a swarm (runtime/fronts/swarms.js)
-export const WAR_ROOM_TOOLS = Object.freeze(["pan", "select", "route", "diversion", "replan", "transport", "fortify", "fleet", "deploy"]);
+//   aircraft   click what the air unit picked out (`wing`) is to strike: troops, a structure or a city (`strikeKind`)
+export const WAR_ROOM_TOOLS = Object.freeze(["pan", "select", "route", "diversion", "replan", "transport", "fortify", "fleet", "deploy", "aircraft"]);
 
 const CLOSED = Object.freeze({
   open: false,
@@ -55,6 +56,15 @@ const CLOSED = Object.freeze({
   fleets: false,
   fleet: "",
   station: "",
+  // Whether the aircraft's plate is out beside the rail (Deploy Aircraft), the
+  // air unit picked out on it (its id), what a click on the map is to strike
+  // with it ("troops", "structure" or "city"), and how far the bombs of one
+  // strike fall, in km, for the ring drawn where the pointer is
+  // (GameUI/warRoomAircraft.jsx; runtime/fronts/airStrike.js).
+  aircraft: false,
+  wing: "",
+  strikeKind: "troops",
+  blast: 0,
   // The ways found for the player's transporters that have not set out, by
   // their ids: { way, km, days, from } or { error, from } (AI/frontApply.js transportWaysFor).
   transportWays: null,

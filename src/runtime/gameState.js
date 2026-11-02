@@ -67,6 +67,7 @@ import { compareGameDates, normalizeGameDate } from "./gameDates.js";
 import { normalizeBattlefields, withWarIdFrontsRenamed } from "./fronts/record.js";
 import { normalizeTransports } from "./fronts/transports.js";
 import { normalizeStrikes } from "./strikes.js";
+import { normalizeAirStrikeOrders, normalizeAirStrikes } from "./fronts/airStrike.js";
 import { battlefieldHeldClaimants } from "./fronts/heldRegions.js";
 import { sharedGameHostCountry } from "./humanPolities.js";
 import { activeWars } from "./gameFeatures.js";
@@ -272,6 +273,10 @@ export const WORLD_DEFAULTS = {
   // The missiles and bombing runs the last turns' events told of, for the map
   // to play (strikes.js). They change nothing by themselves.
   strikes: [],
+  // The air strikes the war room ordered, waiting for time to pass, and those
+  // of the last turns as they went (fronts/airStrike.js).
+  airStrikeOrders: [],
+  airStrikes: [],
   // The battles the last turns' fleets fought (naval/record.js), for the map to
   // mark. What a battle did to the fleets is on the fleets.
   seaBattles: [],
@@ -4594,6 +4599,8 @@ export const normalizeWorldState = (world) => {
     battlefields: normalizeBattlefields(nextWorld.battlefields),
     transports: normalizeTransports(nextWorld.transports),
     strikes: normalizeStrikes(nextWorld.strikes),
+    airStrikeOrders: normalizeAirStrikeOrders(nextWorld.airStrikeOrders),
+    airStrikes: normalizeAirStrikes(nextWorld.airStrikes),
     seaBattles: normalizeSeaBattles(nextWorld.seaBattles),
     naviesRaised: normalizeNaviesRaised(nextWorld.naviesRaised),
     blockades: normalizeBlockades(nextWorld.blockades),

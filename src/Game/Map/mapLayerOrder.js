@@ -185,6 +185,11 @@ export const MAP_LAYER_ORDER = [
   "warroom-fleets-course",
   "warroom-fleets-head",
   "warroom-fleets-ring",
+  // The war room's air strikes: the reach of the air unit picked out, and the rings where their bombs fall.
+  "warroom-air-reach",
+  "warroom-air-blast",
+  "warroom-air-edge",
+  "warroom-air-target",
 
   // Unit counters are interactive operational objects and remain topmost.
   "units-fill",

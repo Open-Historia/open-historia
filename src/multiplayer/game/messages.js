@@ -88,6 +88,10 @@ export const PLAYER_REQUESTS = Object.freeze({
   // for one of the seat's own fleets (cleanFleetOp), sent only where the
   // host's own map says there is sea.
   fleet: obj({ t: literal("fleet"), id: REQUEST_ID, op: json(3) }),
+  // And its air units (runtime/fronts/airStrikeOps.js): an air strike on troops
+  // on a battlefield, an enemy's structure or a city, or one called off, for
+  // one of the seat's own air units (cleanAirStrikeOp).
+  airstrike: obj({ t: literal("airstrike"), id: REQUEST_ID, op: json(3) }),
   // The player's agents: place one in `target`, call `spy` home, send a
   // caught one home or turn it, and say what a turned one reports.
   agent: obj({

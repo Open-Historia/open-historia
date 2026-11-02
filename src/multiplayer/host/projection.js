@@ -68,6 +68,8 @@ export const PUBLIC_WORLD_KEYS = Object.freeze([
   "transports",
   // And what an event's strike looked like: every map plays it.
   "strikes",
+  // And what the war room's air strikes did: who was struck knows it (runtime/fronts/airStrike.js).
+  "airStrikes",
   "seaBattles",
   "blockades",
   // War weariness, peace and alliances coming due (Game/AI/warAndPeace.js):
@@ -140,6 +142,8 @@ const FILTERED_WORLD_KEYS = Object.freeze({
     ? unit
     : { ...unit, orderId: "" })),
   pendingUnitOrders: (world, viewer) => list(world.pendingUnitOrders).filter((order) => ownsUnit(world, order?.unitId, viewer)),
+  // The air strikes a country has ordered and not yet flown are its own.
+  airStrikeOrders: (world, viewer) => list(world.airStrikeOrders).filter((order) => same(order?.owner, viewer)),
 
   // A battlefield is seen whole, as units are: the line, both sides' troops,
   // what has been taken. A side's standing orders and its reserves are its own

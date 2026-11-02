@@ -35,7 +35,7 @@ test("the rail has a key that draws a fortified line, and one that puts out the 
   assert.match(rail, /<RailKey label="Fleets" [^>]*disabled=\{fleets === 0\} onClick=\{onFleets\}>/);
   // (No Fleets key in a scenario without navies: the Wars feature.)
   assert.match(rail, /\{navies && <RailKey label="Fleets" /);
-  assert.match(panel, /canFortify=\{canFortify\}\s*drafted=\{Boolean\(draft\)\}\s*navies=\{navies\}\s*fleets=\{fleets\.length\}\s*fleetsOut=\{fleetsOut\}\s*onFleets=\{\(\) => setWarRoom\(\{ fleets: !getWarRoom\(\)\.fleets \}\)\}/);
+  assert.match(panel, /canFortify=\{canFortify\}\s*drafted=\{Boolean\(draft\)\}\s*navies=\{navies\}\s*fleets=\{fleets\.length\}\s*fleetsOut=\{fleetsOut\}\s*onFleets=\{\(\) => setWarRoom\(\{ fleets: !getWarRoom\(\)\.fleets, aircraft: false \}\)\}/);
   // A line is drawn only where the scenario's wars have fortified lines.
   assert.match(panel, /const canFortify = useMemo\(\(\) => warSettingsOf\(\{ warSettings: world\?\.warSettings \}\)\.mechanics\.walls === true/);
   // What the tool in hand wants done is said beside the rail.
@@ -69,7 +69,7 @@ test("the tools are in the store, with what a click orders for the fleet, and pu
 
 test("on the map: a line is a stroke in its level's colour, and a fleet's place a click that a drag does not make", () => {
   // (And a swarm's place: runtime/fronts/swarms.js.)
-  assert.match(tools, /const placing = tool === "transport" \|\| tool === "fleet" \|\| \(tool === "deploy" && deployForm === "swarm"\);/);
+  assert.match(tools, /const placing = tool === "transport" \|\| tool === "fleet" \|\| tool === "aircraft" \|\| \(tool === "deploy" && deployForm === "swarm"\);/);
   assert.match(tools, /if \(placing\) \{[\s\S]*?map\.panBy\(\[last\[0\] - point\[0\], last\[1\] - point\[1\]\], \{ duration: 0 \}\);/);
   assert.match(tools, /if \(tool === "fleet"\) \{\s*if \(\(done\.moved \?\? 0\) >= CLICK_PX\) return;\s*const place = map\.unproject\(point\);[\s\S]*?const \{ fleet, station \} = getWarRoom\(\);\s*takeTool\("pan"\);\s*reportWarRoomWay\("fleet", \[\[unwrapLng\(place\.lng, 0\), place\.lat\]\], \{ fleet, station \}\);/);
   assert.match(tools, /const colour = tool === "fortify" \? lineColour\(level\) : DRAW_COLOURS\[tool\] \?\? ACCENT;/);
@@ -134,7 +134,8 @@ test("on the map: the lines lie under the planned movements, and the marks on th
   const index = (id) => MAP_LAYER_ORDER.indexOf(id);
   const marks = read("../Map/WarRoomMarks.jsx");
   const drawn = [...marks.matchAll(/id="([a-z-]+)"/g)].map((match) => match[1]).filter((id) => !id.endsWith("-source"));
-  assert.deepEqual(drawn, ["warroom-lines-casing", "warroom-lines-draft", "warroom-lines-label", "warroom-fleets-station", "warroom-fleets-course", "warroom-fleets-head", "warroom-fleets-ring"]);
+  // (And the air strikes' marks, Deploy Aircraft: warRoomAircraft.test.js.)
+  assert.deepEqual(drawn, ["warroom-lines-casing", "warroom-lines-draft", "warroom-lines-label", "warroom-fleets-station", "warroom-fleets-course", "warroom-fleets-head", "warroom-fleets-ring", "warroom-air-reach", "warroom-air-blast", "warroom-air-edge", "warroom-air-target"]);
   // The lines themselves are the map's own, in the war room as out of it, with their breaches (WarGeographyLayers.jsx).
   assert.match(marks, /id="warroom-lines-casing"\s*type="line"\s*filter=\{IS\("draft"\)\}/);
   for (const id of drawn) assert.ok(index(id) >= 0, `${id} is missing from the map's order`);

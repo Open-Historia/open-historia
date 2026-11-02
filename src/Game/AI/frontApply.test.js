@@ -356,8 +356,10 @@ test("a time skip's prompt gains the block only with fronts on, after the rules 
   assert.match(live, /const fronts = frontsLiveBlock\(world, game, variables\.frontsForecast \?\? null\);\s*\n\s*if \(fronts\) blocks\.push\(fronts\);/);
   assert.ok(live.indexOf("blocks.push(FOLDED_SKIP_CONSEQUENCES)") < live.indexOf("frontsLiveBlock(world, game"), "after [Every Event Carries Its Consequences]");
   assert.ok(live.indexOf("[Units and Structures on the Map]") < live.indexOf("frontsLiveBlock(world, game"));
-  // (The land's block and then the sea's, navalPrompt.js: each "" with fronts off.)
-  assert.ok(read("frontApply.js").includes("export const frontsLiveBlock = (world, game, foreseen = null) => [landBlock(world, game, foreseen), seasLiveBlock(world, game, foreseen)].filter(Boolean).join(\"\\n\\n\");"));
+  // (The land's block, then the sea's, navalPrompt.js, then the war room's air strikes as the period flew them,
+  // runtime/fronts/airStrike.js: each "" with fronts off.)
+  assert.ok(read("frontApply.js").includes("export const frontsLiveBlock = (world, game, foreseen = null) => [landBlock(world, game, foreseen), seasLiveBlock(world, game, foreseen), airStrikesLiveBlock(foreseen)].filter(Boolean).join(\"\\n\\n\");"));
+  assert.match(read("frontApply.js"), /export const airStrikesLiveBlock = \(foreseen = null\) => \(frontsOn\(\) && airOn\(\) \? airStrikesBlock\(foreseen\?\.airStrikes\) : ""\);/);
   // (The sea's also "" with navies off: the Wars feature.)
   assert.match(read("frontApply.js"), /export const seasLiveBlock = \(world, game, foreseen = null\) => \(frontsOn\(\) && naviesOn\(\)\s*\n\s*\? buildSeasBlock\(/);
   assert.match(read("frontApply.js"), /const landBlock = \(world, game, foreseen = null\) => \(frontsOn\(\)\s*\n\s*\? buildFrontsBlock\(\{ battlefields: world\?\.battlefields, players: humanCountriesOf\(game\), period: foreseen, transports: world\?\.transports, difficulty: normalizeDifficulty\(game\?\.difficulty\), orderFunction: foreseen\?\.orderFunction === true \}\)\s*\n\s*: ""\);/);

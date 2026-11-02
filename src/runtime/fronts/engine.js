@@ -34,6 +34,7 @@ import { levyOwed, musterShare } from "./muster.js";
 import { DEPLOY_USUAL, DEPLOY_WHY, deployCells } from "./deploy.js";
 import { linesChanged } from "./walls.js";
 import { AIR_MISSIONS, wingChanges } from "./air.js";
+import { bombTroops } from "./airStrike.js";
 import { MILITARY_NEUTRAL, airWorth, landWorth, mixOf, readMilitary, seaWorth } from "./military.js";
 import { absorbUnit, holderOf, isLandFormation, keepStart, lineLength, loadBattle, memberIndex, memberWeights, openBattle, paintGround, raiseTroops, readRegion, reconcile, releaseNamed, saveBattle, setHandicap, setRadii, sideOfName } from "./battle.js";
 import { buildBrief } from "./brief.js";
@@ -1498,6 +1499,8 @@ const applyMoments = (run, day) => {
     if (moment.type === "order") applyOrderMoment(run, moment, day);
     else if (moment.type === "war") applyWarMoment(run, moment, day);
     else if (moment.type === "reinforce") applyReinforce(run, moment);
+    // An air strike the war room ordered, flown before the period (airStrike.js): its bombs on whoever stands there.
+    else if (moment.type === "airstrike") bombTroops(run, moment, day);
     else if (moment.type === "control") {
       // Someone other than the engine changed who controls a region: the world wins.
       const id = clean(moment.regionId);

@@ -4,7 +4,8 @@
 // op (runtime/fronts/warRoomOps.js): an order for troops picked out, a route
 // drawn for them, what was said to the generals and what they took from it, a
 // diversion, a Board operation's arrow redrawn; and a fortified line to be
-// built (fronts/fortifyOps.js) or an order for a fleet (naval/fleetOps.js).
+// built (fronts/fortifyOps.js), an order for a fleet (naval/fleetOps.js) or an
+// air strike (fronts/airStrikeOps.js).
 //
 // Through the write queue, on the world as it stands when the write's turn
 // comes, so it cannot put back a world another writer has changed since. A
@@ -19,8 +20,10 @@
 // Runs under bare node: the world store and the ops both do.
 
 import { inSharedGame, requestFromHost } from "../multiplayer/client/sharedGameBridge.js";
+import { applyAirStrikeOp, cleanAirStrikeOp } from "./fronts/airStrikeOps.js";
 import { applyFortifyOp, cleanFortifyOp } from "./fronts/fortifyOps.js";
 import { applyWarRoomOp, cleanWarRoomOp } from "./fronts/warRoomOps.js";
+import { activeWars } from "./gameFeatures.js";
 import { mutateWorldState, readGameData } from "./gameState.js";
 import { applyFleetOp, cleanFleetOp } from "./naval/fleetOps.js";
 import { eraSettingOf } from "./warSettings.js";
@@ -95,4 +98,13 @@ export const sendFleetOp = async (op, { turnRunning = () => false, readChart = a
   const sent = cleanFleetOp(op);
   if (!sent) throw new Error("Nothing was asked.");
   await sendHeldToMap(sent, { request: "fleet", apply: applyFleetOp, needsChart: ["station", "blockade", "escort"].includes(sent.op) }, { turnRunning, readChart });
+};
+
+// An air strike for one of the player's air units, or its strike called off. The map is read for a city struck:
+// whose the ground is. (None in a scenario without air units: the Wars feature.)
+export const sendAirStrikeOp = async (op, { turnRunning = () => false, readChart = async () => null } = {}) => {
+  const sent = cleanAirStrikeOp(op);
+  if (!sent) throw new Error("Nothing was asked.");
+  const apply = (world, given, context) => applyAirStrikeOp(world, given, { ...context, air: activeWars().air });
+  await sendHeldToMap(sent, { request: "airstrike", apply, needsChart: sent.op === "airstrike" && sent.kind === "city" }, { turnRunning, readChart });
 };

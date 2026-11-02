@@ -213,8 +213,9 @@ import { frontsOn, strategyNetOn, warPartsOffBlock } from "./frontsGate.js";
 import { engineerLines } from "../../runtime/fronts/engineer.js";
 import { foreseeFronts } from "./foreseenFronts.js";
 import { offPageAvailable } from "./frontWorkerClient.js";
-import { applyTurnFronts, citiesFollowCountries, withFrontManpower, withBlockadeEconomy, turnBlockades, regionHoldingsOf, forecastTurnFronts, frontsListBlock, frontPlansBlock, frontPowers, frontRegionTest, frontWarJoins, frontWarStarts, frontsLiveBlock, openScenarioFronts, routesIntoOthers, transportWaysFor, readFrontCities, scenarioFrontsPending, warRoomChartFor, warRoomIntelText, withFrontUnits, withoutFrontPowers } from "./frontApply.js";
+import { applyTurnFronts, citiesFollowCountries, withAirStrikes, withFrontManpower, withBlockadeEconomy, turnBlockades, regionHoldingsOf, forecastTurnFronts, frontsListBlock, frontPlansBlock, frontPowers, frontRegionTest, frontWarJoins, frontWarStarts, frontsLiveBlock, openScenarioFronts, routesIntoOthers, transportWaysFor, readFrontCities, scenarioFrontsPending, warRoomChartFor, warRoomIntelText, withFrontUnits, withoutFrontPowers } from "./frontApply.js";
 import { withTurnStrikes } from "../../runtime/strikes.js";
+import { airStrikeVisuals } from "../../runtime/fronts/airStrike.js";
 import { answerPeaceProposal, offerPeace, playerDiplomacy, turnDays, turnWarAndPeace } from "./warAndPeace.js";
 import { holdPlayersWars } from "./playersWarsHold.js";
 import { chatMessageTags } from "./chatTags.js";
@@ -9318,7 +9319,8 @@ const applySimulationResult = async ({
       // And the transporters as the run left them, with those the answer ordered.
       ...(turnFronts?.transports ? { transports: turnFronts.transports } : null),
       // The missiles and bombing runs this answer told of, for the map to play; those of older turns are let go.
-      ...(turnFronts ? { strikes: withTurnStrikes(baseWorld?.strikes, turnFronts.strikes, nextGame.round) } : null),
+      // (With the war room's air strikes, flown as the period began: runtime/fronts/airStrike.js.)
+      ...(turnFronts ? { strikes: withTurnStrikes(baseWorld?.strikes, [...turnFronts.strikes, ...airStrikeVisuals(turnFronts.airStrikes)], nextGame.round) } : null),
       // And the battles its fleets fought, for the map to mark (runtime/naval/record.js); those of older turns are let go.
       ...(turnFronts ? { seaBattles: withTurnSeaBattles(baseWorld?.seaBattles, turnFronts.sea?.battles, nextGame.round) } : null),
       ...(turnFronts?.sea ? { naviesRaised: turnFronts.sea.raised } : null),
@@ -9429,6 +9431,9 @@ const applySimulationResult = async ({
   // And what a blockade cost the country it was laid on, off its economy
   // (runtime/naval/blockade.js): "make blockades affect the economy".
   impactedWorld = withBlockadeEconomy(impactedWorld, turnFronts, applyCountryStatPatchToWorld);
+  // And what the war room's air strikes did (runtime/fronts/airStrike.js): kept for the war room, the war stats and
+  // the map, a structure struck damaged or destroyed, a city struck its people killed and its country's economy hurt.
+  impactedWorld = withAirStrikes(impactedWorld, turnFronts, { round: nextGame.round, date: baseGame.gameDate, patch: applyCountryStatPatchToWorld });
   // Ground a side has taken on a battlefield is controlled by it, not disputed:
   // the claimants an earlier turn wrote for such a region come off it
   // (runtime/fronts/heldRegions.js). Nothing is touched with fronts off.

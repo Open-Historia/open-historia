@@ -22,7 +22,9 @@
 //     on (warRoomRail.jsx). At its foot, Fortify draws a fortified line to be
 //     built (warRoomFortify.jsx) and Fleets commands the player's fleets
 //     (warRoomFleets.jsx), each on a plate beside the rail; the drawer lists
-//     the player's lines and fleets as they stand.
+//     the player's lines and fleets as they stand. Beside Deploy, Aircraft
+//     sends an air unit to strike troops, a structure or a city
+//     (warRoomAircraft.jsx), and the drawer lists the strikes.
 //   - the TALK with the generals: one request a message (AI/gameplay.js
 //     generateWarRoomReply). They answer, push back, and take orders.
 //
@@ -32,6 +34,9 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { generateWarRoomReply, warRoomChart, warRoomRouteAttacks, warRoomTransportWays } from "../AI/gameplayLazy.js";
+import { normalizeAirStrikeOrders, normalizeAirStrikes } from "../../runtime/fronts/airStrike.js";
+import { airReachOf, airUnitsOf, strikableStructures } from "../../runtime/fronts/airStrikeOps.js";
+import { kmBetween } from "../../runtime/fronts/worldGrid.js";
 import { warRoomIntel, warRoomPlans } from "../AI/frontPlans.js";
 import { isSimulationBusy } from "../AI/simulationStatus.js";
 import { closeWarRoom, getWarRoom, onWarRoomWay, openWarRoom, setWarRoom, showBattlefield, takeTool, useWarRoom } from "../Map/warRoomStore.js";
@@ -52,11 +57,12 @@ import { SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP } from "../../runtime/mobi
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
 import { convoysOf, enemiesOf, fleetsOf } from "../../runtime/naval/fleetOps.js";
-import { sendFleetOp, sendFortifyOp, sendWarRoomOp } from "../../runtime/warRoomWrites.js";
+import { sendAirStrikeOp, sendFleetOp, sendFortifyOp, sendWarRoomOp } from "../../runtime/warRoomWrites.js";
 import { warSettingsOf, warfareOf } from "../../runtime/warSettings.js";
 import { ADVISOR_SLIDE } from "./advisorSlide.js";
 import { placeName, playerFronts } from "./warRoomData.js";
 import { FleetsList, FleetsPlate } from "./warRoomFleets.jsx";
+import { AircraftList, AircraftPlate } from "./warRoomAircraft.jsx";
 import { FortifyPlate, LinesList } from "./warRoomFortify.jsx";
 import { WarRoomRail } from "./warRoomRail.jsx";
 import { WeatherAhead } from "./warRoomWeather.jsx";
@@ -88,6 +94,8 @@ import {
 import { useTurnRunning } from "./useTurnRunning.js";
 
 const WAR_ROOM_WIDTH = "min(26rem, calc(100vw - 1rem))";
+// A structure or a city this near where the map was clicked is what an air strike is sent at.
+const STRIKE_SNAP_KM = 60;
 // The frame of plate round the map: a bar across the top with the
 // battlefield's name on it, and a strip down the left and along the bottom.
 const FRAME_BAR = "2.2rem";
@@ -221,6 +229,10 @@ const WarRoomPanel = ({ open, onClose, width, onResize, onResizeEnd }) => {
   const station = useWarRoom((state) => state.station);
   const deployForm = useWarRoom((state) => state.deployForm);
   const deployCount = useWarRoom((state) => state.deployCount);
+  // The aircraft's plate, the air unit picked out on it, and what it is to strike.
+  const aircraftOut = useWarRoom((state) => state.aircraft);
+  const pickedWing = useWarRoom((state) => state.wing);
+  const strikeKind = useWarRoom((state) => state.strikeKind);
 
   // ---- which battlefield ---------------------------------------------------------------
   const fronts = useMemo(() => playerFronts(world?.battlefields, game.country, world?.wars), [world?.battlefields, game.country, world?.wars]);
@@ -424,6 +436,25 @@ const WarRoomPanel = ({ open, onClose, width, onResize, onResizeEnd }) => {
   // None in a scenario without navies.
   const fleets = useMemo(() => (navies ? fleetsOf({ units: world?.units, pendingUnitOrders: world?.pendingUnitOrders }, game.country) : []), [navies, world?.units, world?.pendingUnitOrders, game.country]);
   const enemies = useMemo(() => enemiesOf({ wars: world?.wars }, game.country), [world?.wars, game.country]);
+  // The player's air units, how far they reach and their bombs fall, and their strikes: waiting, and the last turn's
+  // (runtime/fronts/airStrikeOps.js, airStrike.js). None in a scenario without air units.
+  const wings = useMemo(() => (aircraft ? airUnitsOf({ units: world?.units, airStrikeOrders: world?.airStrikeOrders }, game.country) : []), [aircraft, world?.units, world?.airStrikeOrders, game.country]);
+  const { reach: airReach, blast: airBlast } = useMemo(() => airReachOf({ warSettings: world?.warSettings }, game.gameDate), [world?.warSettings, game.gameDate]);
+  const ownStrike = (entry) => String(entry?.owner ?? "").trim().toLowerCase() === String(game.country ?? "").trim().toLowerCase();
+  const strikesWaiting = useMemo(() => (aircraft ? normalizeAirStrikeOrders(world?.airStrikeOrders).filter(ownStrike) : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [aircraft, world?.airStrikeOrders, game.country]);
+  // (Those of the last turn the player's flew in.)
+  const strikesFlown = useMemo(() => {
+    const own = aircraft ? normalizeAirStrikes(world?.airStrikes).filter(ownStrike) : [];
+    const round = own.reduce((most, strike) => Math.max(most, strike.round), 0);
+    return own.filter((strike) => strike.round === round);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [aircraft, world?.airStrikes, game.country]);
+  const wingName = (id) => wings.find((entry) => entry.id === id)?.name ?? (world?.units ?? []).find((unit) => unit?.id === id)?.name ?? "";
+  useEffect(() => {
+    if (open) setWarRoom({ blast: airBlast });
+  }, [open, airBlast]);
   const convoys = useMemo(() => convoysOf({ transports: world?.transports }, game.country), [world?.transports, game.country]);
   // What the nearest town to a place on the map is called, if one is near: a
   // transporter is told where it is bound in words as well.
@@ -507,12 +538,40 @@ const WarRoomPanel = ({ open, onClose, width, onResize, onResizeEnd }) => {
       } else if (drawn === "fortify") {
         // A fortified line: it waits beside the rail for the level it is to be built to (warRoomFortify.jsx).
         setWarRoom({ draft: way });
+      } else if (drawn === "aircraft" && extra?.wing && way[0]) {
+        // What was clicked: the air unit picked out is to strike it when time next passes.
+        await orderWith(sendAirStrikeOp, await strikeAtRef.current(extra.wing, extra.kind, way[0]));
       } else if (drawn === "fleet" && extra?.fleet && way[0]) {
         // The place clicked at sea: the fleet picked out sails there, or patrols it.
         await orderWith(sendFleetOp, { op: "station", unit: extra.fleet, to: way[0], order: extra.station === "patrol" ? "patrol" : "move" });
       }
     });
   }, [open, name, act, orderWith]);
+
+  // The strike a click on the map orders (Deploy Aircraft): troops where it was clicked on this battlefield, the
+  // enemy's structure nearest it, or the city nearest it with whoever holds it (the map's own chart says).
+  const strikeAt = async (unit, kind, [lng, lat]) => {
+    const near = (list) => list
+      .map((entry) => ({ entry, km: kmBetween(lng, lat, Number(entry.lng), Number(entry.lat)) }))
+      .filter((item) => item.km <= STRIKE_SNAP_KM)
+      .sort((a, b) => a.km - b.km)[0]?.entry ?? null;
+    if (kind === "structure") {
+      const found = near(strikableStructures(world, game.country));
+      return { op: "airstrike", unit, kind, marker: found?.id ?? "" };
+    }
+    if (kind === "city") {
+      const city = near(cities);
+      if (!city) return { op: "airstrike", unit, kind, to: [lng, lat] };
+      const chart = await Promise.resolve().then(() => warRoomChart()).catch(() => null);
+      const country = enemies.find((name) => chart?.holds?.(name, Number(city.lng), Number(city.lat)) === true) ?? (chart ? "" : enemies.length === 1 ? enemies[0] : "");
+      return { op: "airstrike", unit, kind, to: [Number(city.lng), Number(city.lat)], target: city.name, country, people: Number(city.population) || 0 };
+    }
+    return { op: "airstrike", unit, kind: "troops", to: [lng, lat], battlefield: name, target: placeNear(lng, lat) };
+  };
+  const strikeAtRef = useRef(strikeAt);
+  useEffect(() => {
+    strikeAtRef.current = strikeAt;
+  });
 
   // A line drawn is built at the level picked for it, under the name given it, once confirmed.
   const buildLine = async (title) => {
@@ -640,7 +699,12 @@ const WarRoomPanel = ({ open, onClose, width, onResize, onResizeEnd }) => {
   // A fleet picked out, in the drawer or on its plate: the plate comes out beside
   // the rail, and on a phone the drawer folds down to the map it is beside.
   const pickFleet = useCallback((id) => {
-    setWarRoom({ fleet: id, fleets: true });
+    setWarRoom({ fleet: id, fleets: true, aircraft: false });
+    if (isMobile) setFolded(true);
+  }, [isMobile]);
+  // And an air unit, on the aircraft's plate.
+  const pickWing = useCallback((id) => {
+    setWarRoom({ wing: id, aircraft: true, fleets: false });
     if (isMobile) setFolded(true);
   }, [isMobile]);
   const nameOf = (command) => generals.find((general) => general.command === command)?.name || "";
@@ -744,10 +808,14 @@ const WarRoomPanel = ({ open, onClose, width, onResize, onResizeEnd }) => {
         navies={navies}
         fleets={fleets.length}
         fleetsOut={fleetsOut}
-        onFleets={() => setWarRoom({ fleets: !getWarRoom().fleets })}
+        onFleets={() => setWarRoom({ fleets: !getWarRoom().fleets, aircraft: false })}
         station={station}
         deployForm={deployForm}
         onDeployForm={(form) => setWarRoom({ deployForm: form === "swarm" ? "swarm" : "front" })}
+        aircraft={aircraft}
+        wings={wings.length}
+        aircraftOut={aircraftOut}
+        onAircraft={() => setWarRoom({ aircraft: !getWarRoom().aircraft, fleets: false })}
         deployCount={deployCount}
         onDeployCount={(value) => setWarRoom({ deployCount: value })}
         supply={supplyOn}
@@ -786,6 +854,23 @@ const WarRoomPanel = ({ open, onClose, width, onResize, onResizeEnd }) => {
           onOrder={(op) => orderWith(sendFleetOp, op)}
           onPlace={(kind) => takeTool("fleet", { station: kind })}
           onClose={() => setWarRoom({ fleets: false })}
+        />
+      )}
+      {railShown && !draft && !fleetsOut && aircraftOut && (
+        <AircraftPlate
+          isMobile={isMobile}
+          wings={wings}
+          picked={pickedWing}
+          kind={strikeKind}
+          reach={airReach}
+          flown={strikesFlown}
+          locked={locked}
+          tool={tool}
+          onPick={pickWing}
+          onKind={(kind) => setWarRoom({ strikeKind: kind })}
+          onAim={() => takeTool("aircraft")}
+          onCallOff={(unit) => orderWith(sendAirStrikeOp, { op: "unairstrike", unit })}
+          onClose={() => setWarRoom({ aircraft: false })}
         />
       )}
 
@@ -1123,6 +1208,7 @@ const WarRoomPanel = ({ open, onClose, width, onResize, onResizeEnd }) => {
 
                   {/* The player's fleets, commanded from the plate beside the rail, and its fortified lines (warRoomFleets.jsx, warRoomFortify.jsx). */}
                   <FleetsList fleets={fleets} picked={pickedFleet} onPick={pickFleet} />
+                  <AircraftList orders={strikesWaiting} flown={strikesFlown} names={wingName} onPick={pickWing} />
                   <LinesList world={world} country={game.country} gameDate={game.gameDate} locked={locked} onStop={(id) => orderWith(sendFortifyOp, { op: "unfortify", id })} />
 
                   <Heading style={{ marginTop: "0.8rem" }}>What is known of theirs</Heading>

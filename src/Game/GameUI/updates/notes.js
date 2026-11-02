@@ -53,6 +53,67 @@ import { PAST_UPDATES } from "./notesPast.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // "in features rename the fronts section to wars and make it so you can toggle fronts, air troops, and navies for a
+    // scenario", "make it so in the war room you can Deploy Aircraft", "make it so they can be intercepted and if they
+    // are, the "fighters" in the air unit have a simulated battle" (the owner, 2026-11-01).
+    id: "2026-11-deploy-aircraft",
+    kind: "major",
+    date: "2026-11-01",
+    channel: "beta",
+    banners: [
+      {
+        theme: "airRaid",
+        title: "Deploy Aircraft",
+        subtitle: "Wars, part by part",
+        lead: "Send your air units to bomb the enemy's troops, the things they have built, or their cities, and watch for the fighters that rise to meet them. And a scenario now chooses which parts of war it has.",
+        sections: [
+          {
+            heading: "Deploy Aircraft",
+            icon: "plane",
+            items: [
+              "In the War Room, the Aircraft key beside Deploy: pick one of your air units, choose troops, a structure or a city, and click it on the map.",
+              "The strike flies when time next passes. The ring on the map shows where its bombs will fall.",
+            ],
+          },
+          {
+            heading: "Intercepted",
+            icon: "swords",
+            items: [
+              "The enemy's air units within reach may find the raid and rise against it. Then the fighters of both sides fight it out.",
+              "What is left decides it: the bombers get through, get through in part, or turn back. Both sides lose aircraft.",
+            ],
+          },
+          {
+            heading: "What the bombs do",
+            icon: "flag",
+            items: [
+              "Troops under the bombs lose strength, dug-in troops less. Your own troops under them are hit too.",
+              "A structure is damaged or destroyed. A city loses people and economy, and its country grows wearier of the war.",
+            ],
+          },
+          {
+            heading: "Told and counted",
+            icon: "book",
+            items: [
+              "The story is told each strike as it happened, the War Room shows what came of it, and the map plays the raid.",
+              "Countries know the air war in their war stats, and their diplomacy weighs it.",
+            ],
+          },
+          {
+            heading: "Wars, part by part",
+            icon: "gear",
+            items: [
+              "In a scenario's Features, Fronts is now Wars, with a switch each for Fronts, Air units and Navies.",
+              "Switched off, that part of war is gone from the game: nothing of it is raised, sent or fought. Existing scenarios keep everything on.",
+              "The scenario editor's War tab is now under Wars in the Features tab.",
+            ],
+          },
+        ],
+        button: "To the airfield",
+      },
+    ],
+  },
+  {
     // A suggestion's border changes are groups of neighbouring regions; now it says how many regions (2026-11-01).
     id: "2026-11-suggestion-regions",
     kind: "minor",

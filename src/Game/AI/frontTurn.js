@@ -25,7 +25,8 @@
 // applySimulationResult).
 
 import { addGameDays, diffGameDays, gameDateYear } from "../../runtime/gameDates.js";
-import { yearInEra } from "../../runtime/unitMotion.js";
+import { eraOf, yearInEra } from "../../runtime/unitMotion.js";
+import { resolveAirStrikes, withTroopHits } from "../../runtime/fronts/airStrike.js";
 import { militaryLookup } from "../../runtime/militaryStats.js";
 import { DEFAULT_MUSTER, musterTable } from "../../runtime/mustering.js";
 import { warSettingsOf } from "../../runtime/warSettings.js";
@@ -905,6 +906,9 @@ const listed = (names, most = 3) => `${names.slice(0, most).join("; ")}${names.l
 //   strikes          the missiles and bombing runs the answer wrote, with the
 //                    places of each found where the turn can find them
 //                    (runtime/strikes.js): for the map to play
+//   airStrikes       the war room's air strikes as they were flown, as the period
+//                    began (runtime/fronts/airStrike.js): [] when none waited or the
+//                    scenario has no air units, null when the run was not made
 // The same arguments give the same result: a turn applied twice is one turn.
 export const runTurnFronts = async ({
   createFrontRun,
@@ -979,7 +983,7 @@ export const runTurnFronts = async ({
     });
   }
   let strikes = [];
-  const nothing = (battlefields) => ({ events: list, battlefields, unitChanges: [], notes, flips: [], stats: null, news: [], joins: [], starts: [], transports: null, voyages: [], strikes });
+  const nothing = (battlefields) => ({ events: list, battlefields, unitChanges: [], notes, flips: [], stats: null, news: [], joins: [], starts: [], transports: null, voyages: [], strikes, airStrikes: null });
 
   const saved = normalizeBattlefields(world?.battlefields);
   const stages = asArray(warStages).length ? asArray(warStages).map(asArray) : [asArray(world?.wars)];
@@ -1049,6 +1053,27 @@ export const runTurnFronts = async ({
       });
     }
   }
+  // The air strikes the war room ordered (runtime/fronts/airStrike.js), flown as the period begins: who rose
+  // against each and the air battle fought here, and their bombs on the battlefields in the engine's run below.
+  // The same in the run made before the story and the one that applies it. (None in a scenario without air units.)
+  const sorties = air !== false
+    ? resolveAirStrikes({
+      orders: world?.airStrikeOrders,
+      units: asArray(world?.units),
+      wars: stages[0],
+      seed,
+      era: eraOf(fromDate, Number.isInteger(era) ? era : null),
+      flat: map?.flat === true,
+      scale: map?.scale,
+      militaryOf: mechanics?.military === true ? readers.militaryOf : null,
+      markers: asArray(world?.markers),
+      peopleOf: readers.peopleOf,
+      date: fromDate,
+    })
+    : { strikes: [], moments: [], unitChanges: [] };
+  // The formations as the strikes leave them: those that flew or rose are worn, and the land war begins with them so.
+  const flown = applyFrontUnitChanges(asArray(world?.units), sorties.unitChanges);
+
   const nameOf = engineNamer(turnRenames(list), [
     ...stages[0].flatMap((war) => [...asArray(war?.sideA), ...asArray(war?.sideB)]),
     ...saved.flatMap((record) => record.sides.flat()),
@@ -1139,13 +1164,13 @@ export const runTurnFronts = async ({
 
   // The battlefields whose period the story was told before it was written.
   const settled = foretold ? new Set(saved.filter((record) => record.status === "active").map((record) => foldBattlefieldName(record.name))) : null;
-  const moments = planFrontMoments({ events: list, frontOrders: [...aimed, ...stated], warStages: stages, fromDate, days, dayOf, settled })
+  const moments = [...sorties.moments, ...planFrontMoments({ events: list, frontOrders: [...aimed, ...stated], warStages: stages, fromDate, days, dayOf, settled })
     .map((moment) => {
       if (moment.type === "order") return { ...moment, side: nameOf(withoutKind(moment.side)) };
       if (moment.type === "control") return { ...moment, to: nameOf(moment.to) };
       if (moment.type === "war") return { ...moment, names: asArray(moment.names).map(nameOf), ...(moment.opponents ? { opponents: asArray(moment.opponents).map(nameOf) } : {}) };
       return moment;
-    });
+    })];
 
   const allowance = typeof tempoAllowance === "function" ? tempoAllowance(days) : tempoAllowance;
   // The countries under blockade as the period begins, and how short each is for it.
@@ -1181,7 +1206,7 @@ export const runTurnFronts = async ({
       sovereignOf: readers.sovereignOf,
       groupAreas: readers.groupAreas,
       isGroup: readers.isGroup,
-      units: asArray(world?.units),
+      units: flown,
       transports: normalizeTransports(world?.transports),
       // (With the ground the scenario made harder to cross, where it weighs terrain: runtime/fronts/arena.js;
       // and the water frozen this turn, where it has seasons and weather: runtime/fronts/climate.js.)
@@ -1395,7 +1420,14 @@ export const runTurnFronts = async ({
       ? { ...record, brief: { ...record.brief, told: true } }
       : record)),
     // (A formation the land war took up this period is the land war's: the sea says nothing more of it.)
-    unitChanges: [...asArray(result.unitChanges), ...asArray(sea?.unitChanges).filter((change) => !asArray(result.unitChanges).some((entry) => clean(entry?.unitId) === clean(change?.unitId)))],
+    // (And an air unit worn by an air strike, where the land war did not wear it further: its own change says all.)
+    unitChanges: [
+      ...asArray(result.unitChanges),
+      ...sorties.unitChanges.filter((change) => !asArray(result.unitChanges).some((entry) => clean(entry?.unitId) === clean(change?.unitId))),
+      ...asArray(sea?.unitChanges).filter((change) => ![...asArray(result.unitChanges), ...sorties.unitChanges].some((entry) => clean(entry?.unitId) === clean(change?.unitId))),
+    ],
+    // The war room's air strikes as they were flown, with what their bombs did to the troops on the battlefields.
+    airStrikes: withTroopHits(sorties.strikes, result.notes),
     // What the period came to at sea: its battles, the fleets as it leaves them, and any commissioned (runtime/naval/engine.js).
     sea: sea ? { battles: asArray(sea.battles), fleets: asArray(sea.fleets), commissioned: asArray(sea.commissioned), raised: asArray(sea.raised), blockades: asArray(sea.blockades), fromDate, days: sea.days } : null,
     notes,

@@ -93,7 +93,8 @@ export const wearinessOf = (weariness, country) => {
 //   blockade    how hard a blockade pressed on it, 0 to 1
 //   attrition   the share of its army attrition took in the period, 0 to 1
 //   harsh       the share of its armies' days out spent in harsh weather, 0 to 1
-export const wearinessAfter = ({ before = 0, days = 0, atWar = false, called = 0, lost = 0, taken = 0, blockade = 0, attrition = 0, harsh = 0 } = {}) => {
+//   bombed      what air strikes on its cities added, in points (runtime/fronts/airStrike.js wearinessFromStrikes)
+export const wearinessAfter = ({ before = 0, days = 0, atWar = false, called = 0, lost = 0, taken = 0, blockade = 0, attrition = 0, harsh = 0, bombed = 0 } = {}) => {
   const was = within(figure(before), 0, WEARINESS_MOST);
   const years = Math.max(0, figure(days)) / 365;
   if (!atWar) return Math.max(0, was - WEARINESS_PEACE_A_YEAR * years);
@@ -103,6 +104,7 @@ export const wearinessAfter = ({ before = 0, days = 0, atWar = false, called = 0
     + WEARINESS_BLOCKADE_A_YEAR * within(figure(blockade), 0, 1) * years
     + WEARINESS_ATTRITION * within(figure(attrition), 0, 1)
     + WEARINESS_HARSH_A_YEAR * within(figure(harsh), 0, 1) * years
+    + Math.max(0, figure(bombed))
     - WEARINESS_GROUND_TAKEN * within(figure(taken), 0, 1);
   return within(was + Math.min(WEARINESS_PERIOD_MOST, rise), 0, WEARINESS_MOST);
 };
@@ -146,7 +148,8 @@ export const wearinessGoingIn = (kept, { wars = [], startOf = null } = {}) => {
 //   heldBy      (name) => how many regions it held as the turn began
 //   blockades   the period's blockades: [{ country, pressure }]
 //   attrition   what attrition took: [{ name, lost, troopDays, harshDays, days }] (runtime/fronts/attrition.js)
-export const withTurnWeariness = (kept, { days = 0, wars = [], manpower = [], peopleOf = null, flips = [], heldBy = null, blockades = [], attrition = [] } = {}) => {
+//   bombed      what air strikes on its cities added to each: [{ country, value }] (runtime/fronts/airStrike.js)
+export const withTurnWeariness = (kept, { days = 0, wars = [], manpower = [], peopleOf = null, flips = [], heldBy = null, blockades = [], attrition = [], bombed = [] } = {}) => {
   const before = normalizeWarWeariness(kept);
   const fighting = countriesAtWar(wars);
   const names = new Map(before.map((entry) => [fold(entry.country), entry.country]));
@@ -165,6 +168,7 @@ export const withTurnWeariness = (kept, { days = 0, wars = [], manpower = [], pe
     if (clean(flip.to)) taken.set(fold(flip.to), (taken.get(fold(flip.to)) ?? 0) + 1);
   }
   const pressed = new Map(list(blockades).map((entry) => [fold(entry?.country), figure(entry?.pressure)]));
+  const struck = new Map(list(bombed).map((entry) => [fold(entry?.country), figure(entry?.value)]));
   // Of its army, what attrition took (its formations' worth against the army it kept out on average), and of its days out, those in harsh weather.
   const worn = new Map();
   for (const entry of list(attrition)) {
@@ -187,6 +191,7 @@ export const withTurnWeariness = (kept, { days = 0, wars = [], manpower = [], pe
       blockade: pressed.get(key) ?? 0,
       attrition: worn.get(key)?.attrition ?? 0,
       harsh: worn.get(key)?.harsh ?? 0,
+      bombed: struck.get(key) ?? 0,
     });
     if (value > 0) next.push({ country, value });
   }

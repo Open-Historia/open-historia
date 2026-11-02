@@ -32,6 +32,7 @@ import { normalizeBlockades } from "../../runtime/naval/blockade.js";
 import { TERRITORY_AS_HELD, TERRITORY_RESTORED, describeReparation, describeTerms, normalizePeaceOffers, normalizeReparations, openOfferBetween, standingOf, warBetween, wouldAccept } from "../../runtime/peaceTerms.js";
 import { RESOURCES_SHORT_FROM, resourcesOf } from "../../runtime/warResources.js";
 import { wearinessOf, wearinessWord } from "../../runtime/warWeariness.js";
+import { airWarLine } from "../../runtime/fronts/airStrike.js";
 import { groundReader } from "./warAndPeace.js";
 
 export const WAR_STATS_HEADING = "[War Situation]";
@@ -152,6 +153,9 @@ export const describeWarStats = (world, country, { held = null } = {}) => {
     if (enemy) lines.push(`  - ${reckoning(world, war, name, held)}.`);
   }
   if (wars.length > WARS_TOLD_MOST) lines.push(`- and ${wars.length - WARS_TOLD_MOST} more wars.`);
+  // The air war of the last turns: strikes it flew and suffered (runtime/fronts/airStrike.js).
+  const air = airWarLine(world?.airStrikes, name);
+  if (air) lines.push(`- In the air, ${air}.`);
   const supplies = Math.round(resourcesOf(world?.warResources, name));
   if (supplies < 100) lines.push(`- Supplies (fuel, munitions, pay): ${supplies} of 100${supplies < RESOURCES_SHORT_FROM ? ", short: its armies are fighting worse for it" : ""}.`);
   const blockade = normalizeBlockades(world?.blockades).find((entry) => fold(entry.country) === fold(name));
