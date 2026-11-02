@@ -411,6 +411,8 @@ func _discord_invites() -> void:
 	if not invites is DiscordInvites:
 		return
 	var card := invites as DiscordInvites
+	card._timer.stop()
+	await _until(func() -> bool: return not card._reading, 5.0)
 	var inbox: Variant = await _request("discord.inbox")
 	_check("the inbox is empty while the presence is off", inbox is Dictionary and (inbox as Dictionary).get("join") == null and ((inbox as Dictionary).get("requests", []) as Array).is_empty(), str(inbox))
 	_check("nothing shows without an invitation", not card.visible)
