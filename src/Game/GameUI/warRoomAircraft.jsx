@@ -115,7 +115,7 @@ export const AircraftPlate = ({ isMobile, wings, picked, kind, reach, flown, loc
             style={{ ...trayStyle(entry.id === picked), alignItems: "baseline", color: BONE, cursor: "pointer", display: "flex", gap: "0.45rem", padding: "0.3rem 0.45rem", textAlign: "left" }}
           >
             <span data-no-translate style={{ flex: 1, fontSize: "0.78rem", fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{entry.name}</span>
-            <span style={{ ...softText, flex: "0 0 auto" }}>{entry.strength}% · {Math.round(entry.fighters * 100)}% fighters{entry.order && <> · ordered</>}</span>
+            <span style={{ ...softText, flex: "0 0 auto" }}>{entry.order ? "→ " : ""}{entry.strength}%</span>
           </button>
         ))}
       </div>
