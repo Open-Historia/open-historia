@@ -550,7 +550,7 @@ test("unruled land is land nobody holds, and water is not land", () => {
 });
 
 test("a prompt keeps a map's borders by its address, and never parses the regions file on the page first", () => {
-  const prompt = fs.readFileSync(new URL("./promptContext.js", import.meta.url), "utf8");
+  const prompt = fs.readFileSync(new URL("./promptContext.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
   assert.match(prompt, /const regionBordersOfThisMap = \(\) => \{\n {2}const url = JSON_URLS\.regionsGeojson;\n {2}if \(regionBorders\.url === url && regionBorders\.work\) return regionBorders\.work;/);
   assert.match(prompt, /regionBordersInWorker\(url\)\.catch\(\(\) => regionBordersOnThisThread\(url\)\)/);
   // Every prompt for the map waits on the worker: one that never answers is given up on.

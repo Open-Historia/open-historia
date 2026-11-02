@@ -6,7 +6,7 @@ import { builtinModules } from "node:module";
 import test from "node:test";
 import { RUNTIME_DEPENDENCIES, packagedManifest } from "../scripts/package-desktop.mjs";
 
-const read = (relative) => fs.readFileSync(new URL(`../${relative}`, import.meta.url), "utf8");
+const read = (relative) => fs.readFileSync(new URL(`../${relative}`, import.meta.url), "utf8").replace(/\r\n/g, "\n");
 const packageJson = JSON.parse(read("package.json"));
 
 const packedCode = (folder) =>
