@@ -368,11 +368,6 @@
 .chapter .beta { font: 700 0.62rem/1 sans-serif; padding: 0.14rem 0.5rem; border-radius: 999px; background-color: rgba(245, 158, 11, 0.18); border: 1px solid rgba(245, 158, 11, 0.5); color: #fbbf24; letter-spacing: 0.04em; }
 .chapter .cta-row { margin-top: 0.35rem; }
 
-/* Beside the story's chapter cards rather than under them, where there is room. */
-@media (min-width: 1101px) {
-  .gx-panel { left: 31rem; width: min(26.25rem, calc(100% - 31rem - var(--gx-drawer) - 5.5rem)); }
-  .dp { left: 31rem; width: min(36rem, calc(100% - 31rem - var(--gx-drawer) - 5.5rem)); }
-}
 @media (max-width: 1200px) {
   .gx-pill { display: none; }
 }
