@@ -1,4 +1,5 @@
 /*! Open Historia — portions (briefing dossiers + timeout/fallback hardening) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
+import { nextTask } from "../../runtime/nextTask.js";
 import { callAI, providerSupportsBatch, restoreAIBatch, retrieveAIBatch, sendDiplomaticMessageOnceOff, submitAIBatch } from "./main.jsx";
 import { forgetBatch, readStoredBatches, rememberBatch } from "./batchRegistry.js";
 import { jumpDayStep, jumpTargetDate } from "../../runtime/jumpDates.js";
@@ -1465,6 +1466,7 @@ const buildTemplateVariables = async (bundle, options = {}) => {
   // functions carry the detail); with the setting off it gets the full one.
   const lookups = Boolean(options?.lookups) && lookupFunctionsEnabled();
   const variables = await buildPromptContext(bundle, { ...options, lookups, requiredKeys, taskKey });
+  await nextTask();
   // The diplomatic slice is bounded to the player plus, for a chat task, the
   // polities in the thread; wars are few enough to show whole.
   const focusActors = normalizeArray(options?.chat?.countries)
@@ -21230,7 +21232,10 @@ export const maybeSendIdleDiplomacy = async () => {
       chats: openChats,
     });
     if (Math.random() >= idlePulseBackoff.share(fingerprint)) return null;
+    // Nobody is waiting on this, and the map may be moving: it draws between the stages.
+    await nextTask();
     const variables = await buildTemplateVariables(bundle, { taskKey: "idleDiplomacy", lookups: true });
+    await nextTask();
     const institutionRoutingContext = buildIdleInstitutionRoutingContext(bundle.world, bundle.game.country);
     // Every government that may write, the most relevant first with their
     // background; any other's is fetched with government_background

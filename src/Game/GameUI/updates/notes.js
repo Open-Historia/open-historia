@@ -53,6 +53,24 @@ import { PAST_UPDATES } from "./notesPast.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // Terrain and front work kept instead of redone each frame, and borders worked out off the page (2026-11-02).
+    id: "2026-11-smoother-map",
+    kind: "minor",
+    date: "2026-11-02",
+    channel: "beta",
+    banners: [
+      {
+        title: "A smoother map",
+        items: [
+          "Moving, zooming and turning the map is far smoother, above all with 3D terrain on and wars on the map.",
+          "Slower computers gain the most.",
+          "The freeze of a few seconds that could strike mid-game, as a country got ready to write to you, is now a brief hitch at most.",
+          "The map looks just as it did: only the work behind it has changed.",
+        ],
+      },
+    ],
+  },
+  {
     // "in features rename the fronts section to wars and make it so you can toggle fronts, air troops, and navies for a
     // scenario", "make it so in the war room you can Deploy Aircraft", "make it so they can be intercepted and if they
     // are, the "fighters" in the air unit have a simulated battle" (the owner, 2026-11-01).

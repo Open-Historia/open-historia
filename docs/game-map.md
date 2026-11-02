@@ -94,6 +94,19 @@ R5.1 uses one renderer density for the whole session. R5.0 switched between 1× 
 
 Left unset, MapLibre sizes this cache dynamically to roughly `(ceil(w/256)+1)*(ceil(h/256)+1)*5` tiles **per source** — ~270 at 1080p but ~800 on a 4K viewport. With `renderWorldCopies`, panning E/W feeds successive wrapped world-copy tiles into that cache, so retained GPU textures climb until the tab OOMs. `256` caps the 4K case ~3× while being a no-op on phones. In-view tiles are a separate structure and are never evicted by this, so on-screen tiles are never re-fetched. This is orthogonal to the fixed 1× density (which bounds framebuffer pixels, not tiles).
 
+### Terrain caches (`terrainCaches.js`)
+
+Attached to every map instance. With terrain on, MapLibre 5.19 repeats work whose answer has not changed. Nothing here changes a pixel; screenshots of the same camera before and after are identical.
+
+| What | Cost before | Now |
+|---|---|---|
+| **`getTerrainCoords`.** Every tile of every source asks where it lies on every terrain tile | About 3,800 new objects and matrices a frame at 1080p | Kept per tile until the set of terrain tiles changes |
+| **`getTerrainData`.** Asked per tile, per source and per label | 8% of the main thread | Kept for one frame, and forgotten on `render` and `sourcedata` |
+
+Each patch is skipped if the method it relies on has gone, and `terrainCaches.test.js` fails on an upgrade to say so.
+
+**Known and left alone: the drape pool thrashes.** Each terrain tile keeps one 1024 px texture per stack of layers. Custom layers and symbols split the stacks, so a game with a war has 4. MapLibre's render pool reuses any slot not in use at that moment before it makes a new one, and each stack frees its slots when it ends, so the next stack overwrites them. With 8 tiles and 4 stacks, every tile is redrawn every frame. Growing the pool to `tiles × stacks` (8 MB of video memory a slot) cut the main thread's work while panning by a further quarter, but it added about 300 MB of video memory and a stall of 0.5 to 1.9 s on the first pan of every session, even with the slots made and cleared ahead of time. MapLibre 6 reworks the pool.
+
 ### `terrain` memo
 
 `terrain = { source: "terrain-source", exaggeration: 15 }` when `terrainEnabled && !customBg && !bgDeclared`: a custom image or vector background has no DEM to deform. **The globe is included on purpose.** An older guard (`!isGlobe`) kept terrain off the globe, on the grounds that MapLibre could not draw it there and that it could corrupt the shader cache across projection changes; `9b414f54` dropped it because MapLibre 5 does draw terrain on the globe, and every projection change remounts the map (the projection is part of the key), so no GL state survives one.
