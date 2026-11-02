@@ -1586,10 +1586,10 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         scaleLine={shownScale}
         scaleLabel={shownScaleLabel}
         scaleSketchLabel={(from, to) => scaleLabelOf(kmOfLine(from, to), { about: true })}
-        onScaleLineDraw={(from, to) => {
-          setScaleDraft({ from, to });
-          d.setActiveTool("select");
-        }}
+        // The tool stays out until the distance is set or the line is cancelled:
+        // put down at once, the click that ended the line would also pick the
+        // region under it. Another line drawn meanwhile replaces this one.
+        onScaleLineDraw={(from, to) => setScaleDraft({ from, to })}
       />
       </div>
 
@@ -1757,11 +1757,11 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
           onSetScale={(km) => {
             if (!scaleDraft) return;
             patchScale({ from: scaleDraft.from, to: scaleDraft.to, km });
-            setScaleDraft(null);
+            leaveScaleTool();
           }}
           onClearScale={() => {
             patchScale(null);
-            setScaleDraft(null);
+            leaveScaleTool();
           }}
           onClose={() => {
             leaveScaleTool();

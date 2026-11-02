@@ -3806,11 +3806,11 @@ const OlMap = ({
         features: new Collection(),
         type: "LineString",
         maxPoints: 2,
-        style: (feature) => {
+        style: (feature, resolution) => {
           const geometry = feature.getGeometry();
           if (geometry?.getType?.() !== "LineString") return scaleCursorStyle;
           const ends = endsOfLine(geometry);
-          return scaleLineStyles(geometry, ends ? scaleSketchLabelRef.current?.(ends[0], ends[1]) || "" : "");
+          return scaleLineStyles(geometry, ends ? scaleSketchLabelRef.current?.(ends[0], ends[1]) || "" : "", resolution);
         },
       });
       draw.on("drawend", (e) => {

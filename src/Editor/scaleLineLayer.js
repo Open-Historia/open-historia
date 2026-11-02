@@ -16,7 +16,6 @@ import VectorLayer from "ol/layer/Vector";
 import VectorSource from "ol/source/Vector";
 import CircleStyle from "ol/style/Circle";
 import Fill from "ol/style/Fill";
-import RegularShape from "ol/style/RegularShape";
 import Stroke from "ol/style/Stroke";
 import Style from "ol/style/Style";
 import Text from "ol/style/Text";
@@ -39,19 +38,21 @@ export const endsOfLine = (geometry) => {
   return points.length >= 2 ? [toWorld(points[0]), toWorld(points[points.length - 1])] : null;
 };
 
-// A bar across the line at a point, turned to the line.
-const endBar = (at, angle) => new Style({
-  geometry: new Point(at),
-  image: new RegularShape({
-    points: 2,
-    radius: 9,
-    angle: Math.PI / 2 - angle,
-    stroke: new Stroke({ color: ACCENT, width: 3 }),
-  }),
-});
+// A bar across the line at a point, 9 px either side of it at `resolution`
+// (map units to a pixel).
+const BAR_PX = 9;
+const endBar = (at, angle, resolution) => {
+  const reach = BAR_PX * (resolution || 1);
+  const dx = -Math.sin(angle) * reach;
+  const dy = Math.cos(angle) * reach;
+  return new Style({
+    geometry: new LineString([[at[0] - dx, at[1] - dy], [at[0] + dx, at[1] + dy]]),
+    stroke: new Stroke({ color: ACCENT, width: 3, lineCap: "round" }),
+  });
+};
 
 // The look of a scale line (or one being drawn), with `label` written beside it.
-export const scaleLineStyles = (geometry, label) => {
+export const scaleLineStyles = (geometry, label, resolution = 1) => {
   const points = geometry?.getCoordinates?.() ?? [];
   if (points.length < 2) return [];
   const first = points[0];
@@ -61,8 +62,8 @@ export const scaleLineStyles = (geometry, label) => {
   return [
     new Style({ geometry: line, stroke: new Stroke({ color: "rgba(0,0,0,0.75)", width: 6, lineCap: "butt" }) }),
     new Style({ geometry: line, stroke: new Stroke({ color: ACCENT, width: 3, lineCap: "butt", lineDash: [14, 6] }) }),
-    endBar(first, angle),
-    endBar(last, angle),
+    endBar(first, angle, resolution),
+    endBar(last, angle, resolution),
     ...(label
       ? [new Style({
         geometry: new Point([(first[0] + last[0]) / 2, (first[1] + last[1]) / 2]),
@@ -103,7 +104,7 @@ export const createScaleLineLayer = () => {
   const source = new VectorSource();
   const layer = new VectorLayer({
     source,
-    style: (feature) => scaleLineStyles(feature.getGeometry(), feature.get("label") || ""),
+    style: (feature, resolution) => scaleLineStyles(feature.getGeometry(), feature.get("label") || "", resolution),
     updateWhileInteracting: true,
     updateWhileAnimating: true,
   });
