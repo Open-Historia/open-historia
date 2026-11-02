@@ -15,20 +15,16 @@
 // So taken ground looks like the taker's own land on any basemap, and nothing
 // is copied from the screen to do it: the map's fill under it is not there.
 //
-// THE BORDER. The map's borders between the battlefield's regions are left out
-// (vnext/politicalBoundaryTopology.js) and drawn here instead, where the
-// holder changes: along the line halfway between one holder's colour and the
-// next, as the picture and the regions' own colours give it read smoothly
-// (bilinear) between their pixels, with the same width for the zoom and the
-// same dark casing as the map's own borders, in screen pixels. As the paint
-// spreads the line moves with it, and at the frame's edge it meets the map's
-// border running on.
-//
-// The regions' own colours are drawn once into a picture of their own (the
-// "field"), the size of the frame, so the border can see whose the ground on
-// the other side of it is. That is redrawn only when the regions or their
-// owners change; the battlefield's picture is taken up only when it is painted
-// anew.
+// THE BORDER. Where the run has moved the front, the map's borders between the
+// two sides' regions are left out (vnext/politicalBoundaryTopology.js) and the
+// border is drawn here, ONLY where one side's ground meets the other's: never
+// at a coast, against a neutral's land or along the frame. It is traced from
+// the front's own field (frontPaint.js writeFrontField: how far each cell is
+// one side's, evened out, read smoothly between the cells' middles), as the
+// line where that is half-way, and drawn as the map draws its own borders:
+// the same width for the zoom, the same dark line over the same casing, the
+// same edge, so many screen pixels wide wherever it runs. As the run plays the
+// line moves with the ground.
 //
 // The pure parts load in plain Node.
 
@@ -44,10 +40,6 @@ import {
 import { compile, projectionOf, shaderDataOf } from "./frontBasemapLayer.js";
 
 export const FRONT_GROUND_LAYER_ID = "fronts-ground";
-// The field is drawn this many times finer than the picture, and no larger
-// than this each way.
-export const FIELD_FINER = 4;
-export const FIELD_LARGEST = 2048;
 // The map's borders (Nations.jsx polity-boundaries): colour and how solid,
 // the line's own opacity times its colour's.
 export const BORDER_CORE = Object.freeze({ rgb: [5 / 255, 8 / 255, 13 / 255], alpha: 0.94 * 0.96 });
@@ -69,6 +61,17 @@ export const groundBorderWidths = (zoom) => ({
   blur: zoomStopValue(POLITY_BOUNDARY_SHADOW_BLUR_STOPS, zoom),
 });
 
+// How solid a line of this width (px) and blur is at this distance (px) from
+// its middle, as MapLibre's own line draws it (line.vertex.glsl and
+// line.fragment.glsl: the edge is half a device pixel beyond the half width,
+// and fades over the blur and one device pixel more). `ratio` is the
+// device's pixels to a CSS pixel.
+export const lineCoverage = (distance, width, blur = 0, ratio = 1) => {
+  const outset = width / 2 + 0.5 / ratio;
+  const fade = blur + 1 / ratio;
+  return Math.max(0, Math.min(1, (outset - distance) / fade));
+};
+
 // Each corner's own colour (0 to 1), from its region's: `colours` is one
 // [red, green, blue] (0 to 255) a region.
 export const cornerColours = (regionOf, colours) => {
@@ -80,14 +83,6 @@ export const cornerColours = (regionOf, colours) => {
     out[corner * 3 + 2] = rgb[2] / 255;
   }
   return out;
-};
-
-// The field's size for a picture of this size.
-export const fieldSize = (width, height) => {
-  const w = Math.max(1, Number(width) || 1) * FIELD_FINER;
-  const h = Math.max(1, Number(height) || 1) * FIELD_FINER;
-  const scale = Math.min(1, FIELD_LARGEST / w, FIELD_LARGEST / h);
-  return [Math.max(1, Math.round(w * scale)), Math.max(1, Math.round(h * scale))];
 };
 
 const VERTEX = (data) => `#version 300 es
@@ -106,80 +101,26 @@ void main() {
   gl_Position = projectTileWithElevation(a_pos + vec2(u_world, 0.0), 0.0);
 }`;
 
-// The ground, and the border where its holder changes. `holder` is whose the
-// ground is at a place, as a colour: the picture's paint (its colour already
-// weighed by how solid it is) over the regions' own colours; its alpha says
-// whether there is land there at all. Along each way across the screen it
-// looks out to the far edge of the casing for a change of holder; where there
-// is one, how far along from the one colour to the other the ground is, and
-// the nearest place each way where that is halfway, give how far the pixel is
-// from the line.
+// The ground, and the border where the front's field is half-way. The field is
+// read smoothly between the cells' middles, and how fast it changes across the
+// screen (its derivatives) says how many pixels this one is from the half-way
+// line, so the line is as wide on the screen at every zoom. Its edge is the
+// one MapLibre gives its own lines (lineCoverage), in device pixels here.
 const FRAGMENT = `#version 300 es
 precision highp float;
 in vec2 v_uv;
 in vec3 v_own;
 uniform sampler2D u_paint;
-uniform sampler2D u_field;
+uniform sampler2D u_front;
 uniform float u_strength;
+// The line's width, the casing's width and the casing's blur, in device pixels.
 uniform vec3 u_line;
 uniform vec4 u_core;
 uniform vec4 u_casing;
 out vec4 colour;
 
-const int STEPS = 6;
-// Two colours this far apart (squared) are two holders'; nearer, one holder's
-// seen through the soft edge of its own paint.
-const float CHANGE = 0.0064;
-
-// (The field read between a coast pixel and the sea is the land's colour weighed
-// by how much land there is: its colour is had back whole, or a coast would
-// read as a change of holder.)
-vec4 holder(vec2 uv) {
-  vec4 own = textureLod(u_field, uv, 0.0);
-  vec4 paint = textureLod(u_paint, uv, 0.0);
-  vec3 land = own.a > 0.0 ? own.rgb / own.a : vec3(0.0);
-  return vec4(land * (1.0 - paint.a) + paint.rgb, own.a);
-}
-
-// How far from colour a to colour a + d, 0 to 1 (or otherwise, where there is no land).
-float along(vec4 h, vec3 a, vec3 d, float dd, float otherwise) {
-  return h.a < 0.5 ? otherwise : clamp(dot(h.rgb - a, d) / dd, 0.0, 1.0);
-}
-
-// The nearest distance, in px, along +-way (one px of the screen in the
-// picture), at which the ground is halfway between a and a + d.
-float halfway(vec2 uv, vec2 way, float stride, vec3 a, vec3 d, float dd, float here) {
-  float best = 1e6;
-  for (int side = -1; side <= 1; side += 2) {
-    float before = here;
-    for (int i = 1; i <= STEPS; i++) {
-      float offset = float(i) * stride;
-      float now = along(holder(uv + way * (offset * float(side))), a, d, dd, before);
-      if ((before - 0.5) * (now - 0.5) <= 0.0 && before != now) {
-        best = min(best, (float(i) - 1.0 + (before - 0.5) / (before - now)) * stride);
-        break;
-      }
-      before = now;
-    }
-  }
-  return best;
-}
-
-// Along one way across the screen: the colours a reach either side; where
-// they are two holders', how far (px) this pixel is from the nearest place
-// halfway between them, or very far where they are one holder's. Each way is
-// read with its own two colours, so a pixel and the one beside it never read
-// the same edge by different pairs.
-float edgeAlong(vec2 uv, vec4 centre, vec2 way, float reach) {
-  vec4 low = holder(uv - way * reach);
-  vec4 high = holder(uv + way * reach);
-  if (low.a < 0.5 || high.a < 0.5) return 1e6;
-  vec3 d = high.rgb - low.rgb;
-  float dd = dot(d, d);
-  if (dd < CHANGE) return 1e6;
-  float here = along(centre, low.rgb, d, dd, 0.5);
-  if (here == 0.5) return 0.0;
-  return halfway(uv, way, reach / float(STEPS), low.rgb, d, dd, here);
+float coverage(float far, float width, float blur) {
+  return clamp((0.5 * width + 0.5 - far) / (blur + 1.0), 0.0, 1.0);
 }
 
 vec4 over(vec3 rgb, float alpha, vec4 under) {
@@ -187,45 +128,21 @@ vec4 over(vec3 rgb, float alpha, vec4 under) {
 }
 
 void main() {
-  vec2 dx = dFdx(v_uv);
-  vec2 dy = dFdy(v_uv);
+  vec4 front = texture(u_front, v_uv);
+  float side = front.r - 0.5;
+  vec2 change = vec2(dFdx(side), dFdy(side));
   bool inside = v_uv.x >= 0.0 && v_uv.x <= 1.0 && v_uv.y >= 0.0 && v_uv.y <= 1.0;
-  vec4 paint = inside ? textureLod(u_paint, v_uv, 0.0) : vec4(0.0);
+  vec4 paint = inside ? texture(u_paint, v_uv) : vec4(0.0);
   vec4 result = vec4((v_own * (1.0 - paint.a) + paint.rgb) * u_strength, u_strength);
-  float reach = 0.5 * u_line.y + 0.5 * u_line.z + 1.0;
-  if (inside && u_line.y > 0.0) {
-    vec4 centre = holder(v_uv);
-    float ex = edgeAlong(v_uv, centre, dx, reach);
-    float ey = edgeAlong(v_uv, centre, dy, reach);
-    // Across a straight edge, from how far it is each way.
-    float far = ex < 1e5 && ey < 1e5 ? ex * ey / max(1e-6, sqrt(ex * ex + ey * ey)) : min(ex, ey);
-    if (far < 1e5) {
-      float casing = 1.0 - smoothstep(0.5 * (u_line.y - u_line.z) - 0.5, 0.5 * (u_line.y + u_line.z) + 0.5, far);
-      float core = 1.0 - smoothstep(0.5 * u_line.x - 0.5, 0.5 * u_line.x + 0.5, far);
-      result = over(u_casing.rgb, u_casing.a * casing, result);
-      result = over(u_core.rgb, u_core.a * core, result);
-    }
+  float steep = length(change);
+  if (inside && u_line.x > 0.0 && front.g > 0.0 && steep > 0.0) {
+    float far = abs(side) / steep;
+    // Where the run has moved the front; past that the map's own border runs.
+    float here = smoothstep(0.25, 0.75, front.g);
+    result = over(u_casing.rgb, u_casing.a * here * coverage(far, u_line.y, u_line.z), result);
+    result = over(u_core.rgb, u_core.a * here * coverage(far, u_line.x, 0.0), result);
   }
   colour = result;
-}`;
-
-// The regions' own colours, laid flat over the frame: the field.
-const FIELD_VERTEX = `#version 300 es
-precision highp float;
-in vec2 a_pos;
-in vec3 a_own;
-uniform vec4 u_rect;
-out vec3 v_own;
-void main() {
-  v_own = a_own;
-  gl_Position = vec4((a_pos - u_rect.xy) / (u_rect.zw - u_rect.xy) * 2.0 - 1.0, 0.0, 1.0);
-}`;
-const FIELD_FRAGMENT = `#version 300 es
-precision mediump float;
-in vec3 v_own;
-out vec4 colour;
-void main() {
-  colour = vec4(v_own, 1.0);
 }`;
 
 const link = (gl, vertexSource, fragmentSource, names) => {
@@ -247,7 +164,7 @@ const link = (gl, vertexSource, fragmentSource, names) => {
   return out;
 };
 
-const GROUND_UNIFORMS = ["world", "rect", "paint", "field", "strength", "line", "core", "casing"];
+const GROUND_UNIFORMS = ["world", "rect", "paint", "front", "strength", "line", "core", "casing"];
 const PROJECTION_UNIFORMS = {
   matrix: "u_projection_matrix",
   fallback: "u_projection_fallback_matrix",
@@ -255,19 +172,38 @@ const PROJECTION_UNIFORMS = {
   clip: "u_projection_clipping_plane",
   transition: "u_projection_transition",
 };
-const PLAIN_VARIANT = "plain-mercator";
+const PLAIN = Object.freeze({
+  variantName: "plain-mercator",
+  define: "",
+  vertexShaderPrelude: `uniform mat4 u_projection_matrix;
+vec4 projectTileWithElevation(vec2 p, float elevation) {
+  return u_projection_matrix * vec4(p, elevation, 1.0);
+}`,
+});
 
 const isWebGL2 = (gl) => typeof WebGL2RenderingContext !== "undefined" && gl instanceof WebGL2RenderingContext;
 
+const linearTexture = (gl) => {
+  const texture = gl.createTexture();
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  return texture;
+};
+
 // The layer. `areas()` is asked each time the map draws: one a battlefield,
-//   { key, canvas, version, coordinates, meshId, positions, regionOf,
+//   { key, canvas, version, front, coordinates, meshId, positions, regionOf,
 //     colours, colourKey, ready }
-// `version` changes when the picture is painted anew; `colourKey` when the
-// regions' colours do; `ready` once the map's fill of every one of its regions
-// is hidden (an area is not drawn before, so no region is drawn twice).
-// `strength(zoom)` is how strongly the map lays a country's colour over the
-// basemap. `onState(working)` is told whether the layer can draw at all, as
-// soon as it is added and whenever that changes.
+// `version` changes when the picture is painted anew; `front` is its field
+// (frontPaint.js createFrontField), taken up when its own `version` changes;
+// `colourKey` changes when the regions' colours do; `ready` once the map's
+// fill of every one of its regions is hidden (an area is not drawn before, so
+// no region is drawn twice). `strength(zoom)` is how strongly the map lays a
+// country's colour over the basemap. `onState(working)` is told whether the
+// layer can draw at all, as soon as it is added and whenever that changes.
 export const createFrontGroundLayer = ({ id = FRONT_GROUND_LAYER_ID, areas, strength = politicalFillOpacityAtZoom, onState, onError } = {}) => {
   let working = null;
   const tell = (now) => {
@@ -288,10 +224,10 @@ export const createFrontGroundLayer = ({ id = FRONT_GROUND_LAYER_ID, areas, stre
     _ground: null,
     _variant: "",
     _failed: "",
-    _field: null,
     _entries: new Map(),
     _matrices: { main: new Float32Array(16), fallback: new Float32Array(16) },
     drawn: 0,
+    uploads: 0,
 
     onAdd(map, gl) {
       this._map = map;
@@ -300,28 +236,16 @@ export const createFrontGroundLayer = ({ id = FRONT_GROUND_LAYER_ID, areas, stre
         tell(false);
         return;
       }
-      try {
-        this._field = link(gl, FIELD_VERTEX, FIELD_FRAGMENT, ["rect"]);
-      } catch (error) {
-        onError?.(error);
-        tell(false);
-        return;
-      }
       // The flat map's program now, so the caller knows at once whether it can draw.
-      tell(this._ensure(gl, { variantName: PLAIN_VARIANT, define: "", vertexShaderPrelude: `uniform mat4 u_projection_matrix;
-vec4 projectTileWithElevation(vec2 p, float elevation) {
-  return u_projection_matrix * vec4(p, elevation, 1.0);
-}` }));
+      tell(this._ensure(gl, PLAIN));
     },
 
     onRemove(map, gl) {
       try {
         if (this._ground) gl.deleteProgram(this._ground.handle);
-        if (this._field) gl.deleteProgram(this._field.handle);
         for (const entry of this._entries.values()) this._release(gl, entry);
       } catch { /* the context is gone */ }
       this._ground = null;
-      this._field = null;
       this._variant = "";
       this._failed = "";
       this._entries = new Map();
@@ -347,15 +271,15 @@ vec4 projectTileWithElevation(vec2 p, float elevation) {
 
     _release(gl, entry) {
       for (const buffer of [entry.positions, entry.colours]) if (buffer) gl.deleteBuffer(buffer);
-      for (const texture of [entry.paint, entry.field]) if (texture) gl.deleteTexture(texture);
-      if (entry.frame) gl.deleteFramebuffer(entry.frame);
+      for (const texture of [entry.paint, entry.front]) if (texture) gl.deleteTexture(texture);
     },
 
-    // An area's buffers, its picture and its field, made or brought up to date.
+    // An area's buffers and its two pictures, made or brought up to date: each
+    // only when it has changed.
     _prepare(gl, area) {
       let entry = this._entries.get(area.key);
       if (!entry) {
-        entry = { meshId: null, colourKey: null, count: 0, version: null, size: null, fieldKey: null };
+        entry = { meshId: null, colourKey: null, count: 0, version: null, frontVersion: null };
         this._entries.set(area.key, entry);
       }
       entry.rect = pictureRect(area.coordinates);
@@ -374,65 +298,30 @@ vec4 projectTileWithElevation(vec2 p, float elevation) {
         gl.bufferData(gl.ARRAY_BUFFER, cornerColours(area.regionOf, area.colours ?? []), gl.STATIC_DRAW);
         entry.colourKey = area.colourKey;
       }
-      // The picture, taken up only when it has been painted anew.
-      const { canvas } = area;
+      const { canvas, front } = area;
       if (!entry.paint || entry.version !== area.version || entry.canvas !== canvas) {
-        entry.paint ??= gl.createTexture();
+        entry.paint ??= linearTexture(gl);
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, entry.paint);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, canvas);
         entry.version = area.version;
         entry.canvas = canvas;
+        this.uploads += 1;
       }
-      // The field, drawn again only when the regions, their colours or the frame change.
-      const [width, height] = fieldSize(canvas.width, canvas.height);
-      const fieldKey = `${area.meshId}|${area.colourKey}|${width}x${height}|${entry.rect.join(",")}`;
-      if (entry.fieldKey !== fieldKey) {
-        if (!entry.field || entry.size?.[0] !== width || entry.size?.[1] !== height) {
-          if (entry.field) gl.deleteTexture(entry.field);
-          entry.field = gl.createTexture();
-          gl.activeTexture(gl.TEXTURE0);
-          gl.bindTexture(gl.TEXTURE_2D, entry.field);
-          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
-          entry.frame ??= gl.createFramebuffer();
-          entry.size = [width, height];
-        }
-        const before = gl.getParameter(gl.FRAMEBUFFER_BINDING);
-        const viewport = gl.getParameter(gl.VIEWPORT);
-        try {
-          gl.bindFramebuffer(gl.FRAMEBUFFER, entry.frame);
-          gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, entry.field, 0);
-          gl.viewport(0, 0, width, height);
-          gl.disable(gl.BLEND);
-          gl.disable(gl.DEPTH_TEST);
-          gl.disable(gl.STENCIL_TEST);
-          gl.disable(gl.CULL_FACE);
-          gl.disable(gl.SCISSOR_TEST);
-          gl.colorMask(true, true, true, true);
-          gl.clearColor(0, 0, 0, 0);
-          gl.clear(gl.COLOR_BUFFER_BIT);
-          const program = this._field;
-          gl.useProgram(program.handle);
-          gl.uniform4f(program.rect, entry.rect[0], entry.rect[1], entry.rect[2], entry.rect[3]);
-          this._attributes(gl, program, entry);
-          gl.drawArrays(gl.TRIANGLES, 0, entry.count);
-          gl.disableVertexAttribArray(program.pos);
-          gl.disableVertexAttribArray(program.own);
-        } finally {
-          gl.bindFramebuffer(gl.FRAMEBUFFER, before);
-          gl.viewport(viewport[0], viewport[1], viewport[2], viewport[3]);
-        }
-        entry.fieldKey = fieldKey;
+      if (front?.data && (!entry.front || entry.frontVersion !== front.version || entry.frontData !== front.data)) {
+        entry.front ??= linearTexture(gl);
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, entry.front);
+        // (The field is numbers, not a colour: taken up as it is.)
+        gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+        gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, front.width, front.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, front.data);
+        entry.frontVersion = front.version;
+        entry.frontData = front.data;
+        this.uploads += 1;
       }
-      return entry;
+      return entry.front ? entry : null;
     },
 
     _attributes(gl, program, entry) {
@@ -444,23 +333,16 @@ vec4 projectTileWithElevation(vec2 p, float elevation) {
       gl.vertexAttribPointer(program.own, 3, gl.FLOAT, false, 12, 0);
     },
 
-    // Pictures and fields are made ready before the map's own drawing begins,
-    // where MapLibre lets a layer draw into pictures of its own.
-    prerender(gl) {
-      if (!this._field || working === false) return;
-      this._prepareAll(gl);
-    },
-
     _prepareAll(gl) {
       const list = listed();
       const prepared = [];
       // (The map keeps count of how pictures are unpacked: left as they were found.)
       const flip = gl.getParameter(gl.UNPACK_FLIP_Y_WEBGL);
       const premultiply = gl.getParameter(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL);
+      const alignment = gl.getParameter(gl.UNPACK_ALIGNMENT);
       try {
         gl.bindVertexArray(null);
         gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
-        gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
         const seen = new Set();
         for (const area of list) {
           seen.add(area.key);
@@ -476,13 +358,14 @@ vec4 projectTileWithElevation(vec2 p, float elevation) {
       } finally {
         gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, flip);
         gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, premultiply);
+        gl.pixelStorei(gl.UNPACK_ALIGNMENT, alignment);
       }
       return prepared;
     },
 
     render(gl, args) {
       this.drawn = 0;
-      if (!this._field) return;
+      if (!this._ground && working !== true) return;
       const projection = projectionOf(args);
       if (!projection) return;
       if (!this._ensure(gl, shaderDataOf(args))) {
@@ -522,12 +405,12 @@ vec4 projectTileWithElevation(vec2 p, float elevation) {
         gl.uniform4f(program.core, ...BORDER_CORE.rgb, BORDER_CORE.alpha);
         gl.uniform4f(program.casing, ...BORDER_CASING.rgb, BORDER_CASING.alpha);
         gl.uniform1i(program.paint, 0);
-        gl.uniform1i(program.field, 1);
+        gl.uniform1i(program.front, 1);
         for (const entry of prepared) {
           gl.activeTexture(gl.TEXTURE0);
           gl.bindTexture(gl.TEXTURE_2D, entry.paint);
           gl.activeTexture(gl.TEXTURE1);
-          gl.bindTexture(gl.TEXTURE_2D, entry.field);
+          gl.bindTexture(gl.TEXTURE_2D, entry.front);
           gl.uniform4f(program.rect, entry.rect[0], entry.rect[1], entry.rect[2], entry.rect[3]);
           this._attributes(gl, program, entry);
           for (const copy of copies) {

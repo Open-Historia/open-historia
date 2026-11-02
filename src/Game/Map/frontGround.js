@@ -56,10 +56,13 @@ const wanted = channel(NO_IDS);
 const held = channel(NO_IDS);
 
 const sameIds = (a, b) => a.size === b.size && [...a].every((id) => b.has(id));
-const areaKey = (list) => JSON.stringify(list.map((area) => [area.key, area.bounds, area.members]));
+const areaKey = (list) => JSON.stringify(list.map((area) => [area.key, area.bounds, area.members, area.sides ?? null, area.touchedKey ?? ""]));
 
-// [{ key, bounds: [west, south, east, north], members: [names] }], one a
-// battlefield. The same again tells nobody.
+// [{ key, bounds: [west, south, east, north], members: [names], sides:
+// [[names], [names]], touched, touchedKey, grid }], one a battlefield:
+// `touched` (a byte a cell) where its run moves the front, `touchedKey` what
+// tells one such set from another, `grid` its cells' edges
+// (vnext/battlefieldGround.js cellAt). The same again tells nobody.
 export const getGroundAreas = areas.get;
 export const subscribeGroundAreas = areas.subscribe;
 export const setGroundAreas = (list) => {

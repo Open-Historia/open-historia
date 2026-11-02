@@ -15,12 +15,11 @@ import { fileURLToPath } from "node:url";
 import {
   BORDER_CASING,
   BORDER_CORE,
-  FIELD_LARGEST,
   FRONT_GROUND_LAYER_ID,
   cornerColours,
   createFrontGroundLayer,
-  fieldSize,
   groundBorderWidths,
+  lineCoverage,
   pictureRect,
 } from "./frontGroundLayer.js";
 import {
@@ -73,7 +72,7 @@ test("the border is the map's own: its widths for the zoom, its dark line and ca
   assert.ok(Math.abs(BORDER_CASING.alpha - 0.52 * 0.72) < 1e-9);
 });
 
-test("a picture's place, its regions' colours and the field's size", () => {
+test("a picture's place and its regions' colours", () => {
   const rect = pictureRect([[20, 52], [28, 52], [28, 46], [20, 46]]);
   assert.deepEqual(rect, [mercatorX(20), mercatorY(52), mercatorX(28), mercatorY(46)]);
   assert.ok(rect[1] < rect[3], "north is the top of the sheet");
@@ -84,10 +83,6 @@ test("a picture's place, its regions' colours and the field's size", () => {
   assert.deepEqual([...colours.slice(0, 3)], [1, 0, 0]);
   assert.deepEqual([...colours.slice(9, 12)], [0, 0, 1]);
 
-  assert.deepEqual(fieldSize(200, 100), [800, 400]);
-  const [width, height] = fieldSize(4000, 1000);
-  assert.equal(width, FIELD_LARGEST);
-  assert.equal(height, FIELD_LARGEST / 4, "the picture's shape kept");
 });
 
 test("without WebGL 2 the layer says at once it cannot draw, and the pair takes over", async () => {
@@ -103,7 +98,6 @@ test("without WebGL 2 the layer says at once it cannot draw, and the pair takes 
   // Nothing more is drawn or touched.
   const gl = new Proxy({}, { get: () => { throw new Error("the map was touched"); } });
   layer.render(gl, {});
-  layer.prerender(gl, {});
   assert.equal(layer.drawn, 0);
   // The fallback: the pair goes on only once the layer has said so, and the map's own picture layers only past that.
   const layers = read("./FrontLayers.jsx");
@@ -169,14 +163,27 @@ test("the political map holds the fills through one ledger, and asks for the gro
   assert.match(layers, /const drawing = ground === "working";\s*setGroundAreas\(drawing \?/);
 });
 
-test("the ground's shader: the border by the screen's own pixels, the holder read smoothly, nothing of the screen copied", () => {
+test("the ground's border has the map's own edge, and is traced from the front's field, nothing of the screen copied", () => {
+  // MapLibre's line (line.vertex.glsl, line.fragment.glsl): solid to half a device pixel past the half
+  // width less the fade, gone half a device pixel past it, the fade the blur and one device pixel.
+  assert.equal(lineCoverage(0, 2), 1);
+  assert.equal(lineCoverage(1.5, 2), 0);
+  assert.ok(Math.abs(lineCoverage(1, 2) - 0.5) < 1e-9);
+  assert.ok(Math.abs(lineCoverage(1.2, 2, 0, 2) - 0.1) < 1e-9 && Math.abs(lineCoverage(1.2, 2) - 0.3) < 1e-9, "on a sharper screen the edge is half as soft");
+  assert.ok(lineCoverage(2, 4, 1) > 0 && lineCoverage(2, 4, 1) < 1, "a blurred casing fades over its blur");
   const source = read("./frontGroundLayer.js");
-  assert.ok(source.includes("vec2 dx = dFdx(v_uv);"));
-  assert.ok(source.includes("textureLod(u_paint, uv, 0.0)") && source.includes("gl.LINEAR"));
+  // The same rule in the shader, in device pixels.
+  assert.ok(source.includes("return clamp((0.5 * width + 0.5 - far) / (blur + 1.0), 0.0, 1.0);"));
+  // Half-way across the front's field, so many screen pixels from it by how fast it changes there.
+  assert.ok(source.includes("float side = front.r - 0.5;") && source.includes("vec2 change = vec2(dFdx(side), dFdy(side));") && source.includes("float far = abs(side) / steep;"));
+  // Only where the run moved the front (the field's green), never from the colours of the picture.
+  assert.ok(source.includes("front.g > 0.0"));
+  assert.doesNotMatch(source, /holder\(|u_field/);
+  assert.ok(source.includes("gl.LINEAR"));
   assert.ok(!source.includes("copyTexImage2D"), "no copy of the screen");
   assert.ok(source.includes("gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);"));
-  // The picture is taken up only when it has been painted anew.
-  assert.ok(source.includes("entry.version !== area.version"));
+  // The picture and the field are taken up only when they have been drawn anew.
+  assert.ok(source.includes("entry.version !== area.version") && source.includes("entry.frontVersion !== front.version"));
   // No gradient of any kind is drawn: plain colours.
   assert.doesNotMatch(source, /createLinearGradient|createRadialGradient|linear-gradient|radial-gradient/);
 });

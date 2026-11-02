@@ -9,7 +9,7 @@ import {
   setExcludedBoundarySegments,
   updatePoliticalBoundaryState,
 } from "./politicalBoundaryTopology.js";
-import { groundMesh, regionsInAreas } from "./battlefieldGround.js";
+import { groundMesh, regionsInAreas, touchedTester } from "./battlefieldGround.js";
 import {
   aggregatePolityGeometry,
   aggregatePolityGeometryForOwners,
@@ -1037,7 +1037,20 @@ const answerBattlefieldGround = ({ requestId, geometryEpoch, areas = [], known =
 
   let boundaryPatch = null;
   if (boundaryState) {
-    const segments = battlefieldSegmentIds(boundaryState, picked.map(({ regionIds }, index) => ({ regionIds, bounds: areas[index]?.bounds })));
+    // Each region's side, and where the run has moved the front.
+    const fold = (name) => String(name ?? "").trim().toLowerCase();
+    const segments = battlefieldSegmentIds(boundaryState, picked.map(({ regionIds }, index) => {
+      const area = areas[index] ?? {};
+      const sideNames = (Array.isArray(area.sides) ? area.sides : []).map((list) => new Set((list ?? []).map(fold)));
+      return {
+        regionIds,
+        bounds: area.bounds,
+        regionSides: sideNames.length === 2
+          ? regionIds.map((id) => (sideNames[0].has(fold(ownerOf(id))) ? 0 : sideNames[1].has(fold(ownerOf(id))) ? 1 : null))
+          : null,
+        touchedAt: touchedTester(area.grid, area.touched),
+      };
+    }));
     const same = segments.size === battlefieldExcluded.size && [...segments].every((id) => battlefieldExcluded.has(id));
     if (force || !same) {
       boundaryPatch = setExcludedBoundarySegments(boundaryState, segments, currentOwnershipOverrides, { force }).patch;

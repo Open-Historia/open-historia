@@ -1565,7 +1565,7 @@ const WorldMap = ({ isGlobe = false }) => {
         type: "battlefield-ground",
         requestId: `battlefield-ground-${groundRequest}`,
         geometryEpoch,
-        areas: areas.map(({ key, bounds, members }) => ({ key, bounds, members })),
+        areas: areas.map(({ key, bounds, members, sides, touched, grid }) => ({ key, bounds, members, sides, touched, grid })),
         known: [...groundMeshes.keys()],
         force: force === true,
       });

@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { GROUND_MESH_LONGEST, groundMesh, mercatorX, mercatorY, regionBox, regionsInAreas } from "./battlefieldGround.js";
+import { GROUND_MESH_LONGEST, cellAt, groundMesh, mercatorX, mercatorY, regionBox, regionsInAreas, touchedTester } from "./battlefieldGround.js";
 import {
   battlefieldSegmentIds,
   buildPoliticalBoundaryTopology,
@@ -121,4 +121,28 @@ test("a forced exclusion sends every group it touches whole, even one it empties
   const again = setExcludedBoundarySegments(state, ids, {}, { force: true });
   assert.equal(again.patch.removeIds.length, 1, "the emptied group is removed by its id even though the worker never drew it");
   assert.equal(again.changedSegmentCount, 0);
+});
+
+test("only the border between the two sides, where the run has moved the front, is the battlefield's", () => {
+  // Gamma is Alpha's ally; Beta the enemy. The run touches the cells round x = 0 to 2 only.
+  const regions = {
+    type: "FeatureCollection",
+    features: [square("d", "Gamma", -1, 0), square("a", "Alpha", 0, 1), square("b", "Beta", 1, 2), square("c", "Gamma", 2, 3)],
+  };
+  const topology = buildPoliticalBoundaryTopology(regions, { precision: 1000, matchTolerance: 1 });
+  const state = createPoliticalBoundaryState(topology, {});
+  const grid = { cols: 4, rows: 1, colLngs: [-1, 0, 1, 2, 3], rowLats: [0, 1] };
+  assert.equal(cellAt(grid, 0.5, 0.5), 1);
+  assert.equal(cellAt(grid, 360.5, 0.5), 1, "a turn off");
+  assert.equal(cellAt(grid, 5, 0.5), -1);
+  const touched = new Uint8Array([0, 1, 1, 0]);
+  const ids = battlefieldSegmentIds(state, [{
+    regionIds: ["d", "a", "b", "c"],
+    regionSides: [0, 0, 1, 0],
+    bounds: [-1, 0, 3, 1],
+    touchedAt: touchedTester(grid, touched),
+  }]);
+  setExcludedBoundarySegments(state, ids, {});
+  assert.deepEqual(owners(state), new Set(["Alpha | Gamma", "Beta | Gamma"]),
+    "the allies' border stays, and so does the enemies' where the run never went; only Alpha | Beta is left to the battlefield");
 });

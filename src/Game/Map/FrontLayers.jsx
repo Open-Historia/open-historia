@@ -42,7 +42,7 @@ import { POLITICAL_FILL_OPACITY_STOPS, politicalFillOpacityAtZoom } from "./vnex
 import { getFrontTargets, settleFront, startFrontsSync, subscribeFronts } from "./frontsController.js";
 import { arrowDetailAt, frontArrowFeatures, frontArrowRgb, frontAt, frontShownOn, frontTroopFeatures, stageOf } from "./frontGeometry.js";
 import { PAINT_WALL } from "../../runtime/fronts/codec.js";
-import { createPaintPlayer, paintPixels, paintScaleFor, pictureCorners, pictureFits } from "./frontPaint.js";
+import { createFrontField, createPaintPlayer, paintPixels, paintScaleFor, pictureCorners, pictureFits, touchedCells, writeFrontField } from "./frontPaint.js";
 import { FRONT_BASEMAP_PUT_LAYER_ID, FRONT_BASEMAP_TAKE_LAYER_ID, createFrontBasemapLayers } from "./frontBasemapLayer.js";
 import { FRONT_GROUND_LAYER_ID, createFrontGroundLayer } from "./frontGroundLayer.js";
 import { getGroundHeldIds, getGroundMeshes, setGroundAreas, setGroundWantedIds, subscribeGroundHeldIds, subscribeGroundMeshes } from "./frontGround.js";
@@ -231,7 +231,38 @@ const makePicture = (view, onto = null) => {
     palette: new Uint8Array(32 * 4),
     blank: true,
     ...(onto?.maskCanvas ? { maskCanvas: onto.maskCanvas } : {}),
+    // The front's field, for the border the ground's own layer draws where the
+    // sides meet (frontPaint.js writeFrontField): kept with the canvas, since
+    // the map is told of it once, and its touched cells the run's.
+    front: frontOf(view, rowOf, onto?.front),
+    // Where the frame's cells lie, for the map to tell which of its borders
+    // the run moves (vnext/battlefieldGround.js cellAt).
+    grid: onto?.grid ?? gridOf(frame),
   };
+};
+
+// The front's field for a run, on the one the picture already has when it
+// fits; with the cells the run touches, and a key that tells them apart.
+const frontOf = (view, rowOf, onto = null) => {
+  const { cols, rows } = view.frame;
+  const front = onto && onto.width === cols && onto.rows === rows && onto.rowOf === rowOf ? onto : createFrontField(cols, rows, rowOf);
+  front.touched = touchedCells(view);
+  let sum = 0;
+  let count = 0;
+  for (let cell = 0; cell < front.touched.length; cell += 1) {
+    if (!front.touched[cell]) continue;
+    sum = (sum + cell * (count + 1)) % 1000000007;
+    count += 1;
+  }
+  front.touchedKey = `${count}:${sum}`;
+  return front;
+};
+
+const gridOf = (frame) => {
+  const { toLngLat } = projectorOf(frame);
+  const colLngs = Array.from({ length: frame.cols + 1 }, (_, col) => toLngLat(col, 0)[0]);
+  const rowLats = Array.from({ length: frame.rows + 1 }, (_, row) => toLngLat(0, row)[1]);
+  return { cols: frame.cols, rows: frame.rows, colLngs, rowLats };
 };
 
 const FrontLayers = () => {
@@ -245,6 +276,9 @@ const FrontLayers = () => {
   // for this map once it cannot.
   const [ground, setGround] = useState("unknown");
   const groundLayerRef = useRef(null);
+  // (Read by the playing, which writes the front's field only while that layer draws.)
+  const groundOnRef = useRef(false);
+  groundOnRef.current = ground === "working";
   const groundMeshes = useSyncExternalStore(subscribeGroundMeshes, getGroundMeshes);
   // Whether the bare map is being put back under the paint instead (frontBasemapLayer.js).
   const [seenThrough, setSeenThrough] = useState(false);
@@ -366,10 +400,12 @@ const FrontLayers = () => {
   // and fills then stay, under the paint.
   useEffect(() => {
     const drawing = ground === "working";
-    setGroundAreas(drawing ? pictures.map(({ key, coordinates, members }) => {
+    setGroundAreas(drawing ? pictures.map(({ key, coordinates, members, sides, front, grid }) => {
       const [[west, north], [east], [, south]] = coordinates;
-      return { key, bounds: [west, south, east, north], members };
+      return { key, bounds: [west, south, east, north], members, sides, touched: front.touched, touchedKey: front.touchedKey, grid };
     }) : []);
+    // The front's field is written only while the layer draws: once it does, the battlefields are drawn again.
+    if (drawing && !rafRef.current) repaintRef.current();
   }, [ground, pictures]);
   useEffect(() => () => {
     setGroundAreas([]);
@@ -389,6 +425,7 @@ const FrontLayers = () => {
         list.push({
           key: picture.key,
           canvas: picture.canvas,
+          front: picture.front,
           coordinates: picture.coordinates,
           meshId: mesh.meshId,
           positions: mesh.positions,
@@ -551,10 +588,13 @@ const FrontLayers = () => {
             context.putImageData(target.pixels, 0, 0, area.x, area.y, area.width, area.height);
             markPainted(picture.canvas);
           }
+          // The front's field at this day, for the border the ground's own layer draws.
+          if (groundOnRef.current) writeFrontField(player, picture.front, true);
           picture.blank = false;
         } else if (!picture.blank) {
           context.clearRect(0, 0, target.width, target.height);
           markPainted(picture.canvas);
+          if (groundOnRef.current) writeFrontField(player, picture.front, false);
           picture.blank = true;
         }
         if (!handOver(entry, !atRest)) waiting = true;
@@ -780,7 +820,7 @@ const FrontLayers = () => {
       });
       playRef.current = next;
 
-      const signature = [...next.values()].map((entry) => `${entry.slot}:${entry.target.name}:${entry.picture.canvas.width}x${entry.picture.canvas.height}:${entry.picture.coordinates.join(",")}:${[...(entry.target.view.sides?.[0] ?? []), "|", ...(entry.target.view.sides?.[1] ?? [])].join(",")}`).join("|");
+      const signature = [...next.values()].map((entry) => `${entry.slot}:${entry.target.name}:${entry.picture.canvas.width}x${entry.picture.canvas.height}:${entry.picture.coordinates.join(",")}:${[...(entry.target.view.sides?.[0] ?? []), "|", ...(entry.target.view.sides?.[1] ?? [])].join(",")}:${entry.picture.front.touchedKey}`).join("|");
       if (signature !== declared) {
         declared = signature;
         setPictures([...next.values()].map((entry) => ({
@@ -789,8 +829,11 @@ const FrontLayers = () => {
           slot: entry.slot,
           canvas: entry.picture.canvas,
           coordinates: entry.picture.coordinates,
-          // Whose land it is drawn on: its two sides'.
+          // Whose land it is drawn on: its two sides', and which side each is.
           members: [...(entry.target.view.sides?.[0] ?? []), ...(entry.target.view.sides?.[1] ?? [])].map(String),
+          sides: [(entry.target.view.sides?.[0] ?? []).map(String), (entry.target.view.sides?.[1] ?? []).map(String)],
+          front: entry.picture.front,
+          grid: entry.picture.grid,
         })));
       }
 

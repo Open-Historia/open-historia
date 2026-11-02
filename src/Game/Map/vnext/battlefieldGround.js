@@ -73,6 +73,42 @@ export const regionsInAreas = ({ regions = [], areas = [], ownerOf = () => "", b
   });
 };
 
+// The battlefield's cells, as the map is told them: `colLngs` the longitude of
+// each column's west edge and of the last one's east edge, `rowLats` the
+// latitude of each row's south edge (row 0 the southmost) and of the last
+// one's north edge. Gives the cell (row * cols + col) a place lies in, or -1
+// outside the frame. Its longitude may be given a whole turn off.
+const edgeBefore = (edges, value) => {
+  let low = 0;
+  let high = edges.length - 1;
+  if (!(value >= edges[0] && value <= edges[high])) return -1;
+  while (high - low > 1) {
+    const middle = (low + high) >> 1;
+    if (edges[middle] <= value) low = middle;
+    else high = middle;
+  }
+  return low;
+};
+export const cellAt = (grid, lng, lat) => {
+  const { cols, colLngs, rowLats } = grid ?? {};
+  if (!cols || !colLngs?.length || !rowLats?.length) return -1;
+  const row = edgeBefore(rowLats, lat);
+  if (row < 0) return -1;
+  for (const value of [lng, lng - 360, lng + 360]) {
+    const col = edgeBefore(colLngs, value);
+    if (col >= 0) return row * cols + col;
+  }
+  return -1;
+};
+// Whether a place lies in one of the `touched` cells (a byte a cell).
+export const touchedTester = (grid, touched) => {
+  if (!grid || !touched?.length) return null;
+  return (lng, lat) => {
+    const cell = cellAt(grid, lng, lat);
+    return cell >= 0 && touched[cell] > 0;
+  };
+};
+
 export const mercatorX = (lng) => (lng + 180) / 360;
 export const mercatorY = (lat) => {
   const held = Math.max(-85.05, Math.min(85.05, lat));

@@ -536,37 +536,45 @@ const regroupSegments = (state, segmentIds, ownershipOverrides = {}, alsoGroups 
   return { patch: { removeIds, upsert }, changedGroupCount: changedGroups.size };
 };
 
-// The segments a battlefield's own picture draws the border on: those between
-// two of the regions it paints (`regionIds`, its sides' land in its frame)
-// whose ends both lie inside its frame (`bounds`: [west, south, east, north],
-// the frame's longitudes as the map is given them). A segment with an end
-// outside the frame stays the map's: past the frame there is no picture, and
-// the border runs on there as ever.
+// The segments a battlefield draws the border on itself: those between a
+// region of one side and a region of the other (`regionIds` its sides' land in
+// its frame, `regionSides` the side, 0 or 1, of each), whose ends both lie
+// inside its frame (`bounds`: [west, south, east, north], the frame's
+// longitudes as the map is given them), and that lie where its run has moved
+// the front (`touchedAt(lng, lat)`, when given: an end or the middle there).
+// Every other segment stays the map's: a border between two of one side's
+// countries, one past the frame, and one along ground the run never touches,
+// where the sides' ground lies as it always has.
 export const battlefieldSegmentIds = (state, areas = []) => {
   const out = new Set();
   const topology = state?.topology;
   if (!topology || !state?.segments) return out;
   const precision = topology.precision || 1;
   for (const area of areas ?? []) {
-    const indexes = new Set();
-    for (const id of area?.regionIds ?? []) {
+    const sideOf = new Map();
+    (area?.regionIds ?? []).forEach((id, position) => {
       const index = topology.regionIndexById?.get(String(id));
-      if (index != null) indexes.add(index);
-    }
+      if (index != null) sideOf.set(index, Array.isArray(area.regionSides) ? area.regionSides[position] : null);
+    });
     const [west, south, east, north] = Array.isArray(area?.bounds) ? area.bounds.map(Number) : [];
-    if (!indexes.size || ![west, south, east, north].every(Number.isFinite)) continue;
+    if (!sideOf.size || ![west, south, east, north].every(Number.isFinite)) continue;
     const inside = ([x, y]) => {
       const lat = y / precision;
       if (lat < south || lat > north) return false;
       const lng = x / precision;
       return [lng, lng - 360, lng + 360].some((value) => value >= west && value <= east);
     };
-    for (const regionIndex of indexes) {
+    const touched = typeof area.touchedAt === "function"
+      ? ({ a, b }) => [a, b, [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]].some(([x, y]) => area.touchedAt(x / precision, y / precision))
+      : () => true;
+    for (const regionIndex of sideOf.keys()) {
       for (const segmentId of state.regionToSegments[regionIndex] ?? []) {
         if (out.has(segmentId)) continue;
         const segment = state.segments.get(segmentId);
-        if (!segment || !segment.regionIndexes.every((index) => indexes.has(index))) continue;
-        if (inside(segment.a) && inside(segment.b)) out.add(segmentId);
+        if (!segment || segment.regionIndexes.length !== 2 || !segment.regionIndexes.every((index) => sideOf.has(index))) continue;
+        const [first, second] = segment.regionIndexes.map((index) => sideOf.get(index));
+        if (first !== null && second !== null && first === second) continue;
+        if (inside(segment.a) && inside(segment.b) && touched(segment)) out.add(segmentId);
       }
     }
   }
