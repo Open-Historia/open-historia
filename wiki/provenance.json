@@ -67,7 +67,7 @@
       "src/Game/AI/agentConnection.js",
       "server/agentFolder.js",
       "src/Game/GameUI/time.jsx",
-      "src/Game/GameUI/ListenInPhone.jsx"
+      "src/Game/GameUI/social.jsx"
     ],
     "start/how-to-play.md": [
       "src/Game/GameUI/main.jsx",
@@ -92,7 +92,7 @@
       "src/Game/GameUI/stats.jsx",
       "src/Game/GameUI/countryPanel.jsx",
       "src/Game/GameUI/VaultDoor.jsx",
-      "src/Game/GameUI/ListenInPhone.jsx",
+      "src/Game/GameUI/social.jsx",
       "src/runtime/spycraft.js",
       "src/Game/GameUI/main.jsx"
     ],
@@ -225,8 +225,8 @@
       "src/Game/AI/warAndPeace.js",
       "src/runtime/alliances.js",
       "src/runtime/peaceTerms.js",
-      "src/runtime/listenIn.js",
-      "src/Game/GameUI/ListenInPhone.jsx",
+      "src/runtime/socialFeed.js",
+      "src/Game/GameUI/social.jsx",
       "src/Game/Selection/Regions.jsx",
       "src/Game/Selection/CountryPanel.jsx",
       "src/Game/GameUI/MapModeSelector.jsx",

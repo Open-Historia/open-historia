@@ -16,7 +16,7 @@
 // Imports only the game-date rules (runtime/gameDates.js, itself import-free):
 // the rules on the journal, tested on their own.
 
-import { compareGameDates } from "../../runtime/gameDates.js";
+import { compareGameDates, isGameDate } from "../../runtime/gameDates.js";
 
 const asArray = (value) => (Array.isArray(value) ? value : []);
 const asText = (value) => String(value ?? "").trim();
@@ -38,6 +38,7 @@ export const journalTurn = ({
     summary = "",
     outreach = [],
     peaceTreaties = [],
+    socialPosts = [],
     clearActions = true,
     mode = "jump",
     receipt = null,
@@ -59,6 +60,8 @@ export const journalTurn = ({
         outreach: asArray(outreach),
         // The peaces the skip said two countries nobody plays made (peaceTerms.js readTreatyLines).
         peaceTreaties: asArray(peaceTreaties),
+        // Rostra's posts of the period, as the answer wrote them (runtime/socialFeed.js reads them again).
+        socialPosts: asArray(socialPosts),
         clearActions: clearActions !== false,
         mode: asText(mode) || "jump",
         // What the turn's answer lost on its way in (runtime/applicationReceipt.js):
@@ -124,6 +127,10 @@ export const truncateTurn = (journal, keptCount, { originDate = "", minimumDate 
             summary: asText(journal?.summary),
             outreach: asArray(journal?.outreach),
             peaceTreaties: asArray(journal?.peaceTreaties),
+            // The posts written by the closing date; a later one never was. Each
+            // keeps its place in the list (an empty one where a post went), so
+            // a quote of the answer's own "#n" still names the post it named.
+            socialPosts: asArray(journal?.socialPosts).map((post) => (isGameDate(post?.date) && compareGameDates(post.date, closingDate) > 0 ? null : post)),
             clearActions: journal?.clearActions !== false,
             mode: asText(journal?.mode) || "jump",
             covertOperations: asArray(journal?.covertOperations),

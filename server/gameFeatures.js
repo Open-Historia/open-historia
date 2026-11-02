@@ -71,14 +71,15 @@ export const FEATURE_DEFINITIONS = Object.freeze([
       }),
     ]),
   }),
-  // Listen in (src/runtime/listenIn.js): the phone a region's card and a
-  // country's panel open. It asks the model only when the player opens a feed
-  // that is not already kept for that place and day, so it costs nothing while
-  // nobody presses it.
+  // Rostra, the social network (src/runtime/socialFeed.js, src/Game/GameUI/social.jsx):
+  // "make sure the social media feature is disableable in the scenario editor"
+  // (the owner, 2026-11-02). It costs no request either way: the posts ride in
+  // the answer a time skip already gives, and off, the skip is neither shown
+  // the feed nor asked for any, so no part of its prompt goes on them.
   Object.freeze({
-    key: "listenIn",
-    label: "Listen in",
-    description: "A Listen in button on a region's card and in a country's panel opens a phone showing what ordinary people there are posting: the events of the day as they reach a kitchen table, and a few posts about nothing in particular. Each new feed is one AI request, made only when the player opens or refreshes one; a feed already read that day is kept. Off: the button is not shown and no feed is written.",
+    key: "socialMedia",
+    label: "Social media",
+    description: "Rostra, the world's social network: a button beside Actions opens posts by the people who make the news, written with each time skip, where the player can post as their country's leader and quote anyone's post. What is posted is public: the next time skip reads it and the world answers. It asks for no AI request of its own. Off: no Rostra button, nothing is posted, and the time skip is neither shown the posts nor asked to write any.",
     settings: Object.freeze([]),
   }),
   Object.freeze({

@@ -16,6 +16,10 @@ import { chosenOrdersOf, generalsOf, talkOf } from "../../runtime/fronts/command
 import { keptPlansOf } from "../../runtime/fronts/plans.js";
 import { syntheticMap } from "../../runtime/fronts/syntheticMap.js";
 import { battlefieldOn } from "../../runtime/fronts/testKit.js";
+import { PLAYER_REQUESTS } from "../game/messages.js";
+import { validate } from "../protocol/validate.js";
+import { setActiveFeatures } from "../../runtime/gameFeatures.js";
+import { SOCIAL_POST_MAX_CHARS } from "../../runtime/socialFeed.js";
 
 const LATVIA = "Republic of Latvia";
 const RUSSIA = "Russian Federation";
@@ -856,4 +860,69 @@ test("an institution's business goes to the host's desk for the asker's seat, an
   await s.request(s.guest, { t: "institution", id: id(5), call: "lifecycle", args: { command: { type: "seize" } } });
   assert.match(s.ack(s.guest, id(5)).error, /not something a player can do/);
   assert.equal(s.ack(s.guest, id(5)).result, undefined);
+});
+
+// Rostra, the social network (runtime/socialFeed.js): a guest posts through the
+// host, as the leader of its own seat's country whatever the message says, and
+// the feed is public, in every player's view.
+test("a guest's post goes into the feed as its own country's leader, dated by the game, and every view carries it", async () => {
+  const s = setup();
+  s.store.docs.world.countryStats = { [RUSSIA]: { leader: "Ivan Petrov" } };
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  await s.request(s.guest, { t: "post", id: id(2), text: "Moscow wants talks.", quote: "" });
+  assert.equal(s.ack(s.guest, id(2)).ok, true);
+  const [first] = s.store.docs.world.socialFeed;
+  assert.deepEqual(
+    { id: first.id, author: first.author, country: first.country, by: first.by, kind: first.kind, date: first.date, round: first.round, text: first.text },
+    { id: "p1", author: "Ivan Petrov", country: RUSSIA, by: RUSSIA, kind: "player", date: "2014-04-01", round: 1, text: "Moscow wants talks." },
+  );
+  // The host's own seat quotes it.
+  await s.request(s.hostPlayer, { t: "post", id: id(3), text: "Riga is listening.", quote: "p1" });
+  assert.equal(s.ack(s.hostPlayer, id(3)).ok, true);
+  assert.equal(s.store.docs.world.socialFeed[1].quote, "p1");
+  assert.equal(s.store.docs.world.socialFeed[1].by, LATVIA);
+  // A quote of a post that is not there is refused in words, and nothing is written.
+  await s.request(s.guest, { t: "post", id: id(4), text: "Quoting nothing.", quote: "p9" });
+  assert.match(s.ack(s.guest, id(4)).error, /no longer there/);
+  assert.equal(s.store.docs.world.socialFeed.length, 2);
+  // Public: the guest's own view holds both posts.
+  await s.clock.advance(1000);
+  assert.deepEqual((s.shown(s.guest).world?.socialFeed ?? []).map((entry) => entry.id), ["p1", "p2"]);
+});
+
+test("a post request is held to its shape: words within the limit, a post id or nothing to quote, nothing else", () => {
+  const ask = (fields) => validate(PLAYER_REQUESTS.post, { t: "post", id: id(1), quote: "", ...fields });
+  assert.equal(ask({ text: "Hello" }).ok, true);
+  assert.equal(ask({ text: "Hello", quote: "p12" }).ok, true);
+  assert.equal(ask({ text: "" }).ok, false, "a post needs words");
+  assert.equal(ask({ text: "x".repeat(SOCIAL_POST_MAX_CHARS + 1) }).ok, false, "and no more than a post holds");
+  assert.equal(ask({ text: "Hi", quote: "anything" }).ok, false, "a quote names a post by its id");
+  assert.equal(ask({ text: "Hi", author: "Someone Else" }).ok, false, "who wrote it is never the message's to say");
+  assert.equal(ask({ text: "Hi", country: RUSSIA }).ok, false);
+});
+
+test("while a round is resolved, or where the game has no social media, nobody posts", async () => {
+  let release;
+  const s = setup({ holdResolve: new Promise((resolve) => { release = resolve; }) });
+  s.host.join(s.hostPlayer);
+  s.host.join(s.guest);
+  await s.request(s.guest, { t: "pick", id: id(1), country: RUSSIA });
+  await s.host.control.start();
+  await s.request(s.hostPlayer, { t: "ready", id: id(2), value: true });
+  await s.request(s.guest, { t: "ready", id: id(3), value: true });
+  await s.request(s.guest, { t: "post", id: id(4), text: "Now?", quote: "" });
+  assert.match(s.ack(s.guest, id(4)).error, /being resolved/);
+  release();
+  await s.clock.flush();
+  setActiveFeatures({ socialMedia: false }, null);
+  try {
+    await s.request(s.guest, { t: "post", id: id(5), text: "Now?", quote: "" });
+    assert.match(s.ack(s.guest, id(5)).error, /no social media/);
+  } finally {
+    setActiveFeatures(null, null);
+  }
+  assert.equal((s.store.docs.world.socialFeed ?? []).length, 0);
 });

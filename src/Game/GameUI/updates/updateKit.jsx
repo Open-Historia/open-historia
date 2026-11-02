@@ -189,6 +189,7 @@ export const ICONS = Object.freeze({
   star: (size) => <svg {...iconFrame} height={size} width={size}><path d="M12 3l2.6 5.6 6.1.7-4.5 4.1 1.2 6-5.4-3-5.4 3 1.2-6-4.5-4.1 6.1-.7z" /></svg>,
   book: (size) => <svg {...iconFrame} height={size} width={size}><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5zM4 20.5A2.5 2.5 0 0 0 6.5 23H20v-5" /></svg>,
   note: (size) => <svg {...iconFrame} height={size} width={size}><path d="M9 18V5l11-2v13" /><circle cx="6.5" cy="18" r="2.5" /><circle cx="17.5" cy="16" r="2.5" /></svg>,
+  phone: (size) => <svg {...iconFrame} height={size} width={size}><rect height="19" rx="2.5" width="11" x="6.5" y="2.5" /><path d="M10.5 18h3" /></svg>,
   people: (size) => <svg {...iconFrame} height={size} width={size}><circle cx="9" cy="8" r="3" /><circle cx="17" cy="9" r="2.4" /><path d="M3.5 20c0-3.3 2.5-5.5 5.5-5.5s5.5 2.2 5.5 5.5M14.5 15c2.8-.4 6 1.4 6 5" /></svg>,
 });
 

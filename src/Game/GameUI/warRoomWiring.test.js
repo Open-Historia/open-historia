@@ -16,7 +16,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { MAP_LAYER_ORDER } from "../Map/mapLayerOrder.js";
-import { BESIDE_DOCK_LEFT, BESIDE_WAR_ROOM_LEFT, DOCK_HEIGHT_REM, WAR_ROOM_BUTTON_REM } from "./hudDock.js";
+import { BESIDE_DOCK_LEFT, BESIDE_WAR_ROOM_LEFT, DOCK_HEIGHT_REM, WAR_ROOM_BUTTON_REM, dockGeometry } from "./hudDock.js";
 import { rivetPixels, roughMetalPixels } from "./roughMetal.js";
 import { placeName, playerFronts, playerFrontsKey } from "./warRoomData.js";
 
@@ -55,9 +55,15 @@ test("the button is there only while there is a war, beside the dock where Searc
   assert.match(main, /\{\(atWar \|\| isWarRoomOpen\) && \(\s*<WarRoomButton open=\{warRoomShown\} isMobile=\{isMobile\} onToggle=\{toggleWarRoom\} \/>\s*\)\}/);
   // It takes Search's place, and Search begins beyond it.
   assert.match(main, /<Search mapRef=\{mapRef\} besideWarRoom=\{atWar\} \/>/);
-  assert.match(read("search.jsx"), /besideWarRoom && !isMobile \? BESIDE_WAR_ROOM_LEFT : BESIDE_DOCK_LEFT/);
+  // Both from the dock the game shows (hudDock.js useDockGeometry: Rostra can be switched off).
+  assert.match(read("search.jsx"), /besideWarRoom && !isMobile \? dock\.besideWarRoomLeft : dock\.besideDockLeft/);
+  assert.match(main, /isMobile \? `\$\{DOCK_LEFT_REM\}rem` : dock\.besideDockLeft\}/);
   assert.equal(WAR_ROOM_BUTTON_REM, DOCK_HEIGHT_REM, "as tall as the dock it stands beside");
   assert.ok(parseFloat(BESIDE_WAR_ROOM_LEFT) >= parseFloat(BESIDE_DOCK_LEFT) + WAR_ROOM_BUTTON_REM, "Search clears the button");
+  for (const buttons of [2, 3]) {
+    const dock = dockGeometry(buttons);
+    assert.ok(parseFloat(dock.besideWarRoomLeft) >= parseFloat(dock.besideDockLeft) + WAR_ROOM_BUTTON_REM, `Search clears the button beside a dock of ${buttons}`);
+  }
   // Brushed metal, and the panel is not loaded until it is asked for.
   assert.match(main, /backgroundImage: `url\(\$\{brushedMetalUrl\(160\)\}\)`/);
   assert.match(main, /const LazyWarRoomPanel = lazy\(\(\) =>\s*import\("\.\/warRoom\.jsx"\)/);

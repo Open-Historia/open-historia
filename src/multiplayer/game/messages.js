@@ -17,6 +17,7 @@
 
 import { HEX_ID, NAME, bool, int, json, list, literal, num, obj, str } from "../protocol/validate.js";
 import { SETTINGS_SCHEMA } from "../host/settings.js";
+import { SOCIAL_POST_MAX_CHARS } from "../../runtime/socialFeed.js";
 
 // A host and its players must speak the same game: raised whenever these
 // messages or the views (host/projection.js) change in a way an older player's
@@ -29,7 +30,10 @@ import { SETTINGS_SCHEMA } from "../host/settings.js";
 // the host for what is done in one (the "warroom" request).
 // 6: a player's institutions are asked of the host (the "institution" request),
 // and an ack may carry what the host made (`result`).
-export const SHARED_GAME_VERSION = "6";
+// 7: Rostra, the social network: a player posts through the host (the "post"
+// request), and the view carries the feed (world.socialFeed). A screen from
+// before would offer no way to post, and a host from before would refuse one.
+export const SHARED_GAME_VERSION = "7";
 
 // What of the institutions a player's screen may ask the host for: the game's
 // own institution functions, run on the host for the asker's country
@@ -54,6 +58,10 @@ export const PLAYER_REQUESTS = Object.freeze({
   order: obj({ t: literal("order"), id: REQUEST_ID, text: str(ORDER_MAX_CHARS, { min: 1 }) }),
   unorder: obj({ t: literal("unorder"), id: REQUEST_ID, order: str(120, { min: 1 }) }),
   goal: obj({ t: literal("goal"), id: REQUEST_ID, text: str(600) }),
+  // A post on Rostra, the social network (runtime/socialFeed.js), as the leader
+  // of the seat's own country, never one the message names; `quote` the id of
+  // the post it quotes ("p12"), or empty. The host checks that it is still there.
+  post: obj({ t: literal("post"), id: REQUEST_ID, text: str(SOCIAL_POST_MAX_CHARS, { min: 1 }), quote: str(12, { pattern: /^(?:p\d{1,7})?$/ }) }),
   // The player's own Projects board, whole. The host puts it through the
   // game's own normalizer, which holds it to a board's shape and size, and the
   // session holds the message to its own size limit (session/host.js).
