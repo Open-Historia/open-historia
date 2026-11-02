@@ -14,6 +14,7 @@ import { LISTEN_IN_MAX_TRENDS } from "../../runtime/listenIn.js";
 import { WAR_ROOM_ORDERS, WAR_ROOM_STANCES } from "../../runtime/fronts/constants.js";
 import { FRONT_ORDERS_FIELD } from "./nativeFrontLedger.js";
 import { SEAT_ADVICE_ANSWER_SCHEMA, SEAT_ADVICE_FIELD } from "./seatAdvice.js";
+import { WAR_FIGURES_FIELD } from "./warFiguresPrompt.js";
 const textSchema = (description) => ({
   type: "string",
   description,
@@ -1345,6 +1346,13 @@ export const JUMP_FORWARD_SCHEMA = {
       type: "string",
       description: "Fronts; format in prompt. Empty if none.",
     },
+    // The figures the war needs of a country that fights and has none
+    // (warFiguresPrompt.js), a line a country. SENT with fronts on, after the
+    // battlefields' orders (withWarFigures); read either way, loosely.
+    [WAR_FIGURES_FIELD]: {
+      type: "string",
+      description: "War figures; format in prompt. Empty if none.",
+    },
     // Each player's advisor and three orders to consider, in a game a host
     // shares (seatAdvice.js). SENT only then, in full (withSeatAdvice); read
     // either way, loosely, so a malformed piece of advice never costs the turn.
@@ -1393,6 +1401,7 @@ const JUMP_FORWARD_LEAN_SCHEMA = (() => {
     [AGENT_REPORTS_FIELD]: _agentReports,
     [HISTORY_FIELD]: _history,
     [FRONT_ORDERS_FIELD]: _frontOrders,
+    [WAR_FIGURES_FIELD]: _warFigures,
     [SEAT_ADVICE_FIELD]: _seatAdvice,
     ...properties
   } = JUMP_FORWARD_SCHEMA.properties;
@@ -3529,6 +3538,23 @@ export const withFrontOrders = (tool) => {
       // with a battle in every other event came back without it. The answer
       // is still read without the field (the task's own schema, above).
       required: [...new Set([...(Array.isArray(tool.schema.required) ? tool.schema.required : []), FRONT_ORDERS_FIELD])],
+    },
+  };
+};
+
+// Fronts on, the same: a time skip's tool with the figures the war needs
+// (warFiguresPrompt.js) in its contract, after everything the turn itself
+// says, and required for the same reason as the orders: "" when no country
+// wants any.
+export const withWarFigures = (tool) => {
+  const properties = tool?.schema?.properties;
+  if (!properties?.events || !properties?.stopDate || properties[WAR_FIGURES_FIELD]) return tool;
+  return {
+    ...tool,
+    schema: {
+      ...tool.schema,
+      properties: { ...properties, [WAR_FIGURES_FIELD]: JUMP_FORWARD_SCHEMA.properties[WAR_FIGURES_FIELD] },
+      required: [...new Set([...(Array.isArray(tool.schema.required) ? tool.schema.required : []), WAR_FIGURES_FIELD])],
     },
   };
 };

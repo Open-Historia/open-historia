@@ -256,6 +256,8 @@ export const mergeSegmentPayloads = (payloads, { targetDate = "" } = {}) => {
   const storylineUpdates = [];
   // The peaces two countries nobody plays made (peaceTerms.js readTreatyLines), a line each.
   const peaceTreaties = [];
+  // The figures the war needs of the countries that fight (warFiguresPrompt.js), a line a country.
+  const warFigures = [];
   // The polities the model says would try to plant an agent in the player
   // (gameplay.js espionageCandidatesAgainst): their names, once each; null when
   // no segment answered it at all.
@@ -274,6 +276,7 @@ export const mergeSegmentPayloads = (payloads, { targetDate = "" } = {}) => {
     frontOrders.push(...asLedgerRecords(payload.frontOrders));
     storylineUpdates.push(...asLedgerRecords(payload.storylineUpdates));
     peaceTreaties.push(...asLedgerRecords(payload.peaceTreaties));
+    warFigures.push(...asLedgerRecords(payload.warFigures));
     if (typeof payload.spiesOnPlayer === "string" || Array.isArray(payload.spiesOnPlayer)) {
       const named = (Array.isArray(payload.spiesOnPlayer) ? payload.spiesOnPlayer : String(payload.spiesOnPlayer).split(/[,\n;]/))
         .map(normalizeString)
@@ -300,6 +303,7 @@ export const mergeSegmentPayloads = (payloads, { targetDate = "" } = {}) => {
     warUpdates,
     spiesOnPlayer,
     peaceTreaties,
+    warFigures,
     summary: summaries.join("\n\n"),
   };
 };
