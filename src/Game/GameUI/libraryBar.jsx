@@ -565,7 +565,6 @@ const editorSectionLabels = {
   assets: "Assets",
   bundles: "Bundles",
   features: "Features",
-  fronts: "Fronts",
   history: "Pre-history",
   music: "Music",
   overview: "Overview",
@@ -1863,7 +1862,6 @@ const CreateScenarioTile = ({ busy, onCreate }) => (
 const EDITOR_SECTION_GROUPS = Object.freeze([
   Object.freeze({ label: "Presentation", sections: Object.freeze(["overview", "assets", "music"]) }),
   Object.freeze({ label: "Setting", sections: Object.freeze(["world", "history", "politics"]) }),
-  Object.freeze({ label: "War", sections: Object.freeze(["fronts"]) }),
   Object.freeze({ label: "Rules and AI", sections: Object.freeze(["stats", "features", "prompts"]) }),
   Object.freeze({ label: "Sharing", sections: Object.freeze(["bundles"]) }),
 ]);
@@ -1875,9 +1873,8 @@ const EDITOR_SECTION_BLURBS = Object.freeze({
   world: "Where play begins: the player's country, the date, the troops and the story so far.",
   history: "The events that led to the start date.",
   politics: "Governments, parties and institutions.",
-  fronts: "How its wars are fought, every country's military and the fronts it begins with.",
   stats: "The national stats every country is measured by.",
-  features: "Which gameplay features are on.",
+  features: "Which gameplay features are on, and under Wars how its wars are fought, every country's military and the fronts it begins with.",
   prompts: "The instructions the AI follows.",
   bundles: "Download it as one file to share or keep.",
 });
@@ -1902,7 +1899,6 @@ const EditorSectionIcon = ({ kind, size = 17 }) => {
     world: <><circle cx="12" cy="12" r="8.5" /><path d="M3.5 12h17M12 3.5c2.3 2.3 3.5 5.2 3.5 8.5s-1.2 6.2-3.5 8.5c-2.3-2.3-3.5-5.2-3.5-8.5s1.2-6.2 3.5-8.5z" /></>,
     history: <><path d="M5 4.5h11.5a2 2 0 0 1 2 2v13H7a2 2 0 0 1-2-2z" /><path d="M5 17.5a2 2 0 0 1 2-2h11.5M9 8.5h6" /></>,
     politics: <><path d="M4 9.5 12 5l8 4.5M5.5 19.5h13M7 10.5v7M12 10.5v7M17 10.5v7" /></>,
-    fronts: <><path d="M5 5v15M5 5.5c4-2 7 2 11 0v8c-4 2-7-2-11 0" /></>,
     stats: <><path d="M5 19.5V11M10 19.5V6M15 19.5v-6M20 19.5V9" /></>,
     features: <><path d="M6 6.5h12M6 12h12M6 17.5h12" /><circle cx="9" cy="6.5" r="1.8" /><circle cx="15" cy="12" r="1.8" /><circle cx="10" cy="17.5" r="1.8" /></>,
     prompts: <><path d="M5 5.5h14v10H9.5L5 19.5z" /><path d="M8.5 9.5h7M8.5 12.5h4.5" /></>,
@@ -1970,7 +1966,7 @@ const EditorDrawer = ({
   const record = kind === "scenario" ? details.scenario : details.game;
   const visibleSections =
     kind === "scenario"
-      ? ["overview", "world", "history", "fronts", "politics", "stats", "features", "prompts", "assets", "music", "bundles"]
+      ? ["overview", "world", "history", "politics", "stats", "features", "prompts", "assets", "music", "bundles"]
       : ["overview", "world", "features", "prompts", "assets"];
   const groups = EDITOR_SECTION_GROUPS
     .map((group) => ({ ...group, sections: group.sections.filter((key) => visibleSections.includes(key)) }))
@@ -2362,35 +2358,6 @@ const EditorDrawer = ({
         />
       )}
 
-      {/* How its wars are fought (ScenarioWarSettings.jsx): part of the form,
-          which Save below writes. Then the fronts it begins with, which have
-          a Save of their own. */}
-      {editorSection === "fronts" && kind === "scenario" && (
-        <ScenarioWarSettings
-          value={formState.warSettings ?? null}
-          gameDate={formState.gameDate}
-          onChange={(next) => onChange("warSettings", next)}
-        />
-      )}
-
-      {/* Every country's military figures, rated by the AI against the others twenty to a request
-          (ScenarioMilitaryPanel.jsx): saved into the scenario batch by batch, as the Politics tab's are. */}
-      {editorSection === "fronts" && kind === "scenario" && (
-        <ScenarioMilitaryPanel
-          details={details}
-          onDetailsChange={onDetailsChange}
-          gameDate={formState.gameDate}
-          warSettings={formState.warSettings ?? null}
-        />
-      )}
-
-      {editorSection === "fronts" && kind === "scenario" && (
-        <ScenarioFrontsPanel
-          details={details}
-          onDetailsChange={onDetailsChange}
-        />
-      )}
-
       {editorSection === "politics" && kind === "scenario" && (
         <>
           <Suspense
@@ -2435,8 +2402,33 @@ const EditorDrawer = ({
         </div>
       )}
 
+      {/* The Features tab. Under Wars, on a scenario, what was its War tab: how its wars are fought
+          (ScenarioWarSettings.jsx, part of the form, which Save below writes); every country's military
+          figures, rated by the AI against the others twenty to a request (ScenarioMilitaryPanel.jsx, saved
+          batch by batch); and the fronts it begins with (ScenarioFrontsPanel.jsx, with a Save of its own). */}
       {editorSection === "features" && (
         <FeaturesSectionEditor
+          extras={kind === "scenario" ? {
+            fronts: (
+              <>
+                <ScenarioWarSettings
+                  value={formState.warSettings ?? null}
+                  gameDate={formState.gameDate}
+                  onChange={(next) => onChange("warSettings", next)}
+                />
+                <ScenarioMilitaryPanel
+                  details={details}
+                  onDetailsChange={onDetailsChange}
+                  gameDate={formState.gameDate}
+                  warSettings={formState.warSettings ?? null}
+                />
+                <ScenarioFrontsPanel
+                  details={details}
+                  onDetailsChange={onDetailsChange}
+                />
+              </>
+            ),
+          } : null}
           kind={kind}
           features={formState.features}
           scenarioFeatures={kind === "scenario" ? formState.features : formState.scenarioFeatures}

@@ -33,7 +33,9 @@ const writes = read("../../runtime/warRoomWrites.js");
 test("the rail has a key that draws a fortified line, and one that puts out the fleets", () => {
   assert.match(rail, /<RailKey label="Fortify" [^>]*on=\{tool === "fortify" \|\| drafted\} disabled=\{locked \|\| !canFortify\} onClick=\{\(\) => onTool\("fortify"\)\}>/);
   assert.match(rail, /<RailKey label="Fleets" [^>]*disabled=\{fleets === 0\} onClick=\{onFleets\}>/);
-  assert.match(panel, /canFortify=\{canFortify\}\s*drafted=\{Boolean\(draft\)\}\s*fleets=\{fleets\.length\}\s*fleetsOut=\{fleetsOut\}\s*onFleets=\{\(\) => setWarRoom\(\{ fleets: !getWarRoom\(\)\.fleets \}\)\}/);
+  // (No Fleets key in a scenario without navies: the Wars feature.)
+  assert.match(rail, /\{navies && <RailKey label="Fleets" /);
+  assert.match(panel, /canFortify=\{canFortify\}\s*drafted=\{Boolean\(draft\)\}\s*navies=\{navies\}\s*fleets=\{fleets\.length\}\s*fleetsOut=\{fleetsOut\}\s*onFleets=\{\(\) => setWarRoom\(\{ fleets: !getWarRoom\(\)\.fleets \}\)\}/);
   // A line is drawn only where the scenario's wars have fortified lines.
   assert.match(panel, /const canFortify = useMemo\(\(\) => warSettingsOf\(\{ warSettings: world\?\.warSettings \}\)\.mechanics\.walls === true/);
   // What the tool in hand wants done is said beside the rail.

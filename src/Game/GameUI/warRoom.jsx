@@ -62,7 +62,7 @@ import { WarRoomRail } from "./warRoomRail.jsx";
 import { WeatherAhead } from "./warRoomWeather.jsx";
 import { RehearsalTray } from "./warRoomRehearsal.jsx";
 import { supplyShading } from "../Map/warRoomCells.js";
-import { strategyNetOn } from "../AI/frontsGate.js";
+import { airOn, naviesOn, strategyNetOn } from "../AI/frontsGate.js";
 import { scheduleFrontsPrethink } from "../AI/frontPrethink.js";
 import { commanderOf } from "../../runtime/fronts/mind/commanders.js";
 import {
@@ -388,11 +388,14 @@ const WarRoomPanel = ({ open, onClose, width, onResize, onResizeEnd }) => {
   const sameName = (a, b) => String(a ?? "").trim().toLowerCase() === String(b ?? "").trim().toLowerCase();
   const ownTransports = transports.filter((entry) => sameName(entry.owner, game.country));
   const theirTransports = record ? transports.filter((entry) => entry.status === "moving" && (record.sides[1 - side] ?? []).some((member) => sameName(member, entry.owner))) : [];
-  // What carries troops this year.
+  // What carries troops this year. (Nothing by sea in a scenario without navies, nor by air in one without air units: the Wars feature.)
+  const navies = naviesOn();
+  const aircraft = airOn();
   const carriers = useMemo(() => {
     const year = gameDateYear(game.gameDate);
-    return TRANSPORT_MEDIA.map((medium) => ({ medium, ...carrierFor(medium, year) })).filter((carrier) => carrier.kind);
-  }, [game.gameDate]);
+    return TRANSPORT_MEDIA.map((medium) => ({ medium, ...carrierFor(medium, year) }))
+      .filter((carrier) => carrier.kind && (carrier.medium !== "sea" || navies) && (carrier.medium !== "air" || aircraft));
+  }, [game.gameDate, navies, aircraft]);
   // The way found for each of the player's own that has not set out, so that it
   // is seen on the map before time passes (no request: read from the map).
   const waiting = ownTransports.filter((entry) => entry.status === "ordered").map((entry) => `${entry.id}:${entry.medium}:${entry.to.lng},${entry.to.lat}:${entry.embark?.troops.join(".") ?? ""}`).join("|");
@@ -418,7 +421,8 @@ const WarRoomPanel = ({ open, onClose, width, onResize, onResizeEnd }) => {
   // A line can be drawn where the scenario's wars have them (runtime/warSettings.js "walls").
   const canFortify = useMemo(() => warSettingsOf({ warSettings: world?.warSettings }).mechanics.walls === true, [world?.warSettings]);
   // The player's fleets, the countries they may blockade, and the convoys they may cover (runtime/naval/fleetOps.js).
-  const fleets = useMemo(() => fleetsOf({ units: world?.units, pendingUnitOrders: world?.pendingUnitOrders }, game.country), [world?.units, world?.pendingUnitOrders, game.country]);
+  // None in a scenario without navies.
+  const fleets = useMemo(() => (navies ? fleetsOf({ units: world?.units, pendingUnitOrders: world?.pendingUnitOrders }, game.country) : []), [navies, world?.units, world?.pendingUnitOrders, game.country]);
   const enemies = useMemo(() => enemiesOf({ wars: world?.wars }, game.country), [world?.wars, game.country]);
   const convoys = useMemo(() => convoysOf({ transports: world?.transports }, game.country), [world?.transports, game.country]);
   // What the nearest town to a place on the map is called, if one is near: a
@@ -737,6 +741,7 @@ const WarRoomPanel = ({ open, onClose, width, onResize, onResizeEnd }) => {
         onCarrier={(medium) => takeTool("transport", { medium })}
         canFortify={canFortify}
         drafted={Boolean(draft)}
+        navies={navies}
         fleets={fleets.length}
         fleetsOut={fleetsOut}
         onFleets={() => setWarRoom({ fleets: !getWarRoom().fleets })}

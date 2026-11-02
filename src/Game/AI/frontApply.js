@@ -52,7 +52,7 @@ import { FREEFORM, normalizeProjection } from "../../../server/mapProjection.js"
 import { stolenPlansBlock, turnPlanned, warRoomIntel } from "./frontPlans.js";
 import { battlefieldPowers, buildFrontsBlock } from "./frontPrompt.js";
 import { buildScenarioFronts, scenarioFrontsPending } from "./frontScenario.js";
-import { frontsOn, frontsPace, strategyNetOn } from "./frontsGate.js";
+import { airOn, frontsOn, frontsPace, naviesOn, strategyNetOn } from "./frontsGate.js";
 import { labStaffPolicy, trainedStaffPolicy } from "../../runtime/fronts/mind/trained.js";
 import { applyFrontUnitChanges, battlefieldRegionTest, engineRegionsOf, frontWorldReaders, runTurnFronts, stripFrontOps } from "./frontTurn.js";
 import { applyWarUpdates, eventNarratesHardCombat } from "./nativeWarLedger.js";
@@ -234,7 +234,11 @@ const turnRunInput = ({ world, game, campaignId, loadRegions, signal, round, fro
     // The era the scenario set, if it set one (runtime/warSettings.js).
     era: eraSettingOf(world),
     // Which of the engine's newer mechanics it has on: all of them unless it turned one off.
-    mechanics: warSettingsOf(world).mechanics,
+    // (With no air units in the scenario, the Wars feature, no wing flies over a battlefield.)
+    mechanics: airOn() ? warSettingsOf(world).mechanics : { ...warSettingsOf(world).mechanics, air: false },
+    // The Wars feature's other parts: fleets at sea, and what flies.
+    naval: naviesOn(),
+    air: airOn(),
     // How its wars' troops stand where nobody deploys them otherwise: along fronts, or as swarms (runtime/fronts/swarms.js).
     warfare: warfareOf(world, fromDate),
     // The men a counter stands for and the share of people who can fight, where it set them.
@@ -833,7 +837,7 @@ export const frontsLiveBlock = (world, game, foreseen = null) => [landBlock(worl
 // What the skip is told of the war at sea (navalPrompt.js), after the land's:
 // the period's battles where the period was fought beforehand, else the fleets
 // of the countries at war as they stand. "" with fronts off or no such fleet.
-export const seasLiveBlock = (world, game, foreseen = null) => (frontsOn()
+export const seasLiveBlock = (world, game, foreseen = null) => (frontsOn() && naviesOn()
   ? buildSeasBlock({ sea: foreseen?.sea ?? null, units: world?.units, wars: world?.wars, players: humanCountriesOf(game), date: clean(game?.gameDate || game?.startDate), blockades: world?.blockades, era: eraSettingOf(world) })
   : "");
 

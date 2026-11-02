@@ -49,7 +49,7 @@ import { runNaval } from "../../runtime/naval/engine.js";
 import { normalizeBlockades, shortageOfBlockade } from "../../runtime/naval/blockade.js";
 import { shortagesTogether, wearinessGoingIn, wearyShortage } from "../../runtime/warWeariness.js";
 import { normalizeWarResources, resourceShortage } from "../../runtime/warResources.js";
-import { STRIKES_PER_TURN_MOST, findStrikePlace, pickStrikeOrigin, seaLaunchPlace } from "../../runtime/strikes.js";
+import { STRIKES_PER_TURN_MOST, findStrikePlace, fliesAsAircraft, pickStrikeOrigin, seaLaunchPlace } from "../../runtime/strikes.js";
 
 export const FRONT_MARK = "front";
 // The mark on an order the turn itself drew from an event's own operations
@@ -939,6 +939,8 @@ export const runTurnFronts = async ({
   manpower = true,
   // false leaves the fleets alone: the war at sea is not fought (runtime/naval/engine.js).
   naval = true,
+  // false: the scenario has no air units (the Wars feature): nothing is airlifted, and no aircraft is drawn striking.
+  air = true,
   // The most formations a country and the world may have, for a fleet the war at sea commissions.
   unitCaps = null,
   // The era the scenario set, 0 to 3, or null to read it off the date (runtime/warSettings.js).
@@ -985,9 +987,12 @@ export const runTurnFronts = async ({
   // A line that sends a transporter is not an order for a battlefield: it is
   // set apart here and becomes a transporter of the world, below.
   // And a strike is no order at all: it is something to show (runtime/strikes.js).
-  const struck = written.filter((order) => order.order === "strike").slice(0, STRIKES_PER_TURN_MOST);
+  // (With no air units in the scenario no aircraft strikes, and with none of air or sea nothing is carried by it.)
+  const struck = written.filter((order) => order.order === "strike" && (air !== false || !fliesAsAircraft(order.weapon))).slice(0, STRIKES_PER_TURN_MOST);
   const orders = written.filter((order) => order.order !== "strike" && !Object.hasOwn(TRANSPORT_ORDERS, order.order));
-  const dispatches = written.filter((order) => Object.hasOwn(TRANSPORT_ORDERS, order.order));
+  const carriedBy = (order) => TRANSPORT_ORDERS[order.order];
+  const dispatches = written.filter((order) => Object.hasOwn(TRANSPORT_ORDERS, order.order)
+    && !(naval === false && carriedBy(order) === "sea") && !(air === false && carriedBy(order) === "air"));
   const atWar = stages.some((wars) => wars.some((war) => clean(war?.status) !== "ended"));
   const committed = asArray(world?.units).some((unit) => clean(unit?.committedTo));
   // No battlefield, no war, no order and nothing at sea: there is nothing for

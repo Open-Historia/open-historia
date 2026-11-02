@@ -209,7 +209,7 @@ import {
   withIntelligenceRating,
   withoutGroupOps,
 } from "./gameplaySchemas.js";
-import { frontsOn, strategyNetOn } from "./frontsGate.js";
+import { frontsOn, strategyNetOn, warPartsOffBlock } from "./frontsGate.js";
 import { engineerLines } from "../../runtime/fronts/engineer.js";
 import { foreseeFronts } from "./foreseenFronts.js";
 import { offPageAvailable } from "./frontWorkerClient.js";
@@ -2910,6 +2910,9 @@ Write spiesOnPlayer: the polities, by exact name and comma-separated, that would
   // what happened on them by date.
   const fronts = frontsLiveBlock(world, game, variables.frontsForecast ?? null);
   if (fronts) blocks.push(fronts);
+  // What its wars are fought without (the Wars feature): "" when the scenario has air units and navies.
+  const warParts = warPartsOffBlock();
+  if (warParts) blocks.push(warParts);
   // What the game itself does about alliances, weariness, peace and reparations (peacePrompt.js): "" in a world with none of them.
   const peace = buildPeaceBlock({ world, game, players: humanCountriesOf(game) });
   if (peace) blocks.push(peace);

@@ -69,6 +69,7 @@ import { normalizeTransports } from "./fronts/transports.js";
 import { normalizeStrikes } from "./strikes.js";
 import { battlefieldHeldClaimants } from "./fronts/heldRegions.js";
 import { sharedGameHostCountry } from "./humanPolities.js";
+import { activeWars } from "./gameFeatures.js";
 
 export const GAME_DEFAULTS = {
   country: "",
@@ -3044,6 +3045,11 @@ export const applyUnitOpBatch = (units, orders, ops, context = {}) => {
       // marked his oil and gas sites with units ("GSI Arzew", "Hub Sud"), and
       // each skip that told of them raised a twin beside or far from it.
       if (sameFormationOnMap(next, op.unit)) continue;
+      // Nor of a kind the scenario fights without (the Wars feature): no air unit with air units off, no fleet
+      // with navies off. (A story ship is no fleet: it is drawn, and guards nothing.)
+      const wars = activeWars();
+      const spawnType = String(op.unit?.type ?? "").toLowerCase();
+      if ((!wars.air && spawnType === "air") || (!wars.navies && spawnType === "naval" && !op.unit?.storyVessel)) continue;
 
       const unit = { ...op.unit };
       // A story ship is a ship whatever the model called it, unlisted because

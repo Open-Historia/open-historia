@@ -23,7 +23,9 @@ import {
   clearStaleUnitMotion,
   normalizeUnitEntry,
   recenterPatrolOrders,
+  UNIT_TYPES,
 } from "../../runtime/gameState.js";
+import { activeWars } from "../../runtime/gameFeatures.js";
 import { wrapLng } from "../../runtime/unitMotion.js";
 import { TURN_RUNNING_NOTE, isSimulationBusy } from "../AI/simulationStatus.js";
 import { inSharedGame, requestFromHost } from "../../multiplayer/client/sharedGameBridge.js";
@@ -96,7 +98,14 @@ export const getUnitOrder = (unitId) =>
   (ordersOverride ?? pendingOrders).find((order) => order.unitId === unitId) ?? null;
 export const getPlayerCode = () => playerCode;
 // The scenario's allowed deployable troop types, or null when unrestricted.
-export const getAllowedUnitTypes = () => allowedUnitTypes;
+// The scenario's allowed types, less what its wars are fought without (the Wars feature: no air units, no navies).
+// null when every type is allowed.
+const effectiveAllowedUnitTypes = () => {
+  const wars = activeWars();
+  if (wars.air && wars.navies) return allowedUnitTypes;
+  return (allowedUnitTypes ?? UNIT_TYPES).filter((type) => (wars.air || type !== "air") && (wars.navies || type !== "naval"));
+};
+export const getAllowedUnitTypes = () => effectiveAllowedUnitTypes();
 // Whether `type` may be deployed under `allowed` (null or empty: any type).
 export const isDeployableType = (type, allowed) =>
   !Array.isArray(allowed) || allowed.length === 0 || allowed.includes(String(type ?? "").trim().toLowerCase());
@@ -544,7 +553,7 @@ export const deployUnit = async ({ type, strength, name, composition, lng, lat }
   }
   if (unitsLocked()) return null;
   if (!playerCode) await bootstrap();
-  if (!isDeployableType(type, allowedUnitTypes)) return { ok: false, error: UNIT_TYPE_NOT_ALLOWED };
+  if (!isDeployableType(type, effectiveAllowedUnitTypes())) return { ok: false, error: UNIT_TYPE_NOT_ALLOWED };
   // Deploy as PENDING (rendered translucent): the player states an intent, and the
   // AI confirms, relocates or rejects it on the next time-jump.
   // Built outside the commit so the queued order can reference its id.
@@ -562,7 +571,8 @@ export const deployUnit = async ({ type, strength, name, composition, lng, lat }
   if (!unit) return { ok: false, error: ORDER_NOT_SAVED };
   // The scenario's allowed types (no air wing in 1200), whoever asks: the
   // Forces panel offers only those, but the advisor names its own.
-  if (allowedUnitTypes && !allowedUnitTypes.includes(unit.type)) return { ok: false, error: UNIT_TYPE_NOT_ALLOWED };
+  const allowedNow = effectiveAllowedUnitTypes();
+  if (allowedNow && !allowedNow.includes(unit.type)) return { ok: false, error: UNIT_TYPE_NOT_ALLOWED };
   const text =
     `Deploy request: ${name || type} (${type}, strength ${strength}% of establishment` +
     `${composition ? `, ${composition}` : ""}, owner ${playerCode || "PLAYER"}) at ` +
