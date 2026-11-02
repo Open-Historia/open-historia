@@ -42,6 +42,19 @@ import { summarizePolityLabelDiagnostics } from "./vnext/polityLabels.js";
 import { translateLabel } from "../../runtime/translator.js";
 import { MAP_SETTING_KEYS, reduceMotionEnabled, useMapSetting, useMapSettingValue } from "../../runtime/mapSettings.js";
 import { getFrontShownOwners, shownOwnerIds, subscribeFrontShownOwners, withShownOwners, withoutShownTransitions } from "./frontOwnership.js";
+import {
+  CUSTOM_FILL_SOURCE,
+  REPAIR_FILL_SOURCE,
+  TILE_FILL_SOURCE,
+  getGroundAreas,
+  getGroundWantedIds,
+  hiddenFillChanges,
+  hiddenFillTargets,
+  setGroundHeldIds,
+  setGroundMeshes,
+  subscribeGroundAreas,
+  subscribeGroundWantedIds,
+} from "./frontGround.js";
 import { useActiveFeatures } from "../../runtime/gameFeatures.js";
 import { useActiveGameCountry } from "../../runtime/library.js";
 import { buildDiplomaticStanceMap, getDiplomaticOwnerColor } from "../../runtime/diplomaticStance.js";
@@ -59,7 +72,13 @@ import {
 } from "./ownerColors.js";
 import GroupAreaLayers from "./GroupAreaLayers.jsx";
 import { EMPTY_GROUP_AREA_DATA } from "./vnext/groupAreas.js";
-import { POLITICAL_FILL_OPACITY_STOPS, V_NEXT_MARKER_SHAPE_LAYER_IDS } from "./vnext/presentationPolicy.js";
+import {
+  POLITICAL_FILL_OPACITY_STOPS,
+  POLITY_BOUNDARY_SHADOW_BLUR_STOPS,
+  POLITY_BOUNDARY_SHADOW_WIDTH_STOPS,
+  POLITY_BOUNDARY_WIDTH_STOPS,
+  V_NEXT_MARKER_SHAPE_LAYER_IDS,
+} from "./vnext/presentationPolicy.js";
 import { resolvePolityLabelNames } from "./vnext/polityNaming.js";
 import PolityTextLayer, {
   isPolityTextPtr0Enabled,
@@ -366,6 +385,9 @@ const buildScenarioReliefFillOpacity = (stops, hiddenExpression = null) => [
 ];
 
 const POLITICAL_FILL_OPACITY = buildPoliticalFillOpacity();
+// A region whose fill something else is drawing in its place: the hand-over
+// sweep, or a battlefield's ground (frontGround.js).
+const FILL_HIDDEN = ["boolean", ["feature-state", "ownershipTransitionHidden"], false];
 const DISPUTED_STRIPE_OPACITY = 0.22;
 
 // Experiment F: stop drawing the stock GeoJSON fallback and the stock vector
@@ -494,6 +516,17 @@ const WorldMap = ({ isGlobe = false }) => {
   // epoch bump mid-sweep reuses it instead of recolouring every region again.
   const ownershipFillTargetRef = useRef({ owners: null, colorCss: null, fills: null });
   const appliedTileFillStateRef = useRef(new Map());
+  // Whose fill is hidden, and by whom: the hand-over sweep and the
+  // battlefields' ground both hide regions' fills with one feature-state, and
+  // either may let go of a region the other still holds, so neither writes it:
+  // each says which regions it holds and this writes the two together
+  // (frontGround.js). `written` is what has reached MapLibre.
+  const hiddenFillRef = useRef({ sweep: [], ground: [], written: new Map() });
+  const writeHiddenFillsRef = useRef(() => {});
+  // Asks the regions worker which regions each battlefield draws (set by the
+  // worker effect once its catalog is ready); `true` after a boundary patch
+  // made before the newest answer has been published.
+  const battlefieldGroundRequestRef = useRef(null);
   // The region-type feature-state written so far (id -> what and where), and
   // the source rebuilds it belongs to: a rebuilt source has none.
   const appliedRegionTypeStateRef = useRef({ epoch: "", written: new Map() });
@@ -1327,6 +1360,9 @@ const WorldMap = ({ isGlobe = false }) => {
     setInitialCartographySettled(true);
     setAcknowledgedBoundaryOwnership(queued.ownershipOverrides ?? {});
     ownershipPresentation.releaseEntry(queued);
+    // The patch was made before any answer about the battlefields since: the
+    // borders those leave out are sent again, whole.
+    battlefieldGroundRequestRef.current?.(true);
   }, [ownershipPresentation, updateBoundarySourceFromPatch]);
 
   const clearDerivedCartography = useCallback(({ resetMetadata = false } = {}) => {
@@ -1509,6 +1545,34 @@ const WorldMap = ({ isGlobe = false }) => {
     };
     groupAreaRequestRef.current = requestGroupAreas;
 
+    // The battlefields' ground (frontGround.js): asked of THIS worker once it
+    // has its catalog, whenever the battlefields change, and again once the
+    // owners or the shapes it was worked out from have. A mesh is sent once:
+    // those held here are named in the question. Every answer but the newest
+    // is dropped.
+    let groundReady = false;
+    let groundRequest = 0;
+    let groundAsked = false;
+    const groundMeshes = new Map();
+    const requestBattlefieldGround = (force = false) => {
+      if (!groundReady || worker !== polityBoundaryWorkerRef.current) return;
+      const areas = getGroundAreas();
+      // Nothing on the map, and nothing left out of its borders: nothing to ask.
+      if (!areas.length && !groundAsked) return;
+      groundAsked = areas.length > 0;
+      groundRequest += 1;
+      worker.postMessage({
+        type: "battlefield-ground",
+        requestId: `battlefield-ground-${groundRequest}`,
+        geometryEpoch,
+        areas: areas.map(({ key, bounds, members, sides, touched, grid }) => ({ key, bounds, members, sides, touched, grid })),
+        known: [...groundMeshes.keys()],
+        force: force === true,
+      });
+    };
+    battlefieldGroundRequestRef.current = requestBattlefieldGround;
+    setGroundMeshes([]);
+
     // On a phone the worker's first message waits until MapLibre has parsed the
     // same file (regionsSourceMemory.js): the two parses of a classic map at
     // once are what took phones down on the second loading screen. The
@@ -1598,6 +1662,29 @@ const WorldMap = ({ isGlobe = false }) => {
     worker.onmessage = ({ data: result }) => {
       if (worker !== polityBoundaryWorkerRef.current) return;
 
+      if (result?.messageType === "battlefield-ground-result") {
+        if (result.geometryEpoch && result.geometryEpoch !== geometryEpoch) return;
+        if (result.requestId !== `battlefield-ground-${groundRequest}`) return;
+        if (result.error) {
+          console.warn("A battlefield's ground could not be worked out:", result.error);
+          return;
+        }
+        const patch = result.boundaryPatch;
+        if (patch && (patch.removeAll || (patch.removeIds?.length ?? 0) + (patch.upsert?.length ?? 0) > 0)) updateBoundarySourceFromPatch(patch);
+        const kept = new Map();
+        const meshes = [];
+        for (const area of Array.isArray(result.areas) ? result.areas : []) {
+          const mesh = area.positions ? { positions: area.positions, regionOf: area.regionOf } : groundMeshes.get(area.meshId);
+          if (!mesh) continue;
+          kept.set(area.meshId, mesh);
+          meshes.push({ key: area.key, regionIds: area.regionIds ?? [], owners: area.owners ?? [], meshId: area.meshId, ...mesh });
+        }
+        groundMeshes.clear();
+        for (const [meshId, mesh] of kept) groundMeshes.set(meshId, mesh);
+        setGroundMeshes(meshes);
+        return;
+      }
+
       if (result?.messageType === "group-areas-result") {
         if (result.geometryEpoch && result.geometryEpoch !== geometryEpoch) return;
         if (result.requestId !== `group-areas-${groupAreaRequest}`) return;
@@ -1628,8 +1715,10 @@ const WorldMap = ({ isGlobe = false }) => {
         setRegionRenderRepair({ geometryEpoch, data: repairData, repairedIds });
         setInitialRegionRepairSettled(true);
         if (result.disputedData) setDisputedRegionData(result.disputedData);
-        // Repaired shapes replace malformed ones in the groups' tint too.
+        // Repaired shapes replace malformed ones in the groups' tint too, and
+        // in the battlefields' ground.
         requestGroupAreas();
+        requestBattlefieldGround();
         if (Number.isFinite(result.stats?.elapsedMs)) {
           reportPerfOperation("map targeted region render repair", result.stats.elapsedMs, {
             warnAt: PERF_MAP_WARN_MS,
@@ -1667,6 +1756,8 @@ const WorldMap = ({ isGlobe = false }) => {
         catalogReady = true;
         groupAreasReady = true;
         requestGroupAreas();
+        groundReady = true;
+        requestBattlefieldGround();
         const metadata = { ...EMPTY_CUSTOM_REGION_META, ...(result.metadata ?? {}), ready: true };
         setCustomRegionMeta(metadata);
         primeCustomRegionCatalogEntries(metadata.records, { url: regionsGeojsonUrl, invalidateCatalog: false });
@@ -1803,6 +1894,8 @@ const WorldMap = ({ isGlobe = false }) => {
         if (isOwnershipUpdate) {
           releaseOwnershipPresentation(request?.payload?.changedRegionIds ?? []);
         }
+        // New owners may draw other regions of a battlefield.
+        if (isOwnershipUpdate || request?.payload?.type === "initialize") requestBattlefieldGround();
       }
 
       recordMapTrace("nations:cartography-ack", {
@@ -1858,6 +1951,8 @@ const WorldMap = ({ isGlobe = false }) => {
 
     return () => {
       if (groupAreaRequestRef.current === requestGroupAreas) groupAreaRequestRef.current = null;
+      if (battlefieldGroundRequestRef.current === requestBattlefieldGround) battlefieldGroundRequestRef.current = null;
+      setGroundMeshes([]);
       parseHold?.cancel();
       scheduler.stop();
       worker.terminate();
@@ -1883,6 +1978,64 @@ const WorldMap = ({ isGlobe = false }) => {
     groupAreaInputRef.current = { groupAreas, groups };
     groupAreaRequestRef.current?.();
   }, [groupAreas, groups]);
+
+  // The battlefields on the map, as their layers can draw them (frontGround.js).
+  useEffect(() => subscribeGroundAreas(() => battlefieldGroundRequestRef.current?.()), []);
+
+  // The fills hidden: the sweep's regions and the ground's, written together.
+  // The battlefields are told which of theirs are hidden, and draw a
+  // battlefield once all of its are. A source replaced (a style rebuilt, a
+  // context restored) has none of them, and they are written again.
+  writeHiddenFillsRef.current = () => {
+    const mapInstance = map?.getMap ? map.getMap() : map;
+    const state = hiddenFillRef.current;
+    if (!mapInstance?.style || !mapInstance.setFeatureState) {
+      setGroundHeldIds([]);
+      return;
+    }
+    const wanted = hiddenFillTargets({ sweep: state.sweep, ground: state.ground, repaired: repairedRegionIdSet, tiles: true });
+    const { hide, show } = hiddenFillChanges(state.written, wanted);
+    const write = (target, hidden) => {
+      if (!mapInstance.getSource?.(target.source)) return false;
+      try {
+        mapInstance.setFeatureState(target, { ownershipTransitionHidden: hidden });
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    for (const [key, target] of show) {
+      write(target, false);
+      state.written.delete(key);
+    }
+    for (const [key, target] of hide) if (write(target, true)) state.written.set(key, target);
+    setGroundHeldIds(state.ground.filter((id) => state.written.has(`${CUSTOM_FILL_SOURCE}\u001f${id}`)));
+  };
+  useEffect(() => {
+    const mapInstance = map?.getMap ? map.getMap() : map;
+    let frame = 0;
+    const write = () => {
+      frame = 0;
+      writeHiddenFillsRef.current();
+    };
+    const soon = () => {
+      if (!frame) frame = requestAnimationFrame(write);
+    };
+    const wanted = () => {
+      hiddenFillRef.current.ground = [...getGroundWantedIds()];
+      writeHiddenFillsRef.current();
+    };
+    wanted();
+    const unsubscribe = subscribeGroundWantedIds(wanted);
+    // (A source not there yet when a region was held is written once it is.)
+    mapInstance?.on?.("styledata", soon);
+    return () => {
+      unsubscribe();
+      mapInstance?.off?.("styledata", soon);
+      if (frame) cancelAnimationFrame(frame);
+      setGroundHeldIds([]);
+    };
+  }, [map]);
 
   // Group layers mount with a best-guess beforeId (GroupAreaLayers.jsx); the
   // canonical stack (mapLayerOrder.js) settles them once they exist.
@@ -2214,10 +2367,16 @@ const WorldMap = ({ isGlobe = false }) => {
         // published, queue moving), then let the replay draw every fill.
         if (seen.custom !== next.custom && ownershipSweepRef.current.active) ownershipSweepRef.current.finish?.();
         appliedCustomFillStateRef.current = new Map();
+        for (const [key, target] of hiddenFillRef.current.written) {
+          if (target.source === CUSTOM_FILL_SOURCE || target.source === REPAIR_FILL_SOURCE) hiddenFillRef.current.written.delete(key);
+        }
         setCustomFillSourceEpoch((epoch) => epoch + 1);
       }
       if (seen.tiles && seen.tiles !== next.tiles) {
         appliedTileFillStateRef.current = new Map();
+        for (const [key, target] of hiddenFillRef.current.written) {
+          if (target.source === TILE_FILL_SOURCE) hiddenFillRef.current.written.delete(key);
+        }
         setTileFillSourceEpoch((epoch) => epoch + 1);
       }
     };
@@ -2231,6 +2390,10 @@ const WorldMap = ({ isGlobe = false }) => {
       if (frame) cancelAnimationFrame(frame);
     };
   }, [map]);
+  // The hidden fills written again on sources that are new, or newly mended.
+  useEffect(() => {
+    writeHiddenFillsRef.current();
+  }, [customFillSourceEpoch, tileFillSourceEpoch, repairedRegionIdSet]);
 
   // The URL-backed authored source uses the same merged ownership lookup as
   // click resolution and the stock-detail fill path. Live overrides stay
@@ -2423,17 +2586,8 @@ const WorldMap = ({ isGlobe = false }) => {
     );
 
     const setBaseHidden = (hidden) => {
-      for (const regionId of sweep.regionIds) {
-        for (const source of sourceIdsForRegion(regionId)) {
-          if (!mapInstance.getSource?.(source)) continue;
-          try {
-            mapInstance.setFeatureState(
-              { source, id: regionId },
-              { ownershipTransitionHidden: Boolean(hidden) },
-            );
-          } catch {}
-        }
-      }
+      hiddenFillRef.current.sweep = hidden ? [...sweep.regionIds] : [];
+      writeHiddenFillsRef.current();
     };
 
     const applyTargetBaseFill = () => {
@@ -3007,21 +3161,17 @@ const WorldMap = ({ isGlobe = false }) => {
     () => customActive
       ? {
           "fill-color": DETAIL_FILL_COLOR,
-          "fill-opacity": politicalFillOpacity,
+          "fill-opacity": reliefFillStops ? buildScenarioReliefFillOpacity(reliefFillStops, FILL_HIDDEN) : buildPoliticalFillOpacity(FILL_HIDDEN),
           "fill-antialias": false,
           "fill-outline-color": DETAIL_FILL_COLOR,
         }
       : { "fill-opacity": 0 },
-    [customActive, politicalFillOpacity],
+    [customActive, reliefFillStops],
   );
   const transitionAwareFillOpacity = useMemo(() => (customFlag
     ? (reliefFillStops
-      ? buildScenarioReliefFillOpacity(reliefFillStops, ["boolean", ["feature-state", "ownershipTransitionHidden"], false])
-      : buildPoliticalFillOpacity([
-        "boolean",
-        ["feature-state", "ownershipTransitionHidden"],
-        false,
-      ]))
+      ? buildScenarioReliefFillOpacity(reliefFillStops, FILL_HIDDEN)
+      : buildPoliticalFillOpacity(FILL_HIDDEN))
     : 0), [customFlag, reliefFillStops]);
   const customFarFillOpacity = transitionAwareFillOpacity;
   const customAuthoredFillOpacity = transitionAwareFillOpacity;
@@ -3366,8 +3516,8 @@ const WorldMap = ({ isGlobe = false }) => {
           layout={{ "line-cap": "round", "line-join": "round" }}
           paint={{
             "line-color": "rgba(1, 4, 8, 0.72)",
-            "line-width": ["interpolate", ["linear"], ["zoom"], 1, 1.8, 3, 2.5, 6, 3.6, 9, 4.7, 12, 5.8],
-            "line-blur": ["interpolate", ["linear"], ["zoom"], 1, 0.7, 6, 1.15, 12, 1.5],
+            "line-width": ["interpolate", ["linear"], ["zoom"], ...POLITY_BOUNDARY_SHADOW_WIDTH_STOPS.flat()],
+            "line-blur": ["interpolate", ["linear"], ["zoom"], ...POLITY_BOUNDARY_SHADOW_BLUR_STOPS.flat()],
             "line-opacity": customActive && worldKnown ? 0.52 : 0,
           }}
         />
@@ -3378,14 +3528,7 @@ const WorldMap = ({ isGlobe = false }) => {
           layout={{ "line-cap": "round", "line-join": "round" }}
           paint={{
             "line-color": "rgba(5, 8, 13, 0.96)",
-            "line-width": [
-              "interpolate", ["linear"], ["zoom"],
-              1, 0.58,
-              3, 0.92,
-              6, 1.34,
-              9, 1.72,
-              12, 2.08,
-            ],
+            "line-width": ["interpolate", ["linear"], ["zoom"], ...POLITY_BOUNDARY_WIDTH_STOPS.flat()],
             "line-opacity": customActive && worldKnown ? 0.94 : 0,
           }}
         />

@@ -192,6 +192,25 @@ const NEW_UPDATES = [
     ],
   },
   {
+    // "battlefield ground drawn the way the ownership hand-over animation is, plus a moving front border"
+    // (the owner, 2026-11-01): the battlefield draws its sides' regions itself, with the border where the
+    // holders meet (Map/frontGroundLayer.js).
+    id: "2026-11-moving-fronts",
+    kind: "minor",
+    date: "2026-11-01",
+    channel: "beta",
+    banners: [
+      {
+        title: "Fronts that move",
+        items: [
+          "Ground taken on a battlefield now looks just like the land of the country that holds it, on every basemap.",
+          "The border moves with the fighting: it is drawn where the ground changes hands, not along the old border.",
+          "Battlefields are quicker to draw, so the map stays smooth while a turn plays.",
+        ],
+      },
+    ],
+  },
+  {
     // Distances follow the map's projection; the Workshop's scale line; the Flat Earth projection (2026-11-01).
     id: "2026-11-map-distances",
     kind: "minor",

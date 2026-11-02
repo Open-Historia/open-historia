@@ -83,7 +83,7 @@ export const pictureMesh = (coordinates, steps = MESH_STEPS) => {
   return out;
 };
 
-const compile = (gl, type, source) => {
+export const compile = (gl, type, source) => {
   const shader = gl.createShader(type);
   gl.shaderSource(shader, source);
   gl.compileShader(shader);
@@ -104,8 +104,8 @@ vec4 projectTileWithElevation(vec2 p, float elevation) {
   return u_projection_matrix * vec4(p, elevation, 1.0);
 }`,
 });
-const shaderDataOf = (args) => (typeof args?.shaderData?.vertexShaderPrelude === "string" && args.shaderData.variantName ? { define: "", ...args.shaderData } : PLAIN);
-const projectionOf = (args) => {
+export const shaderDataOf = (args) => (typeof args?.shaderData?.vertexShaderPrelude === "string" && args.shaderData.variantName ? { define: "", ...args.shaderData } : PLAIN);
+export const projectionOf = (args) => {
   const data = args?.defaultProjectionData;
   if (data?.mainMatrix) return data;
   const mainMatrix = args?.modelViewProjectionMatrix ?? (Array.isArray(args) || ArrayBuffer.isView(args) ? args : null);
@@ -146,6 +146,8 @@ void main() {
 // How many times a picture's canvas has been drawn on: it goes to the GPU only when this moves.
 const paintedTimes = new WeakMap();
 export const markPicturePainted = (canvas) => paintedTimes.set(canvas, (paintedTimes.get(canvas) ?? 0) + 1);
+// (The battlefield's own ground layer takes a picture up by the same count: frontGroundLayer.js.)
+export const picturePaintedTimes = (canvas) => paintedTimes.get(canvas) ?? 0;
 
 // The two layers, which share the copy. `pictures()` gives what is painted:
 // [{ canvas, coordinates }]. `strength(zoom)` is how strongly the map lays a
