@@ -333,7 +333,8 @@ const WarRoomTools = () => {
     const leave = () => setAim(null);
     // The wheel, and a right-button press, are handed to the map under the
     // sheet (mapGestures.js passToMap): a mouse wheel or a pinch zooms about
-    // the pointer, two fingers on a trackpad turn and tilt the map, and a
+    // the pointer, two fingers on a trackpad zoom (with Shift held, turn and
+    // tilt the map), and a
     // right-button drag turns and tilts it, as anywhere else on the map.
     const wheel = (event) => {
       event.preventDefault();
