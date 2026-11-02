@@ -304,7 +304,8 @@
             { id: "front-bed", type: "line", source: "front", layout: { "line-join": "round" }, paint: { "line-color": "rgba(13, 13, 15, 0.9)", "line-width": 8 } },
             { id: "front", type: "line", source: "front", layout: { "line-join": "round" }, paint: { "line-color": "#e0662f", "line-width": 3.2, "line-dasharray": [2, 1] } }
           ],
-          terrain: { source: "dem", exaggeration: 15 },
+          // A fifth of the game's 15: the story's tilted camera makes the game's relief read as too strong.
+          terrain: { source: "dem", exaggeration: 3 },
           sky: { "sky-color": "#0f1820", "horizon-color": "#24303b", "fog-color": "#111a22", "sky-horizon-blend": 0.5, "horizon-fog-blend": 0.6, "fog-ground-blend": 0.8, "atmosphere-blend": 0 }
         }
       });
