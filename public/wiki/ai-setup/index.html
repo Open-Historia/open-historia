@@ -269,11 +269,10 @@ path against the names the server lists and uses the matching one. If nothing ma
 the id unchanged and the server&#39;s own &quot;not found&quot; message tells you what it offers.</p>
 <h3 id="context-windows">Context windows</h3>
 <p>A model that refuses a request as too long for it teaches the game its context window, and the
-game then keeps from sending it a request it cannot fit. Each entry shows what is known under
-<strong>This model only → Context window (tokens)</strong>: type your own figure there, which beats what was
-learned, or press <strong>Forget this window</strong> after a provider raises its limit. For a model on your
-own machine or network only your own figure counts, so reloading a local model with a bigger
-window needs nothing from you.</p>
+game then keeps from sending it a request it cannot fit, until what it learned lapses: a week
+after a refusal, or a month after the model stated its window. Nothing learned counts for a model
+on your own machine or network, so reloading a local model with a bigger window needs nothing
+from you.</p>
 <h3 id="be-realistic-about-model-size">Be realistic about model size</h3>
 <p>Open Historia asks a lot of the model: it has to return strictly structured data describing
 territory changes, unit movements and diplomatic shifts, not just prose. Small models

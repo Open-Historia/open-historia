@@ -47,7 +47,6 @@
       "electron/launchUpdate.cjs",
       "electron/layeredUpdate.cjs",
       "electron/payloadUpdate.cjs",
-      "electron/betaRecommendation.cjs",
       "electron/setup.html",
       "src/runtime/AppUpdateBanner.jsx",
       "src/runtime/appUpdate.js",
