@@ -863,9 +863,9 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
 
     const hasComponentBaseline = Boolean(baseline?.componentCount);
     const composition = useMemo(() => {
-        try { return { ...politicalEditorComposition(politicsForm), error: "" }; }
+        try { return { ...politicalEditorComposition(politicsForm, { asRecorded: baseline?.politics || null }), error: "" }; }
         catch (error) { return { error: error?.message || "Invalid political landscape." }; }
-    }, [politicsForm]);
+    }, [politicsForm, baseline]);
 
     const save = () => runBusy(async () => {
         if (!target) throw new Error("Pick a country first.");

@@ -13,6 +13,7 @@ import { chatLanguageDiffersFromUi, chatTextDirection } from "../../runtime/i18n
 import { uiString } from "../../runtime/translator.js";
 import { applyProjectOpsToWorld, mutateAdvisorState, normalizeActionEntry, readActionsState, readAdvisorMessages, readWorldState, viewAsSeen, writeActionsState, writeWorldState } from "../../runtime/gameState.js";
 import { CHIEF_ADVISOR_THREAD, advisorContacts, advisorMessagesFor, advisorOfficeStatus, archiveAdvisorContact, createAdvisorContact, politicalAdvisorOffices, replaceAdvisorThread, reviseAdvisorContact } from "../../runtime/advisorThreads.js";
+import { getPoliticalProfile } from "../../runtime/politicalActors.js";
 import StorageProblemNotice from "./storageProblemNotice.jsx";
 import AdvisorRecipients from "./AdvisorRecipients.jsx";
 import { describeReplyProblems, extractFencedJson, looksLikeProjectOps, planAdvisorActionEdits } from "./advisorBlocks.js";
@@ -860,6 +861,11 @@ const AdvisorMessageRow = React.memo(({ msg, msgIndex, speakerName = "Advisor", 
             📉 The chart could not be drawn: {chartProblem}.
             </div>
         )}
+        {msg.suggestionsNotApplied && !msg.streaming && (
+            <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.72rem", marginTop: "0.6rem" }}>
+            This official's suggested Actions or Projects were not applied. Authorize them through your chief advisor or the relevant panel.
+            </div>
+        )}
         {msg.actionsSummary &&<AdvisorActionsCard items={msg.actionsSummary} onOpenActions={onOpenActions} />}
         {msg.projectsSummary && <AdvisorProjectsCard items={msg.projectsSummary} onOpenProjects={onOpenProjects} />}
         {msg.projectsProblem && <AdvisorProjectsProblem kind={msg.projectsProblem} detail={msg.projectsDetail} excerpt={msg.projectsExcerpt} onRetry={onRetryProjects} />}
@@ -1034,7 +1040,12 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
     const sideEffectPendingRef = useRef(0);
     const [sideEffectsBusy, setSideEffectsBusy] = useState(false);
     const playerPolity = useRuntimeState("game", (game) => String(game?.country || ""));
-    const politicalWorld = useRuntimeState("world", (world) => world || {});
+    // Only the player's government, as text: the whole world re-rendered this panel on every write a turn made.
+    const governmentText = useRuntimeState("world", (world) => JSON.stringify(getPoliticalProfile(world || {}, playerPolity)?.government ?? null), playerPolity);
+    const politicalWorld = React.useMemo(() => {
+        const government = JSON.parse(governmentText);
+        return government ? { politicalActors: { byPolity: { [playerPolity]: { polityKey: playerPolity, government } } } } : {};
+    }, [governmentText, playerPolity]);
     const offices = React.useMemo(() => politicalAdvisorOffices(politicalWorld, playerPolity), [politicalWorld, playerPolity]);
     const selectedContact = contacts.find((contact) => contact.id === activeThreadId) || null;
     const recipientLocked = Boolean(selectedContact?.archived);
@@ -1458,8 +1469,9 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
                 const next = prev.slice();
                 const last = next[next.length - 1];
                 const unapproved = threadId !== CHIEF_ADVISOR_THREAD && (actionsProposal || projectsProposal);
-                const visibleReply = unapproved ? `${reply}\n\n(Official's suggested Actions or Projects were not applied. Authorize them through your chief advisor or the relevant panel.)` : reply;
-                const finalMessage = { role: "advisor", text: visibleReply, time: askedOn, at: new Date().toISOString(), ...(memory ? { memory } : {}), ...(chartProblem ? { chartProblem } : {}), ...(actionsProblems.length ? { actionsProblems } : {}), ...(draftProblems.length ? { draftProblems } : {}), ...(institutionDraftProblems.length ? { institutionDraftProblems } : {}), ...(deployProblems.length ? { deployProblems } : {}), ...(actionsSummary ? { actionsSummary } : {}), ...(projectsSummary ? { projectsSummary } : {}), ...(projectsProblem ? { projectsProblem } : {}), ...(projectsDetail ? { projectsDetail } : {}), ...(projectsExcerptText ? { projectsExcerpt: projectsExcerptText } : {}) };
+                // A flag the bubble shows, in the player's language; written into the text, the note was English and
+                // went back to the model as if the official had said it.
+                const finalMessage = { role: "advisor", text: reply, time: askedOn, ...(unapproved ? { suggestionsNotApplied: true } : {}), at: new Date().toISOString(), ...(memory ? { memory } : {}), ...(chartProblem ? { chartProblem } : {}), ...(actionsProblems.length ? { actionsProblems } : {}), ...(draftProblems.length ? { draftProblems } : {}), ...(institutionDraftProblems.length ? { institutionDraftProblems } : {}), ...(deployProblems.length ? { deployProblems } : {}), ...(actionsSummary ? { actionsSummary } : {}), ...(projectsSummary ? { projectsSummary } : {}), ...(projectsProblem ? { projectsProblem } : {}), ...(projectsDetail ? { projectsDetail } : {}), ...(projectsExcerptText ? { projectsExcerpt: projectsExcerptText } : {}) };
                 // Finalise the streaming bubble, or append the full reply if the
                 // provider never streamed a chunk.
                 if (last && last.role === "advisor" && last.streaming) {
@@ -1907,7 +1919,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         onBlur={e => e.target.style.borderColor = "rgba(255,255,255,0.15)"}
         />
         <button
-        onClick={handleSend} disabled={isLoading || recipientLocked || !input.trim()}
+        onClick={handleSend} disabled={isLoading || recipientLocked || !hasBootstrapped || loadFailed || saveFailed || !input.trim()}
         style={{ backgroundColor: isLoading || recipientLocked || !input.trim() ? "rgba(59,130,246,0.4)" : "#3b82f6", border: "none", borderRadius: "10px", width: "2.5rem", height: "2.5rem", display: "flex", alignItems: "center", justifyContent: "center", cursor: isLoading || !input.trim() ? "not-allowed" : "pointer", flexShrink: 0, fontSize: "1rem", transition: "background-color 0.2s" }}
         onMouseEnter={e => { if (!isLoading && !recipientLocked && input.trim()) e.currentTarget.style.backgroundColor = "#2563eb"; }}
         onMouseLeave={e => { if (!isLoading && !recipientLocked && input.trim()) e.currentTarget.style.backgroundColor = "#3b82f6"; }}

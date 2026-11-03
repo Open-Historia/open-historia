@@ -123,3 +123,22 @@ test("Political World PM/head-of-state binding pins a person, never floats to th
   assert.equal(advisorOfficeStatus(legacy, world("Marina Voronina")), "current");
   assert.equal(advisorOfficeStatus(legacy, world("New PM")), "changed");
 });
+
+// Review of #939 (2026-11-03): a personality's line breaks were folded away on save, and an officeholder with no
+// name was offered under its internal id.
+test("a contact keeps its personality's line breaks, and an unnamed officeholder is never offered by id", () => {
+  const [contact] = advisorContacts(createAdvisorContact([], {
+    id: "advisor-lines-001",
+    name: "Marina",
+    title: "Minister",
+    personality: "Meticulous.\r\n\r\n\r\nCautious   with spending.\nWilling to disagree.",
+  }));
+  assert.equal(contact.personality, "Meticulous.\n\nCautious with spending.\nWilling to disagree.");
+  const revised = advisorContacts(reviseAdvisorContact([contact], contact.id, { name: "Marina", title: "Minister", personality: "One.\nTwo." }))[0];
+  assert.equal(revised.personality, "One.\nTwo.");
+
+  const world = { politicalActors: { byPolity: { Testland: { polityKey: "Testland", government: { headOfState: { id: "person-0042" }, headOfGovernment: { name: "Ana Lima", id: "person-7" } } } } } };
+  assert.deepEqual(politicalAdvisorOffices(world, "Testland").map((office) => office.name), ["Ana Lima"]);
+  const bound = { binding: { polity: "Testland", office: "headOfState", name: "Old King", personId: "person-0001" } };
+  assert.equal(advisorOfficeStatus(bound, world), "changed", "a successor known only by id is still a change");
+});
