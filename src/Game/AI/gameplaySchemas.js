@@ -3634,6 +3634,28 @@ export const withWarFigures = (tool) => {
   };
 };
 
+// A time skip's tool with every event's impacts required in what is SENT: {}
+// for an event that changes nothing. Optional, gemini-3.5-flash-lite left the
+// object off every event of a live skip, the changes it had planned in its own
+// reasoning included (2026-11-03: a Urals tank works' projectOps it named and
+// then never wrote; ten events, no impacts on any). Required, the same request
+// came back with impacts on every event, {} on the seven that changed nothing.
+// The answer is still read without it (the task's own schema).
+export const withEventImpacts = (tool) => {
+  const event = tool?.schema?.properties?.events?.items;
+  if (!tool?.schema?.properties?.stopDate || !event?.properties?.impacts) return tool;
+  const required = Array.isArray(event.required) ? event.required : [];
+  if (required.includes("impacts")) return tool;
+  const events = tool.schema.properties.events;
+  return {
+    ...tool,
+    schema: {
+      ...tool.schema,
+      properties: { ...tool.schema.properties, events: { ...events, items: { ...event, required: [...required, "impacts"] } } },
+    },
+  };
+};
+
 // A time skip's tool as this game has Rostra (server/gameFeatures.js
 // socialMedia). On, with its social posts after everything else it is to write
 // but the riders foldJumpTool adds (the agents' reports, the history): after

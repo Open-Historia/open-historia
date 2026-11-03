@@ -10,12 +10,12 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
-import { foldJumpTool, getGameplayTool, withEventAudience, withFrontOrders, withSocialPosts, withWarFigures } from "./gameplaySchemas.js";
+import { foldJumpTool, getGameplayTool, withEventAudience, withEventImpacts, withFrontOrders, withSocialPosts, withWarFigures } from "./gameplaySchemas.js";
 import { toGeminiSchema } from "./geminiSchema.js";
 
 test("the folded skip with everything a game can send stays under what Gemini took", () => {
   // (Built as the turn builds it: gameplay.js forActiveFeatures, then the posts, then folded.)
-  const sent = toGeminiSchema(foldJumpTool(withSocialPosts(withWarFigures(withFrontOrders(withEventAudience(getGameplayTool("jumpForward"), false))), true)).schema);
+  const sent = toGeminiSchema(foldJumpTool(withSocialPosts(withWarFigures(withFrontOrders(withEventImpacts(withEventAudience(getGameplayTool("jumpForward"), false)))), true)).schema);
   const size = JSON.stringify(sent).length;
   // 2026-11-03: 30,239 characters went through, 32,672 did not.
   assert.ok(size < 30300, `the folded skip is ${size} characters`);

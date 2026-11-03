@@ -12,10 +12,12 @@ import { readFileSync } from "node:fs";
 import { applyDiplomaticUpdates, bindPuppetUpdatesToEvents, decodePuppetUpdates } from "./nativeDiplomaticDirector.js";
 import { normalizeWorldState } from "../../runtime/gameState.js";
 
-test("the skip is told that an event making a puppet carries its install line", () => {
+test("the skip is told that an event making a puppet gets its install line, beside the events", () => {
   const gameplay = readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
-  assert.match(gameplay, /Any event that makes one polity the puppet, vassal, protectorate, satellite, client state or tributary of another .* carries the matching install line, with that event's number/);
-  assert.match(gameplay, /An event that frees, annexes or sees a puppet throw off its overlord carries release, annex or revolt the same way\./);
+  assert.match(gameplay, /Any event that makes one polity the puppet, vassal, protectorate, satellite, client state or tributary of another .* gets the matching install line in puppetUpdates, with that event's number/);
+  assert.match(gameplay, /An event that frees, annexes or sees a puppet throw off its overlord gets a release, annex or revolt line the same way\./);
+  // Told "the event carries the line", models wrote it inside the event's impacts, and the check cut it (2026-11-03).
+  assert.match(gameplay, /These lines, like every relation, agreement and war record, are the answer's own, beside its events: never inside an event or its impacts\./);
 });
 
 test("an event and its install line make the puppet", () => {
