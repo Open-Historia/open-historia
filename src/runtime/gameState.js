@@ -56,7 +56,7 @@ import { normalizePowerStatus } from "./powerStatus.js";
 import { normalizeInstitutionLifecycleImpactOp } from "./institutionLifecycleCore.js";
 import {
   buildPoliticalActorLegacyStatsProjection,
-  legacyPoliticalStatsProjectionWriteError,
+  withLegacyPoliticalProjection,
   legacyPoliticalStatsWriteError,
   getPoliticalProfileKey,
   normalizePoliticalActors,
@@ -4610,10 +4610,10 @@ export const normalizeWorldState = (world) => {
     // programme sitting in the Foreign column with both of its controls gone. Idempotent,
     // so a board already correct reads back unchanged.
     militaryExpenditureCommitments: normalizeMilitaryExpenditureCommitments(nextWorld.militaryExpenditureCommitments),
-    fiscalTransactions: normalizeFiscalTransactions(nextWorld.fiscalTransactions).map((entry) => ({
+    fiscalTransactions: readFiscalLedger(normalizeFiscalTransactions, nextWorld.fiscalTransactions, 128, "fiscalTransactions").map((entry) => ({
       ...entry, polity: resolveOwner(entry.polity) || entry.polity,
     })),
-    fiscalTaxPolicies: normalizeFiscalTaxPolicies(nextWorld.fiscalTaxPolicies).map((entry) => ({
+    fiscalTaxPolicies: readFiscalLedger(normalizeFiscalTaxPolicies, nextWorld.fiscalTaxPolicies, 64, "fiscalTaxPolicies").map((entry) => ({
       ...entry, polity: resolveOwner(entry.polity) || entry.polity,
     })),
     projects: normalizeProjects(nextWorld.projects).map((project) => {
@@ -5475,15 +5475,42 @@ const previewPolityOverrides = (polityOverrides, pendingChanges) => {
 // writer (an event's polityChanges.stats, the Stats pane, tracking) goes through
 // the same compatibility + deterministic aggregation path in countryStats.js
 // instead of editing the UI-shaped fields directly.
+// A save's fiscal ledger, read: whole when it is sound, and otherwise row by row, the malformed and duplicated rows
+// dropped and an over-long ledger cut to its newest `limit`, with a warning. normalizeWorldState threw on one bad
+// row, which made an edited or imported save unloadable rather than repaired. The strict normalizers stay the
+// writers' check (fiscalTransactions.js, fiscalTaxPolicies.js).
+const readFiscalLedger = (normalize, input, limit, label) => {
+  try {
+    return normalize(input);
+  } catch (error) {
+    const rows = Array.isArray(input) ? input : [];
+    const kept = [];
+    const ids = new Set();
+    let dropped = Math.max(0, rows.length - limit);
+    for (const row of rows.slice(-limit)) {
+      try {
+        const [entry] = normalize([row]);
+        if (!entry || ids.has(entry.id)) { dropped += 1; continue; }
+        ids.add(entry.id);
+        kept.push(entry);
+      } catch {
+        dropped += 1;
+      }
+    }
+    console.warn(`[fiscal] ${label}: ${error?.message || error}; kept ${kept.length} row(s), dropped ${dropped}.`);
+    return kept;
+  }
+};
+
 export const applyCountryStatPatchToWorld = (world, canonicalName, patch, options = {}) => {
   if (!world || typeof world !== "object" || !canonicalName) return null;
   // This public merger is also used by direct Stats authoring, legacy
   // reassessments and project effects. The event writer's Political World guard
   // alone cannot protect these non-event paths. The canonical actor owns its
-  // leader and government; permit a matching one-way compatibility projection,
-  // but never publish an independent, divergent legacy mirror.
-  const politicalError = legacyPoliticalStatsProjectionWriteError(world, canonicalName, patch);
-  if (politicalError) throw new Error(politicalError);
+  // leader and government: a patch's mirror of them is the actor's one-way
+  // projection, never an independent, divergent one (politicalActors.js
+  // withLegacyPoliticalProjection).
+  patch = withLegacyPoliticalProjection(world, canonicalName, patch);
   if (!world.countryStats || typeof world.countryStats !== "object") world.countryStats = {};
 
   const next = mergeCountryStatPatch(world.countryStats[canonicalName], patch, options);
@@ -5853,20 +5880,25 @@ const applyPolityAndTerritoryImpacts = ({
     // into the authoritative store.
     if (Object.hasOwn(change, "statsEffects") || (change.stats && typeof change.stats === "object")) {
       // An existing Political Actor owns the government and head-of-state.
-      // Legacy Stats is only its compatibility projection. Reject a second
-      // writer here, across Timeline, projects, and GM alike, even if an older
-      // caller bypassed its own preflight. The outer world is detached: throwing
-      // leaves no partial canonical event or misleading prose success.
+      // Legacy Stats is only its compatibility projection, so a second writer's
+      // leader or government is not written. It is LEFT OUT rather than thrown:
+      // a time skip's schema still offers both fields, and by the time an event
+      // is applied the skip's one request is spent, so a throw here cost the
+      // whole turn for an election or a coup told through stats. The GM still
+      // refuses it at Preview (gameMasterValidation.js), before any request.
+      let changeStats = change.stats;
       const legacyPoliticalError = legacyPoliticalStatsWriteError(world, code, change.stats);
       if (legacyPoliticalError) {
-        throw new Error(`Event "${eventId || eventDate || "undated"}" cannot change ${code} Statistics: ${legacyPoliticalError}`);
+        const { leader: _leader, government: _government, ...rest } = change.stats;
+        changeStats = rest;
+        console.warn(`[Political Actors] event "${eventId || eventDate || "undated"}" left ${code}'s Statistics leader/government to its Political Actor: ${legacyPoliticalError}`);
       }
       // Relative numeric effects and legacy absolute patches pass through the
       // same canonical merger. Capture actual before/after only after success.
       const before = world.countryStats?.[code];
       const effect = Object.hasOwn(change, "statsEffects")
         ? planStatsEventEffect({ effect: change.statsEffects, sheet: before,
-          absoluteStats: change.stats, statSheetDefinition, eventId, eventDate,
+          absoluteStats: changeStats, statSheetDefinition, eventId, eventDate,
           eventStorylineIds, storylines: [
             ...normalizeArray(world.storylines),
             // New same-turn storylines are projected by the World Director but
@@ -5885,9 +5917,9 @@ const applyPolityAndTerritoryImpacts = ({
         throw new Error("Statistics event has already been applied to this polity");
       }
       const patch = effect ? {
-        ...(change.stats || {}), ...effect.patch,
-        ...(change.stats?.economy ? { economy: { ...change.stats.economy, ...effect.patch.economy } } : {}),
-      } : change.stats;
+        ...(changeStats || {}), ...effect.patch,
+        ...(changeStats?.economy ? { economy: { ...changeStats.economy, ...effect.patch.economy } } : {}),
+      } : changeStats;
       const merged = applyCountryStatPatchToWorld(world, code, patch, {
         continuity: eventId ? { accountedEventIds: [eventId] } : null,
         maxAggregateRescale: COUNTRY_STATS_EVENT_RESCALE_LIMIT,
@@ -6103,16 +6135,19 @@ export const applyEventImpactsToWorld = ({
   for (let eventIndex = 0; eventIndex < acceptedEvents.length; eventIndex += 1) {
     const event = acceptedEvents[eventIndex];
     if (fiscalActive) {
-      if (!isCanonicalGameDate(event.date)
-        || compareGameDates(event.date, fiscalPeriod.fromDate) < 0
-        || compareGameDates(event.date, fiscalPeriod.toDate) > 0
-        || compareGameDates(event.date, priorFiscalEventDate) < 0) {
-        throw new Error("Fiscal turn events must be dated and chronologically ordered");
-      }
+      // The day this event's law takes effect on the tax clock: its own date,
+      // held inside the period and never before an earlier event's. An event
+      // out of order (a breadth-repair event appended after the answer), undated
+      // or dated past the skip's end used to throw here, after the skip's one
+      // request was spent; it accrues as of the latest day reached instead.
+      let fiscalDay = isCanonicalGameDate(event.date) ? event.date : priorFiscalEventDate;
+      if (compareGameDates(fiscalDay, fiscalPeriod.fromDate) < 0) fiscalDay = fiscalPeriod.fromDate;
+      if (compareGameDates(fiscalDay, fiscalPeriod.toDate) > 0) fiscalDay = fiscalPeriod.toDate;
+      if (compareGameDates(fiscalDay, priorFiscalEventDate) < 0) fiscalDay = priorFiscalEventDate;
       // The event's law is in force BEFORE that civil day's accrual. Prior
       // intervals stop at yesterday and cannot see a later law/repeal.
-      advanceTaxForecast(addGameDays(event.date,-1));
-      priorFiscalEventDate = event.date;
+      advanceTaxForecast(addGameDays(fiscalDay,-1));
+      priorFiscalEventDate = fiscalDay;
     }
     if (useStatsBoundary) settleStatsBoundary("beforeEvent", eventIndex);
     // A project this event COMPLETES releases its effects into this event, before
@@ -6365,7 +6400,8 @@ export const applyEventImpactsToWorld = ({
     }
     // A same-day batch applies ALL of its laws before that date is accrued.
     if (fiscalActive && acceptedEvents[eventIndex + 1]?.date !== event.date) {
-      advanceTaxForecast(event.date);
+      // The day this event was held to above, inside the period (an undated or late event's own date is not).
+      advanceTaxForecast(priorFiscalEventDate);
     }
   }
   if (fiscalActive) advanceTaxForecast(fiscalPeriod.toDate);

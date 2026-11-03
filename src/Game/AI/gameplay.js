@@ -9406,6 +9406,10 @@ const applySimulationResult = async ({
       ];
     }
     curatedEvents = [...curatedEvents, ...repairCuratedEvents];
+    // In date order with the answer's own (timelineOrder.js), not after them: the fiscal clock and the map's
+    // motion budget read the events in the order they happened.
+    const orderedCurated = { events: curatedEvents };
+    if (sortTimelineEventsChronologically(orderedCurated)) curatedEvents = orderedCurated.events;
     console.info(
       `[OH world composition] supplemental candidates ${breadthRepair.events.length}; ` +
       `integrity kept ${repairScreened.events.length}; curator kept ${repairCuratedEvents.length}.`,

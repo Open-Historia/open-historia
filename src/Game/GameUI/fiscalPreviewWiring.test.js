@@ -39,7 +39,6 @@ test('GM Preview and Apply use the same native fiscal validation and show a visi
   assert.match(gameplay,/fiscalPreviewRows = buildFiscalPreviewRows\(bundle\.world, events\)/);
   assert.match(gameplay,/fiscalPreviewRows,/);
   assert.match(ui,/data-gm-fiscal-preview="true"/);
-  assert.match(ui,/Authorization is not payment/);
   assert.match(ui,/Already-budgeted payment receipt; no new debt booked/);
   assert.match(native,/applyFiscalEventOps\(nextWorld, event\.impacts\.fiscalOps/);
 });

@@ -124,21 +124,25 @@ test("GM cannot fork canonical Political World leader/government through legacy 
   assert.match(validateGameMasterPoliticalStatsAuthority(
     direct({ leader: "Federation challenger" }, "Russian Federation"), distinctPolities),
     /Political World actor/);
-  assert.throws(() => applyEventImpactsToWorld({
+  // Past the GM's preflight, the native writer leaves a second writer's leader or government out instead of
+  // failing the whole turn: a time skip's request is already spent there (review of beta-stats-v2, 2026-11-03).
+  const bypassed = applyEventImpactsToWorld({
     colors: {}, world,
     events: [{ date: "2016-01-15", title: "Synthetic bypass demonstration",
-      description: "An unchecked legacy edit must now fail at the common native writer.",
+      description: "An unchecked legacy edit is left to the Political Actor by the common native writer.",
       impacts: { polityChanges: [{ operation: "update", code: "Germany",
-        stats: { leader: "New President" } }] } }],
-  }), /cannot change Germany Statistics: leader is a legacy Statistics display mirror/,
-  "native event application must fail closed even if GM preflight or another caller is bypassed");
-  assert.throws(() => applyEventImpactsToWorld({
+        stats: { leader: "New President", stability: 41 } }] } }],
+  }).world;
+  assert.equal(bypassed.countryStats.Germany.leader, "Incumbent President", "the actor stays the one writer");
+  assert.equal(bypassed.countryStats.Germany.stability, 41, "the rest of the change still lands");
+  const rewritten = applyEventImpactsToWorld({
     colors: {}, world,
     events: [{ date: "2016-01-15", title: "Cabinet rewrite",
-      description: "An unchecked government rewrite must also fail in native code.",
+      description: "An unchecked government rewrite is left out in native code too.",
       impacts: { polityChanges: [{ operation: "update", code: "Germany",
         stats: { government: "military junta" } }] } }],
-  }), /government is a legacy Statistics display mirror/);
+  }).world;
+  assert.equal(rewritten.countryStats.Germany.government, "parliamentary republic");
 
   const authoritative = applyEventImpactsToWorld({
     colors: {}, world,

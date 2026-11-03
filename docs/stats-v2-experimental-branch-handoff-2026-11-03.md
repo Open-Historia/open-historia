@@ -4,10 +4,10 @@
 
 **Experimental source, NOT regular Beta or a production-certified release.** Official repository: `Open-Historia/open-historia`; public collaboration branch: `beta-stats-v2`. Regular `beta`, default `main`, Alpha, and Continuum are different tracks; no Stats V2 code has been merged into `beta` by this checkpoint. The branch is intended for fixes, reproducible creator QA and pull requests **targeting `beta-stats-v2`**, not as an automatic release channel.
 
-The authoritative local integration checkout is `C:\dev\open-historia-beta-stats-upstream-20261103`, branch `integrate/stats-v2-upstream-2026-11-03`. Preserve these separate clean historical worktrees:
+The authoritative local integration checkout is a local path on the contributor's machine, branch `integrate/stats-v2-upstream-2026-11-03`. Preserve these separate clean historical worktrees:
 
-- `C:\dev\open-historia-beta-current`: original Stats feature at `7bad77fc`.
-- `C:\dev\open-historia-beta-stats-integration-20261028`: independently verified Statistics V2 creator-QA checkpoint `f99ba819`.
+- a local path on the contributor's machine: original Stats feature at `7bad77fc`.
+- a local path on the contributor's machine: independently verified Statistics V2 creator-QA checkpoint `f99ba819`.
 - This integration checkout: two-parent upstream merge `f5b0064f6e3896c5d4c9c8f40a4d1d4a2a24caa0` (parents `f99ba819` and public Beta `21a29e698910737c40fcf4e632060830f4f1a8df`), followed by `79805a5` to enable experimental branch tests.
 
 The historical November 3 Electron QA ZIP and matching source snapshot in the developer's Windows Downloads reflect the **pre-upstream-merge** `f99ba819` implementation; do not distribute them as an executable of this integrated commit. No new merged Electron package, signed installer, creator live-playtest or public production deployment is certified here. Publication of new Git commits is separately verifiable on the remote branch; local commits alone are not releases.
@@ -34,7 +34,7 @@ On this exact integrated working source **before committing the two-parent merge
 - Staged `git diff --check`: exit 0; no unmerged index entries. UTF-8 source catalog compared with the staged Git file by raw Node decoding: all 15,886 original strings retained and two fiscal-operation strings added.
 - The merge commit is `f5b0064f` with two verified parent SHAs, authored by GitHub `thekernely`; CI configuration is a separate `79805a5` commit. These are local Git/Windows results. GitHub CI and live-playtest acceptance require separate observation.
 
-Local acceptance logs: `D:\OH-StatsV2-Upstream-20261103\full-test-r1.log` (prior test failure), `full-test-r2.log` (green), `focused-merge.log`, `unit-motion-focused-r2.log`. Original QA logs and screenshots are **not** silently bundled into the public repository. Source-level tests establish a supported implementation, not broad historical economic accuracy or real provider reliability.
+Local acceptance logs: a local path on the contributor's machine (prior test failure), `full-test-r2.log` (green), `focused-merge.log`, `unit-motion-focused-r2.log`. Original QA logs and screenshots are **not** silently bundled into the public repository. Source-level tests establish a supported implementation, not broad historical economic accuracy or real provider reliability.
 
 ## Remaining release gates for contributors
 

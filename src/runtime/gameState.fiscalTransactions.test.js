@@ -65,8 +65,8 @@ test('malformed fiscal event must fail detached world application rather than di
  assert.throws(()=>applyEventImpactsToWorld({world:base(),events:[event('bad','2026-01-01',
    [{op:'pay',id:'missing',amount:12,funding:'already-budgeted',reason:'Unknown'}])]}),
    /fiscal|unknown/i);
- assert.throws(()=>normalizeWorldState({...base(),fiscalTransactions:[{id:'invalid'}]}),
-   /fiscal/i);
+ // A save's malformed ledger row is dropped on read, not made unloadable (review of beta-stats-v2, 2026-11-03).
+ assert.deepEqual(normalizeWorldState({...base(),fiscalTransactions:[{id:'invalid'}]}).fiscalTransactions,[]);
 });
 
 test('accepted fiscal tax policy accrues in game reducer at day boundaries and replays safely',()=>{
@@ -160,4 +160,19 @@ test('a non-fiscal event cannot acquire a new fiscal preflight rejection or muta
     'purely non-fiscal world events retain their established validation boundaries');
   assert.deepEqual(buildFiscalPreviewRows(source,[collision]),[]);
   assert.deepEqual(Object.keys(source.polityOverrides),['Alba','Beta']);
+});
+
+// Review of beta-stats-v2 (2026-11-03): breadth-repair events joined a skip's answer after its own, out of date order,
+// and the fiscal clock threw, failing the turn after its one request was spent. Out of order, undated or past the
+// period, an event now accrues as of the latest day reached.
+test('fiscal accrual takes events out of order or outside the period without failing the turn',()=>{
+ const law={op:'enact-tax-holiday',id:'payroll-relief',polity:'Alba',
+   currency:'USD',amount:2_000_000_000,startDate:'2026-01-10',
+   endDate:'2026-04-01',reason:'A legislated payroll tax exemption for the spring'};
+ const events=[event('late','2026-02-20',[]),event('tax-law','2026-01-10',[law]),
+   event('after','2026-05-01',[]),{...event('undated','',[]),date:''}];
+ const world=applyEventImpactsToWorld({world:base(),events,
+   fiscalPeriod:{fromDate:'2026-01-01',toDate:'2026-03-01'}}).world;
+ assert.equal(world.fiscalTaxPolicies.length,1);
+ assert.ok(world.fiscalTaxPolicies[0].accruedAmount >= 0);
 });

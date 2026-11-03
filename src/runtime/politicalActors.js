@@ -1130,6 +1130,24 @@ export function buildPoliticalActorLegacyStatsProjection(world, polityKey) {
     return projection;
 }
 
+// A sheet patch with its leader and government as the Political Actor has them. A divergent mirror is REPLACED by
+// the actor's projection (or dropped where the actor has none), not refused: the sheets that carry one are mostly
+// the AI's (a first reading, a worker's whole merged sheet, which inherits an older stored leader), written after
+// their request was spent, and a Westminster country's sheet naming its prime minister where the projection names
+// the King failed every save. The actor stays the one writer either way.
+export function withLegacyPoliticalProjection(world, polityKey, patch) {
+    if (!patch || typeof patch !== "object" || Array.isArray(patch)) return patch;
+    if (!legacyPoliticalStatsProjectionWriteError(world, polityKey, patch)) return patch;
+    const projection = buildPoliticalActorLegacyStatsProjection(world, polityKey);
+    const next = { ...patch };
+    for (const field of ["leader", "government"]) {
+        if (!Object.prototype.hasOwnProperty.call(next, field)) continue;
+        if (Object.prototype.hasOwnProperty.call(projection, field)) next[field] = projection[field];
+        else delete next[field];
+    }
+    return next;
+}
+
 export function legacyPoliticalStatsProjectionWriteError(world, polityKey, patch) {
     const authority = legacyPoliticalStatsWriteError(world, polityKey, patch);
     if (!authority) return "";

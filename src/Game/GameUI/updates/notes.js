@@ -53,6 +53,25 @@ import { PAST_UPDATES } from "./notesPast.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // Statistics V2 (thekernely's beta-stats-v2: one native countryStats ledger, fiscal ledgers, no periodic AI
+    // refresh) with the review's fixes, 2026-11-03.
+    id: "2026-11-statistics-v2",
+    kind: "minor",
+    date: "2026-11-03",
+    channel: "beta",
+    banners: [
+      {
+        title: "Statistics that follow the story",
+        items: [
+          "A country's economy, population, production and migration change where the events say they did, and each change keeps the event it came from.",
+          "Statistics are no longer refreshed by the AI on a schedule of their own: they change when the story changes them, which saves requests.",
+          "The Game Master can record public grants, payments and tax holidays and preview them before they apply; they are recorded as amounts, without changing GDP or debt by themselves.",
+          "Scenario authors can edit a scenario's Statistics in the Workshop.",
+        ],
+      },
+    ],
+  },
+  {
     // A model's war, client state, relation or agreement written inside an event is carried out; a skip's events are
     // sent with impacts required, so Gemini no longer leaves them off (AI/jumpAnswerShelves.js,
     // gameplaySchemas.js withEventImpacts; the owner's reports, 2026-11-03).

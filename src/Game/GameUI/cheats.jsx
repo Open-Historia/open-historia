@@ -3764,18 +3764,15 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                         {fiscalPreviewRows.length > 0 && (
                             <div data-gm-fiscal-preview="true" style={{ marginTop: "0.7rem" }}>
                                 {subsectionTitle("Fiscal transactions", fiscalPreviewRows.length, "nominal amounts · before Apply")}
-                                <div style={{ color: "rgba(255,255,255,0.52)", fontSize: "0.64rem", marginBottom: "0.35rem" }}>
-                                    Authorization is not payment. Only explicitly evidenced already-budgeted transfers are recorded; no GDP, tax rate or new borrowing is inferred.
-                                </div>
                                 {visibleOperationRows("fiscal", fiscalPreviewRows).map((row, index) => (
                                     <div key={`fiscal-${row.eventIndex}-${row.id}-${index}`} style={exactRowStyle}>
-                                        <strong>{row.operation} · {row.polity} · {row.id}</strong>
+                                        <strong>{row.operation} · <span data-no-translate>{row.polity}</span></strong>
                                         <div style={{ marginTop: "0.18rem" }}>
                                             {row.operation === "cancel"
-                                                ? <>Remaining authority withdrawn: {row.remainingAmount.toLocaleString("en-US")} {row.currency}</>
+                                                ? <>Remaining authority withdrawn: {row.remainingAmount.toLocaleString()} {row.currency}</>
                                                 : row.operation === "repeal-tax-holiday"
-                                                    ? <>Remaining nominal tax forecast withdrawn: {row.remainingAmount.toLocaleString("en-US")} {row.currency}</>
-                                                    : <>{row.amount.toLocaleString("en-US")} {row.currency} · {row.kind}</>}
+                                                    ? <>Remaining nominal tax forecast withdrawn: {row.remainingAmount.toLocaleString()} {row.currency}</>
+                                                    : <>{row.amount.toLocaleString()} {row.currency} · {row.kind}</>}
                                             {" · "}{row.status} · event {row.eventIndex + 1}
                                         </div>
                                         <div style={{ color: "rgba(255,255,255,0.5)", marginTop: "0.15rem" }}>

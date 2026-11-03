@@ -17,15 +17,15 @@ const world = () => ({
   },
 });
 
-test("Stats persistence worker rejects conflicting actor mirrors before a world PUT", async () => {
+test("Stats persistence worker saves the actor's mirror over a conflicting one", async () => {
   const originalSelf = globalThis.self;
   const originalFetch = globalThis.fetch;
   const outgoing = [];
-  let writes = 0;
+  const writes = [];
   globalThis.self = { postMessage: (message) => outgoing.push(message) };
   globalThis.fetch = async (url, init = {}) => {
     if (init.method === "PUT") {
-      writes += 1;
+      writes.push(JSON.parse(init.body));
       return { ok: true, text: async () => init.body };
     }
     return { ok: true, json: async () => world() };
@@ -36,9 +36,13 @@ test("Stats persistence worker rejects conflicting actor mirrors before a world 
       payload: { urls: { world: "/api/state/world" }, code: "Albion",
         sheet: { leader: "Unapproved Replacement", stability: 50 }, date: "2026-01-01" },
     } });
-    assert.equal(writes, 0, "conflicting worker result may not persist an unrelated stability change");
+    // The sheet is saved with the actor's leader, not refused: every sheet of a country whose stored leader had
+    // drifted from its head of state failed to save (review of beta-stats-v2, 2026-11-03).
+    assert.equal(writes.length, 1, "the worker's sheet is saved");
+    assert.equal(writes[0].countryStats.Albion.leader, "Current President", "with the actor's leader");
+    assert.equal(writes[0].countryStats.Albion.stability, 50, "and the rest of the sheet");
     assert.equal(outgoing.length, 1);
-    assert.match(outgoing[0].error, /Political World|Political Actor|canonical/i);
+    assert.equal(outgoing[0].error, undefined);
   } finally {
     if (originalSelf === undefined) delete globalThis.self; else globalThis.self = originalSelf;
     globalThis.fetch = originalFetch;

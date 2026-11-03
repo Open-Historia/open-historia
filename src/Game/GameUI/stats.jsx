@@ -454,9 +454,6 @@ const MilitaryCard = ({ world, country, style }) => {
                 </span>
                 <span data-no-translate style={{ fontSize: "1.05rem", fontWeight: 800 }}>{power}</span>
             </div>
-            <div style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.64rem", lineHeight: 1.4, marginBottom: "0.55rem" }}>
-                What it weighs in a land war, by its people and what its forces have to spend, through the figures below.
-            </div>
             <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem", marginTop: "0.45rem" }}>
                 {MILITARY_FIGURE_ORDER.map((key) => {
                     if (key === "resources" && !profile.supplied) {

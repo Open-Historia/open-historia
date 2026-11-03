@@ -20,20 +20,18 @@ const withActor = () => normalizeWorldState({
   },
 });
 
+// A divergent mirror is replaced by the actor's projection, not refused: the sheets that carry one are mostly the
+// AI's, written after their request was spent (review of beta-stats-v2, 2026-11-03).
 test("non-event Stats patch cannot fork a canonical Political Actor government or head of state", () => {
   const world = withActor();
-  const before = structuredClone(world);
   assert.deepEqual(buildPoliticalActorLegacyStatsProjection(world, "Albion"), {
     government: "constitutional republic", leader: "Current President",
   });
-  assert.throws(() => applyCountryStatPatchToWorld(world, "Albion", {
-    leader: "Different President", stability: 50,
-  }), /Political World|Political Actor|canonical/i);
-  assert.deepEqual(world, before, "failed patch must not partially update stability or the political mirror");
-  assert.throws(() => applyCountryStatPatchToWorld(world, "Albion", {
-    government: "military dictatorship",
-  }), /Political World|Political Actor|canonical/i);
-  assert.deepEqual(world, before);
+  const sheet = applyCountryStatPatchToWorld(world, "Albion", { leader: "Different President", stability: 50 });
+  assert.equal(sheet.leader, "Current President", "the mirror is the actor's");
+  assert.equal(sheet.stability, 50, "the rest of the patch lands");
+  const again = applyCountryStatPatchToWorld(world, "Albion", { government: "military dictatorship" });
+  assert.equal(again.government, "constitutional republic");
 });
 
 test("native actor projection and unrelated Statistics edits stay writable", () => {
@@ -66,8 +64,6 @@ test("a Political Actor without an established projection does not authorize gue
       polityKey: "Albion", government: {}, parties: [],
     } } },
   });
-  assert.throws(() => applyCountryStatPatchToWorld(world, "Albion", {
-    leader: "Unrecorded Leader",
-  }), /Political World|Political Actor|canonical/i);
-  assert.equal(world.countryStats.Albion.leader, undefined);
+  applyCountryStatPatchToWorld(world, "Albion", { leader: "Unrecorded Leader" });
+  assert.equal(world.countryStats.Albion.leader, undefined, "a guessed mirror is left out");
 });
