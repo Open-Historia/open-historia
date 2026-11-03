@@ -77,6 +77,15 @@ const NEW_UPDATES = [
           "The country panel has one Politics tab again.",
           "The update banner no longer offers the build you have just installed.",
           "Major update notices come before minor ones.",
+          "A time skip in a game that tracks political parties is one AI request again, and a skip that has to check its turn separately always keeps a request for it.",
+        ],
+      },
+      {
+        title: "Politics, advisors and the air",
+        items: [
+          "Politics is one record: each country's Political World now carries what the Politics card had, native party names, ideologies, roles, seats, the legislature and the next election, and turns keep it up.",
+          "Your advisor knows your wars as your general staff would: every front's line, strength and latest fighting, your standing orders, how weary each side is and what is on the table for peace.",
+          "Deploy Aircraft works with the air arm that flies over your fronts when you have no air unit of your own on the map.",
         ],
       },
     ],
