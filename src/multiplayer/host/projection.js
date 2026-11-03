@@ -68,8 +68,6 @@ export const PUBLIC_WORLD_KEYS = Object.freeze([
   "transports",
   // And what an event's strike looked like: every map plays it.
   "strikes",
-  // A country's government and parties (the Politics tab): public knowledge.
-  "politics",
   // And what the war room's air strikes did: who was struck knows it (runtime/fronts/airStrike.js).
   "airStrikes",
   "seaBattles",

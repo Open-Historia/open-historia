@@ -13,6 +13,7 @@ import {
 } from "../../runtime/politicalWorldGeneration.js";
 import { POLITICAL_TRAIT_KEYS, validatePoliticalTraitPatch } from "../../runtime/politicalTraitRegistry.js";
 import { compareGameDates, isCanonicalGameDate } from "../../runtime/gameDates.js";
+import { IDEOLOGIES } from "../../runtime/politics.js";
 
 export const POLITICAL_WORLD_GENERATOR_RESULT_VERSION = 1;
 export const POLITICAL_WORLD_GENERATOR_MAX_ATTEMPTS = 2;
@@ -703,7 +704,7 @@ const allowedTopLevelFields = (needs) => {
 const allowedGovernmentFields = (needs) => {
   const set = new Set();
   if (needs.includes(POLITICAL_GENERATION_NEEDS.GOVERNING_STRUCTURE)) {
-    for (const key of ["form", "status", "headOfState", "headOfGovernment"]) set.add(key);
+    for (const key of ["form", "status", "headOfState", "headOfGovernment", "legislature", "legislatureSeats", "nextElection"]) set.add(key);
   }
   if (needs.includes(POLITICAL_GENERATION_NEEDS.STRATEGIC_CONTEXT)) set.add("ideology");
   if (needs.includes(POLITICAL_GENERATION_NEEDS.REPRESENTATION_ENTITIES)) {
@@ -724,6 +725,8 @@ const representationEntityFieldScope = (needs, collection) => {
     ];
     for (const key of common) fields.add(key);
     if (collection === "parties") {
+      // (The Politics tab's detail of a party, the Political World's now: politicalActors.js.)
+      for (const key of ["nameNative", "shortNameNative", "ideologyFamily", "subideology", "role", "seats", "founded"]) fields.add(key);
       // Generated electoral roster breadth is validated by named support
       // coverage. A representation_entities-only retry must therefore be able
       // to carry support estimates for newly added/corrected parties even when
@@ -1596,6 +1599,7 @@ export const buildPoliticalWorldGenerationPrompt = ({
     + `- Non-electoral systems use power blocs/court/elite/military/revolutionary/colonial structures as appropriate. Their quantitative_landscape percentages mean estimated political influence/control, never electoral polling.\n`
     + `- COLLECTION SHAPE IS STRICT: actorPatch.parties and actorPatch.powerBlocs MUST ALWAYS be JSON arrays of entity objects, including on corrective retries. NEVER return a keyed object/map/dictionary such as {"democratic-party": {...}}. Every entity object carries its own stable id field.\n`
     + `- Parties and power blocs require stable lowercase slug-like ids that survive renames. Government party references use those exact ids.\n`
+    + `- PARTY DETAIL: each party also carries nameNative and shortNameNative (its name and abbreviation as its own speakers write them: correct grammar and agreement, real words, that language's capitalisation, never a word-for-word gloss; the English ones again where English is its own language), ideologyFamily (exactly one of: ${IDEOLOGIES.map((ideology) => ideology.name).join(", ")}), subideology (the narrower current within it, in a few words), seats (its seats in the national legislature, an integer, where there is one), founded (the year) and, for a party outside the government, role (opposition, extraParliamentary, underground, exile or banned; the government's own parties are its rulingPartyIds and coalitionPartyIds). government also carries legislature (its name), legislatureSeats (its total seats) and nextElection (the date or year of the next national election, or why there is none).\n`
     + `- For competitive electoral systems, political significance—not a fixed party count—controls roster breadth. ALWAYS materialize every ruling/governing/formal coalition or confidence-support force needed to explain the current government, even when small. Then include individually significant opposition forces and continue until the named modeled parties explain at least ${POLITICAL_GENERATED_ELECTORAL_NAMED_COVERAGE_MIN}% of estimated support. Only the genuinely diffuse remainder belongs in Other. Set government.rulingPartyIds/coalitionPartyIds to the stable ids you generated when those roles are known. When quantitative_landscape is requested, provide supportEstimate for EVERY represented party. When representation_entities is requested for an electoral roster, supportEstimate is also allowed and should accompany every returned/new party so native named-coverage validation can prove the repaired roster is broad enough instead of relying on fallback arithmetic.\n`
     + `- behavioralDisposition and politicalPressures are native runtime-derived state and MUST NEVER appear in actorPatch.\n`
     + `- Structured leader traits belong in top-level actorPatch.traits, not nested under leader, and describe the operative primary political decision-maker defined above. If leader is an object, keep it to officeholder identity fields such as id/name/title. Traits use bounded 0-100 values and MUST use only the canonical registered keys: ${POLITICAL_TRAIT_KEYS.join(", ")}. Do not force every key; omit dimensions the evidence does not establish.\n`

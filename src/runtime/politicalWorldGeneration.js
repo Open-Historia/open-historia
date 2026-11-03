@@ -111,6 +111,14 @@ const GENERATED_PARTY_FIELDS = new Set([
   "internalStrategy",
   "internalPressure",
   "privateGoal",
+  // What the Politics tab kept apart, the Political World's now (politicalActors.js).
+  "nameNative",
+  "shortNameNative",
+  "ideologyFamily",
+  "subideology",
+  "role",
+  "seats",
+  "founded",
 ]);
 
 const GENERATED_BLOC_FIELDS = new Set([
@@ -145,6 +153,9 @@ const GENERATED_GOVERNMENT_FIELDS = new Set([
   "stability",
   "rulingPartyIds",
   "coalitionPartyIds",
+  "legislature",
+  "legislatureSeats",
+  "nextElection",
 ]);
 
 const GENERATED_POLITICAL_SYSTEM_FIELDS = new Set(["type", "representation", "regimeCharacter", "label", "notes"]);

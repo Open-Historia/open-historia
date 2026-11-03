@@ -211,7 +211,6 @@ import {
   validateGameplayPayload,
   withEventAudience,
   withFrontOrders,
-  withPartyOps,
   withWarFigures,
   withIntelligenceRating,
   withSocialPosts,
@@ -290,7 +289,8 @@ import {
   unassessedHighPriorityEntries,
 } from "../../runtime/projects.js";
 import { activeSpies, applySpyOps, espionageBrief, intelligenceOf, isIntelligenceRated, normalizeIntelligenceRating, normalizeIntercepts, normalizeSpies, planCovertOperations, redactText, resolveEspionage, signalClarity } from "../../runtime/spycraft.js";
-import { applyPartyOps, describePoliticsForPrompt, ideologyListText, leadersAfterGovernmentChange, normalizePoliticalLandscape } from "../../runtime/politics.js";
+import { describeElectionsDue, ideologyListText, normalizePoliticalLandscape } from "../../runtime/politics.js";
+import { foldLandscapeIntoActor } from "../../runtime/politicalLandscapeFold.js";
 import { buildSpyOrdersDirective } from "./spyOrdersDirective.js";
 import { collectionOrders, covertOperationsBlock, untracedTargets } from "./covertOperationsDirective.js";
 import { AGENT_REPORT_EVERY_ROUNDS, agentsDueToReport, agentsReportingWithSkip } from "./agentReports.js";
@@ -2738,9 +2738,9 @@ const JUMP_LIVE_STATE_BANNER = [
 // Fronts on (frontsGate.js): a time skip's tool with the battlefields' orders
 // in it (gameplaySchemas.js withFrontOrders), and the figures the war needs
 // after them (withWarFigures).
-const forActiveFeatures = (tool, { parties = false } = {}) => {
+const forActiveFeatures = (tool) => {
   const grouped = isActiveFeatureEnabled("groups") ? tool : withoutGroupOps(tool);
-  const shown = withPartyOps(withEventAudience(grouped, hostingSharedGame()), parties);
+  const shown = withEventAudience(grouped, hostingSharedGame());
   return frontsOn() ? withWarFigures(withFrontOrders(shown)) : shown;
 };
 let gameMasterPromptNoGroups = null;
@@ -2919,8 +2919,10 @@ Write spiesOnPlayer: the polities, by exact name and comma-separated, that would
     }
   }
 
-  const parties = describePoliticsForPrompt(world.politics, { date: normalizeString(game?.gameDate) });
-  if (parties) blocks.push(parties);
+  // The Political World's elections that fall due (runtime/politics.js describeElectionsDue): the Politics tab's
+  // flag, now the Political World's, whose governments keep the next election (politicalActors.js).
+  const elections = describeElectionsDue(world.politicalActors, { date: normalizeString(game?.gameDate) });
+  if (elections) blocks.push(elections);
 
   try {
     const reportsOnFile = describeReportsForPrompt(world.reports);
@@ -3668,7 +3670,7 @@ const runJsonTask = async (taskKey, {
   if (!sync && typeof onBatchResult === "function" && batchBackgroundTasksEnabled()) {
     const batchTool = forActiveFeatures(customFullStatSheet
       ? getGameplayToolForCustomStatSheet(taskKey, customStatRows, { custom: true })
-      : getGameplayToolForStatIndices(taskKey, statIndexRows, { custom: customStatIndices }), { parties: Boolean(variables?.partiesTracked) });
+      : getGameplayToolForStatIndices(taskKey, statIndexRows, { custom: customStatIndices }));
     if (batchTool && providerSupportsBatch(taskKey)) {
       const customId = `oh_${taskKey}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`.slice(0, 64);
       const submitted = await submitAIBatch({
@@ -3719,7 +3721,7 @@ const runJsonTask = async (taskKey, {
   );
   const featureTool = forActiveFeatures(customFullStatSheet
     ? getGameplayToolForCustomStatSheet(taskKey, customStatRows, { custom: true })
-    : getGameplayToolForStatIndices(taskKey, statIndexRows, { custom: customStatIndices }), { parties: Boolean(variables?.partiesTracked) });
+    : getGameplayToolForStatIndices(taskKey, statIndexRows, { custom: customStatIndices }));
   // The players' advice, asked of the time skip whose prompt asks for it.
   const advisedTool = JUMP_TASK_KEYS.has(taskKey) && normalizeString(variables?.seatAdviceDirective) ? withSeatAdvice(featureTool) : featureTool;
   // And the social posts after all of it, or none where the game has no Rostra
@@ -9936,22 +9938,6 @@ const applySimulationResult = async ({
       if (entry.op === "deploy") void ensureCountryAssessed(entry.target, { reason: "agent deployed by order" });
     }
   }
-  // The parties' changes, carried by the events that made them
-  // (impacts.partyOps, runtime/politics.js). Only compiled lists move.
-  const partyOps = normalizeArray(freshEvents).flatMap((event) => normalizeArray(event?.impacts?.partyOps));
-  if (partyOps.length) {
-    const outcome = applyPartyOps(worldWithImpacts.politics, partyOps, { date: nextGame.gameDate });
-    const leaders = leadersAfterGovernmentChange(worldWithImpacts.politics, outcome.politics, worldWithImpacts.countryStats);
-    worldWithImpacts.politics = outcome.politics;
-    if (leaders.changed.length) {
-      worldWithImpacts.countryStats = leaders.countryStats;
-      logDebugEvent("politics", `Stat sheet leader updated: ${leaders.changed.map((entry) => `${entry.polity} ${entry.from} -> ${entry.to}`).join(", ")}`);
-    }
-    if (outcome.applied.length) {
-      logDebugEvent("politics", `Party changes applied: ${outcome.applied.map((entry) => `${entry.op} ${entry.party || entry.changes?.nameEn || ""} (${entry.polity})`).join(", ")}`);
-    }
-    for (const skipped of outcome.rejected) logDebugEvent("politics", `Party change skipped: ${skipped.reason}`, { op: skipped.op });
-  }
   const spySync = [
     // Order matters: provenance first, so an entry stamped this turn can be
     // doubted in the same pass rather than a turn later.
@@ -14511,9 +14497,10 @@ export const pendingCountryStatSheet = (target) => {
 export const ensureCountryAssessed = (target, options = {}) =>
   ensureCountryStatSheet(target, { ...options, rateIntelligence: true }).then(() => ensureIntelligenceRated(target, options));
 
-// The Politics tab's government and parties for one polity, asked for by the
-// player (runtime/politics.js). It replaces whatever entry the polity had: a
-// refresh is a fresh reading; between readings turns move it (impacts.partyOps).
+// One polity's government and parties as they stand, read on the player's asking and folded into its Political
+// World record (runtime/politicalLandscapeFold.js): its parties' native names, ideologies among the ten, roles and
+// seats, the legislature and the next election, for a record generated before the Political World kept them, or
+// one the player wants read afresh. Between readings turns move it with the Political World's own ops.
 export const assessPoliticalLandscape = async (target, { signal } = {}) => {
   const name = normalizeString(target);
   if (!name) return null;
@@ -14528,7 +14515,8 @@ export const assessPoliticalLandscape = async (target, { signal } = {}) => {
   const dossier = await buildTargetDossier(bundle, name, world);
   const era = normalizeString(world.simulationRules).slice(0, 700);
   const sheet = world.countryStats?.[name];
-  const previous = world.politics?.[name];
+  const actorKey = Object.keys(world.politicalActors?.byPolity ?? {}).find((key) => key.toLowerCase() === name.toLowerCase()) ?? name;
+  const previous = world.politicalActors?.byPolity?.[actorKey] ?? null;
   const { payload } = await runJsonTask("politicalLandscape", {
     signal,
     userMessage: [
@@ -14536,7 +14524,7 @@ export const assessPoliticalLandscape = async (target, { signal } = {}) => {
       era ? `ERA & WORLD RULES:\n${era}` : "",
       `TARGET DOSSIER:\n${dossier || "(nothing recorded)"}`,
       sheet ? `STAT SHEET: government ${normalizeString(sheet.government) || "unknown"}; leader ${normalizeString(sheet.leader) || "unknown"}; stability ${sheet.stability ?? "unknown"}/100.` : "",
-      previous ? `PREVIOUS READING (${previous.asOf || "undated"}; keep what the events since have not changed):\n${JSON.stringify(previous.parties.map(({ nameEn, ideology, subideology, leader, role, seats, support }) => ({ nameEn, ideology, subideology, leader, role, seats, support })))}` : "",
+      previous?.parties?.length ? `ITS PARTIES AS THE RECORD HAS THEM (keep what the events since have not changed, and their names as written here):\n${JSON.stringify(previous.parties.map((party) => ({ name: party.name, shortName: party.shortName, ideology: party.ideologyFamily || party.ideology, subideology: party.subideology, leader: typeof party.leader === "object" ? party.leader?.name : party.leader, role: party.ruling ? "governing" : party.coalition ? "coalition" : party.role, seats: party.seats, support: party.support?.percent })))}` : "",
       `IDEOLOGIES AND THEIR SUBIDEOLOGIES:\n${ideologyListText()}`,
     ].filter(Boolean).join("\n\n"),
     variables,
@@ -14548,8 +14536,15 @@ export const assessPoliticalLandscape = async (target, { signal } = {}) => {
   await waitForSimulationIdle({ signal });
   throwIfAborted(signal);
   if (activeCampaignId() !== campaign) throw new Error("The campaign changed while the parties were being compiled.");
-  await mutateWorldState((latest) => ({ ...latest, politics: { ...(latest?.politics ?? {}), [name]: entry } }));
-  return entry;
+  let folded = null;
+  await mutateWorldState((latest) => {
+    const actors = latest?.politicalActors && typeof latest.politicalActors === "object" ? latest.politicalActors : {};
+    const byPolity = actors.byPolity && typeof actors.byPolity === "object" ? actors.byPolity : {};
+    const key = Object.keys(byPolity).find((entry) => entry.toLowerCase() === name.toLowerCase()) ?? actorKey;
+    folded = foldLandscapeIntoActor(byPolity[key] ?? null, entry, { polityKey: key });
+    return folded ? { ...latest, politicalActors: { ...actors, byPolity: { ...byPolity, [key]: folded } } } : null;
+  });
+  return folded;
 };
 
 // How far the player's standing goal has come (runtime/playerGoal.js), read on

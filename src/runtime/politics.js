@@ -1,8 +1,13 @@
 /*! Open Historia — political parties © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-// The Politics tab of the Stats pane: a polity's government and its parties (or,
-// where there are no parties, its factions), kept per polity in world.politics.
-// Written by the politicalLandscape task (AI/gameplay.js assessPoliticalLandscape)
-// when the player asks for it, then moved by turns through impacts.partyOps.
+// A polity's parties as the Political World keeps them (politicalActors.js):
+// the ten ideologies a party belongs to, the roles a party can have, when an
+// election falls due, and the compiled reading of one polity's government and
+// parties (the politicalLandscape task, AI/gameplay.js assessPoliticalLandscape),
+// which is folded into its Political World record (politicalLandscapeFold.js).
+// The Stats pane's Politics tab once kept those readings apart, in
+// world.politics, moved by ops of their own: "add the new politics thing into
+// the political world and just make it an enhancement of that" (the owner,
+// 2026-11-03). An old save's are folded in when it is opened.
 //
 // The ten ideologies and their subideologies are the Kaiserreich (KX) set, names
 // only, taken from the tables of contents of the KX ideology documents. A
@@ -339,116 +344,6 @@ export const normalizePolitics = (value) =>
       .filter(([polity, entry]) => polity && entry),
   );
 
-// --- Turns: impacts.partyOps -------------------------------------------------
-// An event that changes a polity's parties carries one op per change:
-//   { polity, op: "update", party, changes }   a party's leader, seats, support, role...
-//   { polity, op: "add", changes }             a new party (changes is the whole party)
-//   { polity, op: "remove", party }            dissolved, merged away
-//   { polity, op: "government", changes }      head of state/government, next election...
-// Only a polity whose list has been compiled is changed: with no list there is
-// nothing to keep in step, and a party added to nothing would stand for a whole
-// system the model never described.
-export const PARTY_OPS = ["update", "add", "remove", "government"];
-const PARTY_FIELDS = ["nameEn", "nameNative", "abbrEn", "abbrNative", "ideology", "subideology", "leader", "colour", "role", "seats", "support", "founded", "description"];
-const GOVERNMENT_FIELDS = ["government", "headOfState", "headOfGovernment", "legislature", "legislatureSeats", "nextElection", "kind"];
-
-// An op's changes as a time skip writes them: one line of name=value pairs,
-// split by ";" ("leader=Léon Blum; seats=149; support=20"). The skip's tool
-// declares the changes so (gameplaySchemas.js PARTY_OP_SENT_SCHEMA): the whole
-// object, its nineteen fields, its ten ideologies and its roles under every
-// event of every skip, made Gemini refuse the skip outright once a game tracked
-// any polity's parties ("Request contains an invalid argument", the owner's
-// log, 2026-11-03), and the turn then needed a second request for its checks.
-// The fields named (in any case), numbers where the field is one; an object
-// comes back as it is. A pair with no field the op knows is left out.
-const NUMBER_FIELDS = new Set(["seats", "support", "legislatureSeats"]);
-const FIELD_NAMES = new Map([...PARTY_FIELDS, ...GOVERNMENT_FIELDS].map((field) => [field.toLowerCase(), field]));
-export const readPartyChanges = (value) => {
-  if (value && typeof value === "object" && !Array.isArray(value)) return value;
-  if (typeof value !== "string") return {};
-  const out = {};
-  for (const pair of value.split(";")) {
-    const at = pair.search(/[=:]/);
-    if (at <= 0) continue;
-    const field = FIELD_NAMES.get(pair.slice(0, at).trim().toLowerCase());
-    const raw = pair.slice(at + 1).trim();
-    if (!field || !raw) continue;
-    if (NUMBER_FIELDS.has(field)) {
-      const number = Number(raw.replace(/[,\s%]/g, ""));
-      if (Number.isFinite(number)) out[field] = Math.round(number);
-    } else {
-      out[field] = raw;
-    }
-  }
-  return out;
-};
-
-export const normalizePartyOp = (value) => {
-  if (!value || typeof value !== "object") return null;
-  const polity = text(value.polity);
-  const op = text(value.op);
-  if (!polity || !PARTY_OPS.includes(op)) return null;
-  const changes = readPartyChanges(value.changes);
-  const allowed = op === "government" ? GOVERNMENT_FIELDS : PARTY_FIELDS;
-  const kept = Object.fromEntries(allowed.filter((key) => changes[key] !== undefined && changes[key] !== null).map((key) => [key, changes[key]]));
-  const party = text(value.party);
-  if ((op === "update" || op === "remove") && !party) return null;
-  if (op !== "remove" && !Object.keys(kept).length) return null;
-  return { polity, op, ...(party ? { party } : {}), ...(op !== "remove" ? { changes: kept } : {}) };
-};
-
-const sameName = (a, b) => text(a).toLowerCase() === text(b).toLowerCase();
-const findPartyIndex = (parties, name) =>
-  parties.findIndex((party) => [party.nameEn, party.nameNative, party.abbrEn, party.abbrNative].some((value) => value && sameName(value, name)));
-
-// Applies a turn's ops to world.politics. Returns the new map plus what was
-// applied and what was skipped (with why), for the debug log.
-export const applyPartyOps = (politics, ops, { date = "" } = {}) => {
-  const next = { ...(politics ?? {}) };
-  const applied = [];
-  const rejected = [];
-  for (const raw of ops ?? []) {
-    const op = normalizePartyOp(raw);
-    if (!op) {
-      rejected.push({ op: raw, reason: "malformed party op" });
-      continue;
-    }
-    const key = Object.keys(next).find((polity) => sameName(polity, op.polity));
-    if (!key) {
-      rejected.push({ op, reason: `${op.polity} has no compiled party list` });
-      continue;
-    }
-    const entry = next[key];
-    const parties = [...entry.parties];
-    let changed = { ...entry };
-    if (op.op === "government") {
-      changed = { ...changed, ...op.changes };
-    } else if (op.op === "add") {
-      if (findPartyIndex(parties, op.changes.nameEn || op.changes.nameNative) >= 0) {
-        rejected.push({ op, reason: `${op.changes.nameEn || op.changes.nameNative} is already listed` });
-        continue;
-      }
-      parties.push(op.changes);
-    } else {
-      const index = findPartyIndex(parties, op.party);
-      if (index < 0) {
-        rejected.push({ op, reason: `${key} has no party called ${op.party}` });
-        continue;
-      }
-      if (op.op === "remove") parties.splice(index, 1);
-      else parties[index] = { ...parties[index], ...op.changes };
-    }
-    const normalized = normalizePoliticalLandscape({ ...changed, parties, asOf: date || entry.asOf });
-    if (!normalized) {
-      rejected.push({ op, reason: `the change would leave ${key} with nothing to show` });
-      continue;
-    }
-    next[key] = normalized;
-    applied.push({ ...op, polity: key });
-  }
-  return { politics: next, applied, rejected };
-};
-
 // Whether an election is due by `date` (the game's YYYY-MM-DD). nextElection
 // is free text: a full date, a year and month, or a year somewhere in it
 // ("2028", "by September 2027" reads as 2027). -> "overdue" | "this year" | "".
@@ -468,67 +363,28 @@ export const electionDue = (nextElection, date) => {
   return year === today[1] ? "this year" : "";
 };
 
-// A person's name without the office a list writes after it:
-// "Andrej Plenković, Prime Minister" -> "Andrej Plenković".
-const personOf = (value) => text(value).split(",")[0].trim();
-const foldPerson = (value) => personOf(value).normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
-
-// A standard stat sheet names one leader. When a government op changes the
-// head of government or of state, and the sheet still names the one replaced,
-// the sheet follows, so the Stats tab and the Politics tab tell one story.
-// A sheet naming somebody else (a monarch, a junta chief) is left alone, and a
-// custom sheet has no leader to change.
-//   -> { countryStats, changed: [{ polity, from, to }] }
-export const leadersAfterGovernmentChange = (before, after, countryStats) => {
-  const changed = [];
-  const next = { ...(countryStats ?? {}) };
-  for (const [polity, entry] of Object.entries(after ?? {})) {
-    const prior = before?.[polity];
-    const sheet = next[polity];
-    if (!prior || !sheet || typeof sheet.leader !== "string" || !foldPerson(sheet.leader)) continue;
-    for (const field of ["headOfGovernment", "headOfState"]) {
-      if (!prior[field] || !entry[field] || foldPerson(prior[field]) === foldPerson(entry[field])) continue;
-      if (foldPerson(sheet.leader) !== foldPerson(prior[field])) continue;
-      const to = sheet.leader.includes(",") ? entry[field] : personOf(entry[field]);
-      changed.push({ polity, from: sheet.leader, to });
-      next[polity] = { ...sheet, leader: to };
-      break;
-    }
+// The Political World's elections that fall due by `date`, for the time skip: a
+// line a polity whose government's next election is due (electionDue), with
+// what holding one is in the Political World's ops (politicalActorOps.js). ""
+// when none is. At most ELECTIONS_TOLD_MOST.
+export const ELECTIONS_TOLD_MOST = 12;
+export const describeElectionsDue = (politicalActors, { date = "" } = {}) => {
+  const lines = [];
+  for (const [polity, actor] of Object.entries(politicalActors?.byPolity ?? {})) {
+    const government = actor?.government ?? {};
+    const when = text(government.nextElection, 80);
+    const due = electionDue(when, date);
+    if (!due) continue;
+    const seats = Number(government.legislatureSeats) > 0 ? ` (${Math.round(Number(government.legislatureSeats))} seats)` : "";
+    lines.push(`- ${polity}: ${text(government.legislature) || "its legislature"}${seats}, next election ${when}${due === "overdue" ? ": due now, hold it in this answer" : ": this year, hold it if its date falls in this answer"}`);
+    if (lines.length >= ELECTIONS_TOLD_MOST) break;
   }
-  return { countryStats: next, changed };
-};
-
-// What the simulator is shown of the compiled lists, one line per party.
-// `date` is the game's date, so an election that has fallen due is flagged.
-export const describePoliticsForPrompt = (politics, { date = "" } = {}) => {
-  const entries = Object.entries(politics ?? {});
-  if (!entries.length) return "";
-  const lines = entries.map(([polity, entry]) => {
-    const head = [entry.government, entry.headOfState && `head of state ${entry.headOfState}`, entry.headOfGovernment && `head of government ${entry.headOfGovernment}`,
-      entry.legislatureSeats && `${entry.legislature || "legislature"} ${entry.legislatureSeats} seats`, entry.nextElection && `next election ${entry.nextElection}`]
-      .filter(Boolean).join("; ");
-    const due = electionDue(entry.nextElection, date);
-    const flag = due === "overdue" ? " — ELECTION DUE NOW: hold it in this turn"
-      : due === "this year" ? " — election due this year: hold it if its date falls in this turn" : "";
-    const parties = entry.parties.map((party) => {
-      const ideology = findIdeology(party.ideology)?.name || "unclassified";
-      const size = [party.seats !== null && entry.legislatureSeats ? `${party.seats} seats` : "", party.support !== null ? `${party.support}%` : ""].filter(Boolean).join(", ");
-      const names = [...new Set([party.nameEn, party.nameNative])].join(" / ");
-      const abbrs = [...new Set([party.abbrEn, party.abbrNative].filter(Boolean))].join(" / ");
-      return `  - ${names}${abbrs ? ` (${abbrs})` : ""}: ${PARTY_ROLE_LABELS[party.role]}, ${ideology} / ${party.subideology || "-"}, leader ${party.leader || "unknown"}${size ? `, ${size}` : ""}`;
-    });
-    return `${polity}: ${head}${flag}\n${parties.join("\n")}`;
-  });
-  return `[Political Parties]
-The parties of the polities below are tracked (Stats → Politics). When an event changes them, the same event carries impacts.partyOps, one entry per change; an event that only narrates the change leaves the list wrong. An election moves seats and support for every party that gained or lost (an update op each) and may change the governing role, heads of government and the next election date (a government op). A new leader, a split, a merger, a ban or legalisation, a party founded or dissolved: each is an op. Name the party as it is listed below. An election whose date falls in the period you write is held in it: an event with the result, an update op for every party whose seats or support moved, and a government op with the next election date. A renamed party is one update op that carries all four new names — nameEn, nameNative, abbrEn and abbrNative — never the English name alone. nameNative is the name as native speakers would write it: correct grammar and agreement, real words (never a near-sounding wrong one), and that language's capitalisation rules (e.g. Croatian capitalises only the first word and proper nouns: Hrvatski kršćanski konzervativci) — not a word-for-word gloss; abbrNative abbreviates it.
-The changes are one line of name=value pairs split by ";", only the fields that changed (an add gives the whole party):
-  {"polity":"<listed polity>","op":"update","party":"<listed name or abbreviation>","changes":"leader=<name>; role=<governing|coalition|opposition|extraParliamentary|underground|exile|banned>; seats=<n>; support=<percent>; ideology=<one of the ten>; subideology=<one listed under it>"}
-  {"polity":"<listed polity>","op":"update","party":"<listed name>","changes":"nameEn=<name>; nameNative=<name>; abbrEn=<abbr>; abbrNative=<abbr>"}
-  {"polity":"<listed polity>","op":"add","changes":"nameEn=<name>; nameNative=<name>; abbrEn=<abbr>; abbrNative=<abbr>; ideology=<one of the ten>; subideology=<one>; leader=<name>; role=<role>; seats=<n>; support=<percent>; founded=<year>"}
-  {"polity":"<listed polity>","op":"remove","party":"<listed name>"}
-  {"polity":"<listed polity>","op":"government","changes":"government=<form>; headOfState=<name and title>; headOfGovernment=<name and title>; legislatureSeats=<n>; nextElection=<date or year>"}
-Ideologies: ${IDEOLOGIES.map((ideology) => ideology.name).join(", ")}. Only these polities; never emit partyOps for one not listed.
-${lines.join("\n")}`;
+  if (!lines.length) return "";
+  return [
+    "[Elections Due]",
+    "The Political World keeps when each government's next election falls. An election held in this answer is an event with its result, and politicalActorOps for it: update-party with each party's new seats (patch.seats), and set-party-support with its share of the vote, for every party that gained or lost; form-coalition for the government it makes; set-government with patch.nextElection, the election after it.",
+    ...lines,
+  ].join("\n");
 };
 
 // The list the model chooses from, one line per ideology.
