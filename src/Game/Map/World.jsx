@@ -33,7 +33,7 @@ import {
 import { configureMapRuntime, ensureBasemapProtocol } from "./mapLibreSetup.js";
 import { useBrowserOnline } from "../../runtime/networkStatus.js";
 import { markMapIdle } from "../../runtime/mapReadiness.js";
-import { imageQuad } from "../../../server/mapProjection.js";
+import { MERCATOR_MAX_LAT, imageQuad } from "../../../server/mapProjection.js";
 import { useWorldBackground } from "./useWorldState.js";
 
 // MapLibre's worker pool is made with the first map, so this goes first.
@@ -734,6 +734,15 @@ function World({ mapRef, projection: requestedProjection, terrainEnabled, onInit
 
   const mapProjection = useMemo(() => ({ type: projection }), [projection]);
   const styleUsesGlobeCoords = effectiveCustomBg?.kind === "image" && isGlobe;
+  // How far north and south the camera goes. The real Earth stops at 80°S, with
+  // nothing south of Antarctica's coast worth the space; a scenario's own map
+  // (a picture or drawn shapes) fills the whole Mercator square, and its last
+  // rows to 85°S were out of reach.
+  const ownMapShown = effectiveCustomBg?.kind === "image" || effectiveCustomBg?.kind === "vector";
+  const maxBounds = useMemo(() => [
+    [-Infinity, ownMapShown ? -MERCATOR_MAX_LAT : -80],
+    [Infinity, ownMapShown ? MERCATOR_MAX_LAT : 85],
+  ], [ownMapShown]);
 
   // The old NatGeo preset is a baked raster, so hiding country/city/province
   // names selectively is impossible. The screenshot variant uses Esri's public
@@ -1207,10 +1216,7 @@ function World({ mapRef, projection: requestedProjection, terrainEnabled, onInit
         minZoom={2.25}
         maxZoom={16}
         doubleClickZoom={false}
-        maxBounds={[
-          [-Infinity, -80],
-          [Infinity, 85],
-        ]}
+        maxBounds={maxBounds}
         cursor="default"
         attributionControl={false}
         // A right-button drag turns the map (sideways) and tilts it (up and

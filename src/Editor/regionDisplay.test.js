@@ -5,7 +5,7 @@ import MultiPolygon from "ol/geom/MultiPolygon.js";
 import Polygon from "ol/geom/Polygon.js";
 import VectorSource from "ol/source/Vector.js";
 
-import { FAR_DETAIL, createRegionDisplay, detailOf, simplifyRegion, toleranceOf } from "./regionDisplay.js";
+import { FAR_DETAIL, createRegionDisplay, detailOf, regionFrame, simplifyRegion, toleranceOf } from "./regionDisplay.js";
 
 const ZOOM0 = 156543.03392804097;
 const wiggly = (x, y, size, steps, amplitude = 1) => {
@@ -116,4 +116,27 @@ test("a new zoom redraws the regions a slice per frame, nearest the view first",
   frames.shift()();
   assert.deepEqual(regions.map(detailed), [true, true, true]);
   assert.equal(frames.length, 0);
+});
+
+test("regions changed while the view moves are drawn once it stops, not held off", () => {
+  // The Workshop's conversion of a map's projection moves every region and at
+  // once fits the view to them (an animation): the GPU layer kept drawing the
+  // regions where they had been (Avatar: Resurrection, Mercator to
+  // equirectangular, 2026-11-03).
+  const frame = (over) => regionFrame({ ready: true, hasBuffers: true, still: true, seenRevision: 10, sourceRevision: 10, builtAt: 1000, resolution: 1000, hasExtent: true, ...over });
+  assert.equal(frame({ still: false, sourceRevision: 11 }), "wait", "a change seen on a moving frame is not counted as built");
+  assert.equal(frame({ sourceRevision: 11 }), "mark", "the view stopped: built");
+  assert.equal(frame({}), "hold", "nothing changed: a pan does not rebuild");
+  assert.equal(frame({ still: false }), "hold");
+  assert.equal(frame({ resolution: 1000 * 2 ** 5 }), "mark", "zoomed far out: rebuilt");
+  assert.equal(frame({ ready: false }), "wait", "a build in flight");
+  assert.equal(frame({ hasBuffers: false, ready: false }), "mark", "the first build");
+  assert.equal(frame({ hasBuffers: false, still: false }), "pass");
+});
+
+test("the GPU region layer decides its frames by regionFrame", async () => {
+  const fs = await import("node:fs");
+  const source = fs.readFileSync(new URL("./OlMap.jsx", import.meta.url), "utf8");
+  assert.match(source, /const frame = regionFrame\(\{/);
+  assert.match(source, /if \(frame === "wait"\) return true;/);
 });
