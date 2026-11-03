@@ -138,11 +138,15 @@ const CloseIcon = () => (
     <path d="M6 6l12 12M18 6L6 18" />
   </svg>
 );
-// A pen over a line: write a post.
+// A fountain pen's nib, point down to the left, its slit and breather hole,
+// and the grip above it: write a post (the owner, after a picture of one:
+// "make it use the fountain pen icon that the image used").
 const PenIcon = () => (
-  <svg width="16" height="16" viewBox="0 0 24 24" strokeWidth="1.9" {...stroke}>
-    <path d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16z" />
-    <path d="M13.5 6.5l4 4" />
+  <svg width="17" height="17" viewBox="0 0 24 24" strokeWidth="1.7" {...stroke}>
+    <path d="M3 21l3.4-9.4 3.8-1.8 4 4-1.8 3.8z" />
+    <path d="M10.2 9.8l4.6-4.6a1.4 1.4 0 0 1 2 0l2 2a1.4 1.4 0 0 1 0 2l-4.6 4.6" />
+    <path d="M3 21l5.6-5.6" />
+    <circle cx="10" cy="14" r="1.4" />
   </svg>
 );
 // Three bars: a poll.
