@@ -37,6 +37,56 @@ test("a ledger record written on an event goes into the answer's ledger, an obje
   assert.equal(payload.events[1].warUpdates, undefined);
 });
 
+test("a ledger record written inside an event's impacts goes to the answer's ledger, citing that event", () => {
+  // As four unheld live answers in four wrote the author's client state and war (2026-11-03).
+  const { payload, moved } = reshelveJumpAnswer(answer([
+    { id: "e1", date: "2026-01-02", title: "Quiet", description: "…" },
+    {
+      id: "e2", date: "2026-01-04", title: "Venezuela becomes a client", description: "…",
+      impacts: { puppetUpdates: "install~United States~Venezuela~client~70~open~~Client state", regionTransfers: [{ regionId: "GUY.3_1", toCode: "Venezuela" }] },
+    },
+    { id: "e3", date: "2026-01-10", title: "France invades Belgium", description: "…", impacts: { warUpdates: ["war-fr-be~start~France~Belgium~3~Invasion"] } },
+  ], { puppetUpdates: "" }));
+  assert.equal(payload.puppetUpdates, "install~United States~Venezuela~client~70~open~2~Client state", "the event it was written on, by number");
+  assert.equal(payload.warUpdates, "war-fr-be~start~France~Belgium~3~Invasion", "a number it gave is kept");
+  assert.deepEqual(Object.keys(payload.events[1].impacts), ["regionTransfers"], "the event's own changes stay");
+  assert.deepEqual(payload.events[2].impacts, {}, "an impacts left empty is still an object");
+  assert.deepEqual(moved.map((entry) => `${entry.field}>${entry.to}`), ["impacts.puppetUpdates>puppetUpdates", "impacts.warUpdates>warUpdates"]);
+  assert.equal(validateGameplayPayload("jumpForward", payload).valid, true);
+});
+
+test("a ledger under a made-up name is that ledger", () => {
+  // Gemma 4 31B wrote the author's client state as impacts.puppetOps (2026-11-03).
+  const { payload } = reshelveJumpAnswer(answer([
+    { id: "e1", date: "2026-01-04", title: "Venezuela becomes a client", description: "…", impacts: { puppetOps: ["install~United States~Venezuela~client~70~open~~"] } },
+  ], { warOps: "war-x~start~A~B~1~" }));
+  assert.equal(payload.puppetUpdates, "install~United States~Venezuela~client~70~open~1~");
+  assert.equal(payload.warUpdates, "war-x~start~A~B~1~");
+  assert.equal(payload.warOps, undefined);
+  assert.deepEqual(payload.events[0].impacts, {});
+  assert.equal(validateGameplayPayload("jumpForward", payload).valid, true);
+});
+
+test("a ledger line naming its event by date or id is given that event's number, where exactly one is meant", () => {
+  const { payload } = reshelveJumpAnswer(answer([
+    { id: "e1", date: "1940-09-05", title: "Chelyabinsk plant", description: "…", impacts: { actionIds: ["action-0-x"] } },
+    { id: "e2", date: "1940-09-14", title: "Neutrality pact", description: "…", impacts: { actionIds: ["action-2-y"] } },
+    { id: "e3", date: "1940-09-14", title: "Another the same day", description: "…" },
+    { id: "e4", date: "1940-09-20", title: "Talks", description: "…" },
+  ], {
+    agreementUpdates: [
+      "pact~start~neutrality~Soviet Union,Japan~action-2-y~Soviet-Japanese Pact~Neutrality",
+      "talks~start~other~Soviet Union,Japan~1940-09-20~Talks~Talks",
+      "same-day~start~other~A,B~1940-09-14~Two events that day~…",
+      "kept~start~other~A,B~2,4~Numbers~…",
+    ].join("\n"),
+    relationUpdates: "Soviet Union~Japan~20~cordial~e4~Warmer",
+  }));
+  assert.deepEqual(payload.agreementUpdates.split("\n").map((line) => line.split("~")[4]), ["2", "4", "1940-09-14", "2,4"],
+    "an order's id and a date of one event become its number; a date two events share is left alone");
+  assert.equal(payload.relationUpdates, "Soviet Union~Japan~20~cordial~4~Warmer", "an event's id becomes its number");
+});
+
 test("an answer with nothing out of place is handed back as it came", () => {
   const given = answer([{ date: "2026-01-02", title: "Quiet", description: "…" }]);
   const { payload, moved } = reshelveJumpAnswer(given);

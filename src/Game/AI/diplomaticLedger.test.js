@@ -554,7 +554,8 @@ test("chat deals become agreements, and an agreement's due terms are carried out
   const directive = gameplay.slice(gameplay.indexOf("const buildDiplomaticLedgerDirective"), gameplay.indexOf("const IDLE_RELATION_DECISION_MODEL"));
   assert.match(directive, /A deal both sides accepted in a chat is an agreement from the moment it is made/);
   assert.match(directive, /The terms of an active agreement are commitments/);
-  assert.match(directive, /a regionTransfers entry for land/);
+  assert.match(directive, /an impacts\.regionTransfers entry for land/);
+  assert.match(directive, /an agreementUpdates start records it, naming by number the event that reports it/);
   const { buildBoundedDiplomaticContext } = await import("./nativeDiplomaticDirector.js");
   const terms = `Timor-Leste joins the Indonesian Federation on 1 March 2027 after a referendum. ${"Detail. ".repeat(100)}`;
   const text = buildBoundedDiplomaticContext({
