@@ -101,6 +101,8 @@ export const previewedUpdates = (search = "", updates = UPDATES) => {
   return update ? [update] : null;
 };
 
-// The pages of a notice: every banner of every update in it, each with its update.
-export const noticePages = (updates = []) => updates.flatMap((update) => (Array.isArray(update.banners) ? update.banners : [])
+// The pages of a notice: every banner of every update in it, each with its update. A major update's pages come
+// before every minor one's ("make major update popups always appear in front of the minor update popups": the owner,
+// 2026-11-03), newest first within each; the list itself stays newest first, for which one is remembered as seen.
+export const noticePages = (updates = []) => [...updates.filter((update) => update.kind === "major"), ...updates.filter((update) => update.kind !== "major")].flatMap((update) => (Array.isArray(update.banners) ? update.banners : [])
   .map((banner, index) => ({ key: `${update.id}#${index}`, update, banner })));
