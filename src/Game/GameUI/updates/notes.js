@@ -53,6 +53,22 @@ import { PAST_UPDATES } from "./notesPast.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // An Update downloads the post's update copy, which the hub does not count (runtime/hubFiles.js updateCopyOf;
+    // the hub's index `updates`); the owner's ask, 2026-11-03.
+    id: "2026-11-updates-not-imports",
+    kind: "minor",
+    date: "2026-11-03",
+    channel: "beta",
+    banners: [
+      {
+        title: "Updates are not imports",
+        items: [
+          "Updating a scenario you got from the Community tab no longer adds to its number of imports: only importing it does.",
+        ],
+      },
+    ],
+  },
+  {
     // Terrain matrices sent as 32-bit floats, battlefield pictures no longer handed to hidden layers, the land mask
     // read only where it is on the screen, and names not compared again on every idle (2026-11-03).
     id: "2026-11-lighter-map",
