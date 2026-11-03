@@ -336,6 +336,26 @@ export const normalizePoliticalLandscape = (value) => {
   };
 };
 
+// The AI's compiled landscape is a proposed canonical mutation, not an
+// authoritative election result. Refuse arithmetically impossible proposals
+// before the Political World fold writes them. Older saves still normalize as
+// before; this guard is applied at the new-compilation boundary only.
+export const assertPoliticalLandscapeConsistency = (entry) => {
+  if (!entry) return entry;
+  const parties = Array.isArray(entry.parties) ? entry.parties : [];
+  const seats = parties.reduce((sum, party) => sum + (Number.isFinite(party.seats) ? party.seats : 0), 0);
+  if (Number.isFinite(entry.legislatureSeats) && entry.legislatureSeats > 0 && seats > entry.legislatureSeats) {
+    throw new Error(`Political landscape party seats (${seats}) exceed the legislature's ${entry.legislatureSeats} seats.`);
+  }
+  if (entry.kind === "parties") {
+    const support = parties.reduce((sum, party) => sum + (Number.isFinite(party.support) ? party.support : 0), 0);
+    if (support > 100.000001) {
+      throw new Error(`Political landscape support shares total ${support}%, exceeding 100%.`);
+    }
+  }
+  return entry;
+};
+
 // world.politics: name-keyed like world.intelligence.
 export const normalizePolitics = (value) =>
   Object.fromEntries(

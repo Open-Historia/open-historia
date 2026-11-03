@@ -291,7 +291,7 @@ import {
   unassessedHighPriorityEntries,
 } from "../../runtime/projects.js";
 import { activeSpies, applySpyOps, espionageBrief, intelligenceOf, isIntelligenceRated, normalizeIntelligenceRating, normalizeIntercepts, normalizeSpies, planCovertOperations, redactText, resolveEspionage, signalClarity } from "../../runtime/spycraft.js";
-import { describeElectionsDue, ideologyListText, normalizePoliticalLandscape } from "../../runtime/politics.js";
+import { assertPoliticalLandscapeConsistency, describeElectionsDue, ideologyListText, normalizePoliticalLandscape } from "../../runtime/politics.js";
 import { foldLandscapeIntoActor } from "../../runtime/politicalLandscapeFold.js";
 import { buildSpyOrdersDirective } from "./spyOrdersDirective.js";
 import { collectionOrders, covertOperationsBlock, untracedTargets } from "./covertOperationsDirective.js";
@@ -14544,6 +14544,7 @@ export const assessPoliticalLandscape = async (target, { signal } = {}) => {
   });
   const entry = normalizePoliticalLandscape({ ...payload, asOf: variables.date || "" });
   if (!entry) throw new Error("The answer named no government and no parties.");
+  assertPoliticalLandscapeConsistency(entry);
   // Re-read at write time, as assessIntelligenceService does: a turn may have
   // run, and the campaign in front of the player may have changed.
   await waitForSimulationIdle({ signal });
