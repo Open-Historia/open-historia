@@ -31,7 +31,8 @@
 import React, { useState } from "react";
 import { openCallsFor, TREATY_BROKEN_REPUTATION } from "../../runtime/alliances.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
-import { TERRITORY_AS_HELD, TERRITORY_RESTORED, normalizeReparations } from "../../runtime/peaceTerms.js";
+import { TERRITORY_AS_HELD, TERRITORY_RESTORED, cessionsByReceiver, normalizeReparations } from "../../runtime/peaceTerms.js";
+import { puppetKindLabel } from "../../runtime/puppets.js";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
 import { wearinessOf, wearinessWord } from "../../runtime/warWeariness.js";
 import { inSharedGame, requestFromHost } from "../../multiplayer/client/sharedGameBridge.js";
@@ -72,14 +73,30 @@ export const sendPeaceAnswer = async (op, ref, terms = null, where = {}) => {
 const send = sendPeaceAnswer;
 export { refusalText as peaceRefusalText };
 
-// Terms in the player's words: the ground, then the money.
+// Terms in the player's words: the ground, the land and the country handed
+// over, the money, and any other conditions.
 export const TermsText = ({ terms }) => {
   const payment = terms?.reparations ?? null;
   const share = payment ? Math.round(payment.share * 1000) / 10 : 0;
+  const annexed = terms?.annexed ?? null;
+  const puppet = terms?.puppet ?? null;
+  const conditions = Array.isArray(terms?.conditions) ? terms.conditions : NONE;
   return (
     <>
-      <div>{terms?.territory === TERRITORY_AS_HELD ? "Each side keeps the ground it holds." : "Every region goes back to whose it was before the war."}</div>
+      {annexed
+        ? <div><span data-no-translate>{annexed.country}</span> is annexed: all its land passes to <span data-no-translate>{annexed.by}</span>.</div>
+        : <div>{terms?.territory === TERRITORY_AS_HELD ? "Each side keeps the ground it holds." : "Every region goes back to whose it was before the war."}</div>}
+      {cessionsByReceiver(terms?.cessions).map(({ to, regions }) => (
+        <div key={to}>Ceded to <span data-no-translate>{to}</span>: <span data-no-translate>{regions.join(", ")}</span>.</div>
+      ))}
+      {puppet ? <div><span data-no-translate>{`${puppet.subject} becomes ${puppet.overlord}'s ${puppetKindLabel(puppet.kind)}.`}</span></div> : null}
       <div>{payment ? `${payment.payer} pays ${payment.receiver} reparations: ${share}% of its economy a year for ${payment.years} years.` : "Nobody pays reparations."}</div>
+      {conditions.length > 0 ? (
+        <div>
+          <div>And:</div>
+          {conditions.map((condition) => <div key={condition} data-no-translate>{`- ${condition}`}</div>)}
+        </div>
+      ) : null}
     </>
   );
 };
@@ -237,6 +254,34 @@ const paymentOf = (key, mine, theirs) => {
 
 const fieldStyle = { backgroundColor: "rgba(0,0,0,0.35)", border: "1px solid rgba(255,255,255,0.16)", borderRadius: "6px", color: "#e7e9ea", fontSize: "0.66rem", padding: "0.3rem 0.4rem", width: "100%" };
 
+// What becomes of the enemy country: "free" (nothing), "annex" (all its land is
+// the player's), or a kind of puppet of the player's (runtime/puppets.js).
+const COUNTRY_CHOICES = Object.freeze([
+  { key: "free", label: "Their country stays independent" },
+  { key: "annex", label: "We annex all of their country" },
+  { key: "satellite", label: "Their country becomes our puppet state" },
+  { key: "protectorate", label: "Their country becomes our protectorate" },
+  { key: "client", label: "Their country becomes our client state" },
+]);
+const regionNames = (text) => clean(text).split(/\s*,\s*/).map(clean).filter(Boolean);
+
+// The terms the form makes.
+//   ground, money, country    the three choices
+//   theirs, ours              regions each side cedes, by name, comma between
+//   more                      any other conditions, a line each
+export const termsFromForm = ({ viewer = "", enemy = "", ground = TERRITORY_RESTORED, money = "none", country = "free", theirs = "", ours = "", more = "" } = {}) => {
+  const mine = clean(viewer);
+  const other = clean(enemy);
+  return {
+    territory: ground,
+    reparations: paymentOf(money, mine, other),
+    ...(country === "annex" ? { annexed: { country: other, by: mine } } : {}),
+    ...(["satellite", "protectorate", "client"].includes(country) ? { puppet: { subject: other, overlord: mine, kind: country } } : {}),
+    cessions: [...regionNames(theirs).map((region) => ({ region, to: mine })), ...regionNames(ours).map((region) => ({ region, to: other }))],
+    conditions: String(more ?? "").split(/\r?\n/).map(clean).filter(Boolean),
+  };
+};
+
 // The player's own terms, put to an enemy nobody plays in the chat with it.
 // The chat sends them as the player's message; that enemy's leader answers in
 // its reply (AI/warAndPeace.js answerPeaceProposal).
@@ -247,13 +292,17 @@ const fieldStyle = { backgroundColor: "rgba(0,0,0,0.35)", border: "1px solid rgb
 export const PeaceTermsForm = ({ viewer, enemy, busy = false, onSend, onCancel }) => {
   const [territory, setTerritory] = useState(TERRITORY_RESTORED);
   const [money, setMoney] = useState("none");
+  const [country, setCountry] = useState("free");
+  const [theirs, setTheirs] = useState("");
+  const [ours, setOurs] = useState("");
+  const [more, setMore] = useState("");
   const [said, setSaid] = useState("");
   const [sending, setSending] = useState(false);
   const put = async () => {
     if (sending || busy) return;
     setSending(true);
     setSaid("");
-    const error = await onSend?.({ territory, reparations: paymentOf(money, clean(viewer), clean(enemy)) });
+    const error = await onSend?.(termsFromForm({ viewer, enemy, ground: territory, money, country, theirs, ours, more }));
     setSending(false);
     if (error) setSaid(refusalText(error));
   };
@@ -265,9 +314,15 @@ export const PeaceTermsForm = ({ viewer, enemy, busy = false, onSend, onCancel }
         <option value={TERRITORY_RESTORED}>The old borders: every region goes back</option>
         <option value={TERRITORY_AS_HELD}>Each side keeps the ground it holds</option>
       </select>
+      <select aria-label="Their country" value={country} onChange={(event) => setCountry(event.target.value)} style={fieldStyle}>
+        {COUNTRY_CHOICES.map((choice) => <option key={choice.key} value={choice.key}>{choice.label}</option>)}
+      </select>
+      {country !== "annex" ? <input aria-label="Regions they cede to us" placeholder="Regions they cede to us, by name, comma between" value={theirs} onChange={(event) => setTheirs(event.target.value)} style={fieldStyle} /> : null}
+      <input aria-label="Regions we cede to them" placeholder="Regions we cede to them, by name, comma between" value={ours} onChange={(event) => setOurs(event.target.value)} style={fieldStyle} />
       <select aria-label="Reparations" value={money} onChange={(event) => setMoney(event.target.value)} style={fieldStyle}>
         {REPARATION_CHOICES.map((choice) => <option key={choice.key} value={choice.key}>{choice.label}</option>)}
       </select>
+      <textarea aria-label="Other conditions" placeholder="Any other conditions, a line each" rows={2} value={more} onChange={(event) => setMore(event.target.value)} style={{ ...fieldStyle, resize: "vertical" }} />
       {said ? <div role="status" style={{ color: "#fca5a5", fontSize: ".58rem" }}>{said}</div> : null}
       <div style={{ display: "flex", justifyContent: "flex-end", gap: ".35rem" }}>
         <button type="button" className="oh-tap-row" onClick={() => onCancel?.()} style={{ border: "1px solid rgba(255,255,255,.1)", borderRadius: 8, background: "transparent", color: "rgba(255,255,255,.58)", padding: ".3rem .48rem", fontSize: ".58rem", cursor: "pointer" }}>Cancel</button>

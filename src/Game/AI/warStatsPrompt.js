@@ -29,7 +29,7 @@
 import { describeBonds, normalizeCallsToArms } from "../../runtime/alliances.js";
 import { isOpenBattlefield, normalizeBattlefields } from "../../runtime/fronts/record.js";
 import { normalizeBlockades } from "../../runtime/naval/blockade.js";
-import { TERRITORY_AS_HELD, TERRITORY_RESTORED, describeReparation, describeTerms, normalizePeaceOffers, normalizeReparations, openOfferBetween, standingOf, warBetween, wouldAccept } from "../../runtime/peaceTerms.js";
+import { TERMS_LINE_EXAMPLE, TERRITORY_AS_HELD, TERRITORY_RESTORED, describeReparation, describeTerms, normalizePeaceOffers, normalizeReparations, openOfferBetween, standingOf, warBetween, wouldAccept } from "../../runtime/peaceTerms.js";
 import { RESOURCES_SHORT_FROM, resourcesOf } from "../../runtime/warResources.js";
 import { wearinessOf, wearinessWord } from "../../runtime/warWeariness.js";
 import { airWarLine } from "../../runtime/fronts/airStrike.js";
@@ -210,7 +210,7 @@ export const PEACE_TALK_HEADING = "[Peace]";
 // and the field a group chat's answer carries (gameplaySchemas.js CHAT_ACTIONS_SCHEMA).
 export const PEACE_LINE = "PEACE";
 export const PEACE_ANSWERS_FIELD = "peaceAnswers";
-const TERMS_FORM = "terms as \"as held; Borduria pays 2% for 5 years\" (each side keeps the ground it holds) or \"restored; none\" (the old borders, nobody pays)";
+const TERMS_FORM = `terms as "as held; Borduria pays 2% for 5 years" (each side keeps the ground it holds) or "restored; none" (the old borders, nobody pays), any other term one more part, as in "${TERMS_LINE_EXAMPLE}" ("Borduria is annexed" gives all its land to the other)`;
 
 // What a leader nobody plays, at war with a person, is told of peace between
 // them in a chat: the terms the person put to it, or the offer it made, or

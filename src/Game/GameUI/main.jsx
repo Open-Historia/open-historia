@@ -700,17 +700,6 @@ const Main = ({
   const musicScene = musicSceneOf({ inMenu: mainMenuOpen || hasNoGames, loading: showGameLoading, atWar: atWar || inWar, war: battlefieldShown });
   useEffect(() => { setMusicScene(musicScene); }, [musicScene]);
   const closeWarRoomPanel = useCallback(() => setIsWarRoomOpen(false), []);
-  // Forces just built up on a border in peace open the war room on them (buildUp.jsx).
-  useEffect(() => {
-    const openRoom = () => {
-      setShouldLoadWarRoom(true);
-      setIsAdvisorOpen(false);
-      setIsCountryOpen(false);
-      setIsWarRoomOpen(true);
-    };
-    window.addEventListener("oh:open-war-room", openRoom);
-    return () => window.removeEventListener("oh:open-war-room", openRoom);
-  }, []);
   const toggleWarRoom = () => {
     setShouldLoadWarRoom(true);
     setIsAdvisorOpen(false);

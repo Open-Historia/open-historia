@@ -85,6 +85,7 @@ const peaceOfferSchema = {
     reparationsPayer: textSchema("Who pays; empty for nobody."),
     reparationsPercent: { type: "number", description: "% of the payer's GDP a year." },
     reparationsYears: { type: "integer" },
+    moreTerms: textSchema("Other terms, as in a peaceTreaties line."),
   },
   required: ["territory"],
   additionalProperties: false,

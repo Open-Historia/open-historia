@@ -1350,9 +1350,10 @@ const orderOnBorder = (run, battle, moment, day) => {
 
 // ---- a country's forces at home ----------------------------------------------------------
 // (home.js.) The story builds them up for any country, `home: Country`, and
-// stations them on a border; the player does from the War Room and the game
-// (Game/AI/frontApply.js buildUpAtHome). They are a battlefield of their own,
-// standing, and fight nobody.
+// stations them on a border: for a country a person plays, when an action or a
+// project of theirs does ("there shouldnt be a build up forces button, it should
+// only be done through actions and projects": the owner, 2026-11-03). They are
+// a battlefield of their own, standing, and fight nobody.
 
 const HOME = /^\s*home\s*:\s*(.+?)\s*$/i;
 const COUNTRY_OBJECTIVE = /^\s*country\s*:\s*(.+?)\s*$/i;

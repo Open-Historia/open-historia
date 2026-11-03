@@ -45,6 +45,7 @@ import { diffGameDays } from "../../runtime/gameDates.js";
 import { applyCountryStatPatchToWorld, applyEventImpactsToWorld } from "../../runtime/gameState.js";
 import {
   TERRITORY_AS_HELD,
+  clampTerms,
   describeTerms,
   normalizePeaceOffers,
   normalizePeaceTreaties,
@@ -68,6 +69,7 @@ import { withTurnAttrition } from "../../runtime/attrition.js";
 import { middleFundingPerHead } from "../../runtime/militaryFunding.js";
 import { warSettingsOf } from "../../runtime/warSettings.js";
 import { applyWarUpdates } from "./nativeWarLedger.js";
+import { annexationImpacts, regionOwnerNow, regionsHeldBy } from "../../runtime/gmAnnex.js";
 
 const clean = (value, most = 160) => String(value ?? "").replace(/\s+/g, " ").trim().slice(0, most).trim();
 const fold = (value) => clean(value).toLowerCase();
@@ -218,39 +220,142 @@ export const peaceImpacts = (world, war, territory) => {
   return { regionTransfers, regionControlOps };
 };
 
+// The regions a peace's own terms move, after the ground is settled: every
+// region of a country annexed, to the other of the two, and every region
+// ceded by name, from the other of the two to the one named. A region is found
+// on the map's catalog (`regions`, [{ id, name, countryCode, country }]) by its
+// exact name or id, among those the giver holds; a name the giver holds no
+// region of is left out ("Szohod and Dospad" is tried whole, then as two).
+// Returns { impacts, ceded, missed }: the event's impacts, the regions ceded by
+// their names on the map, and those found nowhere ([{ region, to }]).
+export const termsImpacts = (world, terms, { from = "", to = "", regions = [], note = "" } = {}) => {
+  const read = normalizeTerms(terms);
+  const parties = [clean(from), clean(to)];
+  const otherOf = (name) => parties.find((entry) => entry && fold(entry) !== fold(name)) ?? "";
+  const overrides = record(world?.regionOwnershipOverrides);
+  const sovereignty = record(world?.regionSovereigntyOverrides);
+  const catalog = list(regions);
+  const moves = new Map();
+  const ceded = [];
+  const missed = [];
+  const move = (region, receiver) => {
+    const id = clean(region?.id);
+    const holder = regionOwnerNow(region, overrides);
+    if (!id || fold(holder) === fold(receiver)) return;
+    moves.set(id, { id, name: clean(region?.name) || id, from: holder, to: receiver });
+  };
+  for (const entry of list(read.cessions)) {
+    const giver = otherOf(entry.to);
+    const gives = (region) => fold(regionOwnerNow(region, overrides)) === fold(giver) || fold(sovereignty[clean(region?.id)]) === fold(giver);
+    const find = (name) => catalog.find((region) => gives(region) && (fold(region?.name) === fold(name) || clean(region?.id) === clean(name)));
+    const whole = find(entry.region);
+    const parts = whole ? [whole] : entry.region.split(/\s+and\s+/i).map((name) => find(name));
+    if (parts.length === 0 || parts.some((region) => !region)) {
+      missed.push(entry);
+      continue;
+    }
+    for (const region of parts) {
+      move(region, entry.to);
+      ceded.push({ region: clean(region.name) || clean(region.id), to: entry.to });
+    }
+  }
+  if (read.annexed?.country && read.annexed.by) {
+    const annexed = clean(read.annexed.country);
+    for (const region of catalog) {
+      const id = clean(region?.id);
+      if (fold(regionOwnerNow(region, overrides)) === fold(annexed) || (id && fold(sovereignty[id]) === fold(annexed))) move(region, read.annexed.by);
+    }
+    // (A region only the world lists, handed to it by an override.)
+    for (const region of regionsHeldBy([], overrides, annexed)) if (!moves.has(region.id)) move(region, read.annexed.by);
+  }
+  const impacts = { regionTransfers: [], regionControlOps: [] };
+  for (const receiver of new Set([...moves.values()].map((entry) => entry.to))) {
+    const part = annexationImpacts(world, [...moves.values()].filter((entry) => entry.to === receiver), receiver, note);
+    impacts.regionTransfers.push(...part.regionTransfers);
+    impacts.regionControlOps.push(...part.regionControlOps);
+  }
+  return { impacts, ceded, missed };
+};
+
+// A world with one country made another's puppet by a peace. A live row that
+// puts it under some other overlord ends, released: a country has one overlord.
+export const withTreatyPuppet = (world, puppet, { warId = "", date = "", round = 0 } = {}) => {
+  const subject = clean(puppet?.subject);
+  const overlord = clean(puppet?.overlord);
+  if (!subject || !overlord || fold(subject) === fold(overlord)) return world;
+  const turn = Math.max(0, Math.round(figure(round)));
+  const rows = list(world?.puppets).map((row) => (fold(row?.puppet) === fold(subject) && fold(row?.status || "active") === "active"
+    ? { ...row, status: "released", endedDate: clean(date), lastUpdatedDate: clean(date), updatedRound: turn }
+    : row));
+  return {
+    ...world,
+    puppets: [...rows, {
+      id: `puppet:treaty:${clean(warId)}:${fold(subject)}`,
+      overlord,
+      puppet: subject,
+      kind: clean(puppet.kind) || "satellite",
+      loyalty: 50,
+      secrecy: "open",
+      knownTo: [],
+      status: "active",
+      startedDate: clean(date),
+      lastUpdatedDate: clean(date),
+      sourceEventIds: [],
+      createdRound: turn,
+      updatedRound: turn,
+    }],
+  };
+};
+
+// A world with an event's impacts applied: no time passes (the ground a peace settles).
+const withImpacts = (world, impacts, { id = "", date = "", round = 0, description = "" } = {}) => {
+  if (list(impacts?.regionTransfers).length === 0 && list(impacts?.regionControlOps).length === 0) return world;
+  return applyEventImpactsToWorld({
+    world,
+    round,
+    events: [{
+      id,
+      date: clean(date),
+      title: "Peace",
+      description,
+      importance: "minor",
+      kind: "world",
+      notable: false,
+      playerRelated: false,
+      impacts,
+      source: "manual-admin",
+    }],
+  }).world;
+};
+
 // A world with a war ended on terms.
 //   warId        the war
 //   from, to     who offered, and who took it
-//   terms        { territory, reparations }
+//   terms        { territory, reparations, annexed?, cessions?, puppet?, conditions? }
 //   date, round  when
 //   by           how it came about: "offer" (a person took one), "proposal" (a
 //                person's own terms were taken), "settled" (two countries nobody plays)
+//   regions      the map's region catalog, for the regions annexed or ceded by
+//                name (termsImpacts): with none, only regions the world itself
+//                hands out are found
 // The same world when the war is not being fought.
-export const makePeace = (world, { warId = "", from = "", to = "", terms = null, date = "", round = 0, by = "offer" } = {}) => {
+export const makePeace = (world, { warId = "", from = "", to = "", terms = null, date = "", round = 0, by = "offer", regions = [] } = {}) => {
   const war = list(world?.wars).find((entry) => clean(entry?.id) === clean(warId));
   if (!war || !settleable(war)) return world;
-  const read = normalizeTerms(terms);
+  let read = normalizeTerms(terms);
   const turn = Math.max(0, Math.round(figure(round)));
-  let next = world;
-  const impacts = peaceImpacts(world, war, read.territory);
-  if (impacts.regionTransfers.length > 0 || impacts.regionControlOps.length > 0) {
-    next = applyEventImpactsToWorld({
-      world: next,
-      round: turn,
-      events: [{
-        id: `peace-${clean(warId)}-${clean(date)}`,
-        date: clean(date),
-        title: "Peace",
-        description: "The ground as the peace settles it.",
-        importance: "minor",
-        kind: "world",
-        notable: false,
-        playerRelated: false,
-        impacts,
-        source: "manual-admin",
-      }],
-    }).world;
+  let next = withImpacts(world, peaceImpacts(world, war, read.territory), { id: `peace-${clean(warId)}-${clean(date)}`, date, round: turn, description: "The ground as the peace settles it." });
+  if (read.annexed || read.cessions) {
+    const moved = termsImpacts(next, read, { from, to, regions, note: `Peace: ${clean(war?.title) || clean(warId)}` });
+    next = withImpacts(next, moved.impacts, { id: `peace-terms-${clean(warId)}-${clean(date)}`, date, round: turn, description: "The land the peace's terms hand over." });
+    // (Kept as ceded on the map; a name found nowhere is told as a condition, for the story to settle.)
+    read = normalizeTerms({
+      ...read,
+      cessions: moved.ceded,
+      conditions: [...list(read.conditions), ...moved.missed.map((entry) => `${entry.region} passes to ${entry.to}`)],
+    });
   }
+  if (read.puppet && !(read.annexed && fold(read.annexed.country) === fold(read.puppet.subject))) next = withTreatyPuppet(next, read.puppet, { warId, date, round: turn });
   next = applyWarUpdates({
     world: next,
     updates: [{ id: clean(warId), op: "end", actors: [], opponents: [], eventIds: [], baselineDate: clean(date), note: `Peace: ${describeTerms(read)}` }],
@@ -306,7 +411,7 @@ const withReparationsPaid = (world, days) => {
 //               [{ from, to, terms }] (peaceTerms.js readTreatyLines), each
 //               checked before it is made
 //   onRefused   (treaty with its `reason`) => anything, for each one refused
-export const turnWarAndPeace = ({ world = {}, baseWorld = {}, days = 0, date = "", round = 0, players = [], fronts = null, held = null, treaties = [], onRefused = null, proposals = [], onProposed = null } = {}) => {
+export const turnWarAndPeace = ({ world = {}, baseWorld = {}, days = 0, date = "", round = 0, players = [], fronts = null, held = null, treaties = [], onRefused = null, proposals = [], onProposed = null, regions = [] } = {}) => {
   const holdings = held instanceof Map ? held : regionHoldingsFromWorld(world);
   const turn = Math.max(0, Math.round(figure(round)));
   let next = withReparationsPaid(world, days);
@@ -409,7 +514,7 @@ export const turnWarAndPeace = ({ world = {}, baseWorld = {}, days = 0, date = "
     }
     // (A person's own offer accepted by the country it was put to: their peace, on their terms.)
     const { accepts, ...treaty } = checked.treaty;
-    next = makePeace(next, { ...treaty, date, round: turn, by: accepts ? "proposal" : "settled" });
+    next = makePeace(next, { ...treaty, date, round: turn, by: accepts ? "proposal" : "settled", regions });
     if (accepts) next = { ...next, peaceOffers: normalizePeaceOffers(list(next.peaceOffers).map((offer) => (offer?.id === accepts ? { ...offer, status: "accepted", answeredRound: turn } : offer))) };
   }
   // "an action shouldnt inherently be able to end a war, but it offers peace to the opponent" (the owner,
@@ -512,10 +617,10 @@ export const turnDays = (baseGame, nextGame) => {
 // ---- a person's answers -------------------------------------------------------------------
 
 // A world with an offer of peace taken: the war ends on its terms. The same world when the offer is not open.
-export const acceptPeaceOffer = (world, offerId, { date = "", round = 0 } = {}) => {
+export const acceptPeaceOffer = (world, offerId, { date = "", round = 0, regions = [] } = {}) => {
   const offer = normalizePeaceOffers(world?.peaceOffers).find((entry) => entry.id === clean(offerId, 80));
   if (!offer || offer.status !== "open") return world;
-  const made = makePeace(world, { warId: offer.warId, from: offer.from, to: offer.to, terms: offer.terms, date, round, by: "offer" });
+  const made = makePeace(world, { warId: offer.warId, from: offer.from, to: offer.to, terms: offer.terms, date, round, by: "offer", regions });
   if (made === world) return world;
   return { ...made, peaceOffers: normalizePeaceOffers(list(made.peaceOffers).map((entry) => (entry.id === offer.id ? { ...entry, status: "accepted", answeredRound: Math.max(1, Math.round(figure(round))) } : entry))) };
 };
@@ -565,7 +670,7 @@ export const proposePeace = (world, { warId = "", from = "", terms = null, playe
     warId: clean(warId),
     from: own,
     to,
-    terms: normalizeTerms(terms),
+    terms: clampTerms(terms, { from: own, to }),
     date: clean(date),
     round: turn,
     status: "open",
@@ -586,7 +691,7 @@ export const proposePeace = (world, { warId = "", from = "", terms = null, playe
 //   players     the countries people play
 //   chatId, messageId   the thread and the leader's message
 // Returns { world, outcome, reason }: outcome "peace" | "declined" | "offered" | "", `reason` when nothing was done.
-export const answerPeaceProposal = (world, { from = "", to = "", verdict = null, players = [], date = "", round = 0, chatId = "", messageId = "" } = {}) => {
+export const answerPeaceProposal = (world, { from = "", to = "", verdict = null, players = [], date = "", round = 0, chatId = "", messageId = "", regions = [] } = {}) => {
   const word = clean(verdict?.verdict).toLowerCase();
   const turn = Math.max(1, Math.round(figure(round)));
   const open = openOfferBetween(world?.peaceOffers, from, to);
@@ -594,7 +699,7 @@ export const answerPeaceProposal = (world, { from = "", to = "", verdict = null,
   const marked = (offers, status) => normalizePeaceOffers(list(offers).map((entry) => (entry?.id === put.id ? { ...entry, status, answeredRound: turn } : entry)));
   if (word === "accept") {
     if (!put) return { world, outcome: "", reason: "nothing put" };
-    const made = makePeace(world, { warId: put.warId, from: put.from, to: put.to, terms: put.terms, date, round, by: "proposal" });
+    const made = makePeace(world, { warId: put.warId, from: put.from, to: put.to, terms: put.terms, date, round, by: "proposal", regions });
     if (made === world) return { world, outcome: "", reason: "no-war" };
     return { world: { ...made, peaceOffers: marked(made.peaceOffers, "accepted") }, outcome: "peace", reason: "" };
   }
@@ -646,7 +751,7 @@ export const answerCallToArms = (world, callId, honour, { date = "", round = 0 }
 // nothing was done ("" when something was), `accepted` whether an offer or a
 // call was taken, `offerId` the terms a "propose" put.
 //   chatId, messageId   for "propose": the thread and the message that put the terms
-export const playerDiplomacy = (world, { op = "", ref = "", terms = null, country = "", players = [], date = "", round = 0, chatId = "", messageId = "" } = {}) => {
+export const playerDiplomacy = (world, { op = "", ref = "", terms = null, country = "", players = [], date = "", round = 0, chatId = "", messageId = "", regions = [] } = {}) => {
   const who = fold(country);
   const nothing = (error) => ({ world, error, accepted: false, to: "" });
   if (!who) return nothing("nobody");
@@ -654,7 +759,7 @@ export const playerDiplomacy = (world, { op = "", ref = "", terms = null, countr
     const offer = normalizePeaceOffers(world?.peaceOffers).find((entry) => entry.id === clean(ref, 80));
     if (!offer || offer.status !== "open") return nothing("not-open");
     if (fold(offer.to) !== who) return nothing("not-yours");
-    const next = op === "accept" ? acceptPeaceOffer(world, offer.id, { date, round }) : declinePeaceOffer(world, offer.id, { round });
+    const next = op === "accept" ? acceptPeaceOffer(world, offer.id, { date, round, regions }) : declinePeaceOffer(world, offer.id, { round });
     return next === world ? nothing("not-open") : { world: next, error: "", accepted: op === "accept", to: offer.from };
   }
   if (op === "honour" || op === "refuse") {

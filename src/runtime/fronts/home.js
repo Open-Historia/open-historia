@@ -10,9 +10,9 @@
 // HOME_MARGIN_KM round it; its first side is the country, and its second the
 // countries whose land is nearest (homeNeighbours), so that the ground beyond
 // its borders is somebody's. Its troops are called up round the country's
-// cities, the more round the larger (homeCells): by the player
-// (GameUI/buildUp.jsx, Game/AI/frontApply.js buildUpAtHome) or by the story
-// for any country (`home: Country`, engine.js applyHomeMoment), as many as its
+// cities, the more round the larger (homeCells): by the story, for any country
+// and for a player's when an action or a project of theirs does it (`home:
+// Country`, engine.js applyHomeMoment), as many as its
 // men, supplies, war weariness and mustering allow (engine.js callUpSize),
 // once a day at most, the rest as they muster. In the War Room they go where
 // routes are drawn for them over its own land, at the march's pace (march.js);

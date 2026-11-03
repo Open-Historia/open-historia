@@ -223,7 +223,7 @@ import { frontsOn, strategyNetOn, warPartsOffBlock } from "./frontsGate.js";
 import { engineerLines } from "../../runtime/fronts/engineer.js";
 import { foreseeFronts } from "./foreseenFronts.js";
 import { offPageAvailable } from "./frontWorkerClient.js";
-import { applyTurnFronts, buildUpAtHome, citiesFollowCountries, withAirStrikes, withFrontManpower, withBlockadeEconomy, turnBlockades, regionHoldingsOf, forecastTurnFronts, frontsListBlock, frontPlansBlock, frontPowers, frontRegionTest, frontWarJoins, frontWarStarts, frontsLiveBlock, openScenarioFronts, routesIntoOthers, transportWaysFor, readFrontCities, scenarioFrontsPending, warRoomChartFor, warRoomIntelText, withFrontUnits, withoutFrontPowers } from "./frontApply.js";
+import { applyTurnFronts, citiesFollowCountries, withAirStrikes, withFrontManpower, withBlockadeEconomy, turnBlockades, regionHoldingsOf, forecastTurnFronts, frontsListBlock, frontPlansBlock, frontPowers, frontRegionTest, frontWarJoins, frontWarStarts, frontsLiveBlock, openScenarioFronts, routesIntoOthers, transportWaysFor, readFrontCities, scenarioFrontsPending, warRoomChartFor, warRoomIntelText, withFrontUnits, withoutFrontPowers } from "./frontApply.js";
 import { withTurnStrikes } from "../../runtime/strikes.js";
 import { airStrikeVisuals } from "../../runtime/fronts/airStrike.js";
 import { answerPeaceProposal, offerPeace, playerDiplomacy, turnDays, turnWarAndPeace } from "./warAndPeace.js";
@@ -9845,6 +9845,8 @@ const applySimulationResult = async ({
     fronts: turnFronts,
     held: await regionHoldingsOf(worldWithImpacts, nextGame, campaignId),
     treaties: readTreatyLines(result.peaceTreaties),
+    // (The map's regions, for a peace that annexes a country or cedes regions by name.)
+    regions: readTreatyLines(result.peaceTreaties).length > 0 ? filterToRenderedRegions(await peaceRegionCatalog(), worldWithImpacts) : [],
     onRefused: (treaty) => logDebugEvent("turn", `The skip's peace between ${treaty.from} and ${treaty.to} was not made: ${treaty.reason}.`),
     // A player's order to end their war: their offer of peace, put to the other side.
     proposals: playersWars.proposals,
@@ -13565,46 +13567,6 @@ export const maybeOpenScenarioFronts = async () => {
   }
 };
 
-// The player's forces built up at home, now (frontApply.js buildUpAtHome):
-// called up round its cities, as many as its men, supplies, war weariness and
-// mustering allow, once a day at most; the War Room is then the player's there,
-// to move them with. No request. Returns "" when it is done, else why it was
-// not, in words a person reads.
-export const buildUpForces = async () => {
-  if (!frontsOn()) return "Battlefields are off in this game.";
-  if (isSimulationBusy()) return "A turn is being resolved: build up once it has landed.";
-  beginSimulation();
-  try {
-    const campaignId = activeCampaignId();
-    const campaignRuntimeGameUrl = String(JSON_URLS.game || "");
-    const sameGame = () => (!campaignId || activeCampaignId() === campaignId) && String(JSON_URLS.game || "") === campaignRuntimeGameUrl;
-    const bundle = await readGameStateBundle({ force: true });
-    if (!sameGame()) return "";
-    const world = normalizeWorldState(bundle.world);
-    const built = await buildUpAtHome({ world, game: bundle.game, campaignId, loadRegions: createRenderedRegionsReader() });
-    if (!built) return "Battlefields are off in this game.";
-    if (built.record === undefined) return "The map could not be read: try again.";
-    const kinds = new Set(normalizeArray(built.notes).map((note) => note?.kind));
-    if (kinds.has("called-today")) return "Your forces at home were called up today already: more can be called up once time has passed.";
-    if (kinds.has("reinforce-no-men")) return "Your country has no more men to call up.";
-    if (!built.record) {
-      if (kinds.has("too-many-battlefields")) return "Too many countries have forces built up already.";
-      return "Your country holds no land to build up forces on.";
-    }
-    if (!sameGame()) return "";
-    await mutateWorldState((current) => {
-      if (!sameGame()) return null;
-      const name = built.record.name.toLowerCase();
-      const kept = normalizeArray(current.battlefields).filter((record) => String(record?.name ?? "").toLowerCase() !== name || record?.status === "closed");
-      return withFrontManpower({ ...current, battlefields: [...kept, built.record] }, built, applyCountryStatPatchToWorld);
-    });
-    logDebugEvent("turn", `Forces called up at home: ${built.record.name}.`, { battlefield: built.record.name }, { verbose: true });
-    return "";
-  } finally {
-    endSimulation();
-  }
-};
-
 // Which of the routes drawn on a battlefield go into a country outside its
 // war (frontApply.js routesIntoOthers), for the war room to say so before time
 // passes. It reads the map and asks nobody. A country such a route goes into
@@ -16296,6 +16258,10 @@ export const declineInteractiveOffer = async () => {
   return { interactiveOffer: null };
 };
 
+// The map's regions, for a peace that annexes a country or cedes regions by
+// name (warAndPeace.js makePeace): [] when the catalog cannot be read.
+const peaceRegionCatalog = () => loadRegionCatalog().catch(() => []);
+
 // War and peace between turns (warAndPeace.js playerDiplomacy): the player's
 // answer to an offer of peace or to a call to arms, or terms of their own put
 // to an enemy nobody plays, which its leader answers in the chat
@@ -16307,6 +16273,8 @@ export const declineInteractiveOffer = async () => {
 export const answerDiplomacy = async ({ op = "", ref = "", terms = null, chatId = "", messageId = "" } = {}) => {
   if (isSimulationBusy()) throw new Error("A turn is being generated; wait for it to finish.");
   const game = await readGameData();
+  // (A peace taken may annex a country or cede regions by name: they are found on the map.)
+  const regions = op === "accept" ? await peaceRegionCatalog() : [];
   let outcome = { error: "unknown", accepted: false, to: "" };
   await mutateWorldState((world) => {
     outcome = playerDiplomacy(world, {
@@ -16319,6 +16287,7 @@ export const answerDiplomacy = async ({ op = "", ref = "", terms = null, chatId 
       round: game?.round,
       chatId,
       messageId,
+      regions: filterToRenderedRegions(regions, world),
     });
     return outcome.error ? null : outcome.world;
   });
@@ -16342,6 +16311,7 @@ export const answerPeaceInChat = async ({ speaker = "", line = "", player = "", 
   const person = normalizeString(player) || normalizeString(game?.country);
   const verdict = readPeaceVerdict(line, { from: speaker, to: person });
   if (!verdict) return { outcome: "", reason: "unread" };
+  const regions = verdict.verdict === "accept" ? await peaceRegionCatalog() : [];
   let answer = { outcome: "", reason: "" };
   await mutateWorldState((world) => {
     answer = answerPeaceProposal(world, {
@@ -16353,6 +16323,7 @@ export const answerPeaceInChat = async ({ speaker = "", line = "", player = "", 
       round: game?.round,
       chatId,
       messageId,
+      regions: filterToRenderedRegions(regions, world),
     });
     return answer.outcome ? answer.world : null;
   });

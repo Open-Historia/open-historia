@@ -70,7 +70,7 @@ test("what the game did since the last period is told once, and what waits for a
   const block = buildPeaceBlock({ world: state, game: { round: 8 }, players: ["Aland", "Cisland"] });
   assert.ok(block.includes("- The Southern War: Dorland and Aland made peace on 1915-01-10; every region goes back to whose it was before the war; nobody pays reparations."));
   assert.equal(block.includes("An Older War"), false, "a peace already told is not told again");
-  assert.ok(block.includes("(the war is already ended in the ledger: tell each early in this answer as an event, write no warUpdates for it, and tell no fighting in that war after it)"));
+  assert.ok(block.includes("(the war is already ended in the ledger: tell each early in this answer as an event, write no warUpdates for it, and tell no fighting in that war after it; the land its terms hand over has passed already, and the conditions after its and: are yours to carry out in this answer)"));
   assert.ok(block.includes("Offers of peace that wait for an answer (the answer is theirs: write none, and the war goes on meanwhile):\n- Borduria has offered Aland peace: each side keeps the ground it holds; Borduria pays Aland reparations of 2% of its economy a year for 5 years."));
   assert.ok(block.includes("Offers of peace turned down lately:\n- Aland turned down Borduria's offer of peace (each side keeps the ground it holds; Borduria pays Aland reparations of 2% of its economy a year for 5 years)."), "a country that offered knows before it offers again");
   assert.ok(block.includes("Calls to arms that wait for a player's answer (theirs to give):\n- Cisland is called on to defend Borduria against Aland, under The Northern Pact."));
