@@ -2997,7 +2997,7 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
             type="button"
             aria-pressed={statsView === "politics"}
             onClick={() => setStatsView("politics")}
-            style={statsSubtabStyle(statsView === "politics")}
+            style={statsSubtabStyle(statsView === "politics", touch)}
             >🏛 Politics</button>
             <button
             type="button"
@@ -3005,12 +3005,6 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
             onClick={() => setStatsView("diplomacy")}
             style={statsSubtabStyle(statsView === "diplomacy", touch)}
             >🤝 Diplomacy</button>
-            <button
-            type="button"
-            aria-pressed={statsView === "politics"}
-            onClick={() => setStatsView("politics")}
-            style={statsSubtabStyle(statsView === "politics", touch)}
-            >🏛 Politics</button>
             <button
             type="button"
             aria-pressed={statsView === "economy"}

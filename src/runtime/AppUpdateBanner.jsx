@@ -6,6 +6,7 @@ import {
   APP_UPDATE_REFOCUS_THROTTLE_MS,
   LAUNCH_UPDATE_KEY,
   describeUpdateFailure,
+  desktopBuildIsNewer,
   desktopUpdateProgressIsStale,
   desktopUpdateProgressMatchesBuild,
   isUpdateAvailable,
@@ -267,8 +268,8 @@ export default function AppUpdateBanner() {
         // `current` present = this is the desktop app, and it is the build the
         // Logging file names (only the server knows it).
         if (!dropped && data?.current) setDebugLogContext({ build: desktopBuildLabel(data.current) });
-        // Any DIFFERENCE is an update: the ids are opaque, so a rollback counts
-        // just as much as a newer build.
+        // Only a NEWER build is an update (appUpdate.js desktopBuildIsNewer): a feed still
+        // naming the build before this one is a stale copy, not an update to take.
         if (dropped) return;
         if (!data?.current) {
           if (manual) publishAppUpdateCheckResult({ status: "unsupported" });
@@ -278,7 +279,7 @@ export default function AppUpdateBanner() {
           if (manual) publishAppUpdateCheckResult({ status: "error" });
           return;
         }
-        if (data.buildId === data.current) {
+        if (!desktopBuildIsNewer(data.buildId, data.current)) {
           setDesktop(null);
           if (manual) publishAppUpdateCheckResult({ status: "current", build: data.current });
           return;

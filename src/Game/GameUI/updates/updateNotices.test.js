@@ -65,7 +65,9 @@ test("each update is shown once a device; one that missed several is shown all o
 
 test("every banner of the updates shown is a page, and a preview shows one update whatever was seen", () => {
   assert.deepEqual(noticePages(list.slice(0, 2)).map((page) => page.banner.title), ["C1", "C2", "B"]);
-  assert.deepEqual(noticePages(list).map((page) => page.key), ["c#0", "c#1", "b#0", "a#0"]);
+  // Every major update's pages before any minor one's, newest first within each.
+  assert.deepEqual(noticePages(list).map((page) => page.key), ["c#0", "c#1", "a#0", "b#0"]);
+  assert.deepEqual(noticePages([list[1], list[0]]).map((page) => page.key), ["c#0", "c#1", "b#0"]);
   assert.equal(previewedUpdates("", list), null);
   assert.deepEqual(previewedUpdates("?updateNotice=latest", list).map((update) => update.id), ["c"]);
   assert.deepEqual(previewedUpdates("?updateNotice=b&x=1", list).map((update) => update.id), ["b"]);
