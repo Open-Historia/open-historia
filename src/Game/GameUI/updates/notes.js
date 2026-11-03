@@ -53,6 +53,22 @@ import { PAST_UPDATES } from "./notesPast.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // "Scripted events don't work at all or have any effect, Geopolitical events don't happen anymore" (a player's
+    // report, 2026-11-03): changes written on an event are put where they belong (AI/jumpAnswerShelves.js).
+    id: "2026-11-events-take-effect",
+    kind: "minor",
+    date: "2026-11-03",
+    channel: "beta",
+    banners: [
+      {
+        title: "Events change the world again",
+        items: [
+          "Territory changes, client states and treaties that a time skip writes into its events now take effect, scripted events included, where some AI models had them thrown away.",
+        ],
+      },
+    ],
+  },
+  {
     // "antartica has this strange bug where there are triangles cut out of the climate zones" (the owner,
     // 2026-11-03): the season's tint is map tiles now (Map/seasonTintTiles.js).
     id: "2026-11-season-tint-tiles",
