@@ -1,5 +1,5 @@
-# Runs the test suite on every pull request into beta or main, and on every push
-# to beta, so a change that breaks the suite is visible on the pull request —
+# Runs the test suite on pull requests into beta, beta-stats-v2, or main, and
+# on pushes to beta or beta-stats-v2, so failures surface before promotion —
 # not first discovered when the desktop installer workflow refuses to build
 # (its "Run the tests" step is this same `npm test`). Twice on 2026-09-15 a PR
 # merged into beta with one failing source-text guard, and both times the next
@@ -13,10 +13,12 @@ on:
   pull_request:
     branches:
       - beta
+      - beta-stats-v2
       - main
   push:
     branches:
       - beta
+      - beta-stats-v2
   workflow_dispatch:
 
 permissions:
