@@ -88,8 +88,8 @@ test("the [Social Media] block goes into the live records only while the game ha
 });
 
 test("the field is sent with the feature, read when the turn is written, and the turn keeps itself if the posts break", () => {
-  assert.match(gameplay, /const taskTool = JUMP_TASK_KEYS\.has\(taskKey\) \? withSocialPosts\(advisedTool, isActiveFeatureEnabled\("socialMedia"\)\) : advisedTool;/);
-  assert.match(gameplay, /parseWithoutTrailingFields\(rawText, \[SOCIAL_POSTS_FIELD, AGENT_REPORTS_FIELD, HISTORY_FIELD, SEAT_ADVICE_FIELD\]\)/);
+  assert.match(gameplay, /const taskTool = JUMP_TASK_KEYS\.has\(taskKey\)\n {4}\? withSocialPosts\(advisedTool, isActiveFeatureEnabled\("socialMedia"\), \{ polls: Number\(variables\?\.rostraOpenPolls\) > 0 \}\)\n {4}: advisedTool;/);
+  assert.match(gameplay, /parseWithoutTrailingFields\(rawText, \[POLL_RESULTS_FIELD, SOCIAL_POSTS_FIELD, AGENT_REPORTS_FIELD, HISTORY_FIELD, SEAT_ADVICE_FIELD\]\)/);
   const finish = body(gameplay, "const finishTimelineJump = async");
   assert.match(finish, /socialPosts: merged\.socialPosts,/);
   const apply = body(gameplay, "const applySimulationResult = async");

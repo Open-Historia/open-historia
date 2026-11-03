@@ -35,12 +35,16 @@ import { logDebugEvent } from "../../runtime/debugLog.js";
 import { APP_HEIGHT, useShortTouchScreen, useTouchPrimary } from "../../runtime/mobileUi.js";
 import { toCountryName } from "../../runtime/ownerNames.js";
 import {
+  POLL_CHOICES_MAX,
+  POLL_CHOICES_MIN,
+  POLL_CHOICE_MAX_CHARS,
   SOCIAL_POST_MAX_CHARS,
   compactCount,
   leaderOf,
   mentionsPlayer,
   newestPostNumber,
   playerAccount,
+  pollWinner,
   postEngagement,
   postsAfter,
   socialFeedView,
@@ -50,6 +54,7 @@ import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
 import { inSharedGame, requestFromHost } from "../../multiplayer/client/sharedGameBridge.js";
 import { useTurnRunning } from "./useTurnRunning.js";
+import RostraSearch from "./rostraSearch.jsx";
 
 // Rostra's own colours: the game's grey, and the accent for what is the
 // player's and what can be pressed.
@@ -133,17 +138,32 @@ const CloseIcon = () => (
     <path d="M6 6l12 12M18 6L6 18" />
   </svg>
 );
+// A pen over a line: write a post.
+const PenIcon = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" strokeWidth="1.9" {...stroke}>
+    <path d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16z" />
+    <path d="M13.5 6.5l4 4" />
+  </svg>
+);
+// Three bars: a poll.
+const PollIcon = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" strokeWidth="1.9" {...stroke}>
+    <path d="M4 6h11" />
+    <path d="M4 12h16" />
+    <path d="M4 18h7" />
+  </svg>
+);
 
-// The tab bar's: the feed, the player's country, what answers them, their own.
+// The tab bar's: the feed, a search for any place, what answers them, their own.
 const HomeIcon = () => (
   <svg width="21" height="21" viewBox="0 0 24 24" strokeWidth="1.8" {...stroke}>
     <path d="M4 10.5L12 4l8 6.5V20h-5.5v-5.5h-5V20H4z" />
   </svg>
 );
-const FlagIcon = () => (
+const SearchIcon = () => (
   <svg width="21" height="21" viewBox="0 0 24 24" strokeWidth="1.8" {...stroke}>
-    <path d="M5 21V4" />
-    <path d="M5 4.5c4.5-2 7.5 2 14 0v9c-6.5 2-9.5-2-14 0" />
+    <circle cx="11" cy="11" r="7" />
+    <path d="M21 21l-4.5-4.5" />
   </svg>
 );
 const BellIcon = () => (
@@ -262,6 +282,57 @@ const QuotedPost = ({ post, gone, flags }) => {
   );
 };
 
+// A poll under its question: the choices while the public votes (until the next
+// time skip), then each choice's share as a bar, the winner ticked, how many
+// voted, and what the public said. The choices are the player's own words and
+// the consensus the model's, already in the player's language.
+const PollCard = ({ poll }) => {
+  const results = poll?.results;
+  const winner = pollWinner(poll);
+  const votes = results?.votes ? Number(results.votes).toLocaleString() : "";
+  return (
+    <div style={{ background: "rgba(255,255,255,0.03)", border: `1px solid rgba(255,255,255,0.1)`, borderRadius: "12px", marginTop: "0.6rem", padding: "0.6rem 0.65rem 0.55rem" }}>
+      <div style={{ display: "grid", gap: "0.38rem" }}>
+        {poll.choices.map((choice, index) => {
+          const share = results ? results.shares[index] ?? 0 : null;
+          const won = index === winner;
+          return results ? (
+            <div key={choice} style={{ background: "rgba(255,255,255,0.05)", borderRadius: "8px", overflow: "hidden", position: "relative" }}>
+              <div aria-hidden="true" style={{ background: won ? "rgba(43,193,243,0.28)" : "rgba(255,255,255,0.1)", bottom: 0, left: 0, position: "absolute", top: 0, width: `${share}%` }} />
+              <div style={{ alignItems: "center", display: "flex", gap: "0.5rem", justifyContent: "space-between", padding: "0.42rem 0.6rem", position: "relative" }}>
+                <span data-no-translate style={{ color: INK, fontSize: "0.8rem", fontWeight: won ? 800 : 600, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {won ? `✓ ${choice}` : choice}
+                </span>
+                <span data-no-translate style={{ color: won ? ACCENT : INK_SOFT, flexShrink: 0, fontSize: "0.78rem", fontWeight: 800 }}>{`${share}%`}</span>
+              </div>
+            </div>
+          ) : (
+            <div key={choice} data-no-translate style={{ border: `1px solid ${ACCENT_EDGE}`, borderRadius: "8px", color: INK, fontSize: "0.8rem", fontWeight: 650, padding: "0.4rem 0.6rem" }}>
+              {choice}
+            </div>
+          );
+        })}
+      </div>
+      <div style={{ alignItems: "center", color: INK_FAINT, display: "flex", fontSize: "0.68rem", gap: "0.5rem", justifyContent: "space-between", marginTop: "0.45rem" }}>
+        {results ? (
+          <>
+            <span>{votes ? `${votes} votes` : ""}</span>
+            <span>Final results</span>
+          </>
+        ) : (
+          <span>The public votes until the next time skip.</span>
+        )}
+      </div>
+      {results?.consensus && (
+        <div style={{ background: "rgba(255,255,255,0.04)", border: `1px solid ${LINE}`, borderRadius: "8px", color: INK_SOFT, fontSize: "0.74rem", lineHeight: 1.45, marginTop: "0.5rem", padding: "0.45rem 0.55rem" }}>
+          <strong style={{ color: INK }}>Public consensus:</strong>{" "}
+          <span data-no-translate>{results.consensus}</span>
+        </div>
+      )}
+    </div>
+  );
+};
+
 const Count = ({ icon, value, label }) => (
   <span title={label} style={{ alignItems: "center", color: INK_FAINT, display: "inline-flex", fontSize: "0.72rem", gap: "0.3rem" }}>
     {icon}
@@ -285,14 +356,23 @@ const PostCard = memo(({ post, feed, round, flags, mine, onQuote, canPost }) => 
           )}
           <span style={{ color: INK_FAINT, flexShrink: 0, fontSize: "0.7rem", marginLeft: "auto" }}>{postDate(post.date)}</span>
         </div>
-        {(post.role || post.country) && (
-          <div data-no-translate style={{ color: INK_FAINT, fontSize: "0.7rem", marginTop: "0.05rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            {[post.role, post.country && post.country !== post.author ? post.country : ""].filter(Boolean).join(" · ")}
+        {(post.role || post.country || post.poll) && (
+          <div style={{ alignItems: "center", color: INK_FAINT, display: "flex", fontSize: "0.7rem", gap: "0.35rem", marginTop: "0.05rem", minWidth: 0 }}>
+            {/* A poll says so under its author's name, as such apps have it. */}
+            {post.poll && (
+              <span style={{ background: ACCENT_SOFT, border: `1px solid ${ACCENT_EDGE}`, borderRadius: "5px", color: ACCENT, flexShrink: 0, fontSize: "0.6rem", fontWeight: 800, padding: "0 0.3rem" }}>
+                Poll
+              </span>
+            )}
+            <span data-no-translate style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {[post.role, post.country && post.country !== post.author ? post.country : ""].filter(Boolean).join(" · ")}
+            </span>
           </div>
         )}
         <div data-no-translate style={{ color: INK, fontSize: "0.84rem", lineHeight: 1.5, marginTop: "0.35rem", overflowWrap: "anywhere", whiteSpace: "pre-wrap" }}>
           {post.text}
         </div>
+        {post.poll && <PollCard poll={post.poll} />}
         {post.quote && <QuotedPost post={post.quoted} gone={post.quoteGone || !post.quoted} flags={flags} />}
         <div style={{ alignItems: "center", display: "flex", gap: "1.1rem", marginTop: "0.55rem" }}>
           <button
@@ -337,20 +417,23 @@ const accountOf = (country) => (world) => {
   return `${account.author}\u0000${account.role}\u0000${leaderOf(world, country)?.name ?? ""}`;
 };
 
-// The tab bar along the foot of the screen, as such apps have it.
+// The tab bar along the foot of the screen, as such apps have it. Search took
+// the place of Your country (rostraSearch.jsx), and opens on the player's own.
 const TABS = [
   ["all", "For you", HomeIcon],
-  ["country", "Your country", FlagIcon],
+  ["search", "Search", SearchIcon],
   ["mentions", "Mentions", BellIcon],
   ["mine", "Your posts", PersonIcon],
 ];
 
 const EMPTY_TEXTS = {
   all: "Nothing has been posted yet. The people who make the news post as time passes, and you can post first.",
-  country: "Nobody from your country has posted yet.",
   mentions: "Nobody has mentioned you yet. Post something, and the answers come with the next time skip.",
   mine: "You have not posted yet.",
 };
+
+// A poll's choices as the box starts them: two, both blank.
+const NEW_CHOICES = Object.freeze(["", ""]);
 
 const SocialPanel = ({ isOpen, onClose, onSeen }) => {
   const game = useRuntimeState("game", selectGame);
@@ -364,7 +447,13 @@ const SocialPanel = ({ isOpen, onClose, onSeen }) => {
   const shortTouch = useShortTouchScreen();
   const framed = !isMobile && !shortTouch;
   const [tab, setTab] = useState("all");
+  // The box to write in is put away until the pen in the header is pressed
+  // ("make it so the thing to write a post isnt always there, its only there
+  // when you click the pen icon in the top corner", the owner, 2026-11-03).
+  const [composing, setComposing] = useState(false);
   const [draft, setDraft] = useState("");
+  // A poll's choices while the post is one; null when it is not.
+  const [choices, setChoices] = useState(null);
   const [quoting, setQuoting] = useState(null);
   const [posting, setPosting] = useState(false);
   const [error, setError] = useState("");
@@ -398,7 +487,7 @@ const SocialPanel = ({ isOpen, onClose, onSeen }) => {
   }, [isOpen]);
 
   const flags = useMemo(() => ({ custom: customFlags, polities }), [customFlags, polities]);
-  const posts = useMemo(() => socialFeedView(feed, { tab, country, leader }), [feed, tab, country, leader]);
+  const posts = useMemo(() => (tab === "search" ? [] : socialFeedView(feed, { tab, country, leader })), [feed, tab, country, leader]);
   const mentionCount = useMemo(
     () => feed.filter((post) => mentionsPlayer(post, { feed, country, leader }) && Number(post.round) >= game.round).length,
     [feed, country, leader, game.round],
@@ -406,24 +495,40 @@ const SocialPanel = ({ isOpen, onClose, onSeen }) => {
   const canPost = Boolean(country) && !turnRunning;
   const length = Array.from(draft.trim()).length;
   const tooLong = length > SOCIAL_POST_MAX_CHARS;
+  const typedChoices = (choices ?? []).map((choice) => choice.trim()).filter(Boolean);
+  const pollReady = !choices || typedChoices.length >= POLL_CHOICES_MIN;
+  const ready = Boolean(draft.trim()) && !tooLong && canPost && pollReady;
 
-  const startQuote = useCallback((post) => {
-    setQuoting(post);
+  const openComposer = useCallback(() => {
+    setComposing(true);
     setError("");
     setPosted(false);
     scrollRef.current?.scrollTo?.({ top: 0, behavior: "smooth" });
     window.setTimeout(() => boxRef.current?.focus(), 60);
   }, []);
+  // Put away: what was typed stays for next time, the poll and the quote go.
+  const closeComposer = () => {
+    setComposing(false);
+    setChoices(null);
+    setQuoting(null);
+    setError("");
+  };
+
+  const startQuote = useCallback((post) => {
+    setQuoting(post);
+    openComposer();
+  }, [openComposer]);
 
   const submit = async () => {
     const text = draft.trim();
-    if (!text || tooLong || posting || !canPost) return;
+    if (!ready || posting) return;
+    const poll = choices ? typedChoices : null;
     setPosting(true);
     setError("");
     try {
       if (inSharedGame()) {
         // The host writes it, as the leader of this seat's country.
-        const answer = await requestFromHost("post", { text, quote: quoting?.id || "" });
+        const answer = await requestFromHost("post", { text, quote: quoting?.id || "", ...(poll ? { choices: poll } : {}) });
         if (!answer.ok) {
           setError(answer.error || "The host did not take the post.");
           return;
@@ -432,7 +537,7 @@ const SocialPanel = ({ isOpen, onClose, onSeen }) => {
         // Read and written in the save's own queue, so nothing written meanwhile is lost.
         let refusal = "";
         await mutateWorldState((world) => {
-          const made = withPlayerPost(world, { by: country, text, quote: quoting?.id || "", date: game.gameDate, round: game.round });
+          const made = withPlayerPost(world, { by: country, text, quote: quoting?.id || "", date: game.gameDate, round: game.round, choices: poll });
           refusal = made.error || "";
           return made.error ? null : made.world;
         });
@@ -441,11 +546,13 @@ const SocialPanel = ({ isOpen, onClose, onSeen }) => {
           return;
         }
       }
-      logDebugEvent("action", `Posted on Rostra${quoting ? ` (quoting ${quoting.id})` : ""}: ${text}`);
+      logDebugEvent("action", `Posted on Rostra${quoting ? ` (quoting ${quoting.id})` : ""}${poll ? ` (a poll: ${poll.join(" / ")})` : ""}: ${text}`);
       setDraft("");
       setQuoting(null);
+      setChoices(null);
+      setComposing(false);
       setPosted(true);
-      if (tab === "mentions" || tab === "country") setTab("all");
+      if (tab !== "all" && tab !== "mine") setTab("all");
     } catch (failure) {
       console.error("[social] the post could not be saved:", failure);
       setError("The post could not be saved. Try again.");
@@ -529,19 +636,33 @@ const SocialPanel = ({ isOpen, onClose, onSeen }) => {
           </div>
           {/* In the frame the day is on the status bar. */}
           {!framed && <span style={{ color: INK_FAINT, fontSize: "0.68rem", marginLeft: "auto" }}>{postDate(game.gameDate)}</span>}
+          {/* The pen: write a post (and put the box away again). */}
+          <button
+            type="button"
+            className="oh-tap"
+            onClick={composing ? closeComposer : openComposer}
+            disabled={!country}
+            aria-label={composing ? "Put the post away" : "Write a post"}
+            aria-pressed={composing}
+            title={composing ? "Put the post away" : "Write a post"}
+            style={{ alignItems: "center", background: composing ? ACCENT_SOFT : "rgba(255,255,255,0.06)", border: composing ? `1px solid ${ACCENT_EDGE}` : "1px solid transparent", borderRadius: "999px", color: composing ? ACCENT : INK_SOFT, cursor: country ? "pointer" : "default", display: "inline-flex", flex: "0 0 auto", height: "2rem", justifyContent: "center", marginLeft: framed ? "auto" : undefined, padding: 0, width: "2rem" }}
+          >
+            <PenIcon />
+          </button>
           <button
             type="button"
             className="oh-tap"
             onClick={onClose}
             aria-label="Close Rostra"
-            style={{ alignItems: "center", background: "rgba(255,255,255,0.06)", border: "none", borderRadius: "999px", color: INK_SOFT, cursor: "pointer", display: "inline-flex", flex: "0 0 auto", height: "2rem", justifyContent: "center", marginLeft: framed ? "auto" : undefined, padding: 0, width: "2rem" }}
+            style={{ alignItems: "center", background: "rgba(255,255,255,0.06)", border: "none", borderRadius: "999px", color: INK_SOFT, cursor: "pointer", display: "inline-flex", flex: "0 0 auto", height: "2rem", justifyContent: "center", padding: 0, width: "2rem" }}
           >
             <CloseIcon />
           </button>
         </div>
 
         <div ref={scrollRef} className="rostra-scroll" style={{ flex: 1, minHeight: 0, overflowY: "auto", overscrollBehavior: "contain" }}>
-          {/* The box: the player posts as their country's leader. */}
+          {/* The box, when the pen opened it: the player posts as their country's leader. */}
+          {composing && (
           <div style={{ borderBottom: `1px solid ${LINE}`, display: "flex", gap: "0.65rem", padding: "0.85rem 1rem" }}>
             <Avatar name={author} flagUrl={playerFlag} mine />
             <div style={{ flex: 1, minWidth: 0 }}>
@@ -557,7 +678,7 @@ const SocialPanel = ({ isOpen, onClose, onSeen }) => {
                 disabled={!canPost}
                 onChange={(event) => { setDraft(event.target.value); setPosted(false); }}
                 onKeyDown={onKeyDown}
-                placeholder={canPost ? "What would you like to tell the world?" : "You can post again once the time skip has ended."}
+                placeholder={!canPost ? "You can post again once the time skip has ended." : choices ? "Ask the public a question" : "What would you like to tell the world?"}
                 rows={isTouch || framed ? 2 : 3}
                 enterKeyHint="enter"
                 style={{
@@ -575,6 +696,44 @@ const SocialPanel = ({ isOpen, onClose, onSeen }) => {
                   width: "100%",
                 }}
               />
+              {/* A poll's choices: two to four, each a short line. */}
+              {choices && (
+                <div style={{ display: "grid", gap: "0.35rem", marginTop: "0.4rem" }}>
+                  {choices.map((choice, index) => (
+                    <div key={index} style={{ alignItems: "center", display: "flex", gap: "0.35rem" }}>
+                      <input
+                        className="rostra-composer"
+                        value={choice}
+                        maxLength={POLL_CHOICE_MAX_CHARS}
+                        disabled={!canPost}
+                        onChange={(event) => setChoices((all) => all.map((entry, at) => (at === index ? event.target.value : entry)))}
+                        placeholder={`Choice ${index + 1}`}
+                        aria-label={`Choice ${index + 1}`}
+                        style={{ background: "rgba(255,255,255,0.04)", border: `1px solid ${ACCENT_EDGE}`, borderRadius: "8px", boxSizing: "border-box", color: INK, flex: 1, fontFamily: "sans-serif", fontSize: "0.8rem", minWidth: 0, outline: "none", padding: "0.38rem 0.55rem" }}
+                      />
+                      {choices.length > POLL_CHOICES_MIN && (
+                        <button
+                          type="button"
+                          className="oh-tap"
+                          onClick={() => setChoices((all) => all.filter((_, at) => at !== index))}
+                          aria-label={`Remove choice ${index + 1}`}
+                          style={{ alignItems: "center", background: "none", border: "none", color: INK_FAINT, cursor: "pointer", display: "inline-flex", padding: "0.2rem" }}
+                        >
+                          <CloseIcon />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                  <div style={{ alignItems: "center", display: "flex", gap: "0.6rem", justifyContent: "space-between" }}>
+                    {choices.length < POLL_CHOICES_MAX ? (
+                      <button type="button" className="oh-tap-row" onClick={() => setChoices((all) => [...all, ""])} style={{ background: "none", border: "none", color: ACCENT, cursor: "pointer", fontFamily: "sans-serif", fontSize: "0.72rem", fontWeight: 700, padding: "0.2rem 0", whiteSpace: "nowrap" }}>
+                        Add a choice
+                      </button>
+                    ) : <span />}
+                    <span style={{ color: INK_FAINT, fontSize: "0.66rem" }}>The public votes until the next time skip.</span>
+                  </div>
+                </div>
+              )}
               {quoting && (
                 <div style={{ position: "relative" }}>
                   <QuotedPost post={quoting} gone={false} flags={flags} />
@@ -591,8 +750,21 @@ const SocialPanel = ({ isOpen, onClose, onSeen }) => {
                 </div>
               )}
               {error && <div role="alert" style={{ color: "rgba(253,186,116,0.95)", fontSize: "0.72rem", marginTop: "0.45rem" }}>{error}</div>}
-              {posted && !error && <div style={{ color: ACCENT, fontSize: "0.72rem", marginTop: "0.45rem" }}>Posted. The world answers with the next time skip.</div>}
               <div style={{ alignItems: "center", borderTop: `1px solid ${LINE}`, display: "flex", gap: "0.6rem", justifyContent: "flex-end", marginTop: "0.5rem", paddingTop: "0.5rem" }}>
+                {/* A poll, or a plain post again. */}
+                <button
+                  type="button"
+                  className="oh-tap"
+                  onClick={() => setChoices((all) => (all ? null : [...NEW_CHOICES]))}
+                  disabled={!canPost}
+                  aria-pressed={Boolean(choices)}
+                  aria-label={choices ? "Remove the poll" : "Add a poll"}
+                  title={choices ? "Remove the poll" : "Add a poll"}
+                  style={{ alignItems: "center", background: choices ? ACCENT_SOFT : "none", border: "none", borderRadius: "999px", color: choices ? ACCENT : INK_SOFT, cursor: canPost ? "pointer" : "default", display: "inline-flex", fontFamily: "sans-serif", fontSize: "0.72rem", fontWeight: 700, gap: "0.3rem", marginRight: "auto", padding: "0.3rem 0.55rem" }}
+                >
+                  <PollIcon />
+                  <span>Poll</span>
+                </button>
                 <span data-no-translate style={{ color: tooLong ? "#f87171" : INK_FAINT, fontSize: "0.7rem" }}>
                   {length}/{SOCIAL_POST_MAX_CHARS}
                 </span>
@@ -600,13 +772,13 @@ const SocialPanel = ({ isOpen, onClose, onSeen }) => {
                   type="button"
                   className="oh-tap-row"
                   onClick={() => void submit()}
-                  disabled={!draft.trim() || tooLong || posting || !canPost}
+                  disabled={!ready || posting}
                   style={{
-                    background: draft.trim() && !tooLong && canPost ? ACCENT : "rgba(43,193,243,0.25)",
+                    background: ready ? ACCENT : "rgba(43,193,243,0.25)",
                     border: "none",
                     borderRadius: "999px",
                     color: "#06171d",
-                    cursor: draft.trim() && !tooLong && canPost && !posting ? "pointer" : "default",
+                    cursor: ready && !posting ? "pointer" : "default",
                     fontFamily: "sans-serif",
                     fontSize: "0.78rem",
                     fontWeight: 800,
@@ -618,8 +790,32 @@ const SocialPanel = ({ isOpen, onClose, onSeen }) => {
               </div>
             </div>
           </div>
+          )}
+          {posted && !composing && (
+            <div role="status" style={{ borderBottom: `1px solid ${LINE}`, color: ACCENT, fontSize: "0.74rem", padding: "0.6rem 1rem" }}>
+              Posted. The world answers with the next time skip.
+            </div>
+          )}
 
-          {posts.length === 0 ? (
+          {tab === "search" ? (
+            <RostraSearch
+              shown={isOpen}
+              country={country}
+              feed={feed}
+              renderPost={(post) => (
+                <PostCard
+                  key={post.id}
+                  post={post}
+                  feed={feed}
+                  round={game.round}
+                  flags={flags}
+                  mine={post.kind === "player" && String(post.by || post.country).toLocaleLowerCase() === country.toLocaleLowerCase()}
+                  onQuote={startQuote}
+                  canPost={canPost}
+                />
+              )}
+            />
+          ) : posts.length === 0 ? (
             <p style={{ color: INK_FAINT, fontSize: "0.78rem", fontStyle: "italic", lineHeight: 1.5, margin: 0, padding: "1.2rem 1.1rem" }}>
               {EMPTY_TEXTS[tab]}
             </p>
@@ -637,8 +833,8 @@ const SocialPanel = ({ isOpen, onClose, onSeen }) => {
           ))}
         </div>
 
-        {/* The tab bar: everything, the player's country, what answers or names
-            them, and their own posts. */}
+        {/* The tab bar: everything, a search for any place, what answers or
+            names them, and their own posts. */}
         <div role="tablist" style={{ borderTop: `1px solid ${LINE}`, display: "flex", flexShrink: 0, padding: framed ? "0.3rem 0.35rem 0.05rem" : "0.3rem 0.35rem 0.35rem" }}>
           {TABS.map(([key, label, Icon]) => {
             const active = tab === key;

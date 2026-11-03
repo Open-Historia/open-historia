@@ -125,6 +125,8 @@ test("the tasks that decide nothing for the player are told nothing of the diffi
   assert.deepEqual([...TASKS_WITHOUT_DIFFICULTY].sort(), [
     "demandCheck", "descriptionToAction", "eventConsolidator", "geographyResolver",
     "pregameHistory", "politicalWorldGeneration", "politicalWorldVerification", "timelineCurator", "translation",
+    // Rostra's Search: what ordinary people in a place are posting.
+    "placeFeed",
     // The player's own generals in the war room: they advise and take orders, and what comes of one is the front engine's.
     "warRoom",
   ].sort());
