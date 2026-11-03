@@ -48,19 +48,10 @@ async function main() {
     return;
   }
 
-  // A build with no network (the Nix package, default.nix) hands the pinned
-  // commit's zip in, fetched and checked by the build itself.
-  const given = process.env.OH_FMG_ZIP;
-  let buf;
-  if (given) {
-    log(`reading Fantasy Map Generator ${FMG_TAG} from ${given}…`);
-    buf = fs.readFileSync(given);
-  } else {
-    log(`downloading Fantasy Map Generator ${FMG_TAG}…`);
-    const res = await fetch(FMG_ZIP_URL);
-    if (!res.ok) throw new Error(`download failed (HTTP ${res.status})`);
-    buf = Buffer.from(await res.arrayBuffer());
-  }
+  log(`downloading Fantasy Map Generator ${FMG_TAG}…`);
+  const res = await fetch(FMG_ZIP_URL);
+  if (!res.ok) throw new Error(`download failed (HTTP ${res.status})`);
+  const buf = Buffer.from(await res.arrayBuffer());
 
   log("preparing the game's copy (no outside hosts, only the files a generation uses)…");
   const JSZip = (await import("jszip")).default;

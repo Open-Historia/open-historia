@@ -92,8 +92,16 @@ buildNpmPackage {
 
   # The game (vite build into dist/) and the map generator's prepared copy (fmg/dist).
   npmBuildScript = "build";
+  # (The build has no network: scripts/fetch-fmg.mjs is run with its one download
+  # answered from the zip fetched above.)
   postBuild = ''
-    node scripts/fetch-fmg.mjs --required
+    node --input-type=module -e '
+      import fs from "node:fs";
+      import { pathToFileURL } from "node:url";
+      globalThis.fetch = async () => new Response(fs.readFileSync(process.env.OH_FMG_ZIP));
+      process.argv.push("--required");
+      await import(pathToFileURL("scripts/fetch-fmg.mjs").href);
+    '
   '';
 
   installPhase = ''

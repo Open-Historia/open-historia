@@ -102,37 +102,6 @@ node server/server.js              # Start the server
 
 Then open **http://localhost:3000** in your browser.
 
-### Nix and NixOS
-
-```bash
-nix run github:Open-Historia/open-historia    # build and start the server
-```
-
-Then open **http://localhost:3000**. Games and settings are kept in `$OH_DATA_DIR`
-(default `~/.local/share/open-historia`); the map data comes with the package.
-`nix build` leaves the launcher in `./result/bin/open-historia`, and `nix develop`
-gives a shell with Node.js for working on the game.
-
-On NixOS the server can run as a service:
-
-```nix
-{
-  inputs.open-historia.url = "github:Open-Historia/open-historia";
-  # in your configuration:
-  imports = [ open-historia.nixosModules.default ];
-  services.open-historia = {
-    enable = true;
-    port = 3000;          # the default
-    # host = "0.0.0.0";   # let other devices on the network reach it
-    # openFirewall = true;
-  };
-}
-```
-
-Nothing in the Nix files needs updating by hand: the npm packages are read from
-`package-lock.json` and the map files from `scripts/map-assets.json`. The Nix
-workflow builds and starts the package whenever either changes.
-
 ### Reaching the server from another device
 
 Out of the box the server answers **only the machine it runs on** — which covers
