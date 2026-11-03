@@ -5,14 +5,15 @@
 // actions menu" (the owner, 2026-11-02).
 //
 // Two pages, told apart by the banner's `scene`:
-//   feed   the world talking: a globe whose meridians draw themselves, a column
-//          of posts that scrolls up for ever (one of them quoting another,
-//          embedded as the app shows it), a box where a post is being typed,
-//          and hearts and quote marks rising off the feed. The heart under the
-//          first post answers a touch: it fills, jumps and counts.
+//   feed   the world talking: a globe whose meridians draw themselves, a phone
+//          rising from the foot of the picture as Rostra rises from the dock,
+//          its column of posts scrolling up for ever (one of them quoting
+//          another, embedded as the app shows it), a box where a post is being
+//          typed, and hearts and quote marks rising off the feed. The heart
+//          under the first post answers a touch: it fills, jumps and counts.
 //   desk   the Actions panel with its two tabs, the marker sliding from one to
-//          the other and the board's progress bars filling; beside it the old
-//          phone of Listen in fading as Rostra's mark takes its place.
+//          the other and the board's progress bars filling; beside it the phone
+//          Listen in was, Rostra's mark lighting up on its screen.
 // With Reduce motion nothing moves: each page is drawn as it stands.
 //
 // Flat shapes only: nothing is a gradient, nothing purple.
@@ -26,6 +27,10 @@ const LINE = "rgba(238,243,245,0.12)";
 const BAR = "rgba(238,243,245,0.2)";
 const BAR_SOFT = "rgba(238,243,245,0.11)";
 const SLATE = "#1d272d";
+// The phone Rostra is drawn as (GameUI/social.jsx): its frame, edge and screen.
+const PHONE = "#17171a";
+const PHONE_EDGE = "#3a3a40";
+const PHONE_SCREEN = "#0b0b0d";
 
 // The theme's own motions, beside the kit's: the feed scrolling up, a caret
 // blinking, a heart rising off the feed, and the tab marker sliding.
@@ -39,7 +44,6 @@ if (typeof document !== "undefined" && !document.getElementById(STYLE_ID)) {
   @keyframes ohRostraRise { 0% { opacity: 0; transform: translateY(0) scale(0.6); } 20% { opacity: 1; } 100% { opacity: 0; transform: translateY(-70px) scale(1.1); } }
   @keyframes ohRostraSlide { 0%, 42% { transform: translateX(0); } 50%, 92% { transform: translateX(var(--oh-rostra-slide, 96px)); } 100% { transform: translateX(0); } }
   @keyframes ohRostraType { from { transform: scaleX(0); } to { transform: scaleX(1); } }
-  @keyframes ohRostraFadeOut { from { opacity: 1; } to { opacity: 0.25; } }
   `;
   document.head.appendChild(style);
 }
@@ -121,19 +125,26 @@ const FeedScene = ({ still, narrow }) => {
             </g>
           ))}
         </g>
-        {/* The feed, scrolling up for ever: the same posts twice over, so the turn is seamless. */}
+        {/* The phone, rising from the foot of the picture, its feed scrolling
+            up for ever: the same posts twice over, so the turn is seamless. */}
         <g style={{ transform: `translate(${narrow ? 300 : 320}px, 0px)` }}>
-          <g style={{ "--oh-rostra-scroll": "-282px", ...forever(still, "ohRostraScroll", 16000, 900) }}>
-            {[0, 282].map((offset) => (
-              <g key={`f${offset}`}>
-                <Post accent x={0} y={offset + 14} />
-                <Post lines={2} quote x={0} y={offset + 92} />
-                <Post lines={3} x={0} y={offset + 212} />
-              </g>
-            ))}
+          <clipPath id="oh-rostra-screen">
+            <rect height="200" rx="20" width="262" x="-6" y="40" />
+          </clipPath>
+          <rect fill={PHONE} height="250" rx="32" stroke={PHONE_EDGE} strokeWidth="1.5" width="282" x="-16" y="6" />
+          <rect fill={PHONE_SCREEN} height="236" rx="25" width="266" x="-8" y="13" />
+          <rect fill="#000" height="12" rx="6" width="56" x="97" y="20" />
+          <g clipPath="url(#oh-rostra-screen)">
+            <g style={{ "--oh-rostra-scroll": "-282px", ...forever(still, "ohRostraScroll", 16000, 900) }}>
+              {[0, 282].map((offset) => (
+                <g key={`f${offset}`}>
+                  <Post accent x={0} y={offset + 44} />
+                  <Post lines={2} quote x={0} y={offset + 122} />
+                  <Post lines={3} x={0} y={offset + 242} />
+                </g>
+              ))}
+            </g>
           </g>
-          {/* The box at the top, a post being typed into it. */}
-          <rect fill={ROSTRA_GROUND} height="10" width="250" x="0" y="-6" />
         </g>
         {/* Hearts and quote marks rising off the feed. */}
         {[[600, 150, 0], [640, 170, 1], [700, 140, 2], [740, 175, 3], [660, 120, 4]].map(([x, y, at]) => (
@@ -218,12 +229,12 @@ const DeskScene = ({ still }) => (
         </g>
       ))}
     </g>
-    {/* The old phone of Listen in, fading, and Rostra's mark taking its place. */}
+    {/* The phone Listen in was, Rostra's mark lighting up on its screen. */}
     <g style={{ transform: "translate(620px, 46px)" }}>
-      <g style={still ? { opacity: 0.25 } : motion(still, "ohRostraFadeOut", 1800, 400, "cubic-bezier(0.4, 0, 0.6, 1)")}>
-        <rect fill="none" height="120" rx="14" stroke="rgba(238,243,245,0.35)" strokeDasharray="5 5" width="68" />
-        <rect fill="rgba(238,243,245,0.25)" height="4" rx="2" width="18" x="25" y="110" />
-      </g>
+      <rect fill={PHONE} height="120" rx="14" stroke={PHONE_EDGE} strokeWidth="1.2" width="68" />
+      <rect fill={PHONE_SCREEN} height="112" rx="10" width="60" x="4" y="4" />
+      <rect fill="#000" height="5" rx="2.5" width="18" x="25" y="8" />
+      <rect fill="rgba(238,243,245,0.6)" height="2.5" rx="1.25" width="22" x="23" y="111" />
       <g style={{ transform: "translate(6px, 30px)" }}>
         <g style={motion(still, "ohUpdStamp", 900, 1600, "cubic-bezier(0.2, 0.7, 0.2, 1)")}>
           <path d="M10 2h36a6 6 0 0 1 6 6v26a6 6 0 0 1-6 6H24l-11 9v-9h-3a6 6 0 0 1-6-6V8a6 6 0 0 1 6-6z" fill={ROSTRA_ACCENT} />

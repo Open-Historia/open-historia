@@ -954,14 +954,25 @@
 
   // ---- Rostra, the world's social network (social.jsx SocialPanel, PostCard, QuotedPost) -------------------
   // The posts of the people who make the news, out as the story passes them, and France's own: the reader
-  // posts as France, and Quote under a post puts it in the box.
+  // posts as France, and Quote under a post puts it in the box. Drawn as the game draws it: a phone that
+  // rises from the dock, its tabs along the foot of the screen; on a phone, the app alone (game-ui.css).
   var ROSTRA_ICON = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7.5 21h9l-1.4-8.5H8.9z"/><path d="M5.5 12.5h13"/><path d="M12 12.5V8.2"/><circle cx="12" cy="6.4" r="1.6"/><path d="M16.6 4.2a4.2 4.2 0 0 1 0 4.6"/><path d="M7.4 4.2a4.2 4.2 0 0 0 0 4.6"/></svg>';
   var ROSTRA_MARK = '<svg width="26" height="26" viewBox="0 0 32 32" aria-hidden="true"><path d="M6 3h20a4 4 0 0 1 4 4v14a4 4 0 0 1-4 4H13l-6 5v-5H6a4 4 0 0 1-4-4V7a4 4 0 0 1 4-4z" fill="#2bc1f3"/><path d="M12 21h8l-1.2-7.5h-5.6z" fill="#0b1a20"/><path d="M9.5 13.5h13" stroke="#0b1a20" stroke-width="1.8" stroke-linecap="round"/><circle cx="16" cy="9" r="2" fill="#0b1a20"/></svg>';
   var QUOTE_ICON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 7h4v4c0 2.5-1.3 4-4 5"/><path d="M14 7h4v4c0 2.5-1.3 4-4 5"/></svg>';
   var REPOST_ICON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 3l3 3-3 3"/><path d="M4 12V9a3 3 0 0 1 3-3h13"/><path d="M7 21l-3-3 3-3"/><path d="M20 12v3a3 3 0 0 1-3 3H4"/></svg>';
   var HEART_ICON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.5 5.8a5 5 0 0 0-7.1 0L12 7.2l-1.4-1.4a5 5 0 0 0-7.1 7.1L12 21.4l8.5-8.5a5 5 0 0 0 0-7.1z"/></svg>';
   var CLOSE_ICON = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>';
-  var RS_TABS = [["all", "For you"], ["country", "Your country"], ["mentions", "Mentions"], ["mine", "Your posts"]];
+  var TAB_ICON = function (paths) { return '<svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + paths + "</svg>"; };
+  var RS_TABS = [
+    ["all", "For you", TAB_ICON('<path d="M4 10.5L12 4l8 6.5V20h-5.5v-5.5h-5V20H4z"/>')],
+    ["country", "Your country", TAB_ICON('<path d="M5 21V4"/><path d="M5 4.5c4.5-2 7.5 2 14 0v9c-6.5 2-9.5-2-14 0"/>')],
+    ["mentions", "Mentions", TAB_ICON('<path d="M18 9a6 6 0 1 0-12 0c0 7-3 8-3 8h18s-3-1-3-8"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/>')],
+    ["mine", "Your posts", TAB_ICON('<circle cx="12" cy="8" r="4"/><path d="M4.5 21c.8-4.2 3.3-6.3 7.5-6.3s6.7 2.1 7.5 6.3"/>')]
+  ];
+  // The top of a phone's screen: the game's day, the island, the signal, wireless and battery marks.
+  var STATUS_MARKS = '<svg width="16" height="10" viewBox="0 0 17 11" fill="currentColor"><rect x="0" y="7" width="3" height="4" rx="0.7"/><rect x="4.6" y="5" width="3" height="6" rx="0.7"/><rect x="9.2" y="2.6" width="3" height="8.4" rx="0.7"/><rect x="13.8" y="0" width="3" height="11" rx="0.7"/></svg>' +
+    '<svg width="14" height="10" viewBox="0 0 15 11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M1 4.2a9.2 9.2 0 0 1 13 0"/><path d="M3.4 6.7a5.8 5.8 0 0 1 8.2 0"/><circle cx="7.5" cy="9.3" r="0.9" fill="currentColor" stroke="none"/></svg>' +
+    '<svg width="22" height="10" viewBox="0 0 24 11" fill="none"><rect x="0.5" y="0.5" width="20" height="10" rx="2.6" stroke="currentColor" opacity="0.45"/><rect x="2" y="2" width="14" height="7" rx="1.4" fill="currentColor"/><rect x="21.6" y="3.4" width="1.6" height="4.2" rx="0.8" fill="currentColor" opacity="0.5"/></svg>';
   var RS_EMPTY = {
     all: "Nothing has been posted yet. The people who make the news post as time passes, and you can post first.",
     country: "Nobody from your country has posted yet.",
@@ -1033,20 +1044,22 @@
     var mentions = feed.filter(function (p) { return isMention(p, feed) && p.t >= Math.floor(T); }).length;
     var quoting = social.quoting ? findPost(feed, social.quoting) : null;
     var me = { author: "France", country: "France", kind: "player" };
-    var html = '<div class="rs-head"><div class="rs-mast">' + ROSTRA_MARK + '<div class="rs-name"><b>Rostra</b><small>What the world is saying</small></div><span class="rs-day">' + postDate(isoDate(dateAt(T, state.korea))) + "</span>" +
-      '<button type="button" class="rs-x" data-rs="close" aria-label="Close Rostra">' + CLOSE_ICON + "</button></div>" +
-      '<div class="rs-tabs" role="tablist">' + RS_TABS.map(function (tab) {
-        var on = social.tab === tab[0];
-        var count = tab[0] === "mentions" ? mentions : 0;
-        return '<button type="button" role="tab" aria-selected="' + on + '" class="dp-tab rs-tab' + (on ? " on" : "") + '" data-rs="tab" data-tab="' + tab[0] + '"><span>' + tab[1] + "</span>" + (count ? '<span class="rs-tcount">' + (count > 9 ? "9+" : count) + "</span>" : "") + "</button>";
-      }).join("") + "</div></div>";
+    var day = postDate(isoDate(dateAt(T, state.korea)));
+    var html = '<span class="rs-side one" aria-hidden="true"></span><span class="rs-side two" aria-hidden="true"></span><span class="rs-side three" aria-hidden="true"></span><div class="rs-screen">' +
+      '<div class="rs-status" aria-hidden="true"><span>' + day + '</span><i class="rs-island"></i><span class="rs-marks">' + STATUS_MARKS + "</span></div>" +
+      '<div class="rs-head">' + ROSTRA_MARK + '<div class="rs-name"><b>Rostra</b><small>What the world is saying</small></div><span class="rs-day">' + day + "</span>" +
+      '<button type="button" class="rs-x" data-rs="close" aria-label="Close Rostra">' + CLOSE_ICON + "</button></div>";
     html += '<div class="rs-scroll"><div class="rs-compose">' + avatar(me) + '<div class="rs-main"><div class="rs-as">Posting as <b>France</b></div>' +
-      '<textarea class="rs-input" data-field="rs-input" rows="3" aria-label="Your post" placeholder="What would you like to tell the world?"></textarea>' +
+      '<textarea class="rs-input" data-field="rs-input" rows="2" aria-label="Your post" placeholder="What would you like to tell the world?"></textarea>' +
       (quoting ? '<div class="rs-quoting">' + quotedPost(quoting) + '<button type="button" class="rs-unquote" data-rs="unquote" title="Remove the quote" aria-label="Remove the quote">' + CLOSE_ICON + "</button></div>" : "") +
       (social.posted ? '<div class="rs-note">Posted. The world answers with the next time skip.</div>' : "") +
       '<div class="rs-cfoot"><span class="rs-len"></span><button type="button" class="rs-send" data-rs="post">Post</button></div></div></div>';
     html += posts.length ? posts.map(function (p) { return postCard(p, feed, T); }).join("") : '<p class="rs-empty">' + RS_EMPTY[social.tab] + "</p>";
-    html += "</div>";
+    html += '</div><div class="rs-bar" role="tablist">' + RS_TABS.map(function (tab) {
+      var on = social.tab === tab[0];
+      var count = tab[0] === "mentions" ? mentions : 0;
+      return '<button type="button" role="tab" aria-selected="' + on + '" class="rs-tab' + (on ? " on" : "") + '" data-rs="tab" data-tab="' + tab[0] + '"><span class="rs-ticon">' + tab[2] + (count ? '<span class="rs-tcount">' + (count > 9 ? "9+" : count) + "</span>" : "") + "</span><span class=\"rs-tlabel\">" + tab[1] + "</span></button>";
+    }).join("") + '</div><div class="rs-home" aria-hidden="true"><i></i></div></div>';
     if (!changed("social", html)) return;
     var focused = document.activeElement && el.social.contains(document.activeElement) && document.activeElement.getAttribute("data-field");
     var caret = focused ? document.activeElement.selectionStart : 0;
