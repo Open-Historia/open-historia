@@ -114,7 +114,7 @@ test("an old save's world.politics is folded into its Political World once, and 
 test("a compiled reading of one polity fills in its Political World record, or makes one", () => {
   const made = foldLandscapeIntoActor(null, { government: "Kingdom", headOfState: "King Tomislav III", parties: [party()] }, { polityKey: "Illyria" });
   assert.equal(made.polityKey, "Illyria");
-  assert.equal(made.government.headOfState, "King Tomislav III");
+  assert.deepEqual(made.government.headOfState, { name: "Tomislav III", title: "King" });
   assert.deepEqual(made.government.rulingParties, ["Croatian Democratic Union"]);
   assert.equal(foldLandscapeIntoActor(null, null), null, "nothing read, nothing made");
 });

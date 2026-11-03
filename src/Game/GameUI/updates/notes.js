@@ -84,6 +84,7 @@ const NEW_UPDATES = [
         title: "Politics, advisors and the air",
         items: [
           "Politics is one record: each country's Political World now carries what the Politics card had, native party names, ideologies, roles, seats, the legislature and the next election, and turns keep it up.",
+          "A country's leader is one person everywhere: Rostra and the AI name whoever holds the office now, as the country panel does, and a save's latest Politics reading brings its government with it.",
           "Your advisor knows your wars as your general staff would: every front's line, strength and latest fighting, your standing orders, how weary each side is and what is on the table for peace.",
           "Deploy Aircraft works with the air arm that flies over your fronts when you have no air unit of your own on the map.",
         ],

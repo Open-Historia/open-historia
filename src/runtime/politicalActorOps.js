@@ -4,6 +4,7 @@ import {
   ensurePoliticalProfile,
   getPoliticalProfile,
   getPoliticalProfileKey,
+  leaderAfterOfficeChange,
   normalizePoliticalActorRecord,
   normalizePoliticalBehavioralDisposition,
   normalizePoliticalActors,
@@ -550,6 +551,8 @@ export const applyPoliticalActorOperation = (world, operation) => {
     }
     const current = actor.government && typeof actor.government === "object" ? actor.government : {};
     actor.government = { ...current, ...patch };
+    // (A new head of government or of state in the patch takes the record's leader with it, where that was who held it.)
+    if (actor.leader) actor.leader = leaderAfterOfficeChange(actor.leader, current, actor.government);
 
     // A patch that names only one side of the government keeps the other side
     // as it was, so updating the coalition partners never demotes the rulers.
@@ -589,11 +592,10 @@ export const applyPoliticalActorOperation = (world, operation) => {
     if (leaderName && COLLECTIVE_LEADER_PLACEHOLDER_RE.test(leaderName)) {
       return result({ op, error: `replace-leader leader "${leaderName}" is an administration/cabinet placeholder, not an officeholder.` });
     }
-    actor.government = {
-      ...(actor.government && typeof actor.government === "object" ? actor.government : {}),
-      [office]: cloneValue(leader),
-    };
+    const before = actor.government && typeof actor.government === "object" ? actor.government : {};
+    actor.government = { ...before, [office]: cloneValue(leader) };
     if (office === "headOfState") actor.leader = cloneValue(leader);
+    else if (actor.leader) actor.leader = leaderAfterOfficeChange(actor.leader, before, actor.government);
     return result({ applied: true, op, actor: commitActor(world, key, actor) });
   }
 

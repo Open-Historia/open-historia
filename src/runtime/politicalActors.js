@@ -698,6 +698,57 @@ const sameOfficeholder = (left, right) => {
     return Boolean(leftKey && rightKey && leftKey === rightKey);
 };
 
+// The office a leader's title names: a head of government's (a prime minister,
+// a chancellor) or a head of state's (a president, a monarch). A title naming
+// neither (a supreme leader, a general secretary, a party's chairman) is an
+// office of its own.
+const OFFICE_TITLE_WORDS = Object.freeze({
+    headOfGovernment: /\b(prime minister|premier|chancellor|first minister|chief minister|taoiseach|head of government|president of the government|president of the council of ministers)\b/i,
+    headOfState: /\b(president|king|queen|monarch|emperor|empress|sultan|emir|shah|tsar|czar|kaiser|grand duke|grand duchess|head of state)\b/i,
+});
+const titleOf = (officeholder) => (officeholder && typeof officeholder === "object" ? clean(officeholder.title) : "");
+const withTitle = (holder, title) => {
+    if (!title) return holder;
+    if (typeof holder === "string") return { name: holder, title };
+    return titleOf(holder) ? holder : { ...holder, title };
+};
+
+// A polity's leader as its offices have it. A leader who holds neither office
+// but carries the title of one is its former holder, left behind when a turn
+// gave the office to someone else and said nothing of the leader: "head of
+// state (prime minister) showing 3 different people" (a player's report,
+// 2026-11-03), the generated leader Prime Minister Anthony Albanese still
+// standing over the head of government a turn had made Peter Dutton, and
+// Rostra posting as him. The leader follows the office, the title kept where
+// its new holder has none. A leader of an office of their own stands.
+export const leaderOfOffices = (leader, government) => {
+    const title = titleOf(leader);
+    if (!title) return leader;
+    const holders = [
+        ["headOfGovernment", normalizeOfficeholder(government?.headOfGovernment)],
+        ["headOfState", normalizeOfficeholder(government?.headOfState)],
+    ].filter(([, holder]) => holder);
+    if (holders.some(([, holder]) => sameOfficeholder(holder, leader))) return leader;
+    for (const [office, holder] of holders) {
+        const theirs = titleOf(holder).toLocaleLowerCase() === title.toLocaleLowerCase() || OFFICE_TITLE_WORDS[office].test(title);
+        if (theirs) return withTitle(holder, title);
+    }
+    return leader;
+};
+
+// The leader once an op has given an office to someone else (politicalActorOps.js):
+// whoever held it follows it, titled or not, with the title they had where the
+// new holder has none.
+export const leaderAfterOfficeChange = (leader, before, after) => {
+    for (const office of ["headOfGovernment", "headOfState"]) {
+        const was = normalizeOfficeholder(before?.[office]);
+        const now = normalizeOfficeholder(after?.[office]);
+        if (!was || !now || sameOfficeholder(was, now) || !sameOfficeholder(leader, was)) continue;
+        return withTitle(now, titleOf(leader));
+    }
+    return leader;
+};
+
 // Formal office and operative political authority are not interchangeable.
 // This native resolver deliberately uses regime structure rather than country
 // names: parliamentary executives normally center the head of government;
@@ -884,7 +935,7 @@ export const normalizePoliticalActorRecord = (value, fallbackPolityKey = "") => 
         powerBlocs,
     });
 
-    const leader = normalizeOfficeholder(value.leader || government.headOfState);
+    const leader = leaderOfOffices(normalizeOfficeholder(value.leader || government.headOfState), government);
     if (leader) out.leader = leader;
     else delete out.leader;
 
