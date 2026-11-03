@@ -5,22 +5,24 @@
 // colours, every one of them blending into the next across the map and over
 // the days.
 //
-// One picture over the whole map, a canvas a few hundred pixels a side that
-// the map stretches smoothly over the world: worked out again only when the
-// date or the zones change, and the map told to read it again then. On the
-// globe it reaches to the poles (a taller canvas, the same pixels). It is
+// One picture of the whole map, a canvas a few hundred pixels a side, worked
+// out again only when the date or the zones change; the map reads it as tiles
+// cut from it (seasonTintTiles.js), draped on the terrain like the basemap. On
+// the globe it reaches to the poles (a taller canvas, the same pixels). It is
 // shown while the player's Seasons and weather switch is on (Settings → Map)
 // and the scenario fights its wars with seasons and weather
 // (runtime/warSettings.js).
 
-import React, { useEffect, useMemo } from "react";
+import React, { useMemo } from "react";
 import { Layer, Source, useMap } from "react-map-gl/maplibre";
 import { isConstrainedDevice } from "../../runtime/deviceProfile.js";
 import { MAP_SETTING_KEYS, useMapSettingDefaultOn } from "../../runtime/mapSettings.js";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
 import { warSettingsOf } from "../../runtime/warSettings.js";
 import { climateZonesOf } from "../../runtime/worldGeographyDefaults.js";
-import { GLOBE_TOP_LAT, MERCATOR_TOP_LAT, seasonTintCorners, seasonTintField, seasonTintHeight } from "./seasonTint.js";
+import { GLOBE_TOP_LAT, MERCATOR_TOP_LAT, seasonTintField, seasonTintHeight } from "./seasonTint.js";
+import { SEASON_TINT_PROTOCOL, SEASON_TINT_TILE_SIZE, setSeasonTintPicture } from "./seasonTintTiles.js";
+import { ensureSeasonTintProtocol } from "./mapLibreSetup.js";
 import { useLayerOrder } from "./useLayerOrder.js";
 
 const SOURCE = "seasons-tint-source";
@@ -33,6 +35,10 @@ const selectDate = (game) => String(game?.gameDate || game?.startDate || "");
 // A tint, not a colour: a little stronger from far off, where it is the season
 // that is being looked at, than close in, where the ground is.
 const TINT_OPACITY = ["interpolate", ["linear"], ["zoom"], 2, 0.18, 6, 0.14, 10, 0.1];
+// The picture is a blend a few hundred pixels round the world: past this zoom the map enlarges its tiles.
+const TINT_MAX_ZOOM = 5;
+
+ensureSeasonTintProtocol();
 
 const SeasonLayers = ({ isGlobe = false }) => {
   const { current: mapRef } = useMap();
@@ -47,8 +53,6 @@ const SeasonLayers = ({ isGlobe = false }) => {
   const width = useMemo(() => (isConstrainedDevice() ? 256 : 512), []);
   const topLat = isGlobe ? GLOBE_TOP_LAT : MERCATOR_TOP_LAT;
   const height = seasonTintHeight(width, topLat);
-  const corners = useMemo(() => seasonTintCorners(topLat), [topLat]);
-  // (A source keeps the canvas it was made with: a canvas of another size is another source.)
   const canvas = useMemo(() => {
     if (typeof document === "undefined") return null;
     const made = document.createElement("canvas");
@@ -66,36 +70,22 @@ const SeasonLayers = ({ isGlobe = false }) => {
     const pixels = context.createImageData(width, height);
     pixels.data.set(field.data);
     context.putImageData(pixels, 0, 0);
-    return { date, zones, canvas };
+    // (Each picture is tiles of its own: a new number in their address.)
+    return { number: setSeasonTintPicture(canvas, topLat) };
   }, [shown, canvas, zones, date, width, height, topLat]);
-
-  // The map reads a canvas again only while it is told the canvas is playing:
-  // told so after a redraw, and told to stop once it has had two frames to
-  // take the picture up (as FrontLayers.jsx does its battlefields' pictures).
-  useEffect(() => {
-    if (!map || !drawn) return undefined;
-    let frame = 0;
-    try {
-      const source = map.style ? map.getSource(SOURCE) : null;
-      if (!source?.play) return undefined;
-      source.play();
-      frame = requestAnimationFrame(() => {
-        frame = requestAnimationFrame(() => {
-          try {
-            map.getSource(SOURCE)?.pause?.();
-          } catch { /* the map is gone */ }
-        });
-      });
-      map.triggerRepaint();
-    } catch { /* the map is between styles: the source reads the canvas when it is made again */ }
-    return () => cancelAnimationFrame(frame);
-  }, [map, drawn]);
 
   useLayerOrder(map, LAYERS, Boolean(drawn));
 
   if (!drawn) return null;
   return (
-    <Source key={`${width}x${height}`} id={SOURCE} type="canvas" canvas={canvas} coordinates={corners} animate={false}>
+    <Source
+      key={drawn.number}
+      id={SOURCE}
+      type="raster"
+      tiles={[`${SEASON_TINT_PROTOCOL}://${drawn.number}/{z}/{x}/{y}`]}
+      tileSize={SEASON_TINT_TILE_SIZE}
+      maxzoom={TINT_MAX_ZOOM}
+    >
       <Layer
         id="seasons-tint"
         type="raster"

@@ -9,6 +9,7 @@
 import mapLibreGl from "maplibre-gl";
 import { basemapTileLoader, pmtilesProtocol } from "../../runtime/assets.js";
 import { RELIEF_PROTOCOL, createReliefTileLoader } from "./scenarioTerrain.js";
+import { SEASON_TINT_PROTOCOL, seasonTintTileLoader } from "./seasonTintTiles.js";
 import { isConstrainedDevice, mapRuntimeLimits } from "../../runtime/deviceProfile.js";
 
 const { addProtocol, setMaxParallelImageRequests, setWorkerCount } = mapLibreGl;
@@ -47,5 +48,14 @@ export const ensureBasemapProtocol = () => {
   if (!basemapRegistered) {
     addProtocol("ohbase", basemapTileLoader);
     basemapRegistered = true;
+  }
+};
+
+// ohtint:// URLs: the season's tint, cut into tiles (Map/seasonTintTiles.js).
+let seasonTintRegistered = false;
+export const ensureSeasonTintProtocol = () => {
+  if (!seasonTintRegistered) {
+    addProtocol(SEASON_TINT_PROTOCOL, seasonTintTileLoader);
+    seasonTintRegistered = true;
   }
 };

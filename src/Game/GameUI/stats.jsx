@@ -12,7 +12,8 @@ import { showEventOnTimeline, warTimelineEventId, warTimelineEventOpensWar } fro
 import { isPolityLandless, readGameData, readWorldState, readWorldStateView, writeWorldState } from "../../runtime/gameState.js";
 import { useLibraryState } from "../../runtime/library.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
-import { resolvePolityIdentity } from "../../runtime/polityIdentity.js";
+import { buildPolityIdentityIndex, resolvePolityIdentity } from "../../runtime/polityIdentity.js";
+import { resolvePolityFlag } from "../../runtime/polityFlags.js";
 import { buildHistoricalTrackingCandidateRows, buildHistoricalTrackingIndex, filterHistoricalTrackingCandidateRows, historySamplesInRange } from "./statsHistoricalTracking.js";
 import { buildPlayerPoliticalKnowledgeView, buildPublicPoliticalView } from "../../runtime/politicalKnowledge.js";
 import { resolveCountryTags } from "../../runtime/countryTags.js";
@@ -2026,6 +2027,8 @@ const RankingSection = ({ world, definition, index, playerCode, targetCountry, o
         [world, countries, metrics],
     );
     const metric = metrics.find((entry) => entry.key === metricKey) ?? opening;
+    // (One index of who is who for every row's flag: building it reads every region's owner.)
+    const flagIdentityIndex = useMemo(() => (world ? buildPolityIdentityIndex(world) : null), [world]);
     const ranking = useMemo(
         () => (metric ? buildRanking({ world: world ?? {}, countries, metric, catalog: getPrimedScenarioRegionCatalog() ?? [] }) : null),
         [world, countries, metric],
@@ -2064,7 +2067,8 @@ const RankingSection = ({ world, definition, index, playerCode, targetCountry, o
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: "0.3rem", marginTop: "0.75rem" }}>
                 {shown.map((row) => {
-                    const flagUrl = flags?.[row.key] || world?.polityOverrides?.[row.key]?.flag || flagImageUrlFromGid(row.key);
+                    // (As every other flag in the game is found: by the country's identity, its name or its code.)
+                    const flagUrl = resolvePolityFlag({ polity: { name: row.label, code: row.key }, world: world || {}, flags: flags || {}, identityIndex: flagIdentityIndex }).imageUrl;
                     const mine = Boolean(playerCode) && row.key === playerCode;
                     const open = row.key === targetCountry;
                     return (

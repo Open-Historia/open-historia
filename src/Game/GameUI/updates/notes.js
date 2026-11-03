@@ -53,6 +53,23 @@ import { PAST_UPDATES } from "./notesPast.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // "antartica has this strange bug where there are triangles cut out of the climate zones" (the owner,
+    // 2026-11-03): the season's tint is map tiles now (Map/seasonTintTiles.js).
+    id: "2026-11-season-tint-tiles",
+    kind: "minor",
+    date: "2026-11-03",
+    channel: "beta",
+    banners: [
+      {
+        title: "Seasons drawn whole",
+        items: [
+          "The colours of the seasons no longer have triangles cut out of them near Antarctica when 3D terrain is on.",
+          "The country ranking shows every country's flag, including countries known by their official names.",
+        ],
+      },
+    ],
+  },
+  {
     // Forces built up at home round the cities and moved in the War Room; troops march to the front from inside their
     // country; call-ups sized by the country (the owner, 2026-11-02: runtime/fronts/home.js, march.js).
     id: "2026-11-forces-at-home",
