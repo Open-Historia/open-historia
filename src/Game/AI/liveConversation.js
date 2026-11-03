@@ -1,7 +1,7 @@
 /*! Open Historia — which conversation a reply belongs to © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-// main.jsx holds ONE module-level history for the advisor and one for whichever
-// diplomatic thread is open, and replaces it whenever a thread is opened, the
-// advisor is cleared or a campaign's transcript is loaded. A reply is awaited
+// main.jsx holds a separate history for every Advisor recipient and one for
+// whichever diplomatic thread is open. Histories are replaced only within the
+// affected recipient/thread when it is opened, cleared or loaded. A reply is awaited
 // for seconds, sometimes minutes, and the player can do any of those meanwhile:
 // press Back on France while France is typing and open Germany, and France's
 // reply used to be pushed onto Germany's history and its memory summary written

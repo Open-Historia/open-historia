@@ -56,7 +56,7 @@ const ALLOWED = {
   },
   // alpha: an order whose unit could not be saved is taken back out of the queue.
   "Game/Map/unitsController.js": { "writeWorldState": 3, "writeActionsState": 2 },
-  "Game/GameUI/advisor.jsx": { "writeActionsState": 1, "writeWorldState": 1, "writeJson(advisor)": 1 },
+  "Game/GameUI/advisor.jsx": { "writeActionsState": 1, "writeWorldState": 1 },
   "Game/GameUI/chat.jsx": { "writeChatsState": 1, "writeWorldState": 1 },
   "Game/GameUI/stats.jsx": { "writeWorldState": 3 },
   "Game/GameUI/actions.jsx": { "writeActionsState": 1, "writeWorldState": 1 },

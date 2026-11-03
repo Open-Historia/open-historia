@@ -28,6 +28,19 @@ test("a reply without the envelope parts is returned whole, and a multi-line mem
   assert.equal(folded.memorySummary, "first line second line third");
 });
 
+test("a metadata-only diplomatic response is not a visible leader reply", () => {
+  for (const raw of [
+    "",
+    "  \n ",
+    "DIPLOMATIC_MEMORY: A prior commitment remains in effect.",
+    "REACTION:🤨",
+    "PEACE: accepted",
+    "DIPLOMATIC_MEMORY: No new decisions.\nREACTION:🤨",
+  ]) {
+    assert.throws(() => parseDiplomaticEnvelope(raw), /visible diplomatic reply/i);
+  }
+});
+
 test("the newest stored memory wins and is dated by its message", () => {
   const memory = latestSavedDiplomaticMemory([
     { role: "leader", text: "a", time: "1930-01-01", memorySummary: "old" },

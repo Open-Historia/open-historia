@@ -58,6 +58,7 @@ const officeholderName = (value) => {
 };
 
 const percentText = (value) => {
+  if (value === null || value === undefined || value === "") return "";
   const number = Number(value);
   return Number.isFinite(number) ? String(number) : "";
 };
@@ -70,8 +71,16 @@ const partyToEditor = (party, index) => {
     id: sourceId,
     name: clean(party?.name),
     shortName: clean(party?.shortName),
+    nameNative: clean(party?.nameNative),
+    shortNameNative: clean(party?.shortNameNative),
     leader: officeholderName(party?.leader),
     ideology: clean(party?.ideology),
+    ideologyFamily: clean(party?.ideologyFamily),
+    subideology: clean(party?.subideology),
+    role: party?.ruling === true ? "governing" : party?.coalition === true ? "coalition" : clean(party?.role) || "opposition",
+    seats: party?.seats == null || party?.seats === "" ? "" : String(party.seats),
+    founded: clean(party?.founded),
+    color: clean(party?.color),
     publicDescription: clean(party?.publicDescription),
     publicPrioritiesText: listToEditorText(party?.publicPriorities?.length ? party.publicPriorities : party?.goals),
     priorityField: Array.isArray(party?.publicPriorities) && party.publicPriorities.length ? "publicPriorities" : (Array.isArray(party?.goals) && party.goals.length ? "goals" : "publicPriorities"),
@@ -115,6 +124,9 @@ export const politicalActorToEditorState = (actor) => {
     governmentIdeology: clean(government.ideology),
     governmentStatus: clean(government.status),
     coalitionName: clean(government.coalitionName),
+    legislature: clean(government.legislature),
+    legislatureSeats: government.legislatureSeats == null || government.legislatureSeats === "" ? "" : String(government.legislatureSeats),
+    nextElection: clean(government.nextElection),
     headOfState: officeholderName(government.headOfState),
     headOfGovernment: officeholderName(government.headOfGovernment),
     politicalLeader: officeholderName(source.leader),
@@ -148,6 +160,60 @@ const optionalNumber = (value, { min = 0, max = 100 } = {}) => {
   return Math.max(min, Math.min(max, Math.round(number * 10) / 10));
 };
 
+const optionalSeatCount = (value, label) => {
+  if (value === null || value === undefined || String(value).trim() === "") return null;
+  const number = Number(value);
+  if (!Number.isSafeInteger(number) || number < 0 || number > 100000) {
+    throw new Error(`${label} must be a whole number from 0 to 100,000.`);
+  }
+  return number;
+};
+
+const optionalSupportShare = (value, label) => {
+  if (value === null || value === undefined || String(value).trim() === "") return null;
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < 0 || number > 100) {
+    throw new Error(`${label} must be between 0 and 100 percent.`);
+  }
+  return Math.round(number * 10) / 10;
+};
+
+// Validates author-entered electoral data without guessing missing parties,
+// distributing seats, or rewriting a political result to make it add up.
+export const politicalEditorComposition = (editor) => {
+  const totalSeats = optionalSeatCount(editor?.legislatureSeats, "Legislature seats");
+  const parties = (Array.isArray(editor?.parties) ? editor.parties : []).filter((party) => clean(party?.name));
+  let assignedSeats = 0;
+  let mappedSupport = 0;
+  const seenIds = new Set();
+
+  for (const party of parties) {
+    const id = clean(party.id);
+    if (!id) throw new Error(`Political entity "${clean(party.name)}" needs a stable party ID.`);
+    const idKey = id.toLocaleLowerCase();
+    if (seenIds.has(idKey)) throw new Error(`Duplicate party ID "${id}".`);
+    seenIds.add(idKey);
+    assignedSeats += optionalSeatCount(party.seats, `Seats held by ${clean(party.name)}`) ?? 0;
+    mappedSupport += optionalSupportShare(party.supportPercent, `Support for ${clean(party.name)}`) ?? 0;
+  }
+
+  if (totalSeats !== null && assignedSeats > totalSeats) {
+    throw new Error(`Parties hold ${assignedSeats} seats, exceeding the legislature's ${totalSeats} seats.`);
+  }
+  const representation = clean(editor?.politicalRepresentation);
+  if ((!representation || representation === "electoral") && mappedSupport > 100.000001) {
+    throw new Error(`Named party support totals ${mappedSupport.toFixed(1)}%, exceeding 100%.`);
+  }
+
+  return {
+    totalSeats,
+    assignedSeats,
+    unlistedSeats: totalSeats === null ? null : totalSeats - assignedSeats,
+    mappedSupport: Math.round(mappedSupport * 10) / 10,
+    otherSupport: Math.max(0, Math.round((100 - mappedSupport) * 10) / 10),
+  };
+};
+
 const replaceText = (target, key, value) => {
   const text = clean(value);
   if (text) target[key] = text;
@@ -172,9 +238,25 @@ const applyPartyEditor = (draft, base = {}) => {
   replaceText(next, "id", draft.id);
   replaceText(next, "name", draft.name);
   replaceText(next, "shortName", draft.shortName);
+  if (Object.prototype.hasOwnProperty.call(draft, "nameNative")) replaceText(next, "nameNative", draft.nameNative);
+  if (Object.prototype.hasOwnProperty.call(draft, "shortNameNative")) replaceText(next, "shortNameNative", draft.shortNameNative);
   const leader = preserveOfficeholder(base?.leader, draft.leader);
   if (leader) next.leader = leader; else delete next.leader;
   replaceText(next, "ideology", draft.ideology);
+  if (Object.prototype.hasOwnProperty.call(draft, "ideologyFamily")) replaceText(next, "ideologyFamily", draft.ideologyFamily);
+  if (Object.prototype.hasOwnProperty.call(draft, "subideology")) replaceText(next, "subideology", draft.subideology);
+  if (Object.prototype.hasOwnProperty.call(draft, "role")) {
+    const role = draft.ruling === true ? "governing" : draft.coalition === true ? "coalition"
+      : (draft.role === "governing" || draft.role === "coalition" ? "opposition" : draft.role);
+    replaceText(next, "role", role);
+  }
+  if (Object.prototype.hasOwnProperty.call(draft, "seats")) {
+    const seats = optionalSeatCount(draft.seats, `Seats held by ${clean(draft.name)}`);
+    if (seats === null) delete next.seats;
+    else next.seats = seats;
+  }
+  if (Object.prototype.hasOwnProperty.call(draft, "founded")) replaceText(next, "founded", draft.founded);
+  if (Object.prototype.hasOwnProperty.call(draft, "color")) replaceText(next, "color", draft.color);
   replaceText(next, "publicDescription", draft.publicDescription);
   const priorityField = draft.priorityField === "goals" ? "goals" : "publicPriorities";
   replaceList(next, priorityField, draft.publicPrioritiesText, 16);
@@ -230,6 +312,7 @@ export const applyPoliticalEditorStateToWorld = (world, polityKey, editor) => {
   if (!world || typeof world !== "object") throw new Error("World state is required.");
   const key = clean(polityKey);
   if (!key) throw new Error("Political World edit requires a polity key.");
+  politicalEditorComposition(editor);
 
   const existingActor = getPoliticalProfile(world, key);
   const existingKey = getPoliticalProfileKey(world, key) || key;
@@ -237,20 +320,24 @@ export const applyPoliticalEditorStateToWorld = (world, polityKey, editor) => {
   const existingParties = new Map((Array.isArray(existing.parties) ? existing.parties : []).map((party) => [clean(party?.id), party]));
   const existingBlocs = new Map((Array.isArray(existing.powerBlocs) ? existing.powerBlocs : []).map((bloc) => [clean(bloc?.id), bloc]));
 
-  const parties = (Array.isArray(editor?.parties) ? editor.parties : [])
-    .map((draft) => applyPartyEditor(draft, existingParties.get(clean(draft?._sourceId || draft?.id))))
-    .filter((party) => clean(party?.name));
+  // Keep the draft with its normalized party while filtering blank rows.
+  // Filtering first and then indexing editor.parties assigns coalition/ruling
+  // flags to the wrong party whenever an earlier empty row is discarded.
+  const partyRows = (Array.isArray(editor?.parties) ? editor.parties : [])
+    .map((draft) => ({ draft, party: applyPartyEditor(draft, existingParties.get(clean(draft?._sourceId || draft?.id))) }))
+    .filter(({ party }) => clean(party?.name));
+  const parties = partyRows.map(({ party }) => party);
   const powerBlocs = (Array.isArray(editor?.powerBlocs) ? editor.powerBlocs : [])
     .map((draft) => applyBlocEditor(draft, existingBlocs.get(clean(draft?._sourceId || draft?.id))))
     .filter((bloc) => clean(bloc?.name));
 
-  const rulingPartyIds = parties
-    .filter((_, index) => editor.parties?.[index]?.ruling === true)
-    .map((party) => clean(party.id))
+  const rulingPartyIds = partyRows
+    .filter(({ draft }) => draft?.ruling === true)
+    .map(({ party }) => clean(party.id))
     .filter(Boolean);
-  const coalitionPartyIds = parties
-    .filter((_, index) => editor.parties?.[index]?.coalition === true && editor.parties?.[index]?.ruling !== true)
-    .map((party) => clean(party.id))
+  const coalitionPartyIds = partyRows
+    .filter(({ draft }) => draft?.coalition === true && draft?.ruling !== true)
+    .map(({ party }) => clean(party.id))
     .filter(Boolean);
 
   const government = clone(existing.government) || {};
@@ -258,6 +345,13 @@ export const applyPoliticalEditorStateToWorld = (world, polityKey, editor) => {
   replaceText(government, "ideology", editor?.governmentIdeology);
   replaceText(government, "status", editor?.governmentStatus);
   replaceText(government, "coalitionName", editor?.coalitionName);
+  if (Object.prototype.hasOwnProperty.call(editor || {}, "legislature")) replaceText(government, "legislature", editor.legislature);
+  if (Object.prototype.hasOwnProperty.call(editor || {}, "nextElection")) replaceText(government, "nextElection", editor.nextElection);
+  if (Object.prototype.hasOwnProperty.call(editor || {}, "legislatureSeats")) {
+    const seats = optionalSeatCount(editor.legislatureSeats, "Legislature seats");
+    if (seats === null || seats === 0) delete government.legislatureSeats;
+    else government.legislatureSeats = seats;
+  }
   const hos = preserveOfficeholder(existing?.government?.headOfState, editor?.headOfState);
   const hog = preserveOfficeholder(existing?.government?.headOfGovernment, editor?.headOfGovernment);
   if (hos) government.headOfState = hos; else delete government.headOfState;

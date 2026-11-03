@@ -24,6 +24,21 @@ test("Scenario Political World authoring writes only the canonical politicalActo
   assert.doesNotMatch(source, /politicsStats/);
 });
 
+test("Scenario Political World authoring exposes full legislature and party detail", () => {
+  const source = read("./PoliticalWorldAuthoringPanel.jsx");
+  assert.match(source, /renderInput\("Legislature", "legislature"\)/);
+  assert.match(source, /renderInput\("Legislature seats", "legislatureSeats"/);
+  assert.match(source, /renderInput\("Next election", "nextElection"\)/);
+  assert.match(source, /Native name/);
+  assert.match(source, /Native abbreviation/);
+  assert.match(source, /Ideology family/);
+  assert.match(source, /Subideology/);
+  assert.match(source, /Party role/);
+  assert.match(source, /Seats held/);
+  assert.match(source, /Founded/);
+  assert.match(source, /Party colour/);
+});
+
 test("Scenario Political World authoring uses the canonical trait registry and preserves unset values", () => {
   const source = read("./PoliticalWorldAuthoringPanel.jsx");
 

@@ -239,7 +239,23 @@ Gameplay writes flow: **AI turn / cheat / UI action → `gameState.js` write →
 | **Web saves** | No accounts and no sync: games and scenarios stay in this browser (IndexedDB) and move with game export/import (web build only) | [Web build](web-build.md) |
 | **i18n** | shipped language packs translate the interface (22 languages); the AI translates only content, once, into the server's pack; the prompts' guidance ships translated | [Languages & Translation](i18n.md) |
 
+### Scenario Political World authoring
+
+The Scenario Editor's **Politics → Manage Political World** edits the canonical `world.politicalActors.byPolity` records through `src/Game/GameUI/countryEditorPolitical.js`. Government details include the legislature, seat capacity and next election; party details include stable IDs, parliamentary seats, support, coalition/governing role, native names, ideology and founding information. Government membership is recorded using canonical party IDs rather than independent role flags. Blank party-seat values mean unknown, while `0` means explicitly no seats. The editor rejects duplicate party IDs, excessive assigned seats and impossible electoral support totals rather than inventing corrective data.
+
+The in-game **Cheats → Country Editor** uses that same `countryEditorPolitical.js` bridge against the live `world.politicalActors` record, exposing the legislature and party fields without creating a second Stats-side ledger. Its save path applies the same seat, support and party-ID checks before writing the world, and records a GM edit note.
+
+The on-demand AI **Compile government and parties** workflow is a *candidate update*, not a historical source of truth: `src/Game/AI/gameplay.js` validates compiled totals before folding them into Political World. This protects basic arithmetic integrity but does not establish that every AI-authored party, coalition or election claim matches scenario canon. Use the manual authoring controls to review and correct such results.
+
 ---
+
+### Advisor conversations and recipient identity
+
+The **Advisor** remains a single chief-advisor conversation for legacy saves and for players who never add a contact. The existing `storage/advisor.json` stays an array so desktop/web imports, exports, restore points and native document notices remain compatible. Legacy conversation rows without `threadId` are the `chief` thread. Opt-in recipients are stored as `role: "advisor-contact"` records with stable IDs, bounded names/titles/personality text and optional Political World officeholder bindings; their messages carry that contact's `threadId`. Retiring a contact marks the profile archived without deleting the transcript.
+
+`src/runtime/advisorThreads.js` owns the storage contract and preserves unrelated recipients and native document notices when a conversation is saved via `mutateAdvisorState`'s canonical write queue. `src/Game/AI/advisorSessions.js` keeps separate conversation histories, `ADVISOR_MEMORY` summaries and in-flight generation guards for each thread. The UI in `AdvisorRecipients.jsx` exposes manual contact creation, per-recipient identity editing, switching, archiving and restoration. Available Political World bindings currently include the player's head of government and head of state. A binding pins the *person occupying that office at the time*; an officeholder replacement must never inherit their predecessor's transcript. Manual contacts are conversation identities and **do not** by themselves create canonical ministerial appointments.
+
+Only the chief Advisor retains the pre-existing ability to apply proposed Action and Project operations directly from conversation replies. Additional contacts are advisory; recipient personality is not a source of sovereign authority. Proactive messaging, deadlines and official-specific delegated powers are future work and not implied by the existence of a contact.
 
 ### Quick "where do I look?" index
 

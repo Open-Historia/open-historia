@@ -8,6 +8,7 @@ import test from "node:test";
 import {
   IDEOLOGIES,
   MAX_PARTIES,
+  assertPoliticalLandscapeConsistency,
   describeElectionsDue,
   electionDue,
   findIdeology,
@@ -74,6 +75,34 @@ test("parties are cleaned, coloured by ideology when they carry no colour, and s
   assert.equal(entry.parties[3].ideology, "", "an ideology outside the ten is left unclassified");
   assert.equal(entry.kind, "parties");
   assert.equal(entry.legislatureSeats, 151);
+});
+
+test("AI political compilation rejects impossible seat and support allocations before they become canon", () => {
+  const read = (parties, extras = {}) => normalizePoliticalLandscape({
+    government: "Parliamentary Republic",
+    legislatureSeats: 120,
+    kind: "parties",
+    parties,
+    ...extras,
+  });
+  const valid = read([
+    party({ nameEn: "A", nameNative: "A", seats: 60, support: 50 }),
+    party({ nameEn: "B", nameNative: "B", seats: 40, support: 30 }),
+  ]);
+  assert.equal(assertPoliticalLandscapeConsistency(valid), valid);
+  assert.throws(() => assertPoliticalLandscapeConsistency(read([
+    party({ nameEn: "A", seats: 80, support: 30 }),
+    party({ nameEn: "B", seats: 60, support: 30 }),
+  ])), /exceed.*120 seats/i);
+  assert.throws(() => assertPoliticalLandscapeConsistency(read([
+    party({ nameEn: "A", seats: 60, support: 70 }),
+    party({ nameEn: "B", seats: 40, support: 45 }),
+  ])), /support.*exceed.*100/i);
+  // Influence shares of overlapping factions are not exclusive vote percentages.
+  assert.doesNotThrow(() => assertPoliticalLandscapeConsistency(read([
+    party({ nameEn: "A", seats: 0, support: 70 }),
+    party({ nameEn: "B", seats: 0, support: 50 }),
+  ], { kind: "factions", legislatureSeats: 0 })));
 });
 
 test("empty readings are dropped, and the party count is capped", () => {

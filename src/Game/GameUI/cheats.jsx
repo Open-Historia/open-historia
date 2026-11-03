@@ -71,7 +71,8 @@ import { changedEditorFields, countryStatPatchFromForm, editorStateChanged } fro
 import { collectImpactOps, countImpactOps, otherImpactFamilies } from "./gmPreviewOps.js";
 // The feature types, with the glyph the map draws for each (mapFeatureKinds.js).
 import { GM_MAP_FEATURE_KINDS as MAP_FEATURE_KINDS } from "./mapFeatureKinds.js";
-import { applyPoliticalEditorStateToWorld, politicalActorToEditorState, politicalDebugSnapshotFromWorld, politicalEditorStateFromWorld } from "./countryEditorPolitical.js";
+import { applyPoliticalEditorStateToWorld, politicalActorToEditorState, politicalDebugSnapshotFromWorld, politicalEditorStateFromWorld, politicalEditorComposition } from "./countryEditorPolitical.js";
+import { IDEOLOGIES, PARTY_ROLE_LABELS } from "../../runtime/politics.js";
 import {
     REMINDERS_LIMIT,
     REMINDER_MAX_CHARS,
@@ -795,7 +796,11 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
     });
     const changeParty = (index, key, value) => setPoliticsForm((current) => ({
         ...current,
-        parties: (current.parties || []).map((party, partyIndex) => (partyIndex === index ? { ...party, [key]: value } : party)),
+        parties: (current.parties || []).map((party, partyIndex) => {
+            if (partyIndex !== index) return party;
+            if (key === "role") return { ...party, role: value, ruling: value === "governing", coalition: value === "coalition" };
+            return { ...party, [key]: value };
+        }),
     }));
     const changeBloc = (index, key, value) => setPoliticsForm((current) => ({
         ...current,
@@ -804,7 +809,9 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
     const addParty = () => setPoliticsForm((current) => ({
         ...current,
         parties: [...(current.parties || []), {
-            id: `custom-party-${Date.now().toString(36)}`, name: "New political entity", shortName: "", leader: "", ideology: "", publicDescription: "",
+            _editorKey: `custom-party-row:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 7)}`,
+            id: `custom-party-${Date.now().toString(36)}`, name: "New political entity", shortName: "", nameNative: "", shortNameNative: "",
+            leader: "", ideology: "", ideologyFamily: "", subideology: "", role: "opposition", seats: "", founded: "", color: "", publicDescription: "",
             publicPrioritiesText: "", publicForeignPolicyText: "", supportPercent: "", influencePercent: "", influenceLabel: "", ruling: false, coalition: false,
         }],
     }));
@@ -855,6 +862,10 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
     };
 
     const hasComponentBaseline = Boolean(baseline?.componentCount);
+    const composition = useMemo(() => {
+        try { return { ...politicalEditorComposition(politicsForm), error: "" }; }
+        catch (error) { return { error: error?.message || "Invalid political landscape." }; }
+    }, [politicsForm]);
 
     const save = () => runBusy(async () => {
         if (!target) throw new Error("Pick a country first.");
@@ -1143,7 +1154,10 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
                                 {politicsPairedField("Operative political leader", "politicalLeader")}
                                 {politicsPairedField("Government status", "governmentStatus")}
                                 {politicsPairedField("Coalition / cabinet name", "coalitionName")}
-                                {politicsPairedField("Political system type", "politicalSystemType")}
+                                {politicsPairedField("Legislature", "legislature")}
+                                {politicsPairedField("Legislature seats", "legislatureSeats", { type: "number", min: "0", max: "100000", step: "1" })}
+                                {politicsPairedField("Next election", "nextElection")}
+                                {politicsPairedField("Political system type", "politicalSystemType" )}
                                 <div style={{ minWidth: 0 }}>
                                     <label style={{ ...labelStyle, marginTop: 0 }}>Representation model</label>
                                     <select style={inputStyle} value={politicsForm.politicalRepresentation ?? ""} onChange={(event) => changePolitics("politicalRepresentation", event.target.value)}>
@@ -1192,24 +1206,52 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
 
                         <details open style={{ marginTop: "0.7rem" }}>
                             <summary style={{ cursor: "pointer", fontSize: "0.72rem", fontWeight: 850 }}>Parties / political entities ({politicsForm.parties?.length || 0})</summary>
-                            <div style={{ color: "rgba(255,255,255,0.38)", fontSize: "0.61rem", lineHeight: 1.4, marginTop: "0.35rem" }}>Ruling and coalition membership writes directly to canonical government party IDs.</div>
+                            <div style={{ color: "rgba(255,255,255,0.38)", fontSize: "0.61rem", lineHeight: 1.4, marginTop: "0.35rem" }}>Party roles update the government's actual party IDs. Support (%) and legislature seats are separate measures; blank seats mean unknown, while 0 means no seats.</div>
+                            <div role={composition.error ? "alert" : "status"} style={{ color: composition.error ? "#fca5a5" : "rgba(255,255,255,0.55)", fontSize: "0.64rem", lineHeight: 1.45, marginTop: "0.38rem" }}>
+                                {composition.error || (
+                                    <>
+                                        {composition.totalSeats === null
+                                            ? "Legislature size not specified."
+                                            : `Seats assigned: ${composition.assignedSeats} / ${composition.totalSeats}. Unlisted or unassigned: ${composition.unlistedSeats}.`}
+                                        {" "}
+                                        {politicsForm.parties?.some((party) => party.supportPercent !== "" && party.supportPercent != null)
+                                            ? `Named party support: ${composition.mappedSupport}% (remaining ${composition.otherSupport}% not individually mapped).`
+                                            : "Party support not yet specified."}
+                                    </>
+                                )}
+                            </div>
                             <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem", marginTop: "0.55rem" }}>
                                 {(politicsForm.parties || []).map((party, index) => (
-                                    <details key={party.id || index} style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 9, padding: "0.5rem" }}>
+                                    <details key={party._editorKey || party.id || index} style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 9, padding: "0.5rem" }}>
                                         <summary style={{ cursor: "pointer", fontSize: "0.7rem", fontWeight: 800 }}>
                                             {party.name || `Political entity ${index + 1}`}{party.ruling ? " · Government" : party.coalition ? " · Coalition" : ""}
                                         </summary>
                                         <div style={{ display: "grid", gap: "0.44rem", gridTemplateColumns: "1fr 1fr", marginTop: "0.55rem" }}>
                                             <div><label style={{ ...labelStyle, marginTop: 0 }}>Name</label><input style={inputStyle} value={party.name ?? ""} onChange={(event) => changeParty(index, "name", event.target.value)} /></div>
                                             <div><label style={{ ...labelStyle, marginTop: 0 }}>Short name</label><input style={inputStyle} value={party.shortName ?? ""} onChange={(event) => changeParty(index, "shortName", event.target.value)} /></div>
+                                            <div><label style={{ ...labelStyle, marginTop: 0 }}>Native name</label><input style={inputStyle} value={party.nameNative ?? ""} onChange={(event) => changeParty(index, "nameNative", event.target.value)} /></div>
+                                            <div><label style={{ ...labelStyle, marginTop: 0 }}>Native abbreviation</label><input style={inputStyle} value={party.shortNameNative ?? ""} onChange={(event) => changeParty(index, "shortNameNative", event.target.value)} /></div>
                                             <div><label style={{ ...labelStyle, marginTop: 0 }}>Leader</label><input style={inputStyle} value={party.leader ?? ""} onChange={(event) => changeParty(index, "leader", event.target.value)} /></div>
-                                            <div><label style={{ ...labelStyle, marginTop: 0 }}>Ideology</label><input style={inputStyle} value={party.ideology ?? ""} onChange={(event) => changeParty(index, "ideology", event.target.value)} /></div>
+                                            <div><label style={{ ...labelStyle, marginTop: 0 }}>Ideology label</label><input style={inputStyle} value={party.ideology ?? ""} onChange={(event) => changeParty(index, "ideology", event.target.value)} /></div>
+                                            <div>
+                                                <label style={{ ...labelStyle, marginTop: 0 }}>Ideology family</label>
+                                                <select style={inputStyle} value={party.ideologyFamily ?? ""} onChange={(event) => changeParty(index, "ideologyFamily", event.target.value)}>
+                                                    <option value="">Not specified</option>
+                                                    {IDEOLOGIES.map((ideology) => <option key={ideology.id} value={ideology.id}>{ideology.name}</option>)}
+                                                </select>
+                                            </div>
+                                            <div><label style={{ ...labelStyle, marginTop: 0 }}>Subideology</label><input style={inputStyle} value={party.subideology ?? ""} onChange={(event) => changeParty(index, "subideology", event.target.value)} /></div>
+                                            <div><label style={{ ...labelStyle, marginTop: 0 }}>Seats held</label><input type="number" min="0" max="100000" step="1" style={inputStyle} value={party.seats ?? ""} onChange={(event) => changeParty(index, "seats", event.target.value)} /></div>
+                                            <div><label style={{ ...labelStyle, marginTop: 0 }}>Founded</label><input style={inputStyle} value={party.founded ?? ""} onChange={(event) => changeParty(index, "founded", event.target.value)} /></div>
+                                            <div><label style={{ ...labelStyle, marginTop: 0 }}>Party colour (hex)</label><input style={inputStyle} value={party.color ?? ""} onChange={(event) => changeParty(index, "color", event.target.value)} /></div>
                                             <div><label style={{ ...labelStyle, marginTop: 0 }}>Support (%)</label><input type="number" min="0" max="100" step="0.1" style={inputStyle} value={party.supportPercent ?? ""} onChange={(event) => changeParty(index, "supportPercent", event.target.value)} /></div>
                                             <div><label style={{ ...labelStyle, marginTop: 0 }}>Influence (%)</label><input type="number" min="0" max="100" step="0.1" style={inputStyle} value={party.influencePercent ?? ""} onChange={(event) => changeParty(index, "influencePercent", event.target.value)} /></div>
                                         </div>
-                                        <div style={{ display: "flex", flexWrap: "wrap", gap: "0.75rem", marginTop: "0.5rem" }}>
-                                            <label style={{ alignItems: "center", display: "flex", fontSize: "0.67rem", gap: "0.35rem" }}><input type="checkbox" checked={party.ruling === true} onChange={(event) => changeParty(index, "ruling", event.target.checked)} /> Ruling / government</label>
-                                            <label style={{ alignItems: "center", display: "flex", fontSize: "0.67rem", gap: "0.35rem" }}><input type="checkbox" checked={party.coalition === true} disabled={party.ruling === true} onChange={(event) => changeParty(index, "coalition", event.target.checked)} /> Coalition partner</label>
+                                        <div style={{ marginTop: "0.5rem" }}>
+                                            <label style={{ ...labelStyle, marginTop: 0 }}>Party role</label>
+                                            <select style={inputStyle} value={party.ruling ? "governing" : party.coalition ? "coalition" : party.role || "opposition"} onChange={(event) => changeParty(index, "role", event.target.value)}>
+                                                {Object.entries(PARTY_ROLE_LABELS).map(([role, label]) => <option key={role} value={role}>{label}</option>)}
+                                            </select>
                                         </div>
                                         <label style={labelStyle}>Public description</label><textarea rows={3} style={{ ...inputStyle, resize: "vertical" }} value={party.publicDescription ?? ""} onChange={(event) => changeParty(index, "publicDescription", event.target.value)} />
                                         <label style={labelStyle}>Public priorities · one per line</label><textarea rows={3} style={{ ...inputStyle, resize: "vertical" }} value={party.publicPrioritiesText ?? ""} onChange={(event) => changeParty(index, "publicPrioritiesText", event.target.value)} />
