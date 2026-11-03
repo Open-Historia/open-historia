@@ -15,6 +15,7 @@ import { FRONT_ORDERS_FIELD } from "./nativeFrontLedger.js";
 import { SEAT_ADVICE_ANSWER_SCHEMA, SEAT_ADVICE_FIELD } from "./seatAdvice.js";
 import { IDEOLOGIES, PARTY_ROLES } from "../../runtime/politics.js";
 import { WAR_FIGURES_FIELD } from "./warFiguresPrompt.js";
+import { ANSWER_LEDGER_KEYS } from "./jumpAnswerShelves.js";
 const textSchema = (description) => ({
   type: "string",
   description,
@@ -1427,6 +1428,22 @@ export const JUMP_FORWARD_SCHEMA = {
 };
 
 export const AUTO_JUMP_FORWARD_SCHEMA = JUMP_FORWARD_SCHEMA;
+
+// What a skip's answer is CHECKED against (validateGameplayPayload), never sent: the
+// same, but a ledger may also be a list of records, as a record written on an
+// event is put back into it (jumpAnswerShelves.js) and its readers take either.
+const JUMP_ANSWER_CHECKED_SCHEMA = {
+  ...JUMP_FORWARD_SCHEMA,
+  properties: {
+    ...JUMP_FORWARD_SCHEMA.properties,
+    ...Object.fromEntries(ANSWER_LEDGER_KEYS.map((key) => [key, {
+      anyOf: [
+        JUMP_FORWARD_SCHEMA.properties[key],
+        { type: "array", items: { anyOf: [{ type: "string" }, { type: "object" }] } },
+      ],
+    }])),
+  },
+};
 
 // The lean contract, which foldJumpTool adds to: the answer schema without the
 // board, the agents' reports and the history, and with the social posts' shape.
@@ -3640,8 +3657,8 @@ export const GAMEPLAY_SCHEMAS = Object.freeze({
   goalProgress: GOAL_PROGRESS_SCHEMA,
   warRoom: WAR_ROOM_SCHEMA,
   actions: ACTIONS_SCHEMA,
-  jumpForward: JUMP_FORWARD_SCHEMA,
-  autoJumpForward: AUTO_JUMP_FORWARD_SCHEMA,
+  jumpForward: JUMP_ANSWER_CHECKED_SCHEMA,
+  autoJumpForward: JUMP_ANSWER_CHECKED_SCHEMA,
   descriptionToAction: DESCRIPTION_TO_ACTION_SCHEMA,
   demandCheck: DEMAND_CHECK_SCHEMA,
   chatActions: CHAT_ACTIONS_SCHEMA,

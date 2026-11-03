@@ -230,6 +230,7 @@ import { holdPlayersWars } from "./playersWarsHold.js";
 import { chatMessageTags } from "./chatTags.js";
 import { PEACE_BLOCK_HEADING, buildPeaceBlock } from "./peacePrompt.js";
 import { WAR_FIGURES_WANTED_MOST, buildWarFiguresBlock, readWarFigures } from "./warFiguresPrompt.js";
+import { reshelveJumpAnswer } from "./jumpAnswerShelves.js";
 import { readPeaceVerdict, readTreatyLines, termsOfLetter } from "../../runtime/peaceTerms.js";
 import { PEACE_ANSWERS_FIELD, buildWarStatsBlock, describePeaceTalk, warsOf } from "./warStatsPrompt.js";
 import { takersFor } from "../../runtime/fronts/constants.js";
@@ -4283,6 +4284,15 @@ const runJsonTask = async (taskKey, {
         if (!statsCoverageError && plannedComponentCount > 0 && finalizedComponentCount !== plannedComponentCount) {
           statsCoverageError =
             `Native Stats normalization dropped authoritative territorial components: expected ${plannedComponentCount}, finalized ${finalizedComponentCount}.`;
+        }
+      }
+      // A time skip's answer read for what it means (jumpAnswerShelves.js): a change or a ledger record written
+      // on an event, where the answer keeps it elsewhere, is put where it belongs rather than cut out as "not allowed".
+      if (parsed && JUMP_TASK_KEYS.has(taskKey)) {
+        const shelved = reshelveJumpAnswer(parsed);
+        if (shelved.moved.length) {
+          parsed = shelved.payload;
+          logDebugEvent("ai", `Task "${taskKey}": ${shelved.moved.length} part(s) of the answer written on an event were put where they belong.`, shelved.moved);
         }
       }
       let validation = parsed
