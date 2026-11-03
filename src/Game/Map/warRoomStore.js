@@ -45,7 +45,6 @@ const CLOSED = Object.freeze({
   deployForm: "front",
   // How many fresh formations a deployment drawn calls up when time next passes (runtime/fronts/deploy.js), as the
   // player typed it: "" for as many as a draft usually brings, 0 for none.
-  deployCount: "",
   // A fortified line drawn and not yet ordered built, as [lng, lat] points, or
   // null; and the level it is to be built to (GameUI/warRoomFortify.jsx).
   draft: null,

@@ -74,6 +74,7 @@ import { weatherLoss } from "./weather.js";
 import { downhill } from "./ground.js";
 import { KIND_ARTILLERY, STATE_ADVANCING, STATE_DUG_IN, STATE_ENCIRCLED, STATE_HOLDING, STATE_SPENT, controlRadius, isLive, reachCells, stepAlong } from "./troops.js";
 import { WALL_ASSAULT_COST, WALL_DEFENCE_PER_LEVEL, WALL_ODDS, wallAhead, wearWall } from "./walls.js";
+import { OWN_GROUND_CLEAR } from "./march.js";
 
 const clampRatio = (value) => (value < ATTRITION_RATIO_MIN ? ATTRITION_RATIO_MIN : value > ATTRITION_RATIO_MAX ? ATTRITION_RATIO_MAX : value);
 
@@ -239,6 +240,11 @@ export const stepForward = (battle, paceKm, pace) => {
     entry.forward = (x, y) => inPlay(x, y) && !spared(spare, x, y) && !(kept && kept[Math.floor(y) * field.cols + Math.floor(x)])
       && (x - troop.x) * troop.axisX + (y - troop.y) * troop.axisY >= 0;
     entry.dayCells = (paceKm[troop.kind] * arena.speed[cell] * troop.supply * pace * troop.drive * troop.paceFactor * battle.edge[entry.side].pace * troop.legs) / kmAt(troop.y);
+    // Over its own side's territory, half again as fast as it carves through the other's (march.js). Not read off the
+    // ground under it or just ahead: a troop paints its own side's colour round it as it goes (field.js), so that is
+    // its side's wherever it walks. It is on its own side's territory where the other side's nearest ground is more
+    // than OWN_GROUND_CLEAR brushes off: behind the line, never at it or past it.
+    if (battle.ownPace > 1 && cell >= 0 && battle.toSide[1 - entry.side][cell] / 3 > entry.radius * OWN_GROUND_CLEAR) entry.dayCells *= battle.ownPace;
     parts = Math.max(parts, Math.ceil(entry.dayCells / (entry.radius * 0.5)));
   }
   parts = Math.min(SUBSTEPS_MAX, parts);

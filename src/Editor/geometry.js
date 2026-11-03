@@ -187,6 +187,20 @@ export const clipCoordsToBox = (geom, box) => {
   return out.length ? out : null;
 };
 
+// A polygon geometry cut in two along the vertical line X = x, the pieces
+// `gap` apart, so a move that sends each side to a different edge of the map
+// (a projection centred elsewhere puts its edge through Chukotka) never joins
+// them across it. A geometry wholly on one side comes back as it is.
+export const splitAtX = (geom, x, gap = 1) => {
+  const [minX, , maxX] = geom.getExtent();
+  if (!(minX < x && maxX > x)) return geom;
+  const FAR = 1e9;
+  const west = clipCoordsToBox(geom, [-FAR, -FAR, x - gap, FAR]) || [];
+  const east = clipCoordsToBox(geom, [x + gap, -FAR, FAR, FAR]) || [];
+  const pieces = [...west, ...east];
+  return pieces.length ? coordsToOl(pieces) : geom;
+};
+
 // What a and b share, as polygon-clipping coordinates; null for nothing.
 const intersectionCoords = (a, b) => {
   const box = sharedBox(a, b);

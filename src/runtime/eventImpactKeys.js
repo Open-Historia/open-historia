@@ -19,6 +19,7 @@ export const EVENT_IMPACT_KEYS = Object.freeze([
   "unitOps",
   "markerOps",
   "spyOps",
+  "partyOps",
   "projectOps",
   "createdChats",
   "reports",
