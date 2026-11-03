@@ -53,6 +53,33 @@ import { PAST_UPDATES } from "./notesPast.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // Forces built up at home round the cities and moved in the War Room; troops march to the front from inside their
+    // country; call-ups sized by the country (the owner, 2026-11-02: runtime/fronts/home.js, march.js).
+    id: "2026-11-forces-at-home",
+    kind: "minor",
+    date: "2026-11-03",
+    channel: "beta",
+    banners: [
+      {
+        title: "Forces at home",
+        items: [
+          "Build up forces from your own country's page: they gather round your cities, as many as your men, supplies, war weariness and mustering allow, and more come in over the weeks after.",
+          "The War Room opens for them in peace: draw routes to move them through your own land, to a border or anywhere at home.",
+          "Send them into another country's land and the war with it begins; those near its front fight there.",
+          "Other countries build up their forces and station them on their borders too.",
+        ],
+      },
+      {
+        title: "Armies march to the front",
+        items: [
+          "New troops are called up inside their country, the deeper the thinner its people are spread, and march to the front.",
+          "Armies move half again as fast through their own side's territory as through the enemy's.",
+          "Deploying troops no longer asks how many: your country calls up as many as it can.",
+        ],
+      },
+    ],
+  },
+  {
     // "fully conquouring an enemy should end the war" (the owner, 2026-11-03), after a player's war on the
     // protectorate they had made went on for two years (warAndPeace.js endConqueredWars, endWarsOnPuppets;
     // playersWarsHold.js).
@@ -388,6 +415,25 @@ const NEW_UPDATES = [
           "The desktop app is a smaller download: about 40 MB less on Windows.",
           "It takes up about 100 MB less space once installed.",
           "Updates have far fewer files to put in place, so they finish sooner.",
+        ],
+      },
+    ],
+  },
+  {
+    // PR #916 (DupliM2001), rebuilt on beta: the Politics tab, goal progress, picture basemaps, deals and annexations kept (2026-10-31).
+    id: "2026-10-politics-and-goals",
+    kind: "minor",
+    date: "2026-10-31",
+    channel: "beta",
+    banners: [
+      {
+        title: "Parties, goals and promises kept",
+        items: [
+          "A Politics tab beside Diplomacy and Economy shows a country's government and its main parties, with their ideologies, leaders, seats and support. Ask for it once; the story moves it from then on.",
+          "Under your standing goal, Assess progress says how far it has come: what is done, what stands in the way and what to do next.",
+          "A deal agreed in a diplomatic chat is now kept as an agreement, and its terms are carried out when they fall due.",
+          "An annexation an event tells of now happens on the map, and a country joining a war takes the side against the countries it names.",
+          "In the map editor, a picture of a map asks how it is drawn and where it lies, stays sharp when you zoom in, and the mouse wheel zooms a whole level a notch.",
         ],
       },
     ],

@@ -55,6 +55,7 @@ import { draw, formationsLeft, menOf, partLeft, sideFormationsLeft } from "./man
 import { landWorth, mixOf } from "./military.js";
 import { headStartOf, levyOwed, levyPending, musterShare, mustersFor, readLevy, spreadPick } from "./muster.js";
 import { hasDeploy, readDeploy } from "./deploy.js";
+import { marchKept, marchesFor, readMarch, sendInland } from "./march.js";
 import { authoredForms, authoredTroops } from "./scenarioFronts.js";
 import { SWARM_FORM, raiseSwarms, readSwarms, swarmsKept } from "./swarms.js";
 import { projectorOf } from "./frame.js";
@@ -459,6 +460,8 @@ export const raiseTroops = (battle, run, only = -1) => {
   // And how they stand there: along the line, or in swarms (swarms.js). Where it does not say, as the run's wars are fought.
   const forms = authoredForms(run.input?.authored, battle.sides);
   if (said) for (const side of [HOLDER_SIDE_A, HOLDER_SIDE_B]) if (said[side] > 0) counts[side] = said[side];
+  // (Troops that are there already, come from a country's forces at home, are part of them: home.js.)
+  for (const side of [HOLDER_SIDE_A, HOLDER_SIDE_B]) counts[side] = Math.max(0, counts[side] - liveCount(battle.troops[side]));
   battle.quality = quality.map((value, side) => (only >= 0 && side !== only ? battle.quality[side] : round3(value)));
   for (const side of [HOLDER_SIDE_A, HOLDER_SIDE_B]) {
     // (On a border fortified in peace only the side that deploys there raises troops.)
@@ -528,17 +531,20 @@ export const raiseTroops = (battle, run, only = -1) => {
     // in by now stand on the line; the rest are owed, and come in day by day (engine.js musterDay).
     let present = raised;
     const war = run.wars.get(battle.warId);
-    if (mustersFor(run, war)) {
+    // (A border built up in peace musters too, from the day it was ordered: march.js.)
+    const building = battle.status === "standing" && run.mech?.muster === true && marchesFor(run, battle);
+    if (mustersFor(run, war) || building) {
       const today = run.dateOf(run.day);
       // (The side that began the war is the war's first: it called up its levies before it declared.)
-      const starter = (battle.swap ? 1 - side : side) === HOLDER_SIDE_A;
+      const starter = !building && (battle.swap ? 1 - side : side) === HOLDER_SIDE_A;
       const keep = new Set();
       const owed = [];
       battle.sides[side].forEach((member, owner) => {
         const mine = raised.filter((troop) => troop.owner === owner);
         if (mine.length === 0) return;
         const head = headStartOf(run, member, starter);
-        const since = head > 0 ? addGameDays(war.began, -head) || war.began : war.began;
+        const began = building ? today : war.began;
+        const since = head > 0 ? addGameDays(began, -head) || began : began;
         const days = diffGameDays(since, today);
         const share = days === null ? 1 : musterShare(run, member, days);
         const now = Math.min(mine.length, Math.floor(mine.length * share));
@@ -564,6 +570,8 @@ export const raiseTroops = (battle, run, only = -1) => {
     }
     // Where the side fights in swarms they gather behind the line, each swarm under a general of its own (swarms.js).
     if ((forms?.[side] || run.warfare) === SWARM_FORM) raiseSwarms(battle, side, present);
+    // And they are called up inside their country, and march there (march.js).
+    if (marchesFor(run, battle, war)) sendInland(battle, run, side, present);
     // Each is drawn from the people of the country it is.
     for (const troop of present) draw(run, battle.sides[side][troop.owner], military ? (troop.strength / 100) * menOf(run, battle.sides[side][troop.owner]) : run.menEach);
   }
@@ -658,6 +666,8 @@ export const loadBattle = (run, record, arena) => {
   });
   battle.status = record.status;
   battle.fresh = false;
+  // A country's forces at home (home.js).
+  battle.home = record.home === true;
   setHandicap(battle, run);
   // Who the map draws each region as: the names the last run left for the
   // regions it listed. A region it did not list is shown as its holder in name.
@@ -691,6 +701,15 @@ export const loadBattle = (run, record, arena) => {
     read.forEach((list, side) => {
       const levels = decodeLevels(carry.tired[side]);
       list.forEach((troop, index) => { troop.fatigue = levels[index] ?? 0; });
+    });
+  }
+  // The day a country's forces at home were last called up (home.js): once a day at most.
+  battle.calledOn = typeof carry.called === "string" ? carry.called : "";
+  // Where each troop still on its way to the line is going (march.js).
+  if (Array.isArray(carry.march)) {
+    read.forEach((list, side) => {
+      const goals = readMarch(carry.march[side], list.length);
+      list.forEach((troop, index) => { if (goals[index] >= 0) troop.goal = goals[index]; });
     });
   }
   battle.generals = readGenerals(carry.generals);
@@ -756,12 +775,14 @@ export const loadBattle = (run, record, arena) => {
 
 // A new battle on a frame, where two sides at war touch. null when they do not
 // touch on this ground after all.
-export const openBattle = (run, { name, warId, sides, frame, arena, day }) => {
+//   home   a country's forces at home (home.js): they may stand where its land touches nobody's of the other side
+export const openBattle = (run, { name, warId, sides, frame, arena, day, home = false }) => {
   const battle = createBattle(run, { name, warId, sides, frame, arena, openedDate: run.dateOf(day), openedDay: day });
+  battle.home = home === true;
   setHandicap(battle, run);
   readRegions(battle, run);
   battle.field = openField(arena, run.input.map.regions, battle.regionSide, battle.iceSide);
-  if (!battle.field || traceContour(battle.field).segments === 0) return null;
+  if (!battle.field || (!battle.home && traceContour(battle.field).segments === 0)) return null;
   lineLength(battle);
   return battle;
 };
@@ -952,6 +973,7 @@ export const saveBattle = (battle, run, day, changes, brief) => {
     name: battle.name,
     warId: battle.warId,
     status: battle.status,
+    ...(battle.home ? { home: true } : {}),
     sides,
     openedDate: battle.openedDate,
     asOf: closed ? battle.closedDate : run.dateOf(day),
@@ -1005,6 +1027,9 @@ export const saveBattle = (battle, run, day, changes, brief) => {
           ? { tired: battle.troops.map((list) => encodeLevels(list.map((troop) => (isLive(troop) ? troop.fatigue : 0)))) }
           : {}),
         ...(battle.talk.some((lines) => lines.length > 0) ? { talk: battle.talk } : {}),
+        ...(battle.home && battle.calledOn ? { called: battle.calledOn } : {}),
+        // Where each troop still on its way to the line is going (march.js).
+        ...(battle.troops.some((list) => list.some((troop) => isLive(troop) && troop.goal >= 0)) ? { march: battle.troops.map(marchKept) } : {}),
         ...(plans ? { plans } : {}),
         ...(hasDeploy(battle.deploy) ? { deploy: battle.deploy } : {}),
         ...(Array.isArray(battle.staffPlans) && battle.staffPlans.some(Boolean) ? { staff: battle.staffPlans } : {}),

@@ -17,7 +17,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { setWarRoom } from "../Map/warRoomStore.js";
 import { SAFE_BOTTOM, SAFE_LEFT, SAFE_TOP } from "../../runtime/mobileUi.js";
-import { REINFORCE_MOST } from "../../runtime/fronts/constants.js";
 import { ADVISOR_SLIDE } from "./advisorSlide.js";
 import { BONE, BONE_FAINT, BONE_SOFT, BRASS, RED, RED_BRIGHT, STEEL, STENCIL, linkStyle, plateStyle, rivetStyle, stencilStyle } from "./warRoomTheme.js";
 
@@ -134,8 +133,6 @@ const Rule = () => <div aria-hidden="true" style={{ background: STEEL.seam, boxS
 //   fleets       how many fleets the player has; fleetsOut, the fleets' plate is out (warRoomFleets.jsx)
 //   onFleets     the fleets' plate is put out, or away
 //   station      what a click orders for the fleet picked out, while the fleet tool is in hand
-//   deployCount  how many fresh formations it calls up as typed, "" for a usual draft (runtime/fronts/deploy.js);
-//                onDeployCount, typed
 //   deployForm   what the Deploy tool deploys, "front" or "swarm" (runtime/fronts/swarms.js); onDeployForm, chosen
 //   aircraft     the scenario's wars have air units (the Wars feature): without them there is no Aircraft key
 //   wings        how many air units the player has; aircraftOut, the aircraft's plate is out (warRoomAircraft.jsx);
@@ -143,7 +140,11 @@ const Rule = () => <div aria-hidden="true" style={{ background: STEEL.seam, boxS
 //   supply       the map shades how well supplied the ground is (Map/warRoomCells.js); onSupply, shown or not;
 //                supplyAreas, how much of it is stretched and cut off, in km²
 //   foot         how much of the screen's foot the drawer covers, in px (a phone's folded drawer): the rail ends above it
-const WarRoomRail = ({ shown, top, isMobile, tool, selected, locked, turnRunning, notice, carriers = [], own = 0, away = false, onTool, onOrder, onRelease, onClear, onCarrier, onWithdraw, onReturn, canFortify = false, drafted = false, navies = true, fleets = 0, fleetsOut = false, onFleets = () => {}, station = "", deployForm = "front", onDeployForm = () => {}, aircraft = true, wings = 0, aircraftOut = false, onAircraft = () => {}, deployCount = "", onDeployCount = () => {}, supply = false, onSupply = () => {}, supplyAreas = null, foot = 0 }) => {
+//   peace        it is a border built up in peace, or a country's forces at home (runtime/fronts/home.js): Withdraw
+//                is Stand down
+//   home         it is a country's forces at home: there is no front to go forward or back from, nor an enemy to
+//                deceive, and the troops go where a route is drawn (into another country's land, the war beginning)
+const WarRoomRail = ({ shown, top, isMobile, tool, selected, locked, turnRunning, notice, carriers = [], own = 0, away = false, onTool, onOrder, onRelease, onClear, onCarrier, onWithdraw, onReturn, canFortify = false, drafted = false, navies = true, fleets = 0, fleetsOut = false, onFleets = () => {}, station = "", deployForm = "front", onDeployForm = () => {}, aircraft = true, wings = 0, aircraftOut = false, onAircraft = () => {}, peace = false, home = false, supply = false, onSupply = () => {}, supplyAreas = null, foot = 0 }) => {
   const none = selected.length === 0;
   const drawing = tool !== "pan";
   // The choice of carrier, open beside the rail.
@@ -234,19 +235,21 @@ const WarRoomRail = ({ shown, top, isMobile, tool, selected, locked, turnRunning
         <RailKey label="Route" title="Draw route: draw the way the troops picked out are to go" on={tool === "route"} disabled={locked || none} onClick={() => onTool("route")}><RouteIcon /></RailKey>
         <Rule />
         {/* An advance with no route: each goes straight out from where it stands, as a line told to advance does. */}
-        <RailKey label="Advance" title="Send these troops forward from where they stand, with no route drawn for them" disabled={locked || none} onClick={() => onOrder("advance")}><AdvanceIcon /></RailKey>
+        {!home && <RailKey label="Advance" title="Send these troops forward from where they stand, with no route drawn for them" disabled={locked || none} onClick={() => onOrder("advance")}><AdvanceIcon /></RailKey>}
         <RailKey label="Dig in" title="Dig in: these troops entrench where they stand" disabled={locked || none} onClick={() => onOrder("dig in")}><DigInIcon /></RailKey>
         <RailKey label="Hold" title="Hold: these troops keep their ground and attack nothing" disabled={locked || none} onClick={() => onOrder("hold")}><HoldIcon /></RailKey>
-        <RailKey label="Fall back" title="Fall back: these troops give ground toward their own rear" disabled={locked || none} onClick={() => onOrder("fall back")}><FallBackIcon /></RailKey>
+        {!home && <RailKey label="Fall back" title="Fall back: these troops give ground toward their own rear" disabled={locked || none} onClick={() => onOrder("fall back")}><FallBackIcon /></RailKey>}
         <RailKey label="Release" title="Give these troops back to their stretch of the line" disabled={locked || none} onClick={onRelease}><ReleaseIcon /></RailKey>
         {/* Off the battlefield altogether: the ground stays as it is. With none picked out, every troop of the player's goes. */}
         {away
           ? <RailKey label="Send back" title="Send your troops back onto this battlefield" disabled={locked} onClick={onReturn}><ReturnIcon /></RailKey>
-          : <RailKey label="Withdraw" title="Withdraw: these troops leave the battlefield and go home. With none picked out, all of yours do" disabled={locked || (none && own === 0)} onClick={onWithdraw}><WithdrawIcon /></RailKey>}
+          : peace
+            ? <RailKey label="Stand down" title="Stand down: these troops go home. With none picked out, all of yours do" disabled={locked || (none && own === 0)} onClick={onWithdraw}><WithdrawIcon /></RailKey>
+            : <RailKey label="Withdraw" title="Withdraw: these troops leave the battlefield and go home. With none picked out, all of yours do" disabled={locked || (none && own === 0)} onClick={onWithdraw}><WithdrawIcon /></RailKey>}
         <Rule />
         {/* Carried to where their side holds no land: by ship, rail or air, then a click on the map for where. */}
         <RailKey label="Transport" title="Transport: carry these troops by ship, rail or air to a place your side has no border with" on={tool === "transport" || choice} disabled={locked || none} onClick={() => (tool === "transport" ? onTool("pan") : setChoosing((value) => !value))}><ShipIcon /></RailKey>
-        <RailKey label="Diversion" title="Draw a diversion: a movement you want the other side to believe" on={tool === "diversion"} disabled={locked} onClick={() => onTool("diversion")}><DiversionIcon /></RailKey>
+        {!home && <RailKey label="Diversion" title="Draw a diversion: a movement you want the other side to believe" on={tool === "diversion"} disabled={locked} onClick={() => onTool("diversion")}><DiversionIcon /></RailKey>}
         <RailKey label="Deploy" title="Deploy: choose where your new troops on this battlefield come in, along a front or as a swarm" on={tool === "deploy"} disabled={locked} onClick={() => onTool("deploy")}><DeployIcon /></RailKey>
         {/* Deploy Aircraft: an air unit sent to strike troops, a structure or a city when time next passes. */}
         {aircraft && <RailKey label="Aircraft" title="Deploy Aircraft: send an air unit to strike troops, a structure or a city" on={aircraftOut || tool === "aircraft"} disabled={wings === 0} onClick={onAircraft}><AircraftIcon /></RailKey>}
@@ -397,24 +400,9 @@ const WarRoomRail = ({ shown, top, isMobile, tool, selected, locked, turnRunning
                   >{form === "swarm" ? <>Swarm</> : <>Front</>}</button>
                 ))}
               </div>
-              {/* The fresh formations it calls up when time next passes (runtime/fronts/deploy.js): "it does draw the
-                  line, but the troops are never actually deployed" (the owner, 2026-10-24). */}
-              <label style={{ alignItems: "center", display: "flex", gap: "0.45rem", marginBottom: "0.2rem" }}>
-                <span>Formations to call up</span>
-                <input
-                  type="number"
-                  min={0}
-                  max={REINFORCE_MOST}
-                  step={1}
-                  inputMode="numeric"
-                  value={deployCount}
-                  placeholder="Usual"
-                  data-oh-war-room-deploy-count=""
-                  onChange={(event) => onDeployCount(event.target.value)}
-                  style={{ backgroundColor: "rgba(0,0,0,0.5)", border: `1px solid ${STEEL.sunkLine}`, borderRadius: "3px", boxSizing: "border-box", color: BONE, fontFamily: "inherit", fontSize: "0.78rem", outline: "none", padding: "0.2rem 0.4rem", width: "4.5rem" }}
-                />
-              </label>
-              <div style={{ color: BONE_FAINT, marginBottom: "0.35rem" }}>Empty calls up as many as a usual draft; 0 calls up none.</div>
+              {/* How many it calls up is the country's (runtime/fronts/engine.js callUpSize): "remove the thing to select how
+                  many troops and just make it a realistic amount" (the owner, 2026-11-02). */}
+              <div style={{ color: BONE_FAINT, marginBottom: "0.35rem" }}>As many come as your men, supplies, war weariness and mustering allow, called up inside your country.</div>
               {deployForm === "swarm"
                 ? <>Click the place your new troops here are to gather at. Those called up come in there as a swarm when time next passes, under one general of their own, and so do later levies, drafts and reinforcements. Each moves and fights as troops on a front do. Drag to move the map.</>
                 : <>Draw the line your new troops here are to come in on. Those called up come in on it when time next passes, and so do later levies, drafts and reinforcements. They stand on ground your side holds along it.</>}

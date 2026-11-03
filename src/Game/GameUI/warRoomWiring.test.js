@@ -39,7 +39,7 @@ test("the war room is the player's when his troops are on a battlefield with a w
     { name: "The Alba Front", side: 0, status: "active" },
     { name: "The Truce Line", side: 1, status: "frozen" },
   ], "a border that is only fortified is no conflict, and a front that has closed is over");
-  assert.equal(playerFrontsKey(battlefields, "Aland"), "0:The Alba Front\n1:The Truce Line");
+  assert.equal(playerFrontsKey(battlefields, "Aland"), "0:active:The Alba Front\n1:frozen:The Truce Line");
   assert.equal(playerFrontsKey(battlefields, "Neutralia"), "");
   assert.equal(playerFrontsKey(null, "Aland"), "");
   assert.equal(playerFrontsKey(battlefields, ""), "");
@@ -51,10 +51,11 @@ test("the war room is the player's when his troops are on a battlefield with a w
 
 test("the button is there only while there is a war, beside the dock where Search otherwise is", () => {
   assert.match(main, /const warFronts = useRuntimeState\("world", \(world\) => playerFrontsKey\(world\?\.battlefields, playerCountry, world\?\.wars\), playerCountry\);/);
-  assert.match(main, /const atWar = Boolean\(warFronts\) && activeWars\(\)\.battlefields;/);
-  assert.match(main, /\{\(atWar \|\| isWarRoomOpen\) && \(\s*<WarRoomButton open=\{warRoomShown\} isMobile=\{isMobile\} onToggle=\{toggleWarRoom\} \/>\s*\)\}/);
+  assert.match(main, /const hasFronts = Boolean\(warFronts\) && activeWars\(\)\.battlefields;/);
+  assert.match(main, /const atWar = hasFronts && fightingIn\(warFronts\);/);
+  assert.match(main, /\{\(hasFronts \|\| isWarRoomOpen\) && \(\s*<WarRoomButton open=\{warRoomShown\} isMobile=\{isMobile\} onToggle=\{toggleWarRoom\} \/>\s*\)\}/);
   // It takes Search's place, and Search begins beyond it.
-  assert.match(main, /<Search mapRef=\{mapRef\} besideWarRoom=\{atWar\} \/>/);
+  assert.match(main, /<Search mapRef=\{mapRef\} besideWarRoom=\{hasFronts\} \/>/);
   // Both from the dock the game shows (hudDock.js useDockGeometry: Rostra can be switched off).
   assert.match(read("search.jsx"), /besideWarRoom && !isMobile \? dock\.besideWarRoomLeft : dock\.besideDockLeft/);
   assert.match(main, /isMobile \? `\$\{DOCK_LEFT_REM\}rem` : dock\.besideDockLeft\}/);

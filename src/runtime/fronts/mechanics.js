@@ -15,12 +15,15 @@
 //   supply     advancing and building fortified lines spend a country's war
 //              resources (runtime/warResources.js); the run counts each
 //              country's days of advance (dawn.js dusk)
+//   marching   new troops are raised inside their country and march to the
+//              line, half again as fast over their own side's ground as through
+//              the enemy's; a border built up in peace musters and marches (march.js)
 //
 // Only one turned on with a literal true is on, so that a run given none of
 // them, as every engine test that is not about them is, is to the last digit
 // the run it always was.
 
-export const MECHANICS = Object.freeze(["fatigue", "weather", "terrain", "walls", "muster", "military", "air", "supply", "attrition"]);
+export const MECHANICS = Object.freeze(["fatigue", "weather", "terrain", "walls", "muster", "military", "air", "supply", "attrition", "marching"]);
 
 export const readMechanics = (value) => Object.freeze(Object.fromEntries(MECHANICS.map((key) => [key, value?.[key] === true])));
 

@@ -231,7 +231,6 @@ const WarRoomPanel = ({ open, onClose, width, onResize, onResizeEnd }) => {
   const pickedFleet = useWarRoom((state) => state.fleet);
   const station = useWarRoom((state) => state.station);
   const deployForm = useWarRoom((state) => state.deployForm);
-  const deployCount = useWarRoom((state) => state.deployCount);
   // The aircraft's plate, the air unit picked out on it, and what it is to strike.
   const aircraftOut = useWarRoom((state) => state.aircraft);
   const pickedWing = useWarRoom((state) => state.wing);
@@ -530,10 +529,8 @@ const WarRoomPanel = ({ open, onClose, width, onResize, onResizeEnd }) => {
         await act({ op: "diversion", battlefield: name, way, troops: selectedRef.current.length || THRUST_TROOPS.spearhead });
       } else if (drawn === "deploy") {
         // Where the player's new troops here come in: one line, drawn again over the last; or a swarm's place. And the
-        // fresh formations it calls up there when time next passes, as many as typed (none typed, a usual draft).
-        const count = String(getWarRoom().deployCount ?? "").trim();
-        const calls = count !== "" && Number.isFinite(Number(count)) ? { count: Number(count) } : {};
-        if (await act({ op: "deploy", battlefield: name, way, ...(extra?.form === "swarm" ? { form: "swarm" } : {}), ...calls })) setWarRoom({ tool: "pan" });
+        // fresh formations it calls up there when time next passes, as many as the country can (runtime/fronts/engine.js callUpSize).
+        if (await act({ op: "deploy", battlefield: name, way, ...(extra?.form === "swarm" ? { form: "swarm" } : {}) })) setWarRoom({ tool: "pan" });
       } else if (drawn === "replan" && extra?.replan) {
         await act({ op: "plan", battlefield: name, project: extra.replan, way });
       } else if (drawn === "transport" && extra?.medium && way[0]) {
@@ -821,8 +818,8 @@ const WarRoomPanel = ({ open, onClose, width, onResize, onResizeEnd }) => {
         wings={wings.length}
         aircraftOut={aircraftOut}
         onAircraft={() => setWarRoom({ aircraft: !getWarRoom().aircraft, fleets: false })}
-        deployCount={deployCount}
-        onDeployCount={(value) => setWarRoom({ deployCount: value })}
+        peace={record?.status === "standing"}
+        home={record?.home === true}
         supply={supplyOn}
         onSupply={() => setWarRoom({ supply: !getWarRoom().supply })}
         supplyAreas={supplyShade?.areas ?? null}
@@ -892,8 +889,9 @@ const WarRoomPanel = ({ open, onClose, width, onResize, onResizeEnd }) => {
             <span aria-hidden="true" style={rivetStyle({ right: "0.45rem", bottom: "0.75rem" })} />
             <div data-no-translate style={{ ...stencilStyle, color: BONE, fontSize: "1rem", letterSpacing: "0.2em", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{record.name}</div>
             <div style={{ ...stencilStyle, color: BONE_SOFT, fontSize: "0.74rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              <span data-no-translate>{mine.join(", ")}</span> against <span data-no-translate>{other.join(", ")}</span>
+              {record.home ? <><span data-no-translate>{mine.join(", ")}</span> · forces at home</> : <><span data-no-translate>{mine.join(", ")}</span> against <span data-no-translate>{other.join(", ")}</span></>}
               {record.status === "frozen" && <> · ceasefire</>}
+              {record.status === "standing" && !record.home && <> · built up in peace</>}
             </div>
             <div style={{ flex: 1 }} />
             <div style={{ ...stencilStyle, flex: "0 0 auto", fontSize: "0.8rem" }}>{formatGameDateReadable(game.gameDate) || game.gameDate}</div>
@@ -946,8 +944,9 @@ const WarRoomPanel = ({ open, onClose, width, onResize, onResizeEnd }) => {
             <div style={{ ...stencilStyle, color: BONE, fontSize: "1.25rem", letterSpacing: "0.24em", lineHeight: 1 }}>War Room</div>
             {record && isMobile && (
               <div style={{ ...softText, fontSize: "0.66rem", marginTop: "0.2rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                <span data-no-translate>{mine.join(", ")}</span> against <span data-no-translate>{other.join(", ")}</span>
+                {record.home ? <><span data-no-translate>{mine.join(", ")}</span> · forces at home</> : <><span data-no-translate>{mine.join(", ")}</span> against <span data-no-translate>{other.join(", ")}</span></>}
                 {record.status === "frozen" && <> · ceasefire</>}
+                {record.status === "standing" && !record.home && <> · built up in peace</>}
               </div>
             )}
           </div>

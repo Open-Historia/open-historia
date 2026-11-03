@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
 import { decodeTroops } from "./codec.js";
 import { generalsOf } from "./command.js";
 import { FRONT_COMMANDS_MOST, MAX_COMMANDS, REINFORCE_ORDER, SWARM_TROOPS_EACH } from "./constants.js";
-import { deployLinesOf } from "./deploy.js";
+import { DEPLOY_USUAL, deployLinesOf } from "./deploy.js";
 import { runFronts } from "./engine.js";
 import { projectorOf } from "./frame.js";
 import { authoredForms, normalizeScenarioFronts } from "./scenarioFronts.js";
@@ -42,6 +42,8 @@ const troopsOf = (record, side) => {
   });
 };
 const reinforce = (record, count, day = 1) => [{ day, type: "order", battlefield: record.name, side: "Aland", order: REINFORCE_ORDER, sector: "all", count, given: true, ref: day }];
+// A country that calls its whole army up in two days: a deployment's call-up (engine.js callUpSize) brings a body of them.
+const FAST = { mechanics: { muster: true }, musterOf: () => ({ table: [0, 0.5, 1], head: 0 }) };
 
 test("a block's places are its middle, then ring after ring, never two the same", () => {
   const steps = blockSteps(25);
@@ -57,15 +59,16 @@ test("a block's places are its middle, then ring after ring, never two the same"
 test("a swarm deployment brings a country's new troops in as a group at one place, under one general of its own", () => {
   const [record] = run().battlefields;
   const side = record.sides.findIndex((members) => members.includes("Aland"));
-  // The six it calls up when time next passes (deploy.js): with no order, no event.
-  const placed = applyWarRoomOp([record], { op: "deploy", battlefield: record.name, way: [PLACE], form: "swarm", count: 6 }, { player: "Aland", date: "2024-03-01" });
+  // Those it calls up when time next passes (deploy.js): with no order, no event.
+  const placed = applyWarRoomOp([record], { op: "deploy", battlefield: record.name, way: [PLACE], form: "swarm" }, { player: "Aland", date: "2024-03-01" });
   assert.equal(placed.error, undefined);
-  assert.deepEqual(deployLinesOf(placed.record, side), [{ country: "Aland", way: [PLACE], form: "swarm", call: 6 }]);
+  assert.deepEqual(deployLinesOf(placed.record, side), [{ country: "Aland", way: [PLACE], form: "swarm", call: DEPLOY_USUAL }]);
   const before = troopsOf(record, side).length;
-  const after = run({ battlefields: [placed.record], days: 2 }).battlefields[0];
+  const after = run({ ...FAST, battlefields: [placed.record], days: 2 }).battlefields[0];
   const fresh = troopsOf(after, side).slice(before);
-  assert.equal(fresh.length, 6);
-  assert.ok(after.log.some((entry) => entry.k === "drafted" && entry.at === "6 fresh formations where its swarm gathers"));
+  assert.ok(fresh.length >= 3, `${fresh.length} came`);
+  assert.equal(deployLinesOf(after, side)[0].last.n, fresh.length);
+  assert.ok(after.log.some((entry) => entry.k === "drafted" && entry.at === `${fresh.length} fresh formations where its swarm gathers`));
   // One general, and he is a swarm's: the first number after the line's own generals.
   const commands = new Set(fresh.map((troop) => troop.command));
   assert.equal(commands.size, 1);
@@ -73,7 +76,7 @@ test("a swarm deployment brings a country's new troops in as a group at one plac
   assert.equal(command, FRONT_COMMANDS_MOST);
   assert.deepEqual(swarmsOfRecord(after)[side], [command]);
   const general = generalsOf(after, side).find((one) => one.command === command);
-  assert.equal(general.n, 6, "one general, and they are his alone");
+  assert.equal(general.n, fresh.length, "one general, and they are his alone");
   // Together, at the place: not strung along the front 200 km away.
   const at = { lng: PLACE[0], lat: PLACE[1] };
   for (const troop of fresh) assert.ok(kmApart(troop, at) < 90, `came in ${kmApart(troop, at).toFixed(0)} km from the place`);
@@ -84,8 +87,8 @@ test("a swarm deployment brings a country's new troops in as a group at one plac
 test("new troops join the swarm at their place, and gather as a new one once it has gone on", () => {
   const [record] = run().battlefields;
   const side = record.sides.findIndex((members) => members.includes("Aland"));
-  const placed = applyWarRoomOp([record], { op: "deploy", battlefield: record.name, way: [PLACE], form: "swarm", count: 4 }, { player: "Aland" }).record;
-  const first = run({ battlefields: [placed], days: 2 }).battlefields[0];
+  const placed = applyWarRoomOp([record], { op: "deploy", battlefield: record.name, way: [PLACE], form: "swarm" }, { player: "Aland" }).record;
+  const first = run({ ...FAST, battlefields: [placed], days: 2 }).battlefields[0];
   const [command] = swarmsOfRecord(first)[side];
   const count = troopsOf(first, side).length;
   // More of them while the swarm is still there, by an order for them (the deployment's own call spent): the same general.
@@ -95,10 +98,11 @@ test("new troops join the swarm at their place, and gather as a new one once it 
   assert.ok(joined.every((troop) => troop.command === command));
   assert.deepEqual(swarmsOfRecord(second)[side], [command]);
   // The swarm told to go elsewhere (its place moved away under it): the next ones are a swarm of their own.
-  const away = applyWarRoomOp([second], { op: "deploy", battlefield: second.name, way: [[21, 50.4]], form: "swarm", count: 3 }, { player: "Aland" }).record;
-  const third = run({ battlefields: [away], days: 2 }).battlefields[0];
+  const away = applyWarRoomOp([second], { op: "deploy", battlefield: second.name, way: [[21, 50.4]], form: "swarm" }, { player: "Aland" }).record;
+  const third = run({ ...FAST, battlefields: [away], days: 2 }).battlefields[0];
   const others = troopsOf(third, side).slice(troopsOf(second, side).length);
-  assert.equal(others.length, 3);
+  assert.ok(others.length >= 2, `${others.length} came`);
+  assert.equal(deployLinesOf(third, side)[0].last.n, others.length);
   const fresh = new Set(others.map((troop) => troop.command));
   assert.equal(fresh.size, 1);
   assert.ok(!fresh.has(command));
@@ -108,8 +112,8 @@ test("new troops join the swarm at their place, and gather as a new one once it 
 test("a swarm's troops move by themselves, as the line's do: told to advance, each goes its own way", () => {
   const [record] = run().battlefields;
   const side = record.sides.findIndex((members) => members.includes("Aland"));
-  const placed = applyWarRoomOp([record], { op: "deploy", battlefield: record.name, way: [PLACE], form: "swarm", count: 6 }, { player: "Aland" }).record;
-  const formed = run({ battlefields: [placed], days: 2 }).battlefields[0];
+  const placed = applyWarRoomOp([record], { op: "deploy", battlefield: record.name, way: [PLACE], form: "swarm" }, { player: "Aland" }).record;
+  const formed = run({ ...FAST, battlefields: [placed], days: 2 }).battlefields[0];
   const [command] = swarmsOfRecord(formed)[side];
   const swarm = troopsOf(formed, side).filter((troop) => troop.command === command);
   const told = applyWarRoomOp([formed], { op: "order", battlefield: formed.name, troops: swarm.map((troop) => troop.index), order: "advance" }, { player: "Aland" });

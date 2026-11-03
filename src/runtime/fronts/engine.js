@@ -32,6 +32,9 @@ import { dawn } from "./dawn.js";
 import { anyMechanic, readMechanics } from "./mechanics.js";
 import { levyOwed, musterShare } from "./muster.js";
 import { DEPLOY_USUAL, DEPLOY_WHY, deployCells } from "./deploy.js";
+import { CALL_UP_FULL_DAYS, marchKmOf, marchOn, marchesFor, sendInland, walkRoute } from "./march.js";
+import { liveOrder } from "./closing.js";
+import { HOME_JOIN_KM, HOME_MARGIN_KM, borderCells, homeBounds, homeCells, homeName, homeNeighbours, wayInto } from "./home.js";
 import { linesChanged } from "./walls.js";
 import { AIR_MISSIONS, wingChanges } from "./air.js";
 import { bombTroops } from "./airStrike.js";
@@ -61,6 +64,8 @@ import {
   INVADE_REACH_KM,
   LANDING_CELLS,
   MAX_BATTLEFIELDS,
+  MAX_HOME_FORCES,
+  MUSTER_STANDING_SHARE,
   MAX_CLOSED_BATTLEFIELDS,
   MAX_SIDE_MEMBERS,
   MAX_TROOPS_PER_SIDE,
@@ -78,8 +83,8 @@ import {
 import { contactAt, findContacts, frameForContact, middleOf } from "./contact.js";
 import { REGIONS_NEEDED, growToHold, prepare, recordDay, settleRegions, simulateDay, startRecorder } from "./day.js";
 import { redistance, takeCapsule, traceContour } from "./field.js";
-import { downhill } from "./ground.js";
-import { pointInFrame, projectorOf } from "./frame.js";
+import { cellAt, downhill, measure } from "./ground.js";
+import { createFrame, pointInFrame, projectorOf } from "./frame.js";
 import { landWithin, othersOnWay } from "./invade.js";
 import { draw, formationsLeft, manpowerReport, menOf, menPerFormation, partLeft, sendHome } from "./manpower.js";
 import { applyOrder, assignOrder, fallBackOverland, giveWay, landCarried, putAshore, readSieges, setStandingOrder, standingOf } from "./orders.js";
@@ -237,7 +242,7 @@ const createRun = (input) => {
 };
 
 const regionsOf = (run) => (Array.isArray(run.input?.map?.regions) ? run.input.map.regions : null);
-const openBattles = (run) => run.battles.filter((battle) => battle.status !== "closed");
+const openBattles = (run) => run.battles.filter((battle) => battle.status !== "closed" && !battle.home);
 
 // Which side of a war holds a region: the group in whose area it lies if that
 // group is in the war, else its controller.
@@ -319,6 +324,8 @@ const absorbUnits = (battle, run) => {
 //            They are its side's force, so only the side landed on raises any.
 const startBattle = (run, battle, day, landed = null) => {
   run.battles.push(battle);
+  // (Forces at home near it join it first, and fewer are raised for it: home.js.)
+  const handed = bringHome(run, battle, day);
   raiseTroops(battle, run, landed ? 1 - landed.side : -1);
   if (landed) {
     battle.base[landed.side] = Math.round(memberWeights(battle, run, landed.side).reduce((sum, weight) => sum + weight, 0) * 1000) / 1000;
@@ -330,6 +337,7 @@ const startBattle = (run, battle, day, landed = null) => {
   keepStart(battle);
   readSieges(battle);
   findPockets(battle);
+  homeOrders(run, battle, handed, day);
   startRecorder(battle, run, day);
   recordDay(battle, day, day >= run.days);
 };
@@ -496,6 +504,8 @@ const raiseFor = (battle, run, side, owner) => {
   battle.pool[side] += count * POOL_PER_TROOP * battle.edge[side].reserves;
   // (Where they come as a swarm they stand as one: swarms.js.)
   gatherNewcomers(battle, side, owner, first, run.warfare);
+  // (And they are called up inside its country, and march there: march.js.)
+  if (marchesFor(run, battle, run.wars.get(battle.warId))) sendInland(battle, run, side, battle.troops[side].slice(first));
 };
 
 // A side's new troops, from `first` on in its list, come under what their
@@ -543,6 +553,8 @@ const musterDay = (run, battle, day) => {
       });
       if (home.length > 0) cells = home;
       if (cells.length === 0 && battle.field.holders.indexOf(side) >= 0) cells = [battle.field.holders.indexOf(side)];
+      // (At home, round its cities: home.js.)
+      if (battle.home) cells = homeCells(battle, side, ownGroundOf(battle, run, side, member), due);
       // (On the line its commander drew for its new troops, where it drew one: deploy.js.)
       cells = deployCells(battle, side, member, cells);
       if (cells.length === 0) continue;
@@ -561,6 +573,8 @@ const musterDay = (run, battle, day) => {
       entry.r += due;
       // (Where they come as a swarm they stand as one first: swarms.js.)
       gatherNewcomers(battle, side, entry.o, first, run.warfare);
+      // (Called up inside its country, they march there: march.js.)
+      if (marchesFor(run, battle)) sendInland(battle, run, side, battle.troops[side].slice(first));
       putUnderStanding(run, battle, side, first, today, day);
       battle.touched = true;
       battle.planKey = "";
@@ -637,7 +651,7 @@ const battleSide = (battle, side) => (battle.swap ? 1 - side : side);
 // that war's from now on: whoever has nobody there yet raises troops.
 const adoptStanding = (run, war) => {
   for (const battle of run.battles) {
-    if (battle.status !== "standing") continue;
+    if (battle.status !== "standing" || battle.home) continue;
     const first = warSide(war, battle.sides[0][0]);
     const second = warSide(war, battle.sides[1][0]);
     if (first < 0 || second < 0 || first === second) continue;
@@ -656,11 +670,44 @@ const adoptStanding = (run, war) => {
   }
 };
 
+// A day on a border built up in peace (march.js): the levies it is owed come in, and every troop on its way to it
+// marches on; one told to dig in digs in where it is. Those told to stand down go home, their men given back
+// (manpower.js), and a side that stands down whole calls up nobody more there. Nothing is fought and no ground
+// changes hands.
+const peaceDay = (run, battle, day) => {
+  musterDay(run, battle, day);
+  const marchKm = marchKmOf(run);
+  for (const side of [HOLDER_SIDE_A, HOLDER_SIDE_B]) {
+    const leaving = [];
+    battle.troops[side].forEach((troop, at) => {
+      if (!isLive(troop)) return;
+      if (liveOrder(troop)?.kind === "withdraw") leaving.push(at);
+      else if (troop.dug) troop.goal = -1;
+      // A route drawn for it in the war room, over its own side's ground (march.js walkRoute).
+      else if (liveOrder(troop)?.kind === "way") {
+        troop.goal = -1;
+        if (walkRoute(battle, side, troop, marchKm, day)) battle.touched = true;
+      } else if (troop.goal >= 0 && marchOn(battle, side, troop, marchKm)) battle.touched = true;
+    });
+    if (leaving.length === 0) continue;
+    sendHome(run, battle, side, leaving);
+    for (const at of leaving) battle.troops[side][at].strength = 0;
+    if (liveCount(battle.troops[side]) === 0) battle.levy[side] = [];
+    battle.log.push({ d: run.dateOf(day), k: "stood-down", s: side, at: `${leaving.length} formations sent home`, n: leaving.length });
+    battle.touched = true;
+  }
+};
+
 // A day on a border fortified in peace: nothing happens. Left at token effort
 // with nothing ordered for long enough, or with nobody on it, it is given up.
 const standDay = (battle) => {
   battle.quiet += 1;
   const manned = [HOLDER_SIDE_A, HOLDER_SIDE_B].filter((side) => liveCount(battle.troops[side]) > 0);
+  // (A country's forces at home are given up only when none are left there or still to come: home.js.)
+  if (battle.home) {
+    if (manned.length === 0 && !levyOwed(battle.levy)) battle.closing = "stood-down";
+    return;
+  }
   if (manned.length === 0 || (battle.quiet >= STANDING_QUIET_DAYS && manned.every((side) => battle.effort[side] === "token"))) battle.closing = "stood-down";
 };
 
@@ -1014,7 +1061,8 @@ const reinforceOnFront = (run, battle, moment, day) => {
   const room = Math.min(
     MAX_TROOPS_PER_SIDE - battle.troops[side].length,
     moment.deployed ? MAX_TROOPS_PER_SIDE : REINFORCED_SIZE_MOST * usual - live,
-    REINFORCED_LINE_MOST * troopsCap(battle.lineKm, run.troops) - live,
+    // (At home there is no line to be crowded: home.js.)
+    battle.home ? MAX_TROOPS_PER_SIDE : REINFORCED_LINE_MOST * troopsCap(battle.lineKm, run.troops) - live,
   );
   // And the men have to be there to call up (manpower.js): weighing military figures, a country's last men too, as a
   // counter at part strength, and a country with no army has nobody to call up (military.js).
@@ -1051,6 +1099,8 @@ const reinforceOnFront = (run, battle, moment, day) => {
   });
   if (home.length > 0) cells = home;
   if (cells.length === 0 && battle.field.holders.indexOf(side) >= 0) cells = [battle.field.holders.indexOf(side)];
+  // (At home, round its cities: home.js.)
+  if (battle.home) cells = homeCells(battle, side, ownGroundOf(battle, run, side, drafted), count);
   // (On the line its commander drew for its new troops, where it drew one: deploy.js.)
   const along = cells;
   cells = deployCells(battle, side, drafted, cells);
@@ -1071,12 +1121,15 @@ const reinforceOnFront = (run, battle, moment, day) => {
   battle.pool[side] += count * POOL_PER_TROOP * battle.edge[side].reserves;
   // (Where they come as a swarm they stand as one first: swarms.js.)
   const swarmed = gatherNewcomers(battle, side, owner, first, run.warfare);
+  // (Called up inside its country, they march there: march.js.)
+  if (marchesFor(run, battle)) sendInland(battle, run, side, battle.troops[side].slice(first));
   putUnderStanding(run, battle, side, first, today, day);
   // (Troops come back to a battlefield their side had left.)
   if (battle.away[side]) comeBack(run, battle, day);
   // (Called up on a deployment, where they came in is where it was drawn: callUpDeployed.)
   const where = moment.deployed && swarmed > 0 ? "where its swarm gathers"
     : moment.deployed && onLine ? "on its deployment line"
+      : battle.home ? "round its cities"
       : whole ? "along its whole line" : `in the ${sector.word ?? clean(moment.sector)}`;
   battle.log.push({ d: run.dateOf(day), k: "drafted", s: side, at: `${count} fresh formations ${where}`, n: count });
   battle.quiet = 0;
@@ -1093,6 +1146,26 @@ const reinforceOnFront = (run, battle, moment, day) => {
 // on the line or at the swarm's place, with the men it has left and the room
 // the battlefield has. The call is then spent, and `last` on the deployment
 // says what came of it, kept with it as it is handed on (battle.js).
+//
+// HOW MANY. "people also report that being able to just spawn 60 troops every
+// turn is super op, so remove the thing to select how many troops and just
+// make it a realistic amount based on how many availible troops remain, how
+// many supplies, weariness, and mustering speed" (the owner, 2026-11-02). Of
+// the army the country's strength fields there (troopsWanted), the share its
+// mustering curve calls up in the days the run passes (muster.js; all of it in
+// CALL_UP_FULL_DAYS where no curve is known), less what it is short of
+// (supplies, war weariness and a blockade together: run.shortageOf); held, as
+// every draft is, to the men it has left and the room there is
+// (reinforceOnFront). At least one; none for a deployment drawn as a line only.
+export const callUpSize = (run, battle, side, member) => {
+  const owner = Math.max(0, memberIndex(battle, side, member));
+  const usual = Math.max(troopsLeast(run.troops), Math.round(troopsWanted(memberWeights(battle, run, side)[owner] ?? 0, battle.effort[side], run.troops)));
+  const days = Math.max(1, run.days);
+  const table = run.musterOf(member)?.table;
+  const called = Array.isArray(table) && table.length > 0 ? table[Math.min(table.length - 1, days)] : Math.min(1, days / CALL_UP_FULL_DAYS);
+  return Math.max(1, Math.floor(usual * called * (1 - run.shortageOf(member))));
+};
+
 const callUpDeployed = (run) => {
   for (const battle of run.battles) {
     if (battle.status === "closed" || battle.closing || !Array.isArray(battle.deploy)) continue;
@@ -1101,7 +1174,10 @@ const callUpDeployed = (run) => {
         if (entry.call === undefined) return;
         const before = battle.troops[side].length;
         const noted = run.notes.length;
-        const moment = { side: entry.country, sector: "all", given: true, deployed: true, ...(entry.call === DEPLOY_USUAL ? {} : { count: entry.call }) };
+        // (At home, once a day at most: callUpAtHome.)
+        if (battle.home && battle.calledOn === run.dateOf(0)) return;
+        const moment = { side: entry.country, sector: "all", given: true, deployed: true, count: entry.call === 0 ? 0 : callUpSize(run, battle, side, entry.country) };
+        if (battle.home) battle.calledOn = run.dateOf(0);
         reinforceOnFront(run, battle, moment, 0);
         const n = battle.troops[side].length - before;
         const said = run.notes.slice(noted).map((note) => note.kind).filter((kind) => DEPLOY_WHY[kind]);
@@ -1272,6 +1348,254 @@ const orderOnBorder = (run, battle, moment, day) => {
   orderOnFront(run, battle, { ...moment, battlefield: battle.name }, day);
 };
 
+// ---- a country's forces at home ----------------------------------------------------------
+// (home.js.) The story builds them up for any country, `home: Country`, and
+// stations them on a border; the player does from the War Room and the game
+// (Game/AI/frontApply.js buildUpAtHome). They are a battlefield of their own,
+// standing, and fight nobody.
+
+const HOME = /^\s*home\s*:\s*(.+?)\s*$/i;
+const COUNTRY_OBJECTIVE = /^\s*country\s*:\s*(.+?)\s*$/i;
+
+const homeForcesOf = (run, country) => run.battles.find((battle) => battle.home && battle.status !== "closed" && !battle.closing && fold(battle.sides[0][0]) === fold(country)) ?? null;
+
+// Who holds the ground a cell of a battle is: the region's group in its war, or its controller; "" for none.
+const holderAtCell = (battle, run, cell) => {
+  const region = cell >= 0 ? battle.arena.region[cell] : 0;
+  return region > 0 ? clean(holderOf(battle, run, battle.arena.ids[region])) : "";
+};
+
+// A test of a cell for a member's own ground on a battle, its regions read once.
+const ownGroundOf = (battle, run, side, member) => {
+  const { arena, field } = battle;
+  const mine = new Uint8Array(arena.ids.length);
+  for (let region = 1; region < arena.ids.length; region += 1) if (fold(holderOf(battle, run, arena.ids[region])) === fold(member)) mine[region] = 1;
+  return (cell) => field.holders[cell] === side && field.play[cell] === 1 && mine[arena.region[cell]] === 1;
+};
+
+// A country's forces at home, opened: a frame round its land (HOME_MARGIN_KM beyond it), its neighbours the
+// other side. null where it holds no land on the map, or nobody else's is near.
+const openHome = (run, country, day) => {
+  const regions = landRegionsOf(run);
+  if (!regions) throw REGIONS_NEEDED;
+  const holderOfId = (id) => run.groupOf(id) || run.controllerOf(id);
+  const bounds = homeBounds(regions.filter((region) => fold(holderOfId(region.id)) === fold(country)));
+  if (!bounds) return null;
+  const map = run.input.map;
+  const frame = createFrame(bounds, { ...measureOptions(map), marginKm: HOME_MARGIN_KM });
+  const arena = frame ? arenaFor(run.cache, map, frame, run.input.regionTypes) : null;
+  if (!arena) return null;
+  const neighbours = homeNeighbours(arena, holderOfId, country);
+  if (neighbours.length === 0) return null;
+  const battle = openBattle(run, { name: homeName(country), warId: "", sides: [[clean(country)], neighbours], frame, arena, day, home: true });
+  if (!battle) return null;
+  battle.status = "standing";
+  battle.effort = ["major", "token"];
+  run.battles.push(battle);
+  setRadii(battle);
+  paintGround(battle, run);
+  keepStart(battle);
+  readSieges(battle);
+  findPockets(battle);
+  startRecorder(battle, run, day);
+  return battle;
+};
+
+// A call-up of a country's forces at home, once a day at most: the army its strength fields (troopsWanted, at a
+// major effort), less what it is short of (supplies, war weariness, a blockade: run.shortageOf), or as many as the
+// story says if that is fewer; round its cities (reinforceOnFront: home.js homeCells), held to the men it has.
+// Weighing a war's mustering (muster.js) only its peacetime army (MUSTER_STANDING_SHARE) is there at once, and the
+// rest come in as its curve calls them up from today, round its cities too (musterDay).
+const callUpAtHome = (run, battle, moment, day) => {
+  const date = run.dateOf(day);
+  if (battle.calledOn === date) {
+    run.notes.push({ kind: "called-today", battlefield: battle.name, side: clean(moment.side), ...(moment.ref !== undefined ? { ref: moment.ref } : {}) });
+    return;
+  }
+  const member = battle.sides[HOLDER_SIDE_A][0];
+  const usual = Math.max(troopsLeast(run.troops), Math.round(troopsWanted(memberWeights(battle, run, HOLDER_SIDE_A)[0] ?? 0, "major", run.troops)));
+  const most = Math.max(1, Math.round(usual * (1 - run.shortageOf(member))));
+  const said = Number(moment.count);
+  const count = Number.isFinite(said) && said >= 1 ? Math.min(Math.round(said), most) : most;
+  const mustering = Boolean(run.musterOf(member)?.table);
+  const now = mustering ? Math.max(1, Math.floor(count * MUSTER_STANDING_SHARE)) : count;
+  const before = battle.troops[HOLDER_SIDE_A].length;
+  reinforceOnFront(run, battle, { ...moment, battlefield: battle.name, sector: "all", given: true, deployed: true, count: now }, day);
+  const came = battle.troops[HOLDER_SIDE_A].length - before;
+  if (mustering && came > 0 && count > came) battle.levy[HOLDER_SIDE_A].push({ o: 0, t: count, r: came, f: date });
+  battle.calledOn = date;
+};
+
+// A country's forces at home sent to stand on its border with another (the story: an order with `country: X` for
+// its objective): the nearest of them to it, half of them (all, at effort major or total), each to its own place
+// along it, at the march's pace (march.js marchOn); dug in there, where they were told to dig in.
+const stationOnBorder = (run, battle, target, moment, day) => {
+  const { field } = battle;
+  const theirs = (cell) => fold(holderAtCell(battle, run, cell)) === fold(target);
+  const border = borderCells(battle, HOLDER_SIDE_A, theirs);
+  if (border.length === 0) {
+    run.notes.push({ kind: "border-not-found", battlefield: battle.name, side: clean(moment.side), ...(moment.ref !== undefined ? { ref: moment.ref } : {}) });
+    return;
+  }
+  const troops = battle.troops[HOLDER_SIDE_A];
+  const nearest = (troop) => {
+    let best = Infinity;
+    for (let at = 0; at < border.length; at += Math.max(1, Math.floor(border.length / 64))) {
+      const dx = (border[at] % field.cols) + 0.5 - troop.x;
+      const dy = Math.floor(border[at] / field.cols) + 0.5 - troop.y;
+      if (dx * dx + dy * dy < best) best = dx * dx + dy * dy;
+    }
+    return best;
+  };
+  const live = troops.map((troop, at) => ({ at, far: isLive(troop) ? nearest(troop) : Infinity })).filter((entry) => entry.far < Infinity).sort((a, b) => a.far - b.far || a.at - b.at);
+  const count = WAR_EFFORTS.includes(moment.effort) ? live.length : Math.ceil(live.length / 2);
+  const going = live.slice(0, count).map((entry) => entry.at).sort((a, b) => troops[a].y - troops[b].y || troops[a].x - troops[b].x || a - b);
+  going.forEach((at, index) => {
+    const troop = troops[at];
+    troop.goal = border[Math.min(border.length - 1, Math.floor(((index + 0.5) * border.length) / going.length))];
+    troop.dug = false;
+    if (troop.order && !troop.order.done) troop.order.done = true;
+  });
+  if (going.length > 0) battle.log.push({ d: run.dateOf(day), k: "stationed", s: HOLDER_SIDE_A, at: `${going.length} formations to the border with ${target}`, n: going.length });
+};
+
+// Every troop of a country's forces at home sent home, its men given back; nothing more called up there.
+const standDownAtHome = (run, battle, day) => {
+  sendHome(run, battle, HOLDER_SIDE_A);
+  for (const troop of battle.troops[HOLDER_SIDE_A]) troop.strength = 0;
+  battle.levy[HOLDER_SIDE_A] = [];
+  battle.log.push({ d: run.dateOf(day), k: "stood-down", s: HOLDER_SIDE_A, at: "all its forces at home sent home" });
+  battle.closing = "stood-down";
+};
+
+const applyHomeMoment = (run, moment, day, country) => {
+  const note = { kind: "", battlefield: homeName(country), side: clean(moment.side), ...(moment.ref !== undefined ? { ref: moment.ref } : {}) };
+  // Only a country orders its own forces at home.
+  if (fold(moment.side) !== fold(country)) {
+    run.notes.push({ ...note, kind: "side-not-fighting" });
+    return;
+  }
+  let battle = homeForcesOf(run, country);
+  if (moment.order === "withdraw" || moment.order === "fall back") {
+    if (battle) standDownAtHome(run, battle, day);
+    return;
+  }
+  if (!battle) {
+    if (run.battles.filter((entry) => entry.home && entry.status !== "closed").length >= MAX_HOME_FORCES) {
+      run.notes.push({ ...note, kind: "too-many-battlefields" });
+      return;
+    }
+    battle = openHome(run, country, day);
+    if (!battle) {
+      run.notes.push({ ...note, kind: "home-not-found" });
+      return;
+    }
+  }
+  battle.quiet = 0;
+  battle.touched = true;
+  if (moment.order === "reinforce") {
+    callUpAtHome(run, battle, moment, day);
+    return;
+  }
+  const target = COUNTRY_OBJECTIVE.exec(String(moment.objective ?? ""));
+  if (target && ["hold", "dig in"].includes(moment.order)) {
+    stationOnBorder(run, battle, clean(target[1]), moment, day);
+    return;
+  }
+  if (["hold", "dig in"].includes(moment.order)) orderOnFront(run, battle, { ...moment, battlefield: battle.name }, day);
+  else run.notes.push({ ...note, kind: "home-no-front" });
+};
+
+// THE WAR BEGUN FROM GROUND BUILT UP IN PEACE. "it shouldnt prevent attacks,
+// you should be able to start wars by moving troops into others land" (the
+// owner, 2026-11-02). Troops of a border built up in peace told from the war
+// room to attack across it, or of a border or a country's forces at home sent
+// along a route into another country's land: the war between the two begins
+// as the run does (attackOpensWar), and they carry the order out on its
+// battlefield (adoptStanding; for those at home, bringHome).
+const attackFromStanding = (run, battle) => {
+  if (battle.status !== "standing" || battle.closing) return;
+  for (const order of battle.orders) {
+    if (!order.chosen || !(order.s === HOLDER_SIDE_A || order.s === HOLDER_SIDE_B)) continue;
+    const attacker = battle.sides[order.s].find((member) => fold(member) === fold(order.by)) ?? battle.sides[order.s][0];
+    let defender = "";
+    if (Array.isArray(order.way) && order.way.length > 0) {
+      // From where its troops stand: the way to the route's first point is part of it.
+      let x = 0;
+      let y = 0;
+      let count = 0;
+      for (const troop of battle.troops[order.s]) {
+        if (!isLive(troop) || !(troop.order && !troop.order.done && troop.order.standing === order)) continue;
+        x += troop.x;
+        y += troop.y;
+        count += 1;
+      }
+      const way = order.way.map(([lng, lat]) => battle.place.toCell(lng, lat));
+      defender = wayInto(battle, order.s, count > 0 ? [[x / count, y / count], ...way] : way, (cell) => holderAtCell(battle, run, cell));
+    } else if (!battle.home && ATTACK_ORDERS.includes(order.order)) defender = battle.sides[1 - order.s][0];
+    if (!defender || fold(defender) === fold(attacker)) continue;
+    const war = attackOpensWar(run, attacker, defender, 0, true);
+    if (!war) continue;
+    for (const front of run.battles) if (front.warId === war.id && front.status === "active") tellAttack(run, front, attacker, defender, 0);
+    if (battle.status !== "standing") return;
+  }
+};
+
+// FORCES AT HOME JOIN A WAR'S BATTLEFIELD. Those of a country's forces at home
+// that stand on its side's ground within HOME_JOIN_KM of a battlefield's line,
+// in a war of that country's, join it where they stand, as troops of its side,
+// and are at home no more; what they were told there (a route drawn for them)
+// they carry on with (homeOrders). Returns what homeOrders needs: [{ order, picked }].
+const bringHome = (run, battle, day) => {
+  const handed = [];
+  if (battle.status !== "active" || battle.home) return handed;
+  for (const home of run.battles) {
+    if (!home.home || home.status === "closed" || home.closing) continue;
+    const country = home.sides[0][0];
+    const side = sideOfName(battle, country);
+    if (side < 0) continue;
+    const owner = Math.max(0, memberIndex(battle, side, country));
+    const toOther = measure(battle)[1 - side];
+    const moved = new Map();
+    home.troops[HOLDER_SIDE_A].forEach((troop, at) => {
+      if (!isLive(troop) || battle.troops[side].length >= MAX_TROOPS_PER_SIDE) return;
+      const [lng, lat] = home.place.toLngLat(troop.x, troop.y);
+      const [x, y] = battle.place.toCell(lng, lat);
+      const cell = cellAt(battle.field, x, y);
+      if (cell < 0 || battle.field.holders[cell] !== side || (toOther[cell] / 3) * battle.frame.km > HOME_JOIN_KM) return;
+      const joined = createTroop({ x, y, kind: troop.kind, owner, strength: troop.strength });
+      if (troop.fatigue > 0) joined.fatigue = troop.fatigue;
+      battle.troops[side].push(joined);
+      moved.set(at, { index: battle.troops[side].length - 1, order: troop.order && !troop.order.done ? troop.order.standing ?? null : null });
+      troop.strength = 0;
+    });
+    if (moved.size === 0) continue;
+    for (const order of home.orders) {
+      if (!order.chosen) continue;
+      const picked = [...moved.values()].filter((entry) => entry.order === order).map((entry) => entry.index);
+      if (picked.length === 0) continue;
+      handed.push({ order: { s: side, sector: "all", order: order.order, since: run.dateOf(day), chosen: true, ...(order.way ? { way: order.way } : {}), ...(order.by ? { by: order.by } : {}), ...(order.effort ? { effort: order.effort } : {}) }, picked });
+    }
+    home.touched = true;
+    home.planKey = "";
+    battle.log.push({ d: run.dateOf(day), k: "drafted", s: side, at: `${moved.size} formations from ${country}'s forces at home`, n: moved.size });
+    battle.touched = true;
+    battle.planKey = "";
+  }
+  return handed;
+};
+
+// What the troops brought from home were told, told them here.
+const homeOrders = (run, battle, handed, day) => {
+  if (!Array.isArray(handed) || handed.length === 0) return;
+  const today = prepare(battle, day);
+  for (const { order, picked } of handed) {
+    battle.orders.push(order);
+    assignOrder(battle, run, order, { ...today, date: run.dateOf(day), run }, { picked, lagless: true });
+  }
+  markAttacks(run, battle);
+};
+
 const applyOrderMoment = (run, moment, day) => {
   // A capture the story stated, as the order the turn drew from it (its ref ends "<event>:<region>",
   // AI/frontTurn.js statedCaptures), is not made where the same capture was refused (captureRefused).
@@ -1282,6 +1606,11 @@ const applyOrderMoment = (run, moment, day) => {
   const border = BORDER.exec(String(moment.battlefield ?? ""));
   if (border) {
     applyBorderMoment(run, moment, day, clean(border[1]), clean(border[2]));
+    return;
+  }
+  const home = HOME.exec(String(moment.battlefield ?? ""));
+  if (home) {
+    applyHomeMoment(run, moment, day, clean(home[1]));
     return;
   }
   const wanted = foldBattlefieldName(moment.battlefield);
@@ -2092,6 +2421,9 @@ const moveTransports = (run, day) => {
 const mustHaveRegions = (run) => run.moments.some(({ moment }) => {
   if (moment.type === "war") return ["start", "join-a", "join-b", "resume"].includes(moment.op);
   if (moment.type !== "order") return false;
+  // An order for a country's forces at home that have no record yet opens one (home.js).
+  const home = HOME.exec(String(moment.battlefield ?? ""));
+  if (home) return !normalizeBattlefields(run.input.battlefields).some((record) => record.home && record.status !== "closed" && foldBattlefieldName(record.name) === foldBattlefieldName(homeName(home[1])));
   // An order for a border that has no battlefield yet opens one.
   const border = BORDER.exec(String(moment.battlefield ?? ""));
   if (border) {
@@ -2131,6 +2463,8 @@ const begin = (run) => {
   for (const battle of run.battles) {
     if (battle.closing) continue;
     if (battle.status === "active") absorbUnits(battle, run);
+    // (And those of a country's forces at home that have come near it: home.js.)
+    battle.handedHome = battle.status === "active" ? bringHome(run, battle, 0) : null;
     setRadii(battle);
     paintGround(battle, run);
     keepStart(battle);
@@ -2140,6 +2474,8 @@ const begin = (run) => {
     // (An order written onto the record for a city beyond the frame's edge, by a general in the war room: the frame holds it first.)
     if (battle.status === "active") for (const order of battle.orders.slice()) if (order.objective) holdObjective(run, battle, order.objective, 0);
     assignStanding(run, battle);
+    homeOrders(run, battle, battle.handedHome, 0);
+    battle.handedHome = null;
     markAttacks(run, battle);
   }
   // A formation still marked as committed to a battlefield that is gone, or
@@ -2156,6 +2492,8 @@ const begin = (run) => {
       closeBattle(run, battle, 0);
     } else recordDay(battle, 0, run.days === 0);
   }
+  // Troops built up in peace sent into another country's land from the war room: the war beginning, there and then.
+  for (const battle of run.battles.slice()) attackFromStanding(run, battle);
   for (const war of run.wars.values()) examineWar(run, war, 0);
   if (run.braked) run.notes.push({ kind: "tempo" });
   // Transporters that were ordered set out: their troops leave the battlefields
@@ -2411,7 +2749,11 @@ function* stepDay(run) {
       // Whoever was told to withdraw and has got clear is gone from the battlefield.
       withdrawWhoLeft(run, battle, day);
       battle.daysRun += 1;
-    } else if (battle.status === "standing") standDay(battle);
+    } else if (battle.status === "standing") {
+      // A border built up in peace: its levies come in and its troops march to it; nothing is fought (march.js).
+      if (run.mech.marching) peaceDay(run, battle, day);
+      standDay(battle);
+    }
     if (battle.closing && battle.status !== "closed") closeBattle(run, battle, day);
   }
   // The day's sailing: whoever arrives is on the ground from this evening.

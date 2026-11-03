@@ -784,6 +784,10 @@ const quoted = (notes, field) => named(notes, field).slice(0, 4).join("; ") || "
 const one = (notes, field) => named(notes, field).length <= 1;
 const NOTE_TEXT = {
   "unknown-battlefield": (notes) => `Front orders named ${one(notes, "battlefield") ? "a battlefield that does" : "battlefields that do"} not exist (${quoted(notes, "battlefield")}). Use the names listed under [Fronts]; a battlefield opens by itself where two sides at war hold touching land. To have a country attack one it is at peace with, name their border (\`border: A / B\`) or give the order an objective the other holds.`,
+  // A country's forces at home (runtime/fronts/home.js).
+  "home-not-found": (notes) => `Forces were not built up at home (${quoted(notes, "side")}): that country holds no land on the map with another country's near it.`,
+  "called-today": (notes) => `Forces at home were called up once already that day (${quoted(notes, "side")}): a country calls up its forces at home once a day.`,
+  "home-no-front": (notes) => `An order to forces at home was not carried out (${quoted(notes, "side")}): they have no front to go forward from. Station them on a border (hold or dig in, objective country: X); a war begins with an attack across a border.`,
   "side-not-fighting": (notes) => `Front orders were given for ${quoted(notes, "side")}, which ${one(notes, "side") ? "is" : "are"} not fighting on the battlefield named. Only a side of that battlefield's war takes orders there.`,
   "sector-read-as-all": (notes) => `A sector that does not fit its line was read as the whole line (${quoted(notes, "detail")}). The sectors each line has are listed under [Fronts].`,
   "objective-not-found": (notes) => `An objective was not found on its battlefield and was left out (${quoted(notes, "detail")}). Name a city or a region that lies on that battlefield.`,

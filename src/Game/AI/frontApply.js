@@ -37,6 +37,7 @@ import { gameDateYear } from "../../runtime/gameDates.js";
 import { yearInEra } from "../../runtime/unitMotion.js";
 import { eraSettingOf, warSettingsOf, warfareOf } from "../../runtime/warSettings.js";
 import { normalizeBattlefields } from "../../runtime/fronts/record.js";
+import { homeName } from "../../runtime/fronts/home.js";
 import { isUnderWay, normalizeTransports } from "../../runtime/fronts/transports.js";
 import { AIR_CITY_GDP, airStrikesBlock, normalizeAirStrikes, withTurnAirStrikes } from "../../runtime/fronts/airStrike.js";
 import { findWay } from "../../runtime/fronts/wayfinder.js";
@@ -859,6 +860,45 @@ export const openScenarioFronts = async ({ world = {}, game = {}, campaignId = "
   });
 };
 export { scenarioFrontsPending };
+
+// ---- a country's forces at home ---------------------------------------------------------
+
+// "lets design a whole system so you can build up forces and strengthen and
+// gather troops before any war or conflict is happening yet"; "building up
+// forces shouldnt happen on a border, it should just happen in your country
+// around cities. you can them move them with war room tools to a border" (the
+// owner, 2026-11-02). The player's forces built up at home, now: the front
+// engine run over no days with one order, the player's to call up its forces
+// at home (runtime/fronts/home.js; engine.js applyHomeMoment), as many as its
+// men, supplies, war weariness and mustering allow, round its cities, the
+// rest as they muster; once a day at most. The War Room is then the player's
+// there (GameUI/warRoomData.js), to move them with. It is run with nothing but
+// those forces, so that nothing else is touched by it (a call-up waiting on a
+// battlefield would be spent). No model is asked anything.
+// Returns { record, manpower, notes }: the forces' record, or null with the
+// engine's notes saying why; null when fronts are off, and { record: undefined }
+// when the map could not be read.
+export const BUILD_UP_EVENT = "build-up";
+export const buildUpAtHome = async ({ world = {}, game = {}, campaignId = "", loadRegions = null } = {}) => {
+  if (!frontsOn()) return null;
+  const date = clean(game?.gameDate || game?.startDate);
+  const player = clean(game?.country);
+  const name = fold(homeName(player));
+  const home = normalizeBattlefields(world?.battlefields).filter((record) => record.home === true && record.status !== "closed" && fold(record.name) === name);
+  const run = await runTurnFronts({
+    ...turnRunInput({ world, game, campaignId, loadRegions, signal: null, round: Number(game?.round) || 1, fromDate: date }),
+    world: { ...world, battlefields: home, wars: [] },
+    events: [{ id: BUILD_UP_EVENT, date, title: "Forces called up at home", description: "", impacts: {} }],
+    frontOrders: [{ id: BUILD_UP_EVENT, battlefield: `home: ${player}`, side: player, order: "reinforce", sector: "all", objective: "", result: "", effort: "major", eventIds: [BUILD_UP_EVENT] }],
+    warStages: [[]],
+    fromDate: date,
+    toDate: date,
+    requestedDays: 0,
+  });
+  if (!Array.isArray(run?.battlefields)) return { record: undefined, manpower: [], notes: asArray(run?.notes) };
+  const record = normalizeBattlefields(run.battlefields).find((entry) => entry.home === true && entry.status !== "closed" && fold(entry.name) === name) ?? null;
+  return { record, manpower: record ? asArray(run.manpower) : [], notes: asArray(run?.notes) };
+};
 
 // The world's formations after a turn's run: the ones that went onto a
 // battlefield carry its name, the ones that came back stand where their troops
