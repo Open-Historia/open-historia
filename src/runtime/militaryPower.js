@@ -5,37 +5,41 @@
 // "ANOTHER set of stats that affect the overall front end military strength".
 //
 // A country's MILITARY POWER, the figure the Stats pane shows on its Military
-// card and ranks countries by (Game/GameUI/countryRanking.js), is its weight in
-// a land war (countryWeight.js: its people, and what its forces have to spend),
-// taken through its own military figures (militaryStats.js; what each does in a
-// war: fronts/military.js). Never the land it holds: "remove region count power
-// entirely" (the owner, 2026-10-16). A country whose people nobody knows has no
-// power yet: the AI rates its people and figures against every other country's
-// when the game first needs them (Game/AI/militaryRating.js), if its scenario's
-// designer did not.
+// card and ranks countries by (Game/GameUI/countryRanking.js), is what its
+// forces come to by the figures the AI rated them at against every other
+// country's (Game/AI/militaryRating.js: by its scenario's designer, else when
+// the game first needs them). Never the land it holds: "remove region count
+// power entirely" (the owner, 2026-10-16). A country never rated, or whose
+// people nobody knows, has none (null): its people no longer stand in for a
+// rating ("get rid of that fallback", the owner, 2026-11-03).
 //
-//   manpower share  its people are counted at the share of them who can fight
-//                   against the twelve in a hundred every country had, so a
-//                   country of the usual share weighs what it always did.
-//   spending        what its forces have to spend, against the others (50 the
-//                   middle), where it was rated; else what its economy pays for
-//                   (militaryFunding.js forcesFunding)
-//   quality         0.5 to 1.5, and technology 0.7 to 1.3, as its troops fight
-//                   (statFactor: 1 at 50)
+// It weighs the men far less, and how they are armed and led far more, than the
+// troops of a land war are sized (countryWeight.js: people by the square root).
+// That root put China first, India second and the US third in a scenario rated
+// to the life ("I belive its just taking manpower too high into consideration
+// and technological stuff too low because that scenario has accurate military
+// stats", the owner, 2026-11-03, of Modern Day 2026). Weighed as below, the same
+// figures rank the US, China, India, Russia, Korea, Israel, the UK and France
+// first (militaryPower.test.js). Its own ranges are the figure's alone: a
+// battle is fought as fronts/military.js has it.
+//
+//   men             the men it can put under arms (its people at the share of
+//                   them who can fight), by the MEN_POWER-th root: a hundred
+//                   times the men is two and a half times the power
+//   spending        what its forces have to spend for each soldier, against
+//                   the others: militaryFunding.js spendingFactor, 0.6 to 1.5
+//   quality         POWER_QUALITY, and technology POWER_TECHNOLOGY (1 at 50)
 //   weariness       nothing up to 50; past it, less and less, to 0.6 at 100: a
 //                   weary country fights less willingly. The game's own figure
 //                   for it (warWeariness.js), else the one its author gave it to
 //                   begin with.
-//   arms            its land, sea and air arms, each 0.5 to 1.5 (1 at 50; an
+//   arms            its land, sea and air arms, each POWER_ARMS (1 at 50; an
 //                   arm at 0 counts nothing), weighed 0.6, 0.25 and 0.15
 //
-// At the figures every country has (50 each, a share of twelve, no weariness)
-// it is the weight to the last digit, so a game whose scenario gives nobody any
-// figures ranks its countries exactly as it did. A scenario that turns
-// countries' figures off (warSettings.js mechanics.military) leaves every
-// country at those, its own share of people aside, which the engine counts
-// either way; one that leaves air out of its battles (mechanics.air) weighs
-// the land and the sea alone.
+// A scenario that turns countries' figures off (warSettings.js
+// mechanics.military) leaves every country's quality, technology and arms at
+// 50, its rated spending and men aside; one that leaves air out of its battles
+// (mechanics.air) weighs the land and the sea alone.
 //
 // Pure, and loads in plain Node.
 
@@ -43,8 +47,8 @@ import { RESOURCES_FULL, RESOURCES_SHORTAGE_MOST, economyRate, refillAMonth, res
 import { normalizeBlockades } from "./naval/blockade.js";
 import { countryWeight, middleWeight } from "./countryWeight.js";
 import { MANPOWER_SHARE } from "./fronts/constants.js";
-import { ARM_FACTORS, QUALITY_FACTORS, TECHNOLOGY_FACTORS, readMilitary, statFactor } from "./fronts/military.js";
-import { forcesFunding, middleFundingPerHead } from "./militaryFunding.js";
+import { readMilitary, statFactor } from "./fronts/military.js";
+import { forcesFunding, middleFundingPerHead, spendingFactor } from "./militaryFunding.js";
 import { militaryLookup } from "./militaryStats.js";
 import { populationFigureOf } from "./populationFigure.js";
 import { warSettingsOf } from "./warSettings.js";
@@ -52,6 +56,14 @@ import { warSettingsOf } from "./warSettings.js";
 // The share of its people every country could put under arms before, in percent.
 export const MANPOWER_PERCENT = Math.round(MANPOWER_SHARE * 1000) / 10;
 export const ARM_WEIGHTS = Object.freeze({ land: 0.6, sea: 0.25, air: 0.15 });
+// The power is POWER_SCALE at a million men under arms and every figure at 50. Men count by the MEN_POWER-th root.
+export const POWER_SCALE = 5;
+export const MEN_AT = 1e6;
+export const MEN_POWER = 0.2;
+// What quality, technology and each arm are worth to the power, at 0 and at 100.
+export const POWER_QUALITY = Object.freeze([0.5, 1.8]);
+export const POWER_TECHNOLOGY = Object.freeze([0.5, 1.5]);
+export const POWER_ARMS = Object.freeze([0.3, 1.8]);
 // Weariness costs nothing up to WEARY_POWER_FROM, and WEARY_POWER_COST_MOST at 100.
 export const WEARY_POWER_FROM = 50;
 export const WEARY_POWER_COST_MOST = 0.4;
@@ -97,14 +109,15 @@ const wearinessFor = (world, name, given) => {
 };
 
 // What an arm is worth to the power: nothing at 0.
-const armFactor = (value) => (value <= 0 ? 0 : statFactor(value, ARM_FACTORS[0], ARM_FACTORS[1]));
+const armFactor = (value) => (value <= 0 ? 0 : statFactor(value, POWER_ARMS[0], POWER_ARMS[1]));
 
 // Everything a country's military power is read from, and the power.
 //   middle    middleFundingPerHead of the world's sheets; worked out here when not given
 //   lookup    militaryLookup(world), to read many countries of one world
 // Returns {
-//   power     the figure, or null where its people are not known
-//   base      its weight at its share of people and its spending, before its figures
+//   power     the figure, or null where it was never rated
+//   rated     whether the AI rated it (its spending is known)
+//   base      what its men under arms and its spending come to, before its other figures
 //   figures   { quality, technology, land, sea, air, spending, manpowerShare, weariness } as they count
 //   own       for each figure, whether it is the country's own (its author's, its
 //             sheet's, or for weariness the game's) rather than every country's
@@ -114,7 +127,11 @@ const armFactor = (value) => (value <= 0 ? 0 : statFactor(value, ARM_FACTORS[0],
 export const militaryProfile = (world, name, { middle = null, lookup = null } = {}) => {
   const settings = warSettingsOf(world);
   const counted = settings.mechanics.military;
-  const given = counted ? (typeof lookup === "function" ? lookup : militaryLookup(world))(name) : null;
+  // (Its rating is read whether or not the scenario counts its figures in battle: its spending is the power's scale.)
+  const rating = (typeof lookup === "function" ? lookup : militaryLookup(world))(name);
+  const given = counted ? rating : null;
+  const spent = Number(rating?.spending);
+  const rated = rating?.spending !== null && rating?.spending !== undefined && rating?.spending !== "" && Number.isFinite(spent);
   const read = readMilitary(given);
   const share = read.manpowerShare ?? settings.manpowerShare ?? MANPOWER_PERCENT;
   const weary = wearinessFor(world, name, given);
@@ -124,7 +141,7 @@ export const militaryProfile = (world, name, { middle = null, lookup = null } = 
     land: read.land,
     sea: read.sea,
     air: read.air,
-    spending: Number.isFinite(Number(given?.spending)) && given?.spending !== null && given?.spending !== undefined ? Number(given.spending) : 50,
+    spending: rated ? spent : 50,
     manpowerShare: share,
     weariness: weary.value,
   };
@@ -135,16 +152,13 @@ export const militaryProfile = (world, name, { middle = null, lookup = null } = 
     land: has("land"),
     sea: has("sea"),
     air: has("air"),
-    spending: has("spending"),
+    spending: rated,
     manpowerShare: read.manpowerShare !== null,
     weariness: weary.from !== "none",
   };
 
-  // (A ratio of exactly 1 at the usual share: the people are the people.)
-  const ratio = share / MANPOWER_PERCENT;
   const people = peopleFor(world, name);
-  const paid = forcesFunding({ sheet: recordIn(world?.countryStats, name), middle: middle ?? middleFundingPerHead(world?.countryStats), military: given });
-  const base = people > 0 ? countryWeight({ population: people * ratio, funding: paid }) : null;
+  const base = rated && people > 0 ? POWER_SCALE * Math.pow((people * share) / 100 / MEN_AT, MEN_POWER) * spendingFactor(spent) : null;
 
   const landArm = armFactor(figures.land);
   const seaArm = armFactor(figures.sea);
@@ -152,8 +166,8 @@ export const militaryProfile = (world, name, { middle = null, lookup = null } = 
     ? ARM_WEIGHTS.land * landArm + ARM_WEIGHTS.sea * seaArm + ARM_WEIGHTS.air * armFactor(figures.air)
     : (ARM_WEIGHTS.land * landArm + ARM_WEIGHTS.sea * seaArm) / (ARM_WEIGHTS.land + ARM_WEIGHTS.sea);
   const factors = {
-    quality: statFactor(figures.quality, QUALITY_FACTORS[0], QUALITY_FACTORS[1]),
-    technology: statFactor(figures.technology, TECHNOLOGY_FACTORS[0], TECHNOLOGY_FACTORS[1]),
+    quality: statFactor(figures.quality, POWER_QUALITY[0], POWER_QUALITY[1]),
+    technology: statFactor(figures.technology, POWER_TECHNOLOGY[0], POWER_TECHNOLOGY[1]),
     weariness: 1 - (WEARY_POWER_COST_MOST * Math.max(0, figures.weariness - WEARY_POWER_FROM)) / (100 - WEARY_POWER_FROM),
     arms,
   };
@@ -168,7 +182,7 @@ export const militaryProfile = (world, name, { middle = null, lookup = null } = 
   const blockade = supplied ? normalizeBlockades(world?.blockades).find((entry) => String(entry.country).toLowerCase() === String(name ?? "").replace(/\s+/g, " ").trim().toLowerCase()) : null;
   const refill = supplied ? refillAMonth(economyRate({ sheet: recordIn(world?.countryStats, name), middle: middle ?? middleFundingPerHead(world?.countryStats), pressure: blockade?.pressure ?? 0 })) : null;
   const power = base === null ? null : base * factors.quality * factors.technology * factors.weariness * factors.arms * (supplied ? factors.resources : 1);
-  return { power, base, figures, own, factors, counted, supplied, refill };
+  return { power, rated, base, figures, own, factors, counted, supplied, refill };
 };
 
 // A country's military power: null where its people are not known.

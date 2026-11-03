@@ -63,6 +63,14 @@ const publicPartyRow = (party, index) => {
     ruling: party.ruling === true,
     coalition: party.coalition === true,
     color: clean(party.color),
+    // What the Politics tab kept apart, the Political World's now (politicalActors.js).
+    nameNative: clean(party.nameNative),
+    shortNameNative: clean(party.shortNameNative),
+    ideologyFamily: clean(party.ideologyFamily),
+    subideology: clean(party.subideology),
+    role: clean(party.role),
+    seats: Number.isFinite(Number(party.seats)) && party.seats !== null && party.seats !== "" ? Math.max(0, Math.round(Number(party.seats))) : null,
+    founded: clean(party.founded),
   };
 };
 

@@ -272,3 +272,41 @@ test("strikes measure by the map's projection, as the rest of the engine does", 
   assert.match(read("./airStrikeOps.js"), /measureOptions\(engineMapOf\(worldMeasureOf\(world\)\)\)/);
   assert.match(read("../../Game/GameUI/warRoom.jsx"), /measureOptions\(engineMapOf\(currentMapMeasure\(\)\)\)/);
 });
+
+// "why is the aircraft button greyed out" ... "then why do I see planes flying around" (the owner, 2026-11-03): a
+// country with no air unit on the map still flies its air arm over its fronts (air.js AIR ARMS), and the war room
+// strikes with it.
+test("a country with no air unit of its own strikes with its front's air arm, and one with an air unit does not", async () => {
+  const { airArmsOf, airArmsForOrders, AIR_ARM_UNIT } = await import("./airStrikeOps.js");
+  const { battlefieldOn } = await import("./testKit.js");
+  const { decodeTroops } = await import("./codec.js");
+  const { projectorOf } = await import("./frame.js");
+  const legend = { A: "Aland", B: "Borduria", "~": null };
+  const sheet = syntheticMap({ layout: ["ABBBBB", "ABBBBB"], legend, west: 20, north: 51, step: 1, stepLat: 1 });
+  const row = (lng, count) => Array.from({ length: count }, (_, index) => ({ lng, lat: 49 + ((index + 0.5) * 2) / count }));
+  const record = battlefieldOn(sheet, { troops: [row(20.9, 8), row(21.1, 5)], pool: [100, 100] });
+  const [front] = runFronts(frontInput(sheet, { battlefields: [record], days: 2, steering: { even: true, wander: 0 } })).battlefields;
+  const world = { wars: [WAR], battlefields: [front], units: [] };
+  // Its air arm over the front, based among its troops there.
+  const [arm] = airUnitsOf(world, "Aland");
+  assert.equal(arm.id, `${AIR_ARM_UNIT}${front.name}`);
+  assert.equal(arm.name, `${front.name} air arm`);
+  assert.equal(arm.strength, 100);
+  assert.ok(arm.lng > 20 && arm.lng < 22 && arm.lat > 49 && arm.lat < 51, `${arm.lng}, ${arm.lat}`);
+  // A strike on the enemy's troops there is ordered, and flown with it.
+  const { toLngLat } = projectorOf(front.frame);
+  const enemy = decodeTroops(front.troops[1]).find((troop) => troop.strength > 0);
+  const done = applyAirStrikeOp(world, { op: "airstrike", unit: arm.id, kind: "troops", to: toLngLat(enemy.x, enemy.y), battlefield: front.name, target: "their line" }, { player: "Aland", date: "2024-03-01", round: 2 });
+  assert.equal(done.error, undefined, done.error);
+  assert.equal(done.order.unit, arm.id);
+  const flown = fly([...world.units, ...airArmsForOrders(done.world)], done.world.airStrikeOrders);
+  assert.equal(flown.strikes.length, 1);
+  assert.equal(flown.strikes[0].unit, arm.name);
+  assert.equal(flown.moments.length, 1);
+  // A country with an air unit of its own flies that, and no arm.
+  assert.deepEqual(airArmsOf({ ...world, units: [air("wing", "Aland")] }, "Aland"), []);
+  assert.deepEqual(airUnitsOf({ ...world, units: [air("wing", "Aland")] }, "Aland").map((unit) => unit.id), ["wing"]);
+  // Nor one whose air arm is worth nothing, nor one not fighting there.
+  assert.deepEqual(airArmsOf({ ...world, polityOverrides: { Aland: { name: "Aland", military: { air: 0 } } } }, "Aland"), []);
+  assert.deepEqual(airArmsOf(world, "Cisland"), []);
+});

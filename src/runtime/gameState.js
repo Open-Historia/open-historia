@@ -73,7 +73,7 @@ import { normalizeStrikes } from "./strikes.js";
 import { normalizeAirStrikeOrders, normalizeAirStrikes } from "./fronts/airStrike.js";
 import { battlefieldHeldClaimants } from "./fronts/heldRegions.js";
 import { sharedGameHostCountry } from "./humanPolities.js";
-import { normalizePartyOp, normalizePolitics } from "./politics.js";
+import { foldPoliticsIntoActors } from "./politicalLandscapeFold.js";
 import { activeWars } from "./gameFeatures.js";
 
 export const GAME_DEFAULTS = {
@@ -109,9 +109,6 @@ export const WORLD_DEFAULTS = {
   // intercepted exchange the player can read — and how much of the player's own
   // traffic a rival can.
   intelligence: {},
-  // Per-polity government and parties for the Stats pane's Politics tab
-  // (runtime/politics.js), name-keyed; absent until the player asks for one.
-  politics: {},
   // Every spy in the world, both directions: [{ id, owner, target, deployedAt,
   // status, turnedAt, exposedAt, coverStory, suspected }] — see spycraft.js for
   // the statuses. What the player's spies bring back lives in the intercepts
@@ -3633,7 +3630,6 @@ const normalizeEventImpacts = (value, event = null) => {
       groupOps: [],
       institutionLifecycleOps: [],
       markerOps: [],
-      partyOps: [],
       polityChanges: [],
       politicalActorOps: [],
       projectOps: [],
@@ -3654,8 +3650,6 @@ const normalizeEventImpacts = (value, event = null) => {
     groupOps: normalizeArray(value.groupOps).map(normalizeGroupOp).filter(Boolean),
     institutionLifecycleOps: normalizeArray(value.institutionLifecycleOps).map(normalizeInstitutionLifecycleImpactOp).filter(Boolean),
     markerOps: normalizeArray(value.markerOps).map(normalizeMarkerOp).filter(Boolean),
-    // Changes to a polity's tracked parties (runtime/politics.js).
-    partyOps: normalizeArray(value.partyOps).map(normalizePartyOp).filter(Boolean),
     polityChanges: normalizeArray(value.polityChanges).map(normalizePolityChange).filter(Boolean),
     politicalActorOps: normalizeArray(value.politicalActorOps).map(normalizePoliticalActorImpactOp).filter(Boolean),
     projectOps: normalizeArray(value.projectOps).map(normalizeProjectOp).filter(Boolean),
@@ -4338,7 +4332,9 @@ const withFormerSceneKeyMoved = (world) => {
 export const normalizeWorldState = (world) => {
   // A battlefield saved under a war's id is renamed, and what names it follows
   // (fronts/record.js withWarIdFrontsRenamed), before anything below reads them.
-  const nextWorld = withWarIdFrontsRenamed(withFormerSceneKeyMoved(world && typeof world === "object" ? world : {}));
+  // (What the Stats pane's Politics tab kept apart, world.politics, is the Political World's now: folded into it
+  // once, and gone. runtime/politicalLandscapeFold.js.)
+  const { politics: formerPolitics = null, ...nextWorld } = withWarIdFrontsRenamed(withFormerSceneKeyMoved(world && typeof world === "object" ? world : {}));
   const polityOverrides = Object.fromEntries(
     Object.entries(nextWorld.polityOverrides ?? {})
       .map(([key, value]) => [key, normalizePolityOverride(key, value)])
@@ -4461,7 +4457,9 @@ export const normalizeWorldState = (world) => {
     ...nextWorld,
     countryTags,
     countryStats,
-    politicalActors: normalizePoliticalActors(nextWorld.politicalActors),
+    politicalActors: formerPolitics && typeof formerPolitics === "object" && Object.keys(formerPolitics).length > 0
+      ? foldPoliticsIntoActors(nextWorld.politicalActors, formerPolitics)
+      : normalizePoliticalActors(nextWorld.politicalActors),
     politicalSimulation: normalizePoliticalSimulationClock(nextWorld.politicalSimulation),
     institutions: normalizeInstitutions(nextWorld.institutions, diplomaticIdentityWorld, diplomaticIdentityIndexOf(diplomaticIdentityWorld)),
     powerStatus: normalizePowerStatus(nextWorld.powerStatus, diplomaticIdentityWorld),
@@ -4475,7 +4473,6 @@ export const normalizeWorldState = (world) => {
     historyDocument: normalizeHistoryDocument(nextWorld.historyDocument),
     internationalReputation,
     intelligence,
-    politics: normalizePolitics(nextWorld.politics),
     spies,
     spySeal,
     gmAudit: normalizeGameMasterAudit(nextWorld.gmAudit),

@@ -53,6 +53,44 @@ import { PAST_UPDATES } from "./notesPast.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // Peace on any terms (runtime/peaceTerms.js: annexed, cessions, puppet, conditions), forces built up through
+    // actions and projects only, and the fixes after 0.0.112 (the owner, 2026-11-03).
+    id: "2026-11-peace-on-any-terms",
+    kind: "minor",
+    date: "2026-11-03",
+    channel: "beta",
+    banners: [
+      {
+        title: "Peace on any terms",
+        items: [
+          "A peace can annex the other country whole, hand over regions by name, or make one side the other's puppet state, protectorate or client state.",
+          "Add any other condition to your terms in your own words, and the next time skip carries it out.",
+          "Leaders and time skips offer and accept peace on these terms too.",
+        ],
+      },
+      {
+        title: "Forces and fixes",
+        items: [
+          "Forces are built up through your actions and projects: order a mobilisation and the time skip calls them up round your cities. The Build up forces button is gone.",
+          "Forces built up in peace show on the map again.",
+          "Military power counts how well a country's forces are armed, led and funded far more than how many they are, and a country waits for its rating instead of being ranked by its population.",
+          "The country panel has one Politics tab again.",
+          "The update banner no longer offers the build you have just installed.",
+          "Major update notices come before minor ones.",
+          "A time skip in a game that tracks political parties is one AI request again, and a skip that has to check its turn separately always keeps a request for it.",
+        ],
+      },
+      {
+        title: "Politics, advisors and the air",
+        items: [
+          "Politics is one record: each country's Political World now carries what the Politics card had, native party names, ideologies, roles, seats, the legislature and the next election, and turns keep it up.",
+          "Your advisor knows your wars as your general staff would: every front's line, strength and latest fighting, your standing orders, how weary each side is and what is on the table for peace.",
+          "Deploy Aircraft works with the air arm that flies over your fronts when you have no air unit of your own on the map.",
+        ],
+      },
+    ],
+  },
+  {
     // "Scripted events don't work at all or have any effect, Geopolitical events don't happen anymore" (a player's
     // report, 2026-11-03): changes written on an event are put where they belong (AI/jumpAnswerShelves.js).
     id: "2026-11-events-take-effect",

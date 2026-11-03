@@ -181,7 +181,7 @@ test("an offer of peace no longer pops up over the map, and the skip's contract 
   assert.ok(chat.includes("{(peaceByMessage.get(String(msg.id ?? \"\")) ?? []).map(renderPeaceCard)}") && chat.includes("{strandedPeace.map(renderPeaceCard)}"));
   // The letter's terms and the treaties' lines ride in the skip's one answer: no array bounds (Gemini rejects them).
   const outreach = GAMEPLAY_TOOLS.jumpForward.schema.properties.diplomaticOutreach;
-  assert.deepEqual(Object.keys(outreach.items.properties.peaceOffer.properties), ["territory", "reparationsPayer", "reparationsPercent", "reparationsYears"]);
+  assert.deepEqual(Object.keys(outreach.items.properties.peaceOffer.properties), ["territory", "reparationsPayer", "reparationsPercent", "reparationsYears", "moreTerms"]);
   assert.equal(GAMEPLAY_TOOLS.jumpForward.schema.properties.peaceTreaties.type, "string");
   const bounded = JSON.stringify(outreach.items.properties.peaceOffer).match(/minItems|maxItems/g);
   assert.equal(bounded, null);

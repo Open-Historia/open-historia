@@ -19,6 +19,7 @@ import { validatePoliticalTraitPatch } from "./politicalTraitRegistry.js";
 export const POLITICAL_ACTOR_OPS = Object.freeze({
   CREATE_PARTY: "create-party",
   UPDATE_PARTY: "update-party",
+  DISSOLVE_PARTY: "dissolve-party",
   SET_PARTY_SUPPORT: "set-party-support",
   SET_PARTY_INFLUENCE: "set-party-influence",
   SET_PARTY_LEADER: "set-party-leader",
@@ -49,8 +50,9 @@ export const POLITICAL_ACTOR_GENERATED_OP_EXAMPLES = Object.freeze({
   }),
   [POLITICAL_ACTOR_OPS.UPDATE_PARTY]: Object.freeze({
     partyId: "stable-party-id",
-    patch: Object.freeze({ ideology: "Updated ideology", publicDescription: "Public description" }),
+    patch: Object.freeze({ ideology: "Updated ideology", publicDescription: "Public description", seats: 120, role: "opposition" }),
   }),
+  [POLITICAL_ACTOR_OPS.DISSOLVE_PARTY]: Object.freeze({ partyId: "stable-party-id" }),
   [POLITICAL_ACTOR_OPS.SET_PARTY_SUPPORT]: Object.freeze({ partyId: "stable-party-id", percent: 42 }),
   [POLITICAL_ACTOR_OPS.SET_PARTY_INFLUENCE]: Object.freeze({ partyId: "stable-party-id", percent: 42 }),
   [POLITICAL_ACTOR_OPS.SET_PARTY_LEADER]: Object.freeze({
@@ -72,7 +74,7 @@ export const POLITICAL_ACTOR_GENERATED_OP_EXAMPLES = Object.freeze({
     }),
   }),
   [POLITICAL_ACTOR_OPS.SET_GOVERNMENT]: Object.freeze({
-    patch: Object.freeze({ form: "Parliamentary Republic", ideology: "social liberalism" }),
+    patch: Object.freeze({ form: "Parliamentary Republic", ideology: "social liberalism", nextElection: "2028-05" }),
   }),
   [POLITICAL_ACTOR_OPS.FORM_COALITION]: Object.freeze({
     rulingPartyIds: Object.freeze(["stable-party-id"]),
@@ -100,12 +102,14 @@ export const POLITICAL_ACTOR_GENERATED_OP_EXAMPLES = Object.freeze({
 });
 
 const GENERATED_OP_NOTES = Object.freeze({
-  [POLITICAL_ACTOR_OPS.CREATE_PARTY]: "party fields MUST be nested under party; do not put name/id/ideology at argsJson root",
+  [POLITICAL_ACTOR_OPS.CREATE_PARTY]: "party fields MUST be nested under party; do not put name/id/ideology at argsJson root. A party can also carry nameNative and shortNameNative (its name and abbreviation as its own speakers write them: correct grammar, real words and that language's capitalisation, never a word-for-word gloss), ideologyFamily (one of the ten ideologies), subideology, role (opposition, extraParliamentary, underground, exile or banned; the government's parties are set by form-coalition), seats and founded",
+  [POLITICAL_ACTOR_OPS.UPDATE_PARTY]: "patch takes any party field, seats and role among them; a rename gives name, shortName, nameNative and shortNameNative together",
+  [POLITICAL_ACTOR_OPS.DISSOLVE_PARTY]: "a party dissolved, merged away or abolished: it leaves the list and the government",
   [POLITICAL_ACTOR_OPS.CREATE_POWER_BLOC]: "power-bloc fields MUST be nested under bloc (or powerBloc)",
   [POLITICAL_ACTOR_OPS.SET_PARTY_SUPPORT]: "use for electoral/popular support; percent is 0-100",
   [POLITICAL_ACTOR_OPS.SET_PARTY_INFLUENCE]: "use for non-electoral or party-state influence; percent is 0-100",
   [POLITICAL_ACTOR_OPS.SET_POWER_BLOC_INFLUENCE]: "percent is 0-100; label is optional",
-  [POLITICAL_ACTOR_OPS.SET_GOVERNMENT]: "government fields belong inside patch; this does NOT establish governing party membership - use form-coalition for that",
+  [POLITICAL_ACTOR_OPS.SET_GOVERNMENT]: "government fields belong inside patch (form, ideology, legislature, legislatureSeats, nextElection among them); this does NOT establish governing party membership - use form-coalition for that",
   [POLITICAL_ACTOR_OPS.FORM_COALITION]: "use to establish governing party membership even for a single-party or minority government; REUSE exact existing canonical party ids when parties already exist; rulingPartyIds may contain one party and coalitionPartyIds may be empty",
   [POLITICAL_ACTOR_OPS.SET_TRAITS]: "trait keys must come from the canonical trait registry and values are 0-100",
   [POLITICAL_ACTOR_OPS.SET_PERCEPTIONS]: "perceptions are subjective beliefs keyed by target polity; common bounded metrics include threat, opportunity, weakness and cohesionEstimate",
@@ -283,6 +287,8 @@ export const validatePoliticalActorOperationShape = (operation, { allowNativeDer
     if (!ruling.length && !coalition.length) return "form-coalition requires at least one governing party.";
   } else if (op === POLITICAL_ACTOR_OPS.LEAVE_COALITION) {
     if (!clean(operation.partyId || operation.party)) return "leave-coalition requires partyId/party.";
+  } else if (op === POLITICAL_ACTOR_OPS.DISSOLVE_PARTY) {
+    if (!clean(operation.partyId || operation.party)) return "dissolve-party requires partyId/party.";
   } else if (op === POLITICAL_ACTOR_OPS.REPLACE_LEADER) {
     const office = clean(operation.office);
     if (office !== "headOfState" && office !== "headOfGovernment") return "replace-leader office must be headOfState or headOfGovernment.";
@@ -507,6 +513,18 @@ export const applyPoliticalActorOperation = (world, operation) => {
     updateGovernmentMembership(actor, ruling.ids, coalitionIds, {
       coalitionName: operation.coalitionName,
     });
+    return result({ applied: true, op, actor: commitActor(world, key, actor) });
+  }
+
+  // A party dissolved, merged away or abolished (the Politics tab's "remove", the Political World's now): out of the
+  // list and out of the government.
+  if (op === POLITICAL_ACTOR_OPS.DISSOLVE_PARTY) {
+    const found = requireParty(actor, operation.partyId || operation.party);
+    if (found.error) return result({ op, error: found.error });
+    const id = found.party.id;
+    const government = actor.government && typeof actor.government === "object" ? actor.government : {};
+    actor.parties = asArray(actor.parties).filter((party) => party.id !== id);
+    updateGovernmentMembership(actor, asArray(government.rulingPartyIds).filter((partyId) => partyId !== id), asArray(government.coalitionPartyIds).filter((partyId) => partyId !== id));
     return result({ applied: true, op, actor: commitActor(world, key, actor) });
   }
 

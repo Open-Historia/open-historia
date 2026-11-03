@@ -13,7 +13,7 @@ import { extractJsonArray } from "./jsonSalvage.js";
 import { WAR_ROOM_ORDERS, WAR_ROOM_STANCES } from "../../runtime/fronts/constants.js";
 import { FRONT_ORDERS_FIELD } from "./nativeFrontLedger.js";
 import { SEAT_ADVICE_ANSWER_SCHEMA, SEAT_ADVICE_FIELD } from "./seatAdvice.js";
-import { IDEOLOGIES, PARTY_OPS, PARTY_ROLES } from "../../runtime/politics.js";
+import { IDEOLOGIES, PARTY_ROLES } from "../../runtime/politics.js";
 import { WAR_FIGURES_FIELD } from "./warFiguresPrompt.js";
 import { ANSWER_LEDGER_KEYS } from "./jumpAnswerShelves.js";
 const textSchema = (description) => ({
@@ -86,6 +86,7 @@ const peaceOfferSchema = {
     reparationsPayer: textSchema("Who pays; empty for nobody."),
     reparationsPercent: { type: "number", description: "% of the payer's GDP a year." },
     reparationsYears: { type: "integer" },
+    moreTerms: textSchema("Other terms, as in a peaceTreaties line."),
   },
   required: ["territory"],
   additionalProperties: false,
@@ -897,12 +898,12 @@ const institutionLifecycleImpactOpSchema = {
 
 const politicalActorImpactOpSchema = {
   type: "object",
-  description: "One canonical PWv2 mutation; operation arguments are JSON in argsJson.",
+  description: "Political World change; args as JSON in argsJson.",
   properties: {
     op: {
       type: "string",
       enum: [
-        "create-party", "update-party", "set-party-support", "set-party-influence", "set-party-leader",
+        "create-party", "update-party", "dissolve-party", "set-party-support", "set-party-influence", "set-party-leader",
         "create-power-bloc", "update-power-bloc", "set-power-bloc-influence",
         "set-political-system", "set-government", "form-coalition", "leave-coalition",
         "replace-leader", "set-strategy", "set-traits", "set-perceptions", "remove-perception",
@@ -935,44 +936,6 @@ const groupOpSchema = {
     note: textSchema("Brief reason."),
   },
   required: ["op", "name"],
-  additionalProperties: false,
-};
-
-// A change to a polity's tracked parties (runtime/politics.js applyPartyOps).
-const partyOpSchema = {
-  type: "object",
-  properties: {
-    polity: nonEmptyTextSchema("A polity listed under [Political Parties], exactly as listed."),
-    op: { type: "string", enum: PARTY_OPS, description: "update a party, add a new one, remove one, or change the government." },
-    party: textSchema("For update and remove: the party's listed name or abbreviation."),
-    changes: {
-      type: "object",
-      description: "Only the fields that changed (the whole party for add). A rename sets all four names: nameEn, nameNative, abbrEn and abbrNative.",
-      properties: {
-        nameEn: textSchema("Name in English."),
-        nameNative: textSchema("Name as native speakers write it: correct grammar, real words, that language's capitalisation."),
-        abbrEn: textSchema("English abbreviation."),
-        abbrNative: textSchema("Native abbreviation."),
-        ideology: { type: "string", enum: IDEOLOGIES.map((ideology) => ideology.name), description: "One of the ten ideologies." },
-        subideology: textSchema("A subideology listed under that ideology."),
-        leader: textSchema("New leader."),
-        role: { type: "string", enum: PARTY_ROLES },
-        seats: { type: "integer", minimum: 0 },
-        support: { type: "integer", minimum: 0, maximum: 100 },
-        founded: textSchema("Year founded."),
-        description: textSchema("One short line."),
-        colour: textSchema("#RRGGBB."),
-        government: textSchema("Form of government."),
-        headOfState: textSchema("Head of state's name and title."),
-        headOfGovernment: textSchema("Head of government's name and title."),
-        legislature: textSchema("Legislature's name."),
-        legislatureSeats: { type: "integer", minimum: 0 },
-        nextElection: textSchema("Next election date or year, or why there is none."),
-      },
-      additionalProperties: false,
-    },
-  },
-  required: ["polity", "op"],
   additionalProperties: false,
 };
 
@@ -1063,11 +1026,6 @@ const impactsSchema = {
         + "operation, a sustained political campaign - so the board matches the "
         + "story. Prefer updating a running project over starting a duplicate.",
       items: projectOpSchema,
-    },
-    partyOps: {
-      type: "array",
-      description: "Changes to the parties of a polity listed under [Political Parties]: an election, a new leader, a split, a ban, a new government. See [Political Parties].",
-      items: partyOpSchema,
     },
   },
   additionalProperties: false,
@@ -3570,45 +3528,6 @@ const WAR_ROOM_SCHEMA = {
 // the battles of a war its skip started, so the war was dropped and no front
 // opened (2026-10-30, two answers against one with it left out). The answer is
 // still read against the whole schema, so a shared game's audience is kept.
-// A polity's parties (impacts.partyOps, runtime/politics.js) are asked for
-// only where the world tracks some polity's parties: in any other game the
-// tool sent is what it was before the Politics tab, and its size guard
-// (projectOpSchema.test.js) holds. Where they are asked for, after every other
-// impact. The answer is read against the whole schema either way.
-const PARTY_OPS_FIELD = impactsSchema.properties.partyOps;
-const isImpacts = (properties) => Boolean(properties?.polityChanges && properties?.spyOps);
-export const withPartyOps = (tool, tracked = false) => {
-  let changed = false;
-  const visit = (node) => {
-    if (!node || typeof node !== "object") return node;
-    if (Array.isArray(node)) {
-      const next = node.map(visit);
-      return next.some((entry, index) => entry !== node[index]) ? next : node;
-    }
-    let out = node;
-    for (const [key, value] of Object.entries(node)) {
-      const next = visit(value);
-      if (next !== value) {
-        out = out === node ? { ...node } : out;
-        out[key] = next;
-      }
-    }
-    if (isImpacts(out.properties)) {
-      const { partyOps, ...rest } = out.properties;
-      if (tracked && !partyOps) {
-        out = { ...out, properties: { ...rest, partyOps: PARTY_OPS_FIELD } };
-        changed = true;
-      } else if (!tracked && partyOps) {
-        out = { ...out, properties: rest };
-        changed = true;
-      }
-    }
-    return out;
-  };
-  const schema = visit(tool?.schema);
-  return changed ? { ...tool, schema } : tool;
-};
-
 export const withEventAudience = (tool, shared = false) => {
   let changed = false;
   const visit = (node) => {
@@ -3982,7 +3901,7 @@ export const WAR_ROOM_TOOL = makeTool(
   WAR_ROOM_SCHEMA,
 );
 
-const GAMEPLAY_TOOLS_WITH_PARTIES = Object.freeze({
+export const GAMEPLAY_TOOLS = Object.freeze({
   spyIntercept: SPY_INTERCEPT_TOOL,
   intelligenceAssessment: INTELLIGENCE_ASSESSMENT_TOOL,
   politicalLandscape: POLITICAL_LANDSCAPE_TOOL,
@@ -4011,10 +3930,6 @@ const GAMEPLAY_TOOLS_WITH_PARTIES = Object.freeze({
   projects: PROJECTS_TOOL,
 });
 
-// As sent by default: without partyOps (withPartyOps adds it back where the world tracks parties).
-export const GAMEPLAY_TOOLS = Object.freeze(Object.fromEntries(
-  Object.entries(GAMEPLAY_TOOLS_WITH_PARTIES).map(([key, tool]) => [key, withPartyOps(tool, false)]),
-));
 
 export const getGameplayTool = (taskKey) => GAMEPLAY_TOOLS[taskKey] ?? null;
 
@@ -4538,7 +4453,6 @@ const PAYLOAD_IMPACT_ARRAYS = [
   "unitOps",
   "markerOps",
   "projectOps",
-  "partyOps",
 ];
 
 const flattenImpactWrappers = (value) => {
@@ -4592,7 +4506,6 @@ const normalizeEventShape = (entry) => {
       unitOps: ["units", "unitOperations"],
       markerOps: ["markers", "markerOperations"],
       spyOps: ["spies", "spyOperations", "espionageOps", "agentOps"],
-      partyOps: ["parties", "partyChanges"],
       createdChats: ["chats", "diplomaticChats"],
       projectOps: ["projects", "projectOperations"],
     };
@@ -4608,6 +4521,9 @@ const normalizeEventShape = (entry) => {
       impacts.unitOps = impacts.unitOps.map(normalizeUnitOperationShape);
     }
     if (Array.isArray(impacts.createdChats)) impacts.createdChats = normalizeChatList(impacts.createdChats);
+    // The Politics tab's party ops are the Political World's ops now (politicalActorOps): an answer written before,
+    // a held turn's, is not refused for them.
+    delete impacts.partyOps;
     event.impacts = impacts;
   }
   return event;

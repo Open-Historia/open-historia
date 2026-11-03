@@ -27,6 +27,7 @@
 import { addGameDays, diffGameDays, gameDateYear } from "../../runtime/gameDates.js";
 import { eraOf, yearInEra } from "../../runtime/unitMotion.js";
 import { resolveAirStrikes, withTroopHits } from "../../runtime/fronts/airStrike.js";
+import { airArmsForOrders } from "../../runtime/fronts/airStrikeOps.js";
 import { militaryLookup } from "../../runtime/militaryStats.js";
 import { DEFAULT_MUSTER, musterTable } from "../../runtime/mustering.js";
 import { warSettingsOf } from "../../runtime/warSettings.js";
@@ -1063,7 +1064,8 @@ export const runTurnFronts = async ({
   const sorties = air !== false
     ? resolveAirStrikes({
       orders: world?.airStrikeOrders,
-      units: asArray(world?.units),
+      // (And the air arms of the fronts some of them were ordered for: airStrikeOps.js airArmsOf.)
+      units: [...asArray(world?.units), ...airArmsForOrders(world)],
       wars: stages[0],
       seed,
       era: eraOf(fromDate, Number.isInteger(era) ? era : null),

@@ -15,7 +15,7 @@ import { fileURLToPath } from "node:url";
 
 import { TREATY_BROKEN_REPUTATION } from "../../runtime/alliances.js";
 import { normalizeWorldState } from "../../runtime/gameState.js";
-import { TERRITORY_AS_HELD, TERRITORY_RESTORED } from "../../runtime/peaceTerms.js";
+import { TERRITORY_AS_HELD, TERRITORY_RESTORED, readTermsLine } from "../../runtime/peaceTerms.js";
 import { WEARINESS_A_YEAR, wearinessOf } from "../../runtime/warWeariness.js";
 import { PUBLIC_WORLD_KEYS } from "../../multiplayer/host/projection.js";
 import { playerFronts } from "../GameUI/warRoomData.js";
@@ -400,4 +400,45 @@ test("countries are matched in diplomacy by their one name only", () => {
   assert.equal(playerDiplomacy(base, { op: "accept", ref: "off-1", country: "ALD", date: "1914-09-01", round: 3 }).error, "not-yours");
   assert.equal(proposePeace(base, { warId: "war-1", from: "ALD", terms: { territory: TERRITORY_RESTORED } }).reason, "not-in-war");
   assert.equal(playerDiplomacy(base, { op: "accept", ref: "off-1", country: "Aland", date: "1914-09-01", round: 3 }).error, "");
+});
+
+// "make peace treaties be able to take all territory as well, transfer certain regions in exchange for peace, turn
+// into a puppet state, and do anything else" (the owner, 2026-11-03).
+test("a peace can annex a country whole, cede regions by name, make a puppet, and carry conditions to the story", () => {
+  const state = world();
+  // The map's catalog: Borduria's regions by name (b1 "Klow", b2 "Szohod", b3 "Dospad and Wesk").
+  const catalog = [
+    ...Array.from({ length: 10 }, (_, at) => ({ id: `a${at + 1}`, name: `Aland ${at + 1}`, country: "Aland" })),
+    { id: "b1", name: "Klow", country: "Borduria" },
+    { id: "b2", name: "Szohod", country: "Borduria" },
+    { id: "b3", name: "Dospad", country: "Borduria" },
+    { id: "b4", name: "Wesk", country: "Borduria" },
+    ...Array.from({ length: 6 }, (_, at) => ({ id: `b${at + 5}`, name: `Borduria ${at + 5}`, country: "Borduria" })),
+    ...Array.from({ length: 4 }, (_, at) => ({ id: `c${at + 1}`, name: `Cisland ${at + 1}`, country: "Cisland" })),
+  ];
+  const make = (line, extra = {}) => makePeace(state, { warId: "war-1", from: "Aland", to: "Borduria", terms: readTermsLine(line, { from: "Aland", to: "Borduria" }), date: "1915-01-10", round: 9, regions: catalog, ...extra });
+
+  // All of Borduria passes to Aland: every region it held, and those Aland had taken, in law as in fact.
+  const annexed = make("Borduria is annexed");
+  for (let at = 1; at <= 10; at += 1) assert.deepEqual([holder(annexed, `b${at}`), sovereign(annexed, `b${at}`)], ["Aland", "Aland"], `b${at}`);
+  assert.equal(holder(annexed, "c1"), "Cisland");
+  assert.equal(war(annexed).status, "ended");
+  assert.ok(war(annexed).note.includes("Borduria is annexed: all its land passes to Aland"));
+
+  // Regions ceded by name ("Dospad and Wesk" are two), the rest of the ground as held; a name nowhere on Borduria's
+  // land is told to the story as a condition; and Borduria becomes Aland's protectorate.
+  const ceded = make("as held; Borduria cedes Klow, Dospad and Wesk, Atlantis to Aland; Borduria becomes Aland's protectorate; the border forts are razed");
+  for (const id of ["b1", "b3", "b4", "b8"]) assert.equal(holder(ceded, id), "Aland", id);
+  for (const id of ["b2", "b5"]) assert.equal(holder(ceded, id), "Borduria", id);
+  const terms = ceded.peaceTreaties[0].terms;
+  assert.deepEqual(terms.cessions, [{ region: "Klow", to: "Aland" }, { region: "Dospad", to: "Aland" }, { region: "Wesk", to: "Aland" }]);
+  assert.deepEqual(terms.conditions, ["the border forts are razed", "Atlantis passes to Aland"]);
+  const row = ceded.puppets.find((entry) => entry.status === "active");
+  assert.deepEqual([row.overlord, row.puppet, row.kind], ["Aland", "Borduria", "protectorate"]);
+
+  // A third country is no part of it: Cisland can be neither annexed nor made a puppet by Aland and Borduria's peace.
+  const third = make("Cisland is annexed; Cisland becomes Aland's puppet");
+  assert.equal(holder(third, "c1"), "Cisland");
+  assert.deepEqual(third.puppets.filter((entry) => entry.status === "active"), []);
+  assert.deepEqual(third.peaceTreaties[0].terms.conditions, ["Cisland is annexed", "Cisland becomes Aland's puppet"]);
 });

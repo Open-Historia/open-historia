@@ -7,8 +7,8 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
-import { validateGameplayPayload } from "./gameplaySchemas.js";
-import { reshelveJumpAnswer } from "./jumpAnswerShelves.js";
+import { foldJumpTool, getGameplayTool, validateGameplayPayload } from "./gameplaySchemas.js";
+import { EVENT_IMPACT_KEYS, reshelveJumpAnswer } from "./jumpAnswerShelves.js";
 
 const answer = (events, extra = {}) => ({ events, stopDate: "2026-01-31", summary: "A month.", ...extra });
 
@@ -52,4 +52,11 @@ test("the skip's answer passes its check with a ledger as a list, and the skip r
   const gameplay = fs.readFileSync(new URL("./gameplay.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
   const shelf = gameplay.indexOf("const shelved = reshelveJumpAnswer(parsed);");
   assert.ok(shelf > 0 && shelf < gameplay.indexOf("let validation = parsed", shelf));
+});
+
+test("what is put into an event's impacts is what a skip's impacts take, the folded skip's included, and nothing gone", () => {
+  // (The Politics tab's partyOps were one until they were folded into the Political World's own ops.)
+  const impacts = (tool) => Object.keys(tool.schema.properties.events.items.properties.impacts.properties);
+  const jump = getGameplayTool("jumpForward");
+  assert.deepEqual([...EVENT_IMPACT_KEYS].sort(), [...new Set([...impacts(jump), ...impacts(foldJumpTool(jump))])].sort());
 });

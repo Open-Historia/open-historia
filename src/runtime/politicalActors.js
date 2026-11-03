@@ -2,6 +2,7 @@
 
 import { resolveStockCountryCode } from "./polityIdentity.js";
 import { normalizePoliticalPressureState } from "./politicalPressure.js";
+import { PARTY_ROLES, findIdeology } from "./politics.js";
 
 export const POLITICAL_ACTORS_SCHEMA_VERSION = 6;
 
@@ -366,6 +367,32 @@ export const normalizePoliticalParty = (value, { index = 0 } = {}) => {
     if (ideology) out.ideology = ideology;
     else delete out.ideology;
 
+    // What the Stats pane's Politics tab used to keep apart (world.politics), now
+    // the Political World's own: "add the new politics thing into the political
+    // world and just make it an enhancement of that" (the owner, 2026-11-03).
+    //   nameNative, shortNameNative   the name and abbreviation as its own speakers write them
+    //   ideologyFamily                one of the ten ideologies (politics.js IDEOLOGIES), by id
+    //   subideology                   one listed under it, or the party's own word
+    //   role                          governing, coalition, opposition, outside parliament,
+    //                                 underground, in exile or banned (politics.js PARTY_ROLES);
+    //                                 the government's ruling and coalition parties say the first two
+    //   seats                         its seats in the legislature
+    //   founded                       the year it was founded
+    for (const [key, ...aliases] of [["nameNative"], ["shortNameNative", "abbrNative"], ["subideology"], ["founded"]]) {
+      const text = clean([value[key], ...aliases.map((alias) => value[alias])].find((entry) => clean(entry)));
+      if (text) out[key] = text;
+      else delete out[key];
+      for (const alias of aliases) delete out[alias];
+    }
+    const family = findIdeology(value.ideologyFamily);
+    if (family) out.ideologyFamily = family.id;
+    else delete out.ideologyFamily;
+    if (PARTY_ROLES.includes(value.role)) out.role = value.role;
+    else delete out.role;
+    const seats = Number(value.seats);
+    if (value.seats !== null && value.seats !== undefined && value.seats !== "" && Number.isFinite(seats) && seats >= 0) out.seats = Math.round(seats);
+    else delete out.seats;
+
     const leader = normalizeOfficeholder(value.leader);
     if (leader) out.leader = leader;
     else delete out.leader;
@@ -596,11 +623,15 @@ export const normalizePoliticalGovernment = (value, parties = []) => {
     const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
     const out = cloneActorValue(source);
 
-    for (const key of ["form", "ideology", "status", "coalitionName"]) {
+    // (legislature and nextElection, with legislatureSeats below: the Politics tab's, now the Political World's.)
+    for (const key of ["form", "ideology", "status", "coalitionName", "legislature", "nextElection"]) {
         const text = clean(source[key]);
         if (text) out[key] = text;
         else delete out[key];
     }
+    const legislatureSeats = Number(source.legislatureSeats);
+    if (source.legislatureSeats !== null && source.legislatureSeats !== undefined && source.legislatureSeats !== "" && Number.isFinite(legislatureSeats) && legislatureSeats > 0) out.legislatureSeats = Math.round(legislatureSeats);
+    else delete out.legislatureSeats;
 
     const headOfState = normalizeOfficeholder(source.headOfState || source.headOfStateId);
     const headOfGovernment = normalizeOfficeholder(source.headOfGovernment || source.headOfGovernmentId);

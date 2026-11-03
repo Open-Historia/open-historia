@@ -8,18 +8,18 @@ import test from "node:test";
 import {
   IDEOLOGIES,
   MAX_PARTIES,
-  applyPartyOps,
-  describePoliticsForPrompt,
+  describeElectionsDue,
   electionDue,
-  leadersAfterGovernmentChange,
   findIdeology,
   isListedSubideology,
-  normalizePartyOp,
   normalizePoliticalLandscape,
   normalizePolitics,
 } from "./politics.js";
-import { getGameplayTool, validateGameplayPayload } from "../Game/AI/gameplaySchemas.js";
+import { GAMEPLAY_TOOLS, getGameplayTool, normalizeGameplayPayload, validateGameplayPayload } from "../Game/AI/gameplaySchemas.js";
 import { normalizeWorldState } from "./gameState.js";
+import { applyPoliticalActorOperation } from "./politicalActorOps.js";
+import { foldLandscapeIntoActor } from "./politicalLandscapeFold.js";
+import { buildPublicPoliticalView } from "./politicalKnowledge.js";
 
 const defaults = JSON.parse(fs.readFileSync(new URL("../Game/AI/defaultPrompts.json", import.meta.url), "utf8"));
 
@@ -85,10 +85,38 @@ test("empty readings are dropped, and the party count is capped", () => {
   });
 });
 
-test("the world keeps world.politics through normalization", () => {
-  const world = normalizeWorldState({ politics: { Illyria: { government: "Kingdom", parties: [party()] } } });
-  assert.equal(world.politics.Illyria.parties[0].abbrNative, "HDZ");
-  assert.deepEqual(normalizeWorldState({}).politics, {});
+// "add the new politics thing into the political world and just make it an enhancement of that ... make sure to
+// fully integrate it" (the owner, 2026-11-03): one record of a polity's parties, the Political World's.
+test("an old save's world.politics is folded into its Political World once, and is gone", () => {
+  const world = normalizeWorldState({
+    politicalActors: { byPolity: { Illyria: { polityKey: "Illyria", government: { form: "Kingdom" }, parties: [{ id: "hdz", name: "Croatian Democratic Union", shortName: "CDU", publicDescription: "The old party of government." }] } } },
+    politics: { illyria: { government: "Kingdom", legislature: "Sabor", legislatureSeats: 151, nextElection: "1938", parties: [party(), party({ nameEn: "Social Democrats", nameNative: "Socijaldemokrati", abbrEn: "SDP", abbrNative: "SDP", role: "opposition", seats: 56, support: 25 })] } },
+  });
+  assert.equal("politics" in world, false);
+  const actor = world.politicalActors.byPolity.Illyria;
+  // The party the record had keeps its id and what it said, and takes the compiled figures.
+  const hdz = actor.parties.find((entry) => entry.id === "hdz");
+  assert.deepEqual([hdz.nameNative, hdz.shortNameNative, hdz.ideologyFamily, hdz.subideology, hdz.seats, hdz.support.percent, hdz.publicDescription], ["Hrvatska demokratska zajednica", "HDZ", findIdeology("Social Conservatism").id, "Christian Democracy", 66, 34, "The old party of government."]);
+  assert.equal(hdz.ruling, true, "the governing party governs");
+  // One it did not have is added.
+  assert.equal(actor.parties.find((entry) => entry.name === "Social Democrats")?.seats, 56);
+  assert.deepEqual([actor.government.form, actor.government.legislature, actor.government.legislatureSeats, actor.government.nextElection], ["Kingdom", "Sabor", 151, "1938"]);
+  // Read again, nothing changes.
+  assert.deepEqual(normalizeWorldState(world).politicalActors, world.politicalActors);
+  assert.equal("politics" in normalizeWorldState({}), false);
+  // And the public view carries it all, as the Politics view and other players read it.
+  const view = buildPublicPoliticalView(world, "Illyria");
+  const shown = view.parties.find((entry) => entry.name === "Croatian Democratic Union");
+  assert.deepEqual([shown.nameNative, shown.shortNameNative, shown.subideology, shown.seats], ["Hrvatska demokratska zajednica", "HDZ", "Christian Democracy", 66]);
+  assert.deepEqual([view.government.legislature, view.government.legislatureSeats, view.government.nextElection], ["Sabor", 151, "1938"]);
+});
+
+test("a compiled reading of one polity fills in its Political World record, or makes one", () => {
+  const made = foldLandscapeIntoActor(null, { government: "Kingdom", headOfState: "King Tomislav III", parties: [party()] }, { polityKey: "Illyria" });
+  assert.equal(made.polityKey, "Illyria");
+  assert.equal(made.government.headOfState, "King Tomislav III");
+  assert.deepEqual(made.government.rulingParties, ["Croatian Democratic Union"]);
+  assert.equal(foldLandscapeIntoActor(null, null), null, "nothing read, nothing made");
 });
 
 test("the task has a default prompt and a tool, and its schema takes a full answer", () => {
@@ -105,49 +133,28 @@ test("the task has a default prompt and a tool, and its schema takes a full answ
   assert.equal(validateGameplayPayload("politicalLandscape", { ...answer, parties: [{ ...party(), ideology: "Monarchism" }] }).valid, false);
 });
 
-test("a turn's party ops move only compiled lists, by name or abbreviation", () => {
-  const politics = normalizePolitics({ Illyria: { government: "Kingdom", headOfGovernment: "PM A", legislatureSeats: 151, parties: [party(), party({ nameEn: "Social Democrats", nameNative: "Socijaldemokrati", abbrNative: "SDP", abbrEn: "SDP", role: "opposition", seats: 56 })] } });
-  const { politics: next, applied, rejected } = applyPartyOps(politics, [
-    { polity: "illyria", op: "update", party: "HDZ", changes: { role: "opposition", seats: 40, leader: "New Leader" } },
-    { polity: "Illyria", op: "update", party: "Social Democrats", changes: { role: "governing", seats: 80 } },
-    { polity: "Illyria", op: "government", changes: { headOfGovernment: "PM B", nextElection: "1940" } },
-    { polity: "Illyria", op: "add", changes: { nameEn: "Peasant Party", nameNative: "Seljačka stranka", ideology: "Social Liberalism", subideology: "Agrarianism", leader: "C", role: "opposition", seats: 10, support: 8 } },
-    { polity: "Illyria", op: "add", changes: { nameEn: "Peasant Party" } },
-    { polity: "Illyria", op: "remove", party: "Nobody" },
-    { polity: "Ruritania", op: "update", party: "X", changes: { leader: "Y" } },
-    { polity: "Illyria", op: "explode" },
-  ], { date: "1936-05-01" });
-  assert.equal(applied.length, 4);
-  assert.equal(rejected.length, 4);
-  const entry = next.Illyria;
-  assert.deepEqual(entry.parties.map((p) => p.nameEn), ["Social Democrats", "Croatian Democratic Union", "Peasant Party"]);
-  assert.equal(entry.parties[1].leader, "New Leader");
-  assert.equal(entry.headOfGovernment, "PM B");
-  assert.equal(entry.nextElection, "1940");
-  assert.equal(entry.asOf, "1936-05-01");
-  assert.equal(politics.Illyria.parties[0].nameEn, "Croatian Democratic Union", "the input is not mutated");
-
-  const removed = applyPartyOps(next, [{ polity: "Illyria", op: "remove", party: "Peasant Party" }]).politics;
-  assert.equal(removed.Illyria.parties.length, 2);
+test("a turn moves the parties with the Political World's own ops: seats, roles, native names, a party dissolved", () => {
+  const world = normalizeWorldState({ politicalActors: { byPolity: { Illyria: { polityKey: "Illyria", government: { rulingPartyIds: ["hdz"] }, parties: [{ id: "hdz", name: "Croatian Democratic Union" }, { id: "sdp", name: "Social Democrats" }] } } } });
+  const updated = applyPoliticalActorOperation(world, { op: "update-party", polityKey: "Illyria", partyId: "sdp", patch: { seats: 80, nameNative: "Socijaldemokrati", role: "opposition" } });
+  assert.equal(updated.applied, true);
+  assert.deepEqual(["seats", "nameNative", "role"].map((key) => updated.actor.parties.find((entry) => entry.id === "sdp")[key]), [80, "Socijaldemokrati", "opposition"]);
+  const government = applyPoliticalActorOperation(world, { op: "set-government", polityKey: "Illyria", patch: { legislature: "Sabor", legislatureSeats: 151, nextElection: "1940" } });
+  assert.deepEqual([government.actor.government.legislature, government.actor.government.legislatureSeats, government.actor.government.nextElection], ["Sabor", 151, "1940"]);
+  const dissolved = applyPoliticalActorOperation(world, { op: "dissolve-party", polityKey: "Illyria", partyId: "hdz" });
+  assert.deepEqual(dissolved.actor.parties.map((entry) => entry.id), ["sdp"]);
+  assert.deepEqual(dissolved.actor.government.rulingPartyIds, [], "and it governs no more");
+  assert.match(applyPoliticalActorOperation(world, { op: "dissolve-party", polityKey: "Illyria" }).error, /requires partyId/);
 });
 
-test("party ops survive event normalization, and the turn prompt lists only compiled polities", () => {
-  assert.equal(normalizePartyOp({ polity: "Illyria", op: "update", party: "HDZ", changes: { leader: "X", bogus: 1 } }).changes.bogus, undefined);
-  assert.equal(normalizePartyOp({ polity: "Illyria", op: "update", changes: { leader: "X" } }), null, "an update names its party");
-  assert.equal(describePoliticsForPrompt({}), "");
-  const block = describePoliticsForPrompt(normalizePolitics({ Illyria: { government: "Kingdom", parties: [party()] } }));
-  assert.match(block, /^\[Political Parties\]/);
-  assert.match(block, /Croatian Democratic Union \/ Hrvatska demokratska zajednica \(CDU \/ HDZ\): Governing, Social Conservatism \/ Christian Democracy/);
-  assert.match(block, /renamed party .* all four new names/);
-  const renamed = applyPartyOps(normalizePolitics({ Illyria: { government: "Kingdom", parties: [party()] } }), [
-    { polity: "Illyria", op: "update", party: "HDZ", changes: { nameEn: "Croatian Union", nameNative: "Hrvatska zajednica", abbrEn: "CU", abbrNative: "HZ" } },
-  ]).politics.Illyria.parties[0];
-  assert.deepEqual([renamed.nameEn, renamed.nameNative, renamed.abbrEn, renamed.abbrNative], ["Croatian Union", "Hrvatska zajednica", "CU", "HZ"]);
-  const answer = { events: [] };
-  assert.equal(validateGameplayPayload("politicalLandscape", answer).valid, false);
+test("no tool asks for the Politics tab's own party ops, and an answer that still carries them is not refused", () => {
+  for (const [key, tool] of Object.entries(GAMEPLAY_TOOLS)) assert.ok(!JSON.stringify(tool.schema).includes("partyOps"), key);
+  const event = { date: "1936-01-02", title: "An election", description: "The vote is held.", impacts: { partyOps: [{ polity: "France", op: "update", party: "SFIO", changes: { seats: 149 } }] } };
+  const shaped = normalizeGameplayPayload("jumpForward", { events: [event], summary: "x", stopDate: "1936-01-08" });
+  assert.equal("partyOps" in shaped.events[0].impacts, false);
+  assert.ok(!/partyOps/.test(String(validateGameplayPayload("jumpForward", shaped).error ?? "")));
 });
 
-test("an election is due when its date has come, read from free text", () => {
+test("an election is due when its date has come, read from free text, and the time skip is told the Political World's", () => {
   assert.equal(electionDue("2028", "2026-01-05"), "");
   assert.equal(electionDue("2026", "2026-01-05"), "this year");
   assert.equal(electionDue("by September 2025", "2026-01-05"), "overdue");
@@ -155,21 +162,11 @@ test("an election is due when its date has come, read from free text", () => {
   assert.equal(electionDue("2026-01-05", "2026-01-05"), "overdue");
   assert.equal(electionDue("1940-11", "1940-12-01"), "overdue");
   assert.equal(electionDue("none scheduled", "2026-01-05"), "");
-  const block = describePoliticsForPrompt(normalizePolitics({ Illyria: { government: "Kingdom", nextElection: "1935", parties: [party()] } }), { date: "1936-05-01" });
-  assert.match(block, /Illyria: Kingdom; next election 1935 — ELECTION DUE NOW: hold it in this turn/);
-  assert.match(block, /An election whose date falls in the period you write is held in it/);
-});
-
-test("the stat sheet's leader follows a change of government, and only the one replaced", () => {
-  const before = { Illyria: { headOfGovernment: "Ivan Horvat, Prime Minister", headOfState: "King Tomislav III" } };
-  const after = { Illyria: { headOfGovernment: "Ana Kovač, Prime Minister", headOfState: "King Tomislav III" } };
-  const plain = leadersAfterGovernmentChange(before, after, { Illyria: { leader: "Ivan Horvát", stability: 60 } });
-  assert.deepEqual(plain.countryStats.Illyria, { leader: "Ana Kovač", stability: 60 });
-  assert.deepEqual(plain.changed, [{ polity: "Illyria", from: "Ivan Horvát", to: "Ana Kovač" }]);
-  const titled = leadersAfterGovernmentChange(before, after, { Illyria: { leader: "Ivan Horvat, Prime Minister" } });
-  assert.equal(titled.countryStats.Illyria.leader, "Ana Kovač, Prime Minister");
-  const monarch = leadersAfterGovernmentChange(before, after, { Illyria: { leader: "King Tomislav III" } });
-  assert.deepEqual(monarch.changed, [], "a sheet naming the king is left alone");
-  const custom = leadersAfterGovernmentChange(before, after, { Illyria: { customStats: { stability: 60 } } });
-  assert.deepEqual(custom.changed, [], "a custom sheet has no leader");
+  const actors = { byPolity: { Illyria: { government: { legislature: "Sabor", legislatureSeats: 151, nextElection: "1935" } }, Ruritania: { government: { nextElection: "1940" } } } };
+  const block = describeElectionsDue(actors, { date: "1936-05-01" });
+  assert.match(block, /^\[Elections Due\]/);
+  assert.match(block, /- Illyria: Sabor \(151 seats\), next election 1935: due now, hold it in this answer/);
+  assert.doesNotMatch(block, /Ruritania/);
+  assert.match(block, /update-party with each party's new seats/);
+  assert.equal(describeElectionsDue({ byPolity: {} }, { date: "1936-05-01" }), "");
 });

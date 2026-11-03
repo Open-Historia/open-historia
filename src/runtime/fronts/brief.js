@@ -260,10 +260,12 @@ export const describeSince = (record, { most = 4 } = {}) => {
   };
 };
 
-// The text of one battlefield for a prompt, at most BRIEF_TEXT_MAX characters.
+// The text of one battlefield for a prompt, at most `max` characters
+// (BRIEF_TEXT_MAX for a time skip's, which tells many; the advisor reads its
+// own country's at more: Game/AI/advisorWars.js).
 // With `viewer` a country or a group fighting there, the other side's standing
 // orders are left out: what a government has told its own side is its own.
-export const describeBattlefield = (record, { viewer = "" } = {}) => {
+export const describeBattlefield = (record, { viewer = "", max = BRIEF_TEXT_MAX } = {}) => {
   if (!record || !Array.isArray(record.sides)) return "";
   const brief = record.brief ?? {};
   // A country's forces at home (home.js): how many, how many still mustering, how many near its borders.
@@ -273,7 +275,7 @@ export const describeBattlefield = (record, { viewer = "" } = {}) => {
     const parts = [`${own.n ?? 0} formations round its cities`];
     if (own.mustering > 0) parts.push(`${own.mustering} more still mustering`);
     if (brief.near > 0) parts.push(`${brief.near} of them within ${HOME_NEAR_KM} km of its borders`);
-    return `- ${record.name}: ${country}'s forces at home, built up in peace: ${parts.join(", ")}. No war is fought here; its orders are given as home: ${country}.`.slice(0, BRIEF_TEXT_MAX);
+    return `- ${record.name}: ${country}'s forces at home, built up in peace: ${parts.join(", ")}. No war is fought here; its orders are given as home: ${country}.`.slice(0, max);
   }
   const lead = [record.sides[0][0] ?? "", record.sides[1][0] ?? ""];
   const wanted = String(viewer ?? "").replace(/\s+/g, " ").trim().toLowerCase();
@@ -325,7 +327,7 @@ export const describeBattlefield = (record, { viewer = "" } = {}) => {
   let text = "";
   for (const [mostSectors, mostNames] of [[3, 4], [3, 2], [3, 1], [2, 1], [0, 1]]) {
     text = [head, strength, weather, attrition, ice, air, gone, lineText(mostSectors), sinceText(mostNames), orders, valid].filter(Boolean).join("\n");
-    if (text.length <= BRIEF_TEXT_MAX) return text;
+    if (text.length <= max) return text;
   }
-  return text.slice(0, BRIEF_TEXT_MAX - 1).trimEnd() + "…";
+  return text.slice(0, max - 1).trimEnd() + "…";
 };

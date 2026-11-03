@@ -132,6 +132,11 @@ const publicParty = (party) => {
     ...(publicForeignPolicy.length ? { publicForeignPolicy } : {}),
     ...(clean(party.publicDescription) ? { publicDescription: clean(party.publicDescription) } : {}),
     ...(clean(party.color) ? { color: clean(party.color) } : {}),
+    // What the Politics tab kept apart, the Political World's now (politicalActors.js): all of it public.
+    ...Object.fromEntries(["nameNative", "shortNameNative", "ideologyFamily", "subideology", "role", "founded"]
+      .filter((key) => clean(party[key]))
+      .map((key) => [key, clean(party[key])])),
+    ...(Number.isFinite(Number(party.seats)) && party.seats !== null && party.seats !== "" ? { seats: Math.max(0, Math.round(Number(party.seats))) } : {}),
     ...(party.ruling === true ? { ruling: true } : {}),
     ...(party.coalition === true ? { coalition: true } : {}),
   };
@@ -196,6 +201,10 @@ const publicGovernment = (government) => {
     ...(headOfState ? { headOfState } : {}),
     ...(headOfGovernment ? { headOfGovernment } : {}),
     ...(clean(government.coalitionName) ? { coalitionName: clean(government.coalitionName) } : {}),
+    // The legislature and the next election (the Politics tab's, the Political World's now).
+    ...(clean(government.legislature) ? { legislature: clean(government.legislature) } : {}),
+    ...(Number(government.legislatureSeats) > 0 ? { legislatureSeats: Math.round(Number(government.legislatureSeats)) } : {}),
+    ...(clean(government.nextElection) ? { nextElection: clean(government.nextElection) } : {}),
     ...(rulingPartyIds.length ? { rulingPartyIds } : {}),
     ...(coalitionPartyIds.length ? { coalitionPartyIds } : {}),
     ...(rulingParties.length ? { rulingParties } : {}),
@@ -246,6 +255,12 @@ export const normalizePoliticalIntelligenceAssessment = (value) => {
     ...(findings.length ? { findings } : {}),
   };
 };
+
+// The public view of one Political World record on its own: a polity's parties just compiled
+// (Game/AI/gameplay.js assessPoliticalLandscape), shown before the world is read again.
+export const buildPublicPoliticalViewOfActor = (actor, polityKey) => (actor && polityKey
+  ? buildPublicPoliticalView({ politicalActors: { byPolity: { [polityKey]: actor } } }, polityKey)
+  : null);
 
 export const buildPublicPoliticalView = (world, polityKey) => {
   const actor = getPoliticalProfile(world, polityKey);
