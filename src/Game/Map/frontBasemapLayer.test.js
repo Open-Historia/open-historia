@@ -250,6 +250,15 @@ test("the battlefield layer uses the pair, and clears to grey only where the map
   assert.match(layers, /"raster-opacity": seenThrough \|\| !groundFailed \? 0 : PAINT_OPACITY,/);
   // The pair is the fallback: there only once the ground's own layer has said it cannot draw.
   assert.ok(layers.includes("const painted = anyPainted && groundFailed;"));
+  // And hidden, so the map does no work for them: a clear layer kept its picture's source busy every
+  // frame, and each move of the map sent every picture to it again (MapLibre then sends it on pause too).
+  assert.ok(layers.includes("const copiesHidden = seenThrough || !groundFailed;"));
+  assert.equal(layers.split('visibility: copiesHidden ? "none" : "visible"').length - 1, 2);
+  // A source left playing as it was hidden would keep the map drawing every frame: it is paused.
+  assert.ok(layers.includes("if (copiesHiddenRef.current) {\n        // One left playing as it was hidden would keep the map drawing every frame.\n        source(frontPaintSourceId(entry.slot))?.pause?.();\n        mapInstance?.triggerRepaint?.();\n        return true;\n      }"));
+  assert.ok(layers.includes("if (!copiesHiddenRef.current) for (const entry of playRef.current.values()) handOver(entry, false);"));
+  // When neither can draw, the map's own copies show again, each given its picture first.
+  assert.ok(layers.includes("useLayoutEffect(() => {\n    if (!copiesHidden) handOverAllRef.current();\n  }, [copiesHidden]);"));
   assert.match(layers, /const PAINT_OPACITY = \["interpolate", \["linear"\], \["zoom"\], \.\.\.POLITICAL_FILL_OPACITY_STOPS\.flat\(\)\];/);
   const shader = read("./frontBasemapLayer.js");
   // The taker's colour over the bare map at the strength of a country's fill, as solid as the picture is there.

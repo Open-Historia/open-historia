@@ -53,6 +53,25 @@ import { PAST_UPDATES } from "./notesPast.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // Terrain matrices sent as 32-bit floats, battlefield pictures no longer handed to hidden layers, the land mask
+    // read only where it is on the screen, and names not compared again on every idle (2026-11-03).
+    id: "2026-11-lighter-map",
+    kind: "minor",
+    date: "2026-11-03",
+    channel: "beta",
+    banners: [
+      {
+        title: "A lighter map",
+        items: [
+          "Moving and zooming the map takes less work, so it runs smoother, above all on slower computers with 3D terrain on.",
+          "Letting go of the map near a war brings a shorter hitch.",
+          "The globe turning on its own uses far less of your computer, so laptops and phones stay cooler while you read.",
+          "The map looks just as it did: only the work behind it has changed.",
+        ],
+      },
+    ],
+  },
+  {
     // The Workshop's GPU region layer drew a converted map's regions where they had been (Editor/regionDisplay.js
     // regionFrame), and the game's camera stopped at 80°S on a scenario's own map (Map/World.jsx maxBounds); both
     // on Avatar: Resurrection (the owner's report, 2026-11-03).

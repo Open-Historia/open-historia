@@ -3,6 +3,7 @@
 //   coords        every tile of every source asks where it lies on every terrain tile, every frame:
 //                 about 3,800 new objects and matrices at 1080p. The answer depends only on the tiles.
 //   terrain data  asked per tile, per source and per label within a frame, and the same each time.
+//                 Its matrix is handed to the GPU on every draw as 32-bit floats, not 64-bit.
 //
 // Each is skipped if MapLibre no longer has what it relies on (terrainCaches.test.js names them).
 
@@ -31,6 +32,17 @@ const rememberCoords = (manager) => {
   };
 };
 
+// Chrome copies a matrix that is not a Float32Array into WebGL one number at a time.
+// Only swapped when every number is the same, so elevation read on the CPU is too.
+export const asFloat32Matrix = (matrix) => {
+  if (!matrix || typeof matrix !== "object" || matrix instanceof Float32Array || matrix.length !== 16) return matrix;
+  const copy = new Float32Array(matrix);
+  for (let index = 0; index < 16; index += 1) {
+    if (copy[index] !== matrix[index]) return matrix;
+  }
+  return copy;
+};
+
 const rememberData = (terrain, known) => {
   const work = terrain?.getTerrainData;
   if (typeof work !== "function") return;
@@ -38,6 +50,7 @@ const rememberData = (terrain, known) => {
     let data = known.get(tileID.key);
     if (!data) {
       data = work.call(this, tileID);
+      if (data?.u_terrain_matrix) data.u_terrain_matrix = asFloat32Matrix(data.u_terrain_matrix);
       known.set(tileID.key, data);
     }
     return data;

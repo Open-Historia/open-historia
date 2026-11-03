@@ -181,6 +181,30 @@ test("an unchanged snapshot publishes nothing", async () => {
   runtime.dispose();
 });
 
+test("the map's idle and style wakeups do not compare the same records again, and a change still goes through", async () => {
+  const { runtime, preparer, publish, shown } = await mounted([record("japan"), record("china")]);
+  let reads = 0;
+  const watched = (id) => {
+    const plain = record(id);
+    return Object.defineProperty({ ...plain }, "text", { enumerable: true, get: () => { reads += 1; return plain.text; } });
+  };
+  const same = [watched("japan"), watched("china")];
+  await publish(same);
+  await settle();
+  const comparing = reads;
+  assert.ok(comparing > 0, "a new snapshot is compared");
+  for (let index = 0; index < 5; index += 1) await runtime.syncRecords({ invalidateInFlight: false });
+  assert.equal(reads, comparing, "the same snapshot against the same labels is not");
+  const callsBefore = preparer.calls.length;
+  publish([record("japan", "NIPPON"), record("china")]);
+  await settle();
+  preparer.solves.at(-1)?.finish();
+  await settle();
+  assert.ok(preparer.calls.length > callsBefore);
+  assert.deepEqual(shown(), { japan: "NIPPON", china: "CHINA" });
+  runtime.dispose();
+});
+
 test("a removed polity leaves the layer without preparing anything", async () => {
   const { runtime, preparer, publish, shown } = await mounted([record("japan"), record("china")]);
   const callsBefore = preparer.calls.length;
