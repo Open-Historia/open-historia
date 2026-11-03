@@ -4,7 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 
-import { attachTerrainCaches } from "./terrainCaches.js";
+import { asFloat32Matrix, attachTerrainCaches } from "./terrainCaches.js";
 
 const fakeMap = () => {
   const listeners = new Map();
@@ -74,6 +74,39 @@ test("terrain data lasts one frame, and a tile arriving ends it", () => {
   map.fire("sourcedata");
   map.terrain.getTerrainData({ key: "t1" });
   assert.deepEqual(map.dataCalls, ["t1", "t1", "t1"]);
+});
+
+// Chrome copied a Float64Array into WebGL a number at a time: a fifth of the main thread while panning.
+test("the terrain matrix goes to WebGL as 32-bit floats, and only when every number stays the same", () => {
+  // As MapLibre makes it for a tile two levels under its elevation tile: 1 / (8192 << 2), and an offset of 3/4.
+  const matrix = new Float64Array(16);
+  matrix[0] = 1 / (8192 << 2);
+  matrix[5] = 1 / (8192 << 2);
+  matrix[12] = 0.75;
+  matrix[13] = 0.25;
+  matrix[15] = 1;
+  const quick = asFloat32Matrix(matrix);
+  assert.ok(quick instanceof Float32Array);
+  assert.deepEqual([...quick], [...matrix]);
+  // Its empty matrix is a plain array.
+  const identity = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+  assert.deepEqual([...asFloat32Matrix(identity)], identity);
+  assert.ok(asFloat32Matrix(identity) instanceof Float32Array);
+  // A number 32 bits cannot hold leaves the matrix as it was, so elevation read from it is unchanged.
+  const fine = Float64Array.from(matrix);
+  fine[12] = 0.1;
+  assert.equal(asFloat32Matrix(fine), fine);
+  const already = new Float32Array(16);
+  assert.equal(asFloat32Matrix(already), already);
+  assert.equal(asFloat32Matrix(null), null);
+  assert.deepEqual(asFloat32Matrix([1, 2]), [1, 2]);
+
+  const map = fakeMap();
+  map.terrain.getTerrainData = (tileID) => ({ tile: tileID.key, u_terrain_matrix: matrix });
+  attachTerrainCaches(map);
+  const data = map.terrain.getTerrainData({ key: "t1" });
+  assert.ok(data.u_terrain_matrix instanceof Float32Array);
+  assert.equal(map.terrain.getTerrainData({ key: "t1" }).u_terrain_matrix, data.u_terrain_matrix, "made once a frame");
 });
 
 test("new terrain is tuned once, no terrain is left alone, and detaching stops listening", () => {

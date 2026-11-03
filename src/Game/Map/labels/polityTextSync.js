@@ -156,6 +156,8 @@ export const createPolityTextRuntime = ({
     // not been published yet. Their fingerprints already count as current, so
     // without this a refinement cancelled by a newer snapshot never ran again.
     unrefinedKeys: new Set(),
+    // The records and labels last compared and found the same: { records, fingerprints }.
+    quiet: null,
     generation: 0,
     placementWorker: null,
     cancelPlacement: null,
@@ -269,6 +271,10 @@ export const createPolityTextRuntime = ({
         return;
       }
 
+      // Nothing the comparison below reads has changed since it last found nothing to do.
+      const quiet = runtime.quiet;
+      if (runtime.layer && quiet?.records === requestedRecordsRef && quiet.fingerprints === runtime.fingerprints && runtime.unrefinedKeys.size === 0) return;
+
       const snapshot = [...(getRecords() ?? [])];
       if (!snapshot.length && !runtime.layer) {
         reportStatus({ waitingForStyle: true, failed: false });
@@ -285,7 +291,11 @@ export const createPolityTextRuntime = ({
           return runtime.unrefinedKeys.has(key) && !changedKeys.has(key);
         })
         : [];
-      if (runtime.layer && !changedRecords.length && !removedKeys.length && !unrefinedRecords.length) return;
+      if (runtime.layer && !changedRecords.length && !removedKeys.length && !unrefinedRecords.length) {
+        // Every idle and style event asks again: the same records against the same labels are not compared twice.
+        if (runtime.unrefinedKeys.size === 0) runtime.quiet = { records: requestedRecordsRef, fingerprints: runtime.fingerprints };
+        return;
+      }
 
       const changedOwners = [...new Set(changedRecords.map((record) => record.owner).filter(Boolean))];
       // Crucial continuity invariant: mounted stays TRUE while replacements are

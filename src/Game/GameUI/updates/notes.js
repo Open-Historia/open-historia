@@ -53,6 +53,41 @@ import { PAST_UPDATES } from "./notesPast.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // An Update downloads the post's update copy, which the hub does not count (runtime/hubFiles.js updateCopyOf;
+    // the hub's index `updates`); the owner's ask, 2026-11-03.
+    id: "2026-11-updates-not-imports",
+    kind: "minor",
+    date: "2026-11-03",
+    channel: "beta",
+    banners: [
+      {
+        title: "Updates are not imports",
+        items: [
+          "Updating a scenario you got from the Community tab no longer adds to its number of imports: only importing it does.",
+        ],
+      },
+    ],
+  },
+  {
+    // Terrain matrices sent as 32-bit floats, battlefield pictures no longer handed to hidden layers, the land mask
+    // read only where it is on the screen, and names not compared again on every idle (2026-11-03).
+    id: "2026-11-lighter-map",
+    kind: "minor",
+    date: "2026-11-03",
+    channel: "beta",
+    banners: [
+      {
+        title: "A lighter map",
+        items: [
+          "Moving and zooming the map takes less work, so it runs smoother, above all on slower computers with 3D terrain on.",
+          "Letting go of the map near a war brings a shorter hitch.",
+          "The globe turning on its own uses far less of your computer, so laptops and phones stay cooler while you read.",
+          "The map looks just as it did: only the work behind it has changed.",
+        ],
+      },
+    ],
+  },
+  {
     // Gemini wrote every event's places as objects of their parts; the check failed the answer, its retry and the
     // skip (AI/eventPlaces.js placesAsWritten; a player's Android report, 2026-11-03).
     id: "2026-11-places-as-written",

@@ -3110,7 +3110,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     try {
       // The checked copy of the post's file, stamped with the link to renew:
       // the post, its file, and the release copy that was downloaded.
-      const bundle = await downloadHubScenario({ postId: post.id, bundleUrl: post.bundleUrl, title: post.title, author: post.author, flatMap: post.flatMap });
+      const bundle = await downloadHubScenario({ postId: post.id, bundleUrl: post.bundleUrl, title: post.title, author: post.author, flatMap: post.flatMap, update: true });
       // Noted before the Update: it refreshes the library, and when a game on
       // this scenario is running its effect would otherwise download the
       // basemap that just failed again at once.

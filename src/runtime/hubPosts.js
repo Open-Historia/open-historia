@@ -225,9 +225,10 @@ export const hubCopyStatus = (copies, post) => {
 // /api/hub/file proxy: GitHub's files send no CORS headers. A post's file is
 // its checked copy in the hub's releases, and there is no download without
 // one (hubFiles.js); `copy: false` is for a suggestion, which is a comment's
-// attachment and never copied, fetched once the hub has checked it.
-export const downloadHubFile = async (fileUrl, { copy = true } = {}) => {
-  const response = await fetchHubFile(fileUrl, { copy });
+// attachment and never copied, fetched once the hub has checked it. `update:
+// true`: an Update's download, not counted as an import (hubFiles.js).
+export const downloadHubFile = async (fileUrl, { copy = true, update = false } = {}) => {
+  const response = await fetchHubFile(fileUrl, { copy, update });
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}));
     throw new Error(payload.error || `Download failed (HTTP ${response.status}).`);
@@ -279,7 +280,7 @@ export const readScenarioBundleBytes = async (bytes) => {
 // names. Suggest changes reads the file a copy came from this way (it is what
 // a suggestion is measured against); an import goes through
 // downloadHubScenario, which also says where the bundle came from.
-export const downloadHubBundle = async (bundleUrl) => readScenarioBundleBytes(await downloadHubFile(bundleUrl));
+export const downloadHubBundle = async (bundleUrl, { update = false } = {}) => readScenarioBundleBytes(await downloadHubFile(bundleUrl, { update }));
 
 // A post's scenario file, ready for import and stamped with where it came from
 // (bundle.hubOrigin, which the stores keep with the scenario:
@@ -288,10 +289,12 @@ export const downloadHubBundle = async (bundleUrl) => readScenarioBundleBytes(aw
 // is made here: the Community tab's Import, the Scenarios tab's Update, and
 // Import & play for a game whose map the library lacks. The copy is found
 // first and then asked for by its own address, so the address stamped is the
-// one the bytes came from, even if the index is read again in between.
-export const downloadHubScenario = async ({ postId, bundleUrl, title, author, syncedAt, flatMap = false } = {}) => {
+// one the bytes came from, even if the index is read again in between. An
+// Update (`update: true`) downloads the same bytes from the copy's update copy,
+// which the hub leaves out of the import count; the link still names `release`.
+export const downloadHubScenario = async ({ postId, bundleUrl, title, author, syncedAt, flatMap = false, update = false } = {}) => {
   const release = await requireReleaseCopy(bundleUrl);
-  const downloaded = await downloadHubBundle(release);
+  const downloaded = await downloadHubBundle(release, { update });
   // What the hub's maintainers said of the post (parseScenarioPost flatMap),
   // for a file that declares no projection of its own.
   const bundle = flatMap ? declareFlatMapFromPost(downloaded, { labels: [FLAT_MAP_LABEL] }) : downloaded;
