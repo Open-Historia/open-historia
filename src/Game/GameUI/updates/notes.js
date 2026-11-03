@@ -53,6 +53,84 @@ import { PAST_UPDATES } from "./notesPast.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // "replace the listen in feature with a new button where the projects button was where it opens a social media
+    // application ... things that happen on the social media should be in the time skip ai's (simulation agent)
+    // context", "on beta add the projects menu as a tab in the actions menu", "make sure the social media feature is
+    // disableable in the scenario editor" (the owner, 2026-11-02).
+    id: "2026-11-rostra",
+    kind: "major",
+    date: "2026-11-02",
+    channel: "beta",
+    banners: [
+      {
+        theme: "rostra",
+        scene: "feed",
+        title: "Rostra",
+        subtitle: "The world, in its own words",
+        lead: "A social network for the world you play in. Read what leaders, generals, journalists and celebrities post as time passes, post as your country's leader, and quote anyone.",
+        sections: [
+          {
+            heading: "The people who make the news",
+            icon: "people",
+            items: [
+              "Heads of state, ministers, generals, journalists, analysts and business leaders post about what happens in each time skip.",
+              "Now and then a celebrity or an ordinary person posts about something that has nothing to do with world affairs.",
+            ],
+          },
+          {
+            heading: "Your own voice",
+            icon: "flag",
+            items: [
+              "Post as your country's leader from the box at the top of the feed. Posting costs no AI request.",
+              "Quote any post: the post you quote is shown inside yours.",
+            ],
+          },
+          {
+            heading: "Words have consequences",
+            icon: "eye",
+            items: [
+              "The next time skip reads your posts as your leader's public words: allies, rivals, markets and crowds answer them.",
+              "Leaders and journalists quote you back, and the Mentions tab gathers every post that answers or names you.",
+            ],
+          },
+          {
+            heading: "Find your way",
+            icon: "map",
+            items: [
+              "Rostra opens from the third button of the dock. Tabs show everything, your country, your mentions and your own posts.",
+              "A scenario can switch social media off in its Features tab.",
+            ],
+          },
+        ],
+      },
+      {
+        theme: "rostra",
+        scene: "desk",
+        title: "Projects moves into Actions",
+        subtitle: "And Listen in steps aside",
+        lead: "Projects & Operations is now the second tab of the Actions panel, so its old button could make room for Rostra.",
+        sections: [
+          {
+            heading: "Projects & Operations",
+            icon: "book",
+            items: [
+              "Open Actions and choose the Projects tab: the board works just as it did.",
+              "Your advisor's button to open the board now opens that tab.",
+            ],
+          },
+          {
+            heading: "Listen in",
+            icon: "phone",
+            items: [
+              "The Listen in button on a region's card and a country's panel has been removed.",
+              "Rostra takes its place and asks for no AI request of its own: its posts come with each time skip.",
+            ],
+          },
+        ],
+      },
+    ],
+  },
+  {
     // "have it already contain that" (the owner, 2026-11-02): the skip writes the figures a war needs itself (warFiguresPrompt.js).
     id: "2026-11-war-figures-in-skip",
     kind: "minor",

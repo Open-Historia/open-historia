@@ -53,6 +53,13 @@ const mount = () => {
     // Live-translates the UI when a non-English language is set in Settings.
     startTranslator();
     registerServiceWorker();
+    // Listen in kept the feeds it had shown in IndexedDB (oh-listen-in). Rostra,
+    // the social network, took its place on 2026-11-02 and nothing reads them now.
+    try {
+        globalThis.indexedDB?.deleteDatabase("oh-listen-in");
+    } catch {
+        // Storage refused: there is nothing kept to clear.
+    }
     // The Android app rests in the background once nothing is being generated
     // (runtime/native/backgroundPause.js).
     if (import.meta.env.VITE_OH_NATIVE) installNativeBackgroundPause(isGenerating);

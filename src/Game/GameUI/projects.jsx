@@ -3,6 +3,11 @@
 // — research and industrial programmes, construction projects, military and
 // covert operations — plus whatever their services have learned of other powers'.
 //
+// It is the Actions panel's second tab (actions.jsx): "on beta add the projects
+// menu as a tab in the actions menu" (the owner, 2026-11-02). Its own launcher's
+// slot in the dock went to Rostra, the social network (social.jsx). This file
+// draws the board inside that tab, under the panel's own header.
+//
 // The player cannot author an entry's CONTENT here, deliberately. Two things
 // write what a project is: events, through impacts.projectOps on any
 // jump/GM/interactive event turn, and the advisor, through the ```projects block in a chat
@@ -253,12 +258,6 @@ const SearchIcon = () => (
   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
     <circle cx="11" cy="11" r="7" />
     <path d="M20 20l-3.5-3.5" />
-  </svg>
-);
-
-const CloseIcon = () => (
-  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round">
-    <path d="M6 6l12 12M18 6L6 18" />
   </svg>
 );
 
@@ -1106,7 +1105,8 @@ const selectGameStamp = (game) => ({
   round: Number(game?.round) || 0,
 });
 
-const ProjectsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef }) => {
+// `isOpen`: the Actions panel is open on this tab. Closing either is closing the board.
+const ProjectsBoard = ({ isOpen, onOpenAdvisor, mapRef }) => {
   const projects = useRuntimeState("world", selectProjects);
   const polityOverrides = useRuntimeState("world", selectPolities);
   const { country, gameDate, round } = useRuntimeState("game", selectGameStamp);
@@ -1424,65 +1424,7 @@ const ProjectsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef }) => {
   const nearLimit = projects.length >= PROJECT_BOARD_LIMIT - 10;
 
   return (
-    <div
-      style={{
-        backdropFilter: "blur(8px)",
-        backgroundColor: "rgba(24, 24, 27, 0.95)",
-        border: "1px solid rgba(255,255,255,0.1)",
-        borderRadius: "16px",
-        bottom: isOpen ? "4.25rem" : "-30rem",
-        boxShadow: "-4px 0 24px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.06)",
-        color: "white",
-        display: "flex",
-        flexDirection: "column",
-        fontFamily: "sans-serif",
-        height: PANEL_HEIGHT,
-        left: "0rem",
-        maxWidth: "calc(100vw - 1rem)",
-        minHeight: "10rem",
-        opacity: isOpen ? 1 : 0,
-        overflow: "hidden",
-        pointerEvents: isOpen ? "auto" : "none",
-        position: "fixed",
-        transition: "bottom 0.35s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.35s ease",
-        width: isMobile ? "calc(100vw - 1rem)" : "26.25rem",
-        zIndex: 9998,
-      }}
-    >
-      <div style={{
-        alignItems: "center",
-        borderBottom: "1px solid rgba(255,255,255,0.07)",
-        display: "flex",
-        justifyContent: "space-between",
-        padding: "1rem 1.25rem 0.75rem",
-      }}
-      >
-        <span style={{ fontSize: "1rem", fontWeight: 700, letterSpacing: "0.01em" }}>
-          Projects &amp; Operations
-          {projects.length > 0 && (
-            <span data-no-translate style={{ color: "rgba(255,255,255,0.35)", fontSize: "0.72rem", fontWeight: 500, marginLeft: "0.4rem" }}>
-              {visible.length === projects.length ? projects.length : `${visible.length} / ${projects.length}`}
-            </span>
-          )}
-        </span>
-        <button
-          type="button"
-          className="oh-tap"
-          onClick={onClose}
-          aria-label="Close"
-          style={{
-            background: "none",
-            border: "none",
-            color: "rgba(255,255,255,0.55)",
-            cursor: "pointer",
-            display: "flex",
-            padding: "0.2rem",
-          }}
-        >
-          <CloseIcon />
-        </button>
-      </div>
-
+    <div style={{ display: "flex", flex: 1, flexDirection: "column", minHeight: 0 }}>
       {/* On a phone, the one scroller for everything under the header. On a
           desktop it is not there as far as layout goes (display: contents),
           so its children keep the panel's indentation. */}
@@ -1727,11 +1669,10 @@ const ProjectsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef }) => {
   );
 };
 
-// The launcher, with the same hasOpened latch the Chat and Actions buttons use so
-// the panel body is never mounted until it is first opened.
-// The board glyph, in the same stroke family as the other launcher icons.
-const ProjectsDockIcon = () => (
-  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+// The board glyph, for its tab in the Actions panel: the same stroke family as
+// the launcher icons.
+const ProjectsTabIcon = ({ size = 13 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
     <rect x="4" y="3" width="16" height="18" rx="2" />
     <path d="M8 8h8" />
     <path d="M8 12h8" />
@@ -1739,56 +1680,4 @@ const ProjectsDockIcon = () => (
   </svg>
 );
 
-const Projects = ({ hovered, isOpen, mapRef, onOpenAdvisor, onToggle, setHovered }) => {
-  const [hasOpened, setHasOpened] = useState(false);
-
-  useEffect(() => {
-    if (isOpen) setHasOpened(true);
-  }, [isOpen]);
-
-  return (
-    <>
-      {hasOpened && (
-        <ProjectsPanel
-          isOpen={isOpen}
-          onClose={onToggle}
-          onOpenAdvisor={onOpenAdvisor}
-          mapRef={mapRef}
-        />
-      )}
-      <button
-        type="button"
-        title="Projects & Operations"
-        style={{
-          alignItems: "center",
-          background: isOpen
-          ? "rgba(59,130,246,0.16)"
-          : hovered
-          ? "rgba(255,255,255,0.08)"
-          : "rgba(255,255,255,0.04)",
-          border: isOpen ? "1px solid rgba(96,165,250,0.34)" : "1px solid rgba(255,255,255,0.1)",
-          borderRadius: "10px",
-          boxShadow: "inset 0 1px 0 rgba(255,255,255,0.05)",
-          color: "white",
-          cursor: "pointer",
-          display: "flex",
-          fontFamily: "inherit",
-          fontSize: "1.2rem",
-          height: "3.3rem",
-          justifyContent: "center",
-          outline: "none",
-          transform: hovered ? "translateY(-1px)" : "translateY(0)",
-          transition: "all 0.12s ease",
-          width: "3.3rem",
-        }}
-        onMouseEnter={() => setHovered(true)}
-        onMouseLeave={() => setHovered(false)}
-        onClick={onToggle}
-      >
-        <ProjectsDockIcon />
-      </button>
-    </>
-  );
-};
-
-export { Projects, ProjectsPanel };
+export { ProjectsBoard, ProjectsTabIcon };

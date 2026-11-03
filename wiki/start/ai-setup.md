@@ -17,8 +17,8 @@ key and paste it in.**
 
 <p class="beta-note"><b>On beta the game fights land wars itself.</b> Where two sides at war hold
 touching land, their troops fight it out on a battlefield before the period's story is written,
-and the model then tells the war as it went, at no extra request. The model also writes the posts
-behind a region's <b>Listen in</b> phone, one request for each new feed.</p>
+and the model then tells the war as it went, at no extra request. The posts of <b>Rostra</b>, the
+social network, come in the same answer, at no extra request either.</p>
 
 Without a provider the game still runs — the map, the editor, saved games and the interface all
 work — but time skips fall back to a small set of canned events and the advisor cannot answer.

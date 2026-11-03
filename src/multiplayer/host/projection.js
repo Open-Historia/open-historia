@@ -94,6 +94,8 @@ export const PUBLIC_WORLD_KEYS = Object.freeze([
   "reparations",
   "peaceTreaties",
   "callsToArms",
+  // Rostra, the social network (runtime/socialFeed.js): posts are public.
+  "socialFeed",
   // The stat sheets, and how each has moved: public figures (see the limits above).
   "countryStats", "countryStatsHistory",
 ]);

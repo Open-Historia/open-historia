@@ -20,8 +20,8 @@ const worldDirection = featureDefaults().worldDirection;
 const playerFocus = featureDefaults().playerFocus;
 const groups = featureDefaults().groups;
 const fronts = featureDefaults().fronts;
-const listenIn = featureDefaults().listenIn;
 const pregameHistory = featureDefaults().pregameHistory;
+const socialMedia = featureDefaults().socialMedia;
 
 test("the defaults switch every feature on with its settings at their defaults", () => {
   const defaults = featureDefaults();
@@ -45,7 +45,7 @@ test("a scenario's configuration is made complete, with malformed values replace
     idleDiplomacy: { enabled: true, averageMinutes: 8 },
     groups,
     fronts,
-    listenIn,
+    socialMedia,
     pregameHistory,
     worldDirection,
     playerFocus,
@@ -56,7 +56,7 @@ test("a scenario's configuration is made complete, with malformed values replace
     idleDiplomacy: { enabled: true, averageMinutes: 720 },
     groups,
     fronts,
-    listenIn,
+    socialMedia,
     pregameHistory,
     worldDirection,
     playerFocus,
@@ -130,6 +130,19 @@ test("an older save's puppetStates setting is dropped from a scenario and from a
   assert.equal("puppetStates" in scenario, false);
   assert.deepEqual(normalizeFeatureOverrides({ espionage: { enabled: true }, puppetStates: { enabled: false } }), { espionage: { enabled: true } });
   assert.equal("puppetStates" in resolveFeatures({ puppetStates: { enabled: false } }, { puppetStates: { enabled: false } }), false);
+});
+
+// Listen in was a feature a scenario or a game could switch off until 2026-11-02,
+// when Rostra, the social network, took its place. A save that still carries
+// the key, on or off, loads without it: it is dropped like any feature this
+// build does not define.
+test("an older save's listenIn setting is dropped from a scenario and from a game", () => {
+  const scenario = normalizeFeatureSettings({ groups: false, listenIn: { enabled: false } });
+  assert.deepEqual(scenario, { ...featureDefaults(), groups: { enabled: false } });
+  assert.equal("listenIn" in scenario, false);
+  assert.equal(FEATURE_DEFINITIONS.some((definition) => definition.key === "listenIn"), false);
+  assert.deepEqual(normalizeFeatureOverrides({ listenIn: { enabled: true } }), {});
+  assert.equal("listenIn" in resolveFeatures({ listenIn: { enabled: false } }, { listenIn: { enabled: true } }), false);
 });
 
 test("legacy scripted-event text migrates to unconditional composable rules without changing its dated beat", () => {
