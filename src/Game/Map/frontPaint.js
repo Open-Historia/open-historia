@@ -158,6 +158,32 @@ export const pictureFits = (picture, frame) => {
   return haveWest === west && haveNorth === north && haveEast === east && haveSouth === south;
 };
 
+// A picture's land mask (`target.mask` below), written into `mask`: inside the window [x0, x1) by [y0, y1)
+// it is the alpha of `shape` (RGBA of that window alone), elsewhere 255 on any cell but a wall.
+export const landMask = (mask, { width, height, scale, cols, rows, state, shape, x0, x1, y0, y1 }) => {
+  const seenWidth = x1 - x0;
+  const colOf = new Int32Array(width);
+  for (let x = 0; x < width; x += 1) colOf[x] = Math.min(cols - 1, Math.floor(x / scale));
+  let lastRow = -1;
+  for (let y = 0; y < height; y += 1) {
+    const row = Math.min(rows - 1, Math.max(0, Math.floor(rows - (y + 0.5) / scale)));
+    const seen = y >= y0 && y < y1;
+    const line = y * width;
+    // Off the window a row is the cells' alone, the same as the row above it in the same cell row.
+    if (!seen && row === lastRow) {
+      mask.copyWithin(line, line - width, line);
+      continue;
+    }
+    const base = row * cols;
+    for (let x = 0; x < width; x += 1) {
+      if (seen && x >= x0 && x < x1) mask[line + x] = shape[((y - y0) * seenWidth + x - x0) * 4 + 3];
+      else mask[line + x] = state[base + colOf[x]] === PAINT_WALL ? 0 : 255;
+    }
+    lastRow = seen ? -1 : row;
+  }
+  return mask;
+};
+
 // The painted ground at the player's day, written into `target.data` (RGBA,
 // `target.width` by `target.height`, north up, `target.scale` pixels a cell).
 // `palette` holds four bytes a state: its colour, and how solid it is drawn.
