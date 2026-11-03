@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { CHIEF_ADVISOR_THREAD } from "../../runtime/advisorThreads.js";
+import { ADVISOR_PERSONALITY_MAX_CHARS, CHIEF_ADVISOR_THREAD } from "../../runtime/advisorThreads.js";
 
 const field = {
   background: "rgba(0,0,0,0.22)", border: "1px solid rgba(255,255,255,0.17)",
@@ -127,7 +127,10 @@ export default function AdvisorRecipients({
                 <input style={field} maxLength={120} value={draft.title} onChange={(event) => setDraft((old) => ({ ...old, title: event.target.value }))} />
               </label>
               <label style={subtle}>Personality and principles
-                <textarea style={{ ...field, minHeight: 64, resize: "vertical" }} maxLength={1200} value={draft.personality} onChange={(event) => setDraft((old) => ({ ...old, personality: event.target.value }))} placeholder="e.g. meticulous, cautious with public spending, willing to disagree" />
+                <textarea style={{ ...field, minHeight: 64, resize: "vertical" }} maxLength={ADVISOR_PERSONALITY_MAX_CHARS} value={draft.personality} onChange={(event) => setDraft((old) => ({ ...old, personality: event.target.value }))} placeholder="e.g. meticulous, cautious with public spending, willing to disagree" />
+                <div data-no-translate style={{ color: draft.personality.length >= ADVISOR_PERSONALITY_MAX_CHARS ? "#f87171" : "rgba(255,255,255,0.5)", fontSize: "0.7rem", marginTop: "0.25rem", textAlign: "right" }}>
+                  {draft.personality.length}/{ADVISOR_PERSONALITY_MAX_CHARS}
+                </div>
               </label>
               {draft.binding && <div style={subtle}>Linked to {draft.binding.office === "headOfGovernment" ? "head of government" : "head of state"}: {draft.binding.name}. A replacement will not inherit this conversation.</div>}
               {error && <div role="alert" style={{ color: "#fca5a5", fontSize: "0.72rem" }}>{error}</div>}

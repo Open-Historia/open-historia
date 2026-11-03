@@ -36,6 +36,15 @@ test("additional ministers cannot enact chief-advisor Action or Project blocks",
   assert.match(ui, /recipientLocked/);
 });
 
+test("recipient personality shows a live Rostra-style used/maximum character counter", () => {
+  const contacts = read("./AdvisorRecipients.jsx");
+  const state = read("../../runtime/advisorThreads.js");
+  assert.match(state, /export const ADVISOR_PERSONALITY_MAX_CHARS = 1200/);
+  assert.match(contacts, /maxLength=\{ADVISOR_PERSONALITY_MAX_CHARS\}/);
+  assert.match(contacts, /draft\.personality\.length\}\s*\/\s*\{ADVISOR_PERSONALITY_MAX_CHARS\}/);
+  assert.match(contacts, /data-no-translate/);
+});
+
 test("Political World only identifies explicit officeholders; no invented cabinet positions", () => {
   const contacts = read("./AdvisorRecipients.jsx");
   assert.match(contacts, /Link to Political World \(optional\)/);

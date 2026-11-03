@@ -4,6 +4,7 @@ import { getPoliticalProfile } from "./politicalActors.js";
 // Legacy messages (no threadId) remain the chief advisor's; contact records
 // and other conversations share this array so every save/export path retains them.
 export const CHIEF_ADVISOR_THREAD = "chief";
+export const ADVISOR_PERSONALITY_MAX_CHARS = 1200;
 export const ADVISOR_CONTACT_ROLE = "advisor-contact";
 const MESSAGE_ROLES = new Set(["user", "advisor", "error", "notice"]);
 const OFFICE_ROLES = Object.freeze({
@@ -28,7 +29,7 @@ export const createAdvisorContact = (entries, proposed) => {
   const id = clean(proposed?.id, 100);
   const name = clean(proposed?.name, 100);
   const title = clean(proposed?.title, 120);
-  const personality = clean(proposed?.personality, 1200);
+  const personality = clean(proposed?.personality, ADVISOR_PERSONALITY_MAX_CHARS);
   if (!validId(id) || !name || !title) throw new Error("Advisor contacts require a unique ID, name and position.");
   if (advisorContacts(entries).some((contact) => contact.id === id)) throw new Error("This advisor contact already exists.");
   if (advisorContacts(entries).length >= 24) throw new Error("An Advisor inbox supports at most 24 additional contacts.");
@@ -66,7 +67,7 @@ export const reviseAdvisorContact = (entries, contactId, changes) => {
     throw new Error("A Political World contact's canonical name cannot be changed.");
   }
   return array(entries).map((entry) => (entry?.role === ADVISOR_CONTACT_ROLE && entry.id === contactId)
-    ? { ...entry, name, title, personality: clean(changes?.personality, 1200) }
+    ? { ...entry, name, title, personality: clean(changes?.personality, ADVISOR_PERSONALITY_MAX_CHARS) }
     : entry);
 };
 
