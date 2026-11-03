@@ -17021,6 +17021,9 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
   // and kept through a held segment's retry: the segments already in hand were
   // written under it.
   if (state.folded === undefined) state.folded = !foldedSkipRefused;
+  // A skip asked the old way keeps a request for its checks (the turn review): a round of function calling cannot
+  // spend it, or the turn is held for the checks it had no request left for (the owner's log, 2026-11-03).
+  if (!state.folded) state.requests?.budget?.reserve?.("review", 1);
   if (state.folded && !state.foldedPrep) state.foldedPrep = await prepareFoldedSkip({ bundle, originDate, variables, campaignId: context.campaignId });
   if (!Array.isArray(state.covertOperations)) {
     state.covertOperations = isActiveFeatureEnabled("espionage")
@@ -17448,6 +17451,8 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
             segmentIndex,
           });
           state.folded = false;
+          // (Its checks are a request of their own now: kept for them, as above.)
+          state.requests?.budget?.reserve?.("review", 1);
           segmentDraft = null;
           segmentComplaints.length = 0;
           statuses.length = 0;

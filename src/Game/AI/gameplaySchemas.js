@@ -13,7 +13,7 @@ import { extractJsonArray } from "./jsonSalvage.js";
 import { WAR_ROOM_ORDERS, WAR_ROOM_STANCES } from "../../runtime/fronts/constants.js";
 import { FRONT_ORDERS_FIELD } from "./nativeFrontLedger.js";
 import { SEAT_ADVICE_ANSWER_SCHEMA, SEAT_ADVICE_FIELD } from "./seatAdvice.js";
-import { IDEOLOGIES, PARTY_OPS, PARTY_ROLES } from "../../runtime/politics.js";
+import { IDEOLOGIES, PARTY_OPS, PARTY_ROLES, readPartyChanges } from "../../runtime/politics.js";
 import { WAR_FIGURES_FIELD } from "./warFiguresPrompt.js";
 const textSchema = (description) => ({
   type: "string",
@@ -3559,7 +3559,23 @@ const WAR_ROOM_SCHEMA = {
 // tool sent is what it was before the Politics tab, and its size guard
 // (projectOpSchema.test.js) holds. Where they are asked for, after every other
 // impact. The answer is read against the whole schema either way.
-const PARTY_OPS_FIELD = impactsSchema.properties.partyOps;
+// What is SENT is the op with its changes as one line (runtime/politics.js
+// readPartyChanges), read back into the object the answer is checked against
+// before it is (normalizeEventImpactsShape): the whole object under every event
+// made Gemini refuse the folded skip in a game tracking any polity's parties
+// (the owner's log, 2026-11-03).
+const PARTY_OP_SENT_SCHEMA = {
+  type: "object",
+  properties: {
+    polity: nonEmptyTextSchema("As listed."),
+    op: { type: "string", enum: PARTY_OPS },
+    party: textSchema("Listed name."),
+    changes: textSchema("name=value; ..."),
+  },
+  required: ["polity", "op"],
+  additionalProperties: false,
+};
+const PARTY_OPS_FIELD = { type: "array", description: "See [Political Parties].", items: PARTY_OP_SENT_SCHEMA };
 const isImpacts = (properties) => Boolean(properties?.polityChanges && properties?.spyOps);
 export const withPartyOps = (tool, tracked = false) => {
   let changed = false;
@@ -4592,6 +4608,10 @@ const normalizeEventShape = (entry) => {
       impacts.unitOps = impacts.unitOps.map(normalizeUnitOperationShape);
     }
     if (Array.isArray(impacts.createdChats)) impacts.createdChats = normalizeChatList(impacts.createdChats);
+    // A party op's changes as the tool sends them, one line (PARTY_OP_SENT_SCHEMA), are the object the schema checks.
+    if (Array.isArray(impacts.partyOps)) {
+      impacts.partyOps = impacts.partyOps.map((op) => (isPlainRecord(op) && typeof op.changes === "string" ? { ...op, changes: readPartyChanges(op.changes) } : op));
+    }
     event.impacts = impacts;
   }
   return event;

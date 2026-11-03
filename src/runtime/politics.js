@@ -352,12 +352,43 @@ export const PARTY_OPS = ["update", "add", "remove", "government"];
 const PARTY_FIELDS = ["nameEn", "nameNative", "abbrEn", "abbrNative", "ideology", "subideology", "leader", "colour", "role", "seats", "support", "founded", "description"];
 const GOVERNMENT_FIELDS = ["government", "headOfState", "headOfGovernment", "legislature", "legislatureSeats", "nextElection", "kind"];
 
+// An op's changes as a time skip writes them: one line of name=value pairs,
+// split by ";" ("leader=Léon Blum; seats=149; support=20"). The skip's tool
+// declares the changes so (gameplaySchemas.js PARTY_OP_SENT_SCHEMA): the whole
+// object, its nineteen fields, its ten ideologies and its roles under every
+// event of every skip, made Gemini refuse the skip outright once a game tracked
+// any polity's parties ("Request contains an invalid argument", the owner's
+// log, 2026-11-03), and the turn then needed a second request for its checks.
+// The fields named (in any case), numbers where the field is one; an object
+// comes back as it is. A pair with no field the op knows is left out.
+const NUMBER_FIELDS = new Set(["seats", "support", "legislatureSeats"]);
+const FIELD_NAMES = new Map([...PARTY_FIELDS, ...GOVERNMENT_FIELDS].map((field) => [field.toLowerCase(), field]));
+export const readPartyChanges = (value) => {
+  if (value && typeof value === "object" && !Array.isArray(value)) return value;
+  if (typeof value !== "string") return {};
+  const out = {};
+  for (const pair of value.split(";")) {
+    const at = pair.search(/[=:]/);
+    if (at <= 0) continue;
+    const field = FIELD_NAMES.get(pair.slice(0, at).trim().toLowerCase());
+    const raw = pair.slice(at + 1).trim();
+    if (!field || !raw) continue;
+    if (NUMBER_FIELDS.has(field)) {
+      const number = Number(raw.replace(/[,\s%]/g, ""));
+      if (Number.isFinite(number)) out[field] = Math.round(number);
+    } else {
+      out[field] = raw;
+    }
+  }
+  return out;
+};
+
 export const normalizePartyOp = (value) => {
   if (!value || typeof value !== "object") return null;
   const polity = text(value.polity);
   const op = text(value.op);
   if (!polity || !PARTY_OPS.includes(op)) return null;
-  const changes = value.changes && typeof value.changes === "object" ? value.changes : {};
+  const changes = readPartyChanges(value.changes);
   const allowed = op === "government" ? GOVERNMENT_FIELDS : PARTY_FIELDS;
   const kept = Object.fromEntries(allowed.filter((key) => changes[key] !== undefined && changes[key] !== null).map((key) => [key, changes[key]]));
   const party = text(value.party);
@@ -490,11 +521,12 @@ export const describePoliticsForPrompt = (politics, { date = "" } = {}) => {
   });
   return `[Political Parties]
 The parties of the polities below are tracked (Stats → Politics). When an event changes them, the same event carries impacts.partyOps, one entry per change; an event that only narrates the change leaves the list wrong. An election moves seats and support for every party that gained or lost (an update op each) and may change the governing role, heads of government and the next election date (a government op). A new leader, a split, a merger, a ban or legalisation, a party founded or dissolved: each is an op. Name the party as it is listed below. An election whose date falls in the period you write is held in it: an event with the result, an update op for every party whose seats or support moved, and a government op with the next election date. A renamed party is one update op that carries all four new names — nameEn, nameNative, abbrEn and abbrNative — never the English name alone. nameNative is the name as native speakers would write it: correct grammar and agreement, real words (never a near-sounding wrong one), and that language's capitalisation rules (e.g. Croatian capitalises only the first word and proper nouns: Hrvatski kršćanski konzervativci) — not a word-for-word gloss; abbrNative abbreviates it.
-  {"polity":"<listed polity>","op":"update","party":"<listed name or abbreviation>","changes":{"leader":"","role":"governing|coalition|opposition|extraParliamentary|underground|exile|banned","seats":0,"support":0,"ideology":"","subideology":"","...":"only the fields that changed"}}
-  {"polity":"<listed polity>","op":"update","party":"<listed name>","changes":{"nameEn":"","nameNative":"","abbrEn":"","abbrNative":""}}
-  {"polity":"<listed polity>","op":"add","changes":{"nameEn":"","nameNative":"","abbrEn":"","abbrNative":"","ideology":"one of the ten","subideology":"","leader":"","role":"","seats":0,"support":0,"founded":""}}
+The changes are one line of name=value pairs split by ";", only the fields that changed (an add gives the whole party):
+  {"polity":"<listed polity>","op":"update","party":"<listed name or abbreviation>","changes":"leader=<name>; role=<governing|coalition|opposition|extraParliamentary|underground|exile|banned>; seats=<n>; support=<percent>; ideology=<one of the ten>; subideology=<one listed under it>"}
+  {"polity":"<listed polity>","op":"update","party":"<listed name>","changes":"nameEn=<name>; nameNative=<name>; abbrEn=<abbr>; abbrNative=<abbr>"}
+  {"polity":"<listed polity>","op":"add","changes":"nameEn=<name>; nameNative=<name>; abbrEn=<abbr>; abbrNative=<abbr>; ideology=<one of the ten>; subideology=<one>; leader=<name>; role=<role>; seats=<n>; support=<percent>; founded=<year>"}
   {"polity":"<listed polity>","op":"remove","party":"<listed name>"}
-  {"polity":"<listed polity>","op":"government","changes":{"government":"","headOfState":"","headOfGovernment":"","legislatureSeats":0,"nextElection":""}}
+  {"polity":"<listed polity>","op":"government","changes":"government=<form>; headOfState=<name and title>; headOfGovernment=<name and title>; legislatureSeats=<n>; nextElection=<date or year>"}
 Ideologies: ${IDEOLOGIES.map((ideology) => ideology.name).join(", ")}. Only these polities; never emit partyOps for one not listed.
 ${lines.join("\n")}`;
 };
