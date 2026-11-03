@@ -773,24 +773,38 @@ button.gx-date-country { background: none; border: 0; padding: 0; font-family: i
 }
 
 /* ---- Rostra, the world's social network (social.jsx): the game's grey, and the accent for what is the
-   player's and what can be pressed ---- */
+   player's and what can be pressed. A phone that rises from the dock, with a phone's proportions, as
+   tall as the room above the dock allows; on a phone, the app alone (below). ---- */
 .rs-dock { display: inline-flex; position: relative; }
 .rs-dock .rs-badge { background: #2bc1f3; color: #06171d; font-weight: 800; }
-.rs { width: 31rem; max-width: calc(100% - 1rem); height: min(calc(100% - var(--gx-top) - 9rem), max(calc(100% - var(--gx-top) - 16rem), 30rem)); color: #f4f4f5; }
-.rs-head { border-bottom: 1px solid rgba(255, 255, 255, 0.08); flex-shrink: 0; padding: 0.85rem 1.1rem 0.55rem; }
-.rs-mast { align-items: center; display: flex; gap: 0.6rem; }
-.rs-mast > svg { flex-shrink: 0; }
+.gx-panel.dock-panel.rs { aspect-ratio: 9 / 19; background-color: #17171a; border: 0; border-radius: 2.6rem; box-shadow: 0 0 0 1px #3a3a40, 0 0 0 3px #0e0e10, 0 24px 60px rgba(0, 0, 0, 0.55); box-sizing: border-box; color: #f4f4f5; height: min(46rem, calc(100% - var(--gx-top) - 9rem)); max-width: calc(100% - 1rem); min-height: 24rem; min-width: 17.5rem; overflow: visible; padding: 0.5rem; width: auto; }
+.rs-screen { background: #0b0b0d; border-radius: 2.1rem; display: flex; flex: 1; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; }
+.rs-side { background: #2c2c31; position: absolute; width: 3px; }
+.rs-side.one { border-radius: 2px 0 0 2px; height: 1.8rem; left: -3px; top: 6.2rem; }
+.rs-side.two { border-radius: 2px 0 0 2px; height: 3rem; left: -3px; top: 9rem; }
+.rs-side.three { border-radius: 0 2px 2px 0; height: 4.4rem; right: -3px; top: 9.6rem; }
+.rs-status { align-items: center; display: grid; flex: 0 0 auto; font-size: 0.7rem; font-weight: 700; grid-template-columns: 1fr auto 1fr; height: 2.5rem; padding: 0.3rem 1.35rem 0; }
+.rs-status > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rs-island { background: #000; border-radius: 999px; box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.05); display: block; height: 1.45rem; width: 5.2rem; }
+.rs-marks { align-items: center; display: flex; gap: 0.28rem; justify-content: flex-end; }
+.rs-head { align-items: center; border-bottom: 1px solid rgba(255, 255, 255, 0.08); display: flex; flex-shrink: 0; gap: 0.6rem; padding: 0.25rem 0.95rem 0.6rem; }
+.rs-head > svg { flex-shrink: 0; }
 .rs-name { min-width: 0; }
 .rs-name b { display: block; font-size: 1.05rem; font-weight: 900; letter-spacing: 0.04em; line-height: 1.05; }
 .rs-name small { color: rgba(244, 244, 245, 0.38); display: block; font-size: 0.62rem; margin-top: 0.1rem; }
-.rs-day { color: rgba(244, 244, 245, 0.38); font-size: 0.68rem; margin-left: auto; white-space: nowrap; }
-.rs-x { background: none; border: none; border-radius: 6px; color: rgba(244, 244, 245, 0.62); cursor: pointer; display: flex; padding: 0.2rem; }
-.rs-x:hover { color: white; background: rgba(255, 255, 255, 0.08); }
-.rs-tabs { display: flex; gap: 0.35rem; margin-top: 0.55rem; overflow-x: auto; scrollbar-width: none; }
-.rs-tab.on { color: #f4f4f5; }
-.rs-tcount { align-items: center; background: rgba(43, 193, 243, 0.14); border-radius: 999px; color: #2bc1f3; display: inline-flex; font-size: 0.57rem; font-weight: 800; height: 1.05rem; justify-content: center; min-width: 1.05rem; padding: 0 0.25rem; }
-.rs-tab.on .rs-tcount { background: rgba(255, 255, 255, 0.14); color: #fff; }
-.rs-scroll { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin; scrollbar-color: rgba(255, 255, 255, 0.2) transparent; }
+.rs-day { color: rgba(244, 244, 245, 0.38); display: none; font-size: 0.68rem; margin-left: auto; white-space: nowrap; }
+.rs-x { align-items: center; background: rgba(255, 255, 255, 0.06); border: none; border-radius: 999px; color: rgba(244, 244, 245, 0.62); cursor: pointer; display: inline-flex; flex: 0 0 auto; height: 2rem; justify-content: center; margin-left: auto; padding: 0; width: 2rem; }
+.rs-x:hover { color: white; background: rgba(255, 255, 255, 0.1); }
+.rs-scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: rgba(255, 255, 255, 0.2) transparent; }
+/* The tab bar along the foot of the screen, as such apps have it. */
+.rs-bar { border-top: 1px solid rgba(255, 255, 255, 0.08); display: flex; flex-shrink: 0; padding: 0.3rem 0.35rem 0.05rem; }
+.rs-tab { align-items: center; background: none; border: none; color: rgba(244, 244, 245, 0.38); cursor: pointer; display: flex; flex: 1 1 0; flex-direction: column; font-family: sans-serif; font-size: 0.6rem; font-weight: 650; gap: 0.18rem; min-width: 0; padding: 0.3rem 0.1rem; }
+.rs-tab.on { color: #f4f4f5; font-weight: 800; }
+.rs-ticon { display: inline-flex; position: relative; }
+.rs-tlabel { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rs-tcount { align-items: center; background: #2bc1f3; border: 1.5px solid #0b0b0d; border-radius: 999px; box-sizing: border-box; color: #06171d; display: inline-flex; font-size: 0.55rem; font-weight: 800; height: 1.05rem; justify-content: center; min-width: 1.05rem; padding: 0 0.2rem; position: absolute; right: -0.6rem; top: -0.4rem; }
+.rs-home { display: flex; flex: 0 0 auto; justify-content: center; padding: 0.3rem 0 0.45rem; }
+.rs-home i { background: rgba(244, 244, 245, 0.85); border-radius: 999px; display: block; height: 0.26rem; width: 6.6rem; }
 .rs-compose, .rs-post { border-bottom: 1px solid rgba(255, 255, 255, 0.08); display: flex; gap: 0.65rem; padding: 0.8rem 1rem; }
 .rs-compose { padding: 0.85rem 1rem; }
 .rs-main { flex: 1; min-width: 0; }
@@ -836,13 +850,19 @@ button.gx-date-country { background: none; border: 0; padding: 0; font-family: i
 .rs-post.fresh { animation: rs-in 0.28s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
 @keyframes rs-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .rs-post.fresh { animation: none; } }
+/* On a phone the frame is already in the reader's hand: the app alone, risen from the dock as wide as the screen. */
 @media (max-width: 700px) {
-  .rs { width: calc(100% - 1rem); max-width: none; }
+  .gx-panel.dock-panel.rs { aspect-ratio: auto; background-color: rgba(11, 11, 13, 0.97); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 16px; box-shadow: var(--oh-hud-shadow); height: min(calc(100% - var(--gx-top) - 9rem), max(calc(100% - var(--gx-top) - 16rem), 30rem)); max-width: none; min-height: 10rem; min-width: 0; overflow: hidden; padding: 0; width: calc(100% - 1rem); }
+  .rs-screen { background: transparent; border-radius: 0; }
+  .rs-side, .rs-status, .rs-home { display: none; }
+  .rs-head { padding: 0.6rem 0.9rem 0.55rem; }
+  .rs-day { display: inline; }
+  .rs-x { margin-left: 0; }
+  .rs-bar { padding: 0.3rem 0.35rem 0.35rem; }
+  .rs-tcount { border-color: #18181b; }
 }
 @media (pointer: coarse) {
-  .rs-head { padding: 0.6rem 0.9rem 0.45rem; }
-  .rs-tab { padding: 0.3rem 0.58rem; }
-  .rs-x, .rs-unquote, .rs-act { min-width: 44px; min-height: 44px; justify-content: center; }
+  .rs-x, .rs-unquote, .rs-act, .rs-tab { min-width: 44px; min-height: 44px; justify-content: center; }
   .rs-unquote { min-width: 0; min-height: 0; }
   .rs-send { min-height: 44px; }
 }
