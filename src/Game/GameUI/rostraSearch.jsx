@@ -43,6 +43,7 @@ import { socialFeedView } from "../../runtime/socialFeed.js";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
 import { generatePlaceFeed } from "../AI/gameplayLazy.js";
 import { createReportRequests } from "../Selection/reportRequests.js";
+import { RefreshButton, RefreshIcon } from "./rostraRefresh.jsx";
 
 // A place's feed being written, by game, place, day and language, outside the
 // tab: it is left and opened again while one is on its way, and the second
@@ -59,7 +60,6 @@ const iconProps = { width: 17, height: 17, viewBox: "0 0 24 24", fill: "none", s
 const ReplyIcon = () => <svg {...iconProps}><path d="M21 11.5a8.4 8.4 0 0 1-12.2 7.5L3 21l2-5.6A8.4 8.4 0 1 1 21 11.5z" /></svg>;
 const RepostIcon = () => <svg {...iconProps}><path d="M17 2l4 4-4 4" /><path d="M3 12V9a3 3 0 0 1 3-3h15" /><path d="M7 22l-4-4 4-4" /><path d="M21 12v3a3 3 0 0 1-3 3H3" /></svg>;
 const HeartIcon = ({ filled }) => <svg {...iconProps} fill={filled ? "currentColor" : "none"}><path d="M20.8 5.6a5.2 5.2 0 0 0-7.4 0L12 7l-1.4-1.4a5.2 5.2 0 0 0-7.4 7.4L12 21.8l8.8-8.8a5.2 5.2 0 0 0 0-7.4z" /></svg>;
-const RefreshIcon = () => <svg {...iconProps}><path d="M21 4v6h-6" /><path d="M3 20v-6h6" /><path d="M5.2 9a8 8 0 0 1 13.6-2.6L21 10" /><path d="M18.8 15a8 8 0 0 1-13.6 2.6L3 14" /></svg>;
 const SearchGlyph = () => <svg {...iconProps} width={16} height={16}><circle cx="11" cy="11" r="7" /><path d="M21 21l-4.5-4.5" /></svg>;
 const ClearGlyph = () => <svg {...iconProps} width={14} height={14} strokeWidth={2.2}><path d="M6 6l12 12M18 6L6 18" /></svg>;
 const PinGlyph = () => <svg {...iconProps} width={15} height={15}><path d="M12 21s-6.5-6.1-6.5-11a6.5 6.5 0 0 1 13 0c0 4.9-6.5 11-6.5 11z" /><circle cx="12" cy="10" r="2.3" /></svg>;
@@ -512,11 +512,11 @@ const RostraSearch = ({ shown, country, feed, renderPost }) => {
             {/* Nothing kept for today: one press asks. */}
             {!waiting && failure === undefined && batches.length === 0 && session && (
               <div style={{ padding: "1.1rem 1rem 1.4rem", textAlign: "center" }}>
-                <div style={{ color: INK_SOFT, fontSize: "0.8rem", lineHeight: 1.45 }}>
-                  {`See what ordinary people in ${title} are posting today.`}
+                <div style={{ color: INK, fontSize: "0.86rem", fontWeight: 750 }}>Nothing has been posted here yet.</div>
+                <div style={{ color: INK_SOFT, fontSize: "0.76rem", lineHeight: 1.45, marginTop: "0.3rem" }}>
+                  {`Refresh to see what ordinary people in ${title} are posting.`}
                 </div>
-                <button type="button" className="oh-tap-row" onClick={ask} style={pillButtonStyle}>Load posts</button>
-                <div style={{ color: INK_FAINT, fontSize: "0.66rem", marginTop: "0.5rem" }}>One AI request</div>
+                <RefreshButton onClick={ask} />
               </div>
             )}
             {batches.map((batch, index) => {

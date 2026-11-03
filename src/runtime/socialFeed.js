@@ -524,6 +524,25 @@ const pollLine = (poll) => {
   return ` Poll result: ${shares}${results.votes ? ` (${results.votes.toLocaleString("en-US")} votes)` : ""}.${results.consensus ? ` ${results.consensus}` : ""}`;
 };
 
+// What the empty feed's Refresh asks for (gameplay.js generateRostraPosts): the
+// first posts of a game, before any time skip has written one ("if there are
+// no posts, it should say refresh page with a refresh button to generate
+// them", the owner, 2026-11-03). The same people and rules as a skip's posts,
+// about the world as it stands. `date` the game's day.
+export const ROSTRA_REFRESH_POSTS = "8 to 12";
+export const rostraRefreshRules = ({ players = [], date = "" } = {}) => {
+  const people = list(players).map(clean).filter(Boolean);
+  const playerNames = people.length ? people.join(", ") : "the player's polity";
+  return [
+    `Write ${ROSTRA_REFRESH_POSTS} posts, dated ${date || "today"} or the few days before it, oldest first, about the world as it stands and what has happened lately.`,
+    "  • The people who make the news: heads of state and government, ministers, generals, party leaders, journalists, analysts, chief executives, activists. Each writes in their own voice, under their real name where history gives one.",
+    "  • Quote one another where someone would: a rival answering a rival, a journalist picking a statement apart (quote: \"#2\" for the 2nd post of your own list).",
+    "  • Exactly one post about nothing in world affairs: a celebrity, a sports star or an ordinary person talking about everyday things (offTopic: true).",
+    `Each post: author (a person's full name, never a country, a government or a people), role (their office or what they do), country (the exact map name of the polity they belong to, or empty), date (YYYY-MM-DD), text (at most ${SOCIAL_POST_MAX_CHARS} characters, written as that person would post it), quote (empty, or "#n" for an earlier post of your list).`,
+    `Never write a post as the leader of ${playerNames}, or as anyone who speaks for ${people.length > 1 ? "their governments" : "its government"}: those posts are the player's to write. Their opposition, press and people may post.`,
+  ].join("\n");
+};
+
 // What was said on Rostra in one country and about it, for a Search feed's
 // prompt (gameplay.js generatePlaceFeed): the newest posts by its people and by
 // its leader, and its leader's polls with what the public answered, so that the

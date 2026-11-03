@@ -55,6 +55,7 @@ import { useRuntimeState } from "../../runtime/useRuntimeState.js";
 import { inSharedGame, requestFromHost } from "../../multiplayer/client/sharedGameBridge.js";
 import { useTurnRunning } from "./useTurnRunning.js";
 import RostraSearch from "./rostraSearch.jsx";
+import EmptyFeedRefresh from "./rostraRefresh.jsx";
 
 // Rostra's own colours: the game's grey, and the accent for what is the
 // player's and what can be pressed.
@@ -431,7 +432,6 @@ const TABS = [
 ];
 
 const EMPTY_TEXTS = {
-  all: "Nothing has been posted yet. The people who make the news post as time passes, and you can post first.",
   mentions: "Nobody has mentioned you yet. Post something, and the answers come with the next time skip.",
   mine: "You have not posted yet.",
 };
@@ -819,6 +819,8 @@ const SocialPanel = ({ isOpen, onClose, onSeen }) => {
                 />
               )}
             />
+          ) : posts.length === 0 && tab === "all" ? (
+            <EmptyFeedRefresh canPost={canPost} />
           ) : posts.length === 0 ? (
             <p style={{ color: INK_FAINT, fontSize: "0.78rem", fontStyle: "italic", lineHeight: 1.5, margin: 0, padding: "1.2rem 1.1rem" }}>
               {EMPTY_TEXTS[tab]}

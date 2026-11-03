@@ -68,6 +68,7 @@ const NEW_UPDATES = [
           "Search opens on your own country, where the Your country tab was.",
           "Ask a poll as your country's leader: the public votes during the next time skip, and the poll then shows the results and the public's verdict.",
           "The box to write a post now opens from the pen at the top of Rostra.",
+          "A feed with nothing on it says so and offers Refresh, which asks for the first posts by the people who make the news. It is one AI request.",
         ],
       },
     ],

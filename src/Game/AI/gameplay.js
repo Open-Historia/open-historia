@@ -218,7 +218,7 @@ import {
   POLL_RESULTS_FIELD,
   withoutGroupOps,
 } from "./gameplaySchemas.js";
-import { placeRostraLines, readSkipPollResults, readSkipPosts, socialFeedPromptBlock, withSkipPosts } from "../../runtime/socialFeed.js";
+import { placeRostraLines, readSkipPollResults, readSkipPosts, rostraRefreshRules, socialFeedPromptBlock, withSkipPosts } from "../../runtime/socialFeed.js";
 import { knownPolityNames } from "../../runtime/countryInfoPanel.js";
 import { frontsOn, strategyNetOn, warPartsOffBlock } from "./frontsGate.js";
 import { engineerLines } from "../../runtime/fronts/engineer.js";
@@ -13641,6 +13641,48 @@ export const generatePlaceFeed = async ({ place, language: askedLanguage, signal
     posts: normalizePlaceFeedPosts(payload?.posts),
     trends: normalizePlaceFeedTrends(payload?.trends),
   };
+};
+
+// ---- Rostra's first posts -------------------------------------------------------
+// The empty feed's Refresh (GameUI/rostraRefresh.jsx): ONE request, made because
+// the player pressed it, for the posts the people who make the news are writing
+// now (runtime/socialFeed.js rostraRefreshRules). Read as a skip's posts are
+// (readSkipPosts) and written into the feed in the save's own queue, unless a
+// time skip began or the player left the game while the model was writing.
+// Answers how many posts were kept.
+export const generateRostraPosts = async ({ signal } = {}) => {
+  if (!isActiveFeatureEnabled("socialMedia")) throw new Error("This game has no social media.");
+  const campaign = activeCampaignId();
+  const bundle = await readGameStateBundle({ force: true });
+  const world = normalizeWorldState(bundle.world);
+  const gameDate = normalizeString(bundle.game?.gameDate);
+  const round = Number(bundle.game?.round) || 0;
+  const variables = await buildTemplateVariables(bundle, { taskKey: "rostraFeed" });
+  const read = (posts, feed, latest) => readSkipPosts(posts, { feed, from: "", to: gameDate, round, knownNames: knownPolityNames(latest) });
+  const { payload } = await runJsonTask("rostraFeed", {
+    signal,
+    userMessage: "Nothing has been posted on Rostra yet. Write the first posts.",
+    variables: {
+      ...variables,
+      rostraFeedRules: rostraRefreshRules({
+        players: humanCountriesOf(bundle.game).map((country) => toCountryName(country) || country),
+        date: gameDate,
+      }),
+      rostraFeedLanguage: readingLanguageName(normalizeString(bundle.world?.language || bundle.game?.language)),
+    },
+    // One usable post is a feed; none is a failed request.
+    validatePayload: (candidate) => (read(candidate?.posts, world.socialFeed, world).length
+      ? ""
+      : "posts must hold at least one post by a person, with an author and a text."),
+  });
+  let kept = 0;
+  await mutateWorldState((latest) => {
+    if (isSimulationBusy() || leftCampaign(campaign)) return null;
+    const posts = read(payload?.posts, latest.socialFeed, latest);
+    kept = posts.length;
+    return posts.length ? { ...latest, socialFeed: withSkipPosts(latest.socialFeed, posts) } : null;
+  });
+  return { kept };
 };
 
 // The fronts a scenario begins with (runtime/fronts/scenarioFronts.js), built

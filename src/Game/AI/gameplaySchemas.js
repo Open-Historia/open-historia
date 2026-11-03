@@ -3532,6 +3532,18 @@ const PLACE_FEED_SCHEMA = {
   additionalProperties: false,
 };
 
+// Rostra's first posts (runtime/socialFeed.js rostraRefreshRules): what the
+// empty feed's Refresh asks for. The posts' shape is the time skip's
+// (SOCIAL_POSTS_SENT_SCHEMA), and the answer is read as a skip's posts are
+// (readSkipPosts): one that is not a person's is left out, never the request.
+const ROSTRA_FEED_SCHEMA = {
+  type: "object",
+  description: "The first posts on Rostra, by the people who make the news.",
+  properties: { posts: SOCIAL_POSTS_SENT_SCHEMA },
+  required: ["posts"],
+  additionalProperties: false,
+};
+
 // The war room (GameUI/warRoom.jsx): what the player's generals answer when he
 // speaks to them over a battlefield, the orders they took and, the first time,
 // what they are called. A general is named by his army ("1st Army"), never by
@@ -3756,6 +3768,7 @@ export const GAMEPLAY_SCHEMAS = Object.freeze({
   politicalLandscape: POLITICAL_LANDSCAPE_SCHEMA,
   goalProgress: GOAL_PROGRESS_SCHEMA,
   placeFeed: PLACE_FEED_SCHEMA,
+  rostraFeed: ROSTRA_FEED_SCHEMA,
   warRoom: WAR_ROOM_SCHEMA,
   actions: ACTIONS_SCHEMA,
   jumpForward: JUMP_ANSWER_CHECKED_SCHEMA,
@@ -4002,6 +4015,12 @@ export const PLACE_FEED_TOOL = makeTool(
   PLACE_FEED_SCHEMA,
 );
 
+export const ROSTRA_FEED_TOOL = makeTool(
+  "submit_rostra_posts",
+  "Submit the posts the people who make the news are writing on Rostra.",
+  ROSTRA_FEED_SCHEMA,
+);
+
 export const WAR_ROOM_TOOL = makeTool(
   "submit_war_room_reply",
   "Submit what the generals say to the commander, and the orders they have accepted.",
@@ -4014,6 +4033,7 @@ export const GAMEPLAY_TOOLS = Object.freeze({
   politicalLandscape: POLITICAL_LANDSCAPE_TOOL,
   goalProgress: GOAL_PROGRESS_TOOL,
   placeFeed: PLACE_FEED_TOOL,
+  rostraFeed: ROSTRA_FEED_TOOL,
   warRoom: WAR_ROOM_TOOL,
   actions: ACTIONS_TOOL,
   jumpForward: JUMP_FORWARD_TOOL,
@@ -4868,6 +4888,12 @@ export const normalizeGameplayPayload = (taskKey, value) => {
   if (taskKey === "idleDiplomacy") return normalizeIdleDiplomacyShape(value);
   if (taskKey === "projects") return normalizeProjectsShape(value);
   if (taskKey === "placeFeed") return normalizePlaceFeedShape(value);
+  // The posts bare, or under the skip's own name, are still the posts.
+  if (taskKey === "rostraFeed") {
+    if (Array.isArray(value)) return { posts: value };
+    if (isPlainRecord(value) && !Array.isArray(value.posts) && Array.isArray(value.socialPosts)) return { posts: value.socialPosts };
+    return value;
+  }
   if (taskKey === "countryStatSheet") return normalizeCountryStatSheetShape(value);
   if (taskKey !== "jumpForward" && taskKey !== "autoJumpForward") return value;
   // A bare list of events where the contract wants { events: [...] }: the

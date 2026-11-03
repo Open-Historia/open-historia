@@ -288,6 +288,12 @@ export const PROMPT_SECTION_DEFINITIONS = [
     type: "task",
   },
   {
+    description: "The first posts on Rostra, the social network: what the people who make the news write when the player presses Refresh on an empty feed.",
+    key: "rostraFeed",
+    label: "Rostra Refresh",
+    type: "task",
+  },
+  {
     description: "What ordinary people in a place are posting: the feed Rostra's Search tab opens on a country or a region. It is there while the game has social media (the Features tab's Social media switch).",
     key: "placeFeed",
     label: "Rostra Search",
