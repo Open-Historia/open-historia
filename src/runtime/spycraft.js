@@ -32,21 +32,6 @@ export const intelligenceOf = (world, polity) =>
 export const isIntelligenceRated = (world, polity) =>
   Number.isFinite(Number(world?.intelligence?.[String(polity ?? "").trim()]));
 
-// Whether the scenario says this polity runs no spies at all (a polity record's
-// `noSpies`, ticked in the editor's Polities panel): the free folk beyond the
-// Wall, a nomad horde. It only stops the polity SENDING agents; others may still
-// spy on it. Looked up by key, then by name or alias, since the ledger names a
-// polity the way the world displays it.
-export const cannotSpy = (world, polity) => {
-  const wanted = String(polity ?? "").trim().toLowerCase();
-  if (!wanted) return false;
-  const overrides = world?.polityOverrides && typeof world.polityOverrides === "object" ? world.polityOverrides : {};
-  const record = Object.entries(overrides).find(([key, entry]) =>
-    [key, entry?.name, ...(Array.isArray(entry?.aliases) ? entry.aliases : [])]
-      .some((value) => String(value ?? "").trim().toLowerCase() === wanted))?.[1];
-  return record?.noSpies === true;
-};
-
 // A rating as the model wrote it -> what goes in the world, or null for junk.
 export const normalizeIntelligenceRating = (value) => {
   // Only a number or a numeric string counts: Number([]) is 0 and Number(null)
@@ -193,7 +178,6 @@ export const deploySpy = (world, target, { date = "", playerPolity = "", owner =
   // deploy an agent into their own capital when the two differed at all.
   const same = (a, b) => a.trim().toLowerCase() === b.trim().toLowerCase();
   if (who && same(name, who)) throw new Error("You cannot spy on yourself.");
-  if (cannotSpy(world, who)) throw new Error(`${who} runs no spies.`);
   const spies = normalizeSpies(world?.spies);
   const mine = spies.filter((spy) => spy.owner === who && isLive(spy));
   if (mine.some((spy) => same(spy.target, name))) throw new Error(`A spy is already deployed in ${name}.`);
@@ -288,7 +272,7 @@ export const applySpyOps = (world, ops, { date = "", playerPolity = "" } = {}) =
     }
     try {
       if (op === "deploy") {
-        spies = deploySpy({ ...world, spies }, target, { date, playerPolity: owner });
+        spies = deploySpy({ spies }, target, { date, playerPolity: owner });
         const placed = spies.find((spy) => spy.owner === owner && isLive(spy) && same(spy.target, target));
         if (placed && coverStory) spies = setCoverStory({ spies }, placed.id, coverStory);
         applied.push({ op, target: placed?.target || target });
@@ -461,10 +445,6 @@ export const resolveEspionage = (world, { round = 0, date = "", playerPolity = "
 
   spies = spies.map((spy) => {
     if (!isLive(spy)) return spy;
-    // A polity the scenario says runs no spies has none in the field: an agent
-    // it already had is withdrawn, silently, so an old save means what a new one
-    // does. A caught agent is not live and stays the target's to decide.
-    if (cannotSpy(world, spy.owner)) return { ...spy, status: "recalled" };
     const targetIntel = intel(spy.target);
     const ownerIntel = intel(spy.owner);
 
@@ -560,7 +540,7 @@ export const resolveEspionage = (world, { round = 0, date = "", playerPolity = "
     const inside = () => spies.filter((spy) => spy.target === person && (isLive(spy) || spy.status === "discovered"));
     for (const candidate of Array.isArray(theirs) ? theirs : []) {
       const polity = String(candidate?.polity ?? "").trim();
-      if (!polity || polity === person || (shared && isPerson(polity)) || cannotSpy(world, polity)) continue;
+      if (!polity || polity === person || (shared && isPerson(polity))) continue;
       if (inside().length >= MAX_FOREIGN_SPIES) break;
       if (inside().some((spy) => spy.owner === polity)) continue;
       const key = person === player ? `${polity}:deploy` : `${polity}:deploy:${person}`;

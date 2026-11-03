@@ -28,7 +28,7 @@ const DEFAULT_SCENARIO = JSON.parse(fs.readFileSync(new URL("../../server/seed/d
 // this far behind it: regenerate the packs with the catalog (docs/i18n.md).
 const MIN_COVERAGE = 0.9;
 // "Features" is the scenario and game editors' tab of gameplay features
-// (Espionage, Groups, Listen in…), and these sentences send the player to it.
+// (Espionage, Groups, Wars…), and these sentences send the player to it.
 // It was also the title of the Workshop's list of cities, bases and ports, so
 // most packs gave it the map's word ("地物", "Objecten") while their sentences
 // said "機能" and "Functies". That list is "Map features" now.

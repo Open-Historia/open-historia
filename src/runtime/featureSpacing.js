@@ -15,8 +15,12 @@
 // never ends up across a border or in the sea. If nowhere is clear, the least
 // crowded spot found is used: a little overlap beats a wrong country.
 //
-// DELIBERATELY IMPORT-FREE, like unitMotion.js. Deterministic: the same inputs
-// give the same point.
+// DELIBERATELY IMPORT-FREE, like unitMotion.js, but for the map's measure
+// (runtime/mapMeasure.js): on a map that is not plain Mercator a footprint is
+// measured as the map measures. Deterministic: the same inputs give the same point.
+
+import { kmPerDegreeAt, mapKm } from "../../server/mapDistance.js";
+import { currentMapMeasure } from "./mapMeasure.js";
 
 // Radius on the ground, km. A unit counter is ~11 px at zoom 6, which at the
 // latitudes most campaigns are fought in is about this much ground.
@@ -37,6 +41,8 @@ const finite = (value) => (typeof value === "number" ? Number.isFinite(value)
     : typeof value === "string" && value.trim() !== "" && Number.isFinite(Number(value)));
 
 const separationKm = (a, b) => {
+    const measure = currentMapMeasure();
+    if (!measure.plain) return mapKm(measure, a.lng, a.lat, b.lng, b.lat);
     let dLng = Math.abs(a.lng - b.lng);
     if (dLng > 180) dLng = 360 - dLng;
     return Math.hypot(dLng * kmPerDegLng((a.lat + b.lat) / 2), (a.lat - b.lat) * KM_PER_DEG_LAT);
@@ -62,12 +68,14 @@ export const spaceOut = ({ lng, lat, radiusKm = FOOTPRINT_KM.unit, obstacles = [
     const bounded = stays ? Boolean(stays(origin)) : false;
     let best = origin; let bestCrowding = crowding(origin, radiusKm, others);
 
+    const measure = currentMapMeasure();
+    const per = measure.plain ? { x: kmPerDegLng(origin.lat), y: KM_PER_DEG_LAT } : kmPerDegreeAt(measure, origin.lng, origin.lat);
     for (let step = 1; step <= SPACING_MAX_STEPS; step += 1) {
         const reach = Math.sqrt(step) * radiusKm * SPACING_PADDING;
         const angle = step * GOLDEN_ANGLE;
         let candidate = {
-            lng: origin.lng + (Math.cos(angle) * reach) / kmPerDegLng(origin.lat),
-            lat: Math.max(-89.9, Math.min(89.9, origin.lat + (Math.sin(angle) * reach) / KM_PER_DEG_LAT)),
+            lng: origin.lng + (Math.cos(angle) * reach) / per.x,
+            lat: Math.max(-89.9, Math.min(89.9, origin.lat + (Math.sin(angle) * reach) / per.y)),
         };
         if (bounded && !stays(candidate)) {
             // Walk back toward where it started until it is inside again.

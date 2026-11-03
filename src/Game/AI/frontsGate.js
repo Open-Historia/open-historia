@@ -12,11 +12,27 @@
 // whose FEATURE_DEFINITIONS has no "fronts", fronts are off.
 
 import { FRONT_PACE_SHARE } from "../../runtime/fronts/constants.js";
-import { FEATURE_KEYS, getActiveFeatures, isActiveFeatureEnabled } from "../../runtime/gameFeatures.js";
+import { FEATURE_KEYS, activeWars, getActiveFeatures } from "../../runtime/gameFeatures.js";
 
 export const FRONTS_FEATURE = "fronts";
 
-export const frontsOn = () => FEATURE_KEYS.includes(FRONTS_FEATURE) && isActiveFeatureEnabled(FRONTS_FEATURE);
+// The Wars feature (key "fronts") has a switch for each part: battlefields,
+// air units and navies (server/gameFeatures.js warsOf).
+export const frontsOn = () => FEATURE_KEYS.includes(FRONTS_FEATURE) && activeWars().battlefields;
+// Air units: raised, flown over battlefields and sent to strike. Off, none is.
+export const airOn = () => !FEATURE_KEYS.includes(FRONTS_FEATURE) || activeWars().air;
+// Navies: fleets raised, fighting, blockading and carrying troops by sea. Off, none is.
+export const naviesOn = () => !FEATURE_KEYS.includes(FRONTS_FEATURE) || activeWars().navies;
+
+// What a time skip is told of the parts of war the scenario has switched off:
+// "" when it has all of them, so the prompt is then what it always was. The game
+// leaves out what it writes of them all the same (gameState.js applyUnitOpBatch).
+export const warPartsOffBlock = () => {
+  const off = [airOn() ? "" : "air units", naviesOn() ? "" : "navies"].filter(Boolean);
+  if (off.length === 0) return "";
+  const raise = [airOn() ? "" : "aircraft", naviesOn() ? "" : "fleets"].filter(Boolean).join(" or ");
+  return `[Wars]\nThis scenario's wars are fought without ${off.join(" and ")}. Raise, move or fight no ${raise} in unitOps or front orders: the game has none and leaves out any you write. Tell its wars on land${naviesOn() ? " and at sea" : ""}.`;
+};
 
 // The pace the engine is told for its advances, as a factor of the game's own
 // paces for a formation on the move: the part of them that is the built-in

@@ -20,6 +20,13 @@ import { gameDateDayNumber } from "../../runtime/gameDates.js";
 const asArray = (value) => (Array.isArray(value) ? value : []);
 const asText = (value) => String(value ?? "").trim();
 const scriptedTextMode = (value) => (asText(value).toLowerCase() === "exact" ? "exact" : "generated");
+// Whether the player reads the game in a language other than English, the one a scenario's beats are most often
+// written in: then a beat is told in that language, an exact one translated faithfully, and is found in the answer
+// by its names and its date (beatIsWritten).
+const translated = (language) => {
+    const name = asText(language).toLowerCase();
+    return Boolean(name) && name !== "english" && name !== "en";
+};
 
 // --- Pace ---
 //
@@ -186,17 +193,21 @@ const sharesParentContextAnchor = (parentText, primaryText, haystack) => {
     return anchors.some((word) => haystack.has(word));
 };
 
-export const beatIsWritten = (beat, events) => {
+export const beatIsWritten = (beat, events, { language = "" } = {}) => {
     const beatDay = dateKey(beat?.date);
     const primaryText = `${beat?.title || ""} ${beat?.text || ""}`;
     if (![...words(primaryText)].length || beatDay === null) return false;
     const parentText = asText(beat?.parentText);
     const generatedBranch = Boolean(parentText) && scriptedTextMode(beat?.textMode) !== "exact";
+    // Told in another language, a beat keeps its names and little else of its author's words: on its own date, one of
+    // them is enough.
+    const acrossLanguages = translated(language);
     return asArray(events).some((event) => {
         const eventDay = dateKey(event?.date);
         if (eventDay === null || Math.abs(eventDay - beatDay) > SCRIPTED_MATCH_DAYS) return false;
         const haystack = words(`${event?.title} ${event?.description}`);
-        if (!sharesEnoughWords(primaryText, haystack)) return false;
+        const named = acrossLanguages && eventDay === beatDay && [...words(primaryText)].some((word) => haystack.has(word));
+        if (!named && !sharesEnoughWords(primaryText, haystack)) return false;
         // A generated branch must still belong to its parent event. Without this
         // guard a generic outcome such as "Outcome A is selected" can be rewritten
         // around the player polity and accepted even when the author anchored the
@@ -230,15 +241,20 @@ ${asText(beat?.text)}`
 
 // The answer with every beat of the period in it: the ones it wrote as they
 // are, the rest written by the engine. Pure; returns what was done.
-export const ensureScriptedEvents = (events, beats) => {
+export const ensureScriptedEvents = (events, beats, { language = "" } = {}) => {
     const list = [...asArray(events)];
     const written = [];
     const inserted = [];
     for (const beat of asArray(beats)) {
-        const matchIndex = list.findIndex((event) => beatIsWritten(beat, [event]));
+        const matchIndex = list.findIndex((event) => beatIsWritten(beat, [event], { language }));
         if (matchIndex !== -1) {
             written.push(beat);
-            if (scriptedTextMode(beat?.textMode) === "exact") {
+            if (scriptedTextMode(beat?.textMode) === "exact" && translated(language)) {
+                // In another language the author's wording is the model's faithful translation of it: kept as written,
+                // on the author's date, without an added quotation.
+                const { quote: _quote, ...generated } = list[matchIndex] || {};
+                list[matchIndex] = { ...generated, date: beat.date };
+            } else if (scriptedTextMode(beat?.textMode) === "exact") {
                 // Exact wording freezes presentation, not consequences. Keep every
                 // structured effect the simulator supplied, but restore the author
                 // date/headline/body and remove any AI-added quotation.
@@ -260,9 +276,10 @@ export const ensureScriptedEvents = (events, beats) => {
 
 // What the period is told about its beats: in the user message, beside the
 // receipt, because they are this period's and not the whole game's.
-export const buildScriptedEventsInstruction = (beats) => {
+export const buildScriptedEventsInstruction = (beats, { language = "" } = {}) => {
     const list = asArray(beats);
     if (!list.length) return "";
+    const inLanguage = translated(language);
     const hasExact = list.some((beat) => scriptedTextMode(beat?.textMode) === "exact");
     const rows = list.map((beat) => {
         const exact = scriptedTextMode(beat?.textMode) === "exact";
@@ -278,7 +295,12 @@ export const buildScriptedEventsInstruction = (beats) => {
         + "These happen in this period. Write each as its own event, dated as given, with the impacts it implies, and let the rest of the period feel its consequences. "
         + "Ordinary entries are instructions: write their final event in your own words. For a branched event, the selected outcome refines the parent event rather than replacing its context. "
         + (hasExact
-            ? "An entry marked [EXACT WORDING] is different: copy its supplied text verbatim into the event description and do not add a quotation or extra prose to that event; still supply every canonical impact it implies. When an exact selected outcome has a parent event, use the parent only as context for those consequences, not as extra visible prose. The engine enforces the author's visible wording while preserving those impacts. "
+            ? (inLanguage
+                ? `An entry marked [EXACT WORDING] is different: its title is the text up to its first full stop; write that title and the supplied text into the event as a faithful translation into ${language}, adding nothing, and do not add a quotation or extra prose to that event; still supply every canonical impact it implies. When an exact selected outcome has a parent event, use the parent only as context for those consequences, not as extra visible prose. `
+                : "An entry marked [EXACT WORDING] is different: copy its supplied text verbatim into the event description and do not add a quotation or extra prose to that event; still supply every canonical impact it implies. When an exact selected outcome has a parent event, use the parent only as context for those consequences, not as extra visible prose. The engine enforces the author's visible wording while preserving those impacts. ")
+            : "")
+        + (inLanguage
+            ? `Write each of them in ${language}, on the date given, keeping the names of its people and places as the entry gives them. `
             : "")
         + "They are history in this world: nothing you write may contradict or pre-empt them. One the answer leaves out is written by the engine in the author's words, without its impacts.\n"
         + rows.join("\n");

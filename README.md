@@ -239,15 +239,10 @@ Open any scenario's editor and click **🗺️ Open Map Editor** (or visit
 merge borders freehand, paint owners, import 70k cities, sign your map, then
 **Apply & Play**.
 
-## 🖥️ Host a server node
+## 🖥️ Host the game yourself
 
-The game no longer loads its map from content nodes, and nothing in it asks a node for
-anything. Every build has its own copy of the map: the website and the Android app carry
-it, and the desktop app downloads it from the
+Every build has its own copy of the map: the website and the Android app carry it, and the
+desktop app downloads it from the
 [`map-data` release](https://github.com/Open-Historia/open-historia/releases/tag/map-data)
-the first time it opens.
-
-The node software still exists as a separate project,
-[Open-Historia/open-historia-node](https://github.com/Open-Historia/open-historia-node).
-To host the game yourself, see [WEB-DEPLOY.md](WEB-DEPLOY.md) for the website, or the
-manual install above for a local server.
+the first time it opens. To host the game yourself, see [WEB-DEPLOY.md](WEB-DEPLOY.md) for
+the website, or the manual install above for a local server.

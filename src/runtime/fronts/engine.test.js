@@ -353,6 +353,20 @@ test("orders the engine cannot carry out are refused with a note, and stand corr
   assert.deepEqual(replaced.battlefields[0].orders.map(({ s, sector, order: word }) => [s, sector, word]), [[1, "centre", "hold"], [1, "north", "advance"], [0, "all", "dig in"]]);
 });
 
+// A real-key test (2026-10-28): the model named the front it ordered with its
+// war's id, and the War Room's header read "WAR-FRANCE-ITALY-2016".
+test("an order naming a battlefield with a war's id leaves it the name it would have had", () => {
+  const world = sheet();
+  const opened = runFronts(frontInput(world, { days: 2, moments: [order(0, "Aland", "advance", { battlefield: "WAR-1" }), order(1, "Borduria", "dig in", { battlefield: "war-aland-borduria-2024" })] }));
+  assert.equal(opened.battlefields[0].name, "Aland - Borduria front");
+  assert.deepEqual(opened.battlefields[0].orders.map(({ s, order: word }) => [s, word]), [[0, "advance"], [1, "dig in"]], "both orders still reach it");
+  // On a later run, the war's id still finds the war's battlefield, which keeps its name.
+  const later = runFronts(frontInput(world, { battlefields: opened.battlefields, days: 1, fromDate: "2024-03-03", moments: [order(0, "Aland", "hold", { battlefield: "war-1" })] }));
+  assert.equal(later.battlefields[0].name, "Aland - Borduria front");
+  assert.deepEqual(later.notes.filter((note) => note.kind === "unknown-battlefield"), []);
+  assert.ok(later.battlefields[0].orders.some(({ s, order: word }) => s === 0 && word === "hold"));
+});
+
 test("no more battlefields are open than the world may hold", () => {
   assert.equal(MAX_BATTLEFIELDS, 12);
   const world = sheet();

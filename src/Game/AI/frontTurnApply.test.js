@@ -325,6 +325,24 @@ test("an event the curator drops takes its order with it", async () => {
   assert.deepEqual(frontOps(untold.events), []);
 });
 
+// "if that minimum is not met then the region transfer fails" (the owner, 2026-10-28).
+test("a region the story takes far from any of the taker's troops is not taken: the operation comes off its event, and the receipt says why", async () => {
+  const map = sheet();
+  const world = worldOn(map);
+  const arenas = new Map();
+  const opened = await runTurnFronts(turn(map, world, { events: normalizeEvents([event("o1", "2024-02-27")]), fromDate: "2024-02-25", toDate: FROM, arenas }));
+  const before = { ...world, battlefields: opened.battlefields };
+  // Deep in Borduria, some 200 km from where Aland's troops stand.
+  const target = map.regions.find((region) => region.id === "r18-2");
+  const written = { op: "control", regionId: target.id, regionName: target.name, fromCode: "Borduria", toCode: "Aland", basis: "occupation", note: "Taken, as the event tells." };
+  const events = fiveEvents((id) => (id === "e2" ? { regionControlOps: [written] } : {}));
+  const run = await runTurnFronts(turn(map, before, { events, arenas, loadRegions: async () => { throw new Error("the ground was kept: no shapes are read"); } }));
+  assert.deepEqual(run.events[1].impacts.regionControlOps.filter((op) => op.regionId === target.id), [], "the event keeps no operation for it");
+  assert.equal(run.events[1].title, events[1].title, "and the event itself stays");
+  assert.ok(run.notes.some((note) => /Aland could not take .+: too few of its troops near/.test(note.text)), JSON.stringify(run.notes));
+  assert.equal(applied(before, run.events, run.battlefields).regionOwnershipOverrides[target.id], "Borduria");
+});
+
 test("a change of control an event writes inside a battlefield is a capture stated: troops walk there, and the operation stands", async () => {
   const map = sheet();
   const world = worldOn(map);
@@ -346,7 +364,7 @@ test("a change of control an event writes inside a battlefield is a capture stat
 
   const moments = engine.inputs.at(-1).moments;
   assert.deepEqual(moments, [
-    { day: 8, type: "control", regionId: target.id, to: "Aland", ref: "e2" },
+    { day: 8, type: "control", regionId: target.id, to: "Aland", ref: "e2", capture: true },
     { day: 8, type: "order", battlefield: record.name, side: "Aland", order: "", sector: "all", ref: `${STATED_REF}e2:${target.id}`, objective: `region: ${target.name}`, result: "captured" },
   ]);
   assert.deepEqual(run.notes, []);
@@ -455,8 +473,8 @@ test("a deployment drawn in the war room calls up its troops on the next time sk
   const first = applied(world, opened.events, opened.battlefields);
   const [record] = first.battlefields;
   const side = record.sides.findIndex((members) => members.includes("Aland"));
-  // Far back in Aland, from north to south, calling up five.
-  const drawn = applyWarRoomOp(first.battlefields, { op: "deploy", battlefield: record.name, way: [[20.2, 51.9], [20.2, 51.2]], count: 5 }, { player: "Aland" });
+  // Far back in Aland, from north to south: as many as Aland can call up (runtime/fronts/engine.js callUpSize).
+  const drawn = applyWarRoomOp(first.battlefields, { op: "deploy", battlefield: record.name, way: [[20.2, 51.9], [20.2, 51.2]] }, { player: "Aland" });
   assert.equal(drawn.error, undefined);
   const before = { ...first, battlefields: drawn.battlefields };
   const april = normalizeEvents([event("f1", "2024-04-05"), event("f2", "2024-04-15"), event("f3", "2024-04-28")]);
@@ -465,7 +483,8 @@ test("a deployment drawn in the war room calls up its troops on the next time sk
   const [kept] = after.battlefields;
   const [line] = deployLinesOf(kept, side);
   assert.equal(line.call, undefined, "called up once");
-  assert.deepEqual([line.last.n, line.last.why, line.last.d], [5, "", TO]);
+  assert.ok(line.last.n >= 1, `${line.last.n} called up`);
+  assert.deepEqual([line.last.why, line.last.d], ["", TO]);
   assert.deepEqual(next.notes.filter((note) => /^reinforce|side-not/.test(note.kind)), []);
 });
 

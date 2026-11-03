@@ -4,7 +4,7 @@
  * sovereign ledgers. The actual war path remains authoritative for every
  * excluded polity; it is never reconstructed from missing naval evidence.
  */
-import { planNativeStatsLiveTurn } from './statsLiveTurnClock.js';
+import { planNativeStatsLiveTurn, unresolvedCityAirStrikeTargets } from './statsLiveTurnClock.js';
 import { collectActiveScenarioPolityKeys, createScenarioPolityResolver } from './scenarioPolities.js';
 import { validateNativeMigrationPlans } from './statsMigrationClock.js';
 import { displayNameMigrations, renamePolityInWorld, samePolityName } from '../../server/polityRename.js';
@@ -101,6 +101,12 @@ const safeScope = ({ baseWorld, turnFronts, warUpdates, events }, onReject = nul
   const sea = turnFronts?.sea;
   for (const record of [...(rows(sea?.blockades) ?? []), ...(rows(sea?.blockadeDays) ?? [])]) {
     if (!plain(record) || !block(record.country)) return reject('unknown-sea-target');
+  }
+  // The separate legacy city-bombing writer may still act on a neutral
+  // country's GDP and residents. Exclude that exact polity, not every other
+  // unrelated neutral clock; unknown identity fails closed.
+  for (const country of unresolvedCityAirStrikeTargets(turnFronts)) {
+    if (!block(country)) return reject('unknown-city-strike-target');
   }
   // Migrations must remain two-account transactions. If either endpoint is
   // excluded, the other endpoint stays on the same legacy writer.

@@ -7,7 +7,7 @@ import { HOLDER_SIDE_A, HOLDER_SIDE_B, HOLDER_WALL } from "../../runtime/fronts/
 import { frontViewOf, normalizeBattlefield } from "../../runtime/fronts/record.js";
 import { createReplayRecorder } from "../../runtime/fronts/replay.js";
 import { projectorOf } from "../../runtime/fronts/frame.js";
-import { FILL_DAYS, createPaintPlayer, paintPixels, paintScaleFor, pictureFits, pictureCorners } from "./frontPaint.js";
+import { FILL_DAYS, createFrontField, createPaintPlayer, paintPixels, paintScaleFor, pictureFits, pictureCorners, touchedCells, writeFrontField } from "./frontPaint.js";
 
 const COLS = 24;
 const ROWS = 12;
@@ -334,4 +334,34 @@ test("on the diplomatic map a battlefield's ground is painted in the stances' co
   assert.ok(layers.includes("stances ? parseColorToRgb(getDiplomaticOwnerColor(name, stances)) ?? UNOWNED_RGB : rgbOf(name)"));
   assert.ok(layers.includes("const [red, green, blue] = colorRef.current.groundRgbOf(name);"));
   assert.ok(layers.includes("}, [colorMap, polityOverrides, groups, stances]);"), "a change of map repaints the ground");
+});
+
+test("the front's field: half-way where the two sides' ground meets, and nowhere else", () => {
+  const view = viewOf([12, 14]);
+  const player = createPaintPlayer(view);
+  player.seek(1 + FILL_DAYS);
+  const touched = touchedCells(view);
+  assert.equal(touched[at(12, 5)], 1, "a cell the run paints");
+  assert.equal(touched[at(15, 5)], 1, "and two beyond it");
+  assert.equal(touched[at(2, 5)], 0, "but not ground far from the front");
+  const front = writeFrontField(player, createFrontField(COLS, ROWS, null, touched));
+  assert.equal(front.version, 1);
+  // A pixel a cell, north up: red how far it is side 1's.
+  const red = (col, row) => front.data[((ROWS - 1 - row) * COLS + col) * 4];
+  const green = (col, row) => front.data[((ROWS - 1 - row) * COLS + col) * 4 + 1];
+  const blue = (col, row) => front.data[((ROWS - 1 - row) * COLS + col) * 4 + 2];
+  assert.ok(red(2, 5) < 10 && red(21, 5) > 245, "deep in each side's ground");
+  assert.ok(red(13, 5) < 128 && red(14, 5) > 128, "half-way between the last taken cell and the first of the other side's");
+  assert.ok(red(11, 5) < 128 && red(12, 5) < 128, "no line along the old border the taker has crossed");
+  // Sea takes the land beside it: no line along the coast.
+  assert.equal(blue(5, 0), 0);
+  assert.equal(blue(5, 5), 255);
+  assert.ok(Math.abs(red(5, 1) - red(5, 2)) < 40 && red(5, 1) < 128, "the sea beside side A's coast reads as side A's");
+  assert.ok(red(20, 1) > 128, "and beside side B's, as side B's");
+  assert.equal(green(13, 5), 255);
+  assert.equal(green(2, 5), 0);
+  // A day the battlefield is not shown draws no line.
+  writeFrontField(player, front, false);
+  assert.equal(green(13, 5), 0);
+  assert.equal(front.version, 2);
 });

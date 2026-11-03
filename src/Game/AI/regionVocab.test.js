@@ -3,8 +3,13 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import {
   buildRegionOwnershipText,
+  buildUnruledBordersText,
+  hasUnruledLand,
+  regionTouchingMap,
+  regionTouchingMapSliced,
   regionOwnerName,
   FOCUS_INTRO,
   ROSTER_INTRO,
@@ -424,4 +429,141 @@ test("a power that is listed is listed whole: no limit of 120 regions a power", 
   assert.match(text, /Region 000/);
   assert.match(text, /Region 284/);
   assert.equal(text.includes("more)"), false, "nothing is left out of a listed power");
+});
+
+// A hand-drawn world with wild land between its realms (a fantasy scenario,
+// 2026-10-28): "Try to take Rustmoor Coast" failed because the unruled region
+// next door was named nowhere in the prompt.
+const box = (w, s, e, n) => [[w, s], [e, n]];
+const WILD = [
+  { id: "a", name: "Corvale", bounds: box(0, 0, 10, 10) },
+  { id: "b", name: "Rustmoor Coast", typeId: "coastal", bounds: box(10, 0, 20, 10) },
+  { id: "c", name: "Tollgard", bounds: box(0, -10, 10, 0), adjacencies: ["a"] },
+  { id: "d", name: "Far Moor", bounds: box(50, 50, 60, 60) },
+  { id: "e", name: "The Pale Sea", typeId: "ocean", bounds: box(-10, 0, 0, 10) },
+];
+
+test("unruled land is listed beside the powers it borders, water and the far wild left out", () => {
+  const text = buildUnruledBordersText(WILD, { a: "Brightdale" }, { waterTypes: new Set(["ocean"]) });
+  assert.match(text, /^Land no power rules \(3 regions\)/);
+  assert.match(text, /^- Brightdale: Rustmoor Coast, Tollgard$/m, "by touching boxes, and by the map's own adjacency");
+  assert.equal(text.includes("Far Moor"), false, "a region touching no power is not anybody's neighbour");
+  assert.equal(text.includes("Pale Sea"), false, "water is not land to take");
+});
+
+test("a world with no unruled land says nothing", () => {
+  assert.equal(buildUnruledBordersText(CATALOG, {}), "");
+  assert.equal(buildUnruledBordersText(WILD, { a: "Brightdale", b: "Brightdale", c: "Brightdale", d: "Larkmere" }, { waterTypes: new Set(["ocean"]) }), "");
+});
+
+test("a power's unruled neighbours are capped, and the cut says how many", () => {
+  const many = [{ id: "home", name: "Home", bounds: box(0, 0, 100, 100) },
+    ...Array.from({ length: 5 }, (_, i) => ({ id: `w${i}`, name: `Wild ${i}`, bounds: box(100, i, 110, i + 1) }))];
+  const text = buildUnruledBordersText(many, { home: "Brightdale" }, { perOwnerCap: 3 });
+  assert.match(text, /^- Brightdale: Wild 0, Wild 1, Wild 2, \(\+2 more\)$/m);
+});
+
+// The map's own shapes: a square per region, on a grid of unit cells.
+const cell = (id, name, x, y, extra = {}) => ({
+  type: "Feature",
+  properties: { id, name, ...extra },
+  geometry: { type: "Polygon", coordinates: [[[x, y], [x + 1, y], [x + 1, y + 1], [x, y + 1], [x, y]]] },
+});
+// Brightdale's coast (0,0) | The Narrow Sea (1,0) | Isle of Skerry (2,0), and
+// Brackmoor (0,1) north of the coast, all on one grid; Far Isle (5,5) alone.
+const ISLES = [
+  cell("home", "Corvale", 0, 0),
+  cell("sea", "The Narrow Sea", 1, 0, { typeId: "ocean" }),
+  cell("isle", "Isle of Skerry", 2, 0),
+  cell("moor", "Brackmoor", 0, 1),
+  cell("far", "Far Isle", 5, 5),
+];
+const ISLE_ROWS = ISLES.map((f) => ({ id: f.properties.id, name: f.properties.name, typeId: f.properties.typeId, bounds: box(...f.geometry.coordinates[0][0], ...f.geometry.coordinates[0][2]) }));
+
+test("regions that share an edge touch; a corner or a gap does not", () => {
+  const touching = regionTouchingMap([...ISLES, cell("corner", "Corner", 1, 1)]);
+  assert.deepEqual([...touching.get("home")].sort(), ["moor", "sea"]);
+  assert.deepEqual([...touching.get("sea")].sort(), ["corner", "home", "isle"]);
+  assert.equal(touching.get("far"), undefined);
+  assert.equal(touching.get("corner").has("home"), false, "a shared corner is not a border");
+});
+
+test("wild land one sea away from a power's coast is listed as across that sea; no further", () => {
+  const text = buildUnruledBordersText(ISLE_ROWS, { home: "Brightdale" }, { waterTypes: new Set(["ocean"]), touching: regionTouchingMap(ISLES) });
+  assert.match(text, /^- Brightdale: Brackmoor; by sea: Isle of Skerry \(across The Narrow Sea\)$/m);
+  assert.equal(text.includes("Far Isle"), false, "an island no sea joins to a power is nobody's neighbour");
+});
+
+test("a sea's box joins nothing: only its shared borders do", () => {
+  // A sea whose box covers the whole grid, drawn as a strip that touches only Corvale.
+  const strip = { type: "Feature", properties: { id: "sea", name: "The Narrow Sea", typeId: "ocean" }, geometry: { type: "Polygon", coordinates: [[[0, 0], [0, -1], [6, -1], [6, 0], [1, 0], [0, 0]]] } };
+  const shapes = [ISLES[0], strip, ISLES[2], ISLES[4]];
+  const rows = [...ISLE_ROWS.filter((r) => r.id !== "moor").map((r) => (r.id === "sea" ? { ...r, bounds: box(0, -1, 6, 6) } : r))];
+  const text = buildUnruledBordersText(rows, { home: "Brightdale" }, { waterTypes: new Set(["ocean"]), touching: regionTouchingMap(shapes) });
+  assert.equal(text.includes("Far Isle"), false);
+  assert.equal(text.includes("Isle of Skerry"), false, "the strip runs past the isle's foot without sharing its edge");
+});
+
+test("worked out a slice at a time, the borders are the same, and the page gets to draw", async () => {
+  const shapes = [...ISLES, cell("corner", "Corner", 1, 1)];
+  const whole = regionTouchingMap([...shapes]);
+  let turns = 0;
+  const realNow = performance.now;
+  let clock = 0;
+  performance.now = () => { clock += 5; return clock; };
+  try {
+    const sliced = await regionTouchingMapSliced(shapes, { between: async () => { turns += 1; } });
+    assert.deepEqual([...sliced].map(([id, others]) => [id, [...others].sort()]), [...whole].map(([id, others]) => [id, [...others].sort()]));
+  } finally {
+    performance.now = realNow;
+  }
+  assert.ok(turns > 0, "it let the page draw");
+  assert.equal(regionTouchingMap(shapes), await regionTouchingMapSliced(shapes), "the two keep one answer");
+  assert.deepEqual([...await regionTouchingMapSliced(null)], []);
+});
+
+test("a working out that fails is not handed out again", async () => {
+  const shapes = [...ISLES];
+  const realNow = performance.now;
+  let clock = 0;
+  performance.now = () => { clock += 5; return clock; };
+  try {
+    await assert.rejects(regionTouchingMapSliced(shapes, { between: async () => { throw new Error("stopped"); } }), /stopped/);
+  } finally {
+    performance.now = realNow;
+  }
+  assert.ok((await regionTouchingMapSliced(shapes)).has("home"));
+});
+
+test("two prompts asking at once share one working out", async () => {
+  const shapes = [...ISLES];
+  const [a, b] = await Promise.all([regionTouchingMapSliced(shapes), regionTouchingMapSliced(shapes)]);
+  assert.equal(a, b);
+});
+
+test("unruled land is land nobody holds, and water is not land", () => {
+  const rows = [{ id: "home", name: "Home" }, { id: "wild", name: "Wild" }, { id: "sea", name: "Sea", typeId: "ocean" }];
+  const waterTypes = new Set(["ocean"]);
+  assert.equal(hasUnruledLand(rows, { home: "Brightdale" }, { waterTypes }), true);
+  assert.equal(hasUnruledLand(rows, { home: "Brightdale", wild: "Brightdale" }, { waterTypes }), false);
+  assert.equal(hasUnruledLand(null, {}), false);
+});
+
+test("a prompt keeps a map's borders by its address, and never parses the regions file on the page first", () => {
+  const prompt = fs.readFileSync(new URL("./promptContext.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  assert.match(prompt, /const regionBordersOfThisMap = \(\) => \{\n {2}const url = JSON_URLS\.regionsGeojson;\n {2}if \(regionBorders\.url === url && regionBorders\.work\) return regionBorders\.work;/);
+  assert.match(prompt, /regionBordersInWorker\(url\)\.catch\(\(\) => regionBordersOnThisThread\(url\)\)/);
+  // Every prompt for the map waits on the worker: one that never answers is given up on.
+  assert.match(prompt, /timer = setTimeout\(\(\) => finish\(reject, new Error\("The borders worker did not answer\."\)\), BORDERS_WORKER_MS\);/);
+  assert.match(prompt, /hasUnruledLand\(regionRows, world\.regionOwnershipOverrides, \{ waterTypes \}\)\n\s+\? await regionBordersOfThisMap\(\)/);
+  assert.equal(prompt.includes("regionTouchingMap("), false, "the unsliced one would stop the map for two seconds");
+});
+
+test("the map's shared borders are worked out only when some land is unruled", () => {
+  let asked = 0;
+  const touching = () => { asked += 1; return regionTouchingMap(ISLES); };
+  assert.equal(buildUnruledBordersText(CATALOG, {}, { touching }), "");
+  assert.equal(asked, 0);
+  assert.match(buildUnruledBordersText(ISLE_ROWS, { home: "Brightdale" }, { waterTypes: new Set(["ocean"]), touching }), /by sea: Isle of Skerry/);
+  assert.equal(asked, 1);
 });

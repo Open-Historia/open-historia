@@ -231,13 +231,6 @@ const PolitiesPanel = ({
     setRefreshNonce((n) => n + 1);
   };
 
-  // Ticks or clears "Can't run spies" on every selected country at once: a whole
-  // region's peoples (everyone beyond the Wall) are usually marked together.
-  const setNoSpiesMany = (noSpies) => {
-    for (const row of selectedBulkRows) upsertPolity?.(row.key, { noSpies });
-    setRefreshNonce((n) => n + 1);
-  };
-
   // Removing a polity is a map operation: its regions become unowned, the
   // claims in its name are dropped, and the record (with its colour, flag and
   // tags) goes with them. Deleting only the record used to leave the regions
@@ -443,18 +436,6 @@ const PolitiesPanel = ({
         <button type="button" style={pillButton(true)} disabled={!selectedBulkRows.length} onClick={removeManyFromMap}>
           Delete selected ({selectedBulkRows.length})
         </button>
-        <button
-          type="button"
-          style={pillButton(false)}
-          disabled={!selectedBulkRows.length}
-          title="The selected countries send no spies in the game. Others can still spy on them."
-          onClick={() => setNoSpiesMany(true)}
-        >
-          No spies for selected
-        </button>
-        <button type="button" style={pillButton(false)} disabled={!selectedBulkRows.length} onClick={() => setNoSpiesMany(false)}>
-          Allow spies for selected
-        </button>
       </div>
 
       <div style={{ display: "grid", gap: 6, maxHeight: 230, overflowY: "auto" }}>
@@ -507,7 +488,7 @@ const PolitiesPanel = ({
                     {row.name}
                   </div>
                   <div style={{ fontSize: 10.5, color: "rgba(255,255,255,0.48)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                    {row.regionCount ? `${row.regionCount} regions` : "registered, no regions yet"}{row.claimantCount ? ` · ${row.claimantCount} claims` : ""}{row.record?.noSpies === true ? " · no spies" : ""}{Array.isArray(polities?.[row.key]?.formerNames) && polities[row.key].formerNames.length ? ` · formerly ${polities[row.key].formerNames.join(", ")}` : ""}
+                    {row.regionCount ? `${row.regionCount} regions` : "registered, no regions yet"}{row.claimantCount ? ` · ${row.claimantCount} claims` : ""}{Array.isArray(polities?.[row.key]?.formerNames) && polities[row.key].formerNames.length ? ` · formerly ${polities[row.key].formerNames.join(", ")}` : ""}
                   </div>
                 </span>
               </button>
@@ -627,21 +608,6 @@ const PolitiesPanel = ({
             puppets={puppets}
             setPuppets={setPuppets}
           />
-
-          <div>
-            <div style={{ fontSize: 10.5, color: "rgba(255,255,255,0.48)", marginBottom: 4 }}>Options</div>
-            <label
-              title="This country sends no spies in the game, and any agents it already has are withdrawn. Others can still spy on it."
-              style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11.5, cursor: "pointer" }}
-            >
-              <input
-                type="checkbox"
-                checked={current.record?.noSpies === true}
-                onChange={(e) => upsertPolity?.(current.key, { noSpies: e.target.checked })}
-              />
-              Can&apos;t run spies
-            </label>
-          </div>
 
           {current.record && (
             <div>

@@ -204,13 +204,22 @@ export const zoneWeatherOn = ({ seed = "", zone, date = "" } = {}) => {
 export const ZONE_CURVE_ROUNDS = 3;
 const curves = new WeakMap();
 
+// Past this latitude nothing is on the map (the edge of its square Mercator
+// world): a corner drawn there is not rounded off.
+export const CURVE_KEPT_LAT = 85.0511287798066;
+
 // A closed ring with its corners cut, round by round (Chaikin): each side
-// keeps its middle half. Closed again on its first point.
+// keeps its middle half. Closed again on its first point. A corner past
+// CURVE_KEPT_LAT stays sharp (a point twice over keeps its place through every
+// round): "in antartica on low zoom there are triangle cutouts of the weather"
+// (the owner, 2026-10-28), where Antarctica's corners at 89.5° S were cut by
+// lines across the map's last degrees, and the cuts took triangles out of it.
 export const curveRing = (ring, rounds = ZONE_CURVE_ROUNDS) => {
   let points = (Array.isArray(ring) ? ring : []).filter((point) => Number.isFinite(point?.[0]) && Number.isFinite(point?.[1]));
   const last = points[points.length - 1];
   if (points.length > 1 && points[0][0] === last[0] && points[0][1] === last[1]) points = points.slice(0, -1);
   if (points.length < 3) return points;
+  points = points.flatMap((point) => (Math.abs(point[1]) > CURVE_KEPT_LAT ? [point, point] : [point]));
   for (let round = 0; round < rounds; round += 1) {
     const next = [];
     for (let at = 0; at < points.length; at += 1) {

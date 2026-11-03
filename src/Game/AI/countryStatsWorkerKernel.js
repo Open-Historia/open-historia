@@ -2,7 +2,7 @@
  * Pure deterministic preparation only. No DOM, React, canonical writes, or AI calls.
  */
 import { toCountryName } from "../../runtime/ownerNames.js";
-import { resolvePolityIdentity } from "../../runtime/polityIdentity.js";
+import { buildPolityIdentityIndex, resolvePolityIdentity } from "../../runtime/polityIdentity.js";
 import {
   COUNTRY_STATS_POPULATION_CALIBRATION_VERSION,
   isCompleteCountryStatSheet,
@@ -14,6 +14,21 @@ import { regionOwnerName } from "./regionVocab.js";
 const normalizeString = (value) => String(value ?? "").trim();
 const normalizeArray = (value) => (Array.isArray(value) ? value : []);
 
+// Every token resolved here used to build the identity index again, reading
+// every polity and every region's owner: one stats pass resolves hundreds of
+// tokens, and a 7-day skip spent over 4 s of the worker in countOwnedRegions
+// (2026-10-28). One index per world object, as diplomaticIdentityIndexOf does.
+const statsIdentityIndexes = new WeakMap();
+const statsIdentityIndexOf = (world) => {
+  if (!world || typeof world !== "object") return null;
+  let index = statsIdentityIndexes.get(world);
+  if (!index) {
+    index = buildPolityIdentityIndex(world);
+    statsIdentityIndexes.set(world, index);
+  }
+  return index;
+};
+
 const canonicalStatsPolity = (token, world) => {
   const text = normalizeString(token);
   if (!text) return "";
@@ -22,6 +37,7 @@ const canonicalStatsPolity = (token, world) => {
     requireActive: false,
     allowCoreMatch: true,
     allowStockBase: true,
+    identityIndex: statsIdentityIndexOf(world),
   });
   return normalizeString(resolved?.resolved) || toCountryName(text) || text;
 };

@@ -1178,7 +1178,8 @@ test("the scene is where the player is", () => {
   const screen = read("src/Game/GameUI/main.jsx");
   assert.ok(screen.includes("const battlefieldShown = useWarRoom((room) => room.open || Boolean(room.battlefield));"));
   // At war is what puts the war room's button on the screen: the player's troops on a battlefield.
-  assert.ok(screen.includes("const atWar = Boolean(warFronts) && isActiveFeatureEnabled(\"fronts\");"));
+  // (Battlefields being on is the Wars feature's Fronts switch.)
+  assert.ok(screen.includes("const atWar = hasFronts && fightingIn(warFronts);"));
   assert.ok(screen.includes("musicSceneOf({ inMenu: mainMenuOpen || hasNoGames, loading: showGameLoading, atWar: atWar || inWar, war: battlefieldShown })"));
   assert.ok(screen.includes("useEffect(() => { setMusicScene(musicScene); }, [musicScene]);"));
   // The open game's scenario's own music, told before the scene it is for.

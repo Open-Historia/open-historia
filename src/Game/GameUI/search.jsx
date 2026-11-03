@@ -19,7 +19,7 @@ import {
   searchLocalPlaces,
   subscribeWorldPlaceIndex,
 } from "../../runtime/placeSearch.js";
-import { BESIDE_DOCK_LEFT, BESIDE_WAR_ROOM_LEFT, DOCK_BOTTOM_REM, DOCK_BUTTON_BOTTOM, DOCK_HEIGHT_REM, DOCK_LEFT_REM } from "./hudDock.js";
+import { DOCK_BOTTOM_REM, DOCK_BUTTON_BOTTOM, DOCK_HEIGHT_REM, DOCK_LEFT_REM, useDockGeometry } from "./hudDock.js";
 
 // A small magnifier beside the launcher dock, not a fifth launcher: smaller
 // than the dock's buttons and sitting on the same baseline as their bottoms.
@@ -167,6 +167,8 @@ const localEntry = (place) => ({
 // so Search begins beyond it. (Not on a phone, where that button is above the dock.)
 const Search = memo(({ mapRef, besideWarRoom = false }) => {
   const isMobile = useIsMobile();
+  // As wide as the launchers the game shows (Rostra can be switched off).
+  const dock = useDockGeometry();
   const isTouch = useTouchPrimary();
   const [expanded, setExpanded] = useState(false);
   const [query, setQuery] = useState("");
@@ -361,9 +363,9 @@ const Search = memo(({ mapRef, besideWarRoom = false }) => {
 
   const hasSuggestions = expanded && suggestions.length > 0;
   const phoneBar = expanded && isMobile;
-  const size = phoneBar ? PHONE_BAR_SIZE : isTouch ? TOUCH_SIZE : COMPACT_SIZE;
+  const size = phoneBar ? PHONE_BAR_SIZE : isMobile ? "3.2rem" : isTouch ? TOUCH_SIZE : COMPACT_SIZE;
   // Up from the home indicator and in from a notch, with the dock (0 elsewhere).
-  const bottom = `calc(${phoneBar ? `${DOCK_BOTTOM_REM + DOCK_HEIGHT_REM + 0.5}rem` : DOCK_BUTTON_BOTTOM} + ${SAFE_BOTTOM})`;
+  const bottom = `calc(${phoneBar ? `${DOCK_BOTTOM_REM + DOCK_HEIGHT_REM + 0.5}rem` : isMobile ? `${DOCK_BOTTOM_REM + (DOCK_HEIGHT_REM - 3.2) / 2}rem` : DOCK_BUTTON_BOTTOM} + ${SAFE_BOTTOM})`;
 
   return (
     <div
@@ -375,7 +377,7 @@ const Search = memo(({ mapRef, besideWarRoom = false }) => {
         bottom,
         // hudDock.js derives this from the dock's launcher count, so a new
         // launcher can't end up underneath it.
-        left: `calc(${phoneBar ? `${DOCK_LEFT_REM}rem` : besideWarRoom && !isMobile ? BESIDE_WAR_ROOM_LEFT : BESIDE_DOCK_LEFT} + ${SAFE_LEFT})`,
+        left: `calc(${phoneBar ? `${DOCK_LEFT_REM}rem` : besideWarRoom && !isMobile ? dock.besideWarRoomLeft : dock.besideDockLeft} + ${SAFE_LEFT})`,
         height: size,
         width: expanded ? (isMobile ? `calc(100vw - 1rem - ${SAFE_LEFT} - ${SAFE_RIGHT})` : "17rem") : size,
         overflow: "visible",
@@ -384,7 +386,7 @@ const Search = memo(({ mapRef, besideWarRoom = false }) => {
         display: "flex",
         alignItems: "center",
         zIndex: 9999,
-        borderRadius: hasSuggestions ? "0 0 10px 10px" : "10px",
+        borderRadius: hasSuggestions ? "0 0 12px 12px" : "12px",
         backgroundColor: "var(--oh-hud-bg)",
         backdropFilter: "var(--oh-hud-blur)",
         border: "1px solid var(--oh-hud-border)",

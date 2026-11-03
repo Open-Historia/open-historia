@@ -13,10 +13,14 @@
 import { battleAttrition } from "./attrition.js";
 import { BRIEF_TEXT_MAX, FATIGUE_EXHAUSTED, HOLDER_SIDE_A, HOLDER_SIDE_B, RESERVES_AMPLE_PER_TROOP, SCENARIO_MARK } from "./constants.js";
 import { traceContour } from "./field.js";
+import { measure } from "./ground.js";
 import { measureLine } from "./line.js";
 import { describePoint, inSector, readSectors } from "./sectors.js";
 import { skyHeld } from "./air.js";
 import { levyPending } from "./muster.js";
+
+// How near another country's land a country's forces at home count as standing on its borders (home.js).
+const HOME_NEAR_KM = 60;
 import { isLive } from "./troops.js";
 
 const unique = (names) => [...new Set(names)];
@@ -111,6 +115,16 @@ export const buildBrief = (battle, since) => {
     };
   });
 
+  // A country's forces at home (home.js): how many of them stand within HOME_NEAR_KM of another country's land.
+  const homeNear = battle.home ? (() => {
+    const toOther = measure(battle)[HOLDER_SIDE_B];
+    return battle.troops[HOLDER_SIDE_A].reduce((count, troop) => {
+      if (!isLive(troop)) return count;
+      const cell = Math.floor(troop.y) * field.cols + Math.floor(troop.x);
+      return count + (cell >= 0 && cell < field.size && (toOther[cell] / 3) * battle.frame.km <= HOME_NEAR_KM ? 1 : 0);
+    }, 0);
+  })() : 0;
+
   const manned = new Set();
   if (battle.pocketOf) {
     for (const side of [HOLDER_SIDE_A, HOLDER_SIDE_B]) {
@@ -167,6 +181,7 @@ export const buildBrief = (battle, since) => {
     sectors: rows,
     commands,
     strength,
+    ...(battle.home && homeNear > 0 ? { near: homeNear } : {}),
     taken: [unique(battle.taken[0]), unique(battle.taken[1])],
     cities: [unique(battle.citiesTaken[0]), unique(battle.citiesTaken[1])],
     pockets,
@@ -245,16 +260,27 @@ export const describeSince = (record, { most = 4 } = {}) => {
   };
 };
 
-// The text of one battlefield for a prompt, at most BRIEF_TEXT_MAX characters.
+// The text of one battlefield for a prompt, at most `max` characters
+// (BRIEF_TEXT_MAX for a time skip's, which tells many; the advisor reads its
+// own country's at more: Game/AI/advisorWars.js).
 // With `viewer` a country or a group fighting there, the other side's standing
 // orders are left out: what a government has told its own side is its own.
-export const describeBattlefield = (record, { viewer = "" } = {}) => {
+export const describeBattlefield = (record, { viewer = "", max = BRIEF_TEXT_MAX } = {}) => {
   if (!record || !Array.isArray(record.sides)) return "";
   const brief = record.brief ?? {};
+  // A country's forces at home (home.js): how many, how many still mustering, how many near its borders.
+  if (record.home === true) {
+    const own = Array.isArray(brief.strength) ? brief.strength[0] ?? {} : {};
+    const country = record.sides[0][0] ?? "";
+    const parts = [`${own.n ?? 0} formations round its cities`];
+    if (own.mustering > 0) parts.push(`${own.mustering} more still mustering`);
+    if (brief.near > 0) parts.push(`${brief.near} of them within ${HOME_NEAR_KM} km of its borders`);
+    return `- ${record.name}: ${country}'s forces at home, built up in peace: ${parts.join(", ")}. No war is fought here; its orders are given as home: ${country}.`.slice(0, max);
+  }
   const lead = [record.sides[0][0] ?? "", record.sides[1][0] ?? ""];
   const wanted = String(viewer ?? "").replace(/\s+/g, " ").trim().toLowerCase();
   const viewing = wanted ? record.sides.findIndex((members) => members.some((member) => member.toLowerCase() === wanted)) : -1;
-  const status = record.status === "frozen" ? ", frozen by a ceasefire" : record.status === "closed" ? ", closed" : "";
+  const status = record.status === "frozen" ? ", frozen by a ceasefire" : record.status === "closed" ? ", closed" : record.status === "standing" ? ", forces built up in peace: no war is fought here" : "";
   const head = `- ${record.name}: ${record.sides[0].join(", ")} against ${record.sides[1].join(", ")}, open since ${record.openedDate}${status}, line ${brief.km ?? 0} km`;
 
   const strength = Array.isArray(brief.strength) && brief.strength.length === 2
@@ -301,7 +327,7 @@ export const describeBattlefield = (record, { viewer = "" } = {}) => {
   let text = "";
   for (const [mostSectors, mostNames] of [[3, 4], [3, 2], [3, 1], [2, 1], [0, 1]]) {
     text = [head, strength, weather, attrition, ice, air, gone, lineText(mostSectors), sinceText(mostNames), orders, valid].filter(Boolean).join("\n");
-    if (text.length <= BRIEF_TEXT_MAX) return text;
+    if (text.length <= max) return text;
   }
-  return text.slice(0, BRIEF_TEXT_MAX - 1).trimEnd() + "…";
+  return text.slice(0, max - 1).trimEnd() + "…";
 };

@@ -1,4 +1,6 @@
 import { diffGameDays, parseGameDate } from "./gameDates.js";
+import { mapKm, mapOffset, mapStep } from "../../server/mapDistance.js";
+import { currentMapMeasure } from "./mapMeasure.js";
 
 /*! Open Historia — unit motion, reach & detection math © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Deterministic movement for map units — the reason a fleet sent to the
@@ -10,6 +12,12 @@ import { diffGameDays, parseGameDate } from "./gameDates.js";
 // load without a full install. Keeping this file dependency-free (the same
 // trick GameUI/eventFocus.js uses) means its tests run in a bare checkout.
 // gameState.js re-exports haversineKm from here, so nothing else has to know.
+// (What it imports is as bare: game dates, and the map's measure, server/mapDistance.js.)
+//
+// THE MAP'S MEASURE. A unit's distances follow the scenario's projection
+// (server/mapDistance.js): kmOnMap, stepToward, patrolPoint and seaShareOf take
+// a measure, by default the map being played (mapMeasure.js). On plain
+// Mercator, which is nearly every map, they work exactly as they always did.
 
 // ---- geometry --------------------------------------------------------------
 
@@ -28,6 +36,13 @@ export const haversineKm = (lat1, lng1, lat2, lng2) => {
     Math.cos(toRad(lat1 ?? 0)) * Math.cos(toRad(lat2 ?? 0)) * Math.sin(dLng / 2) ** 2;
   return 2 * EARTH_RADIUS_KM * Math.asin(Math.min(1, Math.sqrt(s)));
 };
+
+// Kilometres between two stored places on the map being played (or on the
+// map whose measure is given): the great circle on a world map, the straight
+// line across a freeform sheet at its scale.
+export const kmOnMap = (lat1, lng1, lat2, lng2, measure = currentMapMeasure()) => (
+  !measure || measure.plain ? haversineKm(lat1, lng1, lat2, lng2) : mapKm(measure, lng1, lat1, lng2, lat2)
+);
 
 // Any longitude back into -180..180. A click on a world copy east or west of
 // the date line (renderWorldCopies) comes in as e.g. 210.
@@ -171,17 +186,17 @@ export const maxTravelKm = (type, gameDate, days, options = {}) =>
 // The part of the great circle between two points that lies over water,
 // 0 to 1, by `isLand([lng, lat])`. Sampled about every 150 km, the ends left
 // out: a port is on land and its ship is not.
-export const seaShareOf = (from, to, isLand) => {
+export const seaShareOf = (from, to, isLand, measure = currentMapMeasure()) => {
   if (typeof isLand !== "function") return null;
   const start = { lng: Number(from?.lng), lat: Number(from?.lat) };
   const end = { lng: Number(to?.lng), lat: Number(to?.lat) };
   if (![start.lng, start.lat, end.lng, end.lat].every(Number.isFinite)) return null;
-  const distance = haversineKm(start.lat, start.lng, end.lat, end.lng);
+  const distance = kmOnMap(start.lat, start.lng, end.lat, end.lng, measure);
   if (distance < 60) return 0;
   const steps = Math.max(6, Math.min(48, Math.round(distance / 150)));
   let water = 0;
   for (let index = 1; index < steps; index += 1) {
-    const point = stepToward(start, end, (distance * index) / steps);
+    const point = stepToward(start, end, (distance * index) / steps, measure);
     if (!isLand([point.lng, point.lat])) water += 1;
   }
   return Number((water / (steps - 1)).toFixed(2));
@@ -215,7 +230,9 @@ export const daysBetweenDates = (from, to) => {
 // This SLERPs rather than lerping the coordinates. Interpolating longitude
 // linearly tears at the antimeridian: a fleet ordered Yokosuka -> San Diego
 // would track backwards across Eurasia instead of over the Pacific.
-export const stepToward = (from, to, maxKm) => {
+export const stepToward = (from, to, maxKm, measure = currentMapMeasure()) => {
+  // A map that is not plain Mercator steps by its own measure (server/mapDistance.js).
+  if (measure && !measure.plain) return mapStep(measure, from, to, maxKm);
   const fromLat = Number(from?.lat) || 0;
   const fromLng = Number(from?.lng) || 0;
   const toLat = Number(to?.lat) || 0;
@@ -278,8 +295,11 @@ export const DEFAULT_PATROL_RADIUS_KM = {
 // gives the same point, so re-reading world.json never jitters the map and the
 // staged event reveal reproduces a patrol exactly. Callers seed with
 // `${unit.id}|${round}|${tick}` so the position changes per turn and per idle
-// pulse, but never at random.
-export const patrolPoint = (station, radiusKm, seed) => {
+// pulse, but never at random. `turn`: eighths of a circle added to the
+// bearing, for a caller looking round the ring for a point on its unit's own
+// ground (gameState.js patrolPointOnItsGround): seeds that differ by a suffix
+// hash to nearly the same bearing, so they cannot do that.
+export const patrolPoint = (station, radiusKm, seed, { turn = 0, measure = currentMapMeasure() } = {}) => {
   const centreLat = Number(station?.lat) || 0;
   const centreLng = Number(station?.lng) || 0;
   const radius = Math.max(0, Number(radiusKm) || 0);
@@ -288,10 +308,15 @@ export const patrolPoint = (station, radiusKm, seed) => {
   }
 
   const hash = hashSeed(seed);
-  const bearing = ((hash % 3600) / 3600) * Math.PI * 2;
+  const bearing = ((hash % 3600) / 3600 + (Number(turn) || 0) / 8) * Math.PI * 2;
   // Bias outward (0.55..1.0 of the radius) so a patrol reads as working its
   // station rather than loitering on top of the centre point.
   const spread = 0.55 + ((Math.floor(hash / 3600) % 1000) / 1000) * 0.45;
+  // A map that is not plain Mercator puts the point by its own measure.
+  if (measure && !measure.plain) {
+    const [lng, lat] = mapOffset(measure, centreLng, centreLat, (bearing * 180) / Math.PI, radius * spread);
+    return { lng: measure.flat ? lng : wrapLng(lng), lat: clampLat(lat) };
+  }
 
   // Great-circle destination from (centre, bearing, distance). Offsetting the
   // degrees flat-earth style instead looks fine near the equator but overshoots

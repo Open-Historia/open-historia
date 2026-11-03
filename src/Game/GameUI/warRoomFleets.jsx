@@ -19,7 +19,7 @@
 // sends every order through runtime/warRoomWrites.js.
 
 import React, { useEffect, useState } from "react";
-import { haversineKm } from "../../runtime/unitMotion.js";
+import { kmOnMap } from "../../runtime/unitMotion.js";
 import { useWarRoom } from "../Map/warRoomStore.js";
 import { besideRailStyle } from "./warRoomFortify.jsx";
 import { BONE, BONE_SOFT, STEEL, keyStyle, linkStyle, stencilStyle, trayStyle } from "./warRoomTheme.js";
@@ -58,7 +58,7 @@ const OrderLine = ({ fleet }) => {
   if (!order) return <>No standing order.</>;
   const radius = Math.round(order.radiusKm);
   if (order.kind === "patrol") return <>Patrolling within {radius} km of its station.</>;
-  const km = Math.round(haversineKm(fleet.lat, fleet.lng, order.toLat, order.toLng));
+  const km = Math.round(kmOnMap(fleet.lat, fleet.lng, order.toLat, order.toLng));
   return <>Under way, about {km} km to go.</>;
 };
 

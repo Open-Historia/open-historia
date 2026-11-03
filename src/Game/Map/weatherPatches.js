@@ -44,6 +44,9 @@ const STEP_LEAST_DEG = 0.06;
 const PIXELS_AIM = 360000;
 const WIDTH_MOST = 6000;
 const SMOOTHING_ROUNDS = 2;
+// How far toward the poles a patch's outline reaches. An outline along the
+// map's very edge (85.05°) was cut into by triangles where the map draws it.
+export const PATCH_EDGE_LAT = 85;
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const list = (value) => (Array.isArray(value) ? value : []);
@@ -245,8 +248,10 @@ export const weatherPatchFeatures = ({ zones = [], weather = new Map() } = {}) =
   if (known.length === 0) return { areas: { type: "FeatureCollection", features: areas } };
   const grid = gridFor(known);
   const top = latToY(grid.topLat);
-  const lngOf = (x) => round6(((x + 0.5) / grid.width) * 360 - 180);
-  const latOf = (y) => round6(yToLat(top - ((y + 0.5) * 2 * top) / grid.height));
+  // Never past the date line: a sliver over it is wrapped round to the other side
+  // of the map as a ring of its own, which is read as a hole in the patch there.
+  const lngOf = (x) => round6(Math.max(-180, Math.min(180, ((x + 0.5) / grid.width) * 360 - 180)));
+  const latOf = (y) => round6(Math.max(-PATCH_EDGE_LAT, Math.min(PATCH_EDGE_LAT, yToLat(top - ((y + 0.5) * 2 * top) / grid.height))));
   const placed = known.map((zone) => ({ zone, ...weather.get(zone.id), cells: zoneWeightGrid(zone, grid) })).filter((entry) => entry.cells);
 
   // The zones of one weather that touch, taken together.

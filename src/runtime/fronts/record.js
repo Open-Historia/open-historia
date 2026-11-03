@@ -46,6 +46,7 @@ import {
   LINE_MARKS,
   MAX_BATTLEFIELDS,
   MAX_CLOSED_BATTLEFIELDS,
+  MAX_HOME_FORCES,
   MAX_CONTESTED_REGIONS,
   MAX_LOG_ENTRIES,
   MAX_NAMED_TROOPS,
@@ -137,7 +138,8 @@ const normalizeOrder = (raw) => {
 // "pocket", "siege", "taken", "destroyed", "assault", "invaded" for a
 // country a side sent its troops into, "attacked" for one it went to war with
 // by attacking, and "withdrew" and "returned" for a side that took its troops
-// off the battlefield and brought them back.)
+// off the battlefield and brought them back, and "bombed" for an air strike
+// the war room ordered: fronts/airStrike.js.)
 const normalizeOrders = (value) => {
   const kept = [];
   const count = [0, 0];
@@ -227,6 +229,8 @@ export const normalizeBattlefield = (raw) => {
     log: normalizeLog(raw.log),
     // What its war has come to, run by run (chronicle.js), for its report once it is over.
     ...(readChronicle(raw.chronicle) ? { chronicle: readChronicle(raw.chronicle) } : {}),
+    // A country's forces at home, built up in peace (home.js).
+    ...(raw.home === true ? { home: true } : {}),
   };
   if (status === "closed") record.closedDate = clean(raw.closedDate, DATE_MAX);
   else if (isRecord(raw.field)) record.field = { mask: packed(raw.field.mask), band: packed(raw.field.band), key: clean(raw.field.key, 40) };
@@ -253,10 +257,68 @@ export const normalizeBattlefields = (value) => {
     seen.add(key);
     (record.status === "closed" ? closed : open).push(record);
   }
-  const list = [...open.slice(0, MAX_BATTLEFIELDS), ...closed.slice(-MAX_CLOSED_BATTLEFIELDS)];
+  // (Forces at home are kept beside the battlefields of wars, never in their place: home.js.)
+  const homes = open.filter((record) => record.home === true).slice(0, MAX_HOME_FORCES);
+  const list = [...open.filter((record) => record.home !== true).slice(0, MAX_BATTLEFIELDS), ...homes, ...closed.slice(-MAX_CLOSED_BATTLEFIELDS)];
   made.add(list);
   results.set(value, list);
   return list;
+};
+
+// A war's id written where a battlefield's name goes. A real-key test
+// (2026-10-28) had the model name the front it ordered "WAR-FRANCE-ITALY-2016",
+// and the War Room's header showed the id. Every id the game or the model makes
+// is "war-" and words joined by dashes with no space, which no front's name is;
+// `warIds` are the ids of the wars at hand, matched in any case.
+const WAR_ID_SHAPE = /^war-[\p{L}\p{N}]+(?:-[\p{L}\p{N}]+)*$/u;
+export const isWarIdName = (name, warIds = []) => {
+  const folded = foldBattlefieldName(name);
+  if (!folded) return false;
+  return WAR_ID_SHAPE.test(folded) || [...warIds].some((id) => foldBattlefieldName(id) === folded);
+};
+
+// What a front of these two sides is called when nobody named it: its two
+// leading members (engine.js nameFor), here the first of each side.
+export const plainFrontName = (sides) => clean(`${sides[0][0]} - ${sides[1][0]} front`, BATTLEFIELD_NAME_MAX);
+
+// A world whose battlefields were named with a war id, saved before the engine
+// refused one: each is called as a front of its sides is when nobody named it,
+// numbered past a name already taken, and what finds it by name follows (the
+// formations committed to it, the transporters bound for or embarking from it),
+// or they would be fighting on a battlefield that is not there. The world is
+// handed back as it was when no battlefield is named so.
+export const withWarIdFrontsRenamed = (world) => {
+  const list = Array.isArray(world?.battlefields) ? world.battlefields : null;
+  if (!list || !list.some((raw) => isRecord(raw) && isWarIdName(raw.name, [raw.warId]))) return world;
+  const taken = new Set(list.filter(isRecord).map((raw) => foldBattlefieldName(raw.name)));
+  const renamed = new Map();
+  const battlefields = list.map((raw) => {
+    if (!isRecord(raw) || !isWarIdName(raw.name, [raw.warId])) return raw;
+    const sides = pairOf(raw.sides, memberList);
+    if (sides[0].length === 0 || sides[1].length === 0) return raw;
+    const plain = plainFrontName(sides);
+    let name = plain;
+    for (let count = 2; taken.has(foldBattlefieldName(name)); count += 1) name = clean(`${plain} ${count}`, BATTLEFIELD_NAME_MAX);
+    taken.add(foldBattlefieldName(name));
+    const key = foldBattlefieldName(raw.name);
+    if (!renamed.has(key)) renamed.set(key, name);
+    return { ...raw, name };
+  });
+  const follow = (value) => (typeof value === "string" ? renamed.get(foldBattlefieldName(value)) ?? value : value);
+  const next = { ...world, battlefields };
+  if (Array.isArray(world.units)) {
+    next.units = world.units.map((unit) => (isRecord(unit) && renamed.has(foldBattlefieldName(unit.committedTo)) ? { ...unit, committedTo: follow(unit.committedTo) } : unit));
+  }
+  if (Array.isArray(world.transports)) {
+    next.transports = world.transports.map((row) => {
+      if (!isRecord(row)) return row;
+      const out = { ...row };
+      if (typeof row.battlefield === "string") out.battlefield = follow(row.battlefield);
+      if (isRecord(row.embark)) out.embark = { ...row.embark, battlefield: follow(row.embark.battlefield) };
+      return out;
+    });
+  }
+  return next;
 };
 
 export const findBattlefield = (battlefields, name) => {

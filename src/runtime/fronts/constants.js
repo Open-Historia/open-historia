@@ -16,6 +16,8 @@ export const BATTLEFIELD_VERSION = 1;
 // written whole and copied into every restore point.
 export const MAX_BATTLEFIELDS = 12;
 export const MAX_CLOSED_BATTLEFIELDS = 4;
+// And the most countries with forces at home at once, besides the battlefields of wars (home.js).
+export const MAX_HOME_FORCES = 6;
 export const MAX_BATTLEFIELDS_CHARS = 160000;
 export const BATTLEFIELD_NAME_MAX = 80;
 
@@ -239,6 +241,23 @@ export const TROOPS_FACTOR_MOST = 4;
 // (The troops a deployment drawn in the war room calls up are held only by the
 // men there are and the line's room: engine.js callUpDeployed.)
 export const REINFORCE_ORDER = "reinforce";
+// A REGION THE STORY SAYS WAS TAKEN (engine.js marchInto, and gameplay.js
+// marchCapturersIn off a battlefield). "the max number of nearby units
+// redirected should be based on the size of the region. there should also be a
+// minimum number and if that minimum is not met then the region transfer
+// fails" (the owner, 2026-10-28). A region takes one of the taker's troops for
+// every STORY_TAKER_KM2 of it, at least one and at most STORY_TAKERS_MOST; it
+// is taken only where at least a third of that many (and at least one) stand
+// in it or within STORY_TAKER_REACH_KM of it.
+export const STORY_TAKER_KM2 = 4000;
+export const STORY_TAKERS_MOST = 8;
+export const STORY_TAKER_REACH_KM = 150;
+// { least, most } for a region of so many km².
+export const takersFor = (areaKm2) => {
+  const area = Number(areaKm2) > 0 ? Number(areaKm2) : 0;
+  const most = Math.min(STORY_TAKERS_MOST, Math.max(1, Math.ceil(area / STORY_TAKER_KM2)));
+  return { least: Math.max(1, Math.ceil(most / 3)), most };
+};
 // THE MEN TROOPS ARE RAISED FROM (manpower.js). A formation at full strength
 // is this many men, by era (before 1500, 1500 to 1849, 1850 to 1944, from
 // 1945), and a country can have this share of its people under arms at once:

@@ -114,11 +114,8 @@ the official app; the beta's is about 150 MB. The files are named `Open-Historia
 `Open-Historia-Beta-mac-arm64.zip` / `-x64.zip`, `Open-Historia-Beta-amd64.deb` and
 `Open-Historia-Beta-x86_64.AppImage`, and the website offers each one under its stable download.
 
-The official app recommends it. The first time it opens after you install it, and the first time
-after each update, it asks *Do you want to download the beta version for the best experience?*
-**Download the beta** opens the beta's download — on Windows the installer itself, elsewhere its
-release page — and **Not now** leaves the question until the next update. The **Updating Open
-Historia** window offers the same download while an update installs.
+The **Updating Open Historia** window of the official app offers the beta's download while an
+update installs — on Windows the installer itself, elsewhere its release page.
 
 Pages and sections marked <em>beta</em> in this wiki describe that build.
 
@@ -130,8 +127,8 @@ What is different in the browser:
 
 - Games and scenarios are stored in your browser's storage, not in files. Clearing site data
   clears your campaigns. The game will ask for persistent storage permission — grant it.
-- The map is served by community-run content nodes rather than downloaded whole. If no node is
-  reachable you get a blank map; see [Troubleshooting](/wiki/troubleshooting/).
+- The map files come with the site and download the first time you play, about 35 MB; your
+  browser keeps them after that. If the map stays blank, see [Troubleshooting](/wiki/troubleshooting/).
 - There is no account and no sync: your games stay in this browser. To play one somewhere else,
   export it and import it there; see [saves and rollback](/wiki/saves/).
 - Providers that refuse direct browser requests need a relay, which the browser build does not

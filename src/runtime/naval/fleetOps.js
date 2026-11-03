@@ -44,7 +44,7 @@
 
 import { normalizeTransports } from "../fronts/transports.js";
 import { placeAlong, wayKm } from "../fronts/worldGrid.js";
-import { haversineKm } from "../unitMotion.js";
+import { kmOnMap } from "../unitMotion.js";
 
 export const FLEET_POSTURES = Object.freeze(["patrol", "blockade", "assaulting", "holding", "withdrawing", "transit"]);
 export const FLEET_OPS = Object.freeze(["posture", "station", "blockade", "escort", "stand"]);
@@ -186,7 +186,7 @@ export const applyFleetOp = (world, op, { player = "", date = "", round = 0, cha
     const before = orders.find((entry) => clean(entry.unitId) === id);
     const next = order === undefined ? (before ? [...kept, before] : kept) : order ? [...kept, order] : kept;
     const now = order === undefined ? standing : order;
-    const far = now?.kind === "move" ? haversineKm(from[1], from[0], now.toLat, now.toLng) : 0;
+    const far = now?.kind === "move" ? kmOnMap(from[1], from[0], now.toLat, now.toLng) : 0;
     const status = now?.kind === "move" && far > FLEET_ARRIVED_KM ? "moving" : fold(unit.status) === "moving" ? "idle" : unit.status;
     const fleet = { ...unit, posture, status, updatedAt: stamp };
     const nextUnits = units.slice();
@@ -222,7 +222,7 @@ export const applyFleetOp = (world, op, { player = "", date = "", round = 0, cha
     const refusal = seaRefusal(to);
     if (refusal) return { error: refusal };
     if (op.order === "patrol") {
-      const far = haversineKm(from[1], from[0], to[1], to[0]);
+      const far = kmOnMap(from[1], from[0], to[1], to[0]);
       return written("patrol", far <= FLEET_PATROL_KM ? patrolAt(to) : moveTo(to, "a patrol station at sea"));
     }
     const posture = fold(unit.posture);

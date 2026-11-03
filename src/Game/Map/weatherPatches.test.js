@@ -9,7 +9,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { PATCH_BANDS, contourRings, ringsToPolygons, smoothRing, weatherPatchFeatures, zoneWeatherById } from "./weatherPatches.js";
+import { PATCH_BANDS, PATCH_EDGE_LAT, contourRings, ringsToPolygons, smoothRing, weatherPatchFeatures, zoneWeatherById } from "./weatherPatches.js";
 import { zoneWeatherFor } from "../../runtime/zoneWeather.js";
 
 // A field of `width` x `height` with 1 where `inside(x, y)`.
@@ -131,4 +131,28 @@ test("each zone's weather is the one the last turn wrote, else worked out as the
   assert.equal(zoneWeatherFor({ climateZones: [], background: { kind: "image" } }, { seed: "campaign", date: "1916-01-10" }), null);
   assert.ok(zoneWeatherFor({ climateZones: [] }, { seed: "campaign", date: "1916-01-10" }).zones.length >= 30);
   assert.equal(zoneWeatherFor(world, { seed: "campaign", date: "Year 12" }), null);
+});
+
+// "there is a weather bug where in antartica on low zoom there are triangle
+// cutouts of the weather (snow)" (the owner, 2026-10-28).
+test("Antarctica's snow runs round the world to the map's edge, with no wedge at the date line and no corner cut off", async () => {
+  const { WORLD_CLIMATE_ZONES } = await import("../../runtime/worldGeographyDefaults.js");
+  const zones = WORLD_CLIMATE_ZONES.filter((zone) => zone.id === "world-antarctica");
+  const { areas } = weatherPatchFeatures({ zones, weather: new Map([["world-antarctica", { state: "snow", season: "The polar year" }]]) });
+  assert.equal(areas.features.length, PATCH_BANDS.length);
+  for (const feature of areas.features) {
+    const points = feature.geometry.coordinates.flat(2);
+    const lngs = points.map(([lng]) => lng);
+    const lats = points.map(([, lat]) => lat);
+    // Nothing past the date line, nor along the map's very edge.
+    assert.ok(Math.min(...lngs) >= -180 && Math.max(...lngs) <= 180);
+    assert.ok(Math.min(...lats) >= -PATCH_EDGE_LAT && Math.max(...lats) < -60);
+    // Even the full snow of the middle reaches the line from both sides (it stopped near 174° before).
+    assert.ok(Math.min(...lngs) < -179.5 && Math.max(...lngs) > 179.5, `level ${feature.properties.level}: ${Math.min(...lngs)}..${Math.max(...lngs)}`);
+    // And down to the edge at every longitude: no corner rounded off across the map's last degrees.
+    for (let lng = -170; lng <= 170; lng += 20) {
+      const south = Math.min(...points.filter(([x]) => Math.abs(x - lng) < 10).map(([, lat]) => lat));
+      assert.ok(south <= -PATCH_EDGE_LAT + 0.01, `level ${feature.properties.level} at ${lng}: ${south}`);
+    }
+  }
 });

@@ -64,8 +64,7 @@ CLAUDE.local.md
 *.sln
 *.sw?
 
-# Content-node store left in old checkouts by the removed in-repo node stub
-# (hash-named blobs; the node itself is Open-Historia/open-historia-node)
+# Content store left in old checkouts by a removed in-repo stub (hash-named blobs)
 /node-content/
 
 # Offline root signing PRIVATE key — never commit

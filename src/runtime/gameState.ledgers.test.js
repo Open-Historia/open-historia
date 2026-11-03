@@ -50,6 +50,18 @@ test("wars, relations and agreements survive a normalizeWorldState round trip", 
   assert.deepEqual(again.agreements, world.agreements);
 });
 
+// A start's note was cut only at a ";" until 2026-10-28, and a real-key test
+// kept "Franco-Italian War~Dispute over…" whole as the war's name.
+test("a war's name saved with its cause run on is mended on reading", () => {
+  const [war] = normalizeWorldState({ wars: [{ id: "w1", status: "active", sideA: ["France"], sideB: ["Italy"], title: "Franco-Italian War~Dispute over Nice" }] }).wars;
+  assert.equal(war.title, "Franco-Italian War");
+  assert.equal(war.cause, "Dispute over Nice");
+  const [kept] = normalizeWorldState({ wars: [{ id: "w1", status: "active", sideA: ["France"], sideB: ["Italy"], title: "Alpine War | border", cause: "The Nice crisis" }] }).wars;
+  assert.deepEqual([kept.title, kept.cause], ["Alpine War", "The Nice crisis"], "a cause already kept stands");
+  const [plain] = normalizeWorldState({ wars: [{ id: "w1", status: "active", sideA: ["France"], sideB: ["Italy"], title: "The War of 2016" }] }).wars;
+  assert.deepEqual([plain.title, plain.cause], ["The War of 2016", ""]);
+});
+
 test("an empty world has empty ledgers", () => {
   const world = normalizeWorldState({});
   assert.deepEqual(world.wars, []);

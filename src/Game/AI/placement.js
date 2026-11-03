@@ -30,8 +30,8 @@
 // not directions — but only as the map spells it: a lookup loose enough to take
 // "off Sevastopol" for the region Sevastopol would put every fleet ashore.
 //
-// DELIBERATELY FREE OF THE MAP'S OWN CODE: its one import, nameRefs.js, has
-// none. The caller hands in a gazetteer — find(name, options)
+// DELIBERATELY FREE OF THE MAP'S OWN CODE: what it imports, nameRefs.js and
+// the map's measure (runtime/mapMeasure.js, server/mapDistance.js), has none. The caller hands in a gazetteer — find(name, options)
 // and regionAt(point) — built from the map it already has (gameplay.js
 // buildPlacementGazetteer), so everything here runs under bare node. Every
 // result is deterministic: the same phrase for the same thing on the same map is
@@ -39,6 +39,8 @@
 // bug the player can see.
 
 import { kindOfName, plainName, stripKindTags } from "./nameRefs.js";
+import { kmPerDegreeAt, mapKm, mapOffset } from "../../../server/mapDistance.js";
+import { currentMapMeasure } from "../../runtime/mapMeasure.js";
 
 const asText = (value) => String(value ?? "").trim();
 const asArray = (value) => (Array.isArray(value) ? value : []);
@@ -47,10 +49,24 @@ const asArray = (value) => (Array.isArray(value) ? value : []);
 // Geometry, on GeoJSON longitude/latitude
 // ---------------------------------------------------------------------------
 
+// On a map that is not plain Mercator (a freeform sheet, another projection, a
+// scale line) every distance here is the map's own measure (server/mapDistance.js).
 const KM_PER_DEG_LAT = 110.574;
 const kmPerDegLng = (lat) => 111.32 * Math.max(0.05, Math.cos((lat * Math.PI) / 180));
+// Kilometres to a degree east and north at a point: { x, y }.
+const degreeKmAt = (point) => {
+    const measure = currentMapMeasure();
+    return measure.plain ? { x: kmPerDegLng(point[1]), y: KM_PER_DEG_LAT } : kmPerDegreeAt(measure, point[0], point[1]);
+};
+// The compass bearing (degrees from north) of a step of [east, north] degrees at a point.
+const bearingOfStep = (point, east, north) => {
+    const per = degreeKmAt(point);
+    return (Math.atan2(east * per.x, north * per.y) * 180) / Math.PI;
+};
 
 export const distanceKm = (a, b) => {
+    const measure = currentMapMeasure();
+    if (!measure.plain) return mapKm(measure, a[0], a[1], b[0], b[1]);
     const meanLat = (a[1] + b[1]) / 2;
     let dLng = Math.abs(a[0] - b[0]);
     if (dLng > 180) dLng = 360 - dLng;
@@ -72,6 +88,11 @@ const midpoint = (a, b) => {
 
 // bearing in compass degrees: 0 north, 90 east.
 export const offsetPoint = (point, bearingDegrees, km) => {
+    const measure = currentMapMeasure();
+    if (!measure.plain) {
+        const [lng, lat] = mapOffset(measure, point[0], point[1], bearingDegrees, km);
+        return [measure.flat ? lng : wrapLng(lng), clampLat(lat)];
+    }
     const radians = (bearingDegrees * Math.PI) / 180;
     const lat = clampLat(point[1] + (Math.cos(radians) * km) / KM_PER_DEG_LAT);
     const lng = wrapLng(point[0] + (Math.sin(radians) * km) / kmPerDegLng(point[1]));
@@ -237,8 +258,10 @@ const readDistanceKm = (amount, unit) => {
 // distanceKm uses.
 const bearingBetween = (from, to) => {
     let dLng = to[0] - from[0];
+    if (currentMapMeasure().flat) return (bearingOfStep(from, dLng, to[1] - from[1]) + 360) % 360;
     if (dLng > 180) dLng -= 360;
     if (dLng < -180) dLng += 360;
+    if (!currentMapMeasure().plain) return (bearingOfStep([from[0], (from[1] + to[1]) / 2], dLng, to[1] - from[1]) + 360) % 360;
     const dx = dLng * kmPerDegLng((from[1] + to[1]) / 2);
     const dy = (to[1] - from[1]) * KM_PER_DEG_LAT;
     return ((Math.atan2(dx, dy) * 180) / Math.PI + 360) % 360;
@@ -497,12 +520,20 @@ const targetOf = (thing, from) => {
     return regions.reduce((best, region) => (distanceKm(centreOf(region), from) < distanceKm(centreOf(best), from) ? region : best)).geometry;
 };
 
+// Open sea: where no land region is (the gazetteer counts a region of a water
+// type as sea), and on the map. Past the Mercator square's top or bottom no
+// region is either, and a fleet put there stood below the bottom of the map: a
+// coast that runs along the map's southern edge stepped out over it (a fantasy
+// scenario's Discord game, 2026-10-26).
+const MAP_EDGE_LAT = 85.0511;
+export const isOpenSea = (point, gazetteer) => Math.abs(point[1]) < MAP_EDGE_LAT && !gazetteer.regionAt(point);
+
 // Is this stretch of a region's edge the sea? Step outward from it; on this map
-// the sea is simply where no region is.
+// the sea is where no land region is (isOpenSea).
 const seawardPoint = (region, vertex, inner, gazetteer, km) => {
-    const bearing = (Math.atan2((vertex[0] - inner[0]) * kmPerDegLng(vertex[1]), (vertex[1] - inner[1]) * KM_PER_DEG_LAT) * 180) / Math.PI;
+    const bearing = bearingOfStep(vertex, vertex[0] - inner[0], vertex[1] - inner[1]);
     const out = offsetPoint(vertex, bearing, km);
-    return gazetteer.regionAt(out) ? null : out;
+    return isOpenSea(out, gazetteer) ? out : null;
 };
 
 const coastOf = (region, gazetteer, { toward = null, seed = 0 } = {}) => {
@@ -669,7 +700,7 @@ const resolveReading = (reading, gazetteer, seed, prefer = "", accepts = null, f
         if (thing.point) {
             // A point cannot be "the side of" anything: go a short way toward the other place.
             const aim = Array.isArray(target) ? target : centreOf({ geometry: target });
-            const bearing = (Math.atan2((aim[0] - thing.point[0]) * kmPerDegLng(thing.point[1]), (aim[1] - thing.point[1]) * KM_PER_DEG_LAT) * 180) / Math.PI;
+            const bearing = bearingOfStep(thing.point, aim[0] - thing.point[0], aim[1] - thing.point[1]);
             return done(offsetPoint(thing.point, bearing, NEAR_KM), "facing", gazetteer, thing.name);
         }
         const region = regionFor(thing, target);
@@ -1297,14 +1328,14 @@ const SEA_PART = /^(?:the\s+)?(?:far\s+)?(?:(?:north|south)(?:[- ]?(?:east|west)
 // to a port by its name moved about on land.
 const SEA_RINGS_KM = [8, 16, 25, 35, 50, 70, 100, 140, 200, 300, 400];
 export const nearestSea = (point, gazetteer, { seed = 0, maxKm = 400 } = {}) => {
-    if (!gazetteer.regionAt(point)) return point;
+    if (isOpenSea(point, gazetteer)) return point;
     for (const km of SEA_RINGS_KM.filter((ring) => ring <= maxKm)) {
         for (let step = 0; step < 16; step += 1) {
             const bearing = (seed + step * 22.5) % 360;
             const out = offsetPoint(point, bearing, km);
-            if (gazetteer.regionAt(out)) continue;
+            if (!isOpenSea(out, gazetteer)) continue;
             const further = offsetPoint(point, bearing, km + 12);
-            return gazetteer.regionAt(further) ? out : further;
+            return isOpenSea(further, gazetteer) ? further : out;
         }
     }
     return null;

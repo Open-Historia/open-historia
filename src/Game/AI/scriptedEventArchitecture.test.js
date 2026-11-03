@@ -11,7 +11,7 @@ const serverFeatures = fs.readFileSync(new URL("../../../server/gameFeatures.js"
 test("time skips gate authored beats natively before prompting and persist accepted resolutions", () => {
   assert.match(gameplay, /planScriptedEvents\(/);
   assert.match(gameplay, /scriptedPlan\.eligible/);
-  assert.match(gameplay, /buildScriptedEventsInstruction\(scriptedBeats\)/);
+  assert.match(gameplay, /buildScriptedEventsInstruction\(scriptedBeats, \{ language: scriptedLanguage \}\)/);
   assert.match(gameplay, /commitScriptedEventPlan\(/);
   assert.match(gameplay, /scriptedEventState:\s*state\.scriptedEventState/);
   assert.match(gameplay, /scriptedEventState:\s*normalizeScriptedEventState\(/);

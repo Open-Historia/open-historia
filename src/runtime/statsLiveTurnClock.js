@@ -20,6 +20,14 @@ import { sameNavalControlChronology } from "./naval/controlChronology.js";
 import { deriveAllNativeEconomicExposure, captureNativeEconomicExposureHistory } from "./statsEconomicExposure.js";
 
 const arr = (value) => Array.isArray(value) ? value : [];
+// A city raid flown by the front engine has a separate legacy GDP/population
+// writer in withAirStrikes. Until its dated losses enter the single native
+// chronological receipt ledger, those affected accounts cannot have both.
+// Return identities rather than assuming a damaged city is necessarily a
+// belligerent: neutral countries may be struck as well.
+export const unresolvedCityAirStrikeTargets = (turnFronts) => arr(turnFronts?.airStrikes)
+  .filter((strike) => strike?.kind === "city" && Number(strike?.power) > 0)
+  .map((strike) => typeof strike?.country === "string" ? strike.country.trim() : "");
 // `runNaval` only publishes a blockadePeriods row after observing positive
 // pressure, even when the whole-turn pressure is below the legacy threshold.
 // Therefore a proven-zero naval result has THREE empty evidence arrays, not
@@ -229,6 +237,10 @@ export const applyNativeDatedBlockadeDay = (world, step) => {
 // behavior without a partial economic mutation.
 export const planNativeStatsLiveTurn = ({ baseWorld, turnFronts, warUpdates,
   fromDate = "", toDate = "", events = [], round = 0, regionCatalog = null } = {}) => {
+  // Civilian bomb damage is currently an independent legacy direct writer.
+  // Fail closed rather than accrue native GDP/population before writing it
+  // again without a dated receipt, history sample or partition guarantee.
+  if (unresolvedCityAirStrikeTargets(turnFronts).length) return null;
   if (!baseWorld?.countryStats || !Object.keys(baseWorld.countryStats).length
     || !Array.isArray(events) || !Number.isInteger(round) || round < 1) return null;
   const zero = provenZeroBlockadeDays({ baseWorld, turnFronts, warUpdates, fromDate, toDate });

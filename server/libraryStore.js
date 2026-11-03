@@ -3692,7 +3692,84 @@ const writeRuntimeTurnState = (payload, { failAfterAssetIndex = -1 } = {}) => {
   return { transactionId, assets };
 };
 
+// A world drawn on its own regions: every owner override keyed to a region id
+// that is not a stock one (src/runtime/countryList.js isHandDrawnWorld, which
+// server code may not import). A world painted over the stock map is not.
+const STOCK_REGION_ID = /^[A-Z]{3}\.\d+(?:_\d+)?$/;
+const isHandDrawnWorldRecord = (world) => {
+  const ids = Object.keys(world?.regionOwnershipOverrides ?? {}).map((id) => String(id).trim());
+  return Boolean(world?.customRegions) && ids.length > 0 && !ids.some((id) => STOCK_REGION_ID.test(id));
+};
+
+// The world.json the active game reads (its own, else its scenario's), read once
+// a change.
+const handDrawnWorldCache = new Map(); // path -> { stamp, handDrawn, owners }
+const activeWorldMapFacts = () => {
+  const activeGame = getActiveGameSummary();
+  const scenario = getActiveRuntimeScenarioSummary();
+  const candidates = [
+    activeGame?.id ? getGameJsonPath(activeGame.id, "world") : null,
+    scenario && !scenario.missing ? getScenarioJsonPath(scenario.id, "world") : null,
+  ].filter(Boolean);
+  const worldPath = candidates.find((candidate) => fs.existsSync(candidate));
+  if (!worldPath) return null;
+  let stamp = "";
+  try {
+    const stat = fs.statSync(worldPath);
+    stamp = `${stat.size}:${stat.mtimeMs}`;
+  } catch {
+    return null;
+  }
+  const known = handDrawnWorldCache.get(worldPath);
+  if (known?.stamp === stamp) return known;
+  const world = readJsonFile(worldPath, {});
+  const owners = new Set();
+  const add = (value) => {
+    const name = String(value ?? "").trim().toLowerCase();
+    if (name) owners.add(name);
+  };
+  for (const [key, polity] of Object.entries(world?.polityOverrides ?? {})) {
+    add(key);
+    add(polity?.name);
+    for (const alias of Array.isArray(polity?.aliases) ? polity.aliases : []) add(alias);
+  }
+  for (const value of Object.values(world?.regionOwnershipOverrides ?? {})) add(value);
+  for (const value of Object.values(world?.regionSovereigntyOverrides ?? {})) add(value);
+  for (const value of Array.isArray(world?.ownerCodes) ? world.ownerCodes : []) add(value);
+  for (const key of Object.keys(world?.groups ?? {})) add(key);
+  const facts = { stamp, handDrawn: isHandDrawnWorldRecord(world), owners };
+  handDrawnWorldCache.set(worldPath, facts);
+  return facts;
+};
+
+// A hand-drawn map's colours never carry the stock palette's real countries: a
+// colours file it does not have is no colours at all, and a stock country at its
+// stock colour that nothing on the map is, is left out. The next write of the
+// colours then saves them without it.
+const colorsForThisMap = (result) => {
+  const facts = activeWorldMapFacts();
+  if (!facts?.handDrawn || !result) return result;
+  const stockPath = resolveColorsAssetFile();
+  if (stockPath && result.sourcePath === stockPath) {
+    return { ...result, data: {}, sourcePath: null };
+  }
+  const colors = result.data;
+  if (!colors || typeof colors !== "object" || Array.isArray(colors) || !stockPath) return result;
+  const stock = readJsonFile(stockPath, {});
+  const kept = Object.fromEntries(Object.entries(colors).filter(([key, value]) => (
+    !Object.hasOwn(stock, key)
+    || facts.owners.has(String(key).trim().toLowerCase())
+    || JSON.stringify(stock[key]) !== JSON.stringify(value)
+  )));
+  return Object.keys(kept).length === Object.keys(colors).length ? result : { ...result, data: kept };
+};
+
 const readRuntimeJsonAsset = (assetKey) => {
+  const result = readRuntimeJsonAssetAsStored(assetKey);
+  return assetKey === "colors" ? colorsForThisMap(result) : result;
+};
+
+const readRuntimeJsonAssetAsStored = (assetKey) => {
   ensureGameStore();
   const activeGameForRecovery = getActiveGameSummary();
   if (activeGameForRecovery?.id) recoverPendingTurnCommit(activeGameForRecovery.id);

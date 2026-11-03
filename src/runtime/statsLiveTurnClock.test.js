@@ -66,6 +66,15 @@ test("positive subthreshold monthly evidence cannot be mistaken for zero when le
   }
 });
 
+test("a city air strike cannot silently add an absolute GDP/population writer on top of native chronology", () => {
+  assert.ok(plan({ turnFronts: { airStrikes: [{ kind: "structure", country: "Aland", power: 75 }] } }),
+    "a structural strike does not itself patch countryStats");
+  assert.equal(plan({ turnFronts: { airStrikes: [{ kind: "city", country: "Aland", power: 75, dead: 50 }] } }), null,
+    "upstream deterministic city losses are not yet dated native economic or demographic receipts");
+  assert.ok(plan({ turnFronts: { airStrikes: [{ kind: "city", country: "Aland", power: 0, dead: 0 }] } }),
+    "a strike that dropped no bombs is not a national Stats writer");
+});
+
 test("annual zero-blockade turn genuinely advances native GDP and emits all months", () => {
   const initial = fixture();
   const boundary = plan({ baseWorld: initial });
@@ -126,6 +135,10 @@ test("gameplay cutover is opt-in and does not call the legacy blockade or AI Sta
   assert.doesNotMatch(body, /nextWorld = await refreshTrackedCountryStatsIfDue\(/,
     "no partial or refused native settlement may invoke periodic AI re-baselining");
   assert.match(body, /if \(!nativeStatsChronology \|\| nativeStatsChronology\.partial\) requestConflictSheets/);
+  assert.match(body, /impactedWorld = withFrontPersonnel\(impactedWorld, turnFronts\)/);
+  assert.match(body, /impactedWorld = withAirStrikes\(impactedWorld, turnFronts/);
+  assert.doesNotMatch(body, /\bwithFrontManpower\b/,
+    "the retired frontApply import does not exist; canonical service commitment uses withFrontPersonnel");
 });
 
 import { addGameDays as addCivilDay, diffGameDays as countCivilDays } from "./gameDates.js";

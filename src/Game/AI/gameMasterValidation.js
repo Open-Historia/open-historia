@@ -251,6 +251,23 @@ export const validateGameMasterChronology = (candidate, game) => {
   return "";
 };
 
+// What the check above asks is the engine's to do: Apply happens today, so an
+// event that changes the world and is dated later is dated today. Asking the
+// model again for a date it cannot otherwise satisfy cost a request.
+export const settleGameMasterChronology = (candidate, game) => {
+  const currentDate = normalizeGameMasterIsoDate(game?.gameDate || game?.startDate);
+  if (!currentDate) return 0;
+  let moved = 0;
+  normalizeArray(candidate?.events).forEach((event, eventIndex) => {
+    const eventDate = normalizeGameMasterIsoDate(event?.date);
+    if (!eventDate || compareGameDates(eventDate, currentDate) <= 0) return;
+    if (!gameMasterEventHasCanonicalEffects(candidate, eventIndex)) return;
+    event.date = currentDate;
+    moved += 1;
+  });
+  return moved;
+};
+
 const resolveGameMasterLifecycleIdentity = (token, world) => {
   const requested = normalizeString(token);
   if (!requested) return "";
@@ -301,6 +318,14 @@ export const normalizeGameMasterPolityLifecycle = (candidate, world, baseActiveP
           ...change,
           operation: "restore",
           code: knownIdentity,
+        };
+      } else if (["create", "restore"].includes(operation) && activeIdentity) {
+        // Bringing into being a country that is already here: what the change
+        // carries (a name, a colour) is an update of it.
+        normalizedChange = {
+          ...change,
+          operation: "update",
+          code: activeIdentity,
         };
       } else if (operation === "restore" && knownIdentity) {
         normalizedChange = {
@@ -416,6 +441,32 @@ export const validateGameMasterBreakawaySovereignty = (candidate) => {
   }
 
   return "";
+};
+
+// The check above, done instead of asked for: a transfer of legal sovereignty
+// to a breakaway from the power it has just gone to war with becomes that
+// breakaway's de-facto control of the region, which is what the rule says the
+// transfer should have been. The map shows the region held either way.
+export const settleGameMasterBreakawaySovereignty = (candidate) => {
+  let moved = 0;
+  for (;;) {
+    const error = validateGameMasterBreakawaySovereignty(candidate);
+    const match = error.match(/^\$\.events\[(\d+)\]\.impacts\.regionTransfers\[(\d+)\]/);
+    if (!match) return moved;
+    const event = candidate.events[Number(match[1])];
+    const [transfer] = event.impacts.regionTransfers.splice(Number(match[2]), 1);
+    event.impacts.regionControlOps = [
+      ...normalizeArray(event.impacts.regionControlOps),
+      {
+        op: "control",
+        regionId: transfer?.regionId,
+        fromCode: transfer?.fromCode,
+        toCode: transfer?.toCode,
+        note: normalizeString(transfer?.note),
+      },
+    ];
+    moved += 1;
+  }
 };
 
 // GM Apply must never report success merely because the common mutation seam

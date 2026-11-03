@@ -14,7 +14,9 @@ test("cities use ranked game markers with dedicated capital stars", () => {
   assert.match(cities, /circle-radius/);
   assert.match(cities, /circle-stroke-width/);
   assert.match(cities, /isStockCapital/);
-  assert.match(cities, /isCustomCapital/);
+  // A capital is the map's own or one a country names now (capitalExpr).
+  assert.match(cities, /capital=\{customCapital\}/);
+  assert.match(cities, /capital=\{stockCapital\}/);
 });
 
 test("capital labels stay white while the capital marker carries the gold accent", () => {
@@ -33,7 +35,7 @@ test("minor settlements are progressively revealed instead of saturating regiona
   assert.match(cityExpressions, /8\.25, 150000/);
   // The stock layers take them from there; cityLayerExpressions.test.js
   // evaluates them against AI-set populations.
-  assert.match(cities, /filter=\{populationLabelFilter\(pop\)\}/);
+  assert.match(cities, /filter=\{populationLabelFilter\(pop, capital\)\}/);
   assert.match(cities, /const customLabelFilter/);
   assert.match(cities, /\[">=", \["zoom"\], 5\.8\]/);
   assert.match(cities, /\[">=", \["zoom"\], 6\.5\]/);

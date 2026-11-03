@@ -4,7 +4,7 @@ import test from "node:test";
 
 import {
   DEFAULT_INTELLIGENCE, MAX_ACTIVE_SPIES, MAX_FOREIGN_SPIES,
-  activeSpies, applySpyOps, cannotSpy, deploySpy, detectionChance, espionageBrief, expelSpy, foreignAgentBrief, foreignDeployChance,
+  activeSpies, applySpyOps, deploySpy, detectionChance, espionageBrief, expelSpy, foreignAgentBrief, foreignDeployChance,
   foreignSpies, intelligenceOf, normalizeIntercepts, normalizeSpies, recallSpy, redactExchange, redactText,
   resolveEspionage, setCoverStory, signalClarity, suspicionChance, turnChance, turnSpy,
 } from "./spycraft.js";
@@ -149,53 +149,6 @@ test("the foreign-spy cap and the one-agent-per-polity rule hold", () => {
   const inFrance = foreignSpies(world, P);
   assert.ok(inFrance.length <= MAX_FOREIGN_SPIES);
   assert.equal(new Set(inFrance.map((s) => s.owner)).size, inFrance.length, "one agent per polity");
-});
-
-test("a polity the scenario marks noSpies is read by key, name or alias", () => {
-  const world = { polityOverrides: { giants: { name: "The Giants", aliases: ["Giants"], noSpies: true }, Pentos: { name: "Pentos" } } };
-  assert.equal(cannotSpy(world, "giants"), true);
-  assert.equal(cannotSpy(world, "the giants"), true);
-  assert.equal(cannotSpy(world, "Giants"), true);
-  assert.equal(cannotSpy(world, "Pentos"), false);
-  assert.equal(cannotSpy(world, "Braavos"), false);
-  assert.equal(cannotSpy({}, "The Giants"), false);
-});
-
-test("a noSpies polity never plants an agent in the player, whatever its odds", () => {
-  let world = { intelligence: { "The Giants": 100, France: 0 }, polityOverrides: { "The Giants": { name: "The Giants", noSpies: true } }, spies: [] };
-  for (let round = 1; round <= 60; round += 1) {
-    const out = resolveEspionage(world, { round, date: "d", playerPolity: P, candidates: [{ polity: "The Giants", hostile: true }] });
-    world = { ...world, spies: out.spies };
-  }
-  assert.deepEqual(foreignSpies(world, P), []);
-});
-
-test("a noSpies polity's live agents are quietly withdrawn; a caught one still waits on the player", () => {
-  const world = {
-    intelligence: { "The Giants": 0, France: 0 },
-    polityOverrides: { "The Giants": { name: "The Giants", noSpies: true } },
-    spies: [
-      { id: "g-1", owner: "The Giants", target: P, status: "turned" },
-      { id: "g-2", owner: "The Giants", target: "Germany", status: "active" },
-      { id: "g-3", owner: "The Giants", target: "Italy", status: "discovered" },
-      { id: "f-1", owner: P, target: "The Giants", status: "active" },
-    ],
-  };
-  const out = resolveEspionage(world, { round: 1, date: "d", playerPolity: P });
-  const status = Object.fromEntries(normalizeSpies(out.spies).map((spy) => [spy.id, spy.status]));
-  assert.equal(status["g-1"], "recalled");
-  assert.equal(status["g-2"], "recalled");
-  assert.equal(status["g-3"], "discovered");
-  assert.notEqual(status["f-1"], "recalled", "others may still spy on a noSpies polity");
-  assert.ok(!out.events.some((event) => /Giants/.test(event.title)), "the withdrawal is silent");
-});
-
-test("a noSpies polity cannot deploy an agent by hand or by order", () => {
-  const world = { polityOverrides: { "The Giants": { name: "The Giants", noSpies: true } }, spies: [] };
-  assert.throws(() => deploySpy(world, "House Stark", { playerPolity: "The Giants" }), /runs no spies/);
-  const result = applySpyOps(world, [{ op: "deploy", target: "House Stark" }], { playerPolity: "The Giants" });
-  assert.equal(result.applied.length, 0);
-  assert.match(result.rejected[0].reason, /runs no spies/);
 });
 
 test("clarity: reader's service does nearly all of it, target's hurts a little, never zero", () => {

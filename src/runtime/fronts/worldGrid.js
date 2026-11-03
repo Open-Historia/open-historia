@@ -76,17 +76,76 @@ export const arcTan2 = (y, x) => {
   return y < 0 ? -turned : turned;
 };
 
+// The height the map draws a latitude at, in degrees (Web Mercator: the angle
+// whose hyperbolic tangent is the latitude's sine), in the engine's arithmetic:
+// that angle halved until small (atanh s = 2 atanh(s / (1 + √(1 − s²)))), then
+// its series. A flat sheet is measured on this height (server/mapDistance.js).
+const MERCATOR_MOST_LAT = 85.0511287798066;
+export const planeY = (lat) => {
+  const value = Number(lat) || 0;
+  const clamped = value > MERCATOR_MOST_LAT ? MERCATOR_MOST_LAT : value < -MERCATOR_MOST_LAT ? -MERCATOR_MOST_LAT : value;
+  let s = sine(clamped * RAD);
+  let doublings = 1;
+  for (let halving = 0; halving < 8 && (s > 0.05 || s < -0.05); halving += 1) {
+    s /= 1 + Math.sqrt(1 - s * s);
+    doublings *= 2;
+  }
+  const square = s * s;
+  let sum = 0;
+  for (let odd = 21; odd >= 1; odd -= 2) sum = 1 / odd + square * sum;
+  return (doublings * s * sum) / RAD;
+};
+
+// A map's measure as the engine is told it (server/mapDistance.js engineMapOf
+// puts it on the input's `map`): what every distance here is taken with.
+//   flat, scale   a freeform sheet: straight across, `scale` km a degree of it
+//   factor        a world projection's scale line: every great circle times it
+//   metric        a world projection that is not Mercator: kilometres by the map's height
+// Nothing for plain Mercator, which is measured as it always was.
+export const measureOptions = (map) => ({
+  flat: map?.flat === true,
+  scale: map?.scale,
+  ...(Number(map?.factor) > 0 && map.factor !== 1 ? { factor: Number(map.factor) } : {}),
+  ...(map?.metric && Array.isArray(map.metric.kx) ? { metric: map.metric } : {}),
+});
+
+// A world projection's table read at a height y (metric: kx and m by the map's
+// height, every `step` from `from`), a straight line between its rows.
+const metricAt = (column, metric, y) => {
+  const at = (y - metric.from) / metric.step;
+  const last = column.length - 1;
+  if (!(at > 0)) return column[0];
+  if (at >= last) return column[last];
+  const row = Math.floor(at);
+  return column[row] + (column[row + 1] - column[row]) * (at - row);
+};
+
 // The kilometres between two points: along the great circle on a globe, and
-// straight across a flat sheet at its own scale.
-export const kmBetween = (lngA, latA, lngB, latB, { flat = false, scale = KM_PER_DEGREE } = {}) => {
-  if (flat) return Math.sqrt((lngB - lngA) * (lngB - lngA) + (latB - latA) * (latB - latA)) * scale;
+// straight across a flat sheet at its own scale (measured on the height the map
+// draws it at, so a degree of the sheet is as long at its top as in its middle).
+// On a world projection that is not Mercator the places are where it draws
+// them: across, a degree of longitude at their middle height; up and down,
+// the meridian between their heights.
+export const kmBetween = (lngA, latA, lngB, latB, { flat = false, scale = KM_PER_DEGREE, factor = 1, metric = null } = {}) => {
+  if (flat) {
+    const dy = planeY(latB) - planeY(latA);
+    return Math.sqrt((lngB - lngA) * (lngB - lngA) + dy * dy) * (Number(scale) > 0 ? scale : KM_PER_DEGREE);
+  }
+  if (metric) {
+    const yA = planeY(latA);
+    const yB = planeY(latB);
+    const across = (unwrapLng(lngB, lngA) - lngA) * metricAt(metric.kx, metric, (yA + yB) / 2);
+    const up = metricAt(metric.m, metric, yB) - metricAt(metric.m, metric, yA);
+    return Math.sqrt(across * across + up * up);
+  }
   const a = latA * RAD;
   const b = latB * RAD;
   const down = sine((b - a) / 2);
   const across = sine(((lngB - lngA) * RAD) / 2);
   const h = Math.min(1, Math.max(0, down * down + cosine(a) * cosine(b) * across * across));
   // (Twice the angle whose sine is the root of h.)
-  return 2 * EARTH_KM * arcTan2(Math.sqrt(h), Math.sqrt(1 - h));
+  const km = 2 * EARTH_KM * arcTan2(Math.sqrt(h), Math.sqrt(1 - h));
+  return factor === 1 ? km : km * factor;
 };
 
 // The point a share of the way from one place to another along the great
@@ -152,7 +211,8 @@ export const worldSheetKey = (mapKey, water = null) => {
 //   water   the ids of the region types that are water (regionTypes.js
 //           waterTypeIds): a region of one is sea on the sheet, like the sea
 //           no region covers. The sheet still reaches as far as they do.
-export const buildWorldGrid = (regions, { flat = false, scale = KM_PER_DEGREE, step: asked = 0, water = null } = {}) => {
+export const buildWorldGrid = (regions, { flat = false, scale = KM_PER_DEGREE, factor = 1, metric = null, step: asked = 0, water = null } = {}) => {
+  const measure = { flat, scale, factor, metric };
   const list = Array.isArray(regions) ? regions : [];
   const box = boundsOf(list);
   if (!box) return null;
@@ -262,7 +322,7 @@ export const buildWorldGrid = (regions, { flat = false, scale = KM_PER_DEGREE, s
   }
   if (!any) return null;
 
-  const grid = { cols, rows, west, north, step, wrap, flat, scale, land, region, ids, full: SUB * SUB };
+  const grid = { cols, rows, west, north, step, wrap, flat, scale, factor, metric, land, region, ids, full: SUB * SUB };
   // The cell a point lies in, or -1 when it is off the sheet.
   grid.cellOf = (lng, lat) => {
     const row = Math.floor((north - lat) / step);
@@ -272,17 +332,21 @@ export const buildWorldGrid = (regions, { flat = false, scale = KM_PER_DEGREE, s
   };
   // The middle of a cell, as [lng, lat].
   grid.centreOf = (cell) => [west + ((cell % cols) + 0.5) * step, north - (Math.floor(cell / cols) + 0.5) * step];
-  grid.km = (lngA, latA, lngB, latB) => kmBetween(lngA, latA, lngB, latB, { flat, scale });
+  grid.km = (lngA, latA, lngB, latB) => kmBetween(lngA, latA, lngB, latB, measure);
   // How long a step from a cell to the next is, by the row it is made in:
-  // along the row, and aslant to the row below. (Down a column it is the same everywhere.)
+  // along the row, aslant to the row below, and down to it. (On a globe down a
+  // column is the same everywhere; on a flat sheet or another projection it is
+  // not: a degree of latitude is drawn taller toward the top and bottom.)
   const along = new Float64Array(rows);
   const aslant = new Float64Array(rows);
+  const downRow = new Float64Array(rows);
   for (let row = 0; row < rows; row += 1) {
     const lat = north - (row + 0.5) * step;
-    along[row] = kmBetween(0, lat, step, lat, { flat, scale });
-    aslant[row] = kmBetween(0, lat, step, lat - step, { flat, scale });
+    along[row] = kmBetween(0, lat, step, lat, measure);
+    aslant[row] = kmBetween(0, lat, step, lat - step, measure);
+    downRow[row] = kmBetween(0, lat, 0, lat - step, measure);
   }
-  grid.stepKm = { along, aslant, down: kmBetween(0, north - step * 0.5, 0, north - step * 1.5, { flat, scale }) };
+  grid.stepKm = { along, aslant, down: kmBetween(0, north - step * 0.5, 0, north - step * 1.5, measure), downRow: flat || metric ? downRow : null };
   // The cosine of each row's latitude, for the distances a search guesses by.
   grid.rowCosine = Float64Array.from({ length: rows }, (_, row) => cosine((north - (row + 0.5) * step) * RAD));
   return grid;
@@ -292,14 +356,32 @@ export const buildWorldGrid = (regions, { flat = false, scale = KM_PER_DEGREE, s
 // for, without a sine a cell: the part of the distance each row adds, and each
 // number of columns apart. Returns (cell) => kilometres.
 export const distanceTo = (grid, goal) => {
-  const { cols, rows, step, flat, scale, wrap } = grid;
+  const { cols, rows, step, flat, scale, wrap, metric } = grid;
   const goalRow = Math.floor(goal / cols);
   const goalCol = goal % cols;
-  if (flat) return (cell) => {
-    const dx = (cell % cols) - goalCol;
-    const dy = Math.floor(cell / cols) - goalRow;
-    return Math.sqrt(dx * dx + dy * dy) * step * scale;
-  };
+  if (flat || metric) {
+    // Each row's height as the map draws it: rows of the sheet are not all as tall.
+    const height = new Float64Array(rows);
+    for (let row = 0; row < rows; row += 1) height[row] = planeY(grid.north - (row + 0.5) * step);
+    if (flat) {
+      const perDegree = Number(scale) > 0 ? scale : KM_PER_DEGREE;
+      return (cell) => {
+        const dx = ((cell % cols) - goalCol) * step;
+        const dy = height[Math.floor(cell / cols)] - height[goalRow];
+        return Math.sqrt(dx * dx + dy * dy) * perDegree;
+      };
+    }
+    const upTo = Float64Array.from(height, (y) => metricAt(metric.m, metric, y));
+    return (cell) => {
+      const row = Math.floor(cell / cols);
+      let apart = (cell % cols) - goalCol;
+      if (apart < 0) apart = -apart;
+      if (wrap && apart > cols - apart) apart = cols - apart;
+      const across = apart * step * metricAt(metric.kx, metric, (height[row] + height[goalRow]) / 2);
+      const up = upTo[row] - upTo[goalRow];
+      return Math.sqrt(across * across + up * up);
+    };
+  }
   const down = new Float64Array(rows);
   for (let row = 0; row < rows; row += 1) {
     const half = sine(((row - goalRow) * step * RAD) / 2);
@@ -311,13 +393,14 @@ export const distanceTo = (grid, goal) => {
     across[apart] = half * half;
   }
   const goalCosine = grid.rowCosine[goalRow];
+  const earthTimes = Number(grid.factor) > 0 ? grid.factor : 1;
   return (cell) => {
     const row = Math.floor(cell / cols);
     let apart = (cell % cols) - goalCol;
     if (apart < 0) apart = -apart;
     if (wrap && apart > cols - apart) apart = cols - apart;
     const h = Math.min(1, down[row] + grid.rowCosine[row] * goalCosine * across[apart]);
-    return 2 * EARTH_KM * arcTan2(Math.sqrt(h), Math.sqrt(1 - h));
+    return 2 * EARTH_KM * arcTan2(Math.sqrt(h), Math.sqrt(1 - h)) * earthTimes;
   };
 };
 

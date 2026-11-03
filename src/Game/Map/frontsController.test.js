@@ -142,3 +142,14 @@ test("a formation at a battlefield being fought over is drawn there, and nowhere
   resetFrontsForTest([]);
   assert.equal(isAtTheFront({ committedTo: "Eastern Ukraine" }), false);
 });
+
+// "it looks like built up troops are invisible in the released version" (the owner, 2026-11-03): forces built up in
+// peace, at home or on a border, are a record standing, and only those fought over were drawn.
+test("forces built up in peace are drawn on the map, and a formation among them is drawn there", () => {
+  const home = battlefield({ name: "Russia home forces", status: "standing", home: true, warId: "", replay: replayOfRun({ days: 0, closes: 0 }) });
+  resetFrontsForTest([home]);
+  const [target] = getFrontTargets();
+  assert.equal(target?.view.status, "standing");
+  assert.equal(isAtTheFront({ committedTo: "Russia home forces" }), true);
+  resetFrontsForTest([]);
+});

@@ -19,8 +19,10 @@ import { getNationColors, getNationFlags } from "../../runtime/assets.js";
 import { subscribeUnits, getUnits, getPendingUnitOrders, startUnitsSync } from "./unitsController.js";
 import { isAtTheFront, startFrontsSync, subscribeFronts } from "./frontsController.js";
 import { shortUnitLabel } from "./unitLabels.js";
-import { resolveUnitFlagUrl, syncUnitFlagIcons } from "./unitFlagIcons.js";
+import { resolveUnitFlagUrl, syncUnitFlagIcons, unitFlagIdentityIndex } from "./unitFlagIcons.js";
 import { useWorldState } from "./useWorldState.js";
+import { mapRing } from "../../../server/mapDistance.js";
+import { currentMapMeasure } from "../../runtime/mapMeasure.js";
 import { createOwnerRgbResolver, ownerDisplayCss } from "./ownerColors.js";
 
 export { shortUnitLabel };
@@ -89,6 +91,9 @@ const UNOWNED_UNIT_COLOR = "rgb(120, 120, 120)";
 // on a circle layer's radius, which is measured in screen pixels and would grow
 // and shrink with the zoom instead of marking a fixed patch of ocean.
 const stationRing = (lng, lat, radiusKm) => {
+  // (A map that is not plain Mercator draws it by its own measure: server/mapDistance.js.)
+  const measure = currentMapMeasure();
+  if (!measure.plain) return mapRing(measure, lng, lat, radiusKm, STATION_RING_POINTS);
   const toRad = (deg) => (deg * Math.PI) / 180;
   const toDeg = (rad) => (rad * 180) / Math.PI;
   const delta = radiusKm / EARTH_RADIUS_KM;
@@ -336,11 +341,13 @@ const Units = () => {
       const mapInstance = map?.getMap?.() ?? map;
       const { customFlags, polities } = flagSourcesRef.current;
       const owners = [...new Set(unitsRef.current.map((unit) => unit.ownerCode).filter(Boolean))];
+      // (One index of the polities for every owner: this runs again as each flag arrives.)
+      const identityIndex = owners.length > 0 ? unitFlagIdentityIndex(polities) : null;
       flagIconsRef.current = syncUnitFlagIcons(
         mapInstance,
         owners.map((ownerCode) => ({
           ownerCode,
-          url: resolveUnitFlagUrl(ownerCode, customFlags, polities),
+          url: resolveUnitFlagUrl(ownerCode, customFlags, polities, identityIndex),
         })),
         // A flag that arrives later has to be folded in and repainted, because
         // the icon id only reaches the bucket through setData. A tween already

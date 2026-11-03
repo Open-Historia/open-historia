@@ -58,7 +58,7 @@ test("one request rates up to twenty polities, every one against the others and 
   assert.match(userMessage, /^The scenario's date: 0298-03-01$/m);
   assert.match(userMessage, /^The era its wars are fought in: Before 1500$/m);
   assert.match(userMessage, /ERA & WORLD RULES:\nA world of swords and dragons\./);
-  assert.match(userMessage, /ALREADY RATED \(the scale your figures keep to; do not return these\):\n- The Reach: quality 55, technology 50, land 70, sea 60, air 0, spending 75, 12% of its people under arms, its people 9000000/);
+  assert.match(userMessage, /ALREADY RATED \(the scale your figures keep to; do not return these\):\n- The Reach: quality 55, technology 50, land 70, sea 60, air 0, spending 75, 12% of its people fit to call up, its people 9000000/);
   assert.match(userMessage, /RATE THESE \(3\):\n- The Dothraki Sea; its people 1200000; what the scenario says of it: Horselords of the grass sea/);
   assert.match(userMessage, /^- Braavos$/m);
   // Twenty to a request.
@@ -110,7 +110,7 @@ test("which figures want rating, how the rated are shown, and who is shown as th
   assert.equal(wantsRating(FULL), false);
   assert.equal(wantsRating({ ...FULL, spending: undefined }), true, "rated before spending was one of the figures");
   assert.deepEqual(ratedFigures({ ...FULL, weariness: 20, muster: [[0.5, 20], [1, 60]] }), FULL);
-  assert.equal(describeMilitary({ quality: 60, technology: 75, manpowerShare: 10.25 }, 146e6), "quality 60, technology 75, 10.3% of its people under arms, its people 146000000");
+  assert.equal(describeMilitary({ quality: 60, technology: 75, manpowerShare: 10.25 }, 146e6), "quality 60, technology 75, 10.3% of its people fit to call up, its people 146000000");
   assert.equal(describeMilitary(null), "");
   const scale = ratedScaleOf([
     { name: "Partial", military: { quality: 40 } },

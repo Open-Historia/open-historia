@@ -58,7 +58,7 @@ Never emit native-only set-political-pressures or set-behavioral-disposition. If
 8. countryStatPatches = ADMIN BASELINE CORRECTIONS in Direct mode ONLY, explicitly requested by the administrator. These are never simulated outcomes: in exact-event or world-intervention modes, return countryStatPatchesJson as [] and never write absolute GDP, population or native macro rates via impacts.polityChanges[].stats. For a financial crisis, strike or other event-driven national impact, attach a bounded, dated impacts.polityChanges[].statsEffects to the event; for temporary growth pressure, use annualRealGrowthDelta, durationDays, gdpCause and a specific reason. Only estimate an uncertain crisis when credible country-specific exposure is established: economicShockEstimate requires sourceStorylineId linked to the same active crisis, evidence, channel and exposure. Otherwise document the disruption without fabricating a numeric loss. Do not confuse a national GDP stock with a growth-rate effect. Direct mode retains explicit absolute corrections, with the live scenario custom-sheet rules taking precedence.
 8A. impacts.fiscalOps = a SEPARATE dated nominal fiscal ledger. When an event ENACTS an explicitly priced civilian grant, relief, procurement or transfer, add {"op":"authorize","id":"stable-id","polity":"Full Name","kind":"grant|relief|procurement|transfer","amount":600000000,"currency":"USD","reason":"specific enacted authorization"}. Authorization DOES NOT mean paid. Later pay only against an existing authorization with independently established transfer and already-budgeted funding: {"op":"pay","id":"same-id","amount":200000000,"funding":"already-budgeted","reason":"confirmed transfer"}. Cancel remaining unpaid authority with {"op":"cancel","id":"same-id","reason":"specific cancellation"}. Project creation/progress is NEVER itself authorization or expenditure. For a formally ENACTED and explicitly bounded tax holiday whose TOTAL nominal revenue-foregone forecast, currency and term are known, emit {"op":"enact-tax-holiday","id":"stable-policy-id","polity":"Full Name","amount":2000000000,"currency":"USD","startDate":"2026-01-01","endDate":"2026-04-01","reason":"actual law and evidence for the $2bn total forecast"}. startDate is the effective accounting boundary, the first accrued civil day is the next day, endDate is the final covered day; the term must be 1..240 days. A repeal uses {"op":"repeal-tax-holiday","id":"stable-policy-id","reason":"enacted repeal"}. The deterministic nominal FORECAST may accrue across turns, but it is NOT an actual tax receipt, Treasury payment or national budget/debt/GDP mutation. Never invent a missing forecast, term, currency, payment, borrowing or GDP conversion. If the input only says "$2bn tax holiday" without proving its total accounting basis and dates, report the missing basis instead of guessing.
 9. impacts.unitOps = persistent military unit mutations: spawn a genuinely new formation, or move, strength, remove for an existing unit, named in unitId exactly as current military units lists it. Reuse the existing units listed there.
-10. impacts.markerOps = persistent physical-world lifecycle mutations: build, update, rename, remove, population. BUILD only a genuinely new, significant, named, geographically concrete feature. UPDATE an existing feature's status, owner, kind, note or location by its name; destruction is an update to status destroyed, not a removal. RENAME a city, capital or structure whenever an action or event decrees a name change: {"op":"rename","name":"<current name>","newName":"<new name>"}. REMOVE only for a canonical correction.
+10. impacts.markerOps = persistent physical-world lifecycle mutations: build, update, rename, remove, population. BUILD only a genuinely new, significant, named, geographically concrete feature. UPDATE an existing feature's status, owner, kind, note or location by its name; destruction is an update to status destroyed, not a removal. RENAME a city, capital, structure or region whenever an action or event decrees a name change: {"op":"rename","name":"<current name or region: name>","newName":"<new name>"}. REMOVE only for a canonical correction.
 11. warUpdates controls ONLY world.wars belligerency. Relations are not wars. A defensive alliance binds once a turn is played (the game then enters a defender's allies in its war itself); in this console nothing is entered for you, so write every join you mean. Any event that starts, joins, leaves, ceasefires, resumes or ends a war must carry the matching warUpdates operation and, on the event itself, the same warId and its combatants.
 12. storylineUpdates controls the persistent world.storylines ledger: the unresolved multi-turn processes (a crisis, an insurgency, a negotiation in progress, an economic emergency, a war's course) whose hidden state the world director advances between turns. Create one when the transaction leaves a process unresolved, advance or resolve the existing id when it changes one, and never mirror a single settled fact as a storyline. participants are cumulative; state says what is true now and why the process is still open.
 13. Every storylineUpdates, warUpdates, relationUpdates, agreementUpdates and puppetUpdates entry must reference at least one real transaction event through eventIndexes. Even direct mode should author a concise correction event when it changes a ledger.
@@ -83,7 +83,7 @@ eventsJson element:
 - polityChanges: {"operation":"update|create|rename|restore|dissolve","code":"","name":"","color":"","aliases":[],"reputation":50,"intelligence":50,"tags":[],"stats":{},"note":""}; include only fields actually changed except operation/code. For create/restore, code is the stable polity identity; name may be a different current regime/display name only when this event establishes it
 - politicalActorOps: {"op":"replace-leader|set-government|set-political-system|create-party|update-party|set-party-support|set-party-influence|set-party-leader|create-power-bloc|update-power-bloc|set-power-bloc-influence|form-coalition|leave-coalition|set-strategy|set-traits|set-perceptions|remove-perception","polityKey":"Full Polity Name","argsJson":"{...}"}; operation-specific args live inside the JSON string and are validated natively. Use the exact decoded argsJson shapes in rule 7; never improvise wrappers. set-traits keys are limited to: ${POLITICAL_TRAIT_KEYS.join(", ")}
 - unitOps: spawn {"op":"spawn","unit":{"name":"","type":"infantry|armor|air|naval|artillery|garrison","ownerCode":"","strength":100,"composition":"","at":"<where, in words, each name with its kind and its country: region: Montana, country: United States / near city: Kharkiv, country: Ukraine / off city: Sevastopol, country: Ukraine>","posture":"holding","note":""}}; move {"op":"move","unitId":"<the unit's name>","at":"<where, in words, with kinds and the country>","posture":"","note":""}; strength {"op":"strength","unitId":"<the unit's name>","strength":0,"note":""}; remove {"op":"remove","unitId":"<the unit's name>","note":""}. Say WHERE with at (see [Placing Things]); lng/lat only for a spot no name describes.
-- markerOps: build {"op":"build","marker":{"name":"","kind":"","ownerCode":"","status":"active","at":"<where, in words, with kinds and the country: region: Montana, country: United States>","note":"","foundedAt":""}}; update {"op":"update","name":"<its name as the list spells it>","kind":"","ownerCode":"","status":"","note":""}; rename {"op":"rename","name":"","newName":"","note":""}; remove {"op":"remove","name":"","note":""}; population {"op":"population","name":"","population":0,"note":""}
+- markerOps: build {"op":"build","marker":{"name":"","kind":"","ownerCode":"","status":"active","at":"<where, in words, with kinds and the country: region: Montana, country: United States>","note":"","foundedAt":""}}; update {"op":"update","name":"<its name as the list spells it>","kind":"","ownerCode":"","status":"","note":""}; rename {"op":"rename","name":"<current name or region: name>","newName":"","note":""}; remove {"op":"remove","name":"","note":""}; population {"op":"population","name":"","population":0,"note":""}
 - createdChats/diplomaticOutreach: {"countries":["Full Polity Name"],"title":"","speaker":"Full Polity Name","openingMessage":""}
 - projectOps (the player's Projects & Operations board, only when the request touches it): {"op":"create|update|milestone|complete|cancel|fail|remove","projectId":"","name":"","summary":"","status":"","progress":0,"note":""}; copy an existing project's id and name exactly
 - fiscalOps (nominal civic appropriations, independently evidenced budgeted transfers, and cancellation only): authorize {"op":"authorize","id":"stable-id","polity":"Full Polity Name","kind":"grant","amount":600000000,"currency":"USD","reason":"specific enacted authorization"}; pay {"op":"pay","id":"existing-id","amount":200000000,"funding":"already-budgeted","reason":"verified payment"}; cancel {"op":"cancel","id":"existing-id","reason":"why remaining authority ended"}. Tax policy: enact {"op":"enact-tax-holiday","id":"stable-id","polity":"Full Name","amount":2000000000,"currency":"USD","startDate":"2026-01-01","endDate":"2026-04-01","reason":"evidenced enacted TOTAL nominal relief"}; repeal {"op":"repeal-tax-holiday","id":"existing-id","reason":"law withdrawing future exemption"}. Put these lists under the event's impacts. Never emit a payment simply because projectOps advanced, nor invent a tax policy's amount, dates or accounting basis.
@@ -193,6 +193,32 @@ export const PROMPT_SECTION_DEFINITIONS = [
     type: "task",
   },
   {
+    description: "A polity's government and its main parties or factions, for the Politics tab.",
+    helpers: [
+      "PLAYER_POLITY",
+      "ORIGIN_ROUND_DATE",
+      "HISTORICAL_PRESET_SIMULATION_RULES",
+      "GRAND_MAP_DESCRIPTION",
+      "PREVIOUS_ROUND_EVENTS",
+    ],
+    key: "politicalLandscape",
+    label: "Political Landscape",
+    type: "task",
+  },
+  {
+    description: "How far the player's standing goal has come, for the Actions panel.",
+    helpers: [
+      "PLAYER_POLITY",
+      "ORIGIN_ROUND_DATE",
+      "HISTORICAL_PRESET_SIMULATION_RULES",
+      "GRAND_MAP_DESCRIPTION",
+      "PREVIOUS_ROUND_EVENTS",
+    ],
+    key: "goalProgress",
+    label: "Goal Progress",
+    type: "task",
+  },
+  {
     description: "Structured national statistics for the selected polity.",
     key: "countryStatSheet",
     label: "Country Stat Sheet",
@@ -263,12 +289,6 @@ export const PROMPT_SECTION_DEFINITIONS = [
     description: "An unprompted note between turns: while the game sits open, whether some polity has a live reason to write to the player, and the small movement of forces that rides on the same call. How often it is asked is the Features tab's idle diplomacy setting.",
     key: "idleDiplomacy",
     label: "Idle Diplomacy",
-    type: "task",
-  },
-  {
-    description: "What ordinary people in a place are posting: the feed the Listen in button opens from a region's card or a country's panel. Whether the button is there at all is the Features tab's Listen in switch.",
-    key: "listenIn",
-    label: "Listen In",
     type: "task",
   },
   {

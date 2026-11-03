@@ -6,6 +6,7 @@ import COUNTRY_NAMES from "./generated/countryNames.js";
 import { gameDateDayNumber } from "./gameDates.js";
 import { buildOwnerAliasMap, createOwnerResolver, regionBaseOwner } from "./ownerNames.js";
 import { resolvePolityIdentity } from "./polityIdentity.js";
+import { resolveRegionName } from "./regionNameFixes.js";
 
 const clean = (value) => String(value ?? "").trim();
 
@@ -55,15 +56,18 @@ export const classifyPolityRegions = ({ catalog = [], world = {}, polityKey = ""
     seen.add(regionId);
   };
 
+  const resolveName = (id, baseName) =>
+    resolveRegionName(id, baseName, world?.regionRenames) || clean(baseName) || id;
+
   for (const region of Array.isArray(catalog) ? catalog : []) {
     const id = clean(region?.id);
     if (!id) continue;
-    classify(id, clean(region?.name) || id, owner(regionBaseOwner(region)));
+    classify(id, resolveName(id, region?.name), owner(regionBaseOwner(region)));
   }
 
   if (includeUncatalogued) {
     for (const regionId of new Set([...Object.keys(ownership), ...Object.keys(sovereignty)])) {
-      if (!seen.has(regionId)) classify(regionId, regionId, "");
+      if (!seen.has(regionId)) classify(regionId, resolveName(regionId, regionId), "");
     }
   }
 

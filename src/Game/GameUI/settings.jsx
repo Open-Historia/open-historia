@@ -39,9 +39,7 @@ import {
     updateEntry,
 } from "../AI/providerConfig.js";
 import { formatResetTime } from "../AI/fallbackRunner.js";
-import { contextWindowKey, createContextWindowMemory, describeRememberedWindow } from "../AI/contextWindow.js";
 import { useWorldBackground } from "../Map/useWorldState.js";
-import { endpointIsLocal } from "../AI/localEndpoint.js";
 import { announceRequestBudgetChange, describeJumpCost, requestDay, requestSettings, requestsByTask } from "../AI/requestBudget.js";
 import {
     AI_REQUEST_CONTROL_EVENT,
@@ -749,44 +747,6 @@ const ApiProviderSelector = ({ provider, onProviderChange }) => {
     );
 };
 
-// What each model has said about its context window (contextWindow.js), read
-// from the same storage the AI calls keep it in (main.jsx contextWindows).
-const contextWindowMemory = createContextWindowMemory({
-    getItem: (key) => { try { return localStorage.getItem(key); } catch { return null; } },
-    setItem: (key, value) => { try { localStorage.setItem(key, value); } catch { /* this session only */ } },
-});
-
-// A model's context window: what was learned from its refusals, which keeps a
-// request it cannot fit from being sent to it, and the player's own figure,
-// which beats that. Forget clears either — for a local model whose window was
-// raised, or a provider that raised its limit — and the next request is sent.
-const ContextWindowField = ({ entry }) => {
-    const [, setRevision] = useState(0);
-    if (!entry) return null;
-    const key = contextWindowKey(entry);
-    // Nothing learned from a server on this machine or network is in force
-    // (main.jsx windowIsLearned), so only the player's own figure is shown for it.
-    const known = contextWindowMemory.remembered(key, { trustLearned: !endpointIsLocal(entry.endpoint) });
-    const changed = () => setRevision((value) => value + 1);
-    return (
-        <div>
-        <SettingsInput
-        label="Context window (tokens)"
-        type="number"
-        value={known?.source === "declared" ? String(known.limitTokens) : ""}
-        onChange={(value) => { contextWindowMemory.declare(key, Number(value)); changed(); }}
-        placeholder="Not set"
-        helperText={describeRememberedWindow(known)}
-        />
-        {known && (
-            <button type="button" className="oh-tap-row" onClick={() => { contextWindowMemory.forget(key); changed(); }} style={{ ...smallButtonStyle, marginTop: "-0.5rem", marginBottom: "0.9rem" }}>
-            Forget this window
-            </button>
-        )}
-        </div>
-    );
-};
-
 // How to ask this provider for structured data. "Auto" tries the strongest
 // method and steps down when a gateway ignores it, which is right for almost
 // everyone — but that discovery costs a full generation per rung, and on a slow
@@ -1217,7 +1177,6 @@ const EntryEditor = ({ entry, connections, entries }) => {
         helperText="Replaces the connection's custom parameters for this entry — e.g. the same model with a larger max_tokens, picked by the Time skip task."
         />
         <StructuredModeSelect value={entry.structuredMode} onChange={set("structuredMode")} />
-        <ContextWindowField entry={entry.resolved} />
         </details>
         </>
         )}
@@ -1747,34 +1706,39 @@ const SocialLinks = ({ discordUrl, redditUrl, githubUrl }) => {
     );
 };
 
-// Same corner and size as always (the top bar's session pill is laid out from
-// it), in the glass finish and with the menu glyph.
+// Same corner and size as the top bar (the session pill and Exit Game button
+// are laid out from it with matching 2.85rem height and 12px corners on desktop),
+// in the glass finish and with the menu glyph.
 // `hidden` while the menu is open: the menu grows out of this button and
 // shrinks back into it, so the button itself steps aside meanwhile.
-const SettingsButton = ({ onToggle, topOffset = "0.5rem", hidden = false }) => (
-    <button
-    type="button"
-    aria-label="Open game menu"
-    title="Game menu"
-    onClick={onToggle}
-    style={{
-        ...baseStyle,
-        top: topOffset,
-        left: `calc(0.5rem + ${SAFE_LEFT})`,
-        height: "4rem",
-        width: "4rem",
-        cursor: "pointer",
-        fontSize: "1.5rem",
-        fontWeight: 800,
-        background: "rgba(35,35,39,0.53)",
-        opacity: hidden ? 0 : 1,
-        pointerEvents: hidden ? "none" : "auto",
-        transition: "opacity 180ms ease 40ms",
-    }}
-    >
-    ☰
-    </button>
-);
+const SettingsButton = ({ onToggle, topOffset = "0.5rem", hidden = false }) => {
+    const isMobile = useIsMobile();
+    return (
+        <button
+        type="button"
+        aria-label="Open game menu"
+        title="Game menu"
+        onClick={onToggle}
+        style={{
+            ...baseStyle,
+            top: topOffset,
+            left: `calc(0.5rem + ${SAFE_LEFT})`,
+            height: isMobile ? "3.2rem" : "2.85rem",
+            width: isMobile ? "3.2rem" : "2.85rem",
+            cursor: "pointer",
+            fontSize: isMobile ? "1.3rem" : "1.2rem",
+            fontWeight: 800,
+            borderRadius: isMobile ? "12px" : "12px",
+            background: "rgba(35,35,39,0.53)",
+            opacity: hidden ? 0 : 1,
+            pointerEvents: hidden ? "none" : "auto",
+            transition: "opacity 180ms ease 40ms",
+        }}
+        >
+        ☰
+        </button>
+    );
+};
 
 // --- Network: let other devices connect -------------------------------------
 // The server binds loopback by default, which is right for the desktop app and
@@ -3292,8 +3256,9 @@ const SettingsMenu = ({
         if (!el) return;
         const rect = el.getBoundingClientRect();
         if (!rect.width || !rect.height) return;
-        el.style.setProperty("--oh-grow-x", (64 / rect.width).toFixed(4));
-        el.style.setProperty("--oh-grow-y", (64 / rect.height).toFixed(4));
+        const buttonDim = isMobile ? 64 : 45.6;
+        el.style.setProperty("--oh-grow-x", (buttonDim / rect.width).toFixed(4));
+        el.style.setProperty("--oh-grow-y", (buttonDim / rect.height).toFixed(4));
     });
     // Relief tiles or the painted vector map, for scenarios that ship both.
     const scenarioTerrain = useMapSettingValue(MAP_SETTING_KEYS.scenarioTerrain) === SCENARIO_TERRAIN_PAINTED ? SCENARIO_TERRAIN_PAINTED : "";

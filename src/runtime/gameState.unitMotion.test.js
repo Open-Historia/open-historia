@@ -22,6 +22,7 @@ import {
   normalizeUnits,
   normalizeWorldState,
   pruneSatisfiedUnitOrders,
+  standingOrdersAskWater,
 } from "./gameState.js";
 import { haversineKm } from "./unitMotion.js";
 
@@ -329,6 +330,63 @@ test("a patrol repositions each round but stays on station", () => {
     assert.ok(haversineKm(50, -30, state.units[0].lat, state.units[0].lng) <= 251);
     assert.equal(state.pendingUnitOrders.length, 1, "a patrol must not prune itself");
   }
+});
+
+// The coast runs north-south at lng -30: the sea is west of it.
+const westIsSea = (lng) => lng < -30;
+const patrolling = (type) => ({
+  units: normalizeUnits([unit({ type, lng: -30, lat: 50 })]),
+  pendingUnitOrders: normalizePendingUnitOrders([
+    { id: "o1", unitId: "unit-1", kind: "patrol", toLng: -30, toLat: 50, radiusKm: 250 },
+  ]),
+});
+
+test("a fleet's patrol keeps to the sea and an army's to the land", () => {
+  for (let round = 1; round <= 12; round += 1) {
+    const fleet = advanceStandingOrders(patrolling("naval"), { fromDate: "2024-01-01", toDate: "2024-02-01", round, onWater: westIsSea });
+    assert.ok(westIsSea(fleet.units[0].lng), `round ${round}: the fleet stood ashore at ${fleet.units[0].lng}`);
+    const army = advanceStandingOrders(patrolling("infantry"), { fromDate: "2024-01-01", toDate: "2024-02-01", round, onWater: westIsSea });
+    assert.ok(!westIsSea(army.units[0].lng) || army.units[0].lng === -30, `round ${round}: the army stood in the sea at ${army.units[0].lng}`);
+  }
+});
+
+// A turn reads the map for where the sea is only when a standing order could ask it (gameplay.js): with no patrol,
+// the orders move exactly as they do with the map read.
+test("only a patrol asks where the sea is, and orders without one move the same without the map", () => {
+  assert.equal(standingOrdersAskWater(patrolling("naval")), true);
+  assert.equal(standingOrdersAskWater(patrolling("air")), true);
+  assert.equal(standingOrdersAskWater({ units: [], pendingUnitOrders: [{ unitId: "unit-1", kind: "Patrol", toLng: 0, toLat: 1 }] }), true);
+  assert.equal(standingOrdersAskWater({}), false);
+  const moving = {
+    units: normalizeUnits([unit({ type: "naval", lng: -40, lat: 50 }), unit({ id: "unit-2", type: "infantry", lng: -20, lat: 50 })]),
+    pendingUnitOrders: normalizePendingUnitOrders([
+      { id: "o1", unitId: "unit-1", kind: "move", toLng: -35, toLat: 45 },
+      { id: "o2", unitId: "unit-2", kind: "attack", toLng: -10, toLat: 52 },
+    ]),
+  };
+  assert.equal(standingOrdersAskWater(moving), false);
+  let asked = 0;
+  const withMap = advanceStandingOrders(moving, { fromDate: "2024-01-01", toDate: "2024-01-08", round: 3, onWater: (lng) => { asked += 1; return westIsSea(lng); } });
+  const without = advanceStandingOrders(moving, { fromDate: "2024-01-01", toDate: "2024-01-08", round: 3, onWater: null });
+  assert.equal(asked, 0);
+  const placed = (world) => world.units.map(({ id, lng, lat, status, posture }) => ({ id, lng, lat, status, posture }));
+  assert.deepEqual(placed(without), placed(withMap));
+  assert.deepEqual(without.pendingUnitOrders, withMap.pendingUnitOrders);
+});
+
+test("a patrol with no point of its ring on its ground stays on its station", () => {
+  const world = advanceStandingOrders(patrolling("naval"), { fromDate: "2024-01-01", toDate: "2024-02-01", round: 3, onWater: () => false });
+  assert.equal(world.units[0].lng, -30);
+  assert.equal(world.units[0].lat, 50);
+});
+
+test("an air patrol ignores the coast", () => {
+  // Both branches must advance the same canonical unit, not separately
+  // normalized units whose wall-clock creation timestamps can differ.
+  const starting = patrolling("air");
+  const drawn = advanceStandingOrders(starting, { fromDate: "2024-01-01", toDate: "2024-02-01", round: 3 });
+  const tested = advanceStandingOrders(starting, { fromDate: "2024-01-01", toDate: "2024-02-01", round: 3, onWater: () => false });
+  assert.deepEqual(tested.units[0], { ...drawn.units[0], updatedAt: tested.units[0].updatedAt });
 });
 
 test("a patrol is reproducible for the same round and idle tick", () => {

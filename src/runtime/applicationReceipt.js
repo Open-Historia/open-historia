@@ -66,6 +66,7 @@ const APPLIED_LABELS = Object.freeze({
   markerOps: ["structure operation", "structure operations"],
   spyOps: ["espionage order", "espionage orders"],
   projectOps: ["project operation", "project operations"],
+  fiscalOps: ["fiscal operation", "fiscal operations"],
   createdChats: ["new chat", "new chats"],
   reports: ["report", "reports"],
 });
@@ -270,7 +271,10 @@ export const selectLastJumpRecord = (simulationHistory) => {
   return null;
 };
 
-const plural = (key, total) => `${total} ${APPLIED_LABELS[key][total === 1 ? 0 : 1]}`;
+// (A key with no label is named as it is: a missing one threw here, mid-turn, and every skip of a game whose
+// answers carried party ops failed with "Cannot read properties of undefined (reading '1')", a player's log,
+// 2026-11-03.)
+const plural = (key, total) => `${total} ${APPLIED_LABELS[key]?.[total === 1 ? 0 : 1] ?? key}`;
 
 // "Withheld" covers two different fates — an event rejected as impossible, and a
 // canonical one judged too routine to show — and the simulator needs the same

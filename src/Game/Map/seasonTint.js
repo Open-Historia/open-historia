@@ -183,38 +183,53 @@ export const zoneTintOn = (zone, date, lat) => {
 
 // Distances on a grid by the 3-4 chamfer, in thirds of a pixel, from every
 // pixel to the nearest that is `target` in `mask` (as fronts/climate.js measures a battlefield's cells).
+// With `wrap` the grid is the whole world round: its left edge is the right
+// one's neighbour, and the passes run twice so a distance crosses the date line.
 const FAR = 1 << 29;
-const chamfer = (mask, width, height, target) => {
+const chamfer = (mask, width, height, target, wrap = false) => {
   const distance = new Int32Array(width * height);
   for (let at = 0; at < distance.length; at += 1) distance[at] = mask[at] === target ? 0 : FAR;
-  for (let y = 0; y < height; y += 1) {
-    for (let x = 0; x < width; x += 1) {
-      const at = y * width + x;
-      let best = distance[at];
-      if (x > 0 && distance[at - 1] + 3 < best) best = distance[at - 1] + 3;
-      if (y > 0) {
-        if (distance[at - width] + 3 < best) best = distance[at - width] + 3;
-        if (x > 0 && distance[at - width - 1] + 4 < best) best = distance[at - width - 1] + 4;
-        if (x < width - 1 && distance[at - width + 1] + 4 < best) best = distance[at - width + 1] + 4;
+  const west = (x) => (x > 0 ? x - 1 : wrap ? width - 1 : -1);
+  const east = (x) => (x < width - 1 ? x + 1 : wrap ? 0 : -1);
+  for (let round = 0; round < (wrap ? 2 : 1); round += 1) {
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const at = y * width + x;
+        const w = west(x);
+        const e = east(x);
+        let best = distance[at];
+        if (w >= 0 && distance[y * width + w] + 3 < best) best = distance[y * width + w] + 3;
+        if (y > 0) {
+          if (distance[at - width] + 3 < best) best = distance[at - width] + 3;
+          if (w >= 0 && distance[(y - 1) * width + w] + 4 < best) best = distance[(y - 1) * width + w] + 4;
+          if (e >= 0 && distance[(y - 1) * width + e] + 4 < best) best = distance[(y - 1) * width + e] + 4;
+        }
+        distance[at] = best;
       }
-      distance[at] = best;
     }
-  }
-  for (let y = height - 1; y >= 0; y -= 1) {
-    for (let x = width - 1; x >= 0; x -= 1) {
-      const at = y * width + x;
-      let best = distance[at];
-      if (x < width - 1 && distance[at + 1] + 3 < best) best = distance[at + 1] + 3;
-      if (y < height - 1) {
-        if (distance[at + width] + 3 < best) best = distance[at + width] + 3;
-        if (x < width - 1 && distance[at + width + 1] + 4 < best) best = distance[at + width + 1] + 4;
-        if (x > 0 && distance[at + width - 1] + 4 < best) best = distance[at + width - 1] + 4;
+    for (let y = height - 1; y >= 0; y -= 1) {
+      for (let x = width - 1; x >= 0; x -= 1) {
+        const at = y * width + x;
+        const w = west(x);
+        const e = east(x);
+        let best = distance[at];
+        if (e >= 0 && distance[y * width + e] + 3 < best) best = distance[y * width + e] + 3;
+        if (y < height - 1) {
+          if (distance[at + width] + 3 < best) best = distance[at + width] + 3;
+          if (e >= 0 && distance[(y + 1) * width + e] + 4 < best) best = distance[(y + 1) * width + e] + 4;
+          if (w >= 0 && distance[(y + 1) * width + w] + 4 < best) best = distance[(y + 1) * width + w] + 4;
+        }
+        distance[at] = best;
       }
-      distance[at] = best;
     }
   }
   return distance;
 };
+
+// How near the date line a zone's outline must come on both sides for the zone
+// to be taken as running round the world (a designer cannot draw on it exactly:
+// Antarctica is drawn from 179.5° W to 179.5° E).
+export const ROUND_THE_WORLD_DEG = 2;
 
 // The picture's grid, reaching to `topLat`: where a place falls on it (a
 // pixel's middle is a whole number), and the latitude and the kilometres a
@@ -273,6 +288,12 @@ export const zoneWeightGrid = (zone, grid) => {
   const width = x1 - x0;
   const height = y1 - y0;
   if (width <= 0 || height <= 0) return null;
+  // A zone that reaches the date line on both sides runs round the world: the
+  // strip it leaves across the line is its own, and its share is measured
+  // round the world, not cut at the picture's edge. Else Antarctica's snow
+  // thinned to nothing in a wedge either side of the line.
+  const seam = (ROUND_THE_WORLD_DEG / 360) * grid.width;
+  const roundTheWorld = x0 === 0 && width === grid.width && minX <= grid.toX(-180) + seam && maxX >= grid.toX(180) - seam;
   // Inside or out by its rings, each pixel's middle (as zoneWeightAt tells it: across all its rings, odd is in).
   const mask = new Uint8Array(width * height);
   let filled = 0;
@@ -296,10 +317,21 @@ export const zoneWeightGrid = (zone, grid) => {
         filled += 1;
       }
     }
+    // Across the date line: the row's first and last pixels inside, each near its edge, are one stretch.
+    if (roundTheWorld && crossings.length >= 2 && crossings[0] <= seam && crossings[crossings.length - 1] >= width - 1 - seam) {
+      for (let x = 0; x < width && mask[row * width + x] === 0; x += 1) {
+        mask[row * width + x] = 1;
+        filled += 1;
+      }
+      for (let x = width - 1; x >= 0 && mask[row * width + x] === 0; x -= 1) {
+        mask[row * width + x] = 1;
+        filled += 1;
+      }
+    }
   }
   if (filled === 0) return null;
-  const inside = chamfer(mask, width, height, 0);
-  const outside = chamfer(mask, width, height, 1);
+  const inside = chamfer(mask, width, height, 0, roundTheWorld);
+  const outside = chamfer(mask, width, height, 1, roundTheWorld);
   const weights = new Float32Array(width * height);
   for (let row = 0; row < height; row += 1) {
     const km = grid.rowKm[y0 + row];

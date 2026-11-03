@@ -2,7 +2,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { createFirstByteTimer, normalizeUsage } from "./usageStats.js";
+import { readFileSync } from "node:fs";
+
+import { createFirstByteTimer, createStreamUsage, normalizeUsage } from "./usageStats.js";
 
 test("Gemini's usageMetadata is read, and thinking tokens count as output", () => {
   // A reasoning model spends most of its output budget on thoughts, which are
@@ -114,4 +116,49 @@ test("usage sums field by field across the rounds of one call", async () => {
     sumUsage({ promptTokens: 1000, outputTokens: 40, cachedTokens: 900 }, { promptTokens: 1100, outputTokens: 400, thinkingTokens: 50 }),
     { promptTokens: 2100, outputTokens: 440, cachedTokens: 900, thinkingTokens: 50 },
   );
+});
+
+// The advisor's streamed replies carried no usage, and the AI debug console
+// showed "no usage" for every one (a real-key test, 2026-10-28).
+const streamed = (frames) => {
+  const reader = createStreamUsage();
+  for (const frame of frames) reader.note(frame);
+  return reader.envelope();
+};
+
+test("a stream's usage is read from its frames into the envelope a buffered answer has", () => {
+  // Gemini repeats usageMetadata as the answer grows: the last is the whole.
+  const gemini = streamed([
+    { candidates: [{ content: { parts: [{ text: "Sire" }] } }], usageMetadata: { promptTokenCount: 900, candidatesTokenCount: 1 } },
+    { candidates: [{ content: { parts: [{ text: ", the" }] }, finishReason: "STOP" }], usageMetadata: { promptTokenCount: 900, candidatesTokenCount: 40, totalTokenCount: 940 } },
+  ]);
+  assert.deepEqual(normalizeUsage(gemini), { promptTokens: 900, outputTokens: 40, totalTokens: 940 });
+  assert.equal(gemini.candidates[0].finishReason, "STOP");
+  // An OpenAI-shaped gateway: usage on a frame of its own, with no choices.
+  const openai = streamed([
+    { choices: [{ delta: { content: "Sire" } }] },
+    { choices: [{ delta: {}, finish_reason: "length" }] },
+    { choices: [], usage: { prompt_tokens: 800, completion_tokens: 60, total_tokens: 860 } },
+  ]);
+  assert.deepEqual(normalizeUsage(openai), { promptTokens: 800, outputTokens: 60, totalTokens: 860 });
+  assert.equal(openai.choices[0].finish_reason, "length", "so a reply cut at its limit is told as one");
+  // Anthropic: the prompt in message_start, the output in message_delta.
+  const anthropic = streamed([
+    { type: "message_start", message: { usage: { input_tokens: 700, output_tokens: 1, cache_read_input_tokens: 100 } } },
+    { type: "content_block_delta", delta: { type: "text_delta", text: "Sire" } },
+    { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 50 } },
+  ]);
+  assert.deepEqual(normalizeUsage(anthropic), { promptTokens: 800, outputTokens: 50, totalTokens: 850, cachedTokens: 100 });
+  // Nothing reported: nothing handed on.
+  assert.equal(streamed([{ choices: [{ delta: { content: "Sire" } }] }]), null);
+});
+
+test("every streamed chat answer hands its usage to the call's record, as a buffered one does", () => {
+  const main = readFileSync(new URL("./main.jsx", import.meta.url), "utf8");
+  const sse = main.slice(main.indexOf("async function streamTextSSE("), main.indexOf("const chatLookupsFor = "));
+  assert.match(sse, /streamUsage\.note\(json\)/);
+  assert.match(sse, /usage: streamUsage\.envelope\(\)/);
+  const calls = main.split("await streamTextSSE(").length - 1;
+  assert.equal(calls, 4, "Gemini, OpenAI-compatible, Anthropic and Anthropic-compatible");
+  assert.equal(main.split("if (streamResult.usage) onUsage?.(streamResult.usage);").length - 1, calls);
 });

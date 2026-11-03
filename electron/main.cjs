@@ -16,7 +16,6 @@ const net = require("node:net");
 const crypto = require("node:crypto");
 const { spawn } = require("node:child_process");
 const { runLaunchUpdate } = require("./launchUpdate.cjs");
-const { recommendBeta } = require("./betaRecommendation.cjs");
 const { BETA_APP_NAME, readChannel } = require("./channel.cjs");
 const { MULTIPLAYER_APP_NAME } = require("./channel.cjs");
 const { createLayeredUpdater } = require("./layeredUpdate.cjs");
@@ -835,6 +834,37 @@ const createMainWindow = () => {
     return { action: "deny" };
   });
 
+  // On Windows, after the page's alert/confirm/prompt closes, the window has
+  // focus but the page gets no keyboard input (a chat cannot be typed into)
+  // until the window is focused again, which is what Alt+Tab fixes. The page is
+  // given wrappers that log a marker when such a dialog closes, and the window
+  // is refocused on it. Done from here, not a preload: this window has none, on
+  // purpose (see the build id above).
+  if (process.platform === "win32") {
+    const DIALOG_CLOSED = "__oh_dialog_closed__";
+    win.webContents.on("dom-ready", () => {
+      win.webContents.executeJavaScript(`(() => {
+        for (const name of ["alert", "confirm", "prompt"]) {
+          const original = window[name];
+          if (typeof original !== "function" || original.ohRefocus) continue;
+          const wrapped = function (...args) {
+            try { return original.apply(window, args); } finally { console.debug(${JSON.stringify(DIALOG_CLOSED)}); }
+          };
+          wrapped.ohRefocus = true;
+          window[name] = wrapped;
+        }
+      })();`).catch(() => {});
+    });
+    win.webContents.on("console-message", (...args) => {
+      // Electron passes one details object; older versions passed (event, level, message).
+      const message = typeof args[2] === "string" ? args[2] : args[0]?.message;
+      if (message !== DIALOG_CLOSED || win.isDestroyed()) return;
+      win.blur();
+      win.focus();
+      win.webContents.focus();
+    });
+  }
+
   // Keep the game IN the game window. This window has no address bar, no back
   // button and an auto-hidden menu, so a link that navigates it away strands the
   // player on a page they cannot leave — and hands anything that can render a
@@ -1027,21 +1057,10 @@ const boot = async () => {
   await mainWindow.loadURL(`http://localhost:${port}`);
   setupWindow?.close();
   setupWindow = null;
-  // The stable app asks, once for every build it runs, whether the player
-  // wants the beta: after a first install and after each update
-  // (electron/betaRecommendation.cjs). Over the open game, never in front of
-  // an update or the map download, and never allowed to stop the game.
-  recommendBeta({
-    fs,
-    recordFile: path.join(USER_ROOT, "beta-recommendation.json"),
-    isBeta: IS_BETA,
-    isPackaged: app.isPackaged,
-    version: app.getVersion(),
-    payloadBuild: files?.root ? String(files.build ?? "") : "",
-    ask: (options) => dialog.showMessageBox(mainWindow, { ...options, title: "Open Historia" }),
-    open: () => shell.openExternal(BETA_DOWNLOAD_URL),
-    log: logMain,
-  }).catch((error) => logMain("warn", "beta.recommendation.failed", String(error?.message || error)));
+  // No dialog asks the player to get the beta any more: "make it so when beta
+  // is merged to main this popup is removed from the stable app" (the owner,
+  // 2026-11-02). The beta never showed it; the stable app stops once this
+  // reaches main. The update window's own Download the beta button stays.
   // The game is up; now confirm the map on disk is still the map we shipped.
   verifyMapData();
 };
@@ -1070,9 +1089,25 @@ const reportFatalBootError = (error) => {
 
 // One instance only: a second launch would hit EADDRINUSE on the server port and
 // die, which reads to the player as "the app is broken".
+// Discord starts the game through this protocol when the player presses Join
+// on a friend's invitation to a shared game and the game is not running; once
+// it is, Discord hands over the game to join (server/discordPresence.js). The
+// id is the server's DISCORD_APPLICATION_ID. Installed builds only: a
+// development run would register the bare Electron binary.
+const DISCORD_APPLICATION_ID = "1529270119916896326";
+const registerDiscordLaunch = () => {
+  if (!app.isPackaged || String(process.env.OH_DISCORD_PRESENCE ?? "1") === "0") return;
+  try {
+    app.setAsDefaultProtocolClient(`discord-${DISCORD_APPLICATION_ID}`);
+  } catch {
+    // Without it Discord can still hand a join to a running game.
+  }
+};
+
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
+  registerDiscordLaunch();
   app.on("second-instance", () => {
     if (mainWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore();

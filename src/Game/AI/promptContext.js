@@ -1,18 +1,19 @@
 import dayjs from "dayjs";
-import { JSON_URLS, getNationTags, loadRegionCatalog, readJson } from "../../runtime/assets.js";
+import { JSON_URLS, getNationTags, loadRegionCatalog, loadScenarioRegionCatalog, prepareWorkerFetchableUrl, readJson } from "../../runtime/assets.js";
 import { resolveAllCountryTags, resolveCountryTags } from "../../runtime/countryTags.js";
 import { buildOwnerAliasMap, canonicalOwnerName, toCountryName } from "../../runtime/ownerNames.js";
 import {
   buildActionDisplayText,
-  haversineKm,
   isPolityLandless,
+  kmOnMap,
   normalizeActionEntry,
   normalizeActions,
   normalizeChats,
   normalizeEvents,
   normalizeWorldState,
 } from "../../runtime/gameState.js";
-import { buildRegionOwnershipText, regionOwnerName } from "./regionVocab.js";
+import { buildRegionOwnershipText, buildUnruledBordersText, hasUnruledLand, regionOwnerName, regionTouchingMapSliced } from "./regionVocab.js";
+import { waterTypeIds } from "../../runtime/regionTypes.js";
 import { isPendingAction, selectFocusPowers } from "./regionFocus.js";
 import { filterChatsVisibleTo } from "./chatVisibility.js";
 import { buildForcePostureText } from "./forcePosture.js";
@@ -24,9 +25,11 @@ import { buildTerritoryIndex } from "./territoryOutlines.js";
 import { compareGameDates, compareGameDatesNewestFirst, diffGameDays, formatGameDateReadable, isGameDate } from "../../runtime/gameDates.js";
 import { difficultyPassage } from "../../runtime/difficulty.js";
 import { worldFileUrl } from "../../runtime/worldFiles.js";
-import { humanCountriesOf } from "../../runtime/humanPolities.js";
-import { SHARED_WORLD_TASKS, buildSharedGameDirective } from "./sharedGameDirective.js";
+import { hostingSharedGame, humanCountriesOf, sharedGameHostCountry } from "../../runtime/humanPolities.js";
+import { SHARED_WORLD_TASKS, buildSharedGameDirective, joinPolityNames } from "./sharedGameDirective.js";
+import { buildSeatAdviceDirective } from "./seatAdvice.js";
 import { unitsOffBattlefields } from "./frontsGate.js";
+import { readingLanguageName } from "../../runtime/i18n.js";
 
 const normalizeString = (value) => String(value ?? "").trim();
 const normalizeArray = (value) => (Array.isArray(value) ? value : []);
@@ -807,7 +810,9 @@ export const buildDetailedChatHistoryText = (
   }
 
   const rendered = normalizedChats.slice(0, limit).map((chat, index) => {
-    const header = `Chat ${index + 1}: ${chat.countries.map((country) => country.name).join(", ")}`;
+    // A shared game's thread is one person's: say whose (AI/sharedLetters.js).
+    const owner = hostingSharedGame() ? normalizeString(chat.player) || sharedGameHostCountry() : "";
+    const header = `Chat ${index + 1}: ${chat.countries.map((country) => country.name).join(", ")}${owner ? ` (with ${owner})` : ""}`;
     return `${header}\n${buildSingleChatHistoryText(chat, { messageLimit })}`;
   });
 
@@ -899,11 +904,8 @@ export const buildAdvisorHistoryText = (messages, { limit = 18 } = {}) => {
 // longEventLimit); actions simply never were. Matching longEventLimit here.
 export const ACTION_HISTORY_LIMIT = 24;
 
-// "France", "France and Spain", "France, Spain and Italy".
-export const joinPolityNames = (names) => {
-  const list = normalizeArray(names).map(normalizeString).filter(Boolean);
-  return list.length > 1 ? `${list.slice(0, -1).join(", ")} and ${list.at(-1)}` : list[0] || "";
-};
+// The several polities people play, as one name (sharedGameDirective.js).
+export { joinPolityNames };
 
 // `includePlanned: false` leaves this round's orders out of a full history:
 // the resolvedActions variable, for a label that says the orders listed were
@@ -1234,7 +1236,7 @@ export const buildPendingUnitOrdersText = (world) => {
   return orders.map((order) => {
     const unit = unitById.get(order.unitId);
     if (!unit) return null;
-    const remaining = Math.round(haversineKm(unit.lat, unit.lng, order.toLat, order.toLng));
+    const remaining = Math.round(kmOnMap(unit.lat, unit.lng, order.toLat, order.toLng));
     if (order.kind === "patrol") {
       return `- ${handles.get(unit.id) || unit.name} (${unit.type}, owner ${unit.ownerCode}) is working a ` +
         `${Math.round(order.radiusKm)} km station centred on lat ${order.toLat.toFixed(2)}, lng ${order.toLng.toFixed(2)}.`;
@@ -1660,6 +1662,44 @@ export const orderByFocus = (items, namesOf, focusCodes) => {
 //
 // `nationTags`: the map's own tags, for a map that is not the active game's
 // (buildPromptContext's mapSource).
+// The regions file is never kept in memory (runtime/assets.js), so a prompt would download and parse its
+// 55 MB and work out every border again each time. Its address changes with the map, so the answer is kept by it.
+let regionBorders = { url: "", work: null };
+const BORDERS_WORKER_MS = 120_000;
+const regionBordersInWorker = async (url) => {
+  if (typeof Worker === "undefined") throw new Error("No workers here.");
+  const fetchUrl = await prepareWorkerFetchableUrl(url);
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(new URL("./regionBordersWorker.js", import.meta.url), { type: "module", name: "openhistoria-region-borders" });
+    // Every prompt for this map waits on the answer, so one that never comes is given up on.
+    let timer = 0;
+    const finish = (settle, value) => {
+      clearTimeout(timer);
+      worker.terminate();
+      settle(value);
+    };
+    timer = setTimeout(() => finish(reject, new Error("The borders worker did not answer.")), BORDERS_WORKER_MS);
+    worker.onmessage = ({ data }) => (Array.isArray(data?.borders)
+      ? finish(resolve, new Map(data.borders.map(([id, others]) => [id, new Set(others)])))
+      : finish(reject, new Error(data?.error || "No borders came back.")));
+    worker.onerror = (event) => finish(reject, new Error(event?.message || "The borders worker failed."));
+    worker.postMessage({ url: fetchUrl });
+  });
+};
+const regionBordersOnThisThread = async (url) => {
+  const shapes = await readJson(url, { defaultValue: null, clone: false }).catch(() => null);
+  // Nothing was read: not kept, so the next prompt tries again.
+  if (!Array.isArray(shapes?.features) && regionBorders.url === url) regionBorders = { url: "", work: null };
+  return regionTouchingMapSliced(shapes?.features);
+};
+const regionBordersOfThisMap = () => {
+  const url = JSON_URLS.regionsGeojson;
+  if (regionBorders.url === url && regionBorders.work) return regionBorders.work;
+  const work = regionBordersInWorker(url).catch(() => regionBordersOnThisThread(url));
+  regionBorders = { url, work };
+  return work;
+};
+
 export const buildWorldSummary = async (bundle, regionCatalog = null, {
   regionListsViaTools = false,
   conversation = false,
@@ -1763,11 +1803,30 @@ export const buildWorldSummary = async (bundle, regionCatalog = null, {
         ...(regionListsViaTools ? { focusTotalCap: 0, rosterCap: 120 } : {}),
       });
 
+  // The wild land beside each power (regionVocab.js): the lists above name only
+  // what powers hold. A conversation is about its powers, not the map's edges.
+  // Read from the scenario's own region rows: the prompt catalog above keeps a
+  // region's name and owner only, and without its box, adjacencies and type
+  // no wild region was anybody's neighbour, so the list was never written
+  // (a five-month Discord game, 2026-10-28).
+  // The map's shapes say which regions share a border, the sea's among them:
+  // wild land across a strait from a power is its neighbour by ship. Worked
+  // out only on a map with unruled land.
+  let unruledBorders = "";
+  if (!conversation) {
+    const regionRows = await loadScenarioRegionCatalog().catch(() => null) ?? regions;
+    const waterTypes = waterTypeIds(world.regionTypes);
+    const touching = hasUnruledLand(regionRows, world.regionOwnershipOverrides, { waterTypes })
+      ? await regionBordersOfThisMap()
+      : null;
+    unruledBorders = buildUnruledBordersText(regionRows, world.regionOwnershipOverrides, { waterTypes, touching });
+  }
+
   return [
     `Player polity: ${bundle.game.country || "Unknown polity"}${playerTags.length ? ` (${playerTags.join(", ")})` : ""}`,
     `Current round: ${bundle.game.round || 1}`,
     `Current date: ${bundle.game.gameDate || "unknown"}`,
-    `Language: ${world.language || bundle.game.language || "English"}`,
+    `Language: ${readingLanguageName(world.language || bundle.game.language, { chat: conversation })}`,
     `Difficulty: ${bundle.game.difficulty || "standard"}`,
     `World before round one: ${world.startingTimelineText || "No world briefing provided."}`,
     `Simulation rules: ${world.simulationRules || "No extra simulation rules were provided."}`,
@@ -1782,6 +1841,7 @@ export const buildWorldSummary = async (bundle, regionCatalog = null, {
       : "Map ownership (this IS the comma-separated region list referenced above — the "
         + "region vocabulary for regionTransfers):",
     regionOwnershipCatalog,
+    ...(unruledBorders ? ["", unruledBorders] : []),
     "",
     "Dynamic polity overrides:",
     politySummary,
@@ -2103,7 +2163,9 @@ export const buildPromptContext = async (bundle, {
     );
   }
   put("gameMasterRequest", gameMasterRequest);
-  put("language", bundle.world.language || bundle.game.language || "English");
+  // The language the player reads, the save's own for one who reads English
+  // (i18n.js readingLanguageName).
+  put("language", readingLanguageName(bundle.world.language || bundle.game.language, { chat: conversation }));
   if (wants("markersSummary")) {
     const markerAttention = buildMarkerAttentionEvidence(bundle, { chat });
     result.markersSummary = buildMarkersSummaryText(bundle.world, {
@@ -2120,7 +2182,15 @@ export const buildPromptContext = async (bundle, {
   // speaks to the one polity in bundle.game.country.
   const people = SHARED_WORLD_TASKS.has(taskKey) ? humanCountriesOf(bundle.game) : [];
   put("playerPolity", people.length > 1 ? joinPolityNames(people) : bundle.game.country || "Unknown polity");
-  if (people.length > 1) result.sharedGameDirective = buildSharedGameDirective(bundle.game);
+  if (people.length > 1) {
+    result.sharedGameDirective = buildSharedGameDirective(bundle.game);
+    result.sharedPolities = people.join("; ");
+  }
+  // A game a host shares: the week brings each player their advisor's three
+  // orders to consider (seatAdvice.js). Only the time skip itself writes them.
+  if (hostingSharedGame() && (taskKey === "jumpForward" || taskKey === "autoJumpForward")) {
+    result.seatAdviceDirective = buildSeatAdviceDirective(humanCountriesOf(bundle.game), bundle.world);
+  }
   if (wants("playerPolityRegions")) {
     result.playerPolityRegions = await buildPlayerPolityRegionsText(
       bundle,

@@ -79,7 +79,7 @@ test("the skip hands the orders the merge carries on to the apply, which keeps a
   assert.match(gameplay, /const keptFrontOrders = filterBoundLedgerUpdatesToKeptEvents\(result\.frontOrders, dedupedEvents, curatedEvents\);/);
   assert.match(gameplay, /const frontOrders = remapLedgerEventIds\(normalizeArray\(keptFrontOrders\), canonicalEventIdentity\.idMap\);/);
   assert.match(gameplay, /payload\.frontOrders = filterBoundLedgerUpdatesToKeptEvents\(payload\?\.frontOrders, taggedEvents, screened\.events\);/);
-  assert.match(gameplay, /return frontsOn\(\) \? withFrontOrders\(shown\) : shown;/, "the contract carries the field only while fronts are on");
+  assert.match(gameplay, /return frontsOn\(\) \? withWarFigures\(withFrontOrders\(shown\)\) : shown;/, "the contract carries the field only while fronts are on");
 });
 
 test("a turn cut short keeps the orders of the events that happened", () => {

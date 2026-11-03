@@ -136,7 +136,7 @@ test("a change of control the model wrote itself is told on its event's day; the
   ];
   const { days, dayOf } = frontRunSpan({ fromDate: "2024-03-01", toDate: "2024-03-31", events });
   assert.deepEqual(planFrontMoments({ events, fromDate: "2024-03-01", days, dayOf }), [
-    { day: 5, type: "control", regionId: "r1", to: "Russia", ref: "e1" },
+    { day: 5, type: "control", regionId: "r1", to: "Russia", ref: "e1", capture: true },
     { day: 5, type: "control", regionId: "r4", to: "Poland", ref: "e1" },
   ]);
 });

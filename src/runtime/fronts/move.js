@@ -132,6 +132,7 @@ import { awayOf, cellAt, cellsOf, distanceFrom, downhill, heldRound, measure, ne
 import { describePoint, inSector } from "./sectors.js";
 import { KIND_ARTILLERY, STATE_ADVANCING, controlRadius, isLive, reachCells, standOff, stands } from "./troops.js";
 import { aimOut, leftOnLeg } from "./way.js";
+import { OWN_GROUND_PACE, marchKmOf, marchOn } from "./march.js";
 
 const toward = [0, 0];
 
@@ -433,7 +434,8 @@ const hold = (battle, side, troop, day, date, attackers) => {
     if (!downhill(field, toOther, troop.x, troop.y, toward)) return;
     const upX = toward[0];
     const upY = toward[1];
-    const step = Math.min(COME_UP_KM / km, away - depth * COME_UP_TO);
+    // (Over its own ground: with troops marching, at their march: march.js.)
+    const step = Math.min((battle.marchKm ? Math.max(COME_UP_KM, battle.marchKm[troop.kind]) : COME_UP_KM) / km, away - depth * COME_UP_TO);
     const landing = cellAt(field, troop.x + upX * step, troop.y + upY * step);
     if (landing < 0 || field.holders[landing] !== side || outflanked(battle, side, troop.x + upX * step, troop.y + upY * step)) return;
     troop.x += upX * step;
@@ -719,6 +721,10 @@ const steer = (battle, run, side, index, troop, order, day, date, squares, weigh
 export const moveDay = (battle, run, day) => {
   const { field } = battle;
   battle.pace = run.pace;
+  // Marching (march.js): what a troop on its way to the line covers in a day, and how much faster any step over its
+  // own side's ground is than through the other side's.
+  battle.marchKm = run.mech?.marching === true ? marchKmOf(run) : null;
+  battle.ownPace = run.mech?.marching === true ? OWN_GROUND_PACE : 1;
   const { kmAt } = battle.place;
   const date = run.dateOf(day);
   const toSide = measure(battle);
@@ -780,6 +786,12 @@ export const moveDay = (battle, run, day) => {
         troop.dig = 0;
         troop.strength = Math.max(0, troop.strength - THROWN_OUT_LOSS);
         if (!isLive(troop)) return;
+      }
+      // Called up inside its country and still on its way to the line (march.js): it marches on, unless it was
+      // given an order by hand, which it carries out from where it is.
+      if (troop.goal >= 0 && battle.marchKm) {
+        if (order && order.standing && order.standing.chosen) troop.goal = -1;
+        else if (marchOn(battle, side, troop, battle.marchKm)) return;
       }
       // With no order of its own, and the other side falling back in front of it: it goes after it.
       if (!order && !troop.pocket && falling.length > 0) {

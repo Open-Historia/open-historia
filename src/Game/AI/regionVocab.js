@@ -47,6 +47,7 @@
 
 import { toCountryName } from "../../runtime/ownerNames.js";
 import { baseCountryOf, splitTerritories } from "./namedAreas.js";
+import { nextTask } from "../../runtime/nextTask.js";
 
 const norm = (value) => String(value ?? "").trim();
 const lower = (value) => norm(value).toLowerCase();
@@ -131,6 +132,180 @@ export const ROSTER_INTRO =
 //     for a caller that is not a model's prompt. Names alone are the default.
 //   options.focusIntro / rosterIntro: the section headers, for a task that is
 //     not writing regionTransfers (FOCUS_INTRO and ROSTER_INTRO speak to one).
+// Which regions share a border, read from the map's own shapes: regions drawn
+// in the editor share their border's points, so two that share at least two
+// (an edge, not a corner) are neighbours. The catalog's boxes cannot say this
+// for water: a sea's box covers half the map. Map of id -> Set of ids; a map
+// whose regions share no points gives an empty one. Kept per features array.
+const touchingCache = new WeakMap();
+function* touchingSteps(features) {
+  const byPoint = new Map();
+  for (const feature of features) {
+    const id = norm(feature?.properties?.id);
+    const geometry = feature?.geometry;
+    if (!id || !geometry) continue;
+    const polygons = geometry.type === "Polygon" ? [geometry.coordinates] : geometry.type === "MultiPolygon" ? geometry.coordinates : [];
+    const seen = new Set();
+    for (const polygon of Array.isArray(polygons) ? polygons : []) {
+      for (const ring of Array.isArray(polygon) ? polygon : []) {
+        for (const point of Array.isArray(ring) ? ring : []) {
+          if (!Array.isArray(point) || !Number.isFinite(point[0]) || !Number.isFinite(point[1])) continue;
+          const key = `${point[0].toFixed(4)},${point[1].toFixed(4)}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          if (!byPoint.has(key)) byPoint.set(key, []);
+          byPoint.get(key).push(id);
+        }
+      }
+    }
+    yield;
+  }
+  const shared = new Map();
+  let borderPoints = 0;
+  for (const ids of byPoint.values()) {
+    if (ids.length < 2) continue;
+    for (const a of ids) {
+      for (const b of ids) {
+        if (a === b) continue;
+        if (!shared.has(a)) shared.set(a, new Map());
+        shared.get(a).set(b, (shared.get(a).get(b) || 0) + 1);
+      }
+    }
+    borderPoints += 1;
+    if (borderPoints % 2048 === 0) yield;
+  }
+  return new Map([...shared].map(([id, counts]) => [id, new Set([...counts].filter(([, n]) => n >= 2).map(([other]) => other))]));
+}
+
+export const regionTouchingMap = (features) => {
+  if (!Array.isArray(features)) return new Map();
+  if (touchingCache.has(features)) return touchingCache.get(features);
+  const steps = touchingSteps(features);
+  let step = steps.next();
+  while (!step.done) step = steps.next();
+  touchingCache.set(features, step.value);
+  return step.value;
+};
+
+// The same answer a slice at a time: on a 6,000 region map it is two seconds' work, and the map is drawing.
+const TOUCHING_SLICE_MS = 8;
+const touchingInProgress = new WeakMap();
+export const regionTouchingMapSliced = (features, { between = nextTask } = {}) => {
+  if (!Array.isArray(features)) return Promise.resolve(new Map());
+  if (touchingCache.has(features)) return Promise.resolve(touchingCache.get(features));
+  if (touchingInProgress.has(features)) return touchingInProgress.get(features);
+  const work = (async () => {
+    try {
+      const steps = touchingSteps(features);
+      let started = performance.now();
+      let step = steps.next();
+      while (!step.done) {
+        if (performance.now() - started >= TOUCHING_SLICE_MS) {
+          await between();
+          started = performance.now();
+        }
+        step = steps.next();
+      }
+      touchingCache.set(features, step.value);
+      return step.value;
+    } finally {
+      touchingInProgress.delete(features);
+    }
+  })();
+  touchingInProgress.set(features, work);
+  return work;
+};
+
+// The land no power rules, by the powers it borders. The lists above are of
+// what powers hold, so on a hand-drawn world with wild land between its realms
+// a model told to take the unruled region next door was never shown its name:
+// "Try to take Rustmoor Coast" came back as a column that could find Rustmoor
+// Coast on no boundary roll (a fantasy scenario, 2026-10-28). Neighbours are
+// the map's shared borders (`touching`, regionTouchingMap), else its declared
+// adjacencies, else touching boxes (which can only add a diagonal neighbour,
+// never drop a real one). Water is not land to take, but it joins: wild land
+// one sea away from a power's coast is listed under that power as across that
+// sea, so a fleet can carry settlers to it. Only by shared borders: a sea's
+// box is half the map. "" when no land is unruled, as on the built-in world.
+//   waterTypes   the ids of the region types that are water (regionTypes.js waterTypeIds)
+//   perOwnerCap  how many a power is listed with at most, by land and by sea each
+//   touching     the map's shared borders (regionTouchingMap), a function giving
+//                them (called only when some land is unruled), or null
+export const hasUnruledLand = (regionCatalog, overrides, { waterTypes = new Set() } = {}) => (Array.isArray(regionCatalog) ? regionCatalog : [])
+  .some((region) => norm(region?.id) && !regionOwnerName(region, overrides) && !waterTypes.has(norm(region.typeId)) && !waterTypes.has(norm(region.type)));
+
+export const buildUnruledBordersText = (regionCatalog, overrides, { waterTypes = new Set(), perOwnerCap = 30, touching = null } = {}) => {
+  const catalog = (Array.isArray(regionCatalog) ? regionCatalog : []).filter((region) => norm(region?.id));
+  const water = (region) => waterTypes.has(norm(region.typeId)) || waterTypes.has(norm(region.type));
+  const unruled = catalog.filter((region) => !regionOwnerName(region, overrides) && !water(region));
+  if (!unruled.length) return "";
+  const box = (region) => (Array.isArray(region.bounds) && region.bounds.length === 2 ? region.bounds : null);
+  const touch = (a, b) => {
+    const p = box(a), q = box(b);
+    return Boolean(p && q) && p[0][0] <= q[1][0] && q[0][0] <= p[1][0] && p[0][1] <= q[1][1] && q[0][1] <= p[1][1];
+  };
+  const declared = new Map();
+  for (const region of catalog) {
+    for (const other of Array.isArray(region.adjacencies) ? region.adjacencies : []) {
+      for (const [from, to] of [[region.id, norm(other)], [norm(other), region.id]]) {
+        if (!declared.has(from)) declared.set(from, new Set());
+        declared.get(from).add(to);
+      }
+    }
+  }
+  const given = typeof touching === "function" ? touching() : touching;
+  const borders = given instanceof Map ? given : new Map();
+  const byId = new Map(catalog.map((region) => [region.id, region]));
+  const owned = catalog.filter((region) => regionOwnerName(region, overrides));
+  const byOwner = new Map();
+  const bySea = new Map();
+  const add = (map, owner, entry) => {
+    if (!map.has(owner)) map.set(owner, new Map());
+    if (!map.get(owner).has(entry.name)) map.get(owner).set(entry.name, entry.text);
+  };
+  for (const wild of unruled) {
+    const name = norm(wild.name) || wild.id;
+    const shared = borders.get(wild.id);
+    const near = shared?.size
+      ? owned.filter((region) => shared.has(region.id))
+      : declared.has(wild.id)
+        ? owned.filter((region) => declared.get(wild.id).has(region.id))
+        : owned.filter((region) => touch(wild, region));
+    const byLand = new Set(near.map((region) => regionOwnerName(region, overrides)));
+    for (const owner of byLand) add(byOwner, owner, { name, text: name });
+    for (const seaId of shared ?? []) {
+      const sea = byId.get(seaId);
+      if (!sea || !water(sea)) continue;
+      for (const coastId of borders.get(seaId) ?? []) {
+        const coast = byId.get(coastId);
+        const owner = coast && !water(coast) ? regionOwnerName(coast, overrides) : "";
+        if (owner && !byLand.has(owner)) add(bySea, owner, { name, text: `${name} (across ${norm(sea.name) || sea.id})` });
+      }
+    }
+  }
+  if (!byOwner.size && !bySea.size) return "";
+  const listed = (entries) => {
+    const sorted = [...(entries ?? new Map())].sort((a, b) => a[0].localeCompare(b[0])).map(([, text]) => text);
+    const shown = sorted.slice(0, perOwnerCap);
+    return `${shown.join(", ")}${sorted.length > shown.length ? `, (+${sorted.length - shown.length} more)` : ""}`;
+  };
+  const lines = [...new Set([...byOwner.keys(), ...bySea.keys()])]
+    .sort((a, b) => a.localeCompare(b))
+    .map((owner) => {
+      const parts = [];
+      if (byOwner.has(owner)) parts.push(listed(byOwner.get(owner)));
+      if (bySea.has(owner)) parts.push(`by sea: ${listed(bySea.get(owner))}`);
+      return `- ${owner}: ${parts.join("; ")}`;
+    });
+  return [
+    `Land no power rules (${unruled.length} regions), by the powers it borders. Such a region can be settled, `
+      + "taken under a power's protection or subdued: a regionTransfers entry naming it \"region: <name>\" exactly as "
+      + "written here (without the sea in brackets), with no fromCode. Each is listed beside every power it touches; "
+      + "\"by sea\" is land across one stretch of water from that power's coast, reached by ships over the sea named:",
+    ...lines,
+  ].join("\n");
+};
+
 export const buildRegionOwnershipText = (regionCatalog, overrides, options = {}) => {
   const catalog = Array.isArray(regionCatalog) ? regionCatalog : [];
   if (catalog.length === 0) {

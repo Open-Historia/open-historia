@@ -160,7 +160,8 @@ test("a change to a formation carries a posture, and a formation the land war to
   const next = applyFrontUnitChanges(units, [{ unitId: "u1", strength: 81.6 }, { unitId: "u2", strength: 40, posture: "withdrawing", lng: 6.5, lat: 52 }]);
   assert.deepEqual(next.map((unit) => [unit.strength, unit.posture, unit.lng]), [[82, "patrol", 4], [40, "withdrawing", 6.5]]);
   const source = read("frontTurn.js");
-  assert.ok(source.includes("...asArray(sea?.unitChanges).filter((change) => !asArray(result.unitChanges).some((entry) => clean(entry?.unitId) === clean(change?.unitId)))"));
+  // (Nor one an air strike wore: runtime/fronts/airStrike.js.)
+  assert.ok(source.includes("...asArray(sea?.unitChanges).filter((change) => ![...asArray(result.unitChanges), ...sorties.unitChanges].some((entry) => clean(entry?.unitId) === clean(change?.unitId)))"));
   assert.ok(source.includes("if (naval !== false && atWar && days > 0) {"));
   assert.ok(source.includes("console.warn(\"[naval] the war at sea could not be fought this turn; the fleets stand as they were.\", error);"), "a sea that cannot be fought never stops the turn");
 });

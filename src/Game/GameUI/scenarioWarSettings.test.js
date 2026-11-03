@@ -57,13 +57,13 @@ test("what the form holds is what the game fights by", () => {
   assert.deepEqual(compactWarSettings(world.warSettings), form, "and the form it builds again");
 });
 
-test("the Fronts tab carries the settings, and Save writes them with the scenario's world", () => {
+test("the Wars feature carries the settings, and Save writes them with the scenario's world", () => {
   const library = read("libraryBar.jsx");
   assert.ok(library.includes("warSettings: compactWarSettings(world.warSettings),"), "the form is built from the world");
   assert.ok(library.includes("? { warSettings: compactWarSettings(editorState.warSettings) }"), "and saved into it");
-  const settingsAt = library.indexOf("<ScenarioWarSettings\n          value={formState.warSettings ?? null}");
+  const settingsAt = library.indexOf("<ScenarioWarSettings\n                  value={formState.warSettings ?? null}");
   assert.ok(settingsAt > 0 && settingsAt < library.indexOf("<ScenarioFrontsPanel"), "above the fronts the scenario begins with");
-  assert.ok(library.includes("{editorSection === \"fronts\" && kind === \"scenario\" && (\n        <ScenarioWarSettings"));
+  assert.ok(library.includes("extras={kind === \"scenario\" ? {\n            fronts: (\n              <>\n                <ScenarioWarSettings"), "under the Wars feature in the Features tab");
   const panel = read("ScenarioWarSettings.jsx");
   for (const label of ["Troop fatigue", "Seasons and weather", "Terrain", "Fortified lines", "Mustering", "Countries' military figures", "Air in battles", "Automatic (read off the date)"]) {
     assert.ok(panel.includes(`"${label}"`) || panel.includes(`>${label}<`), label);

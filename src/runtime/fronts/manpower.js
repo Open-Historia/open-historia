@@ -40,11 +40,17 @@ export const menOf = (run, name) => {
   return own > 0 ? own : run.menEach;
 };
 
-// The share of a country's people who can fight: its own the same way, else
-// the scenario's, else MANPOWER_SHARE.
+// The share of a country's people who can fight: the scenario's, else
+// MANPOWER_SHARE, or its own where it is more (a warrior people, a total war).
+// Never less: a figure rated as the army a country keeps in peace (the United
+// Kingdom 4, Ireland 1, in a reported save) is no measure of the men it can
+// call up, and read as one it left a country "with no men" after a front or
+// two, refusing a deployment's call-up and the story's own drafts alike ("it
+// says I have no manpower, check and have plenty", a player, 2026-10-28).
 export const shareOf = (run, name) => {
+  const base = run.manpowerShare > 0 ? run.manpowerShare : MANPOWER_SHARE;
   const own = run.mech?.military ? run.militaryOf(name).manpowerShare : null;
-  return own > 0 ? own / 100 : run.manpowerShare > 0 ? run.manpowerShare : MANPOWER_SHARE;
+  return own > 0 && own / 100 > base ? own / 100 : base;
 };
 
 // A country's people, where a run knows them: 0 where it does not.

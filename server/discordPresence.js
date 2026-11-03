@@ -17,6 +17,17 @@
 // player); this module keeps Discord up to date, and reconnects when Discord
 // is started, quit or restarted while the game runs. Without an application id,
 // or with OH_DISCORD_PRESENCE=0, it does nothing at all.
+//
+// "make inviting someone to play on discord rich presence invite them to a
+// multiplayer game. if they are online they should get a popup asking them to
+// join" (the owner, 2026-10-28). In a shared game the activity carries a party
+// and a join secret: the lobby's invite code (multiplayer/invite.js), which
+// lets its holder ask the host to join and nothing more. Discord then offers
+// "Invite to join" and "Ask to join". When a friend presses Join, Discord hands
+// that secret to the friend's own game over this same socket (ACTIVITY_JOIN);
+// when someone asks to join, Discord asks the host (ACTIVITY_JOIN_REQUEST),
+// whose answer goes back the same way. Both wait here, in an inbox the page
+// reads (GET /api/presence/inbox), for it to show the player.
 import crypto from "node:crypto";
 import net from "node:net";
 
@@ -28,6 +39,14 @@ export const DISCORD_APPLICATION_ID = "1529270119916896326";
 // upload to the developer portal.
 export const PRESENCE_IMAGE = "https://openhistoria.com/icon-512.png";
 export const PRESENCE_BUTTON = { label: "Play Open Historia", url: "https://openhistoria.com" };
+
+// A shared game's invite code, as multiplayer/invite.js writes it: the only
+// join secret this game sends or takes.
+export const JOIN_SECRET_PATTERN = /^oh1-[A-Za-z0-9_-]{100,124}$/;
+// How long a join Discord handed over waits for the page, and how long a
+// request to join waits for the host's answer (Discord gives up on it sooner).
+export const JOIN_WAIT_MS = 5 * 60 * 1000;
+export const REQUEST_WAIT_MS = 60 * 1000;
 
 // Discord's opcodes on the local socket.
 export const OP_HANDSHAKE = 0;
@@ -71,19 +90,36 @@ const clip = (value, max = MAX_TEXT) => {
 
 // What the page may say. Everything else is dropped, and every string is cut
 // short: this is shown on other people's screens.
+// A shared game's party, as the page reports it: its invite code, how many
+// people are in and how many seats it has. Anything else is not a party.
+export const normalizeParty = (value) => {
+  if (!value || typeof value !== "object") return null;
+  const token = String(value.token ?? "").trim();
+  if (!JOIN_SECRET_PATTERN.test(token)) return null;
+  const seats = Math.max(1, Math.min(64, Math.floor(Number(value.seats)) || 0));
+  const players = Math.max(1, Math.min(seats, Math.floor(Number(value.players)) || 1));
+  return { token, players, seats };
+};
+
 export const normalizePresence = (body) => {
   if (!body || typeof body !== "object") return null;
+  const party = normalizeParty(body.party);
   if (body.scene === "game") {
     return {
       scene: "game",
       player: clip(body.player, 60),
       scenario: clip(body.scenario, 60),
       date: clip(body.date, 40),
+      ...(party ? { party } : {}),
     };
   }
-  if (body.scene === "menu") return { scene: "menu" };
+  if (body.scene === "menu") return { scene: "menu", ...(party ? { party } : {}) };
   return null;
 };
+
+// What Discord is shown as the party's id: a digest of the invite code, so the
+// id says nothing of the code itself.
+export const partyIdOf = (token) => crypto.createHash("sha256").update(String(token)).digest("hex").slice(0, 32);
 
 // The activity Discord shows under "Playing Open Historia":
 //   Playing as France
@@ -102,7 +138,14 @@ export const activityFor = (presence, { startedAt } = {}) => {
     if (details) activity.details = details;
     if (state) activity.state = state;
   } else {
-    activity.details = "In the main menu";
+    activity.details = presence.party ? "In a shared game's lobby" : "In the main menu";
+  }
+  // A shared game: Discord offers "Invite to join" and "Ask to join". It
+  // refuses an activity with both a join secret and buttons, so the button goes.
+  if (presence.party) {
+    activity.party = { id: partyIdOf(presence.party.token), size: [presence.party.players, presence.party.seats] };
+    activity.secrets = { join: presence.party.token };
+    delete activity.buttons;
   }
   return activity;
 };
@@ -178,8 +221,47 @@ export const createDiscordPresence = ({
   let lastSentAt = -Infinity;
   let stopped = false;
   let refused = false;
+  // What Discord handed over for the page: a join the player accepted in
+  // Discord, and requests to join this player's shared game.
+  let pendingJoin = null;
+  let requests = [];
 
   const clear = (timer) => { if (timer !== null) clearTimer(timer); return null; };
+
+  const send = (cmd, args, evt) => {
+    if (!socket) return false;
+    try {
+      socket.write(encodeFrame(OP_FRAME, { cmd, ...(args ? { args } : {}), ...(evt ? { evt } : {}), nonce: crypto.randomUUID() }));
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  // Joins and requests to join, from the moment Discord is reached.
+  const subscribe = () => {
+    send("SUBSCRIBE", null, "ACTIVITY_JOIN");
+    send("SUBSCRIBE", null, "ACTIVITY_JOIN_REQUEST");
+  };
+
+  // What Discord says after READY. Only while the page is reporting at all:
+  // a player who turned the presence off gets no joins either.
+  const onDispatch = (payload) => {
+    if (desired === null) return;
+    if (payload?.evt === "ACTIVITY_JOIN") {
+      const secret = String(payload?.data?.secret ?? "").trim();
+      if (!JOIN_SECRET_PATTERN.test(secret)) return;
+      pendingJoin = { token: secret, at: now() };
+      log("info", "Discord handed over a shared game to join.");
+    } else if (payload?.evt === "ACTIVITY_JOIN_REQUEST") {
+      const user = payload?.data?.user ?? {};
+      const id = String(user.id ?? "");
+      if (!/^\d{5,25}$/.test(id)) return;
+      const name = clip(user.global_name || user.username, 40) || "Someone";
+      requests = [...requests.filter((entry) => entry.id !== id), { id, name, at: now() }].slice(-8);
+      log("info", "Someone on Discord asks to join the shared game.");
+    }
+  };
 
   // Sends what should be showing, unless it already is; never more often than
   // Discord will take, the latest winning.
@@ -193,16 +275,9 @@ export const createDiscordPresence = ({
       if (pushTimer === null) pushTimer = setTimer(() => { pushTimer = null; push(); }, wait);
       return;
     }
-    try {
-      socket.write(encodeFrame(OP_FRAME, {
-        cmd: "SET_ACTIVITY",
-        args: { pid, activity },
-        nonce: crypto.randomUUID(),
-      }));
+    if (send("SET_ACTIVITY", { pid, activity })) {
       lastSent = text;
       lastSentAt = now();
-    } catch {
-      // The socket's close handler tidies up.
     }
   };
 
@@ -251,6 +326,8 @@ export const createDiscordPresence = ({
         finish(true);
       } else if (op === OP_FRAME && payload?.evt === "ERROR") {
         log("warn", `Discord refused the presence: ${payload?.data?.message || "no reason given"}.`);
+      } else if (op === OP_FRAME && candidate === socket) {
+        onDispatch(payload);
       }
     }));
     candidate.on("error", () => {});
@@ -287,6 +364,7 @@ export const createDiscordPresence = ({
         if (await handshake(candidate)) {
           socket = candidate;
           log("info", "Connected to Discord.");
+          subscribe();
           push();
           return;
         }
@@ -328,6 +406,27 @@ export const createDiscordPresence = ({
     update(presence) {
       if (!active || stopped) return;
       show(presence);
+      if (presence === null || presence === undefined) {
+        pendingJoin = null;
+        requests = [];
+      }
+    },
+    // What waits for the page, once: a join (taken when read) and the requests
+    // to join not yet answered. Old ones are let go.
+    takeInbox() {
+      const at = now();
+      const join = pendingJoin && at - pendingJoin.at <= JOIN_WAIT_MS ? { token: pendingJoin.token } : null;
+      pendingJoin = null;
+      requests = requests.filter((entry) => at - entry.at <= REQUEST_WAIT_MS);
+      return { join, requests: requests.map(({ id, name }) => ({ id, name })) };
+    },
+    // The host's answer to a request to join: Discord sends the invite, or
+    // closes the request.
+    answer(userId, accept) {
+      const id = String(userId ?? "");
+      if (!requests.some((entry) => entry.id === id)) return false;
+      requests = requests.filter((entry) => entry.id !== id);
+      return send(accept ? "SEND_ACTIVITY_JOIN_INVITE" : "CLOSE_ACTIVITY_REQUEST", { user_id: id });
     },
     stop() {
       stopped = true;

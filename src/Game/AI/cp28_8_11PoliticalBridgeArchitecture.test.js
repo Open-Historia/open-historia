@@ -43,7 +43,12 @@ test("polity rename re-keys Political Actors and the pre-existing 28k schema gua
   assert.match(rename, /put\("politicalActors", rekeyPoliticalActors\(world\?\.politicalActors, fromKey, to\)\)/);
   assert.match(rename, /a rename cannot merge two political ledgers/i);
   // (Raised by 200 on purpose by Wars and Fronts Pt.2, for polityChanges[].military: projectOpSchema.test.js says so.)
-  assert.match(schemaGuard, /assert\.ok\(jumpChars < 28200,/);
+  // Raised once on purpose, with its reason beside it, for spiesOnPlayer (2026-10-28).
+  // And by 100 for events[].audience, secrets in shared games (2026-10-26).
+  // And by about 230 for a chat's `to`, each shared game's letter reaching its own player.
+  // And by about 560 for a letter's peaceOffer and the peaceTreaties lines: peace when the skip says so (2026-10-30).
+  // And by about 400 for Rostra's socialPosts: the period's posts in the skip's one answer (2026-11-02).
+  assert.match(schemaGuard, /assert\.ok\(jumpChars < 29650,/);
   assert.doesNotMatch(schemaGuard, /jumpChars < 3[01]000|jumpChars < 32000/, "CP28.8.11 must not silently raise the separate pre-existing schema-size guard");
 });
 

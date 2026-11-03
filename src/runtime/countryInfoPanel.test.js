@@ -92,6 +92,22 @@ test("no key, no regions", () => {
   assert.deepEqual(classifyPolityRegions({ catalog: stockCatalog, world: {}, polityKey: "" }).sovereign, []);
 });
 
+test("regionRenames override region names in sovereign lists", () => {
+  const world = {
+    regionRenames: {
+      "fra.1_1": "New Auvergne",
+      "bayern": "Free State of Bavaria",
+    },
+  };
+  const france = classifyPolityRegions({ catalog: stockCatalog, world, polityKey: "France" });
+  assert.equal(france.sovereign.includes("New Auvergne"), true);
+  assert.equal(france.sovereign.includes("Auvergne-Rhône-Alpes"), false);
+
+  const germany = classifyPolityRegions({ catalog: stockCatalog, world, polityKey: "Germany" });
+  assert.equal(germany.sovereign.includes("Free State of Bavaria"), true);
+  assert.equal(germany.sovereign.includes("Bayern"), false);
+});
+
 test("the panel resolves a click to the polity's stable key and current name", () => {
   const world = { polityOverrides: { Germany: { name: "Third Reich", aliases: ["Reich"] } } };
   const resolved = resolvePanelPolity({ name: "Germany", code: "Germany" }, world);

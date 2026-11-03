@@ -123,6 +123,11 @@ const normalizeIndexPost = (raw) => {
     author_association: ASSOCIATIONS.has(source.author_association) ? source.author_association : "NONE",
     reactions: { "+1": wholeCount(record(source.reactions)?.["+1"]) },
     comments: wholeCount(source.comments),
+    // When the scenario begins, as the hub's check read it (hubPosts.js startDate): the Community tab's Start date
+    // filter. Left out here, every post had none, and any range showed nothing.
+    ...(typeof source.scenario_date === "string" && source.scenario_date.length <= 40 && !/[\u0000-\u001f]/.test(source.scenario_date)
+      ? { scenario_date: source.scenario_date }
+      : {}),
   };
 };
 

@@ -222,6 +222,24 @@ export const createRoundMachine = ({
     resolveNow() {
       if (phase === "planning" || phase === "countdown") resolve();
     },
+    // A new round length, for the rounds to come and for this one's deadline,
+    // counted from when its planning began and never under a minute from now.
+    setRoundMinutes(minutes) {
+      const before = settings.roundMinutes;
+      settings = clampSettings({ ...settings, roundMinutes: minutes });
+      if (phase === "planning" || phase === "countdown") {
+        if (paused) {
+          const spent = before * 60 * 1000 - paused.remaining.planning;
+          paused.remaining.planning = Math.max(60 * 1000, settings.roundMinutes * 60 * 1000 - spent);
+        } else {
+          planningEnds = Math.max(planningStarted + settings.roundMinutes * 60 * 1000, now() + 60 * 1000);
+          if (phase === "countdown") countdownEnds = Math.min(countdownEnds, planningEnds);
+        }
+      }
+      emit();
+      arm();
+      return settings.roundMinutes;
+    },
     pause() {
       if (paused || !["planning", "countdown", "revealing"].includes(phase)) return;
       paused = { remaining: { planning: Math.max(0, planningEnds - now()), countdown: Math.max(0, countdownEnds - now()), revealing: Math.max(0, revealEnds - now()) } };

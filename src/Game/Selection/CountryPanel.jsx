@@ -17,19 +17,18 @@ import {
     sortEventsNewestFirst,
 } from "../../runtime/countryInfoPanel.js";
 import { readEventsState, readGameData, readWorldStateView } from "../../runtime/gameState.js";
-import { useActiveFeatures } from "../../runtime/gameFeatures.js";
 import { getStoredLanguage } from "../../runtime/i18n.js";
 import { getLibraryState } from "../../runtime/library.js";
 import { onMemoryPressure } from "../../runtime/memoryPressure.js";
 import { puppetSummaryFor } from "../../runtime/puppets.js";
 import { requestDiplomaticChat } from "../GameUI/chat.jsx";
 import GameFlagPicker from "../GameUI/GameFlagPicker.jsx";
-import { openListenIn } from "../GameUI/ListenInPhone.jsx";
 import { getWorldStateSnapshot, useWorldState } from "../Map/useWorldState.js";
 import { resolvePolityFlag } from "../../runtime/polityFlags.js";
 import { generateCountryStats } from "../AI/gameplayLazy.js";
 import { createReportRequests } from "./reportRequests.js";
 import { bundledFlagUrl } from "../../runtime/countryFlags.js";
+import { formatGameDateReadable } from "../../runtime/gameDates.js";
 
 // Bridge: the region popup's info button opens this panel from outside React.
 let _openPanel = null;
@@ -158,8 +157,6 @@ const RegionPills = ({ names, limit, expanded, onExpand }) => (
 
 const CountryInfoPanel = () => {
     const isMobile = useIsMobile();
-    // Listen in can be switched off for a game (server/gameFeatures.js).
-    const listenInOn = useActiveFeatures().listenIn?.enabled !== false;
     const [country, setCountry] = useState(null); // { code, name, flagUrl, flagEmoji }
     // What the panel read for `country` when it opened; null while it reads,
     // so nothing of the previous country is ever shown under this one's name.
@@ -426,15 +423,6 @@ const CountryInfoPanel = () => {
         setCountry(null);
     };
 
-    // What people across the country are posting (GameUI/ListenInPhone.jsx).
-    // The panel stays open under the phone.
-    const listenIn = () => {
-        openListenIn({
-            polity: displayName || country.name,
-            polityKey: polityKey || country.polityKey || displayName || country.name,
-        });
-    };
-
     const openDiplomacy = () => {
         requestDiplomaticChat({
             name: displayName || country.name,
@@ -524,7 +512,7 @@ const CountryInfoPanel = () => {
                 <div key={event.id} style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 10, padding: "0.55rem 0.7rem" }}>
                 <div style={{ alignItems: "baseline", display: "flex", gap: "0.5rem", justifyContent: "space-between" }}>
                 <span style={{ fontSize: "0.82rem", fontWeight: 700 }}>{event.title}</span>
-                <span style={{ color: "rgba(255,255,255,0.4)", flexShrink: 0, fontSize: "0.68rem" }}>{event.date}</span>
+                <span style={{ color: "rgba(255,255,255,0.4)", flexShrink: 0, fontSize: "0.68rem" }}>{(formatGameDateReadable(event.date) || event.date)}</span>
                 </div>
                 {event.description && (
                     <div style={{ color: "rgba(255,255,255,0.62)", fontSize: "0.74rem", lineHeight: 1.5, marginTop: "0.2rem" }}>
@@ -694,11 +682,6 @@ const CountryInfoPanel = () => {
         <button type="button" className="oh-tap-row" onClick={openStats} style={{ ...footerButtonStyle, flex: "1 1 auto", whiteSpace: "nowrap" }}>
         Stats
         </button>
-        {listenInOn && (
-            <button type="button" className="oh-tap-row" onClick={listenIn} style={{ ...footerButtonStyle, flex: "1 1 auto", whiteSpace: "nowrap" }}>
-            Listen in
-            </button>
-        )}
         <button type="button" className="oh-tap-row" onClick={openDiplomacy} style={{ ...footerButtonStyle, background: "rgba(255,255,255,0.15)", border: "1px solid rgba(255,255,255,0.28)", flex: "1 1 auto", whiteSpace: "nowrap" }}>
         Open Diplomacy
         </button>

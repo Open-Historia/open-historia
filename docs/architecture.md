@@ -18,7 +18,6 @@ This page is the map of the codebase. Each subsystem has its own page; follow th
 | Geometry / GIS | `@turf/*`, `d3-geo`, `polygon-clipping`, `shpjs`, `geotiff` | `package.json` deps |
 | Charts | Chart.js 4 (stats panel) | `src/Game/GameUI/stats.jsx` |
 | Desktop / local server | Express 5 | `server/server.js` (inside Electron for the desktop app) |
-| Signing tools | Ed25519 through Node's `crypto`. No build of the game uses them since the website stopped checking a signed manifest; `@noble/ed25519` is still listed in `package.json` and nothing imports it | `trust/`, `server/trust.js`, `scripts/sign-release.mjs` |
 | Map generator (desktop installers and source checkouts) | Azgaar Fantasy Map Generator: a prepared copy that reaches no outside host, packed by the installers; the Workshop hides its Generate tab where there is none (web, Android) | `fmg/`, `scripts/fetch-fmg.mjs`, `scripts/fmg-vendor.mjs` |
 | Basemap raster tiles | ESRI/ArcGIS Online (public, token-free) + terrarium DEM (AWS) | `src/runtime/assets.js` |
 
@@ -120,7 +119,6 @@ Both `<Map>` and `<UI>` are keyed on `activeGameId` (not the library token) so a
 | `site/` | Marketing homepage shell wrapped around `/play/` by `build:site` |
 | `mobile/` | Android app: Capacitor (`android/`, `www/`, `capacitor.config.json`) around the web build, plus the map-staging scripts (`scripts/`, which use the website's stager and list, `scripts/stage-map-assets.mjs` and `scripts/map-assets.web.json`); no server of its own — see [mobile.md](mobile.md) |
 | `fmg/` | The game's prepared copy of Azgaar's Fantasy Map Generator (gitignored; fetched by `scripts/fetch-fmg.mjs`, packed by the desktop installers, served at `/fmg` for the editor's Generate drawer) |
-| `trust/` | The Ed25519 root public key + `pinned-key.js`, read by the signing tools (`scripts/sign-release.mjs`, `server/trust.js`). No build of the game reads it any more |
 | `tools/import-counter/` | Cloudflare Worker: the retired import counter. It keeps answering older game builds from the hub's index and stores nothing; this build does not call it ([delivery-and-deploy.md §7.1](delivery-and-deploy.md)) |
 | `hub-templates/` | GitHub issue templates for the community scenario/basemap hub |
 | `dist/`, `dist-web/`, `dist-site/` | Build outputs (desktop, web, assembled site) |
@@ -167,7 +165,6 @@ Both `<Map>` and `<UI>` are keyed on `activeGameId` (not the library token) so a
 | `seed-web-defaults.mjs` | Generate web-build seed data (default scenario) |
 | `mobile/scripts/stage-map-assets.mjs` | The Android build's wrapper around `stage-map-assets.mjs` (`npm run map` in `mobile/`): the same list and cache |
 | `extract-regions.mjs` / `extract-cities.mjs` / `build-default-map.mjs` | Build the PMTiles/geojson map data |
-| `sign-release.mjs` / `gen-signing-key.mjs` | Ed25519 signing tools; no build of the game uses them any more |
 | `generate-country-*.mjs`, `generate-lang-packs.mjs`, `fetch-fmg.mjs` | Data/tooling generation |
 
 | `server/*.js` | Purpose |
@@ -177,7 +174,7 @@ Both `<Map>` and `<UI>` are keyed on `activeGameId` (not the library token) so a
 | `mapEditorStore.js`, `basemapStore.js`, `flagStore.js` | Editor docs, basemaps, "My flags" stores |
 | `dataDir.js` | Resolves the single writable `DATA_DIR` (`OH_DATA_DIR` or `server/data`) |
 | `security.js` | Cross-origin write policy, hub URL allowlist, byte-range parsing |
-| `ownerMigration.js`, `trust.js`, `country-names.json` | Owner code→name migration, signature checks for the signing tools, data |
+| `ownerMigration.js`, `country-names.json` | Owner code→name migration, data |
 
 ---
 
@@ -239,7 +236,6 @@ Gameplay writes flow: **AI turn / cheat / UI action → `gameState.js` write →
 |---|---|---|
 | **Map editor** | `?editor=1` route, OpenLayers, authors custom region/city/basemap maps, exports scenario bundles; can run the vendored FMG generator | [Map editor](map-editor.md) |
 | **Community hub** | Scenario/basemap sharing via GitHub issues; server/Worker proxies downloads and counts imports | [Community hub](runtime-services.md) |
-| **Content nodes** | [Open-Historia/open-historia-node](https://github.com/Open-Historia/open-historia-node) (a separate repository) — anyone-runnable, hash-addressed, read-only file server. The website used to load its map through these nodes. It now carries its own copy, and nothing in this repository talks to a node: the client side (`src/runtime/web/nodeConnect.js`, `contentTrust.js`) is removed | [Web build §8](web-build.md) |
 | **Web saves** | No accounts and no sync: games and scenarios stay in this browser (IndexedDB) and move with game export/import (web build only) | [Web build](web-build.md) |
 | **i18n** | shipped language packs translate the interface (22 languages); the AI translates only content, once, into the server's pack; the prompts' guidance ships translated | [Languages & Translation](i18n.md) |
 

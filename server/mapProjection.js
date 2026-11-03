@@ -161,7 +161,27 @@ const MATH = {
       return [x / naturalEarthX(phi), phi];
     },
   },
+  // The round "flat earth" map: azimuthal equidistant about the North Pole.
+  // The pole is the middle, every place is as far from it on the page as on
+  // the globe, and the South Pole is the rim. The prime meridian runs straight
+  // down from the middle, so the Americas are on the left and Asia on the
+  // right, as on the UN's emblem. Its outline is a circle, not a band, so its
+  // sheet is set by hand below (FLAT_EARTH_SHEET).
+  "flat-earth": {
+    forward: (lambda, phi) => {
+      const r = PI / 2 - phi;
+      return [r * sin(lambda), -r * cos(lambda)];
+    },
+    inverse: (x, y) => {
+      const r = min(PI, sqrt(x * x + y * y));
+      return [r > 1e-12 ? Math.atan2(x, -y) : 0, PI / 2 - r];
+    },
+  },
 };
+// The flat-earth disc as wide as the plane: the rim (the South Pole, π from the
+// North Pole) on the plane's edge, so its sheet is the whole square.
+export const FLAT_EARTH = "flat-earth";
+const FLAT_EARTH_SHEET = { scale: 1, half: PI };
 
 // What the Workshop offers, in this order. `name` is the label; freeform is
 // the last, and is not a projection of a globe at all.
@@ -175,6 +195,7 @@ export const PROJECTIONS = Object.freeze([
   { id: "equal-earth", name: "Equal Earth" },
   { id: "mollweide", name: "Mollweide" },
   { id: "sinusoidal", name: "Sinusoidal" },
+  { id: FLAT_EARTH, name: "Flat Earth" },
   { id: FREEFORM, name: "Freeform" },
 ]);
 
@@ -188,28 +209,62 @@ export const isWorldProjection = (type) => Object.hasOwn(MATH, String(type));
 // it is switched off: `globe: false` (the game never wraps this map round a 3D
 // globe: a flat sheet is not one) and `wrap: false` (the map does not repeat
 // sideways when the player pans past its edge).
+//
+// A world projection may be centred off Greenwich: `centre` is the longitude
+// down the middle of the sheet (Q-BAM's Robinson is centred on 10.75°E),
+// written only when it is not 0.
 const viewFlags = (raw) => ({ ...(raw.globe === false ? { globe: false } : {}), ...(raw.wrap === false ? { wrap: false } : {}) });
+const wrapLon = (lon) => ((((lon + 180) % 360) + 360) % 360) - 180;
+const centreOf = (raw) => {
+  const centre = wrapLon(Number(raw.centre) || 0);
+  return centre ? { centre } : {};
+};
+
+// THE MAP'S SCALE: a line the author drew in the Workshop between two places
+// and the distance they said it measures ({ from: [lng, lat], to: [lng, lat],
+// km }, places as stored). A freeform sheet has no globe to measure on, so its
+// whole scale comes from it (server/mapDistance.js); on a world projection it
+// corrects a map drawn at the wrong size (a world smaller or larger than the
+// Earth), every distance on it by the same factor. null when there is none or
+// it could not be one.
+export const SCALE_KM_MOST = 1e7;
+const placeOf = (value) => (Array.isArray(value) && value.length >= 2 && Number.isFinite(Number(value[0])) && Number.isFinite(Number(value[1]))
+  ? [round(clamp(Number(value[0]), -540, 540)), round(clamp(Number(value[1]), -MERCATOR_MAX_LAT, MERCATOR_MAX_LAT))]
+  : null);
+export const normalizeScaleLine = (value) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const from = placeOf(value.from);
+  const to = placeOf(value.to);
+  const km = Number(value.km);
+  if (!from || !to || !(km > 0) || !(km <= SCALE_KM_MOST)) return null;
+  if (abs(from[0] - to[0]) < 1e-6 && abs(from[1] - to[1]) < 1e-6) return null;
+  return { from, to, km: round(km, 3) };
+};
+const scaleOf = (raw) => { const line = normalizeScaleLine(raw.scale); return line ? { scale: line } : {}; };
+
 export const normalizeProjection = (value) => {
   const raw = typeof value === "string" ? { type: value } : value && typeof value === "object" && !Array.isArray(value) ? value : {};
   const type = String(raw.type ?? "").trim().toLowerCase().replace(/[\s_]+/g, "-");
   if (type === FREEFORM) {
     const aspect = Number(raw.aspect);
-    return { type: FREEFORM, aspect: Number.isFinite(aspect) && aspect > 0 ? clamp(aspect, 0.05, 20) : 2, ...viewFlags(raw) };
+    return { type: FREEFORM, aspect: Number.isFinite(aspect) && aspect > 0 ? clamp(aspect, 0.05, 20) : 2, ...viewFlags(raw), ...scaleOf(raw) };
   }
-  return { type: isWorldProjection(type) ? type : DEFAULT_PROJECTION, ...viewFlags(raw) };
+  return { type: isWorldProjection(type) ? type : DEFAULT_PROJECTION, ...centreOf(raw), ...viewFlags(raw), ...scaleOf(raw) };
 };
 
-// What the game map is told of them.
+// What the game map is told of them. The round flat-earth map is never wrapped
+// round a globe nor repeated sideways: either would tear its disc apart.
 export const mapViewOf = (projection) => {
   const raw = projection && typeof projection === "object" && !Array.isArray(projection) ? projection : {};
-  return { noGlobe: raw.globe === false, noWrap: raw.wrap === false };
+  const disc = String(raw.type ?? "") === FLAT_EARTH;
+  return { noGlobe: disc || raw.globe === false, noWrap: disc || raw.wrap === false };
 };
 
 // Whether a projection is worth writing down at all: Mercator with both
-// switches on is what a map is when it says nothing.
+// switches on and no scale line is what a map is when it says nothing.
 export const projectionIsDefault = (projection) => {
   const spec = normalizeProjection(projection);
-  return spec.type === DEFAULT_PROJECTION && spec.globe !== false && spec.wrap !== false;
+  return spec.type === DEFAULT_PROJECTION && !spec.centre && spec.globe !== false && spec.wrap !== false && !spec.scale;
 };
 
 // Whether world.projection is a map already laid out (the game's own record)
@@ -219,7 +274,8 @@ export const projectionIsLaidOut = (value) => Boolean(value && typeof value === 
 export const sameProjection = (a, b) => {
   const left = normalizeProjection(a);
   const right = normalizeProjection(b);
-  return left.type === right.type && (left.type !== FREEFORM || abs(left.aspect - right.aspect) < 1e-6);
+  return left.type === right.type && abs((left.centre ?? 0) - (right.centre ?? 0)) < 1e-9
+    && (left.type !== FREEFORM || abs(left.aspect - right.aspect) < 1e-6);
 };
 
 // ---------------------------------------------------------------------------
@@ -234,6 +290,11 @@ export const sameProjection = (a, b) => {
 const SCALE = {};
 const HALF_HEIGHT = {};
 for (const [type, math] of Object.entries(MATH)) {
+  if (type === FLAT_EARTH) {
+    SCALE[type] = FLAT_EARTH_SHEET.scale;
+    HALF_HEIGHT[type] = FLAT_EARTH_SHEET.half;
+    continue;
+  }
   const scale = PI / math.forward(PI, 0)[0];
   SCALE[type] = scale;
   HALF_HEIGHT[type] = type === "mercator" ? PI : math.forward(0, PI / 2)[1] * scale;
@@ -261,19 +322,22 @@ export const sheetBounds = (projection) => {
   return { west: -east, south: -north, east, north };
 };
 
-// True longitude and latitude (degrees) to the plane, for a world projection.
-const geoToPlane = (type, lon, lat) => {
-  const [x, y] = MATH[type].forward(clamp(Number(lon) || 0, -180, 180) * RAD, clamp(Number(lat) || 0, -90, 90) * RAD);
+// True longitude and latitude (degrees) to the plane, for a world projection
+// (`spec` from normalizeProjection, so with its centre).
+const geoToPlane = ({ type, centre = 0 }, lon, lat) => {
+  const local = centre ? wrapLon((Number(lon) || 0) - centre) : clamp(Number(lon) || 0, -180, 180);
+  const [x, y] = MATH[type].forward(local * RAD, clamp(Number(lat) || 0, -90, 90) * RAD);
   return [x * SCALE[type], y * SCALE[type]];
 };
 
 // And back. A spot outside the projection's outline (the corners of a
 // Robinson or Mollweide sheet) has no place on the globe: it is given the
 // nearest one, on the edge.
-const planeToGeo = (type, X, Y) => {
+const planeToGeo = ({ type, centre = 0 }, X, Y) => {
   const half = HALF_HEIGHT[type];
   const [lambda, phi] = MATH[type].inverse(X / SCALE[type], clamp(Y, -half, half) / SCALE[type]);
-  return [clamp(lambda, -PI, PI) / RAD, clamp(phi, -PI / 2, PI / 2) / RAD];
+  const lon = clamp(lambda, -PI, PI) / RAD;
+  return [centre ? wrapLon(lon + centre) : lon, clamp(phi, -PI / 2, PI / 2) / RAD];
 };
 
 // One spot of the plane, moved from one projection's sheet to another's.
@@ -283,9 +347,9 @@ export const convertPlane = (from, to, X, Y) => {
   const source = normalizeProjection(from);
   const target = normalizeProjection(to);
   if (source.type !== FREEFORM && target.type !== FREEFORM) {
-    if (source.type === target.type) return [X, Y];
-    const [lon, lat] = planeToGeo(source.type, X, Y);
-    return geoToPlane(target.type, lon, lat);
+    if (sameProjection(source, target)) return [X, Y];
+    const [lon, lat] = planeToGeo(source, X, Y);
+    return geoToPlane(target, lon, lat);
   }
   const a = sheetHalf(source);
   const b = sheetHalf(target);
@@ -301,6 +365,8 @@ export const planeOnMap = (projection, X, Y) => {
   const { hx, hy } = sheetHalf(spec);
   if (abs(X) > hx + 1e-9 || abs(Y) > hy + 1e-9) return false;
   if (spec.type === FREEFORM) return true;
+  // The flat-earth map is a disc: its sheet's corners are off the globe.
+  if (spec.type === FLAT_EARTH) return X * X + Y * Y <= PI * PI + 1e-9;
   const [lambda] = MATH[spec.type].inverse(X / SCALE[spec.type], Y / SCALE[spec.type]);
   return abs(lambda) <= PI + 1e-6;
 };
@@ -328,8 +394,22 @@ export const geoToDisplay = (projection, lon, lat) => {
     const Y = (clamp(Number(lat) || 0, -90, 90) / 90) * hy;
     return [round((X / PI) * 180), round(planeToLatDeg(Y))];
   }
-  const [X, Y] = geoToPlane(spec.type, lon, lat);
+  const [X, Y] = geoToPlane(spec, lon, lat);
   return [round((X / PI) * 180), round(planeToLatDeg(Y))];
+};
+
+// Where a picture drawn in a world projection lies on that projection's sheet
+// when it shows only part of the globe ({ west, south, east, north } in
+// degrees, west and east measured from the sheet's centre): bounds as stored.
+// Its sides are read on the equator and the central meridian, which is exact
+// for a crop by latitude in every projection here.
+export const geoBoxOnSheet = (projection, box) => {
+  const { type } = normalizeProjection(projection);
+  const [west] = geoToDisplay(type, box.west, 0);
+  const [east] = geoToDisplay(type, box.east, 0);
+  const [, north] = geoToDisplay(type, 0, box.north);
+  const [, south] = geoToDisplay(type, 0, box.south);
+  return normalizeImageBounds({ west, south, east, north });
 };
 
 // A stored place of a map in `projection`, back as its true longitude and
@@ -342,7 +422,7 @@ export const displayToGeo = (projection, lon, lat) => {
     const { hx, hy } = sheetHalf(spec);
     return [round(clamp(X / hx, -1, 1) * 180), round(clamp(Y / hy, -1, 1) * 90)];
   }
-  const [geoLon, geoLat] = planeToGeo(spec.type, X, Y);
+  const [geoLon, geoLat] = planeToGeo(spec, X, Y);
   return [round(geoLon), round(geoLat)];
 };
 
@@ -359,10 +439,12 @@ export const normalizeImageBounds = (value) => {
   const east = Number(value.east);
   const north = Number(value.north);
   if (![west, south, east, north].every(Number.isFinite)) return null;
+  // A little past ±180 is allowed: a hand-made world picture (Q-BAM) can draw
+  // its globe narrower than its frame, so the frame reaches past the edges.
   const bounds = {
-    west: clamp(west, -180, 180),
+    west: clamp(west, -360, 360),
     south: clamp(south, -MERCATOR_MAX_LAT, MERCATOR_MAX_LAT),
-    east: clamp(east, -180, 180),
+    east: clamp(east, -360, 360),
     north: clamp(north, -MERCATOR_MAX_LAT, MERCATOR_MAX_LAT),
   };
   if (!(bounds.east - bounds.west > 1e-6) || !(bounds.north - bounds.south > 1e-6)) return null;
@@ -511,6 +593,17 @@ const moveOwnBasemaps = (assets, move) => {
 };
 
 // The projection a bundle's file declares and has not been laid out in, or
+// A scale line's two ends moved as every place of the map is moved; the
+// distance it measures is the author's and stays.
+export const moveScaleLine = (line, move) => {
+  const clean = normalizeScaleLine(line);
+  if (!clean) return null;
+  return normalizeScaleLine({ from: move(clean.from[0], clean.from[1]), to: move(clean.to[0], clean.to[1]), km: clean.km });
+};
+// The same for a map converted from one projection to another (the Workshop's
+// Projection panel): the line goes where its two ends go.
+export const convertScaleLine = (from, to, line) => moveScaleLine(line, (lon, lat) => convertDisplayPoint(from, to, lon, lat));
+
 // null: nothing declared, already laid out, or Mercator, which needs nothing.
 export const declaredProjectionOf = (bundle) => {
   const stated = bundle?.data?.world?.projection;
@@ -528,7 +621,7 @@ export const layOutScenarioBundle = (bundle) => {
   if (!spec) return bundle;
   const move = (lon, lat) => geoToDisplay(spec, lon, lat);
   const world = movePlaces(bundle.data.world, move);
-  world.projection = { ...spec, laidOut: true };
+  world.projection = { ...spec, laidOut: true, ...(spec.scale ? { scale: moveScaleLine(spec.scale, move) } : {}) };
   const background = bundle.data.world.background && typeof bundle.data.world.background === "object" ? bundle.data.world.background : null;
   if (background?.kind === "image") {
     // Bounds the file gives say what part of the globe (or of the freeform

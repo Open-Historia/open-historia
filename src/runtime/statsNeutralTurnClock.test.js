@@ -49,6 +49,23 @@ test('war with changed fronts still advances and samples unrelated neutral nativ
   assert.equal(world.countryStatsHistory, undefined);
 });
 
+test('city bombing excludes only affected accounts from native neutral settlement', () => {
+  const war = args();
+  const onBelligerent = { ...war.turnFronts,
+    airStrikes: [{ kind: 'city', country: 'Borduria', power: 75, dead: 80 }] };
+  assert.deepEqual(planNeutralStatsLiveTurn(args({ turnFronts: onBelligerent }))?.scopedCountries, ['Neutral'],
+    'legacy city damage to an excluded belligerent must not stop unrelated native civil accrual');
+  const onNeutral = { ...war.turnFronts,
+    airStrikes: [{ kind: 'city', country: 'Neutral', power: 75, dead: 80 }] };
+  assert.equal(planNeutralStatsLiveTurn(args({ turnFronts: onNeutral })), null,
+    'the bombed neutral account must not receive a second native GDP/population writer');
+  const reasons = [];
+  assert.equal(planNeutralStatsLiveTurn(args({ turnFronts: { ...war.turnFronts,
+    airStrikes: [{ kind: 'city', country: 'Unknown', power: 75, dead: 80 }] },
+    onReject: (code) => reasons.push(code) })), null);
+  assert.deepEqual(reasons, ['unknown-city-strike-target']);
+});
+
 test('a short neutral turn accrues its exact days, while an extended turn samples only elapsed civil months', () => {
   const short = planNeutralStatsLiveTurn(args({ toDate: '1912-01-04' })).afterEvents(baseline(), 0);
   assert.equal(short.countryStats.Neutral.continuity.demographicEvolution.lastDate, '1912-01-04');

@@ -9,10 +9,10 @@ import { GameLoadingScreen, LOADING_CEILING_MS, useGameLoading } from "./gameLoa
 import { setOpenGameCountry, useLibraryState } from "../../runtime/library.js";
 import { playerAtWar } from "../../runtime/playerAtWar.js";
 import { enterGame, useGameEntered } from "../../runtime/gameEntry.js";
-import { useActiveFeatures, isActiveFeatureEnabled } from "../../runtime/gameFeatures.js";
+import { useActiveFeatures, activeWars } from "../../runtime/gameFeatures.js";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
 import { brushedMetalUrl } from "./brushedMetal.js";
-import { playerFrontsKey } from "./warRoomData.js";
+import { fightingIn, playerFrontsKey } from "./warRoomData.js";
 import { presenceFor, useDiscordPresence } from "../../runtime/discordPresence.js";
 import { musicSceneOf, setMusicScene } from "../../runtime/ambientMusic.js";
 import { followScenarioMusic } from "../../runtime/scenarioMusic.js";
@@ -29,7 +29,7 @@ import { ADVISOR_SLIDE } from "./advisorSlide.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { useBackToClose } from "../../runtime/backToClose.js";
 import { MAP_CARD_OPENED, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT } from "../../runtime/mobileUi.js";
-import { BESIDE_DOCK_LEFT, DOCK_BOTTOM_REM, DOCK_HEIGHT_REM, DOCK_LEFT_REM, WAR_ROOM_BUTTON_REM } from "./hudDock.js";
+import { DOCK_BOTTOM_REM, DOCK_HEIGHT_REM, DOCK_LEFT_REM, WAR_ROOM_BUTTON_REM, useDockGeometry } from "./hudDock.js";
 import { showEveryTroop } from "../Map/troopDetail.js";
 import { dismissRegionPopup } from "../Selection/Regions.jsx";
 import { dismissUnitPopup } from "../Selection/Units.jsx";
@@ -220,7 +220,7 @@ const AdvisorDockIcon = () => (
   </svg>
 );
 
-const AdvisorButton = ({ isAdvisorOpen, dockStyle, onToggle }) => (
+const AdvisorButton = ({ isAdvisorOpen, isMobile, dockStyle, onToggle }) => (
   <button
     type="button"
     title="Advisor"
@@ -230,12 +230,15 @@ const AdvisorButton = ({ isAdvisorOpen, dockStyle, onToggle }) => (
       ...baseStyle,
       ...dockStyle,
       // Above the map switch at the foot of the stack (MapModeSelector.jsx).
-      bottom: `calc(3rem + ${SAFE_BOTTOM})`,
+      bottom: `calc(${isMobile ? "3.6rem" : "3rem"} + ${SAFE_BOTTOM})`,
       // Rides beside the advisor drawer, so a wide drawer carries it over the
       // Actions/Projects/chat panels (9998); an open panel stays on top.
       zIndex: 9997,
-      height: "4rem", width: "4rem",
-      cursor: "pointer", fontSize: "1.5rem",
+      height: isMobile ? "3.2rem" : "4rem",
+      width: isMobile ? "3.2rem" : "4rem",
+      cursor: "pointer",
+      fontSize: isMobile ? "1.25rem" : "1.5rem",
+      borderRadius: isMobile ? "12px" : "14px",
       background: isAdvisorOpen
         ? "rgba(255,255,255,0.085)"
         : "rgba(35,35,39,0.53)",
@@ -267,7 +270,10 @@ const WarRoomIcon = () => (
 
 // How far in from the corner it stands while the war room is open: clear of the frame's strips.
 const WAR_ROOM_OPEN_INSET_REM = 1.1;
-const WarRoomButton = ({ open, isMobile, onToggle }) => (
+const WarRoomButton = ({ open, isMobile, onToggle }) => {
+  const buttonSize = isMobile ? "3rem" : `${WAR_ROOM_BUTTON_REM}rem`;
+  const dock = useDockGeometry();
+  return (
   <button
     type="button"
     title="War room"
@@ -279,9 +285,9 @@ const WarRoomButton = ({ open, isMobile, onToggle }) => (
       ...baseStyle,
       // While the war room is open the dock it stood beside is out of sight, so
       // it goes to the corner of the screen, inside the frame round the map.
-      left: `calc(${open ? `${WAR_ROOM_OPEN_INSET_REM}rem` : isMobile ? `${DOCK_LEFT_REM}rem` : BESIDE_DOCK_LEFT} + ${SAFE_LEFT})`,
-      bottom: `calc(${open ? WAR_ROOM_OPEN_INSET_REM : isMobile ? DOCK_BOTTOM_REM + DOCK_HEIGHT_REM + 0.5 : DOCK_BOTTOM_REM}rem + ${SAFE_BOTTOM})`,
-      height: `${WAR_ROOM_BUTTON_REM}rem`, width: `${WAR_ROOM_BUTTON_REM}rem`,
+      left: `calc(${open ? `${WAR_ROOM_OPEN_INSET_REM}rem` : isMobile ? `${DOCK_LEFT_REM}rem` : dock.besideDockLeft} + ${SAFE_LEFT})`,
+      bottom: `calc(${open ? WAR_ROOM_OPEN_INSET_REM : isMobile ? DOCK_BOTTOM_REM + DOCK_HEIGHT_REM + 0.35 : DOCK_BOTTOM_REM}rem + ${SAFE_BOTTOM})`,
+      height: buttonSize, width: buttonSize,
       borderRadius: "50%",
       cursor: "pointer",
       backdropFilter: "none",
@@ -293,11 +299,17 @@ const WarRoomButton = ({ open, isMobile, onToggle }) => (
         ? "0 0 0 2px rgba(255,255,255,0.85), 0 3px 12px rgba(0,0,0,0.55)"
         : "0 3px 12px rgba(0,0,0,0.55)",
       transition: "left 0.3s ease, bottom 0.3s ease, box-shadow 0.15s ease",
+      // Under an open Actions, Projects or Diplomacy panel (9998), as the
+      // advisor's button is: on a phone it stands where their foot is, over the
+      // Submit button ("it covers the submit action button in the action tab",
+      // a player, 2026-10-28). Over everything while the war room is open.
+      zIndex: open ? 9999 : 9997,
     }}
   >
     <WarRoomIcon />
   </button>
-);
+  );
+};
 
 // The wrapper round the HUD's own controls: nothing of its own to lay out
 // while they show, and all of them gone with it while the war room is open.
@@ -343,6 +355,10 @@ const Main = ({
   const consumeCountryTarget = useCallback(() => setPendingCountryTarget(""), []);
   const [isForcesOpen, setIsForcesOpen] = useState(false);
   const [activeBottomPanel, setActiveBottomPanel] = useState(null);
+  // Which tab the Actions panel is asked to show (actions.jsx): Projects &
+  // Operations is its second tab, which the advisor's board card opens. A new
+  // object each time, so asking twice for the same tab still switches to it.
+  const [actionsTab, setActionsTab] = useState(null);
   const [shouldLoadAdvisor, setShouldLoadAdvisor] = useState(false);
   const [shouldLoadCountry, setShouldLoadCountry] = useState(false);
   const [isFullscreenEnabled, setIsFullscreenEnabled] = useState(false);
@@ -653,13 +669,16 @@ const Main = ({
     setIsCountryOpen((open) => !open);
   };
   // The war room's button is there while the player's troops are on a
-  // battlefield where a war is being fought or is frozen by a ceasefire
-  // (warRoomData.js), and fronts are switched on for this game.
+  // battlefield where a war is being fought or is frozen by a ceasefire, or
+  // are built up on a border in peace (warRoomData.js), and fronts are
+  // switched on for this game.
   useActiveFeatures();
   // Nobody is playing a game that has not been opened: no country, so no war.
   const playerCountry = gameEntered ? activeGame?.country || "" : "";
   const warFronts = useRuntimeState("world", (world) => playerFrontsKey(world?.battlefields, playerCountry, world?.wars), playerCountry);
-  const atWar = Boolean(warFronts) && isActiveFeatureEnabled("fronts");
+  const hasFronts = Boolean(warFronts) && activeWars().battlefields;
+  // (Forces built up in peace are no war: the music does not go to war for them.)
+  const atWar = hasFronts && fightingIn(warFronts);
   // For the music, at war is wider than the war room's button: the player's
   // country on a side of a war being fought (the war ledger), whether or not
   // there is a battlefield for it or fronts are switched on.
@@ -802,6 +821,7 @@ const Main = ({
               activePanel={activeBottomPanel}
               onTogglePanel={toggleBottomPanel}
               mapRef={mapRef}
+              actionsTab={actionsTab}
             />
             <MapModeSelector dockStyle={advisorDockStyle} />
             <Other
@@ -809,7 +829,7 @@ const Main = ({
               active={isCountryOpen}
               onToggle={toggleCountry}
             />
-            <Search mapRef={mapRef} besideWarRoom={atWar} />
+            <Search mapRef={mapRef} besideWarRoom={hasFronts} />
             <ForcesPanel
               mapRef={mapRef}
               topOffset={TOP_BAR_OFFSET}
@@ -818,6 +838,7 @@ const Main = ({
             />
             <AdvisorButton
               isAdvisorOpen={isAdvisorOpen}
+              isMobile={isMobile}
               dockStyle={advisorDockStyle}
               onToggle={() => {
                 setIsWarRoomOpen(false);
@@ -828,7 +849,7 @@ const Main = ({
           </>
         )}
       </div>
-      {(atWar || isWarRoomOpen) && (
+      {(hasFronts || isWarRoomOpen) && (
         <WarRoomButton open={warRoomShown} isMobile={isMobile} onToggle={toggleWarRoom} />
       )}
       <Suspense fallback={null}>
@@ -856,8 +877,8 @@ const Main = ({
             onResizeEnd={handleAdvisorResizeEnd}
             // A phone's advisor covers the screen, so it steps aside for the
             // panel it opens.
-            onOpenActions={() => { setActiveBottomPanel("actions"); if (isMobile) setIsAdvisorOpen(false); }}
-            onOpenProjects={() => { setActiveBottomPanel("projects"); if (isMobile) setIsAdvisorOpen(false); }}
+            onOpenActions={() => { setActionsTab({ tab: "actions" }); setActiveBottomPanel("actions"); if (isMobile) setIsAdvisorOpen(false); }}
+            onOpenProjects={() => { setActionsTab({ tab: "projects" }); setActiveBottomPanel("actions"); if (isMobile) setIsAdvisorOpen(false); }}
             requestedPrompt={pendingAdvisorPrompt}
             onConsumeRequest={() => setPendingAdvisorPrompt("")}
           />

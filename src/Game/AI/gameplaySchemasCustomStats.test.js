@@ -64,6 +64,8 @@ test("custom GM transport advertises exact customStats keys inside its shallow J
   assert.match(patchField.description, /"customStats":\{"timber":1\}/);
   assert.match(eventsField.description, /impacts\.polityChanges\[\]\.stats/);
   assert.match(eventsField.description, /timber, silver, grainYield/);
+  // And, as the standard field does, the postures a unit may take.
+  assert.match(eventsField.description, /posture \(impacts\.unitOps\) is one of: holding, massing, patrol, transit, exercise, blockade, withdrawing, assaulting\./);
 
   // The provider transport remains shallow; the fix teaches the string fields
   // rather than expanding the huge internal GM transaction schema again.

@@ -1,6 +1,15 @@
 /*! Open Historia — Country political overview / party landscape */
+// The Political World of a country (runtime/politicalActors.js), as the Stats
+// pane's Politics view shows it. Its parties and government carry what the
+// Politics tab once kept apart: native names, the ten ideologies, roles, seats,
+// the legislature and the next election ("add the new politics thing into the
+// political world and just make it an enhancement of that", the owner,
+// 2026-11-03). A country whose parties lack them can have them filled in on
+// the player's asking (onCompile: Game/AI/gameplay.js assessPoliticalLandscape).
 import React, { useEffect, useMemo, useState } from "react";
 import { buildGovernmentPartyPresentation, buildPoliticalLandscape } from "../../runtime/politicalPresentation.js";
+import { formatGameDateReadable } from "../../runtime/gameDates.js";
+import { PARTY_ROLE_LABELS, findIdeology, isListedSubideology } from "../../runtime/politics.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const list = (value) => (Array.isArray(value) ? value.map(clean).filter(Boolean) : (clean(value) ? [clean(value)] : []));
@@ -153,20 +162,27 @@ const DetailList = ({ title, values }) => {
   );
 };
 
-const PartyDetail = ({ party, onClose }) => {
-  if (!party) return null;
+// A party's role's colour, as the Politics card gave it: who governs warm, the outlawed red.
+const ROLE_TONES = {
+  governing: "#fbbf24",
+  coalition: "#fcd34d",
+  opposition: "#93c5fd",
+  extraParliamentary: "#94a3b8",
+  underground: "#9aa1ab",
+  exile: "#9aa1ab",
+  banned: "#f87171",
+};
+// Its role: the government's own parties by the government, any other by what the record says (opposition if nothing).
+const roleOf = (party) => (party?.ruling ? "governing" : party?.coalition ? "coalition" : PARTY_ROLE_LABELS[party?.role] ? party.role : "opposition");
+
+// What a party row opens onto: what the row does not already say (its description, the words of its outlook, its
+// priorities and foreign policy), from the Political World.
+const PartyMore = ({ party }) => {
   if (party.isOther) {
     return (
-      <div style={{ ...card, marginTop: "0.7rem", padding: "0.72rem 0.78rem" }}>
-        <div style={{ alignItems: "flex-start", display: "flex", gap: "0.5rem", justifyContent: "space-between" }}>
-          <div>
-            <div style={{ color: "rgba(255,255,255,0.92)", fontSize: "0.78rem", fontWeight: 850 }}>Other political support</div>
-            <div style={{ color: "rgba(255,255,255,0.44)", fontSize: "0.63rem", marginTop: "0.12rem" }}>{formatSupport(party.support)} combined</div>
-          </div>
-          <button type="button" onClick={onClose} aria-label="Close party details" style={{ background: "none", border: 0, color: "rgba(255,255,255,0.42)", cursor: "pointer", fontSize: "0.9rem", padding: 0 }}>×</button>
-        </div>
+      <div style={{ padding: "0 0.65rem 0.6rem" }}>
         {party.members?.length > 0 && (
-          <div style={{ display: "flex", flexDirection: "column", gap: "0.38rem", marginTop: "0.65rem" }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.38rem" }}>
             {party.members.map((member) => (
               <div key={member.id} style={{ alignItems: "center", display: "flex", gap: "0.45rem", justifyContent: "space-between" }}>
                 <span style={{ color: "rgba(255,255,255,0.7)", fontSize: "0.68rem" }}>{member.name}</span>
@@ -183,45 +199,87 @@ const PartyDetail = ({ party, onClose }) => {
       </div>
     );
   }
-
-  const ideology = list(party.ideology);
-  const hasDetail = party.leader || ideology.length || party.publicDescription || party.goals?.length || party.publicPriorities?.length || party.publicForeignPolicy?.length;
+  const family = findIdeology(party.ideologyFamily);
+  // (The ten ideologies' own name and the subideology stand for the free text where it only repeats them.)
+  const ideology = list(party.ideology).filter((item) => item.toLowerCase() !== String(family?.name ?? "").toLowerCase() && item.toLowerCase() !== String(party.subideology ?? "").toLowerCase());
+  const hasDetail = ideology.length || party.publicDescription || party.goals?.length || party.publicPriorities?.length || party.publicForeignPolicy?.length;
   return (
-    <div style={{ ...card, marginTop: "0.7rem", padding: "0.76rem 0.8rem" }}>
-      <div style={{ alignItems: "flex-start", display: "flex", gap: "0.55rem", justifyContent: "space-between" }}>
-        <div style={{ minWidth: 0 }}>
-          <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.3rem" }}>
-            <span style={{ color: "rgba(255,255,255,0.95)", fontSize: "0.8rem", fontWeight: 850 }}>{party.name}</span>
-            {party.ruling && <Badge tone="rgba(245,158,11,0.14)" border="rgba(245,158,11,0.32)" color="#fde68a">Government</Badge>}
-            {!party.ruling && party.coalition && <Badge>Coalition</Badge>}
-          </div>
-          <div style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.66rem", fontWeight: 800, marginTop: "0.15rem" }}>
-            {formatSupport(party.support)} support
-            {party.supportApproximate && <span style={{ color: "rgba(253,230,138,0.62)", fontSize: "0.56rem", marginLeft: "0.35rem", textTransform: "uppercase" }}>Approximate</span>}
-          </div>
-        </div>
-        <button type="button" onClick={onClose} aria-label="Close party details" style={{ background: "none", border: 0, color: "rgba(255,255,255,0.42)", cursor: "pointer", fontSize: "0.9rem", padding: 0 }}>×</button>
-      </div>
-
-      {party.publicDescription && <div style={{ color: "rgba(255,255,255,0.62)", fontSize: "0.67rem", lineHeight: 1.46, marginTop: "0.55rem" }}>{party.publicDescription}</div>}
-      {party.leader && (
-        <div style={{ display: "grid", gap: "0.2rem", gridTemplateColumns: "5.6rem minmax(0,1fr)", marginTop: "0.58rem" }}>
-          <span style={{ color: "rgba(255,255,255,0.38)", fontSize: "0.62rem", fontWeight: 750 }}>Party leader</span>
-          <span style={{ color: "rgba(255,255,255,0.76)", fontSize: "0.66rem", fontWeight: 700 }}>{party.leader}</span>
-        </div>
-      )}
+    <div style={{ padding: "0 0.65rem 0.62rem" }}>
+      {party.publicDescription && <div style={{ color: "rgba(255,255,255,0.62)", fontSize: "0.67rem", lineHeight: 1.46 }}>{party.publicDescription}</div>}
       {ideology.length > 0 && (
-        <div style={{ display: "flex", flexWrap: "wrap", gap: "0.28rem", marginTop: "0.58rem" }}>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "0.28rem", marginTop: "0.45rem" }}>
           {ideology.map((item) => <Badge key={item}>{item}</Badge>)}
         </div>
       )}
       <DetailList title="Public priorities" values={party.publicPriorities?.length ? party.publicPriorities : party.goals} />
       <DetailList title="Foreign-policy outlook" values={party.publicForeignPolicy} />
       {!hasDetail && (
-        <div style={{ color: "rgba(255,255,255,0.38)", fontSize: "0.64rem", lineHeight: 1.42, marginTop: "0.58rem" }}>
+        <div style={{ color: "rgba(255,255,255,0.38)", fontSize: "0.64rem", lineHeight: 1.42 }}>
           No additional public party information is currently available.
         </div>
       )}
+    </div>
+  );
+};
+
+// One party in the list: at a glance what the Politics card showed (its names, its role, its ideology, leader,
+// seats, support and founding), and on a click what the Political World knows besides (PartyMore). The share of
+// political support no party of the record's own explains is a row of its own.
+const PartyRow = ({ party, open, onToggle, legislatureSeats = 0, onHover = () => {} }) => {
+  const family = findIdeology(party.ideologyFamily);
+  const listed = isListedSubideology(party.ideologyFamily, party.subideology);
+  const abbreviations = [...new Set([party.shortNameNative, party.shortName].map(clean).filter(Boolean))].join(" · ");
+  const role = roleOf(party);
+  const seats = Number.isFinite(party.seats) ? party.seats : null;
+  return (
+    <div style={{ borderLeft: `3px solid ${partyColor(party)}`, borderTop: "1px solid rgba(255,255,255,0.07)" }}>
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={onToggle}
+        onMouseEnter={() => onHover(party.id)}
+        onMouseLeave={() => onHover("")}
+        style={{ background: open ? "rgba(255,255,255,0.04)" : "transparent", border: 0, color: "inherit", cursor: "pointer", display: "block", padding: "0.55rem 0.65rem", textAlign: "left", width: "100%" }}
+      >
+        <div style={{ alignItems: "flex-start", display: "flex", gap: "0.6rem", justifyContent: "space-between" }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ color: "rgba(255,255,255,0.9)", fontSize: "0.74rem", fontWeight: 800 }}>
+              {party.isOther
+                ? <span>Other political support</span>
+                : <span data-no-translate>{party.name}{abbreviations && <span style={{ color: "rgba(255,255,255,0.45)", fontWeight: 700 }}> ({abbreviations})</span>}</span>}
+            </div>
+            {!party.isOther && clean(party.nameNative) && clean(party.nameNative) !== clean(party.name) && (
+              <div data-no-translate style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.65rem", fontStyle: "italic", marginTop: "0.1rem" }}>{party.nameNative}</div>
+            )}
+          </div>
+          {party.isOther
+            ? <span style={{ color: "rgba(255,255,255,0.48)", flexShrink: 0, fontSize: "0.65rem", fontWeight: 800 }}>{formatSupport(party.support)}</span>
+            : <span style={{ border: `1px solid ${ROLE_TONES[role]}55`, borderRadius: "999px", color: ROLE_TONES[role], flexShrink: 0, fontSize: "0.56rem", fontWeight: 800, padding: "0.1rem 0.38rem" }}>{PARTY_ROLE_LABELS[role]}</span>}
+        </div>
+        {!party.isOther && (family || clean(party.subideology)) && (
+          <div style={{ color: "rgba(255,255,255,0.62)", fontSize: "0.64rem", marginTop: "0.25rem" }}>
+            {family && <span style={{ color: family.colour || "#94a3b8", fontWeight: 800 }}>{family.name}</span>}
+            {clean(party.subideology) && (family
+              ? (
+                <span
+                  title={listed ? undefined : "Not one of this ideology's listed subideologies"}
+                  style={{ color: listed ? "rgba(255,255,255,0.62)" : "rgba(255,255,255,0.35)" }}
+                > · {party.subideology}{listed ? "" : " (unlisted)"}</span>
+              )
+              : <span data-no-translate>{party.subideology}</span>)}
+          </div>
+        )}
+        {!party.isOther && (
+          <div style={{ color: "rgba(255,255,255,0.5)", display: "flex", flexWrap: "wrap", fontSize: "0.62rem", gap: "0.15rem 0.7rem", marginTop: "0.2rem" }}>
+            {party.leader && <span>Leader: <span style={{ color: "rgba(255,255,255,0.8)" }}>{party.leader}</span></span>}
+            {seats !== null && <span data-no-translate>{seats}{legislatureSeats ? `/${legislatureSeats}` : ""} seats</span>}
+            {Number.isFinite(party.support) && <span data-no-translate>{formatSupport(party.support)} support</span>}
+            {party.supportApproximate && <span style={{ color: "rgba(253,230,138,0.62)", fontSize: "0.54rem", textTransform: "uppercase" }}>Approximate</span>}
+            {clean(party.founded) && <span>Founded {party.founded}</span>}
+          </div>
+        )}
+      </button>
+      {open && <PartyMore party={party} />}
     </div>
   );
 };
@@ -276,8 +334,12 @@ const GovernmentOverview = ({ profile, fallbackGovernment, fallbackLeader }) => 
   const headOfState = officeholderName(government.headOfState || fallbackLeader || profile?.leader);
   const headOfGovernment = officeholderName(government.headOfGovernment);
   const governmentParties = buildGovernmentPartyPresentation(profile);
+  const legislature = clean(government.legislature);
+  const legislatureSeats = Number(government.legislatureSeats) > 0 ? Number(government.legislatureSeats) : 0;
+  const nextElection = clean(government.nextElection);
+  const seated = (Array.isArray(profile?.parties) ? profile.parties : []).filter((party) => Number(party?.seats) > 0);
 
-  if (!form && !headOfState && !headOfGovernment && !governmentParties.names.length) return null;
+  if (!form && !headOfState && !headOfGovernment && !governmentParties.names.length && !legislature && !nextElection && !legislatureSeats) return null;
   return (
     <div style={{ ...card, padding: "0.72rem 0.78rem" }}>
       <div style={sectionLabel}>Government</div>
@@ -304,6 +366,51 @@ const GovernmentOverview = ({ profile, fallbackGovernment, fallbackLeader }) => 
           {governmentParties.names.join(" | ")}
         </div>
       )}
+      {(legislature || legislatureSeats > 0 || nextElection) && (
+        <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", color: "rgba(255,255,255,0.48)", display: "flex", flexDirection: "column", fontSize: "0.63rem", gap: "0.2rem", lineHeight: 1.45, marginTop: "0.55rem", paddingTop: "0.5rem" }}>
+          {(legislature || legislatureSeats > 0) && (
+            <div><span style={{ color: "rgba(255,255,255,0.34)" }}>Legislature</span> <span style={{ color: "rgba(255,255,255,0.72)" }}>{legislature}{legislatureSeats ? ` (${legislatureSeats} seats)` : ""}</span></div>
+          )}
+          {nextElection && <div><span style={{ color: "rgba(255,255,255,0.34)" }}>Next election</span> <span style={{ color: "rgba(255,255,255,0.72)" }}>{nextElection}</span></div>}
+        </div>
+      )}
+      {seated.length > 0 && (
+        <div style={{ borderRadius: "999px", display: "flex", height: "10px", marginTop: "0.5rem", overflow: "hidden" }}>
+          {seated.map((party) => (
+            <div
+              key={party.id || party.name}
+              title={`${party.shortName || party.name}: ${Number(party.seats) || 0} seats`}
+              style={{ backgroundColor: partyColor(party), width: `${(Number(party.seats) / Math.max(legislatureSeats, seated.reduce((sum, entry) => sum + Number(entry.seats), 0))) * 100}%` }}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// Fill in a country's parties (their seats, roles and ideologies, the legislature and the next election), or read
+// them afresh: one AI request, on the player's asking (onCompile).
+const PartiesCompile = ({ profile, onCompile, compiling = false, error = "" }) => {
+  if (typeof onCompile !== "function") return null;
+  const detailed = (Array.isArray(profile?.parties) ? profile.parties : []).some((party) => party?.ideologyFamily || Number.isFinite(party?.seats) || party?.role);
+  return (
+    <div style={{ ...card, marginTop: "0.7rem", padding: "0.62rem 0.78rem" }}>
+      {compiling && <div style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.68rem" }}>Compiling the government and parties…</div>}
+      {!compiling && !detailed && (
+        <div style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.68rem", lineHeight: 1.4 }}>
+          Its parties' seats, roles and ideologies have not been filled in yet. Filling them in asks the AI once.
+        </div>
+      )}
+      {!compiling && (
+        <button
+          type="button"
+          className="oh-tap-row"
+          onClick={onCompile}
+          style={{ background: "none", border: "none", color: "#93c5fd", cursor: "pointer", fontSize: "0.72rem", fontWeight: 700, marginTop: detailed ? 0 : "0.4rem", padding: 0 }}
+        >{detailed ? "Compile the government and parties again" : "Compile parties"}</button>
+      )}
+      {error && !compiling && <div role="alert" style={{ color: "#fca5a5", fontSize: "0.68rem", marginTop: "0.35rem" }}>{error}</div>}
     </div>
   );
 };
@@ -358,7 +465,7 @@ const InstitutionPortfolio = ({ rows = [] }) => {
                 <Badge tone={entry?.member ? "rgba(34,197,94,0.1)" : "rgba(148,163,184,0.09)"} border={entry?.member ? "rgba(34,197,94,0.23)" : "rgba(148,163,184,0.18)"} color={entry?.member ? "#86efac" : "rgba(255,255,255,0.55)"}>{lifecycleLabel(entry)}</Badge>
               </div>
               <div style={{ color: "rgba(255,255,255,0.36)", fontSize: "0.58rem", lineHeight: 1.4, marginTop: "0.22rem" }}>
-                {[entry?.member?.sinceDate ? `since ${entry.member.sinceDate}` : "", pending.length ? `${pending.length} pending lifecycle matter${pending.length === 1 ? "" : "s"}` : "", recent?.date && !entry?.member ? `last change ${recent.date}` : ""].filter(Boolean).join(" · ") || (institution.kind || "institution")}
+                {[entry?.member?.sinceDate ? `since ${(formatGameDateReadable(entry.member.sinceDate) || entry.member.sinceDate)}` : "", pending.length ? `${pending.length} pending lifecycle matter${pending.length === 1 ? "" : "s"}` : "", recent?.date && !entry?.member ? `last change ${(formatGameDateReadable(recent.date) || recent.date)}` : ""].filter(Boolean).join(" · ") || (institution.kind || "institution")}
               </div>
               {pending.slice(0, 2).map((item) => <div key={item.id} style={{ color: "var(--oh-grey-muted)", fontSize: "0.56rem", marginTop: "0.24rem" }}>• {item.kind} · {item.status}{item.requestedStatus ? ` · ${item.requestedStatus}` : ""}</div>)}
             </div>
@@ -410,7 +517,7 @@ const IntelligenceAssessment = ({ intelligence }) => {
   );
 };
 
-export default function PoliticalOverview({ profile, fallbackGovernment = "", fallbackLeader = "", intelligence = null, institutions = [] }) {
+export default function PoliticalOverview({ profile, fallbackGovernment = "", fallbackLeader = "", intelligence = null, institutions = [], onCompile = null, compiling = false, compileError = "" }) {
   const landscape = useMemo(() => buildPoliticalLandscape(profile), [profile]);
   const [selectedId, setSelectedId] = useState("");
   const [hoveredId, setHoveredId] = useState("");
@@ -422,11 +529,11 @@ export default function PoliticalOverview({ profile, fallbackGovernment = "", fa
 
   const selected = landscape.entries.find((entry) => entry.id === selectedId) || null;
   const goals = list(profile?.goals).slice(0, 5);
-  const governmentParties = buildGovernmentPartyPresentation(profile);
 
   return (
     <div style={{ marginTop: "0.82rem" }}>
       <GovernmentOverview profile={profile} fallbackGovernment={fallbackGovernment} fallbackLeader={fallbackLeader} />
+      <PartiesCompile profile={profile} onCompile={onCompile} compiling={compiling} error={compileError} />
 
       {landscape.entries.length > 0 && (
         <div style={{ ...card, marginTop: "0.7rem", padding: "0.72rem 0.78rem" }}>
@@ -458,7 +565,22 @@ export default function PoliticalOverview({ profile, fallbackGovernment = "", fa
             />
           )}
 
-          <div style={{ display: "grid", gap: "0.32rem 0.45rem", gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
+          {landscape.mode === "party" && (
+            <div style={{ border: "1px solid rgba(255,255,255,0.07)", borderRadius: "10px", marginTop: "0.5rem", overflow: "hidden" }}>
+              {landscape.entries.map((party) => (
+                <PartyRow
+                  key={party.id}
+                  party={party}
+                  open={party.id === selectedId}
+                  onToggle={() => setSelectedId((current) => current === party.id ? "" : party.id)}
+                  onHover={setHoveredId}
+                  legislatureSeats={Number(profile?.government?.legislatureSeats) || 0}
+                />
+              ))}
+            </div>
+          )}
+
+          {landscape.mode !== "party" && <div style={{ display: "grid", gap: "0.32rem 0.45rem", gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
             {landscape.entries.map((party) => {
               const selectedParty = party.id === selectedId;
               return (
@@ -476,30 +598,9 @@ export default function PoliticalOverview({ profile, fallbackGovernment = "", fa
                 </button>
               );
             })}
-          </div>
+          </div>}
 
-          {governmentParties.names.length > 0 && (
-            <div
-              style={{
-                background: "rgba(245,158,11,0.07)",
-                border: "1px solid rgba(245,158,11,0.16)",
-                borderRadius: "9px",
-                marginTop: "0.62rem",
-                padding: "0.5rem 0.58rem",
-              }}
-            >
-              <div style={{ color: "rgba(253,230,138,0.62)", fontSize: "0.56rem", fontWeight: 850, letterSpacing: "0.07em", textTransform: "uppercase" }}>
-                {governmentParties.label}
-              </div>
-              <div style={{ color: "#fde68a", fontSize: "0.64rem", fontWeight: 800, lineHeight: 1.45, marginTop: "0.24rem" }}>
-                {governmentParties.names.join(" | ")}
-              </div>
-            </div>
-          )}
-
-          {landscape.mode === "party"
-            ? <PartyDetail party={selected} onClose={() => setSelectedId("")} />
-            : <PowerBlocDetail bloc={selected} onClose={() => setSelectedId("")} />}
+          {landscape.mode !== "party" && <PowerBlocDetail bloc={selected} onClose={() => setSelectedId("")} />}
         </div>
       )}
 

@@ -265,3 +265,18 @@ export const chatLanguageDirective = () => {
 
   return `${directive} Reply in ${languageDisplayName(code)} regardless of the language of earlier messages.`;
 };
+
+// The language a prompt names where it says "write in ${language}"
+// (promptContext.js): the one the player reads, the same the directive above
+// gives every call. A save's own language is the fallback, for a player who
+// reads English: a campaign set to French is then still written in French. The
+// save used to come first, and it says "English" unless its author changed it,
+// so an Arabic player's prompt told the model "English" three times and Arabic
+// once, and the suggested actions came back in English (2026-10-29).
+// `chat`: the advisor and the leaders, who answer in the chat language.
+export const readingLanguageName = (saveLanguage = "", { chat = false } = {}) => {
+  const code = chat ? resolveChatLanguage() : getStoredLanguage();
+  if (code && code !== DEFAULT_LANGUAGE) return languageDisplayName(code);
+  const saved = typeof saveLanguage === "string" ? saveLanguage.trim() : "";
+  return saved || "English";
+};

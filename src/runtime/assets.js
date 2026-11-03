@@ -9,6 +9,7 @@ import { resolvePolityIdentity, resolveStockCountryCode } from "./polityIdentity
 import { mergeStockAndDeclaredPolities } from "./countryList.js";
 import { WholeFileSource } from "./wholeFileSource.js";
 import { isNativeBuild } from "./native/bridge.js";
+import { MAP_POLITIES_READY_EVENT, mapIsOpening } from "./mapReadiness.js";
 
 // v2: v1 could serve a stale archive forever (no freshness check), which
 // left months-old map data — countries missing their names — in every
@@ -96,7 +97,9 @@ export const JSON_URLS = {
 
 // ESRI / ArcGIS Online basemaps — all public and token-free. `service` is the
 // path under .../rest/services/; `maxZoom` is that layer's deepest native level
-// (past it MapLibre overscales instead of requesting tiles that 404).
+// (past it MapLibre overscales instead of requesting tiles that 404). `sea`
+// is its open-sea colour (measured at z8), painted under the tiles so a tile
+// that has not arrived yet, or failed, reads as sea instead of black.
 export const ESRI_BASEMAPS = [
   // Relief-first political canvas: World Ocean Base carries ocean bathymetry
   // plus shaded land relief; World.jsx applies a darker dedicated grade.
@@ -106,23 +109,23 @@ export const ESRI_BASEMAPS = [
   // composes this from World Terrain Base + ETOPO relief, so no baked country
   // names or modern political borders sit underneath live OpenHistoria canon.
   { id: "midnight-terrain", label: "Midnight Terrain", service: "World_Terrain_Base", maxZoom: 13 },
-  { id: "imagery", label: "Satellite", service: "World_Imagery", maxZoom: 19 },
-  { id: "streets", label: "Streets", service: "World_Street_Map", maxZoom: 19 },
-  { id: "topo", label: "Topographic", service: "World_Topo_Map", maxZoom: 19 },
-  { id: "terrain", label: "Terrain", service: "World_Terrain_Base", maxZoom: 13 },
-  { id: "shaded", label: "Shaded Relief", service: "World_Shaded_Relief", maxZoom: 13 },
-  { id: "physical", label: "Physical", service: "World_Physical_Map", maxZoom: 8 },
-  { id: "natgeo", label: "National Geographic", service: "NatGeo_World_Map", maxZoom: 16 },
+  { id: "imagery", label: "Satellite", service: "World_Imagery", maxZoom: 19, sea: "#0a2836" },
+  { id: "streets", label: "Streets", service: "World_Street_Map", maxZoom: 19, sea: "#99d9f2" },
+  { id: "topo", label: "Topographic", service: "World_Topo_Map", maxZoom: 19, sea: "#bbe8ff" },
+  { id: "terrain", label: "Terrain", service: "World_Terrain_Base", maxZoom: 13, sea: "#bde6e0" },
+  { id: "shaded", label: "Shaded Relief", service: "World_Shaded_Relief", maxZoom: 13, sea: "#9ebcd8" },
+  { id: "physical", label: "Physical", service: "World_Physical_Map", maxZoom: 8, sea: "#7bb6de" },
+  { id: "natgeo", label: "National Geographic", service: "NatGeo_World_Map", maxZoom: 16, sea: "#74abd8" },
   // Promotional/screenshot variant. Runtime World.jsx replaces this registry
   // entry with the official NatGeo World_Basemap_v2 vector style, darkened and
   // stripped of political/place labels while preserving physical/water labels.
   // The raster service remains here as a semantic/fallback source and keeps the
   // built-in basemap registry/editor contract simple.
   { id: "natgeo-dark", label: "National Geographic - Dark", service: "NatGeo_World_Map", maxZoom: 16 },
-  { id: "ocean", label: "Ocean", service: "Ocean/World_Ocean_Base", maxZoom: 13 },
+  { id: "ocean", label: "Ocean", service: "Ocean/World_Ocean_Base", maxZoom: 13, sea: "#94b9e6" },
   { id: "ocean-dark", label: "Ocean - Dark", service: "Ocean/World_Ocean_Base", maxZoom: 13 },
-  { id: "light-gray", label: "Light Gray Canvas", service: "Canvas/World_Light_Gray_Base", maxZoom: 16 },
-  { id: "dark-gray", label: "Dark Gray Canvas", service: "Canvas/World_Dark_Gray_Base", maxZoom: 16 },
+  { id: "light-gray", label: "Light Gray Canvas", service: "Canvas/World_Light_Gray_Base", maxZoom: 16, sea: "#d0cfd4" },
+  { id: "dark-gray", label: "Dark Gray Canvas", service: "Canvas/World_Dark_Gray_Base", maxZoom: 16, sea: "#232227" },
 ];
 export const DEFAULT_BASEMAP_ID = "ocean";
 // Mirror runtime/basemapPick.js's keys (it imports this module); the last is
@@ -242,6 +245,7 @@ const esriServiceTemplate = (service) =>
 // cache-warming. The high-zoom source goes through basemapProtocolTemplate().
 export const esriTileTemplate = (id) => esriServiceTemplate(basemapById(id).service);
 export const basemapMaxZoom = (id) => basemapById(id).maxZoom;
+export const basemapSeaColour = (id) => basemapById(id).sea ?? null;
 // The high-res source goes through this protocol, with the basemap id baked in
 // so switching styles refetches, and so ESRI's "Map Data Not Yet Available"
 // placeholders can be swapped for an upscaled crop of the nearest real ancestor.
@@ -331,12 +335,21 @@ const isMutableRuntimeJsonUrl = (url) =>
 // Registered with MapLibre by Map/mapLibreSetup.js; archives are added to it
 // here (registerPmtilesArchive) whether or not the map has loaded yet.
 export const pmtilesProtocol = new Protocol();
+// Where map archives are read whole, never over Range: the Android app, whose
+// local server cannot serve a Range (see wholeFileSource.js), and the website,
+// whose host answers a Range on a file of a megabyte or more with the whole
+// file (Cloudflare Pages, measured 2026-10-28: a 16 KB read of the 21 MB
+// regions archive came back as a 200 of 21,106,005 bytes, and pmtiles refused
+// it: "Server returned no content-length header or content-length exceeding
+// request"). The desktop's own server serves ranges and keeps reading them.
+// (Read where import.meta.env may be missing: plain Node, under the tests.)
+const BUILD_ENV = import.meta.env ?? {};
+const READ_ARCHIVES_WHOLE = Boolean(BUILD_ENV.VITE_OH_NATIVE || BUILD_ENV.VITE_OH_WEB);
 // MapLibre asks this protocol for archives by URL, and one it has not been
-// handed yet it opens itself — as a FetchSource, over Range, which the Android
-// app cannot serve (see wholeFileSource.js). There, every archive MapLibre asks
-// for is opened through getPmtilesArchive instead, so it is read whole.
-// Guarded: `tiles` is internal to the pmtiles package.
-if (isNativeBuild() && pmtilesProtocol.tiles instanceof Map) {
+// handed yet it opens itself — as a FetchSource, over Range. Where archives are
+// read whole, every archive MapLibre asks for is opened through
+// getPmtilesArchive instead. Guarded: `tiles` is internal to the pmtiles package.
+if ((isNativeBuild() || READ_ARCHIVES_WHOLE) && pmtilesProtocol.tiles instanceof Map) {
   const opened = pmtilesProtocol.tiles;
   const lookup = opened.get.bind(opened);
   opened.get = (url) => lookup(url) ?? getPmtilesArchive(url);
@@ -808,9 +821,8 @@ class MemorySource {
   }
 }
 
-// The Android app never range-reads an archive: Capacitor's local server
-// ignores the end of a Range (see wholeFileSource.js). Its reads wait for the
-// one whole-file load the warm makes and slice that.
+// The Android app and the website never range-read an archive (READ_ARCHIVES_WHOLE,
+// above). Their reads wait for the one whole-file load the warm makes and slice that.
 const loadWholeArchive = async (url) => {
   await warmPmtilesArchive(url);
   const buffer = binaryValueCache.get(url);
@@ -823,7 +835,7 @@ const loadWholeArchive = async (url) => {
 const createPmtilesArchive = (url) => {
   const source = binaryValueCache.has(url)
     ? new MemorySource(url, binaryValueCache.get(url))
-    : import.meta.env.VITE_OH_NATIVE
+    : READ_ARCHIVES_WHOLE
       ? new WholeFileSource(url, loadWholeArchive)
       : url;
 
@@ -849,13 +861,28 @@ export const registerPmtilesArchive = (url) => {
 const PLACEHOLDER_MIN_ZOOM = 9;
 const placeholderRefByService = new Map();
 
+// A tile that fails on a busy connection is asked for twice more before it is
+// given up on: MapLibre does not ask again for a failed tile until it leaves
+// the view, and until then the gap shows the colour under the map.
+const TILE_RETRIES = 2;
 const fetchBasemapTileBytes = async (service, z, y, x, signal) => {
   const url = buildTileUrl(esriServiceTemplate(service), { x, y, z });
-  const response = await fetch(url, { cache: "force-cache", signal });
-  if (!response.ok) {
-    throw new Error(`Failed to load basemap tile ${z}/${y}/${x}: HTTP ${response.status}`);
+  for (let attempt = 0; ; attempt += 1) {
+    let response = null;
+    try {
+      response = await fetch(url, { cache: "force-cache", signal });
+    } catch (error) {
+      if (signal?.aborted || attempt >= TILE_RETRIES) throw error;
+    }
+    if (response?.ok) return response.arrayBuffer();
+    // A 4xx (other than rate limiting) will not change on asking again.
+    const retryable = !response || response.status >= 500 || response.status === 429;
+    if (response && (!retryable || attempt >= TILE_RETRIES)) {
+      throw new Error(`Failed to load basemap tile ${z}/${y}/${x}: HTTP ${response.status}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 400 * (attempt + 1)));
+    if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
   }
-  return response.arrayBuffer();
 };
 
 const bytesEqual = (a, b) => {
@@ -1817,6 +1844,31 @@ export const getPrimedScenarioRegionCatalog = ({ url = JSON_URLS.regionsGeojson 
   return null;
 };
 
+// While a game opens, its map's border worker is already reading the regions file and hands its
+// catalog over (Nations.jsx). A catalog asked for meanwhile waits for that copy: reading the same
+// 50 MB on the page as well held the page for over a second, and twice the memory, as the game opened.
+const MAP_CATALOG_WAIT_MS = 60_000;
+const mapRegionCatalogSoon = (url) => {
+  const primed = () => (primedCustomRegionCatalog && primedCustomRegionCatalogKey === String(url || "") ? primedCustomRegionCatalog : null);
+  if (primed() || typeof window === "undefined" || !mapIsOpening()) return Promise.resolve(primed());
+  return new Promise((resolve) => {
+    let timer = 0;
+    const finish = () => {
+      clearTimeout(timer);
+      window.removeEventListener("oh:region-catalog-primed", onPrimed);
+      window.removeEventListener(MAP_POLITIES_READY_EVENT, finish);
+      resolve(primed());
+    };
+    const onPrimed = () => {
+      if (primed()) finish();
+    };
+    timer = setTimeout(finish, MAP_CATALOG_WAIT_MS);
+    window.addEventListener("oh:region-catalog-primed", onPrimed);
+    // The map gave up on its borders, or finished without priming: read the file after all.
+    window.addEventListener(MAP_POLITIES_READY_EVENT, finish);
+  });
+};
+
 export const loadScenarioRegionCatalog = async ({ force = false } = {}) => {
   if (
     !force &&
@@ -1824,6 +1876,10 @@ export const loadScenarioRegionCatalog = async ({ force = false } = {}) => {
     primedCustomRegionCatalogKey === JSON_URLS.regionsGeojson
   ) {
     return primedCustomRegionCatalog;
+  }
+  if (!force) {
+    const fromMap = await mapRegionCatalogSoon(JSON_URLS.regionsGeojson);
+    if (fromMap) return fromMap;
   }
 
   // Cold-start compatibility only. In normal gameplay Nations has already loaded
@@ -2005,11 +2061,9 @@ export const loadRegionCatalog = async ({ force = false } = {}) => {
       let customRegionsResolved = true;
       try {
         let customEntries = null;
-        if (
-          primedCustomRegionCatalog &&
-          primedCustomRegionCatalogKey === JSON_URLS.regionsGeojson
-        ) {
-          customEntries = primedCustomRegionCatalog;
+        const fromMap = await mapRegionCatalogSoon(JSON_URLS.regionsGeojson);
+        if (fromMap) {
+          customEntries = fromMap;
         } else {
           // Cold-start fallback only. Once Nations loads the custom map, the
           // compact primer makes this giant geometry read disappear thereafter.

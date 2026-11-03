@@ -54,7 +54,10 @@ import { loadBackgroundFile, rebuildPersistedBackground, vectorLayerToGeoJSON } 
 import ProjectionPanel from "./ProjectionPanel.jsx";
 import { DETAILED_MAP_CONVERSION_MESSAGE, hasDetailedMap, moveFeatureCoords, moveUnits, moveWarShapes, planBasemapChange } from "./projectionConvert.js";
 import { reprojectPicture } from "./projectionImage.js";
-import { convertPlane, normalizeProjection, sameProjection } from "../../server/mapProjection.js";
+import { FREEFORM, convertPlane, convertScaleLine, geoToDisplay, normalizeProjection, sameProjection } from "../../server/mapProjection.js";
+import PictureSetupPanel from "./PictureSetupPanel.jsx";
+import { mapKm, mapMeasureOf } from "../../server/mapDistance.js";
+import { SCALE_TOOL, scaleLabelOf } from "./scaleLineLayer.js";
 import { addBackgroundToLibrary, getBasemapPayload } from "../runtime/basemapLibrary.js";
 import { saveDocument, loadDocument, downloadJson } from "./documentIO.js";
 import { createSaveRunner, isUnsavedStatus, saveRetryDelay, settleUnsavedWork } from "./documentSaving.js";
@@ -499,15 +502,67 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   // added to Your basemaps, not shown by the game); { added } once it is one of
   // the scenario's maps; and { libraryError } when Your basemaps would not take
   // it.
+  // A picture first asks how it is drawn (PictureSetupPanel): its projection
+  // and where it lies, and whether the provinces move with it.
   const uploadBasemap = async (file) => {
     if (!file) return null;
     const bg = await loadBackgroundFile(file);
+    const name = file.name ? file.name.replace(/\.[^.]+$/, "") : "Custom basemap";
+    if (bg.kind === "image") {
+      setPictureSetupError("");
+      setPendingPicture({ bg, name });
+      setBasemapPickerOpen(false);
+      return { pictureSetup: true };
+    }
+    return addUploadedBackground(bg, name);
+  };
+
+  const [pendingPicture, setPendingPicture] = useState(null);
+  const [pictureSetupBusy, setPictureSetupBusy] = useState(false);
+  const [pictureSetupError, setPictureSetupError] = useState("");
+  // The picture kept as it is, laid on `bounds`; the map takes its projection.
+  // The provinces, cities, units and war shapes move into that projection with
+  // it, or the provinces, cities and units are deleted. Not an undo step, as
+  // converting the projection is not.
+  const applyPictureSetup = async ({ projection, bounds, deleteProvinces }) => {
+    if (!pendingPicture || !api) return;
+    const { bg, name } = pendingPicture;
+    setPictureSetupBusy(true);
+    setPictureSetupError("");
+    try {
+      const from = normalizeProjection(d.metadata?.projection);
+      // How the game shows the map (globe, looping) stays as it was.
+      const to = { ...projection, ...(from.globe === false ? { globe: false } : {}), ...(from.wrap === false ? { wrap: false } : {}) };
+      let movedOwnBasemaps = null;
+      if (deleteProvinces) {
+        api.loadRegions({ type: "FeatureCollection", features: [] });
+        d.setFeatures([]);
+        d.setUnits([]);
+      } else if (!sameProjection(from, to)) {
+        moveMapPlaces(from, to);
+        moveWarGeography(from, to);
+        movedOwnBasemaps = moveOwnBasemapsBetween(d.doc?.metadata?.ownBasemaps, from, to);
+      }
+      d.patchMetadata({ projection: to, ...(movedOwnBasemaps ? { ownBasemaps: movedOwnBasemaps } : {}) });
+      setPendingPicture(null);
+      const picture = rebuildPersistedBackground({ kind: "image", dataUrl: bg.dataUrl, aspect: bg.aspect, bounds }, { persisted: false });
+      await addUploadedBackground(picture, name);
+      api.fitToData?.();
+    } catch (e) {
+      setPictureSetupError(e?.message || String(e));
+    } finally {
+      setPictureSetupBusy(false);
+    }
+  };
+
+  // A new basemap saved to Your basemaps for reuse and added to the scenario's
+  // maps; what uploadBasemap answers the picker.
+  const addUploadedBackground = async (bg, name) => {
     const normalized = normalizeBackground(bg);
     if (!normalized) {
       setCustomBg(bg);
       return { sessionOnly: true };
     }
-    const name = file.name ? file.name.replace(/\.[^.]+$/, "") : "Custom basemap";
     let meta = null;
     let libraryError = null;
     try {
@@ -541,7 +596,52 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     image.src = customBg.dataUrl;
     return () => { alive = false; };
   }, [customBg]);
+  // The regions, cities and features, and starting units moved from one
+  // projection's sheet to another's.
+  const moveMapPlaces = (from, to) => {
+    const EARTH = 6378137; // the map's units are metres on the Mercator plane
+    // A new centre moves the map's edge to the meridian opposite it. On a
+    // cylindrical map that meridian is a straight line: cut the regions there.
+    const cylindrical = ["mercator", "equirectangular", "miller", "gall-peters"].includes(from.type);
+    const seamLon = (to.centre ?? 0) - 180;
+    const seamX = cylindrical && to.type !== FREEFORM && (to.centre ?? 0) !== (from.centre ?? 0)
+      ? geoToDisplay(from, seamLon, 0)[0] * (Math.PI / 180) * EARTH
+      : null;
+    api.transformRegions((x, y) => {
+      const [X, Y] = convertPlane(from, to, x / EARTH, y / EARTH);
+      return [X * EARTH, Y * EARTH];
+    }, { seamX });
+    d.setFeatures((list) => moveFeatureCoords(list, from, to));
+    d.setUnits((list) => moveUnits(list, from, to));
+  };
   const [projectionBusy, setProjectionBusy] = useState(false);
+  // The Projection panel's scale line (ProjectionPanel.jsx): one just drawn
+  // with the Scale line tool and waiting for its distance, { from, to }.
+  const [scaleDraft, setScaleDraft] = useState(null);
+  const projectionNow = d.metadata?.projection;
+  const savedScale = useMemo(() => normalizeProjection(projectionNow).scale ?? null, [projectionNow]);
+  // What a line measures on the map as it is now (server/mapDistance.js).
+  const kmOfLine = useCallback((from, to) => mapKm(mapMeasureOf(projectionNow), from[0], from[1], to[0], to[1]), [projectionNow]);
+  const leaveScaleTool = () => {
+    setScaleDraft(null);
+    if (d.activeTool === SCALE_TOOL) d.setActiveTool("select");
+  };
+  const patchScale = (scale) => {
+    const next = { ...normalizeProjection(d.metadata?.projection) };
+    if (scale) next.scale = scale;
+    else delete next.scale;
+    d.patchMetadata({ projection: next });
+  };
+  // Shown on the map while the panel is open: the line just drawn, else the saved one.
+  const shownScale = openPanel === "projection" ? (scaleDraft ?? savedScale) : null;
+  const shownScaleLabel = !shownScale ? "" : scaleDraft ? scaleLabelOf(kmOfLine(scaleDraft.from, scaleDraft.to), { about: true }) : scaleLabelOf(savedScale.km);
+  // The panel closed some other way (its chip in the bottom bar): the Scale line tool is put down too.
+  useEffect(() => {
+    if (openPanel === "projection") return;
+    setScaleDraft(null);
+    if (d.activeTool === SCALE_TOOL) d.setActiveTool("select");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openPanel]);
   const [projectionError, setProjectionError] = useState("");
   // A detailed map cannot be converted with the map (projectionConvert.js).
   const mapHasDetailedMap = hasDetailedMap(d.doc);
@@ -553,6 +653,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     const from = normalizeProjection(d.metadata?.projection);
     const to = normalizeProjection(target);
     if (sameProjection(from, to)) return;
+    setScaleDraft(null);
     setProjectionBusy(true);
     setProjectionError("");
     try {
@@ -592,15 +693,15 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
       } else if (plan.kind === "tiles") {
         nextBg = null;
       }
-      api.transformRegions(moveXY);
-      d.setFeatures((list) => moveFeatureCoords(list, from, to));
-      d.setUnits((list) => moveUnits(list, from, to));
+      moveMapPlaces(from, to);
       moveWarGeography(from, to);
       // The scenario's other drawn basemaps move with it; a picture fills the
       // sheet in any projection and stays as it is.
       const movedOwnBasemaps = moveOwnBasemapsBetween(d.doc?.metadata?.ownBasemaps, from, to);
-      // The two switches about how the game shows the map stay as they were.
-      d.patchMetadata({ projection: { ...to, ...(from.globe === false ? { globe: false } : {}), ...(from.wrap === false ? { wrap: false } : {}) }, ...(plan.kind === "tiles" ? { customBackground: null } : {}), ...(movedOwnBasemaps ? { ownBasemaps: movedOwnBasemaps } : {}) });
+      // The two switches about how the game shows the map stay as they were,
+      // and the scale line goes where its two ends go.
+      const scale = from.scale ? convertScaleLine(from, to, from.scale) : null;
+      d.patchMetadata({ projection: { ...to, ...(from.globe === false ? { globe: false } : {}), ...(from.wrap === false ? { wrap: false } : {}), ...(scale ? { scale } : {}) }, ...(plan.kind === "tiles" ? { customBackground: null } : {}), ...(movedOwnBasemaps ? { ownBasemaps: movedOwnBasemaps } : {}) });
       if (nextBg !== customBg) {
         setCustomBg(nextBg);
         // A redrawn picture is no longer the one in Your basemaps.
@@ -1551,6 +1652,14 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         onWarShapeCreate={createWarShape}
         onWarShapeChange={changeWarShape}
         onWarShapeRemove={removeWarShape}
+        onReferenceSnapped={() => setRefImage((current) => (current ? { ...current, locked: true } : current))}
+        scaleLine={shownScale}
+        scaleLabel={shownScaleLabel}
+        scaleSketchLabel={(from, to) => scaleLabelOf(kmOfLine(from, to), { about: true })}
+        // The tool stays out until the distance is set or the line is cancelled:
+        // put down at once, the click that ended the line would also pick the
+        // region under it. Another line drawn meanwhile replaces this one.
+        onScaleLineDraw={(from, to) => setScaleDraft({ from, to })}
       />
       </div>
 
@@ -1707,7 +1816,27 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
             }
             d.patchMetadata({ projection: next });
           }}
-          onClose={() => setOpenPanel(null)}
+          scaleDraft={scaleDraft}
+          draftKm={scaleDraft ? kmOfLine(scaleDraft.from, scaleDraft.to) : 0}
+          drawingScale={d.activeTool === SCALE_TOOL}
+          onDrawScale={() => {
+            setScaleDraft(null);
+            d.setActiveTool(SCALE_TOOL);
+          }}
+          onCancelScale={leaveScaleTool}
+          onSetScale={(km) => {
+            if (!scaleDraft) return;
+            patchScale({ from: scaleDraft.from, to: scaleDraft.to, km });
+            leaveScaleTool();
+          }}
+          onClearScale={() => {
+            patchScale(null);
+            leaveScaleTool();
+          }}
+          onClose={() => {
+            leaveScaleTool();
+            setOpenPanel(null);
+          }}
         />
       )}
       {openPanel === "reference" && (
@@ -1960,6 +2089,20 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         onRemoveMap={removeFromMaps}
         onShownOver={showDetailedOver}
       />
+      {pendingPicture && (
+        <PictureSetupPanel
+          name={pendingPicture.name}
+          aspect={pendingPicture.bg.aspect}
+          busy={pictureSetupBusy}
+          error={pictureSetupError}
+          onApply={applyPictureSetup}
+          onChooseAnother={() => {
+            setPendingPicture(null);
+            setBasemapPickerOpen(true);
+          }}
+          onClose={() => setPendingPicture(null)}
+        />
+      )}
 
       <BorderCleanupNote lines={cleanupNote} top={12} />
       <BorderCleanupChoice choice={cleanChoice} onChoose={answerClean} />

@@ -22,9 +22,11 @@
 //
 // "the deployment tool in the war room doesnt seem to work. it does draw the
 // line, but the troops are never actually deployed" (the owner, 2026-10-24).
-// A deployment drawn also CALLS UP fresh formations there: `call` on it, as
-// many as the player asked for, or DEPLOY_USUAL for as many as a draft of its
-// country's usually brings. When time next passes they are drafted as for an
+// A deployment drawn also CALLS UP fresh formations there: `call` on it,
+// DEPLOY_USUAL. How many is the country's to say, not the player's ("remove the
+// thing to select how many troops": the owner, 2026-11-02): engine.js
+// callUpSize, by the men it has left, its supplies, its war weariness and how
+// fast it musters. When time next passes they are drafted as for an
 // order for more troops (engine.js callUpDeployed, reinforceOnFront), with the
 // men it has left and the room its line has (never held to what its strength
 // usually raises, as the story's drafts are), and `last` on it says what came

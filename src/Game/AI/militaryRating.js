@@ -27,8 +27,8 @@
 //
 // Its figures are the game's own (runtime/militaryStats.js): quality,
 // technology, land, sea, air and spending from 0 to 100 (50 an ordinary army of
-// its era; an arm at 0 is none at all), the share of its people who can be put
-// under arms, and the shares of its army that are horse and siege.
+// its era; an arm at 0 is none at all), the share of its people it could call
+// up in a war, and the shares of its army that are horse and siege.
 
 import { militaryLookup, normalizeMilitaryStats } from "../../runtime/militaryStats.js";
 import { peopleFor } from "../../runtime/militaryPower.js";
@@ -53,7 +53,7 @@ export const MILITARY_FIGURE_LINES = Object.freeze([
   "technology: what they fight with, against the best of its era (backward 20, ordinary 50, the most advanced 80 and up).",
   "land, sea, air: what it can do on land, at sea and in the air. 0 means it cannot fight there at all: a people that never goes to sea has sea 0; before aircraft every polity has air 0.",
   "spending: what its forces have to spend for each soldier, against the other polities' (the best funded of the world 85 and up, an ordinary army 50, a poor one 20).",
-  "And: manpowerShare, the percent of its people who can be put under arms (12 is ordinary; a warrior people or an order of fighting men far more); cavalryShare and siegeShare, the shares of its army that are horse (armour in modern times) and siege engines (artillery), each from 0 to 1.",
+  "And: manpowerShare, the percent of its people it could call up in a war: every man fit to serve, not the army it keeps now (12 is ordinary, and few are below 8; a warrior people or an order of fighting men far more); cavalryShare and siegeShare, the shares of its army that are horse (armour in modern times) and siege engines (artillery), each from 0 to 1.",
 ]);
 export const MILITARY_EXAMPLE = '{"quality":50,"technology":50,"land":50,"sea":50,"air":50,"spending":50,"manpowerShare":12,"cavalryShare":0.15,"siegeShare":0.1}';
 
@@ -75,7 +75,7 @@ const people = (value) => {
 };
 
 // A polity's figures as a request shows them: "quality 60, technology 75, land 80, sea 50, air 75, spending 60,
-// 10% of its people under arms, its people 146000000".
+// 10% of its people fit to call up, its people 146000000".
 export const describeMilitary = (military, population = 0) => {
   const parts = [];
   for (const field of ["quality", "technology", "land", "sea", "air", "spending"]) {
@@ -83,7 +83,7 @@ export const describeMilitary = (military, population = 0) => {
     if (military?.[field] !== undefined && military?.[field] !== null && Number.isFinite(value)) parts.push(`${field} ${Math.round(value)}`);
   }
   const share = Number(military?.manpowerShare);
-  if (military?.manpowerShare !== undefined && military?.manpowerShare !== null && Number.isFinite(share)) parts.push(`${Math.round(share * 10) / 10}% of its people under arms`);
+  if (military?.manpowerShare !== undefined && military?.manpowerShare !== null && Number.isFinite(share)) parts.push(`${Math.round(share * 10) / 10}% of its people fit to call up`);
   if (people(population) > 0) parts.push(`its people ${people(population)}`);
   return parts.join(", ");
 };

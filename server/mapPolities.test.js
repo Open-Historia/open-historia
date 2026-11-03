@@ -65,12 +65,3 @@ test("an owner with no registry record still ships with a default record", () =>
   assert.equal(seed.world.polityOverrides["Winilli Tribe"]?.name, "Winilli Tribe");
   assert.equal(seed.stats.owners, 1);
 });
-
-test("a country marked \"Can't run spies\" keeps the mark in the scenario it exports", () => {
-  const seed = buildGameSeed(
-    doc({ "The Giants": record("The Giants", { noSpies: true }), Carthage: record("Carthage") }),
-    { type: "FeatureCollection", features: [region("r1", "The Giants"), region("r2", "Carthage")] },
-  );
-  assert.equal(seed.world.polityOverrides["The Giants"].noSpies, true);
-  assert.equal(seed.world.polityOverrides.Carthage.noSpies, undefined);
-});

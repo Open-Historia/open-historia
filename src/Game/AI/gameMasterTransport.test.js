@@ -7,7 +7,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
-import { decodeGameMasterTransportPayload } from "./gameplaySchemas.js";
+import { GAME_MASTER_TRANSPORT_SCHEMA, decodeGameMasterTransportPayload } from "./gameplaySchemas.js";
 
 test("GM uses canonical relation score without demanding a second model-authored status", async () => {
   const { validateGameplayPayload } = await import("./gameplaySchemas.js");
@@ -98,4 +98,45 @@ test("the answer's reading of the request is carried into the transaction and va
 test("an answer without them decodes without them, so the English fallbacks decide", () => {
   const { payload } = decodeGameMasterTransportPayload(bareTransport);
   for (const field of Object.keys(requestFields)) assert.equal(field in payload, false, field);
+});
+
+// A real-key test of the GM console (2026-10-28) could not start a war: the
+// model gave a unit the posture "offensive", and its retry came back with the
+// array escaped once too often.
+const spawn = (posture) => ({ op: "spawn", unit: { name: "1st Army", type: "infantry", ownerCode: "France", strength: 100, composition: "3 divisions", posture } });
+const eventWith = (unitOps) => ({ date: "2016-05-01", title: "France attacks", description: "d", impacts: { unitOps } });
+
+test("array text escaped once too often decodes, with or without the quotes round it", () => {
+  const events = [eventWith([spawn("assaulting")])];
+  const once = JSON.stringify(JSON.stringify(events));
+  for (const eventsJson of [once, once.slice(1, -1)]) {
+    const { payload, error } = decodeGameMasterTransportPayload({ ...bareTransport, eventsJson });
+    assert.equal(error, "", eventsJson.slice(0, 20));
+    assert.deepEqual(payload.events, events);
+  }
+  // Once only: text escaped twice over is not read as an array.
+  const twice = JSON.stringify(once).slice(1, -1);
+  assert.match(decodeGameMasterTransportPayload({ ...bareTransport, eventsJson: twice }).error, /\$\.eventsJson must /);
+});
+
+test("a unit posture said in other words reads as the posture it means", async () => {
+  const { validateGameplayPayload } = await import("./gameplaySchemas.js");
+  const move = { op: "move", unitId: "2nd Army", at: "region: Nice, country: France", posture: "Defensive" };
+  const eventsJson = JSON.stringify([eventWith([spawn("offensive"), move, spawn("retreating")])]);
+  const { payload, error } = decodeGameMasterTransportPayload({ ...bareTransport, eventsJson });
+  assert.equal(error, "");
+  const [first, second, third] = payload.events[0].impacts.unitOps;
+  assert.equal(first.unit.posture, "assaulting");
+  assert.equal(second.posture, "holding");
+  assert.equal(third.unit.posture, "withdrawing");
+  // A word that means none of them is left for the schema to name.
+  const odd = decodeGameMasterTransportPayload({ ...bareTransport, eventsJson: JSON.stringify([eventWith([spawn("pondering")])]) }).payload;
+  assert.equal(odd.events[0].impacts.unitOps[0].unit.posture, "pondering");
+  const verdict = validateGameplayPayload("gameMaster", odd);
+  assert.equal(verdict.valid, false);
+  assert.match(verdict.error, /posture/);
+});
+
+test("the events field names the postures a unit may take, since the text carries no enum", () => {
+  assert.match(GAME_MASTER_TRANSPORT_SCHEMA.properties.eventsJson.description, /posture \(impacts\.unitOps\) is one of: holding, massing, patrol, transit, exercise, blockade, withdrawing, assaulting\./);
 });

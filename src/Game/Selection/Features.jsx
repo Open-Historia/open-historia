@@ -14,6 +14,7 @@ import { dismissRegionPopup, onRegionSelected } from "./Regions.jsx";
 import { dismissUnitPopup } from "./Units.jsx";
 import { isSameFeatureSelection, useCardScreenPos } from "./mapCards.js";
 import { useEventsById } from "./eventLookup.js";
+import { formatGameDateReadable } from "../../runtime/gameDates.js";
 
 let _setSelection = null;
 let _currentSelection = null;
@@ -368,7 +369,7 @@ const FeaturePopup = () => {
               label="Events"
               value={sourceEvents.map((event) => (
                 <span key={event.id} style={{ display: "block" }}>
-                  {event.date ? `${event.date} — ${event.title}` : event.title}
+                  {event.date ? `${(formatGameDateReadable(event.date) || event.date)} — ${event.title}` : event.title}
                 </span>
               ))}
             />

@@ -449,6 +449,8 @@ export const buildLookupContext = ({ regions = [], world = {}, cities = [], even
       aliases: array(region.aliases).map(clean).filter(Boolean),
       geometry: region.geometry ?? null,
       bbox: bboxOf(region.geometry ?? null),
+      // Its region type (a scenario's own, e.g. one marked water: regionTypes.js).
+      typeId: clean(region.typeId),
       adjacencies: array(region.adjacencies).map(clean).filter(Boolean),
       stock: STOCK_REGION_ID.test(id),
     };

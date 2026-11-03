@@ -174,7 +174,7 @@ test("every installer packs the generator", () => {
   // A local build fetches it too; best effort there, since it is not a release.
   for (const [name, script] of Object.entries(packageJson.scripts)) {
     if (!name.startsWith("dist:")) continue;
-    assert.match(script, /node scripts\/fetch-fmg\.mjs && npm run build && electron-builder/, name);
+    assert.match(script, /node scripts\/fetch-fmg\.mjs && npm run build && node scripts\/package-desktop\.mjs/, name);
   }
 });
 

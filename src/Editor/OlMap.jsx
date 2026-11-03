@@ -57,7 +57,12 @@ import { defaults as defaultControls } from "ol/control/defaults";
 import { makeRegionLook, makeRegionOverlayStyle, makeRegionStyle } from "./olStyle.js";
 import { createRegionDisplay } from "./regionDisplay.js";
 import { detailToleranceMeters, simplifyShared, toleranceAtLatitude } from "./simplifyRegions.js";
+import { buildLandField, fitToImage } from "./fitToImage.js";
+import { readBackgroundPixels } from "./backgroundPixels.js";
 import { createEmpty as emptyExtent, extend as extendExtent } from "ol/extent";
+import { defaults as defaultInteractions } from "ol/interaction/defaults";
+import MouseWheelZoom from "ol/interaction/MouseWheelZoom";
+import ImageCanvasSource from "ol/source/ImageCanvas";
 import { buildPoliticalBoundaryTopology } from "../Game/Map/vnext/politicalBoundaryTopology.js";
 import { buildGroupAreaIndex, deriveGroupAreas } from "../Game/Map/vnext/groupAreas.js";
 import { getMarkerPresentation } from "../Game/Map/vnext/presentationPolicy.js";
@@ -68,6 +73,7 @@ import { mergeRegionFeatures, trackMove } from "./shapeEdits.js";
 import { resolvePastedIds } from "./regionClipboard.js";
 import { createWarGeographyLayers, drawTypeOf, pointsOfLine, ringsOfPolygon, shapeNear, syncShapes } from "./warGeographyLayers.js";
 import { isWarTool, mostCommon } from "./warGeographyDoc.js";
+import { SCALE_TOOL, createScaleLineLayer, endsOfLine, scaleCursorStyle, scaleLineStyles, showScaleLine } from "./scaleLineLayer.js";
 import { isWaterType } from "../runtime/regionTypes.js";
 import {
   unionGeoms,
@@ -81,7 +87,9 @@ import {
   unionAllGeoms,
   weldRegions,
   weldedGeometry,
+  splitAtX,
 } from "./geometry.js";
+import { crispWhenMagnified } from "./crispWhenMagnified.js";
 
 
 const BASEMAP_BG = {
@@ -600,9 +608,10 @@ const OlMap = ({
   onReady,
   customBackground = null,
   onCustomBackgroundSave,
-  // Tracing aid: { dataUrl, aspect, opacity, visible } — session-only, never
-  // exported. referenceAdjust turns on the move/resize frame; bumping
-  // referencePlaceNonce re-centers the image on the current view.
+  // Tracing aid: { dataUrl, aspect, opacity, visible, locked } — session-only,
+  // never exported. referenceAdjust turns on the move/resize frame; bumping
+  // referencePlaceNonce re-centers the image on the current view;
+  // onReferenceSnapped is told when it is laid exactly on the basemap.
   referenceImage = null,
   referenceAdjust = false,
   referencePlaceNonce = 0,
@@ -623,6 +632,15 @@ const OlMap = ({
   onWarShapeCreate,
   onWarShapeChange,
   onWarShapeRemove,
+  onReferenceSnapped,
+  // The Projection panel's scale line (scaleLineLayer.js): the line to show
+  // ({ from, to } in [lng, lat], or null) and what is written beside it; what
+  // a line being drawn with the Scale line tool measures as it is drawn,
+  // (from, to) => text; and the line drawn, (from, to).
+  scaleLine = null,
+  scaleLabel = "",
+  scaleSketchLabel = null,
+  onScaleLineDraw,
 }) => {
   const containerRef = useRef(null);
   const mapRef = useRef(null);
@@ -658,6 +676,19 @@ const OlMap = ({
   const refImageLayerRef = useRef(null);
   const refImageExtentRef = useRef(null);
   const refImageFrameSourceRef = useRef(null);
+  // The backgrounds Fit to background can read (backgroundPixels.js): the
+  // reference image, the map's own picture and the tile basemap, each null
+  // while it is not on the map.
+  const fitBackgroundsRef = useRef({ reference: null, picture: null, tiles: null });
+  const referenceImageRef = useRef(referenceImage);
+  referenceImageRef.current = referenceImage;
+  const refPlaceNonceSeenRef = useRef(referencePlaceNonce);
+  const refImageSourceRef = useRef(null);
+  const onReferenceSnappedRef = useRef(onReferenceSnapped);
+  onReferenceSnappedRef.current = onReferenceSnapped;
+  // Where the basemap picture lies and its shape, for laying a reference of
+  // the same map exactly on it.
+  const basemapPictureRef = useRef(null);
   const interactionsRef = useRef([]);
   const regionSnapRef = useRef(null);
   const undoStackRef = useRef([]);
@@ -712,6 +743,11 @@ const OlMap = ({
   onWarShapeChangeRef.current = onWarShapeChange;
   const onWarShapeRemoveRef = useRef(onWarShapeRemove);
   onWarShapeRemoveRef.current = onWarShapeRemove;
+  const scaleLayerRef = useRef(null);
+  const scaleSketchLabelRef = useRef(scaleSketchLabel);
+  scaleSketchLabelRef.current = scaleSketchLabel;
+  const onScaleLineDrawRef = useRef(onScaleLineDraw);
+  onScaleLineDrawRef.current = onScaleLineDraw;
 
   typesByIdRef.current = toTypesById(types);
   colorsRef.current = colors || {};
@@ -1056,16 +1092,28 @@ const OlMap = ({
       selectedId: (kind) => (warSelectionRef.current?.kind === kind ? String(warSelectionRef.current.id) : null),
     });
     warLayersRef.current = war;
+    // The Projection panel's scale line, over everything (scaleLineLayer.js).
+    const scale = createScaleLineLayer();
+    scaleLayerRef.current = scale;
     rebuildFreezingRef.current = () => war.rebuildHatch(
       regionSource,
       freezingRef.current,
       (region) => isWaterType(typesByIdRef.current[region.get("typeId") || "land"]),
     );
 
+    // OpenLayers zooms a third of a level per mouse-wheel notch (300 wheel units
+    // a level; a notch is 100), so getting from the world to a province took
+    // about seventeen notches. One level a notch, as most map apps do, and the
+    // same rate the game map's MapLibre uses for a trackpad.
+    // shortcut: deltaPerZoom_ is private (OpenLayers has no option for it); if a
+    // later OpenLayers renames it, the wheel falls back to its own rate.
+    const wheelZoom = new MouseWheelZoom({ maxDelta: 2, duration: 180 });
+    wheelZoom.deltaPerZoom_ = 100;
     const map = new Map({
       target: containerRef.current,
       controls: defaultControls({ rotate: false }),
-      layers: [regionLayer, regionOverlayLayer, ...war.layers, groupOutlineLayer, labelLayer, pointLayer, unitLayer, importPreviewLayer, paintPreviewLayer, topologyLayer, borderAssistLayer],
+      interactions: defaultInteractions({ mouseWheelZoom: false }).extend([wheelZoom]),
+      layers: [regionLayer, regionOverlayLayer, ...war.layers, groupOutlineLayer, labelLayer, pointLayer, unitLayer, importPreviewLayer, paintPreviewLayer, topologyLayer, borderAssistLayer, scale.layer],
       view: new View({ center: fromLonLat([0, 20]), zoom: 2.1, minZoom: 1, maxZoom: 20 }),
     });
 
@@ -2144,6 +2192,13 @@ const OlMap = ({
       claimants: f.get("claimants") || [],
       group: f.get("group") || "",
     });
+    // Fit to background: the background whose pixels a fit reads, the
+    // reference image first (it is what the author traces), or null.
+    const pickFitBackground = () => {
+      const { reference, picture, tiles } = fitBackgroundsRef.current;
+      if (reference?.extent && referenceImageRef.current?.visible !== false) return reference;
+      return picture || tiles || null;
+    };
     onReady?.({
       map,
       regionSource,
@@ -2355,6 +2410,86 @@ const OlMap = ({
         apply(true);
         pushCmd({ undo: () => apply(false), redo: () => apply(true) });
         return changes.length;
+      },
+      fitBackground: pickFitBackground,
+      // Reads the background around the selected regions and answers a fit
+      // session: preview(reach) shows their coasts pulled up to `reach` pixels
+      // onto its edges, from where they were when it began; commit() makes what
+      // is shown one undo step. Both answer false, and current() false, once
+      // the regions were changed by something else (an undo): the session is spent.
+      fitToBackground: async (ids) => {
+        const background = pickFitBackground();
+        const isArea = (f) => /Polygon$/.test(f?.getGeometry()?.getType() || "");
+        const chosen = (ids || []).map((id) => regionSource.getFeatureById(id)).filter(isArea);
+        if (!background || !chosen.length) return null;
+        const box = emptyExtent();
+        for (const f of chosen) extendExtent(box, f.getGeometry().getExtent());
+        const pixels = await readBackgroundPixels(background, box);
+        const picked = new Set(chosen);
+        const nearby = [];
+        regionSource.forEachFeatureIntersectingExtent(pixels.extent, (f) => {
+          if (!picked.has(f) && isArea(f)) nearby.push(f);
+        });
+        const all = [...chosen, ...nearby];
+        const base = all.map((f) => f.getGeometry());
+        const selected = all.map((_, at) => at < chosen.length);
+        const water = all.map((f) => isWaterType(typesByIdRef.current[f.get("typeId") || "land"]));
+        // Land colours are the ones inside the land regions around.
+        const field = buildLandField(pixels.rgba, pixels.width, pixels.height, pixels.extent, base.filter((_, at) => !water[at]));
+        if (!field) throw Object.assign(new Error(), { code: "no-shore" });
+        let shown = base;
+        let committed = base;
+        const stale = () => all.some((f, at) => f.getGeometry() !== shown[at]);
+        const show = (next) => {
+          all.forEach((f, at) => {
+            if (next[at] !== shown[at]) f.setGeometry(next[at]);
+          });
+          shown = next;
+          restyleRegions();
+          labelLayer.changed();
+        };
+        const same = (a, b) => {
+          if (a === b) return true;
+          const x = a.getFlatCoordinates();
+          const y = b.getFlatCoordinates();
+          if (x.length !== y.length) return false;
+          for (let i = 0; i < x.length; i += 1) if (x[i] !== y[i]) return false;
+          return true;
+        };
+        const center = (box[1] + box[3]) / 2;
+        const metersPerPixel = ((field.extent[2] - field.extent[0]) / field.width) * Math.cos(2 * Math.atan(Math.exp(center / 6378137)) - Math.PI / 2);
+        let shownReach = 0;
+        return {
+          metersPerPixel,
+          current: () => !stale(),
+          preview: (reach) => {
+            if (stale()) return false;
+            if (reach !== shownReach) show(reach > 0 ? fitToImage(base, { field, reach, selected, water }) : base);
+            shownReach = reach;
+            return true;
+          },
+          commit: () => {
+            if (stale()) return false;
+            const changes = [];
+            all.forEach((f, at) => {
+              if (!same(committed[at], shown[at])) changes.push({ feature: f, before: committed[at], after: shown[at], edited: f.get("edited") });
+            });
+            committed = shown;
+            if (!changes.length) return true;
+            const apply = (forward) => {
+              for (const change of changes) {
+                change.feature.setGeometry(forward ? change.after : change.before);
+                change.feature.set("edited", forward ? true : change.edited);
+              }
+              restyleRegions();
+              labelLayer.changed();
+              notifyRegions();
+            };
+            apply(true);
+            pushCmd({ undo: () => apply(false), redo: () => apply(true) });
+            return true;
+          },
+        };
       },
       copyRegions: (ids) => {
         const res = map.getView().getResolution() || 1;
@@ -2943,9 +3078,12 @@ const OlMap = ({
       // (MapEditor convertProjection). `moveXY` takes and answers a spot in this
       // map's own units. It is not an undo step: the cities, the units and the
       // basemap move with it outside this stack, so the history is cleared.
-      transformRegions: (moveXY) => {
+      // `seamX`: where the move puts the map's edge, if it moves it. Regions
+      // across it are cut there first, so their two sides stay apart.
+      transformRegions: (moveXY, { seamX = null } = {}) => {
         const features = regionSource.getFeatures();
         for (const f of features) {
+          if (seamX != null && f.getGeometry()) f.setGeometry(splitAtX(f.getGeometry(), seamX));
           f.getGeometry()?.applyTransform((input, output, stride = 2) => {
             const out = output ?? input;
             for (let i = 0; i < input.length; i += stride) {
@@ -3056,6 +3194,7 @@ const OlMap = ({
       rebuildGroupOutlinesRef.current = null;
       rebuildFreezingRef.current = null;
       warLayersRef.current = null;
+      scaleLayerRef.current = null;
       window.removeEventListener("resize", onResize);
       window.removeEventListener("keydown", onKeyDown);
       map.setTarget(null);
@@ -3108,6 +3247,10 @@ const OlMap = ({
   useEffect(() => {
     warLayersRef.current?.showWorkingOn({ terrain: showTerrain, climate: showClimate });
   }, [showTerrain, showClimate]);
+  useEffect(() => {
+    const scale = scaleLayerRef.current;
+    if (scale) showScaleLine(scale.source, scaleLine, scaleLabel);
+  }, [scaleLine, scaleLabel]);
 
   // ---- mount/remove editing interactions when the active tool changes ------
   useEffect(() => {
@@ -3681,6 +3824,26 @@ const OlMap = ({
       // Snap last so it sees events first: a new outline can follow its
       // neighbours' points and edges.
       added.push(new Snap({ source: own, pixelTolerance: 10 }));
+    } else if (activeTool === SCALE_TOOL) {
+      // The Projection panel's scale line: two clicks, the line's two ends,
+      // with what it measures now written beside it as it is drawn. The line
+      // goes to the panel (onScaleLineDraw), which asks what distance it is.
+      const draw = new Draw({
+        features: new Collection(),
+        type: "LineString",
+        maxPoints: 2,
+        style: (feature, resolution) => {
+          const geometry = feature.getGeometry();
+          if (geometry?.getType?.() !== "LineString") return scaleCursorStyle;
+          const ends = endsOfLine(geometry);
+          return scaleLineStyles(geometry, ends ? scaleSketchLabelRef.current?.(ends[0], ends[1]) || "" : "", resolution);
+        },
+      });
+      draw.on("drawend", (e) => {
+        const ends = endsOfLine(e.feature.getGeometry());
+        if (ends) onScaleLineDrawRef.current?.(ends[0], ends[1]);
+      });
+      added.push(draw);
     } else if (activeTool === "lasso") {
       // freehand circle/lasso: drag to enclose an area, release to select the
       // land regions inside it.
@@ -3816,6 +3979,13 @@ const OlMap = ({
     const customActive = customBackground?.kind === "image" || customBackground?.kind === "vector" || customBackground?.kind === "plain";
     const esri = customActive ? null : editorBasemapById(basemap);
     let base = null;
+    fitBackgroundsRef.current.tiles = esri && !online
+      ? { kind: "tiles", template: "/offline-relief/{z}/{y}/{x}.jpg", maxZoom: 3 }
+      : esri
+        ? { kind: "tiles", template: esriXyzUrl(esri.service), maxZoom: esri.maxZoom }
+        : !customActive && basemap === "osm"
+          ? { kind: "tiles", template: "https://tile.openstreetmap.org/{z}/{x}/{y}.png", maxZoom: 19 }
+          : null;
     if (esri && !online) {
       base = new TileLayer({
         source: new XYZ({ url: "/offline-relief/{z}/{y}/{x}.jpg", maxZoom: 3 }),
@@ -3883,16 +4053,29 @@ const OlMap = ({
     const imageExtent = imageBounds && !boundsFillSquare(imageBounds)
       ? transformExtent([imageBounds.west, imageBounds.south, imageBounds.east, imageBounds.north], "EPSG:4326", "EPSG:3857")
       : WORLD_EXTENT_3857;
-    const imageLayer = new ImageLayer({
+    const imageLayer = crispWhenMagnified(new ImageLayer({
       source: new ImageStatic({ url: bg.url, imageExtent, projection: "EPSG:3857" }),
-    });
+    }), imageExtent, bg.url);
     imageLayer.setZIndex(5);
     map.addLayer(imageLayer);
+    const fitBackgrounds = fitBackgroundsRef.current;
+    fitBackgrounds.picture = { kind: "image", url: bg.url, extent: imageExtent };
+    // Its shape is read from the picture: one restored from a saved map does
+    // not carry it.
+    const placed = { extent: imageExtent, aspect: null };
+    basemapPictureRef.current = placed;
+    const probe = new Image();
+    probe.onload = () => {
+      if (probe.naturalHeight) placed.aspect = probe.naturalWidth / probe.naturalHeight;
+    };
+    probe.src = bg.url;
     // Only fresh uploads write back into the document; a restored (persisted)
     // background is already in the doc/scenario, so don't re-dirty it on open.
     if (!bg.persisted) onCustomBackgroundSaveRef.current?.({ kind: "image", dataUrl: bg.dataUrl, ...(imageBounds ? { bounds: imageBounds } : {}) });
     return () => {
       map.removeLayer(imageLayer);
+      fitBackgrounds.picture = null;
+      basemapPictureRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [customBackground]);
@@ -3909,9 +4092,21 @@ const OlMap = ({
       return undefined;
     }
 
-    // Place (or re-place, when the nonce bumps) at the view centre, spanning
-    // 60% of the visible width at the image's own aspect ratio.
-    if (!refImageExtentRef.current || referencePlaceNonce > 0) {
+    // A picture the same shape as the basemap picture (another Q-BAM) is a
+    // version of the same map: it is laid exactly on the basemap. Otherwise,
+    // or when "Center on view" bumps the nonce, it is placed at the view
+    // centre, spanning 60% of the visible width at its own aspect ratio.
+    const recentre = referencePlaceNonce !== refPlaceNonceSeenRef.current;
+    refPlaceNonceSeenRef.current = referencePlaceNonce;
+    const basemap = basemapPictureRef.current;
+    const sameShape = basemap?.aspect && referenceImage.aspect
+      && Math.abs(referenceImage.aspect / basemap.aspect - 1) < 0.01;
+    if (sameShape && !recentre) {
+      refImageExtentRef.current = [...basemap.extent];
+      // Laid exactly on the basemap: locked, so dragging pans the map instead
+      // of knocking it out of place (the player can unlock it in the panel).
+      if (referenceImage.locked === undefined) onReferenceSnappedRef.current?.();
+    } else if (!refImageExtentRef.current || referencePlaceNonce > 0) {
       const view = map.getView();
       const center = view.getCenter();
       const resolution = view.getResolution();
@@ -3926,16 +4121,50 @@ const OlMap = ({
       ];
     }
 
-    const layer = new ImageLayer({
-      source: new ImageStatic({ url: dataUrl, imageExtent: refImageExtentRef.current, projection: "EPSG:3857" }),
+    // Drawn from one decoded copy of the picture into whatever the map shows,
+    // so moving or resizing it only redraws: a new ImageStatic per mouse move
+    // decoded the whole picture again (a 5000px Q-BAM, dozens of times a
+    // second). Crisp when zoomed past its own pixels, as the basemap is.
+    const picture = new Image();
+    const source = new ImageCanvasSource({
+      projection: "EPSG:3857",
+      canvasFunction: (extent, _resolution, _pixelRatio, size) => {
+        const canvas = document.createElement("canvas");
+        canvas.width = size[0];
+        canvas.height = size[1];
+        const placed = refImageExtentRef.current;
+        if (!placed || !picture.naturalWidth) return canvas;
+        const scale = size[0] / (extent[2] - extent[0]);
+        const width = (placed[2] - placed[0]) * scale;
+        const height = (placed[3] - placed[1]) * scale;
+        const context = canvas.getContext("2d");
+        context.imageSmoothingEnabled = width <= picture.naturalWidth;
+        context.drawImage(picture, (placed[0] - extent[0]) * scale, (extent[3] - placed[3]) * scale, width, height);
+        return canvas;
+      },
     });
+    picture.onload = () => source.changed();
+    picture.src = dataUrl;
+    refImageSourceRef.current = source;
+    const layer = new ImageLayer({ source });
     layer.setZIndex(40);
     layer.setOpacity(referenceImage.visible === false ? 0 : (referenceImage.opacity ?? 0.5));
     map.addLayer(layer);
     refImageLayerRef.current = layer;
+    const fitBackgrounds = fitBackgroundsRef.current;
+    fitBackgrounds.reference = {
+      kind: "image",
+      url: dataUrl,
+      // Read when a fit starts: the frame moves the image without this effect.
+      get extent() {
+        return refImageExtentRef.current;
+      },
+    };
     return () => {
       map.removeLayer(layer);
       refImageLayerRef.current = null;
+      fitBackgrounds.reference = null;
+      refImageSourceRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [referenceImage?.dataUrl, referencePlaceNonce]);
@@ -3948,15 +4177,21 @@ const OlMap = ({
 
   // The adjust frame: a dashed outline + corner handles, and a pointer
   // interaction where dragging a corner resizes (opposite corner anchored,
-  // free aspect so a distorted source map can still be aligned) and dragging
-  // inside moves. Mounted only while the Reference panel is open, and added
-  // last so it wins the event race over the editing interactions.
+  // free aspect so a distorted source map can still be aligned; Shift keeps
+  // the picture's shape) and dragging inside moves. Mounted only while the
+  // Reference panel is open, and added last so it wins the event race over
+  // the editing interactions. Locked, it is only an outline and every drag
+  // pans the map: a reference laid over the whole basemap covers the whole
+  // map, and unlocked it caught every drag.
   useEffect(() => {
     const map = mapRef.current;
     const dataUrl = referenceImage?.dataUrl;
     if (!map || !dataUrl || !referenceAdjust) return undefined;
+    const locked = referenceImage?.locked === true;
 
-    const frameSource = new VectorSource();
+    // wrapX off, as every other editor layer: otherwise the frame is drawn
+    // again on the world copy beside it.
+    const frameSource = new VectorSource({ wrapX: false });
     refImageFrameSourceRef.current = frameSource;
     const frameLayer = new VectorLayer({
       source: frameSource,
@@ -3987,38 +4222,43 @@ const OlMap = ({
       frameSource.clear();
       if (!extent) return;
       frameSource.addFeature(new Feature({ geometry: polygonFromExtent(extent) }));
+      if (locked) return;
       for (const corner of cornersOf(extent)) {
         frameSource.addFeature(new Feature({ geometry: new Point(corner) }));
       }
     };
-    const refreshImage = () => {
-      refImageLayerRef.current?.setSource(
-        new ImageStatic({ url: dataUrl, imageExtent: refImageExtentRef.current, projection: "EPSG:3857" }),
-      );
-    };
     redrawFrame();
 
-    let drag = null; // { mode: "move", last } | { mode: "resize", anchor }
+    // What a pointer at `pixel` would grab: a corner (to resize) or the
+    // picture (to move), or nothing.
+    const grabAt = (pixel, coordinate) => {
+      const extent = refImageExtentRef.current;
+      if (!extent || locked) return null;
+      const corners = cornersOf(extent);
+      for (let index = 0; index < corners.length; index += 1) {
+        const corner = map.getPixelFromCoordinate(corners[index]);
+        if (Math.hypot(corner[0] - pixel[0], corner[1] - pixel[1]) <= 12) return { mode: "resize", index };
+      }
+      const [x, y] = coordinate;
+      return x >= extent[0] && x <= extent[2] && y >= extent[1] && y <= extent[3] ? { mode: "move" } : null;
+    };
+    // Corners 0 and 2 are bottom-left and top-right; 1 and 3 the other diagonal.
+    const cursorFor = (grab) => (grab.mode === "move" ? "move" : grab.index % 2 === 0 ? "nesw-resize" : "nwse-resize");
+
+    let drag = null; // { mode: "move", last } | { mode: "resize", anchor, aspect }
     const interaction = new PointerInteraction({
       handleDownEvent: (event) => {
+        const grab = grabAt(event.pixel, event.coordinate);
+        if (!grab) return false;
         const extent = refImageExtentRef.current;
-        if (!extent) return false;
-        const corners = cornersOf(extent);
-        for (let index = 0; index < corners.length; index += 1) {
-          const pixel = map.getPixelFromCoordinate(corners[index]);
-          const dx = pixel[0] - event.pixel[0];
-          const dy = pixel[1] - event.pixel[1];
-          if (Math.sqrt(dx * dx + dy * dy) <= 11) {
-            drag = { mode: "resize", anchor: corners[(index + 2) % 4] };
-            return true;
-          }
-        }
-        const [x, y] = event.coordinate;
-        if (x >= extent[0] && x <= extent[2] && y >= extent[1] && y <= extent[3]) {
-          drag = { mode: "move", last: event.coordinate };
-          return true;
-        }
-        return false;
+        drag = grab.mode === "move"
+          ? { mode: "move", last: event.coordinate }
+          : {
+              mode: "resize",
+              anchor: cornersOf(extent)[(grab.index + 2) % 4],
+              aspect: (extent[2] - extent[0]) / (extent[3] - extent[1]),
+            };
+        return true;
       },
       handleDragEvent: (event) => {
         const extent = refImageExtentRef.current;
@@ -4031,19 +4271,20 @@ const OlMap = ({
         } else {
           const [ax, ay] = drag.anchor;
           const [cx, cy] = event.coordinate;
-          // A collapsed extent breaks ImageStatic — enforce a minimum edge.
+          // A collapsed extent draws nothing: enforce a minimum edge.
           const minEdge = map.getView().getResolution() * 8;
-          const x1 = Math.min(ax, cx);
-          const y1 = Math.min(ay, cy);
-          refImageExtentRef.current = [
-            x1,
-            y1,
-            Math.max(Math.max(ax, cx), x1 + minEdge),
-            Math.max(Math.max(ay, cy), y1 + minEdge),
-          ];
+          let width = Math.max(Math.abs(cx - ax), minEdge);
+          let height = Math.max(Math.abs(cy - ay), minEdge);
+          if (event.originalEvent?.shiftKey) {
+            if (width / height > drag.aspect) width = height * drag.aspect;
+            else height = width / drag.aspect;
+          }
+          const x2 = ax + (cx >= ax ? width : -width);
+          const y2 = ay + (cy >= ay ? height : -height);
+          refImageExtentRef.current = [Math.min(ax, x2), Math.min(ay, y2), Math.max(ax, x2), Math.max(ay, y2)];
         }
         redrawFrame();
-        refreshImage();
+        refImageSourceRef.current?.changed();
       },
       handleUpEvent: () => {
         drag = null;
@@ -4052,13 +4293,24 @@ const OlMap = ({
     });
     map.addInteraction(interaction);
 
+    // Added after the map's own pointermove (which sets the tool's cursor), so
+    // over the picture this one has the last word.
+    const showCursor = (event) => {
+      if (event.dragging) return;
+      const grab = grabAt(event.pixel, event.coordinate);
+      if (grab) map.getTargetElement().style.cursor = cursorFor(grab);
+    };
+    map.on("pointermove", showCursor);
+
     return () => {
+      map.un("pointermove", showCursor);
+      map.getTargetElement().style.cursor = "";
       map.removeInteraction(interaction);
       map.removeLayer(frameLayer);
       refImageFrameSourceRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [referenceAdjust, referenceImage?.dataUrl]);
+  }, [referenceAdjust, referenceImage?.dataUrl, referenceImage?.locked]);
 
   return <div ref={containerRef} style={{ position: "absolute", inset: 0 }} />;
 };

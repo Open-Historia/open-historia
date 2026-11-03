@@ -40,6 +40,16 @@ import {
 
 const event = (impacts = {}) => ({ title: "Test", description: "test", impacts });
 
+test("every impact an event can carry has a name in the receipt, and one without still never stops a turn", async () => {
+  const { EVENT_IMPACT_KEYS } = await import("./eventImpactKeys.js");
+  const source = (await import("node:fs")).readFileSync(new URL("./applicationReceipt.js", import.meta.url), "utf8");
+  const labelled = new Set([...source.matchAll(/^ {2}(\w+): \["/gm)].map((match) => match[1]));
+  assert.deepEqual(EVENT_IMPACT_KEYS.filter((key) => key !== "actionIds" && !labelled.has(key)), []);
+  // The player's 0.0.112 game: party ops it could not read, a key the receipt had no label for.
+  const receipt = createApplicationReceipt();
+  assert.doesNotThrow(() => noteMalformedImpacts(receipt, event({ partyOps: [{}, {}] }), event({ partyOps: [] })));
+});
+
 test("a collector that is not collecting is a no-op everywhere", () => {
   assert.doesNotThrow(() => noteReceipt(null, "dropped", "x"));
   assert.doesNotThrow(() => tallyAppliedEvents(null, [event()]));

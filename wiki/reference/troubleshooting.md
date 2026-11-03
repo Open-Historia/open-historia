@@ -6,9 +6,10 @@ explains the problem immediately, and it is what to attach to a bug report.
 
 ## The map is blank
 
-**In the browser.** The web build streams its map from community-run content nodes. If none is
-reachable you get no map. Reload; if it persists, the node network is having a bad day — try
-again later, or use the desktop or Android app, which keep the map on the device.
+**In the browser.** The map files come with the site and load from openhistoria.com while the
+game starts; the first visit downloads about 35 MB of them. Reload; if it persists, check that
+nothing (an ad blocker, a firewall) is blocking the site's own files, or use the desktop or
+Android app, which keep the map on the device.
 
 **On desktop.** The map data failed to download on first launch. It is fetched separately from
 the installer, once, behind the **Setting up Open Historia** screen. Restart the app and let that
@@ -57,8 +58,9 @@ This is almost always the model failing to produce valid structured output.
   The error says the context window was exceeded and how big the request was. Once a model has
   said how big its window is, the game remembers and does not send it a request that cannot fit:
   the call goes to the next model in the list instead, or, if none can take it, is not sent at
-  all and says so. If a model can now take more — a provider raised its limit — open its entry in
-  Settings → AI and press **Forget this window** under **This model only**.
+  all and says so. If a model can now take more — a provider raised its limit — the game tries it
+  again by itself once what it learned lapses: a week after a refusal, or a month after the model
+  stated its window.
 - **A local model you loaded with a bigger window is still refused.** A model on your own machine
   or network is never held to a window learned from its refusals, since you set its window when
   you load it. Older builds did hold it, for a month: forget the window as above, or update the

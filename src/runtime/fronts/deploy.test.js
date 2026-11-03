@@ -62,39 +62,39 @@ test("a deployment line is its side's own, and an empty way takes it off", () =>
   // A line nowhere near the battlefield is refused; nobody draws one for a battlefield they are not on.
   assert.ok(applyWarRoomOp([record], { op: "deploy", battlefield: record.name, way: [[100, 10], [101, 10]] }, { player: "Aland" }).error);
   assert.ok(applyWarRoomOp([record], { op: "deploy", battlefield: record.name, way: BACK }, { player: "Neutralia" }).error);
-  // It crosses to a host as a way and nothing else, and the formations it calls up, held to the most a call brings.
+  // It crosses to a host as a way and nothing else: how many it calls up is not the asker's to say, only that it calls nobody.
   assert.deepEqual(cleanWarRoomOp({ op: "deploy", battlefield: record.name, way: BACK, extra: 1 }), { op: "deploy", battlefield: record.name, way: BACK });
-  assert.equal(cleanWarRoomOp({ op: "deploy", battlefield: record.name, way: BACK, count: 4 }).count, 4);
-  assert.equal(cleanWarRoomOp({ op: "deploy", battlefield: record.name, way: BACK, count: 900 }).count, REINFORCE_MOST);
-  assert.equal(cleanWarRoomOp({ op: "deploy", battlefield: record.name, way: BACK, count: -3 }).count, 0);
+  assert.equal(cleanWarRoomOp({ op: "deploy", battlefield: record.name, way: BACK, count: 60 }).count, undefined);
+  assert.equal(cleanWarRoomOp({ op: "deploy", battlefield: record.name, way: BACK, count: 0 }).count, 0);
 });
 
-test("a deployment drawn calls up fresh formations on it when time next passes, and only once", () => {
+test("a deployment drawn calls up fresh formations on it when time next passes, as many as its country can, and only once", () => {
   const [record] = run().battlefields;
   const side = record.sides.findIndex((members) => members.includes("Aland"));
   const before = troopsAt(record, side).length;
-  const drawn = applyWarRoomOp([record], { op: "deploy", battlefield: record.name, way: BACK, count: 4 }, { player: "Aland" }).record;
-  assert.equal(deployLinesOf(drawn, side)[0].call, 4);
+  // Sixty asked for: "being able to just spawn 60 troops every turn is super op" (the owner, 2026-11-02).
+  const drawn = applyWarRoomOp([record], { op: "deploy", battlefield: record.name, way: BACK, count: 60 }, { player: "Aland" }).record;
+  assert.equal(deployLinesOf(drawn, side)[0].call, DEPLOY_USUAL);
   // No order, no event of the story's: the deployment alone brings them, on its line.
   const after = run({ battlefields: [drawn], days: 2 }).battlefields[0];
   const fresh = troopsAt(after, side).slice(before);
-  assert.equal(fresh.length, 4);
+  assert.ok(fresh.length >= 1 && fresh.length < 60, `${fresh.length} came`);
   for (const troop of fresh) assert.ok(troop.lng < 21.5, `came in at ${troop.lng.toFixed(2)}, by the line at 20.4`);
-  assert.ok(after.log.some((entry) => entry.k === "drafted" && entry.at === "4 fresh formations on its deployment line"));
+  assert.ok(after.log.some((entry) => entry.k === "drafted" && entry.at === `${fresh.length} fresh formations on its deployment line`));
   // The call is spent, and the deployment says what came of it.
   const [line] = deployLinesOf(after, side);
   assert.equal(line.call, undefined);
-  assert.deepEqual([line.last.n, line.last.why], [4, ""]);
+  assert.deepEqual([line.last.n, line.last.why], [fresh.length, ""]);
   assert.match(line.last.d, /^2024-/);
   const again = run({ battlefields: [after], days: 2 }).battlefields[0];
   assert.equal(troopsAt(again, side).length, troopsAt(after, side).length, "no more come of it");
-  assert.equal(deployLinesOf(again, side)[0].last.n, 4);
-  // Drawn again, it calls up again: as many as a draft usually brings, without a number; none, with 0.
+  assert.equal(deployLinesOf(again, side)[0].last.n, fresh.length);
+  // Drawn again, it calls up again; none, drawn with a call of 0.
   const usual = applyWarRoomOp([again], { op: "deploy", battlefield: record.name, way: BACK }, { player: "Aland" }).record;
   assert.equal(deployLinesOf(usual, side)[0].call, DEPLOY_USUAL);
   assert.equal(deployLinesOf(usual, side)[0].last, undefined, "a deployment drawn anew has called nobody up yet");
   const more = run({ battlefields: [usual], days: 2 }).battlefields[0];
-  assert.ok(troopsAt(more, side).length >= troopsAt(again, side).length + 2);
+  assert.ok(troopsAt(more, side).length > troopsAt(again, side).length);
   const quiet = applyWarRoomOp([again], { op: "deploy", battlefield: record.name, way: BACK, count: 0 }, { player: "Aland" }).record;
   assert.equal(deployLinesOf(quiet, side)[0].call, undefined);
   const none = run({ battlefields: [quiet], days: 2 }).battlefields[0];
@@ -111,10 +111,29 @@ test("a deployment calls up past what a draft may bring an army that is large al
   const full = run({ battlefields: [record], moments: [{ day: 1, type: "order", battlefield: record.name, side: "Aland", order: REINFORCE_ORDER, sector: "all", count: 5, given: true, ref: 9 }], days: 1 });
   assert.deepEqual(full.notes.filter((note) => note.kind === "reinforce-full").map((note) => note.side), ["Aland"], "a draft may bring no more");
   const before = troopsAt(full.battlefields[0], side).length;
-  const drawn = applyWarRoomOp([full.battlefields[0]], { op: "deploy", battlefield: record.name, way: BACK, count: 5 }, { player: "Aland" }).record;
+  const drawn = applyWarRoomOp([full.battlefields[0]], { op: "deploy", battlefield: record.name, way: BACK }, { player: "Aland" }).record;
   const after = run({ battlefields: [drawn], days: 1 }).battlefields[0];
-  assert.equal(troopsAt(after, side).length, before + 5, "the deployment still brings its five");
-  assert.equal(deployLinesOf(after, side)[0].last.n, 5);
+  const called = deployLinesOf(after, side)[0].last.n;
+  assert.ok(called >= 1, "the deployment still brings its call-up");
+  assert.equal(troopsAt(after, side).length, before + called);
+});
+
+test("a call-up is the country's: more over a longer time, fewer when it is short or weary, and as fast as it musters", () => {
+  const [record] = run().battlefields;
+  const side = record.sides.findIndex((members) => members.includes("Aland"));
+  const drawn = applyWarRoomOp([record], { op: "deploy", battlefield: record.name, way: BACK }, { player: "Aland" }).record;
+  const calledIn = (extra) => deployLinesOf(run({ battlefields: [drawn], ...extra }).battlefields[0], side)[0].last.n;
+  const week = calledIn({ days: 7 });
+  const months = calledIn({ days: 60 });
+  assert.ok(months > week, `${week} in a week, ${months} in two months`);
+  // Short of supplies, weary of its war or blockaded (run.shortageOf: the three together): fewer.
+  const short = calledIn({ days: 60, shortageOf: (name) => (name === "Aland" ? 0.6 : 0) });
+  assert.ok(short < months, `${short} short, ${months} not`);
+  // A country that calls its army up fast brings more in a week than one that takes a year.
+  const curve = (days) => ({ table: Array.from({ length: days + 1 }, (_, day) => day / days), head: 0 });
+  const fast = calledIn({ days: 7, mechanics: { muster: true }, musterOf: () => curve(10) });
+  const slow = calledIn({ days: 7, mechanics: { muster: true }, musterOf: () => curve(365) });
+  assert.ok(fast > slow, `${fast} mustering fast, ${slow} slowly`);
 });
 
 test("a deployment calls up only the men there are, and says so when there are none", () => {

@@ -12,8 +12,10 @@ import {
   frontViewOf,
   holderAt,
   isOpenBattlefield,
+  isWarIdName,
   normalizeBattlefield,
   normalizeBattlefields,
+  withWarIdFrontsRenamed,
 } from "./record.js";
 import { createReplayRecorder } from "./replay.js";
 
@@ -143,6 +145,31 @@ test("one record a name; the open ones are kept first, then the newest closed", 
   assert.equal(list[0].name, "Front 0");
   assert.equal(list[0].warId, "war-1", "the first of a name stands");
   assert.equal(list.at(-1).name, `Old ${MAX_CLOSED_BATTLEFIELDS + 1}`);
+});
+
+// A real-key test (2026-10-28) saved a front named "WAR-FRANCE-ITALY-2016".
+test("a battlefield saved under a war's id is renamed on reading, and what names it follows", () => {
+  assert.ok(isWarIdName("WAR-FRANCE-ITALY-2016"));
+  assert.ok(isWarIdName("Russo-Ukrainian War", ["russo-ukrainian war"]), "or one of the wars at hand, in any case");
+  assert.ok(!isWarIdName("Eastern Ukraine", ["war-1"]));
+  assert.ok(!isWarIdName("War of the Pacific"), "a name with a space is a name");
+  const world = {
+    battlefields: [
+      battlefield({ name: "WAR-FRANCE-ITALY-2016", warId: "war-france-italy-2016", sides: [["France"], ["Italy"]] }),
+      battlefield({ name: "France - Italy front", warId: "war-2", sides: [["France"], ["Italy"]], status: "closed" }),
+      battlefield(),
+    ],
+    units: [{ id: "unit-1", committedTo: "war-france-italy-2016" }, { id: "unit-2", committedTo: "Eastern Ukraine" }],
+    transports: [{ id: "t-1", battlefield: "WAR-FRANCE-ITALY-2016", embark: { battlefield: "War-France-Italy-2016", side: 0, troops: [1] } }],
+  };
+  const mended = withWarIdFrontsRenamed(world);
+  assert.deepEqual(mended.battlefields.map((record) => record.name), ["France - Italy front 2", "France - Italy front", "Eastern Ukraine"], "numbered past a name already taken");
+  assert.deepEqual(mended.units.map((unit) => unit.committedTo), ["France - Italy front 2", "Eastern Ukraine"]);
+  assert.equal(mended.transports[0].battlefield, "France - Italy front 2");
+  assert.equal(mended.transports[0].embark.battlefield, "France - Italy front 2");
+  assert.equal(normalizeBattlefields(mended.battlefields).length, 3, "none is lost as a second of its name");
+  const plain = { battlefields: [battlefield()], units: [] };
+  assert.equal(withWarIdFrontsRenamed(plain), plain, "a world with no such name is handed back as it was");
 });
 
 test("a battlefield and a side are found by exact name in any case", () => {

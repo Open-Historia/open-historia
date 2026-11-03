@@ -1,9 +1,10 @@
 /*! Open Historia — unit motion tests © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Run: node --test src/runtime/unitMotion.test.js
 //
-// unitMotion.js is deliberately import-free, so this file runs in a bare
-// checkout with no node_modules — unlike gameState's tests, which drag in
-// assets.js -> maplibre-gl. Keep it that way.
+// unitMotion.js imports nothing that needs a package (game dates and the
+// map’s measure), so this file runs in a bare checkout with no node_modules
+// — unlike gameState's tests, which drag in assets.js -> maplibre-gl. Keep
+// it that way.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -15,6 +16,7 @@ import {
   eraSpeedFactor,
   hashSeed,
   haversineKm,
+  kmOnMap,
   kmPerDay,
   maxTravelKm,
   patrolPoint,
@@ -22,6 +24,8 @@ import {
   stepToward,
   wrapLng,
 } from "./unitMotion.js";
+import { mapMeasureOf, yToLat } from "../../server/mapDistance.js";
+import { currentMapMeasure, noteMapMeasure } from "./mapMeasure.js";
 
 // ---- haversineKm (moved here from gameState.js; keep its assertions) --------
 
@@ -265,4 +269,34 @@ test("wrapLng brings a world-copy longitude back into range", () => {
   assert.equal(wrapLng(-180), -180);
   assert.equal(wrapLng(900), -180);
   assert.ok(Math.abs(wrapLng(1e300)) <= 180, "a huge value ends");
+});
+
+// ---- the map's measure (server/mapDistance.js) ------------------------------------------
+
+test("on a freeform map a unit's distances are the sheet's straight lines, equal everywhere", () => {
+  const sheet = mapMeasureOf({ type: "freeform", aspect: 2, scale: { from: [0, 0], to: [10, 0], km: 1000 } });
+  // Ten degrees across the sheet are 1,000 km in its middle and near its top alike.
+  assert.ok(Math.abs(kmOnMap(0, 0, 0, 10, sheet) - 1000) < 1e-6);
+  assert.ok(Math.abs(kmOnMap(yToLat(70), 0, yToLat(70), 10, sheet) - 1000) < 1e-6);
+  assert.ok(Math.abs(kmOnMap(yToLat(20), 40, yToLat(30), 40, sheet) - 1000) < 1e-6, "and ten up as far as ten across");
+  // A step goes the way it was sent, as far as it may.
+  const step = stepToward({ lng: 0, lat: yToLat(0) }, { lng: 30, lat: yToLat(40) }, 1000, sheet);
+  assert.ok(Math.abs(step.lng - 6) < 1e-9 && step.arrived === false);
+  assert.ok(Math.abs(kmOnMap(yToLat(0), 0, step.lat, step.lng, sheet) - 1000) < 1e-6);
+  // A patrol keeps within its station's reach on the sheet.
+  const point = patrolPoint({ lng: 50, lat: yToLat(60) }, 200, 7, { measure: sheet });
+  assert.ok(kmOnMap(yToLat(60), 50, point.lat, point.lng, sheet) <= 200 + 1e-6);
+});
+
+test("without a map that says otherwise a unit measures as it always did", () => {
+  assert.equal(currentMapMeasure().plain, true);
+  assert.equal(kmOnMap(51.5, -0.12, 48.85, 2.35), haversineKm(51.5, -0.12, 48.85, 2.35));
+  // The map being played is the measure until another is read.
+  noteMapMeasure({ projection: { type: "freeform", aspect: 2 } });
+  try {
+    assert.ok(Math.abs(kmOnMap(yToLat(60), 0, yToLat(60), 10) - 1113.2) < 1e-6);
+  } finally {
+    noteMapMeasure({});
+  }
+  assert.equal(currentMapMeasure().plain, true);
 });

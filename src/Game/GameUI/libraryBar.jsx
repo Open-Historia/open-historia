@@ -148,6 +148,12 @@ let _openLibraryTab = null;
 export const openLibraryTab = (tab) => {
   _openLibraryTab?.(tab);
 };
+// And lets them close it onto the game, as joining a shared game from the
+// Lobbies tab does (multiplayer/ui/DiscordInvites.jsx).
+let _enterActiveGame = null;
+export const enterActiveGameFromOutside = () => {
+  _enterActiveGame?.();
+};
 
 // Whether the main menu is showing. Lives at module scope because the whole UI
 // tree (this component included) remounts whenever the active game changes —
@@ -564,7 +570,6 @@ const editorSectionLabels = {
   assets: "Assets",
   bundles: "Bundles",
   features: "Features",
-  fronts: "Fronts",
   history: "Pre-history",
   music: "Music",
   overview: "Overview",
@@ -1275,6 +1280,7 @@ const ScenarioCard = ({ onClone, onEdit, onPlay, onSelect, onUpdate, scenario, s
 const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onDelete = null, onEdit, onExport }) => {
   const cardImageUrl = game.coverImageUrl || DEFAULT_SCENARIO_COVER;
   const touch = useTouchPrimary();
+  const isMobile = useIsMobile();
   const [cardMenuOpen, setCardMenuOpen] = useState(false);
   // Which row the pointer is over. These are plain buttons on a translucent
   // surface, so without this nothing moves under the cursor and there is no way
@@ -1345,7 +1351,7 @@ const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onDelete
         position: "relative",
       }}
     >
-      <div style={{ borderRadius: "24px 24px 0 0", height: "9.6rem", overflow: "hidden", position: "relative", width: "100%" }}>
+      <div style={{ borderRadius: "24px 24px 0 0", height: isMobile ? "7.5rem" : "9.6rem", overflow: "hidden", position: "relative", width: "100%" }}>
         <div
           style={{
             background:
@@ -1515,20 +1521,20 @@ const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onDelete
         }}
       >
         <div>
-          <div style={{ color: "#fff", fontSize: "1.32rem", fontWeight: 800, letterSpacing: "-0.025em", lineHeight: 1.2, marginBottom: "0.4rem" }}>
+          <div style={{ color: "#fff", fontSize: isMobile ? "1.15rem" : "1.32rem", fontWeight: 800, letterSpacing: "-0.025em", lineHeight: 1.2, marginBottom: "0.4rem" }}>
             {game.name}
           </div>
-          <div style={{ display: "grid", gap: "0.4rem", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 0.6fr)", marginBottom: "0.55rem" }}>
-            <div style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "10px", gridColumn: "1 / -1", minWidth: 0, padding: "0.4rem 0.55rem" }}>
-              <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.6rem", fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase" }}>{"Country"}</div>
+          <div style={{ display: "grid", gap: "0.35rem", gridTemplateColumns: "1fr 1fr", marginBottom: "0.55rem" }}>
+            <div style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "10px", gridColumn: "1 / -1", minWidth: 0, padding: "0.35rem 0.55rem" }}>
+              <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.58rem", fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase" }}>{"Country"}</div>
               <div style={{ color: "#fff", fontSize: "0.8rem", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={game.country || undefined}>{game.country || "No player country"}</div>
             </div>
-            <div style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "10px", minWidth: 0, padding: "0.4rem 0.55rem" }}>
-              <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.6rem", fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase" }}>{"Date"}</div>
+            <div style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "10px", minWidth: 0, padding: "0.35rem 0.55rem" }}>
+              <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.58rem", fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase" }}>{"Date"}</div>
               <div style={{ color: "#fff", fontSize: "0.8rem", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{game.currentDate || "No date"}</div>
             </div>
-            <div style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "10px", minWidth: 0, padding: "0.4rem 0.55rem" }}>
-              <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.6rem", fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase" }}>{"Round"}</div>
+            <div style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "10px", minWidth: 0, padding: "0.35rem 0.55rem" }}>
+              <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.58rem", fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase" }}>{"Round"}</div>
               <div style={{ color: "#fff", fontSize: "0.8rem", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{game.round || 1}</div>
             </div>
           </div>
@@ -1536,11 +1542,11 @@ const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onDelete
             style={{
               color: "rgba(228,228,235,0.78)",
               display: "-webkit-box",
-              fontSize: "0.82rem",
-              lineHeight: 1.45,
+              fontSize: "0.8rem",
+              lineHeight: 1.4,
               overflow: "hidden",
               WebkitBoxOrient: "vertical",
-              WebkitLineClamp: 3,
+              WebkitLineClamp: isMobile ? 2 : 3,
             }}
             title={game.description || undefined}
           >
@@ -1789,7 +1795,7 @@ const browseControlStyle = {
   padding: "0 0.85rem",
 };
 
-const BrowsePill = ({ active, children, onClick }) => (
+const BrowsePill = ({ active, children, onClick, style }) => (
   <button
     className="oh-tap-row"
     onClick={onClick}
@@ -1798,6 +1804,7 @@ const BrowsePill = ({ active, children, onClick }) => (
       background: active ? "var(--oh-grey-selected)" : "rgba(255,255,255,0.05)",
       borderColor: active ? "var(--oh-grey-border-strong)" : "rgba(255,255,255,0.08)",
       color: active ? "var(--oh-grey-text)" : "rgba(246,246,248,0.78)",
+      ...style,
     }}
     type="button"
   >
@@ -1860,7 +1867,6 @@ const CreateScenarioTile = ({ busy, onCreate }) => (
 const EDITOR_SECTION_GROUPS = Object.freeze([
   Object.freeze({ label: "Presentation", sections: Object.freeze(["overview", "assets", "music"]) }),
   Object.freeze({ label: "Setting", sections: Object.freeze(["world", "history", "politics"]) }),
-  Object.freeze({ label: "War", sections: Object.freeze(["fronts"]) }),
   Object.freeze({ label: "Rules and AI", sections: Object.freeze(["stats", "features", "prompts"]) }),
   Object.freeze({ label: "Sharing", sections: Object.freeze(["bundles"]) }),
 ]);
@@ -1872,9 +1878,8 @@ const EDITOR_SECTION_BLURBS = Object.freeze({
   world: "Where play begins: the player's country, the date, the troops and the story so far.",
   history: "The events that led to the start date.",
   politics: "Governments, parties and institutions.",
-  fronts: "How its wars are fought, every country's military and the fronts it begins with.",
   stats: "The national stats every country is measured by.",
-  features: "Which gameplay features are on.",
+  features: "Which gameplay features are on, and under Wars how its wars are fought, every country's military and the fronts it begins with.",
   prompts: "The instructions the AI follows.",
   bundles: "Download it as one file to share or keep.",
 });
@@ -1899,7 +1904,6 @@ const EditorSectionIcon = ({ kind, size = 17 }) => {
     world: <><circle cx="12" cy="12" r="8.5" /><path d="M3.5 12h17M12 3.5c2.3 2.3 3.5 5.2 3.5 8.5s-1.2 6.2-3.5 8.5c-2.3-2.3-3.5-5.2-3.5-8.5s1.2-6.2 3.5-8.5z" /></>,
     history: <><path d="M5 4.5h11.5a2 2 0 0 1 2 2v13H7a2 2 0 0 1-2-2z" /><path d="M5 17.5a2 2 0 0 1 2-2h11.5M9 8.5h6" /></>,
     politics: <><path d="M4 9.5 12 5l8 4.5M5.5 19.5h13M7 10.5v7M12 10.5v7M17 10.5v7" /></>,
-    fronts: <><path d="M5 5v15M5 5.5c4-2 7 2 11 0v8c-4 2-7-2-11 0" /></>,
     stats: <><path d="M5 19.5V11M10 19.5V6M15 19.5v-6M20 19.5V9" /></>,
     features: <><path d="M6 6.5h12M6 12h12M6 17.5h12" /><circle cx="9" cy="6.5" r="1.8" /><circle cx="15" cy="12" r="1.8" /><circle cx="10" cy="17.5" r="1.8" /></>,
     prompts: <><path d="M5 5.5h14v10H9.5L5 19.5z" /><path d="M8.5 9.5h7M8.5 12.5h4.5" /></>,
@@ -1974,7 +1978,7 @@ const EditorDrawer = ({
   if (!record) return null;
   const visibleSections =
     kind === "scenario"
-      ? ["overview", "world", "history", "fronts", "politics", "stats", "features", "prompts", "assets", "music", "bundles"]
+      ? ["overview", "world", "history", "politics", "stats", "features", "prompts", "assets", "music", "bundles"]
       : ["overview", "world", "features", "prompts", "assets"];
   const groups = EDITOR_SECTION_GROUPS
     .map((group) => ({ ...group, sections: group.sections.filter((key) => visibleSections.includes(key)) }))
@@ -2366,35 +2370,6 @@ const EditorDrawer = ({
         />
       )}
 
-      {/* How its wars are fought (ScenarioWarSettings.jsx): part of the form,
-          which Save below writes. Then the fronts it begins with, which have
-          a Save of their own. */}
-      {editorSection === "fronts" && kind === "scenario" && (
-        <ScenarioWarSettings
-          value={formState.warSettings ?? null}
-          gameDate={formState.gameDate}
-          onChange={(next) => onChange("warSettings", next)}
-        />
-      )}
-
-      {/* Every country's military figures, rated by the AI against the others twenty to a request
-          (ScenarioMilitaryPanel.jsx): saved into the scenario batch by batch, as the Politics tab's are. */}
-      {editorSection === "fronts" && kind === "scenario" && (
-        <ScenarioMilitaryPanel
-          details={details}
-          onDetailsChange={onDetailsChange}
-          gameDate={formState.gameDate}
-          warSettings={formState.warSettings ?? null}
-        />
-      )}
-
-      {editorSection === "fronts" && kind === "scenario" && (
-        <ScenarioFrontsPanel
-          details={details}
-          onDetailsChange={onDetailsChange}
-        />
-      )}
-
       {editorSection === "politics" && kind === "scenario" && (
         <>
           <Suspense
@@ -2455,8 +2430,33 @@ const EditorDrawer = ({
         </div>
       )}
 
+      {/* The Features tab. Under Wars, on a scenario, what was its War tab: how its wars are fought
+          (ScenarioWarSettings.jsx, part of the form, which Save below writes); every country's military
+          figures, rated by the AI against the others twenty to a request (ScenarioMilitaryPanel.jsx, saved
+          batch by batch); and the fronts it begins with (ScenarioFrontsPanel.jsx, with a Save of its own). */}
       {editorSection === "features" && (
         <FeaturesSectionEditor
+          extras={kind === "scenario" ? {
+            fronts: (
+              <>
+                <ScenarioWarSettings
+                  value={formState.warSettings ?? null}
+                  gameDate={formState.gameDate}
+                  onChange={(next) => onChange("warSettings", next)}
+                />
+                <ScenarioMilitaryPanel
+                  details={details}
+                  onDetailsChange={onDetailsChange}
+                  gameDate={formState.gameDate}
+                  warSettings={formState.warSettings ?? null}
+                />
+                <ScenarioFrontsPanel
+                  details={details}
+                  onDetailsChange={onDetailsChange}
+                />
+              </>
+            ),
+          } : null}
           kind={kind}
           features={formState.features}
           scenarioFeatures={kind === "scenario" ? formState.features : formState.scenarioFeatures}
@@ -2689,6 +2689,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     enterGame();
     setMenuOpen(false);
   };
+  _enterActiveGame = enterActiveGame;
   // Bridge for outside callers: open the main menu on a library tab.
   _openLibraryTab = (tab) => {
     setActiveTab(tab);
@@ -4718,7 +4719,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
             display: "flex",
             fontFamily: "sans-serif",
             gap: "0.45rem",
-            left: `calc(5rem + ${SAFE_LEFT})`,
+            left: `calc(3.8rem + ${SAFE_LEFT})`,
             position: "fixed",
             top: TOP_BAR_OFFSET,
             zIndex: 9996,
@@ -4728,28 +4729,39 @@ const LibraryTopBar = ({ onOpenSettings }) => {
             style={{
               ...surfaceStyle,
               alignItems: "center",
-              borderRadius: "13px",
+              borderRadius: "12px",
+              boxSizing: "border-box",
               color: "rgba(255,255,255,0.72)",
               display: "flex",
               gap: "0.55rem",
+              height: "2.85rem",
               // Shrinks to nothing before it can reach under the date widget
               // on narrow desktop windows (the widget owns the top right).
               maxWidth: "min(34rem, max(0rem, calc(100vw - 44rem)))",
               overflow: "hidden",
-              padding: "0.42rem 0.7rem",
+              padding: "0 0.75rem",
             }}
           >
-            <img alt="Open Historia" src="/logo.png" style={{ borderRadius: "8px", flexShrink: 0, height: "1.9rem", width: "1.9rem" }} />
-            <div style={{ minWidth: 0, lineHeight: 1.08 }}>
+            <img alt="Open Historia" src="/logo.png" style={{ borderRadius: "7px", flexShrink: 0, height: "1.85rem", width: "1.85rem" }} />
+            <div style={{ minWidth: 0, lineHeight: 1.15 }}>
               <div style={{ color: "rgba(255,255,255,0.94)", fontSize: "0.72rem", fontWeight: 850 }}>Open Historia</div>
-              <div style={{ color: "rgba(226,226,229,0.42)", fontSize: "0.6rem", marginTop: "0.18rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{summaryText}</div>
+              <div style={{ color: "rgba(226,226,229,0.42)", fontSize: "0.6rem", marginTop: "0.12rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{summaryText}</div>
             </div>
           </div>
           <button
             onClick={exitToMenu}
             title="Leave this game and return to the main menu"
             type="button"
-            style={{ ...actionButtonStyle, ...surfaceStyle, borderRadius: "11px", fontSize: "0.68rem", minHeight: "2.85rem", padding: "0 0.85rem" }}
+            style={{
+              ...actionButtonStyle,
+              ...surfaceStyle,
+              borderRadius: "12px",
+              boxSizing: "border-box",
+              fontSize: "0.68rem",
+              height: "2.85rem",
+              minHeight: "2.85rem",
+              padding: "0 0.85rem",
+            }}
           >
             ⌂ Exit Game
           </button>
@@ -4768,7 +4780,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
             gap: "0.45rem",
             left: `calc(0.5rem + ${SAFE_LEFT})`,
             position: "fixed",
-            top: `calc(5rem + ${SAFE_TOP})`,
+            top: `calc(4rem + ${SAFE_TOP})`,
             zIndex: 9997,
           }}
         >
@@ -4778,7 +4790,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
             onClick={exitToMenu}
             title="Leave this game and return to the main menu"
             type="button"
-            style={touchFit({ ...actionButtonStyle, ...surfaceStyle, borderRadius: "12px", fontSize: "1rem", height: "2.6rem", minHeight: "0", minWidth: "0", padding: 0, width: "2.6rem" }, touch, { icon: true })}
+            style={touchFit({ ...actionButtonStyle, ...surfaceStyle, borderRadius: "12px", fontSize: "1rem", height: "3.2rem", minHeight: "0", minWidth: "0", padding: 0, width: "3.2rem" }, touch, { icon: true })}
           >
             ⌂
           </button>
@@ -5274,21 +5286,21 @@ const LibraryTopBar = ({ onOpenSettings }) => {
           }}
         >
           {isMobile ? (
-            <div style={{ borderBottom: "1px solid rgba(255,255,255,0.08)", flexShrink: 0 }}>
+            <div style={{ background: "rgba(15,15,17,0.92)", backdropFilter: "blur(14px)", borderBottom: "1px solid rgba(255,255,255,0.08)", flexShrink: 0 }}>
               <div
                 style={{
                   alignItems: "center",
                   display: "flex",
-                  gap: "0.55rem",
-                  height: `calc(${BAR_HEIGHT}px + ${SAFE_TOP})`,
+                  gap: "0.45rem",
+                  minHeight: `calc(3.4rem + ${SAFE_TOP})`,
                   overflowX: "auto",
-                  padding: `${SAFE_TOP} calc(0.5rem + ${SAFE_RIGHT}) 0 calc(0.5rem + ${SAFE_LEFT})`,
+                  padding: `calc(${SAFE_TOP} + 0.35rem) calc(0.65rem + ${SAFE_RIGHT}) 0.35rem calc(0.65rem + ${SAFE_LEFT})`,
                   scrollbarWidth: "none",
                 }}
               >
                 {/* On a phone too, the mark opens the history of the game's updates. */}
-                <button aria-label="Update history" className="oh-tap" onClick={() => setHistoryOpen(true)} style={{ background: "none", border: "none", cursor: "pointer", flexShrink: 0, padding: "0 0.2rem" }} title="Update history: every update to Open Historia" type="button">
-                  <img alt="" src="/logo.png" style={{ display: "block", height: "1.7rem", width: "1.7rem" }} />
+                <button aria-label="Update history" className="oh-tap" onClick={() => setHistoryOpen(true)} style={{ background: "none", border: "none", cursor: "pointer", flexShrink: 0, padding: "0 0.25rem 0 0" }} title="Update history: every update to Open Historia" type="button">
+                  <img alt="" src="/logo.png" style={{ display: "block", height: "1.85rem", width: "1.85rem" }} />
                 </button>
                 {MENU_TABS.map((tab) => (
                   <button
@@ -5298,10 +5310,15 @@ const LibraryTopBar = ({ onOpenSettings }) => {
                     onClick={() => setActiveTab(tab.id)}
                     style={touchFit({
                       ...themeButtonStyle,
-                      background: activeTab === tab.id ? "var(--oh-grey-selected)" : "rgba(255,255,255,0.05)",
+                      background: activeTab === tab.id ? "var(--oh-grey-selected)" : "rgba(255,255,255,0.04)",
                       borderColor: activeTab === tab.id ? "var(--oh-grey-border-strong)" : "rgba(255,255,255,0.08)",
+                      borderRadius: "10px",
+                      fontSize: "0.86rem",
+                      fontWeight: activeTab === tab.id ? 700 : 500,
+                      minHeight: "2.35rem",
                       minWidth: "0",
-                      padding: "0.55rem 0.6rem",
+                      padding: "0 0.85rem",
+                      whiteSpace: "nowrap",
                     }, touch)}
                     type="button"
                   >
@@ -5346,19 +5363,17 @@ const LibraryTopBar = ({ onOpenSettings }) => {
 
           <div style={{ flex: 1, overflowY: "auto" }}>
             <div style={{ margin: "0 auto", maxWidth: APP_SHELL_MAX_WIDTH, padding: isMobile ? `1.1rem calc(0.8rem + ${SAFE_RIGHT}) calc(2.5rem + ${SAFE_BOTTOM}) calc(0.8rem + ${SAFE_LEFT})` : `1.5rem calc(1.6rem + ${SAFE_RIGHT}) calc(3rem + ${SAFE_BOTTOM}) 1.6rem`, width: "100%" }}>
-            {/* Phones: the tab's actions head the page, by name. In the bar they
-                would be icon-only controls named by a tooltip, which a finger
-                never sees, and the bar has no room for words beside the tabs. */}
+            {/* Phones: the tab's actions head the page, by name in a clean balanced grid */}
             {isMobile && (typeof onOpenSettings === "function" || tabActions.length > 0) && (
-              <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginBottom: "1.1rem" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(8.5rem, 1fr))", gap: "0.55rem", marginBottom: "1.25rem" }}>
                 {typeof onOpenSettings === "function" && (
-                  <button className="oh-tap-row" onClick={onOpenSettings} style={touchFit(themeButtonStyle, touch)} type="button">
+                  <button className="oh-tap-row" onClick={onOpenSettings} style={touchFit({ ...themeButtonStyle, justifyContent: "center", minHeight: "2.5rem" }, touch)} type="button">
                     <ButtonIcon kind="settings" />
                     Settings
                   </button>
                 )}
                 {tabActions.map(({ icon, label, phoneLabel, run }) => (
-                  <button key={label} className="oh-tap-row" onClick={run} style={touchFit(themeButtonStyle, touch)} type="button">
+                  <button key={label} className="oh-tap-row" onClick={run} style={touchFit({ ...themeButtonStyle, justifyContent: "center", minHeight: "2.5rem" }, touch)} type="button">
                     <ButtonIcon kind={icon} />
                     {phoneLabel || label}
                   </button>
@@ -5414,17 +5429,21 @@ const LibraryTopBar = ({ onOpenSettings }) => {
                     description="One library for every campaign. Search, sort or show archived saves without duplicating them into another shelf."
                     emptyText={gameSearch ? "No games match your search." : "No games in this view."}
                     controls={(
-                      <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.45rem", justifyContent: isMobile ? "flex-start" : "flex-end" }}>
-                        <input aria-label="Search games" onChange={(event) => setGameSearch(event.target.value)} placeholder="Search games…" value={gameSearch} style={{ ...inputStyle, borderRadius: "9px", minHeight: "2.35rem", padding: "0 0.9rem", width: isMobile ? "100%" : "16rem" }} />
-                        {[['active', 'Active'], ['all', 'All'], ['archived', 'Archived']].map(([value, label]) => (
-                          <BrowsePill key={value} active={gameView === value} onClick={() => setGameView(value)}>{label}</BrowsePill>
-                        ))}
-                        <select aria-label="Sort games" onChange={(event) => setGameSort(event.target.value)} value={gameSort} style={{ ...inputStyle, borderRadius: "9px", minHeight: "2.35rem", padding: "0 0.85rem", width: "auto" }}>
-                          <option value="recent">Recently played</option>
-                          <option value="turns">Most turns</option>
-                          <option value="played">Most played</option>
-                          <option value="name">Name</option>
-                        </select>
+                      <div style={{ alignItems: "center", display: "flex", flexDirection: isMobile ? "column" : "row", flexWrap: isMobile ? undefined : "wrap", gap: "0.5rem", width: isMobile ? "100%" : "auto" }}>
+                        <input aria-label="Search games" onChange={(event) => setGameSearch(event.target.value)} placeholder="Search games…" value={gameSearch} style={{ ...inputStyle, borderRadius: "10px", minHeight: "2.4rem", padding: "0 0.9rem", width: isMobile ? "100%" : "16rem" }} />
+                        <div style={{ alignItems: "center", display: "flex", gap: "0.45rem", justifyContent: "space-between", width: isMobile ? "100%" : "auto" }}>
+                          <div style={{ display: "flex", flex: isMobile ? 1 : undefined, gap: "0.35rem" }}>
+                            {[['active', 'Active'], ['all', 'All'], ['archived', 'Archived']].map(([value, label]) => (
+                              <BrowsePill key={value} active={gameView === value} onClick={() => setGameView(value)} style={isMobile ? { flex: 1, justifyContent: "center", padding: "0 0.4rem" } : undefined}>{label}</BrowsePill>
+                            ))}
+                          </div>
+                          <select aria-label="Sort games" onChange={(event) => setGameSort(event.target.value)} value={gameSort} style={{ ...inputStyle, borderRadius: "10px", flexShrink: 0, minHeight: "2.35rem", padding: "0 0.75rem", width: "auto" }}>
+                            <option value="recent">Recently played</option>
+                            <option value="turns">Most turns</option>
+                            <option value="played">Most played</option>
+                            <option value="name">Name</option>
+                          </select>
+                        </div>
                       </div>
                     )}
                   >
@@ -5466,17 +5485,21 @@ const LibraryTopBar = ({ onOpenSettings }) => {
                   description="Everything you can start a new game from, in one place."
                   emptyText={scenarioSearch ? "No scenarios match your search." : "No scenarios in this view."}
                   controls={(
-                    <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.45rem", justifyContent: isMobile ? "flex-start" : "flex-end" }}>
-                      <input aria-label="Search scenarios" onChange={(event) => setScenarioSearch(event.target.value)} placeholder="Search scenarios…" value={scenarioSearch} style={{ ...inputStyle, borderRadius: "9px", minHeight: "2.35rem", padding: "0 0.9rem", width: isMobile ? "100%" : "16rem" }} />
-                      {[['all', 'All'], ['yours', 'Yours'], ['community', 'Community'], ['updates', 'Updates']].map(([value, label]) => (
-                        <BrowsePill key={value} active={scenarioView === value} onClick={() => setScenarioView(value)}>{label}</BrowsePill>
-                      ))}
-                      <select aria-label="Sort scenarios" onChange={(event) => setScenarioSort(event.target.value)} value={scenarioSort} style={{ ...inputStyle, borderRadius: "9px", minHeight: "2.35rem", padding: "0 0.85rem", width: "auto" }}>
-                        <option value="recent">Recently used</option>
-                        <option value="updated">Recently updated</option>
-                        <option value="played">Most played</option>
-                        <option value="name">Name</option>
-                      </select>
+                    <div style={{ alignItems: "center", display: "flex", flexDirection: isMobile ? "column" : "row", flexWrap: isMobile ? undefined : "wrap", gap: "0.5rem", width: isMobile ? "100%" : "auto" }}>
+                      <input aria-label="Search scenarios" onChange={(event) => setScenarioSearch(event.target.value)} placeholder="Search scenarios…" value={scenarioSearch} style={{ ...inputStyle, borderRadius: "10px", minHeight: "2.4rem", padding: "0 0.9rem", width: isMobile ? "100%" : "16rem" }} />
+                      <div style={{ alignItems: "center", display: "flex", gap: "0.45rem", justifyContent: "space-between", overflowX: isMobile ? "auto" : undefined, width: isMobile ? "100%" : "auto" }}>
+                        <div style={{ display: "flex", flex: isMobile ? 1 : undefined, gap: "0.35rem" }}>
+                          {[['all', 'All'], ['yours', 'Yours'], ['community', 'Community'], ['updates', 'Updates']].map(([value, label]) => (
+                            <BrowsePill key={value} active={scenarioView === value} onClick={() => setScenarioView(value)} style={isMobile ? { flex: "1 0 auto", justifyContent: "center", padding: "0 0.45rem" } : undefined}>{label}</BrowsePill>
+                          ))}
+                        </div>
+                        <select aria-label="Sort scenarios" onChange={(event) => setScenarioSort(event.target.value)} value={scenarioSort} style={{ ...inputStyle, borderRadius: "10px", flexShrink: 0, minHeight: "2.35rem", padding: "0 0.75rem", width: "auto" }}>
+                          <option value="recent">Recently used</option>
+                          <option value="updated">Recently updated</option>
+                          <option value="played">Most played</option>
+                          <option value="name">Name</option>
+                        </select>
+                      </div>
                     </div>
                   )}
                 >

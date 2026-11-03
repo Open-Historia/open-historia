@@ -19,10 +19,12 @@
 
 import { createRoundMachine } from "./round.js";
 import { SEAT_STATUS, createSeatBook } from "./seats.js";
+import { seatFoundings, withSeatMoved } from "./foundings.js";
 import { roundSettingsOf } from "./settings.js";
 import { projectForViewer } from "./projection.js";
 import { ORDER_MAX_CHARS } from "../game/messages.js";
 import { withPlayerGoal } from "../../runtime/playerGoal.js";
+import { withPlayerPost } from "../../runtime/socialFeed.js";
 import { normalizeProjects } from "../../runtime/gameState.js";
 import { deployFor, disbandFor, revertOrderFor } from "./forces.js";
 import { agentOrderFor } from "./agents.js";
@@ -30,6 +32,8 @@ import { acceptStructure, canSettleStructure, moveStructure } from "../../runtim
 import { applyWarRoomOp, cleanWarRoomOp } from "../../runtime/fronts/warRoomOps.js";
 import { applyFortifyOp, cleanFortifyOp } from "../../runtime/fronts/fortifyOps.js";
 import { applyFleetOp, cleanFleetOp } from "../../runtime/naval/fleetOps.js";
+import { applyAirStrikeOp, cleanAirStrikeOp } from "../../runtime/fronts/airStrikeOps.js";
+import { activeWars, isActiveFeatureEnabled } from "../../runtime/gameFeatures.js";
 import { eraSettingOf } from "../../runtime/warSettings.js";
 import { humanCountriesOf } from "../../runtime/humanPolities.js";
 import { playerDiplomacy } from "../../Game/AI/warAndPeace.js";
@@ -94,6 +98,9 @@ export const createGameHost = ({
     throw new Error("Institutions are not run here.");
   },
   onStatus = () => {},
+  // Seats that followed their people to a country they founded
+  // (host/foundings.js): [{ from, to, host }], `host` when it was the host's own.
+  onSeatsMoved = () => {},
   log = () => {},
   now = () => Date.now(),
   timers = globalThis,
@@ -105,7 +112,9 @@ export const createGameHost = ({
     allowMidGameJoin: settings.allowMidGameJoin,
     now,
   });
-  const hostCountry = clean(hostSeat.country);
+  // The host's own country: the campaign's (game.country), until the host's
+  // people found one of their own.
+  let hostCountry = clean(hostSeat.country);
   if (hostCountry && hostSeat.device) seats.claim(hostCountry, { device: hostSeat.device, name: hostSeat.name });
   // playerId → { id, device, name, sent: Map(key → json), rev, seen: string[] }
   const connections = new Map();
@@ -210,10 +219,51 @@ export const createGameHost = ({
     },
     onResolve: async ({ round: number }) => {
       await recordHumans();
+      const start = await store.read();
+      const before = { eventIds: new Set(list(start.events).map((event) => clean(event?.id))), areas: { ...(start.world?.groupAreas ?? {}) } };
       await resolveRound({ round: number, humanCountries: seats.humanCountries(), daysPerRound: settings.daysPerRound });
+      await followFoundings(before).catch((error) => log("warn", "a founded country's seat did not follow", { error: String(error?.message || error) }));
       await pushViews();
     },
   });
+
+  // A player's people founded a country this round and gave it their land:
+  // the seat goes with them (host/foundings.js), and with it their queued
+  // orders, their board, their agents and their threads; the game remembers
+  // the old name (game.seatFoundings), so what that government knew is still
+  // theirs to read (host/projection.js). `before`: the event ids and the
+  // groups' areas the round started with.
+  const followFoundings = async (before) => {
+    const docs = await store.read();
+    const moves = seatFoundings({
+      events: list(docs.events).filter((event) => !before.eventIds.has(clean(event?.id))),
+      actions: docs.actions,
+      seated: seats.humanCountries(),
+      host: hostCountry,
+      areas: before.areas,
+    }).filter((move) => seats.move(move.from, move.to));
+    if (!moves.length) return;
+    for (const move of moves) {
+      move.host = same(move.from, hostCountry);
+      if (move.host) hostCountry = move.to;
+      await store.updateGame((game) => ({
+        ...game,
+        ...(move.host ? { country: move.to } : {}),
+        seatFoundings: [...list(game?.seatFoundings), { from: move.from, to: move.to }],
+      }));
+      await store.updateActions((actions) => withSeatMoved({ actions }, move).actions);
+      await store.updateWorld((world) => withSeatMoved({ world }, move).world);
+      await store.updateChats((chats) => withSeatMoved({ chats }, move).chats);
+      log("info", "a seat followed its people to the country they founded", { from: move.from, to: move.to });
+      // Told to the player whose seat moved; everyone sees the lobby change.
+      const device = seats.list().find((seat) => same(seat.country, move.to))?.device;
+      for (const connection of connections.values()) {
+        if (device && connection.device === device) send(connection, { t: "notice", level: "info", text: `${move.from} has founded ${move.to}: you now play ${move.to}.` });
+      }
+    }
+    onSeatsMoved(moves.map(({ from, to, host }) => ({ from, to, host })));
+    await seatsChanged();
+  };
 
   const seatsChanged = async () => {
     // A connection closing after the game stopped changes nothing.
@@ -419,6 +469,26 @@ export const createGameHost = ({
       round.touch(seat.country);
       return refusal;
     },
+    // The war room's air strikes (runtime/fronts/airStrikeOps.js), by the same
+    // rule: the air unit must be the seat's country's, and a city struck is held
+    // to the host's own map. Flown when the round is resolved.
+    airstrike: async (connection, { op }, seat) => {
+      if (round.status().phase === "resolving") return "The round is being resolved: order it once it has landed.";
+      const sent = cleanAirStrikeOp(op);
+      if (!sent) return "Nothing was asked.";
+      const chart = sent.op === "airstrike" && sent.kind === "city" ? await Promise.resolve().then(readChart).catch(() => null) : null;
+      let refusal = "";
+      await store.updateForces(({ world, game }) => {
+        const result = applyAirStrikeOp(world, sent, { player: seat.country, date: clean(game?.gameDate), round: game?.round, chart, air: activeWars().air });
+        if (result.error) {
+          refusal = result.error;
+          return null;
+        }
+        return { world: result.world };
+      });
+      round.touch(seat.country);
+      return refusal;
+    },
     // The Intelligence tab's orders (host/agents.js): the player's own agents,
     // and the foreign ones its own service has caught.
     agent: async (connection, request, seat) => {
@@ -464,21 +534,25 @@ export const createGameHost = ({
     },
     // War and peace (Game/AI/warAndPeace.js): the seat's own answer to an
     // offer of peace or a call to arms, or terms of its own put to an enemy
-    // nobody plays. Whose answer it is is the seat's country and nothing the
+    // nobody plays, which wait for that enemy's leader to answer them in the
+    // seat's chat with it (the host's own table turn, runChatActionBatch, reads
+    // the answer). Whose answer it is is the seat's country and nothing the
     // message says. Not while a round is being resolved: the round would
     // write over it.
     peace: async (connection, { op, ref, terms }, seat) => {
       if (round.status().phase === "resolving") return "The round is being resolved: answer once it has landed.";
       let refusal = "";
-      const regionCatalog = await readRegionCatalog();
+      // (A peace taken may annex a country or cede regions by name: they are found on the map.)
+      const map = op === "accept"
+        ? await Promise.all([import("../../runtime/assets.js"), import("../../Game/AI/promptContext.js")])
+          .then(async ([assets, context]) => ({ catalog: await assets.loadRegionCatalog(), rendered: context.filterToRenderedRegions }))
+          .catch(() => null)
+        : null;
       await store.updateForces(({ world, game }) => {
-        const outcome = playerDiplomacy(world, { op, ref, terms, country: seat.country, players: humanCountriesOf(game), date: clean(game?.gameDate), round: game?.round, regionCatalog });
+        const regions = map ? map.rendered(map.catalog, world) : [];
+        const outcome = playerDiplomacy(world, { op, ref, terms, country: seat.country, players: humanCountriesOf(game), date: clean(game?.gameDate), round: game?.round, regions, regionCatalog: map?.catalog ?? null });
         if (outcome.error) {
           refusal = outcome.error === "not-yours" ? "This is not yours to answer." : outcome.error === "played" ? "That side is led by another player: make peace with them in a chat." : "This is no longer open.";
-          return null;
-        }
-        if (op === "propose" && !outcome.accepted) {
-          refusal = "They refuse these terms.";
           return null;
         }
         return { world: outcome.world };
@@ -487,10 +561,36 @@ export const createGameHost = ({
       return refusal;
     },
     goal: async (connection, { text }, seat) => {
+      if (round.status().phase === "resolving") return "The round is being resolved: set the goal once it has landed.";
       // The game's own rule for a standing goal (runtime/playerGoal.js).
       await store.updateWorld((world) => withPlayerGoal(world, seat.country, text));
       round.touch(seat.country);
       return "";
+    },
+    // A post on Rostra (runtime/socialFeed.js), written as the leader of the
+    // seat's own country by the game's own rule, and dated by the game. It is
+    // public: every view carries the feed. Not while a round is being resolved:
+    // the time skip has read the feed and writes it back with the world answers.
+    post: async (connection, { text, quote }, seat) => {
+      if (!isActiveFeatureEnabled("socialMedia")) return "This game has no social media.";
+      if (round.status().phase === "resolving") return "The round is being resolved: post once it has landed.";
+      let refusal = "";
+      await store.updateForces(({ world, game }) => {
+        const made = withPlayerPost(world, {
+          by: seat.country,
+          text,
+          quote,
+          date: clean(game?.gameDate),
+          round: Number(game?.round) || 0,
+        });
+        if (made.error) {
+          refusal = made.error;
+          return null;
+        }
+        return { world: made.world };
+      });
+      round.touch(seat.country);
+      return refusal;
     },
     // The player's own Projects board, whole, as their screen has just changed
     // it: their advisor's entries, or the board's own buttons. A board is a
@@ -530,6 +630,16 @@ export const createGameHost = ({
       if (!thread && !recipients.length) return "Say it to someone.";
       if (recipients.some((country) => same(country, seat.country))) return "A government does not write to itself.";
       if (recipients.some((country) => !countries.some((known) => same(known, country)))) return "Unknown country.";
+      // A letter to a government the AI plays is part of the week: while one is
+      // being resolved its skip has read the conversations already, so the
+      // letter waits. People write to each other whenever they like.
+      const resolving = round.status().phase === "resolving";
+      const people = seats.humanCountries();
+      const playedByAi = (name) => name && !same(name, seat.country) && !people.some((human) => same(human, name));
+      if (resolving && recipients.some(playedByAi)) return "The round is being resolved: write to the AI's governments once it has landed.";
+      // Dated by the game, as a government's own reply is (chat.jsx `time`):
+      // a letter between people was shown with no date at all.
+      const gameDate = clean((await store.read())?.game?.gameDate);
       let chatId = clean(thread);
       let refusal = "";
       // Everyone at the table: the thread's owner and its members.
@@ -543,6 +653,7 @@ export const createGameHost = ({
         speaker: seat.country,
         code: seat.country,
         text: body,
+        ...(gameDate ? { time: gameDate } : {}),
         createdAt: new Date(now()).toISOString(),
       };
       await store.updateChats((chats) => {
@@ -559,6 +670,10 @@ export const createGameHost = ({
             return null;
           }
           parties = [owner, ...members];
+          if (resolving && parties.some(playedByAi)) {
+            refusal = "The round is being resolved: write to the AI's governments once it has landed.";
+            return null;
+          }
           const next = [...all];
           next[index] = { ...chat, messages: [...list(chat.messages), message] };
           return next;
@@ -577,8 +692,7 @@ export const createGameHost = ({
       // The AI governments in the thread answer (the game's own diplomacy),
       // after the player's view shows what they wrote. A country a person plays
       // answers for itself: a thread between people asks the model nothing.
-      const people = seats.humanCountries();
-      const hasAiGovernment = parties.some((name) => name && !same(name, seat.country) && !people.some((human) => same(human, name)));
+      const hasAiGovernment = parties.some(playedByAi);
       if (hasAiGovernment) {
         pushViews().then(() => replyTo({ chatId, seat: seat.country })).then(() => pushViews())
           .catch((error) => log("warn", "reply failed", { error: String(error?.message || error) }));
@@ -657,6 +771,7 @@ export const createGameHost = ({
       pause: () => round.pause(),
       resume: () => round.resume(),
       resolveNow: () => round.resolveNow(),
+      setRoundMinutes: (minutes) => round.setRoundMinutes(minutes),
       kick(country) {
         const seat = seats.list().find((entry) => same(entry.country, country));
         if (!seat || same(seat.country, hostCountry)) return null;

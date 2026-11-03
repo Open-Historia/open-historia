@@ -5,7 +5,7 @@ import { useMap } from "react-map-gl/maplibre";
 import { getNationFlags, getPrimedScenarioRegionCatalog, resolveCountryDisplayName } from "../../runtime/assets.js";
 import { withMapClaims } from "../../runtime/mapClaims.js";
 import { normalizeGroupAreas, normalizeGroups } from "../../runtime/groups.js";
-import { isActiveFeatureEnabled, useActiveFeatures } from "../../runtime/gameFeatures.js";
+import { isActiveFeatureEnabled } from "../../runtime/gameFeatures.js";
 import { readGameData, readWorldState } from "../../runtime/gameState.js";
 import { livePuppetsFor, puppetKindLabel, puppetSummaryFor } from "../../runtime/puppets.js";
 import { getWorldStateSnapshot } from "../Map/useWorldState.js";
@@ -13,7 +13,6 @@ import { resolvePolityFlag } from "../../runtime/polityFlags.js";
 import { resolvePolityIdentity } from "../../runtime/polityIdentity.js";
 import { bundledFlagUrl, countryGidFromIdentity } from "../../runtime/countryFlags.js";
 import { requestDiplomaticChat } from "../GameUI/chat.jsx";
-import { openListenIn } from "../GameUI/ListenInPhone.jsx";
 import { openCountryPanel } from "./CountryPanel.jsx";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { APP_HEIGHT, MAP_CARD_OPENED, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, useShortTouchScreen, useTouchPrimary } from "../../runtime/mobileUi.js";
@@ -22,6 +21,7 @@ import { copyToClipboard } from "../../runtime/clipboard.js";
 import { isSameRegionSelection, regionControlStatus, useCardScreenPos } from "./mapCards.js";
 import { regionInfoFor } from "./regionInfo.js";
 import { getWorldPlaceIndex } from "../../runtime/placeSearch.js";
+import { resolveRegionName } from "../../runtime/regionNameFixes.js";
 
 let _setSelection = null;
 let _currentSelection = null;
@@ -92,6 +92,13 @@ const resolveLiveSelectionProps = async (props) => {
         }
     }
 
+    const resolvedName = resolveRegionName(
+        regionId,
+        props.NAME_1 ?? props.name ?? "",
+        world?.regionRenames,
+    );
+    const withName = resolvedName ? { ...props, NAME_1: resolvedName } : props;
+
     const overrides =
         world?.regionOwnershipOverrides &&
         typeof world.regionOwnershipOverrides === "object"
@@ -99,7 +106,7 @@ const resolveLiveSelectionProps = async (props) => {
             : {};
 
     if (!Object.prototype.hasOwnProperty.call(overrides, regionId)) {
-        return props;
+        return withName;
     }
 
     const rawController = cleanSelectionValue(overrides[regionId]);
@@ -119,7 +126,7 @@ const resolveLiveSelectionProps = async (props) => {
     );
 
     return {
-        ...props,
+        ...withName,
         // Current controller/owner is authoritative for every normal consumer.
         COUNTRY: resolvedController,
         GID_0: resolvedController,
@@ -227,31 +234,6 @@ const IconBtn = ({ children, title, onClick, expanded }) => {
     );
 };
 
-// The card's one worded button: Listen in (GameUI/ListenInPhone.jsx).
-const listenInButtonStyle = {
-    alignItems: "center",
-    background: "rgba(255,255,255,0.07)",
-    border: "1px solid rgba(255,255,255,0.14)",
-    borderRadius: "8px",
-    color: "rgba(255,255,255,0.88)",
-    cursor: "pointer",
-    display: "flex",
-    fontFamily: "inherit",
-    fontSize: "12px",
-    fontWeight: 600,
-    gap: "6px",
-    justifyContent: "center",
-    marginTop: "8px",
-    padding: "6px 8px",
-    width: "100%",
-};
-
-const PhoneGlyph = () => (
-    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    <rect x="6" y="2" width="12" height="20" rx="2.5" />
-    <path d="M11 18h2" />
-    </svg>
-);
 
 // Copies a name through the shared helper, which falls back where
 // navigator.clipboard is missing (LAN play over http, the Android app), and
@@ -329,8 +311,6 @@ const RegionPopup = () => {
     const shortTouch = useShortTouchScreen();
     const asSheet = isMobile || shortTouch;
     const isTouch = useTouchPrimary();
-    // Listen in can be switched off for a game (server/gameFeatures.js).
-    const listenInOn = useActiveFeatures().listenIn?.enabled !== false;
     const [selection, setSelection] = useState(null);
     const [animKey, setAnimKey] = useState(0);
     const [dismissing, setDismissing] = useState(false);
@@ -362,6 +342,7 @@ const RegionPopup = () => {
         regionClaimants: {},
         regionOwnershipOverrides: {},
         regionSovereigntyOverrides: {},
+        regionRenames: {},
         groups: {},
         groupAreas: {},
     });
@@ -386,6 +367,7 @@ const RegionPopup = () => {
                 regionClaimants: withMapClaims(world, getPrimedScenarioRegionCatalog())?.regionClaimants ?? {},
                 regionOwnershipOverrides: world?.regionOwnershipOverrides ?? {},
                 regionSovereigntyOverrides: world?.regionSovereigntyOverrides ?? {},
+                regionRenames: world?.regionRenames ?? {},
                 ...groupsOf(world),
             });
         };
@@ -577,6 +559,11 @@ const RegionPopup = () => {
 
     const { COUNTRY, NAME_1 } = selection;
     const regionId = selection.GID_1 || "";
+    const displayRegionName = resolveRegionName(
+        regionId,
+        NAME_1,
+        territoryState.regionRenames || worldState?.regionRenames || getWorldStateSnapshot()?.regionRenames,
+    ) || NAME_1;
     const controllerCode = regionId
         ? territoryState.regionOwnershipOverrides?.[regionId] ?? selection.GID_0 ?? selection.owner ?? ""
         : selection.GID_0 ?? selection.owner ?? "";
@@ -785,10 +772,10 @@ const RegionPopup = () => {
 
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "6px", minHeight: "22px" }}>
         <span style={{ color: "rgba(255,255,255,0.65)", fontSize: "12px", minWidth: 0, wordBreak: "break-word" }}>
-        {NAME_1}
+        {displayRegionName}
         </span>
         <div style={{ display: "flex", gap: "4px", flexShrink: 0 }}>
-        <CopyNameBtn title="Copy region name" text={NAME_1} />
+        <CopyNameBtn title="Copy region name" text={displayRegionName} />
         <IconBtn title="Region info" expanded={showRegionInfo} onClick={() => setShowRegionInfo((open) => !open)}>{"\u24D8"}</IconBtn>
         </div>
         </div>
@@ -871,25 +858,6 @@ const RegionPopup = () => {
                 </div>
             )}
             </>
-        )}
-
-        {/* What people here are posting. The card stays where it is, under
-            the phone, for when the phone is put away. */}
-        {listenInOn && (regionId || controllerKey) && (
-            <button
-            type="button"
-            className="oh-tap-row"
-            onClick={() => openListenIn({
-                regionId,
-                regionName: NAME_1,
-                polity: isUnclaimed ? "" : displayCountry,
-                polityKey: controllerKey,
-            })}
-            style={listenInButtonStyle}
-            >
-            <PhoneGlyph />
-            Listen in
-            </button>
         )}
 
         </div>

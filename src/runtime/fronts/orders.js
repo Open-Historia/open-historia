@@ -442,7 +442,7 @@ export const servingOf = (battle, troop) => {
 
 // Troops left standing on ground that is no longer their side's fall back onto
 // their own, at a cost; one with none of its own within `reach` cells is lost.
-const giveWay = (battle, side, lossShare, date, reach = OVERRUN_CELLS) => {
+export const giveWay = (battle, side, lossShare, date, reach = OVERRUN_CELLS) => {
   const { field, arena } = battle;
   for (const troop of battle.troops[side]) {
     if (!isLive(troop) || stands(field, side, troop.x, troop.y)) continue;
@@ -456,6 +456,54 @@ const giveWay = (battle, side, lossShare, date, reach = OVERRUN_CELLS) => {
     troop.x = (cell % field.cols) + 0.5;
     troop.y = Math.floor(cell / field.cols) + 0.5;
     troop.strength *= 1 - lossShare;
+    troop.dig = 0;
+  }
+};
+
+// Troops on ground a story capture gave the other side (engine.js marchInto)
+// fall back overland: out across the region taken, or the region they stand
+// in, onto the nearest of their own ground that borders it, without loss. The nearest of their own as the crow
+// flies could lie behind the taker's lines (a pocket, a besieged town, a coast
+// across a strait), and troops put there stood in the taker's territory (a
+// player's report, 2026-10-31). One with no way back to its own is lost.
+export const fallBackOverland = (battle, side, date, takenRegion, reach) => {
+  const { field, arena } = battle;
+  const { cols, rows, holders, play } = field;
+  const enemy = 1 - side;
+  for (const troop of battle.troops[side]) {
+    if (!isLive(troop) || stands(field, side, troop.x, troop.y)) continue;
+    const start = Math.floor(troop.y) * cols + Math.floor(troop.x);
+    const ownRegion = start >= 0 && start < field.size ? arena.region[start] : -1;
+    const steps = new Map([[start, 0]]);
+    const queue = [start];
+    let found = -1;
+    for (let head = 0; head < queue.length && found < 0; head += 1) {
+      const at = queue[head];
+      const step = steps.get(at);
+      if (step >= reach) continue;
+      const col = at % cols;
+      const row = Math.floor(at / cols);
+      for (const next of [col > 0 ? at - 1 : -1, col < cols - 1 ? at + 1 : -1, row > 0 ? at - cols : -1, row < rows - 1 ? at + cols : -1]) {
+        if (next < 0 || steps.has(next) || !play[next]) continue;
+        if (holders[next] === side) {
+          found = next;
+          break;
+        }
+        // Only out across the region taken or the one it stands in: never through
+        // the taker's other ground, nor a country outside the war, nor the sea.
+        if (holders[next] !== enemy || (arena.region[next] !== takenRegion && arena.region[next] !== ownRegion)) continue;
+        steps.set(next, step + 1);
+        queue.push(next);
+      }
+    }
+    if (found < 0) {
+      const at = describePoint(arena, troop.x, troop.y);
+      if (at) battle.log.push({ d: date, k: "overrun", s: side, at });
+      troop.strength = 0;
+      continue;
+    }
+    troop.x = (found % cols) + 0.5;
+    troop.y = Math.floor(found / cols) + 0.5;
     troop.dig = 0;
   }
 };

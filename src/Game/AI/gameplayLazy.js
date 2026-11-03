@@ -99,6 +99,10 @@ export const declineInteractiveOffer = hostOnly(async (...args) => (await gamepl
 // to arms answered, or terms put to an enemy. A guest's goes to the host as a
 // request (GameUI/warAndPeace.jsx).
 export const answerDiplomacy = hostOnly(async (...args) => (await gameplay()).answerDiplomacy(...args));
+// What a leader's chat reply decided of peace with the player, carried out
+// (AI/warAndPeace.js answerPeaceProposal). In a shared game the host's table
+// turn reads it from its own answer instead.
+export const answerPeaceInChat = hostOnly(async (...args) => (await gameplay()).answerPeaceInChat(...args));
 export const advanceActiveInteractive = hostOnly(async (...args) => (await gameplay()).advanceActiveInteractive(...args));
 export const rewindActiveInteractive = hostOnly(async (...args) => (await gameplay()).rewindActiveInteractive(...args));
 export const endActiveInteractive = hostOnly(async (...args) => (await gameplay()).endActiveInteractive(...args));
@@ -153,11 +157,9 @@ export const pendingCountryStatSheet = async (...args) => (await gameplay()).pen
 // A briefing on a country, in prose: asked with the player's own key from what
 // the player's own screen holds, and written nowhere. A page playing a shared
 // game asks it like any other.
+export const assessPoliticalLandscape = async (...args) => (await gameplay()).assessPoliticalLandscape(...args);
+export const assessGoalProgress = async (...args) => (await gameplay()).assessGoalProgress(...args);
 export const generateCountryStats = async (...args) => (await gameplay()).generateCountryStats(...args);
-// Listen in: one request for what people in a place are posting (runtime/listenIn.js).
-// It writes nothing to the game: asked with the player's own key, kept on the
-// player's own device, so a page playing a shared game asks it like any other.
-export const generateListenInFeed = async (...args) => (await gameplay()).generateListenInFeed(...args);
 // The war room: one request for what the player's generals answer
 // (warRoomContext.js). It writes nothing itself: what they said and the orders
 // they took are written by the caller through runtime/warRoomWrites.js, which

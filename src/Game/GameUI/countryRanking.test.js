@@ -10,7 +10,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { countryWeight } from "../../runtime/countryWeight.js";
+import { spendingFactor } from "../../runtime/militaryFunding.js";
+import { MANPOWER_PERCENT, MEN_AT, MEN_POWER, POWER_SCALE } from "../../runtime/militaryPower.js";
 import { RANKING_METRICS, buildRanking, openingMetric, rankingMetricsFor, rankingValue, regionCountsOf } from "./countryRanking.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -69,37 +70,38 @@ test("a figure from a country's sheet ranks the countries that have one and coun
   assert.equal(rankingMetricsFor({ world: world(weary) }).some((entry) => entry.key === "weariness"), true);
 });
 
-test("military power is the land war's own weight at the figures every country has, for every country whose people are known", () => {
+// What a country's men under arms and its spending come to in its power, at every other figure 50 (militaryPower.js).
+const menOf = (people, spending = 50) => POWER_SCALE * ((people * MANPOWER_PERCENT) / 100 / MEN_AT) ** MEN_POWER * spendingFactor(spending);
+const tenth = (value) => Math.round(value * 10) / 10;
+
+test("military power is what the AI rated each country's forces at; a country never rated is left out, whatever its people", () => {
   assert.equal(metric("military").label, "Military power");
-  const ranking = rank("military");
-  // "remove region count power entirely" (the owner, 2026-10-16): Dorland, known only by its land, is left out until
-  // the AI gives it its people and figures (Game/AI/militaryRating.js).
-  assert.equal(ranking.unranked, 1);
-  const of = (key) => ranking.rows.find((row) => row.key === key).value;
-  // (Two sheets are too few to compare funding by: a treasury in balance leaves the weight as it is.)
-  assert.equal(of("Borduria"), Math.round(countryWeight({ population: 90e6 }) * 10) / 10);
-  assert.equal(of("Aland"), Math.round(countryWeight({ population: 40e6 }) * 10) / 10);
-  assert.equal(of("Cisland"), Math.round(countryWeight({ population: 12e6 }) * 10) / 10, "the people its author gave it");
-  assert.equal(ranking.rows.some((row) => row.key === "Dorland"), false, "never by the land it holds");
-  assert.deepEqual(ranking.rows.map((row) => row.key), ["Borduria", "Aland", "Cisland"]);
+  // "get rid of that fallback" (the owner, 2026-11-03): nobody rated, nobody ranked, Borduria's ninety million and
+  // Aland's economy notwithstanding (the ranking asks the AI to rate them: stats.jsx RankingSection).
+  const bare = rank("military");
+  assert.deepEqual([bare.rows.length, bare.unranked], [0, 4]);
+  // Rated: by their rating, the many below the better funded.
+  const rated = rank("military", { polityOverrides: { Aland: { name: "Aland", military: { spending: 80 } }, Borduria: { name: "Borduria", military: { spending: 30 } }, Cisland: { name: "Cisland", population: 12e6, military: { spending: 90 } } } });
+  assert.deepEqual(rated.rows.map((row) => row.key), ["Aland", "Cisland", "Borduria"]);
+  assert.equal(rated.rows.find((row) => row.key === "Borduria").value, tenth(menOf(90e6, 30)));
+  assert.equal(rated.unranked, 1);
+  assert.equal(rated.rows.some((row) => row.key === "Dorland"), false, "never by the land it holds");
   assert.equal(rankingValue(metric("military"), {}, "Nowhere", { regions: new Map() }), null, "nothing known of it: no figure");
 });
 
 test("a country's own military figures move its power: quality, technology, its share of people, weariness and its arms", () => {
-  const figures = (military) => ({ polityOverrides: { Cisland: { name: "Cisland", population: 12e6, military } } });
+  const figures = (military) => ({ polityOverrides: { Cisland: { name: "Cisland", population: 12e6, military: { spending: 50, ...military } } } });
   const of = (extra, key = "Cisland") => rank("military", extra).rows.find((row) => row.key === key)?.value;
-  const usual = countryWeight({ population: 12e6 });
-  assert.equal(of(figures({ quality: 100 })), Math.round(usual * 1.5 * 10) / 10);
-  assert.equal(of(figures({ technology: 0 })), Math.round(usual * 0.7 * 10) / 10);
-  assert.equal(of(figures({ manpowerShare: 48 })), Math.round(countryWeight({ population: 48e6 }) * 10) / 10, "four times the share, twice the weight");
-  assert.equal(of(figures({ sea: 0 })), Math.round(usual * 0.75 * 10) / 10, "no navy");
+  const usual = menOf(12e6);
+  assert.equal(of(figures({})), tenth(usual));
+  assert.equal(of(figures({ quality: 100 })), tenth(usual * 1.8));
+  assert.equal(of(figures({ technology: 0 })), tenth(usual * 0.5));
+  assert.ok(of(figures({ manpowerShare: 48 })) > of(figures({})), "more of its people fit to fight, more power");
+  assert.equal(of(figures({ sea: 0 })), tenth(usual * 0.75), "no navy");
   assert.equal(of(figures({ land: 0, sea: 0, air: 0 })), 0, "no forces at all");
-  assert.equal(of({ warWeariness: [{ country: "Borduria", value: 100 }] }, "Borduria"), Math.round(countryWeight({ population: 90e6 }) * 0.6 * 10) / 10);
-  // A scenario that does not count countries' own figures ranks them as before.
-  assert.equal(of({ ...figures({ quality: 100 }), warSettings: { mechanics: { military: false } } }), Math.round(usual * 10) / 10);
-  // Figures of its own reorder the list: an elite army outranks a bigger levy.
-  const elite = rank("military", { polityOverrides: { Cisland: { name: "Cisland", population: 12e6, military: { quality: 100, technology: 100, land: 100 } } } });
-  assert.deepEqual(elite.rows.map((row) => row.key), ["Borduria", "Cisland", "Aland"]);
+  assert.equal(of({ ...figures({}), warWeariness: [{ country: "Cisland", value: 100 }] }), tenth(usual * 0.6));
+  // A scenario that does not count countries' own figures ranks them by their rating alone.
+  assert.equal(of({ ...figures({ quality: 100 }), warSettings: { mechanics: { military: false } } }), tenth(usual));
 });
 
 test("countries level on a figure share a rank, and a country is listed once", () => {
@@ -130,15 +132,19 @@ test("the tab opens on a figure a few countries have, so a game nobody has asses
   // Sheets for two countries and an authored figure for a third: people can be ranked.
   assert.equal(openingMetric({ world: world(), countries, metrics: all, catalog }).key, "population");
   // Nobody assessed, nothing authored: the first figure the game works out for everybody, the land each holds
-  // (military power needs a country's people: "remove region count power entirely", the owner, 2026-10-16).
+  // (military power needs a country's rating: "remove region count power entirely", the owner, 2026-10-16; "get rid
+  // of that fallback", 2026-11-03).
   const bare = { regionOwnershipOverrides: {} };
   assert.equal(openingMetric({ world: bare, countries, metrics: all, catalog }).key, "regions");
   // One country with a sheet is not a ranking; a list of one is still better than none when it is all there is.
   const lone = { countryStats: { Aland: { stability: 60 } } };
   assert.equal(openingMetric({ world: lone, countries, metrics: all, catalog }).key, "regions");
-  // Authored people for a few: their military power can be ranked.
+  // Authored people for a few, rated by nobody: not their military power.
   const peopled = { polityOverrides: { Aland: { population: 4e6 }, Borduria: { population: 9e6 }, Cisland: { population: 2e6 } } };
-  assert.equal(openingMetric({ world: peopled, countries, metrics: all.filter((entry) => entry.key !== "population"), catalog }).key, "military");
+  assert.equal(openingMetric({ world: peopled, countries, metrics: all.filter((entry) => entry.key !== "population"), catalog }).key, "regions");
+  // Rated forces for a few: their military power can be ranked.
+  const rated = { polityOverrides: { Aland: { population: 4e6, military: { spending: 60 } }, Borduria: { population: 9e6, military: { spending: 40 } }, Cisland: { population: 2e6, military: { spending: 50 } } } };
+  assert.equal(openingMetric({ world: rated, countries, metrics: all.filter((entry) => entry.key !== "population"), catalog }).key, "military");
   assert.equal(openingMetric({ world: lone, countries, metrics: all.filter((entry) => entry.key === "stability" || entry.key === "gdp"), catalog: [] }).key, "stability");
   assert.equal(openingMetric({ world: {}, countries: [], metrics: all }).key, "population", "nothing anywhere: the first of them");
   assert.equal(openingMetric({ metrics: [] }), null);

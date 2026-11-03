@@ -453,3 +453,49 @@ test("the time skip's directive carries the same rules block as every other task
     const directive = buildWorldDirectionDirective(direction, { playerPolity: "France" });
     assert.ok(directive.endsWith(buildPriorityRulesBlock(direction)));
 });
+
+// "check if scripted events are translated" (the owner, 2026-10-28).
+test("a player in another language is told the scenario's beats in it, an exact one as a faithful translation", () => {
+    const beats = [
+        { date: "1962-10-22", title: "Kennedy announces the quarantine", text: "Kennedy announces the quarantine of Cuba.", textMode: "exact" },
+        { date: "1962-10-28", title: "Khrushchev agrees", text: "Khrushchev agrees to withdraw the missiles from Cuba.", textMode: "generated" },
+    ];
+    const french = buildScriptedEventsInstruction(beats, { language: "French" });
+    assert.match(french, /faithful translation into French/);
+    assert.match(french, /Write each of them in French, on the date given, keeping the names of its people and places/);
+    assert.doesNotMatch(french, /copy its supplied text verbatim/);
+    const english = buildScriptedEventsInstruction(beats, { language: "English" });
+    assert.match(english, /copy its supplied text verbatim/);
+    assert.doesNotMatch(english, /faithful translation/);
+    assert.equal(buildScriptedEventsInstruction(beats), english, "no language is English, as before");
+});
+
+test("an exact beat told in another language keeps the model's translation, and a translated beat is found by its names on its date", () => {
+    const exact = { date: "1962-10-22", title: "Kennedy announces the quarantine", text: "Kennedy announces the quarantine of Cuba.", textMode: "exact" };
+    const answer = [{
+        date: "1962-10-22",
+        title: "Kennedy annonce la quarantaine",
+        description: "Kennedy annonce la quarantaine de Cuba.",
+        quote: { text: "Ajout", speaker: "Quelqu'un" },
+        impacts: { unitOps: [] },
+    }];
+    const inFrench = ensureScriptedEvents(answer, [exact], { language: "French" });
+    assert.deepEqual([inFrench.written.length, inFrench.inserted.length], [1, 0]);
+    assert.equal(inFrench.events[0].title, "Kennedy annonce la quarantaine");
+    assert.equal(inFrench.events[0].description, "Kennedy annonce la quarantaine de Cuba.");
+    assert.equal(inFrench.events[0].quote, undefined);
+    assert.deepEqual(inFrench.events[0].impacts, answer[0].impacts);
+    // In English the author's words are restored, as always.
+    const inEnglish = ensureScriptedEvents(answer, [exact], { language: "English" });
+    assert.equal(inEnglish.events[0].description, exact.text);
+
+    // A beat whose translation shares only a name with it: found on its own date, not a day off, and not by a name alone in English.
+    const beat = { date: "1962-10-28", title: "Khrushchev agrees", text: "Khrushchev agrees to withdraw the missiles from Cuba.", textMode: "generated" };
+    const told = [{ date: "1962-10-28", title: "Khrouchtchev cède", description: "Moscou accepte de retirer ses fusées de Cuba." }];
+    assert.equal(beatIsWritten(beat, told, { language: "French" }), true);
+    assert.equal(beatIsWritten(beat, [{ ...told[0], date: "1962-10-29" }], { language: "French" }), false);
+    assert.equal(beatIsWritten(beat, told, { language: "English" }), false);
+    assert.equal(beatIsWritten(beat, [{ date: "1962-10-28", title: "Grève à Paris", description: "Les dockers cessent le travail." }], { language: "French" }), false);
+    const kept = ensureScriptedEvents(told, [beat], { language: "French" });
+    assert.deepEqual([kept.written.length, kept.inserted.length], [1, 0], "not written a second time in English");
+});

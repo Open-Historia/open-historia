@@ -62,6 +62,7 @@ import {
   normalizePoliticalActors,
   POLITICAL_ACTORS_SCHEMA_VERSION,
 } from "./politicalActors.js";
+import { normalizeSocialFeed } from "./socialFeed.js";
 import { applyPoliticalActorOperation } from "./politicalActorOps.js";
 import { normalizePoliticalSimulationClock } from "./politicalClock.js";
 import { buildPolityIdentityIndex, resolvePolityIdentity } from "./polityIdentity.js";
@@ -69,17 +70,22 @@ import {
   DEFAULT_PATROL_RADIUS_KM,
   daysBetweenDates,
   haversineKm,
+  kmOnMap,
   maxTravelKm,
   patrolPoint,
   stepToward,
   wrapLng,
 } from "./unitMotion.js";
+import { noteMapMeasure } from "./mapMeasure.js";
 import { addGameDays, compareGameDates, isCanonicalGameDate, normalizeGameDate } from "./gameDates.js";
-import { normalizeBattlefields } from "./fronts/record.js";
+import { normalizeBattlefields, withWarIdFrontsRenamed } from "./fronts/record.js";
 import { normalizeTransports } from "./fronts/transports.js";
 import { normalizeStrikes } from "./strikes.js";
+import { normalizeAirStrikeOrders, normalizeAirStrikes } from "./fronts/airStrike.js";
 import { battlefieldHeldClaimants } from "./fronts/heldRegions.js";
 import { sharedGameHostCountry } from "./humanPolities.js";
+import { foldPoliticsIntoActors } from "./politicalLandscapeFold.js";
+import { activeWars } from "./gameFeatures.js";
 
 export const GAME_DEFAULTS = {
   country: "",
@@ -157,6 +163,9 @@ export const WORLD_DEFAULTS = {
   // lowercased original city name -> new display name. world.markers cities are
   // renamed in place by applyMarkerOps; this is the override layer for the rest.
   cityRenames: {},
+  // AI renames of map regions/provinces (stock regions live in PMTiles level 1):
+  // lowercased original region name or GADM id -> new display name.
+  regionRenames: {},
   // AI changes to a city's POPULATION, same override shape as cityRenames and for
   // the same reason: stock cities live in PMTiles and cannot be edited in place.
   // Lowercased original city name -> number. Applies to authored cities too, so a
@@ -281,6 +290,10 @@ export const WORLD_DEFAULTS = {
   // The missiles and bombing runs the last turns' events told of, for the map
   // to play (strikes.js). They change nothing by themselves.
   strikes: [],
+  // The air strikes the war room ordered, waiting for time to pass, and those
+  // of the last turns as they went (fronts/airStrike.js).
+  airStrikeOrders: [],
+  airStrikes: [],
   // The battles the last turns' fleets fought (naval/record.js), for the map to
   // mark. What a battle did to the fleets is on the fleets.
   seaBattles: [],
@@ -335,6 +348,9 @@ export const WORLD_DEFAULTS = {
   // (AI/nativeWorldDirector.js), advanced by compact storylineUpdates lines on
   // a jump payload exactly like the ledgers above.
   storylines: [],
+  // Rostra, the social network (socialFeed.js): every post kept, oldest first.
+  // Written by the player and by the time skip; public in a shared game.
+  socialFeed: [],
   simulationHistory: [],
   simulationRules: "",
   startingTimelineText: "",
@@ -1373,7 +1389,7 @@ export const normalizeUnits = (units) =>
 // re-exported here because promptContext.js and the order pruning below have
 // always imported it from this module. There used to be two copies of this
 // function (here and unitCombat.js's `distanceKm`); now there is one.
-export { haversineKm };
+export { haversineKm, kmOnMap };
 
 const PENDING_ORDER_KIND_SET = new Set(["move", "patrol"]);
 
@@ -1451,7 +1467,7 @@ export const pruneSatisfiedUnitOrders = (units, orders) => {
     // it there left a division 59 km short of its destination reading "moving" with
     // nothing to move it. The radius is for a unit already standing near.
     if (unit.status === "moving") return true;
-    return haversineKm(unit.lat, unit.lng, order.toLat, order.toLng) > PENDING_ORDER_ARRIVAL_KM;
+    return kmOnMap(unit.lat, unit.lng, order.toLat, order.toLng) > PENDING_ORDER_ARRIVAL_KM;
   });
 };
 
@@ -2934,7 +2950,7 @@ export const buildOwnerFootprint = (world, ownerCode, extraAnchors = []) => {
 const nearestKm = (point, anchors) => {
   let best = Infinity;
   for (const anchor of anchors) {
-    const distance = haversineKm(point.lat, point.lng, anchor.lat, anchor.lng);
+    const distance = kmOnMap(point.lat, point.lng, anchor.lat, anchor.lng);
     if (distance < best) best = distance;
   }
   return best;
@@ -3008,6 +3024,30 @@ export const resumeStandingOrders = (world, { round = 0, previousSystem = "" } =
 // How many rounds a story ship stays on the map when no arrival removes it.
 export const STORY_VESSEL_ROUNDS = 10;
 
+// The unit on the map a spawned one already is: the same name and the same
+// owner, folded. A unit with no name of its own ("Unit") is never matched.
+const unitNameKey = (value) => normalizeOptionalString(value).toLowerCase().replace(/\s+/g, " ");
+const sameFormationOnMap = (units, unit) => {
+  const name = unitNameKey(unit?.name);
+  const owner = unitNameKey(unit?.ownerCode);
+  if (!name || name === "unit" || !owner) return null;
+  return units.find((entry) => unitNameKey(entry.name) === name && unitNameKey(entry.ownerCode) === owner && entry.strength > 0) ?? null;
+};
+
+// A save that already has such a twin: a unit the AI raised with the name,
+// owner and kind of one the player placed is that unit's copy, and is dropped;
+// the player's own stays where the player put it.
+export const withoutTwinsOfPlayerUnits = (units) => {
+  const list = normalizeArray(units);
+  const placed = new Set(list
+    .filter((unit) => unit?.source === "player" && unitNameKey(unit?.name) && unitNameKey(unit?.name) !== "unit")
+    .map((unit) => `${unitNameKey(unit.name)}|${unitNameKey(unit.ownerCode)}|${unitNameKey(unit.type)}`));
+  if (placed.size === 0) return list;
+  const kept = list.filter((unit) => unit?.source === "player"
+    || !placed.has(`${unitNameKey(unit?.name)}|${unitNameKey(unit?.ownerCode)}|${unitNameKey(unit?.type)}`));
+  return kept.length === list.length ? list : kept;
+};
+
 export const applyUnitOpBatch = (units, orders, ops, context = {}) => {
   const {
     gameDate = "", elapsedDays = null, round = 0, extraAnchors = [], eventId = "", era = null,
@@ -3035,6 +3075,16 @@ export const applyUnitOpBatch = (units, orders, ops, context = {}) => {
       // op batch can't duplicate a unit (mirrors the event-restatement de-dup).
       const spawnId = op.unit?.id;
       if (spawnId && next.some((unit) => unit.id === spawnId)) continue;
+      // Nor can it raise a second of a formation already there: a spawn named as
+      // one of its owner's units on the map is that unit, said again. A player
+      // marked his oil and gas sites with units ("GSI Arzew", "Hub Sud"), and
+      // each skip that told of them raised a twin beside or far from it.
+      if (sameFormationOnMap(next, op.unit)) continue;
+      // Nor of a kind the scenario fights without (the Wars feature): no air unit with air units off, no fleet
+      // with navies off. (A story ship is no fleet: it is drawn, and guards nothing.)
+      const wars = activeWars();
+      const spawnType = String(op.unit?.type ?? "").toLowerCase();
+      if ((!wars.air && spawnType === "air") || (!wars.navies && spawnType === "naval" && !op.unit?.storyVessel)) continue;
 
       const unit = { ...op.unit };
       // A story ship is a ship whatever the model called it, unlisted because
@@ -3111,7 +3161,7 @@ export const applyUnitOpBatch = (units, orders, ops, context = {}) => {
               posture,
               era,
               seaShare: op.seaShare ?? null,
-              remainingKm: haversineKm(unit.lat, unit.lng, op.toLat, op.toLng),
+              remainingKm: kmOnMap(unit.lat, unit.lng, op.toLat, op.toLng),
             });
         const step = stepToward(unit, { lng: op.toLng, lat: op.toLat }, budget);
 
@@ -3203,13 +3253,40 @@ export const applyUnitOpBatch = (units, orders, ops, context = {}) => {
   return { units: survivors, orders: pruneSatisfiedUnitOrders(survivors, nextOrders) };
 };
 
+// A patrol's next point, on the ground its unit works: a fleet's at sea, a land
+// formation's ashore. A fleet patrolling 250 km round a station off a coast was
+// put down on land a week later (a fantasy scenario's Discord game,
+// 2026-10-28): the ring took no notice of the map. Up to eight points of the
+// ring are tried; when none is on its ground the unit stays on its station,
+// which was placed on it. An air unit flies over both; without `onWater` the
+// ring is used as drawn. The tries go round the ring an eighth at a time.
+const PATROL_TRIES = 8;
+const patrolPointOnItsGround = (unit, order, seed, onWater) => {
+  const station = { lng: order.toLng, lat: order.toLat };
+  const radius = order.radiusKm || DEFAULT_PATROL_RADIUS_KM[unit.type] || 0;
+  const wantsWater = unit.type === "naval" ? true : unit.type === "air" ? null : false;
+  if (typeof onWater !== "function" || wantsWater === null) return patrolPoint(station, radius, seed);
+  for (let attempt = 0; attempt < PATROL_TRIES; attempt += 1) {
+    const point = patrolPoint(station, radius, seed, { turn: attempt });
+    if (onWater(point.lng, point.lat) === wantsWater) return point;
+  }
+  return patrolPoint(station, 0, seed);
+};
+
+// Whether advanceStandingOrders could ask `onWater` of this world: only a patrol does, and few worlds have one, so a
+// caller with none to ask need not read the map for it (gameplay.js).
+export const standingOrdersAskWater = (world) =>
+  normalizePendingUnitOrders(world?.pendingUnitOrders).some((order) => order.kind === "patrol");
+
 // Advance every standing order by the time that has passed. This is what makes
 // units move realistically turn after turn without a single token being spent:
 // a move order steps toward its destination at the unit's own pace, and a patrol
 // order repositions deterministically around its station.
+//   onWater(lng, lat)  whether a point is at sea (gameplay.js waterTestFor), so a
+//                      patrol keeps to its own ground; without it, as drawn
 export const advanceStandingOrders = (
   world,
-  { fromDate, toDate, round = 0, tick = 0, skipUnitIds = [], movedAt = null } = {},
+  { fromDate, toDate, round = 0, tick = 0, skipUnitIds = [], movedAt = null, onWater = null } = {},
 ) => {
   const units = normalizeUnits(world?.units);
   const orders = normalizePendingUnitOrders(world?.pendingUnitOrders);
@@ -3249,11 +3326,7 @@ export const advanceStandingOrders = (
     if (lastMoved.has(unit.id) && unitElapsed <= 0) return unit;
 
     if (order.kind === "patrol") {
-      const point = patrolPoint(
-        { lng: order.toLng, lat: order.toLat },
-        order.radiusKm || DEFAULT_PATROL_RADIUS_KM[unit.type] || 0,
-        `${unit.id}|${round}|${tick}`,
-      );
+      const point = patrolPointOnItsGround(unit, order, `${unit.id}|${round}|${tick}`, onWater);
       return { ...unit, lng: point.lng, lat: point.lat, posture: "patrol", updatedAt: stamp };
     }
 
@@ -3265,7 +3338,7 @@ export const advanceStandingOrders = (
         posture: unit.posture,
         era: eraSettingOf(world),
         seaShare: order.seaShare ?? null,
-        remainingKm: haversineKm(unit.lat, unit.lng, order.toLat, order.toLng),
+        remainingKm: kmOnMap(unit.lat, unit.lng, order.toLat, order.toLng),
       }),
     );
     if (step.arrived && unit.posture === "patrol") stations.set(unit.id, { lng: step.lng, lat: step.lat, type: unit.type });
@@ -3517,10 +3590,13 @@ const normalizeCreatedChat = (entry, index) => {
   if (!chat) return null;
   const openingMessage = normalizeOptionalString(entry?.openingMessage);
   const speaker = normalizeOptionalString(entry?.speaker);
+  // A shared game's letter names the person it is written to (AI/sharedLetters.js).
+  const to = normalizeOptionalString(entry?.to);
   return {
     ...chat,
     ...(openingMessage ? { openingMessage } : {}),
     ...(speaker ? { speaker } : {}),
+    ...(to ? { to } : {}),
   };
 };
 
@@ -4001,7 +4077,13 @@ const normalizeWorldWar = (entry, index = 0) => {
   const status = WORLD_WAR_STATUS_SET.has(rawStatus) ? rawStatus : "active";
   const sourceEventIds = [...new Set(normalizeActionParticipants(entry.sourceEventIds))].slice(-24);
   const storylineIds = [...new Set(normalizeActionParticipants(entry.storylineIds))].slice(-12);
-  const title = normalizeOptionalString(entry.title) || `${sideA[0]}–${sideB[0]} War`;
+  // A name saved with its cause run on after a "~" or "|" ("Franco-Italian
+  // War~Dispute over…"): a start's note was cut only at a ";" until 2026-10-28
+  // (nativeWarLedger.js splitWarStartNote). The name is what comes before it,
+  // and the rest is the cause where none was kept.
+  const [savedTitle, ...runOn] = normalizeOptionalString(entry.title).split(/\s*[~|]\s*/);
+  const title = savedTitle || `${sideA[0]}–${sideB[0]} War`;
+  const cause = normalizeTextLike(entry.cause) || runOn.join(" ").trim();
 
   return {
     id,
@@ -4012,7 +4094,7 @@ const normalizeWorldWar = (entry, index = 0) => {
     startedDate: canonicalizeDateString(entry.startedDate),
     endedDate: status === "ended" ? canonicalizeDateString(entry.endedDate || entry.lastUpdatedDate) : "",
     lastUpdatedDate: canonicalizeDateString(entry.lastUpdatedDate || entry.startedDate),
-    cause: normalizeTextLike(entry.cause),
+    cause,
     note: normalizeTextLike(entry.note),
     sourceEventIds,
     storylineIds,
@@ -4282,7 +4364,11 @@ const withFormerSceneKeyMoved = (world) => {
 };
 
 export const normalizeWorldState = (world) => {
-  const nextWorld = withFormerSceneKeyMoved(world && typeof world === "object" ? world : {});
+  // A battlefield saved under a war's id is renamed, and what names it follows
+  // (fronts/record.js withWarIdFrontsRenamed), before anything below reads them.
+  // (What the Stats pane's Politics tab kept apart, world.politics, is the Political World's now: folded into it
+  // once, and gone. runtime/politicalLandscapeFold.js.)
+  const { politics: formerPolitics = null, ...nextWorld } = withWarIdFrontsRenamed(withFormerSceneKeyMoved(world && typeof world === "object" ? world : {}));
   const polityOverrides = Object.fromEntries(
     Object.entries(nextWorld.polityOverrides ?? {})
       .map(([key, value]) => [key, normalizePolityOverride(key, value)])
@@ -4394,7 +4480,7 @@ export const normalizeWorldState = (world) => {
       .filter(([code, sheet]) => code && sheet && typeof sheet === "object"),
   );
 
-  const units = normalizeUnits(nextWorld.units);
+  const units = withoutTwinsOfPlayerUnits(normalizeUnits(nextWorld.units));
 
   // The ledgers resolve their polity names against the overrides computed above,
   // not the raw input, so a renamed polity folds onto one identity.
@@ -4407,7 +4493,9 @@ export const normalizeWorldState = (world) => {
     countryStats,
     statsEventReceipts: normalizeStatsEventReceipts(nextWorld.statsEventReceipts),
     ...(Object.hasOwn(nextWorld, "frontPersonnel") ? { frontPersonnel: normalizeFrontPersonnel(nextWorld.frontPersonnel) } : {}),
-    politicalActors: normalizePoliticalActors(nextWorld.politicalActors),
+    politicalActors: formerPolitics && typeof formerPolitics === "object" && Object.keys(formerPolitics).length > 0
+      ? foldPoliticsIntoActors(nextWorld.politicalActors, formerPolitics)
+      : normalizePoliticalActors(nextWorld.politicalActors),
     politicalSimulation: normalizePoliticalSimulationClock(nextWorld.politicalSimulation),
     institutions: normalizeInstitutions(nextWorld.institutions, diplomaticIdentityWorld, diplomaticIdentityIndexOf(diplomaticIdentityWorld)),
     powerStatus: normalizePowerStatus(nextWorld.powerStatus, diplomaticIdentityWorld),
@@ -4549,6 +4637,11 @@ export const normalizeWorldState = (world) => {
         .map(([key, value]) => [normalizeString(key).toLowerCase(), normalizeString(value)])
         .filter(([key, value]) => key && value),
     ),
+    regionRenames: Object.fromEntries(
+      Object.entries(nextWorld.regionRenames && typeof nextWorld.regionRenames === "object" ? nextWorld.regionRenames : {})
+        .map(([key, value]) => [normalizeString(key).toLowerCase(), normalizeString(value)])
+        .filter(([key, value]) => key && value),
+    ),
     cityPopulations: Object.fromEntries(
       Object.entries(nextWorld.cityPopulations && typeof nextWorld.cityPopulations === "object" ? nextWorld.cityPopulations : {})
         .map(([city, value]) => [normalizeOptionalString(city).toLowerCase(), Number(value)])
@@ -4565,6 +4658,8 @@ export const normalizeWorldState = (world) => {
     battlefields: normalizeBattlefields(nextWorld.battlefields),
     transports: normalizeTransports(nextWorld.transports),
     strikes: normalizeStrikes(nextWorld.strikes),
+    airStrikeOrders: normalizeAirStrikeOrders(nextWorld.airStrikeOrders),
+    airStrikes: normalizeAirStrikes(nextWorld.airStrikes),
     seaBattles: normalizeSeaBattles(nextWorld.seaBattles),
     naviesRaised: normalizeNaviesRaised(nextWorld.naviesRaised),
     blockades: normalizeBlockades(nextWorld.blockades),
@@ -4586,6 +4681,7 @@ export const normalizeWorldState = (world) => {
     callsToArms: normalizeCallsToArms(nextWorld.callsToArms),
     puppets: normalizeWorldPuppets(nextWorld.puppets, diplomaticIdentityWorld),
     storylines: normalizeWorldStorylines(nextWorld.storylines),
+    socialFeed: normalizeSocialFeed(nextWorld.socialFeed),
     simulationRules: normalizeOptionalString(nextWorld.simulationRules),
     startingTimelineText: normalizeOptionalString(nextWorld.startingTimelineText),
     units,
@@ -4747,14 +4843,18 @@ export const readWorldStateView = async ({ force = false } = {}) => {
   worldViewRaw = raw;
   worldViewCatalog = catalog;
   worldViewNormalized = normalized;
+  noteMapMeasure(normalized);
   return normalized;
 };
 
-export const readWorldState = async ({ force = false } = {}) =>
-  withMapClaims(
+export const readWorldState = async ({ force = false } = {}) => {
+  const world = withMapClaims(
     normalizeWorldState(await readJson(JSON_URLS.world, { defaultValue: WORLD_DEFAULTS, force })),
     getPrimedScenarioRegionCatalog(),
   );
+  noteMapMeasure(world);
+  return world;
+};
 
 // Same-tab cache agreement after a country Stats commit.
 //
@@ -4824,6 +4924,7 @@ export const primeCountryStatsWorkerCommit = async ({
 
 export const writeWorldState = async (world, options = {}) => {
   const normalized = normalizeWorldState(world);
+  noteMapMeasure(normalized);
   // Polity names, aliases and notes written during play are not queued for
   // translation: the AI writes them in the player's language already, and the
   // player types theirs in it. A scenario's own polities are content, queued
@@ -5693,7 +5794,11 @@ const applyPolityAndTerritoryImpacts = ({
       ...(aliases.length > 0 || change.aliases?.length > 0 ? { aliases } : {}),
       ...(change.color ? { color: change.color } : {}),
       name: code,
-      ...(change.note ? { note: change.note } : {}),
+      // A change's note is its REASON (polityChangeSchema: "Brief reason."). It
+      // is the description of a polity that has none yet, a new breakaway, and
+      // never replaces one it has: a week's "Provision sent to the Order" wiped
+      // a scenario's whole description of Brightdale.
+      ...(change.note && !normalizeOptionalString(current.note) ? { note: change.note } : {}),
     };
 
     if (change.color) {
@@ -6180,16 +6285,23 @@ export const applyEventImpactsToWorld = ({
         eventId: event.id,
         gameDate: event.date || "",
       });
-      // A rename that matched no existing structure is a STOCK-map city rename (stock
-      // cities live in PMTiles, not world.markers) — record it as an override layer so
-      // the label layer can show the new name (see Cities.jsx / cityRenames).
+      // A rename that matched no existing structure is a STOCK-map city or region rename (stock
+      // cities and regions live in PMTiles, not world.markers) — record it as an override layer so
+      // the label layer and region inspector show the new name (see Cities.jsx and regionNameFixes.js).
       for (const raw of normalizeArray(event.impacts.markerOps)) {
         const op = normalizeMarkerOp(raw);
         if (!op || !op.name) continue;
         const matched = before.some((m) =>
           op.markerId ? m.id === op.markerId : m.name.toLowerCase() === op.name.toLowerCase());
         if (op.op === "rename" && !matched) {
-          nextWorld.cityRenames = { ...(nextWorld.cityRenames || {}), [op.name.toLowerCase()]: op.newName };
+          const rawName = String(op.name).trim();
+          const isRegion = /^region:\s*/i.test(rawName);
+          const cleanName = rawName.replace(/^region:\s*/i, "").trim().toLowerCase();
+          if (isRegion) {
+            nextWorld.regionRenames = { ...(nextWorld.regionRenames || {}), [cleanName]: op.newName };
+          } else {
+            nextWorld.cityRenames = { ...(nextWorld.cityRenames || {}), [cleanName]: op.newName };
+          }
         }
         // Population is recorded in the override for EVERY city, matched or not.
         // A built marker keeps its own population field, but the map reads the

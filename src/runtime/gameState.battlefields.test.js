@@ -35,6 +35,17 @@ test("a world with no battlefields has an empty list, and a saved one survives a
   assert.deepEqual(normalizeWorldState(JSON.parse(JSON.stringify(world))).battlefields, world.battlefields);
 });
 
+// A real-key test (2026-10-28) saved a front named with its war's id.
+test("a battlefield saved under its war's id is renamed on reading, and its formations follow it", () => {
+  const world = normalizeWorldState({
+    battlefields: [battlefield({ name: "WAR-RUSSIA-UKRAINE-2024", warId: "war-russia-ukraine-2024" })],
+    units: [unit({ committedTo: "WAR-RUSSIA-UKRAINE-2024" })],
+  });
+  assert.equal(world.battlefields[0].name, "Russia - Ukraine front");
+  assert.equal(world.units[0].committedTo, "Russia - Ukraine front");
+  assert.deepEqual(normalizeWorldState(world).battlefields.map((record) => record.name), ["Russia - Ukraine front"]);
+});
+
 test("a formation keeps the battlefield it is fighting on, and only then carries the field", () => {
   assert.equal(normalizeUnitEntry(unit({ committedTo: " Eastern Ukraine " })).committedTo, "Eastern Ukraine");
   assert.equal("committedTo" in normalizeUnitEntry(unit()), false);

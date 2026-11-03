@@ -53,6 +53,577 @@ import { PAST_UPDATES } from "./notesPast.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // A model's war, client state, relation or agreement written inside an event is carried out; a skip's events are
+    // sent with impacts required, so Gemini no longer leaves them off (AI/jumpAnswerShelves.js,
+    // gameplaySchemas.js withEventImpacts; the owner's reports, 2026-11-03).
+    id: "2026-11-changes-where-they-belong",
+    kind: "minor",
+    date: "2026-11-03",
+    channel: "beta",
+    banners: [
+      {
+        title: "Wars and client states take effect",
+        items: [
+          "A war, a client state, a relation or an agreement that an AI model writes inside an event now takes effect, scripted events included, and a time skip on Gemini no longer leaves out the changes its events tell.",
+        ],
+      },
+    ],
+  },
+  {
+    // Peace on any terms (runtime/peaceTerms.js: annexed, cessions, puppet, conditions), forces built up through
+    // actions and projects only, and the fixes after 0.0.112 (the owner, 2026-11-03).
+    id: "2026-11-peace-on-any-terms",
+    kind: "minor",
+    date: "2026-11-03",
+    channel: "beta",
+    banners: [
+      {
+        title: "Peace on any terms",
+        items: [
+          "A peace can annex the other country whole, hand over regions by name, or make one side the other's puppet state, protectorate or client state.",
+          "Add any other condition to your terms in your own words, and the next time skip carries it out.",
+          "Leaders and time skips offer and accept peace on these terms too.",
+        ],
+      },
+      {
+        title: "Forces and fixes",
+        items: [
+          "Forces are built up through your actions and projects: order a mobilisation and the time skip calls them up round your cities. The Build up forces button is gone.",
+          "Forces built up in peace show on the map again.",
+          "Military power counts how well a country's forces are armed, led and funded far more than how many they are, and a country waits for its rating instead of being ranked by its population.",
+          "The country panel has one Politics tab again.",
+          "The update banner no longer offers the build you have just installed.",
+          "Major update notices come before minor ones.",
+          "A time skip in a game that tracks political parties is one AI request again, and a skip that has to check its turn separately always keeps a request for it.",
+        ],
+      },
+      {
+        title: "Politics, advisors and the air",
+        items: [
+          "Politics is one record: each country's Political World now carries what the Politics card had, native party names, ideologies, roles, seats, the legislature and the next election, and turns keep it up.",
+          "A country's leader is one person everywhere: Rostra and the AI name whoever holds the office now, as the country panel does, and a save's latest Politics reading brings its government with it.",
+          "Your advisor knows your wars as your general staff would: every front's line, strength and latest fighting, your standing orders, how weary each side is and what is on the table for peace.",
+          "Deploy Aircraft works with the air arm that flies over your fronts when you have no air unit of your own on the map.",
+        ],
+      },
+    ],
+  },
+  {
+    // "Scripted events don't work at all or have any effect, Geopolitical events don't happen anymore" (a player's
+    // report, 2026-11-03): changes written on an event are put where they belong (AI/jumpAnswerShelves.js).
+    id: "2026-11-events-take-effect",
+    kind: "minor",
+    date: "2026-11-03",
+    channel: "beta",
+    banners: [
+      {
+        title: "Events change the world again",
+        items: [
+          "Territory changes, client states and treaties that a time skip writes into its events now take effect, scripted events included, where some AI models had them thrown away.",
+        ],
+      },
+    ],
+  },
+  {
+    // "antartica has this strange bug where there are triangles cut out of the climate zones" (the owner,
+    // 2026-11-03): the season's tint is map tiles now (Map/seasonTintTiles.js).
+    id: "2026-11-season-tint-tiles",
+    kind: "minor",
+    date: "2026-11-03",
+    channel: "beta",
+    banners: [
+      {
+        title: "Seasons drawn whole",
+        items: [
+          "The colours of the seasons no longer have triangles cut out of them near Antarctica when 3D terrain is on.",
+          "The country ranking shows every country's flag, including countries known by their official names.",
+        ],
+      },
+    ],
+  },
+  {
+    // Forces built up at home round the cities and moved in the War Room; troops march to the front from inside their
+    // country; call-ups sized by the country (the owner, 2026-11-02: runtime/fronts/home.js, march.js).
+    id: "2026-11-forces-at-home",
+    kind: "minor",
+    date: "2026-11-03",
+    channel: "beta",
+    banners: [
+      {
+        title: "Forces at home",
+        items: [
+          "Build up forces from your own country's page: they gather round your cities, as many as your men, supplies, war weariness and mustering allow, and more come in over the weeks after.",
+          "The War Room opens for them in peace: draw routes to move them through your own land, to a border or anywhere at home.",
+          "Send them into another country's land and the war with it begins; those near its front fight there.",
+          "Other countries build up their forces and station them on their borders too.",
+        ],
+      },
+      {
+        title: "Armies march to the front",
+        items: [
+          "New troops are called up inside their country, the deeper the thinner its people are spread, and march to the front.",
+          "Armies move half again as fast through their own side's territory as through the enemy's.",
+          "Deploying troops no longer asks how many: your country calls up as many as it can.",
+        ],
+      },
+    ],
+  },
+  {
+    // "fully conquouring an enemy should end the war" (the owner, 2026-11-03), after a player's war on the
+    // protectorate they had made went on for two years (warAndPeace.js endConqueredWars, endWarsOnPuppets;
+    // playersWarsHold.js).
+    id: "2026-11-wars-end-when-won",
+    kind: "minor",
+    date: "2026-11-03",
+    channel: "beta",
+    banners: [
+      {
+        title: "Wars end when they are won",
+        items: [
+          "A war ends when one side is fully conquered, or becomes the other side's puppet.",
+          "Ordering a war of yours to end now offers your enemy peace, each side keeping what it holds; their government answers in the next time skip.",
+        ],
+      },
+    ],
+  },
+  {
+    // "replace the listen in feature with a new button where the projects button was where it opens a social media
+    // application ... things that happen on the social media should be in the time skip ai's (simulation agent)
+    // context", "on beta add the projects menu as a tab in the actions menu", "make sure the social media feature is
+    // disableable in the scenario editor" (the owner, 2026-11-02).
+    id: "2026-11-rostra",
+    kind: "major",
+    date: "2026-11-02",
+    channel: "beta",
+    banners: [
+      {
+        theme: "rostra",
+        scene: "feed",
+        title: "Rostra",
+        subtitle: "The world, in its own words",
+        lead: "A social network for the world you play in. Read what leaders, generals, journalists and celebrities post as time passes, post as your country's leader, and quote anyone.",
+        sections: [
+          {
+            heading: "The people who make the news",
+            icon: "people",
+            items: [
+              "Heads of state, ministers, generals, journalists, analysts and business leaders post about what happens in each time skip.",
+              "Now and then a celebrity or an ordinary person posts about something that has nothing to do with world affairs.",
+            ],
+          },
+          {
+            heading: "Your own voice",
+            icon: "flag",
+            items: [
+              "Post as your country's leader from the box at the top of the feed. Posting costs no AI request.",
+              "Quote any post: the post you quote is shown inside yours.",
+            ],
+          },
+          {
+            heading: "Words have consequences",
+            icon: "eye",
+            items: [
+              "The next time skip reads your posts as your leader's public words: allies, rivals, markets and crowds answer them.",
+              "Leaders and journalists quote you back, and the Mentions tab gathers every post that answers or names you.",
+            ],
+          },
+          {
+            heading: "Find your way",
+            icon: "map",
+            items: [
+              "Rostra opens from the third button of the dock. Tabs show everything, your country, your mentions and your own posts.",
+              "A scenario can switch social media off in its Features tab.",
+            ],
+          },
+        ],
+      },
+      {
+        theme: "rostra",
+        scene: "desk",
+        title: "Projects moves into Actions",
+        subtitle: "And Listen in steps aside",
+        lead: "Projects & Operations is now the second tab of the Actions panel, so its old button could make room for Rostra.",
+        sections: [
+          {
+            heading: "Projects & Operations",
+            icon: "book",
+            items: [
+              "Open Actions and choose the Projects tab: the board works just as it did.",
+              "Your advisor's button to open the board now opens that tab.",
+            ],
+          },
+          {
+            heading: "Listen in",
+            icon: "phone",
+            items: [
+              "The Listen in button on a region's card and a country's panel has been removed.",
+              "Rostra takes its place and asks for no AI request of its own: its posts come with each time skip.",
+            ],
+          },
+        ],
+      },
+    ],
+  },
+  {
+    // "have it already contain that" (the owner, 2026-11-02): the skip writes the figures a war needs itself (warFiguresPrompt.js).
+    id: "2026-11-war-figures-in-skip",
+    kind: "minor",
+    date: "2026-11-02",
+    channel: "beta",
+    banners: [
+      {
+        title: "A war costs no extra requests",
+        items: [
+          "A time skip that starts a war now works out the strength, people and economy of the countries in it in its own answer, instead of asking the AI for them after the turn.",
+          "So a skip is one request on the turns a war begins too, which matters most on a free key, where requests are what runs out.",
+        ],
+      },
+    ],
+  },
+  {
+    // The Game Master reads a request for what it means; wars open in any language; typed text is not translated (2026-11-02).
+    id: "2026-11-game-master-wars",
+    kind: "minor",
+    date: "2026-11-02",
+    channel: "beta",
+    banners: [
+      {
+        title: "The Game Master does what you ask",
+        items: [
+          "The Game Master no longer turns down a declaration of war over its wording: a war you ask for is made, in any language.",
+          "What a request leaves unsaid, such as who fights in a battle or which war an event belongs to, the game now works out itself instead of asking the AI again.",
+          "When part of a request cannot be made, such as a war with a country that does not exist, the preview says so plainly and shows the rest.",
+          "Wars that break out in a time skip are no longer lost when its events are written in a language other than English.",
+          "Your orders and the Game Master's preview are no longer changed by the translation of the game's interface.",
+        ],
+      },
+    ],
+  },
+  {
+    // "add camera controls (press shift to tilt or turn) to beta" (the owner, 2026-11-02): as the native app has them.
+    id: "2026-11-shift-to-turn",
+    kind: "minor",
+    date: "2026-11-02",
+    channel: "beta",
+    banners: [
+      {
+        title: "Hold Shift to turn and tilt",
+        items: [
+          "On a trackpad, dragging with two fingers now zooms the map, as pinching does.",
+          "Hold Shift while you drag with two fingers to turn and tilt the map: sideways turns it, up and down tilts it.",
+          "A right-button drag still turns and tilts the map, Shift with the arrow keys still does too, and Shift with a mouse wheel zooms in finer steps.",
+        ],
+      },
+      {
+        // "remove the context window ai setting from the settings" (the owner, 2026-11-02).
+        title: "One AI setting fewer",
+        items: [
+          "Settings → AI no longer has a Context window field for each model.",
+          "The game still learns how much a model can take from the model's own refusals, and tries it again by itself after a while.",
+        ],
+      },
+    ],
+  },
+  {
+    // The website's entry screen ("Enter Open Historia") removed: the demo notice comes up over the game (2026-11-02).
+    id: "2026-11-straight-into-the-demo",
+    kind: "minor",
+    date: "2026-11-02",
+    channel: "beta",
+    banners: [
+      {
+        title: "Straight into the demo",
+        items: [
+          "On the website, Play the demo now opens the game itself: the entry page that stood in front of it is gone.",
+          "The note that the browser version is a demo comes up over the game instead, once a visit.",
+        ],
+      },
+    ],
+  },
+  {
+    // A turn no longer reads the whole map for patrols it does not have, the land war reads it off the page, and the
+    // map's names and catalog are not worked out twice as a game opens (2026-11-02).
+    id: "2026-11-faster-turns",
+    kind: "minor",
+    date: "2026-11-02",
+    channel: "beta",
+    banners: [
+      {
+        title: "Faster games and turns",
+        items: [
+          "Games open sooner: the borders and country names come up earlier, above all on large maps.",
+          "Turns end sooner, and the pauses as each one finishes are about half as long.",
+          "A turn that draws a new battlefield no longer holds up the screen while it reads the map.",
+          "Nothing about how the game plays has changed: only the work behind it.",
+        ],
+      },
+    ],
+  },
+  {
+    // Terrain and front work kept instead of redone each frame, and borders worked out off the page (2026-11-02).
+    id: "2026-11-smoother-map",
+    kind: "minor",
+    date: "2026-11-02",
+    channel: "beta",
+    banners: [
+      {
+        title: "A smoother map",
+        items: [
+          "Moving, zooming and turning the map is far smoother, above all with 3D terrain on and wars on the map.",
+          "Slower computers gain the most.",
+          "The freeze of a few seconds that could strike mid-game, as a country got ready to write to you, is now a brief hitch at most.",
+          "The map looks just as it did: only the work behind it has changed.",
+        ],
+      },
+    ],
+  },
+  {
+    // "in features rename the fronts section to wars and make it so you can toggle fronts, air troops, and navies for a
+    // scenario", "make it so in the war room you can Deploy Aircraft", "make it so they can be intercepted and if they
+    // are, the "fighters" in the air unit have a simulated battle" (the owner, 2026-11-01).
+    id: "2026-11-deploy-aircraft",
+    kind: "major",
+    date: "2026-11-01",
+    channel: "beta",
+    banners: [
+      {
+        theme: "airRaid",
+        title: "Deploy Aircraft",
+        subtitle: "Wars, part by part",
+        lead: "Send your air units to bomb the enemy's troops, the things they have built, or their cities, and watch for the fighters that rise to meet them. And a scenario now chooses which parts of war it has.",
+        sections: [
+          {
+            heading: "Deploy Aircraft",
+            icon: "plane",
+            items: [
+              "In the War Room, the Aircraft key beside Deploy: pick one of your air units, choose troops, a structure or a city, and click it on the map.",
+              "The strike flies when time next passes. The ring on the map shows where its bombs will fall.",
+            ],
+          },
+          {
+            heading: "Intercepted",
+            icon: "swords",
+            items: [
+              "The enemy's air units within reach may find the raid and rise against it. Then the fighters of both sides fight it out.",
+              "What is left decides it: the bombers get through, get through in part, or turn back. Both sides lose aircraft.",
+            ],
+          },
+          {
+            heading: "What the bombs do",
+            icon: "flag",
+            items: [
+              "Troops under the bombs lose strength, dug-in troops less. Your own troops under them are hit too.",
+              "A structure is damaged or destroyed. A city loses people and economy, and its country grows wearier of the war.",
+            ],
+          },
+          {
+            heading: "Told and counted",
+            icon: "book",
+            items: [
+              "The story is told each strike as it happened, the War Room shows what came of it, and the map plays the raid.",
+              "Countries know the air war in their war stats, and their diplomacy weighs it.",
+            ],
+          },
+          {
+            heading: "Wars, part by part",
+            icon: "gear",
+            items: [
+              "In a scenario's Features, Fronts is now Wars, with a switch each for Fronts, Air units and Navies.",
+              "Switched off, that part of war is gone from the game: nothing of it is raised, sent or fought. Existing scenarios keep everything on.",
+              "The scenario editor's War tab is now under Wars in the Features tab.",
+            ],
+          },
+        ],
+        button: "To the airfield",
+      },
+    ],
+  },
+  {
+    // "battlefield ground drawn the way the ownership hand-over animation is, plus a moving front border"
+    // (the owner, 2026-11-01): the battlefield draws its sides' regions itself, with the border where the
+    // holders meet (Map/frontGroundLayer.js).
+    id: "2026-11-moving-fronts",
+    kind: "minor",
+    date: "2026-11-01",
+    channel: "beta",
+    banners: [
+      {
+        title: "Fronts that move",
+        items: [
+          "Ground taken on a battlefield now looks just like the land of the country that holds it, on every basemap.",
+          "The border moves with the fighting: it is drawn where the ground changes hands, not along the old border.",
+          "Battlefields are quicker to draw, so the map stays smooth while a turn plays.",
+        ],
+      },
+    ],
+  },
+  {
+    // Distances follow the map's projection; the Workshop's scale line; the Flat Earth projection (2026-11-01).
+    id: "2026-11-map-distances",
+    kind: "minor",
+    date: "2026-11-01",
+    channel: "beta",
+    banners: [
+      {
+        title: "Distances that follow the map",
+        items: [
+          "Troops, fleets, transports and aircraft measure their distances by the map's projection, so every map is as far across as the world it shows.",
+          "On a freeform map every distance is a straight line, at the same scale everywhere.",
+          "In the Workshop's Projection panel, draw a scale line and say how long it is: the whole map and its scenario are measured by it.",
+          "A new Flat Earth projection shows the world as a round map with the North Pole at its centre.",
+        ],
+      },
+    ],
+  },
+  {
+    // A suggestion's border changes are groups of neighbouring regions; now it says how many regions (2026-11-01).
+    id: "2026-11-suggestion-regions",
+    kind: "minor",
+    date: "2026-11-01",
+    channel: "beta",
+    banners: [
+      {
+        title: "Suggestions count their regions",
+        items: [
+          "When you suggest changes to a community scenario, the Borders line now says how many regions you merged into others, reshaped or added.",
+          "Each border change is a group of neighbouring regions that is accepted or rejected together, so many merges can be a few changes.",
+        ],
+      },
+    ],
+  },
+  {
+    // The desktop app packs only what it runs (2026-11-01).
+    id: "2026-11-lighter-desktop",
+    kind: "minor",
+    date: "2026-11-01",
+    channel: "beta",
+    banners: [
+      {
+        title: "A lighter desktop app",
+        items: [
+          "The desktop app is a smaller download: about 40 MB less on Windows.",
+          "It takes up about 100 MB less space once installed.",
+          "Updates have far fewer files to put in place, so they finish sooner.",
+        ],
+      },
+    ],
+  },
+  {
+    // PR #916 (DupliM2001), rebuilt on beta: the Politics tab, goal progress, picture basemaps, deals and annexations kept (2026-10-31).
+    id: "2026-10-politics-and-goals",
+    kind: "minor",
+    date: "2026-10-31",
+    channel: "beta",
+    banners: [
+      {
+        title: "Parties, goals and promises kept",
+        items: [
+          "A Politics tab beside Diplomacy and Economy shows a country's government and its main parties, with their ideologies, leaders, seats and support. Ask for it once; the story moves it from then on.",
+          "Under your standing goal, Assess progress says how far it has come: what is done, what stands in the way and what to do next.",
+          "A deal agreed in a diplomatic chat is now kept as an agreement, and its terms are carried out when they fall due.",
+          "An annexation an event tells of now happens on the map, and a country joining a war takes the side against the countries it names.",
+          "In the map editor, a picture of a map asks how it is drawn and where it lies, stays sharp when you zoom in, and the mouse wheel zooms a whole level a notch.",
+        ],
+      },
+    ],
+  },
+  {
+    // Group diplomacy: countries added to a conversation, conversations renamed, members tagged (PR #917, 2026-10-31).
+    id: "2026-10-group-diplomacy",
+    kind: "minor",
+    date: "2026-10-31",
+    channel: "beta",
+    banners: [
+      {
+        title: "Group diplomacy",
+        items: [
+          "Add countries to a diplomatic conversation with Add Country in its header.",
+          "Rename a conversation with the pencil beside its title.",
+          "In a group conversation, tag countries with the @ chips above the message box: only the countries you tag answer.",
+        ],
+      },
+    ],
+  },
+  {
+    // The phone layout: the main menu, the library's cards and the in-game buttons (PR #918, 2026-10-31).
+    id: "2026-10-phone-layout",
+    kind: "minor",
+    date: "2026-10-31",
+    channel: "beta",
+    banners: [
+      {
+        title: "A tidier phone layout",
+        items: [
+          "On a phone, the main menu's tabs and buttons line up evenly, and searching and sorting the library take a row each.",
+          "Game cards in the library are more compact on small screens.",
+          "In a game on a phone, the menu, date and search buttons match in size, the advisor's button sits clear of the map switch, and the War Room button is smaller.",
+        ],
+      },
+    ],
+  },
+  {
+    // Peace offered through the diplomatic chats, when the AI decides it, with each country's war in its diplomacy (2026-10-30).
+    id: "2026-10-peace-in-the-chats",
+    kind: "minor",
+    date: "2026-10-30",
+    channel: "beta",
+    banners: [
+      {
+        title: "Peace at the table",
+        items: [
+          "An enemy offers peace in its diplomatic chat with you, in its leader's own words, with the terms to accept or decline right there.",
+          "Peace is offered only when a country decides to, not at a fixed weariness: a weary country may still fight on, a strong one may still want peace.",
+          "Put your own terms with Peace in the chat with an enemy, and its leader answers them in the reply: accepts, declines or offers other terms.",
+          "Countries at war know their own war in diplomacy: weariness, supplies, ground, battlefields and allies. One running short may ask you for help.",
+        ],
+      },
+    ],
+  },
+  {
+    id: "2026-10-ai-in-your-language",
+    kind: "minor",
+    date: "2026-10-29",
+    banners: [
+      {
+        title: "Suggestions in your language",
+        items: [
+          "The suggested actions in the Actions panel are written in the language you play in again, not in English.",
+          "Interactive events, intelligence briefings, country statistics and scripted events follow your language the same way.",
+          "When you play in English, a scenario set to another language is still written in that language.",
+        ],
+      },
+    ],
+  },
+  {
+    id: "2026-10-community-dates",
+    kind: "minor",
+    date: "2026-10-29",
+    banners: [
+      {
+        title: "Find scenarios by date",
+        items: [
+          "The Community tab's start and end date filters now find scenarios by the date they begin. Before, any date range showed nothing.",
+          "Set only a start or only an end to see everything after or before it; scenarios set before the common era count too.",
+        ],
+      },
+    ],
+  },
+  {
+    id: "2026-10-discord-invites",
+    kind: "minor",
+    date: "2026-10-29",
+    banners: [
+      {
+        title: "Invite friends from Discord",
+        items: [
+          "In a shared game, your Discord status shows the game as joinable: invite a friend from Discord and they get a popup in their game asking them to join.",
+          "When someone asks to join your shared game from your Discord profile, you get a popup to accept or decline.",
+          "In the desktop app, with Show what I am playing on Discord switched on.",
+        ],
+      },
+    ],
+  },
+  {
     id: "2026-10-gm-causal-previews",
     kind: "minor",
     date: "2026-10-28",
@@ -66,6 +637,97 @@ const NEW_UPDATES = [
           "A Direct request that makes no canonical change is rejected instead of being shown as successful.",
           "World interventions can no longer replace a country's GDP baseline as though a crisis had instantly measured a new total.",
           "Temporary growth effects with an invalid cause or duration are rejected in the preview before Apply.",
+        ],
+      },
+    ],
+  },
+  {
+    id: "2026-10-renamed-regions",
+    kind: "minor",
+    date: "2026-10-28",
+    channel: "beta",
+    banners: [
+      {
+        title: "Renamed regions and a tidier top bar",
+        items: [
+          "A region renamed by an event shows its new name on its place card and in each country's list of territory, for every player in a shared game.",
+          "On a computer, the menu button at the top left is now the same height as the game's name and the Exit Game button beside it.",
+        ],
+      },
+    ],
+  },
+  {
+    id: "2026-10-fixes-from-reports",
+    kind: "minor",
+    date: "2026-10-28",
+    banners: [
+      {
+        title: "Fixes from your reports",
+        items: [
+          "When an event says an army took a region, the region changes hands on that date if enough of that army's troops are nearby (more for a larger region): its nearest troops move in, and the other side's troops there fall back.",
+          "Countries no longer run out of men after a front or two: drafts, reinforcements and the troops a deployment calls up come in again.",
+          "When an event or your action makes a country another's puppet, vassal or protectorate, it now becomes one, and freeing, annexing or a revolt is recorded too.",
+          "A time skip no longer makes a second copy of a unit already on the map; copies already in a save are removed, and deleting one removes only that one.",
+          "On a map you drew yourself, real-world countries no longer creep into the country list. On phones, the Diplomacy panel's institutions fit the screen and the War Room button no longer covers the Actions panel.",
+          "Scripted events are written in your language, and Antarctica's snow is no longer cut into by triangles when zoomed out.",
+          "A time skip on a map with many countries finishes sooner: working out each country's statistics no longer rereads the whole map for every name.",
+        ],
+      },
+    ],
+  },
+  {
+    // What a real-key test of the game found (2026-10-28).
+    id: "2026-10-ai-mended",
+    kind: "minor",
+    date: "2026-10-28",
+    channel: "beta",
+    banners: [
+      {
+        title: "The AI, mended",
+        items: [
+          "The Game Master can start wars again: a unit's orders put in other words, or an answer sent back in an odd format, no longer spoil the preview.",
+          "A battlefield the AI named with a code is called by its sides instead, such as \"France - Italy front\", in new games and saved ones.",
+          "A war's name no longer carries part of its cause after it.",
+          "The AI console now shows how many tokens each of your advisor's answers used.",
+          "Your advisor no longer measures a country's military strength by how many regions it holds.",
+        ],
+      },
+    ],
+  },
+  {
+    id: "2026-10-spies-with-reason",
+    kind: "minor",
+    date: "2026-10-28",
+    banners: [
+      {
+        title: "Spies with a reason",
+        items: [
+          "Foreign agents in your country now come from those with a reason to send them: your enemies and rivals, and powers with a real stake in your affairs.",
+          "A country with no interest in you, or no spy service to speak of, no longer plants agents in your country.",
+        ],
+      },
+    ],
+  },
+  {
+    // The time skip was never shown the regions nobody rules, so an order to take the wild land next door could not
+    // be carried out; and a week's reason for a change to a country replaced that country's whole description
+    // (Discord spike, 2026-10-28). Then (2026-10-29): wild land one sea away counts as within reach by ship, a
+    // patrol keeps to its own ground (a fleet was drifting onto the coast), and in a shared game a player's letter
+    // carries the game date, a letter to an AI government waits while a week is played, and each player has an
+    // advisor of their own government who brings them its secrets.
+    id: "2026-10-unruled-land",
+    kind: "minor",
+    date: "2026-10-29",
+    banners: [
+      {
+        title: "Wild land and a confidant",
+        items: [
+          "On maps with land no country rules, the story now knows which of it lies beside each country, or across a strait or a bay from its coast, so an order to settle or take it can be carried out.",
+          "A country's description from the scenario now stays as written when the story changes something about it, instead of being replaced by a one-line note.",
+          "Fleets on patrol now stay at sea, and armies on patrol stay on land, instead of drifting onto the coast or into the water.",
+          "In shared games, each player has an advisor from their own government, who brings them in Diplomacy what it learns in secret.",
+          "In shared games, letters between players now show the game date.",
+          "In shared games, letters to countries the AI plays, and new goals, can't be sent while a week is being played: send them once its news is in. Letters between players still go through.",
         ],
       },
     ],
@@ -120,6 +782,62 @@ const NEW_UPDATES = [
     ],
   },
   {
+    // A shared game's players whose groups founded countries stayed seated on the groups, so the AI played the new
+    // countries' armies and wars and their secrets reached no one; every AI letter went to the host's seat; and a
+    // capital a country named was never starred on the map; and the time skip's prompt named every player's
+    // polity together as if one ("Northreach and Eastwatch is played by a human") (Discord spike, 2026-10-27).
+    id: "2026-10-founded-countries",
+    kind: "minor",
+    date: "2026-10-27",
+    banners: [
+      {
+        title: "Your country, your mail",
+        items: [
+          "In a shared game, when your people found a country of their own and hand it their land, you now play that new country from then on.",
+          "Its armies, its wars and what only its government knows are yours, along with your queued orders and conversations. Before, the AI took the new country over.",
+          "The new country's leader, government and goals are written from your story, as for any country the world founds.",
+          "In a shared game, each letter a government writes now reaches the player it was written to. Before, every letter went to the host.",
+          "A city a country makes its capital now gets the capital's gold star on the map.",
+          "In a shared game, the AI now treats each player's country as a country of its own, with its own aims, even when two players are at war. Before, it could read them as one.",
+        ],
+      },
+    ],
+  },
+  {
+    // A few panels showed a game date as stored (0354-02-19), and the time skip's troop orders with a mistyped year
+    // (2354 for 0354) were moved to the week's first day (Discord spike, 2026-10-27).
+    id: "2026-10-dates-and-orders",
+    kind: "minor",
+    date: "2026-10-27",
+    banners: [
+      {
+        title: "Dates as you read them",
+        items: [
+          "Dates in the institutions, projects, unit, place and country panels now read as 19 February 354, as the rest of the game writes them.",
+          "A troop order given for a day of the week is now carried out on that day, even when its year came out wrong in the order.",
+        ],
+      },
+    ],
+  },
+  {
+    // The Workshop's selection gained a Fit to background slider: the selected regions' coasts are pulled onto
+    // the shore the background picture, reference image or basemap shows (2026-10-27).
+    id: "2026-10-fit-to-background",
+    kind: "minor",
+    date: "2026-10-27",
+    banners: [
+      {
+        title: "Coasts that follow the map",
+        items: [
+          "In the map editor, select regions and slide Fit to background: their coasts move onto the shoreline your background picture shows.",
+          "It works on your own map picture and the reference image you trace, and on the built-in basemaps where your regions already cover the land.",
+          "The further you slide, the further a coast may move to find the shore. Slide back to Off to put it back, or undo it like any edit.",
+          "Only coasts move: a border between two land regions keeps its line, and only its end slides onto the shore, so neighbours still meet.",
+        ],
+      },
+    ],
+  },
+  {
     id: "2026-10-peace-and-weariness",
     kind: "minor",
     date: "2026-10-26",
@@ -131,6 +849,53 @@ const NEW_UPDATES = [
           "Calls to arms in a war that has ended lapse, so leaving one unanswered no longer costs you reputation.",
           "Peace terms show your own country's war weariness beside your enemy's, with a word for how weary each is.",
           "Listening in on a region now opens on its country's feed first.",
+        ],
+      },
+    ],
+  },
+  {
+    // Claude Opus 5.5 and Sonnet 5.5 refused forced tool choice and temperature (test sessions, 2026-10-26).
+    id: "2026-10-newer-claude",
+    kind: "minor",
+    date: "2026-10-26",
+    banners: [
+      {
+        title: "Newer Claude models",
+        items: [
+          "Claude Opus 5.5 and Sonnet 5.5 now answer every task: time skips and country sheets no longer fail when they turn down settings older models took.",
+        ],
+      },
+    ],
+  },
+  {
+    // Every time skip event was shown to every player of a shared game, so a covert order's outcome reached its
+    // targets and rivals (Discord spike, 2026-10-26).
+    id: "2026-10-shared-secrets",
+    kind: "minor",
+    date: "2026-10-26",
+    banners: [
+      {
+        title: "Secrets stay secret in shared games",
+        items: [
+          "When several people play, what your government does in secret is now told to you alone: the other players no longer read the outcome of your covert orders.",
+          "Anyone in on the secret, or who uncovers it, is told too.",
+          "What others could see happen, such as ships sailing or a minister dismissed, can still reach them as news of its own.",
+        ],
+      },
+    ],
+  },
+  {
+    // A scenario whose oceans are regions of their own put a new fleet past the map's bottom edge: the placer took
+    // the sea for "where no region is" (Discord spike, fantasy scenario, 2026-10-26).
+    id: "2026-10-fleets-at-sea",
+    kind: "minor",
+    date: "2026-10-26",
+    banners: [
+      {
+        title: "Fleets set sail on the right water",
+        items: [
+          "On maps where the seas are drawn as regions of their own, a new or moved fleet could be put past the edge of the map, where no one could see it.",
+          "Fleets now go to the water off their coast, inside the map, and sea regions count as sea when the game places ships and armies.",
         ],
       },
     ],

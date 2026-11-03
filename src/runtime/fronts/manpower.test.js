@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 import { decodeTroops } from "./codec.js";
 import { MANPOWER_SHARE, MEN_PER_FORMATION_BY_ERA, REINFORCE_ORDER } from "./constants.js";
 import { runFronts } from "./engine.js";
-import { menPerFormation } from "./manpower.js";
+import { menPerFormation, shareOf } from "./manpower.js";
 import { frontInput, syntheticMap } from "./syntheticMap.js";
 
 const legend = { A: "Aland", B: "Borduria", "~": null };
@@ -100,4 +100,16 @@ test("the armies a scenario begins with are part of the population its author ga
   const built = run({ peopleOf: people({ Aland: 60e6, Borduria: 300000 }), authored: [] });
   assert.deepEqual(built.manpower, []);
   assert.ok(live(built.battlefields[0], 1).length >= 12, "and nothing holds them to what is fit to serve");
+});
+
+// "I set a deploy line, it says I have no manpower, check and have plenty" (a player, 2026-10-28): the AI rated the
+// army a country keeps (the United Kingdom 4, Ireland 1), and it was read as every man the country could call up.
+test("a country's men to call up are never fewer than the scenario's share, whatever its own figure says", () => {
+  const rated = (manpowerShare, scenario = 0) => shareOf({ mech: { military: true }, militaryOf: () => ({ manpowerShare }), manpowerShare: scenario }, "Ireland");
+  assert.equal(rated(1), MANPOWER_SHARE);
+  assert.equal(rated(4), MANPOWER_SHARE);
+  assert.equal(rated(60), 0.6, "a warrior people, more");
+  assert.equal(rated(1, 0.05), 0.05, "the scenario's own share");
+  assert.equal(rated(null), MANPOWER_SHARE);
+  assert.equal(shareOf({ mech: {}, militaryOf: () => ({ manpowerShare: 60 }), manpowerShare: 0 }, "Ireland"), MANPOWER_SHARE, "figures not weighed");
 });

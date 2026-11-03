@@ -184,7 +184,7 @@ test("a jump asks for as many events as the period holds, not two to four a mont
 test("the live records go into the template, and the request ends on the writing reminder", () => {
   assert.equal(defaultPrompts.helpers.JUMP_LIVE_STATE, "${jumpLiveState}");
   assert.match(gameplaySource, /jumpLiveState: await buildJumpLiveState\(/);
-  assert.match(gameplaySource, /buildScriptedEventsInstruction\(scriptedBeats\),\s*scriptedPoliticalInstruction,\s*WRITING_REMINDER\]/);
+  assert.match(gameplaySource, /buildScriptedEventsInstruction\(scriptedBeats, \{ language: scriptedLanguage \}\),\s*scriptedPoliticalInstruction,\s*WRITING_REMINDER\]/);
   for (const gone of ["[Native World Director — authoritative", "[Diplomatic Consequence Bridge]", "[Actions You Can Take]", "[Counterfactual Knowledge Boundary"]) {
     assert.ok(!gameplaySource.includes(gone), `${gone} is appended again`);
   }
