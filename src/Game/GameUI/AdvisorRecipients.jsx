@@ -15,7 +15,7 @@ const button = {
 const blank = () => ({ name: "", title: "", personality: "", binding: null, officeKey: "" });
 
 export default function AdvisorRecipients({
-  contacts, activeId, offices, statusOf, busy = false, onSelect, onCreate, onRevise, onArchive,
+  contacts, activeId, chiefProfile, offices, statusOf, busy = false, onSelect, onCreate, onRevise, onArchive, onSaveChief, onResetChief,
 }) {
   const [expanded, setExpanded] = useState(false);
   const [editor, setEditor] = useState(null);
@@ -25,11 +25,24 @@ export default function AdvisorRecipients({
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const selected = contacts.find((item) => item.id === activeId);
+  const chiefName = chiefProfile?.name || "Chief advisor";
+  const chiefTitle = chiefProfile?.title || "Chief advisor";
   const visible = contacts.filter((item) => !item.archived || showArchived || item.id === activeId);
   const openEditor = (contact = null) => {
     if (busy || saving) return;
     setEditor(contact?.id || "new");
     setDraft(contact ? { name: contact.name, title: contact.title, personality: contact.personality || "", binding: contact.binding || null, officeKey: "" } : blank());
+    setConfirmArchive("");
+    setError("");
+    setExpanded(true);
+  };
+  const openChiefEditor = () => {
+    if (busy || saving) return;
+    setEditor("chief");
+    setDraft({
+      name: chiefName, title: chiefTitle, personality: chiefProfile?.personality || "",
+      binding: null, officeKey: "",
+    });
     setConfirmArchive("");
     setError("");
     setExpanded(true);
@@ -48,6 +61,7 @@ export default function AdvisorRecipients({
     setError("");
     try {
       if (editor === "new") await onCreate(draft);
+      else if (editor === "chief") await onSaveChief(draft);
       else await onRevise(editor, draft);
       setEditor(null);
     } catch (caught) {
@@ -57,11 +71,7 @@ export default function AdvisorRecipients({
     }
   };
   const retire = async (contact, archived) => {
-    if (busy || saving) return;
-    if (archived && confirmArchive !== contact.id) {
-      setConfirmArchive(contact.id);
-      return;
-    }
+    if (busy || saving || (archived && confirmArchive !== contact.id)) return;
     setSaving(true);
     setError("");
     try {
@@ -74,33 +84,62 @@ export default function AdvisorRecipients({
       setSaving(false);
     }
   };
+  const resetChief = async () => {
+    if (busy || saving) return;
+    setSaving(true);
+    setError("");
+    try {
+      await onResetChief();
+      setEditor(null);
+    } catch (caught) {
+      setError(String(caught?.message || caught));
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
     <section style={{ borderBottom: "1px solid rgba(255,255,255,0.1)", flexShrink: 0, padding: "0.4rem 0.65rem" }} aria-label="Advisor conversations">
       <div style={{ alignItems: "center", display: "flex", gap: 8 }}>
         <button type="button" onClick={() => setExpanded((old) => !old)} style={{ ...button, flex: 1, textAlign: "left" }}>
-          {selected ? selected.name : "Chief advisor"} {selected?.archived ? "(retired)" : ""} {expanded ? "▴" : "▾"}
+          {selected ? selected.name : chiefName} {selected?.archived ? "(retired)" : ""} {expanded ? "▴" : "▾"}
         </button>
         <button type="button" disabled={busy || saving} onClick={() => openEditor()} title="Add an official or advisor" style={{ ...button, opacity: busy ? 0.5 : 1 }} aria-label="Add advisor recipient">+ Contact</button>
       </div>
-      {selected && <div style={{ ...subtle, marginTop: 3 }}>{selected.title}{selected.binding ? " · Political World" : ""}</div>}
+      {(selected || chiefProfile) && <div style={{ ...subtle, marginTop: 3 }}>{selected ? selected.title : chiefTitle}{selected?.binding ? " · Political World" : ""}</div>}
       {expanded && (
         <div style={{ maxHeight: "min(58vh, 410px)", overflowY: "auto", paddingTop: 8, display: "flex", flexDirection: "column", gap: 5 }}>
-          <button type="button" disabled={busy || saving} onClick={() => { onSelect(CHIEF_ADVISOR_THREAD); setEditor(null); }} style={{ ...button, textAlign: "left", background: activeId === CHIEF_ADVISOR_THREAD ? "rgba(59,130,246,0.24)" : button.background }}>
-            Chief advisor <span style={subtle}>· Original conversation</span>
-          </button>
+          <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+            <button type="button" disabled={busy || saving} onClick={() => { onSelect(CHIEF_ADVISOR_THREAD); setEditor(null); setConfirmArchive(""); }} style={{ ...button, flex: 1, minWidth: 0, textAlign: "left", background: activeId === CHIEF_ADVISOR_THREAD ? "rgba(59,130,246,0.24)" : button.background }}>
+              {chiefName} <span style={subtle}>· Original conversation</span>
+              {chiefProfile && <div style={subtle}>{chiefTitle}</div>}
+            </button>
+            <button type="button" disabled={busy || saving} title="Edit chief advisor" onClick={openChiefEditor} style={button}>Edit</button>
+          </div>
           {visible.map((contact) => {
             const officeStatus = statusOf(contact);
             return (
-              <div key={contact.id} style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                <button type="button" disabled={busy || saving} onClick={() => { onSelect(contact.id); setEditor(null); }} style={{ ...button, flex: 1, minWidth: 0, textAlign: "left", background: activeId === contact.id ? "rgba(59,130,246,0.24)" : button.background }}>
-                  <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{contact.name} {contact.archived ? "· Retired" : ""}</div>
-                  <div style={subtle}>{contact.title}{["changed", "vacant"].includes(officeStatus) ? " · No longer in office" : ""}</div>
-                </button>
-                <button type="button" disabled={busy || saving} title={"Edit " + contact.name} onClick={() => openEditor(contact)} style={button}>Edit</button>
-                <button type="button" disabled={busy || saving} title={contact.archived ? "Restore contact" : "Retire contact"} onClick={() => retire(contact, !contact.archived)} style={button}>
-                  {contact.archived ? "Restore" : confirmArchive === contact.id ? "Confirm" : "Retire"}
-                </button>
+              <div key={contact.id} style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                  <button type="button" disabled={busy || saving} onClick={() => { onSelect(contact.id); setEditor(null); setConfirmArchive(""); }} style={{ ...button, flex: 1, minWidth: 0, textAlign: "left", background: activeId === contact.id ? "rgba(59,130,246,0.24)" : button.background }}>
+                    <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{contact.name} {contact.archived ? "· Retired" : ""}</div>
+                    <div style={subtle}>{contact.title}{["changed", "vacant"].includes(officeStatus) ? " · No longer in office" : ""}</div>
+                  </button>
+                  <button type="button" disabled={busy || saving} title={"Edit " + contact.name} onClick={() => openEditor(contact)} style={button}>Edit</button>
+                  <button type="button" disabled={busy || saving} title={contact.archived ? "Restore contact" : "Retire contact"} onClick={() => contact.archived ? retire(contact, false) : (setConfirmArchive(contact.id), setError(""))} style={button}>
+                    {contact.archived ? "Restore" : "Retire"}
+                  </button>
+                </div>
+                {confirmArchive === contact.id && !contact.archived && (
+                  <div role="alertdialog" aria-label={`Retire ${contact.name}?`} style={{ border: "1px solid rgba(248,113,113,0.5)", borderRadius: 8, padding: 10, background: "rgba(127,29,29,0.14)", display: "flex", flexDirection: "column", gap: 7 }}>
+                    <strong style={{ fontSize: "0.76rem" }}>Retire {contact.name}?</strong>
+                    <div style={subtle}>The conversation and personality will be preserved. You can restore this contact later.</div>
+                    <div style={{ display: "flex", gap: 7 }}>
+                      <button type="button" disabled={busy || saving} onClick={() => { setConfirmArchive(""); setError(""); }} style={button}>Cancel</button>
+                      <button type="button" disabled={busy || saving} onClick={() => retire(contact, true)} style={{ ...button, borderColor: "rgba(248,113,113,0.6)", color: "#fca5a5" }}>Retire contact</button>
+                    </div>
+                  </div>
+                )}
               </div>
             );
           })}
@@ -111,7 +150,7 @@ export default function AdvisorRecipients({
           )}
           {editor && (
             <div style={{ border: "1px solid rgba(96,165,250,0.4)", borderRadius: 9, display: "flex", flexDirection: "column", gap: 7, padding: 9 }}>
-              <strong style={{ fontSize: "0.75rem" }}>{editor === "new" ? "Add recipient" : "Edit recipient"}</strong>
+              <strong style={{ fontSize: "0.75rem" }}>{editor === "new" ? "Add recipient" : editor === "chief" ? "Edit chief advisor" : "Edit recipient"}</strong>
               {editor === "new" && (
                 <label style={subtle}>Link to Political World (optional)
                   <select style={field} value={draft.officeKey || ""} disabled={busy || saving} onChange={(event) => chooseOffice(event.target.value)}>
@@ -123,7 +162,7 @@ export default function AdvisorRecipients({
               <label style={subtle}>Name
                 <input style={field} maxLength={100} readOnly={Boolean(draft.binding)} title={draft.binding ? "Linked officeholder identity is fixed" : undefined} value={draft.name} onChange={(event) => setDraft((old) => ({ ...old, name: event.target.value }))} />
               </label>
-              <label style={subtle}>Government position
+              <label style={subtle}>{editor === "chief" ? "Position / title" : "Government position"}
                 <input style={field} maxLength={120} value={draft.title} onChange={(event) => setDraft((old) => ({ ...old, title: event.target.value }))} />
               </label>
               <label style={subtle}>Personality and principles
@@ -135,8 +174,11 @@ export default function AdvisorRecipients({
               {draft.binding && <div style={subtle}>Linked to {draft.binding.office === "headOfGovernment" ? "head of government" : "head of state"}: {draft.binding.name}. A replacement will not inherit this conversation.</div>}
               {error && <div role="alert" style={{ color: "#fca5a5", fontSize: "0.72rem" }}>{error}</div>}
               <div style={{ display: "flex", gap: 7 }}>
-                <button type="button" disabled={busy || saving || !draft.name.trim() || !draft.title.trim()} onClick={submit} style={button}>{saving ? "Saving…" : "Save recipient"}</button>
+                <button type="button" disabled={busy || saving || !draft.name.trim() || !draft.title.trim()} onClick={submit} style={button}>{saving ? "Saving…" : editor === "chief" ? "Save chief advisor" : "Save recipient"}</button>
                 <button type="button" disabled={saving} onClick={() => { setEditor(null); setError(""); }} style={button}>Cancel</button>
+                {editor === "chief" && chiefProfile && (
+                  <button type="button" disabled={busy || saving} onClick={resetChief} style={button}>Restore scenario defaults</button>
+                )}
               </div>
             </div>
           )}

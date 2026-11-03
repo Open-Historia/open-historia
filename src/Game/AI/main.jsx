@@ -147,7 +147,8 @@ import { describeDocumentsForAdvisor } from "../../runtime/reportDelivery.js";
 import { viewAsSeen } from "../../runtime/gameState.js";
 import { withCatchUp } from "./conversationCatchUp.js";
 import { ADVISOR_MEMORY_DIRECTIVE, advisorMemoryContextEntry, latestAdvisorMemory, splitAdvisorMemory } from "./advisorMemory.js";
-import { advisorOfficeStatus } from "../../runtime/advisorThreads.js";
+import { advisorOfficeStatus, chiefAdvisorProfile } from "../../runtime/advisorThreads.js";
+import { describeChiefAdvisorOverride } from "./advisorPersona.js";
 import { createConversationGeneration, removeEntry } from "./liveConversation.js";
 import { createAdvisorSessionRegistry } from "./advisorSessions.js";
 import { buildDiplomaticPoliticalContext } from "./diplomaticPoliticalContext.js";
@@ -3881,7 +3882,8 @@ You are ${recipient.name}, known to the player as ${recipient.title}. You are sp
 ${officeContext}
 ${recipient.personality ? `Personality and operating principles: ${recipient.personality}\n` : ""}Maintain this identity across turns. Speak within your actual knowledge and office; do not invent appointments or authority. You may discuss existing Actions and Projects, but you must not produce machine-readable actions or projects blocks or claim to have executed them. Offer proposals in ordinary prose; only the player may authorize new directives.`
         : "";
-    return { systemPrompt: `${rendered}\n\n${[...directives, identity].filter(Boolean).join("\n\n")}`, lookups: groupLookups };
+    const chiefIdentity = recipient ? "" : describeChiefAdvisorOverride(chiefAdvisorProfile(advisorData));
+    return { systemPrompt: `${rendered}\n\n${[...directives, identity, chiefIdentity].filter(Boolean).join("\n\n")}`, lookups: groupLookups };
 }
 
 // `speakingAs` names the polity whose leader is about to reply. It decides both

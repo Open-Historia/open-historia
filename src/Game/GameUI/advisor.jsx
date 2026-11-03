@@ -12,7 +12,7 @@ import { isComposerSendKey } from "../../runtime/composerKeys.js";
 import { chatLanguageDiffersFromUi, chatTextDirection } from "../../runtime/i18n.js";
 import { uiString } from "../../runtime/translator.js";
 import { applyProjectOpsToWorld, mutateAdvisorState, normalizeActionEntry, readActionsState, readAdvisorMessages, readWorldState, viewAsSeen, writeActionsState, writeWorldState } from "../../runtime/gameState.js";
-import { CHIEF_ADVISOR_THREAD, advisorContacts, advisorMessagesFor, advisorOfficeStatus, archiveAdvisorContact, createAdvisorContact, politicalAdvisorOffices, replaceAdvisorThread, reviseAdvisorContact } from "../../runtime/advisorThreads.js";
+import { CHIEF_ADVISOR_THREAD, advisorContacts, advisorMessagesFor, advisorOfficeStatus, archiveAdvisorContact, chiefAdvisorProfile, createAdvisorContact, politicalAdvisorOffices, replaceAdvisorThread, resetChiefAdvisorProfile, reviseAdvisorContact, saveChiefAdvisorProfile } from "../../runtime/advisorThreads.js";
 import StorageProblemNotice from "./storageProblemNotice.jsx";
 import AdvisorRecipients from "./AdvisorRecipients.jsx";
 import { describeReplyProblems, extractFencedJson, looksLikeProjectOps, planAdvisorActionEdits } from "./advisorBlocks.js";
@@ -1025,6 +1025,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
     const [input, setInput]         = useState("");
     const [isLoading, setIsLoading] = useState(false);
     const [contacts, setContacts] = useState([]);
+    const [chiefProfile, setChiefProfile] = useState(null);
     const [activeThreadId, setActiveThreadId] = useState(CHIEF_ADVISOR_THREAD);
     const activeThreadIdRef = useRef(CHIEF_ADVISOR_THREAD);
     const contactDraftsRef = useRef(new Map());
@@ -1142,6 +1143,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
                 setLoadFailed(true);
             } else {
                 setContacts(advisorContacts(saved));
+                setChiefProfile(chiefAdvisorProfile(saved));
                 const chiefMessages = advisorMessagesFor(saved, CHIEF_ADVISOR_THREAD);
                 updateMessages(chiefMessages);
                 loadHistory(chiefMessages, CHIEF_ADVISOR_THREAD);
@@ -1160,6 +1162,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         const onRuntimeUpdate = (event) => {
             if (event?.detail?.url !== JSON_URLS.advisor) return;
             setContacts(advisorContacts(event.detail.value));
+            setChiefProfile(chiefAdvisorProfile(event.detail.value));
             if (activeThreadIdRef.current === CHIEF_ADVISOR_THREAD) {
                 updateMessages((prev) => mergeNotices(prev, advisorMessagesFor(event.detail.value, CHIEF_ADVISOR_THREAD)));
             }
@@ -1234,6 +1237,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             activeThreadIdRef.current = id;
             setActiveThreadId(id);
             setContacts(advisorContacts(saved));
+            setChiefProfile(chiefAdvisorProfile(saved));
             updateMessages(selectedMessages);
             setInput(contactDraftsRef.current.get(id) || "");
             setVisibleMessageLimit(ADVISOR_INITIAL_RENDER_WINDOW);
@@ -1271,6 +1275,32 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         try {
             await mutateAdvisorState((all) => reviseAdvisorContact(all, id, draft));
             setContacts(advisorContacts(await readAdvisorMessages({ force: true })));
+        } finally {
+            contactMutationRef.current = false;
+            setContactsBusy(false);
+        }
+    };
+
+    const saveChiefProfile = async (draft) => {
+        if (turnInFlightRef.current || sideEffectPendingRef.current || contactMutationRef.current || threadSwitchingRef.current || loadFailed || saveFailed) throw new Error("Cannot edit the chief advisor while the Advisor is busy.");
+        contactMutationRef.current = true;
+        setContactsBusy(true);
+        try {
+            await mutateAdvisorState((all) => saveChiefAdvisorProfile(all, draft));
+            setChiefProfile(chiefAdvisorProfile(await readAdvisorMessages({ force: true })));
+        } finally {
+            contactMutationRef.current = false;
+            setContactsBusy(false);
+        }
+    };
+
+    const restoreChiefProfile = async () => {
+        if (turnInFlightRef.current || sideEffectPendingRef.current || contactMutationRef.current || threadSwitchingRef.current || loadFailed || saveFailed) throw new Error("Cannot restore the chief advisor while the Advisor is busy.");
+        contactMutationRef.current = true;
+        setContactsBusy(true);
+        try {
+            await mutateAdvisorState((all) => resetChiefAdvisorProfile(all));
+            setChiefProfile(chiefAdvisorProfile(await readAdvisorMessages({ force: true })));
         } finally {
             contactMutationRef.current = false;
             setContactsBusy(false);
@@ -1525,6 +1555,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             const said = messagesRef.current.filter((message) => !(message?.id && storedIds.has(message.id)));
             const merged = [...savedThread, ...said];
             setContacts(advisorContacts(saved));
+            setChiefProfile(chiefAdvisorProfile(saved));
             updateMessages(merged);
             loadHistory(merged, threadId);
             if (said.length) await saveMessages(merged, threadId);
@@ -1846,6 +1877,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         <AdvisorRecipients
             contacts={contacts}
             activeId={activeThreadId}
+            chiefProfile={chiefProfile}
             offices={offices}
             statusOf={(contact) => advisorOfficeStatus(contact, politicalWorld)}
             busy={!hasBootstrapped || isLoading || contactsBusy || sideEffectsBusy || saveFailed || storageRetrying || threadSwitchingRef.current || loadFailed}
@@ -1853,6 +1885,8 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             onCreate={createRecipient}
             onRevise={reviseRecipient}
             onArchive={retireRecipient}
+            onSaveChief={saveChiefProfile}
+            onResetChief={restoreChiefProfile}
         />
 
         {loadFailed ? (
@@ -1867,7 +1901,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             keystroke. See AdvisorMessageRow's comment for why that mattered. */}
         <AdvisorMessageList
         messages={messages}
-        speakerName={selectedContact?.name || "Advisor"}
+        speakerName={selectedContact?.name || chiefProfile?.name || "Advisor"}
         canExecute={activeThreadId === CHIEF_ADVISOR_THREAD}
         visibleLimit={visibleMessageLimit}
         onShowEarlier={handleShowEarlier}
@@ -1893,7 +1927,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         <textarea
         ref={inputRef}
         // A phone's keyboard has no Shift+Enter to speak of.
-        placeholder={recipientLocked ? "This contact is retired — restore to reply" : selectedContact ? `Message ${selectedContact.name}…` : isTouch ? "Ask your advisor…" : "Ask your advisor…  (Shift+Enter for a new line)"}
+        placeholder={recipientLocked ? "This contact is retired — restore to reply" : selectedContact ? `Message ${selectedContact.name}…` : chiefProfile ? `Message ${chiefProfile.name}…` : isTouch ? "Ask your advisor…" : "Ask your advisor…  (Shift+Enter for a new line)"}
         rows={1} value={input}
         disabled={recipientLocked}
         enterKeyHint="enter"

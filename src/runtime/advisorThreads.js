@@ -6,6 +6,7 @@ import { getPoliticalProfile } from "./politicalActors.js";
 export const CHIEF_ADVISOR_THREAD = "chief";
 export const ADVISOR_PERSONALITY_MAX_CHARS = 1200;
 export const ADVISOR_CONTACT_ROLE = "advisor-contact";
+export const CHIEF_ADVISOR_PROFILE_ROLE = "advisor-chief-profile";
 const MESSAGE_ROLES = new Set(["user", "advisor", "error", "notice"]);
 const OFFICE_ROLES = Object.freeze({
   headOfGovernment: "Head of government",
@@ -15,6 +16,45 @@ const clean = (value, max = 200) => String(value ?? "").replace(/\s+/g, " ").tri
 const array = (value) => Array.isArray(value) ? value : [];
 const validId = (id) => /^advisor-[a-z0-9][a-z0-9_-]{5,79}$/.test(String(id || ""));
 const threadOf = (entry) => clean(entry?.threadId, 100) || CHIEF_ADVISOR_THREAD;
+
+// A chief-advisor identity is an optional override, not another contact or
+// a replacement for the scenario's original Advisor prompt. Old campaigns keep
+// their chief conversation and instructions unless the player edits this.
+export const chiefAdvisorProfile = (entries) => {
+  const profiles = array(entries).filter((entry) => entry?.role === CHIEF_ADVISOR_PROFILE_ROLE);
+  if (profiles.length !== 1) return null;
+  const profile = profiles[0];
+  if (!clean(profile.name, 100) || !clean(profile.title, 120)) return null;
+  return {
+    role: CHIEF_ADVISOR_PROFILE_ROLE,
+    name: clean(profile.name, 100),
+    title: clean(profile.title, 120),
+    personality: clean(profile.personality, ADVISOR_PERSONALITY_MAX_CHARS),
+  };
+};
+
+export const saveChiefAdvisorProfile = (entries, changes) => {
+  const source = array(entries);
+  if (source.filter((entry) => entry?.role === CHIEF_ADVISOR_PROFILE_ROLE).length > 1) {
+    throw new Error("Duplicate chief advisor profiles are not allowed.");
+  }
+  const name = clean(changes?.name, 100);
+  const title = clean(changes?.title, 120);
+  if (!name || !title) throw new Error("Chief advisor needs a name and position.");
+  if (String(changes?.personality ?? "").length > ADVISOR_PERSONALITY_MAX_CHARS) {
+    throw new Error(`Chief advisor personality cannot exceed ${ADVISOR_PERSONALITY_MAX_CHARS} characters.`);
+  }
+  const profile = {
+    role: CHIEF_ADVISOR_PROFILE_ROLE, name, title,
+    personality: clean(changes?.personality, ADVISOR_PERSONALITY_MAX_CHARS),
+  };
+  const existing = source.findIndex((entry) => entry?.role === CHIEF_ADVISOR_PROFILE_ROLE);
+  if (existing < 0) return [...source, profile];
+  return source.map((entry, index) => index === existing ? profile : entry);
+};
+
+export const resetChiefAdvisorProfile = (entries) => array(entries)
+  .filter((entry) => entry?.role !== CHIEF_ADVISOR_PROFILE_ROLE);
 
 export const advisorContacts = (entries) => array(entries)
   .filter((entry) => entry?.role === ADVISOR_CONTACT_ROLE && validId(entry.id))

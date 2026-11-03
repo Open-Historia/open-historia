@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   CHIEF_ADVISOR_THREAD,
+  chiefAdvisorProfile,
+  saveChiefAdvisorProfile,
+  resetChiefAdvisorProfile,
   advisorContacts,
   advisorMessagesFor,
   advisorOfficeStatus,
@@ -88,6 +91,71 @@ test("fails closed on malformed, duplicate or unknown-contact mutations", () => 
   assert.throws(() => archiveAdvisorContact([], "advisor-unknown-001"), /Unknown/);
   assert.throws(() => replaceAdvisorThread(make(), "advisor-marina-001", [m("surprise", "x")]), /valid message/);
   assert.throws(() => replaceAdvisorThread(make(), "advisor-marina-001", [m("user", "belongs to another minister", "advisor-other-001")]), /cannot be moved/);
+});
+
+test("chief identity defaults to the unchanged legacy single-advisor conversation", () => {
+  const legacy = [
+    { role: "user", text: "Keep the original transcript" },
+    { role: "notice", id: "paper-1", text: "Cabinet briefing" },
+    { role: "advisor", text: "Understood, Mr. President", memory: "Existing memory" },
+  ];
+  assert.equal(chiefAdvisorProfile(legacy), null);
+  assert.deepEqual(resetChiefAdvisorProfile(legacy), legacy);
+  const customized = saveChiefAdvisorProfile(legacy, {
+    name: "Dmitri Orlov", title: "Chief Advisor", personality: "Strict and candid.",
+  });
+  assert.deepEqual(advisorMessagesFor(customized, CHIEF_ADVISOR_THREAD), legacy);
+  assert.deepEqual(chiefAdvisorProfile(customized), {
+    role: "advisor-chief-profile", name: "Dmitri Orlov", title: "Chief Advisor", personality: "Strict and candid.",
+  });
+  const restored = resetChiefAdvisorProfile(customized);
+  assert.deepEqual(restored, legacy);
+});
+
+test("editing the chief profile never touches other recipients or their messages", () => {
+  const original = replaceAdvisorThread(make([{ role: "user", text: "Chief discussion" }]), "advisor-marina-001", [
+    { role: "user", text: "Private treasury discussion" },
+  ]);
+  const changed = saveChiefAdvisorProfile(original, {
+    name: "Graf Friedrich von Rabenfeld", title: "Royal Advisor", personality: "Blunt and pragmatic",
+  });
+  const edited = saveChiefAdvisorProfile(changed, {
+    name: "Graf Friedrich von Rabenfeld", title: "Royal Advisor", personality: "Formal and decisive",
+  });
+  assert.equal(edited.filter((entry) => entry.role === "advisor-chief-profile").length, 1);
+  assert.equal(chiefAdvisorProfile(edited).personality, "Formal and decisive");
+  assert.deepEqual(resetChiefAdvisorProfile(edited), original);
+  assert.deepEqual(advisorContacts(edited), advisorContacts(original));
+  assert.deepEqual(advisorMessagesFor(edited, "advisor-marina-001"), advisorMessagesFor(original, "advisor-marina-001"));
+});
+
+test("chief customization survives later message saves and preserves interleaved native notices", () => {
+  const initial = make([
+    { role: "user", text: "Old question" },
+    { role: "notice", id: "paper-18", text: "Delivered briefing" },
+    { role: "advisor", text: "Old reply" },
+  ]);
+  const profiled = saveChiefAdvisorProfile(initial, {
+    name: "Dmitri Orlov", title: "Chief Advisor", personality: "Candid",
+  });
+  const afterChief = replaceAdvisorThread(profiled, CHIEF_ADVISOR_THREAD, [
+    ...advisorMessagesFor(profiled, CHIEF_ADVISOR_THREAD),
+    { role: "user", text: "New question" },
+  ]);
+  assert.equal(chiefAdvisorProfile(afterChief).name, "Dmitri Orlov");
+  assert.equal(afterChief.filter((entry) => entry.role === "notice").length, 1);
+  const afterMinister = replaceAdvisorThread(afterChief, "advisor-marina-001", [
+    { role: "user", text: "Treasury question" },
+  ]);
+  assert.deepEqual(chiefAdvisorProfile(afterMinister), chiefAdvisorProfile(profiled));
+  assert.equal(advisorMessagesFor(afterMinister, CHIEF_ADVISOR_THREAD).filter((entry) => entry.role === "user").length, 2);
+  assert.equal(afterMinister.find((entry) => entry.role === "notice").id, "paper-18");
+});
+
+test("chief profile validation rejects invalid empty identity or invalid profile length", () => {
+  assert.throws(() => saveChiefAdvisorProfile([], { name: " ", title: "Advisor", personality: "" }), /name and position/);
+  assert.throws(() => saveChiefAdvisorProfile([], { name: "Dmitri", title: " ", personality: "" }), /name and position/);
+  assert.throws(() => saveChiefAdvisorProfile([], { name: "Dmitri", title: "Advisor", personality: "x".repeat(1201) }), /1200/);
 });
 
 test("Political World bindings resolve canonical polity aliases without duplicating officeholders", () => {

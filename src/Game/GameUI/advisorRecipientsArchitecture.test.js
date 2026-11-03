@@ -45,6 +45,29 @@ test("recipient personality shows a live Rostra-style used/maximum character cou
   assert.match(contacts, /data-no-translate/);
 });
 
+test("retiring a contact requires an explicit Cancel or Retire contact choice", () => {
+  const contacts = read("./AdvisorRecipients.jsx");
+  assert.match(contacts, /role="alertdialog"/);
+  assert.match(contacts, /Retire \{contact\.name\}\?/);
+  assert.match(contacts, /The conversation and personality will be preserved/);
+  assert.match(contacts, /onClick=\{\(\) => retire\(contact, true\)\}/);
+  assert.match(contacts, /onClick=\{\(\) => \{ setConfirmArchive\(""\)/);
+});
+
+test("chief advisor can be customized and restored but cannot be retired", () => {
+  const contacts = read("./AdvisorRecipients.jsx");
+  const panel = read("./advisor.jsx");
+  const main = read("../AI/main.jsx");
+  assert.match(contacts, /onClick=\{openChiefEditor\}/);
+  assert.match(contacts, /Edit chief advisor/);
+  assert.match(contacts, /Restore scenario defaults/);
+  assert.match(contacts, /onSaveChief\(draft\)/);
+  assert.match(contacts, /onResetChief\(\)/);
+  assert.match(panel, /saveChiefAdvisorProfile\(all, draft\)/);
+  assert.match(panel, /resetChiefAdvisorProfile\(all\)/);
+  assert.match(main, /describeChiefAdvisorOverride\(chiefAdvisorProfile\(advisorData\)\)/);
+});
+
 test("Political World only identifies explicit officeholders; no invented cabinet positions", () => {
   const contacts = read("./AdvisorRecipients.jsx");
   assert.match(contacts, /Link to Political World \(optional\)/);
