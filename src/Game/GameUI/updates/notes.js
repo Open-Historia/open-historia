@@ -53,6 +53,25 @@ import { PAST_UPDATES } from "./notesPast.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // thekernely's #936-#939 (Advisor contacts: runtime/advisorThreads.js; party authoring: countryEditorPolitical.js;
+    // metadata-only diplomacy replies) with the review's fixes (2026-11-03).
+    id: "2026-11-advisor-contacts",
+    kind: "minor",
+    date: "2026-11-03",
+    channel: "beta",
+    banners: [
+      {
+        title: "Advisor contacts and party details",
+        items: [
+          "The Advisor panel can hold more people to write to: add an official with a position and a personality, or your country's head of state or head of government, and each keeps a conversation of its own.",
+          "Only your chief advisor puts Actions and Projects into effect; the others advise.",
+          "The Workshop and the Country Editor now edit each party's native name, ideology, seats, founding year and colour, and the legislature's size and next election, and check that seats and support add up.",
+          "A leader's reply with no words is shown as the error it is, and one that only answers your peace offer still makes the peace.",
+        ],
+      },
+    ],
+  },
+  {
     // An Update downloads the post's update copy, which the hub does not count (runtime/hubFiles.js updateCopyOf;
     // the hub's index `updates`); the owner's ask, 2026-11-03.
     id: "2026-11-updates-not-imports",

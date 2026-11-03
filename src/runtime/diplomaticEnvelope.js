@@ -44,8 +44,11 @@ export const parseDiplomaticEnvelope = (raw) => {
 
   // Metadata alone cannot stand in for a leader speaking. Failing here makes
   // both ordinary and advisor-drafted diplomacy take their existing error path,
-  // rather than persisting a blank, apparently successful chat bubble.
-  if (!text) throw new Error("Diplomatic AI response contained no visible diplomatic reply.");
+  // rather than persisting a blank, apparently successful chat bubble. A PEACE
+  // line is the exception: it is the leader's answer, and the reply carries the
+  // peace offer it settles (chat.jsx answerPeaceInChat). Refusing it lost the
+  // verdict and asked the player to spend a second request on a Retry.
+  if (!text && !peace) throw new Error("Diplomatic AI response contained no visible diplomatic reply.");
 
   return { reply: text, reaction, memorySummary, peace };
 };

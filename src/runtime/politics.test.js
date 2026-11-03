@@ -199,3 +199,15 @@ test("an election is due when its date has come, read from free text, and the ti
   assert.match(block, /update-party with each party's new seats/);
   assert.equal(describeElectionsDue({ byPolity: {} }, { date: "1936-05-01" }), "");
 });
+
+// Review of #937 (2026-11-03): the shares checked are rounded, so a valid answer of 38.5 + 31.5 + 20.5 + 9.5 = 100
+// arrived as 102 and the whole compiled landscape (and its request) was thrown away.
+test("a compiled landscape whose shares total 100 before rounding is not refused for the rounding", () => {
+  const entry = normalizePoliticalLandscape({
+    government: "Parliamentary Republic",
+    kind: "parties",
+    parties: [38.5, 31.5, 20.5, 9.5].map((support, index) => party({ nameEn: `P${index}`, nameNative: `P${index}`, support })),
+  });
+  assert.equal(entry.parties.reduce((sum, p) => sum + p.support, 0), 102);
+  assert.doesNotThrow(() => assertPoliticalLandscapeConsistency(entry));
+});
