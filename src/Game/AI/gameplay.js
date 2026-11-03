@@ -9231,11 +9231,15 @@ const applySimulationResult = async ({
   }
   // A war a player fights ends only by a peace that player makes or accepts
   // (playersWarsHold.js): the skip's end, ceasefire or a player's leaving is
-  // refused, with the events that told it and what they changed on the map.
-  const playersWars = holdPlayersWars({ updates: result.warUpdates, events: curatedEvents, wars: baseWorld?.wars, players: humanCountriesOf(baseGame) });
+  // refused, with the events that told it and what they changed on the map. One
+  // the player's own order brought about is put to the other side as their offer
+  // of peace instead (turnWarAndPeace below).
+  const playersWars = holdPlayersWars({ updates: result.warUpdates, events: curatedEvents, wars: baseWorld?.wars, players: humanCountriesOf(baseGame), orders: baseActions });
   if (playersWars.refused.length) {
     curatedEvents = playersWars.events;
+    const offered = new Set(playersWars.proposals.map((entry) => entry.update));
     for (const update of playersWars.refused) {
+      if (offered.has(update)) continue;
       logDebugEvent("turn", `The skip's ${update.op} for ${update.id} was refused: a war a player fights ends only by a peace that player makes or accepts.`, update);
       noteReceipt(receipt, "dropped", `"${update.op}" for ${update.id}, and the events that told it: a war a player fights ends only by a peace that player makes or accepts. To bring them to peace, offer it in a letter.`);
     }
@@ -9761,6 +9765,16 @@ const applySimulationResult = async ({
     held: await regionHoldingsOf(worldWithImpacts, nextGame, campaignId),
     treaties: readTreatyLines(result.peaceTreaties),
     onRefused: (treaty) => logDebugEvent("turn", `The skip's peace between ${treaty.from} and ${treaty.to} was not made: ${treaty.reason}.`),
+    // A player's order to end their war: their offer of peace, put to the other side.
+    proposals: playersWars.proposals,
+    onProposed: ({ warId, from, to, offer, reason }) => {
+      if (offer) {
+        logDebugEvent("turn", `${from}'s order to end ${warId} was put to ${to} as an offer of peace.`, offer);
+        noteReceipt(receipt, "dropped", `The end of ${warId}: ${from}'s order offers ${to} peace instead, each keeping what it holds. ${to}'s answer comes with the next skip.`);
+      } else {
+        logDebugEvent("turn", `${from}'s order to end ${warId} offered nothing: ${reason}.`);
+      }
+    },
   });
   // A war's end and a country's fall clear the map (nativeUnitDirector.js
   // pruneWarUnits): the counters raised for a war that has ended, and the units

@@ -173,7 +173,8 @@ export const regionHoldingsOf = async (world, game, campaignId) => {
     const front = await readFrontMap(world, game, campaignId);
     const readers = frontWorldReaders(world, { baseOwners: front.baseOwners, groups: false });
     for (const id of front.regionIds) add(readers.controllerOf(id));
-    if (held.size > 0) return held;
+    // (Every region of the map counted: a country with none holds no land at all.)
+    if (held.size > 0) return Object.assign(held, { complete: true });
   } catch (error) {
     console.warn("[peace] the map's regions could not be counted; the world's own list is used.", error);
   }
