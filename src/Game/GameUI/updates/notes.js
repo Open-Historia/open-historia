@@ -53,6 +53,24 @@ import { PAST_UPDATES } from "./notesPast.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // "fully conquouring an enemy should end the war" (the owner, 2026-11-03), after a player's war on the
+    // protectorate they had made went on for two years (warAndPeace.js endConqueredWars, endWarsOnPuppets;
+    // playersWarsHold.js).
+    id: "2026-11-wars-end-when-won",
+    kind: "minor",
+    date: "2026-11-03",
+    channel: "beta",
+    banners: [
+      {
+        title: "Wars end when they are won",
+        items: [
+          "A war ends when one side is fully conquered, or becomes the other side's puppet.",
+          "Ordering a war of yours to end now offers your enemy peace, each side keeping what it holds; their government answers in the next time skip.",
+        ],
+      },
+    ],
+  },
+  {
     // "replace the listen in feature with a new button where the projects button was where it opens a social media
     // application ... things that happen on the social media should be in the time skip ai's (simulation agent)
     // context", "on beta add the projects menu as a tab in the actions menu", "make sure the social media feature is

@@ -51,8 +51,26 @@ test("a war that is not in the ledger yet is left to the ledger", () => {
 
 test("the turn holds a player's wars before it keeps the ledger records, and the skip is told the rule", () => {
   const gameplay = fs.readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
-  assert.match(gameplay, /const playersWars = holdPlayersWars\(\{ updates: result\.warUpdates, events: curatedEvents, wars: baseWorld\?\.wars, players: humanCountriesOf\(baseGame\) \}\);/);
+  assert.match(gameplay, /const playersWars = holdPlayersWars\(\{ updates: result\.warUpdates, events: curatedEvents, wars: baseWorld\?\.wars, players: humanCountriesOf\(baseGame\), orders: baseActions \}\);/);
   assert.match(gameplay, /filterBoundLedgerUpdatesToKeptEvents\(playersWars\.updates, dedupedEvents, curatedEvents\)/);
   const prompt = fs.readFileSync(new URL("./peacePrompt.js", import.meta.url), "utf8");
-  assert.match(prompt, /A war a player fights ends only by a peace that player makes or accepts/);
+  assert.match(prompt, /A player's order to end their war is their offer of peace/);
+});
+
+// "an action shouldnt inherently be able to end a war, but it offers peace to the opponent" (the owner, 2026-11-03).
+test("an ending the player's own order brought about is refused too, and handed back as their offer of peace", () => {
+  const ordered = [
+    ...events,
+    { id: "evt-4", title: "Ukraine offers to end the war", impacts: { actionIds: ["action-end"] } },
+    { id: "evt-5", title: "Ukraine signs the Geneva peace", impacts: { actionIds: ["action-other"] } },
+  ];
+  const orders = [{ id: "action-end", text: "the war is over, bring the troops home" }, { id: "action-other", country: "Moldova", text: "a trade deal" }];
+  const update = { id: "war-russia-ukraine", op: "end", actors: [], opponents: [], eventIds: ["evt-4"] };
+  const held = holdPlayersWars({ updates: [update], events: ordered, wars, players: ["Ukraine"], orders });
+  assert.deepEqual(held.updates, []);
+  assert.equal(held.refused.length, 1);
+  assert.deepEqual(held.proposals, [{ warId: "war-russia-ukraine", from: "Ukraine", update }]);
+  const theirs = holdPlayersWars({ updates: [{ ...update, eventIds: ["evt-5"] }], events: ordered, wars, players: ["Ukraine"], orders });
+  assert.deepEqual(theirs.proposals, [], "an order given for a country that is not in the war offers nothing");
+  assert.deepEqual(holdPlayersWars({ updates: [{ ...update, eventIds: ["evt-1"] }], events: ordered, wars, players: ["Ukraine"], orders }).proposals, []);
 });

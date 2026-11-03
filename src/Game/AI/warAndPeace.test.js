@@ -24,6 +24,8 @@ import {
   answerCallToArms,
   answerPeaceProposal,
   declinePeaceOffer,
+  endConqueredWars,
+  endWarsOnPuppets,
   groundReader,
   makePeace,
   offerPeace,
@@ -329,6 +331,68 @@ test("a peace made lapses its war's open calls to arms and leaves its battlefiel
   assert.equal(playerFronts([battlefield], "Aland", base.wars).length, 1);
   assert.equal(playerFronts([battlefield], "Aland", peace.wars).length, 0);
   assert.equal(playerFronts([battlefield], "Aland").length, 1);
+});
+
+// "i conquered czechia fully as germany and i want to end the war but somehow my game still thinks im in war" (a
+// player's report, 2026-11-03): Germany made Czechia its protectorate, and its war on the protectorate went on.
+test("a war on a country that has become a side's puppet ends at the end of the turn, with no terms", () => {
+  const call = { id: "call:war-1:Cobaltia", warId: "war-1", ally: "Cobaltia", defender: "Borduria", status: "open", round: 1 };
+  const puppet = { id: "puppet-aland-borduria-0", overlord: "Aland", puppet: "Borduria", kind: "protectorate", loyalty: 95, secrecy: "open", status: "active" };
+  const base = world({ puppets: [puppet], callsToArms: [call] });
+  const after = turnWarAndPeace({ world: base, baseWorld: base, days: 30, date: "1914-10-01", round: 4, players: ["Aland"] });
+  assert.equal(war(after).status, "ended");
+  assert.equal(endWarsOnPuppets(base, { date: "1914-10-01", round: 4 }).callsToArms.find((entry) => entry.id === call.id)?.status, "lapsed");
+  assert.equal(after.regionOwnershipOverrides.b8, "Aland", "what the overlord holds it keeps");
+  assert.deepEqual(after.peaceTreaties ?? [], [], "no treaty: nobody made terms");
+  // The other way round too, and both of two wars on the same pair (a ledger that started the war twice).
+  const twice = world({ wars: [WAR, { ...WAR, id: "war-2" }], puppets: [{ ...puppet, overlord: "Borduria", puppet: "Aland" }] });
+  assert.deepEqual(endWarsOnPuppets(twice, { date: "1914-10-01", round: 4 }).wars.map((entry) => entry.status), ["ended", "ended"]);
+  // A puppet set free, or one of someone outside the war, ends nothing; nor does a side with a member that is no one's.
+  for (const puppets of [[{ ...puppet, status: "released" }], [{ ...puppet, overlord: "Cisland" }]]) {
+    assert.equal(war(endWarsOnPuppets(world({ puppets }), { date: "1914-10-01", round: 4 })).status, "active");
+  }
+  const allied = world({ wars: [{ ...WAR, sideB: ["Borduria", "Cisland"] }], puppets: [puppet] });
+  assert.equal(war(endWarsOnPuppets(allied, { date: "1914-10-01", round: 4 })).status, "active");
+});
+
+// "an action shouldnt inherently be able to end a war, but it offers peace to the opponent" (the owner, 2026-11-03).
+test("a player's order to end their war is put to the enemy as their offer, which the next skip's peace line accepts", () => {
+  const base = world();
+  const proposed = [];
+  const offered = turnWarAndPeace({ world: base, baseWorld: base, days: 30, date: "1914-10-01", round: 4, players: ["Aland"], proposals: [{ warId: "war-1", from: "Aland" }], onProposed: (entry) => proposed.push(entry) });
+  assert.equal(war(offered).status, "active", "the war goes on");
+  const offer = offered.peaceOffers.find((entry) => entry.status === "open");
+  assert.equal(offer?.from, "Aland");
+  assert.equal(offer?.to, "Borduria");
+  assert.equal(offer?.terms?.territory, TERRITORY_AS_HELD);
+  assert.equal(proposed[0]?.to, "Borduria");
+  // Next period: Borduria's government takes it, the skip writing the player's country first.
+  const next = turnWarAndPeace({ world: offered, baseWorld: offered, days: 30, date: "1914-11-01", round: 5, players: ["Aland"], treaties: [{ from: "Aland", to: "Borduria", terms: { territory: TERRITORY_RESTORED } }] });
+  assert.equal(war(next).status, "ended");
+  assert.equal(next.peaceOffers.find((entry) => entry.id === offer.id)?.status, "accepted");
+  assert.equal(holder(next, "b8"), "Aland", "on the terms offered, not those the line wrote");
+  // Without the player's offer, a peace line in their war is refused as before.
+  const refused = [];
+  const none = turnWarAndPeace({ world: base, baseWorld: base, days: 30, date: "1914-10-01", round: 4, players: ["Aland"], treaties: [{ from: "Aland", to: "Borduria", terms: null }], onRefused: (entry) => refused.push(entry) });
+  assert.equal(war(none).status, "active");
+  assert.equal(refused.length, 1);
+});
+
+// "fully conquouring an enemy should end the war" (the owner, 2026-11-03).
+test("a war in which one side's countries hold no land at all ends at the end of the turn, the conqueror keeping it", () => {
+  const conquered = world({ regionOwnershipOverrides: { ...regions("a", "Aland", 10), ...regions("b", "Aland", 10), ...regions("c", "Cisland", 4) } });
+  const after = turnWarAndPeace({ world: conquered, baseWorld: conquered, days: 30, date: "1914-10-01", round: 4, players: ["Aland"] });
+  assert.equal(war(after).status, "ended");
+  assert.match(war(after).note ?? "", /Borduria fully conquered by Aland/);
+  assert.equal(holder(after, "b1"), "Aland");
+  // Not while it holds a region; and a side of groups, who fight without land, never ends this way.
+  assert.equal(war(endConqueredWars(world(), { date: "1914-10-01", round: 4 })).status, "active");
+  const insurgents = world({ wars: [{ ...WAR, sideB: ["Black Hand"] }], groups: { "Black Hand": { name: "Black Hand" } } });
+  assert.equal(war(endConqueredWars(insurgents, { date: "1914-10-01", round: 4 })).status, "active");
+  // Nor on a count of only the regions that changed hands (a map the turn could not read).
+  assert.equal(war(endConqueredWars(conquered, { held: new Map([["aland", 20]]), date: "1914-10-01", round: 4 })).status, "active");
+  const frontApply = read("frontApply.js");
+  assert.match(frontApply, /if \(held\.size > 0\) return Object\.assign\(held, \{ complete: true \}\);/);
 });
 
 test("countries are matched in diplomacy by their one name only", () => {
