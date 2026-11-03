@@ -42,6 +42,11 @@ export const parseDiplomaticEnvelope = (raw) => {
     text = text.slice(0, memoryMatch.index).trimEnd();
   }
 
+  // Metadata alone cannot stand in for a leader speaking. Failing here makes
+  // both ordinary and advisor-drafted diplomacy take their existing error path,
+  // rather than persisting a blank, apparently successful chat bubble.
+  if (!text) throw new Error("Diplomatic AI response contained no visible diplomatic reply.");
+
   return { reply: text, reaction, memorySummary, peace };
 };
 
