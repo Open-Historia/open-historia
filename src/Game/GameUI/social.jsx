@@ -34,6 +34,7 @@ import { getLibraryState } from "../../runtime/library.js";
 import { logDebugEvent } from "../../runtime/debugLog.js";
 import { APP_HEIGHT, useShortTouchScreen, useTouchPrimary } from "../../runtime/mobileUi.js";
 import { toCountryName } from "../../runtime/ownerNames.js";
+import { knownPolityNames } from "../../runtime/countryInfoPanel.js";
 import {
   SOCIAL_POST_MAX_CHARS,
   compactCount,
@@ -50,6 +51,9 @@ import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
 import { inSharedGame, requestFromHost } from "../../multiplayer/client/sharedGameBridge.js";
 import { useTurnRunning } from "./useTurnRunning.js";
+import { generateRostraListenInPosts } from "../AI/gameplayLazy.js";
+import { resolvePolityFlag } from "../../runtime/polityFlags.js";
+import { getWorldStateSnapshot } from "../Map/useWorldState.js";
 
 // Rostra's own colours: the game's grey, and the accent for what is the
 // player's and what can be pressed.
@@ -74,6 +78,8 @@ const ensureStyles = () => {
   style.id = STYLE_ID;
   style.textContent = `
   @keyframes rostraIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+  .rostra-spin { animation: spin 0.85s linear infinite; }
   .rostra-post { animation: rostraIn 0.28s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
   .rostra-scroll { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.2) transparent; }
   .rostra-action:hover { color: ${ACCENT}; }
@@ -87,15 +93,12 @@ const ensureStyles = () => {
 
 const stroke = { fill: "none", stroke: "currentColor", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": true };
 
-// A speaker at a lectern, speaking to the world.
+// A modern smartphone.
 const RostraDockIcon = () => (
   <svg width="18" height="18" viewBox="0 0 24 24" strokeWidth="1.9" {...stroke}>
-    <path d="M7.5 21h9l-1.4-8.5H8.9z" />
-    <path d="M5.5 12.5h13" />
-    <path d="M12 12.5V8.2" />
-    <circle cx="12" cy="6.4" r="1.6" />
-    <path d="M16.6 4.2a4.2 4.2 0 0 1 0 4.6" />
-    <path d="M7.4 4.2a4.2 4.2 0 0 0 0 4.6" />
+    <rect x="5.5" y="2" width="13" height="20" rx="3" />
+    <path d="M10.5 5h3" />
+    <path d="M9.5 19h5" />
   </svg>
 );
 
@@ -158,6 +161,28 @@ const PersonIcon = () => (
     <path d="M4.5 21c.8-4.2 3.3-6.3 7.5-6.3s6.7 2.1 7.5 6.3" />
   </svg>
 );
+const SearchIcon = () => (
+  <svg width="21" height="21" viewBox="0 0 24 24" strokeWidth="1.8" {...stroke}>
+    <circle cx="11" cy="11" r="7" />
+    <path d="M20 20l-3.5-3.5" />
+  </svg>
+);
+const RefreshIcon = ({ spinning = false }) => (
+  <svg
+    width="16"
+    height="16"
+    viewBox="0 0 24 24"
+    strokeWidth="2"
+    className={spinning ? "rostra-spin" : undefined}
+    style={{ transformOrigin: "center" }}
+    {...stroke}
+  >
+    <path d="M21 4v6h-6" />
+    <path d="M3 20v-6h6" />
+    <path d="M5.2 9a8 8 0 0 1 13.6-2.6L21 10" />
+    <path d="M18.8 15a8 8 0 0 1-13.6 2.6L3 14" />
+  </svg>
+);
 
 // The top of a phone's screen: the time (here, the game's day), the island, and
 // the signal, wireless and battery marks. Only drawn inside the frame.
@@ -182,14 +207,17 @@ const initials = (name) => {
 };
 
 // A polity's flag by the precedence every flag in the game follows (see
-// resolveOwnerFlagUrl in projects.jsx): the scenario's own upload, then the
-// polity's, then the ISO flag its name resolves to.
-const flagFor = (country, customFlags, polities) => {
+// resolvePolityFlag in polityFlags.js): custom uploaded flag, polity record flag,
+// map-ref GADM/ISO base flag, or stock national flag.
+const flagFor = (country, customFlags, polities, world) => {
   const name = String(country ?? "").trim();
   if (!name) return "";
+  const activeWorld = world || (typeof getWorldStateSnapshot === "function" ? getWorldStateSnapshot() : null) || {};
+  const resolved = resolvePolityFlag({ polity: name, world: activeWorld, flags: customFlags || {} });
+  if (resolved?.imageUrl) return resolved.imageUrl;
   const key = polities?.[name]
     ? name
-    : Object.keys(polities ?? {}).find((entry) => String(polities[entry]?.name ?? "").trim() === name) || name;
+    : Object.keys(polities ?? {}).find((entry) => String(polities[entry]?.name ?? "").trim().toLowerCase() === name.toLowerCase()) || name;
   return customFlags?.[key] || customFlags?.[name] || polities?.[key]?.flag || flagImageUrlFromGid(key) || flagImageUrlFromGid(name) || "";
 };
 
@@ -250,7 +278,7 @@ const QuotedPost = ({ post, gone, flags }) => {
   return (
     <div style={{ border: `1px solid rgba(255,255,255,0.12)`, borderRadius: "10px", marginTop: "0.55rem", padding: "0.55rem 0.7rem" }}>
       <div style={{ alignItems: "center", display: "flex", gap: "0.45rem", minWidth: 0 }}>
-        <Avatar name={post.author} flagUrl={flagFor(post.country, flags.custom, flags.polities)} mine={post.kind === "player"} size={1.3} />
+        <Avatar name={post.author} flagUrl={flagFor(post.country, flags.custom, flags.polities, flags.world)} mine={post.kind === "player"} size={1.3} />
         <span data-no-translate style={{ color: INK, fontSize: "0.76rem", fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{post.author}</span>
         {post.role && <span data-no-translate style={{ color: INK_FAINT, fontSize: "0.7rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{post.role}</span>}
         <span style={{ color: INK_FAINT, flexShrink: 0, fontSize: "0.68rem", marginLeft: "auto" }}>{postDate(post.date)}</span>
@@ -274,7 +302,7 @@ const PostCard = memo(({ post, feed, round, flags, mine, onQuote, canPost }) => 
   const waiting = post.kind === "player" && Number(round) <= Number(post.round);
   return (
     <article className="rostra-post" style={{ borderBottom: `1px solid ${LINE}`, display: "flex", gap: "0.65rem", padding: "0.8rem 1rem" }}>
-      <Avatar name={post.author} flagUrl={flagFor(post.country, flags.custom, flags.polities)} mine={mine} />
+      <Avatar name={post.author} flagUrl={flagFor(post.country, flags.custom, flags.polities, flags.world)} mine={mine} />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ alignItems: "baseline", display: "flex", gap: "0.4rem", minWidth: 0 }}>
           <span data-no-translate style={{ color: INK, fontSize: "0.84rem", fontWeight: 800, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{post.author}</span>
@@ -340,6 +368,7 @@ const accountOf = (country) => (world) => {
 // The tab bar along the foot of the screen, as such apps have it.
 const TABS = [
   ["all", "For you", HomeIcon],
+  ["search", "Search", SearchIcon],
   ["country", "Your country", FlagIcon],
   ["mentions", "Mentions", BellIcon],
   ["mine", "Your posts", PersonIcon],
@@ -347,15 +376,26 @@ const TABS = [
 
 const EMPTY_TEXTS = {
   all: "Nothing has been posted yet. The people who make the news post as time passes, and you can post first.",
+  search: "No posts found for this country or search term.",
   country: "Nobody from your country has posted yet.",
   mentions: "Nobody has mentioned you yet. Post something, and the answers come with the next time skip.",
   mine: "You have not posted yet.",
+};
+
+const _rostraOpenSubs = new Set();
+export const openRostraListenIn = (countryName, { autoGenerate = true } = {}) => {
+  const target = String(countryName || "").trim();
+  if (!target) return;
+  _rostraOpenSubs.forEach((fn) => {
+    try { fn(target, autoGenerate); } catch { /* noop */ }
+  });
 };
 
 const SocialPanel = ({ isOpen, onClose, onSeen }) => {
   const game = useRuntimeState("game", selectGame);
   const feed = useRuntimeState("world", selectFeed);
   const polities = useRuntimeState("world", selectPolities);
+  const world = useRuntimeState("world", (w) => w);
   const country = toCountryName(game.country) || game.country;
   const [author, role, leader] = useRuntimeState("world", accountOf(country), country).split("\u0000");
   const turnRunning = useTurnRunning(isOpen);
@@ -364,6 +404,9 @@ const SocialPanel = ({ isOpen, onClose, onSeen }) => {
   const shortTouch = useShortTouchScreen();
   const framed = !isMobile && !shortTouch;
   const [tab, setTab] = useState("all");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [selectedCountry, setSelectedCountry] = useState("");
+  const [refreshingCountry, setRefreshingCountry] = useState(false);
   const [draft, setDraft] = useState("");
   const [quoting, setQuoting] = useState(null);
   const [posting, setPosting] = useState(false);
@@ -373,7 +416,21 @@ const SocialPanel = ({ isOpen, onClose, onSeen }) => {
   const boxRef = useRef(null);
   const scrollRef = useRef(null);
 
-  useEffect(() => { ensureStyles(); }, []);
+  useEffect(() => {
+    const handler = (targetCountry, autoGenerate) => {
+      setTab("search");
+      setSelectedCountry(targetCountry);
+      setSearchQuery(targetCountry);
+      if (autoGenerate) {
+        setRefreshingCountry(true);
+        generateRostraListenInPosts({ country: targetCountry, count: 6 })
+          .catch((err) => setError(err?.message || "Failed to generate new posts."))
+          .finally(() => setRefreshingCountry(false));
+      }
+    };
+    _rostraOpenSubs.add(handler);
+    return () => { _rostraOpenSubs.delete(handler); };
+  }, []);
 
   useEffect(() => {
     if (!isOpen) return undefined;
@@ -397,8 +454,49 @@ const SocialPanel = ({ isOpen, onClose, onSeen }) => {
     }
   }, [isOpen]);
 
-  const flags = useMemo(() => ({ custom: customFlags, polities }), [customFlags, polities]);
-  const posts = useMemo(() => socialFeedView(feed, { tab, country, leader }), [feed, tab, country, leader]);
+  const flags = useMemo(() => ({ custom: customFlags, polities, world }), [customFlags, polities, world]);
+  const activeSearchTarget = selectedCountry;
+  const posts = useMemo(
+    () => socialFeedView(feed, { tab, country, leader, targetCountry: tab === "search" ? activeSearchTarget : "" }),
+    [feed, tab, country, leader, activeSearchTarget],
+  );
+
+  // All polities in the world + active feed polities, sorted by feed activity then alphabetically
+  const allAvailableCountries = useMemo(() => {
+    const counts = new Map();
+    feed.forEach((p) => {
+      const c = p?.country ? String(p.country).trim() : "";
+      if (c) counts.set(c, (counts.get(c) || 0) + 1);
+    });
+
+    const known = knownPolityNames(world);
+    const seen = new Set();
+    const result = [];
+
+    // First, countries that have posted, sorted by post count
+    Array.from(counts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .forEach(([name, count]) => {
+        seen.add(name.toLowerCase());
+        result.push({ name, count });
+      });
+
+    // Then, all remaining world countries
+    known
+      .filter((name) => !seen.has(name.toLowerCase()))
+      .sort((a, b) => a.localeCompare(b))
+      .forEach((name) => {
+        result.push({ name, count: 0 });
+      });
+
+    return result;
+  }, [feed, world]);
+
+  const filteredCountryList = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return allAvailableCountries;
+    return allAvailableCountries.filter((c) => c.name.toLowerCase().includes(q));
+  }, [allAvailableCountries, searchQuery]);
   const mentionCount = useMemo(
     () => feed.filter((post) => mentionsPlayer(post, { feed, country, leader }) && Number(post.round) >= game.round).length,
     [feed, country, leader, game.round],
@@ -406,6 +504,21 @@ const SocialPanel = ({ isOpen, onClose, onSeen }) => {
   const canPost = Boolean(country) && !turnRunning;
   const length = Array.from(draft.trim()).length;
   const tooLong = length > SOCIAL_POST_MAX_CHARS;
+
+  const handleRefreshListenIn = useCallback(async () => {
+    const target = selectedCountry || searchQuery.trim();
+    if (!target || refreshingCountry) return;
+    setRefreshingCountry(true);
+    setError("");
+    try {
+      await generateRostraListenInPosts({ country: target, count: 6 });
+      scrollRef.current?.scrollTo?.({ top: 0, behavior: "smooth" });
+    } catch (err) {
+      setError(err?.message || "Failed to generate new posts.");
+    } finally {
+      setRefreshingCountry(false);
+    }
+  }, [selectedCountry, searchQuery, refreshingCountry]);
 
   const startQuote = useCallback((post) => {
     setQuoting(post);
@@ -461,7 +574,7 @@ const SocialPanel = ({ isOpen, onClose, onSeen }) => {
     }
   };
 
-  const playerFlag = flagFor(country, customFlags, polities);
+  const playerFlag = flagFor(country, customFlags, polities, world);
   const shown = isOpen;
 
   // Where it rises from and how it goes, as the dock's other windows do
@@ -541,100 +654,320 @@ const SocialPanel = ({ isOpen, onClose, onSeen }) => {
         </div>
 
         <div ref={scrollRef} className="rostra-scroll" style={{ flex: 1, minHeight: 0, overflowY: "auto", overscrollBehavior: "contain" }}>
-          {/* The box: the player posts as their country's leader. */}
-          <div style={{ borderBottom: `1px solid ${LINE}`, display: "flex", gap: "0.65rem", padding: "0.85rem 1rem" }}>
-            <Avatar name={author} flagUrl={playerFlag} mine />
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ color: INK_FAINT, fontSize: "0.68rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                <span>Posting as</span>
-                {" "}
-                <span data-no-translate style={{ color: INK_SOFT, fontWeight: 700 }}>{[author, role].filter(Boolean).join(", ")}</span>
+          {tab === "search" ? (
+            selectedCountry ? (
+              <>
+                <div style={{ alignItems: "center", background: "rgba(255,255,255,0.03)", borderBottom: `1px solid ${LINE}`, display: "flex", justifyContent: "space-between", padding: "0.75rem 1rem", gap: "0.75rem" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", minWidth: 0 }}>
+                    {flagFor(selectedCountry, customFlags, polities, world) && (
+                      <img
+                        alt=""
+                        src={bundledFlagUrl(flagFor(selectedCountry, customFlags, polities, world))}
+                        style={{ borderRadius: "2px", height: "0.95rem", width: "1.35rem", objectFit: "cover", flexShrink: 0 }}
+                      />
+                    )}
+                    <div style={{ minWidth: 0 }}>
+                      <div data-no-translate style={{ color: INK, fontSize: "0.88rem", fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {selectedCountry}
+                      </div>
+                      <div style={{ color: INK_FAINT, fontSize: "0.68rem" }}>
+                        <span>Listening in on:</span>
+                        {" "}
+                        <span data-no-translate>{selectedCountry}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.45rem", flexShrink: 0 }}>
+                    <button
+                      type="button"
+                      className="oh-tap-row"
+                      onClick={() => void handleRefreshListenIn()}
+                      disabled={refreshingCountry || turnRunning}
+                      aria-label="Generate new posts"
+                      title="Generate 6 new AI posts for this country"
+                      style={{
+                        alignItems: "center",
+                        background: refreshingCountry ? "rgba(255,255,255,0.06)" : ACCENT_SOFT,
+                        border: `1px solid ${refreshingCountry ? LINE : ACCENT_EDGE}`,
+                        borderRadius: "8px",
+                        color: refreshingCountry ? INK_FAINT : ACCENT,
+                        cursor: refreshingCountry || turnRunning ? "default" : "pointer",
+                        display: "inline-flex",
+                        fontSize: "0.74rem",
+                        fontWeight: 700,
+                        gap: "0.35rem",
+                        padding: "0.32rem 0.65rem",
+                      }}
+                    >
+                      <RefreshIcon spinning={refreshingCountry} />
+                      <span>{refreshingCountry ? "Listening…" : "Refresh"}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      className="oh-tap"
+                      onClick={() => {
+                        setSelectedCountry("");
+                        setSearchQuery("");
+                      }}
+                      title="Clear search"
+                      aria-label="Clear search"
+                      style={{
+                        alignItems: "center",
+                        background: "rgba(255,255,255,0.06)",
+                        border: `1px solid ${LINE}`,
+                        borderRadius: "8px",
+                        color: INK_SOFT,
+                        cursor: "pointer",
+                        display: "inline-flex",
+                        fontSize: "0.72rem",
+                        padding: "0.32rem 0.6rem",
+                      }}
+                    >
+                      Clear search
+                    </button>
+                  </div>
+                </div>
+
+                {error && <div role="alert" style={{ color: "rgba(253,186,116,0.95)", fontSize: "0.74rem", padding: "0.5rem 1rem 0" }}>{error}</div>}
+
+                {posts.length === 0 ? (
+                  <div style={{ padding: "2.5rem 1.2rem", textAlign: "center" }}>
+                    <div style={{ fontSize: "2rem", marginBottom: "0.6rem" }}>📡</div>
+                    <div style={{ color: INK, fontSize: "0.92rem", fontWeight: 700, marginBottom: "0.35rem" }}>
+                      No posts found for this country or search term.
+                    </div>
+                    <button
+                      type="button"
+                      className="oh-tap-row"
+                      onClick={() => void handleRefreshListenIn()}
+                      disabled={refreshingCountry || turnRunning}
+                      style={{
+                        background: ACCENT,
+                        border: "none",
+                        borderRadius: "999px",
+                        color: "#06171d",
+                        cursor: "pointer",
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: "0.4rem",
+                        fontSize: "0.8rem",
+                        fontWeight: 800,
+                        padding: "0.5rem 1.25rem",
+                        marginTop: "0.8rem",
+                      }}
+                    >
+                      <RefreshIcon spinning={refreshingCountry} />
+                      <span>{refreshingCountry ? "Listening…" : "Generate new posts"}</span>
+                    </button>
+                  </div>
+                ) : (
+                  posts.map((post) => (
+                    <PostCard
+                      key={post.id}
+                      post={post}
+                      feed={feed}
+                      round={game.round}
+                      flags={flags}
+                      mine={post.kind === "player" && String(post.by || post.country).toLocaleLowerCase() === country.toLocaleLowerCase()}
+                      onQuote={startQuote}
+                      canPost={canPost}
+                    />
+                  ))
+                )}
+              </>
+            ) : (
+              <div>
+                <div style={{ borderBottom: `1px solid ${LINE}`, padding: "0.85rem 1rem" }}>
+                  <div style={{ alignItems: "center", background: "rgba(255,255,255,0.05)", border: `1px solid ${LINE}`, borderRadius: "10px", display: "flex", gap: "0.5rem", padding: "0.5rem 0.75rem" }}>
+                    <SearchIcon />
+                    <input
+                      type="text"
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      placeholder="Search countries to listen in…"
+                      style={{
+                        background: "transparent",
+                        border: "none",
+                        color: INK,
+                        flex: 1,
+                        fontFamily: "sans-serif",
+                        fontSize: "0.86rem",
+                        outline: "none",
+                        width: "100%",
+                      }}
+                      autoFocus
+                    />
+                    {searchQuery && (
+                      <button
+                        type="button"
+                        onClick={() => setSearchQuery("")}
+                        aria-label="Clear search"
+                        style={{ background: "none", border: "none", color: INK_FAINT, cursor: "pointer", display: "flex", padding: 0 }}
+                      >
+                        <CloseIcon />
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <div style={{ color: INK_FAINT, fontSize: "0.68rem", fontWeight: 700, letterSpacing: "0.05em", padding: "0.6rem 1rem 0.35rem", textTransform: "uppercase" }}>
+                  Search countries
+                </div>
+
+                {filteredCountryList.length === 0 ? (
+                  <p style={{ color: INK_FAINT, fontSize: "0.78rem", fontStyle: "italic", lineHeight: 1.5, margin: 0, padding: "1.2rem 1.1rem" }}>
+                    No posts found for this country or search term.
+                  </p>
+                ) : (
+                  filteredCountryList.map(({ name, count }) => (
+                    <div
+                      key={name}
+                      className="oh-tap-row"
+                      onClick={() => {
+                        setSelectedCountry(name);
+                        setSearchQuery("");
+                      }}
+                      style={{
+                        alignItems: "center",
+                        borderBottom: `1px solid ${LINE}`,
+                        cursor: "pointer",
+                        display: "flex",
+                        gap: "0.75rem",
+                        padding: "0.6rem 1rem",
+                        transition: "background 0.12s ease",
+                      }}
+                      onMouseEnter={(e) => e.currentTarget.style.background = "rgba(255,255,255,0.05)"}
+                      onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}
+                    >
+                      {flagFor(name, customFlags, polities, world) ? (
+                        <img
+                          alt=""
+                          src={bundledFlagUrl(flagFor(name, customFlags, polities, world))}
+                          style={{ borderRadius: "2px", height: "0.85rem", width: "1.2rem", objectFit: "cover", flexShrink: 0 }}
+                        />
+                      ) : (
+                        <span style={{ fontSize: "1rem", lineHeight: 1, width: "1.2rem", textAlign: "center" }}>🌐</span>
+                      )}
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div data-no-translate style={{ color: INK, fontSize: "0.84rem", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {name}
+                        </div>
+                      </div>
+                      {count > 0 ? (
+                        <span style={{ alignItems: "center", background: ACCENT_SOFT, border: `1px solid ${ACCENT_EDGE}`, borderRadius: "999px", color: ACCENT, display: "inline-flex", fontSize: "0.68rem", fontWeight: 700, padding: "0.1rem 0.45rem" }}>
+                          {count}
+                        </span>
+                      ) : (
+                        <span style={{ color: INK_FAINT, fontSize: "0.68rem" }}>
+                          0
+                        </span>
+                      )}
+                      <span style={{ color: INK_FAINT, fontSize: "0.8rem", marginLeft: "0.2rem" }}>›</span>
+                    </div>
+                  ))
+                )}
               </div>
-              <textarea
-                ref={boxRef}
-                className="rostra-composer"
-                value={draft}
-                disabled={!canPost}
-                onChange={(event) => { setDraft(event.target.value); setPosted(false); }}
-                onKeyDown={onKeyDown}
-                placeholder={canPost ? "What would you like to tell the world?" : "You can post again once the time skip has ended."}
-                rows={isTouch || framed ? 2 : 3}
-                enterKeyHint="enter"
-                style={{
-                  background: "transparent",
-                  border: "none",
-                  boxSizing: "border-box",
-                  color: INK,
-                  fontFamily: "sans-serif",
-                  fontSize: "0.9rem",
-                  lineHeight: 1.45,
-                  marginTop: "0.3rem",
-                  outline: "none",
-                  padding: 0,
-                  resize: "none",
-                  width: "100%",
-                }}
-              />
-              {quoting && (
-                <div style={{ position: "relative" }}>
-                  <QuotedPost post={quoting} gone={false} flags={flags} />
+            )
+          ) : (
+            <>
+              {/* The box: the player posts as their country's leader. */}
+            <div style={{ borderBottom: `1px solid ${LINE}`, display: "flex", gap: "0.65rem", padding: "0.85rem 1rem" }}>
+              <Avatar name={author} flagUrl={playerFlag} mine />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ color: INK_FAINT, fontSize: "0.68rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  <span>Posting as</span>
+                  {" "}
+                  <span data-no-translate style={{ color: INK_SOFT, fontWeight: 700 }}>{[author, role].filter(Boolean).join(", ")}</span>
+                </div>
+                <textarea
+                  ref={boxRef}
+                  className="rostra-composer"
+                  value={draft}
+                  disabled={!canPost}
+                  onChange={(event) => { setDraft(event.target.value); setPosted(false); }}
+                  onKeyDown={onKeyDown}
+                  placeholder={canPost ? "What would you like to tell the world?" : "You can post again once the time skip has ended."}
+                  rows={isTouch || framed ? 2 : 3}
+                  enterKeyHint="enter"
+                  style={{
+                    background: "transparent",
+                    border: "none",
+                    boxSizing: "border-box",
+                    color: INK,
+                    fontFamily: "sans-serif",
+                    fontSize: "0.9rem",
+                    lineHeight: 1.45,
+                    marginTop: "0.3rem",
+                    outline: "none",
+                    padding: 0,
+                    resize: "none",
+                    width: "100%",
+                  }}
+                />
+                {quoting && (
+                  <div style={{ position: "relative" }}>
+                    <QuotedPost post={quoting} gone={false} flags={flags} />
+                    <button
+                      type="button"
+                      className="oh-tap"
+                      onClick={() => setQuoting(null)}
+                      aria-label="Remove the quote"
+                      title="Remove the quote"
+                      style={{ alignItems: "center", background: "#18181b", border: "1px solid rgba(255,255,255,0.18)", borderRadius: "999px", color: INK_SOFT, cursor: "pointer", display: "flex", height: "1.4rem", justifyContent: "center", padding: 0, position: "absolute", right: "-0.35rem", top: "0.2rem", width: "1.4rem" }}
+                    >
+                      <CloseIcon />
+                    </button>
+                  </div>
+                )}
+                {error && <div role="alert" style={{ color: "rgba(253,186,116,0.95)", fontSize: "0.72rem", marginTop: "0.45rem" }}>{error}</div>}
+                {posted && !error && <div style={{ color: ACCENT, fontSize: "0.72rem", marginTop: "0.45rem" }}>Posted. The world answers with the next time skip.</div>}
+                <div style={{ alignItems: "center", borderTop: `1px solid ${LINE}`, display: "flex", gap: "0.6rem", justifyContent: "flex-end", marginTop: "0.5rem", paddingTop: "0.5rem" }}>
+                  <span data-no-translate style={{ color: tooLong ? "#f87171" : INK_FAINT, fontSize: "0.7rem" }}>
+                    {length}/{SOCIAL_POST_MAX_CHARS}
+                  </span>
                   <button
                     type="button"
-                    className="oh-tap"
-                    onClick={() => setQuoting(null)}
-                    aria-label="Remove the quote"
-                    title="Remove the quote"
-                    style={{ alignItems: "center", background: "#18181b", border: "1px solid rgba(255,255,255,0.18)", borderRadius: "999px", color: INK_SOFT, cursor: "pointer", display: "flex", height: "1.4rem", justifyContent: "center", padding: 0, position: "absolute", right: "-0.35rem", top: "0.2rem", width: "1.4rem" }}
+                    className="oh-tap-row"
+                    onClick={() => void submit()}
+                    disabled={!draft.trim() || tooLong || posting || !canPost}
+                    style={{
+                      background: draft.trim() && !tooLong && canPost ? ACCENT : "rgba(43,193,243,0.25)",
+                      border: "none",
+                      borderRadius: "999px",
+                      color: "#06171d",
+                      cursor: draft.trim() && !tooLong && canPost && !posting ? "pointer" : "default",
+                      fontFamily: "sans-serif",
+                      fontSize: "0.78rem",
+                      fontWeight: 800,
+                      padding: "0.4rem 1.05rem",
+                    }}
                   >
-                    <CloseIcon />
+                    {posting ? "Posting…" : "Post"}
                   </button>
                 </div>
-              )}
-              {error && <div role="alert" style={{ color: "rgba(253,186,116,0.95)", fontSize: "0.72rem", marginTop: "0.45rem" }}>{error}</div>}
-              {posted && !error && <div style={{ color: ACCENT, fontSize: "0.72rem", marginTop: "0.45rem" }}>Posted. The world answers with the next time skip.</div>}
-              <div style={{ alignItems: "center", borderTop: `1px solid ${LINE}`, display: "flex", gap: "0.6rem", justifyContent: "flex-end", marginTop: "0.5rem", paddingTop: "0.5rem" }}>
-                <span data-no-translate style={{ color: tooLong ? "#f87171" : INK_FAINT, fontSize: "0.7rem" }}>
-                  {length}/{SOCIAL_POST_MAX_CHARS}
-                </span>
-                <button
-                  type="button"
-                  className="oh-tap-row"
-                  onClick={() => void submit()}
-                  disabled={!draft.trim() || tooLong || posting || !canPost}
-                  style={{
-                    background: draft.trim() && !tooLong && canPost ? ACCENT : "rgba(43,193,243,0.25)",
-                    border: "none",
-                    borderRadius: "999px",
-                    color: "#06171d",
-                    cursor: draft.trim() && !tooLong && canPost && !posting ? "pointer" : "default",
-                    fontFamily: "sans-serif",
-                    fontSize: "0.78rem",
-                    fontWeight: 800,
-                    padding: "0.4rem 1.05rem",
-                  }}
-                >
-                  {posting ? "Posting…" : "Post"}
-                </button>
               </div>
             </div>
-          </div>
 
-          {posts.length === 0 ? (
-            <p style={{ color: INK_FAINT, fontSize: "0.78rem", fontStyle: "italic", lineHeight: 1.5, margin: 0, padding: "1.2rem 1.1rem" }}>
-              {EMPTY_TEXTS[tab]}
-            </p>
-          ) : posts.map((post) => (
-            <PostCard
-              key={post.id}
-              post={post}
-              feed={feed}
-              round={game.round}
-              flags={flags}
-              mine={post.kind === "player" && String(post.by || post.country).toLocaleLowerCase() === country.toLocaleLowerCase()}
-              onQuote={startQuote}
-              canPost={canPost}
-            />
-          ))}
+            {posts.length === 0 ? (
+              <p style={{ color: INK_FAINT, fontSize: "0.78rem", fontStyle: "italic", lineHeight: 1.5, margin: 0, padding: "1.2rem 1.1rem" }}>
+                {EMPTY_TEXTS[tab]}
+              </p>
+            ) : posts.map((post) => (
+              <PostCard
+                key={post.id}
+                post={post}
+                feed={feed}
+                round={game.round}
+                flags={flags}
+                mine={post.kind === "player" && String(post.by || post.country).toLocaleLowerCase() === country.toLocaleLowerCase()}
+                onQuote={startQuote}
+                canPost={canPost}
+              />
+            ))}
+          </>
+        )}
         </div>
 
         {/* The tab bar: everything, the player's country, what answers or names
@@ -733,6 +1066,15 @@ const Social = ({ hovered, isOpen, onToggle, setHovered }) => {
   useEffect(() => {
     if (isOpen) setHasOpened(true);
   }, [isOpen]);
+
+  useEffect(() => {
+    const handler = () => {
+      setHasOpened(true);
+      if (!isOpen) onToggle();
+    };
+    _rostraOpenSubs.add(handler);
+    return () => { _rostraOpenSubs.delete(handler); };
+  }, [isOpen, onToggle]);
 
   useEffect(() => {
     setSeen(Number(readSeenNumbers()[gameId]) || 0);

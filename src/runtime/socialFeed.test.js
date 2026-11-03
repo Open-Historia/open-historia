@@ -186,6 +186,10 @@ test("the tabs: everything, the player's country, what mentions them, and their 
   assert.deepEqual(ids("country"), ["p1", "p3"]);
   assert.deepEqual(ids("mentions"), ["p2", "p4"]);
   assert.deepEqual(ids("mine"), ["p1"]);
+  assert.deepEqual(
+    socialFeedView(feed, { tab: "search", targetCountry: "Federal Republic of Germany" }).map((entry) => entry.id),
+    ["p2"],
+  );
   const quoting = socialFeedView(feed, { tab: "all" }).find((entry) => entry.id === "p2");
   assert.equal(quoting.quoted.id, "p1");
   assert.equal(mentionsPlayer(feed[0], { feed, country: "French Republic", leader: "Claire Martin" }), false, "not their own post");

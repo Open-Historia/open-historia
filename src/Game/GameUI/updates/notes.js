@@ -53,6 +53,23 @@ import { PAST_UPDATES } from "./notesPast.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // Search countries to listen in on their public statements in Rostra, check in from the map, and generate live posts (2026-11-04).
+    id: "2026-11-rostra-listen-in",
+    kind: "minor",
+    date: "2026-11-04",
+    channel: "beta",
+    banners: [
+      {
+        title: "Listen in on any country",
+        items: [
+          "Rostra's new Search tab lets you look up any country on the map to read its leaders, officials and people without mixing them into your front page.",
+          "Tap Refresh on any country to generate six live statements on current world events with the AI.",
+          "Selecting a region on the map now lets you check in directly on Rostra for that country.",
+        ],
+      },
+    ],
+  },
+  {
     // An Update downloads the post's update copy, which the hub does not count (runtime/hubFiles.js updateCopyOf;
     // the hub's index `updates`); the owner's ask, 2026-11-03.
     id: "2026-11-updates-not-imports",

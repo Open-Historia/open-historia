@@ -22,6 +22,7 @@ import { getLibraryState } from "../../runtime/library.js";
 import { onMemoryPressure } from "../../runtime/memoryPressure.js";
 import { puppetSummaryFor } from "../../runtime/puppets.js";
 import { requestDiplomaticChat } from "../GameUI/chat.jsx";
+import { openRostraListenIn } from "../GameUI/social.jsx";
 import GameFlagPicker from "../GameUI/GameFlagPicker.jsx";
 import { getWorldStateSnapshot, useWorldState } from "../Map/useWorldState.js";
 import { resolvePolityFlag } from "../../runtime/polityFlags.js";
@@ -676,6 +677,9 @@ const CountryInfoPanel = () => {
         {/* Footer */}
         {/* The buttons wrap onto two lines on a narrow phone rather than squeezing their words. */}
         <div style={{ borderTop: "1px solid rgba(255,255,255,0.08)", display: "flex", flexWrap: "wrap", gap: "0.6rem", padding: "0.8rem 1.1rem" }}>
+        <button type="button" className="oh-tap-row" onClick={() => { openRostraListenIn(displayName || country.name); dismiss(); }} style={{ ...footerButtonStyle, flex: "1 1 auto", whiteSpace: "nowrap" }}>
+        Check in Rostra
+        </button>
         <button type="button" className="oh-tap-row" onClick={runAdvisorReport} style={{ ...footerButtonStyle, flex: "1 1 auto", whiteSpace: "nowrap" }}>
         {hasReport ? "Regenerate Report" : "Advisor Report"}
         </button>

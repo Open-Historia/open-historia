@@ -350,13 +350,18 @@ export const mentionsPlayer = (post, { feed = [], country = "", leader = "" } = 
 //   country   posts by people of the player's country
 //   mentions  posts that quote the player or name their country or leader
 //   mine      the player's own
-export const SOCIAL_TABS = Object.freeze(["all", "country", "mentions", "mine"]);
-export const socialFeedView = (feed, { tab = "all", country = "", leader = "" } = {}) => {
+//   search    posts filtered by target country to listen in
+export const SOCIAL_TABS = Object.freeze(["all", "country", "mentions", "mine", "search"]);
+export const socialFeedView = (feed, { tab = "all", country = "", leader = "", targetCountry = "" } = {}) => {
   const posts = normalizeSocialFeed(feed);
   const keep = (post) => {
     if (tab === "mine") return post.kind === "player" && same(post.by || post.country, country);
     if (tab === "country") return same(post.country, country);
     if (tab === "mentions") return mentionsPlayer(post, { feed: posts, country, leader });
+    if (tab === "search") {
+      if (!targetCountry) return true;
+      return same(post.country, targetCountry) || fold(post.text).includes(fold(targetCountry));
+    }
     return true;
   };
   return posts

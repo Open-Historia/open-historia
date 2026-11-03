@@ -175,3 +175,6 @@ export const warRoomTransportWays = async (...args) => (await gameplay()).warRoo
 // (where the sea is, whose the ground). Read from the map, with no request made
 // and nothing written.
 export const warRoomChart = async (...args) => (await gameplay()).warRoomChart(...args);
+
+// Rostra: generate authentic listen-in social posts on demand for a selected country.
+export const generateRostraListenInPosts = async (...args) => (await gameplay()).generateRostraListenInPosts(...args);
