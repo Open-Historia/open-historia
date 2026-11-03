@@ -16,6 +16,26 @@ export const FAR_DETAIL = 0;
 export const detailOf = (resolution) => Math.max(0, Math.floor(Math.log2(ZOOM0_RESOLUTION / resolution) + 1e-9));
 export const toleranceOf = (detail, pixelRatio = 1) => ZOOM0_RESOLUTION / 2 ** (detail + 1) / Math.max(1, pixelRatio);
 
+// What the GPU region layer does with a frame (OlMap's RegionGlRenderer):
+//   "wait"  draw the buffers it has, and leave the source's changes for later
+//   "hold"  the buffers are current: tell OpenLayers the view has not moved, so
+//           a pan or a small zoom does not rebuild them
+//   "mark"  a still view it may build for: remember the zoom it is built at
+//   "pass"  leave it to OpenLayers
+// OpenLayers counts a change of the source as seen on any frame but builds only
+// on a still one, so a change made while the view moves (a conversion of the
+// map's projection, followed at once by the view fitting the map) has to wait
+// for the view to stop: counted on a moving frame, it was held off for good,
+// and the regions stayed drawn where they had been.
+export const regionFrame = ({ ready, hasBuffers, still, seenRevision, sourceRevision, builtAt, resolution, hasExtent }) => {
+  if (!hasBuffers) return still ? "mark" : "pass";
+  if (!ready) return "wait";
+  const current = seenRevision >= sourceRevision;
+  if (!current && !still) return "wait";
+  if (current && builtAt && Math.abs(Math.log2(resolution / builtAt)) < 4 && hasExtent) return "hold";
+  return still ? "mark" : "pass";
+};
+
 const ringBox = (flat, start, end, out) => {
   let minX = Infinity;
   let minY = Infinity;

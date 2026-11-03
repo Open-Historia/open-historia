@@ -53,6 +53,24 @@ import { PAST_UPDATES } from "./notesPast.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // The Workshop's GPU region layer drew a converted map's regions where they had been (Editor/regionDisplay.js
+    // regionFrame), and the game's camera stopped at 80°S on a scenario's own map (Map/World.jsx maxBounds); both
+    // on Avatar: Resurrection (the owner's report, 2026-11-03).
+    id: "2026-11-converted-maps-line-up",
+    kind: "minor",
+    date: "2026-11-03",
+    channel: "beta",
+    banners: [
+      {
+        title: "Converted maps line up",
+        items: [
+          "Converting a map to another projection in the Workshop now shows its regions where they went, on the redrawn picture, instead of where they were.",
+          "On a scenario's own map the camera now reaches the southern edge; the last rows below 80°S were out of reach.",
+        ],
+      },
+    ],
+  },
+  {
     // A branched scripted event set to "Let the AI write it" was taken for missing when the AI told it in words of its
     // own, and the engine wrote the author's instruction as the event (AI/worldDirection.js sharesParentContextAnchor,
     // withoutAsides; a player's report, 2026-11-03).

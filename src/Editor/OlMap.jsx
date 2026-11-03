@@ -55,7 +55,7 @@ import { boundsFillSquare, normalizeImageBounds } from "../../server/mapProjecti
 import { vectorLayerToGeoJSON } from "./customBackground.js";
 import { defaults as defaultControls } from "ol/control/defaults";
 import { makeRegionLook, makeRegionOverlayStyle, makeRegionStyle } from "./olStyle.js";
-import { createRegionDisplay } from "./regionDisplay.js";
+import { createRegionDisplay, regionFrame } from "./regionDisplay.js";
 import { detailToleranceMeters, simplifyShared, toleranceAtLatitude } from "./simplifyRegions.js";
 import { buildLandField, fitToImage } from "./fitToImage.js";
 import { readBackgroundPixels } from "./backgroundPixels.js";
@@ -517,15 +517,20 @@ const HIT_RING = [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1
 
 class RegionGlRenderer extends WebGLVectorLayerRenderer {
   prepareFrameInternal(frameState) {
-    if (!this.ready && this.buffers_) return true;
     const resolution = frameState.viewState.resolution;
-    const still = !frameState.viewHints[ViewHint.ANIMATING] && !frameState.viewHints[ViewHint.INTERACTING];
-    const current = this.buffers_ && this.sourceRevision_ >= this.getLayer().getSource().getRevision();
-    if (current && this.builtAt && Math.abs(Math.log2(resolution / this.builtAt)) < 4 && Array.isArray(this.previousExtent_)) {
-      this.previousExtent_ = frameState.extent.slice();
-    } else if (still) {
-      this.builtAt = resolution;
-    }
+    const frame = regionFrame({
+      ready: this.ready,
+      hasBuffers: Boolean(this.buffers_),
+      still: !frameState.viewHints[ViewHint.ANIMATING] && !frameState.viewHints[ViewHint.INTERACTING],
+      seenRevision: this.sourceRevision_,
+      sourceRevision: this.getLayer().getSource().getRevision(),
+      builtAt: this.builtAt,
+      resolution,
+      hasExtent: Array.isArray(this.previousExtent_),
+    });
+    if (frame === "wait") return true;
+    if (frame === "hold") this.previousExtent_ = frameState.extent.slice();
+    else if (frame === "mark") this.builtAt = resolution;
     return super.prepareFrameInternal(frameState);
   }
 
