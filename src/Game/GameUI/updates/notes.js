@@ -64,6 +64,7 @@ const NEW_UPDATES = [
         title: "Seasons drawn whole",
         items: [
           "The colours of the seasons no longer have triangles cut out of them near Antarctica when 3D terrain is on.",
+          "The country ranking shows every country's flag, including countries known by their official names.",
         ],
       },
     ],
