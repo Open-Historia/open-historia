@@ -210,6 +210,7 @@ import {
   validateGameplayPayload,
   withEventAudience,
   withFrontOrders,
+  withWarFigures,
   withIntelligenceRating,
   withoutGroupOps,
 } from "./gameplaySchemas.js";
@@ -224,6 +225,7 @@ import { answerPeaceProposal, offerPeace, playerDiplomacy, turnDays, turnWarAndP
 import { holdPlayersWars } from "./playersWarsHold.js";
 import { chatMessageTags } from "./chatTags.js";
 import { PEACE_BLOCK_HEADING, buildPeaceBlock } from "./peacePrompt.js";
+import { WAR_FIGURES_WANTED_MOST, buildWarFiguresBlock, readWarFigures } from "./warFiguresPrompt.js";
 import { readPeaceVerdict, readTreatyLines, termsOfLetter } from "../../runtime/peaceTerms.js";
 import { PEACE_ANSWERS_FIELD, buildWarStatsBlock, describePeaceTalk, warsOf } from "./warStatsPrompt.js";
 import { takersFor } from "../../runtime/fronts/constants.js";
@@ -2728,11 +2730,12 @@ const JUMP_LIVE_STATE_BANNER = [
 // the model without groupOps (gameplaySchemas.js withoutGroupOps), and the Game
 // Master's contract without the lines that teach them, built once.
 // Fronts on (frontsGate.js): a time skip's tool with the battlefields' orders
-// in it (gameplaySchemas.js withFrontOrders).
+// in it (gameplaySchemas.js withFrontOrders), and the figures the war needs
+// after them (withWarFigures).
 const forActiveFeatures = (tool) => {
   const grouped = isActiveFeatureEnabled("groups") ? tool : withoutGroupOps(tool);
   const shown = withEventAudience(grouped, hostingSharedGame());
-  return frontsOn() ? withFrontOrders(shown) : shown;
+  return frontsOn() ? withWarFigures(withFrontOrders(shown)) : shown;
 };
 let gameMasterPromptNoGroups = null;
 const gameMasterPromptWithoutGroups = () => {
@@ -2934,6 +2937,10 @@ Write spiesOnPlayer: the polities, by exact name and comma-separated, that would
   // What the game itself does about alliances, weariness, peace and reparations (peacePrompt.js): "" in a world with none of them.
   const peace = buildPeaceBlock({ world, game, players: humanCountriesOf(game) });
   if (peace) blocks.push(peace);
+  // The figures the war needs of a country that fights and has none, which the answer writes itself
+  // (warFiguresPrompt.js): "" with fronts off.
+  const figures = warFiguresBlockOf(world, game);
+  if (figures) blocks.push(figures);
   // What agents have carried off of the players' planned movements there.
   const stolenPlans = await frontPlansBlock(world, game);
   if (stolenPlans) blocks.push(stolenPlans);
@@ -9756,6 +9763,9 @@ const applySimulationResult = async ({
       logDebugEvent("turn", `${pruned.removed.length} unit${pruned.removed.length === 1 ? "" : "s"} left the map: ${pruned.removed.map(({ unit, reason }) => `${unit.name} (${reason === "war-ended" ? "its war ended" : reason === "voyage-ended" ? "its voyage is over" : `${unit.ownerCode} holds no land`})`).join(", ")}.`);
     }
   }
+  // The figures the skip wrote of the countries that fight (warFiguresPrompt.js), kept where a country has
+  // none, before anything after the turn asks for them (requestConflictSheets).
+  if (frontsOn()) worldWithImpacts = keepWarFigures(worldWithImpacts, result.warFigures);
   // Each segment was checked on its own; this is the merged round. A finished
   // turn is never lost to this check, but its verdict is worth a report. Read
   // as the one period it is (startsInForce), as the last attempt's repair
@@ -12664,6 +12674,73 @@ const requestConflictSheets = (world, game, extra = []) => {
   // 2026-10-16). Those in conflict with the player have theirs from the request above.
   const others = militaryTargets(world, { skip: names });
   if (others.length > 0) void ensureMilitaryFigures(others, { reason: "at war" });
+};
+
+// "have it already contain that" (the owner, 2026-11-02): the time skip writes those figures itself, in its own
+// answer (warFiguresPrompt.js), and the requests above are made only for what it left out.
+const foldName = (value) => normalizeString(value).toLowerCase();
+const fightingNames = (world) => {
+  const named = new Map();
+  for (const war of normalizeArray(world?.wars)) {
+    if (!war || war.status === "ended") continue;
+    for (const side of [war.sideA, war.sideB]) for (const name of normalizeArray(side)) if (normalizeString(name)) named.set(foldName(name), normalizeString(name));
+  }
+  for (const record of normalizeArray(world?.battlefields)) {
+    if (!record || record.status === "closed") continue;
+    for (const side of normalizeArray(record.sides)) for (const name of normalizeArray(side)) if (normalizeString(name)) named.set(foldName(name), normalizeString(name));
+  }
+  return named;
+};
+
+// What a skip is told (warFiguresPrompt.js buildWarFiguresBlock): the countries at war that have none, those
+// requestConflictSheets would ask of first; and the scale, the countries at war first. "" with fronts off.
+const warFiguresBlockOf = (world, game) => {
+  if (!frontsOn()) return "";
+  const conflict = conflictSheetTargets(world, humanCountriesOf(game));
+  const wanted = [...conflict, ...militaryTargets(world, { skip: conflict })].slice(0, WAR_FIGURES_WANTED_MOST);
+  const fighting = fightingNames(world);
+  const atWarFirst = (a, b) => Number(fighting.has(foldName(b.name))) - Number(fighting.has(foldName(a.name)));
+  const known = Object.entries(world?.countryStats || {})
+    .map(([name, sheet]) => ({ name, backend: statsBackendOf(sheet) }))
+    .filter((entry) => entry.backend)
+    .sort((a, b) => atWarFirst(a, b) || b.backend.population - a.backend.population);
+  const figuresOf = militaryLookup(world);
+  const everyone = new Map();
+  for (const source of [world?.countryStats, world?.polityOverrides, world?.groups]) for (const key of Object.keys(source || {})) everyone.set(foldName(key), key);
+  const rated = ratedScaleOf([...everyone.values()].map((name) => ({ name, military: figuresOf(name), population: peopleFor(world, name) })), wanted)
+    .sort(atWarFirst);
+  return buildWarFiguresBlock({ wanted, known, rated });
+};
+
+// The figures a skip wrote (warFiguresPrompt.js readWarFigures), on the sheets of the countries they are of: only a
+// country at war or on an open battlefield, under the name its war gives it, never a group (a group is no country
+// with a sheet), and only what it has none of: of its people, economy, budget and debt (statsBackend.js) and of its
+// military figures, each one it has no figure for. The world as it was where nothing is kept.
+const keepWarFigures = (world, lines) => {
+  const read = readWarFigures(lines);
+  if (read.length === 0) return world;
+  const fighting = fightingNames(world);
+  const groups = new Set(Object.keys(world?.groups || {}).map(foldName));
+  const next = { ...world, countryStats: { ...(world?.countryStats || {}) } };
+  const kept = [];
+  for (const { name, backend, military } of read) {
+    const named = fighting.get(foldName(name));
+    if (!named || groups.has(foldName(named))) continue;
+    const key = canonicalStatsPolity(named, next) || named;
+    const sheet = next.countryStats[key];
+    const now = { population: sheet?.population?.total, gdp: sheet?.economy?.gdp, budgetBalance: sheet?.economy?.budgetBalance, publicDebt: sheet?.economy?.publicDebt };
+    const fresh = Object.fromEntries(Object.entries(backend ?? {}).filter(([field]) => now[field] === undefined || now[field] === null || now[field] === ""));
+    const patch = statsBackendPatch(fresh, { partial: true });
+    const had = militaryLookup(next)(named) ?? {};
+    const missing = Object.fromEntries(Object.entries(military ?? {}).filter(([field]) => had[field] === undefined || had[field] === null));
+    if (Object.keys(missing).length > 0) patch.military = missing;
+    if (Object.keys(patch).length === 0) continue;
+    applyCountryStatPatchToWorld(next, key, patch);
+    kept.push(key);
+  }
+  if (kept.length === 0) return world;
+  logDebugEvent("turn", `The skip gave the war's figures of ${kept.join(", ")} in its own answer.`, { countries: kept });
+  return next;
 };
 
 const refreshTrackedCustomStatsIfDue = async ({ bundle, signal, definition, requests = null, replay = null } = {}) => {
@@ -18287,6 +18364,8 @@ const finishTimelineJump = async ({ context, signal, state }) => {
     spiesOnPlayer: merged.spiesOnPlayer,
     // The peaces two countries nobody plays made, a line each (peaceTerms.js readTreatyLines).
     peaceTreaties: merged.peaceTreaties,
+    // The figures the war needs of the countries that fight, a line a country (warFiguresPrompt.js).
+    warFigures: merged.warFigures,
     // How long a skip was asked for: what the front engine runs for where the
     // scenario's calendar is not one the game can count days on.
     requestedDays: context.safeDays,

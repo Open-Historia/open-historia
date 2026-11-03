@@ -53,6 +53,22 @@ import { PAST_UPDATES } from "./notesPast.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // "have it already contain that" (the owner, 2026-11-02): the skip writes the figures a war needs itself (warFiguresPrompt.js).
+    id: "2026-11-war-figures-in-skip",
+    kind: "minor",
+    date: "2026-11-02",
+    channel: "beta",
+    banners: [
+      {
+        title: "A war costs no extra requests",
+        items: [
+          "A time skip that starts a war now works out the strength, people and economy of the countries in it in its own answer, instead of asking the AI for them after the turn.",
+          "So a skip is one request on the turns a war begins too, which matters most on a free key, where requests are what runs out.",
+        ],
+      },
+    ],
+  },
+  {
     // The Game Master reads a request for what it means; wars open in any language; typed text is not translated (2026-11-02).
     id: "2026-11-game-master-wars",
     kind: "minor",
