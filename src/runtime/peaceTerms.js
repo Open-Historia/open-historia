@@ -331,11 +331,20 @@ export const withOffer = (offers, offer) => {
 // A peace two countries nobody plays made, as a time skip tells it, checked:
 // they fight on opposite sides of a war, and no person is on either side.
 // Returns { treaty: { warId, from, to, terms } } or { reason } in words.
-export const treatyFromSkip = ({ from = "", to = "", terms = null, wars = [], players = [] } = {}) => {
+// A person's own offer waiting in that war (`offers`, world.peaceOffers) is the
+// one peace there the skip may make: its receiver accepting it, on the terms
+// offered, whatever the line says of them (`accepts`, the offer's id).
+export const treatyFromSkip = ({ from = "", to = "", terms = null, wars = [], players = [], offers = [] } = {}) => {
   const played = new Set(list(players).map(fold).filter(Boolean));
   const war = warBetween(wars, from, to);
   if (!war) return { reason: `${clean(from) || "nobody"} and ${clean(to) || "nobody"} are not at war` };
-  if (sidesOf(war).some((members) => members.some((member) => played.has(fold(member))))) return { reason: "a person is in that war: their peace is theirs to make" };
+  if (sidesOf(war).some((members) => members.some((member) => played.has(fold(member))))) {
+    const offer = openOfferBetween(offers, from, to);
+    if (offer && clean(offer.warId) === clean(war.id) && played.has(fold(offer.from)) && !played.has(fold(offer.to))) {
+      return { treaty: { warId: clean(war.id), from: offer.from, to: offer.to, terms: offer.terms, accepts: offer.id } };
+    }
+    return { reason: "a person is in that war: their peace is theirs to make" };
+  }
   return { treaty: { warId: clean(war.id), from: clean(from), to: clean(to), terms: clampTerms(terms, { from, to }) } };
 };
 

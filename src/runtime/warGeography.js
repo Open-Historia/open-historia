@@ -28,6 +28,8 @@
 
 import { curvedRings } from "./fronts/climate.js";
 import { WEATHER_STATES } from "./fronts/weather.js";
+import { kmPerDegreeAt } from "../../server/mapDistance.js";
+import { currentMapMeasure } from "./mapMeasure.js";
 
 export const TERRAIN_LEVEL_MOST = 10;
 export const WALL_LEVEL_LEAST = 3;
@@ -187,8 +189,11 @@ export const zoneWeightAt = (zone, lng, lat) => {
   const rings = curvedRings(zone);
   let inside = false;
   let nearest = Infinity;
-  const kx = 111.32 * Math.cos((lat * Math.PI) / 180);
-  const ky = 110.57;
+  // (By the map's measure where it is not plain Mercator: server/mapDistance.js.)
+  const measure = currentMapMeasure();
+  const per = measure.plain ? null : kmPerDegreeAt(measure, lng, lat);
+  const kx = per ? per.x : 111.32 * Math.cos((lat * Math.PI) / 180);
+  const ky = per ? per.y : 110.57;
   for (const ring of rings) {
     for (let at = 0, back = ring.length - 1; at < ring.length; back = at, at += 1) {
       const [ax, ay] = ring[back];

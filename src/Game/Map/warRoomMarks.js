@@ -18,9 +18,13 @@
 
 import { addGameDays, compareGameDates } from "../../runtime/gameDates.js";
 import { arrowHead } from "./warRoomGeometry.js";
+import { mapRing } from "../../../server/mapDistance.js";
+import { currentMapMeasure } from "../../runtime/mapMeasure.js";
 
 export const LINE_COLOURS = Object.freeze({ 3: "#d8c27a", 4: "#d9ad4f", 5: "#e09440", 6: "#e07a36", 7: "#d95f30", 8: "#c9452c", 9: "#b02d2a", 10: "#f4f7fb" });
 export const FLEET_COLOURS = Object.freeze({ fleet: "#c9a54c", picked: "#e9b949", course: "#f4f7fb" });
+// An air strike waiting is the accent's; one flown, by what came of it.
+export const AIR_COLOURS = Object.freeze({ waiting: "#2bc1f3", reach: "#2bc1f3", hit: "#e0454d", partly: "#e09440", missed: "#9aa3ad" });
 const RING_POINTS = 48;
 const EARTH_KM = 6371;
 const RAD = Math.PI / 180;
@@ -71,6 +75,9 @@ export const lineFeatures = ({ lines = [], draft = null, level = 5, player = "",
 
 // A ring of `km` round a place on the globe, as [lng, lat] points, closed.
 export const ringAround = (lng, lat, km, points = RING_POINTS) => {
+  // (A map that is not plain Mercator draws it by its own measure: server/mapDistance.js.)
+  const measure = currentMapMeasure();
+  if (!measure.plain) return mapRing(measure, lng, lat, Math.max(0, Number(km) || 0), points);
   const delta = Math.max(0, Number(km) || 0) / EARTH_KM;
   const phi = lat * RAD;
   const lambda = lng * RAD;
@@ -84,6 +91,30 @@ export const ringAround = (lng, lat, km, points = RING_POINTS) => {
   // (Closed on its very first point, not on one worked out again a turn later.)
   ring.push(ring[0]);
   return ring;
+};
+
+// The air strikes as the war room marks them, as one GeoJSON collection: how far the air unit picked out reaches
+// from its base, every strike of the player's waiting (where its bombs will fall), and what the player's strikes of
+// the last turn came to.
+//   wing      the air unit picked out ({ lng, lat }), or null; reach, how far it reaches, in km
+//   orders    the player's strikes waiting (runtime/fronts/airStrike.js normalizeAirStrikeOrders)
+//   flown     the player's strikes of the last turn (normalizeAirStrikes)
+//   blast     how far the bombs of one fall, in km
+export const airFeatures = ({ wing = null, reach = 0, orders = [], flown = [], blast = 0 } = {}) => {
+  const features = [];
+  const base = wing ? placeOf([wing.lng, wing.lat]) : null;
+  if (base && reach > 0) features.push({ type: "Feature", geometry: { type: "LineString", coordinates: ringAround(base[0], base[1], reach) }, properties: { what: "reach", colour: AIR_COLOURS.reach } });
+  const ring = (lng, lat, what, colour) => {
+    if (blast > 0) features.push({ type: "Feature", geometry: { type: "Polygon", coordinates: [ringAround(lng, lat, blast)] }, properties: { what, colour } });
+    features.push({ type: "Feature", geometry: { type: "Point", coordinates: [lng, lat] }, properties: { what: `${what}-at`, colour } });
+  };
+  for (const order of list(orders)) if (placeOf([order?.lng, order?.lat])) ring(order.lng, order.lat, "aim", AIR_COLOURS.waiting);
+  for (const strike of list(flown)) {
+    if (!placeOf([strike?.lng, strike?.lat]) || strike.outcome === "gone" || strike.outcome === "out of reach") continue;
+    const colour = strike.outcome === "turned back" ? AIR_COLOURS.missed : strike.outcome === "partly" ? AIR_COLOURS.partly : AIR_COLOURS.hit;
+    ring(strike.lng, strike.lat, "struck", colour);
+  }
+  return { type: "FeatureCollection", features };
 };
 
 // The player's fleets, their stations and their courses, as one GeoJSON collection.

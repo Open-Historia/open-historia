@@ -5,6 +5,7 @@ import {
   isFeatureEnabled,
   playerFocusOf,
   resolveFeatures,
+  warsOf,
   worldDirectionOf,
 } from "../../server/gameFeatures.js";
 
@@ -20,6 +21,7 @@ export {
   SCRIPTED_EVENT_CONDITION_TYPES,
   SCRIPTED_EVENT_TRIGGER_MODES,
   resolveFeatures,
+  warsOf,
 } from "../../server/gameFeatures.js";
 
 // The features of the game being played: the active game's scenario under the
@@ -58,3 +60,6 @@ export const getActiveWorldDirection = () => worldDirectionOf(activeFeatures);
 // How much of a time skip belongs to the player (src/Game/AI/playerFocus.js):
 // the scenario's default under this game's own choice. Always a level.
 export const getActivePlayerFocus = () => playerFocusOf(activeFeatures);
+
+// What of its wars this game fights itself: { battlefields, air, navies } (the Wars feature).
+export const activeWars = () => warsOf(activeFeatures);

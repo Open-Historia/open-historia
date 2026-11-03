@@ -39,7 +39,7 @@ test("a blank endpoint is not local, whatever page asks", () => {
     assert.equal(endpointIsLocal("/v1"), false);
 });
 
-test("the preflight and Settings ask this rule of the entry, and the fetch path keeps one rule", () => {
+test("the preflight asks this rule of the entry, and the fetch path keeps one rule", () => {
     const main = read("./main.jsx");
     assert.match(main, /const windowIsLearned = \(entry\) => !endpointIsLocal\(entry\?\.endpoint\);/);
     assert.match(main, /contextWindows\.refusal\(contextWindowKey\(entry\), requestTokens, \{ reserveTokens: answerReserve, trustLearned: windowIsLearned\(entry\) \}\)/);
@@ -52,6 +52,7 @@ test("the preflight and Settings ask this rule of the entry, and the fetch path 
     assert.match(local, /return isLocalHostname\(/);
     assert.doesNotMatch(local, /192/);
 
+    // Settings shows no context window any more (contextWindow.js: the player sets none).
     const settings = read("../GameUI/settings.jsx");
-    assert.match(settings, /contextWindowMemory\.remembered\(key, \{ trustLearned: !endpointIsLocal\(entry\.endpoint\) \}\)/);
+    assert.doesNotMatch(settings, /contextWindow/);
 });

@@ -125,6 +125,18 @@ test("a Mercator map that only disables the globe or the looping still saves tha
   assert.deepEqual(seed.world.projection, { type: "mercator", globe: false, wrap: false, laidOut: true });
 });
 
+test("the Projection panel's scale line is saved with the projection, on a freeform map and on Mercator", () => {
+  const scale = { from: [-20, 10], to: [15, -5.5], km: 1800 };
+  const sheet = buildGameSeed({ ...doc([]), metadata: { ...doc([]).metadata, projection: { type: "freeform", aspect: 2, scale } } }, noRegions);
+  assert.deepEqual(sheet.world.projection, { type: "freeform", aspect: 2, scale, laidOut: true });
+  const mercator = buildGameSeed({ ...doc([]), metadata: { ...doc([]).metadata, projection: { type: "mercator", scale } } }, noRegions);
+  assert.deepEqual(mercator.world.projection, { type: "mercator", scale, laidOut: true }, "a Mercator map with a scale line is not the plain default");
+  // And it is what the Workshop opens the scenario with again (MapEditor: the
+  // world's projection is the document's), unchanged.
+  const again = buildGameSeed({ ...doc([]), metadata: { ...doc([]).metadata, projection: sheet.world.projection } }, noRegions);
+  assert.deepEqual(again.world.projection, sheet.world.projection);
+});
+
 test("a map started from the world map or the legacy world map saves its own regions, the stock world only its owners", () => {
   const regions = { type: "FeatureCollection", features: [{ type: "Feature", properties: { id: "MNG.18_1", owner: "Mongolia", typeId: "land" }, geometry: { type: "Polygon", coordinates: [[[106, 50], [107, 50], [107, 51], [106, 50]]] } }] };
   for (const kind of ["fault-lines", "modern-day"]) {

@@ -19,7 +19,8 @@
 
 import { addGameDays, compareGameDates, diffGameDays } from "../../runtime/gameDates.js";
 import { unwrapLng } from "../../runtime/fronts/frame.js";
-import { kmBetween } from "../../runtime/fronts/worldGrid.js";
+import { kmBetween, measureOptions } from "../../runtime/fronts/worldGrid.js";
+import { engineMapOf } from "../../../server/mapDistance.js";
 import { TERRAIN_LEVEL_MOST, WALL_LEVEL_MOST, normalizeFortifications, normalizeTerrainAreas } from "../../runtime/warGeography.js";
 
 const collection = (features) => ({ type: "FeatureCollection", features });
@@ -77,12 +78,15 @@ const round5 = (value) => Math.round(value * 1e5) / 1e5;
 // before (so a line across the date line is not drawn the long way round),
 // and how far along it each lies in kilometres from the first, measured as
 // the engine measures it (fronts/walls.js readLines). { line, at, total }.
-export const measureLine = (points, { flat = false } = {}) => {
+//   measure   the map's measure (server/mapDistance.js); without one, `flat`
+//             says whether it is a freeform sheet at the usual scale
+export const measureLine = (points, { flat = false, measure = null } = {}) => {
+  const options = measure ? measureOptions(engineMapOf(measure)) : { flat };
   const line = [];
   for (const [lng, lat] of Array.isArray(points) ? points : []) line.push([line.length > 0 ? unwrapLng(lng, line[line.length - 1][0]) : lng, lat]);
   const at = line.length > 0 ? [0] : [];
   for (let index = 1; index < line.length; index += 1) {
-    at.push(at[index - 1] + kmBetween(line[index - 1][0], line[index - 1][1], line[index][0], line[index][1], { flat }));
+    at.push(at[index - 1] + kmBetween(line[index - 1][0], line[index - 1][1], line[index][0], line[index][1], options));
   }
   return { line, at, total: at.length > 0 ? at[at.length - 1] : 0 };
 };
@@ -106,8 +110,8 @@ const stretchOf = ({ line, at }, from, to) => {
 
 // A line cut where it is breached: { standing: [stretch], broken: [stretch] },
 // each stretch a list of points. `breaches` are [from km, to km] along it.
-export const splitByBreaches = (points, breaches, { flat = false } = {}) => {
-  const measured = measureLine(points, { flat });
+export const splitByBreaches = (points, breaches, { flat = false, measure = null } = {}) => {
+  const measured = measureLine(points, { flat, measure });
   const { line, total } = measured;
   if (line.length < 2 || !(total > 0)) return { standing: [], broken: [] };
   const cuts = new Set([0, total]);
@@ -142,7 +146,7 @@ export const splitByBreaches = (points, breaches, { flat = false } = {}) => {
 //        "rubble"     where it has been breached
 //        "planned"    the whole of a line still being built
 //        "progress"   the stretch of it as far along as the work has got
-export const fortificationFeatures = ({ lines = [], date = "", flat = false } = {}) => {
+export const fortificationFeatures = ({ lines = [], date = "", flat = false, measure = null } = {}) => {
   const features = [];
   const add = (id, part, level, stretches) => {
     if (stretches.length === 0) return;
@@ -155,13 +159,13 @@ export const fortificationFeatures = ({ lines = [], date = "", flat = false } = 
   for (const wall of normalizeFortifications(lines)) {
     const progress = wallProgressOn(wall.building, date);
     if (progress && !progress.built) {
-      const measured = measureLine(wall.points, { flat });
+      const measured = measureLine(wall.points, { flat, measure });
       if (!(measured.total > 0)) continue;
       add(wall.id, "planned", wall.level, [measured.line]);
       if (progress.share > 0) add(wall.id, "progress", wall.level, [stretchOf(measured, 0, measured.total * progress.share)]);
       continue;
     }
-    const { standing, broken } = splitByBreaches(wall.points, wall.breaches, { flat });
+    const { standing, broken } = splitByBreaches(wall.points, wall.breaches, { flat, measure });
     add(wall.id, "wall", wall.level, standing);
     add(wall.id, "rubble", wall.level, broken);
   }

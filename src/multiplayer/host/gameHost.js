@@ -24,6 +24,7 @@ import { roundSettingsOf } from "./settings.js";
 import { projectForViewer } from "./projection.js";
 import { ORDER_MAX_CHARS } from "../game/messages.js";
 import { withPlayerGoal } from "../../runtime/playerGoal.js";
+import { withPlayerPost } from "../../runtime/socialFeed.js";
 import { normalizeProjects } from "../../runtime/gameState.js";
 import { deployFor, disbandFor, revertOrderFor } from "./forces.js";
 import { agentOrderFor } from "./agents.js";
@@ -31,6 +32,8 @@ import { acceptStructure, canSettleStructure, moveStructure } from "../../runtim
 import { applyWarRoomOp, cleanWarRoomOp } from "../../runtime/fronts/warRoomOps.js";
 import { applyFortifyOp, cleanFortifyOp } from "../../runtime/fronts/fortifyOps.js";
 import { applyFleetOp, cleanFleetOp } from "../../runtime/naval/fleetOps.js";
+import { applyAirStrikeOp, cleanAirStrikeOp } from "../../runtime/fronts/airStrikeOps.js";
+import { activeWars, isActiveFeatureEnabled } from "../../runtime/gameFeatures.js";
 import { eraSettingOf } from "../../runtime/warSettings.js";
 import { humanCountriesOf } from "../../runtime/humanPolities.js";
 import { playerDiplomacy } from "../../Game/AI/warAndPeace.js";
@@ -464,6 +467,26 @@ export const createGameHost = ({
       round.touch(seat.country);
       return refusal;
     },
+    // The war room's air strikes (runtime/fronts/airStrikeOps.js), by the same
+    // rule: the air unit must be the seat's country's, and a city struck is held
+    // to the host's own map. Flown when the round is resolved.
+    airstrike: async (connection, { op }, seat) => {
+      if (round.status().phase === "resolving") return "The round is being resolved: order it once it has landed.";
+      const sent = cleanAirStrikeOp(op);
+      if (!sent) return "Nothing was asked.";
+      const chart = sent.op === "airstrike" && sent.kind === "city" ? await Promise.resolve().then(readChart).catch(() => null) : null;
+      let refusal = "";
+      await store.updateForces(({ world, game }) => {
+        const result = applyAirStrikeOp(world, sent, { player: seat.country, date: clean(game?.gameDate), round: game?.round, chart, air: activeWars().air });
+        if (result.error) {
+          refusal = result.error;
+          return null;
+        }
+        return { world: result.world };
+      });
+      round.touch(seat.country);
+      return refusal;
+    },
     // The Intelligence tab's orders (host/agents.js): the player's own agents,
     // and the foreign ones its own service has caught.
     agent: async (connection, request, seat) => {
@@ -534,6 +557,31 @@ export const createGameHost = ({
       await store.updateWorld((world) => withPlayerGoal(world, seat.country, text));
       round.touch(seat.country);
       return "";
+    },
+    // A post on Rostra (runtime/socialFeed.js), written as the leader of the
+    // seat's own country by the game's own rule, and dated by the game. It is
+    // public: every view carries the feed. Not while a round is being resolved:
+    // the time skip has read the feed and writes it back with the world answers.
+    post: async (connection, { text, quote }, seat) => {
+      if (!isActiveFeatureEnabled("socialMedia")) return "This game has no social media.";
+      if (round.status().phase === "resolving") return "The round is being resolved: post once it has landed.";
+      let refusal = "";
+      await store.updateForces(({ world, game }) => {
+        const made = withPlayerPost(world, {
+          by: seat.country,
+          text,
+          quote,
+          date: clean(game?.gameDate),
+          round: Number(game?.round) || 0,
+        });
+        if (made.error) {
+          refusal = made.error;
+          return null;
+        }
+        return { world: made.world };
+      });
+      round.touch(seat.country);
+      return refusal;
     },
     // The player's own Projects board, whole, as their screen has just changed
     // it: their advisor's entries, or the board's own buttons. A board is a

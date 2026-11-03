@@ -112,9 +112,9 @@ test("a whole run: forty-five countries in three requests, each rated against al
   assert.equal(scenarioMilitaryRoster(scenario).filter(wantsMilitaryRating).length, 0, "every country rated, its people too");
 });
 
-test("the Scenario Editor's Fronts section has the run, saving into the scenario batch by batch", () => {
+test("the Scenario Editor's Wars feature has the run, saving into the scenario batch by batch", () => {
   const bar = read("libraryBar.jsx");
-  assert.ok(bar.includes("{editorSection === \"fronts\" && kind === \"scenario\" && (\n        <ScenarioMilitaryPanel"));
+  assert.ok(/extras=\{kind === "scenario" \? \{\s*fronts: \([\s\S]*?<ScenarioMilitaryPanel/.test(bar), "under the Wars feature in the Features tab");
   const panel = read("ScenarioMilitaryPanel.jsx");
   assert.ok(panel.includes("const ratings = await rateMilitaryBatch({"));
   assert.ok(panel.includes("const saved = await saveScenario(scenarioId, { world: next });"));

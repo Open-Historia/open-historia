@@ -20,7 +20,7 @@ import { HOLDER_SIDE_A, HOLDER_SIDE_B } from "./constants.js";
 import { isLive } from "./troops.js";
 
 // The moments worth telling afterwards, of what a battlefield's log says.
-export const CHRONICLE_KINDS = Object.freeze(["offensive", "counter", "city", "pocket", "siege", "breached", "destroyed", "invaded", "attacked", "landed", "withdrew", "returned", "assault"]);
+export const CHRONICLE_KINDS = Object.freeze(["offensive", "counter", "city", "pocket", "siege", "breached", "destroyed", "invaded", "attacked", "landed", "withdrew", "returned", "assault", "bombed"]);
 // The most kept: the first few of the war are always kept, then the latest.
 export const CHRONICLE_MOST = 120;
 const OPENING_KEPT = 20;

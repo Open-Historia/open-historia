@@ -114,11 +114,8 @@ the official app; the beta's is about 150 MB. The files are named `Open-Historia
 `Open-Historia-Beta-mac-arm64.zip` / `-x64.zip`, `Open-Historia-Beta-amd64.deb` and
 `Open-Historia-Beta-x86_64.AppImage`, and the website offers each one under its stable download.
 
-The official app recommends it. The first time it opens after you install it, and the first time
-after each update, it asks *Do you want to download the beta version for the best experience?*
-**Download the beta** opens the beta's download — on Windows the installer itself, elsewhere its
-release page — and **Not now** leaves the question until the next update. The **Updating Open
-Historia** window offers the same download while an update installs.
+The **Updating Open Historia** window of the official app offers the beta's download while an
+update installs — on Windows the installer itself, elsewhere its release page.
 
 Pages and sections marked <em>beta</em> in this wiki describe that build.
 

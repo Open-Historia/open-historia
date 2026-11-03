@@ -61,7 +61,7 @@ Defined in `World.jsx`. The `<Map>` has `key={mapInstanceKey}`, so **any change 
 | `maxZoom` | `16` | Deliberate ceiling; PMTiles overzoom past their z8 max |
 | `maxBounds` | `[[-Inf,-80],[Inf,85]]` | Lock latitude to the usable band; longitude free (world copies wrap) |
 | `doubleClickZoom` | `false` | Double-click is reserved for gameplay |
-| `dragRotate` / `pitchWithRotate` | `true` | A right-button drag turns (sideways) and tilts (up and down) the map; a trackpad's two-finger drag does the same (see [Camera controls](#camera-controls-mapgesturesjs)) |
+| `dragRotate` / `pitchWithRotate` | `true` | A right-button drag turns (sideways) and tilts (up and down) the map; a trackpad's two-finger drag with Shift held does the same (see [Camera controls](#camera-controls-mapgesturesjs)) |
 | `maxPitch` | `60` | MapLibre's own default, made explicit; the native app's limit too |
 | `touchPitch` | `false` | Touch screens as before: pinch zooms, a twist turns (`touchZoomRotate`), two fingers do not tilt |
 | `dragPan` | on | Pan enabled |
@@ -94,6 +94,19 @@ R5.1 uses one renderer density for the whole session. R5.0 switched between 1× 
 
 Left unset, MapLibre sizes this cache dynamically to roughly `(ceil(w/256)+1)*(ceil(h/256)+1)*5` tiles **per source** — ~270 at 1080p but ~800 on a 4K viewport. With `renderWorldCopies`, panning E/W feeds successive wrapped world-copy tiles into that cache, so retained GPU textures climb until the tab OOMs. `256` caps the 4K case ~3× while being a no-op on phones. In-view tiles are a separate structure and are never evicted by this, so on-screen tiles are never re-fetched. This is orthogonal to the fixed 1× density (which bounds framebuffer pixels, not tiles).
 
+### Terrain caches (`terrainCaches.js`)
+
+Attached to every map instance. With terrain on, MapLibre 5.19 repeats work whose answer has not changed. Nothing here changes a pixel; screenshots of the same camera before and after are identical.
+
+| What | Cost before | Now |
+|---|---|---|
+| **`getTerrainCoords`.** Every tile of every source asks where it lies on every terrain tile | About 3,800 new objects and matrices a frame at 1080p | Kept per tile until the set of terrain tiles changes |
+| **`getTerrainData`.** Asked per tile, per source and per label | 8% of the main thread | Kept for one frame, and forgotten on `render` and `sourcedata` |
+
+Each patch is skipped if the method it relies on has gone, and `terrainCaches.test.js` fails on an upgrade to say so.
+
+**Known and left alone: the drape pool thrashes.** Each terrain tile keeps one 1024 px texture per stack of layers. Custom layers and symbols split the stacks, so a game with a war has 4. MapLibre's render pool reuses any slot not in use at that moment before it makes a new one, and each stack frees its slots when it ends, so the next stack overwrites them. With 8 tiles and 4 stacks, every tile is redrawn every frame. Growing the pool to `tiles × stacks` (8 MB of video memory a slot) cut the main thread's work while panning by a further quarter, but it added about 300 MB of video memory and a stall of 0.5 to 1.9 s on the first pan of every session, even with the slots made and cleared ahead of time. MapLibre 6 reworks the pool.
+
 ### `terrain` memo
 
 `terrain = { source: "terrain-source", exaggeration: 15 }` when `terrainEnabled && !customBg && !bgDeclared`: a custom image or vector background has no DEM to deform. **The globe is included on purpose.** An older guard (`!isGlobe`) kept terrain off the globe, on the grounds that MapLibre could not draw it there and that it could corrupt the shader cache across projection changes; `9b414f54` dropped it because MapLibre 5 does draw terrain on the globe, and every projection change remounts the map (the projection is part of the key), so no GL state survives one.
@@ -103,15 +116,16 @@ Left unset, MapLibre sizes this cache dynamically to roughly `(ceil(w/256)+1)*(c
 | Input | Pan | Zoom | Turn and tilt |
 |---|---|---|---|
 | Mouse | left drag | wheel | right-button drag (or Ctrl with a left drag): sideways turns, up and down tilts (MapLibre's `dragRotate` with `pitchWithRotate`) |
-| Trackpad | click and drag | pinch (wheel events with `ctrlKey`) | two-finger drag: sideways turns, up and down tilts, both at once |
+| Trackpad | click and drag | pinch (wheel events with `ctrlKey`), or a two-finger drag | two-finger drag with Shift held: sideways turns, up and down tilts, both at once |
 | Keyboard | arrows | `+` / `-` | Shift with the arrows (MapLibre's keyboard handler) |
 | Touch | drag | pinch | twist turns; no tilt (`touchPitch` off) |
 
 A trackpad's two-finger drag reaches the page as wheel events, the same events a mouse wheel sends, and MapLibre's `scrollZoom` zooms on both. `attachMapGestures` (attached by `World.jsx` to every map instance, like the instrumentation below) listens for `wheel` on the canvas container **in the capture phase**, ahead of MapLibre's own listener on that element, and sorts each event with **MapLibre's own trackpad/wheel test** (`ScrollZoomHandler.wheel`, `maplibre-gl/src/ui/handler/scroll_zoom.ts`): a step that is a whole multiple of `4.000244140625` px is a mouse wheel's; a step under 4 px is a trackpad's; the first step after 400 ms of quiet is held up to 40 ms, and then is a lone mouse-wheel notch, or is told by the pace of the next step (`|ms × px| < 200` is a trackpad); a scroll keeps its kind until it pauses for 400 ms. It reads the larger of `deltaX` and `deltaY` (MapLibre reads `deltaY` only; a trackpad's sideways scroll has none).
 
 - **A pinch** (`ctrlKey`) goes on to MapLibre untouched.
-- **A mouse wheel's step** is stopped and handed to MapLibre as a copy whose `deltaY` is rounded to a whole multiple of `4.000244140625` (100 px → 100.006), which MapLibre counts as a wheel at once: the same zoom as before, without a second 40 ms wait.
-- **A trackpad's step** is stopped and turns the map: `easeTo({ bearing, pitch })` about the centre, 0.5° a px sideways and 0.3° a px up and down, the pitch kept within `getMinPitch()`..`getMaxPitch()`. Each step is a 200 ms ease that settles in its first 120 ms, the rest holding the move open for the next step (MapLibre's wheel zoom waits 200 ms before its `zoomend` too); steps share one `easeId`, so a whole scroll is one `movestart`/`moveend`, and each carries on from the goal of the one still easing until a `moveend` says the turn stopped. With Reduce motion on (`reduceMotionEnabled()`) each step is taken at once instead of eased. Fingers that move right (content following them, the default on macOS and Windows) turn the map as Shift+Right does; up tilts it as Shift+Up does.
+- **A mouse wheel's step** is stopped and handed to MapLibre as a copy whose `deltaY` is rounded to a whole multiple of `4.000244140625` (100 px → 100.006), which MapLibre counts as a wheel at once: the same zoom as before, without a second 40 ms wait. With Shift held MapLibre zooms a quarter as far; and as some browsers turn a Shift-held wheel's scroll sideways (`deltaX`, no `deltaY`), the larger of the two is zoomed then.
+- **A trackpad's step without Shift** goes on to MapLibre untouched, which zooms on it at its trackpad rate (a held first step it settles, a few pixels, is let go). This is what the native app does: a two-finger scroll zooms, and only with Shift held turns and tilts.
+- **A trackpad's step with Shift held** is stopped and turns the map: `easeTo({ bearing, pitch })` about the centre, 0.5° a px sideways and 0.3° a px up and down, the pitch kept within `getMinPitch()`..`getMaxPitch()`. Each step is a 200 ms ease that settles in its first 120 ms, the rest holding the move open for the next step (MapLibre's wheel zoom waits 200 ms before its `zoomend` too); steps share one `easeId`, so a whole scroll is one `movestart`/`moveend`, and each carries on from the goal of the one still easing until a `moveend` says the turn stopped. With Reduce motion on (`reduceMotionEnabled()`) each step is taken at once instead of eased. Fingers that move right (content following them, the default on macOS and Windows) turn the map as Shift+Right does; up tilts it as Shift+Up does.
 - **Anything that throws** leaves the event to MapLibre, which zooms on it, and nothing is sorted while `scrollZoom` or `dragRotate` is off. MapLibre's test has a known blind spot, which this inherits: a "smooth scrolling" mouse wheel that sends many small steps quickly looks like a trackpad.
 
 MapLibre's mouse handlers already call `preventDefault()` on `contextmenu` over the map, so a right-button drag opens no browser menu and a right-click without a drag still does nothing. While a War Room tool is in hand its sheet covers the map (`WarRoomTools.jsx`); it hands its `wheel` events and right-button `mousedown`/`mouseup` to the map's canvas as copies (`passToMap`), so the controls are the same there, and it keeps the browser's menu off itself. `GlobeEffects.jsx` counts `rotateend`/`pitchend` as interaction too, so the idle spin waits out its grace after a long turn.
@@ -301,6 +315,8 @@ The old stock pipeline labelled *modern* countries, which was wrong on scenario 
 
 The worker returns `labelData` (one row per polity), `pointLabelData` / `lineLabelData` for the MapLibre layers, and `ptrLabelData` (every label site with its territorial envelope) for PTR.
 
+Placing a name tests thousands of points against its territory's outlines (`pointInRingStateTile`), and visiting every edge for every point was most of the labels' time. An outline of 48 edges or more is tested through bands of its edges, sorted once by height and kept with the outline (`ringBandsOf`): a point visits only its own band's. Each edge sits in every band its height reaches, widened by three times the segment test's epsilon, so every point gets the answer the whole outline gave it (`polityLabels.ringBands.test.js` checks that against the old full scan). On the modern-day map with a played session, the labels went from 4.6 s to 2.4 s in the worker, with identical output.
+
 ### The polity-name renderer (PTR) — `src/Game/Map/labels/`
 
 PTR is the default renderer for live polity labels: one WebGL custom layer, `polity-text-renderer`, that draws each name as a raster ribbon bent along a single arc across the territory. `Nations.jsx` mounts it through `PolityTextLayer.jsx` whenever a game's own map has live labels and country labels are not hidden.
@@ -444,7 +460,6 @@ The region card's control block (`regionControlStatus`) shows for a region that 
 
 The ⓘ beside the region's name (**Region info**) opens a section with the region's cities (with populations, capital and biggest first) and its neighbouring regions grouped by who holds them now. `Selection/regionInfo.js` answers the questions the AI's `region_info` lookup answers, from what the map already holds: the compact catalog the map primes (`getPrimedScenarioRegionCatalog`: declared adjacencies, else touching boxes; centroids) and the city rows it publishes for search (`getWorldPlaceIndex().cities`, with `world.cityRenames` applied). A city belongs to the region whose centre is nearest among those whose box holds it. No read and no request. A world whose map primes no catalog (stock tiles only) says it knows nothing more.
 
-Under everything else on the card is a **Listen in** button, shown while the game's Listen in feature is on. It opens the phone on this region, with the country that holds it now as a second tab, and leaves the card where it is; the country panel's footer has the same button for the country as a whole ([game-ui.md §10-ter](game-ui.md)).
 
 The feature card (a city or a structure) names the **Region** it stands in. `featureAt` in `Nations.jsx` resolves the region under the glyph and hands it over as `hostRegionName` and `hostRegion` (the same selection a click on that region gives `onRegionSelected`); the row is a link that closes the feature card and opens the region's, which a tap beside a small dot on a phone rarely managed. Coordinates show only where there is no region (a structure at sea, or a place opened from search).
 

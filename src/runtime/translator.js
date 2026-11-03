@@ -83,6 +83,16 @@ const TRANSLATED_ATTRIBUTES = ["placeholder", "title", "aria-label", "aria-descr
 // verbatim. [data-no-translate] lets any component opt out explicitly.
 // (<select> is NOT skipped — dropdown options are UI text too; the language
 // picker itself opts out via data-no-translate.)
+//
+// Text a player typed is theirs wherever it is shown, not only while it is in
+// the box they typed it in. A queued order, shown in the Actions panel once it
+// was written, was read as interface text: in a language with no shipped pack
+// it went to the AI and came back "translated" over the player's own words,
+// and with a pack a `{{slot}}` pattern or a " / " list could rewrite a piece
+// of it (a player's report, 2026-11-02: "the client overwrites text inputs
+// through translation layers"). Such text, and the Game Master's preview the
+// model wrote in the player's language, carry data-no-translate (actions.jsx,
+// cheats.jsx).
 const SKIP_SELECTOR = "script, style, noscript, input, textarea, [contenteditable], [data-no-translate]";
 // An input's own placeholder and title are interface text all the same.
 const ATTRIBUTE_SKIP_SELECTOR = "script, style, noscript, [contenteditable], [data-no-translate]";
@@ -389,8 +399,9 @@ const visitTitle = () => {
   if (value !== translated) document.title = translated;
 };
 
-const textIsSkipped = (node) => !node.parentElement || Boolean(node.parentElement.closest(SKIP_SELECTOR));
-const attributesAreSkipped = (element) => Boolean(element.closest(ATTRIBUTE_SKIP_SELECTOR));
+// Exported for translator.test.js: what the walker leaves alone.
+export const textIsSkipped = (node) => !node.parentElement || Boolean(node.parentElement.closest(SKIP_SELECTOR));
+export const attributesAreSkipped = (element) => Boolean(element.closest(ATTRIBUTE_SKIP_SELECTOR));
 const ATTRIBUTE_SELECTOR = TRANSLATED_ATTRIBUTES.map((attribute) => `[${attribute}]`).join(",");
 
 const walkSubtree = (root) => {

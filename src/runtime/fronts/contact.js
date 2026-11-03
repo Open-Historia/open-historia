@@ -12,6 +12,7 @@
 
 import { CONTACT_WITHIN_KM, FRAME_MARGIN_KM } from "./constants.js";
 import { createFrame, latToY, yToLat } from "./frame.js";
+import { measureOptions } from "./worldGrid.js";
 
 // Two boxes this near, in degrees, are taken to touch: shapes drawn by hand do
 // not always share their border to the last digit.
@@ -76,7 +77,7 @@ const boxesOfSides = (regions, sideOf, around = null) => {
 const boundsRound = (contact, held, map) => {
   // How many kilometres a degree of the map's plane is there: a frame laid on
   // the contact knows, so no angle is taken here.
-  const probe = createFrame(contact, { flat: map?.flat === true, scale: map?.scale });
+  const probe = createFrame(contact, measureOptions(map));
   if (!probe) return null;
   const reach = CONTACT_WITHIN_KM / (probe.km / probe.cell);
   const west = contact.west - reach;
@@ -112,7 +113,7 @@ export const middleOf = (region) => {
 // Finds the stretches where the two sides of a war touch.
 //   regions   the map's regions
 //   sideOf    (regionId) => 0, 1, or -1 for a region neither side holds
-//   map       { flat, scale }
+//   map       the map's measure (worldGrid.js measureOptions)
 // Returns [{ bounds: { west, south, east, north }, lng, lat }]: for each
 // stretch the box to lay a frame round, and a point of the contact (to tell
 // whether a battlefield already covers it). In the order the map lists the
@@ -214,4 +215,4 @@ export const findContacts = (regions, sideOf, map) => {
 
 // The frame for a stretch of contact: its box with room round it.
 export const frameForContact = (contact, map) =>
-  createFrame(contact.bounds, { flat: map?.flat === true, scale: map?.scale, marginKm: FRAME_MARGIN_KM });
+  createFrame(contact.bounds, { ...measureOptions(map), marginKm: FRAME_MARGIN_KM });

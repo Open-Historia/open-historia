@@ -24,7 +24,7 @@ import { useEventsById } from "./eventLookup.js";
 // Forces panel — duplicates of either would drift and describe the same formation
 // two different ways on two screens.
 import { POSTURE_LABEL, strengthColor } from "../GameUI/forces.jsx";
-import { haversineKm } from "../../runtime/unitMotion.js";
+import { kmOnMap } from "../../runtime/unitMotion.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { APP_HEIGHT, MAP_CARD_OPENED, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, useCanHover, useShortTouchScreen, useTouchPrimary } from "../../runtime/mobileUi.js";
@@ -185,7 +185,7 @@ const describeOrder = (unit, order) => {
   if (order.kind === "patrol") {
     return `Patrolling · ${Math.round(order.radiusKm)} km station`;
   }
-  const remaining = Math.round(haversineKm(unit.lat, unit.lng, order.toLat, order.toLng));
+  const remaining = Math.round(kmOnMap(unit.lat, unit.lng, order.toLat, order.toLng));
   const destination =
     order.targetLabel || `${order.toLat.toFixed(1)}, ${order.toLng.toFixed(1)}`;
   return `En route to ${destination} — about ${remaining} km to go`;

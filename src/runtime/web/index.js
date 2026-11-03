@@ -13,7 +13,7 @@ import { installWebApiRouter } from "./router.js";
 import { ensureSeeded, migrateStoreLayout } from "./libraryStore.js";
 import * as idb from "./idb.js";
 import { bringHttpSavesAcross } from "./saveMove.js";
-import { markEntered, showHomePage, shouldShowHome } from "./homePage.js";
+import { showDemoNotice, shouldShowDemoNotice } from "./demoNotice.js";
 import { isNativeApp, showNativeBoot } from "./nativeBoot.js";
 import { forgetRetiredAccount } from "./retiredAccount.js";
 import { setBootTranslations } from "./bootTexts.js";
@@ -44,7 +44,7 @@ const requestPersistentStorage = async () => {
   }
 };
 
-// The home page, its demo notice and the Android boot screen are drawn before the
+// The demo notice and the Android boot screen are drawn before the
 // game (and its translator) starts, so they read their text from the player's
 // shipped language pack themselves (bootTexts.js). The language is the one
 // Settings stored: mirrored in localStorage, else the ui-settings row. A
@@ -98,20 +98,21 @@ export const installWebBackend = async () => {
   forgetRetiredAccount();
 
   // The whole world is under this build's own /assets, on the website as in
-  // the app: there is nothing to find or connect to before the game can start.
+  // the app: there is nothing to find or connect to before the game can start,
+  // and no entry screen in front of it. The website's Play the demo button leads
+  // straight here: the demo notice comes up over the game and dismissing it is
+  // the way in.
   try {
     if (boot) {
-      // The app has no entry screen and nothing to press: the player already
-      // chose to be here by opening it. The game mounts behind the boot screen,
-      // which still holds its minimum, so a fast phone does not flash it.
-      markEntered();
+      // The game mounts behind the boot screen, which still holds its minimum,
+      // so a fast phone does not flash it.
       boot.settle();
-    } else if (shouldShowHome()) {
+    } else if (shouldShowDemoNotice()) {
       await bootLanguage;
-      showHomePage();
+      showDemoNotice();
     }
   } catch (error) {
     if (boot) boot.settle();
-    console.warn("Home page failed:", error.message);
+    console.warn("Demo notice failed:", error.message);
   }
 };

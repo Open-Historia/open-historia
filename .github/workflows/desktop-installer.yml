@@ -89,7 +89,7 @@ jobs:
       # in package.json is what produces them); it only declines to upload them,
       # which the release step below does itself.
       - name: Build the installer
-        run: npx electron-builder ${{ matrix.args }} --publish never
+        run: node scripts/package-desktop.mjs ${{ matrix.args }} --publish never
         env:
           # No code-signing certificate yet. Without this electron-builder tries to
           # discover one and fails the build rather than skipping signing.

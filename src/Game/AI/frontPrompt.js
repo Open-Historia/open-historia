@@ -241,6 +241,8 @@ const NEWS_WORDS = {
   siege: (who, at, enemy) => `${enemy} shut troops of ${who} in at ${at} and is besieging them`,
   // A fortified line broken through (runtime/fronts/walls.js): `at` is the line.
   breached: (who, at) => `${who} broke through ${at}`,
+  // An air strike the war room ordered (runtime/fronts/airStrike.js): `at` is what it struck.
+  bombed: (who, at) => `${who}'s aircraft bombed ${at}`,
 };
 // Which of many is told: a capital, then a large town, then troops cut off or
 // shut in, then what an assault took, then any other town, the larger first,
@@ -258,6 +260,7 @@ const newsWeight = (entry) => {
   if (entry.k === "breached") return 3.5e9;
   if (entry.k === "pocket" || entry.k === "siege") return 3e9;
   if (entry.k === "taken" || entry.k === "destroyed") return 2.5e9;
+  if (entry.k === "bombed") return 2.3e9;
   if (entry.k === "overrun") return 1.5e9;
   return 5e8;
 };

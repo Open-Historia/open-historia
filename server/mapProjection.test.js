@@ -10,6 +10,7 @@ import {
   bundleProjection,
   convertScenarioBundle,
   DEFAULT_PROJECTION,
+  FLAT_EARTH,
   FREEFORM,
   MERCATOR_MAX_LAT,
   PROJECTIONS,
@@ -84,7 +85,10 @@ test("every world projection: a place goes onto its sheet and comes back", () =>
       near(backLon, lon, 2e-4, `${type} longitude of ${lon},${lat}`);
       near(backLat, lat, 2e-4, `${type} latitude of ${lon},${lat}`);
     }
-    // The equator spans the whole width, and the centre stays the centre.
+    // The equator spans the whole width, and the centre stays the centre: not
+    // so the round flat-earth map, which is centred on the North Pole
+    // (server/mapDistance.test.js).
+    if (type === FLAT_EARTH) continue;
     near(geoToDisplay(type, 180, 0)[0], 180, 1e-5, `${type} east edge`);
     assert.deepEqual(geoToDisplay(type, 0, 0), [0, 0], type);
   }

@@ -18,7 +18,7 @@
 // tile, then hands the rings here, which keeps the border geometry testable
 // without the map binaries.
 
-import { haversineKm } from "../../runtime/unitMotion.js";
+import { kmOnMap } from "../../runtime/unitMotion.js";
 import { regionOwnerName } from "./regionVocab.js";
 
 const norm = (value) => String(value ?? "").trim();
@@ -69,7 +69,7 @@ const describeOrder = (unit, order) => {
   if (order.kind === "patrol") {
     return `working a ${Math.round(order.radiusKm)} km station`;
   }
-  const remaining = Math.round(haversineKm(unit.lat, unit.lng, order.toLat, order.toLng));
+  const remaining = Math.round(kmOnMap(unit.lat, unit.lng, order.toLat, order.toLng));
   const target = norm(order.targetLabel) || `${order.toLat.toFixed(1)}, ${order.toLng.toFixed(1)}`;
   return `under orders to ${target}, about ${remaining} km still to go`;
 };
@@ -81,7 +81,7 @@ const describeNearestRival = (unit, units) => {
   for (const other of units) {
     if (other.id === unit.id) continue;
     if (lower(other.ownerCode) === lower(unit.ownerCode)) continue;
-    const km = haversineKm(unit.lat, unit.lng, other.lat, other.lng);
+    const km = kmOnMap(unit.lat, unit.lng, other.lat, other.lng);
     if (!best || km < best.km) best = { km, other };
   }
   if (!best || best.km > 2000) return "";
@@ -221,7 +221,7 @@ const ringDistanceKm = (ring, lng, lat) => {
       closestLat = aLat + (bLat - aLat) * t;
     }
 
-    const km = haversineKm(lat, lng, closestLat, closestLng);
+    const km = kmOnMap(lat, lng, closestLat, closestLng);
     if (km < best) best = km;
   }
   return best;

@@ -15,6 +15,7 @@ import { loadNatGeoDarkStyle } from "./natGeoDarkStyle.js";
 import { isMapPerfVerbose, recordMapFreeze, recordMapTrace } from "../../runtime/mapPerfTrace.js";
 import { attachMapInstrumentation } from "./mapInstrumentation.js";
 import { attachMapGestures } from "./mapGestures.js";
+import { attachTerrainCaches } from "./terrainCaches.js";
 import { reduceMotionEnabled } from "../../runtime/mapSettings.js";
 import {
   DEFAULT_BASEMAP_ID,
@@ -1108,8 +1109,8 @@ function World({ mapRef, projection: requestedProjection, terrainEnabled, onInit
     };
   }, [handleBasemapTileLoading, handleSourceLoaded, mapInstanceKey, mapRef, stopLoadingToast]);
 
-  // Two fingers on a trackpad turn and tilt the map, and a mouse wheel still
-  // zooms (mapGestures.js). Put on each map instance, as the listeners above.
+  // Two fingers on a trackpad zoom, and with Shift held turn and tilt the map;
+  // a mouse wheel zooms (mapGestures.js). Put on each map instance, as the listeners above.
   React.useEffect(() => {
     let disposed = false;
     let frame = 0;
@@ -1122,6 +1123,28 @@ function World({ mapRef, projection: requestedProjection, terrainEnabled, onInit
         return;
       }
       detach = attachMapGestures(mapInstance, { still: reduceMotionEnabled });
+    };
+    attach();
+    return () => {
+      disposed = true;
+      if (frame) cancelAnimationFrame(frame);
+      detach?.();
+    };
+  }, [mapInstanceKey, mapRef]);
+
+  // Terrain work that does not change from frame to frame is kept (terrainCaches.js).
+  React.useEffect(() => {
+    let disposed = false;
+    let frame = 0;
+    let detach = null;
+    const attach = () => {
+      if (disposed) return;
+      const mapInstance = mapRef?.current?.getMap?.() || null;
+      if (!mapInstance?.on || mapInstance._removed) {
+        frame = requestAnimationFrame(attach);
+        return;
+      }
+      detach = attachTerrainCaches(mapInstance);
     };
     attach();
     return () => {

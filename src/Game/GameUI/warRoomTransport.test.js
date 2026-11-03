@@ -32,7 +32,8 @@ test("the rail has a key that carries troops, and with a carrier chosen the map 
   assert.match(rail, /<span data-no-translate>\{carrier\.kind\}<\/span> · \{carrier\.capacity\} formations each · \{carrier\.speed\} km a day/);
   assert.match(rail, /onCarrier\(carrier\.medium\);/);
   assert.match(panel, /carriers=\{carriers\}\s*onCarrier=\{\(medium\) => takeTool\("transport", \{ medium \}\)\}/);
-  assert.match(panel, /TRANSPORT_MEDIA\.map\(\(medium\) => \(\{ medium, \.\.\.carrierFor\(medium, year\) \}\)\)\.filter\(\(carrier\) => carrier\.kind\)/);
+  // (Nothing by sea without navies, nor by air without air units: the Wars feature.)
+  assert.match(panel, /TRANSPORT_MEDIA\.map\(\(medium\) => \(\{ medium, \.\.\.carrierFor\(medium, year\) \}\)\)\s*\.filter\(\(carrier\) => carrier\.kind && \(carrier\.medium !== "sea" \|\| navies\) && \(carrier\.medium !== "air" \|\| aircraft\)\)/);
   // The rail says its limit in the number the engine has.
   assert.match(rail, /const LOAD_MOST = (\d+);/);
   assert.equal(Number(/const LOAD_MOST = (\d+);/.exec(rail)[1]), TRANSPORT_LOAD_MOST);

@@ -50,8 +50,10 @@ const ScriptedEventsCheck = ({ text, currentDate, includeOrigin, isGame }) => {
 // and `firstSkipAhead` says the next skip is the game's first, which covers
 // that day too: what the Scripted events check measures a beat against.
 // `world` is the world a scripted event's conditions pick their polities and
-// institutions from (ScriptedEventsEditor).
-const FeaturesSectionEditor = ({ kind, features, scenarioFeatures, world, onChange, styles, currentDate = "", firstSkipAhead = true }) => {
+// institutions from (ScriptedEventsEditor). `extras` holds what a feature's card
+// shows under its settings, by the feature's key: the scenario editor's war
+// settings, military and fronts under Wars.
+const FeaturesSectionEditor = ({ kind, features, scenarioFeatures, world, onChange, styles, currentDate = "", firstSkipAhead = true, extras = null }) => {
   const isGame = kind === "game";
   const base = normalizeFeatureSettings(scenarioFeatures);
   const effective = isGame ? resolveFeatures(scenarioFeatures, features) : normalizeFeatureSettings(features);
@@ -154,6 +156,31 @@ const FeaturesSectionEditor = ({ kind, features, scenarioFeatures, world, onChan
                             onUseScenarioDefault={() => setFeature(definition.key, { [setting.key]: undefined })}
                             onStartOverride={() => setFeature(definition.key, { [setting.key]: cloneScenario() })}
                           />
+                          <div style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.72rem", marginTop: "0.3rem" }}>{setting.description}</div>
+                        </div>
+                      );
+                    }
+                    // An on/off of its own inside a feature (Wars: Fronts, Air units, Navies),
+                    // read exactly as a feature's on/off row is.
+                    if (setting.type === "toggle") {
+                      const scenarioOn = base[definition.key][setting.key] !== false;
+                      const state = isGame
+                        ? (override[setting.key] === undefined ? "default" : override[setting.key] ? "on" : "off")
+                        : (effective[definition.key][setting.key] !== false ? "on" : "off");
+                      return (
+                        <div key={setting.key}>
+                          <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.6rem", justifyContent: "space-between" }}>
+                            <label style={{ ...styles.fieldLabelStyle, marginBottom: 0 }}>{setting.label}</label>
+                            <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem" }}>
+                              {isGame && (
+                                <button type="button" className="oh-tap-row" style={choice(state === "default")} onClick={() => setFeature(definition.key, { [setting.key]: undefined })}>
+                                  Scenario default ({scenarioOn ? "On" : "Off"})
+                                </button>
+                              )}
+                              <button type="button" className="oh-tap-row" style={choice(state === "on")} onClick={() => setFeature(definition.key, { [setting.key]: true })}>On</button>
+                              <button type="button" className="oh-tap-row" style={choice(state === "off")} onClick={() => setFeature(definition.key, { [setting.key]: false })}>Off</button>
+                            </div>
+                          </div>
                           <div style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.72rem", marginTop: "0.3rem" }}>{setting.description}</div>
                         </div>
                       );
@@ -292,6 +319,7 @@ const FeaturesSectionEditor = ({ kind, features, scenarioFeatures, world, onChan
                   })}
                 </div>
               )}
+              {extras?.[definition.key] ? <div style={{ marginTop: "0.85rem" }}>{extras[definition.key]}</div> : null}
             </div>
           );
         })}

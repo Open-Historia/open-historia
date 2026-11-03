@@ -210,7 +210,7 @@ const baselinePowerScore = (world, polity) => {
 // `identityIndex`: the polity identity index of this same world, when the caller
 // scores many polities of it in turn (refreshPowerStatus); otherwise built as needed.
 export const estimateNativePowerScore = (world, polityInput, referenceInput = null, identityIndex = null) => {
-  const polity = canonicalPolity(polityInput, world);
+  const polity = canonicalPolity(polityInput, world, identityIndex);
   if (!polity) {
     return {
       score: null,
@@ -262,7 +262,7 @@ export const estimateNativePowerScore = (world, polityInput, referenceInput = nu
 
   // These are leverage/relevance, not sovereign capability. They may change how
   // much attention or reach an actor has without changing what it materially IS.
-  const institutions = institutionPowerContribution(world, polity);
+  const institutions = institutionPowerContribution(world, polity, identityIndex);
   const strategic = strategicActivityContribution(world, polity);
 
   if (!evidence && generatedBaseline == null) {

@@ -50,7 +50,7 @@
 
 import { airWorth } from "./military.js";
 import { isLive } from "./troops.js";
-import { kmBetween } from "./worldGrid.js";
+import { kmBetween, measureOptions } from "./worldGrid.js";
 
 // How far a wing reaches from its base, by era (before 1500, 1500-1849, 1850-1944, from 1945): none before there were any.
 export const AIR_REACH_KM = Object.freeze([0, 0, 500, 900]);
@@ -82,8 +82,7 @@ const assignWings = (run, day) => {
   const reach = AIR_REACH_KM[run.era] ?? 0;
   if (!(reach > 0)) return;
   run.wings = run.wings ?? new Map();
-  const flat = run.input?.map?.flat === true;
-  const scale = run.input?.map?.scale;
+  const measure = measureOptions(run.input?.map);
   const units = (Array.isArray(run.input?.units) ? run.input.units : []).filter((unit) => fold(unit?.type) === "air" && Number(unit.strength) > 0 && Number.isFinite(Number(unit.lng)) && Number.isFinite(Number(unit.lat)));
   units.sort((a, b) => (String(a.id) < String(b.id) ? -1 : String(a.id) > String(b.id) ? 1 : 0));
   for (const unit of units) {
@@ -97,7 +96,7 @@ const assignWings = (run, day) => {
       const side = [0, 1].find((index) => battle.sides[index].some((member, at) => !battle.gone[index].has(at) && fold(member) === fold(wing.owner)));
       if (side === undefined) continue;
       const [lng, lat] = battle.place.toLngLat(battle.field.cols / 2, battle.field.rows / 2);
-      const km = kmBetween(wing.lng, wing.lat, lng, lat, { flat, scale });
+      const km = kmBetween(wing.lng, wing.lat, lng, lat, measure);
       if (km <= reach && (!best || km < best.km)) best = { battle, side, km };
     }
     if (!best) continue;

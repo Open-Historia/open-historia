@@ -64,6 +64,7 @@ const Moment = ({ moment, names }) => {
     case "withdrew": return <>{who} withdrew its last troops.</>;
     case "returned": return <>{who} sent its troops back.</>;
     case "assault": return <>{who} stormed {at}.</>;
+    case "bombed": return <>{who} bombed {at} from the air.</>;
     default: return null;
   }
 };

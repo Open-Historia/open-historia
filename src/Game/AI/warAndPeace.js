@@ -62,6 +62,7 @@ import { startingWearinessOf } from "../../runtime/militaryStats.js";
 import { landWeightsOf } from "../../runtime/militaryPower.js";
 import { populationFigureOf } from "../../runtime/populationFigure.js";
 import { normalizeWarWeariness, wearinessGoingIn, wearinessOf, withTurnWeariness } from "../../runtime/warWeariness.js";
+import { wearinessFromStrikes } from "../../runtime/fronts/airStrike.js";
 import { economyRate, withTurnResources } from "../../runtime/warResources.js";
 import { withTurnAttrition } from "../../runtime/attrition.js";
 import { middleFundingPerHead } from "../../runtime/militaryFunding.js";
@@ -92,7 +93,8 @@ export const regionHoldingsFromWorld = (world) => {
     const key = fold(holder);
     if (key) held.set(key, (held.get(key) ?? 0) + 1);
   }
-  return held;
+  // (`complete` where the world lists every region: a country it gives none holds no land at all.)
+  return world?.customRegions === true ? Object.assign(held, { complete: true }) : held;
 };
 
 // How a war stands for each country in it, on the ground: (warId, name) =>
@@ -304,7 +306,7 @@ const withReparationsPaid = (world, days) => {
 //               [{ from, to, terms }] (peaceTerms.js readTreatyLines), each
 //               checked before it is made
 //   onRefused   (treaty with its `reason`) => anything, for each one refused
-export const turnWarAndPeace = ({ world = {}, baseWorld = {}, days = 0, date = "", round = 0, players = [], fronts = null, held = null, treaties = [], onRefused = null } = {}) => {
+export const turnWarAndPeace = ({ world = {}, baseWorld = {}, days = 0, date = "", round = 0, players = [], fronts = null, held = null, treaties = [], onRefused = null, proposals = [], onProposed = null } = {}) => {
   const holdings = held instanceof Map ? held : regionHoldingsFromWorld(world);
   const turn = Math.max(0, Math.round(figure(round)));
   let next = withReparationsPaid(world, days);
@@ -367,6 +369,8 @@ export const turnWarAndPeace = ({ world = {}, baseWorld = {}, days = 0, date = "
     blockades: fronts?.sea?.blockades,
     // (And what attrition took, where the scenario's wars count it: runtime/fronts/attrition.js.)
     attrition: fronts?.attrition,
+    // (And what the war room's air strikes on its cities did: runtime/fronts/airStrike.js.)
+    bombed: wearinessFromStrikes(fronts?.airStrikes),
   });
   next = { ...next, warWeariness: weariness };
   // What attrition has cost each country at war (runtime/attrition.js).
@@ -398,15 +402,105 @@ export const turnWarAndPeace = ({ world = {}, baseWorld = {}, days = 0, date = "
   // Only what the skip says was made. Weariness is a figure the AI is told
   // (warStatsPrompt.js), never what makes a peace.
   for (const told of list(treaties)) {
-    const checked = treatyFromSkip({ ...told, wars: next.wars, players });
+    const checked = treatyFromSkip({ ...told, wars: next.wars, players, offers: next.peaceOffers });
     if (!checked.treaty) {
       if (typeof onRefused === "function") onRefused({ ...told, reason: checked.reason });
       continue;
     }
-    next = makePeace(next, { ...checked.treaty, date, round: turn, by: "settled" });
+    // (A person's own offer accepted by the country it was put to: their peace, on their terms.)
+    const { accepts, ...treaty } = checked.treaty;
+    next = makePeace(next, { ...treaty, date, round: turn, by: accepts ? "proposal" : "settled" });
+    if (accepts) next = { ...next, peaceOffers: normalizePeaceOffers(list(next.peaceOffers).map((offer) => (offer?.id === accepts ? { ...offer, status: "accepted", answeredRound: turn } : offer))) };
   }
+  // "an action shouldnt inherently be able to end a war, but it offers peace to the opponent" (the owner,
+  // 2026-11-03): a person's order to end their war is put to the other side as their offer of peace, each keeping
+  // what it holds and nobody paying, which that side's government answers in the next period (above).
+  for (const { warId, from } of list(proposals)) {
+    const put = proposePeace(next, { warId, from, terms: { territory: TERRITORY_AS_HELD }, players, date, round: turn });
+    if (put.offer) next = put.world;
+    if (typeof onProposed === "function") onProposed({ warId, from, to: put.to, offer: put.offer, reason: put.reason });
+  }
+  next = endWarsOnPuppets(next, { date, round: turn });
+  next = endConqueredWars(next, { held: holdings, date, round: turn });
   next = { ...next, peaceOffers: withTurnPeaceOffers(next.peaceOffers, { wars: next.wars, round: turn }) };
   return next;
+};
+
+// "fully conquouring an enemy should end the war" (the owner, 2026-11-03): a war
+// in which every country of one side holds no land at all, and the other side
+// some, is over. A group is left out of the count (groups fight without land of
+// their own), and a side made only of groups never ends this way. Ended with no
+// terms: the conqueror keeps what it took.
+//   held   Map, folded name -> how many regions it holds (regionHoldingsFromWorld or the map's count)
+export const endConqueredWars = (world, { held = null, date = "", round = 0 } = {}) => {
+  const holdings = held instanceof Map ? held : regionHoldingsFromWorld(world);
+  // (Only on a count of every region: one of the regions that changed hands alone would find landless a country
+  // that holds all it ever did.)
+  if (holdings.complete !== true) return world;
+  const groups = new Set(Object.keys(world?.groups && typeof world.groups === "object" ? world.groups : {}).map(fold));
+  const countries = (side) => side.filter((name) => !groups.has(fold(name)));
+  const landless = (side) => countries(side).length > 0 && countries(side).every((name) => !((holdings.get(fold(name)) ?? 0) > 0));
+  const holdsLand = (side) => side.some((name) => (holdings.get(fold(name)) ?? 0) > 0);
+  const ended = [];
+  for (const war of list(world?.wars).filter(active)) {
+    const [sideA, sideB] = sidesOf(war);
+    const beaten = landless(sideB) && holdsLand(sideA) ? sideB : landless(sideA) && holdsLand(sideB) ? sideA : null;
+    if (!beaten) continue;
+    const victors = beaten === sideB ? sideA : sideB;
+    ended.push({ id: clean(war.id), op: "end", actors: [], opponents: [], eventIds: [], baselineDate: clean(date), note: `${countries(beaten).join(", ")} fully conquered by ${victors.join(", ")}.` });
+  }
+  if (ended.length === 0) return world;
+  const turn = Math.max(0, Math.round(figure(round)));
+  const gone = new Set(ended.map((update) => update.id));
+  const next = applyWarUpdates({ world, updates: ended, events: [], stopDate: clean(date), round: turn, limit: Infinity }).world;
+  return {
+    ...next,
+    callsToArms: normalizeCallsToArms(list(next.callsToArms).map((call) => (gone.has(clean(call?.warId)) && call.status === "open" ? { ...call, status: "lapsed", answeredRound: turn } : call))),
+  };
+};
+
+// A war in which every member of one side is now a puppet of a member of the
+// other is over: a subject does not fight its overlord. "i conquered czechia
+// fully as germany and i want to end the war but somehow my game still thinks
+// im in war" (a player's report, 2026-11-03): Germany had made Czechia its
+// protectorate, and its war on the protectorate went on for two years, the
+// protectorate building fortified lines against it. Ended with no terms: what
+// the overlord holds it keeps, and the puppet is its to command. The same world
+// where no war is one.
+export const endWarsOnPuppets = (world, { date = "", round = 0 } = {}) => {
+  const puppets = list(world?.puppets).filter((row) => fold(row?.status || "active") === "active");
+  if (puppets.length === 0) return world;
+  const overlordsOf = (name) => puppets.filter((row) => fold(row?.puppet) === fold(name)).map((row) => fold(row?.overlord));
+  const subjectTo = (subjects, rulers) => {
+    const ruling = new Set(rulers.map(fold));
+    return subjects.length > 0 && subjects.every((name) => overlordsOf(name).some((overlord) => ruling.has(overlord)));
+  };
+  const ended = [];
+  for (const war of list(world?.wars).filter(active)) {
+    const [sideA, sideB] = sidesOf(war);
+    const subjects = subjectTo(sideB, sideA) ? sideB : subjectTo(sideA, sideB) ? sideA : null;
+    if (!subjects) continue;
+    const rulers = subjects === sideB ? sideA : sideB;
+    const row = puppets.find((entry) => subjects.some((name) => fold(entry?.puppet) === fold(name)) && rulers.some((name) => fold(entry?.overlord) === fold(name)));
+    ended.push({
+      id: clean(war.id),
+      op: "end",
+      actors: [],
+      opponents: [],
+      eventIds: [],
+      baselineDate: clean(date),
+      note: `${subjects.join(", ")} became ${clean(row?.overlord)}'s ${clean(row?.kind) || "puppet"}.`,
+    });
+  }
+  if (ended.length === 0) return world;
+  const turn = Math.max(0, Math.round(figure(round)));
+  const gone = new Set(ended.map((update) => update.id));
+  const next = applyWarUpdates({ world, updates: ended, events: [], stopDate: clean(date), round: turn, limit: Infinity }).world;
+  return {
+    ...next,
+    // Whatever was asked in those wars is answered by their ending.
+    callsToArms: normalizeCallsToArms(list(next.callsToArms).map((call) => (gone.has(clean(call?.warId)) && call.status === "open" ? { ...call, status: "lapsed", answeredRound: turn } : call))),
+  };
 };
 
 // The length of a turn's period, in days.

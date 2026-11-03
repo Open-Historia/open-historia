@@ -16,7 +16,6 @@ const net = require("node:net");
 const crypto = require("node:crypto");
 const { spawn } = require("node:child_process");
 const { runLaunchUpdate } = require("./launchUpdate.cjs");
-const { recommendBeta } = require("./betaRecommendation.cjs");
 const { BETA_APP_NAME, readChannel } = require("./channel.cjs");
 const { MULTIPLAYER_APP_NAME } = require("./channel.cjs");
 const { createLayeredUpdater } = require("./layeredUpdate.cjs");
@@ -1058,21 +1057,10 @@ const boot = async () => {
   await mainWindow.loadURL(`http://localhost:${port}`);
   setupWindow?.close();
   setupWindow = null;
-  // The stable app asks, once for every build it runs, whether the player
-  // wants the beta: after a first install and after each update
-  // (electron/betaRecommendation.cjs). Over the open game, never in front of
-  // an update or the map download, and never allowed to stop the game.
-  recommendBeta({
-    fs,
-    recordFile: path.join(USER_ROOT, "beta-recommendation.json"),
-    isBeta: IS_BETA,
-    isPackaged: app.isPackaged,
-    version: app.getVersion(),
-    payloadBuild: files?.root ? String(files.build ?? "") : "",
-    ask: (options) => dialog.showMessageBox(mainWindow, { ...options, title: "Open Historia" }),
-    open: () => shell.openExternal(BETA_DOWNLOAD_URL),
-    log: logMain,
-  }).catch((error) => logMain("warn", "beta.recommendation.failed", String(error?.message || error)));
+  // No dialog asks the player to get the beta any more: "make it so when beta
+  // is merged to main this popup is removed from the stable app" (the owner,
+  // 2026-11-02). The beta never showed it; the stable app stops once this
+  // reaches main. The update window's own Download the beta button stays.
   // The game is up; now confirm the map on disk is still the map we shipped.
   verifyMapData();
 };
