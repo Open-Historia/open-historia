@@ -186,7 +186,7 @@ import { formalAgendaProposals } from "./formalAgenda.js";
 import { abandonWorkerJob, createWorkerFailureStreak } from "./statsWorkerJobs.js";
 import { chatParticipantKey, foldGeneratedChatsIntoStorage, isLifecycleNegotiationChat, logGeneratedChat } from "./chatFold.js";
 import { sharedLetterOf } from "./sharedLetters.js";
-import { extractJsonPayload, parseWithoutTrailingFields, unwrapMimickedToolCall } from "./jsonSalvage.js";
+import { extractJsonArray, extractJsonPayload, parseWithoutTrailingFields, unwrapMimickedToolCall } from "./jsonSalvage.js";
 import { OUTPUT_LIMIT_MESSAGE, REASONING_ONLY_MESSAGE, REASONING_ONLY_NOTE, isUnreachableError } from "./providerErrors.js";
 import { isCancelAllAbort } from "./aiRequestControl.js";
 import { isChatVisibleTo, withoutPlayerParticipant } from "./chatVisibility.js";
@@ -217,7 +217,14 @@ import {
   withSocialPosts,
   withoutGroupOps,
 } from "./gameplaySchemas.js";
-import { readSkipPosts, socialFeedPromptBlock, withSkipPosts } from "../../runtime/socialFeed.js";
+import {
+  SOCIAL_FEED_LIMIT,
+  newestPostNumber,
+  normalizeSocialPost,
+  readSkipPosts,
+  socialFeedPromptBlock,
+  withSkipPosts,
+} from "../../runtime/socialFeed.js";
 import { knownPolityNames } from "../../runtime/countryInfoPanel.js";
 import { frontsOn, strategyNetOn, warPartsOffBlock } from "./frontsGate.js";
 import { engineerLines } from "../../runtime/fronts/engineer.js";
@@ -21688,4 +21695,83 @@ export const maybeSendIdleDiplomacy = async () => {
     idleDiplomacyInFlight = false;
     setChatGenerationInFlight(false);
   }
+};
+
+// --- Rostra Listen-In On-Demand Generation ---------------------------------------
+export const generateRostraListenInPosts = async ({ country, count = 6, signal } = {}) => {
+  const targetCountry = normalizeString(country);
+  if (!targetCountry) throw new Error("A country must be specified to listen in on.");
+  await waitForSimulationIdle({ signal });
+  const bundle = await readGameStateBundle({ force: true });
+  const world = normalizeWorldState(bundle.world);
+  const variables = await buildTemplateVariables(bundle, { taskKey: "ai" });
+  const era = normalizeString(world.simulationRules).slice(0, 700);
+  const dossier = await buildTargetDossier(bundle, targetCountry, world);
+  const sheet = world.countryStats?.[targetCountry];
+  const currentDate = normalizeString(bundle.game?.gameDate || variables.date);
+  const language = variables.language || "English";
+
+  const systemPrompt =
+    `You are the Rostra social intelligence generator for Open Historia, an alternate-history strategy game.\n` +
+    `Current in-game date: ${currentDate}.\n` +
+    `Generate ${count} distinct public social media posts / tweets written by influential people, politicians, analysts, or citizens of ${targetCountry}.\n` +
+    `Treat the TARGET DOSSIER, RECENT EVENTS, and WORLD STATE below as ground truth.\n` +
+    `Each post must feel authentic to this era and geopolitical situation: real reactions to current wars, diplomatic tensions, domestic politics, protests, or economy.\n` +
+    (era ? `ERA & WORLD RULES:\n${era}\n\n` : "") +
+    `TARGET DOSSIER:\n${dossier || `Country: ${targetCountry}`}\n\n` +
+    (sheet ? `STAT SHEET: government ${normalizeString(sheet.government) || "unknown"}; leader ${normalizeString(sheet.leader) || "unknown"}.\n\n` : "") +
+    `WORLD STATE & RECENT EVENTS:\n${variables.recentEvents || variables.worldSummary || "(no current events)"}\n\n` +
+    `Return ONLY a valid JSON array of objects with the following properties:\n` +
+    `[\n` +
+    `  {\n` +
+    `    "author": "Full name of the speaker",\n` +
+    `    "role": "Their role or title (e.g. Minister of Defense, Journalist, Member of Parliament, Local resident)",\n` +
+    `    "country": "${targetCountry}",\n` +
+    `    "date": "${currentDate}",\n` +
+    `    "text": "The tweet / post content in ${language} (1 to 3 sentences)"\n` +
+    `  }\n` +
+    `]\n` +
+    `Return JSON ONLY, with no markdown code blocks or additional text.`;
+
+  const response = await callAIWithTaskLimit(systemPrompt, [
+    { role: "user", parts: [{ text: `Generate ${count} live posts from ${targetCountry} right now.` }] },
+  ], { signal, taskKey: "rostraListenIn" });
+
+  const rawText = typeof response === "string" ? response : normalizeString(response?.rawText || response?.text);
+  const extracted = extractJsonArray(rawText);
+  if (!Array.isArray(extracted) || extracted.length === 0) {
+    throw new Error("Could not parse generated posts from AI response.");
+  }
+
+  const posts = extracted.slice(0, count).map((item) => ({
+    author: normalizeString(item.author || item.name || "Citizen"),
+    role: normalizeString(item.role || item.title || "Citizen"),
+    country: targetCountry,
+    date: normalizeString(item.date || currentDate),
+    text: normalizeString(item.text || item.content),
+  })).filter((p) => p.text.length > 0);
+
+  if (posts.length === 0) throw new Error("No valid posts generated.");
+
+  // Persist into world.socialFeed
+  await mutateWorldState((w) => {
+    const currentFeed = Array.isArray(w.socialFeed) ? [...w.socialFeed] : [];
+    let number = newestPostNumber(currentFeed) + 1;
+    const round = Number(bundle.game?.round) || 1;
+    const newItems = posts.map((p) => {
+      const id = `p${number++}`;
+      return normalizeSocialPost({
+        ...p,
+        id,
+        round,
+        kind: "voice",
+      });
+    }).filter(Boolean);
+    return {
+      ...w,
+      socialFeed: [...currentFeed, ...newItems].slice(-SOCIAL_FEED_LIMIT),
+    };
+  });
+
+  return posts;
 };
