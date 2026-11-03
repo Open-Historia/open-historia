@@ -249,6 +249,14 @@ The on-demand AI **Compile government and parties** workflow is a *candidate upd
 
 ---
 
+### Advisor conversations and recipient identity
+
+The **Advisor** remains a single chief-advisor conversation for legacy saves and for players who never add a contact. The existing `storage/advisor.json` stays an array so desktop/web imports, exports, restore points and native document notices remain compatible. Legacy conversation rows without `threadId` are the `chief` thread. Opt-in recipients are stored as `role: "advisor-contact"` records with stable IDs, bounded names/titles/personality text and optional Political World officeholder bindings; their messages carry that contact's `threadId`. Retiring a contact marks the profile archived without deleting the transcript.
+
+`src/runtime/advisorThreads.js` owns the storage contract and preserves unrelated recipients and native document notices when a conversation is saved via `mutateAdvisorState`'s canonical write queue. `src/Game/AI/advisorSessions.js` keeps separate conversation histories, `ADVISOR_MEMORY` summaries and in-flight generation guards for each thread. The UI in `AdvisorRecipients.jsx` exposes manual contact creation, per-recipient identity editing, switching, archiving and restoration. Available Political World bindings currently include the player's head of government and head of state. A binding pins the *person occupying that office at the time*; an officeholder replacement must never inherit their predecessor's transcript. Manual contacts are conversation identities and **do not** by themselves create canonical ministerial appointments.
+
+Only the chief Advisor retains the pre-existing ability to apply proposed Action and Project operations directly from conversation replies. Additional contacts are advisory; recipient personality is not a source of sovereign authority. Proactive messaging, deadlines and official-specific delegated powers are future work and not implied by the existence of a contact.
+
 ### Quick "where do I look?" index
 
 - Something wrong on the **map** → `src/Game/Map/` (start `World.jsx`, then `Nations.jsx`).
