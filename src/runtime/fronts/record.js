@@ -46,6 +46,7 @@ import {
   LINE_MARKS,
   MAX_BATTLEFIELDS,
   MAX_CLOSED_BATTLEFIELDS,
+  MAX_HOME_FORCES,
   MAX_CONTESTED_REGIONS,
   MAX_LOG_ENTRIES,
   MAX_NAMED_TROOPS,
@@ -228,6 +229,8 @@ export const normalizeBattlefield = (raw) => {
     log: normalizeLog(raw.log),
     // What its war has come to, run by run (chronicle.js), for its report once it is over.
     ...(readChronicle(raw.chronicle) ? { chronicle: readChronicle(raw.chronicle) } : {}),
+    // A country's forces at home, built up in peace (home.js).
+    ...(raw.home === true ? { home: true } : {}),
   };
   if (status === "closed") record.closedDate = clean(raw.closedDate, DATE_MAX);
   else if (isRecord(raw.field)) record.field = { mask: packed(raw.field.mask), band: packed(raw.field.band), key: clean(raw.field.key, 40) };
@@ -254,7 +257,9 @@ export const normalizeBattlefields = (value) => {
     seen.add(key);
     (record.status === "closed" ? closed : open).push(record);
   }
-  const list = [...open.slice(0, MAX_BATTLEFIELDS), ...closed.slice(-MAX_CLOSED_BATTLEFIELDS)];
+  // (Forces at home are kept beside the battlefields of wars, never in their place: home.js.)
+  const homes = open.filter((record) => record.home === true).slice(0, MAX_HOME_FORCES);
+  const list = [...open.filter((record) => record.home !== true).slice(0, MAX_BATTLEFIELDS), ...homes, ...closed.slice(-MAX_CLOSED_BATTLEFIELDS)];
   made.add(list);
   results.set(value, list);
   return list;

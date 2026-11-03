@@ -239,6 +239,12 @@ export const stepForward = (battle, paceKm, pace) => {
     entry.forward = (x, y) => inPlay(x, y) && !spared(spare, x, y) && !(kept && kept[Math.floor(y) * field.cols + Math.floor(x)])
       && (x - troop.x) * troop.axisX + (y - troop.y) * troop.axisY >= 0;
     entry.dayCells = (paceKm[troop.kind] * arena.speed[cell] * troop.supply * pace * troop.drive * troop.paceFactor * battle.edge[entry.side].pace * troop.legs) / kmAt(troop.y);
+    // Where the ground before it is its own side's, half again as fast as it carves through the other's (march.js).
+    if (battle.ownPace > 1) {
+      const aheadX = Math.floor(troop.x + troop.gx * entry.radius);
+      const aheadY = Math.floor(troop.y + troop.gy * entry.radius);
+      if (aheadX >= 0 && aheadY >= 0 && aheadX < field.cols && aheadY < field.rows && field.holders[aheadY * field.cols + aheadX] === entry.side) entry.dayCells *= battle.ownPace;
+    }
     parts = Math.max(parts, Math.ceil(entry.dayCells / (entry.radius * 0.5)));
   }
   parts = Math.min(SUBSTEPS_MAX, parts);

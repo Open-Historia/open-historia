@@ -218,7 +218,7 @@ import { frontsOn, strategyNetOn, warPartsOffBlock } from "./frontsGate.js";
 import { engineerLines } from "../../runtime/fronts/engineer.js";
 import { foreseeFronts } from "./foreseenFronts.js";
 import { offPageAvailable } from "./frontWorkerClient.js";
-import { applyTurnFronts, citiesFollowCountries, withAirStrikes, withFrontManpower, withBlockadeEconomy, turnBlockades, regionHoldingsOf, forecastTurnFronts, frontsListBlock, frontPlansBlock, frontPowers, frontRegionTest, frontWarJoins, frontWarStarts, frontsLiveBlock, openScenarioFronts, routesIntoOthers, transportWaysFor, readFrontCities, scenarioFrontsPending, warRoomChartFor, warRoomIntelText, withFrontUnits, withoutFrontPowers } from "./frontApply.js";
+import { applyTurnFronts, buildUpAtHome, citiesFollowCountries, withAirStrikes, withFrontManpower, withBlockadeEconomy, turnBlockades, regionHoldingsOf, forecastTurnFronts, frontsListBlock, frontPlansBlock, frontPowers, frontRegionTest, frontWarJoins, frontWarStarts, frontsLiveBlock, openScenarioFronts, routesIntoOthers, transportWaysFor, readFrontCities, scenarioFrontsPending, warRoomChartFor, warRoomIntelText, withFrontUnits, withoutFrontPowers } from "./frontApply.js";
 import { withTurnStrikes } from "../../runtime/strikes.js";
 import { airStrikeVisuals } from "../../runtime/fronts/airStrike.js";
 import { answerPeaceProposal, offerPeace, playerDiplomacy, turnDays, turnWarAndPeace } from "./warAndPeace.js";
@@ -13519,6 +13519,46 @@ export const maybeOpenScenarioFronts = async () => {
     }
     if (written) requestConflictSheets({ ...world, battlefields: built.battlefields }, bundle.game);
     return written ? true : null;
+  } finally {
+    endSimulation();
+  }
+};
+
+// The player's forces built up at home, now (frontApply.js buildUpAtHome):
+// called up round its cities, as many as its men, supplies, war weariness and
+// mustering allow, once a day at most; the War Room is then the player's there,
+// to move them with. No request. Returns "" when it is done, else why it was
+// not, in words a person reads.
+export const buildUpForces = async () => {
+  if (!frontsOn()) return "Battlefields are off in this game.";
+  if (isSimulationBusy()) return "A turn is being resolved: build up once it has landed.";
+  beginSimulation();
+  try {
+    const campaignId = activeCampaignId();
+    const campaignRuntimeGameUrl = String(JSON_URLS.game || "");
+    const sameGame = () => (!campaignId || activeCampaignId() === campaignId) && String(JSON_URLS.game || "") === campaignRuntimeGameUrl;
+    const bundle = await readGameStateBundle({ force: true });
+    if (!sameGame()) return "";
+    const world = normalizeWorldState(bundle.world);
+    const built = await buildUpAtHome({ world, game: bundle.game, campaignId, loadRegions: createRenderedRegionsReader() });
+    if (!built) return "Battlefields are off in this game.";
+    if (built.record === undefined) return "The map could not be read: try again.";
+    const kinds = new Set(normalizeArray(built.notes).map((note) => note?.kind));
+    if (kinds.has("called-today")) return "Your forces at home were called up today already: more can be called up once time has passed.";
+    if (kinds.has("reinforce-no-men")) return "Your country has no more men to call up.";
+    if (!built.record) {
+      if (kinds.has("too-many-battlefields")) return "Too many countries have forces built up already.";
+      return "Your country holds no land to build up forces on.";
+    }
+    if (!sameGame()) return "";
+    await mutateWorldState((current) => {
+      if (!sameGame()) return null;
+      const name = built.record.name.toLowerCase();
+      const kept = normalizeArray(current.battlefields).filter((record) => String(record?.name ?? "").toLowerCase() !== name || record?.status === "closed");
+      return withFrontManpower({ ...current, battlefields: [...kept, built.record] }, built, applyCountryStatPatchToWorld);
+    });
+    logDebugEvent("turn", `Forces called up at home: ${built.record.name}.`, { battlefield: built.record.name }, { verbose: true });
+    return "";
   } finally {
     endSimulation();
   }

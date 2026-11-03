@@ -32,6 +32,7 @@ import { RESOURCES_SHORT_FROM } from "../../runtime/warResources.js";
 import { attritionOf } from "../../runtime/attrition.js";
 import { warSettingsOf } from "../../runtime/warSettings.js";
 import { PeaceControls, ReparationsNote } from "./warAndPeace.jsx";
+import { BuildUpControl } from "./buildUp.jsx";
 import { WarReportsList } from "./afterAction.jsx";
 import { institutionPortfolioForPolity } from "../../runtime/institutionLifecycleCore.js";
 import { TURN_RUNNING_NOTE, isSimulationBusy } from "../AI/simulationStatus.js";
@@ -968,6 +969,8 @@ const DiplomacySection = ({ world, identity, targetCountry, viewerPolity }) => {
             </div>
         )}
         </div>
+        {/* On the player's own country: its forces built up at home (buildUp.jsx). */}
+        <BuildUpControl world={world} viewer={viewerPolity} target={identity?.canonicalKey ? identity.canonicalKey(targetCountry) : targetCountry} style={{ ...cardStyle, marginTop: "0.55rem", padding: "0.55rem 0.65rem" }} />
         {/* The reports of the wars it fought on battlefields that have closed, to read again (afterAction.jsx). */}
         <WarReportsList world={world} country={viewerPolity} style={{ ...cardStyle, marginTop: "0.55rem", padding: 0, overflow: "hidden" }} />
         <ReparationsNote world={world} target={targetCountry} />

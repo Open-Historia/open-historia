@@ -12,7 +12,7 @@ import { enterGame, useGameEntered } from "../../runtime/gameEntry.js";
 import { useActiveFeatures, activeWars } from "../../runtime/gameFeatures.js";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
 import { brushedMetalUrl } from "./brushedMetal.js";
-import { playerFrontsKey } from "./warRoomData.js";
+import { fightingIn, playerFrontsKey } from "./warRoomData.js";
 import { presenceFor, useDiscordPresence } from "../../runtime/discordPresence.js";
 import { musicSceneOf, setMusicScene } from "../../runtime/ambientMusic.js";
 import { followScenarioMusic } from "../../runtime/scenarioMusic.js";
@@ -664,13 +664,16 @@ const Main = ({
     setIsCountryOpen((open) => !open);
   };
   // The war room's button is there while the player's troops are on a
-  // battlefield where a war is being fought or is frozen by a ceasefire
-  // (warRoomData.js), and fronts are switched on for this game.
+  // battlefield where a war is being fought or is frozen by a ceasefire, or
+  // are built up on a border in peace (warRoomData.js), and fronts are
+  // switched on for this game.
   useActiveFeatures();
   // Nobody is playing a game that has not been opened: no country, so no war.
   const playerCountry = gameEntered ? activeGame?.country || "" : "";
   const warFronts = useRuntimeState("world", (world) => playerFrontsKey(world?.battlefields, playerCountry, world?.wars), playerCountry);
-  const atWar = Boolean(warFronts) && activeWars().battlefields;
+  const hasFronts = Boolean(warFronts) && activeWars().battlefields;
+  // (Forces built up in peace are no war: the music does not go to war for them.)
+  const atWar = hasFronts && fightingIn(warFronts);
   // For the music, at war is wider than the war room's button: the player's
   // country on a side of a war being fought (the war ledger), whether or not
   // there is a battlefield for it or fronts are switched on.
@@ -692,6 +695,17 @@ const Main = ({
   const musicScene = musicSceneOf({ inMenu: mainMenuOpen || hasNoGames, loading: showGameLoading, atWar: atWar || inWar, war: battlefieldShown });
   useEffect(() => { setMusicScene(musicScene); }, [musicScene]);
   const closeWarRoomPanel = useCallback(() => setIsWarRoomOpen(false), []);
+  // Forces just built up on a border in peace open the war room on them (buildUp.jsx).
+  useEffect(() => {
+    const openRoom = () => {
+      setShouldLoadWarRoom(true);
+      setIsAdvisorOpen(false);
+      setIsCountryOpen(false);
+      setIsWarRoomOpen(true);
+    };
+    window.addEventListener("oh:open-war-room", openRoom);
+    return () => window.removeEventListener("oh:open-war-room", openRoom);
+  }, []);
   const toggleWarRoom = () => {
     setShouldLoadWarRoom(true);
     setIsAdvisorOpen(false);
@@ -820,7 +834,7 @@ const Main = ({
               active={isCountryOpen}
               onToggle={toggleCountry}
             />
-            <Search mapRef={mapRef} besideWarRoom={atWar} />
+            <Search mapRef={mapRef} besideWarRoom={hasFronts} />
             <ForcesPanel
               mapRef={mapRef}
               topOffset={TOP_BAR_OFFSET}
@@ -840,7 +854,7 @@ const Main = ({
           </>
         )}
       </div>
-      {(atWar || isWarRoomOpen) && (
+      {(hasFronts || isWarRoomOpen) && (
         <WarRoomButton open={warRoomShown} isMobile={isMobile} onToggle={toggleWarRoom} />
       )}
       <Suspense fallback={null}>

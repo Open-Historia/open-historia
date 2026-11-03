@@ -79,6 +79,8 @@ export const maybeGeneratePregameHistory = async (...args) => (inSharedGame() ? 
 // The fronts a scenario begins with, built when its game is first entered: the
 // game's own record, so a page playing a shared game builds none.
 export const maybeOpenScenarioFronts = async (...args) => (inSharedGame() ? null : (await gameplay()).maybeOpenScenarioFronts(...args));
+// Forces built up at home (gameplay.js buildUpForces): the game's own record, so a page playing a shared game builds none.
+export const buildUpForces = async (...args) => (inSharedGame() ? "Forces cannot be built up in a shared game yet." : (await gameplay()).buildUpForces(...args));
 // A scenario's own pre-history, written in the Workshop: not the game being played.
 export const generateScenarioPrehistory = async (...args) => (await gameplay()).generateScenarioPrehistory(...args);
 
