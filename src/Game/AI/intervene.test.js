@@ -86,6 +86,20 @@ test("the outreach and the summary ride along; the mode is the turn's", () => {
     assert.equal(result.mode, "jump");
 });
 
+test("the posts written by the closing date come along, a later one does not, and each keeps its place", () => {
+    const journal = journalTurn({
+        events: [event("e1", "2014-04-25", "Ultimatum delivered"), event("e2", "2014-05-10", "Kharkiv falls"), event("e3", "2014-05-20", "Talks open")],
+        socialPosts: [
+            { author: "A B", text: "Before.", date: "2014-04-26" },
+            { author: "C D", text: "After.", date: "2014-05-12" },
+            { author: "E F", text: "Quoting the first.", date: "2014-04-27", quote: "#1" },
+        ],
+    });
+    const { result } = truncateTurn(journal, 2, { originDate: "2014-04-21" });
+    assert.deepEqual(result.socialPosts.map((post) => post?.text ?? null), ["Before.", null, "Quoting the first."]);
+    assert.deepEqual(journalTurn().socialPosts, []);
+});
+
 test("the closing date is the last kept event's, never before the day after the round began", () => {
     assert.equal(closingDateAfterIntervene({ keptEvents: [event("a", "2014-04-21", "same day")], originDate: "2014-04-21", minimumDate: "2014-04-22" }), "2014-04-22");
     assert.equal(closingDateAfterIntervene({ keptEvents: [event("a", "2014-04-30", "x"), event("b", "2014-04-25", "y")], originDate: "2014-04-21" }), "2014-04-30", "the latest date, whatever the order");

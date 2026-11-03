@@ -206,14 +206,18 @@ import {
   getGameplayToolForStatIndices,
   HISTORY_FIELD,
   INTELLIGENCE_RATING_FIELD,
+  SOCIAL_POSTS_FIELD,
   normalizeGameplayPayload,
   validateGameplayPayload,
   withEventAudience,
   withFrontOrders,
   withWarFigures,
   withIntelligenceRating,
+  withSocialPosts,
   withoutGroupOps,
 } from "./gameplaySchemas.js";
+import { readSkipPosts, socialFeedPromptBlock, withSkipPosts } from "../../runtime/socialFeed.js";
+import { knownPolityNames } from "../../runtime/countryInfoPanel.js";
 import { frontsOn, strategyNetOn, warPartsOffBlock } from "./frontsGate.js";
 import { engineerLines } from "../../runtime/fronts/engineer.js";
 import { foreseeFronts } from "./foreseenFronts.js";
@@ -523,10 +527,8 @@ import {
   getPoliticalProfileKey,
   normalizePoliticalActorRecord,
 } from "../../runtime/politicalActors.js";
-import { buildPublicPoliticalView, normalizePoliticalIntelligenceAssessment } from "../../runtime/politicalKnowledge.js";
-import { listenInFeedLanguage, listenInPlace, normalizeListenInPosts, normalizeListenInTrends } from "../../runtime/listenIn.js";
-import { getStoredLanguage, languageDisplayName, readingLanguageName } from "../../runtime/i18n.js";
-import { describeListenInPlace, listenInPlaceLabel, listenInRequest } from "./listenInContext.js";
+import { normalizePoliticalIntelligenceAssessment } from "../../runtime/politicalKnowledge.js";
+import { readingLanguageName } from "../../runtime/i18n.js";
 import { buildRealHistoryDirective } from "./futureHistoryBoundary.js";
 import {
   eventsFromLegacyChat,
@@ -2822,6 +2824,17 @@ ${continuity}`);
   const mandates = buildOpenInstitutionalMandatesBlock(world);
   if (mandates) blocks.push(mandates);
 
+  // Rostra, the social network (runtime/socialFeed.js): what was posted, as
+  // public statements that move events, and the posts this period is to add
+  // in the answer's socialPosts field. Here, among the live records, so the
+  // prompt's cacheable opening is the same with or without posts. Nothing at
+  // all where the game has no Rostra (server/gameFeatures.js socialMedia).
+  if (isActiveFeatureEnabled("socialMedia")) blocks.push(socialFeedPromptBlock({
+    feed: world.socialFeed,
+    players: humanCountriesOf(game).map((country) => toCountryName(country) || country),
+    round: Number(game?.round) || 0,
+  }));
+
   const reputation = normalizeString(variables.playerPolityReputationContext);
   const intelligence = normalizeString(variables.playerPolityIntelligenceContext);
   if (reputation || intelligence) {
@@ -3701,7 +3714,10 @@ const runJsonTask = async (taskKey, {
     ? getGameplayToolForCustomStatSheet(taskKey, customStatRows, { custom: true })
     : getGameplayToolForStatIndices(taskKey, statIndexRows, { custom: customStatIndices }));
   // The players' advice, asked of the time skip whose prompt asks for it.
-  const taskTool = JUMP_TASK_KEYS.has(taskKey) && normalizeString(variables?.seatAdviceDirective) ? withSeatAdvice(featureTool) : featureTool;
+  const advisedTool = JUMP_TASK_KEYS.has(taskKey) && normalizeString(variables?.seatAdviceDirective) ? withSeatAdvice(featureTool) : featureTool;
+  // And the social posts after all of it, or none where the game has no Rostra
+  // (gameplaySchemas.js withSocialPosts).
+  const taskTool = JUMP_TASK_KEYS.has(taskKey) ? withSocialPosts(advisedTool, isActiveFeatureEnabled("socialMedia")) : advisedTool;
   // A first reading's sheet can carry the service's rating, in the same request
   // (generateCountryStatSheet rateIntelligence, gameplaySchemas.js
   // withIntelligenceRating).
@@ -4024,7 +4040,7 @@ const runJsonTask = async (taskKey, {
       // second request for a turn already in hand. Before the output-limit
       // check below, so a cut that fell inside a rider is not a lost turn.
       if (!parsed && rawText && JUMP_TASK_KEYS.has(taskKey)) {
-        const rescued = parseWithoutTrailingFields(rawText, [AGENT_REPORTS_FIELD, HISTORY_FIELD, SEAT_ADVICE_FIELD]);
+        const rescued = parseWithoutTrailingFields(rawText, [SOCIAL_POSTS_FIELD, AGENT_REPORTS_FIELD, HISTORY_FIELD, SEAT_ADVICE_FIELD]);
         if (rescued) {
           parsed = rescued.value;
           console.warn(`[ai] task "${taskKey}": the end of the answer could not be read; kept the turn without ${rescued.dropped.join(" and ")}.`);
@@ -9215,11 +9231,15 @@ const applySimulationResult = async ({
   }
   // A war a player fights ends only by a peace that player makes or accepts
   // (playersWarsHold.js): the skip's end, ceasefire or a player's leaving is
-  // refused, with the events that told it and what they changed on the map.
-  const playersWars = holdPlayersWars({ updates: result.warUpdates, events: curatedEvents, wars: baseWorld?.wars, players: humanCountriesOf(baseGame) });
+  // refused, with the events that told it and what they changed on the map. One
+  // the player's own order brought about is put to the other side as their offer
+  // of peace instead (turnWarAndPeace below).
+  const playersWars = holdPlayersWars({ updates: result.warUpdates, events: curatedEvents, wars: baseWorld?.wars, players: humanCountriesOf(baseGame), orders: baseActions });
   if (playersWars.refused.length) {
     curatedEvents = playersWars.events;
+    const offered = new Set(playersWars.proposals.map((entry) => entry.update));
     for (const update of playersWars.refused) {
+      if (offered.has(update)) continue;
       logDebugEvent("turn", `The skip's ${update.op} for ${update.id} was refused: a war a player fights ends only by a peace that player makes or accepts.`, update);
       noteReceipt(receipt, "dropped", `"${update.op}" for ${update.id}, and the events that told it: a war a player fights ends only by a peace that player makes or accepts. To bring them to peace, offer it in a letter.`);
     }
@@ -9745,6 +9765,16 @@ const applySimulationResult = async ({
     held: await regionHoldingsOf(worldWithImpacts, nextGame, campaignId),
     treaties: readTreatyLines(result.peaceTreaties),
     onRefused: (treaty) => logDebugEvent("turn", `The skip's peace between ${treaty.from} and ${treaty.to} was not made: ${treaty.reason}.`),
+    // A player's order to end their war: their offer of peace, put to the other side.
+    proposals: playersWars.proposals,
+    onProposed: ({ warId, from, to, offer, reason }) => {
+      if (offer) {
+        logDebugEvent("turn", `${from}'s order to end ${warId} was put to ${to} as an offer of peace.`, offer);
+        noteReceipt(receipt, "dropped", `The end of ${warId}: ${from}'s order offers ${to} peace instead, each keeping what it holds. ${to}'s answer comes with the next skip.`);
+      } else {
+        logDebugEvent("turn", `${from}'s order to end ${warId} offered nothing: ${reason}.`);
+      }
+    },
   });
   // A war's end and a country's fall clear the map (nativeUnitDirector.js
   // pruneWarUnits): the counters raised for a war that has ended, and the units
@@ -10040,6 +10070,25 @@ const applySimulationResult = async ({
     if (offer) {
       const offered = freshEvents.find((event) => event.id === offer.eventId);
       logDebugEvent("turn", `Interactive event offered: "${normalizeString(offered?.title) || offer.eventId}" can be played out as a scene.`);
+    }
+  }
+
+  // Rostra's posts of the period (runtime/socialFeed.js), read against the
+  // world as the turn left it: a country it renamed or founded is a name the
+  // posts may use. Each post is read on its own; one that is not a person's, or
+  // that quotes nothing there is, is left out and the rest are kept. On
+  // worldWithImpacts, which everything below starts from again.
+  if (normalizeArray(result.socialPosts).length && isActiveFeatureEnabled("socialMedia")) {
+    const posts = readSkipPosts(result.socialPosts, {
+      feed: worldWithImpacts.socialFeed,
+      from: baseGame.gameDate,
+      to: nextGame.gameDate,
+      round: nextGame.round,
+      knownNames: knownPolityNames(worldWithImpacts),
+    });
+    worldWithImpacts = { ...worldWithImpacts, socialFeed: withSkipPosts(worldWithImpacts.socialFeed, posts) };
+    if (posts.length < normalizeArray(result.socialPosts).length) {
+      logDebugEvent("turn", `Social posts: ${posts.length} of ${normalizeArray(result.socialPosts).length} kept; the rest named no person, quoted nothing there is or repeated a post.`, undefined, { verbose: true });
     }
   }
 
@@ -10349,6 +10398,7 @@ const applySimulationResult = async ({
         summary: result.summary,
         outreach: result.outreach,
         peaceTreaties: result.peaceTreaties,
+        socialPosts: result.socialPosts,
         clearActions: result.clearActions,
         mode: result.mode,
         receipt,
@@ -13367,112 +13417,6 @@ export const generateCountryStats = async ({ code, name } = {}) => {
   return String(raw || "").trim();
 };
 
-// ---- Listen in --------------------------------------------------------------
-// What ordinary people in one place are posting (runtime/listenIn.js), for the
-// phone a region's card and a country's panel open (GameUI/ListenInPhone.jsx).
-// ONE request, made because the player opened or refreshed a feed. No lookup
-// functions, since every round of them is another request: the place's facts
-// are worked out here and handed over in the prompt (listenInContext.js).
-// Nothing is written to the world; the caller keeps the answer on the device
-// (runtime/listenInStore.js).
-
-// The country as its own people know it: its public politics, the economy on
-// its stat sheet, the arrangements that are OPEN, the groups on its land, and
-// how it stands with the country the player leads.
-const listenInCountryFacts = ({ world, polityKey, playerPolity, groups }) => {
-  const identityIndex = buildPolityIdentityIndex(world);
-  const canonical = (value) => canonicalCampaignPolity(value, world, identityIndex);
-  const name = canonical(polityKey);
-  if (!name) return null;
-  const record = world.polityOverrides?.[name] ?? null;
-  const player = canonical(playerPolity);
-  const isPlayer = Boolean(player) && player === name;
-  const relation = !player || isPlayer
-    ? null
-    : normalizeArray(world.relations).find((entry) => {
-      const a = canonical(entry?.a);
-      const b = canonical(entry?.b);
-      return (a === name && b === player) || (b === name && a === player);
-    });
-  const open = normalizeArray(world.puppets).filter((row) => row?.status === "active" && row?.secrecy === "open");
-  return {
-    name: normalizeString(record?.name) || name,
-    aliases: normalizeArray(record?.aliases),
-    note: normalizeString(record?.note),
-    politics: buildPublicPoliticalView(world, name),
-    economy: normalizeString(buildCompactEconomicContext(world.countryStats?.[name])),
-    isPlayer,
-    relationWithPlayer: relation ? { player: normalizeString(playerPolity), status: relationStatusForScore(relation.score) } : null,
-    overlords: open.filter((row) => canonical(row.puppet) === name).map((row) => ({ name: row.overlord, kind: row.kind })),
-    puppets: open.filter((row) => canonical(row.overlord) === name).map((row) => ({ name: row.puppet, kind: row.kind })),
-    groups,
-  };
-};
-
-export const generateListenInFeed = async ({ place, language: askedLanguage, signal } = {}) => {
-  const target = listenInPlace(place);
-  if (!target) throw new Error("There is no place to listen in on.");
-  if (!isActiveFeatureEnabled("listenIn")) throw new Error("Listen in is switched off for this game.");
-  // Stamped before the read: the caller keeps the feed under this campaign and
-  // this game day, whatever the player has opened by the time it comes back.
-  const campaignId = activeCampaignId();
-  const bundle = await readGameStateBundle({ force: true });
-  const world = normalizeWorldState(bundle.world);
-  const variables = await buildTemplateVariables(bundle, { taskKey: "listenIn" });
-  const groupsOn = isActiveFeatureEnabled("groups");
-  const groupAreas = groupsOn ? world.groupAreas ?? {} : {};
-  // The map, indexed the way the lookup functions read it — built only for a
-  // region's feed, or when a group holds ground somewhere.
-  const context = target.scope === "region" || Object.keys(groupAreas).length
-    ? await lazyLookupContext(bundle)().catch(() => null)
-    : null;
-  const answer = context && target.scope === "region" ? executeLookup(context, "region_info", { regionId: target.regionId }) : null;
-  const region = answer && !answer.error ? answer : null;
-  // The country is whoever holds the region today, as the map has it, not as
-  // the card that was clicked remembered it.
-  const polityKey = normalizeString(region?.owner && region.owner !== "unowned" ? region.owner : target.polityKey);
-  const holder = context?.resolveOwner?.(polityKey) || polityKey;
-  const groups = holder
-    ? [...new Set(Object.entries(groupAreas)
-      .filter(([regionId]) => context?.byId?.get(regionId)?.owner === holder)
-      .map(([, group]) => normalizeString(world.groups?.[group]?.name) || group))]
-    : [];
-  const country = polityKey
-    ? listenInCountryFacts({ world, polityKey, playerPolity: bundle.game?.country, groups })
-    : null;
-  const shown = { ...target, polity: country?.name || target.polity };
-  // The phone keeps a feed under the language it asked in, so it names it and
-  // the two cannot disagree; a caller that names none gets the player's own.
-  const uiLanguage = getStoredLanguage();
-  const language = normalizeString(askedLanguage) || listenInFeedLanguage({
-    uiLanguage,
-    uiLanguageName: languageDisplayName(uiLanguage),
-    saveLanguage: bundle.world?.language || bundle.game?.language,
-  });
-  const { payload } = await runJsonTask("listenIn", {
-    signal,
-    userMessage: listenInRequest(shown),
-    variables: {
-      ...variables,
-      listenInPlace: listenInPlaceLabel(shown),
-      listenInPlaceDetails: describeListenInPlace({ place: shown, region, country, groupsOn }),
-      listenInLanguage: language,
-    },
-    // One usable post is still a feed; none is a failed request.
-    validatePayload: (candidate) => (normalizeListenInPosts(candidate?.posts).length
-      ? ""
-      : "posts must hold at least one post with an author and a text."),
-  });
-  return {
-    campaignId,
-    gameDate: normalizeString(bundle.game?.gameDate),
-    round: Number(bundle.game?.round) || 0,
-    language,
-    posts: normalizeListenInPosts(payload?.posts),
-    trends: normalizeListenInTrends(payload?.trends),
-  };
-};
-
 // The fronts a scenario begins with (runtime/fronts/scenarioFronts.js), built
 // into battlefields the first time its game is entered: the engine opens them
 // where the two sides' ground meets and stands the troops along the line, the
@@ -13657,18 +13601,13 @@ export const generateWarRoomReply = async ({ battlefield, message, signal } = {}
     buildTemplateVariables(bundle, { taskKey: "warRoom" }),
     readFrontCities(world, bundle.game),
   ]);
-  const uiLanguage = getStoredLanguage();
   const { payload } = await runJsonTask("warRoom", {
     signal,
     userMessage: warRoomRequest(said),
     variables: {
       ...variables,
       ...warRoomVariables({ record, side, player, cities, intel: warRoomIntelText({ world, game: bundle.game, record, side, cities }) }),
-      warRoomLanguage: listenInFeedLanguage({
-        uiLanguage,
-        uiLanguageName: languageDisplayName(uiLanguage),
-        saveLanguage: bundle.world?.language || bundle.game?.language,
-      }),
+      warRoomLanguage: readingLanguageName(normalizeString(bundle.world?.language || bundle.game?.language)),
     },
     // One general answering is an answer; nobody answering is a failed request.
     validatePayload: (candidate) => (readWarRoomAnswer(candidate, { record, side, cities }).lines.length
@@ -18406,6 +18345,8 @@ const finishTimelineJump = async ({ context, signal, state }) => {
     peaceTreaties: merged.peaceTreaties,
     // The figures the war needs of the countries that fight, a line a country (warFiguresPrompt.js).
     warFigures: merged.warFigures,
+    // What was posted on Rostra in the period (runtime/socialFeed.js), read when the turn is written.
+    socialPosts: merged.socialPosts,
     // How long a skip was asked for: what the front engine runs for where the
     // scenario's calendar is not one the game can count days on.
     requestedDays: context.safeDays,

@@ -371,7 +371,7 @@
 @media (max-width: 1200px) {
   .gx-pill { display: none; }
 }
-/* actions.jsx / projects.jsx: the dock's own windows, opaque, from the dock's top */
+/* actions.jsx / social.jsx: the dock's own windows, opaque, from the dock's top */
 .gx-panel.dock-panel { bottom: 4.75rem; border-radius: 16px; background-color: rgba(24, 24, 27, 0.95); border-color: rgba(255, 255, 255, 0.1); }
 
 /* ---- the country name in the date widget: a button on a phone (time.jsx) ---- */
@@ -683,10 +683,19 @@ button.gx-date-country { background: none; border: 0; padding: 0; font-family: i
 .wr-sides { display: none; }
 .wr-fold { display: none; }
 
-/* ---- the Actions panel (actions.jsx) ---- */
+/* ---- the Actions panel (actions.jsx): Actions and Projects in the diplomacy panel's tab strip ---- */
 .ac { width: 26.25rem; max-width: calc(100% - 1rem); height: min(calc(100% - var(--gx-top) - 9rem), max(calc(100% - var(--gx-top) - 16rem), 30rem)); }
-.ac-head { align-items: center; border-bottom: 1px solid rgba(255, 255, 255, 0.07); display: flex; justify-content: space-between; padding: 1rem 1.25rem 0.75rem; flex-shrink: 0; }
-.ac-head span { font-size: 1rem; font-weight: 700; letter-spacing: 0.01em; }
+.ac-head { align-items: center; border-bottom: 1px solid rgba(255, 255, 255, 0.07); display: flex; gap: 0.5rem; justify-content: space-between; padding: 0.8rem 1rem 0.65rem; flex-shrink: 0; }
+.ac-tabs { display: flex; gap: 0.35rem; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.ac-tab { font-size: 0.8rem; padding: 0.36rem 0.74rem; }
+.ac-tab .dp-count { background: rgba(255, 255, 255, 0.08); color: rgba(255, 255, 255, 0.6); }
+.ac-tab.on .dp-count { background: rgba(255, 255, 255, 0.14); color: #fff; }
+.ac-board { display: flex; flex: 1; flex-direction: column; gap: 0.85rem; min-height: 0; overflow-y: auto; padding: 0.95rem 1.25rem 1.25rem; scrollbar-width: none; }
+.ac-board > * { flex-shrink: 0; }
+.ac-board-sub { color: rgba(255, 255, 255, 0.45); font-size: 0.75rem; line-height: 1.45; margin: 0; }
+.ac-find { background: rgba(0, 0, 0, 0.2); border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 10px; color: white; font-family: sans-serif; font-size: 0.8rem; outline: none; padding: 0.5rem 0.75rem; width: 100%; }
+.ac-find:focus { border-color: rgba(255, 255, 255, 0.25); }
+.ac-find::placeholder { color: rgba(255, 255, 255, 0.4); }
 .ac-body { display: flex; flex-direction: column; gap: 0.875rem; padding: 0.875rem 1.25rem; flex: 1; min-height: 0; overflow: hidden; }
 .ac-body > * { flex-shrink: 0; }
 .ac-setgoal { background: none; border: 1px dashed rgba(255, 255, 255, 0.2); border-radius: 10px; color: #e4e4e7; cursor: pointer; font-family: sans-serif; font-size: 0.78rem; padding: 0.5rem 0.9rem; text-align: left; width: 100%; }
@@ -763,6 +772,101 @@ button.gx-date-country { background: none; border: 0; padding: 0; font-family: i
   .ac-brain, .ac-suggest, .ac-section, .ac-setgoal, .ac-gbtn { min-height: 44px; }
 }
 
+/* ---- Rostra, the world's social network (social.jsx): the game's grey, and the accent for what is the
+   player's and what can be pressed. A phone that rises from the dock, with a phone's proportions, as
+   tall as the room above the dock allows; on a phone, the app alone (below). ---- */
+.rs-dock { display: inline-flex; position: relative; }
+.rs-dock .rs-badge { background: #2bc1f3; color: #06171d; font-weight: 800; }
+.gx-panel.dock-panel.rs { aspect-ratio: 9 / 19; background-color: #17171a; border: 0; border-radius: 2.6rem; box-shadow: 0 0 0 1px #3a3a40, 0 0 0 3px #0e0e10, 0 24px 60px rgba(0, 0, 0, 0.55); box-sizing: border-box; color: #f4f4f5; height: min(46rem, calc(100% - var(--gx-top) - 9rem)); max-width: calc(100% - 1rem); min-height: 24rem; min-width: 17.5rem; overflow: visible; padding: 0.5rem; width: auto; }
+.rs-screen { background: #0b0b0d; border-radius: 2.1rem; display: flex; flex: 1; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; }
+.rs-side { background: #2c2c31; position: absolute; width: 3px; }
+.rs-side.one { border-radius: 2px 0 0 2px; height: 1.8rem; left: -3px; top: 6.2rem; }
+.rs-side.two { border-radius: 2px 0 0 2px; height: 3rem; left: -3px; top: 9rem; }
+.rs-side.three { border-radius: 0 2px 2px 0; height: 4.4rem; right: -3px; top: 9.6rem; }
+.rs-status { align-items: center; display: grid; flex: 0 0 auto; font-size: 0.7rem; font-weight: 700; grid-template-columns: 1fr auto 1fr; height: 2.5rem; padding: 0.3rem 1.35rem 0; }
+.rs-status > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rs-island { background: #000; border-radius: 999px; box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.05); display: block; height: 1.45rem; width: 5.2rem; }
+.rs-marks { align-items: center; display: flex; gap: 0.28rem; justify-content: flex-end; }
+.rs-head { align-items: center; border-bottom: 1px solid rgba(255, 255, 255, 0.08); display: flex; flex-shrink: 0; gap: 0.6rem; padding: 0.25rem 0.95rem 0.6rem; }
+.rs-head > svg { flex-shrink: 0; }
+.rs-name { min-width: 0; }
+.rs-name b { display: block; font-size: 1.05rem; font-weight: 900; letter-spacing: 0.04em; line-height: 1.05; }
+.rs-name small { color: rgba(244, 244, 245, 0.38); display: block; font-size: 0.62rem; margin-top: 0.1rem; }
+.rs-day { color: rgba(244, 244, 245, 0.38); display: none; font-size: 0.68rem; margin-left: auto; white-space: nowrap; }
+.rs-x { align-items: center; background: rgba(255, 255, 255, 0.06); border: none; border-radius: 999px; color: rgba(244, 244, 245, 0.62); cursor: pointer; display: inline-flex; flex: 0 0 auto; height: 2rem; justify-content: center; margin-left: auto; padding: 0; width: 2rem; }
+.rs-x:hover { color: white; background: rgba(255, 255, 255, 0.1); }
+.rs-scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: rgba(255, 255, 255, 0.2) transparent; }
+/* The tab bar along the foot of the screen, as such apps have it. */
+.rs-bar { border-top: 1px solid rgba(255, 255, 255, 0.08); display: flex; flex-shrink: 0; padding: 0.3rem 0.35rem 0.05rem; }
+.rs-tab { align-items: center; background: none; border: none; color: rgba(244, 244, 245, 0.38); cursor: pointer; display: flex; flex: 1 1 0; flex-direction: column; font-family: sans-serif; font-size: 0.6rem; font-weight: 650; gap: 0.18rem; min-width: 0; padding: 0.3rem 0.1rem; }
+.rs-tab.on { color: #f4f4f5; font-weight: 800; }
+.rs-ticon { display: inline-flex; position: relative; }
+.rs-tlabel { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rs-tcount { align-items: center; background: #2bc1f3; border: 1.5px solid #0b0b0d; border-radius: 999px; box-sizing: border-box; color: #06171d; display: inline-flex; font-size: 0.55rem; font-weight: 800; height: 1.05rem; justify-content: center; min-width: 1.05rem; padding: 0 0.2rem; position: absolute; right: -0.6rem; top: -0.4rem; }
+.rs-home { display: flex; flex: 0 0 auto; justify-content: center; padding: 0.3rem 0 0.45rem; }
+.rs-home i { background: rgba(244, 244, 245, 0.85); border-radius: 999px; display: block; height: 0.26rem; width: 6.6rem; }
+.rs-compose, .rs-post { border-bottom: 1px solid rgba(255, 255, 255, 0.08); display: flex; gap: 0.65rem; padding: 0.8rem 1rem; }
+.rs-compose { padding: 0.85rem 1rem; }
+.rs-main { flex: 1; min-width: 0; }
+.rs-av { position: relative; flex-shrink: 0; width: 2.4rem; height: 2.4rem; }
+.rs-av > span:first-child { align-items: center; background: #2a2a2f; border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 999px; color: rgba(244, 244, 245, 0.62); display: flex; font-size: 0.82rem; font-weight: 800; height: 100%; justify-content: center; letter-spacing: 0.02em; width: 100%; box-sizing: border-box; }
+.rs-av.mine > span:first-child { background: rgba(43, 193, 243, 0.14); border-color: rgba(43, 193, 243, 0.45); color: #2bc1f3; }
+.rs-av .rs-flag { position: absolute; right: -0.2rem; bottom: -0.12rem; width: 1.25rem; height: 0.86rem; border: 1.5px solid #18181b; border-radius: 3px; overflow: hidden; }
+.rs-av .rs-flag.across { flex-direction: column; }
+.rs-av.small { width: 1.3rem; height: 1.3rem; }
+.rs-av.small > span:first-child { font-size: 0.44rem; }
+.rs-av.small .rs-flag { width: 0.68rem; height: 0.47rem; border-width: 1px; border-radius: 2px; }
+.rs-top { align-items: baseline; display: flex; gap: 0.4rem; min-width: 0; }
+.rs-top b { font-size: 0.84rem; font-weight: 800; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rs-top small, .rs-qtop small { color: rgba(244, 244, 245, 0.38); flex-shrink: 0; font-size: 0.7rem; margin-left: auto; }
+.rs-you { background: rgba(43, 193, 243, 0.14); border: 1px solid rgba(43, 193, 243, 0.45); border-radius: 999px; color: #2bc1f3; flex-shrink: 0; font-size: 0.58rem; font-weight: 800; letter-spacing: 0.06em; padding: 0.05rem 0.4rem; text-transform: uppercase; }
+.rs-meta { color: rgba(244, 244, 245, 0.38); font-size: 0.7rem; margin-top: 0.05rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rs-text { font-size: 0.84rem; line-height: 1.5; margin-top: 0.35rem; overflow-wrap: anywhere; white-space: pre-wrap; }
+.rs-quoted { border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 10px; margin-top: 0.55rem; padding: 0.55rem 0.7rem; }
+.rs-quoted.gone { border-color: rgba(255, 255, 255, 0.08); color: rgba(244, 244, 245, 0.38); font-size: 0.74rem; font-style: italic; }
+.rs-qtop { align-items: center; display: flex; gap: 0.45rem; min-width: 0; }
+.rs-qtop b { font-size: 0.76rem; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rs-qrole { color: rgba(244, 244, 245, 0.38); font-size: 0.7rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rs-qtop small { font-size: 0.68rem; }
+.rs-qtext { color: rgba(244, 244, 245, 0.62); display: -webkit-box; font-size: 0.78rem; line-height: 1.45; margin-top: 0.3rem; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 4; white-space: pre-wrap; }
+.rs-acts { align-items: center; display: flex; gap: 1.1rem; margin-top: 0.55rem; }
+.rs-act, .rs-count { align-items: center; background: none; border: none; color: rgba(244, 244, 245, 0.38); display: inline-flex; font-family: inherit; font-size: 0.72rem; gap: 0.3rem; padding: 0; }
+.rs-act { cursor: pointer; }
+.rs-act:hover { color: #2bc1f3; }
+.rs-wait { color: rgba(244, 244, 245, 0.38); font-size: 0.7rem; font-style: italic; }
+.rs-as { color: rgba(244, 244, 245, 0.38); font-size: 0.68rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rs-as b { color: rgba(244, 244, 245, 0.62); font-weight: 700; }
+.rs-input { background: transparent; border: none; box-sizing: border-box; color: #f4f4f5; font-family: sans-serif; font-size: 0.9rem; line-height: 1.45; margin-top: 0.3rem; outline: none; padding: 0; resize: none; width: 100%; }
+.rs-input::placeholder { color: rgba(244, 244, 245, 0.38); }
+.rs-quoting { position: relative; }
+.rs-unquote { align-items: center; background: #18181b; border: 1px solid rgba(255, 255, 255, 0.18); border-radius: 999px; color: rgba(244, 244, 245, 0.62); cursor: pointer; display: flex; height: 1.4rem; justify-content: center; padding: 0; position: absolute; right: -0.35rem; top: 0.2rem; width: 1.4rem; }
+.rs-note { color: #2bc1f3; font-size: 0.72rem; margin-top: 0.45rem; }
+.rs-cfoot { align-items: center; border-top: 1px solid rgba(255, 255, 255, 0.08); display: flex; gap: 0.6rem; justify-content: flex-end; margin-top: 0.5rem; padding-top: 0.5rem; }
+.rs-len { color: rgba(244, 244, 245, 0.38); font-size: 0.7rem; }
+.rs-len.over { color: #f87171; }
+.rs-send { background: rgba(43, 193, 243, 0.25); border: none; border-radius: 999px; color: #06171d; cursor: default; font-family: sans-serif; font-size: 0.78rem; font-weight: 800; padding: 0.4rem 1.05rem; }
+.rs-send.on { background: #2bc1f3; cursor: pointer; }
+.rs-empty { color: rgba(244, 244, 245, 0.38); font-size: 0.78rem; font-style: italic; line-height: 1.5; margin: 0; padding: 1.2rem 1.1rem; }
+.rs-post.fresh { animation: rs-in 0.28s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+@keyframes rs-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .rs-post.fresh { animation: none; } }
+/* On a phone the frame is already in the reader's hand: the app alone, risen from the dock as wide as the screen. */
+@media (max-width: 700px) {
+  .gx-panel.dock-panel.rs { aspect-ratio: auto; background-color: rgba(11, 11, 13, 0.97); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 16px; box-shadow: var(--oh-hud-shadow); height: min(calc(100% - var(--gx-top) - 9rem), max(calc(100% - var(--gx-top) - 16rem), 30rem)); max-width: none; min-height: 10rem; min-width: 0; overflow: hidden; padding: 0; width: calc(100% - 1rem); }
+  .rs-screen { background: transparent; border-radius: 0; }
+  .rs-side, .rs-status, .rs-home { display: none; }
+  .rs-head { padding: 0.6rem 0.9rem 0.55rem; }
+  .rs-day { display: inline; }
+  .rs-x { margin-left: 0; }
+  .rs-bar { padding: 0.3rem 0.35rem 0.35rem; }
+  .rs-tcount { border-color: #18181b; }
+}
+@media (pointer: coarse) {
+  .rs-x, .rs-unquote, .rs-act, .rs-tab { min-width: 44px; min-height: 44px; justify-content: center; }
+  .rs-unquote { min-width: 0; min-height: 0; }
+  .rs-send { min-height: 44px; }
+}
+
 /* ---- a phone (useIsMobile, max-width 700px): the game's phone layout ---- */
 @media (max-width: 700px) {
   .gx { --gx-drawer: 100%; }
@@ -785,7 +889,7 @@ button.gx-date-country { background: none; border: 0; padding: 0; font-family: i
   .gx.at-war .gx-search { left: 13.8rem; }
   .gx-search.open { left: 0.5rem; bottom: 5rem; width: calc(100% - 1rem); height: 3rem; }
   .gx-war-btn { left: 0.5rem; bottom: 4.85rem; width: 3rem; height: 3rem; }
-  /* Bottom panels: Events (time.jsx PanelChrome) against the screen; Actions, Projects and Diplomacy from the dock. */
+  /* Bottom panels: Events (time.jsx PanelChrome) against the screen; Actions, Rostra and Diplomacy from the dock. */
   .gx-panel { left: 0.5rem; bottom: 4.9rem; width: calc(100% - 1rem); height: min(calc(100% - var(--gx-top) - 9rem), max(calc(100% - var(--gx-top) - 33rem), 30rem)); min-height: 10rem; }
   .gx-panel.dock-panel { bottom: 4.75rem; height: min(calc(100% - var(--gx-top) - 9rem), max(calc(100% - var(--gx-top) - 16rem), 30rem)); border-radius: 16px; background-color: rgba(24, 24, 27, 0.95); }
   .dp { left: 1rem; bottom: 4.75rem; width: calc(100% - 1.5rem); height: min(50rem, calc(100% - var(--gx-top) - 10.25rem)); min-height: 10rem; }

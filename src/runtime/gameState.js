@@ -51,6 +51,7 @@ import {
   normalizePoliticalActors,
   POLITICAL_ACTORS_SCHEMA_VERSION,
 } from "./politicalActors.js";
+import { normalizeSocialFeed } from "./socialFeed.js";
 import { applyPoliticalActorOperation } from "./politicalActorOps.js";
 import { normalizePoliticalSimulationClock } from "./politicalClock.js";
 import { buildPolityIdentityIndex, resolvePolityIdentity } from "./polityIdentity.js";
@@ -326,6 +327,9 @@ export const WORLD_DEFAULTS = {
   // (AI/nativeWorldDirector.js), advanced by compact storylineUpdates lines on
   // a jump payload exactly like the ledgers above.
   storylines: [],
+  // Rostra, the social network (socialFeed.js): every post kept, oldest first.
+  // Written by the player and by the time skip; public in a shared game.
+  socialFeed: [],
   simulationHistory: [],
   simulationRules: "",
   startingTimelineText: "",
@@ -4629,6 +4633,7 @@ export const normalizeWorldState = (world) => {
     callsToArms: normalizeCallsToArms(nextWorld.callsToArms),
     puppets: normalizeWorldPuppets(nextWorld.puppets, diplomaticIdentityWorld),
     storylines: normalizeWorldStorylines(nextWorld.storylines),
+    socialFeed: normalizeSocialFeed(nextWorld.socialFeed),
     simulationRules: normalizeOptionalString(nextWorld.simulationRules),
     startingTimelineText: normalizeOptionalString(nextWorld.startingTimelineText),
     units,

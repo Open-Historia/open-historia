@@ -2,8 +2,9 @@
 // The game's own HUD over the story's map, built as the game builds it: the
 // ☰ menu, the session pill and Exit Game (libraryBar.jsx), the date with « for
 // the Events panel and » for the time skip (time.jsx), the dock of Chat,
-// Actions and Projects with Search beside it (chat.jsx, hudDock.js), the flag
-// badge and the advisor button (other.jsx, main.jsx), the Advisor drawer
+// Actions (with Projects as its second tab) and Rostra, the world's social
+// network, with Search beside it (chat.jsx, actions.jsx, social.jsx,
+// hudDock.js), the flag badge and the advisor button (other.jsx, main.jsx), the Advisor drawer
 // (advisor.jsx), the Country drawer and its stats (countryPanel.jsx,
 // stats.jsx), and in a war the red War Room button and the War Room itself
 // (warRoom.jsx, warRoomRail.jsx), its steel painted by the game's own
@@ -77,6 +78,26 @@
     [7.3, "2017-02-09", ["Politics"], "The Assemblée backs the congress", "**341** deputies for, **156** against. Protests on the **Place de la Concorde**.", ["France"]],
     [8.3, "2017-03-02", ["Diplomacy", "Peace"], "The Final Act of Strasbourg", "An armistice in Korea along the line held on the day of signing, and **ten years** without a launch.", ["France", "Russia", "United States"]]
   ];
+  // Rostra's feed (social.jsx): each post is out from story time t. A flag is three stripes, down
+  // unless `across`; France's are the default. `kind` "player" is France's own, "everyday" a post about
+  // nothing in world affairs (one every other time skip); `round` is the chapter a post of France's
+  // was made in, answered from the next.
+  var POSTS = [
+    { t: 0.2, id: "p1", author: "Margot Lefèvre", role: "Political editor, Le Quotidien", country: "France", date: "2016-01-01", text: "Happy new year from Paris. The unions promise a hard spring, the Élysée a quiet one. One of them is wrong.", reposts: 210, likes: 1900 },
+    { t: 0.5, id: "p2", author: "The Chancellor of Germany", country: "Germany", flag: ["#000000", "#dd0000", "#ffce00"], across: true, date: "2016-01-01", text: "A good start to 2016 with our friends in France. Europe is strongest when Paris and Berlin speak with one voice.", reposts: 9800, likes: 64000 },
+    { t: 0.75, id: "p3", author: "Luca Marino", role: "Actor", country: "Italy", flag: ["#009246", "#ffffff", "#ce2b37"], date: "2016-01-01", kind: "everyday", text: "Three hours in the queue at a bakery in Montmartre for one croissant. Worth every minute. I would do it again tomorrow.", reposts: 7400, likes: 88000 },
+    { t: 1.2, id: "p4", author: "The President of Russia", country: "Russia", flag: ["#ffffff", "#0039a6", "#d52b1e"], across: true, date: "2016-08-09", text: "Ten missiles crossed the Arctic tonight. Russia will remember who fired them, and when.", reposts: 41000, likes: 230000 },
+    { t: 1.95, id: "p5", author: "Margot Lefèvre", role: "Political editor, Le Quotidien", country: "France", date: "2016-08-09", text: "Seven caught, three through. Paris is very quiet tonight.", reposts: 520, likes: 4100 },
+    { t: 2.1, id: "p6", author: "Antoine Garnier", role: "Correspondent in Busan", country: "France", date: "2016-09-02", text: "Sirens across Seoul. The trains south are full. Nobody here thought the North would cross tonight.", reposts: 1300, likes: 11000 },
+    { t: 2.7, id: "p7", author: "Siobhán Kelly", role: "Nurse, Cork", country: "Ireland", flag: ["#169b62", "#ffffff", "#ff883e"], date: "2016-09-28", kind: "everyday", text: "Night shift done, the dog has eaten my left shoe, and the kettle is on. Small victories.", reposts: 12, likes: 96 },
+    { t: 4.4, id: "p8", author: "France", country: "France", date: "2016-12-01", kind: "player", round: 4, text: "France offers Strasbourg for a peace congress. Washington, Moscow, Beijing: there is a seat at the table for each of you.", reposts: 26000, likes: 190000 },
+    { t: 5.2, id: "p9", author: "The President of the United States", country: "United States", flag: ["#3c3b6e", "#ffffff", "#b22234"], across: true, date: "2017-01-01", quote: "p8", text: "Washington accepts. Our Secretary of State will lead the delegation to Strasbourg.", reposts: 18000, likes: 150000 },
+    { t: 5.25, id: "p10", author: "The President of China", country: "China", flag: ["#de2910", "#de2910", "#de2910"], date: "2017-01-01", quote: "p8", text: "China will bring its neighbour. The armistice line is the one held on the day of signing.", reposts: 9100, likes: 72000 },
+    { t: 6.3, id: "p11", author: "The President of Russia", country: "Russia", flag: ["#ffffff", "#0039a6", "#d52b1e"], across: true, date: "2017-01-14", quote: "p8", text: "We will come to Strasbourg, as the injured party. Inspectors go to Montana as well as to Plesetsk.", reposts: 33000, likes: 210000 },
+    { t: 7.3, id: "p12", author: "Camille Rousseau", role: "Deputy, Assemblée nationale", country: "France", date: "2017-02-09", text: "341 to 156. France goes to Strasbourg with the Assemblée behind it.", reposts: 2100, likes: 19000 },
+    { t: 7.6, id: "p13", author: "Tunde Adeyemi", role: "Footballer", country: "Nigeria", flag: ["#008751", "#ffffff", "#008751"], date: "2017-02-09", kind: "everyday", text: "Hat-trick tonight and my mother still wants to know why I missed the fourth.", reposts: 15000, likes: 120000 },
+    { t: 8.3, id: "p14", author: "The Secretary-General of the United Nations", date: "2017-03-02", quote: "p8", text: "The Final Act of Strasbourg is signed: an armistice in Korea, and ten years without a launch. The world owes France a debt today.", reposts: 61000, likes: 420000 }
+  ];
   // France's figures at the middle of each chapter; each takes what it does not set from the one before.
   var FIGURES = [
     { stability: 68, intel: 74, sovereignty: 72, food: 95, energy: 88, economy: 70, security: 66, reputation: 64, population: 66.8, gdp: 2.44, growth: 1.1, gdpc: 36500, inflation: 0.3, unemployment: 10.1, debt: 96, balance: -3.6, us: 62, de: 74, uk: 48, ru: -24, cn: 18, kp: -46, agreements: 2 },
@@ -97,7 +118,9 @@
   // Which drawer and which view each chapter opens, and which window; unless the reader chose otherwise.
   var DRAWER = { world: "advisor", launch: "advisor", korea: "advisor", choose: "country", order: "advisor", skip: "country", talks: "advisor", parliament: "country", congress: "advisor", yours: "advisor" };
   var VIEW = { choose: "economy", skip: "diplomacy", parliament: "politics", yours: "economy" };
-  var POP = { order: "actions", skip: "events", talks: "chat", congress: "projects" };
+  var POP = { order: "actions", skip: "events", talks: "chat", congress: "actions" };
+  // Which tab of the Actions panel a chapter opens it on.
+  var ACTIONS_TAB = { congress: "projects" };
   var TAGS = { world: ["Politics"], launch: ["Military"], korea: ["Military", "War"], choose: ["Politics"], order: ["Diplomacy"], skip: ["Politics"], talks: ["Diplomacy"], parliament: ["Politics"], congress: ["Diplomacy", "Peace"], yours: [] };
   var MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 
@@ -308,11 +331,13 @@
       '<div class="dp gx-hud" id="gxDip" hidden></div>' +
       // actions.jsx ActionsPanel
       '<div class="gx-panel dock-panel ac gx-hud" id="gxActions" hidden></div>' +
+      // social.jsx SocialPanel
+      '<div class="gx-panel dock-panel rs gx-hud" id="gxSocial" role="dialog" aria-label="Rostra" hidden></div>' +
       // chat.jsx Toolbar
       '<div class="gx-base gx-dock gx-hud" role="toolbar" aria-label="Game windows">' +
       '<button type="button" class="gx-launch" data-pop="chat" title="Chat" aria-label="Diplomacy"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4Z"/><path d="M8 9h8"/><path d="M8 13h5"/></svg><span class="gx-badge" id="gxChatBadge" hidden></span></button>' +
-      '<button type="button" class="gx-launch" data-pop="actions" title="Actions" aria-label="Actions"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L13.5 9.5L21 11L13.5 12.5L12 20L10.5 12.5L3 11L10.5 9.5L12 2Z"/></svg></button>' +
-      '<button type="button" class="gx-launch" data-pop="projects" title="Projects &amp; Operations" aria-label="Projects and operations"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8"/><path d="M8 12h8"/><path d="M8 16h5"/></svg></button></div>' +
+      '<button type="button" class="gx-launch" data-pop="actions" title="Actions and Projects" aria-label="Actions"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L13.5 9.5L21 11L13.5 12.5L12 20L10.5 12.5L3 11L10.5 9.5L12 2Z"/></svg></button>' +
+      '<button type="button" class="gx-launch" data-pop="social" title="Rostra" aria-label="Rostra" id="gxSocialBtn"><span class="rs-dock">' + ROSTRA_ICON + '<span class="gx-badge rs-badge" id="gxSocialBadge" hidden></span></span></button></div>' +
       // search.jsx
       '<button type="button" class="gx-base gx-search gx-hud" id="gxSearch" title="Search place" aria-label="Search place"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><input type="text" placeholder="Search place…" aria-label="Search place" hidden /></button>' +
       // other.jsx flag badge, main.jsx AdvisorButton
@@ -761,13 +786,6 @@
       html = shown.length ? shown.slice().reverse().map(eventCard).join("") : '<div class="gx-empty-box">No world events were recorded for this time skip.</div>';
       html += '<button type="button" class="gx-ghost" data-go="next"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m6 9 6 6 6-6"/></svg>Next event</button>';
       if (later) html += '<button type="button" class="gx-ghost" data-go="end" style="min-height:1.9rem;opacity:0.75">Skip to end (' + later + " more)</button>";
-    } else if (which === "projects") {
-      title = "Projects & Operations";
-      sub = "What France is working at, turn by turn";
-      var congress = clamp((T - 4.4) / 3.9);
-      var deterrence = T >= 1.3 ? (T >= 8.3 ? "Stood down" : "Active") : "";
-      html = '<div class="gx-action gx-project"><p><strong>The Congress of Strasbourg</strong></p><small class="' + (congress >= 1 ? "ok" : "") + '">' + (congress >= 1 ? "Complete" : T >= 4.4 ? "In progress · " + Math.round(congress * 100) + "%" : "Not begun") + "</small>" + bar(congress * 100, congress >= 1 ? "#34d399" : "#3b82f6") + "</div>";
-      if (deterrence) html += '<div class="gx-action gx-project"><p><strong>Deterrence alert</strong> · Forces on alert across the Republic</p><small class="' + (deterrence === "Stood down" ? "ok" : "") + '">' + deterrence + "</small></div>";
     }
     var key = which + title + sub + html;
     if (!changed("panel", key)) return;
@@ -775,7 +793,25 @@
     el.panelSub.textContent = sub;
     el.panelBody.innerHTML = html;
   }
+  // ---- Projects & Operations, the Actions panel's second tab (projects.jsx ProjectsBoard) --------------------
+  function projectsAt(T) {
+    var congress = clamp((T - 4.4) / 3.9);
+    var deterrence = T >= 1.3 ? (T >= 8.3 ? "Stood down" : "Active") : "";
+    var list = [["The Congress of Strasbourg", '<div class="gx-action gx-project"><p><strong>The Congress of Strasbourg</strong></p><small class="' + (congress >= 1 ? "ok" : "") + '">' + (congress >= 1 ? "Complete" : T >= 4.4 ? "In progress · " + Math.round(congress * 100) + "%" : "Not begun") + "</small>" + bar(congress * 100, congress >= 1 ? "#34d399" : "#3b82f6") + "</div>"]];
+    if (deterrence) list.push(["Deterrence alert", '<div class="gx-action gx-project"><p><strong>Deterrence alert</strong> · Forces on alert across the Republic</p><small class="' + (deterrence === "Stood down" ? "ok" : "") + '">' + deterrence + "</small></div>"]);
+    return list;
+  }
+  function projectsBoard(T) {
+    var find = (fields["pj-search"] || "").trim().toLowerCase();
+    var list = projectsAt(T).filter(function (p) { return !find || p[0].toLowerCase().indexOf(find) >= 0; });
+    return '<div class="ac-board"><p class="ac-board-sub">What France is working at, turn by turn</p><input type="search" class="ac-input ac-find" data-field="pj-search" placeholder="Search projects…" aria-label="Search projects" />' +
+      (list.length ? list.map(function (p) { return p[1]; }).join("") : '<p class="ac-none">No project matches.</p>') + "</div>";
+  }
+
   // ---- the Actions panel (actions.jsx ActionsPanel, StandingGoal, ActionItem, SuggestionCard) ----------
+  var ORDERS_ICON = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l1.8 4.6L18.5 9l-4.7 1.4L12 15l-1.8-4.6L5.5 9l4.7-1.4z"/><path d="M18 15l.9 2.1L21 18l-2.1.9L18 21l-.9-2.1L15 18l2.1-.9z"/></svg>';
+  var PROJECTS_ICON = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8"/><path d="M8 12h8"/><path d="M8 16h5"/></svg>';
+  var ACTIONS_TABS = [["actions", "Actions", ORDERS_ICON], ["projects", "Projects", PROJECTS_ICON]];
   var SPARKLE = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2L13.5 9.5L21 11L13.5 12.5L12 20L10.5 12.5L3 11L10.5 9.5L12 2Z"/></svg>';
   var SEND = '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>';
   var SPINNER = '<svg class="ac-spin" width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="8" stroke="rgba(255,255,255,0.2)" stroke-width="2.2"/><path d="M12 4a8 8 0 0 1 8 8" stroke="rgba(255,255,255,0.88)" stroke-width="2.2" stroke-linecap="round"/></svg>';
@@ -791,7 +827,7 @@
       { id: "s3", title: "Meet the unions", text: "Invite the union leaders to the Élysée before the strikes spread." }
     ] }
   ];
-  var acts = { user: [], deleted: {}, asked: false, suggesting: false, open: "submitted", queued: {}, editing: false, goal: null };
+  var acts = { tab: "actions", user: [], deleted: {}, asked: false, suggesting: false, open: "submitted", queued: {}, editing: false, goal: null };
   function goalAt(T) { return acts.goal != null ? acts.goal : T >= 4.1 ? GOAL : ""; }
   function submittedAt(T) {
     var list = T >= 5 ? [] : STORY_ACTIONS.filter(function (a) { return a[0] <= T; }).map(function (a, i) { return { id: "story" + i, text: a[1] }; });
@@ -803,11 +839,40 @@
   function sectionHeader(title, count, open, which) {
     return '<button type="button" class="ac-section" data-ac="section" data-open="' + which + '" aria-expanded="' + open + '"><span class="tri' + (open ? " on" : "") + '">▶</span><span class="ti">' + title + "</span><span>" + count + "</span></button>";
   }
+  // The panel's two tabs, in the diplomacy panel's tab strip: the orders, and the Projects & Operations board.
+  function actionsTabs(T) {
+    var count = projectsAt(T).length;
+    return '<div class="ac-tabs" role="tablist">' + ACTIONS_TABS.map(function (tab) {
+      var on = acts.tab === tab[0];
+      return '<button type="button" role="tab" aria-selected="' + on + '" class="dp-tab ac-tab' + (on ? " on" : "") + '" data-ac="tab" data-tab="' + tab[0] + '"><span class="ic">' + tab[2] + "</span><span>" + tab[1] + "</span>" +
+        (tab[0] === "projects" && count ? '<span class="dp-count ac-count">' + count + "</span>" : "") + "</button>";
+    }).join("") + "</div>";
+  }
   function renderActions(T) {
     if (state.pop !== "actions") return;
+    var html = '<div class="ac-head">' + actionsTabs(T) + '<button type="button" class="dp-x" data-ac="close" aria-label="Close actions">✕</button></div>' + (acts.tab === "projects" ? projectsBoard(T) : ordersTab(T));
+    // The story's order is written into the box, a letter at a time, before it is queued.
+    var storyTyping = acts.tab === "actions" && T >= 4.15 && T < 4.4 && !fields["ac-input"] ? typed(ORDER, 4.15, 0.22, T) : "";
+    if (!changed("actions", html + "|" + storyTyping)) return;
+    var focus = document.activeElement && el.actions.contains(document.activeElement) ? document.activeElement.getAttribute("data-field") : null;
+    var caret = focus ? document.activeElement.selectionStart : 0;
+    var scroller = el.actions.querySelector(".ac-body, .ac-board");
+    var scroll = scroller ? scroller.scrollTop : 0;
+    el.actions.innerHTML = html;
+    if (acts.editing && fields["ac-goal"] == null) fields["ac-goal"] = goalAt(T);
+    Array.prototype.forEach.call(el.actions.querySelectorAll("[data-field]"), function (input) {
+      var key = input.getAttribute("data-field");
+      input.value = key === "ac-input" && storyTyping ? storyTyping : fields[key] || "";
+      if (key === focus) { input.focus(); try { input.setSelectionRange(caret, caret); } catch (error) { /* no caret */ } }
+    });
+    scroller = el.actions.querySelector(".ac-body, .ac-board");
+    if (scroller) scroller.scrollTop = scroll;
+    syncSend();
+  }
+  function ordersTab(T) {
     var goal = goalAt(T);
     var list = submittedAt(T);
-    var html = '<div class="ac-head"><span>Actions</span><button type="button" class="dp-x" data-ac="close" aria-label="Close actions">✕</button></div><div class="ac-body">';
+    var html = '<div class="ac-body">';
     if (acts.editing) {
       html += '<div class="ac-goal editing"><span class="ac-goal-label">Standing goal</span><textarea class="ac-input" rows="2" data-field="ac-goal" aria-label="Standing goal" placeholder="What is your government steering toward? e.g. Keep out of the war and grow the economy"></textarea>' +
         '<div class="ac-goal-btns">' + (goal ? '<button type="button" class="ac-gbtn" data-ac="goal-clear" style="margin-right:auto">Clear goal</button>' : "") + '<button type="button" class="ac-gbtn" data-ac="goal-cancel">Cancel</button><button type="button" class="ac-gbtn primary" data-ac="goal-save">Save</button></div></div>';
@@ -832,21 +897,7 @@
     html += "</div></div>";
     var touch = window.matchMedia && window.matchMedia("(pointer: coarse)").matches;
     html += '<div class="ac-compose"><div class="ac-box"><textarea class="ac-input ac-composer" data-field="ac-input" aria-label="Enter your action" placeholder="' + (touch ? "Enter your action…" : "Enter your action…  (Shift+Enter for a new line)") + '"></textarea><button type="button" class="ac-improve" data-ac="improve" title="Improve action text" aria-label="Improve action text">' + SPARKLE + '</button></div><button type="button" class="ac-send" data-ac="submit" aria-label="Submit action">' + SEND + "</button></div>";
-    // The story's order is written into the box, a letter at a time, before it is queued.
-    var storyTyping = T >= 4.15 && T < 4.4 && !fields["ac-input"] ? typed(ORDER, 4.15, 0.22, T) : "";
-    if (!changed("actions", html + "|" + storyTyping)) return;
-    var focus = document.activeElement && el.actions.contains(document.activeElement) ? document.activeElement.getAttribute("data-field") : null;
-    var caret = focus ? document.activeElement.selectionStart : 0;
-    var scroll = el.actions.querySelector(".ac-body") ? el.actions.querySelector(".ac-body").scrollTop : 0;
-    el.actions.innerHTML = html;
-    if (acts.editing && fields["ac-goal"] == null) fields["ac-goal"] = goal;
-    Array.prototype.forEach.call(el.actions.querySelectorAll("[data-field]"), function (input) {
-      var key = input.getAttribute("data-field");
-      input.value = key === "ac-input" && storyTyping ? storyTyping : fields[key] || "";
-      if (key === focus) { input.focus(); try { input.setSelectionRange(caret, caret); } catch (error) { /* no caret */ } }
-    });
-    el.actions.querySelector(".ac-body").scrollTop = scroll;
-    syncSend();
+    return html;
   }
   function syncSend() {
     var box = el.actions.querySelector(".ac-composer");
@@ -870,7 +921,8 @@
     var what = act.getAttribute("data-ac");
     state.manual.pop = "actions";
     if (what === "close") { setPop(null, true); return; }
-    if (what === "delete") { acts.deleted[act.getAttribute("data-id")] = true; delete acts.queued[act.getAttribute("data-id")]; }
+    if (what === "tab") acts.tab = act.getAttribute("data-tab");
+    else if (what === "delete") { acts.deleted[act.getAttribute("data-id")] = true; delete acts.queued[act.getAttribute("data-id")]; }
     else if (what === "section") acts.open = act.getAttribute("data-open");
     else if (what === "goal-edit") { acts.editing = true; fields["ac-goal"] = goalAt(state.T); }
     else if (what === "goal-cancel") acts.editing = false;
@@ -898,6 +950,172 @@
     } else return;
     state.keys.actions = "";
     renderActions(state.T);
+  }
+
+  // ---- Rostra, the world's social network (social.jsx SocialPanel, PostCard, QuotedPost) -------------------
+  // The posts of the people who make the news, out as the story passes them, and France's own: the reader
+  // posts as France, and Quote under a post puts it in the box. Drawn as the game draws it: a phone that
+  // rises from the dock, its tabs along the foot of the screen; on a phone, the app alone (game-ui.css).
+  var ROSTRA_ICON = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7.5 21h9l-1.4-8.5H8.9z"/><path d="M5.5 12.5h13"/><path d="M12 12.5V8.2"/><circle cx="12" cy="6.4" r="1.6"/><path d="M16.6 4.2a4.2 4.2 0 0 1 0 4.6"/><path d="M7.4 4.2a4.2 4.2 0 0 0 0 4.6"/></svg>';
+  var ROSTRA_MARK = '<svg width="26" height="26" viewBox="0 0 32 32" aria-hidden="true"><path d="M6 3h20a4 4 0 0 1 4 4v14a4 4 0 0 1-4 4H13l-6 5v-5H6a4 4 0 0 1-4-4V7a4 4 0 0 1 4-4z" fill="#2bc1f3"/><path d="M12 21h8l-1.2-7.5h-5.6z" fill="#0b1a20"/><path d="M9.5 13.5h13" stroke="#0b1a20" stroke-width="1.8" stroke-linecap="round"/><circle cx="16" cy="9" r="2" fill="#0b1a20"/></svg>';
+  var QUOTE_ICON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 7h4v4c0 2.5-1.3 4-4 5"/><path d="M14 7h4v4c0 2.5-1.3 4-4 5"/></svg>';
+  var REPOST_ICON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 3l3 3-3 3"/><path d="M4 12V9a3 3 0 0 1 3-3h13"/><path d="M7 21l-3-3 3-3"/><path d="M20 12v3a3 3 0 0 1-3 3H4"/></svg>';
+  var HEART_ICON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.5 5.8a5 5 0 0 0-7.1 0L12 7.2l-1.4-1.4a5 5 0 0 0-7.1 7.1L12 21.4l8.5-8.5a5 5 0 0 0 0-7.1z"/></svg>';
+  var CLOSE_ICON = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+  var TAB_ICON = function (paths) { return '<svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + paths + "</svg>"; };
+  var RS_TABS = [
+    ["all", "For you", TAB_ICON('<path d="M4 10.5L12 4l8 6.5V20h-5.5v-5.5h-5V20H4z"/>')],
+    ["country", "Your country", TAB_ICON('<path d="M5 21V4"/><path d="M5 4.5c4.5-2 7.5 2 14 0v9c-6.5 2-9.5-2-14 0"/>')],
+    ["mentions", "Mentions", TAB_ICON('<path d="M18 9a6 6 0 1 0-12 0c0 7-3 8-3 8h18s-3-1-3-8"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/>')],
+    ["mine", "Your posts", TAB_ICON('<circle cx="12" cy="8" r="4"/><path d="M4.5 21c.8-4.2 3.3-6.3 7.5-6.3s6.7 2.1 7.5 6.3"/>')]
+  ];
+  // The top of a phone's screen: the game's day, the island, the signal, wireless and battery marks.
+  var STATUS_MARKS = '<svg width="16" height="10" viewBox="0 0 17 11" fill="currentColor"><rect x="0" y="7" width="3" height="4" rx="0.7"/><rect x="4.6" y="5" width="3" height="6" rx="0.7"/><rect x="9.2" y="2.6" width="3" height="8.4" rx="0.7"/><rect x="13.8" y="0" width="3" height="11" rx="0.7"/></svg>' +
+    '<svg width="14" height="10" viewBox="0 0 15 11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M1 4.2a9.2 9.2 0 0 1 13 0"/><path d="M3.4 6.7a5.8 5.8 0 0 1 8.2 0"/><circle cx="7.5" cy="9.3" r="0.9" fill="currentColor" stroke="none"/></svg>' +
+    '<svg width="22" height="10" viewBox="0 0 24 11" fill="none"><rect x="0.5" y="0.5" width="20" height="10" rx="2.6" stroke="currentColor" opacity="0.45"/><rect x="2" y="2" width="14" height="7" rx="1.4" fill="currentColor"/><rect x="21.6" y="3.4" width="1.6" height="4.2" rx="0.8" fill="currentColor" opacity="0.5"/></svg>';
+  var RS_EMPTY = {
+    all: "Nothing has been posted yet. The people who make the news post as time passes, and you can post first.",
+    country: "Nobody from your country has posted yet.",
+    mentions: "Nobody has mentioned you yet. Post something, and the answers come with the next time skip.",
+    mine: "You have not posted yet."
+  };
+  var RS_MAX = 280;
+  var social = { tab: "all", seen: 0, user: [], quoting: "", posted: false, drawn: {} };
+  function initials(name) {
+    var words = String(name || "").trim().split(/\s+/).filter(Boolean);
+    var letters = words.length > 1 ? [words[0], words[words.length - 1]] : words;
+    return letters.map(function (w) { return Array.from(w)[0] || ""; }).join("").toUpperCase() || "?";
+  }
+  function compact(value) {
+    var n = Math.max(0, Math.round(value || 0));
+    if (n < 1000) return String(n);
+    var shown = n < 1e6 ? n / 1e3 : n / 1e6;
+    return (shown >= 100 ? Math.round(shown) : Math.round(shown * 10) / 10) + (n < 1e6 ? "K" : "M");
+  }
+  function postDate(text) { var d = parseDate(text); return d ? d.getUTCDate() + " " + MONTHS[d.getUTCMonth()].slice(0, 3) + " " + d.getUTCFullYear() : ""; }
+  function feedAt(T) {
+    return POSTS.filter(function (p) { return p.t <= T; }).concat(social.user).sort(function (a, b) { return b.t - a.t || (b.n || 0) - (a.n || 0); });
+  }
+  function findPost(feed, id) { for (var i = 0; i < feed.length; i += 1) if (feed[i].id === id) return feed[i]; return null; }
+  function isMention(p, feed) {
+    if (p.kind === "player") return false;
+    var quoted = p.quote && findPost(feed, p.quote);
+    return !!(quoted && quoted.kind === "player") || /\bFrance\b/.test(p.text);
+  }
+  function inTab(p, tab, feed) {
+    if (tab === "country") return p.country === "France";
+    if (tab === "mentions") return isMention(p, feed);
+    if (tab === "mine") return p.kind === "player";
+    return true;
+  }
+  // A post of France's is answered with the next time skip: until then it has no reposts or likes.
+  function engagement(p, feed, T) {
+    var quotes = feed.filter(function (q) { return q.quote === p.id; }).length;
+    if (p.kind === "player" && Math.floor(T) <= p.round) return { quotes: quotes, waiting: true };
+    if (!p.user) return { quotes: quotes, reposts: p.reposts, likes: p.likes };
+    var likes = Math.round(180000 * (0.25 + hash(p.n, 7, 11) * 1.5));
+    return { quotes: quotes, reposts: Math.round(likes * (0.08 + hash(p.n, 3, 5) * 0.14)), likes: likes };
+  }
+  function avatar(p, small) {
+    var mine = p.kind === "player";
+    var flag = p.country ? tricolour(p.country === "France" ? null : p.flag, "rs-flag" + (p.across ? " across" : "")) : "";
+    return '<span class="rs-av' + (small ? " small" : "") + (mine ? " mine" : "") + '" aria-hidden="true"><span>' + esc(initials(p.author)) + "</span>" + flag + "</span>";
+  }
+  function quotedPost(p) {
+    if (!p) return '<div class="rs-quoted gone">This post is no longer available.</div>';
+    return '<div class="rs-quoted"><div class="rs-qtop">' + avatar(p, true) + "<b>" + esc(p.author) + "</b>" + (p.role ? '<span class="rs-qrole">' + esc(p.role) + "</span>" : "") + "<small>" + postDate(p.date) + '</small></div><div class="rs-qtext">' + esc(p.text) + "</div></div>";
+  }
+  function postCard(p, feed, T) {
+    var mine = p.kind === "player";
+    var e = engagement(p, feed, T);
+    var meta = [p.role, p.country && p.country !== p.author ? p.country : ""].filter(Boolean).join(" · ");
+    var fresh = !social.drawn[p.id];
+    return '<article class="rs-post' + (fresh ? " fresh" : "") + '">' + avatar(p) + '<div class="rs-main"><div class="rs-top"><b>' + esc(p.author) + "</b>" + (mine ? '<span class="rs-you">You</span>' : "") + "<small>" + postDate(p.date) + "</small></div>" +
+      (meta ? '<div class="rs-meta">' + esc(meta) + "</div>" : "") + '<div class="rs-text">' + esc(p.text) + "</div>" + (p.quote ? quotedPost(findPost(feed, p.quote)) : "") +
+      '<div class="rs-acts"><button type="button" class="rs-act" data-rs="quote" data-id="' + p.id + '" title="Quote this post" aria-label="Quote this post">' + QUOTE_ICON + "<span>" + compact(e.quotes) + "</span></button>" +
+      (e.waiting ? '<span class="rs-wait">The world answers with the next time skip.</span>' : '<span class="rs-count" title="Reposts">' + REPOST_ICON + "<span>" + compact(e.reposts) + '</span></span><span class="rs-count" title="Likes">' + HEART_ICON + "<span>" + compact(e.likes) + "</span></span>") +
+      "</div></div></article>";
+  }
+  function renderSocial(T) {
+    if (state.pop !== "social") return;
+    social.seen = Math.max(social.seen, T);
+    var feed = feedAt(T);
+    var posts = feed.filter(function (p) { return inTab(p, social.tab, feed); });
+    var mentions = feed.filter(function (p) { return isMention(p, feed) && p.t >= Math.floor(T); }).length;
+    var quoting = social.quoting ? findPost(feed, social.quoting) : null;
+    var me = { author: "France", country: "France", kind: "player" };
+    var day = postDate(isoDate(dateAt(T, state.korea)));
+    var html = '<span class="rs-side one" aria-hidden="true"></span><span class="rs-side two" aria-hidden="true"></span><span class="rs-side three" aria-hidden="true"></span><div class="rs-screen">' +
+      '<div class="rs-status" aria-hidden="true"><span>' + day + '</span><i class="rs-island"></i><span class="rs-marks">' + STATUS_MARKS + "</span></div>" +
+      '<div class="rs-head">' + ROSTRA_MARK + '<div class="rs-name"><b>Rostra</b><small>What the world is saying</small></div><span class="rs-day">' + day + "</span>" +
+      '<button type="button" class="rs-x" data-rs="close" aria-label="Close Rostra">' + CLOSE_ICON + "</button></div>";
+    html += '<div class="rs-scroll"><div class="rs-compose">' + avatar(me) + '<div class="rs-main"><div class="rs-as">Posting as <b>France</b></div>' +
+      '<textarea class="rs-input" data-field="rs-input" rows="2" aria-label="Your post" placeholder="What would you like to tell the world?"></textarea>' +
+      (quoting ? '<div class="rs-quoting">' + quotedPost(quoting) + '<button type="button" class="rs-unquote" data-rs="unquote" title="Remove the quote" aria-label="Remove the quote">' + CLOSE_ICON + "</button></div>" : "") +
+      (social.posted ? '<div class="rs-note">Posted. The world answers with the next time skip.</div>' : "") +
+      '<div class="rs-cfoot"><span class="rs-len"></span><button type="button" class="rs-send" data-rs="post">Post</button></div></div></div>';
+    html += posts.length ? posts.map(function (p) { return postCard(p, feed, T); }).join("") : '<p class="rs-empty">' + RS_EMPTY[social.tab] + "</p>";
+    html += '</div><div class="rs-bar" role="tablist">' + RS_TABS.map(function (tab) {
+      var on = social.tab === tab[0];
+      var count = tab[0] === "mentions" ? mentions : 0;
+      return '<button type="button" role="tab" aria-selected="' + on + '" class="rs-tab' + (on ? " on" : "") + '" data-rs="tab" data-tab="' + tab[0] + '"><span class="rs-ticon">' + tab[2] + (count ? '<span class="rs-tcount">' + (count > 9 ? "9+" : count) + "</span>" : "") + "</span><span class=\"rs-tlabel\">" + tab[1] + "</span></button>";
+    }).join("") + '</div><div class="rs-home" aria-hidden="true"><i></i></div></div>';
+    if (!changed("social", html)) return;
+    var focused = document.activeElement && el.social.contains(document.activeElement) && document.activeElement.getAttribute("data-field");
+    var caret = focused ? document.activeElement.selectionStart : 0;
+    var scroller = el.social.querySelector(".rs-scroll");
+    var scroll = scroller ? scroller.scrollTop : 0;
+    el.social.innerHTML = html;
+    var input = el.social.querySelector(".rs-input");
+    input.value = fields["rs-input"] || "";
+    if (focused) { input.focus(); try { input.setSelectionRange(caret, caret); } catch (error) { /* no caret */ } }
+    el.social.querySelector(".rs-scroll").scrollTop = scroll;
+    posts.forEach(function (p) { social.drawn[p.id] = true; });
+    syncPost();
+  }
+  function syncPost() {
+    var input = el.social.querySelector(".rs-input");
+    if (!input) return;
+    var length = Array.from(input.value.trim()).length;
+    var len = el.social.querySelector(".rs-len");
+    len.textContent = length + "/" + RS_MAX;
+    len.classList.toggle("over", length > RS_MAX);
+    el.social.querySelector(".rs-send").classList.toggle("on", length > 0 && length <= RS_MAX);
+  }
+  function submitPost() {
+    var text = (fields["rs-input"] || "").trim();
+    if (!text || Array.from(text).length > RS_MAX) return;
+    var n = social.user.length + 1;
+    social.user.push({ t: state.T, n: n, id: "u" + n, author: "France", country: "France", date: isoDate(dateAt(state.T, state.korea)), kind: "player", round: Math.floor(state.T), user: true, quote: social.quoting, text: text });
+    fields["rs-input"] = "";
+    social.quoting = "";
+    social.posted = true;
+    if (social.tab === "mentions" || social.tab === "country") social.tab = "all";
+  }
+  function socialClick(event) {
+    var act = event.target.closest("[data-rs]");
+    if (!act) return;
+    var what = act.getAttribute("data-rs");
+    state.manual.pop = "social";
+    if (what === "close") { setPop(null, true); return; }
+    if (what === "tab") social.tab = act.getAttribute("data-tab");
+    else if (what === "unquote") social.quoting = "";
+    else if (what === "post") submitPost();
+    else if (what === "quote") {
+      social.quoting = act.getAttribute("data-id");
+      social.posted = false;
+    } else return;
+    renderSocial(state.T);
+    if (what === "quote") {
+      el.social.querySelector(".rs-scroll").scrollTop = 0;
+      el.social.querySelector(".rs-input").focus();
+    }
+  }
+  function socialBadge(T) {
+    var unseen = state.pop === "social" ? 0 : POSTS.filter(function (p) { return p.t <= T && p.t > social.seen; }).length;
+    el.socialBadge.hidden = !unseen;
+    el.socialBadge.textContent = unseen > 9 ? "9+" : String(unseen);
+    el.socialBtn.setAttribute("aria-label", unseen ? "Rostra, " + unseen + " new post" + (unseen === 1 ? "" : "s") : "Rostra");
   }
 
   // ---- the Diplomacy panel (chat.jsx: the workspace, ChatListItem, ConversationView) ----------------
@@ -1379,10 +1597,11 @@
     state.pop = which;
     state.keys.panel = "";
     state.keys.dip = "";
-    el.panel.hidden = !which || which === "chat" || which === "actions";
+    el.panel.hidden = which !== "events";
     el.actions.hidden = which !== "actions";
     state.keys.actions = "";
-    el.panel.classList.toggle("dock-panel", which === "actions" || which === "projects");
+    el.social.hidden = which !== "social";
+    state.keys.social = "";
     el.dip.hidden = which !== "chat";
     if (which === "chat" && !byHand && state.step === "talks") { dip.view = "thread"; dip.thread = CHATS.length - 1; }
     // main.jsx: on a phone a bottom panel opening closes the advisor and the country panel.
@@ -1392,6 +1611,8 @@
     renderPanel(state.T);
     renderDip(state.T);
     renderActions(state.T);
+    renderSocial(state.T);
+    socialBadge(state.T);
   }
   function setDrawer(which, byHand) {
     if (byHand) state.manual.drawer = which || "none";
@@ -1516,6 +1737,7 @@
       // and never with a bottom panel (main.jsx: they take turns).
       setDrawer(!phone() ? DRAWER[step] || "advisor" : POP[step] || step === "launch" || step === "korea" ? null : DRAWER[step] || null);
       if (VIEW[step]) setView(VIEW[step]);
+      acts.tab = ACTIONS_TAB[step] || "actions";
     }
     // What the chapter opens, unless the reader has chosen.
     if (!state.manual.pop) setPop(POP[step] || null);
@@ -1534,6 +1756,8 @@
     renderPanel(T);
     renderDip(T);
     renderActions(T);
+    renderSocial(T);
+    socialBadge(T);
     var unread = CHATS.filter(function (c, i) { return threadUnread(i, T); }).length;
     el.chatBadge.hidden = !unread;
     el.chatBadge.textContent = unread > 9 ? "9+" : String(unread);
@@ -1610,13 +1834,31 @@
     el.actions.addEventListener("click", actionsClick);
     el.actions.addEventListener("input", function (event) {
       var key = event.target.getAttribute("data-field");
-      if (key) { fields[key] = event.target.value; syncSend(); }
+      if (!key) return;
+      fields[key] = event.target.value;
+      if (key === "pj-search") renderActions(state.T);
+      else syncSend();
     });
     el.actions.addEventListener("keydown", function (event) {
       var key = event.target.getAttribute && event.target.getAttribute("data-field");
       if (!key || event.key !== "Enter" || event.shiftKey || (window.matchMedia && window.matchMedia("(pointer: coarse)").matches)) return;
       event.preventDefault();
       actionsClick({ target: el.actions.querySelector(key === "ac-goal" ? '[data-ac="goal-save"]' : '[data-ac="submit"]') });
+    });
+    el.social = $("gxSocial");
+    el.socialBtn = $("gxSocialBtn");
+    el.socialBadge = $("gxSocialBadge");
+    el.social.addEventListener("click", socialClick);
+    el.social.addEventListener("input", function (event) {
+      if (event.target.getAttribute("data-field") !== "rs-input") return;
+      fields["rs-input"] = event.target.value;
+      if (social.posted) { social.posted = false; renderSocial(state.T); }
+      syncPost();
+    });
+    el.social.addEventListener("keydown", function (event) {
+      if (event.target.getAttribute("data-field") !== "rs-input" || event.key !== "Enter" || event.shiftKey || (window.matchMedia && window.matchMedia("(pointer: coarse)").matches)) return;
+      event.preventDefault();
+      socialClick({ target: el.social.querySelector('[data-rs="post"]') });
     });
     el.dip = $("gxDip");
     el.dip.addEventListener("click", dipClick);

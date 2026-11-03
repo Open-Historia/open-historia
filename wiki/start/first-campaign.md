@@ -54,9 +54,9 @@ Finally, **click Germany on the map**. A card opens naming the country and the r
 clicked; press **ⓘ** for Germany's panel — flag, details, related events, and an **Advisor
 Report** on request. Read it. Do the same for Russia and Ukraine.
 
-<p class="beta-note"><b>On beta you can also Listen in.</b> The region's card has a <b>Listen
-in</b> button: a phone of posts by people who live there, about the day's news and about nothing
-at all. Each new feed is one AI request.</p>
+<p class="beta-note"><b>On beta the world posts.</b> The third button of the toolbar opens
+<b>Rostra</b>, a social network where leaders, generals, journalists and celebrities post as time
+passes, and where you can post as your country's leader. It costs no AI request.</p>
 
 ## 3. Talk to someone
 
