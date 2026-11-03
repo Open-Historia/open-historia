@@ -131,11 +131,15 @@ export const leaderOf = (world, polity) => {
   const name = clean(polity);
   if (!name) return null;
   try {
-    const authority = derivePoliticalDecisionAuthority(getPoliticalProfile(world, name));
+    const profile = getPoliticalProfile(world, name);
+    const authority = derivePoliticalDecisionAuthority(profile);
     const primary = authority?.primary;
     const person = clean(typeof primary === "string" ? primary : primary?.name);
     if (person) {
-      const title = clean(typeof primary === "string" ? "" : primary?.title);
+      // (An office written as a bare name takes the title of the record's leader, where that is the same person.)
+      const leader = profile?.leader;
+      const title = clean(typeof primary === "string" ? "" : primary?.title)
+        || (fold(typeof leader === "string" ? leader : leader?.name) === fold(person) ? clean(leader?.title) : "");
       return { name: clip(person, AUTHOR_LIMIT), title: clip(title, ROLE_LIMIT) };
     }
   } catch {
