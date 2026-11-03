@@ -30,6 +30,7 @@ import { SHARED_WORLD_TASKS, buildSharedGameDirective, joinPolityNames } from ".
 import { buildSeatAdviceDirective } from "./seatAdvice.js";
 import { unitsOffBattlefields } from "./frontsGate.js";
 import { readingLanguageName } from "../../runtime/i18n.js";
+import { advisorMessagesFor, CHIEF_ADVISOR_THREAD } from "../../runtime/advisorThreads.js";
 
 const normalizeString = (value) => String(value ?? "").trim();
 const normalizeArray = (value) => (Array.isArray(value) ? value : []);
@@ -883,8 +884,10 @@ export const buildDiplomaticContinuityText = (
   return rows.join("\n\n");
 };
 
+// Generic prompt history remains the legacy chief transcript. Contact profiles
+// and separate official conversations must not leak into a different AI task.
 export const buildAdvisorHistoryText = (messages, { limit = 18 } = {}) => {
-  const normalizedMessages = normalizeArray(messages).map((entry) => {
+  const normalizedMessages = advisorMessagesFor(messages, CHIEF_ADVISOR_THREAD).map((entry) => {
     if (!entry || typeof entry !== "object") return null;
     const role = normalizeString(entry.role || entry.speaker || "message");
     const text = normalizeString(entry.text || entry.content || entry.message);

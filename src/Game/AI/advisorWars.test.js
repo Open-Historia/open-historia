@@ -78,6 +78,6 @@ test("an advisor at peace hears of the fronts elsewhere; in a world with no war 
 
 test("the advisor's prompt carries the country's wars and fronts", () => {
   const main = fs.readFileSync(new URL("./main.jsx", import.meta.url), "utf8");
-  const body = main.slice(main.indexOf("async function buildAdvisorSystemPrompt()"), main.indexOf("export async function buildDiplomaticSystemPrompt("));
+  const body = main.slice(main.indexOf("async function buildAdvisorSystemPrompt("), main.indexOf("export async function buildDiplomaticSystemPrompt("));
   assert.match(body, /describeWarsForAdvisor\(\{ world: worldData, player: gameData\?\.country \|\| "", date: gameData\?\.gameDate \|\| "" \}\)/);
 });

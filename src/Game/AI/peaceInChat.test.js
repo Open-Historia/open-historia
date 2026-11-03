@@ -88,7 +88,7 @@ test("the war's figures are in every prompt where a country at war speaks or dec
   assert.ok(skip.includes(`\n${WAR_STATS_HEADING}\n`) && skip.includes("Borduria:\n- The Border War:"), skip);
   // A leader's reply in a one-on-one chat.
   const main = read("main.jsx");
-  const leader = main.slice(main.indexOf("export async function buildDiplomaticSystemPrompt("), main.indexOf("let advisorHistory = [];"));
+  const leader = main.slice(main.indexOf("export async function buildDiplomaticSystemPrompt("), main.indexOf("const advisorSessions = createAdvisorSessionRegistry();"));
   assert.ok(leader.includes("const wars = speaker ? buildWarStatsBlock({ world: worldData, countries: [speaker], heading: OWN_WARS_HEADING, max: 1800 }) : \"\";"));
   assert.ok(leader.includes("describePeaceTalk({ world: worldData, speaker, player: playerName, form: \"line\" })"));
   assert.ok(leader.includes("${wars ? `\\n\\n${wars}` : \"\"}${peaceTalk ? `\\n\\n${peaceTalk}` : \"\"}"));
