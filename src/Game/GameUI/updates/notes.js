@@ -63,7 +63,7 @@ const NEW_UPDATES = [
       {
         title: "Updates are not imports",
         items: [
-          "Updating a scenario you got from the Community tab no longer adds to its number of imports: only importing it does.",
+          "Updating a scenario you got from the Community tab, or suggesting changes to it, no longer adds to its number of imports: only importing it does.",
         ],
       },
     ],
