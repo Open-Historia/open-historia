@@ -151,6 +151,7 @@ import { createConversationGeneration, removeEntry } from "./liveConversation.js
 import { buildDiplomaticPoliticalContext } from "./diplomaticPoliticalContext.js";
 import { buildAdvisorPoliticalDiplomacyContext } from "./advisorPoliticalDiplomacyContext.js";
 import { describeWeatherForAdvisor } from "./advisorWeather.js";
+import { describeWarsForAdvisor } from "./advisorWars.js";
 import { describeLeaderStanding, describeOurFigures, describeTerritoryForConversation } from "./standingContext.js";
 import { OWN_WARS_HEADING, buildWarStatsBlock, describePeaceTalk } from "./warStatsPrompt.js";
 import { beginAiRequestScope } from "./aiRequestControl.js";
@@ -3821,6 +3822,11 @@ async function buildAdvisorSystemPrompt() {
         // sheet yet is told to estimate, and to say so.
         describeOurFigures(worldData, gameData?.country || "", { statistics: officialStats }),
         ADVISOR_MILITARY_STRENGTH_DIRECTIVE,
+        // The country's wars and their fronts, as its general staff knows them
+        // (advisorWars.js): "the advisor should know everything thats going on
+        // with conflicts and wars" (the owner, 2026-11-03). From the world as
+        // the player has been shown it, like everything here.
+        describeWarsForAdvisor({ world: worldData, player: gameData?.country || "", date: gameData?.gameDate || "" }),
         advisorTerritory,
         describeWeatherForAdvisor({ world: worldData, player: gameData?.country || "", date: gameData?.gameDate || "" }),
         // (The seasons and the weather, which the map shows with no words:
