@@ -471,33 +471,51 @@ const installSharedGameEngine = () => {
 };
 
 // --- display mode (desktop window state) -----------------------------------
+// Windowed, maximized (the window fills the screen, its title bar kept: a
+// window's frame cannot be taken off once it is made) or fullscreen, which
+// covers the whole screen without borders. The choice is kept beside the app's
+// data and given to the window each time it opens.
+const DISPLAY_MODES = ["windowed", "maximized", "fullscreen"];
+const DISPLAY_MODE_FILE = path.join(USER_ROOT, "display-mode.json");
+const readDisplayMode = () => {
+  try {
+    const mode = JSON.parse(fs.readFileSync(DISPLAY_MODE_FILE, "utf8"))?.mode;
+    return DISPLAY_MODES.includes(mode) ? mode : "windowed";
+  } catch {
+    return "windowed";
+  }
+};
 let currentDisplayMode = "windowed";
+const applyDisplayMode = (win, mode) => {
+  if (!win || win.isDestroyed()) return;
+  if (mode === "fullscreen") {
+    win.setFullScreen(true);
+    return;
+  }
+  if (win.isFullScreen()) win.setFullScreen(false);
+  if (mode === "maximized") win.maximize();
+  else if (win.isMaximized()) win.unmaximize();
+};
 const installDesktopDisplayMode = () => {
+  currentDisplayMode = readDisplayMode();
   globalThis.__ohDisplayMode = {
     get: () => {
       if (!mainWindow || mainWindow.isDestroyed()) return { supported: true, mode: currentDisplayMode };
       const mode = mainWindow.isFullScreen()
         ? "fullscreen"
         : mainWindow.isMaximized()
-          ? "borderless"
+          ? "maximized"
           : "windowed";
       return { supported: true, mode };
     },
     set: (mode) => {
-      if (!mainWindow || mainWindow.isDestroyed()) {
-        currentDisplayMode = mode;
-        return { supported: true, mode };
-      }
       currentDisplayMode = mode;
-      if (mode === "fullscreen") {
-        mainWindow.setFullScreen(true);
-      } else if (mode === "borderless") {
-        if (mainWindow.isFullScreen()) mainWindow.setFullScreen(false);
-        mainWindow.maximize();
-      } else {
-        if (mainWindow.isFullScreen()) mainWindow.setFullScreen(false);
-        if (mainWindow.isMaximized()) mainWindow.unmaximize();
+      try {
+        fs.writeFileSync(DISPLAY_MODE_FILE, JSON.stringify({ mode }));
+      } catch (error) {
+        logMain("warn", "display-mode.save", String(error?.message || error));
       }
+      applyDisplayMode(mainWindow, mode);
       return { supported: true, mode };
     },
   };
@@ -913,6 +931,8 @@ const createMainWindow = () => {
   attachEditingContextMenu(win);
   win.webContents.on("render-process-gone", (_event, details) => handlePageGone(win, details, { quitting }));
   win.once("ready-to-show", () => {
+    // The display mode chosen last time (installDesktopDisplayMode).
+    if (currentDisplayMode !== "windowed") applyDisplayMode(win, currentDisplayMode);
     win.show();
     // The game's window is up. When these files are a set an update put
     // together, that is what says they start (electron/bootstrap.cjs counts a

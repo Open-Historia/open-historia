@@ -180,3 +180,22 @@ export const formatGameDateReadable = (value, pattern = "D MMMM YYYY") => {
   };
   return String(pattern).replace(/YYYY|MMMM|MMM|MM|M|DD|Do|D/g, (token) => tokens[token]);
 };
+
+// A short date in a player's language ("1 janv. 2016", "2016年1月1日"), its
+// order and month names the browser's own. Years before AD 1, and a language
+// the browser does not know, keep the English form ("D MMM YYYY").
+export const formatGameDateShort = (value, language = "en") => {
+  const parts = parseGameDate(value);
+  if (!parts) return "";
+  const { year, month, day } = parts;
+  if (year >= 1) {
+    try {
+      const date = new Date(0);
+      date.setUTCFullYear(year, month - 1, day);
+      return new Intl.DateTimeFormat(language, { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" }).format(date);
+    } catch {
+      // the English form below
+    }
+  }
+  return formatGameDateReadable(value, "D MMM YYYY");
+};

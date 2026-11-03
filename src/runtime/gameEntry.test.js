@@ -91,7 +91,8 @@ test("archiving or deleting the open game leaves it, and an archived game's card
   assert.match(bar, /await saveGame\(game\.id, \{ archived: !game\.archived \}\);\s+if \(!game\.archived && game\.id === activeGameId && hasEnteredGame\(\)\) leaveGame\(\);/);
   assert.match(bar, /const wasOpen = record\.id === activeGameId && hasEnteredGame\(\);\s+await removeGame\(record\.id\);\s+if \(wasOpen\) leaveGame\(\);/);
   assert.match(bar, /const handleGameDelete = async \(game\) => \{[\s\S]+?const wasOpen = game\.id === activeGameId && hasEnteredGame\(\);\s+await removeGame\(game\.id\);\s+if \(wasOpen\) leaveGame\(\);/);
-  assert.match(bar, /\{game\.archived && onDelete && game\.canDelete && \(\s+<button[\s\S]+?onClick=\{\(\) => onDelete\(game\)\}/);
+  // Delete is on an archived game's card only, in the archived branch of its buttons.
+  assert.match(bar, /\{game\.archived \? \([\s\S]+?\{onDelete && game\.canDelete && \(\s+<button[\s\S]+?onClick=\{\(\) => onDelete\(game\)\}[\s\S]+?\) : null\}/);
   assert.match(bar, /const handleGameDelete = async \(game\) => \{\s+if \(!game\?\.canDelete\) return;/);
   assert.equal(bar.match(/onDelete=\{handleGameDelete\}/g).length, 2);
   assert.match(bar, /const handleEmpty = \(\) => \{\s+setConfirmEmpty\(false\);\s+run\(\(\) => emptyTrash\(kind\)\);\s+\};/);

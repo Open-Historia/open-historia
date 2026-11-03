@@ -73,7 +73,8 @@ import { splitScenarioBundleImage, unresolvedBundleBackground } from "../../runt
 import { noteMissingBasemapTried, retryMissingBasemap } from "../../runtime/missingBasemap.js";
 import { zipBundle, looksLikeZip } from "../../runtime/bundleZip.js";
 import { SCENARIO_LICENSE_FILE, SCENARIO_LICENSE_TEXT, SCENARIO_LICENSE_URL } from "../../runtime/scenarioLicense.js";
-import { formatGameDateReadable } from "../../runtime/gameDates.js";
+import { formatGameDateShort } from "../../runtime/gameDates.js";
+import { getStoredLanguage } from "../../runtime/i18n.js";
 import { splitBundleFiles } from "../../runtime/bundleFiles.js";
 import { buildGameZipBlob, formatZipSize, readGameZip, saveGameZipToDisk } from "../../runtime/gameZip.js";
 import { findScenarioCopyOfBundle } from "../../runtime/importedScenarioCopy.js";
@@ -1529,7 +1530,7 @@ const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onDelete
             <div style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "10px", minWidth: 0, padding: "0.35rem 0.55rem" }}>
               <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.58rem", fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase" }}>{"Date"}</div>
               <div style={{ color: "#fff", fontSize: "0.8rem", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                {formatGameDateReadable(game.currentDate, "D MMM YYYY") || game.currentDate || "No date"}
+                {formatGameDateShort(game.currentDate, getStoredLanguage()) || game.currentDate || "No date"}
               </div>
             </div>
             <div style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "10px", minWidth: 0, padding: "0.35rem 0.55rem" }}>

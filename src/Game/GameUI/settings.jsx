@@ -2445,15 +2445,24 @@ const DisplayModeSelector = ({ isFullscreenEnabled, onToggleFullscreen }) => {
     const stored = useMapSettingValue(MAP_SETTING_KEYS.displayMode, "");
     const [desktopStatus, setDesktopStatus] = useState(null);
 
+    // Read again whenever the window changes size: Esc, F11 or the window's own
+    // buttons change the mode without this selector.
     useEffect(() => {
         let mounted = true;
-        fetch("/api/desktop/display-mode")
-            .then((r) => (r.ok ? r.json() : null))
-            .then((data) => {
-                if (mounted && data?.supported) setDesktopStatus(data);
-            })
-            .catch(() => {});
-        return () => { mounted = false; };
+        const refresh = () => {
+            fetch("/api/desktop/display-mode")
+                .then((r) => (r.ok ? r.json() : null))
+                .then((data) => {
+                    if (mounted && data?.supported) setDesktopStatus(data);
+                })
+                .catch(() => {});
+        };
+        refresh();
+        window.addEventListener("resize", refresh);
+        return () => {
+            mounted = false;
+            window.removeEventListener("resize", refresh);
+        };
     }, []);
 
     const isDesktop = Boolean(desktopStatus?.supported);
@@ -2486,14 +2495,14 @@ const DisplayModeSelector = ({ isFullscreenEnabled, onToggleFullscreen }) => {
                 onChange={(event) => selectMode(event.target.value)}
             >
                 <option value="windowed">Windowed</option>
-                <option value="borderless">Borderless windowed</option>
+                {isDesktop && <option value="maximized">Maximized</option>}
                 <option value="fullscreen">Fullscreen</option>
             </select>
             <div style={helperStyle}>
-                {activeMode === "borderless"
-                    ? "Maximizes the game window across your screen without borders."
+                {activeMode === "maximized"
+                    ? "The game's window fills your screen, with its title bar."
                     : activeMode === "fullscreen"
-                        ? "Runs the game in full screen mode."
+                        ? "The game covers your whole screen, without borders."
                         : "Runs the game in a standard resizable desktop window."}
             </div>
         </div>

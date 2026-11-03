@@ -53,6 +53,23 @@ import { PAST_UPDATES } from "./notesPast.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // The display mode setting and tidier game cards (a contributor's PR #935, with its review fixes).
+    id: "2026-11-display-mode",
+    kind: "minor",
+    date: "2026-11-03",
+    channel: "beta",
+    banners: [
+      {
+        title: "Windowed, maximized or fullscreen",
+        items: [
+          "In the desktop app, Settings → Display now chooses how the game's window is shown: in a window, maximized, or fullscreen, and remembers it for next time.",
+          "Game cards show their date in your language, and long save names fit on the card.",
+          "A game's Archive button has moved into its card's menu.",
+        ],
+      },
+    ],
+  },
+  {
     // The Workshop's GPU region layer drew a converted map's regions where they had been (Editor/regionDisplay.js
     // regionFrame), and the game's camera stopped at 80°S on a scenario's own map (Map/World.jsx maxBounds); both
     // on Avatar: Resurrection (the owner's report, 2026-11-03).
@@ -591,9 +608,7 @@ const NEW_UPDATES = [
         title: "A tidier phone layout",
         items: [
           "On a phone, the main menu's tabs and buttons line up evenly, and searching and sorting the library take a row each.",
-          "Game cards in the library are cleaner and more compact, with archive controls organized in the card menu.",
-          "Save titles fit naturally on cards, and campaign dates format cleanly across all languages.",
-          "Choose between windowed, borderless windowed and fullscreen display modes in Settings.",
+          "Game cards in the library are more compact on small screens.",
           "In a game on a phone, the menu, date and search buttons match in size, the advisor's button sits clear of the map switch, and the War Room button is smaller.",
         ],
       },
