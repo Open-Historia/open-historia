@@ -470,6 +470,39 @@ const installSharedGameEngine = () => {
   };
 };
 
+// --- display mode (desktop window state) -----------------------------------
+let currentDisplayMode = "windowed";
+const installDesktopDisplayMode = () => {
+  globalThis.__ohDisplayMode = {
+    get: () => {
+      if (!mainWindow || mainWindow.isDestroyed()) return { supported: true, mode: currentDisplayMode };
+      const mode = mainWindow.isFullScreen()
+        ? "fullscreen"
+        : mainWindow.isMaximized()
+          ? "borderless"
+          : "windowed";
+      return { supported: true, mode };
+    },
+    set: (mode) => {
+      if (!mainWindow || mainWindow.isDestroyed()) {
+        currentDisplayMode = mode;
+        return { supported: true, mode };
+      }
+      currentDisplayMode = mode;
+      if (mode === "fullscreen") {
+        mainWindow.setFullScreen(true);
+      } else if (mode === "borderless") {
+        if (mainWindow.isFullScreen()) mainWindow.setFullScreen(false);
+        mainWindow.maximize();
+      } else {
+        if (mainWindow.isFullScreen()) mainWindow.setFullScreen(false);
+        if (mainWindow.isMaximized()) mainWindow.unmaximize();
+      }
+      return { supported: true, mode };
+    },
+  };
+};
+
 // --- map data ---------------------------------------------------------------
 
 // Where a manifest path lives on disk: the rule scripts/fetch-map-assets.mjs
@@ -1006,6 +1039,7 @@ const boot = async () => {
   // Quitting into the installer, which reopens the game on the new version.
   if (launchUpdate.installing) return;
   installSharedGameEngine();
+  installDesktopDisplayMode();
   relocateLegacyStockMap();
   relocateOwnFolderMap();
   let pending = missingAssets();

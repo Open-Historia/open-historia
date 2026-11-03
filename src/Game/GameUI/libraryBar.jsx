@@ -73,6 +73,7 @@ import { splitScenarioBundleImage, unresolvedBundleBackground } from "../../runt
 import { noteMissingBasemapTried, retryMissingBasemap } from "../../runtime/missingBasemap.js";
 import { zipBundle, looksLikeZip } from "../../runtime/bundleZip.js";
 import { SCENARIO_LICENSE_FILE, SCENARIO_LICENSE_TEXT, SCENARIO_LICENSE_URL } from "../../runtime/scenarioLicense.js";
+import { formatGameDateReadable } from "../../runtime/gameDates.js";
 import { splitBundleFiles } from "../../runtime/bundleFiles.js";
 import { buildGameZipBlob, formatZipSize, readGameZip, saveGameZipToDisk } from "../../runtime/gameZip.js";
 import { findScenarioCopyOfBundle } from "../../runtime/importedScenarioCopy.js";
@@ -1326,6 +1327,7 @@ const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onDelete
   const cardMenuItems = [
     ["Edit", () => { setCardMenuOpen(false); onEdit(game.id); }, false],
     ["Clone", () => { setCardMenuOpen(false); onClone(game); }, false],
+    [game.archived ? "Unarchive" : "Archive", () => { setCardMenuOpen(false); onArchive(game); }, false],
     // Offered everywhere, the Android app included: runtime/saveFile.js saves
     // the zip into Downloads/Open Historia there (runtime/native/fileSave.js).
     [exporting ? "Exporting…" : "Export", runExport, exporting],
@@ -1516,7 +1518,7 @@ const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onDelete
         }}
       >
         <div>
-          <div style={{ color: "#fff", fontSize: isMobile ? "1.15rem" : "1.32rem", fontWeight: 800, letterSpacing: "-0.025em", lineHeight: 1.2, marginBottom: "0.4rem" }}>
+          <div style={{ color: "#fff", fontSize: isMobile ? "0.98rem" : "1.08rem", fontWeight: 800, letterSpacing: "-0.02em", lineHeight: 1.25, marginBottom: "0.45rem", overflowWrap: "break-word" }}>
             {game.name}
           </div>
           <div style={{ display: "grid", gap: "0.35rem", gridTemplateColumns: "1fr 1fr", marginBottom: "0.55rem" }}>
@@ -1526,7 +1528,9 @@ const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onDelete
             </div>
             <div style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "10px", minWidth: 0, padding: "0.35rem 0.55rem" }}>
               <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.58rem", fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase" }}>{"Date"}</div>
-              <div style={{ color: "#fff", fontSize: "0.8rem", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{game.currentDate || "No date"}</div>
+              <div style={{ color: "#fff", fontSize: "0.8rem", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {formatGameDateReadable(game.currentDate, "D MMM YYYY") || game.currentDate || "No date"}
+              </div>
             </div>
             <div style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "10px", minWidth: 0, padding: "0.35rem 0.55rem" }}>
               <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.58rem", fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase" }}>{"Round"}</div>
@@ -1564,10 +1568,10 @@ const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onDelete
               onClick={() => onActivate(game.id)}
               style={touchFit({
                 ...themeButtonStyle,
-                background: active ? "rgba(255,255,255,0.06)" : game.accentColor,
-                borderColor: active ? "rgba(255,255,255,0.22)" : game.accentColor,
+                background: active ? "rgba(255,255,255,0.06)" : (game.accentColor || DEFAULT_ACCENT_COLOR),
+                borderColor: active ? "rgba(255,255,255,0.22)" : (game.accentColor || DEFAULT_ACCENT_COLOR),
                 borderRadius: "11px",
-                boxShadow: active ? "none" : `0 3px 12px ${game.accentColor}33`,
+                boxShadow: active ? "none" : `0 3px 12px ${(game.accentColor || DEFAULT_ACCENT_COLOR)}33`,
                 color: "#fff",
                 fontSize: "0.88rem",
                 fontWeight: 700,
@@ -1578,44 +1582,46 @@ const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onDelete
             >
               {active ? "Current" : <><ButtonIcon kind="play" /> Play</>}
             </button>
-            <div style={{ display: "flex", gap: "0.45rem" }}>
-              <button
-                className="oh-tap-row"
-                onClick={() => onArchive(game)}
-                style={touchFit({
-                  ...themeButtonStyle,
-                  background: "rgba(255,255,255,0.06)",
-                  flex: 1,
-                  fontSize: "0.78rem",
-                  minHeight: "2rem",
-                  padding: "0 0.6rem",
-                }, touch)}
-                title={game.archived ? "Move back into your library" : "Hide from the library without deleting"}
-                type="button"
-              >
-                <ButtonIcon kind="archive" /> {game.archived ? "Unarchive" : "Archive"}
-              </button>
-              {game.archived && onDelete && game.canDelete && (
+            {game.archived ? (
+              <div style={{ display: "flex", gap: "0.45rem" }}>
                 <button
                   className="oh-tap-row"
-                  disabled={busy}
-                  onClick={() => onDelete(game)}
+                  onClick={() => onArchive(game)}
                   style={touchFit({
                     ...themeButtonStyle,
-                    background: "rgba(127,29,29,0.34)",
-                    borderColor: "rgba(248,113,113,0.28)",
-                    color: "#fecaca",
+                    background: "rgba(255,255,255,0.06)",
                     flex: 1,
                     fontSize: "0.78rem",
                     minHeight: "2rem",
                     padding: "0 0.6rem",
                   }, touch)}
+                  title={"Move back into your library"}
                   type="button"
                 >
-                  Delete
+                  <ButtonIcon kind="archive" /> {game.archived ? "Unarchive" : "Archive"}
                 </button>
-              )}
-            </div>
+                {onDelete && game.canDelete && (
+                  <button
+                    className="oh-tap-row"
+                    disabled={busy}
+                    onClick={() => onDelete(game)}
+                    style={touchFit({
+                      ...themeButtonStyle,
+                      background: "rgba(127,29,29,0.34)",
+                      borderColor: "rgba(248,113,113,0.28)",
+                      color: "#fecaca",
+                      flex: 1,
+                      fontSize: "0.78rem",
+                      minHeight: "2rem",
+                      padding: "0 0.6rem",
+                    }, touch)}
+                    type="button"
+                  >
+                    Delete
+                  </button>
+                )}
+              </div>
+            ) : null}
           </div>
         </div>
       </div>

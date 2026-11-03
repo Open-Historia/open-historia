@@ -591,7 +591,9 @@ const NEW_UPDATES = [
         title: "A tidier phone layout",
         items: [
           "On a phone, the main menu's tabs and buttons line up evenly, and searching and sorting the library take a row each.",
-          "Game cards in the library are more compact on small screens.",
+          "Game cards in the library are cleaner and more compact, with archive controls organized in the card menu.",
+          "Save titles fit naturally on cards, and campaign dates format cleanly across all languages.",
+          "Choose between windowed, borderless windowed and fullscreen display modes in Settings.",
           "In a game on a phone, the menu, date and search buttons match in size, the advisor's button sits clear of the map switch, and the War Room button is smaller.",
         ],
       },

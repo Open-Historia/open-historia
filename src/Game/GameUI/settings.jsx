@@ -2441,6 +2441,65 @@ const PLAYER_FOCUS_HINTS = {
     spotlight: "The story follows you. At least three quarters of each skip is about you, and the wider world is kept to what matters most.",
 };
 
+const DisplayModeSelector = ({ isFullscreenEnabled, onToggleFullscreen }) => {
+    const stored = useMapSettingValue(MAP_SETTING_KEYS.displayMode, "");
+    const [desktopStatus, setDesktopStatus] = useState(null);
+
+    useEffect(() => {
+        let mounted = true;
+        fetch("/api/desktop/display-mode")
+            .then((r) => (r.ok ? r.json() : null))
+            .then((data) => {
+                if (mounted && data?.supported) setDesktopStatus(data);
+            })
+            .catch(() => {});
+        return () => { mounted = false; };
+    }, []);
+
+    const isDesktop = Boolean(desktopStatus?.supported);
+    const activeMode = isDesktop
+        ? (desktopStatus?.mode || stored || "windowed")
+        : (isFullscreenEnabled ? "fullscreen" : "windowed");
+
+    const selectMode = (mode) => {
+        setMapSettingValue(MAP_SETTING_KEYS.displayMode, mode);
+        if (isDesktop) {
+            setDesktopStatus((prev) => (prev ? { ...prev, mode } : { supported: true, mode }));
+            fetch("/api/desktop/display-mode", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ mode }),
+            }).catch(() => {});
+        } else {
+            if (mode === "fullscreen" && !isFullscreenEnabled) onToggleFullscreen();
+            else if (mode !== "fullscreen" && isFullscreenEnabled) onToggleFullscreen();
+        }
+    };
+
+    return (
+        <div style={fieldGroupStyle}>
+            <label style={labelStyle} htmlFor="game-display-mode">Display mode</label>
+            <select
+                id="game-display-mode"
+                style={inputStyle}
+                value={activeMode}
+                onChange={(event) => selectMode(event.target.value)}
+            >
+                <option value="windowed">Windowed</option>
+                <option value="borderless">Borderless windowed</option>
+                <option value="fullscreen">Fullscreen</option>
+            </select>
+            <div style={helperStyle}>
+                {activeMode === "borderless"
+                    ? "Maximizes the game window across your screen without borders."
+                    : activeMode === "fullscreen"
+                        ? "Runs the game in full screen mode."
+                        : "Runs the game in a standard resizable desktop window."}
+            </div>
+        </div>
+    );
+};
+
 const PlayerFocusSetting = () => {
     // The scenario's default under this game's own choice (server/gameFeatures.js).
     // Kept with the GAME, not on this device: a Spotlight war campaign should not
@@ -2877,7 +2936,7 @@ const SettingsWorkspace = ({
                     <ChatLanguageSelector />
                 </SettingsSection>
                 <SettingsSection title="Display" description="Window and presentation preferences that apply to the game client.">
-                    <Toggle label="Fullscreen" enabled={isFullscreenEnabled} onToggle={onToggleFullscreen} />
+                    <DisplayModeSelector isFullscreenEnabled={isFullscreenEnabled} onToggleFullscreen={onToggleFullscreen} />
                     {/* The vault door shows the first time the game opens after an
                         update (runtime/vaultDoorDue.js); this shows it at every
                         opening. */}
