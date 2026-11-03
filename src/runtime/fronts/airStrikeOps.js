@@ -25,10 +25,13 @@
 // asker is the country that asked, whatever the op says. Pure, and runs in bare node.
 
 import { eraOf, hashSeed } from "../unitMotion.js";
-import { eraSettingOf } from "../warSettings.js";
+import { eraSettingOf, warSettingsOf } from "../warSettings.js";
+import { militaryLookup } from "../militaryStats.js";
+import { decodeTroops } from "./codec.js";
+import { airWorth, readMilitary } from "./military.js";
 import { AIR_REACH_KM } from "./air.js";
 import { AIR_BLAST_KM, AIR_STRIKE_KINDS, AIR_STRIKE_ORDERS_MOST, enemiesIn, fightersShareOf, normalizeAirStrikeOrders } from "./airStrike.js";
-import { pointInFrame } from "./frame.js";
+import { pointInFrame, projectorOf } from "./frame.js";
 import { foldBattlefieldName, isOpenBattlefield, normalizeBattlefields } from "./record.js";
 import { kmBetween, measureOptions } from "./worldGrid.js";
 import { engineMapOf, worldMeasureOf } from "../../../server/mapDistance.js";
@@ -71,14 +74,55 @@ export const airReachOf = (world, date) => {
   return { reach: AIR_REACH_KM[era] ?? 0, blast: AIR_BLAST_KM[era] ?? 0 };
 };
 
-// The asker's air units, as the war room lists them:
+// A FRONT'S AIR ARM. A country at war with no air unit of its own on the map
+// flies its air arm over each battlefield it fights on all the same (air.js
+// AIR ARMS): the aircraft the map draws circling over its troops. The war
+// room flies a strike with it too ("why is the aircraft button greyed out ...
+// then why do I see planes flying around", the owner, 2026-11-03): one air
+// arm a battlefield, at full strength, based where the country's troops there
+// stand (the middle of them), named for the battlefield. It is no unit of the
+// world's: what a strike costs it is gone by the next run, as the engine's own
+// arms are whole again each run. None for a country with an air unit of its own
+// (it flies that), one whose air arm is worth nothing (its military figures:
+// air 0), or one with no troops there.
+export const AIR_ARM_UNIT = "air-arm:";
+export const airArmsOf = (world, player) => {
+  const wanted = fold(player);
+  if (!wanted) return [];
+  if (list(world?.units).some((unit) => unit && fold(unit.type) === "air" && fold(unit.ownerCode) === wanted && fold(unit.status) !== "defeated")) return [];
+  if (warSettingsOf(world ?? {}).mechanics.military === true && airWorth(readMilitary(militaryLookup(world ?? {})(player))) === 0) return [];
+  const arms = [];
+  for (const record of normalizeBattlefields(world?.battlefields)) {
+    if (record.status !== "active" || !record.frame) continue;
+    const side = record.sides.findIndex((members) => members.some((member) => fold(member) === wanted));
+    if (side < 0) continue;
+    const member = record.sides[side].findIndex((name) => fold(name) === wanted);
+    const troops = decodeTroops(record.troops?.[side]).filter((troop) => troop && Number(troop.strength) > 0 && (troop.owner ?? 0) === member);
+    if (troops.length === 0) continue;
+    const x = troops.reduce((sum, troop) => sum + Number(troop.x), 0) / troops.length;
+    const y = troops.reduce((sum, troop) => sum + Number(troop.y), 0) / troops.length;
+    const [lng, lat] = projectorOf(record.frame).toLngLat(x, y);
+    if (!finite(lng) || !finite(lat)) continue;
+    arms.push({ id: `${AIR_ARM_UNIT}${record.name}`, type: "air", ownerCode: record.sides[side][member], name: `${record.name} air arm`, strength: 100, lng: round4(lng), lat: round4(lat), composition: "", status: "" });
+  }
+  return arms;
+};
+
+// The air arms the strikes waiting to fly were ordered for (airArmsOf), as units the strikes fly with
+// (airStrike.js resolveAirStrikes): none where no strike names one.
+export const airArmsForOrders = (world, orders = world?.airStrikeOrders) => {
+  const owners = [...new Set(normalizeAirStrikeOrders(orders).filter((order) => order.unit.startsWith(AIR_ARM_UNIT)).map((order) => order.owner))];
+  return owners.flatMap((owner) => airArmsOf(world, owner));
+};
+
+// The asker's air units, as the war room lists them, its fronts' air arms among them (airArmsOf):
 //   [{ id, name, strength, lng, lat, composition, fighters, pending, order }]
 // `fighters` is the share of it that is fighters (airStrike.js fightersShareOf); `order`, the strike it waits to fly, or null.
 export const airUnitsOf = (world, player) => {
   const wanted = fold(player);
   if (!wanted) return [];
   const orders = new Map(normalizeAirStrikeOrders(world?.airStrikeOrders).map((order) => [order.unit, order]));
-  return list(world?.units)
+  return [...list(world?.units), ...airArmsOf(world, player)]
     .filter((unit) => unit && fold(unit.type) === "air" && fold(unit.ownerCode) === wanted && clean(unit.id) && Number(unit.strength) >= 1
       && finite(unit.lng) && finite(unit.lat) && fold(unit.status) !== "defeated")
     .map((unit) => ({
@@ -117,7 +161,7 @@ export const applyAirStrikeOp = (world, op, { player = "", date = "", round = 0,
   const owner = clean(player, 120);
   if (!owner) return { error: REFUSED.nobody };
   const wanted = clean(op.unit, 160);
-  const unit = wanted ? list(world?.units).find((entry) => entry && clean(entry.id) === wanted) : null;
+  const unit = wanted ? list(world?.units).find((entry) => entry && clean(entry.id) === wanted) ?? airArmsOf(world, owner).find((entry) => entry.id === wanted) ?? null : null;
   if (!unit || fold(unit.type) !== "air" || fold(unit.ownerCode) !== fold(owner)) return { error: REFUSED.unit };
   const id = clean(unit.id);
   const orders = normalizeAirStrikeOrders(world?.airStrikeOrders);
