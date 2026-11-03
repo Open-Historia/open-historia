@@ -53,6 +53,24 @@ import { PAST_UPDATES } from "./notesPast.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // A branched scripted event set to "Let the AI write it" was taken for missing when the AI told it in words of its
+    // own, and the engine wrote the author's instruction as the event (AI/worldDirection.js sharesParentContextAnchor,
+    // withoutAsides; a player's report, 2026-11-03).
+    id: "2026-11-scripted-events-in-ai-words",
+    kind: "minor",
+    date: "2026-11-03",
+    channel: "beta",
+    banners: [
+      {
+        title: "Scripted events in the AI's words",
+        items: [
+          "A scripted event set to Let the AI write it is told in the AI's words again, instead of appearing as the instruction you wrote.",
+          "When a time skip does leave one out, the copy written in its place leaves out your [bracketed] notes to the AI.",
+        ],
+      },
+    ],
+  },
+  {
     // A model's war, client state, relation or agreement written inside an event is carried out; a skip's events are
     // sent with impacts required, so Gemini no longer leaves them off (AI/jumpAnswerShelves.js,
     // gameplaySchemas.js withEventImpacts; the owner's reports, 2026-11-03).

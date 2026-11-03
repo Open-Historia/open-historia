@@ -186,9 +186,12 @@ const sharesEnoughWords = (source, haystack) => {
     return shared >= needed;
 };
 
-const sharesParentContextAnchor = (parentText, primaryText, haystack) => {
-    const primaryWords = words(primaryText);
-    const anchors = [...words(parentText)].filter((word) => !primaryWords.has(word));
+// Any of the parent's words anchors the event, the ones its outcome repeats included: an outcome that names its own
+// places and sides ("the Syrian Arab Republic conquers…") already carries the parent's context, and leaving those words
+// out left only the parent's generic ones ("current", "conclusion", "offensives"). A faithful telling that used none of
+// them was taken for missing, and the engine wrote the author's instruction beside it.
+const sharesParentContextAnchor = (parentText, haystack) => {
+    const anchors = [...words(parentText)];
     if (!anchors.length) return true;
     return anchors.some((word) => haystack.has(word));
 };
@@ -213,19 +216,25 @@ export const beatIsWritten = (beat, events, { language = "" } = {}) => {
         // around the player polity and accepted even when the author anchored the
         // parent event somewhere else. Exact wording is exempt because its visible
         // body is intentionally only the author's selected branch text.
-        return !generatedBranch || sharesParentContextAnchor(parentText, primaryText, haystack);
+        return !generatedBranch || sharesParentContextAnchor(parentText, haystack);
     });
 };
 
 // The event the engine writes for a beat the answer left out: the author's own
 // words, on the author's date, marked as the world's and as worth stopping for.
+// An instruction the AI was to write is the author's direction, so its square-bracketed asides to the simulator
+// ("[In terms of map changes: …]") stay out of the engine's copy; exact wording is kept whole.
+const withoutAsides = (value) => asText(value).replace(/\s*\[[^\]]*\]/g, "").replace(/[ \t]{2,}/g, " ").trim() || asText(value);
 export const scriptedEventFor = (beat) => {
     const parentText = asText(beat?.parentText);
-    const description = parentText && scriptedTextMode(beat?.textMode) !== "exact"
-        ? `${parentText}
+    const exact = scriptedTextMode(beat?.textMode) === "exact";
+    const description = exact
+        ? beat.text
+        : parentText
+            ? `${withoutAsides(parentText)}
 
-${asText(beat?.text)}`
-        : beat.text;
+${withoutAsides(beat?.text)}`
+            : withoutAsides(beat?.text);
     return {
         date: beat.date,
         title: beat.title,
