@@ -203,3 +203,17 @@ test("the server serves the generator from the folder the installers pack", () =
   assert.ok(missing > files, "and what it does not hold is a 404, after the files");
   assert.ok(server.indexOf("if (fs.existsSync(fmgDistDir)) {") < server.indexOf("express.static(distDir)"), "before the app's own files and the SPA fallback");
 });
+
+// The Nix package (default.nix) builds with no network: it fetches the same
+// commit's zip itself, checked by its hash, and hands it to the script.
+test("the Nix package fetches the commit the game pins, and the script reads the zip it is given", () => {
+  const nix = read("../default.nix");
+  assert.ok(nix.includes(`url = "${FMG_ZIP_URL}";`), "default.nix fmgZip: change it with FMG_COMMIT");
+  assert.ok(nix.includes(`fantasy-map-generator-${FMG_TAG}.zip`));
+  assert.match(nix, /OH_FMG_ZIP = "\$\{fmgZip\}";/);
+  assert.match(nix, /node scripts\/fetch-fmg\.mjs --required/);
+  assert.match(nix, /manifest = lib\.importJSON \.\/scripts\/map-assets\.json;/, "the map files are the manifest's");
+  const script = read("../scripts/fetch-fmg.mjs");
+  assert.match(script, /const given = process\.env\.OH_FMG_ZIP;/);
+  assert.match(script, /buf = fs\.readFileSync\(given\);/);
+});

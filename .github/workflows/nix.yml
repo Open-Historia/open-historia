@@ -1,0 +1,59 @@
+# The Nix package (flake.nix, default.nix) builds and starts. It reads
+# package-lock.json and scripts/map-assets.json, so a change to either is
+# checked here; nobody needs Nix installed to keep it working.
+name: Nix
+
+on:
+  push:
+    branches: [main, beta, alpha]
+    paths:
+      - flake.nix
+      - flake.lock
+      - default.nix
+      - nix/**
+      - package.json
+      - package-lock.json
+      - scripts/map-assets.json
+      - scripts/fmg-vendor.mjs
+      - scripts/fetch-fmg.mjs
+      - .github/workflows/nix.yml
+  pull_request:
+    paths:
+      - flake.nix
+      - flake.lock
+      - default.nix
+      - nix/**
+      - package.json
+      - package-lock.json
+      - scripts/map-assets.json
+      - scripts/fmg-vendor.mjs
+      - scripts/fetch-fmg.mjs
+      - .github/workflows/nix.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: cachix/install-nix-action@v31
+      - name: Build
+        run: nix build --print-build-logs .#default
+      - name: Check the flake
+        run: nix flake check --no-build
+      - name: Start the server
+        run: |
+          export OH_DATA_DIR="$RUNNER_TEMP/oh-data" PORT=3123 OH_DISCORD_PRESENCE=0 OH_VISIT_COUNT=0
+          ./result/bin/open-historia > "$RUNNER_TEMP/server.log" 2>&1 &
+          for attempt in $(seq 1 60); do
+            curl -sf "http://127.0.0.1:$PORT/" > /dev/null && break
+            sleep 2
+          done
+          curl -sf "http://127.0.0.1:$PORT/" | grep -qi "<html"
+          curl -sf "http://127.0.0.1:$PORT/fmg/index.html" > /dev/null
+          test -L "$OH_DATA_DIR/stock/regions.geojson"
+          cat "$RUNNER_TEMP/server.log"

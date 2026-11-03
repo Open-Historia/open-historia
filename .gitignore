@@ -69,3 +69,7 @@ electron/channel.json
 
 # Relocatable wiki preview (scripts/build-wiki-preview.mjs) — a build output, like dist-site.
 dist-wiki-preview/
+
+# nix build output
+/result
+/result-*
