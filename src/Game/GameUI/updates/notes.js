@@ -72,6 +72,22 @@ const NEW_UPDATES = [
     ],
   },
   {
+    // Gemini wrote every event's places as objects of their parts; the check failed the answer, its retry and the
+    // skip (AI/eventPlaces.js placesAsWritten; a player's Android report, 2026-11-03).
+    id: "2026-11-places-as-written",
+    kind: "minor",
+    date: "2026-11-03",
+    channel: "beta",
+    banners: [
+      {
+        title: "Long time skips on Gemini",
+        items: [
+          "A time skip no longer fails and asks again when Gemini writes the places of its events in its own format, so a year-long skip takes one request and keeps every event it wrote.",
+        ],
+      },
+    ],
+  },
+  {
     // The Workshop's GPU region layer drew a converted map's regions where they had been (Editor/regionDisplay.js
     // regionFrame), and the game's camera stopped at 80°S on a scenario's own map (Map/World.jsx maxBounds); both
     // on Avatar: Resurrection (the owner's report, 2026-11-03).
