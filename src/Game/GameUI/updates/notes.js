@@ -53,6 +53,33 @@ import { PAST_UPDATES } from "./notesPast.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // Forces built up at home round the cities and moved in the War Room; troops march to the front from inside their
+    // country; call-ups sized by the country (the owner, 2026-11-02: runtime/fronts/home.js, march.js).
+    id: "2026-11-forces-at-home",
+    kind: "minor",
+    date: "2026-11-02",
+    channel: "beta",
+    banners: [
+      {
+        title: "Forces at home",
+        items: [
+          "Build up forces from your own country's page: they gather round your cities, as many as your men, supplies, war weariness and mustering allow, and more come in over the weeks after.",
+          "The War Room opens for them in peace: draw routes to move them through your own land, to a border or anywhere at home.",
+          "Send them into another country's land and the war with it begins; those near its front fight there.",
+          "Other countries build up their forces and station them on their borders too.",
+        ],
+      },
+      {
+        title: "Armies march to the front",
+        items: [
+          "New troops are called up inside their country, the deeper the thinner its people are spread, and march to the front.",
+          "Armies move half again as fast through their own side's territory as through the enemy's.",
+          "Deploying troops no longer asks how many: your country calls up as many as it can.",
+        ],
+      },
+    ],
+  },
+  {
     // "have it already contain that" (the owner, 2026-11-02): the skip writes the figures a war needs itself (warFiguresPrompt.js).
     id: "2026-11-war-figures-in-skip",
     kind: "minor",
