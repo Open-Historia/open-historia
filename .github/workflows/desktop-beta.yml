@@ -47,7 +47,51 @@ permissions:
   contents: write
 
 jobs:
+  # The suite runs once, on Linux, before any installer is built: run in each of
+  # the three builds it cost Windows five and a half minutes a run (a process for
+  # each of some 900 test files, on a runner whose virus scanner reads every file
+  # opened), to tell what Linux had already told. A red suite still stops all
+  # three, as `build` needs this job. Stamped as the builds stamp their tree.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Refuse to dispatch this from anything but beta
+        if: github.event_name == 'workflow_dispatch' && github.repository == 'Open-Historia/open-historia' && github.ref_name != 'beta'
+        shell: bash
+        run: |
+          echo "::error::Run this with 'Use workflow from: beta'."
+          exit 1
+
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Stamp the build id
+        shell: bash
+        run: echo "{\"build\":\"${{ github.run_id }}\"}" > electron/build-id.json
+
+      - name: Stamp the release channel
+        run: node scripts/stamp-channel.mjs beta
+
+      - name: Stamp the app version and package name
+        shell: bash
+        run: node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.version='0.0.${{ github.run_number }}';p.name='open-historia-beta';fs.writeFileSync('package.json',JSON.stringify(p,null,2))"
+
+      # server/betaPackaging.test.js is in here, and it is the only thing that
+      # catches the beta's two update feeds drifting onto different tags, or
+      # latest.json below naming a file electron-builder does not produce. Both
+      # fail silently at runtime, so they have to fail loudly here.
+      - name: Run the tests
+        run: npm test
+
   build:
+    needs: test
     strategy:
       fail-fast: false # one platform failing must not throw away the other two
       matrix:
@@ -125,12 +169,7 @@ jobs:
           node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.version='0.0.${{ github.run_number }}';p.name='open-historia-beta';fs.writeFileSync('package.json',JSON.stringify(p,null,2))"
           node -p "require('./package.json').name+' '+require('./package.json').version"
 
-      # server/betaPackaging.test.js is in here, and it is the only thing that
-      # catches the beta's two update feeds drifting onto different tags, or
-      # latest.json below naming a file electron-builder does not produce. Both
-      # fail silently at runtime, so they have to fail loudly here.
-      - name: Run the tests
-        run: npm test
+      # (The tests ran in the `test` job above, on this same commit.)
 
       # The map editor's Generate drawer runs the game's own copy of Azgaar's
       # Fantasy Map Generator, and the installer packs it (build.files:
