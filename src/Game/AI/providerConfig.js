@@ -265,6 +265,8 @@ export const AI_TASK_ROUTING = [
     { key: "countryStatSheet", label: "Stat sheet", hint: "Mid-tier model", group: "Player" },
     { key: "countryBriefing", label: "Advisor Report", hint: "Mid-tier: a short briefing on one country", group: "Player" },
     { key: "warRoom", label: "War room", hint: "Mid-tier: the generals' answers and the orders they take", group: "Player" },
+    { key: "politicalLandscape", label: "Political parties", hint: "Mid-tier model", group: "Player" },
+    { key: "goalProgress", label: "Goal progress", hint: "Mid-tier model", group: "Player" },
     { key: "interactiveCreation", label: "Interactive event creation", hint: "Mid-tier model", group: "Player" },
     { key: "interactiveExecutor", label: "Interactive event execution", hint: "Mid-tier model", group: "Player" },
     { key: "interactiveSummary", label: "Interactive event summary", hint: "Small model", group: "Player" },
