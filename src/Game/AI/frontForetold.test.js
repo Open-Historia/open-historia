@@ -292,8 +292,8 @@ test("the skip fights its period before it asks, and the turn it writes says so"
   // The turn carries whether it was, so that a turn kept and applied later is applied the same way.
   assert.match(gameplay, /frontsForetold: Boolean\(context\.variables\?\.frontsForecast\),/);
   assert.match(gameplay, /foretold: result\.frontsForetold === true,/);
-  // One way of handing a turn to the engine, for the run before and the run after.
-  assert.equal(apply.split("...turnRunInput({").length - 1, 2);
+  // One way of handing a turn to the engine, for the run before and the run after (and a call-up of forces at home).
+  assert.equal(apply.split("...turnRunInput({").length - 1, 3);
   assert.match(apply, /foretold: foretold === true,/);
   // It asks no model anything.
   const forecast = apply.slice(apply.indexOf("export const forecastTurnFronts"), apply.indexOf("// Runs the front engine over a turn that is about to be applied."));

@@ -72,6 +72,31 @@ test("a day's march over its own side's ground is half again what it carves thro
   }
 });
 
+// "a troop is technically always on its own ground, because its painting its own territory arround it. make sure this
+// isnt an issue with the new troop speed change" (the owner, 2026-11-02).
+test("a line carving into the other side's land goes no faster: the paint round a troop is not its own territory", () => {
+  const old = [{ id: "war-1", title: "aland-war", status: "active", sideA: ["Aland"], sideB: ["Borduria"], startedDate: "2023-06-01" }];
+  const opened = runFronts(war({ wars: old, mechanics: {} })).battlefields[0];
+  const order = [{ day: 1, type: "order", battlefield: opened.name, side: "Aland", order: "advance", sector: "all", effort: "total", given: true, ref: 1 }];
+  const east = (mechanics) => {
+    const after = runFronts(war({ wars: old, battlefields: [opened], moments: order, days: 12, mechanics })).battlefields[0];
+    const side = after.sides.findIndex((members) => members.includes("Aland"));
+    const place = projectorOf(after.frame);
+    const troops = decodeTroops(after.troops[side]).filter((troop) => troop.strength > 0);
+    return troops.reduce((sum, troop) => sum + place.toLngLat(troop.x, troop.y)[0], 0) / troops.length;
+  };
+  const before = (() => {
+    const side = opened.sides.findIndex((members) => members.includes("Aland"));
+    const place = projectorOf(opened.frame);
+    const troops = decodeTroops(opened.troops[side]).filter((troop) => troop.strength > 0);
+    return troops.reduce((sum, troop) => sum + place.toLngLat(troop.x, troop.y)[0], 0) / troops.length;
+  })();
+  const plain = east({});
+  const marching = east({ marching: true });
+  assert.ok(plain > before + 0.3, `the advance went east: ${before.toFixed(2)} to ${plain.toFixed(2)}`);
+  assert.ok(Math.abs(marching - plain) < 0.15, `as far with marching on (${marching.toFixed(2)}) as without (${plain.toFixed(2)})`);
+});
+
 test("the thinner a country's people are spread, the deeper inside it they are called up", () => {
   // Aland's people in great cities near the border, or in one small town.
   const crowded = [21.5, 22.5, 23.5].flatMap((lng) => [50.2, 51, 52].map((lat, at) => ({ name: `City ${lng} ${at}`, lng, lat, population: 4_000_000 })));

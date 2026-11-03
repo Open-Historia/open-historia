@@ -35,6 +35,9 @@ import { holderOf } from "./battle.js";
 import { cellAt, downhill, measure } from "./ground.js";
 
 export const OWN_GROUND_PACE = 1.5;
+// How many of its own brushes (its control radius) the other side's nearest ground must be off for a troop to be on
+// its own side's territory, and not carving into the other's (combat.js stepForward).
+export const OWN_GROUND_CLEAR = 2;
 export const MARCH_DEPTH_AT_KM = 45;
 export const MARCH_DENSITY_AT = 100;
 export const MARCH_DEPTH_LEAST_KM = 20;
