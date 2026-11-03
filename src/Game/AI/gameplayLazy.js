@@ -157,6 +157,8 @@ export const pendingCountryStatSheet = async (...args) => (await gameplay()).pen
 // A briefing on a country, in prose: asked with the player's own key from what
 // the player's own screen holds, and written nowhere. A page playing a shared
 // game asks it like any other.
+export const assessPoliticalLandscape = async (...args) => (await gameplay()).assessPoliticalLandscape(...args);
+export const assessGoalProgress = async (...args) => (await gameplay()).assessGoalProgress(...args);
 export const generateCountryStats = async (...args) => (await gameplay()).generateCountryStats(...args);
 // The war room: one request for what the player's generals answer
 // (warRoomContext.js). It writes nothing itself: what they said and the orders

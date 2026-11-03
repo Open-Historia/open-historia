@@ -22,7 +22,7 @@ import { intelligenceOf } from "../../runtime/spycraft.js";
 import { bundledFlagUrl, flagImageUrlFromGid } from "../../runtime/countryFlags.js";
 import COUNTRY_NAMES from "../../runtime/generated/countryNames.js";
 import { REGION_SELECTED_EVENT } from "../Selection/Regions.jsx";
-import { ensureCountryAssessed, ensureIntelligenceRated, ensureMilitaryFigures, generateCountryStatSheet, pendingCountryStatSheet, readOpenedIntercepts } from "../AI/gameplayLazy.js";
+import { assessPoliticalLandscape, ensureCountryAssessed, ensureIntelligenceRated, ensureMilitaryFigures, generateCountryStatSheet, pendingCountryStatSheet, readOpenedIntercepts } from "../AI/gameplayLazy.js";
 import { wantsRating } from "../AI/militaryRating.js";
 import { militaryLookup } from "../../runtime/militaryStats.js";
 import PoliticalOverview from "./PoliticalOverview.jsx";
@@ -36,6 +36,7 @@ import { WarReportsList } from "./afterAction.jsx";
 import { institutionPortfolioForPolity } from "../../runtime/institutionLifecycleCore.js";
 import { TURN_RUNNING_NOTE, isSimulationBusy } from "../AI/simulationStatus.js";
 import { useTurnRunning } from "./useTurnRunning.js";
+import { PARTY_ROLE_LABELS, findIdeology, isListedSubideology } from "../../runtime/politics.js";
 import { validateGameplayPayload } from "../AI/gameplaySchemas.js";
 import {
     appendCountryStatHistorySample,
@@ -971,6 +972,188 @@ const DiplomacySection = ({ world, identity, targetCountry, viewerPolity }) => {
         {/* The reports of the wars it fought on battlefields that have closed, to read again (afterAction.jsx). */}
         <WarReportsList world={world} country={viewerPolity} style={{ ...cardStyle, marginTop: "0.55rem", padding: 0, overflow: "hidden" }} />
         <ReparationsNote world={world} target={targetCountry} />
+        </>
+    );
+};
+
+const ROLE_TONES = {
+    governing: "#fbbf24",
+    coalition: "#fcd34d",
+    opposition: "#93c5fd",
+    extraParliamentary: "#94a3b8",
+    underground: "#9aa1ab",
+    exile: "#9aa1ab",
+    banned: "#f87171",
+};
+
+// Seat shares where there is a legislature, support otherwise.
+const PartyStrip = ({ parties, bySeats }) => {
+    const value = (party) => (bySeats ? party.seats : party.support) || 0;
+    const total = parties.reduce((sum, party) => sum + value(party), 0);
+    if (!total) return null;
+    return (
+        <div style={{ borderRadius: "999px", display: "flex", height: "10px", marginTop: "0.5rem", overflow: "hidden" }}>
+        {parties.filter((party) => value(party) > 0).map((party, index) => (
+            <div
+            key={`${party.nameEn}-${index}`}
+            title={`${party.abbrEn || party.nameEn}: ${value(party)}${bySeats ? " seats" : "%"}`}
+            style={{ backgroundColor: party.colour, width: `${(value(party) / total) * 100}%` }}
+            />
+        ))}
+        </div>
+    );
+};
+
+const PartyCard = ({ party, bySeats, totalSeats }) => {
+    const ideology = findIdeology(party.ideology);
+    const listed = isListedSubideology(party.ideology, party.subideology);
+    const abbreviations = [...new Set([party.abbrNative, party.abbrEn].filter(Boolean))].join(" · ");
+    const tone = ROLE_TONES[party.role] || "#94a3b8";
+    return (
+        <div style={{ borderLeft: `3px solid ${party.colour}`, borderTop: "1px solid rgba(255,255,255,0.07)", padding: "0.55rem 0.65rem" }}>
+        <div style={{ alignItems: "flex-start", display: "flex", gap: "0.6rem", justifyContent: "space-between" }}>
+        <div style={{ minWidth: 0 }}>
+        <div style={{ color: "rgba(255,255,255,0.9)", fontSize: "0.76rem", fontWeight: 800 }}>
+        {party.nameEn}{abbreviations && <span data-no-translate style={{ color: "rgba(255,255,255,0.45)", fontWeight: 700 }}> ({abbreviations})</span>}
+        </div>
+        {party.nameNative !== party.nameEn && (
+            <div data-no-translate style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.66rem", fontStyle: "italic", marginTop: "0.1rem" }}>
+            {party.nameNative}
+            </div>
+        )}
+        </div>
+        <span style={{ ...statusBadgeStyle(tone), flexShrink: 0 }}>{PARTY_ROLE_LABELS[party.role] || party.role}</span>
+        </div>
+        <div style={{ color: "rgba(255,255,255,0.62)", fontSize: "0.66rem", marginTop: "0.3rem" }}>
+        <span style={{ color: ideology?.colour || "#94a3b8", fontWeight: 800 }}>{ideology?.name || "Unclassified"}</span>
+        {party.subideology && (
+            <span
+            title={listed ? undefined : "Not one of this ideology's listed subideologies"}
+            style={{ color: listed ? "rgba(255,255,255,0.62)" : "rgba(255,255,255,0.35)" }}
+            > · {party.subideology}{listed ? "" : " (unlisted)"}</span>
+        )}
+        </div>
+        <div style={{ color: "rgba(255,255,255,0.5)", display: "flex", flexWrap: "wrap", fontSize: "0.64rem", gap: "0.2rem 0.75rem", marginTop: "0.2rem" }}>
+        {party.leader && <span>Leader: <span style={{ color: "rgba(255,255,255,0.8)" }}>{party.leader}</span></span>}
+        {bySeats && party.seats !== null && <span data-no-translate>{party.seats}{totalSeats ? `/${totalSeats}` : ""} seats</span>}
+        {party.support !== null && <span data-no-translate>{party.support}% support</span>}
+        {party.founded && <span>Founded {party.founded}</span>}
+        </div>
+        {party.description && (
+            <div style={{ color: "rgba(255,255,255,0.38)", fontSize: "0.62rem", marginTop: "0.25rem" }}>{party.description}</div>
+        )}
+        </div>
+    );
+};
+
+const PoliticsSection = ({ world, targetCountry }) => {
+    // The answer of a compile in this session, shown at once rather than after the
+    // pane's next world read; the stored entry wins once a newer one arrives.
+    const [compiled, setCompiled] = useState(null);
+    const [busy, setBusy] = useState(false);
+    const [error, setError] = useState("");
+    const abortRef = useRef(null);
+    useEffect(() => () => abortRef.current?.abort(), []);
+    useEffect(() => {
+        abortRef.current?.abort();
+        setBusy(false);
+        setError("");
+    }, [targetCountry]);
+
+    const stored = world?.politics?.[targetCountry] ?? null;
+    const entry = compiled?.country === targetCountry ? compiled.entry : stored;
+
+    const compile = async () => {
+        abortRef.current?.abort();
+        const controller = new AbortController();
+        abortRef.current = controller;
+        setBusy(true);
+        setError("");
+        try {
+            const result = await assessPoliticalLandscape(targetCountry, { signal: controller.signal });
+            if (!controller.signal.aborted) setCompiled({ country: targetCountry, entry: result });
+        } catch (e) {
+            if (!controller.signal.aborted) setError(e?.message || "Could not compile the parties.");
+        } finally {
+            if (!controller.signal.aborted) setBusy(false);
+        }
+    };
+
+    const factions = entry?.kind === "factions";
+    const bySeats = Boolean(entry?.legislatureSeats) && entry.parties.some((party) => party.seats);
+    const governing = entry?.parties.filter((party) => party.role === "governing" || party.role === "coalition") ?? [];
+    const row = (label, value) => value ? (
+        <div style={{ display: "flex", fontSize: "0.7rem", gap: "0.5rem", marginTop: "0.2rem" }}>
+        <span style={{ color: "rgba(255,255,255,0.4)", flexShrink: 0, width: "7.5rem" }}>{label}</span>
+        <span style={{ color: "rgba(255,255,255,0.85)", minWidth: 0 }}>{value}</span>
+        </div>
+    ) : null;
+
+    return (
+        <>
+        <div style={{ ...sectionTitleStyle, alignItems: "center", display: "flex", justifyContent: "space-between" }}>
+        <span>🏛 Politics</span>
+        {entry && !busy && (
+            <button
+            type="button"
+            className="oh-tap"
+            onClick={compile}
+            title="Compile the government and parties again"
+            aria-label="Compile the government and parties again"
+            style={{ background: "none", border: "none", color: "rgba(255,255,255,0.4)", cursor: "pointer", fontSize: "0.9rem", padding: 0 }}
+            >↻</button>
+        )}
+        </div>
+
+        {busy && (
+            <p style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.8rem" }}>Compiling the government and parties…</p>
+        )}
+        {error && !busy && (
+            <div style={{ backgroundColor: "rgba(239,68,68,0.12)", border: "1px solid rgba(239,68,68,0.3)", borderRadius: "10px", fontSize: "0.78rem", padding: "0.6rem 0.7rem" }}>
+            {error}
+            </div>
+        )}
+        {!entry && !busy && (
+            <div style={cardStyle}>
+            <div style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.72rem" }}>
+            No government and party list has been compiled for this country yet. Compiling it asks the AI once.
+            </div>
+            <button
+            type="button"
+            className="oh-tap-row"
+            onClick={compile}
+            style={{ background: "none", border: "none", color: "#93c5fd", cursor: "pointer", fontSize: "0.78rem", fontWeight: 700, marginTop: "0.45rem", padding: 0 }}
+            >Compile parties</button>
+            </div>
+        )}
+
+        {entry && (
+            <>
+            <div style={cardStyle}>
+            {row("Government", entry.government)}
+            {row("Head of state", entry.headOfState)}
+            {row("Head of government", entry.headOfGovernment)}
+            {row(factions ? "In power" : "Ruling", governing.map((party) => party.abbrNative || party.abbrEn || party.nameEn).join(" + "))}
+            {row("Legislature", entry.legislature && `${entry.legislature}${entry.legislatureSeats ? ` (${entry.legislatureSeats} seats)` : ""}`)}
+            {row("Next election", entry.nextElection)}
+            <PartyStrip parties={entry.parties} bySeats={bySeats} />
+            </div>
+
+            <div style={{ ...cardStyle, marginTop: "0.55rem", overflow: "hidden", padding: 0 }}>
+            <div style={{ color: "rgba(255,255,255,0.7)", fontSize: "0.72rem", fontWeight: 800, padding: "0.55rem 0.65rem" }}>
+            {factions ? "Factions" : "Parties"}
+            </div>
+            {entry.parties.map((party, index) => (
+                <PartyCard key={`${party.nameEn}-${index}`} party={party} bySeats={bySeats} totalSeats={entry.legislatureSeats} />
+            ))}
+            </div>
+            {entry.asOf && (
+                <p style={{ color: "rgba(255,255,255,0.32)", fontSize: "0.62rem", marginTop: "0.5rem" }}>
+                As of {entry.asOf}. Turns update it when events change the parties; ↻ compiles it afresh.
+                </p>
+            )}
+            </>
+        )}
         </>
     );
 };
@@ -2821,6 +3004,12 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
             >🤝 Diplomacy</button>
             <button
             type="button"
+            aria-pressed={statsView === "politics"}
+            onClick={() => setStatsView("politics")}
+            style={statsSubtabStyle(statsView === "politics", touch)}
+            >🏛 Politics</button>
+            <button
+            type="button"
             aria-pressed={statsView === "economy"}
             onClick={() => setStatsView("economy")}
             style={statsSubtabStyle(statsView === "economy", touch)}
@@ -2886,7 +3075,11 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
                 />
             )}
 
-            {statsView === "diplomacy" && !worldSnapshot && (
+            {statsView === "politics" && worldSnapshot && (
+                <PoliticsSection world={worldSnapshot} targetCountry={targetCountry} />
+            )}
+
+            {statsView !== "economy" && !worldSnapshot && (
                 <p style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.76rem", marginTop: "1rem" }}>
                 Loading diplomatic state…
                 </p>
