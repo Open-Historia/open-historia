@@ -53,6 +53,35 @@ import { PAST_UPDATES } from "./notesPast.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // Peace on any terms (runtime/peaceTerms.js: annexed, cessions, puppet, conditions), forces built up through
+    // actions and projects only, and the fixes after 0.0.112 (the owner, 2026-11-03).
+    id: "2026-11-peace-on-any-terms",
+    kind: "minor",
+    date: "2026-11-03",
+    channel: "beta",
+    banners: [
+      {
+        title: "Peace on any terms",
+        items: [
+          "A peace can annex the other country whole, hand over regions by name, or make one side the other's puppet state, protectorate or client state.",
+          "Add any other condition to your terms in your own words, and the next time skip carries it out.",
+          "Leaders and time skips offer and accept peace on these terms too.",
+        ],
+      },
+      {
+        title: "Forces and fixes",
+        items: [
+          "Forces are built up through your actions and projects: order a mobilisation and the time skip calls them up round your cities. The Build up forces button is gone.",
+          "Forces built up in peace show on the map again.",
+          "Military power counts how well a country's forces are armed, led and funded far more than how many they are, and a country waits for its rating instead of being ranked by its population.",
+          "The country panel has one Politics tab again.",
+          "The update banner no longer offers the build you have just installed.",
+          "Major update notices come before minor ones.",
+        ],
+      },
+    ],
+  },
+  {
     // Forces built up at home round the cities and moved in the War Room; troops march to the front from inside their
     // country; call-ups sized by the country (the owner, 2026-11-02: runtime/fronts/home.js, march.js).
     id: "2026-11-forces-at-home",
