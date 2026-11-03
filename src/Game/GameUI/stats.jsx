@@ -32,7 +32,6 @@ import { RESOURCES_SHORT_FROM } from "../../runtime/warResources.js";
 import { attritionOf } from "../../runtime/attrition.js";
 import { warSettingsOf } from "../../runtime/warSettings.js";
 import { PeaceControls, ReparationsNote } from "./warAndPeace.jsx";
-import { BuildUpControl } from "./buildUp.jsx";
 import { WarReportsList } from "./afterAction.jsx";
 import { institutionPortfolioForPolity } from "../../runtime/institutionLifecycleCore.js";
 import { TURN_RUNNING_NOTE, isSimulationBusy } from "../AI/simulationStatus.js";
@@ -475,10 +474,7 @@ const MilitaryCard = ({ world, country, style }) => {
                 </span>
                 <span data-no-translate style={{ fontSize: "1.05rem", fontWeight: 800 }}>{power}</span>
             </div>
-            <div style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.64rem", lineHeight: 1.4, marginBottom: "0.55rem" }}>
-                What it weighs in a land war, by its people and what its forces have to spend, through the figures below.
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem", marginTop: "0.45rem" }}>
                 {MILITARY_FIGURE_ORDER.filter((key) => key !== "resources" || profile.supplied).map((key) => {
                     const value = figures[key];
                     const low = (key === "weariness" && value > 0) || (key === "resources" && value < RESOURCES_SHORT_FROM);
@@ -970,8 +966,6 @@ const DiplomacySection = ({ world, identity, targetCountry, viewerPolity }) => {
             </div>
         )}
         </div>
-        {/* On the player's own country: its forces built up at home (buildUp.jsx). */}
-        <BuildUpControl world={world} viewer={viewerPolity} target={identity?.canonicalKey ? identity.canonicalKey(targetCountry) : targetCountry} style={{ ...cardStyle, marginTop: "0.55rem", padding: "0.55rem 0.65rem" }} />
         {/* The reports of the wars it fought on battlefields that have closed, to read again (afterAction.jsx). */}
         <WarReportsList world={world} country={viewerPolity} style={{ ...cardStyle, marginTop: "0.55rem", padding: 0, overflow: "hidden" }} />
         <ReparationsNote world={world} target={targetCountry} />
