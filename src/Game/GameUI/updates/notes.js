@@ -53,6 +53,26 @@ import { PAST_UPDATES } from "./notesPast.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // Rostra's Search tab (Listen in, back inside Rostra: GameUI/rostraSearch.jsx, runtime/placeFeed.js, the placeFeed
+    // task), the leader's polls (runtime/socialFeed.js, the skip's pollResults) and the box behind the pen; the
+    // owner's ask, 2026-11-03.
+    id: "2026-11-rostra-search-polls",
+    kind: "minor",
+    date: "2026-11-03",
+    channel: "beta",
+    banners: [
+      {
+        title: "Rostra: Search and polls",
+        items: [
+          "Rostra's Search tab finds any country or region and shows what ordinary people there are posting today. Each new place is one AI request.",
+          "Search opens on your own country, where the Your country tab was.",
+          "Ask a poll as your country's leader: the public votes during the next time skip, and the poll then shows the results and the public's verdict.",
+          "The box to write a post now opens from the pen at the top of Rostra.",
+        ],
+      },
+    ],
+  },
+  {
     // thekernely's #936-#939 (Advisor contacts: runtime/advisorThreads.js; party authoring: countryEditorPolitical.js;
     // metadata-only diplomacy replies) with the review's fixes (2026-11-03).
     id: "2026-11-advisor-contacts",

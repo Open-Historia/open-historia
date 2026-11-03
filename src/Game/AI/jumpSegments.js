@@ -265,6 +265,9 @@ export const mergeSegmentPayloads = (payloads, { targetDate = "" } = {}) => {
   // Rostra's posts (runtime/socialFeed.js), each segment's in its turn: they are
   // read, given ids and checked against the feed when the turn is written.
   const socialPosts = [];
+  // And the public's answers to the player's polls, each segment's in its turn:
+  // the first answer to a poll is the one read.
+  const pollResults = [];
   const summaries = [];
   let clearActions = true;
   let stopDate = "";
@@ -281,6 +284,7 @@ export const mergeSegmentPayloads = (payloads, { targetDate = "" } = {}) => {
     peaceTreaties.push(...asLedgerRecords(payload.peaceTreaties));
     warFigures.push(...asLedgerRecords(payload.warFigures));
     socialPosts.push(...asArray(payload.socialPosts));
+    pollResults.push(...asArray(payload.pollResults));
     if (typeof payload.spiesOnPlayer === "string" || Array.isArray(payload.spiesOnPlayer)) {
       const named = (Array.isArray(payload.spiesOnPlayer) ? payload.spiesOnPlayer : String(payload.spiesOnPlayer).split(/[,\n;]/))
         .map(normalizeString)
@@ -309,6 +313,7 @@ export const mergeSegmentPayloads = (payloads, { targetDate = "" } = {}) => {
     peaceTreaties,
     warFigures,
     socialPosts,
+    pollResults,
     summary: summaries.join("\n\n"),
   };
 };

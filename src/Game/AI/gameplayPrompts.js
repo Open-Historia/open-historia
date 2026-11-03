@@ -288,6 +288,12 @@ export const PROMPT_SECTION_DEFINITIONS = [
     type: "task",
   },
   {
+    description: "What ordinary people in a place are posting: the feed Rostra's Search tab opens on a country or a region. It is there while the game has social media (the Features tab's Social media switch).",
+    key: "placeFeed",
+    label: "Rostra Search",
+    type: "task",
+  },
+  {
     description: "The generals in the war room: how they answer the player over a battlefield, when they push back, and how an order they accept is written down. The war room opens from the red button that appears while the player's troops are on a battlefield.",
     key: "warRoom",
     label: "War Room",

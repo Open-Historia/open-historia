@@ -160,6 +160,11 @@ export const pendingCountryStatSheet = async (...args) => (await gameplay()).pen
 export const assessPoliticalLandscape = async (...args) => (await gameplay()).assessPoliticalLandscape(...args);
 export const assessGoalProgress = async (...args) => (await gameplay()).assessGoalProgress(...args);
 export const generateCountryStats = async (...args) => (await gameplay()).generateCountryStats(...args);
+// Rostra's Search: one request for what people in a place are posting
+// (runtime/placeFeed.js). It writes nothing to the game: asked with the
+// player's own key, kept on the player's own device, so a page playing a shared
+// game asks it like any other.
+export const generatePlaceFeed = async (...args) => (await gameplay()).generatePlaceFeed(...args);
 // The war room: one request for what the player's generals answer
 // (warRoomContext.js). It writes nothing itself: what they said and the orders
 // they took are written by the caller through runtime/warRoomWrites.js, which

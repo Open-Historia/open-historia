@@ -39,6 +39,7 @@ export const journalTurn = ({
     outreach = [],
     peaceTreaties = [],
     socialPosts = [],
+    pollResults = [],
     clearActions = true,
     mode = "jump",
     receipt = null,
@@ -62,6 +63,8 @@ export const journalTurn = ({
         peaceTreaties: asArray(peaceTreaties),
         // Rostra's posts of the period, as the answer wrote them (runtime/socialFeed.js reads them again).
         socialPosts: asArray(socialPosts),
+        // The public's answers to the player's polls (runtime/socialFeed.js readSkipPollResults).
+        pollResults: asArray(pollResults),
         clearActions: clearActions !== false,
         mode: asText(mode) || "jump",
         // What the turn's answer lost on its way in (runtime/applicationReceipt.js):
@@ -131,6 +134,8 @@ export const truncateTurn = (journal, keptCount, { originDate = "", minimumDate 
             // keeps its place in the list (an empty one where a post went), so
             // a quote of the answer's own "#n" still names the post it named.
             socialPosts: asArray(journal?.socialPosts).map((post) => (isGameDate(post?.date) && compareGameDates(post.date, closingDate) > 0 ? null : post)),
+            // A poll's answer is the whole period's: cut short, the poll stays open.
+            pollResults: [],
             clearActions: journal?.clearActions !== false,
             mode: asText(journal?.mode) || "jump",
             covertOperations: asArray(journal?.covertOperations),
