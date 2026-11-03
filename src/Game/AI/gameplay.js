@@ -246,7 +246,7 @@ import { describeUndeployedPost, isMilitaryPost, postWantsFormation } from "./mi
 import { findUnitByRef, newestTwinByRef, readNameRef, stripKindTags } from "./nameRefs.js";
 import { areaRegionsFor, buildAreaIndex, findArea, readAreaName } from "./namedAreas.js";
 import { CAPTURE_REACH_KM, findNarratedCaptures, mayNarrateCapture, statedAnnexations, statesCapture } from "./narratedCapture.js";
-import { EVENT_PLACES_RULE, findEventPlace, findEventPlaces, readEventPlace } from "./eventPlaces.js";
+import { EVENT_PLACES_RULE, findEventPlace, findEventPlaces, placesAsWritten, readEventPlace } from "./eventPlaces.js";
 import { normalizeEventPlaces } from "../../runtime/eventPlaces.js";
 import { describeTravelPace, eraOf, kmOnMap, seaShareOf } from "../../runtime/unitMotion.js";
 import { kmPerDegreeAt } from "../../../server/mapDistance.js";
@@ -4296,6 +4296,12 @@ const runJsonTask = async (taskKey, {
         if (shelved.moved.length) {
           parsed = shelved.payload;
           logDebugEvent("ai", `Task "${taskKey}": ${shelved.moved.length} part(s) of the answer written on an event were put where they belong.`, shelved.moved);
+        }
+        // Places written as objects of their parts, read as the words they stand for (eventPlaces.js).
+        const placed = placesAsWritten(parsed);
+        if (placed.rewritten) {
+          parsed = placed.payload;
+          logDebugEvent("ai", `Task "${taskKey}": ${placed.rewritten} place(s) written as objects were read as "kind: name".`);
         }
       }
       let validation = parsed
