@@ -56,6 +56,26 @@ test("at the figures every country has, the power is the land war's own weight t
   assert.equal(militaryPower({}, ""), null);
 });
 
+test("native supplies default on, derive the 100/100 baseline and disappear when a scenario disables supply", () => {
+  const baseline = world();
+  const defaultProfile = militaryProfile(baseline, "Aland");
+  assert.equal(defaultProfile.supplied, true);
+  assert.equal(defaultProfile.figures.resources, 100);
+  assert.equal(defaultProfile.refill !== null, true);
+  const depleted = world({ warResources: [{ country: "Aland", value: 21 }] });
+  const depletedProfile = militaryProfile(depleted, "Aland");
+  assert.equal(depletedProfile.figures.resources, 21);
+  assert.ok(depletedProfile.power < defaultProfile.power);
+  const disabled = world({ warSettings: { mechanics: { supply: false } },
+    warResources: [{ country: "Aland", value: 21 }] });
+  const disabledProfile = militaryProfile(disabled, "Aland");
+  assert.equal(disabledProfile.supplied, false);
+  assert.equal(Object.hasOwn(disabledProfile.figures, "resources"), false);
+  assert.equal(disabledProfile.refill, null);
+  assert.equal(disabledProfile.power, defaultProfile.power,
+    "old warResources records do not penalize warfare when supplies are disabled");
+});
+
 test("quality, technology and the arms each move it, and an arm at 0 counts nothing", () => {
   const base = weight("Dorland");
   const power = (military, extra) => militaryPower(withFigures("Dorland", military, extra), "Dorland");

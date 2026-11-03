@@ -10,6 +10,9 @@ import { normalizeEvents, normalizeWorldState } from "../../runtime/gameState.js
 import { toCountryName } from "../../runtime/ownerNames.js";
 import { resolvePolityIdentity } from "../../runtime/polityIdentity.js";
 import { validateFiniteEconomicInfluenceForm } from "../../runtime/statsEventEffects.js";
+import { normalizeStatsEconomicEventAccounting } from "../../runtime/statsEconomicEventAccounting.js";
+import { NATIONAL_NATIVE_METRICS } from "../../runtime/statIndexDefinitions.js";
+import { legacyPoliticalStatsWriteError } from "../../runtime/politicalActors.js";
 
 const normalizeString = (value) => String(value ?? "").trim();
 const normalizeArray = (value) => (Array.isArray(value) ? value : []);
@@ -21,6 +24,75 @@ const normalizeGameMasterIsoDate = (value) => normalizeGameDate(value);
 // must use bounded, dated statsEffects rather than overwrite a nation's GDP,
 // population or other clock-owned readings with absolute baseline figures.
 // Evaluate both when previewing and when revalidating immediately before Apply.
+// A standard national sheet has one native owner for every named metric.
+// GM proposals must not create a lookalike customStats key for an existing
+// native index (foodAutonomy) or other standard metric (gdp, stability, etc.).
+// Custom-sheet scenarios are deliberately exempt: the same key may be their
+// own independent, author-defined statistic. The caller checks the live sheet.
+const nativeAliasError = (values, path) => {
+  if (!values || typeof values !== "object" || Array.isArray(values)) return "";
+  for (const key of Object.keys(values)) {
+    const metric = NATIONAL_NATIVE_METRICS[key];
+    if (metric) return `${path}.${key} conflicts with canonical native ${metric.path.join(".")}. Use the corresponding native Stats field or typed event effect, not an independent custom metric.`;
+  }
+  return "";
+};
+
+export const validateGameMasterNativeStatAliasWrites = (candidate) => {
+  for (const [index, entry] of normalizeArray(candidate?.countryStatPatches).entries()) {
+    const error = nativeAliasError(entry?.patch?.customStats,
+      `$.countryStatPatches[${index}].patch.customStats`);
+    if (error) return error;
+  }
+  for (const [eventIndex, event] of normalizeArray(candidate?.events).entries()) {
+    for (const [changeIndex, change] of normalizeArray(event?.impacts?.polityChanges).entries()) {
+      const path = `$.events[${eventIndex}].impacts.polityChanges[${changeIndex}]`;
+      const absolute = nativeAliasError(change?.stats?.customStats, `${path}.stats.customStats`);
+      if (absolute) return absolute;
+      const delta = nativeAliasError(change?.statsEffects?.customStatDeltas,
+        `${path}.statsEffects.customStatDeltas`);
+      if (delta) return delta;
+    }
+  }
+  return "";
+};
+
+// Political World owns the incumbent and the governing form once a polity
+// has an initialized Political Actor. A legacy Stats sheet carries a mirror
+// for old displays, not a second source of officeholder identity. Preview and
+// Apply must refuse GM baseline/event writes that would fork that authority.
+// A scenario without a Political Actor still legitimately owns the older
+// descriptive Statistics fields; do not invent a Political World for it.
+export const validateGameMasterPoliticalStatsAuthority = (candidate, world) => {
+  const canonicalTarget = (raw) => {
+    const requested = normalizeString(raw);
+    if (!requested || !world?.politicalActors?.byPolity) return "";
+    const resolved = resolvePolityIdentity(requested, world, {
+      allowUnknown: false, requireActive: false, allowCoreMatch: true,
+      allowStockBase: true, allowMapRefs: false,
+    });
+    return normalizeString(resolved?.resolved) || requested;
+  };
+  const forbidden = (stats, path, polity) => {
+    const error = legacyPoliticalStatsWriteError(world, canonicalTarget(polity), stats);
+    if (!error) return "";
+    const field = ["leader", "government"].find((key) => Object.hasOwn(stats, key));
+    return `${path}.${field} ${error}`;
+  };
+  for (const [index, entry] of normalizeArray(candidate?.countryStatPatches).entries()) {
+    const error = forbidden(entry?.patch, `$.countryStatPatches[${index}].patch`, entry?.country);
+    if (error) return error;
+  }
+  for (const [eventIndex, event] of normalizeArray(candidate?.events).entries()) {
+    for (const [changeIndex, change] of normalizeArray(event?.impacts?.polityChanges).entries()) {
+      const error = forbidden(change?.stats,
+        `$.events[${eventIndex}].impacts.polityChanges[${changeIndex}].stats`, change?.code);
+      if (error) return error;
+    }
+  }
+  return "";
+};
+
 export const validateGameMasterStatsAuthority = (candidate, { mode } = {}) => {
   if (mode === "direct") return "";
   if (mode !== "exact-event" && mode !== "world-intervention") return "";
@@ -64,6 +136,55 @@ export const validateGameMasterDirectMutation = (candidate, { mode } = {}) => {
     .some((event) => eventHasImpacts(event, EVENT_IMPACT_KEYS));
   if (hasTopLevelMutation || hasEventMutation) return "";
   return "Direct GM mode requires at least one actual canonical state-changing operation. An AI summary or prose-only event cannot fulfill an administrative correction. Supply the requested native operation or explicitly report that the correction is unsupported.";
+};
+
+// GM is an explicit administrator, but a dated event still cannot claim that
+// an economic consequence was applied when the transaction only authored prose
+// or a Project. The generated Timeline owns its separate stricter skip guard;
+// this one validates ONLY GM event-accounting truth, not scenario-custom metric
+// semantics or Direct administrative corrections.
+const isFinite = (value) => typeof value === "number" && Number.isFinite(value);
+const measuredEffect = (effect) => {
+  if (!effect || typeof effect !== "object" || Array.isArray(effect)) return false;
+  return ["populationChange", "gdpChangePercent", "annualRealGrowthDelta",
+    "debtFinancedOutlayPercentGdp", "stabilityDelta"].some((key) => isFinite(effect[key]))
+    || ["indexDeltas", "customStatDeltas"].some((key) =>
+      effect[key] && typeof effect[key] === "object" && !Array.isArray(effect[key])
+        && Object.values(effect[key]).some(isFinite))
+    || Boolean(normalizeString(effect.resolveGrowthInfluenceEventId));
+};
+const nationalEconomicEffect = (effect) => {
+  if (!effect || typeof effect !== "object" || Array.isArray(effect)) return false;
+  return ["gdpChangePercent", "annualRealGrowthDelta", "debtFinancedOutlayPercentGdp"]
+    .some((key) => isFinite(effect[key]))
+    || Boolean(normalizeString(effect.resolveGrowthInfluenceEventId));
+};
+export const validateGameMasterEconomicEventAccounting = (candidate, { mode } = {}) => {
+  if (mode !== "exact-event" && mode !== "world-intervention") return "";
+  for (const [eventIndex, event] of normalizeArray(candidate?.events).entries()) {
+    const changes = normalizeArray(event?.impacts?.polityChanges);
+    const effects = changes.map((change) => change?.statsEffects);
+    const nationalEffect = effects.some(nationalEconomicEffect);
+    const anyMeasured = effects.some(measuredEffect);
+    const economyTagged = normalizeArray(event?.tags).some(
+      (tag) => typeof tag === "string" && tag.toLowerCase() === "economy");
+    const path = `$.events[${eventIndex}].economicAccounting`;
+    const declared = event?.economicAccounting;
+    // Unrelated political/cultural events remain valid without a redundant
+    // declaration, unless they actually attempt a dated national macro write.
+    if (!economyTagged && !nationalEffect && declared === undefined) continue;
+    const normalized = normalizeStatsEconomicEventAccounting(declared);
+    if (!normalized || normalized.reason.length < 12) {
+      return `${path} must explicitly state applied, unquantified or none with a concrete reason (12-240 characters) and valid country-specific exposure evidence; Economy events cannot silently omit national accounting.`;
+    }
+    if (nationalEffect && normalized.status !== "applied") {
+      return `${path} must be applied when the event carries a dated typed national GDP, growth or debt effect.`;
+    }
+    if (normalized.status === "applied" && !anyMeasured) {
+      return `${path} declares applied economic accounting without a measurable typed statsEffects operation; narrative, Projects and proposals cannot substitute for canonical state.`;
+    }
+  }
+  return "";
 };
 
 // This is a non-writing admission check. The canonical event writer owns the

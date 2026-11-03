@@ -404,6 +404,26 @@ test("scenario military expenditure authorization stays in host accounting, not 
   }
 });
 
+test("fiscal authorizations and payment receipt identities stay host-only in multiplayer", () => {
+  assert.ok(HOST_ONLY_WORLD_KEYS.includes("fiscalTransactions"));
+  const raw = state();
+  raw.world.fiscalTransactions = [{
+    id: "CANARY-PRIVATE-GRANT", polity: RUSSIA, kind: "grant",
+    currency: "EUR", authorizedAmount: 400000000,
+    authorizedAt: "2014-01-01", authorizedEventId: "CANARY-PRIVATE-AUTH-EVENT",
+    reason: "Confidential government procurement funding arrangement",
+    paidAmount: 0, payments: [], status: "authorized",
+  }];
+  assert.equal(normalizeWorldState(raw.world).fiscalTransactions[0].id, "CANARY-PRIVATE-GRANT");
+  for (const viewer of [LATVIA, RUSSIA, ESTONIA]) {
+    const projected = projectForViewer(raw, viewer);
+    assert.equal(Object.hasOwn(projected.world, "fiscalTransactions"), false,
+      `Private fiscal ledger was sent to ${viewer}`);
+    assert.equal(text(projected).includes("CANARY-PRIVATE-GRANT"), false,
+      `Private fiscal reference leaked to ${viewer}`);
+  }
+});
+
 test("nothing private of the second player reaches the host's view", () => {
   const view = text(projectForViewer(state(), LATVIA));
   for (const canary of [
@@ -659,4 +679,22 @@ test("the game keeps who an event is for across a save, and adds nothing to an e
   ]);
   assert.deepEqual(marked.audience, [RUSSIA]);
   assert.equal("audience" in open, false);
+});
+
+test("nominal tax holiday accrual and fiscal legislation receipts remain host-only",()=>{
+  assert.ok(HOST_ONLY_WORLD_KEYS.includes("fiscalTaxPolicies"));
+  const raw=state();
+  raw.world.fiscalTaxPolicies=[{
+    id:"CANARY-PRIVATE-TAX-LAW",polity:RUSSIA,currency:"RUB",amount:100_000_000,
+    startDate:"2014-01-01",endDate:"2014-03-01",
+    authorizedAt:"2014-01-01",authorizedEventId:"CANARY-PRIVATE-TAX-EVENT",
+    reason:"Private government-specific tax waiver estimate",
+    accruedThrough:"2014-01-01",accruedAmount:0,status:"scheduled",
+  }];
+  assert.equal(normalizeWorldState(raw.world).fiscalTaxPolicies[0].id,"CANARY-PRIVATE-TAX-LAW");
+  for(const viewer of [LATVIA,RUSSIA,ESTONIA]){
+    const out=projectForViewer(raw,viewer);
+    assert.equal(Object.hasOwn(out.world,"fiscalTaxPolicies"),false);
+    assert.equal(text(out).includes("CANARY-PRIVATE-TAX-LAW"),false);
+  }
 });

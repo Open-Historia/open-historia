@@ -208,3 +208,59 @@ test("a list of anything else is left as it is, and said to be the wrong shape",
   const events = [{ date: "2016-01-02", title: "Landfall", description: "At dawn." }];
   assert.deepEqual(normalizeGameplayPayload("actions", events), events);
 });
+
+test('event-level queued order ids are normalized into canonical impacts without conflicts', () => {
+  const raw=jumpWith([]);
+  raw.events=[{
+    date:'1991-10-19',title:'Canadian statistics statement',
+    description:'Ottawa released newly revised figures to its own agencies.',
+    actionIds:['action-1'], impacts:{polityChanges:[]},
+  }];
+  const parsed=normalizeGameplayPayload('jumpForward',raw);
+  assert.deepEqual(parsed.events[0].impacts.actionIds,['action-1']);
+  assert.equal(Object.hasOwn(parsed.events[0],'actionIds'),false);
+  const conflict=normalizeGameplayPayload('jumpForward',{
+    ...raw,events:[{...raw.events[0],impacts:{actionIds:['different-id']}}],
+  });
+  assert.equal(validateGameplayPayload('jumpForward', conflict).valid,false,
+    'conflicting orders must never be silently resolved by producer normalization');
+});
+
+test('event-level created chats migrate without hiding conflicting or malformed impacts', () => {
+  const raw=jumpWith([]);
+  const message={ title: 'Consular conference', speaker: 'Portugal',
+    countries:['Canada'], openingMessage:'Portugal requests a consultation.' };
+  raw.events=[{ date:'1991-10-20', title:'Portugal requests an exchange',
+    description:'Portugal formally requested consular access for its official.',
+    createdChats:[message] }];
+  const accepted=normalizeGameplayPayload('jumpForward',raw);
+  assert.deepEqual(accepted.events[0].impacts.createdChats,[message]);
+  assert.equal(Object.hasOwn(accepted.events[0],'createdChats'),false);
+  const mismatch=normalizeGameplayPayload('jumpForward', {
+    ...raw, events:[{...raw.events[0], impacts:{createdChats:[]}}],
+  });
+  assert.equal(validateGameplayPayload('jumpForward',mismatch).valid,false);
+  const malformed=normalizeGameplayPayload('jumpForward', {
+    ...raw, events:[{...raw.events[0], impacts:'a malformed impact ledger'}],
+  });
+  assert.equal(malformed.events[0].impacts,'a malformed impact ledger');
+  assert.equal(validateGameplayPayload('jumpForward',malformed).valid,false);
+});
+test("Iszlev regression: canonical politicalClaims text-line arrays are lossless transport only", () => {
+  const base = jumpWith([]);
+  const original = ["1~Croatia~government,leadership", "2~Lithuania~election"];
+  const input = { ...base, politicalClaims: original };
+  const output = normalizeGameplayPayload("jumpForward", input);
+  assert.equal(output.politicalClaims, original.join("\n"));
+  assert.deepEqual(input.politicalClaims, original, "do not mutate provider input");
+  assert.equal(validateGameplayPayload("jumpForward", output).valid, true,
+    validateGameplayPayload("jumpForward", output).error);
+  const invalid = normalizeGameplayPayload("jumpForward", {
+    ...base, politicalClaims: ["1~Croatia~government", "not a canonical line"],
+  });
+  assert.equal(validateGameplayPayload("jumpForward", invalid).valid, false);
+  const objects = normalizeGameplayPayload("jumpForward", {
+    ...base, politicalClaims: [{ eventNumber: 1, polity: "Croatia", effects: ["government"] }],
+  });
+  assert.equal(validateGameplayPayload("jumpForward", objects).valid, false);
+});

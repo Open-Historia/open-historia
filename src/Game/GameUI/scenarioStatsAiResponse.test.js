@@ -1,7 +1,8 @@
 /*! Regression tests for accepted single-country/multi-country AI envelopes. */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { interpretScenarioStatsAiResponse, buildScenarioStartingStatsTool } from "./scenarioStatsAiResponse.js";
+import { interpretScenarioStatsAiResponse, buildScenarioStartingStatsTool, describeScenarioFiscalScalarFailure, typedCustomStatsKeys } from "./scenarioStatsAiResponse.js";
+import { toGeminiSchema } from "../AI/geminiSchema.js";
 
 const russia = [{ code: "Russian Empire", name: "Russian Empire" }];
 const stats = { macro: [{ index: 1, population: 1200000, gdpPerCapita: 500 }] };
@@ -74,6 +75,93 @@ test("a countries object may itself be a single identified country", () => {
   assert.deepEqual(get({ countries: { code: "Russian Empire", ...stats } })["Russian Empire"].row.macro, stats.macro);
 });
 
+
+test("typed custom values are schema-required for bounded author-defined sheets, without silently aliasing native debt", () => {
+  const target = [{ code: "Timor-Leste", name: "Timor-Leste" }, { code: "São Tomé and Príncipe", name: "São Tomé and Príncipe" }];
+  const customKeys = ["publicDebt", "cropStocks", "gdp"];
+  const tool = buildScenarioStartingStatsTool(target, { customKeys });
+  for (const i of [1, 2]) {
+    const property = tool.schema.properties[`country${i}CustomStats`];
+    assert.deepEqual(property.required, customKeys);
+    assert.deepEqual(Object.keys(property.properties), customKeys);
+    assert.equal(property.properties.publicDebt.type, "number");
+    assert.deepEqual([property.properties.publicDebt.minimum, property.properties.publicDebt.maximum], [-1e18, 1e18]);
+    assert.ok(tool.schema.required.includes(`country${i}CustomStats`));
+    assert.match(tool.schema.properties[`country${i}Json`].description, /fiscal numbers/);
+  }
+  const answers = { toolInput: {
+    country1Json: JSON.stringify(stats), country1PublicDebt: 37, country1BudgetBalance: -2,
+    country1CustomStats: { publicDebt: 39, cropStocks: 0, gdp: 148 },
+    country2Json: JSON.stringify(stats), country2PublicDebt: 41, country2BudgetBalance: 1,
+    country2CustomStats: { publicDebt: 45, cropStocks: 9, gdp: 111 },
+  } };
+  const rows = interpretScenarioStatsAiResponse(answers, target, { customKeys });
+  assert.equal(rows["Timor-Leste"].error, "");
+  assert.equal(rows["São Tomé and Príncipe"].error, "");
+  assert.equal(rows["Timor-Leste"].row.publicDebt, 37, "native debt stays separately owned");
+  assert.equal(rows["Timor-Leste"].row.customStats.publicDebt, 39, "legacy unbound custom reading stays independent");
+  assert.equal(rows["Timor-Leste"].row.customStats.cropStocks, 0, "explicit zero is legitimate");
+  assert.equal(rows["São Tomé and Príncipe"].row.customStats.gdp, 111);
+  assert.deepEqual(customKeys, ["publicDebt", "cropStocks", "gdp"], "no mutation");
+  const provider = toGeminiSchema(tool.schema);
+  assert.deepEqual(provider.properties.country1CustomStats.required, customKeys);
+  assert.equal(provider.properties.country2CustomStats.properties.gdp.type, "number");
+});
+
+test("typed custom slots reject omitted, malformed, extra and duplicated values per-country without damaging other proposals", () => {
+  const expected = [{ code: "DR Congo" }, { code: "Timor-Leste" }];
+  const valid = {
+    country1Json: JSON.stringify(stats), country1PublicDebt: 50, country1BudgetBalance: -3,
+    country1CustomStats: { publicDebt: 50, cropStocks: 7 },
+    country2Json: JSON.stringify(stats), country2PublicDebt: 44, country2BudgetBalance: -4,
+    country2CustomStats: { publicDebt: 44, cropStocks: 8 },
+  };
+  const parse = (patch) => interpretScenarioStatsAiResponse({ toolInput: { ...valid, ...patch } }, expected,
+    { customKeys: ["publicDebt", "cropStocks"] });
+  const broken = [
+    [{ country1CustomStats: { publicDebt: 50 } }, /cropStocks.*omitted/],
+    [{ country1CustomStats: { publicDebt: "50", cropStocks: 7 } }, /publicDebt.*string/],
+    [{ country1CustomStats: { publicDebt: -Infinity, cropStocks: 7 } }, /non-finite/],
+    [{ country1CustomStats: { publicDebt: 1e19, cropStocks: 7 } }, /outside/],
+    [{ country1CustomStats: { publicDebt: 50, cropStocks: 7, secret: 9 } }, /unrequested custom Statistics/],
+    [{ country1Json: JSON.stringify({ ...stats, customStats: { publicDebt: 50 } }) }, /duplicated independently sourced/],
+    [{ country1CustomStats: null }, /required typed custom Statistics object/],
+  ];
+  for (const [patch, reason] of broken) {
+    const results = parse(patch);
+    assert.equal(results["DR Congo"].row, null);
+    assert.match(results["DR Congo"].error, reason);
+    assert.equal(results["Timor-Leste"].error, "");
+    assert.equal(results["Timor-Leste"].row.customStats.cropStocks, 8);
+  }
+});
+
+test("all-native custom presentation has no independent generated custom metric arguments", () => {
+  const tool = buildScenarioStartingStatsTool(russia, { customKeys: [] });
+  assert.equal(tool.schema.properties.country1CustomStats, undefined);
+  assert.equal(tool.schema.required.includes("country1CustomStats"), false);
+  const result = interpretScenarioStatsAiResponse({toolInput: {
+    country1Json: JSON.stringify(stats), country1PublicDebt: 32, country1BudgetBalance: -1,
+  }},russia,{customKeys:[]});
+  assert.equal(result["Russian Empire"].error,"");
+  assert.equal(result["Russian Empire"].row.customStats,undefined,
+    "do not invent an empty custom data ledger");
+});
+
+test("large custom definitions preserve the existing JSON transport instead of breaking provider size limits", () => {
+  const big = Array.from({ length: 21 }, (_, i) => `custom${i}`);
+  assert.equal(typedCustomStatsKeys(big), null);
+  const tool = buildScenarioStartingStatsTool(russia, { customKeys: big });
+  const boundary = buildScenarioStartingStatsTool([{code:"Timor-Leste"},{code:"DR Congo"},{code:"São Tomé and Príncipe"}], {customKeys:big.slice(0,20)});
+  assert.ok(JSON.stringify(toGeminiSchema(boundary.schema)).length < 22000, "preserve bounded tool declaration size");
+  assert.equal(tool.schema.properties.country1CustomStats, undefined);
+  assert.equal(tool.schema.required.includes("country1CustomStats"), false);
+  const legacy = get({ toolInput: { country1Json: JSON.stringify({ ...stats, customStats: { a: 4 } }),
+    country1PublicDebt: 9, country1BudgetBalance: -1 } });
+  assert.equal(legacy["Russian Empire"].row.customStats.a, 4);
+  assert.throws(() => buildScenarioStartingStatsTool(russia, { customKeys: ["gdp", "gdp"] }), /unique/);
+  assert.throws(() => buildScenarioStartingStatsTool(russia, { customKeys: ["unsupported-name!"] }), /valid native/);
+});
 
 test("declares one mandatory schema-enforced slot per exact requested country", () => {
   const targets = [
@@ -179,10 +267,41 @@ test("tool transport still rejects swapped or duplicate country identities", () 
 test("the Scenario Editor uses the bounded per-batch tool schema", async () => {
   const { readFile } = await import("node:fs/promises");
   const source = await readFile(new URL("./ScenarioStatsAuthoringPanel.jsx", import.meta.url), "utf8");
-  assert.match(source, /tool:\s*buildScenarioStartingStatsTool\(prepared\)/);
+  assert.match(source, /const tool = buildScenarioStartingStatsTool\(prepared, \{ customKeys \}\)/);
+  assert.match(source, /callAI\([\s\S]*?\{[\s\S]*?tool,\s*\}\)/,
+    "the validated scenario tool must be supplied unchanged to the provider");
+  assert.match(source, /interpretScenarioStatsAiResponse\(response, prepared, \{[^\n]*customKeys \}\)/);
   assert.match(source, /OUTPUT TOOL SLOT: country/);
 });
 
+
+test("missing fiscal scalars explain the actual provider shape, without coercion or leaking values", () => {
+  const field = "country1PublicDebt";
+  assert.match(describeScenarioFiscalScalarFailure({},field,0,1000), /omitted/);
+  for (const [input,pattern] of [
+    [null,/null/], ["43.0",/string/], [false,/boolean/],
+    [[],/JSON array/], [{value:43},/JSON object/], [NaN,/non-finite/],
+    [Infinity,/non-finite/], [-1,/outside/], [1001,/outside/],
+  ]) {
+    const result=describeScenarioFiscalScalarFailure({[field]:input},field,0,1000);
+    assert.match(result,pattern);
+    if (typeof input === "number" && Number.isFinite(input)) assert.ok(!result.includes(String(input)), "generic errors must not print an untrusted fiscal number");
+  }
+  assert.equal(describeScenarioFiscalScalarFailure({[field]:0},field,0,1000),"");
+  assert.equal(describeScenarioFiscalScalarFailure({[field]:1000},field,0,1000),"");
+  const target=[{code:"Timor-Leste",name:"Timor-Leste"}];
+  const base={country1Json:JSON.stringify(stats),country1BudgetBalance:-3};
+  for (const [extra,pattern] of [
+    [{},/omitted/],[{country1PublicDebt:"43"},/string/],
+    [{country1PublicDebt:1400},/outside/],
+    [{country1PublicDebt:null},/null/],
+  ]) {
+    const result=get({toolInput:{...base,...extra}},target)["Timor-Leste"];
+    assert.equal(result.row,null);
+    assert.match(result.error,pattern);
+    assert.match(result.error,/No values were saved/);
+  }
+});
 
 test("missing, invalid and conflicting mandatory fiscal tool scalars fail closed for the correct slot", () => {
   const expected = [{ code: "Abeyi Special Administrative Area", name: "Abeyi Special Administrative Area" }, { code: "Ambazonia", name: "Ambazonia" }];
@@ -246,4 +365,38 @@ test("Gemini provider conversion retains the shallow required fiscal numeric fie
   assert.equal(converted.properties.country1PublicDebt.minimum, 0);
   assert.equal(converted.properties.country1BudgetBalance.minimum, -1000);
   assert.equal(converted.additionalProperties, undefined);
+});
+
+test("typed country slots reject contradictory explicit country identifiers without rejecting independent slots", () => {
+  const targets = [{ code: "Russian Empire", name: "Russian Empire" },
+    { code: "French Republic", name: "French Republic" }];
+  const answer = { toolInput: {
+    country1Json: JSON.stringify({ ...stats, code: "Russian Empire",
+      countryCode: "French Republic", name: "Russian Empire" }),
+    country1PublicDebt: 30, country1BudgetBalance: -1,
+    country2Json: JSON.stringify({ ...stats, name: "French Republic" }),
+    country2PublicDebt: 60, country2BudgetBalance: 2,
+  } };
+  const outcome = get(answer, targets);
+  assert.equal(outcome["Russian Empire"].row, null);
+  assert.match(outcome["Russian Empire"].error, /conflicting country identity/i);
+  assert.equal(outcome["French Republic"].error, "");
+  assert.deepEqual(outcome["French Republic"].row.macro, stats.macro);
+  const reversed = get({toolInput: {...answer.toolInput,
+    country1Json: JSON.stringify({ ...stats, code: "Russian Empire",
+      country: "French Republic" }) } }, targets);
+  assert.equal(reversed["Russian Empire"].row, null, "display identities cannot launder a valid machine code");
+});
+
+test("legacy country arrays reject contradictory named identities and preserve valid aliases", () => {
+  const conflict = get({ countries: [{...stats, code:"Russian Empire",
+    polity:"French Republic", name:"Russian Empire"}] });
+  assert.equal(conflict["Russian Empire"].row, null,
+    "an explicit second country cannot hide behind a correct first country code");
+  const good = interpretScenarioStatsAiResponse({ countries: [{
+    ...stats, code:"Russian Empire", country:"Russia", name:"Russian Empire",
+  }] }, russia, {resolveIdentity: (identity) =>
+    identity === "Russia" ? "Russian Empire" : identity});
+  assert.deepEqual(good["Russian Empire"].row.macro, stats.macro,
+    "multiple genuine aliases resolving to one canonical polity remain valid");
 });

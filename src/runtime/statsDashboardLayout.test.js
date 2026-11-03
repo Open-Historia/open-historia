@@ -1,9 +1,70 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { MAX_STAT_DASHBOARD_WIDGETS, DEFAULT_NATIONAL_DASHBOARD, nationalDashboardForDisplay, dashboardColumnsForWidth, normalizeStatsDashboard, projectDashboardGrid, snapDashboardWidgetSize, updateDashboardWidget, duplicateDashboardWidget, insertDashboardWidget, placeDashboardWidget } from './statsDashboardLayout.js';
+import { MAX_STAT_DASHBOARD_WIDGETS, DEFAULT_NATIONAL_DASHBOARD, nationalDashboardForDisplay, shouldShowStandaloneMilitaryCard, isRequiredMilitaryWidget, dashboardColumnsForWidth, normalizeStatsDashboard, projectDashboardGrid, snapDashboardWidgetSize, updateDashboardWidget, duplicateDashboardWidget, insertDashboardWidget, placeDashboardWidget } from './statsDashboardLayout.js';
 import { NATIONAL_NATIVE_METRICS, normalizeStatSheetDefinition, serializeStatSheet } from './statIndexDefinitions.js';
 const sources = new Set([...Object.keys(NATIONAL_NATIVE_METRICS).map(key=>`native:${key}`), 'custom:timber']);
 const normalize = (dashboard) => normalizeStatsDashboard(dashboard, { allowedSources: sources });
+test('Country Details military fallback supports absent legacy dashboard without duplicate native card', () => {
+ const standard = nationalDashboardForDisplay({ custom: false, sections: [] });
+ const legacyCustom = nationalDashboardForDisplay({ custom: true, sections: [] });
+ assert.equal(shouldShowStandaloneMilitaryCard(legacyCustom, 'overview'), true);
+ assert.equal(shouldShowStandaloneMilitaryCard(legacyCustom, 'details'), true);
+ assert.equal(shouldShowStandaloneMilitaryCard(standard, 'overview'), false);
+ assert.equal(shouldShowStandaloneMilitaryCard(standard, 'details'), false,
+   'native Details dashboard owns its military card');
+ const noMilitary = normalize({version:1, widgets:[]});
+ assert.equal(shouldShowStandaloneMilitaryCard(noMilitary, 'overview'), false);
+ assert.equal(shouldShowStandaloneMilitaryCard(noMilitary, 'details'), true,
+   'a custom Details dashboard without a military card keeps the native fallback');
+ const overviewMilitary = {version:1, widgets:[
+   {id:'overview-military',source:'system:military',page:'overview',style:'military',x:0,y:0,w:6,h:6}]};
+ assert.equal(shouldShowStandaloneMilitaryCard(normalize(overviewMilitary), 'details'), true);
+});
+
+test('Wars & Fronts military is a mandatory native system module, with a legacy display fallback', () => {
+ const standard = normalize(DEFAULT_NATIONAL_DASHBOARD);
+ const module = standard.widgets.find(widget => widget.style === 'military');
+ assert.equal(isRequiredMilitaryWidget(module), true);
+ assert.equal(isRequiredMilitaryWidget({ ...module, style: 'value' }), false);
+ assert.equal(isRequiredMilitaryWidget({ ...module, source: 'native:militaryPower' }), false);
+ assert.equal(shouldShowStandaloneMilitaryCard(standard, 'details'), false);
+ const oldCustom = normalize({ version: 1, widgets: [
+  { id: 'metric', source: 'custom:timber', style: 'value', page: 'details', x: 0, y: 0, w: 2, h: 1 },
+ ] });
+ assert.equal(shouldShowStandaloneMilitaryCard(oldCustom, 'details'), true,
+  'older authored layouts may omit the widget, but the player must still receive native Military');
+ const moved = normalize({ version: 1, widgets: [
+  { ...module, page: 'overview', y: 0 },
+ ] });
+ assert.equal(shouldShowStandaloneMilitaryCard(moved, 'details'), true,
+  'a military visualization on Overview may not hide the mandatory Details view');
+ assert.equal(shouldShowStandaloneMilitaryCard(moved, 'overview'), false);
+ assert.equal(shouldShowStandaloneMilitaryCard(null, 'details'), true);
+});
+
+test('mandatory military cannot be duplicated, pasted, or moved to Overview through native layout helpers', () => {
+ const before = normalize(DEFAULT_NATIONAL_DASHBOARD);
+ const military = before.widgets.find(isRequiredMilitaryWidget);
+ const snapshot = structuredClone(before);
+ assert.equal(duplicateDashboardWidget(before, military.id), null);
+ assert.equal(insertDashboardWidget(before, military), null);
+ assert.equal(insertDashboardWidget(before, military, 'overview'), null);
+ assert.equal(updateDashboardWidget(before, military.id, { page: 'overview' }), null);
+ assert.equal(placeDashboardWidget(before, military.id, { page: 'overview', y: 0 }), null);
+ const placed = placeDashboardWidget(before, military.id, { y: 24 });
+ assert.ok(placed, 'position changes on Details remain permitted');
+ assert.equal(placed.widgets.find(isRequiredMilitaryWidget).page, 'details');
+ assert.deepEqual(before, snapshot, 'failed mutations must not change the source layout');
+ const legacyOverview = normalize({ version: 1, widgets: [
+  { ...military, page: 'overview', x: 0, y: 0 },
+ ] });
+ assert.equal(legacyOverview.widgets[0].page, 'overview', 'pre-existing authored layouts remain valid');
+ assert.equal(shouldShowStandaloneMilitaryCard(legacyOverview, 'details'), true);
+ const legacyMove = updateDashboardWidget(legacyOverview, military.id, { y: 2 });
+ assert.equal(legacyMove?.widgets[0].y, 2,
+  'editing the position of a pre-existing Overview card must remain supported without forcing migration');
+});
+
 test('native GDP can have several views but one canonical source identity', () => {
  const duplicated = {version:1, widgets:[{...DEFAULT_NATIONAL_DASHBOARD.widgets[0]},
   {id:'gdp-copy',source:'native:gdp',style:'value',page:'overview',x:0,y:3,w:3,h:1}]};

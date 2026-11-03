@@ -5,8 +5,41 @@
 // way a whole answer is, and only a text with no array in it is an error.
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 import { decodeGameMasterTransportPayload } from "./gameplaySchemas.js";
+
+test("GM uses canonical relation score without demanding a second model-authored status", async () => {
+  const { validateGameplayPayload } = await import("./gameplaySchemas.js");
+  const { decodeRelationUpdates, validateDiplomaticLedgerPayload } =
+    await import("./nativeDiplomaticDirector.js");
+  const promptSource = readFileSync(new URL("./gameplayPrompts.js", import.meta.url), "utf8");
+  const relations = [{ a: "France", b: "Russia", score: 65, eventIndexes: [0],
+    summary: "Bilateral cooperation improves" }];
+  const { payload, error } = decodeGameMasterTransportPayload({
+    mode: "world-intervention", summary: "Bilateral climate update",
+    eventsJson: "[]", territorialScopesJson: "[]", countryStatPatchesJson: "[]",
+    storylineUpdatesJson: "[]", warUpdatesJson: "[]",
+    relationUpdatesJson: JSON.stringify(relations), agreementUpdatesJson: "[]",
+    diplomaticOutreachJson: "[]",
+  });
+  assert.equal(error, "");
+  assert.equal(validateGameplayPayload("gameMaster", payload).valid, true,
+    "derived status is not a second required model output");
+  assert.match(promptSource, /OMIT status/);
+  assert.equal(decodeRelationUpdates(relations)[0].status, "friendly");
+  assert.equal(decodeRelationUpdates([{ ...relations[0], score: 25 }])[0].status, "cordial");
+  const world = { polityOverrides: { France: { status: "active" }, Russia: { status: "active" } } };
+  const events = [{ id: "e1", date: "2016-01-01", title: "Agreement",
+    description: "Relations improve." }];
+  const valid = { events, relationUpdates: relations, agreementUpdates: [] };
+  assert.equal(validateDiplomaticLedgerPayload(valid, { world }), "");
+  assert.equal(decodeRelationUpdates(valid.relationUpdates)[0].status, "friendly");
+  const inconsistent = { events, relationUpdates: [{ ...relations[0], status: "cautious" }],
+    agreementUpdates: [] };
+  assert.match(validateDiplomaticLedgerPayload(inconsistent, { world }),
+    /ABSOLUTE new value/, "explicit contradictory scores still fail closed");
+});
 
 test("well-formed transport text decodes as before", () => {
   const { payload, error } = decodeGameMasterTransportPayload({

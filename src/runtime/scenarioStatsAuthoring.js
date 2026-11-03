@@ -2,6 +2,8 @@
 import {
   DEFAULT_STAT_INDEX_KEYS,
   NATIONAL_NATIVE_METRICS,
+  normalizeStatSheetDefinition,
+  serializeStatSheet,
 } from "./statIndexDefinitions.js";
 import {
   expandTerritorialMacroEstimates,
@@ -17,6 +19,21 @@ import {
   nationalStatsAuthoringContract,
   nationalStatsPresentationCoverage,
 } from "./statsMetricBindings.js";
+
+// Scenario assetStatus.stats is intentionally a BOOLEAN for library cards.
+// Two independently saved definitions both report true. Reviewed country
+// baselines must compare the current actual asset to the authored definition,
+// not mistake that presence flag for a concurrency version.
+export const assertScenarioStatsDefinitionContentsCurrent = (expected, actual) => {
+  if (!actual || typeof actual !== "object" || Array.isArray(actual)) {
+    throw new Error("Statistics definition changed elsewhere or is unavailable. Reload the scenario before applying country baselines.");
+  }
+  const serialized = (input) => JSON.stringify(serializeStatSheet(
+    normalizeStatSheetDefinition(input, { fallbackStandard: false })));
+  if (serialized(expected) !== serialized(actual)) {
+    throw new Error("Statistics definition changed elsewhere. Reload the scenario and review its country baselines before saving.");
+  }
+};
 
 const clean = (value) => String(value ?? "").trim();
 const plain = (value) => value && typeof value === "object" && !Array.isArray(value);
@@ -360,7 +377,11 @@ export const applyScenarioStatsManualEdits = ({ sheet, edits, date, customKeys =
     population: { total: positiveWhole(edits.population, "Population") },
     economy: {
       gdp: valueOf(edits.gdp, [1, 1e18], "GDP"),
-      ...(custom ? {} : {
+      ...(custom ? Object.fromEntries(["gdpGrowth", "inflation", "unemployment"]
+        .filter((key) => edits[key] !== "" && edits[key] != null)
+        .map((key) => [key, valueOf(edits[key], NUMERIC[key], {
+          gdpGrowth: "GDP growth", inflation: "Inflation", unemployment: "Unemployment",
+        }[key])])) : {
         currency: requiredText(edits.currency, "Currency"),
         gdpGrowth: valueOf(edits.gdpGrowth, NUMERIC.gdpGrowth, "GDP growth"),
         inflation: valueOf(edits.inflation, NUMERIC.inflation, "Inflation"),
@@ -374,6 +395,9 @@ export const applyScenarioStatsManualEdits = ({ sheet, edits, date, customKeys =
   let candidate = mergeCountryStatPatch(before, proposed, { maxAggregateRescale: Infinity });
   const hasBirth = edits.birthRate !== "" && edits.birthRate != null;
   const hasDeath = edits.deathRate !== "" && edits.deathRate != null;
+  const hasTrend = ["birthTrendPerYear", "deathTrendPerYear"]
+    .some((key) => edits[key] !== "" && edits[key] != null);
+  if (!hasBirth && hasTrend) throw new Error("Annual birth/death trends require both base rates; clear all four fields to leave the demographic process unset.");
   if (hasBirth !== hasDeath) throw new Error("Set both birth and death rates, or leave both blank.");
   if (hasBirth) {
     if (before.continuity?.demographicClock) {

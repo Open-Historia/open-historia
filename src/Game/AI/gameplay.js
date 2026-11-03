@@ -9,6 +9,7 @@ import { clampTimelineDates, validatePregameEvents, validateTimelineDates } from
 import { buildMilitaryFeasibilityText } from "./militaryFeasibility.js";
 import { looksLikeChatRequest } from "./chatHints.js";
 import { FALLBACK_SUGGESTION_TOPICS, fallbackTurnText } from "../../runtime/fallbackTurnText.js";
+import { fallbackOrderEventFields } from "./fallbackOrderEvent.js";
 import { describePuppetBriefing, puppetBriefingFor } from "../../runtime/puppets.js";
 import { regionTypeRules, regionTypesHaveRules } from "../../runtime/regionTypes.js";
 import { answerableDemandOf, demandCheckContext, demandCheckPrompt, interpretDemandCheck, openDemandOf } from "../../runtime/demandCheck.js";
@@ -31,6 +32,7 @@ import { zoneWeatherFor } from "../../runtime/zoneWeather.js";
 import { militaryLookup } from "../../runtime/militaryStats.js";
 import { MILITARY_CHANGE_RULE, describeMilitaryStanding } from "../../runtime/militaryStanding.js";
 import { warSettingsOf } from "../../runtime/warSettings.js";
+import { validateFiscalEventOperations, buildFiscalPreviewRows } from "../../runtime/fiscalTransactions.js";
 import { STATS_BACKEND_FIELD, conflictSheetTargets, hasStatsBackend, statsBackendInstruction, statsBackendOf, statsBackendPatch, statsBackendTurnRule } from "../../runtime/statsBackend.js";
 import { CONFLICT_BACKENDS_MOST, conflictBackendsRequest, readConflictBackends } from "./conflictBackends.js";
 import { MILITARY_BATCH_MOST, militaryRatingRequest, militaryTargets, ratedScaleOf, readMilitaryRatings, wantsRating } from "./militaryRating.js";
@@ -69,6 +71,7 @@ import { buildStructureDirectorInput, directGeneratedStructureOps } from "./nati
 import {
   buildPlayerFocusDirective,
   citeNarratedOrders,
+  actionNeedsEvent,
   collectPlayerMaterial,
   combinedShares,
   createPlayerEventTest,
@@ -89,7 +92,7 @@ import {
   scopeContainsRegion,
 } from "./gmTerritoryScope.js";
 import { GAME_MASTER_MODES, GM_AUTO_MODE, validateGameMasterModeSelection } from "./gameMasterAutoMode.js";
-import { buildGameMasterStatsPreview } from "./gameMasterStatsPreview.js";
+import { buildGameMasterStatsPreview, reviewGameMasterEconomicPreview } from "./gameMasterStatsPreview.js";
 import {
   gameMasterPolityKey,
   gameMasterStateFingerprint,
@@ -98,6 +101,9 @@ import {
   validateGameMasterChronology,
   validateGameMasterPolityLifecycle,
   validateGameMasterStatsAuthority,
+  validateGameMasterEconomicEventAccounting,
+  validateGameMasterPoliticalStatsAuthority,
+  validateGameMasterNativeStatAliasWrites,
   validateGameMasterDirectMutation,
   validateGameMasterFiniteEconomicInfluences,
   verifyGameMasterTerritoryPostconditions,
@@ -193,7 +199,10 @@ import { formalAgendaProposals } from "./formalAgenda.js";
 import { abandonWorkerJob, createWorkerFailureStreak } from "./statsWorkerJobs.js";
 import { chatParticipantKey, foldGeneratedChatsIntoStorage, isLifecycleNegotiationChat, logGeneratedChat } from "./chatFold.js";
 import { extractJsonPayload, parseWithoutTrailingFields, unwrapMimickedToolCall } from "./jsonSalvage.js";
-import { OUTPUT_LIMIT_MESSAGE, REASONING_ONLY_MESSAGE, REASONING_ONLY_NOTE, isUnreachableError } from "./providerErrors.js";
+import { REASONING_ONLY_NOTE, isUnreachableError } from "./providerErrors.js";
+import { describeUnparseableStructuredAnswer } from "./structuredAnswerFailure.js";
+import { jumpRetryFailureSummary } from "./jumpRetryFailureSummary.js";
+import { gameMasterRetryFeedback } from "./gameMasterRetryFeedback.js";
 import { isCancelAllAbort } from "./aiRequestControl.js";
 import { isChatVisibleTo, withoutPlayerParticipant } from "./chatVisibility.js";
 import { SIMULATION_AUDIENCE, audienceSeesReport, audienceStoleReport, viewerAudience } from "./audience.js";
@@ -1563,7 +1572,7 @@ const JUMP_LEVERS = [
   "• markerOps {\"op\":\"build\",\"marker\":{\"name\":\"\",\"kind\":\"city | military base | port | embassy | airfield | …\",\"ownerCode\":\"\",\"at\":\"\",\"note\":\"\",\"foundedAt\":\"\"}} · {\"op\":\"remove\",\"name\":\"<exact name>\",\"note\":\"\"} · {\"op\":\"rename\",\"name\":\"<current name>\",\"newName\":\"\",\"note\":\"\"} · {\"op\":\"population\",\"name\":\"<city>\",\"population\":\"<the new total>\",\"note\":\"\"}. rename and population work on every city on the map.",
   "• groupOps {\"op\":\"create | update | dissolve | take | release\",\"name\":\"<exact group name>\",\"newName\":\"\",\"description\":\"<what it is and wants>\",\"color\":\"#RRGGBB\",\"regionIds\":[\"region: <name>\"],\"note\":\"\"}; create founds a group (with its first regions if it holds any), take adds regions to its area, release gives them back (all of them when regionIds is empty), dissolve erases it.",
   "• regionClaims {\"regionId\":\"\",\"claimantCode\":\"<full name>\",\"note\":\"\"}, with \"drop\":true when a claim is given up; the region stays striped until a transfer or a drop settles it.",
-  "• actionIds: the ids of the player's orders an event resolves, so the game can clear them.",
+  "• impacts.actionIds: the ids of the player's orders an event resolves, so the game can clear them.",
 ].join("\n");
 
 // ---- The folded skip's own rules -------------------------------------------------
@@ -1583,7 +1592,7 @@ const FOLDED_SKIP_CONSEQUENCES = [
   "• Units. Check the event against Current Military Units. A formation the text has advancing, retreating, redeploying, massing on a border or going into action is MOVED: its name in unitId, an `at`, and the posture it now has (fighting is a move into contact with posture assaulting). Losses, attrition, reinforcement or refit change its strength; destruction or disbandment removes it. Reuse the formation that already exists before raising another: the army that fought last month is the army fighting this month. A ship, submarine or squadron commissioned, delivered or stood up, and a division raised or mobilised, is a NEW formation: spawn it for the power that raised it, at its named port or base, even when that power already has units. A war is fought by formations the map shows, on BOTH sides, whether or not the player is in it: when an event has a power or a group attacking, defending, besieging or falling back somewhere and it has no formation there among Current Military Units, spawn one where the event puts it (a group's formation carries the group's exact name as ownerCode), and move it in later events as the front moves.",
   "• Structures. Anything physical and fixed that the text says was built, opened, completed, commissioned, activated or begun (a base, shipyard, port, airfield, factory, plant, reactor, laboratory, data centre, radar or ground station, launch site, depot, embassy, fortification) is a markerOps build: a specific name, a short lowercase kind, its owner's full name, `at` the place the event names, and a status of planned, under_construction or active. A meeting, study, budget or plan builds nothing; nothing in orbit is a structure, though the ground station that serves it is; a ship or an aircraft is a unit; and nothing already on the map is built twice.",
   EVENT_PLACES_RULE,
-  "• Orders. An event that gives one of the player's orders its outcome lists that order's id in actionIds.",
+  "• Orders. An event that gives one of the player's orders its outcome lists that order's id in impacts.actionIds.",
   "• The board. An event that moved one of the player's projects or operations carries its projectOps, as [Projects & Operations] says.",
   "An event whose text changes nothing material carries no ops, and that is correct: never invent one to fill a field. But an event that says a town fell, a fleet sailed or a base opened, with nothing in its impacts, leaves the player looking at a map that contradicts the story.",
   "Nothing takes a repeat or a filler event off the timeline afterwards either. Do not write an event that restates the record, or one that reports a meeting, a review or a statement with no outcome.",
@@ -2328,7 +2337,7 @@ const canonicalizeNamedThings = (containers, world) => {
 // `formations` are [{ owner, point }] the caller knows will stand by the end of
 // this turn besides the world's units: a unit Director's moves, for the
 // structure Director's posts (militaryPosts.js).
-const resolvePlacements = async (containers, world, { receipt = null, renderedRegions = null, noteGround = false, formations = [], lookupContext = null } = {}) => {
+const resolvePlacements = async (containers, world, { receipt = null, renderedRegions = null, noteGround = false, formations = [], lookupContext = null, strictNamedPlacement = false } = {}) => {
   canonicalizeNamedThings(containers, world);
   const placing = [];
   for (const { event, impacts, path } of normalizeArray(containers)) {
@@ -2372,7 +2381,9 @@ const resolvePlacements = async (containers, world, { receipt = null, renderedRe
     gazetteer = buildPlacementGazetteer(await (lookupContext ?? lazyLookupContext({ world }, { renderedRegions }))(), world);
   } catch (error) {
     console.warn("[placement] the map could not be read; operations keep the coordinates they came with.", error);
-    return { placed: 0, spaced: 0 };
+    return strictNamedPlacement && placing.some((entry) => entry.family === "marker" && entry.phrase)
+      ? { placed: 0, spaced: 0, error: "GM named marker placement cannot be verified because the map lookup is unavailable." }
+      : { placed: 0, spaced: 0 };
   }
 
   // What already stands, plus each thing placed by this payload as it lands.
@@ -2433,6 +2444,16 @@ const resolvePlacements = async (containers, world, { receipt = null, renderedRe
     // says what it did; the country alone put the thing in the middle of it
     // and said nothing. Seen on the built-in map (2026-10-12).
     const containerOnly = Boolean(resolved && resolved === byPhrase && byPhrase.contained);
+    // GM approval is not a normal-turn placement receipt. If the author names
+    // a facility's location and the map cannot resolve that place beyond an
+    // enclosing country, the model's unrelated coordinates must NOT silently
+    // become canonical merely because they are numeric. Ask the existing GM
+    // corrective retry for a verifiable at/location instead.
+    if (strictNamedPlacement && entry.family === "marker" && entry.phrase && hasCoordinates
+      && (byPhrase?.error || containerOnly || !resolved)) {
+      return { placed, spaced,
+        error: `${entry.path}.markerOps: named place "${entry.phrase}" for "${entry.name || "structure"}" cannot be verified on the map; its supplied coordinates cannot replace that named place. Give a map-resolvable \`at\` or omit the unverified location.` };
+    }
     const approximated = (() => {
       // A structure given no place at all still goes into its owner's land, marked
       // so (placement.js `unnamed`); a unit with none is raised at home, below.
@@ -3945,9 +3966,6 @@ const runJsonTask = async (taskKey, {
       // what the model wrote, and never the first fragment that happens to
       // parse (jsonSalvage.js extractJsonPayload).
       const contractKeys = normalizeArray(tool?.schema?.required);
-      // Past this much text with no answer in it, what the model wrote was its
-      // planning (a refusal or an error is a line or two).
-      const PLANNING_PROSE_CHARS = 600;
       // A value that passes the task's own schema check is the whole answer,
       // and fits better than any count of keys: the tool may ask for a key the
       // check does not insist on, and an answer without it is still complete.
@@ -4228,12 +4246,10 @@ const runJsonTask = async (taskKey, {
           : validateGameplayPayload(taskKey, parsed))
         : {
           valid: false,
-          // Reasoning and nothing else, whether the provider returned it apart
-          // or the model wrote its planning where the answer goes: long prose
-          // with no object of the contract's in it.
-          error: cutAtLimitUnusable ? OUTPUT_LIMIT_MESSAGE
-            : reasoningOnly || (contractKeys.length && rawText.length > PLANNING_PROSE_CHARS) ? REASONING_ONLY_MESSAGE
-              : "Response did not contain parseable JSON or tool arguments.",
+          // A long malformed JSON answer is still an answer, not invisible
+          // reasoning. Preserve that distinction in retries and QA reports.
+          error: describeUnparseableStructuredAnswer({ rawText, reasoningOnly,
+            cutAtOutputLimit: cutAtLimitUnusable }),
         };
       // The scenario's stats contract, once the schema passes (validateStatContract).
       if (validation.valid && parsed) {
@@ -4418,7 +4434,7 @@ const runJsonTask = async (taskKey, {
             : "";
         history.push({
           role: "user",
-          parts: [{ text: `Your previous structured answer failed validation: ${validation.error} ${retryInstruction}${transportRepairInstruction}` }],
+          parts: [{ text: `Your previous structured answer failed validation: ${gameMasterRetryFeedback(taskKey, jumpRetryFailureSummary(taskKey, parsed, validation.error))} ${retryInstruction}${transportRepairInstruction}` }],
         });
         continue;
       }
@@ -7702,6 +7718,9 @@ const describeUnresolvedTerritory = (entry, family, eventTitle) => {
 
 export const validateGeneratedWorldChanges = async (candidate, world, {
   strictTransfers = false,
+  // GM Preview requires verifiable named marker locations; ordinary turns keep
+  // their established best-effort placement and visible adjustment receipts.
+  strictNamedPlacement = false,
   captureGuard = true,
   resolvedRegionIdsOnly = false,
   explicitScopeText = "",
@@ -7856,13 +7875,18 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
     noteReceipt(receipt, "dropped", describeUnresolvedTerritory(entry, "regionControlOps", titleAt(entry?.path)), unresolvedTerritoryNote(entry, "regionControlOps", titleAt(entry?.path)));
   }
   // Units and structures placed by name (`at`), and everything placed kept clear
-  // of what already stands (resolvePlacements above). Never an error: a place
-  // that cannot be found is said in the receipt, and the operation keeps any
-  // coordinates it came with. Not on the Game Master's apply-time pass, which
+  // of what already stands (resolvePlacements above). In ordinary turns an
+  // unresolved name is explained in the receipt and coordinates may survive.
+  // GM Preview instead refuses unverified named marker coordinate fallbacks:
+  // its approval must not silently certify a different place as requested.
+  // Not on the Game Master's apply-time pass, which
   // may not reopen the map's geometry: its preview already placed everything.
   // The map's names, read at most once for everything below that asks.
   const lookupContext = lazyLookupContext({ world }, { renderedRegions });
-  if (!resolvedRegionIdsOnly) await resolvePlacements(containers, world, { receipt, renderedRegions, lookupContext });
+  if (!resolvedRegionIdsOnly) {
+    const placement = await resolvePlacements(containers, world, { receipt, renderedRegions, lookupContext, strictNamedPlacement });
+    if (placement?.error) return placement.error;
+  }
   // A capture the text states and the event's own formation shows, with no
   // control operation written for it, is finished here. Only on the answer
   // that is kept: an attempt that can still be sent back is told instead, by
@@ -8273,6 +8297,13 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
     candidate.diplomaticOutreach = keptOutreach;
   }
 
+  // Native fiscal integrity is preflighted before either Timeline acceptance
+  // or GM approval. A malformed reference, amount, date or financing cannot
+  // look successful in Preview and fail only after Apply. This dry run never
+  // changes canonical world state, annual deficit or public debt.
+  const fiscalError = validateFiscalEventOperations(world, candidate?.events);
+  if (fiscalError) return fiscalError;
+
   return "";
 };
 
@@ -8290,21 +8321,18 @@ const fallbackJumpSimulation = async ({ bundle, days, mode, targetDate }) => {
 
   if (firstThreeActions.length > 0) {
     firstThreeActions.forEach((action, index) => {
+      const fallbackOrder = fallbackOrderEventFields(action, bundle.game.country);
       const eventDate = advanceGameDate(
         Math.max(1, Math.round(((index + 1) / (firstThreeActions.length + 1)) * Math.max(days, 1))),
       );
 
       events.push({
         date: eventDate,
-        description: fallbackTurnText(
-          action.kind === "chat" ? "chatEventDescription" : "orderEventDescription",
-          { country: bundle.game.country, order: action.title },
-        ),
+        description: fallbackOrder.description,
         impacts: {
-          // This event exists specifically because of this queued Action. The
-          // exact id is what settleOrders consumes; without it a provider
-          // fallback narrated the order and then carried it over as overdue.
-          actionIds: normalizeString(action.id) ? [normalizeString(action.id)] : [],
+          // Only a fallback that performs a native operation may settle its
+          // action. Ordinary orders have no verified outcome: keep them queued.
+          actionIds: fallbackOrder.actionIds,
           createdChats:
             action.kind === "chat" && action.invitees.length > 0 && action.chatStarter
               ? [
@@ -8323,10 +8351,7 @@ const fallbackJumpSimulation = async ({ bundle, days, mode, targetDate }) => {
         kind: action.kind === "chat" ? "diplomacy" : "player",
         notable: index === firstThreeActions.length - 1,
         playerRelated: true,
-        title: fallbackTurnText(
-          action.kind === "chat" ? "chatEventTitle" : "orderEventTitle",
-          { country: bundle.game.country, order: action.title },
-        ),
+        title: fallbackOrder.title,
       });
     });
   } else {
@@ -8353,7 +8378,9 @@ const fallbackJumpSimulation = async ({ bundle, days, mode, targetDate }) => {
     clearActions: true,
     events,
     stopDate: targetDate,
-    summary: fallbackTurnText(plannedActions.length > 0 ? "summaryWithOrders" : "summaryWithoutOrders", { country: bundle.game.country }),
+    summary: fallbackTurnText(plannedActions.some(actionNeedsEvent)
+      ? "summaryPendingOrders" : plannedActions.length > 0 ? "summaryWithOrders" : "summaryWithoutOrders",
+    { country: bundle.game.country }),
   };
 };
 
@@ -9233,6 +9260,13 @@ const applySimulationResult = async ({
     regionCatalog: freshEvents.some((event) => event?.impacts?.regionTransfers?.length
       || event?.impacts?.projectOps?.length) ? await loadRegionCatalog() : null,
     statsChronology: nativeStatsChronology,
+    // Nominal tax-policy forecasts run on their own dated, event-ordered
+    // ledger, even when national Stats chronology cannot be activated.
+    // They never create a GDP, debt, cash or fiscal-rate mutation.
+    fiscalPeriod: normalizeGameDate(baseGame.gameDate) === baseGame.gameDate
+      && normalizeGameDate(nextGame.gameDate) === nextGame.gameDate
+      && compareGameDates(baseGame.gameDate,nextGame.gameDate) <= 0
+      ? { fromDate:baseGame.gameDate,toDate:nextGame.gameDate } : null,
     // Give every unit op a travel budget of the days between the previous event
     // and its own, so a move op advances a formation as far as it could actually
     // have got rather than teleporting it. An over-long move becomes a partial
@@ -9995,27 +10029,11 @@ const applySimulationResult = async ({
     phases?.enter("applying");
   }
 
-  // Bounded automatic Stats tracking: only when the player's configured calendar
-  // interval is due, and one compact AI batch for every initialised tracked
-  // country. A failure never invalidates the completed turn.
-  try {
-    if (!nativeStatsChronology || nativeStatsChronology.partial) nextWorld = await refreshTrackedCountryStatsIfDue({
-      excludePolities: nativeStatsChronology?.scopedCountries || [],
-      bundle: {
-        actions: nextActions,
-        chats: nextChats,
-        events: nextEvents,
-        game: nextGame,
-        world: nextWorld,
-      },
-      signal: projects?.signal,
-      requests,
-      replay,
-    });
-  } catch (error) {
-    if (projects?.signal?.aborted) throw error;
-    console.warn("[stats auto] unexpected scheduler failure; the completed turn is preserved.", error);
-  }
+  // Tracked history reads canonical simulation results; it must never initiate
+  // a periodic AI re-baseline. A refused/partial native settlement leaves its
+  // existing Stats intact instead of asking a model to overwrite campaign canon.
+  // Manual scenario seeding and explicitly reviewed GM edits remain separate.
+
 
   // And the cities of every country whose people have moved go with them
   // (frontApply.js citiesFollowCountries): no request, and the map's shapes are
@@ -17345,7 +17363,6 @@ const createJumpRequests = ({ segments = 1, reserveInstitutionBallot = false, up
   budget.reserve("jump", pieces);
   if (reserveInstitutionBallot) budget.reserve("institutionBallots", 1);
   if (upkeep?.history) budget.reserve("history", 1);
-  else if (upkeep?.stats) budget.reserve("stats", 1);
   return {
     saving,
     budget,
@@ -17354,40 +17371,15 @@ const createJumpRequests = ({ segments = 1, reserveInstitutionBallot = false, up
   };
 };
 
-// What upkeep a skip ending on `date` owes before it has asked anything:
-//   history  the pile of unfolded events is already past the size at which the
-//            fold is asked for on its own (compactHistoryIfNeeded);
-//   stats    the automatic Stats refresh will be due for a tracked country
-//            that has a sheet (refreshTrackedCountryStatsIfDue decides which).
-// Read from the save alone, so it costs nothing and never fails a skip.
-const skipUpkeepDue = (bundle, date) => {
-  const upkeep = { history: false, stats: false };
+// Only history consolidation can reserve a post-turn AI request. Legacy
+// Statistics tracking metadata remains readable, but no calendar interval
+// authorizes a fresh AI baseline assessment of established canonical sheets.
+const skipUpkeepDue = (bundle) => {
+  let history = false;
   try {
-    upkeep.history = planHistoryConsolidation(bundle).unconsolidatedEvents.length > HISTORY_CONSOLIDATION.ownRequestThreshold;
+    history = planHistoryConsolidation(bundle).unconsolidatedEvents.length > HISTORY_CONSOLIDATION.ownRequestThreshold;
   } catch { /* nothing kept */ }
-  try {
-    const game = normalizeGameData(bundle?.game);
-    const world = bundle?.world ?? {};
-    const endDate = normalizeString(date) || normalizeString(game?.gameDate || game?.startDate);
-    const tracking = normalizeCountryStatsTracking(world?.countryStatsTracking, { playerCountry: game?.country });
-    const intervalMonths = Number(tracking.intervalMonths) || 0;
-    if (intervalMonths && parseIsoDate(endDate)) {
-      const waiting = new Set(normalizeArray(tracking.pendingBaselinePolities).map((entry) => normalizeString(entry)));
-      upkeep.stats = tracking.trackedPolities.slice(0, COUNTRY_STATS_TRACKING_MAX_POLITIES).some((rawPolity) => {
-        const polity = canonicalStatsPolity(rawPolity, world) || normalizeString(rawPolity);
-        const sheet = world?.countryStats?.[polity];
-        if (!sheet || waiting.has(polity)) return false;
-        const lastAuto = normalizeString(tracking.lastAutoRefreshByPolity?.[polity]);
-        const assessed = normalizeString(sheet?.continuity?.assessedDate);
-        const baselineDate = (parseIsoDate(lastAuto) && lastAuto)
-          || (parseIsoDate(assessed) && assessed)
-          || trackedStatsLatestHistoryDate(world, polity)
-          || normalizeString(game?.startDate);
-        return countryStatsTrackingMonthsElapsed(baselineDate, endDate) >= intervalMonths;
-      });
-    }
-  } catch { /* nothing kept */ }
-  return upkeep;
+  return { history, stats: false };
 };
 
 const jumpTaskOptions = (requests, spender) => (requests ? {
@@ -19150,8 +19142,20 @@ const validateGameMasterPreviewPayload = async (candidate, {
 
   const statsAuthorityError = validateGameMasterStatsAuthority(candidate, { mode });
   if (statsAuthorityError) return statsAuthorityError;
+  const politicalStatsAuthorityError = validateGameMasterPoliticalStatsAuthority(candidate, world);
+  if (politicalStatsAuthorityError) return politicalStatsAuthorityError;
+  // Never permit a standard-sheet GM write to masquerade as a custom metric.
+  // Preserve independent author-defined keys on genuinely custom sheets.
+  // Preview and Apply both run this preflight against the live definition.
+  const nativeAliasError = validateGameMasterNativeStatAliasWrites(candidate);
+  if (nativeAliasError && !(await loadStatSheetDefinition())?.custom) return nativeAliasError;
   const finiteEconomicError = validateGameMasterFiniteEconomicInfluences(candidate);
   if (finiteEconomicError) return finiteEconomicError;
+  // The model may narrate an Economy result without authoring a quantified
+  // national Stats effect. Require truthful applied/unquantified/none evidence
+  // before Preview and again before Apply, not only a visual warning.
+  const economicAccountingError = validateGameMasterEconomicEventAccounting(candidate, { mode });
+  if (economicAccountingError) return economicAccountingError;
 
   const requestedDateError = validateGameMasterRequestedExactDate(candidate, { mode, request });
   if (requestedDateError) return requestedDateError;
@@ -19178,6 +19182,7 @@ const validateGameMasterPreviewPayload = async (candidate, {
   // an exact map region, but it never writes world state.
   const worldChangeError = await validateGeneratedWorldChanges(candidate, world, {
     strictTransfers: true,
+    strictNamedPlacement: true,
     captureGuard: false,
     resolvedRegionIdsOnly,
     explicitScopeText: resolvedRegionIdsOnly ? "" : request,
@@ -19318,6 +19323,7 @@ const gameMasterAcceptedOperationLabels = (transaction) => {
       ["regionControlOps", "control"],
       ["polityChanges", "polity"],
       ["politicalActorOps", "political-actor"],
+      ["fiscalOps", "fiscal"],
       ["unitOps", "unit"],
       ["markerOps", "marker"],
       ["institutionLifecycleOps", "institution"],
@@ -19464,6 +19470,10 @@ export const previewGameMasterCommand = async (requestText, { mode = GM_AUTO_MOD
     const statsPreview = buildGameMasterStatsPreview({
       world: bundle.world, events, countryStatPatches,
     });
+    const economicPreviewNotes = reviewGameMasterEconomicPreview(events, { mode: effectiveMode });
+    // A nominal fiscal approval is not a GDP or debt effect. Show the exact
+    // staged amount and status in Preview without deriving a monetary impact.
+    const fiscalPreviewRows = buildFiscalPreviewRows(bundle.world, events);
 
     return {
       id: transactionId,
@@ -19471,6 +19481,8 @@ export const previewGameMasterCommand = async (requestText, { mode = GM_AUTO_MOD
       requestedMode: selectedMode,
       modeReason: normalizeString(payload?.modeReason).slice(0,240),
       statsPreview,
+      economicPreviewNotes,
+      fiscalPreviewRows,
       request,
       date: bundle.game.gameDate || bundle.game.startDate || "",
       round: bundle.game.round || 0,

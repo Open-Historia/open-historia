@@ -950,6 +950,53 @@ const groupOpSchema = {
   additionalProperties: false,
 };
 
+// A civilian nominal authorization or already-budgeted payment is a fiscal
+// transaction, NOT a Project milestone or a direct budget/GDP rewrite. New
+// debt, revenue-foregone accrual and currency conversions need a different
+// proven source and therefore have no field in this first native contract.
+const fiscalOpSchema = {
+  anyOf: [
+    { type: "object", properties: {
+      op: { type: "string", enum: ["authorize"] },
+      id: nonEmptyTextSchema("Stable fiscal transaction id; reuse for later payments."),
+      polity: nonEmptyTextSchema("Exact canonical polity name."),
+      kind: { type: "string", enum: ["grant", "relief", "procurement", "transfer"] },
+      amount: { type: "number", exclusiveMinimum: 0, maximum: 100000000000 },
+      currency: { type: "string", pattern: "^[A-Z]{3}$" },
+      reason: nonEmptyTextSchema("Explicit enacted appropriation and its source, not merely a proposal."),
+      projectId: textSchema("Optional stable ID of a real same-owner Project."),
+    }, required: ["op", "id", "polity", "kind", "amount", "currency", "reason"],
+    additionalProperties: false },
+    { type: "object", properties: {
+      op: { type: "string", enum: ["pay"] },
+      id: nonEmptyTextSchema("Exact existing authorized fiscal transaction ID."),
+      amount: { type: "number", exclusiveMinimum: 0, maximum: 100000000000 },
+      funding: { type: "string", enum: ["already-budgeted"] },
+      reason: nonEmptyTextSchema("Independent evidence of a transfer already covered by the established budget."),
+    }, required: ["op", "id", "amount", "funding", "reason"], additionalProperties: false },
+    { type: "object", properties: {
+      op: { type: "string", enum: ["cancel"] },
+      id: nonEmptyTextSchema("Existing uncompleted fiscal authorization ID."),
+      reason: nonEmptyTextSchema("Reason the remaining authorization is withdrawn."),
+    }, required: ["op", "id", "reason"], additionalProperties: false },
+    { type: "object", properties: {
+      op: { type: "string", enum: ["enact-tax-holiday"] },
+      id: nonEmptyTextSchema("Stable tax-policy source ID."),
+      polity: nonEmptyTextSchema("Exact canonical polity."),
+      amount: { type: "number", exclusiveMinimum: 0, maximum: 100000000000 },
+      currency: { type: "string", pattern: "^[A-Z]{3}$" },
+      startDate: nonEmptyTextSchema("Effective start boundary; accrual begins the next day."),
+      endDate: nonEmptyTextSchema("Final covered day, within 240 days of start boundary."),
+      reason: nonEmptyTextSchema("Enacted policy and independently evidenced TOTAL nominal revenue-foregone estimate; never invent a fiscal rate."),
+    }, required: ["op", "id", "polity", "amount", "currency", "startDate", "endDate", "reason"], additionalProperties: false },
+    { type: "object", properties: {
+      op: { type: "string", enum: ["repeal-tax-holiday"] },
+      id: nonEmptyTextSchema("Previously enacted tax policy ID."),
+      reason: nonEmptyTextSchema("Law rescinding the remaining relief."),
+    }, required: ["op", "id", "reason"], additionalProperties: false },
+  ],
+};
+
 const impactsSchema = {
   type: "object",
   description: "World-state effects; include only the arrays that apply.",
@@ -969,6 +1016,11 @@ const impactsSchema = {
       type: "array",
       description: "Canonical government, leader, party and strategy mutations.",
       items: politicalActorImpactOpSchema,
+    },
+    fiscalOps: {
+      type: "array", maxItems: 8,
+      description: "Dated civilian budget commitments: enacted nominal authorization, independently evidenced already-budgeted payment, or cancellation. A Project is not a paid grant. Unknown funding or tax impact must remain unquantified, never invented.",
+      items: fiscalOpSchema,
     },
     regionTransfers: {
       type: "array",
@@ -1087,9 +1139,14 @@ const JUMP_COMPACT_IMPACT_DESCRIPTIONS = new Set([
 
 const jumpImpactsSchema = {
   ...impactsSchema,
+  description: "Event-local impacts only. Relation, war and agreement updates are TOP-LEVEL jump ledger strings, never nested event impacts. Each ledger row cites its event.",
   properties: Object.fromEntries(
     Object.entries(impactsSchema.properties)
-      .filter(([key]) => key !== "projectOps")
+      // Nominal fiscal transactions are first generated through GM, where the
+      // typed authorization can be reviewed. Keep the ordinary jump's strict
+      // provider grammar budget unchanged; canonical validators and GM still
+      // understand fiscalOps on accepted events.
+      .filter(([key]) => key !== "projectOps" && key !== "fiscalOps")
       .map(([key, schema]) => [
         key,
         JUMP_COMPACT_IMPACT_DESCRIPTIONS.has(key) ? compactJumpImpactSchema(schema) : schema,
@@ -1136,11 +1193,15 @@ const foldedProjectOpsSchema = compactJumpImpactSchema({
   },
 });
 
-// What the validation schema accepts under an event's impacts: the lean jump
-// impacts, and the board's op whole, so a folded answer and a habit both pass.
+// Validation understands every native fiscal operation even though the lean
+// provider-facing jump does not request them. The GM can author them, and a
+// programmatically attached operation must never be silently dropped. Preserve
+// the historic provider grammar budget independently of strict admission.
 const jumpAnswerImpactsSchema = {
   ...jumpImpactsSchema,
-  properties: { ...jumpImpactsSchema.properties, projectOps: impactsSchema.properties.projectOps },
+  properties: { ...jumpImpactsSchema.properties,
+    projectOps: impactsSchema.properties.projectOps,
+    fiscalOps: impactsSchema.properties.fiscalOps },
 };
 
 // The field a folded skip's agents' reports come back in (gameplay.js).
@@ -1205,6 +1266,7 @@ const eventSchema = {
     // consequences. This declaration is evidence, never itself a Stats writer.
     economicAccounting: {
       type: "object",
+      description: "Economy: applied REQUIRES this event\u0027s measurable impacts.polityChanges[].statsEffects; unquantified for real but unmeasured effects; none for no enacted economic change.",
       properties: {
         status: { type: "string", enum: ["applied", "unquantified", "none"] },
         reason: { type: "string", description: "Concrete reason or measurement limitation." },
@@ -2117,7 +2179,10 @@ const gmRelationUpdateSchema = {
     eventIndexes: gmEventIndexesSchema,
     summary: textSchema("Concise reason/current meaning of the relation state."),
   },
-  required: ["a", "b", "score", "status", "eventIndexes", "summary"],
+  // Status is deterministically derived from the canonical score. Legacy
+  // previews may still supply it, and conflicting declarations are rejected
+  // by the native diplomatic validator instead of silently changing scores.
+  required: ["a", "b", "score", "eventIndexes", "summary"],
   additionalProperties: false,
 };
 
@@ -2400,6 +2465,16 @@ export const GAME_MASTER_SCHEMA = {
   additionalProperties: false,
 };
 
+// The provider sees eventsJson only as text. Surface the two most frequently
+// rejected nested Stats requirements from the SAME authoritative native schema
+// instead of copying a second, drift-prone enum into prose.
+export const gameMasterEventTransportStatsContract = () => {
+  const schema = GAME_MASTER_SCHEMA.properties.events.items.properties.impacts.properties
+    .polityChanges.items.properties.statsEffects;
+  const causes = schema.properties.gdpCause.enum;
+  return `Within eventsJson, impacts.polityChanges[].statsEffects MUST be one ${schema.type.toUpperCase()} per polity change, never an array. gdpCause MUST be exactly one of ${causes.map((cause) => `"${cause}"`).join(", ")}; choose the causal category the event supports, not an invented synonym. Retain a dated, justified effect only when canonical changes are actually established.`;
+};
+
 // Provider transport: Gemini rejects very large/deep function declaration
 // schemas with HTTP 400 "Request contains an invalid argument." Keep the GM
 // transaction fully structured inside the app, but send it through a
@@ -2416,7 +2491,7 @@ export const GAME_MASTER_TRANSPORT_SCHEMA = {
     },
     modeReason: textSchema("Why this mode fits the GM request (one sentence); descriptive only."),
     summary: textSchema("Concise explanation of what the transaction would change if applied."),
-    eventsJson: textSchema("JSON array text for canonical event objects. Use [] when none."),
+    eventsJson: textSchema(`JSON array text for canonical event objects. Use [] when none. ${gameMasterEventTransportStatsContract()}`),
     territorialScopesJson: textSchema("JSON array text for exhaustive rendered base-geography territorial scopes. Use [] when none."),
     countryStatPatchesJson: textSchema("JSON array text for authoritative country Stats patches. Use [] when none."),
     storylineUpdatesJson: textSchema("JSON array text for persistent canonical world.storylines updates. Use [] when none."),
@@ -4328,6 +4403,17 @@ const normalizeEventShape = (entry) => {
     if (Array.isArray(impacts.createdChats)) impacts.createdChats = normalizeChatList(impacts.createdChats);
     event.impacts = impacts;
   }
+  // Some providers place these canonical impact fields beside the event.
+  // Preserve known, unambiguous arrays in their actual schema location;
+  // contradictory or malformed copies remain untouched and fail validation.
+  for (const key of ["actionIds", "createdChats"]) {
+    if (!Array.isArray(event[key])) continue;
+    if (event.impacts !== undefined && !isPlainRecord(event.impacts)) continue;
+    if (isPlainRecord(event.impacts) && Object.hasOwn(event.impacts, key)) continue;
+    event.impacts = { ...(isPlainRecord(event.impacts) ? event.impacts : {}),
+      [key]: key === "createdChats" ? normalizeChatList(event[key]) : event[key] };
+    delete event[key];
+  }
   return event;
 };
 
@@ -4612,6 +4698,15 @@ export const normalizeGameplayPayload = (taskKey, value) => {
   delete candidate.clear_actions;
   delete candidate.actionsResolved;
 
+  // Existing political claim text lines are sometimes transported as a JSON
+  // array. Join ONLY exact canonical ledger strings; no inference from object
+  // claims or malformed items. Strict political validation still owns meaning.
+  if (Array.isArray(candidate.politicalClaims) && candidate.politicalClaims.length <= 64
+    && candidate.politicalClaims.every((line) => typeof line === "string"
+      && /^[1-9][0-9]{0,2}~[^~\r\n]{1,120}~(?:election|government|coalition|leadership|system|parties)(?:,(?:election|government|coalition|leadership|system|parties))*$/.test(line))
+    && new Set(candidate.politicalClaims).size === candidate.politicalClaims.length) {
+    candidate.politicalClaims = candidate.politicalClaims.join("\n");
+  }
   if (Array.isArray(candidate.events)) candidate.events = candidate.events.map(normalizeEventShape);
   if (Array.isArray(candidate.diplomaticOutreach)) candidate.diplomaticOutreach = normalizeChatList(candidate.diplomaticOutreach);
   return candidate;

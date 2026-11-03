@@ -19,7 +19,7 @@ test('player and editor use one presentation renderer without writing numeric St
  assert.match(editor,/const dashboard = nationalDashboardForDisplay\(definition\);/);
  assert.match(player,/history=\{worldSnapshot\?\.countryStatsHistory/);
  assert.match(player,/MilitaryCard world=\{worldSnapshot\}/);
- assert.match(editor,/import StatsDashboard, \{ canShowDashboardBar, dashboardMetricFor \} from '\.\/StatsDashboard\.jsx'/);
+ assert.match(editor,/import StatsDashboard, \{ DashboardMilitaryPreview, canShowDashboardBar, dashboardMetricFor \} from '\.\/StatsDashboard\.jsx'/);
  assert.match(editor,/onResizeStart=\{\(event, widget, edge\) => start\(event, widget, edge\)\}/);
  assert.doesNotMatch(read('./StatsDashboard.jsx'),/writeWorldState|generateCountryStatSheet/);
 });
@@ -40,7 +40,7 @@ test('authoring uses one live panel renderer, explicit sample history and edge s
 test('classic presentation stays a faithful three-up player-width preview without hiding modern military',()=>{
  const player=read('./stats.jsx'),editor=read('./StatsDashboardEditor.jsx');
  const renderer=read('./StatsDashboard.jsx');
- assert.match(player,/dashboardPage === "details"/);
+ assert.match(player,/shouldShowStandaloneMilitaryCard\(visibleNationalDashboard, dashboardPage\)/);
  assert.match(player,/MilitaryCard world=\{worldSnapshot\}/);
  assert.match(editor,/Classic layout/);
  assert.match(editor,/structuredClone\(DEFAULT_NATIONAL_DASHBOARD\)/);
@@ -48,6 +48,45 @@ test('classic presentation stays a faithful three-up player-width preview withou
  assert.match(renderer,/dashboardColumnsForWidth/);
  assert.match(renderer,/dashboardRecordedChange/);
  assert.match(renderer,/widget\.style === 'heading'/);
+});
+
+test('mandatory Military readout identifies disabled supply mechanics instead of inventing resources', () => {
+ const player = read('./stats.jsx');
+ assert.match(player, /MILITARY_FIGURE_ORDER\.map\(\(key\) => \{/,
+   'all military rows remain visible in their stable order regardless of optional supply mechanics');
+ assert.match(player, /key === "resources" && !profile\.supplied/);
+ assert.match(player, /data-oh-war-resources-disabled/);
+ assert.match(player, /Supplies disabled/);
+ assert.match(player, /profile\.supplied && profile\.refill !== null/);
+ assert.match(player, /militaryProfile\(world, country\)/,
+   'the live military engine remains the only numeric source');
+});
+
+test('author preview reads scenario supply settings and displays the same disabled mechanic as the player', () => {
+ const library=read('./libraryBar.jsx'), editor=read('./StatsDashboardEditor.jsx'), renderer=read('./StatsDashboard.jsx');
+ assert.match(library, /StatsDashboardEditor value=\{statsValue\} onChange=\{onStatsChange\}\s+warSettings=\{formState\.warSettings\}/);
+ assert.match(editor, /warSettingsOf\(\{ warSettings \}\)\.mechanics\.supply/);
+ assert.match(editor, /sampleSuppliesEnabled=\{suppliesEnabled\}/);
+ assert.match(editor, /RequiredMilitaryPreview suppliesEnabled=\{suppliesEnabled\}/);
+ assert.match(renderer, /DashboardMilitaryPreview suppliesEnabled=\{sampleSuppliesEnabled\}/);
+ assert.match(renderer, /title === 'War resources' && !suppliesEnabled/);
+ assert.match(renderer, /Supplies disabled/);
+});
+
+test('military system readout is locked against editor deletion, relocation and clipboard workarounds', () => {
+ const editor=read('./StatsDashboardEditor.jsx');
+ assert.match(editor, /isRequiredMilitaryWidget\(widget\)/);
+ assert.match(editor, /if \(isRequiredMilitaryWidget\(widget\)\) \{/);
+ assert.match(editor, /editorButton\('Remove', \(\) => remove\(selected\.id\), isRequiredMilitaryWidget\(selected\)\)/);
+ assert.match(editor, /disabled=\{isRequiredMilitaryWidget\(selected\)\}/);
+ assert.match(editor, /shouldShowStandaloneMilitaryCard\(dashboard, page\)/,
+   'the editor must preview the same mandatory military fallback as the player');
+ assert.match(editor, /DashboardMilitaryPreview/);
+ assert.match(editor, /Required by Wars & Fronts/);
+ const player=read('./stats.jsx');
+ assert.match(player, /shouldShowStandaloneMilitaryCard\(visibleNationalDashboard, dashboardPage\)/);
+ assert.match(player, /MilitaryCard world=\{worldSnapshot\}/);
+ assert.match(read('./StatsDashboard.jsx'), /militaryCard \|\|/);
 });
 
 test('visual card property inspector and keyboard interactions are scoped to dashboard, not campaign state',()=>{
@@ -95,10 +134,25 @@ test('complete Details reuses existing live military formula and intelligence, w
  const renderer=read('./StatsDashboard.jsx');
  assert.match(player,/militaryCard=\{worldSnapshot \? <MilitaryCard world=\{worldSnapshot\}/);
  assert.match(player,/intelligence=\{intelligence\}/);
- assert.match(player,/widget.style === "military" && widget.page === "details"/);
- assert.match(editor,/sampleModules intelligence=\{58\}/);
+ assert.match(player,/shouldShowStandaloneMilitaryCard\(visibleNationalDashboard, dashboardPage\)/);
+ assert.doesNotMatch(player,/statSheetDefinition\.dashboard\.widgets/);
+ assert.match(editor,/sampleModules sampleSuppliesEnabled=\{suppliesEnabled\} intelligence=\{58\}/);
  assert.match(renderer,/function DashboardMilitaryPreview/);
  assert.match(renderer,/function DashboardBreakdown/);
  assert.match(renderer,/raw\?\.\[key\]/);
  assert.doesNotMatch(renderer,/militaryProfile|intelligenceOf|writeWorldState|saveGame\(/);
+});
+
+test('published canonical world updates refresh the already-visible country Statistics sheet', () => {
+ const source=read('./stats.jsx');
+ const start=source.lastIndexOf('const onWorldUpdated = (event) => {');
+ assert.notEqual(start,-1);
+ const end=source.indexOf('window.addEventListener("oh:world-updated"',start);
+ assert.ok(end>start);
+ const handler=source.slice(start,end);
+ assert.match(handler,/world\?\.countryStats\?\.\[targetCountry\]/);
+ assert.match(handler,/isValidStatSheet\(persisted, statSheetDefinition\)/);
+ assert.match(handler,/rememberSheet\(cacheKey,/);
+ assert.match(handler,/setState\(\(current\) => current\.status === "ready"/);
+ assert.doesNotMatch(handler,/writeWorldState\(|generateCountryStatSheet\(/);
 });

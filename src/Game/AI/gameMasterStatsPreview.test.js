@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { buildGameMasterStatsPreview } from "./gameMasterStatsPreview.js";
+import { buildGameMasterStatsPreview, reviewGameMasterEconomicPreview } from "./gameMasterStatsPreview.js";
 import { normalizeEvents } from "../../runtime/gameState.js";
 
 const world = {
@@ -84,11 +84,84 @@ test("empty or prose-only GM operations do not manufacture Stats changes", () =>
   assert.deepEqual(buildGameMasterStatsPreview({ world, events: [] }), { count: 0, rows: [] });
 });
 
+test("GM economic disclosure reports Economy-tagged events lacking typed native effects", () => {
+  const events = [
+    { title: "Texas oil output expands 10%", tags: ["Economy"], impacts: {} },
+    { title: "Kansas wheat harvest declines", tags: ["Economy"],
+      economicAccounting: { status: "unquantified", reason: "No country-level attribution established." },
+      impacts: { projectOps: [{ op: "create", name: "Farm support" }] } },
+    { title: "Pipeline outage", tags: ["Economy"], impacts: { polityChanges: [
+      { code: "United States", operation: "update",
+        statsEffects: { annualRealGrowthDelta: -0.15, durationDays: 30, gdpCause: "production", reason: "Evidence." } }] } },
+    { title: "Strategic security alert", tags: ["Politics"], impacts: {} },
+    { title: "Custom production series adjustment", tags: ["Economy"], impacts: { polityChanges: [
+      { code: "United States", operation: "update", statsEffects: { customStatDeltas: { steelOutput: 3 }, reason: "Evidence." } }] } },
+  ];
+  const original = structuredClone(events);
+  const notes = reviewGameMasterEconomicPreview(events, { mode: "world-intervention" });
+  assert.deepEqual(notes.map((note) => [note.eventIndex, note.title, note.declaredStatus]), [
+    [0, "Texas oil output expands 10%", "unspecified"],
+    [1, "Kansas wheat harvest declines", "unquantified"],
+    [4, "Custom production series adjustment", "unspecified"],
+  ]);
+  assert.equal(notes[1].reason, "No country-level attribution established.");
+  assert.deepEqual(events, original, "disclosure must never modify the generated transaction");
+  assert.deepEqual(reviewGameMasterEconomicPreview(events, { mode: "direct" }), [],
+    "Direct baseline corrections have separate authority");
+  assert.deepEqual(reviewGameMasterEconomicPreview([], { mode: "exact-event" }), []);
+});
+
+test("a non-Economy-tagged event with explicit economic accounting is disclosed before GM Apply", () => {
+  const events = [
+    { title: "Major flood relief authorized", tags: ["Disaster"],
+      economicAccounting: { status: "unquantified", reason: "No booked national Stats effect established." },
+      impacts: { projectOps: [{ op: "create", name: "Relief fund" }] } },
+    { title: "Cabinet appointment", tags: ["Politics"],
+      economicAccounting: { status: "none", reason: "Political appointment has no established economy effect." },
+      impacts: {} },
+    { title: "Railway disruption measured", tags: ["Disaster"],
+      economicAccounting: { status: "applied", reason: "Dated quantified output effect." },
+      impacts: { polityChanges: [{ code: "Alba", statsEffects: {
+        annualRealGrowthDelta: -1, durationDays: 14, reason: "Documented closure",
+      } }] } },
+  ];
+  const snapshot = structuredClone(events);
+  const notes = reviewGameMasterEconomicPreview(events, { mode: "world-intervention" });
+  assert.deepEqual(notes.map((note) => [note.eventIndex, note.title, note.declaredStatus]), [
+    [0, "Major flood relief authorized", "unquantified"],
+  ]);
+  assert.deepEqual(events, snapshot);
+});
+
+test("a population-only event cannot masquerade as an economic or fiscal GM mutation", () => {
+  const proposal = [{ title: "Migration programme", tags: ["Economy"], impacts: {
+    polityChanges: [{ code: "Alba", operation: "update", statsEffects: {
+      populationChange: 2_500, populationCause: "immigration", reason: "Documented arrivals",
+    } }],
+  } }];
+  assert.equal(reviewGameMasterEconomicPreview(proposal, { mode: "world-intervention" }).length, 1,
+    "a population change does not establish a GDP, growth, debt or fiscal effect");
+});
+
+test("a security-only change in an Economy-tagged event does not falsely count as GDP mutation", () => {
+  const events = [{ title: "Bank rescue", tags: ["Economy"], impacts: { polityChanges: [{
+    code: "Germany", operation: "update", statsEffects: { stabilityDelta: 3, reason: "Improved confidence." },
+  }] } }];
+  assert.equal(reviewGameMasterEconomicPreview(events).length, 1);
+});
+
 test("GM canonical preview attaches a separate read-only summary, not a new mutation", () => {
   const gameplay = readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
   const ui = readFileSync(new URL("../GameUI/cheats.jsx", import.meta.url), "utf8");
   assert.match(gameplay, /buildGameMasterStatsPreview\(\{/);
   assert.match(ui, /All Stats changes/);
+  assert.match(gameplay, /economicPreviewNotes = reviewGameMasterEconomicPreview\(events, \{ mode: effectiveMode \}\)/);
+  assert.match(ui, /data-gm-economic-disclosure="true"/);
+  assert.doesNotMatch(ui, /Economy-tagged event\(s\)/,
+    "Disaster-tagged events with typed economic accounting can also require disclosure");
+  assert.match(ui, /event\(s\) require economic accounting review/,
+    "GM preview must not mislabel the event category");
+  assert.match(ui, /Apply will not invent a GDP, growth or fiscal mutation/);
   assert.match(ui, /statsPreview/);
   assert.match(ui, /Current reading: \{row\.before\}.*Proposed dated effect: \{row\.proposed\}/,
     "temporary economic influence must not look like a baseline replacement");

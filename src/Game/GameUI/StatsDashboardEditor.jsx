@@ -1,11 +1,13 @@
 /*! Open Historia - visual scenario authoring for existing canonical national metrics. */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import StatsDashboard, { canShowDashboardBar, dashboardMetricFor } from './StatsDashboard.jsx';
+import StatsDashboard, { DashboardMilitaryPreview, canShowDashboardBar, dashboardMetricFor } from './StatsDashboard.jsx';
 import { NATIONAL_NATIVE_METRICS, normalizeStatSheetDefinition } from '../../runtime/statIndexDefinitions.js';
+import { warSettingsOf } from '../../runtime/warSettings.js';
 import { canPlaceDashboardWidget, DEFAULT_NATIONAL_DASHBOARD, DASHBOARD_CARD_SIZES,
   MAX_STAT_DASHBOARD_WIDGETS, DASHBOARD_ACCENTS, duplicateDashboardWidget, insertDashboardWidget,
   placeDashboardWidget, snapDashboardWidgetSize, updateDashboardWidget,
-  dashboardSystemStyle, dashboardSystemSource, nationalDashboardForDisplay } from '../../runtime/statsDashboardLayout.js';
+  dashboardSystemStyle, dashboardSystemSource, isRequiredMilitaryWidget,
+  nationalDashboardForDisplay, shouldShowStandaloneMilitaryCard } from '../../runtime/statsDashboardLayout.js';
 
 const labels = { gdp: 'GDP', gdpPerCapita: 'GDP per capita', totalPopulation: 'Population',
   inflation: 'Inflation', unemployment: 'Unemployment', publicDebt: 'Public debt',
@@ -40,8 +42,20 @@ const SIZE_WIDTH_LABELS = { 2: 'Compact', 3: 'Wide', 6: 'Full' };
 const SIZE_HEIGHT_LABELS = { 2: 'Tall', 3: 'Extra tall' };
 const textField = element => Boolean(element?.closest?.('input,textarea,select,[contenteditable="true"],[role="textbox"]'));
 
+// An authored layout may predate the mandatory native military presentation.
+// Show the same non-removable Details fallback the player receives, using only
+// illustrative editor values, never a second military power calculation.
+const RequiredMilitaryPreview = ({ suppliesEnabled }) => <section aria-label="Required military readout"
+  style={{ marginTop: 12, borderTop: '1px solid rgba(255,255,255,.09)', paddingTop: 9 }}>
+  <div style={{ fontSize: 10.5, fontWeight: 750, color: '#b7c5cd', marginBottom: 7 }}>
+    Required by Wars & Fronts
+  </div>
+  <DashboardMilitaryPreview suppliesEnabled={suppliesEnabled} />
+</section>;
 
-export default function StatsDashboardEditor({ value, onChange, advancedEditor = null }) {
+
+export default function StatsDashboardEditor({ value, onChange, warSettings = null, advancedEditor = null }) {
+  const suppliesEnabled = warSettingsOf({ warSettings }).mechanics.supply;
   const definition = useMemo(() => normalizeStatSheetDefinition(value), [value]);
   const dashboard = nationalDashboardForDisplay(definition);
   const [page, setPage] = useState('overview');
@@ -118,6 +132,9 @@ export default function StatsDashboardEditor({ value, onChange, advancedEditor =
     if (kind === 'bar' && !isBounded(available)) {
       setNotice('Progress bars require a bounded index or percentage (0-100).'); return;
     }
+    if (kind === 'military' && (page !== 'details' || dashboard.widgets.some(isRequiredMilitaryWidget))) {
+      setNotice('Military power is a required Details module. It cannot be duplicated or placed on Overview.'); return;
+    }
     const occupied = new Set(dashboard.widgets.map(row => row.id));
     let id = 'tile1'; for (let i = 1; occupied.has(id); i++) id = `tile${i + 1}`;
     const w = ['heading', 'change'].includes(kind) || dashboardSystemStyle(kind) ? 6 : kind === 'trend' ? 3 : 2;
@@ -138,6 +155,10 @@ export default function StatsDashboardEditor({ value, onChange, advancedEditor =
     commit(next);
   };
   const remove = id => {
+    const widget = dashboard?.widgets.find(row => row.id === id);
+    if (isRequiredMilitaryWidget(widget)) {
+      setNotice('Military power is required by Wars & Fronts and cannot be removed.'); return;
+    }
     // Keep keyboard focus inside the editor after the focused card disappears.
     editorRef.current?.querySelector('[data-dashboard-canvas]')?.focus({ preventScroll: true });
     commit({ ...dashboard, widgets: dashboard.widgets.filter(widget => widget.id !== id) });
@@ -145,11 +166,17 @@ export default function StatsDashboardEditor({ value, onChange, advancedEditor =
   };
   const copyCard = (widget = selected) => {
     if (!widget) return;
+    if (isRequiredMilitaryWidget(widget)) {
+      setNotice('Military power is a required system module, not a duplicable statistic.'); return;
+    }
     clipboardRef.current = { ...widget };
     setNotice('Card copied. Paste it on either tab.');
   };
   const pasteCard = (template = clipboardRef.current) => {
     if (!dashboard || !template) { setNotice('Select a card to copy first.'); return; }
+    if (isRequiredMilitaryWidget(template)) {
+      setNotice('Military power is a required system module, not a duplicable statistic.'); return;
+    }
     // The clipboard holds only presentation metadata, never a national reading.
     const result = insertDashboardWidget(dashboard, template, page);
     if (!result) { setNotice('No room for the pasted card, or the dashboard is full.'); return; }
@@ -157,12 +184,18 @@ export default function StatsDashboardEditor({ value, onChange, advancedEditor =
   };
   const duplicateCard = (widget = selected) => {
     if (!widget || !dashboard) return;
+    if (isRequiredMilitaryWidget(widget)) {
+      setNotice('Military power is a required system module, not a duplicable statistic.'); return;
+    }
     const result = duplicateDashboardWidget(dashboard, widget.id);
     if (!result) { setNotice('No room to duplicate this card.'); return; }
     commit(result.dashboard); setSelectedId(result.id);
   };
   const cutCard = (widget = selected) => {
     if (!widget) return;
+    if (isRequiredMilitaryWidget(widget)) {
+      setNotice('Military power is required by Wars & Fronts and cannot be removed.'); return;
+    }
     clipboardRef.current = { ...widget };
     remove(widget.id);
   };
@@ -204,6 +237,9 @@ export default function StatsDashboardEditor({ value, onChange, advancedEditor =
   };
   const changeTab = (widget, nextPage) => {
     if (widget.page === nextPage) return;
+    if (isRequiredMilitaryWidget(widget)) {
+      setNotice('Military power is required on Details and cannot be moved to another tab.'); return;
+    }
     const siblings = dashboard.widgets.filter(w => w.id !== widget.id);
     for (let y = 0; y <= 40; y++) for (let x = 0; x <= 6 - widget.w; x++) {
       const moved = { ...widget, page: nextPage, x, y };
@@ -303,6 +339,7 @@ export default function StatsDashboardEditor({ value, onChange, advancedEditor =
       <div>
         <strong style={{ fontSize: 15 }}>Statistics dashboard</strong>
         <div style={{ marginTop: 4, fontSize: 12, color: '#9ea8ae' }}>Design the national panel. Metrics keep their existing values.</div>
+        <div style={{ marginTop: 4, fontSize: 11, color: '#b1c5ca' }}>Military power is required by Wars & Fronts and cannot be removed.</div>
       </div>
       {!dashboard ? editorButton('Customize dashboard', enable)
         : <div style={{ display: 'flex', gap: 7 }}>
@@ -350,13 +387,14 @@ export default function StatsDashboardEditor({ value, onChange, advancedEditor =
           <div style={{ border: '1px solid rgba(255,255,255,.09)', borderRadius: 11, padding: 10,
             background: '#15191d', overflowX: 'auto' }}>
             <StatsDashboard dashboard={dashboard} definition={definition} sheet={sampleSheet} history={sampleHistory}
-              page={page} editable sampleModules intelligence={58} selectedId={selectedId} onWidgetSelect={setSelectedId}
+              page={page} editable sampleModules sampleSuppliesEnabled={suppliesEnabled} intelligence={58} selectedId={selectedId} onWidgetSelect={setSelectedId}
               previewWidget={draft} invalidWidget={invalid} onPointerStart={start}
               onResizeStart={(event, widget, edge) => start(event, widget, edge)}
               onPointerMove={move} onPointerEnd={end} onPointerCancel={cancel}
               onWidgetAction={editWidget}
               onWidgetDoubleClick={id => { setSelectedId(id); setTimeout(() => metricSelectRef.current?.focus(), 0); }}
               onWidgetContextMenu={onCardContextMenu} />
+            {page === 'details' && shouldShowStandaloneMilitaryCard(dashboard, page) && <RequiredMilitaryPreview suppliesEnabled={suppliesEnabled} />}
           </div>
           {selected && <div style={{ marginTop: 12, background: '#22282d', border: '1px solid rgba(255,255,255,.09)',
             borderRadius: 10, padding: 12 }}>
@@ -364,8 +402,8 @@ export default function StatsDashboardEditor({ value, onChange, advancedEditor =
               <div><strong style={{ fontSize: 13 }}>Card settings</strong>
                 <div style={{ fontSize: 11, color: '#a9b2b8', marginTop: 3 }}>Change this card without adding another one.</div></div>
               <div style={{ display:'flex', gap: 6 }}>
-                {editorButton('Duplicate', () => duplicateCard(selected))}
-                {editorButton('Remove', () => remove(selected.id))}
+                {editorButton('Duplicate', () => duplicateCard(selected), isRequiredMilitaryWidget(selected))}
+                {editorButton('Remove', () => remove(selected.id), isRequiredMilitaryWidget(selected))}
               </div>
             </div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 9, marginTop: 10, alignItems: 'flex-end' }}>
@@ -374,7 +412,7 @@ export default function StatsDashboardEditor({ value, onChange, advancedEditor =
                 <input value={selected.label || ''} maxLength={60} style={{ ...control, width: '100%' }}
                   onChange={event => { const title = event.target.value; if (title.trim()) editWidget(selected.id, {label: title.trim()}); }} />
               </label> : dashboardSystemStyle(selected.style) ? <><div style={{fontSize:12,color:'#b9c5ca',padding:'7px 0'}}>{systemPresentations.find(([key])=>key===selected.style)?.[1]}</div>
-                <label style={{flex:'1 1 100px'}}><span style={labelStyle}>Tab</span><select value={selected.page} aria-label="Widget tab" style={{...control,width:'100%'}} onChange={e=>changeTab(selected,e.target.value)}>{choosePage.map(([key,text])=><option value={key} key={key}>{text}</option>)}</select></label></> : <>
+                <label style={{flex:'1 1 100px'}}><span style={labelStyle}>Tab</span><select value={selected.page} aria-label="Widget tab" disabled={isRequiredMilitaryWidget(selected)} style={{...control,width:'100%'}} onChange={e=>changeTab(selected,e.target.value)}>{choosePage.map(([key,text])=><option value={key} key={key}>{text}</option>)}</select></label></> : <>
               <label style={{ flex: '1 1 135px' }}><span style={labelStyle}>Metric</span>
                 <select ref={metricSelectRef} value={selected.source} aria-label="Selected card metric" style={{ ...control, width: '100%' }}
                   onChange={event => {
@@ -438,6 +476,8 @@ export default function StatsDashboardEditor({ value, onChange, advancedEditor =
               ['Paste', () => pasteCard()],
               ['Remove', () => remove(contextMenu.id)]].map(([text,action]) =>
               <button key={text} type="button" role="menuitem" style={{...control,textAlign:'left',minWidth:145}}
+                disabled={isRequiredMilitaryWidget(dashboard.widgets.find(w=>w.id===contextMenu.id))
+                  && ['Copy card', 'Duplicate', 'Remove'].includes(text)}
                 onClick={()=>{action();setContextMenu(null);}}>{text}</button>)}
           </div>}
         </div>
@@ -451,7 +491,8 @@ export default function StatsDashboardEditor({ value, onChange, advancedEditor =
             <div style={{ fontSize: 12.5, fontWeight: 800, color: '#f1f5f9' }}>Economy</div>
             <div style={{ fontSize: 10.5, color: '#a6adaf', marginTop: 3, marginBottom: 12 }}>Sample · January 1912</div>
             <StatsDashboard dashboard={dashboard} definition={definition} sheet={sampleSheet}
-              history={sampleHistory} page={page} sampleModules intelligence={58} />
+              history={sampleHistory} page={page} sampleModules sampleSuppliesEnabled={suppliesEnabled} intelligence={58} />
+            {page === 'details' && shouldShowStandaloneMilitaryCard(dashboard, page) && <RequiredMilitaryPreview suppliesEnabled={suppliesEnabled} />}
             <div style={{ marginTop: 13, borderRadius: 10, border: '1px solid #31465d',
               background: '#1b2530', padding: '0.7rem 0.8rem', fontSize: 12, fontWeight: 700 }}>
               📊 Advanced statistics <span style={{ float: 'right' }}>↗</span>

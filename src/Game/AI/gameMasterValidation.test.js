@@ -8,6 +8,8 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { applyEventImpactsToWorld } from "../../runtime/gameState.js";
+import { getPoliticalProfile } from "../../runtime/politicalActors.js";
 
 import {
   gameMasterPolityKey,
@@ -17,6 +19,9 @@ import {
   validateGameMasterChronology,
   validateGameMasterPolityLifecycle,
   validateGameMasterStatsAuthority,
+  validateGameMasterEconomicEventAccounting,
+  validateGameMasterPoliticalStatsAuthority,
+  validateGameMasterNativeStatAliasWrites,
   validateGameMasterDirectMutation,
   validateGameMasterFiniteEconomicInfluences,
   verifyGameMasterTerritoryPostconditions,
@@ -63,6 +68,125 @@ test("GM intervention must not turn a financial catastrophe into an absolute GDP
   assert.match(validateGameMasterStatsAuthority(populationEvent, { mode: "world-intervention" }),
     /absolute native-clock-owned Stats/,
     "population must not bypass the same event/baseline boundary");
+});
+
+test("GM cannot fork canonical Political World leader/government through legacy country Statistics", () => {
+  const world = {
+    politicalActors: { schemaVersion: 1, byPolity: {
+      Germany: { polityKey: "Germany", government: {
+        form: "parliamentary republic", headOfState: { name: "Incumbent President" },
+      }, leader: { name: "Incumbent President" } },
+    } },
+    countryStats: { Germany: { leader: "Incumbent President", government: "parliamentary republic" } },
+  };
+  const direct = (patch, country = "Germany") => ({ countryStatPatches: [{ country, patch }] });
+  assert.match(validateGameMasterPoliticalStatsAuthority(direct({ leader: "New President" }), world),
+    /countryStatPatches\[0\]\.patch\.leader.*Political World actor/);
+  assert.match(validateGameMasterPoliticalStatsAuthority(direct({ government: "military junta" }), world),
+    /countryStatPatches\[0\]\.patch\.government.*Political World actor/);
+  assert.match(validateGameMasterPoliticalStatsAuthority(direct({ leader: "Incumbent President" }), world),
+    /legacy Statistics display mirror/, "even a matching duplicate would establish a second writer");
+  assert.equal(validateGameMasterPoliticalStatsAuthority(direct({ stability: 63 }), world), "",
+    "non-political national Stats edits retain the Direct authority");
+  const event = (stats) => ({ events: [{ impacts: { polityChanges: [
+    { operation: "update", code: "Germany", stats },
+  ] } }] });
+  assert.match(validateGameMasterPoliticalStatsAuthority(event({ leader: "New President" }), world),
+    /events\[0\]\.impacts\.polityChanges\[0\]\.stats\.leader.*politicalActorOps/);
+  assert.match(validateGameMasterPoliticalStatsAuthority(event({ government: "interim cabinet" }), world),
+    /events\[0\]\.impacts\.polityChanges\[0\]\.stats\.government.*politicalActorOps/);
+  assert.equal(validateGameMasterPoliticalStatsAuthority(event({ indices: { military: 62 } }), world), "");
+  assert.equal(validateGameMasterPoliticalStatsAuthority({
+    ...event({ stability: 65 }),
+    events: [{ impacts: { politicalActorOps: [{
+      op: "replace-leader", polityKey: "Germany", argsJson: "{}",
+    }] } }],
+  }, world), "", "the native Political Actor operation remains independently available");
+
+  const legacyOnly = { politicalActors: { schemaVersion: 1, byPolity: {} },
+    countryStats: world.countryStats };
+  assert.equal(validateGameMasterPoliticalStatsAuthority(direct({ leader: "Historical leader" }), legacyOnly), "",
+    "a scenario without Political World preserves the legacy Stats field");
+  assert.equal(validateGameMasterPoliticalStatsAuthority(event({ government: "old cabinet" }), legacyOnly), "");
+  assert.equal(validateGameMasterPoliticalStatsAuthority(direct({ leader: "Italian leader" }, "Italy"), world), "",
+    "one polity's Political World never blocks unrelated legacy-only polities");
+  const distinctPolities = { polityOverrides: {
+    Russia: { code: "Russia", name: "Russia" },
+    "Russian Federation": { code: "Russian Federation", name: "Russian Federation" },
+  }, politicalActors: { schemaVersion: 1, byPolity: {
+    "Russian Federation": { polityKey: "Russian Federation", leader: { name: "Federation incumbent" } },
+  } } };
+  assert.equal(validateGameMasterPoliticalStatsAuthority(direct({ leader: "Separate Russia leader" }, "Russia"),
+    distinctPolities), "",
+  "an independently registered same-stock-base polity must not borrow another actor's authority");
+  assert.match(validateGameMasterPoliticalStatsAuthority(
+    direct({ leader: "Federation challenger" }, "Russian Federation"), distinctPolities),
+    /Political World actor/);
+  assert.throws(() => applyEventImpactsToWorld({
+    colors: {}, world,
+    events: [{ date: "2016-01-15", title: "Synthetic bypass demonstration",
+      description: "An unchecked legacy edit must now fail at the common native writer.",
+      impacts: { polityChanges: [{ operation: "update", code: "Germany",
+        stats: { leader: "New President" } }] } }],
+  }), /cannot change Germany Statistics: leader is a legacy Statistics display mirror/,
+  "native event application must fail closed even if GM preflight or another caller is bypassed");
+  assert.throws(() => applyEventImpactsToWorld({
+    colors: {}, world,
+    events: [{ date: "2016-01-15", title: "Cabinet rewrite",
+      description: "An unchecked government rewrite must also fail in native code.",
+      impacts: { polityChanges: [{ operation: "update", code: "Germany",
+        stats: { government: "military junta" } }] } }],
+  }), /government is a legacy Statistics display mirror/);
+
+  const authoritative = applyEventImpactsToWorld({
+    colors: {}, world,
+    events: [{ date: "2016-01-15", title: "Presidential succession",
+      description: "An actual Political Actor operation establishes a new officeholder.",
+      impacts: { politicalActorOps: [{ op: "replace-leader", polityKey: "Germany",
+        argsJson: JSON.stringify({ office: "headOfState", leader: { name: "New President" } }) }] } }],
+  }).world;
+  assert.equal(getPoliticalProfile(authoritative, "Germany")?.leader?.name, "New President");
+  assert.equal(authoritative.countryStats.Germany.leader, "New President",
+    "accepted canonical Political World mutation still projects into existing Statistics");
+  const legacyOnlyEvent = applyEventImpactsToWorld({ colors: {}, world: legacyOnly,
+    events: [{ date: "2016-01-15", title: "Legacy-only cabinet change",
+      description: "No Political Actor exists for this campaign.",
+      impacts: { polityChanges: [{ operation: "update", code: "Germany",
+        stats: { government: "historical cabinet" } }] } }],
+  }).world;
+  assert.equal(legacyOnlyEvent.countryStats.Germany.government, "historical cabinet",
+    "native writer preserves old campaigns without Political World");
+  assert.deepEqual(world.countryStats.Germany,
+    { leader: "Incumbent President", government: "parliamentary republic" },
+    "preview guards do not write either canonical ledger");
+  const source = readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
+  assert.match(source, /const politicalStatsAuthorityError = validateGameMasterPoliticalStatsAuthority\(candidate, world\)/);
+  assert.match(source, /const validationError = await validateGameMasterPreviewPayload\(candidate, \{/);
+});
+
+test("GM rejects native-metric lookalikes in customStats before Preview and Apply", () => {
+  const direct = { countryStatPatches: [{ country: "United States",
+    patch: { stability: 65, customStats: { foodAutonomy: 70 } } }] };
+  assert.match(validateGameMasterNativeStatAliasWrites(direct),
+    /patch.customStats.foodAutonomy conflicts with canonical native indices.foodAutonomy/);
+  const event = { events: [{ impacts: { polityChanges: [{ operation: "update",
+    code: "United States", stats: { customStats: { foodAutonomy: 70 } } }] } }] };
+  assert.match(validateGameMasterNativeStatAliasWrites(event),
+    /stats.customStats.foodAutonomy conflicts/);
+  const effect = { events: [{ impacts: { polityChanges: [{ operation: "update",
+    code: "United States", statsEffects: { customStatDeltas: { energyAutonomy: -10 } } }] } }] };
+  assert.match(validateGameMasterNativeStatAliasWrites(effect),
+    /customStatDeltas.energyAutonomy conflicts with canonical native indices.energyAutonomy/);
+  assert.equal(validateGameMasterNativeStatAliasWrites({ countryStatPatches: [{
+    patch: { customStats: { cropReliability: 70 } } }] }), "");
+  assert.equal(validateGameMasterNativeStatAliasWrites({ events: [{ impacts: { polityChanges: [{
+    stats: { indices: { foodAutonomy: 70 } },
+    statsEffects: { indexDeltas: { foodAutonomy: -10 } },
+  }] } }] }), "");
+  const source = readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
+  assert.match(source, /const nativeAliasError = validateGameMasterNativeStatAliasWrites\(candidate\)/);
+  assert.match(source, /nativeAliasError && !\(await loadStatSheetDefinition\(\)\)\?\.custom/);
+  assert.match(source, /const validationError = await validateGameMasterPreviewPayload\(candidate, \{/);
 });
 
 test("GM Direct mode must reject the real Auto GDP-preview no-op, without weakening valid corrections", () => {
@@ -300,4 +424,84 @@ test("the state fingerprint changes when anything the preview read changes", () 
     events: [...events, { id: "e2", date: "1915-06-01", title: "New", description: "" }],
   }), base, "an event was added");
   assert.notEqual(gameMasterStateFingerprint({ game: { ...game, gameDate: "1915-06-02" }, world, events }), base, "the date moved");
+});
+
+test("GM Economy events must declare economic accountability before Preview and Apply", () => {
+  const proposal = (event) => ({ events: [event] });
+  const economy = { date: "2016-02-01", title: "Industrial output contracts",
+    tags: ["Economy"], description: "Measured factory disruption.", impacts: {} };
+  for (const mode of ["exact-event", "world-intervention"]) {
+    assert.match(validateGameMasterEconomicEventAccounting(proposal(economy), { mode }),
+      /events\[0\]\.economicAccounting.*must.*(applied|unquantified|none)/i);
+    assert.match(validateGameMasterEconomicEventAccounting(proposal({
+      ...economy, impacts: { projectOps: [{ op: "create", name: "Reconstruction" }] },
+      economicAccounting: { status: "applied", reason: "GDP fell after the disruption." },
+    }), { mode }), /applied.*without.*typed/i,
+    "a Project and economic prose cannot masquerade as an applied native effect");
+    assert.equal(validateGameMasterEconomicEventAccounting(proposal({
+      ...economy,
+      economicAccounting: { status: "unquantified", reason: "Factory closures are verified, but the GDP estimate is not." },
+    }), { mode }), "", "do not invent GDP just to accept an unquantified event");
+    assert.equal(validateGameMasterEconomicEventAccounting(proposal({
+      ...economy, economicAccounting: { status: "none", reason: "A draft bill was discussed but not enacted." },
+    }), { mode }), "", "a proposal with no enacted consequences is not an economic write");
+  }
+  assert.equal(validateGameMasterEconomicEventAccounting(proposal(economy), { mode: "direct" }), "",
+    "Direct administrative corrections retain their separate source authority");
+});
+
+test("GM economic status cannot contradict national typed effects, while independent metrics remain usable", () => {
+  const gdp = { operation: "update", code: "Alba", statsEffects: {
+    annualRealGrowthDelta: -0.3, durationDays: 30,
+    gdpCause: "production", reason: "Observed production shutdown for 30 days.",
+  } };
+  const custom = { operation: "update", code: "Alba", statsEffects: {
+    customStatDeltas: { steelOutput: -3 }, reason: "Measured factory steel output falls.",
+  } };
+  const proposal = (status, changes, tags = ["Economy"]) => ({ events: [{
+    date: "2016-02-01", title: "Factory strike", tags,
+    economicAccounting: { status, reason: "National production consequences are separately assessed." },
+    impacts: { polityChanges: changes },
+  }] });
+  assert.equal(validateGameMasterEconomicEventAccounting(proposal("applied", [gdp]), {
+    mode: "world-intervention",
+  }), "");
+  assert.match(validateGameMasterEconomicEventAccounting(proposal("unquantified", [gdp]), {
+    mode: "world-intervention",
+  }), /must be applied/i);
+  assert.match(validateGameMasterEconomicEventAccounting(proposal("none", [gdp]), {
+    mode: "exact-event",
+  }), /must be applied/i);
+  assert.equal(validateGameMasterEconomicEventAccounting(proposal("applied", [custom]), {
+    mode: "world-intervention",
+  }), "", "a measured custom series is a valid applied typed effect, not proof of macro GDP");
+  assert.equal(validateGameMasterEconomicEventAccounting(proposal("unquantified", [custom]), {
+    mode: "world-intervention",
+  }), "", "national GDP can remain unquantified when a separate custom metric moves");
+  assert.match(validateGameMasterEconomicEventAccounting(proposal("applied", [], ["Disaster"]), {
+    mode: "world-intervention",
+  }), /applied.*without.*typed/i, "Disaster tags cannot bypass false-applied GM accounting");
+  assert.equal(validateGameMasterEconomicEventAccounting({ events: [{
+    date: "2016-02-01", title: "Cabinet reshuffle", tags: ["Politics"], impacts: {},
+  }] }, { mode: "world-intervention" }), "");
+});
+
+test("GM accounting validation preserves strict national exposure evidence and shares Preview/Apply", () => {
+  const declaration = { status: "unquantified",
+    reason: "National industrial output impact cannot be quantified with available sources.",
+    exposures: [{ polity: "Alba", channel: "production", exposure: "direct",
+      evidence: "Documented nationwide plant closures disrupt manufacturing deliveries over several weeks." }] };
+  const proposal = (accounting) => ({ events: [{
+    date: "2016-02-01", title: "Factory shutdown", tags: ["Economy"], economicAccounting: accounting,
+    impacts: {},
+  }] });
+  assert.equal(validateGameMasterEconomicEventAccounting(proposal(declaration),
+    { mode: "world-intervention" }), "");
+  assert.match(validateGameMasterEconomicEventAccounting(proposal({
+    ...declaration, exposures: [declaration.exposures[0], declaration.exposures[0]],
+  }), { mode: "world-intervention" }), /economicAccounting.*valid country-specific exposure evidence/i);
+  const source = readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
+  assert.match(source, /validateGameMasterEconomicEventAccounting\(candidate, \{ mode \}\)/);
+  assert.match(source, /const validationError = await validateGameMasterPreviewPayload\(candidate, \{/,
+    "Apply must call the same native preflight as Preview");
 });

@@ -1015,6 +1015,18 @@ export const ensurePoliticalProfile = (world, polityKey) => {
 // form and head of state in the old sheet vocabulary when such a sheet already
 // exists. Head of government is intentionally NOT collapsed into `leader`: the old
 // field is singular and therefore cannot safely represent both offices.
+// Canonical Political World owns political officeholders. Legacy national Stats
+// may still hold its descriptive mirror, but an event must never edit that
+// mirror independently once the polity has its own Political Actor. This pure
+// contract is shared by GM Preview/Apply validation and the native event writer.
+export function legacyPoliticalStatsWriteError(world, polityKey, patch) {
+    if (!patch || typeof patch !== "object" || Array.isArray(patch)) return "";
+    const field = ["leader", "government"].find((key) =>
+        Object.prototype.hasOwnProperty.call(patch, key));
+    if (!field || !getPoliticalProfile(world, polityKey)) return "";
+    return `${field} is a legacy Statistics display mirror, but this polity already has a canonical Political World actor. Update its leader/government through politicalActorOps; the native writer will project the result to an existing Stats sheet.`;
+}
+
 export function buildPoliticalActorLegacyStatsProjection(world, polityKey) {
     const actor = getPoliticalProfile(world, polityKey);
     if (!actor || typeof actor !== "object") return {};
@@ -1032,4 +1044,15 @@ export function buildPoliticalActorLegacyStatsProjection(world, polityKey) {
     if (form) projection.government = form;
     if (headOfState) projection.leader = headOfState;
     return projection;
+}
+
+export function legacyPoliticalStatsProjectionWriteError(world, polityKey, patch) {
+    const authority = legacyPoliticalStatsWriteError(world, polityKey, patch);
+    if (!authority) return "";
+    const projection = buildPoliticalActorLegacyStatsProjection(world, polityKey);
+    const divergent = ["leader", "government"].find((field) =>
+        Object.prototype.hasOwnProperty.call(patch, field)
+        && (!Object.prototype.hasOwnProperty.call(projection, field)
+            || patch[field] !== projection[field]));
+    return divergent ? "Cannot write Statistics " + divergent + ": " + authority : "";
 }

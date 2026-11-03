@@ -120,6 +120,36 @@ const place = async (gazetteer, unitOps, { world = {}, event = { title: "The squ
 };
 const atSea = (gazetteer, unit) => Number.isFinite(unit.lng) && Number.isFinite(unit.lat) && gazetteer.regionAt([unit.lng, unit.lat]) === null;
 
+test("GM strict named placement refuses unknown structure location instead of keeping guessed coordinates", async () => {
+    const gazetteer = continent(LONGLAND);
+    const marker = { name: "Provincial Recovery Centre", kind: "facility", ownerCode: "Longland",
+        at: "Unlisted Village, Longland", lng: 25, lat: 25 };
+    const response = await placementPass(gazetteer)([{ event: { title: "The centre is built" },
+        impacts: { markerOps: [{ op: "build", marker }] }, path: "$.events[0].impacts" }],
+        {}, { strictNamedPlacement: true });
+    assert.match(response.error || "", /markerOps.*named.*cannot be verified/i);
+    assert.equal(marker.at, "Unlisted Village, Longland", "refused GM preview retains its authored place");
+    assert.deepEqual([marker.lng, marker.lat], [25, 25], "refusal does not claim to relocate the facility");
+});
+
+test("GM strict named placement honors an exact known map place instead of conflicting coordinates", async () => {
+    const gazetteer = continent(LONGLAND);
+    const marker = { name: "Regional Command Centre", kind: "facility", ownerCode: "Longland",
+        at: "Centre", lng: 25, lat: 25 };
+    const response = await placementPass(gazetteer)([{ event: { title: "The centre is built" },
+        impacts: { markerOps: [{ op: "build", marker }] }, path: "$.events[0].impacts" }],
+        {}, { strictNamedPlacement: true });
+    assert.equal(response.error, undefined);
+    assert.equal(marker.at, undefined);
+    assert.equal(gazetteer.regionAt([marker.lng, marker.lat])?.name, "Centre");
+});
+
+test("the GM preflight alone enables strict named marker placement", () => {
+    assert.match(source, /const worldChangeError = await validateGeneratedWorldChanges\(candidate, world, \{\s*strictTransfers: true,\s*strictNamedPlacement: true,/);
+    assert.match(source, /if \(!resolvedRegionIdsOnly\) \{\s*const placement = await resolvePlacements\(containers, world, \{ receipt, renderedRegions, lookupContext, strictNamedPlacement \}\);\s*if \(placement\?\.error\) return placement\.error;/);
+    assert.match(source, /strictNamedPlacement = false/);
+});
+
 test("a new fleet given no place is put to sea off its owner's own coast, not dropped", async () => {
     const gazetteer = continent(LONGLAND);
     const op = spawn();

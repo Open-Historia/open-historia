@@ -9,6 +9,7 @@ import { normalizeStatsCrisisEstimate, estimateGrowthLimit } from "./statsCrisis
 import { normalizeStatsEconomicEventAccounting } from "./statsEconomicEventAccounting.js";
 import { indexRetainedEconomicAssessments } from "./statsEconomicCoverage.js";
 import { normalizeStatsEventReceipts, remainingStatsRecoveryLosses } from "./statsEventReceipts.js";
+import { fiscalSourceDateOf } from "./statsFiscalClock.js";
 import { normalizeCountryStatEconomicInfluences, COUNTRY_STATS_MAX_ECONOMIC_INFLUENCES } from "./countryStats.js";
 import { MAX_STAT_INDICES, MAX_CUSTOM_STATS, STAT_INDEX_KEY_PATTERN, normalizeStatSheetDefinition } from "./statIndexDefinitions.js";
 
@@ -230,6 +231,11 @@ export const planStatsEventEffect = ({ effect, sheet, absoluteStats = null, stat
     const amount = effect.debtFinancedOutlayPercentGdp;
     const debt = sheet.economy?.publicDebt;
     const economicGdp = sheet.economy?.gdp;
+    const fiscalSourceDate = fiscalSourceDateOf(sheet);
+    if (isCanonicalGameDate(fiscalSourceDate) && isCanonicalGameDate(eventDate)
+      && compareGameDates(eventDate, fiscalSourceDate) < 0) {
+      throw new Error("Debt-financed Statistics outlay cannot precede its established fiscal assessment");
+    }
     if (!isCanonicalGameDate(eventDate) || !DEBT_OUTLAY_CAUSES.has(effect.debtFinancedOutlayCause)
       || typeof amount !== "number" || !Number.isFinite(amount)
       || amount < 0.0001 || amount > 5

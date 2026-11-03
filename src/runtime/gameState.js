@@ -9,6 +9,8 @@ import { normalizePeaceOffers, normalizePeaceTreaties, normalizeReparations } fr
 import { normalizeWarWeariness } from "./warWeariness.js";
 import { normalizeWarResources } from "./warResources.js";
 import { normalizeMilitaryExpenditureCommitments, settleMilitaryMilestonePayments } from "./militaryExpenditureCommitments.js";
+import { normalizeFiscalTransactions, applyFiscalEventOps } from "./fiscalTransactions.js";
+import { normalizeFiscalTaxPolicies, advanceFiscalTaxPolicyClock } from "./fiscalTaxPolicies.js";
 import { normalizeFrontPersonnel } from "./fronts/personnelReserve.js";
 import { normalizeAttrition } from "./attrition.js";
 import { eraSettingOf, normalizeWarSettings } from "./warSettings.js";
@@ -54,6 +56,8 @@ import { normalizePowerStatus } from "./powerStatus.js";
 import { normalizeInstitutionLifecycleImpactOp } from "./institutionLifecycleCore.js";
 import {
   buildPoliticalActorLegacyStatsProjection,
+  legacyPoliticalStatsProjectionWriteError,
+  legacyPoliticalStatsWriteError,
   getPoliticalProfileKey,
   normalizePoliticalActors,
   POLITICAL_ACTORS_SCHEMA_VERSION,
@@ -295,6 +299,11 @@ export const WORLD_DEFAULTS = {
   warResources: [],
   // Scenario-priced military project obligations; not a second national debt ledger.
   militaryExpenditureCommitments: [],
+  // Dated civilian fiscal authorizations and already-budgeted payment receipts.
+  // This does not duplicate the native GDP, debt or annual deficit owners.
+  fiscalTransactions: [],
+  // Bounded nominal tax relief forecasts, independent of national GDP/debt.
+  fiscalTaxPolicies: [],
   // What the weather and being cut off have cost each country at war (attrition.js).
   attrition: [],
   // How the scenario's wars are fought (warSettings.js): null where it says nothing.
@@ -3565,6 +3574,7 @@ const normalizeEventImpacts = (value, event = null) => {
     return {
       actionIds: [],
       createdChats: [],
+      fiscalOps: [],
       groupOps: [],
       institutionLifecycleOps: [],
       markerOps: [],
@@ -3580,9 +3590,17 @@ const normalizeEventImpacts = (value, event = null) => {
     };
   }
 
+  // Do not silently drop malformed fiscal effects the way decorative/legacy
+  // event fields may be normalized. A missing payment must never look accepted.
+  if (Object.hasOwn(value, "fiscalOps")
+    && (!Array.isArray(value.fiscalOps) || value.fiscalOps.length > 8)) {
+    throw new Error("Invalid fiscal operations in accepted event");
+  }
   return {
     actionIds: normalizeActionParticipants(value.actionIds),
     createdChats: normalizeArray(value.createdChats).map(normalizeCreatedChat).filter(Boolean),
+    fiscalOps: normalizeArray(value.fiscalOps).map((row) => row && typeof row === "object"
+      && !Array.isArray(row) ? { ...row } : row),
     // Groups the event creates, changes or erases, and the regions they take or
     // lose (runtime/groups.js).
     groupOps: normalizeArray(value.groupOps).map(normalizeGroupOp).filter(Boolean),
@@ -4504,6 +4522,12 @@ export const normalizeWorldState = (world) => {
     // programme sitting in the Foreign column with both of its controls gone. Idempotent,
     // so a board already correct reads back unchanged.
     militaryExpenditureCommitments: normalizeMilitaryExpenditureCommitments(nextWorld.militaryExpenditureCommitments),
+    fiscalTransactions: normalizeFiscalTransactions(nextWorld.fiscalTransactions).map((entry) => ({
+      ...entry, polity: resolveOwner(entry.polity) || entry.polity,
+    })),
+    fiscalTaxPolicies: normalizeFiscalTaxPolicies(nextWorld.fiscalTaxPolicies).map((entry) => ({
+      ...entry, polity: resolveOwner(entry.polity) || entry.polity,
+    })),
     projects: normalizeProjects(nextWorld.projects).map((project) => {
       const owner = resolveOwner(project.ownerCode);
       return owner === project.ownerCode ? project : { ...project, ownerCode: owner };
@@ -5352,6 +5376,13 @@ const previewPolityOverrides = (polityOverrides, pendingChanges) => {
 // instead of editing the UI-shaped fields directly.
 export const applyCountryStatPatchToWorld = (world, canonicalName, patch, options = {}) => {
   if (!world || typeof world !== "object" || !canonicalName) return null;
+  // This public merger is also used by direct Stats authoring, legacy
+  // reassessments and project effects. The event writer's Political World guard
+  // alone cannot protect these non-event paths. The canonical actor owns its
+  // leader and government; permit a matching one-way compatibility projection,
+  // but never publish an independent, divergent legacy mirror.
+  const politicalError = legacyPoliticalStatsProjectionWriteError(world, canonicalName, patch);
+  if (politicalError) throw new Error(politicalError);
   if (!world.countryStats || typeof world.countryStats !== "object") world.countryStats = {};
 
   const next = mergeCountryStatPatch(world.countryStats[canonicalName], patch, options);
@@ -5716,6 +5747,15 @@ const applyPolityAndTerritoryImpacts = ({
     // later reassessment does not apply it twice. The reputation index mirrors
     // into the authoritative store.
     if (Object.hasOwn(change, "statsEffects") || (change.stats && typeof change.stats === "object")) {
+      // An existing Political Actor owns the government and head-of-state.
+      // Legacy Stats is only its compatibility projection. Reject a second
+      // writer here, across Timeline, projects, and GM alike, even if an older
+      // caller bypassed its own preflight. The outer world is detached: throwing
+      // leaves no partial canonical event or misleading prose success.
+      const legacyPoliticalError = legacyPoliticalStatsWriteError(world, code, change.stats);
+      if (legacyPoliticalError) {
+        throw new Error(`Event "${eventId || eventDate || "undated"}" cannot change ${code} Statistics: ${legacyPoliticalError}`);
+      }
       // Relative numeric effects and legacy absolute patches pass through the
       // same canonical merger. Capture actual before/after only after success.
       const before = world.countryStats?.[code];
@@ -5878,7 +5918,7 @@ const applyPolityAndTerritoryImpacts = ({
 // not stamped into an entry's activity, which lists timeline events only.
 export const applyEventImpactsToWorld = ({
   colors = {}, events = [], world, motion = null, round = 0, boardOnlyEventIds = [],
-  statsChronology = null, regionCatalog = null, statSheetDefinition = null,
+  statsChronology = null, fiscalPeriod = null, regionCatalog = null, statSheetDefinition = null,
   statsSourceStorylines = [], historicalEvents = [],
 }) => {
   const boardOnly = new Set(normalizeArray(boardOnlyEventIds).map(normalizeOptionalString).filter(Boolean));
@@ -5916,6 +5956,27 @@ export const applyEventImpactsToWorld = ({
   // Only Statistics and its read-only history may be replaced by the boundary;
   // a rejected boundary aborts this detached turn before canonical publication.
   const acceptedEvents = normalizeEvents(events);
+  // Nominal tax-policy accrual is independent of the Stats fiscal debt clock.
+  // Its interval is provided only by an advancing Timeline turn; a GM event
+  // records a law without quietly advancing game time. This single detached
+  // reducer keeps effects ordered on the exact civil day, even when the
+  // separate national Stats chronology is unavailable or scoped.
+  const fiscalActive = fiscalPeriod !== null;
+  if (fiscalActive && (!isCanonicalGameDate(fiscalPeriod?.fromDate)
+    || !isCanonicalGameDate(fiscalPeriod?.toDate)
+    || compareGameDates(fiscalPeriod.fromDate, fiscalPeriod.toDate) > 0)) {
+    throw new Error("Invalid dated fiscal policy progression interval");
+  }
+  let fiscalCursor = fiscalActive ? fiscalPeriod.fromDate : "";
+  let priorFiscalEventDate = fiscalCursor;
+  const advanceTaxForecast = (toDate) => {
+    if (!fiscalActive || compareGameDates(toDate, fiscalCursor) <= 0) return;
+    const advanced = advanceFiscalTaxPolicyClock(nextWorld, {
+      fromDate:fiscalCursor, toDate,
+    });
+    nextWorld.fiscalTaxPolicies = advanced.fiscalTaxPolicies;
+    fiscalCursor = toDate;
+  };
   const useStatsBoundary = statsChronology !== null;
   if (useStatsBoundary && (typeof statsChronology?.beforeEvent !== "function"
     || typeof statsChronology?.afterEvents !== "function")) {
@@ -5936,6 +5997,18 @@ export const applyEventImpactsToWorld = ({
   };
   for (let eventIndex = 0; eventIndex < acceptedEvents.length; eventIndex += 1) {
     const event = acceptedEvents[eventIndex];
+    if (fiscalActive) {
+      if (!isCanonicalGameDate(event.date)
+        || compareGameDates(event.date, fiscalPeriod.fromDate) < 0
+        || compareGameDates(event.date, fiscalPeriod.toDate) > 0
+        || compareGameDates(event.date, priorFiscalEventDate) < 0) {
+        throw new Error("Fiscal turn events must be dated and chronologically ordered");
+      }
+      // The event's law is in force BEFORE that civil day's accrual. Prior
+      // intervals stop at yesterday and cannot see a later law/repeal.
+      advanceTaxForecast(addGameDays(event.date,-1));
+      priorFiscalEventDate = event.date;
+    }
     if (useStatsBoundary) settleStatsBoundary("beforeEvent", eventIndex);
     // A project this event COMPLETES releases its effects into this event, before
     // anything at all is applied. See releaseProjectCompletionEffects for why it
@@ -6166,7 +6239,24 @@ export const applyEventImpactsToWorld = ({
         Object.assign(nextWorld, settled);
       }
     }
+    // A fiscal authorization is not a Projects milestone, nor may Projects
+    // status imply a nominal payment. Only explicitly typed dated fiscalOps
+    // enter the separate ledger; its operation can refer to a same-event
+    // project now that projectOps have been applied. The outer detached reducer
+    // aborts as a whole if a payment/reference/amount is invalid.
+    if (event.impacts.fiscalOps?.length) {
+      const settled = applyFiscalEventOps(nextWorld, event.impacts.fiscalOps, {
+        eventId: event.id, date: event.date, resolvePolity: resolveOwner,
+      });
+      if (Object.hasOwn(settled,"fiscalTransactions")) nextWorld.fiscalTransactions = settled.fiscalTransactions;
+      if (Object.hasOwn(settled,"fiscalTaxPolicies")) nextWorld.fiscalTaxPolicies = settled.fiscalTaxPolicies;
+    }
+    // A same-day batch applies ALL of its laws before that date is accrued.
+    if (fiscalActive && acceptedEvents[eventIndex + 1]?.date !== event.date) {
+      advanceTaxForecast(event.date);
+    }
   }
+  if (fiscalActive) advanceTaxForecast(fiscalPeriod.toDate);
   if (useStatsBoundary) settleStatsBoundary("afterEvents", acceptedEvents.length);
 
   return {

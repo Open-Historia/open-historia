@@ -18,6 +18,11 @@ export const DASHBOARD_SYSTEM_SOURCES = Object.freeze({
 });
 export const dashboardSystemStyle = (style) => Object.hasOwn(DASHBOARD_SYSTEM_SOURCES, style);
 export const dashboardSystemSource = (style) => DASHBOARD_SYSTEM_SOURCES[style] || null;
+// The Wars & Fronts military readout is mandatory presentation of native
+// systems, never a custom Statistics ledger. Existing dashboards without this
+// tile remain valid: Country Details supplies the same live readout separately.
+export const isRequiredMilitaryWidget = (widget) =>
+  widget?.style === 'military' && widget?.source === DASHBOARD_SYSTEM_SOURCES.military;
 export const DASHBOARD_PAGES = Object.freeze(['overview', 'details']);
 // Presentation accents are bounded identifiers, never arbitrary CSS values.
 export const DASHBOARD_ACCENTS = Object.freeze(['auto', 'neutral', 'green', 'blue', 'amber', 'red']);
@@ -127,6 +132,11 @@ export const updateDashboardWidget = (dashboard, id, patch) => {
   const original = dashboard?.widgets?.find((widget) => widget.id === id);
   if (!original) return null;
   const next = { ...original, ...patch };
+  // The editor is not the only caller of these layout mutation helpers. A
+  // required Wars & Fronts view stays on Details even when an operation is
+  // invoked programmatically; historic Overview layouts remain readable.
+  if (isRequiredMilitaryWidget(original) && original.page === 'details'
+    && next.page !== 'details') return null;
   if (dashboardSystemStyle(next.style)) {
     if (next.source !== dashboardSystemSource(next.style) || next.w !== 6
       || next.h !== DASHBOARD_CARD_SIZES[next.style].heights[0]) return null;
@@ -142,6 +152,9 @@ export const updateDashboardWidget = (dashboard, id, patch) => {
 // Search near the selection first, then the rest of its tab deterministically.
 export const insertDashboardWidget = (dashboard, original, page = undefined) => {
   if (!dashboard || !original || dashboard.widgets.length >= MAX_STAT_DASHBOARD_WIDGETS) return null;
+  // A native military power module is a singleton system readout, not a
+  // reusable numerical tile. Copy, paste, and duplicate share this helper.
+  if (isRequiredMilitaryWidget(original)) return null;
   const targetPage = page || original.page;
   if (!DASHBOARD_PAGES.includes(targetPage)) return null;
   const taken = new Set(dashboard.widgets.map(widget => widget.id));
@@ -226,3 +239,9 @@ export const DEFAULT_NATIONAL_DASHBOARD = Object.freeze({ version: 1, widgets: O
 // retain their explicit sheet presentation; neither path changes countryStats.
 export const nationalDashboardForDisplay = (definition) =>
   definition?.dashboard ?? (definition?.custom ? null : DEFAULT_NATIONAL_DASHBOARD);
+
+// The Country panel's standalone military card is a fallback only. Derive
+// ownership from the displayed dashboard, not an optional authored definition.
+export const shouldShowStandaloneMilitaryCard = (dashboard, page) =>
+  !dashboard || (page === 'details' &&
+    !dashboard.widgets.some((widget) => widget.style === 'military' && widget.page === 'details'));

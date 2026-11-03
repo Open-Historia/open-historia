@@ -8,11 +8,12 @@ import { fileURLToPath } from 'node:url';
 import {
   applyScenarioStatsManualEdits, authorApprovedMacroEstimates,
   createReviewedScenarioStatsSheet, scenarioStatsCoverage,
-  scenarioStatsEditorValues, scenarioStatsRequiredReady,
+  scenarioStatsEditorValues, scenarioStatsRequiredReady, assertScenarioStatsDefinitionContentsCurrent,
 } from './scenarioStatsAuthoring.js';
 import { normalizeCountryStatSheet, normalizeCountryStatDemographicEvolution } from './countryStats.js';
 import { advanceNativeDemographicClock } from './statsDemographicClock.js';
 import { TEMPLATE_WORLD_OVERRIDE_KEYS } from './web/storeConstants.js';
+import { buildScenarioStartingStatsTool, interpretScenarioStatsAiResponse } from '../Game/GameUI/scenarioStatsAiResponse.js';
 
 const basis = {
   context:'Synthetic native plan derived from scenario region map',
@@ -36,6 +37,30 @@ const sheet = (overrides={}, options={}) => createReviewedScenarioStatsSheet({
   row:proposed(overrides),basis,date:'2026-01-01',...options,
 });
 const plain = x => JSON.parse(JSON.stringify(x));
+
+test('typed custom tool numbers pass end-to-end into a reviewed map-backed sheet without duplicating native debt',()=>{
+  const customKeys=['publicDebt','grain'];
+  const target=[{code:'Latvia',name:'Latvia'}];
+  const tool=buildScenarioStartingStatsTool(target,{customKeys});
+  assert.ok(tool.schema.required.includes('country1CustomStats'));
+  const envelope={toolInput:{
+    country1Json:JSON.stringify({macro:proposed().macro}),
+    country1PublicDebt:45,
+    country1BudgetBalance:-2,
+    country1CustomStats:{publicDebt:48,grain:0},
+  }};
+  const interpreted=interpretScenarioStatsAiResponse(envelope,target,{customKeys});
+  assert.equal(interpreted.Latvia.error,'');
+  const result=createReviewedScenarioStatsSheet({row:interpreted.Latvia.row,basis,date:'2026-01-01',customKeys});
+  assert.equal(result.economy.publicDebt,45);
+  assert.equal(result.customStats.publicDebt,48);
+  assert.equal(result.customStats.grain,0);
+  assert.equal(result.population.total,1800000);
+  assert.deepEqual(result.territorialComponents.map(c=>c.geography).sort(),['Kurzeme','Latgale','Riga']);
+  assert.equal(scenarioStatsRequiredReady(result,customKeys),true);
+  assert.throws(()=>createReviewedScenarioStatsSheet({row:{...interpreted.Latvia.row,customStats:{grain:0}},basis,date:'2026-01-01',customKeys}),/publicDebt needs a number/,
+    'missing independent custom debt must still fail; no silent substitution from canonical debt');
+});
 
 test('a map-backed reviewed proposal is a truly complete native sheet, not just a number display',()=>{
   const result=sheet();
@@ -366,4 +391,75 @@ test('AI custom generation may not fabricate native inflation/stability as impli
   assert.equal(previous.economy.inflation, 2.4);
   const next = createReviewedScenarioStatsSheet({ row, basis, date: '2026-01-01', customDefinition, existing: previous });
   assert.equal(next.economy.inflation, 2.4);
+});
+
+test('a concurrent Stats asset replacement is detected even when both assetStatus.stats values remain true',()=>{
+  const old={custom:true,sections:[{key:'main',label:'Production',stats:[
+    {key:'grain',label:'Grain production',kind:'number',minimum:0,maximum:100},
+    {key:'debt',label:'Public debt display',kind:'percentage',minimum:0,maximum:100},
+  ]}]};
+  const changed=structuredClone(old);
+  changed.sections[0].stats[1].nativeMetric='publicDebt';
+  const bounds=structuredClone(old);
+  bounds.sections[0].stats[0].minimum=10;
+  assert.doesNotThrow(()=>assertScenarioStatsDefinitionContentsCurrent(old,structuredClone(old)));
+  assert.throws(()=>assertScenarioStatsDefinitionContentsCurrent(old,changed),/Statistics definition changed elsewhere/i);
+  assert.throws(()=>assertScenarioStatsDefinitionContentsCurrent(old,bounds),/Statistics definition changed elsewhere/i);
+  assert.throws(()=>assertScenarioStatsDefinitionContentsCurrent(old,null),/Statistics definition changed elsewhere/i,
+    'a missing or unreadable asset may not silently authorize a save');
+  assert.equal(old.sections[0].stats[0].minimum,0);
+  assert.equal(changed.sections[0].stats[1].nativeMetric,'publicDebt');
+});
+
+test('custom scenario manual editor can amend native inflation, unemployment and GDP growth without writing custom aliases', () => {
+  const customDefinition = bindingFixture([metric('grain', 'number')]);
+  const original = sheet({ customStats: { grain: 5 } }, { customKeys: ['grain'] });
+  const fields = scenarioStatsEditorValues(original, ['grain']);
+  fields.inflation = -1.3;
+  fields.unemployment = 17;
+  fields.gdpGrowth = -2.1;
+  const edited = applyScenarioStatsManualEdits({ sheet: original, edits: fields, date: '1991-08-18', customDefinition });
+  assert.equal(edited.economy.inflation, -1.3);
+  assert.equal(edited.economy.unemployment, 17);
+  assert.equal(edited.economy.gdpGrowth, -2.1);
+  assert.deepEqual(edited.customStats, { grain: 5 });
+  assert.deepEqual(edited.territorialComponents, original.territorialComponents);
+  assert.equal(original.economy.inflation, 0, "the source fixture\u0027s native zero remains unmodified");
+  const blank = applyScenarioStatsManualEdits({ sheet: original,
+    edits: { ...fields, inflation: '', unemployment: '', gdpGrowth: '' },
+    date: '1991-08-18', customDefinition });
+  assert.equal(blank.economy.inflation, original.economy.inflation);
+  assert.equal(blank.economy.unemployment, original.economy.unemployment);
+  assert.equal(blank.economy.gdpGrowth, original.economy.gdpGrowth);
+  const zero = applyScenarioStatsManualEdits({ sheet: original,
+    edits: { ...fields, inflation: 0, unemployment: 0, gdpGrowth: 0 },
+    date: '1991-08-18', customDefinition });
+  assert.equal(zero.economy.inflation, 0);
+  assert.equal(zero.economy.unemployment, 0);
+  assert.equal(zero.economy.gdpGrowth, 0);
+  assert.throws(() => applyScenarioStatsManualEdits({ sheet: original,
+    edits: { ...fields, inflation: 'unknown' }, date: '1991-08-18', customDefinition }), /Inflation/);
+});
+
+test('orphan demographic trend is rejected instead of silently clearing or ignoring canonical plans', () => {
+  const original = sheet();
+  const edits = scenarioStatsEditorValues(original);
+  const orphan = { ...edits, birthRate: "", deathRate: "", birthTrendPerYear: -0.15, deathTrendPerYear: "" };
+  assert.throws(() => applyScenarioStatsManualEdits({ sheet: original, edits: orphan, date: "2026-01-01" }),
+    /Annual birth\/death trends require both base rates/);
+  assert.ok(original.continuity.demographicEvolution);
+  const remove = applyScenarioStatsManualEdits({ sheet: original,
+    edits: { ...orphan, birthTrendPerYear: "", deathTrendPerYear: "" }, date: "2026-01-01" });
+  assert.equal(remove.continuity?.demographicEvolution, undefined);
+  const row = proposed();
+  for (const key of ["birthRate", "deathRate", "birthTrendPerYear", "deathTrendPerYear"]) delete row[key];
+  const uninitialized = createReviewedScenarioStatsSheet({ row, basis, date: "2026-01-01" });
+  const orphanNew = { ...scenarioStatsEditorValues(uninitialized), birthRate: "", deathRate: "",
+    birthTrendPerYear: "", deathTrendPerYear: -0.05 };
+  assert.throws(() => applyScenarioStatsManualEdits({ sheet: uninitialized, edits: orphanNew, date: "2026-01-01" }),
+    /Annual birth\/death trends require both base rates/);
+  assert.equal(uninitialized.continuity?.demographicEvolution, undefined);
+  const unchanged = applyScenarioStatsManualEdits({ sheet: uninitialized,
+    edits: { ...orphanNew, deathTrendPerYear: "" }, date: "2026-01-01" });
+  assert.equal(unchanged.continuity?.demographicEvolution, undefined);
 });

@@ -3501,6 +3501,8 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
         const controlOps = eventOps("regionControlOps");
         const polityOps = eventOps("polityChanges");
         const gmStatsRows = Array.isArray(gmPreview?.statsPreview?.rows) ? gmPreview.statsPreview.rows : [];
+        const economicPreviewNotes = Array.isArray(gmPreview?.economicPreviewNotes) ? gmPreview.economicPreviewNotes : [];
+        const fiscalPreviewRows = Array.isArray(gmPreview?.fiscalPreviewRows) ? gmPreview.fiscalPreviewRows : [];
         const gmStatsCount = gmPreview?.statsPreview ? gmStatsRows.length
             : statPatches.length + polityOps.filter((op) => op.stats || op.statsEffects).length;
         const seenAbsoluteStats = new Set();
@@ -3735,6 +3737,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                             {countChip("politics", impactCounts.politics)}
                             {countChip("institutions", impactCounts.institutions)}
                             {countChip("stats", gmStatsCount)}
+                            {countChip("fiscal", fiscalPreviewRows.length)}
                             {countChip("storylines", storylineUpdates.length)}
                             {countChip("units", impactCounts.units)}
                             {countChip("markers", impactCounts.markers)}
@@ -3746,6 +3749,57 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                             {countChip("chats", impactCounts.chats + outreach.length)}
                             {impactCounts.other > 0 && countChip("other", impactCounts.other)}
                         </div>
+
+                        {fiscalPreviewRows.length > 0 && (
+                            <div data-gm-fiscal-preview="true" style={{ marginTop: "0.7rem" }}>
+                                {subsectionTitle("Fiscal transactions", fiscalPreviewRows.length, "nominal amounts · before Apply")}
+                                <div style={{ color: "rgba(255,255,255,0.52)", fontSize: "0.64rem", marginBottom: "0.35rem" }}>
+                                    Authorization is not payment. Only explicitly evidenced already-budgeted transfers are recorded; no GDP, tax rate or new borrowing is inferred.
+                                </div>
+                                {visibleOperationRows("fiscal", fiscalPreviewRows).map((row, index) => (
+                                    <div key={`fiscal-${row.eventIndex}-${row.id}-${index}`} style={exactRowStyle}>
+                                        <strong>{row.operation} · {row.polity} · {row.id}</strong>
+                                        <div style={{ marginTop: "0.18rem" }}>
+                                            {row.operation === "cancel"
+                                                ? <>Remaining authority withdrawn: {row.remainingAmount.toLocaleString("en-US")} {row.currency}</>
+                                                : row.operation === "repeal-tax-holiday"
+                                                    ? <>Remaining nominal tax forecast withdrawn: {row.remainingAmount.toLocaleString("en-US")} {row.currency}</>
+                                                    : <>{row.amount.toLocaleString("en-US")} {row.currency} · {row.kind}</>}
+                                            {" · "}{row.status} · event {row.eventIndex + 1}
+                                        </div>
+                                        <div style={{ color: "rgba(255,255,255,0.5)", marginTop: "0.15rem" }}>
+                                            {row.kind === "tax-holiday"
+                                                ? <>Revenue-foregone FORECAST only; no GDP, debt, cash or budget-rate mutation. Period boundary {row.startDate} to {row.endDate}.</>
+                                                : row.operation === "authorize" ? "Not disbursed; no Treasury mutation booked." :
+                                                    row.operation === "pay" ? "Already-budgeted payment receipt; no new debt booked." :
+                                                    "Prior payment receipts are preserved."}
+                                        </div>
+                                        {row.reason && <div style={{ color: "rgba(255,255,255,0.5)" }}>{row.reason}</div>}
+                                    </div>
+                                ))}
+                                {operationExpander("fiscal", fiscalPreviewRows.length)}
+                            </div>
+                        )}
+
+                        {economicPreviewNotes.length > 0 && (
+                            <div data-gm-economic-disclosure="true" role="note" style={{
+                                border: "1px solid rgba(251,191,36,0.38)", borderRadius: 8,
+                                color: "#fcd34d", fontSize: "0.68rem",
+                                lineHeight: 1.42, marginTop: "0.7rem", padding: "0.55rem",
+                            }}>
+                                <strong>{economicPreviewNotes.length} event(s) require economic accounting review: no dated typed national macroeconomic or fiscal effect is recorded.</strong>
+                                <div style={{ marginTop: "0.25rem" }}>
+                                    Their prose, projects or other operations may be recorded, but Apply will not invent a GDP, growth or fiscal mutation from the narrative. Review before Apply.
+                                </div>
+                                {economicPreviewNotes.map((note) => (
+                                    <div key={note.eventIndex} style={{ marginTop: "0.3rem" }}>
+                                        <strong>{`Economic accounting review ${note.eventIndex + 1}: ${note.title}`}</strong>
+                                        {" - accounting: "}{note.declaredStatus}
+                                        {note.reason ? ` - ${note.reason}` : ""}
+                                    </div>
+                                ))}
+                            </div>
+                        )}
 
                         {gmStatsRows.length > 0 && (
                             <div data-gm-stats-summary="true" style={{ marginTop: "0.7rem" }}>

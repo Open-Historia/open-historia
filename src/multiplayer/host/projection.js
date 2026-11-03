@@ -105,6 +105,13 @@ export const HOST_ONLY_WORLD_KEYS = Object.freeze([
   // Scenario-authorized military prices, pending deliveries and payment identities
   // are host accounting records, not public project or treasury information.
   "militaryExpenditureCommitments",
+  // Nominal fiscal obligations and payment event identities can expose a
+  // government's private funding decisions, even when the public narrative
+  // has not disclosed them. Never broadcast the full receipt ledger.
+  "fiscalTransactions",
+  // Dated tax-relief estimates and law source IDs are canonical fiscal
+  // provenance, not a public document or foreign-seat balance sheet.
+  "fiscalTaxPolicies",
 ]);
 
 // The host seat's single-player features (a scene in progress, the key its own

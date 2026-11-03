@@ -12,6 +12,16 @@ const DAYS_PER_YEAR = 365.2425;
 const point4 = (number) => Math.round(number * 10000) / 10000;
 const own = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
 
+// A recorded national assessment (or its historical legacy fallback) is the
+// fiscal source date for both deterministic accrual and one-off debt effects.
+// The date is evidence of the GDP/debt baseline, not permission to infer a rate.
+export const fiscalSourceDateOf = (sheet) =>
+  sheet?.continuity?.assessedDate
+  || sheet?.continuity?.demographicEvolution?.sourceDate
+  || sheet?.continuity?.demographicClock?.sourceDate
+  || sheet?.continuity?.foundingAssessment?.date
+  || "";
+
 // Advance only existing, dated canonical readings; no generic rate assumptions,
 // keyword inference, added AI requests, or creation of missing Stats baselines.
 // `baselineWorld` is the world as the turn BEGAN: an event that changes the
@@ -37,10 +47,7 @@ export const advanceNativeFiscalClock = (
     // Legacy reviewed scenario sheets frequently date their demographic
     // assessment but not the simultaneous starting fiscal reading. Reuse only
     // that explicit canonical source date, never the current turn date.
-    const sourceDate = source?.continuity?.assessedDate
-      || source?.continuity?.demographicEvolution?.sourceDate
-      || source?.continuity?.demographicClock?.sourceDate
-      || source?.continuity?.foundingAssessment?.date;
+    const sourceDate = fiscalSourceDateOf(source);
     const rate = source?.economy?.budgetBalance;
     const debt = live?.economy?.publicDebt;
     if (!isCanonicalGameDate(sourceDate) || typeof rate !== "number" || !Number.isFinite(rate)

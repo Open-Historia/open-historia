@@ -123,7 +123,8 @@ test("gameplay cutover is opt-in and does not call the legacy blockade or AI Sta
   const body = readFileSync(new URL("../Game/AI/gameplay.js", import.meta.url), "utf8");
   assert.match(body, /statsChronology: nativeStatsChronology/);
   assert.match(body, /if \(!nativeStatsChronology \|\| nativeStatsChronology\.partial\) impactedWorld = withBlockadeEconomy/);
-  assert.match(body, /if \(!nativeStatsChronology \|\| nativeStatsChronology\.partial\) nextWorld = await refreshTrackedCountryStatsIfDue/);
+  assert.doesNotMatch(body, /nextWorld = await refreshTrackedCountryStatsIfDue\(/,
+    "no partial or refused native settlement may invoke periodic AI re-baselining");
   assert.match(body, /if \(!nativeStatsChronology \|\| nativeStatsChronology\.partial\) requestConflictSheets/);
 });
 

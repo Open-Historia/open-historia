@@ -109,11 +109,11 @@ test('a war participant cannot authenticate itself from its own war record', () 
   })), null);
 });
 
-test('native and legacy writers coexist in gameplay without asking AI to regenerate neutral Stats', () => {
+test('native and legacy writers coexist without periodic AI regeneration of neutral Stats', () => {
   const source = readFileSync(new URL('../Game/AI/gameplay.js', import.meta.url), 'utf8');
   assert.match(source, /planNativeStatsLiveTurn\(statsTurnArgs\) \|\| planNeutralStatsLiveTurn\(statsTurnArgs\)/);
-  assert.match(source, /excludePolities: nativeStatsChronology\?\.scopedCountries \|\| \[\]/);
-  assert.match(source, /if \(excludePolities\.includes\(polity\)\) continue/);
+  assert.doesNotMatch(source, /nextWorld = await refreshTrackedCountryStatsIfDue\(/);
+  assert.match(source, /return \{ history, stats: false \};/);
   assert.match(source, /nativeStatsChronology\.partial\) impactedWorld = withBlockadeEconomy/);
 });
 

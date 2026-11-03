@@ -71,3 +71,30 @@ export const serializeScenarioEconomicComparabilityCsv = (audit) => {
   ]);
   return [header, ...rows].map((row) => row.map(quote).join(",")).join("\r\n") + "\r\n";
 };
+
+// Optional, country-centered summary for human review. The underlying pairwise
+// readings remain in the audit and export; wide real-world inequality alone is
+// never evidence of a wrong national GDP or grounds to veto scenario saving.
+export const summarizeScenarioEconomicComparability = (audit) => {
+  const readings = Array.isArray(audit?.readings) ? audit.readings : [];
+  const comparisons = Array.isArray(audit?.warnings) ? audit.warnings : [];
+  const byCode = new Map();
+  for (const comparison of comparisons) {
+    for (const side of ["lower", "higher"]) {
+      const code = comparison[side + "Code"];
+      if (!code) continue;
+      const prior = byCode.get(code);
+      byCode.set(code, {
+        code,
+        name: comparison[side + "Name"] || code,
+        comparisonCount: (prior?.comparisonCount || 0) + 1,
+        maxRatio: Math.max(prior?.maxRatio || 0, comparison.ratio || 0),
+      });
+    }
+  }
+  const countries = [...byCode.values()].sort((a, b) =>
+    b.comparisonCount - a.comparisonCount
+    || b.maxRatio - a.maxRatio
+    || a.code.localeCompare(b.code));
+  return { readings: readings.length, comparisons: comparisons.length, countries };
+};

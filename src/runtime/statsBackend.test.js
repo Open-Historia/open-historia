@@ -133,7 +133,7 @@ test("a country the player's own is on a battlefield with is asked for its sheet
   assert.deepEqual(conflictSheetTargets(world({ countryStats: known }), ["Aland"]), []);
 });
 
-test("legacy turns request missing conflict backends; front setup and routes still request them", () => {
+test("legacy turns request missing conflict backends without periodic Stats re-baselining", () => {
   const turn = read("../Game/AI/gameplay.js");
   // (All of them in one request: Game/AI/conflictBackends.test.js.)
   assert.ok(turn.includes("const names = conflictSheetTargets(world, players, { extra }).slice(0, CONFLICT_BACKENDS_MOST);"));
@@ -145,14 +145,16 @@ test("legacy turns request missing conflict backends; front setup and routes sti
   // belligerents. This is not a reassessment of already native-scoped sheets.
   assert.ok(turn.includes("  if (!nativeStatsChronology || nativeStatsChronology.partial) requestConflictSheets(nextWorld, nextGame);\n"),
     "legacy and partial-native turns still request missing conflict backends, unlike fully native turns");
-  assert.ok(turn.includes("excludePolities: nativeStatsChronology?.scopedCountries || []"),
-    "the tracked Stats AI refresh must exclude countries advanced by the partial-native clock");
+  assert.ok(!turn.includes("nextWorld = await refreshTrackedCountryStatsIfDue("),
+    "no legacy or partial-native turn may automatically reassess a canonical Stats baseline");
   assert.ok(turn.includes("    if (written) requestConflictSheets({ ...world, battlefields: built.battlefields }, bundle.game);"), "when a scenario's fronts are built");
   assert.ok(turn.includes("    if (attacked.length > 0) requestConflictSheets(world, game, attacked);"), "when a route is drawn into a country");
   // A sheet wanted for the war is one with a backend: a scenario's own sheet written before it kept one is written again.
   assert.ok(turn.includes("if (complete && (!needBackend || hasStatsBackend(persisted))) return persisted;"));
-  // And the player's own country, tracked from the first skip, is asked for the same.
-  assert.ok(turn.includes('if (waiting) agentClient.holdSkip(ensureCountryStatSheet(waiting, { reason: "historical tracking", needBackend: true, agentKind: "skip" }));'));
+  // The retired historical-tracking scheduler does not invoke its former
+  // player-baseline helper; explicit conflict initialization remains separate.
+  assert.ok(turn.includes("const requestTrackedBaseline = (pending, game) => {"));
+  assert.ok(!turn.includes("nextWorld = await refreshTrackedCountryStatsIfDue("));
 });
 
 // "I meant update both layers of the stats in one request."

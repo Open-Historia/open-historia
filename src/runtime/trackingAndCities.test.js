@@ -109,9 +109,10 @@ test("a city something happened to follows from what was left of it, and not on 
 
 test("the turn does it after the statistics are brought up to date, with no request, and leaves what its own events set", () => {
   const turn = read("../Game/AI/gameplay.js");
-  const refreshed = turn.indexOf("nextWorld = await refreshTrackedCountryStatsIfDue({");
+  const native = turn.indexOf("statsChronology: nativeStatsChronology");
   const followed = turn.indexOf("nextWorld = await citiesFollowCountries({ world: nextWorld, baseWorld, game: nextGame, campaignId, loadRegions: createRenderedRegionsReader() });");
-  assert.ok(refreshed > 0 && followed > refreshed);
+  assert.ok(native > 0 && followed > native);
+  assert.doesNotMatch(turn, /nextWorld = await refreshTrackedCountryStatsIfDue\(/);
   const apply = read("../Game/AI/frontApply.js");
   assert.ok(apply.includes("if (moves.due.length === 0) return noted ? { ...world, cityPopulationBasis: moves.basis } : world;"), "the map is read only when a country is due");
   assert.ok(apply.includes("const skip = new Set(Object.keys(now).filter((key) => Number(now[key]) !== Number(before[key])).map(cityPopulationKey));"));

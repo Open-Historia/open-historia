@@ -53,7 +53,8 @@ test("reasoning is read only for a complete answer, and the log says when one wa
 
 test("with no answer, the player is told the model wrote only its reasoning", () => {
   assert.equal(REASONING_ONLY_MESSAGE, "The model wrote only its reasoning and no answer.");
-  assert.match(task, /reasoningOnly \|\| \(contractKeys\.length && rawText\.length > PLANNING_PROSE_CHARS\) \? REASONING_ONLY_MESSAGE/);
+  assert.match(task, /error: describeUnparseableStructuredAnswer\(\{ rawText, reasoningOnly,/);
+  assert.doesNotMatch(task, /rawText\.length > PLANNING_PROSE_CHARS/);
   // The report shows the reasoning labelled, and the retry does not send it back.
   assert.match(REASONING_ONLY_NOTE, /no answer/);
   assert.match(task, /reasoningOnly \? `\$\{REASONING_ONLY_NOTE\}\\n\$\{reasoningText\}` : ""/);

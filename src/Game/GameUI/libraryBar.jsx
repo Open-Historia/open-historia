@@ -65,6 +65,7 @@ const PoliticalWorldAuthoringPanel = lazy(() => import("./PoliticalWorldAuthorin
 const PoliticalWorldGenerationPanel = lazy(() => import("./PoliticalWorldGenerationPanel.jsx"));
 import { isFeatureEnabled, normalizeFeatureOverrides, normalizeFeatureSettings } from "../../runtime/gameFeatures.js";
 import { flattenStatSheetRows, normalizeStatSheetDefinition, serializeStatSheet } from "../../runtime/statIndexDefinitions.js";
+import { assertScenarioStatsDefinitionContentsCurrent } from "../../runtime/scenarioStatsAuthoring.js";
 import { UNIT_TYPES } from "../../runtime/gameState.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { DIFFICULTY_LEVELS } from "../../runtime/difficulty.js";
@@ -2445,9 +2446,11 @@ const EditorDrawer = ({
               onDetailsChange={onDetailsChange}
               onDirtyChange={onStatsAuthoringDirtyChange}
               onSaveStatsDefinition={onSaveStatsDefinition}
+              onStatsChange={onStatsChange}
             />
           </Suspense>
           <StatsDashboardEditor value={statsValue} onChange={onStatsChange}
+            warSettings={formState.warSettings}
             advancedEditor={<StatsSheetEditor value={statsValue} onChange={onStatsChange} />} />
         </div>
       )}
@@ -3701,6 +3704,20 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     return saved;
   };
 
+  // assetStatus.stats tells only whether the file EXISTS. Compare its
+  // actual current definition for both scenario Save paths, before either
+  // can overwrite another editor's saved Statistics asset. The expected value
+  // is the LAST SAVED definition, never this editor's uncommitted draft.
+  const assertCurrentStatsBeforeScenarioSave = async (scenarioId, fresh) => {
+    if (JSON.stringify(fresh.assetStatus?.stats ?? null) !== JSON.stringify(editorDetails.assetStatus?.stats ?? null)) {
+      throw new Error("The Statistics definition changed elsewhere. Reopen the scenario before saving.");
+    }
+    if (fresh.assetStatus?.stats) {
+      const currentDefinition = await downloadScenarioJsonAsset(scenarioId, "stats", { fresh: true });
+      assertScenarioStatsDefinitionContentsCurrent(editorStatsSavedRef.current, currentDefinition);
+    }
+  };
+
   // Dedicated Save for an edited display definition when approved country
   // proposals are still pending. It changes only the stats asset, not world,
   // game date, map ownership or the proposal selections.
@@ -3713,9 +3730,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     const fresh = await loadScenarioDetails(scenarioId);
     const issue = editorDetailsIssue({ kind: "scenario", expectedId: scenarioId, details: fresh });
     if (issue) throw new Error(`Scenario editor details could not be verified (${issue}).`);
-    if (JSON.stringify(fresh.assetStatus?.stats ?? null) !== JSON.stringify(editorDetails.assetStatus?.stats ?? null)) {
-      throw new Error("The Statistics definition changed elsewhere. Reopen the scenario before saving.");
-    }
+    await assertCurrentStatsBeforeScenarioSave(scenarioId, fresh);
     const saved = await persistScenarioStatsDefinition(scenarioId, fresh);
     const savedIssue = editorDetailsIssue({ kind: "scenario", expectedId: scenarioId, details: saved });
     if (savedIssue) throw new Error(`Saved Statistics definition could not be verified (${savedIssue}).`);
@@ -3737,6 +3752,12 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     try {
       const prompts = serializePromptPack(editorState.prompts);
       if (editorKind === "scenario") {
+        if (!editorStatsFailed) {
+          const fresh = await loadScenarioDetails(editorDetails.scenario.id);
+          const issue = editorDetailsIssue({ kind: "scenario", expectedId: editorDetails.scenario.id, details: fresh });
+          if (issue) throw new Error(`Scenario editor details could not be verified (${issue}).`);
+          await assertCurrentStatsBeforeScenarioSave(editorDetails.scenario.id, fresh);
+        }
         const currentGame = editorDetails.data?.game ?? {};
         const currentWorld = editorDetails.data?.world ?? {};
         let details = await saveScenario(editorDetails.scenario.id, {

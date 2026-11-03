@@ -35,6 +35,45 @@ const statValue = (value) => {
   return String(value);
 };
 
+// Disclosure only. An Economy-tagged GM event can legitimately record
+// unquantified news or start a Project, but neither is a national Stats write.
+// Do not parse prose to infer percentages or silently convert projects to GDP.
+const ECONOMIC_EFFECT_ACTION_FIELDS = new Set([
+  "gdpChangePercent", "annualRealGrowthDelta",
+  "resolveGrowthInfluenceEventId", "debtFinancedOutlayPercentGdp",
+]);
+export const reviewGameMasterEconomicPreview = (events, { mode = "" } = {}) => {
+  if (mode === "direct") return [];
+  return list(events).flatMap((event, index) => {
+    const taggedEconomy = list(event?.tags)
+      .some((tag) => typeof tag === "string" && tag.toLowerCase() === "economy");
+    // Disaster, Politics and other events may explicitly declare national
+    // economic accounting without carrying the Economy filter tag. That
+    // typed declaration is authoritative enough to require a disclosure;
+    // the tag is not the owner of economic completeness.
+    const declaredStatus = String(event?.economicAccounting?.status || "").toLowerCase();
+    if (!taggedEconomy && !["applied", "unquantified"].includes(declaredStatus)) return [];
+    const applied = list(event?.impacts?.polityChanges).some((op) => {
+      const effects = record(op?.statsEffects);
+      // An independent custom series (steelOutput, for example) is not a
+      // national GDP, growth, or fiscal settlement. Its update must not
+      // suppress a missing native macroeconomic disclosure.
+      return effects && Object.entries(effects).some(([key, value]) =>
+        ECONOMIC_EFFECT_ACTION_FIELDS.has(key) &&
+          (key === "resolveGrowthInfluenceEventId"
+            ? typeof value === "string" && Boolean(value.trim())
+            : typeof value === "number" && Number.isFinite(value)));
+    });
+    if (applied) return [];
+    return [{
+      eventIndex: index,
+      title: String(event?.title || `Event ${index + 1}`),
+      declaredStatus: String(event?.economicAccounting?.status || "unspecified"),
+      reason: String(event?.economicAccounting?.reason || ""),
+    }];
+  });
+};
+
 export const buildGameMasterStatsPreview = ({ world, events, countryStatPatches } = {}) => {
   const sheets = record(world?.countryStats) || {};
   const rows = [];

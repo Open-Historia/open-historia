@@ -15,6 +15,7 @@ export const GM_PREVIEW_SECTIONED_IMPACTS = Object.freeze([
     "regionControlOps",
     "polityChanges",
     "politicalActorOps",
+    "fiscalOps",
     "unitOps",
     "markerOps",
     "createdChats",

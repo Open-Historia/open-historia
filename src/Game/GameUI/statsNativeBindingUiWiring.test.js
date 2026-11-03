@@ -65,3 +65,29 @@ test("binding-aware authoring retains C2A legacy conflict notices", () => {
   assert.match(author, /item\.customPath/);
   assert.match(author, /assertNoLegacyNativeStatCopies\(customDefinition, currentSheet\)/);
 });
+
+test("definition-only Save rejects a concurrent same-presence Stats asset replacement before uploading",()=>{
+  const library=readFileSync(new URL("./libraryBar.jsx",import.meta.url),"utf8");
+  const guard=library.slice(library.indexOf("const assertCurrentStatsBeforeScenarioSave = async"),
+    library.indexOf("const handleSaveStatsDefinitionOnly = async"));
+  assert.match(guard,/downloadScenarioJsonAsset\(scenarioId, "stats", \{ fresh: true \}\)/);
+  assert.match(guard,/assertScenarioStatsDefinitionContentsCurrent\(editorStatsSavedRef\.current, currentDefinition\)/);
+  const begin=library.indexOf("const handleSaveStatsDefinitionOnly = async () =>");
+  const end=library.indexOf("const handleSave = async () =>",begin);
+  const action=library.slice(begin,end);
+  assert.match(action,/await assertCurrentStatsBeforeScenarioSave\(scenarioId, fresh\)/);
+  assert.ok(action.indexOf("await assertCurrentStatsBeforeScenarioSave") < action.indexOf("persistScenarioStatsDefinition"),
+    "unchanged library status flags cannot justify replacing another author's definition");
+});
+
+test("general Scenario Save also checks the current Stats asset before rewriting the scenario world",()=>{
+  const library=readFileSync(new URL("./libraryBar.jsx",import.meta.url),"utf8");
+  const begin=library.indexOf("const handleSave = async () =>");
+  const end=library.indexOf("const handleDelete = async () =>",begin);
+  const action=library.slice(begin,end);
+  const check=action.indexOf('await assertCurrentStatsBeforeScenarioSave(editorDetails.scenario.id, fresh)');
+  const save=action.indexOf('await saveScenario(editorDetails.scenario.id, {');
+  assert.match(action,/if \(!editorStatsFailed\)/);
+  assert.ok(check > 0 && check < save,
+    'main Scenario Save must not rewrite stale Stats or world data before checking the current definition');
+});

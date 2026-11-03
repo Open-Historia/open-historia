@@ -343,3 +343,47 @@ test("migration endpoints and their credited cursor rekey with polity identity",
   assert.equal(after.migrationFlows[0].creditedPeople, 50);
   assert.equal(input.migrationFlows[0].fromPolity, "Borduria");
 });
+
+test("fiscal grants, payment receipts and tax-policy forecasts follow a polity rename without rewriting provenance", () => {
+  const prior = world();
+  prior.fiscalTransactions = [
+    { id:"fiscal-grant-borduria",polity:"Borduria",kind:"grant",currency:"EUR",
+      authorizedAmount:600_000_000,authorizedAt:"2026-01-01",
+      authorizedEventId:"authorizing-law",reason:"Enacted relief grant with explicit nominal authority",
+      paidAmount:200_000_000,payments:[{amount:200_000_000,date:"2026-02-01",
+        eventId:"first-tranche",funding:"already-budgeted",
+        reason:"Previously funded Treasury disbursement certified"}],status:"partially-paid" },
+    { id:"fiscal-grant-syldavia",polity:"Syldavia",kind:"relief",currency:"EUR",
+      authorizedAmount:100,authorizedAt:"2026-01-01",
+      authorizedEventId:"foreign-law",reason:"Unrelated source of foreign fiscal authority",
+      paidAmount:0,payments:[],status:"authorized" },
+  ];
+  prior.fiscalTaxPolicies = [
+    { id:"tax-borduria",polity:"Borduria",currency:"EUR",amount:200_000_000,
+      startDate:"2026-01-01",endDate:"2026-04-01",
+      authorizedAt:"2026-01-01",authorizedEventId:"tax-enactment",
+      reason:"Enacted limited tax relief with a nominal total forecast",
+      accruedThrough:"2026-01-01",accruedAmount:0,status:"scheduled" },
+    { id:"tax-syldavia",polity:"Syldavia",currency:"EUR",amount:100,
+      startDate:"2026-01-01",endDate:"2026-04-01",
+      authorizedAt:"2026-01-01",authorizedEventId:"foreign-tax-law",
+      reason:"Independent foreign tax relief and dated forecast",
+      accruedThrough:"2026-01-01",accruedAmount:0,status:"scheduled" },
+  ];
+  const originalGrant = structuredClone(prior.fiscalTransactions[0]);
+  const originalTax = structuredClone(prior.fiscalTaxPolicies[0]);
+  const {world: renamed} = renamePolityInWorld(prior,"Borduria","Bordurian Republic");
+  assert.equal(renamed.fiscalTransactions[0].polity,"Bordurian Republic");
+  assert.equal(renamed.fiscalTransactions[1].polity,"Syldavia");
+  assert.deepEqual({...renamed.fiscalTransactions[0],polity:"Borduria"},originalGrant,
+    "renaming cannot modify amount, source event or previously paid receipts");
+  assert.equal(renamed.fiscalTaxPolicies[0].polity,"Bordurian Republic");
+  assert.equal(renamed.fiscalTaxPolicies[1].polity,"Syldavia");
+  assert.deepEqual({...renamed.fiscalTaxPolicies[0],polity:"Borduria"},originalTax,
+    "tax forecast amount, dates, receipts and event identity survive");
+  assert.equal(prior.fiscalTransactions[0].polity,"Borduria");
+  assert.equal(prior.fiscalTaxPolicies[0].polity,"Borduria");
+  const repeat = renamePolityInWorld(renamed,"Bordurian Republic","Republic of Borduria").world;
+  assert.equal(repeat.fiscalTransactions[0].polity,"Republic of Borduria");
+  assert.equal(repeat.fiscalTaxPolicies[0].polity,"Republic of Borduria");
+});

@@ -7,6 +7,7 @@ import {
   mergeCountryStatPatch,
 } from "../../runtime/countryStats.js";
 import { IO_CONFIG, createWorkerIoClient } from "./runtimeIoBridge.js";
+import { legacyPoliticalStatsProjectionWriteError } from "../../runtime/politicalActors.js";
 
 let cachedRegionUrl = "";
 let cachedScenarioCatalog = null;
@@ -103,6 +104,12 @@ const persistCountryStats = async (payload = {}) => {
   if (!nextSheet || typeof nextSheet !== "object") {
     throw new Error(`Stats worker could not merge the canonical sheet for ${country}.`);
   }
+
+  // This isolated worker bypasses the main thread's countryStats patch seam.
+  // Apply the same one-way Political World authority check before its PUT,
+  // including values inherited from an older stored sheet.
+  const politicalError = legacyPoliticalStatsProjectionWriteError(world, country, nextSheet);
+  if (politicalError) throw new Error(politicalError);
 
   world.countryStats[country] = nextSheet;
   world.countryStatsHistory = appendCountryStatHistorySample(

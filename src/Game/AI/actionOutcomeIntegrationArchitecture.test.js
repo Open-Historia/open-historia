@@ -5,11 +5,15 @@ import fs from "node:fs";
 
 const source = fs.readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
 
-test("fallback events cite the exact queued Action they were synthesized from", () => {
+test("fallback cannot invent outcomes for ordinary orders but preserves native action attribution", () => {
   const start = source.indexOf("const fallbackJumpSimulation");
-  const end = source.indexOf("const buildGeneratedChat", start);
-  const fallback = source.slice(start, end > start ? end : start + 7000);
-  assert.match(fallback, /actionIds:\s*normalizeString\(action\.id\)\s*\?\s*\[normalizeString\(action\.id\)\]\s*:\s*\[\]/);
+  const end = source.indexOf("const normalizeGeneratedEvent", start);
+  const fallback = source.slice(start, end);
+  assert.match(fallback, /fallbackOrderEventFields\(action, bundle\.game\.country\)/);
+  assert.match(fallback, /actionIds: fallbackOrder\.actionIds/);
+  assert.match(fallback, /plannedActions\.some\(actionNeedsEvent\)/);
+  assert.match(fallback, /summaryPendingOrders/);
+  assert.doesNotMatch(fallback, /actionIds:\s*normalizeString\(action\.id\)/);
 });
 
 test("normal jump validation receives the live Action queue for exact actionId reference integrity", () => {

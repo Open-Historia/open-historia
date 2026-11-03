@@ -51,3 +51,22 @@ test("downloadable review includes all flagged comparisons and escapes author la
   assert.match(csv, /"An ""Empire"""/);
   assert.match(csv, /perCapitaRatio/);
 });
+
+test("creator GDP presentation regression: group wide GDP gaps by country without declaring them invalid", async () => {
+  const { summarizeScenarioEconomicComparability } = await import("./scenarioEconomicComparability.js");
+  const sheets = { africa: sheet(22_000_000, 500), america: sheet(250_000_000, 30_000),
+    inland: sheet(8_000_000, 450), west: sheet(40_000_000, 28_000), equal: sheet(9_000_000, 29_000) };
+  const input = auditScenarioEconomicComparability(sheets, { africa: "Africa region", america: "America region" });
+  const before = structuredClone(input);
+  const overview = summarizeScenarioEconomicComparability(input);
+  assert.equal(overview.readings, 5);
+  assert.equal(overview.comparisons, input.warnings.length);
+  assert.equal(overview.countries.length, new Set(input.warnings.flatMap((w) => [w.lowerCode, w.higherCode])).size);
+  assert.deepEqual(overview.countries.map((c) => c.code),
+    summarizeScenarioEconomicComparability(auditScenarioEconomicComparability(Object.fromEntries(Object.entries(sheets).reverse()))).countries.map((c) => c.code));
+  assert.equal(overview.countries.reduce((sum, c) => sum + c.comparisonCount, 0), 2 * overview.comparisons);
+  assert.deepEqual(input, before, "overview is a pure non-mutating presentation transform");
+  assert.equal(sheets.africa.population.total, 22_000_000, "canonical source remains unchanged");
+  assert.deepEqual(summarizeScenarioEconomicComparability({ readings: [], warnings: [] }),
+    { readings: 0, comparisons: 0, countries: [] });
+});

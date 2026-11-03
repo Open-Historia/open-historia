@@ -267,6 +267,16 @@ export const renamePolityInWorld = (world, fromName, toName) => {
   put("militaryExpenditureCommitments", mapRows(world?.militaryExpenditureCommitments, (entry) => ({
     ...entry, polity: one(entry.polity),
   })));
+  // Fiscal authorizations and dated tax-policy forecasts have independent
+  // payment/accrual receipts, but their owner is the SAME canonical polity.
+  // Re-key only that owner; never rewrite source event IDs, financial amounts,
+  // currencies, coverage dates or already-accounted fiscal history.
+  put("fiscalTransactions", mapRows(world?.fiscalTransactions, (entry) => ({
+    ...entry, polity: one(entry.polity),
+  })));
+  put("fiscalTaxPolicies", mapRows(world?.fiscalTaxPolicies, (entry) => ({
+    ...entry, polity: one(entry.polity),
+  })));
   // The fortified lines it holds (runtime/warGeography.js): a wall keeps its owner.
   put("fortifications", mapRows(world?.fortifications, (line) => ({ ...line, owner: one(line.owner) })));
   // How weary of war it is, and what it has left to fight with (runtime/warWeariness.js, warResources.js).

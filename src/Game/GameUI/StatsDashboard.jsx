@@ -94,15 +94,20 @@ const STYLE = `
 // These illustrative rows are editor fixtures, not military state or a second power formula.
 const MILITARY_PREVIEW_ROWS = Object.freeze(['Troop quality', 'Technology', 'Spending', 'Manpower share',
   'War weariness', 'War resources', 'Land', 'Naval', 'Air']);
-function DashboardMilitaryPreview() {
+export function DashboardMilitaryPreview({ suppliesEnabled = true } = {}) {
   return <div style={{ width: '100%', padding: '0.65rem 0.7rem', border: '1px solid rgba(255,255,255,.1)', borderRadius: 9 }}>
     <div style={{display:'flex',justifyContent:'space-between',fontWeight:800,fontSize:12}}>
       <span>Military power</span><span data-no-translate>15.3</span>
     </div>
     <div style={{fontSize:10,color:'#a6acb1',margin:'5px 0 10px'}}>Illustrative values</div>
     {MILITARY_PREVIEW_ROWS.map((title,i) => <div key={title} style={{display:'grid',gridTemplateColumns:'6.2rem 1fr 2.7rem',gap:5,alignItems:'center',fontSize:10,marginBottom:8}}>
-      <span>{title}</span><div style={{height:5,borderRadius:4,background:'#34383d'}}><div style={{height:'100%',width:`${[50,50,50,12,0,100,50,50,50][i]}%`,background:'#8a9ca7'}}/></div>
-      <span style={{textAlign:'right'}}>{[50,50,50,12,0,100,50,50,50][i]}/100</span>
+      <span>{title}</span>
+      {title === 'War resources' && !suppliesEnabled
+        ? <span style={{gridColumn:'2 / 4',color:'#a6acb1',fontStyle:'italic'}}>Supplies disabled</span>
+        : <>
+          <div style={{height:5,borderRadius:4,background:'#34383d'}}><div style={{height:'100%',width:`${[50,50,50,12,0,100,50,50,50][i]}%`,background:'#8a9ca7'}}/></div>
+          <span style={{textAlign:'right'}}>{[50,50,50,12,0,100,50,50,50][i]}{i === 3 ? '%' : '/100'}</span>
+        </>}
     </div>)}
   </div>;
 }
@@ -130,7 +135,7 @@ function DashboardBreakdown({ sheet }) {
 export default function StatsDashboard({ dashboard, definition, sheet, history = [], page = 'overview', editable = false,
   onPointerStart, onResizeStart, onPointerMove, onPointerEnd, onPointerCancel,
   onWidgetAction, onWidgetSelect, onWidgetDoubleClick, onWidgetContextMenu, selectedId = null, previewWidget = null, invalidWidget = false,
-  militaryCard = null, intelligence = null, sampleModules = false }) {
+  militaryCard = null, intelligence = null, sampleModules = false, sampleSuppliesEnabled = true }) {
   const container = useRef(null);
   const lastRects = useRef(new Map());
   const lastPage = useRef(page);
@@ -232,7 +237,7 @@ export default function StatsDashboard({ dashboard, definition, sheet, history =
             ...(widget.accent && widget.accent !== 'auto' ? { borderLeft: `3px solid ${accent}` } : {}),
             boxShadow: selected ? '0 0 0 1px rgba(147,183,176,.25)' : undefined }}>
           {systemCard ? widget.style === 'military'
-            ? (sampleModules ? <DashboardMilitaryPreview /> : militaryCard || <div><span>Military power</span> <span data-no-translate>{'—'}</span></div>)
+            ? (sampleModules ? <DashboardMilitaryPreview suppliesEnabled={sampleSuppliesEnabled} /> : militaryCard || <div><span>Military power</span> <span data-no-translate>{'—'}</span></div>)
             : widget.style === 'intelligence' ? <div style={{padding:'0.55rem 0.7rem',background:'#202326',borderRadius:9}}>
                 <div style={{display:'flex',justifyContent:'space-between',fontSize:11,fontWeight:750,marginBottom:9}}>
                   <span>Intelligence service</span><span data-no-translate>{Number.isFinite(intelligence) ? `${intelligence}/100` : '—'}</span>

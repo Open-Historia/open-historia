@@ -65,7 +65,7 @@ import {
 import { onMemoryPressure } from "../../runtime/memoryPressure.js";
 import { nationalStatsAuthoringContract, nationalStatsPresentationCoverage, resolveNationalStatReading } from "../../runtime/statsMetricBindings.js";
 import StatsDashboard from "./StatsDashboard.jsx";
-import { nationalDashboardForDisplay } from "../../runtime/statsDashboardLayout.js";
+import { nationalDashboardForDisplay, shouldShowStandaloneMilitaryCard } from "../../runtime/statsDashboardLayout.js";
 
 // Sheets are regenerated when the game date moves; within a date they persist
 // across reloads so flipping between countries stays instant.
@@ -457,7 +457,17 @@ const MilitaryCard = ({ world, country, style }) => {
                 What it weighs in a land war, by its people and what its forces have to spend, through the figures below.
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
-                {MILITARY_FIGURE_ORDER.filter((key) => key !== "resources" || profile.supplied).map((key) => {
+                {MILITARY_FIGURE_ORDER.map((key) => {
+                    if (key === "resources" && !profile.supplied) {
+                        // Supplies are enabled by default. Only a scenario that
+                        // explicitly disables its supply mechanic gets this row;
+                        // do not depict an inactive war resource as 0 or 100.
+                        return <div key={key} data-oh-war-resources-disabled=""
+                            style={{ alignItems: "center", display: "grid", gap: "0.5rem", gridTemplateColumns: "6.4rem minmax(0, 1fr) 3.2rem" }}>
+                            <span style={{ color: "rgba(255,255,255,0.6)", fontSize: "0.72rem" }}>{MILITARY_FIGURE_LABELS[key]}</span>
+                            <span style={{ gridColumn: "2 / 4", color: "rgba(255,255,255,0.5)", fontSize: "0.72rem", fontStyle: "italic" }}>Supplies disabled</span>
+                        </div>;
+                    }
                     const value = figures[key];
                     const low = (key === "weariness" && value > 0) || (key === "resources" && value < RESOURCES_SHORT_FROM);
                     const color = low ? MILITARY_WEARY_COLOR : own[key] ? MILITARY_OWN_COLOR : MILITARY_SHARED_COLOR;
@@ -1535,10 +1545,6 @@ const HistoricalTrackingModal = ({
         onChange({ ...current, trackedPolities: nextTracked });
     }, [settings, onChange, playerCountry, trackingCandidates]);
 
-    const setIntervalMonths = useCallback((intervalMonths) => {
-        onChange({ ...(settings || {}), intervalMonths });
-    }, [settings, onChange]);
-
     if (!open || typeof document === "undefined") return null;
 
     return createPortal(
@@ -1550,7 +1556,7 @@ const HistoricalTrackingModal = ({
                         <div style={{ minWidth: 0 }}>
                             <div style={{ color: "#f8fafc", fontSize: "1.15rem", fontWeight: 850 }}>Historical tracking</div>
                             <div style={{ color: "rgba(255,255,255,0.48)", fontSize: "0.75rem", marginTop: "0.12rem" }}>
-                                {hasBoundStats ? "Follow countries in historical graphs. Native-bound values are updated by the simulation, not by automatic AI reassessment." : "Choose how often Stats should re-check tracked countries, and which countries you want on your long-term graphs."}
+                                Track countries for historical graphs. Canonical values evolve through native simulation and validated events; no automatic AI reassessment overwrites them.
                             </div>
                         </div>
                     </div>
@@ -1560,7 +1566,7 @@ const HistoricalTrackingModal = ({
                 <div style={{ display: "grid", flex: 1, gap: "1rem", gridTemplateColumns: "minmax(0, 1fr) minmax(280px, 330px)", minHeight: 0, padding: "1rem 1.05rem 1.05rem", ...(isMobile ? { display: "block", overflowY: "auto", padding: "0.85rem" } : null) }}>
                     <div style={{ minHeight: 0, overflow: isMobile ? "visible" : touch ? "auto" : "hidden", display: "flex", flexDirection: "column", gap: "0.9rem" }}>
                         <div style={{ backgroundColor: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "12px", padding: "0.85rem 0.9rem" }}>
-                            <div style={{ color: "rgba(255,255,255,0.8)", fontSize: "0.78rem", fontWeight: 800, marginBottom: "0.5rem" }}>Auto-refresh cadence</div>
+                            <div style={{ color: "rgba(255,255,255,0.8)", fontSize: "0.78rem", fontWeight: 800, marginBottom: "0.5rem" }}>Legacy AI refresh schedule (retired)</div>
                             <div style={{ display: "flex", flexWrap: "wrap", gap: "0.45rem" }}>
                                 {COUNTRY_STATS_TRACKING_INTERVALS.map((months) => {
                                     const active = Number(settings?.intervalMonths) === months;
@@ -1569,7 +1575,8 @@ const HistoricalTrackingModal = ({
                                             key={months}
                                             type="button"
                                             className="oh-tap-row"
-                                            onClick={() => setIntervalMonths(months)}
+                                            disabled
+                                            title="Automatic periodic AI reassessment is retired; native simulation owns Statistics."
                                             style={{
                                                 backgroundColor: active ? "rgba(0,0,0,0.42)" : "rgba(255,255,255,0.04)",
                                                 border: `1px solid ${active ? "rgba(255,255,255,0.28)" : "rgba(255,255,255,0.08)"}`,
@@ -1587,8 +1594,8 @@ const HistoricalTrackingModal = ({
                                 })}
                             </div>
                             <div style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.68rem", lineHeight: 1.45, marginTop: "0.55rem" }}>
-                                Current setting: <span style={{ color: "#dbeafe" }}>{countryStatsTrackingIntervalLabel(settings?.intervalMonths)}</span>.
-                                {" "}Your country is automatically kept in the tracked list whenever auto-refresh is enabled.
+                                Historical saved setting: <span style={{ color: "#dbeafe" }}>{countryStatsTrackingIntervalLabel(settings?.intervalMonths)}</span> (inactive).
+                                {" "}No automatic AI reassessment will run; native chronological settlement and explicitly accepted effects own canonical Statistics.
                             </div>
                         </div>
 
@@ -1696,17 +1703,16 @@ const HistoricalTrackingModal = ({
                         <div style={{ backgroundColor: "rgba(59,130,246,0.07)", border: "1px solid rgba(96,165,250,0.14)", borderRadius: "12px", padding: "0.85rem 0.9rem" }}>
                             <div style={{ color: "#bfdbfe", fontSize: "0.78rem", fontWeight: 850 }}>At a glance</div>
                             <div style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.68rem", lineHeight: 1.5, marginTop: "0.3rem" }}>
-                                Auto-refresh is currently set to <span style={{ color: "#dbeafe" }}>{countryStatsTrackingIntervalLabel(settings?.intervalMonths)}</span>.
-                                {" "}When tracked countries become due, Continuum refreshes all initialized sheets in one bounded AI batch after a completed turn. Countries marked <span style={{ color: "#fbbf24" }}>baseline needed</span> begin auto-refreshing after their first normal Stats sheet exists.
+                                Historical graphs use persisted native Statistics readings. Scheduled AI reassessment has been retired and no longer alters established campaign values. Countries marked <span style={{ color: "#fbbf24" }}>baseline needed</span> require explicit scenario authoring or manual reviewed generation; time skips do not invent baselines.
                             </div>
                         </div>
                         {trackedPolities.length > 0 && (
                             <div style={{ backgroundColor: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "12px", padding: "0.85rem 0.9rem" }}>
-                                <div style={{ color: "rgba(255,255,255,0.8)", fontSize: "0.74rem", fontWeight: 800 }}>Refresh status</div>
+                                <div style={{ color: "rgba(255,255,255,0.8)", fontSize: "0.74rem", fontWeight: 800 }}>Legacy AI assessment history</div>
                                 <div style={{ color: "rgba(255,255,255,0.48)", fontSize: "0.67rem", lineHeight: 1.5, marginTop: "0.3rem" }}>
                                     {refreshRecord.lastBatchDate
                                         ? `The last automatic refresh ran on ${formatGameDateReadable(refreshRecord.lastBatchDate)}.`
-                                        : "No automatic refresh has run yet."}
+                                        : "No historical automatic AI assessment is recorded."}
                                 </div>
                                 <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem", marginTop: "0.55rem" }}>
                                     {trackedPolities.map((key) => {
@@ -2504,10 +2510,21 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
             setWorldSnapshot(world);
             setPolity(world?.polityOverrides?.[targetCountry] ?? null);
             setPlayerLandless(isPolityLandless(world, player.code));
+            // Canonical world writes can update an already-visible country
+            // without a separate country-stats event. Reflect that exact
+            // saved sheet rather than waiting for a manual panel refresh.
+            const persisted = world?.countryStats?.[targetCountry];
+            if (persisted && isValidStatSheet(persisted, statSheetDefinition)) {
+                const cacheKey = `${player.gameKey}:${targetCountry}`;
+                rememberSheet(cacheKey, { date: player.date, sheet: persisted });
+                setState((current) => current.status === "ready" && current.sheet !== persisted
+                    ? { ...current, sheet: persisted, error: "" }
+                    : current);
+            }
         };
         window.addEventListener("oh:world-updated", onWorldUpdated);
         return () => window.removeEventListener("oh:world-updated", onWorldUpdated);
-    }, [active, targetCountry, player.code]);
+    }, [active, targetCountry, player.code, player.gameKey, player.date, statSheetDefinition]);
 
     // Advanced Statistics loads lazily. Existing permanent history wins, the
     // rolling rollback window is harvested as a migration/backfill source, and the
@@ -3106,8 +3123,7 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
                 {/* Its military power and the figures it is read from, on the
                     standard sheet and on a scenario's own alike: the game works
                     them out for every country (MilitaryCard). */}
-                {worldSnapshot && (!visibleNationalDashboard || (dashboardPage === "details"
-                  && !statSheetDefinition.dashboard.widgets.some(widget => widget.style === "military" && widget.page === "details"))) && (
+                {worldSnapshot && shouldShowStandaloneMilitaryCard(visibleNationalDashboard, dashboardPage) && (
                     <>
                     <div style={sectionTitleStyle}>⚔ Military</div>
                     <MilitaryCard world={worldSnapshot} country={resolvedTargetKey || targetCountry} />
@@ -3141,7 +3157,7 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
                         <span style={{ minWidth: 0 }}>
                             <span style={{ display: "block", fontSize: "0.75rem", fontWeight: 850 }}>Historical tracking</span>
                             <span style={{ color: "rgba(255,255,255,0.46)", display: "block", fontSize: "0.62rem", marginTop: "0.08rem" }}>
-                                Auto-refresh: {countryStatsTrackingIntervalLabel(trackingSettings.intervalMonths)} · Tracked: {trackingSettings.trackedPolities.length}/{COUNTRY_STATS_TRACKING_MAX_POLITIES}
+                                Native history tracking · Tracked: {trackingSettings.trackedPolities.length}/{COUNTRY_STATS_TRACKING_MAX_POLITIES}
                             </span>
                             <span style={{ color: "rgba(255,255,255,0.34)", display: "block", fontSize: "0.6rem", marginTop: "0.14rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                                 {trackingPreview}
