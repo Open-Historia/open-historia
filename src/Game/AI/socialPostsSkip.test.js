@@ -101,7 +101,9 @@ test("the field is sent with the feature, read when the turn is written, and the
   assert.ok(apply.indexOf("socialFeed: withSkipPosts(") < apply.indexOf("let nextWorld = worldWithImpacts;"));
 });
 
-test("the social network asks for nothing: no task of its own, no spender, and the app calls no model", () => {
+// Posts ride in the time skip. The one exception is an empty feed's Refresh
+// (GameUI/rostraRefresh.jsx), a request the player makes by pressing it.
+test("the social network asks for nothing by itself: no spender, and the feed calls no model", () => {
   assert.deepEqual([...SKIP_SPENDERS], ["jump", "review", "history", "stats", "institutionBallots"]);
   assert.equal(Object.keys(GAMEPLAY_SCHEMAS).some((key) => /social|listen/i.test(key)), false);
   assert.equal(Object.keys(JSON.parse(read("./defaultPrompts.json")).tasks).some((key) => /social|listen/i.test(key)), false);

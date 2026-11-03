@@ -160,6 +160,9 @@ export const pendingCountryStatSheet = async (...args) => (await gameplay()).pen
 export const assessPoliticalLandscape = async (...args) => (await gameplay()).assessPoliticalLandscape(...args);
 export const assessGoalProgress = async (...args) => (await gameplay()).assessGoalProgress(...args);
 export const generateCountryStats = async (...args) => (await gameplay()).generateCountryStats(...args);
+// Rostra's empty feed: one request for its first posts, written into the
+// feed (gameplay.js generateRostraPosts).
+export const generateRostraPosts = async (...args) => (await gameplay()).generateRostraPosts(...args);
 // Rostra's Search: one request for what people in a place are posting
 // (runtime/placeFeed.js). It writes nothing to the game: asked with the
 // player's own key, kept on the player's own device, so a page playing a shared

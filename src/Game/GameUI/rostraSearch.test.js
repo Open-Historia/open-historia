@@ -63,6 +63,22 @@ test("a place's posts are one request, made on a pick or a press and never for t
   assert.match(read("../../main.jsx"), /deleteDatabase\("oh-listen-in"\)/);
 });
 
+test("an empty feed says so and offers Refresh: one request, made on the press, never in a shared game", () => {
+  const refresh = read("./rostraRefresh.jsx");
+  assert.match(panel, /posts\.length === 0 && tab === "all" \? \(\n\s*<EmptyFeedRefresh canPost=\{canPost\} \/>/);
+  assert.match(refresh, />Nothing has been posted yet\.</);
+  // The one call, inside the press's handler; nothing asks on render.
+  assert.equal(refresh.match(/generateRostraPosts\(/g).length, 1);
+  assert.match(refresh, /const refresh = async \(\) => \{\n\s*if \(busy\) return;/);
+  assert.match(refresh, /onClick=\{\(\) => void refresh\(\)\}/);
+  assert.doesNotMatch(refresh, /useEffect/);
+  // A shared game's feed is the host's: no button there.
+  assert.match(refresh, /\{shared \? \(/);
+  // Search's empty place uses the same button.
+  assert.match(search, /<RefreshButton onClick=\{ask\} \/>/);
+  assert.doesNotMatch(search, />Load posts</);
+});
+
 test("the box is put away until the pen opens it, and Quote opens it too", () => {
   assert.match(panel, /aria-label=\{composing \? "Put the post away" : "Write a post"\}/);
   assert.match(panel, /\{composing && \(\n {10}<div style=\{\{ borderBottom/);
