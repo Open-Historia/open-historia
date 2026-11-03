@@ -51,8 +51,13 @@ test("the built-in default scenario description has committed translations in ev
   const text = DEFAULT_SCENARIO.description;
   assert.ok(typeof text === "string" && text.trim(), "the default scenario has a description");
   assert.ok(CATALOG.includes(text), "the current scenario description is in the English catalog");
-  const generated = fs.readFileSync(new URL("./web/generated/defaultScenario.js", import.meta.url), "utf8");
-  assert.ok(generated.includes(JSON.stringify(text)), "the web-generated scenario uses the seed's description");
+  // The web build writes this file (scripts/seed-web-defaults.mjs) and git ignores it: a checkout that has not
+  // built the web app (CI's npm ci + npm test) has none, and the check is for when it does.
+  const generatedUrl = new URL("./web/generated/defaultScenario.js", import.meta.url);
+  if (fs.existsSync(generatedUrl)) {
+    const generated = fs.readFileSync(generatedUrl, "utf8");
+    assert.ok(generated.includes(JSON.stringify(text)), "the web-generated scenario uses the seed's description");
+  }
   for (const code of SHIPPED_PACK_LANGUAGES) {
     const translated = read(`${code}.json`)[text];
     assert.ok(typeof translated === "string" && translated.trim(), `${code}: default scenario description must be translated`);
