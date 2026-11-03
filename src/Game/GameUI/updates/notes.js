@@ -53,6 +53,23 @@ import { PAST_UPDATES } from "./notesPast.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // A model's war, client state, relation or agreement written inside an event is carried out; a skip's events are
+    // sent with impacts required, so Gemini no longer leaves them off (AI/jumpAnswerShelves.js,
+    // gameplaySchemas.js withEventImpacts; the owner's reports, 2026-11-03).
+    id: "2026-11-changes-where-they-belong",
+    kind: "minor",
+    date: "2026-11-03",
+    channel: "beta",
+    banners: [
+      {
+        title: "Wars and client states take effect",
+        items: [
+          "A war, a client state, a relation or an agreement that an AI model writes inside an event now takes effect, scripted events included, and a time skip on Gemini no longer leaves out the changes its events tell.",
+        ],
+      },
+    ],
+  },
+  {
     // Peace on any terms (runtime/peaceTerms.js: annexed, cessions, puppet, conditions), forces built up through
     // actions and projects only, and the fixes after 0.0.112 (the owner, 2026-11-03).
     id: "2026-11-peace-on-any-terms",
