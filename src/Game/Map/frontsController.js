@@ -17,6 +17,13 @@ import { foldBattlefieldName, frontViewOf, isOpenBattlefield, normalizeBattlefie
 
 const NONE = Object.freeze([]);
 
+// The battlefields the map draws: those being fought over, and the forces a
+// country has built up in peace, at home or on a border (status "standing"),
+// whose troops were never drawn: "it looks like built up troops are invisible in
+// the released version" (the owner, 2026-11-03). Nothing is taken in peace, so
+// such a record paints no ground: its troops are what is seen.
+export const isDrawnBattlefield = (battlefield) => isOpenBattlefield(battlefield) || battlefield?.status === "standing";
+
 let battlefields = NONE;
 // The list a reveal is showing; null is the world as it stands.
 let override = null;
@@ -150,7 +157,7 @@ export const getFrontTargets = () => {
     const view = frontViewOf(battlefield);
     // One that has closed is drawn only while its last days are still to be
     // played.
-    if (!isOpenBattlefield(battlefield) && !(view.window && view.window.from < view.replay.end)) continue;
+    if (!isDrawnBattlefield(battlefield) && !(view.window && view.window.from < view.replay.end)) continue;
     targets.push({
       name: foldBattlefieldName(battlefield.name),
       run: runKeyOf(battlefield),
@@ -178,7 +185,7 @@ export const isAtTheFront = (unit) => {
   const list = shown();
   let names = openNames.get(list);
   if (!names) {
-    names = new Set(list.filter(isOpenBattlefield).map((battlefield) => foldBattlefieldName(battlefield.name)));
+    names = new Set(list.filter(isDrawnBattlefield).map((battlefield) => foldBattlefieldName(battlefield.name)));
     openNames.set(list, names);
   }
   return names.has(name);
