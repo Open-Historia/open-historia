@@ -57,3 +57,11 @@ test("Country Diplomacy presents Puppet relationships through the shared visibil
   assert.doesNotMatch(stats, /world\.puppets/);
   assert.doesNotMatch(stats, /row\.loyalty\b(?!Band)/);
 });
+
+test("the country panel has one button for each of its views", () => {
+  // Two contributions each added a Politics tab and the merge kept both (the owner, 2026-11-03: "there are 2
+  // politics buttons in the country menu").
+  const views = [...read("stats.jsx").matchAll(/onClick=\{\(\) => setStatsView\("(\w+)"\)\}/g)].map((match) => match[1]);
+  assert.deepEqual(views, [...new Set(views)]);
+  assert.ok(views.includes("politics"));
+});
