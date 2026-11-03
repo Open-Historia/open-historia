@@ -239,6 +239,12 @@ Gameplay writes flow: **AI turn / cheat / UI action → `gameState.js` write →
 | **Web saves** | No accounts and no sync: games and scenarios stay in this browser (IndexedDB) and move with game export/import (web build only) | [Web build](web-build.md) |
 | **i18n** | shipped language packs translate the interface (22 languages); the AI translates only content, once, into the server's pack; the prompts' guidance ships translated | [Languages & Translation](i18n.md) |
 
+### Scenario Political World authoring
+
+The Scenario Editor's **Politics → Manage Political World** edits the canonical `world.politicalActors.byPolity` records through `src/Game/GameUI/countryEditorPolitical.js`. Government details include the legislature, seat capacity and next election; party details include stable IDs, parliamentary seats, support, coalition/governing role, native names, ideology and founding information. Government membership is recorded using canonical party IDs rather than independent role flags. Blank party-seat values mean unknown, while `0` means explicitly no seats. The editor rejects duplicate party IDs, excessive assigned seats and impossible electoral support totals rather than inventing corrective data.
+
+The on-demand AI **Compile government and parties** workflow is a *candidate update*, not a historical source of truth: `src/Game/AI/gameplay.js` validates compiled totals before folding them into Political World. This protects basic arithmetic integrity but does not establish that every AI-authored party, coalition or election claim matches scenario canon. Use the manual authoring controls to review and correct such results.
+
 ---
 
 ### Quick "where do I look?" index
