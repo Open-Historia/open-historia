@@ -863,6 +863,7 @@ export const register = (ctx) => {
     return {
       id: preview?.id || "",
       summary: preview?.summary || "",
+      notes: list(preview?.notes).map((note) => String(note ?? "")).filter(Boolean),
       date: preview?.date || "",
       mode: preview?.mode || "",
       source: preview?.generation?.source || "unknown",
@@ -1541,6 +1542,8 @@ export const register = (ctx) => {
         componentCount: Array.isArray(sheet?.territorialComponents) ? sheet.territorialComponents.length : 0,
         perCapita: Number.isFinite(perCapita) ? perCapita : null,
         politics,
+        ideologies: list(engine.ctPolitics?.IDEOLOGIES).map((ideology) => [ideology.id, ideology.name]),
+        partyRoles: Object.entries(engine.ctPolitics?.PARTY_ROLE_LABELS ?? {}),
         registry: list(engine.politicalTraitRegistry?.POLITICAL_TRAIT_REGISTRY).map((entry) => ({
           key: entry.key, label: entry.label, description: entry.description, min: entry.min, max: entry.max, aliases: list(entry.aliases),
         })),
@@ -1558,7 +1561,24 @@ export const register = (ctx) => {
       };
     },
 
+    "cheats.country.composition": async ({ politics = null, politicsBaseline = null } = {}) => {
+      if (!politics || typeof engine.countryEditorPolitical?.politicalEditorComposition !== "function") return { text: "", error: "" };
+      try {
+        const composition = engine.countryEditorPolitical.politicalEditorComposition(politics, { asRecorded: politicsBaseline || null });
+        const supported = list(politics.parties).some((party) => party?.supportPercent !== "" && party?.supportPercent != null);
+        const seats = composition.totalSeats === null
+          ? "Legislature size not specified."
+          : `Seats assigned: ${composition.assignedSeats} / ${composition.totalSeats}. Unlisted or unassigned: ${composition.unlistedSeats}.`;
+        const support = supported
+          ? `Named party support: ${composition.mappedSupport}% (remaining ${composition.otherSupport}% not individually mapped).`
+          : "Party support not yet specified.";
+        return { text: `${seats} ${support}`, error: "" };
+      } catch (error) {
+        return { text: "", error: error?.message || "Invalid political landscape." };
+      }
+    },
     "cheats.country.save": async ({ code, form = {}, baseline = {}, politics = null, politicsBaseline = null, componentCount = 0, fallbackName = "" }) => {
+
       if (!code) throw new Error("Pick a country first.");
       const world = await readWorld();
       const existing = world.polityOverrides?.[code] ?? {};
