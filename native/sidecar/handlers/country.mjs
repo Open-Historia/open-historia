@@ -1775,10 +1775,20 @@ export const register = (ctx) => {
       await persistTracking(extras, player, { ...current, trackedPolities: nextTracked });
       return trackingView({ target, search });
     },
-    "country.answer": async ({ op = "", ref = "", territory = "", money = "none", theirs = "", chatId = "", messageId = "" } = {}) => {
+    "country.answer": async ({ op = "", ref = "", territory = "", money = "none", theirs = "", country = "free", cede = "", ours = "", more = "", chatId = "", messageId = "" } = {}) => {
       if (op === "propose") {
         const player = await readPlayer();
-        const terms = { territory, reparations: paymentOf(money, player.code, cleanText(theirs)) };
+        const mine = cleanText(player.code);
+        const other = cleanText(theirs);
+        const regionNames = (text) => cleanText(text).split(/\s*,\s*/).map(cleanText).filter(Boolean);
+        const terms = {
+          territory,
+          reparations: paymentOf(money, mine, other),
+          ...(country === "annex" ? { annexed: { country: other, by: mine } } : {}),
+          ...(["satellite", "protectorate", "client"].includes(country) ? { puppet: { subject: other, overlord: mine, kind: country } } : {}),
+          cessions: [...regionNames(cede).map((region) => ({ region, to: mine })), ...regionNames(ours).map((region) => ({ region, to: other }))],
+          conditions: String(more ?? "").split(/\r?\n/).map(cleanText).filter(Boolean),
+        };
         const answer = await answerDiplomacy(ctx, "propose", ref, terms, { chatId, messageId });
         if (!answer.ok || answer.error) return { ok: false, said: answer.error || "That could not be done." };
         const extras = await loadExtras(ctx);

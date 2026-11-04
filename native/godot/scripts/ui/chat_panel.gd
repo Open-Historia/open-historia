@@ -3023,6 +3023,10 @@ class Conversation extends VBoxContainer:
 	var peace_errors: Dictionary = {}
 	var peace_territory := "restored"
 	var peace_money := "none"
+	var peace_country := "free"
+	var peace_cede := ""
+	var peace_ours := ""
+	var peace_more := ""
 	var peace_said := ""
 	var peace_sending := false
 	var editing_title := false
@@ -3472,6 +3476,10 @@ class Conversation extends VBoxContainer:
 		peace_errors = {}
 		peace_territory = "restored"
 		peace_money = "none"
+		peace_country = "free"
+		peace_cede = ""
+		peace_ours = ""
+		peace_more = ""
 		peace_said = ""
 		peace_sending = false
 		_peace_accepted = {}
@@ -4600,10 +4608,39 @@ class Conversation extends VBoxContainer:
 		ground.tooltip_text = "The ground"
 		ground.item_selected.connect(func(index: int) -> void: peace_territory = str(ground.get_item_metadata(index)))
 		column.add_child(ground)
+		var their_country := _peace_field(ChatPanel.a(peace_info.get("countryChoices", [])), peace_country)
+		their_country.tooltip_text = "Their country"
+		their_country.item_selected.connect(func(index: int) -> void:
+			peace_country = str(their_country.get_item_metadata(index))
+			update_composer())
+		column.add_child(their_country)
+		if peace_country != "annex":
+			var cede := _peace_line(peace_cede, "Regions they cede to us, by name, comma between", "Regions they cede to us")
+			cede.text_changed.connect(func(value: String) -> void: peace_cede = value)
+			column.add_child(cede)
+		var ours := _peace_line(peace_ours, "Regions we cede to them, by name, comma between", "Regions we cede to them")
+		ours.text_changed.connect(func(value: String) -> void: peace_ours = value)
+		column.add_child(ours)
 		var money := _peace_field(ChatPanel.a(peace_info.get("reparationChoices", [])), peace_money)
 		money.tooltip_text = "Reparations"
 		money.item_selected.connect(func(index: int) -> void: peace_money = str(money.get_item_metadata(index)))
 		column.add_child(money)
+		var more := TextEdit.new()
+		more.text = peace_more
+		more.placeholder_text = "Any other conditions, a line each"
+		more.tooltip_text = "Other conditions"
+		more.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
+		more.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		more.custom_minimum_size = Vector2(1, 44)
+		more.add_theme_font_override("font", UI.font(400))
+		more.add_theme_font_size_override("font_size", 11)
+		more.add_theme_color_override("font_color", Color8(231, 233, 234))
+		more.add_theme_color_override("font_placeholder_color", Color(1, 1, 1, 0.38))
+		var more_style := UI.box(Color(0, 0, 0, 0.35), Color(1, 1, 1, 0.16), 6, 1, Vector4(6, 3, 6, 3))
+		for state in ["normal", "focus", "read_only"]:
+			more.add_theme_stylebox_override(state, more_style)
+		more.text_changed.connect(func() -> void: peace_more = more.text)
+		column.add_child(more)
 		if not peace_said.is_empty():
 			column.add_child(UI.wrapped(peace_said, 9, ChatPanel.RED_SOFT))
 		var buttons := HBoxContainer.new()
@@ -4623,6 +4660,23 @@ class Conversation extends VBoxContainer:
 		column.add_child(buttons)
 		box.add_child(column)
 		return box
+
+
+	func _peace_line(value: String, placeholder: String, tooltip: String) -> LineEdit:
+		var node := LineEdit.new()
+		node.text = value
+		node.placeholder_text = placeholder
+		node.tooltip_text = tooltip
+		node.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		node.custom_minimum_size = Vector2(1, 26)
+		node.add_theme_font_override("font", UI.font(400))
+		node.add_theme_font_size_override("font_size", 11)
+		node.add_theme_color_override("font_color", Color8(231, 233, 234))
+		node.add_theme_color_override("font_placeholder_color", Color(1, 1, 1, 0.38))
+		var style := UI.box(Color(0, 0, 0, 0.35), Color(1, 1, 1, 0.16), 6, 1, Vector4(6, 3, 6, 3))
+		for state in ["normal", "focus", "read_only"]:
+			node.add_theme_stylebox_override(state, style)
+		return node
 
 
 	func _peace_field(options: Array, chosen: String) -> OptionButton:
@@ -4660,7 +4714,7 @@ class Conversation extends VBoxContainer:
 		update_composer()
 		var id := chat_id
 		var message_id := ChatPanel.thread_id("msg")
-		var reply := await panel.engine.request("country.answer", {"op": "propose", "ref": ChatPanel.t(war.get("id", "")), "territory": peace_territory, "money": peace_money, "theirs": ChatPanel.t(war.get("enemy", "")), "chatId": id, "messageId": message_id})
+		var reply := await panel.engine.request("country.answer", {"op": "propose", "ref": ChatPanel.t(war.get("id", "")), "territory": peace_territory, "money": peace_money, "theirs": ChatPanel.t(war.get("enemy", "")), "country": peace_country, "cede": peace_cede if peace_country != "annex" else "", "ours": peace_ours, "more": peace_more, "chatId": id, "messageId": message_id})
 		peace_sending = false
 		if id != chat_id:
 			return

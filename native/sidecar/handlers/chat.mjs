@@ -533,6 +533,9 @@ export const register = (ctx) => {
         const open = offer.status === "open";
         const payment = offer.terms?.reparations ?? null;
         const share = payment ? Math.round(payment.share * 1000) / 10 : 0;
+        const annexed = offer.terms?.annexed ?? null;
+        const puppet = offer.terms?.puppet ?? null;
+        const conditions = list(offer.terms?.conditions);
         return {
           id: clean(offer.id),
           messageId: clean(offer.messageId),
@@ -544,8 +547,13 @@ export const register = (ctx) => {
           party: mine ? clean(offer.to) : clean(offer.from),
           state: open ? (mine ? "Waiting for their answer" : "") : statusText[offer.status] ?? "",
           terms: [
-            offer.terms?.territory === peace.TERRITORY_AS_HELD ? "Each side keeps the ground it holds." : "Every region goes back to whose it was before the war.",
+            annexed
+              ? `${annexed.country} is annexed: all its land passes to ${annexed.by}.`
+              : offer.terms?.territory === peace.TERRITORY_AS_HELD ? "Each side keeps the ground it holds." : "Every region goes back to whose it was before the war.",
+            ...peace.cessionsByReceiver(offer.terms?.cessions).map(({ to, regions }) => `Ceded to ${to}: ${regions.join(", ")}.`),
+            ...(puppet ? [`${puppet.subject} becomes ${puppet.overlord}'s ${engine.ctPuppets.puppetKindLabel(puppet.kind)}.`] : []),
             payment ? `${payment.payer} pays ${payment.receiver} reparations: ${share}% of its economy a year for ${payment.years} years.` : "Nobody pays reparations.",
+            ...(conditions.length > 0 ? ["And:", ...conditions.map((condition) => `- ${condition}`)] : []),
           ],
         };
       });
@@ -557,6 +565,13 @@ export const register = (ctx) => {
         territoryChoices: [
           { key: peace.TERRITORY_RESTORED, label: "The old borders: every region goes back" },
           { key: peace.TERRITORY_AS_HELD, label: "Each side keeps the ground it holds" },
+        ],
+        countryChoices: [
+          { key: "free", label: "Their country stays independent" },
+          { key: "annex", label: "We annex all of their country" },
+          { key: "satellite", label: "Their country becomes our puppet state" },
+          { key: "protectorate", label: "Their country becomes our protectorate" },
+          { key: "client", label: "Their country becomes our client state" },
         ],
         reparationChoices: [
           { key: "none", label: "Nobody pays" },
