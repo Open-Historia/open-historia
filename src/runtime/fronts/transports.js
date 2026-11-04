@@ -255,6 +255,37 @@ export const huntTransport = (transports, id, hunter, on = true) => normalizeTra
 
 // ---- setting out ----------------------------------------------------------------------
 
+// The cities a dispatch may set out from: its owner's, the best first. Best is
+// the least way to go: from where its troops stand to the city (when they stand
+// somewhere) and on from it to where they are sent. A ship from a country whose
+// capital is far inland sails from a port, and troops a long way from the sea
+// go overland to the one that is on their way.
+//   cities        the map's cities: [{ name, lng, lat }]
+//   holderAt      (lng, lat) => who holds the ground there
+//   owner, to     whose it is, and where it is sent ({ lng, lat })
+//   near          where its troops stand, [lng, lat], or null
+//   km            (lngA, latA, lngB, latB) => the kilometres between two places
+//   most          how many to give
+// Returns [{ lng, lat, name }], the name with its kind ("city: X").
+// (Troops taken off a battlefield try this many of them when no way begins where
+// they stand, for one of these reasons: wayfinder.js findWay.)
+export const EMBARK_PORTS_MOST = 12;
+export const TRANSPORT_START_FAILS = Object.freeze(["no-coast", "no-ground"]);
+export const departuresFor = ({ cities = [], holderAt = () => "", owner = "", to = null, near = null, km, most = 8 } = {}) => {
+  const mine = [];
+  const there = readPoint(to);
+  const here = readPoint(near);
+  for (const city of list(cities)) {
+    const lng = Number(city?.lng);
+    const lat = Number(city?.lat);
+    if (!Number.isFinite(lng) || !Number.isFinite(lat) || fold(holderAt(lng, lat)) !== fold(owner)) continue;
+    const far = (there ? km(lng, lat, there[0], there[1]) : 0) + (here ? km(here[0], here[1], lng, lat) : 0);
+    mine.push({ lng, lat, name: `city: ${clean(city.name)}`, far });
+  }
+  mine.sort((a, b) => a.far - b.far || a.name.localeCompare(b.name));
+  return mine.slice(0, Math.max(0, most)).map(({ lng, lat, name }) => ({ lng, lat, name }));
+};
+
 // The way found for a transporter and what follows from it: it is MOVING, with
 // its way, how long that is and the day it is due; or REFUSED, with why.
 //   grid       the sheet of the whole map (worldGrid.js)

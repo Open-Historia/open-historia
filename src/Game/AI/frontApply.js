@@ -38,7 +38,7 @@ import { yearInEra } from "../../runtime/unitMotion.js";
 import { eraSettingOf, warSettingsOf, warfareOf } from "../../runtime/warSettings.js";
 import { normalizeBattlefields } from "../../runtime/fronts/record.js";
 import { homeName } from "../../runtime/fronts/home.js";
-import { isUnderWay, normalizeTransports } from "../../runtime/fronts/transports.js";
+import { EMBARK_PORTS_MOST, TRANSPORT_START_FAILS, departuresFor, isUnderWay, normalizeTransports } from "../../runtime/fronts/transports.js";
 import { AIR_CITY_GDP, airStrikesBlock, normalizeAirStrikes, withTurnAirStrikes } from "../../runtime/fronts/airStrike.js";
 import { findWay } from "../../runtime/fronts/wayfinder.js";
 import { buildWorldGrid, measureOptions, worldSheetKey } from "../../runtime/fronts/worldGrid.js";
@@ -754,8 +754,11 @@ export const transportWaysFor = async ({ world = {}, game = {}, campaignId = "",
     for (const transport of ordered) {
       const record = records.find((entry) => fold(entry.name) === fold(transport.embark.battlefield));
       if (!record?.frame) continue;
-      // Its war's two sides as the ledger has them, or failing that the battlefield's.
-      const war = asArray(world?.wars).find((entry) => clean(entry?.id) === record.warId);
+      // Its war's two sides as the ledger has them, or failing that the battlefield's. (Troops taken from their
+      // country's forces at home, which are no war's, serve the first war their country is fighting: engine.js transportWar.)
+      const fought = (entry) => clean(entry?.status) === "active" && [...asArray(entry?.sideA), ...asArray(entry?.sideB)].some((name) => fold(name) === fold(transport.owner));
+      const war = asArray(world?.wars).find((entry) => clean(entry?.id) === (transport.warId || record.warId) && fought(entry))
+        ?? (record.home ? asArray(world?.wars).find(fought) : asArray(world?.wars).find((entry) => clean(entry?.id) === record.warId));
       const sides = (war ? [asArray(war.sideA), asArray(war.sideB)] : record.sides).map((members) => members.map(fold));
       const mine = sides[0].includes(fold(transport.owner)) ? 0 : sides[1].includes(fold(transport.owner)) ? 1 : -1;
       if (mine < 0) continue;
@@ -775,16 +778,35 @@ export const transportWaysFor = async ({ world = {}, game = {}, campaignId = "",
       }
       if (count === 0) continue;
       const [lng, lat] = projectorOf(record.frame).toLngLat(x / count, y / count);
-      const from = [Math.round(lng * 1000) / 1000, Math.round(lat * 1000) / 1000];
-      const way = findWay(grid, {
+      const near = [Math.round(lng * 1000) / 1000, Math.round(lat * 1000) / 1000];
+      const wayFrom = (start) => findWay(grid, {
         medium: transport.medium,
-        from,
+        from: start,
         to: [transport.to.lng, transport.to.lat],
         holderOf,
         friendly: (name) => sides[mine].includes(fold(name)),
         hostile: (name) => sides[1 - mine].includes(fold(name)),
         year,
       });
+      // From where they stand, or as the engine sends them where no way begins there: overland to a city of
+      // their country's that one does begin from (runtime/fronts/transports.js departuresFor).
+      let from = near;
+      let way = wayFrom(near);
+      if (TRANSPORT_START_FAILS.includes(way.error)) {
+        const holderAt = (at, of) => {
+          const cell = grid.cellOf(at, of);
+          const mark = cell >= 0 ? grid.region[cell] : 0;
+          return mark ? holderOf(grid.ids[mark]) : "";
+        };
+        const ports = departuresFor({ cities: front.map.cities, holderAt, owner: transport.owner, to: transport.to, near, km: grid.km, most: EMBARK_PORTS_MOST });
+        for (const port of ports) {
+          const tried = wayFrom([port.lng, port.lat]);
+          if (tried.error) continue;
+          way = tried;
+          from = [Math.round(port.lng * 1000) / 1000, Math.round(port.lat * 1000) / 1000];
+          break;
+        }
+      }
       found[transport.id] = way.error
         ? { error: way.error, from }
         : { way: way.way, km: way.km, days: Math.max(1, Math.ceil(way.km / Math.max(1, transport.speed))), landing: way.landing, arrived: way.arrived, from };
