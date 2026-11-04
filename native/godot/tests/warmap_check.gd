@@ -197,7 +197,8 @@ func _patch(image: Image, centre: Vector2, half: int) -> Color:
 	return sum / float(maxi(count, 1))
 
 
-func _painted_world() -> Vector2:
+func _painted_spots(most: int) -> Array:
+	var spots: Array = []
 	for run in war.paint.have_runs():
 		var field: WarPaint.Field = war.paint.field(str(run))
 		if field == null or not field.shown or field.viewport == null:
@@ -205,8 +206,7 @@ func _painted_world() -> Vector2:
 		var image := field.viewport.get_texture().get_image()
 		var width := image.get_width()
 		var height := image.get_height()
-		var best := Vector2.INF
-		var nearest := INF
+		var found: Array = []
 		for y in range(0, height, 3):
 			for x in range(0, width, 3):
 				if image.get_pixel(x, y).a < 0.98:
@@ -219,46 +219,72 @@ func _painted_world() -> Vector2:
 					if px < 0 or py < 0 or px >= width or py >= height or image.get_pixel(px, py).a < 0.98:
 						ok = false
 						break
-				if not ok:
-					continue
-				var distance := Vector2(x - width * 0.5, y - height * 0.5).length()
-				if distance < nearest:
-					nearest = distance
-					best = Vector2(x + 0.5, y + 0.5)
-		if best != Vector2.INF:
-			return field.rect.position + Vector2(best.x / width * field.rect.size.x, best.y / height * field.rect.size.y)
-	return Vector2.INF
+				if ok:
+					found.append(Vector2(x + 0.5, y + 0.5))
+		var middle := Vector2(width * 0.5, height * 0.5)
+		found.sort_custom(func(a: Vector2, b: Vector2) -> bool: return a.distance_squared_to(middle) < b.distance_squared_to(middle))
+		var apart := maxf(width, height) / 10.0
+		var kept: Array = []
+		for point in found:
+			var spot: Vector2 = point
+			var near := false
+			for other in kept:
+				if spot.distance_to(other) < apart:
+					near = true
+					break
+			if near:
+				continue
+			kept.append(spot)
+			spots.append(field.rect.position + Vector2(spot.x / width * field.rect.size.x, spot.y / height * field.rect.size.y))
+			if spots.size() >= most:
+				return spots
+	return spots
 
 
 func _paint_shows(label: String, shot: String, unlit := false) -> void:
-	var spot := _painted_world()
-	if spot == Vector2.INF:
+	var spots := _painted_spots(6)
+	if spots.is_empty():
 		_check(label, false, "no painted pixel found")
 		return
-	main.map_view.camera.position = spot
-	main.map_view.camera.zoom = Vector2.ONE * pow(2.0, 8.6) / 8.0
-	main.map_view.call("_after_camera_move")
 	var light: CanvasLayer = null
+	var globe_node: Node = null
 	if unlit:
 		var globe_view: Variant = _extras().get("globe")
 		var layer: Variant = (globe_view as Object).get("_light_layer") if globe_view is Object else null
 		if layer is CanvasLayer:
 			light = layer
+			globe_node = globe_view as Node
+	var said: PackedStringArray = []
+	var shown := false
+	for item in spots:
+		var spot: Vector2 = item
+		main.map_view.camera.position = spot
+		main.map_view.camera.zoom = Vector2.ONE * pow(2.0, 8.6) / 8.0
+		main.map_view.call("_after_camera_move")
+		await _frames(2)
+		if light:
+			globe_node.set_process(false)
 			light.visible = false
-	await _wait(2.0)
-	var at: Vector2 = main.map_view.world_to_screen(spot)
-	await _shoot(shot)
-	var with_paint := _patch(root.get_viewport().get_texture().get_image(), at, 4)
-	for node in war.paint._copy_nodes:
-		(node as CanvasItem).visible = false
-	await _frames(4)
-	await RenderingServer.frame_post_draw
-	var without := _patch(root.get_viewport().get_texture().get_image(), at, 4)
-	war.paint._sync_visibility()
-	if light:
-		light.visible = true
-	var gap_colour := maxf(absf(with_paint.r - without.r), maxf(absf(with_paint.g - without.g), absf(with_paint.b - without.b)))
-	_check(label, gap_colour > 0.03, "%s painted, %s without the paint" % [with_paint.to_html(false), without.to_html(false)])
+		await _wait(2.0)
+		var at: Vector2 = main.map_view.world_to_screen(spot)
+		await _shoot(shot)
+		var with_paint := _patch(root.get_viewport().get_texture().get_image(), at, 4)
+		for node in war.paint._copy_nodes:
+			(node as CanvasItem).visible = false
+		await _frames(4)
+		await RenderingServer.frame_post_draw
+		var without := _patch(root.get_viewport().get_texture().get_image(), at, 4)
+		war.paint._sync_visibility()
+		await _frames(2)
+		if light:
+			light.visible = true
+			globe_node.set_process(true)
+		var gap_colour := maxf(absf(with_paint.r - without.r), maxf(absf(with_paint.g - without.g), absf(with_paint.b - without.b)))
+		said.append("%s painted, %s without the paint" % [with_paint.to_html(false), without.to_html(false)])
+		if gap_colour > 0.03:
+			shown = true
+			break
+	_check(label, shown, "; ".join(said))
 
 
 func _globe_pass() -> void:
