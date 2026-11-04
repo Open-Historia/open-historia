@@ -53,6 +53,23 @@ import { PAST_UPDATES } from "./notesPast.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // The display mode setting and tidier game cards (a contributor's PR #935, with its review fixes).
+    id: "2026-11-display-mode",
+    kind: "minor",
+    date: "2026-11-03",
+    channel: "beta",
+    banners: [
+      {
+        title: "Windowed, maximized or fullscreen",
+        items: [
+          "In the desktop app, Settings → Display now chooses how the game's window is shown: in a window, maximized, or fullscreen, and remembers it for next time.",
+          "Game cards show their date in your language, and long save names fit on the card.",
+          "A game's Archive button has moved into its card's menu.",
+        ],
+      },
+    ],
+  },
+  {
     // A contributor's PR #942, trimmed to the map card's button (GameUI/rostraOpen.js, opening Search), the dock's
     // phone and flags for full official names (resolvePolityFlag); the owner's choice, 2026-11-03.
     id: "2026-11-rostra-check-in",
