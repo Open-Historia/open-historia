@@ -294,10 +294,9 @@ static func page(banner: Dictionary, update: Dictionary, ctx: Dictionary) -> Con
 	var width: float = ctx.get("width", 1440.0)
 	var is_desk := str(banner.get("scene", "")) == "desk"
 	var plate := UpdateKit.plate({"background": GROUND, "border": accent_alpha(0.28), "radius": 14.0, "padding": Vector4(1, 1, 1, 1)}, still)
-	UpdateKit.brackets(plate, ACCENT, px(0.7), px(1.4), 1.5)
+	UpdateKit.brackets(plate, ACCENT, px(0.7), px(1.4), 1.5, true)
 	var column := UpdateKit.vbox(0)
 	var holder := UpdateKit.frame(px(10.5) if narrow else ShellFonts.clamp_vw(11.5, 24.0, 15.0, width), 2.0, ACCENT)
-	holder.z_index = 1
 	holder.add_child(desk(still) if is_desk else feed_stage(still, narrow))
 	column.add_child(UpdateKit.reveal(holder, 150.0, still))
 	var body := UpdateKit.vbox(0)

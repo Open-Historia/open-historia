@@ -500,8 +500,15 @@ static func plate_reveal(plate_box: PlateBox, still: bool) -> Riser:
 	return holder
 
 
-static func brackets(plate_box: PlateBox, colour: Color, inset := 14.4, length := 35.2, thickness := 2.0) -> void:
-	plate_box.decor.items.append({"kind": "brackets", "colour": colour, "inset": inset, "length": length, "thickness": thickness})
+static func brackets(plate_box: PlateBox, colour: Color, inset := 14.4, length := 35.2, thickness := 2.0, under := false) -> void:
+	var item := {"kind": "brackets", "colour": colour, "inset": inset, "length": length, "thickness": thickness}
+	if not under:
+		plate_box.decor.items.append(item)
+		return
+	var beneath := Decor.new()
+	beneath.items.append(item)
+	plate_box.add_child(beneath)
+	plate_box.move_child(beneath, 0)
 
 
 static func rule(colour: Color, middle: Control = null, margin := Vector2(14.4, 14.4)) -> Control:
