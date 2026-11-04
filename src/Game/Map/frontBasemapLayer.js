@@ -83,7 +83,7 @@ export const pictureMesh = (coordinates, steps = MESH_STEPS) => {
   return out;
 };
 
-const compile = (gl, type, source) => {
+export const compile = (gl, type, source) => {
   const shader = gl.createShader(type);
   gl.shaderSource(shader, source);
   gl.compileShader(shader);
@@ -104,8 +104,8 @@ vec4 projectTileWithElevation(vec2 p, float elevation) {
   return u_projection_matrix * vec4(p, elevation, 1.0);
 }`,
 });
-const shaderDataOf = (args) => (typeof args?.shaderData?.vertexShaderPrelude === "string" && args.shaderData.variantName ? { define: "", ...args.shaderData } : PLAIN);
-const projectionOf = (args) => {
+export const shaderDataOf = (args) => (typeof args?.shaderData?.vertexShaderPrelude === "string" && args.shaderData.variantName ? { define: "", ...args.shaderData } : PLAIN);
+export const projectionOf = (args) => {
   const data = args?.defaultProjectionData;
   if (data?.mainMatrix) return data;
   const mainMatrix = args?.modelViewProjectionMatrix ?? (Array.isArray(args) || ArrayBuffer.isView(args) ? args : null);
@@ -143,13 +143,19 @@ void main() {
   colour = vec4(base * (1.0 - u_strength) * paint.a + paint.rgb * u_strength, paint.a);
 }`;
 
+// How many times a picture's canvas has been drawn on: it goes to the GPU only when this moves.
+const paintedTimes = new WeakMap();
+export const markPicturePainted = (canvas) => paintedTimes.set(canvas, (paintedTimes.get(canvas) ?? 0) + 1);
+// (The battlefield's own ground layer takes a picture up by the same count: frontGroundLayer.js.)
+export const picturePaintedTimes = (canvas) => paintedTimes.get(canvas) ?? 0;
+
 // The two layers, which share the copy. `pictures()` gives what is painted:
 // [{ canvas, coordinates }]. `strength(zoom)` is how strongly the map lays a
 // country's colour over the basemap at a zoom. `onState(working)` is told
 // when the pair starts or stops being able to do its work, so the caller can
 // fall back.
 export const createFrontBasemapLayers = ({ pictures, strength, onState, onError } = {}) => {
-  const shared = { texture: null, width: 0, height: 0, taken: false, working: null };
+  const shared = { texture: null, width: 0, height: 0, taken: false, copies: false, working: null };
   const tell = (working) => {
     if (shared.working === working) return;
     shared.working = working;
@@ -171,6 +177,7 @@ export const createFrontBasemapLayers = ({ pictures, strength, onState, onError 
       } catch { /* the context is gone */ }
       shared.texture = null;
       shared.taken = false;
+      shared.copies = false;
     },
     render(gl) {
       shared.taken = false;
@@ -178,17 +185,29 @@ export const createFrontBasemapLayers = ({ pictures, strength, onState, onError 
       try {
         const width = gl.drawingBufferWidth;
         const height = gl.drawingBufferHeight;
-        if (!shared.texture) shared.texture = gl.createTexture();
-        gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D, shared.texture);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-        gl.copyTexImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 0, 0, width, height, 0);
-        shared.width = width;
-        shared.height = height;
-        shared.taken = gl.getError() === gl.NO_ERROR;
+        if (!shared.texture) {
+          shared.texture = gl.createTexture();
+          shared.copies = false;
+          gl.activeTexture(gl.TEXTURE0);
+          gl.bindTexture(gl.TEXTURE_2D, shared.texture);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        } else {
+          gl.activeTexture(gl.TEXTURE0);
+          gl.bindTexture(gl.TEXTURE_2D, shared.texture);
+        }
+        // getError waits on the GPU process, so it is asked only until a copy has worked at this size.
+        if (shared.copies && shared.width === width && shared.height === height) {
+          gl.copyTexSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 0, 0, width, height);
+        } else {
+          gl.copyTexImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 0, 0, width, height, 0);
+          shared.width = width;
+          shared.height = height;
+          shared.copies = gl.getError() === gl.NO_ERROR;
+        }
+        shared.taken = shared.copies;
       } catch (error) {
         onError?.(error);
       }
@@ -203,25 +222,42 @@ export const createFrontBasemapLayers = ({ pictures, strength, onState, onError 
     _program: null,
     _variant: "",
     _failed: "",
-    _buffer: null,
     _masks: new Map(),
+    _uploaded: new Map(),
     _meshes: new Map(),
+    _buffers: new Map(),
     _matrices: { main: new Float32Array(16), fallback: new Float32Array(16) },
     drawn: 0,
-    onAdd(map, gl) {
+    onAdd(map) {
       this._map = map;
-      this._buffer = gl.createBuffer();
+      // Everything made on a context that was lost is gone: made again on the one given back.
+      this._restored = () => {
+        shared.texture = null;
+        shared.copies = false;
+        shared.taken = false;
+        this._program = null;
+        this._variant = "";
+        this._failed = "";
+        this._masks = new Map();
+        this._uploaded = new Map();
+        this._buffers = new Map();
+      };
+      this._canvas = map?.getCanvas?.() ?? null;
+      this._canvas?.addEventListener?.("webglcontextrestored", this._restored);
     },
     onRemove(map, gl) {
+      this._canvas?.removeEventListener?.("webglcontextrestored", this._restored);
+      this._canvas = null;
       try {
         if (this._program) gl.deleteProgram(this._program.handle);
-        if (this._buffer) gl.deleteBuffer(this._buffer);
+        for (const buffer of this._buffers.values()) gl.deleteBuffer(buffer);
         for (const texture of this._masks.values()) gl.deleteTexture(texture);
       } catch { /* the context is gone */ }
       this._program = null;
-      this._buffer = null;
       this._masks = new Map();
+      this._uploaded = new Map();
       this._meshes = new Map();
+      this._buffers = new Map();
       this._map = null;
       tell(false);
     },
@@ -303,33 +339,47 @@ export const createFrontBasemapLayers = ({ pictures, strength, onState, onError 
         gl.uniform1i(program.mask, 1);
         gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
         gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
-        gl.bindBuffer(gl.ARRAY_BUFFER, this._buffer);
         gl.enableVertexAttribArray(program.pos);
         gl.enableVertexAttribArray(program.uv);
         const seen = new Set();
         for (const picture of list) {
           const key = picture.key ?? picture.coordinates.join(",");
           seen.add(key);
-          // The picture as it is painted this moment: it is small, and changes while a turn is played.
           let texture = this._masks.get(key);
-          if (!texture) {
+          gl.activeTexture(gl.TEXTURE1);
+          if (texture) {
+            gl.bindTexture(gl.TEXTURE_2D, texture);
+          } else {
             texture = gl.createTexture();
             this._masks.set(key, texture);
+            gl.bindTexture(gl.TEXTURE_2D, texture);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
           }
-          gl.activeTexture(gl.TEXTURE1);
-          gl.bindTexture(gl.TEXTURE_2D, texture);
-          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, picture.canvas);
+          // The picture as it is painted this moment: it changes only while a turn is played.
+          const painted = paintedTimes.get(picture.canvas) ?? 0;
+          const uploaded = this._uploaded.get(key);
+          if (uploaded?.canvas !== picture.canvas || uploaded.painted !== painted) {
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, picture.canvas);
+            this._uploaded.set(key, { canvas: picture.canvas, painted });
+          }
           let mesh = this._meshes.get(key);
           if (!mesh) {
             mesh = pictureMesh(picture.coordinates);
             this._meshes.set(key, mesh);
           }
           if (mesh.length === 0) continue;
-          gl.bufferData(gl.ARRAY_BUFFER, mesh, gl.DYNAMIC_DRAW);
+          let buffer = this._buffers.get(key);
+          if (buffer) {
+            gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+          } else {
+            buffer = gl.createBuffer();
+            this._buffers.set(key, buffer);
+            gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+            gl.bufferData(gl.ARRAY_BUFFER, mesh, gl.STATIC_DRAW);
+          }
           gl.vertexAttribPointer(program.pos, 2, gl.FLOAT, false, FLOATS * 4, 0);
           gl.vertexAttribPointer(program.uv, 2, gl.FLOAT, false, FLOATS * 4, 8);
           for (const copy of copies) {
@@ -344,8 +394,11 @@ export const createFrontBasemapLayers = ({ pictures, strength, onState, onError 
         for (const [key, texture] of this._masks) {
           if (seen.has(key)) continue;
           gl.deleteTexture(texture);
+          if (this._buffers.has(key)) gl.deleteBuffer(this._buffers.get(key));
           this._masks.delete(key);
+          this._uploaded.delete(key);
           this._meshes.delete(key);
+          this._buffers.delete(key);
         }
         // The copy is this drawing's alone: the next has to take its own, or goes without
         // (a copy of the map as it was at another moment is not the map under the paint).

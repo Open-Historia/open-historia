@@ -202,7 +202,7 @@ export const PROMPT_GUIDANCE = Object.freeze({
         "and never repeat a note already visible in the existing chats.",
         "What counts as a live reason to write, and what never does."),
     ]),
-    listenIn: Object.freeze([
+    placeFeed: Object.freeze([
       segment("voices", "Who is posting and what about",
         "[Who Is Posting]",
         "with nothing in them the age does not have.",

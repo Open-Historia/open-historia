@@ -273,6 +273,7 @@ const placeOf = ({ lng, lat, seas, cities, km }) => {
 //                    without it nobody is commissioned and nobody closes
 //   cities, seas     the map's cities and the seas its scenario names, for what a battle is called
 //   flat, scale      the map's own measure, where it is a flat sheet
+//   factor, metric   the same on a world projection (fronts/worldGrid.js measureOptions)
 //   caps             { perCountry, world }: the most formations a country and the world may have
 //   raised           world.naviesRaised: [{ country, date }], when each country was last given
 //                    a navy or lost the last of one
@@ -280,7 +281,7 @@ const placeOf = ({ lng, lat, seas, cities, km }) => {
 //   blockades   [{ country, by: [names], pressure, covered, days }]: each country a fleet
 //               pressed on in the period (blockade.js): the mean of its days, the share
 //               of its coast reached, and how many of the period's days it stood
-export const runNaval = ({ fromDate = "", days = 0, seed = "", wars = [], units = [], strengthOf = null, controllerOf = null, grid = null, cities = [], seas = [], flat = false, scale = undefined, caps = {}, raised = [], era: setEra = null, militaryOf = null, weatherSeed = null, iced = [] } = {}) => {
+export const runNaval = ({ fromDate = "", days = 0, seed = "", wars = [], units = [], strengthOf = null, controllerOf = null, grid = null, cities = [], seas = [], flat = false, scale = undefined, factor = 1, metric = null, caps = {}, raised = [], era: setEra = null, militaryOf = null, weatherSeed = null, iced = [] } = {}) => {
   const era = eraOf(fromDate, setEra);
   // Weighing the weather (fronts/weather.js): a storm keeps fleets apart and weakens a blockade. Fleets in the same
   // stretch of sea (five degrees by five) have the same weather; none without a seed.
@@ -302,7 +303,7 @@ export const runNaval = ({ fromDate = "", days = 0, seed = "", wars = [], units 
     return navies.get(key);
   };
   const reach = NAVAL_REACH_KM[era];
-  const km = (lngA, latA, lngB, latB) => (grid ? grid.km(lngA, latA, lngB, latB) : kmBetween(lngA, latA, lngB, latB, { flat, scale }));
+  const km = (lngA, latA, lngB, latB) => (grid ? grid.km(lngA, latA, lngB, latB) : kmBetween(lngA, latA, lngB, latB, { flat, scale, factor, metric }));
   const dateOf = (day) => addGameDays(fromDate, day) || clean(fromDate);
   const weightOf = (name) => {
     const weight = typeof strengthOf === "function" ? Number(strengthOf(name)) : 1;

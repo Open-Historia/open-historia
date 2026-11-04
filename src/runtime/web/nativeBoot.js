@@ -30,7 +30,7 @@ export const MIN_VISIBLE_MS = 500;
 export const BOOT_DEADLINE_MS = 8000;
 
 // Capacitor injects window.Capacitor before the bundle runs. Same signal router.js
-// uses to pick native HTTP, and homePage.js to skip the browser-only demo notice.
+// uses to pick native HTTP, and demoNotice.js to skip the browser-only demo notice.
 export const isNativeApp = () => typeof window !== "undefined" && Boolean(window.Capacitor);
 
 // The one line under the wordmark: what the app is doing while the library is

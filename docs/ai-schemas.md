@@ -45,7 +45,6 @@ Diplomatic speaker routing is deliberately absent from this table: one-on-one th
 | `unitDirector` | `UNIT_DIRECTOR_SCHEMA` | `submit_unit_director` | unit operations for the turn's military events (sanitized by `nativeUnitDirector.js`) |
 | `idleDiplomacy` | `IDLE_DIPLOMACY_SCHEMA` | `submit_idle_diplomacy` | idle inbox drip |
 | `pregameHistory` | `PREGAME_HISTORY_SCHEMA` | `submit_pregame_history` | pre-game backstory |
-| `listenIn` | `LISTEN_IN_SCHEMA` | `submit_listen_in_feed` | `generateListenInFeed`: the Listen in phone's feed |
 | `warRoom` | `WAR_ROOM_SCHEMA` | `submit_war_room_reply` | `generateWarRoomReply`: what the player's generals answer in the war room. `{ lines[{ speaker, text, stance }], orders[{ command, order, objective }], generals[] }`; a general is named by his army ("1st Army"), never by an id. Read by `readWarRoomAnswer` (`warRoomContext.js`), which drops an order whose general's `stance` is `objects` and an objective that is not a city of the battlefield |
 
 `getGameplayTool` returns `null` for an unknown key; `validateGameplayPayload` returns `{ valid: false, error: "Unknown gameplay task key: …" }`.
@@ -232,6 +231,8 @@ Also used for `autoJumpForward`. This is the largest task.
 | `clearActions` | boolean | Were queued player actions resolved | **yes** |
 | `diplomaticOutreach` | `createdChatSchema[]` + `peaceOffer` | Polities reaching out on their own initiative, not tied to any event. A letter offering the player peace carries `peaceOffer` (`territory`, `reparationsPayer`, `reparationsPercent`, `reparationsYears`), kept by `warAndPeace.js offerPeace` and shown on the letter's message | no |
 | `peaceTreaties` | string | The peaces two countries nobody plays made, a line each: `offering | accepting | terms` (`peaceTerms.js readTreatyLines`) | no |
+| `socialPosts` | `{ author*, role, country, date, text*, quote, offTopic }[]` | Rostra's posts of the period (`SOCIAL_POSTS_FIELD`): field notes in the prompt (`[Social Media]`), no bounds on the list (Gemini refuses them on a list of objects). Sent last before the riders (`withSocialPosts`), and not at all while the Social media feature is off; read against a loose `{ type: "object" }[]`, each post on its own by `readSkipPosts` (`runtime/socialFeed.js`), so a malformed post costs that post, never the turn, and a broken or cut-off list is cut away with the riders (`parseWithoutTrailingFields`). It cost the schema about 400 characters: the guard is 29,650 (`projectOpSchema.test.js`) | no |
+| `pollResults` | `{ poll*, shares*: number[], votes, consensus }[]` | The public's votes on the player's open Rostra polls (`POLL_RESULTS_FIELD`), field notes under `[Social Media]`. Sent only while a poll is open, just before `socialPosts` (`withSocialPosts(tool, on, { polls })`), so the guard above is unchanged; read against nothing at all (any value is accepted) and each entry on its own by `readSkipPollResults`, so an odd one costs that poll its answer this time, never the turn | no |
 
 `eventSchema`: `id`, `date`* , `title`* , `description`* , `importance`, `kind`, `places` (below), `notable` (bool), `playerRelated` (bool), `impacts` (`impactsSchema`).
 
@@ -290,7 +291,6 @@ The **pregame bootstrap** declares Puppets already standing on the start date in
 | `GAME_MASTER_SCHEMA` | `summary`*, `impacts`* | GM intervention + world effects |
 | `IDLE_DIPLOMACY_SCHEMA` | `chat`* (`null \| createdChatSchema`) | At most one idle note, or `null` for silence |
 | `PREGAME_HISTORY_SCHEMA` | `events`* (array `minItems:1`,`maxItems:12` of `pregameEventSchema`), `summary`* | Pre-game backstory |
-| `LISTEN_IN_SCHEMA` | `posts`* (array of `{ author*, text*, handle, about, filler, minutesAgo, likes, reposts, replies }`; deliberately no `minItems`, since one usable post is still a feed), `trends` (≤ 5 strings) | What ordinary people in a place are posting (the Listen in phone) |
 
 `actionSchema`: `id`, `title`*, `text`*, `kind`, `invitees`, `chatStarter`. `pregameEventSchema`: `date`*, `title`*, `description`*, `importance`, `kind` — **deliberately no `impacts`** (a backstory event is a record, not a change to apply).
 

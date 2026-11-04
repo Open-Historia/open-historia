@@ -21,7 +21,7 @@ import { enlarge, syntheticMap } from "../../runtime/fronts/syntheticMap.js";
 import { setActiveFeatures } from "../../runtime/gameFeatures.js";
 import { normalizeEvents } from "../../runtime/gameState.js";
 import { applyTurnFronts, forecastTurnFronts, frontPowers, frontRegionTest, frontsLiveBlock, withFrontUnits, withoutFrontPowers } from "./frontApply.js";
-import { frontsOn, frontsPace, unitsOffBattlefields } from "./frontsGate.js";
+import { airOn, frontsOn, frontsPace, naviesOn, unitsOffBattlefields } from "./frontsGate.js";
 import { FRONT_MARK } from "./frontTurn.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -79,18 +79,29 @@ const quietly = async (work) => {
   }
 };
 
-test("the feature is listed, on by default, with a pace from 25 to 300", () => {
+test("the Wars feature is listed, always on, with Fronts, Air units and Navies switches and a pace from 25 to 300", () => {
   const definition = FEATURE_DEFINITIONS.find((entry) => entry.key === "fronts");
   assert.ok(definition, "server/gameFeatures.js lists it");
-  assert.equal(definition.label, "Fronts");
-  assert.match(definition.description, /^Land war fought on battlefields\./);
-  assert.match(definition.description, / Off: no battlefield opens, /, "it says what switching it off does");
-  assert.deepEqual(definition.settings.map(({ key, min, max, defaultValue }) => [key, min, max, defaultValue]), [["pace", 25, 300, 100]]);
-  assert.deepEqual(featureDefaults().fronts, { enabled: true, pace: 100 });
+  assert.equal(definition.label, "Wars");
+  assert.equal(definition.toggleable, false, "its parts have the switches");
+  const fronts = definition.settings.find((setting) => setting.key === "battlefields");
+  assert.equal(fronts.label, "Fronts");
+  assert.match(fronts.description, /^Land war fought on battlefields./);
+  assert.match(fronts.description, / Off: no battlefield opens, /, "it says what switching it off does");
+  assert.deepEqual(definition.settings.map(({ key, type, min, max, defaultValue }) => [key, type ?? "number", min, max, defaultValue]), [
+    ["battlefields", "toggle", undefined, undefined, true],
+    ["air", "toggle", undefined, undefined, true],
+    ["navies", "toggle", undefined, undefined, true],
+    ["pace", "number", 25, 300, 100],
+  ]);
+  const all = { enabled: true, battlefields: true, air: true, navies: true, pace: 100 };
+  assert.deepEqual(featureDefaults().fronts, all);
   // A scenario saved before the feature existed has it on.
-  assert.deepEqual(normalizeFeatureSettings({ espionage: false }).fronts, { enabled: true, pace: 100 });
-  assert.deepEqual(normalizeFeatureSettings({ fronts: { enabled: false, pace: 1000 } }).fronts, { enabled: false, pace: 300 });
-  assert.deepEqual(normalizeFeatureSettings({ fronts: { pace: 3 } }).fronts, { enabled: true, pace: 25 });
+  assert.deepEqual(normalizeFeatureSettings({ espionage: false }).fronts, all);
+  // One saved with fronts off, before the parts had switches, has its battlefields off and nothing else.
+  assert.deepEqual(normalizeFeatureSettings({ fronts: { enabled: false, pace: 1000 } }).fronts, { ...all, battlefields: false, pace: 300 });
+  assert.deepEqual(normalizeFeatureSettings({ fronts: { pace: 3 } }).fronts, { ...all, pace: 25 });
+  assert.deepEqual(normalizeFeatureSettings({ fronts: { air: "off", navies: false } }).fronts, { ...all, air: false, navies: false });
 
   assert.equal(frontsOn(), true, "and a game that says nothing plays with it");
   assert.equal(frontsPace(), 0.4, "the built-in pace of a front: four tenths of a formation's on the move");
@@ -103,6 +114,11 @@ test("the feature is listed, on by default, with a pace from 25 to 300", () => {
     assert.equal(frontsOn(), false);
     setActiveFeatures({ fronts: { enabled: false } }, { fronts: { enabled: true } });
     assert.equal(frontsOn(), true);
+    // Each part its own: air units and navies off leave the battlefields on.
+    setActiveFeatures({ fronts: { air: false, navies: false } }, null);
+    assert.deepEqual([frontsOn(), airOn(), naviesOn()], [true, false, false]);
+    setActiveFeatures({ fronts: { air: false } }, { fronts: { air: true, battlefields: false } });
+    assert.deepEqual([frontsOn(), airOn(), naviesOn()], [false, true, true], "a game's own over its scenario's");
   } finally {
     setActiveFeatures(null, null);
   }
@@ -340,12 +356,15 @@ test("a time skip's prompt gains the block only with fronts on, after the rules 
   assert.match(live, /const fronts = frontsLiveBlock\(world, game, variables\.frontsForecast \?\? null\);\s*\n\s*if \(fronts\) blocks\.push\(fronts\);/);
   assert.ok(live.indexOf("blocks.push(FOLDED_SKIP_CONSEQUENCES)") < live.indexOf("frontsLiveBlock(world, game"), "after [Every Event Carries Its Consequences]");
   assert.ok(live.indexOf("[Units and Structures on the Map]") < live.indexOf("frontsLiveBlock(world, game"));
-  // (The land's block and then the sea's, navalPrompt.js: each "" with fronts off.)
-  assert.ok(read("frontApply.js").includes("export const frontsLiveBlock = (world, game, foreseen = null) => [landBlock(world, game, foreseen), seasLiveBlock(world, game, foreseen)].filter(Boolean).join(\"\\n\\n\");"));
-  assert.match(read("frontApply.js"), /export const seasLiveBlock = \(world, game, foreseen = null\) => \(frontsOn\(\)\s*\n\s*\? buildSeasBlock\(/);
+  // (The land's block, then the sea's, navalPrompt.js, then the war room's air strikes as the period flew them,
+  // runtime/fronts/airStrike.js: each "" with fronts off.)
+  assert.ok(read("frontApply.js").includes("export const frontsLiveBlock = (world, game, foreseen = null) => [landBlock(world, game, foreseen), seasLiveBlock(world, game, foreseen), airStrikesLiveBlock(foreseen)].filter(Boolean).join(\"\\n\\n\");"));
+  assert.match(read("frontApply.js"), /export const airStrikesLiveBlock = \(foreseen = null\) => \(frontsOn\(\) && airOn\(\) \? airStrikesBlock\(foreseen\?\.airStrikes\) : ""\);/);
+  // (The sea's also "" with navies off: the Wars feature.)
+  assert.match(read("frontApply.js"), /export const seasLiveBlock = \(world, game, foreseen = null\) => \(frontsOn\(\) && naviesOn\(\)\s*\n\s*\? buildSeasBlock\(/);
   assert.match(read("frontApply.js"), /const landBlock = \(world, game, foreseen = null\) => \(frontsOn\(\)\s*\n\s*\? buildFrontsBlock\(\{ battlefields: world\?\.battlefields, players: humanCountriesOf\(game\), period: foreseen, transports: world\?\.transports, difficulty: normalizeDifficulty\(game\?\.difficulty\), orderFunction: foreseen\?\.orderFunction === true \}\)\s*\n\s*: ""\);/);
   // The contract carries the field under the same switch.
-  assert.match(gameplay, /return frontsOn\(\) \? withFrontOrders\(shown\) : shown;/);
+  assert.match(gameplay, /return frontsOn\(\) \? withWarFigures\(withFrontOrders\(shown\)\) : shown;/);
   // A side of a battlefield is not "at war with nobody on the map"; with fronts off the set is the units' owners alone.
   assert.match(functionBody("describeWarsWithoutFormations"), /const fielded = new Set\(\[\.\.\.normalizeArray\(world\?\.units\)\.map\(\(unit\) => unit\?\.ownerCode\), \.\.\.frontPowers\(world\)\]\.map\(fold\)\.filter\(Boolean\)\);/);
   assert.match(read("frontApply.js"), /export const frontPowers = \(world\) => \(frontsOn\(\) \? battlefieldPowers\(world\?\.battlefields\) : \[\]\);/);

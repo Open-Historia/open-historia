@@ -117,6 +117,15 @@ export const RECEIPT_PLAYER_TEXTS = Object.freeze({
   politicalNotRecorded: "Kept as written, but the change of government, party or leader it describes was not recorded.",
   overdueOrdersOne: "1 of your orders got no outcome in this time skip and stays queued as overdue.",
   overdueOrdersMany: "{{count}} of your orders got no outcome in this time skip and stay queued as overdue.",
+
+  // The Game Master's preview: a part of the request that could not be made,
+  // left out while the rest is shown for approval (gameplay.js).
+  gmWarUnknownCountry: "The war between {{a}} and {{b}} was left out: {{name}} is not a country in this world.",
+  gmWarNoSides: "A war was left out: the request did not make clear who fights whom.",
+  gmWarChangeLeftOut: "A change to the war between {{a}} and {{b}} was left out: it does not fit that war as it stands.",
+  gmSubordinationLeftOut: "The change between {{overlord}} and {{puppet}} was left out: it cannot be made as the two countries stand now.",
+  gmSubordinationMissing: "The puppet, protectorate or client state the request asked for is not in this preview: ask for it again on its own.",
+  gmStorylineCountryLeftOut: "{{name}} was left out of the storyline \"{{title}}\": it is not a country in this world.",
 });
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();

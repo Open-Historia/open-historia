@@ -1,5 +1,5 @@
-/*! Open Historia — Listen in: where the feeds are kept © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-// The feeds a player has already paid a request for (listenIn.js), per game, in
+/*! Open Historia — Rostra's Search: where the place feeds are kept © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
+// The feeds a player has already paid a request for (placeFeed.js), per game, in
 // a small IndexedDB store of their own on the device — as the AI call record is
 // (AI/telemetry.js), and not in the save. They are colour, not canon: nothing
 // reads them back into the game, and a save that carried them would grow with
@@ -8,18 +8,18 @@
 // Best effort throughout. Without IndexedDB (a private window, node) the
 // session's memory still holds them, and a write that fails only means that
 // feed is asked for again another day.
-import { emptyListenInStore, normalizeListenInStore } from "./listenIn.js";
+import { emptyPlaceFeedStore, normalizePlaceFeedStore } from "./placeFeed.js";
 
-const DB_NAME = "oh-listen-in";
+const DB_NAME = "oh-rostra-places";
 const DB_VERSION = 1;
 const STORE = "games";
 // Feeds are kept for the games read last; an older game's are dropped.
-export const LISTEN_IN_GAMES_KEPT = 12;
+export const PLACE_FEED_GAMES_KEPT = 12;
 
 const clean = (value) => String(value ?? "").trim();
 
 // `idb` is read at every open rather than once: a test installs its own.
-export const createListenInStorage = ({
+export const createPlaceFeedStorage = ({
   idb = () => (typeof indexedDB === "undefined" ? null : indexedDB),
   now = Date.now,
 } = {}) => {
@@ -59,7 +59,7 @@ export const createListenInStorage = ({
   // What is kept for one game. Read from storage once, then from memory.
   const read = async (gameId) => {
     const id = clean(gameId);
-    if (!id) return emptyListenInStore();
+    if (!id) return emptyPlaceFeedStore();
     if (memory.has(id)) return memory.get(id);
     let stored = null;
     try {
@@ -68,7 +68,7 @@ export const createListenInStorage = ({
       // This session's memory only.
     }
     // A batch written while the read was out is newer than what was stored.
-    if (!memory.has(id)) memory.set(id, normalizeListenInStore(stored));
+    if (!memory.has(id)) memory.set(id, normalizePlaceFeedStore(stored));
     return memory.get(id);
   };
 
@@ -76,12 +76,12 @@ export const createListenInStorage = ({
     try {
       await withStore("readwrite", (store) => { store.put({ id, updatedAt: now(), ...value }); });
       const keys = await withStore("readonly", (store) => store.getAllKeys());
-      if (!Array.isArray(keys) || keys.length <= LISTEN_IN_GAMES_KEPT) return;
+      if (!Array.isArray(keys) || keys.length <= PLACE_FEED_GAMES_KEPT) return;
       // Over the limit: only now are the rows themselves read, to find the oldest.
       const rows = await withStore("readonly", (store) => store.getAll());
       const stale = (Array.isArray(rows) ? rows : [])
         .sort((a, b) => (Number(b?.updatedAt) || 0) - (Number(a?.updatedAt) || 0))
-        .slice(LISTEN_IN_GAMES_KEPT)
+        .slice(PLACE_FEED_GAMES_KEPT)
         .map((row) => row.id);
       if (stale.length) await withStore("readwrite", (store) => { for (const key of stale) store.delete(key); });
     } catch {
@@ -94,9 +94,9 @@ export const createListenInStorage = ({
   // come back together both land.
   const update = async (gameId, change) => {
     const id = clean(gameId);
-    if (!id) return emptyListenInStore();
+    if (!id) return emptyPlaceFeedStore();
     await read(id);
-    const next = normalizeListenInStore(change(memory.get(id)));
+    const next = normalizePlaceFeedStore(change(memory.get(id)));
     memory.set(id, next);
     await persist(id, next);
     return next;
@@ -105,6 +105,6 @@ export const createListenInStorage = ({
   return { read, update };
 };
 
-const storage = createListenInStorage();
-export const readListenInStore = storage.read;
-export const updateListenInStore = storage.update;
+const storage = createPlaceFeedStorage();
+export const readPlaceFeedStore = storage.read;
+export const updatePlaceFeedStore = storage.update;

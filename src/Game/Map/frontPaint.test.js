@@ -7,7 +7,7 @@ import { HOLDER_SIDE_A, HOLDER_SIDE_B, HOLDER_WALL } from "../../runtime/fronts/
 import { frontViewOf, normalizeBattlefield } from "../../runtime/fronts/record.js";
 import { createReplayRecorder } from "../../runtime/fronts/replay.js";
 import { projectorOf } from "../../runtime/fronts/frame.js";
-import { FILL_DAYS, createPaintPlayer, paintPixels, paintScaleFor, pictureFits, pictureCorners } from "./frontPaint.js";
+import { FILL_DAYS, createFrontField, createPaintPlayer, landMask, paintPixels, paintScaleFor, pictureFits, pictureCorners, touchedCells, writeFrontField } from "./frontPaint.js";
 
 const COLS = 24;
 const ROWS = 12;
@@ -334,4 +334,84 @@ test("on the diplomatic map a battlefield's ground is painted in the stances' co
   assert.ok(layers.includes("stances ? parseColorToRgb(getDiplomaticOwnerColor(name, stances)) ?? UNOWNED_RGB : rgbOf(name)"));
   assert.ok(layers.includes("const [red, green, blue] = colorRef.current.groundRgbOf(name);"));
   assert.ok(layers.includes("}, [colorMap, polityOverrides, groups, stances]);"), "a change of map repaints the ground");
+});
+
+test("the front's field: half-way where the two sides' ground meets, and nowhere else", () => {
+  const view = viewOf([12, 14]);
+  const player = createPaintPlayer(view);
+  player.seek(1 + FILL_DAYS);
+  const touched = touchedCells(view);
+  assert.equal(touched[at(12, 5)], 1, "a cell the run paints");
+  assert.equal(touched[at(15, 5)], 1, "and two beyond it");
+  assert.equal(touched[at(2, 5)], 0, "but not ground far from the front");
+  const front = writeFrontField(player, createFrontField(COLS, ROWS, null, touched));
+  assert.equal(front.version, 1);
+  // A pixel a cell, north up: red how far it is side 1's.
+  const red = (col, row) => front.data[((ROWS - 1 - row) * COLS + col) * 4];
+  const green = (col, row) => front.data[((ROWS - 1 - row) * COLS + col) * 4 + 1];
+  const blue = (col, row) => front.data[((ROWS - 1 - row) * COLS + col) * 4 + 2];
+  assert.ok(red(2, 5) < 10 && red(21, 5) > 245, "deep in each side's ground");
+  assert.ok(red(13, 5) < 128 && red(14, 5) > 128, "half-way between the last taken cell and the first of the other side's");
+  assert.ok(red(11, 5) < 128 && red(12, 5) < 128, "no line along the old border the taker has crossed");
+  // Sea takes the land beside it: no line along the coast.
+  assert.equal(blue(5, 0), 0);
+  assert.equal(blue(5, 5), 255);
+  assert.ok(Math.abs(red(5, 1) - red(5, 2)) < 40 && red(5, 1) < 128, "the sea beside side A's coast reads as side A's");
+  assert.ok(red(20, 1) > 128, "and beside side B's, as side B's");
+  assert.equal(green(13, 5), 255);
+  assert.equal(green(2, 5), 0);
+  // A day the battlefield is not shown draws no line.
+  writeFrontField(player, front, false);
+  assert.equal(green(13, 5), 0);
+  assert.equal(front.version, 2);
+});
+
+// The mask as it was first made, a pixel at a time from the whole drawing: the quicker one has to match it exactly.
+const landMaskByPixel = ({ width, height, scale, cols, rows, state, drawing, x0, x1, y0, y1 }) => {
+  const mask = new Uint8Array(width * height);
+  for (let y = 0; y < height; y += 1) {
+    const row = Math.min(rows - 1, Math.max(0, Math.floor(rows - (y + 0.5) / scale)));
+    const seen = y >= y0 && y < y1;
+    for (let x = 0; x < width; x += 1) {
+      const at = y * width + x;
+      if (seen && x >= x0 && x < x1) mask[at] = drawing[at * 4 + 3];
+      else mask[at] = state[row * cols + Math.min(cols - 1, Math.floor(x / scale))] === PAINT_WALL ? 0 : 255;
+    }
+  }
+  return mask;
+};
+
+test("a picture's land mask reads only the part on the screen, and is the same as one read from the whole drawing", () => {
+  let seed = 7;
+  const random = () => {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 2147483648;
+  };
+  for (const [cols, rows, scale] of [[24, 12, 4], [31, 17, 3], [9, 40, 6], [5, 5, 2]]) {
+    const width = cols * scale;
+    const height = rows * scale;
+    const state = Uint8Array.from({ length: cols * rows }, () => (random() < 0.3 ? PAINT_WALL : PAINT_OWN_A));
+    const drawing = Uint8ClampedArray.from({ length: width * height * 4 }, () => Math.floor(random() * 256));
+    const windows = [[0, width, 0, height], [0, 0, 0, 0], [width, width, 0, height], [3, 3, 2, 9], [0, width, height, height]];
+    for (let index = 0; index < 40; index += 1) {
+      const a = Math.floor(random() * (width + 1));
+      const b = Math.floor(random() * (height + 1));
+      windows.push([a, Math.min(width, a + Math.floor(random() * width)), b, Math.min(height, b + Math.floor(random() * height))]);
+    }
+    for (const [x0, x1, y0, y1] of windows) {
+      const seen = x0 < x1 && y0 < y1;
+      // What the page reads back: the window alone, or nothing when none of it is on the screen.
+      const shape = seen ? new Uint8ClampedArray((x1 - x0) * (y1 - y0) * 4) : null;
+      for (let y = y0; seen && y < y1; y += 1) {
+        shape.set(drawing.subarray((y * width + x0) * 4, (y * width + x1) * 4), (y - y0) * (x1 - x0) * 4);
+      }
+      const used = new Uint8Array(width * height).fill(9);
+      const quick = landMask(used, { width, height, scale, cols, rows, state, shape, x0, x1, y0, y1 });
+      assert.equal(quick, used, "written into the mask it is given");
+      assert.deepEqual(quick, landMaskByPixel({ width, height, scale, cols, rows, state, drawing, x0, x1, y0, y1 }), `${cols}x${rows} at ${scale}, window ${[x0, x1, y0, y1]}`);
+    }
+  }
+  const layers = fs.readFileSync(new URL("./FrontLayers.jsx", import.meta.url), "utf8");
+  assert.ok(layers.includes("const shape = onScreen ? context.getImageData(x0, y0, x1 - x0, y1 - y0).data : null;"));
+  assert.ok(layers.includes("return landMask(mask, { width, height, scale, cols, rows, state, shape, x0, x1, y0, y1 });"));
 });

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { EVENT_PLACES_RULE, findEventPlace, findEventPlaces, readEventPlace } from "./eventPlaces.js";
+import { EVENT_PLACES_RULE, findEventPlace, findEventPlaces, placesAsWritten, readEventPlace } from "./eventPlaces.js";
 import { MAX_EVENT_PLACES, normalizeEventPlaces } from "../../runtime/eventPlaces.js";
 import { readNameRef, stripKindTags } from "./nameRefs.js";
 
@@ -147,4 +147,22 @@ test("the rule the skip is given says a kind is needed and what is never listed"
     assert.match(EVENT_PLACES_RULE, /each with its kind/);
     assert.match(EVENT_PLACES_RULE, /"building: Camp Humphreys"/);
     assert.match(EVENT_PLACES_RULE, /a thing that is not a place on the map .* is never listed/);
+});
+
+// A player's year-long skips (2026-11-03): Gemini wrote every event's places as { kind, name, country }, the
+// contract wants strings, and one such entry failed the answer, its retry and the skip.
+test("places written as objects of their parts are read as the words they stand for, and found places stay", () => {
+    const answer = { events: [
+        { title: "Reforms", places: [{ kind: "city", name: "Kharkiv", country: "Ukraine" }, { kind: "region", name: "Crimea" }, "sea: Black Sea"] },
+        { title: "Nowhere in particular" },
+    ] };
+    const { payload, rewritten } = placesAsWritten(answer);
+    assert.equal(rewritten, 2);
+    assert.deepEqual(payload.events[0].places, ["city: Kharkiv, country: Ukraine", "region: Crimea", "sea: Black Sea"]);
+    assert.equal(payload.events[1], answer.events[1], "an event without objects is the same event");
+    assert.equal(placesAsWritten(payload).payload, payload, "nothing to rewrite: the same answer");
+
+    const found = [{ kind: "region", name: "Crimea", regionId: "4441" }, { kind: "city", name: "Kharkiv", lng: 36.23, lat: 49.99 }];
+    assert.deepEqual(findEventPlaces(found, gazetteer), found, "a place already found is kept as it is");
+    assert.deepEqual(findEventPlaces([{ kind: "city", name: "Kharkiv", country: "Ukraine" }], gazetteer), [{ kind: "city", name: "Kharkiv", lng: 36.23, lat: 49.99 }]);
 });

@@ -1,6 +1,6 @@
-/*! Open Historia — Listen in: what the model is told about the place © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-// The facts of the place a Listen in feed is written for (runtime/listenIn.js),
-// as the lines of its prompt (gameplay.js generateListenInFeed). They are handed
+/*! Open Historia — Rostra's Search: what the model is told about the place © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
+// The facts of the place a Search feed is written for (runtime/placeFeed.js),
+// as the lines of its prompt (gameplay.js generatePlaceFeed). They are handed
 // over rather than left for the model to look up: a lookup round is a second
 // request, and a feed is only worth having at one.
 //
@@ -12,7 +12,7 @@
 //
 // Plain inputs in, text out, so node can test it.
 
-import { listenInPlace } from "../../runtime/listenIn.js";
+import { placeFeedPlace } from "../../runtime/placeFeed.js";
 import { puppetKindLabel } from "../../runtime/puppets.js";
 
 const clean = (value) => String(value ?? "").trim();
@@ -25,16 +25,16 @@ const sentence = (value) => {
 
 // How the place is named in a sentence: "Bayern, in Germany", "Bayern" where
 // nobody holds it, "Germany".
-export const listenInPlaceLabel = (place) => {
-  const target = listenInPlace(place);
+export const placeFeedPlaceLabel = (place) => {
+  const target = placeFeedPlace(place);
   if (!target) return "";
   if (target.scope === "country") return target.polity;
   return target.polity ? `${target.regionName}, in ${target.polity}` : target.regionName;
 };
 
 // The instruction the request carries.
-export const listenInRequest = (place) => {
-  const target = listenInPlace(place);
+export const placeFeedRequest = (place) => {
+  const target = placeFeedPlace(place);
   if (!target) return "";
   if (target.scope === "country") return `Show what people across ${target.polity} are posting today.`;
   return `Show what people in ${target.regionName}${target.polity ? ` (${target.polity})` : ""} are posting today.`;
@@ -140,8 +140,8 @@ const countryLines = (country, { groupsOn }) => {
 
 // The whole "[The Place]" block. `region` is null for a country's feed, and for
 // a region the map could not describe.
-export const describeListenInPlace = ({ place, region = null, country = null, groupsOn = true } = {}) => {
-  const target = listenInPlace(place);
+export const describePlaceFeedPlace = ({ place, region = null, country = null, groupsOn = true } = {}) => {
+  const target = placeFeedPlace(place);
   if (!target) return "";
   const lines = target.scope === "region"
     ? regionLines(target, region, { groupsOn })

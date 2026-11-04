@@ -216,9 +216,7 @@ const countOwnedRegions = (world) => {
   return counts;
 };
 
-const buildDeclaredPolities = (world) => {
-  const ownershipCounts = countOwnedRegions(world);
-
+const buildDeclaredPolities = (world, ownershipCounts) => {
   return Object.entries(
     world?.polityOverrides || {},
   )
@@ -300,10 +298,14 @@ const chooseUnique = (candidates) => {
   };
 };
 
-export const buildPolityIdentityIndex = (world) => ({
-  declared: buildDeclaredPolities(world),
-  ownershipCounts: countOwnedRegions(world),
-});
+// (Every region's owner counted once for both: it is most of the index's cost.)
+export const buildPolityIdentityIndex = (world) => {
+  const ownershipCounts = countOwnedRegions(world);
+  return {
+    declared: buildDeclaredPolities(world, ownershipCounts),
+    ownershipCounts,
+  };
+};
 
 export const resolvePolityIdentity = (
   token,

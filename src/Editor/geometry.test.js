@@ -17,7 +17,7 @@ import MultiPolygon from "ol/geom/MultiPolygon.js";
 import Polygon from "ol/geom/Polygon.js";
 import VectorSource from "ol/source/Vector.js";
 
-import { clipCoordsToBox, intersectionGeom, overlaps, planarGeometryArea, subtractFrom } from "./geometry.js";
+import { clipCoordsToBox, intersectionGeom, overlaps, planarGeometryArea, splitAtX, subtractFrom } from "./geometry.js";
 
 const coordsToOl = (mp) => (mp.length === 1 ? new Polygon(mp[0]) : new MultiPolygon(mp));
 const areaOfCoords = (coords) => (coords && coords.length ? planarGeometryArea(coordsToOl(coords)) : 0);
@@ -104,4 +104,17 @@ test("on the built-in map, neighbouring pairs give the same pieces and areas as 
     }
   }
   assert.ok(pairs > 1500 && overlapping > 50, `${pairs} pairs, ${overlapping} overlapping`);
+});
+
+test("splitAtX cuts a region crossing the line into pieces on either side, and leaves others alone", () => {
+  const square = new Polygon([[[-10, -5], [10, -5], [10, 5], [-10, 5], [-10, -5]]]);
+  const cut = splitAtX(square, 0);
+  assert.equal(cut.getType(), "MultiPolygon");
+  const pieces = cut.getPolygons();
+  assert.equal(pieces.length, 2);
+  for (const piece of pieces) {
+    const [minX, , maxX] = piece.getExtent();
+    assert.ok(maxX < 0 || minX > 0, `a piece spans the line: ${minX}..${maxX}`);
+  }
+  assert.equal(splitAtX(square, 20), square);
 });

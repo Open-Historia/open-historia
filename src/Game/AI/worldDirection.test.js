@@ -272,6 +272,32 @@ test("a generated selected outcome must remain anchored to its parent event cont
     assert.equal(repaired.events.at(-1).description, `${beat.parentText}\n\n${beat.text}`, "the deterministic fallback keeps both parent context and selected outcome");
 });
 
+// A player's branched Syria beat: the AI told it faithfully, but in none of the parent's words the outcome did not
+// repeat ("current", "conclusion", "offensives"), so it was taken for missing and the engine wrote the author's
+// instruction, bracketed map directions and all, as the event.
+test("a generated outcome that names its own sides is found in a faithful telling, and the engine's copy drops the author's asides", () => {
+    const beat = {
+        date: "2026-01-30",
+        title: "The Syrian Arab Republic conquers the Administration's regions",
+        text: "Peace is achieved. The Syrian Arab Republic conquers all the regions held by Democratic Autonomous Administration of North and East Syria BESIDES Al-Hasaka and Kobani within 17 days of combat operations. [In terms of map changes: the Administration should ONLY hold Al-Hasaka and Kobani.]",
+        parentText: "The current state (or conclusion) of the North-Eastern Syrian offensives into Democratic Autonomous Administration of North and East Syria",
+        textMode: "generated",
+    };
+    const told = [{
+        date: "2026-01-30",
+        title: "Damascus and the SDF sign peace after a 17-day campaign",
+        description: "The Syrian Arab Republic took every region of the Democratic Autonomous Administration of North and East Syria except Al-Hasaka and Kobani.",
+    }];
+    assert.equal(beatIsWritten(beat, told), true);
+    assert.equal(ensureScriptedEvents(told, [beat]).inserted.length, 0, "no second copy beside the AI's own");
+
+    const { events } = ensureScriptedEvents([], [beat]);
+    assert.doesNotMatch(events[0].description, /\[|map changes/, "the simulator's directions stay out of the visible event");
+    assert.match(events[0].description, /^The current state[\s\S]*Al-Hasaka and Kobani within 17 days of combat operations\.$/);
+    const exact = ensureScriptedEvents([], [{ ...beat, textMode: "exact" }]).events[0];
+    assert.equal(exact.description, beat.text, "exact wording keeps every word");
+});
+
 test("exact selected-outcome wording uses parent context for the prompt without adding it to visible prose", () => {
     const beat = {
         date: "2026-01-02",

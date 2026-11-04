@@ -36,7 +36,7 @@ const EXTRA_MODULES = Object.freeze({
   scenarioCanon: "ctScenarioCanon",
   ownerNames: "ctOwnerNames",
   regionNameFixes: "ctRegionNameFixes",
-  listenIn: "ctListenIn",
+  placeFeed: "ctPlaceFeed",
   i18n: "ctI18n",
   communityFlags: "ctCommunityFlags",
   gameFlagChoices: "ctGameFlagChoices",

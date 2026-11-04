@@ -10,7 +10,7 @@ when you are not using it.
 |---|---|
 | **Top left** | **☰** the game menu, the session pill — the game, your country, the date — and **⌂ Exit Game**. |
 | **Top right** | The date pill, with **«** events and **»** time skip. |
-| **Bottom left** | The toolbar: **Chat**, **✦ Actions** and **Projects & Operations**, with search beside it. |
+| **Bottom left** | The toolbar: **Chat**, **✦ Actions** and **Projects & Operations**, with search beside it. On beta: **Chat**, **✦ Actions** (with Projects & Operations as its second tab) and **Rostra**, the social network. |
 | **Bottom right** | Your flag, and the **Advisor** button, which opens a drawer with Advisor and Stats. |
 
 <p class="beta-note"><b>On beta the bottom corners hold more.</b> Bottom right, your flag opens
@@ -35,23 +35,22 @@ Clicking things is the primary way you interact with the world.
   sovereign, who controls it and who claims it, and where a group controls it, which group.
 - **The country panel** → flag, details, alternative names, related events filtered by
   importance (All, Major, Minor), an **Advisor Report** — an AI intelligence reading — on
-  request, and **Open Diplomacy**. On beta it also has **Stats** and **Listen in**.
+  request, and **Open Diplomacy**. On beta it also has **Stats**.
 - **Click a unit** → an intelligence card describing the formation — what it is, whose it is,
   how strong, and what it appears to be doing.
 - **Click a city or structure** → its name, population, and what it is.
 
 <p class="beta-note"><b>On beta the region row's ⓘ opens the region's details</b> — its cities
-and its neighbours — and the card has <b>Listen in</b>, a phone of what ordinary people there are
-posting (see <a href="/wiki/diplomacy/">diplomacy</a>).</p>
+and its neighbours.</p>
 
 Drag to pan, scroll to zoom. See [the world map](/wiki/world-map/) for what the colours,
 stripes and labels mean.
 
 <p class="beta-note"><b>On beta the map also turns and tilts.</b> With a mouse, drag with the
 right button: sideways turns the map, up and down tilts it, and the wheel still zooms. On a
-trackpad, click and drag to pan, pinch to zoom, and drag with two fingers to turn and tilt the map,
-both at once. Shift with the arrow keys turns and tilts it too, and all of this works in the War
-Room as well.</p>
+trackpad, click and drag to pan, and pinch or drag with two fingers to zoom; hold Shift while you
+drag with two fingers to turn and tilt the map, both at once. Shift with the arrow keys turns and
+tilts it too, and all of this works in the War Room as well.</p>
 
 ## The date pill and time
 
@@ -100,6 +99,10 @@ a time. See [giving orders](/wiki/orders/).
 The board of long-running efforts — research programmes, construction, military and covert
 operations, campaigns — that span many turns. You do not add to it by hand: events, your agents
 and your advisor write it. See [projects and operations](/wiki/projects/).
+
+<p class="beta-note"><b>On beta the board is a tab of the Actions panel</b>: open <b>✦ Actions</b>
+and choose <b>Projects</b>. Its old button in the toolbar opens <b>Rostra</b>, the social network
+(see <a href="/wiki/diplomacy/#rostra">diplomacy</a>).</p>
 
 ## The advisor drawer
 

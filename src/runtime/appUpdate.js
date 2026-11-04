@@ -88,6 +88,21 @@ export const isUpdateAvailable = (currentBuild, latest) => {
   return manifest.build > current;
 };
 
+// Whether the desktop feed's build is newer than the running one. The ids are the
+// release workflow's run ids, which only ever go up. A feed naming an OLDER build is
+// a stale copy: GitHub's download servers can hand out the last latest.json for a few
+// minutes after a release replaces it, and an app that had just updated itself showed
+// the banner for the build it came from (the owner, 2026-11-03: "why did I get an
+// update banner even after updating"). Ids that are not plain numbers are compared
+// for a difference, as before.
+export const desktopBuildIsNewer = (feed, current) => {
+  const latest = String(feed ?? "").trim();
+  const running = String(current ?? "").trim();
+  if (!latest || latest === running) return false;
+  if (/^\d+$/.test(latest) && /^\d+$/.test(running)) return Number(latest) > Number(running);
+  return true;
+};
+
 // What the banner says when the app's own updater gives up. The main process
 // keeps electron-updater's message verbatim (main.cjs updateState.error) and the
 // banner used to swallow it: a player saw "0%" flip back to "Update now" and

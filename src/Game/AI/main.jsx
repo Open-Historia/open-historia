@@ -147,10 +147,13 @@ import { describeDocumentsForAdvisor } from "../../runtime/reportDelivery.js";
 import { viewAsSeen } from "../../runtime/gameState.js";
 import { withCatchUp } from "./conversationCatchUp.js";
 import { ADVISOR_MEMORY_DIRECTIVE, advisorMemoryContextEntry, latestAdvisorMemory, splitAdvisorMemory } from "./advisorMemory.js";
+import { advisorOfficeStatus } from "../../runtime/advisorThreads.js";
 import { createConversationGeneration, removeEntry } from "./liveConversation.js";
+import { createAdvisorSessionRegistry } from "./advisorSessions.js";
 import { buildDiplomaticPoliticalContext } from "./diplomaticPoliticalContext.js";
 import { buildAdvisorPoliticalDiplomacyContext } from "./advisorPoliticalDiplomacyContext.js";
 import { describeWeatherForAdvisor } from "./advisorWeather.js";
+import { describeWarsForAdvisor } from "./advisorWars.js";
 import { describeLeaderStanding, describeOurFigures, describeTerritoryForConversation } from "./standingContext.js";
 import { OWN_WARS_HEADING, buildWarStatsBlock, describePeaceTalk } from "./warStatsPrompt.js";
 import { beginAiRequestScope } from "./aiRequestControl.js";
@@ -3753,7 +3756,7 @@ async function describePlayerStatsForAdvisor(worldData, country) {
     });
 }
 
-async function buildAdvisorSystemPrompt() {
+async function buildAdvisorSystemPrompt({ recipient = null } = {}) {
     await ensurePromptsLoaded();
     const [savedGame, actionData, savedChats, savedWorld, savedEvents, advisorData] = await Promise.all([
         readJson(JSON_URLS.game, { defaultValue: {} }),
@@ -3821,6 +3824,11 @@ async function buildAdvisorSystemPrompt() {
         // sheet yet is told to estimate, and to say so.
         describeOurFigures(worldData, gameData?.country || "", { statistics: officialStats }),
         ADVISOR_MILITARY_STRENGTH_DIRECTIVE,
+        // The country's wars and their fronts, as its general staff knows them
+        // (advisorWars.js): "the advisor should know everything thats going on
+        // with conflicts and wars" (the owner, 2026-11-03). From the world as
+        // the player has been shown it, like everything here.
+        describeWarsForAdvisor({ world: worldData, player: gameData?.country || "", date: gameData?.gameDate || "" }),
         advisorTerritory,
         describeWeatherForAdvisor({ world: worldData, player: gameData?.country || "", date: gameData?.gameDate || "" }),
         // (The seasons and the weather, which the map shows with no words:
@@ -3856,7 +3864,24 @@ async function buildAdvisorSystemPrompt() {
         // (advisorMemory.js).
         ADVISOR_MEMORY_DIRECTIVE,
     ].filter(Boolean);
-    return { systemPrompt: `${rendered}\n\n${directives.join("\n\n")}`, lookups: groupLookups };
+    // A manually created contact speaks as its own persistent personality.
+    // Its profile is supplied every call, outside history compaction. Only
+    // the chief advisor inherits the normal ability to propose board edits.
+    const officeStatus = recipient?.binding ? advisorOfficeStatus(recipient, worldData) : "unbound";
+    const officeContext = officeStatus === "current"
+        ? "Political World confirms you are currently the officeholder named in this contact."
+        : ["changed", "vacant"].includes(officeStatus)
+            ? "Political World no longer lists you in that office. You are a FORMER officeholder, not the incumbent; do not claim present authority from that position or act as its successor."
+            : officeStatus === "unavailable"
+                ? "Your present office status is not verified by Political World; do not assert it as canonical."
+                : "This conversation profile is not proof of a canonical political appointment.";
+    const identity = recipient?.id && recipient?.name && recipient?.title
+        ? `[Advisor Recipient — Persistent Identity]
+You are ${recipient.name}, known to the player as ${recipient.title}. You are speaking to the player as this specific person, NOT as their chief advisor.
+${officeContext}
+${recipient.personality ? `Personality and operating principles: ${recipient.personality}\n` : ""}Maintain this identity across turns. Speak within your actual knowledge and office; do not invent appointments or authority. You may discuss existing Actions and Projects, but you must not produce machine-readable actions or projects blocks or claim to have executed them. Offer proposals in ordinary prose; only the player may authorize new directives.`
+        : "";
+    return { systemPrompt: `${rendered}\n\n${[...directives, identity].filter(Boolean).join("\n\n")}`, lookups: groupLookups };
 }
 
 // `speakingAs` names the polity whose leader is about to reply. It decides both
@@ -4028,17 +4053,10 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry, spea
     return `${rendered}${politicalSection}${espionage}${standing ? `\n\n${standing}` : ""}${territory ? `\n\n${territory}` : ""}${wars ? `\n\n${wars}` : ""}${peaceTalk ? `\n\n${peaceTalk}` : ""}${playerGroupText ? `\n\n${playerGroupText}` : ""}${subordinations ? `\n\n${subordinations}` : ""}${papers ? `\n\n${papers}` : ""}${reminders ? `\n\n${reminders}` : ""}`;
 }
 
-let advisorHistory = [];
-// The newest ADVISOR_MEMORY a reply carried (advisorMemory.js): sent ahead of
-// the history, which past MAX_LIVE_CHAT_MESSAGES keeps only snippets of the
-// oldest talk.
-let advisorMemory = "";
-// Which conversation the module histories hold. Loading, opening or clearing
-// one replaces its history, and bumps its count here: a reply that lands after
-// that belongs to a conversation that is no longer here, so it is returned to
-// its caller, which saves it with the thread it was asked in, and never written
-// into whichever history replaced it (liveConversation.js).
-const advisorConversation = createConversationGeneration();
+// Each recipient has an independent in-memory history, durable memory and
+// conversation generation. Legacy calls (without a threadId) use "chief".
+const advisorSessions = createAdvisorSessionRegistry();
+const advisorState = (threadId = "chief") => advisorSessions.get(threadId);
 const diplomaticConversation = createConversationGeneration();
 const MAX_LIVE_CHAT_MESSAGES = 24;
 const RETAINED_LIVE_CHAT_MESSAGES = 18;
@@ -4070,16 +4088,17 @@ function compactConversationHistory(history) {
 // moved on since the last exchange (conversationCatchUp.js). The model reads it
 // ahead of what the player typed; it goes no further than this history.
 export async function sendMessage(userMessage, options) {
-    const { catchUp = "", ...opts } = options || {};
+    const { catchUp = "", threadId = "chief", recipient = null, ...opts } = options || {};
+    const state = advisorState(threadId);
     // The conversation this reply is for, and its history, taken before the
-    // first await (liveConversation.js).
-    const conversation = advisorConversation.current();
-    const priorHistory = advisorHistory;
-    const memoryContext = advisorMemoryContextEntry(advisorMemory);
-    const { systemPrompt, lookups } = await buildAdvisorSystemPrompt();
+    // first await. Another contact can be opened without replacing this state.
+    const conversation = state.conversation.current();
+    const priorHistory = state.history;
+    const memoryContext = advisorMemoryContextEntry(state.memory);
+    const { systemPrompt, lookups } = await buildAdvisorSystemPrompt({ recipient });
     const asked = { role: "user", parts: [{ text: withCatchUp(userMessage, catchUp) }] };
     const history = compactConversationHistory([...priorHistory, asked]);
-    if (advisorConversation.isCurrent(conversation)) advisorHistory = history;
+    if (state.conversation.isCurrent(conversation)) state.history = history;
 
     // Both halves of the exchange, in full, in detailed mode. The question is
     // logged BEFORE the call so it survives a crash or a hang inside it — the
@@ -4098,9 +4117,9 @@ export async function sendMessage(userMessage, options) {
         // keeps the last one. The raw reply goes back to the panel, which
         // strips it the same way and keeps it on the stored message.
         const { reply: shown, memory } = splitAdvisorMemory(reply);
-        if (advisorConversation.isCurrent(conversation)) {
-            if (memory) advisorMemory = memory;
-            advisorHistory.push({ role: "model", parts: [{ text: shown }] });
+        if (state.conversation.isCurrent(conversation)) {
+            if (memory) state.memory = memory;
+            state.history.push({ role: "model", parts: [{ text: shown }] });
         }
         // The raw reply, before advisor.jsx strips its ```actions / ```projects /
         // ```deploy blocks out of it. A block that was malformed, or that the UI
@@ -4109,7 +4128,7 @@ export async function sendMessage(userMessage, options) {
         logDebugEvent("advisor", `Advisor → player (${String(reply ?? "").length} chars in ${elapsedSeconds(startedAt)}).`, reply, { verbose: true });
         return reply;
     } catch (err) {
-        if (advisorConversation.isCurrent(conversation)) removeEntry(advisorHistory, asked);
+        if (state.conversation.isCurrent(conversation)) removeEntry(state.history, asked);
         // Not verbose: an advisor turn that failed is reportable on its own, and
         // the message rolled back off the history here is why a retry looks the
         // way it does.
@@ -4118,31 +4137,29 @@ export async function sendMessage(userMessage, options) {
     }
 }
 
-export function loadHistory(savedMessages) {
-    advisorConversation.replace();
-    advisorMemory = latestAdvisorMemory(savedMessages);
-    advisorHistory = savedMessages
+export function loadHistory(savedMessages, threadId = "chief") {
+    const state = advisorState(threadId);
+    state.conversation.replace();
+    state.memory = latestAdvisorMemory(savedMessages);
+    state.history = savedMessages
     .filter((msg) => msg.role === "user" || msg.role === "advisor")
     .map((msg) => ({
         role: msg.role === "user" ? "user" : "model",
-        // A player's message is sent with the catch-up note it was first sent
-        // with, so a reloaded conversation reads exactly as the live one did.
+        // Preserve the question's original catch-up across reloads.
         parts: [{ text: msg.role === "user" ? withCatchUp(msg.text, msg.catchUp) : msg.text }],
     }));
-    advisorHistory = compactConversationHistory(advisorHistory);
-    // Error bubbles are filtered out above, so the count the model resumes with
-    // is routinely smaller than the transcript on screen — which reads like lost
-    // context to anyone comparing the two. State both.
+    state.history = compactConversationHistory(state.history);
     logDebugEvent("advisor",
-        `Advisor history restored: ${advisorHistory.length} message(s) from a ${savedMessages.length}-message transcript.`,
+        `Advisor history restored for ${threadId}: ${state.history.length} message(s) from a ${savedMessages.length}-message transcript.`,
         undefined, { verbose: true });
 }
 
-export function startChat() {
-    advisorConversation.replace();
-    advisorHistory = [];
-    advisorMemory = "";
-    logDebugEvent("advisor", "Advisor chat started — history cleared.");
+export function startChat(threadId = "chief") {
+    const state = advisorState(threadId);
+    state.conversation.replace();
+    state.history = [];
+    state.memory = "";
+    logDebugEvent("advisor", `Advisor chat started for ${threadId} — history cleared.`);
 }
 
 let diplomaticHistory = [];
@@ -4260,7 +4277,10 @@ export async function sendDiplomaticMessage(playerMessage, speakingAs, countries
             `${speakingAs} → player in ${elapsedSeconds(startedAt)}${reaction ? ` (reaction ${reaction})` : ""}.`,
             { reply, rawChars: String(raw ?? "").length, reaction: reaction || "(none)" },
             { verbose: true });
-        if (stillOpen) diplomaticHistory.push({ role: "model", parts: [{ text: `[${speakingAs}]: ${reply}` }] });
+        // A reply that was only its PEACE line is remembered as that line, as the model wrote it, so the thread knows
+        // what was decided.
+        const remembered = reply || String(raw ?? "").match(/^[ \t]*PEACE[ \t]*:.*$/im)?.[0]?.trim() || "";
+        if (stillOpen) diplomaticHistory.push({ role: "model", parts: [{ text: `[${speakingAs}]: ${remembered}` }] });
         // `peace`: what the leader decided of peace with the player, its hidden
         // PEACE line, "" for nothing (the panel carries it out: gameplay.js answerPeaceInChat).
         return { reply, reaction, memorySummary, peace };

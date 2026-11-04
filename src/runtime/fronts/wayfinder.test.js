@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { syntheticMap } from "./syntheticMap.js";
 import { CANALS, findWay } from "./wayfinder.js";
 import { buildWorldGrid, greatPoint, kmBetween, placeAlong, seasOf, wayKm, worldSheetKey } from "./worldGrid.js";
+import { yToLat } from "./frame.js";
 
 const legend = { A: "Aland", B: "Borduria", N: "Neutralia", C: "Cisland", L: "Landia", "~": null };
 const sheetOf = (layout, extra = {}) => syntheticMap({ layout, legend, west: 20, north: 56, step: 1, ...extra });
@@ -71,7 +72,9 @@ test("the sheet says where there is land, where there is sea, and which cells ar
 test("distances and places along a way", () => {
   assert.ok(Math.abs(kmBetween(0, 0, 1, 0) - 111.19) < 0.1);
   assert.ok(Math.abs(kmBetween(0, 60, 1, 60) - 55.6) < 0.2, "a degree of longitude is half as long at sixty north");
-  assert.equal(kmBetween(0, 0, 3, 4, { flat: true, scale: 10 }), 50);
+  // A flat sheet is measured as it is drawn: up the sheet by the height the map draws a latitude at, the same everywhere.
+  assert.ok(Math.abs(kmBetween(0, 0, 3, yToLat(4), { flat: true, scale: 10 }) - 50) < 1e-6);
+  assert.ok(Math.abs(kmBetween(0, yToLat(60), 3, yToLat(64), { flat: true, scale: 10 }) - 50) < 1e-6, "as long near the top of the sheet as in its middle");
   assert.ok(Math.abs(kmBetween(179, 0, -179, 0) - 222.4) < 0.3, "across the date line is two degrees, not 358");
   // Half way along a great circle between two places on the same latitude lies north of it.
   const [lng, lat] = greatPoint(-70, 45, 0, 45, 0.5);

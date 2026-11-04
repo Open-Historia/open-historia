@@ -26,7 +26,7 @@
 // every label; the troops above the cities and structures and just below the
 // unit counters.
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Layer, Source, useMap } from "react-map-gl/maplibre";
 import { getNationColors } from "../../runtime/assets.js";
 import { MAP_SETTING_KEYS, useMapSettingValue } from "../../runtime/mapSettings.js";
@@ -41,9 +41,10 @@ import { enforceMapLayerOrder } from "./mapLayerOrder.js";
 import { POLITICAL_FILL_OPACITY_STOPS, politicalFillOpacityAtZoom } from "./vnext/presentationPolicy.js";
 import { getFrontTargets, settleFront, startFrontsSync, subscribeFronts } from "./frontsController.js";
 import { arrowDetailAt, frontArrowFeatures, frontArrowRgb, frontAt, frontShownOn, frontTroopFeatures, stageOf } from "./frontGeometry.js";
-import { PAINT_WALL } from "../../runtime/fronts/codec.js";
-import { createPaintPlayer, paintPixels, paintScaleFor, pictureCorners, pictureFits } from "./frontPaint.js";
-import { FRONT_BASEMAP_PUT_LAYER_ID, FRONT_BASEMAP_TAKE_LAYER_ID, createFrontBasemapLayers } from "./frontBasemapLayer.js";
+import { createFrontField, createPaintPlayer, landMask, paintPixels, paintScaleFor, pictureCorners, pictureFits, touchedCells, writeFrontField } from "./frontPaint.js";
+import { FRONT_BASEMAP_PUT_LAYER_ID, FRONT_BASEMAP_TAKE_LAYER_ID, createFrontBasemapLayers, markPicturePainted, picturePaintedTimes } from "./frontBasemapLayer.js";
+import { FRONT_GROUND_LAYER_ID, createFrontGroundLayer } from "./frontGroundLayer.js";
+import { getGroundHeldIds, getGroundMeshes, setGroundAreas, setGroundWantedIds, subscribeGroundHeldIds, subscribeGroundMeshes } from "./frontGround.js";
 import { contestedOwnersOf, setFrontShownOwners } from "./frontOwnership.js";
 import { shownOwnersAt } from "../../runtime/fronts/replay.js";
 import { shortUnitLabel } from "./unitLabels.js";
@@ -78,14 +79,18 @@ const CASING_COLOR = "rgba(5, 8, 13, 0.92)";
 // Taken ground is to look like the taker's own land. A country's land is its
 // colour laid over the basemap at a strength that grows with the zoom; laid
 // over ground that is still the colour of the region's own country, the two
-// would mix into mud. So the territory's colour behind the paint is made to
-// be seen through: the bare map is put back under the painted ground
-// (frontBasemapLayer.js), and the paint is laid over it in its own colours at
-// the very strength the map gives a country's land. It then matches that land
-// at every zoom and on every basemap, dark ones included.
-// Where the map cannot be copied the picture is drawn twice instead, as it
-// used to be: first nearly solid and drained to the pale grey of the game's
-// own relief, which is right on that basemap and too light on a dark one.
+// would mix into mud. So the battlefield draws its sides' regions itself, in
+// place of the map's fills (frontGroundLayer.js, frontGround.js): each pixel
+// in the colour of whoever holds it, at the very strength the map gives a
+// country's land, and the border where the holders meet. It then matches
+// that land at every zoom and on every basemap, dark ones included, and the
+// border moves as the paint does.
+// Where that layer cannot draw (no WebGL 2), the bare map is put back under
+// the painted ground instead, copied from under the fills every frame
+// (frontBasemapLayer.js), and the paint laid over it; and where the map
+// cannot be copied either, the picture is drawn twice, as it used to be:
+// first nearly solid and drained to the pale grey of the game's own relief,
+// which is right on that basemap and too light on a dark one.
 const PAINT_CLEAR_OPACITY = 0.94;
 const PAINT_CLEAR_TONE = [0.92, 0.96];
 const PAINT_OPACITY = ["interpolate", ["linear"], ["zoom"], ...POLITICAL_FILL_OPACITY_STOPS.flat()];
@@ -185,7 +190,10 @@ const makePicture = (view, onto = null) => {
     canvas.height = frame.rows * scale;
   }
   const context = onto?.context ?? canvas.getContext("2d");
-  if (onto) context.clearRect(0, 0, canvas.width, canvas.height);
+  if (onto) {
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    markPicturePainted(canvas);
+  }
   const [west, north] = toLngLat(0, frame.rows);
   const [east, south] = toLngLat(frame.cols, 0);
   let rowOf = null;
@@ -219,7 +227,38 @@ const makePicture = (view, onto = null) => {
     palette: new Uint8Array(32 * 4),
     blank: true,
     ...(onto?.maskCanvas ? { maskCanvas: onto.maskCanvas } : {}),
+    // The front's field, for the border the ground's own layer draws where the
+    // sides meet (frontPaint.js writeFrontField): kept with the canvas, since
+    // the map is told of it once, and its touched cells the run's.
+    front: frontOf(view, rowOf, onto?.front),
+    // Where the frame's cells lie, for the map to tell which of its borders
+    // the run moves (vnext/battlefieldGround.js cellAt).
+    grid: onto?.grid ?? gridOf(frame),
   };
+};
+
+// The front's field for a run, on the one the picture already has when it
+// fits; with the cells the run touches, and a key that tells them apart.
+const frontOf = (view, rowOf, onto = null) => {
+  const { cols, rows } = view.frame;
+  const front = onto && onto.width === cols && onto.rows === rows && onto.rowOf === rowOf ? onto : createFrontField(cols, rows, rowOf);
+  front.touched = touchedCells(view);
+  let sum = 0;
+  let count = 0;
+  for (let cell = 0; cell < front.touched.length; cell += 1) {
+    if (!front.touched[cell]) continue;
+    sum = (sum + cell * (count + 1)) % 1000000007;
+    count += 1;
+  }
+  front.touchedKey = `${count}:${sum}`;
+  return front;
+};
+
+const gridOf = (frame) => {
+  const { toLngLat } = projectorOf(frame);
+  const colLngs = Array.from({ length: frame.cols + 1 }, (_, col) => toLngLat(col, 0)[0]);
+  const rowLats = Array.from({ length: frame.rows + 1 }, (_, row) => toLngLat(0, row)[1]);
+  return { cols: frame.cols, rows: frame.rows, colLngs, rowLats };
 };
 
 const FrontLayers = () => {
@@ -228,8 +267,18 @@ const FrontLayers = () => {
   // The pictures to declare, one a battlefield: [{ key, slot, canvas, coordinates }].
   // Most games have no battlefield, and then no source or layer is declared.
   const [pictures, setPictures] = useState([]);
-  // Whether the bare map is being put back under the paint (frontBasemapLayer.js).
+  // Whether the battlefields' own layer can draw their ground
+  // (frontGroundLayer.js): not known until it is on the map, and given up on
+  // for this map once it cannot.
+  const [ground, setGround] = useState("unknown");
+  const groundLayerRef = useRef(null);
+  // (Read by the playing, which writes the front's field only while that layer draws.)
+  const groundOnRef = useRef(false);
+  groundOnRef.current = ground === "working";
+  const groundMeshes = useSyncExternalStore(subscribeGroundMeshes, getGroundMeshes);
+  // Whether the bare map is being put back under the paint instead (frontBasemapLayer.js).
   const [seenThrough, setSeenThrough] = useState(false);
+  const handOverAllRef = useRef(() => {});
   const picturesRef = useRef(pictures);
   picturesRef.current = pictures;
   const { polityOverrides, groups, regionOwnershipOverrides, wars, relations, agreements, puppets } = useWorldState();
@@ -288,8 +337,115 @@ const FrontLayers = () => {
   const durationRef = useRef(0);
   const repaintRef = useRef(() => {});
 
-  // The two layers that put the bare map back under the paint, while there is a battlefield to paint.
-  const painted = pictures.length > 0;
+  const anyPainted = pictures.length > 0;
+  const groundFailed = ground === "failed";
+  // The map's own copies of the pictures draw nothing while the ground's own layer or the pair draws them.
+  const copiesHidden = seenThrough || !groundFailed;
+  const copiesHiddenRef = useRef(copiesHidden);
+  copiesHiddenRef.current = copiesHidden;
+
+  // The battlefields' own layer, while there is a battlefield to draw. What it
+  // draws is worked out below (groundAreasRef) and read by it every frame.
+  const groundAreasRef = useRef([]);
+  useEffect(() => {
+    const mapInstance = map?.getMap?.() ?? map;
+    if (!mapInstance || !anyPainted || groundFailed) return undefined;
+    let ready = null;
+    let readyIds = null;
+    const layer = createFrontGroundLayer({
+      areas: () => {
+        const held = getGroundHeldIds();
+        if (held !== readyIds) {
+          readyIds = held;
+          ready = new Map();
+        }
+        return groundAreasRef.current.map((area) => {
+          let whole = ready.get(area.key);
+          if (whole === undefined) {
+            whole = area.regionIds.every((id) => held.has(id));
+            ready.set(area.key, whole);
+          }
+          return { ...area, version: picturePaintedTimes(area.canvas), ready: whole };
+        });
+      },
+      strength: politicalFillOpacityAtZoom,
+      onState: (working) => setGround((now) => (now === "failed" ? now : working ? "working" : "failed")),
+      onError: (error) => console.warn("[fronts] a battlefield's ground could not be drawn by its own layer; the bare map is put back under it instead.", error),
+    });
+    groundLayerRef.current = layer;
+    const add = () => {
+      try {
+        if (!mapInstance.style || mapInstance.getLayer(FRONT_GROUND_LAYER_ID)) return;
+        // (Put in its place only when it has just been added: see the pair below.)
+        mapInstance.addLayer(layer);
+        enforceMapLayerOrder(mapInstance);
+      } catch { /* the map is between styles: asked again when the next has loaded */ }
+    };
+    add();
+    mapInstance.on("styledata", add);
+    const repaint = () => mapInstance.triggerRepaint?.();
+    const unsubscribe = subscribeGroundHeldIds(repaint);
+    return () => {
+      mapInstance.off("styledata", add);
+      unsubscribe();
+      try {
+        if (mapInstance.style && mapInstance.getLayer(FRONT_GROUND_LAYER_ID)) mapInstance.removeLayer(FRONT_GROUND_LAYER_ID);
+      } catch { /* the map is gone */ }
+      if (groundLayerRef.current === layer) groundLayerRef.current = null;
+    };
+  }, [map, anyPainted, groundFailed]);
+
+  // The battlefields the ground layer is to draw, told to the political map,
+  // which asks the regions worker for their regions and hides their fills
+  // (Nations.jsx). Nothing while the layer cannot draw: the map's own borders
+  // and fills then stay, under the paint.
+  useEffect(() => {
+    const drawing = ground === "working";
+    setGroundAreas(drawing ? pictures.map(({ key, coordinates, members, sides, front, grid }) => {
+      const [[west, north], [east], [, south]] = coordinates;
+      return { key, bounds: [west, south, east, north], members, sides, touched: front.touched, touchedKey: front.touchedKey, grid };
+    }) : []);
+    // The front's field is written only while the layer draws: once it does, the battlefields are drawn again.
+    if (drawing && !rafRef.current) repaintRef.current();
+  }, [ground, pictures]);
+  useEffect(() => () => {
+    setGroundAreas([]);
+    setGroundWantedIds([]);
+  }, []);
+
+  // Each battlefield's regions with their colours, as the layer draws them, and
+  // those regions told to the political map to hide.
+  useEffect(() => {
+    const byKey = new Map(groundMeshes.map((mesh) => [mesh.key, mesh]));
+    const list = [];
+    if (ground === "working") {
+      for (const picture of pictures) {
+        const mesh = byKey.get(picture.key);
+        if (!mesh?.positions?.length) continue;
+        const colours = mesh.owners.map((owner) => colors.groundRgbOf(owner));
+        list.push({
+          key: picture.key,
+          canvas: picture.canvas,
+          front: picture.front,
+          coordinates: picture.coordinates,
+          meshId: mesh.meshId,
+          positions: mesh.positions,
+          regionOf: mesh.regionOf,
+          regionIds: mesh.regionIds,
+          colours,
+          colourKey: colours.map((rgb) => rgb.join(",")).join(";"),
+        });
+      }
+    }
+    groundAreasRef.current = list;
+    setGroundWantedIds(list.flatMap((area) => area.regionIds));
+    const mapInstance = map?.getMap?.() ?? map;
+    mapInstance?.triggerRepaint?.();
+  }, [ground, groundMeshes, pictures, colors, map]);
+
+  // The two layers that put the bare map back under the paint, while there is
+  // a battlefield to paint and its own layer cannot draw it.
+  const painted = anyPainted && groundFailed;
   useEffect(() => {
     const mapInstance = map?.getMap?.() ?? map;
     if (!mapInstance || !painted) return undefined;
@@ -388,6 +544,13 @@ const FrontLayers = () => {
     // playing. After a redraw it is told so, and told to stop once it has had
     // two frames to take the picture up, unless a playing is still going.
     const handOver = (entry, playing) => {
+      // While the ground's own layer or the pair draws the picture, the map's own copy is hidden.
+      if (copiesHiddenRef.current) {
+        // One left playing as it was hidden would keep the map drawing every frame.
+        source(frontPaintSourceId(entry.slot))?.pause?.();
+        mapInstance?.triggerRepaint?.();
+        return true;
+      }
       const picture = source(frontPaintSourceId(entry.slot));
       if (!picture?.play) return false;
       picture.play();
@@ -429,10 +592,17 @@ const FrontLayers = () => {
           player.seek(entry.day);
           target.data = target.pixels.data;
           const area = paintPixels(player, picture.palette, target);
-          if (area && area.width > 0 && area.height > 0) context.putImageData(target.pixels, 0, 0, area.x, area.y, area.width, area.height);
+          if (area && area.width > 0 && area.height > 0) {
+            context.putImageData(target.pixels, 0, 0, area.x, area.y, area.width, area.height);
+            markPicturePainted(picture.canvas);
+          }
+          // The front's field at this day, for the border the ground's own layer draws.
+          if (groundOnRef.current) writeFrontField(player, picture.front, true);
           picture.blank = false;
         } else if (!picture.blank) {
           context.clearRect(0, 0, target.width, target.height);
+          markPicturePainted(picture.canvas);
+          if (groundOnRef.current) writeFrontField(player, picture.front, false);
           picture.blank = true;
         }
         if (!handOver(entry, !atRest)) waiting = true;
@@ -527,7 +697,7 @@ const FrontLayers = () => {
     // the rest goes by the cells until it is looked at.
     let maskedFor = "";
     const fold = (name) => String(name ?? "").trim().toLowerCase();
-    const maskOf = (entry, bounds) => {
+    const maskOf = (entry, bounds, featuresOf) => {
       const { picture } = entry;
       const { target, player } = picture;
       // A flat sheet's rows are not evenly spaced: it goes by the cells.
@@ -543,25 +713,32 @@ const FrontLayers = () => {
       }
       const context = picture.maskCanvas.getContext("2d", { willReadFrequently: true });
       if (!context) return null;
-      context.clearRect(0, 0, width, height);
-      context.fillStyle = "#ffffff";
       const { toCell } = projectorOf(frame);
+      // The part of the picture the map has on the screen: the only part read from the drawing.
+      const [west, south] = toCell(bounds.getWest(), bounds.getSouth());
+      const [east, north] = toCell(bounds.getEast(), bounds.getNorth());
+      const x0 = Math.max(0, Math.floor(west * scale));
+      const x1 = Math.min(width, Math.ceil(east * scale));
+      const y0 = Math.max(0, Math.floor(height - north * scale));
+      const y1 = Math.min(height, Math.ceil(height - south * scale));
+      const onScreen = x0 < x1 && y0 < y1;
+      if (onScreen) {
+        context.clearRect(0, 0, width, height);
+        context.fillStyle = "#ffffff";
+      }
+      const polygonsOf = (feature) => {
+        const properties = feature.properties ?? {};
+        const id = String(properties.GID_1 ?? properties.id ?? "");
+        if (!members.has(fold(owners[id] ?? properties.owner))) return [];
+        const { type, coordinates } = feature.geometry ?? {};
+        return type === "Polygon" ? [coordinates] : type === "MultiPolygon" ? coordinates : [];
+      };
       let drawn = 0;
-      for (const sourceId of MASK_SOURCES) {
-        if (!source(sourceId)) continue;
-        let features = [];
-        try {
-          features = mapInstance.querySourceFeatures(sourceId) ?? [];
-        } catch {
-          features = [];
-        }
-        for (const feature of features) {
-          const properties = feature.properties ?? {};
-          const id = String(properties.GID_1 ?? properties.id ?? "");
-          if (!members.has(fold(owners[id] ?? properties.owner))) continue;
-          const { type, coordinates } = feature.geometry ?? {};
-          const polygons = type === "Polygon" ? [coordinates] : type === "MultiPolygon" ? coordinates : [];
-          for (const polygon of polygons) {
+      // Off the screen all that matters is whether any of its land is loaded.
+      if (!onScreen && MASK_SOURCES.some((sourceId) => featuresOf(sourceId).some((feature) => polygonsOf(feature).length > 0))) drawn = 1;
+      for (const sourceId of onScreen ? MASK_SOURCES : []) {
+        for (const feature of featuresOf(sourceId)) {
+          for (const polygon of polygonsOf(feature)) {
             context.beginPath();
             for (const ring of polygon) {
               for (let index = 0; index < ring.length; index += 1) {
@@ -577,26 +754,10 @@ const FrontLayers = () => {
         }
       }
       if (drawn === 0) return null;
-      const shape = context.getImageData(0, 0, width, height).data;
+      const shape = onScreen ? context.getImageData(x0, y0, x1 - x0, y1 - y0).data : null;
       const mask = target.mask?.length === width * height ? target.mask : new Uint8Array(width * height);
-      // The part of the picture the map has on the screen.
-      const [west, south] = toCell(bounds.getWest(), bounds.getSouth());
-      const [east, north] = toCell(bounds.getEast(), bounds.getNorth());
-      const x0 = Math.max(0, Math.floor(west * scale));
-      const x1 = Math.min(width, Math.ceil(east * scale));
-      const y0 = Math.max(0, Math.floor(height - north * scale));
-      const y1 = Math.min(height, Math.ceil(height - south * scale));
       const { cols, rows, state } = player;
-      for (let y = 0; y < height; y += 1) {
-        const row = Math.min(rows - 1, Math.max(0, Math.floor(rows - (y + 0.5) / scale)));
-        const seen = y >= y0 && y < y1;
-        for (let x = 0; x < width; x += 1) {
-          const at = y * width + x;
-          if (seen && x >= x0 && x < x1) mask[at] = shape[at * 4 + 3];
-          else mask[at] = state[row * cols + Math.min(cols - 1, Math.floor(x / scale))] === PAINT_WALL ? 0 : 255;
-        }
-      }
-      return mask;
+      return landMask(mask, { width, height, scale, cols, rows, state, shape, x0, x1, y0, y1 });
     };
     const remask = () => {
       if (rafRef.current || playRef.current.size === 0) return;
@@ -610,9 +771,23 @@ const FrontLayers = () => {
       if (key === maskedFor && ownersRef.current === maskedOwners) return;
       maskedFor = key;
       maskedOwners = ownersRef.current;
+      // Read once for every battlefield: the map's regions are the same for each.
+      const queried = new Map();
+      const featuresOf = (sourceId) => {
+        if (!queried.has(sourceId)) {
+          let features = [];
+          try {
+            features = source(sourceId) ? mapInstance.querySourceFeatures(sourceId) ?? [] : [];
+          } catch {
+            features = [];
+          }
+          queried.set(sourceId, features);
+        }
+        return queried.get(sourceId);
+      };
       let any = false;
       for (const entry of playRef.current.values()) {
-        const mask = maskOf(entry, bounds);
+        const mask = maskOf(entry, bounds, featuresOf);
         if (!mask && !entry.picture.target.mask) continue;
         entry.picture.target.mask = mask ?? undefined;
         any = true;
@@ -658,7 +833,7 @@ const FrontLayers = () => {
       });
       playRef.current = next;
 
-      const signature = [...next.values()].map((entry) => `${entry.slot}:${entry.target.name}:${entry.picture.canvas.width}x${entry.picture.canvas.height}:${entry.picture.coordinates.join(",")}`).join("|");
+      const signature = [...next.values()].map((entry) => `${entry.slot}:${entry.target.name}:${entry.picture.canvas.width}x${entry.picture.canvas.height}:${entry.picture.coordinates.join(",")}:${[...(entry.target.view.sides?.[0] ?? []), "|", ...(entry.target.view.sides?.[1] ?? [])].join(",")}:${entry.picture.front.touchedKey}`).join("|");
       if (signature !== declared) {
         declared = signature;
         setPictures([...next.values()].map((entry) => ({
@@ -667,6 +842,11 @@ const FrontLayers = () => {
           slot: entry.slot,
           canvas: entry.picture.canvas,
           coordinates: entry.picture.coordinates,
+          // Whose land it is drawn on: its two sides', and which side each is.
+          members: [...(entry.target.view.sides?.[0] ?? []), ...(entry.target.view.sides?.[1] ?? [])].map(String),
+          sides: [(entry.target.view.sides?.[0] ?? []).map(String), (entry.target.view.sides?.[1] ?? []).map(String)],
+          front: entry.picture.front,
+          grid: entry.picture.grid,
         })));
       }
 
@@ -696,10 +876,13 @@ const FrontLayers = () => {
         paint(true);
         return;
       }
-      for (const entry of playRef.current.values()) handOver(entry, false);
+      if (!copiesHiddenRef.current) for (const entry of playRef.current.values()) handOver(entry, false);
     };
     mapInstance?.on?.("styledata", onStyleData);
     mapInstance?.on?.("moveend", onMoveEnd);
+    handOverAllRef.current = () => {
+      for (const entry of playRef.current.values()) handOver(entry, Boolean(rafRef.current));
+    };
 
     let probe = null;
     if (isFrontProbeEnabled()) {
@@ -737,6 +920,8 @@ const FrontLayers = () => {
           picture: [entry.picture.canvas.width, entry.picture.canvas.height],
           painted: entry.picture.player.bounds,
         })),
+        // Which layer draws the ground, and how much of it was drawn last frame.
+        ground: () => ({ layer: groundLayerRef.current ? FRONT_GROUND_LAYER_ID : null, drawn: groundLayerRef.current?.drawn ?? 0, areas: groundAreasRef.current.map((area) => ({ key: area.key, regions: area.regionIds.length, corners: area.positions.length / 2 })) }),
       };
       window.__OH_FRONTS__ = probe;
     }
@@ -749,6 +934,7 @@ const FrontLayers = () => {
       mapInstance?.off?.("moveend", onMoveEnd);
       mapInstance?.off?.("idle", remask);
       repaintRef.current = () => {};
+      handOverAllRef.current = () => {};
       stop();
       setFrontShownOwners([]);
       unsubscribe();
@@ -756,6 +942,11 @@ const FrontLayers = () => {
       if (probe && window.__OH_FRONTS__ === probe) delete window.__OH_FRONTS__;
     };
   }, [map]);
+
+  // The map's own copies were not kept up while hidden: they are given the pictures before they show.
+  useLayoutEffect(() => {
+    if (!copiesHidden) handOverAllRef.current();
+  }, [copiesHidden]);
 
   const active = pictures.length > 0;
 
@@ -821,8 +1012,9 @@ const FrontLayers = () => {
             id={frontPaintUnderLayerId(picture.slot)}
             type="raster"
             beforeId={paintBefore}
+            layout={{ visibility: copiesHidden ? "none" : "visible" }}
             paint={{
-              "raster-opacity": seenThrough ? 0 : PAINT_CLEAR_OPACITY,
+              "raster-opacity": seenThrough || !groundFailed ? 0 : PAINT_CLEAR_OPACITY,
               "raster-saturation": -1,
               "raster-brightness-min": PAINT_CLEAR_TONE[0],
               "raster-brightness-max": PAINT_CLEAR_TONE[1],
@@ -834,9 +1026,13 @@ const FrontLayers = () => {
             id={frontPaintLayerId(picture.slot)}
             type="raster"
             beforeId={paintBefore}
+            layout={{
+              // Hidden, not only clear: a clear layer still keeps its picture's source busy every frame.
+              visibility: copiesHidden ? "none" : "visible",
+            }}
             paint={{
-              // (Drawn by the layer that puts the bare map back, with it, where that layer works.)
-              "raster-opacity": seenThrough ? 0 : PAINT_OPACITY,
+              // (Drawn by the ground's own layer, or by the one that puts the bare map back, where either works.)
+              "raster-opacity": seenThrough || !groundFailed ? 0 : PAINT_OPACITY,
               "raster-resampling": "linear",
               "raster-fade-duration": 0,
             }}

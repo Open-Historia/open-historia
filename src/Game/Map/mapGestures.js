@@ -1,16 +1,19 @@
-/*! Open Historia — the map's trackpad and mouse controls: two fingers on a trackpad turn and tilt the map, a mouse wheel still zooms © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
+/*! Open Historia — the map's trackpad and mouse controls: two fingers on a trackpad zoom, and with Shift held turn and tilt the map; a mouse wheel zooms © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // "make it so you can do all the map controls with 2 fingers on a trackpad, and
 // make it so mouse you can just right click to do them"; "make it so on track
 // pad, a one finger click and drag pans but 2 finger drag turns tilts and
-// rotates" (the owner, 2026-10-27).
+// rotates" (the owner, 2026-10-27); then "add camera controls (press shift to
+// tilt or turn) to beta" (2026-11-02), as the native app already has them: a
+// two-finger scroll zooms, and only with Shift held turns and tilts.
 //
 // The map's controls (World.jsx sets MapLibre's handlers):
 //
-//   mouse      a left drag pans, the wheel zooms, and a right-button drag turns
-//              the map (sideways) and tilts it (up and down): MapLibre's own
-//              dragRotate with pitchWithRotate;
-//   trackpad   a click and drag pans (it is a left drag), a pinch zooms, and a
-//              two-finger drag turns and tilts the map, both at once: this file;
+//   mouse      a left drag pans, the wheel zooms (Shift: finer, MapLibre's own),
+//              and a right-button drag turns the map (sideways) and tilts it
+//              (up and down): MapLibre's own dragRotate with pitchWithRotate;
+//   trackpad   a click and drag pans (it is a left drag), a pinch zooms, a
+//              two-finger scroll zooms, and a two-finger scroll with Shift held
+//              turns and tilts the map, both at once: this file;
 //   keyboard   the arrows pan, + and - zoom, Shift with the arrows turns and
 //              tilts (MapLibre's keyboard handler, as before);
 //   touch      as before: a drag pans, a pinch zooms, a twist turns.
@@ -24,7 +27,10 @@
 //   - a pinch comes as wheel events with ctrlKey set: it goes on to MapLibre,
 //     which zooms, as before;
 //   - a mouse wheel's events go on to MapLibre, which zooms, as before;
-//   - a trackpad's scroll is kept from MapLibre and turns and tilts the map.
+//   - a trackpad's scroll without Shift goes on to MapLibre, which zooms at a
+//     trackpad's rate;
+//   - a trackpad's scroll with Shift held is kept from MapLibre and turns and
+//     tilts the map.
 //
 // Telling the two apart is MapLibre's own test (ScrollZoomHandler.wheel in
 // maplibre-gl/src/ui/handler/scroll_zoom.ts), the one that already chose its
@@ -209,9 +215,12 @@ export const attachMapGestures = (map, {
   let timer = 0;
   let goal = null;
 
-  // A mouse wheel's scroll of y px, about where `event` happened, to MapLibre's zoom.
-  const zoom = (event, y) => {
-    const copy = makeWheel({ ...pointerInit(event), deltaX: 0, deltaY: asMouseWheel(y), deltaZ: 0, deltaMode: 0 });
+  // A mouse wheel's scroll of x, y px, about where `event` happened, to
+  // MapLibre's zoom. Shift turns a mouse wheel's scroll sideways in some
+  // browsers (deltaX, no deltaY): it still zooms, by whichever way it came.
+  const zoom = (event, x, y) => {
+    const by = event?.shiftKey && Math.abs(x) > Math.abs(y) ? x : y;
+    const copy = makeWheel({ ...pointerInit(event), deltaX: 0, deltaY: asMouseWheel(by), deltaZ: 0, deltaMode: 0 });
     SORTED.add(copy);
     map.getCanvas().dispatchEvent(copy);
   };
@@ -254,7 +263,7 @@ export const attachMapGestures = (map, {
     held = null;
     if (!late || !event || map._removed) return;
     try {
-      zoom(event, late.y);
+      zoom(event, late.x, late.y);
     } catch {
       // That one notch is lost; the next is sorted afresh.
     }
@@ -272,7 +281,7 @@ export const attachMapGestures = (map, {
       if (late && held) {
         const notch = held;
         letGo();
-        zoom(notch, late.y);
+        zoom(notch, late.x, late.y);
       }
       const act = sorter.sort(wheelPixels(event), time);
       if (act.verdict === "wait") {
@@ -281,8 +290,12 @@ export const attachMapGestures = (map, {
         timer = setTimer(expire, LONE_EVENT_MS);
       } else {
         letGo();
+        // Without Shift a trackpad's scroll is MapLibre's to zoom, at its own
+        // trackpad rate: this step goes on to it untouched (a held first step
+        // it settles is a few pixels, and is let go).
+        if (act.verdict === "trackpad" && !event.shiftKey) return;
         if (act.verdict === "trackpad") turn(act.x, act.y);
-        else zoom(event, act.y);
+        else zoom(event, act.x, act.y);
       }
     } catch {
       // MapLibre has this one: it zooms on it, as before.

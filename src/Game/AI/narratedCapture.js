@@ -321,6 +321,162 @@ export const statedCapture = (text, names) => statedCaptures(text, names)[0] ?? 
 const ANY_CUE = /\b(?:captur|seiz|retak|retook|recaptur|liberat|occup|overr[au]n|conquer|secure[sd]|fell\b|falls\b|fallen\b|took\b|takes\b|taken\b|control\b)/i;
 export const mayNarrateCapture = (text) => ANY_CUE.test(asText(text));
 
+// ---- a capture or an annexation stated anywhere ------------------------------------
+
+// The tokens of tokensOf with their case kept, one for one, so a proper name
+// ("captured Kharkiv") can be told from a common noun ("seized land").
+const casedTokensOf = (value) => asText(value)
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/[‘’`]/g, "'")
+    .replace(/,/g, " , ")
+    .replace(/[^\p{L}\p{N}',]+/gu, " ")
+    .split(" ")
+    .map((token) => token.replace(/^'+|'+$/g, ""))
+    .filter(Boolean);
+const capitalised = (token) => /^\p{Lu}/u.test(token ?? "");
+
+// The first sentence of a text that states, as a fact, that a named place was
+// taken: "Russian forces captured Kharkiv", "took control of Aleppo",
+// "Kharkiv fell to Russia", "Kharkiv was captured by …". The place is any
+// capitalised name, so no map is needed: this is what tells an event that
+// should carry a control operation from one that only mentions fighting.
+// Read on an event's description, not its title: a headline capitalises
+// every word. -> the sentence, or null.
+export const statesCapture = (text) => {
+    for (const sentence of sentencesOf(text)) {
+        const tokens = tokensOf(sentence);
+        const cased = casedTokensOf(sentence);
+        if (cased.length !== tokens.length) continue;
+        for (let index = 0; index < tokens.length; index += 1) {
+            const token = tokens[index];
+            const before = tokens.slice(0, index);
+            // "Kharkiv fell to Russian forces"; never "support fell to 20%".
+            if ((token === "falls" || token === "fell") && tokens[index + 1] === "to" && capitalised(cased[index - 1])) {
+                const next = tokens[index + 2] === "the" ? index + 3 : index + 2;
+                if (capitalised(cased[next]) && !hedged(before)) return sentence;
+                continue;
+            }
+            // "Kharkiv was captured by Russian forces".
+            if (PARTICIPLES.has(token) && ["was", "is", "were", "are", "been"].includes(tokens[index - 1])
+                && tokens[index + 1] === "by" && /^[\p{Lu}\p{N}]/u.test(cased[tokens[index + 2] === "the" ? index + 3 : index + 2] ?? "")) {
+                const subject = tokens[index - 1] === "been" ? index - 3 : index - 2;
+                if (subject >= 0 && capitalised(cased[subject]) && !partOfSomething(tokens, subject) && !hedged(before)) return sentence;
+                continue;
+            }
+            let at = -1;
+            if (CONTROL_VERBS.has(token)) {
+                let next = index + 1;
+                while (next < tokens.length && CONTROL_DEGREE.has(tokens[next])) next += 1;
+                if (tokens[next] === "control" && ["of", "over"].includes(tokens[next + 1])) at = next + 2;
+            }
+            if (at < 0 && TOOK.has(token)) {
+                if (/ed$/.test(token) && index > 0 && DESCRIBING_BEFORE.has(tokens[index - 1])) continue;
+                at = index + 1;
+            }
+            if (at < 0) continue;
+            let filler = 0;
+            while (at < tokens.length && OBJECT_FILLER.has(tokens[at]) && filler < 6) {
+                at += 1;
+                filler += 1;
+            }
+            if (capitalised(cased[at]) && !PART_WORDS.has(tokens[at]) && !hedged(before)) return sentence;
+        }
+    }
+    return null;
+};
+
+// Whether some tokens are exactly a power's name, from `start`: "Syria", and
+// not "Syrian".
+const nameAt = (tokens, start, name) => {
+    const words = tokensOf(name);
+    return words.length > 0 && words.every((word, offset) => tokens[start + offset] === word) ? words.length : 0;
+};
+const powerAt = (tokens, start, powers) => {
+    let best = null;
+    for (const power of asArray(powers)) {
+        const length = nameAt(tokens, start, power);
+        if (length && (!best || length > best.length)) best = { power: asText(power), length };
+    }
+    return best;
+};
+// The one power a run of words names, or null when it names none or several.
+const onePowerIn = (tokens, powers) => {
+    const named = new Set();
+    for (let start = 0; start < tokens.length; start += 1) {
+        const found = powerAt(tokens, start, powers);
+        if (found) {
+            named.add(found.power);
+            start += found.length - 1;
+        }
+    }
+    return named.size === 1 ? [...named][0] : null;
+};
+
+const ANNEX_VERBS = new Set(["annexes", "annexed"]);
+const ANNEX_DONE = new Set(["completes", "completed", "formalises", "formalised", "formalizes", "formalized", "proclaims", "proclaimed", "announces", "announced", "declares", "declared", "finalises", "finalised", "finalizes", "finalized", "ratifies", "ratified"]);
+const ANNEX_LEAD = new Set(["the", "formally", "officially", "fully", "all", "of", "rest", "remainder", "remaining", "entire", "whole"]);
+
+// Every whole polity a text says was annexed, and by whom, where both are
+// powers on the map:
+//   "<A> annexes <B>", "<A> formally annexed the rest of <B>",
+//   "<B> is annexed by <A>", "<B> was incorporated into <A>",
+//   "<A> completes the annexation of <B>".
+// "<A> annexed the northern provinces of <B>" is a part of <B>, and left out;
+// so is anything hedged ("plans to annex", "demands the annexation").
+//   -> [{ annexer, annexed, sentence }]
+export const statedAnnexations = (text, powers) => {
+    const found = [];
+    const add = (annexer, annexed, sentence) => {
+        if (!annexer || !annexed || annexer.toLowerCase() === annexed.toLowerCase()) return;
+        if (!found.some((entry) => entry.annexed.toLowerCase() === annexed.toLowerCase())) found.push({ annexer, annexed, sentence });
+    };
+    // The power standing right after `from`, past the words that lead into it.
+    const objectAt = (tokens, from) => {
+        let at = from;
+        while (at < tokens.length && ANNEX_LEAD.has(tokens[at]) && at - from < 5) at += 1;
+        return powerAt(tokens, at, powers)?.power ?? null;
+    };
+    // The power standing right before `end` ("Syria was annexed").
+    const subjectBefore = (tokens, end) => {
+        for (let start = Math.max(0, end - 6); start < end; start += 1) {
+            const at = powerAt(tokens, start, powers);
+            if (at && start + at.length === end) return at.power;
+        }
+        return null;
+    };
+    for (const sentence of sentencesOf(text)) {
+        const tokens = tokensOf(sentence);
+        for (let index = 0; index < tokens.length; index += 1) {
+            const token = tokens[index];
+            if (hedged(tokens.slice(0, index))) break;
+            if (ANNEX_VERBS.has(token)) {
+                // "<B> is annexed by <A>"
+                const passive = ["is", "was", "were", "been"].includes(tokens[index - 1]);
+                if (passive && tokens[index + 1] === "by") {
+                    add(onePowerIn(doerAfter(tokens, index + 2), powers), subjectBefore(tokens, index - (tokens[index - 1] === "been" ? 2 : 1)), sentence);
+                    continue;
+                }
+                if (/ed$/.test(token) && index > 0 && DESCRIBING_BEFORE.has(tokens[index - 1])) continue;
+                add(onePowerIn(doerBefore(tokens, index), powers), objectAt(tokens, index + 1), sentence);
+                continue;
+            }
+            // "<B> was incorporated into <A>"
+            if ((token === "incorporated" || token === "absorbed") && ["is", "was", "been"].includes(tokens[index - 1]) && tokens[index + 1] === "into") {
+                add(objectAt(tokens, index + 2), subjectBefore(tokens, index - (tokens[index - 1] === "been" ? 2 : 1)), sentence);
+                continue;
+            }
+            // "<A> completes the annexation of <B>": only with a verb that says
+            // it is done, since "demands the annexation of" is not.
+            if (token === "annexation" && tokens[index + 1] === "of") {
+                const lead = index - (tokens[index - 1] === "the" ? 1 : 0) - 1;
+                if (ANNEX_DONE.has(tokens[lead])) add(onePowerIn(doerBefore(tokens, lead), powers), objectAt(tokens, index + 2), sentence);
+            }
+        }
+    }
+    return found;
+};
+
 // ---- who is credited ---------------------------------------------------------------
 
 // Words of a formation's name that say whose it is not: "1st Infantry Division"

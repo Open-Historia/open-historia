@@ -473,8 +473,8 @@ test("a deployment drawn in the war room calls up its troops on the next time sk
   const first = applied(world, opened.events, opened.battlefields);
   const [record] = first.battlefields;
   const side = record.sides.findIndex((members) => members.includes("Aland"));
-  // Far back in Aland, from north to south, calling up five.
-  const drawn = applyWarRoomOp(first.battlefields, { op: "deploy", battlefield: record.name, way: [[20.2, 51.9], [20.2, 51.2]], count: 5 }, { player: "Aland" });
+  // Far back in Aland, from north to south: as many as Aland can call up (runtime/fronts/engine.js callUpSize).
+  const drawn = applyWarRoomOp(first.battlefields, { op: "deploy", battlefield: record.name, way: [[20.2, 51.9], [20.2, 51.2]] }, { player: "Aland" });
   assert.equal(drawn.error, undefined);
   const before = { ...first, battlefields: drawn.battlefields };
   const april = normalizeEvents([event("f1", "2024-04-05"), event("f2", "2024-04-15"), event("f3", "2024-04-28")]);
@@ -483,7 +483,8 @@ test("a deployment drawn in the war room calls up its troops on the next time sk
   const [kept] = after.battlefields;
   const [line] = deployLinesOf(kept, side);
   assert.equal(line.call, undefined, "called up once");
-  assert.deepEqual([line.last.n, line.last.why, line.last.d], [5, "", TO]);
+  assert.ok(line.last.n >= 1, `${line.last.n} called up`);
+  assert.deepEqual([line.last.why, line.last.d], ["", TO]);
   assert.deepEqual(next.notes.filter((note) => /^reinforce|side-not/.test(note.kind)), []);
 });
 

@@ -12,9 +12,10 @@ import { showEventOnTimeline, warTimelineEventId, warTimelineEventOpensWar } fro
 import { isPolityLandless, readGameData, readWorldState, readWorldStateView, writeWorldState } from "../../runtime/gameState.js";
 import { useLibraryState } from "../../runtime/library.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
-import { resolvePolityIdentity } from "../../runtime/polityIdentity.js";
+import { buildPolityIdentityIndex, resolvePolityIdentity } from "../../runtime/polityIdentity.js";
+import { resolvePolityFlag } from "../../runtime/polityFlags.js";
 import { buildHistoricalTrackingCandidateRows, buildHistoricalTrackingIndex, filterHistoricalTrackingCandidateRows, historySamplesInRange } from "./statsHistoricalTracking.js";
-import { buildPlayerPoliticalKnowledgeView, buildPublicPoliticalView } from "../../runtime/politicalKnowledge.js";
+import { buildPlayerPoliticalKnowledgeView, buildPublicPoliticalView, buildPublicPoliticalViewOfActor } from "../../runtime/politicalKnowledge.js";
 import { resolveCountryTags } from "../../runtime/countryTags.js";
 import { powerTierForPolity } from "../../runtime/powerStatus.js";
 import { livePuppetsFor, puppetKindLabel, puppetSummaryFor } from "../../runtime/puppets.js";
@@ -22,7 +23,7 @@ import { intelligenceOf } from "../../runtime/spycraft.js";
 import { bundledFlagUrl, flagImageUrlFromGid } from "../../runtime/countryFlags.js";
 import COUNTRY_NAMES from "../../runtime/generated/countryNames.js";
 import { REGION_SELECTED_EVENT } from "../Selection/Regions.jsx";
-import { ensureCountryAssessed, ensureIntelligenceRated, ensureMilitaryFigures, generateCountryStatSheet, pendingCountryStatSheet, readOpenedIntercepts } from "../AI/gameplayLazy.js";
+import { assessPoliticalLandscape, ensureCountryAssessed, ensureIntelligenceRated, ensureMilitaryFigures, generateCountryStatSheet, pendingCountryStatSheet, readOpenedIntercepts } from "../AI/gameplayLazy.js";
 import { wantsRating } from "../AI/militaryRating.js";
 import { militaryLookup } from "../../runtime/militaryStats.js";
 import PoliticalOverview from "./PoliticalOverview.jsx";
@@ -473,10 +474,7 @@ const MilitaryCard = ({ world, country, style }) => {
                 </span>
                 <span data-no-translate style={{ fontSize: "1.05rem", fontWeight: 800 }}>{power}</span>
             </div>
-            <div style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.64rem", lineHeight: 1.4, marginBottom: "0.55rem" }}>
-                What it weighs in a land war, by its people and what its forces have to spend, through the figures below.
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem", marginTop: "0.45rem" }}>
                 {MILITARY_FIGURE_ORDER.filter((key) => key !== "resources" || profile.supplied).map((key) => {
                     const value = figures[key];
                     const low = (key === "weariness" && value > 0) || (key === "resources" && value < RESOURCES_SHORT_FROM);
@@ -973,6 +971,38 @@ const DiplomacySection = ({ world, identity, targetCountry, viewerPolity }) => {
         <ReparationsNote world={world} target={targetCountry} />
         </>
     );
+};
+
+// One country's parties filled in, or read afresh, from its Politics view (Game/AI/gameplay.js
+// assessPoliticalLandscape: one AI request, folded into its Political World record). What it read is shown at once,
+// before the pane's next read of the world: { compile, busy, error, actor }.
+const usePartiesCompile = (targetCountry) => {
+    const [busy, setBusy] = useState(false);
+    const [error, setError] = useState("");
+    const [compiled, setCompiled] = useState(null);
+    const abortRef = useRef(null);
+    useEffect(() => () => abortRef.current?.abort(), []);
+    useEffect(() => {
+        abortRef.current?.abort();
+        setBusy(false);
+        setError("");
+    }, [targetCountry]);
+    const compile = useCallback(async () => {
+        abortRef.current?.abort();
+        const controller = new AbortController();
+        abortRef.current = controller;
+        setBusy(true);
+        setError("");
+        try {
+            const actor = await assessPoliticalLandscape(targetCountry, { signal: controller.signal });
+            if (!controller.signal.aborted && actor) setCompiled({ country: targetCountry, actor });
+        } catch (e) {
+            if (!controller.signal.aborted) setError(e?.message || "Could not compile the parties.");
+        } finally {
+            if (!controller.signal.aborted) setBusy(false);
+        }
+    }, [targetCountry]);
+    return { compile, busy, error, actor: compiled?.country === targetCountry ? compiled.actor : null };
 };
 
 // `touch`: a thumb-sized tab. The inline minHeight would beat the tap class.
@@ -1840,6 +1870,8 @@ const RankingSection = ({ world, definition, index, playerCode, targetCountry, o
         [world, countries, metrics],
     );
     const metric = metrics.find((entry) => entry.key === metricKey) ?? opening;
+    // (One index of who is who for every row's flag: building it reads every region's owner.)
+    const flagIdentityIndex = useMemo(() => (world ? buildPolityIdentityIndex(world) : null), [world]);
     const ranking = useMemo(
         () => (metric ? buildRanking({ world: world ?? {}, countries, metric, catalog: getPrimedScenarioRegionCatalog() ?? [] }) : null),
         [world, countries, metric],
@@ -1878,7 +1910,8 @@ const RankingSection = ({ world, definition, index, playerCode, targetCountry, o
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: "0.3rem", marginTop: "0.75rem" }}>
                 {shown.map((row) => {
-                    const flagUrl = flags?.[row.key] || world?.polityOverrides?.[row.key]?.flag || flagImageUrlFromGid(row.key);
+                    // (As every other flag in the game is found: by the country's identity, its name or its code.)
+                    const flagUrl = resolvePolityFlag({ polity: { name: row.label, code: row.key }, world: world || {}, flags: flags || {}, identityIndex: flagIdentityIndex }).imageUrl;
                     const mine = Boolean(playerCode) && row.key === playerCode;
                     const open = row.key === targetCountry;
                     return (
@@ -2606,7 +2639,11 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
         || worldSnapshot?.countryStats?.[targetCountry]
         || null;
     const currentPoliticalKnowledge = politicalKnowledge.target === targetCountry ? politicalKnowledge.view : null;
-    const publicPoliticalProfile = currentPoliticalKnowledge?.public
+    // (Parties just filled in are shown from what the request answered until the world is read again.)
+    const partiesCompile = usePartiesCompile(targetCountry);
+    const compiledProfile = buildPublicPoliticalViewOfActor(partiesCompile.actor, partiesCompile.actor?.polityKey || targetCountry);
+    const publicPoliticalProfile = compiledProfile
+        || currentPoliticalKnowledge?.public
         || (worldSnapshot && targetCountry ? buildPublicPoliticalView(worldSnapshot, targetCountry) : null);
     const politicalKey = publicPoliticalProfile?.polityKey || resolvedTargetKey || targetCountry;
     const politicalTags = resolveCountryTags(baseTags, worldSnapshot, politicalKey);
@@ -2811,7 +2848,7 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
             type="button"
             aria-pressed={statsView === "politics"}
             onClick={() => setStatsView("politics")}
-            style={statsSubtabStyle(statsView === "politics")}
+            style={statsSubtabStyle(statsView === "politics", touch)}
             >🏛 Politics</button>
             <button
             type="button"
@@ -2840,6 +2877,9 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
                     fallbackLeader={headerSheet?.leader || ""}
                     intelligence={currentPoliticalKnowledge?.intelligence || null}
                     institutions={worldSnapshot ? institutionPortfolioForPolity(worldSnapshot, targetCountry, { viewerPolity: player.code }) : []}
+                    onCompile={worldSnapshot ? partiesCompile.compile : null}
+                    compiling={partiesCompile.busy}
+                    compileError={partiesCompile.error}
                 />
             )}
             {statsView === "politics" && (
@@ -2886,7 +2926,7 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
                 />
             )}
 
-            {statsView === "diplomacy" && !worldSnapshot && (
+            {statsView !== "economy" && !worldSnapshot && (
                 <p style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.76rem", marginTop: "1rem" }}>
                 Loading diplomatic state…
                 </p>

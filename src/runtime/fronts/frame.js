@@ -5,7 +5,7 @@
 // the game is stored on, a hand-drawn flat sheet as much as the real world, so
 // one frame serves both and a cell is square on screen at every latitude.
 //
-//   frame { lng0, lat0, cell, cols, rows, km, flat?, scale? }
+//   frame { lng0, lat0, cell, cols, rows, km, flat?, scale?, proj?, factor? }
 //
 //   lng0, lat0   the south-west corner, as stored coordinates. lng0 is NOT
 //                wrapped: a battlefield across the date line runs past 180.
@@ -21,6 +21,9 @@
 //   cols, rows   columns eastward, rows northward; at most 255 each.
 //   km           what a cell's side was meant to measure, at the middle row.
 //   flat, scale  a flat sheet: every degree is `scale` kilometres everywhere.
+//   proj         a world projection that is not Mercator (server/mapDistance.js
+//                metricTableFor): a row's kilometres are read from it.
+//   factor       the map's scale line on a world projection: every distance times it.
 //
 // On the real world a degree of the plane is fewer kilometres the nearer the
 // pole, by the cosine of the latitude, in every direction alike. So distance is
@@ -32,6 +35,7 @@
 // converted, never inside the engine's daily loop.
 
 import { CELL_STEPS_KM, MAX_CELLS, MAX_GRID_SPAN } from "./constants.js";
+import { metricTableFor } from "../../../server/mapDistance.js";
 
 export const KM_PER_DEGREE = 111.32;
 const RAD = Math.PI / 180;
@@ -60,13 +64,34 @@ export const homeLng0 = (lng0, width) => {
   return turn === 0 ? lng0 : lng0 - turn * 360;
 };
 
+// Kilometres a degree of the plane measures at a height y (Mercator degrees),
+// on a map that is not plain Mercator: across, and up. A table of a world
+// projection (server/mapDistance.js metricTableOf) is read between its rows.
+const readTable = (column, metric, y) => {
+  const at = (y - metric.from) / metric.step;
+  const last = column.length - 1;
+  if (!(at > 0)) return column[0];
+  if (at >= last) return column[last];
+  const row = Math.floor(at);
+  return column[row] + (column[row + 1] - column[row]) * (at - row);
+};
+// The side of a square a degree of the plane is worth there: the mean of across
+// and up, for a projection that does not keep shapes.
+const tableKmPerDegree = (metric, y) => {
+  const across = readTable(metric.kx, metric, y);
+  const up = (readTable(metric.m, metric, y + metric.step / 2) - readTable(metric.m, metric, y - metric.step / 2)) / metric.step;
+  return Math.sqrt(Math.max(1e-9, across * up));
+};
+
 // The frame round a box of stored coordinates { west, south, east, north }.
 // `east` less than `west` is a box across the date line. The cell is the finest
 // of CELL_STEPS_KM the limits allow, coarser still for a box no step fits.
 //   flat      a flat sheet (the map declares a projection that is not the world's)
 //   scale     kilometres to a degree on a flat sheet
+//   factor    the map's scale line on a world projection (server/mapDistance.js)
+//   metric    a world projection that is not Mercator: its table (metricTableOf)
 //   marginKm  room to leave round the box
-export const createFrame = (bounds, { flat = false, scale = KM_PER_DEGREE, marginKm = 0 } = {}) => {
+export const createFrame = (bounds, { flat = false, scale = KM_PER_DEGREE, factor = 1, metric = null, marginKm = 0 } = {}) => {
   const west = Number(bounds?.west);
   let east = Number(bounds?.east);
   const south = Number(bounds?.south);
@@ -76,9 +101,13 @@ export const createFrame = (bounds, { flat = false, scale = KM_PER_DEGREE, margi
 
   const bottom = latToY(south);
   const top = latToY(north);
+  const times = !flat && Number(factor) > 0 ? Number(factor) : 1;
+  const table = !flat && metric && Array.isArray(metric.kx) ? metric : null;
   const kmPerDegree = flat
     ? (Number(scale) > 0 ? Number(scale) : KM_PER_DEGREE)
-    : KM_PER_DEGREE * Math.cos(yToLat((bottom + top) / 2) * RAD);
+    : table
+      ? tableKmPerDegree(table, (bottom + top) / 2)
+      : KM_PER_DEGREE * Math.cos(yToLat((bottom + top) / 2) * RAD) * times;
   const margin = Math.max(0, Number(marginKm) || 0) / kmPerDegree;
   const outer = round6(west - margin);
   const lat0 = round6(yToLat(Math.max(latToY(-MERCATOR_MAX_LAT), bottom - margin)));
@@ -111,6 +140,9 @@ export const createFrame = (bounds, { flat = false, scale = KM_PER_DEGREE, margi
   if (flat) {
     frame.flat = true;
     frame.scale = kmPerDegree;
+  } else {
+    if (table && table.type) frame.proj = table.type;
+    if (times !== 1) frame.factor = times;
   }
   return frame;
 };
@@ -134,6 +166,10 @@ export const normalizeFrame = (value) => {
     const scale = Number(value.scale);
     frame.flat = true;
     frame.scale = scale > 0 && Number.isFinite(scale) ? scale : KM_PER_DEGREE;
+  } else {
+    if (typeof value.proj === "string" && metricTableFor(value.proj)) frame.proj = value.proj;
+    const factor = Number(value.factor);
+    if (factor > 0 && Number.isFinite(factor) && factor !== 1) frame.factor = factor;
   }
   return frame;
 };
@@ -148,10 +184,15 @@ export const projectorOf = (frame) => {
   const y0 = latToY(frame.lat0);
   const middle = lng0 + (cols * cell) / 2;
   const rowKm = new Float64Array(rows);
+  const times = !frame.flat && Number(frame.factor) > 0 ? Number(frame.factor) : 1;
+  const table = !frame.flat && frame.proj ? metricTableFor(frame.proj, times) : null;
   for (let row = 0; row < rows; row += 1) {
+    const y = y0 + (row + 0.5) * cell;
     rowKm[row] = frame.flat
       ? cell * (frame.scale || KM_PER_DEGREE)
-      : cell * KM_PER_DEGREE * Math.cos(yToLat(y0 + (row + 0.5) * cell) * RAD);
+      : table
+        ? cell * tableKmPerDegree(table, y)
+        : cell * KM_PER_DEGREE * Math.cos(yToLat(y) * RAD) * times;
   }
   const projector = {
     rowKm,

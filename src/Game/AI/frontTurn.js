@@ -25,7 +25,9 @@
 // applySimulationResult).
 
 import { addGameDays, diffGameDays, gameDateYear } from "../../runtime/gameDates.js";
-import { yearInEra } from "../../runtime/unitMotion.js";
+import { eraOf, yearInEra } from "../../runtime/unitMotion.js";
+import { resolveAirStrikes, withTroopHits } from "../../runtime/fronts/airStrike.js";
+import { airArmsForOrders } from "../../runtime/fronts/airStrikeOps.js";
 import { militaryLookup } from "../../runtime/militaryStats.js";
 import { DEFAULT_MUSTER, musterTable } from "../../runtime/mustering.js";
 import { warSettingsOf } from "../../runtime/warSettings.js";
@@ -42,14 +44,14 @@ import { anyMechanic } from "../../runtime/fronts/mechanics.js";
 import { pointInFrame } from "../../runtime/fronts/frame.js";
 import { foldBattlefieldName, normalizeBattlefields } from "../../runtime/fronts/record.js";
 import { TRANSPORT_LOAD_USUAL, TRANSPORT_ORDERS, isUnderWay, normalizeTransports, orderTransport } from "../../runtime/fronts/transports.js";
-import { buildWorldGrid, distanceTo, seasOf, worldSheetKey } from "../../runtime/fronts/worldGrid.js";
+import { buildWorldGrid, distanceTo, measureOptions, seasOf, worldSheetKey } from "../../runtime/fronts/worldGrid.js";
 import { waterTypeIds } from "../../runtime/regionTypes.js";
 import { chooseFleetPostures } from "../../runtime/naval/admiral.js";
 import { runNaval } from "../../runtime/naval/engine.js";
 import { normalizeBlockades, shortageOfBlockade } from "../../runtime/naval/blockade.js";
 import { shortagesTogether, wearinessGoingIn, wearyShortage } from "../../runtime/warWeariness.js";
 import { normalizeWarResources, resourceShortage } from "../../runtime/warResources.js";
-import { STRIKES_PER_TURN_MOST, findStrikePlace, pickStrikeOrigin, seaLaunchPlace } from "../../runtime/strikes.js";
+import { STRIKES_PER_TURN_MOST, findStrikePlace, fliesAsAircraft, pickStrikeOrigin, seaLaunchPlace } from "../../runtime/strikes.js";
 
 export const FRONT_MARK = "front";
 // The mark on an order the turn itself drew from an event's own operations
@@ -783,6 +785,10 @@ const quoted = (notes, field) => named(notes, field).slice(0, 4).join("; ") || "
 const one = (notes, field) => named(notes, field).length <= 1;
 const NOTE_TEXT = {
   "unknown-battlefield": (notes) => `Front orders named ${one(notes, "battlefield") ? "a battlefield that does" : "battlefields that do"} not exist (${quoted(notes, "battlefield")}). Use the names listed under [Fronts]; a battlefield opens by itself where two sides at war hold touching land. To have a country attack one it is at peace with, name their border (\`border: A / B\`) or give the order an objective the other holds.`,
+  // A country's forces at home (runtime/fronts/home.js).
+  "home-not-found": (notes) => `Forces were not built up at home (${quoted(notes, "side")}): that country holds no land on the map with another country's near it.`,
+  "called-today": (notes) => `Forces at home were called up once already that day (${quoted(notes, "side")}): a country calls up its forces at home once a day.`,
+  "home-no-front": (notes) => `An order to forces at home was not carried out (${quoted(notes, "side")}): they have no front to go forward from. Station them on a border (hold or dig in, objective country: X); a war begins with an attack across a border.`,
   "side-not-fighting": (notes) => `Front orders were given for ${quoted(notes, "side")}, which ${one(notes, "side") ? "is" : "are"} not fighting on the battlefield named. Only a side of that battlefield's war takes orders there.`,
   "sector-read-as-all": (notes) => `A sector that does not fit its line was read as the whole line (${quoted(notes, "detail")}). The sectors each line has are listed under [Fronts].`,
   "objective-not-found": (notes) => `An objective was not found on its battlefield and was left out (${quoted(notes, "detail")}). Name a city or a region that lies on that battlefield.`,
@@ -905,6 +911,9 @@ const listed = (names, most = 3) => `${names.slice(0, most).join("; ")}${names.l
 //   strikes          the missiles and bombing runs the answer wrote, with the
 //                    places of each found where the turn can find them
 //                    (runtime/strikes.js): for the map to play
+//   airStrikes       the war room's air strikes as they were flown, as the period
+//                    began (runtime/fronts/airStrike.js): [] when none waited or the
+//                    scenario has no air units, null when the run was not made
 // The same arguments give the same result: a turn applied twice is one turn.
 export const runTurnFronts = async ({
   createFrontRun,
@@ -939,6 +948,8 @@ export const runTurnFronts = async ({
   manpower = true,
   // false leaves the fleets alone: the war at sea is not fought (runtime/naval/engine.js).
   naval = true,
+  // false: the scenario has no air units (the Wars feature): nothing is airlifted, and no aircraft is drawn striking.
+  air = true,
   // The most formations a country and the world may have, for a fleet the war at sea commissions.
   unitCaps = null,
   // The era the scenario set, 0 to 3, or null to read it off the date (runtime/warSettings.js).
@@ -977,7 +988,7 @@ export const runTurnFronts = async ({
     });
   }
   let strikes = [];
-  const nothing = (battlefields) => ({ events: list, battlefields, unitChanges: [], notes, flips: [], stats: null, news: [], joins: [], starts: [], transports: null, voyages: [], strikes });
+  const nothing = (battlefields) => ({ events: list, battlefields, unitChanges: [], notes, flips: [], stats: null, news: [], joins: [], starts: [], transports: null, voyages: [], strikes, airStrikes: null });
 
   const saved = normalizeBattlefields(world?.battlefields);
   const stages = asArray(warStages).length ? asArray(warStages).map(asArray) : [asArray(world?.wars)];
@@ -985,9 +996,12 @@ export const runTurnFronts = async ({
   // A line that sends a transporter is not an order for a battlefield: it is
   // set apart here and becomes a transporter of the world, below.
   // And a strike is no order at all: it is something to show (runtime/strikes.js).
-  const struck = written.filter((order) => order.order === "strike").slice(0, STRIKES_PER_TURN_MOST);
+  // (With no air units in the scenario no aircraft strikes, and with none of air or sea nothing is carried by it.)
+  const struck = written.filter((order) => order.order === "strike" && (air !== false || !fliesAsAircraft(order.weapon))).slice(0, STRIKES_PER_TURN_MOST);
   const orders = written.filter((order) => order.order !== "strike" && !Object.hasOwn(TRANSPORT_ORDERS, order.order));
-  const dispatches = written.filter((order) => Object.hasOwn(TRANSPORT_ORDERS, order.order));
+  const carriedBy = (order) => TRANSPORT_ORDERS[order.order];
+  const dispatches = written.filter((order) => Object.hasOwn(TRANSPORT_ORDERS, order.order)
+    && !(naval === false && carriedBy(order) === "sea") && !(air === false && carriedBy(order) === "air"));
   const atWar = stages.some((wars) => wars.some((war) => clean(war?.status) !== "ended"));
   const committed = asArray(world?.units).some((unit) => clean(unit?.committedTo));
   // No battlefield, no war, no order and nothing at sea: there is nothing for
@@ -1044,6 +1058,27 @@ export const runTurnFronts = async ({
       });
     }
   }
+  // The air strikes the war room ordered (runtime/fronts/airStrike.js), flown as the period begins: who rose
+  // against each and the air battle fought here, and their bombs on the battlefields in the engine's run below.
+  // The same in the run made before the story and the one that applies it. (None in a scenario without air units.)
+  const sorties = air !== false
+    ? resolveAirStrikes({
+      orders: world?.airStrikeOrders,
+      // (And the air arms of the fronts some of them were ordered for: airStrikeOps.js airArmsOf.)
+      units: [...asArray(world?.units), ...airArmsForOrders(world)],
+      wars: stages[0],
+      seed,
+      era: eraOf(fromDate, Number.isInteger(era) ? era : null),
+      measure: measureOptions(map),
+      militaryOf: mechanics?.military === true ? readers.militaryOf : null,
+      markers: asArray(world?.markers),
+      peopleOf: readers.peopleOf,
+      date: fromDate,
+    })
+    : { strikes: [], moments: [], unitChanges: [] };
+  // The formations as the strikes leave them: those that flew or rose are worn, and the land war begins with them so.
+  const flown = applyFrontUnitChanges(asArray(world?.units), sorties.unitChanges);
+
   const nameOf = engineNamer(turnRenames(list), [
     ...stages[0].flatMap((war) => [...asArray(war?.sideA), ...asArray(war?.sideB)]),
     ...saved.flatMap((record) => record.sides.flat()),
@@ -1074,7 +1109,7 @@ export const runTurnFronts = async ({
       let sheet = clean(map?.key) && arenas ? arenas.get(key) ?? null : null;
       if (!sheet) {
         const shapes = await readRegions();
-        sheet = shapes ? buildWorldGrid(shapes, { flat: map?.flat === true, scale: map?.scale, water }) : null;
+        sheet = shapes ? buildWorldGrid(shapes, { ...measureOptions(map), water }) : null;
         if (sheet && clean(map?.key) && arenas) arenas.set(key, sheet);
       }
       for (const strike of adrift) {
@@ -1134,13 +1169,13 @@ export const runTurnFronts = async ({
 
   // The battlefields whose period the story was told before it was written.
   const settled = foretold ? new Set(saved.filter((record) => record.status === "active").map((record) => foldBattlefieldName(record.name))) : null;
-  const moments = planFrontMoments({ events: list, frontOrders: [...aimed, ...stated], warStages: stages, fromDate, days, dayOf, settled })
+  const moments = [...sorties.moments, ...planFrontMoments({ events: list, frontOrders: [...aimed, ...stated], warStages: stages, fromDate, days, dayOf, settled })
     .map((moment) => {
       if (moment.type === "order") return { ...moment, side: nameOf(withoutKind(moment.side)) };
       if (moment.type === "control") return { ...moment, to: nameOf(moment.to) };
       if (moment.type === "war") return { ...moment, names: asArray(moment.names).map(nameOf), ...(moment.opponents ? { opponents: asArray(moment.opponents).map(nameOf) } : {}) };
       return moment;
-    });
+    })];
 
   const allowance = typeof tempoAllowance === "function" ? tempoAllowance(days) : tempoAllowance;
   // The countries under blockade as the period begins, and how short each is for it.
@@ -1176,7 +1211,7 @@ export const runTurnFronts = async ({
       sovereignOf: readers.sovereignOf,
       groupAreas: readers.groupAreas,
       isGroup: readers.isGroup,
-      units: asArray(world?.units),
+      units: flown,
       transports: normalizeTransports(world?.transports),
       // (With the ground the scenario made harder to cross, where it weighs terrain: runtime/fronts/arena.js;
       // and the water frozen this turn, where it has seasons and weather: runtime/fronts/climate.js.)
@@ -1243,7 +1278,7 @@ export const runTurnFronts = async ({
       let sheet = clean(map?.key) && arenas ? arenas.get(key) ?? null : null;
       if (!sheet) {
         const shapes = await readRegions();
-        sheet = shapes ? buildWorldGrid(shapes, { flat: map?.flat === true, scale: map?.scale, water }) : null;
+        sheet = shapes ? buildWorldGrid(shapes, { ...measureOptions(map), water }) : null;
         if (sheet && clean(map?.key) && arenas) arenas.set(key, sheet);
       }
       const seaInput = {
@@ -1257,8 +1292,7 @@ export const runTurnFronts = async ({
         grid: sheet,
         cities: asArray(map?.cities),
         seas: asArray(world?.seas).map((entry) => ({ name: clean(entry?.name), lng: Number(entry?.point?.[0] ?? entry?.lng), lat: Number(entry?.point?.[1] ?? entry?.lat) })),
-        flat: map?.flat === true,
-        scale: map?.scale,
+        ...measureOptions(map),
         caps: unitCaps ?? {},
         raised: asArray(world?.naviesRaised),
         era: Number.isInteger(era) ? era : null,
@@ -1390,7 +1424,14 @@ export const runTurnFronts = async ({
       ? { ...record, brief: { ...record.brief, told: true } }
       : record)),
     // (A formation the land war took up this period is the land war's: the sea says nothing more of it.)
-    unitChanges: [...asArray(result.unitChanges), ...asArray(sea?.unitChanges).filter((change) => !asArray(result.unitChanges).some((entry) => clean(entry?.unitId) === clean(change?.unitId)))],
+    // (And an air unit worn by an air strike, where the land war did not wear it further: its own change says all.)
+    unitChanges: [
+      ...asArray(result.unitChanges),
+      ...sorties.unitChanges.filter((change) => !asArray(result.unitChanges).some((entry) => clean(entry?.unitId) === clean(change?.unitId))),
+      ...asArray(sea?.unitChanges).filter((change) => ![...asArray(result.unitChanges), ...sorties.unitChanges].some((entry) => clean(entry?.unitId) === clean(change?.unitId))),
+    ],
+    // The war room's air strikes as they were flown, with what their bombs did to the troops on the battlefields.
+    airStrikes: withTroopHits(sorties.strikes, result.notes),
     // What the period came to at sea: its battles, the fleets as it leaves them, and any commissioned (runtime/naval/engine.js).
     sea: sea ? { battles: asArray(sea.battles), fleets: asArray(sea.fleets), commissioned: asArray(sea.commissioned), raised: asArray(sea.raised), blockades: asArray(sea.blockades), fromDate, days: sea.days } : null,
     notes,

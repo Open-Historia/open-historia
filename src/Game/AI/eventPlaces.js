@@ -131,10 +131,41 @@ export const findEventPlace = (ref, gazetteer, { impacts = null, units = [] } = 
         : null;
 };
 
+// An entry a model wrote as the parts of one, { kind, name, country }, in the words it stands for:
+// "city: Istanbul, country: Ottoman Empire". Anything else as it was.
+const placeAsWritten = (entry) => {
+    // A found place carries where it is (a point, or a region's id).
+    if (!entry || typeof entry !== "object" || Array.isArray(entry) || finite(entry.lng, entry.lat) || asText(entry.regionId)) return entry;
+    const kind = asText(entry.kind || entry.type).toLowerCase();
+    const name = asText(entry.name);
+    if (!kind || !name) return entry;
+    const country = asText(entry.country);
+    return `${kind}: ${name}${country && country !== name ? `, country: ${country}` : ""}`;
+};
+
+// A skip's answer with every event's places in the form the contract asks for. Gemini writes them as objects of
+// their parts in a whole answer at a time, and one such entry failed the answer, its retry and the skip (a
+// player's year-long skips, 2026-11-03). { payload, rewritten }: the same payload where nothing was rewritten.
+export const placesAsWritten = (payload) => {
+    if (!payload || typeof payload !== "object" || !Array.isArray(payload.events)) return { payload, rewritten: 0 };
+    let rewritten = 0;
+    const events = payload.events.map((event) => {
+        if (!event || typeof event !== "object" || !Array.isArray(event.places)) return event;
+        const places = event.places.map(placeAsWritten);
+        const changed = places.filter((place, index) => place !== event.places[index]).length;
+        if (!changed) return event;
+        rewritten += changed;
+        return { ...event, places };
+    });
+    return rewritten ? { payload: { ...payload, events }, rewritten } : { payload, rewritten };
+};
+
 // Every entry of an event's `places`, found. An entry that is already a found
-// place (a turn validated twice) is kept as it is.
+// place (a turn validated twice) is kept as it is; one that only names its parts
+// is looked up like the words it stands for.
 export const findEventPlaces = (places, gazetteer, options = {}) => asArray(places)
     .slice(0, 12)
+    .map(placeAsWritten)
     .map((entry) => (entry && typeof entry === "object" ? entry : findEventPlace(readEventPlace(entry), gazetteer, options)))
     .filter(Boolean);
 

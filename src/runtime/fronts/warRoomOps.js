@@ -24,9 +24,9 @@
 //                                                                 come in (deploy.js): along a line, or with
 //                                                                 form "swarm" as a swarm at the way's one
 //                                                                 place (swarms.js); an empty way takes it off.
-//                                                                 It calls up `count` fresh formations there
-//                                                                 when time next passes: as many as a draft
-//                                                                 usually brings without one, none with 0
+//                                                                 It calls up fresh formations there when time
+//                                                                 next passes, as many as the country can
+//                                                                 (engine.js callUpSize); none with count 0
 //
 // Nothing here moves a troop: orders are put to the troops when time next
 // passes (engine.js assignStanding).
@@ -37,7 +37,7 @@ import { gameDateYear } from "../gameDates.js";
 import { yearInEra } from "../unitMotion.js";
 import { decodeTroops } from "./codec.js";
 import { generalsOf, nameGenerals, orderTroops, ownTroopsOf, readTalk, releaseTroops, returnTroops, withTalk } from "./command.js";
-import { HOLDER_SIDE_A, HOLDER_SIDE_B, MAX_COMMANDS, MAX_TROOPS_PER_SIDE, MAX_WAY_POINTS, REINFORCE_MOST, TALK_TEXT_MAX, WAR_ROOM_ORDERS } from "./constants.js";
+import { HOLDER_SIDE_A, HOLDER_SIDE_B, MAX_COMMANDS, MAX_TROOPS_PER_SIDE, MAX_WAY_POINTS, TALK_TEXT_MAX, WAR_ROOM_ORDERS } from "./constants.js";
 import { pointInFrame, projectorOf } from "./frame.js";
 import { withDiversion, withProjectPlan, withoutPlan } from "./plans.js";
 import { DEPLOY_USUAL, withDeployLine } from "./deploy.js";
@@ -105,7 +105,13 @@ const REFUSED = Object.freeze({
   gone: "That transporter has set out already, or is not yours to call off.",
   quarry: "That is not a transporter of a side you are fighting here.",
   away: "Your troops have not withdrawn from that battlefield.",
+  home: "Your forces at home have no front to go forward from: draw them a route.",
 });
+
+// What a country's forces at home are not told (home.js): to go forward from a front, or back from one, or to make
+// a show of a movement against an enemy; they go where a route is drawn for them, and into a country's land that
+// is the war beginning (engine.js attackFromStanding). Everything else is as on any battlefield.
+const HOME_ORDERS_REFUSED = Object.freeze(["advance", "blitz", "spearhead", "flank", "encircle", "fall back"]);
 
 // One of the transporter ops, for a side of a battlefield. Returns
 // { transports } or { error }.
@@ -237,7 +243,8 @@ const applyTo = (record, side, op, { player, date }) => {
     const way = drawn.length > 0 ? wayOn(record, form ? drawn.slice(0, 1) : drawn) : [];
     if (drawn.length > 0 && way.length < (form ? 1 : 2)) return { error: REFUSED.way };
     // And the troops it calls up there: "it does draw the line, but the troops are never actually deployed" (the owner, 2026-10-24).
-    const count = op.count === undefined || op.count === null || op.count === "" ? DEPLOY_USUAL : Math.max(0, Math.round(Number(op.count) || 0));
+    // How many is the country's to say, never the commander's (engine.js callUpSize); a call of 0 moves the line only.
+    const count = op.count !== undefined && op.count !== null && op.count !== "" && Number(op.count) === 0 ? 0 : DEPLOY_USUAL;
     return { record: withDeployLine(record, side, { country: player, way, form, call: count }) };
   }
   return { error: REFUSED.nothing };
@@ -255,9 +262,11 @@ export const applyWarRoomOp = (battlefields, op, { player = "", date = "", trans
   const rows = list(battlefields);
   const at = rows.findIndex((row) => foldBattlefieldName(row?.name) === wanted && wanted !== "");
   const record = at >= 0 ? normalizeBattlefield(rows[at]) : null;
-  if (!record || !isOpenBattlefield(record)) return { error: REFUSED.closed };
+  const standing = record?.status === "standing";
+  if (!record || !(isOpenBattlefield(record) || standing)) return { error: REFUSED.closed };
   const side = battlefieldSideOf(record, player);
   if (side !== HOLDER_SIDE_A && side !== HOLDER_SIDE_B) return { error: REFUSED.side };
+  if (record.home === true && (op.op === "diversion" || (op.op === "order" && HOME_ORDERS_REFUSED.includes(op.order)))) return { error: REFUSED.home };
   if (TRANSPORT_OPS.includes(op.op)) {
     const carried = applyTransportOp(record, side, op, { player: clean(player, 120), date, transports, era });
     return carried.error ? carried : { battlefields: rows, record, side, transports: carried.transports };
@@ -296,9 +305,9 @@ export const cleanWarRoomOp = (op) => {
   if (op.id !== undefined) sent.id = clean(op.id, 180);
   // A transporter: what it goes by, and where to (and what the place is called, if anything is near).
   if (op.medium !== undefined) sent.medium = TRANSPORT_MEDIA.includes(op.medium) ? op.medium : "";
-  // A deployment's form (swarms.js), and how many formations it calls up (deploy.js).
+  // A deployment's form (swarms.js), and that it calls nobody up (deploy.js): how many it calls up is not the asker's to say.
   if (op.form !== undefined) sent.form = DEPLOY_FORMS.includes(op.form) ? op.form : "";
-  if (op.count !== undefined && op.count !== null && op.count !== "") sent.count = Math.max(0, Math.min(REINFORCE_MOST, Math.round(Number(op.count) || 0)));
+  if (op.count !== undefined && op.count !== null && op.count !== "" && Number(op.count) === 0) sent.count = 0;
   if (op.to !== undefined) sent.to = [Math.round(Number(op.to?.[0]) * 10000) / 10000, Math.round(Number(op.to?.[1]) * 10000) / 10000];
   if (op.name !== undefined) sent.name = clean(op.name, 120);
   return sent;

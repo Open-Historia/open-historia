@@ -48,3 +48,31 @@ test("each reader is told the goal in its own terms, and nothing when there is n
   assert.match(describeGoalForSuggestions("Unify Italy"), /serve it/);
   for (const describe of [describeGoalForAdvisor, describeGoalForSimulation, describeGoalForSuggestions]) assert.equal(describe(""), "");
 });
+
+test("a progress reading is kept with its goal, with the last score for the trend, and dropped when the goal is reworded", async () => {
+  const { playerGoalEntryOf, withGoalProgress, withPlayerGoal } = await import("./playerGoal.js");
+  const { normalizeWorldState } = await import("./gameState.js");
+  let world = withPlayerGoal({}, "Indonesia", "Unite Timor-Leste with Indonesia", { round: 2 });
+  const reading = { progress: 140, summary: "Treaty signed; referendum pending.", achieved: ["Treaty signed", ""], obstacles: ["Referendum"], nextSteps: ["Hold the referendum"], asOf: "2026-02-01", round: 3 };
+  world = withGoalProgress(world, "indonesia", "Unite Timor-Leste with Indonesia", reading);
+  assert.deepEqual(playerGoalEntryOf(world, "Indonesia").progress, {
+    progress: 100, summary: "Treaty signed; referendum pending.", achieved: ["Treaty signed"], obstacles: ["Referendum"], nextSteps: ["Hold the referendum"], asOf: "2026-02-01", round: 3,
+  });
+  world = withGoalProgress(world, "Indonesia", "Unite Timor-Leste with Indonesia", { ...reading, progress: 60 });
+  assert.equal(playerGoalEntryOf(world, "Indonesia").progress.previous, 100);
+  assert.equal(playerGoalEntryOf(normalizeWorldState(world), "Indonesia").progress.progress, 60, "the reading survives a save");
+  assert.equal(withGoalProgress(world, "Indonesia", "A different goal", reading), world, "a reading of another goal is not stored");
+  assert.ok(playerGoalEntryOf(withPlayerGoal(world, "Indonesia", "Unite Timor-Leste with Indonesia"), "Indonesia").progress, "the same goal keeps it");
+  assert.equal(playerGoalEntryOf(withPlayerGoal(world, "Indonesia", "Grow the economy"), "Indonesia").progress, undefined, "a new goal starts again");
+});
+
+test("the goal progress task has a prompt, a tool and a model slot", async () => {
+  const { readFileSync } = await import("node:fs");
+  const { getGameplayTool, validateGameplayPayload } = await import("../Game/AI/gameplaySchemas.js");
+  const defaults = JSON.parse(readFileSync(new URL("../Game/AI/defaultPrompts.json", import.meta.url), "utf8"));
+  assert.match(defaults.tasks.goalProgress, /\$\{goalText\}/);
+  assert.equal(getGameplayTool("goalProgress")?.name, "submit_goal_progress");
+  assert.equal(validateGameplayPayload("goalProgress", { progress: 40, summary: "Halfway.", achieved: [], obstacles: [], nextSteps: [] }).valid, true);
+  assert.equal(validateGameplayPayload("goalProgress", { progress: 140, summary: "x", achieved: [], obstacles: [], nextSteps: [] }).valid, false);
+  assert.match(readFileSync(new URL("../Game/AI/providerConfig.js", import.meta.url), "utf8"), /key: "goalProgress"/);
+});

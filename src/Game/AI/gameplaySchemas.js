@@ -10,10 +10,13 @@ import {
 import { INSTITUTION_LIFECYCLE_DECISIONS } from "../../runtime/institutions.js";
 import { INSTITUTION_CHAT_ACTION_KINDS } from "./institutionChatActions.js";
 import { extractJsonArray } from "./jsonSalvage.js";
-import { LISTEN_IN_MAX_TRENDS } from "../../runtime/listenIn.js";
+import { PLACE_FEED_MAX_TRENDS } from "../../runtime/placeFeed.js";
 import { WAR_ROOM_ORDERS, WAR_ROOM_STANCES } from "../../runtime/fronts/constants.js";
 import { FRONT_ORDERS_FIELD } from "./nativeFrontLedger.js";
 import { SEAT_ADVICE_ANSWER_SCHEMA, SEAT_ADVICE_FIELD } from "./seatAdvice.js";
+import { IDEOLOGIES, PARTY_ROLES } from "../../runtime/politics.js";
+import { WAR_FIGURES_FIELD } from "./warFiguresPrompt.js";
+import { ANSWER_LEDGER_KEYS } from "./jumpAnswerShelves.js";
 const textSchema = (description) => ({
   type: "string",
   description,
@@ -84,6 +87,7 @@ const peaceOfferSchema = {
     reparationsPayer: textSchema("Who pays; empty for nobody."),
     reparationsPercent: { type: "number", description: "% of the payer's GDP a year." },
     reparationsYears: { type: "integer" },
+    moreTerms: textSchema("Other terms, as in a peaceTreaties line."),
   },
   required: ["territory"],
   additionalProperties: false,
@@ -895,12 +899,12 @@ const institutionLifecycleImpactOpSchema = {
 
 const politicalActorImpactOpSchema = {
   type: "object",
-  description: "One canonical PWv2 mutation; operation arguments are JSON in argsJson.",
+  description: "Political World change; args as JSON in argsJson.",
   properties: {
     op: {
       type: "string",
       enum: [
-        "create-party", "update-party", "set-party-support", "set-party-influence", "set-party-leader",
+        "create-party", "update-party", "dissolve-party", "set-party-support", "set-party-influence", "set-party-leader",
         "create-power-bloc", "update-power-bloc", "set-power-bloc-influence",
         "set-political-system", "set-government", "form-coalition", "leave-coalition",
         "replace-leader", "set-strategy", "set-traits", "set-perceptions", "remove-perception",
@@ -1133,6 +1137,55 @@ export const AGENT_REPORTS_FIELD = "agentReports";
 // (historyConsolidation.js buildSkipHistoryJob).
 export const HISTORY_FIELD = "history";
 
+// And Rostra's posts of the period (runtime/socialFeed.js readSkipPosts): the
+// people who make the news on its events, their answers to the player's posts,
+// and now and then one about nothing in world affairs. They ride in the one
+// answer a skip already gives, so the social network costs no request. The
+// shape SENT is below; the answer is read against a loose one, as the agents'
+// reports are, since each post is read on its own when the turn is written and
+// a malformed one costs that post, never the turn. The field notes are in the
+// prompt ([Social Media]), as the ledgers' are.
+export const SOCIAL_POSTS_FIELD = "socialPosts";
+const SOCIAL_POSTS_SENT_SCHEMA = {
+  type: "array",
+  description: "Social media posts of the period; rules under [Social Media].",
+  items: {
+    type: "object",
+    properties: {
+      author: { type: "string" },
+      role: { type: "string" },
+      country: { type: "string" },
+      date: { type: "string" },
+      text: { type: "string" },
+      quote: { type: "string" },
+      offTopic: { type: "boolean" },
+    },
+    required: ["author", "text"],
+    additionalProperties: false,
+  },
+};
+
+// And what the public answered to the player's open Rostra polls
+// (runtime/socialFeed.js readSkipPollResults), sent only while one is open
+// (withSocialPosts), so a skip with none asks for nothing more. Read as the
+// posts are: an entry that names no open poll changes nothing.
+export const POLL_RESULTS_FIELD = "pollResults";
+const POLL_RESULTS_SENT_SCHEMA = {
+  type: "array",
+  description: "The public's votes on the player's open Rostra polls; rules under [Social Media].",
+  items: {
+    type: "object",
+    properties: {
+      poll: { type: "string" },
+      shares: { type: "array", items: { type: "number" } },
+      votes: { type: "number" },
+      consensus: { type: "string" },
+    },
+    required: ["poll", "shares"],
+    additionalProperties: false,
+  },
+};
+
 // Category tags (runtime/eventTags.js): the timeline's filter chips.
 const eventTagsSchema = {
   type: "array",
@@ -1345,6 +1398,13 @@ export const JUMP_FORWARD_SCHEMA = {
       type: "string",
       description: "Fronts; format in prompt. Empty if none.",
     },
+    // The figures the war needs of a country that fights and has none
+    // (warFiguresPrompt.js), a line a country. SENT with fronts on, after the
+    // battlefields' orders (withWarFigures); read either way, loosely.
+    [WAR_FIGURES_FIELD]: {
+      type: "string",
+      description: "War figures; format in prompt. Empty if none.",
+    },
     // Each player's advisor and three orders to consider, in a game a host
     // shares (seatAdvice.js). SENT only then, in full (withSeatAdvice); read
     // either way, loosely, so a malformed piece of advice never costs the turn.
@@ -1371,6 +1431,17 @@ export const JUMP_FORWARD_SCHEMA = {
       type: "object",
       description: "The history job's answer, only when the prompt carries that job.",
     },
+    [SOCIAL_POSTS_FIELD]: {
+      type: "array",
+      description: "Social media posts of the period.",
+      items: { type: "object" },
+    },
+    // Anything at all: each entry is read on its own (socialFeed.js
+    // readSkipPollResults), and one the model wrote oddly costs that poll its
+    // answer this time, never the turn.
+    [POLL_RESULTS_FIELD]: {
+      description: "The public's votes on the player's open polls.",
+    },
   },
   // clearActions is deliberately NOT required: simulateTimelineJump already
   // reads it as `payload?.clearActions !== false`, so a missing value already
@@ -1386,19 +1457,42 @@ export const JUMP_FORWARD_SCHEMA = {
 
 export const AUTO_JUMP_FORWARD_SCHEMA = JUMP_FORWARD_SCHEMA;
 
+// What a skip's answer is CHECKED against (validateGameplayPayload), never sent: the
+// same, but a ledger may also be a list of records, as a record written on an
+// event is put back into it (jumpAnswerShelves.js) and its readers take either.
+const JUMP_ANSWER_CHECKED_SCHEMA = {
+  ...JUMP_FORWARD_SCHEMA,
+  properties: {
+    ...JUMP_FORWARD_SCHEMA.properties,
+    ...Object.fromEntries(ANSWER_LEDGER_KEYS.map((key) => [key, {
+      anyOf: [
+        JUMP_FORWARD_SCHEMA.properties[key],
+        { type: "array", items: { anyOf: [{ type: "string" }, { type: "object" }] } },
+      ],
+    }])),
+  },
+};
+
 // The lean contract, which foldJumpTool adds to: the answer schema without the
-// board, the agents' reports and the history.
+// board, the agents' reports and the history, and with the social posts' shape.
 const JUMP_FORWARD_LEAN_SCHEMA = (() => {
   const {
     [AGENT_REPORTS_FIELD]: _agentReports,
     [HISTORY_FIELD]: _history,
     [FRONT_ORDERS_FIELD]: _frontOrders,
+    [WAR_FIGURES_FIELD]: _warFigures,
     [SEAT_ADVICE_FIELD]: _seatAdvice,
+    [SOCIAL_POSTS_FIELD]: _socialPosts,
+    [POLL_RESULTS_FIELD]: _pollResults,
     ...properties
   } = JUMP_FORWARD_SCHEMA.properties;
   return {
     ...JUMP_FORWARD_SCHEMA,
-    properties: { ...properties, events: { ...properties.events, items: leanJumpEventSchema } },
+    properties: {
+      ...properties,
+      events: { ...properties.events, items: leanJumpEventSchema },
+      [SOCIAL_POSTS_FIELD]: SOCIAL_POSTS_SENT_SCHEMA,
+    },
   };
 })();
 
@@ -3339,12 +3433,71 @@ const INTELLIGENCE_ASSESSMENT_SCHEMA = {
   additionalProperties: false,
 };
 
-// Listen in (runtime/listenIn.js): what ordinary people in one place are posting,
-// for the phone a region's card and a country's panel open. Everything but the
+// A polity's government and its parties (or factions) for the Stats pane's
+// Politics tab; normalized and stored by runtime/politics.js.
+const POLITICAL_LANDSCAPE_SCHEMA = {
+  type: "object",
+  description: "The government of one polity and its main political parties, or its factions where it has no parties, as they stand on the current date.",
+  properties: {
+    government: nonEmptyTextSchema("Form of government, e.g. Constitutional monarchy, One-party state, Military junta."),
+    headOfState: nonEmptyTextSchema("Head of state's name and title."),
+    headOfGovernment: textSchema("Head of government's name and title, blank where the head of state also governs."),
+    legislature: textSchema("The legislature's name, blank where there is none."),
+    legislatureSeats: { type: "integer", minimum: 0, description: "Total seats in the (lower) house; 0 where there is no legislature." },
+    nextElection: textSchema("Date or year of the next national election, or why there is none (\"Suspended\", \"No elections\")."),
+    kind: { type: "string", enum: ["parties", "factions"], description: "factions where the polity has no political parties (court, army, clergy, guilds...)." },
+    parties: {
+      type: "array",
+      minItems: 1,
+      maxItems: 12,
+      items: {
+        type: "object",
+        properties: {
+          nameEn: nonEmptyTextSchema("Name in English."),
+          nameNative: nonEmptyTextSchema("Name in the polity's own language; the English name again only where that is the language."),
+          abbrEn: textSchema("English abbreviation, blank where none is used."),
+          abbrNative: textSchema("Native abbreviation, blank where none is used."),
+          ideology: { type: "string", enum: IDEOLOGIES.map((ideology) => ideology.name), description: "One of the ten ideologies." },
+          subideology: nonEmptyTextSchema("A subideology listed under that ideology."),
+          leader: nonEmptyTextSchema("Current leader's name."),
+          colour: textSchema("The party's colour as #RRGGBB, blank to use its ideology's."),
+          role: { type: "string", enum: PARTY_ROLES, description: "Its place in the system now." },
+          seats: { type: "integer", minimum: 0, description: "Seats held in the legislature; 0 where there is none or it holds none." },
+          support: { type: "integer", minimum: 0, maximum: 100, description: "Estimated popular support or, for a faction, influence, in percent." },
+          founded: textSchema("Year founded, blank if unknown."),
+          description: textSchema("One short line: who it speaks for and where it is strong."),
+        },
+        required: ["nameEn", "nameNative", "ideology", "subideology", "leader", "role", "support"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["government", "headOfState", "kind", "parties"],
+  additionalProperties: false,
+};
+
+// How far the player's standing goal has come, for the Actions panel;
+// normalized and stored by runtime/playerGoal.js.
+const GOAL_PROGRESS_SCHEMA = {
+  type: "object",
+  description: "An honest reading of how far the player's government has come toward its standing goal, on the current date.",
+  properties: {
+    progress: { type: "integer", minimum: 0, maximum: 100, description: "0 = nothing done, 100 = the goal is achieved. Judge what is true in the world, not what was ordered." },
+    summary: nonEmptyTextSchema("Two or three sentences: where things stand and why."),
+    achieved: { type: "array", maxItems: 5, items: textSchema("A milestone already reached, one short line.") },
+    obstacles: { type: "array", maxItems: 4, items: textSchema("What stands in the way, one short line.") },
+    nextSteps: { type: "array", maxItems: 3, items: textSchema("A concrete step that would bring the goal nearer, one short line.") },
+  },
+  required: ["progress", "summary", "achieved", "obstacles", "nextSteps"],
+  additionalProperties: false,
+};
+
+// Rostra's Search (runtime/placeFeed.js): what ordinary people in one place are
+// posting, for the place a player opens in the Search tab. Everything but the
 // author and the text is optional, and the list carries no count to fail: an
-// answer two posts long, or twenty, still shows (runtime/listenIn.js keeps what
+// answer two posts long, or twenty, still shows (runtime/placeFeed.js keeps what
 // a feed holds), where a bound here would cost the player the whole request.
-const LISTEN_IN_SCHEMA = {
+const PLACE_FEED_SCHEMA = {
   type: "object",
   description: "The posts ordinary people in one place are writing today, and what the place is talking about.",
   properties: {
@@ -3371,10 +3524,22 @@ const LISTEN_IN_SCHEMA = {
     trends: {
       type: "array",
       description: "Three to five things this place is talking about today, a few words each, as a trending list names them.",
-      maxItems: LISTEN_IN_MAX_TRENDS,
+      maxItems: PLACE_FEED_MAX_TRENDS,
       items: nonEmptyTextSchema("One trend: a few words or a tag."),
     },
   },
+  required: ["posts"],
+  additionalProperties: false,
+};
+
+// Rostra's first posts (runtime/socialFeed.js rostraRefreshRules): what the
+// empty feed's Refresh asks for. The posts' shape is the time skip's
+// (SOCIAL_POSTS_SENT_SCHEMA), and the answer is read as a skip's posts are
+// (readSkipPosts): one that is not a person's is left out, never the request.
+const ROSTRA_FEED_SCHEMA = {
+  type: "object",
+  description: "The first posts on Rostra, by the people who make the news.",
+  properties: { posts: SOCIAL_POSTS_SENT_SCHEMA },
   required: ["posts"],
   additionalProperties: false,
 };
@@ -3533,14 +3698,81 @@ export const withFrontOrders = (tool) => {
   };
 };
 
+// Fronts on, the same: a time skip's tool with the figures the war needs
+// (warFiguresPrompt.js) in its contract, after everything the turn itself
+// says, and required for the same reason as the orders: "" when no country
+// wants any.
+export const withWarFigures = (tool) => {
+  const properties = tool?.schema?.properties;
+  if (!properties?.events || !properties?.stopDate || properties[WAR_FIGURES_FIELD]) return tool;
+  return {
+    ...tool,
+    schema: {
+      ...tool.schema,
+      properties: { ...properties, [WAR_FIGURES_FIELD]: JUMP_FORWARD_SCHEMA.properties[WAR_FIGURES_FIELD] },
+      required: [...new Set([...(Array.isArray(tool.schema.required) ? tool.schema.required : []), WAR_FIGURES_FIELD])],
+    },
+  };
+};
+
+// A time skip's tool with every event's impacts required in what is SENT: {}
+// for an event that changes nothing. Optional, gemini-3.5-flash-lite left the
+// object off every event of a live skip, the changes it had planned in its own
+// reasoning included (2026-11-03: a Urals tank works' projectOps it named and
+// then never wrote; ten events, no impacts on any). Required, the same request
+// came back with impacts on every event, {} on the seven that changed nothing.
+// The answer is still read without it (the task's own schema).
+export const withEventImpacts = (tool) => {
+  const event = tool?.schema?.properties?.events?.items;
+  if (!tool?.schema?.properties?.stopDate || !event?.properties?.impacts) return tool;
+  const required = Array.isArray(event.required) ? event.required : [];
+  if (required.includes("impacts")) return tool;
+  const events = tool.schema.properties.events;
+  return {
+    ...tool,
+    schema: {
+      ...tool.schema,
+      properties: { ...tool.schema.properties, events: { ...events, items: { ...event, required: [...required, "impacts"] } } },
+    },
+  };
+};
+
+// A time skip's tool as this game has Rostra (server/gameFeatures.js
+// socialMedia). On, with its social posts after everything else it is to write
+// but the riders foldJumpTool adds (the agents' reports, the history): after
+// the battlefields' orders and the players' advice, which withFrontOrders and
+// withSeatAdvice put at the end. Posts are what an answer that runs out of room
+// can best do without, and the last field before the riders is the one
+// gameplay.js can still cut away and keep the turn (parseWithoutTrailingFields).
+// Off, without the field, so the skip is not asked for posts nobody would see.
+// `polls`: the player has an open poll, so the public's answer to it is asked
+// for too, just before the posts (a cut that falls among the posts keeps it).
+// Any other tool comes back as it was.
+export const withSocialPosts = (tool, on = true, { polls = false } = {}) => {
+  const properties = tool?.schema?.properties;
+  if (!properties?.events || !properties[SOCIAL_POSTS_FIELD]) return tool;
+  const { [SOCIAL_POSTS_FIELD]: posts, [POLL_RESULTS_FIELD]: _asked, ...rest } = properties;
+  if (!on) return { ...tool, schema: { ...tool.schema, properties: rest } };
+  return {
+    ...tool,
+    schema: {
+      ...tool.schema,
+      properties: { ...rest, ...(polls ? { [POLL_RESULTS_FIELD]: POLL_RESULTS_SENT_SCHEMA } : {}), [SOCIAL_POSTS_FIELD]: posts },
+    },
+  };
+};
+
 export const GAMEPLAY_SCHEMAS = Object.freeze({
   spyIntercept: SPY_INTERCEPT_SCHEMA,
   intelligenceAssessment: INTELLIGENCE_ASSESSMENT_SCHEMA,
-  listenIn: LISTEN_IN_SCHEMA,
+  politicalLandscape: POLITICAL_LANDSCAPE_SCHEMA,
+  goalProgress: GOAL_PROGRESS_SCHEMA,
+  placeFeed: PLACE_FEED_SCHEMA,
+  rostraFeed: ROSTRA_FEED_SCHEMA,
   warRoom: WAR_ROOM_SCHEMA,
   actions: ACTIONS_SCHEMA,
-  jumpForward: JUMP_FORWARD_SCHEMA,
-  autoJumpForward: AUTO_JUMP_FORWARD_SCHEMA,
+  jumpForward: JUMP_ANSWER_CHECKED_SCHEMA,
+  autoJumpForward: JUMP_ANSWER_CHECKED_SCHEMA,
   descriptionToAction: DESCRIPTION_TO_ACTION_SCHEMA,
   demandCheck: DEMAND_CHECK_SCHEMA,
   chatActions: CHAT_ACTIONS_SCHEMA,
@@ -3759,16 +3991,34 @@ export const SPY_INTERCEPT_TOOL = makeTool(
   SPY_INTERCEPT_SCHEMA,
 );
 
+export const POLITICAL_LANDSCAPE_TOOL = makeTool(
+  "submit_political_landscape",
+  "Submit the target polity's government and its main parties or factions.",
+  POLITICAL_LANDSCAPE_SCHEMA,
+);
+
+export const GOAL_PROGRESS_TOOL = makeTool(
+  "submit_goal_progress",
+  "Submit the reading of how far the standing goal has come.",
+  GOAL_PROGRESS_SCHEMA,
+);
+
 export const INTELLIGENCE_ASSESSMENT_TOOL = makeTool(
   "submit_intelligence_assessment",
   "Submit the assessment of the target polity's intelligence service.",
   INTELLIGENCE_ASSESSMENT_SCHEMA,
 );
 
-export const LISTEN_IN_TOOL = makeTool(
-  "submit_listen_in_feed",
+export const PLACE_FEED_TOOL = makeTool(
+  "submit_place_feed",
   "Submit the posts ordinary people in the place are writing today, and what the place is talking about.",
-  LISTEN_IN_SCHEMA,
+  PLACE_FEED_SCHEMA,
+);
+
+export const ROSTRA_FEED_TOOL = makeTool(
+  "submit_rostra_posts",
+  "Submit the posts the people who make the news are writing on Rostra.",
+  ROSTRA_FEED_SCHEMA,
 );
 
 export const WAR_ROOM_TOOL = makeTool(
@@ -3780,7 +4030,10 @@ export const WAR_ROOM_TOOL = makeTool(
 export const GAMEPLAY_TOOLS = Object.freeze({
   spyIntercept: SPY_INTERCEPT_TOOL,
   intelligenceAssessment: INTELLIGENCE_ASSESSMENT_TOOL,
-  listenIn: LISTEN_IN_TOOL,
+  politicalLandscape: POLITICAL_LANDSCAPE_TOOL,
+  goalProgress: GOAL_PROGRESS_TOOL,
+  placeFeed: PLACE_FEED_TOOL,
+  rostraFeed: ROSTRA_FEED_TOOL,
   warRoom: WAR_ROOM_TOOL,
   actions: ACTIONS_TOOL,
   jumpForward: JUMP_FORWARD_TOOL,
@@ -3804,6 +4057,7 @@ export const GAMEPLAY_TOOLS = Object.freeze({
   pregameHistory: PREGAME_HISTORY_TOOL,
   projects: PROJECTS_TOOL,
 });
+
 
 export const getGameplayTool = (taskKey) => GAMEPLAY_TOOLS[taskKey] ?? null;
 
@@ -4395,6 +4649,9 @@ const normalizeEventShape = (entry) => {
       impacts.unitOps = impacts.unitOps.map(normalizeUnitOperationShape);
     }
     if (Array.isArray(impacts.createdChats)) impacts.createdChats = normalizeChatList(impacts.createdChats);
+    // The Politics tab's party ops are the Political World's ops now (politicalActorOps): an answer written before,
+    // a held turn's, is not refused for them.
+    delete impacts.partyOps;
     event.impacts = impacts;
   }
   return event;
@@ -4507,41 +4764,41 @@ const normalizeChatActionsShape = (value) => {
 // the list under another name or bare, a post's fields under the names a real
 // feed uses, a count as text, a field the schema does not have — are rewritten
 // to the schema's shape here, so none of them costs the player a second request
-// or a post. What the phone shows is cleaned again by runtime/listenIn.js.
-const LISTEN_IN_POST_FIELDS = Object.freeze({
+// or a post. What the phone shows is cleaned again by runtime/placeFeed.js.
+const PLACE_FEED_POST_FIELDS = Object.freeze({
   author: ["author", "name", "displayName", "display_name", "user"],
   handle: ["handle", "username", "userName", "account", "screenName"],
   about: ["about", "bio", "profile", "description"],
   text: ["text", "content", "body", "message", "post"],
 });
-const LISTEN_IN_POST_COUNTS = Object.freeze({
+const PLACE_FEED_POST_COUNTS = Object.freeze({
   minutesAgo: ["minutesAgo", "minutes_ago", "minutes"],
   likes: ["likes", "likeCount", "hearts"],
   reposts: ["reposts", "shares", "retweets", "repostCount"],
   replies: ["replies", "comments", "replyCount"],
 });
-const listenInCount = (value) => {
+const placeFeedCount = (value) => {
   const number = typeof value === "string" ? Number(value.replace(/[\s,]/g, "")) : Number(value);
   return Number.isFinite(number) && number > 0 ? Math.round(number) : 0;
 };
-const normalizeListenInPostShape = (value) => {
+const normalizePlaceFeedPostShape = (value) => {
   if (!isPlainRecord(value)) return value;
   const post = {};
-  for (const [field, names] of Object.entries(LISTEN_IN_POST_FIELDS)) {
+  for (const [field, names] of Object.entries(PLACE_FEED_POST_FIELDS)) {
     const found = firstDefinedKey(value, names);
     if (found !== undefined && found !== null) post[field] = String(found).trim();
   }
   if (typeof post.handle === "string") post.handle = post.handle.replace(/^@+/, "");
-  for (const [field, names] of Object.entries(LISTEN_IN_POST_COUNTS)) {
+  for (const [field, names] of Object.entries(PLACE_FEED_POST_COUNTS)) {
     const found = firstDefinedKey(value, names);
-    if (found !== undefined && found !== null) post[field] = listenInCount(found);
+    if (found !== undefined && found !== null) post[field] = placeFeedCount(found);
   }
-  if (post.minutesAgo === undefined && value.hoursAgo !== undefined) post.minutesAgo = listenInCount(Number(value.hoursAgo) * 60);
+  if (post.minutesAgo === undefined && value.hoursAgo !== undefined) post.minutesAgo = placeFeedCount(Number(value.hoursAgo) * 60);
   const filler = firstDefinedKey(value, ["filler", "offTopic", "off_topic"]);
   if (filler !== undefined) post.filler = filler === true || String(filler).trim().toLowerCase() === "true";
   return post;
 };
-const normalizeListenInShape = (value) => {
+const normalizePlaceFeedShape = (value) => {
   let source = value;
   if (isPlainRecord(value)) {
     for (const wrapper of ["result", "output", "payload", "data", "feed"]) {
@@ -4555,9 +4812,9 @@ const normalizeListenInShape = (value) => {
   if (!Array.isArray(list)) return value;
   const trends = isPlainRecord(source) ? firstDefinedKey(source, ["trends", "trending", "topics"]) : undefined;
   return {
-    posts: list.map(normalizeListenInPostShape),
+    posts: list.map(normalizePlaceFeedPostShape),
     ...(Array.isArray(trends)
-      ? { trends: trends.map((entry) => String(entry ?? "").trim()).filter(Boolean).slice(0, LISTEN_IN_MAX_TRENDS) }
+      ? { trends: trends.map((entry) => String(entry ?? "").trim()).filter(Boolean).slice(0, PLACE_FEED_MAX_TRENDS) }
       : {}),
   };
 };
@@ -4630,8 +4887,14 @@ export const normalizeGameplayPayload = (taskKey, value) => {
   if (taskKey === "pregameHistory") return normalizePregameHistoryShape(value);
   if (taskKey === "idleDiplomacy") return normalizeIdleDiplomacyShape(value);
   if (taskKey === "projects") return normalizeProjectsShape(value);
+  if (taskKey === "placeFeed") return normalizePlaceFeedShape(value);
+  // The posts bare, or under the skip's own name, are still the posts.
+  if (taskKey === "rostraFeed") {
+    if (Array.isArray(value)) return { posts: value };
+    if (isPlainRecord(value) && !Array.isArray(value.posts) && Array.isArray(value.socialPosts)) return { posts: value.socialPosts };
+    return value;
+  }
   if (taskKey === "countryStatSheet") return normalizeCountryStatSheetShape(value);
-  if (taskKey === "listenIn") return normalizeListenInShape(value);
   if (taskKey !== "jumpForward" && taskKey !== "autoJumpForward") return value;
   // A bare list of events where the contract wants { events: [...] }: the
   // events, with the fields beside them empty. A player's log (2026-10-12) has

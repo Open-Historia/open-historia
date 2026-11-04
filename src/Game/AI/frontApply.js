@@ -37,9 +37,11 @@ import { gameDateYear } from "../../runtime/gameDates.js";
 import { yearInEra } from "../../runtime/unitMotion.js";
 import { eraSettingOf, warSettingsOf, warfareOf } from "../../runtime/warSettings.js";
 import { normalizeBattlefields } from "../../runtime/fronts/record.js";
+import { homeName } from "../../runtime/fronts/home.js";
 import { isUnderWay, normalizeTransports } from "../../runtime/fronts/transports.js";
+import { AIR_CITY_GDP, airStrikesBlock, normalizeAirStrikes, withTurnAirStrikes } from "../../runtime/fronts/airStrike.js";
 import { findWay } from "../../runtime/fronts/wayfinder.js";
-import { buildWorldGrid, worldSheetKey } from "../../runtime/fronts/worldGrid.js";
+import { buildWorldGrid, measureOptions, worldSheetKey } from "../../runtime/fronts/worldGrid.js";
 import { regionLocatorOf } from "../../runtime/regionLocator.js";
 import { waterTypeIds } from "../../runtime/regionTypes.js";
 import { chartOf } from "../../runtime/warRoomChart.js";
@@ -48,11 +50,11 @@ import { createFrontRun } from "../../runtime/fronts/engine.js";
 import { getActiveWorldDirection, isActiveFeatureEnabled } from "../../runtime/gameFeatures.js";
 import { normalizeDifficulty } from "../../runtime/difficulty.js";
 import { humanCountriesOf } from "../../runtime/humanPolities.js";
-import { FREEFORM, normalizeProjection } from "../../../server/mapProjection.js";
+import { engineMapOf, worldMeasureOf } from "../../../server/mapDistance.js";
 import { stolenPlansBlock, turnPlanned, warRoomIntel } from "./frontPlans.js";
 import { battlefieldPowers, buildFrontsBlock } from "./frontPrompt.js";
 import { buildScenarioFronts, scenarioFrontsPending } from "./frontScenario.js";
-import { frontsOn, frontsPace, strategyNetOn } from "./frontsGate.js";
+import { airOn, frontsOn, frontsPace, naviesOn, strategyNetOn } from "./frontsGate.js";
 import { labStaffPolicy, trainedStaffPolicy } from "../../runtime/fronts/mind/trained.js";
 import { applyFrontUnitChanges, battlefieldRegionTest, engineRegionsOf, frontWorldReaders, runTurnFronts, stripFrontOps } from "./frontTurn.js";
 import { applyWarUpdates, eventNarratesHardCombat } from "./nativeWarLedger.js";
@@ -118,7 +120,10 @@ const readFrontMap = async (world, game, campaignId) => {
   const structures = asArray(world?.markers)
     .map((marker) => ({ name: clean(marker?.name), kind: clean(marker?.kind), owner: clean(marker?.ownerCode), lng: Number(marker?.lng), lat: Number(marker?.lat) }))
     .filter((entry) => entry.name && Number.isFinite(entry.lng) && Number.isFinite(entry.lat));
-  const projection = normalizeProjection(world?.projection);
+  // How the map measures (server/mapDistance.js): nothing for plain Mercator,
+  // a flat sheet's scale for a freeform map, a world projection's table and its
+  // scale line otherwise. Part of the key, so a map measured anew is a new sheet.
+  const measure = worldMeasureOf(world);
   const key = [
     clean(campaignId) || "game",
     regionIds.length,
@@ -126,14 +131,15 @@ const readFrontMap = async (world, game, campaignId) => {
     hashOf([...names.values()].join("\u0002")),
     cities.length,
     hashOf(JSON.stringify(renames)),
+    ...(measure.plain ? [] : [hashOf(measure.key)]),
   ].join(":");
   return {
     baseOwners,
     names,
     regionIds,
-    // A flat sheet is a map with no globe behind it; nothing in the game says
-    // how many kilometres its degree is, so it is the world's.
-    map: { key, cities, structures, flat: projection.type === FREEFORM },
+    // A flat sheet is a map with no globe behind it: its scale line (the
+    // Workshop's Projection panel) says how many kilometres its degree is.
+    map: { key, cities, structures, ...engineMapOf(measure) },
   };
 };
 
@@ -168,7 +174,8 @@ export const regionHoldingsOf = async (world, game, campaignId) => {
     const front = await readFrontMap(world, game, campaignId);
     const readers = frontWorldReaders(world, { baseOwners: front.baseOwners, groups: false });
     for (const id of front.regionIds) add(readers.controllerOf(id));
-    if (held.size > 0) return held;
+    // (Every region of the map counted: a country with none holds no land at all.)
+    if (held.size > 0) return Object.assign(held, { complete: true });
   } catch (error) {
     console.warn("[peace] the map's regions could not be counted; the world's own list is used.", error);
   }
@@ -183,7 +190,8 @@ export const regionHoldingsOf = async (world, game, campaignId) => {
 // such battlefield is handed back untouched and the map's cities are not read.
 // (A transporter under way is fighting to come: where it lands a battlefield opens.)
 const onBattlefields = (world) => asArray(world?.battlefields).some((row) => row?.status === "active");
-const fighting = (world) => onBattlefields(world) || asArray(world?.transports).some(isUnderWay);
+// (Or an air strike the war room ordered waits to be flown: runtime/fronts/airStrike.js.)
+const fighting = (world) => onBattlefields(world) || asArray(world?.transports).some(isUnderWay) || (airOn() && asArray(world?.airStrikeOrders).length > 0);
 const plannedWorld = async (world, game) => {
   if (!onBattlefields(world)) return world;
   try {
@@ -216,6 +224,10 @@ const turnRunInput = ({ world, game, campaignId, loadRegions, signal, round, fro
     loadRegions: typeof loadRegions === "function"
       ? async () => engineRegionsOf(await loadRegions(), { nameOf: (id) => front?.names.get(id) })
       : null,
+    // The same shapes for a run fought away from the page, which reads the file itself (frontWorkerCore.js).
+    regionsFile: typeof loadRegions?.file === "function"
+      ? async () => ({ url: await loadRegions.file(), names: [...(front?.names ?? [])] })
+      : null,
     pause: pauseFor(signal),
     pace: frontsPace(),
     tempoAllowance: (days) => (direction?.territoryTempo > 0 ? territoryTempoAllowance(direction.territoryTempo, Math.max(1, days)) : null),
@@ -234,7 +246,11 @@ const turnRunInput = ({ world, game, campaignId, loadRegions, signal, round, fro
     // The era the scenario set, if it set one (runtime/warSettings.js).
     era: eraSettingOf(world),
     // Which of the engine's newer mechanics it has on: all of them unless it turned one off.
-    mechanics: warSettingsOf(world).mechanics,
+    // (With no air units in the scenario, the Wars feature, no wing flies over a battlefield.)
+    mechanics: airOn() ? warSettingsOf(world).mechanics : { ...warSettingsOf(world).mechanics, air: false },
+    // The Wars feature's other parts: fleets at sea, and what flies.
+    naval: naviesOn(),
+    air: airOn(),
     // How its wars' troops stand where nobody deploys them otherwise: along fronts, or as swarms (runtime/fronts/swarms.js).
     warfare: warfareOf(world, fromDate),
     // The men a counter stands for and the share of people who can fight, where it set them.
@@ -319,6 +335,8 @@ export const forecastTurnFronts = async ({ world = {}, game = {}, campaignId = "
       hashOf(JSON.stringify(asArray(world?.transports))),
       hashOf(JSON.stringify(asArray(world?.units).map((unit) => [unit?.id, unit?.type, unit?.committedTo, unit?.lng, unit?.lat, unit?.strength]))),
       hashOf(JSON.stringify(asArray(given))),
+      // And the air strikes waiting to be flown as it begins.
+      hashOf(JSON.stringify(asArray(world?.airStrikeOrders))),
       // How the scenario's wars are fought, the ground and the weather they are
       // fought in, and each country's military figures (Wars and Fronts Pt.2).
       hashOf(JSON.stringify(warGroundOf(world))),
@@ -337,7 +355,7 @@ export const forecastTurnFronts = async ({ world = {}, game = {}, campaignId = "
     }, signal);
     const days = Number(run?.stats?.days) || 0;
     const value = run?.battlefields && days > 0
-      ? { fromDate, toDate: target, days, battlefields: run.battlefields, news: asArray(run.news), flips: asArray(run.flips), transports: asArray(run.transports), voyages: asArray(run.voyages), sea: run.sea ?? null, ...(asArray(given).length ? { given: asArray(given) } : {}) }
+      ? { fromDate, toDate: target, days, battlefields: run.battlefields, news: asArray(run.news), flips: asArray(run.flips), transports: asArray(run.transports), voyages: asArray(run.voyages), sea: run.sea ?? null, airStrikes: asArray(run.airStrikes), ...(asArray(given).length ? { given: asArray(given) } : {}) }
       : null;
     foreseen = { key, value };
     if (value) {
@@ -428,7 +446,7 @@ export const applyTurnFronts = async ({
     if (signal?.aborted || error?.name === "AbortError") throw error;
     console.warn("[fronts] the front engine could not be run for this turn; the turn goes on without it and the battlefields stand as they were.", error);
     logDebugEvent("turn", "Fronts: the engine could not be run for this turn; the battlefields stand as they were.", error, { problem: true });
-    return { events: stripFrontOps(events), battlefields: null, unitChanges: [], notes: [], flips: [], stats: null, news: [], joins: [], starts: [], transports: null, voyages: [], strikes: [] };
+    return { events: stripFrontOps(events), battlefields: null, unitChanges: [], notes: [], flips: [], stats: null, news: [], joins: [], starts: [], transports: null, voyages: [], strikes: [], airStrikes: null };
   }
 };
 
@@ -461,7 +479,7 @@ export const citiesFollowCountries = async ({ world = {}, baseWorld = null, game
       const regions = shapes ? engineRegionsOf(shapes, { nameOf: (id) => front.names.get(id) }) : null;
       // (The map could not be read: nothing is moved and nothing is noted, so it is tried again next turn.)
       if (asArray(regions).length === 0) return world;
-      grid = buildWorldGrid(regions, { flat: front.map.flat === true, scale: front.map.scale, water });
+      grid = buildWorldGrid(regions, { ...measureOptions(front.map), water });
       if (grid) kept.set(sheet, grid);
     }
     if (!grid) return world;
@@ -556,6 +574,44 @@ export const withBlockadeEconomy = (world, fronts, patch) => {
     changed = true;
   }
   return changed ? next : world;
+};
+
+// A world with what the war room's air strikes did written into it (runtime/fronts/airStrike.js): each kept as it
+// went, for the war room, the war stats and the map; those that waited cleared; a structure struck damaged or
+// destroyed; a city struck, its people killed and its country's economy hurt. (The air units worn are the turn's
+// unit changes, withFrontUnits; the troops hit, the battlefields'; its country's weariness, warAndPeace.js.) The
+// same world when no strike was flown, or the land war's run was not made.
+//   round, date   the turn's round, and the date the strikes were flown on
+//   patch         (world, name, { population } | { economy }) => writes it (gameState.js applyCountryStatPatchToWorld)
+export const withAirStrikes = (world, fronts, { round = 0, date = "", patch = null } = {}) => {
+  if (!world || !Array.isArray(fronts?.airStrikes)) return world;
+  const flown = normalizeAirStrikes(fronts.airStrikes).map((strike) => ({ ...strike, round, date: clean(date) || strike.date }));
+  let next = { ...world, airStrikeOrders: [], airStrikes: withTurnAirStrikes(world.airStrikes, flown, round) };
+  const struck = new Map(flown.filter((strike) => strike.kind === "structure" && strike.marker && strike.status).map((strike) => [strike.marker, strike.status]));
+  if (struck.size > 0) {
+    next.markers = asArray(next.markers).map((marker) => (struck.has(clean(marker?.id)) && clean(marker?.status) !== struck.get(clean(marker.id))
+      ? { ...marker, status: struck.get(clean(marker.id)), updatedDate: clean(date) || clean(marker.updatedDate) }
+      : marker));
+  }
+  const cities = flown.filter((strike) => strike.kind === "city" && strike.power > 0 && strike.country);
+  if (cities.length === 0 || typeof patch !== "function" || !next.countryStats || typeof next.countryStats !== "object") return next;
+  next = { ...next, countryStats: { ...next.countryStats } };
+  const keys = new Map(Object.keys(next.countryStats).map((key) => [fold(key), key]));
+  for (const strike of cities) {
+    const key = keys.get(fold(strike.country));
+    const sheet = key ? next.countryStats[key] : null;
+    if (!sheet) continue;
+    const total = Number(sheet.population?.total);
+    if (strike.dead > 0 && total > 0) patch(next, key, { population: { total: Math.max(1, Math.round(total - strike.dead)) } });
+    const economy = next.countryStats[key]?.economy;
+    const gdp = Number(economy?.gdp);
+    if (gdp > 0) {
+      const after = Math.max(1, Math.round(gdp * (1 - (AIR_CITY_GDP * Math.min(100, strike.power)) / 100)));
+      const head = Number(economy.gdpPerCapita);
+      if (after < gdp) patch(next, key, { economy: { gdp: after, ...(head > 0 ? { gdpPerCapita: Math.round(((head * after) / gdp) * 100) / 100 } : {}) } });
+    }
+  }
+  return next;
 };
 
 // The world's blockades after a turn (runtime/naval/blockade.js withTurnBlockades):
@@ -688,7 +744,7 @@ export const transportWaysFor = async ({ world = {}, game = {}, campaignId = "",
       const shapes = typeof loadRegions === "function" ? await loadRegions() : null;
       const regions = shapes ? engineRegionsOf(shapes, { nameOf: (id) => front.names.get(id) }) : null;
       if (asArray(regions).length === 0) return found;
-      grid = buildWorldGrid(regions, { flat: front.map.flat === true, scale: front.map.scale, water });
+      grid = buildWorldGrid(regions, { ...measureOptions(front.map), water });
       if (grid) kept.set(sheet, grid);
     }
     if (!grid) return found;
@@ -760,7 +816,7 @@ export const warRoomChartFor = async ({ world = {}, game = {}, campaignId = "", 
       const regions = shapes ? engineRegionsOf(shapes, { nameOf: (id) => front.names.get(id) }) : null;
       if (asArray(regions).length === 0) return null;
       if (!grid) {
-        grid = buildWorldGrid(regions, { flat: front.map.flat === true, scale: front.map.scale, water });
+        grid = buildWorldGrid(regions, { ...measureOptions(front.map), water });
         if (grid) kept.set(sheet, grid);
       }
       if (!grid) return null;
@@ -828,12 +884,15 @@ export const withFrontUnits = (world, fronts) => {
 // prompt is then exactly what it was. `foreseen` is what forecastTurnFronts
 // gave for the turn, when it gave anything: the block then tells the
 // battlefields as the period leaves them and what happened on them.
-export const frontsLiveBlock = (world, game, foreseen = null) => [landBlock(world, game, foreseen), seasLiveBlock(world, game, foreseen)].filter(Boolean).join("\n\n");
+export const frontsLiveBlock = (world, game, foreseen = null) => [landBlock(world, game, foreseen), seasLiveBlock(world, game, foreseen), airStrikesLiveBlock(foreseen)].filter(Boolean).join("\n\n");
+// The war room's air strikes as the period's run flew them (runtime/fronts/airStrike.js): "" when none flew, or the
+// period was not fought before the story (they are flown when the turn is applied all the same, and told the next).
+export const airStrikesLiveBlock = (foreseen = null) => (frontsOn() && airOn() ? airStrikesBlock(foreseen?.airStrikes) : "");
 
 // What the skip is told of the war at sea (navalPrompt.js), after the land's:
 // the period's battles where the period was fought beforehand, else the fleets
 // of the countries at war as they stand. "" with fronts off or no such fleet.
-export const seasLiveBlock = (world, game, foreseen = null) => (frontsOn()
+export const seasLiveBlock = (world, game, foreseen = null) => (frontsOn() && naviesOn()
   ? buildSeasBlock({ sea: foreseen?.sea ?? null, units: world?.units, wars: world?.wars, players: humanCountriesOf(game), date: clean(game?.gameDate || game?.startDate), blockades: world?.blockades, era: eraSettingOf(world) })
   : "");
 

@@ -1,26 +1,26 @@
-/*! Open Historia — Listen in: what the model is told about the place: tests © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-// Run: node --test src/Game/AI/listenInContext.test.js
+/*! Open Historia — Rostra's Search: what the model is told about the place: tests © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
+// Run: node --test src/Game/AI/placeFeedContext.test.js
 
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { describeListenInPlace, listenInPlaceLabel, listenInRequest } from "./listenInContext.js";
+import { describePlaceFeedPlace, placeFeedPlaceLabel, placeFeedRequest } from "./placeFeedContext.js";
 
 const bavaria = { regionId: "DEU.2_1", regionName: "Bayern", polity: "Germany", polityKey: "Germany" };
 const germany = { polity: "Germany", polityKey: "Germany" };
 
 test("a place is named the way a sentence needs it", () => {
-  assert.equal(listenInPlaceLabel(bavaria), "Bayern, in Germany");
-  assert.equal(listenInPlaceLabel({ regionId: "R1", regionName: "The Wastes" }), "The Wastes");
-  assert.equal(listenInPlaceLabel(germany), "Germany");
-  assert.equal(listenInPlaceLabel(null), "");
-  assert.equal(listenInRequest(bavaria), "Show what people in Bayern (Germany) are posting today.");
-  assert.equal(listenInRequest({ regionId: "R1", regionName: "The Wastes" }), "Show what people in The Wastes are posting today.");
-  assert.equal(listenInRequest(germany), "Show what people across Germany are posting today.");
+  assert.equal(placeFeedPlaceLabel(bavaria), "Bayern, in Germany");
+  assert.equal(placeFeedPlaceLabel({ regionId: "R1", regionName: "The Wastes" }), "The Wastes");
+  assert.equal(placeFeedPlaceLabel(germany), "Germany");
+  assert.equal(placeFeedPlaceLabel(null), "");
+  assert.equal(placeFeedRequest(bavaria), "Show what people in Bayern (Germany) are posting today.");
+  assert.equal(placeFeedRequest({ regionId: "R1", regionName: "The Wastes" }), "Show what people in The Wastes are posting today.");
+  assert.equal(placeFeedRequest(germany), "Show what people across Germany are posting today.");
 });
 
 test("a region is described by who holds it, what is in it and what lies beside it", () => {
-  const text = describeListenInPlace({
+  const text = describePlaceFeedPlace({
     place: bavaria,
     region: {
       id: "DEU.2_1", name: "Bayern", owner: "Germany", sovereign: "Germany", claimants: [],
@@ -44,7 +44,7 @@ test("an occupied, claimed region under a group says so", () => {
     neighbours: [{ name: "No Man's Land", owner: "unowned" }],
   };
   const place = { regionId: "UKR.5_1", regionName: "Donetsk", polity: "Russia", polityKey: "Russia" };
-  const lines = describeListenInPlace({ place, region }).split("\n");
+  const lines = describePlaceFeedPlace({ place, region }).split("\n");
   assert.equal(lines[0], "Place: Donetsk, a region held by Russia.");
   assert.equal(lines[1], "By right it belongs to Ukraine; Russia holds it.");
   assert.equal(lines[2], "Also claimed by Donetsk Republic.");
@@ -52,23 +52,23 @@ test("an occupied, claimed region under a group says so", () => {
   assert.equal(lines[4], "Towns and cities here: Donetsk (900,000, capital).");
   assert.equal(lines[5], "Next to it: No Man's Land (held by no country).");
   // With groups switched off for the game, the group is not mentioned.
-  assert.ok(!describeListenInPlace({ place, region, groupsOn: false }).includes("Night Wolves"));
+  assert.ok(!describePlaceFeedPlace({ place, region, groupsOn: false }).includes("Night Wolves"));
 });
 
 test("a region nobody holds, and one the map could not describe, still have a place line", () => {
   assert.equal(
-    describeListenInPlace({ place: { regionId: "R1", regionName: "The Wastes" }, region: { owner: "unowned", sovereign: "unowned" } }),
+    describePlaceFeedPlace({ place: { regionId: "R1", regionName: "The Wastes" }, region: { owner: "unowned", sovereign: "unowned" } }),
     "Place: The Wastes, a region that no country holds.\nThe posts come from people living in The Wastes.",
   );
   assert.equal(
-    describeListenInPlace({ place: bavaria, region: null }).split("\n")[0],
+    describePlaceFeedPlace({ place: bavaria, region: null }).split("\n")[0],
     "Place: Bayern, a region held by Germany.",
   );
-  assert.equal(describeListenInPlace({ place: null }), "");
+  assert.equal(describePlaceFeedPlace({ place: null }), "");
 });
 
 test("a country is described as its own people know it", () => {
-  const text = describeListenInPlace({
+  const text = describePlaceFeedPlace({
     place: germany,
     country: {
       name: "Germany",
@@ -106,10 +106,10 @@ test("a country is described as its own people know it", () => {
 });
 
 test("the player's own country is told apart, and a puppet's open overlord is named", () => {
-  const own = describeListenInPlace({ place: germany, country: { name: "Germany", isPlayer: true, relationWithPlayer: { player: "Germany", status: "friendly" } } });
+  const own = describePlaceFeedPlace({ place: germany, country: { name: "Germany", isPlayer: true, relationWithPlayer: { player: "Germany", status: "friendly" } } });
   assert.ok(own.endsWith("This is the country the player leads: what its government has done is what the player ordered."));
   assert.ok(!own.includes("relations with"));
-  const puppet = describeListenInPlace({
+  const puppet = describePlaceFeedPlace({
     place: { polity: "Poland", polityKey: "Poland" },
     country: { name: "Poland", politics: { leader: "Bolesław Bierut" }, overlords: [{ name: "Soviet Union", kind: "satellite" }] },
   });
@@ -119,7 +119,7 @@ test("the player's own country is told apart, and a puppet's open overlord is na
 
 test("a country nothing is known about adds nothing", () => {
   assert.equal(
-    describeListenInPlace({ place: germany, country: { name: "Germany" } }),
+    describePlaceFeedPlace({ place: germany, country: { name: "Germany" } }),
     "Place: the whole of Germany. The posts come from all over the country, town and countryside alike.",
   );
 });
@@ -146,7 +146,7 @@ test("what the map's own region lookup answers is what the description reads", a
     cities: [{ name: "Kharkiv", coordinates: [36.25, 49.99], population: 1430000, capital: "" }],
   });
 
-  const kharkiv = describeListenInPlace({
+  const kharkiv = describePlaceFeedPlace({
     place: { regionId: "ukr-kharkiv", regionName: "Kharkiv", polity: "Ukraine", polityKey: "Ukraine" },
     region: executeLookup(context, "region_info", { regionId: "ukr-kharkiv" }),
   }).split("\n");
@@ -154,7 +154,7 @@ test("what the map's own region lookup answers is what the description reads", a
   assert.equal(kharkiv[1], "Towns and cities here: Kharkiv (1,430,000).");
   assert.match(kharkiv[2], /^Next to it: .*Belgorod \(Russian Federation\)/);
 
-  const zap = describeListenInPlace({
+  const zap = describePlaceFeedPlace({
     // The card that was clicked still said Ukraine; the map says who holds it.
     place: { regionId: "ukr-zap", regionName: "Zaporizhzhia", polity: "Russian Federation", polityKey: "Russian Federation" },
     region: executeLookup(context, "region_info", { regionId: "ukr-zap" }),

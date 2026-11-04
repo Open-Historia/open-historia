@@ -8,6 +8,7 @@ import {
   LAUNCH_UPDATE_ATTEMPT_LIMIT,
   LAUNCH_UPDATE_WINDOW_MS,
   describeUpdateFailure,
+  desktopBuildIsNewer,
   desktopUpdateProgressIsStale,
   desktopUpdateProgressMatchesBuild,
   isUpdateAvailable,
@@ -122,6 +123,17 @@ test("a settled updater result becomes stale when a newer desktop build is publi
     );
   }
   assert.equal(desktopUpdateProgressIsStale("same-build", "same-build", "ready"), false);
+});
+
+test("only a newer desktop build is an update: a stale feed naming the build before is not", () => {
+  assert.equal(desktopBuildIsNewer("41565342591", "41249972097"), true);
+  assert.equal(desktopBuildIsNewer("41249972097", "41565342591"), false, "the feed a release just replaced");
+  assert.equal(desktopBuildIsNewer("41565342591", "41565342591"), false);
+  assert.equal(desktopBuildIsNewer(" 41565342591 ", "41565342591"), false);
+  assert.equal(desktopBuildIsNewer("", "41565342591"), false);
+  assert.equal(desktopBuildIsNewer(null, "41565342591"), false);
+  assert.equal(desktopBuildIsNewer("new-build", "old-build"), true, "ids that are not numbers: any difference");
+  assert.equal(desktopBuildIsNewer("41565342591", ""), true, "no stamped build: the feed's");
 });
 
 test("describeUpdateFailure keeps the updater's reason and reads as one sentence", () => {

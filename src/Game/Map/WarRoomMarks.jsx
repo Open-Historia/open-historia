@@ -1,8 +1,10 @@
-/*! Open Historia — the war room's fortified lines and fleets on the map © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
+/*! Open Historia — the war room's fortified lines, fleets and air strikes on the map © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // What the war room builds and what it sails, marked on its map while it is
 // open (warRoomMarks.js): the name of every fortified line, the one drawn and
-// waiting to be ordered built, and the player's own fleets with the stations
-// and courses they are told. The lines themselves are the map's own, the same
+// waiting to be ordered built, the player's own fleets with the stations
+// and courses they are told, and the player's air strikes: how far the air unit
+// picked out reaches, where the bombs of each strike waiting will fall, and
+// what the last turn's came to. The lines themselves are the map's own, the same
 // in the war room as out of it, with their breaches and what is built of them
 // (WarGeographyLayers.jsx). Read from the world as it stands; nothing is drawn
 // while the war room is shut. The lines lie under the planned movements, and the marks
@@ -11,16 +13,22 @@
 import React, { useEffect, useMemo } from "react";
 import { Layer, Source, useMap } from "react-map-gl/maplibre";
 import { fleetsOf } from "../../runtime/naval/fleetOps.js";
+import { normalizeAirStrikeOrders, normalizeAirStrikes } from "../../runtime/fronts/airStrike.js";
+import { airReachOf } from "../../runtime/fronts/airStrikeOps.js";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
 import { normalizeFortifications } from "../../runtime/warGeography.js";
 import { enforceMapLayerOrder } from "./mapLayerOrder.js";
-import { fleetFeatures, lineFeatures } from "./warRoomMarks.js";
+import { airFeatures, fleetFeatures, lineFeatures } from "./warRoomMarks.js";
 import { useWarRoom } from "./warRoomStore.js";
 
 const NONE = Object.freeze([]);
 const selectLines = (world) => (Array.isArray(world?.fortifications) ? world.fortifications : NONE);
 const selectUnits = (world) => (Array.isArray(world?.units) ? world.units : NONE);
 const selectOrders = (world) => (Array.isArray(world?.pendingUnitOrders) ? world.pendingUnitOrders : NONE);
+const selectStrikeOrders = (world) => (Array.isArray(world?.airStrikeOrders) ? world.airStrikeOrders : NONE);
+const selectStrikes = (world) => (Array.isArray(world?.airStrikes) ? world.airStrikes : NONE);
+const selectWarSettings = (world) => world?.warSettings ?? null;
+const selectRound = (game) => Number(game?.round) || 0;
 const selectCountry = (game) => String(game?.country ?? "");
 const selectDate = (game) => String(game?.gameDate || game?.startDate || "");
 
@@ -36,6 +44,12 @@ const WarRoomMarks = () => {
   const draft = useWarRoom((state) => state.draft);
   const level = useWarRoom((state) => state.level);
   const picked = useWarRoom((state) => state.fleet);
+  const wing = useWarRoom((state) => state.wing);
+  const aircraft = useWarRoom((state) => state.aircraft);
+  const strikeOrders = useRuntimeState("world", selectStrikeOrders);
+  const strikes = useRuntimeState("world", selectStrikes);
+  const warSettings = useRuntimeState("world", selectWarSettings);
+  const round = useRuntimeState("game", selectRound);
   const lines = useRuntimeState("world", selectLines);
   const units = useRuntimeState("world", selectUnits);
   const orders = useRuntimeState("world", selectOrders);
@@ -50,6 +64,21 @@ const WarRoomMarks = () => {
     [open, units, orders, country, picked],
   );
 
+  const airData = useMemo(() => {
+    if (!open) return airFeatures();
+    const mine = (entry) => String(entry?.owner ?? "").trim().toLowerCase() === country.trim().toLowerCase();
+    const { reach, blast } = airReachOf({ warSettings }, date);
+    const unit = aircraft && wing ? units.find((entry) => entry?.id === wing) : null;
+    return airFeatures({
+      wing: unit ? { lng: Number(unit.lng), lat: Number(unit.lat) } : null,
+      reach,
+      blast,
+      orders: normalizeAirStrikeOrders(strikeOrders).filter(mine),
+      // (What the player's strikes of the turn just passed came to.)
+      flown: normalizeAirStrikes(strikes).filter((strike) => mine(strike) && strike.round >= round),
+    });
+  }, [open, aircraft, wing, units, strikeOrders, strikes, warSettings, country, date, round]);
+
   // The layers come and go with the war room; the map's own order is put back each time they come.
   useEffect(() => {
     if (!open) return;
@@ -57,7 +86,7 @@ const WarRoomMarks = () => {
     try {
       enforceMapLayerOrder(map);
     } catch { /* the map is between styles */ }
-  }, [open, mapRef, lineData, fleetData]);
+  }, [open, mapRef, lineData, fleetData, airData]);
 
   if (!open) return null;
   return (
@@ -124,6 +153,32 @@ const WarRoomMarks = () => {
             "circle-stroke-width": ["case", ["get", "lit"], 3, 1.8],
             "circle-pitch-alignment": "map",
           }}
+        />
+      </Source>
+      <Source id="warroom-air-source" type="geojson" data={airData}>
+        <Layer
+          id="warroom-air-reach"
+          type="line"
+          filter={IS("reach")}
+          paint={{ "line-color": ["get", "colour"], "line-width": 1.6, "line-opacity": 0.8, "line-dasharray": [2.4, 1.8] }}
+        />
+        <Layer
+          id="warroom-air-blast"
+          type="fill"
+          filter={["any", IS("aim"), IS("struck")]}
+          paint={{ "fill-color": ["get", "colour"], "fill-opacity": 0.16, "fill-outline-color": ["get", "colour"] }}
+        />
+        <Layer
+          id="warroom-air-edge"
+          type="line"
+          filter={["any", IS("aim"), IS("struck")]}
+          paint={{ "line-color": ["get", "colour"], "line-width": 2 }}
+        />
+        <Layer
+          id="warroom-air-target"
+          type="circle"
+          filter={["any", IS("aim-at"), IS("struck-at")]}
+          paint={{ "circle-radius": 4.5, "circle-color": ["get", "colour"], "circle-stroke-color": "rgba(5, 8, 13, 0.9)", "circle-stroke-width": 1.4 }}
         />
       </Source>
     </>

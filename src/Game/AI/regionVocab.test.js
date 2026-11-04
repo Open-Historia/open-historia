@@ -3,10 +3,13 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import {
   buildRegionOwnershipText,
   buildUnruledBordersText,
+  hasUnruledLand,
   regionTouchingMap,
+  regionTouchingMapSliced,
   regionOwnerName,
   FOCUS_INTRO,
   ROSTER_INTRO,
@@ -499,6 +502,61 @@ test("a sea's box joins nothing: only its shared borders do", () => {
   const text = buildUnruledBordersText(rows, { home: "Brightdale" }, { waterTypes: new Set(["ocean"]), touching: regionTouchingMap(shapes) });
   assert.equal(text.includes("Far Isle"), false);
   assert.equal(text.includes("Isle of Skerry"), false, "the strip runs past the isle's foot without sharing its edge");
+});
+
+test("worked out a slice at a time, the borders are the same, and the page gets to draw", async () => {
+  const shapes = [...ISLES, cell("corner", "Corner", 1, 1)];
+  const whole = regionTouchingMap([...shapes]);
+  let turns = 0;
+  const realNow = performance.now;
+  let clock = 0;
+  performance.now = () => { clock += 5; return clock; };
+  try {
+    const sliced = await regionTouchingMapSliced(shapes, { between: async () => { turns += 1; } });
+    assert.deepEqual([...sliced].map(([id, others]) => [id, [...others].sort()]), [...whole].map(([id, others]) => [id, [...others].sort()]));
+  } finally {
+    performance.now = realNow;
+  }
+  assert.ok(turns > 0, "it let the page draw");
+  assert.equal(regionTouchingMap(shapes), await regionTouchingMapSliced(shapes), "the two keep one answer");
+  assert.deepEqual([...await regionTouchingMapSliced(null)], []);
+});
+
+test("a working out that fails is not handed out again", async () => {
+  const shapes = [...ISLES];
+  const realNow = performance.now;
+  let clock = 0;
+  performance.now = () => { clock += 5; return clock; };
+  try {
+    await assert.rejects(regionTouchingMapSliced(shapes, { between: async () => { throw new Error("stopped"); } }), /stopped/);
+  } finally {
+    performance.now = realNow;
+  }
+  assert.ok((await regionTouchingMapSliced(shapes)).has("home"));
+});
+
+test("two prompts asking at once share one working out", async () => {
+  const shapes = [...ISLES];
+  const [a, b] = await Promise.all([regionTouchingMapSliced(shapes), regionTouchingMapSliced(shapes)]);
+  assert.equal(a, b);
+});
+
+test("unruled land is land nobody holds, and water is not land", () => {
+  const rows = [{ id: "home", name: "Home" }, { id: "wild", name: "Wild" }, { id: "sea", name: "Sea", typeId: "ocean" }];
+  const waterTypes = new Set(["ocean"]);
+  assert.equal(hasUnruledLand(rows, { home: "Brightdale" }, { waterTypes }), true);
+  assert.equal(hasUnruledLand(rows, { home: "Brightdale", wild: "Brightdale" }, { waterTypes }), false);
+  assert.equal(hasUnruledLand(null, {}), false);
+});
+
+test("a prompt keeps a map's borders by its address, and never parses the regions file on the page first", () => {
+  const prompt = fs.readFileSync(new URL("./promptContext.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  assert.match(prompt, /const regionBordersOfThisMap = \(\) => \{\n {2}const url = JSON_URLS\.regionsGeojson;\n {2}if \(regionBorders\.url === url && regionBorders\.work\) return regionBorders\.work;/);
+  assert.match(prompt, /regionBordersInWorker\(url\)\.catch\(\(\) => regionBordersOnThisThread\(url\)\)/);
+  // Every prompt for the map waits on the worker: one that never answers is given up on.
+  assert.match(prompt, /timer = setTimeout\(\(\) => finish\(reject, new Error\("The borders worker did not answer\."\)\), BORDERS_WORKER_MS\);/);
+  assert.match(prompt, /hasUnruledLand\(regionRows, world\.regionOwnershipOverrides, \{ waterTypes \}\)\n\s+\? await regionBordersOfThisMap\(\)/);
+  assert.equal(prompt.includes("regionTouchingMap("), false, "the unsliced one would stop the map for two seconds");
 });
 
 test("the map's shared borders are worked out only when some land is unruled", () => {

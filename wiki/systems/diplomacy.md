@@ -187,20 +187,35 @@ The **Spy** tab of the same panel (**Intelligence** on beta) shows conversations
 part of, as far as your intelligence service can read them. That is a whole system of its own —
 see [espionage](/wiki/espionage/).
 
-## Listen in
+## Rostra
 
 <p class="beta-note"><b>Beta channel only.</b></p>
 
-Leaders are not the only voices. On beta, **Listen in** — on a region's card when you click it on
-the map, and in a country's panel — opens a phone full of what ordinary people who live there are
-posting: the day's news as it reaches a kitchen table, rumours half right, and about one post in
-four about nothing at all. A region's phone has a second tab for the country that holds it,
-**Trending** sums up the talk, and earlier feeds stay further down, by day.
+Leaders do not only write to you. **Rostra**, the world's social network — the third button of the
+toolbar — is where heads of state, ministers, generals, journalists, analysts and business leaders
+post about what each time skip brought, and where, now and then, a celebrity or an ordinary person
+posts about something that has nothing to do with world affairs. Its tabs show everything, your
+country, your **Mentions** (posts that quote you or name your country or leader) and your own posts.
 
-Each new feed is one AI request, made only when a place has nothing kept for that game day or you
-press the refresh button for new posts; opening it again the same day costs nothing. The people
-posting know only what is public. A scenario or a game can switch it off with its **Listen in**
-feature.
+You post as your country's leader: the pen at the top of Rostra opens the box to write in. You can
+quote any post, and the post you quote is shown inside yours. **Poll** in the box turns your post
+into a question with two to four choices: the public of your country votes during the next time
+skip, and the poll then shows how each choice did, how many voted and what the public said. The
+result is public opinion your government has to live with. What you post is public. The next time skip reads it as your
+leader's own words, and the world answers: leaders and journalists quote you back, and allies,
+rivals, markets and crowds act on what you said. Posting costs no AI request; the posts come in
+the answer each time skip already gives. In a shared game every player posts as their own
+country's leader. A scenario or a game can switch it off with its **Social media** feature.
+
+A new game's feed is empty until the first time skip. While it is, Rostra says so and offers
+**Refresh**: one AI request that writes the first posts by the people who make the news. In a
+shared game the posts come with the next time skip.
+
+**Search**, where the Your country tab was, opens on your own country and finds any country or
+region on the map. A place shows what its people of note have posted on Rostra and, on
+**Refresh**, what ordinary people there are posting today, as **Listen in** did: each new place is one AI
+request, and the same place on the same day opens again at no cost. **Check in Rostra** on a
+region's card opens Search on that country; its posts load when you press **Refresh**.
 
 ## The ledgers behind the talk
 

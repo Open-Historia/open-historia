@@ -39,9 +39,7 @@ import {
     updateEntry,
 } from "../AI/providerConfig.js";
 import { formatResetTime } from "../AI/fallbackRunner.js";
-import { contextWindowKey, createContextWindowMemory, describeRememberedWindow } from "../AI/contextWindow.js";
 import { useWorldBackground } from "../Map/useWorldState.js";
-import { endpointIsLocal } from "../AI/localEndpoint.js";
 import { announceRequestBudgetChange, describeJumpCost, requestDay, requestSettings, requestsByTask } from "../AI/requestBudget.js";
 import {
     AI_REQUEST_CONTROL_EVENT,
@@ -749,44 +747,6 @@ const ApiProviderSelector = ({ provider, onProviderChange }) => {
     );
 };
 
-// What each model has said about its context window (contextWindow.js), read
-// from the same storage the AI calls keep it in (main.jsx contextWindows).
-const contextWindowMemory = createContextWindowMemory({
-    getItem: (key) => { try { return localStorage.getItem(key); } catch { return null; } },
-    setItem: (key, value) => { try { localStorage.setItem(key, value); } catch { /* this session only */ } },
-});
-
-// A model's context window: what was learned from its refusals, which keeps a
-// request it cannot fit from being sent to it, and the player's own figure,
-// which beats that. Forget clears either — for a local model whose window was
-// raised, or a provider that raised its limit — and the next request is sent.
-const ContextWindowField = ({ entry }) => {
-    const [, setRevision] = useState(0);
-    if (!entry) return null;
-    const key = contextWindowKey(entry);
-    // Nothing learned from a server on this machine or network is in force
-    // (main.jsx windowIsLearned), so only the player's own figure is shown for it.
-    const known = contextWindowMemory.remembered(key, { trustLearned: !endpointIsLocal(entry.endpoint) });
-    const changed = () => setRevision((value) => value + 1);
-    return (
-        <div>
-        <SettingsInput
-        label="Context window (tokens)"
-        type="number"
-        value={known?.source === "declared" ? String(known.limitTokens) : ""}
-        onChange={(value) => { contextWindowMemory.declare(key, Number(value)); changed(); }}
-        placeholder="Not set"
-        helperText={describeRememberedWindow(known)}
-        />
-        {known && (
-            <button type="button" className="oh-tap-row" onClick={() => { contextWindowMemory.forget(key); changed(); }} style={{ ...smallButtonStyle, marginTop: "-0.5rem", marginBottom: "0.9rem" }}>
-            Forget this window
-            </button>
-        )}
-        </div>
-    );
-};
-
 // How to ask this provider for structured data. "Auto" tries the strongest
 // method and steps down when a gateway ignores it, which is right for almost
 // everyone — but that discovery costs a full generation per rung, and on a slow
@@ -1217,7 +1177,6 @@ const EntryEditor = ({ entry, connections, entries }) => {
         helperText="Replaces the connection's custom parameters for this entry — e.g. the same model with a larger max_tokens, picked by the Time skip task."
         />
         <StructuredModeSelect value={entry.structuredMode} onChange={set("structuredMode")} />
-        <ContextWindowField entry={entry.resolved} />
         </details>
         </>
         )}
@@ -2482,6 +2441,74 @@ const PLAYER_FOCUS_HINTS = {
     spotlight: "The story follows you. At least three quarters of each skip is about you, and the wider world is kept to what matters most.",
 };
 
+const DisplayModeSelector = ({ isFullscreenEnabled, onToggleFullscreen }) => {
+    const stored = useMapSettingValue(MAP_SETTING_KEYS.displayMode, "");
+    const [desktopStatus, setDesktopStatus] = useState(null);
+
+    // Read again whenever the window changes size: Esc, F11 or the window's own
+    // buttons change the mode without this selector.
+    useEffect(() => {
+        let mounted = true;
+        const refresh = () => {
+            fetch("/api/desktop/display-mode")
+                .then((r) => (r.ok ? r.json() : null))
+                .then((data) => {
+                    if (mounted && data?.supported) setDesktopStatus(data);
+                })
+                .catch(() => {});
+        };
+        refresh();
+        window.addEventListener("resize", refresh);
+        return () => {
+            mounted = false;
+            window.removeEventListener("resize", refresh);
+        };
+    }, []);
+
+    const isDesktop = Boolean(desktopStatus?.supported);
+    const activeMode = isDesktop
+        ? (desktopStatus?.mode || stored || "windowed")
+        : (isFullscreenEnabled ? "fullscreen" : "windowed");
+
+    const selectMode = (mode) => {
+        setMapSettingValue(MAP_SETTING_KEYS.displayMode, mode);
+        if (isDesktop) {
+            setDesktopStatus((prev) => (prev ? { ...prev, mode } : { supported: true, mode }));
+            fetch("/api/desktop/display-mode", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ mode }),
+            }).catch(() => {});
+        } else {
+            if (mode === "fullscreen" && !isFullscreenEnabled) onToggleFullscreen();
+            else if (mode !== "fullscreen" && isFullscreenEnabled) onToggleFullscreen();
+        }
+    };
+
+    return (
+        <div style={fieldGroupStyle}>
+            <label style={labelStyle} htmlFor="game-display-mode">Display mode</label>
+            <select
+                id="game-display-mode"
+                style={inputStyle}
+                value={activeMode}
+                onChange={(event) => selectMode(event.target.value)}
+            >
+                <option value="windowed">Windowed</option>
+                {isDesktop && <option value="maximized">Maximized</option>}
+                <option value="fullscreen">Fullscreen</option>
+            </select>
+            <div style={helperStyle}>
+                {activeMode === "maximized"
+                    ? "The game's window fills your screen, with its title bar."
+                    : activeMode === "fullscreen"
+                        ? "The game covers your whole screen, without borders."
+                        : "Runs the game in a standard resizable desktop window."}
+            </div>
+        </div>
+    );
+};
+
 const PlayerFocusSetting = () => {
     // The scenario's default under this game's own choice (server/gameFeatures.js).
     // Kept with the GAME, not on this device: a Spotlight war campaign should not
@@ -2918,7 +2945,7 @@ const SettingsWorkspace = ({
                     <ChatLanguageSelector />
                 </SettingsSection>
                 <SettingsSection title="Display" description="Window and presentation preferences that apply to the game client.">
-                    <Toggle label="Fullscreen" enabled={isFullscreenEnabled} onToggle={onToggleFullscreen} />
+                    <DisplayModeSelector isFullscreenEnabled={isFullscreenEnabled} onToggleFullscreen={onToggleFullscreen} />
                     {/* The vault door shows the first time the game opens after an
                         update (runtime/vaultDoorDue.js); this shows it at every
                         opening. */}

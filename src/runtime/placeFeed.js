@@ -1,8 +1,11 @@
-/*! Open Historia — Listen in: what ordinary people in a place are posting © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-// Listen in opens a phone on a place — one region, or a whole country — and
-// shows what the people who live there are posting (GameUI/ListenInPhone.jsx).
-// The posts are written by ONE AI request (AI/gameplay.js generateListenInFeed)
-// and kept (listenInStore.js), so opening the same place again on the same game
+/*! Open Historia — Rostra's Search: what ordinary people in a place are posting © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
+// Rostra's Search tab (GameUI/social.jsx) opens a place — one region, or a
+// whole country — and shows what the people who live there are posting: Listen
+// in, as it was until 2026-11-02, inside the social network ("integrate the old
+// listen in into rostra by making it so you can search countries or regions in
+// a search tab", the owner, 2026-11-03).
+// The posts are written by ONE AI request (AI/gameplay.js generatePlaceFeed)
+// and kept (placeFeedStore.js), so opening the same place again on the same game
 // day costs nothing: requests are what most players run out of.
 //
 // This file is the plain data and the rules, with no React, no storage and no
@@ -21,10 +24,10 @@ const count = (value, max) => {
   return Number.isFinite(number) && number > 0 ? Math.min(max, number) : 0;
 };
 
-// What a feed holds. The model is asked for ten to twelve posts (the listenIn
+// What a feed holds. The model is asked for ten to twelve posts (the placeFeed
 // prompt); more than this many are not shown.
-export const LISTEN_IN_MAX_POSTS = 14;
-export const LISTEN_IN_MAX_TRENDS = 5;
+export const PLACE_FEED_MAX_POSTS = 14;
+export const PLACE_FEED_MAX_TRENDS = 5;
 const POST_TEXT_LIMIT = 480;
 const NAME_LIMIT = 48;
 const ABOUT_LIMIT = 72;
@@ -35,16 +38,16 @@ const MAX_ENGAGEMENT = 99999999;
 
 // How much is kept: per place the newest batches (scrolling down a feed goes
 // back through the days it was read on), and per game the places read last.
-export const LISTEN_IN_BATCHES_KEPT = 4;
-export const LISTEN_IN_PLACES_KEPT = 24;
+export const PLACE_FEED_BATCHES_KEPT = 4;
+export const PLACE_FEED_PLACES_KEPT = 24;
 
 // --- Places ---------------------------------------------------------------
 
 // A place a feed is about: a region and the country that holds it, or a
 // country as a whole. `polityKey` is the country's stable key, `polity` the
 // name it goes by now; a region nobody holds has neither. Null when there is
-// nothing to listen in on.
-export const listenInPlace = (raw) => {
+// nothing to show.
+export const placeFeedPlace = (raw) => {
   if (!isRecord(raw)) return null;
   const regionId = clean(raw.regionId);
   const polity = clean(raw.polity);
@@ -57,23 +60,23 @@ export const listenInPlace = (raw) => {
 
 // A region's feed is the region's whoever holds it, so it survives a conquest;
 // a country's goes by its stable key, so it survives a change of name.
-export const listenInPlaceKey = (place) => {
-  const target = listenInPlace(place);
+export const placeFeedPlaceKey = (place) => {
+  const target = placeFeedPlace(place);
   if (!target) return "";
   return target.scope === "region" ? `region:${target.regionId}` : `country:${target.polityKey.toLowerCase()}`;
 };
 
 // The same country as a whole, for the phone's switch from a region's feed to
 // the nation's. Null for a region nobody holds.
-export const listenInCountryOf = (place) => {
-  const target = listenInPlace(place);
-  return target?.polityKey ? listenInPlace({ polity: target.polity, polityKey: target.polityKey }) : null;
+export const placeFeedCountryOf = (place) => {
+  const target = placeFeedPlace(place);
+  return target?.polityKey ? placeFeedPlace({ polity: target.polity, polityKey: target.polityKey }) : null;
 };
 
 // The language a feed is written in, by name: the player's own once they have
 // chosen one, else the save's, which is what every other task of the game
 // answers in. A feed is kept per language, so changing either asks afresh.
-export const listenInFeedLanguage = ({ uiLanguage = "en", uiLanguageName = "", saveLanguage = "" } = {}) =>
+export const placeFeedReadingLanguage = ({ uiLanguage = "en", uiLanguageName = "", saveLanguage = "" } = {}) =>
   (clean(uiLanguage) && clean(uiLanguage) !== "en" && clean(uiLanguageName)
     ? clean(uiLanguageName)
     : clean(saveLanguage) || "English");
@@ -107,7 +110,7 @@ const normalizePost = (raw) => {
 
 // The posts of an answer as the phone shows them: malformed ones and repeats
 // left out, newest first, no more than a feed holds.
-export const normalizeListenInPosts = (raw) => {
+export const normalizePlaceFeedPosts = (raw) => {
   const seen = new Set();
   const posts = [];
   for (const entry of Array.isArray(raw) ? raw : []) {
@@ -121,12 +124,12 @@ export const normalizeListenInPosts = (raw) => {
   return posts
     .map((post, index) => ({ post, index }))
     .sort((a, b) => a.post.minutesAgo - b.post.minutesAgo || a.index - b.index)
-    .slice(0, LISTEN_IN_MAX_POSTS)
+    .slice(0, PLACE_FEED_MAX_POSTS)
     .map(({ post }) => post);
 };
 
 // What the place is talking about, as a few short lines.
-export const normalizeListenInTrends = (raw) => {
+export const normalizePlaceFeedTrends = (raw) => {
   const seen = new Set();
   const trends = [];
   for (const entry of Array.isArray(raw) ? raw : []) {
@@ -136,14 +139,14 @@ export const normalizeListenInTrends = (raw) => {
     seen.add(key);
     trends.push(trend);
   }
-  return trends.slice(0, LISTEN_IN_MAX_TRENDS);
+  return trends.slice(0, PLACE_FEED_MAX_TRENDS);
 };
 
 // --- Batches and the store ------------------------------------------------
 
 // One answer as it is kept: the posts written for one place on one game day in
 // one language. `createdAt` is real time, and with the day makes the id.
-export const createListenInBatch = ({ posts, trends, gameDate, round, language, now = Date.now() } = {}) => {
+export const createPlaceFeedBatch = ({ posts, trends, gameDate, round, language, now = Date.now() } = {}) => {
   const date = clean(gameDate);
   const createdAt = Number.isFinite(Number(now)) ? Number(now) : Date.now();
   const id = `${date || "undated"}:${createdAt.toString(36)}`;
@@ -153,14 +156,14 @@ export const createListenInBatch = ({ posts, trends, gameDate, round, language, 
     round: Math.max(0, Math.round(Number(round)) || 0),
     language: clean(language) || "en",
     createdAt,
-    trends: normalizeListenInTrends(trends),
-    posts: normalizeListenInPosts(posts).map((post, index) => ({ ...post, id: `${id}:${index}` })),
+    trends: normalizePlaceFeedTrends(trends),
+    posts: normalizePlaceFeedPosts(posts).map((post, index) => ({ ...post, id: `${id}:${index}` })),
   };
 };
 
 const normalizeBatch = (raw) => {
   if (!isRecord(raw) || !clean(raw.id)) return null;
-  const posts = normalizeListenInPosts(raw.posts).map((post, index) => ({ ...post, id: `${clean(raw.id)}:${index}` }));
+  const posts = normalizePlaceFeedPosts(raw.posts).map((post, index) => ({ ...post, id: `${clean(raw.id)}:${index}` }));
   if (!posts.length) return null;
   return {
     id: clean(raw.id),
@@ -168,23 +171,23 @@ const normalizeBatch = (raw) => {
     round: Math.max(0, Math.round(Number(raw.round)) || 0),
     language: clean(raw.language) || "en",
     createdAt: Number(raw.createdAt) || 0,
-    trends: normalizeListenInTrends(raw.trends),
+    trends: normalizePlaceFeedTrends(raw.trends),
     posts,
   };
 };
 
-export const emptyListenInStore = () => ({ version: 1, places: {} });
+export const emptyPlaceFeedStore = () => ({ version: 1, places: {} });
 
 // What was kept for one game, as read back from storage: anything malformed is
 // dropped rather than trusted.
-export const normalizeListenInStore = (raw) => {
-  const store = emptyListenInStore();
+export const normalizePlaceFeedStore = (raw) => {
+  const store = emptyPlaceFeedStore();
   for (const entry of Object.values(isRecord(raw?.places) ? raw.places : {})) {
-    const place = listenInPlace(entry?.place);
-    const key = listenInPlaceKey(place);
+    const place = placeFeedPlace(entry?.place);
+    const key = placeFeedPlaceKey(place);
     const batches = (Array.isArray(entry?.batches) ? entry.batches : []).map(normalizeBatch).filter(Boolean);
     if (!key || !batches.length) continue;
-    store.places[key] = { place, openedAt: Number(entry.openedAt) || 0, batches: batches.slice(0, LISTEN_IN_BATCHES_KEPT) };
+    store.places[key] = { place, openedAt: Number(entry.openedAt) || 0, batches: batches.slice(0, PLACE_FEED_BATCHES_KEPT) };
   }
   return store;
 };
@@ -195,8 +198,8 @@ const fromNoLaterThan = (gameDate) => (batch) =>
   !isGameDate(gameDate) || !isGameDate(batch.gameDate) || compareGameDates(batch.gameDate, gameDate) <= 0;
 
 // What the phone shows for a place today: the kept batches, newest day first.
-export const listenInTimeline = (store, place, { gameDate = "" } = {}) => {
-  const entry = store?.places?.[listenInPlaceKey(place)];
+export const placeFeedTimeline = (store, place, { gameDate = "" } = {}) => {
+  const entry = store?.places?.[placeFeedPlaceKey(place)];
   if (!entry) return [];
   return entry.batches
     .filter(fromNoLaterThan(clean(gameDate)))
@@ -205,37 +208,90 @@ export const listenInTimeline = (store, place, { gameDate = "" } = {}) => {
 
 // The batch that already answers for this place today in this language, or
 // null: opening the phone then asks for one. Refreshing asks regardless.
-export const currentListenInBatch = (store, place, { gameDate = "", language = "en" } = {}) => {
+export const currentPlaceFeedBatch = (store, place, { gameDate = "", language = "en" } = {}) => {
   const date = clean(gameDate);
-  return listenInTimeline(store, place, { gameDate: date })
+  return placeFeedTimeline(store, place, { gameDate: date })
     .find((batch) => batch.gameDate === date && batch.language === (clean(language) || "en")) ?? null;
 };
 
 // The store with a new batch on top of its place. Bounded: a place keeps its
 // newest batches, a game the places read last, and batches from a day after
 // the new one (a turn taken back) go.
-export const addListenInBatch = (store, place, batch, { now = Date.now() } = {}) => {
-  const target = listenInPlace(place);
-  const key = listenInPlaceKey(target);
+export const addPlaceFeedBatch = (store, place, batch, { now = Date.now() } = {}) => {
+  const target = placeFeedPlace(place);
+  const key = placeFeedPlaceKey(target);
   const fresh = normalizeBatch(batch);
-  const current = normalizeListenInStore(store);
+  const current = normalizePlaceFeedStore(store);
   if (!key || !fresh) return current;
   const earlier = (current.places[key]?.batches ?? [])
     .filter((entry) => entry.id !== fresh.id)
     .filter(fromNoLaterThan(fresh.gameDate));
-  const places = { ...current.places, [key]: { place: target, openedAt: Number(now) || 0, batches: [fresh, ...earlier].slice(0, LISTEN_IN_BATCHES_KEPT) } };
+  const places = { ...current.places, [key]: { place: target, openedAt: Number(now) || 0, batches: [fresh, ...earlier].slice(0, PLACE_FEED_BATCHES_KEPT) } };
   const kept = Object.entries(places)
     .sort(([, a], [, b]) => b.openedAt - a.openedAt)
-    .slice(0, LISTEN_IN_PLACES_KEPT);
+    .slice(0, PLACE_FEED_PLACES_KEPT);
   return { version: 1, places: Object.fromEntries(kept) };
+};
+
+// --- Finding a place ------------------------------------------------------
+
+// Folded for matching: no case, no accents ("Bogotá" is found by "bogota").
+const searchFold = (value) => clean(value).normalize("NFKD").replace(/\p{M}+/gu, "").toLocaleLowerCase();
+
+// The places a search names, best first: the countries, then the regions,
+// whose names begin with what was typed before those that only contain it.
+// `countries` the names of the countries the map knows; `regions` the map's
+// regions as { id, name, owner }, owner the name of the country holding it now
+// ("" for none). Answers places as placeFeedPlace reads them, each with a line
+// saying what it is.
+export const PLACE_FEED_SEARCH_LIMIT = 12;
+export const placeFeedSearch = ({ query = "", countries = [], regions = [], limit = PLACE_FEED_SEARCH_LIMIT } = {}) => {
+  const wanted = searchFold(query);
+  if (!wanted) return [];
+  const rank = (name) => {
+    const folded = searchFold(name);
+    if (folded === wanted) return 0;
+    if (folded.startsWith(wanted)) return 1;
+    if (folded.split(/[\s\-'’.,()]+/).some((word) => word.startsWith(wanted))) return 2;
+    return folded.includes(wanted) ? 3 : -1;
+  };
+  const found = [];
+  const seen = new Set();
+  for (const name of Array.isArray(countries) ? countries : []) {
+    const polity = clean(name);
+    const score = rank(polity);
+    if (score < 0 || seen.has(`country:${polity.toLowerCase()}`)) continue;
+    seen.add(`country:${polity.toLowerCase()}`);
+    found.push({ score, order: 0, place: placeFeedPlace({ polity, polityKey: polity }) });
+  }
+  for (const region of Array.isArray(regions) ? regions : []) {
+    const name = clean(region?.name);
+    const score = rank(name);
+    if (score < 0 || !clean(region?.id) || seen.has(`region:${clean(region.id)}`)) continue;
+    seen.add(`region:${clean(region.id)}`);
+    const owner = clean(region?.owner);
+    found.push({ score, order: 1, place: placeFeedPlace({ regionId: region.id, regionName: name, polity: owner, polityKey: owner }) });
+  }
+  return found
+    .filter((entry) => entry.place)
+    .sort((a, b) => a.score - b.score || a.order - b.order || placeFeedPlaceTitle(a.place).localeCompare(placeFeedPlaceTitle(b.place)))
+    .slice(0, Math.max(0, Number(limit) || 0))
+    .map((entry) => entry.place);
+};
+
+// A place's name as a header shows it: the region, or the country.
+export const placeFeedPlaceTitle = (place) => {
+  const target = placeFeedPlace(place);
+  if (!target) return "";
+  return target.scope === "region" ? target.regionName : target.polity;
 };
 
 // --- When the phone asks --------------------------------------------------
 
 // A feed's request, named: one runs at a time per game, place, game day and
 // language, and the phone joins it rather than starting another.
-export const listenInRequestKey = ({ gameId = "", place, gameDate = "", language = "" } = {}) => {
-  const key = listenInPlaceKey(place);
+export const placeFeedRequestKey = ({ gameId = "", place, gameDate = "", language = "" } = {}) => {
+  const key = placeFeedPlaceKey(place);
   return key ? [clean(gameId), key, clean(gameDate), clean(language) || "en"].join("|") : "";
 };
 
@@ -247,10 +303,10 @@ export const listenInRequestKey = ({ gameId = "", place, gameDate = "", language
 // once per opening — after the request has been made, has failed or is still
 // running, only the player's own press (Load new posts, Try again) asks again,
 // so nothing that comes back, or fails to, can make the phone ask in a loop.
-export const listenInFeedView = ({ store, place, gameDate = "", language = "en", asked = false, loading = false, failed = false } = {}) => {
-  const ready = Boolean(store) && Boolean(listenInPlace(place));
-  const batches = ready ? listenInTimeline(store, place, { gameDate }) : [];
-  const current = ready ? currentListenInBatch(store, place, { gameDate, language }) : null;
+export const placeFeedView = ({ store, place, gameDate = "", language = "en", asked = false, loading = false, failed = false } = {}) => {
+  const ready = Boolean(store) && Boolean(placeFeedPlace(place));
+  const batches = ready ? placeFeedTimeline(store, place, { gameDate }) : [];
+  const current = ready ? currentPlaceFeedBatch(store, place, { gameDate, language }) : null;
   const shouldAsk = ready && !current && !asked && !loading && !failed;
   return {
     ready,
@@ -268,7 +324,7 @@ export const listenInFeedView = ({ store, place, gameDate = "", language = "en",
 // The line above a batch in the feed. A feed read on an earlier day says which
 // day; an earlier one of the same day says only that it is earlier; the newest
 // of today says nothing.
-export const listenInBatchLine = (batches, index, gameDate = "") => {
+export const placeFeedBatchLine = (batches, index, gameDate = "") => {
   const batch = Array.isArray(batches) ? batches[index] : null;
   if (!batch) return null;
   const before = index > 0 ? batches[index - 1].gameDate : clean(gameDate);
@@ -282,7 +338,7 @@ export const listenInBatchLine = (batches, index, gameDate = "") => {
 // same for the same name.
 const AVATAR_COLOURS = ["#3f6f9f", "#2f8577", "#5a8a45", "#8a7f3a", "#b0792a", "#b8643a", "#a44e48", "#5f6875"];
 
-export const listenInAvatar = (author) => {
+export const placeFeedAvatar = (author) => {
   const name = clean(author);
   const words = name.split(/[\s._-]+/).filter(Boolean);
   const letter = (word) => Array.from(word)[0] ?? "";
@@ -303,7 +359,7 @@ const formatter = (build, language) => {
 };
 
 // How long ago a post was written, as a feed prints it: "now", "5m", "3h", "2d".
-export const listenInAgeLabel = (minutesAgo, language = "en") => {
+export const placeFeedAgeLabel = (minutesAgo, language = "en") => {
   const minutes = count(minutesAgo, MAX_MINUTES_AGO);
   if (minutes < 1) return formatter((code) => new Intl.RelativeTimeFormat(code, { numeric: "auto" }), language).format(0, "second");
   const [value, unit] = minutes < 60 ? [minutes, "minute"] : minutes < 1440 ? [Math.floor(minutes / 60), "hour"] : [Math.floor(minutes / 1440), "day"];
@@ -311,7 +367,7 @@ export const listenInAgeLabel = (minutesAgo, language = "en") => {
 };
 
 // A like or reply count, as a feed prints it: "0" is printed as nothing, 1,240 as "1.2K".
-export const listenInCountLabel = (value, language = "en") => {
+export const placeFeedCountLabel = (value, language = "en") => {
   const number = count(value, MAX_ENGAGEMENT);
   if (!number) return "";
   return formatter((code) => new Intl.NumberFormat(code, { notation: "compact", maximumFractionDigits: 1 }), language).format(number);

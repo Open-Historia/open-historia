@@ -52,6 +52,7 @@ import { closeDay, stepForward } from "./combat.js";
 import { dusk } from "./dawn.js";
 import { countHolders, redistance, resampleField, takeCells, traceContour } from "./field.js";
 import { createFrame, frameBounds, latToY, projectorOf, yToLat } from "./frame.js";
+import { measureOptions } from "./worldGrid.js";
 import { measure } from "./ground.js";
 import { measureLine } from "./line.js";
 import { moveDay } from "./move.js";
@@ -60,6 +61,7 @@ import { createReplayRecorder } from "./replay.js";
 import { readSectors } from "./sectors.js";
 import { markPockets, markSupply, refreshSupply, settlePockets } from "./supply.js";
 import { drawTraits, isLive, liveCount, stands } from "./troops.js";
+import { OWN_GROUND_PACE } from "./march.js";
 
 // What a run throws, and catches, when it needs the map's shapes and was not
 // given them: the caller is told, and runs again with the regions.
@@ -372,7 +374,8 @@ const growWithin = (battle, run) => {
     for (let index = 0; index < battle.arena.size; index += 1) if (battle.arena.speed[index] > fastest) fastest = battle.arena.speed[index];
     let least = Infinity;
     for (let row = 0; row < battle.place.rowKm.length; row += 1) if (battle.place.rowKm[row] < least) least = battle.place.rowKm[row];
-    const stepKm = Math.max(run.advanceKm[0], run.advanceKm[1], run.advanceKm[2]) * run.pace * TRAIT_DRIVE[1] * fastest;
+    // (Marching, a step over its own side's ground is the fastest: march.js.)
+    const stepKm = Math.max(run.advanceKm[0], run.advanceKm[1], run.advanceKm[2]) * run.pace * TRAIT_DRIVE[1] * fastest * (run.mech?.marching === true ? OWN_GROUND_PACE : 1);
     battle.within = Math.max(GROW_WITHIN_CELLS, Math.ceil(stepKm / least) + 2);
     battle.withinFor = battle.arena;
   }
@@ -421,7 +424,7 @@ const largerFrame = (frame, grow, map, within) => {
   const [, highLat] = projectorOf(frame).toLngLat(0, rows - south);
   return createFrame(
     { west: bounds.west - west * frame.cell, east: bounds.west + (cols - west) * frame.cell, south: lowLat, north: highLat },
-    { flat: map.flat === true, scale: map.scale },
+    measureOptions(map),
   );
 };
 

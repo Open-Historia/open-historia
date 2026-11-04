@@ -88,7 +88,7 @@ test("the war's figures are in every prompt where a country at war speaks or dec
   assert.ok(skip.includes(`\n${WAR_STATS_HEADING}\n`) && skip.includes("Borduria:\n- The Border War:"), skip);
   // A leader's reply in a one-on-one chat.
   const main = read("main.jsx");
-  const leader = main.slice(main.indexOf("export async function buildDiplomaticSystemPrompt("), main.indexOf("let advisorHistory = [];"));
+  const leader = main.slice(main.indexOf("export async function buildDiplomaticSystemPrompt("), main.indexOf("const advisorSessions = createAdvisorSessionRegistry();"));
   assert.ok(leader.includes("const wars = speaker ? buildWarStatsBlock({ world: worldData, countries: [speaker], heading: OWN_WARS_HEADING, max: 1800 }) : \"\";"));
   assert.ok(leader.includes("describePeaceTalk({ world: worldData, speaker, player: playerName, form: \"line\" })"));
   assert.ok(leader.includes("${wars ? `\\n\\n${wars}` : \"\"}${peaceTalk ? `\\n\\n${peaceTalk}` : \"\"}"));
@@ -181,7 +181,7 @@ test("an offer of peace no longer pops up over the map, and the skip's contract 
   assert.ok(chat.includes("{(peaceByMessage.get(String(msg.id ?? \"\")) ?? []).map(renderPeaceCard)}") && chat.includes("{strandedPeace.map(renderPeaceCard)}"));
   // The letter's terms and the treaties' lines ride in the skip's one answer: no array bounds (Gemini rejects them).
   const outreach = GAMEPLAY_TOOLS.jumpForward.schema.properties.diplomaticOutreach;
-  assert.deepEqual(Object.keys(outreach.items.properties.peaceOffer.properties), ["territory", "reparationsPayer", "reparationsPercent", "reparationsYears"]);
+  assert.deepEqual(Object.keys(outreach.items.properties.peaceOffer.properties), ["territory", "reparationsPayer", "reparationsPercent", "reparationsYears", "moreTerms"]);
   assert.equal(GAMEPLAY_TOOLS.jumpForward.schema.properties.peaceTreaties.type, "string");
   const bounded = JSON.stringify(outreach.items.properties.peaceOffer).match(/minItems|maxItems/g);
   assert.equal(bounded, null);

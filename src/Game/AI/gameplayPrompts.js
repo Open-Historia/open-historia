@@ -189,6 +189,32 @@ export const PROMPT_SECTION_DEFINITIONS = [
     type: "task",
   },
   {
+    description: "A polity's government and its main parties or factions, for the Politics tab.",
+    helpers: [
+      "PLAYER_POLITY",
+      "ORIGIN_ROUND_DATE",
+      "HISTORICAL_PRESET_SIMULATION_RULES",
+      "GRAND_MAP_DESCRIPTION",
+      "PREVIOUS_ROUND_EVENTS",
+    ],
+    key: "politicalLandscape",
+    label: "Political Landscape",
+    type: "task",
+  },
+  {
+    description: "How far the player's standing goal has come, for the Actions panel.",
+    helpers: [
+      "PLAYER_POLITY",
+      "ORIGIN_ROUND_DATE",
+      "HISTORICAL_PRESET_SIMULATION_RULES",
+      "GRAND_MAP_DESCRIPTION",
+      "PREVIOUS_ROUND_EVENTS",
+    ],
+    key: "goalProgress",
+    label: "Goal Progress",
+    type: "task",
+  },
+  {
     description: "Structured national statistics for the selected polity.",
     key: "countryStatSheet",
     label: "Country Stat Sheet",
@@ -262,9 +288,15 @@ export const PROMPT_SECTION_DEFINITIONS = [
     type: "task",
   },
   {
-    description: "What ordinary people in a place are posting: the feed the Listen in button opens from a region's card or a country's panel. Whether the button is there at all is the Features tab's Listen in switch.",
-    key: "listenIn",
-    label: "Listen In",
+    description: "The first posts on Rostra, the social network: what the people who make the news write when the player presses Refresh on an empty feed.",
+    key: "rostraFeed",
+    label: "Rostra Refresh",
+    type: "task",
+  },
+  {
+    description: "What ordinary people in a place are posting: the feed Rostra's Search tab opens on a country or a region. It is there while the game has social media (the Features tab's Social media switch).",
+    key: "placeFeed",
+    label: "Rostra Search",
     type: "task",
   },
   {

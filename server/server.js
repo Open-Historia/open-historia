@@ -782,6 +782,29 @@ app.post("/api/multiplayer/engine/close", (req, res) => {
   res.json(engine.close());
 });
 
+// Desktop display mode (fullscreen, maximized, windowed). Only the machine
+// running the game has the window: another device on the network is told there
+// is none, so its own Settings keep its own fullscreen switch.
+const desktopDisplayMode = (req) => (isLoopbackAddress(req.socket?.remoteAddress) ? globalThis.__ohDisplayMode || null : null);
+app.get("/api/desktop/display-mode", (req, res) => {
+  const bridge = desktopDisplayMode(req);
+  res.json(bridge ? bridge.get() : { supported: false, mode: "windowed" });
+});
+
+app.post("/api/desktop/display-mode", (req, res) => {
+  const bridge = desktopDisplayMode(req);
+  const mode = String(req.body?.mode || "").trim().toLowerCase();
+  if (!["fullscreen", "maximized", "windowed"].includes(mode)) {
+    res.status(400).json({ error: "Invalid display mode" });
+    return;
+  }
+  if (!bridge) {
+    res.json({ supported: false, mode });
+    return;
+  }
+  res.json(bridge.set(mode));
+});
+
 app.get("/api/scenarios/:scenarioId", (req, res) => {
   try {
     res.json(getScenarioDetails(req.params.scenarioId));

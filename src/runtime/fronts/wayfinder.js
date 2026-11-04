@@ -300,8 +300,8 @@ export const findWay = (grid, { medium = "sea", from, to, holderOf = () => "", f
         if (wrap) x = (x + cols) % cols;
         else if (x < 0 || x >= cols) continue;
         const next = y * cols + x;
-        // (A step's length is its row's: along it, down a column, or aslant between this row and the next.)
-        visit(next, dy === 0 ? grid.stepKm.along[row] : dx === 0 ? grid.stepKm.down : grid.stepKm.aslant[dy < 0 ? y : row]);
+        // (A step's length is its row's: along it, down a column (the same everywhere on a globe), or aslant between this row and the next.)
+        visit(next, dy === 0 ? grid.stepKm.along[row] : dx === 0 ? (grid.stepKm.downRow ? grid.stepKm.downRow[dy < 0 ? y : row] : grid.stepKm.down) : grid.stepKm.aslant[dy < 0 ? y : row]);
       }
     }
     const cut = cuts.get(cell);

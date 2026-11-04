@@ -11,9 +11,11 @@ import {
   buildCanonicalWarContext,
   decodeWarUpdates,
   eventNarratesHardCombat,
+  interpretWarLedger,
   reconcileCombatWarState,
   repairWarLedgerPayload,
   splitWarStartNote,
+  validateCanonicalWarEvents,
   validatePregameWarBootstrap,
   validateWarLedgerPayload,
   warUpdateProseLines,
@@ -212,9 +214,19 @@ test("Round-Zero still fails closed on invalid war baselines", () => {
   assert.match(reversedDates.error, /predates an earlier transition/);
 });
 
-test("a declaration with no matching warUpdates record is rejected", () => {
-  const error = validateWarLedgerPayload({ events: declaration(), warUpdates: "" }, { world });
-  assert.match(error, /narrates a canonical war transition but has no matching warUpdates record/);
+test("a declaration with no record is recorded from its war id and two combatants, and is narrative without them", () => {
+  // Its title reading like a declaration used to be refused outright; the
+  // event says who fights whom and under what id, which is the record.
+  const candidate = { events: [{ ...declaration()[0], combatants: ["Germany", "France"] }], warUpdates: "" };
+  interpretWarLedger(candidate, { world });
+  assert.deepEqual(decodeWarUpdates(candidate.warUpdates).map((update) => [update.id, update.op, update.actors, update.opponents]),
+    [["war-france-germany-1914", "start", ["Germany"], ["France"]]]);
+  assert.equal(validateWarLedgerPayload(candidate, { world }), "");
+  // Without its sides the engine has nothing to record, and the title is narrative.
+  const bare = { events: [{ ...declaration()[0], warId: "" }], warUpdates: "" };
+  interpretWarLedger(bare, { world });
+  assert.deepEqual(decodeWarUpdates(bare.warUpdates), []);
+  assert.equal(validateWarLedgerPayload(bare, { world }), "");
 });
 
 test("hard combat without a canonical war is rejected", () => {
@@ -693,20 +705,27 @@ test("what the ledger calls hard combat can open the war it is told it needs", (
   assert.equal(validateWarLedgerPayload(candidate, { world }), "");
 });
 
-test("a deployment, an exercise or a charm offensive still opens no war, whatever record is put on it", () => {
-  const refused = (title, description, kind = "military") => {
-    const candidate = {
-      events: [ongoing("e1", "2016-03-01", title, description, "war-poland-belarus-2016", ["Poland", "Belarus"], kind)],
-      warUpdates: "war-poland-belarus-2016~start~Poland~Belarus~1~title: A war nobody is fighting",
-    };
-    return validateWarLedgerPayload(candidate, { world });
-  };
-  assert.match(refused("Polish 18th Division Deploys to the Suwalki Gap", "Warsaw moves a mechanised division to the border and raises readiness."), /cannot create a canonical war/);
-  assert.match(refused("Anakonda Exercise Simulates an Attack on the Suwalki Gap", "A training attack by two brigades; attack helicopters and main battle tanks take part in the drill."), /cannot create a canonical war/);
-  assert.match(refused("Warsaw Launches a Diplomatic Offensive Over the Border", "Envoys tour European capitals.", "diplomacy"), /cannot create a canonical war/);
-  assert.match(refused("Combat Battlegroup Arrives at Orzysz", "A NATO combat battlegroup takes up its barracks."), /cannot create a canonical war/);
-  assert.match(refused("Army Declares Its Brigades Ready for Offensive Operations", "The general staff reports full offensive capability on the front line."), /cannot create a canonical war/);
-  assert.match(refused("Allied Forces Push East to Reassure the Baltic States", "Two battalions take up positions near the border."), /cannot create a canonical war/);
+test("a record opens its war whatever its event's words; an exercise is the one wording that does not", () => {
+  // The record the model wrote is what says the war began. Its event used to
+  // have to hold one of the English word lists, and since the skip writes in
+  // the player's own language (2026-10-30) no Italian or Russian world could
+  // open a war at all (a player's report, 2026-11-02).
+  const opened = (title, description, kind = "military") => validateWarLedgerPayload({
+    events: [ongoing("e1", "2016-03-01", title, description, "war-poland-belarus-2016", ["Poland", "Belarus"], kind)],
+    warUpdates: "war-poland-belarus-2016~start~Poland~Belarus~1~title: Polish–Belarusian War",
+  }, { world });
+  assert.equal(opened("Polish 18th Division Deploys to the Suwalki Gap", "Warsaw moves a mechanised division to the border and raises readiness."), "");
+  assert.equal(opened("La Polonia dichiara guerra alla Bielorussia", "Scaduto l'ultimatum dell'ONU, Varsavia apre le ostilità.", "diplomacy"), "");
+  assert.equal(opened("Польша объявляет войну Беларуси", "Ультиматум ООН истёк."), "");
+  assert.match(opened("Anakonda Exercise Simulates an Attack on the Suwalki Gap", "A training attack by two brigades; attack helicopters and main battle tanks take part in the drill."), /describes an exercise or drill/);
+  // The Game Master's records are the administrator's orders: no veto at all.
+  const gm = validateCanonicalWarEvents({
+    events: [ongoing("e1", "2016-03-01", "Anakonda Exercise Turns Into an Invasion Plan", "A drill on the border.", "war-poland-belarus-2016", [], "military")],
+    updates: decodeWarUpdates("war-poland-belarus-2016~start~Poland~Belarus~1~"),
+    world,
+    authority: "gm",
+  });
+  assert.equal(gm, "");
 });
 
 test("the engine still makes up no war of its own from the wider wording", () => {
@@ -729,14 +748,14 @@ test("the engine still makes up no war of its own from the wider wording", () =>
 test("the last attempt's repair drops a war at a time: a refused start costs its own war only", () => {
   // The Iraqi start sits on an event that narrates no fighting at all, and the
   // Syrian one is sound. Every record of the turn used to go.
-  const budget = ongoing("e1", "2016-01-04", "Iraqi Parliament Approves an Emergency War Budget", "Baghdad votes the army another year of funding.", "war-iraq-isis-2014", [], "politics");
+  const budget = ongoing("e1", "2016-01-04", "Iraqi Army Holds a Training Exercise Outside Baghdad", "Brigades rehearse urban clearing in a drill.", "war-iraq-isis-2014", [], "military");
   const candidate = { events: [budget, ALEPPO()], warUpdates: `${IRAQ_START}\n${SYRIA_START}` };
-  assert.match(validateWarLedgerPayload(candidate, { world }), /war-iraq-isis-2014 \(start\) cannot create a canonical war/);
+  assert.match(validateWarLedgerPayload(candidate, { world }), /war-iraq-isis-2014 \(start\) is tied to .*exercise or drill/);
   const repair = quietly(() => repairWarLedgerPayload(candidate, { world }));
   assert.deepEqual(repair.droppedIds, ["war-iraq-isis-2014"]);
   assert.deepEqual(decodeWarUpdates(candidate.warUpdates).map((update) => update.id), ["war-syrian-civil-2011"]);
   assert.equal(repair.strippedEvents, 1);
-  assert.equal(candidate.events[0].warId, "", "the budget vote is narrative");
+  assert.equal(candidate.events[0].warId, "", "the exercise is narrative");
   assert.equal(candidate.events[1].warId, "war-syrian-civil-2011", "the advance is still the Syrian war's");
   assert.equal(repair.residual, "");
 });
@@ -782,4 +801,18 @@ test("the repair drops a join that cannot be made and keeps the war it was joini
   assert.deepEqual(decodeWarUpdates(candidate.warUpdates).map((update) => `${update.id}:${update.op}`), ["war-yemen-2015:start"]);
   assert.deepEqual(repair.droppedIds, ["war-yemen-2015"]);
   assert.equal(repair.strippedEvents, 0);
+});
+
+test("a join goes against the opponents it names, whatever its letter says (#892)", () => {
+  const atWar = { polityOverrides: {}, wars: [{ id: "war-ukraine", status: "active", sideA: ["Russia"], sideB: ["Ukraine"], startedDate: "2022-02-24" }] };
+  const join = (record) => applyWarUpdates({ world: atWar, updates: decodeWarUpdates(record), events: [], stopDate: "2026-02-01", round: 3 }).wars[0];
+  // The letter backwards: "join-a" with Russia, side A, named as the enemy.
+  const backwards = join("war-ukraine~join-a~United Kingdom~Russia~~UK enters the war");
+  assert.deepEqual(backwards.sideA, ["Russia"]);
+  assert.deepEqual(backwards.sideB, ["Ukraine", "United Kingdom"]);
+  // No opponents named: the letter is all there is.
+  assert.deepEqual(join("war-ukraine~join-b~United Kingdom~~~").sideB, ["Ukraine", "United Kingdom"]);
+  assert.deepEqual(join("war-ukraine~join-a~Belarus~~~").sideA, ["Russia", "Belarus"]);
+  // Opponents on both sides say nothing: the letter again.
+  assert.deepEqual(join("war-ukraine~join-a~Belarus~Ukraine,Russia~~").sideA, ["Russia", "Belarus"]);
 });

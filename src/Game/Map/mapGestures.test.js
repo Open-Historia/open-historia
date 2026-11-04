@@ -215,6 +215,9 @@ const wheelEvent = (deltaY, { deltaX = 0, deltaMode = 0, ctrlKey = false, client
   preventDefault() { this.prevented = true; },
 });
 
+// A trackpad step with Shift held: the scroll that turns and tilts the map.
+const turnEvent = (deltaY, options = {}) => wheelEvent(deltaY, { ...options, shiftKey: true });
+
 // The map with the gestures attached, a clock and timers of the test's own.
 const rig = (mapOptions, options = {}) => {
   const map = fakeMap(mapOptions);
@@ -310,9 +313,9 @@ test("a timer that runs late does not lose the held notch", () => {
   assert.equal(timers.size, 0);
 });
 
-test("two fingers on a trackpad turn and tilt the map, and MapLibre never zooms on them", () => {
+test("two fingers on a trackpad with Shift held turn and tilt the map, and MapLibre never zooms on them", () => {
   const { map, wheel } = rig();
-  const first = wheel(wheelEvent(2, { deltaX: -1 }));
+  const first = wheel(turnEvent(2, { deltaX: -1 }));
   assert.equal(first.stopped, true);
   assert.equal(first.prevented, true);
   assert.equal(map.copies.length, 0);
@@ -331,7 +334,7 @@ test("two fingers on a trackpad turn and tilt the map, and MapLibre never zooms 
   // Steps while it eases carry on from where the last was going, not from where the map has got to,
   // however long after the last they come (a slow machine's steps land 150 ms apart).
   map.camera = { bearing: 0.2, pitch: 0.3 };
-  wheel(wheelEvent(3, { deltaX: -2 }), 150);
+  wheel(turnEvent(3, { deltaX: -2 }), 150);
   assert.equal(map.eases.length, 2);
   near(map.eases[1].bearing, 3 * TURN_DEGREES_PER_PX);
   near(map.eases[1].pitch, 5 * TILT_DEGREES_PER_PX);
@@ -339,11 +342,11 @@ test("two fingers on a trackpad turn and tilt the map, and MapLibre never zooms 
   // After the ease has ended a step starts from where the map is.
   map.settle();
   map.camera.bearing = 40;
-  wheel(wheelEvent(1), 500);
+  wheel(turnEvent(1), 500);
   assert.equal(map.eases.at(-1).bearing, 40);
   // And after a drag stopped it part of the way.
   map.interrupt({ bearing: -12, pitch: 7 });
-  wheel(wheelEvent(1), 8);
+  wheel(turnEvent(1), 8);
   assert.equal(map.eases.at(-1).bearing, -12);
   near(map.eases.at(-1).pitch, 7 + TILT_DEGREES_PER_PX);
   assert.equal(map.copies.length, 0);
@@ -351,7 +354,7 @@ test("two fingers on a trackpad turn and tilt the map, and MapLibre never zooms 
 
 test("one step of a turn settles in 60% of its ease, the rest holding the move open", () => {
   const { map, wheel } = rig();
-  wheel(wheelEvent(2));
+  wheel(turnEvent(2));
   const { easing, duration } = map.eases[0];
   assert.equal(duration, 200, "as long as MapLibre's wait before its zoomend");
   assert.equal(easing(0), 0);
@@ -362,9 +365,9 @@ test("one step of a turn settles in 60% of its ease, the rest holding the move o
 
 test("a trackpad's scroll whose first step is held turns the map with that step's scroll too", () => {
   const { map, wheel, timers } = rig();
-  wheel(wheelEvent(12));
+  wheel(turnEvent(12));
   assert.equal(map.eases.length, 0);
-  wheel(wheelEvent(10), 8);
+  wheel(turnEvent(10), 8);
   assert.equal(timers.size, 0);
   assert.equal(map.copies.length, 0, "no zoom at the start of a turn");
   assert.equal(map.eases.length, 1);
@@ -373,26 +376,59 @@ test("a trackpad's scroll whose first step is held turns the map with that step'
 
 test("the tilt stops at the map's limits, and scrolling back moves it at once", () => {
   const { map, wheel } = rig({ pitch: 50, maxPitch: 60 });
-  wheel(wheelEvent(2));
-  for (let step = 0; step < 40; step += 1) wheel(wheelEvent(3.5), 8);
+  wheel(turnEvent(2));
+  for (let step = 0; step < 40; step += 1) wheel(turnEvent(3.5), 8);
   assert.equal(map.eases.at(-1).pitch, 60);
-  wheel(wheelEvent(-3), 8);
+  wheel(turnEvent(-3), 8);
   assert.equal(map.eases.at(-1).pitch, 60 - 3 * TILT_DEGREES_PER_PX, "the overshoot was not stored up");
   const flat = rig({ pitch: 1 });
-  flat.wheel(wheelEvent(-3.9));
+  flat.wheel(turnEvent(-3.9));
   assert.equal(flat.map.eases.at(-1).pitch, 0);
 });
 
 test("with Reduce motion on, each step of a turn is taken at once", () => {
   let still = true;
   const { map, wheel } = rig({}, { still: () => still });
-  wheel(wheelEvent(2, { deltaX: -2 }));
+  wheel(turnEvent(2, { deltaX: -2 }));
   assert.equal(map.eases[0].easing(0), 1);
   assert.equal(map.eases[0].easeId, "oh-trackpad-turn", "still one move for the whole scroll");
   still = false;
   map.settle();
-  wheel(wheelEvent(2), 500);
+  wheel(turnEvent(2), 500);
   assert.ok(map.eases.at(-1).easing(0.1) < 1);
+});
+
+test("without Shift two fingers on a trackpad zoom: MapLibre has the scroll, and the map does not turn", () => {
+  const { map, wheel, timers } = rig();
+  const first = wheel(wheelEvent(2, { deltaX: -1 }));
+  assert.equal(first.stopped, false, "MapLibre zooms on it at its trackpad rate");
+  assert.equal(first.prevented, false);
+  wheel(wheelEvent(3), 8);
+  assert.equal(map.eases.length, 0, "no turn, no tilt");
+  assert.equal(map.copies.length, 0);
+  // A first step held 40 ms, then settled as a trackpad's, also leaves the next step to MapLibre.
+  wheel(wheelEvent(12), 600);
+  assert.equal(timers.size, 1);
+  const settling = wheel(wheelEvent(10), 8);
+  assert.equal(settling.stopped, false);
+  assert.equal(timers.size, 0);
+  assert.equal(map.eases.length, 0);
+  // Shift pressed mid-scroll turns from that step on, and letting it go zooms again.
+  wheel(turnEvent(2), 8);
+  assert.equal(map.eases.length, 1);
+  const after = wheel(wheelEvent(2), 8);
+  assert.equal(after.stopped, false);
+  assert.equal(map.eases.length, 1);
+});
+
+test("a mouse wheel with Shift held still zooms, also when the browser turned its scroll sideways", () => {
+  const { map, wheel, wait } = rig();
+  wheel(wheelEvent(0, { deltaX: 100, shiftKey: true }));
+  wait(LONE_EVENT_MS);
+  assert.equal(map.copies.length, 1);
+  assert.equal(map.copies[0].deltaY, asMouseWheel(100));
+  assert.equal(map.copies[0].shiftKey, true, "finer, as MapLibre zooms with Shift");
+  assert.equal(map.eases.length, 0);
 });
 
 test("a pinch zooms as before: MapLibre has it untouched", () => {
@@ -418,7 +454,7 @@ test("when anything goes wrong the event is MapLibre's, which zooms on it as bef
   map.easeTo = () => {
     throw new Error("the map is between styles");
   };
-  const step = wheel(wheelEvent(2));
+  const step = wheel(turnEvent(2));
   assert.equal(step.stopped, false, "not stopped: MapLibre zooms on it");
   assert.equal(step.prevented, false);
 
@@ -470,6 +506,11 @@ test("the game's map turns and tilts with the right button and the trackpad, and
   assert.match(world, /pitchWithRotate=\{true\}/);
   assert.match(world, /maxPitch=\{60\}/);
   assert.match(world, /touchPitch=\{false\}/);
+  // The camera reaches the whole Mercator square on a scenario's own map; the
+  // real Earth stops at 80°S (Avatar: Resurrection lost its southern rows).
+  assert.match(world, /maxBounds=\{maxBounds\}/);
+  assert.match(world, /\[-Infinity, ownMapShown \? -MERCATOR_MAX_LAT : -80\]/);
+  assert.match(world, /const ownMapShown = effectiveCustomBg\?\.kind === "image" \|\| effectiveCustomBg\?\.kind === "vector";/);
   assert.doesNotMatch(world, /dragRotate=\{false\}/);
   assert.match(world, /attachMapGestures\(mapInstance, \{ still: reduceMotionEnabled \}\)/);
   const tools = read("WarRoomTools.jsx");

@@ -332,7 +332,8 @@ export const difficultyPriorityBlock = (value) => {
 //   timelineCurator              takes repeats and filler off a finished timeline
 //   descriptionToAction          words the player's own order; its outcome is the skip's
 //   demandCheck                  reads whether a reply made or answered a demand
-//   listenIn                     writes what people are saying in a place
+//   placeFeed                    writes what people are saying in a place (Rostra's Search)
+//   rostraFeed                   writes Rostra's first posts (its empty feed's Refresh)
 //   warRoom                      the player's own generals speaking: they advise and take
 //                                orders, and what comes of an order is the front engine's
 //   pregameHistory               the history before the game starts, with no player in it
@@ -345,7 +346,8 @@ export const TASKS_WITHOUT_DIFFICULTY = Object.freeze(new Set([
   "timelineCurator",
   "descriptionToAction",
   "demandCheck",
-  "listenIn",
+  "placeFeed",
+  "rostraFeed",
   "warRoom",
   "pregameHistory",
   "politicalWorldGeneration",

@@ -25,8 +25,8 @@ import {
 import { isSeal, newSeal, openExchange, openPoliticalAssessment } from "../../runtime/spySeal.js";
 import { useActiveFeatures } from "../../runtime/gameFeatures.js";
 import { Actions } from "./actions";
-import { Projects } from "./projects";
-import { DOCK_BOTTOM_REM, DOCK_GAP_REM, DOCK_HEIGHT_REM, DOCK_LEFT_REM, DOCK_WIDTH } from "./hudDock.js";
+import { Social } from "./social.jsx";
+import { DOCK_BOTTOM_REM, DOCK_GAP_REM, DOCK_HEIGHT_REM, DOCK_LEFT_REM, useDockGeometry } from "./hudDock.js";
 import { documentsReadableBy, isDocumentExchange } from "../../runtime/reportDelivery.js";
 import { Presence } from "./presence.jsx";
 import StorageProblemNotice from "./storageProblemNotice.jsx";
@@ -5458,21 +5458,26 @@ const DiplomacyDockIcon = () => (
     </svg>
 );
 
-const Toolbar = memo(({ onOpenAdvisor, activePanel, onTogglePanel, mapRef }) => {
+const Toolbar = memo(({ onOpenAdvisor, activePanel, onTogglePanel, mapRef, actionsTab = null }) => {
     const [hoveredChat, setHoveredChat]       = useState(false);
     const [hoveredActions, setHoveredActions] = useState(false);
-    const [hoveredProjects, setHoveredProjects] = useState(false);
+    const [hoveredSocial, setHoveredSocial] = useState(false);
     // A tap fires mouseenter, and on a touch screen nothing fires mouseleave
     // after it, so a launcher tapped once stayed lit and raised as if the
     // pointer were still over it. There the hover look is left out.
     const canHover = useCanHover();
     // The dock grows by one button per launcher; its geometry lives in hudDock.js
-    // so the Search control beside it moves with it.
+    // so the Search control beside it moves with it. Rostra is there only while
+    // the game's social media feature is on (server/gameFeatures.js).
+    const dock = useDockGeometry();
     return (
-        <div style={{ position: "fixed", bottom: `calc(${DOCK_BOTTOM_REM}rem + ${SAFE_BOTTOM})`, left: `calc(${DOCK_LEFT_REM}rem + ${SAFE_LEFT})`, height: `${DOCK_HEIGHT_REM}rem`, width: DOCK_WIDTH, gap: `${DOCK_GAP_REM}rem`, padding: "0 0.1rem", backgroundColor: "var(--oh-hud-bg)", backdropFilter: "var(--oh-hud-blur)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", color: "white", fontFamily: "sans-serif", borderRadius: "14px", border: "1px solid var(--oh-hud-border)", boxShadow: "var(--oh-hud-shadow-soft)" }}>
+        <div style={{ position: "fixed", bottom: `calc(${DOCK_BOTTOM_REM}rem + ${SAFE_BOTTOM})`, left: `calc(${DOCK_LEFT_REM}rem + ${SAFE_LEFT})`, height: `${DOCK_HEIGHT_REM}rem`, width: dock.width, gap: `${DOCK_GAP_REM}rem`, padding: "0 0.1rem", backgroundColor: "var(--oh-hud-bg)", backdropFilter: "var(--oh-hud-blur)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", color: "white", fontFamily: "sans-serif", borderRadius: "14px", border: "1px solid var(--oh-hud-border)", boxShadow: "var(--oh-hud-shadow-soft)" }}>
         <Chat hovered={canHover && hoveredChat} setHovered={setHoveredChat} isOpen={activePanel === "chat"} onToggle={() => onTogglePanel("chat")} />
-        <Actions onOpenAdvisor={onOpenAdvisor} hovered={canHover && hoveredActions} setHovered={setHoveredActions} isOpen={activePanel === "actions"} onToggle={() => onTogglePanel("actions")} />
-        <Projects onOpenAdvisor={onOpenAdvisor} mapRef={mapRef} hovered={canHover && hoveredProjects} setHovered={setHoveredProjects} isOpen={activePanel === "projects"} onToggle={() => onTogglePanel("projects")} />
+        {/* Projects & Operations is the Actions panel's second tab (actions.jsx);
+            the advisor opens it there with actionsTab. */}
+        <Actions onOpenAdvisor={onOpenAdvisor} mapRef={mapRef} requestedTab={actionsTab} hovered={canHover && hoveredActions} setHovered={setHoveredActions} isOpen={activePanel === "actions"} onToggle={() => onTogglePanel("actions")} />
+        {/* Rostra, the social network (social.jsx), in the slot Projects had. */}
+        {dock.launchers.includes("social") && <Social hovered={canHover && hoveredSocial} setHovered={setHoveredSocial} isOpen={activePanel === "social"} onToggle={() => onTogglePanel("social")} />}
         </div>
     );
 });

@@ -15,11 +15,13 @@ import { loadNatGeoDarkStyle } from "./natGeoDarkStyle.js";
 import { isMapPerfVerbose, recordMapFreeze, recordMapTrace } from "../../runtime/mapPerfTrace.js";
 import { attachMapInstrumentation } from "./mapInstrumentation.js";
 import { attachMapGestures } from "./mapGestures.js";
+import { attachTerrainCaches } from "./terrainCaches.js";
 import { reduceMotionEnabled } from "../../runtime/mapSettings.js";
 import {
   DEFAULT_BASEMAP_ID,
   TERRAIN_TILE_TEMPLATE,
   basemapMaxZoom,
+  basemapSeaColour,
   basemapProtocolTemplate,
   buildBasemapRenderKey,
   decodeAllowedBasemaps,
@@ -31,7 +33,7 @@ import {
 import { configureMapRuntime, ensureBasemapProtocol } from "./mapLibreSetup.js";
 import { useBrowserOnline } from "../../runtime/networkStatus.js";
 import { markMapIdle } from "../../runtime/mapReadiness.js";
-import { imageQuad } from "../../../server/mapProjection.js";
+import { MERCATOR_MAX_LAT, imageQuad } from "../../../server/mapProjection.js";
 import { useWorldBackground } from "./useWorldState.js";
 
 // MapLibre's worker pool is made with the first map, so this goes first.
@@ -329,7 +331,9 @@ const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe, terra
       layers: [
         // Solid base beneath the image so no edge/pole ever shows a transparent hole.
         { id: "custom-bg-base", type: "background", paint: { "background-color": "#0b1a2b" } },
-        { id: "custom-bg-layer", type: "raster", source: "custom-bg", paint: { "raster-fade-duration": 0 } },
+        // "nearest" only when zoomed past the picture's own pixels (MapLibre
+        // still mipmaps it smoothly zoomed out), so a pixel map stays crisp.
+        { id: "custom-bg-layer", type: "raster", source: "custom-bg", paint: { "raster-fade-duration": 0, "raster-resampling": "nearest" } },
       ],
       sky: { "atmosphere-blend": 0 },
     };
@@ -414,11 +418,13 @@ const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe, terra
   const darkPhysicalVariant = basemapId === "ocean-dark"
     || basemapId === "atlas-relief-dark"
     || basemapId === "midnight-terrain";
+  // Under a light basemap, its own sea colour: a tile still on its way, or one
+  // that failed, then reads as sea instead of a black hole in it.
   const physicalBackground = basemapId === "midnight-terrain"
     ? "#000205"
     : darkPhysicalVariant
       ? (basemapId === "ocean-dark" ? "#030a14" : "#050609")
-      : "#0b1017";
+      : basemapSeaColour(renderedBasemapId) ?? "#0b1017";
 
   // THE BLACK TILES. The renderer before vNext put a second raster layer UNDER
   // the basemap: "satellite-lowres", z0-2 only, levels that always have real
@@ -728,6 +734,15 @@ function World({ mapRef, projection: requestedProjection, terrainEnabled, onInit
 
   const mapProjection = useMemo(() => ({ type: projection }), [projection]);
   const styleUsesGlobeCoords = effectiveCustomBg?.kind === "image" && isGlobe;
+  // How far north and south the camera goes. The real Earth stops at 80°S, with
+  // nothing south of Antarctica's coast worth the space; a scenario's own map
+  // (a picture or drawn shapes) fills the whole Mercator square, and its last
+  // rows to 85°S were out of reach.
+  const ownMapShown = effectiveCustomBg?.kind === "image" || effectiveCustomBg?.kind === "vector";
+  const maxBounds = useMemo(() => [
+    [-Infinity, ownMapShown ? -MERCATOR_MAX_LAT : -80],
+    [Infinity, ownMapShown ? MERCATOR_MAX_LAT : 85],
+  ], [ownMapShown]);
 
   // The old NatGeo preset is a baked raster, so hiding country/city/province
   // names selectively is impossible. The screenshot variant uses Esri's public
@@ -1103,8 +1118,8 @@ function World({ mapRef, projection: requestedProjection, terrainEnabled, onInit
     };
   }, [handleBasemapTileLoading, handleSourceLoaded, mapInstanceKey, mapRef, stopLoadingToast]);
 
-  // Two fingers on a trackpad turn and tilt the map, and a mouse wheel still
-  // zooms (mapGestures.js). Put on each map instance, as the listeners above.
+  // Two fingers on a trackpad zoom, and with Shift held turn and tilt the map;
+  // a mouse wheel zooms (mapGestures.js). Put on each map instance, as the listeners above.
   React.useEffect(() => {
     let disposed = false;
     let frame = 0;
@@ -1117,6 +1132,28 @@ function World({ mapRef, projection: requestedProjection, terrainEnabled, onInit
         return;
       }
       detach = attachMapGestures(mapInstance, { still: reduceMotionEnabled });
+    };
+    attach();
+    return () => {
+      disposed = true;
+      if (frame) cancelAnimationFrame(frame);
+      detach?.();
+    };
+  }, [mapInstanceKey, mapRef]);
+
+  // Terrain work that does not change from frame to frame is kept (terrainCaches.js).
+  React.useEffect(() => {
+    let disposed = false;
+    let frame = 0;
+    let detach = null;
+    const attach = () => {
+      if (disposed) return;
+      const mapInstance = mapRef?.current?.getMap?.() || null;
+      if (!mapInstance?.on || mapInstance._removed) {
+        frame = requestAnimationFrame(attach);
+        return;
+      }
+      detach = attachTerrainCaches(mapInstance);
     };
     attach();
     return () => {
@@ -1179,10 +1216,7 @@ function World({ mapRef, projection: requestedProjection, terrainEnabled, onInit
         minZoom={2.25}
         maxZoom={16}
         doubleClickZoom={false}
-        maxBounds={[
-          [-Infinity, -80],
-          [Infinity, 85],
-        ]}
+        maxBounds={maxBounds}
         cursor="default"
         attributionControl={false}
         // A right-button drag turns the map (sideways) and tilts it (up and

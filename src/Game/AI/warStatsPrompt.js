@@ -29,9 +29,10 @@
 import { describeBonds, normalizeCallsToArms } from "../../runtime/alliances.js";
 import { isOpenBattlefield, normalizeBattlefields } from "../../runtime/fronts/record.js";
 import { normalizeBlockades } from "../../runtime/naval/blockade.js";
-import { TERRITORY_AS_HELD, TERRITORY_RESTORED, describeReparation, describeTerms, normalizePeaceOffers, normalizeReparations, openOfferBetween, standingOf, warBetween, wouldAccept } from "../../runtime/peaceTerms.js";
+import { TERMS_LINE_EXAMPLE, TERRITORY_AS_HELD, TERRITORY_RESTORED, describeReparation, describeTerms, normalizePeaceOffers, normalizeReparations, openOfferBetween, standingOf, warBetween, wouldAccept } from "../../runtime/peaceTerms.js";
 import { RESOURCES_SHORT_FROM, resourcesOf } from "../../runtime/warResources.js";
 import { wearinessOf, wearinessWord } from "../../runtime/warWeariness.js";
+import { airWarLine } from "../../runtime/fronts/airStrike.js";
 import { groundReader } from "./warAndPeace.js";
 
 export const WAR_STATS_HEADING = "[War Situation]";
@@ -152,6 +153,9 @@ export const describeWarStats = (world, country, { held = null } = {}) => {
     if (enemy) lines.push(`  - ${reckoning(world, war, name, held)}.`);
   }
   if (wars.length > WARS_TOLD_MOST) lines.push(`- and ${wars.length - WARS_TOLD_MOST} more wars.`);
+  // The air war of the last turns: strikes it flew and suffered (runtime/fronts/airStrike.js).
+  const air = airWarLine(world?.airStrikes, name);
+  if (air) lines.push(`- In the air, ${air}.`);
   const supplies = Math.round(resourcesOf(world?.warResources, name));
   if (supplies < 100) lines.push(`- Supplies (fuel, munitions, pay): ${supplies} of 100${supplies < RESOURCES_SHORT_FROM ? ", short: its armies are fighting worse for it" : ""}.`);
   const blockade = normalizeBlockades(world?.blockades).find((entry) => fold(entry.country) === fold(name));
@@ -206,7 +210,7 @@ export const PEACE_TALK_HEADING = "[Peace]";
 // and the field a group chat's answer carries (gameplaySchemas.js CHAT_ACTIONS_SCHEMA).
 export const PEACE_LINE = "PEACE";
 export const PEACE_ANSWERS_FIELD = "peaceAnswers";
-const TERMS_FORM = "terms as \"as held; Borduria pays 2% for 5 years\" (each side keeps the ground it holds) or \"restored; none\" (the old borders, nobody pays)";
+const TERMS_FORM = `terms as "as held; Borduria pays 2% for 5 years" (each side keeps the ground it holds) or "restored; none" (the old borders, nobody pays), any other term one more part, as in "${TERMS_LINE_EXAMPLE}" ("Borduria is annexed" gives all its land to the other)`;
 
 // What a leader nobody plays, at war with a person, is told of peace between
 // them in a chat: the terms the person put to it, or the offer it made, or

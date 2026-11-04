@@ -360,3 +360,62 @@ test("a dispute the world ended stays ended; one it never recorded shows the map
   assert.deepEqual(await disputes(202, { d1: [] }), { d2: ["B"] }, "an ended dispute stays ended");
   assert.deepEqual(await disputes(203, { d1: ["C"] }), { d1: ["C"], d2: ["B"] }, "the world's live list wins");
 });
+
+test("a battlefield's ground: its regions and their mesh, the borders between them left out, a mesh sent once", async () => {
+  await send({
+    requestId: 301,
+    type: "initialize",
+    geometryEpoch: "ground-g1",
+    regions: {
+      type: "FeatureCollection",
+      features: [rectangle("g1", "A", 0, 1), rectangle("g2", "B", 1, 2), rectangle("g3", "C", 2, 3)],
+    },
+    ownershipOverrides: {},
+    regionClaimants: {},
+    labelNames: { A: "A", B: "B", C: "C" },
+  });
+  const ground = async (requestId, extra = {}) => (await send({
+    requestId,
+    type: "battlefield-ground",
+    geometryEpoch: "ground-g1",
+    areas: [{ key: "field", bounds: [-1, -1, 2.5, 2], members: ["A", "B"] }],
+    ...extra,
+  })).find((message) => message?.messageType === "battlefield-ground-result");
+  const first = await ground(302);
+  assert.equal(first.error, undefined);
+  assert.deepEqual(first.areas[0].regionIds, ["g1", "g2"]);
+  assert.deepEqual(first.areas[0].owners, ["A", "B"]);
+  assert.ok(first.areas[0].positions.length >= 12, "two squares, two triangles each");
+  assert.equal(first.areas[0].regionOf.length, first.areas[0].positions.length / 2);
+  const removed = first.boundaryPatch.removeIds;
+  assert.equal(removed.length, 1, "the A|B border is left to the battlefield");
+  assert.ok(removed[0].includes("A") && removed[0].includes("B"));
+
+  // The same regions again: no mesh for one the asker holds, no border work unless forced.
+  const again = await ground(303, { known: [first.areas[0].meshId] });
+  assert.equal(again.areas[0].meshId, first.areas[0].meshId);
+  assert.equal(again.areas[0].positions, undefined);
+  assert.equal(again.boundaryPatch, null);
+  const forced = await ground(304, { known: [first.areas[0].meshId], force: true });
+  assert.ok(forced.boundaryPatch.removeIds.length === 1);
+
+  // An ownership revision keeps the battlefield's border left out.
+  const update = (await send({
+    requestId: 305,
+    type: "update-ownership",
+    geometryEpoch: "ground-g1",
+    ownershipOverrides: { g3: "B" },
+    regionClaimants: {},
+    labelNames: { A: "A", B: "B", C: "C" },
+    affectedOwners: ["B", "C"],
+    changedRegionIds: ["g3"],
+  })).find((message) => message?.messageType === "cartography-result");
+  assert.ok(!(update.boundaryPatch?.upsert ?? []).some((feature) => String(feature.properties?.owners ?? "").includes("A")));
+
+  // The battlefield gone, its border is the map's again.
+  const gone = (await send({ requestId: 306, type: "battlefield-ground", geometryEpoch: "ground-g1", areas: [] }))
+    .find((message) => message?.messageType === "battlefield-ground-result");
+  assert.deepEqual(gone.areas, []);
+  assert.equal(gone.boundaryPatch.upsert.length, 1);
+  assert.deepEqual(gone.boundaryPatch.upsert[0].properties.ownerList, ["A", "B"]);
+});

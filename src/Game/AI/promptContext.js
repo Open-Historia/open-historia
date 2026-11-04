@@ -1,18 +1,18 @@
 import dayjs from "dayjs";
-import { JSON_URLS, getNationTags, loadRegionCatalog, loadScenarioRegionCatalog, readJson } from "../../runtime/assets.js";
+import { JSON_URLS, getNationTags, loadRegionCatalog, loadScenarioRegionCatalog, prepareWorkerFetchableUrl, readJson } from "../../runtime/assets.js";
 import { resolveAllCountryTags, resolveCountryTags } from "../../runtime/countryTags.js";
 import { buildOwnerAliasMap, canonicalOwnerName, toCountryName } from "../../runtime/ownerNames.js";
 import {
   buildActionDisplayText,
-  haversineKm,
   isPolityLandless,
+  kmOnMap,
   normalizeActionEntry,
   normalizeActions,
   normalizeChats,
   normalizeEvents,
   normalizeWorldState,
 } from "../../runtime/gameState.js";
-import { buildRegionOwnershipText, buildUnruledBordersText, regionOwnerName, regionTouchingMap } from "./regionVocab.js";
+import { buildRegionOwnershipText, buildUnruledBordersText, hasUnruledLand, regionOwnerName, regionTouchingMapSliced } from "./regionVocab.js";
 import { waterTypeIds } from "../../runtime/regionTypes.js";
 import { isPendingAction, selectFocusPowers } from "./regionFocus.js";
 import { filterChatsVisibleTo } from "./chatVisibility.js";
@@ -28,8 +28,10 @@ import { worldFileUrl } from "../../runtime/worldFiles.js";
 import { hostingSharedGame, humanCountriesOf, sharedGameHostCountry } from "../../runtime/humanPolities.js";
 import { SHARED_WORLD_TASKS, buildSharedGameDirective, joinPolityNames } from "./sharedGameDirective.js";
 import { buildSeatAdviceDirective } from "./seatAdvice.js";
+import { openPolls } from "../../runtime/socialFeed.js";
 import { unitsOffBattlefields } from "./frontsGate.js";
 import { readingLanguageName } from "../../runtime/i18n.js";
+import { advisorMessagesFor, CHIEF_ADVISOR_THREAD } from "../../runtime/advisorThreads.js";
 
 const normalizeString = (value) => String(value ?? "").trim();
 const normalizeArray = (value) => (Array.isArray(value) ? value : []);
@@ -883,8 +885,10 @@ export const buildDiplomaticContinuityText = (
   return rows.join("\n\n");
 };
 
+// Generic prompt history remains the legacy chief transcript. Contact profiles
+// and separate official conversations must not leak into a different AI task.
 export const buildAdvisorHistoryText = (messages, { limit = 18 } = {}) => {
-  const normalizedMessages = normalizeArray(messages).map((entry) => {
+  const normalizedMessages = advisorMessagesFor(messages, CHIEF_ADVISOR_THREAD).map((entry) => {
     if (!entry || typeof entry !== "object") return null;
     const role = normalizeString(entry.role || entry.speaker || "message");
     const text = normalizeString(entry.text || entry.content || entry.message);
@@ -1236,7 +1240,7 @@ export const buildPendingUnitOrdersText = (world) => {
   return orders.map((order) => {
     const unit = unitById.get(order.unitId);
     if (!unit) return null;
-    const remaining = Math.round(haversineKm(unit.lat, unit.lng, order.toLat, order.toLng));
+    const remaining = Math.round(kmOnMap(unit.lat, unit.lng, order.toLat, order.toLng));
     if (order.kind === "patrol") {
       return `- ${handles.get(unit.id) || unit.name} (${unit.type}, owner ${unit.ownerCode}) is working a ` +
         `${Math.round(order.radiusKm)} km station centred on lat ${order.toLat.toFixed(2)}, lng ${order.toLng.toFixed(2)}.`;
@@ -1662,6 +1666,44 @@ export const orderByFocus = (items, namesOf, focusCodes) => {
 //
 // `nationTags`: the map's own tags, for a map that is not the active game's
 // (buildPromptContext's mapSource).
+// The regions file is never kept in memory (runtime/assets.js), so a prompt would download and parse its
+// 55 MB and work out every border again each time. Its address changes with the map, so the answer is kept by it.
+let regionBorders = { url: "", work: null };
+const BORDERS_WORKER_MS = 120_000;
+const regionBordersInWorker = async (url) => {
+  if (typeof Worker === "undefined") throw new Error("No workers here.");
+  const fetchUrl = await prepareWorkerFetchableUrl(url);
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(new URL("./regionBordersWorker.js", import.meta.url), { type: "module", name: "openhistoria-region-borders" });
+    // Every prompt for this map waits on the answer, so one that never comes is given up on.
+    let timer = 0;
+    const finish = (settle, value) => {
+      clearTimeout(timer);
+      worker.terminate();
+      settle(value);
+    };
+    timer = setTimeout(() => finish(reject, new Error("The borders worker did not answer.")), BORDERS_WORKER_MS);
+    worker.onmessage = ({ data }) => (Array.isArray(data?.borders)
+      ? finish(resolve, new Map(data.borders.map(([id, others]) => [id, new Set(others)])))
+      : finish(reject, new Error(data?.error || "No borders came back.")));
+    worker.onerror = (event) => finish(reject, new Error(event?.message || "The borders worker failed."));
+    worker.postMessage({ url: fetchUrl });
+  });
+};
+const regionBordersOnThisThread = async (url) => {
+  const shapes = await readJson(url, { defaultValue: null, clone: false }).catch(() => null);
+  // Nothing was read: not kept, so the next prompt tries again.
+  if (!Array.isArray(shapes?.features) && regionBorders.url === url) regionBorders = { url: "", work: null };
+  return regionTouchingMapSliced(shapes?.features);
+};
+const regionBordersOfThisMap = () => {
+  const url = JSON_URLS.regionsGeojson;
+  if (regionBorders.url === url && regionBorders.work) return regionBorders.work;
+  const work = regionBordersInWorker(url).catch(() => regionBordersOnThisThread(url));
+  regionBorders = { url, work };
+  return work;
+};
+
 export const buildWorldSummary = async (bundle, regionCatalog = null, {
   regionListsViaTools = false,
   conversation = false,
@@ -1774,13 +1816,15 @@ export const buildWorldSummary = async (bundle, regionCatalog = null, {
   // The map's shapes say which regions share a border, the sea's among them:
   // wild land across a strait from a power is its neighbour by ship. Worked
   // out only on a map with unruled land.
-  const shapes = conversation ? null : await readJson(JSON_URLS.regionsGeojson, { defaultValue: null, clone: false }).catch(() => null);
-  const unruledBorders = conversation
-    ? ""
-    : buildUnruledBordersText(await loadScenarioRegionCatalog().catch(() => null) ?? regions, world.regionOwnershipOverrides, {
-      waterTypes: waterTypeIds(world.regionTypes),
-      touching: () => regionTouchingMap(shapes?.features),
-    });
+  let unruledBorders = "";
+  if (!conversation) {
+    const regionRows = await loadScenarioRegionCatalog().catch(() => null) ?? regions;
+    const waterTypes = waterTypeIds(world.regionTypes);
+    const touching = hasUnruledLand(regionRows, world.regionOwnershipOverrides, { waterTypes })
+      ? await regionBordersOfThisMap()
+      : null;
+    unruledBorders = buildUnruledBordersText(regionRows, world.regionOwnershipOverrides, { waterTypes, touching });
+  }
 
   return [
     `Player polity: ${bundle.game.country || "Unknown polity"}${playerTags.length ? ` (${playerTags.join(", ")})` : ""}`,
@@ -2150,6 +2194,12 @@ export const buildPromptContext = async (bundle, {
   // orders to consider (seatAdvice.js). Only the time skip itself writes them.
   if (hostingSharedGame() && (taskKey === "jumpForward" || taskKey === "autoJumpForward")) {
     result.seatAdviceDirective = buildSeatAdviceDirective(humanCountriesOf(bundle.game), bundle.world);
+  }
+  // The player's Rostra polls still open (runtime/socialFeed.js): the time skip
+  // is then asked for the public's answer too (gameplaySchemas.js withSocialPosts).
+  if (taskKey === "jumpForward" || taskKey === "autoJumpForward") {
+    const polls = openPolls(bundle.world?.socialFeed).length;
+    if (polls) result.rostraOpenPolls = String(polls);
   }
   if (wants("playerPolityRegions")) {
     result.playerPolityRegions = await buildPlayerPolityRegionsText(

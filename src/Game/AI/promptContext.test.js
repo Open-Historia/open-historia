@@ -8,6 +8,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  buildAdvisorHistoryText,
   buildEventHistoryText,
   buildHistoricalAnchorText,
   buildPlayerPolityRegionsText,
@@ -18,6 +19,20 @@ import {
 } from "./promptContext.js";
 
 const game = { country: "Ruritania", gameDate: "1930-05-12", round: 4, startDate: "1930-01-01" };
+
+test("generic Advisor prompt history excludes unrelated ministers and their private conversations", () => {
+  const entries = [
+    { role: "user", text: "Chief-only strategic discussion" },
+    { role: "advisor", text: "Chief reply" },
+    { role: "advisor-contact", id: "advisor-minister-123456", name: "Finance Minister", title: "Treasury", personality: "Independent" },
+    { role: "user", threadId: "advisor-minister-123456", text: "Confidential Treasury question" },
+    { role: "advisor", threadId: "advisor-minister-123456", text: "Confidential Treasury reply" },
+  ];
+  const formatted = buildAdvisorHistoryText(entries);
+  assert.match(formatted, /Chief-only strategic discussion/);
+  assert.match(formatted, /Chief reply/);
+  assert.doesNotMatch(formatted, /Confidential Treasury|Finance Minister|Treasury reply/);
+});
 
 const unit = (id, ownerCode) => ({ id, name: `${ownerCode} unit ${id}`, type: "infantry", ownerCode, strength: 100, lat: 50, lng: 10 });
 

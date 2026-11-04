@@ -5,15 +5,16 @@ import { useMap } from "react-map-gl/maplibre";
 import { getNationFlags, getPrimedScenarioRegionCatalog, resolveCountryDisplayName } from "../../runtime/assets.js";
 import { withMapClaims } from "../../runtime/mapClaims.js";
 import { normalizeGroupAreas, normalizeGroups } from "../../runtime/groups.js";
-import { isActiveFeatureEnabled, useActiveFeatures } from "../../runtime/gameFeatures.js";
+import { isActiveFeatureEnabled } from "../../runtime/gameFeatures.js";
 import { readGameData, readWorldState } from "../../runtime/gameState.js";
 import { livePuppetsFor, puppetKindLabel, puppetSummaryFor } from "../../runtime/puppets.js";
 import { getWorldStateSnapshot } from "../Map/useWorldState.js";
 import { resolvePolityFlag } from "../../runtime/polityFlags.js";
 import { resolvePolityIdentity } from "../../runtime/polityIdentity.js";
+import { toCountryName } from "../../runtime/ownerNames.js";
 import { bundledFlagUrl, countryGidFromIdentity } from "../../runtime/countryFlags.js";
 import { requestDiplomaticChat } from "../GameUI/chat.jsx";
-import { openListenIn } from "../GameUI/ListenInPhone.jsx";
+import { openRostraPlace } from "../GameUI/rostraOpen.js";
 import { openCountryPanel } from "./CountryPanel.jsx";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { APP_HEIGHT, MAP_CARD_OPENED, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, useShortTouchScreen, useTouchPrimary } from "../../runtime/mobileUi.js";
@@ -235,13 +236,23 @@ const IconBtn = ({ children, title, onClick, expanded }) => {
     );
 };
 
-// The card's one worded button: Listen in (GameUI/ListenInPhone.jsx).
-const listenInButtonStyle = {
+
+const RostraGlyph = () => (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9" />
+        <path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5" />
+        <circle cx="12" cy="12" r="2" />
+        <path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5" />
+        <path d="M19.1 4.9C23 8.8 23 15.1 19.1 19" />
+    </svg>
+);
+
+const rostraButtonStyle = {
     alignItems: "center",
-    background: "rgba(255,255,255,0.07)",
-    border: "1px solid rgba(255,255,255,0.14)",
+    background: "rgba(255, 255, 255, 0.07)",
+    border: "1px solid rgba(43, 193, 243, 0.35)",
     borderRadius: "8px",
-    color: "rgba(255,255,255,0.88)",
+    color: "#2bc1f3",
     cursor: "pointer",
     display: "flex",
     fontFamily: "inherit",
@@ -252,14 +263,8 @@ const listenInButtonStyle = {
     marginTop: "8px",
     padding: "6px 8px",
     width: "100%",
+    transition: "background 0.15s, border-color 0.15s",
 };
-
-const PhoneGlyph = () => (
-    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    <rect x="6" y="2" width="12" height="20" rx="2.5" />
-    <path d="M11 18h2" />
-    </svg>
-);
 
 // Copies a name through the shared helper, which falls back where
 // navigator.clipboard is missing (LAN play over http, the Android app), and
@@ -337,8 +342,6 @@ const RegionPopup = () => {
     const shortTouch = useShortTouchScreen();
     const asSheet = isMobile || shortTouch;
     const isTouch = useTouchPrimary();
-    // Listen in can be switched off for a game (server/gameFeatures.js).
-    const listenInOn = useActiveFeatures().listenIn?.enabled !== false;
     const [selection, setSelection] = useState(null);
     const [animKey, setAnimKey] = useState(0);
     const [dismissing, setDismissing] = useState(false);
@@ -888,22 +891,29 @@ const RegionPopup = () => {
             </>
         )}
 
-        {/* What people here are posting. The card stays where it is, under
-            the phone, for when the phone is put away. */}
-        {listenInOn && (regionId || controllerKey) && (
+        {/* Not while the game has no social media: there is no Rostra. */}
+        {!isUnclaimed && isActiveFeatureEnabled("socialMedia") && (
             <button
             type="button"
             className="oh-tap-row"
-            onClick={() => openListenIn({
-                regionId,
-                regionName: NAME_1,
-                polity: isUnclaimed ? "" : displayCountry,
-                polityKey: controllerKey,
-            })}
-            style={listenInButtonStyle}
+            onClick={(e) => {
+                e.stopPropagation();
+                const name = toCountryName(controllerCode) || displayCountry;
+                openRostraPlace({ polity: name, polityKey: name });
+                _dismiss?.();
+            }}
+            style={rostraButtonStyle}
+            onMouseEnter={(e) => {
+                e.currentTarget.style.background = "rgba(43, 193, 243, 0.15)";
+                e.currentTarget.style.borderColor = "#2bc1f3";
+            }}
+            onMouseLeave={(e) => {
+                e.currentTarget.style.background = "rgba(255, 255, 255, 0.07)";
+                e.currentTarget.style.borderColor = "rgba(43, 193, 243, 0.35)";
+            }}
             >
-            <PhoneGlyph />
-            Listen in
+            <RostraGlyph />
+            <span>Check in Rostra</span>
             </button>
         )}
 

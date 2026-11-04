@@ -7,7 +7,7 @@ import dayjs from "dayjs";
 import advancedFormat from "dayjs/plugin/advancedFormat";
 import { logDebugEvent } from "../../runtime/debugLog.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
-import { generateActionSuggestions, refinePlayerAction } from "../AI/gameplayLazy.js";
+import { assessGoalProgress, generateActionSuggestions, refinePlayerAction } from "../AI/gameplayLazy.js";
 import { revertUnitOrder } from "../Map/unitsController.js";
 import {
     buildActionDisplayText,
@@ -16,7 +16,7 @@ import {
     writeActionsState,
     writeWorldState,
 } from "../../runtime/gameState.js";
-import { PLAYER_GOAL_MAX_CHARS, playerGoalOf, withPlayerGoal } from "../../runtime/playerGoal.js";
+import { PLAYER_GOAL_MAX_CHARS, playerGoalEntryOf, playerGoalOf, withPlayerGoal } from "../../runtime/playerGoal.js";
 import { TURN_RUNNING_NOTE, isSimulationBusy } from "../AI/simulationStatus.js";
 import { useTurnRunning } from "./useTurnRunning.js";
 import { formatGameDateReadable } from "../../runtime/gameDates.js";
@@ -26,6 +26,7 @@ import { useRuntimeState } from "../../runtime/useRuntimeState.js";
 import { uiString } from "../../runtime/translator.js";
 import { useFailureReportButton } from "../../runtime/saveDebugLog.js";
 import { queuedActionIds, selectSavedSuggestions, suggestionsFellBack } from "./actionSuggestions.js";
+import { ProjectsBoard, ProjectsTabIcon } from "./projects.jsx";
 
 dayjs.extend(advancedFormat);
 
@@ -204,12 +205,13 @@ const ActionItem = ({ action, onDelete, locked = false }) => {
         }}
         >
         <div style={{ flex: 1, minWidth: 0 }}>
+        {/* The player's own order, as typed: never the interface's to translate. */}
         {showTitle && (
-            <div style={{ color: "rgba(255,255,255,0.95)", fontSize: "0.78rem", fontWeight: 700, marginBottom: "0.15rem" }}>
+            <div data-no-translate style={{ color: "rgba(255,255,255,0.95)", fontSize: "0.78rem", fontWeight: 700, marginBottom: "0.15rem" }}>
             {normalized.title}
             </div>
         )}
-        <div style={{ color: "rgba(255,255,255,0.82)", fontSize: "0.82rem", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+        <div data-no-translate style={{ color: "rgba(255,255,255,0.82)", fontSize: "0.82rem", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
         {label}
         </div>
         <div
@@ -343,6 +345,85 @@ const goalButtonStyle = (enabled, tone = "neutral") => ({
     fontWeight: 600,
     padding: "0.3rem 0.7rem",
 });
+
+// How far the goal has come (gameplay.js assessGoalProgress): read on demand,
+// since every reading is a request, and marked when a turn has passed since.
+const GoalProgress = ({ country, round, turnRunning }) => {
+    const stored = useRuntimeState("world", (world) => JSON.stringify(playerGoalEntryOf(world, country)?.progress ?? null), country);
+    const progress = React.useMemo(() => JSON.parse(stored || "null"), [stored]);
+    const [busy, setBusy] = React.useState(false);
+    const [error, setError] = React.useState("");
+    const [open, setOpen] = React.useState(false);
+
+    const assess = async () => {
+        if (busy || turnRunning) return;
+        setBusy(true);
+        setError("");
+        try {
+            const reading = await assessGoalProgress();
+            logDebugEvent("action", `Goal progress assessed: ${reading?.progress ?? "?"}/100`);
+        } catch (assessError) {
+            console.error("Failed to assess goal progress:", assessError);
+            setError(String(assessError?.message || "The goal could not be assessed. Try again."));
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const muted = { color: "rgba(255,255,255,0.55)", fontSize: "0.72rem" };
+    if (!progress) {
+        return (
+            <div style={{ alignItems: "center", display: "flex", gap: "0.5rem", justifyContent: "space-between" }}>
+            <span style={muted}>{error || "How far has it come?"}</span>
+            <button type="button" className="oh-tap-row" disabled={busy || turnRunning} onClick={() => void assess()} style={goalButtonStyle(!busy && !turnRunning)}>
+            {busy ? "Assessing…" : "Assess progress"}
+            </button>
+            </div>
+        );
+    }
+
+    const change = Number.isFinite(progress.previous) ? progress.progress - progress.previous : 0;
+    const stale = progress.round && round && round > progress.round;
+    const list = (title, items) => items.length > 0 && (
+        <div>
+        <span style={{ ...muted, fontWeight: 700 }}>{title}</span>
+        <ul style={{ color: "rgba(255,255,255,0.78)", fontSize: "0.74rem", lineHeight: "1.45", margin: "0.15rem 0 0", paddingLeft: "1.1rem" }}>
+        {items.map((item) => <li key={item}>{item}</li>)}
+        </ul>
+        </div>
+    );
+    return (
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
+        <div style={{ alignItems: "center", display: "flex", gap: "0.5rem" }}>
+        <div role="progressbar" aria-label="Goal progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress.progress}
+        style={{ background: "rgba(255,255,255,0.1)", borderRadius: "999px", flex: 1, height: "6px", overflow: "hidden" }}>
+        <div style={{ background: "#7dd3fc", height: "100%", width: `${progress.progress}%` }} />
+        </div>
+        <span style={{ color: "rgba(255,255,255,0.9)", fontSize: "0.76rem", fontWeight: 700 }}>{progress.progress}%</span>
+        {change !== 0 && <span style={{ color: change > 0 ? "#86efac" : "#fca5a5", fontSize: "0.72rem" }}>{change > 0 ? `+${change}` : change}</span>}
+        <button type="button" className="oh-tap" disabled={busy || turnRunning} onClick={() => void assess()}
+        title={turnRunning ? "A turn is running." : "Assess again"} aria-label="Assess progress again"
+        style={{ background: "none", border: "none", color: "rgba(255,255,255,0.45)", cursor: busy || turnRunning ? "not-allowed" : "pointer", fontSize: "0.8rem", padding: 0 }}>
+        {busy ? "…" : "↻"}
+        </button>
+        </div>
+        <button type="button" className="oh-tap" onClick={() => setOpen((value) => !value)} aria-expanded={open}
+        style={{ background: "none", border: "none", color: "rgba(255,255,255,0.78)", cursor: "pointer", fontSize: "0.74rem", lineHeight: "1.45", padding: 0, textAlign: "left" }}>
+        {progress.summary}
+        </button>
+        {open && (
+            <>
+            {list("Reached", progress.achieved)}
+            {list("In the way", progress.obstacles)}
+            {list("Next steps", progress.nextSteps)}
+            </>
+        )}
+        <span style={muted}>
+        {error || `As of ${progress.asOf || "an earlier turn"}${stale ? " — a turn has passed since; ↻ to update" : ""}. ${open ? "" : "Click the summary for details."}`}
+        </span>
+        </div>
+    );
+};
 
 // The player's standing goal (runtime/playerGoal.js): the direction behind the
 // orders. The advisor, the time skip and the suggestions are told it; a foreign
@@ -523,11 +604,43 @@ const StandingGoal = ({ country, round, gameDate, isOpen }) => {
         <span title={goal} style={{ color: "rgba(255,255,255,0.82)", display: "-webkit-box", fontSize: "0.8rem", lineHeight: "1.45", overflow: "hidden", WebkitBoxOrient: "vertical", WebkitLineClamp: 3 }}>
         {"\u{1F3AF} "}{goal}
         </span>
+        <GoalProgress country={country} round={round} turnRunning={turnRunning} />
         </div>
     );
 };
 
-const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
+// The panel's two tabs: the orders for this round, and the Projects &
+// Operations board (projects.jsx), which had a launcher of its own until
+// 2026-11-02: "on beta add the projects menu as a tab in the actions menu" (the
+// owner). The tab strip is the diplomacy panel's (chat.jsx).
+const ACTIONS_TABS = [
+    ["actions", "Actions"],
+    ["projects", "Projects"],
+];
+
+const selectProjectCount = (world) => (Array.isArray(world?.projects) ? world.projects.length : 0);
+
+const OrdersTabIcon = () => (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M12 3l1.8 4.6L18.5 9l-4.7 1.4L12 15l-1.8-4.6L5.5 9l4.7-1.4z" />
+    <path d="M18 15l.9 2.1L21 18l-2.1.9L18 21l-.9-2.1L15 18l2.1-.9z" />
+    </svg>
+);
+
+// `requestedTab`: { tab } from outside (the advisor's board card opens the
+// Projects tab); a new object each time, so the same tab can be asked for twice.
+const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = null }) => {
+    const [tab, setTab] = React.useState("actions");
+    // The board is drawn from the first time its tab is opened and then kept,
+    // so its search and its ticked tags survive a look at the orders.
+    const [boardOpened, setBoardOpened] = React.useState(false);
+    const projectCount = useRuntimeState("world", selectProjectCount);
+    React.useEffect(() => {
+        if (requestedTab?.tab === "actions" || requestedTab?.tab === "projects") setTab(requestedTab.tab);
+    }, [requestedTab]);
+    React.useEffect(() => {
+        if (tab === "projects") setBoardOpened(true);
+    }, [tab]);
     const [actions, setActions] = React.useState([]);
     const [inputValue, setInputValue] = React.useState("");
     const game = useRuntimeState("game", selectGameHeader);
@@ -833,11 +946,33 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
             alignItems: "center",
             borderBottom: "1px solid rgba(255,255,255,0.07)",
             display: "flex",
+            gap: "0.5rem",
             justifyContent: "space-between",
-            padding: "1rem 1.25rem 0.75rem",
+            padding: isTouch ? "0.6rem 0.9rem 0.55rem" : "0.8rem 1rem 0.65rem",
         }}
         >
-        <span style={{ fontSize: "1rem", fontWeight: 700, letterSpacing: "0.01em" }}>Actions</span>
+        <div role="tablist" style={{ display: "flex", gap: ".35rem", minWidth: 0, overflowX: "auto", scrollbarWidth: "none" }}>
+        {ACTIONS_TABS.map(([key, label]) => {
+            const active = tab === key;
+            return (
+                <button
+                key={key}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                className="oh-tap-row"
+                onClick={() => setTab(key)}
+                style={{ alignItems: "center", background: active ? "var(--oh-grey-selected)" : "rgba(255,255,255,.025)", border: "1px solid " + (active ? "var(--oh-grey-border-strong)" : "rgba(255,255,255,.07)"), borderRadius: "8px", color: active ? "white" : "rgba(255,255,255,0.48)", cursor: "pointer", display: "flex", flex: "0 0 auto", fontFamily: "sans-serif", fontSize: ".8rem", fontWeight: 750, gap: ".38rem", padding: isTouch ? ".3rem .62rem" : ".36rem .74rem", whiteSpace: "nowrap" }}
+                >
+                <span aria-hidden="true" style={{ display: "inline-flex", opacity: .8 }}>{key === "projects" ? <ProjectsTabIcon /> : <OrdersTabIcon />}</span>
+                <span>{label}</span>
+                {key === "projects" && projectCount > 0 && (
+                    <span data-no-translate style={{ alignItems: "center", background: active ? "rgba(255,255,255,.14)" : "rgba(255,255,255,.08)", borderRadius: 999, color: active ? "#fff" : "rgba(255,255,255,0.6)", display: "inline-flex", fontSize: ".57rem", fontWeight: 800, height: "1.05rem", justifyContent: "center", minWidth: "1.05rem", padding: "0 .25rem" }}>{projectCount}</span>
+                )}
+                </button>
+            );
+        })}
+        </div>
         <button
         type="button"
         className="oh-tap"
@@ -867,6 +1002,15 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
         </button>
         </div>
 
+        {/* The Projects & Operations board, under the same header (projects.jsx). */}
+        {boardOpened && (
+            <div style={{ display: tab === "projects" ? "flex" : "none", flex: 1, flexDirection: "column", minHeight: 0 }}>
+            <ProjectsBoard isOpen={isOpen && tab === "projects"} onOpenAdvisor={onOpenAdvisor} mapRef={mapRef} />
+            </div>
+        )}
+
+        {tab === "actions" && (
+        <>
         <div style={{ display: "flex", flexDirection: "column", gap: "0.875rem", padding: "0.875rem 1.25rem", flex: 1, minHeight: 0, ...(scrollAsOne ? { overflowY: "auto", scrollbarWidth: "none" } : { overflow: "hidden" }) }}>
 
         <StandingGoal country={game.country} round={game.round} gameDate={game.gameDate} isOpen={isOpen} />
@@ -1148,11 +1292,13 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
         {isSubmitting ? <SpinnerRing size={14} /> : <SendIcon />}
         </button>
         </div>
+        </>
+        )}
         </div>
     );
 };
 
-const Actions = ({ onOpenAdvisor, hovered, setHovered, isOpen, onToggle }) => {
+const Actions = ({ onOpenAdvisor, mapRef, requestedTab = null, hovered, setHovered, isOpen, onToggle }) => {
     const [hasOpened, setHasOpened] = React.useState(false);
 
     React.useEffect(() => {
@@ -1168,11 +1314,13 @@ const Actions = ({ onOpenAdvisor, hovered, setHovered, isOpen, onToggle }) => {
             isOpen={isOpen}
             onClose={onToggle}
             onOpenAdvisor={onOpenAdvisor}
+            mapRef={mapRef}
+            requestedTab={requestedTab}
             />
         )}
         <button
         type="button"
-        title="Actions"
+        title="Actions and Projects"
         style={{
             alignItems: "center",
             background: isOpen

@@ -22,16 +22,43 @@ export const FEATURE_DEFINITIONS = Object.freeze([
     description: "Actors that are not countries, such as insurgencies, cartels, militias, cults or an outbreak, each controlling an area of regions that stay their countries'. Off: the simulator is not given the groups or their areas, anything it writes about groups is left out, and no group's area is shown on the map or on a region's card. A game switched back on finds its groups as it left them.",
     settings: Object.freeze([]),
   }),
-  // Battlefields and fronts (src/runtime/fronts/): land war the game fights
-  // itself, from orders the simulator gives. It costs no request: the orders
-  // ride in the one answer a time skip already gives, and the engine that moves
-  // the troops asks nobody (src/Game/AI/frontsGate.js reads this; frontTurn.js
-  // runs it).
+  // Wars: what the game fights itself, each part with a switch of its own
+  // (src/Game/AI/frontsGate.js reads them). The key is still "fronts": a
+  // scenario or a game saved before the parts had switches said only whether
+  // fronts were on, and that is what its "enabled" reads as here
+  // (legacyEnabledSetting). It costs no request: the orders ride in the one
+  // answer a time skip already gives, and the engine asks nobody.
+  //   battlefields   land war on battlefields (src/runtime/fronts/; frontTurn.js runs it)
+  //   air            air units: raised, flown over battlefields and sent to strike (fronts/air.js, airStrikes.js)
+  //   navies         fleets: raised, fighting at sea, blockading and carrying troops by sea (runtime/naval/)
   Object.freeze({
     key: "fronts",
-    label: "Fronts",
-    description: "Land war fought on battlefields. Where the two sides of a war hold land that touches, a battlefield opens by itself: each side is given troops by its size, the simulator gives them orders, and the game moves them and decides who holds the ground, a region changing hands as it is taken. Off: no battlefield opens, the simulator is asked for no front orders, and a land war is the formations it moves and the regions it hands over itself. A game switched back on finds its battlefields as it left them.",
+    label: "Wars",
+    toggleable: false,
+    legacyEnabledSetting: "battlefields",
+    description: "How the game fights its wars itself. Each part has a switch: land war on battlefields, air units and navies. What is switched off is left to the story: the simulator tells of it, and the game does not fight it.",
     settings: Object.freeze([
+      Object.freeze({
+        key: "battlefields",
+        type: "toggle",
+        label: "Fronts",
+        defaultValue: true,
+        description: "Land war fought on battlefields. Where the two sides of a war hold land that touches, a battlefield opens by itself: each side is given troops by its size, the simulator gives them orders, and the game moves them and decides who holds the ground, a region changing hands as it is taken. Off: no battlefield opens, the simulator is asked for no front orders, and a land war is the formations it moves and the regions it hands over itself. A game switched back on finds its battlefields as it left them.",
+      }),
+      Object.freeze({
+        key: "air",
+        type: "toggle",
+        label: "Air units",
+        defaultValue: true,
+        description: "Air units on the map: they fly over the battlefields near them, and the War Room's Deploy Aircraft sends them to bomb troops, structures or cities, where they can be intercepted. Off: no air unit is raised or flown, the War Room has no aircraft, and the simulator is told the war has none.",
+      }),
+      Object.freeze({
+        key: "navies",
+        type: "toggle",
+        label: "Navies",
+        defaultValue: true,
+        description: "Fleets on the map: they fight at sea, blockade coasts and carry troops across water. Off: no fleet is raised or sails, nothing is carried by sea, the War Room has no fleets, and the simulator is told the war has none.",
+      }),
       Object.freeze({
         key: "pace",
         label: "Pace of an advance",
@@ -44,14 +71,15 @@ export const FEATURE_DEFINITIONS = Object.freeze([
       }),
     ]),
   }),
-  // Listen in (src/runtime/listenIn.js): the phone a region's card and a
-  // country's panel open. It asks the model only when the player opens a feed
-  // that is not already kept for that place and day, so it costs nothing while
-  // nobody presses it.
+  // Rostra, the social network (src/runtime/socialFeed.js, src/Game/GameUI/social.jsx):
+  // "make sure the social media feature is disableable in the scenario editor"
+  // (the owner, 2026-11-02). It costs no request either way: the posts ride in
+  // the answer a time skip already gives, and off, the skip is neither shown
+  // the feed nor asked for any, so no part of its prompt goes on them.
   Object.freeze({
-    key: "listenIn",
-    label: "Listen in",
-    description: "A Listen in button on a region's card and in a country's panel opens a phone showing what ordinary people there are posting: the events of the day as they reach a kitchen table, and a few posts about nothing in particular. Each new feed is one AI request, made only when the player opens or refreshes one; a feed already read that day is kept. Off: the button is not shown and no feed is written.",
+    key: "socialMedia",
+    label: "Social media",
+    description: "Rostra, the world's social network: a button beside Actions opens posts by the people who make the news, written with each time skip, where the player can post as their country's leader and quote anyone's post. What is posted is public: the next time skip reads it and the world answers. It asks for no AI request of its own. Off: no Rostra button, nothing is posted, and the time skip is neither shown the posts nor asked to write any.",
     settings: Object.freeze([]),
   }),
   Object.freeze({
@@ -402,6 +430,8 @@ const readSetting = (value, setting) => {
     if (!Array.isArray(value) && typeof value !== "string") return null;
     return normalizeScriptedEvents(value);
   }
+  // An on/off of its own inside a feature (Wars: Fronts, Air units, Navies).
+  if (setting.type === "toggle") return readBoolean(value);
   if (setting.type === "choice") {
     const text = String(value ?? "").trim().toLowerCase();
     return setting.options.some((option) => option.value === text) ? text : null;
@@ -419,7 +449,14 @@ const readSetting = (value, setting) => {
 };
 
 // `{ espionage: false }` is accepted as shorthand for `{ espionage: { enabled: false } }`.
-const readEntry = (entry) => (isRecord(entry) ? entry : { enabled: entry });
+// A feature whose on/off became one of its settings (legacyEnabledSetting)
+// reads an older "enabled" as that setting, where the setting is not given.
+const readEntry = (entry, definition = null) => {
+  const read = isRecord(entry) ? entry : { enabled: entry };
+  const legacy = definition?.legacyEnabledSetting;
+  if (!legacy || read[legacy] !== undefined || readBoolean(read.enabled) === null) return read;
+  return { ...read, [legacy]: readBoolean(read.enabled) };
+};
 
 // The built-in defaults: everything on, every setting at its default.
 export const featureDefaults = () => normalizeFeatureSettings(null);
@@ -430,7 +467,7 @@ export const normalizeFeatureSettings = (raw) => {
   const source = isRecord(raw) ? raw : {};
   const settings = {};
   for (const definition of FEATURE_DEFINITIONS) {
-    const entry = readEntry(source[definition.key]);
+    const entry = readEntry(source[definition.key], definition);
     // A feature with no on/off is always on, whatever an older save stored.
     const resolved = { enabled: definition.toggleable === false ? true : readBoolean(entry.enabled) ?? true };
     for (const setting of definition.settings) {
@@ -448,7 +485,7 @@ export const normalizeFeatureOverrides = (raw) => {
   const overrides = {};
   for (const definition of FEATURE_DEFINITIONS) {
     if (source[definition.key] === undefined || source[definition.key] === null) continue;
-    const entry = readEntry(source[definition.key]);
+    const entry = readEntry(source[definition.key], definition);
     const resolved = {};
     const enabled = definition.toggleable === false ? null : readBoolean(entry.enabled);
     if (enabled !== null) resolved.enabled = enabled;
@@ -485,6 +522,19 @@ export const resolveFeatures = (scenarioFeatures, gameFeatures) => {
 };
 
 export const isFeatureEnabled = (features, key) => features?.[key]?.enabled !== false;
+
+// What of its wars a game fights itself (the Wars feature, key "fronts"): each
+// part on unless switched off, and an older save's "fronts off" is battlefields off.
+//   { battlefields, air, navies }
+export const warsOf = (features) => {
+  const wars = features?.fronts;
+  const legacyOff = wars?.enabled === false && wars?.battlefields === undefined;
+  return {
+    battlefields: !legacyOff && wars?.battlefields !== false,
+    air: wars?.air !== false,
+    navies: wars?.navies !== false,
+  };
+};
 
 // The director's settings as the engine reads them: null when world direction is
 // off for this game, so every caller's "nothing to enforce" is one check.

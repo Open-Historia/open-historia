@@ -73,6 +73,8 @@ import { splitScenarioBundleImage, unresolvedBundleBackground } from "../../runt
 import { noteMissingBasemapTried, retryMissingBasemap } from "../../runtime/missingBasemap.js";
 import { zipBundle, looksLikeZip } from "../../runtime/bundleZip.js";
 import { SCENARIO_LICENSE_FILE, SCENARIO_LICENSE_TEXT, SCENARIO_LICENSE_URL } from "../../runtime/scenarioLicense.js";
+import { formatGameDateShort } from "../../runtime/gameDates.js";
+import { getStoredLanguage } from "../../runtime/i18n.js";
 import { splitBundleFiles } from "../../runtime/bundleFiles.js";
 import { buildGameZipBlob, formatZipSize, readGameZip, saveGameZipToDisk } from "../../runtime/gameZip.js";
 import { findScenarioCopyOfBundle } from "../../runtime/importedScenarioCopy.js";
@@ -565,7 +567,6 @@ const editorSectionLabels = {
   assets: "Assets",
   bundles: "Bundles",
   features: "Features",
-  fronts: "Fronts",
   history: "Pre-history",
   music: "Music",
   overview: "Overview",
@@ -1327,6 +1328,7 @@ const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onDelete
   const cardMenuItems = [
     ["Edit", () => { setCardMenuOpen(false); onEdit(game.id); }, false],
     ["Clone", () => { setCardMenuOpen(false); onClone(game); }, false],
+    [game.archived ? "Unarchive" : "Archive", () => { setCardMenuOpen(false); onArchive(game); }, false],
     // Offered everywhere, the Android app included: runtime/saveFile.js saves
     // the zip into Downloads/Open Historia there (runtime/native/fileSave.js).
     [exporting ? "Exporting…" : "Export", runExport, exporting],
@@ -1517,7 +1519,7 @@ const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onDelete
         }}
       >
         <div>
-          <div style={{ color: "#fff", fontSize: isMobile ? "1.15rem" : "1.32rem", fontWeight: 800, letterSpacing: "-0.025em", lineHeight: 1.2, marginBottom: "0.4rem" }}>
+          <div style={{ color: "#fff", fontSize: isMobile ? "0.98rem" : "1.08rem", fontWeight: 800, letterSpacing: "-0.02em", lineHeight: 1.25, marginBottom: "0.45rem", overflowWrap: "break-word" }}>
             {game.name}
           </div>
           <div style={{ display: "grid", gap: "0.35rem", gridTemplateColumns: "1fr 1fr", marginBottom: "0.55rem" }}>
@@ -1527,7 +1529,9 @@ const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onDelete
             </div>
             <div style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "10px", minWidth: 0, padding: "0.35rem 0.55rem" }}>
               <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.58rem", fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase" }}>{"Date"}</div>
-              <div style={{ color: "#fff", fontSize: "0.8rem", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{game.currentDate || "No date"}</div>
+              <div style={{ color: "#fff", fontSize: "0.8rem", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {formatGameDateShort(game.currentDate, getStoredLanguage()) || game.currentDate || "No date"}
+              </div>
             </div>
             <div style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "10px", minWidth: 0, padding: "0.35rem 0.55rem" }}>
               <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.58rem", fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase" }}>{"Round"}</div>
@@ -1565,10 +1569,10 @@ const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onDelete
               onClick={() => onActivate(game.id)}
               style={touchFit({
                 ...themeButtonStyle,
-                background: active ? "rgba(255,255,255,0.06)" : game.accentColor,
-                borderColor: active ? "rgba(255,255,255,0.22)" : game.accentColor,
+                background: active ? "rgba(255,255,255,0.06)" : (game.accentColor || DEFAULT_ACCENT_COLOR),
+                borderColor: active ? "rgba(255,255,255,0.22)" : (game.accentColor || DEFAULT_ACCENT_COLOR),
                 borderRadius: "11px",
-                boxShadow: active ? "none" : `0 3px 12px ${game.accentColor}33`,
+                boxShadow: active ? "none" : `0 3px 12px ${(game.accentColor || DEFAULT_ACCENT_COLOR)}33`,
                 color: "#fff",
                 fontSize: "0.88rem",
                 fontWeight: 700,
@@ -1579,44 +1583,46 @@ const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onDelete
             >
               {active ? "Current" : <><ButtonIcon kind="play" /> Play</>}
             </button>
-            <div style={{ display: "flex", gap: "0.45rem" }}>
-              <button
-                className="oh-tap-row"
-                onClick={() => onArchive(game)}
-                style={touchFit({
-                  ...themeButtonStyle,
-                  background: "rgba(255,255,255,0.06)",
-                  flex: 1,
-                  fontSize: "0.78rem",
-                  minHeight: "2rem",
-                  padding: "0 0.6rem",
-                }, touch)}
-                title={game.archived ? "Move back into your library" : "Hide from the library without deleting"}
-                type="button"
-              >
-                <ButtonIcon kind="archive" /> {game.archived ? "Unarchive" : "Archive"}
-              </button>
-              {game.archived && onDelete && game.canDelete && (
+            {game.archived ? (
+              <div style={{ display: "flex", gap: "0.45rem" }}>
                 <button
                   className="oh-tap-row"
-                  disabled={busy}
-                  onClick={() => onDelete(game)}
+                  onClick={() => onArchive(game)}
                   style={touchFit({
                     ...themeButtonStyle,
-                    background: "rgba(127,29,29,0.34)",
-                    borderColor: "rgba(248,113,113,0.28)",
-                    color: "#fecaca",
+                    background: "rgba(255,255,255,0.06)",
                     flex: 1,
                     fontSize: "0.78rem",
                     minHeight: "2rem",
                     padding: "0 0.6rem",
                   }, touch)}
+                  title={"Move back into your library"}
                   type="button"
                 >
-                  Delete
+                  <ButtonIcon kind="archive" /> {game.archived ? "Unarchive" : "Archive"}
                 </button>
-              )}
-            </div>
+                {onDelete && game.canDelete && (
+                  <button
+                    className="oh-tap-row"
+                    disabled={busy}
+                    onClick={() => onDelete(game)}
+                    style={touchFit({
+                      ...themeButtonStyle,
+                      background: "rgba(127,29,29,0.34)",
+                      borderColor: "rgba(248,113,113,0.28)",
+                      color: "#fecaca",
+                      flex: 1,
+                      fontSize: "0.78rem",
+                      minHeight: "2rem",
+                      padding: "0 0.6rem",
+                    }, touch)}
+                    type="button"
+                  >
+                    Delete
+                  </button>
+                )}
+              </div>
+            ) : null}
           </div>
         </div>
       </div>
@@ -1863,7 +1869,6 @@ const CreateScenarioTile = ({ busy, onCreate }) => (
 const EDITOR_SECTION_GROUPS = Object.freeze([
   Object.freeze({ label: "Presentation", sections: Object.freeze(["overview", "assets", "music"]) }),
   Object.freeze({ label: "Setting", sections: Object.freeze(["world", "history", "politics"]) }),
-  Object.freeze({ label: "War", sections: Object.freeze(["fronts"]) }),
   Object.freeze({ label: "Rules and AI", sections: Object.freeze(["stats", "features", "prompts"]) }),
   Object.freeze({ label: "Sharing", sections: Object.freeze(["bundles"]) }),
 ]);
@@ -1875,9 +1880,8 @@ const EDITOR_SECTION_BLURBS = Object.freeze({
   world: "Where play begins: the player's country, the date, the troops and the story so far.",
   history: "The events that led to the start date.",
   politics: "Governments, parties and institutions.",
-  fronts: "How its wars are fought, every country's military and the fronts it begins with.",
   stats: "The national stats every country is measured by.",
-  features: "Which gameplay features are on.",
+  features: "Which gameplay features are on, and under Wars how its wars are fought, every country's military and the fronts it begins with.",
   prompts: "The instructions the AI follows.",
   bundles: "Download it as one file to share or keep.",
 });
@@ -1902,7 +1906,6 @@ const EditorSectionIcon = ({ kind, size = 17 }) => {
     world: <><circle cx="12" cy="12" r="8.5" /><path d="M3.5 12h17M12 3.5c2.3 2.3 3.5 5.2 3.5 8.5s-1.2 6.2-3.5 8.5c-2.3-2.3-3.5-5.2-3.5-8.5s1.2-6.2 3.5-8.5z" /></>,
     history: <><path d="M5 4.5h11.5a2 2 0 0 1 2 2v13H7a2 2 0 0 1-2-2z" /><path d="M5 17.5a2 2 0 0 1 2-2h11.5M9 8.5h6" /></>,
     politics: <><path d="M4 9.5 12 5l8 4.5M5.5 19.5h13M7 10.5v7M12 10.5v7M17 10.5v7" /></>,
-    fronts: <><path d="M5 5v15M5 5.5c4-2 7 2 11 0v8c-4 2-7-2-11 0" /></>,
     stats: <><path d="M5 19.5V11M10 19.5V6M15 19.5v-6M20 19.5V9" /></>,
     features: <><path d="M6 6.5h12M6 12h12M6 17.5h12" /><circle cx="9" cy="6.5" r="1.8" /><circle cx="15" cy="12" r="1.8" /><circle cx="10" cy="17.5" r="1.8" /></>,
     prompts: <><path d="M5 5.5h14v10H9.5L5 19.5z" /><path d="M8.5 9.5h7M8.5 12.5h4.5" /></>,
@@ -1970,7 +1973,7 @@ const EditorDrawer = ({
   const record = kind === "scenario" ? details.scenario : details.game;
   const visibleSections =
     kind === "scenario"
-      ? ["overview", "world", "history", "fronts", "politics", "stats", "features", "prompts", "assets", "music", "bundles"]
+      ? ["overview", "world", "history", "politics", "stats", "features", "prompts", "assets", "music", "bundles"]
       : ["overview", "world", "features", "prompts", "assets"];
   const groups = EDITOR_SECTION_GROUPS
     .map((group) => ({ ...group, sections: group.sections.filter((key) => visibleSections.includes(key)) }))
@@ -2362,35 +2365,6 @@ const EditorDrawer = ({
         />
       )}
 
-      {/* How its wars are fought (ScenarioWarSettings.jsx): part of the form,
-          which Save below writes. Then the fronts it begins with, which have
-          a Save of their own. */}
-      {editorSection === "fronts" && kind === "scenario" && (
-        <ScenarioWarSettings
-          value={formState.warSettings ?? null}
-          gameDate={formState.gameDate}
-          onChange={(next) => onChange("warSettings", next)}
-        />
-      )}
-
-      {/* Every country's military figures, rated by the AI against the others twenty to a request
-          (ScenarioMilitaryPanel.jsx): saved into the scenario batch by batch, as the Politics tab's are. */}
-      {editorSection === "fronts" && kind === "scenario" && (
-        <ScenarioMilitaryPanel
-          details={details}
-          onDetailsChange={onDetailsChange}
-          gameDate={formState.gameDate}
-          warSettings={formState.warSettings ?? null}
-        />
-      )}
-
-      {editorSection === "fronts" && kind === "scenario" && (
-        <ScenarioFrontsPanel
-          details={details}
-          onDetailsChange={onDetailsChange}
-        />
-      )}
-
       {editorSection === "politics" && kind === "scenario" && (
         <>
           <Suspense
@@ -2435,8 +2409,33 @@ const EditorDrawer = ({
         </div>
       )}
 
+      {/* The Features tab. Under Wars, on a scenario, what was its War tab: how its wars are fought
+          (ScenarioWarSettings.jsx, part of the form, which Save below writes); every country's military
+          figures, rated by the AI against the others twenty to a request (ScenarioMilitaryPanel.jsx, saved
+          batch by batch); and the fronts it begins with (ScenarioFrontsPanel.jsx, with a Save of its own). */}
       {editorSection === "features" && (
         <FeaturesSectionEditor
+          extras={kind === "scenario" ? {
+            fronts: (
+              <>
+                <ScenarioWarSettings
+                  value={formState.warSettings ?? null}
+                  gameDate={formState.gameDate}
+                  onChange={(next) => onChange("warSettings", next)}
+                />
+                <ScenarioMilitaryPanel
+                  details={details}
+                  onDetailsChange={onDetailsChange}
+                  gameDate={formState.gameDate}
+                  warSettings={formState.warSettings ?? null}
+                />
+                <ScenarioFrontsPanel
+                  details={details}
+                  onDetailsChange={onDetailsChange}
+                />
+              </>
+            ),
+          } : null}
           kind={kind}
           features={formState.features}
           scenarioFeatures={kind === "scenario" ? formState.features : formState.scenarioFeatures}
@@ -3118,7 +3117,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     try {
       // The checked copy of the post's file, stamped with the link to renew:
       // the post, its file, and the release copy that was downloaded.
-      const bundle = await downloadHubScenario({ postId: post.id, bundleUrl: post.bundleUrl, title: post.title, author: post.author, flatMap: post.flatMap });
+      const bundle = await downloadHubScenario({ postId: post.id, bundleUrl: post.bundleUrl, title: post.title, author: post.author, flatMap: post.flatMap, update: true });
       // Noted before the Update: it refreshes the library, and when a game on
       // this scenario is running its effect would otherwise download the
       // basemap that just failed again at once.

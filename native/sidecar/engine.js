@@ -322,7 +322,7 @@ export * as ctMapCards from "../../src/Game/Selection/mapCards.js";
 export * as ctScenarioCanon from "../../src/runtime/scenarioCanon.js";
 export * as ctOwnerNames from "../../src/runtime/ownerNames.js";
 export * as ctRegionNameFixes from "../../src/runtime/regionNameFixes.js";
-export * as ctListenIn from "../../src/runtime/listenIn.js";
+export * as ctPlaceFeed from "../../src/runtime/placeFeed.js";
 export * as ctI18n from "../../src/runtime/i18n.js";
 export * as ctCommunityFlags from "../../src/runtime/communityFlags.js";
 export * as ctGameFlagChoices from "../../src/Game/GameUI/gameFlagChoices.js";

@@ -16,6 +16,8 @@ export const BATTLEFIELD_VERSION = 1;
 // written whole and copied into every restore point.
 export const MAX_BATTLEFIELDS = 12;
 export const MAX_CLOSED_BATTLEFIELDS = 4;
+// And the most countries with forces at home at once, besides the battlefields of wars (home.js).
+export const MAX_HOME_FORCES = 6;
 export const MAX_BATTLEFIELDS_CHARS = 160000;
 export const BATTLEFIELD_NAME_MAX = 80;
 

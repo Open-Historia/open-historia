@@ -397,3 +397,45 @@ test("the per-turn refresh moves tiers through hysteresis, and leaves a world wi
   const empty = { ...makePeerWorld(), powerStatus: { schemaVersion: 1, byPolity: {} } };
   assert.equal(refreshPowerStatusForTurn(empty, { date: "2014-02-01", round: 2 }), empty);
 });
+
+// A turn's refresh scores every polity against one identity index of the world (refreshPowerStatus); each score is
+// the one it would be with an index built afresh for it, names given as aliases and institutions included.
+test("a polity scored with the world's shared identity index scores as it does alone", async () => {
+  const { buildPolityIdentityIndex } = await import("./polityIdentity.js");
+  const world = {
+    polityOverrides: {
+      "Republic of Aland": { name: "Republic of Aland", aliases: ["Aland", "ALD"], status: "active" },
+      Borduria: { name: "Borduria", code: "BRD", status: "active" },
+      Syldavia: { name: "Syldavia", status: "active" },
+    },
+    regionOwnershipOverrides: { r1: "Republic of Aland", r2: "Republic of Aland", r3: "Borduria", r4: "Syldavia" },
+    countryStats: {
+      "Republic of Aland": { economy: { gdp: 400 }, population: { total: 30 } },
+      Borduria: { economy: { gdp: 120 }, population: { total: 12 } },
+      Syldavia: { economy: { gdp: 60 }, population: { total: 5 } },
+    },
+    politicalActors: { byPolity: {} },
+    countryTags: {},
+    agreements: [],
+    wars: [],
+    institutions: {
+      schemaVersion: 1,
+      ledgerVersion: 1,
+      byId: {
+        "northern-pact": {
+          id: "northern-pact",
+          name: "Northern Pact",
+          kind: "defense_pact",
+          status: "active",
+          foundedDate: "2014-01-01",
+          members: [{ polity: "Aland", status: "member", role: "leader" }, { polity: "BRD", status: "member", role: "member" }],
+        },
+      },
+    },
+  };
+  const index = buildPolityIdentityIndex(world);
+  for (const polity of ["Republic of Aland", "Aland", "ALD", "Borduria", "BRD", "Syldavia", "Nowhere"]) {
+    assert.deepEqual(estimateNativePowerScore(world, polity, null, index), estimateNativePowerScore(world, polity), polity);
+  }
+  assert.ok(estimateNativePowerScore(world, "Aland", null, index).institutionalLeverageScore > 0, "the pact counted");
+});

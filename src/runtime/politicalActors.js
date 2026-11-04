@@ -2,6 +2,7 @@
 
 import { resolveStockCountryCode } from "./polityIdentity.js";
 import { normalizePoliticalPressureState } from "./politicalPressure.js";
+import { PARTY_ROLES, findIdeology } from "./politics.js";
 
 export const POLITICAL_ACTORS_SCHEMA_VERSION = 6;
 
@@ -366,6 +367,32 @@ export const normalizePoliticalParty = (value, { index = 0 } = {}) => {
     if (ideology) out.ideology = ideology;
     else delete out.ideology;
 
+    // What the Stats pane's Politics tab used to keep apart (world.politics), now
+    // the Political World's own: "add the new politics thing into the political
+    // world and just make it an enhancement of that" (the owner, 2026-11-03).
+    //   nameNative, shortNameNative   the name and abbreviation as its own speakers write them
+    //   ideologyFamily                one of the ten ideologies (politics.js IDEOLOGIES), by id
+    //   subideology                   one listed under it, or the party's own word
+    //   role                          governing, coalition, opposition, outside parliament,
+    //                                 underground, in exile or banned (politics.js PARTY_ROLES);
+    //                                 the government's ruling and coalition parties say the first two
+    //   seats                         its seats in the legislature
+    //   founded                       the year it was founded
+    for (const [key, ...aliases] of [["nameNative"], ["shortNameNative", "abbrNative"], ["subideology"], ["founded"]]) {
+      const text = clean([value[key], ...aliases.map((alias) => value[alias])].find((entry) => clean(entry)));
+      if (text) out[key] = text;
+      else delete out[key];
+      for (const alias of aliases) delete out[alias];
+    }
+    const family = findIdeology(value.ideologyFamily);
+    if (family) out.ideologyFamily = family.id;
+    else delete out.ideologyFamily;
+    if (PARTY_ROLES.includes(value.role)) out.role = value.role;
+    else delete out.role;
+    const seats = Number(value.seats);
+    if (value.seats !== null && value.seats !== undefined && value.seats !== "" && Number.isFinite(seats) && seats >= 0) out.seats = Math.round(seats);
+    else delete out.seats;
+
     const leader = normalizeOfficeholder(value.leader);
     if (leader) out.leader = leader;
     else delete out.leader;
@@ -596,11 +623,15 @@ export const normalizePoliticalGovernment = (value, parties = []) => {
     const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
     const out = cloneActorValue(source);
 
-    for (const key of ["form", "ideology", "status", "coalitionName"]) {
+    // (legislature and nextElection, with legislatureSeats below: the Politics tab's, now the Political World's.)
+    for (const key of ["form", "ideology", "status", "coalitionName", "legislature", "nextElection"]) {
         const text = clean(source[key]);
         if (text) out[key] = text;
         else delete out[key];
     }
+    const legislatureSeats = Number(source.legislatureSeats);
+    if (source.legislatureSeats !== null && source.legislatureSeats !== undefined && source.legislatureSeats !== "" && Number.isFinite(legislatureSeats) && legislatureSeats > 0) out.legislatureSeats = Math.round(legislatureSeats);
+    else delete out.legislatureSeats;
 
     const headOfState = normalizeOfficeholder(source.headOfState || source.headOfStateId);
     const headOfGovernment = normalizeOfficeholder(source.headOfGovernment || source.headOfGovernmentId);
@@ -665,6 +696,57 @@ const sameOfficeholder = (left, right) => {
     const leftKey = officeholderIdentityKey(left);
     const rightKey = officeholderIdentityKey(right);
     return Boolean(leftKey && rightKey && leftKey === rightKey);
+};
+
+// The office a leader's title names: a head of government's (a prime minister,
+// a chancellor) or a head of state's (a president, a monarch). A title naming
+// neither (a supreme leader, a general secretary, a party's chairman) is an
+// office of its own.
+const OFFICE_TITLE_WORDS = Object.freeze({
+    headOfGovernment: /\b(prime minister|premier|chancellor|first minister|chief minister|taoiseach|head of government|president of the government|president of the council of ministers)\b/i,
+    headOfState: /\b(president|king|queen|monarch|emperor|empress|sultan|emir|shah|tsar|czar|kaiser|grand duke|grand duchess|head of state)\b/i,
+});
+const titleOf = (officeholder) => (officeholder && typeof officeholder === "object" ? clean(officeholder.title) : "");
+const withTitle = (holder, title) => {
+    if (!title) return holder;
+    if (typeof holder === "string") return { name: holder, title };
+    return titleOf(holder) ? holder : { ...holder, title };
+};
+
+// A polity's leader as its offices have it. A leader who holds neither office
+// but carries the title of one is its former holder, left behind when a turn
+// gave the office to someone else and said nothing of the leader: "head of
+// state (prime minister) showing 3 different people" (a player's report,
+// 2026-11-03), the generated leader Prime Minister Anthony Albanese still
+// standing over the head of government a turn had made Peter Dutton, and
+// Rostra posting as him. The leader follows the office, the title kept where
+// its new holder has none. A leader of an office of their own stands.
+export const leaderOfOffices = (leader, government) => {
+    const title = titleOf(leader);
+    if (!title) return leader;
+    const holders = [
+        ["headOfGovernment", normalizeOfficeholder(government?.headOfGovernment)],
+        ["headOfState", normalizeOfficeholder(government?.headOfState)],
+    ].filter(([, holder]) => holder);
+    if (holders.some(([, holder]) => sameOfficeholder(holder, leader))) return leader;
+    for (const [office, holder] of holders) {
+        const theirs = titleOf(holder).toLocaleLowerCase() === title.toLocaleLowerCase() || OFFICE_TITLE_WORDS[office].test(title);
+        if (theirs) return withTitle(holder, title);
+    }
+    return leader;
+};
+
+// The leader once an op has given an office to someone else (politicalActorOps.js):
+// whoever held it follows it, titled or not, with the title they had where the
+// new holder has none.
+export const leaderAfterOfficeChange = (leader, before, after) => {
+    for (const office of ["headOfGovernment", "headOfState"]) {
+        const was = normalizeOfficeholder(before?.[office]);
+        const now = normalizeOfficeholder(after?.[office]);
+        if (!was || !now || sameOfficeholder(was, now) || !sameOfficeholder(leader, was)) continue;
+        return withTitle(now, titleOf(leader));
+    }
+    return leader;
 };
 
 // Formal office and operative political authority are not interchangeable.
@@ -853,7 +935,7 @@ export const normalizePoliticalActorRecord = (value, fallbackPolityKey = "") => 
         powerBlocs,
     });
 
-    const leader = normalizeOfficeholder(value.leader || government.headOfState);
+    const leader = leaderOfOffices(normalizeOfficeholder(value.leader || government.headOfState), government);
     if (leader) out.leader = leader;
     else delete out.leader;
 
@@ -973,14 +1055,16 @@ export function getPoliticalProfile(world, polityKey) {
         // own right never borrows the actor of ANOTHER polity just because both
         // names map to the same stock country ("Russia" founded next to the
         // "Russian Federation" gets its own actor, not the Federation's).
-        const ownPolities = ownPolityNames(world);
+        // (Those names read every region's owner: only gathered once an actor of that stock country is found.)
+        let ownPolities = null;
+        const ownPolity = (token) => (ownPolities ??= ownPolityNames(world)).has(clean(token));
         const requested = clean(polityKey);
-        const isOtherPolity = (token) => clean(token) !== requested && ownPolities.has(clean(token));
-        const requestedIsOwnPolity = ownPolities.has(requested);
+        const isOtherPolity = (token) => clean(token) !== requested && ownPolity(token);
         for (const [actorKey, actor] of Object.entries(byPolity)) {
-            if (requestedIsOwnPolity && [actorKey, actor?.polityKey].some((token) => token && isOtherPolity(token))) continue;
             const actorTokens = [actorKey, actor?.polityKey, actor?.name].filter(Boolean);
-            if (actorTokens.some((token) => resolveStockCountryCode(token) === stockCode)) return actor;
+            if (!actorTokens.some((token) => resolveStockCountryCode(token) === stockCode)) continue;
+            if (ownPolity(requested) && [actorKey, actor?.polityKey].some((token) => token && isOtherPolity(token))) continue;
+            return actor;
         }
     }
 

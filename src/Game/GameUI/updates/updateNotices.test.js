@@ -45,7 +45,7 @@ test("each update is shown once a device; one that missed several is shown all o
   // Only the updates written as notices, never the history before them: "make sure people ONLY see the update popup
   // things for the updates that are actually being added (plus the music one), not for every update in the history"
   // (the owner, 2026-10-16).
-  assert.deepEqual(firstLook, ["2026-11-native-editor-map", "2026-10-espionage-part-2", "2026-10-swarms", "2026-10-wars-and-fronts-2"]);
+  assert.deepEqual(firstLook, ["2026-11-display-mode", "2026-11-rostra", "2026-11-deploy-aircraft", "2026-10-espionage-part-2"]);
   const past = new Set(PAST_UPDATES.map((update) => update.id));
   for (const seen of [null, "gone", ...past]) {
     assert.deepEqual(pendingUpdates({ seen, keeps: true }).filter((update) => past.has(update.id)), [], `seen ${seen}: no history entry`);
@@ -65,7 +65,9 @@ test("each update is shown once a device; one that missed several is shown all o
 
 test("every banner of the updates shown is a page, and a preview shows one update whatever was seen", () => {
   assert.deepEqual(noticePages(list.slice(0, 2)).map((page) => page.banner.title), ["C1", "C2", "B"]);
-  assert.deepEqual(noticePages(list).map((page) => page.key), ["c#0", "c#1", "b#0", "a#0"]);
+  // Every major update's pages before any minor one's, newest first within each.
+  assert.deepEqual(noticePages(list).map((page) => page.key), ["c#0", "c#1", "a#0", "b#0"]);
+  assert.deepEqual(noticePages([list[1], list[0]]).map((page) => page.key), ["c#0", "c#1", "b#0"]);
   assert.equal(previewedUpdates("", list), null);
   assert.deepEqual(previewedUpdates("?updateNotice=latest", list).map((update) => update.id), ["c"]);
   assert.deepEqual(previewedUpdates("?updateNotice=b&x=1", list).map((update) => update.id), ["b"]);

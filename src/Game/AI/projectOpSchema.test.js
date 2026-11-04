@@ -216,7 +216,10 @@ test("the board no longer costs the jump anything", () => {
   // letter's peaceOffer (its terms, four flat fields) and the peaceTreaties line
   // field, so that a country offers peace when the skip says so, in the skip's
   // one request, and never by a formula of the game's.
-  assert.ok(jumpChars < 29250, `the jump schema grew back to ${jumpChars} chars`);
+  // Rostra, the social network, raised it by about 400, on purpose: the posts of
+  // the period (socialPosts, seven flat fields named in words) ride in the skip's
+  // one answer, where a feed of its own would have been a request a skip.
+  assert.ok(jumpChars < 29650, `the jump schema grew back to ${jumpChars} chars`);
 
   // ...and the game master, which has no second pass to hand the board to, keeps
   // it on its authored events (the provider sees a shallow transport; the

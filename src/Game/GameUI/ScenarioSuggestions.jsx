@@ -31,7 +31,7 @@ import { copyToClipboard } from "../../runtime/clipboard.js";
 import { acceptFor } from "../../runtime/fileAccept.js";
 import { fetchHubIndex, hubIndexProblem } from "../../runtime/hubFiles.js";
 import { downloadHubBundle, downloadHubFile, fetchHubPosts, hubOriginalGone, hubPostUrl } from "../../runtime/hubPosts.js";
-import { buildScenarioSnapshot, changedPathsOf, countChanges, diffScenarioBundles } from "../../runtime/scenarioChanges.js";
+import { borderRegionCounts, buildScenarioSnapshot, changedPathsOf, countChanges, diffScenarioBundles } from "../../runtime/scenarioChanges.js";
 import {
   buildSuggestion,
   buildSuggestionComment,
@@ -386,12 +386,23 @@ const MapChangeSummary = ({ changes, decided = null }) => {
     <div style={{ display: "grid", gap: "0.3rem" }}>
       {REVIEW_SECTIONS.filter((section) => counts.has(section.id)).map((section) => {
         const entry = counts.get(section.id);
+        // A border change is a group of neighbouring regions: say how many regions they touch.
+        const regions = section.id === "borders" ? borderRegionCounts(changes) : null;
         return (
-          <div key={section.id} style={{ display: "flex", fontSize: "0.82rem", gap: "0.5rem", justifyContent: "space-between" }}>
-            <span>{MAP_SECTION_LABELS[section.id]}</span>
-            <span style={{ color: "rgba(255,255,255,0.6)" }}>
-              {decided ? `${entry.decided} of ${entry.total} decided` : entry.total === 1 ? "1 change" : `${entry.total} changes`}
-            </span>
+          <div key={section.id} style={{ display: "grid", gap: "0.1rem" }}>
+            <div style={{ display: "flex", fontSize: "0.82rem", gap: "0.5rem", justifyContent: "space-between" }}>
+              <span>{MAP_SECTION_LABELS[section.id]}</span>
+              <span style={{ color: "rgba(255,255,255,0.6)" }}>
+                {decided ? `${entry.decided} of ${entry.total} decided` : entry.total === 1 ? "1 change" : `${entry.total} changes`}
+              </span>
+            </div>
+            {regions && (regions.merged > 0 || regions.reshaped > 0 || regions.added > 0) && (
+              <div style={{ color: "rgba(255,255,255,0.55)", display: "flex", flexWrap: "wrap", fontSize: "0.76rem", gap: "0 0.6rem" }}>
+                {regions.merged > 0 && <span>{regions.merged === 1 ? "1 region merged into others" : `${regions.merged} regions merged into others`}</span>}
+                {regions.reshaped > 0 && <span>{regions.reshaped === 1 ? "1 region reshaped" : `${regions.reshaped} regions reshaped`}</span>}
+                {regions.added > 0 && <span>{regions.added === 1 ? "1 new region" : `${regions.added} new regions`}</span>}
+              </div>
+            )}
           </div>
         );
       })}
@@ -477,7 +488,9 @@ export const SuggestChangesDialog = ({ scenario, onClose, onUpdate = null }) => 
           setPhase("outdated");
           return;
         }
-        const [base, current] = await Promise.all([downloadHubBundle(bundleUrl), exportScenarioBundle(scenario.id)]);
+        // The post's file from its update copy: reading it to measure a
+        // suggestion against is not an import (hubFiles.js updateCopyOf).
+        const [base, current] = await Promise.all([downloadHubBundle(bundleUrl, { update: true }), exportScenarioBundle(scenario.id)]);
         const found = diffScenarioBundles(base, current);
         if (!alive) return;
         setChanges(found);

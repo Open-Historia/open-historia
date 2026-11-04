@@ -3,7 +3,7 @@ import React, { useState, useRef, useEffect } from "react";
 import { Chart, registerables } from "chart.js";
 import { sendMessage, startChat, loadHistory } from "../AI/main.jsx";
 import { requestDiplomaticChat } from "./chat.jsx";
-import { JSON_URLS, readJson, writeJson } from "../../runtime/assets.js";
+import { JSON_URLS, readJson } from "../../runtime/assets.js";
 import { formatReportFields, logDebugEvent } from "../../runtime/debugLog.js";
 import { useFailureReportButton } from "../../runtime/saveDebugLog.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
@@ -11,8 +11,11 @@ import { SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, useTouchPrimary } from ".
 import { isComposerSendKey } from "../../runtime/composerKeys.js";
 import { chatLanguageDiffersFromUi, chatTextDirection } from "../../runtime/i18n.js";
 import { uiString } from "../../runtime/translator.js";
-import { applyProjectOpsToWorld, normalizeActionEntry, readActionsState, readAdvisorMessages, readWorldState, viewAsSeen, writeActionsState, writeWorldState } from "../../runtime/gameState.js";
+import { applyProjectOpsToWorld, mutateAdvisorState, normalizeActionEntry, readActionsState, readAdvisorMessages, readWorldState, viewAsSeen, writeActionsState, writeWorldState } from "../../runtime/gameState.js";
+import { CHIEF_ADVISOR_THREAD, advisorContacts, advisorMessagesFor, advisorOfficeStatus, archiveAdvisorContact, createAdvisorContact, politicalAdvisorOffices, replaceAdvisorThread, reviseAdvisorContact } from "../../runtime/advisorThreads.js";
+import { getPoliticalProfile } from "../../runtime/politicalActors.js";
 import StorageProblemNotice from "./storageProblemNotice.jsx";
+import AdvisorRecipients from "./AdvisorRecipients.jsx";
 import { describeReplyProblems, extractFencedJson, looksLikeProjectOps, planAdvisorActionEdits } from "./advisorBlocks.js";
 import { sentLetterDate, splitAtBlockquotes } from "./advisorDrafts.js";
 import { repeatedOrder } from "../AI/playerFocus.js";
@@ -653,14 +656,16 @@ const AdvisorChart = ({ config }) => {
 let advisorLoadFailed = false;
 let onAdvisorSaveResult = null;
 
-const saveMessages = async (messages) => {
+const saveMessages = async (messages, threadId = CHIEF_ADVISOR_THREAD, options = {}) => {
     if (advisorLoadFailed) return false;
     try {
-        await writeJson(JSON_URLS.advisor, messages);
+        // The turn may be posting documents to this same file. Merge inside
+        // its canonical write queue, modifying *only* this recipient's messages.
+        await mutateAdvisorState((stored) => replaceAdvisorThread(stored, threadId, messages, options));
         onAdvisorSaveResult?.(true);
         return true;
     } catch (err) {
-        console.error("Failed to save messages:", err);
+        console.error("Failed to save advisor conversation:", err);
         onAdvisorSaveResult?.(false);
         return false;
     }
@@ -811,7 +816,7 @@ const formatAdvisorDate = (dateStr) => {
 // new message appended, or the streaming placeholder being replaced); memo's
 // default shallow prop comparison skips everything else, including every
 // keystroke in the composer below.
-const AdvisorMessageRow = React.memo(({ msg, msgIndex, allowedUnitTypes, chatDiffers, chatDir, onOpenActions, onOpenProjects, onRetryProjects, onRetry, retrying, onDraftMessage, onExecuteInstitutionDraft, onPlaceDeployment }) => {
+const AdvisorMessageRow = React.memo(({ msg, msgIndex, speakerName = "Advisor", canExecute = true, allowedUnitTypes, chatDiffers, chatDir, onOpenActions, onOpenProjects, onRetryProjects, onRetry, retrying, onDraftMessage, onExecuteInstitutionDraft, onPlaceDeployment }) => {
     const { text, chartConfig, chartProblem, messageDrafts, institutionDrafts, deployments } = msg.role === "advisor"
         ? parseAdvisorReply(msg.text, { allowedUnitTypes: allowedUnitTypes ? allowedUnitTypes.split(",") : null, streaming: Boolean(msg.streaming) })
         : { text: msg.text, chartConfig: null, chartProblem: "", messageDrafts: null, institutionDrafts: null, deployments: null };
@@ -828,7 +833,7 @@ const AdvisorMessageRow = React.memo(({ msg, msgIndex, allowedUnitTypes, chatDif
         )}
         {msg.role !== "user" && (
             <span style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.4)", marginBottom: "0.25rem" }}>
-            {msg.role === "error" ? "⚠️ Error" : "🧭 Advisor"}
+            {msg.role === "error" ? "⚠️ Error" : `🧭 ${speakerName}`}
             </span>
         )}
         {/* Player-typed text stays verbatim under UI translation. */}
@@ -856,11 +861,16 @@ const AdvisorMessageRow = React.memo(({ msg, msgIndex, allowedUnitTypes, chatDif
             📉 The chart could not be drawn: {chartProblem}.
             </div>
         )}
+        {msg.suggestionsNotApplied && !msg.streaming && (
+            <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.72rem", marginTop: "0.6rem" }}>
+            This official's suggested Actions or Projects were not applied. Authorize them through your chief advisor or the relevant panel.
+            </div>
+        )}
         {msg.actionsSummary &&<AdvisorActionsCard items={msg.actionsSummary} onOpenActions={onOpenActions} />}
         {msg.projectsSummary && <AdvisorProjectsCard items={msg.projectsSummary} onOpenProjects={onOpenProjects} />}
         {msg.projectsProblem && <AdvisorProjectsProblem kind={msg.projectsProblem} detail={msg.projectsDetail} excerpt={msg.projectsExcerpt} onRetry={onRetryProjects} />}
         {msg.role === "error" && <AdvisorErrorDetails message={msg.text} diagnostics={msg.diagnostics} onRetry={onRetry} retrying={retrying} />}
-        {institutionDrafts && institutionDrafts.length > 0 && (
+        {canExecute && institutionDrafts && institutionDrafts.length > 0 && (
             <div style={{ marginTop: "0.75rem", display: "flex", flexDirection: "column", gap: "0.4rem" }}>
             {institutionDrafts.map((draft, draftIndex) => (
                 <AdvisorInstitutionDraftAction
@@ -872,7 +882,7 @@ const AdvisorMessageRow = React.memo(({ msg, msgIndex, allowedUnitTypes, chatDif
             ))}
             </div>
         )}
-        {deployments && deployments.length > 0 && (
+        {canExecute && deployments && deployments.length > 0 && (
             <div style={{ marginTop: "0.75rem", display: "flex", flexDirection: "column", gap: "0.4rem" }}>
             {/* deployment.index, not the position here: placedDeployments is
                 keyed on it, and it holds when the scenario's allowed types
@@ -968,7 +978,7 @@ const ADVISOR_RENDER_WINDOW_STEP = 20;
 // Only the last `visibleLimit` messages are drawn. `i` stays the index into
 // the WHOLE transcript: placedDeployments and completedInstitutionDrafts are
 // written back through it.
-const AdvisorMessageList = React.memo(({ messages, visibleLimit, onShowEarlier, isLoading, allowedUnitTypes, chatDiffers, chatDir, onOpenActions, onOpenProjects, onRetryProjects, onRetry, retrying, onDraftMessage, onExecuteInstitutionDraft, onPlaceDeployment, messagesEndRef, containerRef, onScroll }) => (
+const AdvisorMessageList = React.memo(({ messages, visibleLimit, onShowEarlier, isLoading, speakerName = "Advisor", canExecute = true, allowedUnitTypes, chatDiffers, chatDir, onOpenActions, onOpenProjects, onRetryProjects, onRetry, retrying, onDraftMessage, onExecuteInstitutionDraft, onPlaceDeployment, messagesEndRef, containerRef, onScroll }) => (
     <div ref={containerRef} onScroll={onScroll} style={{ padding: "0.75rem", flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", gap: "1rem", scrollbarWidth: "none" }}>
     {messages.length === 0 && (
         <p style={{ fontSize: "0.85rem", color: "rgba(255,255,255,0.5)", marginTop: 0 }}>
@@ -995,13 +1005,13 @@ const AdvisorMessageList = React.memo(({ messages, visibleLimit, onShowEarlier, 
     {messages.map((msg, i) => (i < messages.length - visibleLimit ? null : msg.role === "notice"
         ? <AdvisorDocumentNotice key={msg.id || i} notice={msg} />
         : (
-        <AdvisorMessageRow key={i} msg={msg} msgIndex={i} allowedUnitTypes={allowedUnitTypes} chatDiffers={chatDiffers} chatDir={chatDir} onOpenActions={onOpenActions} onOpenProjects={onOpenProjects} onRetryProjects={onRetryProjects} onDraftMessage={onDraftMessage} onExecuteInstitutionDraft={onExecuteInstitutionDraft} onPlaceDeployment={onPlaceDeployment}
+        <AdvisorMessageRow key={i} msg={msg} msgIndex={i} speakerName={speakerName} canExecute={canExecute} allowedUnitTypes={allowedUnitTypes} chatDiffers={chatDiffers} chatDir={chatDir} onOpenActions={onOpenActions} onOpenProjects={onOpenProjects} onRetryProjects={onRetryProjects} onDraftMessage={onDraftMessage} onExecuteInstitutionDraft={onExecuteInstitutionDraft} onPlaceDeployment={onPlaceDeployment}
         onRetry={i === messages.length - 1 && msg.role === "error" ? onRetry : undefined} retrying={retrying} />
     )))}
 
     {isLoading && !(messages[messages.length - 1]?.role === "advisor" && messages[messages.length - 1]?.streaming) && (
         <div style={{ display: "flex", alignItems: "flex-start", flexDirection: "column", gap: "0.25rem" }}>
-        <span style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.4)" }}>🧭 Advisor</span>
+        <span style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.4)" }}>🧭 {speakerName}</span>
         <div style={{ padding: "0.6rem 0.85rem", borderRadius: "12px 12px 12px 4px", backgroundColor: "rgba(255,255,255,0.08)", fontSize: "0.85rem" }}>
         <ThinkingDots />
         </div>
@@ -1020,6 +1030,25 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
     const [messages, setMessages]   = useState([]);
     const [input, setInput]         = useState("");
     const [isLoading, setIsLoading] = useState(false);
+    const [contacts, setContacts] = useState([]);
+    const [activeThreadId, setActiveThreadId] = useState(CHIEF_ADVISOR_THREAD);
+    const activeThreadIdRef = useRef(CHIEF_ADVISOR_THREAD);
+    const contactDraftsRef = useRef(new Map());
+    const threadSwitchingRef = useRef(false);
+    const contactMutationRef = useRef(false);
+    const [contactsBusy, setContactsBusy] = useState(false);
+    const sideEffectPendingRef = useRef(0);
+    const [sideEffectsBusy, setSideEffectsBusy] = useState(false);
+    const playerPolity = useRuntimeState("game", (game) => String(game?.country || ""));
+    // Only the player's government, as text: the whole world re-rendered this panel on every write a turn made.
+    const governmentText = useRuntimeState("world", (world) => JSON.stringify(getPoliticalProfile(world || {}, playerPolity)?.government ?? null), playerPolity);
+    const politicalWorld = React.useMemo(() => {
+        const government = JSON.parse(governmentText);
+        return government ? { politicalActors: { byPolity: { [playerPolity]: { polityKey: playerPolity, government } } } } : {};
+    }, [governmentText, playerPolity]);
+    const offices = React.useMemo(() => politicalAdvisorOffices(politicalWorld, playerPolity), [politicalWorld, playerPolity]);
+    const selectedContact = contacts.find((contact) => contact.id === activeThreadId) || null;
+    const recipientLocked = Boolean(selectedContact?.archived);
     const messagesEndRef            = useRef(null);
     const [visibleMessageLimit, setVisibleMessageLimit] = useState(ADVISOR_INITIAL_RENDER_WINDOW);
     const handleShowEarlier = React.useCallback(() => {
@@ -1038,6 +1067,14 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
     // The transcript and the current runTurn, readable from a stable callback
     // (handleRetryTurn) without making that callback depend on either.
     const messagesRef               = useRef(messages);
+    // Maintain the transcript ref synchronously. Streaming and canonical writes
+    // must not depend on React flushing a queued functional state updater.
+    const updateMessages = React.useCallback((change) => {
+        const next = typeof change === "function" ? change(messagesRef.current) : change;
+        messagesRef.current = next;
+        setMessages(next);
+        return next;
+    }, []);
     const runTurnRef                = useRef(null);
     const turnInFlightRef           = useRef(false);
     const handleMessagesScroll = React.useCallback(() => {
@@ -1112,17 +1149,18 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         let cancelled = false;
         loadMessages().then((saved) => {
             if (cancelled) return;
-            if (saved === null) setLoadFailed(true);
-            if (saved?.length > 0) {
-                setMessages(saved);
-                loadHistory(saved);   // restore advisor history — no prompt arg = advisor mode
+            if (saved === null) {
+                setLoadFailed(true);
             } else {
-                startChat();          // fresh start — no prompt arg = advisor mode
+                setContacts(advisorContacts(saved));
+                const chiefMessages = advisorMessagesFor(saved, CHIEF_ADVISOR_THREAD);
+                updateMessages(chiefMessages);
+                loadHistory(chiefMessages, CHIEF_ADVISOR_THREAD);
             }
             setHasBootstrapped(true);
         });
         return () => { cancelled = true; };
-    }, [hasBootstrapped, isAdvisorOpen]);
+    }, [hasBootstrapped, isAdvisorOpen, updateMessages]);
 
     // A turn flags new papers in the file while the panel holds the conversation
     // (and an undo takes them back): merge them in (mergeNotices), so they show
@@ -1132,11 +1170,14 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         if (!hasBootstrapped) return undefined;
         const onRuntimeUpdate = (event) => {
             if (event?.detail?.url !== JSON_URLS.advisor) return;
-            setMessages((prev) => mergeNotices(prev, event.detail.value));
+            setContacts(advisorContacts(event.detail.value));
+            if (activeThreadIdRef.current === CHIEF_ADVISOR_THREAD) {
+                updateMessages((prev) => mergeNotices(prev, advisorMessagesFor(event.detail.value, CHIEF_ADVISOR_THREAD)));
+            }
         };
         window.addEventListener("oh:runtime-json-updated", onRuntimeUpdate);
         return () => window.removeEventListener("oh:runtime-json-updated", onRuntimeUpdate);
-    }, [hasBootstrapped]);
+    }, [hasBootstrapped, updateMessages]);
 
     useEffect(() => {
         if (!shouldAutoScrollRef.current) return;
@@ -1186,6 +1227,81 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         resizeTextarea();
     }, [input, resizeTextarea]);
 
+    // Recipient navigation does not replace the campaign's chief advisor.
+    // Every contact has its own saved transcript and model history. Switching
+    // while a reply is in flight is forbidden: its streaming UI and write receipt
+    // must reach the conversation it was asked in.
+    const selectRecipient = async (id) => {
+        if (!hasBootstrapped || loadFailed || turnInFlightRef.current || sideEffectPendingRef.current || threadSwitchingRef.current) return;
+        if (activeThreadIdRef.current === id) return;
+        threadSwitchingRef.current = true;
+        try {
+            const saved = await readAdvisorMessages({ force: true });
+            if (id !== CHIEF_ADVISOR_THREAD && !advisorContacts(saved).some((contact) => contact.id === id)) {
+                throw new Error("The selected Advisor recipient no longer exists.");
+            }
+            contactDraftsRef.current.set(activeThreadIdRef.current, input);
+            const selectedMessages = advisorMessagesFor(saved, id);
+            activeThreadIdRef.current = id;
+            setActiveThreadId(id);
+            setContacts(advisorContacts(saved));
+            updateMessages(selectedMessages);
+            setInput(contactDraftsRef.current.get(id) || "");
+            setVisibleMessageLimit(ADVISOR_INITIAL_RENDER_WINDOW);
+            loadHistory(selectedMessages, id);
+            shouldAutoScrollRef.current = true;
+        } catch (error) {
+            setLoadFailed(true);
+            logDebugEvent("advisor", "Advisor contact could not be selected.", error, { problem: true });
+        } finally {
+            threadSwitchingRef.current = false;
+        }
+    };
+
+    const createRecipient = async (draft) => {
+        if (turnInFlightRef.current || sideEffectPendingRef.current || contactMutationRef.current || threadSwitchingRef.current || loadFailed || saveFailed) throw new Error("Cannot add a recipient while the Advisor is busy.");
+        contactMutationRef.current = true;
+        setContactsBusy(true);
+        const random = globalThis.crypto?.randomUUID?.().replace(/-/g, "")
+            || `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 15)}`;
+        const id = `advisor-${random}`;
+        try {
+            await mutateAdvisorState((all) => createAdvisorContact(all, { ...draft, id }));
+            setContacts(advisorContacts(await readAdvisorMessages({ force: true })));
+        } finally {
+            contactMutationRef.current = false;
+            setContactsBusy(false);
+        }
+        await selectRecipient(id);
+    };
+
+    const reviseRecipient = async (id, draft) => {
+        if (turnInFlightRef.current || sideEffectPendingRef.current || contactMutationRef.current || threadSwitchingRef.current || loadFailed || saveFailed) throw new Error("Cannot edit a recipient while the Advisor is busy.");
+        contactMutationRef.current = true;
+        setContactsBusy(true);
+        try {
+            await mutateAdvisorState((all) => reviseAdvisorContact(all, id, draft));
+            setContacts(advisorContacts(await readAdvisorMessages({ force: true })));
+        } finally {
+            contactMutationRef.current = false;
+            setContactsBusy(false);
+        }
+    };
+
+    const retireRecipient = async (id, archived) => {
+        if (turnInFlightRef.current || sideEffectPendingRef.current || contactMutationRef.current || threadSwitchingRef.current || loadFailed || saveFailed) throw new Error("Cannot retire a recipient while the Advisor is busy.");
+        contactMutationRef.current = true;
+        setContactsBusy(true);
+        try {
+            await mutateAdvisorState((all) => archiveAdvisorContact(all, id, archived));
+            setContacts(advisorContacts(await readAdvisorMessages({ force: true })));
+        } finally {
+            contactMutationRef.current = false;
+            setContactsBusy(false);
+        }
+        if (archived && activeThreadIdRef.current === id) await selectRecipient(CHIEF_ADVISOR_THREAD);
+    };
+
     // One turn with the advisor, from either entry point: the composer
     // (handleSend) or the Retry button on a failed turn (handleRetryTurn).
     //
@@ -1200,7 +1316,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
     // Retry sent the question twice, spending two requests, doubling the
     // reply and queueing its actions twice.
     const runTurn = async (text, options) => {
-        if (!text || turnInFlightRef.current) return;
+        if (!text || !hasBootstrapped || loadFailed || saveFailed || turnInFlightRef.current || contactMutationRef.current || threadSwitchingRef.current || recipientLocked) return;
         turnInFlightRef.current = true;
         setIsLoading(true);
         try {
@@ -1212,6 +1328,10 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
     };
 
     const askAdvisor = async (text, { replaceTrailingError = false } = {}) => {
+        const threadId = activeThreadIdRef.current;
+        const recipient = threadId === CHIEF_ADVISOR_THREAD ? null
+            : contacts.find((contact) => contact.id === threadId && !contact.archived);
+        if (threadId !== CHIEF_ADVISOR_THREAD && !recipient) throw new Error("This recipient is unavailable.");
         // The campaign the question is asked in. Its orders, projects and
         // transcript are written through endpoints that follow the open
         // campaign, so a reply that lands after a switch writes nothing.
@@ -1240,7 +1360,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         // paused it reading up through history — the pause is scoped to the
         // reply they scrolled away from, not the whole session.
         shouldAutoScrollRef.current = true;
-        setMessages(prev => (replaceTrailingError
+        updateMessages(prev => (replaceTrailingError
             ? (prev[prev.length - 1]?.role === "error" ? prev.slice(0, -1) : prev.slice())
             : [...prev, {
                 role: "user",
@@ -1254,7 +1374,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         // Streaming: the ThinkingDots show until the first token, then a live
         // advisor bubble fills as tokens arrive. It carries a `streaming` flag so
         // it can be found and finalised; intermediate text is NOT persisted.
-        const showStreaming = (fullText) => setMessages(prev => {
+        const showStreaming = (fullText) => updateMessages(prev => {
             const next = prev.slice();
             const last = next[next.length - 1];
             if (last && last.role === "advisor" && last.streaming) {
@@ -1266,7 +1386,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         });
 
         try {
-            const raw = await sendMessage(text, { onChunk: (_delta, full) => showStreaming(full), catchUp: catchUp.text });
+            const raw = await sendMessage(text, { threadId, recipient, onChunk: (_delta, full) => showStreaming(full), catchUp: catchUp.text });
             if (leftCampaign()) {
                 logDebugEvent("advisor", "Advisor reply dropped: the campaign was switched while it was being written, so none of its orders or projects were applied.");
                 return;
@@ -1289,28 +1409,31 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             const { chartProblem, draftProblems, institutionDraftProblems, deployProblems } = parseAdvisorReply(reply, {
                 allowedUnitTypes: Array.isArray(moment.world?.allowedUnitTypes) ? moment.world.allowedUnitTypes : null,
             });
-            const actionsSummary = await applyAdvisorActions(actionsProposal, actionsProblems, gameRound).catch((error) => {
-                console.error("Failed to apply advisor-proposed actions:", error);
-                return null;
-            });
+            const actionsSummary = threadId === CHIEF_ADVISOR_THREAD
+                ? await applyAdvisorActions(actionsProposal, actionsProblems, gameRound).catch((error) => {
+                    console.error("Failed to apply advisor-proposed actions:", error);
+                    return null;
+                }) : null;
             // Same one-shot treatment for the projects board, with truncation
             // salvage: a full backfill of a long campaign is the one block big
             // enough to be cut off mid-array by the reply token cap.
             const { json: projectsProposal, truncated: projectsTruncated, reason: projectsReason,
                 dropped: projectsDropped, excerpt: projectsExcerpt } =
                 extractFencedJson(reply, "projects", { salvageTruncated: true });
-            const projectsSummary = await applyAdvisorProjects(projectsProposal, gameDate, gameRound).catch((error) => {
-                console.error("Failed to apply advisor-proposed projects:", error);
-                return null;
-            });
+            const projectsSummary = threadId === CHIEF_ADVISOR_THREAD
+                ? await applyAdvisorProjects(projectsProposal, gameDate, gameRound).catch((error) => {
+                    console.error("Failed to apply advisor-proposed projects:", error);
+                    return null;
+                }) : null;
             // Every way this can fail used to look identical to the player: a wall
             // of JSON in the chat and a board that never moved. If the model
             // plainly tried and nothing landed, say so and offer the retry.
             // "Some of it landed" is its own outcome, and the most common one now
             // that a single malformed entry no longer costs the batch.
-            const projectsProblem = projectsSummary
-                ? (projectsTruncated ? "truncated" : (projectsDropped > 0 ? "partial" : ""))
-                : (looksLikeProjectOps(reply) ? (projectsTruncated ? "truncated-empty" : "unusable") : "");
+            const projectsProblem = threadId !== CHIEF_ADVISOR_THREAD ? ""
+                : projectsSummary
+                    ? (projectsTruncated ? "truncated" : (projectsDropped > 0 ? "partial" : ""))
+                    : (looksLikeProjectOps(reply) ? (projectsTruncated ? "truncated-empty" : "unusable") : "");
             // "None of the ops applied" is a distinct failure from "we could not
             // read them": the block parsed fine and every op named a project that
             // does not exist. Telling them apart is the difference between "ask
@@ -1342,10 +1465,13 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
                 projectsDetail: projectsDetail || "",
                 projectsExcerpt: projectsExcerptText || "",
             }, { verbose: true });
-            setMessages(prev => {
+            const next = updateMessages(prev => {
                 const next = prev.slice();
                 const last = next[next.length - 1];
-                const finalMessage = { role: "advisor", text: reply, time: askedOn, at: new Date().toISOString(), ...(memory ? { memory } : {}), ...(chartProblem ? { chartProblem } : {}), ...(actionsProblems.length ? { actionsProblems } : {}), ...(draftProblems.length ? { draftProblems } : {}), ...(institutionDraftProblems.length ? { institutionDraftProblems } : {}), ...(deployProblems.length ? { deployProblems } : {}), ...(actionsSummary ? { actionsSummary } : {}), ...(projectsSummary ? { projectsSummary } : {}), ...(projectsProblem ? { projectsProblem } : {}), ...(projectsDetail ? { projectsDetail } : {}), ...(projectsExcerptText ? { projectsExcerpt: projectsExcerptText } : {}) };
+                const unapproved = threadId !== CHIEF_ADVISOR_THREAD && (actionsProposal || projectsProposal);
+                // A flag the bubble shows, in the player's language; written into the text, the note was English and
+                // went back to the model as if the official had said it.
+                const finalMessage = { role: "advisor", text: reply, time: askedOn, ...(unapproved ? { suggestionsNotApplied: true } : {}), at: new Date().toISOString(), ...(memory ? { memory } : {}), ...(chartProblem ? { chartProblem } : {}), ...(actionsProblems.length ? { actionsProblems } : {}), ...(draftProblems.length ? { draftProblems } : {}), ...(institutionDraftProblems.length ? { institutionDraftProblems } : {}), ...(deployProblems.length ? { deployProblems } : {}), ...(actionsSummary ? { actionsSummary } : {}), ...(projectsSummary ? { projectsSummary } : {}), ...(projectsProblem ? { projectsProblem } : {}), ...(projectsDetail ? { projectsDetail } : {}), ...(projectsExcerptText ? { projectsExcerpt: projectsExcerptText } : {}) };
                 // Finalise the streaming bubble, or append the full reply if the
                 // provider never streamed a chunk.
                 if (last && last.role === "advisor" && last.streaming) {
@@ -1353,12 +1479,12 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
                 } else {
                     next.push(finalMessage);
                 }
-                saveMessages(next);
                 return next;
             });
+            await saveMessages(next, threadId);
         } catch (err) {
             if (leftCampaign()) return;
-            setMessages(prev => {
+            const updated = updateMessages(prev => {
                 const last = prev[prev.length - 1];
                 const base = last && last.role === "advisor" && last.streaming ? prev.slice(0, -1) : prev.slice();
                 // Keep whatever the transport managed to learn about the failure,
@@ -1369,15 +1495,15 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
                     time: askedOn,
                     ...(err?.diagnostics ? { diagnostics: err.diagnostics } : {}),
                 }];
-                saveMessages(updated);
                 return updated;
             });
+            await saveMessages(updated, threadId);
         }
     };
 
     const handleSend = () => {
         const text = input.trim();
-        if (!text || turnInFlightRef.current) return;
+        if (!text || !hasBootstrapped || loadFailed || saveFailed || turnInFlightRef.current || contactMutationRef.current || threadSwitchingRef.current || recipientLocked) return;
         setInput("");
         return runTurn(text);
     };
@@ -1405,13 +1531,15 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             setLoadFailed(false);
             // Not the notices: a turn's arrive in the file and were merged in
             // here (mergeNotices), so the stored copy already holds them.
-            const storedIds = new Set(saved.map((message) => message?.id).filter(Boolean));
+            const threadId = activeThreadIdRef.current;
+            const savedThread = advisorMessagesFor(saved, threadId);
+            const storedIds = new Set(savedThread.map((message) => message?.id).filter(Boolean));
             const said = messagesRef.current.filter((message) => !(message?.id && storedIds.has(message.id)));
-            const merged = [...saved, ...said];
-            setMessages(merged);
-            if (merged.length) loadHistory(merged);
-            else startChat();
-            if (said.length) await saveMessages(merged);
+            const merged = [...savedThread, ...said];
+            setContacts(advisorContacts(saved));
+            updateMessages(merged);
+            loadHistory(merged, threadId);
+            if (said.length) await saveMessages(merged, threadId);
         } finally {
             setStorageRetrying(false);
         }
@@ -1421,7 +1549,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
     const retrySave = async () => {
         setStorageRetrying(true);
         try {
-            await saveMessages(messagesRef.current);
+            await saveMessages(messagesRef.current, activeThreadIdRef.current);
         } finally {
             setStorageRetrying(false);
         }
@@ -1470,6 +1598,12 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
     // the operation, but these native commit seams re-read and revalidate the
     // current institution before any canonical mutation is published.
     const handleExecuteInstitutionDraft = React.useCallback(async (msgIndex, draftIndex, draft) => {
+        if (activeThreadIdRef.current !== CHIEF_ADVISOR_THREAD) {
+            return { ok: false, error: "Additional officials advise only. Authorize an institutional action through the appropriate game panel." };
+        }
+        sideEffectPendingRef.current += 1;
+        setSideEffectsBusy(true);
+        const threadId = activeThreadIdRef.current;
         try {
             // The institution lives in the world a running turn writes back.
             assertNoTurnRunning();
@@ -1539,22 +1673,25 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             }
 
             logDebugEvent("advisor", `Player confirmed Advisor institution action: ${draft.type}.`, JSON.stringify(draft), { verbose: true });
-            setMessages((prev) => {
+            const next = updateMessages((prev) => {
                 const next = prev.slice();
                 const target = next[msgIndex];
                 if (!target) return prev;
                 const completed = new Set(target.completedInstitutionDrafts || []);
                 completed.add(draftIndex);
                 next[msgIndex] = { ...target, completedInstitutionDrafts: [...completed] };
-                saveMessages(next);
                 return next;
             });
+            await saveMessages(next, threadId);
             return { ok: true };
         } catch (err) {
             console.warn("[advisor] could not execute the recommended institution action:", err);
             return { ok: false, error: err?.message || String(err) };
+        } finally {
+            sideEffectPendingRef.current -= 1;
+            if (!sideEffectPendingRef.current) setSideEffectsBusy(false);
         }
-    }, []);
+    }, [updateMessages]);
 
     // Places one deployment the advisor recommended, through the very same
     // deployUnit the Forces panel uses — so it lands as a pending unit with a
@@ -1563,6 +1700,12 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
     // message (not local state) so the button stays "✓ placed" across a reload.
     // Stable reference, for the same memoization reason as handleDraftMessage.
     const handlePlaceDeployment = React.useCallback(async (msgIndex, deployIndex, deployment) => {
+        if (activeThreadIdRef.current !== CHIEF_ADVISOR_THREAD) {
+            return { ok: false, error: "Additional officials advise only. Authorize a deployment through the Forces panel." };
+        }
+        sideEffectPendingRef.current += 1;
+        setSideEffectsBusy(true);
+        const threadId = activeThreadIdRef.current;
         try {
             const { deployUnit } = await import("../Map/unitsController.js");
             // Null: nothing was placed, as a turn is running or the scenario
@@ -1585,7 +1728,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
                 center: [Number(deployment.lng), Number(deployment.lat)],
                 zoom: 4.5,
             });
-            setMessages((prev) => {
+            const next = updateMessages((prev) => {
                 const next = prev.slice();
                 const target = next[msgIndex];
                 if (!target) return prev;
@@ -1593,15 +1736,18 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
                     ...target,
                     placedDeployments: [...(target.placedDeployments || []), deployIndex],
                 };
-                saveMessages(next);
                 return next;
             });
+            await saveMessages(next, threadId);
             return { ok: true };
         } catch (err) {
             console.warn("[advisor] could not place the recommended deployment:", err);
             return { ok: false, error: err?.message || String(err) };
+        } finally {
+            sideEffectPendingRef.current -= 1;
+            if (!sideEffectPendingRef.current) setSideEffectsBusy(false);
         }
-    }, [mapRef]);
+    }, [mapRef, updateMessages]);
 
     if (!hasOpened) return null;
 
@@ -1676,10 +1822,20 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         <button
         className="oh-tap"
         onClick={async () => {
+            if (!hasBootstrapped || loadFailed || saveFailed || contactMutationRef.current || turnInFlightRef.current || sideEffectPendingRef.current || threadSwitchingRef.current) return;
             if (isTouch && !confirmingClear) { setConfirmingClear(true); return; }
             setConfirmingClear(false);
-            setMessages([]); startChat(); await saveMessages([]);
+            const threadId = activeThreadIdRef.current;
+            threadSwitchingRef.current = true;
+            try {
+                updateMessages([]);
+                startChat(threadId);
+                await saveMessages([], threadId, { clearNotices: true });
+            } finally {
+                threadSwitchingRef.current = false;
+            }
         }}
+        disabled={!hasBootstrapped || loadFailed || isLoading || sideEffectsBusy}
         title={confirmingClear ? "Tap again to clear the chat" : "Clear chat"}
         aria-label={confirmingClear ? "Confirm clearing the chat" : "Clear chat"}
         style={confirmingClear
@@ -1699,6 +1855,18 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         )}
         </div>
 
+        <AdvisorRecipients
+            contacts={contacts}
+            activeId={activeThreadId}
+            offices={offices}
+            statusOf={(contact) => advisorOfficeStatus(contact, politicalWorld)}
+            busy={!hasBootstrapped || isLoading || contactsBusy || sideEffectsBusy || saveFailed || storageRetrying || threadSwitchingRef.current || loadFailed}
+            onSelect={selectRecipient}
+            onCreate={createRecipient}
+            onRevise={reviseRecipient}
+            onArchive={retireRecipient}
+        />
+
         {loadFailed ? (
             <StorageProblemNotice title="Could not load your conversation with the advisor." detail="Nothing new is saved until it loads." onRetry={retryLoad} retrying={storageRetrying} retryIcon={<RetryIcon />} />
         ) : saveFailed ? (
@@ -1711,6 +1879,8 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             keystroke. See AdvisorMessageRow's comment for why that mattered. */}
         <AdvisorMessageList
         messages={messages}
+        speakerName={selectedContact?.name || "Advisor"}
+        canExecute={activeThreadId === CHIEF_ADVISOR_THREAD}
         visibleLimit={visibleMessageLimit}
         onShowEarlier={handleShowEarlier}
         isLoading={isLoading}
@@ -1735,8 +1905,9 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         <textarea
         ref={inputRef}
         // A phone's keyboard has no Shift+Enter to speak of.
-        placeholder={isTouch ? "Ask your advisor…" : "Ask your advisor…  (Shift+Enter for a new line)"}
+        placeholder={recipientLocked ? "This contact is retired — restore to reply" : selectedContact ? `Message ${selectedContact.name}…` : isTouch ? "Ask your advisor…" : "Ask your advisor…  (Shift+Enter for a new line)"}
         rows={1} value={input}
+        disabled={recipientLocked}
         enterKeyHint="enter"
         onChange={e => {
             setInput(e.target.value);
@@ -1748,10 +1919,10 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         onBlur={e => e.target.style.borderColor = "rgba(255,255,255,0.15)"}
         />
         <button
-        onClick={handleSend} disabled={isLoading || !input.trim()}
-        style={{ backgroundColor: isLoading || !input.trim() ? "rgba(59,130,246,0.4)" : "#3b82f6", border: "none", borderRadius: "10px", width: "2.5rem", height: "2.5rem", display: "flex", alignItems: "center", justifyContent: "center", cursor: isLoading || !input.trim() ? "not-allowed" : "pointer", flexShrink: 0, fontSize: "1rem", transition: "background-color 0.2s" }}
-        onMouseEnter={e => { if (!isLoading && input.trim()) e.currentTarget.style.backgroundColor = "#2563eb"; }}
-        onMouseLeave={e => { if (!isLoading && input.trim()) e.currentTarget.style.backgroundColor = "#3b82f6"; }}
+        onClick={handleSend} disabled={isLoading || recipientLocked || !hasBootstrapped || loadFailed || saveFailed || !input.trim()}
+        style={{ backgroundColor: isLoading || recipientLocked || !input.trim() ? "rgba(59,130,246,0.4)" : "#3b82f6", border: "none", borderRadius: "10px", width: "2.5rem", height: "2.5rem", display: "flex", alignItems: "center", justifyContent: "center", cursor: isLoading || !input.trim() ? "not-allowed" : "pointer", flexShrink: 0, fontSize: "1rem", transition: "background-color 0.2s" }}
+        onMouseEnter={e => { if (!isLoading && !recipientLocked && input.trim()) e.currentTarget.style.backgroundColor = "#2563eb"; }}
+        onMouseLeave={e => { if (!isLoading && !recipientLocked && input.trim()) e.currentTarget.style.backgroundColor = "#3b82f6"; }}
         >🚀</button>
         </div>
         </div>
