@@ -331,7 +331,7 @@ export const register = (ctx) => {
     if (!post?.bundleUrl || !beginUpdate(scenario.id)) return { started: false, note: "" };
     let outcome = "";
     try {
-      const bundle = await hub.downloadHubScenario({ postId: post.id, bundleUrl: post.bundleUrl, title: post.title, author: post.author, flatMap: post.flatMap });
+      const bundle = await hub.downloadHubScenario({ postId: post.id, bundleUrl: post.bundleUrl, title: post.title, author: post.author, flatMap: post.flatMap, update: true });
       engine.missingBasemap.noteMissingBasemapTried({ id: scenario.id, missingBasemap: provenance.missingBasemapOfBundle(bundle) });
       await lib.updateScenarioFromBundle(scenario.id, bundle);
       const missingBasemap = engine.communityBasemaps.unresolvedBundleBackground(bundle);
@@ -483,9 +483,15 @@ export const register = (ctx) => {
     }
     return list(engine.cmSections.REVIEW_SECTIONS).filter((section) => counts.has(section.id)).map((section) => {
       const entry = counts.get(section.id);
+      const regions = section.id === "borders" ? changesKit.borderRegionCounts(changes) : null;
       return {
         label: MAP_SECTION_LABELS[section.id],
         text: decided ? `${entry.decided} of ${entry.total} decided` : entry.total === 1 ? "1 change" : `${entry.total} changes`,
+        regions: regions ? [
+          regions.merged > 0 ? (regions.merged === 1 ? "1 region merged into others" : `${regions.merged} regions merged into others`) : "",
+          regions.reshaped > 0 ? (regions.reshaped === 1 ? "1 region reshaped" : `${regions.reshaped} regions reshaped`) : "",
+          regions.added > 0 ? (regions.added === 1 ? "1 new region" : `${regions.added} new regions`) : "",
+        ].filter(Boolean) : [],
       };
     });
   };
@@ -822,7 +828,8 @@ export const register = (ctx) => {
           const hubPost = list(posts).find((post) => Number(post.id) === Number(postId)) ?? null;
           return { ...base, phase: "outdated", canUpdate: Boolean(hubPost), hubPostId: hubPost ? Number(hubPost.id) : 0 };
         }
-        const [original, current] = await Promise.all([hub.downloadHubBundle(bundleUrl), lib.exportScenarioBundle(scenario.id)]);
+        const [original, current] = await Promise.all([hub.downloadHubBundle(bundleUrl, { update: true }), lib.exportScenarioBundle(scenario.id)]);
+
         const found = list(changesKit.diffScenarioBundles(original, current));
         suggestDraft = { scenarioId: scenario.id, changes: found };
         const counts = changesKit.countChanges(found);
