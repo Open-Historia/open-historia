@@ -22,6 +22,9 @@ test("only the machine running the game has a window to change", () => {
   const server = read("server/server.js");
   assert.match(server, /const desktopDisplayMode = \(req\) => \(isLoopbackAddress\(req\.socket\?\.remoteAddress\) \? globalThis\.__ohDisplayMode \|\| null : null\);/);
   assert.match(server, /\["fullscreen", "maximized", "windowed"\]\.includes\(mode\)/);
+  // The chosen mode is in the request's JSON body: without the parser every change was refused (400) and the
+  // window never moved.
+  assert.match(server, /app\.post\("\/api\/desktop\/display-mode", jsonParser,/);
 });
 
 test("the display mode is kept and given to the window when it opens", () => {
