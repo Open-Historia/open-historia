@@ -140,6 +140,10 @@ func _key(code: Key) -> InputEventKey:
 
 func _clear_shell() -> void:
 	var shell: ShellBoot = main.get("shell") as ShellBoot
+	var built_by := Time.get_ticks_msec() + 30000
+	while shell == null and Time.get_ticks_msec() < built_by:
+		await process_frame
+		shell = main.get("shell") as ShellBoot
 	if shell == null:
 		return
 	var deadline := Time.get_ticks_msec() + 30000
@@ -378,7 +382,6 @@ func _country_politics(cheats: Node) -> void:
 
 
 func _console() -> void:
-
 	var console: Control = (load("res://scripts/ui/debug_console.gd") as GDScript).new()
 	var layer := CanvasLayer.new()
 	layer.layer = 120

@@ -938,7 +938,6 @@ export const register = (ctx) => {
           time: askedOn,
           ...(unapproved ? { suggestionsNotApplied: true } : {}),
           at: new Date().toISOString(),
-
           ...(memory ? { memory } : {}),
           ...(chartProblem ? { chartProblem } : {}),
           ...(actionsProblems.length ? { actionsProblems } : {}),

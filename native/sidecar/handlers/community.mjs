@@ -829,7 +829,6 @@ export const register = (ctx) => {
           return { ...base, phase: "outdated", canUpdate: Boolean(hubPost), hubPostId: hubPost ? Number(hubPost.id) : 0 };
         }
         const [original, current] = await Promise.all([hub.downloadHubBundle(bundleUrl, { update: true }), lib.exportScenarioBundle(scenario.id)]);
-
         const found = list(changesKit.diffScenarioBundles(original, current));
         suggestDraft = { scenarioId: scenario.id, changes: found };
         const counts = changesKit.countChanges(found);
