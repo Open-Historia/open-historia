@@ -202,7 +202,7 @@ export const landMask = (mask, { width, height, scale, cols, rows, state, shape,
 // its own side's home ground it does not end at all: it runs on a little way
 // over that ground, which is the same colour, and leaves no sliver of the
 // other side's colour along the old border.
-export const paintPixels = (player, palette, target, only = null) => {
+export const paintPixels = (player, palette, target, only = null, { unlessUnchanged = false } = {}) => {
   const { cols, rows, state, since, was, bounds, day, sideOf } = player;
   if (!bounds) return null;
   const { data, width, height, scale, rowOf, mask } = target;
@@ -237,35 +237,43 @@ export const paintPixels = (player, palette, target, only = null) => {
   const readToCol = Math.min(cols - 1, maxCol + 2);
   const readFromRow = Math.max(0, minRow - 2);
   const readToRow = Math.min(rows - 1, maxRow + 2);
+  // The whole picture last painted from this player and mask, with every cell read as it was then, is already right.
+  const same = unlessUnchanged && !only && target.paintedFor === player && target.paintedMask === mask;
+  let changed = !same;
   for (let row = readFromRow; row <= readToRow; row += 1) {
     for (let col = readFromCol; col <= readToCol; col += 1) {
       const cell = row * cols + col;
       const now = state[cell];
-      if (now === PAINT_WALL) {
-        tint[cell] = PAINT_WALL;
-        full[cell] = 0;
-        share[cell] = 0;
-        continue;
+      let nowShare = 0;
+      let nowTint = PAINT_WALL;
+      let nowFull = 0;
+      if (now !== PAINT_WALL) {
+        const before = was[cell];
+        const part = (day - since[cell]) / FILL_DAYS;
+        // How far the change to what it is now has got: all the way, unless it
+        // changed sides a moment ago.
+        const turned = before !== PAINT_WALL && sideOf(before) !== sideOf(now) && part < 1 ? Math.max(0, part) : 1;
+        nowShare = sideOf(now) === 0 ? turned : 1 - turned;
+        if (isPaint(now)) {
+          nowTint = now;
+          nowFull = turned;
+        } else if (isPaint(before) && turned < 1) {
+          // Taken back: the colour it was painted in drains out of it.
+          nowTint = before;
+          nowFull = 1 - turned;
+        } else {
+          nowTint = 0;
+        }
       }
-      const before = was[cell];
-      const part = (day - since[cell]) / FILL_DAYS;
-      // How far the change to what it is now has got: all the way, unless it
-      // changed sides a moment ago.
-      const turned = before !== PAINT_WALL && sideOf(before) !== sideOf(now) && part < 1 ? Math.max(0, part) : 1;
-      share[cell] = sideOf(now) === 0 ? turned : 1 - turned;
-      if (isPaint(now)) {
-        tint[cell] = now;
-        full[cell] = turned;
-      } else if (isPaint(before) && turned < 1) {
-        // Taken back: the colour it was painted in drains out of it.
-        tint[cell] = before;
-        full[cell] = 1 - turned;
-      } else {
-        tint[cell] = 0;
-        full[cell] = 0;
-      }
+      if (!changed && (tint[cell] !== nowTint || full[cell] !== Math.fround(nowFull) || share[cell] !== Math.fround(nowShare))) changed = true;
+      tint[cell] = nowTint;
+      full[cell] = nowFull;
+      share[cell] = nowShare;
     }
   }
+  if (!changed) return null;
+  target.paintedFor = only ? null : player;
+  target.paintedMask = mask;
   // Each cell evened out with the eight round it, so that an edge that runs
   // aslant across the cells is drawn as a slant and not as a stair. Sea has no
   // say: a cell beside it is evened out with the land round it only, and the
@@ -443,26 +451,53 @@ export const createFrontField = (cols, rows, rowOf = null, touched = null) => {
   };
 };
 
-// The field at the player's day, written into `front` (createFrontField).
-export const writeFrontField = (player, front, shown = true) => {
-  const { cols, rows, state, was, since, day, sideOf } = player;
-  const { data, width, height, rowOf, touched, share, even } = front;
-  const size = cols * rows;
-  // How far each cell is side 1's, on its way from one side to the other as it is taken.
-  for (let cell = 0; cell < size; cell += 1) {
+// How far each cell of rows `from` to `to` is side 1's, on its way from one side to the other as it is
+// taken. Says whether any of them is not what it was.
+const writeShareRows = (player, share, from, to) => {
+  const { cols, state, was, since, day, sideOf } = player;
+  let changed = false;
+  for (let cell = from * cols; cell < (to + 1) * cols; cell += 1) {
     const now = state[cell];
-    if (now === PAINT_WALL) {
-      share[cell] = -1;
-      continue;
+    let value = -1;
+    if (now !== PAINT_WALL) {
+      const before = was[cell];
+      const part = (day - since[cell]) / FILL_DAYS;
+      const turned = before !== PAINT_WALL && sideOf(before) !== sideOf(now) && part < 1 ? Math.max(0, part) : 1;
+      value = sideOf(now) === 1 ? turned : 1 - turned;
     }
-    const before = was[cell];
-    const part = (day - since[cell]) / FILL_DAYS;
-    const turned = before !== PAINT_WALL && sideOf(before) !== sideOf(now) && part < 1 ? Math.max(0, part) : 1;
-    share[cell] = sideOf(now) === 1 ? turned : 1 - turned;
+    if (share[cell] !== Math.fround(value)) {
+      share[cell] = value;
+      changed = true;
+    }
   }
+  return changed;
+};
+
+// The field at the player's day, written into `front` (createFrontField). Only a run's own cells change
+// (`player.bounds`), so once a run is written its later days rewrite the rows round them alone.
+export const writeFrontField = (player, front, shown = true) => {
+  const { cols, rows, bounds } = player;
+  const { touched, share } = front;
+  const again = front.writtenFor === player && front.writtenShown === shown && front.writtenTouched === touched;
+  if (again && !bounds) return front;
+  const from = again ? Math.max(0, bounds.minRow - 1) : 0;
+  const to = again ? Math.min(rows - 1, bounds.maxRow + 1) : rows - 1;
+  const changed = writeShareRows(player, share, again ? bounds.minRow : 0, again ? bounds.maxRow : rows - 1);
+  if (again && !changed) return front;
+  writeFieldRows(front, cols, rows, shown, from, to);
+  front.writtenFor = player;
+  front.writtenShown = shown;
+  front.writtenTouched = touched;
+  front.version += 1;
+  return front;
+};
+
+// The field's rows `from` to `to` worked out again from the cells' shares, and the picture rows they show.
+const writeFieldRows = (front, cols, rows, shown, from, to) => {
+  const { data, width, height, rowOf, touched, share, even } = front;
   // Evened out with the eight round it, the land only; sea and others' land
   // take the land's beside them.
-  for (let row = 0; row < rows; row += 1) {
+  for (let row = from; row <= to; row += 1) {
     for (let col = 0; col < cols; col += 1) {
       const cell = row * cols + col;
       const wall = share[cell] < 0;
@@ -486,7 +521,7 @@ export const writeFrontField = (player, front, shown = true) => {
   }
   // Sea with no land beside it takes what lies before it along its row, so it
   // never reads as either side's against land a cell away.
-  for (let row = 0; row < rows; row += 1) {
+  for (let row = from; row <= to; row += 1) {
     let last = -1;
     for (let col = 0; col < cols; col += 1) {
       const cell = row * cols + col;
@@ -504,6 +539,7 @@ export const writeFrontField = (player, front, shown = true) => {
     const v = rowOf ? rowOf[y] : rows - y - 0.5;
     const rowA = Math.max(0, Math.min(rows - 1, Math.floor(v - 0.5)));
     const rowB = Math.min(rows - 1, rowA + 1);
+    if ((rowA < from || rowA > to) && (rowB < from || rowB > to)) continue;
     const f = rowOf ? Math.max(0, Math.min(1, v - 0.5 - rowA)) : 0;
     for (let x = 0; x < width; x += 1) {
       const a = rowA * cols + x;
@@ -516,8 +552,6 @@ export const writeFrontField = (player, front, shown = true) => {
       data[at + 3] = 255;
     }
   }
-  front.version += 1;
-  return front;
 };
 
 // The four corners of a picture as the map is given them ([west, north] round

@@ -415,3 +415,73 @@ test("a picture's land mask reads only the part on the screen, and is the same a
   assert.ok(layers.includes("const shape = onScreen ? context.getImageData(x0, y0, x1 - x0, y1 - y0).data : null;"));
   assert.ok(layers.includes("return landMask(mask, { width, height, scale, cols, rows, state, shape, x0, x1, y0, y1 });"));
 });
+
+// A playing writes each battlefield's field every frame: a later day of the same run rewrites only the rows round
+// the run's cells, or nothing at all, and has to come out as a field written anew for that day.
+test("a later day of a run rewrites only the rows round its cells, and comes out as a field written anew", () => {
+  const view = viewOf([12, 14, 14, 10, 11, 15, 15, 9]);
+  const touched = touchedCells(view);
+  const days = [];
+  for (let day = 0; day <= 7.6; day += 0.05) days.push(day);
+  days.push(3.2, 1.1, 6.4, 0, 7.6, 7.6);
+  const H = ROWS * 2 + 3;
+  const uneven = Array.from({ length: H }, (_, y) => ROWS * (1 - ((y + 0.5) / H) ** 1.3));
+  for (const rowOf of [null, uneven]) {
+    const player = createPaintPlayer(view);
+    const front = createFrontField(COLS, ROWS, rowOf, touched);
+    let before = null;
+    let versionBefore = -1;
+    for (const [index, day] of days.entries()) {
+      const shown = index % 37 !== 5;
+      player.seek(day);
+      writeFrontField(player, front, shown);
+      const anew = createPaintPlayer(view);
+      anew.seek(day);
+      const fresh = writeFrontField(anew, createFrontField(COLS, ROWS, rowOf, touched), shown);
+      assert.deepEqual(front.data, fresh.data, `${rowOf ? "uneven" : "even"} rows, day ${day.toFixed(2)}`);
+      if (front.version === versionBefore) assert.deepEqual(front.data, before, "an unchanged version is an unchanged field");
+      before = Uint8Array.from(front.data);
+      versionBefore = front.version;
+    }
+  }
+  // A run that paints nothing is written once.
+  const still = frontViewOf(normalizeBattlefield({ name: "Quiet", sides, frame }));
+  const quiet = createPaintPlayer(still);
+  const field = createFrontField(COLS, ROWS, null, touchedCells(still));
+  writeFrontField(quiet, field);
+  writeFrontField(quiet, field);
+  assert.equal(field.version, 1);
+});
+
+// What a canvas shows of a picture: no colour where nothing is.
+const shownOf = (data) => data.map((value, at) => (at % 4 !== 3 && data[at - (at % 4) + 3] === 0 ? 0 : value));
+
+test("a frame of a playing whose cells are as the last left them paints nothing, and the picture is as one painted anew", () => {
+  const view = viewOf([12, 14, 14, 10, 11, 15, 15, 9]);
+  const mask = new Uint8Array(COLS * 4 * ROWS * 4).map((_, at) => (at % 7 === 0 ? 120 : 255));
+  for (const withMask of [false, true]) {
+    // As the map paints it, one picture kept from frame to frame: asked to skip, and not.
+    const quick = createPaintPlayer(view);
+    const every = createPaintPlayer(view);
+    const kept = { ...picture(), ...(withMask ? { mask } : {}) };
+    const repainted = { ...picture(), ...(withMask ? { mask } : {}) };
+    let skipped = 0;
+    for (let day = 0; day <= 7.6; day += 0.05) {
+      quick.seek(day);
+      every.seek(day);
+      if (!paintPixels(quick, palette, kept, null, { unlessUnchanged: true })) skipped += 1;
+      paintPixels(every, palette, repainted);
+      assert.deepEqual(kept.data, repainted.data, `${withMask ? "masked" : "unmasked"}, day ${day.toFixed(2)}`);
+      const anew = createPaintPlayer(view);
+      anew.seek(day);
+      const fresh = { ...picture(), ...(withMask ? { mask } : {}) };
+      paintPixels(anew, palette, fresh);
+      assert.deepEqual(shownOf(kept.data), shownOf(fresh.data), `as painted anew, day ${day.toFixed(2)}`);
+    }
+    assert.ok(skipped > 10, "settled frames are not painted again");
+    // Not asked to, it always paints.
+    assert.ok(paintPixels(quick, palette, kept));
+  }
+  const layers = fs.readFileSync(new URL("./FrontLayers.jsx", import.meta.url), "utf8");
+  assert.ok(layers.includes("const area = paintPixels(player, picture.palette, target, null, { unlessUnchanged: !atRest && !redressed && !picture.blank });"));
+});

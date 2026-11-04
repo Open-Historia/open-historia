@@ -586,12 +586,14 @@ const FrontLayers = () => {
         days.push(entry.day);
         shownOwners.push(shownOwnersAt(entry.target.record?.replay, entry.day) ?? contestedOwnersOf(entry.target.record));
         const { picture } = entry;
+        const redressed = picture.stale;
         if (picture.stale) dress(entry);
         const { context, target, player } = picture;
         if (frontShownOn(entry.stage, entry.day) && player.bounds) {
           player.seek(entry.day);
           target.data = target.pixels.data;
-          const area = paintPixels(player, picture.palette, target);
+          // A frame of a playing whose cells are as the last frame left them needs no painting or upload.
+          const area = paintPixels(player, picture.palette, target, null, { unlessUnchanged: !atRest && !redressed && !picture.blank });
           if (area && area.width > 0 && area.height > 0) {
             context.putImageData(target.pixels, 0, 0, area.x, area.y, area.width, area.height);
             markPicturePainted(picture.canvas);
