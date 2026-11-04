@@ -222,15 +222,53 @@ func _country_panel() -> void:
 	_check(_has_text(panel, "POLITICAL LANDSCAPE"), "politics: landscape card")
 	_check(_has_text(panel, "NATIONAL PRIORITIES"), "politics: national priorities")
 	_check(_has_text(panel, "Click any country on the map to inspect it, or open its card and choose Stats."), "footer text")
+	_check(_has_text(panel, "Legislature National Assembly (577 seats)") and _has_text(panel, "Next election June 2017"), "politics: the government card's legislature and next election")
+	_check(_find_all(panel.body, func(node: Node) -> bool: return node.get_class() == "Control" and node.get("parts") != null and (node.get("parts") as Array).size() == 3, []).size() == 1, "politics: the legislature's seats as one bar of three parties")
+	_check(_has_text(panel, "Compile the government and parties again") and not _has_text(panel, "Compile parties"), "politics: parties filled in offer a fresh compile")
+	_check(not _has_text(panel, "GOVERNING PARTY") and not _has_text(panel, "GOVERNING COALITION"), "politics: no repeated governing-parties box")
+	_check(_has_text(panel, "Socialist Party (PS)") and _has_text(panel, "Parti socialiste") and _has_text(panel, "Governing") and _has_text(panel, "Opposition"), "politics: party rows carry names, native names and roles")
+	_check(_has_text(panel, "Social Democracy · Social Democracy") and _has_text(panel, "Leader: Jean-Christophe Cambadélis") and _has_text(panel, "286/577 seats") and _has_text(panel, "29% support") and _has_text(panel, "Founded 1969"), "politics: party row ideology, leader, seats, support, founded")
+	_check(_has_text(panel, "National Populism · Frontism (unlisted)"), "politics: an unlisted subideology is marked")
+	_check(_has_text(panel, "Other political support"), "politics: the other support row")
 	await _shoot("01-country-politics")
 	panel._pick_party("ps")
 	await _wait(0.3)
-	_check(_has_text(panel, "Party leader") and _has_text(panel, "Government"), "politics: party detail opens")
+	_check(_has_text(panel, "The governing party of the centre-left.") and _has_text(panel, "Pro-Europeanism") and not _has_text(panel, "Party leader"), "politics: a party row opens onto its description and outlook")
 	panel.scroll.scroll_vertical = 360
 	await _wait(0.2)
 	await _shoot("02-country-politics-party")
 	panel._pick_party("ps")
 	panel.scroll.scroll_vertical = 0
+	var compile_spy := GDScript.new()
+	compile_spy.source_code = "extends EngineLink
+var real: EngineLink
+var asked: Array = []
+func request(method: String, args: Dictionary = {}) -> Dictionary:
+	if method == \"country.compile\":
+		asked.append(str(args.get(\"target\", \"\")))
+		await Engine.get_main_loop().create_timer(0.6).timeout
+		return {\"ok\": true, \"result\": {\"ok\": false, \"error\": \"The answer named no government and no parties.\"}}
+	return await real.request(method, args)
+func last_request_id() -> int:
+	return real.last_request_id()
+func cancel(id: int) -> void:
+	real.cancel(id)
+"
+	compile_spy.reload()
+	var compiler: Node = compile_spy.new()
+	compiler.set("real", panel.engine)
+	var live_engine: EngineLink = panel.engine
+	panel.engine = compiler
+	panel._compile_parties()
+	await _wait(0.2)
+	_check(_has_text(panel, "Compiling the government and parties…") and not _has_text(panel, "Compile the government and parties again"), "politics: compiling shows its progress")
+	await _until(func() -> bool: return not panel.compiling, 10.0)
+	await _wait(0.4)
+	_check(compiler.get("asked") == ["France"] and _has_text(panel, "The answer named no government and no parties.") and _has_text(panel, "Compile the government and parties again"), "politics: a failed compile says why and can be tried again")
+	await _shoot("02b-country-politics-compile-error")
+	panel.engine = live_engine
+	compiler.free()
+	panel.compile_error = ""
 
 	await panel.set_tab("diplomacy")
 	await _wait(0.6)
