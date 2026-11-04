@@ -4,6 +4,7 @@ const SEEN_KEY = "oh:after-action-seen";
 const SEEN_MOST = 60;
 const WIDTH_KEY = "oh-advisor-width";
 const SHADE_KINDS = ["stretched", "cut", "theirs-cut", "gained", "lost"];
+const STRIKE_SNAP_KM = 60;
 
 export const register = (ctx) => {
   const { engine, plain, clean, list, storage, addStandIn, standIn } = ctx;
@@ -19,6 +20,7 @@ export const register = (ctx) => {
     gameDate: String(game?.gameDate || game?.startDate || ""),
     humanCountries: Array.isArray(game?.humanCountries) ? game.humanCountries : null,
     difficulty: String(game?.difficulty || ""),
+    round: Number(game?.round) || 0,
   });
 
   const read = async () => {
@@ -46,10 +48,11 @@ export const register = (ctx) => {
 
   const placeNear = (cities, lng, lat) => {
     let best = null;
+    const measure = engine.wrMapMeasure.currentMapMeasure();
     for (const city of cities) {
       const across = (Number(city.lng) - lng) * Math.cos((lat * Math.PI) / 180) * 111;
       const down = (Number(city.lat) - lat) * 111;
-      const far = Math.sqrt(across * across + down * down);
+      const far = measure.plain ? Math.sqrt(across * across + down * down) : engine.wrUnitMotion.kmOnMap(lat, lng, Number(city.lat), Number(city.lng), measure);
       if (far <= 70 && (!best || far < best.far)) best = { far, name: city.name };
     }
     return best ? ["city", best.name].join(": ") : "";
@@ -239,13 +242,59 @@ export const register = (ctx) => {
     }));
     const waiting = transports.filter((entry) => same(entry.owner, game.country) && entry.status === "ordered").map((entry) => `${entry.id}:${entry.medium}:${entry.to.lng},${entry.to.lat}:${entry.embark?.troops.join(".") ?? ""}`).join("|");
     const year = engine.gameDates.gameDateYear(game.gameDate);
-    const carriers = T.TRANSPORT_MEDIA.map((medium) => ({ medium, ...T.carrierFor(medium, year) })).filter((carrier) => carrier.kind).map((carrier) => ({ medium: carrier.medium, kind: carrier.kind, capacity: carrier.capacity, speed: carrier.speed }));
+    const navies = engine.wrGate.naviesOn();
+    const aircraft = engine.wrGate.airOn();
+    const carriers = T.TRANSPORT_MEDIA.map((medium) => ({ medium, ...T.carrierFor(medium, year) }))
+      .filter((carrier) => carrier.kind && (carrier.medium !== "sea" || navies) && (carrier.medium !== "air" || aircraft))
+      .map((carrier) => ({ medium: carrier.medium, kind: carrier.kind, capacity: carrier.capacity, speed: carrier.speed }));
     const canFortify = engine.wrSettings.warSettingsOf({ warSettings: world?.warSettings }).mechanics.walls === true;
-    const fleets = engine.wrFleetOps.fleetsOf({ units: world?.units, pendingUnitOrders: world?.pendingUnitOrders }, game.country).map((fleet) => ({
+    const fleets = (navies ? engine.wrFleetOps.fleetsOf({ units: world?.units, pendingUnitOrders: world?.pendingUnitOrders }, game.country) : []).map((fleet) => ({
       ...fleet,
-      togo: fleet.order && fleet.order.kind !== "patrol" ? Math.round(engine.wrUnitMotion.haversineKm(fleet.lat, fleet.lng, fleet.order.toLat, fleet.order.toLng)) : 0,
+      togo: fleet.order && fleet.order.kind !== "patrol" ? Math.round(engine.wrUnitMotion.kmOnMap(fleet.lat, fleet.lng, fleet.order.toLat, fleet.order.toLng)) : 0,
     }));
     const enemies = engine.wrFleetOps.enemiesOf({ wars: world?.wars }, game.country);
+    const AS = engine.wrAirStrike;
+    const ownStrike = (entry) => same(entry?.owner, game.country);
+    const wings = aircraft ? engine.wrAirStrikeOps.airUnitsOf({ units: world?.units, airStrikeOrders: world?.airStrikeOrders }, game.country) : [];
+    const { reach: airReach, blast: airBlast } = engine.wrAirStrikeOps.airReachOf({ warSettings: world?.warSettings }, game.gameDate);
+    const wingName = (id) => wings.find((entry) => entry.id === id)?.name ?? list(world?.units).find((unit) => unit?.id === id)?.name ?? "";
+    const strikesWaiting = aircraft ? AS.normalizeAirStrikeOrders(world?.airStrikeOrders).filter(ownStrike) : [];
+    const ownFlown = aircraft ? AS.normalizeAirStrikes(world?.airStrikes).filter(ownStrike) : [];
+    const lastRound = ownFlown.reduce((most, strike) => Math.max(most, strike.round), 0);
+    const strikeRow = (strike) => {
+      const enemy = strike.hits.filter((hit) => !hit.own).reduce((sum, hit) => sum + hit.n, 0);
+      const own = strike.hits.filter((hit) => hit.own).reduce((sum, hit) => sum + hit.n, 0);
+      return {
+        id: strike.id,
+        unit: strike.unit || wingName(strike.unitId),
+        unitId: strike.unitId,
+        target: strike.target || strike.battlefield || strike.country,
+        kind: strike.kind,
+        outcome: strike.outcome,
+        status: strike.status ?? "",
+        dead: Number(strike.dead) || 0,
+        deadText: (Number(strike.dead) || 0).toLocaleString(),
+        lost: strike.lost,
+        intercepted: strike.intercepted.map((entry) => ({ name: entry.name, lost: entry.lost })),
+        enemy,
+        own,
+        lng: strike.lng,
+        lat: strike.lat,
+        round: strike.round,
+      };
+    };
+    const strikesFlown = ownFlown.filter((strike) => strike.round === lastRound).map(strikeRow);
+    const struck = ownFlown.filter((strike) => strike.round >= game.round).map(strikeRow);
+    const air = {
+      on: aircraft,
+      reach: airReach,
+      reachText: airReach.toLocaleString(),
+      blast: airBlast,
+      wings: wings.map((wing) => ({ id: wing.id, name: wing.name, strength: wing.strength, lng: wing.lng, lat: wing.lat, pending: wing.pending, order: wing.order ? { target: wing.order.target || wing.order.battlefield || wing.order.country, lng: wing.order.lng, lat: wing.order.lat } : null })),
+      orders: strikesWaiting.map((order) => ({ id: order.id, unit: order.unit, name: wingName(order.unit), target: order.target || order.battlefield || order.country, lng: order.lng, lat: order.lat })),
+      flown: strikesFlown,
+      struck,
+    };
     const convoys = engine.wrFleetOps.convoysOf({ transports: world?.transports }, game.country).map((entry) => ({ id: entry.id, label: [entry.kind, entry.to?.name].filter(Boolean).join(" · ") }));
     const fortifications = engine.wrGeography.normalizeFortifications(world?.fortifications);
     const lines = fortifications.filter((line) => fold(line.owner) && fold(line.owner) === fold(game.country)).map((line) => {
@@ -305,7 +354,10 @@ export const register = (ctx) => {
       waiting,
       carriers,
       canFortify,
+      navies,
       fleets,
+      air,
+      home: record.home === true,
       enemies,
       convoys,
       lines,
@@ -401,7 +453,8 @@ export const register = (ctx) => {
     "warroom.fronts": async () => {
       const { world, game } = await read();
       const fronts = plain(frontsOf(world, game.country));
-      return { fronts, atWar: fronts.length > 0 && engine.wrFeatures.isActiveFeatureEnabled("fronts") };
+      const has = fronts.length > 0 && engine.wrFeatures.activeWars().battlefields;
+      return { fronts, atWar: has, fighting: has && engine.wrData.fightingIn(engine.wrData.playerFrontsKey(world?.battlefields, game.country, world?.wars)) };
     },
     "warroom.view": view,
     "warroom.busy": async () => busy(),
@@ -434,12 +487,41 @@ export const register = (ctx) => {
         const cities = await engine.wrCities.readFrontCities(world, game).catch(() => []);
         sent.name = placeNear(cities, Number(sent.to[0]), Number(sent.to[1]));
       }
-      if (sent.op === "deploy" && Object.prototype.hasOwnProperty.call(sent, "countText")) {
-        const count = String(sent.countText ?? "").trim();
-        delete sent.countText;
-        if (count !== "" && Number.isFinite(Number(count))) sent.count = Number(count);
-      }
       return sendOp(sent);
+    },
+    "warroom.airstrike": async ({ op = {} } = {}) => {
+      let sent = { ...op };
+      if (sent.op === "airstrike" && Array.isArray(sent.at)) {
+        const { world, game } = await read();
+        const [lng, lat] = [Number(sent.at[0]), Number(sent.at[1])];
+        const measure = engine.wrWorldGrid.measureOptions(engine.wrMapDistance.engineMapOf(engine.wrMapMeasure.currentMapMeasure()));
+        const near = (rows) => rows
+          .map((entry) => ({ entry, km: engine.wrWorldGrid.kmBetween(lng, lat, Number(entry.lng), Number(entry.lat), measure) }))
+          .filter((item) => item.km <= STRIKE_SNAP_KM)
+          .sort((a, b) => a.km - b.km)[0]?.entry ?? null;
+        const unit = clean(sent.unit);
+        const kind = clean(sent.kind);
+        if (kind === "structure") {
+          const found = near(engine.wrAirStrikeOps.strikableStructures(world, game.country));
+          sent = { op: "airstrike", unit, kind, marker: found?.id ?? "" };
+        } else if (kind === "city") {
+          const cities = await engine.wrCities.readFrontCities(world, game).catch(() => []);
+          const city = near(cities);
+          if (!city) {
+            sent = { op: "airstrike", unit, kind, to: [lng, lat] };
+          } else {
+            const enemies = engine.wrFleetOps.enemiesOf({ wars: world?.wars }, game.country);
+            const chart = await Promise.resolve().then(() => readChart()).catch(() => null);
+            const country = enemies.find((name) => chart?.holds?.(name, Number(city.lng), Number(city.lat)) === true) ?? (chart ? "" : enemies.length === 1 ? enemies[0] : "");
+            sent = { op: "airstrike", unit, kind, to: [Number(city.lng), Number(city.lat)], target: city.name, country, people: Number(city.population) || 0 };
+          }
+        } else {
+          const cities = await engine.wrCities.readFrontCities(world, game).catch(() => []);
+          sent = { op: "airstrike", unit, kind: "troops", to: [lng, lat], battlefield: clean(sent.battlefield), target: placeNear(cities, lng, lat) };
+        }
+      }
+      await engine.wrWrites.sendAirStrikeOp(sent, { turnRunning: busy, readChart });
+      return true;
     },
     "warroom.fortify": async ({ op = {} } = {}) => {
       await engine.wrWrites.sendFortifyOp(op, { turnRunning: busy, readChart });
@@ -643,6 +725,33 @@ export const register = (ctx) => {
         return { ...world, battlefields: [...list(world.battlefields), closed] };
       });
       return made;
+    };
+    methods["warroom.test.home"] = async ({ battlefield = "", home = true, drop = false } = {}) => {
+      let made = "";
+      if (drop) {
+        await engine.gameState.mutateWorldState((world) => ({ ...world, battlefields: list(world?.battlefields).filter((entry) => entry?.status !== "standing") }));
+        return "";
+      }
+      await engine.gameState.mutateWorldState((world) => {
+        const row = list(world?.battlefields).find((entry) => same(entry?.name, battlefield));
+        if (!row) return null;
+        const country = clean(list(row.sides?.[0])[0]);
+        made = home ? engine.wrHome.homeName(country) : `${clean(row.name)} in peace`;
+        const standing = { ...row, name: made, status: "standing", ...(home ? { home: true } : {}) };
+        delete standing.warId;
+        delete standing.field;
+        return { ...world, battlefields: [...list(world.battlefields), standing] };
+      });
+      return made;
+    };
+    methods["warroom.test.wing"] = async ({ name = "Escadre de chasse 2/30", lng = 6.2, lat = 48.7, strength = 90 } = {}) => {
+      const { game } = await read();
+      const id = `unit-test-air-${crypto.randomUUID().slice(0, 8)}`;
+      await engine.gameState.mutateWorldState((world) => ({
+        ...world,
+        units: [...list(world?.units), { id, type: "air", ownerCode: clean(game.country), name: clean(name), strength: Number(strength) || 90, lng: Number(lng), lat: Number(lat), status: "idle", posture: "holding", composition: "fighters and bombers" }],
+      }));
+      return id;
     };
   }
 

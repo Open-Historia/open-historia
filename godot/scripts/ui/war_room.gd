@@ -125,7 +125,8 @@ func setup(engine_link: EngineLink, context: Dictionary = {}) -> void:
 	rail.withdraw.connect(_withdraw_picked)
 	rail.send_back.connect(func() -> void: _act({"op": "return", "battlefield": _name()}))
 	rail.carrier.connect(func(medium: String) -> void: store.take_tool("transport", {"medium": medium}))
-	rail.fleets_toggled.connect(func() -> void: store.set_values({"fleets": not bool(store.value("fleets"))}))
+	rail.fleets_toggled.connect(func() -> void: store.set_values({"fleets": not bool(store.value("fleets")), "aircraft": false}))
+	rail.aircraft_toggled.connect(func() -> void: store.set_values({"aircraft": not bool(store.value("aircraft")), "fleets": false}))
 	rail.supply_toggled.connect(func() -> void: store.set_values({"supply": not bool(store.value("supply"))}))
 	rail.cleared.connect(func() -> void: store.set_values({"selected": []}))
 	plates.fortify_level.connect(func(level: int) -> void: store.set_values({"level": level}))
@@ -136,6 +137,11 @@ func setup(engine_link: EngineLink, context: Dictionary = {}) -> void:
 	plates.fleet_order.connect(func(op: Dictionary) -> void: _order_with("warroom.fleet", op))
 	plates.fleet_place.connect(func(kind: String) -> void: store.take_tool("fleet", {"station": kind}))
 	plates.fleets_close.connect(func() -> void: store.set_values({"fleets": false}))
+	plates.wing_pick.connect(_pick_wing)
+	plates.strike_kind.connect(func(kind: String) -> void: store.set_values({"strike_kind": kind}))
+	plates.aim.connect(func() -> void: store.take_tool("aircraft"))
+	plates.call_off.connect(func(unit: String) -> void: _order_with("warroom.airstrike", {"op": "unairstrike", "unit": unit}))
+	plates.aircraft_close.connect(func() -> void: store.set_values({"aircraft": false}))
 	if engine:
 		var reply: Dictionary = await engine.request("warroom.width")
 		if reply.get("ok", false) and float(reply.get("result", 0)) > 0.0:
@@ -263,7 +269,8 @@ func _sync_store_from_view() -> void:
 		var line: Dictionary = deploy
 		plans.append({"id": "deploy", "kind": "deploy", "form": str(line.get("form", "front")), "ways": [line.get("way", [])], "picked": [], "troops": 0})
 	var intel: Dictionary = _record.get("intel", {})
-	store.set_values({"plans": plans, "known": intel.get("plans", [])})
+	var air: Dictionary = _record.get("air", {})
+	store.set_values({"plans": plans, "known": intel.get("plans", []), "blast": float(air.get("blast", 0.0))})
 	map_layer.set_record(_record)
 	if _rehearsed_name != _name():
 		if _rehearse_call > 0:
@@ -351,7 +358,7 @@ func _on_way(tool: String, way: Array, extra: Dictionary) -> void:
 		"diversion":
 			await _act({"op": "diversion", "battlefield": name, "way": way, "troops": selected.size() if selected.size() > 0 else int(_view.get("spearhead", 44))})
 		"deploy":
-			var op := {"op": "deploy", "battlefield": name, "way": way, "countText": str(store.value("deploy_count"))}
+			var op := {"op": "deploy", "battlefield": name, "way": way}
 			if str(extra.get("form", "")) == "swarm":
 				op["form"] = "swarm"
 			if await _act(op):
@@ -366,6 +373,10 @@ func _on_way(tool: String, way: Array, extra: Dictionary) -> void:
 					store.set_values({"selected": []})
 		"fortify":
 			store.set_values({"draft": way})
+		"aircraft":
+			if not str(extra.get("wing", "")).is_empty() and not way.is_empty():
+				var at: Array = way[0]
+				await _order_with("warroom.airstrike", {"op": "airstrike", "unit": str(extra["wing"]), "kind": str(extra.get("kind", "troops")), "at": [at[0], at[1]], "battlefield": name})
 		"fleet":
 			if not str(extra.get("fleet", "")).is_empty() and not way.is_empty():
 				await _order_with("warroom.fleet", {"op": "station", "unit": str(extra["fleet"]), "to": way[0], "order": "patrol" if str(extra.get("station", "")) == "patrol" else "move"})
@@ -397,7 +408,11 @@ func _withdraw_picked() -> void:
 
 
 func _pick_fleet(id: String) -> void:
-	store.set_values({"fleet": id, "fleets": true})
+	store.set_values({"fleet": id, "fleets": true, "aircraft": false})
+
+
+func _pick_wing(id: String) -> void:
+	store.set_values({"wing": id, "aircraft": true, "fleets": false})
 
 
 func _on_store(keys: PackedStringArray) -> void:
@@ -418,7 +433,7 @@ func _on_store(keys: PackedStringArray) -> void:
 		_fetch_supply()
 	if "supply" in keys and not bool(store.value("supply")):
 		store.set_values({"supply_shade": null})
-	if "selected" in keys or "tool" in keys or "fleets" in keys or "draft" in keys:
+	if "selected" in keys or "tool" in keys or "fleets" in keys or "aircraft" in keys or "draft" in keys:
 		_render_rail()
 	if "battlefield" in keys and bool(store.value("open")) and str(store.value("battlefield")) != _name():
 		refresh()
@@ -888,9 +903,11 @@ func _render() -> void:
 	_strip_bottom.visible = has_record
 	if has_record:
 		_bar_name.text = _name().to_upper()
-		var sides := "%s against %s" % [", ".join(PackedStringArray(mine)), ", ".join(PackedStringArray(other))]
+		var sides := "%s · forces at home" % ", ".join(PackedStringArray(mine)) if bool(record.get("home", false)) else "%s against %s" % [", ".join(PackedStringArray(mine)), ", ".join(PackedStringArray(other))]
 		if str(record.get("status", "")) == "frozen":
 			sides += " · ceasefire"
+		if str(record.get("status", "")) == "standing" and not bool(record.get("home", false)):
+			sides += " · built up in peace"
 		_bar_sides.text = sides.to_upper()
 		var date_label := str(_view.get("dateLabel", ""))
 		_bar_date.text = (date_label if not date_label.is_empty() else str(_view.get("gameDate", ""))).to_upper()
@@ -944,9 +961,13 @@ func _render_rail() -> void:
 		"away": bool(_record.get("away", false)),
 		"can_fortify": bool(_record.get("canFortify", false)),
 		"drafted": draft is Array,
+		"navies": bool(_record.get("navies", true)),
 		"fleets": (_record.get("fleets", []) as Array).size(),
+		"aircraft": bool((_record.get("air", {}) as Dictionary).get("on", true)),
+		"wings": ((_record.get("air", {}) as Dictionary).get("wings", []) as Array).size(),
+		"peace": str(_record.get("status", "")) == "standing",
+		"home": bool(_record.get("home", false)),
 		"supply_areas": _supply_areas,
-		"reinforce_most": int(_view.get("reinforceMost", 60)),
 	})
 	store.set_values({"rail": int(round(rail.right_edge()))})
 	plates.set_props({
@@ -955,6 +976,7 @@ func _render_rail() -> void:
 		"fleets": _record.get("fleets", []),
 		"enemies": _record.get("enemies", []),
 		"convoys": _record.get("convoys", []),
+		"air": _record.get("air", {}),
 	})
 
 
@@ -1429,6 +1451,7 @@ func _plans_block() -> Control:
 			row.add_child(pick)
 			tray.add_child(row)
 			block.add_child(_top(tray, 0.3))
+	_air_list(block)
 	var lines: Array = record.get("lines", [])
 	if not lines.is_empty():
 		block.add_child(T.heading("Fortified lines", null, T.px(0.8)))
@@ -1525,6 +1548,48 @@ func _plans_block() -> Control:
 	if not sources.is_empty():
 		block.add_child(_top(T.text("From your agent in %s." % ", ".join(PackedStringArray(sources)), 0.68, T.BONE_FAINT), 0.3))
 	return block
+
+
+func _air_list(block: VBoxContainer) -> void:
+	var air: Dictionary = _record.get("air", {})
+	var orders: Array = air.get("orders", [])
+	var flown: Array = air.get("flown", [])
+	if orders.is_empty() and flown.is_empty():
+		return
+	block.add_child(T.heading("Air strikes", null, T.px(0.8)))
+	for entry in orders:
+		var order: Dictionary = entry
+		var tray := T.tray(false, Vector4(T.px(0.5), T.px(0.4), T.px(0.5), T.px(0.4)))
+		tray.set_meta("strike", str(order.get("id", "")))
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", int(round(T.px(0.55))))
+		var column := VBoxContainer.new()
+		column.add_theme_constant_override("separation", 0)
+		column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		var title := T.line("%s → %s" % [str(order.get("name", "")), str(order.get("target", ""))])
+		title.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+		column.add_child(title)
+		column.add_child(T.soft("Flies when time next passes."))
+		row.add_child(column)
+		var pick := T.link("Pick")
+		pick.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		var unit := str(order.get("unit", ""))
+		pick.pressed.connect(func() -> void: _pick_wing(unit))
+		row.add_child(pick)
+		tray.add_child(row)
+		block.add_child(_top(tray, 0.3))
+	for entry in flown:
+		var strike: Dictionary = entry
+		var tray := T.tray(false, Vector4(T.px(0.5), T.px(0.4), T.px(0.5), T.px(0.4)))
+		tray.set_meta("struck", str(strike.get("id", "")))
+		var column := VBoxContainer.new()
+		column.add_theme_constant_override("separation", 0)
+		var title := T.line("%s → %s" % [str(strike.get("unit", "")), str(strike.get("target", ""))])
+		title.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+		column.add_child(title)
+		column.add_child(WarRoomPlates.strike_text(strike, false))
+		tray.add_child(column)
+		block.add_child(_top(tray, 0.3))
 
 
 func _deploy_row(line: Dictionary) -> Control:

@@ -279,3 +279,58 @@ static func plan_tone(plan: Dictionary, theirs := false) -> String:
 static func line_colour(level: int) -> Color:
 	var colours := {3: "#d8c27a", 4: "#d9ad4f", 5: "#e09440", 6: "#e07a36", 7: "#d95f30", 8: "#c9452c", 9: "#b02d2a", 10: "#f4f7fb"}
 	return Color(str(colours.get(clampi(level if level != 0 else 5, 3, 10), "#e09440")))
+
+
+static func strike_kind_word(kind: String) -> String:
+	if kind == "structure":
+		return "Structure"
+	if kind == "city":
+		return "City"
+	return "Troops"
+
+
+static func strike_outcome(strike: Dictionary) -> String:
+	match str(strike.get("outcome", "")):
+		"unopposed":
+			return "Nobody rose against it: its bombs fell on target."
+		"through":
+			return "Intercepted, and its bombers got through."
+		"partly":
+			return "Intercepted: only part of its bombers got through."
+		"turned back":
+			return "Intercepted: its bombers turned back without bombing."
+		"out of reach":
+			return "Its target was out of reach: it did not fly."
+	return "It was gone before it could fly."
+
+
+static func strike_done(strike: Dictionary) -> Array:
+	var outcome := str(strike.get("outcome", ""))
+	if outcome == "turned back" or outcome == "out of reach" or outcome == "gone":
+		return []
+	var parts: Array = []
+	var enemy := int(strike.get("enemy", 0))
+	var own := int(strike.get("own", 0))
+	var kind := str(strike.get("kind", ""))
+	var status := str(strike.get("status", ""))
+	if kind == "troops":
+		parts.append(["Hit %d enemy formations." % enemy if enemy > 0 else "No enemy troops were under its bombs.", false])
+	if own > 0:
+		parts.append(["%d of your own side's formations were caught under them." % own, true])
+	if status == "destroyed":
+		parts.append(["Destroyed.", false])
+	if status == "damaged":
+		parts.append(["Damaged.", false])
+	if kind == "structure" and not status.is_empty() and status != "damaged" and status != "destroyed":
+		parts.append(["Still standing.", false])
+	if int(strike.get("dead", 0)) > 0:
+		parts.append(["About %s killed." % str(strike.get("deadText", strike.get("dead", 0))), false])
+	return parts
+
+
+static func strike_losses(strike: Dictionary) -> Array:
+	var parts: Array = ["Lost %d%% of its strength." % int(strike.get("lost", 0))]
+	for entry in strike.get("intercepted", []):
+		var row: Dictionary = entry
+		parts.append("%s lost %d%%." % [str(row.get("name", "")), int(row.get("lost", 0))])
+	return parts

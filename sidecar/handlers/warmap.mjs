@@ -336,13 +336,15 @@ export const register = (ctx) => {
     };
   };
 
+  const drawnBattlefield = (battlefield) => record.isOpenBattlefield(battlefield) || battlefield?.status === "standing";
+
   const frontTargets = (shown) => {
     const targets = [];
     for (const battlefield of shown) {
       if (!battlefield?.replay) continue;
       const view = record.frontViewOf(battlefield);
       if (!view?.replay) continue;
-      if (!record.isOpenBattlefield(battlefield) && !(view.window && view.window.from < view.replay.end)) continue;
+      if (!drawnBattlefield(battlefield) && !(view.window && view.window.from < view.replay.end)) continue;
       targets.push({
         name: record.foldBattlefieldName(battlefield.name),
         run: runKeyOf(battlefield),
@@ -451,7 +453,7 @@ export const register = (ctx) => {
   };
 
   const unitsOf = (world, shownFronts, kit) => {
-    const open = new Set(shownFronts.filter(record.isOpenBattlefield).map((battlefield) => record.foldBattlefieldName(battlefield.name)));
+    const open = new Set(shownFronts.filter(drawnBattlefield).map((battlefield) => record.foldBattlefieldName(battlefield.name)));
     const units = list(world?.units).filter((unit) => {
       const name = record.foldBattlefieldName(unit?.committedTo);
       return !(name && open.has(name));

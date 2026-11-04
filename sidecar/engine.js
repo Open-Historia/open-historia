@@ -358,3 +358,9 @@ export const mpLoadEngineMain = () => import("../../src/multiplayer/host/engineM
 export * as mpLoopback from "../../src/multiplayer/transport/loopback.js";
 export * as chPeacePlacement from "../../src/Game/GameUI/peacePlacement.js";
 export * as socialFeed from "../../src/runtime/socialFeed.js";
+export * as wrAirStrike from "../../src/runtime/fronts/airStrike.js";
+export * as wrAirStrikeOps from "../../src/runtime/fronts/airStrikeOps.js";
+export * as wrWorldGrid from "../../src/runtime/fronts/worldGrid.js";
+export * as wrMapDistance from "../../server/mapDistance.js";
+export * as wrMapMeasure from "../../src/runtime/mapMeasure.js";
+export * as wrHome from "../../src/runtime/fronts/home.js";

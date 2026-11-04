@@ -1,7 +1,7 @@
 class_name EditorWarRules
 extends RefCounted
 
-const WAR_MECHANICS := ["fatigue", "weather", "terrain", "walls", "muster", "military", "air", "supply", "attrition"]
+const WAR_MECHANICS := ["fatigue", "weather", "terrain", "walls", "muster", "military", "air", "supply", "attrition", "marching"]
 const ERA_LABELS := ["Before 1500", "1500 to 1850", "1850 to 1945", "From 1945"]
 const ERA_STARTS := [1500, 1850, 1945]
 const MEN_PER_COUNTER_MOST := 1000000

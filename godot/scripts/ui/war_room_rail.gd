@@ -7,6 +7,7 @@ signal withdraw
 signal send_back
 signal carrier(medium: String)
 signal fleets_toggled
+signal aircraft_toggled
 signal supply_toggled
 signal cleared
 
@@ -30,6 +31,7 @@ const ICONS := {
 	"air": "<svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M12 2l1.4 7 8.1 5v2l-8.1-2.2-.5 5 2.6 2v1.2L12 21l-3.5 1v-1.2l2.6-2-.5-5L2.5 16v-2l8.1-5z'/></svg>",
 	"diversion": "<svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' stroke-dasharray='3.2 3.4'><path d='M4 18c2-7 6-9 14-10'/><path d='M14.5 4.6L18.4 8l-3.2 3.9' stroke-dasharray='0'/></svg>",
 	"deploy": "<svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M3 19h18'/><path d='M4.5 11h4v4h-4z'/><path d='M10 11h4v4h-4z'/><path d='M15.5 11h4v4h-4z'/></svg>",
+	"aircraft": "<svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M12 2.5l1.2 5.5 6.8 4v1.7l-6.8-1.9-.4 3.6 2.2 1.6v1.2L12 17.5l-3 .7V17l2.2-1.6-.4-3.6L4 13.7V12l6.8-4z'/><path d='M7 20.5h.01M12 21.5h.01M17 20.5h.01' stroke-width='2.6'/></svg>",
 	"fortify": "<svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M3.5 20.5v-11h3v-3h3v3h5v-3h3v3h3v11z'/><path d='M10 20.5v-4.5h4v4.5'/></svg>",
 	"fleet": "<svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M3 15.5h18l-2.8 4.5H5.8z'/><path d='M12 3.5v12'/><path d='M12 5.5l6.5 8H12'/></svg>",
 	"supply": "<svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M4 8l8-4.5L20 8v8.5L12 21l-8-4.5z'/><path d='M4 8l8 4.5L20 8M12 12.5V21'/></svg>",
@@ -47,7 +49,6 @@ var _column: VBoxContainer
 var _tab: Button
 var _hint: PanelContainer
 var _carriers: PanelContainer
-var _count_input: LineEdit
 var _was_shown := false
 
 
@@ -98,7 +99,7 @@ func _init() -> void:
 func setup(shared: WarRoomStore) -> void:
 	store = shared
 	store.changed.connect(func(keys: PackedStringArray) -> void:
-		for key in ["tool", "selected", "fleets", "station", "deploy_form", "deploy_count", "supply", "draft"]:
+		for key in ["tool", "selected", "fleets", "aircraft", "station", "deploy_form", "supply", "draft"]:
 			if key in keys:
 				_render()
 				return)
@@ -197,13 +198,18 @@ func _render() -> void:
 	_column.add_child(_rail_key("Select", "Select troops: drag a box round them on the map", "select", tool == "select", locked, func() -> void: store.take_tool("select")))
 	_column.add_child(_rail_key("Route", "Draw route: draw the way the troops picked out are to go", "route", tool == "route", locked or none, func() -> void: store.take_tool("route")))
 	_column.add_child(_rule())
-	_column.add_child(_rail_key("Advance", "Send these troops forward from where they stand, with no route drawn for them", "advance", null, locked or none, func() -> void: order.emit("advance")))
+	var home := bool(props.get("home", false))
+	if not home:
+		_column.add_child(_rail_key("Advance", "Send these troops forward from where they stand, with no route drawn for them", "advance", null, locked or none, func() -> void: order.emit("advance")))
 	_column.add_child(_rail_key("Dig in", "Dig in: these troops entrench where they stand", "dig in", null, locked or none, func() -> void: order.emit("dig in")))
 	_column.add_child(_rail_key("Hold", "Hold: these troops keep their ground and attack nothing", "hold", null, locked or none, func() -> void: order.emit("hold")))
-	_column.add_child(_rail_key("Fall back", "Fall back: these troops give ground toward their own rear", "fall back", null, locked or none, func() -> void: order.emit("fall back")))
+	if not home:
+		_column.add_child(_rail_key("Fall back", "Fall back: these troops give ground toward their own rear", "fall back", null, locked or none, func() -> void: order.emit("fall back")))
 	_column.add_child(_rail_key("Release", "Give these troops back to their stretch of the line", "release", null, locked or none, func() -> void: release.emit()))
 	if bool(props.get("away", false)):
 		_column.add_child(_rail_key("Send back", "Send your troops back onto this battlefield", "return", null, locked, func() -> void: send_back.emit()))
+	elif bool(props.get("peace", false)):
+		_column.add_child(_rail_key("Stand down", "Stand down: these troops go home. With none picked out, all of yours do", "withdraw", null, locked or (none and int(props.get("own", 0)) == 0), func() -> void: withdraw.emit()))
 	else:
 		_column.add_child(_rail_key("Withdraw", "Withdraw: these troops leave the battlefield and go home. With none picked out, all of yours do", "withdraw", null, locked or (none and int(props.get("own", 0)) == 0), func() -> void: withdraw.emit()))
 	_column.add_child(_rule())
@@ -214,11 +220,15 @@ func _render() -> void:
 		else:
 			choosing = not choosing
 			_render()))
-	_column.add_child(_rail_key("Diversion", "Draw a diversion: a movement you want the other side to believe", "diversion", tool == "diversion", locked, func() -> void: store.take_tool("diversion")))
+	if not home:
+		_column.add_child(_rail_key("Diversion", "Draw a diversion: a movement you want the other side to believe", "diversion", tool == "diversion", locked, func() -> void: store.take_tool("diversion")))
 	_column.add_child(_rail_key("Deploy", "Deploy: choose where your new troops on this battlefield come in, along a front or as a swarm", "deploy", tool == "deploy", locked, func() -> void: store.take_tool("deploy")))
+	if bool(props.get("aircraft", true)):
+		_column.add_child(_rail_key("Aircraft", "Deploy Aircraft: send an air unit to strike troops, a structure or a city", "aircraft", bool(store.value("aircraft")) or tool == "aircraft", int(props.get("wings", 0)) == 0, func() -> void: aircraft_toggled.emit()))
 	_column.add_child(_rule())
 	_column.add_child(_rail_key("Fortify", "Fortify: draw a line to be built, then choose how strong it is to be", "fortify", tool == "fortify" or bool(props.get("drafted", false)), locked or not bool(props.get("can_fortify", false)), func() -> void: store.take_tool("fortify")))
-	_column.add_child(_rail_key("Fleets", "Fleets: command your fleets at sea", "fleet", bool(store.value("fleets")) or tool == "fleet", int(props.get("fleets", 0)) == 0, func() -> void: fleets_toggled.emit()))
+	if bool(props.get("navies", true)):
+		_column.add_child(_rail_key("Fleets", "Fleets: command your fleets at sea", "fleet", bool(store.value("fleets")) or tool == "fleet", int(props.get("fleets", 0)) == 0, func() -> void: fleets_toggled.emit()))
 	_column.add_child(_rail_key("Supply", "Supply: shade how well supplied the ground is", "supply", bool(store.value("supply")), false, func() -> void: supply_toggled.emit()))
 	var view := get_viewport_rect().size if is_inside_tree() else Vector2(1440, 900)
 	var width := T.px(0.3) * 2.0 + KEY_SIZE + 2.0
@@ -377,6 +387,8 @@ func _render_hint(shown: bool, out: bool, top: float) -> void:
 		lead = "Click the place the %d picked out are to be carried to. Drag to move the map. They board when time next passes." % selected.size()
 	elif tool == "fortify":
 		lead = "Draw the fortified line on the map. You choose how strong it is to be once it is drawn."
+	elif tool == "aircraft":
+		lead = "Click what the air unit is to strike. Its bombs fall inside the ring, on your own troops there too. Drag to move the map."
 	elif tool == "fleet":
 		lead = "Click the place at sea the fleet is to patrol. Drag to move the map." if str(store.value("station")) == "patrol" else "Click the place at sea the fleet is to sail to. Drag to move the map."
 	if not turn_running and tool == "deploy":
@@ -390,52 +402,7 @@ func _render_hint(shown: bool, out: bool, top: float) -> void:
 			radio.pressed.connect(func() -> void: store.set_values({"deploy_form": "swarm" if value == "swarm" else "front"}))
 			forms.add_child(radio)
 		column.add_child(T.pad(forms, Vector4(0, 0, 0, T.px(0.35))))
-		var count_row := HBoxContainer.new()
-		count_row.add_theme_constant_override("separation", int(round(T.px(0.45))))
-		var count_label := T.text("Formations to call up", 0.74, T.BONE_SOFT)
-		count_label.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-		count_label.autowrap_mode = TextServer.AUTOWRAP_OFF
-		count_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-		count_row.add_child(count_label)
-		_count_input = LineEdit.new()
-		_count_input.text = str(store.value("deploy_count"))
-		_count_input.placeholder_text = "Usual"
-		_count_input.custom_minimum_size = Vector2(T.px(4.5), 0)
-		_count_input.add_theme_font_size_override("font_size", T.font_size(0.78))
-		_count_input.add_theme_color_override("font_color", T.BONE)
-		_count_input.add_theme_color_override("font_placeholder_color", Color(T.BONE, 0.45))
-		var field := UI.box(Color(0, 0, 0, 0.5), T.SUNK_LINE, 3, 1, Vector4(T.px(0.4), T.px(0.2), T.px(0.4), T.px(0.2)))
-		_count_input.add_theme_stylebox_override("normal", field)
-		_count_input.add_theme_stylebox_override("focus", field)
-		var most := int(props.get("reinforce_most", 60))
-		_count_input.text_changed.connect(func(value: String) -> void:
-			var cleaned := ""
-			for character in value:
-				if character in "0123456789":
-					cleaned += character
-			if not cleaned.is_empty() and int(cleaned) > most:
-				cleaned = str(most)
-			if cleaned != value:
-				var caret := _count_input.caret_column
-				_count_input.text = cleaned
-				_count_input.caret_column = mini(caret, cleaned.length())
-			store.state["deploy_count"] = cleaned)
-		_count_input.gui_input.connect(func(event: InputEvent) -> void:
-			if not (event is InputEventKey) or not (event as InputEventKey).pressed:
-				return
-			var key := (event as InputEventKey).keycode
-			if key != KEY_UP and key != KEY_DOWN:
-				return
-			var now := _count_input.text
-			var step := 1 if key == KEY_UP else -1
-			var next := clampi((0 if now.is_empty() else int(now)) + step, 0, most)
-			_count_input.text = str(next)
-			_count_input.caret_column = _count_input.text.length()
-			store.state["deploy_count"] = _count_input.text
-			_count_input.accept_event())
-		count_row.add_child(_count_input)
-		column.add_child(T.pad(count_row, Vector4(0, 0, 0, T.px(0.2))))
-		column.add_child(T.pad(T.text("Empty calls up as many as a usual draft; 0 calls up none.", 0.74, T.BONE_FAINT), Vector4(0, 0, 0, T.px(0.35))))
+		column.add_child(T.pad(T.text("As many come as your men, supplies, war weariness and mustering allow, called up inside your country.", 0.74, T.BONE_FAINT), Vector4(0, 0, 0, T.px(0.35))))
 		if form == "swarm":
 			lead = "Click the place your new troops here are to gather at. Those called up come in there as a swarm when time next passes, under one general of their own, and so do later levies, drafts and reinforcements. Each moves and fights as troops on a front do. Drag to move the map."
 		else:
