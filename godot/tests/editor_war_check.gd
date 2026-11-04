@@ -282,6 +282,11 @@ func _fronts_tab(details: Dictionary, form: Dictionary) -> void:
 	weather.pressed.emit()
 	_check(last_value.get("mechanics", {}).get("weather") == false, "weather switched off")
 	_check(_button(war._mechanics, "○ Seasons and weather") != null, "the switch shows off")
+	var marching := _button(war._mechanics, "✓ Marching to the front")
+	_check(marching != null and marching.tooltip_text.begins_with("New troops are raised inside their country"), "Marching to the front is a war mechanic, with its hint")
+	if marching:
+		marching.pressed.emit()
+		_check(last_value.get("mechanics", {}).get("marching") == false, "marching switched off")
 	_type(war._winner, "France")
 	_type(war._loser, "Germany")
 	war._add()
