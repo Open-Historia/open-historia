@@ -19,7 +19,9 @@ import {
     buildScriptedEventsInstruction,
     dateKey,
     ensureScriptedEvents,
+    firstSkipIncludesScriptedOrigin,
     parseScriptedEvents,
+    scriptedBeatsNotAlreadyWritten,
     reviewScriptedEvents,
     scriptedBeatsInSpan,
     territoryTempoAllowance,
@@ -395,6 +397,65 @@ test("generated scripted wording keeps the simulator's presentation", () => {
     const { events } = ensureScriptedEvents(answer, [beat]);
     assert.equal(events[0].title, answer[0].title);
     assert.equal(events[0].description, answer[0].description);
+});
+
+test("first time skip includes authored start-day beats even after scenario prehistory was recorded", () => {
+    const game = { startDate: "1991-08-19", gameDate: "1991-08-19", round: 1 };
+    const world = { simulationHistory: [{ mode: "pregame", fromDate: "1985-03-11", toDate: "1991-08-19" }] };
+    const span = { game, world, originDate: game.gameDate, segmentIndex: 0 };
+    assert.equal(firstSkipIncludesScriptedOrigin(span), true);
+    const beats = [
+        { id: "night", date: "1991-08-19", title: "Committee meets", text: "Emergency committee meets overnight." },
+        { id: "broadcast", date: "1991-08-19", title: "Emergency broadcast", text: "Emergency committee makes a radio declaration." },
+        { id: "tomorrow", date: "1991-08-20", title: "Countermeasures", text: "The committee orders a curfew." },
+    ];
+    assert.deepEqual(scriptedBeatsInSpan(beats, {
+        originDate: game.gameDate, targetDate: "1991-08-26", includeOrigin: firstSkipIncludesScriptedOrigin(span),
+    }).map((beat) => beat.id), ["night", "broadcast", "tomorrow"]);
+    assert.equal(firstSkipIncludesScriptedOrigin({ ...span, segmentIndex: 1 }), false);
+    assert.equal(firstSkipIncludesScriptedOrigin({ ...span, game: { ...game, round: 2 } }), false);
+    assert.equal(firstSkipIncludesScriptedOrigin({ ...span, originDate: "1991-08-20" }), false);
+    assert.equal(firstSkipIncludesScriptedOrigin({ ...span, game: { ...game, startDate: "bad" } }), false);
+    assert.equal(firstSkipIncludesScriptedOrigin({ ...span, game: { round: 1 } }), true,
+        "legacy first-round saves without startDate still include their origin day");
+});
+
+test("each same-day authored beat needs its own generated timeline event", () => {
+    const beats = [
+        { id: "committee", date: "1991-08-19", title: "Committee announces emergency", text: "Committee announces emergency by radio." },
+        { id: "curfew", date: "1991-08-19", title: "Committee orders curfew", text: "Committee announces emergency and orders curfew." },
+    ];
+    const oneAnswer = [{
+        date: "1991-08-19",
+        title: "Committee announces emergency and curfew",
+        description: "Committee announces emergency by radio and orders curfew.",
+    }];
+    assert.equal(beatIsWritten(beats[0], oneAnswer), true);
+    assert.equal(beatIsWritten(beats[1], oneAnswer), true);
+    const repaired = ensureScriptedEvents(oneAnswer, beats);
+    assert.equal(repaired.written.length, 1, "one AI event can satisfy only one scripted beat");
+    assert.equal(repaired.inserted.length, 1, "second authored beat must still be inserted");
+    assert.equal(repaired.events.length, 2);
+
+    const missingBoth = ensureScriptedEvents([], beats);
+    assert.equal(missingBoth.inserted.length, 2, "an engine-inserted beat cannot silently satisfy another authored beat");
+    assert.equal(missingBoth.events.length, 2);
+});
+
+test("first-day prehistory covers only distinct matching beats and cannot consume two with one event", () => {
+    const beats = [
+        { id: "declaration", date: "1991-08-19", title: "Emergency declaration", text: "The emergency committee broadcasts a declaration." },
+        { id: "curfew", date: "1991-08-19", title: "Emergency curfew", text: "The emergency committee broadcasts a curfew." },
+        { id: "next", date: "1991-08-20", title: "New negotiations", text: "Negotiators meet about the emergency." },
+    ];
+    const prehistory = [{
+        date: "1991-08-19", title: "Emergency declaration and curfew",
+        description: "The emergency committee broadcasts a declaration and a curfew.",
+    }];
+    const remaining = scriptedBeatsNotAlreadyWritten(beats, prehistory);
+    assert.deepEqual(remaining.map((beat) => beat.id), ["curfew", "next"]);
+    assert.deepEqual(scriptedBeatsNotAlreadyWritten(beats, []), beats);
+    assert.deepEqual(scriptedBeatsNotAlreadyWritten([beats[0]], [{ ...prehistory[0], date: "1991-08-18" }]), [beats[0]], "older history may not consume a future authored beat");
 });
 
 test("the period tells the simulator which scripted beats have exact wording", () => {

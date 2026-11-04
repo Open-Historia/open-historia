@@ -552,7 +552,9 @@ import {
   buildWorldDirectionDirective,
   dateKey,
   ensureScriptedEvents,
+  firstSkipIncludesScriptedOrigin,
   scriptedBeatsInSpan,
+  scriptedBeatsNotAlreadyWritten,
   worldShareShortfall,
 } from "./worldDirection.js";
 import {
@@ -17231,12 +17233,15 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
       // retries reuse it (so Chance never rerolls), while an auto jump that stops
       // before an event's date discards that not-yet-due decision.
       const ledgerWorld = state.ledgerWorld || bundle.world;
+      const includeOriginScripted = firstSkipIncludesScriptedOrigin({
+        game: bundle.game, originDate: state.segmentOrigin, segmentIndex,
+      });
       const authoredScriptedBeats = scriptedBeatsInSpan(
         Array.isArray(direction?.scriptedEvents) ? direction.scriptedEvents : [],
         {
           originDate: state.segmentOrigin,
           targetDate: segmentTarget,
-          includeOrigin: normalizeArray(bundle.world?.simulationHistory).length === 0 && segmentIndex === 0,
+          includeOrigin: includeOriginScripted,
         },
       );
       // A retry of the player's failed events (retryHeldPlayerEvents) writes no
@@ -17249,9 +17254,18 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
           pendingState: state.scriptedEventPending,
         });
       state.scriptedEventPending = scriptedPlan.pendingState;
-      const scriptedBeats = scriptedPlan.eligible;
       // The language the player reads the game in (promptContext.js "language"): the beats are told in it.
       const scriptedLanguage = readingLanguageName(normalizeString(bundle.world?.language || bundle.game?.language));
+      // Start-day events may already be part of the scenario prehistory. Mark
+      // every authored beat resolved, but do not narrate those already present
+      // in the initial canonical timeline a second time. Matching is one-to-one.
+      const scriptedBeats = includeOriginScripted
+        ? scriptedBeatsNotAlreadyWritten(
+          scriptedPlan.eligible,
+          normalizeArray(bundle.events).filter((entry) => dateKey(entry?.date) === dateKey(state.segmentOrigin)),
+          { language: scriptedLanguage },
+        )
+        : scriptedPlan.eligible;
       const scriptedPoliticalRequirements = scriptedPoliticalImpactRequirements(scriptedBeats, { world: ledgerWorld });
       const scriptedPoliticalInstruction = buildScriptedPoliticalImpactInstruction(scriptedPoliticalRequirements, { world: ledgerWorld });
       state.structuralScriptedFallbackBlocked = scriptedPoliticalRequirements.length > 0;
