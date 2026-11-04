@@ -44,7 +44,20 @@ const STAND_IN_INSTITUTION_REPLY = [
   "ADVISOR_MEMORY: The player wants the budget steadied first and the fiscal rules tabled formally.",
 ].join("\n");
 
+const STAND_IN_CHARACTER_REPLY = [
+  "I only know what the papers print and what people say in the market. The talk is of the budget, and of little else.",
+  "```actions",
+  "[{\"title\":\"Hold a rally for the budget\",\"text\":\"Hold a rally in the capital in support of the budget.\",\"kind\":\"action\"}]",
+  "```",
+  "```projects",
+  "[{\"op\":\"create\",\"name\":\"Neighbourhood Budget Committee\",\"summary\":\"A committee of citizens to watch the budget.\",\"kind\":\"project\",\"tags\":[\"economic\"],\"status\":\"active\",\"progress\":0}]",
+  "```",
+  "ADVISOR_MEMORY: The player asked a citizen about the budget.",
+].join("\n");
+
 const ADVISOR_MARK = "[Drafting Messages to Send]";
+const CHARACTER_MARK = "[Character Conversation — Public Context Only]";
+const PRIVATE_MARKS = ["[Action Planning]", "[Current Planned Actions]", "[Current Projects]", ADVISOR_MARK];
 const FAIL_MARK = "fleet";
 
 const lastUserText = (body) => {
@@ -389,10 +402,16 @@ export const register = (ctx) => {
 
   if (ctx.standIn) {
     ctx.addStandIn(({ tool, text, body }) => {
+      if (!tool && String(text).includes(CHARACTER_MARK)) {
+        const leaked = PRIVATE_MARKS.filter((mark) => String(text).includes(mark));
+        return { text: leaked.length ? `LEAKED ${leaked.join(" ")}\n${STAND_IN_CHARACTER_REPLY}` : STAND_IN_CHARACTER_REPLY };
+      }
       if (tool || !String(text).includes(ADVISOR_MARK)) return null;
       const asked = lastUserText(body).toLowerCase();
       if (asked.includes(FAIL_MARK)) return null;
-      return { text: asked.includes("institution") ? STAND_IN_INSTITUTION_REPLY : STAND_IN_REPLY };
+      const named = /Your name is (.+?), and your position is/.exec(String(text));
+      const reply = asked.includes("institution") ? STAND_IN_INSTITUTION_REPLY : STAND_IN_REPLY;
+      return { text: named ? `I am ${named[1]}.\n\n${reply}` : reply };
     });
     installStreamingStandIn();
   }
@@ -461,13 +480,34 @@ export const register = (ctx) => {
     }
   };
 
-  const viewOf = (message, world, unseen = null, chats = null) => {
+  const readActions = async () => {
+    try {
+      return list(await gameState.readActionsState());
+    } catch {
+      return [];
+    }
+  };
+
+  const proposalTargetsOf = (message, actions) => {
+    const targets = {};
+    for (const proposal of list(message?.actionProposals)) {
+      const id = String(proposal?.targetId ?? "");
+      if (!id) continue;
+      const action = list(actions).find((entry) => String(entry?.id) === id);
+      const title = String(action?.title || action?.text || "").trim();
+      if (title) targets[String(proposal.id)] = title;
+    }
+    return targets;
+  };
+
+  const viewOf = (message, world, unseen = null, chats = null, actions = null) => {
     const role = message?.role;
     if (role === "notice") return noticeView(message, world, unseen ?? unseenOf(world));
     if (role === "advisor") {
       const parsed = engine.advisorReply.parseAdvisorReply(message.text, { allowedUnitTypes: allowedTypesOf(world), streaming: Boolean(message.streaming) });
       const drafts = parsed.messageDrafts ? parsed.messageDrafts.map((draft) => ({ ...draft, sentNote: sentNote(draft, chats) })) : null;
       return {
+        proposalTargets: proposalTargetsOf(message, actions),
         text: parsed.text,
         md: normalizeMarkdown(parsed.text),
         chartConfig: parsed.chartConfig,
@@ -498,9 +538,9 @@ export const register = (ctx) => {
   };
 
   const viewsOf = async (messages) => {
-    const [world, chats] = await Promise.all([readWorld(), readChats()]);
+    const [world, chats, actions] = await Promise.all([readWorld(), readChats(), readActions()]);
     const unseen = unseenOf(world);
-    return list(messages).map((message) => viewOf(message, world, unseen, chats));
+    return list(messages).map((message) => viewOf(message, world, unseen, chats, actions));
   };
 
   const loadMessages = async () => {
@@ -536,17 +576,27 @@ export const register = (ctx) => {
     const polity = await readPolity();
     const government = engine.polActors.getPoliticalProfile(world || {}, polity)?.government ?? null;
     const political = government ? { politicalActors: { byPolity: { [polity]: { polityKey: polity, government } } } } : {};
+    const labels = threads.ADVISOR_RECIPIENT_TYPE_LABELS;
+    const chief = threads.chiefAdvisorProfile(saved);
     return {
-      contacts: threads.advisorContacts(saved).map((contact) => ({
-        id: contact.id,
-        name: String(contact.name ?? ""),
-        title: String(contact.title ?? ""),
-        personality: String(contact.personality ?? ""),
-        archived: Boolean(contact.archived),
-        binding: contact.binding ?? null,
-        status: threads.advisorOfficeStatus(contact, political),
-      })),
+      contacts: threads.advisorContacts(saved).map((contact) => {
+        const recipientType = threads.advisorRecipientType(contact) || "";
+        return {
+          id: contact.id,
+          name: String(contact.name ?? ""),
+          title: String(contact.title ?? ""),
+          personality: String(contact.personality ?? ""),
+          recipientType,
+          typeLabel: recipientType ? String(labels[recipientType] ?? "") : "",
+          archived: Boolean(contact.archived),
+          binding: contact.binding ?? null,
+          status: threads.advisorOfficeStatus(contact, political),
+        };
+      }),
       offices: threads.politicalAdvisorOffices(political, polity),
+      chief: chief ? { name: chief.name, title: chief.title, personality: chief.personality } : null,
+      types: Object.entries(labels).map(([value, label]) => ({ value, label })),
+      minister: threads.ADVISOR_RECIPIENT_TYPES.MINISTER,
     };
   };
 
@@ -590,7 +640,7 @@ export const register = (ctx) => {
     }
   };
 
-  const buildAdvisorCatchUp = async (messages, moment) => {
+  const buildAdvisorCatchUp = async (messages, moment, { publicOnly = false } = {}) => {
     const previous = [...list(messages)].reverse()
       .find((msg) => (msg.role === "user" || msg.role === "advisor") && !msg.streaming);
     if (!previous) return { text: "", label: "" };
@@ -599,9 +649,9 @@ export const register = (ctx) => {
       return engine.conversationCatchUp.buildCatchUpNote({
         previousDate: previous.time || "",
         currentDate: date || "",
-        events,
-        gmChanges: previous.at ? engine.gmChanges.gmChangesSince(world, previous.at) : [],
-        replyProblems: previous.role === "advisor" ? engine.advisorBlocks.describeReplyProblems(previous) : [],
+        events: publicOnly ? engine.characterConversations.publicCharacterEvents(events, { gameDate: date }) : events,
+        gmChanges: publicOnly ? [] : previous.at ? engine.gmChanges.gmChangesSince(world, previous.at) : [],
+        replyProblems: !publicOnly && previous.role === "advisor" ? engine.advisorBlocks.describeReplyProblems(previous) : [],
         compareDates: dates.compareGameDates,
         formatDate: (value) => dates.formatGameDateReadable(value),
       });
@@ -611,80 +661,7 @@ export const register = (ctx) => {
     }
   };
 
-  const applyAdvisorActions = async (proposal, problems = [], round = 0) => {
-    if (!Array.isArray(proposal) || proposal.length === 0) return null;
-    const current = await gameState.readActionsState({ force: true });
-    const plan = engine.advisorBlocks.planAdvisorActionEdits(current, proposal, gameState.normalizeActionEntry, {
-      repeatOf: (queue, title) => engine.playerFocus.repeatedOrder(queue, title, { round: Number(round) || 0 }),
-    });
-    problems.push(...plan.problems);
-    if (plan.items.length === 0) return null;
-    if (engine.mpBridge.inSharedGame()) {
-      const wording = (action) => String(action?.text || action?.title || "").trim();
-      const before = new Map(current.map((action) => [String(action.id), action]));
-      const after = new Map(plan.next.map((action) => [String(action.id), action]));
-      const ask = async (request, fields, what) => {
-        const answer = await engine.mpBridge.requestFromHost(request, fields);
-        if (!answer.ok) problems.push(`the host did not ${what}: ${answer.error || "it did not answer"}`);
-      };
-      for (const [id, action] of before) {
-        const kept = after.get(id);
-        if (kept && wording(kept) === wording(action)) continue;
-        await ask("unorder", { order: id }, `withdraw "${action.title || wording(action)}"`);
-        if (kept) await ask("order", { text: wording(kept) }, `take the reworded "${kept.title || wording(kept)}"`);
-      }
-      for (const [id, action] of after) {
-        if (!before.has(id)) await ask("order", { text: wording(action) }, `take "${action.title || wording(action)}"`);
-      }
-      return plan.items;
-    }
-    if (plan.reverts.length) {
-      for (const revert of plan.reverts) {
-        try {
-          await engine.unitsController.revertUnitOrder(revert);
-        } catch (error) {
-          console.warn("[advisor] could not revert the unit order:", error?.message ?? error);
-        }
-      }
-    }
-    await gameState.writeActionsState(plan.next);
-    return plan.items;
-  };
-
-  const applyAdvisorProjects = async (proposal, gameDate, round) => {
-    if (!Array.isArray(proposal) || proposal.length === 0) return null;
-    const world = await gameState.readWorldState({ force: true });
-    const before = new Map(world.projects.map((project) => [project.id, project]));
-    const { deferredProjectIds, world: nextWorld } = gameState.applyProjectOpsToWorld({
-      date: String(gameDate || ""),
-      ops: proposal,
-      round: Number(round) || 0,
-      world,
-    });
-    const next = nextWorld.projects;
-    const items = [];
-    for (const project of next) {
-      const previous = before.get(project.id);
-      if (!previous) {
-        items.push({ change: "opened", title: project.name });
-      } else if (previous.updatedAt !== project.updatedAt) {
-        items.push({
-          change: project.status === "complete" && previous.status !== "complete" ? "completed" : "updated",
-          title: project.name,
-        });
-      }
-    }
-    for (const project of world.projects) {
-      if (!next.some((entry) => entry.id === project.id)) items.push({ change: "closed", title: project.name });
-    }
-    for (const id of deferredProjectIds) {
-      const project = next.find((entry) => entry.id === id);
-      if (project) items.push({ change: "deferred", title: project.name });
-    }
-    if (items.length === 0) return null;
-    await gameState.writeWorldState(nextWorld);
-    return items;
-  };
+  const newReplyId = () => `advisor-reply-${globalThis.crypto?.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 14)}`}`;
 
   const fromWire = (json, fallback) => {
     if (typeof json !== "string" || !json) return fallback;
@@ -784,6 +761,40 @@ export const register = (ctx) => {
     },
     "advisor.contact.revise": async ({ id = "", draft = {} } = {}) => plain(await contactMutation((all) => threads.reviseAdvisorContact(all, String(id), draft))),
     "advisor.contact.archive": async ({ id = "", archived = true } = {}) => plain(await contactMutation((all) => threads.archiveAdvisorContact(all, String(id), Boolean(archived)))),
+    "advisor.chief.save": async ({ draft = {} } = {}) => plain(await contactMutation((all) => threads.saveChiefAdvisorProfile(all, draft))),
+    "advisor.chief.reset": async () => plain(await contactMutation((all) => threads.resetChiefAdvisorProfile(all))),
+    "advisor.proceed": async ({ threadId = CHIEF, messageId = "", proposalId = "" } = {}) => {
+      const thread = threadOf(threadId);
+      const campaignId = clean(engine.getLibraryState()?.activeGameId);
+      try {
+        engine.simulationStatus.assertNoTurnRunning();
+        const { round } = await engine.readJson(urls.game, { defaultValue: { round: 0 }, force: true });
+        if (campaignChanged(campaignId, engine.getLibraryState()?.activeGameId)) {
+          throw new Error("The campaign changed before the Action could be queued.");
+        }
+        const receipt = await engine.advisorActionApproval.approveAdvisorAction({
+          threadId: thread,
+          messageId: String(messageId),
+          proposalId: String(proposalId),
+          readAdvisorMessages: gameState.readAdvisorMessages,
+          mutateActionsState: gameState.mutateActionsState,
+          mutateAdvisorState: gameState.mutateAdvisorState,
+          normalizeAction: gameState.normalizeActionEntry,
+          repeatOf: (queue, title) => engine.playerFocus.repeatedOrder(queue, title, { round: Number(round) || 0 }),
+          sharedGame: engine.mpBridge.inSharedGame(),
+          assertReady: engine.simulationStatus.assertNoTurnRunning,
+        });
+        if (campaignChanged(campaignId, engine.getLibraryState()?.activeGameId)) {
+          throw new Error("The campaign changed while the Action was being reviewed. Reopen the correct game.");
+        }
+        const saved = await gameState.readAdvisorMessages({ force: true });
+        const stored = threads.advisorMessagesFor(saved, thread).find((entry) => entry?.role === "advisor" && entry.id === String(messageId));
+        return plain({ ok: true, receipt, receipts: stored?.actionReceipts ?? { [String(proposalId)]: receipt } });
+      } catch (error) {
+        console.warn("[advisor] the Action proposal was not fully confirmed:", error?.message ?? error);
+        return { ok: false, error: `${error?.message || String(error)} If a write succeeded before an error, retrying uses the same Action ID.` };
+      }
+    },
     "advisor.history": async ({ messages = [], json = "", threadId = CHIEF } = {}) => {
       messages = fromWire(json, messages);
       engine.aiMain.loadHistory(list(messages), threadOf(threadId));
@@ -865,7 +876,9 @@ export const register = (ctx) => {
       const askedOn = moment.date || gameDate;
       const catchUp = retry
         ? { text: askedBefore?.catchUp || "", label: askedBefore?.catchUpLabel || "" }
-        : await buildAdvisorCatchUp(transcript, moment);
+        : await buildAdvisorCatchUp(transcript, moment, {
+          publicOnly: Boolean(recipient && threads.advisorRecipientType(recipient) !== threads.ADVISOR_RECIPIENT_TYPES.MINISTER),
+        });
       const asked = retry ? null : {
         role: "user",
         text: question,
@@ -904,24 +917,34 @@ export const register = (ctx) => {
         }
         const { reply, memory } = engine.advisorMemory.splitAdvisorMemory(raw);
         const blocks = engine.advisorBlocks;
+        const replyId = newReplyId();
         const { json: actionsProposal, reason: actionsReason } = blocks.extractFencedJson(reply, "actions");
-        const actionsProblems = actionsReason ? [`it was ${actionsReason}, so nothing in it was applied`] : [];
+        const minister = thread === CHIEF || threads.advisorRecipientType(recipient) === threads.ADVISOR_RECIPIENT_TYPES.MINISTER;
+        const { proposals: actionProposals, problems: invalidProposals } = minister
+          ? engine.advisorActionReview.actionProposalsFromReply(actionsProposal, replyId)
+          : { proposals: [], problems: [] };
+        const actionsProblems = [
+          ...(actionsReason ? [`the Action block was ${actionsReason}; no Action was queued`] : []),
+          ...invalidProposals,
+        ];
         const { chartProblem, draftProblems, institutionDraftProblems, deployProblems } = engine.advisorReply.parseAdvisorReply(reply, {
           allowedUnitTypes: Array.isArray(moment.world?.allowedUnitTypes) ? moment.world.allowedUnitTypes : null,
         });
-        const actionsSummary = thread === CHIEF
-          ? await applyAdvisorActions(actionsProposal, actionsProblems, gameRound).catch((error) => {
-            console.error("Failed to apply advisor-proposed actions:", error?.message ?? error);
-            return null;
-          }) : null;
         const { json: projectsProposal, truncated: projectsTruncated, reason: projectsReason,
           dropped: projectsDropped, excerpt: projectsExcerpt } = blocks.extractFencedJson(reply, "projects", { salvageTruncated: true });
-        const projectsSummary = thread === CHIEF
-          ? await applyAdvisorProjects(projectsProposal, gameDate, gameRound).catch((error) => {
+        const canApplyProjects = engine.advisorProjectRouting.canAdvisorApplyProjectOps(thread, recipient);
+        const projectsSummary = canApplyProjects
+          ? await engine.advisorProjectRouting.applyAdvisorProjectProposal({
+            proposal: projectsProposal,
+            gameDate,
+            round: gameRound,
+            mutateWorldState: gameState.mutateWorldState,
+            applyProjectOpsToWorld: gameState.applyProjectOpsToWorld,
+          }).catch((error) => {
             console.error("Failed to apply advisor-proposed projects:", error?.message ?? error);
             return null;
           }) : null;
-        const projectsProblem = thread !== CHIEF ? ""
+        const projectsProblem = !canApplyProjects ? ""
           : projectsSummary
             ? (projectsTruncated ? "truncated" : (projectsDropped > 0 ? "partial" : ""))
             : (blocks.looksLikeProjectOps(reply) ? (projectsTruncated ? "truncated-empty" : "unusable") : "");
@@ -931,8 +954,11 @@ export const register = (ctx) => {
             ? (projectsReason || "every entry referred to a project that is not on the board")
             : "";
         const projectsExcerptText = (projectsProblem === "unusable" || projectsProblem === "partial") ? projectsExcerpt : "";
-        const unapproved = thread !== CHIEF && Boolean(actionsProposal || projectsProposal);
+        const actionSuggestionsBlocked = !minister && Boolean(actionsProposal);
+        const projectsNotApplied = !canApplyProjects && Boolean(projectsProposal);
+        const unapproved = actionSuggestionsBlocked || projectsNotApplied;
         const finalMessage = {
+          id: replyId,
           role: "advisor",
           text: reply,
           time: askedOn,
@@ -941,17 +967,17 @@ export const register = (ctx) => {
           ...(memory ? { memory } : {}),
           ...(chartProblem ? { chartProblem } : {}),
           ...(actionsProblems.length ? { actionsProblems } : {}),
+          ...(actionProposals.length ? { actionProposals } : {}),
           ...(draftProblems.length ? { draftProblems } : {}),
           ...(institutionDraftProblems.length ? { institutionDraftProblems } : {}),
           ...(deployProblems.length ? { deployProblems } : {}),
-          ...(actionsSummary ? { actionsSummary } : {}),
           ...(projectsSummary ? { projectsSummary } : {}),
           ...(projectsProblem ? { projectsProblem } : {}),
           ...(projectsDetail ? { projectsDetail } : {}),
           ...(projectsExcerptText ? { projectsExcerpt: projectsExcerptText } : {}),
         };
-        const [world, chats] = await Promise.all([readWorld(), readChats()]);
-        return plain({ message: finalMessage, view: viewOf(finalMessage, world, null, chats) });
+        const [world, chats, actions] = await Promise.all([readWorld(), readChats(), readActions()]);
+        return plain({ message: finalMessage, view: viewOf(finalMessage, world, null, chats, actions) });
       } catch (error) {
         stopChunks();
         if (leftCampaign()) return { dropped: true };
