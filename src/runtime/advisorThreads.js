@@ -6,6 +6,22 @@ import { getPoliticalProfile } from "./politicalActors.js";
 export const CHIEF_ADVISOR_THREAD = "chief";
 export const ADVISOR_PERSONALITY_MAX_CHARS = 1200;
 export const ADVISOR_CONTACT_ROLE = "advisor-contact";
+// This classifies the conversation, not a canonical person, office or authority.
+// Older advisor-contact records have no recipientType and remain ministers.
+export const ADVISOR_RECIPIENT_TYPES = Object.freeze({
+  MINISTER: "advisor-minister",
+  CIVILIAN: "citizen-civilian",
+  FOREIGN_OFFICIAL: "foreign-official",
+  OTHER_CHARACTER: "other-character",
+});
+export const ADVISOR_RECIPIENT_TYPE_LABELS = Object.freeze({
+  [ADVISOR_RECIPIENT_TYPES.MINISTER]: "Advisor / Minister",
+  [ADVISOR_RECIPIENT_TYPES.CIVILIAN]: "Citizen / Civilian",
+  [ADVISOR_RECIPIENT_TYPES.FOREIGN_OFFICIAL]: "Foreign Official",
+  [ADVISOR_RECIPIENT_TYPES.OTHER_CHARACTER]: "Other Character",
+});
+const RECIPIENT_TYPE_SET = new Set(Object.values(ADVISOR_RECIPIENT_TYPES));
+export const CHIEF_ADVISOR_PROFILE_ROLE = "advisor-chief-profile";
 const MESSAGE_ROLES = new Set(["user", "advisor", "error", "notice"]);
 const OFFICE_ROLES = Object.freeze({
   headOfGovernment: "Head of government",
@@ -18,6 +34,91 @@ const cleanParagraphs = (value, max) => String(value ?? "").replace(/\r\n?/g, "\
 const array = (value) => Array.isArray(value) ? value : [];
 const validId = (id) => /^advisor-[a-z0-9][a-z0-9_-]{5,79}$/.test(String(id || ""));
 const threadOf = (entry) => clean(entry?.threadId, 100) || CHIEF_ADVISOR_THREAD;
+
+// Never infer a foreign character's government access from a typed label.
+// An absent field is the one legacy compatibility case; an explicit invalid
+// field is unsupported and MUST NOT silently upgrade to minister.
+export const advisorRecipientType = (contact) => {
+  if (!contact || typeof contact !== "object" || Array.isArray(contact)) return null;
+  if (!Object.hasOwn(contact, "recipientType")) return ADVISOR_RECIPIENT_TYPES.MINISTER;
+  return RECIPIENT_TYPE_SET.has(contact.recipientType) ? contact.recipientType : null;
+};
+
+// A caller must never use a caller-selected profile to elevate a civilian or
+// foreign persona into the privileged government Advisor prompt.
+export const assertAdvisorRecipientCanReply = (threadId, recipient) => {
+  if (threadId === CHIEF_ADVISOR_THREAD) {
+    if (recipient != null) throw new Error("The chief advisor cannot impersonate another recipient.");
+    return;
+  }
+  if (!recipient || recipient.id !== threadId) {
+    throw new Error("Advisor recipient not available: conversation identity mismatch or missing contact.");
+  }
+  const type = advisorRecipientType(recipient);
+  if (!type) throw new Error("Unknown or unsupported Advisor recipient type.");
+  if (recipient.archived) throw new Error("This contact is retired. Restore it before replying.");
+  if (recipient.binding && type !== ADVISOR_RECIPIENT_TYPES.MINISTER) {
+    throw new Error("Non-minister character profiles cannot carry privileged Political World office bindings.");
+  }
+};
+
+// Persisted contact identity, not an arbitrary UI-supplied object, decides
+// which prompt branch may run. Recheck at the model boundary: a stale or
+// fabricated profile must not gain minister-level knowledge.
+export const advisorRecipientForReply = (entries, threadId, supplied) => {
+  if (threadId === CHIEF_ADVISOR_THREAD) {
+    assertAdvisorRecipientCanReply(threadId, supplied);
+    return null;
+  }
+  const stored = advisorContacts(entries).find((contact) => contact.id === threadId);
+  if (!stored || supplied?.id !== threadId
+      || advisorRecipientType(stored) !== advisorRecipientType(supplied)
+      || stored.name !== supplied.name
+      || stored.title !== supplied.title) {
+    throw new Error("Advisor recipient changed or unavailable. Reopen this conversation.");
+  }
+  assertAdvisorRecipientCanReply(threadId, stored);
+  return stored;
+};
+
+// A chief-advisor identity is an optional override, not another contact or
+// a replacement for the scenario's original Advisor prompt. Old campaigns keep
+// their chief conversation and instructions unless the player edits this.
+export const chiefAdvisorProfile = (entries) => {
+  const profiles = array(entries).filter((entry) => entry?.role === CHIEF_ADVISOR_PROFILE_ROLE);
+  if (profiles.length !== 1) return null;
+  const profile = profiles[0];
+  if (!clean(profile.name, 100) || !clean(profile.title, 120)) return null;
+  return {
+    role: CHIEF_ADVISOR_PROFILE_ROLE,
+    name: clean(profile.name, 100),
+    title: clean(profile.title, 120),
+    personality: clean(profile.personality, ADVISOR_PERSONALITY_MAX_CHARS),
+  };
+};
+
+export const saveChiefAdvisorProfile = (entries, changes) => {
+  const source = array(entries);
+  if (source.filter((entry) => entry?.role === CHIEF_ADVISOR_PROFILE_ROLE).length > 1) {
+    throw new Error("Duplicate chief advisor profiles are not allowed.");
+  }
+  const name = clean(changes?.name, 100);
+  const title = clean(changes?.title, 120);
+  if (!name || !title) throw new Error("Chief advisor needs a name and position.");
+  if (String(changes?.personality ?? "").length > ADVISOR_PERSONALITY_MAX_CHARS) {
+    throw new Error(`Chief advisor personality cannot exceed ${ADVISOR_PERSONALITY_MAX_CHARS} characters.`);
+  }
+  const profile = {
+    role: CHIEF_ADVISOR_PROFILE_ROLE, name, title,
+    personality: clean(changes?.personality, ADVISOR_PERSONALITY_MAX_CHARS),
+  };
+  const existing = source.findIndex((entry) => entry?.role === CHIEF_ADVISOR_PROFILE_ROLE);
+  if (existing < 0) return [...source, profile];
+  return source.map((entry, index) => index === existing ? profile : entry);
+};
+
+export const resetChiefAdvisorProfile = (entries) => array(entries)
+  .filter((entry) => entry?.role !== CHIEF_ADVISOR_PROFILE_ROLE);
 
 export const advisorContacts = (entries) => array(entries)
   .filter((entry) => entry?.role === ADVISOR_CONTACT_ROLE && validId(entry.id))
@@ -33,10 +134,15 @@ export const createAdvisorContact = (entries, proposed) => {
   const name = clean(proposed?.name, 100);
   const title = clean(proposed?.title, 120);
   const personality = cleanParagraphs(proposed?.personality, ADVISOR_PERSONALITY_MAX_CHARS);
+  const recipientType = advisorRecipientType(proposed);
+  if (!recipientType) throw new Error("Unsupported Advisor recipient type.");
   if (!validId(id) || !name || !title) throw new Error("Advisor contacts require a unique ID, name and position.");
   if (advisorContacts(entries).some((contact) => contact.id === id)) throw new Error("This advisor contact already exists.");
   if (advisorContacts(entries).length >= 24) throw new Error("An Advisor inbox supports at most 24 additional contacts.");
   const binding = proposed?.binding;
+  if (binding != null && recipientType !== ADVISOR_RECIPIENT_TYPES.MINISTER) {
+    throw new Error("Political World office bindings are currently supported only for Advisor / Minister contacts.");
+  }
   let validatedBinding;
   if (binding != null) {
     if (!Object.hasOwn(OFFICE_ROLES, binding.office) || !clean(binding.polity, 100) || !clean(binding.name, 100)) {
@@ -54,7 +160,7 @@ export const createAdvisorContact = (entries, proposed) => {
   }
   return [...array(entries), {
     role: ADVISOR_CONTACT_ROLE,
-    id, name, title, personality,
+    id, name, title, personality, recipientType,
     archived: false,
     ...(validatedBinding ? { binding: validatedBinding } : {}),
   }];
@@ -66,11 +172,24 @@ export const reviseAdvisorContact = (entries, contactId, changes) => {
   const name = clean(changes?.name, 100);
   const title = clean(changes?.title, 120);
   if (!name || !title) throw new Error("Advisor contacts require a name and position.");
+  const recipientType = Object.hasOwn(changes ?? {}, "recipientType")
+    ? advisorRecipientType(changes)
+    : advisorRecipientType(current);
+  if (!recipientType) throw new Error("Unsupported Advisor recipient type.");
+  // A later character audience must never inherit an earlier minister's
+  // private prompt history. Type changes are safe only before the first
+  // saved conversation entry; editing personality/title remains unrestricted.
+  if (recipientType !== advisorRecipientType(current) && advisorMessagesFor(entries, contactId).length) {
+    throw new Error("Cannot change a recipient type with existing conversation history. Create a separate contact.");
+  }
+  if (current.binding && recipientType !== ADVISOR_RECIPIENT_TYPES.MINISTER) {
+    throw new Error("Political World office bindings are currently supported only for Advisor / Minister contacts.");
+  }
   if (current.binding && name.toLocaleLowerCase() !== String(current.binding.name).toLocaleLowerCase()) {
     throw new Error("A Political World contact's canonical name cannot be changed.");
   }
   return array(entries).map((entry) => (entry?.role === ADVISOR_CONTACT_ROLE && entry.id === contactId)
-    ? { ...entry, name, title, personality: cleanParagraphs(changes?.personality, ADVISOR_PERSONALITY_MAX_CHARS) }
+    ? { ...entry, name, title, recipientType, personality: cleanParagraphs(changes?.personality, ADVISOR_PERSONALITY_MAX_CHARS) }
     : entry);
 };
 
