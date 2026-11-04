@@ -35,6 +35,11 @@ var _syncing := false
 var _parties_section: Dictionary = {}
 var _blocs_section: Dictionary = {}
 var _open_states := {}
+var _ideologies: Array = []
+var _party_roles: Array = []
+var _composition: Dictionary = {}
+var _composition_label: Label
+var _composition_serial := 0
 
 
 func _init() -> void:
@@ -61,6 +66,8 @@ func setup(engine: EngineLink, props: Dictionary) -> void:
 			_trait_alias[_alias_key(str(alias))] = str(trait_info.get("key", ""))
 	_representations = result.get("representations", [])
 	_regimes = result.get("regimes", [])
+	_ideologies = result.get("ideologies", [])
+	_party_roles = result.get("partyRoles", [])
 	_take_state(result, true)
 	_render_card()
 
@@ -98,6 +105,8 @@ func _take_state(result: Dictionary, take_draft: bool) -> void:
 		_draft = (result.get("draft", {}) as Dictionary).duplicate(true)
 		_loaded_draft = _draft.duplicate(true)
 		_debug = result.get("debug", {})
+		_composition = {}
+		_recompose()
 	elif key == _selected_key:
 		_has_actor = bool(result.get("hasActor", false))
 		_debug = result.get("debug", {})
@@ -216,6 +225,28 @@ func _set_dirty() -> void:
 	_dirty = true
 	_message = ""
 	_update_header()
+	_recompose()
+
+
+func _recompose() -> void:
+	if _engine == null or _draft.is_empty():
+		return
+	_composition_serial += 1
+	var serial := _composition_serial
+	var reply := await _engine.request("editor.politics.author.composition", {"draft": _draft, "recorded": _loaded_draft if _has_actor else null})
+	if serial != _composition_serial or not reply.get("ok", false) or not is_inside_tree():
+		return
+	_composition = reply.get("result", {})
+	_show_composition()
+
+
+func _show_composition() -> void:
+	if not is_instance_valid(_composition_label):
+		return
+	var problem := str(_composition.get("error", ""))
+	_composition_label.text = problem if not problem.is_empty() else str(_composition.get("text", ""))
+	_composition_label.add_theme_color_override("font_color", Color("#fca5a5") if not problem.is_empty() else Color(1, 1, 1, 0.6))
+	_composition_label.visible = not _composition_label.text.is_empty()
 
 
 func _edit(field: String, value: Variant) -> void:
@@ -350,6 +381,10 @@ func _render_sections() -> void:
 	grid.add_child(_input_field("Operative political leader", "politicalLeader"))
 	grid.add_child(_input_field("Government status", "governmentStatus"))
 	grid.add_child(_input_field("Coalition / cabinet name", "coalitionName"))
+	grid.add_child(_input_field("Legislature", "legislature"))
+	var seats := PoliticalKit.number_input(str(_draft.get("legislatureSeats", "")), 0.0, 100000.0, 1.0, func(value: String) -> void: _edit("legislatureSeats", value))
+	grid.add_child(PoliticalKit.field("Legislature seats", seats))
+	grid.add_child(_input_field("Next election", "nextElection"))
 	grid.add_child(_input_field("Political system type", "politicalSystemType"))
 	grid.add_child(_select_field("Representation model", "politicalRepresentation", "Auto / unspecified", _representations))
 	grid.add_child(_select_field("Regime character", "regimeCharacter", "Unspecified", _regimes))
@@ -466,7 +501,11 @@ func _render_parties() -> void:
 	var content: VBoxContainer = _parties_section["content"]
 	EditorKit.clear(content)
 	PoliticalKit.set_section_title(_parties_section, _parties_title())
-	content.add_child(_section_note("Ruling and coalition flags write to canonical government party IDs."))
+	content.add_child(_section_note("Party roles update the government's actual party IDs. Support (%) and legislature seats are separate measures; blank seats mean unknown, while 0 means no seats."))
+	_composition_label = PoliticalKit.text("", 11, Color(1, 1, 1, 0.6))
+	_composition_label.visible = false
+	content.add_child(_composition_label)
+	_show_composition()
 	var parties: Array = _draft.get("parties", [])
 	for index in range(parties.size()):
 		var party: Dictionary = parties[index]
@@ -475,28 +514,28 @@ func _render_parties() -> void:
 		var refresh_title := func() -> void: PoliticalKit.set_section_title(nested, _party_title(party, index))
 		var inner: VBoxContainer = nested["content"]
 		var grid := PoliticalKit.AutoGrid.new(192.0, 8.0)
-		for pair in [["Name", "name"], ["Short name", "shortName"], ["Leader", "leader"], ["Ideology", "ideology"], ["Influence label", "influenceLabel"]]:
+		for pair in [["Name", "name"], ["Short name", "shortName"], ["Native name", "nameNative"], ["Native abbreviation", "shortNameNative"], ["Leader", "leader"], ["Ideology label", "ideology"], ["Founded", "founded"], ["Party colour (hex)", "color"], ["Influence label", "influenceLabel"]]:
 			grid.add_child(_entity_input(party, str(pair[0]), str(pair[1]), refresh_title))
+		var families: Array = [["", "Not specified"]]
+		families.append_array(_ideologies)
+		grid.add_child(PoliticalKit.field("Ideology family", PoliticalKit.select(families, str(party.get("ideologyFamily", "")), func(value: String) -> void:
+			party["ideologyFamily"] = value
+			_set_dirty())))
+		grid.add_child(_entity_input(party, "Subideology", "subideology", Callable(func() -> void: pass)))
+		var role := "governing" if bool(party.get("ruling", false)) else ("coalition" if bool(party.get("coalition", false)) else (str(party.get("role", "")) if not str(party.get("role", "")).is_empty() else "opposition"))
+		grid.add_child(PoliticalKit.field("Party role", PoliticalKit.select(_party_roles, role, func(value: String) -> void:
+			party["role"] = value
+			party["ruling"] = value == "governing"
+			party["coalition"] = value == "coalition"
+			refresh_title.call()
+			_set_dirty())))
+		var seats := PoliticalKit.number_input(str(party.get("seats", "")), 0.0, 100000.0, 1.0, func(value: String) -> void:
+			party["seats"] = value
+			_set_dirty())
+		grid.add_child(PoliticalKit.field("Seats held", seats))
 		grid.add_child(_entity_number(party, "Support (%)", "supportPercent"))
 		grid.add_child(_entity_number(party, "Influence (%)", "influencePercent"))
 		inner.add_child(grid)
-		var flags := HBoxContainer.new()
-		flags.add_theme_constant_override("separation", 13)
-		var coalition_check := PoliticalKit.check("Coalition partner", bool(party.get("coalition", false)), Callable(), 11, UI.WHITE)
-		var ruling_check := PoliticalKit.check("Ruling / government", bool(party.get("ruling", false)), Callable(), 11, UI.WHITE)
-		coalition_check.disabled = bool(party.get("ruling", false))
-		ruling_check.toggled.connect(func(on: bool) -> void:
-			party["ruling"] = on
-			coalition_check.disabled = on
-			refresh_title.call()
-			_set_dirty())
-		coalition_check.toggled.connect(func(on: bool) -> void:
-			party["coalition"] = on
-			refresh_title.call()
-			_set_dirty())
-		flags.add_child(ruling_check)
-		flags.add_child(coalition_check)
-		inner.add_child(flags)
 		var texts := PoliticalKit.AutoGrid.new(256.0, 9.0)
 		texts.add_child(_entity_area(party, "Public description", "publicDescription"))
 		texts.add_child(_entity_area(party, "Public priorities · one per line", "publicPrioritiesText"))
@@ -577,8 +616,16 @@ func _empty_party() -> Dictionary:
 		"id": "custom-party-%s" % stamp,
 		"name": "New political entity",
 		"shortName": "",
+		"nameNative": "",
+		"shortNameNative": "",
 		"leader": "",
 		"ideology": "",
+		"ideologyFamily": "",
+		"subideology": "",
+		"role": "opposition",
+		"seats": "",
+		"founded": "",
+		"color": "",
 		"publicDescription": "",
 		"publicPrioritiesText": "",
 		"publicForeignPolicyText": "",
@@ -588,6 +635,7 @@ func _empty_party() -> Dictionary:
 		"ruling": false,
 		"coalition": false,
 		"priorityField": "publicPriorities",
+
 	}
 
 

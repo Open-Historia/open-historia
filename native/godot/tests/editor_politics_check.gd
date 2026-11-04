@@ -132,8 +132,13 @@ func _on_details(details: Dictionary, source: Node) -> void:
 
 func _clear_shell() -> void:
 	var shell: ShellBoot = main.get("shell") as ShellBoot
+	var built_by := Time.get_ticks_msec() + 30000
+	while shell == null and Time.get_ticks_msec() < built_by:
+		await process_frame
+		shell = main.get("shell") as ShellBoot
 	if shell == null:
 		return
+
 	var deadline := Time.get_ticks_msec() + 30000
 	while shell.door_state == "deciding" and Time.get_ticks_msec() < deadline:
 		await process_frame
@@ -307,8 +312,23 @@ func _run() -> void:
 	await _wait(0.2)
 	_type(_field(authoring._manager.main_body, "Name"), "Socialist Party")
 	_type(_field(authoring._manager.main_body, "Support (%)"), "28")
-	var ruling := _find(authoring._manager.main_body, func(node: Node) -> bool: return node is CheckBox and (node as CheckBox).text == "Ruling / government") as CheckBox
-	ruling.button_pressed = true
+	_check(_find(authoring._manager.main_body, func(node: Node) -> bool: return node is CheckBox and (node as CheckBox).text == "Ruling / government") == null, "a party's role is chosen, not ticked")
+	_choose_option(_field(authoring._manager.main_body, "Party role"), "governing")
+	_type(_field(authoring._manager.main_body, "Native name"), "Parti socialiste")
+	_choose_option(_field(authoring._manager.main_body, "Ideology family"), "socialDemocracy")
+	_type(_field(authoring._manager.main_body, "Subideology"), "Social Democracy")
+	_type(_field(authoring._manager.main_body, "Founded"), "1969")
+	_type(_field(authoring._manager.main_body, "Party colour (hex)"), "#e4002b")
+	_type(_field(authoring._manager.main_body, "Legislature"), "National Assembly")
+	_type(_field(authoring._manager.main_body, "Next election"), "June 2017")
+	_type(_field(authoring._manager.main_body, "Legislature seats"), "577")
+	_type(_field(authoring._manager.main_body, "Seats held"), "600")
+	var over := await _wait_until(func() -> bool: return str(authoring._composition.get("error", "")) == "Parties hold 600 seats, exceeding the legislature's 577 seats.", 6.0, "seats over the legislature")
+	_check(over and authoring._composition_label.text == "Parties hold 600 seats, exceeding the legislature's 577 seats.", "seats over the legislature are refused as they are typed")
+	_type(_field(authoring._manager.main_body, "Seats held"), "286")
+	var counted := await _wait_until(func() -> bool: return str(authoring._composition.get("text", "")) == "Seats assigned: 286 / 577. Unlisted or unassigned: 291. Named party support: 28% (remaining 72% not individually mapped).", 6.0, "seats and support counted")
+	_check(counted and authoring._composition_label.visible, "the seats and support are counted as they are typed (%s)" % str(authoring._composition))
+	_check(str((authoring._draft.get("parties", []) as Array)[0].get("role", "")) == "governing" and bool((authoring._draft.get("parties", []) as Array)[0].get("ruling", false)), "Governing makes it the government's party")
 	await _wait(0.4)
 	_check(str(authoring._draft.get("traitsJson", "")).contains("\"caution\": 64.5"), "traits JSON follows the trait slider")
 	_check(authoring._dirty, "authoring marks the draft dirty")
@@ -324,6 +344,10 @@ func _run() -> void:
 	_check(((saved_france.get("government", {}) as Dictionary).get("rulingPartyIds", []) as Array).size() == 1, "ruling party written to rulingPartyIds")
 	_check(float((saved_france.get("traits", {}) as Dictionary).get("caution", 0)) == 64.5, "caution trait saved as 64.5")
 	_check(is_equal_approx(float((saved_france.get("government", {}) as Dictionary).get("approval", -1)), 61.0), "typed approval saved, not erased (%s)" % str((saved_france.get("government", {}) as Dictionary).get("approval", "missing")))
+	var saved_party: Dictionary = (saved_france.get("parties", []) as Array)[0] if not (saved_france.get("parties", []) as Array).is_empty() else {}
+	_check(str((saved_france.get("government", {}) as Dictionary).get("legislature", "")) == "National Assembly" and int((saved_france.get("government", {}) as Dictionary).get("legislatureSeats", 0)) == 577 and str((saved_france.get("government", {}) as Dictionary).get("nextElection", "")) == "June 2017", "the legislature, its seats and the next election are saved")
+	_check(str(saved_party.get("nameNative", "")) == "Parti socialiste" and str(saved_party.get("ideologyFamily", "")) == "socialDemocracy" and int(saved_party.get("seats", -1)) == 286 and str(saved_party.get("founded", "")) == "1969" and str(saved_party.get("color", "")) == "#e4002b" and str(saved_party.get("role", "")) == "governing", "the party's native name, family, seats, founding, colour and role are saved (%s)" % JSON.stringify(saved_party).left(300))
+
 	await _shoot("pol-10-authoring-saved")
 	authoring._manager.main_scroll.scroll_vertical = 2000
 	await _wait(0.3)

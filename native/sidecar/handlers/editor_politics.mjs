@@ -1897,8 +1897,27 @@ export const register = (ctx) => {
         })),
         representations: Object.values(engine.polActors.POLITICAL_REPRESENTATIONS).map((value) => [value, representationLabel(value)]),
         regimes: engine.polActors.POLITICAL_REGIME_CHARACTERS.map((value) => [value, representationLabel(value)]),
+        ideologies: (engine.ctPolitics?.IDEOLOGIES ?? []).map((ideology) => [ideology.id, ideology.name]),
+        partyRoles: Object.entries(engine.ctPolitics?.PARTY_ROLE_LABELS ?? {}),
       };
     },
+    "editor.politics.author.composition": async ({ draft = null, recorded = null } = {}) => {
+      if (!draft) return { text: "", error: "" };
+      try {
+        const composition = engine.polCountryEditor.politicalEditorComposition(draft, { asRecorded: recorded || null });
+        const supported = (Array.isArray(draft.parties) ? draft.parties : []).some((party) => party?.supportPercent !== "" && party?.supportPercent != null);
+        const seats = composition.totalSeats === null
+          ? "Legislature size not specified."
+          : `Seats assigned: ${composition.assignedSeats} / ${composition.totalSeats}. Unlisted or unassigned: ${composition.unlistedSeats}.`;
+        const support = supported
+          ? `Named party support: ${composition.mappedSupport}% (remaining ${composition.otherSupport}% not individually mapped).`
+          : "Party support not yet specified.";
+        return { text: `${seats} ${support}`, error: "" };
+      } catch (error) {
+        return { text: "", error: error?.message || "Invalid political landscape." };
+      }
+    },
+
     "editor.politics.author.draft": async ({ scenarioId, polityKey = "" } = {}) => {
       const details = await loadDetails(scenarioId);
       return authorState(details?.data?.world || {}, polityKey);
