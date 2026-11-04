@@ -214,7 +214,8 @@ shared game the posts come with the next time skip.
 **Search**, where the Your country tab was, opens on your own country and finds any country or
 region on the map. A place shows what its people of note have posted on Rostra and, on
 **Refresh**, what ordinary people there are posting today, as **Listen in** did: each new place is one AI
-request, and the same place on the same day opens again at no cost.
+request, and the same place on the same day opens again at no cost. **Check in Rostra** on a
+region's card opens Search on that country; its posts load when you press **Refresh**.
 
 ## The ledgers behind the talk
 

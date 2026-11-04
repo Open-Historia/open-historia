@@ -53,6 +53,24 @@ import { PAST_UPDATES } from "./notesPast.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // A contributor's PR #942, trimmed to the map card's button (GameUI/rostraOpen.js, opening Search), the dock's
+    // phone and flags for full official names (resolvePolityFlag); the owner's choice, 2026-11-03.
+    id: "2026-11-rostra-check-in",
+    kind: "minor",
+    date: "2026-11-03",
+    channel: "beta",
+    banners: [
+      {
+        title: "Check in Rostra from the map",
+        items: [
+          "A region's card has Check in Rostra, which opens Rostra's Search on that country. Its posts load when you press Refresh there.",
+          "Rostra's button is now a phone.",
+          "Posts by countries known by their full names, such as the French Republic, show their national flags.",
+        ],
+      },
+    ],
+  },
+  {
     // Rostra's Search tab (Listen in, back inside Rostra: GameUI/rostraSearch.jsx, runtime/placeFeed.js, the placeFeed
     // task), the leader's polls (runtime/socialFeed.js, the skip's pollResults) and the box behind the pen; the
     // owner's ask, 2026-11-03.

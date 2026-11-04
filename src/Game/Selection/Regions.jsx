@@ -891,7 +891,8 @@ const RegionPopup = () => {
             </>
         )}
 
-        {!isUnclaimed && (
+        {/* Not while the game has no social media: there is no Rostra. */}
+        {!isUnclaimed && isActiveFeatureEnabled("socialMedia") && (
             <button
             type="button"
             className="oh-tap-row"
