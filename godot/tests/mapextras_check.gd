@@ -81,6 +81,10 @@ func _clear_shell() -> void:
 
 func _close_notice() -> void:
 	var shell: ShellBoot = main.get("shell") as ShellBoot
+	if shell != null and shell.door != null and is_instance_valid(shell.door) and not shell.door.is_queued_for_deletion():
+		shell.door.opened.emit()
+		_say("a late vault door opened for the test")
+		await _frames(3)
 	if shell != null and shell.notice != null and is_instance_valid(shell.notice) and shell.notice.is_visible_in_tree():
 		shell.notice.closed.emit()
 		_say("update notice closed for the test")
