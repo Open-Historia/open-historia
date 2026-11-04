@@ -9,7 +9,7 @@ var only := ""
 
 const NEWEST_UPDATES := ["2026-11-ships-from-ports", "2026-11-aircraft-key", "2026-11-gentler-terrain", "2026-11-display-mode"]
 const NEWEST_TITLES := ["Troops sail from a port", "The Aircraft key works", "Gentler 3D terrain", "Windowed, maximized or fullscreen"]
-const FIRST_OPENING := ["2026-11-rostra", "2026-11-deploy-aircraft", "2026-10-espionage-part-2", "2026-11-display-mode"]
+const FIRST_OPENING := ["2026-11-rostra", "2026-11-deploy-aircraft", "2026-10-espionage-part-2", "2026-11-ships-from-ports"]
 
 
 func _update_ids(updates: Array) -> Array:
