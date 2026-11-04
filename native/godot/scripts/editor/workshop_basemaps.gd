@@ -431,7 +431,7 @@ func _add() -> void:
 	_add_button.text = "Adding…"
 	_notice = {}
 	var problem := await _add_file(picked)
-	if not is_instance_valid(self) or not is_inside_tree():
+	if not is_instance_valid(self) or not is_inside_tree() or is_queued_for_deletion():
 		return
 	_busy = false
 	_add_button.text = "⬆ Add basemap or detailed map"
@@ -495,6 +495,9 @@ func _add_file(file: String) -> String:
 			return "Could not read that image."
 		aspect = float(image.get_width()) / float(image.get_height())
 		thumbnail = WorkshopThumbnail.picture(image)
+		host.open_picture_setup({"name": file.get_file().get_basename(), "aspect": aspect, "thumbnail": thumbnail})
+		closed.emit()
+		return ""
 	else:
 		thumbnail = await WorkshopThumbnail.drawn(self, info.get("thumbnail"))
 	if not is_instance_valid(self):

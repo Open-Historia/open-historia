@@ -7,6 +7,7 @@ signal play_game(game_id: String)
 signal failed(message: String)
 signal changed(parts: Dictionary)
 signal review_saved(record: Dictionary)
+signal scale_changed
 
 const SIDEBAR_WIDTH := 268.0
 const SIDE_KEY := "oh-map-editor-sidebar-side"
@@ -103,6 +104,11 @@ var _closing := false
 var _rebaking := false
 var _last_clean := "deep"
 var _scenario_name := ""
+var scale_draft := {}
+var _scale_serial := 0
+var _scale_hover_busy := false
+var _scale_hover_next: Variant = null
+var _picture_setup: Control
 
 
 func setup(engine_link: EngineLink, setup_context: Dictionary) -> void:
@@ -371,6 +377,8 @@ func _build() -> void:
 	map.draw_finished.connect(_on_draw_finished)
 	map.vertex_edit.connect(_on_vertex_edit)
 	map.hover_moved.connect(_on_hover_moved)
+	map.scale_hover.connect(_on_scale_hover)
+	map.scale_drawn.connect(_on_scale_drawn)
 	map.view_moved.connect(func() -> void:
 		if _popup and is_instance_valid(_popup):
 			_close_popup())
@@ -1370,6 +1378,8 @@ func close_panel() -> void:
 		set_tool("select")
 	if was == "units" and tool == "unit":
 		set_tool("select")
+	if was == "projection":
+		leave_scale_tool()
 	_update_war_visibility()
 	_render_panels_nav()
 
@@ -1378,7 +1388,10 @@ func open_panel_named(id: String) -> void:
 	if _panel and is_instance_valid(_panel):
 		_panel.queue_free()
 	_panel = null
+	var was := open_panel
 	open_panel = id
+	if was == "projection" and id != "projection":
+		leave_scale_tool()
 	var shell: WorkshopShell = null
 	match id:
 		"regions":
@@ -1420,6 +1433,105 @@ func open_panel_named(id: String) -> void:
 	_place_panel()
 	_update_war_visibility()
 	_render_panels_nav()
+	if id == "projection":
+		refresh_scale_line()
+
+
+func leave_scale_tool() -> void:
+	scale_draft = {}
+	if tool == "scale":
+		set_tool("select")
+	refresh_scale_line()
+	scale_changed.emit()
+
+
+func draw_scale_line() -> void:
+	scale_draft = {}
+	set_tool("scale")
+	refresh_scale_line()
+	scale_changed.emit()
+
+
+func _on_scale_drawn(from: Vector2, to: Vector2) -> void:
+	scale_draft = {"from": from, "to": to}
+	refresh_scale_line()
+	scale_changed.emit()
+
+
+func _on_scale_hover(from: Vector2, to: Vector2) -> void:
+	if _scale_hover_busy:
+		_scale_hover_next = [from, to]
+		return
+	_scale_hover_busy = true
+	var ends: Array = [from, to]
+	while true:
+		var reply := await request_raw("workshop.projection.measure", {"from": [ends[0].x, ends[0].y], "to": [ends[1].x, ends[1].y]})
+		if map == null:
+			break
+		if tool == "scale" and reply.get("ok", false) and reply["result"] is Dictionary:
+			map.scale_sketch_label = str((reply["result"] as Dictionary).get("label", ""))
+			map.redraw()
+		if _scale_hover_next == null:
+			break
+		ends = _scale_hover_next
+		_scale_hover_next = null
+	_scale_hover_busy = false
+
+
+func scale_draft_measure() -> Dictionary:
+	if scale_draft.is_empty():
+		return {}
+	var from: Vector2 = scale_draft["from"]
+	var to: Vector2 = scale_draft["to"]
+	var reply := await request_raw("workshop.projection.measure", {"from": [from.x, from.y], "to": [to.x, to.y]})
+	return reply["result"] if reply.get("ok", false) and reply["result"] is Dictionary else {}
+
+
+func refresh_scale_line() -> void:
+	_scale_serial += 1
+	var serial := _scale_serial
+	if map == null:
+		return
+	if open_panel != "projection":
+		map.scale_line = {}
+		map.redraw()
+		return
+	if not scale_draft.is_empty():
+		var measured := await scale_draft_measure()
+		if serial != _scale_serial or map == null:
+			return
+		map.scale_line = {"from": scale_draft["from"], "to": scale_draft["to"], "label": str(measured.get("label", ""))}
+		map.redraw()
+		return
+	var reply := await request_raw("workshop.projection.options")
+	if serial != _scale_serial or map == null:
+		return
+	var options: Dictionary = reply["result"] if reply.get("ok", false) and reply["result"] is Dictionary else {}
+	var current: Dictionary = options.get("current", {}) if options.get("current") is Dictionary else {}
+	var line: Variant = current.get("scale")
+	if line is Dictionary and (line as Dictionary).get("from") is Array and (line as Dictionary).get("to") is Array:
+		var ends: Dictionary = line
+		map.scale_line = {"from": Vector2(float(ends["from"][0]), float(ends["from"][1])), "to": Vector2(float(ends["to"][0]), float(ends["to"][1])), "label": str(options.get("scaleLabel", ""))}
+	else:
+		map.scale_line = {}
+	map.redraw()
+
+
+func open_picture_setup(info: Dictionary) -> void:
+	if is_instance_valid(_picture_setup):
+		_picture_setup.queue_free()
+	var shell := WorkshopPictureSetup.new()
+	_picture_setup = shell
+	add_child(shell)
+	shell.closed.connect(func() -> void:
+		if is_instance_valid(shell):
+			shell.queue_free())
+	shell.setup(self, info)
+	shell.max_height = size.y - 24.0
+	var width := minf(shell.panel_width, size.x - dock_left() - dock_right() - 24.0)
+	shell.custom_minimum_size.x = width
+	shell.position = Vector2(dock_left() + 12.0, 12)
+	shell.fit()
 
 
 func open_basemaps() -> void:

@@ -43,6 +43,10 @@ func _render() -> void:
 		body.add_child(WorkshopUI.row("Visible", WorkshopUI.toggle(bool(reference.get("visible", true)), func(on: bool) -> void:
 			host.map.reference["visible"] = on
 			host.map.redraw())))
+		body.add_child(WorkshopUI.row("Lock in place", WorkshopUI.toggle(reference.get("locked") == true, func(on: bool) -> void:
+			host.map.reference["locked"] = on
+			host.map.redraw()
+			_render())))
 		var actions := HBoxContainer.new()
 		actions.add_theme_constant_override("separation", 8)
 		var centre := _button("Center on view")
@@ -55,7 +59,8 @@ func _render() -> void:
 			_render())
 		actions.add_child(remove)
 		body.add_child(actions)
-		body.add_child(WorkshopUI.wrap("Drag inside the image to move it; drag a corner to resize (free stretch, so you can match the map projection). Close this panel to draw and edit through the image.", 11.0, Color(1, 1, 1, 0.55)))
+		var hint := "Locked: dragging moves the map. Unlock to move or resize the image. Close this panel to draw and edit through the image." if reference.get("locked") == true else "Drag inside the image to move it; drag a corner to resize (free stretch, so you can match the map projection; hold Shift to keep its shape). Close this panel to draw and edit through the image."
+		body.add_child(WorkshopUI.wrap(hint, 11.0, Color(1, 1, 1, 0.55)))
 	fit()
 
 
