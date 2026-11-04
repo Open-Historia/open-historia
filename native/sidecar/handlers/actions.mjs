@@ -23,6 +23,20 @@ export const register = (ctx) => {
       if (String(text).includes("[stand-in fails]")) return null;
       return { args: { title: "Balance the budget", text: REFINED_TEXT, kind: "action" } };
     });
+    ctx.addStandIn(({ tool, text }) => {
+      if (tool !== "submit_goal_progress") return null;
+      if (String(text).includes("[stand-in fails]")) return null;
+      const again = String(text).includes("PREVIOUS READING");
+      return {
+        args: {
+          progress: again ? 46 : 38,
+          summary: "The budget is closer to balance and the cabinet holds together, but growth is still slow.",
+          achieved: ["A balanced budget passed parliament"],
+          obstacles: ["Exports are still falling"],
+          nextSteps: ["Open talks on a new trade agreement"],
+        },
+      };
+    });
   }
 
   const movesUnit = (action) => Boolean(action?.unitRevert) && (action.status ?? "planned") === "planned";
@@ -38,13 +52,14 @@ export const register = (ctx) => {
 
   const stampOf = (game, actions, world) => {
     const goal = engine.playerGoal.playerGoalOf(world, game.country);
+    const reading = JSON.stringify(engine.playerGoal.playerGoalEntryOf(world, game.country)?.progress ?? null);
     const topics = list(engine.actionSuggestions.selectSavedSuggestions(world))
       .map((topic) => `${clean(topic?.id)}:${clean(topic?.source)}:${list(topic?.actions).map((action) => clean(action?.id)).join(",")}`)
       .join("|");
     const orders = list(actions)
       .map((action) => `${clean(action?.id)}:${clean(action?.title)}:${clean(action?.text)}:${clean(action?.status)}:${action?.unitRevert ? 1 : 0}`)
       .join("|");
-    return crypto.createHash("sha1").update(`${game.country}\n${game.round}\n${goal}\n${topics}\n${orders}`).digest("hex");
+    return crypto.createHash("sha1").update(`${game.country}\n${game.round}\n${goal}\n${reading}\n${topics}\n${orders}`).digest("hex");
   };
 
   const view = async ({ force = false } = {}) => {
@@ -76,6 +91,7 @@ export const register = (ctx) => {
       stamp: stampOf(game, actions, world),
       goal: engine.playerGoal.playerGoalOf(world, game.country),
       goalMax: engine.playerGoal.PLAYER_GOAL_MAX_CHARS,
+      goalProgress: plain(engine.playerGoal.playerGoalEntryOf(world, game.country)?.progress ?? null),
       busy: engine.simulationStatus.isSimulationBusy(),
       loggingOn: Boolean(debugLog?.isDebugLogEnabled?.()),
       projectCount: list(world?.projects).length,
@@ -195,6 +211,17 @@ export const register = (ctx) => {
       }
       const wording = String(text || "").trim();
       logAction(wording ? `Standing goal set: ${wording}` : "Standing goal cleared");
+      return view();
+    },
+    "actions.assessGoal": async (_args = {}, { signal } = {}) => {
+      if (engine.simulationStatus.isSimulationBusy()) return { ...(await view()), locked: true };
+      try {
+        const reading = await engine.gameplay.assessGoalProgress({ signal });
+        logAction(`Goal progress assessed: ${reading?.progress ?? "?"}/100`);
+      } catch (assessError) {
+        console.error("Failed to assess goal progress:", assessError);
+        return { ...(await view()), error: String(assessError?.message || "The goal could not be assessed. Try again.") };
+      }
       return view();
     },
     "actions.suggest": async () => {
