@@ -3983,6 +3983,9 @@ pub fn rehearsal_copy(battle: &mut Battle) -> Battle {
     copy.watch = false;
     copy.mend_of = false;
     copy.grown = 6.0;
+    if let Some(wings) = copy.wings.as_mut() {
+        wings.detached = true;
+    }
     copy
 }
 
