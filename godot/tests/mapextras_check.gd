@@ -245,7 +245,7 @@ func _port_checks() -> void:
 	basemap.apply_style({"kind": "image", "basemapId": "ocean", "key": "port-check", "image": {"data": data, "quad": [[-180.0, 85.0511], [180.0, 85.0511], [180.0, -85.0511], [-180.0, -85.0511]]}}, main.engine)
 	await _frames(2)
 	var sprites: Array = basemap._custom.get_children().filter(func(node: Node) -> bool: return node is Sprite2D)
-	var crisp := not sprites.is_empty() and (sprites[0] as Sprite2D).material is ShaderMaterial and ((sprites[0] as Sprite2D).material as ShaderMaterial).shader.code.contains("filter_nearest")
+	var crisp := not sprites.is_empty() and (sprites[0] as Sprite2D).texture_filter == CanvasItem.TEXTURE_FILTER_NEAREST_WITH_MIPMAPS and (sprites[0] as Sprite2D).texture.get_image().has_mipmaps()
 	_check(crisp and is_equal_approx(basemap.picture_aspect, 2.0), "a scenario's picture is drawn crisp when zoomed past its own pixels (aspect %.2f)" % basemap.picture_aspect)
 	view.fly_to_lonlat(0.0, 20.0, 3.0, 0.0)
 	await _wait(1.5)

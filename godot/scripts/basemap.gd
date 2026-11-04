@@ -171,16 +171,6 @@ void fragment() {
 }
 """
 
-const PICTURE_SHADER := """
-shader_type canvas_item;
-uniform sampler2D smooth_picture : filter_linear_mipmap;
-uniform sampler2D crisp_picture : filter_nearest;
-void fragment() {
-	vec2 texels = fwidth(UV) * vec2(textureSize(crisp_picture, 0));
-	COLOR = max(texels.x, texels.y) < 1.0 ? texture(crisp_picture, UV) : texture(smooth_picture, UV);
-}
-"""
-
 const VECTOR_SHADER := """
 shader_type canvas_item;
 render_mode unshaded;
@@ -997,18 +987,11 @@ func _mount_custom() -> void:
 		if picture and not picture.is_compressed() and not picture.has_mipmaps():
 			picture.generate_mipmaps()
 			texture = ImageTexture.create_from_image(picture)
-		var shader := Shader.new()
-		shader.code = PICTURE_SHADER
-		var material := ShaderMaterial.new()
-		material.shader = shader
-		material.set_shader_parameter("smooth_picture", texture)
-		material.set_shader_parameter("crisp_picture", texture)
 		for offset in _copy_offsets():
 			var sprite := Sprite2D.new()
 			sprite.texture = texture
-			sprite.material = material
 			sprite.centered = false
-			sprite.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
+			sprite.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST_WITH_MIPMAPS
 			sprite.position = origin + Vector2(offset, 0)
 			sprite.scale = Vector2((corner.x - origin.x) / texture.get_width(), (corner.y - origin.y) / texture.get_height())
 			_custom.add_child(sprite)
