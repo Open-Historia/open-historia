@@ -11,6 +11,10 @@ var _error := ""
 var _check := {}
 var _picture_aspect := 0.0
 var _shape_edit: LineEdit
+var _scale_amount := ""
+var _scale_unit := "km"
+var _draft_label := ""
+var _set_scale: Button
 
 
 func _init() -> void:
@@ -19,6 +23,7 @@ func _init() -> void:
 
 func setup(workshop: Workshop) -> void:
 	host = workshop
+	host.scale_changed.connect(_on_scale_changed)
 	var reply := await host.request_raw("workshop.projection.options")
 	if reply.get("ok", false):
 		_options = reply["result"]
@@ -114,6 +119,8 @@ func _render() -> void:
 			return
 		_busy = true
 		_error = ""
+		host.scale_draft = {}
+		host.scale_changed.emit()
 		_render()
 		var args := {"target": _check.get("chosen"), "keepPicture": offers_keep and _keep}
 		var reply := await host.request("workshop.projection.convert", args)
@@ -128,6 +135,7 @@ func _render() -> void:
 			return
 		_busy = false
 		_error = str(reply.get("error", ""))
+		host.refresh_scale_line()
 		var options := await host.request_raw("workshop.projection.options")
 		if options.get("ok", false):
 			_options = options["result"]
@@ -137,7 +145,133 @@ func _render() -> void:
 	body.add_child(convert)
 	body.add_child(WorkshopUI.row("Disable the 3D globe", WorkshopUI.toggle(current.get("globe") == false, func(off: bool) -> void: _view({"globe": not off}))))
 	body.add_child(WorkshopUI.row("Disable map looping", WorkshopUI.toggle(current.get("wrap") == false, func(off: bool) -> void: _view({"wrap": not off}))))
+	_scale_section(current)
 	fit()
+
+
+func _on_scale_changed() -> void:
+	if not is_instance_valid(self) or host == null:
+		return
+	_draft_label = ""
+	if not host.scale_draft.is_empty():
+		var measured: Dictionary = await host.scale_draft_measure()
+		if not is_instance_valid(self):
+			return
+		_draft_label = str(measured.get("label", ""))
+	var options := await host.request_raw("workshop.projection.options")
+	if not is_instance_valid(self):
+		return
+	if options.get("ok", false):
+		_options = options["result"]
+	_render()
+
+
+func _small_button(text: String) -> Button:
+	var node := WorkshopUI.base_button(text)
+	var normal := UI.box(Color(1, 1, 1, 0.06), Color(1, 1, 1, 0.16), 7, 1, Vector4(8, 5, 8, 5))
+	var hover := UI.box(Color(1, 1, 1, 0.1), Color(1, 1, 1, 0.22), 7, 1, Vector4(8, 5, 8, 5))
+	WorkshopUI._flat_styles(node, normal, hover, hover, normal)
+	WorkshopUI._ink(node, Color(1, 1, 1, 0.86), 11.5, 400)
+	return node
+
+
+func _typed_km() -> float:
+	var text := _scale_amount.replace(",", ".").strip_edges()
+	var typed := text.to_float() if text.is_valid_float() else 0.0
+	if typed <= 0.0:
+		return 0.0
+	return typed * 1.609344 if _scale_unit == "mi" else typed
+
+
+func _style_set_button() -> void:
+	if _set_scale == null or not is_instance_valid(_set_scale):
+		return
+	var km := _typed_km()
+	var can_set := not host.scale_draft.is_empty() and km > 0.0 and km <= 1e7
+	var on_style := UI.box(WorkshopUI.ACCENT, Color(1, 1, 1, 0.16), 8, 1, Vector4(10, 8, 10, 8))
+	var off_style := UI.box(Color(1, 1, 1, 0.08), Color(1, 1, 1, 0.16), 8, 1, Vector4(10, 8, 10, 8))
+	var style := on_style if can_set else off_style
+	WorkshopUI._flat_styles(_set_scale, style, style, style, off_style)
+	WorkshopUI._ink(_set_scale, Color("#06222d") if can_set else Color(1, 1, 1, 0.45), 12.5, 700)
+	_set_scale.add_theme_color_override("font_disabled_color", Color(1, 1, 1, 0.45))
+	_set_scale.disabled = not can_set
+	_set_scale.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND if can_set else Control.CURSOR_ARROW
+
+
+func _scale_section(current: Dictionary) -> void:
+	var title := UI.label("Scale line", 12.5, Color(1, 1, 1, 0.86), 700)
+	var top := MarginContainer.new()
+	top.add_theme_constant_override("margin_top", 4)
+	top.add_child(title)
+	body.add_child(top)
+	var line: Variant = current.get("scale")
+	_set_scale = null
+	if not host.scale_draft.is_empty():
+		var pair := HBoxContainer.new()
+		pair.add_theme_constant_override("separation", 6)
+		var amount := WorkshopUI.input(_scale_amount, "", func(text: String) -> void:
+			_scale_amount = text
+			_style_set_button(), 12.0, 28.0)
+		amount.custom_minimum_size.x = 70
+		amount.size_flags_horizontal = Control.SIZE_SHRINK_END
+		pair.add_child(amount)
+		var unit := WorkshopUI.select([["km", "Kilometres"], ["mi", "Miles"]], _scale_unit, func(value: String) -> void:
+			_scale_unit = value
+			_style_set_button(), 12.0, 28.0)
+		unit.custom_minimum_size.x = 100
+		unit.size_flags_horizontal = Control.SIZE_SHRINK_END
+		pair.add_child(unit)
+		body.add_child(WorkshopUI.row("Its distance", pair))
+		if not _draft_label.is_empty():
+			body.add_child(_note(I18n.ui("It measures {{measured}} now.", {"measured": _draft_label})))
+		var buttons := HBoxContainer.new()
+		buttons.add_theme_constant_override("separation", 6)
+		_set_scale = WorkshopUI.base_button("Set the scale")
+		_set_scale.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_style_set_button()
+		_set_scale.pressed.connect(func() -> void:
+			var km := _typed_km()
+			if host.scale_draft.is_empty() or not (km > 0.0 and km <= 1e7):
+				return
+			var from: Vector2 = host.scale_draft["from"]
+			var to: Vector2 = host.scale_draft["to"]
+			_scale_amount = ""
+			await host.request("workshop.projection.scale", {"scale": {"from": [from.x, from.y], "to": [to.x, to.y], "km": km}})
+			if is_instance_valid(host):
+				host.leave_scale_tool())
+		buttons.add_child(_set_scale)
+		var cancel := _small_button("Cancel")
+		cancel.pressed.connect(func() -> void:
+			_scale_amount = ""
+			host.leave_scale_tool())
+		buttons.add_child(cancel)
+		body.add_child(buttons)
+	elif host.tool == "scale":
+		body.add_child(_note("Click the line's two ends on the map."))
+		var cancel := _small_button("Cancel")
+		cancel.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+		cancel.pressed.connect(func() -> void:
+			_scale_amount = ""
+			host.leave_scale_tool())
+		body.add_child(cancel)
+	else:
+		var said := str(_options.get("scaleLabel", "")) if line is Dictionary else ""
+		if not said.is_empty():
+			body.add_child(_note(I18n.ui("The scale line is {{said}}.", {"said": said})))
+		var buttons := HBoxContainer.new()
+		buttons.add_theme_constant_override("separation", 6)
+		var draw := _small_button("Draw it again" if line is Dictionary else "Draw a scale line")
+		draw.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		draw.pressed.connect(func() -> void: host.draw_scale_line())
+		buttons.add_child(draw)
+		if line is Dictionary:
+			var clear := _small_button("Clear it")
+			clear.pressed.connect(func() -> void:
+				await host.request("workshop.projection.scale", {"scale": null})
+				if is_instance_valid(host):
+					host.leave_scale_tool())
+			buttons.add_child(clear)
+		body.add_child(buttons)
 
 
 func _redraw(target: Variant, spec: Dictionary) -> Dictionary:

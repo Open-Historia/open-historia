@@ -109,6 +109,11 @@ func _clear_shell() -> void:
 	await _frames(3)
 
 
+func _data_root() -> String:
+	var found := str(main.info.get("dataRoot", ""))
+	return found if not found.is_empty() else OS.get_environment("OH_NATIVE_ROOT")
+
+
 func _region_index(id: String) -> int:
 	return int(workshop.map.index_of.get(id, -1))
 
@@ -167,7 +172,7 @@ func _run() -> void:
 		await process_frame
 	_say("menu ready")
 	await _clear_shell()
-	var tiles := str(main.info.get("dataRoot", "")).path_join("native-cache").path_join("tiles")
+	var tiles := _data_root().path_join("native-cache").path_join("tiles")
 	workshop = Workshop.new()
 	main.ui.add_child(workshop)
 	workshop.closed.connect(func() -> void: closed_count += 1)
@@ -194,6 +199,8 @@ func _run() -> void:
 	await _city()
 	await _edit_tools()
 	await _reference()
+	await _scale_line()
+	await _wheel_step()
 	await _audit_tools()
 	await _side_panels()
 	await _save()
@@ -647,6 +654,26 @@ func _reference() -> void:
 	await _drag_mouse(corner, corner + Vector2(50, 30))
 	var resized: Rect2 = workshop.map.reference["rect"]
 	_check("dragging a corner resizes it", resized.size.x > moved.size.x and is_equal_approx(resized.position.x, moved.position.x), "%s -> %s" % [str(moved.size), str(resized.size)])
+	var far_corner := workshop.map.global_position + workshop.map.map.world_to_screen(resized.position + resized.size)
+	await _shift_drag([far_corner, far_corner + Vector2(30, 5), far_corner + Vector2(70, 10)])
+	var kept: Rect2 = workshop.map.reference["rect"]
+	_check("Shift keeps the picture's shape while resizing", kept.size.x > resized.size.x and absf(kept.size.x / kept.size.y - resized.size.x / resized.size.y) < 0.001, "%s -> %s" % [str(resized.size), str(kept.size)])
+	var lock := _row_toggle(panel, "Lock in place")
+	if lock:
+		lock.pressed.emit()
+	await _frames(3)
+	_check("Lock in place locks the picture", workshop.map.reference_locked() and _find_label(workshop._panel, "Locked: dragging moves the map. Unlock to move or resize the image. Close this panel to draw and edit through the image.") != null)
+	var locked_rect: Rect2 = workshop.map.reference["rect"]
+	var camera_before := workshop.map.map.camera.position
+	var inside := workshop.map.global_position + workshop.map.map.world_to_screen(locked_rect.get_center())
+	await _drag_mouse(inside, inside + Vector2(-80, 30))
+	_check("a locked picture stays put and the drag pans the map", (workshop.map.reference["rect"] as Rect2) == locked_rect and workshop.map.map.camera.position.distance_to(camera_before) > 1.0)
+	await _shoot("ws-22a-reference-locked")
+	lock = _row_toggle(workshop._panel, "Lock in place")
+	if lock:
+		lock.pressed.emit()
+	await _frames(3)
+	panel = workshop._panel as WorkshopReference
 	var edits := _find_type(panel, "LineEdit")
 	if not edits.is_empty():
 		var field: LineEdit = edits[0]
@@ -667,6 +694,94 @@ func _reference() -> void:
 	_check("Remove takes the image away", workshop.map.reference.is_empty())
 	workshop.close_panel()
 	OS.set_environment("OH_EDITOR_PICK", "")
+
+
+func _scale_line() -> void:
+	workshop.set_tool("select")
+	workshop.locate(Vector2(2.35, 48.86))
+	await _wait(0.8)
+	workshop.open_panel_named("projection")
+	await _frames(4)
+	var panel := workshop._panel as WorkshopProjection
+	await _until(func() -> bool: return panel != null and not panel._check.is_empty(), 20.0)
+	var draw := _find_button(panel, "Draw a scale line")
+	_check("the Projection panel offers a scale line", draw != null and _find_label(panel, "Scale line") != null)
+	if draw == null:
+		workshop.close_panel()
+		return
+	draw.pressed.emit()
+	await _frames(4)
+	_check("Draw a scale line puts the tool out", workshop.tool == "scale" and _find_label(panel, "Click the line's two ends on the map.") != null)
+	var centre := workshop.map.global_position + workshop.map.size * 0.5
+	var a := centre + Vector2(-160, 60)
+	var b := centre + Vector2(160, 60)
+	await _click(a)
+	await _hover(b)
+	await _until(func() -> bool: return workshop.map.scale_sketch_label.begins_with("≈ "), 5.0)
+	_check("the line being drawn shows what it measures", workshop.map.scale_sketch_label.begins_with("≈ ") and workshop.map.scale_sketch_label.contains(" km · ") and workshop.map.scale_sketch_label.ends_with(" mi"), workshop.map.scale_sketch_label)
+	await _shoot("ws-24-scale-drawing")
+	await _click(b)
+	await _until(func() -> bool: return not workshop.scale_draft.is_empty() and _find_button(panel, "Set the scale") != null, 5.0)
+	var set_button := _find_button(panel, "Set the scale")
+	var measured := false
+	for label in _find_type(panel, "Label"):
+		if (label as Label).text.begins_with("It measures ≈ ") and (label as Label).text.ends_with(" now."):
+			measured = true
+	_check("the line drawn asks for its distance and says what it measures now", workshop.tool == "scale" and set_button != null and set_button.disabled and measured and not workshop.map.scale_line.is_empty())
+	var amount: LineEdit = null
+	for edit in _find_type(panel, "LineEdit"):
+		if is_equal_approx((edit as LineEdit).custom_minimum_size.x, 70.0):
+			amount = edit
+	if amount:
+		amount.text = "500"
+		amount.text_changed.emit("500")
+	await _frames(2)
+	_check("a distance typed enables Set the scale", set_button != null and not set_button.disabled)
+	await _shoot("ws-25-scale-draft")
+	if set_button:
+		set_button.pressed.emit()
+	await _until(func() -> bool: return workshop.tool == "select" and workshop.scale_draft.is_empty() and _find_button(workshop._panel, "Draw it again") != null, 10.0)
+	var projection: Variant = (workshop.state.get("doc", {}) as Dictionary).get("projection")
+	var scale: Dictionary = (projection as Dictionary).get("scale", {}) if projection is Dictionary else {}
+	_check("Set the scale saves the line with the projection", is_equal_approx(float(scale.get("km", 0.0)), 500.0) and scale.get("from") is Array, str(projection))
+	await _until(func() -> bool: return str(workshop.map.scale_line.get("label", "")) == "500 km · 311 mi", 5.0)
+	_check("the map shows the scale line and its distance", str(workshop.map.scale_line.get("label", "")) == "500 km · 311 mi" and _find_label(workshop._panel, "The scale line is 500 km · 311 mi.") != null, str(workshop.map.scale_line.get("label", "")))
+	await _shoot("ws-26-scale-set")
+	var clear := _find_button(workshop._panel, "Clear it")
+	if clear:
+		clear.pressed.emit()
+	await _until(func() -> bool: return _find_button(workshop._panel, "Draw a scale line") != null, 10.0)
+	projection = (workshop.state.get("doc", {}) as Dictionary).get("projection")
+	_check("Clear it takes the scale line away", not (projection is Dictionary and (projection as Dictionary).has("scale")) and workshop.map.scale_line.is_empty(), str(projection))
+	draw = _find_button(workshop._panel, "Draw a scale line")
+	if draw:
+		draw.pressed.emit()
+	await _frames(3)
+	workshop.close_panel()
+	await _frames(3)
+	_check("closing the panel puts the Scale line tool down", workshop.tool == "select" and workshop.map.scale_line.is_empty())
+
+
+func _wheel_step() -> void:
+	workshop.locate(Vector2(2.35, 48.86))
+	await _wait(0.8)
+	var before := workshop.map.ol_zoom()
+	var at := workshop.map.global_position + workshop.map.size * 0.5
+	var wheel := InputEventMouseButton.new()
+	wheel.button_index = MOUSE_BUTTON_WHEEL_UP
+	wheel.pressed = true
+	wheel.factor = 1.0
+	wheel.position = at
+	wheel.global_position = at
+	root.push_input(wheel)
+	await _wait(0.6)
+	_check("one wheel notch zooms the Workshop's map one level", absf(workshop.map.ol_zoom() - before - 1.0) < 0.02, "%.3f" % (workshop.map.ol_zoom() - before))
+	var many := workshop.map.ol_zoom()
+	for notch in range(4):
+		root.push_input(wheel.duplicate())
+		await _frames(1)
+	await _wait(0.6)
+	_check("a fast spin zooms at most two levels", absf(workshop.map.ol_zoom() - many - 2.0) < 0.02, "%.3f" % (workshop.map.ol_zoom() - many))
 
 
 func _city() -> void:
@@ -837,7 +952,7 @@ func _owner_in(w: Workshop, id: String) -> String:
 
 
 func _review() -> void:
-	var tiles := str(main.info.get("dataRoot", "")).path_join("native-cache").path_join("tiles")
+	var tiles := _data_root().path_join("native-cache").path_join("tiles")
 	var second := Workshop.new()
 	main.ui.add_child(second)
 	var records: Array = []
@@ -1089,6 +1204,14 @@ func _projection_redraw(w: Workshop) -> void:
 		if str((entry as Dictionary).get("name", "")) == "Old Chart":
 			key = str((entry as Dictionary).get("key", ""))
 	await w.request("workshop.maps.makeStarting", {"key": key})
+	var placed := await _until(func() -> bool: return is_equal_approx(float(w.map.map.basemap.picture_aspect), 2.0), 20.0)
+	var copy := Image.create(240, 120, false, Image.FORMAT_RGBA8)
+	copy.fill(Color(0.2, 0.8, 0.3))
+	w.map.set_reference(ImageTexture.create_from_image(copy), 2.0)
+	var laid: Rect2 = w.map.reference.get("rect", Rect2())
+	_check("a reference the basemap picture's shape is laid exactly on it, locked", placed and laid == (w.map.map.basemap.picture_rect as Rect2) and w.map.reference_locked(), "%s %s" % [str(laid), str(w.map.map.basemap.picture_rect)])
+	w.map.reference = {}
+	w.map.redraw()
 	w.open_panel_named("projection")
 	await _frames(3)
 	var panel := w._panel as WorkshopProjection
@@ -1097,6 +1220,8 @@ func _projection_redraw(w: Workshop) -> void:
 	_check("the starting picture is known to the Projection panel", not key.is_empty() and bool(panel._options.get("hasPicture", false)) and is_equal_approx(panel._picture_aspect, 2.0), "%s %s" % [key, panel._picture_aspect])
 	panel._type = "robinson"
 	await panel._recheck()
+	var probe_id := str(w.map.ids[0]) if not w.map.ids.is_empty() else ""
+	var probe_before: Vector2 = w.map.centroids[0] if not w.map.centroids.is_empty() else Vector2.ZERO
 	var convert := _find_button(panel, "Convert the map")
 	if convert:
 		convert.pressed.emit()
@@ -1105,6 +1230,10 @@ func _projection_redraw(w: Workshop) -> void:
 	var after := str(panel._options.get("pictureFile", ""))
 	var aspect := panel._aspect_of(after)
 	_check("converting redraws the starting picture for the new projection", done and panel._error.is_empty() and after != before and not after.is_empty() and absf(aspect - 2.0) > 0.005, "%s %s %s" % [panel._error, after.get_file(), aspect])
+	await _until(func() -> bool: return w.map.ready_to_draw and w.map.index_of.has(probe_id), 30.0)
+	var probe_index := int(w.map.index_of.get(probe_id, -1))
+	var probe_after: Vector2 = w.map.centroids[probe_index] if probe_index >= 0 else Vector2.ZERO
+	_check("a converted map's regions are drawn where they went", probe_index >= 0 and probe_after.distance_to(probe_before) > 0.5, "%s %s -> %s" % [probe_id, str(probe_before), str(probe_after)])
 	await _wait(1.0)
 	await _shoot("ws-35-picture-redrawn")
 	panel._picture_aspect = aspect
@@ -1217,6 +1346,42 @@ func _basemaps(w: Workshop) -> void:
 	picture.save_png(picture_file)
 	OS.set_environment("OH_EDITOR_PICK", "*=" + picture_file)
 	await picker._add()
+	await _frames(3)
+	var setup := w._picture_setup as WorkshopPictureSetup
+	await _until(func() -> bool: return setup != null and not setup._projections.is_empty(), 10.0)
+	_check("a basemap picture asks how it is drawn", setup != null and _find_label(setup, "\"Old Chart\" (2.00:1) is kept exactly as it is. Say how it is drawn, and the map takes its projection.") != null and _find_button(setup, "Use this picture") != null and (not is_instance_valid(picker) or picker.is_queued_for_deletion()))
+	if setup:
+		var qbam := _find_button(setup, "It's Q-BAM")
+		if qbam:
+			qbam.pressed.emit()
+		await _frames(3)
+		_check("It's Q-BAM sets Robinson centred on 10.75 degrees east", setup._type == "robinson" and is_equal_approx(float(setup._centre), 10.75) and setup._exact_bounds is Dictionary)
+		var deleting := _row_toggle(setup, "Delete the provinces and nations")
+		if deleting:
+			deleting.pressed.emit()
+		await _frames(3)
+		_check("deleting the provinces is explained", _find_label(setup, "The map starts empty on the picture: provinces, cities and units are removed.") != null)
+		deleting = _row_toggle(setup, "Delete the provinces and nations")
+		if deleting:
+			deleting.pressed.emit()
+		await _frames(3)
+		await _shoot("ws-30a-picture-setup")
+		setup._type = "mercator"
+		setup._centre = 0.0
+		setup._render()
+		await _frames(2)
+		var use := _find_button(setup, "Use this picture")
+		if use:
+			use.pressed.emit()
+		await _until(func() -> bool: return not is_instance_valid(setup) or setup.is_queued_for_deletion(), 30.0)
+	var after_setup: Variant = (w.state.get("doc", {}) as Dictionary).get("projection")
+	_check("Use this picture keeps the map in the projection chosen", after_setup is Dictionary and str((after_setup as Dictionary).get("type", "")) == "mercator", str(after_setup))
+	w.open_basemaps()
+	await _frames(4)
+	for child in w._overlays.get_children():
+		if child is WorkshopBasemaps and not child.is_queued_for_deletion():
+			picker = child
+	await _until(func() -> bool: return not picker._loading, 20.0)
 	var chart := _library_entry(picker, "Old Chart")
 	_check("a picture joins Your basemaps with its thumbnail", not chart.is_empty() and _save_thumbnail(str(chart.get("thumbnail", "")), "ws-30-thumb-picture") and not _scenario_map(picker, "Old Chart").is_empty())
 	var kml_file := root_dir.path_join("Coast.kml")
@@ -1289,7 +1454,7 @@ func _basemaps(w: Workshop) -> void:
 
 
 func _import() -> void:
-	var tiles := str(main.info.get("dataRoot", "")).path_join("native-cache").path_join("tiles")
+	var tiles := _data_root().path_join("native-cache").path_join("tiles")
 	var third := Workshop.new()
 	main.ui.add_child(third)
 	var shut := [false]

@@ -2084,6 +2084,52 @@ export const register = (ctx) => {
     });
   };
 
+  const moveMapPlaces = (s, from, to) => {
+    const projection = engine.wsMapProjection;
+    const convert = engine.wsProjectionConvert;
+    const cylindrical = ["mercator", "equirectangular", "miller", "gall-peters"].includes(from.type);
+    const seamLon = (to.centre ?? 0) - 180;
+    const seamX = cylindrical && to.type !== projection.FREEFORM && (to.centre ?? 0) !== (from.centre ?? 0)
+      ? projection.geoToDisplay(from, seamLon, 0)[0] * (Math.PI / 180) * EARTH
+      : null;
+    const moveXY = (x, y) => {
+      const [X, Y] = projection.convertPlane(from, to, x / EARTH, y / EARTH);
+      return [X * EARTH, Y * EARTH];
+    };
+    for (const f of features(s)) {
+      if (seamX != null && f.getGeometry()) f.setGeometry(engine.wsGeometry.splitAtX(f.getGeometry(), seamX));
+      f.getGeometry()?.applyTransform((input, output, stride = 2) => {
+        const out = output ?? input;
+        for (let i = 0; i < input.length; i += stride) {
+          const [x, y] = moveXY(input[i], input[i + 1]);
+          out[i] = x;
+          out[i + 1] = y;
+        }
+        return out;
+      });
+    }
+    s.undo = [];
+    s.redo = [];
+    notify(s, { geometry: true });
+    setters(s).features((rows) => convert.moveFeatureCoords(rows, from, to));
+    setters(s).units((rows) => convert.moveUnits(rows, from, to));
+  };
+
+  const moveWarGeography = (s, from, to) => {
+    const convert = engine.wsProjectionConvert;
+    setters(s).terrainAreas((rows) => convert.moveWarShapes(rows, from, to));
+    setters(s).fortifications((rows) => convert.moveWarShapes(rows, from, to));
+    setters(s).climateZones((rows) => convert.moveWarShapes(rows, from, to));
+  };
+
+  const KM_PER_MILE = 1.609344;
+  const scaleDistanceText = (value) => new Intl.NumberFormat(undefined, { maximumFractionDigits: value < 10 ? 1 : 0, minimumFractionDigits: 0 }).format(value);
+  const scaleLabelOf = (km, { about = false } = {}) => {
+    const value = Number(km);
+    if (!(value > 0)) return "";
+    return `${about ? "≈ " : ""}${scaleDistanceText(value)} km · ${scaleDistanceText(value / KM_PER_MILE)} mi`;
+  };
+
   const cloneCoords = (value) => (Array.isArray(value) ? value.map(cloneCoords) : value);
   const closestPointOnSegment = (p, a, b) => {
     const vx = b[0] - a[0];
@@ -3176,6 +3222,21 @@ export const register = (ctx) => {
   };
 
   const normalizedUpload = (upload, aspect) => (upload.kind === "image" ? { kind: "image", dataUrl: upload.dataUrl, aspect: Number(aspect) || null } : { kind: "vector", geojson: upload.geojson });
+
+  const addUploaded = async (s, upload, thumbnail, aspect) => {
+    const normalized = normalizedUpload(upload, aspect);
+    let meta = null;
+    let libraryError = null;
+    try {
+      meta = await createLibraryBasemap(normalized, upload.name, clean(thumbnail) || null, { author: s.doc.metadata?.author || "" });
+    } catch (error) {
+      console.warn("[editor] save basemap to library failed:", error);
+      libraryError = error?.message || String(error);
+    }
+    const entry = engine.wsOwnBasemaps.ownBasemapFromLibrary(meta || { id: upload.name, name: upload.name, kind: normalized.kind }, normalized.kind === "vector" ? { geojson: normalized.geojson } : { dataUrl: normalized.dataUrl });
+    const result = entry ? applyMaps(s, engine.wsScenarioMaps.addOwnMap(s.doc.metadata, entry)) : { refused: "" };
+    return { added: Boolean(entry) && !result.refused, ...(result.refused ? { refused: result.refused } : {}), ...(libraryError ? { libraryError } : {}) };
+  };
 
   const readGeoTiffAid = async (target) => {
     const bytes = fs.readFileSync(target);
@@ -4299,13 +4360,32 @@ export const register = (ctx) => {
       patchMetadata(s, { projection: next });
       return delta(s, { doc: true });
     },
+    "workshop.projection.measure": async ({ session: id, from = null, to = null } = {}) => {
+      const s = need(id);
+      const a = Array.isArray(from) ? from.map(Number) : [];
+      const b = Array.isArray(to) ? to.map(Number) : [];
+      if (a.length < 2 || b.length < 2) return { km: 0, label: "" };
+      const distance = engine.wsMapDistance;
+      const km = distance.mapKm(distance.mapMeasureOf(s.doc.metadata?.projection), a[0], a[1], b[0], b[1]);
+      return { km, label: scaleLabelOf(km, { about: true }) };
+    },
+    "workshop.projection.scale": async ({ session: id, scale = null } = {}) => {
+      const s = need(id);
+      const next = { ...engine.wsMapProjection.normalizeProjection(s.doc.metadata?.projection) };
+      if (scale && typeof scale === "object") next.scale = { from: scale.from, to: scale.to, km: Number(scale.km) };
+      else delete next.scale;
+      patchMetadata(s, { projection: next });
+      return delta(s, { doc: true });
+    },
     "workshop.projection.options": async ({ session: id } = {}) => {
       const s = need(id);
       const projection = engine.wsMapProjection;
       const convert = engine.wsProjectionConvert;
+      const current = projection.normalizeProjection(s.doc.metadata?.projection);
       return plain({
         projections: projection.PROJECTIONS.map((entry) => ({ id: entry.id, name: entry.name })),
-        current: projection.normalizeProjection(s.doc.metadata?.projection),
+        current,
+        scaleLabel: current.scale ? scaleLabelOf(current.scale.km) : "",
         freeform: projection.FREEFORM,
         hasPicture: s.doc.metadata?.customBackground?.kind === "image",
         pictureFile: s.doc.metadata?.customBackground?.kind === "image" ? (thumbnailSource(s.doc.metadata.customBackground)?.file || "") : "",
@@ -4356,10 +4436,6 @@ export const register = (ctx) => {
         if (!source?.file) return { ...delta(s, {}), error: "The basemap picture could not be read." };
         return { ...delta(s, {}), redraw: { file: source.file } };
       }
-      const moveXY = (x, y) => {
-        const [X, Y] = projection.convertPlane(from, to, x / EARTH, y / EARTH);
-        return [X * EARTH, Y * EARTH];
-      };
       let nextBg = background;
       if (plan.kind === "redraw") {
         const bytes = fs.readFileSync(clean(redrawn.file));
@@ -4369,28 +4445,12 @@ export const register = (ctx) => {
       else if (plan.kind === "vector") nextBg = { ...background, geojson: projection.moveGeojson(background.geojson, (lon, lat) => projection.convertDisplayPoint(from, to, lon, lat)) };
       else if (plan.kind === "plain") nextBg = { kind: "plain" };
       else if (plan.kind === "tiles") nextBg = null;
-      for (const f of features(s)) {
-        f.getGeometry()?.applyTransform((input, output, stride = 2) => {
-          const out = output ?? input;
-          for (let i = 0; i < input.length; i += stride) {
-            const [x, y] = moveXY(input[i], input[i + 1]);
-            out[i] = x;
-            out[i + 1] = y;
-          }
-          return out;
-        });
-      }
-      s.undo = [];
-      s.redo = [];
-      notify(s, { geometry: true });
-      setters(s).features((rows) => convert.moveFeatureCoords(rows, from, to));
-      setters(s).units((rows) => convert.moveUnits(rows, from, to));
-      setters(s).terrainAreas((rows) => convert.moveWarShapes(rows, from, to));
-      setters(s).fortifications((rows) => convert.moveWarShapes(rows, from, to));
-      setters(s).climateZones((rows) => convert.moveWarShapes(rows, from, to));
+      moveMapPlaces(s, from, to);
+      moveWarGeography(s, from, to);
       const movedOwnBasemaps = engine.wsOwnBasemaps.moveOwnBasemapsBetween(s.doc.metadata?.ownBasemaps, from, to);
+      const scale = from.scale ? projection.convertScaleLine(from, to, from.scale) : null;
       patchMetadata(s, {
-        projection: { ...to, ...(from.globe === false ? { globe: false } : {}), ...(from.wrap === false ? { wrap: false } : {}) },
+        projection: { ...to, ...(from.globe === false ? { globe: false } : {}), ...(from.wrap === false ? { wrap: false } : {}), ...(scale ? { scale } : {}) },
         ...(nextBg !== background ? { customBackground: nextBg } : {}),
         ...(movedOwnBasemaps ? { ownBasemaps: movedOwnBasemaps } : {}),
       });
@@ -4560,23 +4620,45 @@ export const register = (ctx) => {
         return { error: message, vectorTiles: /vector tiles/i.test(message) };
       }
     },
+    "workshop.maps.pictureSetup": async ({ session: id, type = "", centre = 0, aspect = null, deleteProvinces = false, thumbnail = "" } = {}) => {
+      const s = need(id);
+      const upload = s.upload;
+      if (!upload || upload.kind !== "image") return { ...delta(s, {}), error: "Choose the map again." };
+      const projection = engine.wsMapProjection;
+      try {
+        const freeform = String(type) === projection.FREEFORM;
+        const chosen = projection.normalizeProjection(freeform ? { type, aspect: Number(aspect) || undefined } : { type, centre: Number(centre) || 0 });
+        const from = projection.normalizeProjection(s.doc.metadata?.projection);
+        const to = { ...chosen, ...(from.globe === false ? { globe: false } : {}), ...(from.wrap === false ? { wrap: false } : {}) };
+        let movedOwnBasemaps = null;
+        if (deleteProvinces) {
+          s.source.clear();
+          s.savedRegionHashes.clear();
+          s.undo = [];
+          s.redo = [];
+          notify(s, { geometry: true });
+          setters(s).features([]);
+          setters(s).units([]);
+        } else if (!projection.sameProjection(from, to)) {
+          moveMapPlaces(s, from, to);
+          moveWarGeography(s, from, to);
+          movedOwnBasemaps = engine.wsOwnBasemaps.moveOwnBasemapsBetween(s.doc.metadata?.ownBasemaps, from, to);
+        }
+        patchMetadata(s, { projection: to, ...(movedOwnBasemaps ? { ownBasemaps: movedOwnBasemaps } : {}) });
+        s.upload = null;
+        const added = await addUploaded(s, upload, thumbnail, aspect);
+        return { ...delta(s, { all: true }), ...added };
+      } catch (error) {
+        return { ...delta(s, { all: true }), error: error?.message || String(error) };
+      }
+    },
     "workshop.maps.addUpload": async ({ session: id, thumbnail = "", aspect = null } = {}) => {
       const s = need(id);
       const upload = s.upload;
       if (!upload) return { ...delta(s, {}), error: "Choose the map again." };
       s.upload = null;
-      const normalized = normalizedUpload(upload, aspect);
-      let meta = null;
-      let libraryError = null;
-      try {
-        meta = await createLibraryBasemap(normalized, upload.name, clean(thumbnail) || null, { author: s.doc.metadata?.author || "" });
-      } catch (error) {
-        console.warn("[editor] save basemap to library failed:", error);
-        libraryError = error?.message || String(error);
-      }
-      const entry = engine.wsOwnBasemaps.ownBasemapFromLibrary(meta || { id: upload.name, name: upload.name, kind: normalized.kind }, normalized.kind === "vector" ? { geojson: normalized.geojson } : { dataUrl: normalized.dataUrl });
-      const result = entry ? applyMaps(s, engine.wsScenarioMaps.addOwnMap(s.doc.metadata, entry)) : { refused: "" };
-      return { ...delta(s, { doc: true }), added: Boolean(entry) && !result.refused, ...(result.refused ? { refused: result.refused } : {}), ...(libraryError ? { libraryError } : {}) };
+      const added = await addUploaded(s, upload, thumbnail, aspect);
+      return { ...delta(s, { doc: true }), ...added };
     },
     "workshop.maps.uploadTiled": async ({ session: id, path: file = "" } = {}) => {
       const s = need(id);

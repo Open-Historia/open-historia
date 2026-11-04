@@ -22,6 +22,8 @@ signal draw_point_requested(lonlat: Vector2, previous: Variant)
 signal draw_finished(ring: Array)
 signal vertex_edit(op: String, target: String, path: Array, index: int, lonlat: Vector2, alt: bool)
 signal hover_moved(lonlat: Vector2)
+signal scale_hover(from: Vector2, to: Vector2)
+signal scale_drawn(from: Vector2, to: Vector2)
 
 const NEUTRAL := Color8(130, 130, 138)
 const ACCENT_STROKE := Color8(231, 231, 234)
@@ -35,7 +37,10 @@ const LABEL_MIN_ZOOM := 4.0
 const SKETCH_BLUE := Color8(0, 153, 255)
 const SKETCH_FILL := Color(1, 1, 1, 0.5)
 const BOX_FILL := Color(1, 1, 1, 0.75)
-const WHEEL_DELTA_PER_ZOOM := 300.0
+const WHEEL_DELTA_PER_ZOOM := 100.0
+const WHEEL_MAX_DELTA := 2.0
+const WHEEL_ZOOM_DURATION_MS := 180
+const TRACKPAD_DELTA_PER_ZOOM := 300.0
 const WHEEL_TIMEOUT_MS := 80
 const ZOOM_DURATION_MS := 250
 const BOX_ZOOM_DURATION_MS := 200
@@ -43,7 +48,7 @@ const KINETIC_DECAY := -0.005
 const KINETIC_MIN_VELOCITY := 0.05
 const KINETIC_DELAY_MS := 100
 const KINETIC_DURATION_MS := 500
-const BOX_ZOOM_TOOLS := ["select", "pan", "dissolve", "delete", "feature", "marker", "unit", "modify", "border", "move"]
+const BOX_ZOOM_TOOLS := ["select", "pan", "dissolve", "delete", "feature", "marker", "unit", "modify", "border", "move", "scale"]
 const MARKER_GLYPHS := [
 	["\\b(capital|city|town|settlement|metropolis|municipality)\\b", "●"],
 	["\\b(military|army|naval|defen[cs]e|command|headquarters|hq|base|fort|fortress|bunker|silo|garrison|missile|radar|airfield|airbase|barracks|outpost|citadel|arsenal|testing range)\\b", "▲"],
@@ -54,6 +59,8 @@ const MARKER_GLYPHS := [
 ]
 const UNIT_GLYPH := {"infantry": "I", "armor": "A", "air": "✈", "naval": "N", "artillery": "R", "garrison": "G"}
 const WORLD := 4096.0
+const SCALE_INK := Color("#06222d")
+const SCALE_BAR_PX := 9.0
 const REVIEW_COLORS := {"pending": Color("#f59e0b"), "conflict": Color("#f97316"), "accepted": Color("#22c55e"), "rejected": Color(148 / 255.0, 163 / 255.0, 184 / 255.0, 0.75), "proposed": Color("#38bdf8")}
 
 var map: MapView
@@ -96,6 +103,10 @@ var review_points: Array = []
 var review_focus := {}
 var draw_points: Array = []
 var reference := {}
+var scale_line := {}
+var scale_sketch_label := ""
+var _scale_start: Variant = null
+var _scale_cursor := Vector2(-1, -1)
 var reference_adjust := false
 var _reference_drag := {}
 var import_preview := {}
@@ -427,11 +438,11 @@ func _process(_delta: float) -> void:
 		_dirty_fills = false
 		map.editor_commit_colors()
 	if _wheel_started >= 0 and Time.get_ticks_msec() - _wheel_started >= WHEEL_TIMEOUT_MS:
-		var levels := -clampf(_wheel_total, -WHEEL_DELTA_PER_ZOOM, WHEEL_DELTA_PER_ZOOM) / WHEEL_DELTA_PER_ZOOM
+		var levels := -clampf(_wheel_total, -WHEEL_MAX_DELTA * WHEEL_DELTA_PER_ZOOM, WHEEL_MAX_DELTA * WHEEL_DELTA_PER_ZOOM) / WHEEL_DELTA_PER_ZOOM
 		var anchor := _wheel_anchor
 		_wheel_total = 0.0
 		_wheel_started = -1
-		zoom_by(levels, anchor, ZOOM_DURATION_MS)
+		zoom_by(levels, anchor, WHEEL_ZOOM_DURATION_MS)
 	if not _anim.is_empty():
 		_step_animation()
 	if ready_to_draw and not type_keys.is_empty() and _band_signature() != _band_key:
@@ -825,6 +836,11 @@ func _commit_sketch() -> void:
 
 
 func abort_sketch() -> bool:
+	if _scale_start != null:
+		_scale_start = null
+		scale_sketch_label = ""
+		_overlay.queue_redraw()
+		return true
 	if not draw_points.is_empty():
 		draw_points = []
 		snap_marker = null
@@ -867,7 +883,15 @@ func set_reference(texture: Texture2D, aspect: float) -> void:
 	var width := _viewport.size.x / map.camera.zoom.x * 0.6
 	var height := width / (aspect if aspect > 0.0 else 1.5)
 	var centre := map.camera.position
-	reference = {"texture": texture, "aspect": aspect, "rect": Rect2(centre - Vector2(width, height) * 0.5, Vector2(width, height)), "opacity": float(reference.get("opacity", 0.5)), "visible": bool(reference.get("visible", true))}
+	var crisp := CanvasTexture.new()
+	crisp.diffuse_texture = texture
+	crisp.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	reference = {"texture": texture, "crisp": crisp, "aspect": aspect, "rect": Rect2(centre - Vector2(width, height) * 0.5, Vector2(width, height)), "opacity": float(reference.get("opacity", 0.5)), "visible": bool(reference.get("visible", true)), "locked": null}
+	var basemap := map.basemap
+	var picture_aspect := float(basemap.get("picture_aspect")) if basemap else 0.0
+	if picture_aspect > 0.0 and aspect > 0.0 and absf(aspect / picture_aspect - 1.0) < 0.01:
+		reference["rect"] = basemap.get("picture_rect")
+		reference["locked"] = true
 	_overlay.queue_redraw()
 
 
@@ -933,23 +957,36 @@ func _reference_corners() -> Array:
 	return [rect.position + Vector2(0, rect.size.y), rect.position + rect.size, rect.position + Vector2(rect.size.x, 0), rect.position]
 
 
-func _reference_press(point: Vector2) -> bool:
-	if reference.is_empty():
-		return false
+func reference_locked() -> bool:
+	return not reference.is_empty() and reference.get("locked") == true
+
+
+func _reference_grab(point: Vector2) -> Dictionary:
+	if reference.is_empty() or reference_locked():
+		return {}
 	var corners := _reference_corners()
 	for index in range(corners.size()):
-		if map.world_to_screen(corners[index]).distance_to(point) <= 11.0:
-			_reference_drag = {"mode": "resize", "anchor": corners[(index + 2) % 4]}
-			return true
-	var world := screen_to_world(point)
+		if map.world_to_screen(corners[index]).distance_to(point) <= 12.0:
+			return {"mode": "resize", "index": index}
 	var rect: Rect2 = reference["rect"]
-	if rect.has_point(world):
-		_reference_drag = {"mode": "move", "last": world}
-		return true
-	return false
+	var world := screen_to_world(point)
+	var inside := world.x >= rect.position.x and world.x <= rect.end.x and world.y >= rect.position.y and world.y <= rect.end.y
+	return {"mode": "move"} if inside else {}
 
 
-func _reference_move(point: Vector2) -> void:
+func _reference_press(point: Vector2) -> bool:
+	var grab := _reference_grab(point)
+	if grab.is_empty():
+		return false
+	var rect: Rect2 = reference["rect"]
+	if str(grab["mode"]) == "move":
+		_reference_drag = {"mode": "move", "last": screen_to_world(point)}
+	else:
+		_reference_drag = {"mode": "resize", "anchor": _reference_corners()[(int(grab["index"]) + 2) % 4], "aspect": rect.size.x / maxf(rect.size.y, 0.000001)}
+	return true
+
+
+func _reference_move(point: Vector2, shift := false) -> void:
 	if _reference_drag.is_empty() or reference.is_empty():
 		return
 	var world := screen_to_world(point)
@@ -961,9 +998,16 @@ func _reference_move(point: Vector2) -> void:
 	else:
 		var anchor: Vector2 = _reference_drag["anchor"]
 		var least := 8.0 / map.camera.zoom.x
-		var top_left := Vector2(minf(anchor.x, world.x), minf(anchor.y, world.y))
-		var bottom_right := Vector2(maxf(maxf(anchor.x, world.x), top_left.x + least), maxf(maxf(anchor.y, world.y), top_left.y + least))
-		rect = Rect2(top_left, bottom_right - top_left)
+		var width := maxf(absf(world.x - anchor.x), least)
+		var height := maxf(absf(world.y - anchor.y), least)
+		if shift:
+			var keep := float(_reference_drag.get("aspect", 1.0))
+			if width / height > keep:
+				width = height * keep
+			else:
+				height = width / keep
+		var far := Vector2(anchor.x + (width if world.x >= anchor.x else -width), anchor.y + (height if world.y >= anchor.y else -height))
+		rect = Rect2(Vector2(minf(anchor.x, far.x), minf(anchor.y, far.y)), Vector2(width, height))
 	reference["rect"] = rect
 	_overlay.queue_redraw()
 
@@ -976,11 +1020,15 @@ func _draw_reference(canvas: Control) -> void:
 	var bottom_right := map.world_to_screen(rect.position + rect.size)
 	var area := Rect2(top_left, bottom_right - top_left)
 	if bool(reference.get("visible", true)) and reference.get("texture") is Texture2D:
-		canvas.draw_texture_rect(reference["texture"], area, false, Color(1, 1, 1, clampf(float(reference.get("opacity", 0.5)), 0.0, 1.0)))
+		var picture: Texture2D = reference["texture"]
+		var shown: Texture2D = reference["crisp"] if reference.get("crisp") is Texture2D and absf(area.size.x) > picture.get_width() else picture
+		canvas.draw_texture_rect(shown, area, false, Color(1, 1, 1, clampf(float(reference.get("opacity", 0.5)), 0.0, 1.0)))
 	if not reference_adjust:
 		return
 	var frame := PackedVector2Array([area.position, area.position + Vector2(area.size.x, 0), area.position + area.size, area.position + Vector2(0, area.size.y), area.position])
 	_dashed(canvas, frame, Color("#22d3ee"), 1.5, 6.0)
+	if reference_locked():
+		return
 	for corner in [area.position, area.position + Vector2(area.size.x, 0), area.position + area.size, area.position + Vector2(0, area.size.y)]:
 		var at: Vector2 = corner
 		var diamond := PackedVector2Array([at + Vector2(0, -7), at + Vector2(7, 0), at + Vector2(0, 7), at + Vector2(-7, 0)])
@@ -1108,7 +1156,7 @@ func _handle(event: InputEvent) -> void:
 	elif event is InputEventPanGesture:
 		var gesture := event as InputEventPanGesture
 		_anim = {}
-		map.editor_zoom_at(gesture.position, pow(2.0, -gesture.delta.y * 12.0 / WHEEL_DELTA_PER_ZOOM))
+		map.editor_zoom_at(gesture.position, pow(2.0, -gesture.delta.y * 12.0 / TRACKPAD_DELTA_PER_ZOOM))
 		_after_view()
 
 
@@ -1117,7 +1165,7 @@ func _wheel(button: InputEventMouseButton) -> void:
 	var delta := (-100.0 if button.button_index == MOUSE_BUTTON_WHEEL_UP else 100.0) * notches
 	if absf(delta) < 4.0:
 		_anim = {}
-		map.editor_zoom_at(button.position, pow(2.0, -delta / WHEEL_DELTA_PER_ZOOM))
+		map.editor_zoom_at(button.position, pow(2.0, -delta / TRACKPAD_DELTA_PER_ZOOM))
 		_after_view()
 		return
 	if _wheel_started < 0:
@@ -1137,6 +1185,9 @@ func _press(button: InputEventMouseButton) -> void:
 		return
 	if button.double_click:
 		_drag = ""
+		if tool == "scale":
+			_drag = "click"
+			return
 		if tool == "draw":
 			_finish_draw()
 			return
@@ -1244,6 +1295,10 @@ func _update_cursor(point: Vector2) -> void:
 			shape = Control.CURSOR_CROSS
 	elif tool in ["select", "dissolve"] and pick(point) >= 0:
 		shape = Control.CURSOR_POINTING_HAND
+	if reference_adjust:
+		var grab := _reference_grab(point)
+		if not grab.is_empty():
+			shape = Control.CURSOR_MOVE if str(grab["mode"]) == "move" else (Control.CURSOR_BDIAGSIZE if int(grab["index"]) % 2 == 0 else Control.CURSOR_FDIAGSIZE)
 	if _overlay.mouse_default_cursor_shape != shape:
 		_overlay.mouse_default_cursor_shape = shape
 
@@ -1251,7 +1306,12 @@ func _update_cursor(point: Vector2) -> void:
 func _motion(motion: InputEventMouseMotion) -> void:
 	if _drag.is_empty():
 		_update_cursor(motion.position)
-		if tool in ["terrain", "fortification", "climate"] and not _sketch.is_empty():
+		if tool == "scale":
+			_scale_cursor = motion.position
+			if _scale_start != null:
+				scale_hover.emit(_scale_start, _scale_lonlat(motion.position))
+			_overlay.queue_redraw()
+		elif tool in ["terrain", "fortification", "climate"] and not _sketch.is_empty():
 			_overlay.hover = motion.position
 			_overlay.queue_redraw()
 		elif tool == "draw":
@@ -1293,7 +1353,7 @@ func _motion(motion: InputEventMouseMotion) -> void:
 			_halo = _shared_halo(motion.position)
 			_overlay.queue_redraw()
 		"reference":
-			_reference_move(motion.position)
+			_reference_move(motion.position, motion.shift_pressed)
 		"freehand":
 			_freehand.append(motion.position)
 			_overlay.queue_redraw()
@@ -1439,6 +1499,19 @@ func _click(button: InputEventMouseButton) -> void:
 					return
 			var previous: Variant = draw_points[draw_points.size() - 1] if not draw_points.is_empty() else null
 			draw_point_requested.emit(world_to_lonlat(screen_to_world(point)), previous)
+		"scale":
+			if button.shift_pressed or button.ctrl_pressed or button.alt_pressed or button.meta_pressed:
+				return
+			var lonlat := _scale_lonlat(point)
+			if _scale_start == null:
+				_scale_start = lonlat
+				scale_sketch_label = ""
+			else:
+				var from: Vector2 = _scale_start
+				_scale_start = null
+				scale_sketch_label = ""
+				scale_drawn.emit(from, lonlat)
+			_overlay.queue_redraw()
 		"terrain", "fortification", "climate":
 			if _sketch.is_empty():
 				var shape := war_shape_near(point, [tool])
@@ -1550,6 +1623,47 @@ func _draw_overlay(canvas: Control) -> void:
 			hover = (canvas as Overlay).hover
 			line.append(hover)
 		_sketch_shape(canvas, line, _sketch_kind != "fortification", hover)
+	if not scale_line.is_empty():
+		_draw_scale_line(canvas, screen_of(scale_line["from"]), screen_of(scale_line["to"]), str(scale_line.get("label", "")))
+	if tool == "scale":
+		if _scale_start != null and _scale_cursor.x >= 0.0:
+			_draw_scale_line(canvas, screen_of(_scale_start), _scale_cursor, scale_sketch_label)
+		if _scale_cursor.x >= 0.0:
+			canvas.draw_circle(_scale_cursor, 5.0, WorkshopUI.ACCENT, true, -1.0, true)
+			canvas.draw_arc(_scale_cursor, 5.0, 0.0, TAU, 24, SCALE_INK, 1.5, true)
+
+
+func _scale_lonlat(point: Vector2) -> Vector2:
+	var lonlat := world_to_lonlat(screen_to_world(point))
+	return Vector2(snappedf(lonlat.x, 0.00001), snappedf(lonlat.y, 0.00001))
+
+
+func _draw_scale_line(canvas: Control, first: Vector2, last: Vector2, label: String) -> void:
+	if first.distance_to(last) < 0.5:
+		return
+	var along := (last - first).normalized()
+	canvas.draw_line(first, last, Color(0, 0, 0, 0.75), 6.0)
+	var length := first.distance_to(last)
+	var at := 0.0
+	while at < length:
+		var stop := minf(at + 14.0, length)
+		canvas.draw_line(first + along * at, first + along * stop, WorkshopUI.ACCENT, 3.0)
+		at += 20.0
+	var across := Vector2(-along.y, along.x) * SCALE_BAR_PX
+	for end in [first, last]:
+		var tip: Vector2 = end
+		canvas.draw_line(tip - across, tip + across, WorkshopUI.ACCENT, 3.0, true)
+		canvas.draw_circle(tip - across, 1.5, WorkshopUI.ACCENT, true, -1.0, true)
+		canvas.draw_circle(tip + across, 1.5, WorkshopUI.ACCENT, true, -1.0, true)
+	if label.is_empty():
+		return
+	var font := UI.font(700)
+	var width := font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, 12).x
+	var height := font.get_height(12)
+	var middle := (first + last) * 0.5 + Vector2(0, -16)
+	var box := Rect2(middle - Vector2(width * 0.5 + 6.0, height * 0.5 + 3.0), Vector2(width + 12.0, height + 6.0))
+	canvas.draw_rect(box, WorkshopUI.ACCENT, true)
+	canvas.draw_string(font, Vector2(middle.x - width * 0.5, middle.y + (font.get_ascent(12) - font.get_descent(12)) * 0.5), label, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, SCALE_INK)
 
 
 func _sketch_shape(canvas: Control, points: PackedVector2Array, area: bool, cursor: Vector2) -> void:
