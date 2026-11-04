@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   CHIEF_ADVISOR_THREAD,
+  ADVISOR_RECIPIENT_TYPES,
+  advisorRecipientType,
+  assertAdvisorRecipientCanReply,
+  advisorRecipientForReply,
   chiefAdvisorProfile,
   saveChiefAdvisorProfile,
   resetChiefAdvisorProfile,
@@ -190,4 +194,93 @@ test("Political World PM/head-of-state binding pins a person, never floats to th
   const legacy = { ...contact, binding: { polity: "Russia", office: "headOfGovernment", name: "Marina Voronina" } };
   assert.equal(advisorOfficeStatus(legacy, world("Marina Voronina")), "current");
   assert.equal(advisorOfficeStatus(legacy, world("New PM")), "changed");
+});
+
+test("legacy contacts default to Advisor/Minister without rewriting saved profiles or history", () => {
+  const legacy = [
+    { role: "user", text: "Chief's established conversation" },
+    { role: "advisor-contact", id: "advisor-minister-legacy", name: "Viktor", title: "Finance Minister", personality: "Skeptical", archived: false },
+    { role: "user", threadId: "advisor-minister-legacy", text: "Private finance discussion" },
+  ];
+  const saved = structuredClone(legacy);
+  const contact = advisorContacts(legacy)[0];
+  assert.equal(advisorRecipientType(contact), ADVISOR_RECIPIENT_TYPES.MINISTER);
+  assert.equal(Object.hasOwn(contact, "recipientType"), false);
+  assert.doesNotThrow(() => assertAdvisorRecipientCanReply(contact.id, contact));
+  assert.deepEqual(replaceAdvisorThread(legacy, CHIEF_ADVISOR_THREAD, advisorMessagesFor(legacy)), legacy);
+  assert.deepEqual(legacy, saved);
+});
+
+test("manually created historical and faction characters retain their distinct recipient types", () => {
+  for (const [type, name, title, id] of [
+    [ADVISOR_RECIPIENT_TYPES.FOREIGN_OFFICIAL, "Wilhelm II", "German Emperor", "advisor-wilhelm-1912"],
+    [ADVISOR_RECIPIENT_TYPES.CIVILIAN, "Nadezhda", "Russian revolutionary organizer", "advisor-nadezhda-1912"],
+    [ADVISOR_RECIPIENT_TYPES.OTHER_CHARACTER, "Representatives of the movement", "Revolutionary delegation", "advisor-movement-1912"],
+  ]) {
+    const created = createAdvisorContact([], { id, name, title, personality: "Independent judgment", recipientType: type });
+    const profile = advisorContacts(created)[0];
+    assert.equal(advisorRecipientType(profile), type);
+    assert.equal(profile.binding, undefined);
+    assert.doesNotThrow(() => assertAdvisorRecipientCanReply(id, profile));
+    const withHistory = replaceAdvisorThread(created, id, [m("user", "Hello")]);
+    const edited = reviseAdvisorContact(withHistory, id, { name, title, personality: "Persistent identity", recipientType: type });
+    assert.equal(advisorRecipientType(advisorContacts(edited)[0]), type);
+    const restored = archiveAdvisorContact(archiveAdvisorContact(edited, id, true), id, false);
+    assert.equal(advisorRecipientType(advisorContacts(restored)[0]), type);
+    assert.deepEqual(advisorMessagesFor(restored, id).map((entry) => entry.text), ["Hello"]);
+  }
+});
+
+test("a contact with conversation history cannot be reclassified into a different knowledge domain", () => {
+  const minister = make();
+  const id = "advisor-marina-001";
+  const withHistory = replaceAdvisorThread(minister, id, [m("user", "Confidential treasury schedule")]);
+  assert.throws(() => reviseAdvisorContact(withHistory, id, {
+    name: "Marina", title: "Finance Minister", recipientType: ADVISOR_RECIPIENT_TYPES.CIVILIAN, personality: "",
+  }), /conversation history/);
+  assert.equal(advisorRecipientType(advisorContacts(withHistory)[0]), ADVISOR_RECIPIENT_TYPES.MINISTER);
+  assert.deepEqual(advisorMessagesFor(withHistory, id).map((entry) => entry.text), ["Confidential treasury schedule"]);
+  const beforeSpeaking = reviseAdvisorContact(minister, id, {
+    name: "Marina", title: "Finance Minister", recipientType: ADVISOR_RECIPIENT_TYPES.CIVILIAN, personality: "",
+  });
+  assert.equal(advisorRecipientType(advisorContacts(beforeSpeaking)[0]), ADVISOR_RECIPIENT_TYPES.CIVILIAN);
+});
+
+test("recipient types fail closed: invalid types, wrong thread, unsupported conversations and forged bindings", () => {
+  assert.equal(advisorRecipientType({ recipientType: "unknown" }), null);
+  assert.equal(advisorRecipientType({ recipientType: "" }), null);
+  assert.throws(() => createAdvisorContact([], {
+    id: "advisor-bad-type-01", name: "Someone", title: "Someone", recipientType: "foreign-official-ish",
+  }), /recipient type/);
+  assert.throws(() => createAdvisorContact([], {
+    id: "advisor-foreign-01", name: "Wilhelm II", title: "Emperor", recipientType: ADVISOR_RECIPIENT_TYPES.FOREIGN_OFFICIAL,
+    binding: { polity: "Germany", office: "headOfState", name: "Wilhelm II" },
+  }), /Political World.*Advisor/);
+  const office = politicalAdvisorOffices(world("Marina Voronina", "pm-17"), "Russia")[0];
+  const bound = advisorContacts(createAdvisorContact([], { id: "advisor-bound-001", ...office }))[0];
+  assert.throws(() => reviseAdvisorContact([bound], bound.id, {
+    name: bound.name, title: bound.title, recipientType: ADVISOR_RECIPIENT_TYPES.CIVILIAN,
+  }), /Political World.*Advisor/);
+  assert.throws(() => assertAdvisorRecipientCanReply("advisor-wrong-001", bound), /identity mismatch/);
+  assert.throws(() => assertAdvisorRecipientCanReply("advisor-missing-001", null), /not available/);
+  assert.throws(() => assertAdvisorRecipientCanReply(CHIEF_ADVISOR_THREAD, bound), /chief advisor/);
+  assert.doesNotThrow(() => assertAdvisorRecipientCanReply(CHIEF_ADVISOR_THREAD, null));
+  assert.throws(() => assertAdvisorRecipientCanReply("advisor-missing-001", {
+    id: "advisor-missing-001", recipientType: "bogus",
+  }), /unsupported/);
+});
+
+test("the AI resolves the canonical recipient rather than accepting a forged or stale profile", () => {
+  const saved = createAdvisorContact([], {
+    id: "advisor-foreign-001", name: "George V", title: "British monarch",
+    recipientType: ADVISOR_RECIPIENT_TYPES.FOREIGN_OFFICIAL,
+  });
+  const stored = advisorContacts(saved)[0];
+  assert.deepEqual(advisorRecipientForReply(saved, stored.id, stored), stored);
+  assert.throws(() => advisorRecipientForReply(saved, stored.id, { ...stored, recipientType: ADVISOR_RECIPIENT_TYPES.MINISTER }), /changed or unavailable/);
+  assert.throws(() => advisorRecipientForReply(saved, stored.id, { ...stored, name: "Wilhelm II" }), /changed or unavailable/);
+  assert.throws(() => advisorRecipientForReply([], stored.id, stored), /changed or unavailable/);
+  const retired = archiveAdvisorContact(saved, stored.id, true);
+  assert.throws(() => advisorRecipientForReply(retired, stored.id, stored), /retired/);
+  assert.equal(advisorRecipientForReply(saved, CHIEF_ADVISOR_THREAD, null), null);
 });

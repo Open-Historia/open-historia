@@ -147,8 +147,9 @@ import { describeDocumentsForAdvisor } from "../../runtime/reportDelivery.js";
 import { viewAsSeen } from "../../runtime/gameState.js";
 import { withCatchUp } from "./conversationCatchUp.js";
 import { ADVISOR_MEMORY_DIRECTIVE, advisorMemoryContextEntry, latestAdvisorMemory, splitAdvisorMemory } from "./advisorMemory.js";
-import { advisorOfficeStatus, chiefAdvisorProfile } from "../../runtime/advisorThreads.js";
+import { ADVISOR_RECIPIENT_TYPES, advisorOfficeStatus, advisorRecipientForReply, advisorRecipientType, assertAdvisorRecipientCanReply, chiefAdvisorProfile } from "../../runtime/advisorThreads.js";
 import { describeChiefAdvisorOverride } from "./advisorPersona.js";
+import { buildCharacterSystemPrompt } from "./characterConversations.js";
 import { createConversationGeneration, removeEntry } from "./liveConversation.js";
 import { createAdvisorSessionRegistry } from "./advisorSessions.js";
 import { buildDiplomaticPoliticalContext } from "./diplomaticPoliticalContext.js";
@@ -3758,6 +3759,25 @@ async function describePlayerStatsForAdvisor(worldData, country) {
 }
 
 async function buildAdvisorSystemPrompt({ recipient = null } = {}) {
+    if (recipient && advisorRecipientType(recipient) !== ADVISOR_RECIPIENT_TYPES.MINISTER) {
+        // This branch deliberately reads NO actions, private diplomatic chats,
+        // Advisor transcripts or prompt pack. World is used only by viewAsSeen
+        // to exclude unrevealed events, never fed to the character prompt.
+        const [savedGame, savedEvents, savedWorld] = await Promise.all([
+            readJson(JSON_URLS.game, { defaultValue: {} }),
+            readJson(JSON_URLS.events, { defaultValue: [] }),
+            readJson(JSON_URLS.world, { defaultValue: {} }),
+        ]);
+        const visible = await viewAsSeen({ game: savedGame, events: savedEvents, world: savedWorld });
+        return {
+            systemPrompt: `${buildCharacterSystemPrompt({
+                recipient,
+                gameData: visible.game,
+                eventData: visible.events,
+            })}\n\n${chatLanguageDirective()}`,
+            lookups: null,
+        };
+    }
     await ensurePromptsLoaded();
     const [savedGame, actionData, savedChats, savedWorld, savedEvents, advisorData] = await Promise.all([
         readJson(JSON_URLS.game, { defaultValue: {} }),
@@ -4091,13 +4111,21 @@ function compactConversationHistory(history) {
 // ahead of what the player typed; it goes no further than this history.
 export async function sendMessage(userMessage, options) {
     const { catchUp = "", threadId = "chief", recipient = null, ...opts } = options || {};
+    // The persisted contact, not an arbitrary UI profile, selects the prompt
+    // audience. Resolve it before reading government context or calling AI.
+    const storedRecipient = threadId === "chief" ? null : advisorRecipientForReply(
+        await readJson(JSON_URLS.advisor, { defaultValue: [], force: true }),
+        threadId, recipient,
+    );
+    assertAdvisorRecipientCanReply(threadId, storedRecipient);
+    const character = storedRecipient && advisorRecipientType(storedRecipient) !== ADVISOR_RECIPIENT_TYPES.MINISTER;
     const state = advisorState(threadId);
     // The conversation this reply is for, and its history, taken before the
     // first await. Another contact can be opened without replacing this state.
     const conversation = state.conversation.current();
     const priorHistory = state.history;
     const memoryContext = advisorMemoryContextEntry(state.memory);
-    const { systemPrompt, lookups } = await buildAdvisorSystemPrompt({ recipient });
+    const { systemPrompt, lookups } = await buildAdvisorSystemPrompt({ recipient: storedRecipient });
     const asked = { role: "user", parts: [{ text: withCatchUp(userMessage, catchUp) }] };
     const history = compactConversationHistory([...priorHistory, asked]);
     if (state.conversation.isCurrent(conversation)) state.history = history;
@@ -4113,7 +4141,11 @@ export async function sendMessage(userMessage, options) {
         // maxTokens 8192 caps the reply; onChunk (passed by the advisor UI) streams
         // it token-by-token. Providers that can't stream still return the full reply
         // here, so the advisor works either way.
-        const reply = await callAI(systemPrompt, [...(memoryContext ? [memoryContext] : []), ...history], { maxTokens: 8192, ...opts, languageMode: "chat", logLabel: "advisor", taskKey: "advisor", agentKind: "advisor", ...(lookups ? { lookups } : {}) });
+        // Character calls cannot be handed caller-supplied tools/options: only
+        // the streaming callback is forwarded. Minister/chief options remain
+        // unchanged for compatibility.
+        const callOptions = character ? { onChunk: opts.onChunk } : opts;
+        const reply = await callAI(systemPrompt, [...(memoryContext ? [memoryContext] : []), ...history], { maxTokens: 8192, ...callOptions, languageMode: "chat", logLabel: "advisor", taskKey: "advisor", agentKind: "advisor", ...(lookups ? { lookups } : {}) });
         // The memory line comes off before the reply joins the history: the
         // model is given it once, ahead of the turns. A reply that dropped it
         // keeps the last one. The raw reply goes back to the panel, which

@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { ADVISOR_PERSONALITY_MAX_CHARS, CHIEF_ADVISOR_THREAD } from "../../runtime/advisorThreads.js";
+import { ADVISOR_PERSONALITY_MAX_CHARS, ADVISOR_RECIPIENT_TYPES, ADVISOR_RECIPIENT_TYPE_LABELS, CHIEF_ADVISOR_THREAD, advisorRecipientType } from "../../runtime/advisorThreads.js";
 
 const field = {
   background: "rgba(0,0,0,0.22)", border: "1px solid rgba(255,255,255,0.17)",
@@ -12,7 +12,7 @@ const button = {
   borderRadius: 7, color: "#e2e8f0", cursor: "pointer",
   fontFamily: "inherit", fontSize: "0.72rem", padding: "0.4rem 0.55rem",
 };
-const blank = () => ({ name: "", title: "", personality: "", binding: null, officeKey: "" });
+const blank = () => ({ name: "", title: "", personality: "", recipientType: ADVISOR_RECIPIENT_TYPES.MINISTER, binding: null, officeKey: "" });
 
 export default function AdvisorRecipients({
   contacts, activeId, chiefProfile, offices, statusOf, busy = false, onSelect, onCreate, onRevise, onArchive, onSaveChief, onResetChief,
@@ -31,7 +31,7 @@ export default function AdvisorRecipients({
   const openEditor = (contact = null) => {
     if (busy || saving) return;
     setEditor(contact?.id || "new");
-    setDraft(contact ? { name: contact.name, title: contact.title, personality: contact.personality || "", binding: contact.binding || null, officeKey: "" } : blank());
+    setDraft(contact ? { name: contact.name, title: contact.title, personality: contact.personality || "", recipientType: advisorRecipientType(contact) || "", binding: contact.binding || null, officeKey: "" } : blank());
     setConfirmArchive("");
     setError("");
     setExpanded(true);
@@ -107,6 +107,11 @@ export default function AdvisorRecipients({
         <button type="button" disabled={busy || saving} onClick={() => openEditor()} title="Add an official or advisor" style={{ ...button, opacity: busy ? 0.5 : 1 }} aria-label="Add advisor recipient">+ Contact</button>
       </div>
       {(selected || chiefProfile) && <div style={{ ...subtle, marginTop: 3 }}>{selected ? selected.title : chiefTitle}{selected?.binding ? " · Political World" : ""}</div>}
+      {selected && advisorRecipientType(selected) !== ADVISOR_RECIPIENT_TYPES.MINISTER && (
+        <div role="status" style={{ ...subtle, marginTop: 5 }}>
+          This character uses only the public scenario timeline and their own conversation history. Private government records and diplomacy are not shared.
+        </div>
+      )}
       {expanded && (
         <div style={{ maxHeight: "min(58vh, 410px)", overflowY: "auto", paddingTop: 8, display: "flex", flexDirection: "column", gap: 5 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
@@ -123,7 +128,7 @@ export default function AdvisorRecipients({
                 <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
                   <button type="button" disabled={busy || saving} onClick={() => { onSelect(contact.id); setEditor(null); setConfirmArchive(""); }} style={{ ...button, flex: 1, minWidth: 0, textAlign: "left", background: activeId === contact.id ? "rgba(59,130,246,0.24)" : button.background }}>
                     <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{contact.name} {contact.archived ? "· Retired" : ""}</div>
-                    <div style={subtle}>{contact.title}{["changed", "vacant"].includes(officeStatus) ? " · No longer in office" : ""}</div>
+                    <div style={subtle}>{contact.title} · {ADVISOR_RECIPIENT_TYPE_LABELS[advisorRecipientType(contact)] || "Unsupported recipient type"}{["changed", "vacant"].includes(officeStatus) ? " · No longer in office" : ""}</div>
                   </button>
                   <button type="button" disabled={busy || saving} title={"Edit " + contact.name} onClick={() => openEditor(contact)} style={button}>Edit</button>
                   <button type="button" disabled={busy || saving} title={contact.archived ? "Restore contact" : "Retire contact"} onClick={() => contact.archived ? retire(contact, false) : (setConfirmArchive(contact.id), setError(""))} style={button}>
@@ -151,7 +156,20 @@ export default function AdvisorRecipients({
           {editor && (
             <div style={{ border: "1px solid rgba(96,165,250,0.4)", borderRadius: 9, display: "flex", flexDirection: "column", gap: 7, padding: 9 }}>
               <strong style={{ fontSize: "0.75rem" }}>{editor === "new" ? "Add recipient" : editor === "chief" ? "Edit chief advisor" : "Edit recipient"}</strong>
-              {editor === "new" && (
+              {editor !== "chief" && (
+                <label style={subtle}>Recipient type
+                  <select style={field} value={draft.recipientType} disabled={busy || saving || Boolean(draft.binding)} onChange={(event) => setDraft((old) => ({
+                    ...old, recipientType: event.target.value, binding: null, officeKey: "",
+                  }))}>
+                    {!ADVISOR_RECIPIENT_TYPE_LABELS[draft.recipientType] && <option value="">Unsupported recipient type</option>}
+                    {Object.entries(ADVISOR_RECIPIENT_TYPE_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                  </select>
+                </label>
+              )}
+              {editor !== "chief" && editor !== "new" && (
+                <div style={subtle}>Recipient type can only change before conversation history exists.</div>
+              )}
+              {editor === "new" && draft.recipientType === ADVISOR_RECIPIENT_TYPES.MINISTER && (
                 <label style={subtle}>Link to Political World (optional)
                   <select style={field} value={draft.officeKey || ""} disabled={busy || saving} onChange={(event) => chooseOffice(event.target.value)}>
                     <option value="">Independent / custom official</option>
@@ -162,7 +180,7 @@ export default function AdvisorRecipients({
               <label style={subtle}>Name
                 <input style={field} maxLength={100} readOnly={Boolean(draft.binding)} title={draft.binding ? "Linked officeholder identity is fixed" : undefined} value={draft.name} onChange={(event) => setDraft((old) => ({ ...old, name: event.target.value }))} />
               </label>
-              <label style={subtle}>{editor === "chief" ? "Position / title" : "Government position"}
+              <label style={subtle}>{editor === "chief" ? "Position / title" : draft.recipientType === ADVISOR_RECIPIENT_TYPES.MINISTER ? "Government position" : "Position / role"}
                 <input style={field} maxLength={120} value={draft.title} onChange={(event) => setDraft((old) => ({ ...old, title: event.target.value }))} />
               </label>
               <label style={subtle}>Personality and principles
@@ -172,6 +190,9 @@ export default function AdvisorRecipients({
                 </div>
               </label>
               {draft.binding && <div style={subtle}>Linked to {draft.binding.office === "headOfGovernment" ? "head of government" : "head of state"}: {draft.binding.name}. A replacement will not inherit this conversation.</div>}
+              {editor !== "chief" && draft.recipientType !== ADVISOR_RECIPIENT_TYPES.MINISTER && (
+                <div style={subtle}>You can speak with this character without a Political World office. Only public scenario information is available to them.</div>
+              )}
               {error && <div role="alert" style={{ color: "#fca5a5", fontSize: "0.72rem" }}>{error}</div>}
               <div style={{ display: "flex", gap: 7 }}>
                 <button type="button" disabled={busy || saving || !draft.name.trim() || !draft.title.trim()} onClick={submit} style={button}>{saving ? "Saving…" : editor === "chief" ? "Save chief advisor" : "Save recipient"}</button>

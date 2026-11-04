@@ -12,7 +12,7 @@ import { isComposerSendKey } from "../../runtime/composerKeys.js";
 import { chatLanguageDiffersFromUi, chatTextDirection } from "../../runtime/i18n.js";
 import { uiString } from "../../runtime/translator.js";
 import { applyProjectOpsToWorld, mutateAdvisorState, normalizeActionEntry, readActionsState, readAdvisorMessages, readWorldState, viewAsSeen, writeActionsState, writeWorldState } from "../../runtime/gameState.js";
-import { CHIEF_ADVISOR_THREAD, advisorContacts, advisorMessagesFor, advisorOfficeStatus, archiveAdvisorContact, chiefAdvisorProfile, createAdvisorContact, politicalAdvisorOffices, replaceAdvisorThread, resetChiefAdvisorProfile, reviseAdvisorContact, saveChiefAdvisorProfile } from "../../runtime/advisorThreads.js";
+import { ADVISOR_RECIPIENT_TYPES, CHIEF_ADVISOR_THREAD, advisorContacts, advisorMessagesFor, advisorOfficeStatus, advisorRecipientType, archiveAdvisorContact, chiefAdvisorProfile, createAdvisorContact, politicalAdvisorOffices, replaceAdvisorThread, resetChiefAdvisorProfile, reviseAdvisorContact, saveChiefAdvisorProfile } from "../../runtime/advisorThreads.js";
 import StorageProblemNotice from "./storageProblemNotice.jsx";
 import AdvisorRecipients from "./AdvisorRecipients.jsx";
 import { describeReplyProblems, extractFencedJson, looksLikeProjectOps, planAdvisorActionEdits } from "./advisorBlocks.js";
@@ -23,6 +23,7 @@ import { parseAdvisorReply } from "./advisorReply.js";
 import { ADVISOR_SLIDE } from "./advisorSlide.js";
 import Markdown, { MarkdownStyleInjector } from "./markdown.jsx";
 import { buildCatchUpNote } from "../AI/conversationCatchUp.js";
+import { publicCharacterEvents } from "../AI/characterConversations.js";
 import { splitAdvisorMemory, stripAdvisorMemory } from "../AI/advisorMemory.js";
 import { commitWithVotingRuleBackfill } from "../AI/institutionGovernanceRetry.js";
 import { gmChangesSince } from "../../runtime/gmChanges.js";
@@ -768,7 +769,7 @@ const readSeenMoment = async (gameDate) => {
 // the time that passed, the newest events since, and the Game Master's changes by
 // hand. A fresh conversation has nothing to catch up on — it reads the present.
 // A note that cannot be built is no note: the question still goes.
-const buildAdvisorCatchUp = async (messages, moment) => {
+const buildAdvisorCatchUp = async (messages, moment, { publicOnly = false } = {}) => {
     const previous = [...(Array.isArray(messages) ? messages : [])].reverse()
         .find((msg) => (msg.role === "user" || msg.role === "advisor") && !msg.streaming);
     if (!previous) return { text: "", label: "" };
@@ -777,11 +778,14 @@ const buildAdvisorCatchUp = async (messages, moment) => {
         return buildCatchUpNote({
             previousDate: previous.time || "",
             currentDate: date || "",
-            events,
-            gmChanges: previous.at ? gmChangesSince(world, previous.at) : [],
+            // Character contacts get PUBLIC timeline changes only. Private
+            // Game Master edits, scoped intelligence events and receipts are
+            // never injected through a system-side catch-up message.
+            events: publicOnly ? publicCharacterEvents(events, { gameDate: date }) : events,
+            gmChanges: publicOnly ? [] : previous.at ? gmChangesSince(world, previous.at) : [],
             // The advisor's receipt for its own last reply: a chart not drawn, a
             // block that half landed.
-            replyProblems: previous.role === "advisor" ? describeReplyProblems(previous) : [],
+            replyProblems: !publicOnly && previous.role === "advisor" ? describeReplyProblems(previous) : [],
             compareDates: compareGameDates,
             formatDate: (value) => formatGameDateReadable(value),
         });
@@ -815,7 +819,7 @@ const formatAdvisorDate = (dateStr) => {
 // new message appended, or the streaming placeholder being replaced); memo's
 // default shallow prop comparison skips everything else, including every
 // keystroke in the composer below.
-const AdvisorMessageRow = React.memo(({ msg, msgIndex, speakerName = "Advisor", canExecute = true, allowedUnitTypes, chatDiffers, chatDir, onOpenActions, onOpenProjects, onRetryProjects, onRetry, retrying, onDraftMessage, onExecuteInstitutionDraft, onPlaceDeployment }) => {
+const AdvisorMessageRow = React.memo(({ msg, msgIndex, speakerName = "Advisor", canExecute = true, canDraft = true, allowedUnitTypes, chatDiffers, chatDir, onOpenActions, onOpenProjects, onRetryProjects, onRetry, retrying, onDraftMessage, onExecuteInstitutionDraft, onPlaceDeployment }) => {
     const { text, chartConfig, chartProblem, messageDrafts, institutionDrafts, deployments } = msg.role === "advisor"
         ? parseAdvisorReply(msg.text, { allowedUnitTypes: allowedUnitTypes ? allowedUnitTypes.split(",") : null, streaming: Boolean(msg.streaming) })
         : { text: msg.text, chartConfig: null, chartProblem: "", messageDrafts: null, institutionDrafts: null, deployments: null };
@@ -849,8 +853,8 @@ const AdvisorMessageRow = React.memo(({ msg, msgIndex, speakerName = "Advisor", 
             <AdvisorReplyBody
             text={text}
             written={msg.role === "advisor"}
-            drafts={messageDrafts}
-            onDraftMessage={onDraftMessage}
+            drafts={canDraft ? messageDrafts : null}
+            onDraftMessage={canDraft ? onDraftMessage : undefined}
             />
         )}
         {chartConfig && <AdvisorChart config={chartConfig} />}
@@ -972,11 +976,11 @@ const ADVISOR_RENDER_WINDOW_STEP = 20;
 // Only the last `visibleLimit` messages are drawn. `i` stays the index into
 // the WHOLE transcript: placedDeployments and completedInstitutionDrafts are
 // written back through it.
-const AdvisorMessageList = React.memo(({ messages, visibleLimit, onShowEarlier, isLoading, speakerName = "Advisor", canExecute = true, allowedUnitTypes, chatDiffers, chatDir, onOpenActions, onOpenProjects, onRetryProjects, onRetry, retrying, onDraftMessage, onExecuteInstitutionDraft, onPlaceDeployment, messagesEndRef, containerRef, onScroll }) => (
+const AdvisorMessageList = React.memo(({ messages, visibleLimit, onShowEarlier, isLoading, speakerName = "Advisor", emptyMessage = "No messages yet. Ask your advisor something!", canExecute = true, canDraft = true, allowedUnitTypes, chatDiffers, chatDir, onOpenActions, onOpenProjects, onRetryProjects, onRetry, retrying, onDraftMessage, onExecuteInstitutionDraft, onPlaceDeployment, messagesEndRef, containerRef, onScroll }) => (
     <div ref={containerRef} onScroll={onScroll} style={{ padding: "0.75rem", flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", gap: "1rem", scrollbarWidth: "none" }}>
     {messages.length === 0 && (
         <p style={{ fontSize: "0.85rem", color: "rgba(255,255,255,0.5)", marginTop: 0 }}>
-        No messages yet. Ask your advisor something!
+        {emptyMessage}
         </p>
     )}
 
@@ -999,7 +1003,7 @@ const AdvisorMessageList = React.memo(({ messages, visibleLimit, onShowEarlier, 
     {messages.map((msg, i) => (i < messages.length - visibleLimit ? null : msg.role === "notice"
         ? <AdvisorDocumentNotice key={msg.id || i} notice={msg} />
         : (
-        <AdvisorMessageRow key={i} msg={msg} msgIndex={i} speakerName={speakerName} canExecute={canExecute} allowedUnitTypes={allowedUnitTypes} chatDiffers={chatDiffers} chatDir={chatDir} onOpenActions={onOpenActions} onOpenProjects={onOpenProjects} onRetryProjects={onRetryProjects} onDraftMessage={onDraftMessage} onExecuteInstitutionDraft={onExecuteInstitutionDraft} onPlaceDeployment={onPlaceDeployment}
+        <AdvisorMessageRow key={i} msg={msg} msgIndex={i} speakerName={speakerName} canExecute={canExecute} canDraft={canDraft} allowedUnitTypes={allowedUnitTypes} chatDiffers={chatDiffers} chatDir={chatDir} onOpenActions={onOpenActions} onOpenProjects={onOpenProjects} onRetryProjects={onRetryProjects} onDraftMessage={onDraftMessage} onExecuteInstitutionDraft={onExecuteInstitutionDraft} onPlaceDeployment={onPlaceDeployment}
         onRetry={i === messages.length - 1 && msg.role === "error" ? onRetry : undefined} retrying={retrying} />
     )))}
 
@@ -1038,7 +1042,12 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
     const politicalWorld = useRuntimeState("world", (world) => world || {});
     const offices = React.useMemo(() => politicalAdvisorOffices(politicalWorld, playerPolity), [politicalWorld, playerPolity]);
     const selectedContact = contacts.find((contact) => contact.id === activeThreadId) || null;
-    const recipientLocked = Boolean(selectedContact?.archived);
+    const recipientUnavailableReason = selectedContact?.archived
+        ? "This contact is retired — restore to reply"
+        : selectedContact && !advisorRecipientType(selectedContact)
+            ? "Unsupported recipient type — cannot open conversation"
+            : "";
+    const recipientLocked = Boolean(recipientUnavailableReason);
     const messagesEndRef            = useRef(null);
     const [visibleMessageLimit, setVisibleMessageLimit] = useState(ADVISOR_INITIAL_RENDER_WINDOW);
     const handleShowEarlier = React.useCallback(() => {
@@ -1373,7 +1382,9 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         const askedOn = moment.date || gameDate;
         const catchUp = replaceTrailingError
             ? { text: askedBefore?.catchUp || "", label: askedBefore?.catchUpLabel || "" }
-            : await buildAdvisorCatchUp(messagesRef.current, moment);
+            : await buildAdvisorCatchUp(messagesRef.current, moment, {
+                publicOnly: Boolean(recipient && advisorRecipientType(recipient) !== ADVISOR_RECIPIENT_TYPES.MINISTER),
+            });
 
         // A fresh question re-engages auto-scroll even if the player had
         // paused it reading up through history — the pause is scoped to the
@@ -1902,7 +1913,9 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         <AdvisorMessageList
         messages={messages}
         speakerName={selectedContact?.name || chiefProfile?.name || "Advisor"}
+        emptyMessage={selectedContact && advisorRecipientType(selectedContact) !== ADVISOR_RECIPIENT_TYPES.MINISTER ? "No messages yet. Start your conversation." : "No messages yet. Ask your advisor something!"}
         canExecute={activeThreadId === CHIEF_ADVISOR_THREAD}
+        canDraft={activeThreadId === CHIEF_ADVISOR_THREAD || advisorRecipientType(selectedContact) === ADVISOR_RECIPIENT_TYPES.MINISTER}
         visibleLimit={visibleMessageLimit}
         onShowEarlier={handleShowEarlier}
         isLoading={isLoading}
@@ -1927,7 +1940,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         <textarea
         ref={inputRef}
         // A phone's keyboard has no Shift+Enter to speak of.
-        placeholder={recipientLocked ? "This contact is retired — restore to reply" : selectedContact ? `Message ${selectedContact.name}…` : chiefProfile ? `Message ${chiefProfile.name}…` : isTouch ? "Ask your advisor…" : "Ask your advisor…  (Shift+Enter for a new line)"}
+        placeholder={recipientUnavailableReason || (selectedContact ? `Message ${selectedContact.name}…` : chiefProfile ? `Message ${chiefProfile.name}…` : isTouch ? "Ask your advisor…" : "Ask your advisor…  (Shift+Enter for a new line)")}
         rows={1} value={input}
         disabled={recipientLocked}
         enterKeyHint="enter"
