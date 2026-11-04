@@ -89,10 +89,9 @@ static func page(banner: Dictionary, update: Dictionary, ctx: Dictionary) -> Con
 	var narrow: bool = ctx.get("narrow", false)
 	var width: float = ctx.get("width", 1440.0)
 	var plate := UpdateKit.plate({"background": NIGHT, "border": Color(233 / 255.0, 227 / 255.0, 207 / 255.0, 0.22), "radius": 6.0, "padding": Vector4(1, 1, 1, 1)}, still)
-	UpdateKit.brackets(plate, FLAK, px(0.7), px(1.6), 1.5)
+	UpdateKit.brackets(plate, FLAK, px(0.7), px(1.6), 1.5, true)
 	var column := UpdateKit.vbox(0)
 	var holder := UpdateKit.frame(px(11.0) if narrow else ShellFonts.clamp_vw(12.0, 25.0, 16.0, width), 3.0, FLAK)
-	holder.z_index = 1
 	holder.add_child(sky(still))
 	column.add_child(UpdateKit.reveal(holder, 150.0, still))
 	var body := UpdateKit.vbox(0)

@@ -257,6 +257,17 @@ func _find(node: Node, test: Callable) -> Node:
 	return null
 
 
+func _highest_z(node: Node, base := 0) -> int:
+	var z := base
+	if node is CanvasItem:
+		var item := node as CanvasItem
+		z = base + item.z_index if item.z_as_relative else item.z_index
+	var top := z
+	for child in node.get_children():
+		top = maxi(top, _highest_z(child, z))
+	return top
+
+
 func _themes(shell: ShellBoot) -> void:
 	var reply: Dictionary = await main.engine.request("shell.updates")
 	var listed: Array = reply.get("result", {}).get("updates", [])
@@ -312,6 +323,7 @@ func _themes(shell: ShellBoot) -> void:
 	shell.overlay.add_child(every)
 	await every.setup(main.engine, since, {"reduceMotion": true})
 	var unread: PackedStringArray = []
+	var raised: PackedStringArray = []
 	for index in range(every.page_count()):
 		every.show_page(index)
 		await _frames(3)
@@ -319,7 +331,10 @@ func _themes(shell: ShellBoot) -> void:
 		var title := str((page["banner"] as Dictionary).get("title", ""))
 		if not Array(_texts(every, PackedStringArray())).any(func(value: String) -> bool: return value.contains(title)):
 			unread.append(str(page.get("key", "")))
+		if _highest_z(every) > 0:
+			raised.append(str(page.get("key", "")))
 	_check("every notice since the native editor map's renders, %d pages" % every.page_count(), since.size() > 20 and every.page_count() >= since.size() and unread.is_empty(), ", ".join(unread))
+	_check("no notice page draws above the vault door", raised.is_empty(), ", ".join(raised))
 	every.show_page(0)
 	await _wait(0.4)
 	await _shoot("s-44-every-new-notice-first")
@@ -448,9 +463,15 @@ func _boot_door(shell: ShellBoot) -> void:
 	await _shoot("s-05-door-bolts")
 	await _until(func() -> bool: return Time.get_ticks_msec() - clicked >= 2450, 3.0)
 	await _shoot("s-06-door-opening-30")
-	_check("the notice is mounted as the leaves part", shell.notice != null and is_instance_valid(shell.notice))
 	await _until(func() -> bool: return Time.get_ticks_msec() - clicked >= 3050, 3.0)
 	await _shoot("s-07-door-opening-60")
+	await _until(func() -> bool: return shell.parting or shell.door == null, 6.0)
+	_check("the notice is mounted as the leaves part", shell.notice != null and is_instance_valid(shell.notice))
+	await _until(func() -> bool: return shell.door == null or (shell.notice != null and is_instance_valid(shell.notice) and shell.notice.page_count() > 0), 4.0)
+	await _frames(2)
+	await _shoot("s-07b-door-parting-over-notice")
+	var parting := shell.notice != null and is_instance_valid(shell.notice) and is_instance_valid(door)
+	_check("the door draws over the notice as the leaves part", parting and shell.notice.get_index() < door.get_index() and _highest_z(shell.notice) <= door.z_index, str(_highest_z(shell.notice)) if parting else "no notice")
 	await _until(func() -> bool: return shell.door == null, 6.0)
 	_check("the door is gone after opening", shell.door == null and shell.door_state == "open")
 	for name in ["spin", "unlock", "open"]:
