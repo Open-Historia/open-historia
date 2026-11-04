@@ -13,14 +13,14 @@ import { isPolityLandless, readGameData, readWorldState, readWorldStateView, wri
 import { useLibraryState } from "../../runtime/library.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
 import { buildPolityIdentityIndex, resolvePolityIdentity } from "../../runtime/polityIdentity.js";
-import { resolvePolityFlag } from "../../runtime/polityFlags.js";
+import { resolveChosenPolityFlag, resolvePolityFlag } from "../../runtime/polityFlags.js";
 import { buildHistoricalTrackingCandidateRows, buildHistoricalTrackingIndex, filterHistoricalTrackingCandidateRows, historySamplesInRange } from "./statsHistoricalTracking.js";
 import { buildPlayerPoliticalKnowledgeView, buildPublicPoliticalView, buildPublicPoliticalViewOfActor } from "../../runtime/politicalKnowledge.js";
 import { resolveCountryTags } from "../../runtime/countryTags.js";
 import { powerTierForPolity } from "../../runtime/powerStatus.js";
 import { livePuppetsFor, puppetKindLabel, puppetSummaryFor } from "../../runtime/puppets.js";
 import { intelligenceOf } from "../../runtime/spycraft.js";
-import { bundledFlagUrl, flagImageUrlFromGid } from "../../runtime/countryFlags.js";
+import { bundledFlagUrl } from "../../runtime/countryFlags.js";
 import COUNTRY_NAMES from "../../runtime/generated/countryNames.js";
 import { REGION_SELECTED_EVENT } from "../Selection/Regions.jsx";
 import { assessPoliticalLandscape, ensureCountryAssessed, ensureIntelligenceRated, ensureMilitaryFigures, generateCountryStatSheet, pendingCountryStatSheet, readOpenedIntercepts } from "../AI/gameplayLazy.js";
@@ -336,22 +336,30 @@ const EconomyCard = ({ label, value, sub, tone }) => (
     </div>
 );
 
+// All 0–100 indices share one compact treatment. The surrounding section grid
+// retains each scenario author's exact section and metric order.
+const IndexMetricCard = ({ icon = "", label, value, color = "#a1a1aa" }) => {
+    const numeric = value === null || value === undefined || value === "" ? NaN : Number(value);
+    const bounded = clamp01(numeric);
+    return (
+        <div style={{ ...cardStyle, minWidth: 0, padding: "0.65rem 0.7rem" }}>
+            <div style={{ color: "rgba(255,255,255,0.72)", fontSize: "0.7rem", minHeight: "1.9em", overflowWrap: "anywhere" }}>
+                {icon} {label}
+            </div>
+            <div data-no-translate style={{ fontSize: "1.12rem", fontWeight: 800, margin: "0.25rem 0 0.5rem" }}>
+                {Number.isFinite(numeric) ? bounded : "—"}
+                {Number.isFinite(numeric) && <span style={{ color: "rgba(255,255,255,0.4)", fontSize: "0.62rem", fontWeight: 600 }}> / 100</span>}
+            </div>
+            <Bar value={Number.isFinite(numeric) ? bounded : 0} color={color} />
+        </div>
+    );
+};
+
 const CustomStatCard = ({ stat, value }) => {
     const numeric = Number(value);
     const formatted = formatCustomStatValue(stat, numeric);
     if (stat.kind === "index") {
-        const bounded = clamp01(numeric);
-        return (
-            <div style={{ ...cardStyle, gridColumn: "1 / -1" }}>
-                <div style={{ alignItems: "center", display: "flex", justifyContent: "space-between", marginBottom: "0.4rem", gap: "0.5rem" }}>
-                    <span style={{ color: "rgba(255,255,255,0.8)", fontSize: "0.76rem", minWidth: 0 }}>
-                        {stat.icon} {stat.label}
-                    </span>
-                    <span data-no-translate style={{ flexShrink: 0, fontSize: "0.78rem", fontWeight: 800 }}>{Number.isFinite(numeric) ? `${bounded}/100` : "—"}</span>
-                </div>
-                <Bar value={bounded} color={stat.color || "#a1a1aa"} />
-            </div>
-        );
+        return <IndexMetricCard icon={stat.icon} label={stat.label} value={value} color={stat.color || "#a1a1aa"} />;
     }
     return (
         <div style={cardStyle}>
@@ -384,7 +392,7 @@ const CustomStatsSheet = ({ definition, sheet, hiddenKeys = [] }) => {
                     <div style={{ ...sectionTitleStyle, marginTop: sectionIndex === 0 ? "1rem" : sectionTitleStyle.marginTop }}>
                         {section.icon || "◆"} {section.label}
                     </div>
-                    <div style={{ display: "grid", gap: "0.55rem", gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
+                    <div style={{ display: "grid", gap: "0.55rem", gridTemplateColumns: "repeat(auto-fit, minmax(min(12rem, 100%), 1fr))" }}>
                         {section.stats.map((stat) => (
                             <CustomStatCard key={stat.key} stat={stat} value={values[stat.key]} />
                         ))}
@@ -1379,7 +1387,7 @@ const AdvancedStatsModal = ({
             <div style={{ background: "rgba(20,20,22,0.995)", border: "1px solid var(--oh-hud-border)", borderRadius: "18px", boxShadow: "var(--oh-hud-shadow)", display: "flex", flexDirection: "column", height: `min(880px, calc(${APP_HEIGHT} - 2.4rem))`, maxWidth: "1380px", minHeight: "580px", overflow: "hidden", width: "min(96vw, 1380px)", ...(isMobile ? phoneSheetStyle : fit ? { minHeight: 0 } : null) }}>
                 <div style={{ alignItems: "center", borderBottom: "1px solid rgba(255,255,255,0.08)", display: "flex", gap: "0.75rem", padding: "0.85rem 1rem" }}>
                     <div style={{ alignItems: "center", backgroundColor: "rgba(59,130,246,0.12)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "9px", display: "flex", flexShrink: 0, height: "2.25rem", justifyContent: "center", overflow: "hidden", width: "2.25rem" }}>
-                        {flagUrl ? <img alt="" src={bundledFlagUrl(flagUrl)} style={{ height: "100%", objectFit: "cover", width: "100%" }} /> : <span style={{ color: "#93c5fd", fontSize: "0.72rem", fontWeight: 900 }}>{flagFallback}</span>}
+                        {flagUrl ? <img alt="" src={bundledFlagUrl(flagUrl)} style={{ height: "100%", objectFit: "contain", width: "100%" }} /> : <span style={{ color: "#93c5fd", fontSize: "0.72rem", fontWeight: 900 }}>{flagFallback}</span>}
                     </div>
                     <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ alignItems: "baseline", display: "flex", flexWrap: "wrap", gap: "0.35rem 0.65rem" }}>
@@ -1926,7 +1934,7 @@ const RankingSection = ({ world, definition, index, playerCode, targetCountry, o
                         >
                             <span data-no-translate style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.72rem", fontVariantNumeric: "tabular-nums", fontWeight: 800 }}>{row.rank}</span>
                             <span style={{ backgroundColor: "rgba(255,255,255,0.08)", borderRadius: "3px", display: "block", height: "1rem", overflow: "hidden", width: "1.5rem" }}>
-                                {flagUrl ? <img alt="" src={bundledFlagUrl(flagUrl)} style={{ display: "block", height: "100%", objectFit: "cover", width: "100%" }} /> : null}
+                                {flagUrl ? <img alt="" src={bundledFlagUrl(flagUrl)} style={{ display: "block", height: "100%", objectFit: "contain", width: "100%" }} /> : null}
                             </span>
                             <span data-no-translate style={{ fontSize: "0.78rem", fontWeight: mine ? 800 : 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.label}</span>
                             <span data-no-translate style={{ fontSize: "0.78rem", fontVariantNumeric: "tabular-nums", fontWeight: 800 }}>{formatRankingValue(metric, row.value)}</span>
@@ -2141,7 +2149,20 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
             setCustomFlags(flags || {});
             setBaseTags(tags || {});
         });
-        return () => { cancelled = true; };
+        // FlagPicker writes to the same campaign flag map used by the map popup;
+        // keep this drawer in sync even if the choice changes while it is open.
+        const onFlagsUpdated = () => {
+            getNationFlags().then((flags) => {
+                if (cancelled) return;
+                setCustomFlags(flags || {});
+                setFlagFailed(false);
+            }).catch(() => {});
+        };
+        window.addEventListener("oh:flags-updated", onFlagsUpdated);
+        return () => {
+            cancelled = true;
+            window.removeEventListener("oh:flags-updated", onFlagsUpdated);
+        };
     }, [activeGameId]);
 
     useEffect(() => {
@@ -2656,13 +2677,19 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
     const powerTierLabel = POWER_TIER_LABELS[powerTier] || "";
     const intelligence = targetCountry && worldSnapshot ? intelligenceOf(worldSnapshot, targetCountry) : null;
     const isPlayer = targetCountry && targetCountry.toUpperCase() === String(player.code).toUpperCase();
-    // An author-set flag (scenario flags.json) wins over the code-derived one, so a
-    // custom era polity shows the flag its map-maker drew instead of initials.
-    // But a landless PLAYER never borrows the code-derived country flag (a
-    // stateless actor is not the country its code resolves to) — their own row
-    // falls through to the neutral initials unless they set a flag of their own.
+    // Use the same campaign-aware flag authority as the map popup and ranking.
+    // A full country name (e.g. "Russian Federation") is not necessarily a stock
+    // flag lookup key, even when its canonical record points at RUS. Authored
+    // flags, stable polity identities and mapRefs all take precedence over stock
+    // presentation fallbacks. Landless player actors may use only chosen flags.
     const suppressDerivedFlag = isPlayer && playerLandless;
-    const flagUrl = customFlags[targetCountry] || polity?.flag || (suppressDerivedFlag ? "" : flagImageUrlFromGid(targetCountry));
+    const flagArgs = {
+        polity: { polityKey: resolvedTargetKey, name: polity?.name || displayName || targetCountry, code: polity?.code || targetCountry },
+        world: worldSnapshot || {},
+        flags: customFlags,
+        identityIndex: polityIndex?.identityIndex,
+    };
+    const flagUrl = (suppressDerivedFlag ? resolveChosenPolityFlag(flagArgs) : resolvePolityFlag(flagArgs)).imageUrl;
     const initials = String(targetCountry).replace(/[^A-Za-z]/g, "").slice(0, 2).toUpperCase() || "??";
 
     const breakdown = useMemo(() => {
@@ -2716,13 +2743,13 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
             <>
             {/* Country header */}
             <div style={{ alignItems: "flex-start", display: "flex", gap: "0.7rem" }}>
-            <div style={{ alignItems: "center", backgroundColor: "rgba(59,130,246,0.16)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: "10px", color: "#93c5fd", display: "flex", flexShrink: 0, fontSize: "0.95rem", fontWeight: 800, height: "2.6rem", justifyContent: "center", overflow: "hidden", width: "2.6rem" }}>
+            <div style={{ alignItems: "center", backgroundColor: "rgba(59,130,246,0.16)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: "10px", color: "#93c5fd", display: "flex", flexShrink: 0, fontSize: "0.95rem", fontWeight: 800, height: "2.5rem", justifyContent: "center", overflow: "hidden", width: "3.35rem" }}>
             {flagUrl && !flagFailed ? (
                 <img
                 alt=""
                 src={bundledFlagUrl(flagUrl)}
                 onError={() => setFlagFailed(true)}
-                style={{ height: "100%", objectFit: "cover", width: "100%" }}
+                style={{ height: "100%", objectFit: "contain", width: "100%" }}
                 />
             ) : initials}
             </div>
@@ -2962,21 +2989,10 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
 
                 {/* Strategic indices */}
                 <div style={sectionTitleStyle}>⚑ Strategic indices</div>
-                <div style={{ display: "flex", flexDirection: "column", gap: "0.55rem" }}>
-                {indexRows.map((row) => {
-                    const value = clamp01(sheet.indices?.[row.key]);
-                    return (
-                        <div key={row.key} style={cardStyle}>
-                        <div style={{ alignItems: "center", display: "flex", justifyContent: "space-between", marginBottom: "0.4rem" }}>
-                        <span style={{ color: "rgba(255,255,255,0.8)", fontSize: "0.76rem" }}>
-                        {row.icon} {row.label}
-                        </span>
-                        <span data-no-translate style={{ fontSize: "0.78rem", fontWeight: 800 }}>{value}%</span>
-                        </div>
-                        <Bar value={value} color={row.color} />
-                        </div>
-                    );
-                })}
+                <div style={{ display: "grid", gap: "0.55rem", gridTemplateColumns: "repeat(auto-fit, minmax(min(12rem, 100%), 1fr))" }}>
+                {indexRows.map((row) => (
+                    <IndexMetricCard key={row.key} icon={row.icon} label={row.label} value={sheet.indices?.[row.key]} color={row.color} />
+                ))}
                 </div>
 
                 {/* Population — whole polity plus core/integrated vs other territories. */}

@@ -83,6 +83,19 @@ test("the record's code alone is a bridge to its stock flag", () => {
   assert.equal(flag.polityKey, "Weimar Republic");
 });
 
+test("a full-name Russian Federation record resolves to its actual flag, without borrowing it for landless actors", () => {
+  const polity = { polityKey: "Russian Federation", name: "Russian Federation", code: "RUS" };
+  const world = worldWith({ "Russian Federation": { name: "Russian Federation", code: "RUS" } });
+  const flag = resolvePolityFlag({ polity, world });
+  assert.equal(flag.imageUrl, "https://flagcdn.com/ru.svg");
+  assert.equal(flag.source, "stock-record-identity");
+  assert.equal(resolveChosenPolityFlag({ polity, world }).imageUrl, null);
+
+  const custom = resolvePolityFlag({ polity, world, flags: { "Russian Federation": "data:image/png;base64,RUSSIAN" } });
+  assert.equal(custom.imageUrl, "data:image/png;base64,RUSSIAN");
+  assert.equal(custom.source, "custom");
+});
+
 test("a stock country with no record keeps its built-in flag", () => {
   const flag = resolvePolityFlag({ polity: "France", world: {} });
   assert.deepEqual(flag, { imageUrl: FRANCE_FLAG, mapCode: "FRA", polityKey: "France", source: "stock" });

@@ -4,7 +4,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { cardScreenPoint, isBehindGlobe, isSameFeatureSelection, isSameRegionSelection, regionControlStatus } from "./mapCards.js";
+import { cardScreenPoint, clampAnchoredCardTop, isBehindGlobe, isSameFeatureSelection, isSameRegionSelection, regionControlStatus } from "./mapCards.js";
 
 // A stand-in for MapLibre: a flat map projects longitude straight across the
 // screen, `pixelsPerDegree` to the degree, centred on `center`.
@@ -19,6 +19,13 @@ const fakeMap = ({ projection = "mercator", center = { lng: 20, lat: 0 }, width 
 });
 
 const TOKYO = { lng: 139.7, lat: 35.7 };
+
+test("a region card follows its anchor until its actual height would cross a viewport edge", () => {
+  assert.equal(clampAnchoredCardTop(450, 250, 900), 440, "ordinary card remains at the click");
+  assert.equal(clampAnchoredCardTop(750, 360, 900), 532, "taller flag moves the card upwards to fit");
+  assert.equal(clampAnchoredCardTop(7, 250, 900), 8, "near-top selection stays inside the viewport");
+  assert.equal(clampAnchoredCardTop(750, 1000, 800), 8, "very tall card is top-aligned for its scrollable body");
+});
 
 test("on the flat map a place more than 90 degrees from the centre still gets its card", () => {
   // Zoomed out over Africa, about 284 degrees of longitude across the screen.
