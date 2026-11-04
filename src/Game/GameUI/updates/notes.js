@@ -53,6 +53,24 @@ import { PAST_UPDATES } from "./notesPast.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // Troops taken off a battlefield far from the sea were refused a ship ("no sea is near where it would set out")
+    // whenever they stood more than a day's march inland: now they go overland to a port of their country's on
+    // their way (runtime/fronts/engine.js departTransport, transports.js departuresFor). A player's report, 2026-11-04.
+    id: "2026-11-ships-from-ports",
+    kind: "minor",
+    date: "2026-11-04",
+    channel: "beta",
+    banners: [
+      {
+        title: "Troops sail from a port",
+        items: [
+          "Troops you send by sea from the War Room no longer have to stand by the coast: they go overland to one of your ports on their way, and sail from there.",
+          "A transport that cannot set out because your country has no navy or no air arm now says so.",
+        ],
+      },
+    ],
+  },
+  {
     // The War Room's Aircraft key counted only air units on the map, never a front's air arm (GameUI/warRoom.jsx
     // airUnitsOf given the whole world); the owner's report, 2026-11-04.
     id: "2026-11-aircraft-key",

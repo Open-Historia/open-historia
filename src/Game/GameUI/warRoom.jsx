@@ -154,6 +154,8 @@ const WayRefusal = ({ code }) => {
   if (code === "no-ground") return <>it has no land of your side's to start on</>;
   if (code === "no-troops") return <>its troops were gone</>;
   if (code === "no-war") return <>you are fighting no war</>;
+  if (code === "no-navy") return <>your country has no navy to carry them</>;
+  if (code === "no-air-force") return <>your country has no air arm to carry them</>;
   if (code === "railhead") return <>its line ends before that place</>;
   if (code === "too-far" || code === "off-map") return <>that place cannot be reached</>;
   return <>no way was found</>;
