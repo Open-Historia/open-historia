@@ -99,12 +99,13 @@ func _updater() -> AppUpdate:
 
 func _run() -> void:
 	_check("the update feed is this machine", feed.begins_with("http://127.0.0.1:"), feed)
+	await _until(func() -> bool: return _updater() != null, 30.0)
 	var updater := _updater()
 	_check("the updater is mounted", updater != null)
 	if updater == null:
 		_finish()
 		return
-	if mode == "equal":
+	if mode == "equal" or mode == "older":
 		await _run_equal(updater)
 	elif mode == "chunks":
 		await _run_chunks(updater)
@@ -182,11 +183,12 @@ func _run_equal(updater: AppUpdate) -> void:
 		if updater.cover.visible:
 			cover_seen = true
 		return main.menu.visible, 120.0)
+	var which := "an older build: a stale feed" if mode == "older" else "an equal build"
 	_check("the menu opens", menu_up)
-	_check("no update screen for an equal build", not cover_seen)
+	_check("no update screen for %s" % which, not cover_seen)
 	await _clear_shell()
 	await _wait(3.0)
-	_check("no banner for an equal build", not updater.banner.visible)
+	_check("no banner for %s" % which, not updater.banner.visible)
 	var menu_node: Node = main.get("game_menu")
 	await menu_node.call("open")
 	menu_node.call("_show_tab", "help")
@@ -196,7 +198,7 @@ func _run_equal(updater: AppUpdate) -> void:
 	_check("Check for updates says it is up to date", str(told.get("status", "")) == "current" and menu_node.call("_update_check_text") == "You are up to date.", str(told))
 	_check("still no banner", not updater.banner.visible)
 	await _wait(0.3)
-	await _shoot("u7-equal-up-to-date")
+	await _shoot("u7-%s-up-to-date" % mode)
 
 
 func _run_chunks(updater: AppUpdate) -> void:
