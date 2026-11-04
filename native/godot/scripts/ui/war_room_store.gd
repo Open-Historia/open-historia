@@ -4,7 +4,7 @@ extends RefCounted
 signal changed(keys: PackedStringArray)
 signal way_drawn(tool: String, way: Array, extra: Dictionary)
 
-const TOOLS := ["pan", "select", "route", "diversion", "replan", "transport", "fortify", "fleet", "deploy"]
+const TOOLS := ["pan", "select", "route", "diversion", "replan", "transport", "fortify", "fleet", "deploy", "aircraft"]
 const CLOSED := {
 	"open": false,
 	"battlefield": "",
@@ -15,12 +15,15 @@ const CLOSED := {
 	"replan": "",
 	"medium": "",
 	"deploy_form": "front",
-	"deploy_count": "",
 	"draft": null,
 	"level": 5,
 	"fleets": false,
 	"fleet": "",
 	"station": "",
+	"aircraft": false,
+	"wing": "",
+	"strike_kind": "troops",
+	"blast": 0.0,
 	"transport_ways": null,
 	"pointed": "",
 	"plans": [],

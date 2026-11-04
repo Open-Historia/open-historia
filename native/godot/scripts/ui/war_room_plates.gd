@@ -9,11 +9,17 @@ signal fleet_pick(id: String)
 signal fleet_order(op: Dictionary)
 signal fleet_place(kind: String)
 signal fleets_close
+signal wing_pick(id: String)
+signal strike_kind(kind: String)
+signal aim
+signal call_off(unit: String)
+signal aircraft_close
 
 const T := preload("res://scripts/ui/war_room_theme.gd")
 const W := preload("res://scripts/ui/war_room_words.gd")
 const LEVELS := [3, 4, 5, 6, 7, 8, 9]
 const POSTURES := ["patrol", "blockade", "assaulting", "holding", "withdrawing", "transit"]
+const STRIKE_KINDS := ["troops", "structure", "city"]
 
 var store: WarRoomStore
 var props: Dictionary = {}
@@ -23,6 +29,7 @@ var enemy := ""
 var convoy := ""
 var _fortify: PanelContainer
 var _fleets: PanelContainer
+var _aircraft: PanelContainer
 var _name_field: LineEdit
 
 
@@ -31,6 +38,7 @@ func _init() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_fortify = _plate()
 	_fleets = _plate()
+	_aircraft = _plate()
 
 
 func _plate() -> PanelContainer:
@@ -46,7 +54,7 @@ func _plate() -> PanelContainer:
 func setup(shared: WarRoomStore) -> void:
 	store = shared
 	store.changed.connect(func(keys: PackedStringArray) -> void:
-		for key in ["draft", "level", "fleets", "fleet", "tool", "station", "rail"]:
+		for key in ["draft", "level", "fleets", "fleet", "tool", "station", "rail", "aircraft", "wing", "strike_kind"]:
 			if key in keys:
 				_render()
 				return)
@@ -107,6 +115,11 @@ func _render() -> void:
 		_render_fleets()
 	else:
 		_clear(_fleets)
+	_aircraft.visible = shown and not drafted and not bool(store.value("fleets")) and bool(store.value("aircraft"))
+	if _aircraft.visible:
+		_render_aircraft()
+	else:
+		_clear(_aircraft)
 
 
 func _render_fortify() -> void:
@@ -371,3 +384,152 @@ func _render_fleets() -> void:
 	await get_tree().process_frame
 	if is_instance_valid(scroll) and scroll.get_parent() == _fleets:
 		_place(_fleets, scroll, column.get_combined_minimum_size().y)
+
+
+func _render_aircraft() -> void:
+	_clear(_aircraft)
+	var locked := bool(props.get("locked", false))
+	var air: Dictionary = props.get("air", {})
+	var wings: Array = air.get("wings", [])
+	var picked := str(store.value("wing"))
+	var wing: Dictionary = {}
+	for entry in wings:
+		if str((entry as Dictionary).get("id", "")) == picked:
+			wing = entry
+	if wing.is_empty() and not wings.is_empty():
+		wing_pick.emit(str((wings[0] as Dictionary).get("id", "")))
+		return
+	var scroll := ScrollContainer.new()
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	var column := _column()
+	column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(column)
+	var head := HBoxContainer.new()
+	head.add_theme_constant_override("separation", int(round(T.px(0.5))))
+	var title := T.stencil("Deploy Aircraft", 0.72)
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	head.add_child(title)
+	var close := T.link("Close")
+	close.pressed.connect(func() -> void: aircraft_close.emit())
+	head.add_child(close)
+	column.add_child(head)
+	if wings.is_empty():
+		column.add_child(T.soft("You have no air units."))
+	var list_box := VBoxContainer.new()
+	list_box.add_theme_constant_override("separation", int(round(T.px(0.2))))
+	for entry in wings:
+		var row: Dictionary = entry
+		var id := str(row.get("id", ""))
+		var button := Button.new()
+		button.focus_mode = Control.FOCUS_NONE
+		button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+		button.set_meta("wing", id)
+		var style := T.tray_style(id == picked, Vector4(T.px(0.45), T.px(0.3), T.px(0.45), T.px(0.3)))
+		for state in ["normal", "hover", "pressed", "hover_pressed", "focus"]:
+			button.add_theme_stylebox_override(state, style)
+		var line := HBoxContainer.new()
+		line.add_theme_constant_override("separation", int(round(T.px(0.45))))
+		line.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var name_label := T.text(str(row.get("name", "")), 0.78, T.BONE, 700)
+		name_label.autowrap_mode = TextServer.AUTOWRAP_OFF
+		name_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		name_label.clip_text = true
+		name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		name_label.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+		line.add_child(name_label)
+		var state_label := T.text(("→ " if typeof(row.get("order")) == TYPE_DICTIONARY else "") + "%d%%" % int(row.get("strength", 0)), 0.72, T.BONE_SOFT)
+		state_label.autowrap_mode = TextServer.AUTOWRAP_OFF
+		state_label.size_flags_horizontal = Control.SIZE_SHRINK_END
+		line.add_child(state_label)
+		var holder := T.pad(line, Vector4(T.px(0.45), T.px(0.3), T.px(0.45), T.px(0.3)))
+		holder.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		button.add_child(holder)
+		button.custom_minimum_size = Vector2(0, line.get_combined_minimum_size().y + T.px(0.6) + 2.0)
+		button.pressed.connect(func() -> void: wing_pick.emit(id))
+		list_box.add_child(button)
+	if wings.size() > 4:
+		var list_scroll := ScrollContainer.new()
+		list_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+		list_scroll.custom_minimum_size.y = T.px(9.0)
+		list_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		list_scroll.add_child(list_box)
+		column.add_child(list_scroll)
+	else:
+		column.add_child(list_box)
+	if not wing.is_empty():
+		var id := str(wing.get("id", ""))
+		var pending := bool(wing.get("pending", false))
+		var off := locked or pending
+		var order: Variant = wing.get("order")
+		var aiming := str(store.value("tool")) == "aircraft"
+		if pending:
+			column.add_child(T.soft("It joins your order of battle when time next passes; it takes orders then."))
+		column.add_child(T.soft("It reaches %s km from its base." % str(air.get("reachText", air.get("reach", 0)))))
+		column.add_child(T.heading("Strike"))
+		var kinds := HFlowContainer.new()
+		kinds.add_theme_constant_override("h_separation", int(round(T.px(0.25))))
+		kinds.add_theme_constant_override("v_separation", int(round(T.px(0.25))))
+		var kind := str(store.value("strike_kind"))
+		for value in STRIKE_KINDS:
+			var key := _fleet_key(W.strike_kind_word(value), kind == value, off)
+			key.set_meta("strike_kind", value)
+			var chosen: String = value
+			key.pressed.connect(func() -> void: strike_kind.emit(chosen))
+			kinds.add_child(key)
+		column.add_child(kinds)
+		var orders := HFlowContainer.new()
+		orders.add_theme_constant_override("h_separation", int(round(T.px(0.25))))
+		orders.add_theme_constant_override("v_separation", int(round(T.px(0.25))))
+		var choose := _fleet_key("Cancel" if aiming else "Choose target", aiming, off)
+		choose.set_meta("aim", true)
+		choose.pressed.connect(func() -> void: aim.emit())
+		orders.add_child(choose)
+		if typeof(order) == TYPE_DICTIONARY:
+			var stop := _fleet_key("Call off", false, locked)
+			stop.pressed.connect(func() -> void: call_off.emit(id))
+			orders.add_child(stop)
+		column.add_child(orders)
+		if typeof(order) == TYPE_DICTIONARY:
+			column.add_child(T.soft("Ordered to strike %s when time next passes." % str((order as Dictionary).get("target", ""))))
+		var last: Dictionary = {}
+		for entry in air.get("flown", []):
+			if str((entry as Dictionary).get("unitId", "")) == id:
+				last = entry
+		if not last.is_empty():
+			column.add_child(T.heading("Last strike", null, T.px(0.2)))
+			column.add_child(strike_text(last, true))
+	_aircraft.add_child(scroll)
+	_place(_aircraft, scroll, column.get_combined_minimum_size().y)
+	await get_tree().process_frame
+	if is_instance_valid(scroll) and scroll.get_parent() == _aircraft:
+		_place(_aircraft, scroll, column.get_combined_minimum_size().y)
+
+
+static func strike_text(strike: Dictionary, named: bool) -> RichTextLabel:
+	var rich := RichTextLabel.new()
+	rich.fit_content = true
+	rich.scroll_active = false
+	rich.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	rich.selection_enabled = false
+	rich.add_theme_font_override("normal_font", UI.font(400))
+	rich.add_theme_font_size_override("normal_font_size", T.font_size(0.72))
+	rich.add_theme_color_override("default_color", T.BONE_SOFT)
+	rich.add_theme_constant_override("line_separation", 3)
+	rich.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var said := ("%s: " % str(strike.get("target", ""))) if named else ""
+	said += W.strike_outcome(strike)
+	rich.add_text(said)
+	for part in W.strike_done(strike):
+		var piece: Array = part
+		if bool(piece[1]):
+			rich.push_color(T.AMBER)
+			rich.add_text(" " + str(piece[0]))
+			rich.pop()
+		else:
+			rich.add_text(" " + str(piece[0]))
+		said += " " + str(piece[0])
+	for line in W.strike_losses(strike):
+		rich.add_text(" " + str(line))
+		said += " " + str(line)
+	rich.set_meta("plain", said)
+	return rich

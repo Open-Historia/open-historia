@@ -14,6 +14,7 @@ const MECHANIC_LABELS := {
 	"air": "Air in battles",
 	"supply": "Supplies",
 	"attrition": "Attrition",
+	"marching": "Marching to the front",
 }
 const MECHANIC_HINTS := {
 	"fatigue": "Troops tire as they march and fight, and recover at rest; a day after they hold their ground, they fight a little harder.",
@@ -25,6 +26,7 @@ const MECHANIC_HINTS := {
 	"air": "Air wings take part in the fighting below them.",
 	"supply": "Building fortified lines uses up a country's war resources, which its funding refills; an army low on them fights worse.",
 	"attrition": "Harsh weather and a hard winter wear down every army out in them, the more so tired, short of supply or cut off; what it costs weighs heavily on a country's will to fight.",
+	"marching": "New troops are raised inside their country, the deeper the thinner its people are spread, and march to the front; armies move half again as fast through their own side's territory as through the enemy's.",
 }
 
 var engine: EngineLink

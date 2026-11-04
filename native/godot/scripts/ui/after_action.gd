@@ -201,6 +201,9 @@ func _moment(rich: RichTextLabel, moment: Dictionary, names: Array) -> void:
 		"assault":
 			_who(rich, who)
 			rich.add_text(" stormed %s." % place)
+		"bombed":
+			_who(rich, who)
+			rich.add_text(" bombed %s from the air." % place)
 
 
 func _build() -> void:

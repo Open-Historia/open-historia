@@ -417,7 +417,7 @@ export const register = (ctx) => {
     let orderText = "";
     if (order?.kind === "patrol") orderText = `Patrolling · ${Math.round(order.radiusKm)} km station`;
     else if (order) {
-      const remaining = Math.round(engine.gameState.haversineKm(unit.lat, unit.lng, order.toLat, order.toLng));
+      const remaining = Math.round(engine.wrUnitMotion.kmOnMap(unit.lat, unit.lng, order.toLat, order.toLng));
       const destination = order.targetLabel || `${Number(order.toLat).toFixed(1)}, ${Number(order.toLng).toFixed(1)}`;
       orderText = `En route to ${destination} — about ${remaining} km to go`;
     }

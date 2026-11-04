@@ -22,6 +22,7 @@ const SYMBOL_SPACING := 250.0
 const TILE_PX := 512.0
 const TEXT_PADDING := 2.0
 const FLEET_COLOURS := {"fleet": Color("#c9a54c"), "picked": Color("#e9b949"), "course": Color("#f4f7fb")}
+const AIR_COLOURS := {"waiting": Color("#2bc1f3"), "reach": Color("#2bc1f3"), "hit": Color("#e0454d"), "partly": Color("#e09440"), "missed": Color("#9aa3ad")}
 
 var map: MapView
 var store: WarRoomStore
@@ -34,6 +35,7 @@ var last_labels := PackedStringArray()
 var label_rects: Array[Rect2] = []
 var _taken: Array[Rect2] = []
 var _war_seen: Array[Rect2] = []
+var _aim: Variant = null
 
 
 func _init() -> void:
@@ -64,6 +66,8 @@ func _on_store(keys: PackedStringArray) -> void:
 	if not drawing:
 		_held = {}
 		_draft = null
+	if tool != "aircraft":
+		_aim = null
 	if "open" in keys and not bool(store.value("open")):
 		_fitted = ""
 		_publish([])
@@ -205,6 +209,7 @@ func _draw() -> void:
 	_draw_plans()
 	_draw_plan_labels(plan_labels)
 	_draw_fleets()
+	_draw_air()
 	_draw_tool()
 
 
@@ -726,7 +731,66 @@ func _draw_fleets() -> void:
 		draw_arc(at, radius_stops.call(lit), 0.0, TAU, 48, colour, 3.0 if lit else 1.8, true)
 
 
+func _air_ring(lng: float, lat: float, colour: Color, blast: float) -> void:
+	if blast > 0.0:
+		var ring := _project_way(ring_around(lng, lat, blast))
+		if ring.size() >= 4:
+			var fill := ring.slice(0, ring.size() - 1)
+			if Geometry2D.triangulate_polygon(fill).size() > 0:
+				draw_colored_polygon(fill, Color(colour, 0.16))
+			draw_polyline(ring, colour, 2.0, true)
+	var at := _project_way([[lng, lat]])[0]
+	draw_circle(at, 4.5 + 1.4, Color(5 / 255.0, 8 / 255.0, 13 / 255.0, 0.9), true, -1.0, true)
+	draw_circle(at, 4.5, colour, true, -1.0, true)
+
+
+func _draw_air() -> void:
+	var air: Dictionary = record.get("air", {})
+	if air.is_empty():
+		return
+	var blast := float(air.get("blast", 0.0))
+	var reach := float(air.get("reach", 0.0))
+	var picked := str(store.value("wing"))
+	if bool(store.value("aircraft")) and not picked.is_empty() and reach > 0.0:
+		for entry in air.get("wings", []):
+			var wing: Dictionary = entry
+			if str(wing.get("id", "")) != picked:
+				continue
+			var ring := _project_way(ring_around(float(wing.get("lng", 0)), float(wing.get("lat", 0)), reach))
+			_draw_dashed(ring, Color(AIR_COLOURS["reach"], 0.8), 1.6, 2.4, 1.8)
+	for entry in air.get("orders", []):
+		var order: Dictionary = entry
+		_air_ring(float(order.get("lng", 0)), float(order.get("lat", 0)), AIR_COLOURS["waiting"], blast)
+	for entry in air.get("struck", []):
+		var strike: Dictionary = entry
+		var outcome := str(strike.get("outcome", ""))
+		if outcome == "gone" or outcome == "out of reach":
+			continue
+		var colour: Color = AIR_COLOURS["missed"] if outcome == "turned back" else (AIR_COLOURS["partly"] if outcome == "partly" else AIR_COLOURS["hit"])
+		_air_ring(float(strike.get("lng", 0)), float(strike.get("lat", 0)), colour, blast)
+
+
+func _ring_at(point: Vector2) -> Variant:
+	var km := float(store.value("blast"))
+	if not (km > 0.0):
+		return null
+	var place := screen_to_lnglat(point)
+	var east := _project_way([[place.x + km / (111.32 * maxf(0.05, cos(place.y * RAD))), place.y]])[0]
+	var centre := _project_way([[place.x, place.y]])[0]
+	return Vector3(point.x, point.y, maxf(4.0, east.distance_to(centre)))
+
+
 func _draw_tool() -> void:
+	if str(store.value("tool")) == "aircraft" and _aim is Vector3:
+		var aim: Vector3 = _aim
+		var middle := Vector2(aim.x, aim.y)
+		draw_circle(middle, aim.z, Color(43 / 255.0, 193 / 255.0, 243 / 255.0, 0.14), true, -1.0, true)
+		var outline := PackedVector2Array()
+		for index in range(65):
+			outline.append(middle + Vector2.from_angle(TAU * index / 64.0) * aim.z)
+		_dash_px(outline, ACCENT, 1.6, 5.0, 4.0)
+		draw_line(middle + Vector2(-7, 0), middle + Vector2(7, 0), ACCENT, 1.6, true)
+		draw_line(middle + Vector2(0, -7), middle + Vector2(0, 7), ACCENT, 1.6, true)
 	if _draft == null:
 		return
 	if _draft is Rect2:
@@ -773,7 +837,7 @@ func _dash_px(points: PackedVector2Array, colour: Color, width: float, on: float
 
 func _placing() -> bool:
 	var tool := str(store.value("tool"))
-	return tool == "transport" or tool == "fleet" or (tool == "deploy" and str(store.value("deploy_form")) == "swarm")
+	return tool == "transport" or tool == "fleet" or tool == "aircraft" or (tool == "deploy" and str(store.value("deploy_form")) == "swarm")
 
 
 func _mine() -> Array:
@@ -817,6 +881,12 @@ func _gui_input(event: InputEvent) -> void:
 			_press(button.position, button.shift_pressed)
 		else:
 			_release(button.position)
+		accept_event()
+	elif event is InputEventMouseMotion and str(store.value("tool")) == "aircraft":
+		_aim = _ring_at((event as InputEventMouseMotion).position)
+		if not _held.is_empty():
+			_move((event as InputEventMouseMotion).position)
+		queue_redraw()
 		accept_event()
 	elif event is InputEventMouseMotion and not _held.is_empty():
 		_move((event as InputEventMouseMotion).position)
@@ -913,6 +983,15 @@ func _release(point: Vector2) -> void:
 		store.take_tool("pan")
 		store.report_way("deploy", [spot], {"form": "swarm"})
 		return
+	if tool == "aircraft":
+		if float(done["moved"]) >= CLICK_PX:
+			return
+		var spot := screen_to_lnglat(point)
+		var wing := str(store.value("wing"))
+		var strike_kind := str(store.value("strike_kind"))
+		store.take_tool("pan")
+		store.report_way("aircraft", [[unwrap_lng(spot.x, 0.0), spot.y]], {"wing": wing, "kind": strike_kind})
+		return
 	if tool == "fleet":
 		if float(done["moved"]) >= CLICK_PX:
 			return
@@ -939,4 +1018,11 @@ func _release(point: Vector2) -> void:
 func cancel_drawing() -> void:
 	_held = {}
 	_draft = null
+	_aim = null
 	queue_redraw()
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_MOUSE_EXIT and _aim != null:
+		_aim = null
+		queue_redraw()
