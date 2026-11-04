@@ -9,6 +9,11 @@ const libraryBar = fs.readFileSync(new URL("../GameUI/libraryBar.jsx", import.me
 const serverFeatures = fs.readFileSync(new URL("../../../server/gameFeatures.js", import.meta.url), "utf8");
 
 test("time skips gate authored beats natively before prompting and persist accepted resolutions", () => {
+  assert.ok(gameplay.includes("firstSkipIncludesScriptedOrigin("));
+  assert.ok(gameplay.includes("includeOrigin: includeOriginScripted"));
+  assert.ok(gameplay.includes("scriptedBeatsNotAlreadyWritten("));
+  assert.ok(gameplay.includes("scriptedPlan.eligible,"));
+  assert.equal(gameplay.includes("simulationHistory).length === 0 && segmentIndex === 0"), false);
   assert.match(gameplay, /planScriptedEvents\(/);
   assert.match(gameplay, /scriptedPlan\.eligible/);
   assert.match(gameplay, /buildScriptedEventsInstruction\(scriptedBeats, \{ language: scriptedLanguage \}\)/);
