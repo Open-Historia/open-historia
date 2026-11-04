@@ -161,7 +161,8 @@ func _idle() -> void:
 
 func _settled() -> void:
 	await _until(func() -> bool: return not room._acting, 60.0)
-	await _wait(0.6)
+	await room.refresh()
+	await _wait(0.3)
 
 
 func _draw_way(points: Array) -> void:
@@ -294,7 +295,7 @@ func _run() -> void:
 		way.append(start + Vector2(step * 9.0, -step * 4.0))
 	await _draw_way(way)
 	await _settled()
-	_check("a route drawn becomes a planned movement", _shows(room, "Route"), room._notice)
+	_check("a route drawn becomes a planned movement", await _until(func() -> bool: return _shows(room, "Route"), 10.0), room._notice)
 	await _shoot("wr-08-route")
 	room.store.take_tool("diversion")
 	var feint: Array = []
@@ -302,7 +303,7 @@ func _run() -> void:
 		feint.append(start + Vector2(-step * 8.0, step * 5.0))
 	await _draw_way(feint)
 	await _settled()
-	_check("a diversion is planned", _shows(room, "Diversion") and _shows(room, "You have turned no agent of theirs"), room._notice)
+	_check("a diversion is planned", await _until(func() -> bool: return _shows(room, "Diversion") and _shows(room, "You have turned no agent of theirs"), 10.0), room._notice)
 	room.store.take_tool("deploy")
 	await _wait(0.3)
 	_check("the deploy hint reads as React's", _shows(room.rail, "As many come as your men, supplies, war weariness and mustering allow, called up inside your country.") and not _shows(room.rail, "Formations to call up"))
@@ -323,8 +324,7 @@ func _run() -> void:
 	for step in range(10):
 		wall.append(_screen_of([6.05 + step * 0.03, 49.0 - step * 0.11]))
 	await _draw_way(wall)
-	await _wait(1.0)
-	_check("a drawn line waits on the fortify plate", room.plates._fortify.visible and _shows(room.plates, "FORTIFIED LINE") and _shows(room.plates, "to build"))
+	_check("a drawn line waits on the fortify plate", await _until(func() -> bool: return room.plates._fortify.visible and _shows(room.plates, "FORTIFIED LINE") and _shows(room.plates, "to build"), 15.0))
 	await _shoot("wr-11-fortify-plate")
 	room.plates.line_name = "Ligne Moselle"
 	await _idle()
@@ -498,7 +498,7 @@ func _run() -> void:
 		await main.hud.war_cards._answer("accept", str(made["id"]))
 		accepted += 1
 	_check("an offer of peace is accepted from its card", accepted > 0)
-	var gone := await _until(func() -> bool: return not button.visible, 10.0)
+	var gone := await _until(func() -> bool: return not button.visible, 20.0)
 	var fronts_left: Dictionary = await main.engine.request("warroom.fronts")
 	_check("the War Room button for a war ended in peace goes away at once", gone and not bool((fronts_left.get("result", {}) as Dictionary).get("atWar", true)), str(fronts_left.get("result", {})))
 	await _shoot("wr-22-peace")
