@@ -1532,8 +1532,10 @@ func open_picture_setup(info: Dictionary) -> void:
 
 
 func _place_picture_setup() -> void:
+	if not is_instance_valid(_picture_setup) or _picture_setup.is_queued_for_deletion():
+		return
 	var shell := _picture_setup as WorkshopShell
-	if shell == null or not is_instance_valid(shell):
+	if shell == null:
 		return
 	shell.max_height = size.y - 24.0
 	var width := minf(shell.panel_width, size.x - dock_left() - dock_right() - 24.0)
