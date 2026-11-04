@@ -150,6 +150,9 @@ fn air_matches_js() {
                 if matches!(value.get("airDay"), Val::Num(day) if *day == case.arg(2).num()) {
                     return None;
                 }
+                if matches!(value.get("airDay"), Val::Num(day) if *day == -1.0) && value.get("mech").get("military").is_true() && case.calls("0.militaryOf").is_none() {
+                    return None;
+                }
                 let figures = case.calls("0.militaryOf").cloned().unwrap_or_default();
                 let mut run = create_run(Val::Obj(Obj::new()), Box::new(Figures(figures)));
                 run.input = std::sync::Arc::new(value.get("input").clone());
@@ -197,7 +200,12 @@ fn air_matches_js() {
             ("wearWings", &|case| {
                 let run = bare_run();
                 set_wings(&run, case.arg(0).get("wings"));
-                let battle = air_battle(&run, case.arg(1));
+                let mut battle = air_battle(&run, case.arg(1));
+                if matches!(case.arg(0).get("airDay"), Val::Num(day) if *day == -1.0) {
+                    if let Some(wings) = battle.wings.as_mut() {
+                        wings.detached = true;
+                    }
+                }
                 wear_wings(&run, &battle);
                 Some(expect(case, Val::Undef)?.and_then(|_| same(&wings_val(&run), after_of(case, 0).get("wings"))))
             }),

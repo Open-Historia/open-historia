@@ -132,7 +132,7 @@ const BRIEF_BATTLE = {
   skies: 1,
   troops: { "*": { "*": { x: 1, y: 1, strength: 1, owner: 1, fatigue: 1, command: 1, pocket: 1, dug: 1, order: { kind: 1, done: 1, word: 1, own: 1 } } } },
 };
-const RECORD_TEXT = { name: 1, status: 1, sides: 1, openedDate: 1, orders: 1, effort: 1, brief: { km: 1, strength: 1, weather: 1, attrition: 1, air: 1, frozen: 1, carry: { away: 1, under: 1 }, sectors: 1, since: 1, taken: 1, cities: 1, pockets: 1 } };
+const RECORD_TEXT = { name: 1, status: 1, home: 1, sides: 1, openedDate: 1, orders: 1, effort: 1, brief: { km: 1, strength: 1, near: 1, weather: 1, attrition: 1, air: 1, frozen: 1, carry: { away: 1, under: 1 }, sectors: 1, since: 1, taken: 1, cities: 1, pockets: 1 } };
 const POLICY_PICKS = {
   0: {
     ...FEATURE_HOME,
@@ -257,7 +257,7 @@ const MODULES = {
   "src/runtime/fronts/constants.js": { name: "constants" },
   "src/runtime/fronts/codec.js": { name: "codec" },
   "src/runtime/fronts/frame.js": { name: "frame", factories: ["projectorOf"] },
-  "server/mapDistance.js": { name: "mapDistance", quiet: true, keep: ["metricTableFor"], most: 12, bytes: 900000 },
+  "server/mapDistance.js": { name: "mapDistance", quiet: true, keep: ["metricTableFor"], most: 40, bytes: 900000 },
   "src/runtime/fronts/worldGrid.js": { name: "worldGrid", factories: ["buildWorldGrid"] },
   "src/runtime/regionTypes.js": { name: "regionTypes", keep: ["isWaterType", "waterTypeIds"] },
   "src/runtime/fronts/arena.js": { name: "arena", factories: ["rasterizeArena", "arenaFor"] },
@@ -319,7 +319,7 @@ const MODULES = {
     picks: {
       skyOfWings: { 0: { era: 1, mech: 1, input: { map: { flat: 1, scale: 1 }, units: 1, airArms: 1 }, airDay: 1, wings: 1, battles: { "*": AIR_BATTLE } }, 1: AIR_BATTLE },
       airStrikes: { 0: { wings: 1, troops: { "*": { "*": { strength: 1, loss: 1 } } } } },
-      wearWings: { 0: { wings: 1 }, 1: { wings: 1 } },
+      wearWings: { 0: { wings: 1, airDay: 1 }, 1: { wings: 1 } },
       wingChanges: { 0: { wings: 1 } },
       skyHeld: { 0: { wings: 1, airMission: 1 } },
       airMissionOf: { 0: { airMission: 1 } },
