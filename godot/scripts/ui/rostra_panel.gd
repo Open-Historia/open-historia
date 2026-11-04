@@ -213,10 +213,9 @@ static func glyph(name: String, size: int) -> Texture2D:
 	if _textures.has(key):
 		return _textures[key]
 	var entry: Array = GLYPHS.get(name, ["", 24.0])
-	var image := Image.new()
-	if image.load_svg_from_string(str(entry[0]), float(size) / float(entry[1])) != OK:
+	var texture := UI.svg_texture(str(entry[0]), float(size) / float(entry[1]))
+	if texture == null:
 		return null
-	var texture := ImageTexture.create_from_image(image)
 	_textures[key] = texture
 	return texture
 
@@ -236,10 +235,9 @@ static func mark_texture(size: int) -> Texture2D:
 	var key := "mark:%d" % size
 	if _textures.has(key):
 		return _textures[key]
-	var image := Image.new()
-	if image.load_svg_from_string(MARK, float(size) / 32.0) != OK:
+	var texture := UI.svg_texture(MARK, float(size) / 32.0)
+	if texture == null:
 		return null
-	var texture := ImageTexture.create_from_image(image)
 	_textures[key] = texture
 	return texture
 

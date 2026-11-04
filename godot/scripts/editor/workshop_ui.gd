@@ -87,17 +87,9 @@ static func icon(name: String, size := 16, color := Color(1, 1, 1, 1)) -> Textur
 	if _icon_cache.has(key):
 		return _icon_cache[key]
 	var svg := svg_of(name).replace("#ffffff", "#" + color.to_html(false))
-	var image := Image.new()
-	if image.load_svg_from_string(svg, float(size) / 24.0) != OK:
+	var texture := UI.svg_texture(svg, float(size) / 24.0, color.a if color.a < 1.0 else 1.0)
+	if texture == null:
 		return null
-	if color.a < 1.0:
-		image.convert(Image.FORMAT_RGBA8)
-		for y in range(image.get_height()):
-			for x in range(image.get_width()):
-				var pixel := image.get_pixel(x, y)
-				pixel.a *= color.a
-				image.set_pixel(x, y, pixel)
-	var texture := ImageTexture.create_from_image(image)
 	_icon_cache[key] = texture
 	return texture
 
@@ -430,10 +422,9 @@ static func _check_icon(on: bool, faded: bool) -> Texture2D:
 	var box := "<rect x='1.5' y='1.5' width='13' height='13' rx='3' fill='%s' fill-opacity='%s' stroke='%s' stroke-opacity='%s' stroke-width='1.2'/>" % ["#e7e7ea" if on else "#ffffff", "1" if on else "0.06", "#e7e7ea" if on else "#ffffff", "1" if on else "0.55"]
 	var mark := "<path d='M4.5 8.3l2.4 2.4 4.6-5.2' fill='none' stroke='#12141a' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/>" if on else ""
 	var svg := "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16' opacity='%s'>%s%s</svg>" % ["0.45" if faded else "1", box, mark]
-	var image := Image.new()
-	if image.load_svg_from_string(svg, 1.0) != OK:
+	var texture := UI.svg_texture(svg, 1.0)
+	if texture == null:
 		return null
-	var texture := ImageTexture.create_from_image(image)
 	_icon_cache[key] = texture
 	return texture
 

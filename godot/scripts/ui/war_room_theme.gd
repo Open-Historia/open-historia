@@ -240,17 +240,9 @@ static func svg_icon(key_name: String, svg: String, size: int, color: Color, vie
 	if _icons.has(cache_key):
 		return _icons[cache_key]
 	var painted := svg.replace("currentColor", "#" + color.to_html(false))
-	var image := Image.new()
-	if image.load_svg_from_string(painted, float(size) / view_size) != OK:
+	var texture := UI.svg_texture(painted, float(size) / view_size, color.a if color.a < 1.0 else 1.0)
+	if texture == null:
 		return null
-	if color.a < 1.0:
-		image.convert(Image.FORMAT_RGBA8)
-		for y in range(image.get_height()):
-			for x in range(image.get_width()):
-				var pixel := image.get_pixel(x, y)
-				pixel.a *= color.a
-				image.set_pixel(x, y, pixel)
-	var texture := ImageTexture.create_from_image(image)
 	_icons[cache_key] = texture
 	return texture
 

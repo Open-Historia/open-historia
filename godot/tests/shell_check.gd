@@ -8,7 +8,7 @@ var played: PackedStringArray = []
 var only := ""
 
 const NEWEST_UPDATES := ["2026-11-native-advisor-contacts", "2026-11-ships-from-ports", "2026-11-aircraft-key", "2026-11-gentler-terrain"]
-const NEWEST_TITLES := ["Advisors and contacts", "Troops sail from a port", "The Aircraft key works", "Gentler 3D terrain"]
+const NEWEST_TITLES := ["The same size on every screen", "Troops sail from a port", "The Aircraft key works", "Gentler 3D terrain"]
 const FIRST_OPENING := ["2026-11-rostra", "2026-11-deploy-aircraft", "2026-10-espionage-part-2", "2026-11-native-advisor-contacts"]
 
 
@@ -410,7 +410,7 @@ func _parts() -> void:
 	press.pressed = true
 	Input.parse_input_event(press)
 	await _frames(3)
-	_check("Ctrl+= zooms in one step", is_equal_approx(root.content_scale_factor, pow(1.2, 0.5)), str(root.content_scale_factor))
+	_check("Ctrl+= zooms in one step", is_equal_approx(root.content_scale_factor, pow(1.2, 0.5) * Hotkeys.screen_scale()), str(root.content_scale_factor))
 	var steps := [[KEY_EQUAL, false, 1.0], [KEY_EQUAL, true, 1.5], [KEY_KP_ADD, false, 2.0], [KEY_MINUS, false, 1.5], [KEY_KP_SUBTRACT, false, 1.0]]
 	var landed: Array = []
 	for step in steps:
@@ -435,7 +435,14 @@ func _parts() -> void:
 	reset.pressed = true
 	Input.parse_input_event(reset)
 	await _frames(3)
-	_check("Ctrl+0 resets the zoom", is_equal_approx(root.content_scale_factor, 1.0) and is_equal_approx(before, 1.0), str(root.content_scale_factor))
+	_check("Ctrl+0 resets the zoom", is_equal_approx(root.content_scale_factor, Hotkeys.screen_scale()) and is_equal_approx(before, Hotkeys.screen_scale()), str(root.content_scale_factor))
+	var sizes := [[Vector2(1920, 1080), 1.0], [Vector2(1920, 1200), 1.0], [Vector2(1366, 768), 1.0], [Vector2(2560, 1440), 2560.0 / 1920.0], [Vector2(3440, 1440), 1440.0 / 1080.0], [Vector2(3840, 2160), 2.0], [Vector2(5120, 2880), 5120.0 / 1920.0], [Vector2(2160, 3840), 2160.0 / 1920.0]]
+	var off: Array = []
+	for pair in sizes:
+		if not is_equal_approx(Hotkeys.resolution_scale(pair[0]), float(pair[1])):
+			off.append("%s -> %.3f" % [str(pair[0]), Hotkeys.resolution_scale(pair[0])])
+	_check("the interface is as big against the screen on 1440p, ultrawide, 4K and 5K as on 1080p, and never smaller than designed", off.is_empty(), ", ".join(PackedStringArray(off)))
+	_check("this screen's scale is what its resolution asks for", is_equal_approx(Hotkeys.screen_scale(), maxf(Hotkeys.os_scale(), Hotkeys.resolution_scale(Vector2(DisplayServer.screen_get_size(DisplayServer.window_get_current_screen()))))), str(Hotkeys.screen_scale()))
 	var escapes := [0]
 	hotkeys.escape_pressed.connect(func() -> void: escapes[0] += 1)
 	await _key(KEY_ESCAPE)

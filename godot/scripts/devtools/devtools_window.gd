@@ -34,8 +34,10 @@ func _init(owner_node: Node, link: EngineLink, host: Node, log_capture: DevTools
 	visible = false
 	title = "DevTools - Open Historia"
 	var usable := DisplayServer.screen_get_usable_rect(DisplayServer.window_get_current_screen()).size
-	size = Vector2i(mini(1180, maxi(640, int(usable.x * 0.9))), mini(760, maxi(400, int(usable.y * 0.9))))
-	min_size = Vector2i(640, 400)
+	var scale := Hotkeys.screen_scale()
+	content_scale_factor = scale
+	size = Vector2i(mini(roundi(1180 * scale), maxi(roundi(640 * scale), int(usable.x * 0.9))), mini(roundi(760 * scale), maxi(roundi(400 * scale), int(usable.y * 0.9))))
+	min_size = Vector2i(roundi(640 * scale), roundi(400 * scale))
 	initial_position = Window.WINDOW_INITIAL_POSITION_CENTER_MAIN_WINDOW_SCREEN
 	force_native = DisplayServer.has_feature(DisplayServer.FEATURE_SUBWINDOWS)
 	transient = false

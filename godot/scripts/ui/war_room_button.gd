@@ -32,9 +32,7 @@ func _init() -> void:
 	focus_mode = Control.FOCUS_NONE
 	texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
 	visible = false
-	var image := Image.new()
-	if image.load_svg_from_string(SWORDS, 30.0 / 24.0) == OK:
-		_swords = ImageTexture.create_from_image(image)
+	_swords = UI.svg_texture(SWORDS, 30.0 / 24.0)
 
 
 func setup(engine_link: EngineLink, _context: Dictionary = {}) -> void:

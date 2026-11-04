@@ -13,10 +13,15 @@ const ZOOM_STEP := 0.5
 const ZOOM_BASE := 1.2
 const ZOOM_LEAST := -3.0
 const ZOOM_MOST := 4.0
+const DESIGN_SCREEN := Vector2(1920.0, 1080.0)
+const SCREEN_WATCH_SECONDS := 0.5
 
 var engine: EngineLink
 var apply_defaults := true
 var zoom_level := 0.0
+var _scale_now := 0.0
+var _windowed_size := Vector2i.ZERO
+var _screen_watch: Timer
 
 
 func _init() -> void:
@@ -31,6 +36,12 @@ func setup(link: EngineLink, defaults := true) -> void:
 		_fit_screen(true)
 		if not get_tree().root.dpi_changed.is_connected(_on_dpi_changed):
 			get_tree().root.dpi_changed.connect(_on_dpi_changed)
+		if _screen_watch == null:
+			_screen_watch = Timer.new()
+			_screen_watch.wait_time = SCREEN_WATCH_SECONDS
+			_screen_watch.timeout.connect(_watch_screen)
+			add_child(_screen_watch)
+			_screen_watch.start()
 	if engine == null:
 		return
 	if not engine.is_ready():
@@ -40,10 +51,21 @@ func setup(link: EngineLink, defaults := true) -> void:
 		set_zoom(float(reply["result"].get("level", 0.0)), false)
 
 
-static func screen_scale() -> float:
+static func os_scale() -> float:
 	if OS.get_name() != "macOS":
 		return 1.0
 	return maxf(1.0, DisplayServer.screen_get_max_scale())
+
+
+static func resolution_scale(pixels: Vector2) -> float:
+	if pixels.x <= 0.0 or pixels.y <= 0.0:
+		return 1.0
+	return maxf(1.0, minf(pixels.x / DESIGN_SCREEN.x, pixels.y / DESIGN_SCREEN.y))
+
+
+static func screen_scale(screen := -1) -> float:
+	var at := DisplayServer.window_get_current_screen() if screen < 0 else screen
+	return maxf(os_scale(), resolution_scale(Vector2(DisplayServer.screen_get_size(at))))
 
 
 func zoom_factor() -> float:
@@ -56,7 +78,10 @@ func ui_factor() -> float:
 
 func _fit_screen(resize: bool) -> void:
 	var scale := screen_scale()
+	_scale_now = scale
 	get_tree().root.content_scale_factor = ui_factor()
+	if DisplayServer.window_get_mode() == DisplayServer.WINDOW_MODE_WINDOWED:
+		_windowed_size = DisplayServer.window_get_size()
 	if not resize or scale <= 1.0 or DisplayServer.window_get_mode() != DisplayServer.WINDOW_MODE_WINDOWED:
 		return
 	var screen := DisplayServer.window_get_current_screen()
@@ -65,11 +90,33 @@ func _fit_screen(resize: bool) -> void:
 	var size := Vector2i(wanted.min(Vector2(usable.size) * 0.94).round())
 	DisplayServer.window_set_size(size)
 	DisplayServer.window_set_position(usable.position + (usable.size - size) / 2)
+	_windowed_size = size
 
 
 func _on_dpi_changed() -> void:
-	if apply_defaults and is_inside_tree():
-		_fit_screen(false)
+	_watch_screen()
+
+
+func _watch_screen() -> void:
+	if not apply_defaults or not is_inside_tree():
+		return
+	var windowed := DisplayServer.window_get_mode() == DisplayServer.WINDOW_MODE_WINDOWED
+	var scale := screen_scale()
+	if is_equal_approx(scale, _scale_now):
+		if windowed:
+			_windowed_size = DisplayServer.window_get_size()
+		return
+	var was := _scale_now
+	_scale_now = scale
+	get_tree().root.content_scale_factor = ui_factor()
+	if was <= 0.0 or not windowed or _windowed_size == Vector2i.ZERO:
+		return
+	var usable := DisplayServer.screen_get_usable_rect(DisplayServer.window_get_current_screen())
+	var size := Vector2i((Vector2(_windowed_size) * scale / was).min(Vector2(usable.size) * 0.94).round())
+	var at := DisplayServer.window_get_position()
+	DisplayServer.window_set_size(size)
+	DisplayServer.window_set_position(Vector2i(clampi(at.x, usable.position.x, maxi(usable.position.x, usable.end.x - size.x)), clampi(at.y, usable.position.y, maxi(usable.position.y, usable.end.y - size.y))))
+	_windowed_size = size
 
 
 func set_zoom(level: float, remember := true) -> void:
