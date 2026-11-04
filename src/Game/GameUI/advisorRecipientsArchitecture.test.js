@@ -28,9 +28,13 @@ test("Advisor runs each recipient using isolated AI conversation state and persi
   assert.match(main, /loadHistory\(savedMessages, threadId = "chief"\)/);
 });
 
-test("additional ministers cannot enact chief-advisor Action or Project blocks", () => {
+test("Chief and minister Actions require player review; only Chief Projects retain auto-apply", () => {
   const ui = read("./advisor.jsx");
-  assert.match(ui, /threadId === CHIEF_ADVISOR_THREAD\s*\? await applyAdvisorActions/);
+  assert.doesNotMatch(ui, /applyAdvisorActions\(/);
+  assert.match(ui, /actionProposalsFromReply\(actionsProposal, replyId\)/);
+  assert.match(ui, /await approveAdvisorAction\(/);
+  assert.match(ui, /onDiscussAction=\{handleDiscussAction\}/);
+  assert.match(ui, /onProceedAction=\{handleProceedAction\}/);
   assert.match(ui, /threadId === CHIEF_ADVISOR_THREAD\s*\? await applyAdvisorProjects/);
   assert.match(ui, /mutateAdvisorState\(\(stored\) => replaceAdvisorThread/);
   assert.match(ui, /recipientLocked/);
