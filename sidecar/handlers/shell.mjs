@@ -54,9 +54,12 @@ const walkFiles = (dir, found = []) => {
   return found;
 };
 
+const NOT_ON_NATIVE = new Set(["2026-11-smoother-zooming"]);
+
 export const register = (ctx) => {
   const { engine, api, emit, plain, storage, clean, list, cacheDir, addStandIn, standIn } = ctx;
   const notes = engine.shellNotes;
+  const onNative = (update) => !NOT_ON_NATIVE.has(clean(update?.id));
   const notices = engine.shellNotices;
   const doorDue = engine.shellDoorDue;
   const plan = engine.shellVaultPlan;
@@ -353,8 +356,8 @@ export const register = (ctx) => {
 
   return {
     "shell.boot": async ({ preview = "" } = {}) => {
-      const asked = notices.previewedUpdates(previewSearch(preview));
-      const notice = asked ? { updates: asked, preview: true } : { updates: notices.pendingUpdates(), preview: false };
+      const asked = notices.previewedUpdates(previewSearch(preview), list(notes.UPDATES).filter(onNative));
+      const notice = asked ? { updates: asked, preview: true } : { updates: notices.pendingUpdates({ updates: list(notes.NOTICE_UPDATES).filter(onNative) }), preview: false };
       const door = await doorDue.decideVaultDoor({ always: settings.vaultDoorAlways(), resolveBuild: nativeBuild }).catch(() => ({ show: false, build: "" }));
       return {
         door: { show: door.show === true, build: clean(door.build) },
@@ -373,7 +376,7 @@ export const register = (ctx) => {
       return true;
     },
     "shell.state": async () => ({ seen: notices.seenUpdate() ?? "", doorBuild: doorDue.readVaultDoorBuild() ?? "" }),
-    "shell.updates": async () => ({ updates: list(notes.UPDATES).map(updateView) }),
+    "shell.updates": async () => ({ updates: list(notes.UPDATES).filter(onNative).map(updateView) }),
     "shell.prefs": async () => prefs(),
     "shell.metal": async () => metal(),
     "shell.brushedMetal": async ({ size = 64, options = {} } = {}) => brushedDisc(Math.max(8, Math.min(1024, Math.round(Number(size) || 64))), options && typeof options === "object" ? options : {}),
