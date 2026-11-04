@@ -367,3 +367,7 @@ export * as wrHome from "../../src/runtime/fronts/home.js";
 export * as ctPolitics from "../../src/runtime/politics.js";
 export * as advisorThreads from "../../src/runtime/advisorThreads.js";
 export * as wsMapDistance from "../../server/mapDistance.js";
+export * as advisorActionReview from "../../src/Game/GameUI/advisorActionReview.js";
+export * as advisorActionApproval from "../../src/Game/GameUI/advisorActionApproval.js";
+export * as advisorProjectRouting from "../../src/Game/GameUI/advisorProjectRouting.js";
+export * as characterConversations from "../../src/Game/AI/characterConversations.js";
