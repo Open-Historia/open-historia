@@ -72,6 +72,10 @@ static func way_refusal(code: String) -> String:
 			return "its troops were gone"
 		"no-war":
 			return "you are fighting no war"
+		"no-navy":
+			return "your country has no navy to carry them"
+		"no-air-force":
+			return "your country has no air arm to carry them"
 		"railhead":
 			return "its line ends before that place"
 		"too-far", "off-map":

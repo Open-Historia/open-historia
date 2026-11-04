@@ -7,8 +7,8 @@ var failures: PackedStringArray = []
 var played: PackedStringArray = []
 var only := ""
 
-const NEWEST_UPDATES := ["2026-11-display-mode", "2026-11-rostra-check-in", "2026-11-rostra-search-polls", "2026-11-advisor-contacts"]
-const NEWEST_TITLES := ["Windowed, maximized or fullscreen", "Check in Rostra from the map", "Rostra: Search and polls", "Advisor contacts and party details"]
+const NEWEST_UPDATES := ["2026-11-ships-from-ports", "2026-11-aircraft-key", "2026-11-gentler-terrain", "2026-11-display-mode"]
+const NEWEST_TITLES := ["Troops sail from a port", "The Aircraft key works", "Gentler 3D terrain", "Windowed, maximized or fullscreen"]
 const FIRST_OPENING := ["2026-11-rostra", "2026-11-deploy-aircraft", "2026-10-espionage-part-2", "2026-11-display-mode"]
 
 
