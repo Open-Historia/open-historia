@@ -6,6 +6,7 @@ import {
   buildPoliticalBoundaryTopology,
   createPoliticalBoundaryState as createBoundaryState,
   politicalBoundaryStateCollection,
+  segmentIdsOfRegion,
   setExcludedBoundarySegments,
   updatePoliticalBoundaryState,
 } from "./politicalBoundaryTopology.js";
@@ -605,7 +606,7 @@ const transitionDirectionForChange = ({
   let inwardNormalWeight = 0;
   const sharedFrontierSegments = [];
   const precision = Number(cachedTopology?.precision ?? 0);
-  const incidentSegments = boundaryState?.regionToSegments?.[index] ?? [];
+  const incidentSegments = segmentIdsOfRegion(boundaryState, index);
 
   if (precision > 0 && boundaryState?.segments && incidentSegments.length) {
     for (const segmentId of incidentSegments) {
@@ -663,7 +664,7 @@ const transitionDirectionForChange = ({
     for (const seed of queue) recipientIndexes.add(seed);
     for (let cursor = 0; cursor < queue.length; cursor += 1) {
       const regionIndex = queue[cursor];
-      for (const segmentId of boundaryState.regionToSegments?.[regionIndex] ?? []) {
+      for (const segmentId of segmentIdsOfRegion(boundaryState, regionIndex)) {
         const segment = boundaryState.segments.get(segmentId);
         if (!segment) continue;
         for (const neighborIndex of segment.regionIndexes ?? []) {
