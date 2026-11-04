@@ -439,24 +439,16 @@ func _map_cards() -> void:
 	cards._build_region(false)
 	await _wait(0.4)
 	_check(_has_text(cards, "Cities") or _has_text(cards, "No cities or neighbouring regions are known for this region."), "region info section")
-	_check(_has_text(cards, "Listen in"), "region card: Listen in button")
+	_check(_has_text(cards, "Check in Rostra") and not _has_text(cards, "Listen in"), "region card: Check in Rostra, no Listen in")
 	await _shoot("15-region-card-info")
 	var region: Dictionary = cards._region
-	cards.open_listen_in({"regionId": str(region.get("regionId", "")), "regionName": str(region.get("regionName", "")), "polity": "France", "polityKey": "France"})
-	var phone = cards._phone
-	await _until(func() -> bool: return is_instance_valid(phone) and _has_text(phone, "Camille Bernard"), 40.0)
+	var rostra := main.hud.panels.get("social") as RostraPanel
+	main.hud.open_rostra({"polity": str(region.get("rostraPlace", "France")), "polityKey": str(region.get("rostraPlace", "France"))})
+	await _until(func() -> bool: return rostra != null and is_instance_valid(rostra._search) and str(rostra._search.view.get("title", "")) == "France", 40.0)
 	await _wait(0.5)
-	var phone_tabs: Array = phone._tabs.get_children() if is_instance_valid(phone) else []
-	_check(is_instance_valid(phone) and phone.view.get("nationwide", false) and phone_tabs.size() == 2 and str(phone_tabs[0].text) == "France" and str(phone_tabs[1].text) == str(region.get("regionName", "")), "listen in: opens on the country's feed, its tab first")
-	_check(is_instance_valid(phone) and _has_text(phone, "Camille Bernard") and _has_text(phone, "TRENDING") and _has_text(phone, "Written by your AI model. Each new feed is one AI request."), "listen in: the whole country")
-	await _shoot("16-listen-in-country")
-	phone.nationwide = false
-	await phone.refresh_view()
-	await _until(func() -> bool: return is_instance_valid(phone) and not bool(phone.view.get("waiting", true)), 40.0)
-	await _wait(0.5)
-	_check(is_instance_valid(phone) and not phone.view.get("nationwide", true) and _has_text(phone, "Camille Bernard"), "listen in: the region's feed")
-	await _shoot("17-listen-in-region")
-	phone.close()
+	_check(main.hud.active_panel == "social" and rostra != null and rostra.tab == "search" and is_instance_valid(rostra._search) and str(rostra._search.view.get("title", "")) == "France", "Check in Rostra opens Rostra's Search on the region's country")
+	await _shoot("16-check-in-rostra")
+	main.hud.set_active_panel("")
 	await _wait(0.4)
 	await cards._open_country_from_region()
 	await _wait(1.0)
