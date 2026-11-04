@@ -214,6 +214,8 @@ fn frame_of(value: &Value) -> Frame {
         km: number_field(value, "km"),
         flat: value.get("flat") == Some(&Value::Bool(true)),
         scale: value.get("scale").map(number_of).filter(|scale| *scale > 0.0).unwrap_or(KM_PER_DEGREE),
+        proj: None,
+        factor: None,
     }
 }
 

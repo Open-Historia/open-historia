@@ -38,6 +38,7 @@ use super::game_dates::{add_game_days, diff_game_days};
 use super::ground::{away_of, cell_at, downhill, measure};
 use super::manpower::{draw, formations_left_with, men_of, part_left_with, side_formations_left_with};
 use super::military::mix_of;
+use super::march::{march_kept, marches_for, read_march, send_inland};
 use super::movement::place_behind;
 use super::muster::{head_start_of, levy_owed, muster_share, musters_for, read_levy, spread_pick};
 use super::orders::standing_of;
@@ -210,6 +211,11 @@ pub struct Battle {
     pub opened_for: bool,
     pub led_by_own: Option<[bool; 2]>,
     pub answering: Option<[f64; 2]>,
+    pub home: bool,
+    pub called_on: String,
+    pub march_km: Option<[f64; 3]>,
+    pub own_pace: f64,
+    pub march_depths: Vec<(String, f64)>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -368,6 +374,11 @@ pub fn create_battle(run: &Run, opening: Opening) -> Battle {
         opened_for: false,
         led_by_own: None,
         answering: None,
+        home: false,
+        called_on: String::new(),
+        march_km: None,
+        own_pace: 1.0,
+        march_depths: Vec::new(),
     }
 }
 
@@ -741,6 +752,9 @@ pub fn raise_troops(battle: &mut Battle, run: &Run, me: Option<usize>, only: i64
             }
         }
     }
+    for side in 0..2 {
+        counts[side] = jsmath::max(0.0, counts[side] - live_count(&battle.troops[side]) as f64);
+    }
     battle.quality = [0, 1].map(|side| if only >= 0 && side as i64 != only { battle.quality[side] } else { round3(sized.quality[side]) });
     for side in 0..2 {
         if only >= 0 && side as i64 != only {
@@ -833,10 +847,11 @@ pub fn raise_troops(battle: &mut Battle, run: &Run, me: Option<usize>, only: i64
         let mut present = raised.clone();
         let war = run.wars.get(&battle.war_id.string_or_empty());
         let began = war.map(|war| Val::str(&war.began)).unwrap_or(Val::Undef);
-        if musters_for(run.mech.muster(), run.input.get("authored").truthy(), &began, run.input.get("gameBegan")) {
-            let war = war.unwrap();
+        let building = battle.status == "standing" && run.mech.muster() && marches_for(run, battle, None);
+        if musters_for(run.mech.muster(), run.input.get("authored").truthy(), &began, run.input.get("gameBegan")) || building {
             let today = run.date_of(run.day);
-            let starter = (if battle.swap { 1 - side } else { side }) == 0;
+            let war_began = if building { today.clone() } else { war.unwrap().began.clone() };
+            let starter = !building && (if battle.swap { 1 - side } else { side }) == 0;
             let mut keep: Vec<usize> = Vec::new();
             let mut owed: Vec<Owed> = Vec::new();
             for owner in 0..count {
@@ -847,14 +862,14 @@ pub fn raise_troops(battle: &mut Battle, run: &Run, me: Option<usize>, only: i64
                 let member = &battle.sides[side][owner];
                 let head = if starter { head_start_of(run.muster_of(member).get("head"), true) } else { 0.0 };
                 let since = if head > 0.0 {
-                    let moved = add_game_days(&war.began, -head);
+                    let moved = add_game_days(&war_began, -head);
                     if moved.is_empty() {
-                        war.began.clone()
+                        war_began.clone()
                     } else {
                         moved
                     }
                 } else {
-                    war.began.clone()
+                    war_began.clone()
                 };
                 let share = match diff_game_days(&since, &today) {
                     None => 1.0,
@@ -911,6 +926,9 @@ pub fn raise_troops(battle: &mut Battle, run: &Run, me: Option<usize>, only: i64
         let swarming = if form.truthy() { matches!(form, Val::Str(text) if text == SWARM_FORM) } else { run.warfare == SWARM_FORM };
         if swarming {
             raise_swarms(battle, side, &present);
+        }
+        if marches_for(run, battle, war) {
+            send_inland(battle, run, side, &present);
         }
         for &index in &present {
             let troop = &battle.troops[side][index];
@@ -1063,8 +1081,9 @@ pub fn load_battle(run: &Run, record: &Val, arena: Rc<Arena>) -> Battle {
     );
     battle.status = record.get("status").string_or_empty();
     battle.fresh = false;
+    battle.home = record.get("home").is_true();
     set_handicap(&mut battle, run);
-    let carry = if record.get("brief").get("carry").is_nullish() { Val::Obj(Obj::new()) } else { record.get("brief").get("carry").clone() };
+    let carry =if record.get("brief").get("carry").is_nullish() { Val::Obj(Obj::new()) } else { record.get("brief").get("carry").clone() };
     for entry in record.get("contested").array_or_empty() {
         if let (Val::Str(id), Val::Str(name)) = (entry.at(0), entry.at(1)) {
             if entry.as_array().is_some() && !id.is_empty() && !name.is_empty() {
@@ -1122,6 +1141,20 @@ pub fn load_battle(run: &Run, record: &Val, arena: Rc<Arena>) -> Battle {
             let levels = decode_levels(&carry.get("tired").at(side).string_or_empty());
             for (index, troop) in list.iter_mut().enumerate() {
                 troop.fatigue = levels.get(index).copied().unwrap_or(0.0);
+            }
+        }
+    }
+    battle.called_on = match carry.get("called") {
+        Val::Str(text) => text.clone(),
+        _ => String::new(),
+    };
+    if carry.get("march").as_array().is_some() {
+        for (side, list) in read.iter_mut().enumerate() {
+            let goals = read_march(carry.get("march").at(side), list.len());
+            for (index, troop) in list.iter_mut().enumerate() {
+                if goals[index] >= 0.0 {
+                    troop.goal = goals[index];
+                }
             }
         }
     }
@@ -1254,16 +1287,18 @@ pub struct Opened {
     pub frame: Frame,
     pub arena: Rc<Arena>,
     pub day: f64,
+    pub home: bool,
 }
 
 pub fn open_battle(run: &Run, opened: Opened) -> Option<Battle> {
-    let Opened { name, war_id, sides, frame, arena, day } = opened;
+    let Opened { name, war_id, sides, frame, arena, day, home } = opened;
     let mut battle = create_battle(run, Opening { name, war_id, sides, frame, arena: arena.clone(), opened_date: Val::Str(run.date_of(day)), opened_day: Val::Num(day) });
+    battle.home = home;
     set_handicap(&mut battle, run);
     read_regions(&mut battle, run);
     let (region_side, ice) = region_sides(&battle);
     let mut field = open_field(arena, run.input.get("map").get("regions").array_or_empty(), &region_side, ice.as_deref())?;
-    if trace_contour(&mut field).segments == 0 {
+    if !battle.home && trace_contour(&mut field).segments == 0 {
         return None;
     }
     battle.field = Some(field);
@@ -1579,7 +1614,10 @@ pub fn save_battle(battle: &mut Battle, run: &Run, day: f64, changes: &mut Vec<V
     record.set("name", Val::str(&battle.name));
     record.set("warId", battle.war_id.clone());
     record.set("status", Val::str(&battle.status));
-    record.set("sides", Val::Arr(sides.iter().map(|members| Val::Arr(members.iter().map(|member| Val::str(member)).collect())).collect()));
+    if battle.home {
+        record.set("home", Val::Bool(true));
+    }
+    record.set("sides",Val::Arr(sides.iter().map(|members| Val::Arr(members.iter().map(|member| Val::str(member)).collect())).collect()));
     record.set("openedDate", battle.opened_date.clone());
     record.set("asOf", Val::Str(if closed { battle.closed_date.clone() } else { run.date_of(day) }));
     record.set("frame", frame_record(&battle.frame));
@@ -1640,6 +1678,12 @@ pub fn save_battle(battle: &mut Battle, run: &Run, day: f64, changes: &mut Vec<V
     }
     if battle.talk.iter().any(|lines| !lines.is_empty()) {
         carry.set("talk", Val::Arr(battle.talk.iter().map(|lines| Val::Arr(lines.iter().map(talk_val).collect())).collect()));
+    }
+    if battle.home && !battle.called_on.is_empty() {
+        carry.set("called", Val::str(&battle.called_on));
+    }
+    if battle.troops.iter().any(|list| list.iter().any(|troop| is_live(troop) && troop.goal >= 0.0)) {
+        carry.set("march", Val::Arr(battle.troops.iter().map(|list| march_kept(list)).collect()));
     }
     if plans.truthy() {
         carry.set("plans", plans);

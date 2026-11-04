@@ -9,6 +9,7 @@ use super::walls::{wall_ahead, wear_wall, WALL_ASSAULT_COST, WALL_DEFENCE_PER_LE
 use super::weather::weather_loss;
 use super::js::Val;
 use crate::jsmath;
+use super::march::OWN_GROUND_CLEAR;
 
 fn clamp_ratio(value: f64) -> f64 {
     if value < ATTRITION_RATIO_MIN {
@@ -253,6 +254,12 @@ pub fn step_forward(run: &Run, battle: &mut Battle, pace_km: &[f64], pace: f64) 
         entry.radius = control_radius(troop, |y| battle.place.km_at(y));
         let pace_of = if troop.kind >= 0.0 && troop.kind.fract() == 0.0 { pace_km.get(troop.kind as usize).copied().unwrap_or(f64::NAN) } else { f64::NAN };
         entry.day_cells = (pace_of * battle.arena.speed[cell] as f64 * troop.supply * pace * troop.drive * troop.pace_factor * battle.edge[entry.side].pace * troop.legs) / battle.place.km_at(troop.y);
+        if battle.own_pace > 1.0 {
+            let clear = battle.to_side.as_ref().map_or(f64::NAN, |to_side| to_side.sides[1 - entry.side][cell] as f64 / 3.0);
+            if clear > entry.radius * OWN_GROUND_CLEAR {
+                entry.day_cells *= battle.own_pace;
+            }
+        }
         parts = jsmath::max(parts, (entry.day_cells / (entry.radius * 0.5)).ceil());
     }
     parts = jsmath::min(SUBSTEPS_MAX, parts);

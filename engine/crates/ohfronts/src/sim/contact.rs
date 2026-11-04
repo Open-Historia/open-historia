@@ -1,6 +1,7 @@
 use super::constants::{CONTACT_WITHIN_KM, FRAME_MARGIN_KM};
 use super::frame::{create_frame, lat_to_y, y_to_lat, Bounds, Frame};
 use super::js::{self, Val};
+use super::world_grid::measure_of;
 use crate::jsmath;
 
 const TOUCH_DEGREES: f64 = 0.02;
@@ -93,16 +94,8 @@ fn boxes_of_sides<F: FnMut(&str) -> Option<usize>>(regions: &[Val], side_of: &mu
     held
 }
 
-fn map_flat(map: &Val) -> bool {
-    map.get("flat").is_true()
-}
-
-fn map_scale(map: &Val) -> f64 {
-    map.get("scale").num()
-}
-
 fn bounds_round(contact: Area, held: &[Vec<Area>; 2], map: &Val) -> Option<Area> {
-    let probe = create_frame(contact.bounds(), map_flat(map), map_scale(map), 0.0)?;
+    let probe = create_frame(contact.bounds(), measure_of(map), 0.0)?;
     let reach = CONTACT_WITHIN_KM / (probe.km / probe.cell);
     let west = contact.west - reach;
     let east = contact.east + reach;
@@ -282,5 +275,5 @@ pub fn find_contacts<F: FnMut(&str) -> Option<usize>>(regions: &[Val], mut side_
 }
 
 pub fn frame_for_contact(bounds: Area, map: &Val) -> Option<Frame> {
-    create_frame(bounds.bounds(), map_flat(map), map_scale(map), FRAME_MARGIN_KM)
+    create_frame(bounds.bounds(), measure_of(map), FRAME_MARGIN_KM)
 }

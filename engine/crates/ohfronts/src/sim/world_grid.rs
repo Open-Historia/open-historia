@@ -80,28 +80,195 @@ pub fn arc_tan2(y: f64, x: f64) -> f64 {
     }
 }
 
+const MERCATOR_MOST_LAT: f64 = 85.0511287798066;
+
+pub fn plane_y(lat: f64) -> f64 {
+    let value = js::or_zero(lat);
+    let clamped = if value > MERCATOR_MOST_LAT {
+        MERCATOR_MOST_LAT
+    } else if value < -MERCATOR_MOST_LAT {
+        -MERCATOR_MOST_LAT
+    } else {
+        value
+    };
+    let mut s = sine(clamped * RAD);
+    let mut doublings = 1.0;
+    let mut halving = 0;
+    while halving < 8 && (s > 0.05 || s < -0.05) {
+        s /= 1.0 + (1.0 - s * s).sqrt();
+        doublings *= 2.0;
+        halving += 1;
+    }
+    let square = s * s;
+    let mut sum = 0.0;
+    let mut odd = 21.0;
+    while odd >= 1.0 {
+        sum = 1.0 / odd + square * sum;
+        odd -= 2.0;
+    }
+    (doublings * s * sum) / RAD
+}
+
+#[derive(Debug, PartialEq)]
+pub struct Metric {
+    pub kind: Option<String>,
+    pub step: f64,
+    pub from: f64,
+    pub kx: Vec<f64>,
+    pub m: Vec<f64>,
+}
+
+static METRICS: std::sync::Mutex<Vec<&'static Metric>> = std::sync::Mutex::new(Vec::new());
+static METRIC_TABLES: std::sync::Mutex<Vec<(String, u64, &'static Metric)>> = std::sync::Mutex::new(Vec::new());
+
+fn same_numbers(a: &[f64], b: &[f64]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.to_bits() == y.to_bits())
+}
+
+pub fn intern_metric(metric: Metric) -> &'static Metric {
+    let mut known = METRICS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(found) = known.iter().find(|other| other.kind == metric.kind && other.step.to_bits() == metric.step.to_bits() && other.from.to_bits() == metric.from.to_bits() && same_numbers(&other.kx, &metric.kx) && same_numbers(&other.m, &metric.m)) {
+        return found;
+    }
+    let made: &'static Metric = Box::leak(Box::new(metric));
+    known.push(made);
+    made
+}
+
+fn column_of(value: &Val) -> Vec<f64> {
+    match value {
+        Val::Typed(typed) => typed.values(),
+        other => other.array_or_empty().iter().map(js::to_number).collect(),
+    }
+}
+
+pub fn metric_of(value: &Val) -> Option<&'static Metric> {
+    if !value.truthy() || !matches!(value.get("kx"), Val::Arr(_)) {
+        return None;
+    }
+    let kind = match value.get("type") {
+        Val::Str(text) => Some(text.clone()),
+        _ => None,
+    };
+    Some(intern_metric(Metric { kind, step: js::to_number(value.get("step")), from: js::to_number(value.get("from")), kx: column_of(value.get("kx")), m: column_of(value.get("m")) }))
+}
+
+pub fn projection_type(value: &str) -> String {
+    let lower = js::trim(value).to_lowercase();
+    let mut out = String::new();
+    let mut gap = false;
+    for unit in lower.chars() {
+        if unit == '_' || js::is_js_whitespace(unit) {
+            gap = true;
+            continue;
+        }
+        if gap {
+            out.push('-');
+            gap = false;
+        }
+        out.push(unit);
+    }
+    if gap {
+        out.push('-');
+    }
+    out
+}
+
+pub const TABLED_PROJECTIONS: [&str; 9] = ["equirectangular", "miller", "gall-peters", "robinson", "natural-earth", "equal-earth", "mollweide", "sinusoidal", "flat-earth"];
+
+pub fn has_metric_table(kind: &str) -> bool {
+    TABLED_PROJECTIONS.contains(&projection_type(kind).as_str())
+}
+
+pub fn register_metric_table(kind: &str, factor: f64, table: &Val) {
+    let Some(metric) = metric_of(table) else { return };
+    let key = projection_type(kind);
+    let mut tables = METRIC_TABLES.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if !tables.iter().any(|(known, bits, _)| *known == key && *bits == factor.to_bits()) {
+        tables.push((key, factor.to_bits(), metric));
+    }
+}
+
+pub fn metric_table_for(kind: &str, factor: f64) -> Option<&'static Metric> {
+    if !has_metric_table(kind) {
+        return None;
+    }
+    let key = projection_type(kind);
+    let times = if factor > 0.0 { factor } else { 1.0 };
+    let tables = METRIC_TABLES.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    match tables.iter().find(|(known, bits, _)| *known == key && *bits == times.to_bits()) {
+        Some((_, _, table)) => Some(*table),
+        None => panic!("the projection {kind} has no table at {times} in the Rust engine"),
+    }
+}
+
+pub fn metric_at(column: &[f64], metric: &Metric, y: f64) -> f64 {
+    let at = (y - metric.from) / metric.step;
+    let last = column.len() as f64 - 1.0;
+    let pick = |index: f64| if index >= 0.0 && (index as usize) < column.len() { column[index as usize] } else { f64::NAN };
+    if !(at > 0.0) {
+        return pick(0.0);
+    }
+    if at >= last {
+        return pick(last);
+    }
+    let row = at.floor();
+    pick(row) + (pick(row + 1.0) - pick(row)) * (at - row)
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct Surface {
     pub flat: bool,
     pub scale: f64,
+    pub factor: f64,
+    pub metric: Option<&'static Metric>,
 }
 
 impl Default for Surface {
     fn default() -> Self {
-        Surface { flat: false, scale: KM_PER_DEGREE }
+        Surface { flat: false, scale: KM_PER_DEGREE, factor: 1.0, metric: None }
     }
+}
+
+impl Surface {
+    pub fn plain(flat: bool, scale: f64) -> Self {
+        Surface { flat, scale, factor: 1.0, metric: None }
+    }
+}
+
+pub fn measure_of(map: &Val) -> Surface {
+    let scale = match map.get("scale") {
+        Val::Undef => KM_PER_DEGREE,
+        other => js::to_number(other),
+    };
+    let given = js::to_number(map.get("factor"));
+    let factor = if given > 0.0 && !matches!(map.get("factor"), Val::Num(n) if *n == 1.0) { given } else { 1.0 };
+    Surface { flat: map.get("flat").is_true(), scale, factor, metric: metric_of(map.get("metric")) }
 }
 
 pub fn km_between(lng_a: f64, lat_a: f64, lng_b: f64, lat_b: f64, surface: Surface) -> f64 {
     if surface.flat {
-        return ((lng_b - lng_a) * (lng_b - lng_a) + (lat_b - lat_a) * (lat_b - lat_a)).sqrt() * surface.scale;
+        let dy = plane_y(lat_b) - plane_y(lat_a);
+        return ((lng_b - lng_a) * (lng_b - lng_a) + dy * dy).sqrt() * (if surface.scale > 0.0 { surface.scale } else { KM_PER_DEGREE });
+    }
+    if let Some(metric) = surface.metric {
+        let y_a = plane_y(lat_a);
+        let y_b = plane_y(lat_b);
+        let across = (unwrap_lng(lng_b, lng_a) - lng_a) * metric_at(&metric.kx, metric, (y_a + y_b) / 2.0);
+        let up = metric_at(&metric.m, metric, y_b) - metric_at(&metric.m, metric, y_a);
+        return (across * across + up * up).sqrt();
     }
     let a = lat_a * RAD;
     let b = lat_b * RAD;
     let down = sine((b - a) / 2.0);
     let across = sine(((lng_b - lng_a) * RAD) / 2.0);
     let h = jsmath::min(1.0, jsmath::max(0.0, down * down + cosine(a) * cosine(b) * across * across));
-    2.0 * EARTH_KM * arc_tan2(h.sqrt(), (1.0 - h).sqrt())
+    let km = 2.0 * EARTH_KM * arc_tan2(h.sqrt(), (1.0 - h).sqrt());
+    if surface.factor == 1.0 {
+        km
+    } else {
+        km * surface.factor
+    }
 }
 
 pub fn great_point(lng_a: f64, lat_a: f64, lng_b: f64, lat_b: f64, share: f64) -> [f64; 2] {
@@ -191,6 +358,7 @@ pub struct StepKm {
     pub along: Vec<f64>,
     pub aslant: Vec<f64>,
     pub down: f64,
+    pub down_row: Option<Vec<f64>>,
 }
 
 #[derive(Clone, Debug)]
@@ -203,6 +371,8 @@ pub struct WorldGrid {
     pub wrap: bool,
     pub flat: bool,
     pub scale: f64,
+    pub factor: f64,
+    pub metric: Option<&'static Metric>,
     pub land: Vec<u8>,
     pub region: Vec<i32>,
     pub ids: Vec<String>,
@@ -217,6 +387,8 @@ pub struct WorldGrid {
 pub struct GridOptions {
     pub flat: bool,
     pub scale: Option<f64>,
+    pub factor: Option<f64>,
+    pub metric: Option<&'static Metric>,
     pub step: f64,
     pub water: Option<Vec<String>>,
 }
@@ -224,6 +396,8 @@ pub struct GridOptions {
 pub fn build_world_grid(list: &[Val], options: &GridOptions) -> Option<WorldGrid> {
     let flat = options.flat;
     let scale = options.scale.unwrap_or(KM_PER_DEGREE);
+    let factor = options.factor.unwrap_or(1.0);
+    let metric = options.metric;
     let [box_west, box_south, box_east, box_north] = bounds_of(list)?;
     let wrap = !flat && box_east - box_west > 300.0;
     let pad = jsmath::max(1.0, jsmath::max(box_east - box_west, box_north - box_south) * 0.2);
@@ -364,13 +538,15 @@ pub fn build_world_grid(list: &[Val], options: &GridOptions) -> Option<WorldGrid
     if !any {
         return None;
     }
-    let surface = Surface { flat, scale };
+    let surface = Surface { flat, scale, factor, metric };
     let mut along = vec![0.0; rows];
     let mut aslant = vec![0.0; rows];
+    let mut down_row = vec![0.0; rows];
     for row in 0..rows {
         let lat = north - (row as f64 + 0.5) * step;
         along[row] = km_between(0.0, lat, step, lat, surface);
         aslant[row] = km_between(0.0, lat, step, lat - step, surface);
+        down_row[row] = km_between(0.0, lat, 0.0, lat - step, surface);
     }
     let down = km_between(0.0, north - step * 0.5, 0.0, north - step * 1.5, surface);
     let row_cosine = (0..rows).map(|row| cosine((north - (row as f64 + 0.5) * step) * RAD)).collect();
@@ -383,11 +559,13 @@ pub fn build_world_grid(list: &[Val], options: &GridOptions) -> Option<WorldGrid
         wrap,
         flat,
         scale,
+        factor,
+        metric,
         land,
         region,
         ids,
         full: (SUB * SUB) as u8,
-        step_km: StepKm { along, aslant, down },
+        step_km: StepKm { along, aslant, down, down_row: if flat || metric.is_some() { Some(down_row) } else { None } },
         row_cosine,
         seas: None,
         sea_count: 0,
@@ -396,7 +574,11 @@ pub fn build_world_grid(list: &[Val], options: &GridOptions) -> Option<WorldGrid
 
 impl WorldGrid {
     pub fn surface(&self) -> Surface {
-        Surface { flat: self.flat, scale: self.scale }
+        Surface { flat: self.flat, scale: self.scale, factor: self.factor, metric: self.metric }
+    }
+
+    pub fn plain_surface(&self) -> Surface {
+        Surface::plain(self.flat, self.scale)
     }
 
     pub fn cell_of(&self, lng: f64, lat: f64) -> f64 {
@@ -424,20 +606,29 @@ impl WorldGrid {
 }
 
 pub enum DistanceTo {
-    Flat { cols: usize, goal_row: f64, goal_col: f64, step: f64, scale: f64 },
-    Round { cols: usize, goal_col: f64, wrap: bool, down: Vec<f64>, across: Vec<f64>, row_cosine: Vec<f64>, goal_cosine: f64 },
+    Flat { cols: usize, goal_row: f64, goal_col: f64, step: f64, per_degree: f64, height: Vec<f64> },
+    Tabled { cols: usize, goal_row: f64, goal_col: f64, step: f64, wrap: bool, height: Vec<f64>, up_to: Vec<f64>, metric: &'static Metric },
+    Round { cols: usize, goal_col: f64, wrap: bool, down: Vec<f64>, across: Vec<f64>, row_cosine: Vec<f64>, goal_cosine: f64, earth_times: f64 },
+}
+
+fn pick(list: &[f64], at: f64) -> f64 {
+    if at >= 0.0 && (at as usize) < list.len() && at.fract() == 0.0 {
+        list[at as usize]
+    } else {
+        f64::NAN
+    }
 }
 
 impl DistanceTo {
     pub fn km(&self, cell: f64) -> f64 {
         match self {
-            DistanceTo::Flat { cols, goal_row, goal_col, step, scale } => {
+            DistanceTo::Flat { cols, goal_row, goal_col, step, per_degree, height } => {
                 let cols = *cols as f64;
-                let dx = (cell % cols) - goal_col;
-                let dy = (cell / cols).floor() - goal_row;
-                (dx * dx + dy * dy).sqrt() * step * scale
+                let dx = ((cell % cols) - goal_col) * step;
+                let dy = pick(height, (cell / cols).floor()) - pick(height, *goal_row);
+                (dx * dx + dy * dy).sqrt() * per_degree
             }
-            DistanceTo::Round { cols, goal_col, wrap, down, across, row_cosine, goal_cosine } => {
+            DistanceTo::Tabled { cols, goal_row, goal_col, step, wrap, height, up_to, metric } => {
                 let cols = *cols as f64;
                 let row = (cell / cols).floor();
                 let mut apart = (cell % cols) - goal_col;
@@ -447,9 +638,22 @@ impl DistanceTo {
                 if *wrap && apart > cols - apart {
                     apart = cols - apart;
                 }
-                let pick = |list: &Vec<f64>, at: f64| if at >= 0.0 && (at as usize) < list.len() && at.fract() == 0.0 { list[at as usize] } else { f64::NAN };
+                let across = apart * step * metric_at(&metric.kx, metric, (pick(height, row) + pick(height, *goal_row)) / 2.0);
+                let up = pick(up_to, row) - pick(up_to, *goal_row);
+                (across * across + up * up).sqrt()
+            }
+            DistanceTo::Round { cols, goal_col, wrap, down, across, row_cosine, goal_cosine, earth_times } => {
+                let cols = *cols as f64;
+                let row = (cell / cols).floor();
+                let mut apart = (cell % cols) - goal_col;
+                if apart < 0.0 {
+                    apart = -apart;
+                }
+                if *wrap && apart > cols - apart {
+                    apart = cols - apart;
+                }
                 let h = jsmath::min(1.0, pick(down, row) + pick(row_cosine, row) * goal_cosine * pick(across, apart));
-                2.0 * EARTH_KM * arc_tan2(h.sqrt(), (1.0 - h).sqrt())
+                2.0 * EARTH_KM * arc_tan2(h.sqrt(), (1.0 - h).sqrt()) * earth_times
             }
         }
     }
@@ -459,8 +663,15 @@ pub fn distance_to(grid: &WorldGrid, goal: f64) -> DistanceTo {
     let cols = grid.cols as f64;
     let goal_row = (goal / cols).floor();
     let goal_col = goal % cols;
-    if grid.flat {
-        return DistanceTo::Flat { cols: grid.cols, goal_row, goal_col, step: grid.step, scale: grid.scale };
+    if grid.flat || grid.metric.is_some() {
+        let height: Vec<f64> = (0..grid.rows).map(|row| plane_y(grid.north - (row as f64 + 0.5) * grid.step)).collect();
+        if grid.flat {
+            let per_degree = if grid.scale > 0.0 { grid.scale } else { KM_PER_DEGREE };
+            return DistanceTo::Flat { cols: grid.cols, goal_row, goal_col, step: grid.step, per_degree, height };
+        }
+        let metric = grid.metric.unwrap();
+        let up_to = height.iter().map(|&y| metric_at(&metric.m, metric, y)).collect();
+        return DistanceTo::Tabled { cols: grid.cols, goal_row, goal_col, step: grid.step, wrap: grid.wrap, height, up_to, metric };
     }
     let down = (0..grid.rows)
         .map(|row| {
@@ -475,7 +686,8 @@ pub fn distance_to(grid: &WorldGrid, goal: f64) -> DistanceTo {
         })
         .collect();
     let goal_cosine = if goal_row >= 0.0 && (goal_row as usize) < grid.row_cosine.len() { grid.row_cosine[goal_row as usize] } else { f64::NAN };
-    DistanceTo::Round { cols: grid.cols, goal_col, wrap: grid.wrap, down, across, row_cosine: grid.row_cosine.clone(), goal_cosine }
+    let earth_times = if grid.factor > 0.0 { grid.factor } else { 1.0 };
+    DistanceTo::Round { cols: grid.cols, goal_col, wrap: grid.wrap, down, across, row_cosine: grid.row_cosine.clone(), goal_cosine, earth_times }
 }
 
 pub fn seas_of(grid: &mut WorldGrid) -> &Vec<i32> {

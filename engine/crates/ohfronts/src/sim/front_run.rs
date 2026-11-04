@@ -5,22 +5,26 @@ use super::battle::{absorb_unit, finished_val, holder_of, is_land_formation, kee
 use super::brief::build_brief;
 use super::codec::hash_key;
 use super::command::assign_commands;
-use super::constants::{takers_for, BATTLEFIELD_NAME_MAX, BREAKTHROUGH_LOOK_DAYS, EFFORT_FACTORS, FRONT_EFFORTS, FRONT_ORDERS, HAND_OVER_REACH_CELLS, INVADE_REACH_KM, LANDING_CELLS, MAX_BATTLEFIELDS, MAX_CLOSED_BATTLEFIELDS, MAX_SIDE_MEMBERS, MAX_TROOPS_PER_SIDE, MIND_MARK, OBJECTIVE_BEYOND_KM, POOL_PER_TROOP, REINFORCED_LINE_MOST, REINFORCED_SIZE_MOST, REINFORCE_MOST, REINFORCE_ORDER, REINFORCE_USUAL_SHARE, SCENARIO_MARK, STAFF_MARK, STAFF_REVIEW_DAYS, STANDING_QUIET_DAYS, STORY_TAKER_REACH_KM, TROOPS_PER_STRENGTH, TROOP_KINDS, WAR_EFFORTS, WITHDRAW_DAYS_MOST, WITHDRAW_KM};
+use super::constants::{takers_for, BATTLEFIELD_NAME_MAX, BREAKTHROUGH_LOOK_DAYS, EFFORT_FACTORS, FRONT_EFFORTS, FRONT_ORDERS, HAND_OVER_REACH_CELLS, INVADE_REACH_KM, LANDING_CELLS, MAX_BATTLEFIELDS, MAX_CLOSED_BATTLEFIELDS, MAX_HOME_FORCES, MAX_SIDE_MEMBERS, MUSTER_STANDING_SHARE, MAX_TROOPS_PER_SIDE, MIND_MARK, OBJECTIVE_BEYOND_KM, POOL_PER_TROOP, REINFORCED_LINE_MOST, REINFORCED_SIZE_MOST, REINFORCE_MOST, REINFORCE_ORDER, REINFORCE_USUAL_SHARE, SCENARIO_MARK, STAFF_MARK, STAFF_REVIEW_DAYS, STANDING_QUIET_DAYS, STORY_TAKER_REACH_KM, TROOPS_PER_STRENGTH, TROOP_KINDS, WAR_EFFORTS, WITHDRAW_DAYS_MOST, WITHDRAW_KM};
 use super::contact::{contact_at, find_contacts, frame_for_contact, middle_of};
 use super::dawn::dawn;
 use super::day::{grow_to_hold, prepare, record_day, settle_regions, simulate_day, start_recorder, RegionsNeeded, Today};
 use super::deploy::{deploy_cells, Call, Last, DEPLOY_WHY};
 use super::engine::{clean, clean_text, create_run, fold, fold_text, member_list, Asked, Body, Hooks, Own, Run, Said, StaffHook, War};
 use super::field::{redistance, take_capsule, trace_contour, Field, How};
-use super::frame::{point_in_frame, Frame};
+use super::frame::{create_frame, point_in_frame, Frame};
 use super::game_dates::{compare_game_dates, diff_game_days, game_date_year};
-use super::ground::downhill;
+use super::ground::{cell_at as field_cell_at, downhill, measure};
 use super::invade::{land_within, others_on_way};
 use super::js::{self, Obj, Val};
 use super::manpower::{draw, formations_left, formations_left_with, manpower_report, men_of, part_left, part_left_with, send_home};
 use super::mechanics::any_of;
 use super::military::{air_worth, land_worth, mix_of, sea_worth};
-use super::muster::{levy_owed, muster_share};
+use super::muster::{levy_owed, muster_share, Levy};
+use super::march::{march_km_of, march_on, marches_for, send_inland, walk_route, CALL_UP_FULL_DAYS};
+use super::home::{border_cells, home_bounds, home_cells as cells_round_cities, home_name, home_neighbours, way_into, HOME_JOIN_KM, HOME_MARGIN_KM};
+use super::air_strike::bomb_troops;
+use super::closing::live_order;
 use super::orders::{apply_order, assign_order, give_way, land_carried, put_ashore, read_sieges, set_standing_order, standing_of, OrderDay};
 use super::record::{fold_battlefield_name, frame_from, is_war_id_name, normalize_battlefields};
 use super::region_types::water_type_ids;
@@ -33,8 +37,7 @@ use super::transports::{bound_for, interception_of, load_of, move_on, normalize_
 use super::troops::{create_troop, is_live, kinds_for, live_count, troops_cap, troops_least, troops_wanted, TroopSeed, STATE_HOLDING};
 use super::unit_motion::year_in_era;
 use super::walls::lines_changed;
-use super::world_grid::{build_world_grid, km_between, place_along, world_sheet_key, GridOptions, Surface, WorldGrid};
-use crate::frame::KM_PER_DEGREE;
+use super::world_grid::{build_world_grid, km_between, measure_of, place_along, world_sheet_key, GridOptions, Surface, WorldGrid};
 use crate::jsmath;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc as Rc;
@@ -92,14 +95,6 @@ fn battle_ref(at: usize) -> Val {
     Val::obj([("battle", num(at as f64))])
 }
 
-fn surface_of(map: &Val) -> Surface {
-    let scale = match map.get("scale") {
-        Val::Undef => KM_PER_DEGREE,
-        other => js::to_number(other),
-    };
-    Surface { flat: map.get("flat").is_true(), scale }
-}
-
 fn order_day<'a>(today: &'a Today, date: &'a str) -> OrderDay<'a> {
     OrderDay { day: today.day, date, contour: &today.line.contour, count: today.line.count(), sectors: &today.sectors }
 }
@@ -113,7 +108,7 @@ fn regions_of(run: &Run) -> Option<&Vec<Val>> {
 }
 
 fn open_battles(run: &Run) -> usize {
-    run.battles.iter().filter(|battle| battle.status != "closed").count()
+    run.battles.iter().filter(|battle| battle.status != "closed" && !battle.home).count()
 }
 
 fn players_have(run: &Run, name: &Val) -> bool {
@@ -301,6 +296,7 @@ struct Landed {
 
 fn start_battle(run: &mut Run, mut battle: Battle, day: f64, landed: Option<Landed>) -> usize {
     let at = run.battles.len();
+    let handed = bring_home(run, &mut battle, day);
     raise_troops(&mut battle, run, None, landed.as_ref().map_or(-1, |landed| 1 - landed.side as i64));
     if let Some(landed) = &landed {
         battle.base[landed.side] = jsmath::round(sum_of(&member_weights(&battle, run, None, landed.side)) * 1000.0) / 1000.0;
@@ -312,9 +308,18 @@ fn start_battle(run: &mut Run, mut battle: Battle, day: f64, landed: Option<Land
     keep_start(&mut battle);
     read_sieges(&mut battle);
     find_pockets(&mut battle);
+    if handed.is_empty() {
+        start_recorder(&mut battle, run, day, None);
+        record_day(&mut battle, day, day >= run.days);
+        run.battles.push(battle);
+        return at;
+    }
+    run.battles.push(battle);
+    home_orders(run, at, handed, day);
+    let mut battle = lend(run, at);
     start_recorder(&mut battle, run, day, None);
     record_day(&mut battle, day, day >= run.days);
-    run.battles.push(battle);
+    give(run, at, battle);
     at
 }
 
@@ -454,7 +459,7 @@ fn land_where_troops_stand(run: &mut Run, war: &War, day: f64) -> Flow<()> {
     }
     let input = run.input.clone();
     let map = input.get("map");
-    let surface = surface_of(&map);
+    let surface = measure_of(&map);
     let near = |a: &(String, f64, f64), b: &(String, f64, f64)| km_between(a.1, a.2, b.1, b.2, surface) <= STANDING_REACH_KM;
     let mut best = 0;
     let mut most = 0;
@@ -504,7 +509,7 @@ fn examine_war(run: &mut Run, id: &str, day: f64) -> Flow<()> {
         }
         let Some(frame) = frame_for_contact(contact.bounds, &map) else { continue };
         let Some(arena) = arena_at(run, &frame) else { continue };
-        let Some(mut battle) = open_battle(run, Opened { name: String::new(), war_id: text(&war.id), sides: war.sides.clone(), frame, arena, day }) else { continue };
+        let Some(mut battle) = open_battle(run, Opened { name: String::new(), war_id: text(&war.id), sides: war.sides.clone(), frame, arena, day, home: false }) else { continue };
         battle.name = name_for(run, &mut battle);
         battle.auto_named = true;
         start_battle(run, battle, day, None);
@@ -593,6 +598,11 @@ fn raise_for(run: &Run, battle: &mut Battle, side: usize, owner: usize) {
     draw(run, &member, if military { men } else { count as f64 * run.men_each });
     battle.pool[side] += count as f64 * POOL_PER_TROOP * battle.edge[side].reserves;
     gather_newcomers(battle, side, owner as f64, first, &text(&run.warfare));
+    let war = run.wars.get(&war_id_of(battle)).cloned();
+    if marches_for(run, battle, war.as_ref()) {
+        let fresh: Vec<usize> = (first..battle.troops[side].len()).collect();
+        send_inland(battle, run, side, &fresh);
+    }
 }
 
 fn put_under_standing(run: &Run, battle: &mut Battle, side: usize, first: usize, today: &Today, day: f64) {
@@ -660,6 +670,12 @@ fn muster_day(run: &mut Run, at: usize, day: f64) {
                     cells = vec![cell];
                 }
             }
+            if battle.home {
+                let mine = own_ground_of(&battle, run, member.as_str());
+                let field = battle.field.as_ref().unwrap();
+                let arena = battle.arena.clone();
+                cells = cells_round_cities(&battle, side, &|cell| field.holders[cell] as usize == side && field.play[cell] == 1 && mine[arena.region[cell] as usize] == 1, due);
+            }
             let cells = deploy_on(&battle, side, &member, cells);
             if cells.is_empty() {
                 continue;
@@ -684,6 +700,10 @@ fn muster_day(run: &mut Run, at: usize, day: f64) {
             battle.pool[side] += due as f64 * POOL_PER_TROOP * battle.edge[side].reserves;
             battle.levy[side][entry_at].r += due as f64;
             gather_newcomers(&mut battle, side, entry.o, first, &text(&run.warfare));
+            if marches_for(run, &battle, None) {
+                let fresh: Vec<usize> = (first..battle.troops[side].len()).collect();
+                send_inland(&mut battle, run, side, &fresh);
+            }
             put_under_standing(run, &mut battle, side, first, today.as_ref().unwrap(), day);
             battle.touched = true;
             battle.plan_key = String::new();
@@ -765,7 +785,7 @@ fn leave_battle(run: &mut Run, battle: &mut Battle, names: &[String]) {
 
 fn adopt_standing(run: &mut Run, war: &War) {
     for at in 0..run.battles.len() {
-        if run.battles[at].status != "standing" {
+        if run.battles[at].status != "standing" || run.battles[at].home {
             continue;
         }
         let first = war_side(war, run.battles[at].sides[0].first().map_or("", |name| name.as_str()));
@@ -796,9 +816,56 @@ fn adopt_standing(run: &mut Run, war: &War) {
     }
 }
 
+fn peace_day(run: &mut Run, at: usize, day: f64) {
+    muster_day(run, at, day);
+    let march = march_km_of(run);
+    let date = run.date_of(day);
+    let mut battle = lend(run, at);
+    for side in 0..2 {
+        let mut leaving: Vec<usize> = Vec::new();
+        for index in 0..battle.troops[side].len() {
+            if !is_live(&battle.troops[side][index]) {
+                continue;
+            }
+            let kind = live_order(&battle.troops[side][index]).map(|order| order.read("kind")).unwrap_or(Val::Undef);
+            if word_is(&kind, "withdraw") {
+                leaving.push(index);
+            } else if battle.troops[side][index].dug {
+                battle.troops[side][index].goal = -1.0;
+            } else if word_is(&kind, "way") {
+                battle.troops[side][index].goal = -1.0;
+                if walk_route(&mut battle, side, index, &march, day) {
+                    battle.touched = true;
+                }
+            } else if battle.troops[side][index].goal >= 0.0 && march_on(&mut battle, side, index, &march) {
+                battle.touched = true;
+            }
+        }
+        if leaving.is_empty() {
+            continue;
+        }
+        send_home(run, &battle, side, Some(&leaving));
+        for &index in &leaving {
+            battle.troops[side][index].strength = 0.0;
+        }
+        if live_count(&battle.troops[side]) == 0 {
+            battle.levy[side] = Vec::new();
+        }
+        battle.log.push(Val::obj([("d", text(&date)), ("k", text("stood-down")), ("s", num(side as f64)), ("at", text(&format!("{} formations sent home", leaving.len()))), ("n", num(leaving.len() as f64))]));
+        battle.touched = true;
+    }
+    give(run, at, battle);
+}
+
 fn stand_day(battle: &mut Battle) {
     battle.quiet += 1.0;
     let manned: Vec<usize> = (0..2).filter(|&side| live_count(&battle.troops[side]) > 0).collect();
+    if battle.home {
+        if manned.is_empty() && !levy_owed(&battle.levy) {
+            battle.closing = "stood-down".to_string();
+        }
+        return;
+    }
     if manned.is_empty() || (battle.quiet >= STANDING_QUIET_DAYS && manned.iter().all(|&side| battle.effort[side] == "token")) {
         battle.closing = "stood-down".to_string();
     }
@@ -1137,7 +1204,7 @@ fn open_landing_at(run: &mut Run, war: &War, side_name: &str, lng: f64, lat: f64
     let Some(frame) = contact.and_then(|contact| frame_for_contact(contact.bounds, &map)) else { return Ok(None) };
     let Some(arena) = arena_at(run, &frame) else { return Ok(None) };
     let given = given_name(run, name);
-    let opened = open_battle(run, Opened { name: given.clone(), war_id: text(&war.id), sides: war.sides.clone(), frame: frame.clone(), arena: arena.clone(), day });
+    let opened = open_battle(run, Opened { name: given.clone(), war_id: text(&war.id), sides: war.sides.clone(), frame: frame.clone(), arena: arena.clone(), day, home: false });
     let mut battle = match opened {
         Some(battle) => battle,
         None => landing_ground(run, &given, &war.id, &war.sides, &frame, arena.clone(), day),
@@ -1287,7 +1354,7 @@ fn reinforce_on_front(run: &mut Run, at: usize, moment: &Val, day: f64) {
     let usual = jsmath::max(troops_least(run.troops), jsmath::round(troops_wanted(strength, &battle.effort[side], run.troops)));
     let live = live_count(&battle.troops[side]) as f64;
     let deployed = moment.get("deployed").truthy();
-    let room = jsmath::min(jsmath::min(MAX_TROOPS_PER_SIDE - battle.troops[side].len() as f64, if deployed { MAX_TROOPS_PER_SIDE } else { REINFORCED_SIZE_MOST * usual - live }), REINFORCED_LINE_MOST * troops_cap(battle.line_km, run.troops) - live);
+    let room = jsmath::min(jsmath::min(MAX_TROOPS_PER_SIDE - battle.troops[side].len() as f64, if deployed { MAX_TROOPS_PER_SIDE } else { REINFORCED_SIZE_MOST * usual - live }), if battle.home { MAX_TROOPS_PER_SIDE } else { REINFORCED_LINE_MOST * troops_cap(battle.line_km, run.troops) - live });
     let military = run.mech.military();
     let drafted = battle.sides[side][owner].clone();
     let no_army = military && land_worth(&run.military_of(&drafted)) == 0.0;
@@ -1321,6 +1388,12 @@ fn reinforce_on_front(run: &mut Run, at: usize, moment: &Val, day: f64) {
             cells = vec![cell];
         }
     }
+    if battle.home {
+        let mine = own_ground_of(&battle, run, drafted.as_str());
+        let field = battle.field.as_ref().unwrap();
+        let arena = battle.arena.clone();
+        cells = cells_round_cities(&battle, side, &|cell| field.holders[cell] as usize == side && field.play[cell] == 1 && mine[arena.region[cell] as usize] == 1, count);
+    }
     let on_line = has_deploy_line(&battle, side, &drafted);
     let cells = deploy_on(&battle, side, &drafted, cells);
     if cells.is_empty() {
@@ -1341,7 +1414,12 @@ fn reinforce_on_front(run: &mut Run, at: usize, moment: &Val, day: f64) {
     draw(run, &drafted, if military { called } else { count as f64 * run.men_each });
     battle.pool[side] += count as f64 * POOL_PER_TROOP * battle.edge[side].reserves;
     let swarmed = gather_newcomers(&mut battle, side, owner as f64, first, &text(&run.warfare));
+    if marches_for(run, &battle, None) {
+        let fresh: Vec<usize> = (first..battle.troops[side].len()).collect();
+        send_inland(&mut battle, run, side, &fresh);
+    }
     put_under_standing(run, &mut battle, side, first, &today, day);
+    let at_home = battle.home;
     let away = battle.away[side];
     give(run, at, battle);
     if away {
@@ -1351,6 +1429,8 @@ fn reinforce_on_front(run: &mut Run, at: usize, moment: &Val, day: f64) {
         "where its swarm gathers".to_string()
     } else if deployed && on_line {
         "on its deployment line".to_string()
+    } else if at_home {
+        "round its cities".to_string()
     } else if whole {
         "along its whole line".to_string()
     } else {
@@ -1362,6 +1442,20 @@ fn reinforce_on_front(run: &mut Run, at: usize, moment: &Val, day: f64) {
     battle.quiet = 0.0;
     battle.touched = true;
     battle.plan_key = String::new();
+}
+
+pub fn call_up_size(run: &Run, at: usize, side: usize, member: &str) -> f64 {
+    let battle = &run.battles[at];
+    let owner = jsmath::max(0.0, member_index(battle, side, member) as f64) as usize;
+    let weights = member_weights(battle, run, Some(at), side);
+    let usual = jsmath::max(troops_least(run.troops), jsmath::round(troops_wanted(weights.get(owner).copied().unwrap_or(0.0), &battle.effort[side], run.troops)));
+    let days = jsmath::max(1.0, run.days);
+    let curve = run.muster_of(member);
+    let called = match curve.get("table") {
+        Val::Arr(table) if !table.is_empty() => js::to_number(&table[jsmath::min(table.len() as f64 - 1.0, days) as usize]),
+        _ => jsmath::min(1.0, days / CALL_UP_FULL_DAYS),
+    };
+    jsmath::max(1.0, (usual * called * (1.0 - run.shortage_of(member))).floor())
 }
 
 fn call_up_deployed(run: &mut Run) {
@@ -1377,13 +1471,22 @@ fn call_up_deployed(run: &mut Run) {
                 let Some(call) = &entry.call else { continue };
                 let before = run.battles[at].troops[side].len();
                 let noted = run.notes.len();
+                let first_day = run.date_of(0.0);
+                if run.battles[at].home && run.battles[at].called_on == first_day {
+                    continue;
+                }
                 let mut moment = Obj::new();
                 moment.set("side", text(&entry.country));
                 moment.set("sector", text("all"));
                 moment.set("given", Val::Bool(true));
                 moment.set("deployed", Val::Bool(true));
-                if let Call::Count(count) = call {
-                    moment.set("count", num(*count));
+                let count = match call {
+                    Call::Count(count) if *count == 0.0 => 0.0,
+                    _ => call_up_size(run, at, side, &entry.country),
+                };
+                moment.set("count", num(count));
+                if run.battles[at].home {
+                    run.battles[at].called_on = first_day;
                 }
                 reinforce_on_front(run, at, &Val::Obj(moment), 0.0);
                 let n = run.battles[at].troops[side].len() as f64 - before as f64;
@@ -1528,7 +1631,7 @@ fn apply_border_moment(run: &mut Run, moment: &Val, day: f64, first: &str, secon
         for contact in contacts {
             let Some(frame) = frame_for_contact(contact.bounds, &map) else { continue };
             let Some(arena) = arena_at(run, &frame) else { continue };
-            opened = open_battle(run, Opened { name: names[0].clone(), war_id: text(""), sides: [vec![first.to_string()], vec![second.to_string()]], frame, arena, day });
+            opened = open_battle(run, Opened { name: names[0].clone(), war_id: text(""), sides: [vec![first.to_string()], vec![second.to_string()]], frame, arena, day, home: false });
             if opened.is_some() {
                 break;
             }
@@ -1621,6 +1724,415 @@ fn border_names(value: &Val) -> Option<(String, String)> {
     Some((first.to_string(), second.to_string()))
 }
 
+fn line_ends(unit: char) -> bool {
+    matches!(unit, '\n' | '\r' | '\u{2028}' | '\u{2029}')
+}
+
+fn prefixed_name(value: &Val, word: &str) -> Option<String> {
+    let full = if value.is_nullish() { String::new() } else { js::to_string(value) };
+    let body = full.trim_start_matches(js::is_js_whitespace);
+    let mut units = body.char_indices();
+    for wanted in word.chars() {
+        let (_, unit) = units.next()?;
+        if !unit.eq_ignore_ascii_case(&wanted) {
+            return None;
+        }
+    }
+    let after = units.next().map_or(body.len(), |(at, _)| at);
+    let rest = body[after..].trim_start_matches(js::is_js_whitespace);
+    let rest = rest.strip_prefix(':')?;
+    let trimmed = rest.trim_start_matches(js::is_js_whitespace);
+    if !trimmed.is_empty() {
+        let name = trimmed.trim_end_matches(js::is_js_whitespace);
+        if name.contains(line_ends) {
+            return None;
+        }
+        return Some(name.to_string());
+    }
+    rest.chars().rev().find(|unit| !line_ends(*unit)).map(|unit| unit.to_string())
+}
+
+fn home_forces_of(run: &Run, country: &str) -> Option<usize> {
+    run.battles.iter().position(|battle| battle.home && battle.status != "closed" && battle.closing.is_empty() && fold_text(battle.sides[0].first().map_or("", |name| name.as_str())) == fold_text(country))
+}
+
+fn holder_at_cell(battle: &Battle, run: &Run, cell: i64) -> String {
+    let region = if cell >= 0 { battle.arena.region[cell as usize] as usize } else { 0 };
+    if region > 0 {
+        clean_text(&holder_of(battle, run, &battle.arena.ids[region]), 120)
+    } else {
+        String::new()
+    }
+}
+
+fn own_ground_of(battle: &Battle, run: &Run, member: &str) -> Vec<u8> {
+    let arena = &battle.arena;
+    let wanted = fold_text(member);
+    let mut mine = vec![0u8; arena.ids.len()];
+    for region in 1..arena.ids.len() {
+        if fold_text(&holder_of(battle, run, &arena.ids[region])) == wanted {
+            mine[region] = 1;
+        }
+    }
+    mine
+}
+
+fn open_home(run: &mut Run, country: &str, day: f64) -> Flow<Option<usize>> {
+    let Some(regions) = land_regions_of(run) else { return Err(RegionsNeeded) };
+    let holder_of_id = |run: &Run, id: &str| {
+        let group = run.group_of(id);
+        if group.is_empty() {
+            run.controller_of(id)
+        } else {
+            group
+        }
+    };
+    let wanted = fold_text(country);
+    let mine: Vec<Val> = regions.iter().filter(|region| fold_text(&holder_of_id(run, &js::to_string(region.get("id")))) == wanted).cloned().collect();
+    let Some(bounds) = home_bounds(&mine) else { return Ok(None) };
+    let input = run.input.clone();
+    let map = input.get("map");
+    let Some(frame) = create_frame(bounds, measure_of(map), HOME_MARGIN_KM) else { return Ok(None) };
+    let Some(arena) = arena_at(run, &frame) else { return Ok(None) };
+    let neighbours = home_neighbours(&arena, |id| holder_of_id(run, id), country);
+    if neighbours.is_empty() {
+        return Ok(None);
+    }
+    let Some(mut battle) = open_battle(run, Opened { name: home_name(country), war_id: text(""), sides: [vec![clean_text(country, 120)], neighbours], frame, arena, day, home: true }) else { return Ok(None) };
+    battle.status = "standing".to_string();
+    battle.effort = ["major".to_string(), "token".to_string()];
+    set_radii(&mut battle);
+    paint_ground(&mut battle, run);
+    keep_start(&mut battle);
+    read_sieges(&mut battle);
+    find_pockets(&mut battle);
+    start_recorder(&mut battle, run, day, None);
+    run.battles.push(battle);
+    Ok(Some(run.battles.len() - 1))
+}
+
+fn call_up_at_home(run: &mut Run, at: usize, moment: &Val, day: f64) {
+    let date = run.date_of(day);
+    let name = run.battles[at].name.clone();
+    if run.battles[at].called_on == date {
+        run.notes.push(note_of("called-today", &name, moment));
+        return;
+    }
+    let (member, usual) = {
+        let battle = &run.battles[at];
+        let member = battle.sides[0].first().cloned().unwrap_or_default();
+        let weights = member_weights(battle, run, Some(at), 0);
+        (member, jsmath::max(troops_least(run.troops), jsmath::round(troops_wanted(weights.first().copied().unwrap_or(0.0), "major", run.troops))))
+    };
+    let most = jsmath::max(1.0, jsmath::round(usual * (1.0 - run.shortage_of(&member))));
+    let said = js::to_number(moment.get("count"));
+    let count = if said.is_finite() && said >= 1.0 { jsmath::min(jsmath::round(said), most) } else { most };
+    let mustering = run.muster_of(&member).get("table").truthy();
+    let now = if mustering { jsmath::max(1.0, (count * MUSTER_STANDING_SHARE).floor()) } else { count };
+    let before = run.battles[at].troops[0].len();
+    let mut asked = js::spread(moment);
+    asked.set("battlefield", text(&name));
+    asked.set("sector", text("all"));
+    asked.set("given", Val::Bool(true));
+    asked.set("deployed", Val::Bool(true));
+    asked.set("count", num(now));
+    reinforce_on_front(run, at, &Val::Obj(asked), day);
+    let came = (run.battles[at].troops[0].len() - before) as f64;
+    if mustering && came > 0.0 && count > came {
+        run.battles[at].levy[0].push(Levy { o: 0.0, t: count, r: came, f: date.clone() });
+    }
+    run.battles[at].called_on = date;
+}
+
+fn station_on_border(run: &mut Run, at: usize, target: &str, moment: &Val, day: f64) {
+    let wanted = fold_text(target);
+    let border = {
+        let battle = &run.battles[at];
+        let theirs: Vec<bool> = (0..battle.arena.ids.len()).map(|region| if region > 0 { fold_text(&clean_text(&holder_of(battle, run, &battle.arena.ids[region]), 120)) == wanted } else { wanted.is_empty() }).collect();
+        let arena = battle.arena.clone();
+        border_cells(battle, 0, &|cell| theirs[arena.region[cell] as usize])
+    };
+    let name = run.battles[at].name.clone();
+    if border.is_empty() {
+        run.notes.push(note_of("border-not-found", &name, moment));
+        return;
+    }
+    let date = run.date_of(day);
+    let battle = &mut run.battles[at];
+    let cols = battle.field.as_ref().unwrap().cols as i32;
+    let every = jsmath::max(1.0, (border.len() as f64 / 64.0).floor()) as usize;
+    let nearest = |x: f64, y: f64| {
+        let mut best = f64::INFINITY;
+        let mut index = 0;
+        while index < border.len() {
+            let dx = (border[index] % cols) as f64 + 0.5 - x;
+            let dy = (border[index] / cols) as f64 + 0.5 - y;
+            if dx * dx + dy * dy < best {
+                best = dx * dx + dy * dy;
+            }
+            index += every;
+        }
+        best
+    };
+    let troops = &mut battle.troops[0];
+    let mut live: Vec<(usize, f64)> = troops.iter().enumerate().map(|(index, troop)| (index, if is_live(troop) { nearest(troop.x, troop.y) } else { f64::INFINITY })).filter(|entry| entry.1 < f64::INFINITY).collect();
+    js::stable_sort_by(&mut live, |a, b| {
+        let by = a.1 - b.1;
+        if by != 0.0 && !by.is_nan() {
+            by
+        } else {
+            a.0 as f64 - b.0 as f64
+        }
+    });
+    let count = if word_in(moment.get("effort"), &WAR_EFFORTS) { live.len() } else { (live.len() as f64 / 2.0).ceil() as usize };
+    let mut going: Vec<usize> = live.iter().take(count).map(|entry| entry.0).collect();
+    js::stable_sort_by(&mut going, |&a, &b| {
+        let by = troops[a].y - troops[b].y;
+        if by != 0.0 && !by.is_nan() {
+            return by;
+        }
+        let by = troops[a].x - troops[b].x;
+        if by != 0.0 && !by.is_nan() {
+            return by;
+        }
+        a as f64 - b as f64
+    });
+    let length = going.len();
+    for (index, &at_troop) in going.iter().enumerate() {
+        let troop = &mut troops[at_troop];
+        let pick = jsmath::min(border.len() as f64 - 1.0, (((index as f64 + 0.5) * border.len() as f64) / length as f64).floor()) as usize;
+        troop.goal = border[pick] as f64;
+        troop.dug = false;
+        if troop.order.truthy() && !troop.order.read("done").truthy() {
+            troop.order.write("done", Val::Bool(true));
+        }
+    }
+    if length > 0 {
+        battle.log.push(Val::obj([("d", text(&date)), ("k", text("stationed")), ("s", num(0.0)), ("at", text(&format!("{} formations to the border with {}", length, target))), ("n", num(length as f64))]));
+    }
+}
+
+fn stand_down_at_home(run: &mut Run, at: usize, day: f64) {
+    let date = run.date_of(day);
+    let mut battle = lend(run, at);
+    send_home(run, &battle, 0, None);
+    for troop in battle.troops[0].iter_mut() {
+        troop.strength = 0.0;
+    }
+    battle.levy[0] = Vec::new();
+    battle.log.push(Val::obj([("d", text(&date)), ("k", text("stood-down")), ("s", num(0.0)), ("at", text("all its forces at home sent home"))]));
+    battle.closing = "stood-down".to_string();
+    give(run, at, battle);
+}
+
+fn apply_home_moment(run: &mut Run, moment: &Val, day: f64, country: &str) -> Flow<()> {
+    let label = home_name(country);
+    if fold(moment.get("side")) != fold_text(country) {
+        run.notes.push(note_of("side-not-fighting", &label, moment));
+        return Ok(());
+    }
+    let mut battle = home_forces_of(run, country);
+    if word_is(moment.get("order"), "withdraw") || word_is(moment.get("order"), "fall back") {
+        if let Some(at) = battle {
+            stand_down_at_home(run, at, day);
+        }
+        return Ok(());
+    }
+    if battle.is_none() {
+        if run.battles.iter().filter(|entry| entry.home && entry.status != "closed").count() as f64 >= MAX_HOME_FORCES {
+            run.notes.push(note_of("too-many-battlefields", &label, moment));
+            return Ok(());
+        }
+        battle = open_home(run, country, day)?;
+        if battle.is_none() {
+            run.notes.push(note_of("home-not-found", &label, moment));
+            return Ok(());
+        }
+    }
+    let at = battle.unwrap();
+    run.battles[at].quiet = 0.0;
+    run.battles[at].touched = true;
+    if word_is(moment.get("order"), REINFORCE_ORDER) {
+        call_up_at_home(run, at, moment, day);
+        return Ok(());
+    }
+    let holding = word_in(moment.get("order"), &["hold", "dig in"]);
+    if let Some(target) = prefixed_name(moment.get("objective"), "country") {
+        if holding {
+            station_on_border(run, at, &clean_text(&target, 120), moment, day);
+            return Ok(());
+        }
+    }
+    if holding {
+        let name = run.battles[at].name.clone();
+        order_on_front(run, at, &with_battlefield(moment, &name), day)?;
+    } else {
+        run.notes.push(note_of("home-no-front", &label, moment));
+    }
+    Ok(())
+}
+
+fn attack_from_standing(run: &mut Run, at: usize) -> Flow<()> {
+    if run.battles[at].status != "standing" || !run.battles[at].closing.is_empty() {
+        return Ok(());
+    }
+    let orders = run.battles[at].orders.clone();
+    for order in orders {
+        let side = match order.read("s") {
+            Val::Num(n) if n == 0.0 || n == 1.0 => n as usize,
+            _ => continue,
+        };
+        if !order.read("chosen").truthy() {
+            continue;
+        }
+        let (attacker, defender) = {
+            let battle = &run.battles[at];
+            let by = fold(&order.read("by"));
+            let attacker = battle.sides[side].iter().find(|member| fold_text(member) == by).or(battle.sides[side].first()).cloned().unwrap_or_default();
+            let way = order.read("way");
+            let defender = match &way {
+                Val::Arr(points) if !points.is_empty() => {
+                    let (mut x, mut y, mut count) = (0.0, 0.0, 0.0);
+                    for troop in &battle.troops[side] {
+                        if !is_live(troop) || !(troop.order.truthy() && !troop.order.read("done").truthy() && troop.order.read("standing").same_ref(&order)) {
+                            continue;
+                        }
+                        x += troop.x;
+                        y += troop.y;
+                        count += 1.0;
+                    }
+                    let route: Vec<[f64; 2]> = points.iter().map(|point| battle.place.to_cell(point.at(0).num(), point.at(1).num())).collect();
+                    let path: Vec<[f64; 2]> = if count > 0.0 { std::iter::once([x / count, y / count]).chain(route).collect() } else { route };
+                    way_into(battle, side, &path, &|cell| holder_at_cell(battle, run, cell as i64))
+                }
+                _ if !battle.home && is_attack_word(&order.read("order")) => battle.sides[1 - side].first().cloned().unwrap_or_default(),
+                _ => String::new(),
+            };
+            (attacker, defender)
+        };
+        if defender.is_empty() || fold_text(&defender) == fold_text(&attacker) {
+            continue;
+        }
+        let Some(war) = attack_opens_war(run, &attacker, &defender, 0.0, true)? else { continue };
+        for front in 0..run.battles.len() {
+            if is_of_war(&run.battles[front], &war) && run.battles[front].status == "active" {
+                tell_attack(run, front, &attacker, &defender, 0.0);
+            }
+        }
+        if run.battles[at].status != "standing" {
+            return Ok(());
+        }
+    }
+    Ok(())
+}
+
+struct Handed {
+    order: Val,
+    picked: Vec<usize>,
+}
+
+fn bring_home(run: &mut Run, battle: &mut Battle, day: f64) -> Vec<Handed> {
+    let mut handed: Vec<Handed> = Vec::new();
+    if battle.status != "active" || battle.home {
+        return handed;
+    }
+    let date = run.date_of(day);
+    for home_at in 0..run.battles.len() {
+        {
+            let home = &run.battles[home_at];
+            if !home.home || home.status == "closed" || !home.closing.is_empty() {
+                continue;
+            }
+        }
+        let country = run.battles[home_at].sides[0].first().cloned().unwrap_or_default();
+        let side = side_of_name(battle, &country);
+        if side < 0 {
+            continue;
+        }
+        let side = side as usize;
+        let owner = jsmath::max(0.0, member_index(battle, side, &country) as f64);
+        measure(battle.field.as_ref().unwrap(), &mut battle.to_side);
+        let mut moved: Vec<(usize, Val)> = Vec::new();
+        let home = &mut run.battles[home_at];
+        for index in 0..home.troops[0].len() {
+            if !is_live(&home.troops[0][index]) || battle.troops[side].len() as f64 >= MAX_TROOPS_PER_SIDE {
+                continue;
+            }
+            let troop = &home.troops[0][index];
+            let [lng, lat] = home.place.to_lng_lat(troop.x, troop.y);
+            let [x, y] = battle.place.to_cell(lng, lat);
+            let field = battle.field.as_ref().unwrap();
+            let cell = field_cell_at(field, x, y);
+            let to_other = &battle.to_side.as_ref().unwrap().sides[1 - side];
+            if cell < 0 || field.holders[cell as usize] as usize != side || (to_other[cell as usize] as f64 / 3.0) * battle.frame.km > HOME_JOIN_KM {
+                continue;
+            }
+            let mut joined = create_troop(TroopSeed { x, y, kind: troop.kind, owner, strength: troop.strength, ..TroopSeed::default() });
+            if troop.fatigue > 0.0 {
+                joined.fatigue = troop.fatigue;
+            }
+            let standing = if troop.order.truthy() && !troop.order.read("done").truthy() {
+                match troop.order.read("standing") {
+                    Val::Undef => Val::Null,
+                    other => other,
+                }
+            } else {
+                Val::Null
+            };
+            battle.troops[side].push(joined);
+            moved.push((battle.troops[side].len() - 1, standing));
+            home.troops[0][index].strength = 0.0;
+        }
+        if moved.is_empty() {
+            continue;
+        }
+        for order in &home.orders {
+            if !order.read("chosen").truthy() {
+                continue;
+            }
+            let picked: Vec<usize> = moved.iter().filter(|(_, standing)| standing.same_ref(order)).map(|(index, _)| *index).collect();
+            if picked.is_empty() {
+                continue;
+            }
+            let mut entry = Obj::new();
+            entry.set("s", num(side as f64));
+            entry.set("sector", text("all"));
+            entry.set("order", order.read("order"));
+            entry.set("since", text(&date));
+            entry.set("chosen", Val::Bool(true));
+            for key in ["way", "by", "effort"] {
+                let value = order.read(key);
+                if value.truthy() {
+                    entry.set(key, value);
+                }
+            }
+            handed.push(Handed { order: Val::shared(entry), picked });
+        }
+        home.touched = true;
+        home.plan_key = String::new();
+        battle.log.push(Val::obj([("d", text(&date)), ("k", text("drafted")), ("s", num(side as f64)), ("at", text(&format!("{} formations from {}'s forces at home", moved.len(), country))), ("n", num(moved.len() as f64))]));
+        battle.touched = true;
+        battle.plan_key = String::new();
+    }
+    handed
+}
+
+fn home_orders(run: &mut Run, at: usize, handed: Vec<Handed>, day: f64) {
+    if handed.is_empty() {
+        return;
+    }
+    let mut battle = lend(run, at);
+    let today = prepare(&mut battle, day);
+    let date = run.date_of(day);
+    for Handed { order, picked } in handed {
+        battle.orders.push(order.clone());
+        let mut order = order;
+        assign_order(&mut battle, run, &mut order, &order_day(&today, &date), Some(&picked), true);
+    }
+    give(run, at, battle);
+    mark_attacks(run, at);
+}
+
 fn apply_order_moment(run: &mut Run, moment: &Val, day: f64) -> Flow<()> {
     if word_is(moment.get("result"), "captured") && !run.captures_refused.is_empty() {
         let reference = clean(moment.get("ref"), 120);
@@ -1630,6 +2142,9 @@ fn apply_order_moment(run: &mut Run, moment: &Val, day: f64) -> Flow<()> {
     }
     if let Some((first, second)) = border_names(moment.get("battlefield")) {
         return apply_border_moment(run, moment, day, &clean_text(&first, 120), &clean_text(&second, 120));
+    }
+    if let Some(country) = prefixed_name(moment.get("battlefield"), "home") {
+        return apply_home_moment(run, moment, day, &clean_text(&country, 120));
     }
     let mut moment = moment.clone();
     let wanted = fold_battlefield_name(moment.get("battlefield"));
@@ -1943,6 +2458,8 @@ fn apply_moments(run: &mut Run, day: f64) -> Flow<()> {
             apply_war_moment(run, &moment, day)?;
         } else if kind == "reinforce" {
             apply_reinforce(run, &moment);
+        } else if kind == "airstrike" {
+            bomb_troops(run, &moment, day);
         } else if kind == "control" {
             let id = clean(moment.get("regionId"), 120);
             let refused = if moment.get("capture").is_true() { capture_refused(run, &id, moment.get("to")) } else { None };
@@ -2278,7 +2795,8 @@ fn world_grid_of(run: &mut Run) -> Flow<Option<String>> {
         Val::Undef => None,
         other => Some(js::to_number(other)),
     };
-    let Some(grid) = build_world_grid(regions, &GridOptions { flat: map.get("flat").is_true(), scale, step: 0.0, water: Some(water) }) else { return Ok(None) };
+    let measure = measure_of(map);
+    let Some(grid) = build_world_grid(regions, &GridOptions { flat: map.get("flat").is_true(), scale, factor: Some(measure.factor), metric: measure.metric, step: 0.0, water: Some(water) }) else { return Ok(None) };
     if !map_key.is_empty() && run.cache_on {
         run.grids.insert(key.clone(), grid);
         return Ok(Some(key));
@@ -2309,7 +2827,7 @@ fn holder_at_point(run: &Run, grid: &str, war: &War, lng: f64, lat: f64) -> Stri
 }
 
 fn city_near(run: &Run, lng: f64, lat: f64, within_km: f64) -> String {
-    let surface = surface_of(run.input.get("map"));
+    let surface = measure_of(run.input.get("map"));
     let mut best: Option<(f64, String)> = None;
     for city in run.input.get("map").get("cities").array_or_empty() {
         let far = km_between(lng, lat, js::to_number(city.get("lng")), js::to_number(city.get("lat")), surface);
@@ -2387,7 +2905,7 @@ fn seat_of(run: &Run, grid: &str, war: &War, wanted: &str) -> Option<(f64, f64, 
 }
 
 fn origins_of(run: &Run, grid: &str, war: &War, transport: &Transport) -> Vec<(f64, f64, String)> {
-    let surface = surface_of(run.input.get("map"));
+    let surface = measure_of(run.input.get("map"));
     let mut mine: Vec<(f64, f64, String, f64)> = Vec::new();
     let to = (transport.to.lng.unwrap_or(f64::NAN), transport.to.lat.unwrap_or(f64::NAN));
     for city in run.input.get("map").get("cities").array_or_empty() {
@@ -2724,7 +3242,8 @@ fn begin_transports(run: &mut Run) -> Flow<()> {
 }
 
 fn move_transports(run: &mut Run, day: f64) -> Flow<()> {
-    let surface = surface_of(run.input.get("map"));
+    let measure = measure_of(run.input.get("map"));
+    let surface = Surface::plain(measure.flat, measure.scale);
     let date = run.date_of(day);
     for index in 0..run.transports.len() {
         let before = run.transports[index].clone();
@@ -2748,7 +3267,7 @@ fn move_transports(run: &mut Run, day: f64) -> Flow<()> {
         let (moved, arrived) = move_on(&before, surface);
         run.transports[index] = moved.clone();
         let mine = war_side(&war, &moved.owner);
-        let middle = place_along(&moved.way, (before.gone + moved.gone) / 2.0, surface);
+        let middle = place_along(&moved.way, (before.gone + moved.gone) / 2.0, measure);
         let grid = world_grid_of(run)?;
         let at = match &middle {
             Some(middle) => [middle.lng, middle.lat],
@@ -2796,6 +3315,10 @@ fn must_have_regions(run: &Run) -> bool {
         }
         if !word_is(moment.get("type"), "order") {
             return false;
+        }
+        if let Some(country) = prefixed_name(moment.get("battlefield"), "home") {
+            let wanted = fold_battlefield_name(&text(&home_name(&country)));
+            return !records.iter().any(|record| record.get("home").is_true() && !word_is(record.get("status"), "closed") && fold_battlefield_name(record.get("name")) == wanted);
         }
         if let Some((first, second)) = border_names(moment.get("battlefield")) {
             let (first, second) = (clean_text(&first, 120), clean_text(&second, 120));
@@ -2848,6 +3371,7 @@ fn begin(run: &mut Run) -> Flow<()> {
         if battle.status == "active" {
             absorb_units(run, &mut battle, at);
         }
+        let handed = if battle.status == "active" { bring_home(run, &mut battle, 0.0) } else { Vec::new() };
         set_radii(&mut battle);
         paint_ground(&mut battle, run);
         keep_start(&mut battle);
@@ -2865,6 +3389,7 @@ fn begin(run: &mut Run) -> Flow<()> {
             }
         }
         assign_standing(run, at);
+        home_orders(run, at, handed, 0.0);
         mark_attacks(run, at);
     }
     let input = run.input.clone();
@@ -2888,6 +3413,10 @@ fn begin(run: &mut Run) -> Flow<()> {
             let last = run.days == 0.0;
             record_day(&mut run.battles[at], 0.0, last);
         }
+    }
+    let standing = run.battles.len();
+    for at in 0..standing {
+        attack_from_standing(run, at)?;
     }
     let ids: Vec<String> = run.wars.keys().cloned().collect();
     for id in ids {
@@ -3201,6 +3730,9 @@ fn step_day(run: &mut Run) -> Flow<()> {
             withdraw_who_left(run, index, day);
             run.battles[index].days_run += 1.0;
         } else if run.battles[index].status == "standing" {
+            if run.mech.marching() {
+                peace_day(run, index, day);
+            }
             stand_day(&mut run.battles[index]);
         }
         if !run.battles[index].closing.is_empty() && run.battles[index].status != "closed" {

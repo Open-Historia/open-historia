@@ -1,5 +1,5 @@
 use crate::support::*;
-use crate::world_grid::{grid_of, surface_of};
+use crate::world_grid::{grid_of, plain_surface_of as surface_of};
 use ohfronts::sim::js::{self, Val};
 use ohfronts::sim::transports::*;
 

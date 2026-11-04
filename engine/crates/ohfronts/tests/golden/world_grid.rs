@@ -4,7 +4,30 @@ use ohfronts::sim::js::{Typed, Val};
 use ohfronts::sim::world_grid::*;
 
 pub fn surface_of(options: &Val) -> Surface {
-    Surface { flat: options.get("flat").truthy(), scale: if options.get("scale").is_undef() { KM_PER_DEGREE } else { options.get("scale").num() } }
+    Surface {
+        flat: options.get("flat").truthy(),
+        scale: if options.get("scale").is_undef() { KM_PER_DEGREE } else { options.get("scale").num() },
+        factor: if options.get("factor").is_undef() { 1.0 } else { ohfronts::sim::js::to_number(options.get("factor")) },
+        metric: if options.get("metric").truthy() { metric_of(options.get("metric")) } else { None },
+    }
+}
+
+pub fn plain_surface_of(options: &Val) -> Surface {
+    Surface::plain(options.get("flat").truthy(), if options.get("scale").is_undef() { KM_PER_DEGREE } else { options.get("scale").num() })
+}
+
+fn measure_val(map: &Val) -> Val {
+    let mut out = ohfronts::sim::js::Obj::new();
+    out.set("flat", Val::Bool(map.get("flat").is_true()));
+    out.set("scale", map.get("scale").clone());
+    let given = ohfronts::sim::js::to_number(map.get("factor"));
+    if given > 0.0 && !matches!(map.get("factor"), Val::Num(n) if *n == 1.0) {
+        out.set("factor", num(given));
+    }
+    if measure_of(map).metric.is_some() {
+        out.set("metric", map.get("metric").clone());
+    }
+    Val::Obj(out)
 }
 
 fn typed_u8(value: &Val) -> Vec<u8> {
@@ -26,11 +49,18 @@ pub fn grid_of(value: &Val) -> WorldGrid {
         wrap: value.get("wrap").truthy(),
         flat: value.get("flat").truthy(),
         scale: value.get("scale").num(),
+        factor: if value.get("factor").is_undef() { 1.0 } else { value.get("factor").num() },
+        metric: if value.get("metric").truthy() { metric_of(value.get("metric")) } else { None },
         land: typed_u8(value.get("land")),
         region: typed_i32(value.get("region")),
         ids: value.get("ids").array_or_empty().iter().map(|id| id.string()).collect(),
         full: value.get("full").num() as u8,
-        step_km: StepKm { along: arg_numbers(step_km.get("along")), aslant: arg_numbers(step_km.get("aslant")), down: step_km.get("down").num() },
+        step_km: StepKm {
+            along: arg_numbers(step_km.get("along")),
+            aslant: arg_numbers(step_km.get("aslant")),
+            down: step_km.get("down").num(),
+            down_row: if step_km.get("downRow").truthy() { Some(arg_numbers(step_km.get("downRow"))) } else { None },
+        },
         row_cosine: arg_numbers(value.get("rowCosine")),
         seas: if value.get("seas").is_undef() { None } else { Some(typed_i32(value.get("seas"))) },
         sea_count: value.get("seaCount").num() as usize,
@@ -47,11 +77,13 @@ pub fn grid_val(grid: &WorldGrid) -> Val {
         ("wrap", Val::Bool(grid.wrap)),
         ("flat", Val::Bool(grid.flat)),
         ("scale", num(grid.scale)),
+        ("factor", num(grid.factor)),
+        ("metric", grid.metric.map(metric_val).unwrap_or(Val::Null)),
         ("land", u8s(grid.land.clone())),
         ("region", i32s(grid.region.clone())),
         ("ids", list(grid.ids.iter().map(|id| text(id)).collect())),
         ("full", num(grid.full as f64)),
-        ("stepKm", Val::obj([("along", f64s(grid.step_km.along.clone())), ("aslant", f64s(grid.step_km.aslant.clone())), ("down", num(grid.step_km.down))])),
+        ("stepKm", Val::obj([("along", f64s(grid.step_km.along.clone())), ("aslant", f64s(grid.step_km.aslant.clone())), ("down", num(grid.step_km.down)), ("downRow", grid.step_km.down_row.clone().map(f64s).unwrap_or(Val::Null))])),
         ("rowCosine", f64s(grid.row_cosine.clone())),
     ]);
     if let (Some(seas), Val::Obj(obj)) = (&grid.seas, &mut out) {
@@ -59,6 +91,18 @@ pub fn grid_val(grid: &WorldGrid) -> Val {
         obj.set("seaCount", num(grid.sea_count as f64));
     }
     out
+}
+
+pub fn metric_val(metric: &Metric) -> Val {
+    let mut out = ohfronts::sim::js::Obj::new();
+    if let Some(kind) = &metric.kind {
+        out.set("type", text(kind));
+    }
+    out.set("step", num(metric.step));
+    out.set("from", num(metric.from));
+    out.set("kx", nums(&metric.kx));
+    out.set("m", nums(&metric.m));
+    Val::Obj(out)
 }
 
 pub fn points_of(value: &Val) -> Vec<[f64; 2]> {
@@ -97,6 +141,8 @@ fn world_grid_matches_js() {
                     &GridOptions {
                         flat: options.get("flat").truthy(),
                         scale: if options.get("scale").is_undef() { None } else { Some(options.get("scale").num()) },
+                        factor: if options.get("factor").is_undef() { None } else { Some(ohfronts::sim::js::to_number(options.get("factor"))) },
+                        metric: if options.get("metric").truthy() { metric_of(options.get("metric")) } else { None },
                         step: if options.get("step").is_undef() { 0.0 } else { options.get("step").num() },
                         water: water_of(options.get("water")).filter(|_| matches!(options.get("water"), Val::Set(items) if !items.is_empty())),
                     },
@@ -143,6 +189,8 @@ fn world_grid_matches_js() {
                 expect(case, placed_val(found))
             }),
             ("wayKm", &|case| expect(case, num(way_km(&points_of(case.arg(0)), surface_of(case.arg(1)))))),
+            ("measureOptions", &|case| expect(case, measure_val(case.arg(0)))),
+            ("planeY", &|case| expect(case, num(plane_y(ohfronts::sim::js::to_number(case.arg(0)))))),
         ],
     );
 }
@@ -161,6 +209,18 @@ fn way_val(way: &ohfronts::sim::wayfinder::Way) -> Val {
             ("arrived", Val::Bool(*arrived)),
         ]),
     }
+}
+
+#[test]
+fn metric_tables_match_js() {
+    run(
+        "mapDistance",
+        &[("metricTableFor", &|case| {
+            let factor = if case.arg(1).is_undef() { 1.0 } else { ohfronts::sim::js::to_number(case.arg(1)) };
+            let found = metric_table_for(&case.arg(0).string_or_empty(), factor).map(metric_val).unwrap_or(Val::Null);
+            expect(case, found)
+        })],
+    );
 }
 
 #[test]

@@ -1,10 +1,9 @@
 use super::battle::Battle;
 use super::engine::Run;
-use super::frame::KM_PER_DEGREE;
 use super::game_dates::{add_game_days, compare_game_dates};
 use super::ground::cell_at;
 use super::js::{self, OrdMap, Val};
-use super::world_grid::{km_between, Surface};
+use super::world_grid::{km_between, measure_of, Surface};
 use crate::jsmath;
 use std::sync::Arc as Rc;
 
@@ -97,7 +96,7 @@ pub fn read_line(line: &Val, surface: Surface) -> WallLine {
 pub fn read_lines(run: &Run) -> std::cell::Ref<'_, Vec<WallLine>> {
     if run.lines.borrow().is_none() {
         let map = run.input.get("map");
-        let surface = Surface { flat: map.get("flat").is_true(), scale: if map.get("scale").is_undef() { KM_PER_DEGREE } else { map.get("scale").num() } };
+        let surface = measure_of(map);
         let given: &[Val] = if run.mech.walls() { run.input.get("fortifications").array_or_empty() } else { &[] };
         let lines: Vec<WallLine> = given.iter().map(|line| read_line(line, surface)).filter(|line| line.points.len() >= 2).collect();
         *run.lines.borrow_mut() = Some(lines);

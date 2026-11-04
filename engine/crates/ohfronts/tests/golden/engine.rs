@@ -201,6 +201,7 @@ fn engine_matches_js() {
 fn engine_timing() {
     let rounds: usize = std::env::var("ROUNDS").ok().and_then(|text| text.parse().ok()).unwrap_or(5);
     let only_led = std::env::var("PLANNER").is_ok();
+    metric_tables();
     let fixture = load("engine");
     let mut rows: Vec<(usize, f64)> = Vec::new();
     for (name, cases) in &fixture.cases {

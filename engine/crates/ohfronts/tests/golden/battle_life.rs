@@ -354,7 +354,7 @@ pub fn open_battle_check(case: &Case) -> Option<Result<(), String>> {
     let run = run_at(case, 0);
     let given = case.arg(1);
     let sides = |at: usize| given.get("sides").at(at).array_or_empty().iter().map(|m| m.string_or_empty()).collect::<Vec<String>>();
-    let opened = Opened { name: given.get("name").string_or_empty(), war_id: given.get("warId").clone(), sides: [sides(0), sides(1)], frame: frame_of(given.get("frame")), arena: Rc::new(arena_of(given.get("arena"))), day: given.get("day").num() };
+    let opened = Opened { name: given.get("name").string_or_empty(), war_id: given.get("warId").clone(), sides: [sides(0), sides(1)], frame: frame_of(given.get("frame")), arena: Rc::new(arena_of(given.get("arena"))), day: given.get("day").num(), home: given.get("home").is_true() };
     let battle = open_battle(&run, opened);
     let want = case.result.as_ref()?.plain();
     match battle {

@@ -30,6 +30,11 @@ fn muster_matches_js() {
                 let entries: Vec<Levy> = side.array_or_empty().iter().map(levy_of).collect();
                 expect(case, num(levy_pending(&entries)))
             }),
+            ("mustersFor", &|case| {
+                let run = case.arg(0);
+                let war = case.arg(1);
+                expect(case, Val::Bool(ohfronts::sim::muster::musters_for(run.get("mech").get("muster").is_true(), run.get("input").get("authored").truthy(), war.get("began"), run.get("input").get("gameBegan"))))
+            }),
             ("levyOwed", &|case| {
                 let side = |at: usize| -> Vec<Levy> { case.arg(0).at(at).array_or_empty().iter().map(levy_of).collect() };
                 expect(case, Val::Bool(levy_owed(&[side(0), side(1)])))

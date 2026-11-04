@@ -82,6 +82,7 @@ pub struct Troop {
     pub entry: Val,
     pub still: Val,
     pub climate: Option<Effects>,
+    pub goal: f64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -177,6 +178,7 @@ pub fn create_troop(seed: TroopSeed) -> Troop {
         entry: Val::Undef,
         still: Val::Undef,
         climate: None,
+        goal: f64::NAN,
     }
 }
 

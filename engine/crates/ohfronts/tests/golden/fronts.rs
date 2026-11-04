@@ -107,6 +107,7 @@ pub fn troop_full(value: &Val) -> Troop {
     set("punch", &mut troop.punch);
     set("guard", &mut troop.guard);
     set("legs", &mut troop.legs);
+    set("goal", &mut troop.goal);
     set("rested", &mut troop.rested);
     set("command", &mut troop.command);
     set("next", &mut troop.next);
@@ -283,6 +284,21 @@ pub fn pick_battle(run: &Run, value: &Val) -> Battle {
     let mut battle = create_battle(run, Opening { name: value.get("name").string_or_empty(), war_id: Val::Undef, sides: [sides(0), sides(1)], frame: frame_of(value.get("frame")), arena: arena.clone(), opened_date: Val::Undef, opened_day: Val::Undef });
     if !value.get("seed").is_undef() {
         battle.seed = value.get("seed").string_or_empty();
+    }
+    battle.home = value.get("home").is_true();
+    if let Val::Str(status) = value.get("status") {
+        battle.status = status.clone();
+    }
+    if let Val::Str(called) = value.get("calledOn") {
+        battle.called_on = called.clone();
+    }
+    if let Val::Num(pace) = value.get("ownPace") {
+        battle.own_pace = *pace;
+    }
+    if let Val::Arr(march) = value.get("marchKm") {
+        if march.len() == 3 {
+            battle.march_km = Some([march[0].num(), march[1].num(), march[2].num()]);
+        }
     }
     if value.get("field").is_object() {
         let mut field = field_lite(value.get("field"), &Val::Undef);

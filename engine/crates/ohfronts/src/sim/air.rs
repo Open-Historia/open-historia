@@ -1,10 +1,9 @@
 use super::battle::Battle;
 use super::engine::Run;
-use super::frame::KM_PER_DEGREE;
 use super::js::{self, OrdMap, Val};
 use super::military::air_worth;
 use super::troops::is_live;
-use super::world_grid::{km_between, Surface};
+use super::world_grid::{km_between, measure_of};
 use crate::jsmath;
 
 pub const AIR_REACH_KM: [f64; 4] = [0.0, 0.0, 500.0, 900.0];
@@ -78,7 +77,7 @@ pub fn assign_wings(run: &Run, day: f64) {
         *run.wings.borrow_mut() = Some(OrdMap::new());
     }
     let map = run.input.get("map");
-    let surface = Surface { flat: map.get("flat").is_true(), scale: if map.get("scale").is_undef() { KM_PER_DEGREE } else { map.get("scale").num() } };
+    let surface = measure_of(map);
     let mut units: Vec<&Val> = run
         .input
         .get("units")

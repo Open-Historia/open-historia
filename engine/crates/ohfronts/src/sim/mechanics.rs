@@ -1,10 +1,10 @@
 use super::js::Val;
 
-pub const MECHANICS: [&str; 9] = ["fatigue", "weather", "terrain", "walls", "muster", "military", "air", "supply", "attrition"];
+pub const MECHANICS: [&str; 10] = ["fatigue", "weather", "terrain", "walls", "muster", "military", "air", "supply", "attrition", "marching"];
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Mechanics {
-    pub on: [bool; 9],
+    pub on: [bool; 10],
 }
 
 impl Mechanics {
@@ -47,10 +47,14 @@ impl Mechanics {
     pub fn attrition(&self) -> bool {
         self.on[8]
     }
+
+    pub fn marching(&self) -> bool {
+        self.on[9]
+    }
 }
 
 pub fn read_mechanics(value: &Val) -> Mechanics {
-    let mut on = [false; 9];
+    let mut on = [false; 10];
     for (at, key) in MECHANICS.iter().enumerate() {
         on[at] = value.get(key).is_true();
     }

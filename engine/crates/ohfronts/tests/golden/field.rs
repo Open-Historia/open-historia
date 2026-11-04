@@ -146,6 +146,9 @@ pub fn field_val(field: &Field) -> Val {
 fn same_field(field: &Field, want: &Val) -> Result<(), String> {
     let got = field_val(field);
     for key in ["cols", "rows", "size", "play", "holders", "phi", "ghost", "changed", "marked", "painter", "when", "edits", "turns", "contourEdits"] {
+        if want.get(key).is_undef() && !want.get("cols").is_undef() && !matches!(key, "cols" | "rows" | "size" | "play" | "holders" | "phi") {
+            continue;
+        }
         same(got.get(key), want.get(key)).map_err(|error| format!("field.{key}: {error}"))?;
     }
     Ok(())

@@ -10,6 +10,7 @@ use super::sectors::{describe_point, in_sector};
 use super::troops::{control_radius, is_live, reach_cells, stand_off, stands, Troop, KIND_ARTILLERY, STATE_ADVANCING};
 use super::unit_motion::hash_seed;
 use super::way::{aim_out, left_on_leg, Leg};
+use super::march::{kind_pick, march_km_of, march_on, OWN_GROUND_PACE};
 use crate::jsmath;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -403,7 +404,11 @@ fn hold(battle: &mut Battle, side: usize, index: usize, day: f64, date: &str, at
             if !downhill(field, to_other, troop.x, troop.y, toward) {
                 return;
             }
-            let step = jsmath::min(COME_UP_KM / km, away - depth * COME_UP_TO);
+            let come_up = match &battle.march_km {
+                Some(march) => jsmath::max(COME_UP_KM, kind_pick(march, troop.kind)),
+                None => COME_UP_KM,
+            };
+            let step = jsmath::min(come_up / km, away - depth * COME_UP_TO);
             let landing = cell_at(field, troop.x + toward[0] * step, troop.y + toward[1] * step);
             if landing < 0 || field.holders[landing as usize] as usize != side {
                 return;
@@ -741,6 +746,8 @@ fn steer(battle: &mut Battle, run: &Run, side: usize, index: usize, day: f64, da
 
 pub fn move_day(battle: &mut Battle, run: &Run, day: f64) {
     battle.pace = run.pace;
+    battle.march_km = if run.mech.marching() { Some(march_km_of(run)) } else { None };
+    battle.own_pace = if run.mech.marching() { OWN_GROUND_PACE } else { 1.0 };
     let date = run.date_of(day);
     to_side(battle);
     let cell_km = battle.frame.km;
@@ -820,6 +827,17 @@ pub fn move_day(battle: &mut Battle, run: &Run, day: f64) {
                 troop.strength = jsmath::max(0.0, troop.strength - THROWN_OUT_LOSS);
                 if !is_live(troop) {
                     continue;
+                }
+            }
+            if battle.troops[side][index].goal >= 0.0 {
+                if let Some(march) = battle.march_km {
+                    let held = &battle.troops[side][index].order;
+                    let standing = held.read("standing");
+                    if order && standing.truthy() && standing.read("chosen").truthy() {
+                        battle.troops[side][index].goal = -1.0;
+                    } else if march_on(battle, side, index, &march) {
+                        continue;
+                    }
                 }
             }
             if !order && !battle.troops[side][index].pocket && !falling.is_empty() {

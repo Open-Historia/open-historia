@@ -1,5 +1,5 @@
 import { labStaffPolicy, trainedStaffPolicy } from "../../src/runtime/fronts/mind/trained.js";
-import { runTurnFronts } from "../../src/Game/AI/frontTurn.js";
+import { engineRegionsOf, runTurnFronts } from "../../src/Game/AI/frontTurn.js";
 import { eventNarratesHardCombat } from "../../src/Game/AI/nativeWarLedger.js";
 import { territoryTempoAllowance } from "../../src/Game/AI/worldDirection.js";
 import { rustRunMaker } from "./rustFronts.mjs";
@@ -10,8 +10,22 @@ const arenasFor = (key) => {
   return kept.arenas;
 };
 
+const regionsReadHere = async (ask) => {
+  try {
+    const file = await ask("regionsFile");
+    if (!file?.url || typeof fetch !== "function") return null;
+    const response = await fetch(file.url, { cache: "no-store", credentials: "same-origin" });
+    if (!response.ok) return null;
+    const names = new Map(Array.isArray(file.names) ? file.names : []);
+    const regions = engineRegionsOf(await response.json(), { nameOf: (id) => names.get(id) });
+    return regions.length > 0 ? regions : null;
+  } catch {
+    return null;
+  }
+};
+
 export const fightInRust = async (host, data = {}, { ask, pause = null, onRuns = null, slice } = {}) => {
-  const { staff = null, tempo = 0, narrates = false, strikes = [], readsMap = false, readsRegions = false, ...rest } = data ?? {};
+  const { staff = null, tempo = 0, narrates = false, strikes = [], readsMap = false, readsRegions = false, findsRegionsFile = false, ...rest } = data ?? {};
   const asks = Array.isArray(strikes) ? strikes : [];
   let regionIds = null;
   const led = Boolean(staff && trainedStaffPolicy());
@@ -28,7 +42,7 @@ export const fightInRust = async (host, data = {}, { ask, pause = null, onRuns =
           return read ? { ...read, arenas: arenasFor(String(read.map?.key ?? "")) } : read;
         },
       } : {}),
-      ...(readsRegions ? { loadRegions: () => ask("loadRegions") } : {}),
+      ...(readsRegions ? { loadRegions: async () => (findsRegionsFile ? await regionsReadHere(ask) : null) ?? ask("loadRegions") } : {}),
       pause: typeof pause === "function" ? pause : async () => {},
       ...(tempo > 0 ? { tempoAllowance: (days) => territoryTempoAllowance(tempo, Math.max(1, days)) } : {}),
       ...(led ? { staffPolicy: labStaffPolicy(staff) } : {}),

@@ -44,7 +44,10 @@ fn brief_matches_js() {
                 let got = describe_since(case.arg(0), most);
                 expect(case, Val::obj([("since", text(&got.since)), ("text", text(&got.text)), ("moved", Val::Bool(got.moved))]))
             }),
-            ("describeBattlefield", &|case| expect(case, text(&describe_battlefield(case.arg(0), case.arg(1).get("viewer"))))),
+            ("describeBattlefield", &|case| {
+                let max = if case.arg(1).get("max").is_undef() { ohfronts::sim::constants::BRIEF_TEXT_MAX } else { case.arg(1).get("max").num() };
+                expect(case, text(&describe_battlefield_within(case.arg(0), case.arg(1).get("viewer"), max)))
+            }),
         ],
     );
 }

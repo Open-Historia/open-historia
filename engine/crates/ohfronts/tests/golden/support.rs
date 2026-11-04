@@ -565,7 +565,32 @@ pub fn expect_after(case: &Case, index: usize, got: &Val) -> Result<(), String> 
     }
 }
 
+static METRIC_TABLES: std::sync::Once = std::sync::Once::new();
+
+pub fn metric_tables() {
+    METRIC_TABLES.call_once(|| {
+        let local = std::env::var("GOLDEN_DIR").ok().map(|dir| format!("{dir}/mapDistance.json")).filter(|path| std::path::Path::new(path).exists());
+        let path = local.unwrap_or_else(|| format!("{}/tests/golden/mapDistance.json", env!("CARGO_MANIFEST_DIR")));
+        if !std::path::Path::new(&path).exists() {
+            return;
+        }
+        for (fn_name, cases) in &load("mapDistance").cases {
+            if fn_name != "metricTableFor" {
+                continue;
+            }
+            for case in cases {
+                let factor = if case.arg(1).is_undef() { 1.0 } else { js::to_number(case.arg(1)) };
+                let times = if factor > 0.0 { factor } else { 1.0 };
+                if let Some(result) = &case.result {
+                    ohfronts::sim::world_grid::register_metric_table(&case.arg(0).string_or_empty(), times, result);
+                }
+            }
+        }
+    });
+}
+
 pub fn run(module: &str, checks: &[(&str, Check)]) {
+    metric_tables();
     let fixture = load(module);
     let mut failures = Vec::new();
     let mut report = Vec::new();
