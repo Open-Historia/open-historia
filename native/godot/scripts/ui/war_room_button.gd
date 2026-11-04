@@ -64,6 +64,8 @@ func _game_shown() -> bool:
 			for watched in [_menu, _hud]:
 				if watched and not (watched as Control).visibility_changed.is_connected(_apply):
 					(watched as Control).visibility_changed.connect(_apply)
+			if _hud and not (_hud as Hud).dock_resized.is_connected(_apply):
+				(_hud as Hud).dock_resized.connect(_apply)
 	if _menu and _menu.visible:
 		return false
 	return room_open or not _hud or _hud.visible
@@ -96,7 +98,7 @@ func _apply() -> void:
 	visible = _game_shown() and (at_war or room_open)
 	if _tween and _tween.is_valid():
 		_tween.kill()
-	var left := OPEN_INSET if room_open else BESIDE_DOCK_LEFT
+	var left := OPEN_INSET if room_open else _beside_dock()
 	var bottom := OPEN_INSET if room_open else DOCK_BOTTOM
 	if not is_inside_tree():
 		_place(room_open)
@@ -108,8 +110,14 @@ func _apply() -> void:
 	_tween.tween_property(self, "offset_bottom", -bottom, 0.3)
 
 
+func _beside_dock() -> float:
+	if _hud and is_instance_valid(_hud):
+		return (_hud as Hud).beside_dock_left()
+	return BESIDE_DOCK_LEFT
+
+
 func _place(open_state: bool) -> void:
-	var left := OPEN_INSET if open_state else BESIDE_DOCK_LEFT
+	var left := OPEN_INSET if open_state else _beside_dock()
 	var bottom := OPEN_INSET if open_state else DOCK_BOTTOM
 	offset_left = left
 	offset_right = left + SIZE
