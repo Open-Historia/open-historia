@@ -53,6 +53,21 @@ import { PAST_UPDATES } from "./notesPast.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // The 3D terrain's exaggeration halved, 15 to 7.5 (Map/World.jsx); the owner's ask, 2026-11-03.
+    id: "2026-11-gentler-terrain",
+    kind: "minor",
+    date: "2026-11-03",
+    channel: "beta",
+    banners: [
+      {
+        title: "Gentler 3D terrain",
+        items: [
+          "Mountains and valleys on the 3D terrain now rise half as high as before.",
+        ],
+      },
+    ],
+  },
+  {
     // The display mode setting and tidier game cards (a contributor's PR #935, with its review fixes).
     id: "2026-11-display-mode",
     kind: "minor",
