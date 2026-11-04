@@ -106,6 +106,10 @@ func _bare_map() -> void:
 	if shell.door != null and is_instance_valid(shell.door) and shell.door.is_visible_in_tree():
 		shell.door.opened.emit()
 		_say("vault door opened for the test")
+	if not shell.notice_updates.is_empty():
+		await _until(func() -> bool: return shell.notice != null and is_instance_valid(shell.notice), 5.0)
+		await _frames(5)
+	await _close_notice()
 
 
 func _front_border() -> void:
@@ -141,7 +145,7 @@ func _front_border() -> void:
 	var borders: Array[ShaderMaterial] = main.map_view.extras_border_materials()
 	var cuts := int(borders[0].get_shader_parameter("war_cuts")) if not borders.is_empty() else 0
 	_check("the map's own borders between the sides give way where the battlefield draws its own", war.paint.cut_slots > 0 and cuts == war.paint.cut_slots, "%d slots, %d cut" % [war.paint.cut_slots, cuts])
-	_bare_map()
+	await _bare_map()
 	await _focus([[5.5, 48.2], [8.6, 50.2]], 7.4)
 	await _wait(0.8)
 	await _shoot("w3b-front-border-z7")
