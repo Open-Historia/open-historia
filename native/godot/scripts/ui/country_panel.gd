@@ -1027,7 +1027,8 @@ func _party_row(party: Dictionary, first := false) -> Control:
 		names.add_child(heading)
 		if not str(party.get("nameNative", "")).is_empty():
 			var native := _rich(10, Color(1, 1, 1, 0.5))
-			native.add_theme_font_override("italics_font", UI.font(400))
+			native.add_theme_font_override("italics_font", AdvisorPanel._italic(400))
+			native.add_theme_font_size_override("italics_font_size", 10)
 			native.text = "[i]%s[/i]" % _escape(str(party["nameNative"]))
 			names.add_child(native)
 	top.add_child(names)
