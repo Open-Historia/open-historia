@@ -1917,7 +1917,6 @@ export const register = (ctx) => {
         return { text: "", error: error?.message || "Invalid political landscape." };
       }
     },
-
     "editor.politics.author.draft": async ({ scenarioId, polityKey = "" } = {}) => {
       const details = await loadDetails(scenarioId);
       return authorState(details?.data?.world || {}, polityKey);

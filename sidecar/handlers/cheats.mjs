@@ -1578,7 +1578,6 @@ export const register = (ctx) => {
       }
     },
     "cheats.country.save": async ({ code, form = {}, baseline = {}, politics = null, politicsBaseline = null, componentCount = 0, fallbackName = "" }) => {
-
       if (!code) throw new Error("Pick a country first.");
       const world = await readWorld();
       const existing = world.polityOverrides?.[code] ?? {};

@@ -1149,6 +1149,7 @@ func _render_recipients() -> void:
 		chief_line.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		chief_line.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		chief_line.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+		chief_line.custom_minimum_size.x = 1
 		chief_line.add_theme_font_override("normal_font", UI.font(400))
 		chief_line.add_theme_font_size_override("normal_font_size", 12)
 		chief_line.add_theme_color_override("default_color", RECIPIENT_INK)
@@ -1249,6 +1250,10 @@ func _recipient_editor_box(busy: bool) -> Control:
 		var choose := OptionButton.new()
 		choose.focus_mode = Control.FOCUS_NONE
 		choose.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+		choose.fit_to_longest_item = false
+		choose.clip_text = true
+		choose.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		choose.custom_minimum_size.x = 1
 		choose.add_theme_font_override("font", UI.font(400))
 		choose.add_theme_font_size_override("font_size", 12)
 		var choose_style := UI.box(Color(0, 0, 0, 0.22), RECIPIENT_BORDER, 7, 1, Vector4(7, 6, 7, 6))
@@ -2195,7 +2200,6 @@ func _institution_action(draft: Dictionary, message_index: int, draft_index: int
 		_side_effect(1)
 		var reply: Dictionary = await engine.request("advisor.institution", {"draft": draft})
 		_side_effect(-1)
-
 		var result: Dictionary = reply.get("result", {}) if reply.get("ok", false) else {"ok": false, "error": str(reply.get("error", ""))}
 		if bool(result.get("ok", false)):
 			st["status"] = "completed"

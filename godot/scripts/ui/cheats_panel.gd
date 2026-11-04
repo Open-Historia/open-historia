@@ -1167,7 +1167,9 @@ func _gm_preview_box(view: Dictionary) -> Control:
 	if not notes.is_empty():
 		column.add_child(_gap(9))
 		var left_out: Array = _box(Color(0, 0, 0, 0), Color(1, 1, 1, 0.14), 8, Vector4(9, 7, 9, 7), 4)
-		(left_out[1] as VBoxContainer).add_child(UI.label("LEFT OUT OF THIS PREVIEW", 10, Color(1, 1, 1, 0.5), 800, "Arial", 1))
+		var left_title := UI.label(I18n.now("Left out of this preview").to_upper(), 10, Color(1, 1, 1, 0.5), 800, "Arial", 1)
+		left_title.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+		(left_out[1] as VBoxContainer).add_child(left_title)
 		for note in notes:
 			(left_out[1] as VBoxContainer).add_child(_note(str(note), 11, Color(1, 1, 1, 0.78)))
 		column.add_child(left_out[0])
@@ -2839,7 +2841,6 @@ func _render_parties(column: VBoxContainer) -> void:
 		politics["parties"] = entries
 		_ce_composition()
 		_render())
-
 	section.add_child(add)
 
 

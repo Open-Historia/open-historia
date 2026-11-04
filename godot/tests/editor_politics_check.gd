@@ -138,7 +138,6 @@ func _clear_shell() -> void:
 		shell = main.get("shell") as ShellBoot
 	if shell == null:
 		return
-
 	var deadline := Time.get_ticks_msec() + 30000
 	while shell.door_state == "deciding" and Time.get_ticks_msec() < deadline:
 		await process_frame
@@ -347,7 +346,6 @@ func _run() -> void:
 	var saved_party: Dictionary = (saved_france.get("parties", []) as Array)[0] if not (saved_france.get("parties", []) as Array).is_empty() else {}
 	_check(str((saved_france.get("government", {}) as Dictionary).get("legislature", "")) == "National Assembly" and int((saved_france.get("government", {}) as Dictionary).get("legislatureSeats", 0)) == 577 and str((saved_france.get("government", {}) as Dictionary).get("nextElection", "")) == "June 2017", "the legislature, its seats and the next election are saved")
 	_check(str(saved_party.get("nameNative", "")) == "Parti socialiste" and str(saved_party.get("ideologyFamily", "")) == "socialDemocracy" and int(saved_party.get("seats", -1)) == 286 and str(saved_party.get("founded", "")) == "1969" and str(saved_party.get("color", "")) == "#e4002b" and str(saved_party.get("role", "")) == "governing", "the party's native name, family, seats, founding, colour and role are saved (%s)" % JSON.stringify(saved_party).left(300))
-
 	await _shoot("pol-10-authoring-saved")
 	authoring._manager.main_scroll.scroll_vertical = 2000
 	await _wait(0.3)

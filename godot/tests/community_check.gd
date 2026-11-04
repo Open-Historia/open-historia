@@ -317,7 +317,6 @@ func _suggestions() -> void:
 	await dialog._act("undo", ["meta:accentColor"])
 	await _wait(0.3)
 	_check(_has_text(dialog, "0 of 4 changes decided"), "undo puts the change back")
-
 	dialog.close()
 	await _wait(0.4)
 	var banner := SuggestionsBanner.new()

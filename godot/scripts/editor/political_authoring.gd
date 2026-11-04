@@ -635,7 +635,6 @@ func _empty_party() -> Dictionary:
 		"ruling": false,
 		"coalition": false,
 		"priorityField": "publicPriorities",
-
 	}
 
 

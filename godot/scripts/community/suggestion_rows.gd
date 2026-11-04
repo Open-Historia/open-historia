@@ -250,6 +250,5 @@ static func map_summary(rows: Array) -> VBoxContainer:
 	return column
 
 
-
 static func card() -> PanelContainer:
 	return CommunityKit.panel(CARD_BG, CARD_BORDER, 18, Vector4(14, 14, 14, 14))
