@@ -305,21 +305,18 @@ func _run() -> void:
 	_check("a diversion is planned", _shows(room, "Diversion") and _shows(room, "You have turned no agent of theirs"), room._notice)
 	room.store.take_tool("deploy")
 	await _wait(0.3)
-	_check("the deploy hint reads as React's", _shows(room.rail, "Formations to call up") and _shows(room.rail, "Empty calls up as many as a usual draft; 0 calls up none."))
-	var most := int(room._view.get("reinforceMost", 60))
-	var count_box: LineEdit = room.rail._count_input
-	count_box.text = "9999"
-	count_box.text_changed.emit("9999")
-	_check("the call-up box stops at the most a call-up can bring", count_box.text == str(most) and str(room.store.value("deploy_count")) == str(most), "%s of %d" % [count_box.text, most])
-	count_box.text = ""
-	count_box.text_changed.emit("")
+	_check("the deploy hint reads as React's", _shows(room.rail, "As many come as your men, supplies, war weariness and mustering allow, called up inside your country.") and not _shows(room.rail, "Formations to call up"))
+	_check("no box asks how many to call up", _find(room.rail, "LineEdit").is_empty())
 	await _shoot("wr-09-deploy-tool")
 	var line: Array = []
 	for step in range(10):
 		line.append(start + Vector2(-40.0 + step * 2.0, -60.0 + step * 14.0))
 	await _draw_way(line)
 	await _settled()
-	_check("a deployment line is drawn", _shows(room, "Deployment line") and _shows(room, "Fresh formations come in here when time next passes"), room._notice)
+	var deployed := await _until(func() -> bool: return _shows(room, "Deployment line") and _shows(room, "Fresh formations come in here when time next passes"), 10.0)
+	_check("a deployment line is drawn", deployed, room._notice)
+	if not deployed:
+		_dump("planned", room._sections)
 	await _shoot("wr-10-deployed")
 	room.store.take_tool("fortify")
 	var wall: Array = []
@@ -434,8 +431,13 @@ func _run() -> void:
 	room.map_layer._press(target, false)
 	room.map_layer._release(target)
 	await _settled()
-	_check("a transporter is ordered", _shows(room, "TRANSPORTERS"), room._notice)
+	var carried := await _until(func() -> bool: return _shows(room, "TRANSPORTERS") or not room._notice.is_empty(), 10.0)
+	_check("a transporter is ordered", carried and _shows(room, "TRANSPORTERS"), room._notice)
+	if not carried:
+		_dump("planned", room._sections)
 	await _shoot("wr-15-transport")
+	await _aircraft(start)
+	await _home_forces()
 	room._sections_scroll.scroll_vertical = 100000
 	await _wait(0.3)
 	await _shoot("wr-16-drawer-bottom")
@@ -483,6 +485,10 @@ func _run() -> void:
 	forces.close()
 	await _wait(0.2)
 	_check("the button shows in the game at war", button.visible)
+	await _peace_terms()
+	var dropped: Dictionary = await main.engine.request("warroom.test.home", {"drop": true})
+	_check("the forces built up for the test are taken off again", dropped.get("ok", false), str(dropped.get("error", "")))
+	await button.refresh()
 	var accepted := 0
 	for attempt in range(4):
 		var offer: Dictionary = await main.engine.request("warroom.test.offer")
@@ -508,6 +514,143 @@ func _run() -> void:
 	for failure in failures:
 		_say("  failed: " + failure)
 	_finish(0 if failures.is_empty() else 1)
+
+
+func _aircraft(start: Vector2) -> void:
+	var made: Dictionary = await main.engine.request("warroom.test.wing", {"name": "Escadre de chasse 2/30", "lng": 6.2, "lat": 48.7})
+	_check("an air unit of the player's is put on the map", made.get("ok", false), str(made.get("error", "")))
+	await room.refresh()
+	await _wait(0.5)
+	var air: Dictionary = room._record.get("air", {})
+	_check("the war room lists the air unit and its reach", (air.get("wings", []) as Array).size() > 0 and float(air.get("reach", 0)) > 0.0 and float(air.get("blast", 0)) > 0.0, JSON.stringify(air).left(300))
+	_check("the rail has the Aircraft key", _shows(room.rail, "AIRCRAFT"))
+	room.rail.aircraft_toggled.emit()
+	await _wait(0.6)
+	_check("the Aircraft key puts out the Deploy Aircraft plate", room.plates._aircraft.visible and _shows(room.plates, "DEPLOY AIRCRAFT") and _shows(room.plates, "Escadre de chasse 2/30") and _shows(room.plates, "It reaches") and _shows(room.plates, "TROOPS") and _shows(room.plates, "STRUCTURE") and _shows(room.plates, "CITY") and _shows(room.plates, "CHOOSE TARGET"))
+	_check("the first air unit is picked out", not str(room.store.value("wing")).is_empty())
+	await _shoot("wr-15a-aircraft-plate")
+	room.plates.aim.emit()
+	await _wait(0.3)
+	_check("Choose target takes up the aircraft tool", str(room.store.value("tool")) == "aircraft" and _shows(room.rail, "Click what the air unit is to strike. Its bombs fall inside the ring, on your own troops there too. Drag to move the map.") and _shows(room.plates, "CANCEL"))
+	var aim_at := start + Vector2(30.0, -20.0)
+	var motion := InputEventMouseMotion.new()
+	motion.position = aim_at
+	room.map_layer._gui_input(motion)
+	await _frames(3)
+	_check("a ring the size of where the bombs fall follows the pointer", room.map_layer._aim is Vector3 and float((room.map_layer._aim as Vector3).z) >= 4.0, str(room.map_layer._aim))
+	await _shoot("wr-15b-aircraft-aim")
+	await _idle()
+	room.map_layer._press(aim_at, false)
+	room.map_layer._release(aim_at)
+	await _settled()
+	air = room._record.get("air", {})
+	_check("a click orders the strike", (air.get("orders", []) as Array).size() == 1 and _shows(room, "AIR STRIKES") and _shows(room, "Flies when time next passes.") and _shows(room.plates, "Ordered to strike"), room._notice)
+	_check("the tool is put down after the click", str(room.store.value("tool")) == "pan")
+	await _shoot("wr-15c-aircraft-ordered")
+	var wing := str(room.store.value("wing"))
+	await _idle()
+	room.plates.call_off.emit(wing)
+	await _settled()
+	air = room._record.get("air", {})
+	_check("Call off takes the strike back", (air.get("orders", []) as Array).is_empty(), room._notice)
+	room.store.set_values({"strike_kind": "city"})
+	room.plates.aim.emit()
+	await _wait(0.2)
+	var city_at := _screen_of([6.99, 49.23]) + Vector2(6, 4)
+	await _idle()
+	room.map_layer._press(city_at, false)
+	room.map_layer._release(city_at)
+	await _settled()
+	air = room._record.get("air", {})
+	var orders: Array = air.get("orders", [])
+	_check("a city strike is sent at the enemy city nearest the click", orders.size() == 1 and not str((orders[0] as Dictionary).get("target", "")).is_empty(), "%s / %s" % [JSON.stringify(orders), room._notice])
+	room.store.set_values({"strike_kind": "troops"})
+	if orders.is_empty():
+		room.plates.aim.emit()
+		await _wait(0.2)
+		await _idle()
+		room.map_layer._press(aim_at, false)
+		room.map_layer._release(aim_at)
+		await _settled()
+	var flown_skip: Dictionary = await main.engine.request("skip", {"days": 7})
+	_check("a week passes with the strike waiting", flown_skip.get("ok", false), str(flown_skip.get("error", "")))
+	await room.refresh()
+	await _wait(0.8)
+	air = room._record.get("air", {})
+	var flown: Array = air.get("flown", [])
+	_check("the strike is flown when time passes and the drawer says what came of it", not flown.is_empty() and (air.get("orders", []) as Array).is_empty(), JSON.stringify(flown).left(400))
+	if not flown.is_empty():
+		var said := WarRoomWords.strike_outcome(flown[0])
+		_check("what the strike came to is in the drawer and on the plate", _shows(room, said) and _shows(room.plates, "LAST STRIKE"), said)
+		_check("the war room map rings where it struck", not (air.get("struck", []) as Array).is_empty())
+	room._sections_scroll.scroll_vertical = 100000
+	await _wait(0.3)
+	await _shoot("wr-15d-aircraft-flown")
+	room._sections_scroll.scroll_vertical = 0
+	room.plates.aircraft_close.emit()
+	await _wait(0.2)
+	_check("Close puts the plate away", not room.plates._aircraft.visible)
+
+
+func _home_forces() -> void:
+	var made: Dictionary = await main.engine.request("warroom.test.home", {"battlefield": "Rhine Front", "home": true})
+	var home := str(made.get("result", ""))
+	_check("forces at home are built up (test record)", made.get("ok", false) and not home.is_empty(), str(made))
+	var peace: Dictionary = await main.engine.request("warroom.test.home", {"battlefield": "Rhine Front", "home": false})
+	var standing := str(peace.get("result", ""))
+	_check("forces built up on a border in peace (test record)", peace.get("ok", false) and not standing.is_empty(), str(peace))
+	await room.refresh()
+	await _wait(0.5)
+	_check("the war room has a tab for each", _shows(room._tabs_row, home.to_upper()) and _shows(room._tabs_row, standing.to_upper()))
+	room.store.show_battlefield(home, 0)
+	await _until(func() -> bool: return room._name() == home, 15.0)
+	await _wait(0.8)
+	_check("the frame says forces at home", room._bar_sides.text == "FRANCE · FORCES AT HOME", room._bar_sides.text)
+	_check("at home there is no front to go forward or back from, nor an enemy to deceive", not _shows(room.rail, "ADVANCE") and not _shows(room.rail, "FALL BACK") and not _shows(room.rail, "DIVERSION") and _shows(room.rail, "DIG IN") and _shows(room.rail, "DEPLOY"))
+	_check("in peace Withdraw is Stand down", _shows(room.rail, "STAND DOWN") and not _shows(room.rail, "WITHDRAW"))
+	await _shoot("wr-15e-forces-at-home")
+	var layers := _war_layers()
+	if layers:
+		await layers.refresh()
+		await _wait(1.5)
+		var names: Array = []
+		for entry in layers._entries:
+			names.append(str(entry["name"]))
+		_check("the map draws forces built up in peace", home.to_lower() in names, ", ".join(names))
+	room.store.show_battlefield(standing, 0)
+	await _until(func() -> bool: return room._name() == standing, 15.0)
+	await _wait(0.8)
+	_check("the frame says built up in peace", room._bar_sides.text.ends_with(" · BUILT UP IN PEACE") and room._bar_sides.text.contains(" AGAINST "), room._bar_sides.text)
+	_check("on a border in peace the front's keys stay", _shows(room.rail, "ADVANCE") and _shows(room.rail, "DIVERSION") and _shows(room.rail, "STAND DOWN"))
+	await _shoot("wr-15f-built-up-in-peace")
+	var fronts: Dictionary = await main.engine.request("warroom.fronts")
+	var result: Dictionary = fronts.get("result", {})
+	_check("forces built up in peace keep the button, and the war is still a war", bool(result.get("atWar", false)) and bool(result.get("fighting", false)), str(result))
+	room.store.show_battlefield("Rhine Front", 0)
+	await _until(func() -> bool: return room._name() == "Rhine Front", 15.0)
+	await _wait(0.6)
+
+
+func _peace_terms() -> void:
+	var asked: Dictionary = await main.engine.request("chat.peace", {"chatId": "", "messageIds": [], "counterpart": "Germany", "player": "France"})
+	var info: Dictionary = asked.get("result", {})
+	var labels: Array = []
+	for choice in info.get("countryChoices", []):
+		labels.append(str((choice as Dictionary).get("label", "")))
+	_check("the terms of peace offer what becomes of their country", labels == ["Their country stays independent", "We annex all of their country", "Their country becomes our puppet state", "Their country becomes our protectorate", "Their country becomes our client state"], ", ".join(labels))
+	var war: Dictionary = info.get("war", {}) if info.get("war") is Dictionary else {}
+	if str(war.get("id", "")).is_empty():
+		_check("a war to make peace in", false, str(info))
+		return
+	var put: Dictionary = await main.engine.request("country.answer", {"op": "propose", "ref": str(war["id"]), "territory": "as held", "money": "they-light", "theirs": "Germany", "country": "satellite", "cede": "Saarland, Rhineland-Palatinate", "ours": "", "more": "Germany disarms west of the Rhine", "chatId": "native-peace-test", "messageId": "native-peace-test-msg"})
+	var answer: Dictionary = put.get("result", {}) if put.get("ok", false) else {}
+	var terms := str(answer.get("terms", ""))
+	_check("terms on any terms are put", bool(answer.get("ok", false)) and terms.contains("Saarland") and terms.contains("puppet state") and terms.contains("Germany disarms west of the Rhine"), "%s %s" % [terms, str(answer.get("said", put.get("error", "")))])
+	var shown: Dictionary = await main.engine.request("chat.peace", {"chatId": "native-peace-test", "messageIds": ["native-peace-test-msg"], "counterpart": "Germany", "player": "France"})
+	var lines: Array = []
+	for offer in (shown.get("result", {}) as Dictionary).get("offers", []):
+		lines.append_array((offer as Dictionary).get("terms", []))
+	_check("the offer card says every term", "Ceded to France: Saarland, Rhineland-Palatinate." in lines and "Germany becomes France's puppet state." in lines and "And:" in lines and "- Germany disarms west of the Rhine" in lines, " | ".join(lines))
 
 
 func _compare() -> void:

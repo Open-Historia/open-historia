@@ -109,6 +109,26 @@ func _clear_shell() -> void:
 	await _frames(3)
 
 
+func _close_late_notice() -> void:
+	var shell: ShellBoot = main.shell
+	if shell == null:
+		return
+	var quiet_since := Time.get_ticks_msec()
+	var deadline := Time.get_ticks_msec() + 12000
+	while Time.get_ticks_msec() < deadline and Time.get_ticks_msec() - quiet_since < 3000:
+		if shell.door != null and is_instance_valid(shell.door):
+			shell.door.opened.emit()
+			_say("a late vault door opened for the test")
+			quiet_since = Time.get_ticks_msec()
+		if shell.notice != null and is_instance_valid(shell.notice) and not shell.notice.is_queued_for_deletion():
+			await _frames(5)
+			shell.notice.closed.emit()
+			_say("a late update notice closed for the test")
+			quiet_since = Time.get_ticks_msec()
+		await process_frame
+	await _frames(3)
+
+
 func _data_root() -> String:
 	var found := str(main.info.get("dataRoot", ""))
 	return found if not found.is_empty() else OS.get_environment("OH_NATIVE_ROOT")
@@ -194,6 +214,7 @@ func _run() -> void:
 	for text in ["💾 Save", "Exit", "▶ Apply & Play"]:
 		_check("footer button %s" % text, _find_button(workshop, text) != null)
 	await _shoot("ws-1-opened")
+	await _close_late_notice()
 	await _paint()
 	await _countries()
 	await _city()
@@ -660,7 +681,7 @@ func _reference() -> void:
 	_check("Shift keeps the picture's shape while resizing", kept.size.x > resized.size.x and absf(kept.size.x / kept.size.y - resized.size.x / resized.size.y) < 0.001, "%s -> %s" % [str(resized.size), str(kept.size)])
 	var lock := _row_toggle(panel, "Lock in place")
 	if lock:
-		lock.pressed.emit()
+		lock.button_pressed = not lock.button_pressed
 	await _frames(3)
 	_check("Lock in place locks the picture", workshop.map.reference_locked() and _find_label(workshop._panel, "Locked: dragging moves the map. Unlock to move or resize the image. Close this panel to draw and edit through the image.") != null)
 	var locked_rect: Rect2 = workshop.map.reference["rect"]
@@ -671,7 +692,7 @@ func _reference() -> void:
 	await _shoot("ws-22a-reference-locked")
 	lock = _row_toggle(workshop._panel, "Lock in place")
 	if lock:
-		lock.pressed.emit()
+		lock.button_pressed = not lock.button_pressed
 	await _frames(3)
 	panel = workshop._panel as WorkshopReference
 	var edits := _find_type(panel, "LineEdit")
@@ -741,7 +762,7 @@ func _scale_line() -> void:
 	if set_button:
 		set_button.pressed.emit()
 	await _until(func() -> bool: return workshop.tool == "select" and workshop.scale_draft.is_empty() and _find_button(workshop._panel, "Draw it again") != null, 10.0)
-	var projection: Variant = (workshop.state.get("doc", {}) as Dictionary).get("projection")
+	var projection: Variant = ((workshop.state.get("doc", {}) as Dictionary).get("metadata", {}) as Dictionary).get("projection")
 	var scale: Dictionary = (projection as Dictionary).get("scale", {}) if projection is Dictionary else {}
 	_check("Set the scale saves the line with the projection", is_equal_approx(float(scale.get("km", 0.0)), 500.0) and scale.get("from") is Array, str(projection))
 	await _until(func() -> bool: return str(workshop.map.scale_line.get("label", "")) == "500 km · 311 mi", 5.0)
@@ -751,7 +772,7 @@ func _scale_line() -> void:
 	if clear:
 		clear.pressed.emit()
 	await _until(func() -> bool: return _find_button(workshop._panel, "Draw a scale line") != null, 10.0)
-	projection = (workshop.state.get("doc", {}) as Dictionary).get("projection")
+	projection = ((workshop.state.get("doc", {}) as Dictionary).get("metadata", {}) as Dictionary).get("projection")
 	_check("Clear it takes the scale line away", not (projection is Dictionary and (projection as Dictionary).has("scale")) and workshop.map.scale_line.is_empty(), str(projection))
 	draw = _find_button(workshop._panel, "Draw a scale line")
 	if draw:
@@ -1358,12 +1379,12 @@ func _basemaps(w: Workshop) -> void:
 		_check("It's Q-BAM sets Robinson centred on 10.75 degrees east", setup._type == "robinson" and is_equal_approx(float(setup._centre), 10.75) and setup._exact_bounds is Dictionary)
 		var deleting := _row_toggle(setup, "Delete the provinces and nations")
 		if deleting:
-			deleting.pressed.emit()
+			deleting.button_pressed = not deleting.button_pressed
 		await _frames(3)
 		_check("deleting the provinces is explained", _find_label(setup, "The map starts empty on the picture: provinces, cities and units are removed.") != null)
 		deleting = _row_toggle(setup, "Delete the provinces and nations")
 		if deleting:
-			deleting.pressed.emit()
+			deleting.button_pressed = not deleting.button_pressed
 		await _frames(3)
 		await _shoot("ws-30a-picture-setup")
 		setup._type = "mercator"
@@ -1374,7 +1395,7 @@ func _basemaps(w: Workshop) -> void:
 		if use:
 			use.pressed.emit()
 		await _until(func() -> bool: return not is_instance_valid(setup) or setup.is_queued_for_deletion(), 30.0)
-	var after_setup: Variant = (w.state.get("doc", {}) as Dictionary).get("projection")
+	var after_setup: Variant = ((w.state.get("doc", {}) as Dictionary).get("metadata", {}) as Dictionary).get("projection")
 	_check("Use this picture keeps the map in the projection chosen", after_setup is Dictionary and str((after_setup as Dictionary).get("type", "")) == "mercator", str(after_setup))
 	w.open_basemaps()
 	await _frames(4)
