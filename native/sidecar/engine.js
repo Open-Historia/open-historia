@@ -364,4 +364,5 @@ export * as wrWorldGrid from "../../src/runtime/fronts/worldGrid.js";
 export * as wrMapDistance from "../../server/mapDistance.js";
 export * as wrMapMeasure from "../../src/runtime/mapMeasure.js";
 export * as wrHome from "../../src/runtime/fronts/home.js";
+export * as ctPolitics from "../../src/runtime/politics.js";
 export * as wsMapDistance from "../../server/mapDistance.js";

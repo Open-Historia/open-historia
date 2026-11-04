@@ -48,6 +48,9 @@ var _tabs_fitted := true
 var _sheet_target := ""
 var _busy_timer: Timer
 var _tracking_model: Dictionary = {}
+var compiling := false
+var compile_error := ""
+var _compile_call := 0
 
 
 func _init() -> void:
@@ -82,6 +85,7 @@ func show_country(name := "") -> void:
 	var asked := name.strip_edges()
 	if asked != target or data.is_empty():
 		_cancel_sheet()
+		_cancel_compile()
 		refresh_step = ""
 		selected_party = ""
 		hovered_party = ""
@@ -250,6 +254,40 @@ func _on_engine_event(name: String, payload: Variant) -> void:
 	sheet_status = "loading"
 	sheet_waiting = bool(info.get("waiting", false))
 	_render()
+
+
+func _cancel_compile() -> void:
+	if _compile_call > 0 and engine:
+		engine.cancel(_compile_call)
+	_compile_call = 0
+	compiling = false
+	compile_error = ""
+
+
+func _compile_parties() -> void:
+	if compiling or target.is_empty():
+		return
+	var asked := target
+	compiling = true
+	compile_error = ""
+	_render()
+	var call := engine.last_request_id() + 1
+	_compile_call = call
+	var reply: Dictionary = await engine.request("country.compile", {"target": asked})
+	if _compile_call != call:
+		return
+	_compile_call = 0
+	compiling = false
+	if asked != target or not is_open():
+		return
+	var result: Dictionary = reply.get("result", {}) if typeof(reply.get("result")) == TYPE_DICTIONARY else {}
+	if result.get("aborted", false):
+		return
+	if not reply.get("ok", false) or (not result.get("ok", false) and not str(result.get("error", "")).is_empty()):
+		compile_error = str(result.get("error", reply.get("error", "")))
+		if compile_error.is_empty():
+			compile_error = "Could not compile the parties."
+	await _load(target)
 
 
 func _cancel_sheet() -> void:
@@ -533,6 +571,9 @@ func _render() -> void:
 			_render_economy()
 		"ranking":
 			_render_ranking()
+	if (tab == "politics" or tab == "ranking") and not data.get("worldRead", true):
+		body.add_child(gap(16))
+		body.add_child(text("Loading diplomatic state…", 12, Color(1, 1, 1, 0.42)))
 	body.add_child(gap(16))
 	body.add_child(text(FOOTER, 11, Color(1, 1, 1, 0.35)))
 	await get_tree().process_frame
@@ -763,8 +804,43 @@ func _render_politics() -> void:
 			line.add_theme_color_override("default_color", Color(1, 1, 1, 0.48))
 			line.text = "[color=#ffffff57]%s[/color] %s" % [str(info.get("partiesLabel", "")), _escape(str(info["parties"]))]
 			stack.add_child(line)
+		var legislature := str(info.get("legislature", ""))
+		var election := str(info.get("nextElection", ""))
+		if not legislature.is_empty() or not election.is_empty():
+			stack.add_child(gap(9))
+			var rule := ColorRect.new()
+			rule.color = Color(1, 1, 1, 0.06)
+			rule.custom_minimum_size.y = 1
+			stack.add_child(rule)
+			stack.add_child(gap(8))
+			var facts := column(3)
+			for pair in [["Legislature", legislature], ["Next election", election]]:
+				if str(pair[1]).is_empty():
+					continue
+				var fact := RichTextLabel.new()
+				fact.bbcode_enabled = true
+				fact.fit_content = true
+				fact.scroll_active = false
+				fact.mouse_filter = Control.MOUSE_FILTER_IGNORE
+				fact.add_theme_font_override("normal_font", UI.font(400))
+				fact.add_theme_font_size_override("normal_font_size", 10)
+				fact.add_theme_color_override("default_color", Color(1, 1, 1, 0.48))
+				fact.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+				fact.text = "[color=#ffffff57]%s[/color] [color=#ffffffb8]%s[/color]" % [_escape(I18n.now(str(pair[0]))), _escape(str(pair[1]))]
+				facts.add_child(fact)
+			stack.add_child(facts)
+		var seats: Array = info.get("seats", [])
+		if not seats.is_empty():
+			stack.add_child(gap(8))
+			var bar := StatSeats.new()
+			bar.parts = seats
+			bar.custom_minimum_size = Vector2(1, 10)
+			stack.add_child(bar)
 		box.add_child(stack)
 		body.add_child(box)
+	var compile: Variant = politics.get("compile")
+	if typeof(compile) == TYPE_DICTIONARY:
+		_render_compile(compile)
 	var landscape: Variant = politics.get("landscape")
 	if typeof(landscape) == TYPE_DICTIONARY:
 		_render_landscape(landscape)
@@ -792,6 +868,29 @@ func _render_politics() -> void:
 
 func _escape(value: String) -> String:
 	return value.replace("[", "[lb]")
+
+
+func _render_compile(compile: Dictionary) -> void:
+	body.add_child(gap(11))
+	var box := _politics_card(Vector4(12, 10, 12, 10))
+	var stack := column(0)
+	var detailed: bool = compile.get("detailed", false)
+	if compiling:
+		stack.add_child(text("Compiling the government and parties…", 11, Color(1, 1, 1, 0.5)))
+	else:
+		if not detailed:
+			stack.add_child(text("Its parties' seats, roles and ideologies have not been filled in yet. Filling them in asks the AI once.", 11, Color(1, 1, 1, 0.5)))
+			stack.add_child(gap(6))
+		var again := link("Compile the government and parties again" if detailed else "Compile parties", Color("#93c5fd"), 12, 700)
+		again.pressed.connect(_compile_parties)
+		stack.add_child(again)
+	if not compile_error.is_empty() and not compiling:
+		stack.add_child(gap(6))
+		var problem := text(compile_error, 11, Color("#fca5a5"))
+		problem.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+		stack.add_child(problem)
+	box.add_child(stack)
+	body.add_child(box)
 
 
 func _render_landscape(landscape: Dictionary) -> void:
@@ -830,6 +929,19 @@ func _render_landscape(landscape: Dictionary) -> void:
 		_donut.hovering.connect(_hover_party)
 		holder.add_child(_donut)
 		stack.add_child(holder)
+	if str(landscape.get("mode", "party")) == "party":
+		stack.add_child(gap(8))
+		var frame := card(Color(0, 0, 0, 0), Color(1, 1, 1, 0.07), 10, Vector4(1, 1, 1, 1))
+		var rows := column(0)
+		var first := true
+		for item in entries:
+			rows.add_child(_party_row(item, first))
+			first = false
+		frame.add_child(rows)
+		stack.add_child(frame)
+		box.add_child(stack)
+		body.add_child(box)
+		return
 	var legend := GridContainer.new()
 	legend.columns = 2
 	legend.add_theme_constant_override("h_separation", 7)
@@ -854,21 +966,168 @@ func _render_landscape(landscape: Dictionary) -> void:
 		cell.mouse_exited.connect(_hover_party.bind(""))
 		legend.add_child(cell)
 	stack.add_child(legend)
-	if not str(landscape.get("governmentNames", "")).is_empty():
-		stack.add_child(gap(10))
-		var amber := card(Color(245 / 255.0, 158 / 255.0, 11 / 255.0, 0.07), Color(245 / 255.0, 158 / 255.0, 11 / 255.0, 0.16), 9, Vector4(9, 8, 9, 8))
-		var inner := column(4)
-		inner.add_child(text(str(landscape.get("governmentLabel", "")).to_upper(), 9, Color(253 / 255.0, 230 / 255.0, 138 / 255.0, 0.62), 850, true, 1))
-		inner.add_child(text(str(landscape["governmentNames"]), 10, Color("#fde68a"), 800))
-		amber.add_child(inner)
-		stack.add_child(amber)
 	for item in entries:
 		var party: Dictionary = item
 		if str(party.get("id", "")) == selected_party and not selected_party.is_empty():
 			stack.add_child(gap(11))
-			stack.add_child(_party_detail(party, str(landscape.get("mode", "party")) == "party"))
+			stack.add_child(_party_detail(party, false))
 	box.add_child(stack)
 	body.add_child(box)
+
+
+func _rich(size: int, color: Color, weight := 400, bold_weight := 800, wrap := true) -> RichTextLabel:
+	var node := RichTextLabel.new()
+	node.bbcode_enabled = true
+	node.fit_content = true
+	node.scroll_active = false
+	node.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART if wrap else TextServer.AUTOWRAP_OFF
+	if wrap:
+		node.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		node.custom_minimum_size.x = 1
+	node.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	node.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+	node.add_theme_font_override("normal_font", UI.font(weight))
+	node.add_theme_font_override("bold_font", UI.font(bold_weight))
+	node.add_theme_font_size_override("normal_font_size", size)
+	node.add_theme_font_size_override("bold_font_size", size)
+	node.add_theme_color_override("default_color", color)
+	return node
+
+
+func _party_row(party: Dictionary, first := false) -> Control:
+	var id := str(party.get("id", ""))
+	var open := id == selected_party and not selected_party.is_empty()
+	var other: bool = party.get("isOther", false)
+	var holder := HBoxContainer.new()
+	holder.add_theme_constant_override("separation", 0)
+	holder.mouse_filter = Control.MOUSE_FILTER_PASS
+	holder.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var stripe := ColorRect.new()
+	stripe.color = tone(str(party.get("color", "")))
+	stripe.custom_minimum_size.x = 3
+	stripe.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	holder.add_child(stripe)
+	var right := column(0)
+	if not first:
+		right.add_child(_rule())
+	var shade := Color(1, 1, 1, 0.04) if open else Color(0, 0, 0, 0)
+	var cell := StatClickable.new(UI.box(shade, Color(0, 0, 0, 0), 0, 0, Vector4(10, 9, 10, 9)), UI.box(shade, Color(0, 0, 0, 0), 0, 0, Vector4(10, 9, 10, 9)))
+	cell.clicked.connect(_pick_party.bind(id))
+	cell.mouse_entered.connect(_hover_party.bind(id))
+	cell.mouse_exited.connect(_hover_party.bind(""))
+	var lines := column(0)
+	var top := row(10)
+	var names := column(2)
+	if other:
+		names.add_child(text("Other political support", 12, Color(1, 1, 1, 0.9), 800))
+	else:
+		var heading := _rich(12, Color(1, 1, 1, 0.9), 800, 700)
+		var abbreviations := str(party.get("abbreviations", ""))
+		heading.text = _escape(str(party.get("name", ""))) + ("" if abbreviations.is_empty() else " [b][color=#ffffff73](%s)[/color][/b]" % _escape(abbreviations))
+		names.add_child(heading)
+		if not str(party.get("nameNative", "")).is_empty():
+			var native := _rich(10, Color(1, 1, 1, 0.5))
+			native.add_theme_font_override("italics_font", UI.font(400))
+			native.text = "[i]%s[/i]" % _escape(str(party["nameNative"]))
+			names.add_child(native)
+	top.add_child(names)
+	if other:
+		var share := UI.label(str(party.get("supportText", "—")), 10, Color(1, 1, 1, 0.48), 800)
+		share.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+		top.add_child(share)
+	else:
+		var ink := tone(str(party.get("roleTone", "")), Color("#93c5fd"))
+		var role := pill(str(party.get("role", "")), Color(0, 0, 0, 0), Color(ink.r, ink.g, ink.b, 0x55 / 255.0), ink, 9, 800, Vector4(6, 2, 6, 2))
+		role.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+		top.add_child(role)
+	lines.add_child(top)
+	var family := str(party.get("family", ""))
+	var sub := str(party.get("subideology", ""))
+	if not other and (not family.is_empty() or not sub.is_empty()):
+		lines.add_child(gap(4))
+		var ideology := _rich(10, Color(1, 1, 1, 0.62))
+		var shown := ""
+		if not family.is_empty():
+			shown = "[b][color=#%s]%s[/color][/b]" % [tone(str(party.get("familyColor", "")), Color("#94a3b8")).to_html(false), _escape(I18n.now(family))]
+			if not sub.is_empty():
+				var listed: bool = party.get("listed", false)
+				shown += "[color=%s] %s[/color]" % ["#ffffff9e" if listed else "#ffffff59", _escape("· %s" % sub if listed else I18n.ui("· {{subideology}} (unlisted)", {"subideology": sub}))]
+				if not listed:
+					ideology.mouse_filter = Control.MOUSE_FILTER_PASS
+					ideology.tooltip_text = "Not one of this ideology's listed subideologies"
+		else:
+			shown = _escape(sub)
+		ideology.text = shown
+		lines.add_child(ideology)
+	if not other:
+		var facts := flow(11, 2)
+		if not str(party.get("leader", "")).is_empty():
+			var leader := _rich(10, Color(1, 1, 1, 0.5), 400, 800, false)
+			leader.text = "%s [color=#ffffffcc]%s[/color]" % [_escape(I18n.now("Leader:")), _escape(str(party["leader"]))]
+			facts.add_child(leader)
+		for key in ["seatsText", "rowSupport"]:
+			if not str(party.get(key, "")).is_empty():
+				var fact := UI.label(str(party[key]), 10, Color(1, 1, 1, 0.5))
+				fact.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+				facts.add_child(fact)
+		if party.get("supportApproximate", false):
+			var rough := UI.label("APPROXIMATE", 9, Color(253 / 255.0, 230 / 255.0, 138 / 255.0, 0.62), 400)
+			rough.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+			facts.add_child(rough)
+		if not str(party.get("founded", "")).is_empty():
+			facts.add_child(UI.label(str(party["founded"]), 10, Color(1, 1, 1, 0.5)))
+		if facts.get_child_count() > 0:
+			lines.add_child(gap(3))
+			lines.add_child(facts)
+	cell.add_child(lines)
+	right.add_child(cell)
+	if open:
+		right.add_child(_party_more(party))
+	holder.add_child(right)
+	return holder
+
+
+func _party_more(party: Dictionary) -> Control:
+	var bg := PanelContainer.new()
+	bg.add_theme_stylebox_override("panel", UI.box(Color(1, 1, 1, 0.04), Color(0, 0, 0, 0), 0, 0, Vector4(10, 0, 10, 10)))
+	bg.mouse_filter = Control.MOUSE_FILTER_PASS
+	var stack := column(0)
+	if party.get("isOther", false):
+		var members: Array = party.get("members", [])
+		if not members.is_empty():
+			var list := column(6)
+			for item in members:
+				var member: Dictionary = item
+				var line := row(7)
+				line.add_child(text(str(member.get("name", "")), 11, Color(1, 1, 1, 0.7)))
+				line.add_child(UI.label(str(member.get("support", "")), 10, Color(1, 1, 1, 0.48), 800))
+				list.add_child(line)
+			stack.add_child(list)
+		if not str(party.get("unlistedText", "")).is_empty():
+			if not members.is_empty():
+				stack.add_child(gap(9))
+			stack.add_child(text(str(party["unlistedText"]), 10, Color(1, 1, 1, 0.4)))
+		bg.add_child(stack)
+		return bg
+	var ideology: Array = party.get("moreIdeology", [])
+	var described := not str(party.get("publicDescription", "")).is_empty() or not ideology.is_empty() or not (party.get("priorities", []) as Array).is_empty() or not (party.get("foreignPolicy", []) as Array).is_empty()
+	if not str(party.get("publicDescription", "")).is_empty():
+		var about := text(str(party["publicDescription"]), 11, Color(1, 1, 1, 0.62))
+		about.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+		stack.add_child(about)
+	if not ideology.is_empty():
+		if stack.get_child_count() > 0:
+			stack.add_child(gap(7))
+		var chips := flow(4, 4)
+		for value in ideology:
+			chips.add_child(pill(str(value), Color(1, 1, 1, 0.06), UI.HUD_BORDER, Color(1, 1, 1, 0.72), 9, 750))
+		stack.add_child(chips)
+	stack.add_child(_detail_list("Public priorities", party.get("priorities", [])))
+	stack.add_child(_detail_list("Foreign-policy outlook", party.get("foreignPolicy", [])))
+	if not described:
+		stack.add_child(text("No additional public party information is currently available.", 10, Color(1, 1, 1, 0.38)))
+	bg.add_child(stack)
+	return bg
 
 
 func _pick_party(id: String) -> void:
@@ -1546,9 +1805,7 @@ func _military_card(military: Dictionary) -> PanelContainer:
 	top.add_child(text("MILITARY POWER", 11, Color(1, 1, 1, 0.55), 700, true, 1))
 	top.add_child(UI.label(str(military.get("power", "—")), 17, UI.WHITE, 800))
 	stack.add_child(top)
-	stack.add_child(gap(3))
-	stack.add_child(text("What it weighs in a land war, by its people and what its forces have to spend, through the figures below.", 10, Color(1, 1, 1, 0.42)))
-	stack.add_child(gap(9))
+	stack.add_child(gap(7))
 	var rows := column(6)
 	for item in military.get("rows", []):
 		var figure: Dictionary = item
@@ -2271,6 +2528,45 @@ class StatBar extends Control:
 		if mark >= 0.0:
 			var x: float = size.x * clamp(round(mark), 0.0, 100.0) / 100.0
 			draw_rect(Rect2(x, 0, 1, size.y), Color(1, 1, 1, 0.55))
+
+
+class StatSeats extends Control:
+	var parts: Array = []
+
+	func _init() -> void:
+		mouse_filter = Control.MOUSE_FILTER_PASS
+		size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		tooltip_text = " "
+
+	func _pieces() -> Array:
+		var x := 0.0
+		var shown: Array = []
+		for item in parts:
+			var part: Dictionary = item
+			var width: float = size.x * float(part.get("share", 0))
+			if width > 0.0:
+				shown.append([x, width, StatPaint.tone(str(part.get("color", ""))), str(part.get("tip", ""))])
+			x += width
+		return shown
+
+	func _draw() -> void:
+		var radius := int(ceil(size.y * 0.5))
+		var shown := _pieces()
+		for index in range(shown.size()):
+			var piece: Array = shown[index]
+			var style := UI.box(piece[2], Color(0, 0, 0, 0), 0, 0)
+			var reaches := float(piece[0]) + float(piece[1]) >= size.x - 0.5
+			style.corner_radius_top_left = radius if index == 0 else 0
+			style.corner_radius_bottom_left = radius if index == 0 else 0
+			style.corner_radius_top_right = radius if reaches else 0
+			style.corner_radius_bottom_right = radius if reaches else 0
+			draw_style_box(style, Rect2(float(piece[0]), 0, float(piece[1]), size.y))
+
+	func _get_tooltip(at_position: Vector2) -> String:
+		for piece in _pieces():
+			if at_position.x >= float(piece[0]) and at_position.x < float(piece[0]) + float(piece[1]):
+				return str(piece[3])
+		return ""
 
 
 class StatMeter extends Control:

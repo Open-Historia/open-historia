@@ -41,6 +41,7 @@ const EXTRA_MODULES = Object.freeze({
   communityFlags: "ctCommunityFlags",
   gameFlagChoices: "ctGameFlagChoices",
   hubFiles: "ctHubFiles",
+  politics: "ctPolitics",
 });
 
 let extrasFound = null;
@@ -820,14 +821,45 @@ export const register = (ctx) => {
     };
   });
 
-  const politicsView = (extras, { profile, fallbackGovernment, fallbackLeader, intelligence, institutions }) => {
+  const politicsView = (extras, { profile, fallbackGovernment, fallbackLeader, intelligence, institutions, compilable = false }) => {
     const government = profile?.government || {};
     const form = cleanText(government.form || fallbackGovernment);
     const headOfState = officeholderName(government.headOfState || fallbackLeader || profile?.leader);
     const headOfGovernment = officeholderName(government.headOfGovernment);
     const governmentParties = extras.politicalPresentation.buildGovernmentPartyPresentation(profile);
     const landscape = extras.politicalPresentation.buildPoliticalLandscape(profile);
+    const legislature = cleanText(government.legislature);
+    const legislatureSeats = Number(government.legislatureSeats) > 0 ? Number(government.legislatureSeats) : 0;
+    const nextElection = cleanText(government.nextElection);
+    const seated = asArray(profile?.parties).filter((party) => Number(party?.seats) > 0);
+    const seatedTotal = Math.max(legislatureSeats, seated.reduce((sum, party) => sum + Number(party.seats), 0));
+    const politics = extras.politics;
+    const roleOf = (party) => (party?.ruling ? "governing" : party?.coalition ? "coalition" : politics.PARTY_ROLE_LABELS[party?.role] ? party.role : "opposition");
+    const roleTones = { governing: "#fbbf24", coalition: "#fcd34d", opposition: "#93c5fd", extraParliamentary: "#94a3b8", underground: "#9aa1ab", exile: "#9aa1ab", banned: "#f87171" };
+    const partyRowView = (party) => {
+      if (party.isOther) return {};
+      const family = politics.findIdeology(party.ideologyFamily);
+      const subideology = cleanText(party.subideology);
+      const role = roleOf(party);
+      const seats = Number.isFinite(party.seats) ? party.seats : null;
+      const ideology = listOf(party.ideology).filter((item) => item.toLowerCase() !== String(family?.name ?? "").toLowerCase() && item.toLowerCase() !== subideology.toLowerCase());
+      return {
+        abbreviations: [...new Set([party.shortNameNative, party.shortName].map(cleanText).filter(Boolean))].join(" · "),
+        nameNative: cleanText(party.nameNative) && cleanText(party.nameNative) !== cleanText(party.name) ? cleanText(party.nameNative) : "",
+        role: politics.PARTY_ROLE_LABELS[role],
+        roleTone: cssHex(roleTones[role]),
+        family: family ? cleanText(family.name) : "",
+        familyColor: cssHex(family?.colour || "#94a3b8"),
+        subideology,
+        listed: Boolean(family) && politics.isListedSubideology(party.ideologyFamily, party.subideology),
+        seatsText: seats !== null ? `${seats}${legislatureSeats ? `/${legislatureSeats}` : ""} seats` : "",
+        rowSupport: Number.isFinite(party.support) ? `${formatSupport(party.support)} support` : "",
+        founded: cleanText(party.founded) ? `Founded ${cleanText(party.founded)}` : "",
+        moreIdeology: ideology,
+      };
+    };
     const entryView = (party) => ({
+      ...partyRowView(party),
       id: cleanText(party.id),
       name: cleanText(party.name),
       shortName: cleanText(party.shortName || party.name),
@@ -851,14 +883,19 @@ export const register = (ctx) => {
       priorities: listOf(asArray(party.publicPriorities).length ? party.publicPriorities : party.goals),
       foreignPolicy: listOf(party.publicForeignPolicy),
     });
+    const detailed = asArray(profile?.parties).some((party) => party?.ideologyFamily || Number.isFinite(party?.seats) || party?.role);
     return {
-      government: (!form && !headOfState && !headOfGovernment && !governmentParties.names.length) ? null : {
+      government: (!form && !headOfState && !headOfGovernment && !governmentParties.names.length && !legislature && !nextElection && !legislatureSeats) ? null : {
         form,
         headOfState,
         headOfGovernment: headOfGovernment && headOfGovernment !== headOfState ? headOfGovernment : "",
         partiesLabel: governmentParties.names.length > 1 ? "Governing coalition:" : "Government:",
         parties: governmentParties.names.join(" | "),
+        legislature: legislature || legislatureSeats > 0 ? `${legislature}${legislatureSeats ? ` (${legislatureSeats} seats)` : ""}` : "",
+        nextElection,
+        seats: seated.map((party) => ({ color: partyColor(party), share: seatedTotal > 0 ? Number(party.seats) / seatedTotal : 0, tip: `${party.shortName || party.name}: ${Number(party.seats) || 0} seats` })),
       },
+      compile: compilable ? { detailed } : null,
       landscape: asArray(landscape.entries).length ? {
         mode: landscape.mode,
         title: cleanText(landscape.title),
@@ -869,8 +906,6 @@ export const register = (ctx) => {
         centerSubLabel: cleanText(landscape.centerSubLabel) || "landscape",
         slices: asArray(landscape.slices).map(entryView),
         entries: asArray(landscape.entries).map(entryView),
-        governmentLabel: governmentParties.label,
-        governmentNames: governmentParties.names.join(" | "),
       } : null,
       goals: listOf(profile?.goals).slice(0, 5),
       institutions: institutionsView(institutions),
@@ -1214,6 +1249,7 @@ export const register = (ctx) => {
         fallbackLeader: headerSheet?.leader || "",
         intelligence: intelligenceReport,
         institutions,
+        compilable: Boolean(world),
       }),
       groups: await groupsView(extras, { world, target, isPlayer: Boolean(player.code) && target === player.code }),
       diplomacy: world ? diplomacyView(extras, { world, identity, target, viewer: player.code }) : null,
@@ -1221,6 +1257,7 @@ export const register = (ctx) => {
       military: world && sheet && tab === "economy" ? militaryView(extras, world, resolvedKey || target) : null,
       tracking: trackingSummary(extras, settings, identity),
       generating: generating.has(target),
+      worldRead: Boolean(world),
     };
   };
 
@@ -1263,11 +1300,12 @@ export const register = (ctx) => {
       return formatCompactNumber(value);
     };
     const shown = showAll ? ranking.rows : ranking.rows.slice(0, RANKING_ROWS_FIRST);
+    const flagIdentityIndex = world ? extras.polityIdentity.buildPolityIdentityIndex(world) : null;
     return {
       metric: metric.key,
       metrics: metrics.map((entry) => ({ key: entry.key, label: entry.label, selected: entry.key === metric.key })),
       rows: shown.map((row) => {
-        const flagUrl = flags?.[row.key] || world?.polityOverrides?.[row.key]?.flag || engine.countryFlags.flagImageUrlFromGid(row.key);
+        const flagUrl = extras.polityFlags.resolvePolityFlag({ polity: { name: row.label, code: row.key }, world: world || {}, flags: flags || {}, identityIndex: flagIdentityIndex }).imageUrl;
         return {
           key: row.key,
           rank: String(row.rank),
@@ -1679,11 +1717,11 @@ export const register = (ctx) => {
           France: {
             polityKey: "France",
             name: "France",
-            government: { form: "Semi-presidential republic", headOfState: "François Hollande", headOfGovernment: "Manuel Valls", rulingParties: ["Socialist Party"] },
+            government: { form: "Semi-presidential republic", headOfState: "François Hollande", headOfGovernment: "Manuel Valls", rulingParties: ["Socialist Party"], legislature: "National Assembly", legislatureSeats: 577, nextElection: "June 2017" },
             parties: [
-              { id: "ps", name: "Socialist Party", shortName: "PS", support: 29, leader: "Jean-Christophe Cambadélis", ideology: ["Social democracy"], publicDescription: "The governing party of the centre-left." },
-              { id: "lr", name: "The Republicans", shortName: "LR", support: 27, ideology: ["Liberal conservatism"] },
-              { id: "fn", name: "National Front", shortName: "FN", support: 25, ideology: ["National conservatism"] },
+              { id: "ps", name: "Socialist Party", shortName: "PS", nameNative: "Parti socialiste", support: 29, seats: 286, role: "governing", ideologyFamily: "socialDemocracy", subideology: "Social Democracy", founded: "1969", leader: "Jean-Christophe Cambadélis", ideology: ["Social democracy", "Pro-Europeanism"], publicDescription: "The governing party of the centre-left." },
+              { id: "lr", name: "The Republicans", shortName: "LR", nameNative: "Les Républicains", support: 27, seats: 194, role: "opposition", ideologyFamily: "socialConservatism", subideology: "Gaullism", founded: "2015", ideology: ["Liberal conservatism"] },
+              { id: "fn", name: "National Front", shortName: "FN", nameNative: "Front national", support: 25, seats: 2, role: "opposition", ideologyFamily: "nationalPopulism", subideology: "Frontism", ideology: ["National conservatism"] },
               { id: "fg", name: "Left Front", shortName: "FG", support: 11 },
             ],
             goals: ["Restore growth and cut unemployment", "Defeat the raids on Chad", "Hold the European Union together"],
@@ -1701,6 +1739,17 @@ export const register = (ctx) => {
       const code = cleanText(target);
       if (!code) return { status: "idle" };
       return loadSheet({ code, force, forceReassess, generate, signal, id });
+    },
+    "country.compile": async ({ target = "" } = {}, { signal } = {}) => {
+      const code = cleanText(target);
+      if (!code) return { ok: false, error: "Could not compile the parties." };
+      try {
+        const actor = await engine.gameplay.assessPoliticalLandscape(code, { signal });
+        return { ok: Boolean(actor), error: "" };
+      } catch (error) {
+        if (signal?.aborted) return { ok: false, aborted: true, error: "" };
+        return { ok: false, error: cleanText(error?.message) || "Could not compile the parties." };
+      }
     },
     "country.ranking": async (args) => rankingView(args),
     "country.chart": async (args) => chartView(args),
