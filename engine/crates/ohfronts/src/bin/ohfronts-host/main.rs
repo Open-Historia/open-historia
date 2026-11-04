@@ -79,6 +79,7 @@ struct Lookups {
     present: HashSet<String>,
     tables: HashMap<String, HashMap<String, Val>>,
     memo: Mutex<HashMap<(usize, String), Val>>,
+    collation: HashMap<String, f64>,
 }
 
 impl Lookups {
@@ -124,6 +125,9 @@ impl Hooks for Lookups {
     }
     fn people_of(&self, name: &str) -> Val {
         self.look(7, name)
+    }
+    fn collate(&self, a: &str, b: &str) -> Option<f64> {
+        Some(self.collation.get(a)? - self.collation.get(b)?)
     }
 }
 
@@ -240,7 +244,11 @@ impl Host {
             }
             _ => Kept::default(),
         };
-        let hooks = Lookups { link: self.link.clone(), run: id, present, tables, memo: Mutex::new(HashMap::new()) };
+        let collation: HashMap<String, f64> = match message.get("collation").as_obj() {
+            Some(given) => given.entries().map(|(name, rank)| (name.to_string(), rank.num())).collect(),
+            None => HashMap::new(),
+        };
+        let hooks = Lookups { link: self.link.clone(), run: id, present, tables, memo: Mutex::new(HashMap::new()), collation };
         let run = create_front_run_kept(input, Box::new(hooks), policy, kept);
         let finished = run.finished();
         self.runs.insert(id, Slot { run, key });
