@@ -306,6 +306,25 @@ func _themes(shell: ShellBoot) -> void:
 	narrow.queue_free()
 	window.size = before
 	await _frames(4)
+	var stop := _update_ids(listed).find("2026-11-native-editor-map")
+	var since: Array = listed.slice(0, stop) if stop > 0 else []
+	var every := UpdateNotice.new()
+	shell.overlay.add_child(every)
+	await every.setup(main.engine, since, {"reduceMotion": true})
+	var unread: PackedStringArray = []
+	for index in range(every.page_count()):
+		every.show_page(index)
+		await _frames(3)
+		var page: Dictionary = every._pages[index]
+		var title := str((page["banner"] as Dictionary).get("title", ""))
+		if not Array(_texts(every, PackedStringArray())).any(func(value: String) -> bool: return value.contains(title)):
+			unread.append(str(page.get("key", "")))
+	_check("every notice since the native editor map's renders, %d pages" % every.page_count(), since.size() > 20 and every.page_count() >= since.size() and unread.is_empty(), ", ".join(unread))
+	every.show_page(0)
+	await _wait(0.4)
+	await _shoot("s-44-every-new-notice-first")
+	every.queue_free()
+	await _frames(3)
 
 
 func _parts() -> void:
