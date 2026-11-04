@@ -5,6 +5,12 @@ The in-game UI is a flat set of `position: fixed` React components layered over 
 - Shell & mount point: `src/App.jsx` (`GameApp`) renders `<UI>` = `src/Game/GameUI/main.jsx` once `isReady`, passing `mapRef`, `isGlobeEnabled`, `isTerrainEnabled`, and their setters.
 - Related pages: [World state](world-state.md) · [AI gameplay pipeline](ai-overview.md) · [Map rendering](game-map.md) · [Library & scenarios runtime](runtime-services.md) · [Diplomacy & chat](ai-overview.md)
 
+### Country flag presentation and Stats indices (Beta, 2026-11-04)
+
+The standalone Country drawer (`GameUI/countryPanel.jsx` → `GameUI/stats.jsx`) resolves its flag through the same canonical `resolvePolityFlag` authority as the map's country popup (`Selection/CountryPanel.jsx`) and country ranking. The resolver prioritizes authored `flags.json` entries, historical polity-record flags and unambiguous map/stock references; the drawer must not assume the selected polity's display name is a GADM/ISO flag code. A landless player polity still uses `resolveChosenPolityFlag` and cannot borrow a stock-country flag it does not own. Country-drawer images show the complete flag with `object-fit: contain`. The map region popup's banner expands to the flag's intrinsic image aspect ratio rather than letterboxing it within a fixed 96px frame; exceptionally tall custom flags are capped to available viewport height, and the scrollable floating card adjusts its top position as its measured height changes. The loading/no-flag banner retains a 96px placeholder. The popup retains its existing width, controls, and map-selection behavior.
+
+In the drawer's National tab, 0–100 index cards use a compact responsive grid. On a custom Stats sheet, `CustomStatsSheet` still traverses `definition.sections` and each section's `stats` in **exact author-defined order**; the redesign changes presentation only, not metric semantics, grouping or AI generation. The standard sheet likewise keeps its established section order. The canonical intelligence-service value remains independent of any duplicate authored custom metric, and unrecorded indices display as unset rather than an invented score.
+
 ---
 
 ## 1. The GameUI shell — `src/Game/GameUI/main.jsx`
