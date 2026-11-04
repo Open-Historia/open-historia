@@ -228,8 +228,10 @@ func _history(details: Dictionary, form: Dictionary) -> void:
 	var before := JSON.stringify(history._draft)
 	_confirm_soon()
 	history._generate()
-	await _wait(0.5)
-	_check(history._cancel_button.visible and history._generate_button.text == "Generating…", "Cancel shows while generating")
+	var asked := Time.get_ticks_msec()
+	while not history._busy and Time.get_ticks_msec() - asked < 5000:
+		await process_frame
+	_check(history._busy and history._cancel_button.visible and history._generate_button.text == "Generating…", "Cancel shows while generating")
 	history._cancel_button.pressed.emit()
 	while history._busy:
 		await process_frame
