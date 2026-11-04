@@ -9,7 +9,7 @@
 // MapLibre 5 sends a URL source's whole parsed file back to the page once its
 // worker has tiled it, and keeps it on the source (`_data.geojson`) for
 // updateData(). Nothing calls updateData on the regions source and getData()
-// asks the worker, so on the page that copy only takes memory: hundreds of MB
+// would ask the worker, so on the page that copy only takes memory: hundreds of MB
 // for the classic world, for as long as the game is open. Pointing the source
 // back at its URL lets it go. `_data` is MapLibre's own field: if a later
 // version renames it, this finds nothing and does nothing.
@@ -26,6 +26,31 @@ export const forgetParsedSourceCopy = (map, sourceId, url) => {
   source._data = { url };
   return true;
 };
+
+// The worker keeps two more copies once it has tiled the file: the parsed file
+// (`_pendingData`, for getData()) and its features by id (`_dataUpdateable`,
+// for updateData()). Only the tile index draws, nothing asks the regions source
+// for its data, and a new file is fetched again, so they only take memory:
+// about 120 MB for the modern world. WORKER_COPY_SWEEP is the classic script
+// MapLibre's workers run (mapLibreSetup.js forgetWorkerSourceCopies) to drop
+// them, with `sourceId` bound. A source still loading is left alone, and if a
+// later MapLibre renames these fields it finds nothing and does nothing.
+export const WORKER_COPY_SWEEP = `
+  var maps = self.worker && self.worker.workerSources;
+  var dropped = 0;
+  if (maps && typeof maps === "object") {
+    for (var mapId in maps) {
+      var source = maps[mapId] && maps[mapId].geojson && maps[mapId].geojson[sourceId];
+      if (!source || source._pendingRequest || !source._geoJSONIndex || !source._pendingData) continue;
+      source._pendingData = undefined;
+      source._dataUpdateable = undefined;
+      dropped += 1;
+    }
+  }
+  return dropped;
+`;
+
+export const workerCopySweepScript = (sourceId) => `(function (self, sourceId) {${WORKER_COPY_SWEEP}})(self, ${JSON.stringify(String(sourceId))});`;
 
 // On a constrained device (runtime/deviceProfile.js) the worker does not start
 // its parse until MapLibre's source has loaded, so the two peaks come one after

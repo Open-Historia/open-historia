@@ -14,14 +14,20 @@ export const PROVINCE_OUTLINE_MIN_ZOOM = 4.15;
 export const PROVINCE_OUTLINE_COLOR = "rgba(205, 218, 228, 0.64)";
 const PROVINCE_OUTLINE_LINE_COLOR = ["coalesce", TYPE_STROKE_STATE, PROVINCE_OUTLINE_COLOR];
 
-const PROVINCE_OUTLINE_WIDTH = [
+const outlineWidth = (scaled) => [
   "interpolate", ["linear"], ["zoom"],
-  PROVINCE_OUTLINE_MIN_ZOOM, withTypeStrokeWidth(0.40),
-  5.0, withTypeStrokeWidth(0.48),
-  6.5, withTypeStrokeWidth(0.56),
-  8.0, withTypeStrokeWidth(0.62),
-  12.0, withTypeStrokeWidth(0.72),
+  PROVINCE_OUTLINE_MIN_ZOOM, scaled(0.40),
+  5.0, scaled(0.48),
+  6.5, scaled(0.56),
+  8.0, scaled(0.62),
+  12.0, scaled(0.72),
 ];
+const PROVINCE_OUTLINE_WIDTH = outlineWidth(withTypeStrokeWidth);
+
+// Without region types a property no region has stands in for their state: drawn alike, never re-applied per tile.
+const NO_REGION_TYPE = ["get", "__ohNoRegionType__"];
+const UNTYPED_LINE_COLOR = ["coalesce", NO_REGION_TYPE, PROVINCE_OUTLINE_COLOR];
+const UNTYPED_WIDTH = outlineWidth((width) => ["*", width, ["number", NO_REGION_TYPE, 1]]);
 const PROVINCE_OUTLINE_OPACITY = [
   "interpolate", ["linear"], ["zoom"],
   PROVINCE_OUTLINE_MIN_ZOOM, 0,
@@ -32,10 +38,10 @@ const PROVINCE_OUTLINE_OPACITY = [
   12.0, 0.58,
 ];
 
-export const buildProvinceOutlinePaint = (active) => ({
-  "line-color": PROVINCE_OUTLINE_LINE_COLOR,
+export const buildProvinceOutlinePaint = (active, { regionTypes = true } = {}) => ({
+  "line-color": regionTypes ? PROVINCE_OUTLINE_LINE_COLOR : UNTYPED_LINE_COLOR,
   // MapLibre measures line-width in CSS pixels; keep it visibly subordinate to
   // sovereign borders even after the local administrative grid is fully present.
-  "line-width": PROVINCE_OUTLINE_WIDTH,
+  "line-width": regionTypes ? PROVINCE_OUTLINE_WIDTH : UNTYPED_WIDTH,
   "line-opacity": active ? PROVINCE_OUTLINE_OPACITY : 0,
 });

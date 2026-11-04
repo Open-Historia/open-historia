@@ -154,6 +154,19 @@ export const reviewScriptedEvents = (text, { currentDate = "", includeOrigin = f
     return { count, ignored };
 };
 
+// Prehistory/bootstrap is not a completed time skip. The initial game already
+// has a pregame simulationHistory entry in some scenarios, so its length cannot
+// decide whether the start day's authored beats have been processed.
+// `scriptedEventState` still prevents replaying any previously resolved beat.
+export const firstSkipIncludesScriptedOrigin = ({ game = {}, originDate = "", segmentIndex = 0 } = {}) => {
+    const origin = dateKey(originDate);
+    const authoredStart = asText(game?.startDate);
+    return segmentIndex === 0
+        && origin !== null
+        && Number(game?.round) === 1
+        && (!authoredStart || origin === dateKey(authoredStart));
+};
+
 // The beats a period covers: after its origin (the day itself belongs to the
 // period before) up to and including its target — except on a game's very
 // first skip, whose origin day nobody covered.
@@ -220,6 +233,23 @@ export const beatIsWritten = (beat, events, { language = "" } = {}) => {
     });
 };
 
+// First-day prehistory may already contain a matching event. Only the exact
+// event date counts; one historical timeline card cannot discharge multiple
+// scripted beats with similar wording.
+export const scriptedBeatsNotAlreadyWritten = (beats, priorEvents, { language = "" } = {}) => {
+    const prior = asArray(priorEvents);
+    const used = new Set();
+    return asArray(beats).filter((beat) => {
+        const index = prior.findIndex((event, candidateIndex) => !used.has(candidateIndex)
+            && dateKey(event?.date) !== null
+            && dateKey(event?.date) === dateKey(beat?.date)
+            && beatIsWritten(beat, [event], { language }));
+        if (index < 0) return true;
+        used.add(index);
+        return false;
+    });
+};
+
 // The event the engine writes for a beat the answer left out: the author's own
 // words, on the author's date, marked as the world's and as worth stopping for.
 // An instruction the AI was to write is the author's direction, so its square-bracketed asides to the simulator
@@ -252,11 +282,23 @@ ${withoutAsides(beat?.text)}`
 // are, the rest written by the engine. Pure; returns what was done.
 export const ensureScriptedEvents = (events, beats, { language = "" } = {}) => {
     const list = [...asArray(events)];
+    const generatedCount = list.length;
+    const consumed = new Set();
     const written = [];
     const inserted = [];
     for (const beat of asArray(beats)) {
-        const matchIndex = list.findIndex((event) => beatIsWritten(beat, [event], { language }));
+        // Only pre-existing model events can satisfy authored beats, one-to-one.
+        // Never let a single generated card or a previous fallback insertion
+        // silently discharge a second same-day scripted event.
+        let matchIndex = -1;
+        for (let index = 0; index < generatedCount; index += 1) {
+            if (!consumed.has(index) && beatIsWritten(beat, [list[index]], { language })) {
+                matchIndex = index;
+                break;
+            }
+        }
         if (matchIndex !== -1) {
+            consumed.add(matchIndex);
             written.push(beat);
             if (scriptedTextMode(beat?.textMode) === "exact" && translated(language)) {
                 // In another language the author's wording is the model's faithful translation of it: kept as written,

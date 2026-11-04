@@ -16,7 +16,7 @@ import {
 } from "./unitsController.js";
 import { recordMapTrace, recordMapWork } from "../../runtime/mapPerfTrace.js";
 import { logDebugEvent } from "../../runtime/debugLog.js";
-import { ensurePmtilesProtocol } from "./mapLibreSetup.js";
+import { ensurePmtilesProtocol, forgetWorkerSourceCopies } from "./mapLibreSetup.js";
 import { getShownRelief, subscribeShownRelief } from "./scenarioTerrain.js";
 import {
   JSON_URLS,
@@ -1417,8 +1417,9 @@ const WorldMap = ({ isGlobe = false }) => {
     };
   }, [map, derivedSourceEpoch]);
 
-  // MapLibre keeps a copy of the whole parsed regions file on the page once it
-  // has loaded it; it is dropped as soon as it lands (regionsSourceMemory.js).
+  // MapLibre keeps copies of the whole parsed regions file on the page and in its
+  // worker once it has loaded it; they are dropped as soon as it lands
+  // (regionsSourceMemory.js).
   const regionsFetchUrlRef = useRef("");
   regionsFetchUrlRef.current = regionsGeojsonFetchUrl || "";
   useEffect(() => {
@@ -1426,7 +1427,7 @@ const WorldMap = ({ isGlobe = false }) => {
     if (!mapInstance?.on) return undefined;
     const forget = (event) => {
       if (event?.sourceId !== "custom-regions-source") return;
-      forgetParsedSourceCopy(mapInstance, "custom-regions-source", regionsFetchUrlRef.current);
+      if (forgetParsedSourceCopy(mapInstance, "custom-regions-source", regionsFetchUrlRef.current)) forgetWorkerSourceCopies("custom-regions-source");
     };
     mapInstance.on("sourcedata", forget);
     forget({ sourceId: "custom-regions-source" });
@@ -1591,7 +1592,7 @@ const WorldMap = ({ isGlobe = false }) => {
           onRelease: (reason) => {
             parseHeld = false;
             recordMapTrace("nations:regions-parse-released", { reason });
-            forgetParsedSourceCopy(holdMap, "custom-regions-source", regionsGeojsonFetchUrl);
+            if (forgetParsedSourceCopy(holdMap, "custom-regions-source", regionsGeojsonFetchUrl)) forgetWorkerSourceCopies("custom-regions-source");
             const message = heldMessage;
             heldMessage = null;
             if (message && worker === polityBoundaryWorkerRef.current) worker.postMessage(message);
@@ -3179,7 +3180,8 @@ const WorldMap = ({ isGlobe = false }) => {
   // Scenario geometry owns its grid; never stack stock outlines on top of it.
   // Both paths use the same close-zoom hairline policy, and stay hidden until
   // the world is known. Political frontiers remain visible independently.
-  const regionsOutlinePaint = buildProvinceOutlinePaint(worldKnown && !customActive);
+  const outlineReadsRegionTypes = { regionTypes: regionTypeStyles.size > 0 };
+  const regionsOutlinePaint = buildProvinceOutlinePaint(worldKnown && !customActive, outlineReadsRegionTypes);
 
   // Scenario-authored label styling (world.labelFont/labelTextColor/
   // labelHaloColor). The style has no glyphs endpoint, so MapLibre v5 draws
@@ -3417,7 +3419,7 @@ const WorldMap = ({ isGlobe = false }) => {
           beforeId={hasMapLayer("polity-boundaries-shadow") ? "polity-boundaries-shadow" : undefined}
           filter={unrepairedRegionFilter}
           layout={{ "line-cap": "round", "line-join": "round" }}
-          paint={buildProvinceOutlinePaint(customActive && worldKnown)}
+          paint={buildProvinceOutlinePaint(customActive && worldKnown, outlineReadsRegionTypes)}
         />
       </Source>
       )}
@@ -3465,7 +3467,7 @@ const WorldMap = ({ isGlobe = false }) => {
           minzoom={PROVINCE_OUTLINE_MIN_ZOOM}
           beforeId={hasMapLayer("polity-boundaries-shadow") ? "polity-boundaries-shadow" : undefined}
           layout={{ "line-cap": "round", "line-join": "round" }}
-          paint={buildProvinceOutlinePaint(customActive && worldKnown)}
+          paint={buildProvinceOutlinePaint(customActive && worldKnown, outlineReadsRegionTypes)}
         />
       </Source>
       )}

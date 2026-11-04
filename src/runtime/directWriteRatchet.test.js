@@ -56,7 +56,8 @@ const ALLOWED = {
   },
   // alpha: an order whose unit could not be saved is taken back out of the queue.
   "Game/Map/unitsController.js": { "writeWorldState": 3, "writeActionsState": 2 },
-  "Game/GameUI/advisor.jsx": { "writeActionsState": 1, "writeWorldState": 1 },
+  // M3C removes both direct Advisor Actions and Projects whole-document writes.
+  // Keep both forbidden; Project edits now use the canonical world write queue.
   "Game/GameUI/chat.jsx": { "writeChatsState": 1, "writeWorldState": 1 },
   "Game/GameUI/stats.jsx": { "writeWorldState": 3 },
   "Game/GameUI/actions.jsx": { "writeActionsState": 1, "writeWorldState": 1 },

@@ -53,6 +53,28 @@ import { PAST_UPDATES } from "./notesPast.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // The province outline reads no feature-state on a map without region types, so a tile that loads applies the
+    // regions' state to its fill alone (Map/provinceOutlineStyle.js); a playing paints and writes only what a frame
+    // changes (Map/frontPaint.js unlessUnchanged, writeFrontField); MapLibre's worker drops its spare copies of the
+    // regions file (Map/regionsSourceMemory.js) and the border worker keeps its segments as typed-array rows
+    // (vnext/politicalBoundaryTopology.js SegmentTable): 2.35 GB to 1.97 GB on the modern world (2026-11-04).
+    id: "2026-11-smoother-zooming",
+    kind: "minor",
+    date: "2026-11-04",
+    channel: "beta",
+    banners: [
+      {
+        title: "Smoother zooming and battles",
+        items: [
+          "Zooming in and out brings in new map detail with shorter pauses on most maps, above all on slower computers and phones.",
+          "When a turn lands, its battles play out on the map about twice as smoothly, above all on slower computers and phones.",
+          "A game on a large map, like the modern world, needs about a sixth less memory, so it is less likely to run short on computers and phones with little to spare.",
+          "The map looks just as it did: only the work behind it has changed.",
+        ],
+      },
+    ],
+  },
+  {
     // Troops taken off a battlefield far from the sea were refused a ship ("no sea is near where it would set out")
     // whenever they stood more than a day's march inland: now they go overland to a port of their country's on
     // their way (runtime/fronts/engine.js departTransport, transports.js departuresFor). A player's report, 2026-11-04.

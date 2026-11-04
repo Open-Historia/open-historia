@@ -1,6 +1,7 @@
 /*! Open Historia — province outline regression tests © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import { createPropertyExpression, latest, validateStyleMin } from "@maplibre/maplibre-gl-style-spec";
 import { buildProvinceOutlinePaint, PROVINCE_OUTLINE_COLOR, PROVINCE_OUTLINE_MIN_ZOOM } from "./provinceOutlineStyle.js";
 
@@ -65,4 +66,27 @@ test("inactive or not-yet-known worlds never show province strokes", () => {
   for (const zoom of [0, 3.5, 6.5, 8, 12, 16, 24]) {
     assert.equal(evaluate(paint, "line-opacity", zoom), 0);
   }
+});
+
+test("without region types the outline is drawn exactly as before, and reads no feature-state", () => {
+  const typed = buildProvinceOutlinePaint(true);
+  const untyped = buildProvinceOutlinePaint(true, { regionTypes: false });
+  for (let zoom = 0; zoom <= 24; zoom += 0.05) {
+    for (const property of ["line-color", "line-width", "line-opacity"]) {
+      assert.deepEqual(evaluate(untyped, property, zoom), evaluate(typed, property, zoom), `${property} at ${zoom}`);
+    }
+  }
+  for (const property of ["line-color", "line-width"]) {
+    const was = createPropertyExpression(typed[property], latest.paint_line[property]).value;
+    const now = createPropertyExpression(untyped[property], latest.paint_line[property]).value;
+    // Still worked out per region, so MapLibre draws it the same way; only no state is read.
+    assert.equal(now.kind, was.kind, property);
+    assert.equal(was.isStateDependent, true, property);
+    assert.equal(now.isStateDependent, false, property);
+  }
+  assert.deepEqual(buildProvinceOutlinePaint(true, { regionTypes: true }), typed);
+  const nations = fs.readFileSync(new URL("./Nations.jsx", import.meta.url), "utf8");
+  assert.ok(nations.includes("const outlineReadsRegionTypes = { regionTypes: regionTypeStyles.size > 0 };"));
+  assert.equal(nations.split("buildProvinceOutlinePaint(customActive && worldKnown, outlineReadsRegionTypes)").length - 1, 2);
+  assert.ok(nations.includes("buildProvinceOutlinePaint(worldKnown && !customActive, outlineReadsRegionTypes)"));
 });
