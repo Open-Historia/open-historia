@@ -1134,11 +1134,14 @@ func _action_row(entry: Dictionary) -> Control:
 	text.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	if bool(entry.get("showTitle", false)):
 		var title := _text(str(entry.get("title", "")), 12, Color(1, 1, 1, 0.95), 700, 1.75)
+		title.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
 		var title_pad := MarginContainer.new()
 		title_pad.add_theme_constant_override("margin_bottom", 2)
 		title_pad.add_child(title)
 		text.add_child(title_pad)
-	text.add_child(_text(str(entry.get("label", "")), 13, Color(1, 1, 1, 0.82), 400, 1.75))
+	var order := _text(str(entry.get("label", "")), 13, Color(1, 1, 1, 0.82), 400, 1.75)
+	order.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+	text.add_child(order)
 	var meta := UI.label(("%s • %s" % [str(entry.get("kind", "")), str(entry.get("status", ""))]).to_upper(), 11, Color(1, 1, 1, 0.38), 400, "Arial", 1)
 	var meta_pad := MarginContainer.new()
 	meta_pad.add_theme_constant_override("margin_top", 4)
