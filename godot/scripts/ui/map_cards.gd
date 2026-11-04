@@ -6,6 +6,7 @@ signal open_country(name: String)
 signal open_stats(name: String)
 signal region_opened(index: int)
 signal flag_changed(polity_key: String)
+signal open_rostra(place: Dictionary)
 
 const Country := preload("res://scripts/ui/country_panel.gd")
 const CARD_TINT := Color(24 / 255.0, 24 / 255.0, 27 / 255.0, 0.95)
@@ -75,7 +76,6 @@ var _info_flag: TextureRect
 var _info_header: MarginContainer
 var _info_margin: MarginContainer
 var _info_footer_margin: MarginContainer
-var _phone: ListenPhone
 var _flag_picker: FlagPicker
 
 
@@ -630,35 +630,35 @@ func _build_region(animate: bool) -> void:
 		if not str(held.get("description", "")).is_empty():
 			inner.add_child(Country.gap(3))
 			inner.add_child(Country.text(str(held["description"]), 11, Color(1, 1, 1, 0.72)))
-	if _region.get("listenIn", false):
+	if _region.get("rostra", false):
 		inner.add_child(Country.gap(8))
-		var listen := Country.small_button("", Color(1, 1, 1, 0.07), Color(1, 1, 1, 0.14), Color(1, 1, 1, 0.88), 12, 600, Vector4(8, 6, 8, 6), 8)
-		listen.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		listen.custom_minimum_size.y = 28
-		var listen_row := HBoxContainer.new()
-		listen_row.alignment = BoxContainer.ALIGNMENT_CENTER
-		listen_row.add_theme_constant_override("separation", 6)
-		listen_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		listen_row.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-		var phone_glyph := TextureRect.new()
-		phone_glyph.texture = _phone_icon()
-		phone_glyph.stretch_mode = TextureRect.STRETCH_KEEP_CENTERED
-		phone_glyph.custom_minimum_size = Vector2(12, 12)
-		phone_glyph.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-		phone_glyph.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		listen_row.add_child(phone_glyph)
-		var listen_words := UI.label("Listen in", 12, Color(1, 1, 1, 0.88), 600)
-		listen_words.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-		listen_row.add_child(listen_words)
-		listen.add_child(listen_row)
-		var identity: Dictionary = _region.get("identity", {})
-		listen.pressed.connect(open_listen_in.bind({
-			"regionId": str(_region.get("regionId", "")),
-			"regionName": str(_region.get("regionName", "")),
-			"polity": "" if unclaimed else country_name,
-			"polityKey": "" if unclaimed else str(identity.get("polityKey", "")),
-		}))
-		inner.add_child(listen)
+		var rostra := Country.small_button("", Color(1, 1, 1, 0.07), Color(43 / 255.0, 193 / 255.0, 243 / 255.0, 0.35), UI.ACCENT, 12, 600, Vector4(8, 6, 8, 6), 8)
+		var rostra_hover := UI.box(Color(43 / 255.0, 193 / 255.0, 243 / 255.0, 0.15), UI.ACCENT, 8, 1, Vector4(8, 6, 8, 6))
+		for state in ["hover", "pressed", "hover_pressed"]:
+			rostra.add_theme_stylebox_override(state, rostra_hover)
+		rostra.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		rostra.custom_minimum_size.y = 28
+		var rostra_row := HBoxContainer.new()
+		rostra_row.alignment = BoxContainer.ALIGNMENT_CENTER
+		rostra_row.add_theme_constant_override("separation", 6)
+		rostra_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		rostra_row.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		var rostra_glyph := TextureRect.new()
+		rostra_glyph.texture = _rostra_icon()
+		rostra_glyph.stretch_mode = TextureRect.STRETCH_KEEP_CENTERED
+		rostra_glyph.custom_minimum_size = Vector2(13, 13)
+		rostra_glyph.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		rostra_glyph.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		rostra_row.add_child(rostra_glyph)
+		var rostra_words := UI.label("Check in Rostra", 12, UI.ACCENT, 600)
+		rostra_words.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		rostra_row.add_child(rostra_words)
+		rostra.add_child(rostra_row)
+		var rostra_name := str(_region.get("rostraPlace", country_name))
+		rostra.pressed.connect(func() -> void:
+			open_rostra.emit({"polity": rostra_name, "polityKey": rostra_name})
+			dismiss())
+		inner.add_child(rostra)
 	margin.add_child(inner)
 	stack.add_child(margin)
 	card.add_child(stack)
@@ -1107,13 +1107,6 @@ func _overlay_host() -> Control:
 	return parent as Control if parent is Control else self
 
 
-func open_listen_in(place: Dictionary) -> void:
-	if _phone and is_instance_valid(_phone):
-		_phone.close()
-	_phone = ListenPhone.new(engine, place)
-	_overlay_host().add_child(_phone)
-
-
 func _open_flag_picker() -> void:
 	if _flag_picker and is_instance_valid(_flag_picker):
 		_flag_picker.close()
@@ -1328,14 +1321,6 @@ func _info_footer_buttons(loading: bool) -> void:
 		_close_info()
 		open_stats.emit(target))
 	_info_footer.add_child(stats)
-	if _info.get("listenIn", true):
-		var listen := _footer_button("Listen in")
-		var key := str(_info.get("key", ""))
-		listen.pressed.connect(open_listen_in.bind({
-			"polity": str(_info.get("name", _info_country.get("name", ""))),
-			"polityKey": key if not key.is_empty() else str(_info_country.get("polityKey", _info.get("name", ""))),
-		}))
-		_info_footer.add_child(listen)
 	var diplomacy := _footer_button("Open Diplomacy", true)
 	diplomacy.pressed.connect(func() -> void:
 		var target := str(_info.get("key", "")) if not str(_info.get("key", "")).is_empty() else str(_info.get("name", _info_country.get("name", "")))
@@ -1399,10 +1384,10 @@ func _markdown(source: String) -> RichTextLabel:
 	return node
 
 
-func _phone_icon() -> Texture2D:
-	var svg := "<svg viewBox='0 0 24 24' fill='none' stroke='#ffffff' stroke-opacity='0.88' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><rect x='6' y='2' width='12' height='20' rx='2.5'/><path d='M11 18h2'/></svg>"
+func _rostra_icon() -> Texture2D:
+	var svg := "<svg viewBox='0 0 24 24' fill='none' stroke='#2bc1f3' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M4.9 19.1C1 15.2 1 8.8 4.9 4.9'/><path d='M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5'/><circle cx='12' cy='12' r='2'/><path d='M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5'/><path d='M19.1 4.9C23 8.8 23 15.1 19.1 19'/></svg>"
 	var image := Image.new()
-	if image.load_svg_from_string(svg, 0.5) != OK:
+	if image.load_svg_from_string(svg, 13.0 / 24.0) != OK:
 		return null
 	return ImageTexture.create_from_image(image)
 
@@ -1414,659 +1399,6 @@ class CardPointer extends Control:
 	func _draw() -> void:
 		var middle := size.x * 0.5
 		draw_colored_polygon(PackedVector2Array([Vector2(middle - 8, 0), Vector2(middle + 8, 0), Vector2(middle, 9)]), Color(24 / 255.0, 24 / 255.0, 27 / 255.0, 0.95))
-
-
-class ListenPhone extends Control:
-	signal finished
-	const INK := Color(244 / 255.0, 244 / 255.0, 245 / 255.0, 1.0)
-	const INK_SOFT := Color(244 / 255.0, 244 / 255.0, 245 / 255.0, 0.56)
-	const INK_FAINT := Color(244 / 255.0, 244 / 255.0, 245 / 255.0, 0.34)
-	const LINE := Color(1, 1, 1, 0.09)
-	const SCREEN := Color(11 / 255.0, 11 / 255.0, 13 / 255.0, 1.0)
-	const LIKED := Color(244 / 255.0, 63 / 255.0, 94 / 255.0, 1.0)
-	const GLYPHS := {
-		"reply": "<svg viewBox='0 0 24 24' fill='none' stroke='#fff' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'><path d='M21 11.5a8.4 8.4 0 0 1-12.2 7.5L3 21l2-5.6A8.4 8.4 0 1 1 21 11.5z'/></svg>",
-		"repost": "<svg viewBox='0 0 24 24' fill='none' stroke='#fff' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'><path d='M17 2l4 4-4 4'/><path d='M3 12V9a3 3 0 0 1 3-3h15'/><path d='M7 22l-4-4 4-4'/><path d='M21 12v3a3 3 0 0 1-3 3H3'/></svg>",
-		"heart": "<svg viewBox='0 0 24 24' fill='none' stroke='#fff' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'><path d='M20.8 5.6a5.2 5.2 0 0 0-7.4 0L12 7l-1.4-1.4a5.2 5.2 0 0 0-7.4 7.4L12 21.8l8.8-8.8a5.2 5.2 0 0 0 0-7.4z'/></svg>",
-		"hearted": "<svg viewBox='0 0 24 24' fill='#fff' stroke='#fff' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'><path d='M20.8 5.6a5.2 5.2 0 0 0-7.4 0L12 7l-1.4-1.4a5.2 5.2 0 0 0-7.4 7.4L12 21.8l8.8-8.8a5.2 5.2 0 0 0 0-7.4z'/></svg>",
-		"share": "<svg viewBox='0 0 24 24' fill='none' stroke='#fff' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'><path d='M4 13v6a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-6'/><path d='M16 6l-4-4-4 4'/><path d='M12 2v13'/></svg>",
-		"refresh": "<svg viewBox='0 0 24 24' fill='none' stroke='#fff' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'><path d='M21 4v6h-6'/><path d='M3 20v-6h6'/><path d='M5.2 9a8 8 0 0 1 13.6-2.6L21 10'/><path d='M18.8 15a8 8 0 0 1-13.6 2.6L3 14'/></svg>",
-		"close": "<svg viewBox='0 0 24 24' fill='none' stroke='#fff' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'><path d='M6 6l12 12'/><path d='M18 6L6 18'/></svg>",
-		"home": "<svg viewBox='0 0 24 24' fill='#fff'><path d='M12 3l9 8h-2.5v9h-5v-6h-3v6h-5v-9H3z'/></svg>",
-		"search": "<svg viewBox='0 0 24 24' fill='none' stroke='#fff' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'><circle cx='11' cy='11' r='7'/><path d='M21 21l-4.5-4.5'/></svg>",
-		"bell": "<svg viewBox='0 0 24 24' fill='none' stroke='#fff' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'><path d='M18 9a6 6 0 1 0-12 0c0 7-3 8-3 8h18s-3-1-3-8'/><path d='M13.7 21a2 2 0 0 1-3.4 0'/></svg>",
-		"mail": "<svg viewBox='0 0 24 24' fill='none' stroke='#fff' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'><rect x='3' y='5' width='18' height='14' rx='2'/><path d='M3 7l9 6 9-6'/></svg>",
-		"signal": "<svg viewBox='0 0 17 11' fill='#fff'><rect x='0' y='7' width='3' height='4' rx='0.7'/><rect x='4.6' y='5' width='3' height='6' rx='0.7'/><rect x='9.2' y='2.6' width='3' height='8.4' rx='0.7'/><rect x='13.8' y='0' width='3' height='11' rx='0.7'/></svg>",
-		"wifi": "<svg viewBox='0 0 15 11' fill='none' stroke='#fff' stroke-width='1.6' stroke-linecap='round'><path d='M1 4.2a9.2 9.2 0 0 1 13 0'/><path d='M3.4 6.7a5.8 5.8 0 0 1 8.2 0'/><circle cx='7.5' cy='9.3' r='0.9' fill='#fff' stroke='none'/></svg>",
-		"battery": "<svg viewBox='0 0 24 11' fill='none'><rect x='0.5' y='0.5' width='20' height='10' rx='2.6' stroke='#fff' stroke-opacity='0.45'/><rect x='2' y='2' width='14' height='7' rx='1.4' fill='#fff'/><rect x='21.6' y='3.4' width='1.6' height='4.2' rx='0.8' fill='#fff' fill-opacity='0.5'/></svg>",
-	}
-
-	var engine: EngineLink
-	var place: Dictionary = {}
-	var nationwide := true
-	var session: Variant = null
-	var asked: Dictionary = {}
-	var loading: Dictionary = {}
-	var failed: Dictionary = {}
-	var liked: Dictionary = {}
-	var view: Dictionary = {}
-	var _dim: ColorRect
-	var _frame: Control
-	var _date_short: Label
-	var _title: Label
-	var _date_long: Label
-	var _refresh: Button
-	var _tabs: HBoxContainer
-	var _scroll: ScrollContainer
-	var _content: VBoxContainer
-	var _shimmer: Array = []
-	var _clock := 0.0
-	var _closing := false
-	var _textures := {}
-
-	func _init(link: EngineLink, target: Dictionary) -> void:
-		engine = link
-		place = target
-		set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-		mouse_filter = Control.MOUSE_FILTER_STOP
-		_dim = ColorRect.new()
-		_dim.color = Color(6 / 255.0, 6 / 255.0, 8 / 255.0, 0.62)
-		_dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-		_dim.mouse_filter = Control.MOUSE_FILTER_STOP
-		_dim.gui_input.connect(_on_dim_input)
-		add_child(_dim)
-		_frame = Control.new()
-		_frame.mouse_filter = Control.MOUSE_FILTER_STOP
-		add_child(_frame)
-		_build()
-
-	func _ready() -> void:
-		_fit()
-		get_viewport().size_changed.connect(_fit)
-		modulate.a = 0.0
-		var fade := create_tween()
-		fade.tween_property(self, "modulate:a", 1.0, 0.16)
-		_frame.pivot_offset = _frame.size * 0.5
-		_frame.scale = Vector2.ONE * 0.985
-		var settle := create_tween().set_parallel(true).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
-		settle.tween_property(_frame, "scale", Vector2.ONE, 0.26)
-		settle.tween_property(_frame, "position:y", _frame.position.y, 0.26).from(_frame.position.y + 18.0)
-		await refresh_view()
-
-	func _fit() -> void:
-		var area := get_viewport_rect().size
-		var width: float = min(376.0, area.x - 32.0)
-		var height: float = min(784.0, area.y - 32.0)
-		_frame.size = Vector2(width + 6.0, height + 6.0)
-		_frame.position = ((area - _frame.size) * 0.5).round()
-		_frame.pivot_offset = _frame.size * 0.5
-
-	func _svg(name: String, width: int, height: int, color: Color) -> Texture2D:
-		var key := "%s:%d:%d:%s" % [name, width, height, color.to_html()]
-		if _textures.has(key):
-			return _textures[key]
-		var source: String = str(GLYPHS.get(name, "")).replace("#fff", "#" + color.to_html(false))
-		var image := Image.new()
-		var base := 24.0
-		if name == "signal":
-			base = 17.0
-		elif name == "wifi":
-			base = 15.0
-		elif name == "battery":
-			base = 24.0
-		if image.load_svg_from_string(source, float(width) / base) != OK:
-			return null
-		if color.a < 1.0:
-			image.convert(Image.FORMAT_RGBA8)
-			for y in range(image.get_height()):
-				for x in range(image.get_width()):
-					var pixel := image.get_pixel(x, y)
-					pixel.a *= color.a
-					image.set_pixel(x, y, pixel)
-		var texture := ImageTexture.create_from_image(image)
-		_textures[key] = texture
-		return texture
-
-	func _glyph(name: String, size: int, color: Color, height := -1) -> TextureRect:
-		var rect := TextureRect.new()
-		rect.texture = _svg(name, size, height if height > 0 else size, color)
-		rect.stretch_mode = TextureRect.STRETCH_KEEP_CENTERED
-		rect.custom_minimum_size = Vector2(size, height if height > 0 else size)
-		rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		rect.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-		return rect
-
-	func _label(text: String, size: int, color: Color, weight := 400) -> Label:
-		var node := UI.label(text, size, color, weight, "Segoe UI")
-		return node
-
-	func _round_button(name: String, tip: String) -> Button:
-		var node := Button.new()
-		node.focus_mode = Control.FOCUS_NONE
-		node.tooltip_text = tip
-		node.custom_minimum_size = Vector2(32, 32)
-		node.icon = _svg(name, 18, 18, INK)
-		node.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		node.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-		var style := UI.box(Color(1, 1, 1, 0.06), Color(0, 0, 0, 0), 999, 0)
-		var hover := UI.box(Color(1, 1, 1, 0.1), Color(0, 0, 0, 0), 999, 0)
-		for state in [["normal", style], ["focus", style], ["disabled", style], ["hover", hover], ["pressed", hover], ["hover_pressed", hover]]:
-			node.add_theme_stylebox_override(state[0], state[1])
-		node.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-		return node
-
-	func _build() -> void:
-		var outer := PanelContainer.new()
-		outer.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-		outer.add_theme_stylebox_override("panel", UI.box(Color(14 / 255.0, 14 / 255.0, 16 / 255.0), Color(0, 0, 0, 0), 53, 0, Vector4(2, 2, 2, 2)))
-		outer.mouse_filter = Control.MOUSE_FILTER_STOP
-		_frame.add_child(outer)
-		var ring := PanelContainer.new()
-		ring.add_theme_stylebox_override("panel", UI.box(Color(58 / 255.0, 58 / 255.0, 64 / 255.0), Color(0, 0, 0, 0), 51, 0, Vector4(1, 1, 1, 1)))
-		ring.mouse_filter = Control.MOUSE_FILTER_PASS
-		outer.add_child(ring)
-		var body := PanelContainer.new()
-		body.add_theme_stylebox_override("panel", UI.box(Color(23 / 255.0, 23 / 255.0, 26 / 255.0), Color(0, 0, 0, 0), 50, 0, Vector4(9.6, 9.6, 9.6, 9.6)))
-		body.mouse_filter = Control.MOUSE_FILTER_PASS
-		ring.add_child(body)
-		for side in [[-3.0, 115.2, 32.0, true], [-3.0, 166.4, 54.4, true], [-3.0, 176.0, 80.0, false]]:
-			var button := ColorRect.new()
-			button.color = Color(44 / 255.0, 44 / 255.0, 49 / 255.0)
-			button.mouse_filter = Control.MOUSE_FILTER_IGNORE
-			button.size = Vector2(3, float(side[2]))
-			button.position = Vector2(float(side[0]) if side[3] else 0.0, float(side[1]))
-			if not side[3]:
-				button.anchor_left = 1.0
-				button.anchor_right = 1.0
-				button.offset_left = 0.0
-				button.offset_right = 3.0
-				button.offset_top = float(side[1])
-				button.offset_bottom = float(side[1]) + float(side[2])
-			_frame.add_child(button)
-		var screen := PanelContainer.new()
-		screen.add_theme_stylebox_override("panel", UI.box(SCREEN, Color(0, 0, 0, 0), 41, 0))
-		screen.clip_contents = true
-		screen.mouse_filter = Control.MOUSE_FILTER_PASS
-		body.add_child(screen)
-		var column := VBoxContainer.new()
-		column.add_theme_constant_override("separation", 0)
-		screen.add_child(column)
-		var status := MarginContainer.new()
-		for entry in [["margin_left", 24], ["margin_right", 24], ["margin_top", 6], ["margin_bottom", 0]]:
-			status.add_theme_constant_override(entry[0], entry[1])
-		status.custom_minimum_size.y = 44
-		var status_row := HBoxContainer.new()
-		status_row.add_theme_constant_override("separation", 0)
-		_date_short = _label("", 12, INK, 700)
-		_date_short.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		_date_short.size_flags_stretch_ratio = 1.0
-		_date_short.clip_text = true
-		_date_short.custom_minimum_size.x = 1
-		_date_short.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-		status_row.add_child(_date_short)
-		var island := Panel.new()
-		island.custom_minimum_size = Vector2(90, 25)
-		island.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-		island.add_theme_stylebox_override("panel", UI.box(Color(0, 0, 0), Color(1, 1, 1, 0.05), 999, 1))
-		island.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		status_row.add_child(island)
-		var marks := HBoxContainer.new()
-		marks.add_theme_constant_override("separation", 5)
-		marks.alignment = BoxContainer.ALIGNMENT_END
-		marks.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		marks.size_flags_stretch_ratio = 1.0
-		marks.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		marks.add_child(_glyph("signal", 17, INK, 11))
-		marks.add_child(_glyph("wifi", 15, INK, 11))
-		marks.add_child(_glyph("battery", 24, INK, 11))
-		status_row.add_child(marks)
-		status.add_child(status_row)
-		column.add_child(status)
-		var header := MarginContainer.new()
-		for entry in [["margin_left", 14], ["margin_right", 14], ["margin_top", 6], ["margin_bottom", 8]]:
-			header.add_theme_constant_override(entry[0], entry[1])
-		var header_row := HBoxContainer.new()
-		header_row.add_theme_constant_override("separation", 10)
-		var shut := _round_button("close", "Close")
-		shut.pressed.connect(close)
-		header_row.add_child(shut)
-		var titles := VBoxContainer.new()
-		titles.add_theme_constant_override("separation", 0)
-		titles.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		titles.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		_title = _label("", 16, INK, 800)
-		_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		_title.clip_text = true
-		_title.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-		_title.custom_minimum_size.x = 1
-		titles.add_child(_title)
-		_date_long = _label("", 11, INK_SOFT)
-		_date_long.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		_date_long.clip_text = true
-		_date_long.custom_minimum_size.x = 1
-		titles.add_child(_date_long)
-		header_row.add_child(titles)
-		_refresh = _round_button("refresh", "Load new posts (one AI request)")
-		_refresh.pressed.connect(_ask)
-		header_row.add_child(_refresh)
-		header.add_child(header_row)
-		column.add_child(header)
-		_tabs = HBoxContainer.new()
-		_tabs.add_theme_constant_override("separation", 0)
-		column.add_child(_tabs)
-		_scroll = ScrollContainer.new()
-		_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-		_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-		_scroll.get_v_scroll_bar().modulate.a = 0.0
-		_content = VBoxContainer.new()
-		_content.add_theme_constant_override("separation", 0)
-		_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		_scroll.add_child(_content)
-		column.add_child(_scroll)
-		var bar_rule := ColorRect.new()
-		bar_rule.color = LINE
-		bar_rule.custom_minimum_size.y = 1
-		column.add_child(bar_rule)
-		var bar := MarginContainer.new()
-		for entry in [["margin_left", 16], ["margin_right", 16], ["margin_top", 9], ["margin_bottom", 5]]:
-			bar.add_theme_constant_override(entry[0], entry[1])
-		var bar_row := HBoxContainer.new()
-		bar_row.add_theme_constant_override("separation", 0)
-		for entry in [["home", INK], ["search", INK_SOFT], ["bell", INK_SOFT], ["mail", INK_SOFT]]:
-			var holder := CenterContainer.new()
-			holder.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-			holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
-			holder.add_child(_glyph(entry[0], 22, entry[1]))
-			bar_row.add_child(holder)
-		bar.add_child(bar_row)
-		column.add_child(bar)
-		var indicator := CenterContainer.new()
-		indicator.custom_minimum_size.y = 14
-		indicator.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		var pill := Panel.new()
-		pill.custom_minimum_size = Vector2(118, 4.5)
-		pill.add_theme_stylebox_override("panel", UI.box(Color(244 / 255.0, 244 / 255.0, 245 / 255.0, 0.85), Color(0, 0, 0, 0), 999, 0))
-		pill.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		indicator.add_child(pill)
-		var indicator_pad := MarginContainer.new()
-		indicator_pad.add_theme_constant_override("margin_top", 0)
-		indicator_pad.add_theme_constant_override("margin_bottom", 6)
-		indicator_pad.add_child(indicator)
-		column.add_child(indicator_pad)
-
-	func _on_dim_input(event: InputEvent) -> void:
-		if event is InputEventMouseButton and (event as InputEventMouseButton).pressed and (event as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT:
-			close()
-
-	func _input(event: InputEvent) -> void:
-		if event is InputEventKey and (event as InputEventKey).pressed and (event as InputEventKey).keycode == KEY_ESCAPE:
-			get_viewport().set_input_as_handled()
-			close()
-
-	func _process(delta: float) -> void:
-		if _shimmer.is_empty():
-			return
-		_clock += delta
-		var glow := 0.5 + 0.5 * (0.5 - 0.5 * cos(_clock / 1.4 * TAU))
-		for node in _shimmer:
-			if is_instance_valid(node):
-				(node as CanvasItem).modulate.a = glow
-
-	func close() -> void:
-		if _closing:
-			return
-		_closing = true
-		finished.emit()
-		var fade := create_tween()
-		fade.tween_property(self, "modulate:a", 0.0, 0.12)
-		fade.tween_callback(queue_free)
-
-	func refresh_view() -> void:
-		var reply: Dictionary = await engine.request("mapcards.listenin.view", {"place": place, "nationwide": nationwide, "session": session, "asked": asked, "loading": loading, "failed": failed})
-		if _closing or not is_inside_tree():
-			return
-		if not reply.get("ok", false):
-			return
-		var result: Dictionary = reply.get("result", {})
-		if result.get("closed", false):
-			close()
-			return
-		view = result
-		session = result.get("session")
-		_render()
-		if view.get("shouldAsk", false):
-			await _load()
-
-	func _ask() -> void:
-		if view.get("canAsk", false):
-			await _load()
-
-	func _load() -> void:
-		var key := str(view.get("requestKey", ""))
-		if key.is_empty() or loading.has(key):
-			return
-		asked[key] = true
-		failed.erase(key)
-		loading[key] = true
-		var target: Dictionary = view.get("place", place)
-		var language := str((session as Dictionary).get("language", "")) if typeof(session) == TYPE_DICTIONARY else ""
-		await refresh_view()
-		var reply: Dictionary = await engine.request("mapcards.listenin.load", {"place": target, "language": language, "key": key})
-		loading.erase(key)
-		if _closing or not is_inside_tree():
-			return
-		var result: Dictionary = reply.get("result", {}) if reply.get("ok", false) else {"ok": false, "error": str(reply.get("error", ""))}
-		if not result.get("ok", false):
-			failed[key] = str(result.get("error", ""))
-		elif typeof(session) == TYPE_DICTIONARY and str(result.get("campaignId", "")) == str((session as Dictionary).get("gameId", "")):
-			var landed := str(result.get("gameDate", ""))
-			if not landed.is_empty() and landed != str((session as Dictionary).get("gameDate", "")):
-				(session as Dictionary)["gameDate"] = landed
-		await refresh_view()
-
-	func _pill(text: String) -> Button:
-		var node := Button.new()
-		node.text = text
-		node.focus_mode = Control.FOCUS_NONE
-		node.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-		node.add_theme_font_override("font", UI.font(800, "Segoe UI"))
-		node.add_theme_font_size_override("font_size", 13)
-		for state in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_hover_pressed_color"]:
-			node.add_theme_color_override(state, SCREEN)
-		var style := UI.box(INK, Color(0, 0, 0, 0), 999, 0, Vector4(17.6, 7.2, 17.6, 7.2))
-		for state in ["normal", "hover", "pressed", "focus", "hover_pressed"]:
-			node.add_theme_stylebox_override(state, style)
-		node.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-		node.pressed.connect(_load)
-		return node
-
-	func _rule() -> ColorRect:
-		var node := ColorRect.new()
-		node.color = LINE
-		node.custom_minimum_size.y = 1
-		node.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		return node
-
-	func _render() -> void:
-		_date_short.text = str(view.get("dateShort", ""))
-		_title.text = str(view.get("title", ""))
-		_date_long.text = str(view.get("dateLong", ""))
-		var can_ask: bool = view.get("canAsk", false)
-		_refresh.disabled = not can_ask
-		_refresh.modulate.a = 1.0 if can_ask else 0.45
-		_refresh.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND if can_ask else Control.CURSOR_ARROW
-		for child in _tabs.get_children():
-			child.queue_free()
-		var tabs: Variant = view.get("tabs")
-		_tabs.visible = typeof(tabs) == TYPE_ARRAY
-		if typeof(tabs) == TYPE_ARRAY:
-			var names: Array = tabs
-			var whole: bool = view.get("nationwide", false)
-			for index in range(2):
-				var active := (index == 0) == whole
-				var tab := Button.new()
-				tab.text = str(names[index])
-				tab.focus_mode = Control.FOCUS_NONE
-				tab.clip_text = true
-				tab.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-				tab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-				tab.custom_minimum_size = Vector2(1, 37)
-				tab.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-				tab.add_theme_font_override("font", UI.font(700, "Segoe UI"))
-				tab.add_theme_font_size_override("font_size", 13)
-				for state in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_hover_pressed_color"]:
-					tab.add_theme_color_override(state, INK if active else INK_SOFT)
-				var style := StyleBoxFlat.new()
-				style.bg_color = Color(0, 0, 0, 0)
-				style.border_color = INK if active else Color(0, 0, 0, 0)
-				style.border_width_bottom = 2
-				style.content_margin_left = 8
-				style.content_margin_right = 8
-				style.content_margin_top = 9.6
-				style.content_margin_bottom = 8
-				for state in ["normal", "hover", "pressed", "focus", "hover_pressed"]:
-					tab.add_theme_stylebox_override(state, style)
-				var whole_country := index == 0
-				tab.pressed.connect(func() -> void:
-					nationwide = whole_country
-					refresh_view())
-				_tabs.add_child(tab)
-		var keep := _scroll.scroll_vertical
-		for child in _content.get_children():
-			child.queue_free()
-		_shimmer.clear()
-		var trends: Array = view.get("trends", [])
-		if not trends.is_empty():
-			var block := MarginContainer.new()
-			for entry in [["margin_left", 16], ["margin_right", 16], ["margin_top", 10], ["margin_bottom", 11]]:
-				block.add_theme_constant_override(entry[0], entry[1])
-			var stack := VBoxContainer.new()
-			stack.add_theme_constant_override("separation", 6)
-			stack.add_child(UI.label("TRENDING", 11, INK_SOFT, 700, "Segoe UI", 1))
-			var chips := HFlowContainer.new()
-			chips.add_theme_constant_override("h_separation", 6)
-			chips.add_theme_constant_override("v_separation", 6)
-			for trend in trends:
-				var chip := PanelContainer.new()
-				chip.add_theme_stylebox_override("panel", UI.box(Color(1, 1, 1, 0.07), Color(0, 0, 0, 0), 999, 0, Vector4(9.6, 3.5, 9.6, 3.5)))
-				chip.add_child(_label(str(trend), 12, INK, 600))
-				chips.add_child(chip)
-			stack.add_child(chips)
-			block.add_child(stack)
-			_content.add_child(block)
-			_content.add_child(_rule())
-		var waiting: bool = view.get("waiting", false)
-		var failure: Variant = view.get("failure")
-		var batches: Array = view.get("batches", [])
-		if waiting:
-			var tuning := MarginContainer.new()
-			for entry in [["margin_left", 16], ["margin_right", 16], ["margin_top", 11], ["margin_bottom", 3]]:
-				tuning.add_theme_constant_override(entry[0], entry[1])
-			tuning.add_child(_label("Tuning in…", 12, INK_SOFT))
-			_content.add_child(tuning)
-			for width in [0.7, 0.48, 0.82]:
-				_content.add_child(_skeleton(width))
-		if typeof(failure) == TYPE_STRING and not waiting:
-			var box := MarginContainer.new()
-			for entry in [["margin_left", 16], ["margin_right", 16], ["margin_top", 18], ["margin_bottom", 18]]:
-				box.add_theme_constant_override(entry[0], entry[1])
-			var stack := VBoxContainer.new()
-			stack.add_theme_constant_override("separation", 5)
-			var headline := _label("The feed could not be loaded.", 14, INK, 700)
-			headline.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-			stack.add_child(headline)
-			if not str(failure).is_empty():
-				var detail := _label(str(failure), 12, INK_SOFT)
-				detail.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-				detail.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-				detail.custom_minimum_size.x = 1
-				stack.add_child(detail)
-			stack.add_child(Control.new())
-			stack.add_child(_pill("Try again"))
-			box.add_child(stack)
-			_content.add_child(box)
-			_content.add_child(_rule())
-		if not waiting and typeof(failure) != TYPE_STRING and batches.is_empty():
-			var empty := MarginContainer.new()
-			for entry in [["margin_left", 16], ["margin_right", 16], ["margin_top", 26], ["margin_bottom", 26]]:
-				empty.add_theme_constant_override(entry[0], entry[1])
-			var stack := VBoxContainer.new()
-			stack.add_theme_constant_override("separation", 11)
-			var nothing := _label("Nothing has come through yet.", 14, INK_SOFT)
-			nothing.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-			stack.add_child(nothing)
-			stack.add_child(_pill("Load posts"))
-			empty.add_child(stack)
-			_content.add_child(empty)
-		for item in batches:
-			var batch: Dictionary = item
-			if not str(batch.get("line", "")).is_empty():
-				var line := PanelContainer.new()
-				line.add_theme_stylebox_override("panel", UI.box(Color(1, 1, 1, 0.03), Color(0, 0, 0, 0), 0, 0, Vector4(16, 6.4, 16, 6.4)))
-				var words := _label(str(batch["line"]), 11, INK_SOFT, 700)
-				words.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-				line.add_child(words)
-				_content.add_child(line)
-				_content.add_child(_rule())
-			for post_item in batch.get("posts", []):
-				_content.add_child(_post(post_item))
-				_content.add_child(_rule())
-		if not batches.is_empty():
-			var note := MarginContainer.new()
-			for entry in [["margin_left", 19], ["margin_right", 19], ["margin_top", 14], ["margin_bottom", 19]]:
-				note.add_theme_constant_override(entry[0], entry[1])
-			var words := _label("Written by your AI model. Each new feed is one AI request.", 11, INK_FAINT)
-			words.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-			words.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-			words.custom_minimum_size.x = 1
-			note.add_child(words)
-			_content.add_child(note)
-		await get_tree().process_frame
-		if is_instance_valid(_scroll):
-			_scroll.scroll_vertical = keep
-
-	func _skeleton(width: float) -> Control:
-		var box := MarginContainer.new()
-		for entry in [["margin_left", 16], ["margin_right", 16], ["margin_top", 13], ["margin_bottom", 13]]:
-			box.add_theme_constant_override(entry[0], entry[1])
-		var line := HBoxContainer.new()
-		line.add_theme_constant_override("separation", 11)
-		var face := Panel.new()
-		face.custom_minimum_size = Vector2(40, 40)
-		face.add_theme_stylebox_override("panel", UI.box(Color(1, 1, 1, 0.1), Color(0, 0, 0, 0), 999, 0))
-		face.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
-		_shimmer.append(face)
-		line.add_child(face)
-		var bars := VBoxContainer.new()
-		bars.add_theme_constant_override("separation", 8)
-		bars.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		var gap_top := Control.new()
-		gap_top.custom_minimum_size.y = 3
-		bars.add_child(gap_top)
-		for fraction in [0.45, 0.92, width]:
-			var holder := Control.new()
-			holder.custom_minimum_size.y = 11
-			holder.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-			var bar := Panel.new()
-			bar.add_theme_stylebox_override("panel", UI.box(Color(1, 1, 1, 0.1), Color(0, 0, 0, 0), 999, 0))
-			bar.anchor_right = float(fraction)
-			bar.anchor_bottom = 1.0
-			holder.add_child(bar)
-			_shimmer.append(bar)
-			bars.add_child(holder)
-		line.add_child(bars)
-		box.add_child(line)
-		return box
-
-	func _post(item: Variant) -> Control:
-		var post: Dictionary = item
-		var id := str(post.get("id", ""))
-		var box := MarginContainer.new()
-		for entry in [["margin_left", 16], ["margin_right", 16], ["margin_top", 13], ["margin_bottom", 13]]:
-			box.add_theme_constant_override(entry[0], entry[1])
-		var line := HBoxContainer.new()
-		line.add_theme_constant_override("separation", 11)
-		var face := PanelContainer.new()
-		face.custom_minimum_size = Vector2(40, 40)
-		face.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
-		face.add_theme_stylebox_override("panel", UI.box(Color.html(str(post.get("colour", "#5f6875ff"))), Color(0, 0, 0, 0), 999, 0))
-		var initials := UI.label(str(post.get("initials", "?")), 13, UI.WHITE, 700, "Segoe UI")
-		initials.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		initials.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-		face.add_child(initials)
-		line.add_child(face)
-		var words := VBoxContainer.new()
-		words.add_theme_constant_override("separation", 0)
-		words.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		var who := HBoxContainer.new()
-		who.add_theme_constant_override("separation", 5)
-		var author := _label(str(post.get("author", "")), 14, INK, 700)
-		author.clip_text = true
-		author.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-		author.custom_minimum_size.x = min(UI.font(700, "Segoe UI").get_string_size(author.text, HORIZONTAL_ALIGNMENT_LEFT, -1, 14).x + 2.0, 170.0)
-		who.add_child(author)
-		if not str(post.get("handle", "")).is_empty():
-			var handle := _label(str(post["handle"]), 13, INK_SOFT)
-			handle.clip_text = true
-			handle.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-			handle.custom_minimum_size.x = 32
-			handle.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-			handle.size_flags_stretch_ratio = 10.0
-			who.add_child(handle)
-		who.add_child(_label(str(post.get("age", "")), 13, INK_SOFT))
-		words.add_child(who)
-		if not str(post.get("about", "")).is_empty():
-			var about := _label(str(post["about"]), 12, INK_FAINT)
-			about.clip_text = true
-			about.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-			about.custom_minimum_size.x = 1
-			words.add_child(about)
-		var spacer := Control.new()
-		spacer.custom_minimum_size.y = 3
-		words.add_child(spacer)
-		var text := _label(str(post.get("text", "")), 15, INK)
-		text.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		text.custom_minimum_size.x = 1
-		text.add_theme_constant_override("line_spacing", 4)
-		words.add_child(text)
-		var actions_gap := Control.new()
-		actions_gap.custom_minimum_size.y = 8
-		words.add_child(actions_gap)
-		var actions := HBoxContainer.new()
-		actions.add_theme_constant_override("separation", 0)
-		actions.custom_minimum_size.x = 0
-		var is_liked: bool = liked.has(id)
-		actions.add_child(_action("reply", str(post.get("replies", "")), INK_FAINT))
-		actions.add_child(_action("repost", str(post.get("reposts", "")), INK_FAINT))
-		var heart := Button.new()
-		heart.flat = true
-		heart.focus_mode = Control.FOCUS_NONE
-		heart.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-		heart.icon = _svg("hearted" if is_liked else "heart", 18, 18, LIKED if is_liked else INK_FAINT)
-		heart.text = str(post.get("likesWithMine", "")) if is_liked else str(post.get("likes", ""))
-		heart.add_theme_constant_override("h_separation", 5)
-		heart.add_theme_font_override("font", UI.font(400, "Segoe UI"))
-		heart.add_theme_font_size_override("font_size", 12)
-		for state in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_hover_pressed_color"]:
-			heart.add_theme_color_override(state, LIKED if is_liked else INK_FAINT)
-		for state in ["normal", "hover", "pressed", "focus", "hover_pressed"]:
-			heart.add_theme_stylebox_override(state, StyleBoxEmpty.new())
-		heart.custom_minimum_size.x = 48
-		heart.alignment = HORIZONTAL_ALIGNMENT_LEFT
-		heart.pressed.connect(func() -> void:
-			if liked.has(id):
-				liked.erase(id)
-			else:
-				liked[id] = true
-			_render())
-		var heart_holder := HBoxContainer.new()
-		heart_holder.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		heart_holder.add_child(heart)
-		actions.add_child(heart_holder)
-		var share := HBoxContainer.new()
-		share.add_child(_glyph("share", 18, INK_FAINT))
-		actions.add_child(share)
-		var limit := HBoxContainer.new()
-		limit.add_child(actions)
-		actions.custom_minimum_size.x = 272
-		actions.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-		words.add_child(limit)
-		line.add_child(words)
-		box.add_child(line)
-		return box
-
-	func _action(name: String, count: String, color: Color) -> Control:
-		var holder := HBoxContainer.new()
-		holder.add_theme_constant_override("separation", 5)
-		holder.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		holder.custom_minimum_size.x = 48
-		holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		holder.add_child(_glyph(name, 18, color))
-		if not count.is_empty():
-			var label := _label(count, 12, color)
-			label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-			holder.add_child(label)
-		return holder
 
 
 class FlagPicker extends Control:

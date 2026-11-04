@@ -15,7 +15,6 @@ import {
 } from "./country.mjs";
 
 const TURN_RUNNING_NOTE = "A turn is running. This can be changed once it ends.";
-const LISTEN_IN_GAMES_KEPT = 12;
 const GAME_FLAG_LIMIT = 120;
 const ORDER_NOT_SAVED = "The order could not be saved; the next time skip would not see it. Try again.";
 const PHOTON = "https://photon.komoot.io/api/";
@@ -300,7 +299,8 @@ export const register = (ctx) => {
         claimants: claimants.map(displayPolity).join(", "),
       } : null,
       group: group ? { name: cleanText(group.name), color: cssHex(group.color), description: String(group.description ?? "").trim() } : null,
-      listenIn: featureOn(features, "listenIn") && Boolean(id || controllerKey),
+      rostra: !isUnclaimed && featureOn(features, "socialMedia"),
+      rostraPlace: toCountryName(controllerCode) || displayCountry,
     };
   };
 
@@ -365,7 +365,6 @@ export const register = (ctx) => {
       reportKey,
       report: cached === undefined ? null : cached,
       reportPending: briefingsInFlight.has(reportKey),
-      listenIn: featureOn(featuresOf(ctx, extras), "listenIn"),
     };
   };
 
@@ -621,174 +620,6 @@ export const register = (ctx) => {
     };
   };
 
-  const listenFile = path.join(ctx.dataRoot, "native", "listen-in.json");
-  let listenKept = null;
-  const listenRequests = new Map();
-
-  const listenAll = () => {
-    if (listenKept) return listenKept;
-    try {
-      const parsed = JSON.parse(fs.readFileSync(listenFile, "utf8"));
-      listenKept = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
-    } catch {
-      listenKept = {};
-    }
-    return listenKept;
-  };
-
-  const listenStore = (extras, gameId) => {
-    const id = cleanText(gameId);
-    if (!id) return extras.listenIn.emptyListenInStore();
-    return extras.listenIn.normalizeListenInStore(listenAll()[id]);
-  };
-
-  const listenUpdate = (extras, gameId, change) => {
-    const id = cleanText(gameId);
-    if (!id) return extras.listenIn.emptyListenInStore();
-    const next = extras.listenIn.normalizeListenInStore(change(listenStore(extras, id)));
-    const all = listenAll();
-    all[id] = { id, updatedAt: Date.now(), ...next };
-    const stale = Object.values(all)
-      .sort((a, b) => (Number(b?.updatedAt) || 0) - (Number(a?.updatedAt) || 0))
-      .slice(LISTEN_IN_GAMES_KEPT)
-      .map((row) => row.id);
-    for (const key of stale) delete all[key];
-    try {
-      fs.mkdirSync(path.dirname(listenFile), { recursive: true });
-      const temp = `${listenFile}.${process.pid}.tmp`;
-      fs.writeFileSync(temp, JSON.stringify(all));
-      fs.renameSync(temp, listenFile);
-    } catch (error) {
-      emit("log", { category: "listen-in", message: `The feed was kept for this session only: ${error?.message ?? error}` });
-    }
-    return next;
-  };
-
-  const listenSession = async (extras) => {
-    const [game, world] = await Promise.all([readGame(), readWorld()]);
-    let uiLanguage = "en";
-    try {
-      uiLanguage = cleanText(ctx.storage.getItem("ui_language")) || "en";
-    } catch {
-      uiLanguage = "en";
-    }
-    return {
-      gameId: String(engine.getLibraryState?.()?.activeGameId ?? ""),
-      gameDate: String(game?.gameDate ?? ""),
-      uiLanguage,
-      language: extras.listenIn.listenInFeedLanguage({
-        uiLanguage,
-        uiLanguageName: extras.i18n.languageDisplayName(uiLanguage),
-        saveLanguage: world?.language || game?.language,
-      }),
-    };
-  };
-
-  const listenView = async ({ place = null, nationwide = false, session = null, asked = {}, loading = {}, failed = {} } = {}) => {
-    const extras = await loadExtras(ctx);
-    const li = extras.listenIn;
-    const features = featuresOf(ctx, extras);
-    const target = li.listenInPlace(place);
-    if (!target || !featureOn(features, "listenIn")) return { closed: true };
-    const country = target.scope === "region" ? li.listenInCountryOf(target) : null;
-    const shown = nationwide && country ? country : target;
-    const open = session && typeof session === "object" && "gameId" in session ? session : await listenSession(extras);
-    const store = listenStore(extras, open.gameId);
-    const requestKey = li.listenInRequestKey({ ...open, place: shown });
-    const failure = Object.prototype.hasOwnProperty.call(failed ?? {}, requestKey) ? String(failed[requestKey] ?? "") : null;
-    const view = li.listenInFeedView({
-      store,
-      place: shown,
-      gameDate: open.gameDate,
-      language: open.language,
-      asked: Boolean(asked?.[requestKey]),
-      loading: Boolean(loading?.[requestKey]),
-      failed: failure !== null,
-    });
-    const readable = (value, pattern) => extras.gameDates.formatGameDateReadable(value, pattern) || "";
-    return {
-      closed: false,
-      session: open,
-      place: shown,
-      requestKey,
-      title: shown.scope === "region" ? shown.regionName : shown.polity,
-      dateLong: readable(open.gameDate),
-      dateShort: readable(open.gameDate, "D MMM YYYY"),
-      tabs: country ? [country.polity, target.regionName] : null,
-      nationwide: Boolean(nationwide && country),
-      shouldAsk: view.shouldAsk,
-      waiting: view.waiting,
-      canAsk: view.canAsk,
-      failure,
-      trends: view.trends,
-      batches: view.batches.map((batch, index) => {
-        const line = li.listenInBatchLine(view.batches, index, open.gameDate);
-        return {
-          id: batch.id,
-          line: line ? (line.kind === "date" ? readable(line.gameDate) || line.gameDate : "Earlier") : "",
-          posts: batch.posts.map((post) => {
-            const avatar = li.listenInAvatar(post.author);
-            return {
-              id: post.id,
-              author: post.author,
-              handle: post.handle ? `@${post.handle}` : "",
-              age: `· ${li.listenInAgeLabel(post.minutesAgo, open.uiLanguage)}`,
-              about: post.about,
-              text: post.text,
-              replies: li.listenInCountLabel(post.replies, open.uiLanguage),
-              reposts: li.listenInCountLabel(post.reposts, open.uiLanguage),
-              likes: li.listenInCountLabel(post.likes, open.uiLanguage),
-              likesWithMine: li.listenInCountLabel(post.likes + 1, open.uiLanguage),
-              initials: avatar.initials,
-              colour: cssHex(avatar.colour),
-            };
-          }),
-        };
-      }),
-    };
-  };
-
-  const listenLoad = async ({ place = null, language = "", key = "" } = {}, { signal } = {}) => {
-    const extras = await loadExtras(ctx);
-    const li = extras.listenIn;
-    const target = li.listenInPlace(place);
-    if (!target) return { ok: false, error: "There is no place to listen in on." };
-    if (!listenRequests.has(key)) {
-      const run = (async () => {
-        const answer = await engine.gameplay.generateListenInFeed({ place: target, language, signal });
-        const batch = li.createListenInBatch(answer);
-        listenUpdate(extras, answer.campaignId, (kept) => li.addListenInBatch(kept, target, batch));
-        return { campaignId: answer.campaignId, gameDate: answer.gameDate };
-      })();
-      listenRequests.set(key, run);
-      run.finally(() => listenRequests.delete(key)).catch(() => {});
-    }
-    try {
-      const outcome = await listenRequests.get(key);
-      return { ok: true, ...outcome };
-    } catch (error) {
-      return { ok: false, error: String(error?.message || "") };
-    }
-  };
-
-  if (ctx.standIn) {
-    ctx.addStandIn(({ tool, text }) => {
-      if (tool !== "submit_listen_in_feed") return null;
-      const near = /Paris|Île-de-France|France/.test(String(text));
-      return {
-        args: {
-          posts: [
-            { author: "Camille Bernard", handle: "camille_b", about: "Night-shift nurse, Créteil", text: near ? "Third strike notice this month. The RER was packed again and half the ward came in late." : "The buses were late again this morning.", minutesAgo: 4, likes: 38, reposts: 6, replies: 9 },
-            { author: "Julien Moreau", handle: "jmoreau75", about: "Café owner, 11th arrondissement", text: "Terraces full despite the cold. People want to be outside together after everything.", minutesAgo: 22, likes: 214, reposts: 31, replies: 18 },
-            { author: "Inès", handle: "ines.dessine", about: "Illustrator", text: "Lost cat near Place de la République: grey, answers to Biscotte. Please share!", filler: true, minutesAgo: 47, likes: 1240, reposts: 902, replies: 66 },
-            { author: "Marc Lefèvre", handle: "", about: "Retired teacher", text: "The news from the south worries me. Nobody on television explains what we are doing there.", minutesAgo: 95, likes: 57, reposts: 4, replies: 23 },
-          ],
-          trends: ["#GrèveRER", "Sahel", "Biscotte", "Prix du gazole"],
-        },
-      };
-    });
-  }
-
   const flagPolity = (polity) => ({
     polityKey: cleanText(polity?.polityKey),
     name: cleanText(polity?.name),
@@ -923,8 +754,6 @@ export const register = (ctx) => {
     "mapcards.search": async (args) => localSearch(args),
     "mapcards.places": async (args, meta) => remoteSearch(args, meta),
     "mapcards.stances": async () => stances(),
-    "mapcards.listenin.view": async (args) => listenView(args),
-    "mapcards.listenin.load": async (args, meta) => listenLoad(args, meta),
     "mapcards.flags.view": async (args) => flagsView(args),
     "mapcards.flags.apply": async ({ polity = {}, dataUrl = "" } = {}) => {
       const extras = await loadExtras(ctx);

@@ -11,8 +11,8 @@ signal turn_landed(view: Dictionary)
 signal open_interactive
 signal world_changed
 
-const DOCK_LAUNCHERS := [["chat", "Chat", 18], ["actions", "Actions", 16], ["projects", "Projects & Operations", 18]]
-const PANEL_FILES := ["map_cards", "chat_panel", "actions_panel", "projects_panel", "advisor_panel", "country_panel", "search_box", "diplomatic_legend", "chat_notices", "war_peace_cards"]
+const DOCK_LAUNCHERS := [["chat", "Chat", 18], ["actions", "Actions and Projects", 16], ["social", "Rostra", 18]]
+const PANEL_FILES := ["map_cards", "chat_panel", "actions_panel", "projects_panel", "rostra_panel", "rostra_search", "advisor_panel", "country_panel", "search_box", "diplomatic_legend", "chat_notices", "war_peace_cards"]
 
 var date_widget: DateWidget
 var search_slot: Control
@@ -26,6 +26,12 @@ var _advisor_frame: GlassPanel
 var _launchers := {}
 var _chat_badge: PanelContainer
 var _chat_badge_label: Label
+var _dock: GlassPanel
+var _rostra_badge: PanelContainer
+var _rostra_badge_label: Label
+var _rostra_unseen := 0
+var _social_on := true
+var _beside_war_room := false
 var _mode_buttons := {}
 var panels := {}
 var drawers := {}
@@ -159,6 +165,7 @@ func _launcher_style(open: bool, hovered: bool) -> StyleBoxFlat:
 
 func _build_dock() -> void:
 	var dock := _glass(UI.HUD_BG, 14, Rect2(8, -72, 205, 64), Vector4(0, 1, 0, 1), Vector4(11, 5, 11, 5))
+	_dock = dock
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 12)
 	row.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -169,7 +176,7 @@ func _build_dock() -> void:
 		tile.custom_minimum_size = Vector2(53, 53)
 		tile.tooltip_text = entry[1]
 		tile.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-		var glyph := UI.icon_rect(name, entry[2])
+		var glyph := RostraPanel.dock_glyph(entry[2]) if name == "social" else UI.icon_rect(name, entry[2])
 		glyph.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 		tile.add_child(glyph)
 		tile.pressed.connect(func() -> void: toggle_dock(name))
@@ -189,6 +196,22 @@ func _build_dock() -> void:
 			_chat_badge.add_child(_chat_badge_label)
 			_chat_badge.visible = false
 			tile.add_child(_chat_badge)
+		if name == "social":
+			_rostra_badge = PanelContainer.new()
+			var badge_style := UI.box(UI.ACCENT, Color(1, 1, 1, 0.35), 999, 1, Vector4(3, 0, 3, 0))
+			badge_style.shadow_color = Color(0, 0, 0, 0.5)
+			badge_style.shadow_size = 2
+			badge_style.shadow_offset = Vector2(0, 1)
+			_rostra_badge.add_theme_stylebox_override("panel", badge_style)
+			_rostra_badge.custom_minimum_size = Vector2(17, 17)
+			_rostra_badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			_rostra_badge_label = UI.label("", 10, Color("#06171d"), 800)
+			_rostra_badge_label.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+			_rostra_badge_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+			_rostra_badge_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+			_rostra_badge.add_child(_rostra_badge_label)
+			_rostra_badge.visible = false
+			tile.add_child(_rostra_badge)
 		row.add_child(tile)
 	dock.add_child(row)
 	search_slot = Control.new()
@@ -237,6 +260,61 @@ func _fit_chat_badge() -> void:
 	_chat_badge.position = Vector2(52.0 - _chat_badge.size.x, 9.0)
 
 
+func set_rostra_badge(count: int) -> void:
+	_rostra_unseen = count
+	if not _rostra_badge:
+		return
+	_rostra_badge.visible = active_panel != "social" and count > 0
+	_rostra_badge_label.text = "9+" if count > 9 else str(count)
+	_rostra_badge.reset_size()
+	_rostra_badge.position = Vector2(48.3 - _rostra_badge.size.x, 8.7)
+	var tile: Button = _launchers.get("social")
+	if tile:
+		tile.tooltip_text = "Rostra"
+
+
+func set_social_enabled(on: bool) -> void:
+	_social_on = on
+	var tile: Button = _launchers.get("social")
+	if tile:
+		tile.visible = on
+	if not on and active_panel == "social":
+		set_active_panel("")
+	_place_dock()
+
+
+func beside_dock_left() -> float:
+	return 8.0 + _dock_width() + 8.0
+
+
+func _dock_width() -> float:
+	var count := DOCK_LAUNCHERS.size() - (0 if _social_on else 1)
+	return roundf((0.65 + count * (3.3 + 0.75)) * 16.0)
+
+
+func _place_dock() -> void:
+	if _dock:
+		_dock.offset_right = _dock.offset_left + _dock_width()
+	var left := beside_dock_left() + (72.0 if _beside_war_room else 0.0)
+	search_slot.offset_left = left
+	search_slot.offset_right = left + 38.0
+
+
+func open_rostra(place: Dictionary) -> void:
+	if not panels.has("social") or not _social_on:
+		return
+	if active_panel != "social":
+		set_active_panel("social")
+	_invoke(panels["social"], "open_place", [place])
+
+
+func open_actions_tab(tab: String) -> void:
+	if not panels.has("actions"):
+		return
+	_invoke(panels["actions"], "set_tab", [tab])
+	set_active_panel("actions")
+
+
 func toggle_dock(name: String) -> void:
 	set_active_panel("" if active_panel == name else name)
 
@@ -266,6 +344,8 @@ func set_active_panel(name: String) -> void:
 			_chat_badge.visible = false
 		elif previous == "chat":
 			set_chat_badge(_chat_unread, _chat_generating)
+	if _rostra_badge:
+		_rostra_badge.visible = name != "social" and _rostra_unseen > 0
 
 
 func _on_date_panel(name: String) -> void:
@@ -484,6 +564,7 @@ func mount_panels(game: Dictionary) -> void:
 		_hook(map_cards, "open_chat", open_chat)
 		_hook(map_cards, "open_stats", func(name: String) -> void: show_country(name))
 		_hook(map_cards, "flag_changed", func(_key: String) -> void: _reload_flag_and_map())
+		_hook(map_cards, "open_rostra", open_rostra)
 		var cards_ctx := ctx.duplicate()
 		if forces and is_instance_valid(forces) and forces.has_method("begin_structure_place"):
 			cards_ctx["move_structure"] = func(marker_id: String) -> void:
@@ -505,18 +586,19 @@ func mount_panels(game: Dictionary) -> void:
 	if actions:
 		_add_panel("actions", actions)
 		_hook(actions, "open_advisor", seed_advisor)
+		_hook(actions, "show_on_map", func(lng: float, lat: float, zoom: float) -> void: _map.fly_to_lonlat(lng, lat, zoom))
 		_setup(actions, ctx)
-	var projects := _make("projects_panel")
-	if projects:
-		_add_panel("projects", projects)
-		_hook(projects, "open_advisor", seed_advisor)
-		_hook(projects, "show_on_map", func(lng: float, lat: float, zoom: float) -> void: _map.fly_to_lonlat(lng, lat, zoom))
-		_setup(projects, ctx)
+	var rostra := _make("rostra_panel")
+	if rostra:
+		_add_panel("social", rostra)
+		_hook(rostra, "unseen_changed", set_rostra_badge)
+		_hook(rostra, "enabled_changed", set_social_enabled)
+		_setup(rostra, ctx)
 	var advisor := _make("advisor_panel")
 	if advisor:
 		_add_drawer("advisor", advisor)
-		_hook(advisor, "open_actions", func() -> void: set_active_panel("actions"))
-		_hook(advisor, "open_projects", func() -> void: set_active_panel("projects"))
+		_hook(advisor, "open_actions", func() -> void: open_actions_tab("actions"))
+		_hook(advisor, "open_projects", func() -> void: open_actions_tab("projects"))
 		_hook(advisor, "open_chat", open_chat)
 		_hook(advisor, "open_thread", func(target: Dictionary, draft: String) -> void:
 			if not panels.has("chat"):
@@ -564,7 +646,8 @@ func mount_panels(game: Dictionary) -> void:
 			move_child(war_cards, map_cards.get_index() + 1)
 		_hook(war_cards, "answered", func(_op: String, _ref: String) -> void: world_changed.emit())
 		_setup(war_cards, {"poll_seconds": 5.0, "game": game})
-	for entry in [["chat", "chat_panel"], ["actions", "actions_panel"], ["projects", "projects_panel"]]:
+	set_rostra_badge(0)
+	for entry in [["chat", "chat_panel"], ["actions", "actions_panel"], ["social", "rostra_panel"]]:
 		var tile: Button = _launchers.get(entry[0])
 		if tile:
 			if _unavailable.has(entry[1]):
@@ -746,8 +829,8 @@ func set_war(node: Node) -> void:
 
 
 func set_beside_war_room(at_war: bool) -> void:
-	search_slot.offset_left = 293 if at_war else 221
-	search_slot.offset_right = 331 if at_war else 259
+	_beside_war_room = at_war
+	_place_dock()
 
 
 func _refresh_flag_badge() -> void:

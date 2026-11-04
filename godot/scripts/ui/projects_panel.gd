@@ -1,12 +1,9 @@
 class_name ProjectsPanel
-extends PanelFrame
+extends VBoxContainer
 
 signal open_advisor(text: String)
 signal show_on_map(lng: float, lat: float, zoom: float)
 
-const PANEL_WIDTH := 420.0
-const SURFACE := Color(24 / 255.0, 24 / 255.0, 27 / 255.0, 0.95)
-const SURFACE_BORDER := Color(1, 1, 1, 0.1)
 const NATURAL_LEADING := 1.12
 const TAG_COLUMN := 140.0
 const TAG_GAP := 3.0
@@ -76,7 +73,6 @@ var _pending := ""
 var _confirm_id := ""
 var _confirm_button: Button
 var _poll: Timer
-var _count_label: Label
 var _filters: PanelContainer
 var _search: LineEdit
 var _chips: HFlowContainer
@@ -95,37 +91,16 @@ var _menu_grid: GridContainer
 var _menu_empty_pad: MarginContainer
 var _menu_clear: Button
 var _menu_rows: Array[Control] = []
+var _open := false
 
 
 func _init() -> void:
-	super._init("Projects & Operations", "", "bottom", PANEL_WIDTH)
-	set_tint(SURFACE)
-	radius = 16.0
-	border = SURFACE_BORDER
-	_material.set_shader_parameter("radius", 16.0)
-	_material.set_shader_parameter("border_color", SURFACE_BORDER)
-	_material.set_shader_parameter("highlight", 0.06)
-	_material.set_shader_parameter("blur_px", 8.0)
-	_restyle_close()
-	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	var margin := scroll.get_child(0) as MarginContainer
-	for side in ["margin_left", "margin_right", "margin_top", "margin_bottom"]:
-		margin.add_theme_constant_override(side, 0)
-	margin.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	body.add_theme_constant_override("separation", 0)
-	body.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	var titles := header_title.get_parent()
-	var title_row := HBoxContainer.new()
-	title_row.add_theme_constant_override("separation", 6)
-	titles.remove_child(header_title)
-	title_row.add_child(header_title)
-	_count_label = UI.label("", 12, Color(1, 1, 1, 0.35), 500)
-	_count_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	title_row.add_child(_count_label)
-	titles.add_child(title_row)
-	titles.move_child(title_row, 0)
+	add_theme_constant_override("separation", 0)
+	size_flags_vertical = Control.SIZE_EXPAND_FILL
+	size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	mouse_filter = Control.MOUSE_FILTER_PASS
 	_build_filters()
-	body.add_child(_filters)
+	add_child(_filters)
 	_banner = PanelContainer.new()
 	var banner_style := UI.box(Color(245 / 255.0, 158 / 255.0, 11 / 255.0, 0.12), Color(0, 0, 0, 0), 0, 0, Vector4(16, 8, 16, 8))
 	banner_style.border_color = Color(245 / 255.0, 158 / 255.0, 11 / 255.0, 0.3)
@@ -134,7 +109,7 @@ func _init() -> void:
 	_banner_label = UI.wrapped("", 11, Color(253 / 255.0, 230 / 255.0, 138 / 255.0, 0.95))
 	_banner.add_child(_leading(_banner_label, 11, 1.45))
 	_banner.visible = false
-	body.add_child(_banner)
+	add_child(_banner)
 	_cards_scroll = ScrollContainer.new()
 	_cards_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_cards_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
@@ -148,9 +123,9 @@ func _init() -> void:
 	_cards.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	cards_margin.add_child(_cards)
 	_cards_scroll.add_child(cards_margin)
-	body.add_child(_cards_scroll)
+	add_child(_cards_scroll)
 	_build_menu()
-	(scroll.get_parent() as VBoxContainer).add_child(_menu)
+	add_child(_menu)
 	_poll = Timer.new()
 	_poll.wait_time = 1.0
 	_poll.timeout.connect(_on_poll)
@@ -160,9 +135,6 @@ func _init() -> void:
 
 func _ready() -> void:
 	get_viewport().size_changed.connect(func() -> void:
-		if _open:
-			offset_top = -BOTTOM_GAP - _height()
-			offset_bottom = -BOTTOM_GAP
 		if _menu_open:
 			_place_menu.call_deferred())
 	get_viewport().gui_focus_changed.connect(_on_focus_changed)
@@ -181,15 +153,13 @@ func close() -> void:
 	set_open(false)
 
 
+func is_open() -> bool:
+	return _open
+
+
 func set_open(open: bool) -> void:
 	var was := _open
 	_open = open
-	var height := _height()
-	var tween := create_tween().set_parallel(true).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
-	tween.tween_property(self, "offset_top", -BOTTOM_GAP - height if open else 200.0, 0.35)
-	tween.tween_property(self, "offset_bottom", -BOTTOM_GAP if open else 200.0 + height, 0.35)
-	tween.tween_property(self, "modulate:a", 1.0 if open else 0.0, 0.35)
-	mouse_filter = Control.MOUSE_FILTER_STOP if open else Control.MOUSE_FILTER_IGNORE
 	if open and not was:
 		_poll.start()
 		_request_view(true)
@@ -205,19 +175,6 @@ func set_open(open: bool) -> void:
 
 func refresh() -> void:
 	await _request_view(true)
-
-
-func _restyle_close() -> void:
-	var row := header_extra.get_parent()
-	var close_button := row.get_child(header_extra.get_index() + 1) as Button
-	if close_button == null:
-		return
-	close_button.flat = false
-	close_button.icon = _glyph("close", 14, Color(1, 1, 1, 0.55))
-	close_button.tooltip_text = ""
-	var rest := UI.box(Color(0, 0, 0, 0), Color(0, 0, 0, 0), 0, 0, Vector4(3, 3, 3, 3))
-	for state in ["normal", "focus", "disabled", "hover", "pressed", "hover_pressed"]:
-		close_button.add_theme_stylebox_override(state, rest)
 
 
 func _height() -> float:
@@ -583,9 +540,6 @@ func _set_owner(owner: String) -> void:
 
 func _render() -> void:
 	var total := int(_view.get("total", 0))
-	var visible_count := int(_view.get("visibleCount", 0))
-	_count_label.text = ("" if total == 0 else (str(total) if visible_count == total else "%d / %d" % [visible_count, total]))
-	_count_label.visible = total > 0
 	var empty_board := _loaded and total == 0
 	_filters.visible = not empty_board
 	if not empty_board:
