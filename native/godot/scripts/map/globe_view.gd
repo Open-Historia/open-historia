@@ -18,7 +18,7 @@ const REFINED_RENDER_PIXELS := 180000.0
 const INTERACTIVE_RENDER_PIXELS := 48000.0
 const EARTH_RADIUS_M := 6371008.8
 const MAX_TERRAIN_ELEVATION_M := 8849.0
-const TERRAIN_EXAGGERATION := 15.0
+const TERRAIN_EXAGGERATION := 7.5
 const MAP_LAYER_BIT := 2
 const LIGHT_LAYER := 3
 const FLAT_TEXTURE_SCALE := 1.75
@@ -75,7 +75,7 @@ uniform vec4 dem_rect[6];
 uniform sampler2D lod_map : filter_nearest, repeat_disable;
 uniform vec4 lod_rect = vec4(0.0, 0.0, 1.0, 0.0);
 uniform ivec2 lod_size = ivec2(0, 0);
-uniform float relief_scale = 15.0;
+uniform float relief_scale = 7.5;
 uniform float relief_low = 0.0;
 uniform float relief_high = 0.0;
 uniform float relief_step = 1.0;

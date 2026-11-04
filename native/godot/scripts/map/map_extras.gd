@@ -411,8 +411,9 @@ func constrain_camera() -> void:
 	var zoom := camera.zoom.x
 	if zoom < MapView.MIN_ZOOM:
 		zoom = MapView.MIN_ZOOM
-	var top := GlobeView.world_of_lonlat(0.0, LAT_NORTH).y
-	var bottom := GlobeView.world_of_lonlat(0.0, LAT_SOUTH).y
+	var own_map := str(background.get("kind", "builtin")) in ["image", "vector"]
+	var top := GlobeView.world_of_lonlat(0.0, GlobeView.MERCATOR_LIMIT if own_map else LAT_NORTH).y
+	var bottom := GlobeView.world_of_lonlat(0.0, -GlobeView.MERCATOR_LIMIT if own_map else LAT_SOUTH).y
 	if (bottom - top) * zoom < size.y:
 		zoom = size.y / (bottom - top)
 	camera.zoom = Vector2.ONE * zoom

@@ -4,7 +4,7 @@ extends Node
 signal changed
 
 const URL := "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/%d/%d/%d.png"
-const EXAGGERATION := 15.0
+const EXAGGERATION := 7.5
 const SOURCE_MAX_ZOOM := 5
 const SOURCE_MIN_ZOOM := 0
 const DELTA_ZOOM := 1
