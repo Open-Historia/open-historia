@@ -26,7 +26,7 @@ const RUN_PICK = {
   battles: { "*": BATTLE_PICK },
 };
 const LANE_TROOP = { x: 1, y: 1, strength: 1, kind: 1, depth: 1, hx: 1, hy: 1, radiusKm: 1, lane: 1, station: 1, body: 1 };
-const WALL_RUN = { lines: 1, input: { map: { flat: 1, scale: 1 }, fortifications: 1 }, mech: 1 };
+const WALL_RUN = { lines: 1, input: { map: { flat: 1, scale: 1, factor: 1, metric: 1 }, fortifications: 1 }, mech: 1 };
 const WALL_BATTLE = { sides: 1, gone: 1, frame: 1, place: 1, field: { cols: 1, rows: 1, size: 1, play: 1 }, troops: { "*": { "*": { x: 1, y: 1, strength: 1, walled: 1 } } }, wallsFor: 1, wallSides: 1, walls: 1, wallMask: 1, wallDate: 1, wallRun: { lines: 1 }, log: 1 };
 const AIR_BATTLE = { name: 1, status: 1, sides: 1, gone: 1, frame: 1, field: { cols: 1, rows: 1 }, troops: { "*": { "*": { strength: 1, owner: 1 } } }, sky: 1, airMission: 1, wings: 1 };
 const CLIMATE_RUN = { input: { climateZones: 1, climateSeed: 1, fromDate: 1, toDate: 1, days: 1 }, seed: 1, steer: 1, zoneSkiesDate: 1, zoneSkies: 1, zoneNeighbours: 1 };
@@ -278,7 +278,7 @@ const MODULES = {
   "src/runtime/fronts/deploy.js": { name: "deploy", keep: ["readDeploy", "hasDeploy", "deployLinesOf", "withDeployLine", "deployCells"], picks: { deployCells: { 0: { deploy: 1, field: { cols: 1, rows: 1, holders: 1 }, frame: 1 } } } },
   "src/runtime/fronts/field.js": { name: "field", factories: ["createField", "openField", "unpackField", "resampleField"], big: ["takeCapsule", "takeCells", "restoreCells", "rebuildFromHolders", "resampleField", "rebuildDistances"] },
   "src/runtime/fronts/line.js": { name: "line" },
-  "src/runtime/fronts/wayfinder.js": { name: "wayfinder", big: ["findWay"], picks: { findWay: { 0: { cols: 1, rows: 1, west: 1, north: 1, step: 1, wrap: 1, flat: 1, scale: 1, land: 1, region: 1, ids: 1, full: 1, stepKm: 1, rowCosine: 1, seas: 1, seaCount: 1 } } } },
+  "src/runtime/fronts/wayfinder.js": { name: "wayfinder", big: ["findWay"], picks: { findWay: { 0: { cols: 1, rows: 1, west: 1, north: 1, step: 1, wrap: 1, flat: 1, scale: 1, factor: 1, metric: 1, land: 1, region: 1, ids: 1, full: 1, stepKm: 1, rowCosine: 1, seas: 1, seaCount: 1 } } } },
   "src/runtime/fronts/command.js": { name: "command", picks: { assignCommands: { 0: { troops: { "*": { "*": { x: 1, y: 1, strength: 1, owner: 1, command: 1 } } }, swarms: 1 } } } },
   "src/runtime/fronts/replay.js": { name: "replay", factories: ["createReplayRecorder"], big: ["createReplayRecorder"], picks: { createReplayRecorder: { methods: { record: { 1: { "*": { "*": { strength: 1, x: 1, y: 1, state: 1 } } }, 2: { holders: 1, homes: 1, painters: 1, when: 1 } } } } } },
   "src/runtime/fronts/ground.js": { name: "ground", big: ["measure", "awayOf", "cheapestWay"], picks: { cellsOf: { 0: { cols: 1, rows: 1 } } } },
@@ -317,7 +317,7 @@ const MODULES = {
     name: "air",
     big: ["skyOfWings"],
     picks: {
-      skyOfWings: { 0: { era: 1, mech: 1, input: { map: { flat: 1, scale: 1 }, units: 1, airArms: 1 }, airDay: 1, wings: 1, battles: { "*": AIR_BATTLE } }, 1: AIR_BATTLE },
+      skyOfWings: { 0: { era: 1, mech: 1, input: { map: { flat: 1, scale: 1, factor: 1, metric: 1 }, units: 1, airArms: 1 }, airDay: 1, wings: 1, battles: { "*": AIR_BATTLE } }, 1: AIR_BATTLE },
       airStrikes: { 0: { wings: 1, troops: { "*": { "*": { strength: 1, loss: 1 } } } } },
       wearWings: { 0: { wings: 1, airDay: 1 }, 1: { wings: 1 } },
       wingChanges: { 0: { wings: 1 } },
