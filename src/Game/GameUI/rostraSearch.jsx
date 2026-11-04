@@ -223,7 +223,7 @@ const regionsOnMap = (catalog, world) => {
     });
 };
 
-const RostraSearch = ({ shown, country, feed, renderPost }) => {
+const RostraSearch = ({ shown, opened = null, country, feed, renderPost }) => {
   const world = useRuntimeState("world", selectSearchWorld);
   const ownership = ownershipKeyOf(world);
   const own = useMemo(() => placeFeedPlace({ polity: country, polityKey: country }), [country]);
@@ -354,6 +354,15 @@ const RostraSearch = ({ shown, country, feed, renderPost }) => {
   useEffect(() => {
     if (shown && shouldAsk) load(place, requestKey, session.language);
   }, [shown, shouldAsk, load, place, requestKey, session]);
+
+  // A place a map card opened Rostra on (rostraOpen.js): shown, and not asked
+  // for by itself; its Refresh asks.
+  useEffect(() => {
+    if (!opened?.place) return;
+    setPicked(opened.place);
+    setNationwide(false);
+    setQuery("");
+  }, [opened]);
 
   const pick = (next) => {
     setPicked(next);

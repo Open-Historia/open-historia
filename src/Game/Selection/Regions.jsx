@@ -11,8 +11,10 @@ import { livePuppetsFor, puppetKindLabel, puppetSummaryFor } from "../../runtime
 import { getWorldStateSnapshot } from "../Map/useWorldState.js";
 import { resolvePolityFlag } from "../../runtime/polityFlags.js";
 import { resolvePolityIdentity } from "../../runtime/polityIdentity.js";
+import { toCountryName } from "../../runtime/ownerNames.js";
 import { bundledFlagUrl, countryGidFromIdentity } from "../../runtime/countryFlags.js";
 import { requestDiplomaticChat } from "../GameUI/chat.jsx";
+import { openRostraPlace } from "../GameUI/rostraOpen.js";
 import { openCountryPanel } from "./CountryPanel.jsx";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { APP_HEIGHT, MAP_CARD_OPENED, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, useShortTouchScreen, useTouchPrimary } from "../../runtime/mobileUi.js";
@@ -234,6 +236,35 @@ const IconBtn = ({ children, title, onClick, expanded }) => {
     );
 };
 
+
+const RostraGlyph = () => (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9" />
+        <path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5" />
+        <circle cx="12" cy="12" r="2" />
+        <path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5" />
+        <path d="M19.1 4.9C23 8.8 23 15.1 19.1 19" />
+    </svg>
+);
+
+const rostraButtonStyle = {
+    alignItems: "center",
+    background: "rgba(255, 255, 255, 0.07)",
+    border: "1px solid rgba(43, 193, 243, 0.35)",
+    borderRadius: "8px",
+    color: "#2bc1f3",
+    cursor: "pointer",
+    display: "flex",
+    fontFamily: "inherit",
+    fontSize: "12px",
+    fontWeight: 600,
+    gap: "6px",
+    justifyContent: "center",
+    marginTop: "8px",
+    padding: "6px 8px",
+    width: "100%",
+    transition: "background 0.15s, border-color 0.15s",
+};
 
 // Copies a name through the shared helper, which falls back where
 // navigator.clipboard is missing (LAN play over http, the Android app), and
@@ -858,6 +889,31 @@ const RegionPopup = () => {
                 </div>
             )}
             </>
+        )}
+
+        {!isUnclaimed && (
+            <button
+            type="button"
+            className="oh-tap-row"
+            onClick={(e) => {
+                e.stopPropagation();
+                const name = toCountryName(controllerCode) || displayCountry;
+                openRostraPlace({ polity: name, polityKey: name });
+                _dismiss?.();
+            }}
+            style={rostraButtonStyle}
+            onMouseEnter={(e) => {
+                e.currentTarget.style.background = "rgba(43, 193, 243, 0.15)";
+                e.currentTarget.style.borderColor = "#2bc1f3";
+            }}
+            onMouseLeave={(e) => {
+                e.currentTarget.style.background = "rgba(255, 255, 255, 0.07)";
+                e.currentTarget.style.borderColor = "rgba(43, 193, 243, 0.35)";
+            }}
+            >
+            <RostraGlyph />
+            <span>Check in Rostra</span>
+            </button>
         )}
 
         </div>

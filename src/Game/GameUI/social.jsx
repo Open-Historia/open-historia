@@ -54,7 +54,10 @@ import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
 import { inSharedGame, requestFromHost } from "../../multiplayer/client/sharedGameBridge.js";
 import { useTurnRunning } from "./useTurnRunning.js";
+import { resolvePolityFlag } from "../../runtime/polityFlags.js";
+import { getWorldStateSnapshot } from "../Map/useWorldState.js";
 import RostraSearch from "./rostraSearch.jsx";
+import { onRostraPlace, takeRostraPlace } from "./rostraOpen.js";
 import EmptyFeedRefresh from "./rostraRefresh.jsx";
 
 // Rostra's own colours: the game's grey, and the accent for what is the
@@ -93,15 +96,12 @@ const ensureStyles = () => {
 
 const stroke = { fill: "none", stroke: "currentColor", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": true };
 
-// A speaker at a lectern, speaking to the world.
+// A modern smartphone.
 const RostraDockIcon = () => (
   <svg width="18" height="18" viewBox="0 0 24 24" strokeWidth="1.9" {...stroke}>
-    <path d="M7.5 21h9l-1.4-8.5H8.9z" />
-    <path d="M5.5 12.5h13" />
-    <path d="M12 12.5V8.2" />
-    <circle cx="12" cy="6.4" r="1.6" />
-    <path d="M16.6 4.2a4.2 4.2 0 0 1 0 4.6" />
-    <path d="M7.4 4.2a4.2 4.2 0 0 0 0 4.6" />
+    <rect x="5.5" y="2" width="13" height="20" rx="3" />
+    <path d="M10.5 5h3" />
+    <path d="M9.5 19h5" />
   </svg>
 );
 
@@ -207,14 +207,17 @@ const initials = (name) => {
 };
 
 // A polity's flag by the precedence every flag in the game follows (see
-// resolveOwnerFlagUrl in projects.jsx): the scenario's own upload, then the
-// polity's, then the ISO flag its name resolves to.
-const flagFor = (country, customFlags, polities) => {
+// resolvePolityFlag in polityFlags.js): custom uploaded flag, polity record flag,
+// map-ref GADM/ISO base flag, or stock national flag.
+const flagFor = (country, customFlags, polities, world) => {
   const name = String(country ?? "").trim();
   if (!name) return "";
+  const activeWorld = world || (typeof getWorldStateSnapshot === "function" ? getWorldStateSnapshot() : null) || {};
+  const resolved = resolvePolityFlag({ polity: name, world: activeWorld, flags: customFlags || {} });
+  if (resolved?.imageUrl) return resolved.imageUrl;
   const key = polities?.[name]
     ? name
-    : Object.keys(polities ?? {}).find((entry) => String(polities[entry]?.name ?? "").trim() === name) || name;
+    : Object.keys(polities ?? {}).find((entry) => String(polities[entry]?.name ?? "").trim().toLowerCase() === name.toLowerCase()) || name;
   return customFlags?.[key] || customFlags?.[name] || polities?.[key]?.flag || flagImageUrlFromGid(key) || flagImageUrlFromGid(name) || "";
 };
 
@@ -275,7 +278,7 @@ const QuotedPost = ({ post, gone, flags }) => {
   return (
     <div style={{ border: `1px solid rgba(255,255,255,0.12)`, borderRadius: "10px", marginTop: "0.55rem", padding: "0.55rem 0.7rem" }}>
       <div style={{ alignItems: "center", display: "flex", gap: "0.45rem", minWidth: 0 }}>
-        <Avatar name={post.author} flagUrl={flagFor(post.country, flags.custom, flags.polities)} mine={post.kind === "player"} size={1.3} />
+        <Avatar name={post.author} flagUrl={flagFor(post.country, flags.custom, flags.polities, flags.world)} mine={post.kind === "player"} size={1.3} />
         <span data-no-translate style={{ color: INK, fontSize: "0.76rem", fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{post.author}</span>
         {post.role && <span data-no-translate style={{ color: INK_FAINT, fontSize: "0.7rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{post.role}</span>}
         <span style={{ color: INK_FAINT, flexShrink: 0, fontSize: "0.68rem", marginLeft: "auto" }}>{postDate(post.date)}</span>
@@ -350,7 +353,7 @@ const PostCard = memo(({ post, feed, round, flags, mine, onQuote, canPost }) => 
   const waiting = post.kind === "player" && Number(round) <= Number(post.round);
   return (
     <article className="rostra-post" style={{ borderBottom: `1px solid ${LINE}`, display: "flex", gap: "0.65rem", padding: "0.8rem 1rem" }}>
-      <Avatar name={post.author} flagUrl={flagFor(post.country, flags.custom, flags.polities)} mine={mine} />
+      <Avatar name={post.author} flagUrl={flagFor(post.country, flags.custom, flags.polities, flags.world)} mine={mine} />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ alignItems: "baseline", display: "flex", gap: "0.4rem", minWidth: 0 }}>
           <span data-no-translate style={{ color: INK, fontSize: "0.84rem", fontWeight: 800, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{post.author}</span>
@@ -443,6 +446,7 @@ const SocialPanel = ({ isOpen, onClose, onSeen }) => {
   const game = useRuntimeState("game", selectGame);
   const feed = useRuntimeState("world", selectFeed);
   const polities = useRuntimeState("world", selectPolities);
+  const world = useRuntimeState("world", (w) => w);
   const country = toCountryName(game.country) || game.country;
   const [author, role, leader] = useRuntimeState("world", accountOf(country), country).split("\u0000");
   const turnRunning = useTurnRunning(isOpen);
@@ -468,6 +472,19 @@ const SocialPanel = ({ isOpen, onClose, onSeen }) => {
 
   useEffect(() => { ensureStyles(); }, []);
 
+  // A place a map card opened Rostra on (rostraOpen.js): Search, showing it.
+  const [opened, setOpened] = useState(null);
+  useEffect(() => {
+    const show = () => {
+      const place = takeRostraPlace();
+      if (!place) return;
+      setTab("search");
+      setOpened({ place });
+    };
+    show();
+    return onRostraPlace(show);
+  }, []);
+
   useEffect(() => {
     if (!isOpen) return undefined;
     let cancelled = false;
@@ -490,7 +507,7 @@ const SocialPanel = ({ isOpen, onClose, onSeen }) => {
     }
   }, [isOpen]);
 
-  const flags = useMemo(() => ({ custom: customFlags, polities }), [customFlags, polities]);
+  const flags = useMemo(() => ({ custom: customFlags, polities, world }), [customFlags, polities, world]);
   const posts = useMemo(() => (tab === "search" ? [] : socialFeedView(feed, { tab, country, leader })), [feed, tab, country, leader]);
   const mentionCount = useMemo(
     () => feed.filter((post) => mentionsPlayer(post, { feed, country, leader }) && Number(post.round) >= game.round).length,
@@ -572,7 +589,7 @@ const SocialPanel = ({ isOpen, onClose, onSeen }) => {
     }
   };
 
-  const playerFlag = flagFor(country, customFlags, polities);
+  const playerFlag = flagFor(country, customFlags, polities, world);
   const shown = isOpen;
 
   // Where it rises from and how it goes, as the dock's other windows do
@@ -804,6 +821,7 @@ const SocialPanel = ({ isOpen, onClose, onSeen }) => {
           {tab === "search" ? (
             <RostraSearch
               shown={isOpen}
+              opened={opened}
               country={country}
               feed={feed}
               renderPost={(post) => (
@@ -935,6 +953,12 @@ const Social = ({ hovered, isOpen, onToggle, setHovered }) => {
   useEffect(() => {
     if (isOpen) setHasOpened(true);
   }, [isOpen]);
+
+  // Check in Rostra on a map card opens the panel (rostraOpen.js).
+  useEffect(() => onRostraPlace(() => {
+    setHasOpened(true);
+    if (!isOpen) onToggle();
+  }), [isOpen, onToggle]);
 
   useEffect(() => {
     setSeen(Number(readSeenNumbers()[gameId]) || 0);
