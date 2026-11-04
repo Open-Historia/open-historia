@@ -61,6 +61,9 @@ var _goal_edit: TextEdit
 var _goal_save: Button
 var _goal_clear: Button
 var _goal_note: Label
+var _progress_busy := false
+var _progress_error := ""
+var _progress_open := false
 var _brainstorm: Button
 var _suggest_button: Button
 var _suggest_spinner: ActionsSpinner
@@ -720,7 +723,7 @@ func _render_goal() -> void:
 	var country := str(_view.get("country", ""))
 	var goal := str(_view.get("goal", ""))
 	var mode := "" if country.is_empty() else ("edit" if _goal_editing else ("set" if not goal.is_empty() else "empty"))
-	var key := "%s|%s|%s" % [mode, goal, str(_turn_running)]
+	var key := "%s|%s|%s|%s|%s|%s|%s|%s" % [mode, goal, str(_turn_running), JSON.stringify(_view.get("goalProgress")), str(_progress_busy), _progress_error, str(_progress_open), str(_view.get("round", 0))]
 	if mode == "edit" and _goal_mode == "edit" and is_instance_valid(_goal_edit):
 		_goal_shown = key
 		_update_goal_editor()
@@ -801,8 +804,123 @@ func _goal_card(goal: String) -> Control:
 	words.tooltip_text = goal
 	words.mouse_filter = Control.MOUSE_FILTER_PASS
 	column.add_child(_leading(words, 13, 1.45))
+	column.add_child(_goal_progress())
 	card.add_child(column)
 	return card
+
+
+func _goal_progress() -> Control:
+	var progress: Variant = _view.get("goalProgress")
+	var muted := Color(1, 1, 1, 0.55)
+	var locked := _progress_busy or _turn_running
+	if typeof(progress) != TYPE_DICTIONARY:
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 8)
+		var note := UI.wrapped(_progress_error if not _progress_error.is_empty() else "How far has it come?", 12, muted)
+		note.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		note.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		row.add_child(note)
+		var assess := _goal_button("Assessing…" if _progress_busy else "Assess progress", false)
+		assess.disabled = locked
+		assess.mouse_default_cursor_shape = Control.CURSOR_FORBIDDEN if locked else Control.CURSOR_POINTING_HAND
+		assess.pressed.connect(_assess_goal)
+		row.add_child(assess)
+		return row
+	var reading: Dictionary = progress
+	var score := int(reading.get("progress", 0))
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 6)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	var bar := ProgressBar.new()
+	bar.min_value = 0
+	bar.max_value = 100
+	bar.value = score
+	bar.show_percentage = false
+	bar.custom_minimum_size.y = 6
+	bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	bar.add_theme_stylebox_override("background", UI.box(Color(1, 1, 1, 0.1), Color(0, 0, 0, 0), 3, 0, Vector4.ZERO))
+	var fill := UI.box(Color("#7dd3fc"), Color(0, 0, 0, 0), 3, 0, Vector4.ZERO)
+	if score < 100:
+		fill.corner_radius_top_right = 0
+		fill.corner_radius_bottom_right = 0
+	bar.add_theme_stylebox_override("fill", fill)
+	row.add_child(bar)
+	var percent := UI.label("%d%%" % score, 12, Color(1, 1, 1, 0.9), 700)
+	percent.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	row.add_child(percent)
+	var change := score - int(reading["previous"]) if reading.has("previous") else 0
+	if change != 0:
+		var trend := UI.label("+%d" % change if change > 0 else str(change), 12, Color("#86efac") if change > 0 else Color("#fca5a5"))
+		trend.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		row.add_child(trend)
+	var again := Button.new()
+	again.text = "…" if _progress_busy else "↻"
+	again.focus_mode = Control.FOCUS_NONE
+	var empty := StyleBoxEmpty.new()
+	for state in ["normal", "hover", "pressed", "focus", "disabled", "hover_pressed"]:
+		again.add_theme_stylebox_override(state, empty)
+	again.add_theme_font_override("font", UI.font(400))
+	again.add_theme_font_size_override("font_size", 13)
+	for slot in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_hover_pressed_color", "font_disabled_color"]:
+		again.add_theme_color_override(slot, Color(1, 1, 1, 0.45))
+	again.disabled = locked
+	again.tooltip_text = "A turn is running." if _turn_running else "Assess again"
+	again.mouse_default_cursor_shape = Control.CURSOR_FORBIDDEN if locked else Control.CURSOR_POINTING_HAND
+	again.pressed.connect(_assess_goal)
+	row.add_child(again)
+	column.add_child(row)
+	var summary := UI.wrapped(str(reading.get("summary", "")), 12, Color(1, 1, 1, 0.78))
+	summary.mouse_filter = Control.MOUSE_FILTER_STOP
+	summary.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	summary.gui_input.connect(func(event: InputEvent) -> void:
+		if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+			_progress_open = not _progress_open
+			_render_goal())
+	column.add_child(_leading(summary, 12, 1.45))
+	if _progress_open:
+		for part in [["Reached", "achieved"], ["In the way", "obstacles"], ["Next steps", "nextSteps"]]:
+			var items: Array = reading.get(part[1], []) if typeof(reading.get(part[1])) == TYPE_ARRAY else []
+			if items.is_empty():
+				continue
+			var block := VBoxContainer.new()
+			block.add_theme_constant_override("separation", 2)
+			block.add_child(UI.label(part[0], 12, muted, 700))
+			for item in items:
+				var line := MarginContainer.new()
+				line.add_theme_constant_override("margin_left", 6)
+				line.add_child(_leading(UI.wrapped("•  " + str(item), 12, Color(1, 1, 1, 0.78)), 12, 1.45))
+				block.add_child(line)
+			column.add_child(block)
+	var current_round := int(_view.get("round", 0))
+	var read_round := int(reading.get("round", 0))
+	var stale := read_round > 0 and current_round > 0 and current_round > read_round
+	var as_of := str(reading.get("asOf", ""))
+	var footer := _progress_error
+	if footer.is_empty():
+		footer = "As of %s%s. %s" % [as_of if not as_of.is_empty() else "an earlier turn", " — a turn has passed since; ↻ to update" if stale else "", "" if _progress_open else "Click the summary for details."]
+	column.add_child(UI.wrapped(footer.strip_edges(), 12, muted))
+	return column
+
+
+func _assess_goal() -> void:
+	if _progress_busy or _turn_running or engine == null:
+		return
+	_progress_busy = true
+	_progress_error = ""
+	_render_goal()
+	var reply: Dictionary = await engine.request("actions.assessGoal", {})
+	_progress_busy = false
+	if not reply.get("ok", false) or typeof(reply.get("result")) != TYPE_DICTIONARY:
+		var failed := str(reply.get("error", ""))
+		_progress_error = failed if not failed.is_empty() else "The goal could not be assessed. Try again."
+		_render_goal()
+		return
+	var result: Dictionary = reply["result"]
+	_progress_error = str(result.get("error", ""))
+	_apply_view(result)
 
 
 func _goal_editor(goal: String) -> Control:

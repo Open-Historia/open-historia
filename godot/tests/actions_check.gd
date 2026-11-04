@@ -94,6 +94,18 @@ func _find_label(node: Node, text: String) -> Label:
 	return null
 
 
+func _find_label_containing(node: Node, text: String) -> Label:
+	if node == null:
+		return null
+	for child in node.get_children():
+		if child is Label and (child as Label).text.contains(text):
+			return child as Label
+		var found := _find_label_containing(child, text)
+		if found:
+			return found
+	return null
+
+
 func _card_for(panel: ProjectsPanel, name: String) -> Node:
 	var node: Node = _find_label(panel._cards, name)
 	while node and node.get_parent() != panel._cards:
@@ -200,6 +212,36 @@ func _actions_checks() -> void:
 	panel._goal_edit.gui_input.emit(_key(KEY_ESCAPE))
 	await _frames(3)
 	_check(not panel._goal_editing and _find_button(panel, "Edit") != null, "Escape leaves the goal editor")
+	_check(_find_button(panel, "Assess progress") != null and _find_label(panel, "How far has it come?") != null, "the goal card offers Assess progress")
+	_find_button(panel, "Assess progress").pressed.emit()
+	await _frames(2)
+	_check(_find_button(panel, "Assessing…") != null and _find_button(panel, "Assessing…").disabled, "Assess progress reads Assessing… and is locked while it asks")
+	await _until(func() -> bool: return typeof(panel._view.get("goalProgress")) == TYPE_DICTIONARY and not panel._progress_busy, 30.0)
+	var reading: Variant = panel._view.get("goalProgress")
+	_check(typeof(reading) == TYPE_DICTIONARY and int((reading as Dictionary).get("progress", -1)) == 38, "the reading is kept with the goal (38/100)")
+	await _frames(3)
+	_check(_find_label(panel, "38%") != null, "the bar's figure reads 38%")
+	_check(_find_label(panel, "Reached") == null and _find_label_containing(panel, "Click the summary for details.") != null, "the details stay folded until the summary is clicked")
+	var summary := _find_label_containing(panel, "The budget is closer to balance")
+	_check(summary != null, "the reading's summary is shown")
+	if summary:
+		var click := InputEventMouseButton.new()
+		click.button_index = MOUSE_BUTTON_LEFT
+		click.pressed = true
+		summary.gui_input.emit(click)
+		await _frames(3)
+	_check(_find_label(panel, "Reached") != null and _find_label(panel, "In the way") != null and _find_label(panel, "Next steps") != null, "clicking the summary opens Reached, In the way and Next steps")
+	_check(_find_label_containing(panel, "A balanced budget passed parliament") != null, "what was reached is listed")
+	await _shoot("actions-2b-goal-progress")
+	var again := _find_button(panel, "↻")
+	_check(again != null and not again.disabled and again.tooltip_text == "Assess again", "↻ offers to assess again")
+	if again:
+		again.pressed.emit()
+	await _until(func() -> bool:
+		var now: Variant = panel._view.get("goalProgress")
+		return typeof(now) == TYPE_DICTIONARY and int((now as Dictionary).get("progress", -1)) == 46 and not panel._progress_busy, 30.0)
+	await _frames(3)
+	_check(_find_label(panel, "46%") != null and _find_label(panel, "+8") != null, "a second reading shows the change since the last (+8)")
 
 	_find_button(panel, "Brainstorm").pressed.emit()
 	_check(advisor_texts.size() == 1 and advisor_texts[0] == ActionsPanel.BRAINSTORM_TEXT, "Brainstorm asks for the advisor with the React starter text")
@@ -316,6 +358,8 @@ func _actions_checks() -> void:
 		await _frames(3)
 		var locked_edit := _find_button(panel, "Edit")
 		_check(locked_edit != null and locked_edit.disabled, "the goal's Edit is locked while a turn runs")
+		var locked_again := _find_button(panel, "↻")
+		_check(locked_again != null and locked_again.disabled and locked_again.tooltip_text == "A turn is running.", "↻ is locked while a turn runs")
 		var locked_remove := false
 		for entry in panel._view.get("submitted", []):
 			if (entry as Dictionary).get("movesUnit", false):
@@ -327,6 +371,7 @@ func _actions_checks() -> void:
 	await _until(func() -> bool: return int(panel._view.get("round", 0)) != round_before, 20.0)
 	await _wait(1.0)
 	_check(int(panel._view.get("round", 0)) != round_before, "the panel re-read the queue when the round changed (%d → %d)" % [round_before, int(panel._view.get("round", 0))])
+	_check(_find_label_containing(panel, "a turn has passed since; ↻ to update") != null, "a reading from before the skip says a turn has passed since")
 	await _shoot("actions-8-after-skip")
 	panel.close()
 	await _wait(0.5)
