@@ -480,6 +480,7 @@ func _layout() -> void:
 		_fmg.size = Vector2(WorkshopFmg.WIDTH, view.y)
 	_place_panel()
 	_place_inspector()
+	_place_picture_setup()
 
 
 func _place_panel() -> void:
@@ -1527,6 +1528,13 @@ func open_picture_setup(info: Dictionary) -> void:
 		if is_instance_valid(shell):
 			shell.queue_free())
 	shell.setup(self, info)
+	_place_picture_setup()
+
+
+func _place_picture_setup() -> void:
+	var shell := _picture_setup as WorkshopShell
+	if shell == null or not is_instance_valid(shell):
+		return
 	shell.max_height = size.y - 24.0
 	var width := minf(shell.panel_width, size.x - dock_left() - dock_right() - 24.0)
 	shell.custom_minimum_size.x = width
