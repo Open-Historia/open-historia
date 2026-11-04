@@ -2,6 +2,7 @@ class_name ActionsPanel
 extends PanelFrame
 
 signal open_advisor(text: String)
+signal show_on_map(lng: float, lat: float, zoom: float)
 
 const PANEL_WIDTH := 420.0
 const SURFACE := Color(24 / 255.0, 24 / 255.0, 27 / 255.0, 0.95)
@@ -26,10 +27,15 @@ const BLUE_HOVER := Color("#2563eb")
 const BLUE_DIM := Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.3)
 const RED := Color(239 / 255.0, 68 / 255.0, 68 / 255.0)
 const NATURAL_LEADING := 1.12
+const ACTIONS_TABS := [["actions", "Actions"], ["projects", "Projects"]]
+const GREY_SELECTED := Color("#0e0e10")
+const GREY_BORDER_STRONG := Color(1, 1, 1, 0.22)
 const GLYPHS := {
 	"sparkle": "<svg viewBox='0 0 24 24' fill='none' stroke='#fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M12 2L13.5 9.5L21 11L13.5 12.5L12 20L10.5 12.5L3 11L10.5 9.5L12 2Z'/></svg>",
 	"stop": "<svg viewBox='0 0 24 24' fill='#fff'><rect x='6' y='6' width='12' height='12' rx='2'/></svg>",
 	"send": "<svg viewBox='0 0 24 24' fill='#fff'><path d='M2.01 21L23 12 2.01 3 2 10l15 2-15 2z'/></svg>",
+	"orders": "<svg viewBox='0 0 24 24' fill='none' stroke='#fff' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><path d='M12 3l1.8 4.6L18.5 9l-4.7 1.4L12 15l-1.8-4.6L5.5 9l4.7-1.4z'/><path d='M18 15l.9 2.1L21 18l-2.1.9L18 21l-.9-2.1L15 18l2.1-.9z'/></svg>",
+	"board": "<svg viewBox='0 0 24 24' fill='none' stroke='#fff' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><rect x='4' y='3' width='16' height='18' rx='2'/><path d='M8 8h8'/><path d='M8 12h8'/><path d='M8 16h5'/></svg>",
 }
 
 static var _glyph_cache := {}
@@ -81,6 +87,12 @@ var _submit_spinner: ActionsSpinner
 var _is_improving := false
 var _improve_call := 0
 var _is_submitting := false
+var _tab := "actions"
+var _tab_buttons := {}
+var _project_count := 0
+var _orders: VBoxContainer
+var _board_holder: VBoxContainer
+var _board: ProjectsPanel
 
 
 func _init() -> void:
@@ -118,6 +130,22 @@ func _init() -> void:
 	_notes_margin.visible = false
 	column.add_child(_notes_margin)
 	column.add_child(_build_composer())
+	_orders = VBoxContainer.new()
+	_orders.add_theme_constant_override("separation", 0)
+	_orders.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	var at := scroll.get_index()
+	for part in [scroll, _notes_margin, column.get_child(column.get_child_count() - 1)]:
+		column.remove_child(part)
+		_orders.add_child(part)
+	column.add_child(_orders)
+	column.move_child(_orders, at)
+	_board_holder = VBoxContainer.new()
+	_board_holder.add_theme_constant_override("separation", 0)
+	_board_holder.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_board_holder.visible = false
+	column.add_child(_board_holder)
+	column.move_child(_board_holder, at + 1)
+	_build_tabs()
 	_poll = Timer.new()
 	_poll.wait_time = 0.8
 	_poll.timeout.connect(_on_poll)
@@ -136,6 +164,8 @@ func _ready() -> void:
 func setup(link: EngineLink, ctx: Dictionary = {}) -> void:
 	engine = link
 	context = ctx
+	if _board:
+		_board.setup(link, ctx)
 
 
 func open() -> void:
@@ -155,6 +185,8 @@ func set_open(open: bool) -> void:
 	tween.tween_property(self, "offset_bottom", -BOTTOM_GAP if open else 200.0 + height, 0.35)
 	tween.tween_property(self, "modulate:a", 1.0 if open else 0.0, 0.35)
 	mouse_filter = Control.MOUSE_FILTER_STOP if open else Control.MOUSE_FILTER_IGNORE
+	if _board:
+		_board.set_open(open and _tab == "projects")
 	if open and not was:
 		_has_requested = false
 		_suggestion_error = ""
@@ -176,6 +208,8 @@ func refresh(force := true) -> void:
 	var reply: Dictionary = await engine.request("actions.read", {"force": force})
 	if reply.get("ok", false):
 		_apply_view(reply["result"])
+	if _board and _board.is_open():
+		await _board.refresh()
 
 
 func _restyle_close() -> void:
@@ -199,6 +233,125 @@ func _restyle_close() -> void:
 		close_button.add_theme_color_override(slot, UI.WHITE)
 
 
+func _build_tabs() -> void:
+	header_title.visible = false
+	var row := header_extra.get_parent() as HBoxContainer
+	var header := row.get_parent() as MarginContainer
+	for side in [["margin_left", 16], ["margin_right", 16], ["margin_top", 13], ["margin_bottom", 10]]:
+		header.add_theme_constant_override(side[0], side[1])
+	var close_button := row.get_child(header_extra.get_index() + 1) as Control
+	if close_button:
+		close_button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	var strip := HBoxContainer.new()
+	strip.add_theme_constant_override("separation", 6)
+	for entry in ACTIONS_TABS:
+		var tab := _tab_button(entry[0], entry[1])
+		strip.add_child(tab)
+		_tab_buttons[entry[0]] = tab
+	var titles := header_title.get_parent()
+	titles.add_child(strip)
+	titles.move_child(strip, 0)
+	_style_tabs()
+
+
+func _tab_button(key: String, caption_text: String) -> Button:
+	var tab := Button.new()
+	tab.focus_mode = Control.FOCUS_NONE
+	tab.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	var holder := MarginContainer.new()
+	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	for side in [["margin_left", 12], ["margin_right", 12], ["margin_top", 6], ["margin_bottom", 6]]:
+		holder.add_theme_constant_override(side[0], side[1])
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 6)
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var glyph := TextureRect.new()
+	glyph.name = "Glyph"
+	glyph.texture = _glyph("board" if key == "projects" else "orders", 13, UI.WHITE)
+	glyph.custom_minimum_size = Vector2(13, 13)
+	glyph.stretch_mode = TextureRect.STRETCH_KEEP_CENTERED
+	glyph.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	glyph.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(glyph)
+	var caption := UI.label(caption_text, 13, Color(1, 1, 1, 0.48), 750)
+	caption.name = "Caption"
+	caption.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	row.add_child(caption)
+	var count := PanelContainer.new()
+	count.name = "Count"
+	count.custom_minimum_size = Vector2(17, 17)
+	count.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	count.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	var count_label := UI.label("", 9, Color(1, 1, 1, 0.6), 800)
+	count_label.name = "Value"
+	count_label.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+	count_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	count_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	count.add_child(count_label)
+	count.visible = false
+	row.add_child(count)
+	holder.add_child(row)
+	holder.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	tab.add_child(holder)
+	tab.custom_minimum_size = Vector2(row.get_combined_minimum_size().x + 26, 29)
+	tab.pressed.connect(func() -> void: set_tab(key))
+	return tab
+
+
+func _style_tabs() -> void:
+	for key in _tab_buttons:
+		var tab: Button = _tab_buttons[key]
+		var chosen: bool = key == _tab
+		var style := UI.box(GREY_SELECTED if chosen else Color(1, 1, 1, 0.025), GREY_BORDER_STRONG if chosen else Color(1, 1, 1, 0.07), 8, 1)
+		for state in ["normal", "hover", "pressed", "hover_pressed", "focus", "disabled"]:
+			tab.add_theme_stylebox_override(state, style)
+		var ink := UI.WHITE if chosen else Color(1, 1, 1, 0.48)
+		var caption := tab.find_child("Caption", true, false) as Label
+		caption.add_theme_color_override("font_color", ink)
+		(tab.find_child("Glyph", true, false) as TextureRect).self_modulate = Color(ink.r, ink.g, ink.b, ink.a * 0.8)
+		var count_holder := tab.find_child("Count", true, false) as PanelContainer
+		var count_value := count_holder.find_child("Value", true, false) as Label
+		count_holder.visible = key == "projects" and _project_count > 0
+		count_value.text = str(_project_count)
+		count_value.add_theme_color_override("font_color", UI.WHITE if chosen else Color(1, 1, 1, 0.6))
+		count_holder.add_theme_stylebox_override("panel", UI.box(Color(1, 1, 1, 0.14) if chosen else Color(1, 1, 1, 0.08), Color(0, 0, 0, 0), 999, 0, Vector4(4, 0, 4, 0)))
+		var row := caption.get_parent() as HBoxContainer
+		tab.custom_minimum_size.x = row.get_combined_minimum_size().x + 26
+
+
+func _set_project_count(count: int) -> void:
+	if count == _project_count:
+		return
+	_project_count = count
+	_style_tabs()
+
+
+func current_tab() -> String:
+	return _tab
+
+
+func set_tab(key: String) -> void:
+	if not (key in ["actions", "projects"]):
+		return
+	_tab = key
+	var on_board := key == "projects"
+	if on_board and _board == null:
+		_board = ProjectsPanel.new()
+		_board.setup(engine, context)
+		_board.open_advisor.connect(func(text: String) -> void: open_advisor.emit(text))
+		_board.show_on_map.connect(func(lng: float, lat: float, zoom: float) -> void: show_on_map.emit(lng, lat, zoom))
+		_board_holder.add_child(_board)
+	_orders.visible = not on_board
+	_board_holder.visible = on_board
+	if _board:
+		_board.set_open(_open and on_board)
+	_style_tabs()
+
+
+func board() -> ProjectsPanel:
+	return _board
+
+
 func _height() -> float:
 	var viewport_height := get_viewport_rect().size.y if is_inside_tree() else 900.0
 	return maxf(160.0, minf(viewport_height - 144.0, maxf(viewport_height - 256.0, 480.0)))
@@ -212,6 +365,7 @@ func _apply_view(view: Variant) -> void:
 	_turn_running = bool(_view.get("busy", false))
 	_logging_on = bool(_view.get("loggingOn", _logging_on))
 	_last_round = int(_view.get("round", 0))
+	_set_project_count(int(_view.get("projectCount", _project_count)))
 	_render_goal()
 	_render_sections()
 	_render_notes()
@@ -229,6 +383,7 @@ func _on_poll() -> void:
 	var busy := bool(state.get("busy", false))
 	var current_round := int(state.get("round", 0))
 	var stamp := str(state.get("stamp", ""))
+	_set_project_count(int(state.get("projectCount", _project_count)))
 	if current_round > 0 and _last_round > 0 and current_round != _last_round:
 		_last_round = current_round
 		await refresh(true)

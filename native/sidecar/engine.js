@@ -357,3 +357,4 @@ export * as mpRelays from "../../src/multiplayer/signaling/relays.js";
 export const mpLoadEngineMain = () => import("../../src/multiplayer/host/engineMain.js");
 export * as mpLoopback from "../../src/multiplayer/transport/loopback.js";
 export * as chPeacePlacement from "../../src/Game/GameUI/peacePlacement.js";
+export * as socialFeed from "../../src/runtime/socialFeed.js";

@@ -255,7 +255,7 @@ const INVOKABLE = {
     "setAsideActiveInteractive", "runChatActionBatch", "checkDemandReply", "ensureCountryAssessed", "processPendingEventOutreach",
     "generateActionSuggestions", "refinePlayerAction", "previewGameMasterCommand", "applyGameMasterPreview", "consolidateHistoryNow",
     "ensureIntelligenceRated", "ensureMilitaryFigures", "readOpenedIntercepts", "generateCountryStatSheet", "pendingCountryStatSheet",
-    "generateCountryStats", "generateListenInFeed", "generateWarRoomReply", "warRoomRouteAttacks", "warRoomTransportWays", "warRoomChart",
+    "generateCountryStats", "generatePlaceFeed", "generateWarRoomReply", "warRoomRouteAttacks", "warRoomTransportWays", "warRoomChart",
     "maybeSendIdleDiplomacy", "maybeGatherIntelligence", "prethinkFronts", "warRoomRehearse",
   ],
   gameState: [
