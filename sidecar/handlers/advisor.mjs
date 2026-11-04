@@ -381,6 +381,8 @@ export const register = (ctx) => {
   const gameState = engine.gameState;
   const urls = engine.JSON_URLS;
   const dates = engine.gameDates;
+  const threads = engine.advisorThreads;
+  const CHIEF = threads.CHIEF_ADVISOR_THREAD;
   let loadFailed = false;
   let storedNotices = [];
   let lastNoticeViews = "";
@@ -513,15 +515,66 @@ export const register = (ctx) => {
     }
   };
 
-  const saveMessages = async (messages) => {
+  const saveMessages = async (messages, threadId = CHIEF, options = {}) => {
     if (loadFailed) return { saved: false, blocked: true };
     try {
-      await engine.assets.writeJson(urls.advisor, messages);
+      await gameState.mutateAdvisorState((stored) => threads.replaceAdvisorThread(stored, threadId, messages, options));
       return { saved: true, blocked: false };
     } catch (error) {
-      console.error("Failed to save messages:", error?.message ?? error);
+      console.error("Failed to save advisor conversation:", error?.message ?? error);
       return { saved: false, blocked: false };
     }
+  };
+
+  const readPolity = async () => {
+    const game = await engine.readJson(urls.game, { defaultValue: {}, force: false }).catch(() => ({}));
+    return String(game?.country || "");
+  };
+
+  const contactsOf = async (saved, worldIn = null) => {
+    const world = worldIn ?? await readWorld();
+    const polity = await readPolity();
+    const government = engine.polActors.getPoliticalProfile(world || {}, polity)?.government ?? null;
+    const political = government ? { politicalActors: { byPolity: { [polity]: { polityKey: polity, government } } } } : {};
+    return {
+      contacts: threads.advisorContacts(saved).map((contact) => ({
+        id: contact.id,
+        name: String(contact.name ?? ""),
+        title: String(contact.title ?? ""),
+        personality: String(contact.personality ?? ""),
+        archived: Boolean(contact.archived),
+        binding: contact.binding ?? null,
+        status: threads.advisorOfficeStatus(contact, political),
+      })),
+      offices: threads.politicalAdvisorOffices(political, polity),
+    };
+  };
+
+  let lastContacts = "";
+  const pushContacts = async (saved = null) => {
+    let stored = saved;
+    if (stored === null) {
+      try {
+        stored = await gameState.readAdvisorMessages();
+      } catch {
+        return;
+      }
+    }
+    const view = await contactsOf(stored);
+    const payload = JSON.stringify(view);
+    if (payload === lastContacts) return;
+    lastContacts = payload;
+    emit("advisor.contacts", plain(view));
+  };
+
+  const threadOf = (threadId) => String(threadId || CHIEF);
+
+  const contactMutation = async (change) => {
+    await gameState.mutateAdvisorState(change);
+    const saved = await gameState.readAdvisorMessages({ force: true });
+    const view = await contactsOf(saved);
+    lastContacts = JSON.stringify(view);
+    return view;
   };
 
   const readSeenMoment = async (gameDate) => {
@@ -664,9 +717,11 @@ export const register = (ctx) => {
       if (event?.detail?.url !== urls.advisor) return;
       storedNotices = noticesOf(event.detail.value);
       scheduleNotices();
+      if (lastContacts) pushContacts(list(event.detail.value)).catch(() => {});
     });
     globalThis.addEventListener("oh:world-updated", (event) => {
       if (storedNotices.length) scheduleNotices();
+      if (lastContacts) pushContacts().catch(() => {});
       const world = event?.detail?.world;
       if (!world || lastAllowed === null) return;
       const allowed = Array.isArray(world.allowedUnitTypes) ? world.allowedUnitTypes.join(",") : "";
@@ -680,28 +735,58 @@ export const register = (ctx) => {
   }
 
   return {
-    "advisor.load": async ({ restore = true } = {}) => {
+    "advisor.load": async ({ restore = true, threadId = CHIEF } = {}) => {
+      const thread = threadOf(threadId);
       const saved = await loadMessages();
+      const messages = saved === null ? [] : threads.advisorMessagesFor(saved, thread);
       if (restore) {
-        if (saved?.length > 0) engine.aiMain.loadHistory(saved);
-        else engine.aiMain.startChat();
+        if (saved !== null) engine.aiMain.loadHistory(messages, thread);
+        else engine.aiMain.startChat(thread);
       }
-      const messages = saved ?? [];
-      storedNotices = noticesOf(messages);
+      storedNotices = noticesOf(saved ?? []);
       lastNoticeViews = "";
       const world = await readWorld();
       lastAllowed = Array.isArray(world?.allowedUnitTypes) ? world.allowedUnitTypes.join(",") : "";
+      const people = await contactsOf(saved ?? [], world);
+      lastContacts = JSON.stringify(people);
       return plain({
         failed: saved === null,
         messages,
         views: await viewsOf(messages),
+        ...people,
         ...flags(),
       });
     },
-    "advisor.history": async ({ messages = [], json = "" } = {}) => {
+    "advisor.select": async ({ threadId = CHIEF } = {}) => {
+      const thread = threadOf(threadId);
+      const saved = await gameState.readAdvisorMessages({ force: true });
+      if (thread !== CHIEF && !threads.advisorContacts(saved).some((contact) => contact.id === thread)) {
+        throw new Error("The selected Advisor recipient no longer exists.");
+      }
+      const messages = threads.advisorMessagesFor(saved, thread);
+      engine.aiMain.loadHistory(messages, thread);
+      const people = await contactsOf(saved);
+      lastContacts = JSON.stringify(people);
+      return plain({ messages, views: await viewsOf(messages), ...people });
+    },
+    "advisor.contacts": async () => {
+      const saved = await gameState.readAdvisorMessages();
+      const people = await contactsOf(saved);
+      lastContacts = JSON.stringify(people);
+      return plain(people);
+    },
+    "advisor.contact.create": async ({ draft = {} } = {}) => {
+      const random = globalThis.crypto?.randomUUID?.().replace(/-/g, "")
+        || `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 15)}`;
+      const id = `advisor-${random}`;
+      const people = await contactMutation((all) => threads.createAdvisorContact(all, { ...draft, id }));
+      return plain({ id, ...people });
+    },
+    "advisor.contact.revise": async ({ id = "", draft = {} } = {}) => plain(await contactMutation((all) => threads.reviseAdvisorContact(all, String(id), draft))),
+    "advisor.contact.archive": async ({ id = "", archived = true } = {}) => plain(await contactMutation((all) => threads.archiveAdvisorContact(all, String(id), Boolean(archived)))),
+    "advisor.history": async ({ messages = [], json = "", threadId = CHIEF } = {}) => {
       messages = fromWire(json, messages);
-      if (list(messages).length) engine.aiMain.loadHistory(list(messages));
-      else engine.aiMain.startChat();
+      engine.aiMain.loadHistory(list(messages), threadOf(threadId));
       return true;
     },
     "advisor.views": async ({ messages = [], json = "" } = {}) => plain({ views: await viewsOf(fromWire(json, messages)) }),
@@ -718,7 +803,7 @@ export const register = (ctx) => {
       lastNoticeViews = JSON.stringify([storedNotices, views]);
       return plain({ notices: storedNotices, views, ...flags() });
     },
-    "advisor.save": async ({ messages = [], json = "" } = {}) => saveMessages(list(fromWire(json, messages))),
+    "advisor.save": async ({ messages = [], json = "", threadId = CHIEF, clearNotices = false } = {}) => saveMessages(list(fromWire(json, messages)), threadOf(threadId), { clearNotices: Boolean(clearNotices) }),
     "advisor.report": async ({ kind = "", title = "", fields = [] } = {}) => {
       const debugLog = engine.debugLog;
       const incident = { kind: String(kind), title: String(title), fields: list(fields).filter(Array.isArray) };
@@ -743,9 +828,10 @@ export const register = (ctx) => {
       const text = debugLog?.buildIncidentReport?.(incident) ?? "";
       return { loggingOn, state: text ? "copied" : "failed", text };
     },
-    "advisor.clear": async () => {
-      engine.aiMain.startChat();
-      return saveMessages([]);
+    "advisor.clear": async ({ threadId = CHIEF } = {}) => {
+      const thread = threadOf(threadId);
+      engine.aiMain.startChat(thread);
+      return saveMessages([], thread, { clearNotices: true });
     },
     "advisor.width": async ({ width } = {}) => {
       const value = Math.round(Number(width) || 0);
@@ -756,8 +842,15 @@ export const register = (ctx) => {
       const saved = Number(storage.getItem("oh-advisor-width"));
       return Number.isFinite(saved) && saved > 0 ? saved : 0;
     },
-    "advisor.ask": async ({ text = "", messages = [], json = "", retry = false, token = "" } = {}) => {
+    "advisor.ask": async ({ text = "", messages = [], json = "", retry = false, token = "", threadId = CHIEF } = {}) => {
       messages = fromWire(json, messages);
+      const thread = threadOf(threadId);
+      let recipient = null;
+      if (thread !== CHIEF) {
+        const saved = await gameState.readAdvisorMessages().catch(() => []);
+        recipient = threads.advisorContacts(saved).find((contact) => contact.id === thread && !contact.archived) || null;
+        if (!recipient) return plain({ unavailable: true, problem: "This recipient is unavailable." });
+      }
       const question = String(text ?? "");
       const transcript = list(messages);
       const library = engine.getLibraryState();
@@ -803,7 +896,7 @@ export const register = (ctx) => {
       };
 
       try {
-        const raw = await engine.aiMain.sendMessage(question, { onChunk, catchUp: catchUp.text });
+        const raw = await engine.aiMain.sendMessage(question, { threadId: thread, recipient, onChunk, catchUp: catchUp.text });
         stopChunks();
         if (leftCampaign()) {
           console.warn("[advisor] Advisor reply dropped: the campaign was switched while it was being written, so none of its orders or projects were applied.");
@@ -816,30 +909,36 @@ export const register = (ctx) => {
         const { chartProblem, draftProblems, institutionDraftProblems, deployProblems } = engine.advisorReply.parseAdvisorReply(reply, {
           allowedUnitTypes: Array.isArray(moment.world?.allowedUnitTypes) ? moment.world.allowedUnitTypes : null,
         });
-        const actionsSummary = await applyAdvisorActions(actionsProposal, actionsProblems, gameRound).catch((error) => {
-          console.error("Failed to apply advisor-proposed actions:", error?.message ?? error);
-          return null;
-        });
+        const actionsSummary = thread === CHIEF
+          ? await applyAdvisorActions(actionsProposal, actionsProblems, gameRound).catch((error) => {
+            console.error("Failed to apply advisor-proposed actions:", error?.message ?? error);
+            return null;
+          }) : null;
         const { json: projectsProposal, truncated: projectsTruncated, reason: projectsReason,
           dropped: projectsDropped, excerpt: projectsExcerpt } = blocks.extractFencedJson(reply, "projects", { salvageTruncated: true });
-        const projectsSummary = await applyAdvisorProjects(projectsProposal, gameDate, gameRound).catch((error) => {
-          console.error("Failed to apply advisor-proposed projects:", error?.message ?? error);
-          return null;
-        });
-        const projectsProblem = projectsSummary
-          ? (projectsTruncated ? "truncated" : (projectsDropped > 0 ? "partial" : ""))
-          : (blocks.looksLikeProjectOps(reply) ? (projectsTruncated ? "truncated-empty" : "unusable") : "");
+        const projectsSummary = thread === CHIEF
+          ? await applyAdvisorProjects(projectsProposal, gameDate, gameRound).catch((error) => {
+            console.error("Failed to apply advisor-proposed projects:", error?.message ?? error);
+            return null;
+          }) : null;
+        const projectsProblem = thread !== CHIEF ? ""
+          : projectsSummary
+            ? (projectsTruncated ? "truncated" : (projectsDropped > 0 ? "partial" : ""))
+            : (blocks.looksLikeProjectOps(reply) ? (projectsTruncated ? "truncated-empty" : "unusable") : "");
         const projectsDetail = projectsProblem === "partial"
           ? `${projectsDropped} entr${projectsDropped === 1 ? "y was" : "ies were"} malformed and skipped.`
           : projectsProblem === "unusable"
             ? (projectsReason || "every entry referred to a project that is not on the board")
             : "";
         const projectsExcerptText = (projectsProblem === "unusable" || projectsProblem === "partial") ? projectsExcerpt : "";
+        const unapproved = thread !== CHIEF && Boolean(actionsProposal || projectsProposal);
         const finalMessage = {
           role: "advisor",
           text: reply,
           time: askedOn,
+          ...(unapproved ? { suggestionsNotApplied: true } : {}),
           at: new Date().toISOString(),
+
           ...(memory ? { memory } : {}),
           ...(chartProblem ? { chartProblem } : {}),
           ...(actionsProblems.length ? { actionsProblems } : {}),

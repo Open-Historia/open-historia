@@ -43,6 +43,13 @@ const QUOTE := Vector2(8.8, 8.8)
 const RULE := Vector2(13.6, 13.6)
 const CODE := Vector2(8.0, 8.0)
 const TABLE := Vector2(8.8, 8.8)
+const CHIEF_THREAD := "chief"
+const PERSONALITY_MAX := 1200
+const RECIPIENT_BG := Color(1, 1, 1, 0.06)
+const RECIPIENT_BORDER := Color(1, 1, 1, 0.17)
+const RECIPIENT_PICKED := Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.24)
+const RECIPIENT_INK := Color("#e2e8f0")
+const RECIPIENT_SUBTLE := Color(1, 1, 1, 0.5)
 
 static var _italic_fonts := {}
 static var _mono_font: Font
@@ -84,6 +91,22 @@ var _states := {}
 var _live_hooks: Array = []
 var _build_hooks: Array = []
 var _inner_hooks: Array = []
+var contacts: Array = []
+var offices: Array = []
+var active_thread := CHIEF_THREAD
+var _thread_drafts := {}
+var _thread_switching := false
+var _contacts_busy := false
+var _side_effects := 0
+var _recipients_holder: VBoxContainer
+var _recipients_open := false
+var _recipient_editor := ""
+var _recipient_draft := {}
+var _recipient_show_archived := false
+var _recipient_confirm := ""
+var _recipient_error := ""
+var _recipient_saving := false
+var _recipient_list: ScrollContainer
 
 var _clear_button: Button
 var _strip_holder: VBoxContainer
@@ -121,6 +144,10 @@ func _init() -> void:
 	set_meta("width", DEFAULT_WIDTH)
 	_build_header()
 	var column: Node = scroll.get_parent()
+	_recipients_holder = VBoxContainer.new()
+	_recipients_holder.add_theme_constant_override("separation", 0)
+	column.add_child(_recipients_holder)
+	column.move_child(_recipients_holder, scroll.get_index())
 	_strip_holder = VBoxContainer.new()
 	_strip_holder.add_theme_constant_override("separation", 0)
 	column.add_child(_strip_holder)
@@ -273,7 +300,8 @@ func refresh() -> void:
 	if reply.get("ok", false):
 		var result: Dictionary = reply.get("result", {})
 		_apply_flags(result)
-		_merge_notices(result.get("notices", []), result.get("views", []))
+		if active_thread == CHIEF_THREAD:
+			_merge_notices(result.get("notices", []), result.get("views", []))
 
 
 func reset() -> void:
@@ -287,9 +315,18 @@ func reset() -> void:
 	_load_failed = false
 	_save_failed = false
 	_pending_seeds = []
+	contacts = []
+	offices = []
+	active_thread = CHIEF_THREAD
+	_thread_drafts = {}
+	_recipients_open = false
+	_recipient_editor = ""
+	_recipient_error = ""
+	_recipient_confirm = ""
 	_input.text = ""
 	_resize_input()
 	_render_strip()
+	_render_recipients()
 	_render()
 
 
@@ -340,8 +377,11 @@ func _ensure_bootstrap() -> void:
 	views = (result.get("views", []) as Array).duplicate()
 	while views.size() < messages.size():
 		views.append({})
+	_take_contacts(result)
 	_has_bootstrapped = true
 	_render_strip()
+	_render_recipients()
+	_apply_composer()
 	_render()
 	for text in _pending_seeds:
 		_apply_seed(text)
@@ -388,8 +428,13 @@ func _on_engine_event(event_name: String, data: Variant) -> void:
 		_render_live()
 		_follow()
 	elif event_name == "advisor.notices":
-		if _has_bootstrapped:
+		if _has_bootstrapped and active_thread == CHIEF_THREAD:
 			_merge_notices(payload.get("notices", []), payload.get("views", []))
+	elif event_name == "advisor.contacts":
+		if _has_bootstrapped:
+			_take_contacts(payload)
+			_render_recipients()
+			_apply_composer()
 	elif event_name == "advisor.allowed":
 		if _has_bootstrapped:
 			_refresh_views()
@@ -486,10 +531,12 @@ func _storage_strip(title: String, detail: String, on_retry: Callable) -> Contro
 func _retry_load() -> void:
 	_storage_retrying = true
 	_render_strip()
-	var reply: Dictionary = await engine.request("advisor.load", {"restore": false})
+	var thread := active_thread
+	var reply: Dictionary = await engine.request("advisor.load", {"restore": false, "threadId": thread})
 	var result: Dictionary = reply.get("result", {}) if reply.get("ok", false) else {}
 	if not result.is_empty() and not bool(result.get("failed", true)):
 		_load_failed = false
+		_take_contacts(result)
 		var saved: Array = result.get("messages", [])
 		var saved_views: Array = result.get("views", [])
 		var stored_ids := {}
@@ -513,19 +560,23 @@ func _retry_load() -> void:
 		messages = merged
 		views = merged_views
 		_render()
-		await engine.request("advisor.history", {"json": _wire(messages)})
+		await engine.request("advisor.history", {"json": _wire(messages), "threadId": thread})
 		if said > 0:
 			await _save()
 	_storage_retrying = false
 	_render_strip()
+	_render_recipients()
+	_update_send()
 
 
 func _retry_save() -> void:
 	_storage_retrying = true
 	_render_strip()
+	_render_recipients()
 	await _save()
 	_storage_retrying = false
 	_render_strip()
+	_render_recipients()
 
 
 func _save() -> void:
@@ -535,7 +586,7 @@ func _save() -> void:
 	_saving = true
 	while true:
 		_save_again = false
-		var reply: Dictionary = await engine.request("advisor.save", {"json": _wire(messages)})
+		var reply: Dictionary = await engine.request("advisor.save", {"json": _wire(messages), "threadId": active_thread})
 		if reply.get("ok", false):
 			var result: Dictionary = reply.get("result", {})
 			if not bool(result.get("blocked", false)):
@@ -552,6 +603,8 @@ func _set_save_failed(failed: bool) -> void:
 		return
 	_save_failed = failed
 	_render_strip()
+	_render_recipients()
+	_update_send()
 
 
 func _style_clear_button() -> void:
@@ -559,25 +612,27 @@ func _style_clear_button() -> void:
 		_clear_button.text = "Clear?"
 		_clear_button.tooltip_text = "Tap again to clear the chat"
 		var style := UI.box(Color(239 / 255.0, 68 / 255.0, 68 / 255.0, 0.18), Color(239 / 255.0, 68 / 255.0, 68 / 255.0, 0.55), 8, 1, Vector4(10, 2, 10, 2))
-		for state in ["normal", "hover", "pressed", "focus", "hover_pressed"]:
+		for state in ["normal", "hover", "pressed", "focus", "hover_pressed", "disabled"]:
 			_clear_button.add_theme_stylebox_override(state, style)
 		_clear_button.add_theme_font_override("font", UI.font(600))
 		_clear_button.add_theme_font_size_override("font_size", 13)
-		for name in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_hover_pressed_color"]:
+		for name in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_hover_pressed_color", "font_disabled_color"]:
 			_clear_button.add_theme_color_override(name, Color("#fca5a5"))
 	else:
 		_clear_button.text = "🗑"
 		_clear_button.tooltip_text = "Clear chat"
 		var empty := StyleBoxEmpty.new()
-		for state in ["normal", "hover", "pressed", "focus", "hover_pressed"]:
+		for state in ["normal", "hover", "pressed", "focus", "hover_pressed", "disabled"]:
 			_clear_button.add_theme_stylebox_override(state, empty)
 		_clear_button.add_theme_font_override("font", UI.font(400))
 		_clear_button.add_theme_font_size_override("font_size", 22)
-		for name in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_hover_pressed_color"]:
+		for name in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_hover_pressed_color", "font_disabled_color"]:
 			_clear_button.add_theme_color_override(name, Color(1, 1, 1, 0.4))
 
 
 func _on_clear_pressed() -> void:
+	if not _has_bootstrapped or _load_failed or _save_failed or _contacts_busy or _turn_in_flight or _side_effects > 0 or _thread_switching:
+		return
 	if _touch and not _confirming_clear:
 		_confirming_clear = true
 		_style_clear_button()
@@ -591,7 +646,9 @@ func _on_clear_pressed() -> void:
 	_render()
 	if engine == null:
 		return
-	var reply: Dictionary = await engine.request("advisor.clear")
+	_thread_switching = true
+	var reply: Dictionary = await engine.request("advisor.clear", {"threadId": active_thread})
+	_thread_switching = false
 	if reply.get("ok", false):
 		var result: Dictionary = reply.get("result", {})
 		if not bool(result.get("blocked", false)):
@@ -671,9 +728,11 @@ func _resize_input() -> void:
 func _update_send() -> void:
 	if _send_button == null:
 		return
-	var blocked := _loading or _input.text.strip_edges().is_empty()
+	var blocked := _loading or _recipient_locked() or not _has_bootstrapped or _load_failed or _save_failed or _input.text.strip_edges().is_empty()
 	_send_button.disabled = blocked
-	_send_button.mouse_default_cursor_shape = Control.CURSOR_FORBIDDEN if blocked else Control.CURSOR_POINTING_HAND
+	_send_button.mouse_default_cursor_shape = Control.CURSOR_FORBIDDEN if _loading or _input.text.strip_edges().is_empty() else Control.CURSOR_POINTING_HAND
+	if _clear_button:
+		_clear_button.disabled = not _has_bootstrapped or _load_failed or _loading or _side_effects > 0
 
 
 func _on_input_key(event: InputEvent) -> void:
@@ -692,7 +751,7 @@ func _on_input_key(event: InputEvent) -> void:
 
 func _send_from_composer() -> void:
 	var text := _input.text.strip_edges()
-	if text.is_empty() or _turn_in_flight:
+	if text.is_empty() or not _has_bootstrapped or _load_failed or _save_failed or _turn_in_flight or _contacts_busy or _thread_switching or _recipient_locked():
 		return
 	_input.text = ""
 	_resize_input()
@@ -713,7 +772,7 @@ func _retry_turn() -> void:
 
 
 func _run_turn(text: String, retry: bool) -> void:
-	if text.is_empty() or _turn_in_flight or engine == null:
+	if text.is_empty() or not _has_bootstrapped or _load_failed or _save_failed or _turn_in_flight or _contacts_busy or _thread_switching or _recipient_locked() or engine == null:
 		return
 	_turn_in_flight = true
 	_set_loading(true)
@@ -725,6 +784,7 @@ func _run_turn(text: String, retry: bool) -> void:
 func _set_loading(loading: bool) -> void:
 	_loading = loading
 	_update_send()
+	_render_recipients()
 	_render(false)
 
 
@@ -732,11 +792,14 @@ func _ask(text: String, retry: bool) -> void:
 	_token = "%d-%d" % [Time.get_ticks_usec(), randi()]
 	var token := _token
 	_auto_scroll = true
-	var reply: Dictionary = await engine.request("advisor.ask", {"text": text, "json": _wire(messages), "retry": retry, "token": token})
+	var reply: Dictionary = await engine.request("advisor.ask", {"text": text, "json": _wire(messages), "retry": retry, "token": token, "threadId": active_thread})
 	if token != _token:
 		return
 	_token = ""
 	_live = {}
+	if reply.get("ok", false) and bool((reply.get("result", {}) as Dictionary).get("unavailable", false)):
+		_render()
+		return
 	if not reply.get("ok", false):
 		var failed := {"role": "error", "text": str(reply.get("error", "")), "time": ""}
 		messages.append(failed)
@@ -920,7 +983,7 @@ func _set_dots(running: bool) -> void:
 func _thinking_row() -> Control:
 	var row := VBoxContainer.new()
 	row.add_theme_constant_override("separation", 4)
-	row.add_child(_tagged("🧭", " Advisor", 11, Color(1, 1, 1, 0.4)))
+	row.add_child(_speaker_tag())
 	var bubble := PanelContainer.new()
 	var style := UI.box(Color(1, 1, 1, 0.08), Color(0, 0, 0, 0), 12, 0, Vector4(14, 10, 14, 10))
 	style.corner_radius_bottom_left = 4
@@ -932,6 +995,510 @@ func _thinking_row() -> Control:
 	bubble.add_child(_dots_label)
 	row.add_child(bubble)
 	return row
+
+
+func _take_contacts(result: Dictionary) -> void:
+	if typeof(result.get("contacts")) == TYPE_ARRAY:
+		contacts = (result["contacts"] as Array).duplicate(true)
+	if typeof(result.get("offices")) == TYPE_ARRAY:
+		offices = (result["offices"] as Array).duplicate(true)
+
+
+func _selected_contact() -> Dictionary:
+	if active_thread == CHIEF_THREAD:
+		return {}
+	for item in contacts:
+		var contact: Dictionary = item
+		if str(contact.get("id", "")) == active_thread:
+			return contact
+	return {}
+
+
+func _recipient_locked() -> bool:
+	return bool(_selected_contact().get("archived", false))
+
+
+func _speaker_tag() -> HBoxContainer:
+	var contact := _selected_contact()
+	if contact.is_empty():
+		return _tagged("🧭", " Advisor", 11, Color(1, 1, 1, 0.4))
+	var tag := _tagged("🧭", " " + str(contact.get("name", "")), 11, Color(1, 1, 1, 0.4))
+	tag.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+	return tag
+
+
+func _side_effect(step: int) -> void:
+	_side_effects = max(0, _side_effects + step)
+	_update_send()
+	_render_recipients()
+
+
+func _recipients_busy() -> bool:
+	return not _has_bootstrapped or _loading or _contacts_busy or _side_effects > 0 or _save_failed or _storage_retrying or _thread_switching or _load_failed
+
+
+func _apply_composer() -> void:
+	if _input == null:
+		return
+	var contact := _selected_contact()
+	if _recipient_locked():
+		_input.placeholder_text = "This contact is retired — restore to reply"
+	elif not contact.is_empty():
+		_input.placeholder_text = I18n.ui("Message {{name}}…", {"name": str(contact.get("name", ""))})
+	else:
+		_input.placeholder_text = "Ask your advisor…" if _touch else "Ask your advisor…  (Shift+Enter for a new line)"
+	_input.editable = not _recipient_locked()
+	_resize_input()
+	_update_send()
+
+
+func _recipient_button(text: String, picked := false, left := false) -> Button:
+	var button := Button.new()
+	button.text = text
+	button.focus_mode = Control.FOCUS_NONE
+	button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	button.alignment = HORIZONTAL_ALIGNMENT_LEFT if left else HORIZONTAL_ALIGNMENT_CENTER
+	button.add_theme_font_override("font", UI.font(400))
+	button.add_theme_font_size_override("font_size", 12)
+	var style := UI.box(RECIPIENT_PICKED if picked else RECIPIENT_BG, RECIPIENT_BORDER, 7, 1, Vector4(9, 6, 9, 6))
+	for state in ["normal", "hover", "pressed", "focus", "hover_pressed", "disabled"]:
+		button.add_theme_stylebox_override(state, style)
+	for name in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_hover_pressed_color", "font_disabled_color"]:
+		button.add_theme_color_override(name, RECIPIENT_INK)
+	return button
+
+
+func _recipient_field(value: String, limit: int) -> LineEdit:
+	var field := LineEdit.new()
+	field.text = value
+	field.max_length = limit
+	field.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	field.add_theme_font_override("font", UI.font(400))
+	field.add_theme_font_size_override("font_size", 12)
+	field.add_theme_color_override("font_color", Color("#f8fafc"))
+	field.add_theme_color_override("font_uneditable_color", Color("#f8fafc"))
+	field.add_theme_color_override("caret_color", UI.WHITE)
+	var style := UI.box(Color(0, 0, 0, 0.22), RECIPIENT_BORDER, 7, 1, Vector4(7, 6, 7, 6))
+	for state in ["normal", "focus", "read_only"]:
+		field.add_theme_stylebox_override(state, style)
+	return field
+
+
+func _recipient_label(text: String) -> Label:
+	var label := UI.wrapped(text, 11, RECIPIENT_SUBTLE)
+	return label
+
+
+func _render_recipients() -> void:
+	if _recipients_holder == null:
+		return
+	var keep := _recipient_list.scroll_vertical if is_instance_valid(_recipient_list) else 0
+	for child in _recipients_holder.get_children():
+		_recipients_holder.remove_child(child)
+		child.queue_free()
+	_recipient_list = null
+	var busy := _recipients_busy()
+	var section := PanelContainer.new()
+	var section_style := UI.box(Color(0, 0, 0, 0), Color(0, 0, 0, 0), 0, 0, Vector4(10, 6, 10, 6))
+	section_style.border_color = Color(1, 1, 1, 0.1)
+	section_style.border_width_bottom = 1
+	section.add_theme_stylebox_override("panel", section_style)
+	var stack := VBoxContainer.new()
+	stack.add_theme_constant_override("separation", 0)
+	section.add_child(stack)
+	var top := HBoxContainer.new()
+	top.add_theme_constant_override("separation", 8)
+	var selected := _selected_contact()
+	var heading := (I18n.now("Chief advisor") if selected.is_empty() else str(selected.get("name", ""))) + (" " + I18n.now("(retired)") if bool(selected.get("archived", false)) else "") + (" ▴" if _recipients_open else " ▾")
+	var toggle := _recipient_button(heading, false, true)
+	toggle.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+	toggle.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	toggle.clip_text = true
+	toggle.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	toggle.pressed.connect(func() -> void:
+		_recipients_open = not _recipients_open
+		_render_recipients())
+	top.add_child(toggle)
+	var add := _recipient_button("+ Contact")
+	add.tooltip_text = "Add an official or advisor"
+	add.disabled = busy or _recipient_saving
+	add.modulate.a = 0.5 if busy else 1.0
+	add.pressed.connect(func() -> void: _open_recipient_editor({}))
+	top.add_child(add)
+	stack.add_child(top)
+	if not selected.is_empty():
+		var subtle := UI.wrapped(str(selected.get("title", "")) + (" " + I18n.now("· Political World") if typeof(selected.get("binding")) == TYPE_DICTIONARY else ""), 11, RECIPIENT_SUBTLE)
+		subtle.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+		stack.add_child(_gap(3))
+		stack.add_child(subtle)
+	if _recipients_open:
+		stack.add_child(_gap(8))
+		_recipient_list = ScrollContainer.new()
+		_recipient_list.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+		_recipient_list.get_v_scroll_bar().modulate.a = 0.0
+		var list := VBoxContainer.new()
+		list.add_theme_constant_override("separation", 5)
+		list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_recipient_list.add_child(list)
+		var chief := RecipientRow.new(RECIPIENT_PICKED if active_thread == CHIEF_THREAD else RECIPIENT_BG, RECIPIENT_BORDER)
+		chief.disabled = busy or _recipient_saving
+		var chief_line := RichTextLabel.new()
+		chief_line.bbcode_enabled = true
+		chief_line.fit_content = true
+		chief_line.scroll_active = false
+		chief_line.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		chief_line.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		chief_line.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+		chief_line.add_theme_font_override("normal_font", UI.font(400))
+		chief_line.add_theme_font_size_override("normal_font_size", 12)
+		chief_line.add_theme_color_override("default_color", RECIPIENT_INK)
+		chief_line.text = "%s [font_size=11][color=#ffffff80]%s[/color][/font_size]" % [_escape(I18n.now("Chief advisor")), _escape(I18n.now("· Original conversation"))]
+		chief.add_child(chief_line)
+		chief.pressed.connect(func() -> void:
+			_recipient_editor = ""
+			_select_recipient(CHIEF_THREAD))
+		list.add_child(chief)
+		var any_archived := false
+		for item in contacts:
+			var contact: Dictionary = item
+			var id := str(contact.get("id", ""))
+			var archived := bool(contact.get("archived", false))
+			any_archived = any_archived or archived
+			if archived and not _recipient_show_archived and id != active_thread:
+				continue
+			var line := HBoxContainer.new()
+			line.add_theme_constant_override("separation", 5)
+			var pick := RecipientRow.new(RECIPIENT_PICKED if id == active_thread else RECIPIENT_BG, RECIPIENT_BORDER)
+			pick.disabled = busy or _recipient_saving
+			pick.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			var words := VBoxContainer.new()
+			words.add_theme_constant_override("separation", 1)
+			words.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			var name := UI.label(str(contact.get("name", "")) + (" " + I18n.now("· Retired") if archived else ""), 12, RECIPIENT_INK)
+			name.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+			name.clip_text = true
+			name.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+			name.custom_minimum_size.x = 1
+			words.add_child(name)
+			var gone := ["changed", "vacant"].has(str(contact.get("status", "")))
+			var title := UI.wrapped(str(contact.get("title", "")) + (" " + I18n.now("· No longer in office") if gone else ""), 11, RECIPIENT_SUBTLE)
+			title.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+			words.add_child(title)
+			pick.add_child(words)
+			pick.pressed.connect(func() -> void:
+				_recipient_editor = ""
+				_select_recipient(id))
+			line.add_child(pick)
+			var edit := _recipient_button("Edit")
+			edit.tooltip_text = I18n.ui("Edit {{name}}", {"name": str(contact.get("name", ""))})
+			edit.disabled = busy or _recipient_saving
+			edit.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+			edit.pressed.connect(func() -> void: _open_recipient_editor(contact))
+			line.add_child(edit)
+			var retire := _recipient_button("Restore" if archived else ("Confirm" if _recipient_confirm == id else "Retire"))
+			retire.tooltip_text = "Restore contact" if archived else "Retire contact"
+			retire.disabled = busy or _recipient_saving
+			retire.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+			retire.pressed.connect(func() -> void: _retire_recipient(contact, not archived))
+			line.add_child(retire)
+			list.add_child(line)
+		if any_archived:
+			var shown := _recipient_button("Hide retired contacts" if _recipient_show_archived else "Show retired contacts")
+			shown.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+			shown.pressed.connect(func() -> void:
+				_recipient_show_archived = not _recipient_show_archived
+				_render_recipients())
+			list.add_child(shown)
+		if not _recipient_editor.is_empty():
+			list.add_child(_recipient_editor_box(busy))
+		elif not _recipient_error.is_empty():
+			var problem := UI.wrapped(_recipient_error, 12, Color("#fca5a5"))
+			problem.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+			list.add_child(problem)
+		stack.add_child(_recipient_list)
+		var fit := func() -> void:
+			if not is_instance_valid(_recipient_list) or not is_instance_valid(list):
+				return
+			var most := minf(get_viewport_rect().size.y * 0.58, 410.0)
+			_recipient_list.custom_minimum_size.y = minf(list.get_combined_minimum_size().y, most)
+		list.minimum_size_changed.connect(fit)
+		fit.call()
+		_restore_recipient_scroll.call_deferred(keep)
+	_recipients_holder.add_child(section)
+
+
+func _restore_recipient_scroll(value: int) -> void:
+	if is_instance_valid(_recipient_list):
+		_recipient_list.scroll_vertical = value
+
+
+func _recipient_editor_box(busy: bool) -> Control:
+	var frame := PanelContainer.new()
+	frame.add_theme_stylebox_override("panel", UI.box(Color(0, 0, 0, 0), Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.4), 9, 1, Vector4(9, 9, 9, 9)))
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 7)
+	frame.add_child(box)
+	var adding := _recipient_editor == "new"
+	box.add_child(UI.label("Add recipient" if adding else "Edit recipient", 12, UI.WHITE, 700))
+	var binding: Variant = _recipient_draft.get("binding")
+	var bound := typeof(binding) == TYPE_DICTIONARY
+	if adding:
+		var link := VBoxContainer.new()
+		link.add_theme_constant_override("separation", 3)
+		link.add_child(_recipient_label("Link to Political World (optional)"))
+		var choose := OptionButton.new()
+		choose.focus_mode = Control.FOCUS_NONE
+		choose.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+		choose.add_theme_font_override("font", UI.font(400))
+		choose.add_theme_font_size_override("font_size", 12)
+		var choose_style := UI.box(Color(0, 0, 0, 0.22), RECIPIENT_BORDER, 7, 1, Vector4(7, 6, 7, 6))
+		for state in ["normal", "hover", "pressed", "focus", "hover_pressed", "disabled"]:
+			choose.add_theme_stylebox_override(state, choose_style)
+		for name in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_hover_pressed_color", "font_disabled_color"]:
+			choose.add_theme_color_override(name, Color("#f8fafc"))
+		choose.add_item(I18n.now("Independent / custom official"))
+		var picked := 0
+		for index in range(offices.size()):
+			var office: Dictionary = offices[index]
+			choose.add_item("%s: %s" % [I18n.now(str(office.get("title", ""))), str(office.get("name", ""))])
+			if str(office.get("binding", {}).get("office", "")) == str(_recipient_draft.get("officeKey", "")) and not str(_recipient_draft.get("officeKey", "")).is_empty():
+				picked = index + 1
+		choose.select(picked)
+		choose.disabled = busy or _recipient_saving
+		choose.item_selected.connect(func(at: int) -> void:
+			if at <= 0 or at > offices.size():
+				_recipient_draft["binding"] = null
+				_recipient_draft["officeKey"] = ""
+			else:
+				var office: Dictionary = offices[at - 1]
+				_recipient_draft["name"] = str(office.get("name", ""))
+				_recipient_draft["title"] = str(office.get("title", ""))
+				_recipient_draft["binding"] = (office.get("binding", {}) as Dictionary).duplicate()
+				_recipient_draft["officeKey"] = str(office.get("binding", {}).get("office", ""))
+			_render_recipients())
+		link.add_child(choose)
+		box.add_child(link)
+	var save := _recipient_button("Saving…" if _recipient_saving else "Save recipient")
+	save.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	var ready_to_save := func() -> void:
+		if is_instance_valid(save):
+			save.disabled = busy or _recipient_saving or str(_recipient_draft.get("name", "")).strip_edges().is_empty() or str(_recipient_draft.get("title", "")).strip_edges().is_empty()
+	var name_box := VBoxContainer.new()
+	name_box.add_theme_constant_override("separation", 3)
+	name_box.add_child(_recipient_label("Name"))
+	var name := _recipient_field(str(_recipient_draft.get("name", "")), 100)
+	name.editable = not bound
+	if bound:
+		name.tooltip_text = "Linked officeholder identity is fixed"
+	name.text_changed.connect(func(value: String) -> void:
+		_recipient_draft["name"] = value
+		ready_to_save.call())
+	name_box.add_child(name)
+	box.add_child(name_box)
+	var title_box := VBoxContainer.new()
+	title_box.add_theme_constant_override("separation", 3)
+	title_box.add_child(_recipient_label("Government position"))
+	var title := _recipient_field(str(_recipient_draft.get("title", "")), 120)
+	title.text_changed.connect(func(value: String) -> void:
+		_recipient_draft["title"] = value
+		ready_to_save.call())
+	title_box.add_child(title)
+	box.add_child(title_box)
+	var character := VBoxContainer.new()
+	character.add_theme_constant_override("separation", 3)
+	character.add_child(_recipient_label("Personality and principles"))
+	var personality := TextEdit.new()
+	personality.text = str(_recipient_draft.get("personality", ""))
+	personality.placeholder_text = "e.g. meticulous, cautious with public spending, willing to disagree"
+	personality.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
+	personality.custom_minimum_size.y = 64
+	personality.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	personality.add_theme_font_override("font", UI.font(400))
+	personality.add_theme_font_size_override("font_size", 12)
+	personality.add_theme_color_override("font_color", Color("#f8fafc"))
+	personality.add_theme_color_override("font_placeholder_color", Color(1, 1, 1, 0.4))
+	personality.add_theme_color_override("caret_color", UI.WHITE)
+	var area_style := UI.box(Color(0, 0, 0, 0.22), RECIPIENT_BORDER, 7, 1, Vector4(7, 6, 7, 6))
+	for state in ["normal", "focus", "read_only"]:
+		personality.add_theme_stylebox_override(state, area_style)
+	character.add_child(personality)
+	var count := UI.label("", 11, RECIPIENT_SUBTLE)
+	count.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	count.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+	var show_count := func() -> void:
+		var length := personality.text.length()
+		count.text = "%d/%d" % [length, PERSONALITY_MAX]
+		count.add_theme_color_override("font_color", Color("#f87171") if length >= PERSONALITY_MAX else RECIPIENT_SUBTLE)
+	show_count.call()
+	personality.text_changed.connect(func() -> void:
+		if personality.text.length() > PERSONALITY_MAX:
+			var line := personality.get_caret_line()
+			var column := personality.get_caret_column()
+			personality.text = personality.text.substr(0, PERSONALITY_MAX)
+			personality.set_caret_line(min(line, personality.get_line_count() - 1))
+			personality.set_caret_column(column)
+		_recipient_draft["personality"] = personality.text
+		show_count.call())
+	character.add_child(count)
+	box.add_child(character)
+	if bound:
+		var office := str((binding as Dictionary).get("office", ""))
+		var linked := UI.wrapped(I18n.ui("Linked to head of government: {{name}}. A replacement will not inherit this conversation." if office == "headOfGovernment" else "Linked to head of state: {{name}}. A replacement will not inherit this conversation.", {"name": str((binding as Dictionary).get("name", ""))}), 11, RECIPIENT_SUBTLE)
+		linked.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+		box.add_child(linked)
+	if not _recipient_error.is_empty():
+		var problem := UI.wrapped(_recipient_error, 12, Color("#fca5a5"))
+		problem.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+		box.add_child(problem)
+	var buttons := HBoxContainer.new()
+	buttons.add_theme_constant_override("separation", 7)
+	ready_to_save.call()
+	save.pressed.connect(_submit_recipient)
+	buttons.add_child(save)
+	var cancel := _recipient_button("Cancel")
+	cancel.disabled = _recipient_saving
+	cancel.pressed.connect(func() -> void:
+		_recipient_editor = ""
+		_recipient_error = ""
+		_render_recipients())
+	buttons.add_child(cancel)
+	box.add_child(buttons)
+	return frame
+
+
+func _open_recipient_editor(contact: Dictionary) -> void:
+	if _recipients_busy() or _recipient_saving:
+		return
+	_recipient_editor = str(contact.get("id", "")) if not contact.is_empty() else "new"
+	if contact.is_empty():
+		_recipient_draft = {"name": "", "title": "", "personality": "", "binding": null, "officeKey": ""}
+	else:
+		_recipient_draft = {"name": str(contact.get("name", "")), "title": str(contact.get("title", "")), "personality": str(contact.get("personality", "")), "binding": contact.get("binding"), "officeKey": ""}
+	_recipient_confirm = ""
+	_recipient_error = ""
+	_recipients_open = true
+	_render_recipients()
+
+
+func _contact_draft() -> Dictionary:
+	return {"name": str(_recipient_draft.get("name", "")), "title": str(_recipient_draft.get("title", "")), "personality": str(_recipient_draft.get("personality", "")), "binding": _recipient_draft.get("binding")}
+
+
+func _submit_recipient() -> void:
+	if _recipients_busy() or _recipient_saving:
+		return
+	_recipient_saving = true
+	_recipient_error = ""
+	_render_recipients()
+	var problem := ""
+	if _recipient_editor == "new":
+		problem = await _create_recipient(_contact_draft())
+	else:
+		problem = await _revise_recipient(_recipient_editor, _contact_draft())
+	_recipient_saving = false
+	if problem.is_empty():
+		_recipient_editor = ""
+	else:
+		_recipient_error = problem
+	_render_recipients()
+
+
+func _contacts_blocked() -> bool:
+	return _turn_in_flight or _side_effects > 0 or _contacts_busy or _thread_switching or _load_failed or _save_failed
+
+
+func _contact_change(method: String, args: Dictionary, busy_text: String) -> Dictionary:
+	if _contacts_blocked():
+		return {"error": busy_text}
+	_contacts_busy = true
+	_render_recipients()
+	var reply: Dictionary = await engine.request(method, args)
+	_contacts_busy = false
+	if not reply.get("ok", false):
+		_render_recipients()
+		return {"error": str(reply.get("error", busy_text))}
+	var result: Dictionary = reply.get("result", {})
+	_take_contacts(result)
+	_render_recipients()
+	_apply_composer()
+	return result
+
+
+func _create_recipient(draft: Dictionary) -> String:
+	var result := await _contact_change("advisor.contact.create", {"draft": draft}, "Cannot add a recipient while the Advisor is busy.")
+	if result.has("error"):
+		return str(result["error"])
+	await _select_recipient(str(result.get("id", "")))
+	return ""
+
+
+func _revise_recipient(id: String, draft: Dictionary) -> String:
+	var result := await _contact_change("advisor.contact.revise", {"id": id, "draft": draft}, "Cannot edit a recipient while the Advisor is busy.")
+	return str(result.get("error", ""))
+
+
+func _retire_recipient(contact: Dictionary, archived: bool) -> void:
+	if _recipients_busy() or _recipient_saving:
+		return
+	var id := str(contact.get("id", ""))
+	if archived and _recipient_confirm != id:
+		_recipient_confirm = id
+		_render_recipients()
+		return
+	_recipient_saving = true
+	_recipient_error = ""
+	var result := await _contact_change("advisor.contact.archive", {"id": id, "archived": archived}, "Cannot retire a recipient while the Advisor is busy.")
+	_recipient_saving = false
+	if result.has("error"):
+		_recipient_error = str(result["error"])
+	else:
+		_recipient_confirm = ""
+		if _recipient_editor == id:
+			_recipient_editor = ""
+		if archived and active_thread == id:
+			await _select_recipient(CHIEF_THREAD)
+	_render_recipients()
+	_apply_composer()
+
+
+func _select_recipient(id: String) -> void:
+	if not _has_bootstrapped or _load_failed or _turn_in_flight or _side_effects > 0 or _thread_switching or engine == null:
+		return
+	if active_thread == id:
+		return
+	_thread_switching = true
+	while _saving:
+		await get_tree().process_frame
+	_render_recipients()
+	var reply: Dictionary = await engine.request("advisor.select", {"threadId": id})
+	if not reply.get("ok", false):
+		_load_failed = true
+		_thread_switching = false
+		_render_strip()
+		_render_recipients()
+		_update_send()
+		return
+	var result: Dictionary = reply.get("result", {})
+	_thread_drafts[active_thread] = _input.text
+	active_thread = id
+	_take_contacts(result)
+	messages = (result.get("messages", []) as Array).duplicate()
+	views = (result.get("views", []) as Array).duplicate()
+	while views.size() < messages.size():
+		views.append({})
+	for key in _rows.keys():
+		var entry: Dictionary = _rows[key]
+		if is_instance_valid(entry.get("control")):
+			(entry["control"] as Node).queue_free()
+	_rows.clear()
+	_states.clear()
+	_input.text = str(_thread_drafts.get(id, ""))
+	_visible_limit = INITIAL_WINDOW
+	_auto_scroll = true
+	_thread_switching = false
+	_apply_composer()
+	_render_recipients()
+	_render()
 
 
 func _gap(height: float) -> Control:
@@ -965,7 +1532,7 @@ func _message_row(message: Dictionary, view: Dictionary, index: int, retry_here:
 		row.add_child(tag)
 		row.add_child(_gap(7.2))
 	if not user:
-		row.add_child(_tagged("⚠️" if role == "error" else "🧭", " Error" if role == "error" else " Advisor", 11, Color(1, 1, 1, 0.4)))
+		row.add_child(_tagged("⚠️", " Error", 11, Color(1, 1, 1, 0.4)) if role == "error" else _speaker_tag())
 		row.add_child(_gap(4))
 	var bubble := PanelContainer.new()
 	var bg := BLUE if user else (Color(239 / 255.0, 68 / 255.0, 68 / 255.0, 0.2) if role == "error" else Color(1, 1, 1, 0.08))
@@ -987,6 +1554,8 @@ func _message_row(message: Dictionary, view: Dictionary, index: int, retry_here:
 	var full := false
 	var pictured := ""
 	var text := str(view.get("text", message.get("text", "")))
+	if user or (role == "advisor" and not _chat_dir.is_empty()):
+		content.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
 	if user:
 		content.add_child(_rich(_escape(text), 14, UI.WHITE, 1.5))
 		natural = _line_width(text, 14)
@@ -1011,6 +1580,12 @@ func _message_row(message: Dictionary, view: Dictionary, index: int, retry_here:
 		var sentence := " The chart could not be drawn: %s." % chart_problem
 		content.add_child(_rich(_emoji_first("📉", sentence), 12, Color(1, 1, 1, 0.45), 1.5))
 		natural = max(natural, _line_width("📉" + sentence, 12))
+	if bool(message.get("suggestionsNotApplied", false)) and not streaming:
+		content.add_child(_gap(9.6))
+		var unapplied := _rich(_escape(I18n.now("This official's suggested Actions or Projects were not applied. Authorize them through your chief advisor or the relevant panel.")), 12, Color(1, 1, 1, 0.45), 1.5)
+		unapplied.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+		content.add_child(unapplied)
+		natural = max(natural, _line_width("This official's suggested Actions or Projects were not applied. Authorize them through your chief advisor or the relevant panel.", 12))
 	if typeof(message.get("actionsSummary")) == TYPE_ARRAY:
 		content.add_child(_gap(12))
 		content.add_child(_actions_card(message["actionsSummary"]))
@@ -1028,7 +1603,8 @@ func _message_row(message: Dictionary, view: Dictionary, index: int, retry_here:
 		var details := _error_details(view, retry_here, state)
 		content.add_child(details)
 		natural = max(natural, float(details.get_meta("natural", 0.0)))
-	var institution: Array = view.get("institutionDrafts", []) if typeof(view.get("institutionDrafts")) == TYPE_ARRAY else []
+	var can_execute := active_thread == CHIEF_THREAD
+	var institution: Array = view.get("institutionDrafts", []) if typeof(view.get("institutionDrafts")) == TYPE_ARRAY and can_execute else []
 	if not institution.is_empty():
 		content.add_child(_gap(12))
 		var completed: Array = message.get("completedInstitutionDrafts", []) if typeof(message.get("completedInstitutionDrafts")) == TYPE_ARRAY else []
@@ -1038,7 +1614,7 @@ func _message_row(message: Dictionary, view: Dictionary, index: int, retry_here:
 			stack.add_child(_institution_action(institution[draft_index], index, draft_index, _has_number(completed, draft_index), state))
 		content.add_child(stack)
 		full = true
-	var deployments: Array = view.get("deployments", []) if typeof(view.get("deployments")) == TYPE_ARRAY else []
+	var deployments: Array = view.get("deployments", []) if typeof(view.get("deployments")) == TYPE_ARRAY and can_execute else []
 	if not deployments.is_empty():
 		content.add_child(_gap(12))
 		var placed: Array = message.get("placedDeployments", []) if typeof(message.get("placedDeployments")) == TYPE_ARRAY else []
@@ -1551,7 +2127,14 @@ func _deploy_action(deployment: Dictionary, message_index: int, placed: bool, ro
 		st["status"] = "placing"
 		st["error"] = ""
 		(st["apply"] as Callable).call()
+		if active_thread != CHIEF_THREAD:
+			st["status"] = "idle"
+			st["error"] = "Additional officials advise only. Authorize a deployment through the Forces panel."
+			(st["apply"] as Callable).call()
+			return
+		_side_effect(1)
 		var reply: Dictionary = await engine.request("advisor.deploy", {"deployment": deployment})
+		_side_effect(-1)
 		var result: Dictionary = reply.get("result", {}) if reply.get("ok", false) else {"ok": false, "error": str(reply.get("error", ""))}
 		if bool(result.get("ok", false)):
 			st["status"] = "placed"
@@ -1604,7 +2187,15 @@ func _institution_action(draft: Dictionary, message_index: int, draft_index: int
 		st["status"] = "working"
 		st["error"] = ""
 		(st["apply"] as Callable).call()
+		if active_thread != CHIEF_THREAD:
+			st["status"] = "idle"
+			st["error"] = "Additional officials advise only. Authorize an institutional action through the appropriate game panel."
+			(st["apply"] as Callable).call()
+			return
+		_side_effect(1)
 		var reply: Dictionary = await engine.request("advisor.institution", {"draft": draft})
+		_side_effect(-1)
+
 		var result: Dictionary = reply.get("result", {}) if reply.get("ok", false) else {"ok": false, "error": str(reply.get("error", ""))}
 		if bool(result.get("ok", false)):
 			st["status"] = "completed"
@@ -2722,6 +3313,27 @@ func _legend_item(text: String, color: Color) -> Control:
 	row.add_child(swatch)
 	row.add_child(UI.label(text, 12, Color(1, 1, 1, 0.5)))
 	return row
+
+
+class RecipientRow extends PanelContainer:
+	signal pressed
+	var disabled := false
+
+	func _init(bg: Color, border: Color) -> void:
+		add_theme_stylebox_override("panel", UI.box(bg, border, 7, 1, Vector4(9, 6, 9, 6)))
+		mouse_filter = Control.MOUSE_FILTER_STOP
+		mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+		size_flags_horizontal = Control.SIZE_EXPAND_FILL
+
+	func _gui_input(event: InputEvent) -> void:
+		if disabled or not (event is InputEventMouseButton):
+			return
+		var button := event as InputEventMouseButton
+		if button.button_index != MOUSE_BUTTON_LEFT:
+			return
+		if not button.pressed and Rect2(Vector2.ZERO, size).has_point(button.position):
+			pressed.emit()
+		accept_event()
 
 
 class AdvisorChart extends Control:
