@@ -288,6 +288,7 @@ func _suggestions() -> void:
 			{"id": "meta:accentColor", "area": "details", "kind": "field", "path": ["meta", "accentColor"], "from": "#2bc1f3", "to": "#f97316"},
 			{"id": "meta:subtitle", "area": "details", "kind": "field", "path": ["meta", "subtitle"], "text": true, "from": "", "to": "A subtitle the native check suggests."},
 			{"id": "region-owner:test", "area": "map", "kind": "region-owner", "region": "test", "from": "France", "to": "Germany"},
+			{"id": "borders:check-a,check-b,check-c", "area": "map", "kind": "borders", "regions": [{"id": "check-a", "op": "remove", "name": "Check A"}, {"id": "check-b", "op": "remove", "name": "Check B"}, {"id": "check-c", "op": "reshape", "name": "Check C"}]},
 		],
 	}
 	var handle := FileAccess.open(file, FileAccess.WRITE)
@@ -306,15 +307,17 @@ func _suggestions() -> void:
 	_check(ready and dialog._phase == "ready", "the suggestion file opens for review")
 	await _wait(0.6)
 	_check(_has_text(dialog, "CHANGES OUTSIDE THE MAP") and _has_text(dialog, "CHANGES ON THE MAP") and _has_text(dialog, "Who owns which region"), "review lists both kinds of change")
-	_check(_has_text(dialog, "0 of 3 changes decided"), "review counts the changes")
+	_check(_has_text(dialog, "0 of 4 changes decided"), "review counts the changes")
+	_check(_has_text(dialog, "Borders") and _has_text(dialog, "2 regions merged into others") and _has_text(dialog, "1 region reshaped") and not _has_text(dialog, "new region"), "a border change says how many regions it touches")
 	await _shoot("c13-review")
 	await dialog._act("accept", ["meta:accentColor"])
 	await _wait(0.5)
-	_check(_has_text(dialog, "Accepted") and _has_text(dialog, "1 of 3 changes decided"), "accepting applies and records the change")
+	_check(_has_text(dialog, "Accepted") and _has_text(dialog, "1 of 4 changes decided"), "accepting applies and records the change")
 	await _shoot("c14-review-accepted")
 	await dialog._act("undo", ["meta:accentColor"])
 	await _wait(0.3)
-	_check(_has_text(dialog, "0 of 3 changes decided"), "undo puts the change back")
+	_check(_has_text(dialog, "0 of 4 changes decided"), "undo puts the change back")
+
 	dialog.close()
 	await _wait(0.4)
 	var banner := SuggestionsBanner.new()

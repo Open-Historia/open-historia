@@ -233,8 +233,22 @@ static func map_summary(rows: Array) -> VBoxContainer:
 		name.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		line.add_child(name)
 		line.add_child(UI.label(str(item.get("text", "")), 13, Color(1, 1, 1, 0.6)))
-		column.add_child(line)
+		var regions: Array = item.get("regions", [])
+		if regions.is_empty():
+			column.add_child(line)
+			continue
+		var block := CommunityKit.column(2)
+		block.add_child(line)
+		var counts := HFlowContainer.new()
+		counts.add_theme_constant_override("h_separation", 10)
+		counts.add_theme_constant_override("v_separation", 0)
+		counts.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		for value in regions:
+			counts.add_child(UI.label(str(value), 12, Color(1, 1, 1, 0.55)))
+		block.add_child(counts)
+		column.add_child(block)
 	return column
+
 
 
 static func card() -> PanelContainer:
