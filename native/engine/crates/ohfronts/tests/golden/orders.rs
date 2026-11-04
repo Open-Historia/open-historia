@@ -206,7 +206,11 @@ pub fn battle_like(battle: &Battle, want: &Val) -> Result<(), String> {
     if let Some(field) = &battle.field {
         let wants = want.get("field");
         if wants.get("holders").is_object() {
-            same(&u8s(field.holders.clone()), wants.get("holders")).map_err(|error| format!("holders: {error}"))?;
+            let holders = match wants.get("holders") {
+                Val::Typed(ohfronts::sim::js::Typed::I8(_)) => Val::Typed(ohfronts::sim::js::Typed::I8(field.holders.iter().map(|&holder| holder as i8).collect())),
+                _ => u8s(field.holders.clone()),
+            };
+            same(&holders, wants.get("holders")).map_err(|error| format!("holders: {error}"))?;
         }
         if wants.get("phi").is_object() {
             same(&typed_f64(&field.phi), wants.get("phi")).map_err(|error| format!("phi: {error}"))?;

@@ -6,7 +6,9 @@ use super::constants::{CAPTOR_WITHIN_KM, FLIP_AT, GROW_KM, GROW_WITHIN_CELLS, MA
 use super::dawn::dusk;
 use super::engine::Run;
 use super::field::{count_holders, redistance, resample_field, take_cells, trace_contour, Claims, Field, Painter};
-use super::frame::{create_frame, frame_bounds, Bounds, Frame, Projector, KM_PER_DEGREE};
+use super::frame::{create_frame, frame_bounds, Bounds, Frame, Projector};
+use super::march::OWN_GROUND_PACE;
+use super::world_grid::measure_of;
 use super::ground::measure;
 use super::js::{self, Val};
 use super::line::{measure_line, Line};
@@ -435,7 +437,7 @@ fn grow_within(battle: &mut Battle, run: &Run) -> f64 {
                 least = km;
             }
         }
-        let step_km = jsmath::max(jsmath::max(run.advance_km[0], run.advance_km[1]), run.advance_km[2]) * run.pace * TRAIT_DRIVE[1] * fastest;
+        let step_km = jsmath::max(jsmath::max(run.advance_km[0], run.advance_km[1]), run.advance_km[2]) * run.pace * TRAIT_DRIVE[1] * fastest * if run.mech.marching() { OWN_GROUND_PACE } else { 1.0 };
         battle.within = jsmath::max(GROW_WITHIN_CELLS, (step_km / least).ceil() + 2.0);
         battle.within_for = Some(battle.arena.clone());
     }
@@ -497,8 +499,7 @@ pub fn larger_frame(frame: &Frame, grow: [bool; 4], map: &Val, within: f64) -> O
     let place = Projector::of(frame);
     let [_, low_lat] = place.to_lng_lat(0.0, -south);
     let [_, high_lat] = place.to_lng_lat(0.0, rows - south);
-    let scale = if map.get("scale").is_undef() { KM_PER_DEGREE } else { map.get("scale").num() };
-    create_frame(Bounds { west: bounds.west - west * frame.cell, east: bounds.west + (cols - west) * frame.cell, south: low_lat, north: high_lat }, map.get("flat").is_true(), scale, 0.0)
+    create_frame(Bounds { west: bounds.west - west * frame.cell, east: bounds.west + (cols - west) * frame.cell, south: low_lat, north: high_lat }, measure_of(map), 0.0)
 }
 
 #[derive(Clone, Copy, Debug)]

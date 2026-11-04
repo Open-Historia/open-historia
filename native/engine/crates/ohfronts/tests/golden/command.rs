@@ -117,6 +117,10 @@ fn command_matches_js() {
             }),
             ("talkOf", &|case| expect(case, list(talk_of(case.arg(0), case.arg(1)).iter().map(talk_val).collect()))),
             ("withTalk", &|case| expect(case, with_talk(case.arg(0), case.arg(1), case.arg(2)))),
+            ("nearestOnRoute", &|case| {
+                let (at, part) = nearest_on_route(&points_of(case.arg(0)), case.arg(1).num(), case.arg(2).num());
+                expect(case, Val::obj([("at", num(at as f64)), ("part", num(part))]))
+            }),
             ("routeAhead", &|case| expect(case, list(route_ahead(&points_of(case.arg(0)), case.arg(1).num(), case.arg(2).num()).iter().map(|p| nums(p)).collect()))),
             ("thinRoute", &|case| {
                 let most = if case.arg(1).is_undef() { 12 } else { case.arg(1).num() as usize };

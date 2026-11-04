@@ -3,7 +3,7 @@ use super::js::{self, Val};
 use super::troops::Troop;
 use crate::jsmath;
 
-pub const CHRONICLE_KINDS: [&str; 13] = ["offensive", "counter", "city", "pocket", "siege", "breached", "destroyed", "invaded", "attacked", "landed", "withdrew", "returned", "assault"];
+pub const CHRONICLE_KINDS: [&str; 14] = ["offensive", "counter", "city", "pocket", "siege", "breached", "destroyed", "invaded", "attacked", "landed", "withdrew", "returned", "assault", "bombed"];
 pub const CHRONICLE_MOST: usize = 120;
 const OPENING_KEPT: usize = 20;
 pub const CHRONICLE_RUN_MOST: usize = 16;

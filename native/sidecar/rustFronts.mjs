@@ -3,6 +3,7 @@ import path from "node:path";
 import readline from "node:readline";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { metricTableFor } from "../../server/mapDistance.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -285,6 +286,32 @@ export const createFrontsHost = ({ file = frontsHostPath(), log = (text) => proc
   };
 };
 
+const finiteTimes = (value) => {
+  const factor = Number(value);
+  return factor > 0 && Number.isFinite(factor) ? factor : 1;
+};
+
+export const metricTablesOf = (input) => {
+  const found = new Map();
+  const add = (type, factor) => {
+    if (typeof type !== "string" || !type) return;
+    const key = `${type}|${factor}`;
+    if (found.has(key)) return;
+    const table = metricTableFor(type, factor);
+    if (table) found.set(key, [type, factor, table]);
+  };
+  const map = input?.map;
+  if (map && map.flat !== true && map.metric && Array.isArray(map.metric.kx)) {
+    const given = Number(map.factor);
+    add(map.metric.type, given > 0 && map.factor !== 1 ? given : 1);
+  }
+  for (const record of Array.isArray(input?.battlefields) ? input.battlefields : []) {
+    const frame = record?.frame;
+    if (frame && typeof frame === "object" && frame.flat !== true && typeof frame.proj === "string") add(frame.proj, finiteTimes(frame.factor));
+  }
+  return [...found.values()];
+};
+
 const abortError = () => new DOMException("The land war's run was called off.", "AbortError");
 
 export const openMessage = (id, input, { policy = null, regionIds = null } = {}) => {
@@ -317,7 +344,7 @@ export const openMessage = (id, input, { policy = null, regionIds = null } = {})
       tables[name] = table;
     }
   }
-  return `{"t":"open","id":${id},"readers":${JSON.stringify(readers)},"policy":${spec ? encode(spec) : "null"},"tables":${encode(tables)},"input":${encode(data)}}`;
+  return `{"t":"open","id":${id},"readers":${JSON.stringify(readers)},"policy":${spec ? encode(spec) : "null"},"tables":${encode(tables)},"metrics":${encode(metricTablesOf(given))},"input":${encode(data)}}`;
 };
 
 export const rustRunMaker = (host, { policy = null, regionIds = () => null, slice = SLICE_MS } = {}) => {

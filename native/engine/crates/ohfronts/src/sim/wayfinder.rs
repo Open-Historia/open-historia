@@ -349,7 +349,10 @@ pub fn find_way(grid: &mut WorldGrid, ask: &Ask) -> Way {
                 let length = if dy == 0 {
                     grid.step_km.along[row]
                 } else if dx == 0 {
-                    grid.step_km.down
+                    match &grid.step_km.down_row {
+                        Some(rows) => rows[if dy < 0 { y as usize } else { row }],
+                        None => grid.step_km.down,
+                    }
                 } else {
                     grid.step_km.aslant[if dy < 0 { y as usize } else { row }]
                 };
@@ -506,7 +509,7 @@ pub fn find_way(grid: &mut WorldGrid, ask: &Ask) -> Way {
         landing = last;
     }
     Way::Found {
-        km: jsmath::round(way_km(&way, grid.surface())),
+        km: jsmath::round(way_km(&way, grid.plain_surface())),
         way,
         start: [round3(first[0]), round3(first[1])],
         start_km: jsmath::round(start_km),

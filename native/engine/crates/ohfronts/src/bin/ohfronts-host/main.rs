@@ -7,6 +7,7 @@ use ohfronts::sim::mind::net::Shape;
 use ohfronts::sim::mind::planner::{create_plainer_planner, create_planner, PlannerOptions};
 use ohfronts::sim::mind::policy::{create_staff_policy, create_troop_policy};
 use ohfronts::sim::mind::trained::{lab_staff_policy, trained_staff_policy};
+use ohfronts::sim::world_grid::register_metric_table;
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, Write};
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -213,6 +214,9 @@ impl Host {
 
     fn open(&mut self, id: u64, mut message: Val) -> Result<String, String> {
         let policy = policy_of(message.get("policy"))?;
+        for entry in message.get("metrics").array_or_empty() {
+            register_metric_table(&entry.at(0).string_or_empty(), entry.at(1).num(), entry.at(2));
+        }
         let present: HashSet<String> = message.get("readers").array_or_empty().iter().map(js::to_string).collect();
         let mut tables: HashMap<String, HashMap<String, Val>> = HashMap::new();
         if let Some(given) = message.get("tables").as_obj() {

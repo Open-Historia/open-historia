@@ -1,5 +1,6 @@
 use super::constants::{CELL_STEPS_KM, MAX_CELLS, MAX_GRID_SPAN};
 use super::js::Val;
+use super::world_grid::{has_metric_table, metric_at, metric_table_for, Metric, Surface};
 use crate::jsmath;
 
 pub use crate::frame::{lat_to_y, number_or_zero, y_to_lat, Frame, KM_PER_DEGREE, RAD};
@@ -33,7 +34,14 @@ pub struct Bounds {
     pub north: f64,
 }
 
-pub fn create_frame(bounds: Bounds, flat: bool, scale: f64, margin_km: f64) -> Option<Frame> {
+fn table_km_per_degree(metric: &Metric, y: f64) -> f64 {
+    let across = metric_at(&metric.kx, metric, y);
+    let up = (metric_at(&metric.m, metric, y + metric.step / 2.0) - metric_at(&metric.m, metric, y - metric.step / 2.0)) / metric.step;
+    jsmath::max(1e-9, across * up).sqrt()
+}
+
+pub fn create_frame(bounds: Bounds, measure: Surface, margin_km: f64) -> Option<Frame> {
+    let Surface { flat, scale, factor, metric } = measure;
     let west = bounds.west;
     let mut east = bounds.east;
     let south = bounds.south;
@@ -46,14 +54,18 @@ pub fn create_frame(bounds: Bounds, flat: bool, scale: f64, margin_km: f64) -> O
     }
     let bottom = lat_to_y(south);
     let top = lat_to_y(north);
+    let times = if !flat && factor > 0.0 { factor } else { 1.0 };
+    let table = if flat { None } else { metric };
     let km_per_degree = if flat {
         if scale > 0.0 {
             scale
         } else {
             KM_PER_DEGREE
         }
+    } else if let Some(table) = table {
+        table_km_per_degree(table, (bottom + top) / 2.0)
     } else {
-        KM_PER_DEGREE * jsmath::cos(y_to_lat((bottom + top) / 2.0) * RAD)
+        KM_PER_DEGREE * jsmath::cos(y_to_lat((bottom + top) / 2.0) * RAD) * times
     };
     let margin = jsmath::max(0.0, number_or_zero(margin_km)) / km_per_degree;
     let outer = round6(west - margin);
@@ -86,6 +98,8 @@ pub fn create_frame(bounds: Bounds, flat: bool, scale: f64, margin_km: f64) -> O
         km,
         flat,
         scale: if flat { km_per_degree } else { 0.0 },
+        proj: if flat { None } else { table.and_then(|table| table.kind.clone()).filter(|kind| !kind.is_empty()) },
+        factor: if !flat && times != 1.0 { Some(times) } else { None },
     })
 }
 
@@ -112,11 +126,21 @@ pub fn normalize_frame(value: &Val) -> Option<Frame> {
     if !(-MERCATOR_MAX_LAT..=MERCATOR_MAX_LAT).contains(&lat0) || !(-540.0..=540.0).contains(&lng0) {
         return None;
     }
-    let mut frame = Frame { lng0: home_lng0(lng0, cols * cell), lat0, cell, cols, rows, km, flat: false, scale: 0.0 };
+    let mut frame = Frame { lng0: home_lng0(lng0, cols * cell), lat0, cell, cols, rows, km, flat: false, scale: 0.0, proj: None, factor: None };
     if value.get("flat").is_true() {
         let scale = value.get("scale").num();
         frame.flat = true;
         frame.scale = if scale > 0.0 && scale.is_finite() { scale } else { KM_PER_DEGREE };
+    } else {
+        if let Val::Str(proj) = value.get("proj") {
+            if has_metric_table(proj) {
+                frame.proj = Some(proj.clone());
+            }
+        }
+        let factor = super::js::to_number(value.get("factor"));
+        if factor > 0.0 && factor.is_finite() && factor != 1.0 {
+            frame.factor = Some(factor);
+        }
     }
     Some(frame)
 }
@@ -138,12 +162,23 @@ impl Projector {
         let middle = frame.lng0 + (frame.cols * frame.cell) / 2.0;
         let rows = if frame.rows > 0.0 { frame.rows as usize } else { 0 };
         let scale = if frame.scale != 0.0 && !frame.scale.is_nan() { frame.scale } else { KM_PER_DEGREE };
+        let times = match frame.factor {
+            Some(factor) if !frame.flat && factor > 0.0 => factor,
+            _ => 1.0,
+        };
+        let table = match &frame.proj {
+            Some(proj) if !frame.flat && !proj.is_empty() => metric_table_for(proj, times),
+            _ => None,
+        };
         let row_km = (0..rows)
             .map(|row| {
+                let y = y0 + (row as f64 + 0.5) * frame.cell;
                 if frame.flat {
                     frame.cell * scale
+                } else if let Some(table) = table {
+                    frame.cell * table_km_per_degree(table, y)
                 } else {
-                    frame.cell * KM_PER_DEGREE * jsmath::cos(y_to_lat(y0 + (row as f64 + 0.5) * frame.cell) * RAD)
+                    frame.cell * KM_PER_DEGREE * jsmath::cos(y_to_lat(y) * RAD) * times
                 }
             })
             .collect();

@@ -31,6 +31,8 @@ pub struct Frame {
     pub km: f64,
     pub flat: bool,
     pub scale: f64,
+    pub proj: Option<String>,
+    pub factor: Option<f64>,
 }
 
 #[derive(Clone, Debug)]

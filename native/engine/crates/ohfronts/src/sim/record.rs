@@ -217,6 +217,13 @@ pub fn frame_record(frame: &Frame) -> Val {
     if frame.flat {
         out.set("flat", Val::Bool(true));
         out.set("scale", Val::Num(frame.scale));
+    } else {
+        if let Some(proj) = &frame.proj {
+            out.set("proj", Val::str(proj));
+        }
+        if let Some(factor) = frame.factor {
+            out.set("factor", Val::Num(factor));
+        }
     }
     Val::Obj(out)
 }
@@ -295,6 +302,9 @@ pub fn normalize_battlefield(raw: &Val) -> Option<Val> {
     if let Some(chronicle) = read_chronicle(raw.get("chronicle")) {
         record.set("chronicle", chronicle_record(&chronicle));
     }
+    if raw.get("home").is_true() {
+        record.set("home", Val::Bool(true));
+    }
     if status == "closed" {
         record.set("closedDate", Val::Str(clean(raw.get("closedDate"), DATE_MAX)));
     } else if is_record(raw.get("field")) {
@@ -328,10 +338,13 @@ pub fn normalize_battlefields(value: &Val) -> Vec<Val> {
             open.push(record);
         }
     }
-    open.truncate(MAX_BATTLEFIELDS as usize);
+    let is_home = |record: &Val| record.get("home").is_true();
+    let homes: Vec<Val> = open.iter().filter(|record| is_home(record)).take(MAX_HOME_FORCES as usize).cloned().collect();
+    let mut list: Vec<Val> = open.into_iter().filter(|record| !is_home(record)).take(MAX_BATTLEFIELDS as usize).collect();
+    list.extend(homes);
     let from = closed.len().saturating_sub(MAX_CLOSED_BATTLEFIELDS as usize);
-    open.extend(closed.split_off(from));
-    open
+    list.extend(closed.split_off(from));
+    list
 }
 
 fn war_id_shape(text: &str) -> bool {
@@ -572,7 +585,24 @@ pub fn battlefields_as_seen(battlefields: &Val, date: &Val, from_date: &Val) -> 
 
 pub fn frame_from(value: &Val) -> Frame {
     let n = |key: &str| value.get(key).num();
-    Frame { lng0: n("lng0"), lat0: n("lat0"), cell: n("cell"), cols: n("cols"), rows: n("rows"), km: n("km"), flat: value.get("flat").truthy(), scale: if value.get("scale").is_undef() { 0.0 } else { n("scale") } }
+    Frame {
+        lng0: n("lng0"),
+        lat0: n("lat0"),
+        cell: n("cell"),
+        cols: n("cols"),
+        rows: n("rows"),
+        km: n("km"),
+        flat: value.get("flat").truthy(),
+        scale: if value.get("scale").is_undef() { 0.0 } else { n("scale") },
+        proj: match value.get("proj") {
+            Val::Str(proj) if !proj.is_empty() => Some(proj.clone()),
+            _ => None,
+        },
+        factor: match value.get("factor") {
+            Val::Undef => None,
+            other => Some(super::js::to_number(other)),
+        },
+    }
 }
 
 pub fn holder_at(battlefield: &Val, lng: f64, lat: f64) -> Val {

@@ -31,6 +31,8 @@ pub const REFUSED_TRANSPORTS: &str = "Too many transporters are out already: wai
 pub const REFUSED_GONE: &str = "That transporter has set out already, or is not yours to call off.";
 pub const REFUSED_QUARRY: &str = "That is not a transporter of a side you are fighting here.";
 pub const REFUSED_AWAY: &str = "Your troops have not withdrawn from that battlefield.";
+pub const REFUSED_HOME: &str = "Your forces at home have no front to go forward from: draw them a route.";
+const HOME_ORDERS_REFUSED: [&str; 6] = ["advance", "blitz", "spearhead", "flank", "encircle", "fall back"];
 
 fn clean(value: &Val, most: usize) -> String {
     let text = js::trim(&js::collapse_spaces(&value.string_or_empty())).to_string();
@@ -333,7 +335,8 @@ fn apply_to(record: &Val, side: usize, op: &Val, player: &str, date: &Val) -> Re
             let count = match op.get("count") {
                 Val::Undef | Val::Null => text(DEPLOY_USUAL),
                 Val::Str(given) if given.is_empty() => text(DEPLOY_USUAL),
-                other => num(jsmath::max(0.0, jsmath::round(js::or_zero(js::to_number(other))))),
+                other if js::to_number(other) == 0.0 => num(0.0),
+                _ => text(DEPLOY_USUAL),
             };
             Ok(with_deploy_line(record, &side_val, &text(player), &way_val(&way), &text(form), &count))
         }
@@ -349,7 +352,7 @@ pub fn apply_war_room_op(battlefields: &Val, op: &Val, player: &Val, date: &Val,
     let rows = list(battlefields).to_vec();
     let at = rows.iter().position(|row| fold_battlefield_name(row.get("name")) == wanted && !wanted.is_empty());
     let record = at.and_then(|at| normalize_battlefield(&rows[at]));
-    let Some(record) = record.filter(is_open_battlefield) else { return Applied::Error(REFUSED_CLOSED) };
+    let Some(record) = record.filter(|record| is_open_battlefield(record) || matches!(record.get("status"), Val::Str(status) if status == "standing")) else { return Applied::Error(REFUSED_CLOSED) };
     let at = at.unwrap();
     let player = clean(player, 120);
     let side = battlefield_side_of(&record, &text(&player));
@@ -358,6 +361,9 @@ pub fn apply_war_room_op(battlefields: &Val, op: &Val, player: &Val, date: &Val,
     }
     let side = side as usize;
     let op_name = op.get("op").string_or_empty();
+    if record.get("home").is_true() && (op_name == "diversion" || (op_name == "order" && matches!(op.get("order"), Val::Str(order) if HOME_ORDERS_REFUSED.contains(&order.as_str())))) {
+        return Applied::Error(REFUSED_HOME);
+    }
     if TRANSPORT_OPS.contains(&op_name.as_str()) {
         return match apply_transport_op(&record, side, op, &player, date, transports, era) {
             Ok(transports) => Applied::Battlefields { battlefields: rows, record, side, transports: Some(transports) },
@@ -451,8 +457,8 @@ pub fn clean_war_room_op(op: &Val) -> Val {
         });
     }
     let count = op.get("count");
-    if !count.is_nullish() && !matches!(count, Val::Str(given) if given.is_empty()) {
-        sent.set("count", num(jsmath::max(0.0, jsmath::min(REINFORCE_MOST, jsmath::round(js::or_zero(js::to_number(count)))))));
+    if !count.is_nullish() && !matches!(count, Val::Str(given) if given.is_empty()) && js::to_number(count) == 0.0 {
+        sent.set("count", num(0.0));
     }
     if given("to") {
         let to = op.get("to");

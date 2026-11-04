@@ -180,6 +180,7 @@ pub const MAX_BATTLEFIELDS: f64 = 12.0;
 pub const MAX_BATTLEFIELDS_CHARS: f64 = 160000.0;
 pub const MAX_CELLS: f64 = 64000.0;
 pub const MAX_CLOSED_BATTLEFIELDS: f64 = 4.0;
+pub const MAX_HOME_FORCES: f64 = 6.0;
 pub const MAX_COMMANDS: f64 = 8.0;
 pub const MAX_CONTESTED_REGIONS: f64 = 160.0;
 pub const MAX_FRAMES: f64 = 5.0;

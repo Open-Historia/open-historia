@@ -2,6 +2,9 @@ use super::air::sky_held;
 use super::attrition::battle_attrition;
 use super::battle::Battle;
 use super::constants::{BRIEF_TEXT_MAX, FATIGUE_EXHAUSTED, RESERVES_AMPLE_PER_TROOP, SCENARIO_MARK};
+use super::ground::measure;
+
+pub const HOME_NEAR_KM: f64 = 60.0;
 use super::field::trace_contour;
 use super::js::{self, Obj, Val};
 use super::line::measure_line;
@@ -80,6 +83,24 @@ fn n(value: f64) -> Val {
 
 pub fn build_brief(battle: &mut Battle, since: &Val) -> Val {
     let contour = trace_contour(battle.field.as_mut().unwrap());
+    let home_near = if battle.home {
+        measure(battle.field.as_ref().unwrap(), &mut battle.to_side);
+        let field = battle.field.as_ref().unwrap();
+        let to_other = &battle.to_side.as_ref().unwrap().sides[1];
+        let mut count = 0.0;
+        for troop in &battle.troops[0] {
+            if !is_live(troop) {
+                continue;
+            }
+            let cell = troop.y.floor() * field.cols as f64 + troop.x.floor();
+            if cell >= 0.0 && cell < field.size as f64 && (to_other[cell as usize] as f64 / 3.0) * battle.frame.km <= HOME_NEAR_KM {
+                count += 1.0;
+            }
+        }
+        count
+    } else {
+        0.0
+    };
     let battle = &*battle;
     let field = battle.field.as_ref().unwrap();
     let place = &battle.place;
@@ -274,7 +295,10 @@ pub fn build_brief(battle: &mut Battle, since: &Val) -> Val {
     out.set("sectors", Val::Arr(rows));
     out.set("commands", Val::Arr(commands));
     out.set("strength", Val::Arr(strength));
-    out.set("taken", Val::Arr(vec![unique(&battle.taken[0]), unique(&battle.taken[1])]));
+    if battle.home && home_near > 0.0 {
+        out.set("near", n(home_near));
+    }
+    out.set("taken",Val::Arr(vec![unique(&battle.taken[0]), unique(&battle.taken[1])]));
     out.set("cities", Val::Arr(vec![unique(&battle.cities_taken[0]), unique(&battle.cities_taken[1])]));
     out.set("pockets", Val::Arr(pockets));
     out.set("since", since.clone());
@@ -476,11 +500,31 @@ fn add(sum: Val, value: &Val) -> Val {
 }
 
 pub fn describe_battlefield(record: &Val, viewer: &Val) -> String {
+    describe_battlefield_within(record, viewer, BRIEF_TEXT_MAX)
+}
+
+pub fn describe_battlefield_within(record: &Val, viewer: &Val, max: f64) -> String {
     if !record.truthy() || record.get("sides").as_array().is_none() {
         return String::new();
     }
     let brief = if record.get("brief").is_nullish() { Val::Obj(Obj::new()) } else { record.get("brief").clone() };
     let sides = record.get("sides");
+    if record.get("home").is_true() {
+        let own = match brief.get("strength") {
+            Val::Arr(list) => list.first().filter(|entry| !entry.is_nullish()).cloned().unwrap_or(Val::Obj(Obj::new())),
+            _ => Val::Obj(Obj::new()),
+        };
+        let country = text(&or_empty(item(&item(sides, 0), 0)));
+        let mut parts = vec![format!("{} formations round its cities", if own.get("n").is_nullish() { "0".to_string() } else { text(own.get("n")) })];
+        if js::to_number(own.get("mustering")) > 0.0 {
+            parts.push(format!("{} more still mustering", text(own.get("mustering"))));
+        }
+        if js::to_number(brief.get("near")) > 0.0 {
+            parts.push(format!("{} of them within {} km of its borders", text(brief.get("near")), js::number_to_string(HOME_NEAR_KM)));
+        }
+        let told = format!("- {}: {}'s forces at home, built up in peace: {}. No war is fought here; its orders are given as home: {}.", text(record.get("name")), country, parts.join(", "), country);
+        return js::slice_units(&told, 0, if max > 0.0 { max as usize } else { 0 });
+    }
     let lead = [or_empty(item(&item(sides, 0), 0)), or_empty(item(&item(sides, 1), 0))];
     let wanted = js::lower(js::trim(&js::collapse_spaces(&if viewer.is_nullish() { String::new() } else { text(viewer) })));
     let viewing: i64 = if wanted.is_empty() {
@@ -491,6 +535,7 @@ pub fn describe_battlefield(record: &Val, viewer: &Val) -> String {
     let status = match record.get("status") {
         Val::Str(status) if status == "frozen" => ", frozen by a ceasefire",
         Val::Str(status) if status == "closed" => ", closed",
+        Val::Str(status) if status == "standing" => ", forces built up in peace: no war is fought here",
         _ => "",
     };
     let km = brief.get("km");
@@ -602,11 +647,11 @@ pub fn describe_battlefield(record: &Val, viewer: &Val) -> String {
     let mut text_out = String::new();
     for (most_sectors, most_names) in [(3, 4), (3, 2), (3, 1), (2, 1), (0, 1)] {
         text_out = [head.clone(), strength.clone(), weather.clone(), attrition.clone(), ice.clone(), air.clone(), gone.clone(), line_text(most_sectors), since_text(most_names), orders.clone(), valid.clone()].into_iter().filter(|part| !part.is_empty()).collect::<Vec<_>>().join("\n");
-        if js::utf16_len(&text_out) as f64 <= BRIEF_TEXT_MAX {
+        if js::utf16_len(&text_out) as f64 <= max {
             return text_out;
         }
     }
-    let cut = js::slice_units(&text_out, 0, BRIEF_TEXT_MAX as usize - 1);
+    let cut = js::slice_units(&text_out, 0, (max - 1.0).max(0.0) as usize);
     format!("{}…", cut.trim_end_matches(js::is_js_whitespace))
 }
 

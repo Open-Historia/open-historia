@@ -1,6 +1,7 @@
 use crate::support::*;
 use ohfronts::sim::frame::*;
 use ohfronts::sim::js::Val;
+use ohfronts::sim::world_grid::{metric_of, Surface};
 
 pub fn frame_of(value: &Val) -> Frame {
     Frame {
@@ -12,6 +13,11 @@ pub fn frame_of(value: &Val) -> Frame {
         km: value.get("km").num(),
         flat: value.get("flat").truthy(),
         scale: if value.get("scale").truthy() { value.get("scale").num() } else { KM_PER_DEGREE },
+        proj: match value.get("proj") {
+            Val::Str(proj) if !proj.is_empty() => Some(proj.clone()),
+            _ => None,
+        },
+        factor: if value.get("factor").is_undef() { None } else { Some(value.get("factor").num()) },
     }
 }
 
@@ -24,10 +30,17 @@ pub fn frame_val(frame: &Frame) -> Val {
         ("rows", num(frame.rows)),
         ("km", num(frame.km)),
     ]);
-    if frame.flat {
-        if let Val::Obj(obj) = &mut out {
+    if let Val::Obj(obj) = &mut out {
+        if frame.flat {
             obj.set("flat", Val::Bool(true));
             obj.set("scale", num(frame.scale));
+        } else {
+            if let Some(proj) = &frame.proj {
+                obj.set("proj", text(proj));
+            }
+            if let Some(factor) = frame.factor {
+                obj.set("factor", num(factor));
+            }
         }
     }
     out
@@ -59,10 +72,11 @@ fn frame_matches_js() {
                 let flat = !options.get("flat").is_undef() && options.get("flat").truthy();
                 let scale = if options.get("scale").is_undef() { KM_PER_DEGREE } else { options.get("scale").num() };
                 let margin = if options.get("marginKm").is_undef() { 0.0 } else { options.get("marginKm").num() };
+                let factor = if options.get("factor").is_undef() { 1.0 } else { ohfronts::sim::js::to_number(options.get("factor")) };
+                let metric = if options.get("metric").truthy() { metric_of(options.get("metric")) } else { None };
                 let made = create_frame(
                     Bounds { west: bounds.get("west").num(), south: bounds.get("south").num(), east: bounds.get("east").num(), north: bounds.get("north").num() },
-                    flat,
-                    scale,
+                    Surface { flat, scale, factor, metric },
                     margin,
                 );
                 expect(case, opt_frame(made))
