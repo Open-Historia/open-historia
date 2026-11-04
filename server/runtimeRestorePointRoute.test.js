@@ -49,3 +49,27 @@ test("one restore point is sent by its id, and an unknown id is a 404", async ()
   const missing = await fetch(`${base}/api/runtime/snapshots/snap-9-9`);
   assert.equal(missing.status, 404);
 });
+
+test("only rollback archive uploads accept JSON bodies larger than 64 MiB", async () => {
+  // Deliberately cross the real parser threshold rather than merely asserting
+  // a parser name in source. Whitespace adds transfer bytes without bloating
+  // the restore-point files in this isolated test game.
+  const body = `${JSON.stringify(archive)}${" ".repeat(64 * 1024 * 1024)}`;
+  assert(Buffer.byteLength(body) > 64 * 1024 * 1024);
+
+  const snapshotWrite = await fetch(`${base}/api/runtime/json/snapshots`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", Prefer: "return=minimal" },
+    body,
+  });
+  assert.equal(snapshotWrite.status, 204);
+  assert.equal(snapshotWrite.headers.get("preference-applied"), "return=minimal");
+  assert.deepEqual(await (await fetch(`${base}/api/runtime/json/snapshots`)).json(), archive);
+
+  const ordinaryWrite = await fetch(`${base}/api/runtime/json/events`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body,
+  });
+  assert.equal(ordinaryWrite.status, 413, "ordinary JSON assets must retain the 64 MiB limit");
+});
