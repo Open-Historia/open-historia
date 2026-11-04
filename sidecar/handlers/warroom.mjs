@@ -255,7 +255,7 @@ export const register = (ctx) => {
     const enemies = engine.wrFleetOps.enemiesOf({ wars: world?.wars }, game.country);
     const AS = engine.wrAirStrike;
     const ownStrike = (entry) => same(entry?.owner, game.country);
-    const wings = aircraft ? engine.wrAirStrikeOps.airUnitsOf({ units: world?.units, airStrikeOrders: world?.airStrikeOrders }, game.country) : [];
+    const wings = aircraft ? engine.wrAirStrikeOps.airUnitsOf(world, game.country) : [];
     const { reach: airReach, blast: airBlast } = engine.wrAirStrikeOps.airReachOf({ warSettings: world?.warSettings }, game.gameDate);
     const wingName = (id) => wings.find((entry) => entry.id === id)?.name ?? list(world?.units).find((unit) => unit?.id === id)?.name ?? "";
     const strikesWaiting = aircraft ? AS.normalizeAirStrikeOrders(world?.airStrikeOrders).filter(ownStrike) : [];
