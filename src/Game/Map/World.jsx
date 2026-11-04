@@ -855,7 +855,10 @@ function World({ mapRef, projection: requestedProjection, terrainEnabled, onInit
       terrainEnabled && online && !effectiveCustomBg && !effectiveBgDeclared
         ? {
             source: "terrain-source",
-            exaggeration: 15,
+            // Half what it was (15): "half the intensity of 3d terrain
+            // ingame" (the owner, 2026-11-03). GlobeEffects.jsx reads it from
+            // here for the globe's own allowance.
+            exaggeration: 7.5,
           }
         : null,
     [terrainEnabled, online, effectiveCustomBg, effectiveBgDeclared],

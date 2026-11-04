@@ -28,6 +28,7 @@ import { worldFileUrl } from "../../runtime/worldFiles.js";
 import { hostingSharedGame, humanCountriesOf, sharedGameHostCountry } from "../../runtime/humanPolities.js";
 import { SHARED_WORLD_TASKS, buildSharedGameDirective, joinPolityNames } from "./sharedGameDirective.js";
 import { buildSeatAdviceDirective } from "./seatAdvice.js";
+import { openPolls } from "../../runtime/socialFeed.js";
 import { unitsOffBattlefields } from "./frontsGate.js";
 import { readingLanguageName } from "../../runtime/i18n.js";
 import { advisorMessagesFor, CHIEF_ADVISOR_THREAD } from "../../runtime/advisorThreads.js";
@@ -2193,6 +2194,12 @@ export const buildPromptContext = async (bundle, {
   // orders to consider (seatAdvice.js). Only the time skip itself writes them.
   if (hostingSharedGame() && (taskKey === "jumpForward" || taskKey === "autoJumpForward")) {
     result.seatAdviceDirective = buildSeatAdviceDirective(humanCountriesOf(bundle.game), bundle.world);
+  }
+  // The player's Rostra polls still open (runtime/socialFeed.js): the time skip
+  // is then asked for the public's answer too (gameplaySchemas.js withSocialPosts).
+  if (taskKey === "jumpForward" || taskKey === "autoJumpForward") {
+    const polls = openPolls(bundle.world?.socialFeed).length;
+    if (polls) result.rostraOpenPolls = String(polls);
   }
   if (wants("playerPolityRegions")) {
     result.playerPolityRegions = await buildPlayerPolityRegionsText(

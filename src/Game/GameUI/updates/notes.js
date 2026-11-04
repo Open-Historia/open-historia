@@ -53,6 +53,130 @@ import { PAST_UPDATES } from "./notesPast.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // Troops taken off a battlefield far from the sea were refused a ship ("no sea is near where it would set out")
+    // whenever they stood more than a day's march inland: now they go overland to a port of their country's on
+    // their way (runtime/fronts/engine.js departTransport, transports.js departuresFor). A player's report, 2026-11-04.
+    id: "2026-11-ships-from-ports",
+    kind: "minor",
+    date: "2026-11-04",
+    channel: "beta",
+    banners: [
+      {
+        title: "Troops sail from a port",
+        items: [
+          "Troops you send by sea from the War Room no longer have to stand by the coast: they go overland to one of your ports on their way, and sail from there.",
+          "A transport that cannot set out because your country has no navy or no air arm now says so.",
+        ],
+      },
+    ],
+  },
+  {
+    // The War Room's Aircraft key counted only air units on the map, never a front's air arm (GameUI/warRoom.jsx
+    // airUnitsOf given the whole world); the owner's report, 2026-11-04.
+    id: "2026-11-aircraft-key",
+    kind: "minor",
+    date: "2026-11-04",
+    channel: "beta",
+    banners: [
+      {
+        title: "The Aircraft key works",
+        items: [
+          "In the War Room, the Aircraft key is no longer greyed out for a country whose only aircraft are the ones flying over its fronts: those can be sent to strike now.",
+        ],
+      },
+    ],
+  },
+  {
+    // The 3D terrain's exaggeration halved, 15 to 7.5 (Map/World.jsx); the owner's ask, 2026-11-03.
+    id: "2026-11-gentler-terrain",
+    kind: "minor",
+    date: "2026-11-03",
+    channel: "beta",
+    banners: [
+      {
+        title: "Gentler 3D terrain",
+        items: [
+          "Mountains and valleys on the 3D terrain now rise half as high as before.",
+        ],
+      },
+    ],
+  },
+  {
+    // The display mode setting and tidier game cards (a contributor's PR #935, with its review fixes).
+    id: "2026-11-display-mode",
+    kind: "minor",
+    date: "2026-11-03",
+    channel: "beta",
+    banners: [
+      {
+        title: "Windowed, maximized or fullscreen",
+        items: [
+          "In the desktop app, Settings → Display now chooses how the game's window is shown: in a window, maximized, or fullscreen, and remembers it for next time.",
+          "Game cards show their date in your language, and long save names fit on the card.",
+          "A game's Archive button has moved into its card's menu.",
+        ],
+      },
+    ],
+  },
+  {
+    // A contributor's PR #942, trimmed to the map card's button (GameUI/rostraOpen.js, opening Search), the dock's
+    // phone and flags for full official names (resolvePolityFlag); the owner's choice, 2026-11-03.
+    id: "2026-11-rostra-check-in",
+    kind: "minor",
+    date: "2026-11-03",
+    channel: "beta",
+    banners: [
+      {
+        title: "Check in Rostra from the map",
+        items: [
+          "A region's card has Check in Rostra, which opens Rostra's Search on that country. Its posts load when you press Refresh there.",
+          "Rostra's button is now a phone.",
+          "Posts by countries known by their full names, such as the French Republic, show their national flags.",
+        ],
+      },
+    ],
+  },
+  {
+    // Rostra's Search tab (Listen in, back inside Rostra: GameUI/rostraSearch.jsx, runtime/placeFeed.js, the placeFeed
+    // task), the leader's polls (runtime/socialFeed.js, the skip's pollResults) and the box behind the pen; the
+    // owner's ask, 2026-11-03.
+    id: "2026-11-rostra-search-polls",
+    kind: "minor",
+    date: "2026-11-03",
+    channel: "beta",
+    banners: [
+      {
+        title: "Rostra: Search and polls",
+        items: [
+          "Rostra's Search tab finds any country or region and shows what ordinary people there are posting today. Each new place is one AI request.",
+          "Search opens on your own country, where the Your country tab was.",
+          "Ask a poll as your country's leader: the public votes during the next time skip, and the poll then shows the results and the public's verdict.",
+          "The box to write a post now opens from the pen at the top of Rostra.",
+          "A feed with nothing on it says so and offers Refresh, which asks for the first posts by the people who make the news. It is one AI request.",
+        ],
+      },
+    ],
+  },
+  {
+    // thekernely's #936-#939 (Advisor contacts: runtime/advisorThreads.js; party authoring: countryEditorPolitical.js;
+    // metadata-only diplomacy replies) with the review's fixes (2026-11-03).
+    id: "2026-11-advisor-contacts",
+    kind: "minor",
+    date: "2026-11-03",
+    channel: "beta",
+    banners: [
+      {
+        title: "Advisor contacts and party details",
+        items: [
+          "The Advisor panel can hold more people to write to: add an official with a position and a personality, or your country's head of state or head of government, and each keeps a conversation of its own.",
+          "Only your chief advisor puts Actions and Projects into effect; the others advise.",
+          "The Workshop and the Country Editor now edit each party's native name, ideology, seats, founding year and colour, and the legislature's size and next election, and check that seats and support add up.",
+          "A leader's reply with no words is shown as the error it is, and one that only answers your peace offer still makes the peace.",
+        ],
+      },
+    ],
+  },
+  {
     // An Update downloads the post's update copy, which the hub does not count (runtime/hubFiles.js updateCopyOf;
     // the hub's index `updates`); the owner's ask, 2026-11-03.
     id: "2026-11-updates-not-imports",

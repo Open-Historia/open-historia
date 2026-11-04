@@ -110,7 +110,7 @@ Each patch is skipped if the method it relies on has gone, and `terrainCaches.te
 
 ### `terrain` memo
 
-`terrain = { source: "terrain-source", exaggeration: 15 }` when `terrainEnabled && !customBg && !bgDeclared`: a custom image or vector background has no DEM to deform. **The globe is included on purpose.** An older guard (`!isGlobe`) kept terrain off the globe, on the grounds that MapLibre could not draw it there and that it could corrupt the shader cache across projection changes; `9b414f54` dropped it because MapLibre 5 does draw terrain on the globe, and every projection change remounts the map (the projection is part of the key), so no GL state survives one.
+`terrain = { source: "terrain-source", exaggeration: 7.5 }` (15 until 2026-11-03, when the owner had it halved) when `terrainEnabled && !customBg && !bgDeclared`: a custom image or vector background has no DEM to deform. **The globe is included on purpose.** An older guard (`!isGlobe`) kept terrain off the globe, on the grounds that MapLibre could not draw it there and that it could corrupt the shader cache across projection changes; `9b414f54` dropped it because MapLibre 5 does draw terrain on the globe, and every projection change remounts the map (the projection is part of the key), so no GL state survives one.
 
 ### Camera controls (`mapGestures.js`)
 

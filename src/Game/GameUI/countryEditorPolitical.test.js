@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyPoliticalEditorStateToWorld, politicalActorToEditorState } from "./countryEditorPolitical.js";
+import { applyPoliticalEditorStateToWorld, politicalActorToEditorState, politicalEditorComposition } from "./countryEditorPolitical.js";
 
 const baseActor = {
   polityKey: "Test Empire",
@@ -242,4 +242,34 @@ test("renaming stable party and bloc IDs preserves hidden canonical fields while
   assert.equal(bloc.privateGoal, "Preserve officer autonomy");
   assert.equal(bloc.color, "#654321");
   assert.ok(saved.government.rulingPartyIds.includes("new-conservatives"));
+});
+
+// Review of #937 (2026-11-03): a record that already held more seats than its legislature (an older AI compile)
+// blocked every save of that country, a 0-seat legislature was saved as none but counted as a total of 0, and any
+// text passed as a party colour.
+test("a record already over its totals still saves other edits, a 0-seat legislature is no total, and colours are hex", () => {
+  const actor = structuredClone(baseActor);
+  actor.government.legislatureSeats = 100;
+  actor.parties[0].seats = 70;
+  actor.parties[1].seats = 50;
+  const world = { politicalActors: { byPolity: { "Test Empire": actor } } };
+  const editor = politicalActorToEditorState(actor);
+  editor.nextElection = "2031-06-01";
+  const saved = applyPoliticalEditorStateToWorld(structuredClone(world), "Test Empire", editor);
+  assert.equal(saved.government.nextElection, "2031-06-01", "an unrelated edit saves");
+  editor.parties[0].seats = "75";
+  assert.throws(() => applyPoliticalEditorStateToWorld(structuredClone(world), "Test Empire", editor), /exceeding the legislature's 100 seats/);
+  editor.parties[0].seats = "60";
+  assert.doesNotThrow(() => applyPoliticalEditorStateToWorld(structuredClone(world), "Test Empire", editor), "moving towards the total saves");
+
+  const fresh = politicalActorToEditorState(structuredClone(baseActor));
+  fresh.legislatureSeats = "0";
+  fresh.parties[0].seats = "10";
+  assert.equal(politicalEditorComposition(fresh).totalSeats, null);
+  assert.doesNotThrow(() => politicalEditorComposition(fresh));
+
+  fresh.parties[0].color = "dark blue";
+  assert.throws(() => applyPoliticalEditorStateToWorld({ politicalActors: { byPolity: { "Test Empire": structuredClone(baseActor) } } }, "Test Empire", fresh), /hex colour/);
+  fresh.parties[0].color = "#2BC1F3";
+  assert.equal(applyPoliticalEditorStateToWorld({ politicalActors: { byPolity: { "Test Empire": structuredClone(baseActor) } } }, "Test Empire", fresh).parties[0].color, "#2BC1F3");
 });

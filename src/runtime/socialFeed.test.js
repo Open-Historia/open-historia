@@ -9,6 +9,7 @@ import assert from "node:assert/strict";
 
 import { mergeSegmentPayloads } from "../Game/AI/jumpSegments.js";
 import {
+  ROSTRA_REFRESH_POSTS,
   SOCIAL_FEED_LIMIT,
   SOCIAL_POST_MAX_CHARS,
   SOCIAL_PROMPT_CHARS,
@@ -19,6 +20,7 @@ import {
   postEngagement,
   promptPosts,
   readSkipPosts,
+  rostraRefreshRules,
   socialFeedPromptBlock,
   socialFeedView,
   wantsEverydayPost,
@@ -242,6 +244,16 @@ test("a post about nothing in world affairs is asked for every other skip", () =
   assert.equal(wantsEverydayPost(feed, 4), true);
   assert.match(socialFeedPromptBlock({ feed: [], players: ["X"], round: 1 }), /exactly one post about nothing in world affairs/);
   assert.match(socialFeedPromptBlock({ feed, players: ["X"], round: 3 }), /No post about everyday things this time/);
+});
+
+test("Refresh asks for a feed's worth of posts by public figures, never in the player's name", () => {
+  const rules = rostraRefreshRules({ players: ["French Republic"], date: "1936-05-01" });
+  assert.match(rules, new RegExp(`Write ${ROSTRA_REFRESH_POSTS} posts, dated 1936-05-01`));
+  assert.match(rules, /Exactly one post about nothing in world affairs/);
+  assert.match(rules, /"#n" for an earlier post of your list/);
+  assert.match(rules, /Never write a post as the leader of French Republic, or as anyone who speaks for its government/);
+  assert.match(rostraRefreshRules({ players: ["French Republic", "Kingdom of Spain"] }), /dated today.*\n[\s\S]*speaks for their governments/);
+  assert.match(rostraRefreshRules(), /the leader of the player's polity/);
 });
 
 test("in a shared game every player's leader is the player's own to write", () => {

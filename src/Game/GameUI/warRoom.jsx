@@ -154,6 +154,8 @@ const WayRefusal = ({ code }) => {
   if (code === "no-ground") return <>it has no land of your side's to start on</>;
   if (code === "no-troops") return <>its troops were gone</>;
   if (code === "no-war") return <>you are fighting no war</>;
+  if (code === "no-navy") return <>your country has no navy to carry them</>;
+  if (code === "no-air-force") return <>your country has no air arm to carry them</>;
   if (code === "railhead") return <>its line ends before that place</>;
   if (code === "too-far" || code === "off-map") return <>that place cannot be reached</>;
   return <>no way was found</>;
@@ -439,8 +441,11 @@ const WarRoomPanel = ({ open, onClose, width, onResize, onResizeEnd }) => {
   const fleets = useMemo(() => (navies ? fleetsOf({ units: world?.units, pendingUnitOrders: world?.pendingUnitOrders }, game.country) : []), [navies, world?.units, world?.pendingUnitOrders, game.country]);
   const enemies = useMemo(() => enemiesOf({ wars: world?.wars }, game.country), [world?.wars, game.country]);
   // The player's air units, how far they reach and their bombs fall, and their strikes: waiting, and the last turn's
-  // (runtime/fronts/airStrikeOps.js, airStrike.js). None in a scenario without air units.
-  const wings = useMemo(() => (aircraft ? airUnitsOf({ units: world?.units, airStrikeOrders: world?.airStrikeOrders }, game.country) : []), [aircraft, world?.units, world?.airStrikeOrders, game.country]);
+  // (runtime/fronts/airStrikeOps.js, airStrike.js). None in a scenario without air units. The whole world: a
+  // front's air arm (airArmsOf) is found from the battlefields, the war settings and the military figures, and
+  // with the units alone the Aircraft key stayed greyed out for a country flying only those ("why is the aircraft
+  // button always greyed out?", the owner, 2026-11-04).
+  const wings = useMemo(() => (aircraft ? airUnitsOf(world, game.country) : []), [aircraft, world, game.country]);
   const { reach: airReach, blast: airBlast } = useMemo(() => airReachOf({ warSettings: world?.warSettings }, game.gameDate), [world?.warSettings, game.gameDate]);
   const ownStrike = (entry) => String(entry?.owner ?? "").trim().toLowerCase() === String(game.country ?? "").trim().toLowerCase();
   const strikesWaiting = useMemo(() => (aircraft ? normalizeAirStrikeOrders(world?.airStrikeOrders).filter(ownStrike) : []),

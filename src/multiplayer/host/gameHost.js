@@ -569,7 +569,7 @@ export const createGameHost = ({
     // seat's own country by the game's own rule, and dated by the game. It is
     // public: every view carries the feed. Not while a round is being resolved:
     // the time skip has read the feed and writes it back with the world answers.
-    post: async (connection, { text, quote }, seat) => {
+    post: async (connection, { text, quote, choices }, seat) => {
       if (!isActiveFeatureEnabled("socialMedia")) return "This game has no social media.";
       if (round.status().phase === "resolving") return "The round is being resolved: post once it has landed.";
       let refusal = "";
@@ -578,6 +578,8 @@ export const createGameHost = ({
           by: seat.country,
           text,
           quote,
+          // A poll's choices, when the post asks one.
+          choices: Array.isArray(choices) && choices.length ? choices : null,
           date: clean(game?.gameDate),
           round: Number(game?.round) || 0,
         });

@@ -13,6 +13,7 @@ import { chatLanguageDiffersFromUi, chatTextDirection } from "../../runtime/i18n
 import { uiString } from "../../runtime/translator.js";
 import { applyProjectOpsToWorld, mutateActionsState, mutateAdvisorState, mutateWorldState, normalizeActionEntry, readAdvisorMessages, viewAsSeen } from "../../runtime/gameState.js";
 import { ADVISOR_RECIPIENT_TYPES, CHIEF_ADVISOR_THREAD, advisorContacts, advisorMessagesFor, advisorOfficeStatus, advisorRecipientType, archiveAdvisorContact, chiefAdvisorProfile, createAdvisorContact, politicalAdvisorOffices, replaceAdvisorThread, resetChiefAdvisorProfile, reviseAdvisorContact, saveChiefAdvisorProfile } from "../../runtime/advisorThreads.js";
+import { getPoliticalProfile } from "../../runtime/politicalActors.js";
 import StorageProblemNotice from "./storageProblemNotice.jsx";
 import AdvisorRecipients from "./AdvisorRecipients.jsx";
 import { describeReplyProblems, extractFencedJson, looksLikeProjectOps } from "./advisorBlocks.js";
@@ -797,6 +798,11 @@ const AdvisorMessageRow = React.memo(({ msg, msgIndex, speakerName = "Advisor", 
             📉 The chart could not be drawn: {chartProblem}.
             </div>
         )}
+        {msg.suggestionsNotApplied && !msg.streaming && (
+            <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.72rem", marginTop: "0.6rem" }}>
+            This official's suggested Actions or Projects were not applied. Authorize them through your chief advisor or the relevant panel.
+            </div>
+        )}
         {msg.actionsSummary &&<AdvisorActionsCard items={msg.actionsSummary} onOpenActions={onOpenActions} />}
         {Array.isArray(msg.actionsProblems) && msg.actionsProblems.length > 0 && (
             <div role="alert" style={{ marginTop: "0.5rem", fontSize: "0.72rem", color: "#fca5a5" }}>Some Action proposals could not be reviewed: {msg.actionsProblems.join(" ")}</div>
@@ -986,7 +992,12 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
     const sideEffectPendingRef = useRef(0);
     const [sideEffectsBusy, setSideEffectsBusy] = useState(false);
     const playerPolity = useRuntimeState("game", (game) => String(game?.country || ""));
-    const politicalWorld = useRuntimeState("world", (world) => world || {});
+    // Only the player's government, as text: the whole world re-rendered this panel on every write a turn made.
+    const governmentText = useRuntimeState("world", (world) => JSON.stringify(getPoliticalProfile(world || {}, playerPolity)?.government ?? null), playerPolity);
+    const politicalWorld = React.useMemo(() => {
+        const government = JSON.parse(governmentText);
+        return government ? { politicalActors: { byPolity: { [playerPolity]: { polityKey: playerPolity, government } } } } : {};
+    }, [governmentText, playerPolity]);
     const offices = React.useMemo(() => politicalAdvisorOffices(politicalWorld, playerPolity), [politicalWorld, playerPolity]);
     const selectedContact = contacts.find((contact) => contact.id === activeThreadId) || null;
     const recipientUnavailableReason = selectedContact?.archived
@@ -1450,9 +1461,12 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             const next = updateMessages(prev => {
                 const next = prev.slice();
                 const last = next[next.length - 1];
+                const actionSuggestionsBlocked = threadId !== CHIEF_ADVISOR_THREAD && advisorRecipientType(recipient) !== ADVISOR_RECIPIENT_TYPES.MINISTER && actionsProposal;
                 const projectsNotApplied = !canApplyProjects && projectsProposal;
-                const visibleReply = projectsNotApplied ? `${reply}\n\n(This contact's Projects are advisory and were not applied.)` : reply;
-                const finalMessage = { id: replyId, role: "advisor", text: visibleReply, time: askedOn, at: new Date().toISOString(), ...(memory ? { memory } : {}), ...(chartProblem ? { chartProblem } : {}), ...(actionsProblems.length ? { actionsProblems } : {}), ...(actionProposals.length ? { actionProposals } : {}), ...(draftProblems.length ? { draftProblems } : {}), ...(institutionDraftProblems.length ? { institutionDraftProblems } : {}), ...(deployProblems.length ? { deployProblems } : {}), ...(projectsSummary ? { projectsSummary } : {}), ...(projectsProblem ? { projectsProblem } : {}), ...(projectsDetail ? { projectsDetail } : {}), ...(projectsExcerptText ? { projectsExcerpt: projectsExcerptText } : {}) };
+                // Keep the upstream localization fix: the notice is UI metadata, not part of the
+                // reply text or the future model context. Ordinary Action proposals stay reviewable.
+                const suggestionsNotApplied = Boolean(actionSuggestionsBlocked || projectsNotApplied);
+                const finalMessage = { id: replyId, role: "advisor", text: reply, time: askedOn, at: new Date().toISOString(), ...(suggestionsNotApplied ? { suggestionsNotApplied: true } : {}), ...(memory ? { memory } : {}), ...(chartProblem ? { chartProblem } : {}), ...(actionsProblems.length ? { actionsProblems } : {}), ...(actionProposals.length ? { actionProposals } : {}), ...(draftProblems.length ? { draftProblems } : {}), ...(institutionDraftProblems.length ? { institutionDraftProblems } : {}), ...(deployProblems.length ? { deployProblems } : {}), ...(projectsSummary ? { projectsSummary } : {}), ...(projectsProblem ? { projectsProblem } : {}), ...(projectsDetail ? { projectsDetail } : {}), ...(projectsExcerptText ? { projectsExcerpt: projectsExcerptText } : {}) };
                 // Finalise the streaming bubble, or append the full reply if the
                 // provider never streamed a chunk.
                 if (last && last.role === "advisor" && last.streaming) {
@@ -1961,7 +1975,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         onBlur={e => e.target.style.borderColor = "rgba(255,255,255,0.15)"}
         />
         <button
-        onClick={handleSend} disabled={isLoading || recipientLocked || !input.trim()}
+        onClick={handleSend} disabled={isLoading || recipientLocked || !hasBootstrapped || loadFailed || saveFailed || !input.trim()}
         style={{ backgroundColor: isLoading || recipientLocked || !input.trim() ? "rgba(59,130,246,0.4)" : "#3b82f6", border: "none", borderRadius: "10px", width: "2.5rem", height: "2.5rem", display: "flex", alignItems: "center", justifyContent: "center", cursor: isLoading || !input.trim() ? "not-allowed" : "pointer", flexShrink: 0, fontSize: "1rem", transition: "background-color 0.2s" }}
         onMouseEnter={e => { if (!isLoading && !recipientLocked && input.trim()) e.currentTarget.style.backgroundColor = "#2563eb"; }}
         onMouseLeave={e => { if (!isLoading && !recipientLocked && input.trim()) e.currentTarget.style.backgroundColor = "#3b82f6"; }}

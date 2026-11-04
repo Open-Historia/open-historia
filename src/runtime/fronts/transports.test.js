@@ -15,6 +15,7 @@ import {
   cancelTransport,
   carrierFor,
   carriersOf,
+  departuresFor,
   huntTransport,
   interceptionOf,
   loadOf,
@@ -220,6 +221,47 @@ test("troops taken off a battlefield go aboard: they are gone from it, and come 
   const nobody = run(world, { battlefields: [front], transports: orderTransport([], { medium: "sea", owner: "Aland", to: { lng: 26.4, lat: 50.6 }, embark: { battlefield: "No such front", side: 0, troops: picked } }, { year: 2024 }).transports, days: 2 });
   assert.deepEqual([nobody.transports[0].status, nobody.transports[0].note, nobody.voyages[0].k], ["refused", "no-troops", "refused"]);
   assert.equal(live(nobody.battlefields[0], 0).length, live(front, 0).length);
+});
+
+test("troops picked out far from the sea go overland to a port of their country's on their way, and sail from there", () => {
+  // Aland and Borduria fight along a border far inland; Aland's coast is in the south, and Borduria has a shore across the water from it.
+  const layout = [
+    ...Array.from({ length: 12 }, () => "AAAAAAAAAAAAAAABBBBBBBBBBBBBBB"),
+    ...Array.from({ length: 3 }, () => "AA~~~~~~~~~~~~~~~~~~~~~~~~~~~~"),
+    "AA~~~~~~~~~~~~BBBBBBBBBBBBBBBB",
+    "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~",
+  ];
+  const places = [
+    { name: "Alba", lng: 26, lat: 58.5, capital: true },
+    { name: "Harbour", lng: 33.5, lat: 51.5 },
+    { name: "Westhaven", lng: 21.5, lat: 48.5 },
+    { name: "Southport", lng: 40.5, lat: 47.5 },
+  ];
+  const world = syntheticMap({ layout, legend, west: 20, north: 63, step: 1, cities: places, key: "inland" });
+  const row = (lng, south, north, count) => Array.from({ length: count }, (_, index) => ({ lng, lat: south + ((index + 0.5) * (north - south)) / count }));
+  const front = run(world, { battlefields: [battlefieldOn(world, { troops: [row(34.9, 54.5, 58.5, 20), row(35.1, 54.5, 58.5, 12)], pool: [300, 300] })], days: 0 }).battlefields[0];
+  const picked = Array.from({ length: 6 }, (_, index) => index);
+  const sent = orderTransport([], { medium: "sea", owner: "Aland", to: { lng: 40.5, lat: 47.5, name: "city: Southport" }, embark: { battlefield: front.name, side: 0, troops: picked }, by: "Aland" }, { date: "2024-03-01", year: 2024 });
+  const result = run(world, { battlefields: [front], transports: sent.transports, days: 6 });
+  const [transport] = result.transports;
+  // Where they stand is some 600 km from the water: they sail from Harbour, the port on their way to Southport.
+  assert.deepEqual([transport.status, transport.note, transport.from?.name, transport.load.length], ["landed", "", "city: Harbour", 6]);
+  assert.deepEqual(result.voyages.map((voyage) => [voyage.k, voyage.from ?? ""]), [["sailed", "city: Harbour"], ["landed", ""]]);
+  const sailing = run(world, { battlefields: [front], transports: sent.transports, days: 1 });
+  assert.ok(picked.every((index) => !(decodeTroops(sailing.battlefields[0].troops[0])[index]?.strength > 0)), "they left the front they were taken from");
+  // A country with no city it can sail from at all is refused for why it could not sail where its troops stand, and nobody goes aboard.
+  const portless = syntheticMap({ layout, legend, west: 20, north: 63, step: 1, cities: [places[0], places[3]], key: "inland, no port" });
+  const stuck = run(portless, { battlefields: [front], transports: sent.transports, days: 1 });
+  assert.deepEqual([stuck.transports[0].status, stuck.transports[0].note], ["refused", "no-coast"]);
+  assert.ok(picked.every((index) => decodeTroops(stuck.battlefields[0].troops[0])[index]?.strength > 0));
+
+  // The cities a dispatch may set out from: its owner's, by the way from its troops through each to where it is sent.
+  const km = (lngA, latA, lngB, latB) => Math.hypot(lngA - lngB, latA - latB);
+  const holderAt = (lng) => (lng < 35 ? "Aland" : "Borduria");
+  assert.deepEqual(departuresFor({ cities: places, holderAt, owner: "aland", to: { lng: 40.5, lat: 47.5 }, near: [34.9, 56.5], km }).map((city) => city.name), ["city: Harbour", "city: Alba", "city: Westhaven"]);
+  const two = [{ name: "Near", lng: 0, lat: 10 }, { name: "Far", lng: 0, lat: 0 }];
+  assert.deepEqual(departuresFor({ cities: two, holderAt, owner: "Aland", to: { lng: 5, lat: 0 }, near: [0, 11], km }).map((city) => city.name), ["city: Near", "city: Far"], "the one by its troops, though it is further from where it is sent");
+  assert.deepEqual(departuresFor({ cities: two, holderAt, owner: "Aland", to: { lng: 5, lat: 0 }, km, most: 1 }).map((city) => city.name), ["city: Far"], "with nobody standing anywhere, the nearest to where it is sent");
 });
 
 test("troops put down in a country that was in no war are an attack on it: it joins the other side that day", () => {
