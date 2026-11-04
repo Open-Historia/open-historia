@@ -10,6 +10,7 @@ signal map_mode_changed(mode: String)
 signal turn_landed(view: Dictionary)
 signal open_interactive
 signal world_changed
+signal dock_resized
 
 const DOCK_LAUNCHERS := [["chat", "Chat", 18], ["actions", "Actions and Projects", 16], ["social", "Rostra", 18]]
 const PANEL_FILES := ["map_cards", "chat_panel", "actions_panel", "projects_panel", "rostra_panel", "rostra_search", "advisor_panel", "country_panel", "search_box", "diplomatic_legend", "chat_notices", "war_peace_cards"]
@@ -281,6 +282,7 @@ func set_social_enabled(on: bool) -> void:
 	if not on and active_panel == "social":
 		set_active_panel("")
 	_place_dock()
+	dock_resized.emit()
 
 
 func beside_dock_left() -> float:

@@ -445,6 +445,8 @@ func _feature_checks() -> void:
 	await _wait(0.3)
 	var dock: Control = hud.get("_dock")
 	_check(not (launchers["social"] as Control).visible and is_equal_approx(dock.size.x, 140.0) and is_equal_approx(hud.search_slot.offset_left, 156.0), "off, the dock has no Rostra button and closes the gap")
+	var war_button := main.get("war_room_button") as WarRoomButton
+	_check(war_button != null and is_equal_approx(war_button.offset_left, 156.0) and is_equal_approx(war_button.offset_right, 156.0 + WarRoomButton.SIZE), "off, the war room's button stands beside the narrower dock (%s)" % (str(war_button.offset_left) if war_button else "none"))
 	var german := _german_region()
 	await hud.map_cards.show_region(german, main.map_view.region_name(german), main.map_view.region_owner(german), Vector2(720, 450))
 	await _wait(1.0)
@@ -455,6 +457,9 @@ func _feature_checks() -> void:
 	_check(on.get("ok", false), "Social media is switched back on")
 	await _until(func() -> bool: return (launchers["social"] as Control).visible, 10.0)
 	_check((launchers["social"] as Control).visible and is_equal_approx(hud.search_slot.offset_left, 221.0), "on again, the button is back")
+	await _wait(0.4)
+	var war_again := main.get("war_room_button") as WarRoomButton
+	_check(war_again != null and is_equal_approx(war_again.offset_left, 221.0), "on again, the war room's button moves back beside the full dock (%s)" % (str(war_again.offset_left) if war_again else "none"))
 
 
 func _german_region() -> int:
