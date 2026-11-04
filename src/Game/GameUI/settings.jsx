@@ -2474,11 +2474,15 @@ const DisplayModeSelector = ({ isFullscreenEnabled, onToggleFullscreen }) => {
         setMapSettingValue(MAP_SETTING_KEYS.displayMode, mode);
         if (isDesktop) {
             setDesktopStatus((prev) => (prev ? { ...prev, mode } : { supported: true, mode }));
+            // The window's own answer, not the choice: a refused change shows the mode the window is in.
             fetch("/api/desktop/display-mode", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ mode }),
-            }).catch(() => {});
+            })
+                .then((r) => (r.ok ? r.json() : fetch("/api/desktop/display-mode").then((again) => (again.ok ? again.json() : null))))
+                .then((data) => { if (data?.supported) setDesktopStatus(data); })
+                .catch(() => {});
         } else {
             if (mode === "fullscreen" && !isFullscreenEnabled) onToggleFullscreen();
             else if (mode !== "fullscreen" && isFullscreenEnabled) onToggleFullscreen();

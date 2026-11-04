@@ -93,7 +93,7 @@ import { authoredName } from "./scenarioFronts.js";
 import { breakthroughAnswer, sideIsPlayed, staffDecision, staffMayOrder, staffStanding } from "./staff.js";
 import { findPockets } from "./supply.js";
 import { SWARM_FORM, gatherNewcomers } from "./swarms.js";
-import { TRANSPORT_ENDED, boundFor, interceptionOf, loadOf, moveOn, normalizeTransports, setOut, struck, transportChance } from "./transports.js";
+import { EMBARK_PORTS_MOST, TRANSPORT_ENDED, TRANSPORT_START_FAILS, boundFor, departuresFor, interceptionOf, loadOf, moveOn, normalizeTransports, setOut, struck, transportChance } from "./transports.js";
 import { describePoint, findPlace, inSector, resolveSector } from "./sectors.js";
 import { STATE_HOLDING, createTroop, isLive, kindsFor, liveCount, troopsCap, troopsFactor, troopsLeast, troopsWanted } from "./troops.js";
 import { buildWorldGrid, kmBetween, measureOptions, placeAlong, worldSheetKey } from "./worldGrid.js";
@@ -2172,20 +2172,21 @@ const seatOf = (run, grid, war, wanted) => {
   }
   return best;
 };
-// Where a dispatch nobody gave a starting place sets out from: its owner's
-// cities, the nearest to where it is sent first (a ship from a country whose
-// capital is far inland sails from its nearest port).
-const originsOf = (run, grid, war, transport) => {
+// Where a dispatch sets out from when nobody gave it a starting place, or its
+// troops' own place will not do: its owner's cities, the nearest to where it is
+// sent first, or with troops standing somewhere the one on their way there
+// (transports.js departuresFor).
+const originsOf = (run, grid, war, transport, near = null, most = 8) => {
   const measure = measureOptions(run.input.map);
-  const mine = [];
-  for (const city of Array.isArray(run.input.map?.cities) ? run.input.map.cities : []) {
-    const lng = Number(city.lng);
-    const lat = Number(city.lat);
-    if (!Number.isFinite(lng + lat) || fold(holderAtPoint(run, grid, war, lng, lat)) !== fold(transport.owner)) continue;
-    mine.push({ lng, lat, name: `city: ${clean(city.name)}`, far: kmBetween(lng, lat, transport.to.lng, transport.to.lat, measure) });
-  }
-  mine.sort((a, b) => a.far - b.far || a.name.localeCompare(b.name));
-  return mine.slice(0, 8);
+  return departuresFor({
+    cities: run.input.map?.cities,
+    holderAt: (lng, lat) => holderAtPoint(run, grid, war, lng, lat),
+    owner: transport.owner,
+    to: transport.to,
+    near,
+    km: (lngA, latA, lngB, latB) => kmBetween(lngA, latA, lngB, latB, measure),
+    most,
+  });
 };
 
 // Whether a transporter set out with its owner fighting no war, to attack a
@@ -2256,19 +2257,32 @@ const departTransport = (run, index, day) => {
   if (origins.length === 0) return refuse("no-origin");
   const { embark: _embark, raise: _raise, ...bare } = transport;
   const loaded = { ...bare, load, warId: war.id };
+  const fromHere = (origin) => setOut({ ...loaded, from: { lng: origin.lng, lat: origin.lat, name: clean(origin.name) } }, {
+    grid,
+    from: [origin.lng, origin.lat],
+    holderOf: (id) => holderIn(run, war, id),
+    friendly,
+    hostile,
+    year: yearInEra(gameDateYear(run.dateOf(0)), Number.isInteger(run.input?.era) ? run.input.era : null),
+    date,
+    dateOf: (days) => run.dateOf(day + days),
+  });
   let out = null;
   for (const origin of origins) {
-    out = setOut({ ...loaded, from: { lng: origin.lng, lat: origin.lat, name: clean(origin.name) } }, {
-      grid,
-      from: [origin.lng, origin.lat],
-      holderOf: (id) => holderIn(run, war, id),
-      friendly,
-      hostile,
-      year: yearInEra(gameDateYear(run.dateOf(0)), Number.isInteger(run.input?.era) ? run.input.era : null),
-      date,
-      dateOf: (days) => run.dateOf(day + days),
-    });
+    out = fromHere(origin);
     if (out.status === "moving") break;
+  }
+  // Troops taken off a battlefield set out from where they stand. Where no way
+  // begins there (a ship with no sea near, a train with none of its side's
+  // land) they go overland to a city of their country's on their way that one
+  // does begin from; where none does, they are refused for where they stand.
+  if (boarding && out.status !== "moving" && TRANSPORT_START_FAILS.includes(out.note)) {
+    const there = out;
+    for (const origin of originsOf(run, grid, war, transport, [origins[0].lng, origins[0].lat], EMBARK_PORTS_MOST)) {
+      out = fromHere(origin);
+      if (out.status === "moving") break;
+    }
+    if (out.status !== "moving") out = there;
   }
   if (out.status !== "moving") return refuse(out.note || "no-way");
   // Where it is to put them down is somebody's land: a country outside the war is attacked by it.

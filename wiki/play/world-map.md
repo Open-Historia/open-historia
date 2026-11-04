@@ -146,7 +146,7 @@ the switch then says *The 3D globe is disabled for this scenario's map.*
 ## 3D terrain
 
 **Settings → Map → 3D Terrain**, marked experimental and honestly so. It raises real elevation
-with a heavy 15× exaggeration so that mountain ranges actually read at world scale, plus light
+with a 7.5× exaggeration so that mountain ranges actually read at world scale, plus light
 hillshading. A scenario with a custom background has no elevation data to raise, so it stays off
 there.
 
