@@ -548,11 +548,128 @@ func _run() -> void:
 	var cleared: Variant = await _doc("advisor")
 	_check("Clear chat empties the conversation and the file", panel.messages.is_empty() and typeof(cleared) == TYPE_ARRAY and (cleared as Array).is_empty())
 	await _shoot("advisor-19-cleared")
+	await _contacts()
 	_say("%d failures" % failures.size())
 	_finish(0 if failures.is_empty() else 1)
 
 
+func _contact_named(name: String) -> Dictionary:
+	for item in panel.contacts:
+		if str((item as Dictionary).get("name", "")) == name:
+			return item
+	return {}
+
+
+func _find_option(node: Node) -> OptionButton:
+	if node is OptionButton and (node as OptionButton).is_visible_in_tree():
+		return node as OptionButton
+	for child in node.get_children():
+		var found := _find_option(child)
+		if found:
+			return found
+	return null
+
+
+func _labels_with(node: Node, text: String) -> bool:
+	if node is Label and (node as Label).text.contains(text) and (node as Label).is_visible_in_tree():
+		return true
+	if node is Button and (node as Button).text.contains(text) and (node as Button).is_visible_in_tree():
+		return true
+	if node is RichTextLabel and (node as RichTextLabel).get_parsed_text().contains(text) and (node as RichTextLabel).is_visible_in_tree():
+		return true
+	for child in node.get_children():
+		if _labels_with(child, text):
+			return true
+	return false
+
+
+func _contacts() -> void:
+	var seeded: Dictionary = await main.engine.request("country.standin_seed")
+	_check("the player's government is in the Political World", seeded.get("ok", false))
+	_check("the two offices of the player's government are offered", await _until(func() -> bool: return panel.offices.size() == 2, 15.0), str(panel.offices))
+	_check("the recipients bar reads Chief advisor with + Contact", _find_button(panel, "Chief advisor ▾") != null and _find_button(panel, "+ Contact") != null and _find_button(panel, "+ Contact").tooltip_text == "Add an official or advisor")
+	_find_button(panel, "Chief advisor ▾").pressed.emit()
+	await _frames(3)
+	_check("the list opens with the original conversation", _find_button(panel, "Chief advisor ▴") != null and _labels_with(panel, "Chief advisor · Original conversation"))
+	_find_button(panel, "+ Contact").pressed.emit()
+	await _frames(3)
+	_check("the editor offers a link to the Political World", _find_text(panel, "Add recipient") and _find_text(panel, "Link to Political World (optional)") and _find_text(panel, "Name") and _find_text(panel, "Government position") and _find_text(panel, "Personality and principles") and _find_text(panel, "0/1200"))
+	var save_button := _find_button(panel, "Save recipient")
+	_check("Save recipient waits for a name and a position", save_button != null and save_button.disabled)
+	var choose := _find_option(panel)
+	var at := -1
+	if choose:
+		for index in range(choose.item_count):
+			if choose.get_item_text(index) == "Head of government: Manuel Valls":
+				at = index
+	_check("the head of government is offered by name", choose != null and choose.get_item_text(0) == "Independent / custom official" and at > 0, str(choose.item_count) if choose else "none")
+	if at > 0:
+		choose.select(at)
+		choose.item_selected.emit(at)
+		await _frames(3)
+	_check("a linked contact takes the officeholder's name and says so", str(panel._recipient_draft.get("name", "")) == "Manuel Valls" and _find_text(panel, "Linked to head of government: Manuel Valls. A replacement will not inherit this conversation."))
+	panel._recipient_draft["personality"] = "Blunt about the deficit.\nLoyal to the President."
+	await _shoot("advisor-20-contact-editor")
+	panel._submit_recipient()
+	_check("saving the contact opens its conversation", await _until(func() -> bool: return panel.active_thread != "chief" and not panel._thread_switching, 15.0), panel.active_thread)
+	await _frames(3)
+	var valls := _contact_named("Manuel Valls")
+	_check("the contact is kept with its link and personality", not valls.is_empty() and str(valls.get("title", "")) == "Head of government" and typeof(valls.get("binding")) == TYPE_DICTIONARY and str(valls.get("personality", "")) == "Blunt about the deficit.\nLoyal to the President." and str(valls.get("status", "")) == "current", JSON.stringify(valls))
+	_check("the bar names the contact and its office", _find_button(panel, "Manuel Valls ▴") != null and _find_text(panel, "Head of government · Political World"))
+	_check("the composer is addressed to the contact", panel._input.placeholder_text == "Message Manuel Valls…" and panel.messages.is_empty(), panel._input.placeholder_text)
+	var actions_before := JSON.stringify(await _doc("actions")).count("Convene the budget cabinet")
+	panel._input.text = "What do you make of the budget?"
+	panel._update_send()
+	panel._send_from_composer()
+	_check("the contact answers", await _until(func() -> bool: return not panel._loading and panel.messages.size() == 2, 90.0), str(panel.messages.size()))
+	await _wait(0.8)
+	var answer: Dictionary = panel.messages[1] if panel.messages.size() > 1 else {}
+	_check("the contact speaks under its own name", _labels_with(panel, " Manuel Valls") and not _find_text(panel, " Advisor"))
+	_check("an official's suggested actions and projects are not applied", str(answer.get("role", "")) == "advisor" and bool(answer.get("suggestionsNotApplied", false)) and not answer.has("actionsSummary") and not answer.has("projectsSummary") and JSON.stringify(await _doc("actions")).count("Convene the budget cabinet") == actions_before)
+	_check("and the reply says so", _find_text(panel, "This official's suggested Actions or Projects were not applied. Authorize them through your chief advisor or the relevant panel."))
+	_check("an official offers no deployment or institution buttons", _find_button(panel, "📍 Place Brigade de Lorraine here") == null)
+	var stored: Variant = await _doc("advisor")
+	var stored_text := JSON.stringify(stored)
+	_check("the contact and its conversation share the advisor file", typeof(stored) == TYPE_ARRAY and stored_text.contains("advisor-contact") and stored_text.count("\"threadId\":\"%s\"" % panel.active_thread) == 2, stored_text.left(300))
+	await _shoot("advisor-21-contact-reply")
+	var contact_thread: String = panel.active_thread
+	await panel._select_recipient("chief")
+	_check("the chief advisor's conversation is its own", panel.active_thread == "chief" and panel.messages.is_empty() and panel._input.placeholder_text.begins_with("Ask your advisor…"))
+	await panel._select_recipient(contact_thread)
+	_check("and the contact's comes back with it", panel.active_thread == contact_thread and panel.messages.size() == 2)
+	valls = _contact_named("Manuel Valls")
+	await panel._retire_recipient(valls, true)
+	await _frames(2)
+	_check("Retire asks to confirm", _find_button(panel, "Confirm") != null and not bool(_contact_named("Manuel Valls").get("archived", false)))
+	await panel._retire_recipient(valls, true)
+	await _until(func() -> bool: return panel.active_thread == "chief" and not panel._thread_switching, 10.0)
+	await _frames(3)
+	_check("a retired contact leaves for the chief advisor", bool(_contact_named("Manuel Valls").get("archived", false)) and panel.active_thread == "chief" and _find_button(panel, "Show retired contacts") != null)
+	_find_button(panel, "Show retired contacts").pressed.emit()
+	await _frames(3)
+	_check("retired contacts can be shown", _find_text(panel, "Manuel Valls · Retired") and _find_button(panel, "Restore") != null)
+	await panel._select_recipient(contact_thread)
+	await _frames(3)
+	panel._input.text = "One more thing."
+	panel._update_send()
+	_check("a retired contact cannot be written to", panel._input.placeholder_text == "This contact is retired — restore to reply" and not panel._input.editable and panel._send_button.disabled and _find_button(panel, "Manuel Valls (retired) ▴") != null)
+	await _shoot("advisor-22-contact-retired")
+	await panel._retire_recipient(_contact_named("Manuel Valls"), false)
+	await _frames(3)
+	panel._update_send()
+	_check("Restore lets it be written to again", not bool(_contact_named("Manuel Valls").get("archived", true)) and panel._input.editable and not panel._send_button.disabled)
+	panel._input.text = ""
+	panel._open_recipient_editor(_contact_named("Manuel Valls"))
+	await _frames(3)
+	_check("Edit keeps a linked name fixed", _find_text(panel, "Edit recipient") and _find_option(panel) == null)
+	panel._recipient_draft["title"] = "Prime Minister"
+	await panel._submit_recipient()
+	_check("an edit is saved", str(_contact_named("Manuel Valls").get("title", "")) == "Prime Minister" and panel._recipient_editor.is_empty())
+	await _shoot("advisor-23-contact-edited")
+
+
 func _finish(code: int) -> void:
+
 	main.engine.stop()
 	await _frames(2)
 	quit(code)
