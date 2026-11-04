@@ -19,6 +19,7 @@ const CACHE_PREFIX = "i18n_v2_";
 const LEGACY_CACHE_PREFIX = "i18n_cache_";
 const CACHE_LIMIT = 8000;
 const ZOOM_KEY = "oh-native-zoom-level";
+const DISPLAY_MODES = ["windowed", "maximized", "fullscreen"];
 const TRANSLATION_PROMPT_MARK = "You are the translation engine for a grand-strategy game.";
 
 const attempt = async (work) => {
@@ -69,6 +70,17 @@ export const register = (ctx) => {
 
   const language = () => clean(i18n.getStoredLanguage()) || "en";
 
+  const displayMode = () => {
+    try {
+      const mode = JSON.parse(fs.readFileSync(path.join(ctx.dataRoot || ".", "display-mode.json"), "utf8"))?.mode;
+      return DISPLAY_MODES.includes(mode) ? mode : "windowed";
+    } catch {
+      return "windowed";
+    }
+  };
+
+  attemptNow(() => fs.rmSync(path.join(ctx.dataRoot || ".", "native", "listen-in.json"), { force: true }));
+
   const formatUpdateDate = (date, parts = { day: "numeric", month: "long", year: "numeric" }) => {
     const [year, month, day] = String(date || "").split("-").map(Number);
     if (!year || !month) return "";
@@ -100,6 +112,7 @@ export const register = (ctx) => {
       language: code,
       rtl: i18n.isRtlLanguage(code) === true,
       packed: i18n.hasShippedPack(code) === true,
+      displayMode: displayMode(),
     };
   };
 

@@ -7,7 +7,9 @@ var failures: PackedStringArray = []
 var played: PackedStringArray = []
 var only := ""
 
-const NEWEST_UPDATES := ["2026-11-native-editor-map", "2026-11-lighter-desktop", "2026-10-group-diplomacy", "2026-10-phone-layout"]
+const NEWEST_UPDATES := ["2026-11-display-mode", "2026-11-rostra-check-in", "2026-11-rostra-search-polls", "2026-11-advisor-contacts"]
+const NEWEST_TITLES := ["Windowed, maximized or fullscreen", "Check in Rostra from the map", "Rostra: Search and polls", "Advisor contacts and party details"]
+const FIRST_OPENING := ["2026-11-rostra", "2026-11-deploy-aircraft", "2026-10-espionage-part-2", "2026-11-display-mode"]
 
 
 func _update_ids(updates: Array) -> Array:
@@ -42,7 +44,7 @@ func _missed_updates(shell: ShellBoot) -> void:
 	for index in range(shell.notice.page_count() if mounted else 0):
 		shell.notice.show_page(index)
 		await _wait(0.5)
-		for title in ["A clearer map in the map editor", "A lighter desktop app", "Group diplomacy", "A tidier phone layout"]:
+		for title in NEWEST_TITLES:
 			if Array(_texts(shell.notice, PackedStringArray())).any(func(value: String) -> bool: return value.contains(title)):
 				found[title] = true
 	_check("their pages read as written", found.size() == 4, ", ".join(PackedStringArray(found.keys())))
@@ -385,10 +387,10 @@ func _notice_and_history(shell: ShellBoot) -> void:
 	var pages := notice.page_count()
 	_check("the notice pages through the updates", pages >= 2, str(pages))
 	var shown_ids := _update_ids(notice._pages.map(func(page: Dictionary) -> Dictionary: return page.get("update", {})))
-	_check("a first opening's notice starts on the newest update", not shown_ids.is_empty() and shown_ids[0] == NEWEST_UPDATES[0], ", ".join(PackedStringArray(shown_ids)))
+	_check("a first opening's notice shows the major updates first, then the newest", shown_ids == FIRST_OPENING, ", ".join(PackedStringArray(shown_ids)))
 	var state: Dictionary = await main.engine.request("shell.state")
 	var remembered: Dictionary = state.get("result", {})
-	_check("the newest update is remembered the moment it shows", not str(remembered.get("seen", "")).is_empty(), str(remembered))
+	_check("the newest update is remembered the moment it shows", str(remembered.get("seen", "")) == NEWEST_UPDATES[0], str(remembered))
 	await _shoot("s-08-notice-page-1")
 	for index in range(1, mini(pages, 4)):
 		notice.show_page(index)

@@ -1012,8 +1012,10 @@ func _count_chip(title: String, count: int) -> PanelContainer:
 
 
 func _game_card(game: Dictionary, active: bool) -> Control:
-	var accent := Color(str(game.get("accentColor", "#2bc1f3")))
-	var card := _card_frame(active, accent, 466)
+	var accent_text := str(game.get("accentColor", ""))
+	var accent := Color(accent_text if not accent_text.is_empty() else "#2bc1f3")
+	var archived: bool = game.get("archived", false)
+	var card := _card_frame(active, accent, 463 if archived else 424)
 	var column := VBoxContainer.new()
 	column.add_theme_constant_override("separation", 0)
 	card.add_child(column)
@@ -1059,14 +1061,16 @@ func _game_card(game: Dictionary, active: bool) -> Control:
 		body.add_theme_constant_override(side[0], side[1])
 	var stack := VBoxContainer.new()
 	stack.add_theme_constant_override("separation", 7)
-	var title := UI.label(str(game.get("name", "")), 21, UI.WHITE, 800, "Arial", -1)
-	title.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	var title := UI.label(str(game.get("name", "")), 17, UI.WHITE, 800, "Arial", 0)
+	title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	stack.add_child(title)
 	var country := str(game.get("country", ""))
 	stack.add_child(_info_tile("Country", country if not country.is_empty() else "No player country"))
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 6)
-	var date_text := str(game.get("gameDate", ""))
+	var date_text := str(game.get("dateText", ""))
+	if date_text.is_empty():
+		date_text = str(game.get("gameDate", ""))
 	row.add_child(_info_tile("Date", date_text if not date_text.is_empty() else "No date"))
 	row.add_child(_info_tile("Round", str(max(1, int(game.get("round", 1))))))
 	stack.add_child(row)
@@ -1092,15 +1096,18 @@ func _game_card(game: Dictionary, active: bool) -> Control:
 		play.add_theme_stylebox_override("pressed", accent_hover)
 	play.pressed.connect(func() -> void: _activate_game(game))
 	stack.add_child(play)
+	if not archived:
+		body.add_child(stack)
+		column.add_child(body)
+		return card
 	var buttons := HBoxContainer.new()
 	buttons.add_theme_constant_override("separation", 7)
-	var archived: bool = game.get("archived", false)
-	var archive := UI.button("Unarchive" if archived else "Archive", "small", "archive")
+	var archive := UI.button("Unarchive", "small", "archive")
 	archive.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	archive.tooltip_text = "Move back into your library" if archived else "Hide from the library without deleting"
+	archive.tooltip_text = "Move back into your library"
 	archive.pressed.connect(func() -> void: _archive_game(game))
 	buttons.add_child(archive)
-	if archived and game.get("canDelete", false):
+	if game.get("canDelete", false):
 		var delete := UI.button("Delete", "small")
 		delete.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		var red := UI.box(Color(127 / 255.0, 29 / 255.0, 29 / 255.0, 0.34), Color(248 / 255.0, 113 / 255.0, 113 / 255.0, 0.28), 9, 1, Vector4(12, 0, 12, 0))
@@ -1124,7 +1131,7 @@ func _open_card_menu(anchor: Button, game: Dictionary) -> void:
 	var stack := VBoxContainer.new()
 	stack.add_theme_constant_override("separation", 0)
 	stack.custom_minimum_size.x = 208
-	for label in ["Edit", "Clone", "Export"]:
+	for label in ["Edit", "Clone", "Unarchive" if game.get("archived", false) else "Archive", "Export"]:
 		var row := Button.new()
 		row.text = label
 		row.alignment = HORIZONTAL_ALIGNMENT_LEFT
@@ -1147,6 +1154,10 @@ func _open_card_menu(anchor: Button, game: Dictionary) -> void:
 			row.pressed.connect(func() -> void:
 				popup.hide()
 				_clone_game(game))
+		elif label == "Archive" or label == "Unarchive":
+			row.pressed.connect(func() -> void:
+				popup.hide()
+				_archive_game(game))
 		else:
 			row.pressed.connect(func() -> void:
 				row.text = "Exporting…"

@@ -322,6 +322,7 @@ const methods = {
         scenarioName: scenarioName.get(clean(game?.scenarioId)) || clean(game?.scenarioName) || clean(game?.heroTitle),
         country: clean(game?.country),
         gameDate: clean(game?.currentDate ?? game?.gameDate),
+        dateText: clean(engine.gameDates.formatGameDateShort(game?.currentDate ?? game?.gameDate, engine.shellI18n.getStoredLanguage())),
         round: Number(game?.round ?? game?.currentRound) || 1,
         description: clean(game?.description),
         eventCount: Number(game?.eventCount) || 0,

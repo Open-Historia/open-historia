@@ -131,7 +131,9 @@ func setup(engine: EngineLink, updates: Array, prefs: Dictionary) -> void:
 	_still = bool(prefs.get("reduceMotion", false))
 	_pages.clear()
 	var needs_metal := false
-	for raw in updates:
+	var ordered: Array = updates.filter(func(update: Variant) -> bool: return update is Dictionary and str((update as Dictionary).get("kind", "")) == "major")
+	ordered.append_array(updates.filter(func(update: Variant) -> bool: return update is Dictionary and str((update as Dictionary).get("kind", "")) != "major"))
+	for raw in ordered:
 		var update: Dictionary = raw
 		var banners: Array = update.get("banners", [])
 		for index in range(banners.size()):

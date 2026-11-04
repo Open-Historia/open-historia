@@ -394,6 +394,8 @@ static func read_setting(value: Variant, setting: Dictionary) -> Variant:
 		if not (value is Array) and not (value is String):
 			return null
 		return normalize_scripted_events(value)
+	if type == "toggle":
+		return read_boolean(value)
 	if type == "choice":
 		var text := js_trim(text_of(value)).to_lower()
 		for option in setting.get("options", []):
@@ -415,8 +417,14 @@ static func read_setting(value: Variant, setting: Dictionary) -> Variant:
 	return js_round(clamped) if float(setting.get("step", 1)) >= 1.0 else clamped
 
 
-static func read_entry(entry: Variant) -> Dictionary:
-	return entry if entry is Dictionary else {"enabled": entry}
+static func read_entry(entry: Variant, definition: Dictionary = {}) -> Dictionary:
+	var read: Dictionary = entry if entry is Dictionary else {"enabled": entry}
+	var legacy := str(definition.get("legacyEnabledSetting", ""))
+	if legacy.is_empty() or read.has(legacy) or read_boolean(read.get("enabled")) == null:
+		return read
+	var merged := read.duplicate()
+	merged[legacy] = read_boolean(read.get("enabled"))
+	return merged
 
 
 static func default_of(setting: Dictionary) -> Variant:
@@ -432,7 +440,7 @@ static func normalize_settings(raw: Variant, defs: Array) -> Dictionary:
 	for definition in defs:
 		var def: Dictionary = definition
 		var key := str(def["key"])
-		var entry := read_entry(source.get(key))
+		var entry := read_entry(source.get(key), def)
 		var enabled: Variant = read_boolean(entry.get("enabled"))
 		var resolved := {"enabled": true if def.get("toggleable", true) == false else (enabled if enabled != null else true)}
 		for item in def.get("settings", []):
@@ -451,7 +459,7 @@ static func normalize_overrides(raw: Variant, defs: Array) -> Dictionary:
 		var key := str(def["key"])
 		if not source.has(key) or source[key] == null:
 			continue
-		var entry := read_entry(source[key])
+		var entry := read_entry(source[key], def)
 		var resolved := {}
 		var enabled: Variant = null if def.get("toggleable", true) == false else read_boolean(entry.get("enabled"))
 		if enabled != null:
