@@ -175,6 +175,8 @@ func _run() -> void:
 		await _languages(shell)
 	if only in ["", "parts"]:
 		await _parts()
+	if only in ["", "themes"]:
+		await _themes(shell)
 	if only in ["", "loading", "boot"]:
 		await _loading(shell)
 	_finish()
@@ -243,6 +245,67 @@ func _languages(shell: ShellBoot) -> void:
 	main._call(main.menu, "_show_page", ["games"])
 	await _wait(0.4)
 	await _shoot("s-26-menu-english-again")
+
+
+func _find(node: Node, test: Callable) -> Node:
+	if test.call(node):
+		return node
+	for child in node.get_children():
+		var found := _find(child, test)
+		if found:
+			return found
+	return null
+
+
+func _themes(shell: ShellBoot) -> void:
+	var reply: Dictionary = await main.engine.request("shell.updates")
+	var listed: Array = reply.get("result", {}).get("updates", [])
+	var wanted := listed.filter(func(update: Variant) -> bool: return update is Dictionary and str((update as Dictionary).get("id", "")) in ["2026-11-deploy-aircraft", "2026-11-rostra"])
+	_check("the Rostra and Deploy Aircraft notices are served", wanted.size() == 2, str(_update_ids(wanted)))
+	for still in [false, true]:
+		var notice := UpdateNotice.new()
+		shell.overlay.add_child(notice)
+		await notice.setup(main.engine, wanted, {"reduceMotion": still})
+		var keys: Array = notice._pages.map(func(page: Dictionary) -> String: return str(page.get("key", "")))
+		_check("the two themes' pages, newest first (%s)" % ("still" if still else "moving"), keys == ["2026-11-rostra#0", "2026-11-rostra#1", "2026-11-deploy-aircraft#0"], str(keys))
+		var themes := ["rostra", "rostra", "airRaid"]
+		for index in range(notice.page_count()):
+			notice.show_page(index)
+			var banner: Dictionary = notice._pages[index]["banner"]
+			_check("page %d is drawn by its theme, %s" % [index + 1, themes[index]], UpdateNotice.Themes.registered(banner) and str(banner.get("theme", "")) == themes[index])
+			await _wait(0.6 if still else 3.2)
+			await _shoot("s-40-theme-%s-%d" % ["still" if still else "moving", index + 1])
+			var texts := Array(_texts(notice, PackedStringArray()))
+			_check("page %d reads its title" % (index + 1), texts.any(func(value: String) -> bool: return value.contains(str(banner.get("title", "")))), str(banner.get("title", "")))
+			if index == 0:
+				var like: Node = _find(notice, func(node: Node) -> bool: return node is Button and node.get("likes") != null)
+				_check("the feed has its Like heart, at 1,204", like != null and Array(_texts(like, PackedStringArray())).has("1,204"))
+				if like:
+					(like as Button).pressed.emit()
+					await _wait(0.2 if still else 0.5)
+					_check("a touch likes it: 1,205", Array(_texts(like, PackedStringArray())).has("1,205") and bool(like.get("liked")))
+					await _shoot("s-41-theme-liked-%s" % ("still" if still else "moving"))
+			if index == 2:
+				var finish := Array(_texts(notice._controls, PackedStringArray()))
+				_check("the last page's button is To the airfield", finish.has("To the airfield"), str(finish))
+		notice.queue_free()
+		await _frames(3)
+	var window := root.get_window()
+	var before := window.size
+	window.size = Vector2i(400, 860)
+	await _frames(4)
+	var narrow := UpdateNotice.new()
+	shell.overlay.add_child(narrow)
+	await narrow.setup(main.engine, wanted, {"reduceMotion": false})
+	await _wait(3.0)
+	_check("a phone-wide notice draws the narrow pages", narrow._narrow, str(narrow._viewport_width()))
+	await _shoot("s-42-theme-phone-rostra")
+	narrow.show_page(2)
+	await _wait(3.0)
+	await _shoot("s-43-theme-phone-air-raid")
+	narrow.queue_free()
+	window.size = before
+	await _frames(4)
 
 
 func _parts() -> void:
