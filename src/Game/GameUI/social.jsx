@@ -54,7 +54,11 @@ import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
 import { inSharedGame, requestFromHost } from "../../multiplayer/client/sharedGameBridge.js";
 import { useTurnRunning } from "./useTurnRunning.js";
+import { resolvePolityFlag } from "../../runtime/polityFlags.js";
+import { buildPolityIdentityIndex } from "../../runtime/polityIdentity.js";
+import { getWorldStateSnapshot } from "../Map/useWorldState.js";
 import RostraSearch from "./rostraSearch.jsx";
+import { onRostraPlace, takeRostraPlace } from "./rostraOpen.js";
 import EmptyFeedRefresh from "./rostraRefresh.jsx";
 
 // Rostra's own colours: the game's grey, and the accent for what is the
@@ -93,15 +97,12 @@ const ensureStyles = () => {
 
 const stroke = { fill: "none", stroke: "currentColor", strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": true };
 
-// A speaker at a lectern, speaking to the world.
+// A modern smartphone.
 const RostraDockIcon = () => (
   <svg width="18" height="18" viewBox="0 0 24 24" strokeWidth="1.9" {...stroke}>
-    <path d="M7.5 21h9l-1.4-8.5H8.9z" />
-    <path d="M5.5 12.5h13" />
-    <path d="M12 12.5V8.2" />
-    <circle cx="12" cy="6.4" r="1.6" />
-    <path d="M16.6 4.2a4.2 4.2 0 0 1 0 4.6" />
-    <path d="M7.4 4.2a4.2 4.2 0 0 0 0 4.6" />
+    <rect x="5.5" y="2" width="13" height="20" rx="3" />
+    <path d="M10.5 5h3" />
+    <path d="M9.5 19h5" />
   </svg>
 );
 
@@ -207,14 +208,35 @@ const initials = (name) => {
 };
 
 // A polity's flag by the precedence every flag in the game follows (see
-// resolveOwnerFlagUrl in projects.jsx): the scenario's own upload, then the
-// polity's, then the ISO flag its name resolves to.
+// resolvePolityFlag in polityFlags.js): custom uploaded flag, polity record flag,
+// map-ref GADM/ISO base flag, or stock national flag.
+//
+// Resolved once a name for each world, with one identity index for all the
+// names: building that index reads every region's owner, and a feed draws a
+// flag for every post.
+const flagCache = new WeakMap();
+const resolvedFlag = (name, customFlags) => {
+  const world = getWorldStateSnapshot();
+  if (!world || typeof world !== "object") return "";
+  let entry = flagCache.get(world);
+  if (!entry || entry.flags !== customFlags) {
+    entry = { flags: customFlags, index: null, names: new Map() };
+    flagCache.set(world, entry);
+  }
+  if (!entry.names.has(name)) {
+    entry.index ??= buildPolityIdentityIndex(world);
+    entry.names.set(name, resolvePolityFlag({ polity: name, world, flags: customFlags || {}, identityIndex: entry.index })?.imageUrl || "");
+  }
+  return entry.names.get(name);
+};
 const flagFor = (country, customFlags, polities) => {
   const name = String(country ?? "").trim();
   if (!name) return "";
+  const resolved = resolvedFlag(name, customFlags);
+  if (resolved) return resolved;
   const key = polities?.[name]
     ? name
-    : Object.keys(polities ?? {}).find((entry) => String(polities[entry]?.name ?? "").trim() === name) || name;
+    : Object.keys(polities ?? {}).find((entry) => String(polities[entry]?.name ?? "").trim().toLowerCase() === name.toLowerCase()) || name;
   return customFlags?.[key] || customFlags?.[name] || polities?.[key]?.flag || flagImageUrlFromGid(key) || flagImageUrlFromGid(name) || "";
 };
 
@@ -467,6 +489,19 @@ const SocialPanel = ({ isOpen, onClose, onSeen }) => {
   const scrollRef = useRef(null);
 
   useEffect(() => { ensureStyles(); }, []);
+
+  // A place a map card opened Rostra on (rostraOpen.js): Search, showing it.
+  const [opened, setOpened] = useState(null);
+  useEffect(() => {
+    const show = () => {
+      const place = takeRostraPlace();
+      if (!place) return;
+      setTab("search");
+      setOpened({ place });
+    };
+    show();
+    return onRostraPlace(show);
+  }, []);
 
   useEffect(() => {
     if (!isOpen) return undefined;
@@ -804,6 +839,7 @@ const SocialPanel = ({ isOpen, onClose, onSeen }) => {
           {tab === "search" ? (
             <RostraSearch
               shown={isOpen}
+              opened={opened}
               country={country}
               feed={feed}
               renderPost={(post) => (
@@ -935,6 +971,12 @@ const Social = ({ hovered, isOpen, onToggle, setHovered }) => {
   useEffect(() => {
     if (isOpen) setHasOpened(true);
   }, [isOpen]);
+
+  // Check in Rostra on a map card opens the panel (rostraOpen.js).
+  useEffect(() => onRostraPlace(() => {
+    setHasOpened(true);
+    if (!isOpen) onToggle();
+  }), [isOpen, onToggle]);
 
   useEffect(() => {
     setSeen(Number(readSeenNumbers()[gameId]) || 0);

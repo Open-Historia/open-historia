@@ -53,6 +53,56 @@ import { PAST_UPDATES } from "./notesPast.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // The 3D terrain's exaggeration halved, 15 to 7.5 (Map/World.jsx); the owner's ask, 2026-11-03.
+    id: "2026-11-gentler-terrain",
+    kind: "minor",
+    date: "2026-11-03",
+    channel: "beta",
+    banners: [
+      {
+        title: "Gentler 3D terrain",
+        items: [
+          "Mountains and valleys on the 3D terrain now rise half as high as before.",
+        ],
+      },
+    ],
+  },
+  {
+    // The display mode setting and tidier game cards (a contributor's PR #935, with its review fixes).
+    id: "2026-11-display-mode",
+    kind: "minor",
+    date: "2026-11-03",
+    channel: "beta",
+    banners: [
+      {
+        title: "Windowed, maximized or fullscreen",
+        items: [
+          "In the desktop app, Settings → Display now chooses how the game's window is shown: in a window, maximized, or fullscreen, and remembers it for next time.",
+          "Game cards show their date in your language, and long save names fit on the card.",
+          "A game's Archive button has moved into its card's menu.",
+        ],
+      },
+    ],
+  },
+  {
+    // A contributor's PR #942, trimmed to the map card's button (GameUI/rostraOpen.js, opening Search), the dock's
+    // phone and flags for full official names (resolvePolityFlag); the owner's choice, 2026-11-03.
+    id: "2026-11-rostra-check-in",
+    kind: "minor",
+    date: "2026-11-03",
+    channel: "beta",
+    banners: [
+      {
+        title: "Check in Rostra from the map",
+        items: [
+          "A region's card has Check in Rostra, which opens Rostra's Search on that country. Its posts load when you press Refresh there.",
+          "Rostra's button is now a phone.",
+          "Posts by countries known by their full names, such as the French Republic, show their national flags.",
+        ],
+      },
+    ],
+  },
+  {
     // Rostra's Search tab (Listen in, back inside Rostra: GameUI/rostraSearch.jsx, runtime/placeFeed.js, the placeFeed
     // task), the leader's polls (runtime/socialFeed.js, the skip's pollResults) and the box behind the pen; the
     // owner's ask, 2026-11-03.
