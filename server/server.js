@@ -791,7 +791,9 @@ app.get("/api/desktop/display-mode", (req, res) => {
   res.json(bridge ? bridge.get() : { supported: false, mode: "windowed" });
 });
 
-app.post("/api/desktop/display-mode", (req, res) => {
+// jsonParser: without it req.body was undefined, every mode read as "" and the
+// window was answered 400 and never changed.
+app.post("/api/desktop/display-mode", jsonParser, (req, res) => {
   const bridge = desktopDisplayMode(req);
   const mode = String(req.body?.mode || "").trim().toLowerCase();
   if (!["fullscreen", "maximized", "windowed"].includes(mode)) {
