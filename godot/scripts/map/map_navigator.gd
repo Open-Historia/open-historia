@@ -446,7 +446,7 @@ func scroll_input(delta: Vector2, shift: bool, at: Vector2, kind := "") -> void:
 		_wheel_type = "trackpad"
 	elif time_delta > WHEEL_NEW_ACTION_MS:
 		_wheel_type = ""
-		_wheel_last_value = delta.y
+		_wheel_last_value = delta.x if shift and absf(delta.x) > absf(delta.y) else delta.y
 		_scroll_held = delta
 		_wheel_timeout_at = now + WHEEL_SINGLE_EVENT_MS
 		_wheel_timeout_around = at
@@ -460,7 +460,7 @@ func scroll_input(delta: Vector2, shift: bool, at: Vector2, kind := "") -> void:
 		if shift:
 			_turn_scroll(delta + held)
 			return
-		var pinch_by := delta.y + held.y
+		var pinch_by := delta.y
 		if pinch_by != 0.0:
 			_wheel_delta -= pinch_by
 			if not _wheel_active:
@@ -469,7 +469,8 @@ func scroll_input(delta: Vector2, shift: bool, at: Vector2, kind := "") -> void:
 	if _wheel_type != "wheel":
 		return
 	_scroll_held = Vector2.ZERO
-	var zoom_by := delta.y + held.y
+	var by := delta + held
+	var zoom_by := by.x if shift and absf(by.x) > absf(by.y) else by.y
 	if shift and zoom_by != 0.0:
 		zoom_by /= 4.0
 	_wheel_delta -= zoom_by

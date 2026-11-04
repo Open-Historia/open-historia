@@ -189,7 +189,70 @@ func _run() -> void:
 		await _terrain_checks()
 	if _wants("settings"):
 		await _settings_checks()
+	if _wants("port"):
+		await _port_checks()
 	_finish(0 if failures.is_empty() else 1)
+
+
+func _south_edge(view: MapView) -> float:
+	var half := view.get_viewport_rect().size.y * 0.5 / view.camera.zoom.x
+	return GlobeView.lonlat_of_world(Vector2(view.camera.position.x, view.camera.position.y + half)).y
+
+
+func _port_checks() -> void:
+	var view: MapView = main.map_view
+	var navigator: MapNavigator = extras.navigator
+	var at := Vector2(720, 450)
+	extras.apply_map_settings({"Globe": false})
+	await _frames(3)
+	_hold_level(true)
+	await _level_view(view)
+	view.fly_to_lonlat(10.0, 45.0, 4.0, 0.0)
+	await _wait(1.0)
+	var zoom := view.zoom_level()
+	navigator.scroll_input(Vector2(-100.0, 0.0), true, at, "wheel")
+	await _wait(0.5)
+	_check(view.zoom_level() > zoom + 0.01 and view.bearing == 0.0 and view.pitch == 0.0, "Shift turns a mouse wheel's scroll sideways and it still zooms, finer (%+.4f)" % (view.zoom_level() - zoom))
+	_hold_level(false)
+	var kind := str(extras.background.get("kind", "builtin"))
+	view.camera.position = GlobeView.world_of_lonlat(0.0, -84.9)
+	view.camera.zoom = Vector2.ONE * pow(2.0, 4.0) / 8.0
+	view.call("_after_camera_move")
+	var builtin_edge := _south_edge(view)
+	_check(kind != "builtin" or absf(builtin_edge + 80.0) < 0.05, "the real Earth stops at 80 degrees south (%.2f)" % builtin_edge)
+	extras.background["kind"] = "image"
+	view.camera.position = GlobeView.world_of_lonlat(0.0, -84.9)
+	view.call("_after_camera_move")
+	var own_edge := _south_edge(view)
+	_check(absf(own_edge + GlobeView.MERCATOR_LIMIT) < 0.05, "a scenario's own map reaches 85 degrees south (%.2f)" % own_edge)
+	await _shoot("port-1-own-map-south")
+	extras.background["kind"] = kind
+	view.fly_to_lonlat(10.0, 45.0, 4.0, 0.0)
+	await _wait(1.0)
+	var basemap = view.basemap
+	var sea := {"streets": "#99d9f2", "imagery": "#0a2836", "light-gray": "#d0cfd4", "atlas-relief": "#bde6e0", "midnight-terrain": "#000205"}
+	var shown := []
+	for id in sea:
+		basemap.apply_style({"kind": "builtin", "basemapId": id}, main.engine)
+		var colour: Color = basemap._background.color
+		shown.append("%s %s" % [id, colour.to_html(false)])
+		_check(colour.is_equal_approx(Color(str(sea[id]))), "under %s the map shows its own sea colour (%s)" % [id, colour.to_html(false)])
+	var picture := Image.create(16, 8, false, Image.FORMAT_RGBA8)
+	for y in range(8):
+		for x in range(16):
+			picture.set_pixel(x, y, Color(0.9, 0.2, 0.1) if (x + y) % 2 == 0 else Color(0.1, 0.3, 0.9))
+	var data := Marshalls.raw_to_base64(picture.save_png_to_buffer())
+	basemap.apply_style({"kind": "image", "basemapId": "ocean", "key": "port-check", "image": {"data": data, "quad": [[-180.0, 85.0511], [180.0, 85.0511], [180.0, -85.0511], [-180.0, -85.0511]]}}, main.engine)
+	await _frames(2)
+	var sprites: Array = basemap._custom.get_children().filter(func(node: Node) -> bool: return node is Sprite2D)
+	var crisp := not sprites.is_empty() and (sprites[0] as Sprite2D).material is ShaderMaterial and ((sprites[0] as Sprite2D).material as ShaderMaterial).shader.code.contains("filter_nearest")
+	_check(crisp and is_equal_approx(basemap.picture_aspect, 2.0), "a scenario's picture is drawn crisp when zoomed past its own pixels (aspect %.2f)" % basemap.picture_aspect)
+	view.fly_to_lonlat(0.0, 20.0, 3.0, 0.0)
+	await _wait(1.5)
+	await _shoot("port-2-crisp-picture")
+	await extras.refresh_background()
+	await _wait(1.0)
+	_say("sea colours: %s" % ", ".join(PackedStringArray(shown)))
 
 
 func _texts(node: Node, into: PackedStringArray) -> void:
@@ -1192,7 +1255,7 @@ func _terrain_checks() -> void:
 	_check(globe.relief_shown() and globe.relief.has_data and globe.active, "3D terrain is on by default and raises the map from the terrarium elevation tiles React uses (%d tiles)" % globe.relief.tiles.size())
 	var peak := GlobeView.world_of_lonlat(6.8652, 45.8326)
 	var peak_height := globe.height_at(peak)
-	_check(peak_height > 2000.0 * TerrainRelief.EXAGGERATION, "Mont Blanc stands on raised ground, at MapLibre's 15-times exaggeration (%.0f m from %.0f m of elevation)" % [peak_height, peak_height / TerrainRelief.EXAGGERATION])
+	_check(peak_height > 2000.0 * TerrainRelief.EXAGGERATION, "Mont Blanc stands on raised ground, at MapLibre's 7.5-times exaggeration (%.0f m from %.0f m of elevation)" % [peak_height, peak_height / TerrainRelief.EXAGGERATION])
 	var raised := view.world_to_screen(peak)
 	var plain := globe.world_to_screen_flat(peak)
 	_check(plain.y - raised.y > 20.0, "the tilted map lifts the mountain on screen (%.1f px above the sea-level plane)" % (plain.y - raised.y))

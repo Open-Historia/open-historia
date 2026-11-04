@@ -13,6 +13,7 @@ const MAX_REQUESTS := 6
 const KEEP_TEXTURES := 320
 const EVICT_SLACK := 64
 const PLACEHOLDER_MIN_ZOOM := 9
+const TILE_RETRIES := 2
 const DEFAULT_ID := "ocean"
 const BASE_GREY := Color8(11, 16, 23)
 const CUSTOM_SEA := Color8(11, 26, 43)
@@ -38,6 +39,19 @@ const SERVICES := {
 	"ocean-dark": ["Ocean/World_Ocean_Base", 13],
 	"light-gray": ["Canvas/World_Light_Gray_Base", 16],
 	"dark-gray": ["Canvas/World_Dark_Gray_Base", 16],
+}
+
+const SEA_COLOURS := {
+	"imagery": "#0a2836",
+	"streets": "#99d9f2",
+	"topo": "#bbe8ff",
+	"terrain": "#bde6e0",
+	"shaded": "#9ebcd8",
+	"physical": "#7bb6de",
+	"natgeo": "#74abd8",
+	"ocean": "#94b9e6",
+	"light-gray": "#d0cfd4",
+	"dark-gray": "#232227",
 }
 
 const EDITOR_BASEMAPS := {
@@ -157,6 +171,16 @@ void fragment() {
 }
 """
 
+const PICTURE_SHADER := """
+shader_type canvas_item;
+uniform sampler2D smooth_picture : filter_linear_mipmap;
+uniform sampler2D crisp_picture : filter_nearest;
+void fragment() {
+	vec2 texels = fwidth(UV) * vec2(textureSize(crisp_picture, 0));
+	COLOR = max(texels.x, texels.y) < 1.0 ? texture(crisp_picture, UV) : texture(smooth_picture, UV);
+}
+"""
+
 const VECTOR_SHADER := """
 shader_type canvas_item;
 render_mode unshaded;
@@ -218,6 +242,8 @@ var _decoding := 0
 var _queued := {}
 var _landed: Array = []
 var _missing := {}
+var picture_rect := Rect2()
+var picture_aspect := 0.0
 
 
 func _ready() -> void:
@@ -357,9 +383,9 @@ func _rebuild_layers() -> void:
 		"atlas-relief":
 			paint = "relief_terrain"
 			world_paint = "world_relief"
-			_background.color = BASE_GREY
+			_background.color = Color(str(SEA_COLOURS[rendered]))
 		_:
-			_background.color = BASE_GREY
+			_background.color = Color(str(SEA_COLOURS[rendered])) if SEA_COLOURS.has(rendered) else BASE_GREY
 	if id == "natgeo-dark":
 		_background.color = Color("#111416")
 		_add_layer("natgeo-physical", "natgeo", "natgeo_physical", 0, 8, -1, -48)
@@ -702,7 +728,7 @@ func _pump() -> void:
 	_report_loading()
 
 
-func _fetch(layer: TileLayer, key: String, url: String) -> void:
+func _fetch(layer: TileLayer, key: String, url: String, attempt := 0) -> void:
 	if url.is_empty():
 		layer.on_loaded(key, null, PackedByteArray())
 		return
@@ -718,6 +744,25 @@ func _fetch(layer: TileLayer, key: String, url: String) -> void:
 		var owner_layer := layer_ref.get_ref() as TileLayer
 		if owner_layer == null or not is_instance_valid(owner_layer):
 			_pump()
+			return
+		var retried := owner_layer.source == "esri" and owner_layer.fixed_zoom != 2 and not editor_plain
+		var retryable := result != HTTPRequest.RESULT_SUCCESS or code >= 500 or code == 429
+		if retried and retryable and attempt < TILE_RETRIES and not _offline:
+			_active += 1
+			var wait := Timer.new()
+			wait.one_shot = true
+			wait.wait_time = 0.4 * (attempt + 1)
+			add_child(wait)
+			wait.timeout.connect(func() -> void:
+				wait.queue_free()
+				_active -= 1
+				var again := layer_ref.get_ref() as TileLayer
+				if again == null or not is_instance_valid(again) or again.is_queued_for_deletion():
+					_pump()
+					return
+				again.pending.erase(key)
+				_fetch(again, key, url, attempt + 1))
+			wait.start()
 			return
 		if result == HTTPRequest.RESULT_SUCCESS and code == 200 and body.size() >= 4:
 			_decode_later(owner_layer, key, "", body)
@@ -927,6 +972,8 @@ func _store(layer: TileLayer, key: String, body: PackedByteArray) -> void:
 func _mount_custom() -> void:
 	for child in _custom.get_children():
 		child.queue_free()
+	picture_rect = Rect2()
+	picture_aspect = 0.0
 	var kind := _style_kind()
 	if kind == "image":
 		var image_spec: Variant = style.get("image")
@@ -944,9 +991,22 @@ func _mount_custom() -> void:
 		var bottom_right: Array = quad[2]
 		var origin := _project(float(top_left[0]), float(top_left[1]))
 		var corner := _project(float(bottom_right[0]), float(bottom_right[1]))
+		picture_rect = Rect2(origin, corner - origin)
+		picture_aspect = float(texture.get_width()) / float(maxi(1, texture.get_height()))
+		var picture := texture.get_image()
+		if picture and not picture.is_compressed() and not picture.has_mipmaps():
+			picture.generate_mipmaps()
+			texture = ImageTexture.create_from_image(picture)
+		var shader := Shader.new()
+		shader.code = PICTURE_SHADER
+		var material := ShaderMaterial.new()
+		material.shader = shader
+		material.set_shader_parameter("smooth_picture", texture)
+		material.set_shader_parameter("crisp_picture", texture)
 		for offset in _copy_offsets():
 			var sprite := Sprite2D.new()
 			sprite.texture = texture
+			sprite.material = material
 			sprite.centered = false
 			sprite.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
 			sprite.position = origin + Vector2(offset, 0)
