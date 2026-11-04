@@ -62,6 +62,17 @@ uniform bool shadow = false;
 uniform bool editor = false;
 uniform sampler2D editor_style : filter_nearest;
 uniform int editor_rows = 1;
+uniform int war_cuts = 0;
+uniform sampler2D war_sides : filter_nearest;
+uniform float war_world = 4096.0;
+uniform vec4 war_rect_0 = vec4(0.0, 0.0, 1.0, 1.0);
+uniform vec4 war_rect_1 = vec4(0.0, 0.0, 1.0, 1.0);
+uniform vec4 war_rect_2 = vec4(0.0, 0.0, 1.0, 1.0);
+uniform vec4 war_rect_3 = vec4(0.0, 0.0, 1.0, 1.0);
+uniform sampler2D war_touched_0 : filter_nearest;
+uniform sampler2D war_touched_1 : filter_nearest;
+uniform sampler2D war_touched_2 : filter_nearest;
+uniform sampler2D war_touched_3 : filter_nearest;
 varying vec4 tint;
 varying float edge;
 varying float core;
@@ -104,6 +115,38 @@ float editor_rank(vec4 look) {
 	if (look.b > 0.5) return 2.0e6;
 	return look.g;
 }
+bool war_split(float x, float y) {
+	return x > 0.25 && y > 0.25 && abs(x - y) > 0.25;
+}
+bool war_touched_at(sampler2D touched, vec4 rect, vec2 at) {
+	for (int k = -1; k <= 1; k++) {
+		vec2 uv = (at + vec2(float(k) * war_world, 0.0) - rect.xy) / rect.zw;
+		if (uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0) {
+			return textureLod(touched, vec2(uv.x, 1.0 - uv.y), 0.0).r > 0.5;
+		}
+	}
+	return false;
+}
+bool war_cut(int a, int b, vec2 at) {
+	if (war_cuts <= 0 || b < 0) {
+		return false;
+	}
+	vec4 sa = texelFetch(war_sides, ivec2(a % columns, a / columns), 0);
+	vec4 sb = texelFetch(war_sides, ivec2(b % columns, b / columns), 0);
+	if (war_split(sa.r, sb.r) && war_touched_at(war_touched_0, war_rect_0, at)) {
+		return true;
+	}
+	if (war_cuts > 1 && war_split(sa.g, sb.g) && war_touched_at(war_touched_1, war_rect_1, at)) {
+		return true;
+	}
+	if (war_cuts > 2 && war_split(sa.b, sb.b) && war_touched_at(war_touched_2, war_rect_2, at)) {
+		return true;
+	}
+	if (war_cuts > 3 && war_split(sa.a, sb.a) && war_touched_at(war_touched_3, war_rect_3, at)) {
+		return true;
+	}
+	return false;
+}
 float stops5(float z, float a, float b, float c, float d, float e) {
 	if (z <= 1.0) return a;
 	if (z <= 3.0) return mix(a, b, (z - 1.0) / 2.0);
@@ -121,7 +164,7 @@ void vertex() {
 	tint = vec4(0.0);
 	soft = 1.0;
 	twice = 0.0;
-	bool country = !editor && b >= 0 && distance(owner_of(a), owner_of(b)) > 0.001;
+	bool country = !editor && b >= 0 && distance(owner_of(a), owner_of(b)) > 0.001 && !war_cut(a, b, VERTEX);
 	if (editor) {
 		if (!shadow) {
 			vec4 look = texelFetch(editor_style, ivec2(a % columns, a / columns + editor_rows), 0);

@@ -96,6 +96,60 @@ func _sync_map() -> void:
 	await main._world_changed()
 
 
+func _bare_map() -> void:
+	var shell: ShellBoot = main.get("shell") as ShellBoot
+	if shell == null:
+		return
+	if shell.loading != null and shell.loading.is_open():
+		shell.loading.close_now()
+		_say("the game's loading cover closed for the test")
+	if shell.door != null and is_instance_valid(shell.door) and shell.door.is_visible_in_tree():
+		shell.door.opened.emit()
+		_say("vault door opened for the test")
+
+
+func _front_border() -> void:
+	var shown: WarPaint.Field = null
+	for front in war._state.get("fronts", []):
+		var field: WarPaint.Field = war.paint.field(str((front as Dictionary).get("run", "")))
+		if field and field.shown and field.has_bounds:
+			shown = field
+	_check("a battlefield shown has its front's field", shown != null and shown.field_viewport != null and shown.touched_texture != null)
+	if shown == null or shown.field_viewport == null:
+		return
+	var touched := 0
+	for value in shown.touched:
+		if value > 0:
+			touched += 1
+	_check("the field knows where the run moved the front", touched > 0, "%d of %d cells" % [touched, shown.touched.size()])
+	shown.field_viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
+	await RenderingServer.frame_post_draw
+	await _frames(2)
+	var image := shown.field_viewport.get_texture().get_image()
+	var ours := 0
+	var theirs := 0
+	for y in range(image.get_height()):
+		for x in range(image.get_width()):
+			var pixel := image.get_pixel(x, y)
+			if pixel.g < 0.5 or pixel.b < 0.5:
+				continue
+			if pixel.r < 0.4:
+				ours += 1
+			elif pixel.r > 0.6:
+				theirs += 1
+	_check("the front's field is one side's on one hand and the other's on the other, where the run moved it", ours > 0 and theirs > 0, "%d side A, %d side B" % [ours, theirs])
+	var borders: Array[ShaderMaterial] = main.map_view.extras_border_materials()
+	var cuts := int(borders[0].get_shader_parameter("war_cuts")) if not borders.is_empty() else 0
+	_check("the map's own borders between the sides give way where the battlefield draws its own", war.paint.cut_slots > 0 and cuts == war.paint.cut_slots, "%d slots, %d cut" % [war.paint.cut_slots, cuts])
+	_bare_map()
+	await _focus([[5.5, 48.2], [8.6, 50.2]], 7.4)
+	await _wait(0.8)
+	await _shoot("w3b-front-border-z7")
+	await _focus([[4.0, 47.0], [10.5, 51.5]], 6.0)
+	await _wait(0.6)
+	await _shoot("w3c-front-border-z6")
+
+
 func _skip(days: int) -> void:
 	var began := Time.get_ticks_msec()
 	var reply := await _call("skip", {"days": days})
@@ -434,6 +488,7 @@ func _run() -> void:
 	await _wait(2.5)
 	var still := [str(war.overlay.troops), str(war.overlay.sides), str(war._entries.map(func(entry: Dictionary) -> float: return float(entry.get("day", 0.0))))]
 	_check("a front at rest stands still between skips", not war.playing() and still == resting, "troops %s, sides %s, days %s" % [still[0] == resting[0], still[1] == resting[1], still[2] == resting[2]])
+	await _front_border()
 	await _rust_frames_pass()
 	await _focus([[6.6, 48.9], [8.0, 49.7]], 8.6)
 	await _wait(0.8)

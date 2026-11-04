@@ -467,6 +467,7 @@ func _apply_owners(force: bool) -> void:
 		return
 	var had := not _overlay_signature.is_empty()
 	_overlay_signature = signature
+	paint.cut_borders(_merged_map(shown))
 	if shown.is_empty() and not had and not force:
 		return
 	var quiet := {}
