@@ -75,11 +75,18 @@ const NEW_UPDATES = [
     ],
   },
   {
-    // Advisor M2-M3C, the standing goal's progress and the war room's button beside a narrower dock, as the native app has them since lab native/godot-app took beta e07fb83e (2026-11-04).
+    // The interface as large against any screen as on 1080p (Hotkeys.resolution_scale, DPITexture icons), Advisor M2-M3C, the standing goal's progress and the war room's button beside a narrower dock, as the native app has them since lab native/godot-app took beta e07fb83e (2026-11-04).
     id: "2026-11-native-advisor-contacts",
     kind: "minor",
     date: "2026-11-04",
     banners: [
+      {
+        title: "The same size on every screen",
+        items: [
+          "On a 1440p, 4K or larger screen, the game is now as large against the screen as on a 1080p one, with sharp text and icons. Screens of 1080p or smaller look as before.",
+          "Move the window to a screen of another size and it rescales to match. Ctrl and + or − still make it larger or smaller.",
+        ],
+      },
       {
         title: "Advisors and contacts",
         items: [
