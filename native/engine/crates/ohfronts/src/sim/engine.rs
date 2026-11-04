@@ -44,6 +44,9 @@ pub trait Hooks {
     fn people_of(&self, _name: &str) -> Val {
         Val::Undef
     }
+    fn collate(&self, _a: &str, _b: &str) -> Option<f64> {
+        None
+    }
 }
 
 pub struct NoHooks;
@@ -394,6 +397,17 @@ impl Run {
             }
         } else {
             0.0
+        }
+    }
+
+    pub fn collate(&self, a: &str, b: &str) -> f64 {
+        if let Some(by) = self.hooks.collate(a, b) {
+            return by;
+        }
+        match js::compare_units(a, b) {
+            std::cmp::Ordering::Less => -1.0,
+            std::cmp::Ordering::Greater => 1.0,
+            std::cmp::Ordering::Equal => 0.0,
         }
     }
 

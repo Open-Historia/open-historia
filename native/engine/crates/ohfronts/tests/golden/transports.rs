@@ -130,6 +130,24 @@ fn transports_matches_js() {
                 );
                 Some(expect(case, transport_val(&got))?.and_then(|_| holder.done()).and_then(|_| friendly.done()).and_then(|_| hostile.done()).and_then(|_| dated.done()))
             }),
+            ("departuresFor", &|case| {
+                let options = case.arg(0);
+                let holder = Script::new(case, "0.holderAt");
+                let measure = Script::new(case, "0.km");
+                let holder_at = |lng: f64, lat: f64| if matches!(options.get("holderAt"), Val::Fn) { js::to_string(&holder.call(&[num(lng), num(lat)])) } else { String::new() };
+                let km = |a: f64, b: f64, c: f64, d: f64| js::to_number(&measure.call(&[num(a), num(b), num(c), num(d)]));
+                let collate = |a: &str, b: &str| match js::compare_units(a, b) {
+                    std::cmp::Ordering::Less => -1.0,
+                    std::cmp::Ordering::Greater => 1.0,
+                    std::cmp::Ordering::Equal => 0.0,
+                };
+                let most = if options.get("most").is_undef() { 8.0 } else { options.get("most").num() };
+                let cities = options.get("cities").array_or_empty().to_vec();
+                let owner = if options.get("owner").is_undef() { String::new() } else { js::to_string(options.get("owner")) };
+                let found = departures_for(Departures { cities: &cities, holder_at: &holder_at, owner: &owner, to: options.get("to"), near: options.get("near"), km: &km, most, collate: &collate });
+                let value = list(found.iter().map(|(lng, lat, name)| Val::obj([("lng", num(*lng)), ("lat", num(*lat)), ("name", text(name))])).collect());
+                Some(expect(case, value)?.and_then(|_| holder.done()).and_then(|_| measure.done()))
+            }),
             ("interceptionOf", &|case| {
                 let options = case.arg(2);
                 let grid = if options.get("grid").truthy() { Some(grid_of(options.get("grid"))) } else { None };

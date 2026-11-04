@@ -33,7 +33,7 @@ use super::sectors::{describe_point, find_place, in_sector, resolve_sector, Sect
 use super::staff::{breakthrough_answer, side_is_played, staff_decision, staff_may_order, staff_standing};
 use super::supply::find_pockets;
 use super::swarms::gather_newcomers;
-use super::transports::{bound_for, interception_of, load_of, move_on, normalize_transports, set_out, struck, transport_chance, transport_val, Place, SetOut, Transport, Watch, TRANSPORT_ENDED};
+use super::transports::{bound_for, departures_for, interception_of, load_of, move_on, normalize_transports, set_out, struck, transport_chance, transport_val, Departures, Place, SetOut, Transport, Watch, EMBARK_PORTS_MOST, TRANSPORT_ENDED, TRANSPORT_START_FAILS};
 use super::troops::{create_troop, is_live, kinds_for, live_count, troops_cap, troops_least, troops_wanted, TroopSeed, STATE_HOLDING};
 use super::unit_motion::year_in_era;
 use super::walls::lines_changed;
@@ -2904,30 +2904,14 @@ fn seat_of(run: &Run, grid: &str, war: &War, wanted: &str) -> Option<(f64, f64, 
     best.map(|(_, lng, lat, name)| (lng, lat, name))
 }
 
-fn origins_of(run: &Run, grid: &str, war: &War, transport: &Transport) -> Vec<(f64, f64, String)> {
+fn origins_of(run: &Run, grid: &str, war: &War, transport: &Transport, near: Option<[f64; 2]>, most: f64) -> Vec<(f64, f64, String)> {
     let surface = measure_of(run.input.get("map"));
-    let mut mine: Vec<(f64, f64, String, f64)> = Vec::new();
-    let to = (transport.to.lng.unwrap_or(f64::NAN), transport.to.lat.unwrap_or(f64::NAN));
-    for city in run.input.get("map").get("cities").array_or_empty() {
-        let (lng, lat) = (js::to_number(city.get("lng")), js::to_number(city.get("lat")));
-        if !(lng + lat).is_finite() || fold_text(&holder_at_point(run, grid, war, lng, lat)) != fold_text(&transport.owner) {
-            continue;
-        }
-        mine.push((lng, lat, format!("city: {}", clean(city.get("name"), 120)), km_between(lng, lat, to.0, to.1, surface)));
-    }
-    js::stable_sort_by(&mut mine, |a, b| {
-        let by = a.3 - b.3;
-        if by != 0.0 && !by.is_nan() {
-            by
-        } else {
-            match js::compare_units(&a.2, &b.2) {
-                std::cmp::Ordering::Less => -1.0,
-                std::cmp::Ordering::Greater => 1.0,
-                std::cmp::Ordering::Equal => 0.0,
-            }
-        }
-    });
-    mine.into_iter().take(8).map(|(lng, lat, name, _)| (lng, lat, name)).collect()
+    let to = Val::obj([("lng", transport.to.lng.map_or(Val::Undef, Val::Num)), ("lat", transport.to.lat.map_or(Val::Undef, Val::Num))]);
+    let near = near.map_or(Val::Null, |point| Val::nums(&point));
+    let holder_at = |lng: f64, lat: f64| holder_at_point(run, grid, war, lng, lat);
+    let km = |lng_a: f64, lat_a: f64, lng_b: f64, lat_b: f64| km_between(lng_a, lat_a, lng_b, lat_b, surface);
+    let collate = |a: &str, b: &str| run.collate(a, b);
+    departures_for(Departures { cities: run.input.get("map").get("cities").array_or_empty(), holder_at: &holder_at, owner: &transport.owner, to: &to, near: &near, km: &km, most, collate: &collate })
 }
 
 fn sails_in_peace(transport: &Transport) -> bool {
@@ -3038,7 +3022,7 @@ fn depart_transport(run: &mut Run, index: usize, day: f64) -> Flow<()> {
         load = kinds.iter().map(|&kind| [100.0, kind]).collect();
         draw(run, &transport.owner, load.len() as f64 * men_of(run, &transport.owner));
         if origins.is_empty() {
-            origins = origins_of(run, &grid, &war, &transport);
+            origins = origins_of(run, &grid, &war, &transport, None, 8.0);
         }
     }
     if origins.is_empty() {
@@ -3054,26 +3038,38 @@ fn depart_transport(run: &mut Run, index: usize, day: f64) -> Flow<()> {
             _ => year,
         }
     };
-    let mut out: Option<Transport> = None;
-    {
-        let run_ref: &Run = run;
-        let holder = |id: &str| holder_in(run_ref, &war, id);
+    let try_from = |run: &Run, sheet: &mut WorldGrid, places: &[(f64, f64, String)]| -> Option<Transport> {
+        let holder = |id: &str| holder_in(run, &war, id);
         let friendly = |name: &str| war_side(&war, name) == mine;
         let hostile = |name: &str| war_side(&war, name) == 1 - mine;
-        let date_of = |days: f64| run_ref.date_of(day + days);
-        for (lng, lat, name) in &origins {
+        let date_of = |days: f64| run.date_of(day + days);
+        let mut out: Option<Transport> = None;
+        for (lng, lat, name) in places {
             let from = Val::nums(&[*lng, *lat]);
             let setting = Transport { from: Some(place_of(*lng, *lat, &clean_text(name, 120))), ..loaded.clone() };
-            let gone = set_out(&setting, SetOut { grid: &mut sheet, from: &from, holder_of: &holder, friendly: &friendly, hostile: &hostile, year, date: &date, date_of: &date_of });
+            let gone = set_out(&setting, SetOut { grid: &mut *sheet, from: &from, holder_of: &holder, friendly: &friendly, hostile: &hostile, year, date: &date, date_of: &date_of });
             let moving = gone.status == "moving";
             out = Some(gone);
             if moving {
                 break;
             }
         }
-    }
+        out
+    };
+    let mut out = try_from(run, &mut sheet, &origins).unwrap();
     run.grids.insert(grid.clone(), sheet);
-    let mut out = out.unwrap();
+    if boarding.is_some() && out.status != "moving" && TRANSPORT_START_FAILS.contains(&out.note.as_str()) {
+        let there = out.clone();
+        let ports = origins_of(run, &grid, &war, &transport, Some([origins[0].0, origins[0].1]), EMBARK_PORTS_MOST);
+        let mut sheet = run.grids.remove(&grid).unwrap();
+        if let Some(found) = try_from(run, &mut sheet, &ports) {
+            out = found;
+        }
+        run.grids.insert(grid.clone(), sheet);
+        if out.status != "moving" {
+            out = there;
+        }
+    }
     if out.status != "moving" {
         let note = if out.note.is_empty() { "no-way".to_string() } else { out.note.clone() };
         refuse(run, index, &transport, &note, day);
@@ -3817,7 +3813,19 @@ pub fn snapshot(run: &mut Run) -> Val {
         .iter()
         .map(|entry| Val::obj([("day", entry.get("day").clone()), ("date", entry.get("date").clone()), ("battlefield", named_at(run, entry.get("battlefield"))), ("warId", entry.get("warId").clone()), ("name", entry.get("name").clone()), ("side", entry.get("side").clone()), ("by", entry.get("by").clone())]))
         .collect();
-    let voyages: Vec<Val> = run.voyages.iter().map(|voyage| if voyage.get("battlefield").truthy() { with_names(run, voyage, "battlefield") } else { voyage.clone() }).collect();
+    let voyages: Vec<Val> = run
+        .voyages
+        .iter()
+        .map(|voyage| {
+            let field = voyage.get("battlefield").clone();
+            let mut out = js::spread(voyage);
+            out.remove("battlefield");
+            if field.truthy() {
+                out.set("battlefield", if field.is_plain_object() { named_at(run, &field) } else { Val::Undef });
+            }
+            Val::Obj(out)
+        })
+        .collect();
     let notes: Vec<Val> = run.notes.iter().map(|note| with_names(run, note, "battlefield")).collect();
     let mut news: Vec<Val> = Vec::new();
     for battle in &run.battles {

@@ -476,6 +476,52 @@ pub struct SetOut<'a> {
     pub date_of: &'a dyn Fn(f64) -> String,
 }
 
+pub const EMBARK_PORTS_MOST: f64 = 12.0;
+pub const TRANSPORT_START_FAILS: [&str; 2] = ["no-coast", "no-ground"];
+
+pub struct Departures<'a> {
+    pub cities: &'a [Val],
+    pub holder_at: &'a dyn Fn(f64, f64) -> String,
+    pub owner: &'a str,
+    pub to: &'a Val,
+    pub near: &'a Val,
+    pub km: &'a dyn Fn(f64, f64, f64, f64) -> f64,
+    pub most: f64,
+    pub collate: &'a dyn Fn(&str, &str) -> f64,
+}
+
+pub fn departures_for(ask: Departures) -> Vec<(f64, f64, String)> {
+    let there = read_point(ask.to);
+    let here = read_point(ask.near);
+    let owner = fold(&Val::str(ask.owner));
+    let mut mine: Vec<(f64, f64, String, f64)> = Vec::new();
+    for city in ask.cities {
+        let lng = js::to_number(city.get("lng"));
+        let lat = js::to_number(city.get("lat"));
+        if !lng.is_finite() || !lat.is_finite() || fold(&Val::Str((ask.holder_at)(lng, lat))) != owner {
+            continue;
+        }
+        let far = (match there {
+            Some([to_lng, to_lat]) => (ask.km)(lng, lat, to_lng, to_lat),
+            None => 0.0,
+        }) + (match here {
+            Some([from_lng, from_lat]) => (ask.km)(from_lng, from_lat, lng, lat),
+            None => 0.0,
+        });
+        mine.push((lng, lat, format!("city: {}", clean(city.get("name"), 120)), far));
+    }
+    js::stable_sort_by(&mut mine, |a, b| {
+        let by = a.3 - b.3;
+        if by != 0.0 && !by.is_nan() {
+            by
+        } else {
+            (ask.collate)(&a.2, &b.2)
+        }
+    });
+    let most = if ask.most > 0.0 { ask.most as usize } else { 0 };
+    mine.into_iter().take(most).map(|(lng, lat, name, _)| (lng, lat, name)).collect()
+}
+
 fn refused(transport: &Transport, note: &str, date: &str) -> Transport {
     Transport { status: "refused".into(), note: note.into(), ended: date.into(), ..transport.clone() }
 }

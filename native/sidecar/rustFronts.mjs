@@ -312,6 +312,21 @@ export const metricTablesOf = (input) => {
   return [...found.values()];
 };
 
+const cityNameOf = (value) => String(value ?? "").replace(/\s+/g, " ").trim().slice(0, 120).trim();
+
+export const collationOf = (input) => {
+  const cities = Array.isArray(input?.map?.cities) ? input.map.cities : [];
+  if (cities.length === 0 || !Array.isArray(input?.transports) || input.transports.length === 0) return {};
+  const names = [...new Set(cities.map((city) => `city: ${cityNameOf(city?.name)}`))].sort((a, b) => a.localeCompare(b));
+  const ranks = {};
+  let rank = 0;
+  names.forEach((name, at) => {
+    if (at > 0 && names[at - 1].localeCompare(name) !== 0) rank += 1;
+    ranks[name] = rank;
+  });
+  return ranks;
+};
+
 const abortError = () => new DOMException("The land war's run was called off.", "AbortError");
 
 export const openMessage = (id, input, { policy = null, regionIds = null } = {}) => {
@@ -344,7 +359,7 @@ export const openMessage = (id, input, { policy = null, regionIds = null } = {})
       tables[name] = table;
     }
   }
-  return `{"t":"open","id":${id},"readers":${JSON.stringify(readers)},"policy":${spec ? encode(spec) : "null"},"tables":${encode(tables)},"metrics":${encode(metricTablesOf(given))},"input":${encode(data)}}`;
+  return `{"t":"open","id":${id},"readers":${JSON.stringify(readers)},"policy":${spec ? encode(spec) : "null"},"tables":${encode(tables)},"metrics":${encode(metricTablesOf(given))},"collation":${encode(collationOf(given))},"input":${encode(data)}}`;
 };
 
 export const rustRunMaker = (host, { policy = null, regionIds = () => null, slice = SLICE_MS } = {}) => {
