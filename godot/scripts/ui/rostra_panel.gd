@@ -366,7 +366,11 @@ static func plain_button(look: StyleBox, hover: StyleBox = null) -> Button:
 static func fill_button(button: Button, child: Control) -> void:
 	child.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	button.add_child(child)
-	button.custom_minimum_size = child.get_combined_minimum_size()
+	var keep := func() -> void:
+		if is_instance_valid(button) and is_instance_valid(child):
+			button.custom_minimum_size = child.get_combined_minimum_size()
+	child.minimum_size_changed.connect(keep)
+	keep.call()
 
 
 static func round_button(name: String, glyph_size: int, color: Color, bg: Color, edge := Color(0, 0, 0, 0), size := 32.0) -> Button:
@@ -553,7 +557,7 @@ func post_card(post: Dictionary, can_post: bool) -> Control:
 	quote.pressed.connect(func() -> void: start_quote(card))
 	actions.add_child(quote)
 	if bool(post.get("waiting", false)):
-		var waiting := text("The world answers with the next time skip.", 11, INK_FAINT)
+		var waiting := para("The world answers with the next time skip.", 11, INK_FAINT, 400, 1.3)
 		waiting.add_theme_font_override("font", italic())
 		actions.add_child(waiting)
 	else:
@@ -604,9 +608,13 @@ func _build() -> void:
 		button.size = Vector2(3, float(spec[2]) * 16.0)
 		_side_buttons.append(button)
 		add_child(button)
+	var room := Control.new()
+	room.mouse_filter = Control.MOUSE_FILTER_PASS
+	_screen.add_child(room)
 	var stack := column(0)
 	stack.mouse_filter = Control.MOUSE_FILTER_PASS
-	_screen.add_child(stack)
+	stack.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	room.add_child(stack)
 	_status = MarginContainer.new()
 	_status.custom_minimum_size.y = 40
 	for side in [["margin_left", 22], ["margin_right", 22], ["margin_top", 5], ["margin_bottom", 0]]:
