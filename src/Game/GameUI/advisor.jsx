@@ -11,13 +11,14 @@ import { SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, useTouchPrimary } from ".
 import { isComposerSendKey } from "../../runtime/composerKeys.js";
 import { chatLanguageDiffersFromUi, chatTextDirection } from "../../runtime/i18n.js";
 import { uiString } from "../../runtime/translator.js";
-import { applyProjectOpsToWorld, mutateActionsState, mutateAdvisorState, normalizeActionEntry, readAdvisorMessages, readWorldState, viewAsSeen, writeWorldState } from "../../runtime/gameState.js";
+import { applyProjectOpsToWorld, mutateActionsState, mutateAdvisorState, mutateWorldState, normalizeActionEntry, readAdvisorMessages, viewAsSeen } from "../../runtime/gameState.js";
 import { ADVISOR_RECIPIENT_TYPES, CHIEF_ADVISOR_THREAD, advisorContacts, advisorMessagesFor, advisorOfficeStatus, advisorRecipientType, archiveAdvisorContact, chiefAdvisorProfile, createAdvisorContact, politicalAdvisorOffices, replaceAdvisorThread, resetChiefAdvisorProfile, reviseAdvisorContact, saveChiefAdvisorProfile } from "../../runtime/advisorThreads.js";
 import StorageProblemNotice from "./storageProblemNotice.jsx";
 import AdvisorRecipients from "./AdvisorRecipients.jsx";
 import { describeReplyProblems, extractFencedJson, looksLikeProjectOps } from "./advisorBlocks.js";
 import { actionProposalsFromReply, recordAdvisorActionReceipt } from "./advisorActionReview.js";
 import { approveAdvisorAction } from "./advisorActionApproval.js";
+import { applyAdvisorProjectProposal, canAdvisorApplyProjectOps } from "./advisorProjectRouting.js";
 import { sentLetterDate, splitAtBlockquotes } from "./advisorDrafts.js";
 import { repeatedOrder } from "../AI/playerFocus.js";
 import { institutionDraftButtonLabel } from "./advisorInstitutionDrafts.js";
@@ -147,75 +148,6 @@ const AdvisorErrorDetails = ({ message, diagnostics, onRetry, retrying }) => {
         )}
         </div>
     );
-};
-
-// Applies the advisor's ```projects proposal to the real board (world.projects,
-// the same field events write through impacts.projectOps) and reports what
-// actually happened, so the confirmation card shows real outcomes rather than
-// echoing the model's request back. Runs ONCE, right when a reply arrives (see
-// handleSend) — never at render time, since parseAdvisorReply runs on every re-render
-// and must stay a pure read.
-//
-// The read-modify-write spreads the WHOLE world back. A shallow patch here would
-// drop polityOverrides / regionOwnershipOverrides / ownerCodes and blank the map
-// — the same trap saveGame documents in libraryBar.jsx.
-// `round` matters as much as the date: applyProjectOps stamps it onto
-// updatedRound, which is the ONLY thing deriveProjectFlags uses to decide whether a
-// programme has gone quiet. Without it an advisor update kept whatever round the
-// last EVENT stamped, so asking the advisor to brief you on a project — it updates
-// the board, the receipt card says "1 updated" — left the card still wearing "No
-// recent progress". The event path has always passed it (gameplay.js); this one had
-// not.
-const applyAdvisorProjects = async (proposal, gameDate, round) => {
-    if (!Array.isArray(proposal) || proposal.length === 0) return null;
-
-    const world = await readWorldState({ force: true });
-    const before = new Map(world.projects.map((project) => [project.id, project]));
-
-    // applyProjectOpsToWorld normalizes defensively, so the raw parsed ops are
-    // fine here; it also drops anything aimed at a project that does not exist.
-    //
-    // Not bare applyProjectOps: a project the advisor COMPLETES may carry
-    // onComplete effects — a border it hands over, a polity it renames — and those
-    // have to land whoever completed it. This is the same door the event path uses,
-    // in the same order, so a completion from chat and a completion from a jump
-    // change the world identically.
-    const { deferredProjectIds, world: nextWorld } = applyProjectOpsToWorld({
-        date: String(gameDate || ""),
-        ops: proposal,
-        round: Number(round) || 0,
-        world,
-    });
-    const next = nextWorld.projects;
-
-    const items = [];
-    for (const project of next) {
-        const previous = before.get(project.id);
-        if (!previous) {
-            items.push({ change: "opened", title: project.name });
-        } else if (previous.updatedAt !== project.updatedAt) {
-            items.push({
-                change: project.status === "complete" && previous.status !== "complete" ? "completed" : "updated",
-                title: project.name,
-            });
-        }
-    }
-    for (const project of world.projects) {
-        if (!next.some((entry) => entry.id === project.id)) {
-            items.push({ change: "closed", title: project.name });
-        }
-    }
-    // A project whose completion would change the world is NOT closed from here —
-    // only an event may move a border or rename a polity. Say so on the card rather
-    // than silently doing nothing, or the advisor claims it finished something the
-    // board still shows as running and nobody can tell why.
-    for (const id of deferredProjectIds) {
-        const project = next.find((entry) => entry.id === id);
-        if (project) items.push({ change: "deferred", title: project.name });
-    }
-    if (items.length === 0) return null;
-    await writeWorldState(nextWorld);
-    return items;
 };
 
 // Inline confirmation for what the advisor just did to the projects board. Same
@@ -1463,8 +1395,15 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             const { json: projectsProposal, truncated: projectsTruncated, reason: projectsReason,
                 dropped: projectsDropped, excerpt: projectsExcerpt } =
                 extractFencedJson(reply, "projects", { salvageTruncated: true });
-            const projectsSummary = threadId === CHIEF_ADVISOR_THREAD
-                ? await applyAdvisorProjects(projectsProposal, gameDate, gameRound).catch((error) => {
+            const canApplyProjects = canAdvisorApplyProjectOps(threadId, recipient);
+            const projectsSummary = canApplyProjects
+                ? await applyAdvisorProjectProposal({
+                    proposal: projectsProposal,
+                    gameDate,
+                    round: gameRound,
+                    mutateWorldState,
+                    applyProjectOpsToWorld,
+                }).catch((error) => {
                     console.error("Failed to apply advisor-proposed projects:", error);
                     return null;
                 }) : null;
@@ -1473,7 +1412,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             // plainly tried and nothing landed, say so and offer the retry.
             // "Some of it landed" is its own outcome, and the most common one now
             // that a single malformed entry no longer costs the batch.
-            const projectsProblem = threadId !== CHIEF_ADVISOR_THREAD ? ""
+            const projectsProblem = !canApplyProjects ? ""
                 : projectsSummary
                     ? (projectsTruncated ? "truncated" : (projectsDropped > 0 ? "partial" : ""))
                     : (looksLikeProjectOps(reply) ? (projectsTruncated ? "truncated-empty" : "unusable") : "");
@@ -1511,7 +1450,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             const next = updateMessages(prev => {
                 const next = prev.slice();
                 const last = next[next.length - 1];
-                const projectsNotApplied = threadId !== CHIEF_ADVISOR_THREAD && projectsProposal;
+                const projectsNotApplied = !canApplyProjects && projectsProposal;
                 const visibleReply = projectsNotApplied ? `${reply}\n\n(This contact's Projects are advisory and were not applied.)` : reply;
                 const finalMessage = { id: replyId, role: "advisor", text: visibleReply, time: askedOn, at: new Date().toISOString(), ...(memory ? { memory } : {}), ...(chartProblem ? { chartProblem } : {}), ...(actionsProblems.length ? { actionsProblems } : {}), ...(actionProposals.length ? { actionProposals } : {}), ...(draftProblems.length ? { draftProblems } : {}), ...(institutionDraftProblems.length ? { institutionDraftProblems } : {}), ...(deployProblems.length ? { deployProblems } : {}), ...(projectsSummary ? { projectsSummary } : {}), ...(projectsProblem ? { projectsProblem } : {}), ...(projectsDetail ? { projectsDetail } : {}), ...(projectsExcerptText ? { projectsExcerpt: projectsExcerptText } : {}) };
                 // Finalise the streaming bubble, or append the full reply if the
