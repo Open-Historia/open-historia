@@ -1409,7 +1409,7 @@ func _terrain_names_checks(view: MapView) -> void:
 	if layer == null:
 		_check(false, "the map has its country names")
 		return
-	var pitch := tilt.x if tilt != Vector2.ZERO else 55.0
+	var pitch := tilt.x if tilt != Vector2.ZERO else 60.0
 	var bearing := tilt.y if tilt != Vector2.ZERO else 0.0
 	view.fly_to_lonlat(8.6, 45.4, 5.0, 0.0)
 	view.pitch = pitch
