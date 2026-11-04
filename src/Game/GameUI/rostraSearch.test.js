@@ -79,6 +79,32 @@ test("an empty feed says so and offers Refresh: one request, made on the press, 
   assert.doesNotMatch(search, />Load posts</);
 });
 
+test("Check in Rostra on a region card opens Search on that country, and asks for nothing by itself", async () => {
+  const { onRostraPlace, openRostraPlace, takeRostraPlace } = await import("./rostraOpen.js");
+  // Pressed before the panel was ever shown: the place waits for it.
+  openRostraPlace({ polity: "French Republic", polityKey: "French Republic" });
+  assert.deepEqual(takeRostraPlace(), { scope: "country", regionId: "", regionName: "", polity: "French Republic", polityKey: "French Republic" });
+  assert.equal(takeRostraPlace(), null, "taken once");
+  const heard = [];
+  const stop = onRostraPlace((place) => heard.push(place.polity));
+  openRostraPlace({ polity: "Kingdom of Spain" });
+  openRostraPlace({ polity: "" });
+  stop();
+  openRostraPlace({ polity: "Italian Republic" });
+  assert.deepEqual(heard, ["Kingdom of Spain"]);
+  takeRostraPlace();
+  // The card's button, only with Social media on; the panel takes the place
+  // when it mounts and when it is open; Search shows it without asking.
+  const card = read("../Selection/Regions.jsx");
+  assert.match(card, /\{!isUnclaimed && isActiveFeatureEnabled\("socialMedia"\) && \(/);
+  assert.match(card, /openRostraPlace\(\{ polity: name, polityKey: name \}\);/);
+  assert.match(panel, /show\(\);\n\s*return onRostraPlace\(show\);/);
+  assert.match(panel, /setTab\("search"\);/);
+  const opened = search.match(/useEffect\(\(\) => \{\n\s*if \(!opened\?\.place\) return;[\s\S]+?\}, \[opened\]\);/)?.[0] ?? "";
+  assert.match(opened, /setPicked\(opened\.place\);/);
+  assert.doesNotMatch(opened, /setWanted|load\(/);
+});
+
 test("the box is put away until the pen opens it, and Quote opens it too", () => {
   assert.match(panel, /aria-label=\{composing \? "Put the post away" : "Write a post"\}/);
   assert.match(panel, /\{composing && \(\n {10}<div style=\{\{ borderBottom/);
