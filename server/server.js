@@ -1191,7 +1191,15 @@ app.put("/api/runtime/turn-commit", jsonParser, (req, res) => {
   }
 });
 
-app.put("/api/runtime/json/:assetKey", jsonParser, (req, res) => {
+// The rolling rollback archive can exceed 64 MiB on long campaigns. Keep the
+// larger parser exclusive to snapshots; ordinary runtime JSON writes retain
+// their tighter limit and all existing shape/storage guards below.
+const runtimeJsonWriteParser = (req, res, next) => {
+  const parser = req.params.assetKey === "snapshots" ? largeJsonParser : jsonParser;
+  parser(req, res, next);
+};
+
+app.put("/api/runtime/json/:assetKey", runtimeJsonWriteParser, (req, res) => {
   try {
     // express.json() hands us {} when the body was absent or unparseable, which is
     // indistinguishable from a genuine {} — and for an object-shaped asset like
