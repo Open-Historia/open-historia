@@ -600,10 +600,9 @@ static func icon(name: String, size_px: int, tint: Color) -> Texture2D:
 		return _icons[key]
 	var body: String = ICON_PATHS.get(name, ICON_PATHS["star"])
 	var svg := "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' width='24' height='24' fill='none' stroke='#%s' stroke-opacity='%.3f' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'>%s</svg>" % [tint.to_html(false), tint.a, body]
-	var image := Image.new()
-	if image.load_svg_from_string(svg, float(size_px) / 24.0) != OK:
+	var texture := UI.svg_texture(svg, float(size_px) / 24.0)
+	if texture == null:
 		return null
-	var texture := ImageTexture.create_from_image(image)
 	_icons[key] = texture
 	return texture
 

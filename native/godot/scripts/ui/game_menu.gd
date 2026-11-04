@@ -655,11 +655,11 @@ func _community_tile(url: String, label: String, color: Color, path: String) -> 
 		button.add_theme_stylebox_override(state, normal)
 	for state in ["hover", "pressed", "hover_pressed"]:
 		button.add_theme_stylebox_override(state, hover)
-	var image := Image.new()
 	var svg := "<svg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'><path fill='#ffffff' d='%s'/></svg>" % path
-	if image.load_svg_from_string(svg, 32.0 / 24.0) == OK:
+	var drawn := UI.svg_texture(svg, 32.0 / 24.0)
+	if drawn != null:
 		var mark := TextureRect.new()
-		mark.texture = ImageTexture.create_from_image(image)
+		mark.texture = drawn
 		mark.stretch_mode = TextureRect.STRETCH_KEEP_CENTERED
 		mark.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		mark.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -970,10 +970,7 @@ class ApiSetupPrompt extends Control:
 		return button
 
 	func _svg(svg: String, size: int, color: Color) -> Texture2D:
-		var image := Image.new()
-		if image.load_svg_from_string(svg.replace("#fff", "#" + color.to_html(false)), float(size) / 24.0) != OK:
-			return null
-		return ImageTexture.create_from_image(image)
+		return UI.svg_texture(svg.replace("#fff", "#" + color.to_html(false)), float(size) / 24.0)
 
 	func _video_panel() -> WebPanel:
 		if _video and is_instance_valid(_video):

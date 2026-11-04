@@ -452,17 +452,7 @@ static func badge(text: String, bg: Color, border: Color, ink: Color, size := 10
 
 static func svg_icon(svg: String, size := 17, color := UI.WHITE) -> Texture2D:
 	var source := svg.replace("currentColor", "#" + color.to_html(false))
-	var image := Image.new()
-	if image.load_svg_from_string(source, float(size) / 24.0) != OK:
-		return null
-	if color.a < 1.0:
-		image.convert(Image.FORMAT_RGBA8)
-		for y in range(image.get_height()):
-			for x in range(image.get_width()):
-				var pixel := image.get_pixel(x, y)
-				pixel.a *= color.a
-				image.set_pixel(x, y, pixel)
-	return ImageTexture.create_from_image(image)
+	return UI.svg_texture(source, float(size) / 24.0, color.a)
 
 
 static func text_value(value: Variant) -> String:

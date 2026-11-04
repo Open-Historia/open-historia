@@ -129,19 +129,24 @@ static func icon(name: String, size := 16, color := WHITE) -> Texture2D:
 		return null
 	if color != WHITE and name != "star":
 		svg = svg.replace("#fff", "#" + color.to_html(false))
-	var image := Image.new()
-	var scale := float(size) / 24.0
-	if image.load_svg_from_string(svg, scale) != OK:
+	var texture := svg_texture(svg, float(size) / 24.0, color.a if color.a < 1.0 and name != "star" else 1.0)
+	if texture == null:
 		return null
-	if color.a < 1.0 and name != "star":
-		image.convert(Image.FORMAT_RGBA8)
-		for y in range(image.get_height()):
-			for x in range(image.get_width()):
-				var pixel := image.get_pixel(x, y)
-				pixel.a *= color.a
-				image.set_pixel(x, y, pixel)
-	var texture := ImageTexture.create_from_image(image)
 	_icons[key] = texture
+	return texture
+
+
+static func svg_texture(svg: String, scale: float, alpha := 1.0) -> Texture2D:
+	var source := svg
+	if alpha < 1.0:
+		var open := source.find("<svg")
+		var close := source.find(">", open)
+		var end := source.rfind("</svg>")
+		if open >= 0 and close > open and end > close:
+			source = source.substr(0, close + 1) + "<g opacity='%s'>" % String.num(clampf(alpha, 0.0, 1.0), 4) + source.substr(close + 1, end - close - 1) + "</g>" + source.substr(end)
+	var texture := DPITexture.create_from_string(source, scale)
+	if texture == null or texture.get_width() <= 0:
+		return null
 	return texture
 
 
@@ -173,12 +178,10 @@ static func flag(path: String, height := 32) -> Texture2D:
 	if not file:
 		return null
 	var svg := file.get_as_text()
-	var probe := Image.new()
-	if probe.load_svg_from_string(svg, 1.0) != OK or probe.get_height() == 0:
+	var natural := svg_texture(svg, 1.0)
+	if natural == null or natural.get_height() <= 0:
 		return null
-	var image := Image.new()
-	image.load_svg_from_string(svg, float(height) / probe.get_height())
-	var texture := ImageTexture.create_from_image(image)
+	var texture := svg_texture(svg, float(height) / natural.get_height())
 	_flags[key] = texture
 	return texture
 

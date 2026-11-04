@@ -250,17 +250,9 @@ static func _glyph(name: String, size: int, color: Color) -> Texture2D:
 	if _glyph_cache.has(key):
 		return _glyph_cache[key]
 	var svg: String = str(GLYPHS.get(name, "")).replace("#fff", "#" + color.to_html(false))
-	var image := Image.new()
-	if image.load_svg_from_string(svg, float(size) / 24.0) != OK:
+	var texture := UI.svg_texture(svg, float(size) / 24.0, color.a if color.a < 1.0 else 1.0)
+	if texture == null:
 		return null
-	if color.a < 1.0:
-		image.convert(Image.FORMAT_RGBA8)
-		for y in range(image.get_height()):
-			for x in range(image.get_width()):
-				var pixel := image.get_pixel(x, y)
-				pixel.a *= color.a
-				image.set_pixel(x, y, pixel)
-	var texture := ImageTexture.create_from_image(image)
 	_glyph_cache[key] = texture
 	return texture
 

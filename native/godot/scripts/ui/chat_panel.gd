@@ -2414,10 +2414,9 @@ static func icon(icon_key: String, px: int) -> Texture2D:
 	var svg: String = ICONS.get(icon_key, "")
 	if svg.is_empty():
 		return null
-	var image := Image.new()
-	if image.load_svg_from_string(svg, float(px) / 24.0) != OK:
+	var texture := UI.svg_texture(svg, float(px) / 24.0)
+	if texture == null:
 		return null
-	var texture := ImageTexture.create_from_image(image)
 	_cache[key] = texture
 	return texture
 

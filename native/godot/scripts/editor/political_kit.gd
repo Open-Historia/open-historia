@@ -209,17 +209,9 @@ static func check_icon(checked: bool, faded: bool) -> Texture2D:
 	var svg := "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' width='16' height='16'><rect x='1' y='1' width='14' height='14' rx='3.5' fill='#ffffff' fill-opacity='0.06' stroke='#ffffff' stroke-opacity='0.5' stroke-width='1.3'/></svg>"
 	if checked:
 		svg = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' width='16' height='16'><rect x='1' y='1' width='14' height='14' rx='3.5' fill='#2bc1f3'/><path d='M4.2 8.3l2.4 2.4 5-5.2' fill='none' stroke='#ffffff' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'/></svg>"
-	var image := Image.new()
-	if image.load_svg_from_string(svg, 1.0) != OK:
+	var texture := UI.svg_texture(svg, 1.0, 0.45 if faded else 1.0)
+	if texture == null:
 		return null
-	if faded:
-		image.convert(Image.FORMAT_RGBA8)
-		for y in range(image.get_height()):
-			for x in range(image.get_width()):
-				var pixel := image.get_pixel(x, y)
-				pixel.a *= 0.45
-				image.set_pixel(x, y, pixel)
-	var texture := ImageTexture.create_from_image(image)
 	_check_icons[key] = texture
 	return texture
 

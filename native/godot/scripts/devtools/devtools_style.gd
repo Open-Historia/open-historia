@@ -134,10 +134,7 @@ static func theme() -> Theme:
 
 
 static func _svg(source: String) -> Texture2D:
-	var image := Image.new()
-	if image.load_svg_from_string(source, 1.0) != OK:
-		return null
-	return ImageTexture.create_from_image(image)
+	return UI.svg_texture(source, 1.0)
 
 
 static func text(value: String, size := 12, color := INK, weight := 400, mono := false) -> Label:
