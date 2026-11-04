@@ -75,6 +75,37 @@ const NEW_UPDATES = [
     ],
   },
   {
+    // Advisor M2-M3C, the standing goal's progress and the war room's button beside a narrower dock, as the native app has them since lab native/godot-app took beta e07fb83e (2026-11-04).
+    id: "2026-11-native-advisor-contacts",
+    kind: "minor",
+    date: "2026-11-04",
+    banners: [
+      {
+        title: "Advisors and contacts",
+        items: [
+          "Rename your chief advisor and give them a new title with Edit beside them in the list of contacts. Restore scenario defaults brings the original back and keeps the conversation.",
+          "Each contact has a type: Advisor / Minister, Citizen / Civilian, Foreign Official or Other Character. A minister can open Projects and propose Actions; any other contact knows only what is public.",
+          "An Action your advisor proposes now waits on a card in the conversation: Discuss talks it over first, and Proceed / Queue puts it on your list.",
+          "Retire asks first. The conversation and personality are kept, and you can restore the contact later.",
+        ],
+      },
+      {
+        title: "How far your goal has come",
+        items: [
+          "Under your standing goal in Actions, Assess progress asks how far it has come: a score out of 100, the change since the last reading, what was reached, what is in the way and the next steps.",
+          "Each reading is one request, so it is made only when you ask. A reworded goal starts again.",
+        ],
+      },
+      {
+        title: "Also in this update",
+        items: [
+          "A scenario's events set for its first day now happen in the first time skip, and several set for the same day all happen.",
+          "With Social media off, the War Room button stands right beside the dock.",
+        ],
+      },
+    ],
+  },
+  {
     // Troops taken off a battlefield far from the sea were refused a ship ("no sea is near where it would set out")
     // whenever they stood more than a day's march inland: now they go overland to a port of their country's on
     // their way (runtime/fronts/engine.js departTransport, transports.js departuresFor). A player's report, 2026-11-04.
