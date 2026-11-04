@@ -5089,6 +5089,8 @@ class Conversation extends VBoxContainer:
 			stripe.add_theme_stylebox_override("panel", stripe_style)
 			bubble.add_child(stripe)
 		var natural := 0.0
+		if not is_error:
+			inner.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
 		if is_player:
 			var body := UI.label(text, 14, UI.WHITE)
 			body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
