@@ -38,7 +38,8 @@ test("the rail has an Aircraft key beside Deploy, only where the scenario has ai
   // The panel: the key's plate, which shuts the fleets' (and theirs shuts it).
   assert.match(panel, /aircraft=\{aircraft\}\s*wings=\{wings\.length\}\s*aircraftOut=\{aircraftOut\}\s*onAircraft=\{\(\) => setWarRoom\(\{ aircraft: !getWarRoom\(\)\.aircraft, fleets: false \}\)\}/);
   assert.match(panel, /const aircraft = airOn\(\);/);
-  assert.match(panel, /const wings = useMemo\(\(\) => \(aircraft \? airUnitsOf\(/);
+  // The whole world, so that a front's air arm is counted (airArmsOf reads the battlefields).
+  assert.match(panel, /const wings = useMemo\(\(\) => \(aircraft \? airUnitsOf\(world, game\.country\) : \[\]\), \[aircraft, world, game\.country\]\);/);
   assert.match(panel, /\{railShown && !draft && !fleetsOut && aircraftOut && \(\s*<AircraftPlate/);
   assert.match(panel, /<AircraftList orders=\{strikesWaiting\} flown=\{strikesFlown\} names=\{wingName\} onPick=\{pickWing\} \/>/);
 });
