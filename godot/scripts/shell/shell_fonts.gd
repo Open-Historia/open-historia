@@ -33,6 +33,8 @@ static func font(css_stack := "Segoe UI", weight := 400, italic := false, spacin
 		return _cache[key]
 	var system := SystemFont.new()
 	var names := families(css_stack)
+	if stretch == 100 and not names.is_empty() and names[0] == "Bahnschrift Condensed":
+		stretch = 87
 	for fallback in ["Segoe UI", "Arial", "Segoe UI Emoji", "Segoe UI Symbol"]:
 		if not names.has(fallback):
 			names.append(fallback)

@@ -28,6 +28,7 @@ const ICON_PATHS := {
 	"star": "<path d='M12 3l2.6 5.6 6.1.7-4.5 4.1 1.2 6-5.4-3-5.4 3 1.2-6-4.5-4.1 6.1-.7z'/>",
 	"book": "<path d='M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5zM4 20.5A2.5 2.5 0 0 0 6.5 23H20v-5'/>",
 	"note": "<path d='M9 18V5l11-2v13'/><circle cx='6.5' cy='18' r='2.5'/><circle cx='17.5' cy='16' r='2.5'/>",
+	"phone": "<rect height='19' rx='2.5' width='11' x='6.5' y='2.5'/><path d='M10.5 18h3'/>",
 	"people": "<circle cx='9' cy='8' r='3'/><circle cx='17' cy='9' r='2.4'/><path d='M3.5 20c0-3.3 2.5-5.5 5.5-5.5s5.5 2.2 5.5 5.5M14.5 15c2.8-.4 6 1.4 6 5'/>",
 }
 
@@ -80,6 +81,7 @@ class Riser extends Container:
 class CardGrid extends Container:
 	var min_column := 248.0
 	var gap := 12.0
+	var fixed_columns := 0
 	var _height := 0.0
 
 	func _init() -> void:
@@ -100,7 +102,7 @@ class CardGrid extends Container:
 				items.append(child as Control)
 		var total := 0.0
 		if not items.is_empty():
-			var columns := clampi(floori((size.x + gap) / (min_column + gap)), 1, items.size())
+			var columns := fixed_columns if fixed_columns > 0 else clampi(floori((size.x + gap) / (min_column + gap)), 1, items.size())
 			var width := maxf(0.0, (size.x - gap * float(columns - 1)) / float(columns))
 			var y := 0.0
 			var start := 0
@@ -609,8 +611,9 @@ static func icon_rect(name: String, size_px: int, tint: Color) -> TextureRect:
 	return node
 
 
-static func feature_cards(sections: Array, accent: Color, soft: Color, card: Dictionary, stack: String, caps: bool, delay: float, still: bool, step := 110.0) -> CardGrid:
+static func feature_cards(sections: Array, accent: Color, soft: Color, card: Dictionary, stack: String, caps: bool, delay: float, still: bool, step := 110.0, columns := 0) -> CardGrid:
 	var grid := CardGrid.new()
+	grid.fixed_columns = columns
 	grid.min_column = px(15.5)
 	grid.gap = px(0.75)
 	var index := 0

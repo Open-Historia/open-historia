@@ -18,8 +18,13 @@ const KEYFRAMES := {
 	"ohUpdBob": {"order": ["ty", "rot"], "ty": [[0.0, 0.0], [0.5, -14.0], [1.0, 0.0]], "rot": [[0.0, "tilt"], [0.5, "-tilt"], [1.0, "tilt"]]},
 	"ohUpdRing": {"order": ["s"], "opacity": [[0.0, 0.9], [1.0, 0.0]], "s": [[0.0, 0.4], [1.0, 2.2]]},
 	"ohUpdStrike": {"order": ["s", "ty"], "s": [[0.0, 1.0], [0.35, 1.3], [1.0, 1.0]], "ty": [[0.0, 0.0], [0.35, -8.0], [1.0, 0.0]]},
+	"ohRostraScroll": {"order": ["ty"], "ty": [[0.0, 0.0], [1.0, "scroll"]]},
+	"ohRostraCaret": {"order": [], "opacity": [[0.0, 1.0], [0.49, 1.0], [0.5, 0.0], [1.0, 0.0]]},
+	"ohRostraRise": {"order": ["ty", "s"], "opacity": [[0.0, 0.0], [0.2, 1.0], [1.0, 0.0]], "ty": [[0.0, 0.0], [1.0, -70.0]], "s": [[0.0, 0.6], [1.0, 1.1]]},
+	"ohRostraSlide": {"order": ["tx"], "tx": [[0.0, 0.0], [0.42, 0.0], [0.5, "slide"], [0.92, "slide"], [1.0, 0.0]]},
+	"ohRostraType": {"order": ["sx"], "sx": [[0.0, 0.0], [1.0, 1.0]]},
 }
-const DEFAULT_VARS := {"fall": 160.0, "length": 1000.0, "tilt": -6.0, "from": 0.0, "to": 0.0}
+const DEFAULT_VARS := {"fall": 160.0, "length": 1000.0, "tilt": -6.0, "from": 0.0, "to": 0.0, "scroll": -150.0, "slide": 96.0}
 const TRANSFORM_KEYS := ["tx", "ty", "rot", "s", "sx"]
 
 
@@ -416,7 +421,7 @@ func _fillable(points: PackedVector2Array) -> Array:
 
 func parse_path(data: String) -> Array:
 	if not _path_tokens:
-		_path_tokens = RegEx.create_from_string("[MmLlHhVvCcSsQqTtZz]|[-+]?(?:\\d*\\.\\d+|\\d+\\.?)(?:[eE][-+]?\\d+)?")
+		_path_tokens = RegEx.create_from_string("[MmLlHhVvCcSsQqTtZzAa]|[-+]?(?:\\d*\\.\\d+|\\d+\\.?)(?:[eE][-+]?\\d+)?")
 	var tokens: PackedStringArray = []
 	for found in _path_tokens.search_all(data):
 		tokens.append(found.get_string())
@@ -431,7 +436,7 @@ func parse_path(data: String) -> Array:
 	var index := 0
 	while index < tokens.size():
 		var token := tokens[index]
-		if token.length() == 1 and "MmLlHhVvCcSsQqTtZz".contains(token):
+		if token.length() == 1 and "MmLlHhVvCcSsQqTtZzAa".contains(token):
 			command = token
 			index += 1
 			if command == "Z" or command == "z":
@@ -525,6 +530,19 @@ func parse_path(data: String) -> Array:
 					current.append(pen * u * u + q * 2.0 * u * t + end_q * t * t)
 				last_control = q
 				pen = end_q
+			"A":
+				var radii := Vector2(absf(float(tokens[index])), absf(float(tokens[index + 1])))
+				var tilt := deg_to_rad(float(tokens[index + 2]))
+				var large := float(tokens[index + 3]) != 0.0
+				var sweep := float(tokens[index + 4]) != 0.0
+				var end_a := base + Vector2(float(tokens[index + 5]), float(tokens[index + 6]))
+				index += 7
+				if current.is_empty():
+					current.append(start)
+				for point in arc_points(pen, radii, tilt, large, sweep, end_a):
+					current.append(point)
+				last_control = end_a
+				pen = end_a
 			_:
 				index += 1
 		last_command = command
@@ -532,6 +550,47 @@ func parse_path(data: String) -> Array:
 		parts.append(current)
 		closed.append(false)
 	return [parts, closed]
+
+
+static func arc_points(from: Vector2, radii: Vector2, tilt: float, large: bool, sweep: bool, to: Vector2) -> PackedVector2Array:
+	var points := PackedVector2Array()
+	if from.is_equal_approx(to):
+		return points
+	if radii.x <= 0.0 or radii.y <= 0.0:
+		points.append(to)
+		return points
+	var c := cos(tilt)
+	var s := sin(tilt)
+	var half := (from - to) * 0.5
+	var p := Vector2(c * half.x + s * half.y, -s * half.x + c * half.y)
+	var rx := radii.x
+	var ry := radii.y
+	var grow := (p.x * p.x) / (rx * rx) + (p.y * p.y) / (ry * ry)
+	if grow > 1.0:
+		rx *= sqrt(grow)
+		ry *= sqrt(grow)
+	var top := rx * rx * ry * ry - rx * rx * p.y * p.y - ry * ry * p.x * p.x
+	var bottom := rx * rx * p.y * p.y + ry * ry * p.x * p.x
+	var coef := sqrt(maxf(0.0, top / bottom)) if bottom > 0.0 else 0.0
+	if large == sweep:
+		coef = -coef
+	var centre_p := Vector2(coef * rx * p.y / ry, -coef * ry * p.x / rx)
+	var middle := (from + to) * 0.5
+	var centre := Vector2(c * centre_p.x - s * centre_p.y, s * centre_p.x + c * centre_p.y) + middle
+	var u := Vector2((p.x - centre_p.x) / rx, (p.y - centre_p.y) / ry)
+	var v := Vector2((-p.x - centre_p.x) / rx, (-p.y - centre_p.y) / ry)
+	var start_angle := atan2(u.y, u.x)
+	var delta := wrapf(atan2(v.y, v.x) - start_angle, -PI, PI)
+	if not sweep and delta > 0.0:
+		delta -= TAU
+	elif sweep and delta < 0.0:
+		delta += TAU
+	var steps := clampi(ceili(absf(delta) * maxf(rx, ry) / 2.0), 6, 64)
+	for step in range(1, steps + 1):
+		var angle := start_angle + delta * float(step) / float(steps)
+		points.append(centre + Vector2(rx * c * cos(angle) - ry * s * sin(angle), rx * s * cos(angle) + ry * c * sin(angle)))
+	points[points.size() - 1] = to
+	return points
 
 
 func set_fill(shape: Shape, value: Variant) -> void:
@@ -827,7 +886,24 @@ func _draw_shape(canvas: Control, shape: Shape, parent: Transform2D, parent_opac
 			for index in range(shape.parts.size()):
 				var points: PackedVector2Array = shape.parts[index]
 				var is_closed: bool = shape.closed[index]
-				if pattern.is_empty():
+				if not clipping.is_empty():
+					var inside: Transform2D = (clipping["from"] as Transform2D) * matrix
+					var line_points := points
+					if is_closed and points.size() > 2:
+						line_points = points.duplicate()
+						line_points.append(points[0])
+					var whole := matrix.get_scale().x
+					var shown := (clipping["matrix"] as Transform2D).get_scale().x
+					var keep := shape.width
+					shape.width = keep * (whole / shown if shown > 0.0 else 1.0)
+					canvas.draw_set_transform_matrix(clipping["matrix"])
+					var pieces: Array = [line_points] if pattern.is_empty() else _dashes(points, is_closed, pattern, dash_offset)
+					for piece in pieces:
+						for kept in Geometry2D.intersect_polyline_with_polygon(inside * (piece as PackedVector2Array), clipping["poly"]):
+							_stroke_line(canvas, kept, false, ink, shape)
+					shape.width = keep
+					canvas.draw_set_transform_matrix(matrix)
+				elif pattern.is_empty():
 					_stroke_line(canvas, points, is_closed, ink, shape)
 				else:
 					for piece in _dashes(points, is_closed, pattern, dash_offset):
