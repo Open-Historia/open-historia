@@ -236,6 +236,18 @@ func _features_scenario(details: Dictionary, form: Dictionary) -> void:
 	pace.release_focus()
 	await _frames(3)
 	_check(float((last_features as Dictionary)["fronts"]["pace"]) == 300.0 and pace.text == "300", "a pace above 300 settles at 300")
+	var shown: Array = []
+	_collect(section, shown)
+	var words := shown.filter(func(node: Node) -> bool: return node is Label and (node as Label).is_visible_in_tree()).map(func(node: Node) -> String: return (node as Label).text)
+	_check(words.has("Wars") and words.has("FRONTS") and words.has("AIR UNITS") and words.has("NAVIES") and words.has("Social media") and not words.has("Listen in"), "Features has Wars with Fronts, Air units and Navies, and Social media")
+	await _press(_find_button(section, "Off", 3), "Air units Off")
+	var wars: Dictionary = (last_features as Dictionary)["fronts"]
+	_check(wars.get("air") == false and wars.get("battlefields") == true and wars.get("navies") == true and wars.get("enabled") == true, "Air units Off leaves fronts and navies on")
+	await _shoot("rules-1b-features-wars")
+	await _press(_find_button(section, "On", 3), "Air units On")
+	_check(((last_features as Dictionary)["fronts"] as Dictionary).get("air") == true, "Air units On")
+	var legacy := EditorFeaturesModel.normalize_settings({"fronts": {"enabled": false}}, EditorFeaturesSection.definitions.get("features", []))
+	_check(legacy["fronts"]["battlefields"] == false and legacy["fronts"]["enabled"] == true and legacy["fronts"]["air"] == true and legacy["fronts"]["navies"] == true, "an older save's fronts off reads as Fronts off: %s" % str(legacy["fronts"]))
 	var area: TextEdit = _find_type(section, "TextEdit", 0)
 	area.grab_focus()
 	area.text = "No power may field nuclear weapons before 1945."
@@ -502,6 +514,10 @@ func _features_game() -> void:
 	_check(_same_json(last_features, {"groups": {"enabled": false}}), "a game override is sparse: {groups: {enabled: false}}")
 	await _press(_find_button(section, "Scenario default (On)", 1), "Groups scenario default")
 	_check(_same_json(last_features, {}), "Scenario default removes the override")
+	await _press(_find_button(section, "Off", 4), "Navies Off")
+	_check(_same_json(last_features, {"fronts": {"navies": false}}), "a game's Navies Off is sparse: {fronts: {navies: false}}")
+	await _press(_find_button(section, "Scenario default (On)", 4), "Navies scenario default")
+	_check(_same_json(last_features, {}), "Navies follows the scenario again")
 	var minutes := _find_line(section, "8", 0)
 	_check(minutes != null, "idle diplomacy field shows the scenario's 8 as its placeholder")
 	if minutes:

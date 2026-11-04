@@ -133,12 +133,14 @@ func _until(condition: Callable, seconds: float) -> bool:
 
 
 func _clear_shell() -> void:
-	var shell: ShellBoot = main.get("shell") as ShellBoot
+	await _until(func() -> bool: return main.shell != null, 120.0)
+	var shell: ShellBoot = main.shell
 	if shell == null:
 		return
-	await _until(func() -> bool: return shell.door_state != "deciding", 30.0)
+	await _until(func() -> bool: return shell.door_state != "deciding", 120.0)
 	if shell.door != null and is_instance_valid(shell.door):
-		shell.door.opened.emit()
+		shell.door.open()
+		await _until(func() -> bool: return shell.door == null, 8.0)
 		_say("vault door opened for the test")
 	if not shell.notice_updates.is_empty():
 		await _until(func() -> bool: return shell.notice != null and is_instance_valid(shell.notice), 5.0)
@@ -172,11 +174,13 @@ func _run() -> void:
 	menu.setting_changed.connect(func(key: String, value: Variant) -> void: signals_seen.append("setting_changed:%s=%s" % [key, str(value)]))
 
 	await menu.open_app_settings()
+	await _until(func() -> bool: return _all_text(menu._workspace).contains("Privacy"), 20.0)
 	await _wait(0.8)
 	var app_text := _all_text(menu._workspace)
 	_check("app settings say they are for every game", app_text.contains("For every game. A game's own settings are in its ☰ menu."))
 	_check("app settings open on General", app_text.contains("Language") and app_text.contains("Display") and app_text.contains("Accessibility") and app_text.contains("Privacy"))
 	await _shoot("m01-app-general")
+	await _display_mode(menu)
 	await menu._workspace.set_section("map")
 	await _wait(0.5)
 	app_text = _all_text(menu._workspace)
@@ -234,9 +238,13 @@ func _run() -> void:
 			var entries: Array = menu._workspace._fallback.get("entries", [])
 			if not entries.is_empty():
 				menu._workspace._editing_entry = str((entries[0] as Dictionary).get("id", ""))
+				menu._workspace._details["entry:%s" % str((entries[0] as Dictionary).get("id", ""))] = true
 				menu._workspace._render()
 				await _wait(0.5)
+				var entry_text := _all_text(menu._workspace)
+				_check("This model only has no Context window field", entry_text.contains("How the AI answers") and not entry_text.contains("Context window") and not entry_text.contains("Forget this window"))
 				await _shoot("m24-ai-entry-editor")
+				menu._workspace._details.erase("entry:%s" % str((entries[0] as Dictionary).get("id", "")))
 			menu._workspace._editing_entry = ""
 			menu._workspace._render()
 			await _wait(0.3)
@@ -399,10 +407,111 @@ func _run() -> void:
 				_check("the scene ends in the record", typeof(panel._finished) == TYPE_DICTIONARY, panel._error)
 				await _shoot("m65-interactive-finished")
 	panel.close()
+	await _library()
 	await _discord_invites()
 	_say("signals: %s" % ", ".join(signals_seen))
 	_say("failures: %d %s" % [failures.size(), ", ".join(failures)])
 	_finish()
+
+
+func _display_mode(menu: Variant) -> void:
+	var workspace: Variant = menu._workspace
+	var select: OptionButton = workspace._display_select
+	var modes := []
+	if select:
+		for index in range(select.item_count):
+			modes.append(str(select.get_item_metadata(index)))
+	var text := _all_text(workspace)
+	_check("Display has a Display mode: Windowed, Maximized, Fullscreen", select != null and modes == ["windowed", "maximized", "fullscreen"] and text.contains("Display mode") and text.contains("[Windowed]") and text.contains("Runs the game in a standard resizable desktop window."), str(modes))
+	_check("the Fullscreen switch is gone", _find_label(workspace._content, "Fullscreen") == null)
+	if not select:
+		return
+	select.select(1)
+	select.item_selected.emit(1)
+	await _until(func() -> bool: return ShellBoot.display_mode() == "maximized", 4.0)
+	await _wait(0.6)
+	var kept: Variant = await _request("settings.values")
+	var shown_mode := str((kept as Dictionary).get("displayMode", "")) if kept is Dictionary else ""
+	var file := FileAccess.open(OS.get_environment("OH_NATIVE_ROOT").path_join("display-mode.json"), FileAccess.READ)
+	var on_disk := file.get_as_text() if file else ""
+	_check("Maximized fills the screen and is kept for the next opening", ShellBoot.display_mode() == "maximized" and shown_mode == "maximized" and on_disk.contains("maximized") and str(workspace._display_helper.text) == "The game's window fills your screen, with its title bar.", "%s, %s, %s" % [ShellBoot.display_mode(), shown_mode, on_disk])
+	await _shoot("m01b-display-maximized")
+	select.select(0)
+	select.item_selected.emit(0)
+	await _until(func() -> bool: return ShellBoot.display_mode() == "windowed", 4.0)
+	await _wait(0.6)
+	_check("Windowed gives the window back", ShellBoot.display_mode() == "windowed" and select.selected == 0)
+
+
+func _library() -> void:
+	await main._exit_game()
+	main._call(main.menu, "_show_page", ["games"])
+	await main._refresh_library()
+	await _wait(1.2)
+	var library: Node = main.menu
+	var grid := library._page_root.get_node_or_null("GamesGrid") as GridContainer
+	var games: Array = main.library.get("games", [])
+	_check("the library shows the game's card", grid != null and grid.get_child_count() > 0 and not games.is_empty())
+	if grid == null or grid.get_child_count() == 0 or games.is_empty():
+		return
+	var game: Dictionary = games[0]
+	var card: Control = grid.get_child(0)
+	var title := _find_label(card, str(game.get("name", "")))
+	_check("the card's name is smaller and wraps", title != null and title.get_theme_font_size("font_size") == 17 and title.autowrap_mode != TextServer.AUTOWRAP_OFF)
+	var date_text := str(game.get("dateText", ""))
+	_check("the card's date is written in the player's language", not date_text.is_empty() and date_text != str(game.get("gameDate", "")) and _find_label(card, date_text) != null, "%s from %s" % [date_text, str(game.get("gameDate", ""))])
+	_check("a game in the library has no Archive button on its card", _find_text(card, "Archive") == null)
+	await _shoot("m80-library-card")
+	var more: Button = null
+	for node in card.find_children("*", "Button", true, false):
+		if (node as Button).tooltip_text.begins_with("More for"):
+			more = node
+	_check("the card has its ⋯ menu", more != null)
+	if more == null:
+		return
+	more.pressed.emit()
+	await _wait(0.5)
+	var popup: PopupPanel = null
+	for child in library.get_children():
+		if child is PopupPanel and (child as PopupPanel).visible:
+			popup = child
+	var rows := []
+	if popup:
+		for node in popup.find_children("*", "Button", true, false):
+			rows.append((node as Button).text)
+	_check("the card's menu offers Edit, Clone, Archive, Export", rows == ["Edit", "Clone", "Archive", "Export"], str(rows))
+	await _shoot("m81-card-menu")
+	if popup == null:
+		return
+	var archive: Button = null
+	for node in popup.find_children("*", "Button", true, false):
+		if (node as Button).text == "Archive":
+			archive = node
+	archive.pressed.emit()
+	var id := str(game.get("id", ""))
+	var archived := await _until(func() -> bool: return (main.library.get("games", []) as Array).any(func(entry: Dictionary) -> bool: return str(entry.get("id", "")) == id and bool(entry.get("archived", false))), 10.0)
+	_check("Archive from the menu archives the game", archived)
+	library._game_view = "archived"
+	library._show_page("games")
+	await _wait(1.0)
+	var shelf := library._page_root.get_node_or_null("GamesGrid") as GridContainer
+	var archived_card: Control = shelf.get_child(0) if shelf and shelf.get_child_count() > 0 else null
+	_check("an archived game's card offers Unarchive and Delete", archived_card != null and _find_text(archived_card, "Unarchive") != null and (_find_text(archived_card, "Delete") != null or not bool(game.get("canDelete", false))))
+	await _shoot("m82-archived-card")
+	var unarchive: Button = null
+	var found: Node = _find_text(archived_card, "Unarchive") if archived_card else null
+	while found and not (found is Button):
+		found = found.get_parent()
+	if found is Button:
+		unarchive = found
+	_check("the Unarchive button is there", unarchive != null)
+	if unarchive:
+		unarchive.pressed.emit()
+		var back := await _until(func() -> bool: return (main.library.get("games", []) as Array).any(func(entry: Dictionary) -> bool: return str(entry.get("id", "")) == id and not bool(entry.get("archived", false))), 10.0)
+		_check("Unarchive puts it back in the library", back)
+	library._game_view = "active"
+	library._show_page("games")
+	await _wait(0.4)
 
 
 func _discord_invites() -> void:
