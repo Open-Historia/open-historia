@@ -70,6 +70,115 @@ const NEW_UPDATES = [
     ],
   },
   {
+    // A contributor's PR #942, trimmed to the map card's button (GameUI/rostraOpen.js, opening Search), the dock's
+    // phone and flags for full official names (resolvePolityFlag); the owner's choice, 2026-11-03.
+    id: "2026-11-rostra-check-in",
+    kind: "minor",
+    date: "2026-11-03",
+    channel: "beta",
+    banners: [
+      {
+        title: "Check in Rostra from the map",
+        items: [
+          "A region's card has Check in Rostra, which opens Rostra's Search on that country. Its posts load when you press Refresh there.",
+          "Rostra's button is now a phone.",
+          "Posts by countries known by their full names, such as the French Republic, show their national flags.",
+        ],
+      },
+    ],
+  },
+  {
+    // Rostra's Search tab (Listen in, back inside Rostra: GameUI/rostraSearch.jsx, runtime/placeFeed.js, the placeFeed
+    // task), the leader's polls (runtime/socialFeed.js, the skip's pollResults) and the box behind the pen; the
+    // owner's ask, 2026-11-03.
+    id: "2026-11-rostra-search-polls",
+    kind: "minor",
+    date: "2026-11-03",
+    channel: "beta",
+    banners: [
+      {
+        title: "Rostra: Search and polls",
+        items: [
+          "Rostra's Search tab finds any country or region and shows what ordinary people there are posting today. Each new place is one AI request.",
+          "Search opens on your own country, where the Your country tab was.",
+          "Ask a poll as your country's leader: the public votes during the next time skip, and the poll then shows the results and the public's verdict.",
+          "The box to write a post now opens from the pen at the top of Rostra.",
+          "A feed with nothing on it says so and offers Refresh, which asks for the first posts by the people who make the news. It is one AI request.",
+        ],
+      },
+    ],
+  },
+  {
+    // thekernely's #936-#939 (Advisor contacts: runtime/advisorThreads.js; party authoring: countryEditorPolitical.js;
+    // metadata-only diplomacy replies) with the review's fixes (2026-11-03).
+    id: "2026-11-advisor-contacts",
+    kind: "minor",
+    date: "2026-11-03",
+    channel: "beta",
+    banners: [
+      {
+        title: "Advisor contacts and party details",
+        items: [
+          "The Advisor panel can hold more people to write to: add an official with a position and a personality, or your country's head of state or head of government, and each keeps a conversation of its own.",
+          "Only your chief advisor puts Actions and Projects into effect; the others advise.",
+          "The Workshop and the Country Editor now edit each party's native name, ideology, seats, founding year and colour, and the legislature's size and next election, and check that seats and support add up.",
+          "A leader's reply with no words is shown as the error it is, and one that only answers your peace offer still makes the peace.",
+        ],
+      },
+    ],
+  },
+  {
+    // An Update downloads the post's update copy, which the hub does not count (runtime/hubFiles.js updateCopyOf;
+    // the hub's index `updates`); the owner's ask, 2026-11-03.
+    id: "2026-11-updates-not-imports",
+    kind: "minor",
+    date: "2026-11-03",
+    channel: "beta",
+    banners: [
+      {
+        title: "Updates are not imports",
+        items: [
+          "Updating a scenario you got from the Community tab, or suggesting changes to it, no longer adds to its number of imports: only importing it does.",
+        ],
+      },
+    ],
+  },
+  {
+    // Terrain matrices sent as 32-bit floats, battlefield pictures no longer handed to hidden layers, the land mask
+    // read only where it is on the screen, and names not compared again on every idle (2026-11-03).
+    id: "2026-11-lighter-map",
+    kind: "minor",
+    date: "2026-11-03",
+    channel: "beta",
+    banners: [
+      {
+        title: "A lighter map",
+        items: [
+          "Moving and zooming the map takes less work, so it runs smoother, above all on slower computers with 3D terrain on.",
+          "Letting go of the map near a war brings a shorter hitch.",
+          "The globe turning on its own uses far less of your computer, so laptops and phones stay cooler while you read.",
+          "The map looks just as it did: only the work behind it has changed.",
+        ],
+      },
+    ],
+  },
+  {
+    // Gemini wrote every event's places as objects of their parts; the check failed the answer, its retry and the
+    // skip (AI/eventPlaces.js placesAsWritten; a player's Android report, 2026-11-03).
+    id: "2026-11-places-as-written",
+    kind: "minor",
+    date: "2026-11-03",
+    channel: "beta",
+    banners: [
+      {
+        title: "Long time skips on Gemini",
+        items: [
+          "A time skip no longer fails and asks again when Gemini writes the places of its events in its own format, so a year-long skip takes one request and keeps every event it wrote.",
+        ],
+      },
+    ],
+  },
+  {
     // The Workshop's GPU region layer drew a converted map's regions where they had been (Editor/regionDisplay.js
     // regionFrame), and the game's camera stopped at 80°S on a scenario's own map (Map/World.jsx maxBounds); both
     // on Avatar: Resurrection (the owner's report, 2026-11-03).

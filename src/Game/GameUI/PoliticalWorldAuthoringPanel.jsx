@@ -342,9 +342,9 @@ export default function PoliticalWorldAuthoringPanel({ details, onDetailsChange 
 
   const selectedActor = selectedKey ? world?.politicalActors?.byPolity?.[selectedKey] || null : null;
   const composition = useMemo(() => {
-    try { return { ...politicalEditorComposition(draft), error: "" }; }
+    try { return { ...politicalEditorComposition(draft, { asRecorded: selectedActor ? politicalActorToEditorState(selectedActor) : null }), error: "" }; }
     catch (error) { return { error: error?.message || "Invalid political landscape." }; }
-  }, [draft]);
+  }, [draft, selectedActor]);
   const debugSnapshot = selectedKey ? politicalDebugSnapshotFromWorld(world, selectedKey) : null;
   const messageIsSuccess = message === "Political World saved." || message === "Political World profile deleted.";
 

@@ -178,10 +178,11 @@ const optionalSupportShare = (value, label) => {
   return Math.round(number * 10) / 10;
 };
 
-// Validates author-entered electoral data without guessing missing parties,
-// distributing seats, or rewriting a political result to make it add up.
-export const politicalEditorComposition = (editor) => {
-  const totalSeats = optionalSeatCount(editor?.legislatureSeats, "Legislature seats");
+// The totals an editor state adds up to. A legislature of 0 seats is no total: saving deletes it
+// (applyPoliticalEditorStateToWorld), so the counter must not report parties "exceeding 0 seats".
+const compositionTotals = (editor) => {
+  const statedSeats = optionalSeatCount(editor?.legislatureSeats, "Legislature seats");
+  const totalSeats = statedSeats === 0 ? null : statedSeats;
   const parties = (Array.isArray(editor?.parties) ? editor.parties : []).filter((party) => clean(party?.name));
   let assignedSeats = 0;
   let mappedSupport = 0;
@@ -196,12 +197,26 @@ export const politicalEditorComposition = (editor) => {
     assignedSeats += optionalSeatCount(party.seats, `Seats held by ${clean(party.name)}`) ?? 0;
     mappedSupport += optionalSupportShare(party.supportPercent, `Support for ${clean(party.name)}`) ?? 0;
   }
+  return { totalSeats, assignedSeats, mappedSupport };
+};
 
-  if (totalSeats !== null && assignedSeats > totalSeats) {
+// Validates author-entered electoral data without guessing missing parties,
+// distributing seats, or rewriting a political result to make it add up.
+// `asRecorded`: the record as it stood before this edit, in the editor's form. A record that already held more seats
+// or support than its totals (an older AI compile, a turn's edits) does not stop every other edit to the country
+// from saving; only an edit that makes it worse, or changes the legislature's size, is refused.
+export const politicalEditorComposition = (editor, { asRecorded = null } = {}) => {
+  const { totalSeats, assignedSeats, mappedSupport } = compositionTotals(editor);
+  let before = null;
+  try { before = asRecorded ? compositionTotals(asRecorded) : null; } catch { before = null; }
+  const seatsAsRecorded = Boolean(before) && before.totalSeats === totalSeats && assignedSeats <= before.assignedSeats;
+  const supportAsRecorded = Boolean(before) && mappedSupport <= before.mappedSupport + 0.000001;
+
+  if (totalSeats !== null && assignedSeats > totalSeats && !seatsAsRecorded) {
     throw new Error(`Parties hold ${assignedSeats} seats, exceeding the legislature's ${totalSeats} seats.`);
   }
   const representation = clean(editor?.politicalRepresentation);
-  if ((!representation || representation === "electoral") && mappedSupport > 100.000001) {
+  if ((!representation || representation === "electoral") && mappedSupport > 100.000001 && !supportAsRecorded) {
     throw new Error(`Named party support totals ${mappedSupport.toFixed(1)}%, exceeding 100%.`);
   }
 
@@ -256,7 +271,13 @@ const applyPartyEditor = (draft, base = {}) => {
     else next.seats = seats;
   }
   if (Object.prototype.hasOwnProperty.call(draft, "founded")) replaceText(next, "founded", draft.founded);
-  if (Object.prototype.hasOwnProperty.call(draft, "color")) replaceText(next, "color", draft.color);
+  if (Object.prototype.hasOwnProperty.call(draft, "color")) {
+    const color = clean(draft.color);
+    if (color && !/^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(color)) {
+      throw new Error(`The colour of ${clean(draft.name)} must be a hex colour such as #2bc1f3.`);
+    }
+    replaceText(next, "color", color);
+  }
   replaceText(next, "publicDescription", draft.publicDescription);
   const priorityField = draft.priorityField === "goals" ? "goals" : "publicPriorities";
   replaceList(next, priorityField, draft.publicPrioritiesText, 16);
@@ -312,7 +333,7 @@ export const applyPoliticalEditorStateToWorld = (world, polityKey, editor) => {
   if (!world || typeof world !== "object") throw new Error("World state is required.");
   const key = clean(polityKey);
   if (!key) throw new Error("Political World edit requires a polity key.");
-  politicalEditorComposition(editor);
+  politicalEditorComposition(editor, { asRecorded: politicalEditorStateFromWorld(world, key) });
 
   const existingActor = getPoliticalProfile(world, key);
   const existingKey = getPoliticalProfileKey(world, key) || key;

@@ -348,8 +348,11 @@ export const assertPoliticalLandscapeConsistency = (entry) => {
     throw new Error(`Political landscape party seats (${seats}) exceed the legislature's ${entry.legislatureSeats} seats.`);
   }
   if (entry.kind === "parties") {
-    const support = parties.reduce((sum, party) => sum + (Number.isFinite(party.support) ? party.support : 0), 0);
-    if (support > 100.000001) {
+    const shares = parties.filter((party) => Number.isFinite(party.support));
+    const support = shares.reduce((sum, party) => sum + party.support, 0);
+    // The shares checked here are whole numbers (normalizeParty rounds them), and each can gain half a point in the
+    // rounding: 38.5 + 31.5 + 20.5 + 9.5 is 100, rounded 102. Only a total the rounding cannot explain is refused.
+    if (support > 100 + 0.5 * shares.length + 0.000001) {
       throw new Error(`Political landscape support shares total ${support}%, exceeding 100%.`);
     }
   }

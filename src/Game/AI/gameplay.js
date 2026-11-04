@@ -215,9 +215,10 @@ import {
   withWarFigures,
   withIntelligenceRating,
   withSocialPosts,
+  POLL_RESULTS_FIELD,
   withoutGroupOps,
 } from "./gameplaySchemas.js";
-import { readSkipPosts, socialFeedPromptBlock, withSkipPosts } from "../../runtime/socialFeed.js";
+import { placeRostraLines, readSkipPollResults, readSkipPosts, rostraRefreshRules, socialFeedPromptBlock, withSkipPosts } from "../../runtime/socialFeed.js";
 import { knownPolityNames } from "../../runtime/countryInfoPanel.js";
 import { frontsOn, strategyNetOn, warPartsOffBlock } from "./frontsGate.js";
 import { engineerLines } from "../../runtime/fronts/engineer.js";
@@ -246,7 +247,7 @@ import { describeUndeployedPost, isMilitaryPost, postWantsFormation } from "./mi
 import { findUnitByRef, newestTwinByRef, readNameRef, stripKindTags } from "./nameRefs.js";
 import { areaRegionsFor, buildAreaIndex, findArea, readAreaName } from "./namedAreas.js";
 import { CAPTURE_REACH_KM, findNarratedCaptures, mayNarrateCapture, statedAnnexations, statesCapture } from "./narratedCapture.js";
-import { EVENT_PLACES_RULE, findEventPlace, findEventPlaces, readEventPlace } from "./eventPlaces.js";
+import { EVENT_PLACES_RULE, findEventPlace, findEventPlaces, placesAsWritten, readEventPlace } from "./eventPlaces.js";
 import { normalizeEventPlaces } from "../../runtime/eventPlaces.js";
 import { describeTravelPace, eraOf, kmOnMap, seaShareOf } from "../../runtime/unitMotion.js";
 import { kmPerDegreeAt } from "../../../server/mapDistance.js";
@@ -531,8 +532,10 @@ import {
   getPoliticalProfileKey,
   normalizePoliticalActorRecord,
 } from "../../runtime/politicalActors.js";
-import { normalizePoliticalIntelligenceAssessment } from "../../runtime/politicalKnowledge.js";
-import { readingLanguageName } from "../../runtime/i18n.js";
+import { buildPublicPoliticalView, normalizePoliticalIntelligenceAssessment } from "../../runtime/politicalKnowledge.js";
+import { placeFeedReadingLanguage, placeFeedPlace, normalizePlaceFeedPosts, normalizePlaceFeedTrends } from "../../runtime/placeFeed.js";
+import { getStoredLanguage, languageDisplayName, readingLanguageName } from "../../runtime/i18n.js";
+import { describePlaceFeedPlace, placeFeedPlaceLabel, placeFeedRequest } from "./placeFeedContext.js";
 import { buildRealHistoryDirective } from "./futureHistoryBoundary.js";
 import {
   eventsFromLegacyChat,
@@ -3730,7 +3733,9 @@ const runJsonTask = async (taskKey, {
   const advisedTool = JUMP_TASK_KEYS.has(taskKey) && normalizeString(variables?.seatAdviceDirective) ? withSeatAdvice(featureTool) : featureTool;
   // And the social posts after all of it, or none where the game has no Rostra
   // (gameplaySchemas.js withSocialPosts).
-  const taskTool = JUMP_TASK_KEYS.has(taskKey) ? withSocialPosts(advisedTool, isActiveFeatureEnabled("socialMedia")) : advisedTool;
+  const taskTool = JUMP_TASK_KEYS.has(taskKey)
+    ? withSocialPosts(advisedTool, isActiveFeatureEnabled("socialMedia"), { polls: Number(variables?.rostraOpenPolls) > 0 })
+    : advisedTool;
   // A first reading's sheet can carry the service's rating, in the same request
   // (generateCountryStatSheet rateIntelligence, gameplaySchemas.js
   // withIntelligenceRating).
@@ -4053,7 +4058,7 @@ const runJsonTask = async (taskKey, {
       // second request for a turn already in hand. Before the output-limit
       // check below, so a cut that fell inside a rider is not a lost turn.
       if (!parsed && rawText && JUMP_TASK_KEYS.has(taskKey)) {
-        const rescued = parseWithoutTrailingFields(rawText, [SOCIAL_POSTS_FIELD, AGENT_REPORTS_FIELD, HISTORY_FIELD, SEAT_ADVICE_FIELD]);
+        const rescued = parseWithoutTrailingFields(rawText, [POLL_RESULTS_FIELD, SOCIAL_POSTS_FIELD, AGENT_REPORTS_FIELD, HISTORY_FIELD, SEAT_ADVICE_FIELD]);
         if (rescued) {
           parsed = rescued.value;
           console.warn(`[ai] task "${taskKey}": the end of the answer could not be read; kept the turn without ${rescued.dropped.join(" and ")}.`);
@@ -4296,6 +4301,12 @@ const runJsonTask = async (taskKey, {
         if (shelved.moved.length) {
           parsed = shelved.payload;
           logDebugEvent("ai", `Task "${taskKey}": ${shelved.moved.length} part(s) of the answer written on an event were put where they belong.`, shelved.moved);
+        }
+        // Places written as objects of their parts, read as the words they stand for (eventPlaces.js).
+        const placed = placesAsWritten(parsed);
+        if (placed.rewritten) {
+          parsed = placed.payload;
+          logDebugEvent("ai", `Task "${taskKey}": ${placed.rewritten} place(s) written as objects were read as "kind: name".`);
         }
       }
       let validation = parsed
@@ -10189,6 +10200,13 @@ const applySimulationResult = async ({
       logDebugEvent("turn", `Social posts: ${posts.length} of ${normalizeArray(result.socialPosts).length} kept; the rest named no person, quoted nothing there is or repeated a post.`, undefined, { verbose: true });
     }
   }
+  // And what the public answered to the player's open polls: the share each
+  // choice won, the votes and one sentence, written onto the poll's post. A
+  // poll nobody answered stays open for the next skip.
+  if (normalizeArray(result.pollResults).length && isActiveFeatureEnabled("socialMedia")) {
+    const voted = readSkipPollResults(result.pollResults, { feed: worldWithImpacts.socialFeed, round: nextGame.round });
+    if (voted.answered) worldWithImpacts = { ...worldWithImpacts, socialFeed: voted.feed };
+  }
 
   let nextWorld = worldWithImpacts;
 
@@ -10497,6 +10515,7 @@ const applySimulationResult = async ({
         outreach: result.outreach,
         peaceTreaties: result.peaceTreaties,
         socialPosts: result.socialPosts,
+        pollResults: result.pollResults,
         clearActions: result.clearActions,
         mode: result.mode,
         receipt,
@@ -13513,6 +13532,157 @@ export const generateCountryStats = async ({ code, name } = {}) => {
     { role: "user", parts: [{ text: `Give me the intelligence briefing on ${target}.` }] },
   ], { taskKey: "countryBriefing", agentKind: "advisor" });
   return String(raw || "").trim();
+};
+
+// ---- Rostra's Search: a place's feed --------------------------------------------
+// What ordinary people in one place are posting (runtime/placeFeed.js), for the
+// place a player opens in Rostra's Search tab (GameUI/rostraSearch.jsx): Listen
+// in, as it was until 2026-11-02. ONE request, made because the player opened
+// or refreshed a place. No lookup functions, since every round of them is
+// another request: the place's facts are worked out here and handed over in the
+// prompt (placeFeedContext.js), with what was said on Rostra in its country
+// (runtime/socialFeed.js placeRostraLines). Nothing is written to the world; the
+// caller keeps the answer on the device (runtime/placeFeedStore.js).
+
+// The country as its own people know it: its public politics, the economy on
+// its stat sheet, the arrangements that are OPEN, the groups on its land, and
+// how it stands with the country the player leads.
+const placeFeedCountryFacts = ({ world, polityKey, playerPolity, groups }) => {
+  const identityIndex = buildPolityIdentityIndex(world);
+  const canonical = (value) => canonicalCampaignPolity(value, world, identityIndex);
+  const name = canonical(polityKey);
+  if (!name) return null;
+  const record = world.polityOverrides?.[name] ?? null;
+  const player = canonical(playerPolity);
+  const isPlayer = Boolean(player) && player === name;
+  const relation = !player || isPlayer
+    ? null
+    : normalizeArray(world.relations).find((entry) => {
+      const a = canonical(entry?.a);
+      const b = canonical(entry?.b);
+      return (a === name && b === player) || (b === name && a === player);
+    });
+  const open = normalizeArray(world.puppets).filter((row) => row?.status === "active" && row?.secrecy === "open");
+  return {
+    name: normalizeString(record?.name) || name,
+    aliases: normalizeArray(record?.aliases),
+    note: normalizeString(record?.note),
+    politics: buildPublicPoliticalView(world, name),
+    economy: normalizeString(buildCompactEconomicContext(world.countryStats?.[name])),
+    isPlayer,
+    relationWithPlayer: relation ? { player: normalizeString(playerPolity), status: relationStatusForScore(relation.score) } : null,
+    overlords: open.filter((row) => canonical(row.puppet) === name).map((row) => ({ name: row.overlord, kind: row.kind })),
+    puppets: open.filter((row) => canonical(row.overlord) === name).map((row) => ({ name: row.puppet, kind: row.kind })),
+    groups,
+  };
+};
+
+export const generatePlaceFeed = async ({ place, language: askedLanguage, signal } = {}) => {
+  const target = placeFeedPlace(place);
+  if (!target) throw new Error("There is no place to show.");
+  if (!isActiveFeatureEnabled("socialMedia")) throw new Error("This game has no social media.");
+  // Stamped before the read: the caller keeps the feed under this campaign and
+  // this game day, whatever the player has opened by the time it comes back.
+  const campaignId = activeCampaignId();
+  const bundle = await readGameStateBundle({ force: true });
+  const world = normalizeWorldState(bundle.world);
+  const variables = await buildTemplateVariables(bundle, { taskKey: "placeFeed" });
+  const groupsOn = isActiveFeatureEnabled("groups");
+  const groupAreas = groupsOn ? world.groupAreas ?? {} : {};
+  // The map, indexed the way the lookup functions read it — built only for a
+  // region's feed, or when a group holds ground somewhere.
+  const context = target.scope === "region" || Object.keys(groupAreas).length
+    ? await lazyLookupContext(bundle)().catch(() => null)
+    : null;
+  const answer = context && target.scope === "region" ? executeLookup(context, "region_info", { regionId: target.regionId }) : null;
+  const region = answer && !answer.error ? answer : null;
+  // The country is whoever holds the region today, as the map has it, not as
+  // the card that was clicked remembered it.
+  const polityKey = normalizeString(region?.owner && region.owner !== "unowned" ? region.owner : target.polityKey);
+  const holder = context?.resolveOwner?.(polityKey) || polityKey;
+  const groups = holder
+    ? [...new Set(Object.entries(groupAreas)
+      .filter(([regionId]) => context?.byId?.get(regionId)?.owner === holder)
+      .map(([, group]) => normalizeString(world.groups?.[group]?.name) || group))]
+    : [];
+  const country = polityKey
+    ? placeFeedCountryFacts({ world, polityKey, playerPolity: bundle.game?.country, groups })
+    : null;
+  const shown = { ...target, polity: country?.name || target.polity };
+  // The phone keeps a feed under the language it asked in, so it names it and
+  // the two cannot disagree; a caller that names none gets the player's own.
+  const uiLanguage = getStoredLanguage();
+  const language = normalizeString(askedLanguage) || placeFeedReadingLanguage({
+    uiLanguage,
+    uiLanguageName: languageDisplayName(uiLanguage),
+    saveLanguage: bundle.world?.language || bundle.game?.language,
+  });
+  const { payload } = await runJsonTask("placeFeed", {
+    signal,
+    userMessage: placeFeedRequest(shown),
+    variables: {
+      ...variables,
+      placeFeedPlace: placeFeedPlaceLabel(shown),
+      placeFeedPlaceDetails: describePlaceFeedPlace({ place: shown, region, country, groupsOn }),
+      placeFeedLanguage: language,
+      placeFeedRostra: placeRostraLines(world.socialFeed, { country: shown.polity || country?.name })
+        || "Nothing has been posted there lately.",
+    },
+    // One usable post is still a feed; none is a failed request.
+    validatePayload: (candidate) => (normalizePlaceFeedPosts(candidate?.posts).length
+      ? ""
+      : "posts must hold at least one post with an author and a text."),
+  });
+  return {
+    campaignId,
+    gameDate: normalizeString(bundle.game?.gameDate),
+    round: Number(bundle.game?.round) || 0,
+    language,
+    posts: normalizePlaceFeedPosts(payload?.posts),
+    trends: normalizePlaceFeedTrends(payload?.trends),
+  };
+};
+
+// ---- Rostra's first posts -------------------------------------------------------
+// The empty feed's Refresh (GameUI/rostraRefresh.jsx): ONE request, made because
+// the player pressed it, for the posts the people who make the news are writing
+// now (runtime/socialFeed.js rostraRefreshRules). Read as a skip's posts are
+// (readSkipPosts) and written into the feed in the save's own queue, unless a
+// time skip began or the player left the game while the model was writing.
+// Answers how many posts were kept.
+export const generateRostraPosts = async ({ signal } = {}) => {
+  if (!isActiveFeatureEnabled("socialMedia")) throw new Error("This game has no social media.");
+  const campaign = activeCampaignId();
+  const bundle = await readGameStateBundle({ force: true });
+  const world = normalizeWorldState(bundle.world);
+  const gameDate = normalizeString(bundle.game?.gameDate);
+  const round = Number(bundle.game?.round) || 0;
+  const variables = await buildTemplateVariables(bundle, { taskKey: "rostraFeed" });
+  const read = (posts, feed, latest) => readSkipPosts(posts, { feed, from: "", to: gameDate, round, knownNames: knownPolityNames(latest) });
+  const { payload } = await runJsonTask("rostraFeed", {
+    signal,
+    userMessage: "Nothing has been posted on Rostra yet. Write the first posts.",
+    variables: {
+      ...variables,
+      rostraFeedRules: rostraRefreshRules({
+        players: humanCountriesOf(bundle.game).map((country) => toCountryName(country) || country),
+        date: gameDate,
+      }),
+      rostraFeedLanguage: readingLanguageName(normalizeString(bundle.world?.language || bundle.game?.language)),
+    },
+    // One usable post is a feed; none is a failed request.
+    validatePayload: (candidate) => (read(candidate?.posts, world.socialFeed, world).length
+      ? ""
+      : "posts must hold at least one post by a person, with an author and a text."),
+  });
+  let kept = 0;
+  await mutateWorldState((latest) => {
+    if (isSimulationBusy() || leftCampaign(campaign)) return null;
+    const posts = read(payload?.posts, latest.socialFeed, latest);
+    kept = posts.length;
+    return posts.length ? { ...latest, socialFeed: withSkipPosts(latest.socialFeed, posts) } : null;
+  });
+  return { kept };
 };
 
 // The fronts a scenario begins with (runtime/fronts/scenarioFronts.js), built
@@ -18511,6 +18681,8 @@ const finishTimelineJump = async ({ context, signal, state }) => {
     warFigures: merged.warFigures,
     // What was posted on Rostra in the period (runtime/socialFeed.js), read when the turn is written.
     socialPosts: merged.socialPosts,
+    // What the public answered to the player's open polls (runtime/socialFeed.js readSkipPollResults).
+    pollResults: merged.pollResults,
     // How long a skip was asked for: what the front engine runs for where the
     // scenario's calendar is not one the game can count days on.
     requestedDays: context.safeDays,

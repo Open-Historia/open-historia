@@ -16,7 +16,7 @@ test("Cheats Country Editor exposes the same canonical legislature and party fie
 
 test("Cheats Country Editor reuses canonical political composition validation and role membership", () => {
   const ui = source();
-  assert.match(ui, /politicalEditorComposition\(politicsForm\)/);
+  assert.match(ui, /politicalEditorComposition\(politicsForm, \{ asRecorded: baseline\?\.politics \|\| null \}\)/);
   assert.match(ui, /applyPoliticalEditorStateToWorld\(world, target, politicsForm\)/);
   assert.match(ui, /if \(key === "role"\)/);
   assert.match(ui, /ruling: value === "governing"/);

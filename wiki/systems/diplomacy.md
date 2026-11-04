@@ -197,15 +197,25 @@ post about what each time skip brought, and where, now and then, a celebrity or 
 posts about something that has nothing to do with world affairs. Its tabs show everything, your
 country, your **Mentions** (posts that quote you or name your country or leader) and your own posts.
 
-You post as your country's leader, from the box at the top, and you can quote any post: the post
-you quote is shown inside yours. What you post is public. The next time skip reads it as your
+You post as your country's leader: the pen at the top of Rostra opens the box to write in. You can
+quote any post, and the post you quote is shown inside yours. **Poll** in the box turns your post
+into a question with two to four choices: the public of your country votes during the next time
+skip, and the poll then shows how each choice did, how many voted and what the public said. The
+result is public opinion your government has to live with. What you post is public. The next time skip reads it as your
 leader's own words, and the world answers: leaders and journalists quote you back, and allies,
 rivals, markets and crowds act on what you said. Posting costs no AI request; the posts come in
 the answer each time skip already gives. In a shared game every player posts as their own
 country's leader. A scenario or a game can switch it off with its **Social media** feature.
 
-Rostra took the place of **Listen in**, which showed what ordinary people in a place were posting
-and cost one AI request for each feed.
+A new game's feed is empty until the first time skip. While it is, Rostra says so and offers
+**Refresh**: one AI request that writes the first posts by the people who make the news. In a
+shared game the posts come with the next time skip.
+
+**Search**, where the Your country tab was, opens on your own country and finds any country or
+region on the map. A place shows what its people of note have posted on Rostra and, on
+**Refresh**, what ordinary people there are posting today, as **Listen in** did: each new place is one AI
+request, and the same place on the same day opens again at no cost. **Check in Rostra** on a
+region's card opens Search on that country; its posts load when you press **Refresh**.
 
 ## The ledgers behind the talk
 

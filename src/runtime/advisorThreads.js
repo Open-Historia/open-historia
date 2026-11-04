@@ -12,6 +12,9 @@ const OFFICE_ROLES = Object.freeze({
   headOfState: "Head of state",
 });
 const clean = (value, max = 200) => String(value ?? "").replace(/\s+/g, " ").trim().slice(0, max);
+// A personality as it was typed: its line breaks kept (at most one blank line in a row), the spaces in each line folded.
+const cleanParagraphs = (value, max) => String(value ?? "").replace(/\r\n?/g, "\n").split("\n")
+  .map((line) => line.replace(/\s+/g, " ").trim()).join("\n").replace(/\n{3,}/g, "\n\n").trim().slice(0, max);
 const array = (value) => Array.isArray(value) ? value : [];
 const validId = (id) => /^advisor-[a-z0-9][a-z0-9_-]{5,79}$/.test(String(id || ""));
 const threadOf = (entry) => clean(entry?.threadId, 100) || CHIEF_ADVISOR_THREAD;
@@ -29,7 +32,7 @@ export const createAdvisorContact = (entries, proposed) => {
   const id = clean(proposed?.id, 100);
   const name = clean(proposed?.name, 100);
   const title = clean(proposed?.title, 120);
-  const personality = clean(proposed?.personality, ADVISOR_PERSONALITY_MAX_CHARS);
+  const personality = cleanParagraphs(proposed?.personality, ADVISOR_PERSONALITY_MAX_CHARS);
   if (!validId(id) || !name || !title) throw new Error("Advisor contacts require a unique ID, name and position.");
   if (advisorContacts(entries).some((contact) => contact.id === id)) throw new Error("This advisor contact already exists.");
   if (advisorContacts(entries).length >= 24) throw new Error("An Advisor inbox supports at most 24 additional contacts.");
@@ -67,7 +70,7 @@ export const reviseAdvisorContact = (entries, contactId, changes) => {
     throw new Error("A Political World contact's canonical name cannot be changed.");
   }
   return array(entries).map((entry) => (entry?.role === ADVISOR_CONTACT_ROLE && entry.id === contactId)
-    ? { ...entry, name, title, personality: clean(changes?.personality, ADVISOR_PERSONALITY_MAX_CHARS) }
+    ? { ...entry, name, title, personality: cleanParagraphs(changes?.personality, ADVISOR_PERSONALITY_MAX_CHARS) }
     : entry);
 };
 
@@ -131,7 +134,8 @@ export const replaceAdvisorThread = (entries, threadId, messages, { clearNotices
 const officeholder = (value) => {
   if (typeof value === "string") return { name: clean(value, 100), id: "" };
   if (!value || typeof value !== "object") return { name: "", id: "" };
-  return { name: clean(value.name || value.id, 100), id: clean(value.id, 100) };
+  // An id is never shown as a name: an officeholder with no name is offered to nobody (names, never ids).
+  return { name: clean(value.name, 100), id: clean(value.id, 100) };
 };
 
 export const politicalAdvisorOffices = (world, polity) => {
@@ -154,7 +158,7 @@ export const advisorOfficeStatus = (contact, world) => {
   const government = getPoliticalProfile(world, binding.polity)?.government;
   if (!government) return "unavailable";
   const current = officeholder(government[binding.office]);
-  if (!current.name) return "vacant";
   if (binding.personId && current.id) return binding.personId === current.id ? "current" : "changed";
+  if (!current.name) return current.id ? "changed" : "vacant";
   return current.name.toLocaleLowerCase() === String(binding.name).toLocaleLowerCase() ? "current" : "changed";
 };

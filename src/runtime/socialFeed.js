@@ -71,6 +71,119 @@ const postNumber = (id) => {
   return match ? Number(match[1]) : 0;
 };
 
+// --- Polls ----------------------------------------------------------------------
+
+// A player's post can be a poll (the owner, 2026-11-03, after a picture of one:
+// "take inspiration from this image to add a poll thing"): the post is the
+// question, and two to four choices go under it. The public of the leader's
+// country votes over the next time skip, which writes the result in the answer
+// it already gives (its pollResults field, readSkipPollResults): the share each
+// choice won, how many voted, and one sentence on what the public said. Until
+// then the poll is open, and from then on it shows its final results.
+export const POLL_CHOICES_MIN = 2;
+export const POLL_CHOICES_MAX = 4;
+export const POLL_CHOICE_MAX_CHARS = 40;
+const CONSENSUS_LIMIT = 240;
+const MAX_VOTES = 9999999999;
+
+// Shares as whole percentages that add up to 100, in the choices' order: what
+// the model wrote, scaled, and the points rounding loses given to the largest
+// remainders. Null for no share at all.
+const wholeShares = (raw, count) => {
+  const values = Array.from({ length: count }, (_, index) => {
+    const number = Number(String(list(raw)[index] ?? "").replace(/[%\s,]/g, ""));
+    return Number.isFinite(number) && number > 0 ? number : 0;
+  });
+  const total = values.reduce((sum, value) => sum + value, 0);
+  if (!total) return null;
+  const exact = values.map((value) => (value / total) * 100);
+  const shares = exact.map(Math.floor);
+  let left = 100 - shares.reduce((sum, value) => sum + value, 0);
+  const order = exact.map((value, index) => [value - Math.floor(value), index]).sort((a, b) => b[0] - a[0] || a[1] - b[1]);
+  for (const [, index] of order) {
+    if (left <= 0) break;
+    shares[index] += 1;
+    left -= 1;
+  }
+  return shares;
+};
+
+// A poll as it is kept: its choices, each once and none blank, and its results
+// once the public has voted. Null for one with fewer than two choices.
+export const normalizePoll = (raw) => {
+  if (!isRecord(raw)) return null;
+  const seen = new Set();
+  const choices = [];
+  for (const entry of list(raw.choices ?? raw.options)) {
+    const choice = clip(entry, POLL_CHOICE_MAX_CHARS);
+    if (!choice || seen.has(fold(choice))) continue;
+    seen.add(fold(choice));
+    choices.push(choice);
+    if (choices.length >= POLL_CHOICES_MAX) break;
+  }
+  if (choices.length < POLL_CHOICES_MIN) return null;
+  const poll = { choices };
+  const results = isRecord(raw.results) ? raw.results : null;
+  const shares = results ? wholeShares(results.shares, choices.length) : null;
+  if (shares) {
+    const votes = Math.round(Number(String(results.votes ?? "").replace(/[\s,]/g, "")));
+    poll.results = {
+      shares,
+      votes: Number.isFinite(votes) && votes > 0 ? Math.min(MAX_VOTES, votes) : 0,
+      consensus: clip(results.consensus, CONSENSUS_LIMIT),
+      round: Number.isFinite(Number(results.round)) ? Math.max(0, Math.trunc(Number(results.round))) : 0,
+    };
+  }
+  return poll;
+};
+
+// The choices the player typed, as a poll, or { error } (a sentence for them).
+export const pollFromChoices = (choices) => {
+  const typed = list(choices).map((choice) => clean(choice)).filter(Boolean);
+  if (typed.some((choice) => Array.from(choice).length > POLL_CHOICE_MAX_CHARS)) return { error: `A choice is at most ${POLL_CHOICE_MAX_CHARS} characters.` };
+  const poll = normalizePoll({ choices: typed });
+  if (!poll || poll.choices.length !== typed.length) return { error: `A poll needs ${POLL_CHOICES_MIN} to ${POLL_CHOICES_MAX} different choices.` };
+  return { poll };
+};
+
+// The player's polls the public has not voted on yet, oldest first.
+export const openPolls = (feed) => normalizeSocialFeed(feed).filter((post) => post.poll && !post.poll.results);
+
+// The answer's pollResults, read onto the open polls they name (by id). An
+// entry for a poll that is not open, or with no share at all, changes nothing.
+// `round` the round the skip lands on.
+export const readSkipPollResults = (raw, { feed = [], round = 0 } = {}) => {
+  const posts = normalizeSocialFeed(feed);
+  const open = new Map(openPolls(posts).map((post) => [post.id, post]));
+  const answered = new Map();
+  for (const entry of list(raw)) {
+    if (!isRecord(entry)) continue;
+    const id = clean(entry.poll ?? entry.id ?? entry.post);
+    const post = open.get(id);
+    if (!post || answered.has(id)) continue;
+    // Shares by choice, where the model named them instead of listing them.
+    const asked = entry.shares ?? entry.results ?? entry.percentages;
+    const shares = isRecord(asked)
+      ? post.poll.choices.map((choice) => asked[choice] ?? Object.entries(asked).find(([key]) => fold(key) === fold(choice))?.[1])
+      : asked;
+    const poll = normalizePoll({ ...post.poll, results: { shares, votes: entry.votes, consensus: entry.consensus, round } });
+    if (poll?.results) answered.set(id, poll);
+  }
+  if (!answered.size) return { feed: posts, answered: 0 };
+  return {
+    feed: posts.map((post) => (answered.has(post.id) ? { ...post, poll: answered.get(post.id) } : post)),
+    answered: answered.size,
+  };
+};
+
+// The winning choice's place, or -1 while the poll is open or tied at the top.
+export const pollWinner = (poll) => {
+  const shares = poll?.results?.shares;
+  if (!Array.isArray(shares) || !shares.length) return -1;
+  const top = Math.max(...shares);
+  return shares.filter((share) => share === top).length === 1 ? shares.indexOf(top) : -1;
+};
+
 // --- Posts ----------------------------------------------------------------------
 
 // One kept post, or null when it has no id, no author or nothing to say.
@@ -95,6 +208,9 @@ export const normalizeSocialPost = (raw) => {
   if (postNumber(quote) && quote !== id) post.quote = quote;
   // Whose seat wrote a player's post: in a shared game, which person's country.
   if (kind === "player" && clean(raw.by)) post.by = clip(raw.by, COUNTRY_LIMIT);
+  // Only a player asks a poll.
+  const poll = kind === "player" ? normalizePoll(raw.poll) : null;
+  if (poll) post.poll = poll;
   return post;
 };
 
@@ -163,14 +279,18 @@ export const playerAccount = (world, polity) => {
 };
 
 // A post the player writes, as their country's leader. `by` is their country;
-// `quote` the id of the post they quote, if any. Returns { world, post } or
-// { error } (a sentence for the player), and never writes anything itself.
-export const withPlayerPost = (world, { by = "", text = "", quote = "", date = "", round = 0 } = {}) => {
+// `quote` the id of the post they quote, if any; `choices` a poll's choices,
+// when the post asks one (its text is then the question). Returns { world,
+// post } or { error } (a sentence for the player), and never writes anything
+// itself.
+export const withPlayerPost = (world, { by = "", text = "", quote = "", date = "", round = 0, choices = null } = {}) => {
   const country = clean(by);
   const body = postText(text, SOCIAL_POST_MAX_CHARS + 1);
   if (!country) return { error: "Nobody to post as." };
   if (!body) return { error: "A post needs words." };
   if (body.length > SOCIAL_POST_MAX_CHARS) return { error: `A post is at most ${SOCIAL_POST_MAX_CHARS} characters.` };
+  const asked = Array.isArray(choices) ? pollFromChoices(choices) : null;
+  if (asked?.error) return { error: asked.error };
   const feed = normalizeSocialFeed(world?.socialFeed);
   const quoted = clean(quote);
   if (quoted && !findPost(feed, quoted)) return { error: "That post is no longer there to quote." };
@@ -184,6 +304,7 @@ export const withPlayerPost = (world, { by = "", text = "", quote = "", date = "
     kind: "player",
     by: country,
     quote: quoted,
+    ...(asked?.poll ? { poll: asked.poll } : {}),
   });
   return { world: { ...(isRecord(world) ? world : {}), socialFeed: normalizeSocialFeed([...feed, post]) }, post };
 };
@@ -391,7 +512,53 @@ const describePost = (post, feed, round) => {
   const quoting = quoted
     ? ` Quoting ${quoted.id} (${clean(quoted.author)}: "${clip(quoted.text, 90)}").`
     : "";
-  return `${post.id} | ${post.date || "undated"} | ${who}${marks.length ? ` [${marks.join("; ")}]` : ""}:${quoting} "${clip(post.text, PROMPT_TEXT_LIMIT)}"`;
+  return `${post.id} | ${post.date || "undated"} | ${who}${marks.length ? ` [${marks.join("; ")}]` : ""}:${quoting} "${clip(post.text, PROMPT_TEXT_LIMIT)}"${pollLine(post.poll)}`;
+};
+
+// A poll's choices, and what the public answered once it has.
+const pollLine = (poll) => {
+  if (!poll) return "";
+  const results = poll.results;
+  if (!results) return ` Poll, open until this time skip: ${poll.choices.map((choice) => `"${choice}"`).join(" / ")}.`;
+  const shares = poll.choices.map((choice, index) => `"${choice}" ${results.shares[index]}%`).join(", ");
+  return ` Poll result: ${shares}${results.votes ? ` (${results.votes.toLocaleString("en-US")} votes)` : ""}.${results.consensus ? ` ${results.consensus}` : ""}`;
+};
+
+// What the empty feed's Refresh asks for (gameplay.js generateRostraPosts): the
+// first posts of a game, before any time skip has written one ("if there are
+// no posts, it should say refresh page with a refresh button to generate
+// them", the owner, 2026-11-03). The same people and rules as a skip's posts,
+// about the world as it stands. `date` the game's day.
+export const ROSTRA_REFRESH_POSTS = "8 to 12";
+export const rostraRefreshRules = ({ players = [], date = "" } = {}) => {
+  const people = list(players).map(clean).filter(Boolean);
+  const playerNames = people.length ? people.join(", ") : "the player's polity";
+  return [
+    `Write ${ROSTRA_REFRESH_POSTS} posts, dated ${date || "today"} or the few days before it, oldest first, about the world as it stands and what has happened lately.`,
+    "  • The people who make the news: heads of state and government, ministers, generals, party leaders, journalists, analysts, chief executives, activists. Each writes in their own voice, under their real name where history gives one.",
+    "  • Quote one another where someone would: a rival answering a rival, a journalist picking a statement apart (quote: \"#2\" for the 2nd post of your own list).",
+    "  • Exactly one post about nothing in world affairs: a celebrity, a sports star or an ordinary person talking about everyday things (offTopic: true).",
+    `Each post: author (a person's full name, never a country, a government or a people), role (their office or what they do), country (the exact map name of the polity they belong to, or empty), date (YYYY-MM-DD), text (at most ${SOCIAL_POST_MAX_CHARS} characters, written as that person would post it), quote (empty, or "#n" for an earlier post of your list).`,
+    `Never write a post as the leader of ${playerNames}, or as anyone who speaks for ${people.length > 1 ? "their governments" : "its government"}: those posts are the player's to write. Their opposition, press and people may post.`,
+  ].join("\n");
+};
+
+// What was said on Rostra in one country and about it, for a Search feed's
+// prompt (gameplay.js generatePlaceFeed): the newest posts by its people and by
+// its leader, and its leader's polls with what the public answered, so that the
+// people there talk about what is being said where they live. "" for nothing.
+export const PLACE_ROSTRA_POSTS = 8;
+export const placeRostraLines = (feed, { country = "" } = {}) => {
+  const name = clean(country);
+  if (!name) return "";
+  const posts = normalizeSocialFeed(feed);
+  return [...posts]
+    .reverse()
+    .filter((post) => same(post.country, name) || (post.kind === "player" && same(post.by, name)))
+    .slice(0, PLACE_ROSTRA_POSTS)
+    .reverse()
+    .map((post) => `${post.date || "undated"} | ${[clean(post.author), clean(post.role)].filter(Boolean).join(", ")}: "${clip(post.text, PROMPT_TEXT_LIMIT)}"${pollLine(post.poll)}`)
+    .join("\n");
 };
 
 // The posts the skip is shown, most important first: every post of the
@@ -434,6 +601,12 @@ export const socialFeedPromptBlock = ({ feed = [], players = [], round = 0 } = {
   }
   const lines = kept.sort((a, b) => postNumber(a.post.id) - postNumber(b.post.id)).map((entry) => entry.line);
   const everyday = wantsEverydayPost(posts, round);
+  // An open poll is always shown, whatever else the block had room for: the
+  // skip is to answer it.
+  const polls = openPolls(posts);
+  for (const post of polls) {
+    if (!kept.some((entry) => entry.post.id === post.id)) lines.push(describePost(post, posts, round));
+  }
   return [
     "[Social Media]",
     "Rostra is this world's social network, where the people who make the news post in public. Each post below is a public statement by the person who wrote it, and it can move events as a speech would: a leader's post can insult a neighbour or reassure an ally, calm a market or start a run on it, call people into the streets, embarrass a government or sink a negotiation. Where a post would really have consequences in this period, write them into the events, and let the people it concerns answer it.",
@@ -448,5 +621,10 @@ export const socialFeedPromptBlock = ({ feed = [], players = [], round = 0 } = {
       : "  • No post about everyday things this time: every post is about world affairs.",
     `Each post: author (a person's full name, never a country, a government or a people), role (their office or what they do), country (the exact map name of the polity they belong to, or empty), date (YYYY-MM-DD inside the period), text (at most ${SOCIAL_POST_MAX_CHARS} characters, written as that person would post it, in the language the events are written in), quote (the id of the post it quotes, from the list above or "#2" for the 2nd post of your own list, else empty).`,
     `Never write a post as the leader of ${playerNames}, or as anyone who speaks for ${people.length > 1 ? "their governments" : "its government"}: those posts are the player's to write. Their opposition, press and people may post.`,
+    ...(polls.length ? [
+      `Write pollResults: the player's open ${polls.length === 1 ? "poll" : "polls"} (${polls.map((post) => post.id).join(", ")}), as the public of the leader's country voted on ${polls.length === 1 ? "it" : "them"} during this period. For each: poll (its id), shares (the percentage of voters who chose each choice, whole numbers in the choices' order, adding up to 100), votes (how many people voted, as many as would answer such a poll there) and consensus (one sentence: what the public said and why).`,
+      "  • Decide the shares from what that public really thinks of the question in this world, never from what the leader would like to hear. A poll asked in a country at war, in a crisis or under a government its people distrust can go against it.",
+      "  • The result is public opinion the government has to live with: let it show where it matters, in the events and in what people post (quoting the poll, cheering or mocking the result).",
+    ] : []),
   ].join("\n");
 };
