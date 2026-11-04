@@ -983,6 +983,9 @@ export const register = (ctx) => {
       }];
       next.blockades = [...list(world.blockades).filter((entry) => fold(entry?.country) !== fold(b)), { country: b, by: [a], pressure: 0.34, covered: 0.4, days: 6, since: date }];
       next.units = list(world.units).map((entry) => (entry?.id === "native-test-fr-4" ? { ...entry, lng: 4.4, lat: 54.2, posture: "blockade", committedTo: "" } : entry));
+      if (!next.units.some((entry) => entry?.id === "native-test-fr-5")) {
+        next.units.push({ id: "native-test-fr-5", ownerCode: a, type: "air", name: "Air Wing Saint-Dizier", strength: 80, status: "pending", lng: 4.9, lat: 48.6, source: "ai" });
+      }
       next.markers = [...list(world.markers).filter((marker) => !String(marker?.id ?? "").startsWith("native-test-")), {
         id: "native-test-m1", name: "Forward Air Base Metz", kind: "military base", ownerCode: a, status: "active", lng: 6.18, lat: 49.12,
       }, {
