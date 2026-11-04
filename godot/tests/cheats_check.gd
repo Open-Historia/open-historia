@@ -223,6 +223,7 @@ func _run() -> void:
 		stability.gui_input.emit(_key(KEY_UP))
 		_check(stability.text == "100", "and never past its maximum", stability.text)
 	await _shoot("cheats-03-country-numbers")
+	await _country_politics(cheats)
 
 	await cheats._go("events")
 	await _wait(0.6)
@@ -278,7 +279,106 @@ func _run() -> void:
 	_finish(0 if failures.is_empty() else 1)
 
 
+func _option_after(node: Node, label: String) -> OptionButton:
+	var labels: Array = []
+	_collect_labels(node, label, labels)
+	for found in labels:
+		for child in (found as Node).get_parent().get_children():
+			if child is OptionButton:
+				return child
+	return null
+
+
+func _country_politics(cheats: Node) -> void:
+	var seeded: Dictionary = await main.engine.request("country.standin_seed")
+	_check(seeded.get("ok", false), "France's Political World is seeded")
+	await cheats._ce_load("France")
+	cheats._s["open:cp_party_0"] = true
+	cheats._s["open:cp_party_1"] = true
+	cheats._render()
+	await _wait(0.8)
+	var form := _field_after(cheats, "GOVERNMENT FORM")
+	if form:
+		form.text = "Semi-presidential republic"
+		form.text_changed.emit(form.text)
+	_check(form != null and form.text == "Semi-presidential republic" and str(cheats._cp().get("governmentForm", "")) == "Semi-presidential republic", "a text field of the government takes words", form.text if form else "none")
+	_check(_field_after(cheats, "LEGISLATURE") != null and _field_after(cheats, "LEGISLATURE") .text == "National Assembly" and _field_after(cheats, "LEGISLATURE SEATS") != null and _field_after(cheats, "LEGISLATURE SEATS").text == "577" and _field_after(cheats, "NEXT ELECTION") != null and _field_after(cheats, "NEXT ELECTION").text == "June 2017", "the government's legislature, its seats and the next election")
+	_check(_has_text(cheats, "Party roles update the government's actual party IDs. Support (%) and legislature seats are separate measures; blank seats mean unknown, while 0 means no seats."), "the parties' note")
+	_check(await _until(func() -> bool: return _has_text(cheats, "Seats assigned: 482 / 577. Unlisted or unassigned: 95. Named party support: 92% (remaining 8% not individually mapped)."), 6.0), "the seats and support add up live")
+	_check(_field_after(cheats, "NATIVE NAME") != null and _field_after(cheats, "NATIVE NAME").text == "Parti socialiste" and _field_after(cheats, "SEATS HELD") != null and _field_after(cheats, "SEATS HELD").text == "286" and _field_after(cheats, "FOUNDED") != null and _field_after(cheats, "PARTY COLOUR (HEX)") != null and _field_after(cheats, "SUBIDEOLOGY") != null and _field_after(cheats, "IDEOLOGY LABEL") != null and _field_after(cheats, "NATIVE ABBREVIATION") != null, "a party's native names, seats, founding and colour")
+	var family := _option_after(cheats, "IDEOLOGY FAMILY")
+	_check(family != null and family.get_item_text(family.selected) == "Social Democracy" and family.get_item_text(0) == "Not specified" and family.item_count == 11, "the ideology family is one of the ten", str(family.item_count) if family else "none")
+	var role := _option_after(cheats, "PARTY ROLE")
+	_check(role != null and role.get_item_text(role.selected) == "Governing" and role.item_count == 7 and not _has_text(cheats, "Ruling / government"), "a party's role is chosen, not ticked")
+	await _shoot("cheats-03b-country-politics")
+	var seats := _field_after(cheats, "SEATS HELD")
+	if seats:
+		seats.text = "600"
+		seats.text_changed.emit("600")
+	_check(await _until(func() -> bool: return _has_text(cheats, "Parties hold 796 seats, exceeding the legislature's 577 seats."), 6.0), "seats over the legislature are refused live")
+	await _shoot("cheats-03c-country-politics-over")
+	if seats:
+		seats.text = "286"
+		seats.text_changed.emit("286")
+	await _until(func() -> bool: return _has_text(cheats, "Seats assigned: 482 / 577."), 6.0)
+	var roles: Array = []
+	_collect_labels(cheats, "PARTY ROLE", roles)
+	if roles.size() >= 2:
+		for child in (roles[1] as Node).get_parent().get_children():
+			if child is OptionButton:
+				var picker := child as OptionButton
+				for index in range(picker.item_count):
+					if picker.get_item_text(index) == "Coalition partner":
+						picker.select(index)
+						picker.item_selected.emit(index)
+	var parties: Array = cheats._cp().get("parties", [])
+	var lr: Dictionary = parties[1] if parties.size() > 1 else {}
+	_check(str(lr.get("role", "")) == "coalition" and bool(lr.get("coalition", false)) and not bool(lr.get("ruling", true)), "choosing Coalition partner makes it a coalition party")
+	var election := _field_after(cheats, "NEXT ELECTION")
+	if election:
+		election.text = "May 2017"
+		election.text_changed.emit("May 2017")
+	var colour: Array = []
+	_collect_labels(cheats, "PARTY COLOUR (HEX)", colour)
+	var colour_field: LineEdit = null
+	if not colour.is_empty():
+		for child in (colour[0] as Node).get_parent().get_children():
+			if child is LineEdit:
+				colour_field = child
+	if colour_field:
+		colour_field.text = "blue"
+		colour_field.text_changed.emit("blue")
+	var save := _find_button(cheats, "Save present-state edit")
+	if save:
+		save.pressed.emit()
+	await _until(func() -> bool: return not cheats._busy, 10.0)
+	await _wait(0.4)
+	_check(str(cheats._status).contains("must be a hex colour"), "a party colour must be hex", str(cheats._status))
+	cheats._s["open:cp_party_0"] = true
+	cheats._render()
+	await _wait(0.3)
+	colour.clear()
+	_collect_labels(cheats, "PARTY COLOUR (HEX)", colour)
+	if not colour.is_empty():
+		for child in (colour[0] as Node).get_parent().get_children():
+			if child is LineEdit:
+				(child as LineEdit).text = "#e4002b"
+				(child as LineEdit).text_changed.emit("#e4002b")
+	save = _find_button(cheats, "Save present-state edit")
+	if save:
+		save.pressed.emit()
+	await _until(func() -> bool: return not cheats._busy, 10.0)
+	await _wait(1.0)
+	var world: Dictionary = await main.engine.request("doc.read", {"key": "world"})
+	var actor: Dictionary = (((world.get("result", {}) as Dictionary).get("politicalActors", {}) as Dictionary).get("byPolity", {}) as Dictionary).get("France", {})
+	var government: Dictionary = actor.get("government", {})
+	var saved_parties: Array = actor.get("parties", [])
+	var saved_lr: Dictionary = saved_parties[1] if saved_parties.size() > 1 else {}
+	_check(str(government.get("nextElection", "")) == "May 2017" and int(government.get("legislatureSeats", 0)) == 577 and str(saved_lr.get("role", "")) == "coalition" and (government.get("coalitionPartyIds", []) as Array).has("lr") and str((saved_parties[0] as Dictionary).get("color", "")) == "#e4002b", "the edit is saved to France's Political World", JSON.stringify(government).left(300))
+
+
 func _console() -> void:
+
 	var console: Control = (load("res://scripts/ui/debug_console.gd") as GDScript).new()
 	var layer := CanvasLayer.new()
 	layer.layer = 120

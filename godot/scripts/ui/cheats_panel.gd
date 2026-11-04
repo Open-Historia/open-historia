@@ -111,6 +111,8 @@ var _trait_tags: Dictionary = {}
 var _trait_alias: Dictionary = {}
 var _traits_json_edit: TextEdit
 var _syncing := false
+var _composition_label: Label
+var _composition_serial := 0
 var _live_timer: Timer
 var _live_kinds: Dictionary = {}
 
@@ -1157,7 +1159,18 @@ func _gm_preview_box(view: Dictionary) -> Control:
 	column.add_child(top)
 	column.add_child(_gap(9))
 	var summary := str(view.get("summary", ""))
-	column.add_child(_note(summary if not summary.is_empty() else "No summary returned.", 12, Color(1, 1, 1, 0.82)))
+	var summary_label := _note(summary if not summary.is_empty() else "No summary returned.", 12, Color(1, 1, 1, 0.82))
+	if not summary.is_empty():
+		summary_label.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+	column.add_child(summary_label)
+	var notes: Array = view.get("notes", [])
+	if not notes.is_empty():
+		column.add_child(_gap(9))
+		var left_out: Array = _box(Color(0, 0, 0, 0), Color(1, 1, 1, 0.14), 8, Vector4(9, 7, 9, 7), 4)
+		(left_out[1] as VBoxContainer).add_child(UI.label("LEFT OUT OF THIS PREVIEW", 10, Color(1, 1, 1, 0.5), 800, "Arial", 1))
+		for note in notes:
+			(left_out[1] as VBoxContainer).add_child(_note(str(note), 11, Color(1, 1, 1, 0.78)))
+		column.add_child(left_out[0])
 	column.add_child(_gap(9))
 	var chips := HFlowContainer.new()
 	chips.add_theme_constant_override("h_separation", 5)
@@ -1181,8 +1194,12 @@ func _gm_preview_box(view: Dictionary) -> Control:
 			for badge in event.get("badges", []):
 				badges.add_child(_pill_label(str(badge), Color(1, 1, 1, 0.5), Color(1, 1, 1, 0.05), Color(1, 1, 1, 0.09), 9, 400, 0))
 			inner.add_child(badges)
-			inner.add_child(_note(str(event.get("title", "")), 12, Color(1, 1, 1, 0.9), 650))
-			inner.add_child(_note(str(event.get("description", "")), 11, Color(1, 1, 1, 0.54)))
+			var event_title := _note(str(event.get("title", "")), 12, Color(1, 1, 1, 0.9), 650)
+			event_title.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+			inner.add_child(event_title)
+			var event_text := _note(str(event.get("description", "")), 11, Color(1, 1, 1, 0.54))
+			event_text.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+			inner.add_child(event_text)
 			var combatants := str(event.get("combatants", ""))
 			if not combatants.is_empty():
 				inner.add_child(_note(combatants, 10, Color(1, 1, 1, 0.38)))
@@ -1698,6 +1715,10 @@ func _ce_load(code: String) -> void:
 			_s.erase("ce_politics")
 			_s.erase("ce_politics_base")
 		_s["ce_registry"] = result.get("registry", [])
+		_s["ce_ideologies"] = result.get("ideologies", [])
+		_s["ce_roles"] = result.get("partyRoles", [])
+		_s.erase("ce_composition")
+		_ce_composition()
 		_s["ce_debug"] = result.get("debug") if typeof(result.get("debug")) == TYPE_DICTIONARY else {}
 		_s["ce_decision"] = str(result.get("decisionContext", ""))
 		_trait_alias = {}
@@ -2593,9 +2614,39 @@ func _cp_field(label: String, field: Control) -> Control:
 
 
 func _cp_line(label: String, key: String) -> Control:
-	return _cp_field(label, _number_line(str(_cp().get(key, "")), "", 0.0, 100.0, 0.1, func(text: String) -> void:
+	return _cp_field(label, _line(str(_cp().get(key, "")), "", func(text: String) -> void:
 		var politics := _cp()
 		politics[key] = text))
+
+
+func _cp_number(label: String, key: String, min_value: float, max_value: float, step: float, on_change: Callable = Callable()) -> Control:
+	return _cp_field(label, _number_line(str(_cp().get(key, "")), "", min_value, max_value, step, func(text: String) -> void:
+		var politics := _cp()
+		politics[key] = text
+		if on_change.is_valid():
+			on_change.call()))
+
+
+func _ce_composition() -> void:
+	if not _s.has("ce_politics") or engine == null:
+		return
+	_composition_serial += 1
+	var serial := _composition_serial
+	var reply: Dictionary = await engine.request("cheats.country.composition", {"politics": _sd("ce_politics"), "politicsBaseline": _sd("ce_politics_base")})
+	if serial != _composition_serial or not reply.get("ok", false):
+		return
+	_s["ce_composition"] = reply.get("result", {})
+	_show_composition()
+
+
+func _show_composition() -> void:
+	if not is_instance_valid(_composition_label):
+		return
+	var composition: Dictionary = _s.get("ce_composition", {})
+	var problem := str(composition.get("error", ""))
+	_composition_label.text = problem if not problem.is_empty() else str(composition.get("text", ""))
+	_composition_label.add_theme_color_override("font_color", FAIL_INK if not problem.is_empty() else Color(1, 1, 1, 0.55))
+	_composition_label.visible = not _composition_label.text.is_empty()
 
 
 func _cp_select(label: String, key: String, options: Array, placeholder: String) -> Control:
@@ -2624,8 +2675,12 @@ func _cp_entry_line(list_key: String, index: int, label: String, key: String, on
 		_cp_entry_set(list_key, index, key, text)
 		if on_change.is_valid():
 			on_change.call()
+		if list_key == "parties":
+			_ce_composition()
 	if key == "supportPercent" or key == "influencePercent":
 		return _cp_field(label, _number_line(str(entry.get(key, "")), "", 0.0, 100.0, 0.1, changed))
+	if key == "seats":
+		return _cp_field(label, _number_line(str(entry.get(key, "")), "", 0.0, 100000.0, 1.0, changed))
 	return _cp_field(label, _line(str(entry.get(key, "")), "", changed))
 
 
@@ -2680,12 +2735,15 @@ func _render_politics(column: VBoxContainer) -> void:
 	column.add_child(head)
 	var government := _details("Government & political system", "cp_government", true, column, 12, 850)
 	var grid := _two_columns()
-	for pair in [["Government form", "governmentForm"], ["Government ideology", "governmentIdeology"], ["Head of state", "headOfState"], ["Head of government", "headOfGovernment"], ["Operative political leader", "politicalLeader"], ["Government status", "governmentStatus"], ["Coalition / cabinet name", "coalitionName"], ["Political system type", "politicalSystemType"]]:
+	for pair in [["Government form", "governmentForm"], ["Government ideology", "governmentIdeology"], ["Head of state", "headOfState"], ["Head of government", "headOfGovernment"], ["Operative political leader", "politicalLeader"], ["Government status", "governmentStatus"], ["Coalition / cabinet name", "coalitionName"], ["Legislature", "legislature"]]:
 		grid.add_child(_cp_line(str(pair[0]), str(pair[1])))
+	grid.add_child(_cp_number("Legislature seats", "legislatureSeats", 0.0, 100000.0, 1.0, _ce_composition))
+	grid.add_child(_cp_line("Next election", "nextElection"))
+	grid.add_child(_cp_line("Political system type", "politicalSystemType"))
 	grid.add_child(_cp_select("Representation model", "politicalRepresentation", REPRESENTATION_OPTIONS, "Auto / unspecified"))
 	grid.add_child(_cp_select("Regime character", "regimeCharacter", REGIME_OPTIONS, "Unspecified"))
-	grid.add_child(_cp_line("Government approval / 100", "approval"))
-	grid.add_child(_cp_line("Political stability / 100", "politicalStability"))
+	grid.add_child(_cp_number("Government approval / 100", "approval", 0.0, 100.0, 0.1))
+	grid.add_child(_cp_number("Political stability / 100", "politicalStability", 0.0, 100.0, 0.1))
 	government.add_child(grid)
 	government.add_child(_cp_line("Public system label", "politicalSystemLabel"))
 	government.add_child(_cp_area("Political-system notes", "politicalSystemNotes"))
@@ -2722,7 +2780,11 @@ func _mono(edit: TextEdit) -> void:
 func _render_parties(column: VBoxContainer) -> void:
 	var parties: Array = _cp().get("parties", [])
 	var section := _details("Parties / political entities (%d)" % parties.size(), "cp_parties", true, column, 12, 850)
-	section.add_child(_note("Ruling and coalition membership writes directly to canonical government party IDs.", 10, Color(1, 1, 1, 0.38)))
+	section.add_child(_note("Party roles update the government's actual party IDs. Support (%) and legislature seats are separate measures; blank seats mean unknown, while 0 means no seats.", 10, Color(1, 1, 1, 0.38)))
+	_composition_label = _note("", 10, Color(1, 1, 1, 0.55))
+	_composition_label.visible = false
+	section.add_child(_composition_label)
+	_show_composition()
 	for index in range(parties.size()):
 		var party: Dictionary = parties[index]
 		var card: Array = _box(Color(1, 1, 1, 0.025), Color(1, 1, 1, 0.08), 9, Vector4(8, 4, 8, 8), 5)
@@ -2734,23 +2796,27 @@ func _render_parties(column: VBoxContainer) -> void:
 		var grid := _two_columns()
 		grid.add_child(_cp_entry_line("parties", index, "Name", "name", retitle))
 		grid.add_child(_cp_entry_line("parties", index, "Short name", "shortName"))
+		grid.add_child(_cp_entry_line("parties", index, "Native name", "nameNative"))
+		grid.add_child(_cp_entry_line("parties", index, "Native abbreviation", "shortNameNative"))
 		grid.add_child(_cp_entry_line("parties", index, "Leader", "leader"))
-		grid.add_child(_cp_entry_line("parties", index, "Ideology", "ideology"))
+		grid.add_child(_cp_entry_line("parties", index, "Ideology label", "ideology"))
+		grid.add_child(_cp_field("Ideology family", _select(_s.get("ce_ideologies", []), str(party.get("ideologyFamily", "")), "Not specified", func(value: String) -> void:
+			_cp_entry_set("parties", index, "ideologyFamily", value))))
+		grid.add_child(_cp_entry_line("parties", index, "Subideology", "subideology"))
+		grid.add_child(_cp_entry_line("parties", index, "Seats held", "seats"))
+		grid.add_child(_cp_entry_line("parties", index, "Founded", "founded"))
+		grid.add_child(_cp_entry_line("parties", index, "Party colour (hex)", "color"))
 		grid.add_child(_cp_entry_line("parties", index, "Support (%)", "supportPercent"))
 		grid.add_child(_cp_entry_line("parties", index, "Influence (%)", "influencePercent"))
 		inner.add_child(grid)
-		var flags := HBoxContainer.new()
-		flags.add_theme_constant_override("separation", 14)
-		var ruling := bool(party.get("ruling", false))
-		flags.add_child(_check("Ruling / government", ruling, func(on: bool) -> void:
-			_cp_entry_set("parties", index, "ruling", on)
-			_render()))
-		var coalition := _check("Coalition partner", bool(party.get("coalition", false)), func(on: bool) -> void:
-			_cp_entry_set("parties", index, "coalition", on)
-			_render())
-		coalition.disabled = ruling
-		flags.add_child(coalition)
-		inner.add_child(flags)
+		var role := "governing" if bool(party.get("ruling", false)) else ("coalition" if bool(party.get("coalition", false)) else (str(party.get("role", "")) if not str(party.get("role", "")).is_empty() else "opposition"))
+		inner.add_child(_cp_field("Party role", _select(_s.get("ce_roles", []), role, "", func(value: String) -> void:
+			_cp_entry_set("parties", index, "role", value)
+			_cp_entry_set("parties", index, "ruling", value == "governing")
+			_cp_entry_set("parties", index, "coalition", value == "coalition")
+			if is_instance_valid(toggle):
+				toggle.text = toggle.text.substr(0, 2) + _cp_party_title(party, index)
+			_ce_composition())))
 		inner.add_child(_cp_entry_area("parties", index, "Public description", "publicDescription"))
 		inner.add_child(_cp_entry_area("parties", index, "Public priorities · one per line", "publicPrioritiesText"))
 		inner.add_child(_cp_entry_area("parties", index, "Foreign-policy outlook · one per line", "publicForeignPolicyText"))
@@ -2761,6 +2827,7 @@ func _render_parties(column: VBoxContainer) -> void:
 			var entries: Array = _cp().get("parties", [])
 			if index < entries.size():
 				entries.remove_at(index)
+			_ce_composition()
 			_render())
 		inner.add_child(remove)
 		section.add_child(card[0])
@@ -2768,9 +2835,11 @@ func _render_parties(column: VBoxContainer) -> void:
 	add.pressed.connect(func() -> void:
 		var politics := _cp()
 		var entries: Array = politics.get("parties", [])
-		entries.append({"id": "custom-party-" + _now_id(), "name": "New political entity", "shortName": "", "leader": "", "ideology": "", "publicDescription": "", "publicPrioritiesText": "", "publicForeignPolicyText": "", "supportPercent": "", "influencePercent": "", "influenceLabel": "", "ruling": false, "coalition": false})
+		entries.append({"_editorKey": "custom-party-row:%s:%s" % [_now_id(), _base36(randi() % 60466176)], "id": "custom-party-" + _now_id(), "name": "New political entity", "shortName": "", "nameNative": "", "shortNameNative": "", "leader": "", "ideology": "", "ideologyFamily": "", "subideology": "", "role": "opposition", "seats": "", "founded": "", "color": "", "publicDescription": "", "publicPrioritiesText": "", "publicForeignPolicyText": "", "supportPercent": "", "influencePercent": "", "influenceLabel": "", "ruling": false, "coalition": false})
 		politics["parties"] = entries
+		_ce_composition()
 		_render())
+
 	section.add_child(add)
 
 
