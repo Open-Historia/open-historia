@@ -335,12 +335,15 @@ func _actions_checks() -> void:
 
 
 func _projects_checks() -> void:
-	var panel := ProjectsPanel.new()
-	main.hud.add_child(panel)
-	panel.setup(main.engine, {})
-	panel.open_advisor.connect(func(text: String) -> void: advisor_texts.append(text))
-	panel.show_on_map.connect(func(lng: float, lat: float, zoom: float) -> void: map_targets.append(Vector3(lng, lat, zoom)))
-	panel.open()
+	var actions := ActionsPanel.new()
+	main.hud.add_child(actions)
+	actions.setup(main.engine, {})
+	actions.open_advisor.connect(func(text: String) -> void: advisor_texts.append(text))
+	actions.show_on_map.connect(func(lng: float, lat: float, zoom: float) -> void: map_targets.append(Vector3(lng, lat, zoom)))
+	actions.set_tab("projects")
+	actions.open()
+	var panel := actions.board()
+	_check(panel != null and actions.current_tab() == "projects", "Projects & Operations is the Actions panel's second tab")
 	await _until(func() -> bool: return panel._loaded, 20.0)
 	await _wait(0.5)
 	_check(int(panel._view.get("total", -1)) == 0, "a new game's board is empty")
@@ -374,7 +377,8 @@ func _projects_checks() -> void:
 	_check(int(panel._view.get("visibleCount", 0)) == 2, "Mine opens on the two running entries of the player")
 	_check(_find_button(panel, "Closed (1)") != null, "the Closed chip shows the count")
 	_check(_find_button(panel, "Foreign (2)") != null, "the Foreign chip shows the count")
-	_check(panel._count_label.text == "2 / 5", "the header counts visible / total (%s)" % panel._count_label.text)
+	await _until(func() -> bool: return actions._project_count == 5, 6.0)
+	_check(actions._project_count == 5 and (actions._tab_buttons["projects"].find_child("Count", true, false) as Control).visible, "the Projects tab counts the board (%d)" % actions._project_count)
 	await _shoot("projects-2-mine")
 
 	var cards: Array = panel._view.get("cards", [])
@@ -473,7 +477,7 @@ func _projects_checks() -> void:
 	panel._search.text_changed.emit("zzz")
 	await _until(func() -> bool: return int(panel._view.get("visibleCount", -1)) == 0, 10.0)
 	_check(_find_label(panel, "No closed entries match those filters.") != null, "a search with no hits says so")
-	panel.close()
+	actions.close()
 	await _wait(0.5)
 	_check(panel._owner == "mine" and not panel._show_closed, "closing resets the view to Mine and running work")
 
