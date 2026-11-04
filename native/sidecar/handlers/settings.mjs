@@ -2,6 +2,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+const DISPLAY_MODES = ["windowed", "maximized", "fullscreen"];
+const DISPLAY_MODE_KEY = "display_window_mode";
+
 const MAP_KEYS = {
   defaultBasemap: "map_basemap_default",
   defaultBasemapOn: "map_basemap_default_on",
@@ -117,36 +120,6 @@ const CSV_COLUMNS = [
   "requestsOk", "requestsRefused", "requestsFailed",
 ];
 
-const isLocalHostname = (hostname) => {
-  const host = String(hostname ?? "").trim().toLowerCase();
-  if (!host) return false;
-  if (host === "localhost" || host === "::1" || host === "[::1]") return true;
-  if (host.endsWith(".local")) return true;
-  return /^127\./.test(host) || /^10\./.test(host) || /^192\.168\./.test(host) || /^172\.(1[6-9]|2\d|3[01])\./.test(host);
-};
-
-const endpointIsLocal = (endpoint) => {
-  const value = String(endpoint ?? "").trim();
-  if (!value) return false;
-  try {
-    return isLocalHostname(new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(value) ? value : `http://${value}`).hostname);
-  } catch {
-    return false;
-  }
-};
-
-const formatTokens = (tokens) => (tokens >= 1000 ? `${Math.round(tokens / 1000)}K` : String(tokens));
-
-const describeRememberedWindow = (known) => {
-  const formatDate = (ms) => new Date(ms).toLocaleDateString();
-  if (!known) return "Leave blank and the game learns this model's window from its own refusal. Set it only if you know it.";
-  if (known.source === "declared") return `You set this model's window to ${formatTokens(known.limitTokens)} tokens. A request too big for it is not sent to it.`;
-  if (known.limitTokens > 0) return `The model said its window is ${formatTokens(known.limitTokens)} tokens. A request too big for it is not sent to it until ${formatDate(known.until)}.`;
-  return `The model refused a request of about ${formatTokens(known.tooBigTokens)} tokens. One that big is not sent to it until ${formatDate(known.until)}.`;
-};
-
-const contextWindowKey = (entry) => [entry?.provider, entry?.endpoint, entry?.model].map((value) => String(value ?? "").trim().toLowerCase()).join("|");
-
 const normalizePlayerFocus = (value) => {
   const key = String(value ?? "").trim().toLowerCase().replace(/[\s_]+/g, "-");
   return PLAYER_FOCUS_LEVELS.some((level) => level.key === key) ? key : "balanced";
@@ -223,6 +196,15 @@ const rowView = (row) => ({
 
 export const register = (ctx) => {
   const { engine, api, emit, plain, storage, clean, list } = ctx;
+  const displayModeFile = path.join(ctx.dataRoot || ".", "display-mode.json");
+  const readDisplayMode = () => {
+    try {
+      const mode = JSON.parse(fs.readFileSync(displayModeFile, "utf8"))?.mode;
+      return DISPLAY_MODES.includes(mode) ? mode : "windowed";
+    } catch {
+      return "windowed";
+    }
+  };
   const pc = () => engine.providerConfig;
   const rb = () => engine.requestBudget;
   const dl = () => engine.debugLog;
@@ -346,6 +328,7 @@ export const register = (ctx) => {
       labelFonts: list(ms()?.LABEL_FONT_SUGGESTIONS).length ? [...ms().LABEL_FONT_SUGGESTIONS] : ["Georgia", "Times New Roman", "Garamond", "Palatino Linotype", "Impact", "Arial Black", "Arial", "Trebuchet MS", "Verdana", "Courier New", "Comic Sans MS"],
       basemaps: list(engine.assets?.ESRI_BASEMAPS).map((entry) => ({ id: clean(entry?.id), label: clean(entry?.label) })),
       defaultBasemapId: clean(engine.assets?.DEFAULT_BASEMAP_ID),
+      displayMode: readDisplayMode(),
       context: context(),
     };
   };
@@ -385,20 +368,9 @@ export const register = (ctx) => {
     const resolvedList = config.getResolvedFallbackList();
     const resolved = new Map(resolvedList.map((entry) => [entry.id, entry]));
     const listEntries = config.getFallbackList();
-    const windows = engine.aiMain?.contextWindows ?? null;
     const entries = listEntries.map((entry, index) => {
       const own = resolved.get(entry.id) ?? null;
       const status = config.getEntryStatus(entry.id, at);
-      let windowView = null;
-      if (own && own.provider !== config.AGENT_PROVIDER) {
-        const known = windows?.remembered ? windows.remembered(contextWindowKey(own), { trustLearned: !endpointIsLocal(own.endpoint) }) : null;
-        windowView = {
-          available: Boolean(windows?.remembered),
-          value: known?.source === "declared" ? String(known.limitTokens) : "",
-          helper: describeRememberedWindow(known),
-          known: Boolean(known),
-        };
-      }
       return {
         id: entry.id,
         index,
@@ -411,7 +383,6 @@ export const register = (ctx) => {
         status: status.status,
         statusText: describeRowStatus(status, at),
         answered: status.lastAnsweredAt ? ` · answered ${formatAgo(status.lastAnsweredAt, at)}` : "",
-        window: windowView,
       };
     });
     const connectionViews = connections.map((connection) => {
@@ -453,7 +424,6 @@ export const register = (ctx) => {
       structuredLabels: STRUCTURED_MODE_LABELS,
       structuredHints: STRUCTURED_MODE_HINTS,
       structuredIntro: STRUCTURED_MODE_INTRO,
-      contextWindowsAvailable: Boolean(windows?.remembered),
     };
   };
 
@@ -833,16 +803,6 @@ export const register = (ctx) => {
       storage.flush();
       return fallbackView();
     },
-    "settings.entry.window": async ({ id, tokens = null, forget = false }) => {
-      const windows = engine.aiMain.contextWindows;
-      const entry = pc().getResolvedFallbackList().find((candidate) => candidate.id === id);
-      if (!entry) throw new Error("That entry is gone.");
-      const key = contextWindowKey(entry);
-      if (forget) windows.forget(key);
-      else windows.declare(key, Number(tokens));
-      storage.flush();
-      return fallbackView();
-    },
     "settings.fallback.fill": async ({ connectionIds = [], models = "" }) => {
       const added = pc().fillFallbackList(list(connectionIds), String(models ?? "").split(/[\n,]/));
       storage.flush();
@@ -1026,8 +986,15 @@ export const register = (ctx) => {
         storage.setItem(key, JSON.stringify(Boolean(value)));
         logSetting(key === "Globe" ? "3D Globe" : "3D Terrain", Boolean(value));
         storage.flush();
-      } else if (key === "Fullscreen") {
-        logSetting("Fullscreen", Boolean(value));
+      } else if (key === "DisplayMode") {
+        const mode = DISPLAY_MODES.includes(value) ? value : "windowed";
+        writeValue(DISPLAY_MODE_KEY, mode);
+        try {
+          fs.writeFileSync(displayModeFile, JSON.stringify({ mode }));
+        } catch (error) {
+          logEvent("setting", `The display mode could not be kept: ${error?.message ?? error}`);
+        }
+        storage.flush();
       } else {
         throw new Error(`Unknown setting: ${key}`);
       }

@@ -197,7 +197,8 @@ func _scenario_flow() -> void:
 	await _wait(1.0)
 	await _shoot("ed-01-overview")
 	_check(_label(editor._content, "On its card") != null and _label(editor._content, "Its headline") != null, "the overview shows both cards")
-	for key in ["world", "history", "fronts", "politics", "stats", "features", "prompts", "assets", "music", "bundles"]:
+	_check(not ScenarioEditor.SCENARIO_SECTIONS.has("fronts") and str(ScenarioEditor.SECTION_BLURBS["features"]).contains("under Wars"), "the war tab is part of Features, under Wars")
+	for key in ["world", "history", "politics", "stats", "features", "prompts", "assets", "music", "bundles"]:
 		editor._go_section(key)
 		await _wait(1.2 if key in ["music", "features"] else 0.6)
 		if key == "politics":
@@ -271,9 +272,12 @@ func _scenario_flow() -> void:
 		await _wait(0.2)
 		_check(_label(editor._content, "· edited") != null, "an edited passage is marked edited")
 		await _shoot("ed-07-prompts-edited")
-	editor._go_section("fronts")
-	await _wait(0.8)
+	editor._go_section("features")
+	await _until(func() -> bool: return not _find_all(editor._content, func(entry: Node) -> bool: return entry is LineEdit and (entry as LineEdit).placeholder_text == "10,000", []).is_empty(), 20.0)
+	await _wait(0.4)
 	var men := _find_all(editor._content, func(entry: Node) -> bool: return entry is LineEdit and (entry as LineEdit).placeholder_text == "10,000", [])
+	_check(_label(editor._content, "AIR UNITS") != null and _label(editor._content, "NAVIES") != null and _label(editor._content, "FRONTS") != null, "the Wars card has switches for fronts, air units and navies")
+	await _shoot("ed-07b-features-wars")
 	_check(not men.is_empty(), "the war settings show Men per counter")
 	if not men.is_empty():
 		var fronts_panel: EditorFrontsPanel = null

@@ -25,6 +25,8 @@ var _world_signature := ""
 var _card: PanelContainer
 var _cache: Dictionary = {}
 var _guard := false
+var _extras: Dictionary = {}
+var _extra_holders: Array = []
 
 
 func setup(engine: EngineLink, props: Dictionary) -> void:
@@ -82,6 +84,8 @@ func _read(props: Dictionary) -> void:
 		_first_skip_ahead = bool(props["firstSkipAhead"])
 	if props.has("host"):
 		_host = props["host"]
+	if props.has("extras"):
+		_extras = props["extras"] if props["extras"] is Dictionary else {}
 	if not props.has("scenarioFeatures") and _kind == "scenario" and props.has("value"):
 		_scenario_features = _features
 
@@ -196,10 +200,16 @@ func _rebuild() -> void:
 	var grid := VBoxContainer.new()
 	grid.add_theme_constant_override("separation", 11)
 	column.add_child(grid)
+	_extra_holders.clear()
 	for definition in _defs():
 		grid.add_child(_feature_card(definition))
 	add_child(_card)
 	add_child(EditorKit.gap(15))
+	for pair in _extra_holders:
+		var fill: Callable = pair[1]
+		if fill.is_valid():
+			fill.call(pair[0])
+	_extra_holders.clear()
 	_built = true
 	_building = false
 	_refresh()
@@ -299,6 +309,8 @@ func _feature_card(definition_input: Variant) -> Control:
 			var type := str(setting.get("type", ""))
 			if type == "scripted-events":
 				list.add_child(_scripted_row(key, setting))
+			elif type == "toggle":
+				list.add_child(_toggle_row(key, setting))
 			elif type == "choice":
 				list.add_child(_choice_row(key, setting))
 			elif type == "text":
@@ -306,6 +318,13 @@ func _feature_card(definition_input: Variant) -> Control:
 			else:
 				list.add_child(_number_row(key, setting))
 		column.add_child(list)
+	if _extras.get(key) is Callable:
+		column.add_child(EditorKit.gap(14))
+		var holder := VBoxContainer.new()
+		holder.add_theme_constant_override("separation", 0)
+		holder.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		column.add_child(holder)
+		_extra_holders.append([holder, _extras[key]])
 	return card
 
 
@@ -384,6 +403,53 @@ func _scripted_props(key: String, setting_key: String) -> Dictionary:
 		"host": _host,
 		"options": _options,
 	}
+
+
+func _toggle_row(key: String, setting: Dictionary) -> Control:
+	var setting_key := str(setting["key"])
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 0)
+	column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var top := HBoxContainer.new()
+	top.add_theme_constant_override("separation", 10)
+	var label := EditorKit.field_label(str(setting.get("label", "")))
+	label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	top.add_child(label)
+	var buttons := HBoxContainer.new()
+	buttons.add_theme_constant_override("separation", 6)
+	var default_button: Button = null
+	if _is_game():
+		default_button = _choice_button("")
+		default_button.pressed.connect(func() -> void: _set_feature(key, {}, [setting_key]))
+		buttons.add_child(default_button)
+	var on_button := _choice_button("On")
+	on_button.pressed.connect(func() -> void: _set_feature(key, {setting_key: true}))
+	buttons.add_child(on_button)
+	var off_button := _choice_button("Off")
+	off_button.pressed.connect(func() -> void: _set_feature(key, {setting_key: false}))
+	buttons.add_child(off_button)
+	top.add_child(buttons)
+	column.add_child(top)
+	column.add_child(EditorKit.gap(5))
+	column.add_child(_setting_description(str(setting.get("description", ""))))
+	_refreshers.append(func() -> void:
+		if not is_instance_valid(on_button):
+			return
+		var derived := _derive()
+		var state := ""
+		if _is_game():
+			var override := _feature_value(derived, "overrides", key)
+			state = "default" if not override.has(setting_key) else ("on" if bool(override[setting_key]) else "off")
+		else:
+			state = "off" if _feature_value(derived, "effective", key).get(setting_key) == false else "on"
+		_style_choice(on_button, state == "on")
+		_style_choice(off_button, state == "off")
+		if default_button:
+			var scenario_on: bool = _feature_value(derived, "base", key).get(setting_key) != false
+			default_button.text = "Scenario default (%s)" % ("On" if scenario_on else "Off")
+			_style_choice(default_button, state == "default"))
+	return column
 
 
 func _choice_row(key: String, setting: Dictionary) -> Control:

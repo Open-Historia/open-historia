@@ -13,7 +13,6 @@ const SECTION_LABELS := {
 	"assets": "Assets",
 	"bundles": "Bundles",
 	"features": "Features",
-	"fronts": "Fronts",
 	"history": "Pre-history",
 	"music": "Music",
 	"overview": "Overview",
@@ -25,7 +24,6 @@ const SECTION_LABELS := {
 const SECTION_GROUPS := [
 	["Presentation", ["overview", "assets", "music"]],
 	["Setting", ["world", "history", "politics"]],
-	["War", ["fronts"]],
 	["Rules and AI", ["stats", "features", "prompts"]],
 	["Sharing", ["bundles"]],
 ]
@@ -36,13 +34,12 @@ const SECTION_BLURBS := {
 	"world": "Where play begins: the player's country, the date, the troops and the story so far.",
 	"history": "The events that led to the start date.",
 	"politics": "Governments, parties and institutions.",
-	"fronts": "How its wars are fought, every country's military and the fronts it begins with.",
 	"stats": "The national stats every country is measured by.",
-	"features": "Which gameplay features are on.",
+	"features": "Which gameplay features are on, and under Wars how its wars are fought, every country's military and the fronts it begins with.",
 	"prompts": "The instructions the AI follows.",
 	"bundles": "Download it as one file to share or keep.",
 }
-const SCENARIO_SECTIONS := ["overview", "world", "history", "fronts", "politics", "stats", "features", "prompts", "assets", "music", "bundles"]
+const SCENARIO_SECTIONS := ["overview", "world", "history", "politics", "stats", "features", "prompts", "assets", "music", "bundles"]
 const GAME_SECTIONS := ["overview", "world", "features", "prompts", "assets"]
 const SECTION_ICONS := {
 	"overview": "<rect x='3.5' y='4.5' width='17' height='15' rx='2.5'/><path d='M7 9h10M7 13h6'/>",
@@ -51,7 +48,6 @@ const SECTION_ICONS := {
 	"world": "<circle cx='12' cy='12' r='8.5'/><path d='M3.5 12h17M12 3.5c2.3 2.3 3.5 5.2 3.5 8.5s-1.2 6.2-3.5 8.5c-2.3-2.3-3.5-5.2-3.5-8.5s1.2-6.2 3.5-8.5z'/>",
 	"history": "<path d='M5 4.5h11.5a2 2 0 0 1 2 2v13H7a2 2 0 0 1-2-2z'/><path d='M5 17.5a2 2 0 0 1 2-2h11.5M9 8.5h6'/>",
 	"politics": "<path d='M4 9.5 12 5l8 4.5M5.5 19.5h13M7 10.5v7M12 10.5v7M17 10.5v7'/>",
-	"fronts": "<path d='M5 5v15M5 5.5c4-2 7 2 11 0v8c-4 2-7-2-11 0'/>",
 	"stats": "<path d='M5 19.5V11M10 19.5V6M15 19.5v-6M20 19.5V9'/>",
 	"features": "<path d='M6 6.5h12M6 12h12M6 17.5h12'/><circle cx='9' cy='6.5' r='1.8'/><circle cx='15' cy='12' r='1.8'/><circle cx='10' cy='17.5' r='1.8'/>",
 	"prompts": "<path d='M5 5.5h14v10H9.5L5 19.5z'/><path d='M8.5 9.5h7M8.5 12.5h4.5'/>",
@@ -789,8 +785,6 @@ func _render_section() -> void:
 			_render_world()
 		"history":
 			_render_history()
-		"fronts":
-			_render_fronts()
 		"politics":
 			_render_politics()
 		"stats":
@@ -988,9 +982,9 @@ func _props(extra := {}) -> Dictionary:
 	return out
 
 
-func _host(panel: Control, extra: Dictionary, on_value := Callable()) -> void:
+func _host(panel: Control, extra: Dictionary, on_value := Callable(), parent: Control = null) -> void:
 	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_content.add_child(panel)
+	(parent if parent else _content).add_child(panel)
 	_panels.append({"panel": panel, "extra": extra})
 	if panel.has_signal("details_changed"):
 		panel.connect("details_changed", _on_panel_details)
@@ -1066,13 +1060,12 @@ func _render_history() -> void:
 	_host(EditorHistoryPanel.new(), {})
 
 
-func _render_fronts() -> void:
-	_content.add_theme_constant_override("separation", 0)
+func _render_wars(holder: VBoxContainer) -> void:
 	_host(EditorWarSettings.new(), {"value": _form.get("warSettings"), "value_field": "warSettings"}, func(value: Variant) -> void:
 		_set_form("warSettings", value)
-		_update_panels())
-	_host(EditorMilitaryPanel.new(), {})
-	_host(EditorFrontsPanel.new(), {})
+		_update_panels(), holder)
+	_host(EditorMilitaryPanel.new(), {}, Callable(), holder)
+	_host(EditorFrontsPanel.new(), {}, Callable(), holder)
 
 
 func _render_politics() -> void:
@@ -1099,7 +1092,8 @@ func _render_stats() -> void:
 
 
 func _render_features() -> void:
-	_host(EditorFeaturesSection.new(), {"value": _form.get("features"), "value_field": "features"}, func(value: Variant) -> void: _set_form("features", value))
+	var extras := {"fronts": _render_wars} if _kind == "scenario" else {}
+	_host(EditorFeaturesSection.new(), {"value": _form.get("features"), "value_field": "features", "extras": extras}, func(value: Variant) -> void: _set_form("features", value))
 
 
 func _render_music() -> void:

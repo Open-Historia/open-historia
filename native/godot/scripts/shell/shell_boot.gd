@@ -29,6 +29,26 @@ var _game_view: CanvasItem
 var map_view: MapView
 var _settle_serial := 0
 var _driven := false
+var _display_applied := false
+
+
+static func display_mode() -> String:
+	match DisplayServer.window_get_mode():
+		DisplayServer.WINDOW_MODE_FULLSCREEN, DisplayServer.WINDOW_MODE_EXCLUSIVE_FULLSCREEN:
+			return "fullscreen"
+		DisplayServer.WINDOW_MODE_MAXIMIZED:
+			return "maximized"
+	return "windowed"
+
+
+static func apply_display_mode(mode: String) -> void:
+	match mode:
+		"fullscreen":
+			DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
+		"maximized":
+			DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_MAXIMIZED)
+		_:
+			DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
 
 
 func _init() -> void:
@@ -98,6 +118,11 @@ func prepare() -> void:
 	var result: Dictionary = reply.get("result", {})
 	prefs = result.get("prefs", {})
 	_share_motion()
+	if not _display_applied:
+		_display_applied = true
+		var mode := str(prefs.get("displayMode", "windowed"))
+		if mode != "windowed":
+			apply_display_mode(mode)
 	var told: Dictionary = result.get("notice", {})
 	notice_updates = told.get("updates", [])
 	notice_preview = bool(told.get("preview", false))

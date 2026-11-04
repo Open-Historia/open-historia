@@ -22,6 +22,11 @@ const SLATE_INK := Color("#f8fafc")
 const HELPER_INK := Color(1, 1, 1, 0.48)
 const LABEL_INK := Color(1, 1, 1, 0.88)
 const ERROR_INK := Color("#fca5a5")
+const DISPLAY_MODE_HINTS := {
+	"windowed": "Runs the game in a standard resizable desktop window.",
+	"maximized": "The game's window fills your screen, with its title bar.",
+	"fullscreen": "The game covers your whole screen, without borders.",
+}
 const PRIVACY_URL := "https://openhistoria.com/privacy/"
 const MUSIC_SITE := "www.scottbuckley.com.au"
 const MUSIC_SITE_URL := "https://www.scottbuckley.com.au/"
@@ -123,6 +128,8 @@ var _content: VBoxContainer
 var _confirm_layer: Control
 var _confirm_holder: ConfirmAnswer
 var _icons := {}
+var _display_select: OptionButton
+var _display_helper: Label
 
 
 func _ready() -> void:
@@ -145,6 +152,7 @@ func _ready() -> void:
 	add_child(_tick_timer)
 	_tick_timer.start()
 	resized.connect(_layout)
+	resized.connect(_refresh_display_mode)
 	_layout()
 
 
@@ -1087,12 +1095,7 @@ func _build_general() -> void:
 			_values = reply
 		_rerender(), false))
 	var display := _section("Display", "Window and presentation preferences that apply to the game client.")
-	var fullscreen := DisplayServer.window_get_mode() in [DisplayServer.WINDOW_MODE_FULLSCREEN, DisplayServer.WINDOW_MODE_EXCLUSIVE_FULLSCREEN]
-	_add_toggle(display, "Fullscreen", fullscreen, func() -> void:
-		var next := not (DisplayServer.window_get_mode() in [DisplayServer.WINDOW_MODE_FULLSCREEN, DisplayServer.WINDOW_MODE_EXCLUSIVE_FULLSCREEN])
-		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN if next else DisplayServer.WINDOW_MODE_WINDOWED)
-		_req("settings.window", {"key": "Fullscreen", "value": next})
-		setting_changed.emit("fullscreen", next))
+	_display_mode(display)
 	_add_toggle(display, "Show the vault door every time", _flag("vault_door_every_time"), func() -> void: _set_flag("vault_door_every_time", not _flag("vault_door_every_time")))
 	_add_toggle_note(display, "On: the vault door appears every time you start the game. Off: only the first time you start it after an update.")
 	var access := _section("Accessibility", "Reduce automatic camera motion and map animations without changing simulation behavior.")
@@ -1110,6 +1113,37 @@ func _build_general() -> void:
 	var privacy := _section("Privacy", "What the game tells other services about you, and the switches for it.", policy)
 	_add_toggle(privacy, "Show what I am playing on Discord", _flag("privacy_discord_presence"), func() -> void: _set_flag("privacy_discord_presence", not _flag("privacy_discord_presence")))
 	_add_settings_helper(privacy, "Discord shows the country you play, the scenario and the in-game date to people who can see your activity. Desktop app only.", 0)
+
+
+func _display_mode(parent: VBoxContainer) -> void:
+	parent.add_child(_field_label("Display mode"))
+	_gap(parent, 6.4)
+	var mode := ShellBoot.display_mode()
+	_display_select = _select([["windowed", "Windowed"], ["maximized", "Maximized"], ["fullscreen", "Fullscreen"]], mode, func(value: String) -> void:
+		ShellBoot.apply_display_mode(value)
+		_req("settings.window", {"key": "DisplayMode", "value": value})
+		setting_changed.emit("display_mode", value)
+		_show_display_mode(value)
+		await get_tree().process_frame
+		if is_inside_tree():
+			_refresh_display_mode())
+	parent.add_child(_display_select)
+	_display_helper = _add_helper(parent, DISPLAY_MODE_HINTS.get(mode, ""))
+	_gap(parent, 14.4)
+
+
+func _show_display_mode(mode: String) -> void:
+	if not is_instance_valid(_display_select):
+		return
+	for index in range(_display_select.item_count):
+		if str(_display_select.get_item_metadata(index)) == mode and _display_select.selected != index:
+			_display_select.select(index)
+	if is_instance_valid(_display_helper):
+		_display_helper.text = DISPLAY_MODE_HINTS.get(mode, "")
+
+
+func _refresh_display_mode() -> void:
+	_show_display_mode(ShellBoot.display_mode())
 
 
 func _language_options(query: String, current: String, mark_built_in: bool) -> Array:
@@ -1792,9 +1826,6 @@ func _entry_editor(parent: VBoxContainer, entry: Dictionary) -> void:
 	if open:
 		_settings_input(parent, "Custom parameters for this model (JSON)", str(entry.get("customParamsOverride", "")), "Blank uses the connection's", func(text: String) -> void: _queue_write("entry:%s:params" % id, "settings.entry.update", {"id": id, "patch": {"customParamsOverride": text}}), "Replaces the connection's custom parameters for this entry — e.g. the same model with a larger max_tokens, picked by the Time skip task.", true)
 		_structured_mode(parent, id, str(entry.get("structuredMode", "auto")))
-		var window: Variant = entry.get("window")
-		if typeof(window) == TYPE_DICTIONARY:
-			_context_window(parent, id, window)
 	_gap(parent, 6.4)
 
 
@@ -1893,30 +1924,6 @@ func _structured_mode(parent: VBoxContainer, id: String, mode: String) -> void:
 	parent.add_child(_select(options, current, func(value: String) -> void: _fallback_call("settings.entry.update", {"id": id, "patch": {"structuredMode": value}})))
 	_add_helper(parent, str(_fallback.get("structuredIntro", "")) if current == "auto" else str(hints.get(current, "")))
 	_gap(parent, 14.4)
-
-
-func _context_window(parent: VBoxContainer, id: String, window: Dictionary) -> void:
-	parent.add_child(_field_label("Context window (tokens)"))
-	_gap(parent, 6.4)
-	var line := _line(str(window.get("value", "")), "Not set")
-	line.text_changed.connect(func(text: String) -> void:
-		var digits := ""
-		for character in text:
-			if character >= "0" and character <= "9":
-				digits += character
-		if digits != text:
-			line.text = digits
-			line.caret_column = digits.length()
-		_queue_write("entry:%s:window" % id, "settings.entry.window", {"id": id, "tokens": int(digits) if not digits.is_empty() else 0}))
-	parent.add_child(line)
-	_add_helper(parent, str(window.get("helper", "")))
-	_gap(parent, 14.4)
-	if bool(window.get("known", false)):
-		_pull_up(parent, 8)
-		var forget := _button("Forget this window", func() -> void: _fallback_call("settings.entry.window", {"id": id, "forget": true}))
-		forget.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-		parent.add_child(forget)
-		_gap(parent, 14.4)
 
 
 func _connection_fields(parent: VBoxContainer, connection: Dictionary, shared_by: int) -> void:
