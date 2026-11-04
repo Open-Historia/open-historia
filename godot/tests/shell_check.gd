@@ -7,9 +7,9 @@ var failures: PackedStringArray = []
 var played: PackedStringArray = []
 var only := ""
 
-const NEWEST_UPDATES := ["2026-11-ships-from-ports", "2026-11-aircraft-key", "2026-11-gentler-terrain", "2026-11-display-mode"]
-const NEWEST_TITLES := ["Troops sail from a port", "The Aircraft key works", "Gentler 3D terrain", "Windowed, maximized or fullscreen"]
-const FIRST_OPENING := ["2026-11-rostra", "2026-11-deploy-aircraft", "2026-10-espionage-part-2", "2026-11-ships-from-ports"]
+const NEWEST_UPDATES := ["2026-11-native-advisor-contacts", "2026-11-ships-from-ports", "2026-11-aircraft-key", "2026-11-gentler-terrain"]
+const NEWEST_TITLES := ["Advisors and contacts", "Troops sail from a port", "The Aircraft key works", "Gentler 3D terrain"]
+const FIRST_OPENING := ["2026-11-rostra", "2026-11-deploy-aircraft", "2026-10-espionage-part-2", "2026-11-native-advisor-contacts"]
 
 
 func _update_ids(updates: Array) -> Array:
@@ -511,6 +511,7 @@ func _notice_and_history(shell: ShellBoot) -> void:
 	if shell.history:
 		var history_ids := _update_ids(shell.history._updates)
 		_check("the update history lists the newest updates", (NEWEST_UPDATES + ["2026-10-peace-and-weariness"]).all(func(id: String) -> bool: return history_ids.has(id)), ", ".join(PackedStringArray(history_ids.slice(0, 6))))
+		_check("the browser map's notice of smoother zooming is left out of the native history", not history_ids.has("2026-11-smoother-zooming"))
 		shell.history.view("2026-10-peace-and-weariness")
 		await _wait(1.6)
 		var viewed := _texts(shell.history.viewing(), PackedStringArray()) if shell.history.viewing() else PackedStringArray()
