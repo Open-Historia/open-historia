@@ -53,6 +53,22 @@ import { PAST_UPDATES } from "./notesPast.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // The War Room's Aircraft key counted only air units on the map, never a front's air arm (GameUI/warRoom.jsx
+    // airUnitsOf given the whole world); the owner's report, 2026-11-04.
+    id: "2026-11-aircraft-key",
+    kind: "minor",
+    date: "2026-11-04",
+    channel: "beta",
+    banners: [
+      {
+        title: "The Aircraft key works",
+        items: [
+          "In the War Room, the Aircraft key is no longer greyed out for a country whose only aircraft are the ones flying over its fronts: those can be sent to strike now.",
+        ],
+      },
+    ],
+  },
+  {
     // The 3D terrain's exaggeration halved, 15 to 7.5 (Map/World.jsx); the owner's ask, 2026-11-03.
     id: "2026-11-gentler-terrain",
     kind: "minor",
