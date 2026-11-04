@@ -49,12 +49,13 @@ func _run() -> void:
 	var hud: Hud = main.hud
 	await _wait(2.0)
 	_say("panels: %s drawers: %s" % [hud.panels.keys(), hud.drawers.keys()])
-	for name in ["chat", "actions", "projects"]:
+	for name in ["chat", "actions", "social"]:
 		hud.toggle_dock(name)
 		await _wait(1.6)
-		_say("%s open=%s active=%s" % [name, (hud.panels[name] as PanelFrame).is_open(), hud.active_panel])
+		_say("%s open=%s active=%s" % [name, hud.panels[name].is_open(), hud.active_panel])
+		_check(hud.panels[name].is_open() and hud.active_panel == name, "the %s launcher opens its panel" % name)
 		await _shoot("h-%s" % name)
-	hud.toggle_dock("projects")
+	hud.toggle_dock("social")
 	await _wait(0.5)
 	hud.toggle_drawer("advisor")
 	await _wait(1.6)

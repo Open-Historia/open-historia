@@ -445,17 +445,12 @@ func _person_post(item: Variant) -> Control:
 	line.add_child(face)
 	var words := RostraPanel.column(0)
 	words.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	var who := RostraPanel.row(5)
-	var author := RostraPanel.clipped(str(post.get("author", "")), 13, INK, 800, true)
-	author.custom_minimum_size.x = minf(UI.font(800).get_string_size(author.text, HORIZONTAL_ALIGNMENT_LEFT, -1, 13).x + 2.0, 170.0)
-	who.add_child(author)
+	var who := RostraPanel.FitRow.new(5)
+	who.add_child(RostraPanel.shrinking(RostraPanel.clipped(str(post.get("author", "")), 13, INK, 800, true)))
 	if not str(post.get("handle", "")).is_empty():
-		var handle := RostraPanel.clipped(str(post["handle"]), 12, INK_SOFT, 400, true)
-		handle.custom_minimum_size.x = 32
-		handle.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		handle.size_flags_stretch_ratio = 10.0
-		who.add_child(handle)
+		who.add_child(RostraPanel.shrinking(RostraPanel.clipped(str(post["handle"]), 12, INK_SOFT, 400, true), 10.0, 32.0))
 	who.add_child(RostraPanel.text(str(post.get("age", "")), 12, INK_SOFT, 400, true))
+	who.add_child(RostraPanel.filling(RostraPanel.spacer()))
 	words.add_child(who)
 	if not str(post.get("about", "")).is_empty():
 		words.add_child(RostraPanel.clipped(str(post["about"]), 11, INK_FAINT, 400, true))

@@ -323,6 +323,22 @@ static func column(gap: float) -> VBoxContainer:
 	return node
 
 
+static func shrinking(node: Control, weight := 1.0, least := 0.0) -> Control:
+	node.set_meta("shrink", weight)
+	node.set_meta("least", least)
+	if node is Label:
+		var label := node as Label
+		var font: Font = label.get_theme_font("font")
+		var size := label.get_theme_font_size("font_size")
+		node.set_meta("basis", ceilf(font.get_string_size(label.text, HORIZONTAL_ALIGNMENT_LEFT, -1, size).x) + 2.0)
+	return node
+
+
+static func filling(node: Control) -> Control:
+	node.set_meta("fill", true)
+	return node
+
+
 static func spacer() -> Control:
 	var node := Control.new()
 	node.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -408,24 +424,13 @@ static func quoted_card(post: Dictionary) -> Control:
 		return gone
 	var card := boxed(Color(0, 0, 0, 0), Color(1, 1, 1, 0.12), 10, Vector4(11, 9, 11, 9))
 	var stack := column(5)
-	var top := row(7)
+	var top := FitRow.new(7)
 	top.add_child(avatar(str(post.get("author", "")), str(post.get("initials", "")), str(post.get("flag", "")), bool(post.get("mine", false)), 1.3))
-	var author := clipped(str(post.get("author", "")), 12, INK, 700, true)
-	author.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	author.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	author.size_flags_stretch_ratio = 0.01
-	author.custom_minimum_size.x = minf(UI.font(700).get_string_size(author.text, HORIZONTAL_ALIGNMENT_LEFT, -1, 12).x + 2.0, 150.0)
-	top.add_child(author)
+	top.add_child(shrinking(clipped(str(post.get("author", "")), 12, INK, 700, true)))
 	if not str(post.get("role", "")).is_empty():
-		var role := clipped(str(post["role"]), 11, INK_FAINT, 400, true)
-		role.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		role.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-		top.add_child(role)
-	else:
-		top.add_child(spacer())
-	var when := text(str(post.get("date", "")), 11, INK_FAINT)
-	when.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	top.add_child(when)
+		top.add_child(shrinking(clipped(str(post["role"]), 11, INK_FAINT, 400, true)))
+	top.add_child(filling(spacer()))
+	top.add_child(text(str(post.get("date", "")), 11, INK_FAINT))
 	stack.add_child(top)
 	var body := para(str(post.get("text", "")), 12, INK_SOFT, 400, 1.45, true)
 	body.max_lines_visible = 4
@@ -471,7 +476,7 @@ static func poll_card(poll: Dictionary) -> Control:
 		foot.add_child(spacer())
 		foot.add_child(text("Final results", 11, INK_FAINT))
 	else:
-		foot.add_child(text("The public votes until the next time skip.", 11, INK_FAINT))
+		foot.add_child(para("The public votes until the next time skip.", 11, INK_FAINT, 400, 1.3))
 	stack.add_child(foot)
 	if has_results and not str((results as Dictionary).get("consensus", "")).is_empty():
 		var box := boxed(Color(1, 1, 1, 0.04), LINE, 8, Vector4(9, 7, 9, 7))
@@ -506,12 +511,8 @@ func post_card(post: Dictionary, can_post: bool) -> Control:
 	line.add_child(avatar(str(post.get("author", "")), str(post.get("initials", "")), str(post.get("flag", "")), mine, 2.4))
 	var words := column(0)
 	words.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	var top := row(6)
-	var author := clipped(str(post.get("author", "")), 13, INK, 800, true)
-	author.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	author.size_flags_stretch_ratio = 0.01
-	author.custom_minimum_size.x = minf(UI.font(800).get_string_size(author.text, HORIZONTAL_ALIGNMENT_LEFT, -1, 13).x + 2.0, 190.0)
-	top.add_child(author)
+	var top := FitRow.new(6)
+	top.add_child(shrinking(clipped(str(post.get("author", "")), 13, INK, 800, true)))
 	if mine:
 		var you := boxed(ACCENT_SOFT, ACCENT_EDGE, 999, Vector4(6, 1, 6, 1))
 		you.size_flags_vertical = Control.SIZE_SHRINK_CENTER
@@ -519,7 +520,7 @@ func post_card(post: Dictionary, can_post: bool) -> Control:
 		you_words.uppercase = true
 		you.add_child(you_words)
 		top.add_child(you)
-	top.add_child(spacer())
+	top.add_child(filling(spacer()))
 	top.add_child(text(str(post.get("date", "")), 11, INK_FAINT))
 	words.add_child(top)
 	if bool(post.get("hasMeta", false)):
@@ -660,7 +661,6 @@ func _build() -> void:
 			_open_composer())
 	_header_row.add_child(_pen)
 	_close = round_button("close", 15, INK_SOFT, Color(1, 1, 1, 0.06))
-	_close.tooltip_text = "Close Rostra"
 	_close.pressed.connect(func() -> void: closed.emit())
 	_header_row.add_child(_close)
 	_header.add_child(_header_row)
@@ -776,7 +776,10 @@ func _build_composer() -> void:
 	_draft.add_theme_constant_override("line_spacing", 5)
 	for state in ["normal", "focus", "read_only"]:
 		_draft.add_theme_stylebox_override(state, StyleBoxEmpty.new())
-	_draft.get_v_scroll_bar().modulate.a = 0.0
+	for bar in [_draft.get_v_scroll_bar(), _draft.get_h_scroll_bar()]:
+		for state in ["scroll", "scroll_focus", "grabber", "grabber_highlight", "grabber_pressed"]:
+			(bar as ScrollBar).add_theme_stylebox_override(state, StyleBoxEmpty.new())
+		(bar as ScrollBar).modulate.a = 0.0
 	_draft.text_changed.connect(func() -> void:
 		_posted = false
 		_posted_note.visible = false
@@ -961,6 +964,9 @@ func _load_view(force: bool) -> void:
 
 
 func _render() -> void:
+	var day := str(view.get("date", ""))
+	if day != _status_date.text and not _status_date.text.is_empty() and is_instance_valid(_search):
+		_search.refresh_view()
 	_status_date.text = str(view.get("date", ""))
 	_header_date.text = str(view.get("date", ""))
 	var has_country := not str(view.get("country", "")).is_empty()
@@ -1247,7 +1253,8 @@ func _render_choices() -> void:
 			_update_composer())
 		foot.add_child(add)
 	foot.add_child(spacer())
-	var note := text("The public votes until the next time skip.", 11, INK_FAINT)
+	var note := para("The public votes until the next time skip.", 11, INK_FAINT, 400, 1.3)
+	note.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	note.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	foot.add_child(note)
 	_choice_box.add_child(foot)
@@ -1383,3 +1390,64 @@ class ShareBar extends PanelContainer:
 		bar.corner_radius_bottom_right = 8 if width >= size.x - 0.5 else 0
 		bar.anti_aliasing = true
 		draw_style_box(bar, Rect2(Vector2.ZERO, Vector2(width, size.y)))
+
+
+class FitRow extends Container:
+	var gap := 6.0
+
+	func _init(spacing := 6.0) -> void:
+		gap = spacing
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+		size_flags_horizontal = Control.SIZE_EXPAND_FILL
+
+	func _items() -> Array[Control]:
+		var out: Array[Control] = []
+		for child in get_children():
+			if child is Control and (child as Control).visible and not (child as Control).top_level:
+				out.append(child as Control)
+		return out
+
+	func _get_minimum_size() -> Vector2:
+		var items := _items()
+		var width := gap * maxf(0.0, float(items.size() - 1))
+		var height := 0.0
+		for child in items:
+			var least := child.get_combined_minimum_size()
+			width += float(child.get_meta("least", 0.0)) if child.has_meta("shrink") else (0.0 if child.has_meta("fill") else least.x)
+			height = maxf(height, least.y)
+		return Vector2(width, height)
+
+	func _notification(what: int) -> void:
+		if what != NOTIFICATION_SORT_CHILDREN:
+			return
+		var items := _items()
+		var widths: Array[float] = []
+		var total := gap * maxf(0.0, float(items.size() - 1))
+		var weight := 0.0
+		var fills := 0
+		for child in items:
+			var width: float = float(child.get_meta("basis", child.get_combined_minimum_size().x))
+			if child.has_meta("fill"):
+				width = 0.0
+				fills += 1
+			widths.append(width)
+			total += width
+			if child.has_meta("shrink"):
+				weight += float(child.get_meta("shrink")) * width
+		var over := total - size.x
+		if over > 0.0 and weight > 0.0:
+			for index in range(items.size()):
+				var child := items[index]
+				if child.has_meta("shrink"):
+					var cut := over * float(child.get_meta("shrink")) * widths[index] / weight
+					widths[index] = maxf(float(child.get_meta("least", 0.0)), widths[index] - cut)
+		elif over < 0.0 and fills > 0:
+			for index in range(items.size()):
+				if items[index].has_meta("fill"):
+					widths[index] = -over / float(fills)
+		var x := 0.0
+		for index in range(items.size()):
+			var child := items[index]
+			var height := child.get_combined_minimum_size().y
+			fit_child_in_rect(child, Rect2(x, roundf((size.y - height) * 0.5), widths[index], height))
+			x += widths[index] + gap
