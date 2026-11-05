@@ -71,6 +71,7 @@ var _disc_jpeg := PackedByteArray()
 var _disc_image: Image
 var _plate_image: Image
 var _baked_size := Vector2i.ZERO
+var _baked_scale := 0.0
 var _prepared := false
 var _shake_epoch := 0
 var _shaking_since := -1
@@ -361,6 +362,11 @@ func _build_layers() -> void:
 	add_child(_knob)
 
 
+func _pixel_scale() -> float:
+	var view := get_viewport()
+	return maxf(1.0, view.get_oversampling()) if view else 1.0
+
+
 func _area() -> Vector2:
 	var area := size
 	if area.x < 1.0 or area.y < 1.0:
@@ -372,18 +378,23 @@ func _bake() -> void:
 	var area := _area()
 	var width := maxi(1, roundi(area.x))
 	var height := maxi(1, roundi(area.y))
-	var face := Image.create_empty(width, height, false, Image.FORMAT_RGBA8)
+	var density := _pixel_scale()
+	var face := Image.create_empty(maxi(1, roundi(width * density)), maxi(1, roundi(height * density)), false, Image.FORMAT_RGBA8)
 	face.fill(WALL)
 	if _plate_image:
-		var tile := _plate_image.get_size()
-		for y in range(0, height, tile.y):
-			for x in range(0, width, tile.x):
-				face.blit_rect(_plate_image, Rect2i(Vector2i.ZERO, tile), Vector2i(x, y))
+		var plate := _plate_image
+		if not is_equal_approx(density, 1.0):
+			plate = _plate_image.duplicate() as Image
+			plate.resize(maxi(1, roundi(_plate_image.get_width() * density)), maxi(1, roundi(_plate_image.get_height() * density)), Image.INTERPOLATE_LANCZOS)
+		var tile := plate.get_size()
+		for y in range(0, face.get_height(), tile.y):
+			for x in range(0, face.get_width(), tile.x):
+				face.blit_rect(plate, Rect2i(Vector2i.ZERO, tile), Vector2i(x, y))
 	var disc_uri := ""
 	if not _disc_jpeg.is_empty():
 		disc_uri = "data:image/jpeg;base64," + Marshalls.raw_to_base64(_disc_jpeg)
 	var vector := Image.new()
-	if vector.load_svg_from_string(SvgKit.face(width, height, disc_uri), 1.0) == OK:
+	if vector.load_svg_from_string(SvgKit.face(width, height, disc_uri), density) == OK:
 		if vector.get_format() != Image.FORMAT_RGBA8:
 			vector.convert(Image.FORMAT_RGBA8)
 		face.blend_rect(vector, Rect2i(Vector2i.ZERO, vector.get_size()), Vector2i.ZERO)
@@ -392,7 +403,7 @@ func _bake() -> void:
 	var wheel_disc := ""
 	if _disc_image:
 		var small := _disc_image.duplicate() as Image
-		var pixels := maxi(1, roundi(224.0 * side / 300.0))
+		var pixels := maxi(1, roundi(224.0 * side / 300.0 * density))
 		small.resize(pixels, pixels, Image.INTERPOLATE_LANCZOS)
 		wheel_disc = "data:image/png;base64," + Marshalls.raw_to_base64(small.save_png_to_buffer())
 	var logo_uri := ""
@@ -401,17 +412,18 @@ func _bake() -> void:
 		var logo := mark.get_image().duplicate() as Image
 		if logo.is_compressed():
 			logo.decompress()
-		var pixels := maxi(1, roundi(200.0 * side / 300.0))
+		var pixels := maxi(1, roundi(200.0 * side / 300.0 * density))
 		logo.resize(pixels, pixels, Image.INTERPOLATE_LANCZOS)
 		logo_uri = "data:image/png;base64," + Marshalls.raw_to_base64(logo.save_png_to_buffer())
 	var wheel := Image.new()
-	if wheel.load_svg_from_string(SvgKit.wheel(side, wheel_disc, logo_uri), 1.0) == OK:
+	if wheel.load_svg_from_string(SvgKit.wheel(side, wheel_disc, logo_uri), density) == OK:
 		_wheel.wheel_texture = ImageTexture.create_from_image(wheel)
 	var shadow := Image.new()
-	if shadow.load_svg_from_string(SvgKit.wheel_shadow(side), 1.0) == OK:
+	if shadow.load_svg_from_string(SvgKit.wheel_shadow(side), density) == OK:
 		_wheel.shadow_texture = ImageTexture.create_from_image(shadow)
 	_wheel.queue_redraw()
 	_baked_size = Vector2i(width, height)
+	_baked_scale = density
 	var area_pixels := Vector2(width, height)
 	for index in range(_leaf_rects.size()):
 		var material := _leaf_rects[index].material as ShaderMaterial
@@ -511,7 +523,7 @@ func _process(_delta: float) -> void:
 		return
 	var now := Time.get_ticks_msec()
 	var area := _area()
-	if Vector2i(roundi(area.x), roundi(area.y)) != _baked_size:
+	if Vector2i(roundi(area.x), roundi(area.y)) != _baked_size or not is_equal_approx(_pixel_scale(), _baked_scale):
 		_bake()
 		_layout()
 	var shake := Vector3.ZERO

@@ -7,6 +7,7 @@ const TONES := {"own": Color("#e9b949"), "enemy": Color("#e0454d"), "other": Col
 
 static var _sprites: Dictionary = {}
 static var _flags: Dictionary = {}
+static var _flag_masks: Dictionary = {}
 
 
 static func stops(level: float, table: Array) -> float:
@@ -171,8 +172,10 @@ static func _step(edge: float, value: float) -> float:
 static func flag(path: String) -> Texture2D:
 	if path.is_empty():
 		return null
-	if _flags.has(path):
-		return _flags[path]
+	var px := maxi(64, roundi(64.0 * UI.pixel_scale()))
+	var key := "%s|%d" % [path, px]
+	if _flags.has(key):
+		return _flags[key]
 	var image := Image.new()
 	var loaded := false
 	if path.to_lower().ends_with(".svg"):
@@ -181,7 +184,7 @@ static func flag(path: String) -> Texture2D:
 			var svg := file.get_as_text()
 			var probe := Image.new()
 			if probe.load_svg_from_string(svg, 1.0) == OK and probe.get_width() > 0 and probe.get_height() > 0:
-				var fit := 64.0 / minf(probe.get_width(), probe.get_height())
+				var fit := float(px) / minf(probe.get_width(), probe.get_height())
 				loaded = image.load_svg_from_string(svg, maxf(fit, 0.05)) == OK
 	else:
 		var still := ImageLoader.decode_gif(FileAccess.get_file_as_bytes(path)) if path.to_lower().ends_with(".gif") else null
@@ -189,29 +192,56 @@ static func flag(path: String) -> Texture2D:
 		if still != null:
 			image = still
 	if not loaded or image.get_width() == 0:
-		_flags[path] = null
+		_flags[key] = null
 		return null
 	image.convert(Image.FORMAT_RGBA8)
 	var width := image.get_width()
 	var height := image.get_height()
-	var cover := maxf(64.0 / width, 64.0 / height)
-	var scaled_w := maxi(64, int(ceil(width * cover)))
-	var scaled_h := maxi(64, int(ceil(height * cover)))
+	var cover := maxf(float(px) / width, float(px) / height)
+	var scaled_w := maxi(px, int(ceil(width * cover)))
+	var scaled_h := maxi(px, int(ceil(height * cover)))
 	image.resize(scaled_w, scaled_h, Image.INTERPOLATE_BILINEAR)
-	var round_image := Image.create_empty(64, 64, false, Image.FORMAT_RGBA8)
-	var left := (scaled_w - 64) / 2
-	var top := (scaled_h - 64) / 2
-	for y in range(64):
-		for x in range(64):
-			var d := Vector2(x + 0.5 - 32.0, y + 0.5 - 32.0).length()
-			var cover_alpha := clampf(32.0 - d + 0.5, 0.0, 1.0)
-			if cover_alpha <= 0.0:
-				continue
-			var c := image.get_pixel(x + left, y + top)
-			round_image.set_pixel(x, y, Color(c.r, c.g, c.b, c.a * cover_alpha))
+	var round_image := Image.create_empty(px, px, false, Image.FORMAT_RGBA8)
+	round_image.blit_rect(image, Rect2i((scaled_w - px) / 2, (scaled_h - px) / 2, px, px), Vector2i.ZERO)
+	var mask := _flag_mask(px)
+	var cuts: PackedInt32Array = mask["cuts"]
+	var clear := Color(0, 0, 0, 0)
+	for y in range(px):
+		var cut := cuts[y]
+		if cut * 2 >= px:
+			round_image.fill_rect(Rect2i(0, y, px, 1), clear)
+		elif cut > 0:
+			round_image.fill_rect(Rect2i(0, y, cut, 1), clear)
+			round_image.fill_rect(Rect2i(px - cut, y, cut, 1), clear)
+	var edges: PackedFloat32Array = mask["edges"]
+	for at in range(0, edges.size(), 3):
+		var x := int(edges[at])
+		var y := int(edges[at + 1])
+		var c := round_image.get_pixel(x, y)
+		round_image.set_pixel(x, y, Color(c.r, c.g, c.b, c.a * edges[at + 2]))
 	var texture := ImageTexture.create_from_image(round_image)
-	_flags[path] = texture
+	_flags[key] = texture
 	return texture
+
+
+static func _flag_mask(px: int) -> Dictionary:
+	if _flag_masks.has(px):
+		return _flag_masks[px]
+	var half := px / 2.0
+	var cuts := PackedInt32Array()
+	var edges := PackedFloat32Array()
+	for y in range(px):
+		var cut := px
+		for x in range(px):
+			var alpha := clampf(half - Vector2(x + 0.5 - half, y + 0.5 - half).length() + 0.5, 0.0, 1.0)
+			if alpha > 0.0 and cut == px:
+				cut = x
+			if alpha > 0.0 and alpha < 1.0:
+				edges.append_array(PackedFloat32Array([x, y, alpha]))
+		cuts.append(cut)
+	var mask := {"cuts": cuts, "edges": edges}
+	_flag_masks[px] = mask
+	return mask
 
 
 static func batch() -> Array:
