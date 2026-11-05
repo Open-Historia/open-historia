@@ -328,6 +328,31 @@ export const screenFrontOrders = (orders, { events = [], humanSides = [], citesO
   return { kept, dropped };
 };
 
+// The call-ups a player ordered that the answer told without writing them: an event that carries out a player's own
+// action and raises that player's own manpower (polityChanges military.manpower above 0), with no `home:` line for
+// that country in the answer, calls its forces at home up all the same. The answer's own figures say a build-up
+// happened; without the line the event said troops were raised and none were (a player's report, 2026-11-05).
+export const untoldBuildUps = (events, orders, { humanSides = [], owners = new Map() } = {}) => {
+  const humans = new Set(asArray(humanSides).map(fold).filter(Boolean));
+  const ordered = new Set(asArray(orders)
+    .filter((order) => /^home:/i.test(clean(order?.battlefield)) && order?.order === "reinforce")
+    .map((order) => fold(order.side)));
+  const lines = [];
+  asArray(events).forEach((event, index) => {
+    const players = asArray(event?.impacts?.actionIds).map((id) => fold(owners.get(clean(id)))).filter((side) => humans.has(side));
+    for (const change of asArray(event?.impacts?.polityChanges)) {
+      const side = clean(change?.code);
+      if (!players.includes(fold(side)) || ordered.has(fold(side))) continue;
+      if (!(Number(change?.military?.manpower) > 0)) continue;
+      ordered.add(fold(side));
+      lines.push(`home: ${side}~${side}~reinforce~all~${index + 1}`);
+    }
+  });
+  if (lines.length === 0) return [];
+  console.info(`[OH fronts] ${lines.length} build-up(s) an event told without its line called up all the same: ${lines.join(" | ")}`);
+  return bindFrontOrdersToEvents(lines, events);
+};
+
 // One line for the receipt the simulator reads next turn: which orders were
 // left out, and why, without repeating a reason.
 export const describeDroppedFrontOrders = (dropped) => {
