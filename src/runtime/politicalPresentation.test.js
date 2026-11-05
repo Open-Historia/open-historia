@@ -10,6 +10,7 @@ import assert from "node:assert/strict";
 import {
   buildGovernmentPartyPresentation,
   buildPoliticalLandscape,
+  buildPoliticalLandscapeViews,
   buildPoliticalPartyLandscape,
   buildPoliticalPowerStructure,
   getPoliticalLandscapeMeta,
@@ -200,4 +201,80 @@ test("the government line names one party or a coalition, each once", () => {
   assert.equal(coalition.label, "Governing coalition");
 
   assert.deepEqual(buildGovernmentPartyPresentation({}), { ids: [], names: [], label: "" });
+});
+
+test("mixed electoral profile exposes separate party and bloc views without changing representation", () => {
+  const profile = {
+    politicalSystem: { representation: "electoral" },
+    parties: [{ id: "p", name: "Democratic Party", support: { percent: 40 } }],
+    powerBlocs: [
+      { id: "tech", name: "Silicon Valley Billionaires", kind: "elite_factions", influence: { percent: 60, basis: "scenario" }, internalStrategy: "hidden" },
+      { id: "army", name: "Military establishment", influence: { label: "strong" } },
+    ],
+  };
+  const before = structuredClone(profile);
+  const views = buildPoliticalLandscapeViews(profile);
+  assert.equal(views.defaultView, "parties");
+  assert.equal(views.canSwitch, true);
+  assert.equal(views.parties.mode, "party");
+  assert.deepEqual(views.parties.entries.map((entry) => entry.name), ["Democratic Party", "Other"]);
+  assert.equal(views.blocs.mode, "power");
+  assert.equal(views.blocs.source, "blocs");
+  assert.deepEqual(views.blocs.entries.map((entry) => entry.name), ["Silicon Valley Billionaires", "Military establishment"]);
+  assert.equal(views.blocs.entries[0].influence, 60);
+  assert.equal(views.blocs.entries[1].influence, null);
+  assert.equal(views.blocs.entries[1].displayValue, "strong");
+  assert.ok(!("internalStrategy" in views.blocs.entries[0]), "power view must whitelist visible fields");
+  assert.deepEqual(profile, before, "the view must not rewrite representation or actor state");
+});
+
+test("independent bloc strengths never synthesize a complementary Other bloc or normalized shares", () => {
+  const views = buildPoliticalLandscapeViews({
+    politicalSystem: { representation: "elite_factions" },
+    powerBlocs: [
+      { name: "Capital", influence: { percent: 80 } },
+      { name: "Security", influence: { percent: 70 } },
+      { name: "Church", influence: { label: "moderate" } },
+    ],
+  });
+  assert.equal(views.defaultView, "blocs");
+  assert.equal(views.canSwitch, false);
+  assert.deepEqual(views.blocs.entries.map((entry) => entry.influence), [80, 70, null]);
+  assert.deepEqual(views.blocs.entries.map((entry) => entry.name), ["Capital", "Security", "Church"]);
+  assert.ok(!views.blocs.entries.some((entry) => entry.isOther));
+});
+
+test("electoral polity with only known blocs offers that view without fake parties", () => {
+  const views = buildPoliticalLandscapeViews({
+    politicalSystem: { representation: "electoral" },
+    powerBlocs: [{ id: "army", name: "Army", influence: { percent: 45 } }],
+  });
+  assert.equal(views.defaultView, "blocs");
+  assert.equal(views.parties, null);
+  assert.equal(views.canSwitch, false);
+});
+
+test("party state with no bloc roster retains the canonical party-influence fallback", () => {
+  const views = buildPoliticalLandscapeViews({
+    politicalSystem: { representation: "party_state" },
+    parties: [{ id: "vanguard", name: "Vanguard Party", influence: { percent: 75 } }],
+  });
+  assert.equal(views.defaultView, "blocs");
+  assert.equal(views.canSwitch, false);
+  assert.equal(views.blocs.source, "party-influence");
+  assert.equal(views.blocs.entries[0].influence, 75);
+  assert.equal(views.blocs.entries[0].name, "Vanguard Party");
+});
+
+test("no political rosters gives no fabricated view; qualitative-only blocs still appear", () => {
+  const empty = buildPoliticalLandscapeViews({ politicalSystem: { representation: "none" } });
+  assert.deepEqual(empty, { parties: null, blocs: null, defaultView: "", canSwitch: false });
+  const qualitative = buildPoliticalLandscapeViews({
+    politicalSystem: { representation: "military_factions" },
+    powerBlocs: [{ name: "General Staff", influence: { label: "very strong" } }],
+  });
+  assert.equal(qualitative.blocs.entries.length, 1);
+  assert.equal(qualitative.blocs.entries[0].influence, null);
+  assert.equal(qualitative.blocs.entries[0].displayValue, "very strong");
+  assert.equal(qualitative.blocs.hasQuantitativeValues, false);
 });
