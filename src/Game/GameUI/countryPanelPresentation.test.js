@@ -25,7 +25,10 @@ test("flags in the Country drawer and region popup show the whole image without 
   assert.match(mapPopup, /src=\{bundledFlagUrl\(flagState\.imageUrl\)\}[\s\S]{0,260}height: "auto"/);
   assert.match(mapPopup, /height: "96px"/, "an empty/loading banner retains a predictable height");
   assert.match(mapPopup, /ref=\{popupBodyRef\}/);
-  assert.match(mapPopup, /clampAnchoredCardTop\(screenPos\.y, popupBodyHeight, window\.innerHeight\)/);
+  assert.match(mapPopup, /clampAnchoredCardTop\(screenPos\.y, popupBodyHeight \+ pointerHeight, window\.innerHeight\)/);
+  assert.match(mapPopup, /top: popupTop/);
+  assert.match(mapPopup, /maxHeight: asSheet \? [^\n]+ : "calc\(100dvh - 2rem\)"/);
+  assert.doesNotMatch(mapPopup, /translateY\(-100%\)/, "floating popup animation must not translate the clamped card off-screen");
 });
 
 test("custom index metrics share the section grid and keep scenario order", () => {

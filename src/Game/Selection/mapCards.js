@@ -77,14 +77,16 @@ export const isSameFeatureSelection = (current, next) => {
     && Math.abs(Number(current.lat) - Number(next.lat)) <= SAME_SPOT_DEGREES;
 };
 
-// A floating region card follows its map anchor, but cannot exceed the screen
-// once a flag's true aspect ratio (or expanded region details) changes its height.
-// The card body separately caps itself to the viewport and scrolls if needed.
+// The floating card's visible TOP sits above its map anchor, leaving the small
+// pointer just below the card. Previously this returned a top-edge coordinate,
+// but the popup then translated itself upward by 100% in its animation; tall
+// cards disappeared above the viewport. The caller includes the pointer height
+// in cardHeight, and the scrollable body is separately viewport-capped.
 export const clampAnchoredCardTop = (anchorY, cardHeight, viewportHeight) => {
   const inset = 8;
-  const preferred = Number(anchorY) - 10;
-  if (!Number.isFinite(preferred) || !Number.isFinite(viewportHeight)) return inset;
   const height = Number.isFinite(cardHeight) ? Math.max(0, cardHeight) : 0;
+  const preferred = Number(anchorY) - height - 1;
+  if (!Number.isFinite(preferred) || !Number.isFinite(viewportHeight)) return inset;
   return Math.max(inset, Math.min(preferred, viewportHeight - height - inset));
 };
 

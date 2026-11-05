@@ -20,11 +20,15 @@ const fakeMap = ({ projection = "mercator", center = { lng: 20, lat: 0 }, width 
 
 const TOKYO = { lng: 139.7, lat: 35.7 };
 
-test("a region card follows its anchor until its actual height would cross a viewport edge", () => {
-  assert.equal(clampAnchoredCardTop(450, 250, 900), 440, "ordinary card remains at the click");
-  assert.equal(clampAnchoredCardTop(750, 360, 900), 532, "taller flag moves the card upwards to fit");
-  assert.equal(clampAnchoredCardTop(7, 250, 900), 8, "near-top selection stays inside the viewport");
+test("a region card uses its visible top above the anchor, not a transformed top after clamping", () => {
+  assert.equal(clampAnchoredCardTop(450, 259, 900), 190, "ordinary card ends just above the clicked point");
+  assert.equal(clampAnchoredCardTop(750, 369, 900), 380, "taller flags retain the same anchor relation");
+  assert.equal(clampAnchoredCardTop(7, 259, 900), 8, "near-top selection stays inside the viewport");
   assert.equal(clampAnchoredCardTop(750, 1000, 800), 8, "very tall card is top-aligned for its scrollable body");
+  assert.equal(clampAnchoredCardTop(900, 900 - 32 + 9, 900), 15, "a viewport-capped body plus arrow respects the bottom inset");
+  assert.ok(clampAnchoredCardTop(900, 900 - 32 + 9, 900) + (900 - 32 + 9) + 8 <= 900);
+  assert.equal(clampAnchoredCardTop(Number.NaN, 300, 900), 8, "invalid anchors fail closed");
+  assert.equal(clampAnchoredCardTop(700, 100, Number.NaN), 8, "invalid viewport measurements fail closed");
 });
 
 test("on the flat map a place more than 90 degrees from the centre still gets its card", () => {
