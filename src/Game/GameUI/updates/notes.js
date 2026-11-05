@@ -53,6 +53,27 @@ import { PAST_UPDATES } from "./notesPast.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // A Mac report, 2026-11-04: the app "opens then immediately closes". The packed Mac build starts as far as its
+    // window in a simulated run; what is left to it is said and logged now (electron/main.cjs app.alreadyRunning,
+    // window.shown, the system and folder in app.files, updater.relaunch; a launch update from a translocated copy waits for the next start; server.js EADDRINUSE through __ohFatal) and an Intel Mac's banner
+    // download is its own zip (server/desktopDownload.js).
+    id: "2026-11-mac-opening",
+    kind: "minor",
+    date: "2026-11-04",
+    channel: "beta",
+    banners: [
+      {
+        title: "Opening the game on a Mac",
+        items: [
+          "If you open the game from where you downloaded it rather than from Applications, an update it finds as it opens is installed the next time you open it, and the game opens straight away instead of restarting.",
+          "Clicking the game in the Dock while it is running brings its window forward.",
+          "On an Intel Mac, the download the update banner offers is the one built for Intel Macs.",
+          "If the game cannot start because the connection it uses on your computer is taken, it says so instead of closing without a word.",
+        ],
+      },
+    ],
+  },
+  {
     id: "2026-11-picture-edges-and-strike-targets",
     kind: "minor",
     date: "2026-11-04",

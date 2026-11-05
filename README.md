@@ -96,7 +96,7 @@ Download the installer for your platform from the
 **[Open Historia for Desktop release](https://github.com/Open-Historia/open-historia/releases/tag/desktop-stable)**, then:
 
 - **Windows:** run **`Open-Historia-Setup.exe`**, then open Open Historia from the Start Menu
-- **macOS:** unzip and drag **Open Historia** to Applications (first run: right-click -> *Open*)
+- **macOS:** unzip and drag **Open Historia** to Applications (first run: macOS closes it once as unsigned; choose *Done*, then System Settings -> Privacy & Security -> *Open Anyway*; on macOS 14 and earlier, right-click -> *Open*)
 - **Linux:** `chmod +x Open-Historia-x86_64.AppImage` and run it
 
 The app comes ready to run; the world map downloads the first time it opens. On

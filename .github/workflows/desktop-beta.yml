@@ -270,7 +270,7 @@ jobs:
               'It does share one thing: the downloaded world map, so there is no second 170MB download if you already have the official app installed.' \
               '' \
               '- Windows: `Open-Historia-Beta-Setup.exe`' \
-              '- macOS: `Open-Historia-Beta-mac-arm64.zip` (Apple Silicon) or `-x64` (Intel) — unsigned, so right-click → Open the first time.' \
+              '- macOS: `Open-Historia-Beta-mac-arm64.zip` (Apple Silicon) or `-x64` (Intel) — unsigned, so the first time macOS closes it: choose Done, then System Settings → Privacy & Security → Open Anyway (macOS 14 and earlier: right-click → Open).' \
               '- Linux: `Open-Historia-Beta-x86_64.AppImage`, or `Open-Historia-Beta-amd64.deb`' \
               '' \
               'It updates itself from this page, never onto the official build.' \
