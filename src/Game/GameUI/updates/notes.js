@@ -53,6 +53,23 @@ import { PAST_UPDATES } from "./notesPast.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // A player's "I build up my forces" was told as an event and a rise in Poland's manpower, with no `home:` line, so
+    // nobody was called up (AI/nativeFrontLedger.js untoldBuildUps; frontPrompt.js names the player in the line).
+    // A player's report, 2026-11-05.
+    id: "2026-11-build-ups-call-up",
+    kind: "minor",
+    date: "2026-11-05",
+    channel: "beta",
+    banners: [
+      {
+        title: "Build-ups raise troops",
+        items: [
+          "An order to build up your forces now calls troops up round your cities even when the time skip tells it only as a rise in your manpower.",
+        ],
+      },
+    ],
+  },
+  {
     // A Mac report, 2026-11-04: the app "opens then immediately closes". The packed Mac build starts as far as its
     // window in a simulated run; what is left to it is said and logged now (electron/main.cjs app.alreadyRunning,
     // window.shown, the system and folder in app.files, updater.relaunch; a launch update from a translocated copy waits for the next start; server.js EADDRINUSE through __ohFatal) and an Intel Mac's banner
