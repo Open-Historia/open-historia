@@ -53,6 +53,23 @@ import { PAST_UPDATES } from "./notesPast.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // A post imported before (kept by post number in ui-settings `hubImported`, server/hubImported.js), or one the
+    // library holds, is downloaded from its uncounted update copy (runtime/hubPosts.js downloadHubScenario); a post
+    // with no update copy yet still counts. The owner's ask, 2026-11-04.
+    id: "2026-11-reimports-not-imports",
+    kind: "minor",
+    date: "2026-11-05",
+    channel: "beta",
+    banners: [
+      {
+        title: "Importing again is not an import",
+        items: [
+          "Importing a Community scenario you have imported before, even one you have since deleted, no longer adds to its number of imports.",
+        ],
+      },
+    ],
+  },
+  {
     // "When map looping is disabled in a scenario, you shouldn't be able to continue infinitely anyway", and the Third
     // Great Ninja War's picture (freeform, ±72°) showed empty ground past its top and bottom. The camera's bounds had
     // infinite longitudes, which switched off MapLibre's one-world hold, and the square's ±85° for every picture
