@@ -53,6 +53,23 @@ import { PAST_UPDATES } from "./notesPast.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // The translator's on-device model (runtime/translationModels.js, translationWorker.js): Opus-MT for ar de es fr
+    // id it nl pt ru zh (and da hu ro, which have no pack), downloaded once after the player says yes; the AI keeps
+    // every other language and whatever the model's answer was refused for. The owner, 2026-11-05.
+    id: "2026-11-translation-model",
+    kind: "minor",
+    date: "2026-11-05",
+    channel: "beta",
+    banners: [
+      {
+        title: "Translation without AI requests",
+        items: [
+          "In German, French, Spanish, Italian, Portuguese, Dutch, Russian, Chinese, Arabic and Indonesian, names and descriptions a scenario adds can now be translated on your device by a model downloaded once, instead of by your AI model. The game asks before it downloads.",
+        ],
+      },
+    ],
+  },
+  {
     // "A file downloaded by everyone who downloads the main app, a different file for the beta app ... only downloaded
     // once when the app is installed or when people update to this update and never again" (the owner, 2026-11-04).
     // The app shells do it (electron/appFile.cjs, mobile/android .../AppFile.java); the page and the website never do.

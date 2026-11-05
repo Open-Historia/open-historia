@@ -112,12 +112,14 @@ const dropWebAnalytics = (isAndroid: boolean) => ({
   },
 })
 
-// The Advisor's microphone runs Whisper in a worker (src/runtime/speechWorker.js)
-// on the copy of ONNX Runtime that Transformers.js pins. Its WebAssembly is
-// emitted into the build from that package, so the runtime is never fetched
-// from a CDN; only the model weights come from the model host. It runs on the
-// CPU build of the runtime (the 8-bit model gains nothing from WebGPU), which
-// is half the size of the WebGPU one Transformers.js imports by default.
+// Two features run a model in a worker on Transformers.js and the copy of ONNX
+// Runtime it pins: the Advisor's microphone (Whisper, src/runtime/speechWorker.js)
+// and the translator (Opus-MT, src/runtime/translationWorker.js). Both import the
+// runtime's WebAssembly from `oh-ort-transformers/`, so it is emitted into the
+// build once, from that package, and never fetched from a CDN; only the model
+// weights come from the model host. Both run on the CPU build of the runtime
+// (their 8-bit models gain nothing from WebGPU), which is half the size of the
+// WebGPU one Transformers.js imports by default.
 const ortDistOf = (fromFile: string) =>
   path.dirname(createRequire(new URL(fromFile, import.meta.url)).resolve('onnxruntime-web/ort-wasm-simd-threaded.wasm')).replace(/\\/g, '/')
 // The Android app listens through the phone's own recogniser and never runs a
@@ -138,9 +140,9 @@ const dropOnDeviceSpeech = (isAndroid: boolean) => ({
   },
 })
 
-const speechRuntimeAliases = [
+const transformersRuntimeAliases = [
   { find: /^onnxruntime-web(?:\/webgpu)?$/, replacement: 'onnxruntime-web/wasm' },
-  { find: /^oh-ort-whisper\//, replacement: `${ortDistOf('./node_modules/@huggingface/transformers/dist/transformers.web.js')}/` },
+  { find: /^oh-ort-transformers\//, replacement: `${ortDistOf('./node_modules/@huggingface/transformers/dist/transformers.web.js')}/` },
 ]
 
 // https://vite.dev/config/
@@ -175,7 +177,7 @@ export default defineConfig(({ mode }) => ({
     format: 'es',
   },
   resolve: {
-    alias: speechRuntimeAliases,
+    alias: transformersRuntimeAliases,
   },
   plugins: [
     react({
