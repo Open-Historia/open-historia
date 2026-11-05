@@ -150,8 +150,13 @@ Blockades and reparations cut into it.
 of its stat sheet: **Troop quality**, **Technology**, **Spending**, **Manpower share**, **War
 weariness**, **War resources** (where the scenario counts them) and its **Land**, **Naval** and
 **Air** arms. Its **Military power**, the figure at the top of the card and the one the Stats
-pane's **🏆 Ranking** tab uses to rank military power, comes from its people and its spending
-through those figures, and never from how much land it holds. The figures are rated by the AI
+pane's **🏆 Ranking** tab uses to rank military power, is the men it can put under arms times what
+each of them is worth by those figures (spending, quality, technology and its arms), and never how
+much land it holds. How far being better armed outweighs being more is the scenario's to say: its
+**Importance of technology**, in the scenario editor's Features tab under Wars. Left empty it is
+4.5, configured for the modern world, where a smaller, far better armed force outweighs a larger
+one; at 1 the men and their arms count alike, as in a world where everyone fights with much the
+same weapons; at 0 only the men count. The figures are rated by the AI
 against every other country, twenty countries to a request: a scenario designer can rate every
 country at once in the scenario editor's **Fronts** tab (**Rate every country**), and a country
 nobody rated is rated the first time the game needs it. Time skips then move your figures with

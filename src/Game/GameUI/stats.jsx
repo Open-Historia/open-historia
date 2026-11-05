@@ -29,7 +29,7 @@ import { militaryLookup } from "../../runtime/militaryStats.js";
 import PoliticalOverview from "./PoliticalOverview.jsx";
 import { filterAndSortCountryRelations } from "./countryDiplomacyView.js";
 import { buildRanking, openingMetric, rankingMetricsFor } from "./countryRanking.js";
-import { MANPOWER_PERCENT, militaryProfile } from "../../runtime/militaryPower.js";
+import { MANPOWER_PERCENT, formatMilitaryPower, militaryProfile } from "../../runtime/militaryPower.js";
 import { RESOURCES_SHORT_FROM } from "../../runtime/warResources.js";
 import { attritionOf } from "../../runtime/attrition.js";
 import { warSettingsOf } from "../../runtime/warSettings.js";
@@ -476,7 +476,7 @@ const MilitaryCard = ({ world, country, style }) => {
     const { figures, own } = profile;
     // What attrition has cost it in its war (runtime/attrition.js), where the scenario counts it.
     const worn = warSettingsOf(world).mechanics.attrition ? attritionOf(world?.attrition, country) : null;
-    const power = profile.power === null ? "—" : (Math.round(profile.power * 10) / 10).toLocaleString();
+    const power = formatMilitaryPower(profile.power);
     return (
         <div style={{ ...cardStyle, ...style }}>
             <div style={{ alignItems: "center", display: "flex", justifyContent: "space-between", marginBottom: "0.2rem" }}>
@@ -1898,7 +1898,7 @@ const formatRankingValue = (metric, value) => {
     if (metric.kind === "money") return formatEuroTotal(value);
     if (metric.kind === "money each") return formatEuroPerCapita(value);
     if (metric.kind === "index") return String(Math.round(value));
-    if (metric.kind === "weight") return (Math.round(value * 10) / 10).toLocaleString();
+    if (metric.kind === "weight") return formatMilitaryPower(value);
     return formatCompactNumber(value);
 };
 
