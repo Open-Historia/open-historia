@@ -232,6 +232,7 @@ func _run() -> void:
 	var saved: Variant = await _doc("advisor")
 	_check("the transcript was saved", typeof(saved) == TYPE_ARRAY and (saved as Array).size() == 2, str((saved as Array).size()) if typeof(saved) == TYPE_ARRAY else "none")
 	_check("the proposal card names the Action and offers Discuss and Proceed", _find_text(panel, "Convene the budget cabinet") and _find_text(panel, "Proposed") and _labels_with(panel, "Proposed Action") and _find_button(panel, "Discuss") != null and _find_button(panel, "Proceed / Queue") != null)
+	_conversation_look()
 	await _shoot("advisor-04-receipts")
 	var discuss := _find_button(panel, "Discuss")
 	if discuss:
@@ -386,6 +387,9 @@ func _run() -> void:
 	await _wait(0.6)
 	var failed: Dictionary = panel.messages[panel.messages.size() - 1]
 	_check("the failure is an error message", str(failed.get("role", "")) == "error", str(failed.get("text", "")))
+	var errors := _bubbles("error")
+	var error_style: StyleBoxFlat = (errors[errors.size() - 1] as PanelContainer).get_theme_stylebox("panel") as StyleBoxFlat if not errors.is_empty() else null
+	_check("an error keeps its own treatment: a red rail, a faint red ground, the full width", error_style != null and error_style.border_width_left == 2 and error_style.border_color == Color("#d78686") and error_style.bg_color.r > error_style.bg_color.b and absf((errors[errors.size() - 1] as Control).size.x - panel._list_width()) < 2.0 and _labels_with(panel, " Error"))
 	var saved_after_error: Variant = await _doc("advisor")
 	_check("the error is saved with the transcript", typeof(saved_after_error) == TYPE_ARRAY and (saved_after_error as Array).size() == 6)
 	var report := _find_button(panel, "💾 Save logging file")
@@ -445,6 +449,9 @@ func _run() -> void:
 		read_it.pressed.emit()
 		await _frames(3)
 		_check("Read it opens the paper and turns into Put it away", read_it.text == "Put it away")
+		var notices := _bubbles("notice")
+		var notice_style: StyleBoxFlat = (notices[0] as PanelContainer).get_theme_stylebox("panel") as StyleBoxFlat if not notices.is_empty() else null
+		_check("a paper notice keeps its own amber rail across the width", notice_style != null and notice_style.border_color == Color("#be9d60") and notice_style.border_width_left == 2 and absf((notices[0] as Control).size.x - panel._list_width()) < 2.0)
 		panel.scroll.scroll_vertical = int(panel.scroll.get_v_scroll_bar().max_value)
 		await _frames(3)
 		await _shoot("advisor-13-paper-notice")
@@ -604,6 +611,75 @@ func _run() -> void:
 	_finish(0 if failures.is_empty() else 1)
 
 
+func _trigger(name: String, chevron: String, retired := false) -> Button:
+	var toggle: Button = panel._recipient_trigger
+	if toggle == null or not is_instance_valid(toggle) or not toggle.is_visible_in_tree():
+		return null
+	if _find_text(toggle, name) and _find_text(toggle, chevron) and _find_text(toggle, "(retired)") == retired:
+		return toggle
+	return null
+
+
+func _bubbles(role: String) -> Array:
+	var found: Array = []
+	var queue: Array = [panel.body]
+	while not queue.is_empty():
+		var node: Node = queue.pop_front()
+		if node is PanelContainer and str(node.get_meta("role", "")) == role and (node as Control).is_visible_in_tree():
+			found.append(node)
+		queue.append_array(node.get_children())
+	return found
+
+
+func _conversation_look() -> void:
+	_check("the drawer is a dark navy conversation surface", panel.tint == Color("#111d2a"))
+	_check("the header reads ADVISOR beside a ◇", panel.header_title.uppercase and panel.header_title.get_parent().get_parent().get_child(0) is Label and (panel.header_title.get_parent().get_parent().get_child(0) as Label).text == "◇")
+	_check("the send button is a conventional arrow, not a rocket", panel._send_button.text.is_empty() and panel._send_button.icon != null and panel._send_button.tooltip_text == "Send message" and panel._send_button.custom_minimum_size == Vector2(42, 42) and _find_button(panel, "🚀") == null)
+	var normal := panel._input.get_theme_stylebox("normal") as StyleBoxFlat
+	_check("the composer is a rectangular navy field", normal != null and normal.bg_color == Color("#192b3b") and normal.corner_radius_top_left == 6 and panel._input.custom_minimum_size.y >= 42.0)
+	var users := _bubbles("user")
+	var replies := _bubbles("advisor")
+	var user_style: StyleBoxFlat = (users[0] as PanelContainer).get_theme_stylebox("panel") as StyleBoxFlat if not users.is_empty() else null
+	var reply_style: StyleBoxFlat = (replies[0] as PanelContainer).get_theme_stylebox("panel") as StyleBoxFlat if not replies.is_empty() else null
+	_check("the player's message stays a compact blue-toned box on the right", user_style != null and user_style.bg_color == Color("#27475e") and (users[0] as Control).size_flags_horizontal == Control.SIZE_SHRINK_END and (users[0] as Control).size.x <= panel._list_width() * 0.89 + 1.0)
+	_check("a reply is open text on a narrow left rail, the full width", reply_style != null and reply_style.bg_color.a == 0.0 and reply_style.border_width_left == 2 and reply_style.border_color == Color("#3b6681") and absf((replies[0] as Control).size.x - panel._list_width()) < 2.0)
+	var speaker := _speaker_label()
+	_check("the speaker is named in the accent", speaker != null and speaker.get_theme_color("font_color") == Color("#85cbe6"))
+
+
+func _speaker_label() -> Label:
+	var queue: Array = [panel.body]
+	while not queue.is_empty():
+		var node: Node = queue.pop_front()
+		if node is Label and (node as Label).text.begins_with(" ") and (node as Label).get_parent() is HBoxContainer and (node as Label).get_parent().get_child(0) is Label and ((node as Label).get_parent().get_child(0) as Label).text == "🧭" and (node as Label).is_visible_in_tree():
+			return node
+		queue.append_array(node.get_children())
+	return null
+
+
+func _picker_look() -> void:
+	var selects: Array = []
+	var queue: Array = [panel]
+	while not queue.is_empty():
+		var node: Node = queue.pop_front()
+		if node is AdvisorPanel.RecipientRow and (node as Control).is_visible_in_tree():
+			selects.append(node)
+		queue.append_array(node.get_children())
+	var current: Variant = selects.filter(func(node: Node) -> bool: return bool(node.get_meta("current", false)))
+	var current_style: StyleBoxFlat = (current[0] as PanelContainer).get_theme_stylebox("panel") as StyleBoxFlat if (current as Array).size() == 1 else null
+	_check("the contact list is a ledger with the open conversation marked by an accent rail", current_style != null and current_style.border_width_left == 2 and current_style.border_color == Color("#85cbe6") and current_style.corner_radius_top_left == 0)
+	var edit := _find_tipped(panel, "Edit", "Edit chief advisor")
+	var edit_style: StyleBoxFlat = edit.get_theme_stylebox("normal") as StyleBoxFlat if edit else null
+	_check("Edit is a quiet outlined action", edit_style != null and edit_style.bg_color.a == 0.0 and edit_style.corner_radius_top_left == 5)
+	await _shoot("advisor-19b-contact-ledger")
+	if (current as Array).size() == 1:
+		(current[0] as AdvisorPanel.RecipientRow).pressed.emit()
+		await _frames(3)
+	_check("choosing a conversation folds the list away", not panel._recipients_open and _trigger("Chief advisor", "▾") != null)
+	_trigger("Chief advisor", "▾").pressed.emit()
+	await _frames(3)
+
+
 func _contact_named(name: String) -> Dictionary:
 	for item in panel.contacts:
 		if str((item as Dictionary).get("name", "")) == name:
@@ -684,10 +760,11 @@ func _contacts() -> void:
 	var seeded: Dictionary = await main.engine.request("country.standin_seed")
 	_check("the player's government is in the Political World", seeded.get("ok", false))
 	_check("the two offices of the player's government are offered", await _until(func() -> bool: return panel.offices.size() == 2, 15.0), str(panel.offices))
-	_check("the recipients bar reads Chief advisor with + Contact", _find_button(panel, "Chief advisor ▾") != null and _find_button(panel, "+ Contact") != null and _find_button(panel, "+ Contact").tooltip_text == "Add an official or advisor")
-	_find_button(panel, "Chief advisor ▾").pressed.emit()
+	_check("the recipients bar reads Chief advisor with + Contact", _trigger("Chief advisor", "▾") != null and _find_button(panel, "+ Contact") != null and _find_button(panel, "+ Contact").tooltip_text == "Add an official or advisor")
+	_trigger("Chief advisor", "▾").pressed.emit()
 	await _frames(3)
-	_check("the list opens with the original conversation and its Edit", _find_button(panel, "Chief advisor ▴") != null and _labels_with(panel, "Chief advisor · Original conversation") and _find_tipped(panel, "Edit", "Edit chief advisor") != null)
+	_check("the list opens with the original conversation and its Edit", _trigger("Chief advisor", "▴") != null and _labels_with(panel, "Chief advisor · Original conversation") and _find_tipped(panel, "Edit", "Edit chief advisor") != null)
+	await _picker_look()
 	_find_button(panel, "+ Contact").pressed.emit()
 	await _frames(3)
 	var kinds := _find_option_with(panel, "Advisor / Minister")
@@ -709,7 +786,7 @@ func _contacts() -> void:
 	await _frames(3)
 	var valls := _contact_named("Manuel Valls")
 	_check("the contact is kept with its link, type and personality", not valls.is_empty() and str(valls.get("title", "")) == "Head of government" and typeof(valls.get("binding")) == TYPE_DICTIONARY and str(valls.get("recipientType", "")) == "advisor-minister" and str(valls.get("personality", "")) == "Blunt about the deficit.\nLoyal to the President." and str(valls.get("status", "")) == "current", JSON.stringify(valls))
-	_check("the bar names the contact and its office", _find_button(panel, "Manuel Valls ▴") != null and _find_text(panel, "Head of government · Political World"))
+	_check("the bar names the contact and its office", _trigger("Manuel Valls", "▴") != null and _find_text(panel, "Head of government · Political World"))
 	_check("the list gives the contact's type", _labels_with(panel, "Head of government · Advisor / Minister"))
 	_check("the composer is addressed to the contact", panel._input.placeholder_text == "Message Manuel Valls…" and panel.messages.is_empty(), panel._input.placeholder_text)
 	var actions_before := JSON.stringify(await _doc("actions")).count("Convene the budget cabinet")
@@ -771,7 +848,7 @@ func _contacts() -> void:
 	await _frames(3)
 	panel._input.text = "One more thing."
 	panel._update_send()
-	_check("a retired contact cannot be written to", panel._input.placeholder_text == "This contact is retired — restore to reply" and not panel._input.editable and panel._send_button.disabled and _find_button(panel, "Manuel Valls (retired) ▴") != null)
+	_check("a retired contact cannot be written to", panel._input.placeholder_text == "This contact is retired — restore to reply" and not panel._input.editable and panel._send_button.disabled and _trigger("Manuel Valls", "▴", true) != null)
 	_check("a retired contact's proposals cannot be approved", _find_button(panel, "Proceed / Queue") == null and _find_button(panel, "Discuss") == null)
 	await _shoot("advisor-22-contact-retired")
 	await panel._retire_recipient(_contact_named("Manuel Valls"), false)
@@ -857,7 +934,7 @@ func _chief_identity() -> void:
 	panel._recipient_draft["personality"] = "Candid and pragmatic; challenges weak arguments."
 	await panel._submit_recipient()
 	await _frames(3)
-	_check("the chief advisor takes its new name and title", str(panel.chief_profile.get("name", "")) == "Dmitri Orlov" and _find_button(panel, "Dmitri Orlov ▴") != null and _find_text(panel, "Chief of Staff") and _labels_with(panel, "Dmitri Orlov · Original conversation") and panel._input.placeholder_text == "Message Dmitri Orlov…", panel._input.placeholder_text)
+	_check("the chief advisor takes its new name and title", str(panel.chief_profile.get("name", "")) == "Dmitri Orlov" and _trigger("Dmitri Orlov", "▴") != null and _find_text(panel, "Chief of Staff") and _labels_with(panel, "Dmitri Orlov · Original conversation") and panel._input.placeholder_text == "Message Dmitri Orlov…", panel._input.placeholder_text)
 	var stored := JSON.stringify(await _doc("advisor"))
 	_check("the identity is kept as its own record", stored.contains("advisor-chief-profile") and stored.contains("Candid and pragmatic"))
 	await _shoot("advisor-26-chief-customised")
@@ -879,7 +956,7 @@ func _chief_identity() -> void:
 		await _until(func() -> bool: return panel.chief_profile.is_empty() and not panel._recipient_saving, 10.0)
 		await _frames(3)
 	stored = JSON.stringify(await _doc("advisor"))
-	_check("Restore scenario defaults brings back the scenario's advisor and keeps the conversation", panel.chief_profile.is_empty() and _find_button(panel, "Chief advisor ▴") != null and not stored.contains("advisor-chief-profile") and stored.contains("Who am I speaking with?") and panel.messages.size() == before + 2 and panel._recipient_editor.is_empty())
+	_check("Restore scenario defaults brings back the scenario's advisor and keeps the conversation", panel.chief_profile.is_empty() and _trigger("Chief advisor", "▴") != null and not stored.contains("advisor-chief-profile") and stored.contains("Who am I speaking with?") and panel.messages.size() == before + 2 and panel._recipient_editor.is_empty())
 
 
 func _unsupported_type() -> void:

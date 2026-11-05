@@ -36,20 +36,31 @@ const COPY_TIP := "Copies this error's details. Diagnostics logging is off — t
 const RETRY_PROJECTS_TEXT := "Continue putting my projects and operations on the board — the last reply was cut off. Pick up from where you stopped and skip anything already on the board. Send no more than ten, one sentence each. Only include efforts that genuinely appear in our history — if everything real is already on the board, just tell me that and add nothing."
 const CHECK_SVG := "<svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='3.2' stroke-linecap='round' stroke-linejoin='round'><path d='M5.5 12.5l4.2 4.2 8.8-9.4'/></svg>"
 const RETRY_SVG :="<svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'><path d='M21 12a9 9 0 1 1-2.64-6.36'/><path d='M21 3v6h-6'/></svg>"
-const PARAGRAPH := Vector2(0.0, 8.0)
-const HEADING := Vector2(14.4, 6.4)
-const LIST := Vector2(4.8, 9.6)
-const QUOTE := Vector2(8.8, 8.8)
+const PARAGRAPH := Vector2(0.0, 12.48)
+const HEADING := Vector2(16.8, 6.4)
+const LIST := Vector2(4.8, 13.6)
+const QUOTE := Vector2(12.0, 12.0)
 const RULE := Vector2(13.6, 13.6)
 const CODE := Vector2(8.0, 8.0)
 const TABLE := Vector2(8.8, 8.8)
 const CHIEF_THREAD := "chief"
 const PERSONALITY_MAX := 1200
-const RECIPIENT_BG := Color(1, 1, 1, 0.06)
-const RECIPIENT_BORDER := Color(1, 1, 1, 0.17)
-const RECIPIENT_PICKED := Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.24)
-const RECIPIENT_INK := Color("#e2e8f0")
-const RECIPIENT_SUBTLE := Color(1, 1, 1, 0.5)
+const RECIPIENT_BG := Color("#203648")
+const RECIPIENT_BORDER := Color(133 / 255.0, 191 / 255.0, 219 / 255.0, 0.2)
+const RECIPIENT_PICKED := Color(69 / 255.0, 137 / 255.0, 176 / 255.0, 0.17)
+const RECIPIENT_INK := Color("#d8e5ee")
+const RECIPIENT_SUBTLE := Color("#97acbd")
+const CLEAR := Color(0, 0, 0, 0)
+const DRAWER_BG := Color("#111d2a")
+const EDGE := Color(139 / 255.0, 190 / 255.0, 219 / 255.0, 0.19)
+const ACCENT_INK := Color("#85cbe6")
+const FIELD_BG := Color("#112131")
+const FIELD_BORDER := Color(133 / 255.0, 191 / 255.0, 219 / 255.0, 0.28)
+const FIELD_INK := Color("#f0f6fa")
+const ACTION_BORDER := Color(141 / 255.0, 194 / 255.0, 222 / 255.0, 0.2)
+const ACTION_INK := Color("#b2c7d6")
+const READING_INK := Color("#e2edf5")
+const ARROW_SVG := "<svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='M12 19V5m-7 7 7-7 7 7'/></svg>"
 
 static var _italic_fonts := {}
 static var _mono_font: Font
@@ -110,6 +121,7 @@ var _recipient_confirm := ""
 var _recipient_error := ""
 var _recipient_saving := false
 var _recipient_list: ScrollContainer
+var _recipient_trigger: Button
 
 var _clear_button: Button
 var _strip_holder: VBoxContainer
@@ -129,7 +141,7 @@ var _scroll_tween: Tween
 func _init() -> void:
 	super._init("Advisor", "", "drawer", DEFAULT_WIDTH)
 	_touch = OS.has_feature("mobile")
-	set_tint(PANEL_BG)
+	set_tint(DRAWER_BG)
 	_material.set_shader_parameter("radius", 0.0)
 	_material.set_shader_parameter("highlight", 0.0)
 	_material.set_shader_parameter("border_color", Color(0, 0, 0, 0))
@@ -159,16 +171,16 @@ func _init() -> void:
 	scroll.get_v_scroll_bar().value_changed.connect(_on_list_scrolled)
 	scroll.resized.connect(_relayout)
 	var margin := body.get_parent() as MarginContainer
-	for side in ["margin_left", "margin_right", "margin_top", "margin_bottom"]:
-		margin.add_theme_constant_override(side, 12)
-	body.add_theme_constant_override("separation", 16)
+	for side in [["margin_left", 14], ["margin_right", 14], ["margin_top", 15], ["margin_bottom", 19]]:
+		margin.add_theme_constant_override(side[0], side[1])
+	body.add_theme_constant_override("separation", 20)
 	_live_holder = VBoxContainer.new()
 	_live_holder.add_theme_constant_override("separation", 0)
 	_live_holder.set_meta("advisor_row", true)
 	_live_holder.visible = false
 	body.add_child(_live_holder)
 	var rule := ColorRect.new()
-	rule.color = Color(1, 1, 1, 0.1)
+	rule.color = EDGE
 	rule.custom_minimum_size.y = 1
 	rule.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	column.add_child(rule)
@@ -190,20 +202,24 @@ func _init() -> void:
 func _build_header() -> void:
 	var row: HBoxContainer = header_extra.get_parent() as HBoxContainer
 	var header := row.get_parent() as MarginContainer
-	for side in [["margin_left", 12], ["margin_right", 12], ["margin_top", 11], ["margin_bottom", 11]]:
+	for side in [["margin_left", 14], ["margin_right", 14], ["margin_top", 9], ["margin_bottom", 9]]:
 		header.add_theme_constant_override(side[0], side[1])
-	row.add_theme_constant_override("separation", 8)
+	header.custom_minimum_size.y = 46
+	var band := UI.box(Color("#0c1622"), CLEAR, 0, 0)
+	header.draw.connect(func() -> void: header.draw_style_box(band, Rect2(Vector2.ZERO, header.size)))
+	row.add_theme_constant_override("separation", 9)
 	var column: Node = header.get_parent()
 	var header_rule := column.get_child(header.get_index() + 1) as ColorRect
 	if header_rule:
-		header_rule.color = Color(1, 1, 1, 0.1)
-	var compass := UI.label("🧭", 16, UI.WHITE)
-	compass.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	row.add_child(compass)
-	row.move_child(compass, 0)
-	header_title.add_theme_font_override("font", UI.font(800))
-	header_title.add_theme_font_size_override("font_size", 14)
-	header_title.add_theme_color_override("font_color", UI.WHITE)
+		header_rule.color = EDGE
+	var mark := UI.label("◇", 17, ACCENT_INK)
+	mark.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	row.add_child(mark)
+	row.move_child(mark, 0)
+	header_title.add_theme_font_override("font", UI.font(850, "Arial", 1))
+	header_title.add_theme_font_size_override("font_size", 12)
+	header_title.add_theme_color_override("font_color", Color("#edf5fb"))
+	header_title.uppercase = true
 	header_title.get_parent().set("size_flags_vertical", Control.SIZE_SHRINK_CENTER)
 	_clear_button = Button.new()
 	_clear_button.focus_mode = Control.FOCUS_NONE
@@ -225,8 +241,10 @@ func _build_header() -> void:
 		empty.content_margin_left = 8
 		for state in ["normal", "hover", "pressed", "focus", "hover_pressed"]:
 			close.add_theme_stylebox_override(state, empty)
-		for name in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_hover_pressed_color"]:
+		for name in ["font_color", "font_pressed_color", "font_focus_color"]:
 			close.add_theme_color_override(name, Color(1, 1, 1, 0.55))
+		close.add_theme_color_override("font_hover_color", Color("#eaf4fc"))
+		close.add_theme_color_override("font_hover_pressed_color", Color("#eaf4fc"))
 	closed.connect(close_panel)
 
 
@@ -632,8 +650,10 @@ func _style_clear_button() -> void:
 			_clear_button.add_theme_stylebox_override(state, empty)
 		_clear_button.add_theme_font_override("font", UI.font(400))
 		_clear_button.add_theme_font_size_override("font_size", 22)
-		for name in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_hover_pressed_color", "font_disabled_color"]:
+		for name in ["font_color", "font_pressed_color", "font_focus_color", "font_disabled_color"]:
 			_clear_button.add_theme_color_override(name, Color(1, 1, 1, 0.4))
+		_clear_button.add_theme_color_override("font_hover_color", Color("#eaf4fc"))
+		_clear_button.add_theme_color_override("font_hover_pressed_color", Color("#eaf4fc"))
 
 
 func _on_clear_pressed() -> void:
@@ -664,25 +684,29 @@ func _on_clear_pressed() -> void:
 
 
 func _build_composer() -> Control:
+	var tray := PanelContainer.new()
+	tray.add_theme_stylebox_override("panel", UI.box(Color("#101a26"), CLEAR, 0, 0, Vector4(13, 12, 13, 12)))
 	var margin := MarginContainer.new()
-	for side in ["margin_left", "margin_right", "margin_top", "margin_bottom"]:
-		margin.add_theme_constant_override(side, 16)
+	tray.add_child(margin)
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 8)
 	_input = TextEdit.new()
 	_input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_input.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_input.size_flags_vertical = Control.SIZE_SHRINK_END
 	_input.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
 	_input.placeholder_text = "Ask your advisor…" if _touch else "Ask your advisor…  (Shift+Enter for a new line)"
 	_input.add_theme_font_override("font", UI.font(400))
 	_input.add_theme_font_size_override("font_size", 14)
 	_input.add_theme_constant_override("line_spacing", int(round(21.0 - UI.font(400).get_height(14))))
-	_input.add_theme_color_override("font_color", UI.WHITE)
-	_input.add_theme_color_override("font_placeholder_color", Color(1, 1, 1, 0.4))
-	_input.add_theme_color_override("caret_color", UI.WHITE)
-	_input.add_theme_color_override("selection_color", Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.45))
-	var normal := UI.box(Color(0, 0, 0, 0.2), Color(1, 1, 1, 0.15), 10, 1, Vector4(12, 9, 12, 9))
-	var focus := UI.box(Color(0, 0, 0, 0.2), Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.6), 10, 1, Vector4(12, 9, 12, 9))
+	_input.add_theme_color_override("font_color", FIELD_INK)
+	_input.add_theme_color_override("font_readonly_color", Color("#8d9baa"))
+	_input.add_theme_color_override("font_placeholder_color", Color("#859caf"))
+	_input.add_theme_color_override("caret_color", FIELD_INK)
+	_input.add_theme_color_override("selection_color", Color(130 / 255.0, 200 / 255.0, 229 / 255.0, 0.35))
+	var normal := UI.box(Color("#192b3b"), Color(133 / 255.0, 183 / 255.0, 210 / 255.0, 0.3), 6, 1, Vector4(12, 9, 12, 9))
+	var focus := UI.box(Color("#1c3246"), Color("#82c8e5"), 6, 1, Vector4(12, 9, 12, 9))
+	focus.shadow_color = Color(130 / 255.0, 200 / 255.0, 229 / 255.0, 0.2)
+	focus.shadow_size = 1
 	_input.add_theme_stylebox_override("normal", normal)
 	_input.add_theme_stylebox_override("read_only", normal)
 	_input.add_theme_stylebox_override("focus", focus)
@@ -694,26 +718,29 @@ func _build_composer() -> Control:
 	_input.resized.connect(func() -> void: _resize_input.call_deferred())
 	row.add_child(_input)
 	_send_button = Button.new()
-	_send_button.text = "🚀"
+	_send_button.icon = _svg(ARROW_SVG, 19, UI.WHITE)
+	_send_button.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_send_button.tooltip_text = "Send message"
 	_send_button.focus_mode = Control.FOCUS_NONE
-	_send_button.custom_minimum_size = Vector2(40, 40)
-	_send_button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	_send_button.add_theme_font_override("font", UI.font(400))
-	_send_button.add_theme_font_size_override("font_size", 16)
-	for name in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_hover_pressed_color", "font_disabled_color"]:
+	_send_button.custom_minimum_size = Vector2(42, 42)
+	_send_button.size_flags_vertical = Control.SIZE_SHRINK_END
+	for name in ["icon_normal_color", "icon_hover_color", "icon_pressed_color", "icon_focus_color", "icon_hover_pressed_color"]:
 		_send_button.add_theme_color_override(name, UI.WHITE)
-	_send_button.add_theme_stylebox_override("normal", UI.box(BLUE, Color(0, 0, 0, 0), 10, 0))
-	_send_button.add_theme_stylebox_override("hover", UI.box(BLUE_HOVER, Color(0, 0, 0, 0), 10, 0))
-	_send_button.add_theme_stylebox_override("pressed", UI.box(BLUE_HOVER, Color(0, 0, 0, 0), 10, 0))
-	_send_button.add_theme_stylebox_override("hover_pressed", UI.box(BLUE_HOVER, Color(0, 0, 0, 0), 10, 0))
-	_send_button.add_theme_stylebox_override("focus", UI.box(BLUE, Color(0, 0, 0, 0), 10, 0))
-	_send_button.add_theme_stylebox_override("disabled", UI.box(Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.4), Color(0, 0, 0, 0), 10, 0))
+	_send_button.add_theme_color_override("icon_disabled_color", Color("#91a5b5"))
+	var resting := UI.box(Color("#326e93"), Color("#4c94b9"), 6, 1)
+	var lifted := UI.box(Color("#4285a9"), Color("#86cce8"), 6, 1)
+	_send_button.add_theme_stylebox_override("normal", resting)
+	_send_button.add_theme_stylebox_override("focus", resting)
+	_send_button.add_theme_stylebox_override("hover", lifted)
+	_send_button.add_theme_stylebox_override("pressed", lifted)
+	_send_button.add_theme_stylebox_override("hover_pressed", lifted)
+	_send_button.add_theme_stylebox_override("disabled", UI.box(Color("#243b4d"), Color("#314c60"), 6, 1))
 	_send_button.pressed.connect(_send_from_composer)
 	row.add_child(_send_button)
 	margin.add_child(row)
 	_resize_input()
 	_update_send()
-	return margin
+	return tray
 
 
 func _resize_input() -> void:
@@ -728,7 +755,7 @@ func _resize_input() -> void:
 		var wrapped := font.get_multiline_string_size(_input.placeholder_text, HORIZONTAL_ALIGNMENT_LEFT, room, 14, -1, TextServer.BREAK_MANDATORY | TextServer.BREAK_WORD_BOUND)
 		lines = max(lines, int(round(wrapped.y / max(1.0, font.get_height(14)))))
 	var height := float(max(1, lines)) * float(_input.get_line_height()) + 18.0 + 2.0
-	_input.custom_minimum_size.y = min(height, 300.0)
+	_input.custom_minimum_size.y = clampf(height, 42.0, 300.0)
 
 
 func _update_send() -> void:
@@ -736,6 +763,7 @@ func _update_send() -> void:
 		return
 	var blocked := _loading or _recipient_locked() or not _has_bootstrapped or _load_failed or _save_failed or _input.text.strip_edges().is_empty()
 	_send_button.disabled = blocked
+	_send_button.modulate.a = 0.7 if blocked else 1.0
 	_send_button.mouse_default_cursor_shape = Control.CURSOR_FORBIDDEN if _loading or _input.text.strip_edges().is_empty() else Control.CURSOR_POINTING_HAND
 	if _clear_button:
 		_clear_button.disabled = not _has_bootstrapped or _load_failed or _loading or _side_effects > 0
@@ -861,7 +889,7 @@ func _list_width() -> float:
 	var width := scroll.size.x
 	if width <= 0.0:
 		width = _width - 1.0
-	return max(120.0, width - 24.0)
+	return max(120.0, width - 28.0)
 
 
 func _relayout() -> void:
@@ -896,7 +924,9 @@ func _render(follow := true) -> void:
 		body.add_child(empty)
 	if messages.size() > _visible_limit:
 		var hidden: int = min(messages.size() - _visible_limit, WINDOW_STEP)
-		var earlier := _chip("Show 1 earlier message" if hidden == 1 else "Show %d earlier messages" % hidden, Color(1, 1, 1, 0.04), Color(1, 1, 1, 0.09), Color(1, 1, 1, 0.58), 11, 400, Vector4(10, 6, 10, 6), 999)
+		var earlier := _chip("Show 1 earlier message" if hidden == 1 else "Show %d earlier messages" % hidden, Color("#1b2d3d"), EDGE, Color("#b8cddd"), 11, 400, Vector4(12, 6, 12, 6), 5)
+		earlier.add_theme_stylebox_override("hover", UI.box(Color("#1b2d3d"), Color("#779eb5"), 5, 1, Vector4(12, 6, 12, 6)))
+		earlier.add_theme_color_override("font_hover_color", UI.WHITE)
 		earlier.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 		earlier.pressed.connect(func() -> void:
 			_visible_limit += WINDOW_STEP
@@ -993,15 +1023,15 @@ func _set_dots(running: bool) -> void:
 func _thinking_row() -> Control:
 	var row := VBoxContainer.new()
 	row.add_theme_constant_override("separation", 4)
-	row.add_child(_speaker_tag())
+	row.add_child(_speaker_tag(false))
 	var bubble := PanelContainer.new()
-	var style := UI.box(Color(1, 1, 1, 0.08), Color(0, 0, 0, 0), 12, 0, Vector4(14, 10, 14, 10))
-	style.corner_radius_bottom_left = 4
+	var style := UI.box(Color(80 / 255.0, 128 / 255.0, 155 / 255.0, 0.1), Color("#538bad"), 0, 0, Vector4(13, 7, 11, 7))
+	style.border_width_left = 2
 	bubble.add_theme_stylebox_override("panel", style)
 	bubble.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	if _dots_timer.is_stopped():
 		_dots = 0
-	_dots_label = UI.label("Thinking" + ".".repeat(_dots) + " ", 14, Color(1, 1, 1, 0.6))
+	_dots_label = UI.label("Thinking" + ".".repeat(_dots) + " ", 13, Color("#b0c7d8"))
 	bubble.add_child(_dots_label)
 	row.add_child(bubble)
 	return row
@@ -1087,11 +1117,13 @@ func _speaker_name() -> String:
 	return str(chief_profile.get("name", ""))
 
 
-func _speaker_tag() -> HBoxContainer:
-	var name := _speaker_name()
-	if name.is_empty():
-		return _tagged("🧭", " Advisor", 11, Color(1, 1, 1, 0.4))
-	var tag := _tagged("🧭", " " + name, 11, Color(1, 1, 1, 0.4))
+func _speaker_tag(lit := true) -> HBoxContainer:
+	var speaker := _speaker_name()
+	var ink := ACCENT_INK if lit else Color(1, 1, 1, 0.4)
+	var weight := 850 if lit else 400
+	if speaker.is_empty():
+		return _tagged("🧭", " Advisor", 11, ink, weight)
+	var tag := _tagged("🧭", " " + speaker, 11, ink, weight)
 	tag.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
 	return tag
 
@@ -1120,6 +1152,7 @@ func _apply_composer() -> void:
 	else:
 		_input.placeholder_text = "Ask your advisor…" if _touch else "Ask your advisor…  (Shift+Enter for a new line)"
 	_input.editable = reason.is_empty()
+	_input.modulate.a = 1.0 if _input.editable else 0.65
 	_resize_input()
 	_update_send()
 
@@ -1132,12 +1165,69 @@ func _recipient_button(text: String, picked := false, left := false) -> Button:
 	button.alignment = HORIZONTAL_ALIGNMENT_LEFT if left else HORIZONTAL_ALIGNMENT_CENTER
 	button.add_theme_font_override("font", UI.font(400))
 	button.add_theme_font_size_override("font_size", 12)
-	var style := UI.box(RECIPIENT_PICKED if picked else RECIPIENT_BG, RECIPIENT_BORDER, 7, 1, Vector4(9, 6, 9, 6))
-	for state in ["normal", "hover", "pressed", "focus", "hover_pressed", "disabled"]:
+	var style := UI.box(RECIPIENT_PICKED if picked else RECIPIENT_BG, RECIPIENT_BORDER, 5, 1, Vector4(9, 6, 9, 6))
+	for state in ["normal", "hover", "pressed", "focus", "hover_pressed"]:
 		button.add_theme_stylebox_override(state, style)
-	for name in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_hover_pressed_color", "font_disabled_color"]:
+	button.add_theme_stylebox_override("disabled", _faded(style))
+	for name in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_hover_pressed_color"]:
 		button.add_theme_color_override(name, RECIPIENT_INK)
+	button.add_theme_color_override("font_disabled_color", Color(RECIPIENT_INK, 0.45))
 	return button
+
+
+func _faded(style: StyleBoxFlat) -> StyleBoxFlat:
+	var dim := style.duplicate() as StyleBoxFlat
+	dim.bg_color = Color(dim.bg_color, dim.bg_color.a * 0.45)
+	dim.border_color = Color(dim.border_color, dim.border_color.a * 0.45)
+	return dim
+
+
+func _contact_action(text: String) -> Button:
+	var button := Button.new()
+	button.text = text
+	button.focus_mode = Control.FOCUS_NONE
+	button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	button.custom_minimum_size.y = 34
+	button.add_theme_font_override("font", UI.font(700))
+	button.add_theme_font_size_override("font_size", 11)
+	var resting := UI.box(CLEAR, ACTION_BORDER, 5, 1, Vector4(8, 6, 8, 6))
+	var lifted := UI.box(Color(106 / 255.0, 159 / 255.0, 191 / 255.0, 0.11), Color(141 / 255.0, 194 / 255.0, 222 / 255.0, 0.53), 5, 1, Vector4(8, 6, 8, 6))
+	for state in [["normal", resting], ["focus", resting], ["disabled", _faded(resting)], ["hover", lifted], ["pressed", lifted], ["hover_pressed", lifted]]:
+		button.add_theme_stylebox_override(state[0], state[1])
+	for name in ["font_color", "font_pressed_color", "font_focus_color"]:
+		button.add_theme_color_override(name, ACTION_INK)
+	button.add_theme_color_override("font_disabled_color", Color(ACTION_INK, 0.45))
+	button.add_theme_color_override("font_hover_color", Color("#f1f8fc"))
+	button.add_theme_color_override("font_hover_pressed_color", Color("#f1f8fc"))
+	button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	return button
+
+
+func _contact_select(current: bool) -> RecipientRow:
+	var resting := UI.box(RECIPIENT_PICKED if current else CLEAR, ACCENT_INK if current else CLEAR, 0, 0, Vector4(9, 7, 7, 7))
+	resting.border_width_left = 2
+	var lifted := UI.box(RECIPIENT_PICKED if current else Color(131 / 255.0, 182 / 255.0, 211 / 255.0, 0.08), ACCENT_INK if current else CLEAR, 0, 0, Vector4(9, 7, 7, 7))
+	lifted.border_width_left = 2
+	var pick := RecipientRow.new(resting, lifted)
+	pick.custom_minimum_size.y = 42
+	pick.set_meta("current", current)
+	return pick
+
+
+func _contact_row() -> HBoxContainer:
+	var line := HBoxContainer.new()
+	line.add_theme_constant_override("separation", 5)
+	line.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	return line
+
+
+func _contact_rule(line: HBoxContainer) -> PanelContainer:
+	var frame := PanelContainer.new()
+	var style := UI.box(CLEAR, Color(141 / 255.0, 194 / 255.0, 222 / 255.0, 0.13), 0, 0, Vector4(0, 3, 0, 3))
+	style.border_width_bottom = 1
+	frame.add_theme_stylebox_override("panel", style)
+	frame.add_child(line)
+	return frame
 
 
 func _recipient_field(value: String, limit: int) -> LineEdit:
@@ -1147,10 +1237,10 @@ func _recipient_field(value: String, limit: int) -> LineEdit:
 	field.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	field.add_theme_font_override("font", UI.font(400))
 	field.add_theme_font_size_override("font_size", 12)
-	field.add_theme_color_override("font_color", Color("#f8fafc"))
-	field.add_theme_color_override("font_uneditable_color", Color("#f8fafc"))
+	field.add_theme_color_override("font_color", FIELD_INK)
+	field.add_theme_color_override("font_uneditable_color", FIELD_INK)
 	field.add_theme_color_override("caret_color", UI.WHITE)
-	var style := UI.box(Color(0, 0, 0, 0.22), RECIPIENT_BORDER, 7, 1, Vector4(7, 6, 7, 6))
+	var style := UI.box(FIELD_BG, FIELD_BORDER, 5, 1, Vector4(7, 7, 7, 7))
 	for state in ["normal", "focus", "read_only"]:
 		field.add_theme_stylebox_override(state, style)
 	return field
@@ -1171,11 +1261,11 @@ func _recipient_option() -> OptionButton:
 	choose.custom_minimum_size.x = 1
 	choose.add_theme_font_override("font", UI.font(400))
 	choose.add_theme_font_size_override("font_size", 12)
-	var choose_style := UI.box(Color(0, 0, 0, 0.22), RECIPIENT_BORDER, 7, 1, Vector4(7, 6, 7, 6))
+	var choose_style := UI.box(FIELD_BG, FIELD_BORDER, 5, 1, Vector4(7, 7, 7, 7))
 	for state in ["normal", "hover", "pressed", "focus", "hover_pressed", "disabled"]:
 		choose.add_theme_stylebox_override(state, choose_style)
 	for name in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_hover_pressed_color", "font_disabled_color"]:
-		choose.add_theme_color_override(name, Color("#f8fafc"))
+		choose.add_theme_color_override(name, FIELD_INK)
 	return choose
 
 
@@ -1187,61 +1277,59 @@ func _render_recipients() -> void:
 		_recipients_holder.remove_child(child)
 		child.queue_free()
 	_recipient_list = null
+	_recipient_trigger = null
 	var busy := _recipients_busy()
 	var section := PanelContainer.new()
-	var section_style := UI.box(Color(0, 0, 0, 0), Color(0, 0, 0, 0), 0, 0, Vector4(10, 6, 10, 6))
-	section_style.border_color = Color(1, 1, 1, 0.1)
+	var section_style := UI.box(Color("#152434"), EDGE, 0, 0, Vector4(13, 10, 13, 11))
 	section_style.border_width_bottom = 1
 	section.add_theme_stylebox_override("panel", section_style)
 	var stack := VBoxContainer.new()
 	stack.add_theme_constant_override("separation", 0)
 	section.add_child(stack)
 	var top := HBoxContainer.new()
-	top.add_theme_constant_override("separation", 8)
+	top.add_theme_constant_override("separation", 7)
 	var selected := _selected_contact()
 	var chief_heading := I18n.now("Chief advisor") if chief_profile.is_empty() else _chief_name()
-	var heading := (chief_heading if selected.is_empty() else str(selected.get("name", ""))) + (" " + I18n.now("(retired)") if bool(selected.get("archived", false)) else "") + (" ▴" if _recipients_open else " ▾")
-	var toggle := _recipient_button(heading, false, true)
-	toggle.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
-	toggle.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	toggle.clip_text = true
-	toggle.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	toggle.pressed.connect(func() -> void:
-		_recipients_open = not _recipients_open
-		_render_recipients())
-	top.add_child(toggle)
-	var add := _recipient_button("+ Contact")
+	top.add_child(_recipient_toggle(chief_heading if selected.is_empty() else str(selected.get("name", "")), bool(selected.get("archived", false))))
+	var add := _contact_action("+ Contact")
 	add.tooltip_text = "Add an official or advisor"
 	add.disabled = busy or _recipient_saving
-	add.modulate.a = 0.5 if busy else 1.0
 	add.pressed.connect(func() -> void: _open_recipient_editor({}))
 	top.add_child(add)
 	stack.add_child(top)
 	if not selected.is_empty() or not chief_profile.is_empty():
 		var shown_title := str(selected.get("title", "")) if not selected.is_empty() else _chief_title()
-		var subtle := UI.wrapped(shown_title + (" " + I18n.now("· Political World") if typeof(selected.get("binding")) == TYPE_DICTIONARY else ""), 11, RECIPIENT_SUBTLE)
+		var subtle := UI.wrapped(shown_title + (" " + I18n.now("· Political World") if typeof(selected.get("binding")) == TYPE_DICTIONARY else ""), 10, Color("#94aabb"))
 		subtle.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
-		stack.add_child(_gap(3))
+		stack.add_child(_gap(4))
 		stack.add_child(subtle)
 	if not selected.is_empty() and _type_of(selected) != minister_type:
 		stack.add_child(_gap(5))
 		stack.add_child(_recipient_label("This character uses only the public scenario timeline and their own conversation history. Private government records and diplomacy are not shared."))
 	if _recipients_open:
-		stack.add_child(_gap(8))
+		stack.add_child(_gap(10))
 		_recipient_list = ScrollContainer.new()
 		_recipient_list.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-		_recipient_list.get_v_scroll_bar().modulate.a = 0.0
+		var bar := _recipient_list.get_v_scroll_bar()
+		bar.add_theme_stylebox_override("grabber", UI.box(Color("#36546a"), CLEAR, 999, 0))
+		bar.add_theme_stylebox_override("grabber_highlight", UI.box(Color("#46677f"), CLEAR, 999, 0))
+		bar.add_theme_stylebox_override("grabber_pressed", UI.box(Color("#46677f"), CLEAR, 999, 0))
+		bar.add_theme_stylebox_override("scroll", UI.box(CLEAR, CLEAR, 0, 0))
+		bar.custom_minimum_size.x = 6
+		var padding := MarginContainer.new()
+		padding.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		for side in [["margin_left", 1], ["margin_right", 1], ["margin_top", 2], ["margin_bottom", 2]]:
+			padding.add_theme_constant_override(side[0], side[1])
 		var list := VBoxContainer.new()
-		list.add_theme_constant_override("separation", 5)
+		list.add_theme_constant_override("separation", 0)
 		list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		_recipient_list.add_child(list)
-		var chief_box := HBoxContainer.new()
-		chief_box.add_theme_constant_override("separation", 5)
-		var chief := RecipientRow.new(RECIPIENT_PICKED if active_thread == CHIEF_THREAD else RECIPIENT_BG, RECIPIENT_BORDER)
+		padding.add_child(list)
+		_recipient_list.add_child(padding)
+		var chief_box := _contact_row()
+		var chief := _contact_select(active_thread == CHIEF_THREAD)
 		chief.disabled = busy or _recipient_saving
-		chief.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		var chief_words := VBoxContainer.new()
-		chief_words.add_theme_constant_override("separation", 1)
+		chief_words.add_theme_constant_override("separation", 2)
 		chief_words.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		var chief_line := RichTextLabel.new()
 		chief_line.bbcode_enabled = true
@@ -1251,28 +1339,31 @@ func _render_recipients() -> void:
 		chief_line.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		chief_line.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
 		chief_line.custom_minimum_size.x = 1
-		chief_line.add_theme_font_override("normal_font", UI.font(400))
+		chief_line.add_theme_font_override("normal_font", UI.font(750))
+		chief_line.add_theme_font_override("bold_font", UI.font(400))
 		chief_line.add_theme_font_size_override("normal_font_size", 12)
-		chief_line.add_theme_color_override("default_color", RECIPIENT_INK)
-		chief_line.text = "%s [font_size=11][color=#ffffff80]%s[/color][/font_size]" % [_escape(chief_heading), _escape(I18n.now("· Original conversation"))]
+		chief_line.add_theme_font_size_override("bold_font_size", 11)
+		chief_line.add_theme_color_override("default_color", UI.WHITE if active_thread == CHIEF_THREAD else Color("#e0ebf4"))
+		chief_line.text = "%s [b][color=#97acbd]%s[/color][/b]" % [_escape(chief_heading), _escape(I18n.now("· Original conversation"))]
 		chief_words.add_child(chief_line)
 		if not chief_profile.is_empty():
-			var chief_title := UI.wrapped(_chief_title(), 11, RECIPIENT_SUBTLE)
+			var chief_title := UI.wrapped(_chief_title(), 10, Color("#8fa6b8"))
 			chief_title.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
 			chief_words.add_child(chief_title)
 		chief.add_child(chief_words)
 		chief.pressed.connect(func() -> void:
 			_recipient_editor = ""
 			_recipient_confirm = ""
+			_recipients_open = false
+			_render_recipients()
 			_select_recipient(CHIEF_THREAD))
 		chief_box.add_child(chief)
-		var chief_edit := _recipient_button("Edit")
+		var chief_edit := _contact_action("Edit")
 		chief_edit.tooltip_text = "Edit chief advisor"
 		chief_edit.disabled = busy or _recipient_saving
-		chief_edit.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		chief_edit.pressed.connect(_open_chief_editor)
 		chief_box.add_child(chief_edit)
-		list.add_child(chief_box)
+		list.add_child(_contact_rule(chief_box))
 		var any_archived := false
 		for item in contacts:
 			var contact: Dictionary = item
@@ -1282,43 +1373,41 @@ func _render_recipients() -> void:
 			if archived and not _recipient_show_archived and id != active_thread:
 				continue
 			var entry := VBoxContainer.new()
-			entry.add_theme_constant_override("separation", 5)
-			var line := HBoxContainer.new()
-			line.add_theme_constant_override("separation", 5)
-			var pick := RecipientRow.new(RECIPIENT_PICKED if id == active_thread else RECIPIENT_BG, RECIPIENT_BORDER)
+			entry.add_theme_constant_override("separation", 0)
+			var line := _contact_row()
+			var pick := _contact_select(id == active_thread)
 			pick.disabled = busy or _recipient_saving
-			pick.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 			var words := VBoxContainer.new()
-			words.add_theme_constant_override("separation", 1)
+			words.add_theme_constant_override("separation", 2)
 			words.mouse_filter = Control.MOUSE_FILTER_IGNORE
-			var name := UI.label(str(contact.get("name", "")) + (" " + I18n.now("· Retired") if archived else ""), 12, RECIPIENT_INK)
-			name.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
-			name.clip_text = true
-			name.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-			name.custom_minimum_size.x = 1
-			words.add_child(name)
+			var name_label := UI.label(str(contact.get("name", "")) + (" " + I18n.now("· Retired") if archived else ""), 12, UI.WHITE if id == active_thread else Color("#e0ebf4"), 750)
+			name_label.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+			name_label.clip_text = true
+			name_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+			name_label.custom_minimum_size.x = 1
+			words.add_child(name_label)
 			var gone := ["changed", "vacant"].has(str(contact.get("status", "")))
 			var type_label := str(contact.get("typeLabel", ""))
 			var kind := I18n.now(type_label if not type_label.is_empty() else "Unsupported recipient type")
-			var title := UI.wrapped(str(contact.get("title", "")) + " · " + kind + (" " + I18n.now("· No longer in office") if gone else ""), 11, RECIPIENT_SUBTLE)
+			var title := UI.wrapped(str(contact.get("title", "")) + " · " + kind + (" " + I18n.now("· No longer in office") if gone else ""), 10, Color("#8fa6b8"))
 			title.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
 			words.add_child(title)
 			pick.add_child(words)
 			pick.pressed.connect(func() -> void:
 				_recipient_editor = ""
 				_recipient_confirm = ""
+				_recipients_open = false
+				_render_recipients()
 				_select_recipient(id))
 			line.add_child(pick)
-			var edit := _recipient_button("Edit")
+			var edit := _contact_action("Edit")
 			edit.tooltip_text = I18n.ui("Edit {{name}}", {"name": str(contact.get("name", ""))})
 			edit.disabled = busy or _recipient_saving
-			edit.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 			edit.pressed.connect(func() -> void: _open_recipient_editor(contact))
 			line.add_child(edit)
-			var retire := _recipient_button("Restore" if archived else "Retire")
+			var retire := _contact_action("Restore" if archived else "Retire")
 			retire.tooltip_text = "Restore contact" if archived else "Retire contact"
 			retire.disabled = busy or _recipient_saving
-			retire.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 			retire.pressed.connect(func() -> void:
 				if archived:
 					_retire_recipient(contact, false)
@@ -1327,7 +1416,7 @@ func _render_recipients() -> void:
 					_recipient_error = ""
 					_render_recipients())
 			line.add_child(retire)
-			entry.add_child(line)
+			entry.add_child(_contact_rule(line))
 			if _recipient_confirm == id and not archived:
 				entry.add_child(_retire_confirmation(contact, busy))
 			list.add_child(entry)
@@ -1337,23 +1426,70 @@ func _render_recipients() -> void:
 			shown.pressed.connect(func() -> void:
 				_recipient_show_archived = not _recipient_show_archived
 				_render_recipients())
+			list.add_child(_gap(5))
 			list.add_child(shown)
 		if not _recipient_editor.is_empty():
+			list.add_child(_gap(9))
 			list.add_child(_recipient_editor_box(busy))
 		elif not _recipient_error.is_empty():
 			var problem := UI.wrapped(_recipient_error, 12, Color("#fca5a5"))
 			problem.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+			list.add_child(_gap(5))
 			list.add_child(problem)
 		stack.add_child(_recipient_list)
 		var fit := func() -> void:
-			if not is_instance_valid(_recipient_list) or not is_instance_valid(list):
+			if not is_instance_valid(_recipient_list) or not is_instance_valid(padding):
 				return
 			var most := minf(get_viewport_rect().size.y * 0.58, 410.0)
-			_recipient_list.custom_minimum_size.y = minf(list.get_combined_minimum_size().y, most)
-		list.minimum_size_changed.connect(fit)
+			_recipient_list.custom_minimum_size.y = minf(padding.get_combined_minimum_size().y, most)
+		padding.minimum_size_changed.connect(fit)
 		fit.call()
 		_restore_recipient_scroll.call_deferred(keep)
 	_recipients_holder.add_child(section)
+
+
+func _recipient_toggle(heading: String, archived: bool) -> Button:
+	var toggle := Button.new()
+	toggle.focus_mode = Control.FOCUS_NONE
+	toggle.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	toggle.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	toggle.custom_minimum_size = Vector2(1, 38)
+	toggle.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+	var resting := UI.box(Color("#20374a"), Color(141 / 255.0, 194 / 255.0, 222 / 255.0, 0.27), 6, 1, Vector4(10, 7, 10, 7))
+	var open_style := UI.box(Color("#29485e"), Color(133 / 255.0, 203 / 255.0, 230 / 255.0, 0.63), 6, 1, Vector4(10, 7, 10, 7))
+	var face := open_style if _recipients_open else resting
+	for state in [["normal", face], ["focus", face], ["disabled", face], ["hover", open_style], ["pressed", open_style], ["hover_pressed", open_style]]:
+		toggle.add_theme_stylebox_override(state[0], state[1])
+	var inside := MarginContainer.new()
+	inside.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	inside.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	for side in [["margin_left", 10], ["margin_right", 10], ["margin_top", 0], ["margin_bottom", 0]]:
+		inside.add_theme_constant_override(side[0], side[1])
+	var line := HBoxContainer.new()
+	line.add_theme_constant_override("separation", 6)
+	line.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var named := UI.label(heading, 13, Color("#f3f8fc"), 800)
+	named.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+	named.clip_text = true
+	named.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	named.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	named.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	named.custom_minimum_size.x = 1
+	line.add_child(named)
+	if archived:
+		var retired := UI.label("(retired)", 11, RECIPIENT_SUBTLE)
+		retired.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		line.add_child(retired)
+	var chevron := UI.label("▴" if _recipients_open else "▾", 13, ACCENT_INK)
+	chevron.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	line.add_child(chevron)
+	inside.add_child(line)
+	toggle.add_child(inside)
+	toggle.pressed.connect(func() -> void:
+		_recipients_open = not _recipients_open
+		_render_recipients())
+	_recipient_trigger = toggle
+	return toggle
 
 
 func _retire_confirmation(contact: Dictionary, busy: bool) -> Control:
@@ -1375,9 +1511,10 @@ func _retire_confirmation(contact: Dictionary, busy: bool) -> Control:
 		_render_recipients())
 	answers.add_child(cancel)
 	var confirm := _recipient_button("Retire contact")
-	var danger := UI.box(RECIPIENT_BG, Color(248 / 255.0, 113 / 255.0, 113 / 255.0, 0.6), 7, 1, Vector4(9, 6, 9, 6))
-	for state in ["normal", "hover", "pressed", "focus", "hover_pressed", "disabled"]:
+	var danger := UI.box(RECIPIENT_BG, Color(248 / 255.0, 113 / 255.0, 113 / 255.0, 0.6), 5, 1, Vector4(9, 6, 9, 6))
+	for state in ["normal", "hover", "pressed", "focus", "hover_pressed"]:
 		confirm.add_theme_stylebox_override(state, danger)
+	confirm.add_theme_stylebox_override("disabled", _faded(danger))
 	for name in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_hover_pressed_color", "font_disabled_color"]:
 		confirm.add_theme_color_override(name, Color("#fca5a5"))
 	confirm.disabled = busy or _recipient_saving
@@ -1395,7 +1532,7 @@ func _restore_recipient_scroll(value: int) -> void:
 
 func _recipient_editor_box(busy: bool) -> Control:
 	var frame := PanelContainer.new()
-	frame.add_theme_stylebox_override("panel", UI.box(Color(0, 0, 0, 0), Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.4), 9, 1, Vector4(9, 9, 9, 9)))
+	frame.add_theme_stylebox_override("panel", UI.box(Color("#192b3b"), Color(133 / 255.0, 203 / 255.0, 230 / 255.0, 0.32), 6, 1, Vector4(12, 12, 12, 12)))
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 7)
 	frame.add_child(box)
@@ -1495,10 +1632,10 @@ func _recipient_editor_box(busy: bool) -> Control:
 	personality.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	personality.add_theme_font_override("font", UI.font(400))
 	personality.add_theme_font_size_override("font_size", 12)
-	personality.add_theme_color_override("font_color", Color("#f8fafc"))
+	personality.add_theme_color_override("font_color", FIELD_INK)
 	personality.add_theme_color_override("font_placeholder_color", Color(1, 1, 1, 0.4))
 	personality.add_theme_color_override("caret_color", UI.WHITE)
-	var area_style := UI.box(Color(0, 0, 0, 0.22), RECIPIENT_BORDER, 7, 1, Vector4(7, 6, 7, 6))
+	var area_style := UI.box(FIELD_BG, FIELD_BORDER, 5, 1, Vector4(7, 7, 7, 7))
 	for state in ["normal", "focus", "read_only"]:
 		personality.add_theme_stylebox_override(state, area_style)
 	character.add_child(personality)
@@ -1757,17 +1894,26 @@ func _message_row(message: Dictionary, view: Dictionary, index: int, retry_here:
 		row.add_child(tag)
 		row.add_child(_gap(7.2))
 	if not user:
-		row.add_child(_tagged("⚠️", " Error", 11, Color(1, 1, 1, 0.4)) if role == "error" else _speaker_tag())
-		row.add_child(_gap(4))
+		row.add_child(_tagged("⚠️", " Error", 11, Color("#f0a4a4"), 850) if role == "error" else _speaker_tag())
+		row.add_child(_gap(6))
 	var bubble := PanelContainer.new()
-	var bg := BLUE if user else (Color(239 / 255.0, 68 / 255.0, 68 / 255.0, 0.2) if role == "error" else Color(1, 1, 1, 0.08))
-	var border := Color(239 / 255.0, 68 / 255.0, 68 / 255.0, 0.3) if role == "error" else Color(0, 0, 0, 0)
-	var style := UI.box(bg, border, 12, 1, Vector4(14, 10, 14, 10))
+	var style: StyleBoxFlat
+	var pad := 22.0
 	if user:
-		style.corner_radius_bottom_right = 2
+		style = UI.box(Color("#27475e"), Color(133 / 255.0, 203 / 255.0, 230 / 255.0, 0.28), 7, 1, Vector4(13, 11, 13, 11))
+		style.corner_radius_bottom_right = 3
+		pad = 26.0
+	elif role == "error":
+		style = UI.box(Color(127 / 255.0, 39 / 255.0, 49 / 255.0, 0.12), Color("#d78686"), 0, 0, Vector4(15, 10, 13, 10))
+		style.border_width_left = 2
+		style.corner_radius_top_right = 5
+		style.corner_radius_bottom_right = 5
+		pad = 28.0
 	else:
-		style.corner_radius_bottom_left = 2
+		style = UI.box(CLEAR, Color("#3b6681"), 0, 0, Vector4(15, 1, 7, 2))
+		style.border_width_left = 2
 	bubble.add_theme_stylebox_override("panel", style)
+	bubble.set_meta("role", role)
 	bubble.size_flags_horizontal = Control.SIZE_SHRINK_END if user else Control.SIZE_SHRINK_BEGIN
 	if role == "advisor" and not _chat_dir.is_empty():
 		bubble.layout_direction = Control.LAYOUT_DIRECTION_RTL if _chat_dir == "rtl" else Control.LAYOUT_DIRECTION_LTR
@@ -1782,7 +1928,7 @@ func _message_row(message: Dictionary, view: Dictionary, index: int, retry_here:
 	if user or (role == "advisor" and not _chat_dir.is_empty()):
 		content.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
 	if user:
-		content.add_child(_rich(_escape(text), 14, UI.WHITE, 1.5))
+		content.add_child(_rich(_escape(text), 14, Color("#f1f8fc"), 1.63))
 		natural = _line_width(text, 14)
 	else:
 		var drafts: Array = view.get("messageDrafts", []) if typeof(view.get("messageDrafts")) == TYPE_ARRAY and _minister_or_chief() else []
@@ -1873,30 +2019,29 @@ func _message_row(message: Dictionary, view: Dictionary, index: int, retry_here:
 		content.add_child(stack)
 		full = true
 	row.add_child(bubble)
-	var fixed := 100000.0 if full else natural + 28.0 + 2.0
-	var wide_when_open := role == "error" and bool(view.get("hasDetail", false))
+	var fixed := 100000.0 if full or not user else natural + pad
 	_register_bubble(bubble, func() -> float:
-		if wide_when_open and bool(state.get("details_open", false)):
+		if not user:
 			return 100000.0
 		if not pictured.is_empty() and not full:
-			return maxf(fixed, _markdown_width(pictured) + 28.0 + 2.0)
-		return fixed, _inner_hooks)
+			return maxf(fixed, _markdown_width(pictured) + pad)
+		return fixed, _inner_hooks, 0.89 if user else 1.0, pad)
 	_inner_hooks = []
 	var date := str(view.get("date", ""))
 	if not user and not str(message.get("time", "")).is_empty() and not date.is_empty():
-		row.add_child(_gap(4))
-		row.add_child(UI.label(date, 10, Color(1, 1, 1, 0.3)))
+		row.add_child(_gap(5))
+		row.add_child(UI.label(date, 10, Color("#7993a8")))
 	return row
 
 
-func _register_bubble(bubble: Control, natural: Callable, inner: Array) -> void:
+func _register_bubble(bubble: Control, natural: Callable, inner: Array, cap := 0.9, pad := 28.0) -> void:
 	_build_hooks.append(func(available: float) -> void:
 		if not is_instance_valid(bubble):
 			return
-		var width: float = min(float(natural.call()), available * 0.9)
+		var width: float = min(float(natural.call()), available * cap)
 		bubble.custom_minimum_size.x = width
 		for hook in inner:
-			(hook as Callable).call(width - 28.0))
+			(hook as Callable).call(width - pad))
 
 
 func _emoji_first(emoji: String, text: String) -> String:
@@ -2630,14 +2775,15 @@ func _notice_row(notice: Dictionary, view: Dictionary, state: Dictionary) -> Con
 	row.add_child(_tagged("🧭", " Advisor", 11, Color(1, 1, 1, 0.4)))
 	row.add_child(_gap(4))
 	var bubble := PanelContainer.new()
-	var style := UI.box(Color(250 / 255.0, 204 / 255.0, 21 / 255.0, 0.06), Color(250 / 255.0, 204 / 255.0, 21 / 255.0, 0.22), 12, 1, Vector4(13, 9, 13, 9))
-	style.corner_radius_bottom_left = 2
+	var style := UI.box(Color(140 / 255.0, 106 / 255.0, 38 / 255.0, 0.08), Color("#be9d60"), 0, 0, Vector4(14, 10, 12, 10))
+	style.border_width_left = 2
 	bubble.add_theme_stylebox_override("panel", style)
+	bubble.set_meta("role", "notice")
 	bubble.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	var column := VBoxContainer.new()
 	column.add_theme_constant_override("separation", 0)
 	var lead := "📄 A new paper on your desk: [b]%s[/b], %s." % [_escape(str(view.get("title", ""))), _escape(str(view.get("how", "")))]
-	var heading := _rich(lead, 13, UI.WHITE, 1.5)
+	var heading := _rich(lead, 16, Color("#e5dbbd"), 1.55)
 	heading.add_theme_font_override("bold_font", UI.font(800))
 	column.add_child(heading)
 	column.add_child(_gap(4.8))
@@ -2663,10 +2809,9 @@ func _notice_row(notice: Dictionary, view: Dictionary, state: Dictionary) -> Con
 	rule.custom_minimum_size.y = 1
 	paper.add_child(rule)
 	paper.add_child(_gap(7.2))
-	paper.add_child(_rich(_escape(str(view.get("body", ""))), 13, UI.WHITE, 1.5))
+	paper.add_child(_rich(_escape(str(view.get("body", ""))), 16, Color("#e5dbbd"), 1.55))
 	paper.visible = open
 	column.add_child(paper)
-	var natural := _line_width("📄 A new paper on your desk: %s, %s." % [str(view.get("title", "")), str(view.get("how", ""))], 13) + 26.0 + 4.0
 	toggle.pressed.connect(func() -> void:
 		state["read_open"] = not bool(state.get("read_open", false))
 		paper.visible = bool(state["read_open"])
@@ -2674,8 +2819,7 @@ func _notice_row(notice: Dictionary, view: Dictionary, state: Dictionary) -> Con
 		_relayout())
 	bubble.add_child(column)
 	row.add_child(bubble)
-	_register_bubble(bubble, func() -> float:
-		return 100000.0 if bool(state.get("read_open", false)) else natural, [])
+	_register_bubble(bubble, func() -> float: return 100000.0, [], 1.0, 26.0)
 	var date := str(view.get("date", ""))
 	if not str(notice.get("time", "")).is_empty() and not date.is_empty():
 		row.add_child(_gap(4))
@@ -3252,7 +3396,7 @@ func _cells(line: String) -> PackedStringArray:
 	return cells
 
 
-func _markdown(source: String, size := 14, inset := 0.0, color := UI.WHITE) -> Control:
+func _markdown(source: String, size := 14, inset := 0.0, color := READING_INK) -> Control:
 	var holder := VBoxContainer.new()
 	holder.add_theme_constant_override("separation", 0)
 	var previous := -1.0
@@ -3282,7 +3426,7 @@ func _markdown(source: String, size := 14, inset := 0.0, color := UI.WHITE) -> C
 func _md_block(block: Dictionary, size: int, inset: float, color: Color) -> Control:
 	match str(block["type"]):
 		"p":
-			return _rich(_inline(str(block["text"])), size, color, 1.5)
+			return _rich(_inline(str(block["text"])), size, color, 1.65)
 		"heading":
 			return _heading(int(block["level"]), str(block["text"]))
 		"list":
@@ -3310,7 +3454,7 @@ func _heading(level: int, text: String) -> Control:
 	if level >= 4:
 		label = _rich("[b]%s[/b]" % _inline(text.to_upper()), 12, SMALL_HEADING, 1.3)
 	else:
-		label = _rich("[b]%s[/b]" % _inline(text), int(sizes[level - 1]), Color(1, 1, 1, 0.95), 1.3)
+		label = _rich("[b]%s[/b]" % _inline(text), int(sizes[level - 1]), Color("#f1f8fd"), 1.3)
 	column.add_child(label)
 	if level <= 2:
 		column.add_child(_gap(4.5 if level == 1 else 3.5))
@@ -3386,7 +3530,7 @@ func _list(items: Array, loose: bool, size: int, inset: float, color: Color) -> 
 			lead.content_margin_top = _half_leading(size, 1.5)
 			dot.add_theme_stylebox_override("normal", lead)
 			row.add_child(dot)
-		var text := _rich(_inline(body_text), size, color, 1.5)
+		var text := _rich(_inline(body_text), size, color, 1.57)
 		text.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		row.add_child(text)
 		column.add_child(row)
@@ -3403,11 +3547,11 @@ func _spacer_width(width: float) -> Control:
 
 func _quote_block(text: String, size: int, inset: float) -> Control:
 	var box := PanelContainer.new()
-	var style := UI.box(Color(LINK.r, LINK.g, LINK.b, 0.07), Color(0, 0, 0, 0), 0, 0, Vector4(11, 6, 11, 6))
-	style.border_color = LINK
+	var style := UI.box(Color(65 / 255.0, 113 / 255.0, 145 / 255.0, 0.08), Color(0, 0, 0, 0), 0, 0, Vector4(11, 6, 11, 6))
+	style.border_color = Color("#729fb7")
 	style.border_width_left = 2
-	style.corner_radius_top_right = 6
-	style.corner_radius_bottom_right = 6
+	style.corner_radius_top_right = 4
+	style.corner_radius_bottom_right = 4
 	box.add_theme_stylebox_override("panel", style)
 	box.add_child(_markdown(text, size, inset + 24.0, Color(1, 1, 1, 0.82)))
 	return box
@@ -3708,12 +3852,25 @@ func _legend_item(text: String, color: Color) -> Control:
 class RecipientRow extends PanelContainer:
 	signal pressed
 	var disabled := false
+	var resting: StyleBox
+	var lifted: StyleBox
 
-	func _init(bg: Color, border: Color) -> void:
-		add_theme_stylebox_override("panel", UI.box(bg, border, 7, 1, Vector4(9, 6, 9, 6)))
+	func _init(normal_style: StyleBox, hover_style: StyleBox) -> void:
+		resting = normal_style
+		lifted = hover_style
+		add_theme_stylebox_override("panel", resting)
 		mouse_filter = Control.MOUSE_FILTER_STOP
 		mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 		size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		mouse_entered.connect(func() -> void:
+			if not disabled:
+				add_theme_stylebox_override("panel", lifted))
+		mouse_exited.connect(func() -> void: add_theme_stylebox_override("panel", resting))
+
+	func _process(_delta: float) -> void:
+		var shade := 0.45 if disabled else 1.0
+		if not is_equal_approx(modulate.a, shade):
+			modulate.a = shade
 
 	func _gui_input(event: InputEvent) -> void:
 		if disabled or not (event is InputEventMouseButton):
