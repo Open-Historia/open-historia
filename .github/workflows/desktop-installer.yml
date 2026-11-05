@@ -64,15 +64,16 @@ jobs:
           echo "{\"build\":\"${{ github.run_id }}\"}" > electron/build-id.json
           cat electron/build-id.json
 
-      # package.json ships 0.0.0 and electron-updater decides whether an update
-      # exists by comparing SEMVER — so without a real, increasing version here
-      # every build would look identical to the one already installed and the app
-      # would never update itself. run_number increments per run and is shared by
-      # all three jobs in it, so one release is one version on every platform.
+      # electron-updater decides whether an update exists by comparing SEMVER, so
+      # every release needs a higher version than the one installed. A release
+      # names its version in package.json (2.5.0 was the first; bump it for the
+      # next). A tree still at 0.0.0 takes the run number, as every stable build
+      # did before 2.5.0: run_number increments per run and is shared by all three
+      # jobs in it, so one release is one version on every platform.
       - name: Stamp the app version
         shell: bash
         run: |
-          node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.version='0.0.${{ github.run_number }}';fs.writeFileSync('package.json',JSON.stringify(p,null,2))"
+          node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));if(p.version==='0.0.0')p.version='0.0.${{ github.run_number }}';fs.writeFileSync('package.json',JSON.stringify(p,null,2))"
           node -p "'version: '+require('./package.json').version"
 
       # The map editor's Generate drawer runs the game's own copy of Azgaar's
