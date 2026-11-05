@@ -17,7 +17,6 @@ import { fileURLToPath } from "node:url";
 
 import { renameInTransports } from "../../../server/battlefieldNames.js";
 import { renamePolityInWorld } from "../../../server/polityRename.js";
-import { PUBLIC_WORLD_KEYS } from "../../multiplayer/host/projection.js";
 import { applyEventImpactsToWorld, normalizeEvents, normalizeWorldState } from "../../runtime/gameState.js";
 import { createFrontRun } from "../../runtime/fronts/engine.js";
 import { syntheticMap } from "../../runtime/fronts/syntheticMap.js";
@@ -204,7 +203,6 @@ test("the world keeps its transporters, shows them to everyone in a shared game,
   const world = normalizeWorldState({ transports: [...hunted, { id: "junk" }, null, hunted[0]] });
   assert.deepEqual(world.transports.map((entry) => [entry.id, entry.status, entry.owner]), [["t1", "moving", "Aland"]], "what is not a transporter is not kept, and each is kept once");
   assert.deepEqual(normalizeWorldState({}).transports, []);
-  assert.ok(PUBLIC_WORLD_KEYS.includes("transports"));
   const renamed = renameInTransports(hunted, "aland", "The Aland Republic");
   assert.deepEqual([renamed[0].owner, renamed[0].by, renamed[0].hunters, renamed[0].attacks], ["The Aland Republic", "The Aland Republic", ["Borduria"], ["Neutralia"]]);
   assert.deepEqual(renameInTransports(hunted, "Borduria", "Bordureich")[0].hunters, ["Bordureich"]);

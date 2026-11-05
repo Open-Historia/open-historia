@@ -25,7 +25,6 @@ import {
 } from "./gameState.js";
 import { findInstitutionalChannel, materializeInstitutionalChannel } from "./institutionalChannels.js";
 import { getPoliticalProfile } from "./politicalActors.js";
-import { askHostForInstitution, institutionsGoToHost } from "./sharedInstitutions.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const lower = (value) => clean(value).toLocaleLowerCase();
@@ -1061,8 +1060,6 @@ const activeInstitutionalMemberForPlayer = (world, institutionId, playerCountry)
 export const commitInstitutionalPlayerProposal = async ({
   institutionId = "", playerCountry = "", date = "", expectedGameId = "", proposal = {},
 } = {}) => {
-  // In a shared game the host does this, for this player (sharedInstitutions.js).
-  if (institutionsGoToHost()) return askHostForInstitution("proposal", { institutionId, proposal: { type: proposal?.type, title: proposal?.title, summary: proposal?.summary } });
   let result = null;
   const committed = await mutateCanonicalTurnState(({ world, chats, events, game }) => {
     const player = clean(playerCountry || game?.country);
@@ -1091,9 +1088,6 @@ export const commitInstitutionalPlayerProposal = async ({
 export const commitInstitutionalPlayerVoteRequest = async ({
   institutionId = "", proposalId = "", playerCountry = "", date = "", expectedGameId = "",
 } = {}) => {
-  // In a shared game the host does this, for this player (sharedInstitutions.js).
-  // A charter without a voting rule is given one there first, by the host's AI.
-  if (institutionsGoToHost()) return askHostForInstitution("voteRequest", { institutionId, proposalId }, { timeoutMs: 120_000 });
   let result = null;
   const committed = await mutateCanonicalTurnState(({ world, chats, events, game }) => {
     const player = clean(playerCountry || game?.country);
@@ -1123,8 +1117,6 @@ export const commitInstitutionGovernanceCommand = async ({
   institutionId = "", playerCountry = "", date = "", command = {}, expectedGameId = "",
   expectedGameDate = "", expectedRound = null, externalConsequenceApplier = null,
 } = {}) => {
-  // In a shared game the host does this, for this player (sharedInstitutions.js).
-  if (institutionsGoToHost()) return askHostForInstitution("governance", { institutionId, command });
   let result = null;
   const committed = await mutateCanonicalTurnState(({ world, chats, events, game }) => {
     if (clean(expectedGameDate) && clean(game?.gameDate) !== clean(expectedGameDate)) {
@@ -1245,8 +1237,6 @@ export const applyInstitutionalPlayerMessage = ({
 export const commitInstitutionalPlayerMessage = async ({
   institutionId = "", playerCountry = "", text = "", date = "", expectedGameId = "",
 } = {}) => {
-  // In a shared game the host does this, for this player (sharedInstitutions.js).
-  if (institutionsGoToHost()) return askHostForInstitution("message", { institutionId, text });
   let result = null;
   const committed = await mutateCanonicalTurnState(({ world, chats, game }) => {
     result = applyInstitutionalPlayerMessage({

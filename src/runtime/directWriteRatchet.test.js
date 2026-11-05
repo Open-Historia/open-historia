@@ -5,7 +5,7 @@
 // the orders...) that its writer read some time before. If anything changed the
 // document in between (the player deployed a unit while a model call was out,
 // a note landed while the player typed), the older copy wins and the change is
-// gone. Multiplayer makes that the normal case, with every seat writing at once.
+// gone.
 //
 // The cure is a read-modify-write inside the one write queue: gameState.js
 // mutateWorldState and its siblings for one document, mutateCanonicalTurnState

@@ -10,8 +10,8 @@
 //   - the desktop app: OH_DESKTOP_BUILD, the release workflow's stamp, which
 //     only its server knows, and says with the app's kind (GET /api/app-kind,
 //     server/appKind.js);
-//   - anything else (a server started by hand, an unstamped desktop build, the
-//     multiplayer build, a development run): the address of the running code.
+//   - anything else (a server started by hand, an unstamped desktop build, a
+//     development run): the address of the running code.
 //     A release build's files are named after a hash of their content, so a
 //     new version has a new address; a development run's address never
 //     changes, so there the door shows the first time and then only when

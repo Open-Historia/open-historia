@@ -108,7 +108,6 @@ const selectWorld = (world) => world ?? null;
 const selectGame = (game) => ({
   country: game?.country || "",
   gameDate: String(game?.gameDate || game?.startDate || ""),
-  humanCountries: Array.isArray(game?.humanCountries) ? game.humanCountries : null,
   // (What the level gives the other side on a battlefield is said in the room.)
   difficulty: String(game?.difficulty || ""),
 });
@@ -307,8 +306,7 @@ const WarRoomPanel = ({ open, onClose, width, onResize, onResizeEnd }) => {
   // as percentages: the room says it, so that the handicap is never a hidden one. Null on even terms.
   const theirEdge = useMemo(() => {
     if (!record || (side !== 0 && side !== 1)) return null;
-    // (Everybody a person plays, in a shared game too: nobody is handicapped against another player.)
-    const people = [...humanCountriesOf(game), ...(Array.isArray(game.humanCountries) ? game.humanCountries : [])];
+    const people = humanCountriesOf(game);
     const given = handicapOf({ difficulty: game.difficulty, sides: record.sides, players: people });
     return given.side === 1 - side ? { power: Math.round(given.edge.power * 100), pace: Math.round(given.edge.pace * 100), reserves: Math.round(given.edge.reserves * 100) } : null;
   }, [record, side, game]);
@@ -339,7 +337,7 @@ const WarRoomPanel = ({ open, onClose, width, onResize, onResizeEnd }) => {
   // Who leads them, where the game's difficulty says otherwise than the best there is (runtime/fronts/mind/trained.js).
   const theirCommander = useMemo(() => {
     if (!record || (side !== 0 && side !== 1) || !strategyNetOn()) return null;
-    const people = [...humanCountriesOf(game), ...(Array.isArray(game.humanCountries) ? game.humanCountries : [])];
+    const people = humanCountriesOf(game);
     const who = commanderOf({ sides: record.sides, side: 1 - side, difficulty: game.difficulty || "medium", players: people });
     return who === "trained" ? null : who;
   }, [record, side, game]);

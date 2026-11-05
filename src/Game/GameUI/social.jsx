@@ -8,8 +8,7 @@
 // Posting costs no request. A post is kept on the world (world.socialFeed), and
 // the next time skip reads it as a public statement by the player's leader: the
 // world answers it then, in posts that quote it and in what happens. A post is
-// written only between skips (the skip writes the feed back with the world),
-// and in a shared game through the host, as the leader of the seat's own country.
+// written only between skips (the skip writes the feed back with the world).
 //
 // Quoting works as it does on the networks people know: Quote under a post puts
 // it in the box, and what is posted carries it embedded. The skip quotes the
@@ -52,7 +51,6 @@ import {
 } from "../../runtime/socialFeed.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
-import { inSharedGame, requestFromHost } from "../../multiplayer/client/sharedGameBridge.js";
 import { useTurnRunning } from "./useTurnRunning.js";
 import { resolvePolityFlag } from "../../runtime/polityFlags.js";
 import { buildPolityIdentityIndex } from "../../runtime/polityIdentity.js";
@@ -565,25 +563,16 @@ const SocialPanel = ({ isOpen, onClose, onSeen }) => {
     setPosting(true);
     setError("");
     try {
-      if (inSharedGame()) {
-        // The host writes it, as the leader of this seat's country.
-        const answer = await requestFromHost("post", { text, quote: quoting?.id || "", ...(poll ? { choices: poll } : {}) });
-        if (!answer.ok) {
-          setError(answer.error || "The host did not take the post.");
-          return;
-        }
-      } else {
-        // Read and written in the save's own queue, so nothing written meanwhile is lost.
-        let refusal = "";
-        await mutateWorldState((world) => {
-          const made = withPlayerPost(world, { by: country, text, quote: quoting?.id || "", date: game.gameDate, round: game.round, choices: poll });
-          refusal = made.error || "";
-          return made.error ? null : made.world;
-        });
-        if (refusal) {
-          setError(refusal);
-          return;
-        }
+      // Read and written in the save's own queue, so nothing written meanwhile is lost.
+      let refusal = "";
+      await mutateWorldState((world) => {
+        const made = withPlayerPost(world, { by: country, text, quote: quoting?.id || "", date: game.gameDate, round: game.round, choices: poll });
+        refusal = made.error || "";
+        return made.error ? null : made.world;
+      });
+      if (refusal) {
+        setError(refusal);
+        return;
       }
       logDebugEvent("action", `Posted on Rostra${quoting ? ` (quoting ${quoting.id})` : ""}${poll ? ` (a poll: ${poll.join(" / ")})` : ""}: ${text}`);
       setDraft("");

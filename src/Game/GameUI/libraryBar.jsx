@@ -99,7 +99,7 @@ import {
   SuggestionsBanner,
   openSuggestionsOf,
 } from "./ScenarioSuggestions.jsx";
-import { CommunitySkeleton, LobbiesSkeleton, MenuCardSkeletons } from "./menuSkeleton.jsx";
+import { CommunitySkeleton, MenuCardSkeletons } from "./menuSkeleton.jsx";
 
 const UNIT_TYPE_LABELS = {
   infantry: "Infantry",
@@ -114,9 +114,6 @@ const UNIT_TYPE_LABELS = {
 const MapEditor = lazy(() => import("../../Editor/MapEditor.jsx"));
 // Lazy so the GitHub-backed Community tab costs nothing until opened.
 const CommunityPanel = lazy(() => import("./communityHub.jsx"));
-// Lobbies: join a private one by invite code, host one, and the public list
-// (multiplayer/).
-const LobbiesTab = lazy(() => import("../../multiplayer/ui/LobbiesTab.jsx"));
 // Every update to the game, on a timeline: opened from the menu's mark.
 const UpdateHistory = lazy(() => import("./updates/UpdateHistory.jsx"));
 // Lazy so OpenLayers only loads when the country picker map is opened.
@@ -144,12 +141,6 @@ const gameShelfMemory = { search: "", sort: "recent", view: "active" };
 let _openLibraryTab = null;
 export const openLibraryTab = (tab) => {
   _openLibraryTab?.(tab);
-};
-// And lets them close it onto the game, as joining a shared game from the
-// Lobbies tab does (multiplayer/ui/DiscordInvites.jsx).
-let _enterActiveGame = null;
-export const enterActiveGameFromOutside = () => {
-  _enterActiveGame?.();
 };
 
 // Whether the main menu is showing. Lives at module scope because the whole UI
@@ -305,15 +296,6 @@ const ButtonIcon = ({ kind, size = 15, strokeWidth = 1.9 }) => {
           <path d="m9 7 8 5-8 5z" fill="currentColor" stroke="none" />
         </svg>
       );
-    case "host":
-      return (
-        <svg aria-hidden="true" {...common}>
-          <circle cx="9" cy="8" r="3.2" />
-          <path d="M3.5 19c.6-3.1 2.8-5 5.5-5s4.9 1.9 5.5 5" />
-          <path d="M16 5.2a3 3 0 0 1 0 5.6" />
-          <path d="M17.5 14.3c1.7.6 2.8 2.3 3 4.7" />
-        </svg>
-      );
     case "archive":
       return (
         <svg aria-hidden="true" {...common}>
@@ -384,15 +366,6 @@ const ButtonIcon = ({ kind, size = 15, strokeWidth = 1.9 }) => {
           <path d="M12 3.5c2.3 2.3 3.5 5.2 3.5 8.5s-1.2 6.2-3.5 8.5c-2.3-2.3-3.5-5.2-3.5-8.5s1.2-6.2 3.5-8.5z" />
         </svg>
       );
-    case "lobbies":
-      return (
-        <svg aria-hidden="true" {...common}>
-          <circle cx="8.5" cy="8.5" r="3" />
-          <circle cx="16.5" cy="9.5" r="2.4" />
-          <path d="M3 19c.5-3 2.6-4.8 5.5-4.8s5 1.8 5.5 4.8" />
-          <path d="M14.8 14.6c.5-.2 1.1-.3 1.7-.3 2.3 0 4 1.5 4.5 4.2" />
-        </svg>
-      );
     default:
       return null;
   }
@@ -405,7 +378,6 @@ const MENU_TABS = Object.freeze([
   Object.freeze({ id: "games", label: "Games" }),
   Object.freeze({ id: "scenarios", label: "Scenarios" }),
   Object.freeze({ id: "community", label: "Community" }),
-  Object.freeze({ id: "lobbies", label: "Lobbies" }),
 ]);
 const MENU_RAIL_WIDTH = "6.9rem";
 const MENU_RAIL_ICON = 22;
@@ -2618,8 +2590,6 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   const [scenarioSearch, setScenarioSearch] = useState("");
   const [scenarioSort, setScenarioSort] = useState("recent");
   const [scenarioView, setScenarioView] = useState("all");
-  // The Lobbies tab's host settings, opened by its "Host a lobby" action.
-  const [lobbyHosting, setLobbyHosting] = useState(false);
   const [menuOpen, setMenuOpenState] = useState(menuOpenDefault);
   // Whether the player has opened a game since the page started
   // (runtime/gameEntry.js). Until then the library's active game is only the
@@ -2658,17 +2628,14 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     setMenuOpen(true);
   };
   // The menu closes over the game that is ALREADY the active one, with the
-  // library opening nothing: hosting a lobby (the game the player has is the
-  // lobby) and joining one (the host's game is shown in a stand-in that is
-  // activated later, when the host has answered). At startup that game is not
-  // loaded (runtime/gameEntry.js), and nothing else here would load it: every
+  // library opening nothing: a phone's Back over a game the menu was opened
+  // from. At startup that game is not loaded (runtime/gameEntry.js), and nothing else here would load it: every
   // other way out of the menu goes through activateGame or
   // createGame({ setActive }), which enter the game they open.
   const enterActiveGame = () => {
     enterGame();
     setMenuOpen(false);
   };
-  _enterActiveGame = enterActiveGame;
   // Bridge for outside callers: open the main menu on a library tab.
   _openLibraryTab = (tab) => {
     setActiveTab(tab);
@@ -4604,10 +4571,8 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     : null;
 
   // The open tab's own actions: in the bar on a desktop, heading the page on a
-  // phone. The Community tab brings its own; the Lobbies tab's is hosting one.
-  const tabActions = activeTab === "community" ? [] : activeTab === "lobbies" ? [
-    { icon: "host", label: "Host a lobby", run: () => setLobbyHosting(true) },
-  ] : [
+  // phone. The Community tab brings its own.
+  const tabActions = activeTab === "community" ? [] : [
     { icon: "refresh", label: "Refresh", run: () => { refreshTrash(); refreshLibraryCatalog({ force: true }).catch(() => {}); } },
     activeTab === "scenarios"
       ? { icon: "import", label: "Import Scenario", phoneLabel: "Import Scenario", run: () => importScenarioInputRef.current?.click() }
@@ -5290,17 +5255,13 @@ const LibraryTopBar = ({ onOpenSettings }) => {
                 ))}
               </div>
             )}
-            {activeTab !== "community" && activeTab !== "lobbies" && (
+            {activeTab !== "community" && (
               <SuggestionsBanner scenarios={scenarios} onOpen={(scenario) => openScenarioEditor(scenario.id)} />
             )}
             {/* While a page, or what it lists, is on its way: the outlines of
                 its cards with a glimmer over them, never the word "Loading"
                 (menuSkeleton.jsx). A screen reader is told in these words. */}
-            {activeTab === "lobbies" ? (
-              <Suspense fallback={<LobbiesSkeleton label="Loading lobbies…" />}>
-                <LobbiesTab hosting={lobbyHosting} onHostingChange={setLobbyHosting} onEnterGame={enterActiveGame} />
-              </Suspense>
-            ) : activeTab === "community" ? (
+            {activeTab === "community" ? (
               // The Community tab's browse grid has the library's template
               // (communityHub.jsx COMMUNITY_GRID_TEMPLATE), which cannot be
               // read from here without loading the tab.

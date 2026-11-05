@@ -14,7 +14,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { PUBLIC_WORLD_KEYS } from "../../multiplayer/host/projection.js";
 import { normalizeWorldState } from "../../runtime/gameState.js";
 import { createFrontRun } from "../../runtime/fronts/engine.js";
 import { syntheticMap } from "../../runtime/fronts/syntheticMap.js";
@@ -256,7 +255,6 @@ test("the world keeps its strikes, every player's map is given them, and the tur
   assert.deepEqual(normalizeWorldState({}).strikes, []);
   const kept = normalizeWorldState({ strikes: [{ id: "s1", owner: "Aland", weapon: "bombing run", count: 12, down: 2, round: 4, to: { name: "city: Brod", lng: 51, lat: 45 } }, { id: "s2", weapon: "catapult" }] }).strikes;
   assert.deepEqual(kept, [{ id: "s1", eventId: "", date: "", round: 4, owner: "Aland", weapon: "bombing run", count: 12, down: 2, from: null, to: { name: "city: Brod", lng: 51, lat: 45 } }]);
-  assert.ok(PUBLIC_WORLD_KEYS.includes("strikes"));
   const gameplay = read("./gameplay.js");
   assert.match(gameplay, /strikes: withTurnStrikes\(baseWorld\?\.strikes, \[\.\.\.turnFronts\.strikes, \.\.\.airStrikeVisuals\(turnFronts\.airStrikes\)\], nextGame\.round\)/);
   assert.match(gameplay, /import \{ withTurnStrikes \} from "\.\.\/\.\.\/runtime\/strikes\.js";/);

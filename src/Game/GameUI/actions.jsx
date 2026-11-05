@@ -21,7 +21,6 @@ import { TURN_RUNNING_NOTE, isSimulationBusy } from "../AI/simulationStatus.js";
 import { useTurnRunning } from "./useTurnRunning.js";
 import { formatGameDateReadable } from "../../runtime/gameDates.js";
 import { refreshRuntimeState, subscribeRuntime } from "../../runtime/runtimeStore.js";
-import { inSharedGame, requestFromHost } from "../../multiplayer/client/sharedGameBridge.js";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
 import { uiString } from "../../runtime/translator.js";
 import { useFailureReportButton } from "../../runtime/saveDebugLog.js";
@@ -470,13 +469,6 @@ const StandingGoal = ({ country, round, gameDate, isOpen }) => {
         setSaving(true);
         setError("");
         try {
-            // In a shared game the host keeps the goal: it is asked to.
-            if (inSharedGame()) {
-                const answer = await requestFromHost("goal", { text: String(text || "").trim() });
-                if (!answer.ok) throw new Error(answer.error);
-                setEditing(false);
-                return;
-            }
             const current = await readWorldState({ force: true });
             await writeWorldState(withPlayerGoal(current, country, text, { round, date: gameDate }));
             const wording = String(text || "").trim();
@@ -765,18 +757,6 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
 
         setIsSubmitting(true);
         try {
-            // In a shared game an order is the host's to queue; its answer comes
-            // back in the next view.
-            if (inSharedGame()) {
-                const answer = await requestFromHost("order", { text: nextAction.text || trimmed });
-                if (!answer.ok) {
-                    console.warn("[actions] the host refused the order:", answer.error);
-                    return;
-                }
-                logDebugEvent("action", `Order sent to the host: ${nextAction.title || nextAction.text || "(untitled)"}`);
-                setInputValue("");
-                return;
-            }
             // Not saved: the order stays in the box to try again.
             if (!(await persistActions([...actions, nextAction]))) return;
             // What the player told their country to do is half of "the series of
@@ -834,10 +814,6 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
 
     const handleDelete = async (index) => {
         const removed = actions[index];
-        if (inSharedGame()) {
-            await requestFromHost("unorder", { order: String(removed?.id || "") });
-            return;
-        }
         if (movesUnit(removed) && isSimulationBusy()) return;
         // Removed from the queue first: undoing the unit's move while the order
         // stays in actions.json would leave the skip acting on a move the map no
@@ -867,10 +843,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
             return;
         }
 
-        if (inSharedGame()) {
-            const answer = await requestFromHost("order", { text: queuedAction.text || queuedAction.title });
-            if (!answer.ok) return;
-        } else if (!(await persistActions([...actions, queuedAction]))) {
+        if (!(await persistActions([...actions, queuedAction]))) {
             // Not saved: the card stays unqueued, so it can be tried again.
             return;
         }

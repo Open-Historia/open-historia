@@ -3,11 +3,10 @@
 //
 // What a line and a fleet order are and do is tested where they live
 // (runtime/fortifyCost, warRoomChart, fronts/fortifyOps, naval/fleetOps;
-// Map/warRoomMarks; multiplayer/host/gameHost). This is the war room's hold on
-// them: the keys on the rail, the stroke and the click on the map, the plates
-// beside the rail, the ops sent through the war room's seam, and the requests a
-// shared game carries. The components cannot be loaded under plain node, so
-// where they are wired is read as text.
+// Map/warRoomMarks). This is the war room's hold on them: the keys on the rail,
+// the stroke and the click on the map, the plates beside the rail and the ops
+// sent through the war room's seam. The components cannot be loaded under plain
+// node, so where they are wired is read as text.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -17,8 +16,6 @@ import { fileURLToPath } from "node:url";
 
 import { MAP_LAYER_ORDER } from "../Map/mapLayerOrder.js";
 import { WAR_ROOM_TOOLS, closeWarRoom, getWarRoom, openWarRoom, setWarRoom, takeTool } from "../Map/warRoomStore.js";
-import { PLAYER_REQUESTS } from "../../multiplayer/game/messages.js";
-import { validate } from "../../multiplayer/protocol/validate.js";
 import { FORTIFY_LEVEL_USUAL } from "../../runtime/fortifyCost.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -88,16 +85,14 @@ test("the drawer takes the line drawn and the place clicked, and sends them thro
   // The plates come out beside the rail: the line drawn first, the fleets otherwise.
   assert.match(panel, /\{railShown && draft && \(\s*<FortifyPlate/);
   assert.match(panel, /\{railShown && !draft && fleetsOut && \(\s*<FleetsPlate/);
-  // The seams: the host in a shared game, the write queue otherwise and never while a turn runs, the map read only here.
+  // The seam: the write queue, never while a turn runs, the map read only here.
   assert.match(writes, /export const sendFortifyOp = async \(op, \{ turnRunning = \(\) => false, readChart = async \(\) => null \} = \{\}\) => \{/);
-  assert.match(writes, /await sendHeldToMap\(sent, \{ request: "fortify", apply: applyFortifyOp, needsChart: sent\.op === "fortify" \}/);
-  assert.match(writes, /await sendHeldToMap\(sent, \{ request: "fleet", apply: applyFleetOp, needsChart: \["station", "blockade", "escort"\]\.includes\(sent\.op\) \}/);
-  assert.match(writes, /if \(inSharedGame\(\)\) \{\s*const answer = await requestFromHost\(request, \{ op: sent \}\);/);
+  assert.match(writes, /await sendHeldToMap\(sent, \{ apply: applyFortifyOp, needsChart: sent\.op === "fortify" \}/);
+  assert.match(writes, /await sendHeldToMap\(sent, \{ apply: applyFleetOp, needsChart: \["station", "blockade", "escort"\]\.includes\(sent\.op\) \}/);
   assert.equal(writes.split("if (turnRunning()) throw new Error(TURN_RUNNING_REFUSAL);").length - 1, 3, "the war room's own ops once, and the lines and fleets before the map is read and after");
-  // The map is read by the game's own engine code, with no request made; the host reads its own.
+  // The map is read by the game's own engine code, with no request made.
   assert.match(read("../AI/gameplay.js").replace(/\r\n/g, "\n"), /export const warRoomChart = async \(\{ world = null, game = null \} = \{\}\) => \{/);
   assert.match(read("../AI/gameplayLazy.js"), /export const warRoomChart = async \(\.\.\.args\) => \(await gameplay\(\)\)\.warRoomChart\(\.\.\.args\);/);
-  assert.match(read("../../multiplayer/host/engineMain.js"), /readChart: \(\) => warRoomChart\(\),/);
 });
 
 test("the line's plate says how long it is, what it holds, and how long it takes to build at the level picked", () => {
@@ -117,17 +112,6 @@ test("the line's plate says how long it is, what it holds, and how long it takes
   assert.match(fleets, /onClick=\{\(\) => onPlace\("patrol"\)\}/);
   // Names are the game's own text: not translated.
   assert.match(fleets, /<span data-no-translate style=\{\{ flex: 1, [^}]*\}\}>\{entry\.name\}<\/span>/);
-});
-
-test("a shared game carries a line and a fleet's order as requests of their own, held to their size", () => {
-  const ask = (t, op) => validate(PLAYER_REQUESTS[t], { t, id: "00000000000000a1", op });
-  assert.equal(ask("fortify", { op: "fortify", points: [[20, 50], [20.6, 50.4]], level: 6, name: "A line" }).ok, true);
-  assert.equal(ask("fortify", { op: "unfortify", id: "built-1" }).ok, true);
-  assert.equal(ask("fleet", { op: "station", unit: "u1", to: [21, 57.5], order: "move" }).ok, true);
-  assert.equal(ask("fleet", { op: "blockade", unit: "u1", country: "Latvia" }).ok, true);
-  assert.equal(ask("fleet", { op: "station", unit: "u1", to: [[[21]]] }).ok, false, "nothing nested past what an order has");
-  assert.equal(ask("fortify", { op: "fortify", points: [[[[20]]]] }).ok, false);
-  assert.equal(validate(PLAYER_REQUESTS.fleet, { t: "fleet", id: "00000000000000a1", op: { op: "stand", unit: "u1" }, extra: 1 }).ok, false, "and nothing beside it");
 });
 
 test("on the map: the lines lie under the planned movements, and the marks on the fleets under their counters", () => {

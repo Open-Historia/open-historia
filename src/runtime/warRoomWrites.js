@@ -13,13 +13,8 @@
 // over anything written under it: nothing is written until it has landed, and
 // the caller is told so.
 //
-// In a shared game the world is the host's: the page asks (request
-// "warroom"), the host checks the troops are the asker's and writes the same
-// op, and the next view shows it. A refusal is thrown with the host's reason.
-//
 // Runs under bare node: the world store and the ops both do.
 
-import { inSharedGame, requestFromHost } from "../multiplayer/client/sharedGameBridge.js";
 import { applyAirStrikeOp, cleanAirStrikeOp } from "./fronts/airStrikeOps.js";
 import { applyFortifyOp, cleanFortifyOp } from "./fronts/fortifyOps.js";
 import { applyWarRoomOp, cleanWarRoomOp } from "./fronts/warRoomOps.js";
@@ -36,11 +31,6 @@ export const TURN_RUNNING_REFUSAL = "A turn is being resolved: the generals take
 export const sendWarRoomOp = async (op, { turnRunning = () => false } = {}) => {
   const sent = cleanWarRoomOp(op);
   if (!sent) throw new Error("Nothing was asked.");
-  if (inSharedGame()) {
-    const answer = await requestFromHost("warroom", { op: sent });
-    if (!answer.ok) throw new Error(answer.error || "The host did not take that.");
-    return;
-  }
   if (turnRunning()) throw new Error(TURN_RUNNING_REFUSAL);
   const game = await readGameData();
   let refusal = "";
@@ -57,18 +47,11 @@ export const sendWarRoomOp = async (op, { turnRunning = () => false } = {}) => {
 };
 
 // The war room's fortified lines (runtime/fronts/fortifyOps.js) and fleets
-// (runtime/naval/fleetOps.js) go the same way, each by an op of its own and a
-// request of its own to the host ("fortify", "fleet"). Both are held to the
-// map (runtime/warRoomChart.js: where the sea is, whose the ground is), which
-// the caller reads (`readChart`, resolving with a chart or null) and which is
-// asked for only where this page writes the world itself: the host of a shared
-// game reads its own.
-const sendHeldToMap = async (sent, { request, apply, needsChart }, { turnRunning, readChart }) => {
-  if (inSharedGame()) {
-    const answer = await requestFromHost(request, { op: sent });
-    if (!answer.ok) throw new Error(answer.error || "The host did not take that.");
-    return;
-  }
+// (runtime/naval/fleetOps.js) go the same way, each by an op of its own. Both
+// are held to the map (runtime/warRoomChart.js: where the sea is, whose the
+// ground is), which the caller reads (`readChart`, resolving with a chart or
+// null).
+const sendHeldToMap = async (sent, { apply, needsChart }, { turnRunning, readChart }) => {
   if (turnRunning()) throw new Error(TURN_RUNNING_REFUSAL);
   const chart = needsChart ? await Promise.resolve().then(readChart).catch(() => null) : null;
   // (The map can take a moment to read: a turn may have begun meanwhile.)
@@ -90,14 +73,14 @@ const sendHeldToMap = async (sent, { request, apply, needsChart }, { turnRunning
 export const sendFortifyOp = async (op, { turnRunning = () => false, readChart = async () => null } = {}) => {
   const sent = cleanFortifyOp(op);
   if (!sent) throw new Error("Nothing was asked.");
-  await sendHeldToMap(sent, { request: "fortify", apply: applyFortifyOp, needsChart: sent.op === "fortify" }, { turnRunning, readChart });
+  await sendHeldToMap(sent, { apply: applyFortifyOp, needsChart: sent.op === "fortify" }, { turnRunning, readChart });
 };
 
 // An order for one of the player's fleets.
 export const sendFleetOp = async (op, { turnRunning = () => false, readChart = async () => null } = {}) => {
   const sent = cleanFleetOp(op);
   if (!sent) throw new Error("Nothing was asked.");
-  await sendHeldToMap(sent, { request: "fleet", apply: applyFleetOp, needsChart: ["station", "blockade", "escort"].includes(sent.op) }, { turnRunning, readChart });
+  await sendHeldToMap(sent, { apply: applyFleetOp, needsChart: ["station", "blockade", "escort"].includes(sent.op) }, { turnRunning, readChart });
 };
 
 // An air strike for one of the player's air units, or its strike called off. The map is read for a city struck:
@@ -106,5 +89,5 @@ export const sendAirStrikeOp = async (op, { turnRunning = () => false, readChart
   const sent = cleanAirStrikeOp(op);
   if (!sent) throw new Error("Nothing was asked.");
   const apply = (world, given, context) => applyAirStrikeOp(world, given, { ...context, air: activeWars().air });
-  await sendHeldToMap(sent, { request: "airstrike", apply, needsChart: sent.op === "airstrike" && sent.kind === "city" }, { turnRunning, readChart });
+  await sendHeldToMap(sent, { apply, needsChart: sent.op === "airstrike" && sent.kind === "city" }, { turnRunning, readChart });
 };

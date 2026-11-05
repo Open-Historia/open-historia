@@ -165,7 +165,7 @@ test("the editor looks for the same mark the preparation writes", () => {
 test("every installer packs the generator", () => {
   const packageJson = JSON.parse(read("../package.json"));
   assert.ok(packageJson.build.files.includes("fmg/dist/**"));
-  // Every electron-builder config the branch has: the multiplayer one is not on every branch.
+  // Every electron-builder config the branch has.
   const configs = fs.readdirSync(new URL("../", import.meta.url)).filter((name) => /^electron-builder\..+\.yml$/.test(name));
   assert.ok(configs.includes("electron-builder.beta.yml"));
   for (const config of configs) {

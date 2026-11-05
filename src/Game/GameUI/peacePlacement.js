@@ -7,7 +7,7 @@
 //
 //   a thread holds an offer whose message is in it, or that was made in it
 //   (chatId); an offer with neither (a time skip's letter folded into a thread
-//   opened before, a guest's terms the host kept) belongs to the one-on-one
+//   opened before) belongs to the one-on-one
 //   thread with the other side
 //   in the thread, an offer sits under its message when that message is drawn;
 //   one still open whose message is not (out of the window, or never had one)

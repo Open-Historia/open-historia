@@ -14,7 +14,6 @@ import {
   normalizeInstitutions,
   resolveInstitutionRecord,
 } from "./institutions.js";
-import { askHostForInstitution, institutionsGoToHost } from "./sharedInstitutions.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const lower = (value) => clean(value).toLocaleLowerCase();
@@ -158,8 +157,6 @@ export const ensureInstitutionalChannel = async ({
   date = "",
   expectedGameId = "",
 } = {}) => {
-  // In a shared game the host does this, for this player (sharedInstitutions.js).
-  if (institutionsGoToHost()) return askHostForInstitution("channel", { institutionId });
   let result = null;
   const committed = await mutateCanonicalTurnState(({ chats, game, world }) => {
     result = materializeInstitutionalChannel({

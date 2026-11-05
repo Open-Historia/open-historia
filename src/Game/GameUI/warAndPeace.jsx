@@ -25,8 +25,7 @@
 //                      peace, which opens the chat with the enemy.
 //   ReparationsNote    in the same tab: who is paying whom, and for how long.
 //
-// An answer is the player's own country's and nobody else's. On a page that
-// is playing a shared game it goes to the host as a request.
+// An answer is the player's own country's and nobody else's.
 
 import React, { useState } from "react";
 import { openCallsFor, TREATY_BROKEN_REPUTATION } from "../../runtime/alliances.js";
@@ -35,7 +34,6 @@ import { TERRITORY_AS_HELD, TERRITORY_RESTORED, cessionsByReceiver, normalizeRep
 import { puppetKindLabel } from "../../runtime/puppets.js";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
 import { wearinessOf, wearinessWord } from "../../runtime/warWeariness.js";
-import { inSharedGame, requestFromHost } from "../../multiplayer/client/sharedGameBridge.js";
 import { answerDiplomacy } from "../AI/gameplayLazy.js";
 import { TURN_RUNNING_NOTE, isSimulationBusy } from "../AI/simulationStatus.js";
 
@@ -55,16 +53,12 @@ const refusalText = (error) => {
   return clean(error) || "That could not be done.";
 };
 
-// Sends one answer: to the host of a shared game, else to the game itself.
+// Sends one answer to the game.
 //   where   for "propose": { chatId, messageId }, the thread and the message that put the terms
 // Resolves { ok, error, accepted, to, offerId }.
 export const sendPeaceAnswer = async (op, ref, terms = null, where = {}) => {
   if (isSimulationBusy()) return { ok: false, error: TURN_RUNNING_NOTE, accepted: false, to: "" };
   try {
-    if (inSharedGame()) {
-      const answer = await requestFromHost("peace", { op, ref, terms: terms ?? {} });
-      return { ok: answer.ok === true, error: answer.ok ? "" : clean(answer.error), accepted: answer.ok === true && (op === "accept" || op === "honour"), to: "" };
-    }
     return await answerDiplomacy({ op, ref, terms, chatId: clean(where.chatId), messageId: clean(where.messageId) });
   } catch (error) {
     return { ok: false, error: clean(error?.message) || "That could not be done.", accepted: false, to: "" };

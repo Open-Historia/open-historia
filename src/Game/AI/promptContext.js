@@ -25,9 +25,6 @@ import { buildTerritoryIndex } from "./territoryOutlines.js";
 import { compareGameDates, compareGameDatesNewestFirst, diffGameDays, formatGameDateReadable, isGameDate } from "../../runtime/gameDates.js";
 import { difficultyPassage } from "../../runtime/difficulty.js";
 import { worldFileUrl } from "../../runtime/worldFiles.js";
-import { hostingSharedGame, humanCountriesOf, sharedGameHostCountry } from "../../runtime/humanPolities.js";
-import { SHARED_WORLD_TASKS, buildSharedGameDirective, joinPolityNames } from "./sharedGameDirective.js";
-import { buildSeatAdviceDirective } from "./seatAdvice.js";
 import { openPolls } from "../../runtime/socialFeed.js";
 import { unitsOffBattlefields } from "./frontsGate.js";
 import { readingLanguageName } from "../../runtime/i18n.js";
@@ -812,9 +809,7 @@ export const buildDetailedChatHistoryText = (
   }
 
   const rendered = normalizedChats.slice(0, limit).map((chat, index) => {
-    // A shared game's thread is one person's: say whose (AI/sharedLetters.js).
-    const owner = hostingSharedGame() ? normalizeString(chat.player) || sharedGameHostCountry() : "";
-    const header = `Chat ${index + 1}: ${chat.countries.map((country) => country.name).join(", ")}${owner ? ` (with ${owner})` : ""}`;
+    const header = `Chat ${index + 1}: ${chat.countries.map((country) => country.name).join(", ")}`;
     return `${header}\n${buildSingleChatHistoryText(chat, { messageLimit })}`;
   });
 
@@ -907,9 +902,6 @@ export const buildAdvisorHistoryText = (messages, { limit = 18 } = {}) => {
 // once, it was pasted in repeatedly. Events were always capped (eventLimit /
 // longEventLimit); actions simply never were. Matching longEventLimit here.
 export const ACTION_HISTORY_LIMIT = 24;
-
-// The several polities people play, as one name (sharedGameDirective.js).
-export { joinPolityNames };
 
 // `includePlanned: false` leaves this round's orders out of a full history:
 // the resolvedActions variable, for a label that says the orders listed were
@@ -2184,20 +2176,7 @@ export const buildPromptContext = async (bundle, {
   if (wants("numberOfRegions")) {
     result.numberOfRegions = String(regionCatalog.length);
   }
-  // A shared game's world passes speak to every polity people play
-  // (humanPolities.js), and say so (sharedGameDirective.js); every other task
-  // speaks to the one polity in bundle.game.country.
-  const people = SHARED_WORLD_TASKS.has(taskKey) ? humanCountriesOf(bundle.game) : [];
-  put("playerPolity", people.length > 1 ? joinPolityNames(people) : bundle.game.country || "Unknown polity");
-  if (people.length > 1) {
-    result.sharedGameDirective = buildSharedGameDirective(bundle.game);
-    result.sharedPolities = people.join("; ");
-  }
-  // A game a host shares: the week brings each player their advisor's three
-  // orders to consider (seatAdvice.js). Only the time skip itself writes them.
-  if (hostingSharedGame() && (taskKey === "jumpForward" || taskKey === "autoJumpForward")) {
-    result.seatAdviceDirective = buildSeatAdviceDirective(humanCountriesOf(bundle.game), bundle.world);
-  }
+  put("playerPolity", bundle.game.country || "Unknown polity");
   // The player's Rostra polls still open (runtime/socialFeed.js): the time skip
   // is then asked for the public's answer too (gameplaySchemas.js withSocialPosts).
   if (taskKey === "jumpForward" || taskKey === "autoJumpForward") {

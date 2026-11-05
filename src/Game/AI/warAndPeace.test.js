@@ -17,7 +17,6 @@ import { TREATY_BROKEN_REPUTATION } from "../../runtime/alliances.js";
 import { normalizeWorldState } from "../../runtime/gameState.js";
 import { TERRITORY_AS_HELD, TERRITORY_RESTORED, readTermsLine } from "../../runtime/peaceTerms.js";
 import { WEARINESS_A_YEAR, wearinessOf } from "../../runtime/warWeariness.js";
-import { PUBLIC_WORLD_KEYS } from "../../multiplayer/host/projection.js";
 import { playerFronts } from "../GameUI/warRoomData.js";
 import {
   acceptPeaceOffer,
@@ -294,10 +293,9 @@ test("a standing is set on the world and on a sheet that carries the figure", ()
   assert.equal(withReputation(state, "", 10), state);
 });
 
-test("the world keeps all of it, every player is shown it, and the turn and a person's answer reach it", () => {
+test("the world keeps all of it, and the turn and a person's answer reach it", () => {
   const kept = normalizeWorldState({});
   assert.deepEqual([kept.warWeariness, kept.peaceOffers, kept.reparations, kept.peaceTreaties, kept.callsToArms], [[], [], [], [], []]);
-  for (const key of ["warWeariness", "peaceOffers", "reparations", "peaceTreaties", "callsToArms"]) assert.ok(PUBLIC_WORLD_KEYS.includes(key), key);
   const gameplay = read("gameplay.js");
   assert.ok(gameplay.includes("worldWithImpacts = turnWarAndPeace({\n    world: worldWithImpacts,\n    baseWorld,\n    days: turnDays(baseGame, nextGame),"));
   assert.ok(gameplay.indexOf("worldWithImpacts = turnWarAndPeace({") < gameplay.indexOf("const pruned = pruneWarUnits({"), "before the units of a war that has ended leave the map");

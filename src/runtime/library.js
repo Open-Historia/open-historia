@@ -155,13 +155,6 @@ const requestJson = async (pathname, { body, method = "GET" } = {}) => {
   }
 };
 
-// A shared game (multiplayer/client/sharedGame.js) is played through a game in
-// this library: the host's own campaign, or a guest's stand-in of the same
-// scenario. Its documents are then the host's view, but the library reads the
-// entry from this device's files, which a shared game never writes: the entry
-// would name the stand-in's country and the date the game was opened at. While
-// one is open, the entry shows the view's country and date instead.
-let sharedGameEntry = null; // { gameId, country, currentDate }
 let lastCatalog = null;
 
 // Which country a game is played as is in the game's own record (game.json),
@@ -172,20 +165,16 @@ let lastCatalog = null;
 // reads the list (the country in the game's bar, its drawer, the war room's
 // button, the music) kept the old one, or none. So while a game is open its
 // entry names the country its own record names (setOpenGameCountry, told by
-// the game's screen). A shared game's entry, above, is the view's and wins.
+// the game's screen).
 let openGameCountry = null; // { gameId, country }
 
 const withOpenGameCountry = (game) => (openGameCountry && game?.id === openGameCountry.gameId && game.country !== openGameCountry.country
   ? { ...game, country: openGameCountry.country }
   : game);
 
-const withSharedGameEntry = (game) => (sharedGameEntry && game?.id === sharedGameEntry.gameId
-  ? { ...game, country: sharedGameEntry.country, currentDate: sharedGameEntry.currentDate || game.currentDate }
-  : game);
-
 const applyLibraryCatalog = (catalog) => {
   lastCatalog = catalog;
-  const games = Array.isArray(catalog?.games) ? catalog.games.map((game) => withSharedGameEntry(withOpenGameCountry(game))) : [];
+  const games = Array.isArray(catalog?.games) ? catalog.games.map((game) => withOpenGameCountry(game)) : [];
   const scenarios = Array.isArray(catalog?.scenarios) ? catalog.scenarios : [];
   const activeGameId = catalog?.activeGameId ?? games[0]?.id ?? null;
   const selectedScenarioId = catalog?.selectedScenarioId ?? scenarios[0]?.id ?? null;
@@ -253,16 +242,6 @@ const applyLibraryCatalog = (catalog) => {
   return libraryState;
 };
 
-// { gameId, country, currentDate } while a shared game is open, null after.
-export const setSharedGameEntry = (entry) => {
-  const next = entry?.gameId
-    ? { gameId: String(entry.gameId), country: String(entry.country ?? ""), currentDate: String(entry.currentDate ?? "") }
-    : null;
-  if (JSON.stringify(next) === JSON.stringify(sharedGameEntry)) return;
-  sharedGameEntry = next;
-  if (lastCatalog) applyLibraryCatalog(lastCatalog);
-};
-
 // The country the open game's own record names, or (no game id) nothing. The
 // library's listeners are woken only when that changes what an entry shows.
 export const setOpenGameCountry = (gameId, country) => {
@@ -271,7 +250,7 @@ export const setOpenGameCountry = (gameId, country) => {
   // What every entry of the list names, before and after: the game it was
   // about and the game it is about now may both change.
   const named = () => (Array.isArray(lastCatalog?.games)
-    ? lastCatalog.games.map((game) => withSharedGameEntry(withOpenGameCountry(game))?.country ?? "").join("\n")
+    ? lastCatalog.games.map((game) => withOpenGameCountry(game)?.country ?? "").join("\n")
     : "");
   const before = named();
   openGameCountry = next;

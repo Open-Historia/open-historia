@@ -20,12 +20,12 @@
 // Who sets it:
 //   - the library, when a game it was asked to open has landed in its state:
 //     activateGame (Play on a game's card, the active one included; Import &
-//     play; a shared game's stand-in) and createGame({ setActive }) (a new
+//     play) and createGame({ setActive }) (a new
 //     game, a clone, Apply & Play). Not before: the map must not start on the
 //     game that is on its way out;
 //   - the main menu, when it closes over the game that is already the active
-//     one without the library opening anything: hosting or joining a shared
-//     game (GameUI/libraryBar.jsx, the Lobbies tab's onEnterGame).
+//     one without the library opening anything: a phone's Back over a game the
+//     menu was opened from (GameUI/libraryBar.jsx enterActiveGame).
 // Between a press of Play and the game landing, the menu is closed and nothing
 // is entered yet: the cover is up (main.jsx `awaitingGame`), and a flow that
 // fails opens the menu again.

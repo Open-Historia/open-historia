@@ -12,7 +12,7 @@
 // The weather is drawn from the campaign's own seed (the land war's: Game/AI/
 // frontApply.js turnRunInput climateSeed), which only the screen that plays
 // the turn knows: so the turn writes what each zone's weather is as it lands
-// (world.zoneWeather), and every screen of a shared game draws the same.
+// (world.zoneWeather).
 //
 //   world.zoneWeather   { date, zones: [{ id, state, season }] }: the date the
 //                       turn landed on and each zone's weather on it; null where

@@ -81,5 +81,4 @@ test("the drawer sends the op, lists the transporters, and shows the way found f
   const writes = read("../../runtime/warRoomWrites.js");
   assert.match(writes, /transports: world\?\.transports, era: eraSettingOf\(world\) \}\);/);
   assert.match(writes, /\.\.\.\(result\.transports \? \{ transports: result\.transports \} : null\) \};/);
-  assert.match(read("../../multiplayer/host/gameHost.js"), /\.\.\.\(result\.transports \? \{ transports: result\.transports \} : null\) \} \};/);
 });

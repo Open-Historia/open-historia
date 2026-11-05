@@ -4,11 +4,9 @@
 // be a minimum of 3)", 10 being a line nobody passes.
 //
 // A line the player draws in the war room (GameUI/warRoomFortify.jsx) is an
-// OP, as everything done there is (warRoomOps.js): the page playing alone
-// applies it to its own world, and a page in a shared game sends it to the
-// host, which applies the very same op for the country that asked
-// (runtime/warRoomWrites.js sendFortifyOp, multiplayer/host/gameHost.js). So
-// the rules are here once:
+// OP, as everything done there is (warRoomOps.js), applied to the world for
+// the country that asked (runtime/warRoomWrites.js sendFortifyOp). So the
+// rules are here once:
 //
 //   { op: "fortify",   points, level, name?, owner? }   a line to be built along `points`
 //                                                      ([lng, lat]) at `level`, held to 3..9:
@@ -20,7 +18,7 @@
 // A line is the asking country's: one that names another owner is refused. It
 // runs only over the country's own territory, the land it holds on the map,
 // every kilometre of it, read from the regions' own shapes (runtime/
-// warRoomChart.js, regionLocator.js; by the page or the host): water is
+// warRoomChart.js, regionLocator.js): water is
 // crossed, another's land is not, not even a little way over a border. It
 // is FORTIFY_KM_LEAST long at least and FORTIFY_KM_MOST at most, and it joins
 // the world's lines (runtime/warGeography.js fortifications) BEING BUILT from

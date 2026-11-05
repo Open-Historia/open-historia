@@ -15,8 +15,8 @@
 //
 // THE ENGINE'S RULE HOLDS HERE: only + - * / and comparisons. A gate is a
 // clipped line and so is a squash, not an exponential, so the same weights
-// decide the same thing on every machine (a multiplayer host and whoever
-// checks it must agree).
+// decide the same thing on every machine (whoever runs it and whoever checks
+// it must agree).
 //
 // A network that orders troops one by one (policy.js createTroopPolicy) has a
 // HEAD besides: the same small layer for every troop, shown that troop's own

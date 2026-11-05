@@ -27,5 +27,5 @@ test("an event that changes nothing answers with an empty impacts, and one witho
 
 test("every skip's tool goes through it", () => {
   const gameplay = fs.readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
-  assert.match(gameplay, /const shown = withEventImpacts\(withEventAudience\(grouped, hostingSharedGame\(\)\)\);/);
+  assert.match(gameplay, /const shown = withEventImpacts\(withEventAudience\(grouped\)\);/);
 });

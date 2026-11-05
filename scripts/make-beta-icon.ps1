@@ -12,11 +12,6 @@
 # Windows-only (System.Drawing), which is where this is developed. The output is an
 # ordinary PNG; regenerating it any other way is fine.
 #
-# The multiplayer build's icon is the same banner in another colour and word:
-#
-#   powershell -ExecutionPolicy Bypass -File scripts/make-beta-icon.ps1 -Text MULTIPLAYER `
-#     -OutFile electron\multiplayer-assets\icon-multiplayer.png -Top "22,160,210" -Bottom "10,112,160" -Edge "5,60,90"
-#
 # Colours are "r,g,b" text: -File hands every argument over as a string.
 param(
   [string]$Text = "BETA",

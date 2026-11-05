@@ -83,7 +83,7 @@ test("the running build: the bundle's stamp first, then the desktop app's server
   // The desktop app.
   assert.equal(await appBuildId({ env: {}, fetchImpl: server.fetchImpl, moduleUrl: code }), "desktop-99");
   assert.equal(server.asked.length, 1);
-  // A server with no stamp (by hand, unstamped, the multiplayer build): the code's address.
+  // A server with no stamp (by hand, unstamped): the code's address.
   assert.equal(await appBuildId({ env: {}, fetchImpl: answering({ app: "local" }).fetchImpl, moduleUrl: code }), "bundle-/assets/main-AbC123.js");
   // A development run asks nothing: its server has no stamp to give.
   const dev = answering({ app: "desktop", build: "99" });

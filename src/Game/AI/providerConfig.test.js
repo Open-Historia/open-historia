@@ -743,7 +743,6 @@ test("an Agent entry serves what the player started, of the kinds it ticks, and 
   assert.equal(serves({}), false, "a call that does not say the player started it never goes to the Agent");
   assert.equal(serves({ agentKind: "advisor", requestKind: "background" }), false, "nobody is at the terminal for background AI");
   assert.equal(serves({ agentKind: "skip", requestKind: "background" }), true, "a skip's own follow-up is the player's skip, though the game asks it");
-  assert.equal(serves({ spender: "jump", sharedGame: true }), false, "a shared game never waits on one player's terminal");
   assert.equal(serves({ agentKind: "diplomacy" }, { ...agent, kinds: ["skip"] }), false, "an unticked kind goes to the entry below");
   assert.equal(serves({ spender: "jump" }, { ...agent, paused: true }), false, "paused, it serves nothing");
   assert.equal(serves({ spender: "review", skipPassedOn: true }), false, "the rest of a skip the player sent to their key");

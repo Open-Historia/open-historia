@@ -415,7 +415,6 @@ const FeaturePopup = () => {
               <button
                 className="oh-tap"
                 onClick={() => {
-                  // In a shared game the host may refuse (the round is being resolved).
                   void saveSettledStructure(feature.id)
                     .catch((error) => logDebugEvent("warn", "[map] Accepting the structure's place failed.", error));
                 }}

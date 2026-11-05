@@ -384,7 +384,7 @@ test("the engine's files keep to arithmetic every machine does alike", () => {
   // logarithms, outside any day's work; the record, its packing and its replay
   // keep what the engine hands them and decide nothing; the tests and what
   // they share are not the engine.
-  const beside = ["frame.js", "codec.js", "record.js", "replay.js", "view.js", "syntheticMap.js", "testKit.js"];
+  const beside = ["frame.js", "codec.js", "record.js", "replay.js", "syntheticMap.js", "testKit.js"];
   const files = readdirSync(folder).filter((name) => name.endsWith(".js") && !name.endsWith(".test.js") && !beside.includes(name));
   assert.ok(["arena.js", "field.js", "troops.js", "sectors.js", "combat.js", "orders.js", "brief.js", "engine.js", "day.js", "battle.js", "supply.js", "line.js", "contact.js", "constants.js"].every((name) => files.includes(name)));
   const forbidden = /Math\.(random|sin|cos|tan|asin|acos|atan|atan2|hypot|exp|expm1|pow|log|log2|log10|log1p|cbrt|sinh|cosh|tanh)\b|\*\*|Date\.now|new Date|performance\.now/;

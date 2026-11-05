@@ -20,15 +20,8 @@ export const approveAdvisorAction = async ({
   mutateAdvisorState,
   normalizeAction,
   repeatOf,
-  sharedGame = false,
   assertReady = () => {},
 } = {}) => {
-  // Host request "order" currently accepts text only, with no stable proposal
-  // ID/acknowledged Action ID. Retrying after a lost ack could issue twice.
-  // Refuse instead of presenting a false idempotency guarantee in multiplayer.
-  if (sharedGame) {
-    throw new Error("Advisor Action review in shared games needs host-backed proposal IDs. Queue through the Actions panel for now.");
-  }
   const saved = await readAdvisorMessages({ force: true });
   if (!Array.isArray(saved)) throw new Error("The Advisor conversation could not be read.");
   if (threadId !== CHIEF_ADVISOR_THREAD) {

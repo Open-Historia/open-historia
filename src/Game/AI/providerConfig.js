@@ -98,13 +98,13 @@ export const providerOptionsFor = ({ localServer }) =>
 // entry answers only what the player started, of a kind it ticks, while it is
 // not paused. A call says the player started it with `agentKind`, or with the
 // time skip's `spender`; one that says neither (the game's own work, and every
-// background call) never waits on a terminal nobody may be at. Nor does a
-// shared game's round. Every other entry answers every call.
+// background call) never waits on a terminal nobody may be at. Every other
+// entry answers every call.
 // `skipPassedOn`: the player sent the rest of the running skip to their key
 // (Use API key).
-export function entryServesCall(entry, { agentKind = "", spender = "", requestKind = "", sharedGame = false, skipPassedOn = false } = {}) {
+export function entryServesCall(entry, { agentKind = "", spender = "", requestKind = "", skipPassedOn = false } = {}) {
     if (entry?.provider !== AGENT_PROVIDER) return true;
-    if (entry.paused === true || sharedGame) return false;
+    if (entry.paused === true) return false;
     // The game's own follow-up to a skip (a first stat-sheet reading as it
     // lands) is still the skip the player started; anything else in the
     // background has nobody at the terminal.

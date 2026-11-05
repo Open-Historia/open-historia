@@ -76,17 +76,6 @@ test("a record that agrees with the list wakes nobody, and one that does not wak
   library.setOpenGameCountry(null);
 });
 
-test("a shared game's entry is the view's, and wins", async () => {
-  await library.refreshLibraryCatalog({ force: true });
-  library.setOpenGameCountry("session", "Ukraine");
-  library.setSharedGameEntry({ gameId: "session", country: "Poland", currentDate: "2016-07-06" });
-  assert.equal(library.getLibraryState().activeGame.country, "Poland");
-  library.setSharedGameEntry(null);
-  assert.equal(library.getLibraryState().activeGame.country, "Ukraine");
-  library.setOpenGameCountry(null);
-  assert.equal(library.getLibraryState().activeGame.country, "");
-});
-
 test("the game's screen tells the library the country of the game's own record, once it is read", () => {
   const screen = read("../Game/GameUI/main.jsx");
   assert.ok(screen.includes("const selectPlayedCountry = (game) => (game ? String(game.country ?? \"\").trim() : null);"));

@@ -93,13 +93,6 @@ test("a normal close, the app quitting, or a window already gone is not a crash"
   assert.equal(dialogs.length, 0);
 });
 
-test("the multiplayer build says its own name", () => {
-  const { handlePageGone, dialogs } = load({ appName: "Open Historia Multiplayer" });
-  handlePageGone(makeWindow(), { reason: "oom" });
-  assert.equal(dialogs[0].title, "Open Historia Multiplayer");
-  assert.equal(dialogs[0].message, "Open Historia Multiplayer ran out of memory.");
-});
-
 test("the beta says its own name, and a window closed during the dialog is left alone", async () => {
   const { handlePageGone, dialogs, quits } = load({ appName: "Open Historia Beta", response: 0 });
   const win = makeWindow();

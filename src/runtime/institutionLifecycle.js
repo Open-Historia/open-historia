@@ -21,7 +21,6 @@ import {
   institutionPortfolioForPolity,
   ensureInstitutionLifecycleNegotiationChatCore,
 } from "./institutionLifecycleCore.js";
-import { askHostForInstitution, institutionsGoToHost } from "./sharedInstitutions.js";
 
 export {
   advanceInstitutionLifecycleCore,
@@ -41,8 +40,6 @@ const list = (value) => Array.isArray(value) ? value : [];
 export const commitInstitutionLifecycleCommand = async ({
   playerCountry = "", date = "", expectedGameId = "", command = {},
 } = {}) => {
-  // In a shared game the host does this, for this player (sharedInstitutions.js).
-  if (institutionsGoToHost()) return askHostForInstitution("lifecycle", { command });
   let result = null;
   const committed = await mutateCanonicalTurnState(({ world, chats, events, game }) => {
     const player = playerCountry || game?.country || "";
@@ -75,8 +72,6 @@ export const commitInstitutionLifecycleCommand = async ({
 export const ensureInstitutionLifecycleNegotiationChat = async ({
   institutionId = "", caseIds = [], playerCountry = "", date = "", expectedGameId = "",
 } = {}) => {
-  // In a shared game the host does this, for this player (sharedInstitutions.js).
-  if (institutionsGoToHost()) return askHostForInstitution("negotiation", { institutionId, caseIds });
   let result = null;
   const committed = await mutateCanonicalTurnState(({ world, chats, game }) => {
     const player = playerCountry || game?.country || "";

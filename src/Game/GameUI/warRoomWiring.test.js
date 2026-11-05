@@ -151,7 +151,6 @@ test("the war room writes through its own seam and asks one request a message", 
   assert.equal(panel.split("generateWarRoomReply(").length - 1, 1, "one place asks the generals");
   assert.match(panel, /if \(controller\.signal\.aborted \|\| \(answer\.campaignId && gameIdRef\.current && answer\.campaignId !== gameIdRef\.current\)\) return;/, "an answer for another game is not written into this one");
   const writes = read("../../runtime/warRoomWrites.js");
-  assert.match(writes, /if \(inSharedGame\(\)\) \{\s*const answer = await requestFromHost\("warroom", \{ op: sent \}\);/);
   assert.match(writes, /if \(turnRunning\(\)\) throw new Error\(TURN_RUNNING_REFUSAL\);/);
   // What the model wrote is shown as it came; the interface's own words are translated.
   assert.match(panel, /<div\s+data-no-translate\s+style=\{\{\s+background: own \? RED_DARK : OLIVE/);
