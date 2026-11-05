@@ -1378,20 +1378,17 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             // No reply is authority to write an Action. Persist one durable
             // message-bound proposal per valid fenced op, then wait for Proceed.
             const replyId = `advisor-reply-${globalThis.crypto?.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 14)}`}`;
-            const { json: actionsProposal, reason: actionsReason } = extractFencedJson(reply, "actions");
+            // Parse once for BOTH the displayed text and persisted proposals.
+            // A provider may emit multiple fenced Action arrays; each must be
+            // reviewable, with none silently left as raw JSON in the message.
+            const { actionsProposal, actionBlockProblems, chartProblem, draftProblems, institutionDraftProblems, deployProblems } = parseAdvisorReply(reply, {
+                allowedUnitTypes: Array.isArray(moment.world?.allowedUnitTypes) ? moment.world.allowedUnitTypes : null,
+            });
             const { proposals: actionProposals, problems: invalidProposals } =
                 (threadId === CHIEF_ADVISOR_THREAD || advisorRecipientType(recipient) === ADVISOR_RECIPIENT_TYPES.MINISTER)
                     ? actionProposalsFromReply(actionsProposal, replyId)
                     : { proposals: [], problems: [] };
-            const actionsProblems = [
-                ...(actionsReason ? [`the Action block was ${actionsReason}; no Action was queued`] : []),
-                ...invalidProposals,
-            ];
-            // The buttons a reply offers are drawn at render time; which ones
-            // could not be drawn is worked out once, here, for the receipt.
-            const { chartProblem, draftProblems, institutionDraftProblems, deployProblems } = parseAdvisorReply(reply, {
-                allowedUnitTypes: Array.isArray(moment.world?.allowedUnitTypes) ? moment.world.allowedUnitTypes : null,
-            });
+            const actionsProblems = [...actionBlockProblems, ...invalidProposals];
             // Same one-shot treatment for the projects board, with truncation
             // salvage: a full backfill of a long campaign is the one block big
             // enough to be cut off mid-array by the reply token cap.
