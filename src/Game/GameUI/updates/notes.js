@@ -53,18 +53,17 @@ import { PAST_UPDATES } from "./notesPast.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
-    // A player's "I build up my forces" was told as an event and a rise in Poland's manpower, with no `home:` line, so
-    // nobody was called up (AI/nativeFrontLedger.js untoldBuildUps; frontPrompt.js names the player in the line).
-    // A player's report, 2026-11-05.
-    id: "2026-11-build-ups-call-up",
+    // The skip's build-up line was written `home: X~X~...`; Poland's ordered build-up came back with no line at all
+    // and nobody was called up. The line now names the player (AI/frontPrompt.js playerRule). A player's report, 2026-11-05.
+    id: "2026-11-build-up-line-named",
     kind: "minor",
     date: "2026-11-05",
     channel: "beta",
     banners: [
       {
-        title: "Build-ups raise troops",
+        title: "Build-ups you order",
         items: [
-          "An order to build up your forces now calls troops up round your cities even when the time skip tells it only as a rise in your manpower.",
+          "A time skip is now told your own country's name in the line that calls up your forces at home, so a build-up you order is called up more reliably.",
         ],
       },
     ],
