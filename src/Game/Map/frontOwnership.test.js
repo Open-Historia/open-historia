@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  contestedOwnersOf, getFrontShownOwners, resetFrontShownOwnersForTest, setFrontShownOwners, shownOwnerIds,
+  contestedOwnersOf, drawnOwnersOf, getFrontShownOwners, resetFrontShownOwnersForTest, setFrontShownOwners, shownOwnerIds,
   subscribeFrontShownOwners, withShownOwners, withoutShownTransitions,
 } from "./frontOwnership.js";
 
@@ -79,4 +79,29 @@ test("a record's regions taken in name and not in full are read as whose each is
   assert.equal(contestedOwnersOf(record), contestedOwnersOf(record), "read once");
   assert.equal(contestedOwnersOf({ contested: [] }), null);
   assert.equal(contestedOwnersOf(null), null);
+});
+
+test("forces standing in peace hold no region back: an annexed country's land is drawn as its annexer's", () => {
+  // As the player's save had it: Italy's forces at home, a record standing in
+  // peace, listing two regions of Tunisia, which the story had annexed to
+  // Italy, as still drawn as Tunisia's. The map painted them in Tunisia's
+  // colour under Tunisia's name, though a click said they were Italy's.
+  const world = { 3886: "People's Republic Of Italy", 3867: "People's Republic Of Italy" };
+  const home = {
+    name: "People's Republic Of Italy home forces",
+    status: "standing",
+    home: true,
+    sides: [["People's Republic Of Italy"], ["People's Democratic Republic of Algeria"]],
+    replay: null,
+    contested: [["3886", "Republic of Tunisia"], ["3867", "Republic of Tunisia"]],
+  };
+  assert.equal(drawnOwnersOf(home, 3), null);
+  resetFrontShownOwnersForTest();
+  setFrontShownOwners([drawnOwnersOf(home, 3)]);
+  assert.equal(withShownOwners(world, getFrontShownOwners()), world, "drawn as the world says");
+  // A battlefield being fought over still holds back what it has taken in name only.
+  const front = { ...home, name: "The front", status: "active", home: undefined };
+  assert.deepEqual(drawnOwnersOf(front, 3), { 3886: "Republic of Tunisia", 3867: "Republic of Tunisia" });
+  assert.equal(drawnOwnersOf(null, 3), null);
+  resetFrontShownOwnersForTest();
 });

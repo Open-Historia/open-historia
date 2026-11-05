@@ -53,6 +53,24 @@ import { PAST_UPDATES } from "./notesPast.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // An annexed Tunisia stayed in its own colour and name on the map though a click said its land was Italy's: the
+    // player's forces at home (a battlefield standing in peace) kept listing its regions as "taken in name only", which
+    // nothing standing ever finishes (runtime/fronts/battle.js readRegions; Map/frontOwnership.js drawnOwnersOf).
+    // A player's report, 2026-11-05.
+    id: "2026-11-annexed-land-on-the-map",
+    kind: "minor",
+    date: "2026-11-05",
+    channel: "beta",
+    banners: [
+      {
+        title: "Annexed land on the map",
+        items: [
+          "A country you annex while your forces are built up at home now takes your colour and name on the map at once, instead of keeping its own. A game where this happened is drawn right as soon as it is opened.",
+        ],
+      },
+    ],
+  },
+  {
     // The skip's build-up line was written `home: X~X~...`; Poland's ordered build-up came back with no line at all
     // and nobody was called up. The line now names the player (AI/frontPrompt.js playerRule). A player's report, 2026-11-05.
     id: "2026-11-build-up-line-named",
