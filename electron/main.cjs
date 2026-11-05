@@ -20,6 +20,7 @@ const { BETA_APP_NAME, readChannel } = require("./channel.cjs");
 const { createLayeredUpdater } = require("./layeredUpdate.cjs");
 const { createPayloadUpdater } = require("./payloadUpdate.cjs");
 const payloadBoot = require("./payloadBoot.cjs");
+const { fetchAppFileOnce } = require("./appFile.cjs");
 
 // The map is drawn with WebGL, and without it the game is a black window with
 // "WebGL Not Available" on it (seen on a player's Mac, 2026-10-12, in the middle
@@ -785,6 +786,17 @@ const boot = async () => {
   ipcMain.removeHandler("setup:update-later");
   // Quitting into the installer, which reopens the game on the new version.
   if (launchUpdate.installing) return;
+  // This app's own file, downloaded once per install or update and never
+  // again (electron/appFile.cjs): how installs are counted. In the background;
+  // the game opens whether it goes through or not.
+  void fetchAppFileOnce({
+    channel: CHANNEL,
+    packaged: app.isPackaged,
+    markFile: path.join(USER_ROOT, "app-file.json"),
+    fs,
+    fetchImpl: (url, init) => require("electron").net.fetch(url, init),
+    log: logMain,
+  });
   relocateLegacyStockMap();
   const pending = missingAssets();
   if (pending.length) {

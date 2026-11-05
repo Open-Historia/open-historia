@@ -59,6 +59,9 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(BackgroundPausePlugin.class);
         registerPlugin(RendererRestartPlugin.class);
         super.onCreate(savedInstanceState);
+        // This app's own file, downloaded once per install or update and never
+        // again (AppFile): how installs are counted. On its own thread.
+        AppFile.fetchOnce(this);
         getBridge().addWebViewListener(new WebViewListener() {
             @Override
             public boolean onRenderProcessGone(WebView view, RenderProcessGoneDetail detail) {
