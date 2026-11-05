@@ -239,7 +239,7 @@ import { takersFor } from "../../runtime/fronts/constants.js";
 import { pointInFrame } from "../../runtime/fronts/frame.js";
 import { normalizeBattlefields } from "../../runtime/fronts/record.js";
 import { readWarRoomAnswer, warRoomRequest, warRoomStanding, warRoomVariables } from "./warRoomContext.js";
-import { bindFrontOrdersToEvents, describeDroppedFrontOrders, frontOrderProseLines, screenFrontOrders, untoldBuildUps } from "./nativeFrontLedger.js";
+import { bindFrontOrdersToEvents, describeDroppedFrontOrders, frontOrderProseLines, screenFrontOrders } from "./nativeFrontLedger.js";
 import { buildOwnerAliasMap, canonicalOwnerName, toCountryName } from "../../runtime/ownerNames.js";
 import { countryGidFromIdentity } from "../../runtime/countryFlags.js";
 import { editDistance, foldRegionKey, matchRegionName, stripRegionAffixes } from "./regionMatch.js";
@@ -1024,9 +1024,8 @@ const screenSegmentFrontOrders = (candidate, { game, actions, receipt = null } =
       .some((id) => normalizeString(owners.get(normalizeString(id))).toLowerCase() === normalizeString(side).toLowerCase()),
   });
   if (dropped.length) noteReceipt(receipt, "dropped", describeDroppedFrontOrders(dropped));
-  candidate.frontOrders = [...kept, ...untoldBuildUps(events, kept, { humanSides: humanCountriesOf(game), owners })];
+  candidate.frontOrders = kept;
 };
-
 
 // One segment's storyline records, after its ledgers. The director's semantic
 // binder attaches a strong unique match to its selected storyline, quiet echoes
