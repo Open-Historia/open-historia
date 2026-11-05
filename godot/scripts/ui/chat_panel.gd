@@ -1378,9 +1378,7 @@ func _dot_texture() -> Texture2D:
 	var key := "unread-dot"
 	if _cache.has(key):
 		return _cache[key]
-	var image := Image.new()
-	image.load_svg_from_string("<svg viewBox='0 0 8 8' xmlns='http://www.w3.org/2000/svg'><circle cx='4' cy='4' r='3.2' fill='#60a5fa'/></svg>", 1.0)
-	var texture := ImageTexture.create_from_image(image)
+	var texture := UI.svg_texture("<svg viewBox='0 0 8 8' width='8' height='8' xmlns='http://www.w3.org/2000/svg'><circle cx='4' cy='4' r='3.2' fill='#60a5fa'/></svg>", 1.0)
 	_cache[key] = texture
 	return texture
 

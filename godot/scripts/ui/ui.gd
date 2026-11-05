@@ -136,6 +136,13 @@ static func icon(name: String, size := 16, color := WHITE) -> Texture2D:
 	return texture
 
 
+static func pixel_scale() -> float:
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null or tree.root == null:
+		return 1.0
+	return maxf(1.0, tree.root.get_oversampling())
+
+
 static func svg_texture(svg: String, scale: float, alpha := 1.0) -> Texture2D:
 	var source := svg
 	if alpha < 1.0:
