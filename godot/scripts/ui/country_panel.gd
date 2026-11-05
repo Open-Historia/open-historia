@@ -11,6 +11,8 @@ const MIN_WIDTH := 280.0
 const DEFAULT_WIDTH := 320.0
 const LEFT_CLEARANCE := 376.0
 const FOOTER := "Click any country on the map to inspect it, or open its card and choose Stats."
+static var _bold_fonts := {}
+static var _arrow: Texture2D
 const CARD_BG := Color(18 / 255.0, 32 / 255.0, 47 / 255.0, 0.44)
 const CARD_BORDER := Color(151 / 255.0, 190 / 255.0, 214 / 255.0, 0.11)
 const ROW_RULE := Color(1, 1, 1, 0.07)
@@ -557,10 +559,17 @@ static func flow(h := 4, v := 4) -> HFlowContainer:
 
 static func text(value: String, size: int, color: Color, weight := 400, wrap := true, spacing := 0) -> Label:
 	var node := UI.label(value, size, color, weight, "Arial", spacing)
+	node.add_theme_constant_override("line_spacing", 0)
 	if wrap:
 		node.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		node.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		node.custom_minimum_size.x = 1
+	return node
+
+
+static func prose(value: String, size: int, color: Color, weight := 400) -> Label:
+	var node := text(value, size, color, weight)
+	node.add_theme_constant_override("line_spacing", 3)
 	return node
 
 
@@ -586,7 +595,7 @@ static func badge(value: String, ink: Color, size := 9, upper := true) -> PanelC
 	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	holder.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	holder.size_flags_horizontal = Control.SIZE_SHRINK_END
-	holder.add_child(UI.label(value.to_upper() if upper else value, size, ink, 800, "Arial", 1 if upper else 0))
+	holder.add_child(UI.label(value.to_upper() if upper else value, size, ink, 800))
 	return holder
 
 
@@ -670,17 +679,17 @@ static func caps(value: String, size: int, color: Color, weight := 850, spacing 
 	return node
 
 
-static func leading(base: Font, size: int, line_height: float) -> Font:
+static func leading(base: Font, size: int, line_px: float) -> Font:
 	var variation := FontVariation.new()
 	variation.base_font = base
-	var extra := size * line_height - base.get_height(size)
+	var extra := line_px - base.get_height(size)
 	variation.spacing_top = int(floor(extra * 0.5))
 	variation.spacing_bottom = int(round(extra - floor(extra * 0.5)))
 	return variation
 
 
-static func tight(node: Control, size: int, weight: int, line_height: float) -> Control:
-	var face := leading(UI.font(weight), size, line_height)
+static func tight(node: Control, size: int, weight: int, line_px: float) -> Control:
+	var face := leading(UI.font(weight), size, line_px)
 	if node is RichTextLabel:
 		node.add_theme_font_override("normal_font", face)
 	else:
@@ -803,11 +812,11 @@ func _render_header() -> void:
 	var info := column(0)
 	var title_row := flow(8, 6)
 	var title := text(str(data.get("name", target)), 21, DOSSIER_TEXT, 850)
-	tight(title, 21, 850, 1.16)
+	tight(title, 21, 850, 24.1)
 	title.custom_minimum_size.x = 160
 	title_row.add_child(title)
 	if data.get("isPlayer", false):
-		var mine := pill("Your country", Color(245 / 255.0, 158 / 255.0, 11 / 255.0, 0.18), Color(245 / 255.0, 158 / 255.0, 11 / 255.0, 0.5), Color("#fbbf24"), 10, 700, Vector4(8, 2, 8, 2))
+		var mine := pill("Your country", Color(245 / 255.0, 158 / 255.0, 11 / 255.0, 0.18), Color(245 / 255.0, 158 / 255.0, 11 / 255.0, 0.5), Color("#fbbf24"), 10, 700, Vector4(8, 3, 8, 3))
 		mine.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		title_row.add_child(mine)
 	info.add_child(title_row)
@@ -937,7 +946,6 @@ func _tab_strip(floating: bool) -> PanelContainer:
 		words.grow_horizontal = Control.GROW_DIRECTION_BOTH
 		words.grow_vertical = Control.GROW_DIRECTION_BOTH
 		button.add_child(words)
-		button.resized.connect(_fit_tab.bind(button, words, str(entry[1]), 850 if chosen else 680))
 		button.mouse_entered.connect(func() -> void: words.add_theme_color_override("font_color", Color("#e7f3fa")))
 		button.mouse_exited.connect(func() -> void: words.add_theme_color_override("font_color", ink))
 		button.pressed.connect(set_tab.bind(key))
@@ -945,12 +953,6 @@ func _tab_strip(floating: bool) -> PanelContainer:
 		line.add_child(button)
 	strip.add_child(line)
 	return strip
-
-
-func _fit_tab(button: Button, words: Label, value: String, weight: int) -> void:
-	var room := button.size.x - 4.0
-	var wide := UI.font(weight).get_string_size(I18n.now(value), HORIZONTAL_ALIGNMENT_LEFT, -1, 11).x
-	words.add_theme_font_size_override("font_size", 11 if wide <= room or room <= 0.0 else 10)
 
 
 func _place_sticky() -> void:
@@ -1004,7 +1006,7 @@ func _render_politics() -> void:
 		var form := str(info.get("form", ""))
 		if not form.is_empty():
 			stack.add_child(gap(5))
-			stack.add_child(text(form, 12, Color(1, 1, 1, 0.78), 760))
+			stack.add_child(tight(text(form, 12, Color(1, 1, 1, 0.78), 760), 12, 760, 15.8))
 		var heads := GridContainer.new()
 		var head_of_government := str(info.get("headOfGovernment", ""))
 		heads.columns = 2 if not head_of_government.is_empty() else 1
@@ -1014,12 +1016,12 @@ func _render_politics() -> void:
 		if not str(info.get("headOfState", "")).is_empty():
 			var cell := column(3)
 			cell.add_child(text("HEAD OF STATE", 9, Color(1, 1, 1, 0.34), 800, true, 1))
-			cell.add_child(text(str(info["headOfState"]), 12, Color("#fbbf24"), 780))
+			cell.add_child(tight(text(str(info["headOfState"]), 12, Color("#fbbf24"), 780), 12, 780, 15.5))
 			heads.add_child(cell)
 		if not head_of_government.is_empty():
 			var cell := column(3)
 			cell.add_child(text("HEAD OF GOVERNMENT", 9, Color(1, 1, 1, 0.34), 800, true, 1))
-			cell.add_child(text(head_of_government, 12, Color(1, 1, 1, 0.78), 760))
+			cell.add_child(tight(text(head_of_government, 12, Color(1, 1, 1, 0.78), 760), 12, 760, 15.5))
 			heads.add_child(cell)
 		if heads.get_child_count() > 0:
 			stack.add_child(gap(11 if not form.is_empty() else 6))
@@ -1036,7 +1038,7 @@ func _render_politics() -> void:
 			line.fit_content = true
 			line.scroll_active = false
 			line.mouse_filter = Control.MOUSE_FILTER_IGNORE
-			line.add_theme_font_override("normal_font", UI.font(400))
+			line.add_theme_font_override("normal_font", leading(UI.font(400), 10, 14.6))
 			line.add_theme_font_size_override("normal_font_size", 10)
 			line.add_theme_color_override("default_color", Color(1, 1, 1, 0.48))
 			line.text = "[color=#ffffff57]%s[/color] %s" % [str(info.get("partiesLabel", "")), _escape(str(info["parties"]))]
@@ -1050,7 +1052,7 @@ func _render_politics() -> void:
 			rule.custom_minimum_size.y = 1
 			stack.add_child(rule)
 			stack.add_child(gap(8))
-			var facts := column(3)
+			var facts := column(2)
 			for pair in [["Legislature", legislature], ["Next election", election]]:
 				if str(pair[1]).is_empty():
 					continue
@@ -1059,7 +1061,7 @@ func _render_politics() -> void:
 				fact.fit_content = true
 				fact.scroll_active = false
 				fact.mouse_filter = Control.MOUSE_FILTER_IGNORE
-				fact.add_theme_font_override("normal_font", UI.font(400))
+				fact.add_theme_font_override("normal_font", leading(UI.font(400), 10, 14.6))
 				fact.add_theme_font_size_override("normal_font_size", 10)
 				fact.add_theme_color_override("default_color", Color(1, 1, 1, 0.48))
 				fact.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
@@ -1088,7 +1090,7 @@ func _render_politics() -> void:
 		stack.add_child(_label_small("National priorities"))
 		stack.add_child(gap(2))
 		for goal in goals:
-			stack.add_child(text("• %s" % str(goal), 11, Color(1, 1, 1, 0.65)))
+			stack.add_child(prose("• %s" % str(goal), 11, Color(1, 1, 1, 0.65)))
 		box.add_child(stack)
 	var institutions: Array = politics.get("institutions", [])
 	if not institutions.is_empty():
@@ -1138,7 +1140,7 @@ func _render_landscape(views: Dictionary, polity: String) -> void:
 	var entries: Array = landscape.get("entries", [])
 	if entries.is_empty():
 		return
-	page.add_child(gap(17))
+	page.add_child(gap(19))
 	var stack := column(0)
 	stack.add_child(gap(4))
 	var top := row(7)
@@ -1268,7 +1270,8 @@ func _bloc_ledger(entries: Array) -> Control:
 			if not str(bloc.get(key, "")).is_empty():
 				facts.append(_escape(str(bloc[key])))
 		if not facts.is_empty():
-			inner.add_child(gap(6))
+			if not (typeof(strength) == TYPE_INT or typeof(strength) == TYPE_FLOAT):
+				inner.add_child(gap(6))
 			var meta := _rich(10, Color("#8ea2b5"))
 			meta.text = "[color=#688399]  ·  [/color]".join(facts)
 			inner.add_child(meta)
@@ -1345,11 +1348,33 @@ func _rich(size: int, color: Color, weight := 400, bold_weight := 800, wrap := t
 	node.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	node.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
 	node.add_theme_font_override("normal_font", UI.font(weight))
-	node.add_theme_font_override("bold_font", UI.font(bold_weight))
+	node.add_theme_font_override("bold_font", _bold_within(UI.font(bold_weight), UI.font(weight), size) if bold_weight >= 800 and weight < 800 else UI.font(bold_weight))
 	node.add_theme_font_size_override("normal_font_size", size)
 	node.add_theme_font_size_override("bold_font_size", size)
 	node.add_theme_color_override("default_color", color)
 	return node
+
+
+static func _select_arrow() -> Texture2D:
+	if _arrow == null:
+		_arrow = UI.svg_texture("<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'><path d='M2.2 4.2 6 7.9l3.8-3.7' fill='none' stroke='#e4e4e7' stroke-width='2.1' stroke-linecap='round' stroke-linejoin='round'/></svg>", 1.0)
+	return _arrow
+
+
+static func _bold_within(bold: Font, base: Font, size: int) -> Font:
+	var top := int(round(base.get_ascent(size) - bold.get_ascent(size)))
+	var bottom := int(round(base.get_descent(size) - bold.get_descent(size)))
+	if top >= 0 and bottom >= 0:
+		return bold
+	var key := "%d:%d:%d" % [bold.get_instance_id(), base.get_instance_id(), size]
+	if _bold_fonts.has(key):
+		return _bold_fonts[key]
+	var variation := FontVariation.new()
+	variation.base_font = bold
+	variation.spacing_top = min(0, top)
+	variation.spacing_bottom = min(0, bottom)
+	_bold_fonts[key] = variation
+	return variation
 
 
 func _party_row(party: Dictionary, first := false) -> Control:
@@ -1375,7 +1400,7 @@ func _party_row(party: Dictionary, first := false) -> Control:
 	cell.mouse_exited.connect(_hover_party.bind(""))
 	var lines := column(0)
 	var top := row(10)
-	var names := column(2)
+	var names := column(1)
 	if other:
 		names.add_child(text("Other political support", 12, Color(1, 1, 1, 0.9), 800))
 	else:
@@ -1403,7 +1428,7 @@ func _party_row(party: Dictionary, first := false) -> Control:
 	var family := str(party.get("family", ""))
 	var sub := str(party.get("subideology", ""))
 	if not other and (not family.is_empty() or not sub.is_empty()):
-		lines.add_child(gap(4))
+		lines.add_child(gap(3))
 		var ideology := _rich(10, Color(1, 1, 1, 0.62))
 		var shown := ""
 		if not family.is_empty():
@@ -1419,7 +1444,7 @@ func _party_row(party: Dictionary, first := false) -> Control:
 		ideology.text = shown
 		lines.add_child(ideology)
 	if not other:
-		var facts := flow(11, 2)
+		var facts := flow(11, 0)
 		if not str(party.get("leader", "")).is_empty():
 			var leader := _rich(10, Color(1, 1, 1, 0.5), 400, 800, false)
 			leader.text = "%s [color=#ffffffcc]%s[/color]" % [_escape(I18n.now("Leader:")), _escape(str(party["leader"]))]
@@ -1465,13 +1490,13 @@ func _party_more(party: Dictionary) -> Control:
 		if not str(party.get("unlistedText", "")).is_empty():
 			if not members.is_empty():
 				stack.add_child(gap(9))
-			stack.add_child(text(str(party["unlistedText"]), 10, Color(1, 1, 1, 0.4)))
+			stack.add_child(prose(str(party["unlistedText"]), 10, Color(1, 1, 1, 0.4)))
 		bg.add_child(stack)
 		return bg
 	var ideology: Array = party.get("moreIdeology", [])
 	var described := not str(party.get("publicDescription", "")).is_empty() or not ideology.is_empty() or not (party.get("priorities", []) as Array).is_empty() or not (party.get("foreignPolicy", []) as Array).is_empty()
 	if not str(party.get("publicDescription", "")).is_empty():
-		var about := text(str(party["publicDescription"]), 11, Color(1, 1, 1, 0.62))
+		var about := prose(str(party["publicDescription"]), 11, Color(1, 1, 1, 0.62))
 		about.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
 		stack.add_child(about)
 	if not ideology.is_empty():
@@ -1508,7 +1533,7 @@ func _detail_list(title: String, values: Array) -> Control:
 	stack.add_child(gap(6))
 	stack.add_child(text(title.to_upper(), 9, Color(1, 1, 1, 0.42), 800, true, 1))
 	for value in values:
-		stack.add_child(text("• %s" % str(value), 11, Color(1, 1, 1, 0.68)))
+		stack.add_child(prose("• %s" % str(value), 11, Color(1, 1, 1, 0.68)))
 	return stack
 
 
@@ -1538,7 +1563,7 @@ func _party_detail(party: Dictionary, as_party: bool) -> Control:
 				stack.add_child(line)
 		if not str(party.get("unlistedText", "")).is_empty():
 			stack.add_child(gap(9))
-			stack.add_child(text(str(party["unlistedText"]), 10, Color(1, 1, 1, 0.4)))
+			stack.add_child(prose(str(party["unlistedText"]), 10, Color(1, 1, 1, 0.4)))
 		box.add_child(stack)
 		return box
 	var name_line := flow(5, 4)
@@ -1573,7 +1598,7 @@ func _party_detail(party: Dictionary, as_party: bool) -> Control:
 	stack.add_child(top)
 	if not str(party.get("publicDescription", "")).is_empty():
 		stack.add_child(gap(9))
-		stack.add_child(text(str(party["publicDescription"]), 11, Color(1, 1, 1, 0.62)))
+		stack.add_child(prose(str(party["publicDescription"]), 11, Color(1, 1, 1, 0.62)))
 	if not str(party.get("leader", "")).is_empty():
 		stack.add_child(gap(9))
 		var lead := row(4)
@@ -1641,7 +1666,7 @@ func _render_institutions(institutions: Array) -> void:
 			main.add_child(gap(5))
 			main.add_child(text(str(pending), 10, Color("#a2b9c8")))
 		line.add_child(main)
-		var status := caps(str(entry.get("label", "")), 9, Color("#83d5aa") if member else Color("#99a7b7"), 800, 0)
+		var status := caps(str(entry.get("label", "")), 10, Color("#83d5aa") if member else Color("#99a7b7"), 800, 0)
 		status.size_flags_horizontal = Control.SIZE_SHRINK_END
 		status.custom_minimum_size.x = 104
 		status.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
@@ -1672,7 +1697,7 @@ func _render_intelligence(intelligence: Dictionary) -> void:
 	stack.add_child(top)
 	if not str(intelligence.get("summary", "")).is_empty():
 		stack.add_child(gap(8))
-		stack.add_child(text(str(intelligence["summary"]), 11, Color(1, 1, 1, 0.72)))
+		stack.add_child(prose(str(intelligence["summary"]), 11, Color(1, 1, 1, 0.72)))
 	var findings: Array = intelligence.get("findings", [])
 	if not findings.is_empty():
 		stack.add_child(gap(9))
@@ -1687,7 +1712,7 @@ func _render_intelligence(intelligence: Dictionary) -> void:
 			var words := column(2)
 			if not str(finding.get("topic", "")).is_empty():
 				words.add_child(text(str(finding["topic"]), 9, Color(1, 1, 1, 0.5), 800))
-			words.add_child(text(str(finding.get("text", "")), 10, Color(1, 1, 1, 0.6)))
+			words.add_child(prose(str(finding.get("text", "")), 10, Color(1, 1, 1, 0.6)))
 			line.add_child(words)
 			list.add_child(line)
 		if findings.size() > 4:
@@ -1735,7 +1760,7 @@ func _render_groups(groups: Dictionary) -> void:
 		words.add_child(clipped(str(group.get("name", "")), 12, Color(1, 1, 1, 0.88), 750))
 		words.add_child(text(str(group.get("held", "")), 10, Color(1, 1, 1, 0.45)))
 		if not str(group.get("description", "")).is_empty():
-			var about := text(str(group["description"]), 10, Color(1, 1, 1, 0.38))
+			var about := prose(str(group["description"]), 10, Color(1, 1, 1, 0.38))
 			about.max_lines_visible = 2
 			about.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 			words.add_child(about)
@@ -1842,10 +1867,11 @@ func _summary_strip(metrics: Array) -> Control:
 		cell.custom_minimum_size.x = 1
 		var inner := column(0)
 		var label := caps(str(metric.get("label", "")), 9, Color("#a2b6c6"), 750, 0)
+		label.add_theme_constant_override("line_spacing", int(round(9.44 * 1.4 - UI.font(750).get_height(9))))
 		label.custom_minimum_size.y = 19
 		inner.add_child(label)
 		inner.add_child(gap(4))
-		inner.add_child(tight(plain(str(metric.get("value", "")), 23, tone(str(metric.get("tone", ""))), 850), 23, 850, 1.18))
+		inner.add_child(tight(plain(str(metric.get("value", "")), 23, tone(str(metric.get("tone", ""))), 850), 23, 850, 27.4))
 		cell.add_child(inner)
 		cells.add_child(cell)
 	stack.add_child(cells)
@@ -2006,7 +2032,7 @@ func _relation_tools() -> Control:
 	field.add_theme_color_override("font_color", Color("#f4f4f5"))
 	field.add_theme_color_override("font_placeholder_color", Color(1, 1, 1, 0.42))
 	field.add_theme_stylebox_override("normal", UI.box(Color(0, 0, 0, 0.2), Color(1, 1, 1, 0.13), 7, 1, Vector4(9, 5, 9, 5)))
-	field.add_theme_stylebox_override("focus", UI.box(Color("#1e2a39"), Color(135 / 255.0, 201 / 255.0, 233 / 255.0, 0.5), 7, 1, Vector4(9, 5, 9, 5)))
+	field.add_theme_stylebox_override("focus", UI.box(Color("#1e2a39"), Color("#91ddf5"), 7, 2, Vector4(9, 5, 9, 5)))
 	field.add_theme_icon_override("clear", UI.icon("close", 12, Color(1, 1, 1, 0.5)))
 	field.text_changed.connect(_search_relations)
 	field.focus_entered.connect(func() -> void: _relation_focus = true)
@@ -2017,15 +2043,18 @@ func _relation_tools() -> Control:
 	order.focus_mode = Control.FOCUS_NONE
 	order.fit_to_longest_item = false
 	order.clip_text = true
-	order.custom_minimum_size = Vector2(118, 32)
+	order.custom_minimum_size = Vector2(98, 32)
 	order.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	order.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-	var shut := UI.box(Color("#242429"), Color(1, 1, 1, 0.13), 7, 1, Vector4(7, 4, 7, 4))
-	var lit := UI.box(Color("#242429"), Color(1, 1, 1, 0.22), 7, 1, Vector4(7, 4, 7, 4))
+	var shut := UI.box(Color("#242429"), Color(1, 1, 1, 0.13), 7, 1, Vector4(10, 4, 4, 4))
+	var lit := UI.box(Color("#242429"), Color(1, 1, 1, 0.22), 7, 1, Vector4(10, 4, 4, 4))
 	for state in [["normal", shut], ["focus", shut], ["disabled", shut], ["hover", lit], ["pressed", lit], ["hover_pressed", lit]]:
 		order.add_theme_stylebox_override(state[0], state[1])
 	order.add_theme_font_override("font", UI.font(400))
 	order.add_theme_font_size_override("font_size", 11)
+	order.add_theme_constant_override("arrow_margin", 4)
+	order.add_theme_constant_override("h_separation", 2)
+	order.add_theme_icon_override("arrow", _select_arrow())
 	for state in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_hover_pressed_color"]:
 		order.add_theme_color_override(state, Color("#e4e4e7"))
 	for index in range(RELATION_SORTS.size()):
@@ -2123,7 +2152,7 @@ func _relation_row(relation: Dictionary) -> Control:
 		detail.mouse_filter = Control.MOUSE_FILTER_PASS
 		detail.add_theme_stylebox_override("panel", edged(Color(0, 0, 0, 0.14), Color(138 / 255.0, 205 / 255.0, 230 / 255.0, 0.55), Vector4(2, 0, 0, 0), Vector4(11, 9, 11, 10)))
 		var words := column(0)
-		words.add_child(text(str(relation.get("summary", "")), 10, Color(1, 1, 1, 0.6)))
+		words.add_child(prose(str(relation.get("summary", "")), 10, Color(1, 1, 1, 0.6)))
 		var counterpart := str(relation.get("key", ""))
 		if not counterpart.is_empty():
 			words.add_child(gap(8))
@@ -2277,10 +2306,12 @@ func _render_economy() -> void:
 		page.add_child(_category("👥 Population"))
 		var population: Dictionary = sheet.get("population", {})
 		var people := card()
-		var people_stack := column(5)
+		var people_stack := column(0)
 		people_stack.add_child(text("TOTAL POPULATION", 10, Color(1, 1, 1, 0.45), 700, true, 1))
+		people_stack.add_child(gap(5))
 		people_stack.add_child(UI.label(str(population.get("total", "—")), 18, Color("#e7e7e9"), 800))
 		if not str(population.get("scope", "")).is_empty():
+			people_stack.add_child(gap(1))
 			people_stack.add_child(text(str(population["scope"]), 11, Color(1, 1, 1, 0.45)))
 		people.add_child(people_stack)
 		page.add_child(people)
@@ -2374,10 +2405,12 @@ func _index_datum(label: String, value: Variant, color: Color) -> StatHover:
 func _value_datum(label: String, value: String, sub: String, ink: Color) -> StatHover:
 	var cell := StatHover.new(edged(CLEAR, DOSSIER_LINE, Vector4(0, 0, 0, 1), Vector4(8, 10, 8, 10)), edged(DATUM_HOVER, DOSSIER_LINE, Vector4(0, 0, 0, 1), Vector4(8, 10, 8, 10)))
 	cell.size_flags_vertical = Control.SIZE_FILL
-	var inner := column(5)
+	var inner := column(0)
 	inner.add_child(text(label, 10, Color(1, 1, 1, 0.45), 700, true, 1))
+	inner.add_child(gap(5))
 	inner.add_child(text(value, 17, ink, 800))
 	if not sub.is_empty():
+		inner.add_child(gap(2))
 		inner.add_child(text(sub, 11, Color(1, 1, 1, 0.4)))
 	cell.add_child(inner)
 	return cell
@@ -2439,7 +2472,7 @@ func _wide_button(glyph: String, glyph_bg: Color, glyph_border: Color, glyph_ink
 	icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	icon.add_theme_stylebox_override("panel", UI.box(glyph_bg, glyph_border, 8, 1))
 	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var mark := UI.label(glyph, 15, glyph_ink)
+	var mark := UI.label(glyph, 15, glyph_ink, 400, "Segoe UI Symbol" if glyph == "⚙" else "Arial")
 	mark.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	mark.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	icon.add_child(mark)
@@ -2556,11 +2589,11 @@ func _ranking_context() -> Control:
 	var cells := row(0)
 	cells.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	var picked := plain(str(ranking.get("selectedRank", "—")), 26, Color("#8fd3f1"), 850)
-	tight(picked, 26, 850, 1.14)
+	tight(picked, 26, 850, 30.1)
 	cells.add_child(_ranking_summary(picked, "Selected country"))
 	cells.add_child(line_rule(Color(143 / 255.0, 187 / 255.0, 212 / 255.0, 0.16), true))
 	var counted := _rich(26, Color("#f0f6fa"), 850, 650, false)
-	tight(counted, 26, 850, 1.14)
+	tight(counted, 26, 850, 30.1)
 	counted.text = "%d[b][font_size=14][color=#8b9eaf] / %d[/color][/font_size][/b]" % [int(ranking.get("ranked", 0)), int(ranking.get("total", 0))]
 	cells.add_child(_ranking_summary(counted, "Countries ranked"))
 	stack.add_child(cells)
@@ -2940,7 +2973,7 @@ func _render_tracking(model_in: Variant) -> void:
 	glyph.custom_minimum_size = Vector2(40, 40)
 	glyph.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	glyph.add_theme_stylebox_override("panel", UI.box(Color(234 / 255.0, 179 / 255.0, 8 / 255.0, 0.12), Color(250 / 255.0, 204 / 255.0, 21 / 255.0, 0.22), 12, 1))
-	var cog := UI.label("⚙", 19, Color("#fbbf24"))
+	var cog := UI.label("⚙", 19, Color("#fbbf24"), 400, "Segoe UI Symbol")
 	cog.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	cog.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	glyph.add_child(cog)
@@ -3084,7 +3117,7 @@ func _render_tracking(model_in: Variant) -> void:
 	var advice_stack := column(5)
 	advice_stack.add_child(text("Suggested approach", 12, Color(1, 1, 1, 0.8), 800))
 	for value in ["Keep your country tracked.", "Add nearby powers or direct rivals.", "6 months is a good default.", "Stay bounded: 4–8 countries is usually plenty."]:
-		advice_stack.add_child(text("•  %s" % value, 11, Color(1, 1, 1, 0.48)))
+		advice_stack.add_child(prose("•  %s" % value, 11, Color(1, 1, 1, 0.48)))
 	advice.add_child(advice_stack)
 	aside.add_child(advice)
 	aside.add_child(UI.spacer(false))

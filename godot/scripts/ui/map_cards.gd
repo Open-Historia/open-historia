@@ -387,7 +387,7 @@ func _icon_button(glyph: String, title: String, size := 22) -> Button:
 	node.focus_mode = Control.FOCUS_NONE
 	node.custom_minimum_size = Vector2(size, size)
 	node.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-	node.add_theme_font_override("font", UI.font(400))
+	node.add_theme_font_override("font", UI.font(400, "Segoe UI Symbol" if glyph == "ⓘ" else "Arial"))
 	node.add_theme_font_size_override("font_size", 11)
 	node.add_theme_color_override("font_color", Color(1, 1, 1, 0.4))
 	node.add_theme_color_override("font_hover_color", Color(1, 1, 1, 0.8))
@@ -1103,6 +1103,7 @@ func _build_info_shell() -> void:
 	var scroll := ScrollContainer.new()
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_NEVER
 	var margin := MarginContainer.new()
 	_info_margin = margin
 	margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -1168,9 +1169,9 @@ func _pills(holder: Container, names: Array, limit: int, key: String) -> void:
 	var expanded: bool = _info_expanded.get(key, false)
 	var shown := names if expanded else names.slice(0, limit)
 	for value in shown:
-		chips.add_child(Country.pill(str(value), Color(0, 0, 0, 0), Color(1, 1, 1, 0.35), Color(1, 1, 1, 0.92), 12, 600, Vector4(10, 3, 10, 4)))
+		chips.add_child(Country.pill(str(value), Color(0, 0, 0, 0), Color(1, 1, 1, 0.35), Color(1, 1, 1, 0.92), 12, 600, Vector4(10, 4, 10, 5)))
 	if not expanded and names.size() > limit:
-		var more := Country.small_button("+%d more" % (names.size() - limit), Color(0, 0, 0, 0), Color(1, 1, 1, 0.35), Color(1, 1, 1, 0.92), 12, 600, Vector4(10, 3, 10, 4), 999)
+		var more := Country.small_button("+%d more" % (names.size() - limit), Color(0, 0, 0, 0), Color(1, 1, 1, 0.35), Color(1, 1, 1, 0.92), 12, 600, Vector4(10, 4, 10, 5), 999)
 		more.modulate.a = 0.6
 		more.pressed.connect(func() -> void:
 			_info_expanded[key] = true
@@ -1236,7 +1237,11 @@ func _render_info(loading: bool) -> void:
 		_fit_info()
 		return
 	if events.is_empty():
-		_info_body.add_child(Country.text("No events found for this country.", 13, Color(1, 1, 1, 0.5)))
+		var nothing := MarginContainer.new()
+		nothing.add_theme_constant_override("margin_top", 5)
+		nothing.add_theme_constant_override("margin_bottom", 6)
+		nothing.add_child(Country.text("No events found for this country.", 13, Color(1, 1, 1, 0.5)))
+		_info_body.add_child(nothing)
 	else:
 		var list := Country.column(7)
 		for item in events.slice(0, _info_limit):
@@ -1273,7 +1278,7 @@ func _render_info(loading: bool) -> void:
 			chip.tooltip_text = "What this country is — the map-maker set this, and the AI reads it as context"
 			chips.add_child(chip)
 		_info_body.add_child(chips)
-	_info_body.add_child(Country.gap(4))
+	_info_body.add_child(Country.gap(3))
 	_info_body.add_child(Country.text("Details", 16, UI.WHITE, 800))
 	var details := Country.row(13)
 	var aliases := Country.column(6)
