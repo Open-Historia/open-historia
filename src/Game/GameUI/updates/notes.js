@@ -90,7 +90,8 @@ const NEW_UPDATES = [
   },
   {
     // The Advisor's microphone (GameUI/AdvisorMic.jsx, runtime/speechInput.js): the browser's or the phone's own
-    // recogniser where there is one, otherwise Whisper base (80 MB) on the device. No AI request.
+    // recogniser where there is one; in the desktop app Windows' or macOS's own (electron/speechSystem.cjs), and
+    // Whisper base (80 MB) on the device where that cannot listen and on Linux. No AI request.
     id: "2026-11-advisor-microphone",
     kind: "minor",
     date: "2026-11-05",
@@ -100,7 +101,7 @@ const NEW_UPDATES = [
         title: "Speak to your advisor",
         items: [
           "The Advisor's input bar has a microphone beside Send. Press it and speak: what you say appears in the box, and it sends itself once you have been quiet for 3 seconds. Press it again to stop without sending.",
-          "It costs no AI requests. In the desktop app the speech is recognised on your computer, by a model downloaded once when you first press it.",
+          "It costs no AI requests. In the desktop app, Windows or macOS recognises the speech itself; where it cannot, and on Linux, a speech model downloaded once does it on your computer.",
         ],
       },
     ],

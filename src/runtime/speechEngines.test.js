@@ -5,9 +5,47 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { LANGUAGES } from "./i18n.js";
-import { ON_DEVICE_MODELS, SPEECH_ENGINES, baseLanguage, formatModelSize, modelBytes, onDeviceEngineFor, pickSpeechEngine, speechLocale, whisperLanguage } from "./speechEngines.js";
+import { ON_DEVICE_MODELS, SPEECH_ENGINES, baseLanguage, formatModelSize, modelBytes, onDeviceEngineFor, pickSpeechEngine, speechLocale, systemFallbackReason, systemSpeechPlatform, whisperLanguage } from "./speechEngines.js";
 
-const { ANDROID, BROWSER, WHISPER } = SPEECH_ENGINES;
+const { ANDROID, BROWSER, SYSTEM, WHISPER } = SPEECH_ENGINES;
+
+test("the desktop app on Windows or macOS asks the system's recogniser first, in every language", () => {
+  for (const language of ["en", "fr", "ja", "ar", "zh"]) {
+    assert.equal(pickSpeechEngine({ language, electron: true, systemRecognizer: true, browserRecognizer: true, onDevice: true }), SYSTEM, language);
+  }
+  // Even without the means to run Whisper: the system's needs none of them.
+  assert.equal(pickSpeechEngine({ language: "en", electron: true, systemRecognizer: true }), SYSTEM);
+});
+
+test("where the system's recogniser cannot listen, the same press falls back to Whisper", () => {
+  assert.equal(pickSpeechEngine({ language: "en", electron: true, systemRecognizer: true, skipSystem: true, browserRecognizer: true, onDevice: true }), WHISPER);
+  // Linux, or a build with no program for it.
+  assert.equal(pickSpeechEngine({ language: "de", electron: true, systemRecognizer: false, onDevice: true }), WHISPER);
+  assert.equal(pickSpeechEngine({ language: "de", electron: true, systemRecognizer: true, skipSystem: true, onDevice: false }), null);
+});
+
+test("the system's recogniser is the desktop app's alone: never a browser's, never Android's", () => {
+  assert.equal(pickSpeechEngine({ language: "en", systemRecognizer: true, browserRecognizer: true, onDevice: true }), BROWSER);
+  assert.equal(pickSpeechEngine({ language: "en", systemRecognizer: true, onDevice: true }), WHISPER);
+  assert.equal(pickSpeechEngine({ language: "en", native: true, nativeRecognizer: true, electron: true, systemRecognizer: true }), ANDROID);
+});
+
+test("why the system's recogniser did not listen", () => {
+  assert.equal(systemFallbackReason("privacy"), "privacy");
+  assert.equal(systemFallbackReason("denied"), "denied");
+  assert.equal(systemFallbackReason("language"), "language");
+  assert.equal(systemFallbackReason("unavailable"), "absent");
+  for (const code of ["failed", "network", undefined, "something new"]) assert.equal(systemFallbackReason(code), "failed", String(code));
+  // A microphone the system refused would be refused to Whisper too.
+  assert.equal(systemFallbackReason("microphone"), null);
+});
+
+test("Windows and macOS desktop apps may have a system recogniser; Linux has none", () => {
+  assert.equal(systemSpeechPlatform("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) open-historia/0.0.1 Chrome/138.0.0.0 Electron/37.2.0 Safari/537.36"), true);
+  assert.equal(systemSpeechPlatform("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Electron/37.2.0 Safari/537.36"), true);
+  assert.equal(systemSpeechPlatform("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Electron/37.2.0 Safari/537.36"), false);
+  assert.equal(systemSpeechPlatform(""), false);
+});
 
 test("Android uses the phone's recogniser, or nothing: never a model download", () => {
   assert.equal(pickSpeechEngine({ language: "en", native: true, nativeRecognizer: true, onDevice: true }), ANDROID);

@@ -6,12 +6,15 @@
 // guard that holds the Send button back holds this back too.
 //
 // The recogniser is the platform's or one that runs on the device
-// (src/runtime/speechInput.js); none of them costs an AI request. An on-device
-// model is downloaded once, after the player has seen its size and said yes.
+// (src/runtime/speechInput.js); none of them costs an AI request. In the
+// desktop app on Windows and macOS the system's own is asked first, and when it
+// cannot listen the same press goes on with the on-device model. That model is
+// downloaded once, after the player has seen its size and said yes, and the
+// prompt says why the system's was not used when it was tried.
 
 import React, { useEffect, useRef, useState } from "react";
 import { resolveChatLanguage } from "../../runtime/i18n.js";
-import { formatModelSize } from "../../runtime/speechEngines.js";
+import { SPEECH_ENGINES, formatModelSize } from "../../runtime/speechEngines.js";
 import { downloadSpeechModel, speechEngineFor, speechModelFor, speechModelReady, startSpeech } from "../../runtime/speechInput.js";
 
 const joinText = (before, heard) => [String(before || "").replace(/\s+$/, ""), String(heard || "").trim()].filter(Boolean).join(" ");
@@ -29,6 +32,9 @@ const AdvisorMic = ({ disabled, input, onInput, onSend, threadKey }) => {
   const [phase, setPhase] = useState("idle");
   const [progress, setProgress] = useState(0);
   const [problem, setProblem] = useState("");
+  // Why the system's recogniser did not listen on this press (speechEngines.js
+  // systemFallbackReason), for the download prompt.
+  const [fallback, setFallback] = useState(null);
   const sessionRef = useRef(null);
   const baseRef = useRef("");
   const inputRef = useRef(input);
@@ -39,7 +45,10 @@ const AdvisorMic = ({ disabled, input, onInput, onSend, threadKey }) => {
 
   const language = resolveChatLanguage();
   const engine = speechEngineFor(language);
-  const model = engine ? speechModelFor(engine) : null;
+  // The on-device engine: this one, or the one a press falls back to when the
+  // system's recogniser cannot listen.
+  const onDeviceEngine = engine === SPEECH_ENGINES.SYSTEM ? speechEngineFor(language, { skipSystem: true }) : engine;
+  const model = onDeviceEngine ? speechModelFor(onDeviceEngine) : null;
   const modelName = model?.name || "";
   const size = model ? formatModelSize(model.bytes) : "";
 
@@ -61,7 +70,22 @@ const AdvisorMic = ({ disabled, input, onInput, onSend, threadKey }) => {
     setProblem(code || "failed");
   };
 
-  const listen = () => {
+  // The on-device engine's half of a press: the download prompt the first
+  // time, else straight to listening.
+  const pressOnDevice = async () => {
+    if (!onDeviceEngine) {
+      showProblem("failed");
+      return;
+    }
+    if (model && !(await speechModelReady(onDeviceEngine).catch(() => false))) {
+      setProblem("");
+      setPhase("asking");
+      return;
+    }
+    listen(onDeviceEngine);
+  };
+
+  const listen = (chosen) => {
     turnRef.current += 1;
     const turn = turnRef.current;
     const current = () => turn === turnRef.current;
@@ -69,6 +93,7 @@ const AdvisorMic = ({ disabled, input, onInput, onSend, threadKey }) => {
     setProblem("");
     setPhase("listening");
     sessionRef.current = startSpeech({
+      engine: chosen,
       language,
       onState: (state) => { if (current()) setPhase(state); },
       onPartial: (text) => { if (current()) callbacksRef.current.onInput(joinText(baseRef.current, text)); },
@@ -82,6 +107,13 @@ const AdvisorMic = ({ disabled, input, onInput, onSend, threadKey }) => {
       },
       onError: (error) => {
         if (!current()) return;
+        // The system's recogniser could not listen: the same press goes on
+        // with the on-device model.
+        if (error?.code === "system") {
+          setFallback(error.fallback || null);
+          pressOnDevice();
+          return;
+        }
         showProblem(error?.code);
       },
     });
@@ -97,20 +129,20 @@ const AdvisorMic = ({ disabled, input, onInput, onSend, threadKey }) => {
       return;
     }
     if (phase !== "idle" || disabled) return;
-    if (model && !(await speechModelReady(engine).catch(() => false))) {
-      setProblem("");
-      setPhase("asking");
+    setFallback(null);
+    if (engine === SPEECH_ENGINES.SYSTEM) {
+      listen(engine);
       return;
     }
-    listen();
+    pressOnDevice();
   };
 
   const download = async () => {
     setPhase("downloading");
     setProgress(0);
     try {
-      await downloadSpeechModel(engine, ({ loaded, total }) => setProgress(total ? Math.floor((loaded / total) * 100) : 0));
-      listen();
+      await downloadSpeechModel(onDeviceEngine, ({ loaded, total }) => setProgress(total ? Math.floor((loaded / total) * 100) : 0));
+      listen(onDeviceEngine);
     } catch (error) {
       setPhase("idle");
       showProblem(error?.code || "model");
@@ -128,6 +160,15 @@ const AdvisorMic = ({ disabled, input, onInput, onSend, threadKey }) => {
     <div className="oh-advisor-mic-wrap">
       {phase === "asking" && model && (
         <div className="oh-advisor-mic-note" role="dialog" aria-label="Download the speech model">
+          {fallback === "privacy" ? (
+            <p>Windows' own speech recognition is off: it needs Online speech recognition turned on in Settings → Privacy & security → Speech.</p>
+          ) : fallback === "denied" ? (
+            <p>macOS has not allowed this app to use its speech recognition.</p>
+          ) : fallback === "language" ? (
+            <p>Your system's speech recognition does not have this language.</p>
+          ) : fallback === "failed" ? (
+            <p>Your system's speech recognition did not start.</p>
+          ) : null}
           <p>Speech is recognised on this device. It needs a one-time download of the {modelName} model ({size}).</p>
           <div className="oh-advisor-mic-actions">
             <button type="button" className="oh-advisor-mic-button" onClick={() => setPhase("idle")}>Cancel</button>

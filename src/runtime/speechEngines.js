@@ -9,6 +9,13 @@
 //   browser   the Web Speech API of a browser that has one. Not in Electron: it
 //             has the constructor, but no key for Google's service behind it,
 //             so every start fails with "network".
+//   system    in the desktop app on Windows and macOS, the operating system's
+//             own recogniser, through a small program the app ships
+//             (electron/speechSystem.cjs): Windows.Media.SpeechRecognition,
+//             SFSpeechRecognizer. Asked first on every press; where it cannot
+//             listen (no program, Windows' online speech recognition off,
+//             macOS refusing, the language not installed, any failure) the
+//             same press goes on with Whisper.
 //   whisper   OpenAI's Whisper base in a worker (Transformers.js on ONNX
 //             Runtime Web), for every language of the game: it was trained on
 //             all fifty, and its download is small enough to ask for.
@@ -19,8 +26,36 @@
 export const SPEECH_ENGINES = Object.freeze({
   ANDROID: "android",
   BROWSER: "browser",
+  SYSTEM: "system",
   WHISPER: "whisper",
 });
+
+// Why the system's recogniser did not listen, as the page tells the player
+// beside the download prompt, from the code its program gave:
+//   privacy   Windows: Online speech recognition is off (it dictates through
+//             Microsoft's service, and refuses until the player agrees)
+//   denied    macOS: speech recognition not allowed for the app
+//   language  the system has no recogniser for the player's language
+//   failed    anything else that kept it from starting
+//   absent    no program to ask (Linux, a build without one): said nothing
+//             about, and not asked again this session
+// null for a microphone the system refused: Whisper would be refused too, so
+// that is the permission error, not a fallback.
+export const systemFallbackReason = (code) => {
+  switch (code) {
+    case "microphone": return null;
+    case "privacy":
+    case "denied":
+    case "language":
+      return code;
+    case "unavailable": return "absent";
+    default: return "failed";
+  }
+};
+
+// Whether the desktop app may have a system recogniser: Windows and macOS
+// builds carry one (scripts/build-speech-helpers.mjs); Linux has none.
+export const systemSpeechPlatform = (userAgent) => /\bWindows NT\b|\bMacintosh\b|\bMac OS X\b/.test(String(userAgent || ""));
 
 // Whisper's codes for the game's languages where they differ from the game's.
 const WHISPER_CODES = Object.freeze({ fil: "tl" });
@@ -76,6 +111,10 @@ export const onDeviceEngineFor = (code) => (whisperLanguage(code) ? SPEECH_ENGIN
 //   nativeRecognizer  its SpeechRecognition plugin is there
 //   browserRecognizer the page has SpeechRecognition / webkitSpeechRecognition
 //   electron          the page runs in the desktop app
+//   systemRecognizer  the desktop app is on Windows or macOS, and its program
+//                     was not found missing this session
+//   skipSystem        the system's recogniser could not listen on this press
+//                     (the fallback the same press goes on with)
 //   browserBroken     the browser's recogniser failed this session (network,
 //                     refused by the browser, language not offered)
 //   onDevice          a worker, WebAssembly and the microphone are there
@@ -85,12 +124,17 @@ export const pickSpeechEngine = ({
   nativeRecognizer = false,
   browserRecognizer = false,
   electron = false,
+  systemRecognizer = false,
+  skipSystem = false,
   browserBroken = false,
   onDevice = false,
 } = {}) => {
   // A model download is no thing to put on a phone that has a recogniser of
   // its own, and the Android WebView has no Web Speech API.
   if (native) return nativeRecognizer ? SPEECH_ENGINES.ANDROID : null;
+  // The owner's rule: the computer's own speech recognition first, Whisper
+  // only where it does not work.
+  if (electron && systemRecognizer && !skipSystem) return SPEECH_ENGINES.SYSTEM;
   if (browserRecognizer && !electron && !browserBroken) return SPEECH_ENGINES.BROWSER;
   if (!onDevice) return null;
   return onDeviceEngineFor(language);

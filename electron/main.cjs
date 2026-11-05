@@ -21,6 +21,7 @@ const { MULTIPLAYER_APP_NAME } = require("./channel.cjs");
 const { createLayeredUpdater } = require("./layeredUpdate.cjs");
 const { attachZoomKeys } = require("./zoomKeys.cjs");
 const { installMicrophonePermission } = require("./microphone.cjs");
+const { createSystemSpeech } = require("./speechSystem.cjs");
 const { createPayloadUpdater } = require("./payloadUpdate.cjs");
 const payloadBoot = require("./payloadBoot.cjs");
 const { clearOtherPortsCaches } = require("./staleCaches.cjs");
@@ -522,6 +523,12 @@ const installDesktopDisplayMode = () => {
       return { supported: true, mode };
     },
   };
+};
+
+// The Advisor's microphone through the system's own speech recognition
+// (speechSystem.cjs), for POST /api/desktop/speech/listen.
+const installSystemSpeech = () => {
+  globalThis.__ohSystemSpeech = createSystemSpeech({ log: (level, event, message) => logMain(level, event, message) });
 };
 
 // --- map data ---------------------------------------------------------------
@@ -1108,6 +1115,7 @@ const boot = async () => {
   });
   installSharedGameEngine();
   installDesktopDisplayMode();
+  installSystemSpeech();
   relocateLegacyStockMap();
   relocateOwnFolderMap();
   let pending = missingAssets();
@@ -1230,6 +1238,7 @@ if (!app.requestSingleInstanceLock()) {
   app.on("window-all-closed", () => app.quit());
   app.on("before-quit", () => {
     quitting = true;
+    globalThis.__ohSystemSpeech?.stopAll();
   });
   ipcMain.handle("setup:cancel", () => app.quit());
   // "Download the beta" on the update screen: in the player's own browser, so
