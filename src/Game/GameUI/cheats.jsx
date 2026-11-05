@@ -205,8 +205,8 @@ const TOOL_GROUPS = [
 ];
 
 const inputStyle = {
-    background: "rgba(0,0,0,0.28)",
-    border: "1px solid rgba(255,255,255,0.16)",
+    background: "var(--oh-ui-overlay-strong, rgba(0,0,0,0.28))",
+    border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.16))",
     borderRadius: 8,
     boxSizing: "border-box",
     color: "#fff",
@@ -218,8 +218,8 @@ const inputStyle = {
 
 const buttonStyle = {
     alignItems: "center",
-    background: "rgba(255,255,255,0.06)",
-    border: "1px solid rgba(255,255,255,0.12)",
+    background: "var(--oh-ui-overlay-card, rgba(255,255,255,0.06))",
+    border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.12))",
     borderRadius: 8,
     color: "#fff",
     cursor: "pointer",
@@ -233,15 +233,15 @@ const buttonStyle = {
 
 const primaryButtonStyle = {
     ...buttonStyle,
-    background: "rgba(255,255,255,0.1)",
-    border: "1px solid rgba(255,255,255,0.28)",
+    background: "var(--oh-ui-active, rgba(255,255,255,0.1))",
+    border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.28))",
 };
 
 const homeToolButtonStyle = {
     ...buttonStyle,
     alignItems: "center",
-    background: "rgba(255,255,255,0.04)",
-    border: "1px solid rgba(255,255,255,0.09)",
+    background: "var(--oh-ui-overlay-card, rgba(255,255,255,0.04))",
+    border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.09))",
     borderRadius: 10,
     gap: "0.65rem",
     justifyContent: "flex-start",
@@ -252,8 +252,8 @@ const homeToolButtonStyle = {
 
 const iconTileStyle = {
     alignItems: "center",
-    background: "rgba(255,255,255,0.06)",
-    border: "1px solid rgba(255,255,255,0.1)",
+    background: "var(--oh-ui-overlay-card, rgba(255,255,255,0.06))",
+    border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.1))",
     borderRadius: 8,
     color: "#f4f4f5",
     display: "flex",
@@ -266,8 +266,8 @@ const iconTileStyle = {
 };
 
 const badgeStyle = {
-    background: "rgba(255,255,255,0.06)",
-    border: "1px solid rgba(255,255,255,0.1)",
+    background: "var(--oh-ui-overlay-card, rgba(255,255,255,0.06))",
+    border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.1))",
     borderRadius: 999,
     color: "rgba(255,255,255,0.52)",
     flexShrink: 0,
@@ -477,9 +477,9 @@ const CheatsPanel = ({ open, onClose, onOpenForces }) => {
         <div
         className="oh-hud-panel"
         style={{
-            background: "rgba(24, 24, 27, 0.96)",
+            background: "var(--oh-ui-overlay, rgba(24, 24, 27, 0.96))",
             backdropFilter: "blur(8px)",
-            border: "1px solid rgba(255,255,255,0.1)",
+            border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.1))",
             borderRadius: 18,
             boxShadow: "-4px 0 24px rgba(0,0,0,0.4)",
             color: "white",
@@ -502,8 +502,8 @@ const CheatsPanel = ({ open, onClose, onOpenForces }) => {
             <div style={{ overflowY: "auto", paddingRight: "0.15rem" }}>
             <div style={{
                 alignItems: "center",
-                background: "rgba(255,255,255,0.04)",
-                border: "1px solid rgba(255,255,255,0.09)",
+                background: "var(--oh-ui-overlay-card, rgba(255,255,255,0.04))",
+                border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.09))",
                 borderRadius: 11,
                 display: "flex",
                 gap: "0.65rem",
