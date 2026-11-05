@@ -276,7 +276,7 @@ A **suggestion** is a comment's attachment and is never copied. `refreshPublishe
 
 When the hub cannot be read (offline, or its index is still a version 1 file) the Community tab, the flag and basemap browsers and every download fail with one of the `HUB_FILE_TEXTS` sentences. There is no fallback to GitHub's API or to a post's attachment.
 
-The count is downloads, not people. The desktop serves a file it already has from `hub-cache/`, so importing the same file twice on one machine counts once. What the old counter had reached for each post is added in by the hub, so no number started again from nothing ([delivery-and-deploy.md §7.1](delivery-and-deploy.md)).
+The **import count** is how many times a scenario's checked file has been downloaded, as GitHub counts a release file's downloads: downloads, not people. The desktop serves a file it already has from `hub-cache/`, so importing the same file twice on one machine counts once. What the old counter had reached for each post is added in by the hub, so no number started again from nothing ([delivery-and-deploy.md §7.1](delivery-and-deploy.md)).
 
 ## Community flags — `src/runtime/communityFlags.js`
 

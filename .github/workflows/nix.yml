@@ -1,0 +1,113 @@
+# Open Historia for Nix (flake.nix, default.nix).
+#
+# Nix players install from this repository (`nix profile install
+# github:Open-Historia/open-historia`), so every merge to main is a release
+# for them. This workflow keeps that working and fast:
+#
+#   build    every push to main and every pull request that touches what the
+#            package is made from: builds it, starts the server and checks the
+#            game, the map generator and the stock map are there. On main, the
+#            build is pushed to the Cachix binary cache when one is set up
+#            (repository variable CACHIX_CACHE, secret CACHIX_AUTH_TOKEN), so
+#            players download it ready-built instead of building it.
+#   update   every Monday (or by hand): moves flake.lock to the newest
+#            nixpkgs, builds with it, and opens a pull request when it changed.
+name: Nix
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - flake.nix
+      - flake.lock
+      - default.nix
+      - nix/**
+      - package.json
+      - package-lock.json
+      - scripts/map-assets.json
+      - scripts/fmg-vendor.mjs
+      - scripts/fetch-fmg.mjs
+      - src/**
+      - server/**
+      - public/**
+      - .github/workflows/nix.yml
+  pull_request:
+    paths:
+      - flake.nix
+      - flake.lock
+      - default.nix
+      - nix/**
+      - package.json
+      - package-lock.json
+      - scripts/map-assets.json
+      - scripts/fmg-vendor.mjs
+      - scripts/fetch-fmg.mjs
+      - .github/workflows/nix.yml
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nix-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: cachix/install-nix-action@v31
+      - name: Use the binary cache
+        if: vars.CACHIX_CACHE != ''
+        uses: cachix/cachix-action@v16
+        with:
+          name: ${{ vars.CACHIX_CACHE }}
+          authToken: ${{ github.ref == 'refs/heads/main' && secrets.CACHIX_AUTH_TOKEN || '' }}
+      - name: Check the flake
+        run: nix flake check --no-build
+      - name: Build
+        run: nix build --print-build-logs .#default
+      - name: Start the server
+        run: |
+          export OH_DATA_DIR="$RUNNER_TEMP/oh-data" PORT=3123 OH_DISCORD_PRESENCE=0 OH_VISIT_COUNT=0
+          ./result/bin/open-historia > "$RUNNER_TEMP/server.log" 2>&1 &
+          for attempt in $(seq 1 60); do
+            curl -sf "http://127.0.0.1:$PORT/" > /dev/null && break
+            sleep 2
+          done
+          cat "$RUNNER_TEMP/server.log"
+          curl -sf "http://127.0.0.1:$PORT/" | grep -qi "<html"
+          curl -sf "http://127.0.0.1:$PORT/fmg/index.html" > /dev/null
+          curl -sf "http://127.0.0.1:$PORT/api/library" > /dev/null
+          test -L "$OH_DATA_DIR/stock/regions.geojson"
+
+  update:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: cachix/install-nix-action@v31
+      - name: Move flake.lock to the newest nixpkgs
+        run: nix flake update
+      - name: Build with it
+        run: nix build --print-build-logs .#default
+      - name: Open a pull request
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: nix/update-flake-lock
+          base: main
+          add-paths: flake.lock
+          commit-message: "Nix: flake.lock to the newest nixpkgs"
+          title: "Nix: flake.lock to the newest nixpkgs"
+          body: |
+            The weekly update of the Nix package's pinned nixpkgs (the Nix workflow's `update` job). It built with the new lock before this was opened.
+          delete-branch: true
