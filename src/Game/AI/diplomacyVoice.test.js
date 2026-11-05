@@ -22,6 +22,8 @@ test("every request that writes a country's message to the player says which cou
   assert.match(gameplay, /the lines marked \$\{player\} in the conversation are what it said to you\. Answer them as the polity you write for, never as \$\{player\}\./);
   // And what every note and message is written against.
   const schemas = read("./gameplaySchemas.js");
-  assert.match(schemas, /The initiator's own first message, in its leader's voice, TO the player: never the player's words./);
+  assert.match(schemas, /The speaker's own first message, in its leader's voice, TO the player: never the player's words./);
+  // And who that speaker is: one of the chat's countries, never a bloc's line pinned on a country it addresses.
+  assert.match(schemas, /Who sends it: one of countries, as written. Never the player./);
   assert.match(schemas, /send_message: spoken message only, in the actor's own voice, written TO the others/);
 });

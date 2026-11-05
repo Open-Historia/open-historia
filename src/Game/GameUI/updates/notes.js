@@ -53,6 +53,25 @@ import { PAST_UPDATES } from "./notesPast.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // Two chats the owner sent, 2026-11-04: a "Meccan Alliance" condemnation of Iran shown twice, as Iran's own words,
+    // and a "GSSTO" ultimatum to Tokyo and Toronto shown as Japan's. A chat's first line is said by whom the skip named
+    // (AI/chatSpeaker.js), and a line the same sender just said is not added again (AI/chatFold.js).
+    id: "2026-11-chat-opener-speaker",
+    kind: "minor",
+    date: "2026-11-05",
+    channel: "beta",
+    banners: [
+      {
+        title: "Who wrote to you",
+        items: [
+          "A letter an alliance or organisation sends you is shown under its own name, no longer as the words of a country it is writing to.",
+          "A country that writes first in a chat is added to that chat if it was not in it.",
+          "The same letter no longer appears twice in a row in a chat.",
+        ],
+      },
+    ],
+  },
+  {
     // The Advisor's microphone (GameUI/AdvisorMic.jsx, runtime/speechInput.js): the browser's or the phone's own
     // recogniser where there is one, otherwise Whisper base (80 MB) on the device. No AI request.
     id: "2026-11-advisor-microphone",
