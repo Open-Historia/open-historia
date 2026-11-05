@@ -4,7 +4,8 @@
 // page up, so it lives here.
 //
 // The weights come from the model host once and stay in the browser's Cache
-// API; the ONNX Runtime it runs on is part of the build (vite.config.ts), so
+// API (WHISPER_CACHE, which the page's sweep of old caches in assets.js leaves
+// alone); the ONNX Runtime it runs on is part of the build (vite.config.ts), so
 // the audio and the runtime never leave the device and only the first use
 // needs a connection.
 //
@@ -49,10 +50,14 @@ const progressTracker = () => {
 // download. Its key is the file's URL on the model host.
 const fileUrl = (file) => `https://huggingface.co/${MODEL.repo}/resolve/${MODEL.revision}/${file}`;
 
+// Transformers.js's own cache name, kept so a model downloaded before stays;
+// named in assets.js too, whose sweep of old caches keeps it.
+const WHISPER_CACHE = "transformers-cache";
+
 const cached = async () => {
   try {
     if (typeof caches === "undefined") return false;
-    const cache = await caches.open("transformers-cache");
+    const cache = await caches.open(WHISPER_CACHE);
     for (const file of Object.keys(MODEL.files)) {
       if (!(await cache.match(fileUrl(file)))) return false;
     }
@@ -69,15 +74,54 @@ const cached = async () => {
 // languages stays well under 25 tokens a second.
 const maxTokensFor = (samples) => Math.min(440, 32 + Math.ceil((samples / SAMPLE_RATE) * 25));
 
+// A small file of the model, from the cache or else from the model host (then
+// kept), under the key Transformers.js uses: the file's URL at the pinned
+// revision.
+const readJson = async (file) => {
+  const url = fileUrl(file);
+  const cache = typeof caches === "undefined" ? null : await caches.open(WHISPER_CACHE).catch(() => null);
+  let response = await cache?.match(url);
+  if (!response) {
+    response = await fetch(url);
+    if (!response.ok) throw new Error(`${file}: ${response.status}`);
+    await cache?.put(url, response.clone()).catch(() => {});
+  }
+  return response.json();
+};
+
 const loadWhisper = async () => {
-  const { pipeline, env } = await import("@huggingface/transformers");
+  const {
+    env,
+    AutoModelForSpeechSeq2Seq,
+    AutomaticSpeechRecognitionPipeline,
+    WhisperFeatureExtractor,
+    WhisperProcessor,
+    WhisperTokenizer,
+  } = await import("@huggingface/transformers");
   env.allowLocalModels = false;
   env.useBrowserCache = true;
+  env.cacheKey = WHISPER_CACHE;
   // Its runtime's glue is inside the bundle; only the WebAssembly is a file.
   env.backends.onnx.wasm.wasmPaths = { wasm: new URL(whisperOrtWasm, self.location.href).href };
   env.backends.onnx.wasm.numThreads = THREADS;
   const report = progressTracker();
-  const asr = await pipeline("automatic-speech-recognition", MODEL.repo, {
+  // Not pipeline(): in Transformers.js 4.3.1 it first asks the model host
+  // whether the "main" revision has a tokenizer and a preprocessor config
+  // (get_tokenizer_files and get_processor_files drop the revision), which are
+  // never in the cache, so every load needed a connection and failed without
+  // one. The pipeline is put together here from the same parts, each read at
+  // the pinned revision through the cache.
+  const [tokenizerJson, tokenizerConfig, preprocessorConfig] = await Promise.all([
+    readJson("tokenizer.json"),
+    readJson("tokenizer_config.json"),
+    readJson("preprocessor_config.json"),
+  ]);
+  const tokenizer = new WhisperTokenizer(tokenizerJson, tokenizerConfig);
+  const processor = new WhisperProcessor(preprocessorConfig, {
+    tokenizer,
+    feature_extractor: new WhisperFeatureExtractor(preprocessorConfig),
+  });
+  const model = await AutoModelForSpeechSeq2Seq.from_pretrained(MODEL.repo, {
     revision: MODEL.revision,
     device: "wasm",
     dtype: { encoder_model: "q8", decoder_model_merged: "q8" },
@@ -85,6 +129,7 @@ const loadWhisper = async () => {
       if (event?.status === "progress") report(event.file, event.loaded);
     },
   });
+  const asr = new AutomaticSpeechRecognitionPipeline({ task: "automatic-speech-recognition", model, tokenizer, processor });
   // The page hands over pieces of a turn cut at pauses, none longer than
   // Whisper's 30-second window (speechOnDevice.js), so each is one pass of the
   // encoder and none needs the pipeline's overlapping chunks. The language is

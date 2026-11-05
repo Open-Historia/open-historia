@@ -419,7 +419,11 @@ test("the page's start-up sweep of old caches leaves the kept music", () => {
   const assets = read("src/runtime/assets.js");
   assert.ok(assets.includes(`const KEPT_MUSIC_CACHE_NAME = "${KEPT_MUSIC_CACHE}";`), "the same name in both files");
   // (And the saves brought across from the site's old address, runtime/web/saveMove.js, and the
-  // translation model, runtime/translationWorker.js.)
-  assert.ok(assets.includes("if (key !== PRELOAD_CACHE_NAME && key !== KEPT_MUSIC_CACHE_NAME && key !== SAVE_MOVE_CACHE_NAME && key !== TRANSLATION_MODEL_CACHE_NAME) caches.delete(key).catch(() => {});"));
+  // two models: the translator's, runtime/translationWorker.js, and the microphone's, runtime/speechWorker.js.)
+  assert.ok(assets.includes("if (!KEPT_CACHE_NAMES.has(key)) caches.delete(key).catch(() => {});"));
+  const kept = assets.slice(assets.indexOf("const KEPT_CACHE_NAMES = new Set(["), assets.indexOf("]);", assets.indexOf("const KEPT_CACHE_NAMES")));
+  for (const name of ["PRELOAD_CACHE_NAME", "KEPT_MUSIC_CACHE_NAME", "SAVE_MOVE_CACHE_NAME", "TRANSLATION_MODEL_CACHE_NAME", "WHISPER_CACHE_NAME"]) {
+    assert.ok(kept.includes(name), name);
+  }
   assert.equal(KEPT_MUSIC_CACHE, "oh-music-v1");
 });

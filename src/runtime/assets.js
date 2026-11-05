@@ -29,12 +29,23 @@ const SAVE_MOVE_CACHE_NAME = "oh-save-move";
 // The translator's model on this device, downloaded once (translationWorker.js
 // MODEL_CACHE): not an older version's cache either.
 const TRANSLATION_MODEL_CACHE_NAME = "oh-translation-model-v1";
+// The Advisor microphone's Whisper model (speechWorker.js WHISPER_CACHE,
+// Transformers.js's own name for its cache): swept on every start before, so
+// the model was downloaded again each time the game opened.
+const WHISPER_CACHE_NAME = "transformers-cache";
+const KEPT_CACHE_NAMES = new Set([
+  PRELOAD_CACHE_NAME,
+  KEPT_MUSIC_CACHE_NAME,
+  SAVE_MOVE_CACHE_NAME,
+  TRANSLATION_MODEL_CACHE_NAME,
+  WHISPER_CACHE_NAME,
+]);
 if (typeof caches !== "undefined" && caches?.keys) {
   caches
     .keys()
     .then((keys) => {
       for (const key of keys) {
-        if (key !== PRELOAD_CACHE_NAME && key !== KEPT_MUSIC_CACHE_NAME && key !== SAVE_MOVE_CACHE_NAME && key !== TRANSLATION_MODEL_CACHE_NAME) caches.delete(key).catch(() => {});
+        if (!KEPT_CACHE_NAMES.has(key)) caches.delete(key).catch(() => {});
       }
     })
     .catch(() => {});
