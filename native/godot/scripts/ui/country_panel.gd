@@ -11,9 +11,22 @@ const MIN_WIDTH := 280.0
 const DEFAULT_WIDTH := 320.0
 const LEFT_CLEARANCE := 376.0
 const FOOTER := "Click any country on the map to inspect it, or open its card and choose Stats."
-const CARD_BG := Color(1, 1, 1, 0.05)
-const CARD_BORDER := Color(1, 1, 1, 0.08)
+const CARD_BG := Color(18 / 255.0, 32 / 255.0, 47 / 255.0, 0.44)
+const CARD_BORDER := Color(151 / 255.0, 190 / 255.0, 214 / 255.0, 0.11)
 const ROW_RULE := Color(1, 1, 1, 0.07)
+const CLEAR := Color(0, 0, 0, 0)
+const DOSSIER_LINE := Color(156 / 255.0, 188 / 255.0, 211 / 255.0, 0.13)
+const DOSSIER_PAGE := Color("#141c27")
+const DOSSIER_TOOLBAR := Color(10 / 255.0, 16 / 255.0, 25 / 255.0, 0.74)
+const DOSSIER_TEXT := Color("#eef3f7")
+const SECTION_INK := Color("#adcadc")
+const LABEL_INK := Color("#aac8dc")
+const LEDGER_INK := Color("#d2e0ec")
+const LEDGER_RULE := Color(144 / 255.0, 181 / 255.0, 207 / 255.0, 0.28)
+const RECORD_HOVER := Color(129 / 255.0, 183 / 255.0, 216 / 255.0, 0.055)
+const DATUM_HOVER := Color(95 / 255.0, 160 / 255.0, 192 / 255.0, 0.075)
+const INDEX_LEAST := 192.0
+const RELATION_SORTS := [["strongest", "Strongest first"], ["weakest", "Weakest first"], ["alphabetical", "Name A–Z"]]
 
 var engine: EngineLink
 var context: Dictionary = {}
@@ -44,8 +57,20 @@ var _modal: Control
 var _modal_kind := ""
 var _donut: StatDonut
 var _legend_rows: Array = []
-var _tabs_fitted := true
 var _sheet_target := ""
+var page: VBoxContainer
+var relation_search := ""
+var relation_sort := "strongest"
+var relation_open := ""
+var _roster: Dictionary = {}
+var _relations_box: VBoxContainer
+var _relation_field: LineEdit
+var _relation_focus := false
+var _relation_ask := 0
+var _overlay: Control
+var _strip: Control
+var _sticky: Control
+var _toolbar_style: StyleBoxFlat
 var _busy_timer: Timer
 var _tracking_model: Dictionary = {}
 var compiling := false
@@ -54,15 +79,16 @@ var _compile_call := 0
 
 
 func _init() -> void:
-	super._init("Country", "Politics, diplomacy and national statistics", "drawer", DEFAULT_WIDTH)
+	super._init("Country", "", "drawer", DEFAULT_WIDTH)
 	set_tint(Color(24 / 255.0, 24 / 255.0, 27 / 255.0, 0.95))
 	_restyle_header()
 	_build_handle()
 	var margin := body.get_parent() as MarginContainer
-	for side in [["margin_left", 16], ["margin_right", 16], ["margin_top", 14], ["margin_bottom", 20]]:
+	for side in [["margin_left", 0], ["margin_right", 0], ["margin_top", 0], ["margin_bottom", 20]]:
 		margin.add_theme_constant_override(side[0], side[1])
 	body.add_theme_constant_override("separation", 0)
-	scroll.get_v_scroll_bar().modulate.a = 0.0
+	page = body
+	_style_scroll()
 	_busy_timer = Timer.new()
 	_busy_timer.wait_time = 0.8
 	_busy_timer.timeout.connect(_poll_busy)
@@ -93,6 +119,7 @@ func show_country(name := "") -> void:
 		findings_all = false
 		sheet_status = "idle"
 		sheet_error = ""
+		_reset_relations()
 	if not is_open():
 		set_open(true)
 	_busy_timer.start()
@@ -136,7 +163,17 @@ func set_tab(next: String) -> void:
 	ranking.clear()
 	ranking_metric = ""
 	ranking_all = false
+	_reset_relations()
 	await _load(target)
+
+
+func _reset_relations() -> void:
+	relation_search = ""
+	relation_sort = "strongest"
+	relation_open = ""
+	_roster = {}
+	_relation_focus = false
+	_relation_ask += 1
 
 
 func set_drawer_width(width: float) -> void:
@@ -144,8 +181,6 @@ func set_drawer_width(width: float) -> void:
 	var most: float = max(viewport - LEFT_CLEARANCE, min(DEFAULT_WIDTH, viewport - 16.0))
 	_drawer_width = round(clamp(width, min(MIN_WIDTH, most), most))
 	set_meta("width", _drawer_width)
-	if not data.is_empty() and not data.has("empty") and _tabs_fit(_tab_labels()) != _tabs_fitted:
-		_render()
 	if is_open():
 		offset_left = -8.0 - _drawer_width
 		offset_right = -8.0
@@ -163,14 +198,21 @@ func _restyle_header() -> void:
 	var titles := header_title.get_parent() as VBoxContainer
 	var row := titles.get_parent() as HBoxContainer
 	var header := row.get_parent() as MarginContainer
-	for side in [["margin_left", 12], ["margin_right", 12], ["margin_top", 12], ["margin_bottom", 12]]:
+	for side in [["margin_left", 13], ["margin_right", 13], ["margin_top", 10], ["margin_bottom", 10]]:
 		header.add_theme_constant_override(side[0], side[1])
-	header_title.add_theme_font_override("font", UI.font(800))
-	header_title.add_theme_font_size_override("font_size", 14)
-	header_title.add_theme_color_override("font_color", UI.WHITE)
-	header_subtitle.add_theme_font_size_override("font_size", 10)
-	header_subtitle.add_theme_color_override("font_color", Color(1, 1, 1, 0.38))
-	var mark := UI.label("🏳", 16, UI.WHITE)
+	header.custom_minimum_size.y = 48
+	row.add_theme_constant_override("separation", 9)
+	titles.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_toolbar_style = UI.box(DOSSIER_TOOLBAR, CLEAR, 0, 0)
+	_toolbar_style.corner_radius_top_left = 18
+	_toolbar_style.corner_radius_top_right = 18
+	header.draw.connect(func() -> void: header.draw_style_box(_toolbar_style, Rect2(Vector2.ZERO, header.size)))
+	header_title.add_theme_font_override("font", UI.font(850, "Arial", 2))
+	header_title.add_theme_font_size_override("font_size", 12)
+	header_title.add_theme_color_override("font_color", Color("#d7e5f0"))
+	header_title.uppercase = true
+	header_subtitle.visible = false
+	var mark := UI.label("◈", 18, Color("#8ecbe8"))
 	mark.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	row.add_child(mark)
 	row.move_child(mark, 0)
@@ -178,15 +220,38 @@ func _restyle_header() -> void:
 	if close_button:
 		close_button.tooltip_text = "Close country panel"
 		close_button.icon = UI.icon("close", 18, Color(1, 1, 1, 0.55))
+		close_button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	var rule := header.get_parent().get_child(1) as ColorRect
 	if rule:
-		rule.color = Color(1, 1, 1, 0.1)
+		rule.color = DOSSIER_LINE
+
+
+func _style_scroll() -> void:
+	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	var sheet := UI.box(DOSSIER_PAGE, CLEAR, 0, 0)
+	sheet.corner_radius_bottom_left = 18
+	sheet.corner_radius_bottom_right = 18
+	scroll.add_theme_stylebox_override("panel", sheet)
+	var bar := scroll.get_v_scroll_bar()
+	var grab := UI.box(Color(148 / 255.0, 187 / 255.0, 209 / 255.0, 0.3), CLEAR, 999, 0)
+	var held := UI.box(Color(148 / 255.0, 187 / 255.0, 209 / 255.0, 0.45), CLEAR, 999, 0)
+	bar.add_theme_stylebox_override("grabber", grab)
+	bar.add_theme_stylebox_override("grabber_highlight", held)
+	bar.add_theme_stylebox_override("grabber_pressed", held)
+	var track := UI.box(CLEAR, CLEAR, 0, 0, Vector4(1, 4, 1, 4))
+	bar.add_theme_stylebox_override("scroll", track)
+	bar.add_theme_stylebox_override("scroll_focus", track)
+	bar.custom_minimum_size.x = 7
+	bar.value_changed.connect(func(_value: float) -> void: _place_sticky.call_deferred())
+	scroll.resized.connect(_place_sticky)
+	(body.get_parent() as Control).item_rect_changed.connect(_place_sticky)
 
 
 func _build_handle() -> void:
 	var overlay := Control.new()
 	overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(overlay)
+	_overlay = overlay
 	var handle := Control.new()
 	handle.anchor_bottom = 1.0
 	handle.offset_right = 10.0
@@ -302,7 +367,7 @@ func _load(asked: String) -> void:
 		return
 	_sequence += 1
 	var sequence := _sequence
-	var reply: Dictionary = await engine.request("country.view", {"target": asked, "tab": tab})
+	var reply: Dictionary = await engine.request("country.view", {"target": asked, "tab": tab, "relationSearch": relation_search, "relationSort": relation_sort})
 	if sequence != _sequence or not is_open():
 		return
 	if not reply.get("ok", false):
@@ -351,7 +416,7 @@ func _load_sheet(force: bool, reassess: bool, generate: bool, sequence: int) -> 
 		"ready":
 			sheet_status = "ready"
 			sheet_error = ""
-			var view: Dictionary = await engine.request("country.view", {"target": target, "tab": tab})
+			var view: Dictionary = await engine.request("country.view", {"target": target, "tab": tab, "relationSearch": relation_search, "relationSort": relation_sort})
 			if sequence != _sequence or not view.get("ok", false):
 				return status
 			data = view.get("result", {})
@@ -380,7 +445,7 @@ func _background(fn: String, sequence: int) -> void:
 	if sequence != _sequence or asked != target or not is_open():
 		return
 	if reply.get("ok", false):
-		var view: Dictionary = await engine.request("country.view", {"target": target, "tab": tab})
+		var view: Dictionary = await engine.request("country.view", {"target": target, "tab": tab, "relationSearch": relation_search, "relationSort": relation_sort})
 		if sequence == _sequence and is_open() and view.get("ok", false):
 			data = view.get("result", {})
 			_render()
@@ -537,14 +602,75 @@ static func small_button(value: String, bg: Color, border: Color, ink: Color, si
 	return node
 
 
-func _section(title: String, top := 17.6) -> Control:
-	var holder := VBoxContainer.new()
-	holder.add_theme_constant_override("separation", 0)
+static func edged(bg: Color, line: Color, widths: Vector4, margins := Vector4.ZERO, radius := 0) -> StyleBoxFlat:
+	var style := StyleBoxFlat.new()
+	style.bg_color = bg
+	style.border_color = line
+	style.border_width_left = int(widths.x)
+	style.border_width_top = int(widths.y)
+	style.border_width_right = int(widths.z)
+	style.border_width_bottom = int(widths.w)
+	style.set_corner_radius_all(radius)
+	style.content_margin_left = margins.x
+	style.content_margin_top = margins.y
+	style.content_margin_right = margins.z
+	style.content_margin_bottom = margins.w
+	style.anti_aliasing = true
+	return style
+
+
+static func line_rule(color: Color, vertical := false) -> ColorRect:
+	var rule := ColorRect.new()
+	rule.color = color
+	if vertical:
+		rule.custom_minimum_size.x = 1
+		rule.size_flags_vertical = Control.SIZE_FILL
+	else:
+		rule.custom_minimum_size.y = 1
+		rule.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	rule.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	return rule
+
+
+static func caps(value: String, size: int, color: Color, weight := 850, spacing := 1) -> Label:
+	var node := text(value, size, color, weight, true, spacing)
+	node.uppercase = true
+	return node
+
+
+static func plain(value: String, size: int, color: Color, weight := 400) -> Label:
+	var node := UI.label(value, size, color, weight)
+	node.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+	return node
+
+
+func _section(title: String, top := 21.0, bottom := 10.0, under := 8.0) -> Control:
+	var holder := column(0)
 	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	holder.add_child(gap(top))
-	holder.add_child(text(title.to_upper(), 11, Color(1, 1, 1, 0.45), 700, true, 1))
-	holder.add_child(gap(9.6))
+	var head := PanelContainer.new()
+	head.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	head.add_theme_stylebox_override("panel", edged(CLEAR, Color(146 / 255.0, 186 / 255.0, 210 / 255.0, 0.15), Vector4(0, 0, 0, 1), Vector4(0, 0, 0, under)))
+	head.add_child(caps(title, 11, SECTION_INK, 850, 1))
+	holder.add_child(head)
+	holder.add_child(gap(bottom))
 	return holder
+
+
+func _category(title: String, first := false) -> Control:
+	return _section(title, 25.0 if first else 30.0, 14.0, 10.0)
+
+
+func _padded() -> VBoxContainer:
+	var holder := MarginContainer.new()
+	holder.add_theme_constant_override("margin_left", 16)
+	holder.add_theme_constant_override("margin_right", 16)
+	holder.mouse_filter = Control.MOUSE_FILTER_PASS
+	holder.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var inner := column(0)
+	holder.add_child(inner)
+	body.add_child(holder)
+	return inner
 
 
 func _render() -> void:
@@ -552,16 +678,28 @@ func _render() -> void:
 	clear_body()
 	_donut = null
 	_legend_rows.clear()
+	_relations_box = null
+	_relation_field = null
+	_strip = null
+	if is_instance_valid(_sticky):
+		_sticky.queue_free()
+	_sticky = null
 	if data.is_empty():
-		body.add_child(text("Loading…", 13, Color(1, 1, 1, 0.5)))
+		page = _padded()
+		page.add_child(gap(14))
+		page.add_child(text("Loading…", 13, Color(1, 1, 1, 0.5)))
 		return
 	if data.has("empty"):
-		body.add_child(text(str(data["empty"]), 13, Color(1, 1, 1, 0.5)))
+		page = _padded()
+		page.add_child(gap(14))
+		page.add_child(text(str(data["empty"]), 13, Color(1, 1, 1, 0.5)))
 		return
 	_render_header()
 	if refresh_step != "" and tab == "economy" and sheet_status != "loading":
+		page = _padded()
 		_render_refresh_menu()
 	_render_tabs()
+	page = _padded()
 	match tab:
 		"politics":
 			_render_politics()
@@ -572,39 +710,49 @@ func _render() -> void:
 		"ranking":
 			_render_ranking()
 	if (tab == "politics" or tab == "ranking") and not data.get("worldRead", true):
-		body.add_child(gap(16))
-		body.add_child(text("Loading diplomatic state…", 12, Color(1, 1, 1, 0.42)))
-	body.add_child(gap(16))
-	body.add_child(text(FOOTER, 11, Color(1, 1, 1, 0.35)))
+		page.add_child(gap(16))
+		page.add_child(text("Loading diplomatic state…", 12, Color(1, 1, 1, 0.42)))
+	page.add_child(gap(16))
+	page.add_child(text(FOOTER, 11, Color(1, 1, 1, 0.35)))
+	page.add_child(gap(16))
+	if _relation_focus and is_instance_valid(_relation_field):
+		_relation_field.grab_focus()
+		_relation_field.caret_column = _relation_field.text.length()
 	await get_tree().process_frame
 	scroll.scroll_vertical = keep
+	_place_sticky()
 
 
 func _render_header() -> void:
-	var line := row(11)
+	var hero := DossierHero.new()
+	hero.add_theme_stylebox_override("panel", edged(Color("#1b3248"), Color(128 / 255.0, 180 / 255.0, 213 / 255.0, 0.25), Vector4(0, 0, 0, 1), Vector4(16, 20, 16, 19)))
+	var line := row(14)
 	var frame := PanelContainer.new()
-	frame.custom_minimum_size = Vector2(42, 42)
+	frame.custom_minimum_size = Vector2(74, 50)
 	frame.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
-	frame.clip_contents = true
-	frame.add_theme_stylebox_override("panel", UI.box(Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.16), Color(1, 1, 1, 0.12), 10, 1))
+	var frame_style := UI.box(Color(1 / 255.0, 9 / 255.0, 18 / 255.0, 0.35), Color(214 / 255.0, 235 / 255.0, 247 / 255.0, 0.2), 5, 1, Vector4(1, 1, 1, 1))
+	frame_style.shadow_color = Color(0, 0, 0, 0.3)
+	frame_style.shadow_size = 10
+	frame_style.shadow_offset = Vector2(0, 8)
+	frame.add_theme_stylebox_override("panel", frame_style)
 	frame.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var flag := texture_for(str(data.get("flag", "")), 64)
+	var flag := texture_for(str(data.get("flag", "")), 100)
 	if flag:
 		var picture := TextureRect.new()
 		picture.texture = flag
 		picture.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-		picture.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+		picture.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		picture.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		frame.add_child(picture)
 	else:
-		var initials := UI.label(str(data.get("initials", "??")), 15, Color("#93c5fd"), 800)
+		var initials := UI.label(str(data.get("initials", "??")), 16, Color("#93c5fd"), 800)
 		initials.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		initials.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 		frame.add_child(initials)
 	line.add_child(frame)
 	var info := column(0)
 	var title_row := row(8)
-	title_row.add_child(text(str(data.get("name", target)), 16, UI.WHITE, 800))
+	title_row.add_child(text(str(data.get("name", target)), 21, DOSSIER_TEXT, 850))
 	if data.get("isPlayer", false):
 		var mine := pill("Your country", Color(245 / 255.0, 158 / 255.0, 11 / 255.0, 0.18), Color(245 / 255.0, 158 / 255.0, 11 / 255.0, 0.5), Color("#fbbf24"), 10, 700, Vector4(8, 2, 8, 2))
 		mine.size_flags_vertical = Control.SIZE_SHRINK_CENTER
@@ -636,7 +784,8 @@ func _render_header() -> void:
 		again.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 		again.pressed.connect(_toggle_refresh_menu)
 		line.add_child(again)
-	body.add_child(line)
+	hero.add_child(line)
+	body.add_child(hero)
 
 
 func _toggle_refresh_menu() -> void:
@@ -649,7 +798,7 @@ func _menu_button(value: String, ink := Color("#e7e7e9"), border := Color(1, 1, 
 
 
 func _render_refresh_menu() -> void:
-	body.add_child(gap(11))
+	page.add_child(gap(11))
 	var box := card()
 	var stack := column(9)
 	var first := column(4)
@@ -682,7 +831,7 @@ func _render_refresh_menu() -> void:
 		third.add_child(buttons)
 		stack.add_child(third)
 	box.add_child(stack)
-	body.add_child(box)
+	page.add_child(box)
 
 
 func _refresh_sheet(reassess: bool) -> void:
@@ -694,74 +843,109 @@ func _refresh_sheet(reassess: bool) -> void:
 
 
 func _render_tabs() -> void:
-	body.add_child(gap(14))
-	var strip := row(8)
-	var labels := _tab_labels()
-	var widest := _tab_widths(labels)
-	var fits := _tabs_fit(labels)
-	_tabs_fitted = fits
-	for index in range(labels.size()):
-		var entry: Array = labels[index]
+	_strip = _tab_strip(false)
+	body.add_child(_strip)
+	_sticky = _tab_strip(true)
+	_sticky.visible = false
+	_overlay.add_child(_sticky)
+	_overlay.move_child(_sticky, 0)
+
+
+func _tab_strip(floating: bool) -> PanelContainer:
+	var strip := PanelContainer.new()
+	var style := edged(Color(14 / 255.0, 20 / 255.0, 30 / 255.0, 0.97), Color(143 / 255.0, 183 / 255.0, 210 / 255.0, 0.17), Vector4(0, 0, 0, 1), Vector4(10, 0, 10, 0))
+	style.shadow_color = Color(0, 0, 0, 0.25)
+	style.shadow_size = 10
+	style.shadow_offset = Vector2(0, 6)
+	strip.add_theme_stylebox_override("panel", style)
+	strip.mouse_filter = Control.MOUSE_FILTER_STOP if floating else Control.MOUSE_FILTER_PASS
+	strip.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var line := row(0)
+	line.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	for entry in _tab_labels():
 		var key: String = entry[0]
 		var chosen := key == tab
 		var button := Button.new()
-		button.text = entry[1]
 		button.focus_mode = Control.FOCUS_NONE
-		button.autowrap_mode = TextServer.AUTOWRAP_WORD
-		button.clip_text = not fits
 		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		button.custom_minimum_size = Vector2(widest[index] if fits else 1.0, 39)
+		button.custom_minimum_size = Vector2(1, 45)
 		button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-		button.add_theme_font_override("font", UI.font(800))
-		button.add_theme_font_size_override("font_size", 11)
-		var ink := Color("#f4f4f5") if chosen else Color(1, 1, 1, 0.58)
-		for state in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_hover_pressed_color"]:
-			button.add_theme_color_override(state, ink)
-		var style := UI.box(Color(0, 0, 0, 0.42) if chosen else Color(1, 1, 1, 0.03), Color(1, 1, 1, 0.28) if chosen else Color(1, 1, 1, 0.09), 8, 1, Vector4(4, 6, 4, 6))
-		var hover := UI.box(Color(0, 0, 0, 0.42) if chosen else Color(1, 1, 1, 0.06), Color(1, 1, 1, 0.28) if chosen else Color(1, 1, 1, 0.16), 8, 1, Vector4(4, 6, 4, 6))
-		for state in [["normal", style], ["focus", style], ["disabled", style], ["hover", hover], ["pressed", hover], ["hover_pressed", hover]]:
+		button.tooltip_text = ""
+		var under := Color("#86c9e7") if chosen else CLEAR
+		var normal := edged(CLEAR, under, Vector4(0, 0, 0, 2), Vector4(5, 9, 5, 9))
+		var hover := edged(Color(115 / 255.0, 165 / 255.0, 198 / 255.0, 0.1), under, Vector4(0, 0, 0, 2), Vector4(5, 9, 5, 9))
+		for state in [["normal", normal], ["focus", normal], ["disabled", normal], ["hover", hover], ["pressed", hover], ["hover_pressed", hover]]:
 			button.add_theme_stylebox_override(state[0], state[1])
+		var ink := Color("#eaf7fd") if chosen else Color(194 / 255.0, 211 / 255.0, 224 / 255.0, 0.58)
+		var words := UI.label(str(entry[1]), 11, ink, 850 if chosen else 680)
+		words.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		words.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		words.set_anchors_and_offsets_preset(Control.PRESET_CENTER, Control.PRESET_MODE_MINSIZE)
+		words.grow_horizontal = Control.GROW_DIRECTION_BOTH
+		words.grow_vertical = Control.GROW_DIRECTION_BOTH
+		button.add_child(words)
+		button.resized.connect(_fit_tab.bind(button, words, str(entry[1]), 850 if chosen else 680))
+		button.mouse_entered.connect(func() -> void: words.add_theme_color_override("font_color", Color("#e7f3fa")))
+		button.mouse_exited.connect(func() -> void: words.add_theme_color_override("font_color", ink))
 		button.pressed.connect(set_tab.bind(key))
-		strip.add_child(button)
-	body.add_child(strip)
+		button.set_meta("tab", key)
+		line.add_child(button)
+	strip.add_child(line)
+	return strip
+
+
+func _fit_tab(button: Button, words: Label, value: String, weight: int) -> void:
+	var room := button.size.x - 4.0
+	var wide := UI.font(weight).get_string_size(I18n.now(value), HORIZONTAL_ALIGNMENT_LEFT, -1, 11).x
+	words.add_theme_font_size_override("font_size", 11 if wide <= room or room <= 0.0 else 10)
+
+
+func _place_sticky() -> void:
+	if not is_instance_valid(_sticky) or not is_instance_valid(_strip) or not _strip.is_inside_tree():
+		return
+	var top := scroll.get_global_rect().position.y
+	var held := _strip.get_global_rect()
+	var stuck := held.position.y < top - 0.5
+	_sticky.visible = stuck
+	if stuck:
+		_sticky.size = held.size
+		_sticky.global_position = Vector2(held.position.x, top)
 
 
 func _tab_labels() -> Array:
 	return [["politics", "🏛 Politics"], ["diplomacy", "🤝 Diplomacy"], ["economy", str(data.get("economyTab", "📈 Economy"))], ["ranking", "🏆 Ranking"]]
 
 
-func _tab_widths(labels: Array) -> Array[float]:
-	var widths: Array[float] = []
-	for entry in labels:
-		var most := 0.0
-		for word in str(entry[1]).split(" ", false):
-			most = max(most, UI.font(800).get_string_size(word, HORIZONTAL_ALIGNMENT_LEFT, -1, 11).x)
-		widths.append(ceil(most) + 12.0)
-	return widths
-
-
-func _tabs_fit(labels: Array) -> bool:
-	var needed := 8.0 * (labels.size() - 1)
-	for width in _tab_widths(labels):
-		needed += width
-	return needed <= _drawer_width - 32.0
-
-
 func _politics_card(margins := Vector4(12, 11, 12, 11)) -> PanelContainer:
 	return card(Color(1, 1, 1, 0.042), Color(1, 1, 1, 0.08), 12, margins)
 
 
+func _secondary(top: float) -> PanelContainer:
+	page.add_child(gap(top))
+	var holder := PanelContainer.new()
+	holder.mouse_filter = Control.MOUSE_FILTER_PASS
+	holder.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	holder.add_theme_stylebox_override("panel", edged(CLEAR, DOSSIER_LINE, Vector4(0, 1, 0, 0), Vector4(2, 13, 2, 13)))
+	page.add_child(holder)
+	return holder
+
+
 func _label_small(value: String) -> Label:
-	return text(value.to_upper(), 10, Color(1, 1, 1, 0.42), 800, true, 1)
+	return caps(value, 10, LABEL_INK, 850, 1)
 
 
 func _render_politics() -> void:
 	var politics: Dictionary = data.get("politics", {})
-	body.add_child(gap(13))
+	page.add_child(gap(14))
 	var government: Variant = politics.get("government")
 	if typeof(government) == TYPE_DICTIONARY:
 		var info: Dictionary = government
-		var box := _politics_card()
+		var box := GovernmentCard.new()
+		var briefing := UI.box(Color("#1d3348"), Color(129 / 255.0, 187 / 255.0, 217 / 255.0, 0.2), 12, 1, Vector4(15, 15, 15, 15))
+		briefing.shadow_color = Color(0, 0, 0, 0.14)
+		briefing.shadow_size = 12
+		briefing.shadow_offset = Vector2(0, 10)
+		box.add_theme_stylebox_override("panel", briefing)
 		var stack := column(0)
 		stack.add_child(_label_small("Government"))
 		var form := str(info.get("form", ""))
@@ -837,7 +1021,7 @@ func _render_politics() -> void:
 			bar.custom_minimum_size = Vector2(1, 10)
 			stack.add_child(bar)
 		box.add_child(stack)
-		body.add_child(box)
+		page.add_child(box)
 	var compile: Variant = politics.get("compile")
 	if typeof(compile) == TYPE_DICTIONARY:
 		_render_compile(compile)
@@ -846,15 +1030,13 @@ func _render_politics() -> void:
 		_render_landscape(landscape)
 	var goals: Array = politics.get("goals", [])
 	if not goals.is_empty():
-		body.add_child(gap(11))
-		var box := _politics_card()
+		var box := _secondary(14)
 		var stack := column(5)
 		stack.add_child(_label_small("National priorities"))
 		stack.add_child(gap(2))
 		for goal in goals:
 			stack.add_child(text("• %s" % str(goal), 11, Color(1, 1, 1, 0.65)))
 		box.add_child(stack)
-		body.add_child(box)
 	var institutions: Array = politics.get("institutions", [])
 	if not institutions.is_empty():
 		_render_institutions(institutions)
@@ -871,8 +1053,7 @@ func _escape(value: String) -> String:
 
 
 func _render_compile(compile: Dictionary) -> void:
-	body.add_child(gap(11))
-	var box := _politics_card(Vector4(12, 10, 12, 10))
+	var box := _secondary(10)
 	var stack := column(0)
 	var detailed: bool = compile.get("detailed", false)
 	if compiling:
@@ -890,13 +1071,12 @@ func _render_compile(compile: Dictionary) -> void:
 		problem.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
 		stack.add_child(problem)
 	box.add_child(stack)
-	body.add_child(box)
 
 
 func _render_landscape(landscape: Dictionary) -> void:
-	body.add_child(gap(11))
-	var box := _politics_card()
+	page.add_child(gap(17))
 	var stack := column(0)
+	stack.add_child(gap(4))
 	var top := row(7)
 	var titles := column(2)
 	titles.add_child(_label_small(str(landscape.get("title", ""))))
@@ -916,31 +1096,16 @@ func _render_landscape(landscape: Dictionary) -> void:
 	var entries: Array = landscape.get("entries", [])
 	var slices: Array = landscape.get("slices", [])
 	if not slices.is_empty():
-		var holder := CenterContainer.new()
-		holder.custom_minimum_size.y = 178
-		holder.mouse_filter = Control.MOUSE_FILTER_PASS
-		_donut = StatDonut.new()
-		_donut.slices = slices
-		_donut.selected = selected_party
-		_donut.hovered = hovered_party
-		_donut.center_label = str(landscape.get("centerLabel", "Political"))
-		_donut.center_sub = str(landscape.get("centerSubLabel", "landscape"))
-		_donut.picked.connect(_pick_party)
-		_donut.hovering.connect(_hover_party)
-		holder.add_child(_donut)
-		stack.add_child(holder)
+		stack.add_child(_landscape_overview(landscape, slices, entries))
 	if str(landscape.get("mode", "party")) == "party":
-		stack.add_child(gap(8))
-		var frame := card(Color(0, 0, 0, 0), Color(1, 1, 1, 0.07), 10, Vector4(1, 1, 1, 1))
+		stack.add_child(gap(6))
 		var rows := column(0)
 		var first := true
 		for item in entries:
 			rows.add_child(_party_row(item, first))
 			first = false
-		frame.add_child(rows)
-		stack.add_child(frame)
-		box.add_child(stack)
-		body.add_child(box)
+		stack.add_child(rows)
+		page.add_child(stack)
 		return
 	var legend := GridContainer.new()
 	legend.columns = 2
@@ -965,14 +1130,57 @@ func _render_landscape(landscape: Dictionary) -> void:
 		cell.mouse_entered.connect(_hover_party.bind(str(party.get("id", ""))))
 		cell.mouse_exited.connect(_hover_party.bind(""))
 		legend.add_child(cell)
+	stack.add_child(gap(6))
 	stack.add_child(legend)
 	for item in entries:
 		var party: Dictionary = item
 		if str(party.get("id", "")) == selected_party and not selected_party.is_empty():
 			stack.add_child(gap(11))
 			stack.add_child(_party_detail(party, false))
-	box.add_child(stack)
-	body.add_child(box)
+	page.add_child(stack)
+
+
+func _landscape_overview(landscape: Dictionary, slices: Array, entries: Array) -> Control:
+	var holder := PanelContainer.new()
+	holder.mouse_filter = Control.MOUSE_FILTER_PASS
+	holder.add_theme_stylebox_override("panel", edged(CLEAR, DOSSIER_LINE, Vector4(0, 0, 0, 1), Vector4(0, 5, 0, 11)))
+	var split := row(10)
+	split.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_donut = StatDonut.new()
+	_donut.limit = 160.0
+	_donut.custom_minimum_size = Vector2(145, 150)
+	_donut.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_donut.size_flags_stretch_ratio = 0.9
+	_donut.slices = slices
+	_donut.selected = selected_party
+	_donut.hovered = hovered_party
+	_donut.center_label = str(landscape.get("centerLabel", "Political"))
+	_donut.center_sub = str(landscape.get("centerSubLabel", "landscape"))
+	_donut.picked.connect(_pick_party)
+	_donut.hovering.connect(_hover_party)
+	split.add_child(_donut)
+	var legend := column(5)
+	legend.size_flags_stretch_ratio = 1.0
+	legend.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	legend.custom_minimum_size.x = 1
+	for item in entries.slice(0, 4):
+		var entry: Dictionary = item
+		var line := row(7)
+		var dot := StatDot.new()
+		dot.color = tone(str(entry.get("color", "")))
+		dot.custom_minimum_size = Vector2(8, 8)
+		dot.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		line.add_child(dot)
+		var named := clipped(str(entry.get("shortName", entry.get("name", ""))), 11, Color(229 / 255.0, 240 / 255.0, 247 / 255.0, 0.83))
+		named.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+		named.tooltip_text = str(entry.get("name", ""))
+		named.mouse_filter = Control.MOUSE_FILTER_PASS
+		line.add_child(named)
+		line.add_child(plain(str(entry.get("valueText", "")), 11, Color("#b6d1e0"), 800))
+		legend.add_child(line)
+	split.add_child(legend)
+	holder.add_child(split)
+	return holder
 
 
 func _rich(size: int, color: Color, weight := 400, bold_weight := 800, wrap := true) -> RichTextLabel:
@@ -1244,49 +1452,68 @@ func _party_detail(party: Dictionary, as_party: bool) -> Control:
 
 
 func _render_institutions(institutions: Array) -> void:
-	body.add_child(gap(11))
-	var box := _politics_card()
+	page.add_child(gap(22))
+	var ledger := MarginContainer.new()
+	ledger.add_theme_constant_override("margin_left", 3)
+	ledger.add_theme_constant_override("margin_right", 2)
+	ledger.mouse_filter = Control.MOUSE_FILTER_PASS
 	var stack := column(0)
-	var top := row(7)
-	var titles := column(2)
+	var heading := PanelContainer.new()
+	heading.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	heading.add_theme_stylebox_override("panel", edged(CLEAR, Color(156 / 255.0, 188 / 255.0, 211 / 255.0, 0.24), Vector4(0, 0, 0, 1), Vector4(0, 2, 0, 12)))
+	var top := row(10)
+	var titles := column(3)
 	titles.add_child(_label_small("Institutions"))
-	titles.add_child(text("Canonical memberships and institutional history", 9, Color(1, 1, 1, 0.34)))
+	titles.add_child(text("Canonical memberships and institutional history", 10, Color(1, 1, 1, 0.39)))
 	top.add_child(titles)
-	var count := pill(str(institutions.size()), Color(1, 1, 1, 0.06), UI.HUD_BORDER, Color(1, 1, 1, 0.72), 9, 750)
+	var count := PanelContainer.new()
 	count.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	count.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	count.add_theme_stylebox_override("panel", edged(CLEAR, Color(156 / 255.0, 188 / 255.0, 211 / 255.0, 0.2), Vector4(1, 0, 0, 0), Vector4(10, 0, 3, 0)))
+	count.add_child(plain(str(institutions.size()), 14, Color("#9bcfe7"), 850))
 	top.add_child(count)
-	stack.add_child(top)
-	stack.add_child(gap(9))
+	heading.add_child(top)
+	stack.add_child(heading)
+	stack.add_child(gap(3))
 	var shown := institutions if institutions_all else institutions.slice(0, 10)
-	var list := column(7)
 	for item in shown:
 		var entry: Dictionary = item
-		var cell := card(Color(1, 1, 1, 0.025), Color(1, 1, 1, 0.065), 9, Vector4(9, 8, 9, 8))
-		var inner := column(3)
-		var line := row(7)
-		line.add_child(text(str(entry.get("name", "")), 11, Color(1, 1, 1, 0.88), 820))
 		var member: bool = entry.get("member", false)
-		line.add_child(pill(str(entry.get("label", "")), Color(34 / 255.0, 197 / 255.0, 94 / 255.0, 0.1) if member else Color(148 / 255.0, 163 / 255.0, 184 / 255.0, 0.09), Color(34 / 255.0, 197 / 255.0, 94 / 255.0, 0.23) if member else Color(148 / 255.0, 163 / 255.0, 184 / 255.0, 0.18), Color("#86efac") if member else Color(1, 1, 1, 0.55), 9, 750))
-		inner.add_child(line)
-		inner.add_child(text(str(entry.get("detail", "")), 9, Color(1, 1, 1, 0.36)))
+		var cell := InstitutionRow.new()
+		cell.active = member
+		cell.add_theme_stylebox_override("panel", edged(CLEAR, Color(156 / 255.0, 188 / 255.0, 211 / 255.0, 0.12), Vector4(0, 0, 0, 1), Vector4(23, 12, 2, 12)))
+		var line := row(7)
+		var main := column(0)
+		main.add_child(text(str(entry.get("name", "")), 12, Color("#e1ebf3"), 825))
+		main.add_child(gap(3))
+		main.add_child(text(str(entry.get("detail", "")), 10, Color("#8396a8")))
 		for pending in entry.get("pending", []):
-			inner.add_child(text(str(pending), 9, Color(1, 1, 1, 0.5)))
-		cell.add_child(inner)
-		list.add_child(cell)
+			main.add_child(gap(5))
+			main.add_child(text(str(pending), 10, Color("#a2b9c8")))
+		line.add_child(main)
+		var status := caps(str(entry.get("label", "")), 9, Color("#83d5aa") if member else Color("#99a7b7"), 800, 0)
+		status.size_flags_horizontal = Control.SIZE_SHRINK_END
+		status.custom_minimum_size.x = 104
+		status.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		status.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+		line.add_child(status)
+		cell.add_child(line)
+		stack.add_child(cell)
 	if institutions.size() > 10:
-		var more := link("Show fewer" if institutions_all else "Show all (%d)" % institutions.size(), Color(1, 1, 1, 0.55), 10, 760)
+		stack.add_child(gap(6))
+		var more := link("Show fewer" if institutions_all else "Show all (%d)" % institutions.size(), Color("#9bdbf3"), 11, 750)
+		more.add_theme_color_override("font_hover_color", Color("#d5f0fa"))
 		more.pressed.connect(func() -> void:
 			institutions_all = not institutions_all
 			_render())
-		list.add_child(more)
-	stack.add_child(list)
-	box.add_child(stack)
-	body.add_child(box)
+		stack.add_child(more)
+	ledger.add_child(stack)
+	page.add_child(ledger)
+	page.add_child(gap(6))
 
 
 func _render_intelligence(intelligence: Dictionary) -> void:
-	body.add_child(gap(11))
-	var box := card(Color(1, 1, 1, 0.025), UI.HUD_BORDER, 12, Vector4(12, 11, 12, 11))
+	var box := _secondary(14)
 	var stack := column(0)
 	var top := row(6)
 	top.add_child(text("🕵 INTELLIGENCE ASSESSMENT", 10, Color(1, 1, 1, 0.72), 800, true, 1))
@@ -1324,12 +1551,11 @@ func _render_intelligence(intelligence: Dictionary) -> void:
 		stack.add_child(gap(9))
 		stack.add_child(text(str(intelligence["footer"]), 9, Color("#fbbf24") if intelligence.get("stale", false) else Color(1, 1, 1, 0.34)))
 	box.add_child(stack)
-	body.add_child(box)
 
 
 func _render_groups(groups: Dictionary) -> void:
-	body.add_child(_section(str(groups.get("title", ""))))
-	var box := card(CARD_BG, CARD_BORDER, 10, Vector4.ZERO)
+	page.add_child(_section(str(groups.get("title", ""))))
+	var box := card(CARD_BG, CARD_BORDER, 8, Vector4.ZERO)
 	var stack := column(0)
 	var first := true
 	for item in groups.get("rows", []):
@@ -1369,7 +1595,7 @@ func _render_groups(groups: Dictionary) -> void:
 		cell.add_child(line)
 		stack.add_child(cell)
 	box.add_child(stack)
-	body.add_child(box)
+	page.add_child(box)
 
 
 func _rule() -> ColorRect:
@@ -1381,7 +1607,7 @@ func _rule() -> ColorRect:
 
 
 func _list_card(title: String, right := "") -> Array:
-	var box := card(CARD_BG, CARD_BORDER, 10, Vector4.ZERO)
+	var box := card(CARD_BG, CARD_BORDER, 8, Vector4.ZERO)
 	var stack := column(0)
 	var top := MarginContainer.new()
 	for side in [["margin_left", 10], ["margin_right", 10], ["margin_top", 9], ["margin_bottom", 9]]:
@@ -1408,39 +1634,94 @@ func _list_row(stack: VBoxContainer) -> VBoxContainer:
 	return inner
 
 
-func _empty_row(stack: VBoxContainer, value: String) -> void:
-	var inner := _list_row(stack)
-	inner.add_child(text(value, 11, Color(1, 1, 1, 0.4)))
+func _ledger(title: String, top: float, right := "", frame: StyleBox = null) -> VBoxContainer:
+	page.add_child(gap(top))
+	var stack := column(0)
+	var head := PanelContainer.new()
+	head.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	head.add_theme_stylebox_override("panel", edged(CLEAR, LEDGER_RULE, Vector4(0, 0, 0, 1), Vector4(0, 8, 0, 7)))
+	var line := row(9)
+	line.add_child(text(title, 12, LEDGER_INK, 800))
+	if not right.is_empty():
+		var tag := plain(right, 10, Color("#8196a8"), 600)
+		tag.size_flags_vertical = Control.SIZE_SHRINK_END
+		line.add_child(tag)
+	head.add_child(line)
+	stack.add_child(head)
+	if frame:
+		var holder := PanelContainer.new()
+		holder.mouse_filter = Control.MOUSE_FILTER_PASS
+		holder.add_theme_stylebox_override("panel", frame)
+		holder.add_child(stack)
+		page.add_child(holder)
+	else:
+		page.add_child(stack)
+	return stack
+
+
+func _record(margins: Vector4, line := DOSSIER_LINE, bar := false) -> RecordRow:
+	var cell := RecordRow.new(edged(CLEAR, line, Vector4(0, 0, 0, 1), margins), edged(RECORD_HOVER, line, Vector4(0, 0, 0, 1), margins))
+	cell.bar = bar
+	return cell
+
+
+func _ledger_empty(stack: VBoxContainer, value: String) -> void:
+	var holder := MarginContainer.new()
+	for side in [["margin_left", 2], ["margin_right", 2], ["margin_top", 11], ["margin_bottom", 11]]:
+		holder.add_theme_constant_override(side[0], side[1])
+	holder.add_child(text(value, 11, Color(1, 1, 1, 0.4)))
+	stack.add_child(holder)
+
+
+func _summary_strip(metrics: Array) -> Control:
+	var holder := PanelContainer.new()
+	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	holder.add_theme_stylebox_override("panel", UI.box(Color("#1b2b3b"), CLEAR, 0, 0))
+	var stack := column(0)
+	stack.add_child(line_rule(Color(145 / 255.0, 195 / 255.0, 220 / 255.0, 0.28)))
+	var cells := row(0)
+	cells.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	for index in range(metrics.size()):
+		var metric: Dictionary = metrics[index]
+		if index > 0:
+			cells.add_child(line_rule(DOSSIER_LINE, true))
+		var cell := MarginContainer.new()
+		for side in [["margin_left", 10], ["margin_right", 10], ["margin_top", 11], ["margin_bottom", 11]]:
+			cell.add_theme_constant_override(side[0], side[1])
+		cell.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		cell.custom_minimum_size.x = 1
+		var inner := column(0)
+		var label := caps(str(metric.get("label", "")), 9, Color("#a2b6c6"), 750, 0)
+		label.custom_minimum_size.y = 19
+		inner.add_child(label)
+		inner.add_child(gap(4))
+		inner.add_child(plain(str(metric.get("value", "")), 23, tone(str(metric.get("tone", ""))), 850))
+		cell.add_child(inner)
+		cells.add_child(cell)
+	stack.add_child(cells)
+	stack.add_child(line_rule(DOSSIER_LINE))
+	holder.add_child(stack)
+	return holder
 
 
 func _render_diplomacy() -> void:
 	var diplomacy: Variant = data.get("diplomacy")
 	if typeof(diplomacy) != TYPE_DICTIONARY:
-		body.add_child(gap(16))
-		body.add_child(text("Loading diplomatic state…", 12, Color(1, 1, 1, 0.42)))
+		page.add_child(gap(16))
+		page.add_child(text("Loading diplomatic state…", 12, Color(1, 1, 1, 0.42)))
 		return
 	var info: Dictionary = diplomacy
-	body.add_child(_section("🤝 Diplomacy"))
-	var metrics := GridContainer.new()
-	metrics.columns = 3
-	metrics.add_theme_constant_override("h_separation", 7)
-	metrics.add_theme_constant_override("v_separation", 7)
-	for item in info.get("metrics", []):
-		var metric: Dictionary = item
-		var cell := card(CARD_BG, CARD_BORDER, 10, Vector4(10, 9, 10, 9))
-		var inner := column(3)
-		inner.add_child(text(str(metric.get("label", "")), 9, Color(1, 1, 1, 0.4), 800))
-		inner.add_child(UI.label(str(metric.get("value", "")), 16, tone(str(metric.get("tone", ""))), 900))
-		cell.add_child(inner)
-		metrics.add_child(cell)
-	body.add_child(metrics)
+	page.add_child(gap(14))
+	page.add_child(_summary_strip(info.get("metrics", [])))
+	var spacing := [17.0]
+	var next_gap := func() -> float:
+		var value: float = spacing[0]
+		spacing[0] = 15.0
+		return value
 	var subordination: Variant = info.get("subordination")
 	if typeof(subordination) == TYPE_DICTIONARY:
 		var sub: Dictionary = subordination
-		body.add_child(gap(9))
-		var box := card(CARD_BG, CARD_BORDER, 10, Vector4(10, 10, 10, 10))
-		var stack := column(0)
-		stack.add_child(text("SUBORDINATION", 9, Color(1, 1, 1, 0.48), 850, true, 1))
+		var stack := _ledger("Subordination", next_gap.call(), "", edged(CLEAR, Color("#d6b878"), Vector4(3, 0, 0, 0), Vector4(10, 2, 10, 7)))
 		stack.add_child(gap(4))
 		stack.add_child(text(str(sub.get("headline", "")), 12, Color(1, 1, 1, 0.9), 850))
 		stack.add_child(gap(4))
@@ -1455,61 +1736,47 @@ func _render_diplomacy() -> void:
 		if not str(sub.get("provenance", "")).is_empty():
 			stack.add_child(gap(6))
 			stack.add_child(text(str(sub["provenance"]), 9, Color(1, 1, 1, 0.36)))
-		box.add_child(stack)
-		body.add_child(box)
 	var subordinates: Array = info.get("subordinates", [])
 	if not subordinates.is_empty():
-		body.add_child(gap(9))
-		var parts := _list_card("Subordinate states")
+		var stack := _ledger("Subordinate states", next_gap.call())
 		for item in subordinates:
 			var entry: Dictionary = item
-			var inner := _list_row(parts[1])
+			var cell := _record(Vector4(4, 9, 4, 9), Color(156 / 255.0, 188 / 255.0, 211 / 255.0, 0.1))
 			var line := row(9)
 			var words := column(2)
-			words.add_child(clipped(str(entry.get("name", "")), 12, Color(1, 1, 1, 0.86), 750))
+			var key := str(entry.get("key", ""))
+			if not key.is_empty():
+				var named := link("%s ›" % str(entry.get("name", "")), Color("#c7dcff"), 12, 750)
+				named.clip_text = true
+				named.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+				named.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+				named.custom_minimum_size.x = 1
+				named.pressed.connect(_retarget.bind(key))
+				words.add_child(named)
+			else:
+				words.add_child(clipped(str(entry.get("name", "")), 12, Color(1, 1, 1, 0.86), 750))
 			if not str(entry.get("facts", "")).is_empty():
 				words.add_child(text(str(entry["facts"]), 10, Color(1, 1, 1, 0.38)))
 			line.add_child(words)
 			line.add_child(badge(str(entry.get("badge", "")), tone(str(entry.get("tone", "")))))
-			inner.add_child(line)
-		body.add_child(parts[0])
-	body.add_child(gap(9))
-	var relations := _list_card("Bilateral relations", "−100 to +100")
-	var relation_rows: Array = info.get("relations", [])
-	if relation_rows.is_empty():
-		_empty_row(relations[1], "No tracked bilateral relations. An absent record is not the same as explicit neutrality.")
-	for item in relation_rows:
-		var relation: Dictionary = item
-		var inner := _list_row(relations[1])
-		var line := row(10)
-		var words := column(2)
-		words.add_child(clipped(str(relation.get("name", "")), 12, Color(1, 1, 1, 0.88), 750))
-		words.add_child(text(str(relation.get("summary", "")), 10, Color(1, 1, 1, 0.38)))
-		line.add_child(words)
-		var side := column(3)
-		side.size_flags_horizontal = Control.SIZE_SHRINK_END
-		var color := tone(str(relation.get("tone", "")))
-		var score := UI.label(str(relation.get("score", "")), 14, color, 900)
-		score.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-		side.add_child(score)
-		side.add_child(badge(str(relation.get("status", "")), color))
-		line.add_child(side)
-		inner.add_child(line)
-		inner.add_child(gap(6))
-		var meter := StatMeter.new()
-		meter.value = float(relation.get("scoreValue", 0))
-		meter.color = color
-		meter.custom_minimum_size.y = 5
-		inner.add_child(meter)
-	body.add_child(relations[0])
-	body.add_child(gap(9))
-	var agreements := _list_card("Formal agreements")
+			cell.add_child(line)
+			stack.add_child(cell)
+	var roster: Variant = info.get("relations")
+	_roster = roster if typeof(roster) == TYPE_DICTIONARY else {}
+	var recorded := int(_roster.get("recorded", 0))
+	var relations := _ledger("Bilateral relations", next_gap.call(), I18n.ui("−100 to +100 · {{relationsCount}} recorded", {"relationsCount": str(recorded)}))
+	if recorded > 0:
+		relations.add_child(_relation_tools())
+	_relations_box = column(0)
+	relations.add_child(_relations_box)
+	_fill_relations()
+	var agreements := _ledger("Formal agreements", next_gap.call())
 	var agreement_rows: Array = info.get("agreements", [])
 	if agreement_rows.is_empty():
-		_empty_row(agreements[1], "No canonical formal agreements involving this polity.")
+		_ledger_empty(agreements, "No canonical formal agreements involving this polity.")
 	for item in agreement_rows:
 		var agreement: Dictionary = item
-		var inner := _list_row(agreements[1])
+		var cell := _record(Vector4(11, 11, 4, 11), DOSSIER_LINE, true)
 		var line := row(9)
 		var words := column(2)
 		words.add_child(text(str(agreement.get("title", "")), 12, Color(1, 1, 1, 0.86), 750))
@@ -1518,16 +1785,15 @@ func _render_diplomacy() -> void:
 			words.add_child(text(str(agreement["updated"]), 9, Color(1, 1, 1, 0.28)))
 		line.add_child(words)
 		line.add_child(badge(str(agreement.get("status", "")), tone(str(agreement.get("tone", "")))))
-		inner.add_child(line)
-	body.add_child(agreements[0])
-	body.add_child(gap(9))
-	var conflicts := _list_card("Current conflicts")
+		cell.add_child(line)
+		agreements.add_child(cell)
+	var conflicts := _ledger("Current conflicts", next_gap.call())
 	var wars: Array = info.get("wars", [])
 	if wars.is_empty():
-		_empty_row(conflicts[1], "No active or ceasefire canonical conflicts involving this polity.")
+		_ledger_empty(conflicts, "No active or ceasefire canonical conflicts involving this polity.")
 	for item in wars:
 		var war: Dictionary = item
-		var inner := _list_row(conflicts[1])
+		var cell := _record(Vector4(3, 11, 3, 11))
 		var line := row(9)
 		var words := column(2)
 		words.add_child(text(str(war.get("title", "")), 12, Color(1, 1, 1, 0.86), 750))
@@ -1543,11 +1809,11 @@ func _render_diplomacy() -> void:
 		_peace_controls(words, war)
 		line.add_child(words)
 		line.add_child(badge(str(war.get("status", "")), tone(str(war.get("tone", "")))))
-		inner.add_child(line)
-	body.add_child(conflicts[0])
+		cell.add_child(line)
+		conflicts.add_child(cell)
 	var reports: Array = info.get("reports", [])
 	if not reports.is_empty():
-		body.add_child(gap(9))
+		page.add_child(gap(9))
 		var list := _list_card("War reports")
 		for item in reports:
 			var report: Dictionary = item
@@ -1562,15 +1828,196 @@ func _render_diplomacy() -> void:
 			read.pressed.connect(func() -> void: open_war_report.emit(str(report.get("name", ""))))
 			line.add_child(read)
 			inner.add_child(line)
-		body.add_child(list[0])
+		page.add_child(list[0])
 	var reparations: Array = info.get("reparations", [])
 	if not reparations.is_empty():
-		body.add_child(gap(9))
+		page.add_child(gap(9))
 		var note := column(2)
 		note.add_child(text("Reparations", 11, Color(1, 1, 1, 0.7), 800))
 		for line in reparations:
 			note.add_child(text(str(line), 11, Color(1, 1, 1, 0.7)))
-		body.add_child(note)
+		page.add_child(note)
+
+
+func _relation_tools() -> Control:
+	var holder := MarginContainer.new()
+	for side in [["margin_left", 10], ["margin_right", 10], ["margin_top", 12], ["margin_bottom", 13]]:
+		holder.add_theme_constant_override(side[0], side[1])
+	holder.mouse_filter = Control.MOUSE_FILTER_PASS
+	var line := row(6)
+	var field := LineEdit.new()
+	field.placeholder_text = "Find country or relation…"
+	field.text = relation_search
+	field.clear_button_enabled = true
+	field.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	field.custom_minimum_size = Vector2(1, 32)
+	field.add_theme_font_override("font", UI.font(400))
+	field.add_theme_font_size_override("font_size", 11)
+	field.add_theme_color_override("font_color", Color("#f4f4f5"))
+	field.add_theme_color_override("font_placeholder_color", Color(1, 1, 1, 0.42))
+	field.add_theme_stylebox_override("normal", UI.box(Color(0, 0, 0, 0.2), Color(1, 1, 1, 0.13), 7, 1, Vector4(9, 5, 9, 5)))
+	field.add_theme_stylebox_override("focus", UI.box(Color("#1e2a39"), Color(135 / 255.0, 201 / 255.0, 233 / 255.0, 0.5), 7, 1, Vector4(9, 5, 9, 5)))
+	field.add_theme_icon_override("clear", UI.icon("close", 12, Color(1, 1, 1, 0.5)))
+	field.text_changed.connect(_search_relations)
+	field.focus_entered.connect(func() -> void: _relation_focus = true)
+	field.focus_exited.connect(func() -> void: _relation_focus = false)
+	_relation_field = field
+	line.add_child(field)
+	var order := OptionButton.new()
+	order.focus_mode = Control.FOCUS_NONE
+	order.fit_to_longest_item = false
+	order.clip_text = true
+	order.custom_minimum_size = Vector2(118, 32)
+	order.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	order.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	var shut := UI.box(Color("#242429"), Color(1, 1, 1, 0.13), 7, 1, Vector4(7, 4, 7, 4))
+	var lit := UI.box(Color("#242429"), Color(1, 1, 1, 0.22), 7, 1, Vector4(7, 4, 7, 4))
+	for state in [["normal", shut], ["focus", shut], ["disabled", shut], ["hover", lit], ["pressed", lit], ["hover_pressed", lit]]:
+		order.add_theme_stylebox_override(state[0], state[1])
+	order.add_theme_font_override("font", UI.font(400))
+	order.add_theme_font_size_override("font_size", 11)
+	for state in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_hover_pressed_color"]:
+		order.add_theme_color_override(state, Color("#e4e4e7"))
+	for index in range(RELATION_SORTS.size()):
+		var entry: Array = RELATION_SORTS[index]
+		order.add_item(str(entry[1]))
+		order.set_item_metadata(index, str(entry[0]))
+		if str(entry[0]) == relation_sort:
+			order.select(index)
+	order.item_selected.connect(func(index: int) -> void: _sort_relations(str(order.get_item_metadata(index))))
+	line.add_child(order)
+	holder.add_child(line)
+	return holder
+
+
+func _fill_relations() -> void:
+	if not is_instance_valid(_relations_box):
+		return
+	for child in _relations_box.get_children():
+		_relations_box.remove_child(child)
+		child.queue_free()
+	var rows: Array = _roster.get("rows", [])
+	var recorded := int(_roster.get("recorded", 0))
+	for item in rows:
+		_relations_box.add_child(_relation_row(item))
+	if recorded == 0:
+		_relations_box.add_child(_relation_note("No tracked bilateral relations. An absent record is not the same as explicit neutrality.", 0.45, true))
+	elif rows.is_empty():
+		_relations_box.add_child(_relation_note(I18n.ui("No relationships match the search. {{relationsCount}} records are still available.", {"relationsCount": str(recorded)}), 0.48, false))
+
+
+func _relation_note(value: String, alpha: float, translate: bool) -> Control:
+	var holder := PanelContainer.new()
+	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	holder.add_theme_stylebox_override("panel", edged(CLEAR, Color(1, 1, 1, 0.07), Vector4(0, 1, 0, 0), Vector4(10, 10, 10, 10)))
+	var words := text(value, 11, Color(1, 1, 1, alpha))
+	if not translate:
+		words.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+	holder.add_child(words)
+	return holder
+
+
+func _relation_row(relation: Dictionary) -> Control:
+	var key := str(relation.get("rosterKey", ""))
+	var expanded := not key.is_empty() and key == relation_open
+	var holder := PanelContainer.new()
+	holder.mouse_filter = Control.MOUSE_FILTER_PASS
+	holder.add_theme_stylebox_override("panel", edged(CLEAR, Color(156 / 255.0, 188 / 255.0, 211 / 255.0, 0.095), Vector4(0, 0, 0, 1)))
+	var stack := column(0)
+	var shade := Color(1, 1, 1, 0.035) if expanded else CLEAR
+	var head := StatClickable.new(UI.box(shade, CLEAR, 0, 0, Vector4(10, 7, 10, 7)), UI.box(Color(103 / 255.0, 170 / 255.0, 210 / 255.0, 0.085), CLEAR, 0, 0, Vector4(10, 7, 10, 7)))
+	head.custom_minimum_size.y = 38
+	var line := row(7)
+	var named := clipped(str(relation.get("name", "")), 12, Color(1, 1, 1, 0.9), 750)
+	named.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	named.tooltip_text = str(relation.get("name", ""))
+	named.mouse_filter = Control.MOUSE_FILTER_PASS
+	line.add_child(named)
+	var color := tone(str(relation.get("tone", "")))
+	var scored: bool = relation.get("hasScore", false)
+	var signal_box := column(2)
+	signal_box.size_flags_horizontal = Control.SIZE_SHRINK_END
+	signal_box.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	signal_box.custom_minimum_size.x = 42
+	var score := plain(str(relation.get("score", "—")), 13, color, 850)
+	score.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	signal_box.add_child(score)
+	if scored:
+		var meter := StatMeter.new()
+		meter.value = float(relation.get("scoreValue", 0))
+		meter.color = color
+		meter.custom_minimum_size = Vector2(42, 3)
+		signal_box.add_child(meter)
+	line.add_child(signal_box)
+	var status := badge(str(relation.get("status", "")), color)
+	status.custom_minimum_size.x = 62
+	status.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	(status.get_child(0) as Label).horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	line.add_child(status)
+	var chevron := UI.label("⌄", 13, Color(1, 1, 1, 0.45))
+	chevron.custom_minimum_size = Vector2(12, 16)
+	chevron.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	chevron.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	chevron.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	chevron.pivot_offset = Vector2(6, 8)
+	chevron.rotation = PI if expanded else 0.0
+	line.add_child(chevron)
+	head.add_child(line)
+	head.clicked.connect(_toggle_relation.bind(key))
+	stack.add_child(head)
+	if expanded:
+		var indent := MarginContainer.new()
+		indent.add_theme_constant_override("margin_left", 11)
+		indent.mouse_filter = Control.MOUSE_FILTER_PASS
+		var detail := PanelContainer.new()
+		detail.mouse_filter = Control.MOUSE_FILTER_PASS
+		detail.add_theme_stylebox_override("panel", edged(Color(0, 0, 0, 0.14), Color(138 / 255.0, 205 / 255.0, 230 / 255.0, 0.55), Vector4(2, 0, 0, 0), Vector4(11, 9, 11, 10)))
+		var words := column(0)
+		words.add_child(text(str(relation.get("summary", "")), 10, Color(1, 1, 1, 0.6)))
+		var counterpart := str(relation.get("key", ""))
+		if not counterpart.is_empty():
+			words.add_child(gap(8))
+			var inspect := link("Inspect country ›", Color("#93c5fd"), 11, 750)
+			inspect.pressed.connect(_retarget.bind(counterpart))
+			words.add_child(inspect)
+		detail.add_child(words)
+		indent.add_child(detail)
+		stack.add_child(indent)
+	holder.add_child(stack)
+	return holder
+
+
+func _toggle_relation(key: String) -> void:
+	relation_open = "" if relation_open == key else key
+	_fill_relations()
+
+
+func _search_relations(value: String) -> void:
+	relation_search = value
+	await _ask_relations()
+
+
+func _sort_relations(key: String) -> void:
+	relation_sort = key
+	await _ask_relations()
+
+
+func _ask_relations() -> void:
+	if not engine or target.is_empty():
+		return
+	_relation_ask += 1
+	var asked := _relation_ask
+	var reply: Dictionary = await engine.request("country.relations", {"target": target, "search": relation_search, "sort": relation_sort})
+	if asked != _relation_ask or tab != "diplomacy" or not reply.get("ok", false):
+		return
+	var result: Variant = reply.get("result")
+	if typeof(result) != TYPE_DICTIONARY:
+		return
+	_roster = result
+	var diplomacy: Variant = data.get("diplomacy")
+	if typeof(diplomacy) == TYPE_DICTIONARY:
+		(diplomacy as Dictionary)["relations"] = result
+	_fill_relations()
 
 
 func _weariness_line(weary: Array) -> HFlowContainer:
@@ -1610,17 +2057,17 @@ func _peace_controls(holder: VBoxContainer, war: Dictionary) -> void:
 func _render_economy() -> void:
 	var definition_error := str(data.get("definitionError", ""))
 	if not definition_error.is_empty():
-		body.add_child(gap(16))
+		page.add_child(gap(16))
 		var box := card(Color(239 / 255.0, 68 / 255.0, 68 / 255.0, 0.12), Color(239 / 255.0, 68 / 255.0, 68 / 255.0, 0.3), 10, Vector4(13, 11, 13, 11))
 		box.add_child(text(definition_error, 13, UI.WHITE))
-		body.add_child(box)
+		page.add_child(box)
 		return
 	if sheet_status == "loading":
-		body.add_child(gap(16))
-		body.add_child(text("Waiting for the world to finish updating, then compiling national statistics…" if sheet_waiting else "Compiling national statistics…", 13, Color(1, 1, 1, 0.5)))
+		page.add_child(gap(16))
+		page.add_child(text("Waiting for the world to finish updating, then compiling national statistics…" if sheet_waiting else "Compiling national statistics…", 13, Color(1, 1, 1, 0.5)))
 		return
 	if sheet_status == "error":
-		body.add_child(gap(16))
+		page.add_child(gap(16))
 		var box := card(Color(239 / 255.0, 68 / 255.0, 68 / 255.0, 0.12), Color(239 / 255.0, 68 / 255.0, 68 / 255.0, 0.3), 10, Vector4(13, 11, 13, 11))
 		var stack := column(6)
 		stack.add_child(text(sheet_error, 13, UI.WHITE))
@@ -1628,7 +2075,7 @@ func _render_economy() -> void:
 		again.pressed.connect(_refresh_sheet.bind(false))
 		stack.add_child(again)
 		box.add_child(stack)
-		body.add_child(box)
+		page.add_child(box)
 		return
 	var economy: Variant = data.get("economy")
 	if typeof(economy) != TYPE_DICTIONARY or sheet_status != "ready":
@@ -1638,36 +2085,25 @@ func _render_economy() -> void:
 	var rated := typeof(intelligence) == TYPE_INT or typeof(intelligence) == TYPE_FLOAT
 	if sheet.get("custom", false):
 		if rated:
-			body.add_child(gap(16))
-			body.add_child(_intelligence_card(float(intelligence)))
+			page.add_child(gap(16))
+			page.add_child(_intelligence_card(float(intelligence)))
 		var first := true
 		for item in sheet.get("sections", []):
 			var section: Dictionary = item
-			body.add_child(_section(str(section.get("title", "")), 16.0 if first else 17.6))
+			page.add_child(_category(str(section.get("title", "")), first))
 			first = false
-			var grid := GridContainer.new()
-			grid.columns = 2
-			grid.add_theme_constant_override("h_separation", 9)
-			grid.add_theme_constant_override("v_separation", 9)
-			var wide: Array = []
+			var grid := StatFitGrid.new()
+			grid.least = INDEX_LEAST
 			for stat_item in section.get("stats", []):
 				var stat: Dictionary = stat_item
 				if str(stat.get("kind", "")) == "index":
-					wide.append(_index_card(str(stat.get("label", "")), str(stat.get("value", "")), float(stat.get("bar", 0)), tone(str(stat.get("color", "")))))
+					grid.add_child(_index_datum(str(stat.get("label", "")), stat.get("value"), tone(str(stat.get("color", "")), Color("#a1a1aa"))))
 				else:
-					var cell := card()
-					var inner := column(5)
-					inner.add_child(text(str(stat.get("label", "")), 10, Color(1, 1, 1, 0.45), 700, true, 1))
-					inner.add_child(text(str(stat.get("value", "")), 17, tone(str(stat.get("color", ""))), 800))
-					cell.add_child(inner)
-					grid.add_child(cell)
-			for card_node in wide:
-				body.add_child(card_node)
-				body.add_child(gap(9))
+					grid.add_child(_value_datum(str(stat.get("label", "")), str(stat.get("value", "")), "", tone(str(stat.get("color", "")))))
 			if grid.get_child_count() > 0:
-				body.add_child(grid)
+				page.add_child(grid)
 	else:
-		body.add_child(gap(16))
+		page.add_child(gap(16))
 		var stability: Dictionary = sheet.get("stability", {})
 		var box := card()
 		var stack := column(7)
@@ -1677,17 +2113,18 @@ func _render_economy() -> void:
 		stack.add_child(line)
 		stack.add_child(_bar(float(stability.get("value", 0)), tone(str(stability.get("color", "")))))
 		box.add_child(stack)
-		body.add_child(box)
+		page.add_child(box)
 		if rated:
-			body.add_child(gap(10))
-			body.add_child(_intelligence_card(float(intelligence)))
-		body.add_child(_section("⚑ Strategic indices"))
-		var indices := column(9)
+			page.add_child(gap(10))
+			page.add_child(_intelligence_card(float(intelligence)))
+		page.add_child(_category("⚑ Strategic indices"))
+		var indices := StatFitGrid.new()
+		indices.least = INDEX_LEAST
 		for item in sheet.get("indices", []):
 			var index: Dictionary = item
-			indices.add_child(_index_card(str(index.get("label", "")), "%d%%" % int(index.get("value", 0)), float(index.get("value", 0)), tone(str(index.get("color", "")))))
-		body.add_child(indices)
-		body.add_child(_section("👥 Population"))
+			indices.add_child(_index_datum(str(index.get("label", "")), index.get("value"), tone(str(index.get("color", "")), Color("#a1a1aa"))))
+		page.add_child(indices)
+		page.add_child(_category("👥 Population"))
 		var population: Dictionary = sheet.get("population", {})
 		var people := card()
 		var people_stack := column(5)
@@ -1696,28 +2133,20 @@ func _render_economy() -> void:
 		if not str(population.get("scope", "")).is_empty():
 			people_stack.add_child(text(str(population["scope"]), 11, Color(1, 1, 1, 0.45)))
 		people.add_child(people_stack)
-		body.add_child(people)
-		body.add_child(_section("📈 Economy"))
+		page.add_child(people)
+		page.add_child(_category("📈 Economy"))
 		var grid := GridContainer.new()
 		grid.columns = 2
 		grid.add_theme_constant_override("h_separation", 9)
 		grid.add_theme_constant_override("v_separation", 9)
 		for item in sheet.get("cards", []):
 			var entry: Dictionary = item
-			var cell := card()
-			cell.size_flags_vertical = Control.SIZE_FILL
-			var inner := column(5)
-			inner.add_child(text(str(entry.get("label", "")), 10, Color(1, 1, 1, 0.45), 700, true, 1))
-			inner.add_child(text(str(entry.get("value", "")), 17, tone(str(entry.get("tone", ""))), 800))
-			if not str(entry.get("sub", "")).is_empty():
-				inner.add_child(text(str(entry["sub"]), 11, Color(1, 1, 1, 0.4)))
-			cell.add_child(inner)
-			grid.add_child(cell)
-		body.add_child(grid)
+			grid.add_child(_value_datum(str(entry.get("label", "")), str(entry.get("value", "")), str(entry.get("sub", "")), tone(str(entry.get("tone", "")))))
+		page.add_child(grid)
 		if not str(sheet.get("currency", "")).is_empty():
-			body.add_child(gap(7))
-			body.add_child(text("Domestic currency: %s · GDP accounting shown in 2026-EUR-equivalent values." % str(sheet["currency"]), 11, Color(1, 1, 1, 0.35)))
-		body.add_child(gap(14))
+			page.add_child(gap(7))
+			page.add_child(text("Domestic currency: %s · GDP accounting shown in 2026-EUR-equivalent values." % str(sheet["currency"]), 11, Color(1, 1, 1, 0.35)))
+		page.add_child(gap(14))
 		var split := card()
 		var split_stack := column(8)
 		split_stack.add_child(text("GDP breakdown", 12, Color(1, 1, 1, 0.7)))
@@ -1739,16 +2168,16 @@ func _render_economy() -> void:
 			keys.add_child(key)
 		split_stack.add_child(keys)
 		split.add_child(split_stack)
-		body.add_child(split)
+		page.add_child(split)
 	var military: Variant = data.get("military")
 	if typeof(military) == TYPE_DICTIONARY:
-		body.add_child(_section("⚔ Military"))
-		body.add_child(_military_card(military))
-	body.add_child(gap(14))
+		page.add_child(_category("⚔ Military"))
+		page.add_child(_military_card(military))
+	page.add_child(gap(14))
 	var advanced := _wide_button("📊", Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.18), Color(147 / 255.0, 197 / 255.0, 253 / 255.0, 0.2), Color.WHITE, "Advanced statistics", ["Explore campaign trends and historical snapshots"], Color(147 / 255.0, 197 / 255.0, 253 / 255.0, 0.75), false)
 	advanced.clicked.connect(_open_advanced)
-	body.add_child(advanced)
-	body.add_child(gap(9))
+	page.add_child(advanced)
+	page.add_child(gap(9))
 	var tracking: Dictionary = data.get("tracking", {})
 	var running: bool = data.get("turnRunning", false)
 	var lines: Array = [str(tracking.get("line", "")), str(tracking.get("preview", ""))]
@@ -1762,7 +2191,7 @@ func _render_economy() -> void:
 		history.mouse_default_cursor_shape = Control.CURSOR_FORBIDDEN
 	else:
 		history.clicked.connect(_open_tracking)
-	body.add_child(history)
+	page.add_child(history)
 
 
 func _bar(value: float, color: Color, height := 6.0, mark := -1.0) -> StatBar:
@@ -1775,16 +2204,33 @@ func _bar(value: float, color: Color, height := 6.0, mark := -1.0) -> StatBar:
 	return node
 
 
-func _index_card(label: String, value: String, bar: float, color: Color) -> PanelContainer:
-	var box := card()
-	var stack := column(6)
-	var line := row(8)
-	line.add_child(text(label, 12, Color(1, 1, 1, 0.8)))
-	line.add_child(UI.label(value, 12, UI.WHITE, 800))
-	stack.add_child(line)
-	stack.add_child(_bar(bar, color))
-	box.add_child(stack)
-	return box
+func _index_datum(label: String, value: Variant, color: Color) -> StatHover:
+	var cell := StatHover.new(edged(CLEAR, DOSSIER_LINE, Vector4(0, 0, 0, 1), Vector4(8, 10, 8, 10)), edged(DATUM_HOVER, DOSSIER_LINE, Vector4(0, 0, 0, 1), Vector4(8, 10, 8, 10)))
+	var stack := column(0)
+	var title := text(label, 11, Color(1, 1, 1, 0.72))
+	title.custom_minimum_size.y = 21
+	stack.add_child(title)
+	stack.add_child(gap(4))
+	var known := typeof(value) == TYPE_INT or typeof(value) == TYPE_FLOAT
+	var figure := _rich(18, UI.WHITE, 800, 600, false)
+	figure.text = "%d[b][font_size=10][color=#ffffff66] / 100[/color][/font_size][/b]" % int(value) if known else "—"
+	stack.add_child(figure)
+	stack.add_child(gap(8))
+	stack.add_child(_bar(float(value) if known else 0.0, color))
+	cell.add_child(stack)
+	return cell
+
+
+func _value_datum(label: String, value: String, sub: String, ink: Color) -> StatHover:
+	var cell := StatHover.new(edged(CLEAR, DOSSIER_LINE, Vector4(0, 0, 0, 1), Vector4(8, 10, 8, 10)), edged(DATUM_HOVER, DOSSIER_LINE, Vector4(0, 0, 0, 1), Vector4(8, 10, 8, 10)))
+	cell.size_flags_vertical = Control.SIZE_FILL
+	var inner := column(5)
+	inner.add_child(text(label, 10, Color(1, 1, 1, 0.45), 700, true, 1))
+	inner.add_child(text(value, 17, ink, 800))
+	if not sub.is_empty():
+		inner.add_child(text(sub, 11, Color(1, 1, 1, 0.4)))
+	cell.add_child(inner)
+	return cell
 
 
 func _intelligence_card(value: float) -> PanelContainer:
@@ -1872,69 +2318,179 @@ func _wide_button(glyph: String, glyph_bg: Color, glyph_border: Color, glyph_ink
 func _render_ranking() -> void:
 	if ranking.is_empty():
 		return
-	body.add_child(_section("Ranked by"))
-	var chips := flow(6, 6)
-	for item in ranking.get("metrics", []):
-		var metric: Dictionary = item
-		var chosen: bool = metric.get("selected", false)
-		var chip := small_button(str(metric.get("label", "")), Color(43 / 255.0, 193 / 255.0, 243 / 255.0, 0.16) if chosen else Color(1, 1, 1, 0.04), Color(43 / 255.0, 193 / 255.0, 243 / 255.0, 0.6) if chosen else Color(1, 1, 1, 0.1), Color("#e8f8fe") if chosen else Color(1, 1, 1, 0.62), 11, 700, Vector4(10, 4, 10, 4), 999)
-		chip.pressed.connect(_pick_metric.bind(str(metric.get("key", ""))))
-		chips.add_child(chip)
-	body.add_child(chips)
-	body.add_child(gap(12))
-	var list := column(5)
+	page.add_child(gap(17))
+	page.add_child(caps("Ranked by", 10, Color("#a7c5d8"), 850, 2))
+	page.add_child(gap(8))
+	page.add_child(_metric_select())
+	page.add_child(gap(15))
+	page.add_child(_ranking_context())
+	var head := MarginContainer.new()
+	for side in [["margin_left", 6], ["margin_right", 6], ["margin_top", 16], ["margin_bottom", 7]]:
+		head.add_theme_constant_override(side[0], side[1])
+	head.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var columns := row(7)
+	var rank_head := caps("Rank", 10, Color("#8fa5b7"), 850, 1)
+	rank_head.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	rank_head.autowrap_mode = TextServer.AUTOWRAP_OFF
+	rank_head.custom_minimum_size.x = 35
+	columns.add_child(rank_head)
+	var flag_space := Control.new()
+	flag_space.custom_minimum_size.x = 28
+	flag_space.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	columns.add_child(flag_space)
+	columns.add_child(caps("Country", 10, Color("#8fa5b7"), 850, 1))
+	var value_head := caps("Value", 10, Color("#8fa5b7"), 850, 1)
+	value_head.size_flags_horizontal = Control.SIZE_SHRINK_END
+	value_head.custom_minimum_size.x = 1
+	value_head.autowrap_mode = TextServer.AUTOWRAP_OFF
+	value_head.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	columns.add_child(value_head)
+	head.add_child(columns)
+	page.add_child(head)
+	var list := column(0)
+	list.add_child(line_rule(Color(143 / 255.0, 187 / 255.0, 212 / 255.0, 0.23)))
 	for item in ranking.get("rows", []):
-		var entry: Dictionary = item
-		var mine: bool = entry.get("mine", false)
-		var opened: bool = entry.get("open", false)
-		var border := Color(43 / 255.0, 193 / 255.0, 243 / 255.0, 0.6) if mine else (Color(1, 1, 1, 0.28) if opened else Color(1, 1, 1, 0.08))
-		var cell := StatClickable.new(UI.box(Color(1, 1, 1, 0.1) if opened else Color(1, 1, 1, 0.04), border, 8, 1, Vector4(9, 6, 9, 6)), UI.box(Color(1, 1, 1, 0.08), border, 8, 1, Vector4(9, 6, 9, 6)))
-		if mine:
-			cell.tooltip_text = "Your country"
-		var stack := column(3)
-		var line := row(8)
-		var rank := UI.label(str(entry.get("rank", "")), 12, Color(1, 1, 1, 0.5), 800)
-		rank.custom_minimum_size.x = 27
-		line.add_child(rank)
-		var flag_box := PanelContainer.new()
-		flag_box.custom_minimum_size = Vector2(24, 16)
-		flag_box.clip_contents = true
-		flag_box.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-		flag_box.add_theme_stylebox_override("panel", UI.box(Color(1, 1, 1, 0.08), Color(0, 0, 0, 0), 3, 0))
-		flag_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		var flag := texture_for(str(entry.get("flag", "")), 32)
-		if flag:
-			var picture := TextureRect.new()
-			picture.texture = flag
-			picture.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-			picture.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
-			picture.mouse_filter = Control.MOUSE_FILTER_IGNORE
-			flag_box.add_child(picture)
-		line.add_child(flag_box)
-		line.add_child(clipped(str(entry.get("label", "")), 12, Color("#f4f4f5"), 800 if mine else 600))
-		line.add_child(UI.label(str(entry.get("value", "")), 12, Color("#f4f4f5"), 800))
-		stack.add_child(line)
-		var bar := _bar(float(entry.get("bar", 0)), UI.ACCENT, 3.0)
-		bar.track = Color(1, 1, 1, 0.08)
-		stack.add_child(bar)
-		cell.add_child(stack)
-		cell.clicked.connect(_retarget.bind(str(entry.get("key", ""))))
-		list.add_child(cell)
-	body.add_child(list)
+		list.add_child(_ranking_row(item))
+	page.add_child(list)
 	if ranking.get("more", false):
-		body.add_child(gap(10))
+		page.add_child(gap(10))
 		var every := _menu_button("Show every country")
 		every.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		every.pressed.connect(func() -> void:
 			ranking_all = true
 			_load_ranking(_sequence))
-		body.add_child(every)
+		page.add_child(every)
 	if not str(ranking.get("empty", "")).is_empty():
-		body.add_child(gap(13))
-		body.add_child(text(str(ranking["empty"]), 12, Color(1, 1, 1, 0.55)))
+		page.add_child(gap(13))
+		page.add_child(text(str(ranking["empty"]), 12, Color(1, 1, 1, 0.55)))
 	if not str(ranking.get("unranked", "")).is_empty():
-		body.add_child(gap(11))
-		body.add_child(text(str(ranking["unranked"]), 11, Color(1, 1, 1, 0.42)))
+		page.add_child(gap(11))
+		var said := text("%s %s" % [I18n.now(str(ranking["unranked"])), str(ranking.get("unrankedCount", ""))], 11, Color(1, 1, 1, 0.42))
+		said.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+		page.add_child(said)
+
+
+func _metric_select() -> OptionButton:
+	var select := OptionButton.new()
+	select.focus_mode = Control.FOCUS_NONE
+	select.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	select.custom_minimum_size = Vector2(1, 42)
+	select.fit_to_longest_item = false
+	select.clip_text = true
+	select.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	var shut := UI.box(Color("#213245"), Color(147 / 255.0, 194 / 255.0, 221 / 255.0, 0.28), 7, 1, Vector4(10, 8, 10, 8))
+	var lit := UI.box(Color("#213245"), Color(147 / 255.0, 207 / 255.0, 236 / 255.0, 0.65), 7, 1, Vector4(10, 8, 10, 8))
+	for state in [["normal", shut], ["focus", shut], ["disabled", shut], ["hover", lit], ["pressed", lit], ["hover_pressed", lit]]:
+		select.add_theme_stylebox_override(state[0], state[1])
+	select.add_theme_font_override("font", UI.font(800))
+	select.add_theme_font_size_override("font_size", 14)
+	for state in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_hover_pressed_color"]:
+		select.add_theme_color_override(state, Color("#edf5fb"))
+	var metrics: Array = ranking.get("metrics", [])
+	for index in range(metrics.size()):
+		var metric: Dictionary = metrics[index]
+		select.add_item(str(metric.get("label", "")))
+		select.set_item_metadata(index, str(metric.get("key", "")))
+		if metric.get("selected", false):
+			select.select(index)
+	select.item_selected.connect(func(index: int) -> void: _pick_metric(str(select.get_item_metadata(index))))
+	return select
+
+
+func _ranking_context() -> Control:
+	var holder := PanelContainer.new()
+	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	holder.add_theme_stylebox_override("panel", UI.box(Color("#1c2e40"), CLEAR, 0, 0))
+	var stack := column(0)
+	stack.add_child(line_rule(Color(143 / 255.0, 187 / 255.0, 212 / 255.0, 0.29)))
+	var cells := row(0)
+	cells.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var picked := plain(str(ranking.get("selectedRank", "—")), 26, Color("#8fd3f1"), 850)
+	cells.add_child(_ranking_summary(picked, "Selected country"))
+	cells.add_child(line_rule(Color(143 / 255.0, 187 / 255.0, 212 / 255.0, 0.16), true))
+	var counted := _rich(26, Color("#f0f6fa"), 850, 650, false)
+	counted.text = "%d[b][font_size=14][color=#8b9eaf] / %d[/color][/font_size][/b]" % [int(ranking.get("ranked", 0)), int(ranking.get("total", 0))]
+	cells.add_child(_ranking_summary(counted, "Countries ranked"))
+	stack.add_child(cells)
+	stack.add_child(line_rule(Color(143 / 255.0, 187 / 255.0, 212 / 255.0, 0.15)))
+	holder.add_child(stack)
+	return holder
+
+
+func _ranking_summary(figure: Control, label: String) -> Control:
+	var cell := MarginContainer.new()
+	for side in [["margin_left", 11], ["margin_right", 11], ["margin_top", 12], ["margin_bottom", 13]]:
+		cell.add_theme_constant_override(side[0], side[1])
+	cell.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	cell.custom_minimum_size.x = 1
+	cell.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var inner := column(0)
+	inner.add_child(figure)
+	inner.add_child(gap(5))
+	inner.add_child(caps(label, 10, Color("#9bb1c2"), 750, 0))
+	cell.add_child(inner)
+	return cell
+
+
+func _ranking_row(entry: Dictionary) -> RankRow:
+	var mine: bool = entry.get("mine", false)
+	var opened: bool = entry.get("open", false)
+	var rule := Color(145 / 255.0, 179 / 255.0, 202 / 255.0, 0.14)
+	var pad := Vector4(6, 9, 6, 9)
+	var normal: StyleBoxFlat
+	var hover: StyleBoxFlat
+	if opened:
+		normal = UI.box(Color("#244055"), Color(132 / 255.0, 204 / 255.0, 238 / 255.0, 0.48), 0, 1, pad)
+		hover = normal
+	elif mine:
+		normal = edged(Color(46 / 255.0, 107 / 255.0, 145 / 255.0, 0.17), rule, Vector4(0, 0, 0, 1), pad)
+		hover = normal
+	else:
+		normal = edged(CLEAR, rule, Vector4(0, 0, 0, 1), pad)
+		hover = edged(Color(119 / 255.0, 174 / 255.0, 208 / 255.0, 0.1), rule, Vector4(0, 0, 0, 1), pad)
+	var cell := RankRow.new(normal, hover)
+	cell.mine_bar = mine
+	cell.custom_minimum_size.y = 52
+	if mine:
+		cell.tooltip_text = "Your country"
+	var line := row(7)
+	var place := int(entry.get("rank", 0))
+	var ink := Color("#94a8b9")
+	if place == 1:
+		ink = Color("#e6c67b")
+	elif place == 2:
+		ink = Color("#c3d4e1")
+	elif place == 3:
+		ink = Color("#d0a58d")
+	var rank := plain(str(entry.get("rankText", "")), 13, ink, 850)
+	rank.custom_minimum_size.x = 35
+	rank.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	line.add_child(rank)
+	var flag_box := Control.new()
+	flag_box.custom_minimum_size = Vector2(28, 21)
+	flag_box.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	flag_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var flag := texture_for(str(entry.get("flag", "")), 42)
+	if flag:
+		var picture := TextureRect.new()
+		picture.texture = flag
+		picture.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		picture.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		picture.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		picture.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		flag_box.add_child(picture)
+	line.add_child(flag_box)
+	var named := text(str(entry.get("label", "")), 12, UI.WHITE if opened else Color("#e5edf5"), 700)
+	named.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+	named.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	line.add_child(named)
+	var figure := plain(str(entry.get("value", "")), 12, UI.WHITE if opened else Color("#d5e8f3"), 850)
+	figure.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	figure.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	line.add_child(figure)
+	cell.add_child(line)
+	cell.clicked.connect(_retarget.bind(str(entry.get("key", ""))))
+	return cell
 
 
 func _pick_metric(key: String) -> void:
@@ -2034,7 +2590,7 @@ func _render_advanced(loading := false) -> void:
 		var picture := TextureRect.new()
 		picture.texture = flag
 		picture.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-		picture.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+		picture.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		badge_box.add_child(picture)
 	else:
 		var initials := UI.label(str(model.get("initials", "")), 12, Color("#93c5fd"), 900)
@@ -2624,6 +3180,7 @@ class StatDonut extends Control:
 	var hovered := ""
 	var center_label := "Political"
 	var center_sub := "landscape"
+	var limit := 0.0
 	var _segments: Array = []
 
 	func _init() -> void:
@@ -2643,13 +3200,24 @@ class StatDonut extends Control:
 			result.append([party, start, finish])
 		return result
 
-	func _point(angle: float, radius: float, scale: float) -> Vector2:
+	func _side() -> float:
+		var edge: float = min(size.x, size.y)
+		return min(edge, limit) if limit > 0.0 else size.x
+
+	func _origin() -> Vector2:
+		if limit <= 0.0:
+			return Vector2.ZERO
+		var edge := _side()
+		return Vector2((size.x - edge) * 0.5, (size.y - edge) * 0.5)
+
+	func _point(angle: float, radius: float, unit: float) -> Vector2:
 		var radians := deg_to_rad(angle - 90.0)
-		return (Vector2(90, 90) + Vector2(cos(radians), sin(radians)) * radius) * scale
+		return _origin() + (Vector2(90, 90) + Vector2(cos(radians), sin(radians)) * radius) * unit
 
 	func _draw() -> void:
-		var scale := size.x / 180.0
-		draw_circle(Vector2(90, 90) * scale, 78.0 * scale, Color(1, 1, 1, 0.025), true, -1.0, true)
+		var unit := _side() / 180.0
+		var middle := _origin() + Vector2(90, 90) * unit
+		draw_circle(middle, 78.0 * unit, Color(1, 1, 1, 0.025), true, -1.0, true)
 		_segments = _segments_now()
 		for segment in _segments:
 			var party: Dictionary = segment[0]
@@ -2659,9 +3227,9 @@ class StatDonut extends Control:
 			var points := PackedVector2Array()
 			var steps: int = max(2, int(ceil((finish - start) / 3.0)))
 			for step in range(steps + 1):
-				points.append(_point(lerp(start, finish, float(step) / steps), 78.0, scale))
+				points.append(_point(lerp(start, finish, float(step) / steps), 78.0, unit))
 			for step in range(steps, -1, -1):
-				points.append(_point(lerp(start, finish, float(step) / steps), 50.0, scale))
+				points.append(_point(lerp(start, finish, float(step) / steps), 50.0, unit))
 			var color := StatPaint.tone(str(party.get("color", "")))
 			var alpha := 1.0 if id == selected or id == hovered else (0.58 if not selected.is_empty() else 0.9)
 			if id == hovered:
@@ -2669,9 +3237,9 @@ class StatDonut extends Control:
 			draw_colored_polygon(points, Color(color.r, color.g, color.b, color.a * alpha))
 			var outline := points.duplicate()
 			outline.append(points[0])
-			draw_polyline(outline, Color(1, 1, 1, 0.9) if id == selected else Color(11 / 255.0, 15 / 255.0, 23 / 255.0, 0.88), (2.4 if id == selected else 1.5) * scale * 0.5, true)
-		draw_circle(Vector2(90, 90) * scale, 47.0 * scale, Color(18 / 255.0, 20 / 255.0, 27 / 255.0, 0.98), true, -1.0, true)
-		draw_circle(Vector2(90, 90) * scale, 47.0 * scale, Color(1, 1, 1, 0.07), false, 1.0, true)
+			draw_polyline(outline, Color(1, 1, 1, 0.9) if id == selected else Color(11 / 255.0, 15 / 255.0, 23 / 255.0, 0.88), (2.4 if id == selected else 1.5) * unit * 0.5, true)
+		draw_circle(middle, 47.0 * unit, Color(18 / 255.0, 20 / 255.0, 27 / 255.0, 0.98), true, -1.0, true)
+		draw_circle(middle, 47.0 * unit, Color(1, 1, 1, 0.07), false, 1.0, true)
 		var active: Dictionary = {}
 		for item in slices:
 			var party: Dictionary = item
@@ -2682,25 +3250,27 @@ class StatDonut extends Control:
 				var party: Dictionary = item
 				if str(party.get("id", "")) == selected and not selected.is_empty():
 					active = party
-		var name := center_label
+		var heading := center_label
 		var sub := center_sub
 		if not active.is_empty():
-			name = str(active.get("shortName", active.get("name", "")))
+			heading = str(active.get("shortName", active.get("name", "")))
 			sub = str(active.get("valueText", ""))
-		if name.length() > 18:
-			name = name.substr(0, 16) + "…"
+		if heading.length() > 18:
+			heading = heading.substr(0, 16) + "…"
 		var bold := UI.font(800)
 		var regular := UI.font(700)
-		var top_size := int(round(11 * scale))
-		var sub_size := int(round(9 * scale))
-		var width := bold.get_string_size(name, HORIZONTAL_ALIGNMENT_LEFT, -1, top_size).x
-		draw_string(bold, Vector2(90 * scale - width * 0.5, 85 * scale), name, HORIZONTAL_ALIGNMENT_LEFT, -1, top_size, Color(1, 1, 1, 0.94))
+		var top_size := int(round(11 * unit))
+		var sub_size := int(round(9 * unit))
+		var width := bold.get_string_size(heading, HORIZONTAL_ALIGNMENT_LEFT, -1, top_size).x
+		draw_string(bold, Vector2(middle.x - width * 0.5, middle.y - 5 * unit), heading, HORIZONTAL_ALIGNMENT_LEFT, -1, top_size, Color(1, 1, 1, 0.94))
 		var sub_width := regular.get_string_size(sub, HORIZONTAL_ALIGNMENT_LEFT, -1, sub_size).x
-		draw_string(regular, Vector2(90 * scale - sub_width * 0.5, 101 * scale), sub, HORIZONTAL_ALIGNMENT_LEFT, -1, sub_size, Color(1, 1, 1, 0.58) if not active.is_empty() else Color(1, 1, 1, 0.36))
+		draw_string(regular, Vector2(middle.x - sub_width * 0.5, middle.y + 11 * unit), sub, HORIZONTAL_ALIGNMENT_LEFT, -1, sub_size, Color(1, 1, 1, 0.58) if not active.is_empty() else Color(1, 1, 1, 0.36))
 
-	func _slice_at(position: Vector2) -> String:
-		var scale := size.x / 180.0
-		var local := position / scale - Vector2(90, 90)
+	func _slice_at(point: Vector2) -> String:
+		var unit := _side() / 180.0
+		if unit <= 0.0:
+			return ""
+		var local := (point - _origin()) / unit - Vector2(90, 90)
 		var distance := local.length()
 		if distance < 50.0 or distance > 78.0:
 			return ""
@@ -2724,6 +3294,140 @@ class StatDonut extends Control:
 	func _notification(what: int) -> void:
 		if what == NOTIFICATION_MOUSE_EXIT and not hovered.is_empty():
 			hovering.emit("")
+		elif what == NOTIFICATION_RESIZED and limit > 0.0:
+			var want: float = max(150.0, min(size.x, limit))
+			if not is_equal_approx(custom_minimum_size.y, want):
+				custom_minimum_size.y = want
+			queue_redraw()
+
+
+class DossierHero extends PanelContainer:
+	func _init() -> void:
+		mouse_filter = Control.MOUSE_FILTER_PASS
+		size_flags_horizontal = Control.SIZE_EXPAND_FILL
+
+	func _draw() -> void:
+		var wide := size.x
+		var tall := size.y
+		draw_colored_polygon(PackedVector2Array([Vector2(wide * 0.78, 0), Vector2(wide, 0), Vector2(wide, tall), Vector2(wide * 0.95, tall)]), Color(159 / 255.0, 208 / 255.0, 232 / 255.0, 0.16 * 0.25))
+		draw_rect(Rect2(0, tall - 4.0, wide * 0.42, 3.0), Color("#78bedc"))
+
+
+class GovernmentCard extends PanelContainer:
+	var accent: StyleBoxFlat
+
+	func _init() -> void:
+		accent = StyleBoxFlat.new()
+		accent.bg_color = Color(0, 0, 0, 0)
+		accent.border_color = Color("#86bdde")
+		accent.border_width_left = 3
+		accent.set_corner_radius_all(12)
+		accent.anti_aliasing = true
+		mouse_filter = Control.MOUSE_FILTER_PASS
+		size_flags_horizontal = Control.SIZE_EXPAND_FILL
+
+	func _rounded(extent: Vector2, radius: float) -> PackedVector2Array:
+		var shape := PackedVector2Array()
+		var corners := [[Vector2(extent.x - radius, radius), -90.0], [Vector2(extent.x - radius, extent.y - radius), 0.0], [Vector2(radius, extent.y - radius), 90.0], [Vector2(radius, radius), 180.0]]
+		for corner in corners:
+			var centre: Vector2 = corner[0]
+			var from: float = corner[1]
+			for step in range(7):
+				shape.append(centre + Vector2.from_angle(deg_to_rad(from + 15.0 * step)) * radius)
+		return shape
+
+	func _draw() -> void:
+		if size.x <= 24.0 or size.y <= 24.0:
+			return
+		var circle := PackedVector2Array()
+		var centre := Vector2(size.x + 34.0 - 85.0, 13.0)
+		for step in range(48):
+			circle.append(centre + Vector2.from_angle(TAU * step / 48.0) * 85.0)
+		for piece in Geometry2D.intersect_polygons(circle, _rounded(size, 12.0)):
+			draw_colored_polygon(piece, Color(136 / 255.0, 193 / 255.0, 222 / 255.0, 0.07))
+		draw_style_box(accent, Rect2(Vector2.ZERO, size))
+
+
+class InstitutionRow extends PanelContainer:
+	var active := true
+
+	func _init() -> void:
+		mouse_filter = Control.MOUSE_FILTER_PASS
+		size_flags_horizontal = Control.SIZE_EXPAND_FILL
+
+	func _draw() -> void:
+		draw_rect(Rect2(5.0, 0, 1.0, size.y), Color(137 / 255.0, 184 / 255.0, 210 / 255.0, 0.22))
+		var dot := Vector2(5.5, 21.5)
+		draw_circle(dot, 6.5, Color("#141c27"), true, -1.0, true)
+		draw_circle(dot, 3.5, Color("#80cda6") if active else Color("#8192a6"), true, -1.0, true)
+
+
+class RecordRow extends PanelContainer:
+	var normal: StyleBox
+	var hover: StyleBox
+	var bar := false
+
+	func _init(normal_style: StyleBox, hover_style: StyleBox) -> void:
+		normal = normal_style
+		hover = hover_style
+		add_theme_stylebox_override("panel", normal)
+		mouse_filter = Control.MOUSE_FILTER_PASS
+		size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		mouse_entered.connect(func() -> void: add_theme_stylebox_override("panel", hover))
+		mouse_exited.connect(func() -> void: add_theme_stylebox_override("panel", normal))
+
+	func _draw() -> void:
+		if bar and size.y > 26.0:
+			draw_rect(Rect2(0.8, 12.3, 2.0, size.y - 24.6), Color(129 / 255.0, 170 / 255.0, 191 / 255.0, 0.42))
+
+
+class StatHover extends PanelContainer:
+	var normal: StyleBox
+	var hover: StyleBox
+
+	func _init(normal_style: StyleBox, hover_style: StyleBox) -> void:
+		normal = normal_style
+		hover = hover_style
+		add_theme_stylebox_override("panel", normal)
+		mouse_filter = Control.MOUSE_FILTER_PASS
+		size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		custom_minimum_size.x = 1
+		mouse_entered.connect(func() -> void: add_theme_stylebox_override("panel", hover))
+		mouse_exited.connect(func() -> void: add_theme_stylebox_override("panel", normal))
+
+
+class StatFitGrid extends GridContainer:
+	var least := 192.0
+
+	func _init() -> void:
+		add_theme_constant_override("h_separation", 9)
+		add_theme_constant_override("v_separation", 9)
+		size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		mouse_filter = Control.MOUSE_FILTER_PASS
+		columns = 1
+
+	func _notification(what: int) -> void:
+		if what == NOTIFICATION_RESIZED or what == NOTIFICATION_CHILD_ORDER_CHANGED or what == NOTIFICATION_READY:
+			_fit()
+
+	func _fit() -> void:
+		var count := 0
+		for child in get_children():
+			if child is Control and (child as Control).visible:
+				count += 1
+		var spacing := float(get_theme_constant("h_separation"))
+		var fit := int(floor((size.x + spacing) / (least + spacing)))
+		var want := clampi(fit, 1, maxi(1, count))
+		if want != columns:
+			columns = want
+
+
+class RankRow extends StatClickable:
+	var mine_bar := false
+
+	func _draw() -> void:
+		if mine_bar:
+			draw_rect(Rect2(0, 0, 3.0, size.y), Color("#8acde6"))
 
 
 class StatChart extends Control:

@@ -298,6 +298,7 @@ export * as ctMilitaryPower from "../../src/runtime/militaryPower.js";
 export * as ctMilitaryRating from "../../src/Game/AI/militaryRating.js";
 export * as ctMilitaryStats from "../../src/runtime/militaryStats.js";
 export * as ctCountryRanking from "../../src/Game/GameUI/countryRanking.js";
+export * as ctCountryDiplomacyView from "../../src/Game/GameUI/countryDiplomacyView.js";
 export * as ctPowerStatus from "../../src/runtime/powerStatus.js";
 export * as ctCountryTags from "../../src/runtime/countryTags.js";
 export * as ctCountryStats from "../../src/runtime/countryStats.js";

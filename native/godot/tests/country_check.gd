@@ -61,7 +61,10 @@ func _texts(node: Node, into: PackedStringArray) -> PackedStringArray:
 	if node is CanvasItem and not (node as CanvasItem).is_visible_in_tree():
 		return into
 	if node is Label:
-		into.append((node as Label).text)
+		into.append((node as Label).text.to_upper() if (node as Label).uppercase else (node as Label).text)
+	elif node is OptionButton:
+		for index in range((node as OptionButton).item_count):
+			into.append((node as OptionButton).get_item_text(index))
 	elif node is Button:
 		into.append((node as Button).text)
 	elif node is RichTextLabel:
@@ -104,6 +107,29 @@ func _press(node: Node, wanted: String) -> bool:
 		if _press(child, wanted):
 			return true
 	return false
+
+
+func _relation_names(panel: Node) -> PackedStringArray:
+	var names := PackedStringArray()
+	var box: Variant = panel.get("_relations_box")
+	if not (box is Node) or not is_instance_valid(box):
+		return names
+	for entry in (box as Node).get_children():
+		if entry.is_queued_for_deletion():
+			continue
+		var found := _find_all(entry, func(node: Node) -> bool: return node is Label and (node as Label).clip_text, [])
+		if not found.is_empty():
+			names.append((found[0] as Label).text)
+	return names
+
+
+func _index_columns(panel: Node) -> int:
+	var grids := _find_all(panel.get("body"), func(node: Node) -> bool: return node is CountryPanel.StatFitGrid, [])
+	return (grids[0] as GridContainer).columns if grids.size() == 1 else -1
+
+
+func _caps_label(node: Node, wanted: String) -> bool:
+	return not _find_all(node, func(item: Node) -> bool: return item is Label and (item as Label).uppercase and (item as Label).text == wanted and (item as Label).is_visible_in_tree(), []).is_empty()
 
 
 func _has_text(node: Node, wanted: String) -> bool:
@@ -220,7 +246,13 @@ func _country_panel() -> void:
 	await _wait(1.0)
 	_check(panel.target == "France", "panel opens on the player's own country")
 	_check(_has_text(panel, "🏛 Politics") and _has_text(panel, "🤝 Diplomacy") and _has_text(panel, "📈 Economy") and _has_text(panel, "🏆 Ranking"), "four tabs")
-	_check(_has_text(panel, "Country") and _has_text(panel, "Politics, diplomacy and national statistics"), "drawer header")
+	_check(_has_text(panel, "COUNTRY") and panel.header_title.uppercase and not panel.header_subtitle.visible and not _has_text(panel, "Politics, diplomacy and national statistics"), "drawer toolbar: COUNTRY in capitals, no subtitle")
+	var hero_flags := _find_all(panel.body, func(node: Node) -> bool: return node is TextureRect and node.get_parent() is PanelContainer and (node.get_parent() as Control).custom_minimum_size == Vector2(74, 50), [])
+	_check(hero_flags.size() == 1 and (hero_flags[0] as TextureRect).stretch_mode == TextureRect.STRETCH_KEEP_ASPECT_CENTERED and (hero_flags[0] as TextureRect).texture != null, "hero: the flag is shown whole in its 74×50 frame")
+	_check(_find_all(panel.body, func(node: Node) -> bool: return node is CountryPanel.DossierHero, []).size() == 1, "hero: the identity header")
+	_check(_find_all(panel.body, func(node: Node) -> bool: return node is CountryPanel.GovernmentCard, []).size() == 1, "politics: the Government card is a leadership brief")
+	var donuts := _find_all(panel.body, func(node: Node) -> bool: return node is CountryPanel.StatDonut, [])
+	_check(donuts.size() == 1 and is_equal_approx(float(donuts[0].get("limit")), 160.0) and _has_text(panel, "PS") and _has_text(panel, "29%"), "politics: the party donut beside its legend")
 	_check(_has_text(panel, "Your country"), "Your country badge")
 	_check(_has_text(panel, "GOVERNMENT") and _has_text(panel, "François Hollande"), "politics: government card")
 	_check(_has_text(panel, "POLITICAL LANDSCAPE"), "politics: landscape card")
@@ -235,6 +267,16 @@ func _country_panel() -> void:
 	_check(_has_text(panel, "National Populism · Frontism (unlisted)"), "politics: an unlisted subideology is marked")
 	_check(_has_text(panel, "Other political support"), "politics: the other support row")
 	await _shoot("01-country-politics")
+	panel.scroll.scroll_vertical = 0
+	await _wait(0.3)
+	_check(panel._sticky != null and not panel._sticky.visible, "tabs: in place under the header, no floating copy")
+	panel.scroll.scroll_vertical = 420
+	await _wait(0.3)
+	var pane_top: float = panel.scroll.get_global_rect().position.y
+	_check(panel._sticky != null and panel._sticky.visible and absf(panel._sticky.global_position.y - pane_top) < 1.0 and _has_text(panel._sticky, "🏛 Politics"), "tabs: stick to the top of the pane when it scrolls")
+	await _shoot("01b-country-sticky-tabs")
+	panel.scroll.scroll_vertical = 0
+	await _wait(0.2)
 	panel._pick_party("ps")
 	await _wait(0.3)
 	_check(_has_text(panel, "The governing party of the centre-left.") and _has_text(panel, "Pro-Europeanism") and not _has_text(panel, "Party leader"), "politics: a party row opens onto its description and outlook")
@@ -280,6 +322,42 @@ func cancel(id: int) -> void:
 	_check(_has_text(panel, "Élysée Treaty") and _has_text(panel, "vs Libya") and _has_text(panel, "Fighting alongside Chad"), "diplomacy rows")
 	_check(_has_text(panel, "War weariness: ") and _has_text(panel, "France 45") and _has_text(panel, "strained") and _has_text(panel, "Libya 83") and _has_text(panel, "exhausted") and not _has_text(panel, "Chad 30"), "war weariness: your own country beside the enemy's, a word for each")
 	await _shoot("03-country-diplomacy")
+	_check(_has_text(panel, "RELATIONS") and _has_text(panel, "ACTIVE AGREEMENTS") and _has_text(panel, "CONFLICTS") and not _has_text(panel, "🤝 DIPLOMACY"), "diplomacy: the three counts as one strip, no section title")
+	_check(_has_text(panel, "−100 to +100 · 3 recorded"), "diplomacy: the relations header counts the records")
+	_check(_relation_names(panel) == PackedStringArray(["Germany", "United Kingdom", "Libya"]), "diplomacy: relations strongest first (%s)" % ", ".join(_relation_names(panel)))
+	_check(not _has_text(panel, "The Franco-German engine of the European Union.") and _has_text(panel, "Find country or relation…") and _has_text(panel, "Strongest first") and _has_text(panel, "Name A–Z"), "diplomacy: a compact roster with search and sort, stories folded")
+	panel._toggle_relation("id:rel-fr-de")
+	await _wait(0.2)
+	_check(_has_text(panel, "The Franco-German engine of the European Union.") and _has_text(panel, "Inspect country ›"), "diplomacy: a row opens onto its story and Inspect country")
+	await _shoot("03a-country-relation-open")
+	panel._relation_field.text = "channel"
+	await panel._search_relations("channel")
+	await _wait(0.2)
+	_check(_relation_names(panel) == PackedStringArray(["United Kingdom"]) and is_instance_valid(panel._relation_field) and panel._relation_field.text == "channel", "diplomacy: search finds a relation by its description (%s)" % ", ".join(_relation_names(panel)))
+	panel._relation_field.text = "hostile"
+	await panel._search_relations("hostile")
+	await _wait(0.2)
+	_check(_relation_names(panel) == PackedStringArray(["Libya"]), "diplomacy: search finds a relation by its status")
+	panel._relation_field.text = "absent"
+	await panel._search_relations("absent")
+	await _wait(0.2)
+	_check(_relation_names(panel).is_empty() and _has_text(panel, "No relationships match the search. 3 records are still available."), "diplomacy: no match says how many records remain")
+	await _shoot("03b-country-relation-no-match")
+	panel._relation_field.text = ""
+	await panel._search_relations("")
+	await panel._sort_relations("weakest")
+	await _wait(0.2)
+	_check(_relation_names(panel) == PackedStringArray(["Libya", "United Kingdom", "Germany"]), "diplomacy: weakest first (%s)" % ", ".join(_relation_names(panel)))
+	await panel._sort_relations("alphabetical")
+	await _wait(0.2)
+	_check(_relation_names(panel) == PackedStringArray(["Germany", "Libya", "United Kingdom"]), "diplomacy: name A–Z (%s)" % ", ".join(_relation_names(panel)))
+	await _shoot("03c-country-relations-sorted")
+	var inspected := _press(panel, "Inspect country ›")
+	await _until(func() -> bool: return panel.target == "Germany", 10.0)
+	await _wait(0.6)
+	_check(inspected and panel.target == "Germany" and panel.tab == "diplomacy" and panel.relation_sort == "strongest" and panel.relation_open.is_empty(), "diplomacy: Inspect country opens that country on the same tab, its roster reset")
+	await panel.show_country("France")
+	await _wait(0.6)
 	panel.scroll.scroll_vertical = 560
 	await _wait(0.2)
 	_check(_has_text(panel, "Propose peace in the chat") and not _has_text(panel, "Put these terms"), "peace is proposed in the chat")
@@ -306,7 +384,18 @@ func cancel(id: int) -> void:
 	_check(ready and panel.sheet_status == "ready", "economy sheet generated (%s %s)" % [panel.sheet_status, panel.sheet_error])
 	_check(_has_text(panel, "⚠ NATIONAL STABILITY") and _has_text(panel, "TOTAL POPULATION") and _has_text(panel, "GDP breakdown"), "economy cards")
 	_check(_has_text(panel, "⚑ STRATEGIC INDICES") and _has_text(panel, "📈 ECONOMY") and _has_text(panel, "GDP/CAPITA"), "economy sections")
+	var grids := _find_all(panel.body, func(node: Node) -> bool: return node is CountryPanel.StatFitGrid, [])
+	var index_grid: GridContainer = grids[0] if grids.size() == 1 else null
+	_check(index_grid != null and index_grid.get_child_count() == 6 and index_grid.columns == 1, "economy: the six strategic indices in one compact grid, one column at the default width")
+	_check(index_grid != null and _has_text(index_grid.get_child(0), "⚑ Sovereignty") and _has_text(index_grid.get_child(0), "82 / 100") and _has_text(index_grid.get_child(5), "International reputation") and _has_text(index_grid.get_child(5), "78 / 100"), "economy: indices keep their order and read N / 100")
 	await _shoot("05-country-economy")
+	panel.set_drawer_width(560)
+	await _wait(0.5)
+	_check(_index_columns(panel) == 2, "economy: a wider drawer fits two index columns (%d)" % _index_columns(panel))
+	await _shoot("05a-country-economy-wide")
+	panel.set_drawer_width(320)
+	await _wait(0.5)
+	_check(_index_columns(panel) == 1, "economy: and one again at the default width (%d)" % _index_columns(panel))
 	panel.scroll.scroll_vertical = 700
 	await _wait(0.3)
 	await _shoot("06-country-economy-lower")
@@ -378,7 +467,17 @@ func request(method: String, args: Dictionary = {}) -> Dictionary:
 
 	await panel.set_tab("ranking")
 	await _wait(1.2)
-	_check(_has_text(panel, "RANKED BY") and _has_text(panel, "Land held"), "ranking chips")
+	_check(_has_text(panel, "RANKED BY") and _has_text(panel, "Land held"), "ranking metrics")
+	var selects := _find_all(panel.body, func(node: Node) -> bool: return node is OptionButton, [])
+	_check(selects.size() == 1 and (selects[0] as OptionButton).item_count == (panel.ranking.get("metrics", []) as Array).size() and (selects[0] as OptionButton).item_count > 1, "ranking: one complete metric selector instead of a cloud of buttons")
+	var picked_rank := str(panel.ranking.get("selectedRank", ""))
+	_check(picked_rank.begins_with("#") and _has_text(panel, picked_rank) and _caps_label(panel.body, "Selected country") and _caps_label(panel.body, "Countries ranked") and _has_text(panel, "%d / %d" % [int(panel.ranking.get("ranked", 0)), int(panel.ranking.get("total", 0))]), "ranking: the selected country's rank and how many are ranked (%s)" % picked_rank)
+	_check(_caps_label(panel.body, "Rank") and _caps_label(panel.body, "Country") and _caps_label(panel.body, "Value"), "ranking: the leaderboard's column heads")
+	var rank_rows := _find_all(panel.body, func(node: Node) -> bool: return node is CountryPanel.RankRow, [])
+	_check(not rank_rows.is_empty() and _has_text(rank_rows[0], "01") and _find_all(rank_rows[0], func(node: Node) -> bool: return node is CountryPanel.StatBar, []).is_empty(), "ranking: rows read 01, 02… without the old bar")
+	var rank_flags := _find_all(panel.body, func(node: Node) -> bool: return node is TextureRect and (node as TextureRect).texture != null, [])
+	_check(not rank_flags.is_empty() and rank_flags.all(func(node: TextureRect) -> bool: return node.stretch_mode == TextureRect.STRETCH_KEEP_ASPECT_CENTERED), "ranking: flags shown whole (%d)" % rank_flags.size())
+	_check(rank_rows.any(func(node: Node) -> bool: return bool(node.get("mine_bar"))), "ranking: the player's row is marked")
 	await _shoot("12-country-ranking")
 	var before: String = panel.target
 	panel.ranking_all = true
@@ -435,7 +534,22 @@ func _map_cards() -> void:
 	var tip: float = card.position.y + card.get_combined_minimum_size().y
 	_check(abs(tip - (screen.y - 10.0)) <= 1.5, "region card pointer tip sits 10 px above the click, as released (tip %.1f, click %.1f)" % [tip, screen.y])
 	_check(abs(card.position.x + card.size.x * 0.5 - screen.x) <= 1.5, "region card centred on the click")
+	var banners := _find_all(card, func(node: Node) -> bool: return node is Control and node.has_meta("banner"), [])
+	var banner_flags := _find_all(card, func(node: Node) -> bool: return node is TextureRect and (node as TextureRect).texture != null and node.get_parent().has_meta("banner"), [])
+	if banners.size() == 1 and banner_flags.size() == 1:
+		var shown_flag: Texture2D = (banner_flags[0] as TextureRect).texture
+		var whole: float = round(238.0 * shown_flag.get_height() / shown_flag.get_width())
+		_check(absf(float(banners[0].get_meta("banner")) - whole) < 0.5 and (banners[0] as Control).size.y == whole and (banner_flags[0] as TextureRect).stretch_mode == TextureRect.STRETCH_KEEP_ASPECT_CENTERED, "region card: the flag banner keeps the flag's own proportions (%.0f px for %.0f)" % [(banners[0] as Control).size.y, whole])
+	else:
+		_check(false, "region card: a flag banner (%d, %d)" % [banners.size(), banner_flags.size()])
 	await _shoot("14-region-card")
+	var home: Vector2 = cards._floating_anchor
+	cards._floating_anchor = cards._screen_to_world(Vector2(screen.x, 30.0))
+	await _wait(0.4)
+	_check(card.position.y >= 7.5 and card.position.y <= 8.5, "region card: near the top edge it stays on screen (top %.1f)" % card.position.y)
+	await _shoot("14a-region-card-top-edge")
+	cards._floating_anchor = home
+	await _wait(0.4)
 	var marker := _click_marker(screen)
 	await _shoot("14b-region-card-click-marker")
 	marker.queue_free()

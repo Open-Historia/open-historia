@@ -814,6 +814,9 @@ func _on_region_clicked(index: int) -> void:
 func _reload_flag_and_map() -> void:
 	if not _engine:
 		return
+	var country_drawer: Variant = drawers.get("country")
+	if country_drawer is CountryPanel and (country_drawer as CountryPanel).is_open():
+		(country_drawer as CountryPanel).refresh()
 	var flag := await _engine.request("game.flag", {"country": str(_game.get("country", ""))})
 	if flag.get("ok", false):
 		set_flag_info(flag["result"])
