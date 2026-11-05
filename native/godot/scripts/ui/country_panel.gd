@@ -83,6 +83,15 @@ var _compile_call := 0
 func _init() -> void:
 	super._init("Country", "", "drawer", DEFAULT_WIDTH)
 	set_tint(Color(24 / 255.0, 24 / 255.0, 27 / 255.0, 0.95))
+	_material.set_shader_parameter("radius", 0.0)
+	_material.set_shader_parameter("highlight", 0.0)
+	_material.set_shader_parameter("border_color", CLEAR)
+	_material.set_shader_parameter("blur_px", 8.0)
+	add_theme_stylebox_override("panel", UI.box(CLEAR))
+	offset_top = 0.0
+	offset_bottom = 0.0
+	offset_left = 0.0
+	offset_right = DEFAULT_WIDTH
 	_restyle_header()
 	_build_handle()
 	var margin := body.get_parent() as MarginContainer
@@ -178,14 +187,23 @@ func _reset_relations() -> void:
 	_relation_ask += 1
 
 
+func set_open(open_state: bool) -> void:
+	_open = open_state
+	var tween := create_tween().set_parallel(true).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	tween.tween_property(self, "offset_left", -_drawer_width if open_state else 0.0, 0.3)
+	tween.tween_property(self, "offset_right", 0.0 if open_state else _drawer_width, 0.3)
+	tween.tween_property(self, "modulate:a", 1.0 if open_state else 0.0, 0.3)
+	mouse_filter = Control.MOUSE_FILTER_STOP if open_state else Control.MOUSE_FILTER_IGNORE
+
+
 func set_drawer_width(width: float) -> void:
 	var viewport := get_viewport_rect().size.x if is_inside_tree() else 1440.0
 	var most: float = max(viewport - LEFT_CLEARANCE, min(DEFAULT_WIDTH, viewport - 16.0))
 	_drawer_width = round(clamp(width, min(MIN_WIDTH, most), most))
 	set_meta("width", _drawer_width)
 	if is_open():
-		offset_left = -8.0 - _drawer_width
-		offset_right = -8.0
+		offset_left = -_drawer_width
+		offset_right = 0.0
 
 
 func drawer_width() -> float:
@@ -200,16 +218,14 @@ func _restyle_header() -> void:
 	var titles := header_title.get_parent() as VBoxContainer
 	var row := titles.get_parent() as HBoxContainer
 	var header := row.get_parent() as MarginContainer
-	for side in [["margin_left", 13], ["margin_right", 13], ["margin_top", 10], ["margin_bottom", 10]]:
+	for side in [["margin_left", 13], ["margin_right", 13], ["margin_top", 8], ["margin_bottom", 8]]:
 		header.add_theme_constant_override(side[0], side[1])
-	header.custom_minimum_size.y = 48
+	header.custom_minimum_size.y = 47
 	row.add_theme_constant_override("separation", 9)
 	titles.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_toolbar_style = UI.box(DOSSIER_TOOLBAR, CLEAR, 0, 0)
-	_toolbar_style.corner_radius_top_left = 18
-	_toolbar_style.corner_radius_top_right = 18
 	header.draw.connect(func() -> void: header.draw_style_box(_toolbar_style, Rect2(Vector2.ZERO, header.size)))
-	header_title.add_theme_font_override("font", UI.font(850, "Arial", 2))
+	header_title.add_theme_font_override("font", UI.font(850, "Arial", 1))
 	header_title.add_theme_font_size_override("font_size", 12)
 	header_title.add_theme_color_override("font_color", Color("#d7e5f0"))
 	header_title.uppercase = true
@@ -221,18 +237,26 @@ func _restyle_header() -> void:
 	var close_button := row.get_child(row.get_child_count() - 1) as Button
 	if close_button:
 		close_button.tooltip_text = "Close country panel"
-		close_button.icon = UI.icon("close", 18, Color(1, 1, 1, 0.55))
+		close_button.icon = null
+		close_button.text = "✕"
+		close_button.flat = false
 		close_button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		close_button.add_theme_font_override("font", UI.font(400))
+		close_button.add_theme_font_size_override("font_size", 22)
+		var bare := StyleBoxEmpty.new()
+		bare.content_margin_left = 8
+		for state in ["normal", "hover", "pressed", "focus", "hover_pressed"]:
+			close_button.add_theme_stylebox_override(state, bare)
+		for state in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_hover_pressed_color"]:
+			close_button.add_theme_color_override(state, Color(1, 1, 1, 0.55))
 	var rule := header.get_parent().get_child(1) as ColorRect
 	if rule:
 		rule.color = DOSSIER_LINE
 
 
 func _style_scroll() -> void:
-	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_NEVER
 	var sheet := UI.box(DOSSIER_PAGE, CLEAR, 0, 0)
-	sheet.corner_radius_bottom_left = 18
-	sheet.corner_radius_bottom_right = 18
 	scroll.add_theme_stylebox_override("panel", sheet)
 	var bar := scroll.get_v_scroll_bar()
 	var grab := UI.box(Color(148 / 255.0, 187 / 255.0, 209 / 255.0, 0.3), CLEAR, 999, 0)
@@ -254,6 +278,12 @@ func _build_handle() -> void:
 	overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(overlay)
 	_overlay = overlay
+	var edge := ColorRect.new()
+	edge.color = Color(1, 1, 1, 0.1)
+	edge.anchor_bottom = 1.0
+	edge.offset_right = 1.0
+	edge.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	overlay.add_child(edge)
 	var handle := Control.new()
 	handle.anchor_bottom = 1.0
 	handle.offset_right = 10.0
@@ -640,6 +670,24 @@ static func caps(value: String, size: int, color: Color, weight := 850, spacing 
 	return node
 
 
+static func leading(base: Font, size: int, line_height: float) -> Font:
+	var variation := FontVariation.new()
+	variation.base_font = base
+	var extra := size * line_height - base.get_height(size)
+	variation.spacing_top = int(floor(extra * 0.5))
+	variation.spacing_bottom = int(round(extra - floor(extra * 0.5)))
+	return variation
+
+
+static func tight(node: Control, size: int, weight: int, line_height: float) -> Control:
+	var face := leading(UI.font(weight), size, line_height)
+	if node is RichTextLabel:
+		node.add_theme_font_override("normal_font", face)
+	else:
+		node.add_theme_font_override("font", face)
+	return node
+
+
 static func plain(value: String, size: int, color: Color, weight := 400) -> Label:
 	var node := UI.label(value, size, color, weight)
 	node.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
@@ -753,8 +801,11 @@ func _render_header() -> void:
 		frame.add_child(initials)
 	line.add_child(frame)
 	var info := column(0)
-	var title_row := row(8)
-	title_row.add_child(text(str(data.get("name", target)), 21, DOSSIER_TEXT, 850))
+	var title_row := flow(8, 6)
+	var title := text(str(data.get("name", target)), 21, DOSSIER_TEXT, 850)
+	tight(title, 21, 850, 1.16)
+	title.custom_minimum_size.x = 160
+	title_row.add_child(title)
 	if data.get("isPlayer", false):
 		var mine := pill("Your country", Color(245 / 255.0, 158 / 255.0, 11 / 255.0, 0.18), Color(245 / 255.0, 158 / 255.0, 11 / 255.0, 0.5), Color("#fbbf24"), 10, 700, Vector4(8, 2, 8, 2))
 		mine.size_flags_vertical = Control.SIZE_SHRINK_CENTER
@@ -1794,7 +1845,7 @@ func _summary_strip(metrics: Array) -> Control:
 		label.custom_minimum_size.y = 19
 		inner.add_child(label)
 		inner.add_child(gap(4))
-		inner.add_child(plain(str(metric.get("value", "")), 23, tone(str(metric.get("tone", ""))), 850))
+		inner.add_child(tight(plain(str(metric.get("value", "")), 23, tone(str(metric.get("tone", ""))), 850), 23, 850, 1.18))
 		cell.add_child(inner)
 		cells.add_child(cell)
 	stack.add_child(cells)
@@ -2505,9 +2556,11 @@ func _ranking_context() -> Control:
 	var cells := row(0)
 	cells.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	var picked := plain(str(ranking.get("selectedRank", "—")), 26, Color("#8fd3f1"), 850)
+	tight(picked, 26, 850, 1.14)
 	cells.add_child(_ranking_summary(picked, "Selected country"))
 	cells.add_child(line_rule(Color(143 / 255.0, 187 / 255.0, 212 / 255.0, 0.16), true))
 	var counted := _rich(26, Color("#f0f6fa"), 850, 650, false)
+	tight(counted, 26, 850, 1.14)
 	counted.text = "%d[b][font_size=14][color=#8b9eaf] / %d[/color][/font_size][/b]" % [int(ranking.get("ranked", 0)), int(ranking.get("total", 0))]
 	cells.add_child(_ranking_summary(counted, "Countries ranked"))
 	stack.add_child(cells)
@@ -2526,7 +2579,10 @@ func _ranking_summary(figure: Control, label: String) -> Control:
 	var inner := column(0)
 	inner.add_child(figure)
 	inner.add_child(gap(5))
-	inner.add_child(caps(label, 10, Color("#9bb1c2"), 750, 0))
+	var named := caps(label, 10, Color("#9bb1c2"), 750, 0)
+	named.autowrap_mode = TextServer.AUTOWRAP_OFF
+	named.clip_text = true
+	inner.add_child(named)
 	cell.add_child(inner)
 	return cell
 

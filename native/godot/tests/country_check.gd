@@ -48,6 +48,29 @@ func _wait(seconds: float) -> void:
 	await create_timer(seconds).timeout
 
 
+func _cover_gone() -> void:
+	var shell: Variant = main.get("shell")
+	if shell == null or shell.get("loading") == null:
+		return
+	var deadline := Time.get_ticks_msec() + 90000
+	while (shell.loading as GameLoadingScreen).is_open() and Time.get_ticks_msec() < deadline:
+		await process_frame
+	await _wait(0.5)
+
+
+func _shoot2x(name: String) -> void:
+	if shots.is_empty():
+		return
+	var before := root.size
+	root.size = Vector2i(before.x * 2, before.y * 2)
+	root.content_scale_factor = 2.0
+	await _frames(10)
+	root.get_viewport().get_texture().get_image().save_png(shots.path_join(name + "@2x.png"))
+	root.size = before
+	root.content_scale_factor = 1.0
+	await _frames(6)
+
+
 func _shoot(name: String) -> void:
 	await _frames(4)
 	await RenderingServer.frame_post_draw
@@ -267,6 +290,7 @@ func _run() -> void:
 	main.picker._choose("France")
 	await main._on_country_chosen("France", "medium")
 	await _until(func() -> bool: return main.hud.drawers.has("country") and main.hud.map_cards != null, 20.0)
+	await _cover_gone()
 	await _wait(1.0)
 	var seeded: Dictionary = await main.engine.request("country.standin_seed", {"blocs": true})
 	_check(seeded.get("ok", false), "stand-in world seeded")
@@ -312,7 +336,8 @@ func _country_panel() -> void:
 	await _wait(0.3)
 	_check(panel._sticky != null and not panel._sticky.visible, "tabs: in place under the header, no floating copy")
 	panel.scroll.scroll_vertical = 420
-	await _wait(0.3)
+	await _until(func() -> bool: return panel._sticky != null and panel._sticky.visible, 5.0)
+	await _wait(0.2)
 	var pane_top: float = panel.scroll.get_global_rect().position.y
 	_check(panel._sticky != null and panel._sticky.visible and absf(panel._sticky.global_position.y - pane_top) < 1.0 and _has_text(panel._sticky, "🏛 Politics"), "tabs: stick to the top of the pane when it scrolls")
 	await _shoot("01b-country-sticky-tabs")

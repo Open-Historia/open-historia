@@ -27,7 +27,7 @@ void vertex() {
 }
 void fragment() {
 	vec2 p = local;
-	vec4 color = texture(TEXTURE, UV) * COLOR;
+	vec4 color = COLOR;
 	float alpha = 1.0;
 	if (p.y < radius) {
 		if (p.x < radius) alpha = clamp(radius - length(p - vec2(radius)) + 0.5, 0.0, 1.0);
