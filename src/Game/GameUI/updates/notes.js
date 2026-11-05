@@ -53,6 +53,28 @@ import { PAST_UPDATES } from "./notesPast.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // MapLibre never kept a tile's painted terrain between frames once there were two stacks of layers: it does now,
+    // ended by what changes it (Map/terrainCaches.js). Clipping masks are kept while the tiles are the same
+    // (Map/clippingMasks.js), sources share what they work out (Map/sourceCaches.js), and the idle pulse asks the
+    // world each whole-map question once and lets the map draw between its stages (runtime/worldLookups.js).
+    // Every pixel and every prompt checked identical; on the owner's phone the pulse's freeze fell from 1.6 s to 0.45 s.
+    id: "2026-11-less-for-the-gpu",
+    kind: "minor",
+    date: "2026-11-05",
+    channel: "beta",
+    banners: [
+      {
+        title: "Less work for your graphics card",
+        items: [
+          "With 3D terrain on, the map now takes about a quarter of the graphics work it did while you look around it, so it runs smoother and cooler, above all on computers with modest graphics.",
+          "Pinching to zoom on a phone stutters less.",
+          "The freeze you could feel when a country was deciding whether to write to you is about a quarter as long, and the map keeps moving through most of it.",
+          "The map looks just as it did: only the work behind it has changed.",
+        ],
+      },
+    ],
+  },
+  {
     // The translator's on-device model (runtime/translationModels.js, translationWorker.js): Opus-MT for ar de es fr
     // id it nl pt ru zh (and da hu ro, which have no pack), downloaded once after the player says yes; the AI keeps
     // every other language and whatever the model's answer was refused for. The owner, 2026-11-05.

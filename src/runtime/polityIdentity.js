@@ -14,6 +14,7 @@
 import COUNTRY_NAMES from "./generated/countryNames.js";
 import OFFICIAL_COUNTRY_CODES_BY_NAME from "./generated/officialCountryAliases.js";
 import { toCountryName } from "./ownerNames.js";
+import { lookedUp } from "./worldLookups.js";
 
 const normalizeString = (value) => String(value ?? "").trim();
 
@@ -299,13 +300,13 @@ const chooseUnique = (candidates) => {
 };
 
 // (Every region's owner counted once for both: it is most of the index's cost.)
-export const buildPolityIdentityIndex = (world) => {
+export const buildPolityIdentityIndex = (world) => lookedUp(world, "polityIdentityIndex", () => {
   const ownershipCounts = countOwnedRegions(world);
   return {
     declared: buildDeclaredPolities(world, ownershipCounts),
     ownershipCounts,
   };
-};
+});
 
 export const resolvePolityIdentity = (
   token,
