@@ -495,3 +495,67 @@ export const buildPoliticalLandscape = (publicPoliticalProfile, options = {}) =>
     hasQuantitativeValues: false,
   };
 };
+
+
+// This is strictly a presentation selector. The canonical representation model
+// remains the simulation/generation contract; it must not hide an already-public
+// second roster or be rewritten when a player changes what they are inspecting.
+export const buildPoliticalLandscapeViews = (publicPoliticalProfile, options = {}) => {
+  const hasNamed = (key) => (Array.isArray(publicPoliticalProfile?.[key])
+    ? publicPoliticalProfile[key] : []).some((entry) => clean(entry?.name));
+  const hasParties = hasNamed("parties");
+  const hasBlocs = hasNamed("powerBlocs");
+  if (!hasParties && !hasBlocs) {
+    return { parties: null, blocs: null, defaultView: "", canSwitch: false };
+  }
+
+  const meta = getPoliticalLandscapeMeta(publicPoliticalProfile);
+  const parties = hasParties ? (() => {
+    const data = buildPoliticalPartyLandscape(publicPoliticalProfile, options);
+    return {
+      ...POLITICAL_LANDSCAPE_META.electoral,
+      representation: meta.representation,
+      ...data,
+      entries: data.slices.length ? data.slices : data.parties,
+      totalKnownPercent: data.totalKnownSupport,
+      hasQuantitativeValues: data.slices.length > 0,
+    };
+  })() : null;
+
+  const blocs = hasBlocs ? (() => {
+    const data = buildPoliticalPowerStructure(publicPoliticalProfile);
+    return {
+      ...POLITICAL_LANDSCAPE_META.elite_factions,
+      representation: meta.representation,
+      title: "Power blocs",
+      subtitle: "Recorded non-party influence; each strength is independent",
+      source: "blocs",
+      ...data,
+      // A power bloc's influence need not partition a shared 100% pie.
+      // Do not display the synthetic "Other" complement from the legacy chart.
+      entries: data.blocs,
+      hasQuantitativeValues: data.hasQuantitativeInfluence,
+    };
+  })() : (meta.representation === "party_state" && hasParties ? (() => {
+    const data = buildPoliticalLandscape(publicPoliticalProfile, options);
+    return {
+      ...data,
+      title: "Power structure",
+      subtitle: "Party-state influence; no separate power-bloc roster is recorded",
+      source: "party-influence",
+      entries: data.blocs || data.entries,
+    };
+  })() : null);
+
+  const defaultView = meta.mode === "party" && parties ? "parties"
+    : meta.mode === "power" && blocs ? "blocs"
+      : parties ? "parties"
+        : blocs ? "blocs" : "";
+  return {
+    parties,
+    blocs,
+    defaultView,
+    // An inferred party-state fallback is not a separate bloc roster.
+    canSwitch: Boolean(hasParties && hasBlocs),
+  };
+};

@@ -7,7 +7,7 @@
 // 2026-11-03). A country whose parties lack them can have them filled in on
 // the player's asking (onCompile: Game/AI/gameplay.js assessPoliticalLandscape).
 import React, { useEffect, useMemo, useState } from "react";
-import { buildGovernmentPartyPresentation, buildPoliticalLandscape } from "../../runtime/politicalPresentation.js";
+import { buildGovernmentPartyPresentation, buildPoliticalLandscapeViews } from "../../runtime/politicalPresentation.js";
 import { formatGameDateReadable } from "../../runtime/gameDates.js";
 import { PARTY_ROLE_LABELS, findIdeology, isListedSubideology } from "../../runtime/politics.js";
 
@@ -101,8 +101,8 @@ const PartyDonut = ({ slices, selectedId, hoveredId, onSelect, onHover, centerLa
   const centerSub = active ? (active.displayValue || formatSupport(active.support)) : centerSubLabel;
 
   return (
-    <div style={{ alignItems: "center", display: "flex", justifyContent: "center", minHeight: "150px", minWidth: 0 }}>
-      <svg aria-label={ariaLabel} role="img" viewBox="0 0 180 180" style={{ display: "block", height: "auto", maxWidth: "160px", overflow: "visible", width: "100%" }}>
+    <div style={{ alignItems: "center", display: "flex", justifyContent: "center", minHeight: "172px", minWidth: 0 }}>
+      <svg aria-label={ariaLabel} role="img" viewBox="0 0 180 180" style={{ display: "block", height: "auto", maxWidth: "185px", overflow: "visible", width: "100%" }}>
         <circle cx="90" cy="90" r="78" fill="rgba(255,255,255,0.025)" stroke="rgba(255,255,255,0.05)" strokeWidth="1" />
         {segments.map(({ party, start, end }) => {
           const selected = party.id === selectedId;
@@ -330,6 +330,49 @@ const PowerBlocDetail = ({ bloc, onClose }) => {
   );
 };
 
+const PowerBlocLedger = ({ entries, selectedId, onSelect, onHover }) => (
+  <div className="oh-country-bloc-ledger" role="list" aria-label="Recorded political influence">
+    {entries.map((bloc) => {
+      const quantified = Number.isFinite(bloc.influence);
+      return (
+        <div key={bloc.id} className="oh-country-bloc-entry" role="listitem" data-expanded={selectedId === bloc.id ? "true" : undefined}>
+          <button
+            type="button"
+            className="oh-country-bloc-button"
+            aria-expanded={selectedId === bloc.id}
+            onClick={() => onSelect(bloc.id)}
+            onMouseEnter={() => onHover(bloc.id)}
+            onMouseLeave={() => onHover("")}
+          >
+            <div className="oh-country-bloc-heading">
+              <span data-no-translate className="oh-country-bloc-name">{bloc.name}</span>
+              <span data-no-translate className="oh-country-bloc-value">{bloc.displayValue || "Not quantified"}</span>
+            </div>
+            {quantified ? (
+              <div className="oh-country-bloc-track" role="meter" aria-valuemin={0} aria-valuemax={100} aria-valuenow={bloc.influence} aria-label={`${bloc.name}: ${bloc.displayValue} influence`}>
+                <div className="oh-country-bloc-fill" style={{ backgroundColor: partyColor(bloc), width: `${bloc.influence}%` }} />
+              </div>
+            ) : (
+              <div className="oh-country-bloc-qualitative">
+                {bloc.influenceLabel ? "Qualitative influence assessment" : "No numeric influence recorded"}
+              </div>
+            )}
+            {(bloc.kind || bloc.leader || bloc.status) && (
+              <div className="oh-country-bloc-meta">
+                {bloc.kind && <span data-no-translate>{bloc.kind.replaceAll("_", " ")}</span>}
+                {bloc.leader && <span data-no-translate>{bloc.leader}</span>}
+                {bloc.status && <span data-no-translate>{bloc.status}</span>}
+              </div>
+            )}
+            {bloc.influenceApproximate && <div className="oh-country-bloc-approximate">Approximate</div>}
+          </button>
+          {selectedId === bloc.id && <PowerBlocDetail bloc={bloc} onClose={() => onSelect(bloc.id)} />}
+        </div>
+      );
+    })}
+  </div>
+);
+
 const GovernmentOverview = ({ profile, fallbackGovernment, fallbackLeader }) => {
   const government = profile?.government || {};
   const form = clean(government.form || fallbackGovernment);
@@ -523,16 +566,26 @@ const IntelligenceAssessment = ({ intelligence }) => {
 };
 
 export default function PoliticalOverview({ profile, fallbackGovernment = "", fallbackLeader = "", intelligence = null, institutions = [], onCompile = null, compiling = false, compileError = "" }) {
-  const landscape = useMemo(() => buildPoliticalLandscape(profile), [profile]);
+  const views = useMemo(() => buildPoliticalLandscapeViews(profile), [profile]);
+  const polityKey = clean(profile?.polityKey || profile?.name);
+  const [viewChoice, setViewChoice] = useState({ polityKey: "", value: "" });
+  const activeView = views.canSwitch && viewChoice.polityKey === polityKey && views[viewChoice.value]
+    ? viewChoice.value : views.defaultView;
+  const landscape = views[activeView] || null;
   const [selectedId, setSelectedId] = useState("");
   const [hoveredId, setHoveredId] = useState("");
+  const chooseView = (value) => {
+    if (value === activeView || !views[value]) return;
+    setViewChoice({ polityKey, value });
+    setSelectedId("");
+    setHoveredId("");
+  };
 
   useEffect(() => {
     setSelectedId("");
     setHoveredId("");
   }, [profile?.polityKey]);
 
-  const selected = landscape.entries.find((entry) => entry.id === selectedId) || null;
   const goals = list(profile?.goals).slice(0, 5);
 
   return (
@@ -540,7 +593,7 @@ export default function PoliticalOverview({ profile, fallbackGovernment = "", fa
       <GovernmentOverview profile={profile} fallbackGovernment={fallbackGovernment} fallbackLeader={fallbackLeader} />
       <PartiesCompile profile={profile} onCompile={onCompile} compiling={compiling} error={compileError} />
 
-      {landscape.entries.length > 0 && (
+      {landscape?.entries.length > 0 && (
         <section className="oh-country-landscape" style={{ ...card, marginTop: "1.05rem", padding: "0.72rem 0.78rem" }}>
           <div style={{ alignItems: "center", display: "flex", gap: "0.45rem", justifyContent: "space-between" }}>
             <div>
@@ -548,7 +601,9 @@ export default function PoliticalOverview({ profile, fallbackGovernment = "", fa
               <div style={{ color: "rgba(255,255,255,0.34)", fontSize: "0.59rem", marginTop: "0.15rem" }}>{landscape.subtitle}</div>
             </div>
             <div style={{ color: "rgba(255,255,255,0.36)", fontSize: "0.59rem", fontWeight: 750, textAlign: "right" }}>
-              <div>{landscape.hasQuantitativeValues ? `${landscape.totalKnownPercent}% ${landscape.mappedLabel}` : "Qualitative"}</div>
+              <div>{activeView === "blocs"
+                ? `${landscape.entries.length} recorded · ${landscape.entries.filter((entry) => Number.isFinite(entry.influence)).length} quantified`
+                : landscape.hasQuantitativeValues ? `${landscape.totalKnownPercent}% ${landscape.mappedLabel}` : "Qualitative"}</div>
               {landscape.hasQuantitativeValues && landscape.isApproximate && (
                 <div style={{ color: "rgba(253,230,138,0.68)", fontSize: "0.54rem", fontWeight: 800, letterSpacing: "0.04em", marginTop: "0.12rem", textTransform: "uppercase" }}>
                   Approximate
@@ -557,7 +612,7 @@ export default function PoliticalOverview({ profile, fallbackGovernment = "", fa
             </div>
           </div>
 
-          {landscape.slices.length > 0 && (
+          {activeView === "parties" && landscape.slices.length > 0 && (
             <div className="oh-country-landscape-overview">
               <PartyDonut
                 slices={landscape.slices}
@@ -581,7 +636,21 @@ export default function PoliticalOverview({ profile, fallbackGovernment = "", fa
             </div>
           )}
 
-          {landscape.mode === "party" && (
+          {activeView === "blocs" && <PowerBlocLedger
+            entries={landscape.entries}
+            selectedId={selectedId}
+            onSelect={(id) => setSelectedId((current) => current === id ? "" : id)}
+            onHover={setHoveredId}
+          />}
+
+          {views.canSwitch && (
+            <div className="oh-country-landscape-switch" role="group" aria-label="Political structure view">
+              <button type="button" aria-pressed={activeView === "parties"} onClick={() => chooseView("parties")}>Political parties</button>
+              <button type="button" aria-pressed={activeView === "blocs"} onClick={() => chooseView("blocs")}>Power blocs</button>
+            </div>
+          )}
+
+          {activeView === "parties" && (
             <div className="oh-country-landscape-party-list" style={{ border: 0, borderRadius: 0, marginTop: "0.4rem", overflow: "hidden" }}>
               {landscape.entries.map((party) => (
                 <PartyRow
@@ -596,27 +665,6 @@ export default function PoliticalOverview({ profile, fallbackGovernment = "", fa
             </div>
           )}
 
-          {landscape.mode !== "party" && <div style={{ display: "grid", gap: "0.32rem 0.45rem", gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
-            {landscape.entries.map((party) => {
-              const selectedParty = party.id === selectedId;
-              return (
-                <button
-                  key={party.id}
-                  type="button"
-                  onClick={() => setSelectedId((current) => current === party.id ? "" : party.id)}
-                  onMouseEnter={() => setHoveredId(party.id)}
-                  onMouseLeave={() => setHoveredId("")}
-                  style={{ alignItems: "center", background: selectedParty ? "rgba(255,255,255,0.07)" : "transparent", border: selectedParty ? "1px solid rgba(255,255,255,0.1)" : "1px solid transparent", borderRadius: "7px", color: "inherit", cursor: "pointer", display: "flex", gap: "0.36rem", minWidth: 0, padding: "0.3rem 0.35rem", textAlign: "left" }}
-                >
-                  <span style={{ background: partyColor(party), borderRadius: "999px", flex: "0 0 auto", height: "0.48rem", width: "0.48rem" }} />
-                  <span style={{ color: "rgba(255,255,255,0.66)", flex: 1, fontSize: "0.62rem", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{party.shortName || party.name}</span>
-                  <span style={{ color: "rgba(255,255,255,0.43)", flex: "0 0 auto", fontSize: "0.6rem", fontWeight: 800 }}>{party.displayValue || formatSupport(party.support)}</span>
-                </button>
-              );
-            })}
-          </div>}
-
-          {landscape.mode !== "party" && <PowerBlocDetail bloc={selected} onClose={() => setSelectedId("")} />}
         </section>
       )}
 
