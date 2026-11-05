@@ -12,6 +12,7 @@ const EXTRA_MODULES = Object.freeze({
   militaryRating: "ctMilitaryRating",
   militaryStats: "ctMilitaryStats",
   countryRanking: "ctCountryRanking",
+  countryDiplomacyView: "ctCountryDiplomacyView",
   powerStatus: "ctPowerStatus",
   countryTags: "ctCountryTags",
   countryStats: "ctCountryStats",
@@ -690,6 +691,11 @@ export const register = (ctx) => {
     }
   };
 
+  const indexValue = (value) => {
+    const numeric = value === null || value === undefined || value === "" ? NaN : Number(value);
+    return Number.isFinite(numeric) ? clamp01(numeric) : null;
+  };
+
   const economyView = (extras, { sheet, definition, indexRows, intelligence }) => {
     if (!sheet) return null;
     if (definition.custom) {
@@ -703,8 +709,7 @@ export const register = (ctx) => {
           stats: section.stats.map((stat) => {
             const numeric = Number(values[stat.key]);
             if (stat.kind === "index") {
-              const bounded = clamp01(numeric);
-              return { kind: "index", label: `${stat.icon ?? ""} ${stat.label}`, value: Number.isFinite(numeric) ? `${bounded}/100` : "—", bar: bounded, color: cssHex(stat.color || "#a1a1aa") };
+              return { kind: "index", label: cleanText(`${stat.icon ?? ""} ${stat.label}`), value: indexValue(values[stat.key]), color: cssHex(stat.color || "#a1a1aa") };
             }
             return { kind: "value", label: `${stat.icon ?? ""} ${stat.label}`.toUpperCase(), value: formatCustomStatValue(stat, numeric), color: cssHex(stat.color || "#e7e7e9") };
           }),
@@ -732,7 +737,7 @@ export const register = (ctx) => {
       custom: false,
       intelligence,
       stability: { value: clamp01(sheet.stability), color: stabilityColor(clamp01(sheet.stability)) },
-      indices: asArray(indexRows).map((row) => ({ label: `${row.icon} ${row.label}`, value: clamp01(sheet.indices?.[row.key]), color: cssHex(row.color) })),
+      indices: asArray(indexRows).map((row) => ({ label: cleanText(`${row.icon ?? ""} ${row.label}`), value: indexValue(sheet.indices?.[row.key]), color: cssHex(row.color || "#a1a1aa") })),
       population: {
         total: formatPopulation(totalPopulation),
         scope: hasOtherTerritories ? `Core/integrated ${formatPopulation(corePopulation)} · Other territories ${formatPopulation(otherPopulation)}` : "",
@@ -949,23 +954,59 @@ export const register = (ctx) => {
     return { title: isPlayer ? "👥 Groups on our territory" : "👥 Groups on its territory", rows };
   };
 
-  const diplomacyView = (extras, { world, identity, target, viewer }) => {
+  const relationRows = (identity, world, target) => {
+    if (!world || !identity || !target) return [];
+    const { canonicalKey, displayName } = identity;
+    const targetKey = lowerText(canonicalKey(target));
+    if (!targetKey) return [];
+    return asArray(world.relations)
+      .map((relation, relationIndex) => {
+        const a = canonicalKey(relation?.a);
+        const b = canonicalKey(relation?.b);
+        if (lowerText(a) !== targetKey && lowerText(b) !== targetKey) return null;
+        const counterpart = lowerText(a) === targetKey ? b : a;
+        return {
+          ...relation,
+          rosterKey: relation?.id ? `id:${relation.id}` : `entry:${relationIndex}`,
+          counterpart,
+          counterpartName: displayName(counterpart),
+          displayStatus: relationStatusForScore(relation?.score),
+        };
+      })
+      .filter(Boolean)
+      .sort((left, right) => Number(right.score || 0) - Number(left.score || 0) || left.counterpartName.localeCompare(right.counterpartName));
+  };
+
+  const relationRoster = (extras, rows, { search = "", sort = "strongest" } = {}) => {
+    const visible = extras.countryDiplomacyView.filterAndSortCountryRelations(rows, { search: String(search ?? ""), sort: String(sort ?? "strongest") });
+    return {
+      recorded: rows.length,
+      rows: visible.map((relation) => {
+        const raw = relation.score;
+        const hasScore = raw !== null && raw !== undefined && raw !== "" && Number.isFinite(Number(raw));
+        return {
+          key: cleanText(relation.counterpart),
+          rosterKey: relation.rosterKey,
+          name: relation.counterpartName,
+          summary: cleanText(relation.summary) || "Tracked bilateral relationship.",
+          hasScore,
+          score: hasScore ? formatRelationScore(raw) : "—",
+          scoreValue: hasScore ? Math.max(-100, Math.min(100, Number(raw))) : 0,
+          status: hasScore ? prettyToken(relation.displayStatus) : "Unrated",
+          tone: cssHex(hasScore ? relationTone(raw) : "#94a3b8"),
+        };
+      }),
+    };
+  };
+
+  const diplomacyView = (extras, { world, identity, target, viewer, relationSearch = "", relationSort = "strongest" }) => {
     if (!world || !identity || !target) return null;
     const { canonicalKey, displayName } = identity;
     const canonical = canonicalKey(target);
     const targetKey = lowerText(canonical);
     if (!targetKey) return null;
     const history = world.simulationHistory;
-    const relations = asArray(world.relations)
-      .map((relation) => {
-        const a = canonicalKey(relation?.a);
-        const b = canonicalKey(relation?.b);
-        if (lowerText(a) !== targetKey && lowerText(b) !== targetKey) return null;
-        const counterpart = lowerText(a) === targetKey ? b : a;
-        return { ...relation, counterpart, counterpartName: displayName(counterpart) };
-      })
-      .filter(Boolean)
-      .sort((left, right) => Number(right.score || 0) - Number(left.score || 0) || left.counterpartName.localeCompare(right.counterpartName));
+    const relations = relationRows(identity, world, target);
     const rank = { active: 0, suspended: 1, ended: 2, expired: 3 };
     const agreements = asArray(world.agreements)
       .map((agreement) => {
@@ -1038,6 +1079,7 @@ export const register = (ctx) => {
             row.fromIntelligence ? "From intelligence" : "",
           ].filter(Boolean);
           return {
+            key: cleanText(canonicalKey(row?.puppet) || row?.puppet),
             name: displayName(row?.puppet),
             facts: facts.join(" · "),
             badge: prettyToken(extras.puppets.puppetKindLabel(row?.kind)),
@@ -1065,9 +1107,9 @@ export const register = (ctx) => {
       });
     return {
       metrics: [
-        { label: "RELATIONS", value: String(relations.length), tone: "#60a5faff" },
-        { label: "ACTIVE AGREEMENTS", value: String(agreements.filter((agreement) => lowerText(agreement.status) === "active").length), tone: "#34d399ff" },
-        { label: "CONFLICTS", value: String(wars.length), tone: wars.length ? "#f87171ff" : "#94a3b8ff" },
+        { label: "Relations", value: String(relations.length), tone: "#91d4f4ff" },
+        { label: "Active agreements", value: String(agreements.filter((agreement) => lowerText(agreement.status) === "active").length), tone: "#6dd7b5ff" },
+        { label: "Conflicts", value: String(wars.length), tone: wars.length ? "#ff8c82ff" : "#9aabb8ff" },
       ],
       subordination: subordination ? {
         headline: cleanText(subordination.headline),
@@ -1076,14 +1118,7 @@ export const register = (ctx) => {
         provenance: cleanText(subordination.provenance),
       } : null,
       subordinates,
-      relations: relations.map((relation) => ({
-        name: relation.counterpartName,
-        summary: cleanText(relation.summary) || "Tracked bilateral relationship.",
-        score: formatRelationScore(relation.score),
-        scoreValue: Math.max(-100, Math.min(100, Number(relation.score) || 0)),
-        status: prettyToken(relationStatusForScore(relation.score)),
-        tone: cssHex(relationTone(relation.score)),
-      })),
+      relations: relationRoster(extras, relations, { search: relationSearch, sort: relationSort }),
       agreements: agreements.map((agreement) => ({
         title: cleanText(agreement.title) || "Untitled agreement",
         detail: `${prettyToken(agreement.type || "other")} · ${agreement.counterparts.length ? agreement.counterparts.join(" · ") : "Multilateral agreement"}`,
@@ -1160,7 +1195,23 @@ export const register = (ctx) => {
     };
   };
 
-  const view = async ({ target: requested = "", tab = "economy" } = {}) => {
+  const drawerFlag = (extras, { world, identity, target, polity, displayName, customFlags, isPlayer, landless }) => {
+    const resolvedKey = identity ? (identity.canonicalKey(target) || target) : target;
+    const flagArgs = {
+      polity: { polityKey: resolvedKey, name: polity?.name || displayName || target, code: polity?.code || target },
+      world: world || {},
+      flags: customFlags || {},
+      identityIndex: identity?.identityIndex,
+    };
+    try {
+      const chosen = isPlayer && landless ? extras.polityFlags.resolveChosenPolityFlag(flagArgs) : extras.polityFlags.resolvePolityFlag(flagArgs);
+      return cleanText(chosen?.imageUrl);
+    } catch {
+      return "";
+    }
+  };
+
+  const view = async ({ target: requested = "", tab = "economy", relationSearch = "", relationSort = "strongest" } = {}) => {
     const extras = await loadExtras(ctx);
     const player = await readPlayer();
     const { definition, indexRows, error: definitionError } = await readDefinition();
@@ -1187,7 +1238,7 @@ export const register = (ctx) => {
     const landless = world ? Boolean(engine.gameState.isPolityLandless(world, player.code)) : false;
     const customFlags = await engine.assets.getNationFlags().catch(() => ({}));
     const baseTags = await engine.assets.getNationTags().catch(() => ({}));
-    const flagUrl = customFlags?.[target] || polity?.flag || (isPlayer && landless ? "" : engine.countryFlags.flagImageUrlFromGid(target));
+    const flagUrl = drawerFlag(extras, { world, identity, target, polity, displayName, customFlags, isPlayer, landless });
     const resolvedKey = identity ? (identity.canonicalKey(target) || target) : target;
     const cacheKey = `${player.gameKey}:${target}`;
     const cachedSheet = memoryCache.get(cacheKey)?.sheet ?? null;
@@ -1252,7 +1303,7 @@ export const register = (ctx) => {
         compilable: Boolean(world),
       }),
       groups: await groupsView(extras, { world, target, isPlayer: Boolean(player.code) && target === player.code }),
-      diplomacy: world ? diplomacyView(extras, { world, identity, target, viewer: player.code }) : null,
+      diplomacy: world ? diplomacyView(extras, { world, identity, target, viewer: player.code, relationSearch, relationSort }) : null,
       economy: economyView(extras, { sheet, definition, indexRows, intelligence }),
       military: world && sheet && tab === "economy" ? militaryView(extras, world, resolvedKey || target) : null,
       tracking: trackingSummary(extras, settings, identity),
@@ -1301,17 +1352,21 @@ export const register = (ctx) => {
     };
     const shown = showAll ? ranking.rows : ranking.rows.slice(0, RANKING_ROWS_FIRST);
     const flagIdentityIndex = world ? extras.polityIdentity.buildPolityIdentityIndex(world) : null;
+    const selectedRank = ranking.rows.find((row) => row.key === target);
     return {
       metric: metric.key,
       metrics: metrics.map((entry) => ({ key: entry.key, label: entry.label, selected: entry.key === metric.key })),
+      selectedRank: selectedRank ? `#${selectedRank.rank}` : "—",
+      ranked: ranking.rows.length,
+      total: ranking.total,
       rows: shown.map((row) => {
         const flagUrl = extras.polityFlags.resolvePolityFlag({ polity: { name: row.label, code: row.key }, world: world || {}, flags: flags || {}, identityIndex: flagIdentityIndex }).imageUrl;
         return {
           key: row.key,
-          rank: String(row.rank),
+          rank: Number(row.rank) || 0,
+          rankText: String(row.rank).padStart(2, "0"),
           label: row.label,
           value: formatValue(row.value),
-          bar: ranking.most > 0 ? Math.max(2, Math.round((Math.abs(row.value) / ranking.most) * 100)) : 0,
           flag: flagFile(ctx, flagUrl),
           mine: Boolean(player.code) && row.key === player.code,
           open: row.key === target,
@@ -1320,12 +1375,13 @@ export const register = (ctx) => {
       more: ranking.rows.length > shown.length,
       empty: ranking.rows.length === 0 ? "No country has this figure yet." : "",
       unranked: ranking.unranked > 0
-        ? `${metric.sheet
+        ? (metric.sheet
           ? "Countries that have not been assessed are left out. Open a country's sheet, or track it, to add it here."
           : metric.key === "military"
             ? "Countries whose military has not been rated yet are left out until the AI rates them against the others."
-            : "Countries the game has no figure for are left out."} (${ranking.rows.length}/${ranking.total})`
+            : "Countries the game has no figure for are left out.")
         : "",
+      unrankedCount: ranking.unranked > 0 ? `(${ranking.rows.length}/${ranking.total})` : "",
     };
   };
 
@@ -1454,7 +1510,7 @@ export const register = (ctx) => {
     const customFlags = await engine.assets.getNationFlags().catch(() => ({}));
     const isPlayer = target.toUpperCase() === String(player.code).toUpperCase();
     const landless = world ? Boolean(engine.gameState.isPolityLandless(world, player.code)) : false;
-    const flagUrl = customFlags?.[target] || polity?.flag || (isPlayer && landless ? "" : engine.countryFlags.flagImageUrlFromGid(target));
+    const flagUrl = drawerFlag(extras, { world, identity: identityIndexFor(extras, world), target, polity, displayName, customFlags, isPlayer, landless });
     const base = {
       countryName: cleanText(polity?.name) || displayName || target,
       flag: flagFile(ctx, flagUrl),
@@ -1752,6 +1808,14 @@ export const register = (ctx) => {
       }
     },
     "country.ranking": async (args) => rankingView(args),
+    "country.relations": async ({ target = "", search = "", sort = "strongest" } = {}) => {
+      const extras = await loadExtras(ctx);
+      const world = await engine.gameState.readWorldStateView({ force: false }).catch(() => null);
+      const identity = identityIndexFor(extras, world);
+      const asked = cleanText(target);
+      const key = asked ? (identity?.canonicalKey(asked) || asked) : "";
+      return relationRoster(extras, relationRows(identity, world, key), { search, sort });
+    },
     "country.chart": async (args) => chartView(args),
     "country.tracking": async (args) => trackingView(args),
     "country.tracking.interval": async ({ months = 0, target = "", search = "" } = {}) => {

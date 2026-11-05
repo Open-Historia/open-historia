@@ -77,6 +77,8 @@ var _info_header: MarginContainer
 var _info_margin: MarginContainer
 var _info_footer_margin: MarginContainer
 var _flag_picker: FlagPicker
+var _region_scroll: ScrollContainer
+var _region_content: Control
 
 
 func _init() -> void:
@@ -303,10 +305,32 @@ func _process(_delta: float) -> void:
 	var shown := screen.x >= 0.0 and screen.y >= 0.0 and screen.x <= view.x and screen.y <= view.y
 	_floating.visible = shown
 	if shown:
+		if _floating_kind == "region":
+			_fit_region_body(view.y)
 		var height := _floating.get_combined_minimum_size().y
 		if not is_equal_approx(_floating.size.y, height):
 			_floating.size = Vector2(_floating.size.x, height)
-		_floating.position = Vector2(round(screen.x - max(_floating_width, _floating.size.x) * 0.5), round(screen.y - _floating_lift - height + _floating_rise))
+		var top := screen.y - _floating_lift - height
+		if _floating_kind == "region":
+			top = clamp_anchored_card_top(top, height, view.y)
+		_floating.position = Vector2(round(screen.x - max(_floating_width, _floating.size.x) * 0.5), round(top + _floating_rise))
+
+
+static func clamp_anchored_card_top(preferred: float, card_height: float, viewport_height: float) -> float:
+	var inset := 8.0
+	if not is_finite(preferred) or not is_finite(viewport_height):
+		return inset
+	var tall: float = max(0.0, card_height) if is_finite(card_height) else 0.0
+	return max(inset, min(preferred, viewport_height - tall - inset))
+
+
+func _fit_region_body(viewport_height: float) -> void:
+	if not is_instance_valid(_region_scroll) or not is_instance_valid(_region_content):
+		return
+	var cap: float = max(96.0, viewport_height - 16.0)
+	var want: float = min(_region_content.get_combined_minimum_size().y, cap)
+	if not is_equal_approx(_region_scroll.custom_minimum_size.y, want):
+		_region_scroll.custom_minimum_size.y = want
 
 
 func _close_floating() -> void:
@@ -471,22 +495,27 @@ func _build_region(animate: bool) -> void:
 	card.custom_minimum_size.x = width
 	var stack := Country.column(0)
 	var top := Control.new()
-	top.custom_minimum_size = Vector2(width, 96)
+	var flag := Country.texture_for(str(_region.get("flag", "")), 240)
+	var banner := 96.0
+	if flag and flag.get_width() > 0 and flag.get_height() > 0:
+		var whole := width * float(flag.get_height()) / float(flag.get_width())
+		banner = round(min(whole, min(320.0, get_viewport_rect().size.y * 0.4)))
+	top.custom_minimum_size = Vector2(width, banner)
 	top.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	top.set_meta("banner", banner)
 	var blank := ColorRect.new()
 	blank.color = Color(41 / 255.0, 41 / 255.0, 45 / 255.0, 0.6)
 	blank.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	blank.material = _shader_material(width, 96)
+	blank.material = _shader_material(width, banner)
 	blank.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	top.add_child(blank)
-	var flag := Country.texture_for(str(_region.get("flag", "")), 96)
 	if flag:
 		var picture := TextureRect.new()
 		picture.texture = flag
 		picture.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-		picture.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+		picture.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		picture.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-		picture.material = _shader_material(width, 96)
+		picture.material = _shader_material(width, banner)
 		(picture.material as ShaderMaterial).set_shader_parameter("fade", 0.9)
 		picture.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		top.add_child(picture)
@@ -661,7 +690,18 @@ func _build_region(animate: bool) -> void:
 		inner.add_child(rostra)
 	margin.add_child(inner)
 	stack.add_child(margin)
-	card.add_child(stack)
+	var held := 0.0
+	if is_instance_valid(_region_scroll) and _floating_kind == "region":
+		held = _region_scroll.custom_minimum_size.y
+	var body := ScrollContainer.new()
+	body.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	body.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	body.custom_minimum_size = Vector2(width, held)
+	body.mouse_filter = Control.MOUSE_FILTER_PASS
+	body.add_child(stack)
+	_region_scroll = body
+	_region_content = stack
+	card.add_child(body)
 	root.add_child(card)
 	var pointer := CardPointer.new()
 	pointer.custom_minimum_size = Vector2(width, 9)
@@ -1038,7 +1078,7 @@ func _build_info_shell() -> void:
 	flag_button.clip_contents = true
 	_info_flag = TextureRect.new()
 	_info_flag.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	_info_flag.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+	_info_flag.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	_info_flag.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_info_flag.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	flag_button.add_child(_info_flag)
