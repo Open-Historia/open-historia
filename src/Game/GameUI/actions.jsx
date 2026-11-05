@@ -512,7 +512,7 @@ const StandingGoal = ({ country, round, gameDate, isOpen }) => {
 
     if (editing) {
         return (
-            <div style={{ background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.18)", borderRadius: "10px", display: "flex", flexDirection: "column", gap: "0.45rem", padding: "0.6rem 0.75rem" }}>
+            <div style={{ background: "var(--oh-ui-overlay-card, rgba(255,255,255,0.08))", border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.18))", borderRadius: "10px", display: "flex", flexDirection: "column", gap: "0.45rem", padding: "0.6rem 0.75rem" }}>
             {label}
             <textarea
             ref={draftRef}
@@ -526,7 +526,7 @@ const StandingGoal = ({ country, round, gameDate, isOpen }) => {
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={handleKeyDown}
             style={{
-                background: "rgba(0,0,0,0.25)",
+                background: "var(--oh-ui-bg, rgba(0,0,0,0.25))",
                 border: "1px solid rgba(255,255,255,0.15)",
                 borderRadius: "8px",
                 boxSizing: "border-box",
@@ -587,7 +587,7 @@ const StandingGoal = ({ country, round, gameDate, isOpen }) => {
     }
 
     return (
-        <div style={{ background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: "10px", display: "flex", flexDirection: "column", gap: "0.3rem", padding: "0.55rem 0.75rem" }}>
+        <div style={{ background: "var(--oh-ui-overlay-card, rgba(255,255,255,0.08))", border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.15))", borderRadius: "10px", display: "flex", flexDirection: "column", gap: "0.3rem", padding: "0.55rem 0.75rem" }}>
         <div style={{ alignItems: "center", display: "flex", justifyContent: "space-between" }}>
         {label}
         <button
@@ -916,8 +916,8 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
         <div
         style={{
             backdropFilter: "blur(8px)",
-            backgroundColor: "rgba(24, 24, 27, 0.95)",
-            border: "1px solid rgba(255,255,255,0.1)",
+            backgroundColor: "var(--oh-ui-bg, rgba(24, 24, 27, 0.95))",
+            border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.1))",
             borderRadius: "16px",
             bottom: isOpen ? "4.25rem" : "-30rem",
             boxShadow: "-4px 0 24px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.06)",
