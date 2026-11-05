@@ -12,7 +12,7 @@
 //               { type: "load" }                           → progress…, then ready | error
 //               { type: "transcribe", id, audio, language } → { type: "text", id, text }
 
-import whisperOrtWasm from "oh-ort-whisper/ort-wasm-simd-threaded.wasm?url";
+import whisperOrtWasm from "oh-ort-transformers/ort-wasm-simd-threaded.wasm?url";
 import { ON_DEVICE_MODELS, SPEECH_ENGINES, modelBytes } from "./speechEngines.js";
 
 const MODEL = ON_DEVICE_MODELS[SPEECH_ENGINES.WHISPER];

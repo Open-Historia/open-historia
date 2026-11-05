@@ -418,7 +418,8 @@ test("the director, the editor's preview and Settings all go through this one fu
 test("the page's start-up sweep of old caches leaves the kept music", () => {
   const assets = read("src/runtime/assets.js");
   assert.ok(assets.includes(`const KEPT_MUSIC_CACHE_NAME = "${KEPT_MUSIC_CACHE}";`), "the same name in both files");
-  // (And the saves brought across from the site's old address: runtime/web/saveMove.js.)
-  assert.ok(assets.includes("if (key !== PRELOAD_CACHE_NAME && key !== KEPT_MUSIC_CACHE_NAME && key !== SAVE_MOVE_CACHE_NAME) caches.delete(key).catch(() => {});"));
+  // (And the saves brought across from the site's old address, runtime/web/saveMove.js, and the
+  // translation model, runtime/translationWorker.js.)
+  assert.ok(assets.includes("if (key !== PRELOAD_CACHE_NAME && key !== KEPT_MUSIC_CACHE_NAME && key !== SAVE_MOVE_CACHE_NAME && key !== TRANSLATION_MODEL_CACHE_NAME) caches.delete(key).catch(() => {});"));
   assert.equal(KEPT_MUSIC_CACHE, "oh-music-v1");
 });

@@ -26,12 +26,15 @@ const KEPT_MUSIC_CACHE_NAME = "oh-music-v1";
 // from the site's http address: the service worker fills it just before the game
 // starts, and web/saveMove.js empties it once they are in the library.
 const SAVE_MOVE_CACHE_NAME = "oh-save-move";
+// The translator's model on this device, downloaded once (translationWorker.js
+// MODEL_CACHE): not an older version's cache either.
+const TRANSLATION_MODEL_CACHE_NAME = "oh-translation-model-v1";
 if (typeof caches !== "undefined" && caches?.keys) {
   caches
     .keys()
     .then((keys) => {
       for (const key of keys) {
-        if (key !== PRELOAD_CACHE_NAME && key !== KEPT_MUSIC_CACHE_NAME && key !== SAVE_MOVE_CACHE_NAME) caches.delete(key).catch(() => {});
+        if (key !== PRELOAD_CACHE_NAME && key !== KEPT_MUSIC_CACHE_NAME && key !== SAVE_MOVE_CACHE_NAME && key !== TRANSLATION_MODEL_CACHE_NAME) caches.delete(key).catch(() => {});
       }
     })
     .catch(() => {});

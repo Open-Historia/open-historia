@@ -106,7 +106,7 @@ import { saveDebugLogFile } from "../../runtime/saveDebugLog.js";
 import { buildGameZipBlob, formatZipSize, saveGameZipToDisk } from "../../runtime/gameZip.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { usePresenceLeaving } from "./presence.jsx";
-import { uiString } from "../../runtime/translator.js";
+import { setTranslationModelOn, translationModelOffer, uiString } from "../../runtime/translator.js";
 import { DEFAULT_BASEMAP_ID, ESRI_BASEMAPS, decodeAllowedBasemaps, decodeOwnBasemaps, isBuiltinBasemapId } from "../../runtime/assets.js";
 import { DEFAULT_BASEMAP_KEY, DEFAULT_BASEMAP_ON_KEY, basemapShownFor, scenarioMapsOfWorld } from "../../runtime/basemapPick.js";
 import { useGameBasemapPick } from "../Map/useBasemapPick.js";
@@ -308,6 +308,10 @@ const LanguagePicker = ({ label, current, onSelect, saving = false, helperText, 
 const LanguageSelector = () => {
     const [saving, setSaving] = useState(false);
     const current = getStoredLanguage();
+    // The translation model for this language, where there is one
+    // (runtime/translationModels.js), and whether the player uses it.
+    const [modelOffer, setModelOffer] = useState(translationModelOffer);
+    const modelOn = Boolean(modelOffer?.on);
 
     const applyLanguage = async (code) => {
         if (!code || code === current || saving) {
@@ -324,7 +328,15 @@ const LanguageSelector = () => {
         window.location.reload();
     };
 
+    const toggleModel = () => {
+        const next = !modelOn;
+        logSettingChange("Translate on this device", next ? "on" : "off");
+        setModelOffer((offer) => (offer ? { ...offer, on: next } : offer));
+        void setTranslationModelOn(next);
+    };
+
     return (
+        <>
         <LanguagePicker
         label="UI language"
         current={current}
@@ -332,9 +344,21 @@ const LanguageSelector = () => {
         saving={saving}
         markBuiltIn
         helperText={isBuiltInLanguage(current)
-            ? "Languages marked ✓ ship with the game translated. What scenarios add (names, descriptions, custom stats) is translated by your AI model, once."
-            : "This language is translated by your AI model as you play, once per string. Languages marked ✓ ship with the game translated."}
+            ? (modelOn
+                ? "Languages marked ✓ ship with the game translated. What scenarios add (names, descriptions, custom stats) is translated on this device, once."
+                : "Languages marked ✓ ship with the game translated. What scenarios add (names, descriptions, custom stats) is translated by your AI model, once.")
+            : (modelOn
+                ? "This language is translated on this device as you play, once per string. Languages marked ✓ ship with the game translated."
+                : "This language is translated by your AI model as you play, once per string. Languages marked ✓ ship with the game translated.")}
         />
+        {modelOffer && (
+            <Toggle
+            label={`Translate on this device (${modelOffer.size})`}
+            enabled={modelOn}
+            onToggle={toggleModel}
+            />
+        )}
+        </>
     );
 };
 
