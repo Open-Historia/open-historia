@@ -3,7 +3,8 @@
 // world.warSettings) is set at the top of the Scenario Editor's Fronts tab
 // (ScenarioWarSettings.jsx) and saved with the rest of the editor's form
 // (libraryBar.jsx buildScenarioEditorState, handleSave): its era, the men a
-// counter stands for, the share of people who can fight, its default mustering
+// counter stands for, the share of people who can fight, the importance of
+// technology in a country's military power (militaryPower.js), its default mustering
 // curve, which of the engine's newer mechanics are on, and whether its wars'
 // troops come along fronts or as swarms (runtime/fronts/swarms.js).
 //
@@ -16,10 +17,10 @@
 //
 // No React here, so node can test it.
 
-import { MEN_PER_COUNTER_MOST, normalizeWarSettings } from "../../runtime/warSettings.js";
+import { MEN_PER_COUNTER_MOST, TECHNOLOGY_WEIGHT_MOST, normalizeWarSettings } from "../../runtime/warSettings.js";
 import { formatPopulationFigure, readPopulationFigure } from "../../runtime/populationFigure.js";
 
-const EMPTY = Object.freeze({ mechanics: {}, era: null, menPerCounter: null, manpowerShare: null, muster: null, warfare: null });
+const EMPTY = Object.freeze({ mechanics: {}, era: null, menPerCounter: null, manpowerShare: null, technologyWeight: null, muster: null, warfare: null });
 const within = (value, least, most) => Math.min(most, Math.max(least, value));
 
 // The settings as the form holds them: null where they say nothing.
@@ -27,8 +28,8 @@ export const compactWarSettings = (value) => {
   const kept = normalizeWarSettings(value);
   if (!kept) return null;
   const mechanics = Object.fromEntries(Object.entries(kept.mechanics).filter(([, on]) => on === false));
-  const compact = { mechanics, era: kept.era, menPerCounter: kept.menPerCounter, manpowerShare: kept.manpowerShare, muster: kept.muster, ...(kept.outcomes ? { outcomes: kept.outcomes } : {}), ...(kept.warfare ? { warfare: kept.warfare } : {}) };
-  const empty = Object.keys(mechanics).length === 0 && ["era", "menPerCounter", "manpowerShare", "muster"].every((key) => compact[key] === null) && !compact.outcomes && !compact.warfare;
+  const compact = { mechanics, era: kept.era, menPerCounter: kept.menPerCounter, manpowerShare: kept.manpowerShare, technologyWeight: kept.technologyWeight, muster: kept.muster, ...(kept.outcomes ? { outcomes: kept.outcomes } : {}), ...(kept.warfare ? { warfare: kept.warfare } : {}) };
+  const empty = Object.keys(mechanics).length === 0 && ["era", "menPerCounter", "manpowerShare", "technologyWeight", "muster"].every((key) => compact[key] === null) && !compact.outcomes && !compact.warfare;
   return empty ? null : compact;
 };
 
@@ -52,18 +53,23 @@ export const warNumberText = (value, key) => {
   return key === "menPerCounter" ? formatPopulationFigure(number) : String(number);
 };
 
-// The settings after an author typed `text` into the men-a-counter or the
-// share-of-people field: { settings, ok }. An empty field is the default again;
-// a figure past the bounds is held to them (1 to MEN_PER_COUNTER_MOST men, 1 to
-// 100 percent), where normalizeWarSettings would drop it; ok is false for text
-// that is no figure, the settings then left as they were.
+// The settings after an author typed `text` into the men-a-counter, the
+// share-of-people or the importance-of-technology field: { settings, ok }. An
+// empty field is the default again; a figure past the bounds is held to them (1
+// to MEN_PER_COUNTER_MOST men, 1 to 100 percent, 0 to TECHNOLOGY_WEIGHT_MOST),
+// where normalizeWarSettings would drop it; ok is false for text that is no
+// figure, the settings then left as they were.
 export const withWarNumber = (value, key, text) => {
   const raw = String(text ?? "").trim();
   if (raw === "") return { settings: withWarSettings(value, { [key]: null }), ok: true };
   const number = key === "menPerCounter"
     ? readPopulationFigure(raw)
     : Number(raw.replace(/\s*%$/, "").replace(",", "."));
-  if (!Number.isFinite(number) || number <= 0) return { settings: compactWarSettings(value), ok: false };
-  const held = key === "menPerCounter" ? within(Math.round(number), 1, MEN_PER_COUNTER_MOST) : within(number, 1, 100);
+  // (The importance of technology may be 0: the men alone.)
+  const least = key === "technologyWeight" ? 0 : Number.MIN_VALUE;
+  if (!Number.isFinite(number) || number < least) return { settings: compactWarSettings(value), ok: false };
+  const held = key === "menPerCounter"
+    ? within(Math.round(number), 1, MEN_PER_COUNTER_MOST)
+    : key === "technologyWeight" ? within(number, 0, TECHNOLOGY_WEIGHT_MOST) : within(number, 1, 100);
   return { settings: withWarSettings(value, { [key]: held }), ok: true };
 };

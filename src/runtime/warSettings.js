@@ -18,6 +18,14 @@
 //                   the era's own (fronts/constants.js MEN_PER_FORMATION_BY_ERA)
 //   manpowerShare   the share of a country's people who can fight, in percent
 //                   (1 to 100), or null for the game's own twelve
+//   technologyWeight how far better-armed, trained and funded soldiers outweigh
+//                   more of them in a country's military power (militaryPower.js),
+//                   0 to 10: 0 counts the men alone, 1 the men and how they are
+//                   armed alike; null for TECHNOLOGY_WEIGHT_MODERN, the modern
+//                   world's. Never read off the date ("dont just make it be so if
+//                   its in a scertain year its a diff formula, cause maybe a
+//                   scenario 500 years in the future is a post apocalyptic
+//                   thing", the owner, 2026-11-04)
 //   muster          how long calling up an army takes: two points [share of
 //                   the army, days] the curve goes through besides (0, 0)
 //                   (mustering.js), or null for the game's own
@@ -38,6 +46,10 @@ export const WAR_MECHANICS = Object.freeze(["fatigue", "weather", "terrain", "wa
 export const ERA_LABELS = Object.freeze(["Before 1500", "1500 to 1850", "1850 to 1945", "From 1945"]);
 export const MEN_PER_COUNTER_MOST = 1000000;
 export const MUSTER_DAYS_MOST = 3650;
+// The importance of technology where a scenario does not say: the modern world's. At it, Modern Day 2026's figures rank
+// the US, China, India, Russia, Korea, Israel, the UK, France, Japan and Pakistan (militaryPower.test.js).
+export const TECHNOLOGY_WEIGHT_MODERN = 4.5;
+export const TECHNOLOGY_WEIGHT_MOST = 10;
 // "war fronts havent always existed" (the owner, 2026-10-16): the year the game's wars are fought along fronts from,
 // where a scenario does not say. Before it a war's troops come as swarms.
 export const FRONTS_FROM_YEAR = 1900;
@@ -76,12 +88,14 @@ export const normalizeWarSettings = (value) => {
   for (const key of WAR_MECHANICS) if (typeof value.mechanics?.[key] === "boolean") mechanics[key] = value.mechanics[key];
   const men = numberIn(value.menPerCounter, 1, MEN_PER_COUNTER_MOST);
   const share = numberIn(value.manpowerShare, 1, 100);
+  const weight = numberIn(value.technologyWeight, 0, TECHNOLOGY_WEIGHT_MOST);
   const outcomes = normalizeWarOutcomes(value.outcomes);
   return {
     mechanics,
     era: normalizeEra(value.era),
     menPerCounter: men === null ? null : Math.round(men),
     manpowerShare: share === null ? null : Math.round(share * 10) / 10,
+    technologyWeight: weight === null ? null : Math.round(weight * 10) / 10,
     muster: normalizeMusterPoints(value.muster),
     ...(outcomes.length > 0 ? { outcomes } : {}),
     ...(normalizeWarfare(value.warfare) ? { warfare: normalizeWarfare(value.warfare) } : {}),
@@ -90,7 +104,7 @@ export const normalizeWarSettings = (value) => {
 
 // The settings a game's wars are fought under: every mechanic on unless the scenario turned it off.
 export const warSettingsOf = (world) => {
-  const kept = normalizeWarSettings(world?.warSettings) ?? { mechanics: {}, era: null, menPerCounter: null, manpowerShare: null, muster: null };
+  const kept = normalizeWarSettings(world?.warSettings) ?? { mechanics: {}, era: null, menPerCounter: null, manpowerShare: null, technologyWeight: null, muster: null };
   return { ...kept, mechanics: Object.fromEntries(WAR_MECHANICS.map((key) => [key, kept.mechanics[key] !== false])) };
 };
 

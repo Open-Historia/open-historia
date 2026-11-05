@@ -53,6 +53,23 @@ import { PAST_UPDATES } from "./notesPast.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // Military power counts the men in full, each soldier's worth raised to the scenario's importance of technology
+    // (runtime/militaryPower.js, warSettings.technologyWeight; the Wars feature's field); the owner's ask, 2026-11-04.
+    id: "2026-11-importance-of-technology",
+    kind: "minor",
+    date: "2026-11-05",
+    channel: "beta",
+    banners: [
+      {
+        title: "Importance of technology",
+        items: [
+          "A country's military power now counts all the men it can put under arms, times what each of them is worth by its arms, training and funding.",
+          "Scenario authors set how much better arms outweigh more men in the scenario editor, under Wars in the Features tab. Left empty it is configured for the modern world; lower it for a world where numbers decided wars.",
+        ],
+      },
+    ],
+  },
+  {
     // A post imported before (kept by post number in ui-settings `hubImported`, server/hubImported.js), or one the
     // library holds, is downloaded from its uncounted update copy (runtime/hubPosts.js downloadHubScenario); a post
     // with no update copy yet still counts. The owner's ask, 2026-11-04.
