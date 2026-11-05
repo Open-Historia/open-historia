@@ -81,6 +81,9 @@ buildNpmPackage {
 
   env = {
     ELECTRON_SKIP_BINARY_DOWNLOAD = "1";
+    # onnxruntime-node (under @huggingface/transformers) fetches extra binaries from NuGet as it installs; the
+    # sandbox has no network, and the game runs its models in the browser.
+    ONNXRUNTIME_NODE_INSTALL = "skip";
     OH_FMG_ZIP = "${fmgZip}";
   };
 
