@@ -45,8 +45,7 @@ import { createFrontField, createPaintPlayer, landMask, paintPixels, paintScaleF
 import { FRONT_BASEMAP_PUT_LAYER_ID, FRONT_BASEMAP_TAKE_LAYER_ID, createFrontBasemapLayers, markPicturePainted, picturePaintedTimes } from "./frontBasemapLayer.js";
 import { FRONT_GROUND_LAYER_ID, createFrontGroundLayer } from "./frontGroundLayer.js";
 import { getGroundHeldIds, getGroundMeshes, setGroundAreas, setGroundWantedIds, subscribeGroundHeldIds, subscribeGroundMeshes } from "./frontGround.js";
-import { contestedOwnersOf, setFrontShownOwners } from "./frontOwnership.js";
-import { shownOwnersAt } from "../../runtime/fronts/replay.js";
+import { drawnOwnersOf, setFrontShownOwners } from "./frontOwnership.js";
 import { shortUnitLabel } from "./unitLabels.js";
 import { useEveryTroopShown } from "./troopDetail.js";
 import { useWarRoom } from "./warRoomStore.js";
@@ -584,7 +583,7 @@ const FrontLayers = () => {
       for (const entry of playRef.current.values()) {
         drawn.push(frontAt(entry.stage, entry.day));
         days.push(entry.day);
-        shownOwners.push(shownOwnersAt(entry.target.record?.replay, entry.day) ?? contestedOwnersOf(entry.target.record));
+        shownOwners.push(drawnOwnersOf(entry.target.record, entry.day));
         const { picture } = entry;
         const redressed = picture.stale;
         if (picture.stale) dress(entry);

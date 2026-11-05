@@ -17,6 +17,7 @@
 // still told as whose it really is.
 
 import { buildOwnerAliasMap, createOwnerResolver } from "../../runtime/ownerNames.js";
+import { shownOwnersAt } from "../../runtime/fronts/replay.js";
 
 const NONE = Object.freeze({});
 let shown = NONE;
@@ -107,6 +108,17 @@ export const contestedOwnersOf = (record) => {
     contestedMaps.set(list, made);
   }
   return made;
+};
+
+// Whose each region a battlefield draws as, on a day of its last run: what its
+// replay says, else the regions its record lists. A battlefield standing in
+// peace (a country's forces at home, a border built up) draws none: nothing is
+// fought there, so no region is being taken. A save from before the engine
+// knew that can list regions the story handed over, an annexed country's,
+// which the map would go on drawing as the old country's for good.
+export const drawnOwnersOf = (record, day) => {
+  if (!record || record.status === "standing") return null;
+  return shownOwnersAt(record.replay, day) ?? contestedOwnersOf(record);
 };
 
 export const resetFrontShownOwnersForTest = () => {
