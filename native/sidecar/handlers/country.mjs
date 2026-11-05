@@ -46,6 +46,7 @@ const EXTRA_MODULES = Object.freeze({
 });
 
 let extrasFound = null;
+let fixtureProfiles = {};
 
 export const loadExtras = async (ctx) => {
   if (extrasFound) return extrasFound;
@@ -485,24 +486,85 @@ export const register = (ctx) => {
   void loadExtras(ctx).catch((error) => emit("log", { category: "country", message: `The country panel's helpers could not be built: ${error?.message ?? error}` }));
   if (ctx.standIn) {
     ctx.addStandIn(({ tool, text }) => {
+      if (tool === "submit_intelligence_assessment") {
+        const named = String(text).match(/intelligence service of (.+?) as it stands/i)?.[1]?.trim() || "";
+        const rating = fixtureProfiles[named]?.intelligence;
+        return rating ? { args: rating } : null;
+      }
+      if (!tool && /military assessor/.test(String(text)) && /"polities"/.test(String(text))) {
+        const polities = [];
+        for (const match of String(text).matchAll(/^- (.+?); its people (\d+)/gm)) {
+          const military = fixtureProfiles[match[1].trim()]?.military;
+          if (military) polities.push({ polity: match[1].trim(), population: Number(match[2]), military });
+        }
+        return polities.length ? { text: JSON.stringify({ polities }) } : null;
+      }
       if (tool !== "submit_country_stat_sheet") return null;
       const buckets = [...new Set([...String(text).matchAll(/\[M(\d+)\]/g)].map((match) => match[1]))];
-      const each = Math.max(1, Math.round(66_000_000 / Math.max(1, buckets.length)));
-      const rows = buckets.length ? buckets.map((index) => `${index}~core~${each}~38500`) : ["core~mainland~66000000~38500"];
+      const named = String(text).match(/stat sheet for (.+?) \(canonical polity/i)?.[1]?.trim() || String(text).match(/stat sheet for ([^\n.]+)/i)?.[1]?.trim() || "";
+      const profile = fixtureProfiles[named] || null;
+      const people = Number(profile?.population) || 66_000_000;
+      const perHead = profile ? Math.round(Number(profile.gdpPerCapitaUsd) * 1.1) : 38500;
+      const each = Math.max(1, Math.round(people / Math.max(1, buckets.length)));
+      let rows = buckets.length ? buckets.map((index) => `${index}~core~${each}~${perHead}`) : [`core~mainland~${people}~${perHead}`];
+      let split = null;
+      if (profile) {
+        const groups = [];
+        for (const match of String(text).matchAll(/^\[M(\d+)\][^\n]*?components: (.*)$/gm)) {
+          const index = Number(match[1]);
+          if (groups.some((group) => group.index === index)) continue;
+          const components = match[2].split(/;\s*(?=\[C\d+\])/).map((part) => {
+            const found = part.match(/^\[(C\d+)\]\s*([^(]+?)\s*(?:\((.*)\))?\s*$/);
+            if (!found) return null;
+            const regions = Number((found[3] || "").match(/only (\d+) of/)?.[1] || (found[3] || "").match(/(\d+) regions?/)?.[1] || 1);
+            return { id: found[1], name: found[2].trim(), regions };
+          }).filter(Boolean);
+          groups.push({ index, components });
+        }
+        const all = groups.flatMap((group) => group.components);
+        const home = all.find((component) => component.name.toLowerCase() === named.toLowerCase()) || [...all].sort((a, b) => b.regions - a.regions)[0];
+        const others = all.filter((component) => component !== home);
+        const otherRegions = others.reduce((sum, component) => sum + component.regions, 0) || 1;
+        const othersPeople = others.length ? Math.round(people * 0.03) : 0;
+        const peopleOf = (component) => (component === home ? people - othersPeople : Math.max(1000, Math.round(othersPeople * component.regions / otherRegions)));
+        const gdpOf = (component) => (component === home ? perHead : Math.round(perHead * 0.6));
+        const macro = groups.map((group) => {
+          const pop = group.components.reduce((sum, component) => sum + peopleOf(component), 0);
+          const gdp = group.components.reduce((sum, component) => sum + peopleOf(component) * gdpOf(component), 0);
+          return { group, pop, perHead: Math.round(gdp / Math.max(1, pop)), kind: group.components.includes(home) ? "core" : "overseas/dependent" };
+        });
+        if (macro.length) rows = macro.map((entry) => `${entry.group.index}~${entry.kind}~${entry.pop}~${entry.perHead}`);
+        const wanted = String(text).match(/PER-COMPONENT SPLIT — REQUIRED for ([M\d, ]+)/);
+        if (wanted) {
+          const asked = new Set(wanted[1].split(/,\s*/).map((value) => Number(value.replace("M", ""))));
+          const lines = [];
+          for (const entry of macro) {
+            if (!asked.has(entry.group.index)) continue;
+            const shares = entry.group.components.map((component) => ({ component, share: Math.round((peopleOf(component) / Math.max(1, entry.pop)) * 10000) / 100 }));
+            const total = shares.reduce((sum, item) => sum + item.share, 0);
+            const biggest = shares.reduce((a, b) => (b.share > a.share ? b : a), shares[0]);
+            biggest.share = Math.round((biggest.share + (100 - total)) * 100) / 100;
+            for (const { component, share } of shares) lines.push(`${component.id}~${share}~${component === home ? "core" : "overseas/dependent"}~${gdpOf(component)}`);
+          }
+          split = lines.join("\n");
+        }
+      }
       const calibration = { mode: "historical_start", historyAuthorityCutoff: "2016", basis: "Stand-in figures for a native test." };
       return {
         args: {
-          capital: "Paris",
-          continent: "Europe",
-          government: "Semi-presidential republic",
-          leader: "François Hollande",
-          stability: 71,
-          indices: { sovereignty: 82, foodAutonomy: 88, energyAutonomy: 54, economicIndependence: 70, internalSecurity: 66, internationalReputation: 78 },
+          capital: profile?.capital || "Paris",
+          continent: profile?.continent || "Europe",
+          government: profile?.government || "Semi-presidential republic",
+          leader: profile?.leader || "François Hollande",
+          stability: profile?.stability ?? 71,
+          indices: profile?.indices || { sovereignty: 82, foodAutonomy: 88, energyAutonomy: 54, economicIndependence: 70, internalSecurity: 66, internationalReputation: 78 },
           territorialMacroComponentsText: rows.join("\n"),
+          ...(split !== null ? { territorialComponentSplitText: split } : {}),
           populationCalibration: calibration,
-          economicCalibration: { ...calibration, anchorYear: 2016, anchorCurrency: "EUR", nominalGdpBillions: 2230, nominalGdpPerCapita: 33500, rebasedGdpPerCapita2026Eur: 38500, divergenceEventIds: [] },
-          economy: { gdpGrowth: 1.1, currency: "Euro", inflation: 0.3, unemployment: 10.1, publicDebt: 96.5, budgetBalance: -3.5 },
-          gdpBreakdown: { agriculture: 2, industry: 19, services: 79 },
+          economicCalibration: { ...calibration, anchorYear: 2016, anchorCurrency: "EUR", nominalGdpBillions: profile ? Math.round((people * Number(profile.gdpPerCapitaUsd)) / 1e7) / 100 : 2230, nominalGdpPerCapita: profile ? Number(profile.gdpPerCapitaUsd) : 33500, rebasedGdpPerCapita2026Eur: perHead, divergenceEventIds: [] },
+          economy: profile?.economy || { gdpGrowth: 1.1, currency: "Euro", inflation: 0.3, unemployment: 10.1, publicDebt: 96.5, budgetBalance: -3.5 },
+          gdpBreakdown: profile?.gdpBreakdown || { agriculture: 2, industry: 19, services: 79 },
+          ...(profile?.intelligence && /intelligenceService/.test(String(text)) ? { intelligenceService: profile.intelligence } : {}),
         },
       };
     });
@@ -1811,7 +1873,28 @@ export const register = (ctx) => {
   };
 
   return {
-    ...(ctx.standIn ? { "country.standin_seed": async (args) => standInSeed(args) } : {}),
+    ...(ctx.standIn ? {
+      "country.standin_seed": async (args) => standInSeed(args),
+      "country.standin_merge": async ({ world: seed = {}, advisor = null, profiles = null } = {}) => {
+        if (profiles && typeof profiles === "object") fixtureProfiles = profiles;
+        const byId = (rows) => new Map(asArray(rows).map((row) => [row?.id, row]));
+        await engine.gameState.mutateWorldState((latest) => {
+          const relations = byId(latest?.relations);
+          for (const row of asArray(seed.relations)) relations.set(row.id, row);
+          const agreements = byId(latest?.agreements);
+          for (const row of asArray(seed.agreements)) agreements.set(row.id, row);
+          return {
+            ...latest,
+            relations: [...relations.values()],
+            agreements: [...agreements.values()],
+            institutions: { ...(latest?.institutions || {}), byId: { ...(latest?.institutions?.byId || {}), ...(seed.institutions?.byId || {}) } },
+            politicalActors: { ...(latest?.politicalActors || {}), byPolity: { ...(latest?.politicalActors?.byPolity || {}), ...(seed.politicalActors?.byPolity || {}) } },
+          };
+        });
+        if (Array.isArray(advisor)) await engine.gameState.mutateAdvisorState(() => advisor);
+        return { ok: true };
+      },
+    } : {}),
     "country.view": async (args) => view(args),
     "country.sheet": async ({ target = "", force = false, forceReassess = false, generate = true } = {}, { signal, id }) => {
       const code = cleanText(target);
