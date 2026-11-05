@@ -109,6 +109,47 @@ func _press(node: Node, wanted: String) -> bool:
 	return false
 
 
+func _view_buttons(panel: Node) -> Array:
+	return _find_all(panel.get("body"), func(node: Node) -> bool: return node is Button and node.has_meta("view") and (node as Button).is_visible_in_tree(), [])
+
+
+func _power_blocs(panel: Node) -> void:
+	panel.scroll.scroll_vertical = 0
+	panel._render()
+	await _wait(0.3)
+	var buttons := _view_buttons(panel)
+	_check(buttons.size() == 2 and (buttons[0] as Button).text == "Political parties" and (buttons[1] as Button).text == "Power blocs" and bool(buttons[0].get_meta("pressed")) and not bool(buttons[1].get_meta("pressed")), "politics: a country with parties and power blocs offers both, parties first")
+	var overview := _find_all(panel.body, func(node: Node) -> bool: return node is CountryPanel.StatDonut, [])
+	var switch_row: Control = (buttons[0] as Control).get_parent().get_parent().get_parent().get_parent() if buttons.size() == 2 else null
+	var holder: Node = switch_row.get_parent() if switch_row else null
+	var donut_row: Node = overview[0].get_parent().get_parent() if overview.size() == 1 else null
+	var ordered := holder != null and donut_row != null and donut_row.get_parent() == holder and donut_row.get_index() < switch_row.get_index() and switch_row.get_index() < holder.get_child_count() - 1
+	_check(ordered and is_equal_approx(float(overview[0].get("limit")), 185.0), "politics: the switch sits under the party donut, above the party records")
+	var frame: Control = (buttons[0] as Control).get_parent().get_parent() if buttons.size() == 2 else null
+	_check(frame != null and frame.size.x < panel.body.size.x - 60.0, "politics: the switch is a compact strip, not a full-width bar")
+	await _shoot("02c-country-parties-switch")
+	if buttons.size() == 2:
+		(buttons[1] as Button).pressed.emit()
+	await _wait(0.4)
+	_check(panel.landscape_view == "blocs" and _caps_label(panel.body, "Power blocs") and _has_text(panel, "Recorded non-party influence; each strength is independent") and _has_text(panel, "2 recorded · 1 quantified"), "politics: Power blocs shows its own ledger, counted")
+	_check(_has_text(panel, "Employers' federation") and _has_text(panel, "38%") and _has_text(panel, "business lobby  ·  Pierre Gattaz  ·  organised") and _has_text(panel, "Trade union confederations") and _has_text(panel, "strong") and _has_text(panel, "Qualitative influence assessment"), "politics: each bloc with its own strength, a qualitative one without a bar")
+	_check(_find_all(panel.body, func(node: Node) -> bool: return node is CountryPanel.StatDonut, []).is_empty() and not _has_text(panel, "Socialist Party (PS)") and not _has_text(panel, "Other political support"), "politics: no party donut and no party rows behind the blocs")
+	var tracks := _find_all(panel.body, func(node: Node) -> bool: return node is CountryPanel.StatBar and node.get_parent() is VBoxContainer and is_equal_approx(float(node.get("value")), 38.0), [])
+	_check(tracks.size() == 1, "politics: the quantified bloc has its 0-100 bar")
+	var after := _view_buttons(panel)
+	_check(after.size() == 2 and bool(after[1].get_meta("pressed")), "politics: the switch stays under the ledger, Power blocs chosen")
+	await _shoot("02d-country-power-blocs")
+	panel._pick_party("medef")
+	await _wait(0.3)
+	_check(_has_text(panel, "The voice of large French employers.") and _has_text(panel, "Leading figure") and _has_text(panel, "38% influence"), "politics: a bloc opens onto its public details")
+	await _shoot("02e-country-power-bloc-open")
+	after = _view_buttons(panel)
+	if after.size() == 2:
+		(after[0] as Button).pressed.emit()
+	await _wait(0.4)
+	_check(panel.landscape_view == "parties" and panel.selected_party.is_empty() and _has_text(panel, "Socialist Party (PS)") and _find_all(panel.body, func(node: Node) -> bool: return node is CountryPanel.StatDonut, []).size() == 1, "politics: back to the parties, details closed")
+
+
 func _relation_names(panel: Node) -> PackedStringArray:
 	var names := PackedStringArray()
 	var box: Variant = panel.get("_relations_box")
@@ -227,7 +268,7 @@ func _run() -> void:
 	await main._on_country_chosen("France", "medium")
 	await _until(func() -> bool: return main.hud.drawers.has("country") and main.hud.map_cards != null, 20.0)
 	await _wait(1.0)
-	var seeded: Dictionary = await main.engine.request("country.standin_seed")
+	var seeded: Dictionary = await main.engine.request("country.standin_seed", {"blocs": true})
 	_check(seeded.get("ok", false), "stand-in world seeded")
 	main.hud.move_child(main.hud.war_cards, main.hud.map_cards.get_index() + 1)
 	await _country_panel()
@@ -252,7 +293,7 @@ func _country_panel() -> void:
 	_check(_find_all(panel.body, func(node: Node) -> bool: return node is CountryPanel.DossierHero, []).size() == 1, "hero: the identity header")
 	_check(_find_all(panel.body, func(node: Node) -> bool: return node is CountryPanel.GovernmentCard, []).size() == 1, "politics: the Government card is a leadership brief")
 	var donuts := _find_all(panel.body, func(node: Node) -> bool: return node is CountryPanel.StatDonut, [])
-	_check(donuts.size() == 1 and is_equal_approx(float(donuts[0].get("limit")), 160.0) and _has_text(panel, "PS") and _has_text(panel, "29%"), "politics: the party donut beside its legend")
+	_check(donuts.size() == 1 and is_equal_approx(float(donuts[0].get("limit")), 185.0) and _has_text(panel, "PS") and _has_text(panel, "29%"), "politics: the party donut beside its legend")
 	_check(_has_text(panel, "Your country"), "Your country badge")
 	_check(_has_text(panel, "GOVERNMENT") and _has_text(panel, "François Hollande"), "politics: government card")
 	_check(_has_text(panel, "POLITICAL LANDSCAPE"), "politics: landscape card")
@@ -315,6 +356,7 @@ func cancel(id: int) -> void:
 	panel.engine = live_engine
 	compiler.free()
 	panel.compile_error = ""
+	await _power_blocs(panel)
 
 	await panel.set_tab("diplomacy")
 	await _wait(0.6)

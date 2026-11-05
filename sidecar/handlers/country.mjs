@@ -832,7 +832,7 @@ export const register = (ctx) => {
     const headOfState = officeholderName(government.headOfState || fallbackLeader || profile?.leader);
     const headOfGovernment = officeholderName(government.headOfGovernment);
     const governmentParties = extras.politicalPresentation.buildGovernmentPartyPresentation(profile);
-    const landscape = extras.politicalPresentation.buildPoliticalLandscape(profile);
+    const views = extras.politicalPresentation.buildPoliticalLandscapeViews(profile);
     const legislature = cleanText(government.legislature);
     const legislatureSeats = Number(government.legislatureSeats) > 0 ? Number(government.legislatureSeats) : 0;
     const nextElection = cleanText(government.nextElection);
@@ -880,6 +880,8 @@ export const register = (ctx) => {
       supportApproximate: Boolean(party.supportApproximate),
       influenceApproximate: Boolean(party.influenceApproximate),
       displayValue: cleanText(party.displayValue),
+      influence: Number.isFinite(party.influence) ? party.influence : null,
+      influenceLabel: cleanText(party.influenceLabel),
       leader: cleanText(party.leader),
       kind: cleanText(party.kind),
       status: cleanText(party.status),
@@ -889,6 +891,24 @@ export const register = (ctx) => {
       foreignPolicy: listOf(party.publicForeignPolicy),
     });
     const detailed = asArray(profile?.parties).some((party) => party?.ideologyFamily || Number.isFinite(party?.seats) || party?.role);
+    const landscapeView = (landscape, view) => {
+      const entries = asArray(landscape?.entries);
+      if (!landscape || !entries.length) return null;
+      return {
+        view,
+        mode: landscape.mode,
+        title: cleanText(landscape.title),
+        subtitle: cleanText(landscape.subtitle),
+        valueText: view === "blocs"
+          ? `${entries.length} recorded · ${entries.filter((entry) => Number.isFinite(entry?.influence)).length} quantified`
+          : landscape.hasQuantitativeValues ? `${landscape.totalKnownPercent}% ${landscape.mappedLabel}` : "Qualitative",
+        approximate: Boolean(landscape.hasQuantitativeValues && landscape.isApproximate),
+        centerLabel: cleanText(landscape.centerLabel) || "Political",
+        centerSubLabel: cleanText(landscape.centerSubLabel) || "landscape",
+        slices: view === "parties" ? asArray(landscape.slices).map(entryView) : [],
+        entries: entries.map(entryView),
+      };
+    };
     return {
       government: (!form && !headOfState && !headOfGovernment && !governmentParties.names.length && !legislature && !nextElection && !legislatureSeats) ? null : {
         form,
@@ -901,17 +921,13 @@ export const register = (ctx) => {
         seats: seated.map((party) => ({ color: partyColor(party), share: seatedTotal > 0 ? Number(party.seats) / seatedTotal : 0, tip: `${party.shortName || party.name}: ${Number(party.seats) || 0} seats` })),
       },
       compile: compilable ? { detailed } : null,
-      landscape: asArray(landscape.entries).length ? {
-        mode: landscape.mode,
-        title: cleanText(landscape.title),
-        subtitle: cleanText(landscape.subtitle),
-        valueText: landscape.hasQuantitativeValues ? `${landscape.totalKnownPercent}% ${landscape.mappedLabel}` : "Qualitative",
-        approximate: Boolean(landscape.hasQuantitativeValues && landscape.isApproximate),
-        centerLabel: cleanText(landscape.centerLabel) || "Political",
-        centerSubLabel: cleanText(landscape.centerSubLabel) || "landscape",
-        slices: asArray(landscape.slices).map(entryView),
-        entries: asArray(landscape.entries).map(entryView),
-      } : null,
+      polityKey: cleanText(profile?.polityKey || profile?.name),
+      landscapes: {
+        parties: landscapeView(views.parties, "parties"),
+        blocs: landscapeView(views.blocs, "blocs"),
+        defaultView: cleanText(views.defaultView),
+        canSwitch: Boolean(views.canSwitch),
+      },
       goals: listOf(profile?.goals).slice(0, 5),
       institutions: institutionsView(institutions),
       intelligence: intelligence ? {
@@ -1730,7 +1746,7 @@ export const register = (ctx) => {
     };
   };
 
-  const standInSeed = async () => {
+  const standInSeed = async ({ blocs = false } = {}) => {
     const game = await engine.gameState.readGameData({ force: true });
     const date = cleanText(game?.gameDate || game?.startDate);
     await engine.gameState.mutateWorldState((world) => ({
@@ -1781,6 +1797,12 @@ export const register = (ctx) => {
               { id: "fg", name: "Left Front", shortName: "FG", support: 11 },
             ],
             goals: ["Restore growth and cut unemployment", "Defeat the raids on Chad", "Hold the European Union together"],
+            ...(blocs ? {
+              powerBlocs: [
+                { id: "medef", name: "Employers' federation", kind: "business_lobby", status: "organised", leader: "Pierre Gattaz", influence: { percent: 38, basis: "scenario" }, publicDescription: "The voice of large French employers." },
+                { id: "unions", name: "Trade union confederations", kind: "labour_movement", influence: { label: "strong" } },
+              ],
+            } : {}),
           },
         },
       },
@@ -1789,7 +1811,7 @@ export const register = (ctx) => {
   };
 
   return {
-    ...(ctx.standIn ? { "country.standin_seed": async () => standInSeed() } : {}),
+    ...(ctx.standIn ? { "country.standin_seed": async (args) => standInSeed(args) } : {}),
     "country.view": async (args) => view(args),
     "country.sheet": async ({ target = "", force = false, forceReassess = false, generate = true } = {}, { signal, id }) => {
       const code = cleanText(target);
