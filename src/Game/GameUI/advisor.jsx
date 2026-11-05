@@ -11,19 +11,24 @@ import { SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, useTouchPrimary } from ".
 import { isComposerSendKey } from "../../runtime/composerKeys.js";
 import { chatLanguageDiffersFromUi, chatTextDirection } from "../../runtime/i18n.js";
 import { uiString } from "../../runtime/translator.js";
-import { applyProjectOpsToWorld, mutateAdvisorState, normalizeActionEntry, readActionsState, readAdvisorMessages, readWorldState, viewAsSeen, writeActionsState, writeWorldState } from "../../runtime/gameState.js";
-import { CHIEF_ADVISOR_THREAD, advisorContacts, advisorMessagesFor, advisorOfficeStatus, archiveAdvisorContact, createAdvisorContact, politicalAdvisorOffices, replaceAdvisorThread, reviseAdvisorContact } from "../../runtime/advisorThreads.js";
+import { applyProjectOpsToWorld, mutateActionsState, mutateAdvisorState, mutateWorldState, normalizeActionEntry, readAdvisorMessages, viewAsSeen } from "../../runtime/gameState.js";
+import { ADVISOR_RECIPIENT_TYPES, CHIEF_ADVISOR_THREAD, advisorContacts, advisorMessagesFor, advisorOfficeStatus, advisorRecipientType, archiveAdvisorContact, chiefAdvisorProfile, createAdvisorContact, politicalAdvisorOffices, replaceAdvisorThread, resetChiefAdvisorProfile, reviseAdvisorContact, saveChiefAdvisorProfile } from "../../runtime/advisorThreads.js";
 import { getPoliticalProfile } from "../../runtime/politicalActors.js";
 import StorageProblemNotice from "./storageProblemNotice.jsx";
 import AdvisorRecipients from "./AdvisorRecipients.jsx";
-import { describeReplyProblems, extractFencedJson, looksLikeProjectOps, planAdvisorActionEdits } from "./advisorBlocks.js";
+import { describeReplyProblems, extractFencedJson, looksLikeProjectOps } from "./advisorBlocks.js";
+import { actionProposalsFromReply, recordAdvisorActionReceipt } from "./advisorActionReview.js";
+import { approveAdvisorAction } from "./advisorActionApproval.js";
+import { applyAdvisorProjectProposal, canAdvisorApplyProjectOps } from "./advisorProjectRouting.js";
 import { sentLetterDate, splitAtBlockquotes } from "./advisorDrafts.js";
 import { repeatedOrder } from "../AI/playerFocus.js";
 import { institutionDraftButtonLabel } from "./advisorInstitutionDrafts.js";
 import { parseAdvisorReply } from "./advisorReply.js";
 import { ADVISOR_SLIDE } from "./advisorSlide.js";
 import Markdown, { MarkdownStyleInjector } from "./markdown.jsx";
+import "./advisorDossier.css";
 import { buildCatchUpNote } from "../AI/conversationCatchUp.js";
+import { publicCharacterEvents } from "../AI/characterConversations.js";
 import { splitAdvisorMemory, stripAdvisorMemory } from "../AI/advisorMemory.js";
 import { commitWithVotingRuleBackfill } from "../AI/institutionGovernanceRetry.js";
 import { gmChangesSince } from "../../runtime/gmChanges.js";
@@ -35,7 +40,7 @@ import { commitInstitutionLifecycleCommand } from "../../runtime/institutionLife
 import { getLibraryState } from "../../runtime/library.js";
 import { campaignChanged } from "../../runtime/campaignGuard.js";
 import { TURN_RUNNING_NOTE, assertNoTurnRunning, isSimulationBusy } from "../AI/simulationStatus.js";
-import { inSharedGame, requestFromHost } from "../../multiplayer/client/sharedGameBridge.js";
+import { inSharedGame } from "../../multiplayer/client/sharedGameBridge.js";
 
 Chart.register(...registerables);
 
@@ -58,63 +63,8 @@ const ThinkingDots = () => {
 // Taking a reply apart (its prose, and the chart, drafts, deployments and
 // board edits in its fences) lives in advisorReply.js, where it is tested.
 
-// Applies the advisor's ```actions proposal to the real queue (readActionsState/
-// writeActionsState — the same storage the Actions panel reads and writes) and
-// reports what actually happened, so the confirmation card shows real outcomes
-// rather than just echoing the model's request back. Runs ONCE, right when a
-// reply arrives (see handleSend) — never at render time, since parseAdvisorReply
-// above runs on every re-render and must stay a pure read.
-// `problems` collects, in sentences, what the advisor asked for and did not get
-// — its receipt, told to it before the next question (advisorBlocks.js).
-const applyAdvisorActions = async (proposal, problems = [], round = 0) => {
-    if (!Array.isArray(proposal) || proposal.length === 0) return null;
-
-    const current = await readActionsState({ force: true });
-    // The edits themselves are worked out in advisorBlocks.js, where they are
-    // tested; this applies them.
-    const plan = planAdvisorActionEdits(current, proposal, normalizeActionEntry, {
-        repeatOf: (queue, title) => repeatedOrder(queue, title, { round: Number(round) || 0 }),
-    });
-    problems.push(...plan.problems);
-    if (plan.items.length === 0) return null;
-    // In a shared game the queue is the host's (multiplayer/): each change the
-    // advisor made is asked of it, as the Actions panel asks, and what the host
-    // turns down is told to the advisor with the rest of its receipt.
-    if (inSharedGame()) {
-        const wording = (action) => String(action?.text || action?.title || "").trim();
-        const before = new Map(current.map((action) => [String(action.id), action]));
-        const after = new Map(plan.next.map((action) => [String(action.id), action]));
-        const ask = async (request, fields, what) => {
-            const answer = await requestFromHost(request, fields);
-            if (!answer.ok) problems.push(`the host did not ${what}: ${answer.error || "it did not answer"}`);
-        };
-        for (const [id, action] of before) {
-            const kept = after.get(id);
-            if (kept && wording(kept) === wording(action)) continue;
-            await ask("unorder", { order: id }, `withdraw "${action.title || wording(action)}"`);
-            if (kept) await ask("order", { text: wording(kept) }, `take the reworded "${kept.title || wording(kept)}"`);
-        }
-        for (const [id, action] of after) {
-            if (!before.has(id)) await ask("order", { text: wording(action) }, `take "${action.title || wording(action)}"`);
-        }
-        return plan.items;
-    }
-    // A removed troop order takes its unit off the map again (or back where it
-    // was), exactly as deleting it in the Actions panel does.
-    if (plan.reverts.length) {
-        const { revertUnitOrder } = await import("../Map/unitsController.js");
-        for (const revert of plan.reverts) {
-            try {
-                await revertUnitOrder(revert);
-            } catch (error) {
-                console.warn("[advisor] could not revert the unit order:", error);
-            }
-        }
-    }
-    await writeActionsState(plan.next);
-    return plan.items;
-};
-
+// M3C: Action blocks are saved as proposals on the reply. The player's
+// explicit Proceed click is the only path to the canonical Actions writer.
 // Saves the diagnostics log with this failure attached at the top, or copies
 // the failure alone while logging is off (runtime/saveDebugLog.js).
 const ReportButton = ({ buildIncident, tone = "rgba(255,255,255,0.2)", color = "rgba(255,255,255,0.6)" }) => {
@@ -200,75 +150,6 @@ const AdvisorErrorDetails = ({ message, diagnostics, onRetry, retrying }) => {
         )}
         </div>
     );
-};
-
-// Applies the advisor's ```projects proposal to the real board (world.projects,
-// the same field events write through impacts.projectOps) and reports what
-// actually happened, so the confirmation card shows real outcomes rather than
-// echoing the model's request back. Runs ONCE, right when a reply arrives (see
-// handleSend) — never at render time, since parseAdvisorReply runs on every re-render
-// and must stay a pure read.
-//
-// The read-modify-write spreads the WHOLE world back. A shallow patch here would
-// drop polityOverrides / regionOwnershipOverrides / ownerCodes and blank the map
-// — the same trap saveGame documents in libraryBar.jsx.
-// `round` matters as much as the date: applyProjectOps stamps it onto
-// updatedRound, which is the ONLY thing deriveProjectFlags uses to decide whether a
-// programme has gone quiet. Without it an advisor update kept whatever round the
-// last EVENT stamped, so asking the advisor to brief you on a project — it updates
-// the board, the receipt card says "1 updated" — left the card still wearing "No
-// recent progress". The event path has always passed it (gameplay.js); this one had
-// not.
-const applyAdvisorProjects = async (proposal, gameDate, round) => {
-    if (!Array.isArray(proposal) || proposal.length === 0) return null;
-
-    const world = await readWorldState({ force: true });
-    const before = new Map(world.projects.map((project) => [project.id, project]));
-
-    // applyProjectOpsToWorld normalizes defensively, so the raw parsed ops are
-    // fine here; it also drops anything aimed at a project that does not exist.
-    //
-    // Not bare applyProjectOps: a project the advisor COMPLETES may carry
-    // onComplete effects — a border it hands over, a polity it renames — and those
-    // have to land whoever completed it. This is the same door the event path uses,
-    // in the same order, so a completion from chat and a completion from a jump
-    // change the world identically.
-    const { deferredProjectIds, world: nextWorld } = applyProjectOpsToWorld({
-        date: String(gameDate || ""),
-        ops: proposal,
-        round: Number(round) || 0,
-        world,
-    });
-    const next = nextWorld.projects;
-
-    const items = [];
-    for (const project of next) {
-        const previous = before.get(project.id);
-        if (!previous) {
-            items.push({ change: "opened", title: project.name });
-        } else if (previous.updatedAt !== project.updatedAt) {
-            items.push({
-                change: project.status === "complete" && previous.status !== "complete" ? "completed" : "updated",
-                title: project.name,
-            });
-        }
-    }
-    for (const project of world.projects) {
-        if (!next.some((entry) => entry.id === project.id)) {
-            items.push({ change: "closed", title: project.name });
-        }
-    }
-    // A project whose completion would change the world is NOT closed from here —
-    // only an event may move a border or rename a polity. Say so on the card rather
-    // than silently doing nothing, or the advisor claims it finished something the
-    // board still shows as running and nobody can tell why.
-    for (const id of deferredProjectIds) {
-        const project = next.find((entry) => entry.id === id);
-        if (project) items.push({ change: "deferred", title: project.name });
-    }
-    if (items.length === 0) return null;
-    await writeWorldState(nextWorld);
-    return items;
 };
 
 // Inline confirmation for what the advisor just did to the projects board. Same
@@ -373,7 +254,7 @@ const AdvisorProjectsProblem = ({ kind, detail, excerpt, onRetry }) => {
     );
 };
 
-// Inline confirmation for what the advisor just did to the Actions queue —
+// Historical inline confirmation for previously auto-applied Chief Actions —
 // the "review" half of "advisor creates, I review": nothing here is silent.
 const AdvisorActionsCard = ({ items, onOpenActions }) => {
     const counts = items.reduce((acc, item) => {
@@ -402,6 +283,60 @@ const AdvisorActionsCard = ({ items, onOpenActions }) => {
             </li>
         ))}
         </ul>
+        </div>
+    );
+};
+
+// A proposed Action is NOT yet on the board. Only a human Proceed click may
+// queue it. Each card owns its transient error/busy state; accepted receipts
+// are stored on the originating message and survive campaign reload.
+const AdvisorActionProposalCard = ({ proposal, receipt, onDiscuss, onProceed, onOpenActions, disabled }) => {
+    const [busy, setBusy] = useState(false);
+    const [error, setError] = useState("");
+    const name = proposal.title || proposal.text || (proposal.operation === "remove" ? "Remove queued Action" : "Change queued Action");
+    const label = proposal.operation === "remove" ? "Remove proposed Action"
+        : proposal.operation === "edit" ? "Proposed Action change" : "Proposed Action";
+    const confirmed = !!receipt;
+    const proceed = async () => {
+        if (busy || disabled || confirmed || !onProceed) return;
+        setBusy(true);
+        setError("");
+        try {
+            const result = await onProceed();
+            if (!result?.ok) setError(result?.error || "The Action was not queued.");
+        } catch (failure) {
+            setError(failure?.message || "The Action was not queued.");
+        } finally {
+            setBusy(false);
+        }
+    };
+    return (
+        <div style={{ marginTop: "0.6rem", background: "rgba(255,255,255,0.035)", border: "1px solid rgba(255,255,255,0.2)", borderRadius: "9px", padding: "0.6rem 0.7rem" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.5rem" }}>
+            <strong style={{ fontSize: "0.76rem" }}>📋 {label}</strong>
+            <span style={{ fontSize: "0.67rem", color: confirmed ? "#86efac" : "#e4e4e7" }}>
+                {confirmed ? (receipt.status === "queued" ? "Queued" : receipt.status === "updated" ? "Updated" : "Removed") : "Proposed"}
+            </span>
+        </div>
+        <div style={{ fontSize: "0.78rem", fontWeight: 700, marginTop: "0.4rem" }} data-no-translate>{name}</div>
+        {proposal.text && proposal.text !== name && (
+            <div data-no-translate style={{ fontSize: "0.73rem", opacity: 0.77, marginTop: "0.3rem" }}>{proposal.text}</div>
+        )}
+        {proposal.targetId && (
+            <div style={{ fontSize: "0.65rem", opacity: 0.55, marginTop: "0.3rem" }}>Existing Action: <span data-no-translate>{proposal.targetId}</span></div>
+        )}
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.4rem", marginTop: "0.6rem", flexWrap: "wrap" }}>
+        {confirmed ? (
+            onOpenActions && <button type="button" onClick={onOpenActions} style={{ border: "1px solid rgba(255,255,255,0.22)", borderRadius: "7px", background: "transparent", color: "#e4e4e7", padding: "0.3rem 0.55rem", cursor: "pointer" }}>Open Actions</button>
+        ) : (
+            <>
+            <button type="button" disabled={busy || disabled} onClick={onDiscuss} style={{ border: "1px solid rgba(255,255,255,0.25)", borderRadius: "7px", background: "transparent", color: "#e4e4e7", padding: "0.3rem 0.55rem", cursor: busy || disabled ? "default" : "pointer" }}>Discuss</button>
+            <button type="button" disabled={busy || disabled} onClick={proceed} style={{ border: "1px solid rgba(147,197,253,0.6)", borderRadius: "7px", background: "rgba(59,130,246,0.22)", color: "#dbeafe", padding: "0.3rem 0.55rem", cursor: busy || disabled ? "default" : "pointer" }}>{busy ? "Queueing…" : proposal.operation === "remove" ? "Proceed / Remove" : "Proceed / Queue"}</button>
+            </>
+        )}
+        </div>
+        {confirmed && <div style={{ fontSize: "0.68rem", marginTop: "0.35rem", color: "rgba(255,255,255,0.65)" }}>Confirmed by Actions board. Execution still requires game-time resolution.</div>}
+        {error && <div role="alert" style={{ fontSize: "0.72rem", color: "#fca5a5", marginTop: "0.4rem" }}>{error}</div>}
         </div>
     );
 };
@@ -769,7 +704,7 @@ const readSeenMoment = async (gameDate) => {
 // the time that passed, the newest events since, and the Game Master's changes by
 // hand. A fresh conversation has nothing to catch up on — it reads the present.
 // A note that cannot be built is no note: the question still goes.
-const buildAdvisorCatchUp = async (messages, moment) => {
+const buildAdvisorCatchUp = async (messages, moment, { publicOnly = false } = {}) => {
     const previous = [...(Array.isArray(messages) ? messages : [])].reverse()
         .find((msg) => (msg.role === "user" || msg.role === "advisor") && !msg.streaming);
     if (!previous) return { text: "", label: "" };
@@ -778,11 +713,14 @@ const buildAdvisorCatchUp = async (messages, moment) => {
         return buildCatchUpNote({
             previousDate: previous.time || "",
             currentDate: date || "",
-            events,
-            gmChanges: previous.at ? gmChangesSince(world, previous.at) : [],
+            // Character contacts get PUBLIC timeline changes only. Private
+            // Game Master edits, scoped intelligence events and receipts are
+            // never injected through a system-side catch-up message.
+            events: publicOnly ? publicCharacterEvents(events, { gameDate: date }) : events,
+            gmChanges: publicOnly ? [] : previous.at ? gmChangesSince(world, previous.at) : [],
             // The advisor's receipt for its own last reply: a chart not drawn, a
             // block that half landed.
-            replyProblems: previous.role === "advisor" ? describeReplyProblems(previous) : [],
+            replyProblems: !publicOnly && previous.role === "advisor" ? describeReplyProblems(previous) : [],
             compareDates: compareGameDates,
             formatDate: (value) => formatGameDateReadable(value),
         });
@@ -816,14 +754,14 @@ const formatAdvisorDate = (dateStr) => {
 // new message appended, or the streaming placeholder being replaced); memo's
 // default shallow prop comparison skips everything else, including every
 // keystroke in the composer below.
-const AdvisorMessageRow = React.memo(({ msg, msgIndex, speakerName = "Advisor", canExecute = true, allowedUnitTypes, chatDiffers, chatDir, onOpenActions, onOpenProjects, onRetryProjects, onRetry, retrying, onDraftMessage, onExecuteInstitutionDraft, onPlaceDeployment }) => {
+const AdvisorMessageRow = React.memo(({ msg, msgIndex, speakerName = "Advisor", canExecute = true, canDraft = true, canReviewActions = true, allowedUnitTypes, chatDiffers, chatDir, onOpenActions, onOpenProjects, onRetryProjects, onRetry, retrying, onDraftMessage, onDiscussAction, onProceedAction, onExecuteInstitutionDraft, onPlaceDeployment }) => {
     const { text, chartConfig, chartProblem, messageDrafts, institutionDrafts, deployments } = msg.role === "advisor"
         ? parseAdvisorReply(msg.text, { allowedUnitTypes: allowedUnitTypes ? allowedUnitTypes.split(",") : null, streaming: Boolean(msg.streaming) })
         : { text: msg.text, chartConfig: null, chartProblem: "", messageDrafts: null, institutionDrafts: null, deployments: null };
     const asWritten = msg.role === "advisor" && chatDiffers;
 
     return (
-        <div style={{ display: "flex", flexDirection: "column", alignItems: msg.role === "user" ? "flex-end" : "flex-start" }}>
+        <div className="oh-advisor-message-row" data-role={msg.role}>
         {/* The world moved on before this question; the advisor was told how
             (the whole note is in the tooltip). */}
         {msg.role === "user" && msg.catchUpLabel && (
@@ -832,26 +770,18 @@ const AdvisorMessageRow = React.memo(({ msg, msgIndex, speakerName = "Advisor", 
             </span>
         )}
         {msg.role !== "user" && (
-            <span style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.4)", marginBottom: "0.25rem" }}>
+            <span className="oh-advisor-speaker">
             {msg.role === "error" ? "⚠️ Error" : `🧭 ${speakerName}`}
             </span>
         )}
         {/* Player-typed text stays verbatim under UI translation. */}
-        <div data-no-translate={msg.role === "user" || asWritten ? "" : undefined} dir={asWritten ? chatDir : undefined} style={{
-            maxWidth: "90%", width: chartConfig ? "90%" : undefined,
-            padding: "0.6rem 0.85rem",
-            borderRadius: msg.role === "user" ? "12px 12px 2px 12px" : "12px 12px 12px 2px",
-            backgroundColor: msg.role === "user" ? "#3b82f6" : msg.role === "error" ? "rgba(239,68,68,0.2)" : "rgba(255,255,255,0.08)",
-            fontSize: "0.85rem", lineHeight: "1.5", whiteSpace: "pre-wrap", wordBreak: "break-word",
-            border: msg.role === "error" ? "1px solid rgba(239,68,68,0.3)" : "none",
-            boxSizing: "border-box",
-        }}>
+        <div className="oh-advisor-message-body" data-role={msg.role} data-no-translate={msg.role === "user" || asWritten ? "" : undefined} dir={asWritten ? chatDir : undefined}>
         {msg.role === "user" ? text : (
             <AdvisorReplyBody
             text={text}
             written={msg.role === "advisor"}
-            drafts={messageDrafts}
-            onDraftMessage={onDraftMessage}
+            drafts={canDraft ? messageDrafts : null}
+            onDraftMessage={canDraft ? onDraftMessage : undefined}
             />
         )}
         {chartConfig && <AdvisorChart config={chartConfig} />}
@@ -867,6 +797,20 @@ const AdvisorMessageRow = React.memo(({ msg, msgIndex, speakerName = "Advisor", 
             </div>
         )}
         {msg.actionsSummary &&<AdvisorActionsCard items={msg.actionsSummary} onOpenActions={onOpenActions} />}
+        {Array.isArray(msg.actionsProblems) && msg.actionsProblems.length > 0 && (
+            <div role="alert" style={{ marginTop: "0.5rem", fontSize: "0.72rem", color: "#fca5a5" }}>Some Action proposals could not be reviewed: {msg.actionsProblems.join(" ")}</div>
+        )}
+        {canReviewActions && Array.isArray(msg.actionProposals) && msg.actionProposals.map((proposal) => (
+            <AdvisorActionProposalCard
+                key={proposal.id}
+                proposal={proposal}
+                receipt={msg.actionReceipts?.[proposal.id]}
+                onDiscuss={() => onDiscussAction(msg.id, proposal)}
+                onProceed={() => onProceedAction(msg.id, proposal.id)}
+                onOpenActions={onOpenActions}
+                disabled={retrying}
+            />
+        ))}
         {msg.projectsSummary && <AdvisorProjectsCard items={msg.projectsSummary} onOpenProjects={onOpenProjects} />}
         {msg.projectsProblem && <AdvisorProjectsProblem kind={msg.projectsProblem} detail={msg.projectsDetail} excerpt={msg.projectsExcerpt} onRetry={onRetryProjects} />}
         {msg.role === "error" && <AdvisorErrorDetails message={msg.text} diagnostics={msg.diagnostics} onRetry={onRetry} retrying={retrying} />}
@@ -899,7 +843,7 @@ const AdvisorMessageRow = React.memo(({ msg, msgIndex, speakerName = "Advisor", 
         )}
         </div>
         {msg.time && msg.role !== "user" && (
-            <span style={{ fontSize: "0.65rem", color: "rgba(255,255,255,0.3)", marginTop: "0.25rem" }}>
+            <span className="oh-advisor-message-time">
             {formatAdvisorDate(msg.time)}
             </span>
         )}
@@ -928,7 +872,7 @@ const AdvisorDocumentNotice = ({ notice }) => {
     return (
         <div style={{ alignItems: "flex-start", display: "flex", flexDirection: "column" }}>
             <span style={{ color: "rgba(255,255,255,0.4)", fontSize: "0.7rem", marginBottom: "0.25rem" }}>🧭 Advisor</span>
-            <div style={{ background: "rgba(250,204,21,0.06)", border: "1px solid rgba(250,204,21,0.22)", borderRadius: "12px 12px 12px 2px", boxSizing: "border-box", fontSize: "0.82rem", lineHeight: 1.5, maxWidth: "90%", padding: "0.55rem 0.8rem" }}>
+            <div className="oh-advisor-notice">
                 <div>
                     📄 A new paper on your desk: <span data-no-translate style={{ fontWeight: 800 }}>{report.title}</span>, {noticeHow(notice)}.
                 </div>
@@ -978,20 +922,19 @@ const ADVISOR_RENDER_WINDOW_STEP = 20;
 // Only the last `visibleLimit` messages are drawn. `i` stays the index into
 // the WHOLE transcript: placedDeployments and completedInstitutionDrafts are
 // written back through it.
-const AdvisorMessageList = React.memo(({ messages, visibleLimit, onShowEarlier, isLoading, speakerName = "Advisor", canExecute = true, allowedUnitTypes, chatDiffers, chatDir, onOpenActions, onOpenProjects, onRetryProjects, onRetry, retrying, onDraftMessage, onExecuteInstitutionDraft, onPlaceDeployment, messagesEndRef, containerRef, onScroll }) => (
-    <div ref={containerRef} onScroll={onScroll} style={{ padding: "0.75rem", flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", gap: "1rem", scrollbarWidth: "none" }}>
+const AdvisorMessageList = React.memo(({ messages, visibleLimit, onShowEarlier, isLoading, speakerName = "Advisor", emptyMessage = "No messages yet. Ask your advisor something!", canExecute = true, canDraft = true, canReviewActions = true, allowedUnitTypes, chatDiffers, chatDir, onOpenActions, onOpenProjects, onRetryProjects, onRetry, retrying, onDraftMessage, onDiscussAction, onProceedAction, onExecuteInstitutionDraft, onPlaceDeployment, messagesEndRef, containerRef, onScroll }) => (
+    <div className="oh-advisor-messages" ref={containerRef} onScroll={onScroll}>
     {messages.length === 0 && (
         <p style={{ fontSize: "0.85rem", color: "rgba(255,255,255,0.5)", marginTop: 0 }}>
-        No messages yet. Ask your advisor something!
+        {emptyMessage}
         </p>
     )}
 
     {messages.length > visibleLimit && (
         <button
             type="button"
-            className="oh-tap-row"
+            className="oh-tap-row oh-advisor-message-history"
             onClick={onShowEarlier}
-            style={{ alignSelf: "center", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: "999px", color: "rgba(255,255,255,0.58)", cursor: "pointer", flexShrink: 0, fontSize: "0.68rem", padding: "0.35rem 0.65rem" }}
         >
             {Math.min(messages.length - visibleLimit, ADVISOR_RENDER_WINDOW_STEP) === 1
                 ? "Show 1 earlier message"
@@ -1005,14 +948,14 @@ const AdvisorMessageList = React.memo(({ messages, visibleLimit, onShowEarlier, 
     {messages.map((msg, i) => (i < messages.length - visibleLimit ? null : msg.role === "notice"
         ? <AdvisorDocumentNotice key={msg.id || i} notice={msg} />
         : (
-        <AdvisorMessageRow key={i} msg={msg} msgIndex={i} speakerName={speakerName} canExecute={canExecute} allowedUnitTypes={allowedUnitTypes} chatDiffers={chatDiffers} chatDir={chatDir} onOpenActions={onOpenActions} onOpenProjects={onOpenProjects} onRetryProjects={onRetryProjects} onDraftMessage={onDraftMessage} onExecuteInstitutionDraft={onExecuteInstitutionDraft} onPlaceDeployment={onPlaceDeployment}
+        <AdvisorMessageRow key={i} msg={msg} msgIndex={i} speakerName={speakerName} canExecute={canExecute} canDraft={canDraft} canReviewActions={canReviewActions} allowedUnitTypes={allowedUnitTypes} chatDiffers={chatDiffers} chatDir={chatDir} onOpenActions={onOpenActions} onOpenProjects={onOpenProjects} onRetryProjects={onRetryProjects} onDraftMessage={onDraftMessage} onDiscussAction={onDiscussAction} onProceedAction={onProceedAction} onExecuteInstitutionDraft={onExecuteInstitutionDraft} onPlaceDeployment={onPlaceDeployment}
         onRetry={i === messages.length - 1 && msg.role === "error" ? onRetry : undefined} retrying={retrying} />
     )))}
 
     {isLoading && !(messages[messages.length - 1]?.role === "advisor" && messages[messages.length - 1]?.streaming) && (
         <div style={{ display: "flex", alignItems: "flex-start", flexDirection: "column", gap: "0.25rem" }}>
         <span style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.4)" }}>🧭 {speakerName}</span>
-        <div style={{ padding: "0.6rem 0.85rem", borderRadius: "12px 12px 12px 4px", backgroundColor: "rgba(255,255,255,0.08)", fontSize: "0.85rem" }}>
+        <div className="oh-advisor-thinking">
         <ThinkingDots />
         </div>
         </div>
@@ -1031,6 +974,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
     const [input, setInput]         = useState("");
     const [isLoading, setIsLoading] = useState(false);
     const [contacts, setContacts] = useState([]);
+    const [chiefProfile, setChiefProfile] = useState(null);
     const [activeThreadId, setActiveThreadId] = useState(CHIEF_ADVISOR_THREAD);
     const activeThreadIdRef = useRef(CHIEF_ADVISOR_THREAD);
     const contactDraftsRef = useRef(new Map());
@@ -1048,7 +992,12 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
     }, [governmentText, playerPolity]);
     const offices = React.useMemo(() => politicalAdvisorOffices(politicalWorld, playerPolity), [politicalWorld, playerPolity]);
     const selectedContact = contacts.find((contact) => contact.id === activeThreadId) || null;
-    const recipientLocked = Boolean(selectedContact?.archived);
+    const recipientUnavailableReason = selectedContact?.archived
+        ? "This contact is retired — restore to reply"
+        : selectedContact && !advisorRecipientType(selectedContact)
+            ? "Unsupported recipient type — cannot open conversation"
+            : "";
+    const recipientLocked = Boolean(recipientUnavailableReason);
     const messagesEndRef            = useRef(null);
     const [visibleMessageLimit, setVisibleMessageLimit] = useState(ADVISOR_INITIAL_RENDER_WINDOW);
     const handleShowEarlier = React.useCallback(() => {
@@ -1153,6 +1102,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
                 setLoadFailed(true);
             } else {
                 setContacts(advisorContacts(saved));
+                setChiefProfile(chiefAdvisorProfile(saved));
                 const chiefMessages = advisorMessagesFor(saved, CHIEF_ADVISOR_THREAD);
                 updateMessages(chiefMessages);
                 loadHistory(chiefMessages, CHIEF_ADVISOR_THREAD);
@@ -1171,6 +1121,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         const onRuntimeUpdate = (event) => {
             if (event?.detail?.url !== JSON_URLS.advisor) return;
             setContacts(advisorContacts(event.detail.value));
+            setChiefProfile(chiefAdvisorProfile(event.detail.value));
             if (activeThreadIdRef.current === CHIEF_ADVISOR_THREAD) {
                 updateMessages((prev) => mergeNotices(prev, advisorMessagesFor(event.detail.value, CHIEF_ADVISOR_THREAD)));
             }
@@ -1245,6 +1196,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             activeThreadIdRef.current = id;
             setActiveThreadId(id);
             setContacts(advisorContacts(saved));
+            setChiefProfile(chiefAdvisorProfile(saved));
             updateMessages(selectedMessages);
             setInput(contactDraftsRef.current.get(id) || "");
             setVisibleMessageLimit(ADVISOR_INITIAL_RENDER_WINDOW);
@@ -1288,6 +1240,32 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         }
     };
 
+    const saveChiefProfile = async (draft) => {
+        if (turnInFlightRef.current || sideEffectPendingRef.current || contactMutationRef.current || threadSwitchingRef.current || loadFailed || saveFailed) throw new Error("Cannot edit the chief advisor while the Advisor is busy.");
+        contactMutationRef.current = true;
+        setContactsBusy(true);
+        try {
+            await mutateAdvisorState((all) => saveChiefAdvisorProfile(all, draft));
+            setChiefProfile(chiefAdvisorProfile(await readAdvisorMessages({ force: true })));
+        } finally {
+            contactMutationRef.current = false;
+            setContactsBusy(false);
+        }
+    };
+
+    const restoreChiefProfile = async () => {
+        if (turnInFlightRef.current || sideEffectPendingRef.current || contactMutationRef.current || threadSwitchingRef.current || loadFailed || saveFailed) throw new Error("Cannot restore the chief advisor while the Advisor is busy.");
+        contactMutationRef.current = true;
+        setContactsBusy(true);
+        try {
+            await mutateAdvisorState((all) => resetChiefAdvisorProfile(all));
+            setChiefProfile(chiefAdvisorProfile(await readAdvisorMessages({ force: true })));
+        } finally {
+            contactMutationRef.current = false;
+            setContactsBusy(false);
+        }
+    };
+
     const retireRecipient = async (id, archived) => {
         if (turnInFlightRef.current || sideEffectPendingRef.current || contactMutationRef.current || threadSwitchingRef.current || loadFailed || saveFailed) throw new Error("Cannot retire a recipient while the Advisor is busy.");
         contactMutationRef.current = true;
@@ -1316,7 +1294,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
     // Retry sent the question twice, spending two requests, doubling the
     // reply and queueing its actions twice.
     const runTurn = async (text, options) => {
-        if (!text || !hasBootstrapped || loadFailed || saveFailed || turnInFlightRef.current || contactMutationRef.current || threadSwitchingRef.current || recipientLocked) return;
+        if (!text || !hasBootstrapped || loadFailed || saveFailed || turnInFlightRef.current || sideEffectPendingRef.current || contactMutationRef.current || threadSwitchingRef.current || recipientLocked) return;
         turnInFlightRef.current = true;
         setIsLoading(true);
         try {
@@ -1354,7 +1332,9 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         const askedOn = moment.date || gameDate;
         const catchUp = replaceTrailingError
             ? { text: askedBefore?.catchUp || "", label: askedBefore?.catchUpLabel || "" }
-            : await buildAdvisorCatchUp(messagesRef.current, moment);
+            : await buildAdvisorCatchUp(messagesRef.current, moment, {
+                publicOnly: Boolean(recipient && advisorRecipientType(recipient) !== ADVISOR_RECIPIENT_TYPES.MINISTER),
+            });
 
         // A fresh question re-engages auto-scroll even if the player had
         // paused it reading up through history — the pause is scoped to the
@@ -1395,33 +1375,38 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             // message, never in its text: loadHistory sends the newest one ahead
             // of the history after a reload.
             const { reply, memory } = splitAdvisorMemory(raw);
-            // Apply any ```actions proposal in the reply to the real queue BEFORE
-            // finalising the message, so the confirmation card that renders with it
-            // reflects what actually happened — not a re-derivation done later at
-            // render time (which can't know what the queue looked like when this
-            // reply arrived).
+            // No reply is authority to write an Action. Persist one durable
+            // message-bound proposal per valid fenced op, then wait for Proceed.
+            const replyId = `advisor-reply-${globalThis.crypto?.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 14)}`}`;
             const { json: actionsProposal, reason: actionsReason } = extractFencedJson(reply, "actions");
-            // What the advisor asked for and did not get, kept on the reply and
-            // told to it before the next question (advisorBlocks.js).
-            const actionsProblems = actionsReason ? [`it was ${actionsReason}, so nothing in it was applied`] : [];
+            const { proposals: actionProposals, problems: invalidProposals } =
+                (threadId === CHIEF_ADVISOR_THREAD || advisorRecipientType(recipient) === ADVISOR_RECIPIENT_TYPES.MINISTER)
+                    ? actionProposalsFromReply(actionsProposal, replyId)
+                    : { proposals: [], problems: [] };
+            const actionsProblems = [
+                ...(actionsReason ? [`the Action block was ${actionsReason}; no Action was queued`] : []),
+                ...invalidProposals,
+            ];
             // The buttons a reply offers are drawn at render time; which ones
             // could not be drawn is worked out once, here, for the receipt.
             const { chartProblem, draftProblems, institutionDraftProblems, deployProblems } = parseAdvisorReply(reply, {
                 allowedUnitTypes: Array.isArray(moment.world?.allowedUnitTypes) ? moment.world.allowedUnitTypes : null,
             });
-            const actionsSummary = threadId === CHIEF_ADVISOR_THREAD
-                ? await applyAdvisorActions(actionsProposal, actionsProblems, gameRound).catch((error) => {
-                    console.error("Failed to apply advisor-proposed actions:", error);
-                    return null;
-                }) : null;
             // Same one-shot treatment for the projects board, with truncation
             // salvage: a full backfill of a long campaign is the one block big
             // enough to be cut off mid-array by the reply token cap.
             const { json: projectsProposal, truncated: projectsTruncated, reason: projectsReason,
                 dropped: projectsDropped, excerpt: projectsExcerpt } =
                 extractFencedJson(reply, "projects", { salvageTruncated: true });
-            const projectsSummary = threadId === CHIEF_ADVISOR_THREAD
-                ? await applyAdvisorProjects(projectsProposal, gameDate, gameRound).catch((error) => {
+            const canApplyProjects = canAdvisorApplyProjectOps(threadId, recipient);
+            const projectsSummary = canApplyProjects
+                ? await applyAdvisorProjectProposal({
+                    proposal: projectsProposal,
+                    gameDate,
+                    round: gameRound,
+                    mutateWorldState,
+                    applyProjectOpsToWorld,
+                }).catch((error) => {
                     console.error("Failed to apply advisor-proposed projects:", error);
                     return null;
                 }) : null;
@@ -1430,7 +1415,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             // plainly tried and nothing landed, say so and offer the retry.
             // "Some of it landed" is its own outcome, and the most common one now
             // that a single malformed entry no longer costs the batch.
-            const projectsProblem = threadId !== CHIEF_ADVISOR_THREAD ? ""
+            const projectsProblem = !canApplyProjects ? ""
                 : projectsSummary
                     ? (projectsTruncated ? "truncated" : (projectsDropped > 0 ? "partial" : ""))
                     : (looksLikeProjectOps(reply) ? (projectsTruncated ? "truncated-empty" : "unusable") : "");
@@ -1456,9 +1441,9 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             // apart, and it is logged whether or not anything went wrong so the
             // "it worked, the player looked at the wrong panel" case is on the
             // record too.
-            logDebugEvent("advisor", "Advisor reply blocks applied.", {
+            logDebugEvent("advisor", "Advisor reply blocks reviewed.", {
                 actionsBlock: actionsProposal ? `${Array.isArray(actionsProposal) ? actionsProposal.length : 1} op(s)` : "(none in the reply)",
-                actionsApplied: actionsSummary ? `${actionsSummary.length} change(s)` : "nothing",
+                actionsProposed: `${actionProposals.length} pending review (zero auto-queued)`,
                 projectsBlock: projectsProposal ? `${Array.isArray(projectsProposal) ? projectsProposal.length : 1} op(s)` : "(none in the reply)",
                 projectsApplied: projectsSummary ? `${projectsSummary.length} change(s)` : "nothing",
                 projectsProblem: projectsProblem || "(none)",
@@ -1468,10 +1453,12 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             const next = updateMessages(prev => {
                 const next = prev.slice();
                 const last = next[next.length - 1];
-                const unapproved = threadId !== CHIEF_ADVISOR_THREAD && (actionsProposal || projectsProposal);
-                // A flag the bubble shows, in the player's language; written into the text, the note was English and
-                // went back to the model as if the official had said it.
-                const finalMessage = { role: "advisor", text: reply, time: askedOn, ...(unapproved ? { suggestionsNotApplied: true } : {}), at: new Date().toISOString(), ...(memory ? { memory } : {}), ...(chartProblem ? { chartProblem } : {}), ...(actionsProblems.length ? { actionsProblems } : {}), ...(draftProblems.length ? { draftProblems } : {}), ...(institutionDraftProblems.length ? { institutionDraftProblems } : {}), ...(deployProblems.length ? { deployProblems } : {}), ...(actionsSummary ? { actionsSummary } : {}), ...(projectsSummary ? { projectsSummary } : {}), ...(projectsProblem ? { projectsProblem } : {}), ...(projectsDetail ? { projectsDetail } : {}), ...(projectsExcerptText ? { projectsExcerpt: projectsExcerptText } : {}) };
+                const actionSuggestionsBlocked = threadId !== CHIEF_ADVISOR_THREAD && advisorRecipientType(recipient) !== ADVISOR_RECIPIENT_TYPES.MINISTER && actionsProposal;
+                const projectsNotApplied = !canApplyProjects && projectsProposal;
+                // Keep the upstream localization fix: the notice is UI metadata, not part of the
+                // reply text or the future model context. Ordinary Action proposals stay reviewable.
+                const suggestionsNotApplied = Boolean(actionSuggestionsBlocked || projectsNotApplied);
+                const finalMessage = { id: replyId, role: "advisor", text: reply, time: askedOn, at: new Date().toISOString(), ...(suggestionsNotApplied ? { suggestionsNotApplied: true } : {}), ...(memory ? { memory } : {}), ...(chartProblem ? { chartProblem } : {}), ...(actionsProblems.length ? { actionsProblems } : {}), ...(actionProposals.length ? { actionProposals } : {}), ...(draftProblems.length ? { draftProblems } : {}), ...(institutionDraftProblems.length ? { institutionDraftProblems } : {}), ...(deployProblems.length ? { deployProblems } : {}), ...(projectsSummary ? { projectsSummary } : {}), ...(projectsProblem ? { projectsProblem } : {}), ...(projectsDetail ? { projectsDetail } : {}), ...(projectsExcerptText ? { projectsExcerpt: projectsExcerptText } : {}) };
                 // Finalise the streaming bubble, or append the full reply if the
                 // provider never streamed a chunk.
                 if (last && last.role === "advisor" && last.streaming) {
@@ -1503,7 +1490,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
 
     const handleSend = () => {
         const text = input.trim();
-        if (!text || !hasBootstrapped || loadFailed || saveFailed || turnInFlightRef.current || contactMutationRef.current || threadSwitchingRef.current || recipientLocked) return;
+        if (!text || !hasBootstrapped || loadFailed || saveFailed || turnInFlightRef.current || sideEffectPendingRef.current || contactMutationRef.current || threadSwitchingRef.current || recipientLocked) return;
         setInput("");
         return runTurn(text);
     };
@@ -1537,6 +1524,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             const said = messagesRef.current.filter((message) => !(message?.id && storedIds.has(message.id)));
             const merged = [...savedThread, ...said];
             setContacts(advisorContacts(saved));
+            setChiefProfile(chiefAdvisorProfile(saved));
             updateMessages(merged);
             loadHistory(merged, threadId);
             if (said.length) await saveMessages(merged, threadId);
@@ -1570,6 +1558,58 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         setInput(uiString(RETRY_PROJECTS_TEXT));
         inputRef.current?.focus();
     }, []);
+
+    // Discuss is a local composer handoff: it neither sends a message nor
+    // writes an Action. Preserve any draft the player was already typing.
+    const handleDiscussAction = React.useCallback((_messageId, proposal) => {
+        if (turnInFlightRef.current || sideEffectPendingRef.current || threadSwitchingRef.current) return;
+        const subject = String(proposal?.title || proposal?.text || "this Action").trim().slice(0, 240);
+        const prompt = `Let's discuss the proposed Action "${subject}" before I authorize it.`;
+        setInput((current) => current.trim() ? `${current.replace(/\s+$/, "")}\n\n${prompt}` : prompt);
+        inputRef.current?.focus();
+    }, []);
+
+    // Canonical approval: re-fetch the stored message and recipient, then
+    // re-plan against the latest queue IN its existing canonical write queue.
+    // An already-saved Action ID is idempotent after a click retry/reload.
+    const handleProceedAction = React.useCallback(async (messageId, proposalId) => {
+        if (turnInFlightRef.current || sideEffectPendingRef.current || threadSwitchingRef.current || advisorLoadFailed) {
+            return { ok: false, error: "The Advisor is busy. Try again when the current operation finishes." };
+        }
+        const threadId = activeThreadIdRef.current;
+        const campaignId = String(getLibraryState()?.activeGameId || "").trim();
+        sideEffectPendingRef.current += 1;
+        setSideEffectsBusy(true);
+        try {
+            assertNoTurnRunning();
+            const { round } = await readJson(JSON_URLS.game, { defaultValue: { round: 0 }, force: true });
+            if (campaignChanged(campaignId, getLibraryState()?.activeGameId)) {
+                throw new Error("The campaign changed before the Action could be queued.");
+            }
+            const receipt = await approveAdvisorAction({
+                threadId, messageId, proposalId,
+                readAdvisorMessages, mutateActionsState, mutateAdvisorState,
+                normalizeAction: normalizeActionEntry,
+                repeatOf: (queue, title) => repeatedOrder(queue, title, { round: Number(round) || 0 }),
+                sharedGame: inSharedGame(),
+                assertReady: assertNoTurnRunning,
+            });
+            if (campaignChanged(campaignId, getLibraryState()?.activeGameId)) {
+                throw new Error("The campaign changed while the Action was being reviewed. Reopen the correct game.");
+            }
+            updateMessages((previous) => recordAdvisorActionReceipt(previous, threadId, messageId, proposalId, receipt));
+            logDebugEvent("advisor", `Player confirmed Advisor Action proposal ${proposalId}: ${receipt.status}.`, {
+                messageId, actionId: receipt.actionId,
+            }, { verbose: true });
+            return { ok: true };
+        } catch (error) {
+            console.warn("[advisor] the Action proposal was not fully confirmed:", error);
+            return { ok: false, error: `${error?.message || String(error)} If a write succeeded before an error, retrying uses the same Action ID.` };
+        } finally {
+            sideEffectPendingRef.current -= 1;
+            if (!sideEffectPendingRef.current) setSideEffectsBusy(false);
+        }
+    }, [updateMessages]);
 
     // Hands the drafted letter to the diplomacy panel: opens (or reuses) the
     // chat with that country and drops the text in its composer, where the
@@ -1754,7 +1794,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
     return (
         <>
         <MarkdownStyleInjector />
-        <div style={{
+        <div className="oh-advisor-drawer" style={{
             // Pinned to the top and the bottom rather than given a height. 100vh
             // is the height a phone shows with its address bar HIDDEN, so while
             // the bar showed, a 100vh drawer anchored at the bottom ran off the
@@ -1777,7 +1817,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             ...(isMobile
                 ? { left: 0, paddingTop: SAFE_TOP, paddingBottom: SAFE_BOTTOM, paddingLeft: SAFE_LEFT, paddingRight: SAFE_RIGHT, boxSizing: "border-box" }
                 : { width: `calc(${width || ADVISOR_PANEL_WIDTH} + ${SAFE_RIGHT})`, paddingTop: SAFE_TOP, paddingBottom: SAFE_BOTTOM, paddingRight: SAFE_RIGHT, boxSizing: "border-box", borderLeft: "1px solid rgba(255,255,255,0.1)" }),
-            backgroundColor: "rgba(24, 24, 27, 0.95)", backdropFilter: "blur(8px)",
+            backdropFilter: "blur(8px)",
             // Phones: above every HUD button/panel (toolbar 9999, forces 10000,
             // library panels 10031) so nothing covers the full-screen sheet;
             // below the editor (10050) and server-down (10060) overlays.
@@ -1815,9 +1855,9 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             </div>
         )}
         {/* Advisor is its own system. Country/Stats lives in the separate flag drawer. */}
-        <div style={{ alignItems: "center", borderBottom: "1px solid rgba(255,255,255,0.1)", display: "flex", gap: "0.5rem", padding: "0.78rem 0.75rem" }}>
-        <span aria-hidden="true" style={{ fontSize: "1rem" }}>🧭</span>
-        <span style={{ fontSize: "0.9rem", fontWeight: 800 }}>Advisor</span>
+        <div className="oh-advisor-header">
+        <span className="oh-advisor-header-mark" aria-hidden="true">◇</span>
+        <span className="oh-advisor-header-title">Advisor</span>
         <div style={{ flex: 1 }} />
         <button
         className="oh-tap"
@@ -1858,6 +1898,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         <AdvisorRecipients
             contacts={contacts}
             activeId={activeThreadId}
+            chiefProfile={chiefProfile}
             offices={offices}
             statusOf={(contact) => advisorOfficeStatus(contact, politicalWorld)}
             busy={!hasBootstrapped || isLoading || contactsBusy || sideEffectsBusy || saveFailed || storageRetrying || threadSwitchingRef.current || loadFailed}
@@ -1865,6 +1906,8 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             onCreate={createRecipient}
             onRevise={reviseRecipient}
             onArchive={retireRecipient}
+            onSaveChief={saveChiefProfile}
+            onResetChief={restoreChiefProfile}
         />
 
         {loadFailed ? (
@@ -1879,8 +1922,11 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             keystroke. See AdvisorMessageRow's comment for why that mattered. */}
         <AdvisorMessageList
         messages={messages}
-        speakerName={selectedContact?.name || "Advisor"}
+        speakerName={selectedContact?.name || chiefProfile?.name || "Advisor"}
+        emptyMessage={selectedContact && advisorRecipientType(selectedContact) !== ADVISOR_RECIPIENT_TYPES.MINISTER ? "No messages yet. Start your conversation." : "No messages yet. Ask your advisor something!"}
         canExecute={activeThreadId === CHIEF_ADVISOR_THREAD}
+        canDraft={activeThreadId === CHIEF_ADVISOR_THREAD || advisorRecipientType(selectedContact) === ADVISOR_RECIPIENT_TYPES.MINISTER}
+        canReviewActions={!recipientLocked && (activeThreadId === CHIEF_ADVISOR_THREAD || advisorRecipientType(selectedContact) === ADVISOR_RECIPIENT_TYPES.MINISTER)}
         visibleLimit={visibleMessageLimit}
         onShowEarlier={handleShowEarlier}
         isLoading={isLoading}
@@ -1893,6 +1939,8 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         onRetry={handleRetryTurn}
         retrying={isLoading}
         onDraftMessage={handleDraftMessage}
+        onDiscussAction={handleDiscussAction}
+        onProceedAction={handleProceedAction}
         onExecuteInstitutionDraft={handleExecuteInstitutionDraft}
         onPlaceDeployment={handlePlaceDeployment}
         messagesEndRef={messagesEndRef}
@@ -1901,11 +1949,12 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         />
 
         {/* Input */}
-        <div style={{ padding: "1rem", borderTop: "1px solid rgba(255,255,255,0.1)", display: "flex", alignItems: "center", gap: "0.5rem" }}>
+        <div className="oh-advisor-composer">
         <textarea
+        className="oh-advisor-composer-input"
         ref={inputRef}
         // A phone's keyboard has no Shift+Enter to speak of.
-        placeholder={recipientLocked ? "This contact is retired — restore to reply" : selectedContact ? `Message ${selectedContact.name}…` : isTouch ? "Ask your advisor…" : "Ask your advisor…  (Shift+Enter for a new line)"}
+        placeholder={recipientUnavailableReason || (selectedContact ? `Message ${selectedContact.name}…` : chiefProfile ? `Message ${chiefProfile.name}…` : isTouch ? "Ask your advisor…" : "Ask your advisor…  (Shift+Enter for a new line)")}
         rows={1} value={input}
         disabled={recipientLocked}
         enterKeyHint="enter"
@@ -1914,16 +1963,20 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             resizeTextarea();
         }}
         onKeyDown={handleKeyDown}
-        style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.2)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: "10px", color: "white", fontSize: "0.875rem", padding: "0.6rem 0.75rem", resize: "none", outline: "none", fontFamily: "sans-serif", lineHeight: "1.5", overflowY: "auto", scrollbarWidth: "none", transition: "border-color 0.2s" }}
-        onFocus={e => e.target.style.borderColor = "rgba(59,130,246,0.6)"}
-        onBlur={e => e.target.style.borderColor = "rgba(255,255,255,0.15)"}
+
         />
         <button
-        onClick={handleSend} disabled={isLoading || recipientLocked || !hasBootstrapped || loadFailed || saveFailed || !input.trim()}
-        style={{ backgroundColor: isLoading || recipientLocked || !input.trim() ? "rgba(59,130,246,0.4)" : "#3b82f6", border: "none", borderRadius: "10px", width: "2.5rem", height: "2.5rem", display: "flex", alignItems: "center", justifyContent: "center", cursor: isLoading || !input.trim() ? "not-allowed" : "pointer", flexShrink: 0, fontSize: "1rem", transition: "background-color 0.2s" }}
-        onMouseEnter={e => { if (!isLoading && !recipientLocked && input.trim()) e.currentTarget.style.backgroundColor = "#2563eb"; }}
-        onMouseLeave={e => { if (!isLoading && !recipientLocked && input.trim()) e.currentTarget.style.backgroundColor = "#3b82f6"; }}
-        >🚀</button>
+        type="button"
+        className="oh-advisor-send"
+        aria-label="Send message"
+        title="Send message"
+        onClick={handleSend}
+        disabled={isLoading || recipientLocked || !hasBootstrapped || loadFailed || saveFailed || !input.trim()}
+        >
+          <svg aria-hidden="true" focusable="false" width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 19V5m-7 7 7-7 7 7" />
+          </svg>
+        </button>
         </div>
         </div>
         </div>

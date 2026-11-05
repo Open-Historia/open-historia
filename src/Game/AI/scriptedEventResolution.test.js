@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { firstSkipIncludesScriptedOrigin, scriptedBeatsInSpan } from "./worldDirection.js";
 import {
   commitScriptedEventPlan,
   evaluateScriptedEventCondition,
@@ -247,6 +248,48 @@ test("later due events in the same plan can depend on the selected outcome of an
   ], percent: 100 }, "1914-03-21");
   const plan = planScriptedEvents([primary, followup], { world, random: () => 0.2 });
   assert.deepEqual(plan.eligible.map((row) => row.id), ["primary", "followup"]);
+});
+
+test("Swan Lake-style first-day chain resolves all authored beats after pregame bootstrap", () => {
+  const start = "1991-08-19";
+  const startGame = { startDate: start, gameDate: start, round: 1 };
+  const bootstrap = { simulationHistory: [{
+    date: start, fromDate: "1985-03-11", toDate: start, mode: "pregame", source: "scenario",
+  }] };
+  const beats = [
+    event("overnight-plan", undefined, start),
+    { ...event("emergency-announcement", undefined, start), outcomes: [
+      { id: "constitutional", text: "The committee follows constitutional limits.", weight: 100 },
+      { id: "unconstitutional", text: "The committee seizes extra powers.", weight: 0 },
+    ] },
+    event("swan-lake-broadcast", undefined, start),
+    event("ukrainian-response", { mode: "rules", operator: "all", percent: 100, conditions: [
+      { type: "scripted_event_fired", eventId: "emergency-announcement" },
+    ] }, "1991-08-20"),
+    event("march-on-moscow", { mode: "rules", operator: "all", percent: 100, conditions: [
+      { type: "scripted_outcome_selected", eventId: "emergency-announcement", outcomeId: "constitutional" },
+    ] }, "1991-08-21"),
+    event("final-condemnation", { mode: "rules", operator: "all", percent: 100, conditions: [
+      { type: "scripted_event_fired", eventId: "ukrainian-response" },
+    ] }, "1991-08-21"),
+  ];
+  const due = scriptedBeatsInSpan(beats, {
+    originDate: start,
+    targetDate: "1991-08-26",
+    includeOrigin: firstSkipIncludesScriptedOrigin({
+      game: startGame, world: bootstrap, originDate: start, segmentIndex: 0,
+    }),
+  });
+  assert.equal(due.length, 6, "pregame history cannot discard the three start-day beats");
+  const plan = planScriptedEvents(due, { world, random: () => 0.99 });
+  assert.deepEqual(plan.eligible.map((row) => row.id), beats.map((row) => row.id));
+  assert.equal(plan.eligible[1].selectedOutcomeId, "constitutional", "the zero-weight alternative cannot be selected");
+  const committed = commitScriptedEventPlan({}, plan, { throughDate: "1991-08-26" });
+  assert.equal(committed.fired.length, 6);
+  assert.equal(committed.skipped.length, 0);
+  assert.equal(Object.keys(committed.state).length, 6);
+  assert.equal(planScriptedEvents(due, { world, resolvedState: committed.state }).eligible.length, 0,
+    "reload never reruns the completed scenario chain");
 });
 
 test("a branch with no positive-weight outcome fails closed", () => {

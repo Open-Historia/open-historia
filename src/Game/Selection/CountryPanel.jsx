@@ -452,7 +452,7 @@ const CountryInfoPanel = () => {
         <div style={{ alignItems: "center", display: "flex", gap: "0.6rem", padding: "1rem 1.1rem 0.8rem" }}>
         {currentFlag.imageUrl && !flagFailed ? (
             <button type="button" onClick={() => setFlagPickerOpen(true)} title="Change flag" style={{ background: "none", border: "none", padding: 0, cursor: "pointer", display: "flex" }}>
-                <img src={bundledFlagUrl(currentFlag.imageUrl)} alt="" onError={() => setFlagFailed(true)} style={{ borderRadius: 4, height: "1.35rem", width: "2.1rem", objectFit: "cover", boxShadow: "0 0 0 1px rgba(255,255,255,0.15)" }} />
+                <img src={bundledFlagUrl(currentFlag.imageUrl)} alt="" onError={() => setFlagFailed(true)} style={{ borderRadius: 4, height: "1.35rem", width: "2.1rem", objectFit: "contain", boxShadow: "0 0 0 1px rgba(255,255,255,0.15)" }} />
             </button>
         ) : (
             <button type="button" onClick={() => setFlagPickerOpen(true)} title="Set flag" style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: 4, height: "1.35rem", width: "2.1rem", cursor: "pointer" }} />

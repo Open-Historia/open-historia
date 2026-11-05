@@ -147,7 +147,9 @@ import { describeDocumentsForAdvisor } from "../../runtime/reportDelivery.js";
 import { viewAsSeen } from "../../runtime/gameState.js";
 import { withCatchUp } from "./conversationCatchUp.js";
 import { ADVISOR_MEMORY_DIRECTIVE, advisorMemoryContextEntry, latestAdvisorMemory, splitAdvisorMemory } from "./advisorMemory.js";
-import { advisorOfficeStatus } from "../../runtime/advisorThreads.js";
+import { ADVISOR_RECIPIENT_TYPES, advisorOfficeStatus, advisorRecipientForReply, advisorRecipientType, assertAdvisorRecipientCanReply, chiefAdvisorProfile } from "../../runtime/advisorThreads.js";
+import { describeChiefAdvisorOverride } from "./advisorPersona.js";
+import { buildCharacterSystemPrompt } from "./characterConversations.js";
 import { createConversationGeneration, removeEntry } from "./liveConversation.js";
 import { createAdvisorSessionRegistry } from "./advisorSessions.js";
 import { buildDiplomaticPoliticalContext } from "./diplomaticPoliticalContext.js";
@@ -3419,15 +3421,15 @@ const chatPromptDemand = (template, { extra = [], exclude = [] } = {}) => prompt
 // time rather than written into defaultPrompts.json's `advisor` text: it is
 // the contract advisor.jsx parses, and it lives beside the code that reads it.
 const buildAdvisorActionsDirective = (plannedActionsWithIds) => `[Action Planning]
-You can create, edit, or remove the player's queued Actions directly from this conversation — the same queue the Actions panel manages, with no separate confirmation step. Because of that, only propose actions the two of you have actually settled on together in this conversation; never invent or queue one on your own initiative from an open-ended question, and never re-propose something the player already turned down.
+You can propose creating, editing, or removing Actions from this conversation. The player must explicitly click Proceed on each proposal before the existing Actions board accepts it. You CANNOT queue or execute Actions merely by replying. When the player asks for strategy, options, priorities or next steps, actively recommend one or two concrete Actions if there is a justified move; use a fenced actions block for proposals worth reviewing even before the player agrees, because Proceed is the explicit authorization gate. Do not force an Action into a purely factual answer, invent authorization, claim a proposal was queued, or re-propose something already declined. Distinguish proposed, queued and simulated outcomes; native receipts are authoritative.
 
-To act, end your reply with a fenced \`\`\`actions block containing a JSON array (in ADDITION to your normal prose reply — always also say in plain text what you're proposing or changed; the array itself is stripped from what the player sees). Each entry:
+To propose an Action, end your reply with a fenced \`\`\`actions block containing a JSON array (in ADDITION to your normal prose reply — always also say in plain text what you're proposing or changed; the array itself is stripped from what the player sees). Each entry:
 - Create: {"title":"...","text":"...","kind":"action"} — kind is "action" unless it's specifically a diplomatic outreach, then "chat".
 - Edit an existing one: {"id":"<exact id copied from the list below>","title":"...","text":"..."} — only the fields you include change.
 - Remove an existing one: {"id":"<exact id copied from the list below>","remove":true}.
 IDs must be copied EXACTLY from [Current Planned Actions] below — never invented or guessed. Omit the \`\`\`actions block entirely when nothing should change (most replies need none).
 
-Internal acts belong HERE, not on the Projects board: renaming or recolouring the country, a new flag, style, title or anthem, a redesignated capital, a proclamation, a ministry reshuffle. Each is a single decision by a government that needs nobody else's consent, it takes effect at the next time skip, and opening a project for one leaves the player watching a progress bar instead of getting what they asked for. Queue it as an action, say plainly when it takes effect, and say what will visibly change (the map label, the country panel, the border). A transfer of territory belongs here too WHEN the other side has already agreed to it, or the ground has already been taken and held — but a contested one does not: that is a project, and you should say what is missing rather than promise it.
+Internal acts belong HERE, not on the Projects board: renaming or recolouring the country, a new flag, style, title or anthem, a redesignated capital, a proclamation, a ministry reshuffle. Each is a single decision by a government that needs nobody else's consent, it takes effect at the next time skip, and opening a project for one leaves the player watching a progress bar instead of getting what they asked for. Propose it as an Action for the player's review, say that it will NOT enter the queue until approved, and explain what should visibly change after the time skip if it succeeds (the map label, the country panel, the border). A transfer of territory belongs here too WHEN the other side has already agreed to it, or the ground has already been taken and held — but a contested one does not: that is a project, and you should say what is missing rather than promise it.
 
 Example:
 \`\`\`actions
@@ -3570,7 +3572,7 @@ Example of a table that earns its place:
 const buildAdvisorProjectsDirective = (projectsSummary) => `[Projects & Operations]
 The player has a Projects & Operations board: the running list of their long-term efforts — research and industrial programmes, construction projects, military and covert operations, sustained political campaigns — each with a description, tags, progress, timeline and next milestone. They can read, sort and filter it, and on THEIR OWN entries set a priority or abandon one outright, but they cannot create an entry or write its content, and they hold neither lever over another power's programme (see [Whose project it is]). You and the world's events are the only things that author what a project IS. A project the player has marked HIGH PRIORITY is one they want moved: brief them on it first and unprompted, and chase it when it goes quiet. One marked low priority may be left alone unless they ask. An abandoned project is closed, and you must not re-open it on your own initiative — but if the player explicitly asks you to resume it, do so: reactivate it with op update and status active, or open a fresh entry, and say plainly that is what you have done. Never set a priority yourself unless they have asked you to in this conversation.
 
-You can create, update and close entries directly from this conversation, with no separate confirmation step. Because of that, only open a project once the two of you have actually settled on a sustained effort — never speculatively from an open-ended question, and never re-open one the player has abandoned. Do open one unprompted when it is clearly warranted: if they commit to something that will run for rounds, it belongs on the board, and nothing else will put it there.
+You can create, update and close entries directly from this conversation, with no separate confirmation step. Proactively RECOMMEND relevant long-running Projects in normal prose during strategy discussions, even before commitment; a recommendation is not itself a board mutation. Only emit a projects block to open a player-owned effort once the player has clearly decided to initiate it, not merely asked an exploratory question. Do not demand special phrases like "create a project": an unambiguous commitment is enough. Never reopen an abandoned effort unless the player explicitly asks. If they commit to sustained work across rounds, record it on the board without waiting for a second approval request.
 
 [Whose project it is]
 Roughly half a mature board is not the player's. A foreign power's programme sits there because their services have learned of it, and it is marked THEIRS in the list below; anything not so marked is the player's own. The difference is not decoration:
@@ -3582,7 +3584,7 @@ Retaliation is the one case worth naming twice, because it looks like an excepti
 
 [What does not belong on the board]
 The board is for work that genuinely runs for rounds and can fall behind. Three things are not that, and putting one here is worse than doing nothing, because the player then watches a progress bar instead of getting what they asked for:
-- Internal acts. Renaming or recolouring the country, a new flag, style, title or anthem, a redesignated capital, a proclamation, a ministry reshuffle, the administration of land they already hold. These are one signature by a government that needs nobody's permission. They are ACTIONS — queue them in your \`\`\`actions block, tell the player they take effect at the next time skip, and say what will visibly change when they do (the map label, the country panel).
+- Internal acts. Renaming or recolouring the country, a new flag, style, title or anthem, a redesignated capital, a proclamation, a ministry reshuffle, the administration of land they already hold. These are one signature by a government that needs nobody else's consent. They are ACTIONS — propose them in your \`\`\`actions block for the player's review, explain that the player must click Proceed before they are queued, and describe the intended visible change after a subsequent time skip (the map label, the country panel).
 - Anything the player has asked you to simply do. A request is not a programme.
 - Single decisions and one-off events. Signing something already agreed, a speech, a state visit, a purchase already funded.
 Territory is the one that needs judgement. Handing a region over is immediate too WHEN the other side has already agreed to it, or when the ground has already been taken and held — a settled hand-over needs no programme. It is only a project when it is genuinely contested: then the campaign to obtain the consent or the ground is the project, the transfer itself rides on its onComplete, and the world's events will mark the territory disputed in the meantime.
@@ -3757,6 +3759,25 @@ async function describePlayerStatsForAdvisor(worldData, country) {
 }
 
 async function buildAdvisorSystemPrompt({ recipient = null } = {}) {
+    if (recipient && advisorRecipientType(recipient) !== ADVISOR_RECIPIENT_TYPES.MINISTER) {
+        // This branch deliberately reads NO actions, private diplomatic chats,
+        // Advisor transcripts or prompt pack. World is used only by viewAsSeen
+        // to exclude unrevealed events, never fed to the character prompt.
+        const [savedGame, savedEvents, savedWorld] = await Promise.all([
+            readJson(JSON_URLS.game, { defaultValue: {} }),
+            readJson(JSON_URLS.events, { defaultValue: [] }),
+            readJson(JSON_URLS.world, { defaultValue: {} }),
+        ]);
+        const visible = await viewAsSeen({ game: savedGame, events: savedEvents, world: savedWorld });
+        return {
+            systemPrompt: `${buildCharacterSystemPrompt({
+                recipient,
+                gameData: visible.game,
+                eventData: visible.events,
+            })}\n\n${chatLanguageDirective()}`,
+            lookups: null,
+        };
+    }
     await ensurePromptsLoaded();
     const [savedGame, actionData, savedChats, savedWorld, savedEvents, advisorData] = await Promise.all([
         readJson(JSON_URLS.game, { defaultValue: {} }),
@@ -3866,7 +3887,8 @@ async function buildAdvisorSystemPrompt({ recipient = null } = {}) {
     ].filter(Boolean);
     // A manually created contact speaks as its own persistent personality.
     // Its profile is supplied every call, outside history compaction. Only
-    // the chief advisor inherits the normal ability to propose board edits.
+    // minister contacts may propose Actions for review and may manage Projects;
+    // non-minister characters remain outside those privileged AI pathways.
     const officeStatus = recipient?.binding ? advisorOfficeStatus(recipient, worldData) : "unbound";
     const officeContext = officeStatus === "current"
         ? "Political World confirms you are currently the officeholder named in this contact."
@@ -3879,9 +3901,10 @@ async function buildAdvisorSystemPrompt({ recipient = null } = {}) {
         ? `[Advisor Recipient — Persistent Identity]
 You are ${recipient.name}, known to the player as ${recipient.title}. You are speaking to the player as this specific person, NOT as their chief advisor.
 ${officeContext}
-${recipient.personality ? `Personality and operating principles: ${recipient.personality}\n` : ""}Maintain this identity across turns. Speak within your actual knowledge and office; do not invent appointments or authority. You may discuss existing Actions and Projects, but you must not produce machine-readable actions or projects blocks or claim to have executed them. Offer proposals in ordinary prose; only the player may authorize new directives.`
+${recipient.personality ? `Personality and operating principles: ${recipient.personality}\n` : ""}Maintain this identity across turns. Speak within your actual knowledge and office; do not invent appointments or authority. You may propose Actions for human review using fenced actions blocks, but they are NOT queued until the player explicitly selects Proceed; never claim to have executed one. You may also create or update Projects with fenced projects blocks once the player has clearly committed to the sustained effort, or when recording substantiated progress; those Project edits go directly to the existing board without an extra approval. Recommend potential Projects freely in prose, but do not open speculative ones or claim institutional powers merely from your typed title. No other canonical government mutations are authorized by this conversation.`
         : "";
-    return { systemPrompt: `${rendered}\n\n${[...directives, identity].filter(Boolean).join("\n\n")}`, lookups: groupLookups };
+    const chiefIdentity = recipient ? "" : describeChiefAdvisorOverride(chiefAdvisorProfile(advisorData));
+    return { systemPrompt: `${rendered}\n\n${[...directives, identity, chiefIdentity].filter(Boolean).join("\n\n")}`, lookups: groupLookups };
 }
 
 // `speakingAs` names the polity whose leader is about to reply. It decides both
@@ -4089,13 +4112,21 @@ function compactConversationHistory(history) {
 // ahead of what the player typed; it goes no further than this history.
 export async function sendMessage(userMessage, options) {
     const { catchUp = "", threadId = "chief", recipient = null, ...opts } = options || {};
+    // The persisted contact, not an arbitrary UI profile, selects the prompt
+    // audience. Resolve it before reading government context or calling AI.
+    const storedRecipient = threadId === "chief" ? null : advisorRecipientForReply(
+        await readJson(JSON_URLS.advisor, { defaultValue: [], force: true }),
+        threadId, recipient,
+    );
+    assertAdvisorRecipientCanReply(threadId, storedRecipient);
+    const character = storedRecipient && advisorRecipientType(storedRecipient) !== ADVISOR_RECIPIENT_TYPES.MINISTER;
     const state = advisorState(threadId);
     // The conversation this reply is for, and its history, taken before the
     // first await. Another contact can be opened without replacing this state.
     const conversation = state.conversation.current();
     const priorHistory = state.history;
     const memoryContext = advisorMemoryContextEntry(state.memory);
-    const { systemPrompt, lookups } = await buildAdvisorSystemPrompt({ recipient });
+    const { systemPrompt, lookups } = await buildAdvisorSystemPrompt({ recipient: storedRecipient });
     const asked = { role: "user", parts: [{ text: withCatchUp(userMessage, catchUp) }] };
     const history = compactConversationHistory([...priorHistory, asked]);
     if (state.conversation.isCurrent(conversation)) state.history = history;
@@ -4111,7 +4142,11 @@ export async function sendMessage(userMessage, options) {
         // maxTokens 8192 caps the reply; onChunk (passed by the advisor UI) streams
         // it token-by-token. Providers that can't stream still return the full reply
         // here, so the advisor works either way.
-        const reply = await callAI(systemPrompt, [...(memoryContext ? [memoryContext] : []), ...history], { maxTokens: 8192, ...opts, languageMode: "chat", logLabel: "advisor", taskKey: "advisor", agentKind: "advisor", ...(lookups ? { lookups } : {}) });
+        // Character calls cannot be handed caller-supplied tools/options: only
+        // the streaming callback is forwarded. Minister/chief options remain
+        // unchanged for compatibility.
+        const callOptions = character ? { onChunk: opts.onChunk } : opts;
+        const reply = await callAI(systemPrompt, [...(memoryContext ? [memoryContext] : []), ...history], { maxTokens: 8192, ...callOptions, languageMode: "chat", logLabel: "advisor", taskKey: "advisor", agentKind: "advisor", ...(lookups ? { lookups } : {}) });
         // The memory line comes off before the reply joins the history: the
         // model is given it once, ahead of the turns. A reply that dropped it
         // keeps the last one. The raw reply goes back to the panel, which

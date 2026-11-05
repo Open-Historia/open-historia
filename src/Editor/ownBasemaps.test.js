@@ -46,6 +46,17 @@ test("one of Your basemaps becomes one of the scenario's own, named by its check
   assert.equal(ownBasemapFromLibrary({ id: "lib-2", kind: "image" }, {}), null);
 });
 
+test("a picture keeps the edges its setup gave it, in the scenario and in the game", () => {
+  const bounds = { west: -181.114, south: -67.1689, east: 180.586, north: 67.0707 };
+  const entry = ownBasemapFromLibrary({ id: "lib-3", contentHash: "def456", name: "Q-BAM", kind: "image" }, { dataUrl: PICTURE.dataUrl, bounds, aspect: 2 });
+  assert.deepEqual(entry, { id: "def456", name: "Q-BAM", background: { kind: "image", dataUrl: PICTURE.dataUrl, bounds, aspect: 2 } });
+  const { ownBasemapsData } = buildOwnBasemapsForGame([entry]);
+  assert.deepEqual(ownBasemapsData, { def456: { dataUrl: PICTURE.dataUrl, bounds } });
+  assert.deepEqual(ownBasemapsFromGame([{ id: "def456", name: "Q-BAM", kind: "image" }], ownBasemapsData), [{ id: "def456", name: "Q-BAM", background: { kind: "image", dataUrl: PICTURE.dataUrl, bounds } }]);
+  const moved = moveOwnBasemapsBetween([entry], { type: "robinson" }, { type: "equirectangular" });
+  assert.deepEqual(moved, [{ id: "def456", name: "Q-BAM", background: { kind: "image", dataUrl: PICTURE.dataUrl, aspect: 2 } }]);
+});
+
 test("a drawn one moves with the map into another projection; a picture stays", () => {
   const list = [{ id: "p", name: "P", background: PICTURE }, { id: "d", name: "D", background: DRAWN }];
   assert.equal(moveOwnBasemapsBetween(list, { type: "mercator" }, { type: "mercator" }), null);

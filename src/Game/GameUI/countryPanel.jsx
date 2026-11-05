@@ -1,6 +1,7 @@
 /*! Open Historia — standalone country panel */
 import React, { useCallback, useState } from "react";
 import StatsPane from "./stats.jsx";
+import "./countryDossier.css";
 import { ADVISOR_SLIDE } from "./advisorSlide.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP } from "../../runtime/mobileUi.js";
@@ -32,7 +33,7 @@ const CountryPanel = ({ open, onClose, width, onResize, onResizeEnd, mapRef, req
   }, [onResize, onResizeEnd]);
 
   return (
-    <div style={{
+    <div className="oh-country-dossier" style={{
       // Pinned to the top and the bottom, as the advisor is (advisor.jsx): a
       // 100vh drawer anchored at the bottom ran off the top of a phone's
       // screen while its address bar showed, and took the ✕ with it.
@@ -81,11 +82,10 @@ const CountryPanel = ({ open, onClose, width, onResize, onResizeEnd, mapRef, req
         </div>
       )}
 
-      <div style={{ alignItems: "center", borderBottom: "1px solid rgba(255,255,255,0.1)", display: "flex", gap: "0.5rem", padding: "0.78rem 0.75rem" }}>
-        <span aria-hidden="true" style={{ fontSize: "1rem" }}>🏳</span>
+      <div className="oh-country-dossier-toolbar" style={{ alignItems: "center", borderBottom: "1px solid rgba(255,255,255,0.1)", display: "flex", gap: "0.55rem", padding: "0.65rem 0.8rem" }}>
+        <span aria-hidden="true" style={{ color: "#8ecbe8", fontSize: "1.1rem", lineHeight: 1 }}>◈</span>
         <div style={{ minWidth: 0 }}>
-          <div style={{ fontSize: "0.9rem", fontWeight: 800 }}>Country</div>
-          <div style={{ color: "rgba(255,255,255,0.38)", fontSize: "0.6rem", marginTop: "0.1rem" }}>Politics, diplomacy and national statistics</div>
+          <div style={{ color: "#d7e5f0", fontSize: "0.72rem", fontWeight: 850, letterSpacing: "0.13em", textTransform: "uppercase" }}>Country</div>
         </div>
         <div style={{ flex: 1 }} />
         <button
