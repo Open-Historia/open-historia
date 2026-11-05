@@ -458,7 +458,9 @@ export const SuggestChangesDialog = ({ scenario, onClose, onUpdate = null }) => 
           setPhase("outdated");
           return;
         }
-        const [base, current] = await Promise.all([downloadHubBundle(bundleUrl), exportScenarioBundle(scenario.id)]);
+        // The post's file from its update copy: reading it to measure a
+        // suggestion against is not an import (hubFiles.js updateCopyOf).
+        const [base, current] = await Promise.all([downloadHubBundle(bundleUrl, { update: true }), exportScenarioBundle(scenario.id)]);
         const found = diffScenarioBundles(base, current);
         if (!alive) return;
         setChanges(found);

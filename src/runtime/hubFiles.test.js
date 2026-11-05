@@ -33,6 +33,7 @@ import {
   releaseCopyOf,
   requireReleaseCopy,
   resetHubIndexCache,
+  updateCopyOf,
 } from "./hubFiles.js";
 import { HUB_URL } from "./hubIssues.js";
 import { parsePost } from "./hubPosts.js";
@@ -109,7 +110,7 @@ test("an index from before the hub kept a list lists nothing, and none of its co
   // A version that says 2 with no list is no better.
   assert.equal(normalizeHubIndex({ version: 2, files: { [ATTACHMENT]: COPY } }).listed, false);
   for (const junk of [null, undefined, [], "text", 4]) {
-    assert.deepEqual(normalizeHubIndex(junk), { listed: false, files: {}, imports: {}, posts: [], suggestions: {} });
+    assert.deepEqual(normalizeHubIndex(junk), { listed: false, files: {}, imports: {}, posts: [], suggestions: {}, updates: {} });
   }
 });
 
@@ -365,4 +366,34 @@ test("the game downloads hub files through hubFiles.js only, asks GitHub's API f
   assert.deepEqual(counter, []);
   const suggestions = fs.readFileSync(path.join(ROOT, "src/Game/GameUI/ScenarioSuggestions.jsx"), "utf8");
   assert.match(suggestions, /downloadHubFile\(source\.ref\.zipUrl, \{ copy: false \}\)/);
+});
+
+test("an Update downloads the copy's update copy, which the hub does not count as an import", async (t) => {
+  const UPDATE = COPY.replace(/\.zip$/, "-update.zip");
+  const withUpdates = { ...INDEX, updates: { [COPY]: UPDATE, [COVER_COPY]: "https://example.com/not-the-hub.zip", "https://example.com/x.zip": UPDATE } };
+  const read = normalizeHubIndex(withUpdates);
+  assert.deepEqual(read.updates, { [COPY]: UPDATE }, "only for a copy the index gives out, and only in the hub's releases");
+  assert.equal(updateCopyOf(read, COPY), UPDATE);
+  assert.equal(updateCopyOf(read, COVER_COPY), null);
+  const calls = mockFetch(t, { [HUB_INDEX_URL]: json(withUpdates), [proxy(COPY)]: new Response("copy bytes"), [proxy(UPDATE)]: new Response("copy bytes") });
+  assert.equal(await (await fetchHubFile(ATTACHMENT, { update: true })).text(), "copy bytes");
+  assert.equal(await (await fetchHubFile(ATTACHMENT)).text(), "copy bytes", "an import is the counted copy");
+  assert.deepEqual(calls, [HUB_INDEX_URL, proxy(UPDATE), proxy(COPY)]);
+});
+
+test("an Update with no update copy, or one just gone, downloads the counted copy", async (t) => {
+  const calls = mockFetch(t, { [HUB_INDEX_URL]: json(INDEX), [proxy(COPY)]: new Response("copy bytes") });
+  assert.equal(await (await fetchHubFile(ATTACHMENT, { update: true })).text(), "copy bytes");
+  assert.deepEqual(calls, [HUB_INDEX_URL, proxy(COPY)]);
+  const UPDATE = COPY.replace(/\.zip$/, "-update.zip");
+  const gone = mockFetch(t, { [HUB_INDEX_URL]: json({ ...INDEX, updates: { [COPY]: UPDATE } }), [proxy(COPY)]: new Response("copy bytes") });
+  assert.equal(await (await fetchHubFile(ATTACHMENT, { update: true })).text(), "copy bytes");
+  assert.deepEqual(gone, [HUB_INDEX_URL, proxy(UPDATE), proxy(COPY)]);
+});
+
+test("the Scenarios tab's Update asks for the update copy; the Community tab's Import does not", () => {
+  const bar = fs.readFileSync(path.join(ROOT, "src/Game/GameUI/libraryBar.jsx"), "utf8");
+  const hub = fs.readFileSync(path.join(ROOT, "src/Game/GameUI/communityHub.jsx"), "utf8");
+  assert.ok(bar.includes("downloadHubScenario({ postId: post.id, bundleUrl: post.bundleUrl, title: post.title, author: post.author, flatMap: post.flatMap, update: true })"));
+  assert.doesNotMatch(hub, /update: true/);
 });

@@ -67,7 +67,7 @@ test("Suggest changes on a copy whose original is gone says to update first, and
   const card = read("./ScenarioSuggestions.jsx");
   // Asked of the hub's index before anything is downloaded, so what the
   // player reads is what to do, not a download that failed.
-  assert.match(card, /if \(hubOriginalGone\(\{ bundleUrl, release \}, hubIndex\)\) \{[\s\S]{0,300}?setPhase\("outdated"\);\s+return;\s+\}\s+const \[base, current\] = await Promise\.all\(\[downloadHubBundle\(bundleUrl\), exportScenarioBundle\(scenario\.id\)\]\);/);
+  assert.match(card, /if \(hubOriginalGone\(\{ bundleUrl, release \}, hubIndex\)\) \{[\s\S]{0,300}?setPhase\("outdated"\);\s+return;\s+\}\s+(?:\/\/[^\n]*\n\s+)*const \[base, current\] = await Promise\.all\(\[downloadHubBundle\(bundleUrl, \{ update: true \}\), exportScenarioBundle\(scenario\.id\)\]\);/);
   assert.match(card, /\{phase === "outdated" && \(/);
   assert.match(card, /Update the scenario first, then make your changes and suggest them\./);
   // The Update is offered there only while the post is still on the hub.
