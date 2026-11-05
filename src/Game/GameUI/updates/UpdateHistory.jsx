@@ -25,10 +25,11 @@ const monthOf = (date) => formatUpdateDate(String(date || "").slice(0, 7), { mon
 
 const UpdateCard = ({ update, onView, delay }) => {
   const still = useStill();
-  const major = update.kind === "major";
-  const first = update.banners?.[0] ?? {};
+  const release = update.kind === "release";
+  const major = update.kind === "major" || release;
+  const first = release ? { title: update.title, subtitle: update.subtitle, lead: update.lead } : update.banners?.[0] ?? {};
   const chrome = chromeOf({ update, banner: first });
-  const accent = major ? chrome.dot.on : "rgba(244,244,245,0.5)";
+  const accent = release ? "#d9a441" : major ? chrome.dot.on : "rgba(244,244,245,0.5)";
   return (
     <li style={{ listStyle: "none", margin: "0 0 0.9rem", paddingLeft: "2.4rem", position: "relative", ...motion(still, "ohUpdRise", 500, delay) }}>
       <span
@@ -55,7 +56,7 @@ const UpdateCard = ({ update, onView, delay }) => {
         }}
       >
         <div style={{ alignItems: "baseline", display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
-          <span style={{ color: major ? accent : FAINT, fontSize: "0.66rem", fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase" }}>{major ? <>Major update</> : <>Minor update</>}</span>
+          <span style={{ color: major ? accent : FAINT, fontSize: "0.66rem", fontWeight: 800, letterSpacing: "0.12em", textTransform: "uppercase" }}>{release ? <>Version <span data-no-translate>{update.version}</span></> : major ? <>Major update</> : <>Minor update</>}</span>
           <span style={{ color: FAINT, fontSize: "0.72rem" }}>{noticeDate(update.date)}</span>
           {update.channel === "beta" && <span style={{ border: `1px solid ${LINE}`, borderRadius: "999px", color: FAINT, fontSize: "0.64rem", padding: "0 0.4rem" }}>First on the beta</span>}
           {update.channel === "alpha" && <span style={{ border: `1px solid ${LINE}`, borderRadius: "999px", color: FAINT, fontSize: "0.64rem", padding: "0 0.4rem" }}>First on the alpha</span>}
@@ -65,7 +66,7 @@ const UpdateCard = ({ update, onView, delay }) => {
           {major && first.subtitle && <span style={{ color: SOFT, fontWeight: 600 }}> · {first.subtitle}</span>}
         </div>
         {major && first.lead && <p style={{ color: SOFT, fontSize: "0.84rem", lineHeight: 1.5, margin: "0.35rem 0 0" }}>{first.lead}</p>}
-        {major && update.banners.length > 1 && (
+        {major && !release && update.banners.length > 1 && (
           <div style={{ color: FAINT, fontSize: "0.76rem", marginTop: "0.4rem" }}>
             {update.banners.map((banner) => banner.title).join(" · ")}
           </div>
