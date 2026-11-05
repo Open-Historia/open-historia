@@ -53,6 +53,25 @@ import { PAST_UPDATES } from "./notesPast.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // "When map looping is disabled in a scenario, you shouldn't be able to continue infinitely anyway", and the Third
+    // Great Ninja War's picture (freeform, ±72°) showed empty ground past its top and bottom. The camera's bounds had
+    // infinite longitudes, which switched off MapLibre's one-world hold, and the square's ±85° for every picture
+    // (Map/cameraBounds.js). The owner, 2026-11-05: all custom basemaps, not just freeform ones.
+    id: "2026-11-map-edges",
+    kind: "minor",
+    date: "2026-11-05",
+    channel: "beta",
+    banners: [
+      {
+        title: "The map stops at its edges",
+        items: [
+          "A scenario drawn on its own picture now stops at the picture's edges: you can no longer pan or zoom out past its top and bottom.",
+          "With map looping turned off, the map now stops at its left and right edges instead of going on for ever.",
+        ],
+      },
+    ],
+  },
+  {
     // An annexed Tunisia stayed in its own colour and name on the map though a click said its land was Italy's: the
     // player's forces at home (a battlefield standing in peace) kept listing its regions as "taken in name only", which
     // nothing standing ever finishes (runtime/fronts/battle.js readRegions; Map/frontOwnership.js drawnOwnersOf).
