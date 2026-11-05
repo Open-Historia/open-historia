@@ -51,6 +51,7 @@ const runLaunchUpdate = async ({
   checkTimeoutMs = LAUNCH_CHECK_TIMEOUT_MS,
   installDelayMs = INSTALL_DELAY_MS,
   setTimer = setTimeout,
+  canRestart = () => true,
 }) => {
   if (!updater) return { installing: false, reason: "unsupported" };
 
@@ -91,6 +92,14 @@ const runLaunchUpdate = async ({
       return { installing: false, reason: "later", version };
     }
     writeRecord(fs, recordFile, {});
+    // Where this start could not come back after restarting (see main.cjs),
+    // the update is left in place for the next start and the game opens now.
+    if (!canRestart()) {
+      log("info", "updater.launchNextStart", `${version} is in place; the next start runs it.`);
+      send({ version, opening: true });
+      return { installing: false, reason: "next-start", version };
+    }
+    log("info", "updater.launchRestart", `${version} is in place; restarting into it.`);
     send({ version, percent: 100, installing: true });
     setTimer(() => updater.quitAndInstall(true, true), installDelayMs);
     return { installing: true, reason: "installing", version };

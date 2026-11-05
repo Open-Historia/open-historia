@@ -129,6 +129,7 @@ import {
   sanitizeRelayHeaders,
 } from "./security.js";
 import { appendLog, clearLog, readLogSince } from "./logStore.js";
+import { desktopDownloadFor } from "./desktopDownload.js";
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 import { DATA_DIR } from "./dataDir.js";
@@ -686,7 +687,7 @@ app.get("/api/app-update", async (req, res) => {
       // how the page can tell it is there at all — it is otherwise an ordinary
       // localhost page — and it is absent everywhere else, so no banner appears.
       current: String(process.env.OH_DESKTOP_BUILD || ""),
-      download: str(raw && raw[{ win32: "windows", darwin: "mac", linux: "linux" }[process.platform]]),
+      download: desktopDownloadFor(raw),
       // True when this app can install the update itself. False on a build that
       // cannot (unsigned macOS, an unpackaged dev run), and the banner then offers
       // the download link exactly as it did before.
@@ -2430,6 +2431,13 @@ httpServer.on("error", (error) => {
     console.error(`Port ${PORT} is already in use — Open Historia is probably already running.`);
     console.error("Close the other instance (the ⏻ button in the game stops it), or set the");
     console.error(`PORT environment variable to run this one on a different port.`);
+    // Inside the desktop app this is the app's own process, and exiting it
+    // closed the app without a word, a window or a line in its log. The app
+    // says what happened and quits instead (electron/main.cjs).
+    if (typeof globalThis.__ohFatal === "function") {
+      globalThis.__ohFatal(error);
+      return;
+    }
     process.exit(1);
   }
   throw error;

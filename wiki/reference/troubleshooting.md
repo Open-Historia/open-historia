@@ -302,7 +302,14 @@ The installer is not code-signed yet. Choose **More info → Run anyway** in Sma
 
 ## macOS will not open the app
 
-Also not code-signed. Right-click the app and choose **Open**, then confirm. Once only.
+Also not code-signed. If the app closes as soon as it opens, with a message that macOS cannot
+check it for malicious software, choose **Done**, then **System Settings → Privacy & Security →
+Open Anyway**, and confirm. On macOS 14 and earlier, right-click the app and choose **Open**
+instead. Once only.
+
+If it still closes at once, send the bug report below with the crash report macOS wrote: in
+Finder, **Go → Go to Folder…** `~/Library/Logs/DiagnosticReports`, and the newest file whose name
+starts with `Open Historia`.
 
 ## Reporting a bug
 

@@ -118,6 +118,33 @@ test("an update found at launch downloads with progress, then quits into the ins
   assert.equal(updater.listenerCount("download-progress"), 0);
 });
 
+// A Mac report, 2026-11-04: "when clicking the app to open it, it opens then
+// immediately closes". An unsigned Mac app opened where it was downloaded runs
+// from macOS's temporary copy of it, and a restart from there is not to be
+// relied on; the update waits for the next start and the game opens now.
+test("an update found where the app cannot restart is left for the next start, and the game opens", async (t) => {
+  const s = setup(t);
+  const logs = [];
+  const updater = fakeUpdater({ check: available("0.0.117"), download: async () => {} });
+  const result = await s.run(updater, { canRestart: () => false, log: (...entry) => logs.push(entry) });
+  assert.deepEqual(result, { installing: false, reason: "next-start", version: "0.0.117" });
+  assert.deepEqual(s.sent.at(-1), { version: "0.0.117", opening: true });
+  s.timers.forEach((timer) => timer.fn());
+  assert.equal(updater.installs.length, 0, "no restart");
+  assert.equal(s.record()?.failures, undefined, "an update in place is not a failure");
+  assert.ok(logs.some(([, event]) => event === "updater.launchNextStart"));
+});
+
+test("main.cjs restarts into a launch update except from macOS's temporary copy of the app", () => {
+  const main = fs.readFileSync(path.join(ROOT, "electron", "main.cjs"), "utf8");
+  assert.match(main, /canRestart: \(\) => !runsTranslocated\(\)/);
+  const start = main.indexOf("const runsTranslocated = ");
+  const runsTranslocated = (platform, execPath) => new Function("process", `${main.slice(start, main.indexOf("\n", start))}\nreturn runsTranslocated();`)({ platform, execPath });
+  assert.equal(runsTranslocated("darwin", "/private/var/folders/x1/T/AppTranslocation/0F3C/d/Open Historia Beta.app/Contents/MacOS/Open Historia Beta"), true);
+  assert.equal(runsTranslocated("darwin", "/Applications/Open Historia Beta.app/Contents/MacOS/Open Historia Beta"), false);
+  assert.equal(runsTranslocated("win32", "C:\\AppTranslocation\\Open Historia.exe"), false);
+});
+
 test("'Open the game now' opens the game and leaves the download running", async (t) => {
   const s = setup(t);
   const updater = fakeUpdater({ check: available("0.0.40"), download: () => new Promise(() => {}) });
