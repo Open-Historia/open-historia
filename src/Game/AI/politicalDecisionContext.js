@@ -16,6 +16,7 @@ import {
 import { institutionsForPolity } from "../../runtime/institutions.js";
 import { institutionLifecycleCasesForPolity } from "../../runtime/institutionLifecycleCore.js";
 import { powerDecisionProfileForPolity } from "../../runtime/powerStatus.js";
+import { readingWorld } from "../../runtime/worldLookups.js";
 
 export const POLITICAL_DECISION_CONTEXT_VERSION = 5;
 export const POLITICAL_DECISION_CURRENT_STATE_AUTHORITY_RULE = "CURRENT-STATE AUTHORITY: this capsule is the actor's canonical current political state. Scenario/world-before-round-one temperament is starting context only; if it conflicts with this capsule, use this capsule for present decision behavior. Preserve objective canon unchanged.";
@@ -1187,7 +1188,11 @@ export const buildPoliticalDecisionContext = (
  * boundary so an omniscient simulation call does not turn one actor's private
  * state into another actor's knowledge.
  */
-export const buildBoundedPoliticalDecisionContextSet = (
+export const buildBoundedPoliticalDecisionContextSet = (worldLike, options) => (
+  readingWorld(worldLike, () => buildDecisionContextSet(worldLike, options))
+);
+
+const buildDecisionContextSet = (
   worldLike,
   {
     actorPolities = [],

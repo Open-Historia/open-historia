@@ -209,9 +209,9 @@ const ChevronDownIcon = () => (
 );
 
 const panelSurface = {
-    backgroundColor: "var(--oh-hud-bg-strong)",
+    backgroundColor: "var(--oh-ui-overlay, var(--oh-hud-bg-strong))",
     backdropFilter: "var(--oh-hud-blur)",
-    border: "1px solid var(--oh-hud-border)",
+    border: "1px solid var(--oh-ui-line, var(--oh-hud-border))",
     borderRadius: "18px",
     boxShadow: "var(--oh-hud-shadow)",
     color: "white",
@@ -562,18 +562,18 @@ const cloneWorldForStaging = (world) => {
 const MetricPill = ({ children, icon = null, tone = "default", onClick = null, active = false }) => {
     const toneMap = {
         default: {
-            background: "rgba(148,163,184,0.12)",
-            border: "1px solid rgba(148,163,184,0.18)",
+            background: "var(--oh-ui-overlay-card, rgba(148,163,184,0.12))",
+            border: "1px solid var(--oh-ui-line, rgba(148,163,184,0.18))",
             color: "rgba(232,232,234,0.84)",
         },
         accent: {
-            background: "rgba(96,165,250,0.12)",
-            border: "1px solid rgba(96,165,250,0.22)",
-            color: "#bfdbfe",
+            background: "var(--oh-ui-active, rgba(96,165,250,0.12))",
+            border: "1px solid var(--oh-ui-accent, rgba(96,165,250,0.22))",
+            color: "var(--oh-ui-text, #bfdbfe)",
         },
         slate: {
-            background: "rgba(255,255,255,0.04)",
-            border: "1px solid rgba(255,255,255,0.1)",
+            background: "var(--oh-ui-overlay-card, rgba(255,255,255,0.04))",
+            border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.1))",
             color: "#f4f4f5",
         },
     };
@@ -589,7 +589,7 @@ const MetricPill = ({ children, icon = null, tone = "default", onClick = null, a
         onClick={onClick ?? undefined}
         style={{
             alignItems: "center",
-            background: active ? "rgba(0,0,0,0.42)" : resolved.background,
+            background: active ? "var(--oh-ui-overlay-strong, rgba(0,0,0,0.42))" : resolved.background,
             border: resolved.border,
             borderRadius: "999px",
             color: resolved.color,
@@ -612,8 +612,8 @@ const MetricPill = ({ children, icon = null, tone = "default", onClick = null, a
 const TagPill = ({ children }) => (
     <span
     style={{
-        background: "rgba(255,255,255,0.04)",
-                                   border: "1px solid rgba(255,255,255,0.08)",
+        background: "var(--oh-ui-overlay-card, rgba(255,255,255,0.04))",
+                                   border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.08))",
                                    borderRadius: "999px",
                                    color: "rgba(230,230,233,0.74)",
                                    display: "inline-flex",
@@ -628,8 +628,8 @@ const TagPill = ({ children }) => (
 
 const ghostButtonStyle = {
     alignItems: "center",
-    background: "rgba(255,255,255,0.04)",
-    border: "1px solid rgba(255,255,255,0.08)",
+    background: "var(--oh-ui-overlay-card, rgba(255,255,255,0.04))",
+    border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.08))",
     borderRadius: "10px",
     color: "rgba(255,255,255,0.84)",
     cursor: "pointer",
@@ -657,8 +657,8 @@ const LinkPill = ({ link, onFocus }) => (
     onClick={() => onFocus?.(link.bounds)}
     style={{
         alignItems: "center",
-        background: "rgba(96,165,250,0.07)",
-        border: "1px solid rgba(96,165,250,0.2)",
+        background: "var(--oh-ui-active, rgba(96,165,250,0.07))",
+        border: "1px solid var(--oh-ui-line, rgba(96,165,250,0.2))",
         borderRadius: "999px",
         color: "rgba(219,234,254,0.86)",
         cursor: "pointer",
@@ -807,7 +807,7 @@ const EventCard = ({ event, footer = null, lookups, openMapChanges = null, onTog
     return (
         <div
         style={{
-            background: "rgba(255,255,255,0.045)",
+            background: "var(--oh-ui-overlay-card, rgba(255,255,255,0.045))",
             border: filed ? "1px dashed rgba(255,255,255,0.14)" : "1px solid rgba(255,255,255,0.08)",
             borderRadius: "16px",
             boxShadow: "inset 0 1px 0 rgba(255,255,255,0.03)",
@@ -819,8 +819,8 @@ const EventCard = ({ event, footer = null, lookups, openMapChanges = null, onTog
         <div
         style={{
             alignItems: "center",
-            background: "rgba(255,255,255,0.02)",
-            borderBottom: "1px solid rgba(255,255,255,0.05)",
+            background: "var(--oh-ui-overlay-header, rgba(255,255,255,0.02))",
+            borderBottom: "1px solid var(--oh-ui-line, rgba(255,255,255,0.05))",
             display: "flex",
             gap: "0.45rem",
             justifyContent: "space-between",
@@ -1029,7 +1029,7 @@ const PanelChrome = ({
         >
         <div
         style={{
-            borderBottom: hasHeaderText ? "1px solid rgba(255,255,255,0.07)" : "none",
+            borderBottom: hasHeaderText ? "1px solid var(--oh-ui-line, rgba(255,255,255,0.07))" : "none",
             flexShrink: 0,
             padding: hasHeaderText ? "1rem 1.25rem 0.75rem" : "0.7rem 0.75rem 0",
         }}
@@ -1159,8 +1159,8 @@ const JumpNode = ({ isLoading, opt, onJump }) => {
             onJump(opt.days);
         }}
         style={{
-            background: hovered ? "rgba(255,255,255,0.1)" : "rgba(255,255,255,0.05)",
-            border: hovered ? "1px solid rgba(255,255,255,0.28)" : "1px solid rgba(255,255,255,0.18)",
+            background: hovered ? "var(--oh-ui-hover, rgba(255,255,255,0.1))" : "var(--oh-ui-overlay-card, rgba(255,255,255,0.05))",
+            border: hovered ? "1px solid var(--oh-ui-accent, rgba(255,255,255,0.28))" : "1px solid var(--oh-ui-line, rgba(255,255,255,0.18))",
             borderRadius: "10px",
             color: "white",
             cursor: "pointer",
@@ -1645,8 +1645,8 @@ const TimelineSkipPanel = ({
         )}
         <div
         style={{
-            background: "rgba(255,255,255,0.07)",
-            border: "2px solid rgba(255,255,255,0.28)",
+            background: "var(--oh-ui-overlay-card, rgba(255,255,255,0.07))",
+            border: "2px solid var(--oh-ui-line, rgba(255,255,255,0.28))",
             borderRadius: "999px",
             color: "#e4e4e7",
             fontSize: "0.7rem",
@@ -1679,8 +1679,8 @@ const TimelineSkipPanel = ({
             onAutoJump();
         }}
         style={{
-            background: "rgba(37,99,235,0.2)",
-            border: "1px solid rgba(96,165,250,0.45)",
+            background: "var(--oh-ui-active, rgba(37,99,235,0.2))",
+            border: "1px solid var(--oh-ui-accent, rgba(96,165,250,0.45))",
             borderRadius: "12px",
             color: "white",
             cursor: blocked ? "default" : "pointer",
@@ -1697,8 +1697,8 @@ const TimelineSkipPanel = ({
         <div
         style={{
             alignItems: "center",
-            background: "rgba(255,255,255,0.04)",
-            border: "1px solid rgba(255,255,255,0.1)",
+            background: "var(--oh-ui-overlay-card, rgba(255,255,255,0.04))",
+            border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.1))",
             borderRadius: "12px",
             display: "flex",
             gap: "0.35rem",
@@ -1717,8 +1717,8 @@ const TimelineSkipPanel = ({
         placeholder="Custom"
         disabled={blocked}
         style={{
-            background: "rgba(0,0,0,0.25)",
-            border: "1px solid rgba(255,255,255,0.16)",
+            background: "var(--oh-ui-overlay-strong, rgba(0,0,0,0.25))",
+            border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.16))",
             borderRadius: "8px",
             color: "#fff",
             fontSize: "0.8rem",
@@ -1734,8 +1734,8 @@ const TimelineSkipPanel = ({
         onChange={(event) => setCustomUnit(event.target.value)}
         disabled={blocked}
         style={{
-            background: "rgba(0,0,0,0.25)",
-            border: "1px solid rgba(255,255,255,0.16)",
+            background: "var(--oh-ui-overlay-strong, rgba(0,0,0,0.25))",
+            border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.16))",
             borderRadius: "8px",
             color: "#fff",
             cursor: "pointer",
@@ -1758,8 +1758,8 @@ const TimelineSkipPanel = ({
         onClick={runCustomJump}
         disabled={blocked || !customValue}
         style={{
-            background: "rgba(255,255,255,0.1)",
-            border: "1px solid rgba(255,255,255,0.28)",
+            background: "var(--oh-ui-active, rgba(255,255,255,0.1))",
+            border: "1px solid var(--oh-ui-accent, rgba(255,255,255,0.28))",
             borderRadius: "8px",
             color: "#fff",
             cursor: blocked || !customValue ? "default" : "pointer",

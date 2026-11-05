@@ -23,7 +23,7 @@ const WORLD_DIRECTION_DEFAULTS = { enabled: true, eventPace: 100, worldShare: 35
 const PLAYER_FOCUS_DEFAULTS = { enabled: true, level: "balanced" };
 const GROUPS_DEFAULTS = { enabled: true };
 // (Wars: the fronts feature with a switch each for battlefields, air units and navies, all on.)
-const FRONTS_DEFAULTS = { enabled: true, battlefields: true, air: true, navies: true, pace: 100 };
+const FRONTS_DEFAULTS = { enabled: true, battlefields: true, air: true, navies: true };
 const PREGAME_HISTORY_DEFAULTS = { enabled: true };
 const SOCIAL_MEDIA_DEFAULTS = { enabled: true };
 

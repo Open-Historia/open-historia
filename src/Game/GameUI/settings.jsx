@@ -110,6 +110,7 @@ import { setTranslationModelOn, translationModelOffer, uiString } from "../../ru
 import { DEFAULT_BASEMAP_ID, ESRI_BASEMAPS, decodeAllowedBasemaps, decodeOwnBasemaps, isBuiltinBasemapId } from "../../runtime/assets.js";
 import { DEFAULT_BASEMAP_KEY, DEFAULT_BASEMAP_ON_KEY, basemapShownFor, scenarioMapsOfWorld } from "../../runtime/basemapPick.js";
 import { useGameBasemapPick } from "../Map/useBasemapPick.js";
+import UiThemeSettings from "./UiThemeSettings.jsx";
 import { formatBytes, subscribeTiledBasemaps } from "../../runtime/tiledBasemaps.js";
 import { detailedMapOffers, detailedMapsDownloadLine, lookUpDetailedMaps } from "../Map/detailedMapOffers.js";
 import DetailedMapsInstallOffer from "../Map/DetailedMapsInstallOffer.jsx";
@@ -2382,9 +2383,9 @@ const PRIVACY_HREF = import.meta.env.VITE_OH_NATIVE ? "https://openhistoria.com/
 
 const QuickAction = ({ title, description, symbol, tone = "neutral", onClick, href, compact = false }) => {
     const tones = {
-        neutral: { background: "rgba(255,255,255,0.04)", border: "rgba(255,255,255,0.08)", icon: "rgba(255,255,255,0.08)", color: "#f8fafc" },
-        slate: { background: "rgba(255,255,255,0.05)", border: "rgba(255,255,255,0.12)", icon: "rgba(255,255,255,0.08)", color: "#e4e4e7" },
-        blue: { background: "rgba(59,130,246,0.08)", border: "rgba(96,165,250,0.18)", icon: "rgba(59,130,246,0.16)", color: "#dbeafe" },
+        neutral: { background: "var(--oh-ui-overlay-card, rgba(255,255,255,0.04))", border: "var(--oh-ui-line, rgba(255,255,255,0.08))", icon: "var(--oh-ui-overlay-card, rgba(255,255,255,0.08))", color: "#f8fafc" },
+        slate: { background: "var(--oh-ui-overlay-card, rgba(255,255,255,0.05))", border: "var(--oh-ui-line, rgba(255,255,255,0.12))", icon: "var(--oh-ui-overlay-card, rgba(255,255,255,0.08))", color: "#e4e4e7" },
+        blue: { background: "var(--oh-ui-active, rgba(59,130,246,0.08))", border: "var(--oh-ui-line, rgba(96,165,250,0.18))", icon: "var(--oh-ui-active, rgba(59,130,246,0.16))", color: "var(--oh-ui-text, #dbeafe)" },
         amber: { background: "rgba(245,158,11,0.07)", border: "rgba(251,191,36,0.17)", icon: "rgba(245,158,11,0.14)", color: "#fde68a" },
     };
     const palette = tones[tone] ?? tones.neutral;
@@ -2605,7 +2606,7 @@ const PlayerFocusSetting = () => {
 };
 
 const SettingsSection = ({ title, description, right, children }) => (
-    <section style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: "14px", padding: "1.1rem 1.25rem" }}>
+    <section style={{ background: "var(--oh-ui-surface, rgba(255,255,255,0.025))", border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.06))", borderRadius: "14px", padding: "1.1rem 1.25rem" }}>
         <div style={{ alignItems: "flex-start", display: "flex", gap: "0.75rem", justifyContent: "space-between", marginBottom: "0.85rem" }}>
             <div style={{ minWidth: 0 }}>
                 <div style={{ alignItems: "center", display: "flex", gap: "0.5rem" }}>
@@ -2924,10 +2925,10 @@ const SettingsWorkspace = ({
                     onClick={() => onSectionChange(section.key)}
                     style={{
                         alignItems: "center",
-                        background: selected ? "rgba(59,130,246,0.12)" : "transparent",
+                        background: selected ? "var(--oh-ui-active, rgba(59,130,246,0.12))" : "transparent",
                         border: `1px solid ${selected ? "rgba(96,165,250,0.3)" : "transparent"}`,
                         borderRadius: "10px",
-                        color: selected ? "#ffffff" : "rgba(255,255,255,0.6)",
+                        color: selected ? "var(--oh-ui-text, #ffffff)" : "rgba(255,255,255,0.6)",
                         cursor: "pointer",
                         display: "flex",
                         flex: isMobile ? "1 1 0" : "none",
@@ -2941,9 +2942,9 @@ const SettingsWorkspace = ({
                         ...(isMobile ? { flexDirection: "column", gap: "0.25rem", justifyContent: "center", padding: "0.45rem 0.2rem", textAlign: "center" } : null),
                     }}
                     >
-                        <span aria-hidden="true" style={{ alignItems: "center", background: selected ? "rgba(59,130,246,0.24)" : "rgba(255,255,255,0.04)", border: `1px solid ${selected ? "rgba(96,165,250,0.4)" : "transparent"}`, borderRadius: "8px", color: selected ? "#60a5fa" : "rgba(255,255,255,0.7)", display: "inline-flex", flexShrink: 0, fontSize: "0.85rem", fontWeight: 700, height: "1.9rem", justifyContent: "center", width: "1.9rem", transition: "all 140ms ease" }}>{section.icon}</span>
+                        <span aria-hidden="true" style={{ alignItems: "center", background: selected ? "var(--oh-ui-active, rgba(59,130,246,0.24))" : "rgba(255,255,255,0.04)", border: `1px solid ${selected ? "rgba(96,165,250,0.4)" : "transparent"}`, borderRadius: "8px", color: selected ? "var(--oh-ui-accent, #60a5fa)" : "rgba(255,255,255,0.7)", display: "inline-flex", flexShrink: 0, fontSize: "0.85rem", fontWeight: 700, height: "1.9rem", justifyContent: "center", width: "1.9rem", transition: "all 140ms ease" }}>{section.icon}</span>
                         <span>
-                            <span style={{ display: "block", fontSize: "0.8rem", fontWeight: selected ? 750 : 600, color: selected ? "#bfdbfe" : "inherit" }}>{section.label}</span>
+                            <span style={{ display: "block", fontSize: "0.8rem", fontWeight: selected ? 750 : 600, color: selected ? "var(--oh-ui-accent, #bfdbfe)" : "inherit" }}>{section.label}</span>
                             {!isMobile && <span style={{ color: selected ? "rgba(191,219,254,0.65)" : "rgba(255,255,255,0.32)", display: "block", fontSize: "0.62rem", lineHeight: 1.35, marginTop: "0.12rem" }}>{section.description}</span>}
                         </span>
                     </button>
@@ -2960,7 +2961,7 @@ const SettingsWorkspace = ({
         <div key={activeSection} className="oh-surface-in" style={{ display: "flex", flexDirection: "column", gap: "0.85rem" }}>
             <div style={{ marginBottom: "0.2rem" }}>
                 <div style={{ alignItems: "center", display: "flex", gap: "0.5rem" }}>
-                    <span style={{ color: "#60a5fa", fontSize: "0.95rem" }}>{page?.icon}</span>
+                    <span style={{ color: "var(--oh-ui-accent, #60a5fa)", fontSize: "0.95rem" }}>{page?.icon}</span>
                     <span style={{ color: "#f8fafc", fontSize: "1.1rem", fontWeight: 800, letterSpacing: "-0.01em" }}>{pageTitle}</span>
                 </div>
                 <div style={{ color: "rgba(255,255,255,0.48)", fontSize: "0.72rem", marginTop: "0.2rem" }}>{pageDescription}</div>
@@ -2983,6 +2984,9 @@ const SettingsWorkspace = ({
                     onToggle={() => updateMapSetting("vaultDoorAlways", MAP_SETTING_KEYS.vaultDoorAlways, !mapSettings.vaultDoorAlways)}
                     />
                     <div style={{ ...helperStyle, marginTop: "-0.6rem", marginBottom: "0.6rem" }}>{"On: the vault door appears every time you start the game. Off: only the first time you start it after an update."}</div>
+                </SettingsSection>
+                <SettingsSection title="Interface appearance" description="Choose interface colors for Country, Diplomacy, Advisor, Actions and Projects.">
+                    <UiThemeSettings />
                 </SettingsSection>
                 <SettingsSection title="Accessibility" description="Reduce automatic camera motion and map animations without changing simulation behavior.">
                     <Toggle
@@ -3215,12 +3219,12 @@ const SettingsWorkspace = ({
     // ✕ or the bottom of the page.
     return createPortal(
         <div role="dialog" aria-modal="true" aria-label="Game settings" className={leaving ? "oh-fade-out" : closing ? "oh-fade-out-slow" : fromRect ? undefined : "oh-fade-in"} style={{ alignItems: "center", background: "rgba(8,9,11,0.75)", display: "flex", inset: 0, justifyContent: "center", padding: isMobile ? `calc(0.45rem + ${SAFE_TOP}) calc(0.45rem + ${SAFE_RIGHT}) calc(0.45rem + ${SAFE_BOTTOM}) calc(0.45rem + ${SAFE_LEFT})` : "clamp(0.8rem, 2vw, 1.6rem)", position: "fixed", zIndex: 2147483000, contain: "strict" }}>
-            <div ref={cardRef} className="oh-ws-card" style={{ background: "rgba(20,21,24,0.97)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: isMobile ? "12px" : "18px", boxShadow: "0 24px 60px rgba(0,0,0,0.55), 0 0 0 1px rgba(255,255,255,0.04)", color: "white", display: "flex", flexDirection: "column", fontFamily: "sans-serif", height: isMobile ? `calc(${APP_HEIGHT} - 0.9rem - ${SAFE_TOP} - ${SAFE_BOTTOM})` : `min(800px, calc(${APP_HEIGHT} - 2.4rem))`, maxWidth: "1120px", overflow: "hidden", width: isMobile ? `calc(100vw - 0.9rem - ${SAFE_LEFT} - ${SAFE_RIGHT})` : "min(94vw, 1120px)" }}>
+            <div ref={cardRef} className="oh-ws-card" style={{ background: "var(--oh-ui-bg, rgba(20,21,24,0.97))", border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.08))", borderRadius: isMobile ? "12px" : "18px", boxShadow: "0 24px 60px rgba(0,0,0,0.55), 0 0 0 1px rgba(255,255,255,0.04)", color: "white", display: "flex", flexDirection: "column", fontFamily: "sans-serif", height: isMobile ? `calc(${APP_HEIGHT} - 0.9rem - ${SAFE_TOP} - ${SAFE_BOTTOM})` : `min(800px, calc(${APP_HEIGHT} - 2.4rem))`, maxWidth: "1120px", overflow: "hidden", width: isMobile ? `calc(100vw - 0.9rem - ${SAFE_LEFT} - ${SAFE_RIGHT})` : "min(94vw, 1120px)" }}>
                 <div style={{ alignItems: "center", borderBottom: "1px solid rgba(255,255,255,0.07)", display: "flex", gap: "0.75rem", padding: "0.85rem 1.1rem" }}>
                     <button type="button" className="oh-tap" onClick={onBack} aria-label="Back to game menu" title="Back to game menu" style={{ alignItems: "center", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "8px", color: "rgba(255,255,255,0.7)", cursor: "pointer", display: "flex", fontSize: "1rem", height: "2.1rem", justifyContent: "center", width: "2.1rem", transition: "background-color 140ms ease, color 140ms ease" }}>←</button>
                     <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.45rem 0.65rem" }}>
-                            <span style={{ backgroundColor: "#3b82f6", borderRadius: "3px", display: "inline-block", height: "1.05rem", width: "4px" }} />
+                            <span style={{ backgroundColor: "var(--oh-ui-accent, #3b82f6)", borderRadius: "3px", display: "inline-block", height: "1.05rem", width: "4px" }} />
                             <span style={{ color: "#f8fafc", fontSize: "1.04rem", fontWeight: 800 }}>Settings</span>
                             {forGame && context?.scenarioName && <span style={{ backgroundColor: "rgba(59,130,246,0.15)", border: "1px solid rgba(96,165,250,0.3)", borderRadius: "6px", color: "#93c5fd", fontSize: "0.7rem", fontWeight: 700, padding: "0.15rem 0.45rem" }}>{context.scenarioName}</span>}
                         </div>
@@ -3257,8 +3261,8 @@ const QuickMenuTabButton = ({ label, selected, onClick, fill = false }) => (
     className="oh-tap-row"
     onClick={onClick}
     style={{
-        background: selected ? "rgba(0,0,0,0.42)" : "transparent",
-        border: `1px solid ${selected ? "rgba(255,255,255,0.28)" : "transparent"}`,
+        background: selected ? "var(--oh-ui-active, rgba(0,0,0,0.42))" : "transparent",
+        border: `1px solid ${selected ? "var(--oh-ui-accent, rgba(255,255,255,0.28))" : "transparent"}`,
         borderRadius: "8px",
         color: selected ? "#f4f4f5" : "rgba(255,255,255,0.56)",
         cursor: "pointer",
@@ -3293,7 +3297,7 @@ const ContextSummaryCard = ({ context }) => {
     ];
 
     return (
-        <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "11px", padding: "0.8rem 0.85rem" }}>
+        <div style={{ background: "var(--oh-ui-overlay-card, rgba(255,255,255,0.03))", border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.07))", borderRadius: "11px", padding: "0.8rem 0.85rem" }}>
             <div style={{ color: "rgba(255,255,255,0.82)", fontSize: "0.74rem", fontWeight: 800, marginBottom: "0.6rem" }}>Current session</div>
             <div style={{ display: "grid", gap: "0.45rem" }}>
                 {rows.map((row) => (
@@ -3584,8 +3588,8 @@ const SettingsMenu = ({
             alignItems: "stretch",
             justifyContent: "flex-start",
             height: "auto",
-            background: "rgba(32,32,35,0.63)",
-            border: "1px solid var(--oh-hud-border)",
+            background: "var(--oh-ui-overlay, rgba(32,32,35,0.63))",
+            border: "1px solid var(--oh-ui-line, var(--oh-hud-border))",
             boxShadow: "var(--oh-hud-shadow)",
         }}
         >
@@ -3602,7 +3606,7 @@ const SettingsMenu = ({
                 <button type="button" className="oh-tap" onClick={() => onClose?.()} aria-label="Close game menu" style={{ alignItems: "center", background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "8px", color: "rgba(255,255,255,0.58)", cursor: "pointer", display: "flex", fontSize: "1rem", height: "2rem", justifyContent: "center", width: "2rem" }}>×</button>
             </div>
 
-            <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "10px", display: "flex", gap: "0.2rem", padding: "0.2rem", marginBottom: "0.8rem", overflowX: "auto", scrollbarWidth: "none" }}>
+            <div style={{ background: "var(--oh-ui-overlay-card, rgba(255,255,255,0.03))", border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.07))", borderRadius: "10px", display: "flex", gap: "0.2rem", padding: "0.2rem", marginBottom: "0.8rem", overflowX: "auto", scrollbarWidth: "none" }}>
                 {QUICK_MENU_TABS.map((tab) => (
                     <QuickMenuTabButton key={tab.key} label={tab.label} selected={activeQuickTab === tab.key} onClick={() => setActiveQuickTab(tab.key)} fill={isMobile} />
                 ))}

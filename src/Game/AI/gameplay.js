@@ -1493,6 +1493,8 @@ const buildTemplateVariables = async (bundle, options = {}) => {
   // A task that declares the lookup functions gets the slim prompt (the
   // functions carry the detail); with the setting off it gets the full one.
   const lookups = Boolean(options?.lookups) && lookupFunctionsEnabled();
+  // Background work hands in nextTask: nobody is waiting on it, and the map may be moving.
+  const pause = options?.pause;
   const variables = await buildPromptContext(bundle, { ...options, lookups, requiredKeys, taskKey });
   await nextTask();
   // The diplomatic slice is bounded to the player plus, for a chat task, the
@@ -1503,6 +1505,7 @@ const buildTemplateVariables = async (bundle, options = {}) => {
   if (wants("canonicalWarContext")) {
     variables.canonicalWarContext = buildCanonicalWarContext(bundle.world, { round: bundle?.game?.round });
   }
+  await pause?.();
   if (wants("canonicalDiplomaticContext")) {
     variables.canonicalDiplomaticContext = buildBoundedDiplomaticContext(bundle.world, {
       playerPolity: normalizeString(bundle?.game?.country),
@@ -1510,17 +1513,21 @@ const buildTemplateVariables = async (bundle, options = {}) => {
       maxActors: 8,
     }).text;
   }
+  await pause?.();
   if (wants("territorialControlContext")) {
     variables.territorialControlContext = await buildTerritorialControlContext(bundle.world, lookups ? { maxRows: 24, viaLookups: true } : {});
   }
   // Groups switched off for this game (server/gameFeatures.js): no task is
   // given them, which also leaves out the time skip's [Groups] rule and the
   // Game Master's block (both read these).
+  await pause?.();
   const groupsOn = isActiveFeatureEnabled("groups");
   variables.groupsContext = groupsOn ? await buildGroupsContext(bundle.world, { regionCatalog: options?.mapSource?.regionCatalog }) : "";
+  await pause?.();
   variables.playerGroupContext = groupsOn
     ? await buildPlayerGroupContext(bundle.world, bundle.game?.country, { regionCatalog: options?.mapSource?.regionCatalog })
     : "";
+  await pause?.();
   if (wants("canonicalStorylineContext")) {
     variables.canonicalStorylineContext = buildGameMasterStorylineContext(bundle.world);
   }
@@ -1531,9 +1538,11 @@ const buildTemplateVariables = async (bundle, options = {}) => {
       bundle?.game?.country,
     );
   }
+  await pause?.();
   if (wants("playerPolityReputationContext")) {
     variables.playerPolityReputationContext = await buildPlayerPolityReputationText(bundle);
   }
+  await pause?.();
   if (wants("playerPolityIntelligenceContext")) {
     variables.playerPolityIntelligenceContext = buildPlayerPolityIntelligenceText(bundle);
   }
@@ -21685,13 +21694,15 @@ export const maybeSendIdleDiplomacy = async () => {
     if (Math.random() >= idlePulseBackoff.share(fingerprint)) return null;
     // Nobody is waiting on this, and the map may be moving: it draws between the stages.
     await nextTask();
-    const variables = await buildTemplateVariables(bundle, { taskKey: "idleDiplomacy", lookups: true });
+    const variables = await buildTemplateVariables(bundle, { taskKey: "idleDiplomacy", lookups: true, pause: nextTask });
     await nextTask();
     const institutionRoutingContext = buildIdleInstitutionRoutingContext(bundle.world, bundle.game.country);
+    await nextTask();
     // Every government that may write, the most relevant first with their
     // background; any other's is fetched with government_background
     // (idlePoliticalDiplomacyContext.js).
     const politicalDecisionSet = buildIdleDiplomacyPoliticalDecisionSet(bundle);
+    await nextTask();
     const pulseLookups = idleDiplomacyLookups(buildTaskLookups(bundle), { world: bundle.world, decisionSet: politicalDecisionSet, canFetch: !savingRequests() });
     const politicalDecisionContext = idleDiplomacyPoliticalContextText(politicalDecisionSet, {
       canFetch: Boolean(pulseLookups?.tools?.some((tool) => tool?.name === GOVERNMENT_BACKGROUND_FUNCTION)),

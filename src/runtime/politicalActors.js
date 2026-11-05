@@ -3,6 +3,7 @@
 import { resolveStockCountryCode } from "./polityIdentity.js";
 import { normalizePoliticalPressureState } from "./politicalPressure.js";
 import { PARTY_ROLES, findIdeology } from "./politics.js";
+import { lookedUp } from "./worldLookups.js";
 
 export const POLITICAL_ACTORS_SCHEMA_VERSION = 6;
 
@@ -1007,13 +1008,19 @@ function candidatesForPolity(world, key) {
 // Every name the world knows as a polity of its own: a declared record key or a
 // map owner.
 function ownPolityNames(world) {
-    const names = new Set(Object.keys(world?.polityOverrides || {}).map(clean));
-    for (const owner of Object.values(world?.regionOwnershipOverrides || {})) names.add(clean(owner));
-    names.delete("");
-    return names;
+    return lookedUp(world, "ownPolityNames", () => {
+        const names = new Set(Object.keys(world?.polityOverrides || {}).map(clean));
+        for (const owner of Object.values(world?.regionOwnershipOverrides || {})) names.add(clean(owner));
+        names.delete("");
+        return names;
+    });
 }
 
 export function getPoliticalProfile(world, polityKey) {
+    return lookedUp(world, "politicalProfile", () => findPoliticalProfile(world, polityKey), polityKey);
+}
+
+function findPoliticalProfile(world, polityKey) {
     const byPolity = world?.politicalActors?.byPolity;
     if (!byPolity) return null;
 

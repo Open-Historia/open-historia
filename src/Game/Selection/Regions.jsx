@@ -15,7 +15,7 @@ import { toCountryName } from "../../runtime/ownerNames.js";
 import { bundledFlagUrl, countryGidFromIdentity } from "../../runtime/countryFlags.js";
 import { requestDiplomaticChat } from "../GameUI/chat.jsx";
 import { openRostraPlace } from "../GameUI/rostraOpen.js";
-import { openCountryPanel } from "./CountryPanel.jsx";
+import { OPEN_COUNTRY_STATS_EVENT, openCountryPanel } from "./CountryPanel.jsx";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { APP_HEIGHT, MAP_CARD_OPENED, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, useShortTouchScreen, useTouchPrimary } from "../../runtime/mobileUi.js";
 import { useBackToClose } from "../../runtime/backToClose.js";
@@ -289,12 +289,12 @@ if (typeof document !== "undefined" && !document.getElementById(ANIM_ID)) {
     style.id = ANIM_ID;
     style.textContent = `
     @keyframes regionPopupFadeIn {
-        from { opacity: 0; transform: translateY(calc(-100% + 10px)); }
-        to   { opacity: 1; transform: translateY(-100%); }
+        from { opacity: 0; transform: translateY(10px); }
+        to   { opacity: 1; transform: none; }
     }
     @keyframes regionPopupFadeOut {
-        from { opacity: 1; transform: translateY(-100%); }
-        to   { opacity: 0; transform: translateY(calc(-100% + 10px)); }
+        from { opacity: 1; transform: none; }
+        to   { opacity: 0; transform: translateY(10px); }
     }
     @keyframes regionSheetFadeIn {
         from { opacity: 0; transform: translateY(10px); }
@@ -530,6 +530,15 @@ const RegionPopup = () => {
         _dismiss?.();
     };
 
+    // The full list already lives in Country → Diplomacy. Reuse the same
+    // public Country-drawer navigation as the legacy country-info card; do
+    // not make the map popup a second puppet directory.
+    const handleOpenCountryDossier = (country) => {
+        if (!country) return;
+        window.dispatchEvent(new CustomEvent(OPEN_COUNTRY_STATS_EVENT, { detail: { country } }));
+        _dismiss?.();
+    };
+
     _dismiss = () => setDismissing(true);
 
     const finishDismiss = () => {
@@ -675,6 +684,8 @@ const RegionPopup = () => {
     const heldPuppets = controllerKey && worldState && playerCountry
         ? livePuppetsFor(worldState, playerCountry).filter((row) => row.overlord === controllerKey)
         : [];
+    const puppetPreview = heldPuppets.slice(0, 2);
+    const remainingPuppets = heldPuppets.length - puppetPreview.length;
     // Wider on a touch screen that still anchors the card at the tap (a tablet,
     // a phone on its side): the finger-sized buttons took 140 of the header's
     // 216 px and broke the country's name mid-word.
@@ -692,6 +703,17 @@ const RegionPopup = () => {
         })
         : null;
 
+    // The body is measured AFTER its max-height cap. Include the pointer in
+    // the screen-space footprint; no CSS transform may change this position.
+    const pointerHeight = 9;
+    const popupTop = !asSheet && screenPos
+        ? clampAnchoredCardTop(screenPos.y, popupBodyHeight + pointerHeight, window.innerHeight)
+        : 0;
+    // Once clamped, the triangle may no longer point at the selected region.
+    // Hide a misleading pointer rather than drawing it at an unrelated spot.
+    const pointerAligned = !asSheet && screenPos && popupBodyHeight > 0
+        && Math.abs(popupTop + popupBodyHeight + pointerHeight - screenPos.y) <= 12;
+
     return createPortal(
         <div
         key={animKey}
@@ -700,7 +722,7 @@ const RegionPopup = () => {
             position: "fixed",
             ...(asSheet ? (isMobile ? SHEET_PLACEMENT : SIDEWAYS_SHEET_PLACEMENT) : {
                 left: screenPos.x - POPUP_WIDTH / 2,
-                top: clampAnchoredCardTop(screenPos.y, popupBodyHeight, window.innerHeight),
+                top: popupTop,
                 width: `${POPUP_WIDTH}px`,
             }),
             zIndex: 20,
@@ -719,7 +741,10 @@ const RegionPopup = () => {
             borderRadius: "12px",
             overflowX: "hidden",
             overflowY: "auto",
-            maxHeight: asSheet ? (isMobile ? SHEET_MAX_HEIGHT : SIDEWAYS_SHEET_MAX_HEIGHT) : "calc(100dvh - 1rem)",
+            // Reserve space for the pointer and both viewport edges. A very
+            // tall puppet list must scroll *inside* the card, not push the
+            // fixed card (including its flag and close button) off-screen.
+            maxHeight: asSheet ? (isMobile ? SHEET_MAX_HEIGHT : SIDEWAYS_SHEET_MAX_HEIGHT) : "calc(100dvh - 2rem)",
             fontFamily: "sans-serif",
             boxShadow: "0 8px 32px rgba(0,0,0,0.5), 0 2px 8px rgba(0,0,0,0.3)",
             border: "1px solid rgba(255,255,255,0.12)",
@@ -820,9 +845,30 @@ const RegionPopup = () => {
             </div>
         )}
         {heldPuppets.length > 0 && (
-            <div style={{ marginTop: "7px", fontSize: "11px", lineHeight: 1.4, color: "rgba(255,255,255,0.8)" }}>
-            <span style={{ color: "rgba(255,255,255,0.45)" }}>{heldPuppets[0].role === "overlord" ? "Our puppets: " : "Puppets: "}</span>
-            {heldPuppets.map((row) => `${row.puppet} (${puppetKindLabel(row.kind)})`).join(", ")}
+            <div style={{ marginTop: "8px", fontSize: "11px", lineHeight: 1.4, color: "rgba(255,255,255,0.8)" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "6px", marginBottom: "5px" }}>
+            <span style={{ color: "rgba(255,255,255,0.7)", fontWeight: 700 }}>Subordinate states</span>
+            <span data-no-translate style={{ color: "rgba(255,255,255,0.92)", fontWeight: 800 }}>{heldPuppets.length}</span>
+            </div>
+            {puppetPreview.map((row) => (
+                <div key={row.id || `${row.overlord}-${row.puppet}-${row.kind}`} style={{ lineHeight: 1.35, marginTop: "3px", overflowWrap: "anywhere" }}>
+                {row.puppet} <span style={{ color: "rgba(255,255,255,0.5)" }}>({puppetKindLabel(row.kind)})</span>
+                </div>
+            ))}
+            {remainingPuppets > 0 && (
+                <div style={{ color: "rgba(255,255,255,0.55)", marginTop: "3px" }}>+<span data-no-translate>{remainingPuppets}</span> more</div>
+            )}
+            <div style={{ alignItems: "center", display: "flex", gap: "4px", marginTop: "7px" }}>
+            <button
+                type="button"
+                className="oh-tap"
+                title="Country"
+                onClick={(e) => { e.stopPropagation(); handleOpenCountryDossier(controllerKey); }}
+                style={{ background: "none", border: 0, color: "#8acde6", cursor: "pointer", fontSize: "11px", fontWeight: 700, padding: "2px 0", textDecoration: "underline", textUnderlineOffset: "2px" }}
+            >Country</button>
+            <span style={{ color: "rgba(255,255,255,0.55)" }}>→</span>
+            <span style={{ color: "rgba(255,255,255,0.68)" }}>Diplomacy</span>
+            </div>
             </div>
         )}
 
@@ -948,7 +994,7 @@ const RegionPopup = () => {
         </div>
 
         {/* The pointer at the tapped spot; a phone's sheet points at nothing. */}
-        {!asSheet && (
+        {pointerAligned && (
             <div
             style={{
                 width: 0,

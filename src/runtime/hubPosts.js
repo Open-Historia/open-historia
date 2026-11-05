@@ -395,6 +395,7 @@ export const parseSuggestionComment = (comment, postId) => {
 };
 
 const commentCache = new Map(); // postId -> { at, comments }
+const COMMENT_CACHE_MOST = 50;
 
 // Every page of a post's comments. A page that fails fails the read, so the
 // caller never records a comment count it has not read all of.
@@ -410,7 +411,9 @@ export const fetchPostComments = async (postId, { force = false } = {}) => {
         : `Could not read the post's comments (HTTP ${error.status}).`,
     );
   });
+  commentCache.delete(id);
   commentCache.set(id, { at: Date.now(), comments: list });
+  if (commentCache.size > COMMENT_CACHE_MOST) commentCache.delete(commentCache.keys().next().value);
   return list;
 };
 

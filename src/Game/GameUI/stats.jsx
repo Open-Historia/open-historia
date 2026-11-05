@@ -410,12 +410,10 @@ const CustomStatsSheet = ({ definition, sheet, hiddenKeys = [] }) => {
 // on the standard and on a custom sheet alike: the pane asks for a first
 // reading of it either way.
 const IntelligenceServiceCard = ({ value, style }) => (
-    <div style={{ ...cardStyle, ...style }}>
-        <div style={{ alignItems: "center", display: "flex", justifyContent: "space-between", marginBottom: "0.45rem" }}>
-            <span style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.68rem", fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase" }}>
-                🕵 Intelligence service
-            </span>
-            <span data-no-translate style={{ fontSize: "0.85rem", fontWeight: 800 }}>{value}/100</span>
+    <div className="oh-country-intelligence-stat" style={style}>
+        <div className="oh-country-intelligence-stat-heading">
+            <span className="oh-country-intelligence-stat-label">🕵 Intelligence service</span>
+            <span data-no-translate className="oh-country-intelligence-stat-value">{value}/100</span>
         </div>
         <Bar value={value} color="#38bdf8" />
     </div>

@@ -1,6 +1,6 @@
 # Advisor conversation UI — scoped visual contract
 
-Status: Local Beta UI proposal (2026-11-05), pending in-game visual acceptance and PR. The implementation is not in upstream Beta until merged and released.
+Status: Advisor conversation visual redesign is merged in Beta source via PR #952 (merge `13aadc1e`, 2026-11-05). The separate multi-Action-fence parsing hotfix below is local source only until separately committed, merged, and released.
 
 ## Purpose and ownership
 
@@ -29,3 +29,13 @@ Implementation is owned by `src/Game/GameUI/advisor.jsx`, `AdvisorRecipients.jsx
 `src/Game/GameUI/advisorVisualLayout.test.js` covers scoped styling, memoized rows, native message/control preservation, recipient permissions, composer behavior, and responsive/accessible selectors. Existing `advisorRecipientsArchitecture.test.js`, `advisorThreads.test.js`, Advisor reply/draft tests, localization/no-gradient tests and the full Beta suite continue to apply.
 
 Development note: the previous Political World Parties/Power Blocs switch is on a separate uncommitted feature track in the same local checkout. Keep the Advisor's overlay archive scoped only to its own modified/new files and this document. Do not mix commits, PRs or release claims across these tracks.
+
+## 2026-11-05 — multiple fenced Advisor Action proposals (local hotfix)
+
+A provider can emit several separate ```actions JSON arrays in one reply, even though the prompt asks for a single array. Previously `parseAdvisorReply` stripped only the first `actions` fence and `advisor.jsx` independently extracted that same first block when constructing persistent proposal attachments. Later Action arrays were displayed as raw horizontal-scrolling JSON code instead of reviewable cards. This is a parser contract bug, not a consequence of the Advisor visual stylesheet or a change in the Actions simulation.
+
+`src/Game/GameUI/advisorReply.js` now uses the existing fenced JSON extractor repeatedly for Action blocks, preserving source order and leaving all other named block types on their existing routes. It hides completed raw Action fences and unfinished trailing `actions` content while streaming or on finalization. Malformed, non-list or truncated Action blocks do not yield partial speculative Action proposals, and the failure is reported in `actionBlockProblems`. `advisor.jsx` derives the stored proposals and error receipts from that same parse result; it no longer independently extracts only the first block. The existing `actionProposalsFromReply` validation, 24-proposal total limit, stable reply-bound IDs, per-proposal Discuss/Proceed confirmation, board writer, idempotency, recipient permissions and game-turn boundaries are unchanged. **No Action is auto-queued.**
+
+Existing persisted Advisor messages are not rewritten or silently reinterpreted as newly authorized proposals. Future replies can show all accepted Action cards; old messages with missing proposal attachments cannot safely be auto-backfilled without a separate migration/authority decision. The reporter supplied screenshots (Gemma4:31b; Cold War scenario), not the underlying raw model transcript; the repeated correctly labeled fence diagnosis is reproduced in native tests, while alternate raw fence labels or malformed provider syntax have not been independently observed in that live report.
+
+Regression evidence: `src/Game/GameUI/advisorReply.test.js` reproduces three separate Action arrays with two subsequent raw-code leaks, verifies stable proposal identities across the complete sequence, preserves the global 24-proposal bound across separate fences and rejects malformed/incomplete secondary blocks. The full project suite, production builds and user-facing retest must be recorded as separate gates before release.

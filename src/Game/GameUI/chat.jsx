@@ -886,7 +886,7 @@ const MessageBubble = ({ msg, onRetry, compact = false, showTime = true }) => {
             <div data-no-translate={isError ? undefined : ""} dir={isPlayer || isError ? undefined : chatTextDirection()} style={{
                 padding: ".62rem .82rem",
                 borderRadius: isPlayer ? "13px 13px 3px 13px" : "13px 13px 13px 3px",
-                backgroundColor: isPlayer ? "rgba(59,130,246,.92)" : isError ? "rgba(239,68,68,0.16)" : `color-mix(in srgb, ${accentColor} 4%, rgba(35,35,39,0.96))`,
+                backgroundColor: isPlayer ? "var(--oh-ui-active, rgba(59,130,246,.92))" : isError ? "rgba(239,68,68,0.16)" : `color-mix(in srgb, ${accentColor} 4%, var(--oh-ui-surface, rgba(35,35,39,0.96)))`,
                 fontSize: ".85rem", lineHeight: "1.5", whiteSpace: "pre-wrap", wordBreak: "break-word",
                 border: isPlayer ? "1px solid rgba(147,197,253,.2)" : isError ? "1px solid rgba(239,68,68,0.3)" : "1px solid rgba(255,255,255,.08)",
                 borderLeft: (!isPlayer && !isError) ? `2px solid color-mix(in srgb, ${accentColor} 72%, white 8%)` : undefined,
@@ -2268,7 +2268,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                 <div data-diplomacy-header="modern" style={{ display: "flex", alignItems: "center",
                     // On touch the gaps close up too: four thumb-sized buttons
                     // .72rem apart left a phone's thread title under 60px.
-                    gap: isTouch ? ".35rem" : ".72rem", padding: isTouch ? ".35rem 1rem" : ".72rem 1rem", borderBottom: "1px solid rgba(255,255,255,.07)", background: "rgba(15,15,18,.26)", flexShrink: 0 }}>
+                    gap: isTouch ? ".35rem" : ".72rem", padding: isTouch ? ".35rem 1rem" : ".72rem 1rem", borderBottom: "1px solid var(--oh-ui-line, rgba(255,255,255,.07))", background: "var(--oh-ui-header, rgba(15,15,18,.26))", flexShrink: 0 }}>
                 <button className="oh-tap" onClick={onBack} aria-label="Back to diplomacy" style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(255,255,255,.58)", display: "flex", padding: ".26rem", borderRadius: 7 }}><BackIcon /></button>
                 <div style={{ display: "inline-flex", alignItems: "center", minWidth: headerCountries.length > 1 ? "2.5rem" : "1.55rem", paddingRight: headerCountries.length > 1 ? ".2rem" : 0, flexShrink: 0 }}>
                     {headerCountries.map((country, index) => (
@@ -2423,7 +2423,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                     Your advisor brings you what your government learns in secret. Act on it with your orders.
                 </div>
             ) : !isLoading ? (
-                <div data-diplomacy-composer="modern" style={{ padding: isInstitutionCouncil ? ".65rem 1rem .8rem" : ".72rem 1rem .82rem", borderTop: "1px solid rgba(255,255,255,0.08)", background: isInstitutionCouncil ? "transparent" : "rgba(13,13,16,.56)", flexShrink: 0 }}>
+                <div data-diplomacy-composer="modern" style={{ padding: isInstitutionCouncil ? ".65rem 1rem .8rem" : ".72rem 1rem .82rem", borderTop: "1px solid rgba(255,255,255,0.08)", background: isInstitutionCouncil ? "transparent" : "var(--oh-ui-header, rgba(13,13,16,.56))", flexShrink: 0 }}>
                 {isInstitutionCouncil && <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: ".6rem", marginBottom: ".38rem" }}>
                     <span style={{ fontSize: ".52rem", fontWeight: 850, letterSpacing: ".07em", color: "rgba(255,255,255,.4)", textTransform: "uppercase" }}>Council message</span>
                     <button type="button" className="oh-tap-row" onClick={() => onInstitutionNavigate?.("agenda")} style={{ border: 0, background: "transparent", color: "rgba(231,231,234,.72)", cursor: "pointer", fontSize: ".58rem", fontWeight: 800 }}>Formal business →</button>
@@ -2928,8 +2928,8 @@ const ChatListItem = ({ chat, playerCountry, onClick, onDelete, onToggleRead, un
         <div onMouseEnter={() => setHovered(true)} onMouseLeave={() => { setHovered(false); setConfirming(false); }} style={{ position: "relative" }}>
         <button data-diplomacy-thread-row="modern" onClick={onClick} style={{
             width: "100%", padding: canHover ? ".76rem 3rem .76rem .9rem" : ".76rem 6.7rem .76rem .9rem", borderRadius: 12,
-            border: `1px solid ${hovered ? "rgba(255,255,255,.13)" : unread ? "rgba(96,165,250,.15)" : "rgba(255,255,255,.07)"}`,
-            background: hovered ? "rgba(255,255,255,.065)" : unread ? "rgba(59,130,246,.035)" : "rgba(255,255,255,.025)",
+            border: `1px solid ${hovered ? "var(--oh-ui-accent, rgba(255,255,255,.13))" : unread ? "var(--oh-ui-line, rgba(96,165,250,.15))" : "var(--oh-ui-line, rgba(255,255,255,.07))"}`,
+            background: hovered ? "var(--oh-ui-hover, rgba(255,255,255,.065))" : unread ? "var(--oh-ui-overlay-card, rgba(59,130,246,.035))" : "var(--oh-ui-overlay-card, rgba(255,255,255,.025))",
             display: "flex", alignItems: "center", gap: ".78rem", cursor: "pointer",
             transition: "background .15s, border-color .15s, transform .15s", transform: hovered ? "translateY(-1px)" : "translateY(0)",
             fontFamily: "sans-serif", textAlign: "left", boxShadow: hovered ? "0 6px 18px rgba(0,0,0,.12)" : "none",
@@ -2959,11 +2959,11 @@ const ChatListItem = ({ chat, playerCountry, onClick, onDelete, onToggleRead, un
             {showActions && (
                 <>
                 <button className="oh-tap" onClick={e => { e.stopPropagation(); onToggleRead?.(); }} title={unread ? "Mark as read" : "Mark as unread"} aria-label={unread ? "Mark as read" : "Mark as unread"}
-                style={{ display: "flex", alignItems: "center", background: "rgba(24,24,27,.86)", border: "1px solid rgba(255,255,255,.08)", cursor: "pointer", color: "rgba(96,165,250,.78)", padding: ".3rem", borderRadius: 7, lineHeight: 1 }}>
+                style={{ display: "flex", alignItems: "center", background: "var(--oh-ui-overlay-strong, rgba(24,24,27,.86))", border: "1px solid var(--oh-ui-line, rgba(255,255,255,.08))", cursor: "pointer", color: "var(--oh-ui-accent, rgba(96,165,250,.78))", padding: ".3rem", borderRadius: 7, lineHeight: 1 }}>
                     <EnvelopeIcon filled={unread} />
                 </button>
                 <button className="oh-tap" onClick={e => { e.stopPropagation(); if (confirming) onDelete(); else setConfirming(true); }} title={confirming ? "Click again to delete this chat" : "Delete chat"} aria-label={confirming ? "Confirm deleting this chat" : "Delete chat"}
-                style={{ display: "flex", alignItems: "center", gap: ".28rem", background: confirming ? "rgba(239,68,68,.18)" : "rgba(24,24,27,.86)", border: `1px solid ${confirming ? "rgba(239,68,68,.55)" : "rgba(255,255,255,.08)"}`, cursor: "pointer", color: confirming ? "#fca5a5" : "rgba(239,68,68,.68)", fontSize: ".68rem", fontWeight: 650, padding: confirming ? ".3rem .48rem" : ".3rem", borderRadius: 7, lineHeight: 1 }}>
+                style={{ display: "flex", alignItems: "center", gap: ".28rem", background: confirming ? "rgba(239,68,68,.18)" : "var(--oh-ui-overlay-strong, rgba(24,24,27,.86))", border: `1px solid ${confirming ? "rgba(239,68,68,.55)" : "rgba(255,255,255,.08)"}`, cursor: "pointer", color: confirming ? "#fca5a5" : "rgba(239,68,68,.68)", fontSize: ".68rem", fontWeight: 650, padding: confirming ? ".3rem .48rem" : ".3rem", borderRadius: 7, lineHeight: 1 }}>
                     {confirming ? "Delete?" : <TrashIcon />}
                 </button>
                 </>
@@ -3512,7 +3512,7 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries, panelOp
     const selectedDiplomaticLabel = diplomaticKnowledgeLabel(selectedRawEntry, selectedClarity, Boolean(selectedSpy));
     const selectedSourceLabel = sourceQualityLabel(selectedAssessment?.confidence, selectedClarity, Boolean(selectedSpy));
 
-    const panel = { border: "1px solid rgba(255,255,255,.08)", borderRadius: 10, background: "rgba(255,255,255,.025)" };
+    const panel = { border: "1px solid rgba(255,255,255,.08)", borderRadius: 10, background: "var(--oh-ui-overlay-card, rgba(255,255,255,.025))" };
     const subhead = { fontSize: ".58rem", letterSpacing: ".09em", textTransform: "uppercase", color: "rgba(255,255,255,.37)", fontWeight: 800 };
     const navItems = [["overview", "Overview"], ["countries", "Countries"], ["operations", "Operations"], ["reports", "Reports"]];
 
@@ -3616,7 +3616,7 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries, panelOp
                             <div style={subhead}>Institutional position</div>
                             <div style={{ marginTop: ".42rem", display: "flex", flexDirection: "column", gap: ".3rem" }}>
                                 {selectedInstitutionPortfolio.length ? selectedInstitutionPortfolio.slice(0, 10).map(({ institution, member, history, cases }) => (
-                                    <div key={institution.id} style={{ display: "flex", alignItems: "center", gap: ".45rem", padding: ".38rem .45rem", borderRadius: 7, background: "rgba(255,255,255,.025)", border: "1px solid rgba(255,255,255,.05)" }}>
+                                    <div key={institution.id} style={{ display: "flex", alignItems: "center", gap: ".45rem", padding: ".38rem .45rem", borderRadius: 7, background: "var(--oh-ui-overlay-card, rgba(255,255,255,.025))", border: "1px solid rgba(255,255,255,.05)" }}>
                                         <span style={{ flex: 1, minWidth: 0, fontSize: ".62rem", color: "rgba(255,255,255,.68)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{institution.name}</span>
                                         <span style={{ fontSize: ".53rem", color: member ? "rgba(231,231,234,.68)" : "rgba(255,255,255,.35)", textTransform: "capitalize" }}>{member ? (member.role || member.status || "member") : "former / historical"}</span>
                                         {cases?.length ? <span style={{ fontSize: ".49rem", color: "#fde68a" }}>{cases.length} pending</span> : null}
@@ -4439,7 +4439,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
                 frame), so the two meet with the same 0.5rem gap and never stack.
                 Nothing else is held back: the panel shrinks only once the drawer
                 would really reach it, not the moment the drawer opens. */}
-            <div style={{ position: "fixed", bottom: isOpen ? "4.25rem" : "-52rem", left: "0.5rem", width: "min(58rem, calc(100vw - 1rem - var(--oh-right-drawer-safe-offset, 0px)))", height: "min(50rem, calc(100vh - 8rem))", minHeight: "24rem", backgroundColor: "rgba(24,24,27,0.95)", backdropFilter: "blur(8px)", borderRadius: "16px", border: "1px solid rgba(255,255,255,0.1)", boxShadow: "-4px 0 24px rgba(0,0,0,0.4),inset 0 1px 0 rgba(255,255,255,0.06)", zIndex: 9998, overflow: "hidden", transition: "bottom 0.35s cubic-bezier(0.4,0,0.2,1),opacity 0.35s ease", opacity: isOpen ? 1 : 0, pointerEvents: isOpen ? "auto" : "none", fontFamily: "sans-serif", color: "white", display: "flex", flexDirection: "column",
+            <div style={{ position: "fixed", bottom: isOpen ? "4.25rem" : "-52rem", left: "0.5rem", width: "min(58rem, calc(100vw - 1rem - var(--oh-right-drawer-safe-offset, 0px)))", height: "min(50rem, calc(100vh - 8rem))", minHeight: "24rem", backgroundColor: "var(--oh-ui-overlay, rgba(24,24,27,0.95))", backdropFilter: "blur(8px)", borderRadius: "16px", border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.1))", boxShadow: "-4px 0 24px rgba(0,0,0,0.4),inset 0 1px 0 rgba(255,255,255,0.06)", zIndex: 9998, overflow: "hidden", transition: "bottom 0.35s cubic-bezier(0.4,0,0.2,1),opacity 0.35s ease", opacity: isOpen ? 1 : 0, pointerEvents: isOpen ? "auto" : "none", fontFamily: "sans-serif", color: "white", display: "flex", flexDirection: "column",
                 ...(isTouch ? { width: `min(58rem, calc(100vw - 1.5rem - ${SAFE_LEFT} - ${SAFE_RIGHT}))`, height: `min(50rem, calc(${APP_HEIGHT} - 10.25rem - ${SAFE_TOP} - ${SAFE_BOTTOM}))`, minHeight: "10rem" } : {}) }}>
 
             {chatsLoadFailed ? (
@@ -4459,7 +4459,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
                 onInstitutionNavigate={(section) => { const institutionId = activeChat.institutionId || activeChat.lifecycleInstitutionId; if (institutionId) navigateInstitution(institutionId, section); }} onLifecycleResult={adoptInstitutionalResult} onInstitutionBusinessOpened={runInstitutionCouncilTurn} />
             ) : (
                 <>
-                <div data-diplomacy-workspace-header="modern" style={{ padding: isTouch ? ".35rem .85rem .3rem" : ".7rem .85rem .65rem", borderBottom: "1px solid rgba(255,255,255,0.07)", flexShrink: 0 }}>
+                <div data-diplomacy-workspace-header="modern" style={{ padding: isTouch ? ".35rem .85rem .3rem" : ".7rem .85rem .65rem", borderBottom: "1px solid var(--oh-ui-line, rgba(255,255,255,0.07))", background: "var(--oh-ui-overlay-header, transparent)", flexShrink: 0 }}>
                     <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: ".75rem" }}>
                         <div style={{ display: "flex", alignItems: "center", gap: ".55rem", minWidth: 0 }}>
                             <div aria-hidden="true" style={{ width: "1.65rem", height: "1.65rem", borderRadius: 7, border: "1px solid var(--oh-grey-border-strong)", background: "var(--oh-grey-raised)", color: "var(--oh-grey-text)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><WorkspaceTabIcon type="contacts" size={15} /></div>
@@ -4480,7 +4480,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
                             ["institutions", "institutions", "Institutions", institutionUnreadCount],
                             ...(espionageOn ? [["spy", "intelligence", "Intelligence", 0]] : []),
                         ].map(([key, iconType, label, count]) => (
-                            <button key={key} className="oh-tap-row" onClick={() => setView(key)} style={{ flex: "0 0 auto", whiteSpace: "nowrap", display: "flex", alignItems: "center", gap: ".38rem", padding: isTouch ? ".3rem .58rem" : ".34rem .68rem", borderRadius: "8px", fontSize: ".72rem", fontWeight: 750, cursor: "pointer", fontFamily: "sans-serif", border: "1px solid " + (currentView === key ? "var(--oh-grey-border-strong)" : "rgba(255,255,255,.07)"), background: currentView === key ? "var(--oh-grey-selected)" : "rgba(255,255,255,.025)", color: currentView === key ? "white" : "rgba(255,255,255,0.48)" }}>
+                            <button key={key} className="oh-tap-row" onClick={() => setView(key)} style={{ flex: "0 0 auto", whiteSpace: "nowrap", display: "flex", alignItems: "center", gap: ".38rem", padding: isTouch ? ".3rem .58rem" : ".34rem .68rem", borderRadius: "8px", fontSize: ".72rem", fontWeight: 750, cursor: "pointer", fontFamily: "sans-serif", border: "1px solid " + (currentView === key ? "var(--oh-grey-border-strong)" : "var(--oh-ui-line, rgba(255,255,255,.07))"), background: currentView === key ? "var(--oh-ui-active, var(--oh-grey-selected))" : "var(--oh-ui-overlay-card, rgba(255,255,255,.025))", color: currentView === key ? "white" : "rgba(255,255,255,0.48)" }}>
                                 <span aria-hidden="true" style={{ display: "inline-flex", opacity: .8 }}><WorkspaceTabIcon type={iconType} size={13} /></span>
                                 <span>{label}</span>
                                 {Number(count) > 0 && <span style={{ minWidth: "1.05rem", height: "1.05rem", padding: "0 .25rem", borderRadius: 999, display: "inline-flex", alignItems: "center", justifyContent: "center", background: currentView === key ? "rgba(255,255,255,.14)" : "rgba(96,165,250,.16)", color: currentView === key ? "#fff" : "#93c5fd", fontSize: ".57rem", fontWeight: 800 }}>{count}</span>}
@@ -4533,7 +4533,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
                     rather than above the tab switch. */}
                 {openChats.length > 0 && (
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.5rem", padding: "0.55rem 1.25rem", borderBottom: "1px solid rgba(255,255,255,0.06)", flexShrink: 0 }}>
-                    <button className="oh-tap-row" onClick={() => setShowUnreadOnly(v => !v)} style={{ alignItems: "center", background: showUnreadOnly ? "rgba(96,165,250,0.18)" : "rgba(255,255,255,0.05)", border: `1px solid ${showUnreadOnly ? "rgba(96,165,250,0.5)" : "rgba(255,255,255,0.12)"}`, borderRadius: "999px", color: showUnreadOnly ? "#93c5fd" : "rgba(255,255,255,0.6)", cursor: "pointer", display: "flex", fontFamily: "sans-serif", fontSize: "0.72rem", fontWeight: 600, gap: "0.3rem", padding: "0.28rem 0.65rem", transition: "all 0.12s ease" }}>
+                    <button className="oh-tap-row" onClick={() => setShowUnreadOnly(v => !v)} style={{ alignItems: "center", background: showUnreadOnly ? "var(--oh-ui-active, rgba(96,165,250,0.18))" : "var(--oh-ui-overlay-card, rgba(255,255,255,0.05))", border: `1px solid ${showUnreadOnly ? "var(--oh-ui-accent, rgba(96,165,250,0.5))" : "var(--oh-ui-line, rgba(255,255,255,0.12))"}`, borderRadius: "999px", color: showUnreadOnly ? "var(--oh-ui-accent, #93c5fd)" : "rgba(255,255,255,0.6)", cursor: "pointer", display: "flex", fontFamily: "sans-serif", fontSize: "0.72rem", fontWeight: 600, gap: "0.3rem", padding: "0.28rem 0.65rem", transition: "all 0.12s ease" }}>
                     {showUnreadOnly && <span style={{ width: "0.4rem", height: "0.4rem", borderRadius: "50%", background: "#60a5fa" }} />}
                     Unread{unreadIds.size > 0 ? ` (${unreadIds.size})` : ""}
                     </button>
@@ -4564,9 +4564,9 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
                 ))}
                 </div>
                 <div style={{ padding: "0.75rem 1rem", borderTop: "1px solid rgba(255,255,255,0.07)", flexShrink: 0 }}>
-                <button className="oh-tap-row" onClick={() => setShowSelector(true)} style={{ width: "100%", padding: "0.7rem", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.07)", color: "rgba(255,255,255,0.85)", fontSize: "0.85rem", fontWeight: 500, cursor: "pointer", fontFamily: "sans-serif" }}
-                onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.12)"}
-                onMouseLeave={e => e.currentTarget.style.background = "rgba(255,255,255,0.07)"}>Start New Chat</button>
+                <button className="oh-tap-row" onClick={() => setShowSelector(true)} style={{ width: "100%", padding: "0.7rem", borderRadius: "10px", border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.12))", background: "var(--oh-ui-overlay-card, rgba(255,255,255,0.07))", color: "rgba(255,255,255,0.85)", fontSize: "0.85rem", fontWeight: 500, cursor: "pointer", fontFamily: "sans-serif" }}
+                onMouseEnter={e => e.currentTarget.style.background = "var(--oh-ui-hover, rgba(255,255,255,0.12))"}
+                onMouseLeave={e => e.currentTarget.style.background = "var(--oh-ui-overlay-card, rgba(255,255,255,0.07))"}>Start New Chat</button>
                 </div>
                 </>
                 )}

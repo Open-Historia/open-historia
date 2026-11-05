@@ -29,13 +29,13 @@ import { SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, useTouchPrimary } from ".
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 
 const COLORS = {
-    bg: "#0a0e11",
-    panel: "#101518",
-    raised: "#1a1a1c",
-    border: "#353538",
-    text: "#cdcdd1",
-    muted: "#8b949e",
-    accent: "#3b82f6",
+    bg: "var(--oh-ui-bg, #0a0e11)",
+    panel: "var(--oh-ui-header, #101518)",
+    raised: "var(--oh-ui-surface, #1a1a1c)",
+    border: "var(--oh-ui-line, #353538)",
+    text: "var(--oh-ui-text, #cdcdd1)",
+    muted: "var(--oh-ui-muted, #8b949e)",
+    accent: "var(--oh-ui-active, #3b82f6)",
     danger: "#f85149",
     gold: "#d29922",
     ok: "#3fb950",
@@ -63,7 +63,7 @@ const buttonStyle = {
     padding: "0.35rem 0.7rem",
     borderRadius: "8px",
     border: `1px solid ${COLORS.border}`,
-    backgroundColor: "#262628",
+    backgroundColor: "var(--oh-ui-raised, #262628)",
     color: "white",
     fontSize: "0.72rem",
     fontWeight: 700,
@@ -85,7 +85,7 @@ const selectStyle = {
 
 const tableStyle = { width: "100%", borderCollapse: "collapse", fontSize: "0.72rem", color: COLORS.text };
 const thStyle = { textAlign: "left", padding: "0.45rem 0.6rem", backgroundColor: COLORS.raised, color: COLORS.muted, fontSize: "0.62rem", textTransform: "uppercase", letterSpacing: "0.08em" };
-const tdStyle = { padding: "0.35rem 0.6rem", borderTop: `1px solid #262628` };
+const tdStyle = { padding: "0.35rem 0.6rem", borderTop: "1px solid var(--oh-ui-line, #262628)" };
 const monoTd = { ...tdStyle, fontFamily: MONO };
 
 const Card = ({ label, value, sub, accent }) => (
@@ -95,7 +95,7 @@ const Card = ({ label, value, sub, accent }) => (
         padding: "0.8rem",
         borderRadius: "10px",
         border: `1px solid ${accent ? "rgba(59,130,246,0.5)" : COLORS.border}`,
-        backgroundColor: accent ? "rgba(59,130,246,0.06)" : COLORS.raised,
+        backgroundColor: accent ? "var(--oh-ui-active, rgba(59,130,246,0.06))" : COLORS.raised,
     }}>
         <div style={{ fontSize: "0.6rem", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.1em", color: COLORS.muted, marginBottom: "0.25rem" }}>{label}</div>
         <div style={{ fontSize: "1.2rem", fontWeight: 800, color: "white", lineHeight: 1 }}>{value}</div>
@@ -133,7 +133,7 @@ const RatingWidget = ({ rating, onRate }) => {
                     padding: "0.15rem 0.35rem",
                     fontSize: "0.68rem",
                     color: rating >= value ? COLORS.gold : COLORS.muted,
-                    backgroundColor: rating >= value ? "rgba(210,153,34,0.15)" : "#262628",
+                    backgroundColor: rating >= value ? "rgba(210,153,34,0.15)" : "var(--oh-ui-raised, #262628)",
                 }}
             >
                 {value}
@@ -168,7 +168,7 @@ const CopyButton = ({ text }) => {
 const Section = ({ title, right, children }) => (
     <div style={{ marginBottom: "1.4rem" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.5rem" }}>
-            <h3 style={{ margin: 0, fontSize: "0.7rem", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.1em", color: "#60a5fa" }}>{title}</h3>
+            <h3 style={{ margin: 0, fontSize: "0.7rem", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--oh-ui-accent, #60a5fa)" }}>{title}</h3>
             {right}
         </div>
         {children}
@@ -248,8 +248,8 @@ const GenerationRow = ({ record, selected, onSelect, compact = false }) => {
             textAlign: "left",
             padding: "0.45rem 0.7rem",
             border: "none",
-            borderBottom: "1px solid #262628",
-            backgroundColor: selected ? "rgba(0,0,0,0.42)" : "transparent",
+            borderBottom: "1px solid var(--oh-ui-line, #262628)",
+            backgroundColor: selected ? "var(--oh-ui-active, rgba(0,0,0,0.42))" : "transparent",
             color: COLORS.text,
             cursor: "pointer",
             display: "flex",

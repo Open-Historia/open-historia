@@ -12,6 +12,7 @@ import { describeReplyProblems, filterAdvisorDeployments, planAdvisorActionEdits
 import { buildMessageDrafts } from "./advisorDrafts.js";
 import { buildInstitutionDrafts } from "./advisorInstitutionDrafts.js";
 import { parseAdvisorReply } from "./advisorReply.js";
+import { actionProposalsFromReply } from "./advisorActionReview.js";
 
 const fence = (lang, body) => "```" + lang + "\n" + body + "\n```";
 
@@ -203,6 +204,60 @@ test("a reply's fences are stripped and each becomes what the panel draws", () =
   assert.deepEqual(parsed.institutionDraftProblems, []);
   assert.equal(parsed.deployProblems.length, 1);
   assert.match(parsed.deployProblems[0], /1st Air Wing/);
+});
+
+test("separate Action fences are all hidden and returned in stable review order", () => {
+  const reply = [
+    "### Proposed Actions",
+    "Here are three orders worth considering:",
+    fence("actions", '[{"title":"Industrial co-determination","text":"Establish worker councils."}]'),
+    "The social guarantee should follow.",
+    fence("actions", '[{"title":"Proclaim the Social Guarantee","text":"Announce the plan."}]'),
+    fence("actions", '[{"title":"Brief the American Zone","text":"Open talks."}]'),
+    "Nothing is queued without approval.",
+    fence("senddraft", '[{"country":"France"}]'),
+  ].join("\n");
+  const parsed = parseAdvisorReply(reply);
+  assert.deepEqual(parsed.actionsProposal?.map((op) => op.title), [
+    "Industrial co-determination",
+    "Proclaim the Social Guarantee",
+    "Brief the American Zone",
+  ]);
+  assert.doesNotMatch(parsed.text, /Industrial co-determination|Proclaim the Social Guarantee|Brief the American Zone|\x60\x60\x60actions/);
+  assert.match(parsed.text, /Nothing is queued without approval/);
+  assert.deepEqual(parsed.actionBlockProblems, []);
+  const { proposals, problems } = actionProposalsFromReply(parsed.actionsProposal, "advisor-reply-regression-20261105");
+  assert.deepEqual(proposals.map((proposal) => [proposal.id, proposal.actionId]), [
+    ["proposal-0", "action-advisor-reply-regression-20261105-0"],
+    ["proposal-1", "action-advisor-reply-regression-20261105-1"],
+    ["proposal-2", "action-advisor-reply-regression-20261105-2"],
+  ]);
+  assert.deepEqual(problems, []);
+});
+
+test("the existing 24-proposal ceiling still rejects excessive proposals split across fences", () => {
+  const reply = Array.from({ length: 25 }, (_, index) =>
+    fence("actions", JSON.stringify([{ title: `Order ${index + 1}` }]))).join("\n");
+  const parsed = parseAdvisorReply(reply);
+  assert.equal(parsed.actionsProposal.length, 25);
+  assert.doesNotMatch(parsed.text, /Order \d|\x60\x60\x60actions/);
+  const reviewed = actionProposalsFromReply(parsed.actionsProposal, "advisor-reply-regression-20261105");
+  assert.equal(reviewed.proposals.length, 0, "no partial batch slips past the existing global ceiling");
+  assert.match(reviewed.problems[0], /exceeds the review limit/);
+});
+
+test("malformed and unfinished secondary Action fences stay hidden and cannot become proposals", () => {
+  const parsed = parseAdvisorReply([
+    "Review only the valid orders.",
+    fence("actions", '[{"title":"Valid","text":"Review first."}]'),
+    fence("actions", "{ definitely not json"),
+    "\x60\x60\x60actions\n[{\x22title\x22:\x22Unfinished",
+  ].join("\n"));
+  assert.deepEqual(parsed.actionsProposal?.map((op) => op.title), ["Valid"]);
+  assert.doesNotMatch(parsed.text, /definitely not json|Unfinished|\x60\x60\x60actions/);
+  assert.equal(parsed.actionBlockProblems.length, 2);
+  assert.match(parsed.actionBlockProblems[0], /invalid JSON/);
+  assert.match(parsed.actionBlockProblems[1], /cut off/);
 });
 
 test("a block that is not valid JSON, or not a list, is reported whole", () => {
