@@ -27,6 +27,7 @@ import { assessPoliticalLandscape, ensureCountryAssessed, ensureIntelligenceRate
 import { wantsRating } from "../AI/militaryRating.js";
 import { militaryLookup } from "../../runtime/militaryStats.js";
 import PoliticalOverview from "./PoliticalOverview.jsx";
+import { filterAndSortCountryRelations } from "./countryDiplomacyView.js";
 import { buildRanking, openingMetric, rankingMetricsFor } from "./countryRanking.js";
 import { MANPOWER_PERCENT, militaryProfile } from "../../runtime/militaryPower.js";
 import { RESOURCES_SHORT_FROM } from "../../runtime/warResources.js";
@@ -225,18 +226,20 @@ const clamp01 = (value) => Math.max(0, Math.min(100, Math.round(Number(value) ||
 const INDEX_ROWS = DEFAULT_STAT_INDEX_ROWS;
 
 const sectionTitleStyle = {
-    color: "rgba(255,255,255,0.45)",
-    fontSize: "0.68rem",
-    fontWeight: 700,
-    letterSpacing: "0.08em",
-    margin: "1.1rem 0 0.6rem",
+    color: "#adcadc",
+    fontSize: "0.67rem",
+    fontWeight: 850,
+    letterSpacing: "0.09em",
+    margin: "1.3rem 0 0.6rem",
+    borderBottom: "1px solid rgba(146,186,210,0.15)",
+    paddingBottom: "0.48rem",
     textTransform: "uppercase",
 };
 
 const cardStyle = {
-    backgroundColor: "rgba(255,255,255,0.05)",
-    border: "1px solid rgba(255,255,255,0.08)",
-    borderRadius: "10px",
+    backgroundColor: "rgba(18,32,47,0.44)",
+    border: "1px solid rgba(151,190,214,0.11)",
+    borderRadius: "8px",
     padding: "0.6rem 0.7rem",
 };
 
@@ -327,7 +330,7 @@ const customMetricUnitLabel = (stat) => {
 };
 
 const EconomyCard = ({ label, value, sub, tone }) => (
-    <div style={cardStyle}>
+    <div className="oh-country-economic-datum" style={{ ...cardStyle, background: "none", border: 0, borderBottom: "1px solid rgba(156,188,211,0.13)", borderRadius: 0, padding: "0.64rem 0.48rem" }}>
     <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.62rem", fontWeight: 700, letterSpacing: "0.06em", marginBottom: "0.3rem", textTransform: "uppercase" }}>
     {label}
     </div>
@@ -342,7 +345,7 @@ const IndexMetricCard = ({ icon = "", label, value, color = "#a1a1aa" }) => {
     const numeric = value === null || value === undefined || value === "" ? NaN : Number(value);
     const bounded = clamp01(numeric);
     return (
-        <div style={{ ...cardStyle, minWidth: 0, padding: "0.65rem 0.7rem" }}>
+        <div className="oh-country-index-datum" style={{ ...cardStyle, background: "none", border: 0, borderBottom: "1px solid rgba(156,188,211,0.13)", borderRadius: 0, minWidth: 0, padding: "0.6rem 0.48rem" }}>
             <div style={{ color: "rgba(255,255,255,0.72)", fontSize: "0.7rem", minHeight: "1.9em", overflowWrap: "anywhere" }}>
                 {icon} {label}
             </div>
@@ -362,7 +365,7 @@ const CustomStatCard = ({ stat, value }) => {
         return <IndexMetricCard icon={stat.icon} label={stat.label} value={value} color={stat.color || "#a1a1aa"} />;
     }
     return (
-        <div style={cardStyle}>
+        <div className="oh-country-economic-datum" style={{ ...cardStyle, background: "none", border: 0, borderBottom: "1px solid rgba(156,188,211,0.13)", borderRadius: 0, padding: "0.64rem 0.48rem" }}>
             <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.62rem", fontWeight: 700, letterSpacing: "0.05em", marginBottom: "0.3rem", textTransform: "uppercase" }}>
                 {stat.icon} {stat.label}
             </div>
@@ -389,7 +392,7 @@ const CustomStatsSheet = ({ definition, sheet, hiddenKeys = [] }) => {
         <>
             {sections.map((section, sectionIndex) => (
                 <React.Fragment key={section.key}>
-                    <div style={{ ...sectionTitleStyle, marginTop: sectionIndex === 0 ? "1rem" : sectionTitleStyle.marginTop }}>
+                    <div className="oh-country-stat-category" data-first={sectionIndex === 0 ? "true" : undefined} style={{ ...sectionTitleStyle, margin: undefined }}>
                         {section.icon || "◆"} {section.label}
                     </div>
                     <div style={{ display: "grid", gap: "0.55rem", gridTemplateColumns: "repeat(auto-fit, minmax(min(12rem, 100%), 1fr))" }}>
@@ -612,19 +615,52 @@ const RelationMeter = ({ score, tone }) => {
     const value = Math.max(-100, Math.min(100, Number(score) || 0));
     const width = `${Math.abs(value) / 2}%`;
     return (
-        <div style={{ backgroundColor: "rgba(255,255,255,0.08)", borderRadius: "999px", height: "5px", marginTop: "0.38rem", overflow: "hidden", position: "relative" }}>
+        <div aria-hidden="true" className="oh-country-relation-meter" style={{ backgroundColor: "rgba(255,255,255,0.1)", borderRadius: "999px", height: "3px", marginTop: "0.15rem", overflow: "hidden", position: "relative" }}>
         <div style={{ backgroundColor: "rgba(255,255,255,0.22)", height: "100%", left: "50%", position: "absolute", top: 0, width: "1px" }} />
         <div style={{ backgroundColor: tone, borderRadius: "999px", height: "100%", left: value >= 0 ? "50%" : `calc(50% - ${width})`, position: "absolute", top: 0, width }} />
         </div>
     );
 };
 
+// Keep the default roster deliberately compact. The original narrative is
+// still available by expanding the specific relationship, with no new AI lookup.
+const DiplomaticRelationRow = ({ relation, expanded, onToggle, onPick }) => {
+    const hasScore = relation.score !== null && relation.score !== undefined && relation.score !== "" && Number.isFinite(Number(relation.score));
+    const tone = hasScore ? relationTone(relation.score) : "#94a3b8";
+    return (
+        <div data-country-record className="oh-country-relation-row">
+            <button
+                type="button"
+                className="oh-tap-row"
+                onClick={onToggle}
+                aria-expanded={expanded}
+                aria-label={`Details for ${relation.counterpartName}`}
+                style={{ alignItems: "center", background: expanded ? "rgba(255,255,255,0.035)" : "none", border: 0, color: "inherit", cursor: "pointer", display: "flex", gap: "0.45rem", minHeight: "2.35rem", padding: "0.42rem 0.65rem", textAlign: "left", width: "100%" }}
+            >
+                <span title={relation.counterpartName} style={{ color: "rgba(255,255,255,0.9)", flex: 1, fontSize: "0.73rem", fontWeight: 750, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{relation.counterpartName}</span>
+                <span className="oh-country-relation-signal">
+                    <span data-no-translate style={{ color: tone, fontSize: "0.81rem", fontVariantNumeric: "tabular-nums", fontWeight: 850 }}>{hasScore ? formatRelationScore(relation.score) : "—"}</span>
+                    {hasScore && <RelationMeter score={relation.score} tone={tone} />}
+                </span>
+                <span style={{ ...statusBadgeStyle(tone), justifyContent: "center", minWidth: "3.9rem" }}>{hasScore ? prettyToken(relation.displayStatus) : "Unrated"}</span>
+                <span aria-hidden="true" style={{ color: "rgba(255,255,255,0.45)", flexShrink: 0, fontSize: "0.8rem", transform: expanded ? "rotate(180deg)" : "none" }}>⌄</span>
+            </button>
+            {expanded && (
+                <div className="oh-country-relation-detail" style={{ background: "rgba(0,0,0,0.14)", padding: "0.55rem 0.7rem 0.65rem" }}>
+                    <div style={{ color: "rgba(255,255,255,0.6)", fontSize: "0.66rem", lineHeight: 1.5, overflowWrap: "anywhere" }}>{relation.summary || "Tracked bilateral relationship."}</div>
+                    {onPick && relation.counterpart && (
+                        <button type="button" className="oh-tap-row" onClick={() => onPick(relation.counterpart)} style={{ background: "none", border: 0, color: "#93c5fd", cursor: "pointer", fontSize: "0.68rem", fontWeight: 750, marginTop: "0.5rem", padding: 0, textAlign: "left" }}>Inspect country ›</button>
+                    )}
+                </div>
+            )}
+        </div>
+    );
+};
+
 const DiplomacyMetric = ({ label, value, tone = "#e7e7e9" }) => (
-    <div style={{ ...cardStyle, minWidth: 0, padding: "0.55rem 0.6rem" }}>
-    <div style={{ color: "rgba(255,255,255,0.4)", fontSize: "0.55rem", fontWeight: 800, letterSpacing: "0.05em", textTransform: "uppercase" }}>
-    {label}
-    </div>
-    <div data-no-translate style={{ color: tone, fontSize: "1rem", fontWeight: 900, marginTop: "0.2rem" }}>{value}</div>
+    <div className="oh-country-diplomacy-metric">
+        <div style={{ color: "#a2b6c6", fontSize: "0.59rem", fontWeight: 750, letterSpacing: "0.055em", lineHeight: 1.4, minHeight: "2em", textTransform: "uppercase" }}>{label}</div>
+        <div data-no-translate style={{ color: tone, fontSize: "1.45rem", fontWeight: 850, lineHeight: 1.18, marginTop: "0.28rem" }}>{value}</div>
     </div>
 );
 
@@ -701,7 +737,10 @@ const GroupsOnTerritory = ({ world, targetCountry, isPlayer, mapRef }) => {
 // built once per world. Resolving every relation, party and war side through
 // resolvePolityIdentity alone rebuilt that index for each name, hundreds of times
 // on every world update.
-const DiplomacySection = ({ world, identity, targetCountry, viewerPolity }) => {
+const DiplomacySection = ({ world, identity, targetCountry, viewerPolity, onPick }) => {
+    const [relationSearch, setRelationSearch] = useState("");
+    const [relationSort, setRelationSort] = useState("strongest");
+    const [expandedRelation, setExpandedRelation] = useState("");
     const diplomacy = useMemo(() => {
         if (!world || !identity || !targetCountry) return null;
         const { canonicalKey, displayName } = identity;
@@ -710,7 +749,7 @@ const DiplomacySection = ({ world, identity, targetCountry, viewerPolity }) => {
         if (!targetKey) return null;
 
         const relations = asArray(world.relations)
-            .map((relation) => {
+            .map((relation, relationIndex) => {
                 const a = canonicalKey(relation?.a);
                 const b = canonicalKey(relation?.b);
                 const aKey = lowerText(a);
@@ -719,6 +758,8 @@ const DiplomacySection = ({ world, identity, targetCountry, viewerPolity }) => {
                 const counterpart = aKey === targetKey ? b : a;
                 return {
                     ...relation,
+                    // Stable across view sorting/searching, even for older records without IDs.
+                    rosterKey: relation?.id ? `id:${relation.id}` : `entry:${relationIndex}`,
                     counterpart,
                     counterpartName: displayName(counterpart),
                     displayStatus: relationStatusForScore(relation?.score),
@@ -798,21 +839,24 @@ const DiplomacySection = ({ world, identity, targetCountry, viewerPolity }) => {
             activeAgreements: agreements.filter((agreement) => lowerText(agreement.status) === "active").length,
         };
     }, [world, identity, targetCountry, viewerPolity]);
+    const visibleRelations = useMemo(
+        () => filterAndSortCountryRelations(diplomacy?.relations, { search: relationSearch, sort: relationSort }),
+        [diplomacy?.relations, relationSearch, relationSort],
+    );
 
     if (!diplomacy) return null;
 
     return (
         <>
-        <div style={sectionTitleStyle}>🤝 Diplomacy</div>
-        <div style={{ display: "grid", gap: "0.45rem", gridTemplateColumns: "repeat(3, minmax(0, 1fr))" }}>
-        <DiplomacyMetric label="Relations" value={diplomacy.relations.length} tone="#60a5fa" />
-        <DiplomacyMetric label="Active agreements" value={diplomacy.activeAgreements} tone="#34d399" />
-        <DiplomacyMetric label="Conflicts" value={diplomacy.currentWars.length} tone={diplomacy.currentWars.length ? "#f87171" : "#94a3b8"} />
+        <div className="oh-country-diplomacy-summary">
+            <DiplomacyMetric label="Relations" value={diplomacy.relations.length} tone="#91d4f4" />
+            <DiplomacyMetric label="Active agreements" value={diplomacy.activeAgreements} tone="#6dd7b5" />
+            <DiplomacyMetric label="Conflicts" value={diplomacy.currentWars.length} tone={diplomacy.currentWars.length ? "#ff8c82" : "#9aabb8"} />
         </div>
 
         {diplomacy.subordination && (
-            <div style={{ ...cardStyle, marginTop: "0.55rem", padding: "0.65rem" }}>
-            <div style={{ color: "rgba(255,255,255,0.48)", fontSize: "0.56rem", fontWeight: 850, letterSpacing: "0.05em", textTransform: "uppercase" }}>Subordination</div>
+            <section className="oh-country-ledger-section" style={{ borderLeft: "3px solid #d6b878", padding: "0.15rem 0.65rem 0.45rem" }}>
+            <div className="oh-country-ledger-header">Subordination</div>
             <div style={{ color: "rgba(255,255,255,0.9)", fontSize: "0.78rem", fontWeight: 850, marginTop: "0.28rem" }}>{diplomacy.subordination.headline}</div>
             <div style={{ color: "rgba(255,255,255,0.58)", fontSize: "0.66rem", lineHeight: 1.45, marginTop: "0.22rem" }}>{diplomacy.subordination.meaning}</div>
             {diplomacy.subordination.facts.length > 0 && (
@@ -825,12 +869,12 @@ const DiplomacySection = ({ world, identity, targetCountry, viewerPolity }) => {
             {diplomacy.subordination.provenance && (
                 <div style={{ color: "rgba(255,255,255,0.36)", fontSize: "0.58rem", fontStyle: "italic", lineHeight: 1.4, marginTop: "0.4rem" }}>{diplomacy.subordination.provenance}</div>
             )}
-            </div>
+            </section>
         )}
 
         {diplomacy.subordinates.length > 0 && (
-            <div style={{ ...cardStyle, marginTop: "0.55rem", padding: 0, overflow: "hidden" }}>
-            <div style={{ color: "rgba(255,255,255,0.7)", fontSize: "0.72rem", fontWeight: 800, padding: "0.55rem 0.65rem" }}>Subordinate states</div>
+            <section className="oh-country-ledger-section">
+            <div className="oh-country-ledger-header">Subordinate states</div>
             {diplomacy.subordinates.map((row) => {
                 const facts = [
                     row.loyaltyBand,
@@ -839,10 +883,20 @@ const DiplomacySection = ({ world, identity, targetCountry, viewerPolity }) => {
                     row.fromIntelligence ? "From intelligence" : "",
                 ].filter(Boolean);
                 return (
-                    <div key={row.id || `${row.overlord}-${row.puppetKey}`} style={{ borderTop: "1px solid rgba(255,255,255,0.07)", padding: "0.55rem 0.65rem" }}>
+                    <div data-country-record key={row.id || `${row.overlord}-${row.puppetKey}`} style={{ borderBottom: "1px solid rgba(156,188,211,0.1)", padding: "0.56rem 0.25rem" }}>
                     <div style={{ alignItems: "flex-start", display: "flex", gap: "0.55rem", justifyContent: "space-between" }}>
                     <div style={{ minWidth: 0 }}>
-                    <div style={{ color: "rgba(255,255,255,0.86)", fontSize: "0.72rem", fontWeight: 750, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.puppetName}</div>
+                    {onPick && row.puppetKey ? (
+                        <button
+                            type="button"
+                            className="oh-tap-row"
+                            onClick={() => onPick(row.puppetKey)}
+                            aria-label={`Inspect ${row.puppetName}`}
+                            style={{ background: "none", border: 0, color: "#c7dcff", cursor: "pointer", display: "block", fontSize: "0.72rem", fontWeight: 750, maxWidth: "100%", overflow: "hidden", padding: 0, textAlign: "left", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                        >{row.puppetName} ›</button>
+                    ) : (
+                        <div style={{ color: "rgba(255,255,255,0.86)", fontSize: "0.72rem", fontWeight: 750, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.puppetName}</div>
+                    )}
                     {facts.length > 0 && (
                         <div style={{ color: "rgba(255,255,255,0.38)", fontSize: "0.6rem", lineHeight: 1.4, marginTop: "0.14rem" }}>{facts.join(" · ")}</div>
                     )}
@@ -852,51 +906,66 @@ const DiplomacySection = ({ world, identity, targetCountry, viewerPolity }) => {
                     </div>
                 );
             })}
-            </div>
+            </section>
         )}
 
-        <div style={{ ...cardStyle, marginTop: "0.55rem", padding: 0, overflow: "hidden" }}>
-        <div style={{ alignItems: "center", display: "flex", justifyContent: "space-between", padding: "0.55rem 0.65rem" }}>
-        <span style={{ color: "rgba(255,255,255,0.7)", fontSize: "0.72rem", fontWeight: 800 }}>Bilateral relations</span>
-        <span style={{ color: "rgba(255,255,255,0.32)", fontSize: "0.6rem" }}>−100 to +100</span>
+        <section className="oh-country-ledger-section">
+        <div className="oh-country-ledger-header">
+            <span>Bilateral relations</span>
+            <span style={{ color: "#8196a8", fontSize: "0.6rem", fontWeight: 600 }}>{`−100 to +100 · ${diplomacy.relations.length} recorded`}</span>
         </div>
-        {diplomacy.relations.length ? diplomacy.relations.map((relation, index) => {
-            const tone = relationTone(relation.score);
+        {diplomacy.relations.length > 0 && (
+            <div className="oh-country-relation-tools" style={{ alignItems: "center", display: "flex", gap: "0.4rem" }}>
+                <input
+                    type="search"
+                    aria-label="Search bilateral relations"
+                    placeholder="Find country or relation…"
+                    value={relationSearch}
+                    onChange={(event) => setRelationSearch(event.target.value)}
+                    style={{ background: "rgba(0,0,0,0.2)", border: "1px solid rgba(255,255,255,0.13)", borderRadius: "7px", color: "#f4f4f5", flex: 1, fontSize: "0.68rem", minHeight: "2rem", minWidth: 0, padding: "0.35rem 0.55rem" }}
+                />
+                <select
+                    aria-label="Sort bilateral relations"
+                    value={relationSort}
+                    onChange={(event) => setRelationSort(event.target.value)}
+                    style={{ background: "#242429", border: "1px solid rgba(255,255,255,0.13)", borderRadius: "7px", color: "#e4e4e7", cursor: "pointer", flexShrink: 0, fontSize: "0.66rem", minHeight: "2rem", maxWidth: "8.2rem", padding: "0.3rem" }}
+                >
+                    <option value="strongest">Strongest first</option>
+                    <option value="weakest">Weakest first</option>
+                    <option value="alphabetical">Name A–Z</option>
+                </select>
+            </div>
+        )}
+        {visibleRelations.map((relation, index) => {
+            const rowKey = relation.rosterKey || `${relation.counterpart}-${index}`;
             return (
-                <div key={relation.id || `${relation.counterpart}-${index}`} style={{ borderTop: "1px solid rgba(255,255,255,0.07)", padding: "0.55rem 0.65rem" }}>
-                <div style={{ alignItems: "flex-start", display: "flex", gap: "0.6rem", justifyContent: "space-between" }}>
-                <div style={{ minWidth: 0 }}>
-                <div style={{ color: "rgba(255,255,255,0.88)", fontSize: "0.74rem", fontWeight: 750, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                {relation.counterpartName}
-                </div>
-                <div style={{ color: "rgba(255,255,255,0.38)", fontSize: "0.62rem", marginTop: "0.12rem" }}>
-                {relation.summary || "Tracked bilateral relationship."}
-                </div>
-                </div>
-                <div style={{ alignItems: "flex-end", display: "flex", flexDirection: "column", flexShrink: 0, gap: "0.2rem" }}>
-                <span data-no-translate style={{ color: tone, fontSize: "0.9rem", fontWeight: 900 }}>{formatRelationScore(relation.score)}</span>
-                <span style={statusBadgeStyle(tone)}>{prettyToken(relation.displayStatus)}</span>
-                </div>
-                </div>
-                <RelationMeter score={relation.score} tone={tone} />
-                </div>
+                <DiplomaticRelationRow
+                    key={rowKey}
+                    relation={relation}
+                    expanded={expandedRelation === rowKey}
+                    onToggle={() => setExpandedRelation((current) => current === rowKey ? "" : rowKey)}
+                    onPick={onPick}
+                />
             );
-        }) : (
-            <div style={{ borderTop: "1px solid rgba(255,255,255,0.07)", color: "rgba(255,255,255,0.4)", fontSize: "0.68rem", padding: "0.65rem" }}>
-            No tracked bilateral relations. An absent record is not the same as explicit neutrality.
+        })}
+        {!diplomacy.relations.length ? (
+            <div style={{ borderTop: "1px solid rgba(255,255,255,0.07)", color: "rgba(255,255,255,0.45)", fontSize: "0.68rem", padding: "0.65rem" }}>
+                No tracked bilateral relations. An absent record is not the same as explicit neutrality.
+            </div>
+        ) : visibleRelations.length === 0 && (
+            <div style={{ borderTop: "1px solid rgba(255,255,255,0.07)", color: "rgba(255,255,255,0.48)", fontSize: "0.68rem", padding: "0.65rem" }}>
+                {`No relationships match the search. ${diplomacy.relations.length} records are still available.`}
             </div>
         )}
-        </div>
+        </section>
 
-        <div style={{ ...cardStyle, marginTop: "0.55rem", padding: 0, overflow: "hidden" }}>
-        <div style={{ color: "rgba(255,255,255,0.7)", fontSize: "0.72rem", fontWeight: 800, padding: "0.55rem 0.65rem" }}>
-        Formal agreements
-        </div>
+        <section className="oh-country-ledger-section">
+        <div className="oh-country-ledger-header">Formal agreements</div>
         {diplomacy.agreements.length ? diplomacy.agreements.map((agreement, index) => {
             const tone = agreementStatusTone(agreement.status);
             const counterpartText = agreement.counterparts.length ? agreement.counterparts.join(" · ") : "Multilateral agreement";
             return (
-                <div key={agreement.id || `${agreement.title}-${index}`} style={{ borderTop: "1px solid rgba(255,255,255,0.07)", padding: "0.55rem 0.65rem" }}>
+                <div data-country-record className="oh-country-agreement" key={agreement.id || `${agreement.title}-${index}`} style={{ padding: "0.62rem 0.15rem" }}>
                 <div style={{ alignItems: "flex-start", display: "flex", gap: "0.55rem", justifyContent: "space-between" }}>
                 <div style={{ minWidth: 0 }}>
                 <div style={{ color: "rgba(255,255,255,0.86)", fontSize: "0.72rem", fontWeight: 750 }}>{agreement.title || "Untitled agreement"}</div>
@@ -914,23 +983,21 @@ const DiplomacySection = ({ world, identity, targetCountry, viewerPolity }) => {
                 </div>
             );
         }) : (
-            <div style={{ borderTop: "1px solid rgba(255,255,255,0.07)", color: "rgba(255,255,255,0.4)", fontSize: "0.68rem", padding: "0.65rem" }}>
+            <div style={{ color: "rgba(255,255,255,0.4)", fontSize: "0.68rem", padding: "0.7rem 0.15rem" }}>
             No canonical formal agreements involving this polity.
             </div>
         )}
-        </div>
+        </section>
 
-        <div style={{ ...cardStyle, marginTop: "0.55rem", padding: 0, overflow: "hidden" }}>
-        <div style={{ color: "rgba(255,255,255,0.7)", fontSize: "0.72rem", fontWeight: 800, padding: "0.55rem 0.65rem" }}>
-        Current conflicts
-        </div>
+        <section className="oh-country-ledger-section">
+        <div className="oh-country-ledger-header">Current conflicts</div>
         {diplomacy.currentWars.length ? diplomacy.currentWars.map((war, index) => {
             const tone = warStatusTone(war.status);
             // The date as a date, under the name the line has always used, so
             // it stays the catalogued sentence.
             const startedDate = war.startedLabel;
             return (
-                <div key={war.id || `${war.title}-${index}`} style={{ borderTop: "1px solid rgba(255,255,255,0.07)", padding: "0.55rem 0.65rem" }}>
+                <div data-country-record key={war.id || `${war.title}-${index}`} style={{ borderBottom: "1px solid rgba(156,188,211,0.13)", padding: "0.7rem 0.2rem" }}>
                 <div style={{ alignItems: "flex-start", display: "flex", gap: "0.55rem", justifyContent: "space-between" }}>
                 <div style={{ minWidth: 0 }}>
                 <div style={{ color: "rgba(255,255,255,0.86)", fontSize: "0.72rem", fontWeight: 750 }}>
@@ -969,11 +1036,11 @@ const DiplomacySection = ({ world, identity, targetCountry, viewerPolity }) => {
                 </div>
             );
         }) : (
-            <div style={{ borderTop: "1px solid rgba(255,255,255,0.07)", color: "rgba(255,255,255,0.4)", fontSize: "0.68rem", padding: "0.65rem" }}>
+            <div style={{ color: "rgba(255,255,255,0.4)", fontSize: "0.68rem", padding: "0.7rem 0.15rem" }}>
             No active or ceasefire canonical conflicts involving this polity.
             </div>
         )}
-        </div>
+        </section>
         {/* The reports of the wars it fought on battlefields that have closed, to read again (afterAction.jsx). */}
         <WarReportsList world={world} country={viewerPolity} style={{ ...cardStyle, marginTop: "0.55rem", padding: 0, overflow: "hidden" }} />
         <ReparationsNote world={world} target={targetCountry} />
@@ -1016,18 +1083,19 @@ const usePartiesCompile = (targetCountry) => {
 // `touch`: a thumb-sized tab. The inline minHeight would beat the tap class.
 const statsSubtabStyle = (selected, touch = false) => ({
     alignItems: "center",
-    backgroundColor: selected ? "rgba(0,0,0,0.42)" : "rgba(255,255,255,0.03)",
-    border: `1px solid ${selected ? "rgba(255,255,255,0.28)" : "rgba(255,255,255,0.09)"}`,
-    borderRadius: "8px",
-    color: selected ? "#f4f4f5" : "rgba(255,255,255,0.58)",
+    backgroundColor: "transparent",
+    border: 0,
+    borderBottom: selected ? "2px solid #86c9e7" : "2px solid transparent",
+    borderRadius: 0,
+    color: selected ? "#eaf7fd" : "rgba(194,211,224,0.58)",
     cursor: "pointer",
     display: "flex",
     flex: 1,
-    fontSize: "0.72rem",
-    fontWeight: 800,
+    fontSize: "0.68rem",
+    fontWeight: selected ? 850 : 680,
     justifyContent: "center",
-    minHeight: touch ? "2.75rem" : "2.45rem",
-    padding: "0.45rem 0.55rem",
+    minHeight: touch ? "3rem" : "2.8rem",
+    padding: "0.55rem 0.3rem",
     transition: "background-color 0.15s, border-color 0.15s, color 0.15s",
 });
 
@@ -1834,33 +1902,6 @@ const formatRankingValue = (metric, value) => {
     return formatCompactNumber(value);
 };
 
-const rankingMetricStyle = (selected, touch) => ({
-    backgroundColor: selected ? "rgba(43,193,243,0.16)" : "rgba(255,255,255,0.04)",
-    border: `1px solid ${selected ? "rgba(43,193,243,0.6)" : "rgba(255,255,255,0.1)"}`,
-    borderRadius: "999px",
-    color: selected ? "#e8f8fe" : "rgba(255,255,255,0.62)",
-    cursor: "pointer",
-    fontSize: "0.7rem",
-    fontWeight: 700,
-    minHeight: touch ? "2.4rem" : undefined,
-    padding: "0.3rem 0.65rem",
-});
-
-const rankingRowStyle = (open, mine) => ({
-    alignItems: "center",
-    backgroundColor: open ? "rgba(255,255,255,0.1)" : "rgba(255,255,255,0.04)",
-    border: `1px solid ${mine ? "rgba(43,193,243,0.6)" : open ? "rgba(255,255,255,0.28)" : "rgba(255,255,255,0.08)"}`,
-    borderRadius: "8px",
-    color: "#f4f4f5",
-    cursor: "pointer",
-    display: "grid",
-    gap: "0.15rem 0.5rem",
-    gridTemplateColumns: "1.7rem 1.5rem minmax(0, 1fr) auto",
-    padding: "0.4rem 0.55rem",
-    textAlign: "left",
-    width: "100%",
-});
-
 const RankingSection = ({ world, definition, index, playerCode, targetCountry, onPick, flags, touch }) => {
     const [metricKey, setMetricKey] = useState("");
     const [showAll, setShowAll] = useState(false);
@@ -1902,23 +1943,42 @@ const RankingSection = ({ world, definition, index, playerCode, targetCountry, o
     }, [unratedKey]);
     if (!metric || !ranking) return null;
     const shown = showAll ? ranking.rows : ranking.rows.slice(0, RANKING_ROWS_FIRST);
+    const selectedRank = ranking.rows.find((row) => row.key === targetCountry);
     return (
-        <div>
-            <div style={sectionTitleStyle}>Ranked by</div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem" }}>
-                {metrics.map((entry) => (
-                    <button
-                        key={entry.key}
-                        type="button"
-                        aria-pressed={entry.key === metric.key}
-                        onClick={() => { setMetricKey(entry.key); setShowAll(false); }}
-                        style={rankingMetricStyle(entry.key === metric.key, touch)}
-                    >{entry.label}</button>
-                ))}
+        <div className="oh-country-ranking-dossier">
+            <div className="oh-country-ranking-picker">
+                <label className="oh-country-ranking-label" htmlFor="oh-country-ranking-metric">Ranked by</label>
+                <select
+                    id="oh-country-ranking-metric"
+                    className="oh-country-ranking-select"
+                    aria-label="Ranked by"
+                    value={metric.key}
+                    onChange={(event) => { setMetricKey(event.target.value); setShowAll(false); }}
+                    style={{ minHeight: touch ? "3rem" : "2.65rem" }}
+                >
+                    {metrics.map((entry) => (
+                        <option key={entry.key} value={entry.key}>{entry.label}</option>
+                    ))}
+                </select>
             </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: "0.3rem", marginTop: "0.75rem" }}>
+
+            <div className="oh-country-ranking-context">
+                <div className="oh-country-ranking-summary-item">
+                    <div data-no-translate className="oh-country-ranking-summary-value">{selectedRank ? `#${selectedRank.rank}` : "—"}</div>
+                    <div className="oh-country-ranking-summary-label">Selected country</div>
+                </div>
+                <div className="oh-country-ranking-summary-item">
+                    <div data-no-translate className="oh-country-ranking-summary-value">{ranking.rows.length}<span className="oh-country-ranking-total"> / {ranking.total}</span></div>
+                    <div className="oh-country-ranking-summary-label">Countries ranked</div>
+                </div>
+            </div>
+
+            <div className="oh-country-ranking-column-head" aria-hidden="true">
+                <span>Rank</span><span>Country</span><span>Value</span>
+            </div>
+            <div className="oh-country-ranking-list">
                 {shown.map((row) => {
-                    // (As every other flag in the game is found: by the country's identity, its name or its code.)
+                    // Resolve the same canonical flag as every other country view.
                     const flagUrl = resolvePolityFlag({ polity: { name: row.label, code: row.key }, world: world || {}, flags: flags || {}, identityIndex: flagIdentityIndex }).imageUrl;
                     const mine = Boolean(playerCode) && row.key === playerCode;
                     const open = row.key === targetCountry;
@@ -1926,21 +1986,20 @@ const RankingSection = ({ world, definition, index, playerCode, targetCountry, o
                         <button
                             key={row.key}
                             type="button"
-                            className="oh-tap-row"
+                            className="oh-country-ranking-row oh-tap-row"
+                            data-rank-tier={row.rank <= 3 ? "top" : undefined}
+                            data-rank={row.rank}
+                            data-mine={mine ? "true" : undefined}
                             aria-current={open ? "true" : undefined}
                             title={mine ? "Your country" : undefined}
                             onClick={() => onPick(row.key)}
-                            style={rankingRowStyle(open, mine)}
                         >
-                            <span data-no-translate style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.72rem", fontVariantNumeric: "tabular-nums", fontWeight: 800 }}>{row.rank}</span>
-                            <span style={{ backgroundColor: "rgba(255,255,255,0.08)", borderRadius: "3px", display: "block", height: "1rem", overflow: "hidden", width: "1.5rem" }}>
+                            <span data-no-translate className="oh-country-ranking-rank">{String(row.rank).padStart(2, "0")}</span>
+                            <span className="oh-country-ranking-flag">
                                 {flagUrl ? <img alt="" src={bundledFlagUrl(flagUrl)} style={{ display: "block", height: "100%", objectFit: "contain", width: "100%" }} /> : null}
                             </span>
-                            <span data-no-translate style={{ fontSize: "0.78rem", fontWeight: mine ? 800 : 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.label}</span>
-                            <span data-no-translate style={{ fontSize: "0.78rem", fontVariantNumeric: "tabular-nums", fontWeight: 800 }}>{formatRankingValue(metric, row.value)}</span>
-                            <span style={{ backgroundColor: "rgba(255,255,255,0.08)", borderRadius: "999px", gridColumn: "1 / -1", height: "3px", overflow: "hidden" }}>
-                                <span style={{ backgroundColor: "#2bc1f3", display: "block", height: "100%", width: `${ranking.most > 0 ? Math.max(2, Math.round((Math.abs(row.value) / ranking.most) * 100)) : 0}%` }} />
-                            </span>
+                            <span data-no-translate className="oh-country-ranking-name">{row.label}</span>
+                            <span data-no-translate className="oh-country-ranking-value">{formatRankingValue(metric, row.value)}</span>
                         </button>
                     );
                 })}
@@ -2731,7 +2790,7 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
 
     return (
         <div style={{ display: "flex", flex: 1, flexDirection: "column", minHeight: 0 }}>
-        <div style={{ flex: 1, overflowY: "auto", padding: "0.9rem 1rem 1.25rem", scrollbarWidth: "none" }}>
+        <div className="oh-country-dossier-scroll" style={{ flex: 1, overflowY: "auto", padding: "0 1rem 1.25rem", scrollbarWidth: "thin" }}>
 
         {!targetCountry && (
             <p style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.85rem" }}>
@@ -2741,9 +2800,9 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
 
         {targetCountry && (
             <>
-            {/* Country header */}
-            <div style={{ alignItems: "flex-start", display: "flex", gap: "0.7rem" }}>
-            <div style={{ alignItems: "center", backgroundColor: "rgba(59,130,246,0.16)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: "10px", color: "#93c5fd", display: "flex", flexShrink: 0, fontSize: "0.95rem", fontWeight: 800, height: "2.5rem", justifyContent: "center", overflow: "hidden", width: "3.35rem" }}>
+            {/* Country identity: an anchored dossier header rather than another information card. */}
+            <div className="oh-country-hero" style={{ alignItems: "flex-start", display: "flex", gap: "0.86rem" }}>
+            <div className="oh-country-hero-flag" style={{ alignItems: "center", backgroundColor: "rgba(59,130,246,0.16)", border: "1px solid rgba(214,235,247,0.2)", borderRadius: "5px", color: "#93c5fd", display: "flex", flexShrink: 0, fontSize: "1rem", fontWeight: 800, height: "3.1rem", justifyContent: "center", overflow: "hidden", width: "4.65rem" }}>
             {flagUrl && !flagFailed ? (
                 <img
                 alt=""
@@ -2755,7 +2814,7 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
             </div>
             <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.35rem 0.5rem" }}>
-            <span style={{ flex: "1 1 9rem", fontSize: "1.02rem", fontWeight: 800, lineHeight: 1.15, minWidth: 0, overflowWrap: "anywhere" }}>
+            <span className="oh-country-hero-title" style={{ flex: "1 1 10rem", fontSize: "1.3rem", fontWeight: 850, lineHeight: 1.16, minWidth: 0, overflowWrap: "anywhere" }}>
             {polity?.name || displayName || targetCountry}
             </span>
             {isPlayer && (
@@ -2870,7 +2929,7 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
                 </div>
             )}
 
-            <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.9rem" }}>
+            <div className="oh-country-dossier-tabs" role="navigation" aria-label="Country" style={{ display: "flex", gap: 0, marginTop: 0 }}>
             <button
             type="button"
             aria-pressed={statsView === "politics"}
@@ -2897,6 +2956,7 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
             >🏆 Ranking</button>
             </div>
 
+            <div className="oh-country-content" data-view={statsView}>
             {statsView === "politics" && (
                 <PoliticalOverview
                     profile={publicPoliticalProfile}
@@ -2937,7 +2997,7 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
             )}
 
             {statsView === "diplomacy" && worldSnapshot && (
-                <DiplomacySection world={worldSnapshot} identity={polityIndex} targetCountry={targetCountry} viewerPolity={player.code} />
+                <DiplomacySection key={targetCountry} world={worldSnapshot} identity={polityIndex} targetCountry={targetCountry} viewerPolity={player.code} onPick={setTargetCountry} />
             )}
 
             {statsView === "ranking" && (
@@ -2988,7 +3048,7 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
                 {intelligence !== null && <IntelligenceServiceCard value={intelligence} style={{ marginTop: "0.6rem" }} />}
 
                 {/* Strategic indices */}
-                <div style={sectionTitleStyle}>⚑ Strategic indices</div>
+                <div className="oh-country-stat-category" style={{ ...sectionTitleStyle, margin: undefined }}>⚑ Strategic indices</div>
                 <div style={{ display: "grid", gap: "0.55rem", gridTemplateColumns: "repeat(auto-fit, minmax(min(12rem, 100%), 1fr))" }}>
                 {indexRows.map((row) => (
                     <IndexMetricCard key={row.key} icon={row.icon} label={row.label} value={sheet.indices?.[row.key]} color={row.color} />
@@ -2996,7 +3056,7 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
                 </div>
 
                 {/* Population — whole polity plus core/integrated vs other territories. */}
-                <div style={sectionTitleStyle}>👥 Population</div>
+                <div className="oh-country-stat-category" style={{ ...sectionTitleStyle, margin: undefined }}>👥 Population</div>
                 <div style={cardStyle}>
                 <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.62rem", fontWeight: 700, letterSpacing: "0.06em", marginBottom: "0.3rem", textTransform: "uppercase" }}>
                 Total population
@@ -3012,7 +3072,7 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
                 </div>
 
                 {/* Economy */}
-                <div style={sectionTitleStyle}>📈 Economy</div>
+                <div className="oh-country-stat-category" style={{ ...sectionTitleStyle, margin: undefined }}>📈 Economy</div>
                 <div style={{ display: "grid", gap: "0.55rem", gridTemplateColumns: "1fr 1fr" }}>
                 <EconomyCard
                 label="GDP"
@@ -3069,7 +3129,7 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
                     them out for every country (MilitaryCard). */}
                 {worldSnapshot && (
                     <>
-                    <div style={sectionTitleStyle}>⚔ Military</div>
+                    <div className="oh-country-stat-category" style={{ ...sectionTitleStyle, margin: undefined }}>⚔ Military</div>
                     <MilitaryCard world={worldSnapshot} country={resolvedTargetKey || targetCountry} />
                     </>
                 )}
@@ -3121,6 +3181,7 @@ const StatsPaneBody = ({ active, mapRef, requestedTarget = "", onConsumeTarget }
             <p style={{ color: "rgba(255,255,255,0.35)", fontSize: "0.7rem", marginTop: "1rem" }}>
             Click any country on the map to inspect it, or open its card and choose Stats.
             </p>
+            </div>
             </>
         )}
         </div>
