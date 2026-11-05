@@ -11,6 +11,7 @@ test("the skip is told the build-up line with the player's own name", () => {
   const block = buildFrontsBlock({ battlefields: [], players: ["Poland"] });
   assert.match(block, /`home: Poland~Poland~reinforce~all~4`/);
   assert.doesNotMatch(block, /home: X~X/);
+  assert.match(block, /Only that line calls them up: an event or a figure alone raises nobody\./);
 });
 
 test("with several players the line keeps its placeholder", () => {

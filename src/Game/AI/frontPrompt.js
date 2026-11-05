@@ -43,8 +43,9 @@ import { foldBattlefieldName, normalizeBattlefields } from "../../runtime/fronts
 import { loadOf, normalizeTransports } from "../../runtime/fronts/transports.js";
 import { FRONT_ORDERS_FIELD } from "./nativeFrontLedger.js";
 
-// (12500, and the line that teaches a country's forces at home, so that the battlefields keep their room: runtime/fronts/home.js.)
-export const FRONTS_BLOCK_MAX = 12830;
+// (12500, the line that teaches a country's forces at home and the sentence that it alone calls them up, so that the
+// battlefields keep their room: runtime/fronts/home.js.)
+export const FRONTS_BLOCK_MAX = 12910;
 // The most that is told of transporters in it.
 export const TRANSPORTS_TEXT_MAX = 640;
 export const FRONTS_BLOCK_HEADING = "[Fronts]";
@@ -120,7 +121,7 @@ const playerRule = (players, fought, orderFunction = false) => {
     return `${who} ${one ? "is" : "are each"} played by a person: write no order for ${one ? "it" : "them"} of your own. `
       + `The battlefields below are the period as it goes if ${one ? "that person gives its" : "those people give their"} troops NO new order. `
       + `If an action of this turn does give ${one ? "its" : "their"} troops one (to attack, push for a place, dig in, hold, fall back, withdraw, to draft more troops or send reinforcements to a front, or anything of the kind), call ${FRONT_ORDER_FUNCTION} FIRST, before you write any event, with a line for each stretch of line the action speaks of (north-west troops to dig trenches and the southern ones to push for a city are two lines, \`NAME~X~dig in~northwest~~\` and \`NAME~X~advance~south~~city: Y\`; to pull out is \`NAME~X~withdraw~all~~\`; a draft of thirty formations for the south is \`NAME~X~reinforce~south~~30\`). `
-      + `Building up ${one ? "its" : "their"} forces at home, round ${one ? "its" : "their"} cities, is such an order too, given by an action of this turn or by a project of ${one ? "its" : "theirs"} under way that mobilises or raises troops: \`home: ${home}~reinforce~all~~\` (call ${FRONT_ORDER_FUNCTION} with it the same way). `
+      + `Building up ${one ? "its" : "their"} forces at home, round ${one ? "its" : "their"} cities, is such an order too, given by an action of this turn or by a project of ${one ? "its" : "theirs"} under way that mobilises or raises troops: \`home: ${home}~reinforce~all~~\` (call ${FRONT_ORDER_FUNCTION} with it the same way). Only that line calls them up: an event or a figure alone raises nobody. `
       + "The period is fought again with it and you are given the war as it then went: that is what your events tell, and the event that carries the action tells what came of the order. Do not write such an order again in frontOrders. "
       + "With no such action, call nothing. What came of a battle they are in may always be stated as a result, with the order field left empty.";
   }
@@ -130,7 +131,7 @@ const playerRule = (players, fought, orderFunction = false) => {
     + (fought
       ? "Such an order is carried out next period, so its event tells of the order being given and not of what came of it. "
       : "It is carried out from that event's date. ")
-    + `Building up ${one ? "its" : "their"} forces at home, round ${one ? "its" : "their"} cities, is such an order too, given by an action of this turn or by a project of ${one ? "its" : "theirs"} under way that mobilises or raises troops: \`home: ${home}~reinforce~all~4\`. `
+    + `Building up ${one ? "its" : "their"} forces at home, round ${one ? "its" : "their"} cities, is such an order too, given by an action of this turn or by a project of ${one ? "its" : "theirs"} under way that mobilises or raises troops: \`home: ${home}~reinforce~all~4\`. Only that line calls them up: an event or a figure alone raises nobody. `
     + "What came of a battle they are in may always be stated as a result, with the order field left empty.";
 };
 
