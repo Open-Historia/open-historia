@@ -73,6 +73,38 @@ const NEW_UPDATES = [
     ],
   },
   {
+    id: "2026-11-native-sharp-at-any-size",
+    kind: "minor",
+    date: "2026-11-04",
+    banners: [
+      {
+        title: "Sharp at any size",
+        items: [
+          "The vault door, the round flags on the war map and the dot that marks an unread chat now grow with the rest of the interface on large screens, and stay sharp.",
+        ],
+      },
+      {
+        title: "The Country drawer and the Advisor, redrawn",
+        items: [
+          "The Country drawer is laid out anew: the whole flag in its header, tabs that stay in view as you scroll, relations you can search and sort, compact index cards, a leaderboard for each ranking, and a country's parties and its power blocs shown apart.",
+          "The Advisor's conversations look new too: replies read as open text beside a narrow rail, your own messages stay compact on the right, and the contact list is a tidy ledger.",
+        ],
+      },
+      {
+        title: "Map pictures keep their edges",
+        items: [
+          "A picture you add to a scenario's maps in the Workshop now keeps the edges its setup gave it, Q-BAM's exact ones included, so it stays lined up with the coastlines in the Workshop and in the game.",
+        ],
+      },
+      {
+        title: "Strike targets by name",
+        items: [
+          "In the War Room, an air strike sent at troops names the town nearest them plainly, without \"city:\" in front of it.",
+        ],
+      },
+    ],
+  },
+  {
     // The province outline reads no feature-state on a map without region types, so a tile that loads applies the
     // regions' state to its fill alone (Map/provinceOutlineStyle.js); a playing paints and writes only what a frame
     // changes (Map/frontPaint.js unlessUnchanged, writeFrontField); MapLibre's worker drops its spare copies of the
