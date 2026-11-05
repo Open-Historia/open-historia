@@ -80,7 +80,7 @@ test("a player with several providers, profiles and per-task models keeps all of
   // migrated). Note the provider is spelled with its hyphen in these keys.
   store.set("openai-compatible_model_jumpForward", "qwen3-big");
   store.set("openai-compatible_model_actions", "qwen3-big");
-  store.set("openai-compatible_model_nextSpeaker", "qwen3");
+  store.set("openai-compatible_model_descriptionToAction", "qwen3");
   store.set("gemini_model_advisor", "gemini-3.5-flash");
 
   const connections = config.getConnections().map(({ id, ...rest }) => rest);
@@ -97,7 +97,7 @@ test("a player with several providers, profiles and per-task models keeps all of
   ]);
   assert.equal(config.getTaskPick("jumpForward"), list[1].id);
   assert.equal(config.getTaskPick("actions"), list[1].id);
-  assert.equal(config.getTaskPick("nextSpeaker"), list[0].id);
+  assert.equal(config.getTaskPick("descriptionToAction"), list[0].id);
   assert.equal(config.getTaskPick("advisor"), "");
 
   // Once only: the old settings are never read again.
@@ -357,6 +357,29 @@ test("entry states are kept apart from the settings, and survive a reload", () =
   assert.equal(config.fallbackStateStore.get(entry.id), undefined, "the reset button");
 });
 
+test("switching a Connection to another provider leaves its key behind", () => {
+  const gemini = config.addConnection({ provider: "gemini", apiKey: "AIzaSECRETSECRETSECRET1234" });
+  config.updateConnection(gemini, { provider: "openai-compatible" });
+  let connection = config.getConnections().find((candidate) => candidate.id === gemini);
+  assert.equal(connection.provider, "openai-compatible");
+  assert.equal(connection.apiKey, "", "the Gemini key is never sent to the new endpoint");
+
+  // Between the two self-hosted kinds the key still goes to the same server.
+  const local = config.addConnection({ provider: "openai-compatible", endpoint: "http://192.168.1.5:4000/v1", apiKey: "sk-local" });
+  config.updateConnection(local, { provider: "anthropic-compatible" });
+  connection = config.getConnections().find((candidate) => candidate.id === local);
+  assert.equal(connection.apiKey, "sk-local");
+  assert.equal(connection.endpoint, "http://192.168.1.5:4000/v1");
+
+  // A patch that brings its own key keeps it, and other edits touch nothing.
+  config.updateConnection(local, { provider: "openai", apiKey: "sk-openai" });
+  config.updateConnection(local, { name: "Work" });
+  connection = config.getConnections().find((candidate) => candidate.id === local);
+  assert.equal(connection.apiKey, "sk-openai");
+  config.updateConnection(local, { provider: "openai" });
+  assert.equal(config.getConnections().find((candidate) => candidate.id === local).apiKey, "sk-openai", "the same provider again is no switch");
+});
+
 test("editing an Unusable entry or its Connection clears the mark, so the fix is tried at once", () => {
   store.set("gemini_api_key", "AIzaBADKEY12345678901234");
   const [entry] = config.getFallbackList();
@@ -590,4 +613,145 @@ test("quick setup needs the provider's requirement, and a self-hosted one needs 
   assert.equal(top.id, entryId);
   assert.equal(top.endpoint, "http://localhost:11434/v1");
   assert.equal(config.isFallbackListConfigured(), true);
+});
+
+test("intelligence assessment is available for per-task model routing", () => {
+  assert.ok(config.AI_TASK_ROUTING.some((entry) => entry.key === "intelligenceAssessment"));
+});
+
+test("Political World claim repair is available for per-task model routing", () => {
+  assert.ok(config.AI_TASK_ROUTING.some((entry) => entry.key === "politicalClaimRepair"));
+});
+
+test("Political World generation and verification keep independent/inherited task routing", () => {
+  assert.ok(config.AI_TASK_ROUTING.some((entry) => entry.key === "politicalWorldGeneration"));
+  assert.ok(config.AI_TASK_ROUTING.some((entry) => entry.key === "politicalWorldVerification"));
+
+  const [top] = config.getResolvedFallbackList();
+  const politics = config.addEntry({ connectionId: top.connectionId, model: "politics-model" });
+  const verification = config.addEntry({ connectionId: top.connectionId, model: "verification-model" });
+
+  config.setTaskPick("politicalWorldGeneration", politics);
+  let plan = config.resolveTaskFallbackEntries("politicalWorldGeneration");
+  assert.equal(plan.preferredEntryId, politics);
+  assert.equal(plan.implicit, false);
+
+  plan = config.resolveTaskFallbackEntries("politicalWorldVerification");
+  assert.equal(plan.preferredEntryId, politics, "verification inherits generation quality when it has no own pick");
+  assert.equal(plan.implicit, true);
+
+  config.setTaskPick("politicalWorldVerification", verification);
+  plan = config.resolveTaskFallbackEntries("politicalWorldVerification");
+  assert.equal(plan.preferredEntryId, verification);
+  assert.equal(plan.implicit, false);
+});
+
+test("group chats, intelligence and demand checks can have a model of their own; translation is no AI task", () => {
+  for (const key of ["chatActions", "intelligenceAssessment", "demandCheck"]) {
+    assert.ok(config.AI_TASK_ROUTING.some((entry) => entry.key === key), key);
+  }
+  assert.ok(!config.AI_TASK_ROUTING.some((entry) => entry.key === "translation"), "translation runs on the device");
+  const [top] = config.getResolvedFallbackList();
+  const small = config.addEntry({ connectionId: top.connectionId, model: "small-model" });
+  config.setTaskPick("demandCheck", small);
+  assert.equal(config.resolveTaskFallbackEntries("demandCheck").preferredEntryId, small);
+  config.setTaskPick("demandCheck", "");
+  assert.equal(config.resolveTaskFallbackEntries("demandCheck").preferredEntryId, "");
+});
+
+test("a group chat starts on the Leader chat model until it is given its own", () => {
+  const [top] = config.getResolvedFallbackList();
+  const leaders = config.addEntry({ connectionId: top.connectionId, model: "leader-model" });
+  const councils = config.addEntry({ connectionId: top.connectionId, model: "council-model" });
+
+  assert.equal(config.resolveTaskFallbackEntries("chatActions").preferredEntryId, "", "no picks: the top of the list");
+
+  config.setTaskPick("diplomacy", leaders);
+  let plan = config.resolveTaskFallbackEntries("chatActions");
+  assert.equal(plan.preferredEntryId, leaders);
+  assert.equal(plan.implicit, true);
+
+  config.setTaskPick("chatActions", councils);
+  plan = config.resolveTaskFallbackEntries("chatActions");
+  assert.equal(plan.preferredEntryId, councils);
+  assert.equal(plan.implicit, false);
+  assert.equal(config.resolveTaskFallbackEntries("diplomacy").preferredEntryId, leaders, "and the leaders keep theirs");
+
+  config.setTaskPick("chatActions", "");
+  config.setTaskPick("diplomacy", "");
+});
+
+test("the Advisor Report has its own routing row and starts on the stat-sheet pick until it has one", () => {
+  assert.ok(config.AI_TASK_ROUTING.some((entry) => entry.key === "countryBriefing"));
+
+  const [top] = config.getResolvedFallbackList();
+  const statSheet = config.addEntry({ connectionId: top.connectionId, model: "stat-sheet-model" });
+  const briefing = config.addEntry({ connectionId: top.connectionId, model: "briefing-model" });
+
+  config.setTaskPick("countryStatSheet", statSheet);
+  let plan = config.resolveTaskFallbackEntries("countryBriefing");
+  assert.equal(plan.preferredEntryId, statSheet, "an old stat-sheet pick still covers the briefing");
+  assert.equal(plan.implicit, true);
+
+  config.setTaskPick("countryBriefing", briefing);
+  plan = config.resolveTaskFallbackEntries("countryBriefing");
+  assert.equal(plan.preferredEntryId, briefing);
+  assert.equal(plan.implicit, false);
+  assert.equal(config.resolveTaskFallbackEntries("countryStatSheet").preferredEntryId, statSheet, "the stat sheet never inherits back");
+});
+
+// --- an Agent Connection (docs/adr/0008-subscription-agents-answer-through-the-game.md) ---
+
+test("an Agent Connection needs no key, endpoint or model, and starts with every kind ticked and not paused", () => {
+  const connectionId = config.addConnection({ provider: "agent", name: "My Claude" });
+  config.clearFallbackList();
+  config.addEntry({ connectionId });
+  const [row] = resolved();
+  assert.equal(row.provider, "agent");
+  assert.equal(row.connectionName, "My Claude");
+  assert.deepEqual(row.kinds, ["skip", "advisor", "diplomacy", "gameMaster", "interactive"]);
+  assert.equal(row.paused, false);
+  assert.equal(config.isFallbackListConfigured(), true, "the start-of-game prompt must not ask for a key");
+  assert.equal(config.providerSetupRequirement("agent"), "none");
+});
+
+test("an Agent Connection saved before the kinds existed answers every kind", () => {
+  store.set("ai_connections", JSON.stringify([{ id: "c1", provider: "agent", name: "Old", tasks: ["jump", "review"] }]));
+  store.set("ai_fallback_list", JSON.stringify([{ id: "e1", connectionId: "c1" }]));
+  const [row] = resolved();
+  assert.deepEqual(row.kinds, ["skip", "advisor", "diplomacy", "gameMaster", "interactive"]);
+});
+
+test("unticking a kind and pausing are kept", () => {
+  const connectionId = config.addConnection({ provider: "agent" });
+  config.updateConnection(connectionId, { kinds: ["skip", "advisor"], paused: true });
+  const connection = config.getConnections().find((candidate) => candidate.id === connectionId);
+  assert.deepEqual(connection.kinds, ["skip", "advisor"]);
+  assert.equal(connection.paused, true);
+});
+
+test("an Agent entry serves what the player started, of the kinds it ticks, and nothing while paused", () => {
+  const agent = { provider: "agent", kinds: ["skip", "advisor", "diplomacy", "gameMaster", "interactive"], paused: false };
+  const serves = (call, entry = agent) => config.entryServesCall(entry, call);
+  assert.equal(serves({ spender: "jump" }), true, "a time-skip call is the skip kind");
+  assert.equal(serves({ spender: "jumpRetry" }), true);
+  assert.equal(serves({ agentKind: "skip", spender: "stats" }), true, "a skip's follow-up");
+  assert.equal(serves({ agentKind: "advisor" }), true);
+  assert.equal(serves({ agentKind: "diplomacy" }), true);
+  assert.equal(serves({ agentKind: "gameMaster" }), true);
+  assert.equal(serves({ agentKind: "interactive" }), true);
+  assert.equal(serves({}), false, "a call that does not say the player started it never goes to the Agent");
+  assert.equal(serves({ agentKind: "advisor", requestKind: "background" }), false, "nobody is at the terminal for background AI");
+  assert.equal(serves({ agentKind: "skip", requestKind: "background" }), true, "a skip's own follow-up is the player's skip, though the game asks it");
+  assert.equal(serves({ agentKind: "diplomacy" }, { ...agent, kinds: ["skip"] }), false, "an unticked kind goes to the entry below");
+  assert.equal(serves({ spender: "jump" }, { ...agent, paused: true }), false, "paused, it serves nothing");
+  assert.equal(serves({ spender: "review", skipPassedOn: true }), false, "the rest of a skip the player sent to their key");
+  assert.equal(serves({ agentKind: "skip", spender: "stats", skipPassedOn: true }), false);
+  assert.equal(serves({ agentKind: "advisor", skipPassedOn: true }), true, "a chat is not the skip");
+  assert.equal(config.entryServesCall({ provider: "gemini" }, {}), true, "every other Connection serves every call");
+});
+
+test("the Agent Connection kind is offered only where a local server runs", () => {
+  assert.equal(config.providerOptionsFor({ localServer: true }).some((option) => option.value === "agent"), true);
+  assert.equal(config.providerOptionsFor({ localServer: false }).some((option) => option.value === "agent"), false);
 });

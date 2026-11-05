@@ -19,10 +19,16 @@
 // makes explicit, a border cleanup's hairline changes — is not a change.
 
 import { FEATURE_DEFINITIONS, normalizeFeatureSettings } from "../../server/gameFeatures.js";
+import { normalizeScenarioMusic } from "../../server/scenarioMusic.js";
 import { PROMPT_GUIDANCE, normalizePackGuidance } from "../Game/AI/promptGuidance.js";
+import { normalizeGroups } from "./groups.js";
+import { normalizeClimateZones, normalizeFortifications, normalizeFreezingRegions, normalizeTerrainAreas } from "./warGeography.js";
+import { isCurrentCanonWorld } from "./scenarioCanon.js";
+import { normalizeScenarioPrehistory } from "./scenarioPrehistory.js";
 import COUNTRY_NAMES from "./generated/countryNames.js";
 import { DEFAULT_SCENARIO_META, accentOrDefault } from "./web/storeConstants.js";
 import { bundleProjection, convertScenarioBundle, layOutScenarioBundle, normalizeImageBounds, normalizeProjection } from "../../server/mapProjection.js";
+import { normalizeAllowedBasemaps, normalizeOwnBasemaps } from "./assets.js";
 import {
   buildOwnerRenameMap,
   buildPolityMapRefs,
@@ -36,10 +42,6 @@ import {
 // ---- values -------------------------------------------------------------------
 
 const isRecord = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
-// This version of the game has no groups (a newer one keeps them in
-// src/runtime/groups.js): a post made by one may carry them, read here as they
-// are, and what is suggested about them is left out below.
-const normalizeGroups = (raw) => (isRecord(raw) ? raw : {});
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const textOf = (value) => String(value ?? "").replace(/\r\n/g, "\n").trim();
 
@@ -140,14 +142,21 @@ const polygonArea = (rings) => (Array.isArray(rings)
   : 0);
 
 // The border cleanup a Workshop save runs (topologySweep.js) repairs defects up
-// to 500 m wide in the map's projection, 0.0045° at most. On a region the
-// player never touched it fills a crack, trims a sliver, and makes or removes
-// geometry of next to no area: a spike (a vertex the ring runs out to and
-// straight back from), a sliver tip (out and back within the cleanup's width)
-// and a speck (a stray part of a few metres), or a whole stray part that is
-// only a sliver. A spike or a tip moves a bounding box a long way (0.5° on one
-// region), so a region's box is measured without them.
-const CLEANUP_WIDTH = 0.005; // degrees
+// to 1.5 km wide in the map's projection (BORDER_CLEANUP.maxWidth), 0.0135° at
+// most. On a region the player never touched it fills a crack, trims a sliver,
+// and makes or removes geometry of next to no area: a spike (a vertex the ring
+// runs out to and straight back from), a sliver tip (out and back within the
+// cleanup's width) and a speck (a stray part of a few metres), or a whole
+// stray part that is only a sliver. A spike or a tip moves a bounding box a
+// long way (0.5° on one region), so a region's box is measured without them.
+//
+// This follows the cleanup's width and has to: it was 0.005° while the cleanup
+// stopped at 500 m, and at 1.5 km a save of the untouched built-in map then
+// read as two reshaped regions (a triangle filled into Freiburg moved its
+// outline 0.0099°; a crack filled along 358 km of Gillette's border added
+// 0.28% to its area). The price is that a border moved by less than this, a
+// kilometre or so, no longer reads as a change either.
+const CLEANUP_WIDTH = 0.015; // degrees
 const SPECK_AREA = 1e-5; // square degrees, about a tenth of a square kilometre
 const SPIKE_SINE = 0.1; // a turn back within about 6°
 // The ring without its spikes and tips; `collapsed` when nothing but them was
@@ -274,7 +283,18 @@ export const rgbToHex = (rgb) => `#${(rgbOf(rgb) || [128, 128, 128]).map((n) => 
 
 const META_FIELDS = ["name", "eyebrow", "accentColor", "subtitle", "description", "heroTitle", "heroSubtitle"];
 const GAME_FIELDS = ["country", "startDate", "gameDate", "difficulty", "language"];
-const WORLD_DETAIL_FIELDS = ["allowedUnitTypes", "labelFont", "labelTextColor", "labelHaloColor", "simulationRules", "startingTimelineText"];
+const WORLD_DETAIL_FIELDS = ["allowedUnitTypes", "labelFont", "labelTextColor", "labelHaloColor", "simulationRules", "startingTimelineText", "warSettings"];
+// What a scenario draws on its map for war (Wars and Fronts Pt.2:
+// runtime/warGeography.js), each list compared and taken whole.
+export const WAR_MAP_FIELDS = Object.freeze(["terrainAreas", "fortifications", "climateZones", "freezingRegions"]);
+const WAR_MAP_NORMALIZERS = Object.freeze({
+  terrainAreas: normalizeTerrainAreas,
+  fortifications: normalizeFortifications,
+  climateZones: normalizeClimateZones,
+  freezingRegions: normalizeFreezingRegions,
+});
+// One of those lists as it is compared: in the world's own form.
+export const warMapListOf = (field, value) => (WAR_MAP_NORMALIZERS[field] ? WAR_MAP_NORMALIZERS[field](value) : []);
 // The Politics tab's generated world (PoliticalWorldGenerationPanel,
 // InstitutionAuthoringPanel): diffed entry by entry where entries have ids.
 export const POLITICS_FIELDS = ["politicalActors", "institutions", "powerStatus", "agreements", "canonContext"];
@@ -296,6 +316,27 @@ const GUIDANCE_PATHS = [
   ...["advisor", "leader"].flatMap((section) => (PROMPT_GUIDANCE[section] ?? []).map((seg) => `${section}.${seg.id}`)),
   ...Object.entries(PROMPT_GUIDANCE.tasks ?? {}).flatMap(([task, segments]) => segments.map((seg) => `tasks.${task}.${seg.id}`)),
 ];
+const GUIDANCE_PATH_SET = new Set(GUIDANCE_PATHS);
+
+// Whether a details field's path is one the diff below makes. A suggestion
+// file names its fields, and accepting one writes them as keys of the
+// author's scenario, so a file may name only these (normalizeSuggestion,
+// buildDetailSave): never the world whole, its storage or its provenance.
+export const isDetailFieldPath = (path) => {
+  if (!Array.isArray(path) || !path.every((part) => typeof part === "string")) return false;
+  const [area, key, setting] = path;
+  if (area === "meta") return path.length === 2 && META_FIELDS.includes(key);
+  if (area === "game") return path.length === 2 && GAME_FIELDS.includes(key);
+  if (area === "world") return path.length === 2 && WORLD_DETAIL_FIELDS.includes(key);
+  if (area === "features") {
+    const definition = FEATURE_DEFINITIONS.find((entry) => entry.key === key);
+    return path.length === 3 && Boolean(definition) && (setting === "enabled" || definition.settings.some((entry) => entry.key === setting));
+  }
+  // One part per step, as the diff splits them: ["prompts", "advisor.role"]
+  // joins to a listed passage too, but would be written as a section of its own.
+  if (area === "prompts") return path.slice(1).every((part) => part && !part.includes(".")) && GUIDANCE_PATH_SET.has(path.slice(1).join("."));
+  return false;
+};
 
 const regionIdOf = (feature) => {
   const props = feature?.properties ?? {};
@@ -429,6 +470,7 @@ const cityView = (feature) => {
     population,
     capital: clean(props.capital) === "primary",
     tier: cityTierOf(props.tier, population),
+    ...(isRecord(props.populationByYear) && Object.keys(props.populationByYear).length ? { populationByYear: props.populationByYear } : {}),
   };
 };
 
@@ -517,6 +559,58 @@ const metaOf = (scenario) => {
   };
 };
 
+// The canon context as the game reads it (scenarioCanon.js readScenarioCanon):
+// only a world whose canon is current has one. Generating the Political World
+// makes a scenario's canon current — canonModelVersion beside the context — and
+// a context without the version is ignored, its divergence and reference packs
+// with it. So a scenario that gained a Political World shows a canon change
+// even when a stale context was already sitting in it, and accepting that
+// change makes the author's canon current too (suggestionApply.js).
+const canonContextOf = (world) => (isCurrentCanonWorld(world) ? world.canonContext ?? null : null);
+
+// What tells a detailed map among the scenario's maps apart (docs/adr/0007):
+// how it is named, the map it is shown over, its fill ramp. It has no payload;
+// this stands in for one (Editor/suggestionReview.js hashes the same).
+export const ownDetailedBody = ({ tiled, over, fillOpacity }) => ({
+  tiled,
+  over: typeof over === "string" ? over : "",
+  ...(Array.isArray(fillOpacity) ? { fillOpacity } : {}),
+});
+
+// The scenario's other maps (world.ownBasemaps, payloads in the
+// ownBasemapsData asset), by id: each told apart by its kind and a hash of its
+// payload, as the main basemap is. One whose payload is not in the file is
+// left out rather than read as a map with nothing on it; a detailed map is
+// told apart by ownDetailedBody.
+const ownBasemapsOf = (list, data) => new globalThis.Map(normalizeOwnBasemaps(list).flatMap((own) => {
+  const payload = isRecord(data) ? data[own.id] : null;
+  const body = own.kind === "tiled" ? ownDetailedBody(own)
+    : own.kind === "image"
+    ? (typeof payload?.dataUrl === "string" && payload.dataUrl ? { dataUrl: payload.dataUrl } : null)
+    : (isRecord(payload?.geojson) ? { geojson: payload.geojson } : null);
+  return body ? [[own.id, { name: own.name, kind: own.kind, hash: hashText(canonicalJson(body)), data: body }]] : [];
+}));
+
+// The detailed map a scenario names (world.background.tiled, docs/adr/0006,
+// with its fill ramp; the Map Editor's doc.metadata.tiledBasemap), or null. It
+// is apart from the basemap: optional, drawn on top of it, and the basemap is
+// told apart without it. An official map is the id and the version it needs,
+// the author's own the checksum of its file; the name is only how it is shown.
+export const detailedMapView = (tiled) => {
+  if (!isRecord(tiled)) return null;
+  const id = clean(tiled.id);
+  const hash = clean(tiled.hash).toLowerCase();
+  if (!id && !hash) return null;
+  return {
+    ...(id ? { id, version: Math.max(1, Math.round(Number(tiled.version) || 1)) } : { hash }),
+    name: clean(tiled.name),
+    ...(Array.isArray(tiled.fillOpacity) ? { fillOpacity: tiled.fillOpacity } : {}),
+  };
+};
+export const detailedMapKey = (view) => (view
+  ? canonicalJson({ id: view.id ?? "", version: view.version ?? 0, hash: view.hash ?? "", fillOpacity: view.fillOpacity ?? null })
+  : "");
+
 export const buildScenarioSnapshot = (bundle) => {
   const legacyOwners = isRecord(bundle?.data?.world) && needsOwnerMigration(bundle.data.world);
   const source = isRecord(bundle) ? migrateBundleOwners(bundle) : {};
@@ -532,14 +626,20 @@ export const buildScenarioSnapshot = (bundle) => {
   return {
     meta: metaOf(scenario),
     features: normalizeFeatureSettings(scenario.features),
+    // Which hub tracks it plays, by situation (server/scenarioMusic.js), or
+    // null when it names none: read as the stores read it.
+    music: normalizeScenarioMusic(scenario.music),
     game: Object.fromEntries(GAME_FIELDS.map((key) => [key, clean(game[key])])),
     world: Object.fromEntries(WORLD_DETAIL_FIELDS.map((key) => [key, key === "allowedUnitTypes"
       ? (Array.isArray(world[key]) ? [...new Set(world[key].map(clean).filter(Boolean))].sort() : [])
       : textOf(world[key])])),
-    politics: Object.fromEntries(POLITICS_FIELDS.map((key) => [key, world[key] ?? null])),
+    politics: Object.fromEntries(POLITICS_FIELDS.map((key) => [key, key === "canonContext" ? canonContextOf(world) : world[key] ?? null])),
     prompts: flattenGuidance(data.prompts),
     stats: bundleAssetJson(assets.stats) ?? null,
     institutionLogos: bundleAssetJson(assets.institutionLogos) ?? null,
+    // The pre-history (scenarioPrehistory.js), or null when the scenario keeps
+    // none — which is not the same as an empty one: its games ask for none.
+    history: normalizeScenarioPrehistory(world.prehistory),
     cover: bundleAssetBinary(assets.cover),
     map: {
       regions,
@@ -558,18 +658,48 @@ export const buildScenarioSnapshot = (bundle) => {
       cities: citiesFC && Array.isArray(citiesFC.features) ? citiesFC.features.map(cityView).filter(Boolean) : null,
       author: clean(world.author),
       basemap: clean(world.basemap),
+      // The starting map's name, as Settings → Map lists it (CONTEXT.md).
+      startingMapName: clean(world.background?.name),
       // The map's projection (server/mapProjection.js) with its two switches,
       // and where the picture lies on it. The picture is told apart by what
       // it is, not by where it lies: the bounds follow the projection.
       projection: normalizeProjection(world.projection),
+      war: Object.fromEntries(WAR_MAP_FIELDS.map((field) => [field, warMapListOf(field, world[field])])),
       background: world.background?.kind && backgroundData
         ? { kind: clean(world.background.kind), hash: hashText(canonicalJson(backgroundData)), data: backgroundData, ...(backgroundBounds ? { bounds: backgroundBounds } : {}) }
         : null,
+      // The maps players may switch to: the built-in ones ticked, and the
+      // scenario's other basemaps of its own (runtime/assets.js).
+      allowedBasemaps: normalizeAllowedBasemaps(world.allowedBasemaps),
+      ownBasemaps: ownBasemapsOf(world.ownBasemaps, bundleAssetJson(assets.ownBasemapsData)),
+      detailedMap: detailedMapView(isRecord(world.background?.tiled)
+        ? { ...world.background.tiled, ...(Array.isArray(world.background.fillOpacity) ? { fillOpacity: world.background.fillOpacity } : {}) }
+        : null),
     },
   };
 };
 
 // ---- the diff -----------------------------------------------------------------
+
+// What changed inside one record, as the paths a person would name
+// ("government.leader"), for showing a Politics entry's change. Lists and
+// values are compared whole; a record that appeared or went away is read
+// field by field; at most `max` paths, the first ones in order.
+export const changedPathsOf = (before, after, { max = 6 } = {}) => {
+  const paths = [];
+  const walk = (a, b, prefix) => {
+    if (paths.length > max || sameValue(a, b)) return;
+    if ((isRecord(a) || a == null) && (isRecord(b) || b == null)) {
+      a = a ?? {};
+      b = b ?? {};
+      for (const key of [...new Set([...Object.keys(a), ...Object.keys(b)])]) walk(a[key], b[key], prefix ? `${prefix}.${key}` : key);
+      return;
+    }
+    paths.push({ path: prefix, from: a ?? null, to: b ?? null });
+  };
+  walk(before, after, "");
+  return paths;
+};
 
 const TEXT_FIELDS = new Set(["meta.description", "meta.subtitle", "meta.heroSubtitle", "world.simulationRules", "world.startingTimelineText"]);
 
@@ -590,30 +720,57 @@ const entryKeyOf = (entry, index) => {
   return `#${index}`;
 };
 const entryLabelOf = (entry, key) => (isRecord(entry) ? clean(entry.name || entry.title || entry.label || entry.id) || key : key);
+// A ledger: one map of records inside a wrapper that also carries its format
+// (`{ schemaVersion, byPolity }` for the political actors and the power
+// status, `{ schemaVersion, ledgerVersion, byId }` for the institutions). Its
+// entries are what an author edits, one country or one institution at a time;
+// the wrapper's other fields are bookkeeping, never a change of their own.
+export const POLITICS_LEDGER_KEYS = Object.freeze(["byPolity", "byId"]);
+export const politicsLedgerKeyOf = (value) => (isRecord(value)
+  ? POLITICS_LEDGER_KEYS.find((key) => isRecord(value[key]) && Object.values(value[key]).every(isRecord)) ?? ""
+  : "");
+export const politicsLedgerShellOf = (value, within) => {
+  if (!isRecord(value)) return {};
+  const shell = { ...value };
+  delete shell[within];
+  return shell;
+};
 // What a Politics value is made of: a list of entries, a map of records keyed
-// by id, or anything else (one value, changed whole).
+// by id, a ledger (above), or anything else (one value, changed whole).
 const politicsShapeOf = (value) => {
   if (isEmptyValue(value)) return "empty";
   if (Array.isArray(value)) return value.every(isRecord) ? "list" : "value";
+  const within = politicsLedgerKeyOf(value);
+  if (within) return `ledger:${within}`;
   if (isRecord(value) && Object.values(value).every(isRecord)) return "map";
   return "value";
 };
-export const politicsEntries = (value, container) => (container === "list"
-  ? new Map((Array.isArray(value) ? value : []).map((entry, index) => [entryKeyOf(entry, index), entry]))
-  : new Map(Object.entries(isRecord(value) ? value : {})));
+// A Politics value's entries by key; `within` names a ledger's map.
+export const politicsEntries = (value, container, within = "") => {
+  if (container === "list") return new Map((Array.isArray(value) ? value : []).map((entry, index) => [entryKeyOf(entry, index), entry]));
+  const map = within ? (isRecord(value) ? value[within] : null) : value;
+  return new Map(Object.entries(isRecord(map) ? map : {}));
+};
+// The canon context is one setting (the universe, the divergence, the
+// reference packs): changed whole, whatever its shape happens to look like.
+const WHOLE_POLITICS_FIELDS = new Set(["canonContext"]);
 const diffPolitics = (field, from, to, changes) => {
   if (sameValue(from, to)) return;
-  const fromShape = politicsShapeOf(from);
-  const toShape = politicsShapeOf(to);
-  const container = fromShape === "empty" ? toShape : toShape === "empty" || toShape === fromShape ? fromShape : "value";
-  if (container !== "list" && container !== "map") {
+  const fromShape = WHOLE_POLITICS_FIELDS.has(field) ? "value" : politicsShapeOf(from);
+  const toShape = WHOLE_POLITICS_FIELDS.has(field) ? "value" : politicsShapeOf(to);
+  const shape = fromShape === "empty" ? toShape : toShape === "empty" || toShape === fromShape ? fromShape : "value";
+  if (shape !== "list" && shape !== "map" && !shape.startsWith("ledger:")) {
     changes.push({ id: `politics:${field}`, area: "details", kind: "politics", field, container: "value", entry: null, from: from ?? null, to: to ?? null });
     return;
   }
-  const a = politicsEntries(from, container);
-  const b = politicsEntries(to, container);
+  const container = shape === "list" ? "list" : "map";
+  const within = shape.startsWith("ledger:") ? shape.slice("ledger:".length) : "";
+  // The wrapper a first entry is put into, when the author has no ledger yet.
+  const ledger = within ? { within, shell: politicsLedgerShellOf(isEmptyValue(to) ? from : to, within) } : {};
+  const a = politicsEntries(from, container, within);
+  const b = politicsEntries(to, container, within);
   const push = (key, op, entry, before, after) => changes.push({
-    id: `politics:${field}:${key}`, area: "details", kind: "politics", field, container, entry: key, label: entryLabelOf(entry, key), op, from: before, to: after,
+    id: `politics:${field}:${key}`, area: "details", kind: "politics", field, container, ...ledger, entry: key, label: entryLabelOf(entry, key), op, from: before, to: after,
   });
   for (const [key, entry] of b) {
     if (!a.has(key)) push(key, "add", entry, null, entry);
@@ -621,6 +778,35 @@ const diffPolitics = (field, from, to, changes) => {
   }
   for (const [key, entry] of a) {
     if (!b.has(key)) push(key, "remove", entry, entry, null);
+  }
+};
+
+// The pre-history: each event added, changed or removed is its own change,
+// found by its id; the summary, the prompt it was generated from and the Day-one
+// facts are one more, since they were written together and are read together.
+export const historySetupOf = (history) => (history
+  ? { prompt: history.prompt, summary: history.summary, updates: history.updates }
+  : null);
+const diffHistory = (from, to, changes) => {
+  if (!from && !to) return;
+  const before = new Map((from?.events ?? []).map((event) => [event.id, event]));
+  const after = new Map((to?.events ?? []).map((event) => [event.id, event]));
+  const push = (key, op, event, a, b) => changes.push({
+    id: `history:event:${key}`, area: "details", kind: "history", part: "event", entry: key, label: clean(event?.title) || key, op, from: a, to: b,
+  });
+  for (const [key, event] of after) {
+    if (!before.has(key)) push(key, "add", event, null, event);
+    else if (!sameValue(before.get(key), event)) push(key, "change", event, before.get(key), event);
+  }
+  for (const [key, event] of before) {
+    if (!after.has(key)) push(key, "remove", event, event, null);
+  }
+  const setupFrom = historySetupOf(from);
+  const setupTo = historySetupOf(to);
+  // A record appearing is a change even when it is empty: its games stop
+  // asking for a backstory.
+  if (Boolean(setupFrom) !== Boolean(setupTo) || canonicalJson(setupFrom) !== canonicalJson(setupTo)) {
+    changes.push({ id: "history:setup", area: "details", kind: "history", part: "setup", entry: null, from: setupFrom, to: setupTo });
   }
 };
 
@@ -666,11 +852,17 @@ const diffDetails = (base, next, changes) => {
     }
   }
   for (const field of POLITICS_FIELDS) diffPolitics(field, base.politics[field], next.politics[field], changes);
+  diffHistory(base.history, next.history, changes);
   if (!sameValue(base.stats, next.stats)) {
     changes.push({ id: "stats", area: "details", kind: "stats", from: base.stats, to: next.stats });
   }
   if (!sameValue(base.institutionLogos, next.institutionLogos)) {
     changes.push({ id: "institutionLogos", area: "details", kind: "institutionLogos", from: base.institutionLogos, to: next.institutionLogos });
+  }
+  // The music is one change, whichever situations it touches: its lists were
+  // chosen together, and an author takes or leaves them together.
+  if (!sameValue(base.music, next.music)) {
+    changes.push({ id: "music", area: "details", kind: "music", from: base.music ?? null, to: next.music ?? null });
   }
   if ((base.cover?.hash || "") !== (next.cover?.hash || "")) {
     changes.push({
@@ -1035,8 +1227,17 @@ const diffMapFields = (base, next, changes) => {
       ...(next.map.background?.bounds ? { bounds: next.map.background.bounds } : {}),
     });
   }
+  // What it draws on its map for war, each list whole.
+  for (const field of WAR_MAP_FIELDS) {
+    const from = base.map.war?.[field] ?? [];
+    const to = next.map.war?.[field] ?? [];
+    if (!sameValue(from, to)) changes.push({ id: `map:war:${field}`, area: "map", kind: "war-map", field, from, to });
+  }
   if (base.map.author !== next.map.author) {
     changes.push({ id: "map:author", area: "map", kind: "map-field", field: "author", from: base.map.author, to: next.map.author });
+  }
+  if ((base.map.startingMapName || "") !== (next.map.startingMapName || "")) {
+    changes.push({ id: "map:startingMapName", area: "map", kind: "map-field", field: "startingMapName", from: base.map.startingMapName || "", to: next.map.startingMapName || "" });
   }
   if ((base.map.basemap || "") !== (next.map.basemap || "") && next.map.basemap) {
     changes.push({ id: "map:basemap", area: "map", kind: "map-field", field: "basemap", from: base.map.basemap, to: next.map.basemap });
@@ -1051,6 +1252,38 @@ const diffMapFields = (base, next, changes) => {
         ? { kind: next.map.background.kind, hash: next.map.background.hash, data: next.map.background.data, ...(next.map.background.bounds ? { bounds: next.map.background.bounds } : {}) }
         : null,
     });
+  }
+  diffBasemapChoices(base, next, changes);
+  // The detailed map on its own, apart from the basemap under it: one may be
+  // put on, swapped or taken off without the basemap changing.
+  const detailedFrom = base.map.detailedMap ?? null;
+  const detailedTo = next.map.detailedMap ?? null;
+  if (detailedMapKey(detailedFrom) !== detailedMapKey(detailedTo)) {
+    changes.push({ id: "map:detailedMap", area: "map", kind: "detailed-map", from: detailedFrom, to: detailedTo });
+  }
+};
+
+// The maps players may switch to. The built-in list is compared as written:
+// null (the default) and [] (none) are not the same choice.
+const ownBasemapView = ({ name, kind, hash }) => ({ name, kind, hash });
+const diffBasemapChoices = (base, next, changes) => {
+  const allowedFrom = base.map.allowedBasemaps ?? null;
+  const allowedTo = next.map.allowedBasemaps ?? null;
+  if (JSON.stringify(allowedFrom) !== JSON.stringify(allowedTo)) {
+    changes.push({ id: "map:allowedBasemaps", area: "map", kind: "allowed-basemaps", from: allowedFrom, to: allowedTo });
+  }
+  const before = base.map.ownBasemaps ?? new globalThis.Map();
+  const after = next.map.ownBasemaps ?? new globalThis.Map();
+  for (const [key, entry] of after) {
+    const was = before.get(key);
+    if (!was) {
+      changes.push({ id: `own-basemap-add:${key}`, area: "map", kind: "own-basemap-add", key, to: entry });
+    } else if (canonicalJson(ownBasemapView(was)) !== canonicalJson(ownBasemapView(entry))) {
+      changes.push({ id: `own-basemap-change:${key}`, area: "map", kind: "own-basemap-change", key, from: ownBasemapView(was), to: entry });
+    }
+  }
+  for (const [key, entry] of before) {
+    if (!after.has(key)) changes.push({ id: `own-basemap-remove:${key}`, area: "map", kind: "own-basemap-remove", key, from: ownBasemapView(entry) });
   }
 };
 
@@ -1089,15 +1322,8 @@ export const diffScenarioBundles = (baseBundle, nextBundle) => {
   diffKeyed("marker", base.map.markers, next.map.markers, changes, { label: (marker, id) => clean(marker?.name) || id });
   diffKeyed("puppet", base.map.puppets, next.map.puppets, changes, { label: (row, id) => `${clean(row?.puppet)} ← ${clean(row?.overlord)}`.trim() || id });
   diffMapFields(base, next, changes);
-  // What this version cannot hold is never suggested from it: a post made by a
-  // newer version keeps its political world, institution logos, groups, map
-  // features and puppet states, and a copy made here does not change them.
-  return changes.filter((change) => !UNSUPPORTED_KINDS.has(change.kind));
+  return changes;
 };
-const UNSUPPORTED_KINDS = new Set([
-  "politics", "institutionLogos", "region-group", "group-add", "group-remove", "group-change",
-  "marker-add", "marker-remove", "marker-change", "puppet-add", "puppet-remove", "puppet-change",
-]);
 
 // ---- summaries ----------------------------------------------------------------
 
@@ -1111,6 +1337,31 @@ export const countChanges = (changes) => {
   }
   return counts;
 };
+
+// The regions inside the border changes. A border change is a group of
+// neighbouring regions accepted together (a merge is regions taken out and the
+// ones beside them grown), so a suggestion of many merges is few changes: this
+// says how many regions they touch.
+export const borderRegionCounts = (changes) => {
+  const counts = { merged: 0, reshaped: 0, added: 0 };
+  for (const change of Array.isArray(changes) ? changes : []) {
+    if (change?.kind !== "borders") continue;
+    for (const region of Array.isArray(change.regions) ? change.regions : []) {
+      if (region?.op === "remove") counts.merged += 1;
+      else if (region?.op === "reshape") counts.reshaped += 1;
+      else if (region?.op === "add") counts.added += 1;
+    }
+  }
+  return counts;
+};
+
+// "28 regions merged into others, 17 reshaped, 2 new": what a suggestion's
+// border changes do, in words.
+export const describeBorderRegions = ({ merged = 0, reshaped = 0, added = 0 } = {}) => [
+  merged ? `${merged === 1 ? "1 region" : `${merged} regions`} merged into others` : "",
+  reshaped ? `${reshaped} reshaped` : "",
+  added ? `${added} new` : "",
+].filter(Boolean).join(", ");
 
 const plural = (count, one, many) => `${count} ${count === 1 ? one : many}`;
 const FIELD_NAMES = {
@@ -1139,10 +1390,18 @@ export const summarizeChangesForComment = (changes, { maxLines = 14 } = {}) => {
   if (fields.length > 6) lines.push(`${fields.length - 6} more settings changed`);
   const politics = list.filter((change) => change.kind === "politics").length;
   if (politics) lines.push(`${plural(politics, "Politics entry", "Politics entries")} changed`);
+  const historyEvents = list.filter((change) => change.kind === "history" && change.part === "event").length;
+  if (historyEvents) lines.push(`${plural(historyEvents, "pre-history event", "pre-history events")} changed`);
+  if (list.some((change) => change.kind === "history" && change.part === "setup")) lines.push("Pre-history summary or Day-one facts changed");
   if (byKind.stats) lines.push("Stats sheet changed");
+  if (byKind.institutionLogos) lines.push("Institution logos changed");
+  if (byKind.music) lines.push("Music changed");
   if (byKind.cover) lines.push("New cover image");
   if (byKind["region-owner"]) lines.push(`${plural(byKind["region-owner"], "region changes", "regions change")} owner`);
-  if (byKind.borders) lines.push(`${plural(byKind.borders, "border change", "border changes")}`);
+  if (byKind.borders) {
+    const regions = describeBorderRegions(borderRegionCounts(list));
+    lines.push(`${plural(byKind.borders, "border change", "border changes")}${regions ? ` (${regions})` : ""}`);
+  }
   if (byKind["polity-add"]) lines.push(`${plural(byKind["polity-add"], "new country", "new countries")}`);
   if (byKind["polity-remove"]) lines.push(`${plural(byKind["polity-remove"], "country removed", "countries removed")}`);
   if (byKind["polity-rename"]) lines.push(`${plural(byKind["polity-rename"], "country renamed", "countries renamed")}`);
@@ -1162,7 +1421,12 @@ export const summarizeChangesForComment = (changes, { maxLines = 14 } = {}) => {
   const puppets = (byKind["puppet-add"] ?? 0) + (byKind["puppet-remove"] ?? 0) + (byKind["puppet-change"] ?? 0);
   if (puppets) lines.push(`${plural(puppets, "puppet state change", "puppet state changes")}`);
   if (byKind.background) lines.push("New basemap");
+  const ownBasemaps = (byKind["own-basemap-add"] ?? 0) + (byKind["own-basemap-remove"] ?? 0) + (byKind["own-basemap-change"] ?? 0);
+  if (ownBasemaps) lines.push(`${plural(ownBasemaps, "change to the other basemaps", "changes to the other basemaps")}`);
+  if (byKind["allowed-basemaps"]) lines.push("Built-in maps players can switch to changed");
+  if (byKind["detailed-map"]) lines.push("Detailed map changed");
   if (byKind.projection) lines.push("Map projection changed");
-  if (byKind["map-field"]) lines.push(`${plural(byKind["map-field"], "map setting changed", "map settings changed")}`);
+  const mapSettings = (byKind["map-field"] ?? 0) + (byKind["war-map"] ?? 0);
+  if (mapSettings) lines.push(`${plural(mapSettings, "map setting changed", "map settings changed")}`);
   return lines.length > maxLines ? [...lines.slice(0, maxLines - 1), `…and ${lines.length - maxLines + 1} more`] : lines;
 };

@@ -17,8 +17,8 @@ key and paste it in.**
 
 <p class="beta-note"><b>On beta the game fights land wars itself.</b> Where two sides at war hold
 touching land, their troops fight it out on a battlefield before the period's story is written,
-and the model then tells the war as it went, at no extra request. The model also writes the posts
-behind a region's <b>Listen in</b> phone, one request for each new feed.</p>
+and the model then tells the war as it went, at no extra request. The posts of <b>Rostra</b>, the
+social network, come in the same answer, at no extra request either.</p>
 
 Without a provider the game still runs — the map, the editor, saved games and the interface all
 work — but time skips fall back to a small set of canned events and the advisor cannot answer.
@@ -145,11 +145,10 @@ the id unchanged and the server's own "not found" message tells you what it offe
 ### Context windows
 
 A model that refuses a request as too long for it teaches the game its context window, and the
-game then keeps from sending it a request it cannot fit. Each entry shows what is known under
-**This model only → Context window (tokens)**: type your own figure there, which beats what was
-learned, or press **Forget this window** after a provider raises its limit. For a model on your
-own machine or network only your own figure counts, so reloading a local model with a bigger
-window needs nothing from you.
+game then keeps from sending it a request it cannot fit, until what it learned lapses: a week
+after a refusal, or a month after the model stated its window. Nothing learned counts for a model
+on your own machine or network, so reloading a local model with a bigger window needs nothing
+from you.
 
 ### Be realistic about model size
 
@@ -340,7 +339,7 @@ sign-in.
   starts by itself, such as background diplomacy, idle chats and automatic stat tracking. With
   nothing below it, those don't run, so keep a free Gemini key under it.
 - **Pause my Agent** sends everything to the entry below, for when you are away from your
-  terminal. In a shared game the Agent sits out the same way.
+  terminal.
 - **While a skip waits**, the time panel says *Waiting for your Agent*, and **Use API key** sends
   the rest of that skip on to the next entry instead.
 

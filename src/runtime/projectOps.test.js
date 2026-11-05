@@ -11,6 +11,7 @@ import {
   applyProjectOps,
   applyProjectOpsToWorld,
   normalizeWorldState,
+  releaseProjectCompletionEffects,
 } from "./gameState.js";
 
 const standingWatch = {
@@ -222,11 +223,21 @@ test("milestone status synonyms mark a checkpoint reached", () => {
     assert.equal(after.nextMilestone, null, `status "${status}" left it outstanding`);
   }
 
-  for (const status of ["missed", "slipped", "late"]) {
+  for (const status of ["missed", "unmet", "failed"]) {
     const after = applyProjectOps([before], [{
       op: "milestone", name: before.name, milestone: { title: "Sea trials", status },
     }], { date: "2034-06-03" })[0];
     assert.equal(after.milestones[0].status, "missed", `status "${status}" did not mark it missed`);
+  }
+
+  // Late is not the same as never: a slipped checkpoint is still outstanding, so
+  // it stays the next milestone and the next skip is asked to answer it.
+  for (const status of ["slipped", "late", "delayed", "overdue"]) {
+    const after = applyProjectOps([before], [{
+      op: "milestone", name: before.name, milestone: { title: "Sea trials", status },
+    }], { date: "2034-06-03" })[0];
+    assert.equal(after.milestones[0].status, "slipped", `status "${status}" did not mark it slipped`);
+    assert.equal(after.nextMilestone?.title, "Sea trials", `status "${status}" left nothing outstanding`);
   }
 });
 
@@ -421,6 +432,59 @@ test("an update carrying status complete releases the effects too", () => {
   assert.ok(next.projects[0].onCompleteAppliedAt);
 });
 
+// Every other way a batch can finish a project releases the effects as well:
+// the release is worked out by the applier that stamps the latch, so the two
+// cannot disagree about what completed.
+test("a create restating a project as complete releases the effects", () => {
+  const world = worldWith(applyProjectOps([], [annexation(renameRuritania)]));
+  const { world: next } = applyEventImpactsToWorld({
+    events: [eventWith([{ op: "create", name: "Northern Question", status: "complete" }])],
+    world,
+  });
+
+  assert.equal(next.projects[0].status, "complete");
+  assert.equal(next.polityOverrides["Federal Republic of Ruritania"].name, "Federal Republic of Ruritania");
+  assert.ok(next.projects[0].onCompleteAppliedAt);
+});
+
+test("a project opened and completed in the same batch releases the effects", () => {
+  const { world: next } = applyEventImpactsToWorld({
+    events: [eventWith([annexation(renameRuritania), { op: "complete", name: "Northern Question" }])],
+    world: worldWith([]),
+  });
+
+  assert.equal(next.projects[0].status, "complete");
+  assert.equal(next.polityOverrides["Federal Republic of Ruritania"].name, "Federal Republic of Ruritania");
+});
+
+test("a project renamed and then completed in the same batch releases the effects", () => {
+  const world = worldWith(applyProjectOps([], [annexation(renameRuritania)]));
+  const { world: next } = applyEventImpactsToWorld({
+    events: [eventWith([
+      { op: "update", name: "Northern Question", newName: "Treaty of the Marches" },
+      { op: "complete", name: "Treaty of the Marches" },
+    ])],
+    world,
+  });
+
+  assert.equal(next.projects[0].status, "complete");
+  assert.equal(next.polityOverrides["Federal Republic of Ruritania"].name, "Federal Republic of Ruritania");
+  assert.ok(next.projects[0].onCompleteAppliedAt);
+});
+
+test("a later restatement of a completed project releases nothing a second time", () => {
+  const world = worldWith(applyProjectOps([], [annexation(renameRuritania)]));
+  const { world: once } = applyEventImpactsToWorld({
+    events: [eventWith([{ op: "create", name: "Northern Question", status: "complete" }])],
+    world,
+  });
+  const released = releaseProjectCompletionEffects(once.projects, [
+    { op: "create", name: "Northern Question", status: "complete" },
+    { op: "complete", name: "Northern Question" },
+  ]);
+  assert.deepEqual(released.projectIds, []);
+});
+
 // Pins the fold-before-alias-rebuild ordering: released polityChanges are merged
 // into the event's own list BEFORE the owner resolver is rebuilt, so the event's
 // other impacts may already speak the name the completion introduces.
@@ -478,6 +542,26 @@ test("the non-event door REFUSES to complete a project that would change the wor
   assert.deepEqual(result.world.polityOverrides, {}, "the advisor renamed a polity from chat");
   assert.equal(result.world.projects[0].status, "active", "the project must stay open for the simulation to close");
   assert.deepEqual(result.deferredProjectIds, [result.world.projects[0].id]);
+});
+
+test("the non-event door holds a completion however the op spells it", () => {
+  const world = worldWith(applyProjectOps([], [annexation(renameRuritania)]));
+  const restated = applyProjectOpsToWorld({
+    ops: [{ op: "create", name: "Northern Question", status: "complete", progress: 100 }],
+    world,
+  });
+  assert.equal(restated.world.projects[0].status, "active");
+  assert.equal(restated.world.projects[0].progress, 100, "the rest of the op still lands");
+  assert.deepEqual(restated.deferredProjectIds, [restated.world.projects[0].id]);
+
+  const opened = applyProjectOpsToWorld({
+    ops: [annexation(renameRuritania), { op: "complete", name: "Northern Question" }],
+    world: worldWith([]),
+  });
+  assert.deepEqual(opened.world.polityOverrides, {});
+  assert.equal(opened.world.projects[0].status, "active");
+  assert.equal(opened.world.projects[0].onCompleteAppliedAt, "", "a held completion is not spent");
+  assert.deepEqual(opened.deferredProjectIds, [opened.world.projects[0].id]);
 });
 
 // Refusing to CLOSE it is not a reason to lose everything else the reply said.

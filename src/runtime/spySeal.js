@@ -12,10 +12,23 @@
 // bar is "cannot be read by copying the text or opening the file", which it
 // clears — and for a single-player game that is the honest and sufficient bar.
 //
-// WebCrypto only, so the same file runs in the browser and in Node's test
-// runner without a dependency.
+// WebCrypto where it exists. The Android app's WebView is not a secure context
+// and has no crypto.subtle, so there the same AES-GCM runs in pure JS
+// (aesGcm.js) and the IV comes from sha256.js's pure SHA-256. Both paths produce
+// the same bytes, so an intercept sealed on the desktop opens on the phone and
+// the other way round.
 
-const subtle = () => globalThis.crypto?.subtle;
+import { aesGcmDecrypt, aesGcmEncrypt } from "./aesGcm.js";
+import { sha256HexPure } from "./sha256.js";
+
+// Guarded: an insecure context may throw on the property access itself.
+const subtle = () => {
+  try {
+    return globalThis.crypto?.subtle ?? null;
+  } catch {
+    return null;
+  }
+};
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
@@ -28,12 +41,16 @@ const fromB64 = (text) => Uint8Array.from(atob(text), (c) => c.charCodeAt(0));
 // kept in world.spySeal.
 export const newSeal = () => toHex(globalThis.crypto.getRandomValues(new Uint8Array(32)));
 
+// Unique report ids keep AES-GCM labels unique even when an agent reports twice
+// in the same game round.
+export const newSpyReportId = () => `spy-report-${toHex(globalThis.crypto.getRandomValues(new Uint8Array(12)))}`;
+
 export const isSeal = (value) => /^[0-9a-f]{64}$/i.test(String(value ?? ""));
 
 const keyCache = new Map();
-const importKey = async (seal) => {
+const importKey = async (webCrypto, seal) => {
   if (keyCache.has(seal)) return keyCache.get(seal);
-  const key = await subtle().importKey("raw", fromHex(seal), { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+  const key = await webCrypto.importKey("raw", fromHex(seal), { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
   keyCache.set(seal, key);
   return key;
 };
@@ -42,20 +59,50 @@ const importKey = async (seal) => {
 // same message always seals to the same bytes, so a re-save never churns the
 // file, and the label is never reused for different plaintext under one key
 // because an intercept id is minted per gather.
-const ivFor = async (label) => new Uint8Array(await subtle().digest("SHA-256", encoder.encode(String(label)))).slice(0, 12);
+const ivFor = (label) => fromHex(sha256HexPure(String(label))).slice(0, 12);
 
 export const sealText = async (seal, label, text) => {
-  const key = await importKey(seal);
-  const iv = await ivFor(label);
-  const bytes = await subtle().encrypt({ name: "AES-GCM", iv }, key, encoder.encode(String(text ?? "")));
-  return toB64(new Uint8Array(bytes));
+  const iv = ivFor(label);
+  const plain = encoder.encode(String(text ?? ""));
+  const webCrypto = subtle();
+  if (webCrypto) {
+    try {
+      const key = await importKey(webCrypto, seal);
+      return toB64(new Uint8Array(await webCrypto.encrypt({ name: "AES-GCM", iv }, key, plain)));
+    } catch {
+      /* not usable after all (insecure context) — fall through */
+    }
+  }
+  return toB64(aesGcmEncrypt(fromHex(seal), iv, plain));
 };
 
 export const openText = async (seal, label, cipher) => {
-  const key = await importKey(seal);
-  const iv = await ivFor(label);
-  const bytes = await subtle().decrypt({ name: "AES-GCM", iv }, key, fromB64(String(cipher ?? "")));
-  return decoder.decode(bytes);
+  const iv = ivFor(label);
+  const sealed = fromB64(String(cipher ?? ""));
+  const webCrypto = subtle();
+  let key = null;
+  if (webCrypto) {
+    try {
+      key = await importKey(webCrypto, seal);
+    } catch {
+      key = null;
+    }
+  }
+  // A wrong seal or a tampered cipher throws on either path.
+  if (key) return decoder.decode(await webCrypto.decrypt({ name: "AES-GCM", iv }, key, sealed));
+  return decoder.decode(aesGcmDecrypt(fromHex(seal), iv, sealed));
+};
+
+// Whether this device can seal and reopen an intercept. Checked before an
+// agent's report spends its AI request, so a report that could not be stored
+// is never paid for.
+export const spySealingWorks = async () => {
+  const probe = "0".repeat(64);
+  try {
+    return (await openText(probe, "probe", await sealText(probe, "probe", "probe"))) === "probe";
+  } catch {
+    return false;
+  }
 };
 
 // Seals every message of an exchange in place of its text. Messages already
@@ -83,3 +130,26 @@ export const openExchange = async (seal, exchange) => ({
     }
   })),
 });
+
+
+// Political assessments use the same per-game seal as traffic, but a separate
+// report-scoped label. They are opened only in memory before the knowledge layer
+// decides what the player may see.
+const politicalAssessmentLabel = (reportId) => `${String(reportId ?? "").trim() || "legacy-report"}:political-assessment`;
+
+export const sealPoliticalAssessment = async (seal, reportId, assessment) => {
+  if (!assessment || typeof assessment !== "object" || Array.isArray(assessment)) return null;
+  if (assessment.cipher && !assessment.summary && !assessment.findings) return { cipher: String(assessment.cipher) };
+  return { cipher: await sealText(seal, politicalAssessmentLabel(reportId), JSON.stringify(assessment)) };
+};
+
+export const openPoliticalAssessment = async (seal, reportId, assessment) => {
+  if (!assessment || typeof assessment !== "object" || Array.isArray(assessment)) return null;
+  if (!assessment.cipher) return assessment;
+  try {
+    const parsed = JSON.parse(await openText(seal, politicalAssessmentLabel(reportId), assessment.cipher));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return { summary: "[unreadable]", findings: [] };
+  }
+};

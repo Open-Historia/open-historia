@@ -1,4 +1,5 @@
 /*! Open Historia — GPU ownership frontier-distance flood presentation © 2026 Open Historia contributors, AGPL-3.0-or-later (see LICENSE). */
+import { politicalFillOpacityAtZoom } from "./presentationPolicy.js";
 
 export const OWNERSHIP_FLOOD_LAYER_ID = "ownership-transition-flood";
 export const MAX_ACTIVE_OWNERSHIP_FLOOD_FIELDS = 8;
@@ -130,24 +131,6 @@ const parseCssRgb = (value, fallback = [0.5, 0.5, 0.5]) => {
   if (hex?.length === 3) return [...hex].map((char) => parseInt(`${char}${char}`, 16) / 255);
   if (hex?.length === 6) return [0, 2, 4].map((offset) => parseInt(hex.slice(offset, offset + 2), 16) / 255);
   return fallback;
-};
-
-const politicalFillOpacityAtZoom = (zoom) => {
-  const stops = [
-    [1.5, 0.46], [2.5, 0.50], [3.75, 0.56], [5.0, 0.62],
-    [6.5, 0.68], [8.0, 0.72], [10.0, 0.78], [12.0, 0.82], [14.0, 0.84],
-  ];
-  const z = Number(zoom) || 0;
-  if (z <= stops[0][0]) return stops[0][1];
-  for (let index = 1; index < stops.length; index += 1) {
-    const [z1, a1] = stops[index];
-    const [z0, a0] = stops[index - 1];
-    if (z <= z1) {
-      const t = (z - z0) / Math.max(1e-9, z1 - z0);
-      return a0 + ((a1 - a0) * t);
-    }
-  }
-  return stops.at(-1)[1];
 };
 
 const releaseField = (gl, field) => {

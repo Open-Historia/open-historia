@@ -5,7 +5,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { AI_FIRST_BYTE_TIMEOUT_MS, AI_IDLE_TIMEOUT_MS, createIdleDeadline } from "./idleDeadline.js";
+import { AI_FIRST_BYTE_TIMEOUT_MS, AI_IDLE_TIMEOUT_MS, createIdleDeadline, runWithIdleDeadline } from "./idleDeadline.js";
 
 // Mock timers, because every case here is about when something fires and the
 // windows are minutes long.
@@ -157,4 +157,61 @@ test("the deadline moves forward with every token", (t) => {
   timers.tick(60000);
   idle.note();
   assert.equal(idle.deadline, first + 60000);
+});
+
+// ---- runWithIdleDeadline: the direct calls (tracked stats, the briefing) ----
+// They used to pass a stopwatch "deadline" that callAI reads only to cap a
+// busy-retry, so a stalled provider held the skip forever with "Limit AI
+// generation" on.
+
+// A stand-in provider call: never answers, and rejects when its signal aborts,
+// the way fetch does.
+const hangingCall = (seen = {}) => ({ signal, deadline, onActivity }) => {
+  Object.assign(seen, { signal, deadline, onActivity });
+  return new Promise((_, reject) => {
+    signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
+  });
+};
+
+test("a direct call that never answers is stopped at the first-byte window, with the stall named", async (t) => {
+  const timers = withTimers(t);
+  const timeoutError = new Error("stalled");
+  const seen = {};
+  const pending = runWithIdleDeadline(hangingCall(seen), { idleMs: AI_IDLE_TIMEOUT_MS, firstByteMs: AI_FIRST_BYTE_TIMEOUT_MS, timeoutError });
+  assert.equal(seen.deadline, Date.now() + AI_FIRST_BYTE_TIMEOUT_MS);
+  timers.tick(AI_FIRST_BYTE_TIMEOUT_MS - 1);
+  assert.equal(seen.signal.aborted, false);
+  timers.tick(1);
+  await assert.rejects(pending, (error) => error === timeoutError);
+});
+
+test("a direct call that is still streaming is not stopped", async (t) => {
+  const timers = withTimers(t);
+  let finish;
+  const pending = runWithIdleDeadline(({ onActivity }) => new Promise((resolve) => {
+    finish = resolve;
+    for (let i = 0; i < 5; i += 1) { onActivity(); timers.tick(AI_IDLE_TIMEOUT_MS - 1000); }
+  }), { idleMs: AI_IDLE_TIMEOUT_MS, firstByteMs: AI_FIRST_BYTE_TIMEOUT_MS });
+  finish("done");
+  assert.equal(await pending, "done");
+});
+
+test("the setting off: no window, the call waits as long as it takes", async (t) => {
+  const timers = withTimers(t);
+  const seen = {};
+  let settled = false;
+  runWithIdleDeadline(hangingCall(seen), { idleMs: 0, firstByteMs: 0 }).catch(() => { settled = true; });
+  timers.tick(AI_FIRST_BYTE_TIMEOUT_MS * 4);
+  await Promise.resolve();
+  assert.equal(settled, false);
+  assert.equal(seen.deadline, null);
+  assert.equal(seen.signal.aborted, false);
+});
+
+test("the caller's Cancel still cancels, and is not reported as a stall", async () => {
+  const outer = new AbortController();
+  const timeoutError = new Error("stalled");
+  const pending = runWithIdleDeadline(hangingCall(), { idleMs: AI_IDLE_TIMEOUT_MS, signal: outer.signal, timeoutError });
+  outer.abort(new Error("cancelled"));
+  await assert.rejects(pending, (error) => error !== timeoutError && error.name === "AbortError");
 });

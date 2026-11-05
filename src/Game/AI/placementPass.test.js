@@ -22,6 +22,7 @@ import assert from "node:assert/strict";
 import {
     bboxOfGeometry,
     describeApproximatePlacement,
+    describeOtherKind,
     hashText,
     homeWaters,
     nearestSea,
@@ -32,14 +33,14 @@ import {
 } from "./placement.js";
 import { FOOTPRINT_KM, obstaclesOf, spaceOut } from "../../runtime/featureSpacing.js";
 import { createApplicationReceipt, noteReceipt } from "../../runtime/applicationReceipt.js";
-
+import { placementNote } from "../../runtime/receiptPlayerNotes.js";
 import { normalizeEvents } from "../../runtime/gameState.js";
 import { seaShareOf } from "../../runtime/unitMotion.js";
-import { findUnitByRef, readNameRef } from "./nameRefs.js";
+import { findUnitByRef, readNameRef, stripKindTags } from "./nameRefs.js";
 
 const source = readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
 const start = source.indexOf("const LAND_UNIT_TYPES = new Set(");
-const end = source.indexOf("// The system prompt a task is sent:");
+const end = source.indexOf("// A garrison or base on another power's land is deployed by");
 assert.ok(start !== -1 && end > start, "could not find the placement pass in gameplay.js");
 
 const asArray = (value) => (Array.isArray(value) ? value : []);
@@ -50,14 +51,14 @@ const fold = (value) => asText(value).toLowerCase();
 const placementPass = (gazetteer) => new Function(
     "normalizeArray", "normalizeString", "lazyLookupContext", "buildPlacementGazetteer", "obstaclesOf", "spaceOut", "FOOTPRINT_KM",
     "resolvePlacement", "resolveRegionPlacement", "describeApproximatePlacement", "nearestSea", "homeWaters", "placementHash",
-    "noteReceipt", "logDebugEvent", "findUnitByRef", "readNameRef", "seaShareOf",
-    "regionWithinContainer",
+    "noteReceipt", "placementNote", "noteUndeployedPosts", "logDebugEvent", "findUnitByRef", "readNameRef", "seaShareOf",
+    "regionWithinContainer", "describeOtherKind", "stripKindTags",
     `${source.slice(start, end)}\nreturn resolvePlacements;`,
 )(
     asArray, asText, () => async () => ({}), () => gazetteer, obstaclesOf, spaceOut, FOOTPRINT_KM,
     resolvePlacement, resolveRegionPlacement, describeApproximatePlacement, nearestSea, homeWaters, hashText,
-    noteReceipt, () => {}, findUnitByRef, readNameRef, seaShareOf,
-    regionWithinContainer,
+    noteReceipt, placementNote, () => {}, () => {}, findUnitByRef, readNameRef, seaShareOf,
+    regionWithinContainer, describeOtherKind, stripKindTags,
 );
 
 // What gameplay.js's gazetteer offers the pass, over a list of regions.
@@ -172,14 +173,36 @@ test("a fleet SENT inland is not moved: only a new one is given its owner's wate
     assert.deepEqual(notes, ['dropped: Event "The squadron is formed": 1st Squadron was sent inland, too far from any sea for a fleet, and was not moved. Place fleets with "off <port>" or the name of a sea.']);
 });
 
-test("a new fleet put inland in another power's country is not sent home to a far coast", async () => {
+test("a new fleet put inland in another power's country goes to that country's coast, not home and not nowhere", async () => {
     const gazetteer = continent(LONGLAND);
-    // Rimland's land, the middle of it more than 400 km from any sea.
+    // Rimland's land, the middle of it more than 400 km from any sea. It used
+    // to be left off the map: a formation its event raised, lost for the
+    // place it was raised at (a player's log, 2026-10-12, asked what was).
     const op = spawn({ at: "North-West" });
     const { notes } = await place(gazetteer, [op]);
-    assert.equal(op.unit.lng, undefined);
-    assert.equal(op.unit.lat, undefined);
-    assert.deepEqual(notes, ['dropped: Event "The squadron is formed": 1st Squadron was placed inland, too far from any sea for a fleet, and was left off the map. Place fleets with "off <port>" or the name of a sea.']);
+    assert.ok(atSea(gazetteer, op.unit), `not at sea: ${op.unit.lng},${op.unit.lat}`);
+    assert.ok(op.unit.lng < 0 || op.unit.lat > 30, `off North-West's own shore, not Longland's: ${op.unit.lng},${op.unit.lat}`);
+    assert.equal(op.unit.at, undefined);
+    assert.deepEqual(notes, ['adjusted: Event "The squadron is formed": 1st Squadron was placed inland, too far from any sea for a fleet, and was put to sea off North-West, on Rimland\'s own coast, instead. Place fleets with "off <port>" or the name of a sea.']);
+});
+
+test("a new fleet in a foreign country with no coast goes to its owner's own waters", async () => {
+    // Inland holds the middle box and no shore; Longland holds East.
+    const gazetteer = continent({ c: "Inland", e: "Longland" });
+    const op = spawn({ at: "Centre" });
+    const { notes } = await place(gazetteer, [op]);
+    assert.ok(atSea(gazetteer, op.unit), `not at sea: ${op.unit.lng},${op.unit.lat}`);
+    assert.ok(op.unit.lng > 30, "east of East, the only shore Longland has");
+    assert.match(notes.at(-1), /^adjusted: .*was put to sea off East, on Longland's own coast, instead\./);
+});
+
+test("a fleet MOVED inland in another power's country is still not moved", async () => {
+    const gazetteer = continent(LONGLAND);
+    const world = { units: [{ id: "fleet-1", name: "1st Squadron", type: "naval", ownerCode: "Longland", lng: 31, lat: 15 }] };
+    const op = { op: "move", unitId: "fleet-1", at: "North-West" };
+    const { notes } = await place(gazetteer, [op], { world });
+    assert.equal(op.toLng, undefined);
+    assert.match(notes.at(-1), /^dropped: .*was sent inland, too far from any sea for a fleet, and was not moved\./);
 });
 
 test("a new fleet whose owner holds no coast is left off the map, and the normalizer says so once", async (t) => {

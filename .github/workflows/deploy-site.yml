@@ -63,7 +63,7 @@ jobs:
 
       - name: Build the site
         # Landing page at /, game at /play/, the map under /play/assets/.
-        # seed-web-defaults.mjs reads the default scenario out of server/data,
+        # seed-web-defaults.mjs reads the default scenario out of server/seed,
         # which IS committed; the map files come from the map-data Release.
         run: npm run build:site
 

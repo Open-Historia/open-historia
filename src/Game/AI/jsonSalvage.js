@@ -266,7 +266,19 @@ const closersFor = (stack) => stack
 // half-written array — is left unparseable on purpose.
 const CLOSED_VALUE_TAIL = /[}\]]$/;
 
-const balancedJsonCandidates = (text) => {
+// A bracket that prose opens and never closes ("[Action Planning", a lone "{"
+// in a sentence) swallows everything after it: the scan is still inside that
+// block when the text runs out, so an answer further on is never offered.
+// Asked to (`readOn`), the scan goes back to just past such a bracket and
+// reads on, a bounded number of times, and marks what it then finds `inner`.
+// Only for a reader that can tell the answer from a part of one: the same
+// walk over an answer that was cut off finds the finished pieces inside it,
+// and a turn never half-lands (above).
+const UNCLOSED_RESTARTS = 64;
+
+// The blocks in the order they stand in the text, as { text, inner }, then the
+// last-resort repair.
+const orderedJsonCandidates = (text, { readOn = false } = {}) => {
   const candidates = [];
   const repairs = [];
   const stack = [];
@@ -276,11 +288,27 @@ const balancedJsonCandidates = (text) => {
   let start = -1;
   let inString = false;
   let escaped = false;
+  let restarts = 0;
   const open = (ch) => {
     stack.push(ch);
     commas.push(0);
   };
-  for (let i = 0; i < text.length; i += 1) {
+  for (let i = 0; i <= text.length; i += 1) {
+    if (i === text.length) {
+      if (start === -1) break;
+      // The text ran out inside a block. The first time, that block is the
+      // one a forgotten closer may be mended on (below).
+      if (restarts === 0 && !inString && stack.length
+          && stack.every((ch, level) => ch === "[" && commas[level] === 0)) {
+        const fragment = text.slice(start).trimEnd();
+        if (CLOSED_VALUE_TAIL.test(fragment)) repairs.push(`${fragment}${closersFor(stack)}`);
+      }
+      if (!readOn || restarts >= UNCLOSED_RESTARTS) break;
+      restarts += 1;
+      i = start;
+      start = -1;
+      continue;
+    }
     const ch = text[i];
     if (start === -1) {
       if (ch === "{" || ch === "[") {
@@ -306,21 +334,21 @@ const balancedJsonCandidates = (text) => {
         stack.pop();
         commas.pop();
         if (stack.length === 0) {
-          candidates.push(text.slice(start, i + 1));
+          candidates.push({ text: text.slice(start, i + 1), inner: restarts > 0 });
           start = -1;
         }
       }
     }
   }
-  if (start !== -1 && !inString && stack.length
-      && stack.every((ch, level) => ch === "[" && commas[level] === 0)) {
-    const fragment = text.slice(start).trimEnd();
-    if (CLOSED_VALUE_TAIL.test(fragment)) repairs.push(`${fragment}${closersFor(stack)}`);
-  }
+  return { candidates, repairs };
+};
+
+const balancedJsonCandidates = (text) => {
+  const { candidates, repairs } = orderedJsonCandidates(text);
   // Objects first: the payload is an object, and a stray inline array (e.g. in
   // the model's commentary) must not shadow it.
-  candidates.sort((a, b) => (a[0] === "{" ? 0 : 1) - (b[0] === "{" ? 0 : 1));
-  return [...candidates, ...repairs];
+  const sorted = candidates.map((candidate) => candidate.text).sort((a, b) => (a[0] === "{" ? 0 : 1) - (b[0] === "{" ? 0 : 1));
+  return [...sorted, ...repairs];
 };
 
 // An object whose LAST fields are riders: things carried at the end of an answer
@@ -390,6 +418,21 @@ export const parseWithoutTrailingFields = (rawText, fields) => {
   return null;
 };
 
+// The OpenAI wire's own tool call, written out as text:
+// `{ "id": "call_001", "type": "function", "function": { "name": …,
+// "arguments": … } }`. The call is its `function` member, returned here; null
+// when `value` is not such a call. Everything around that member has to be the
+// wire's own fields, so a payload that merely has a field named `function` is
+// not taken for one.
+const WIRE_CALL_KEYS = new Set(["id", "type", "index", "function"]);
+const wireCallFunction = (value) => {
+  const inner = value.function;
+  if (!inner || typeof inner !== "object" || Array.isArray(inner)) return null;
+  if (Object.keys(value).some((key) => !WIRE_CALL_KEYS.has(key))) return null;
+  if (value.type !== undefined && normalizeString(value.type).toLowerCase() !== "function") return null;
+  return inner;
+};
+
 // Some openai-compatible endpoints/models (seen with nvidia/nemotron models)
 // are asked to call the tool (tool_choice: "required") but don't actually
 // populate tool_calls — they answer with a normal text message that just
@@ -402,12 +445,19 @@ export const parseWithoutTrailingFields = (rawText, fields) => {
 // wrapping breaks strict JSON parsing, fails to parse at all) and the whole
 // turn is discarded to the canned fallback. Unwrap it back to the actual
 // arguments object so the real content underneath still gets applied.
+//
+// Small local models go one level further and write the wire's whole call
+// around it (wireCallFunction above), usually as the one member of an array,
+// once a lookup conversation has shown them what a call looks like. A player's
+// koboldcpp model answered the Projects board that way, and "$ must be object;
+// received array" held a turn whose events were already written.
 export const unwrapMimickedToolCall = (value, toolName) => {
   let current = value;
   for (let hops = 0; hops < 3 && Array.isArray(current) && current.length === 1; hops += 1) {
     current = current[0];
   }
   if (!current || typeof current !== "object" || Array.isArray(current)) return value;
+  current = wireCallFunction(current) ?? current;
   const name = normalizeString(current.name);
   if (toolName && name && name !== toolName) return value;
   // getGameplayTool returns null for tasks with no registered tool, so a name
@@ -480,13 +530,75 @@ export const extractJsonArray = (rawText) => {
   return null;
 };
 
-export const extractJsonPayload = (rawText) => {
+// `prefer`: how well a parsed value fits what the task asked for, as a number
+// (0 for not at all). With it, the answer is the value that fits BEST, wherever
+// it stands in the text, and the last of several that fit equally: a model that
+// plans in its answer writes drafts and fragments before the thing itself.
+// Without it, the first value that parses is taken, as it always was. With it,
+// when nothing fits at all: a value that is most of what was written is the
+// answer in the wrong shape, and is handed on so that the caller's own check
+// says what is wrong with it; a small value in a long text is a scrap of the
+// model's planning, and null comes back instead (MISSHAPEN_ANSWER_SHARE).
+//
+// A player's log (2026-10-12): a time skip's answer was some thirty thousand
+// characters of planning with small JSON in it ('{"op":"spawn",…}', a list of
+// order ids). The first fragment that parsed was taken for the answer, and the
+// skip failed with "$.events is required." whatever stood further on.
+//
+// `minFit`: with `prefer`, the least fit a value must have to be returned at
+// all (the caller is reading something that is not an answer, and wants the
+// whole contract or nothing).
+// `fullFit`: the fit of a value that has everything the contract requires. A
+// value found by reading on past a bracket the text left open counts only at
+// that fit, so a piece of an answer that was cut off is never taken for it.
+const MISSHAPEN_ANSWER_SHARE = 0.5;
+
+export const extractJsonPayload = (rawText, { prefer = null, minFit = 0, fullFit = Infinity } = {}) => {
   // Reasoning models (and several Ollama chat templates) prepend a think block
   // the strict parser chokes on; the answer follows it.
   const text = stripBeforeSentinel(rawText)
     .replace(/<think>[\s\S]*?<\/think>/gi, "")
     .replace(/^[\s\S]*?<\/think>/i, "")
     .trim();
+
+  if (typeof prefer === "function") {
+    const fitOf = (value) => {
+      const fit = Number(prefer(value));
+      return Number.isFinite(fit) ? fit : 0;
+    };
+    const whole = lenientJsonParse(text);
+    // The whole text is one value: that is the answer, fitting or not.
+    if (whole && minFit <= 0) return whole;
+    if (whole && fitOf(whole) >= minFit) return whole;
+    const parsedInOrder = [];
+    for (const fence of text.matchAll(/```[a-z]*\s*([\s\S]*?)```/gi)) {
+      const parsed = fence[1] ? lenientJsonParse(fence[1].trim()) : null;
+      if (parsed && typeof parsed === "object") parsedInOrder.push({ parsed, inner: false, chars: fence[1].length });
+    }
+    const { candidates, repairs } = orderedJsonCandidates(text, { readOn: true });
+    for (const candidate of [...candidates, ...repairs.map((repair) => ({ text: repair, inner: false }))]) {
+      const parsed = lenientJsonParse(candidate.text);
+      if (parsed && typeof parsed === "object") parsedInOrder.push({ parsed, inner: candidate.inner, chars: candidate.text.length });
+    }
+    let best = null;
+    let bestFit = 0;
+    for (const { parsed, inner } of parsedInOrder) {
+      const fit = fitOf(parsed);
+      if (inner && fit < fullFit) continue;
+      if (fit > 0 && fit >= bestFit) {
+        best = parsed;
+        bestFit = fit;
+      }
+    }
+    if (best && bestFit >= minFit) return best;
+    if (minFit > 0) return null;
+    // Nothing fits. The answer in the wrong shape, if one value is most of the
+    // text; otherwise nothing, and never a scrap.
+    const largest = parsedInOrder
+      .filter((entry) => !entry.inner)
+      .sort((a, b) => b.chars - a.chars)[0];
+    return largest && largest.chars >= text.length * MISSHAPEN_ANSWER_SHARE ? largest.parsed : null;
+  }
 
   const direct = lenientJsonParse(text);
   if (direct) return direct;

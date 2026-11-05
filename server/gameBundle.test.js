@@ -281,6 +281,33 @@ test("a game whose scenario this install lacks still imports, and remembers what
   assert.equal(result.importedScenarioOrigin.bundleUrl, "https://example.invalid/map.zip");
 });
 
+test("a game whose map arrives later is pointed at it, and only at a map that is here", () => {
+  // "Import & play" imports the map and then re-points the game. The map can
+  // land under another id than the one the game names (that id is taken here),
+  // so the store has to accept the new one; it used to drop it without a word.
+  const root = buildDataDir({ scenarioId: "default" });
+  const result = runStore(root, `
+    const imported = store.importGameBundle({
+      schema: "open-historia-game-bundle/1",
+      game: { name: "Borrowed Campaign" },
+      data: {},
+      scenarioRef: { scenarioId: "someone-elses-map", scenarioName: "Someone Else's Map" },
+    });
+    const card = () => store.getGameCatalog().games.find((entry) => entry.id === imported.game.id);
+    const before = card().scenarioMissing;
+    let unknown = null;
+    try { store.updateGame(imported.game.id, { scenarioId: "not-here", name: "Renamed" }); } catch (error) { unknown = error.message; }
+    const afterUnknown = { scenarioId: card().scenarioId, name: card().name };
+    store.updateGame(imported.game.id, { scenarioId: "default" });
+    ${report(`{ before, unknown, afterUnknown, after: { scenarioId: card().scenarioId, missing: card().scenarioMissing } }`)}
+  `);
+
+  assert.equal(result.before, true);
+  assert.match(result.unknown, /Scenario not found: not-here/);
+  assert.deepEqual(result.afterUnknown, { scenarioId: "someone-elses-map", name: "Borrowed Campaign" }, "a refused re-point writes nothing");
+  assert.deepEqual(result.after, { scenarioId: "default", missing: false });
+});
+
 test("the sender's scenario hints survive an ordinary meta write", () => {
   const root = buildDataDir({ scenarioId: "someone-elses-map", scenarioExists: false });
   const result = runStore(root, `
@@ -432,4 +459,27 @@ test("the campaign's own dates travel, and arrival is recorded separately", () =
   assert.ok(result.sentUpdatedAt, "and its updatedAt");
   assert.equal(result.landedCreatedAt, result.sentCreatedAt, "which the import keeps rather than minting its own");
   assert.ok(result.landedImportedAt > result.sentCreatedAt, "arrival is recorded separately, and is later");
+});
+
+test("an optional file the game does not have stays out of the bundle, so the scenario's shows through", () => {
+  // The game has its own colours but no flags file: it reads the scenario's
+  // flags. Exported as {}, the flags became the imported game's own and hid them.
+  const root = buildDataDir();
+  writeJson(path.join(root, "scenarios", "default", "flags.json"), { Testland: "data:image/png;base64,AAAA" });
+  const result = runStore(root, `
+    const bundle = store.exportGameBundle("test-campaign");
+    const imported = store.importGameBundle(bundle);
+    store.setActiveGame(imported.game.id);
+    ${report(`{
+      keys: Object.keys(bundle.data),
+      colors: bundle.data.colors,
+      flags: store.readRuntimeJsonAsset("flags").data,
+    }`)}
+  `);
+
+  assert.deepEqual(result.colors, { Testland: [1, 2, 3] }, "a file the game has travels");
+  for (const key of ["flags", "tags", "institutionLogos"]) {
+    assert.equal(result.keys.includes(key), false, `${key} is not exported as an empty object`);
+  }
+  assert.deepEqual(result.flags, { Testland: "data:image/png;base64,AAAA" }, "the imported game reads the scenario's flags");
 });

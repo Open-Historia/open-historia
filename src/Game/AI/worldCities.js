@@ -29,12 +29,12 @@
 // Imports only the name folding and the distance, so it runs under bare node.
 
 import { distanceKm } from "./placement.js";
-import { ASSETS_BASE } from "../../runtime/assetsBase.js";
+import { worldFileUrl } from "../../runtime/worldFiles.js";
 import { foldRegionKey, foldRegionKeyOnce } from "./regionMatch.js";
 
-// Where the prompt's city catalog reads it from (promptContext.js
-// CITY_SEED_URL): the build's own assets/ (assetsBase.js).
-const WORLD_CITIES_URL = `${ASSETS_BASE}/cities-seed.json`;
+// Where the editor's importer and the prompt's city catalog read it from: the
+// build's own /assets folder, on every build (runtime/worldFiles.js).
+const WORLD_CITIES_URL = worldFileUrl("cities");
 
 // One town is on the list up to four times. The list was swept from map tiles
 // at four zoom levels (scripts/extract-cities.mjs), and each level rounds a

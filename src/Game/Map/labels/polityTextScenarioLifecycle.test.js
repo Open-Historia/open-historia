@@ -8,16 +8,14 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const layer = fs.readFileSync(path.join(here, "PolityTextLayer.jsx"), "utf8");
 const nations = fs.readFileSync(path.join(here, "..", "Nations.jsx"), "utf8");
 
+// What the runtime does with each wakeup is tested in polityTextSync.test.js;
+// these check that the component sends the right one.
 test("scenario style wakeups cannot starve an in-flight PTR placement generation", () => {
-  assert.match(layer, /activeRecordsRef:\s*null/);
-  assert.match(layer, /const recordsActuallyChanged = requestedRecordsRef !== runtime\.activeRecordsRef/);
-  assert.match(layer, /if \(!invalidateInFlight \|\| !recordsActuallyChanged\) return/);
   assert.match(layer, /const onMapReady = \(\) => \{[\s\S]*?invalidateInFlight: false/);
 });
 
 test("new canonical PTR records still preempt stale placement work", () => {
   assert.match(layer, /runtime\.syncRecords\(\{ invalidateInFlight: true \}\)/);
-  assert.match(layer, /runtime\.generation \+= 1;[\s\S]*?cancelPlacementSolve\(\)/);
 });
 
 test("PTR scenario recovery does not key the renderer to the mutable runtime asset token", () => {
@@ -32,8 +30,10 @@ test("scenario recovery keeps the accepted political-fill and flood baseline int
   assert.match(nations, /const OWNERSHIP_FLOOD_PREP_BUDGET_MS = 350/);
   assert.match(
     nations,
-    /const transitionAwareFillOpacity = useMemo\(\(\) => \(customFlag[\s\S]*?buildPoliticalFillOpacity\(\[/,
+    /const transitionAwareFillOpacity = useMemo\(\(\) => \(customFlag[\s\S]*?buildPoliticalFillOpacity\(FILL_HIDDEN\)/,
   );
+  // (The hidden flag, shared by the sweep and the battlefields' ground: frontGround.js.)
+  assert.match(nations, /const FILL_HIDDEN = \["boolean", \["feature-state", "ownershipTransitionHidden"\], false\];/);
   assert.doesNotMatch(
     nations,
     /const transitionAwareFillOpacity = useMemo\(\(\) => \(customFlag[\s\S]*?\[\s*"case",[\s\S]*?POLITICAL_FILL_OPACITY/,

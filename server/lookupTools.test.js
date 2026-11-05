@@ -15,6 +15,7 @@ import {
   executeLookup,
   isLookupToolName,
 } from "../src/Game/AI/lookupTools.js";
+import { viewerAudience } from "../src/Game/AI/audience.js";
 
 const square = (x, y) => ({ type: "Polygon", coordinates: [[[x, y], [x + 1, y], [x + 1, y + 1], [x, y + 1], [x, y]]] });
 
@@ -50,7 +51,7 @@ const WORLD = {
     { id: "p2", name: "Pipeline", kind: "industry", ownerCode: "Russian Federation", status: "completed", progress: 100 },
   ],
   storylines: [
-    { id: "s1", kind: "war", title: "Eastern front", status: "active", participants: ["Ukraine", "Russian Federation"], pressure: 70, momentum: 20, startedDate: "2014-03-01", state: "Stalemate along the river.", drivers: ["mobilisation"] },
+    { id: "s1", kind: "war", title: "Eastern front", status: "active", participants: ["Ukraine", "Russian Federation"], pressure: 70, momentum: 20, startedDate: "2014-03-01", state: "Stalemate along the river." },
     { id: "s2", kind: "politics", title: "Moscow succession", status: "dormant", participants: ["Russian Federation"], pressure: 10, momentum: 0 },
   ],
   spies: [
@@ -92,6 +93,9 @@ test("the catalogue is well formed and the directive names the rules", () => {
   assert.ok(!isLookupToolName("submit_jump_result"));
   assert.match(LOOKUP_DIRECTIVE, /find_region/);
   assert.match(LOOKUP_DIRECTIVE, /exact name/);
+  // Every lookup the catalogue declares is one the directive can point the model at.
+  assert.equal(LOOKUP_TOOL_NAMES.length, 23);
+  for (const name of ["political_actor", "list_institutions", "institution_info"]) assert.match(LOOKUP_DIRECTIVE, new RegExp(name));
 });
 
 test("list_powers: exact names, counts by current control, the player flagged", () => {
@@ -101,6 +105,39 @@ test("list_powers: exact names, counts by current control, the player flagged", 
     { name: "Ukraine", regions: 3, player: true },
   ]);
   assert.deepEqual(run("list_powers", { query: "russ" }).powers.map((power) => power.name), ["Russian Federation"]);
+});
+
+test("list_powers: landless polities in the present are listed, the player's group polity marked", () => {
+  const ctx = buildLookupContext({
+    regions: REGIONS,
+    world: {
+      ...WORLD,
+      polityOverrides: {
+        ...WORLD.polityOverrides,
+        "Free Kharkiv Brigades": { name: "Free Kharkiv Brigades", status: "active" },
+        GXL: { name: "Government in Exile", aliases: [] },
+        "Old Kingdom": { name: "Old Kingdom", status: "dissolved" },
+        "Sleeping Khanate": { name: "Sleeping Khanate", status: "dormant" },
+      },
+      groups: { "Free Kharkiv Brigades": { description: "Partisans." } },
+      groupAreas: { "ukr-kharkiv": "Free Kharkiv Brigades" },
+    },
+    player: "Free Kharkiv Brigades",
+  });
+  const out = executeLookup(ctx, "list_powers", {});
+  assert.deepEqual(out.powers, [
+    { name: "Russian Federation", regions: 3 },
+    { name: "Ukraine", regions: 3 },
+    { name: "Free Kharkiv Brigades", regions: 0, landless: true, player: true, alsoGroup: true },
+    // Keyed by a legacy code: listed by the label every other function resolves.
+    { name: "GXL", regions: 0, landless: true },
+  ]);
+  assert.equal(out.count, 4);
+  // What list_powers names, power_info answers.
+  assert.equal(executeLookup(ctx, "power_info", { name: "GXL" }).regions, 0);
+  assert.equal(executeLookup(ctx, "power_info", { name: "Government in Exile" }).name, "GXL");
+  // A landless polity is also a close name for an unknown one.
+  assert.deepEqual(executeLookup(ctx, "list_regions", { owner: "Free Kharkiv" }).didYouMean, ["Free Kharkiv Brigades"]);
 });
 
 test("list_regions: one power's regions by name, paged", () => {
@@ -117,11 +154,36 @@ test("list_regions: one power's regions by name, paged", () => {
 test("owner names are exact: Russia is not the Russian Federation", () => {
   const out = run("list_regions", { owner: "Russia" });
   assert.match(out.error, /"Russia" is not a power/);
-  assert.deepEqual(out.powers, ["Russian Federation", "Ukraine"]);
+  assert.deepEqual(out.didYouMean, ["Russian Federation"]);
+  assert.equal(out.powers, undefined);
   assert.equal(run("power_info", { name: "Russia" }).error !== undefined, true);
   // A declared alias and a legacy code both name the power the map spells out.
   assert.equal(run("list_regions", { owner: "UKR" }).owner, "Ukraine");
   assert.equal(run("power_info", { name: "RUS" }).name, "Russian Federation");
+});
+
+test("an unknown power is answered with the closest exact names, else the alphabetical list", () => {
+  const owners = {};
+  const regions = [];
+  for (const name of ["Albania", "Austria", "Australia", "Belarus", "Russian Federation", "Prussia", "Rwanda", "Tunisia", "Democratic Republic of the Congo", "Republic of the Congo"]) {
+    const id = name.toLowerCase().replace(/\W+/g, "-");
+    regions.push({ id, name: `${name} heartland` });
+    owners[id] = name;
+  }
+  const ctx = buildLookupContext({ regions, world: { regionOwnershipOverrides: owners } });
+  const ask = (owner) => executeLookup(ctx, "list_regions", { owner });
+  // Containment first, a whole word ahead of a fragment; then a letter or two off.
+  assert.deepEqual(ask("Russia").didYouMean, ["Russian Federation", "Prussia"]);
+  assert.deepEqual(ask("Congo").didYouMean, ["Republic of the Congo", "Democratic Republic of the Congo"]);
+  assert.deepEqual(ask("Austia").didYouMean, ["Austria"]);
+  assert.equal(ask("Russia").powers, undefined);
+  // Nothing close: the alphabetical list, as before.
+  const far = ask("Zzyzx");
+  assert.equal(far.didYouMean, undefined);
+  assert.equal(far.powers[0], "Albania");
+  assert.equal(far.powers.length, 10);
+  // A suggestion never resolves: the near name still names nobody.
+  assert.match(ask("Russia").error, /not a power/);
 });
 
 test("find_region: exact, with an administrative suffix, a transliteration off, or ambiguous", () => {
@@ -213,6 +275,35 @@ test("war_ledger and chat_history read the ledgers as they are", () => {
   assert.match(run("chat_history", { with: "Russia" }).error, /not a power/);
 });
 
+test("chat_history: every thread with the power, the live one with the latest word read, chatId reads another", () => {
+  // Stored newest-created first, as the save keeps them.
+  const chats = [
+    { id: "c-council", title: "Council table", institutionId: "rc", countries: [{ name: "Russian Federation" }, { name: "Belarus" }], messages: [{ speaker: "Belarus", text: "Order.", time: "2014-03-02" }] },
+    { id: "c-old", title: "Old talks", status: "closed", countries: [{ name: "Russian Federation" }], messages: [{ speaker: "Russian Federation", text: "Done.", time: "2014-03-09" }] },
+    { id: "c-live", title: "Ceasefire", countries: [{ name: "Russian Federation" }], messages: [{ speaker: "Ukraine", text: "Hold fire.", time: "2014-03-04" }, { speaker: "Russian Federation", text: "Agreed.", time: "" }] },
+    { id: "c-bc", title: "Ancient", countries: [{ name: "Russian Federation" }], messages: [{ speaker: "Ukraine", text: "Old.", time: "300 BC" }] },
+  ];
+  const ctx = buildLookupContext({ regions: REGIONS, world: WORLD, chats, player: "Ukraine" });
+  const out = executeLookup(ctx, "chat_history", { with: "Russian Federation" });
+  assert.equal(out.chatId, "c-live");
+  assert.equal(out.title, "Ceasefire");
+  assert.deepEqual(out.messages.map((message) => message.text), ["Hold fire.", "Agreed."]);
+  assert.equal(out.messages[0].date, "2014-03-04");
+  assert.deepEqual(out.threads.map((thread) => thread.id), ["c-live", "c-council", "c-bc", "c-old"]);
+  assert.deepEqual(out.threads[0], { id: "c-live", title: "Ceasefire", participants: ["Russian Federation"], messages: 2, lastMessageDate: "2014-03-04" });
+  assert.equal(out.threads[1].institutionId, "rc");
+  assert.equal(out.threads[3].status, "closed");
+
+  const old = executeLookup(ctx, "chat_history", { with: "Russian Federation", chatId: "c-old" });
+  assert.equal(old.chatId, "c-old");
+  assert.deepEqual(old.messages.map((message) => message.text), ["Done."]);
+  const missing = executeLookup(ctx, "chat_history", { with: "Russian Federation", chatId: "nope" });
+  assert.deepEqual(missing.messages, []);
+  assert.match(missing.hint, /No thread "nope"/);
+  // A thread with someone else is not one of this power's.
+  assert.match(executeLookup(ctx, "chat_history", { with: "Ukraine", chatId: "c-live" }).hint, /No conversation/);
+});
+
 test("list_units and contested_regions", () => {
   assert.equal(run("list_units", {}).count, 1);
   assert.equal(run("list_units", { owner: "Ukraine" }).count, 0);
@@ -277,6 +368,25 @@ test("list_projects: the board by owner and status, with what completion moves o
   assert.match(run("list_projects", { owner: "Russia" }).error, /not a power/);
 });
 
+test("list_projects: a proposed programme is open, and the board's statuses decide it", () => {
+  const ctx = buildLookupContext({
+    regions: REGIONS,
+    world: {
+      ...WORLD,
+      projects: [
+        { id: "q1", name: "Canal", ownerCode: "Ukraine", status: "proposed" },
+        { id: "q2", name: "Dam", ownerCode: "Ukraine", status: "Stalled" },
+        { id: "q3", name: "Bridge", ownerCode: "Ukraine", status: "complete" },
+        { id: "q4", name: "Port", ownerCode: "Ukraine", status: "cancelled" },
+        { id: "q5", name: "Rail", ownerCode: "Ukraine" },
+      ],
+    },
+    player: "Ukraine",
+  });
+  assert.deepEqual(executeLookup(ctx, "list_projects", {}).projects.map((project) => project.id), ["q1", "q2", "q5"]);
+  assert.deepEqual(executeLookup(ctx, "list_projects", { status: "closed" }).projects.map((project) => project.id), ["q3", "q4"]);
+});
+
 test("relations_between: the pairwise ledger, agreements and whether they are at war", () => {
   const pair = run("relations_between", { a: "Ukraine", b: "Russian Federation" });
   assert.equal(pair.relation.score, -70);
@@ -293,7 +403,7 @@ test("storylines: filtered by participant and status", () => {
   assert.deepEqual(run("storylines", {}).storylines.map((storyline) => storyline.id), ["s1", "s2"]);
   const ukraine = run("storylines", { participant: "Ukraine" });
   assert.deepEqual(ukraine.storylines.map((storyline) => storyline.id), ["s1"]);
-  assert.deepEqual(ukraine.storylines[0].drivers, ["mobilisation"]);
+  assert.equal(ukraine.storylines[0].state, "Stalemate along the river.");
   assert.deepEqual(run("storylines", { status: "dormant" }).storylines.map((storyline) => storyline.id), ["s2"]);
 });
 
@@ -354,32 +464,46 @@ test("map_around: the neighbourhood of a region grouped by owner, with sovereign
   assert.match(run("map_around", { regionId: "nope" }).error, /No region/);
 });
 
-test("a region is asked for by its name, however it is written; the map's own key is still read", () => {
-  const byName = run("region_info", { region: "Kharkiv" });
-  assert.equal(byName.name, "Kharkiv");
-  assert.equal("id" in byName, false, "no answer carries the map's key for a region");
-  assert.equal(run("region_info", { region: "region: Kharkiv" }).name, "Kharkiv");
-  assert.equal(run("region_info", { region: "Kharkiv (Ukraine)" }).name, "Kharkiv");
-  assert.equal(run("region_info", { region: "kharkiv oblast" }).name, "Kharkiv", "a suffix or a letter off, when one region fits");
-  assert.equal(run("region_info", { regionId: "ukr-kharkiv" }).name, "Kharkiv");
-  assert.equal(run("map_around", { region: "Kharkiv" }).centre.name, "Kharkiv");
-  assert.equal(run("path_between", { fromRegion: "Kharkiv", toRegion: "Belgorod" }).steps, 1);
-  assert.match(run("region_history", { region: "Zaporizhzhia" }).name, /Zaporizhzhia/);
-  assert.match(run("region_info", { region: "Atlantis" }).error, /No region is called "Atlantis"/);
-  assert.match(run("region_info", {}).error, /Name the region/);
+const PUPPET_WORLD = {
+  ...WORLD,
+  polityOverrides: {
+    ...WORLD.polityOverrides,
+    Belarus: { name: "Belarus" },
+    Moldova: { name: "Moldova" },
+    Crimea: { name: "Crimea" },
+  },
+  puppets: [
+    { id: "p-bel", overlord: "Russian Federation", puppet: "Belarus", kind: "satellite", secrecy: "open", loyalty: 70, status: "active", startedDate: "1994-07-20" },
+    { id: "p-mda", overlord: "Russian Federation", puppet: "Moldova", kind: "client", secrecy: "covert", loyalty: 30, status: "active", startedDate: "2013-05-01", knownTo: [{ polity: "Ukraine", learnedDate: "2014-02-01" }] },
+    { id: "p-crm", overlord: "Ukraine", puppet: "Crimea", kind: "protectorate", secrecy: "open", loyalty: 50, status: "released", startedDate: "1992-01-01", endedDate: "1995-01-01" },
+  ],
+};
+
+test("power_info and relations_between: who directs whom, the truth for the narrator", () => {
+  const ctx = buildLookupContext({ regions: REGIONS, world: PUPPET_WORLD, player: "Ukraine" });
+  assert.deepEqual(executeLookup(ctx, "power_info", { name: "Russian Federation" }).subordinations, [
+    { overlord: "Russian Federation", puppet: "Belarus", kind: "satellite", secrecy: "open", loyalty: 70, since: "1994-07-20" },
+    { overlord: "Russian Federation", puppet: "Moldova", kind: "client", secrecy: "covert", loyalty: 30, since: "2013-05-01", alsoKnownTo: ["Ukraine"] },
+  ]);
+  // An arrangement that ended directs nobody.
+  assert.deepEqual(executeLookup(ctx, "power_info", { name: "Ukraine" }).subordinations, []);
+  const pair = executeLookup(ctx, "relations_between", { a: "Belarus", b: "Russian Federation" });
+  assert.deepEqual(pair.subordinations.map((row) => `${row.overlord}>${row.puppet}`), ["Russian Federation>Belarus"]);
+  assert.deepEqual(executeLookup(ctx, "relations_between", { a: "Belarus", b: "Moldova" }).subordinations, []);
 });
 
-test("two regions of one name are told apart by their owner, never guessed", () => {
-  const ctx = buildLookupContext({
-    regions: [
-      { id: "us-ga", name: "Georgia", owner: "United States" },
-      { id: "ge-1", name: "Georgia", owner: "Georgia" },
-    ],
-    world: {},
-  });
-  assert.match(executeLookup(ctx, "region_info", { region: "Georgia" }).error, /2 regions are called "Georgia", held by United States, Georgia\. Say which, as "Georgia \(<owner>\)"/);
-  assert.equal(executeLookup(ctx, "region_info", { region: "Georgia (United States)" }).owner, "United States");
-  assert.equal(executeLookup(ctx, "region_info", { region: "region: Georgia (Georgia)" }).owner, "Georgia");
+test("subordinations as a viewer knows them", () => {
+  const as = (polity) => buildLookupContext({ regions: REGIONS, world: PUPPET_WORLD, player: "Ukraine", audience: viewerAudience([polity]) });
+  // Ukraine's service uncovered the covert client; the open satellite is public. No loyalty for another's puppet.
+  assert.deepEqual(executeLookup(as("Ukraine"), "power_info", { name: "Russian Federation" }).subordinations, [
+    { overlord: "Russian Federation", puppet: "Belarus", kind: "satellite", secrecy: "open", since: "1994-07-20" },
+    { overlord: "Russian Federation", puppet: "Moldova", kind: "client", secrecy: "covert", since: "2013-05-01", fromIntelligence: true, asOf: "2014-02-01" },
+  ]);
+  // Belarus knows its own arrangement and nothing of the covert one.
+  assert.deepEqual(executeLookup(as("Belarus"), "power_info", { name: "Russian Federation" }).subordinations.map((row) => row.puppet), ["Belarus"]);
+  assert.deepEqual(executeLookup(as("Belarus"), "relations_between", { a: "Moldova", b: "Russian Federation" }).subordinations, []);
+  // The overlord reads its puppet's loyalty as a band, never a number.
+  assert.equal(executeLookup(as("Russian Federation"), "power_info", { name: "Moldova" }).subordinations[0].loyalty, "Restless");
 });
 
 test("list_regions with a group: its whole area with each region's owner, paged; map_around names the group", () => {
@@ -412,6 +536,35 @@ test("list_regions with a group: its whole area with each region's owner, paged;
   assert.equal(around.byOwner["Russian Federation"][0].controlledByGroup, "Kharkiv Partisans");
   assert.equal("controlledByGroup" in executeLookup(ctx, "map_around", { regionId: "ukr-zap" }).byOwner["Russian Federation"][0], false);
 });
+
+test("a region is asked for by its name, however it is written; the map's own key is still read", () => {
+  const byName = run("region_info", { region: "Kharkiv" });
+  assert.equal(byName.name, "Kharkiv");
+  assert.equal("id" in byName, false, "no answer carries the map's key for a region");
+  assert.equal(run("region_info", { region: "region: Kharkiv" }).name, "Kharkiv");
+  assert.equal(run("region_info", { region: "Kharkiv (Ukraine)" }).name, "Kharkiv");
+  assert.equal(run("region_info", { region: "kharkiv oblast" }).name, "Kharkiv", "a suffix or a letter off, when one region fits");
+  assert.equal(run("region_info", { regionId: "ukr-kharkiv" }).name, "Kharkiv");
+  assert.equal(run("map_around", { region: "Kharkiv" }).centre.name, "Kharkiv");
+  assert.equal(run("path_between", { fromRegion: "Kharkiv", toRegion: "Belgorod" }).steps, 1);
+  assert.match(run("region_history", { region: "Zaporizhzhia" }).name, /Zaporizhzhia/);
+  assert.match(run("region_info", { region: "Atlantis" }).error, /No region is called "Atlantis"/);
+  assert.match(run("region_info", {}).error, /Name the region/);
+});
+
+test("two regions of one name are told apart by their owner, never guessed", () => {
+  const ctx = buildLookupContext({
+    regions: [
+      { id: "us-ga", name: "Georgia", owner: "United States" },
+      { id: "ge-1", name: "Georgia", owner: "Georgia" },
+    ],
+    world: {},
+  });
+  assert.match(executeLookup(ctx, "region_info", { region: "Georgia" }).error, /2 regions are called "Georgia", held by United States, Georgia\. Say which, as "Georgia \(<owner>\)"/);
+  assert.equal(executeLookup(ctx, "region_info", { region: "Georgia (United States)" }).owner, "United States");
+  assert.equal(executeLookup(ctx, "region_info", { region: "region: Georgia (Georgia)" }).owner, "Georgia");
+});
+
 // A territory by its own name (src/Game/AI/namedAreas.js): Greenland is no
 // power and no region of the built-in map, only the regions that belong to it.
 test("list_regions names a power's territories beside its regions", () => {

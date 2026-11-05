@@ -1,9 +1,13 @@
 import { useEffect, useState } from "react";
-import { JSON_URLS, readJson, reportPerfOperation } from "../../runtime/assets.js";
+import { JSON_URLS, encodeOwnBasemaps, readJson, reportPerfOperation } from "../../runtime/assets.js";
 import { recordMapTrace, recordMapWork } from "../../runtime/mapPerfTrace.js";
 import { buildOwnerAliasMap, createOwnerResolver } from "../../runtime/ownerNames.js";
-import { mapViewOf } from "../../../server/mapProjection.js";
 import { normalizeGroupAreas, normalizeGroups } from "../../runtime/groups.js";
+import { isFictionalWorld } from "../../runtime/scenarioCanon.js";
+import { normalizeRegionTypes } from "../../runtime/regionTypes.js";
+import { battlefieldHeldClaimants } from "../../runtime/fronts/heldRegions.js";
+import { mapViewOf, projectionIsDefault, sheetBounds } from "../../../server/mapProjection.js";
+import { noteMapMeasure } from "../../runtime/mapMeasure.js";
 
 // Map-facing world store — R5.0 event-driven edition.
 //
@@ -14,6 +18,8 @@ import { normalizeGroupAreas, normalizeGroups } from "../../runtime/groups.js";
 
 const EMPTY_OBJECT = Object.freeze({});
 const EMPTY_MARKERS = Object.freeze([]);
+const EMPTY_REGION_TYPES = Object.freeze([]);
+const EMPTY_ARRAY = Object.freeze([]);
 
 let sharedState = null;
 let publishedState = null;
@@ -136,9 +142,40 @@ export const withSettledClaims = (claimants, settled) => {
   return next;
 };
 
+// Ground one side of a battlefield has taken from the other is drawn as the
+// taker's, not in a disputed region's stripes (runtime/fronts/heldRegions.js).
+// The world is cleaned of those claimants when a turn's land war is written;
+// this is the same rule laid over what the map draws, so that a game saved
+// before then is right as soon as it is opened. The list given comes back when
+// there is nothing to take off it.
+export const withoutHeldDisputes = (claimants, state, owners) => {
+  const changed = battlefieldHeldClaimants({
+    battlefields: state?.battlefields,
+    owners,
+    sovereigns: state?.regionSovereigntyOverrides,
+    claimants,
+  });
+  if (changed.size === 0) return claimants;
+  const next = { ...claimants };
+  for (const [regionId, kept] of changed) next[regionId] = kept.length > 0 ? kept : NO_CLAIMANTS;
+  return next;
+};
+
+// The capitals countries name in their figures, lower case and one a line; a
+// dissolved country's no longer counts.
+export const capitalNamesOf = (state) => {
+  const stats = state?.countryStats && typeof state.countryStats === "object" ? state.countryStats : {};
+  const gone = (name) => String(state?.polityOverrides?.[name]?.status ?? "").toLowerCase() === "dissolved";
+  return [...new Set(Object.entries(stats)
+    .filter(([name]) => !gone(name))
+    .map(([, sheet]) => String(sheet?.capital ?? "").trim().toLowerCase())
+    .filter(Boolean))].sort().join("\n");
+};
+
 const deriveMapState = (state) => ({
   worldState: state,
   worldKnown: Boolean(state && Object.keys(state).length > 0),
+  fictionalWorld: isFictionalWorld(state ?? {}),
   customRegions: Boolean(state?.customRegions),
   customGeometry: Boolean(
     state?.customGeometry ??
@@ -147,6 +184,14 @@ const deriveMapState = (state) => ({
   customCities: Boolean(state?.customCities),
   basemap: state?.basemap || null,
   background: state?.background ?? null,
+  // A string, so an unchanged list keeps its identity: null = any built-in map.
+  allowedBasemaps: Array.isArray(state?.allowedBasemaps) ? state.allowedBasemaps.map(String).join(",") : null,
+  // The scenario's other basemaps of its own, a string for the same reason.
+  ownBasemaps: encodeOwnBasemaps(state?.ownBasemaps),
+  // Where a picture with no bounds of its own lies: the scenario's sheet, as
+  // an imported picture is laid (server/mapProjection.js layOutScenarioBundle);
+  // null for Mercator, whose sheet is the whole square. A string, as above.
+  pictureSheet: projectionIsDefault(state?.projection) ? null : JSON.stringify(sheetBounds(state.projection)),
   // How the scenario lets its map be shown (world.projection: mapViewOf).
   noGlobe: mapViewOf(state?.projection).noGlobe,
   noWrap: mapViewOf(state?.projection).noWrap,
@@ -154,7 +199,7 @@ const deriveMapState = (state) => ({
     const folded = foldOwnerTokens(state);
     return {
       regionOwnershipOverrides: folded.overrides,
-      regionClaimants: withSettledClaims(folded.claimants, state?.settledRegionClaims),
+      regionClaimants: withoutHeldDisputes(withSettledClaims(folded.claimants, state?.settledRegionClaims), state, folded.overrides),
     };
   })(),
   polityOverrides: state?.polityOverrides ?? EMPTY_OBJECT,
@@ -166,8 +211,21 @@ const deriveMapState = (state) => ({
     return { groups, groupAreas: normalizeGroupAreas(state.groupAreas, groups) };
   })(),
   markers: Array.isArray(state?.markers) ? state.markers : EMPTY_MARKERS,
+  puppets: Array.isArray(state?.puppets) ? state.puppets : EMPTY_ARRAY,
+  wars: Array.isArray(state?.wars) ? state.wars : EMPTY_ARRAY,
+  relations: Array.isArray(state?.relations) ? state.relations : EMPTY_ARRAY,
+  agreements: Array.isArray(state?.agreements) ? state.agreements : EMPTY_ARRAY,
+  // The scenario's region types (runtime/regionTypes.js), whose look the map
+  // draws; a scenario saved before they were exported has none.
+  regionTypes: Array.isArray(state?.regionTypes) && state.regionTypes.length
+    ? normalizeRegionTypes(state.regionTypes)
+    : EMPTY_REGION_TYPES,
   cityRenames: state?.cityRenames ?? EMPTY_OBJECT,
   cityPopulations: state?.cityPopulations ?? EMPTY_OBJECT,
+  // The cities countries name their capitals now (world.countryStats), in
+  // lower case, for the city layers' stars (Cities.jsx). A string, so a
+  // republish that names the same ones is the same value.
+  capitalNames: capitalNamesOf(state),
   labelFont: state?.labelFont ?? "",
   labelHaloColor: state?.labelHaloColor ?? "",
   labelTextColor: state?.labelTextColor ?? "",
@@ -176,11 +234,15 @@ const deriveMapState = (state) => ({
 const sameMapState = (prev, next) =>
   Boolean(prev) &&
   prev.worldKnown === next.worldKnown &&
+  prev.fictionalWorld === next.fictionalWorld &&
   prev.customRegions === next.customRegions &&
   prev.customGeometry === next.customGeometry &&
   prev.customCities === next.customCities &&
   prev.basemap === next.basemap &&
   prev.background === next.background &&
+  prev.allowedBasemaps === next.allowedBasemaps &&
+  prev.ownBasemaps === next.ownBasemaps &&
+  prev.pictureSheet === next.pictureSheet &&
   prev.noGlobe === next.noGlobe &&
   prev.noWrap === next.noWrap &&
   prev.labelFont === next.labelFont &&
@@ -189,8 +251,14 @@ const sameMapState = (prev, next) =>
   prev.regionOwnershipOverrides === next.regionOwnershipOverrides &&
   prev.regionClaimants === next.regionClaimants &&
   prev.markers === next.markers &&
+  prev.puppets === next.puppets &&
+  prev.wars === next.wars &&
+  prev.relations === next.relations &&
+  prev.agreements === next.agreements &&
+  prev.regionTypes === next.regionTypes &&
   prev.cityRenames === next.cityRenames &&
   prev.cityPopulations === next.cityPopulations &&
+  prev.capitalNames === next.capitalNames &&
   prev.groups === next.groups &&
   prev.groupAreas === next.groupAreas &&
   prev.polityOverrides === next.polityOverrides;
@@ -217,6 +285,21 @@ const stabilizeMapStateReferences = (prev, next) => {
     markers: areEqualStructured(prev.markers, next.markers)
       ? prev.markers
       : next.markers,
+    puppets: areEqualStructured(prev.puppets, next.puppets)
+      ? prev.puppets
+      : next.puppets,
+    wars: areEqualStructured(prev.wars, next.wars)
+      ? prev.wars
+      : next.wars,
+    relations: areEqualStructured(prev.relations, next.relations)
+      ? prev.relations
+      : next.relations,
+    agreements: areEqualStructured(prev.agreements, next.agreements)
+      ? prev.agreements
+      : next.agreements,
+    regionTypes: areEqualStructured(prev.regionTypes, next.regionTypes)
+      ? prev.regionTypes
+      : next.regionTypes,
     cityRenames: areEqualStructured(prev.cityRenames, next.cityRenames)
       ? prev.cityRenames
       : next.cityRenames,
@@ -231,6 +314,8 @@ const stabilizeMapStateReferences = (prev, next) => {
 const publish = ({ force = false } = {}) => {
   const state = effectiveState();
   if (!state) return;
+  // What the map measures distances by (runtime/mapMeasure.js), for what it draws in kilometres.
+  noteMapMeasure(state);
   const rawNext = deriveMapState(state);
   const startedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
   const next = force
@@ -319,7 +404,10 @@ const installListeners = () => {
   window.addEventListener("oh:active-game-changed", onActiveGameChanged);
 };
 
-export function useWorldState() {
+// `wait` is for a caller that is on screen before any game is opened (the
+// cover a game opens under, mounted with the main menu: runtime/gameEntry.js):
+// while it is set nothing is subscribed and world.json is not read.
+export function useWorldState({ wait = false } = {}) {
   const [state, setState] = useState(() => {
     if (publishedState) return publishedState;
     const current = effectiveState();
@@ -327,6 +415,7 @@ export function useWorldState() {
   });
 
   useEffect(() => {
+    if (wait) return undefined;
     installListeners();
     const handler = (data) => setState(data);
     subscribers.add(handler);
@@ -342,7 +431,7 @@ export function useWorldState() {
     return () => {
       subscribers.delete(handler);
     };
-  }, []);
+  }, [wait]);
 
   return state;
 }
@@ -356,6 +445,9 @@ export function useWorldBackground() {
     return {
       background: current?.background ?? null,
       basemap: current?.basemap || null,
+      allowedBasemaps: current?.allowedBasemaps ?? null,
+      ownBasemaps: current?.ownBasemaps ?? null,
+      pictureSheet: current?.pictureSheet ?? null,
       noGlobe: Boolean(current?.noGlobe),
       noWrap: Boolean(current?.noWrap),
     };
@@ -367,6 +459,9 @@ export function useWorldBackground() {
     const handler = (data) => {
       const background = data?.background ?? null;
       const basemap = data?.basemap || null;
+      const allowedBasemaps = data?.allowedBasemaps ?? null;
+      const ownBasemaps = data?.ownBasemaps ?? null;
+      const pictureSheet = data?.pictureSheet ?? null;
       const noGlobe = Boolean(data?.noGlobe);
       const noWrap = Boolean(data?.noWrap);
 
@@ -375,11 +470,11 @@ export function useWorldBackground() {
           prev.background === background ||
           areEqualStructured(prev.background, background);
 
-        if (backgroundSame && prev.basemap === basemap && prev.noGlobe === noGlobe && prev.noWrap === noWrap) {
+        if (backgroundSame && prev.basemap === basemap && prev.allowedBasemaps === allowedBasemaps && prev.ownBasemaps === ownBasemaps && prev.pictureSheet === pictureSheet && prev.noGlobe === noGlobe && prev.noWrap === noWrap) {
           return prev;
         }
 
-        return { background, basemap, noGlobe, noWrap };
+        return { background, basemap, allowedBasemaps, ownBasemaps, pictureSheet, noGlobe, noWrap };
       });
     };
 

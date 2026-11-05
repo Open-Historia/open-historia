@@ -37,12 +37,12 @@ const handClock = () => {
 
 const step = (speaker, id) => ({ speaker, events: [{ id, kind: "message", by: speaker }] });
 
-const record = (steps, { onSay } = {}) => {
+const record = (steps, { onSay, pauseMs = 5000 } = {}) => {
     const clock = handClock();
     const log = [];
     const reveal = startChatReveal({
         steps,
-        pauseMs: 5000,
+        pauseMs,
         onTyping: (next) => log.push(next ? `typing ${next.speaker}` : "nobody typing"),
         onSay: (said) => { log.push(`said ${said.events[0].id}`); return onSay ? onSay(said) : true; },
         onEnd: () => log.push("end"),
@@ -63,6 +63,22 @@ test("each step is said after its speaker has typed for the pause", () => {
     assert.deepEqual(log, ["typing Prussia", "said b", "typing France", "said c", "nobody typing", "end"]);
     assert.equal(reveal.running, false);
     assert.deepEqual(reveal.stop(), [], "nothing left once it has all been said");
+});
+
+test("each step may choose its own pause", () => {
+    const pauses = [1000, 3000];
+    let index = 0;
+    const { clock, log } = record([step("Prussia", "b"), step("France", "c")], {
+        pauseMs: () => pauses[index++],
+    });
+    clock.advance(999);
+    assert.deepEqual(log, ["typing Prussia"]);
+    clock.advance(1);
+    assert.deepEqual(log, ["typing Prussia", "said b", "typing France"]);
+    clock.advance(2999);
+    assert.deepEqual(log, ["typing Prussia", "said b", "typing France"]);
+    clock.advance(1);
+    assert.deepEqual(log, ["typing Prussia", "said b", "typing France", "said c", "nobody typing", "end"]);
 });
 
 test("cutting in stops the turn where it stands and hands back what was not said", () => {

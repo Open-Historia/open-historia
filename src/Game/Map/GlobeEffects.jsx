@@ -15,8 +15,9 @@ import {
   drawCelestialStars,
   releaseCelestialStars,
 } from "./globeCelestialCanvas.js";
-import { MAP_SETTING_KEYS, useMapSetting } from "../../runtime/mapSettings.js";
+import { MAP_SETTING_KEYS, useMotionSetting } from "../../runtime/mapSettings.js";
 import { isConstrainedDevice } from "../../runtime/deviceProfile.js";
+import { useWarRoom } from "./warRoomStore.js";
 
 const ROTATION_DEG_PER_MS = 360 / (10 * 60 * 1000);
 const INTERACTION_GRACE_MS = 3000;
@@ -70,7 +71,11 @@ let sunWorldPosition = subsolarPoint();
 
 const GlobeEffects = ({ active }) => {
   const { current: map } = useMap();
-  const autoRotateDisabled = useMapSetting(MAP_SETTING_KEYS.disableIdleRotation);
+  // Off by the player's switch, or by the system's reduced-motion setting. And
+  // while the war room is open: there the map is being read and drawn on, and a
+  // planet that turns by itself under a route half drawn is in the way.
+  const warRoomOpen = useWarRoom((state) => state.open);
+  const autoRotateDisabled = useMotionSetting(MAP_SETTING_KEYS.disableIdleRotation) || warRoomOpen;
 
   useEffect(() => {
     if (!active || !map) return undefined;
@@ -86,6 +91,10 @@ const GlobeEffects = ({ active }) => {
     let starsVisible = false;
     let lightingVisible = false;
     let autoRotationActive = false;
+    let lastSunCalculation = -Infinity;
+    const activeCelestialFrameMs = isConstrainedDevice()
+      ? 1000 / 18
+      : CELESTIAL_FRAME_MS_ACTIVE;
     const activeLightingFrameMs = isConstrainedDevice()
       ? LIGHTING_FRAME_MS_ACTIVE_CONSTRAINED
       : LIGHTING_FRAME_MS_ACTIVE;
@@ -98,7 +107,10 @@ const GlobeEffects = ({ active }) => {
       lastInteraction = performance.now();
       autoRotationActive = false;
     };
-    const interactionEvents = ["dragstart", "zoomstart", "rotatestart", "pitchstart", "wheel"];
+    // The ends too: a turn of the globe (a right-button drag, or two fingers on
+    // a trackpad with Shift held, Map/mapGestures.js) can outlast the grace, and the spin
+    // should wait out the grace after it, not set off the moment it ends.
+    const interactionEvents = ["dragstart", "zoomstart", "rotatestart", "pitchstart", "rotateend", "pitchend", "wheel"];
     for (const event of interactionEvents) mapInstance.on(event, markInteraction);
     const interruptAutoRotation = () => {
       markInteraction();
@@ -110,13 +122,16 @@ const GlobeEffects = ({ active }) => {
 
     const syncVisuals = (forceLighting = false) => {
       if (disposed || contextLost || !mapInstance.style) return;
-      // Track the real sun every draw — a dozen trig ops, far cheaper than the
-      // canvas work below, and it keeps the terminator honest while rendering.
-      sunWorldPosition = subsolarPoint();
+      const now = performance.now();
+      // The real Earth's terminator creeps ~0.25°/minute; recalculating the sun
+      // ephemeris every 10 seconds is imperceptible but saves per-frame Date/trig work.
+      if (now - lastSunCalculation > 10000) {
+        lastSunCalculation = now;
+        sunWorldPosition = subsolarPoint();
+      }
       const canvas = mapInstance.getCanvas();
       const width = canvas.clientWidth;
       const height = canvas.clientHeight;
-      const now = performance.now();
       const matrix = mapInstance.transform?.modelViewProjectionMatrix;
       const projectionTransition = globeTransitionOpacity(
         mapInstance.transform
@@ -136,7 +151,7 @@ const GlobeEffects = ({ active }) => {
       const isIdle = !isMorphing
         && (autoRotationActive
           || (!mapInstance.isMoving() && now - lastInteraction > INTERACTION_GRACE_MS));
-      const celestialFrameMs = isIdle ? CELESTIAL_FRAME_MS_IDLE : CELESTIAL_FRAME_MS_ACTIVE;
+      const celestialFrameMs = isIdle ? CELESTIAL_FRAME_MS_IDLE : activeCelestialFrameMs;
       const lightingFrameMs = isIdle ? LIGHTING_FRAME_MS_IDLE : activeLightingFrameMs;
       if (projectionTransition > 0
         && (forceLighting || now - lastCelestialDraw >= celestialFrameMs)) {
@@ -155,7 +170,6 @@ const GlobeEffects = ({ active }) => {
       }
 
       if (sunElement) {
-        const sunDirection = directionFromLngLat(sunWorldPosition.lng, sunWorldPosition.lat);
         const projected = projectGlobeSun({
           sunLng: sunWorldPosition.lng,
           sunLat: sunWorldPosition.lat,
@@ -185,16 +199,20 @@ const GlobeEffects = ({ active }) => {
           lightingTimer = 0;
           lastLightingDraw = now;
           lightingVisible = true;
+          const sunDirection = directionFromLngLat(sunWorldPosition.lng, sunWorldPosition.lat);
           drawGlobeLighting({
             canvas: lightingCanvas,
             matrix,
             cameraPosition: mapInstance.transform?.cameraPosition,
-            sunDirection: directionFromLngLat(sunWorldPosition.lng, sunWorldPosition.lat),
+            sunDirection,
             width,
             height,
             opacity: projectionTransition,
             terrainRadii: terrainSurfaceRadii(mapInstance),
-            immediate: autoRotationActive || mapInstance.isMoving(),
+            // Main thread only for a camera that is being moved; the idle
+            // spin goes to the lighting worker at the interactive size.
+            immediate: !autoRotationActive && mapInstance.isMoving(),
+            interactive: autoRotationActive || mapInstance.isMoving(),
           });
         } else if (!lightingTimer) {
           lightingTimer = window.setTimeout(() => {

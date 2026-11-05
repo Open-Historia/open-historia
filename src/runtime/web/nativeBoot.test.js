@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  CONNECT_DEADLINE_MS,
+  BOOT_DEADLINE_MS,
   MIN_VISIBLE_MS,
   bootStatusText,
   isNativeApp,
@@ -37,13 +37,16 @@ test("only a Capacitor shell counts as the app", () => {
   withWindow({ Capacitor: { Plugins: {} } }, () => assert.equal(isNativeApp(), true));
 });
 
-test("the status line says the world is being made ready, then that it is on the device", () => {
+test("the status line says what the app is doing, then what is true", () => {
+  // The map is inside the APK: there is no connection to report, only the
+  // seeding to wait for.
   assert.equal(bootStatusText(false), "Getting the world ready…");
   assert.equal(bootStatusText(true), "Everything is on this device");
 });
 
-test("the floor is shorter than the deadline", () => {
-  assert.ok(MIN_VISIBLE_MS < CONNECT_DEADLINE_MS, "the anti-flash floor must not become the wait");
+test("the deadline is a wait a player would give up on, and the floor is shorter than it", () => {
+  assert.ok(BOOT_DEADLINE_MS >= 4000 && BOOT_DEADLINE_MS <= 15000);
+  assert.ok(MIN_VISIBLE_MS < BOOT_DEADLINE_MS, "the anti-flash floor must not become the wait");
   assert.ok(MIN_VISIBLE_MS <= 1000, "a floor above a second is a delay the player can feel");
 });
 
@@ -54,5 +57,8 @@ test("showNativeBoot is inert without a document, and settling it is still safe"
   assert.equal(typeof globalThis.document, "undefined", "this test asserts the no-DOM path");
   const boot = showNativeBoot();
   assert.equal(typeof boot.settle, "function");
-  assert.doesNotThrow(() => boot.settle(true));
+  assert.doesNotThrow(() => boot.settle());
+  assert.doesNotThrow(() => boot.settle());
+  // index.js relabels it once the language pack has loaded.
+  assert.doesNotThrow(() => boot.relabel());
 });

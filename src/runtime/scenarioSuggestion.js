@@ -11,10 +11,11 @@
 //     suggestion.json       { schema, id, createdAt, scenario, by, note, changes[] }
 //     files/cover.<ext>     a suggested cover image, when there is one
 //     files/background.json a suggested basemap, when there is one
+//     files/own-basemaps/<id>.json  another basemap of the scenario's own, added or changed
 
 import { zipBundle, unzipBundle, looksLikeZip } from "./bundleZip.js";
 import { SCENARIO_LICENSE_FILE, SCENARIO_LICENSE_TEXT, scenarioLicense } from "./scenarioLicense.js";
-import { countChanges, summarizeChangesForComment } from "./scenarioChanges.js";
+import { countChanges, isDetailFieldPath, POLITICS_FIELDS, summarizeChangesForComment, WAR_MAP_FIELDS } from "./scenarioChanges.js";
 import { SUGGESTION_MARKER } from "./hubPosts.js";
 
 export const SUGGESTION_SCHEMA = "open-historia-scenario-suggestion/1";
@@ -41,25 +42,52 @@ export const suggestionFileName = (scenarioName) => `${slug(scenarioName)}-sugge
 // The change kinds a suggestion may carry (scenarioChanges.js). Anything else
 // in a file is dropped on reading, so a file from a newer or a broken build
 // shows what this build can apply and nothing it would misread.
-// The changes this version of the game can apply. A suggestion made by a newer
-// one may also carry its political world, institution logos, groups, map
-// features and puppet states: those are skipped here.
-const KNOWN_KINDS = new Set([
-  "field", "stats", "cover",
-  "region-owner", "region-name", "region-type", "region-claims", "borders",
+export const KNOWN_KINDS = new Set([
+  "field", "politics", "history", "stats", "institutionLogos", "music", "cover",
+  "region-owner", "region-name", "region-type", "region-claims", "region-group", "borders",
   "polity-add", "polity-remove", "polity-change", "polity-rename",
+  "group-add", "group-remove", "group-change",
   "city-add", "city-remove", "city-change", "cities-replace",
   "unit-add", "unit-remove", "unit-change",
-  "map-field", "background", "projection",
+  "marker-add", "marker-remove", "marker-change",
+  "puppet-add", "puppet-remove", "puppet-change",
+  "map-field", "background", "projection", "war-map",
+  "allowed-basemaps", "own-basemap-add", "own-basemap-remove", "own-basemap-change", "detailed-map",
 ]);
 const isRecord = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
+// A Politics change names the ledger it goes into and the entry, both of
+// which become object keys when it is applied: only a ledger this build knows,
+// and never a key that would reach an object's prototype.
+const POLITICS_LEDGERS = new Set(["byPolity", "byId"]);
+const UNSAFE_KEYS = new Set(["__proto__", "prototype", "constructor"]);
+// Its field, like a field change's path, becomes a key of the author's world:
+// only a Politics part this build writes.
+// An entry (a Politics record, a pre-history event) becomes an object key too.
+const safeEntryKey = (entry) => entry === undefined || entry === null || (typeof entry === "string" && !UNSAFE_KEYS.has(entry));
+// One of the scenario's other basemaps is named by an id that becomes a key of
+// the author's own list and the name of a file in the .zip.
+const OWN_BASEMAP_KINDS = new Set(["own-basemap-add", "own-basemap-remove", "own-basemap-change"]);
+const validOwnBasemapKey = (key) => typeof key === "string" && /^[\w-]{1,40}$/.test(key) && !UNSAFE_KEYS.has(key);
+const ownBasemapFile = (key) => `files/own-basemaps/${key}.json`;
+const validPoliticsChange = (change) => POLITICS_FIELDS.includes(change.field)
+  && (change.within === undefined || POLITICS_LEDGERS.has(change.within))
+  && safeEntryKey(change.entry);
 const validChange = (change) => isRecord(change)
   && typeof change.id === "string" && change.id
   && KNOWN_KINDS.has(change.kind)
   && (change.area === "details" || change.area === "map")
-  && (change.kind !== "field" || (Array.isArray(change.path) && change.path.every((part) => typeof part === "string")))
+  && (change.kind !== "field" || isDetailFieldPath(change.path))
+  && (change.kind !== "politics" || validPoliticsChange(change))
+  && (change.kind !== "history" || ((change.part === "event" || change.part === "setup") && safeEntryKey(change.entry)))
+  // The music is a record of lists or nothing; what is in it is read track by
+  // track when it is shown and when it is applied (server/scenarioMusic.js).
+  && (change.kind !== "music" || ((change.to ?? null) === null || isRecord(change.to)))
   && (change.kind !== "borders" || Array.isArray(change.regions))
-  && (change.kind !== "projection" || (isRecord(change.to) && typeof change.to.type === "string"));
+  && (change.kind !== "projection" || (isRecord(change.to) && typeof change.to.type === "string"))
+  && (change.kind !== "war-map" || (WAR_MAP_FIELDS.includes(change.field) && Array.isArray(change.to)))
+  && (!OWN_BASEMAP_KINDS.has(change.kind) || validOwnBasemapKey(change.key))
+  && (change.kind !== "allowed-basemaps" || change.to === null || (Array.isArray(change.to) && change.to.every((id) => typeof id === "string")))
+  && (change.kind !== "detailed-map" || change.to === null || isRecord(change.to));
 
 export const normalizeSuggestion = (raw) => {
   if (!isRecord(raw) || raw.schema !== SUGGESTION_SCHEMA) {
@@ -131,6 +159,12 @@ export const buildSuggestionZip = async (suggestion) => {
       const { data, ...to } = change.to;
       return { ...change, to: { ...to, file } };
     }
+    if ((change.kind === "own-basemap-add" || change.kind === "own-basemap-change") && change.to?.data) {
+      const file = ownBasemapFile(change.key);
+      files[file] = JSON.stringify(change.to.data);
+      const { data, ...to } = change.to;
+      return { ...change, to: { ...to, file } };
+    }
     return change;
   });
   // Suggested changes are under the same licence as the scenario they are
@@ -163,9 +197,11 @@ export const readSuggestionFile = async (input) => {
       const { file, ...to } = change.to;
       const base64 = await zip.base64(file);
       changes.push(base64 ? { ...change, to: { ...to, base64 } } : { ...change, to: null, missingFile: true });
-    } else if (change?.kind === "background" && typeof change.to?.file === "string") {
+    } else if ((change?.kind === "background" || ((change?.kind === "own-basemap-add" || change?.kind === "own-basemap-change") && validOwnBasemapKey(change.key)))
+      && typeof change.to?.file === "string") {
       const { file, ...to } = change.to;
-      const data = await zip.text(file);
+      // Read from where this build writes it, whatever the file names.
+      const data = await zip.text(change.kind === "background" ? file : ownBasemapFile(change.key));
       let parsed = null;
       try { parsed = data ? JSON.parse(data) : null; } catch { parsed = null; }
       changes.push(parsed ? { ...change, to: { ...to, data: parsed } } : { ...change, to: null, missingFile: true });

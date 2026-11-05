@@ -95,7 +95,8 @@ test("keys kept inside saved Connections are searched for like any other stored 
     const debugLog = files.find(({ file }) => file === "runtime/debugLog.js").text;
     const listKey = /const CONNECTIONS_KEY = "([^"]+)"/.exec(providerConfig)?.[1];
     assert.ok(listKey, "the Connections storage key has moved; this guard needs updating");
-    const scanned = /\/\(([^)]*)\)\$\/i\.test\(key\)\) \{\s*try \{ collectApiKeyFields/.exec(debugLog)?.[1] ?? "";
+    // The names of the stored lists that are opened for apiKey fields.
+    const scanned = /const SECRET_LIST_NAME = \/\(([^)]*)\)\$\/i;/.exec(debugLog)?.[1] ?? "";
     assert.ok(scanned.split("|").some((suffix) => suffix && listKey.endsWith(suffix)), `debugLog.js does not scan "${listKey}" for keys`);
 });
 

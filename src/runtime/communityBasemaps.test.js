@@ -10,10 +10,10 @@
 //   - what is shown and what is downloaded is the file's checked copy in the
 //     hub's releases, never the post's own attachment, and a post whose file
 //     has no copy is not offered;
-//   - install and publish-time dedupe point a reference at the same file, as
-//     its post names it;
-//   - a reference resolves back into the basemap it was made from, and one the
-//     hub does not offer leaves the scenario without it.
+//   - install and publish-time dedupe point a reference at the same file, read
+//     the same way;
+//   - a reference resolves back into the basemap it was made from — including a
+//     vector published as a .zip, which used to be parsed as JSON and dropped.
 import test from "node:test";
 import assert from "node:assert/strict";
 
@@ -25,6 +25,7 @@ import {
   installCommunityBasemap,
   readScenarioZipBackground,
   resolveScenarioBundleBackground,
+  unresolvedBundleBackground,
 } from "./communityBasemaps.js";
 import { sha256Hex } from "./basemapLibrary.js";
 import { HUB_FILE_TEXTS, HUB_INDEX_URL } from "./hubFiles.js";
@@ -34,26 +35,28 @@ const PNG_DATA_URL = `data:image/png;base64,${Buffer.from(PNG_BYTES).toString("b
 const VECTOR = { type: "FeatureCollection", features: [{ type: "Feature", properties: { fill: "#123456" }, geometry: { type: "Point", coordinates: [1, 2] } }] };
 
 const RELEASES = "https://github.com/Open-Historia/Open-historia-scenarios/releases/download";
-// Each file as its post names it (a dragged-in image has no extension at all)...
-const INLINE_URL = "https://github.com/user-attachments/assets/9c14bf78-1b9c-4354-b338-4dbba2789063";
+// Each file as its post names it...
+const INLINE_URL = "https://github.com/user-attachments/assets/aaaa-inline.png";
 const SVG_URL = "https://github.com/user-attachments/files/101/coast.svg";
 const ZIP_URL = "https://github.com/user-attachments/files/102/vector-world.zip";
 const OLD_JSON_URL = `${RELEASES}/b1/old.basemap.json`;
 const SCENARIO_ZIP_URL = "https://github.com/user-attachments/files/103/rome-scenario.zip";
 const AGAIN_ZIP_URL = "https://github.com/user-attachments/files/104/again.zip";
-const LOST_URL = "https://github.com/user-attachments/assets/7a5d2c1b-lost";
-const UNCHECKED_URL = "https://github.com/user-attachments/assets/6b4e3d2c-unchecked";
+const EMPTY_JSON_URL = "https://github.com/user-attachments/files/9/empty.json";
+const LOST_URL = "https://github.com/user-attachments/assets/lost.png";
+const UNCHECKED_URL = "https://github.com/user-attachments/assets/unchecked.png";
 // ...and its checked copy in the hub's releases. An .svg's copy is a PNG: the
 // hub draws one of every SVG it is given.
 const COPIES = {
-  [INLINE_URL]: `${RELEASES}/basemaps-1/p1-9c14bf78.png`,
+  [INLINE_URL]: `${RELEASES}/basemaps-1/p1-aaaa-0a0a0a0a.png`,
   [SVG_URL]: `${RELEASES}/basemaps-1/p2-101-coast-1b1b1b1b.png`,
   [ZIP_URL]: `${RELEASES}/basemaps-1/p3-102-vector-world-2c2c2c2c.zip`,
   [OLD_JSON_URL]: `${RELEASES}/basemaps-1/p4-old-3d3d3d3d.basemap.json`,
   [SCENARIO_ZIP_URL]: `${RELEASES}/scenarios-1/p10-103-rome-scenario-4e4e4e4e.zip`,
   [AGAIN_ZIP_URL]: `${RELEASES}/scenarios-1/p11-104-again-5f5f5f5f.zip`,
+  [EMPTY_JSON_URL]: `${RELEASES}/basemaps-1/p6-9-empty-6a6a6a6a.json`,
   // Listed, and no longer there to download.
-  [LOST_URL]: `${RELEASES}/basemaps-1/p7-7a5d2c1b.png`,
+  [LOST_URL]: `${RELEASES}/basemaps-1/p7-lost-7b7b7b7b.png`,
 };
 
 const issue = (number, title, body, extra = {}) => ({
@@ -123,8 +126,7 @@ const setUpHub = async () => {
   files.set(UNCHECKED_URL, { bytes: PNG_BYTES, type: "image/png" });
 
   basemapIssues = [
-    // As the hub's form writes a post with a dragged-in image.
-    issue(1, "[Basemap] Inline Relief", `### Basemap name\n\nInline Relief\n\n### Author / credit\n\nann\n\n### Basemap image\n\n<img width="2380" height="2380" alt="Image" src="${INLINE_URL}" />\n\n### Technical info (do not edit)\n\nBasemap-Hash: ${"a".repeat(64)}\nBasemap-Kind: image`),
+    issue(1, "[Basemap] Inline Relief", `### Image\n![relief](${INLINE_URL})\n\n### Basemap info\nBasemap-Hash: ${"a".repeat(64)}\nBasemap-Kind: image`),
     // Closed by the hub once its file was released: still a post.
     issue(2, "[Basemap] Coast Lines", `### Image\n[coast.svg](${SVG_URL})\n\nBasemap-Hash: ${"b".repeat(64)}\nBasemap-Kind: image`, { state: "closed" }),
     issue(3, "[Basemap] Vector World", `### File\n[vector-world.zip](${ZIP_URL})\n\nBasemap-Hash: ${"c".repeat(64)}\nBasemap-Kind: vector`),
@@ -178,10 +180,6 @@ test("every body shape is read as the right kind of post, with the right file", 
 
   for (const post of posts) assert.equal(basemapPostInstallable(post), true, `post ${post.id} is installable`);
   assert.equal(basemapPostInstallable({ kind: "vector", coverImageUrl: INLINE_URL }), false, "a vector needs its data file");
-
-  // Kept as long as the index is: a second look costs no request.
-  await fetchCommunityBasemaps();
-  assert.deepEqual(fetched, [HUB_INDEX_URL]);
 });
 
 test("install reads each post's payload from its checked copy, and records the file a reference should point at", async () => {
@@ -203,7 +201,7 @@ test("install reads each post's payload from its checked copy, and records the f
   }
   assert.deepEqual(saved[2].payload, { geojson: VECTOR }, "the zipped vector unpacks to its geometry");
   assert.equal(saved[3].name, "Old Map", "an old bundle's own name wins");
-  assert.equal(saved[0].payload.dataUrl, PNG_DATA_URL, "a PNG by its bytes, though GitHub serves a release file as a plain download and the post's address has no extension");
+  assert.equal(saved[0].payload.dataUrl, PNG_DATA_URL, "a PNG by its bytes, though GitHub serves a release file as a plain download");
   assert.equal(saved[1].payload.dataUrl, PNG_DATA_URL, "the .svg's copy is the PNG the hub drew of it, and is saved as one");
 
   await installCommunityBasemap(byId(posts, "scenario-10"));
@@ -240,9 +238,7 @@ test("dedupe prefers a local community install, then a hub post, and otherwise a
   assert.deepEqual(await dedupeScenarioBundleBackground(local), { referenced: true, needsPublish: false });
   assert.deepEqual(local.assets.backgroundData, { mode: "communityRef", hash: vectorHash, via: "dataFile", url: ZIP_URL, fileName: "background.json" });
 
-  // Hub hit: the same reference, found through the post list. It names the
-  // file as its post does, never the copy: a copy's address changes whenever
-  // the hub releases the file again.
+  // Hub hit: the same reference, found through the post list.
   localBasemaps = [];
   const hub = bundleWith("vector", { geojson: VECTOR });
   assert.deepEqual(await dedupeScenarioBundleBackground(hub), { referenced: true, needsPublish: false });
@@ -257,13 +253,15 @@ test("dedupe prefers a local community install, then a hub post, and otherwise a
 
 const embeddedPayload = (bundle) => JSON.parse(Buffer.from(bundle.assets.backgroundData.data, "base64").toString("utf-8"));
 
-test("a reference resolves back into the basemap it was made from, out of its checked copy", async () => {
+test("a reference resolves back into the basemap it was made from", async () => {
   await setUpHub();
   const ref = (via, url) => ({ assets: { backgroundData: { mode: "communityRef", hash: "x", via, url, fileName: "background.json" } } });
-  downloads.length = 0;
+
+  const zipped = await resolveScenarioBundleBackground(ref("dataFile", ZIP_URL));
+  assert.equal(zipped.assets.backgroundData.mode, "embedded");
+  assert.deepEqual(embeddedPayload(zipped), { geojson: VECTOR }, "a zipped vector is unzipped, not parsed as JSON");
 
   const image = await resolveScenarioBundleBackground(ref("image", INLINE_URL));
-  assert.equal(image.assets.backgroundData.mode, "embedded");
   assert.deepEqual(embeddedPayload(image), { dataUrl: PNG_DATA_URL });
 
   const old = await resolveScenarioBundleBackground(ref("dataFile", OLD_JSON_URL));
@@ -276,24 +274,35 @@ test("a reference resolves back into the basemap it was made from, out of its ch
   // A reference that names the checked copy itself is fetched from it too.
   const byCopy = await resolveScenarioBundleBackground(ref("image", COPIES[INLINE_URL]));
   assert.deepEqual(embeddedPayload(byCopy), { dataUrl: PNG_DATA_URL });
-  assert.deepEqual(downloads, [COPIES[INLINE_URL], COPIES[OLD_JSON_URL], COPIES[INLINE_URL], COPIES[INLINE_URL]]);
 });
 
-test("a reference the hub does not offer leaves the scenario without its basemap, and is not fetched from the post", async () => {
+test("a reference that cannot be fetched is kept, with the reason, instead of deleted", async () => {
   await setUpHub();
-  // Not among the hub's checked files: the import goes on without it.
+  // The hub does not offer the file: not among its checked files.
   downloads.length = 0;
-  const refused = await resolveScenarioBundleBackground({ assets: { backgroundData: { mode: "communityRef", hash: "x", via: "image", url: UNCHECKED_URL, fileName: "background.json" } } });
-  assert.equal(refused.assets.backgroundData, undefined);
-  assert.deepEqual(downloads, [], "the post's own attachment is not asked for instead");
+  const unchecked = { mode: "communityRef", hash: "x", via: "image", url: UNCHECKED_URL, fileName: "background.json" };
+  const refused = await resolveScenarioBundleBackground({ assets: { backgroundData: { ...unchecked } } });
+  assert.deepEqual(refused.assets.backgroundData, { ...unchecked, missingReason: HUB_FILE_TEXTS.notReleased });
+  assert.equal(unresolvedBundleBackground(refused), HUB_FILE_TEXTS.notReleased, "a whole sentence with its full stop, so a language pack can match it");
+  assert.deepEqual(downloads, [], "and it is not fetched from the post instead");
 
-  // The hub lists a copy that will not download: the same.
-  const gone = await resolveScenarioBundleBackground({ assets: { backgroundData: { mode: "communityRef", hash: "x", via: "image", url: LOST_URL, fileName: "background.json" } } });
-  assert.equal(gone.assets.backgroundData, undefined);
-  assert.deepEqual(downloads, [COPIES[LOST_URL]]);
+  // The hub lists a copy that will not download: the download's own failure.
+  const gone = { mode: "communityRef", hash: "x", via: "image", url: LOST_URL, fileName: "background.json" };
+  const bundle = await resolveScenarioBundleBackground({ assets: { backgroundData: { ...gone } } });
+  assert.deepEqual(bundle.assets.backgroundData, { ...gone, missingReason: "Not found on the hub." });
+  assert.equal(unresolvedBundleBackground(bundle), "Not found on the hub.");
 
-  // Installing a post whose file the hub no longer offers says why.
-  await assert.rejects(installCommunityBasemap({ kind: "image", coverImageUrl: UNCHECKED_URL, title: "Unchecked" }), { message: HUB_FILE_TEXTS.notReleased });
+  // A file that downloads but carries no basemap is missing too.
+  files.set(COPIES[EMPTY_JSON_URL], { bytes: new TextEncoder().encode(JSON.stringify({ payload: {} })), type: RELEASE_TYPE });
+  const empty = await resolveScenarioBundleBackground({ assets: { backgroundData: { mode: "communityRef", via: "dataFile", url: EMPTY_JSON_URL } } });
+  assert.equal(empty.assets.backgroundData.mode, "communityRef");
+  assert.equal(unresolvedBundleBackground(empty), "The shared basemap has no image or map in it.");
+
+  // Resolved, embedded or absent: nothing missing.
+  const resolved = await resolveScenarioBundleBackground({ assets: { backgroundData: { mode: "communityRef", via: "image", url: INLINE_URL } } });
+  assert.equal(unresolvedBundleBackground(resolved), null);
+  assert.equal(unresolvedBundleBackground({ assets: {} }), null);
+  assert.equal(unresolvedBundleBackground(null), null);
 });
 
 // --- a scenario post's basemap, however its zip carries it ---

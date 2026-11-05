@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Linked into oh-speech-macos (scripts/build-speech-helpers.mjs): a program
+     with no bundle keeps its usage descriptions here. The app's own Info.plist
+     carries the same two keys (package.json build.mac.extendInfo and the
+     electron-builder yml configs), and the prompts macOS shows name the app. -->
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>io.github.arkniem.openhistoria.speech</string>
+  <key>CFBundleName</key>
+  <string>Open Historia speech</string>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>The Advisor's microphone turns what you say into a message.</string>
+  <key>NSSpeechRecognitionUsageDescription</key>
+  <string>The Advisor's microphone uses macOS's speech recognition to turn what you say into a message. It runs on this Mac where macOS can; otherwise Apple recognises it.</string>
+</dict>
+</plist>

@@ -46,6 +46,21 @@ export const HANDSHAKE_TIMEOUT_MS = 5000;
 export const RETRY_MS = 30000;
 export const MIN_UPDATE_MS = 4000;
 
+// How long the activity stays up after the page last reported. The page says
+// what is on screen again every minute (src/runtime/discordPresence.js), and
+// says goodbye when its tab is closed; this covers the goodbye that never
+// comes (a crashed or killed browser). The desktop app quits with its window,
+// which takes the activity down anyway, but the downloadable local server
+// keeps running after its tab is gone, and showed "Playing as France" to the
+// player's friends for as long as it did.
+export const PRESENCE_STALE_MS = 3 * 60 * 1000;
+
+// Which game the elapsed timer belongs to: a new scene, scenario or player
+// starts it again, a new in-game date does not.
+const sessionOf = (presence) => (presence
+  ? JSON.stringify([presence.scene, presence.scenario ?? "", presence.player ?? ""])
+  : null);
+
 // Discord's limits: details and state 2 to 128 characters.
 const MAX_TEXT = 128;
 const clip = (value, max = MAX_TEXT) => {
@@ -148,10 +163,13 @@ export const createDiscordPresence = ({
   clearTimer = (id) => clearTimeout(id),
   pid = process.pid,
   log = () => {},
+  staleMs = PRESENCE_STALE_MS,
 } = {}) => {
   const active = Boolean(enabled && String(applicationId || "").trim());
   let desired = null;
+  let session = null;
   let startedAt = null;
+  let staleTimer = null;
   let socket = null;
   let connecting = false;
   let retryTimer = null;
@@ -224,6 +242,7 @@ export const createDiscordPresence = ({
       } else if (op === OP_CLOSE) {
         if (Number(payload?.code) === CLOSE_INVALID_CLIENT_ID) {
           refused = true;
+          staleTimer = clear(staleTimer);
           log("warn", `Discord does not know application ${applicationId}; presence is off until the id is fixed.`);
         }
         finish(false);
@@ -280,20 +299,41 @@ export const createDiscordPresence = ({
     }
   };
 
+  // What the page reported, or null for nothing to show (Discord clears the
+  // activity). The elapsed timer starts again with each new game (sessionOf):
+  // it used to be set once per server process, so after the main menu, or a
+  // second game, it still counted from the first report.
+  const show = (presence) => {
+    desired = presence ?? null;
+    const next = sessionOf(desired);
+    if (next !== session) {
+      session = next;
+      startedAt = desired ? now() : null;
+    }
+    staleTimer = clear(staleTimer);
+    if (desired && !refused) {
+      staleTimer = setTimer(() => {
+        staleTimer = null;
+        log("info", "The page stopped reporting; clearing the activity.");
+        show(null);
+      }, staleMs);
+    }
+    if (socket) push();
+    else if (desired) void open();
+  };
+
   return {
     get active() { return active; },
     get connected() { return socket !== null; },
     update(presence) {
       if (!active || stopped) return;
-      desired = presence ?? null;
-      if (desired && startedAt === null) startedAt = now();
-      if (socket) push();
-      else if (desired) void open();
+      show(presence);
     },
     stop() {
       stopped = true;
       desired = null;
       retryTimer = clear(retryTimer);
+      staleTimer = clear(staleTimer);
       drop();
     },
   };

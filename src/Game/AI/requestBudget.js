@@ -51,17 +51,18 @@ export const JUMP_REQUEST_CAP = 3;
 //                       until the pile is twice its limit).
 //   stats               the automatic Stats refresh, a feature the player
 //                       switches on and sets the interval of.
+//   institutionBallots  NPC votes on a proposal open in an institution.
 //
 // Nothing else asks inside a skip. A place name the map does not have is left
 // out and said in the receipt (the model writes it exactly next time, or looks
 // it up when function calling is on); a storyline the skip left still stays
 // overdue, which is what the next skip is told to move first; with saving off
-// the units, the fronts, the repeats, the board and the agents used to be a
-// request each, and are the skip's own answer now.
-export const SKIP_SPENDERS = Object.freeze(["jump", "review", "history", "stats"]);
+// the units, the fronts, the structures, the repeats, the board and the agents
+// used to be a request each, and are the skip's own answer now.
+export const SKIP_SPENDERS = Object.freeze(["jump", "review", "history", "stats", "institutionBallots"]);
 
 // "jumpRetry" and "jumpLookup" are "jump" asking again and looking something up.
-const spenderBase = (spender) => String(spender || "other").replace(/(?:Retry|Lookup)$/, "") || "other";
+export const spenderBase = (spender) => String(spender || "other").replace(/(?:Retry|Lookup)$/, "") || "other";
 
 export const REQUEST_BUDGET_KEYS = Object.freeze({
     // ON unless the player turned it off ("0"): an absent key saves requests.
@@ -73,7 +74,7 @@ export const REQUEST_BUDGET_KEYS = Object.freeze({
     ledger: "ai_request_ledger",
 });
 
-// There were five more, `ai_review_units` and its siblings: a switch for each
+// There were six more, `ai_review_units` and its siblings: a switch for each
 // check a time skip got after it was written. They are gone (2026-10). The
 // checks are part of the skip itself now (gameplay.js, "The folded time skip"),
 // so there is nothing left to switch, and a check left off only ever meant a
@@ -296,13 +297,17 @@ export const backgroundAllowance = ({ settings, ledger }) => {
 export const jumpRequestCap = ({ segments = 1 } = {}) => JUMP_REQUEST_CAP + Math.max(0, Math.round(Number(segments) || 1) - 1);
 
 // `only`: the spenders this budget serves at all (SKIP_SPENDERS for a time
-// skip); null serves anyone. There is no budget without a cap: nothing in the
-// game asks for one, and a skip that could spend without limit is the thing the
-// cap is there to prevent.
-export const createJumpBudget = ({ cap = JUMP_REQUEST_CAP, only = null } = {}) => {
-    const spends = [];
-    // Requests kept for a spender that asks later (reserve below).
-    const reservations = new Map();
+// skip); null serves anyone. `state` is what `state` below gave out: a skip
+// kept for its campaign (parkedTurn.js) goes on spending from the budget it
+// had, after a restart too. There is no budget without a cap: the one that
+// had none was for the A/B lab's runs, and went with them.
+export const createJumpBudget = ({ cap = JUMP_REQUEST_CAP, only = null, state = null } = {}) => {
+    const spends = (Array.isArray(state?.spends) ? state.spends : [])
+        .filter((entry) => entry && typeof entry === "object")
+        .map((entry) => ({ spender: String(entry.spender || "other"), granted: entry.granted === true, ...(entry.denied === true ? { denied: true } : {}) }));
+    const reservations = new Map(Object.entries(state?.reservations && typeof state.reservations === "object" ? state.reservations : {})
+        .map(([key, value]) => [key, Math.max(0, Math.round(Number(value) || 0))])
+        .filter(([, value]) => value > 0));
     const limit = Math.max(1, Math.round(Number(cap) || JUMP_REQUEST_CAP));
     const served = Array.isArray(only) ? new Set(only.map((entry) => String(entry))) : null;
     const spent = () => spends.filter((entry) => entry.granted).length;
@@ -313,9 +318,9 @@ export const createJumpBudget = ({ cap = JUMP_REQUEST_CAP, only = null } = {}) =
         cap: limit,
         only: served ? [...served] : null,
         allows,
-        // Keep requests for a spender that asks later: a skip keeps one for
-        // each of its segments (gameplay.js createJumpRequests). What asks
-        // earlier cannot spend them, and the total cap never increases.
+        // Reserve a bounded slot for correctness work that happens late in the
+        // turn. Optional work asked earlier cannot consume that slot, but the
+        // total request cap never increases.
         reserve: (spender, count = 1) => {
             const key = String(spender || "other");
             const wanted = Math.max(0, Math.round(Number(count) || 0));
@@ -324,6 +329,15 @@ export const createJumpBudget = ({ cap = JUMP_REQUEST_CAP, only = null } = {}) =
             const added = Math.min(wanted, capacity);
             if (added) reservations.set(key, (reservations.get(key) || 0) + added);
             return reservations.get(key) || 0;
+        },
+        // Give back a slot that was kept and turned out not to be needed, so the
+        // next in line may have it (the history fold the skip's own answer
+        // carried leaves its request to the Stats refresh).
+        release: (spender) => {
+            const key = String(spender || "other");
+            const held = reservations.get(key) || 0;
+            reservations.delete(key);
+            return held;
         },
         // May this spender make one request? Recorded either way, so the turn's
         // log can say what was skipped to stay inside the cap, and what was not
@@ -356,6 +370,10 @@ export const createJumpBudget = ({ cap = JUMP_REQUEST_CAP, only = null } = {}) =
         get skipped() { return spends.filter((entry) => !entry.granted && !entry.denied).map((entry) => entry.spender); },
         get denied() { return spends.filter((entry) => entry.denied).map((entry) => entry.spender); },
         get log() { return spends.map((entry) => ({ ...entry })); },
+        // Plain data, for createJumpBudget's `state`.
+        get state() {
+            return { spends: spends.map((entry) => ({ ...entry })), reservations: Object.fromEntries(reservations) };
+        },
     };
 };
 
@@ -384,6 +402,24 @@ export const describeDay = ({ settings, ledger }) => {
         byTask: { ...day.byTask },
         lastJump: day.lastJump ? { ...day.lastJump } : null,
     };
+};
+
+// Today's requests by task, most first, for Settings → AI. `labels` names the
+// task keys the caller knows ({ jumpForward: "Time skip" }); a key it does not
+// is shown as it was counted, with `named: false`. Keys under one name (two
+// spellings of "other") make one row.
+export const requestsByTask = (byTask, labels = {}) => {
+    const rows = new Map();
+    for (const [key, total] of Object.entries(byTask ?? {})) {
+        const count = wholeNumber(total, { min: 0, max: Number.MAX_SAFE_INTEGER, fallback: 0 });
+        if (!count) continue;
+        const named = Object.prototype.hasOwnProperty.call(labels, key) && Boolean(labels[key]);
+        const label = named ? labels[key] : key;
+        const row = rows.get(label) ?? { label, named, count: 0 };
+        row.count += count;
+        rows.set(label, row);
+    }
+    return [...rows.values()].sort((a, b) => b.count - a.count || Number(b.named) - Number(a.named) || a.label.localeCompare(b.label));
 };
 
 // --- The game's own ---

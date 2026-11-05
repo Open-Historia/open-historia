@@ -64,7 +64,7 @@ test("the board runs BEFORE anything is written", () => {
   // The held-turn UX rests entirely on this: a board failure must mean nothing
   // happened, so the turn can be held and retried without applying twice.
   const board = at("if (projects) {", "the projects/board call");
-  const write = at("await Promise.all([", "the state write");
+  const write = at("await writeCanonicalTurnState({", "the atomic canonical state write");
   assert.ok(
     board < write,
     "the board must run before the state write, or a held turn cannot be retried safely",
@@ -92,15 +92,17 @@ test("the curator hands on the events it keeps off the timeline", () => {
 test("the board pass is given the Hidden events, and their ops land before the write", () => {
   const board = at("if (projects) {", "the projects/board call");
   const handedOn = at("hiddenEvents: boardHiddenEvents", "passing the Hidden events to the board pass");
-  const applied = at("boardOnlyEventIds:", "applying Hidden-event ops without stamping activity");
-  const write = at("await Promise.all([", "the state write");
+  // The carriers are applied in boardPassApply.js, where a Hidden event's ops
+  // go in without stamping activity (boardPassApply.test.js).
+  const applied = at("applyBoardCarriers({", "applying the board pass's ops, Hidden events' included");
+  const write = at("await writeCanonicalTurnState({", "the atomic canonical state write");
   assert.ok(board < handedOn && handedOn < write, "the board pass must receive the Hidden events before the write");
   assert.ok(applied < write, "a Hidden event's Board ops must be applied before the write, or they are lost");
 });
 
 test("a provisional major event the board pass did not back is kept off the timeline before the write", () => {
   const settle = at("if (unbackedIds.has(list[index]?.id)) list.splice(index, 1);", "removing unbacked provisional events");
-  const write = at("await Promise.all([", "the state write");
+  const write = at("await writeCanonicalTurnState({", "the atomic canonical state write");
   assert.ok(settle < write, "an unbacked provisional event must leave nextEvents before it is written");
 });
 
@@ -112,4 +114,14 @@ test("the Hidden events ride in the turn's result, so a held board Retry sees th
   const body = source.slice(start, source.indexOf("const applyArgs = {", start));
   assert.match(body, /hiddenEvents: state.hiddenEvents/, "the segments' Hidden events must be carried in result");
   assert.match(body, /boardProvisionalEventIds: state.boardProvisionalEventIds/, "the provisional event ids must be carried in result");
+});
+
+test("the agents' operations are decided once a skip, told to its first part alone, and carried out from the turn's result", () => {
+  const planned = source.indexOf("state.covertOperations = isActiveFeatureEnabled(\"espionage\")");
+  assert.notEqual(planned, -1, "the skip no longer plans the operations once");
+  assert.ok(source.indexOf("if (!Array.isArray(state.covertOperations))") !== -1 && source.indexOf("if (!Array.isArray(state.covertOperations))") < planned, "a held skip's retry would roll its operations again");
+  assert.ok(source.includes('covertOperations: segmentIndex === 0 ? covertBrief : ""'), "a skip in several parts would write each operation once a part");
+  assert.ok(source.includes('covertOperations: normalizeString(state.generation?.source) === "fallback" ? [] : normalizeArray(state.covertOperations)'), "a canned turn would carry out operations nobody wrote");
+  at("operations: normalizeArray(result.covertOperations)", "the operations handed to resolveEspionage");
+  at("covertOperations: result.covertOperations", "the operations kept in the turn's journal for Intervene");
 });

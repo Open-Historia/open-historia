@@ -3,11 +3,12 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import fs from 'node:fs'
 import path from 'node:path'
+import { createRequire } from 'node:module'
 
 // The big map binaries live in public/ so the dev server and the Express server can
 // serve them off disk, but NEITHER build serves them from the bundle: the desktop
-// streams them via /api/runtime/pmtiles/:assetKey, and the website gets its own
-// smaller copies from scripts/stage-map-assets.mjs, laid in after this drop.
+// streams them via /api/runtime/pmtiles/:assetKey, and a web build carries its own
+// pinned copies, which scripts/stage-map-assets.mjs lays into the output AFTER this.
 //
 // Vite copies publicDir wholesale and offers no partial exclude, so it duplicated
 // ~160MB into dist/ and — worse — made `npm run build:site` emit a site Cloudflare
@@ -17,10 +18,11 @@ import path from 'node:path'
 // are gitignored and arrive from the map-data Release at first launch, so CI and a
 // fresh clone build fine and the deploy failure looks random. Dropping them after
 // the copy is the fix; "remember to delete them before deploying" is not.
-// Never wanted in EITHER build: nothing loads a pmtiles archive from the bundle.
-// The desktop streams them off disk via /api/runtime/pmtiles/:assetKey and the
-// website's z8 copies are laid in by scripts/stage-map-assets.mjs. Copying these in
-// only broke the Pages deploy at its 25 MiB-per-file limit.
+// A developer's copies are never wanted in EITHER build. The desktop streams its
+// archives off disk via /api/runtime/pmtiles/:assetKey. A web build carries the
+// pinned z8 archives under the same names, laid in after the build by
+// scripts/stage-map-assets.mjs; whatever happens to sit in public/ must not go
+// in their place (a z10 archive would break the Pages deploy at its 25 MiB a file).
 const PMTILES = [
   'assets/regions.pmtiles',
   'assets/countries.pmtiles',
@@ -32,12 +34,15 @@ const PMTILES = [
 // — so dropping them there makes /assets/regions-seed.geojson fall through to the
 // SPA fallback, answer with index.html, and the editor open with zero regions.
 //
-// The web build must not carry the desktop's copies: regions-seed.geojson is 52.8MB
-// at z8 and Pages rejects any file over 25MiB. scripts/stage-map-assets.mjs lays the
-// web-sized ones in after this drop.
+// A web build must not carry THESE copies: a developer's public/ holds the
+// desktop's (regions-seed.geojson is 55 MB at z8, and Pages rejects any file
+// over 25 MiB). It carries its own, web-sized ones, which scripts/stage-map-assets.mjs
+// lays into the output after this from the pinned map-data release
+// (scripts/map-assets.web.json), under the same names.
 const EDITOR_SEEDS = [
   'assets/regions-seed.geojson',
   'assets/cities-seed.json',
+  'assets/default-regions.geojson',
 ]
 
 // The Android bundle drops both sets as well: mobile/scripts/stage-www.mjs lays
@@ -107,6 +112,39 @@ const dropWebAnalytics = (isAndroid: boolean) => ({
   },
 })
 
+// Two features run a model in a worker on Transformers.js and the copy of ONNX
+// Runtime it pins: the Advisor's microphone (Whisper, src/runtime/speechWorker.js)
+// and the translator (Opus-MT, src/runtime/translationWorker.js). Both import the
+// runtime's WebAssembly from `oh-ort-transformers/`, so it is emitted into the
+// build once, from that package, and never fetched from a CDN; only the model
+// weights come from the model host. Both run on the CPU build of the runtime
+// (their 8-bit models gain nothing from WebGPU), which is half the size of the
+// WebGPU one Transformers.js imports by default.
+const ortDistOf = (fromFile: string) =>
+  path.dirname(createRequire(new URL(fromFile, import.meta.url)).resolve('onnxruntime-web/ort-wasm-simd-threaded.wasm')).replace(/\\/g, '/')
+// The Android app listens through the phone's own recogniser and never runs a
+// model, but a dead `import()` is still loaded, and loading speechOnDevice.js
+// emits its worker and the runtime's WebAssembly (14 MB) into the APK. There
+// it is a module that has nothing to offer.
+const dropOnDeviceSpeech = (isAndroid: boolean) => ({
+  name: 'oh-drop-on-device-speech',
+  enforce: 'pre' as const,
+  resolveId(id: string, importer?: string) {
+    if (isAndroid && id === './speechOnDevice.js' && importer?.replace(/\\/g, '/').endsWith('/src/runtime/speechInput.js')) return '\0oh-no-on-device-speech'
+    return null
+  },
+  load(id: string) {
+    if (id !== '\0oh-no-on-device-speech') return null
+    return 'const no = () => Promise.reject(Object.assign(new Error("failed"), { code: "failed" }));\n'
+      + 'export const modelReady = no;\nexport const downloadModel = no;\nexport const startOnDevice = () => { throw Object.assign(new Error("failed"), { code: "failed" }); };\n'
+  },
+})
+
+const transformersRuntimeAliases = [
+  { find: /^onnxruntime-web(?:\/webgpu)?$/, replacement: 'onnxruntime-web/wasm' },
+  { find: /^oh-ort-transformers\//, replacement: `${ortDistOf('./node_modules/@huggingface/transformers/dist/transformers.web.js')}/` },
+]
+
 // https://vite.dev/config/
 // `--mode web` (npm run build:web / build:site / dev:web) builds the website,
 // `--mode android` (npm run build:android) the Android app's bundle — the web
@@ -126,8 +164,8 @@ export default defineConfig(({ mode }) => ({
     // a plain truthiness check.
     'import.meta.env.VITE_OH_WEB': JSON.stringify(mode === 'web' || mode === 'android'),
     // The Android app is the web build with everything on the device: the map
-    // inside the APK, native file saving, native HTTP
-    // for a model on the LAN. A second compile-time literal, so those branches
+    // inside the APK (the website carries the same files under its own /assets),
+    // native file saving, native HTTP for a model on the LAN. A second compile-time literal, so those branches
     // are stripped from the website exactly as the web ones are from desktop.
     'import.meta.env.VITE_OH_NATIVE': JSON.stringify(mode === 'android'),
   },
@@ -138,6 +176,9 @@ export default defineConfig(({ mode }) => ({
   worker: {
     format: 'es',
   },
+  resolve: {
+    alias: transformersRuntimeAliases,
+  },
   plugins: [
     react({
       babel: {
@@ -147,6 +188,7 @@ export default defineConfig(({ mode }) => ({
     dropMapBinaries(mode === 'web' || mode === 'android'),
     emitWebVersion(mode === 'web'),
     dropWebAnalytics(mode === 'android'),
+    dropOnDeviceSpeech(mode === 'android'),
   ],
   // Proxy API calls to the Express server during `npm run dev` so the map editor's
   // save/load (and the game's runtime endpoints) work with hot-reload too.

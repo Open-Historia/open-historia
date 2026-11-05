@@ -84,7 +84,9 @@ export const toPlainText = (value) => String(value ?? "")
     .replace(/\\([\\`*_{}[\]()#+\-.!~>])/g, "$1")
     .trim();
 
-export const buildMessageDrafts = (draftsRaw, sourceText) => {
+// `problems`, when given, collects a sentence for every entry that got no
+// button, for the advisor's receipt (advisorBlocks.js describeReplyProblems).
+export const buildMessageDrafts = (draftsRaw, sourceText, problems = []) => {
     const allQuotes = extractBlockquotes(sourceText);
     // Where the paired run starts within allQuotes — the same end-alignment the
     // slice below performs, kept as a number so each draft can say WHICH
@@ -95,16 +97,70 @@ export const buildMessageDrafts = (draftsRaw, sourceText) => {
     const blockquotes = allQuotes.slice(offset);
     return draftsRaw
         .map((draft, index) => {
-            const country = draft && String(draft.country ?? "").trim();
-            if (!country) return null;
+            const targetType = String(draft?.targetType || "private").trim().toLowerCase();
+            const country = String(draft?.country ?? "").trim();
+            const institutionId = String(draft?.institutionId ?? "").trim();
+            const caseId = String(draft?.caseId ?? "").trim();
+            const threadId = String(draft?.threadId ?? "").trim();
+            const label = country ? `the draft to ${country}` : `draft ${index + 1}`;
+            const drop = (why) => {
+                problems.push(`${label} ${why}, so no button was drawn for it`);
+                return null;
+            };
+            if (targetType === "private" && !country) return drop("named no country");
+            if (targetType === "institution-council" && !institutionId && !threadId) return drop("named no institutionId or threadId");
+            if (targetType === "institution-lifecycle" && ((!institutionId && !threadId) || (!caseId && !threadId))) return drop("named no caseId and institutionId, or threadId");
+            if (!["private", "institution-council", "institution-lifecycle"].includes(targetType)) return drop(`had the targetType "${targetType}", which is not private, institution-council or institution-lifecycle`);
             // A "text" field is still honored if present — older saved messages
             // have one, and an explicit value beats the positional guess.
             // Plain text: this string goes into the diplomacy composer, which
             // renders the player's own messages verbatim.
             const text = toPlainText(String(draft?.text ?? "").trim() || blockquotes[index] || "");
-            return text ? { country, text, quoteIndex: offset + index } : null;
+            if (!text) return drop("had no > blockquote holding its letter just before the block");
+            return {
+                targetType,
+                country,
+                institutionId,
+                caseId,
+                threadId,
+                text,
+                quoteIndex: offset + index,
+            };
         })
         .filter(Boolean);
+};
+
+// When a drafted private letter has already gone to its recipient: the date of
+// the player's own message in a one-to-one chat with that country that says the
+// same thing, or "" when none does. The advisor drafted Winterfell's acceptance
+// of the Tyrell barley offer again a week after it was sent, and the player sent
+// it a second time. "The same thing" is word overlap (Dice) of 0.9 or more: the
+// repeats in that game scored 1.0, while distinct letters to the same house,
+// all opening "My lord Tyrell, Winterfell...", scored 0.77 at most.
+const SAME_LETTER = 0.9;
+const letterWords = (text) => new Set(String(text ?? "").toLowerCase()
+    .replace(/[^\p{L}\p{N} ]+/gu, " ").split(/\s+/).filter((word) => word.length > 2));
+const overlap = (left, right) => {
+    const a = letterWords(left);
+    const b = letterWords(right);
+    if (!a.size || !b.size) return 0;
+    let shared = 0;
+    a.forEach((word) => { if (b.has(word)) shared += 1; });
+    return (2 * shared) / (a.size + b.size);
+};
+export const sentLetterDate = (draft, chats) => {
+    if (String(draft?.targetType || "private") !== "private") return "";
+    const recipient = String(draft?.country ?? "").trim().toLowerCase();
+    if (!recipient) return "";
+    for (const chat of Array.isArray(chats) ? chats : []) {
+        const countries = Array.isArray(chat?.countries) ? chat.countries : [];
+        if (chat?.institutionId || countries.length !== 1) continue;
+        if (String(countries[0]?.name ?? "").trim().toLowerCase() !== recipient) continue;
+        const sent = (Array.isArray(chat?.messages) ? chat.messages : [])
+            .filter((message) => message?.role === "user" && overlap(message.text, draft.text) >= SAME_LETTER);
+        if (sent.length) return String(sent.at(-1).time ?? "").trim() || "earlier";
+    }
+    return "";
 };
 
 // Splits a reply into the blockquotes and the prose between them, in order, so

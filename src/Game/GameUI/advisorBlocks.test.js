@@ -264,3 +264,34 @@ test("looksLikeProjectOps knows every verb the engine accepts", () => {
   assert.equal(looksLikeProjectOps('[{"op":"spawn","name":"1st Fleet"}]'), false);
   assert.equal(looksLikeProjectOps('[{"op":"fail"}]'), false, "an op with nothing to target is not a board change");
 });
+
+test("a projects block still streaming is hidden, not salvaged or warned about", () => {
+  const partial = 'On it.\n\n```projects\n[\n  {\n    "op": "update",\n    "lastUpdate": "Forced mechanization deployed nationwide; domestic-source fertilizer plants';
+  const warnings = [];
+  const original = console.warn;
+  console.warn = (...args) => warnings.push(args.join(" "));
+  try {
+    const result = extractFencedJson(partial, "projects", { salvageTruncated: true, streaming: true });
+    assert.equal(result.rest, "On it.\n\n");
+    assert.equal(result.json, null);
+    assert.equal(result.truncated, false);
+    assert.equal(result.reason, "");
+  } finally {
+    console.warn = original;
+  }
+  assert.deepEqual(warnings, []);
+});
+
+test("an unclosed actions block is kept out of a streaming bubble", () => {
+  const result = extractFencedJson('Queued.\n```actions\n[{"title":"Land ref', "actions", { streaming: true });
+  assert.equal(result.rest, "Queued.\n");
+  assert.equal(result.json, null);
+});
+
+test("a closed block parses the same whether or not the reply is streaming", () => {
+  const text = 'Done.\n```projects\n[{"op":"create","name":"Dam"}]\n```\nMore.';
+  const streaming = extractFencedJson(text, "projects", { salvageTruncated: true, streaming: true });
+  const complete = extractFencedJson(text, "projects", { salvageTruncated: true });
+  assert.deepEqual(streaming, complete);
+  assert.deepEqual(complete.json, [{ op: "create", name: "Dam" }]);
+});

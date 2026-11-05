@@ -35,11 +35,20 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- The app downloads its own updates and opens Android's installer on them
+         (UpdatePlugin.java). Android still asks the player to confirm each one,
+         and the first time to allow installs from Open Historia. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- Lets the WebView see connectivity. Without it navigator.onLine is always
          true, so the game could not tell it was offline: the map kept asking
          remote tile servers instead of drawing its bundled relief. A normal
          permission, granted at install without a prompt. -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- The Advisor's microphone (src/runtime/speechInput.js) hands speech to the
+         phone's own recogniser through @capacitor-community/speech-recognition,
+         whose manifest also declares this and the RecognitionService query.
+         Android asks the player the first time the microphone is pressed. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <!-- An export is saved into Downloads/Open Historia (src/runtime/native/fileSave.js).
          Android 11 and newer let an app create files there with no permission at
          all, so these stop at Android 10 (API 29), where the Filesystem plugin asks

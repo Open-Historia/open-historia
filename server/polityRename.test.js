@@ -104,6 +104,10 @@ test("a rename never merges two countries, and needs both names", () => {
 test("the stores the world does not hold follow the rename: colours, flags, the game's polity, chats and orders", () => {
   assert.deepEqual(renamePolityInColors({ Borduria: [1, 2, 3], Syldavia: [4, 5, 6] }, "Borduria", "Bordurian Republic"), { "Bordurian Republic": [1, 2, 3], Syldavia: [4, 5, 6] });
   assert.deepEqual(renamePolityInFlags({ Borduria: "data:flag" }, "Borduria", "Bordurian Republic"), { "Bordurian Republic": "data:flag" });
+  // The same rename applied again (Intervene re-running the turn): the flag has
+  // already moved, and moving nothing must not delete it.
+  const moved = { "Bordurian Republic": "data:flag", Syldavia: "data:other" };
+  assert.equal(renamePolityInFlags(moved, "Borduria", "Bordurian Republic"), moved);
   assert.deepEqual(renamePolityInGame({ country: "Borduria", round: 2 }, "Borduria", "Bordurian Republic"), { country: "Bordurian Republic", round: 2 });
   const game = { country: "Syldavia" };
   assert.equal(renamePolityInGame(game, "Borduria", "Bordurian Republic"), game, "another polity's game is the same object");
@@ -306,4 +310,22 @@ test("a Workshop rename keeps no previous name, while a rename in play does", ()
 
   const world = renamePolityInWorld({ polityOverrides: { Prussia: { name: "Prussia", aliases: [] } } }, "Prussia", "German Empire").world;
   assert.deepEqual(world.polityOverrides["German Empire"].formerNames, ["Prussia"], "history made in play still folds onto the country");
+});
+
+test("a rename carries the country's fortified lines, in play and in the Workshop", () => {
+  const world = { polityOverrides: { Aland: { name: "Aland", code: "Aland" } }, fortifications: [{ id: "w1", name: "The Line", owner: "Aland", level: 6, points: [[0, 0], [1, 1]] }, { id: "w2", name: "Theirs", owner: "Borea", level: 4, points: [[2, 2], [3, 3]] }] };
+  const { world: renamed } = renamePolityInWorld(world, "Aland", "New Aland");
+  assert.deepEqual(renamed.fortifications.map((line) => line.owner), ["New Aland", "Borea"]);
+  const doc = { polities: { Aland: { name: "Aland" } }, fortifications: world.fortifications };
+  assert.deepEqual(renamePolityInDocument(doc, "Aland", "New Aland").fortifications.map((line) => line.owner), ["New Aland", "Borea"]);
+});
+
+test("a country renamed in play no longer shows the label its old name had on the map", () => {
+  const labelled = world();
+  labelled.polityOverrides.Borduria = { ...labelled.polityOverrides.Borduria, mapLabel: "Old Borduria", mapDistinctLabel: "Kingdom of Borduria" };
+  const { world: next } = renamePolityInWorld(labelled, "Borduria", "Bordurian Republic");
+  const record = next.polityOverrides["Bordurian Republic"];
+  assert.equal(record.name, "Bordurian Republic");
+  assert.equal(record.mapLabel, undefined);
+  assert.equal(record.mapDistinctLabel, undefined);
 });

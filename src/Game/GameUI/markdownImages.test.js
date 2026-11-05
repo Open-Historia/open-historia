@@ -95,11 +95,9 @@ test("raw HTML stays off, so an <img> tag in the text is text", () => {
     assert.doesNotMatch(renderer, /urlTransform=/);
 });
 
-test("every place model or scenario text becomes markup has the renderer's pictures", () => {
+test("the shared renderer is the only place model or scenario text becomes markup", () => {
     // If another file starts rendering markdown or injecting HTML, its pictures
-    // need the same rule: this list is where that gets noticed. The timeline's
-    // cards and the country panel's report call ReactMarkdown themselves, under
-    // their own stylesheet, so each of their calls is held to the rule below.
+    // need the same rule: this list is where that gets noticed.
     const root = new URL("../../", import.meta.url);
     const found = [];
     const walk = (directory) => {
@@ -116,15 +114,5 @@ test("every place model or scenario text becomes markup has the renderer's pictu
         }
     };
     walk(root);
-    const direct = ["Game/GameUI/time.jsx", "Game/Selection/CountryPanel.jsx"];
-    assert.deepEqual(found.sort(), ["Game/GameUI/markdown.jsx", ...direct]);
-
-    assert.match(renderer, /export const TEXT_COMPONENTS = \{ a: ExternalLink, img: LocalImage \};/, "the link and the picture the direct callers are handed");
-    for (const file of direct) {
-        const text = fs.readFileSync(new URL(file, root), "utf8");
-        const calls = text.match(/<ReactMarkdown\b[^>]*>/g) || [];
-        assert.ok(calls.length > 0, `${file} no longer calls ReactMarkdown; this guard needs updating`);
-        for (const call of calls) assert.match(call, /components=\{TEXT_COMPONENTS\}/, `${file}: ${call}`);
-        assert.doesNotMatch(text, /rehypePlugins=|urlTransform=/, `${file}: raw HTML stays off and the address filter stays on`);
-    }
+    assert.deepEqual(found, ["Game/GameUI/markdown.jsx"]);
 });

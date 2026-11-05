@@ -3,23 +3,25 @@
  * Copyright (c) 2026 Nicholas Krol - AGPL-3.0-or-later (see LICENSE).
  */
 
-// Searchable region list. Matches by name / id / owner / country; clicking a row
-// selects the region and zooms to it. Backed by the OL source via the map API.
+// Searchable region list. Matches by name / id / owner, and by the owner's
+// display name and aliases (regionSearch.js); clicking a row selects the region
+// and zooms to it. Backed by the OL source via the map API.
 
 import { useEffect, useMemo, useState } from "react";
 import Panel from "./Panel.jsx";
 import Icon from "./Icon.jsx";
 import { inputStyle } from "./editorStyles.js";
+import { polityDisplayName } from "./regionSearch.js";
 
-const RegionsPanel = ({ api, selection, setSelection, onClose }) => {
+const RegionsPanel = ({ api, polities, selection, setSelection, onClose }) => {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState([]);
   const selectedSet = useMemo(() => new Set(selection), [selection]);
 
   useEffect(() => {
     if (!api) return;
-    setResults(api.queryRegions(query, 300));
-  }, [api, query, selection]);
+    setResults(api.queryRegions(query, 300, { polities }));
+  }, [api, polities, query, selection]);
 
   return (
     <Panel title="Regions" icon="list" onClose={onClose} width={330}>
@@ -64,7 +66,7 @@ const RegionsPanel = ({ api, selection, setSelection, onClose }) => {
                   {r.name || r.id}
                 </div>
                 <div style={{ fontSize: 10.5, color: "rgba(255,255,255,0.5)" }}>
-                  {r.id} · {r.owner || "unowned"}
+                  {r.id} · {polityDisplayName(polities, r.owner) || "unowned"}
                 </div>
               </span>
             </button>

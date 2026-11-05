@@ -1,5 +1,5 @@
 /*! Open Historia — worker-safe live polity label geometry © 2026 Open Historia contributors, AGPL-3.0-or-later (see LICENSE). */
-// Pure geometry/text-layout subset of countryLabels.js. This module intentionally
+// Pure geometry/text layout for the live polity labels. This module intentionally
 // has no MapLibre, PMTiles, DOM, storage, or translation dependencies so it can
 // run inside the political-cartography worker.
 
@@ -253,19 +253,80 @@ const pointOnSegmentTile = (point, a, b, epsilon = 1e-5) => {
   return dot <= lengthSquared + epsilon;
 };
 
-// 1 = inside, 0 = boundary, -1 = outside.
-const pointInRingStateTile = (point, ring) => {
-  if (!Array.isArray(ring) || ring.length < 3) return -1;
-  let inside = false;
-  for (let index = 0, previous = ring.length - 1; index < ring.length; previous = index, index += 1) {
+const ringEdgeState = (point, a, b, state) => {
+  if (pointOnSegmentTile(point, a, b)) return 0;
+  if ((a[1] > point[1]) === (b[1] > point[1])) return state;
+  const x = a[0] + ((point[1] - a[1]) * (b[0] - a[0])) / (b[1] - a[1]);
+  return x > point[0] ? -state : state;
+};
+
+// Placing one name tests thousands of points against outlines of thousands of edges, and every edge
+// was visited for every point: most of the time a country's name took. A ring's edges are sorted
+// once into horizontal bands, and a point visits only its own band's. An edge is in every band its
+// height reaches, widened by 3 epsilon (over its length when that is under 1), twice the furthest
+// pointOnSegmentTile could accept a point, so no edge that could cross the point's ray or carry the
+// point is ever left out: the answer is the same. (A ring with a coordinate that is not a finite
+// number is not banded, and is scanned whole as before.)
+const RING_BAND_MIN_EDGES = 48;
+const ringBands = new WeakMap();
+const ringBandsOf = (ring) => {
+  let bands = ringBands.get(ring);
+  if (bands !== undefined) return bands;
+  const count = ring.length;
+  const low = new Float64Array(count);
+  const high = new Float64Array(count);
+  const edges = [];
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (let index = 0, previous = count - 1; index < count; previous = index, index += 1) {
     const a = ring[previous];
     const b = ring[index];
-    if (pointOnSegmentTile(point, a, b)) return 0;
-    if ((a[1] > point[1]) === (b[1] > point[1])) continue;
-    const x = a[0] + ((point[1] - a[1]) * (b[0] - a[0])) / (b[1] - a[1]);
-    if (x > point[0]) inside = !inside;
+    if (![a?.[0], a?.[1], b?.[0], b?.[1]].every(Number.isFinite)) {
+      ringBands.set(ring, null);
+      return null;
+    }
+    const dx = b[0] - a[0];
+    const dy = b[1] - a[1];
+    const lengthSquared = dx * dx + dy * dy;
+    const reach = lengthSquared <= 1e-10 ? 3e-5 : 3e-5 * Math.max(1, 1 / Math.sqrt(lengthSquared));
+    low[index] = Math.min(a[1], b[1]) - reach;
+    high[index] = Math.max(a[1], b[1]) + reach;
+    if (low[index] < minY) minY = low[index];
+    if (high[index] > maxY) maxY = high[index];
+    edges.push(index);
   }
-  return inside ? 1 : -1;
+  const size = Math.max(1, Math.min(4096, Math.ceil(edges.length / 8)));
+  const height = (maxY - minY) / size || 1;
+  const lists = Array.from({ length: size }, () => []);
+  for (const index of edges) {
+    const first = Math.max(0, Math.min(size - 1, Math.floor((low[index] - minY) / height)));
+    const last = Math.max(0, Math.min(size - 1, Math.floor((high[index] - minY) / height)));
+    for (let band = first; band <= last; band += 1) lists[band].push(index);
+  }
+  bands = { minY, maxY, size, height, lists };
+  ringBands.set(ring, bands);
+  return bands;
+};
+
+// 1 = inside, 0 = boundary, -1 = outside.
+export const pointInRingStateTile = (point, ring) => {
+  if (!Array.isArray(ring) || ring.length < 3) return -1;
+  let state = -1;
+  const bands = ring.length < RING_BAND_MIN_EDGES || !Number.isFinite(point[0]) || !Number.isFinite(point[1]) ? null : ringBandsOf(ring);
+  if (!bands) {
+    for (let index = 0, previous = ring.length - 1; index < ring.length; previous = index, index += 1) {
+      state = ringEdgeState(point, ring[previous], ring[index], state);
+      if (state === 0) return 0;
+    }
+    return state;
+  }
+  if (point[1] < bands.minY || point[1] > bands.maxY) return -1;
+  const band = Math.max(0, Math.min(bands.size - 1, Math.floor((point[1] - bands.minY) / bands.height)));
+  for (const index of bands.lists[band]) {
+    state = ringEdgeState(point, ring[index === 0 ? ring.length - 1 : index - 1], ring[index], state);
+    if (state === 0) return 0;
+  }
+  return state;
 };
 
 const pointInPolygonTile = (point, polygonRings) => {
@@ -1715,15 +1776,17 @@ const polygonBoundsLngLat = (polygon) => {
 
 // Groups an owner's polygons into landmasses, largest first. Specks below
 // PART_CLUSTER_MIN_AREA_LOCAL never get a label and are left out entirely.
-const landmassClusters = (polygons) => {
+// homeFlags marks, index for index, the polygons on the polity's home ground; a
+// landmass holding any of them is `home`.
+const landmassClusters = (polygons, homeFlags = null) => {
   const items = [];
-  for (const polygon of polygons ?? []) {
+  (polygons ?? []).forEach((polygon, polygonIndex) => {
     const area = polygonAreaLocal(polygon);
-    if (!(area > PART_CLUSTER_MIN_AREA_LOCAL)) continue;
+    if (!(area > PART_CLUSTER_MIN_AREA_LOCAL)) return;
     const bounds = polygonBoundsLngLat(polygon);
-    if (!Number.isFinite(bounds.west)) continue;
-    items.push({ polygon, area, bounds });
-  }
+    if (!Number.isFinite(bounds.west)) return;
+    items.push({ polygon, area, bounds, home: Boolean(homeFlags?.[polygonIndex]) });
+  });
   if (!items.length) return [];
 
   const parent = items.map((_, index) => index);
@@ -1764,8 +1827,9 @@ const landmassClusters = (polygons) => {
     if (cluster) {
       cluster.polygons.push(item.polygon);
       cluster.area += item.area;
+      cluster.home = cluster.home || item.home;
     } else {
-      clusters.set(root, { polygons: [item.polygon], area: item.area });
+      clusters.set(root, { polygons: [item.polygon], area: item.area, home: item.home });
     }
   });
   return [...clusters.values()].sort((a, b) => b.area - a.area);
@@ -1783,13 +1847,6 @@ const ownerFeatureId = (owner) => {
 };
 
 
-const polygonOuterCentroidLngLat = (polygon) => {
-  const outer = Array.isArray(polygon?.[0]) ? polygon[0] : [];
-  if (!outer.length) return { lng: 0, lat: 0 };
-  const { cx, cy } = getCentroid(outer);
-  return { lng: cx, lat: cy };
-};
-
 const polygonSetAreaLngLat = (polygons) => (polygons ?? []).reduce((sum, polygon) => {
   const outer = calculateArea(polygon?.[0] ?? []);
   const holes = (polygon ?? []).slice(1)
@@ -1797,30 +1854,20 @@ const polygonSetAreaLngLat = (polygons) => (polygons ?? []).reduce((sum, polygon
   return sum + Math.max(0, outer - holes);
 }, 0);
 
-// A sovereign owner may contain a very large detached dependency. Geometry alone
-// cannot infer the political core: Kingdom of Denmark is the canonical modern-map
-// case, where Greenland is physically much larger than Denmark. Keep the polity
-// label on the core and emit GREENLAND separately as a geographic territory label.
-const cartographicPolygonSetsForOwner = (owner, allPolygons) => {
-  const normalized = String(owner ?? "").toLocaleLowerCase();
-  if (!normalized.includes("denmark")) {
-    return { primary: allPolygons, detached: [] };
-  }
-
-  const primary = [];
-  const greenland = [];
-  for (const polygon of allPolygons ?? []) {
-    const { lng, lat } = polygonOuterCentroidLngLat(polygon);
-    if (lng < -10 && lat > 58) greenland.push(polygon);
-    else if (lng > 5 && lng < 16 && lat > 53 && lat < 59) primary.push(polygon);
-  }
-
-  return {
-    primary: primary.length ? primary : allPolygons,
-    detached: greenland.length
-      ? [{ id: "greenland", name: "GREENLAND", polygons: greenland }]
-      : [],
-  };
+// A sovereign owner may hold a detached dependency much larger than its own
+// country - Greenland is far larger than Denmark - so area alone cannot find the
+// political core. The regions say where the polity is at home: the stock country
+// most of them came from (the aggregation's first gadm0). Its polygons are
+// flagged here, and the core is the largest landmass holding any of them. A
+// polity whose regions carry no stock country keeps the largest landmass.
+// No polity name is special-cased; the dependency is labelled like any other
+// landmass of consequence.
+const homePolygonFlags = (feature, allPolygons) => {
+  const properties = feature?.properties ?? {};
+  const home = String(properties.gadm0?.[0] ?? "").trim();
+  const codes = properties.polygonGadm0;
+  if (!home || !Array.isArray(codes) || codes.length !== allPolygons.length) return null;
+  return codes.map((code) => code === home);
 };
 
 export const selectPolityPointFallbacks = (pointLabelData, renderedWarpOwners = new Set()) => {
@@ -2465,15 +2512,15 @@ export const buildPolityLabelCollections = (
     const name = String(nameResolver(owner, feature) ?? owner).trim();
     if (!name || !allPolygons.length) continue;
 
-    const cartographicSets = cartographicPolygonSetsForOwner(owner, allPolygons);
-    const clusters = landmassClusters(cartographicSets.primary);
+    const clusters = landmassClusters(allPolygons, homePolygonFlags(feature, allPolygons));
     if (!clusters.length) continue;
     const upperName = name.toUpperCase();
     const featureId = ownerFeatureId(owner);
 
-    // The political core is the landmass with the most ground; its label is the
-    // polity's one logical record.
-    const core = clusters[0];
+    // The political core is the home landmass with the most ground; its label is
+    // the polity's one logical record.
+    const coreIndex = Math.max(0, clusters.findIndex((cluster) => cluster.home));
+    const core = clusters[coreIndex];
     const coreRecords = buildLandmassLabelRecords({
       polygons: core.polygons,
       owner,
@@ -2493,7 +2540,8 @@ export const buildPolityLabelCollections = (
     // without a colour key. They are supplemental cartographic labels, not
     // polity records: the one-polity/one-logical-label invariant stands, and
     // each has a pseudo owner so the curve/point handoff treats it on its own.
-    for (let index = 1; index < clusters.length; index += 1) {
+    for (let index = 0; index < clusters.length; index += 1) {
+      if (index === coreIndex) continue;
       const part = clusters[index];
       if (part.area < MIN_PART_AREA_LOCAL || part.area < core.area * MIN_PART_FRACTION) break;
       const partRecords = buildLandmassLabelRecords({
@@ -2512,92 +2560,6 @@ export const buildPolityLabelCollections = (
       pointFeatures.push(partRecords.point);
       if (partRecords.line) lineFeatures.push(partRecords.line);
     }
-
-    // Detached geographic territories are supplemental cartographic labels, not
-    // additional polity records. This keeps the one-polity/one-logical-label
-    // invariant while allowing GREENLAND to exist alongside DENMARK.
-    for (const territory of cartographicSets.detached) {
-      const territoryArea = polygonSetAreaLngLat(territory.polygons);
-      if (!(territoryArea > 0)) continue;
-      const territoryCloud = [];
-      let territoryMinX = Infinity;
-      let territoryMinY = Infinity;
-      let territoryMaxX = -Infinity;
-      let territoryMaxY = -Infinity;
-      for (const polygon of territory.polygons) {
-        const outerTile = ringLngLatToTile(polygon?.[0], extent);
-        if (outerTile.length < 4) continue;
-        for (const point of outerTile) {
-          territoryCloud.push(point);
-          territoryMinX = Math.min(territoryMinX, point[0]);
-          territoryMinY = Math.min(territoryMinY, point[1]);
-          territoryMaxX = Math.max(territoryMaxX, point[0]);
-          territoryMaxY = Math.max(territoryMaxY, point[1]);
-        }
-      }
-      if (territoryCloud.length < 4) continue;
-      const territoryShapeWidth = Math.max(0, territoryMaxX - territoryMinX);
-      const territoryShapeHeight = Math.max(0, territoryMaxY - territoryMinY);
-      const territoryAxis = getPrincipalAxisMetrics(territoryCloud);
-      // Detached territories are already a geographic grouping rather than one
-      // polygon. Anchor against the canonical owner group's visual centre instead of
-      // whichever administrative region happens to be the single largest.
-      const territoryPoint = [
-        (territoryMinX + territoryMaxX) / 2,
-        (territoryMinY + territoryMaxY) / 2,
-      ];
-      const [territoryRawLng, territoryLat] = tileToLngLat(territoryPoint[0], territoryPoint[1], extent);
-      const territoryName = String(territory.name).toUpperCase();
-      const territoryPriority = Math.sqrt(Math.max(territoryArea, 1e-8)) * 17500;
-      const territoryVisibility = visibilityScaleFor(territoryPriority, territoryName);
-      const territoryTier = tierForVisibilityScale(territoryVisibility);
-      const territoryTypography = fitPointTypography({
-        shapeWidth: territoryShapeWidth,
-        shapeHeight: territoryShapeHeight,
-        axisSpan: territoryAxis.axisSpan,
-        crossSpan: territoryAxis.crossSpan,
-        name: territoryName,
-        priorityScale: territoryPriority,
-      });
-
-      pointFeatures.push({
-        type: "Feature",
-        id: `territory-label-${territory.id}`,
-        geometry: { type: "Point", coordinates: [wrapLongitude(territoryRawLng), territoryLat] },
-        properties: {
-          name: territoryName,
-          owner: `__territory_${territory.id}__`,
-          sourceOwner: owner,
-          labelKind: "territory",
-          labelSiteRole: "geographic-territory",
-          tier: territoryTier.id,
-          minZoom: territoryTier.minZoom,
-          curveMinZoom: null,
-          curveBand: "none",
-          forceOverlapZoom: territoryTier.forceOverlapZoom,
-          allowOverlap: true,
-          areaScale: territoryPriority,
-          priorityScale: territoryPriority,
-          visibilityScale: Number(territoryVisibility.toFixed(2)),
-          shapeWidth: territoryShapeWidth,
-          shapeHeight: territoryShapeHeight,
-          axisSpan: Number(territoryAxis.axisSpan.toFixed(3)),
-          crossSpan: Number(territoryAxis.crossSpan.toFixed(3)),
-          rotation: territoryAxis.angle,
-          lat: territoryLat,
-          anchorLng: wrapLongitude(territoryRawLng),
-          anchorLat: territoryLat,
-          mode: "point",
-          presentation: "persistent",
-          safeWarp: false,
-          fitScale: territoryTypography.fitScale,
-          fontPxAtZoom4: territoryTypography.fontPxAtZoom4,
-          letterSpacing: territoryTypography.letterSpacing,
-          targetOccupancy: territoryTypography.targetOccupancy,
-          estimatedOccupancy: territoryTypography.estimatedOccupancy,
-        },
-      });
-    }
   }
 
   return {
@@ -2608,4 +2570,57 @@ export const buildPolityLabelCollections = (
     pointLabelData: { type: "FeatureCollection", features: pointFeatures },
     glyphLabelData: { type: "FeatureCollection", features: [] },
   };
+};
+
+// One row per logical polity label, for the map's debug probe and the tests.
+export const summarizePolityLabelDiagnostics = (collections) => {
+  const features = Array.isArray(collections?.labelData?.features)
+    ? collections.labelData.features
+    : [
+        ...(collections?.lineLabelData?.features ?? []),
+        ...(collections?.pointLabelData?.features ?? []),
+      ];
+  const counts = new Map();
+  for (const feature of features) {
+    const owner = String(feature?.properties?.owner ?? "");
+    counts.set(owner, (counts.get(owner) ?? 0) + 1);
+  }
+  return features.map((feature) => {
+    const props = feature?.properties ?? {};
+    return {
+      owner: props.owner,
+      name: props.name,
+      labelCount: counts.get(String(props.owner ?? "")) ?? 0,
+      mode: props.mode,
+      tier: props.tier,
+      minZoom: props.minZoom,
+      curveMinZoom: props.curveMinZoom,
+      curveBand: props.curveBand,
+      baselineKind: props.baselineKind,
+      placementBendRatio: Number(Number(props.placementBendRatio ?? 0).toFixed(4)),
+      safeWarp: props.safeWarp,
+      forceOverlapZoom: props.forceOverlapZoom,
+      visibilityScale: props.visibilityScale,
+      fontPxAtZoom4: props.fontPxAtZoom4,
+      letterSpacing: props.letterSpacing,
+      targetOccupancy: props.targetOccupancy,
+      estimatedOccupancy: props.estimatedOccupancy,
+      lineFontPxAtZoom4: props.lineFontPxAtZoom4,
+      lineLetterSpacing: props.lineLetterSpacing,
+      lineEstimatedOccupancy: props.lineEstimatedOccupancy,
+      shapeWidth: Number(Number(props.shapeWidth ?? 0).toFixed(1)),
+      shapeHeight: Number(Number(props.shapeHeight ?? 0).toFixed(1)),
+      axisSpan: Number(Number(props.axisSpan ?? 0).toFixed(1)),
+      crossSpan: Number(Number(props.crossSpan ?? 0).toFixed(1)),
+      pathLength: Number(Number(props.pathLength ?? 0).toFixed(1)),
+      pathWidth: Number(Number(props.pathWidth ?? 0).toFixed(1)),
+      pathTurnDegrees: props.pathTurnDegrees,
+      warpPointCount: props.warpPointCount,
+      warpMaxSegmentTurnDegrees: props.warpMaxSegmentTurnDegrees,
+      warpDetourRatio: props.warpDetourRatio,
+      rotation: Number(Number(props.rotation ?? 0).toFixed(2)),
+      anchorLng: Number(Number(props.anchorLng ?? 0).toFixed(3)),
+      anchorLat: Number(Number(props.anchorLat ?? 0).toFixed(3)),
+    };
+  });
 };

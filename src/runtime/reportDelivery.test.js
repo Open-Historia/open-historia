@@ -1,7 +1,8 @@
 /*! Open Historia — report delivery tests © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Run: node --test src/runtime/reportDelivery.test.js
 //
-// Runs without node_modules: reportDelivery.js imports nothing.
+// Runs without node_modules: reportDelivery.js imports only AI/audience.js,
+// which imports nothing.
 //
 // The invariant: every document that changes hands reaches the player by the
 // one channel a government would receive it through — or not at all, when it
@@ -24,6 +25,7 @@ import {
   planReportDeliveries,
   withoutOrphanedDocuments,
 } from "./reportDelivery.js";
+import { audienceSeesReport, viewerAudience } from "../Game/AI/audience.js";
 
 const PLAYER = "Ukraine";
 const doc = (id, visibleTo, extra = {}) => ({ id, title: `Document ${id}`, body: `The text of ${id}.`, visibleTo, sourceEventId: `event-${id}`, ...extra });
@@ -114,6 +116,22 @@ test("the event card shows what came with the event, and the advisor reads every
     "the letter came through diplomacy and the protocol through the agent, not the card");
   assert.deepEqual(documentsReadableBy(reports, PLAYER).map((report) => report.id), ["protocol", "letter", "assessment", "communique"]);
   assert.deepEqual(planReportDeliveries({ after: reports, player: "" }), [], "no player, no deliveries");
+});
+
+test("the player's government reads by the same audience rule as a leader", () => {
+  const reports = [
+    doc("communique", null),
+    doc("letter", [" ukraine ", "Russian Federation"]),
+    doc("protocol", ["Russian Federation"], { interceptedBy: ["UKRAINE"] }),
+    doc("secret", ["French Republic"], { interceptedBy: ["Russian Federation"] }),
+    doc("malformed", "Ukraine"),
+    null,
+  ];
+  const audience = viewerAudience([PLAYER]);
+  const byRule = reports.filter((report) => report && audienceSeesReport(audience, report)).map((report) => report.id).reverse();
+  assert.deepEqual(byRule, ["protocol", "letter", "communique"]);
+  assert.deepEqual(documentsReadableBy(reports, PLAYER).map((report) => report.id), byRule);
+  assert.deepEqual(documentsReadableBy(reports, "").map((report) => report.id), ["communique"], "no government, only what was published");
 });
 
 test("an undone turn takes its stolen copies out of the agents' file", () => {

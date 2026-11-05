@@ -28,12 +28,20 @@ const PLACEHOLDER_NAMES = new Set(["", "na", "n/a", "null", "nan", "?"]);
 export const isPlaceholderRegionName = (value) =>
   PLACEHOLDER_NAMES.has(String(value ?? "").trim().toLowerCase());
 
-// The name a region should be shown and referred to by. Returns "" when the source
-// name is a placeholder and no correction is known — callers already treat a nameless
-// region as one to skip (the AI catalog) or leave blank (the map panel), which is
-// better than surfacing "NA" as if it were the place's actual name.
-export const resolveRegionName = (id, rawName) => {
-  const fixed = REGION_NAME_FIXES[String(id ?? "").trim()];
-  if (fixed) return fixed;
-  return isPlaceholderRegionName(rawName) ? "" : String(rawName ?? "").trim();
+// The name a region should be shown and referred to by. Accepts an optional
+// renames override dictionary (world.regionRenames) keyed by region id or lowercased
+// name. Returns "" when the source name is a placeholder and no correction is known.
+export const resolveRegionName = (id, rawName, renames = null) => {
+  const cleanId = String(id ?? "").trim();
+  const cleanRaw = isPlaceholderRegionName(rawName) ? "" : String(rawName ?? "").trim();
+  const standard = REGION_NAME_FIXES[cleanId] || cleanRaw;
+  if (renames && typeof renames === "object") {
+    const override = renames[cleanId]
+      || renames[cleanId.toLowerCase()]
+      || (standard ? renames[standard.toLowerCase()] : undefined)
+      || (cleanRaw ? renames[cleanRaw.toLowerCase()] : undefined);
+    if (override && typeof override === "string" && override.trim()) return override.trim();
+  }
+  return standard || "";
 };
+

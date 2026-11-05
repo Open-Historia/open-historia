@@ -9,7 +9,7 @@
 // minutes and shared by callers asking at the same time (hubFiles.js). It
 // costs none of the 60 API requests an hour a player has; those are left for
 // the one thing still read through GitHub's API, a post's comments
-// (hubPosts.js fetchPostComments).
+// (hubPosts.js fetchPostComments, every page of them: fetchHubPages).
 //
 // hubPosts.js imports communityBasemaps.js, so what both need lives here
 // rather than in either.
@@ -21,6 +21,44 @@ import { fetchHubIndex, hubIndexProblem } from "./hubFiles.js";
 export { HUB_OWNER, HUB_REPO };
 export const HUB_URL = `https://github.com/${HUB_OWNER}/${HUB_REPO}`;
 export const HUB_API = `https://api.github.com/repos/${HUB_OWNER}/${HUB_REPO}`;
+
+// GitHub serves 100 entries a page; a list stops after this many pages.
+export const MAX_HUB_PAGES = 10;
+const HEADERS = { Accept: "application/vnd.github+json" };
+
+// A failed read, with the HTTP status for the caller's own message.
+export class HubHttpError extends Error {
+  constructor(status) {
+    super(`HTTP ${status}`);
+    this.status = status;
+  }
+}
+
+// The next page's URL from GitHub's Link header, or null. Only GitHub's API
+// is followed.
+export const nextPageUrl = (link) => {
+  for (const part of String(link ?? "").split(",")) {
+    const match = /<([^>]+)>\s*;\s*rel="?next"?/i.exec(part);
+    if (match) return /^https:\/\/api\.github\.com\//i.test(match[1]) ? match[1] : null;
+  }
+  return null;
+};
+
+// Every page of a GitHub list, following rel="next" up to `maxPages`. A page
+// that fails fails the read: a post's comments are read to the end or not at
+// all, so nobody records a count of comments it has not seen.
+export const fetchHubPages = async (url, { maxPages = MAX_HUB_PAGES } = {}) => {
+  const items = [];
+  let next = url;
+  for (let page = 0; next && page < maxPages; page += 1) {
+    const response = await fetch(next, { headers: HEADERS });
+    if (!response.ok) throw new HubHttpError(response.status);
+    const body = await response.json();
+    if (Array.isArray(body)) items.push(...body);
+    next = nextPageUrl(response.headers?.get?.("link"));
+  }
+  return items;
+};
 
 // The hub's posts carrying `label`, as the issue objects the parsers read
 // (hubPosts.js parsePost, communityFlags.js, communityBasemaps.js): the

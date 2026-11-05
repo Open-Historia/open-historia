@@ -116,6 +116,55 @@ test("R3.8 refuses to guess when two new-crisis events are semantically ambiguou
   assert.deepEqual(candidate.storylineUpdates[0].eventIndexes, []);
 });
 
+// A game played in Russian. The link score read the storyline's and the event's
+// words with everything but a-z and 0-9 taken out, so two texts in Cyrillic
+// shared nothing: an event number the model had given was taken for unrelated
+// and stripped, and none was ever inferred.
+test("a storyline and its event are linked by their words in another script", () => {
+  const candidate = (eventIndexes) => ({
+    events: [
+      {
+        date: "2020-06-10",
+        title: "Массовые антиправительственные волнения углубляют политический кризис в Мали",
+        description: "Крупные демонстрации в Бамако оспаривают легитимность правительства; оппозиция грозит гражданским неповиновением.",
+        storylineIds: [],
+      },
+      {
+        date: "2020-06-14",
+        title: "Гана открывает новый экспортный терминал",
+        description: "Терминал начал коммерческую работу.",
+        storylineIds: [],
+      },
+    ],
+    storylineUpdates: [
+      {
+        id: "storyline-mali-political-crisis",
+        status: "active",
+        pressure: 58,
+        momentum: 64,
+        startedDate: "2020-06-10",
+        kind: "crisis",
+        title: "Политический кризис и волнения в Мали",
+        participants: ["Republic of Mali"],
+        eventIndexes,
+        state: "Массовая мобилизация оппозиции и споры о легитимности власти стали неразрешённым политическим кризисом.",
+      },
+    ],
+  });
+
+  const given = candidate([0]);
+  normalizeWorldStorylineEventLinks(given, { world: {} });
+  assert.deepEqual(given.storylineUpdates[0].eventIndexes, [0], "the model's own event number is kept");
+
+  const omitted = candidate([]);
+  normalizeWorldStorylineEventLinks(omitted, { world: {} });
+  assert.deepEqual(omitted.storylineUpdates[0].eventIndexes, [0], "and found when it gave none");
+
+  const wrong = candidate([1]);
+  normalizeWorldStorylineEventLinks(wrong, { world: {} });
+  assert.deepEqual(wrong.storylineUpdates[0].eventIndexes, [0], "a number pointing at the export terminal is corrected");
+});
+
 test("R3.8 propagates a native selected-storyline event link before anti-stasis evaluation", () => {
   const candidate = {
     stopDate: "2020-06-21",

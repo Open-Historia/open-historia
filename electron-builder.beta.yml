@@ -35,23 +35,29 @@ appId: io.github.arkniem.openhistoria.beta
 # …\Programs\open-historia, indistinguishable from a stable install's own folder.
 productName: Open Historia Beta
 
-# Identical to package.json's `build.files`. server/** carries the default scenario
-# (server/data/scenarios/default), which the app needs on first run; the ~170MB of
-# map archives are NOT packaged — the app fetches them on first launch.
+# Identical to package.json's `build.files`. server/seed carries the default scenario.
+# The map archives are not packaged: the app fetches them on first launch.
 files:
   - LICENSE
   - dist/**
+  - "!dist/screenshots/**"
+  - "!dist/screenshot.png"
   - server/**
+  - "!server/data/**"
+  - "!server/**/*.test.js"
   - electron/**
+  - "!electron/speech/*.{cs,swift,plist}"
   - scripts/fetch-map-assets.mjs
   - scripts/map-assets.json
-  - public/lang/**
   - fmg/dist/**
   - package.json
   - "!**/*.map"
 
 asarUnpack:
   - scripts/**
+  # The system speech programs (electron/speechSystem.cjs; their sources stay
+  # out, above): nothing can be started from inside the archive.
+  - electron/speech/**
 
 # Ad-hoc code-signs the packaged .app on macOS. Without it the build ships with
 # only the stock Electron binary's linker signature and no sealed resources, and
@@ -110,6 +116,8 @@ win:
   artifactName: Open-Historia-Beta-Setup-${os}.${ext}
 
 nsis:
+  # The app turns differential downloads off, and building for them costs the installer its compression.
+  differentialPackage: false
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true
@@ -130,6 +138,13 @@ mac:
         - arm64
   icon: electron/beta-assets/icon-beta.png
   category: public.app-category.strategy-games
+  # macOS shows these when the Advisor's microphone first asks; without them the
+  # system ends the app at the first getUserMedia (electron/microphone.cjs), and
+  # refuses its speech recognition program (electron/speech/macos.swift), whose
+  # prompts name this app.
+  extendInfo:
+    NSMicrophoneUsageDescription: "The Advisor's microphone turns what you say into a message."
+    NSSpeechRecognitionUsageDescription: "The Advisor's microphone uses macOS's speech recognition to turn what you say into a message. It runs on this Mac where macOS can; otherwise Apple recognises it."
   artifactName: Open-Historia-Beta-mac-${arch}.${ext}
 
 linux:

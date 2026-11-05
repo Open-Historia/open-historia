@@ -76,7 +76,7 @@ test("dedupeByName is the picker's last line of defence", () => {
   assert.deepEqual(dedupeByName(null), []);
 });
 
-import { mergeStockAndDeclaredPolities } from "./countryList.js";
+import { holdsLand, landHolderNames, mergeStockAndDeclaredPolities, pickableCountries } from "./countryList.js";
 
 // The Fault Lines map names its Russia "Russian Federation"; the tiles say
 // "Russia". One polity, one picker entry, under the scenario's name.
@@ -119,4 +119,80 @@ test("a stock country folds onto the declared polity that carries its code", () 
   assert.ok(names.includes("Atlantis"), "an invented polity is listed beside the stock list");
   assert.ok(names.includes("United States"));
   assert.equal(new Set(names.map((name) => name.toLowerCase())).size, names.length, "no duplicates");
+});
+
+// An absorbed country stayed in the pickers because nothing asked the map: the
+// British Empire held all of Australia's regions and Australia was still listed.
+test("landHolderNames reads who holds land from overrides, baked owners and sovereigns", () => {
+  const regions = [
+    { id: "AUS.1_1", country: "Australia" },
+    { id: "AUS.2_1", country: "Australia" },
+    { id: "FRA.1_1", country: "France" },
+    { id: "UKR.1_1", country: "Ukraine" },
+  ];
+  const world = {
+    regionOwnershipOverrides: { "AUS.1_1": "British Empire", "AUS.2_1": "British Empire", "UKR.1_1": "Russia" },
+    regionSovereigntyOverrides: { "UKR.1_1": "Ukraine" },
+  };
+  const holders = landHolderNames(regions, world);
+  assert.deepEqual([...holders].sort(), ["british empire", "france", "russia", "ukraine"]);
+  assert.equal(holdsLand({ name: "Australia", code: "AUS" }, holders), false);
+  assert.equal(holdsLand({ name: "Ukraine" }, holders), true, "an occupied homeland still counts");
+});
+
+test("on a hand-drawn world a stock region with no override holds nothing", () => {
+  const regions = [{ id: "AUS.1_1", country: "Australia" }, { id: "drawn-1", country: "Albion" }];
+  const holders = landHolderNames(regions, { customRegions: true, regionOwnershipOverrides: {} });
+  assert.deepEqual([...holders], ["albion"]);
+});
+
+test("with no catalog to read, the pickers hide no one", () => {
+  assert.equal(landHolderNames([], {}), null);
+  const countries = [{ name: "Australia" }, { name: "France" }];
+  assert.deepEqual(pickableCountries(countries, { holders: null, world: {} }), countries);
+});
+
+// A hand-drawn map (Game of Thrones, 298 AC) listed China, Ghana and every other
+// stock country in its pickers, the GM panel and the AI's lookups: the stock
+// tiles were merged in whatever map the world was drawn on. On a hand-drawn
+// world a stock country is listed only when the map gives it land or the
+// scenario declares it.
+const stockResolvers = {
+  resolveStockCountryCode: (token) => ({ China: "CHN", France: "FRA", Ghana: "GHA" })[String(token ?? "").trim()] ?? null,
+  resolvePolityIdentity: (token) => ({ resolved: String(token ?? "").trim() }),
+};
+const stock = [{ code: "CHN", name: "China" }, { code: "FRA", name: "France" }, { code: "GHA", name: "Ghana" }];
+
+test("on a hand-drawn world the stock countries are left out", () => {
+  const merged = mergeStockAndDeclaredPolities(stock, {
+    customRegions: true,
+    regionOwnershipOverrides: { reg_got_0001: "House Stark", reg_got_0002: "The Crown" },
+    polityOverrides: { "House Stark": { name: "House Stark" }, "The Crown": { name: "The Crown" } },
+  }, stockResolvers);
+  assert.deepEqual(merged.map((entry) => entry.name), ["House Stark", "The Crown"]);
+});
+
+test("on a hand-drawn world a stock country the map gives land, or the scenario declares, stays", () => {
+  const merged = mergeStockAndDeclaredPolities(stock, {
+    customRegions: true,
+    regionOwnershipOverrides: { r1: "France", r2: "Atlantis" },
+    regionSovereigntyOverrides: {},
+    polityOverrides: { Atlantis: { name: "Atlantis" }, Ghana: { name: "Ghana" } },
+  }, stockResolvers);
+  const names = merged.map((entry) => entry.name);
+  assert.ok(names.includes("France"), "holds a region on this map");
+  assert.ok(names.includes("Ghana"), "declared by the scenario");
+  assert.ok(!names.includes("China"));
+  assert.deepEqual(merged.find((entry) => entry.name === "France"), { code: "FRA", name: "France" }, "keeps its stock code for flags");
+});
+
+test("a world drawn on the stock regions keeps the stock list", () => {
+  const onStock = mergeStockAndDeclaredPolities(stock, {
+    customRegions: true,
+    regionOwnershipOverrides: { "FRA.1_1": "Atlantis" },
+    polityOverrides: { Atlantis: { name: "Atlantis" } },
+  }, stockResolvers);
+  assert.equal(onStock.length, 4);
+  const plain = mergeStockAndDeclaredPolities(stock, {}, stockResolvers);
+  assert.equal(plain.length, 3);
 });

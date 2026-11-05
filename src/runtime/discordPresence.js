@@ -63,8 +63,14 @@ const usePresenceAllowed = () => {
   return allowed;
 };
 
-// The goodbye, sent when the player turns the switch off: a scene the server
-// does not know, which it reads as nothing to show.
+// Said again this often while the page is open. The server takes the activity
+// down when the reports stop (PRESENCE_STALE_MS in server/discordPresence.js),
+// which is what clears it after a tab that closed without saying goodbye: the
+// downloadable local server keeps running when its tab is gone.
+export const PRESENCE_HEARTBEAT_MS = 60000;
+
+// The goodbye, sent as the page goes away: a scene the server does not know,
+// which it reads as nothing to show.
 export const PRESENCE_GONE = { scene: "none" };
 
 const postPresence = (body) => {
@@ -77,15 +83,39 @@ export const useDiscordPresence = (presence) => {
   useEffect(() => {
     if (!onLocalServer() || !allowed) return undefined;
     const timer = setTimeout(() => postPresence(body), PRESENCE_DEBOUNCE_MS);
-    return () => clearTimeout(timer);
+    const heartbeat = setInterval(() => postPresence(body), PRESENCE_HEARTBEAT_MS);
+    return () => {
+      clearTimeout(timer);
+      clearInterval(heartbeat);
+    };
   }, [allowed, body]);
 
   // Turned off while something may be showing: the goodbye, once, so Discord
-  // takes the activity down now. Nothing is sent for a switch that was already
-  // off when the page opened: nothing was reported.
+  // takes the activity down now instead of when the server notices the reports
+  // have stopped (PRESENCE_STALE_MS, three minutes). Nothing is sent for a
+  // switch that was already off when the page opened: nothing was reported.
   const wasAllowed = useRef(allowed);
   useEffect(() => {
     if (wasAllowed.current && !allowed && onLocalServer()) postPresence(JSON.stringify(PRESENCE_GONE));
     wasAllowed.current = allowed;
   }, [allowed]);
+
+  // A beacon, because an ordinary request started while the page unloads is
+  // cancelled with it. Sent as a plain string (text/plain): Chromium has
+  // refused a beacon Blob typed application/json, and the server reads a body
+  // it does not parse as JSON as nothing to show, which is the goodbye anyway.
+  useEffect(() => {
+    if (!onLocalServer() || typeof window === "undefined") return undefined;
+    const leave = () => {
+      // Switched off: nothing was reported, so there is nothing to take back.
+      if (!presenceAllowed()) return;
+      try {
+        navigator.sendBeacon?.("/api/presence", JSON.stringify(PRESENCE_GONE));
+      } catch {
+        /* the server's staleness timeout clears it instead */
+      }
+    };
+    window.addEventListener("pagehide", leave);
+    return () => window.removeEventListener("pagehide", leave);
+  }, []);
 };

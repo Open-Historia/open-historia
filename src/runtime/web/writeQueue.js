@@ -37,3 +37,21 @@ export const serializeWrite = (task) => {
 
 // Test seam: waits for everything currently queued to finish.
 export const writeQueueIdle = () => tail;
+
+// The same, one chain per key, for work that may nest inside a queued write or
+// inside another key's task (the owner migration: a game's waits on its
+// scenario's) and so cannot share the single chain above without deadlocking.
+// A key's chain is dropped once it is idle.
+const keyedTails = new Map();
+export const serializeByKey = (key, task) => {
+  const result = (keyedTails.get(key) ?? Promise.resolve()).then(task, task);
+  const keyTail = result.then(
+    () => {},
+    () => {},
+  );
+  keyedTails.set(key, keyTail);
+  keyTail.then(() => {
+    if (keyedTails.get(key) === keyTail) keyedTails.delete(key);
+  });
+  return result;
+};

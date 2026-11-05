@@ -18,6 +18,7 @@ import {
   isOfferableEvent,
   normalizeInteractiveOffer,
   offeredEvent,
+  skipsSinceOffer,
 } from "./interactiveOffer.js";
 
 const event = (id, overrides = {}) => ({
@@ -47,11 +48,36 @@ test("only an event about the player, of weight, by the simulation, and not a sc
   assert.equal(isOfferableEvent(null), false);
 });
 
-test("a skip offers rarely: about one time in three when every skip has an event worth it", () => {
+test("a skip offers rarely: about one time in four when every skip has an event worth it", () => {
   const rounds = Array.from({ length: 900 }, (_, index) => index + 2);
   const offered = rounds.filter((round) => chooseInteractiveOffer({ events: [event(`first-${round}`), event(`second-${round}`)], round }));
   const rate = offered.length / rounds.length;
   assert.ok(Math.abs(rate - INTERACTIVE_OFFER_CHANCE) < 0.06, `rate ${rate.toFixed(3)}`);
+});
+
+test("a campaign of skips is offered about one skip in five, never two skips running", () => {
+  const history = [];
+  let lastOfferRound = 0;
+  let offers = 0;
+  let previousOffered = false;
+  for (let round = 2; round < 2402; round += 1) {
+    const offer = chooseInteractiveOffer({ events: [event(`event-ai-r${round}-001`), event(`event-ai-r${round}-002`)], round, lastOfferRound, history });
+    assert.ok(!(offer && previousOffered), `offers on two skips running at round ${round}`);
+    previousOffered = Boolean(offer);
+    if (offer) {
+      offers += 1;
+      lastOfferRound = round;
+    }
+    history.unshift({ round, mode: "jump" });
+  }
+  const rate = offers / 2400;
+  assert.ok(Math.abs(rate - 1 / 5) < 0.03, `rate ${rate.toFixed(3)}`);
+});
+
+test("campaigns whose turns carry the same event ids do not share their dice", () => {
+  const rounds = Array.from({ length: 200 }, (_, index) => index + 2);
+  const offeredFor = (campaign) => rounds.filter((round) => chooseInteractiveOffer({ events: [event(`event-ai-r${round}-001`, { title: `${campaign} ${round}` })], round }));
+  assert.notDeepEqual(offeredFor("Poland mobilizes"), offeredFor("France mobilizes"));
 });
 
 test("the same turn always offers the same event", () => {
@@ -80,11 +106,22 @@ test("an Intervene that keeps the offered event keeps the offer", () => {
   assert.equal(chooseInteractiveOffer({ events: events.slice(0, 1), round }), null, "stopped before it: nothing left worth it");
 });
 
-test("no offer within the cooldown of the last one", () => {
+test("no offer within the cooldown of the last one, counted in skips", () => {
   const always = { chance: 1, events: [event("a")] };
-  assert.equal(chooseInteractiveOffer({ ...always, round: 10, lastOfferRound: 10 - INTERACTIVE_OFFER_COOLDOWN + 1 }), null);
-  assert.deepEqual(chooseInteractiveOffer({ ...always, round: 10, lastOfferRound: 10 - INTERACTIVE_OFFER_COOLDOWN }), { eventId: "a", round: 10 });
+  const skips = (from, to) => Array.from({ length: to - from + 1 }, (_, index) => ({ round: to - index, mode: "jump" }));
+  assert.equal(INTERACTIVE_OFFER_COOLDOWN, 2);
+  assert.equal(chooseInteractiveOffer({ ...always, round: 10, lastOfferRound: 9, history: skips(2, 9) }), null);
+  assert.deepEqual(chooseInteractiveOffer({ ...always, round: 10, lastOfferRound: 8, history: skips(2, 9) }), { eventId: "a", round: 10 });
   assert.deepEqual(chooseInteractiveOffer({ ...always, round: 2, lastOfferRound: 0 }), { eventId: "a", round: 2 }, "a campaign that never had one");
+});
+
+test("a played scene or a GM command between two skips does not count as a skip", () => {
+  const always = { chance: 1, events: [event("a")] };
+  const history = [{ round: 7, mode: "gm" }, { round: 6, mode: "interactive" }, { round: 5, mode: "jump" }];
+  assert.equal(skipsSinceOffer({ history, round: 8, lastOfferRound: 5 }), 1);
+  assert.equal(chooseInteractiveOffer({ ...always, round: 8, lastOfferRound: 5, history }), null);
+  assert.deepEqual(chooseInteractiveOffer({ ...always, round: 9, lastOfferRound: 5, history: [{ round: 8, mode: "auto" }, ...history] }), { eventId: "a", round: 9 });
+  assert.equal(skipsSinceOffer({ history, round: 8, lastOfferRound: 0 }), Infinity);
 });
 
 test("a stored offer is normalized, and stands only on an event still on the record with no scene in progress", () => {

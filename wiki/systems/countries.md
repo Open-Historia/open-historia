@@ -41,9 +41,8 @@ and **Open Diplomacy**.
 
 <p class="beta-note"><b>On beta the card does more.</b> It says what you know of any
 <a href="/wiki/war/#puppets-and-overlords">puppet arrangement</a> the country is part of, and has
-two more buttons: <b>Stats</b>, which opens the country in the <b>Country</b> panel (see
-<a href="/wiki/statistics/">national statistics</a>), and <b>Listen in</b>, which opens a phone of
-posts by people who live there.</p>
+a <b>Stats</b> button, which opens the country in the <b>Country</b> panel (see
+<a href="/wiki/statistics/">national statistics</a>).</p>
 
 ## Tags
 

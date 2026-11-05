@@ -190,44 +190,6 @@ export const buildOwnershipPresentationDelta = (
   return delta;
 };
 
-export const splitOwnershipPresentationDelta = (
-  delta,
-  editedStockIds = [],
-  { preferScenarioGeometry = false } = {},
-) => {
-  const edited = new Set((editedStockIds ?? []).map((id) => String(id)));
-  const stockIds = [];
-  const authoredIds = [];
-
-  for (const entry of delta ?? []) {
-    const id = String(entry?.id ?? "");
-    if (!id) continue;
-
-    // On a scenario/custom map, the rendered region feature is the only geometry
-    // that is guaranteed to match the scenario's actual political shape. A
-    // region may deliberately retain a stock-looking GID_1/sourceBaseRegionId
-    // even after being clipped, split, or repurposed by the scenario author.
-    // Painting the PMTiles stock feature during a live ownership transition can
-    // therefore flash an entire modern province/country-sized polygon for a
-    // tiny authored fragment, then appear to "revert" once the authored
-    // scenario geometry is the only presentation fallback.
-    //
-    // The live delta is a correctness fallback, so prefer the scenario GeoJSON
-    // whenever it is available. Stock PMTiles remain the crisp steady-state
-    // detail layer without becoming a second ownership truth.
-    if (preferScenarioGeometry) {
-      authoredIds.push(id);
-      continue;
-    }
-
-    if (id.includes(".") && !edited.has(id)) stockIds.push(id);
-    else authoredIds.push(id);
-  }
-
-  return { stockIds, authoredIds };
-};
-
-
 const canonicalOwner = (value) => toCountryName(String(value ?? "").trim());
 
 /**
@@ -260,14 +222,4 @@ export const diffPoliticalOwnership = (records, previousOverrides = {}, nextOver
     changes,
     affectedOwners: [...affectedOwners],
   };
-};
-
-export const mergeFeaturePatch = (featureMap, { upsert = [], removeIds = [] } = {}) => {
-  const next = new Map(featureMap instanceof Map ? featureMap : []);
-  for (const id of removeIds ?? []) next.delete(String(id));
-  for (const feature of upsert ?? []) {
-    if (feature?.id === undefined || feature?.id === null) continue;
-    next.set(String(feature.id), feature);
-  }
-  return next;
 };

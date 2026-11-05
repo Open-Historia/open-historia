@@ -1,5 +1,7 @@
 /*! Open Historia — country picker list assembly © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 
+import { toCountryName } from "./ownerNames.js";
+
 // Merges the AI's polity overrides onto the country list read from the tiles.
 //
 // Why this exists as its own pure module: it got this wrong in a way that only
@@ -80,6 +82,15 @@ export const mergeCountryOverrides = (countries, polityOverrides) => {
     .sort((left, right) => left.name.localeCompare(right.name));
 };
 
+// A world drawn on its own regions rather than the stock ones: custom regions,
+// and not one owner override keyed to a stock region id. A world painted over
+// the stock map (a Roman scenario, the default world) is not hand-drawn.
+export const isHandDrawnWorld = (world) => {
+  if (!world?.customRegions) return false;
+  const ids = Object.keys(world?.regionOwnershipOverrides ?? {});
+  return ids.length > 0 && !ids.some((id) => STOCK_REGION_ID.test(clean(id)));
+};
+
 // Merges the stock country list (read from the tiles: { code: "RUS", name:
 // "Russia" }) with the campaign's declared polities so a picker lists each
 // polity ONCE, under the name the scenario gave it.
@@ -116,9 +127,21 @@ export const mergeStockAndDeclaredPolities = (
     declaredByStockCode.set(code, declaredByStockCode.has(code) ? null : stableKey);
   }
 
+  // A hand-drawn map (Game of Thrones) is not the Earth the tiles describe:
+  // China and Ghana listed beside House Stark in its pickers, its GM panel and
+  // the AI's lookups. There a stock country is listed only when this map gives
+  // it land or the scenario declares it.
+  const handDrawn = isHandDrawnWorld(world);
+  const landed = new Set([
+    ...Object.values(world?.regionOwnershipOverrides ?? {}),
+    ...Object.values(world?.regionSovereigntyOverrides ?? {}),
+  ].map(norm).filter(Boolean));
+
   const merged = new Map();
   for (const entry of Array.isArray(countries) ? countries : []) {
     if (!entry) continue;
+    if (handDrawn && !landed.has(norm(entry.name)) && !landed.has(norm(entry.code))
+      && !(entry.code && declaredByStockCode.get(entry.code))) continue;
     const token = entry.name || entry.code;
     const declared = entry.code ? declaredByStockCode.get(entry.code) : null;
     const resolved = declared
@@ -161,4 +184,72 @@ export const dedupeByName = (countries) => {
     seen.add(key);
     return true;
   });
+};
+
+// Who can still be picked to talk to or spy on.
+//
+// The pickers list every stock country plus every declared polity, and a country
+// that loses its last region is not removed from either: when the British Empire
+// absorbed Australia, Canada and India, all three stayed "active" polities with
+// no land and went on filling the Diplomacy and Spies pickers. Only an explicit
+// dissolution event marks a polity gone, and absorbing all of its land is not one.
+//
+// So the pickers ask the map. These helpers never shorten loadCountryNames
+// itself: that list also resolves the names in existing threads, reports and
+// intercepts, which must keep working for a country that is gone.
+
+const STOCK_REGION_ID = /^[A-Z]{3}\.\d+(?:_\d+)?$/;
+
+// Every owner holding land right now, as lowercased full names: a region's
+// override owner, else its baked owner, plus its lawful sovereign (an occupied
+// homeland is still a homeland). On a hand-drawn world a stock region without an
+// override is not on the map (filterToRenderedRegions), so its baked owner holds
+// nothing. Null when there is no catalog to read, so a load failure never hides
+// anyone on a guess.
+export const landHolderNames = (regions, world) => {
+  const list = Array.isArray(regions) ? regions : [];
+  if (list.length === 0) return null;
+  const ownership = world?.regionOwnershipOverrides ?? {};
+  const sovereignty = world?.regionSovereigntyOverrides ?? {};
+  const stockNeedsOverride = Boolean(world?.customRegions)
+    && list.some((region) => !STOCK_REGION_ID.test(clean(region?.id)));
+  const holders = new Set();
+  const add = (owner) => {
+    const name = toCountryName(clean(owner));
+    if (name) holders.add(norm(name));
+  };
+  for (const region of list) {
+    const id = clean(region?.id);
+    if (!id) continue;
+    if (ownership[id] !== undefined) add(ownership[id]);
+    else if (!(stockNeedsOverride && STOCK_REGION_ID.test(id))) add(region?.country || region?.countryCode);
+    if (sovereignty[id]) add(sovereignty[id]);
+  }
+  return holders;
+};
+
+export const holdsLand = (country, holders) => Boolean(holders) && (
+  holders.has(norm(country?.name)) || holders.has(norm(toCountryName(clean(country?.code))))
+);
+
+// A country with no land left can still deserve a place in the pickers: a
+// government-in-exile or a movement the player founded landless in the Faction
+// Creator (which leaves no marker of its own), as against Australia, absorbed
+// whole. `polity` is the country's world.polityOverrides entry, or undefined for
+// a stock country the campaign never declared.
+export const keepLandlessCountry = (country, polity) => {
+  // A real map country with no land left was annexed; a dissolved polity ended.
+  // Anything else landless (a faction, a movement) is still a power.
+  if (clean(polity?.status).toLowerCase() === "dissolved") return false;
+  const code = clean(country?.code);
+  return !(code && toCountryName(code) !== code);
+};
+
+export const pickableCountries = (countries, { holders, world } = {}) => {
+  const list = Array.isArray(countries) ? countries : [];
+  if (!holders) return list;
+  const overrides = world?.polityOverrides ?? {};
+  const declared = (country) => overrides[clean(country?.name)]
+    ?? Object.values(overrides).find((polity) => norm(polity?.name) === norm(country?.name));
+  return list.filter((country) => holdsLand(country, holders) || keepLandlessCountry(country, declared(country)));
 };

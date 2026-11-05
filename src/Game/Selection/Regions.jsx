@@ -1,19 +1,29 @@
 /*! Open Historia — portions (era polity names/flags + intel briefing) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useMap } from "react-map-gl/maplibre";
-import { getNationFlags, resolveCountryDisplayName } from "../../runtime/assets.js";
-import { readWorldState } from "../../runtime/gameState.js";
+import { getNationFlags, getPrimedScenarioRegionCatalog, resolveCountryDisplayName } from "../../runtime/assets.js";
+import { withMapClaims } from "../../runtime/mapClaims.js";
 import { normalizeGroupAreas, normalizeGroups } from "../../runtime/groups.js";
+import { isActiveFeatureEnabled } from "../../runtime/gameFeatures.js";
+import { readGameData, readWorldState } from "../../runtime/gameState.js";
+import { livePuppetsFor, puppetKindLabel, puppetSummaryFor } from "../../runtime/puppets.js";
 import { getWorldStateSnapshot } from "../Map/useWorldState.js";
 import { resolvePolityFlag } from "../../runtime/polityFlags.js";
 import { resolvePolityIdentity } from "../../runtime/polityIdentity.js";
-import { countryGidFromIdentity } from "../../runtime/countryFlags.js";
+import { toCountryName } from "../../runtime/ownerNames.js";
+import { bundledFlagUrl, countryGidFromIdentity } from "../../runtime/countryFlags.js";
 import { requestDiplomaticChat } from "../GameUI/chat.jsx";
-import { openCountryPanel } from "./CountryPanel.jsx";
+import { openRostraPlace } from "../GameUI/rostraOpen.js";
+import { OPEN_COUNTRY_STATS_EVENT, openCountryPanel } from "./CountryPanel.jsx";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { APP_HEIGHT, MAP_CARD_OPENED, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, useShortTouchScreen, useTouchPrimary } from "../../runtime/mobileUi.js";
 import { useBackToClose } from "../../runtime/backToClose.js";
+import { copyToClipboard } from "../../runtime/clipboard.js";
+import { clampAnchoredCardTop, isSameRegionSelection, regionControlStatus, useCardScreenPos } from "./mapCards.js";
+import { regionInfoFor } from "./regionInfo.js";
+import { getWorldPlaceIndex } from "../../runtime/placeSearch.js";
+import { resolveRegionName } from "../../runtime/regionNameFixes.js";
 
 let _setSelection = null;
 let _currentSelection = null;
@@ -27,13 +37,25 @@ export const setRegionClickInterceptor = (fn) => {
     _clickInterceptor = typeof fn === "function" ? fn : null;
 };
 
-// Passive tap on every normal region click (the Stats tab watches which country
-// the player is inspecting). Never consumes the click — popups still open.
-let _clickObserver = null;
+// Stable browser event for passive consumers of a committed normal region
+// selection (the Stats tab re-targets on it). It survives lazy chunk / HMR
+// module boundaries and allows multiple listeners without changing the
+// click-consumption contract: it never consumes the click, popups still open.
+export const REGION_SELECTED_EVENT = "oh:region-selected";
 
-export const setRegionClickObserver = (fn) => {
-    _clickObserver = typeof fn === "function" ? fn : null;
-};
+// WHO IS PLAYING, and why it is read here rather than per click. What the card
+// may say about a subordination depends on the viewer, and a COVERT one is
+// invisible to a viewer it does not know — so a popup that had not yet learned
+// the player's country showed no puppet panel at all, and an open one in a
+// stranger's words. It is read once, kept for the session, and refreshed in the
+// background; the first click of a session no longer races a request.
+let _playerCountry = "";
+const rememberPlayerCountry = (readGame) => readGame()
+    .then((game) => {
+        _playerCountry = String(game?.country ?? "").trim() || _playerCountry;
+        return _playerCountry;
+    })
+    .catch(() => _playerCountry);
 
 const cleanSelectionValue = (value) => String(value ?? "").trim();
 
@@ -72,6 +94,13 @@ const resolveLiveSelectionProps = async (props) => {
         }
     }
 
+    const resolvedName = resolveRegionName(
+        regionId,
+        props.NAME_1 ?? props.name ?? "",
+        world?.regionRenames,
+    );
+    const withName = resolvedName ? { ...props, NAME_1: resolvedName } : props;
+
     const overrides =
         world?.regionOwnershipOverrides &&
         typeof world.regionOwnershipOverrides === "object"
@@ -79,7 +108,7 @@ const resolveLiveSelectionProps = async (props) => {
             : {};
 
     if (!Object.prototype.hasOwnProperty.call(overrides, regionId)) {
-        return props;
+        return withName;
     }
 
     const rawController = cleanSelectionValue(overrides[regionId]);
@@ -99,7 +128,7 @@ const resolveLiveSelectionProps = async (props) => {
     );
 
     return {
-        ...props,
+        ...withName,
         // Current controller/owner is authoritative for every normal consumer.
         COUNTRY: resolvedController,
         GID_0: resolvedController,
@@ -112,23 +141,26 @@ const resolveLiveSelectionProps = async (props) => {
 const commitRegionSelection = (props) => {
     if (!props || typeof props !== "object") return;
 
-    try { _clickObserver?.(props); } catch { /* observers must never break clicks */ }
+    if (typeof window !== "undefined" && typeof CustomEvent !== "undefined") {
+        try {
+            window.dispatchEvent(new CustomEvent(REGION_SELECTED_EVENT, { detail: props }));
+        } catch { /* passive listeners must never break clicks */ }
+    }
 
     const { COUNTRY, NAME_1, GID_0, GID_1, gid0, owner, lngLat } = props;
     if (!_setSelection) return;
 
-    const isSame =
-    _currentSelection &&
-    _currentSelection.COUNTRY === COUNTRY &&
-    _currentSelection.NAME_1 === NAME_1;
+    // By the region's id where both have one (mapCards.js): a drawn map's
+    // regions often share a name and no country.
+    const isSame = isSameRegionSelection(_currentSelection, props);
 
-    if (isSame) {
-        _dismiss?.();
-    } else if (_currentSelection !== null) {
-        _dismiss?.();
-    } else {
-        _setSelection({ COUNTRY, NAME_1, GID_0, GID_1, gid0, owner, lngLat });
-    }
+    // Clicking the region already shown closes its card. Clicking a DIFFERENT
+    // one shows that region: it used to only close the open card, so every
+    // other click round the map appeared to do nothing and the card had to be
+    // asked for twice. _setSelection replays the card's entrance on the new
+    // region, which discards the outgoing one.
+    if (isSame) _dismiss?.();
+    else _setSelection({ COUNTRY, NAME_1, GID_0, GID_1, gid0, owner, lngLat });
 };
 
 export const onRegionSelected = (props) => {
@@ -169,7 +201,7 @@ const createFlagState = (status = "idle", imageUrl = null, emoji = null) => ({
 
 // Flags are resolved through the shared stable-lineage flag service below.
 
-const IconBtn = ({ children, title, onClick }) => {
+const IconBtn = ({ children, title, onClick, expanded }) => {
     const [hovered, setHovered] = React.useState(false);
 
     return (
@@ -178,6 +210,7 @@ const IconBtn = ({ children, title, onClick }) => {
         className="oh-tap"
         title={title}
         aria-label={title}
+        aria-expanded={expanded}
         onClick={onClick}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
@@ -203,6 +236,52 @@ const IconBtn = ({ children, title, onClick }) => {
     );
 };
 
+
+const RostraGlyph = () => (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9" />
+        <path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5" />
+        <circle cx="12" cy="12" r="2" />
+        <path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5" />
+        <path d="M19.1 4.9C23 8.8 23 15.1 19.1 19" />
+    </svg>
+);
+
+const rostraButtonStyle = {
+    alignItems: "center",
+    background: "rgba(255, 255, 255, 0.07)",
+    border: "1px solid rgba(43, 193, 243, 0.35)",
+    borderRadius: "8px",
+    color: "#2bc1f3",
+    cursor: "pointer",
+    display: "flex",
+    fontFamily: "inherit",
+    fontSize: "12px",
+    fontWeight: 600,
+    gap: "6px",
+    justifyContent: "center",
+    marginTop: "8px",
+    padding: "6px 8px",
+    width: "100%",
+    transition: "background 0.15s, border-color 0.15s",
+};
+
+// Copies a name through the shared helper, which falls back where
+// navigator.clipboard is missing (LAN play over http, the Android app), and
+// says for a moment whether it worked: a tick, or a cross and "Copy failed".
+const CopyNameBtn = ({ text, title }) => {
+    const [result, setResult] = React.useState(""); // "" | copied | failed
+    const copy = async () => {
+        setResult((await copyToClipboard(text)) ? "copied" : "failed");
+        setTimeout(() => setResult(""), 1500);
+    };
+    return (
+        <IconBtn title={result === "copied" ? "Copied" : result === "failed" ? "Copy failed" : title} onClick={copy}>
+        {result === "copied" ? "\u2713" : result === "failed" ? "\u2715" : "\u29C9"}
+        </IconBtn>
+    );
+};
+
 const ANIM_ID = "region-popup-anims";
 
 if (typeof document !== "undefined" && !document.getElementById(ANIM_ID)) {
@@ -210,12 +289,12 @@ if (typeof document !== "undefined" && !document.getElementById(ANIM_ID)) {
     style.id = ANIM_ID;
     style.textContent = `
     @keyframes regionPopupFadeIn {
-        from { opacity: 0; transform: translateY(calc(-100% + 10px)); }
-        to   { opacity: 1; transform: translateY(-100%); }
+        from { opacity: 0; transform: translateY(10px); }
+        to   { opacity: 1; transform: none; }
     }
     @keyframes regionPopupFadeOut {
-        from { opacity: 1; transform: translateY(-100%); }
-        to   { opacity: 0; transform: translateY(calc(-100% + 10px)); }
+        from { opacity: 1; transform: none; }
+        to   { opacity: 0; transform: translateY(10px); }
     }
     @keyframes regionSheetFadeIn {
         from { opacity: 0; transform: translateY(10px); }
@@ -264,20 +343,39 @@ const RegionPopup = () => {
     const asSheet = isMobile || shortTouch;
     const isTouch = useTouchPrimary();
     const [selection, setSelection] = useState(null);
-    const [screenPos, setScreenPos] = useState(null);
     const [animKey, setAnimKey] = useState(0);
+    const popupBodyRef = useRef(null);
+    const [popupBodyHeight, setPopupBodyHeight] = useState(0);
     const [dismissing, setDismissing] = useState(false);
+    // The Region info section (regionInfo.js), shut again for each region.
+    const [showRegionInfo, setShowRegionInfo] = useState(false);
     const [flagState, setFlagState] = useState(() => createFlagState());
     const [flagImageFailed, setFlagImageFailed] = useState(false);
     // Scenario polity registry (world.polityOverrides): era names + optional flags.
     const [polities, setPolities] = useState({});
     const [worldState, setWorldState] = useState(null);
+    // Who is looking, for the puppet lines: what the card may say about a
+    // subordination depends on whether the player is party to it or found it out.
+    // Kept across popups, not read afresh for each: the read is a promise, and
+    // the first paint after a click would otherwise have no viewer at all — and
+    // a card with no viewer is the player's own overlord described to them as a
+    // stranger's business. The panel is suppressed until this is known.
+    const [playerCountry, setPlayerCountry] = useState(_playerCountry);
+    useEffect(() => {
+        let cancelled = false;
+        // The cached read, not a forced one: this is the same game.json every
+        // other panel holds, and a failed round trip used to leave the card
+        // with no viewer and so no puppet panel.
+        rememberPlayerCountry(readGameData).then((country) => { if (!cancelled) setPlayerCountry(country); });
+        return () => { cancelled = true; };
+    }, [selection]);
     // sparse control metadata. ownership is the de-facto controller; sovereignty is
     // only stored when it differs, because duplicating every normal border is dumb.
     const [territoryState, setTerritoryState] = useState({
         regionClaimants: {},
         regionOwnershipOverrides: {},
         regionSovereigntyOverrides: {},
+        regionRenames: {},
         groups: {},
         groupAreas: {},
     });
@@ -296,9 +394,13 @@ const RegionPopup = () => {
             setWorldState(world);
             setPolities(world?.polityOverrides ?? {});
             setTerritoryState({
-                regionClaimants: world?.regionClaimants ?? {},
+                // The map file's own disputes too, as the map shows them
+                // (runtime/mapClaims.js): a dispute drawn in the Workshop was
+                // striped on the map with no claimant on this card.
+                regionClaimants: withMapClaims(world, getPrimedScenarioRegionCatalog())?.regionClaimants ?? {},
                 regionOwnershipOverrides: world?.regionOwnershipOverrides ?? {},
                 regionSovereigntyOverrides: world?.regionSovereigntyOverrides ?? {},
+                regionRenames: world?.regionRenames ?? {},
                 ...groupsOf(world),
             });
         };
@@ -333,7 +435,7 @@ const RegionPopup = () => {
             setWorldState(world);
             setPolities(world?.polityOverrides ?? {});
             setTerritoryState({
-                regionClaimants: world?.regionClaimants ?? {},
+                regionClaimants: withMapClaims(world, getPrimedScenarioRegionCatalog())?.regionClaimants ?? {},
                 regionOwnershipOverrides: world?.regionOwnershipOverrides ?? {},
                 regionSovereigntyOverrides: world?.regionSovereigntyOverrides ?? {},
                 ...groupsOf(world),
@@ -366,6 +468,7 @@ const RegionPopup = () => {
     _setSelection = (value) => {
         _currentSelection = value;
         setDismissing(false);
+        setShowRegionInfo(false);
         setFlagState(value ? createFlagState("loading") : createFlagState());
         setFlagImageFailed(false);
         setSelection(value);
@@ -427,16 +530,28 @@ const RegionPopup = () => {
         _dismiss?.();
     };
 
+    // The full list already lives in Country → Diplomacy. Reuse the same
+    // public Country-drawer navigation as the legacy country-info card; do
+    // not make the map popup a second puppet directory.
+    const handleOpenCountryDossier = (country) => {
+        if (!country) return;
+        window.dispatchEvent(new CustomEvent(OPEN_COUNTRY_STATS_EVENT, { detail: { country } }));
+        _dismiss?.();
+    };
+
     _dismiss = () => setDismissing(true);
 
-    const handleAnimationEnd = (e) => {
-        if (e.animationName !== "regionPopupFadeOut" && e.animationName !== "regionSheetFadeOut") return;
-
+    const finishDismiss = () => {
         _currentSelection = null;
         setSelection(null);
         setFlagState(createFlagState());
         setFlagImageFailed(false);
         setDismissing(false);
+    };
+
+    const handleAnimationEnd = (e) => {
+        if (e.animationName !== "regionPopupFadeOut" && e.animationName !== "regionSheetFadeOut") return;
+        finishDismiss();
     };
 
     useEffect(() => {
@@ -461,58 +576,39 @@ const RegionPopup = () => {
         );
     }, [selection?.COUNTRY, selection?.GID_0, selection?.GID_1, selection?.owner, worldState, customFlags, territoryState]);
 
+    // A phone's sheet follows no point on the map, so nothing is tracked
+    // (mapCards.js).
+    const screenPos = useCardScreenPos(map, selection?.lngLat, Boolean(selection) && !asSheet);
+    const floatingCardVisible = Boolean(selection && screenPos && !asSheet);
+
+    // True-sized flags and expandable region details alter the card height.
+    // Observe the laid-out body (not the animated bounding box) so a card near
+    // the viewport edge moves up rather than losing its controls off-screen.
     useEffect(() => {
-        // A phone's sheet follows no point on the map, so nothing is tracked.
-        if (!map || !selection || asSheet) {
-            setScreenPos(null);
-            return;
-        }
-
-        const update = () => {
-            const center = map.getCenter();
-            const toRad = (deg) => (deg * Math.PI) / 180;
-            const lat1 = toRad(center.lat);
-            const lat2 = toRad(selection.lngLat.lat);
-            const dLng = toRad(selection.lngLat.lng - center.lng);
-            const cosAngle =
-            Math.sin(lat1) * Math.sin(lat2) +
-            Math.cos(lat1) * Math.cos(lat2) * Math.cos(dLng);
-
-            if (cosAngle < 0) {
-                setScreenPos(null);
-                return;
-            }
-
-            const point = map.project(selection.lngLat);
-            setScreenPos((prev) => {
-                if (
-                    prev &&
-                    Math.abs(prev.x - point.x) < 0.5 &&
-                    Math.abs(prev.y - point.y) < 0.5
-                ) {
-                    return prev;
-                }
-
-                return { x: point.x, y: point.y };
-            });
+        if (!floatingCardVisible) return undefined;
+        const body = popupBodyRef.current;
+        if (!body) return undefined;
+        const measure = () => {
+            const height = body.offsetHeight;
+            setPopupBodyHeight((previous) => Math.abs(previous - height) < 1 ? previous : height);
         };
-
-        let frameId = 0;
-        const scheduleUpdate = () => {
-            if (frameId) return;
-            frameId = requestAnimationFrame(() => {
-                frameId = 0;
-                update();
-            });
-        };
-
-        update();
-        map.on("move", scheduleUpdate);
+        const frame = window.requestAnimationFrame(measure);
+        const observer = typeof ResizeObserver === "function" ? new ResizeObserver(measure) : null;
+        observer?.observe(body);
+        window.addEventListener("resize", measure);
         return () => {
-            if (frameId) cancelAnimationFrame(frameId);
-            map.off("move", scheduleUpdate);
+            window.cancelAnimationFrame(frame);
+            observer?.disconnect();
+            window.removeEventListener("resize", measure);
         };
-    }, [map, selection, asSheet]);
+    }, [floatingCardVisible, animKey]);
+
+    // A card that is not on screen has no fade-out to play, and the fade's end
+    // is what clears the selection: without this a dismiss left it selected.
+    useEffect(() => {
+        if (dismissing && !asSheet && !screenPos) finishDismiss();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [dismissing, asSheet, screenPos]);
 
     // On a phone the card and a bottom panel would share one spot at the
     // bottom of the screen, the card underneath: it tells the HUD it opened,
@@ -528,6 +624,11 @@ const RegionPopup = () => {
 
     const { COUNTRY, NAME_1 } = selection;
     const regionId = selection.GID_1 || "";
+    const displayRegionName = resolveRegionName(
+        regionId,
+        NAME_1,
+        territoryState.regionRenames || worldState?.regionRenames || getWorldStateSnapshot()?.regionRenames,
+    ) || NAME_1;
     const controllerCode = regionId
         ? territoryState.regionOwnershipOverrides?.[regionId] ?? selection.GID_0 ?? selection.owner ?? ""
         : selection.GID_0 ?? selection.owner ?? "";
@@ -545,18 +646,10 @@ const RegionPopup = () => {
             .filter((value) => value && value !== controllerCode),
     )];
     const isUnclaimed = controllerCode === "";
-    const controllingGroup = regionId ? territoryState.groups?.[territoryState.groupAreas?.[regionId]] ?? null : null;
-    const isOccupied = Boolean(controllerCode && sovereignCode && controllerCode !== sovereignCode);
-    const isContested = claimants.length > 0;
-    const controlStatus = isOccupied && isContested
-        ? "Occupied / contested"
-        : isOccupied
-            ? "Occupied"
-            : isContested
-                ? "Contested"
-                : isUnclaimed
-                    ? "Unclaimed"
-                    : "Administered";
+    // Not shown while groups are switched off for this game (server/gameFeatures.js).
+    const controllingGroup = regionId && isActiveFeatureEnabled("groups")
+        ? territoryState.groups?.[territoryState.groupAreas?.[regionId]] ?? null
+        : null;
     const displayPolity = (code) => {
         if (!code) return "Unclaimed Territory";
         const identity = resolvePolityIdentity(code, worldState, {
@@ -568,13 +661,58 @@ const RegionPopup = () => {
         const key = identity.resolved || code;
         return worldState?.polityOverrides?.[key]?.name || key || "Unclaimed Territory";
     };
+    // Shown for a region that is occupied or claimed, unowned land included
+    // (mapCards.js).
+    const { isOccupied, status: controlStatus } = regionControlStatus({
+        controllerCode,
+        sovereignCode,
+        claimants,
+        displayName: displayPolity,
+    });
     // header stays on the current administrator/controller. legal title goes below.
     const displayCountry = isUnclaimed ? "Unclaimed Territory" : displayPolity(controllerCode);
+    // The same summary the country panel shows (runtime/puppets.js), and for an
+    // Overlord the Puppets this viewer knows it holds. A covert arrangement the
+    // player never uncovered leaves no trace on the card.
+    const controllerKey = isUnclaimed ? "" : (resolvePolityIdentity(controllerCode, worldState, {
+        allowUnknown: true,
+        requireActive: false,
+        allowCoreMatch: true,
+        allowStockBase: true,
+    }).resolved || controllerCode || "");
+    const subordination = controllerKey && worldState ? puppetSummaryFor(worldState, playerCountry, controllerKey) : null;
+    const heldPuppets = controllerKey && worldState && playerCountry
+        ? livePuppetsFor(worldState, playerCountry).filter((row) => row.overlord === controllerKey)
+        : [];
+    const puppetPreview = heldPuppets.slice(0, 2);
+    const remainingPuppets = heldPuppets.length - puppetPreview.length;
     // Wider on a touch screen that still anchors the card at the tap (a tablet,
     // a phone on its side): the finger-sized buttons took 140 of the header's
     // 216 px and broke the country's name mid-word.
     const POPUP_WIDTH = isTouch ? 300 : 238;
     const showFlagImage = Boolean(flagState.imageUrl && !flagImageFailed);
+    // Only while the section is open: the cities and neighbours, from what the
+    // map holds in memory (regionInfo.js), for no read and no request.
+    const regionInfo = showRegionInfo
+        ? regionInfoFor({
+            regionId,
+            catalog: getPrimedScenarioRegionCatalog(),
+            cities: getWorldPlaceIndex().cities,
+            cityRenames: worldState?.cityRenames,
+            ownerOf: (id, entry) => territoryState.regionOwnershipOverrides?.[id] ?? entry?.country ?? "",
+        })
+        : null;
+
+    // The body is measured AFTER its max-height cap. Include the pointer in
+    // the screen-space footprint; no CSS transform may change this position.
+    const pointerHeight = 9;
+    const popupTop = !asSheet && screenPos
+        ? clampAnchoredCardTop(screenPos.y, popupBodyHeight + pointerHeight, window.innerHeight)
+        : 0;
+    // Once clamped, the triangle may no longer point at the selected region.
+    // Hide a misleading pointer rather than drawing it at an unrelated spot.
+    const pointerAligned = !asSheet && screenPos && popupBodyHeight > 0
+        && Math.abs(popupTop + popupBodyHeight + pointerHeight - screenPos.y) <= 12;
 
     return createPortal(
         <div
@@ -584,7 +722,7 @@ const RegionPopup = () => {
             position: "fixed",
             ...(asSheet ? (isMobile ? SHEET_PLACEMENT : SIDEWAYS_SHEET_PLACEMENT) : {
                 left: screenPos.x - POPUP_WIDTH / 2,
-                top: screenPos.y - 10,
+                top: popupTop,
                 width: `${POPUP_WIDTH}px`,
             }),
             zIndex: 20,
@@ -595,32 +733,37 @@ const RegionPopup = () => {
         }}
         >
         <div
+        ref={popupBodyRef}
         style={{
             backgroundColor: "rgba(24, 24, 27, 0.95)",
             backdropFilter: "blur(4px)",
             WebkitBackdropFilter: "blur(4px)",
             borderRadius: "12px",
-            overflow: asSheet ? "auto" : "hidden",
-            maxHeight: asSheet ? (isMobile ? SHEET_MAX_HEIGHT : SIDEWAYS_SHEET_MAX_HEIGHT) : undefined,
+            overflowX: "hidden",
+            overflowY: "auto",
+            // Reserve space for the pointer and both viewport edges. A very
+            // tall puppet list must scroll *inside* the card, not push the
+            // fixed card (including its flag and close button) off-screen.
+            maxHeight: asSheet ? (isMobile ? SHEET_MAX_HEIGHT : SIDEWAYS_SHEET_MAX_HEIGHT) : "calc(100dvh - 2rem)",
             fontFamily: "sans-serif",
             boxShadow: "0 8px 32px rgba(0,0,0,0.5), 0 2px 8px rgba(0,0,0,0.3)",
             border: "1px solid rgba(255,255,255,0.12)",
             color: "white",
         }}
         >
-        <div style={{ position: "relative", width: "100%", height: "96px", background: "rgba(41,41,45,0.6)" }}>
+        <div style={{ position: "relative", width: "100%", background: "rgba(41,41,45,0.6)" }}>
         {showFlagImage ? (
             <img
-            src={flagState.imageUrl}
+            src={bundledFlagUrl(flagState.imageUrl)}
             alt={displayCountry}
-            style={{ width: "100%", height: "100%", objectFit: "cover", display: "block", opacity: 0.9 }}
+            style={{ width: "100%", height: "auto", maxHeight: "min(320px, 40dvh)", objectFit: "contain", display: "block", opacity: 0.9 }}
             onError={() => setFlagImageFailed(true)}
             />
         ) : (
             <div
             style={{
                 width: "100%",
-                height: "100%",
+                height: "96px",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
@@ -680,31 +823,117 @@ const RegionPopup = () => {
         </div>
         <div style={{ display: "flex", gap: "4px", flexShrink: 0 }}>
         {!isUnclaimed && <IconBtn title="Open diplomatic chat" onClick={handleOpenChat}>{"\uD83D\uDCAC"}</IconBtn>}
-        <IconBtn title="Copy name" onClick={() => navigator.clipboard?.writeText(displayCountry)}>{"\u29C9"}</IconBtn>
+        <CopyNameBtn title="Copy name" text={displayCountry} />
         {!isUnclaimed && <IconBtn title="Country intel (AI)" onClick={handleToggleStats}>{"\u24D8"}</IconBtn>}
         </div>
         </div>
+
+        {subordination && (
+            <div style={{ marginTop: "7px", padding: "7px 9px", borderRadius: "9px", background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.13)", borderLeft: "2px solid rgba(255,255,255,0.3)" }}>
+            <span style={{ display: "block", fontSize: "12px", fontWeight: 800, color: "rgba(255,255,255,0.96)" }}>{subordination.headline}</span>
+            <div style={{ fontSize: "11px", color: "rgba(255,255,255,0.82)", lineHeight: 1.4, marginTop: "3px" }}>{subordination.meaning}</div>
+            {subordination.facts.length > 0 && (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "3px", marginTop: "5px" }}>
+                {subordination.facts.map((fact) => (
+                    <span key={fact} style={{ background: "rgba(0,0,0,0.25)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "999px", color: "rgba(255,255,255,0.7)", fontSize: "10px", padding: "1px 6px", whiteSpace: "nowrap" }}>{fact}</span>
+                ))}
+                </div>
+            )}
+            {subordination.provenance && (
+                <div style={{ fontSize: "10px", color: "rgba(255,255,255,0.45)", fontStyle: "italic", marginTop: "3px" }}>{subordination.provenance}</div>
+            )}
+            </div>
+        )}
+        {heldPuppets.length > 0 && (
+            <div style={{ marginTop: "8px", fontSize: "11px", lineHeight: 1.4, color: "rgba(255,255,255,0.8)" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "6px", marginBottom: "5px" }}>
+            <span style={{ color: "rgba(255,255,255,0.7)", fontWeight: 700 }}>Subordinate states</span>
+            <span data-no-translate style={{ color: "rgba(255,255,255,0.92)", fontWeight: 800 }}>{heldPuppets.length}</span>
+            </div>
+            {puppetPreview.map((row) => (
+                <div key={row.id || `${row.overlord}-${row.puppet}-${row.kind}`} style={{ lineHeight: 1.35, marginTop: "3px", overflowWrap: "anywhere" }}>
+                {row.puppet} <span style={{ color: "rgba(255,255,255,0.5)" }}>({puppetKindLabel(row.kind)})</span>
+                </div>
+            ))}
+            {remainingPuppets > 0 && (
+                <div style={{ color: "rgba(255,255,255,0.55)", marginTop: "3px" }}>+<span data-no-translate>{remainingPuppets}</span> more</div>
+            )}
+            <div style={{ alignItems: "center", display: "flex", gap: "4px", marginTop: "7px" }}>
+            <button
+                type="button"
+                className="oh-tap"
+                title="Country"
+                onClick={(e) => { e.stopPropagation(); handleOpenCountryDossier(controllerKey); }}
+                style={{ background: "none", border: 0, color: "#8acde6", cursor: "pointer", fontSize: "11px", fontWeight: 700, padding: "2px 0", textDecoration: "underline", textUnderlineOffset: "2px" }}
+            >Country</button>
+            <span style={{ color: "rgba(255,255,255,0.55)" }}>→</span>
+            <span style={{ color: "rgba(255,255,255,0.68)" }}>Diplomacy</span>
+            </div>
+            </div>
+        )}
 
         <div style={{ borderTop: "1px solid rgba(255,255,255,0.1)", margin: "7px 0" }} />
 
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "6px", minHeight: "22px" }}>
         <span style={{ color: "rgba(255,255,255,0.65)", fontSize: "12px", minWidth: 0, wordBreak: "break-word" }}>
-        {NAME_1}
+        {displayRegionName}
         </span>
         <div style={{ display: "flex", gap: "4px", flexShrink: 0 }}>
-        <IconBtn title="Copy region name" onClick={() => navigator.clipboard?.writeText(NAME_1)}>{"\u29C9"}</IconBtn>
-        <IconBtn title="Region info">{"\u24D8"}</IconBtn>
+        <CopyNameBtn title="Copy region name" text={displayRegionName} />
+        <IconBtn title="Region info" expanded={showRegionInfo} onClick={() => setShowRegionInfo((open) => !open)}>{"\u24D8"}</IconBtn>
         </div>
         </div>
 
-        {!isUnclaimed && (isOccupied || isContested) && (
+        {showRegionInfo && (
+            <>
+            <div style={{ borderTop: "1px solid rgba(255,255,255,0.08)", margin: "7px 0 5px" }} />
+            {regionInfo && (regionInfo.cities.length > 0 || regionInfo.neighbours.length > 0) ? (
+                <div style={{ display: "grid", gridTemplateColumns: "76px minmax(0, 1fr)", gap: "3px 7px", fontSize: "11px", lineHeight: 1.35 }}>
+                {regionInfo.cities.length > 0 && (
+                    <>
+                    <span style={{ color: "rgba(255,255,255,0.42)" }}>Cities</span>
+                    <span style={{ color: "rgba(255,255,255,0.84)", wordBreak: "break-word" }}>
+                    {regionInfo.cities
+                        .map((city) => (city.population > 0 ? `${city.name} (${city.population.toLocaleString()})` : city.name))
+                        .join(", ")}
+                    </span>
+                    </>
+                )}
+                {regionInfo.neighbours.length > 0 && (
+                    <>
+                    <span style={{ color: "rgba(255,255,255,0.42)" }}>Neighbours</span>
+                    <span style={{ color: "rgba(255,255,255,0.84)", wordBreak: "break-word" }}>
+                    {regionInfo.neighbours.map((group) => (
+                        <span key={group.owner || "unowned"} style={{ display: "block" }}>
+                        <span style={{ color: "rgba(255,255,255,0.55)" }}>{displayPolity(group.owner)}</span>
+                        {" \u00B7 "}
+                        {group.regions.join(", ")}
+                        </span>
+                    ))}
+                    </span>
+                    </>
+                )}
+                </div>
+            ) : (
+                <div style={{ fontSize: "11px", lineHeight: 1.4, color: "rgba(255,255,255,0.5)" }}>
+                No cities or neighbouring regions are known for this region.
+                </div>
+            )}
+            </>
+        )}
+
+        {controlStatus && (
             <>
             <div style={{ borderTop: "1px solid rgba(255,255,255,0.08)", margin: "7px 0 5px" }} />
             <div style={{ display: "grid", gridTemplateColumns: "76px minmax(0, 1fr)", gap: "3px 7px", fontSize: "11px", lineHeight: 1.35 }}>
-            <span style={{ color: "rgba(255,255,255,0.42)" }}>Sovereign</span>
-            <span style={{ color: "rgba(255,255,255,0.84)", wordBreak: "break-word" }}>{displayPolity(sovereignCode)}</span>
-            <span style={{ color: "rgba(255,255,255,0.42)" }}>Controlled by</span>
-            <span style={{ color: "rgba(255,255,255,0.84)", wordBreak: "break-word" }}>{displayPolity(controllerCode)}</span>
+            {!isUnclaimed && (
+                <>
+                <span style={{ color: "rgba(255,255,255,0.42)" }}>Sovereign</span>
+                <span style={{ color: "rgba(255,255,255,0.84)", wordBreak: "break-word" }}>{displayPolity(sovereignCode)}</span>
+                <span style={{ color: "rgba(255,255,255,0.42)" }}>Controlled by</span>
+                <span style={{ color: "rgba(255,255,255,0.84)", wordBreak: "break-word" }}>{displayPolity(controllerCode)}</span>
+                </>
+            )}
             <span style={{ color: "rgba(255,255,255,0.42)" }}>Status</span>
             <span style={{ color: isOccupied ? "#fbbf24" : "rgba(255,255,255,0.84)", fontWeight: 700 }}>{controlStatus}</span>
             {claimants.length > 0 && (
@@ -735,11 +964,37 @@ const RegionPopup = () => {
             </>
         )}
 
+        {/* Not while the game has no social media: there is no Rostra. */}
+        {!isUnclaimed && isActiveFeatureEnabled("socialMedia") && (
+            <button
+            type="button"
+            className="oh-tap-row"
+            onClick={(e) => {
+                e.stopPropagation();
+                const name = toCountryName(controllerCode) || displayCountry;
+                openRostraPlace({ polity: name, polityKey: name });
+                _dismiss?.();
+            }}
+            style={rostraButtonStyle}
+            onMouseEnter={(e) => {
+                e.currentTarget.style.background = "rgba(43, 193, 243, 0.15)";
+                e.currentTarget.style.borderColor = "#2bc1f3";
+            }}
+            onMouseLeave={(e) => {
+                e.currentTarget.style.background = "rgba(255, 255, 255, 0.07)";
+                e.currentTarget.style.borderColor = "rgba(43, 193, 243, 0.35)";
+            }}
+            >
+            <RostraGlyph />
+            <span>Check in Rostra</span>
+            </button>
+        )}
+
         </div>
         </div>
 
         {/* The pointer at the tapped spot; a phone's sheet points at nothing. */}
-        {!asSheet && (
+        {pointerAligned && (
             <div
             style={{
                 width: 0,

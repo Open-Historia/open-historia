@@ -9,6 +9,7 @@ import { flagImageUrlFromGid } from "../runtime/countryFlags.js";
 import { saveBlobToDisk } from "../runtime/saveFile.js";
 import { acceptFor } from "../runtime/fileAccept.js";
 import { resolveStockCountryCode } from "../runtime/polityIdentity.js";
+import { latestPopulation, populationByYearField } from "../runtime/cityPopulation.js";
 
 const WORLD = { west: -180, east: 180, north: 85.05112878, south: -85.05112878 };
 
@@ -630,7 +631,8 @@ const collectImportedCityPoints = (features, polities) => {
     const tier = Number.isFinite(explicitTier) && explicitTier >= 1 && explicitTier <= 3
       ? Math.round(explicitTier)
       : symbolTier;
-    const population = Number(props.population);
+    const series = populationByYearField(props);
+    const population = Number(props.population) || latestPopulation(series.populationByYear);
     const scale = Number(props.scale);
     const labelScale = Number(props.lbSize ?? props.labelScale);
     const sourceRegionId = primitiveKey(props.sourceRegionId ?? props.regionId ?? props.regionID);
@@ -647,6 +649,7 @@ const collectImportedCityPoints = (features, polities) => {
       regionId: sourceRegionId || null,
       sourceRegionId: sourceRegionId || null,
       population: Number.isFinite(population) && population > 0 ? population : 0,
+      ...series,
       tier,
       tags,
       ...(Number.isFinite(scale) && scale > 0 ? { scale } : {}),
@@ -712,6 +715,7 @@ const ProvinceImportPanel = ({ api, polities = {}, flags = {}, importPolityRoste
   const [landOnly, setLandOnly] = useState(true);
   const [ignoreBlack, setIgnoreBlack] = useState(true);
   const [inheritOwners, setInheritOwners] = useState(true);
+  const [simplifyOutlines, setSimplifyOutlines] = useState(true);
   const [materializeStandardFlags, setMaterializeStandardFlags] = useState(true);
   const [importCities, setImportCities] = useState(true);
   const [replaceExistingCities, setReplaceExistingCities] = useState(false);
@@ -1019,15 +1023,28 @@ const ProvinceImportPanel = ({ api, polities = {}, flags = {}, importPolityRoste
       const backup = api.serializeRegions?.();
       if (backup) {
         const pointBackups = (currentPointFeatures || []).map(cityFeatureToGeoJSON).filter(Boolean);
-        downloadGeoJSON(
-          { ...backup, features: [...(backup.features || []), ...pointBackups] },
-          `continuum-pre-province-import-${safeStamp()}.geojson`,
-        );
+        // Awaited: the import replaces the whole map with no undo, so a backup
+        // that failed to save (the app's file write can fail on a full disk, or
+        // run out of memory encoding a large map) has to stop it or be waved
+        // through knowingly.
+        try {
+          await downloadGeoJSON(
+            { ...backup, features: [...(backup.features || []), ...pointBackups] },
+            `open-historia-pre-province-import-${safeStamp()}.geojson`,
+          );
+        } catch (e) {
+          const reason = e?.message || String(e);
+          if (!window.confirm(`The backup of the current map could not be saved (${reason}). Replace the map anyway, with no backup and no undo?`)) {
+            setProgress({ fraction: 0, message: "" });
+            setStatus("Nothing was replaced: the backup of the current map could not be saved.");
+            return;
+          }
+        }
       }
 
       setProgress({ fraction: 0.45, message: "Replacing region geometry…" });
       api.clearProvinceImportPreview?.();
-      const applied = api.replaceRegionsFromImport?.(result, { inheritOwners });
+      const applied = api.replaceRegionsFromImport?.(result, { inheritOwners, simplifyMeters: mode === "geojson" && simplifyOutlines ? 100 : 0 });
       if (!applied?.count) throw new Error("The map rejected the imported region collection.");
 
       const polityImport = Array.isArray(result.importPolityRows) && result.importPolityRows.length
@@ -1062,10 +1079,10 @@ const ProvinceImportPanel = ({ api, polities = {}, flags = {}, importPolityRoste
       style={{
         ...panelSurface,
         position: "fixed",
-        left: 14,
-        top: 44,
-        width: "min(460px, calc(100vw - 28px))",
-        maxHeight: "calc(100vh - 116px)",
+        left: "calc(var(--editor-dock-left, 0px) + 12px)",
+        top: "var(--editor-top, 12px)",
+        width: "min(460px, calc(100vw - var(--editor-dock-left, 0px) - var(--editor-dock-right, 0px) - 24px))",
+        maxHeight: "calc(100vh - var(--editor-top, 12px) - var(--editor-bottom, 12px))",
         overflowY: "auto",
         zIndex: 45,
         padding: 0,
@@ -1078,9 +1095,6 @@ const ProvinceImportPanel = ({ api, polities = {}, flags = {}, importPolityRoste
       </div>
 
       <div style={{ padding: 13, display: "grid", gap: 12 }}>
-        <div style={{ fontSize: 12, lineHeight: 1.45, color: "rgba(255,255,255,0.72)" }}>
-          Import a user-supplied colour-coded province raster (including a local HOI4-style <b>provinces.bmp</b>) and turn its colours into real map regions. Shared borders are traced from one pixel lattice, so imported neighbours start with exact matching boundaries.
-        </div>
 
         <div style={{ display: "flex", gap: 7 }}>
           <button onClick={() => { setMode("raster"); setOverlayVisible(true); setResult(null); }} style={buttonStyle(mode === "raster")}>Province raster</button>
@@ -1140,7 +1154,7 @@ const ProvinceImportPanel = ({ api, polities = {}, flags = {}, importPolityRoste
                 </label>
               </div>
               <div style={{ fontSize: 10.8, color: "#fbbf24", lineHeight: 1.4 }}>
-                R1 uses a rectangular geographic fit. It is enough to import a complete province network, but exact control-point warping/alignment is the next importer pass for foreign projections.
+                The image is read as an equirectangular map, its rows spaced evenly in latitude between the north and south bounds, and the overlay is drawn the same way. An image in Web Mercator or another projection will not line up.
               </div>
             </div>
 
@@ -1170,9 +1184,6 @@ const ProvinceImportPanel = ({ api, polities = {}, flags = {}, importPolityRoste
                 }}
                 style={{ ...inputStyle, padding: 7 }}
               />
-              <span style={{ color: "rgba(255,255,255,0.5)" }}>
-                Polygon/MultiPolygon geometry. A normal <code>properties.name</code> is preserved; common alternatives such as NAME, region_name and province_name are normalized automatically. <code>properties.owner</code> is imported as polity ownership and <code>properties.ownerColor</code> as that polity&apos;s authored colour. Optional <code>Point</code> features explicitly marked with <code>properties.markerType=&quot;city&quot;</code> are recognized as city markers.
-              </span>
             </label>
 
             <label style={{ display: "grid", gap: 5, fontSize: 11.5 }}>
@@ -1191,17 +1202,11 @@ const ProvinceImportPanel = ({ api, polities = {}, flags = {}, importPolityRoste
                 }}
                 style={{ ...inputStyle, padding: 7 }}
               />
-              <span style={{ color: "rgba(255,255,255,0.5)" }}>
-                Supported: arrays of records, <code>{"{regions:[...]}"}</code>, <code>{"{provinces:[...]}"}</code>, GeoJSON FeatureCollections, or objects keyed by region/province ID.
-              </span>
             </label>
 
             {metadataFile && (
               <div style={{ display: "grid", gap: 7, padding: "9px 10px", borderRadius: 9, background: "rgba(255,255,255,0.1)", border: "1px solid rgba(255,255,255,0.1)" }}>
                 <div style={{ fontSize: 11.5, fontWeight: 800 }}>Metadata join</div>
-                <div style={{ fontSize: 10.7, color: "rgba(255,255,255,0.56)", lineHeight: 1.4 }}>
-                  Auto-match compares IDs in both files. If it chooses the wrong fields, run Analyze once, select the correct keys below, then Analyze again.
-                </div>
 
                 <label style={{ fontSize: 10.7, color: "rgba(255,255,255,0.65)" }}>
                   Geometry key
@@ -1238,6 +1243,11 @@ const ProvinceImportPanel = ({ api, polities = {}, flags = {}, importPolityRoste
               </div>
             )}
 
+            <label style={{ fontSize: 11.5, lineHeight: 1.4 }}>
+              <input type="checkbox" checked={simplifyOutlines} onChange={(e) => setSimplifyOutlines(e.target.checked)} />{" "}
+              <b>Simplify outlines to about 100 m</b>
+            </label>
+
             <div style={{ display: "grid", gap: 6, padding: "9px 10px", borderRadius: 9, background: "rgba(234,179,8,0.06)", border: "1px solid rgba(234,179,8,0.18)" }}>
               <label style={{ fontSize: 11.2, lineHeight: 1.4 }}>
                 <input
@@ -1247,9 +1257,6 @@ const ProvinceImportPanel = ({ api, polities = {}, flags = {}, importPolityRoste
                 />{" "}
                 <b>Store recognized standard flags in this scenario</b>
               </label>
-              <div style={{ fontSize: 10.6, color: "rgba(255,255,255,0.52)", lineHeight: 1.4 }}>
-                Explicit top-level <code>polities</code> metadata (<code>flag</code>/<code>flagCode</code>) is imported first. When it is absent, this option may fill safely recognized owners from Open Historia&apos;s built-in catalog. Existing custom/historical campaign flags are preserved.
-              </div>
             </div>
 
             {stats?.cityMarkers > 0 && (
@@ -1263,9 +1270,6 @@ const ProvinceImportPanel = ({ api, polities = {}, flags = {}, importPolityRoste
                   <input type="checkbox" disabled={!importCities} checked={replaceExistingCities} onChange={(e) => setReplaceExistingCities(e.target.checked)} />{" "}
                   Replace existing city markers instead of merge/update
                 </label>
-                <div style={{ fontSize: 10.6, color: "rgba(255,255,255,0.52)", lineHeight: 1.4 }}>
-                  Only Points explicitly marked as cities are imported. <code>square</code> → Town (tier 1); <code>flag</code>/<code>cross</code> → City (tier 2); <code>full-flag</code> → Major City (tier 3) + Capital. Unmarked Points are ignored.
-                </div>
               </div>
             )}
           </div>
@@ -1274,9 +1278,6 @@ const ProvinceImportPanel = ({ api, polities = {}, flags = {}, importPolityRoste
         <label style={{ fontSize: 11.5, lineHeight: 1.4 }}>
           <input type="checkbox" checked={inheritOwners} onChange={(e) => setInheritOwners(e.target.checked)} />{" "}
           <b>Inherit current polity ownership by imported province centroid</b>
-          <div style={{ color: "rgba(255,255,255,0.52)", marginLeft: 20 }}>
-            Keeps the existing scenario politically useful after a geometry replacement. Existing owner fields already present in imported GeoJSON are preserved.
-          </div>
         </label>
 
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>

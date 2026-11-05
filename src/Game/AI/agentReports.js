@@ -1,19 +1,14 @@
 /*! Open Historia — when an agent is due a report of its own © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 
-// After a time skip the reports cost no request at all, whatever Save AI
-// requests says: they are written at the end of the skip's own answer
-// (gameplay.js prepareFoldedSkip), and what is rationed there is the length of
-// that answer (agentsReportingWithSkip).
+// With requests not being saved, each report is a whole request: one per agent
+// after every applied turn, once, and since then only on this calendar
+// (agentsDueToReport). The calendar, never whether the last attempt worked: a
+// report that keeps failing must not buy a request every skip.
 //
-// A skip a provider refused in that form is checked by the turn review instead
-// (gameplay.js runTurnReview), where a report rides along for nothing and asks
-// for a review of its own only on this calendar (agentsDueToReport). The
-// calendar, never whether the last attempt worked: a report that keeps failing
-// must not buy a request every skip.
-//
-// A turn that was not a skip (a resolved event) has no answer for a report to
-// ride on. With requests not being saved each agent makes a request of its own
-// after it (gameplay.js refreshSpyIntercepts), and nothing here is asked.
+// While requests are being saved (the default) the reports cost no request at
+// all: they are written at the end of the time skip's own answer (gameplay.js
+// prepareFoldedSkip), and what is rationed there is the length of that answer
+// (agentsReportingWithSkip).
 
 import { compareGameDates } from "../../runtime/gameDates.js";
 

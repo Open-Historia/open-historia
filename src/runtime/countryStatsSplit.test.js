@@ -15,6 +15,8 @@ import {
   expandTerritorialMacroEstimates,
   guardCountryStatContinuity,
   normalizeCountryStatContinuity,
+  normalizeCountryStatsMacroEstimate,
+  resolveCountryStatsPopulationCalibration,
 } from "./countryStats.js";
 
 const splitBuckets = [
@@ -145,4 +147,71 @@ test("continuity remembers which components have a semantic split, for which sli
   );
   assert.deepEqual(normalizeCountryStatContinuity({ assessedDate: "2016-02-01", semanticSplitComponents: [] }).semanticSplitComponents, []);
   assert.equal(normalizeCountryStatContinuity({ assessedDate: "2016-02-01" }).semanticSplitComponents, undefined);
+});
+
+test("an uninhabited macro bucket may use zero population and zero GDP/capita without inventing residents", () => {
+  assert.deepEqual(
+    normalizeCountryStatsMacroEstimate({
+      index: 12,
+      group: "overseas/dependent",
+      population: 0,
+      gdpPerCapita: 0,
+    }),
+    { index: 12, group: "overseas/dependent", population: 0, gdpPerCapita: 1 },
+  );
+
+  const macroPlan = [{
+    index: 12,
+    members: [{ geography: "Remote uninhabited island", weight: 1 }],
+  }];
+  const estimates = [{ index: 12, group: "overseas/dependent", population: 0, gdpPerCapita: 0 }];
+  const { components, error } = expandTerritorialMacroEstimates(macroPlan, estimates);
+
+  assert.equal(error, "");
+  assert.equal(components.length, 1);
+  assert.equal(components[0].population, 0);
+  assert.equal(components[0].gdpPerCapita, 1);
+});
+
+
+test("missing population calibration provenance is recovered from the same baseline's economic calibration", () => {
+  const economicCalibration = {
+    mode: "historical_start",
+    historyAuthorityCutoff: "1912-01-01",
+    basis: "Whole-scope nominal economic baseline.",
+  };
+  const resolved = resolveCountryStatsPopulationCalibration(undefined, economicCalibration);
+  assert.equal(resolved.synthesized, true);
+  assert.deepEqual(resolved.calibration, {
+    mode: "historical_start",
+    historyAuthorityCutoff: "1912-01-01",
+    basis:
+      "Native regional macro estimates over the authoritative live Stats footprint; " +
+      "scenario-causality frontier aligned to economicCalibration for the same baseline.",
+  });
+});
+
+test("explicit population calibration provenance is never overwritten", () => {
+  const explicit = {
+    mode: "counterfactual_start",
+    historyAuthorityCutoff: "1905",
+    basis: "Scenario diverged before the start date.",
+  };
+  const resolved = resolveCountryStatsPopulationCalibration(explicit, {
+    mode: "historical_start",
+    historyAuthorityCutoff: "1912-01-01",
+  });
+  assert.equal(resolved.synthesized, false);
+  assert.equal(resolved.calibration, explicit);
+});
+
+test("missing population calibration still fails closed when economic provenance cannot supply the frontier", () => {
+  assert.deepEqual(
+    resolveCountryStatsPopulationCalibration(undefined, { mode: "historical_start" }),
+    { calibration: undefined, synthesized: false },
+  );
+  assert.deepEqual(
+    resolveCountryStatsPopulationCalibration(undefined, undefined),
+    { calibration: undefined, synthesized: false },
+  );
 });

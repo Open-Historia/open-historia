@@ -268,13 +268,6 @@ export const normalizeCustomStatValues = (value, definitionInput, { partial = fa
   return out;
 };
 
-export const isCompleteCustomStatValues = (value, definitionInput) => {
-  const definition = normalizeStatSheetDefinition(definitionInput);
-  if (!definition.custom) return false;
-  const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
-  return statSheetKeys(definition).every((key) => Number.isFinite(Number(source[key])));
-};
-
 export const describeStatIndexRows = (rows) => normalizeStatIndexRows(rows)
   .map((row) => `${row.key} = ${row.label}${row.description ? ` — ${row.description}` : ""}`)
   .join("; ");

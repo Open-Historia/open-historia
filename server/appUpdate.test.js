@@ -102,16 +102,71 @@ test("restart only installs an update that finished downloading", async () => {
   assert.deepEqual(updater.calls, ["restart"]);
 });
 
-test("the manifest tells the page which of the two updates it can offer", async () => {
-  // autoUpdate is what the banner branches on: true installs in place, false keeps
-  // opening the installer download. It is answered from this process, so it holds
-  // even when the GitHub fetch behind the rest of the payload fails.
+test("the manifest reports local updater capability even when GitHub is unreachable", async (t) => {
+  // Release metadata is remote, but the desktop updater lives in this process.
+  // Keep the test offline and deterministic rather than relying on GitHub timing.
+  const networkFetch = globalThis.fetch;
+  t.mock.method(globalThis, "fetch", (resource, options) => {
+    if (String(resource).startsWith(base)) return networkFetch(resource, options);
+    if (String(resource).startsWith("https://github.com/Open-Historia/open-historia/releases/download/")) {
+      return Promise.reject(new Error("test: release host unreachable"));
+    }
+    return networkFetch(resource, options);
+  });
+
   globalThis.__ohAutoUpdate = fake().handle;
   const on = await (await fetch(`${base}/api/app-update?track=desktop`)).json();
   assert.equal(on.autoUpdate, true);
 
   delete globalThis.__ohAutoUpdate;
-  // The reply is cached for three minutes, so ask on a track that has not been hit.
+  // A separate track also reports the now-absent local updater.
   const off = await (await fetch(`${base}/api/app-update?track=stable`)).json();
-  assert.equal(off.autoUpdate ?? false, false);
+  assert.equal(off.autoUpdate, false);
+  assert.equal(off.buildId, undefined, "offline replies must not invent a release");
+});
+
+test("cached release metadata never caches the local updater capability", async (t) => {
+  const networkFetch = globalThis.fetch;
+  let manifestRequests = 0;
+  t.mock.method(globalThis, "fetch", (resource, options) => {
+    if (String(resource).startsWith(base)) return networkFetch(resource, options);
+    if (String(resource).startsWith("https://github.com/Open-Historia/open-historia/releases/download/")) {
+      manifestRequests += 1;
+      return Promise.resolve(new Response(JSON.stringify({
+        build: "test-desktop-build", notes: "Test release",
+      }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    }
+    return networkFetch(resource, options);
+  });
+
+  globalThis.__ohAutoUpdate = fake().handle;
+  const first = await (await fetch(`${base}/api/app-update?track=desktop`)).json();
+  assert.equal(first.buildId, "test-desktop-build");
+  assert.equal(first.autoUpdate, true);
+
+  delete globalThis.__ohAutoUpdate;
+  const second = await (await fetch(`${base}/api/app-update?track=desktop`)).json();
+  assert.equal(second.buildId, first.buildId, "the feed remains cached");
+  assert.equal(second.autoUpdate, false, "the local updater capability is not cached");
+  assert.equal(manifestRequests, 1, "cache hits must not re-fetch the feed");
+});
+
+test("failed release HTTP responses still report local desktop capability", async (t) => {
+  const networkFetch = globalThis.fetch;
+  t.mock.method(globalThis, "fetch", (resource, options) => {
+    if (String(resource).startsWith(base)) return networkFetch(resource, options);
+    if (String(resource).startsWith("https://github.com/Open-Historia/open-historia/releases/download/")) {
+      return Promise.resolve(new Response("service unavailable", { status: 503 }));
+    }
+    return networkFetch(resource, options);
+  });
+
+  globalThis.__ohAutoUpdate = fake().handle;
+  const unavailable = await (await fetch(`${base}/api/app-update?track=beta`)).json();
+  assert.equal(unavailable.autoUpdate, true);
+  assert.equal(unavailable.buildId, undefined, "a failed feed must not invent a release");
+
+  const unknown = await (await fetch(`${base}/api/app-update?track=not-a-track`)).json();
+  assert.deepEqual(unknown, {}, "unknown tracks still return no update information");
+  delete globalThis.__ohAutoUpdate;
 });

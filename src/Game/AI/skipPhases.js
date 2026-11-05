@@ -22,6 +22,10 @@
 
 export const SKIP_PHASES = Object.freeze({
   reading: "Reading the world",
+  // The land war of the period, fought before its story is written (frontApply.js forecastTurnFronts), and
+  // written into the record as the turn is applied (applyTurnFronts).
+  fighting: "Fighting the war",
+  recordingWar: "Writing the war into the record",
   writing: "Writing the events",
   checking: "Checking the skip",
   placing: "Placing the armies and the fronts",
@@ -129,6 +133,7 @@ export const formatSkipPhases = (summary) => {
 const REVIEW_JOB_WORDS = Object.freeze({
   units: "moving the armies",
   territory: "redrawing the fronts",
+  structures: "placing new structures",
   timeline: "checking the record",
   board: "updating the board",
 });

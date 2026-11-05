@@ -6,11 +6,12 @@
 //
 //   the desktop app   scripts/map-assets.json      fetched at first launch
 //   the website       scripts/map-assets.web.json  fetched when the site is built
+//   the Android app   scripts/map-assets.web.json  fetched when the APK is built
 //
-// This is the second of those. A browser cannot read a release asset itself
-// (GitHub sends no CORS header on the download), so the website carries its
-// copy: `npm run build:web` / `build:site` lay the files under
-// <outDir>/assets/, and the page reads them from its own origin.
+// This is the second and third of those. A browser cannot read a release asset
+// itself (GitHub sends no CORS header on the download), so the website carries
+// its copy as the Android app does: `npm run build:web` / `build:site` lay the
+// files under <outDir>/assets/, and the page reads them from its own origin.
 // Every file in the list has to fit Cloudflare Pages' 25 MiB limit, which is
 // why this list holds the z8 trims and the web-sized world, not the desktop's.
 //

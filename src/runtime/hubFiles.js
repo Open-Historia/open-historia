@@ -123,6 +123,11 @@ const normalizeIndexPost = (raw) => {
     author_association: ASSOCIATIONS.has(source.author_association) ? source.author_association : "NONE",
     reactions: { "+1": wholeCount(record(source.reactions)?.["+1"]) },
     comments: wholeCount(source.comments),
+    // When the scenario begins, as the hub's check read it (hubPosts.js startDate): the Community tab's Start date
+    // filter. Left out here, every post had none, and any range showed nothing.
+    ...(typeof source.scenario_date === "string" && source.scenario_date.length <= 40 && !/[\u0000-\u001f]/.test(source.scenario_date)
+      ? { scenario_date: source.scenario_date }
+      : {}),
   };
 };
 
@@ -295,6 +300,30 @@ export const requireReleaseCopy = async (fileUrl) => {
 };
 
 const proxied = (url) => fetch(`/api/hub/file?url=${encodeURIComponent(url)}`);
+
+// The same route as an address, for what loads a file itself rather than
+// through fetch(): an <audio> playing a hub track (hubMusic.js). In the desktop
+// app that is the local server's proxy, which keeps the file in its hub cache.
+// On the website and in the Android app /api/hub/file exists only inside the
+// page's fetch (web/router.js hands it to the hub proxy), and an element's own
+// request never passes through that: so there the address is the hub proxy's
+// own, the one the router would have asked. "" where no proxy is configured.
+export const hubFileAddress = (url, env = import.meta.env ?? {}) => {
+  const query = `?url=${encodeURIComponent(url)}`;
+  if (!env.VITE_OH_WEB) return `/api/hub/file${query}`;
+  const base = String(env.VITE_OH_HUB_URL || "").replace(/\/$/, "");
+  return base ? `${base}/hub/file${query}` : "";
+};
+
+// A file in the hub's own releases, by its own address, through the same
+// proxy: for what the hub lists elsewhere than in its index, which is a track
+// of its music list (hubMusic.js; fetched once to be kept, keptMusic.js). The
+// address is held to the hub's releases here as it is where the list is read.
+export const fetchHubRelease = async (releaseUrl) => {
+  const release = hubReleaseUrl(releaseUrl);
+  if (!release) throw new Error(HUB_FILE_TEXTS.notReleased);
+  return proxied(release);
+};
 
 // A hub file's Response, through the /api/hub/file proxy (GitHub's files send
 // no CORS headers): its checked copy in the hub's releases, always. A file

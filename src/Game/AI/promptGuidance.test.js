@@ -69,6 +69,18 @@ test("no passage carries the technical layer", () => {
   }
 });
 
+test("leader diplomacy defaults do not force grammatical person or canned acceptance/refusal theater", () => {
+  const leader = defaultPrompts.leader;
+  assert.doesNotMatch(leader, /NEVER speak in the third person/i);
+  assert.doesNotMatch(leader, /other participants will face consequences/i);
+  assert.doesNotMatch(leader, /respond with cheers and respect/i);
+  assert.doesNotMatch(leader, /ALWAYS CONSIDER propositions and deals more often from the player/i);
+  assert.match(leader, /do not favor or reject them merely because they come from the player/i);
+  assert.match(leader, /do not force one grammatical person/i);
+  assert.match(leader, /Do not manufacture threats or \"consequences\" because a proposal is refused/i);
+  assert.match(leader, /do not manufacture celebration, gratitude, \"cheers\", or respect because one is accepted/i);
+});
+
 test("an unedited pack composes the shipped prompt byte for byte", () => {
   for (const key of SECTION_KEYS) {
     const text = defaultTextOf(key);
@@ -119,6 +131,21 @@ test("a pack in the old whole-prompt shape carries nothing", () => {
   assert.deepEqual(normalizePackGuidance({ promptModel: PROMPT_MODEL_VERSION, guidance: "nope" }, GUIDANCE_DEFAULTS), empty);
   assert.deepEqual(normalizePackGuidance(null, GUIDANCE_DEFAULTS), empty);
   assert.deepEqual(normalizePackGuidance([], GUIDANCE_DEFAULTS), empty);
+});
+
+// Listen in had a prompt of its own, with one passage an author could edit,
+// until 2026-11-02 (Rostra took its place and asks for nothing). A scenario or
+// a game that edited it still loads: the passage is dropped with the task, and
+// the author's other edits are kept.
+test("a pack that edited Listen in's passage loads without it", () => {
+  const warRoom = guidanceSegmentsFor("warRoom")[0];
+  const pack = normalizePackGuidance({
+    promptModel: PROMPT_MODEL_VERSION,
+    guidance: { tasks: { listenIn: { voices: "Everyone posts in verse." }, warRoom: { [warRoom.id]: "The generals speak in verse." } } },
+  }, GUIDANCE_DEFAULTS);
+  assert.equal("listenIn" in pack.tasks, false);
+  assert.equal("listenIn" in PROMPT_GUIDANCE.tasks, false);
+  assert.equal(pack.tasks.warRoom[warRoom.id], "The generals speak in verse.");
 });
 
 test("only real edits are kept", () => {

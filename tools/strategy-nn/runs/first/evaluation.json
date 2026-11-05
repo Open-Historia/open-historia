@@ -1,0 +1,293 @@
+{
+  "name": "residual",
+  "file": "best.json",
+  "trained": {
+    "gen": 5,
+    "validation": -0.0752,
+    "prior": 0.6,
+    "drafts": false
+  },
+  "wars": 240,
+  "all": {
+    "staff": {
+      "reward": -0.458,
+      "homeLost": 0.432,
+      "taken": 0.448,
+      "army": -0.008
+    },
+    "network": {
+      "reward": -0.094,
+      "homeLost": 0.325,
+      "taken": 0.66,
+      "army": -0.055
+    },
+    "advance": {
+      "reward": -0.094,
+      "homeLost": 0.325,
+      "taken": 0.66,
+      "army": -0.055
+    },
+    "hold": {
+      "reward": -0.881,
+      "homeLost": 0.455,
+      "taken": 0,
+      "army": 0.08
+    },
+    "dig": {
+      "reward": -0.786,
+      "homeLost": 0.414,
+      "taken": 0,
+      "army": 0.082
+    }
+  },
+  "networkAgainstStaff": {
+    "gap": 0.364,
+    "error": 0.052,
+    "better": 128,
+    "same": 65,
+    "worse": 47,
+    "homeLostGap": -0.107,
+    "takenGap": 0.212
+  },
+  "networkAgainstAdvance": {
+    "gap": 0,
+    "error": 0,
+    "better": 0,
+    "same": 240,
+    "worse": 0,
+    "homeLostGap": 0,
+    "takenGap": 0
+  },
+  "headToHead": {
+    "staff": {
+      "reward": -0.525,
+      "homeLost": 0.484,
+      "taken": 0.46,
+      "army": 0.011
+    },
+    "network": {
+      "reward": -0.119,
+      "homeLost": 0.346,
+      "taken": 0.653,
+      "army": -0.018
+    },
+    "against": {
+      "gap": 0.405,
+      "error": 0.056,
+      "better": 124,
+      "same": 66,
+      "worse": 50,
+      "homeLostGap": -0.138,
+      "takenGap": 0.192
+    }
+  },
+  "cuts": [
+    {
+      "label": "began the war",
+      "wars": 128,
+      "staff": {
+        "reward": -0.381,
+        "homeLost": 0.403,
+        "taken": 0.475,
+        "army": -0.022
+      },
+      "network": {
+        "reward": -0.072,
+        "homeLost": 0.313,
+        "taken": 0.667,
+        "army": -0.066
+      },
+      "against": {
+        "gap": 0.309,
+        "error": 0.062,
+        "better": 60,
+        "same": 42,
+        "worse": 26,
+        "homeLostGap": -0.09,
+        "takenGap": 0.192
+      }
+    },
+    {
+      "label": "was attacked",
+      "wars": 112,
+      "staff": {
+        "reward": -0.546,
+        "homeLost": 0.466,
+        "taken": 0.417,
+        "army": 0.007
+      },
+      "network": {
+        "reward": -0.119,
+        "homeLost": 0.339,
+        "taken": 0.651,
+        "army": -0.042
+      },
+      "against": {
+        "gap": 0.427,
+        "error": 0.087,
+        "better": 68,
+        "same": 23,
+        "worse": 21,
+        "homeLostGap": -0.127,
+        "takenGap": 0.234
+      }
+    },
+    {
+      "label": "the weaker (under 0.8)",
+      "wars": 93,
+      "staff": {
+        "reward": -1.515,
+        "homeLost": 0.826,
+        "taken": 0.004,
+        "army": -0.056
+      },
+      "network": {
+        "reward": -1.29,
+        "homeLost": 0.774,
+        "taken": 0.188,
+        "army": -0.109
+      },
+      "against": {
+        "gap": 0.225,
+        "error": 0.059,
+        "better": 55,
+        "same": 0,
+        "worse": 38,
+        "homeLostGap": -0.052,
+        "takenGap": 0.185
+      }
+    },
+    {
+      "label": "about even (0.8 to 1.25)",
+      "wars": 69,
+      "staff": {
+        "reward": -0.404,
+        "homeLost": 0.39,
+        "taken": 0.431,
+        "army": 0.036
+      },
+      "network": {
+        "reward": 0.568,
+        "homeLost": 0.073,
+        "taken": 0.924,
+        "army": -0.028
+      },
+      "against": {
+        "gap": 0.971,
+        "error": 0.135,
+        "better": 60,
+        "same": 1,
+        "worse": 8,
+        "homeLostGap": -0.317,
+        "takenGap": 0.494
+      }
+    },
+    {
+      "label": "the stronger (over 1.25)",
+      "wars": 78,
+      "staff": {
+        "reward": 0.755,
+        "homeLost": 0,
+        "taken": 0.992,
+        "army": 0.009
+      },
+      "network": {
+        "reward": 0.748,
+        "homeLost": 0.013,
+        "taken": 0.987,
+        "army": -0.013
+      },
+      "against": {
+        "gap": -0.007,
+        "error": 0.027,
+        "better": 13,
+        "same": 64,
+        "worse": 1,
+        "homeLostGap": 0.013,
+        "takenGap": -0.005
+      }
+    },
+    {
+      "label": "enemy: scripted staff",
+      "wars": 165,
+      "staff": {
+        "reward": -0.453,
+        "homeLost": 0.459,
+        "taken": 0.486,
+        "army": 0.005
+      },
+      "network": {
+        "reward": -0.081,
+        "homeLost": 0.333,
+        "taken": 0.666,
+        "army": -0.018
+      },
+      "against": {
+        "gap": 0.372,
+        "error": 0.066,
+        "better": 82,
+        "same": 54,
+        "worse": 29,
+        "homeLostGap": -0.126,
+        "takenGap": 0.18
+      }
+    },
+    {
+      "label": "enemy: always advances",
+      "wars": 36,
+      "staff": {
+        "reward": -1.223,
+        "homeLost": 0.778,
+        "taken": 0.222,
+        "army": 0
+      },
+      "network": {
+        "reward": -0.89,
+        "homeLost": 0.639,
+        "taken": 0.361,
+        "army": -0.028
+      },
+      "against": {
+        "gap": 0.333,
+        "error": 0.165,
+        "better": 15,
+        "same": 6,
+        "worse": 15,
+        "homeLostGap": -0.139,
+        "takenGap": 0.139
+      }
+    },
+    {
+      "label": "enemy: always holds",
+      "wars": 39,
+      "staff": {
+        "reward": 0.228,
+        "homeLost": 0,
+        "taken": 0.495,
+        "army": -0.072
+      },
+      "network": {
+        "reward": 0.588,
+        "homeLost": 0,
+        "taken": 0.91,
+        "army": -0.237
+      },
+      "against": {
+        "gap": 0.36,
+        "error": 0.061,
+        "better": 31,
+        "same": 5,
+        "worse": 3,
+        "homeLostGap": 0,
+        "takenGap": 0.415
+      }
+    }
+  ],
+  "whatItSaid": {
+    "dig in": 0,
+    "hold": 0,
+    "probe": 0,
+    "advance": 1
+  },
+  "drafts": 0
+}

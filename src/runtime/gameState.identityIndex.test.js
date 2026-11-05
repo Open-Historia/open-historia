@@ -4,7 +4,7 @@ import test from "node:test";
 import { normalizeWorldState } from "./gameState.js";
 
 // A time skip on a phone froze the page for minutes (2026-10-23): every
-// relation and agreement row resolved its names by building the whole
+// relation, agreement and puppet row resolved its names by building the whole
 // polity identity index again, reading every polity and every region's owner,
 // and the game normalises the world hundreds of times in one skip. One pass
 // over this world took 10 s on a desktop before; it takes well under a tenth
@@ -20,7 +20,7 @@ const bigWorld = () => {
     world: {
       polityOverrides,
       regionOwnershipOverrides,
-      
+      puppets: Array.from({ length: 60 }, (_, i) => ({ id: `p${i}`, overlord: `Testland ${i}`, puppet: names[i + 100], status: "active", startedDate: "1836-01-01" })),
       agreements: Array.from({ length: 200 }, (_, i) => ({ id: `a${i}`, type: "alliance", parties: [names[i % 300], `Testland ${(i * 7 + 3) % 300}`], status: "active", startedDate: "1836-01-01" })),
       relations: Array.from({ length: 200 }, (_, i) => ({ a: names[i % 300], b: `Testland ${(i * 11 + 5) % 300}`, score: 10 })),
     },
@@ -39,6 +39,9 @@ test("a world with many polities and diplomatic rows is normalised in one quick 
 test("the rows still resolve each name, an alias included, to the polity it means", () => {
   const { names, world } = bigWorld();
   const next = normalizeWorldState(world);
+  const puppet = next.puppets.find((row) => row.id === "p7");
+  assert.equal(puppet.overlord, names[7]);
+  assert.equal(puppet.puppet, names[107]);
   const agreement = next.agreements.find((row) => row.id === "a1");
   assert.ok(agreement, "the agreement is kept");
   assert.deepEqual([...agreement.parties].sort(), [names[1], names[10]].sort());

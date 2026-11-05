@@ -6,6 +6,7 @@
 // UI settings persist in IndexedDB. Only bundled into the web build (VITE_OH_WEB).
 
 import { kvGet, kvUpdate } from "./idb.js";
+import { HUB_IMPORTED_KEY, mergeHubImported } from "../../../server/hubImported.js";
 import { jsonResponse, errorResponse } from "./util.js";
 
 const isLangCode = (code) => /^[a-z]{2,3}$/.test(code);
@@ -21,7 +22,9 @@ const shippedPackCache = new Map();
 // origin-rooted /lang/*.json is a 404 — and the catch below turns that into an
 // empty pack, so every language silently fell back to untranslated English with
 // no error. BASE_URL is "/" for the local server, so one path serves both builds.
-const loadShippedPack = async (code) => {
+// Exported for the first screens (index.js), which are drawn before the game's
+// translator runs and look their text up in the same pack.
+export const loadShippedPack = async (code) => {
   if (shippedPackCache.has(code)) return shippedPackCache.get(code);
   let pack = {};
   try {
@@ -93,6 +96,10 @@ export const handleUiSettings = async (ctx) => {
       const merged = { ...(current || {}) };
       if (typeof ctx.body?.language === "string" && ctx.body.language.trim().length <= 16) {
         merged.language = ctx.body.language.trim();
+      }
+      // Hub posts imported (server/hubImported.js): added to, never replaced.
+      if (Array.isArray(ctx.body?.[HUB_IMPORTED_KEY])) {
+        merged[HUB_IMPORTED_KEY] = mergeHubImported(merged[HUB_IMPORTED_KEY], ctx.body[HUB_IMPORTED_KEY]);
       }
       return merged;
     }, {});

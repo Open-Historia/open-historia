@@ -6,7 +6,6 @@ const DEFAULT_MATCH_TOLERANCE = 500;
 const DEFAULT_MATCH_GRID_SIZE = 0.25;
 const MAX_NUMERIC_KEY_PRECISION = 370000;
 const POINT_ID_SPAN = 2 ** 26;
-const EMPTY_FEATURE_COLLECTION = Object.freeze({ type: "FeatureCollection", features: [] });
 
 const polygonsOf = (geometry) => {
   if (geometry?.type === "Polygon") return [geometry.coordinates];
@@ -298,108 +297,6 @@ export const buildPoliticalBoundaryTopology = (
   };
 };
 
-export const derivePolityBoundariesFromTopology = (
-  topology,
-  ownershipOverrides = {},
-  { affectedOwners = null } = {},
-) => {
-  if (!topology?.regionIds?.length) return { data: EMPTY_FEATURE_COLLECTION, stats: { boundaryGroupCount: 0 } };
-  const affected = affectedOwners && [...affectedOwners].length
-    ? new Set([...affectedOwners].map((owner) => toCountryName(owner)).filter(Boolean))
-    : null;
-  const ownerCache = new Array(topology.regionIds.length);
-  const ownerForRegion = (regionIndex) => {
-    if (regionIndex < 0) return "";
-    if (ownerCache[regionIndex] !== undefined) return ownerCache[regionIndex];
-    const id = topology.regionIds[regionIndex];
-    const owner = toCountryName(ownershipOverrides?.[id] ?? topology.baseOwners[regionIndex] ?? "");
-    ownerCache[regionIndex] = owner;
-    return owner;
-  };
-
-  const byOwnerGroup = new Map();
-  let boundarySegmentCount = 0;
-  const addBoundary = (regionIndexes, pointA, pointB) => {
-    if (!pointA || !pointB || (pointA[0] === pointB[0] && pointA[1] === pointB[1])) return;
-    const owners = [...new Set(regionIndexes.map(ownerForRegion).filter(Boolean))].sort();
-    if (owners.length < 2) return;
-    if (affected && !owners.some((owner) => affected.has(owner))) return;
-    const key = owners.join("\u001f");
-    let group = byOwnerGroup.get(key);
-    if (!group) {
-      group = { owners, segments: [], seen: new Set() };
-      byOwnerGroup.set(key, group);
-    }
-    const uniqueKey = edgeKey(pointA, pointB);
-    if (group.seen.has(uniqueKey)) return;
-    group.seen.add(uniqueKey);
-    group.segments.push({ a: pointA, b: pointB });
-    boundarySegmentCount += 1;
-  };
-
-  for (let edge = 0; edge < topology.a.length; edge += 1) {
-    const second = topology.region2[edge];
-    const extra = topology.extra.get(edge);
-    if (second === -1 && !extra) continue;
-    const regions = [topology.region1[edge]];
-    if (second !== -1) regions.push(second);
-    if (extra) regions.push(...extra);
-    addBoundary(
-      regions,
-      [topology.pointX[topology.a[edge]], topology.pointY[topology.a[edge]]],
-      [topology.pointX[topology.b[edge]], topology.pointY[topology.b[edge]]],
-    );
-  }
-  for (let index = 0; index < topology.recoveredA.length; index += 1) {
-    addBoundary(
-      [topology.recoveredRegion1[index], topology.recoveredRegion2[index]],
-      topology.recoveredA[index],
-      topology.recoveredB[index],
-    );
-  }
-
-  let boundaryChainCount = 0;
-  const features = [];
-  const ordered = [...byOwnerGroup.entries()].sort(([left], [right]) => left.localeCompare(right));
-  for (const [ownerKey, group] of ordered) {
-    const coordinates = stitchSegments(group.segments, topology.precision);
-    boundaryChainCount += coordinates.length;
-    features.push({
-      type: "Feature",
-      id: stableId("polity-boundary", ownerKey),
-      properties: {
-        class: "polity-boundary",
-        ownerKey,
-        owners: group.owners.join(" | "),
-        ownerList: group.owners,
-        owner0: group.owners[0] ?? "",
-        owner1: group.owners[1] ?? "",
-        owner2: group.owners[2] ?? "",
-        owner3: group.owners[3] ?? "",
-      },
-      geometry: { type: "MultiLineString", coordinates },
-    });
-  }
-  return {
-    data: { type: "FeatureCollection", features },
-    stats: {
-      regionCount: topology.regionIds.length,
-      edgeCount: topology.a.length,
-      boundarySegmentCount,
-      boundaryChainCount,
-      boundaryGroupCount: features.length,
-      recoveredBoundarySegmentCount: topology.recoveredA.length,
-      skippedFeatureCount: topology.stats?.skippedFeatureCount ?? 0,
-    },
-  };
-};
-
-export const boundaryFeatureTouchesOwner = (feature, owners) => {
-  const wanted = owners instanceof Set ? owners : new Set([...owners ?? []].map((value) => toCountryName(value)));
-  const names = String(feature?.properties?.owners ?? "").split(" | ").map(toCountryName).filter(Boolean);
-  return names.some((name) => wanted.has(name));
-};
-
 
 const segmentOwners = (segment, topology, ownershipOverrides = {}) => {
   const owners = [];
@@ -416,10 +313,145 @@ const segmentOwners = (segment, topology, ownershipOverrides = {}) => {
   return owners;
 };
 
-const boundaryFeatureForGroup = (ownerKey, group, precision) => {
+const NO_SLOTS = new Int32Array(0);
+const isRegion = (value) => Number.isInteger(value) && value >= 0;
+const distinctRegions = (values) => [...new Set(values.filter(isRegion))];
+// distinctRegions([first, second]), without the Set: nearly every segment is one.
+const distinctPair = (first, second) => {
+  const takeSecond = isRegion(second) && second !== first;
+  if (!isRegion(first)) return takeSecond ? [second] : [];
+  return takeSecond ? [first, second] : [first];
+};
+
+// Every frontier segment of a topology (an edge or recovered seam two or more
+// regions share), kept as numbers: a modern world has over a million, and an
+// object apiece held hundreds of MB in the worker. Each has a slot, in the
+// order they were found (edges, then seams), and its id (`e:<edge>`,
+// `r:<seam>`); `get` builds the segment ({ id, regionIndexes, a, b }) when asked.
+class SegmentTable {
+  constructor(topology) {
+    const regionCount = topology?.regionIds?.length ?? 0;
+    this.topology = topology;
+    this.edgeSlot = new Int32Array(topology?.a?.length ?? 0).fill(-1);
+    this.seamSlot = new Int32Array(topology?.recoveredA?.length ?? 0).fill(-1);
+    // A slot's ref: its edge, or -(seam + 1).
+    const refs = [];
+    const counts = new Int32Array(regionCount + 1);
+    const take = (ref, slots, index) => {
+      const regions = this.regionsOfRef(ref);
+      if (regions.length < 2) return;
+      slots[index] = refs.length;
+      refs.push(ref);
+      for (const region of regions) if (region < regionCount) counts[region + 1] += 1;
+    };
+    for (let edge = 0; edge < this.edgeSlot.length; edge += 1) take(edge, this.edgeSlot, edge);
+    for (let seam = 0; seam < this.seamSlot.length; seam += 1) take(-(seam + 1), this.seamSlot, seam);
+    this.refs = Int32Array.from(refs);
+    // Each region's slots, in slot order: regionList[regionStart[r] .. regionStart[r + 1]).
+    for (let region = 0; region < regionCount; region += 1) counts[region + 1] += counts[region];
+    this.regionStart = counts;
+    this.regionList = new Int32Array(counts[regionCount]);
+    const cursor = counts.slice(0, regionCount);
+    for (let slot = 0; slot < this.refs.length; slot += 1) {
+      for (const region of this.regionsOfRef(this.refs[slot])) if (region < regionCount) this.regionList[cursor[region]++] = slot;
+    }
+  }
+
+  get size() {
+    return this.refs.length;
+  }
+
+  regionsOfRef(ref) {
+    const topology = this.topology;
+    if (ref >= 0) {
+      const first = topology.region1[ref];
+      const second = topology.region2[ref];
+      const more = topology.extra?.get?.(ref);
+      if (!more) return second !== -1 ? distinctPair(first, second) : distinctPair(first, undefined);
+      const values = [first];
+      if (second !== -1) values.push(second);
+      values.push(...more);
+      return distinctRegions(values);
+    }
+    const seam = -ref - 1;
+    return distinctPair(topology.recoveredRegion1[seam], topology.recoveredRegion2[seam]);
+  }
+
+  slotOf(id) {
+    if (typeof id !== "string" || id.length < 3 || id[1] !== ":") return -1;
+    const digits = id.slice(2);
+    const index = Number(digits);
+    if (!Number.isInteger(index) || index < 0 || String(index) !== digits) return -1;
+    const slots = id[0] === "e" ? this.edgeSlot : id[0] === "r" ? this.seamSlot : null;
+    return slots && index < slots.length ? slots[index] : -1;
+  }
+
+  has(id) {
+    return this.slotOf(id) >= 0;
+  }
+
+  idOf(slot) {
+    const ref = this.refs[slot];
+    return ref >= 0 ? `e:${ref}` : `r:${-ref - 1}`;
+  }
+
+  regionIndexesOf(slot) {
+    return this.regionsOfRef(this.refs[slot]);
+  }
+
+  pointsOf(slot) {
+    const topology = this.topology;
+    const ref = this.refs[slot];
+    if (ref >= 0) {
+      return {
+        a: [topology.pointX[topology.a[ref]], topology.pointY[topology.a[ref]]],
+        b: [topology.pointX[topology.b[ref]], topology.pointY[topology.b[ref]]],
+      };
+    }
+    return { a: topology.recoveredA[-ref - 1], b: topology.recoveredB[-ref - 1] };
+  }
+
+  segmentAt(slot) {
+    const { a, b } = this.pointsOf(slot);
+    return { id: this.idOf(slot), regionIndexes: this.regionIndexesOf(slot), a, b };
+  }
+
+  get(id) {
+    const slot = this.slotOf(id);
+    return slot < 0 ? undefined : this.segmentAt(slot);
+  }
+
+  *values() {
+    for (let slot = 0; slot < this.refs.length; slot += 1) yield this.segmentAt(slot);
+  }
+
+  slotsOfRegion(regionIndex) {
+    if (!Number.isInteger(regionIndex) || regionIndex < 0 || regionIndex + 1 >= this.regionStart.length) return NO_SLOTS;
+    return this.regionList.subarray(this.regionStart[regionIndex], this.regionStart[regionIndex + 1]);
+  }
+}
+
+// The ids of the segments a region has a side of, in the order they were found.
+export const segmentIdsOfRegion = (state, regionIndex) => {
+  const table = state?.segments;
+  if (!table?.slotsOfRegion) return [];
+  return Array.from(table.slotsOfRegion(regionIndex), (slot) => table.idOf(slot));
+};
+
+// The group a segment is drawn in: its owners, or none when it has fewer than
+// two or lies on a battlefield whose own picture draws the border between its
+// sides (state.excluded, setExcludedBoundarySegments).
+const slotKeyOf = (state, slot, ownershipOverrides = {}) => {
+  const table = state.segments;
+  if (state.excluded?.size && state.excluded.has(table.idOf(slot))) return "";
+  const owners = segmentOwners({ regionIndexes: table.regionIndexesOf(slot) }, state.topology, ownershipOverrides);
+  return owners.length >= 2 ? owners.join("\u001f") : "";
+};
+
+const boundaryFeatureForGroup = (ownerKey, group, table, precision) => {
   if (!group?.segments?.size) return null;
   const owners = ownerKey.split("\u001f").filter(Boolean);
-  const coordinates = stitchSegments([...group.segments.values()], precision);
+  const coordinates = stitchSegments(Array.from(group.segments, (slot) => table.pointsOf(slot)), precision);
   if (!coordinates.length) return null;
   return {
     type: "Feature",
@@ -438,86 +470,42 @@ const boundaryFeatureForGroup = (ownerKey, group, precision) => {
   };
 };
 
-const buildTopologySegments = (topology) => {
-  const segments = new Map();
-  const regionToSegments = Array.from({ length: topology?.regionIds?.length ?? 0 }, () => []);
-  const register = (id, regionIndexes, aPoint, bPoint) => {
-    const indexes = [...new Set((regionIndexes ?? []).filter((value) => Number.isInteger(value) && value >= 0))];
-    if (indexes.length < 2) return;
-    const segment = { id, regionIndexes: indexes, a: aPoint, b: bPoint };
-    segments.set(id, segment);
-    for (const regionIndex of indexes) regionToSegments[regionIndex]?.push(id);
-  };
-
-  for (let edge = 0; edge < (topology?.a?.length ?? 0); edge += 1) {
-    const second = topology.region2[edge];
-    const more = topology.extra.get(edge);
-    if (second === -1 && !more) continue;
-    const regionIndexes = [topology.region1[edge]];
-    if (second !== -1) regionIndexes.push(second);
-    if (more) regionIndexes.push(...more);
-    register(
-      `e:${edge}`,
-      regionIndexes,
-      [topology.pointX[topology.a[edge]], topology.pointY[topology.a[edge]]],
-      [topology.pointX[topology.b[edge]], topology.pointY[topology.b[edge]]],
-    );
-  }
-
-  for (let index = 0; index < (topology?.recoveredA?.length ?? 0); index += 1) {
-    register(
-      `r:${index}`,
-      [topology.recoveredRegion1[index], topology.recoveredRegion2[index]],
-      topology.recoveredA[index],
-      topology.recoveredB[index],
-    );
-  }
-
-  return { segments, regionToSegments };
-};
-
 /**
  * Mutable worker-local boundary state. Geometry topology is immutable; only the
  * owner classification of existing frontier segments changes between political
  * revisions. Runtime updates therefore touch segments incident to changed
- * regions instead of rescanning the entire authored map.
+ * regions instead of rescanning the entire authored map. Groups hold segment
+ * slots (SegmentTable), in the order the segments joined them.
  */
-export const createPoliticalBoundaryState = (topology, ownershipOverrides = {}) => {
-  const { segments, regionToSegments } = buildTopologySegments(topology);
-  const groups = new Map();
-  const segmentGroupKey = new Map();
-  const features = new Map();
-
-  const addToGroup = (key, segment) => {
-    let group = groups.get(key);
-    if (!group) {
-      group = { segments: new Map() };
-      groups.set(key, group);
-    }
-    group.segments.set(segment.id, { a: segment.a, b: segment.b });
-  };
-
-  for (const segment of segments.values()) {
-    const owners = segmentOwners(segment, topology, ownershipOverrides);
-    if (owners.length < 2) continue;
-    const key = owners.join("\u001f");
-    segmentGroupKey.set(segment.id, key);
-    addToGroup(key, segment);
-  }
-
-  for (const [key, group] of groups) {
-    const feature = boundaryFeatureForGroup(key, group, topology.precision);
-    if (feature) features.set(key, feature);
-  }
-
-  return {
+export const createPoliticalBoundaryState = (topology, ownershipOverrides = {}, { excluded = null } = {}) => {
+  const segments = new SegmentTable(topology);
+  const state = {
     topology,
     segments,
-    regionToSegments,
-    groups,
-    segmentGroupKey,
-    features,
+    groups: new Map(),
+    segmentGroupKey: new Map(),
+    features: new Map(),
+    excluded: new Set([...(excluded ?? [])].filter((id) => segments.has(id))),
   };
+
+  for (let slot = 0; slot < segments.size; slot += 1) {
+    const key = slotKeyOf(state, slot, ownershipOverrides);
+    if (!key) continue;
+    state.segmentGroupKey.set(slot, key);
+    let group = state.groups.get(key);
+    if (!group) {
+      group = { segments: new Set() };
+      state.groups.set(key, group);
+    }
+    group.segments.add(slot);
+  }
+
+  for (const [key, group] of state.groups) {
+    const feature = boundaryFeatureForGroup(key, group, segments, topology.precision);
+    if (feature) state.features.set(key, feature);
+  }
+
+  return state;
 };
 
 export const politicalBoundaryStateCollection = (state) => ({
@@ -553,38 +541,52 @@ export const updatePoliticalBoundaryState = (
     return { patch: { removeIds: [], upsert: [] }, stats: { changedSegmentCount: 0, changedGroupCount: 0 } };
   }
 
-  const segmentIds = new Set();
+  const slots = new Set();
   for (const rawId of changedRegionIds ?? []) {
     const regionIndex = state.topology.regionIndexById?.get(String(rawId ?? ""));
     if (regionIndex == null) continue;
-    for (const segmentId of state.regionToSegments[regionIndex] ?? []) segmentIds.add(segmentId);
+    for (const slot of state.segments.slotsOfRegion(regionIndex)) slots.add(slot);
   }
 
-  const changedGroups = new Set();
-  for (const segmentId of segmentIds) {
-    const segment = state.segments.get(segmentId);
-    if (!segment) continue;
-    const previousKey = state.segmentGroupKey.get(segmentId) ?? "";
-    const owners = segmentOwners(segment, state.topology, ownershipOverrides);
-    const nextKey = owners.length >= 2 ? owners.join("\u001f") : "";
+  const result = regroupSegments(state, slots, ownershipOverrides);
+  return {
+    patch: result.patch,
+    stats: {
+      changedSegmentCount: slots.size,
+      changedGroupCount: result.changedGroupCount,
+      boundaryGroupCount: state.features.size,
+    },
+  };
+};
+
+// Moves each of these segments (their slots) to the group its owners (and
+// whether it is left out) now give it, and rebuilds the groups that changed:
+// the patch for the source. `alsoGroups` are rebuilt whether or not a segment moved.
+const regroupSegments = (state, slots, ownershipOverrides = {}, alsoGroups = []) => {
+  const forced = new Set(alsoGroups);
+  const changedGroups = new Set(forced);
+  for (const slot of slots) {
+    if (!(slot >= 0 && slot < state.segments.size)) continue;
+    const previousKey = state.segmentGroupKey.get(slot) ?? "";
+    const nextKey = slotKeyOf(state, slot, ownershipOverrides);
     if (previousKey === nextKey) continue;
 
     if (previousKey) {
       const oldGroup = state.groups.get(previousKey);
-      oldGroup?.segments?.delete(segmentId);
+      oldGroup?.segments?.delete(slot);
       changedGroups.add(previousKey);
     }
     if (nextKey) {
       let nextGroup = state.groups.get(nextKey);
       if (!nextGroup) {
-        nextGroup = { segments: new Map() };
+        nextGroup = { segments: new Set() };
         state.groups.set(nextKey, nextGroup);
       }
-      nextGroup.segments.set(segmentId, { a: segment.a, b: segment.b });
-      state.segmentGroupKey.set(segmentId, nextKey);
+      nextGroup.segments.add(slot);
+      state.segmentGroupKey.set(slot, nextKey);
       changedGroups.add(nextKey);
     } else {
-      state.segmentGroupKey.delete(segmentId);
+      state.segmentGroupKey.delete(slot);
     }
   }
 
@@ -596,10 +598,12 @@ export const updatePoliticalBoundaryState = (
     if (!group?.segments?.size) {
       state.groups.delete(key);
       state.features.delete(key);
-      if (oldFeature?.id != null) removeIds.push(String(oldFeature.id));
+      // (A forced group the worker no longer has may still be drawn: its id goes too.)
+      const goneId = oldFeature?.id ?? (forced.has(key) ? stableId("polity-boundary", key) : null);
+      if (goneId != null) removeIds.push(String(goneId));
       continue;
     }
-    const feature = boundaryFeatureForGroup(key, group, state.topology.precision);
+    const feature = boundaryFeatureForGroup(key, group, state.segments, state.topology.precision);
     if (!feature) {
       state.features.delete(key);
       if (oldFeature?.id != null) removeIds.push(String(oldFeature.id));
@@ -609,12 +613,82 @@ export const updatePoliticalBoundaryState = (
     upsert.push(feature);
   }
 
-  return {
-    patch: { removeIds, upsert },
-    stats: {
-      changedSegmentCount: segmentIds.size,
-      changedGroupCount: changedGroups.size,
-      boundaryGroupCount: state.features.size,
-    },
-  };
+  return { patch: { removeIds, upsert }, changedGroupCount: changedGroups.size };
+};
+
+// The segments a battlefield draws the border on itself: those between a
+// region of one side and a region of the other (`regionIds` its sides' land in
+// its frame, `regionSides` the side, 0 or 1, of each), whose ends both lie
+// inside its frame (`bounds`: [west, south, east, north], the frame's
+// longitudes as the map is given them), and that lie where its run has moved
+// the front (`touchedAt(lng, lat)`, when given: an end or the middle there).
+// Every other segment stays the map's: a border between two of one side's
+// countries, one past the frame, and one along ground the run never touches,
+// where the sides' ground lies as it always has.
+export const battlefieldSegmentIds = (state, areas = []) => {
+  const out = new Set();
+  const topology = state?.topology;
+  if (!topology || !state?.segments) return out;
+  const table = state.segments;
+  // Slots taken so far, in the order they were taken: the ids, in that order, are the answer.
+  const taken = new Set();
+  const precision = topology.precision || 1;
+  for (const area of areas ?? []) {
+    const sideOf = new Map();
+    (area?.regionIds ?? []).forEach((id, position) => {
+      const index = topology.regionIndexById?.get(String(id));
+      if (index != null) sideOf.set(index, Array.isArray(area.regionSides) ? area.regionSides[position] : null);
+    });
+    const [west, south, east, north] = Array.isArray(area?.bounds) ? area.bounds.map(Number) : [];
+    if (!sideOf.size || ![west, south, east, north].every(Number.isFinite)) continue;
+    const inside = ([x, y]) => {
+      const lat = y / precision;
+      if (lat < south || lat > north) return false;
+      const lng = x / precision;
+      return [lng, lng - 360, lng + 360].some((value) => value >= west && value <= east);
+    };
+    const touched = typeof area.touchedAt === "function"
+      ? ({ a, b }) => [a, b, [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]].some(([x, y]) => area.touchedAt(x / precision, y / precision))
+      : () => true;
+    for (const regionIndex of sideOf.keys()) {
+      for (const slot of table.slotsOfRegion(regionIndex)) {
+        if (taken.has(slot)) continue;
+        const regionIndexes = table.regionIndexesOf(slot);
+        if (regionIndexes.length !== 2 || !regionIndexes.every((index) => sideOf.has(index))) continue;
+        const [first, second] = regionIndexes.map((index) => sideOf.get(index));
+        if (first !== null && second !== null && first === second) continue;
+        const segment = table.pointsOf(slot);
+        if (inside(segment.a) && inside(segment.b) && touched(segment)) taken.add(slot);
+      }
+    }
+  }
+  for (const slot of taken) out.add(table.idOf(slot));
+  return out;
+};
+
+// Leaves these segments out of the boundaries (and gives back those no longer
+// listed): the patch for the source. With `force`, every group a left-out
+// segment (now or before) belongs to by its owners is sent whole, so a patch
+// made before and shown after (Nations.jsx publishOwnershipPresentation)
+// cannot leave one drawn.
+export const setExcludedBoundarySegments = (state, segmentIds = [], ownershipOverrides = {}, { force = false } = {}) => {
+  if (!state?.segments) return { patch: { removeIds: [], upsert: [] }, changedSegmentCount: 0 };
+  const next = new Set([...(segmentIds ?? [])].filter((id) => state.segments.has(id)));
+  const before = state.excluded ?? new Set();
+  const touched = new Set();
+  for (const id of before) if (!next.has(id)) touched.add(id);
+  for (const id of next) if (!before.has(id)) touched.add(id);
+  state.excluded = next;
+  const alsoGroups = [];
+  if (force) {
+    for (const id of new Set([...before, ...next])) {
+      const segment = state.segments.get(id);
+      if (!segment) continue;
+      const owners = segmentOwners(segment, state.topology, ownershipOverrides);
+      if (owners.length >= 2) alsoGroups.push(owners.join("\u001f"));
+    }
+  }
+  const slots = [...touched].map((id) => state.segments.slotOf(id)).filter((slot) => slot >= 0);
+  const result = regroupSegments(state, slots, ownershipOverrides, alsoGroups);
+  return { patch: result.patch, changedSegmentCount: touched.size };
 };

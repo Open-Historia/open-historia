@@ -19,7 +19,7 @@
 
 const nodeFs = require("node:fs");
 const nodePath = require("node:path");
-const { chunkAssetName, chunksOfFile, planUpdate, readHead, readManifest, sha256 } = require("./payloadChunks.cjs");
+const { LARGE_FILE_BYTES, chunkAssetName, chunksOfFile, planUpdate, readHead, readManifest, sha256 } = require("./payloadChunks.cjs");
 const { CURRENT_FILE, MANIFEST_FILE, compareBuilds, readState, sameShell, writeJsonAtomically } = require("./payloadBoot.cjs");
 
 const CHUNK_ATTEMPTS = 3;
@@ -27,6 +27,16 @@ const CHUNKS_AT_ONCE = 4;
 const HEAD_BYTES_LIMIT = 64 * 1024;
 const MANIFEST_BYTES_LIMIT = 16 * 1024 * 1024;
 const QUIET_LIMIT_MS = 45_000;
+const SLICE_MS = 25;
+
+const slicer = (sliceMs = SLICE_MS) => {
+  let since = Date.now();
+  return async () => {
+    if (Date.now() - since < sliceMs) return;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    since = Date.now();
+  };
+};
 
 const abortError = () => {
   const error = new Error("The update was cancelled.");
@@ -53,25 +63,66 @@ const listFiles = (root, fs = nodeFs) => {
 
 // What the app already holds, for planUpdate: each file by its hash, and each
 // chunk its large files are made of by where it can be read.
-const indexLocal = (root, { fs = nodeFs, signal = null, onFile = null } = {}) => {
+const indexLocal = async (root, { fs = nodeFs, signal = null, onFile = null, sliceMs = SLICE_MS } = {}) => {
   const files = new Map();
   const chunks = new Map();
   const names = listFiles(root, fs);
-  names.forEach((relative, index) => {
+  const breathe = slicer(sliceMs);
+  for (let index = 0; index < names.length; index += 1) {
+    await breathe();
     throwIfAborted(signal);
+    const relative = names[index];
     const file = nodePath.join(root, relative);
     let data;
     try {
       data = fs.readFileSync(file);
     } catch {
-      return; // unreadable: then it is simply not something to reuse
+      continue; // unreadable: then it is simply not something to reuse
     }
     files.set(sha256(data), file);
     for (const chunk of chunksOfFile(data)) {
       if (!chunks.has(chunk.id)) chunks.set(chunk.id, { file, offset: chunk.offset, size: chunk.size });
     }
     onFile?.(index + 1, names.length);
-  });
+  }
+  return { files, chunks };
+};
+
+const indexFromManifest = async (root, { fs = nodeFs, signal = null, onFile = null, sliceMs = SLICE_MS } = {}) => {
+  let manifest = null;
+  try {
+    manifest = readManifest(JSON.parse(fs.readFileSync(nodePath.join(root, MANIFEST_FILE), "utf8"))).manifest;
+  } catch {
+    return null;
+  }
+  if (!manifest) return null;
+  const files = new Map();
+  const chunks = new Map();
+  const breathe = slicer(sliceMs);
+  for (let index = 0; index < manifest.files.length; index += 1) {
+    await breathe();
+    throwIfAborted(signal);
+    const entry = manifest.files[index];
+    const file = nodePath.join(root, ...entry.path.split("/"));
+    let size = -1;
+    try {
+      size = fs.statSync(file).size;
+    } catch {
+      size = -1;
+    }
+    if (size === entry.size) {
+      if (!files.has(entry.sha256)) files.set(entry.sha256, file);
+      const whole = entry.size >= LARGE_FILE_BYTES && entry.parts.every((part) => part.at === 0 && part.size === manifest.chunks[part.chunk]);
+      if (whole) {
+        let offset = 0;
+        for (const part of entry.parts) {
+          if (!chunks.has(part.chunk)) chunks.set(part.chunk, { file, offset, size: part.size });
+          offset += part.size;
+        }
+      }
+    }
+    onFile?.(index + 1, manifest.files.length);
+  }
   return { files, chunks };
 };
 
@@ -275,7 +326,14 @@ const createPayloadUpdater = ({
     fs.mkdirSync(cacheDir, { recursive: true });
 
     onProgress({ phase: "reading", percent: 0 });
-    const local = indexLocal(currentRoot, { fs, signal });
+    const reading = {
+      fs,
+      signal,
+      onFile: (read, total) => {
+        if (read % 100 === 0 || read === total) onProgress({ phase: "reading", percent: Math.floor((read / total) * 100) });
+      },
+    };
+    const local = (await indexFromManifest(currentRoot, reading)) ?? await indexLocal(currentRoot, reading);
     const plan = planUpdate(manifest, local);
     log("info", `update ${build}: ${plan.copy.length} file(s) kept, ${plan.build.length} to put together, ${plan.fetch.length} chunk(s) to fetch (${plan.fetchBytes} of ${plan.totalBytes} bytes)`);
 
@@ -338,6 +396,7 @@ const createPayloadUpdater = ({
       done += 1;
       if (done % 50 === 0 || done === total) onProgress({ phase: "building", percent: Math.floor((done / total) * 100) });
     };
+    const breathe = slicer();
     try {
       // A file kept from a set an earlier update made is linked, not copied: it
       // was read and hashed a moment ago, nothing ever writes to it, and the two
@@ -345,6 +404,7 @@ const createPayloadUpdater = ({
       // linked, and is copied and checked like one that was put together.
       const linkable = (from) => from.startsWith(payloadDir + nodePath.sep);
       for (const file of plan.copy) {
+        await breathe();
         throwIfAborted(signal);
         const target = nodePath.join(stagingDir, ...file.path.split("/"));
         let linked = false;
@@ -361,6 +421,7 @@ const createPayloadUpdater = ({
         step();
       }
       for (const file of plan.build) {
+        await breathe();
         throwIfAborted(signal);
         const parts = file.parts.map((part) => (part.local
           ? readSlice(fs, part.local.file, part.local.offset, part.local.size)
@@ -387,4 +448,4 @@ const createPayloadUpdater = ({
   return { check, apply };
 };
 
-module.exports = { CHUNKS_AT_ONCE, CHUNK_ATTEMPTS, createPayloadUpdater, indexLocal, listFiles };
+module.exports = { CHUNKS_AT_ONCE, CHUNK_ATTEMPTS, createPayloadUpdater, indexFromManifest, indexLocal, listFiles };

@@ -211,3 +211,42 @@ describe("game catalog: a game whose scenario is gone, on the write side", () =>
     assert.equal(result.first, "scenario-that-was-deleted-missing");
   });
 });
+
+// updateGame with a scenarioId, in a child process bound to `root`.
+const probeRelink = (root, scenarioId) => {
+  const script = `
+    const store = await import(${JSON.stringify(STORE_URL)});
+    let error = "";
+    try {
+      store.updateGame("game-alpha", { scenarioId: ${JSON.stringify(scenarioId)} });
+    } catch (caught) {
+      error = String(caught?.message || caught);
+    }
+    const game = store.getGameCatalog().games.find((entry) => entry.id === "game-alpha");
+    process.stdout.write(JSON.stringify({ error, scenarioId: game.scenarioId, scenarioMissing: game.scenarioMissing }));
+  `;
+  const out = execFileSync(process.execPath, ["--input-type=module", "-e", script], {
+    encoding: "utf-8",
+    env: { ...process.env, OH_DATA_DIR: root },
+  });
+  return JSON.parse(out);
+};
+
+describe("game catalog: Import & play relinks the game to the map it fetched", () => {
+  test("a game is pointed at a scenario the library now holds", () => {
+    const root = buildDataDir({ active: "game-alpha", ids: ["game-alpha"] });
+    writeJson(path.join(root, "scenarios", "fetched-map", "scenario.json"), { id: "fetched-map", name: "Fetched Map" });
+    writeJson(path.join(root, "scenarios", "fetched-map", "world.json"), { ownerSchema: OWNER_SCHEMA });
+    const result = probeRelink(root, "fetched-map");
+    assert.equal(result.error, "");
+    assert.equal(result.scenarioId, "fetched-map");
+    assert.equal(result.scenarioMissing, false);
+  });
+
+  test("a scenario id the library does not hold is refused", () => {
+    const root = buildDataDir({ active: "game-alpha", ids: ["game-alpha"] });
+    const result = probeRelink(root, "not-here");
+    assert.match(result.error, /Scenario not found: not-here/);
+    assert.equal(result.scenarioId, "new-scenario");
+  });
+});

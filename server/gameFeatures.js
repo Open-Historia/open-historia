@@ -17,6 +17,62 @@ export const FEATURE_DEFINITIONS = Object.freeze([
     settings: Object.freeze([]),
   }),
   Object.freeze({
+    key: "groups",
+    label: "Groups",
+    description: "Actors that are not countries, such as insurgencies, cartels, militias, cults or an outbreak, each controlling an area of regions that stay their countries'. Off: the simulator is not given the groups or their areas, anything it writes about groups is left out, and no group's area is shown on the map or on a region's card. A game switched back on finds its groups as it left them.",
+    settings: Object.freeze([]),
+  }),
+  // Wars: what the game fights itself, each part with a switch of its own
+  // (src/Game/AI/frontsGate.js reads them). The key is still "fronts": a
+  // scenario or a game saved before the parts had switches said only whether
+  // fronts were on, and that is what its "enabled" reads as here
+  // (legacyEnabledSetting). It costs no request: the orders ride in the one
+  // answer a time skip already gives, and the engine asks nobody.
+  //   battlefields   land war on battlefields (src/runtime/fronts/; frontTurn.js runs it)
+  //   air            air units: raised, flown over battlefields and sent to strike (fronts/air.js, airStrikes.js)
+  //   navies         fleets: raised, fighting at sea, blockading and carrying troops by sea (runtime/naval/)
+  Object.freeze({
+    key: "fronts",
+    label: "Wars",
+    toggleable: false,
+    legacyEnabledSetting: "battlefields",
+    description: "How the game fights its wars itself. Each part has a switch: land war on battlefields, air units and navies. What is switched off is left to the story: the simulator tells of it, and the game does not fight it.",
+    settings: Object.freeze([
+      Object.freeze({
+        key: "battlefields",
+        type: "toggle",
+        label: "Fronts",
+        defaultValue: true,
+        description: "Land war fought on battlefields. Where the two sides of a war hold land that touches, a battlefield opens by itself: each side is given troops by its size, the simulator gives them orders, and the game moves them and decides who holds the ground, a region changing hands as it is taken. Off: no battlefield opens, the simulator is asked for no front orders, and a land war is the formations it moves and the regions it hands over itself. A game switched back on finds its battlefields as it left them.",
+      }),
+      Object.freeze({
+        key: "air",
+        type: "toggle",
+        label: "Air units",
+        defaultValue: true,
+        description: "Air units on the map: they fly over the battlefields near them, and the War Room's Deploy Aircraft sends them to bomb troops, structures or cities, where they can be intercepted. Off: no air unit is raised or flown, the War Room has no aircraft, and the simulator is told the war has none.",
+      }),
+      Object.freeze({
+        key: "navies",
+        type: "toggle",
+        label: "Navies",
+        defaultValue: true,
+        description: "Fleets on the map: they fight at sea, blockade coasts and carry troops across water. Off: no fleet is raised or sails, nothing is carried by sea, the War Room has no fleets, and the simulator is told the war has none.",
+      }),
+    ]),
+  }),
+  // Rostra, the social network (src/runtime/socialFeed.js, src/Game/GameUI/social.jsx):
+  // "make sure the social media feature is disableable in the scenario editor"
+  // (the owner, 2026-11-02). It costs no request either way: the posts ride in
+  // the answer a time skip already gives, and off, the skip is neither shown
+  // the feed nor asked for any, so no part of its prompt goes on them.
+  Object.freeze({
+    key: "socialMedia",
+    label: "Social media",
+    description: "Rostra, the world's social network: a button beside Actions opens posts by the people who make the news, written with each time skip, where the player can post as their country's leader and quote anyone's post. What is posted is public: the next time skip reads it and the world answers. It asks for no AI request of its own. Off: no Rostra button, nothing is posted, and the time skip is neither shown the posts nor asked to write any.",
+    settings: Object.freeze([]),
+  }),
+  Object.freeze({
     key: "idleDiplomacy",
     label: "Idle diplomacy",
     description: "While the game sits open between turns, a polity with a live reason to speak may send the player an unprompted note. Every attempt is an AI request nobody pressed a button for, so it only runs while Background AI is on (Settings, AI, AI requests; on by default), and stops at that player's daily cap.",
@@ -32,6 +88,12 @@ export const FEATURE_DEFINITIONS = Object.freeze([
         description: "How often, on average, the model is asked whether some polity would write. Most attempts send nothing; the roll only runs while the game is on screen, and only while Background AI is on.",
       }),
     ]),
+  }),
+  Object.freeze({
+    key: "pregameHistory",
+    label: "Pre-game history",
+    description: "When a fresh game first opens, turn the scenario's World Before Round One briefing into timeline events and use it to bootstrap the wars, relations, agreements and unresolved storylines already true on the start date. Off: no pre-game history AI request runs and no Round-One state is inferred from the briefing; canonical state authored directly into the scenario is left untouched.",
+    settings: Object.freeze([]),
   }),
   // The director: what a scenario's author decides about HOW the world is run,
   // as numbers the engine reads and enforces rather than prose the model may or
@@ -74,12 +136,10 @@ export const FEATURE_DEFINITIONS = Object.freeze([
       }),
       Object.freeze({
         key: "scriptedEvents",
-        type: "text",
+        type: "scripted-events",
         label: "Scripted events",
-        maxLength: 8000,
-        rows: 8,
-        defaultValue: "",
-        description: "History that happens on its date whatever else the players do: one event per line, the date first (YYYY-MM-DD, a year before AD 1 with a leading minus), then what happens in your own words. The time skip that covers the date is asked to write it; if it does not, the engine writes it for you. \"1914-06-28 Archduke Franz Ferdinand is assassinated in Sarajevo.\"",
+        defaultValue: Object.freeze([]),
+        description: "Dated scenario-authored historical beats. Conditions are checked natively once on the event date, then an optional chance is rolled once. Match all, any, or at least N conditions; resolved outcomes never reroll. Eligible events are still guaranteed by the engine if the model omits them.",
       }),
       Object.freeze({
         key: "territoryTempo",
@@ -90,6 +150,36 @@ export const FEATURE_DEFINITIONS = Object.freeze([
         step: 1,
         defaultValue: 0,
         description: "How fast borders may move. The engine counts a skip's transfers and captures in event order and withholds any beyond the ceiling for the period, telling the simulator to carry the front on next time. Set it for a slow war of attrition; leave it at 0 for the built-in behaviour.",
+      }),
+    ]),
+  }),
+  // How much of a time skip belongs to the player's own country
+  // (src/Game/AI/playerFocus.js). The scenario sets the level a new game starts
+  // on — a tight one-nation campaign wants a different default from a world
+  // sandbox — and the player changes it for their own game in Settings, AI,
+  // Generation behavior. Off: no minimum share of Player events at all; the
+  // world's share above still applies.
+  Object.freeze({
+    key: "playerFocus",
+    label: "Player focus",
+    // No on/off: every game has some balance between the player and the world,
+    // and switching a level off would only mean "ignore the level", which is
+    // what World first already says in words a player understands.
+    toggleable: false,
+    description: "How much of each time skip is about the player's own country, as far as they have something going on — orders, Project dates due, wars, open threads. In a quiet stretch the world fills the skip whatever this says, and it never invents business for the player. The player can change it for their own game.",
+    settings: Object.freeze([
+      Object.freeze({
+        key: "level",
+        type: "choice",
+        label: "The scenario starts on",
+        defaultValue: "balanced",
+        options: Object.freeze([
+          Object.freeze({ value: "world-first", label: "World first", description: "At least a quarter of a skip is the player's when they have something going on." }),
+          Object.freeze({ value: "balanced", label: "Balanced", description: "At least 40%. The built-in feel." }),
+          Object.freeze({ value: "focused", label: "Focused", description: "At least 60%, and other powers' plans take less of what the simulator is shown." }),
+          Object.freeze({ value: "spotlight", label: "Spotlight", description: "At least three quarters, and the wider world is kept to what matters most." }),
+        ]),
+        description: "Where a new game on this scenario starts. Players change it for their own game in Settings.",
       }),
     ]),
   }),
@@ -110,9 +200,232 @@ const readBoolean = (value) => {
   return null;
 };
 
-// A setting is a number unless it says `type: "text"`. Blank text is "not set":
+export const SCRIPTED_EVENT_TRIGGER_MODES = Object.freeze(["rules", "always", "chance", "conditional"]);
+export const SCRIPTED_EVENT_CONDITION_OPERATORS = Object.freeze(["all", "any", "at_least"]);
+// These are the predicates the authoring UI exposes today because their native
+// ledgers are already dependable enough to be scenario-writing contracts.
+// Legacy war predicates remain readable by the runtime for existing CSE-v1
+// content, but are intentionally not advertised until the war ledger is hardened.
+export const SCRIPTED_EVENT_CONDITION_TYPES = Object.freeze([
+  "polity_exists",
+  "polity_not_exists",
+  "political_actor_exists",
+  "political_actor_not_exists",
+  "institution_exists",
+  "institution_not_exists",
+  "institution_has_polity",
+  "institution_lacks_polity",
+  "institution_member_status",
+  "polity_subordinate_to",
+  "polity_not_subordinate_to",
+  "polity_controls_region",
+  "polity_not_controls_region",
+  "scripted_event_fired",
+  "scripted_event_skipped",
+  "scripted_outcome_selected",
+  "scripted_outcome_not_selected",
+]);
+
+const scriptedEventDateKey = (iso) => {
+  const match = /^(-?)(\d{1,4})-(\d{2})-(\d{2})$/.exec(String(iso ?? "").trim());
+  if (!match) return null;
+  const value = Number(match[2]) * 10000 + Number(match[3]) * 100 + Number(match[4]);
+  return match[1] ? -value : value;
+};
+
+const scriptedEventHash = (value) => {
+  let hash = 2166136261;
+  const source = String(value ?? "");
+  for (let index = 0; index < source.length; index += 1) {
+    hash ^= source.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+};
+
+const scriptedEventId = (value, fallbackSeed) => {
+  const explicit = String(value ?? "").trim().toLowerCase()
+    .replace(/[^a-z0-9._:-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 120);
+  return explicit || `scripted-${scriptedEventHash(fallbackSeed)}`;
+};
+
+const scriptedEventTitle = (body) => {
+  const text = String(body ?? "").replace(/\s+/g, " ").trim();
+  const sentence = /^(.{12,140}?[.!?])\s/.exec(`${text} `);
+  return (sentence ? sentence[1] : text).slice(0, 140).replace(/[.!?]$/, "");
+};
+
+const normalizeScriptedCondition = (value) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const type = String(value.type ?? "").trim().toLowerCase();
+  if (!type) return null;
+  const out = { type: type.slice(0, 80) };
+  for (const key of ["polityId", "warId", "institutionId", "overlordId", "eventId", "outcomeId", "regionId", "baseOwner", "status", "kind"]) {
+    const token = String(value[key] ?? "").trim().slice(0, 160);
+    if (token) out[key] = token;
+  }
+  return out;
+};
+
+const scriptedEventPercent = (value, fallback = 100) => {
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.max(0, Math.min(100, number)) : fallback;
+};
+
+const normalizeScriptedRuleGroup = (source) => {
+  const conditions = (Array.isArray(source.conditions) ? source.conditions : [])
+    .map(normalizeScriptedCondition)
+    .filter(Boolean)
+    .slice(0, 24);
+  const rawOperator = String(source.operator ?? "all").trim().toLowerCase().replace(/-/g, "_");
+  const operator = SCRIPTED_EVENT_CONDITION_OPERATORS.includes(rawOperator) ? rawOperator : "all";
+  const requested = Number(source.requiredCount ?? source.minimum ?? 1);
+  const requiredCount = conditions.length
+    ? Math.max(1, Math.min(conditions.length, Number.isFinite(requested) ? Math.trunc(requested) : 1))
+    : 0;
+  return {
+    operator,
+    ...(operator === "at_least" ? { requiredCount } : {}),
+    conditions,
+  };
+};
+
+const normalizeScriptedTrigger = (value) => {
+  const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  const mode = String(source.mode ?? "always").trim().toLowerCase();
+
+  if (mode === "rules") {
+    return {
+      mode: "rules",
+      ...normalizeScriptedRuleGroup(source),
+      percent: scriptedEventPercent(source.percent ?? source.chancePercent, 100),
+    };
+  }
+
+  // CSE v1 compatibility. Old modes are normalized into the composable rules
+  // contract on read/save, so existing scenarios keep their behavior while the
+  // authoring model no longer needs mutually-exclusive Always/Chance/Conditional.
+  if (mode === "chance") {
+    return {
+      mode: "rules",
+      operator: "all",
+      conditions: [],
+      percent: scriptedEventPercent(source.percent, 50),
+    };
+  }
+  if (mode === "conditional") {
+    const group = normalizeScriptedRuleGroup(source);
+    // A malformed old Conditional with no conditions used to fail closed.
+    // Preserve that rather than silently turning it into an unconditional event.
+    if (!group.conditions.length) return { mode: "invalid" };
+    return { mode: "rules", ...group, percent: 100 };
+  }
+  if (mode === "always" || !source.mode) {
+    return { mode: "rules", operator: "all", conditions: [], percent: 100 };
+  }
+
+  // Unknown trigger modes survive normalization as invalid rather than falling
+  // through to an unconditional event. The runtime fails closed.
+  return { mode: mode.slice(0, 32) || "invalid" };
+};
+
+const normalizeScriptedOutcomeWeight = (value, fallback = 1) => {
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.max(0, Math.min(1000000, number)) : fallback;
+};
+
+const normalizeScriptedTextMode = (value) => (
+  String(value ?? "").trim().toLowerCase() === "exact" ? "exact" : "generated"
+);
+
+const normalizeScriptedOutcomes = (value, parentId) => {
+  if (!Array.isArray(value)) return [];
+  const ids = new Map();
+  const outcomes = [];
+  for (let index = 0; index < value.length && outcomes.length < 24; index += 1) {
+    const entry = value[index];
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const body = String(entry.text ?? entry.description ?? "").replace(/\r\n/g, "\n").trim().slice(0, 4000);
+    if (!body) continue;
+    const baseId = scriptedEventId(entry.id, `${parentId}|outcome|${body}|${index}`);
+    const seen = ids.get(baseId) || 0;
+    ids.set(baseId, seen + 1);
+    const id = seen ? `${baseId}-${seen + 1}`.slice(0, 160) : baseId;
+    const title = String(entry.title ?? "").replace(/\s+/g, " ").trim().slice(0, 140) || scriptedEventTitle(body);
+    outcomes.push({ id, title, text: body, weight: normalizeScriptedOutcomeWeight(entry.weight, 1) });
+  }
+  return outcomes;
+};
+
+export const normalizeScriptedEvents = (value) => {
+  let source = value;
+  if (typeof source === "string") {
+    source = source.split(/\r?\n/).map((rawLine, index) => {
+      const line = rawLine.trim();
+      if (!line || line.startsWith("#")) return null;
+      const match = /^\s*(-?\d{1,4}-\d{2}-\d{2})\s*(?:[—–\-:|]+\s*)?(.*)$/.exec(line);
+      if (!match || scriptedEventDateKey(match[1]) === null) return null;
+      const body = String(match[2] ?? "").trim();
+      if (!body) return null;
+      return {
+        id: scriptedEventId("", `${match[1]}|${body}|${index}`),
+        date: match[1],
+        title: scriptedEventTitle(body),
+        text: body,
+        textMode: "generated",
+        trigger: { mode: "rules", operator: "all", conditions: [], percent: 100 },
+      };
+    }).filter(Boolean);
+  }
+  if (!Array.isArray(source)) return [];
+
+  const ids = new Map();
+  const events = [];
+  for (let index = 0; index < source.length; index += 1) {
+    const entry = source[index];
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const date = String(entry.date ?? "").trim();
+    const body = String(entry.text ?? entry.description ?? "").replace(/\r\n/g, "\n").trim().slice(0, 4000);
+    if (scriptedEventDateKey(date) === null || !body) continue;
+    const baseId = scriptedEventId(entry.id, `${date}|${body}|${index}`);
+    const seen = ids.get(baseId) || 0;
+    ids.set(baseId, seen + 1);
+    const id = seen ? `${baseId}-${seen + 1}`.slice(0, 160) : baseId;
+    const title = String(entry.title ?? "").replace(/\s+/g, " ").trim().slice(0, 140) || scriptedEventTitle(body);
+    const outcomes = normalizeScriptedOutcomes(entry.outcomes, id);
+    events.push({
+      id,
+      date,
+      title,
+      text: body,
+      textMode: normalizeScriptedTextMode(entry.textMode ?? entry.wordingMode ?? entry.presentationMode),
+      trigger: normalizeScriptedTrigger(entry.trigger),
+      ...(outcomes.length ? { outcomes } : {}),
+    });
+  }
+  return events.sort((left, right) => scriptedEventDateKey(left.date) - scriptedEventDateKey(right.date));
+};
+
+// A setting is a number unless it says otherwise. Blank text is "not set":
 // a scenario's blank is its default, and a game's blank follows the scenario.
 const readSetting = (value, setting) => {
+  // A choice is one of the values the setting lists. Anything else — a value
+  // from an older build, a typo in an imported scenario — is "not set", so the
+  // scenario's default (or the built-in one) stands rather than a level the
+  // engine cannot read.
+  if (setting.type === "scripted-events") {
+    if (typeof value === "string" && !value.trim()) return null;
+    if (!Array.isArray(value) && typeof value !== "string") return null;
+    return normalizeScriptedEvents(value);
+  }
+  // An on/off of its own inside a feature (Wars: Fronts, Air units, Navies).
+  if (setting.type === "toggle") return readBoolean(value);
+  if (setting.type === "choice") {
+    const text = String(value ?? "").trim().toLowerCase();
+    return setting.options.some((option) => option.value === text) ? text : null;
+  }
   if (setting.type === "text") {
     if (typeof value !== "string") return null;
     const text = value.replace(/\r\n/g, "\n").trim().slice(0, setting.maxLength || 2000);
@@ -126,7 +439,14 @@ const readSetting = (value, setting) => {
 };
 
 // `{ espionage: false }` is accepted as shorthand for `{ espionage: { enabled: false } }`.
-const readEntry = (entry) => (isRecord(entry) ? entry : { enabled: entry });
+// A feature whose on/off became one of its settings (legacyEnabledSetting)
+// reads an older "enabled" as that setting, where the setting is not given.
+const readEntry = (entry, definition = null) => {
+  const read = isRecord(entry) ? entry : { enabled: entry };
+  const legacy = definition?.legacyEnabledSetting;
+  if (!legacy || read[legacy] !== undefined || readBoolean(read.enabled) === null) return read;
+  return { ...read, [legacy]: readBoolean(read.enabled) };
+};
 
 // The built-in defaults: everything on, every setting at its default.
 export const featureDefaults = () => normalizeFeatureSettings(null);
@@ -137,8 +457,9 @@ export const normalizeFeatureSettings = (raw) => {
   const source = isRecord(raw) ? raw : {};
   const settings = {};
   for (const definition of FEATURE_DEFINITIONS) {
-    const entry = readEntry(source[definition.key]);
-    const resolved = { enabled: readBoolean(entry.enabled) ?? true };
+    const entry = readEntry(source[definition.key], definition);
+    // A feature with no on/off is always on, whatever an older save stored.
+    const resolved = { enabled: definition.toggleable === false ? true : readBoolean(entry.enabled) ?? true };
     for (const setting of definition.settings) {
       resolved[setting.key] = readSetting(entry[setting.key], setting) ?? setting.defaultValue;
     }
@@ -154,9 +475,9 @@ export const normalizeFeatureOverrides = (raw) => {
   const overrides = {};
   for (const definition of FEATURE_DEFINITIONS) {
     if (source[definition.key] === undefined || source[definition.key] === null) continue;
-    const entry = readEntry(source[definition.key]);
+    const entry = readEntry(source[definition.key], definition);
     const resolved = {};
-    const enabled = readBoolean(entry.enabled);
+    const enabled = definition.toggleable === false ? null : readBoolean(entry.enabled);
     if (enabled !== null) resolved.enabled = enabled;
     for (const setting of definition.settings) {
       const value = readSetting(entry[setting.key], setting);
@@ -165,6 +486,17 @@ export const normalizeFeatureOverrides = (raw) => {
     if (Object.keys(resolved).length) overrides[definition.key] = resolved;
   }
   return overrides;
+};
+
+// A game's overrides with one feature's override replaced (or removed, for
+// null/undefined) and every other feature's kept. The library stores take
+// `features` as the complete override set, so a caller that changes one
+// feature sends this rather than that feature alone.
+export const withFeatureOverride = (raw, key, entry) => {
+  const next = { ...normalizeFeatureOverrides(raw) };
+  if (entry === undefined || entry === null) delete next[key];
+  else next[key] = entry;
+  return normalizeFeatureOverrides(next);
 };
 
 // What a game actually plays with: the scenario's configuration under the
@@ -181,6 +513,19 @@ export const resolveFeatures = (scenarioFeatures, gameFeatures) => {
 
 export const isFeatureEnabled = (features, key) => features?.[key]?.enabled !== false;
 
+// What of its wars a game fights itself (the Wars feature, key "fronts"): each
+// part on unless switched off, and an older save's "fronts off" is battlefields off.
+//   { battlefields, air, navies }
+export const warsOf = (features) => {
+  const wars = features?.fronts;
+  const legacyOff = wars?.enabled === false && wars?.battlefields === undefined;
+  return {
+    battlefields: !legacyOff && wars?.battlefields !== false,
+    air: wars?.air !== false,
+    navies: wars?.navies !== false,
+  };
+};
+
 // The director's settings as the engine reads them: null when world direction is
 // off for this game, so every caller's "nothing to enforce" is one check.
 export const worldDirectionOf = (features) => {
@@ -191,9 +536,16 @@ export const worldDirectionOf = (features) => {
     eventPace: percent(direction.eventPace, 100),
     worldShare: percent(direction.worldShare, 35),
     priorityRules: typeof direction.priorityRules === "string" ? direction.priorityRules.trim() : "",
-    scriptedEvents: typeof direction.scriptedEvents === "string" ? direction.scriptedEvents.trim() : "",
+    scriptedEvents: normalizeScriptedEvents(direction.scriptedEvents),
     territoryTempo: percent(direction.territoryTempo, 0),
   };
+};
+
+// The Player focus level this game plays with (src/Game/AI/playerFocus.js holds
+// what each level means). Always a level: the feature has no on/off.
+export const playerFocusOf = (features) => {
+  const level = features?.playerFocus?.level;
+  return typeof level === "string" && level ? level : "balanced";
 };
 
 // Idle diplomacy rolls once a minute while the game is on screen; an average

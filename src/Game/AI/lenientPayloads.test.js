@@ -181,3 +181,30 @@ test("countryStatSheet: a missing, null or zero statsSchemaVersion is filled bef
   assert.equal(normalizeGameplayPayload("countryStatSheet", { statsSchemaVersion: 2 }).statsSchemaVersion, 2);
   assert.equal(normalizeGameplayPayload("countryStatSheet", "not an object"), "not an object");
 });
+
+// A player's log (2026-10-12): a time skip answered with a bare list of events
+// was sent back for being "an array instead of an object", and the second
+// request came back worse.
+test("a bare list of events is read as the skip's events, the fields beside them empty", () => {
+  const events = [
+    { date: "2016-01-02", title: "Landfall at Manila Bay", description: "It came ashore at dawn." },
+    { date: "2016-01-03", headline: "A program is ordered", summary: "The President signs the directive." },
+  ];
+  const shaped = normalizeGameplayPayload("jumpForward", events);
+  assert.equal(shaped.events.length, 2);
+  assert.equal(shaped.events[1].title, "A program is ordered");
+  assert.equal(shaped.stopDate, "2016-01-03");
+  assert.equal(shaped.summary, "");
+  assert.equal(validateGameplayPayload("jumpForward", shaped).valid, true, validateGameplayPayload("jumpForward", shaped).error);
+  assert.equal(normalizeGameplayPayload("autoJumpForward", events).events.length, 2);
+});
+
+test("a list of anything else is left as it is, and said to be the wrong shape", () => {
+  for (const value of [["action-0-mv5syueg-okgdywp"], [], [{ op: "spawn" }], [{ title: "A headline and nothing else" }], [1, 2, 3]]) {
+    assert.deepEqual(normalizeGameplayPayload("jumpForward", value), value);
+    assert.equal(validateGameplayPayload("jumpForward", value).valid, false);
+  }
+  // Only a time skip: another task's list is that task's business.
+  const events = [{ date: "2016-01-02", title: "Landfall", description: "At dawn." }];
+  assert.deepEqual(normalizeGameplayPayload("actions", events), events);
+});

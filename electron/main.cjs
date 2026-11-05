@@ -13,13 +13,17 @@ const { app, BrowserWindow, dialog, ipcMain, shell, Menu, MenuItem } = require("
 const path = require("node:path");
 const fs = require("node:fs");
 const net = require("node:net");
+const crypto = require("node:crypto");
 const { spawn } = require("node:child_process");
 const { runLaunchUpdate } = require("./launchUpdate.cjs");
-const { recommendBeta } = require("./betaRecommendation.cjs");
 const { BETA_APP_NAME, readChannel } = require("./channel.cjs");
 const { createLayeredUpdater } = require("./layeredUpdate.cjs");
+const { attachZoomKeys } = require("./zoomKeys.cjs");
+const { installMicrophonePermission } = require("./microphone.cjs");
+const { createSystemSpeech } = require("./speechSystem.cjs");
 const { createPayloadUpdater } = require("./payloadUpdate.cjs");
 const payloadBoot = require("./payloadBoot.cjs");
+const { clearOtherPortsCaches } = require("./staleCaches.cjs");
 const { fetchAppFileOnce } = require("./appFile.cjs");
 
 // The map is drawn with WebGL, and without it the game is a black window with
@@ -42,6 +46,7 @@ app.commandLine.appendSwitch("disable-gpu-process-crash-limit");
 // needs both before this file runs, and the two must agree.
 const CHANNEL = readChannel(__dirname);
 const IS_BETA = CHANNEL === "beta";
+const APP_NAME = IS_BETA ? BETA_APP_NAME : "Open Historia";
 
 // Electron derives userData — the Chromium profile, and with it the single-instance
 // lock — from the app name, which for both builds would otherwise be package.json's
@@ -51,7 +56,7 @@ const IS_BETA = CHANNEL === "beta";
 // has to happen HERE, before anything reads a path: the installer's productName
 // does NOT reach Electron (it only names the exe, the install folder and the
 // shortcut).
-if (IS_BETA) app.setName(BETA_APP_NAME);
+if (IS_BETA) app.setName(APP_NAME);
 
 // Where a beta build looks for ITS updates. server.js defaults the desktop track to
 // .../desktop-stable/latest.json, so without this override a tester would be offered
@@ -89,8 +94,9 @@ const BETA_DOWNLOAD_URL = process.platform === "win32"
 // testing the beta a way to quietly damage a real campaign.
 const USER_ROOT = app.getPath("userData");
 const DATA_DIR = path.join(USER_ROOT, "server", "data");
-// The world map is the exception, and it is the safe one to share: ~170MB of
-// pmtiles that scripts/map-assets.json pins by sha256, identical on both branches,
+// The world map is the exception, and it is the safe one to share: ~35MB of
+// pmtiles that scripts/map-assets.json pins by sha256, identical on both branches
+// (so a change to those pins has to reach every branch in the same release),
 // and written through a temp file and a rename. Pointing the beta at the stable
 // app's copy saves a tester that download; with no stable install the fetcher just
 // creates the folder, and a later stable install finds the map already there.
@@ -101,9 +107,12 @@ const ASSETS_DIR = IS_BETA && app.isPackaged
   : path.join(USER_ROOT, "public", "assets");
 
 // The map manifest lists paths relative to a project root ("public/assets/...",
-// "server/data/scenarios/..."), so pointing the fetcher's cwd at USER_ROOT lands
-// every file exactly where DATA_DIR and ASSETS_DIR already expect it — no
-// changes to the fetcher, and one place that decides the layout.
+// "server/data/stock/..."). The server reads them from these two folders, and
+// the fetcher inherits both variables and writes "public/assets/..." into
+// ASSETS_DIR and "server/data/..." into DATA_DIR (assetTarget() below is the
+// same rule, for the setup check). Resolving them against USER_ROOT instead
+// sent a packaged beta's download into its own folder while its server read
+// the stable app's, so the map never rendered however often it downloaded.
 process.env.OH_DATA_DIR = DATA_DIR;
 process.env.OH_ASSETS_DIR = ASSETS_DIR;
 
@@ -312,6 +321,7 @@ const setupAutoUpdater = () => {
     runningVersion: runningVersion(),
     // Nothing to install: the files are in place, and a new start runs them.
     relaunch: () => {
+      logMain("info", "updater.relaunch", "Restarting into the updated files.");
       app.relaunch();
       app.exit(0);
     },
@@ -393,7 +403,74 @@ const MANIFEST = path.join(APP_ROOT, "scripts", "map-assets.json");
 let mainWindow = null;
 let setupWindow = null;
 
+// --- display mode (desktop window state) -----------------------------------
+// Windowed, maximized (the window fills the screen, its title bar kept: a
+// window's frame cannot be taken off once it is made) or fullscreen, which
+// covers the whole screen without borders. The choice is kept beside the app's
+// data and given to the window each time it opens.
+const DISPLAY_MODES = ["windowed", "maximized", "fullscreen"];
+const DISPLAY_MODE_FILE = path.join(USER_ROOT, "display-mode.json");
+const readDisplayMode = () => {
+  try {
+    const mode = JSON.parse(fs.readFileSync(DISPLAY_MODE_FILE, "utf8"))?.mode;
+    return DISPLAY_MODES.includes(mode) ? mode : "windowed";
+  } catch {
+    return "windowed";
+  }
+};
+let currentDisplayMode = "windowed";
+const applyDisplayMode = (win, mode) => {
+  if (!win || win.isDestroyed()) return;
+  if (mode === "fullscreen") {
+    win.setFullScreen(true);
+    return;
+  }
+  if (win.isFullScreen()) win.setFullScreen(false);
+  if (mode === "maximized") win.maximize();
+  else if (win.isMaximized()) win.unmaximize();
+};
+const installDesktopDisplayMode = () => {
+  currentDisplayMode = readDisplayMode();
+  globalThis.__ohDisplayMode = {
+    get: () => {
+      if (!mainWindow || mainWindow.isDestroyed()) return { supported: true, mode: currentDisplayMode };
+      const mode = mainWindow.isFullScreen()
+        ? "fullscreen"
+        : mainWindow.isMaximized()
+          ? "maximized"
+          : "windowed";
+      return { supported: true, mode };
+    },
+    set: (mode) => {
+      currentDisplayMode = mode;
+      try {
+        fs.writeFileSync(DISPLAY_MODE_FILE, JSON.stringify({ mode }));
+      } catch (error) {
+        logMain("warn", "display-mode.save", String(error?.message || error));
+      }
+      applyDisplayMode(mainWindow, mode);
+      return { supported: true, mode };
+    },
+  };
+};
+
+// The Advisor's microphone through the system's own speech recognition
+// (speechSystem.cjs), for POST /api/desktop/speech/listen.
+const installSystemSpeech = () => {
+  globalThis.__ohSystemSpeech = createSystemSpeech({ log: (level, event, message) => logMain(level, event, message) });
+};
+
 // --- map data ---------------------------------------------------------------
+
+// Where a manifest path lives on disk: the rule scripts/fetch-map-assets.mjs
+// applies with the OH_ASSETS_DIR / OH_DATA_DIR set above, so the setup check
+// looks where the download writes and the server reads.
+const assetTarget = (assetPath) => {
+  const rel = String(assetPath).replace(/\\/g, "/");
+  if (rel.startsWith("public/assets/")) return path.join(ASSETS_DIR, rel.slice("public/assets/".length));
+  if (rel.startsWith("server/data/")) return path.join(DATA_DIR, rel.slice("server/data/".length));
+  return path.join(USER_ROOT, rel);
+};
 
 // Which manifest entries are still missing or the wrong size. Cheap (a stat per
 // file) and it is what decides whether the setup screen is shown at all, so a
@@ -415,7 +492,7 @@ const relocateLegacyStockMap = () => {
     const manifest = JSON.parse(fs.readFileSync(MANIFEST, "utf8"));
     const stock = (manifest.assets ?? []).find((asset) => asset.path === "server/data/stock/regions.geojson");
     if (!stock) return;
-    const target = path.join(USER_ROOT, stock.path);
+    const target = assetTarget(stock.path);
     const legacy = path.join(USER_ROOT, "server", "data", "scenarios", "default", "regions.geojson");
     if (fs.existsSync(target) || !fs.existsSync(legacy)) return;
     // A file of another size is a map the player put there, not ours to move.
@@ -427,6 +504,73 @@ const relocateLegacyStockMap = () => {
   }
 };
 
+// A file's SHA-256, read a megabyte at a time: a map archive runs to 100 MB,
+// and this is the main process.
+const sha256OfFile = (file) => {
+  const hash = crypto.createHash("sha256");
+  const chunk = Buffer.allocUnsafe(1 << 20);
+  const fd = fs.openSync(file, "r");
+  try {
+    for (;;) {
+      const read = fs.readSync(fd, chunk, 0, chunk.length, null);
+      if (read <= 0) break;
+      hash.update(chunk.subarray(0, read));
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+  return hash.digest("hex");
+};
+
+// Until this build the fetcher resolved every manifest path against USER_ROOT,
+// so a packaged beta that has been through the setup download holds the whole
+// map under its OWN public/assets, where its server never looked. With the
+// check, the download and the server now agreed on the shared folder, that
+// install would be sent through the same 230 MB a second time. Each such file
+// is moved to where it is read instead, BEFORE the manifest is checked, as the
+// stock map is above.
+//
+// Only a file that is the published one, byte for byte: the folder it goes to
+// is the stable app's too, the setup check trusts a file's size, and a file of
+// the right length with other contents would be both apps' map from then on. A
+// file already in the shared folder at the right size stays, and so does ours.
+// Returns the release names of the files it moved.
+const relocateOwnFolderMap = () => {
+  let manifest;
+  try {
+    manifest = JSON.parse(fs.readFileSync(MANIFEST, "utf8"));
+  } catch {
+    return [];
+  }
+  const moved = [];
+  for (const asset of manifest.assets ?? []) {
+    try {
+      const target = assetTarget(asset.path);
+      const own = path.join(USER_ROOT, String(asset.path));
+      // One folder: the stable build, a dev run, and what the beta keeps for itself.
+      if (path.resolve(own) === path.resolve(target)) continue;
+      if (fs.statSync(own).size !== asset.bytes) continue;
+      let inPlace = false;
+      try {
+        inPlace = fs.statSync(target).size === asset.bytes;
+      } catch {
+        inPlace = false;
+      }
+      if (inPlace || sha256OfFile(own) !== asset.sha256) continue;
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.renameSync(own, target);
+      moved.push(asset.asset);
+    } catch {
+      // Best effort, a file at a time: nothing of ours there, or it could not
+      // be moved, and the fetcher downloads it.
+    }
+  }
+  if (moved.length) {
+    logMain("info", "map.relocated", `Moved ${moved.length} map file(s) this app had downloaded into its own folder to the folder its server reads.`, { assets: moved });
+  }
+  return moved;
+};
+
 const missingAssets = () => {
   let manifest;
   try {
@@ -436,10 +580,26 @@ const missingAssets = () => {
   }
   return (manifest.assets ?? []).filter((asset) => {
     try {
-      return fs.statSync(path.join(USER_ROOT, asset.path)).size !== asset.bytes;
+      return fs.statSync(assetTarget(asset.path)).size !== asset.bytes;
     } catch {
       return true;
     }
+  });
+};
+
+// The fetcher reports a file it could not get only on stderr ("[warn] could not
+// download ..."), and a packaged app shows no console, so each line goes to the
+// Desktop log a player sends with a report.
+const logFetcherStderr = (child, event) => {
+  let pending = "";
+  child.stderr.on("data", (chunk) => {
+    pending += chunk.toString();
+    const lines = pending.split(/\r?\n/);
+    pending = lines.pop() ?? "";
+    for (const line of lines) if (line.trim()) logMain("warn", event, line.trim());
+  });
+  child.stderr.on("end", () => {
+    if (pending.trim()) logMain("warn", event, pending.trim());
   });
 };
 
@@ -453,6 +613,7 @@ const downloadMapData = (onProgress) =>
       env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
       stdio: ["ignore", "pipe", "pipe"],
     });
+    logFetcherStderr(child, "map.download");
     let buffer = "";
     child.stdout.on("data", (chunk) => {
       buffer += chunk.toString();
@@ -485,7 +646,7 @@ const verifyMapData = () => {
     env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
     stdio: ["ignore", "pipe", "pipe"],
   });
-  child.stderr.on("data", (chunk) => console.warn(`[map-verify] ${String(chunk).trim()}`));
+  logFetcherStderr(child, "map.verify");
   child.on("error", () => {});
 };
 
@@ -503,6 +664,14 @@ const createSetupWindow = () =>
     backgroundColor: "#131315",
     show: false,
     webPreferences: { preload: path.join(__dirname, "preload.cjs") },
+  });
+
+// After a download that left files missing, the setup window offers "Try
+// again" or "Continue without the map"; resolves with "retry" or "continue".
+// Closing the window instead quits the app, as it always has.
+const waitForSetupChoice = () =>
+  new Promise((resolve) => {
+    ipcMain.handleOnce("setup:choice", (_event, choice) => resolve(choice === "retry" ? "retry" : "continue"));
   });
 
 // The fetcher keeps printing progress after a player closes the setup window
@@ -594,7 +763,7 @@ const handlePageGone = (win, details, { quitting: isQuitting = false } = {}) => 
   const reason = String(details?.reason || "unknown");
   if (reason === "clean-exit" || isQuitting || !win || win.isDestroyed()) return false;
   logMain("error", "window.pageGone", `The game's page stopped (${reason}).`, { reason, exitCode: details?.exitCode });
-  const name = IS_BETA ? BETA_APP_NAME : "Open Historia";
+  const name = APP_NAME;
   const { message, detail } = pageGoneWording(reason, name);
   dialog
     .showMessageBox(win, { type: "error", title: name, message, detail, buttons: ["Reload", "Quit"], defaultId: 0, cancelId: 1, noLink: true })
@@ -625,10 +794,17 @@ const createMainWindow = () => {
     autoHideMenuBar: true,
     backgroundColor: "#131315",
     show: false,
-    title: IS_BETA ? BETA_APP_NAME : "Open Historia",
+    title: APP_NAME,
     // Explicit even though it's already Electron's default — the whole reason
     // this window needs a context menu at all is to surface what this enables.
     webPreferences: { spellcheck: true },
+  });
+  // Ctrl+= zooms in as Ctrl+- zooms out (zoomKeys.cjs).
+  attachZoomKeys(win.webContents);
+  // The Advisor's microphone, for the game's own page only (microphone.cjs).
+  installMicrophonePermission(win.webContents.session, {
+    origin: () => `http://localhost:${process.env.PORT || 3000}`,
+    systemPreferences: require("electron").systemPreferences,
   });
   // Links to GitHub/Discord open in the real browser rather than replacing the
   // game with a page the player cannot navigate back from.
@@ -653,6 +829,37 @@ const createMainWindow = () => {
     return { action: "deny" };
   });
 
+  // On Windows, after the page's alert/confirm/prompt closes, the window has
+  // focus but the page gets no keyboard input (a chat cannot be typed into)
+  // until the window is focused again, which is what Alt+Tab fixes. The page is
+  // given wrappers that log a marker when such a dialog closes, and the window
+  // is refocused on it. Done from here, not a preload: this window has none, on
+  // purpose (see the build id above).
+  if (process.platform === "win32") {
+    const DIALOG_CLOSED = "__oh_dialog_closed__";
+    win.webContents.on("dom-ready", () => {
+      win.webContents.executeJavaScript(`(() => {
+        for (const name of ["alert", "confirm", "prompt"]) {
+          const original = window[name];
+          if (typeof original !== "function" || original.ohRefocus) continue;
+          const wrapped = function (...args) {
+            try { return original.apply(window, args); } finally { console.debug(${JSON.stringify(DIALOG_CLOSED)}); }
+          };
+          wrapped.ohRefocus = true;
+          window[name] = wrapped;
+        }
+      })();`).catch(() => {});
+    });
+    win.webContents.on("console-message", (...args) => {
+      // Electron passes one details object; older versions passed (event, level, message).
+      const message = typeof args[2] === "string" ? args[2] : args[0]?.message;
+      if (message !== DIALOG_CLOSED || win.isDestroyed()) return;
+      win.blur();
+      win.focus();
+      win.webContents.focus();
+    });
+  }
+
   // Keep the game IN the game window. This window has no address bar, no back
   // button and an auto-hidden menu, so a link that navigates it away strands the
   // player on a page they cannot leave — and hands anything that can render a
@@ -668,7 +875,12 @@ const createMainWindow = () => {
   attachEditingContextMenu(win);
   win.webContents.on("render-process-gone", (_event, details) => handlePageGone(win, details, { quitting }));
   win.once("ready-to-show", () => {
+    // The display mode chosen last time (installDesktopDisplayMode).
+    if (currentDisplayMode !== "windowed") applyDisplayMode(win, currentDisplayMode);
     win.show();
+    // How far a start got: an app that closes before this line never showed
+    // its window.
+    logMain("info", "window.shown", `The game's window is up (${currentDisplayMode}).`);
     // The game's window is up. When these files are a set an update put
     // together, that is what says they start (electron/bootstrap.cjs counts a
     // start that never gets here, and gives the set up after two).
@@ -744,12 +956,16 @@ const findFreePort = async (start, attempts = 20) => {
   throw new Error(`No free port found in ${start}-${start + attempts - 1}.`);
 };
 
+// The port this launch asked for, before the search moved on from a taken one.
+let requestedPort = 3000;
+
 // Starting the server is importing it: server.js calls app.listen() at module
 // scope. It reads OH_DATA_DIR / OH_ASSETS_DIR / PORT, all set before the import.
 const startServer = async () => {
   fs.mkdirSync(DATA_DIR, { recursive: true });
   fs.mkdirSync(ASSETS_DIR, { recursive: true });
   const requested = Number(process.env.PORT) || 3000;
+  requestedPort = requested;
   const port = await findFreePort(requested);
   if (port !== requested) {
     console.log(`Port ${requested} is in use — starting Open Historia on ${port} instead.`);
@@ -760,11 +976,36 @@ const startServer = async () => {
   await import(`file://${path.join(APP_ROOT, "server", "server.js").replace(/\\/g, "/")}`);
 };
 
+// An unsigned Mac app opened where it was downloaded, rather than from the
+// Applications folder it was dragged to, is run by macOS from a temporary
+// read-only copy (App Translocation). Restarting from that copy is not to be
+// relied on: an update installed at launch that restarts the app can leave the
+// player with a window that opened and closed. There the update is left for the
+// next start, which runs it, and the game opens at once.
+const runsTranslocated = () => process.platform === "darwin" && process.execPath.includes("/AppTranslocation/");
+
 const boot = async () => {
   // Which copy of the app's files this start runs: the installed ones, or a
   // set an update put together (electron/bootstrap.cjs decided, and says why).
   const files = globalThis.__ohPayload;
-  logMain("info", "app.files", files?.root ? `update ${files.build}, from ${files.root}` : `as installed (${files?.reason || "no bootstrap"})`);
+  logMain("info", "app.files", files?.root ? `update ${files.build}, from ${files.root}` : `as installed (${files?.reason || "no bootstrap"})`, {
+    // Which computer this start is on: a report of an app that will not open
+    // says little without the system and the chip.
+    system: `${process.platform} ${process.arch} ${(() => {
+      try {
+        return require("node:os").release();
+      } catch {
+        return "";
+      }
+    })()}`,
+    electron: process.versions.electron,
+    // Where the app runs from: the Applications folder, where it was
+    // downloaded, or macOS's temporary copy of it (runsTranslocated).
+    from: path.dirname(process.execPath),
+  });
+  // The server's port can be taken after the free one was found; it reports
+  // that here, so the player is told rather than the app closing (server.js).
+  globalThis.__ohFatal = reportFatalBootError;
   const updater = installAutoUpdater();
   // Opening the game installs a waiting update before anything else starts
   // (electron/launchUpdate.cjs); the banner is for one found while it is open.
@@ -778,6 +1019,7 @@ const boot = async () => {
     // beta has nothing newer to offer.
     send: (payload) => sendToSetup("setup:update", { ...payload, betaOffer: !IS_BETA }),
     waitForLater: waitForUpdateLater,
+    canRestart: () => !runsTranslocated(),
     log: logMain,
   }).catch((error) => {
     logMain("warn", "updater.launchFailed", String(error?.message || error));
@@ -797,9 +1039,12 @@ const boot = async () => {
     fetchImpl: (url, init) => require("electron").net.fetch(url, init),
     log: logMain,
   });
+  installDesktopDisplayMode();
+  installSystemSpeech();
   relocateLegacyStockMap();
-  const pending = missingAssets();
-  if (pending.length) {
+  relocateOwnFolderMap();
+  let pending = missingAssets();
+  while (pending.length) {
     await openSetupWindow();
     const totalBytes = pending.reduce((sum, asset) => sum + asset.bytes, 0);
     let doneBytes = 0;
@@ -816,30 +1061,41 @@ const boot = async () => {
         assetTotal: total,
       });
     });
-    sendToSetup("setup:done");
+    // The fetcher always exits 0 (it must never block a launch or an update),
+    // so whether the download worked is read off the disk. A player who hit a
+    // network blip used to be sent into a blank world with no word about it.
+    pending = missingAssets();
+    if (!pending.length) {
+      sendToSetup("setup:done");
+      break;
+    }
+    logMain("warn", "map.incomplete", `${pending.length} map file(s) still missing after the download.`, {
+      assets: pending.map((asset) => asset.asset),
+    });
+    sendToSetup("setup:failed", { missing: pending.length });
+    if ((await waitForSetupChoice()) !== "retry") {
+      sendToSetup("setup:done");
+      break;
+    }
   }
 
   await startServer();
   mainWindow = createMainWindow();
   const port = process.env.PORT || 3000;
+  // Not awaited: these are other origins than the one about to load, and
+  // deleting gigabytes must not hold the window up.
+  clearOtherPortsCaches(mainWindow.webContents.session, { port: Number(port), requested: requestedPort })
+    .then((cleared) => {
+      if (cleared.failed) logMain("warn", "cache.otherPorts", `${cleared.failed} of ${cleared.origins} other ports' caches could not be cleared.`);
+    })
+    .catch(() => {});
   await mainWindow.loadURL(`http://localhost:${port}`);
   setupWindow?.close();
   setupWindow = null;
-  // The stable app asks, once for every build it runs, whether the player
-  // wants the beta: after a first install and after each update
-  // (electron/betaRecommendation.cjs). Over the open game, never in front of
-  // an update or the map download, and never allowed to stop the game.
-  recommendBeta({
-    fs,
-    recordFile: path.join(USER_ROOT, "beta-recommendation.json"),
-    isBeta: IS_BETA,
-    isPackaged: app.isPackaged,
-    version: app.getVersion(),
-    payloadBuild: files?.root ? String(files.build ?? "") : "",
-    ask: (options) => dialog.showMessageBox(mainWindow, { ...options, title: "Open Historia" }),
-    open: () => shell.openExternal(BETA_DOWNLOAD_URL),
-    log: logMain,
-  }).catch((error) => logMain("warn", "beta.recommendation.failed", String(error?.message || error)));
+  // No dialog asks the player to get the beta any more: "make it so when beta
+  // is merged to main this popup is removed from the stable app" (the owner,
+  // 2026-11-02). The beta never showed it; the stable app stops once this
+  // reaches main. The update window's own Download the beta button stays.
   // The game is up; now confirm the map on disk is still the map we shipped.
   verifyMapData();
 };
@@ -851,7 +1107,7 @@ const boot = async () => {
 const reportFatalBootError = (error) => {
   const message = String((error && error.message) || error || "Unknown error");
   logMain("error", "main.bootFailed", message, { code: error && error.code });
-  const name = IS_BETA ? BETA_APP_NAME : "Open Historia";
+  const name = APP_NAME;
   const portClash = (error && error.code === "EADDRINUSE") || message.includes("EADDRINUSE") || message.startsWith("No free port");
   dialog.showErrorBox(
     `${name} could not start`,
@@ -868,19 +1124,31 @@ const reportFatalBootError = (error) => {
 
 // One instance only: a second launch would hit EADDRINUSE on the server port and
 // die, which reads to the player as "the app is broken".
+
+// The game's window, brought forward: by a second launch, and on macOS by a
+// click on the app in the Dock or in Finder while it is running, which starts
+// nothing new and used to show nothing either.
+const bringGameForward = () => {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  if (!mainWindow.isVisible()) mainWindow.show();
+  mainWindow.focus();
+};
+
 if (!app.requestSingleInstanceLock()) {
+  // Another copy of the app holds the lock and is brought forward instead.
+  // Said in the log, because from outside this start looks like an app that
+  // opens and closes at once.
+  logMain("info", "app.alreadyRunning", "Another copy of the app is running; it was brought forward and this start closed.");
   app.quit();
 } else {
-  app.on("second-instance", () => {
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) mainWindow.restore();
-      mainWindow.focus();
-    }
-  });
+  app.on("second-instance", bringGameForward);
+  app.on("activate", bringGameForward);
   app.whenReady().then(boot).catch(reportFatalBootError);
   app.on("window-all-closed", () => app.quit());
   app.on("before-quit", () => {
     quitting = true;
+    globalThis.__ohSystemSpeech?.stopAll();
   });
   ipcMain.handle("setup:cancel", () => app.quit());
   // "Download the beta" on the update screen: in the player's own browser, so

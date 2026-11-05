@@ -21,10 +21,13 @@
 
 const FMG_PATH = "/fmg/index.html";
 const READY_TIMEOUT_MS = 90000;
+// The most cultures the driver asks FMG for; the panel's Cultures input stops here too.
+export const MAX_CULTURES = 30;
 const MAP_W = 1920;
 const MAP_H = 1080;
-// Synchronous, in-memory heightmap templates (no image load → never hang).
-const SYNC_TEMPLATES = ["continents", "archipelago", "pangea", "mediterranean", "peninsula", "isthmus", "atoll", "highIsland", "lowIsland", "volcano", "shattered", "fractious"];
+// Synchronous, in-memory heightmap templates (no image load → never hang). The
+// Generate panel lists exactly these, after "random".
+export const SYNC_TEMPLATES = ["continents", "archipelago", "pangea", "mediterranean", "peninsula", "isthmus", "atoll", "highIsland", "lowIsland", "volcano", "shattered", "fractious"];
 // For "random" (or an unknown template) pick only from world-scale shapes — skip the
 // tiny-island templates (atoll/volcano/lowIsland) that make poor whole-world basemaps.
 // Deterministic for a given seed so re-running the same seed reproduces the same map.
@@ -103,7 +106,7 @@ const need = (cond, what) => {
 //    inner inputs; clamped to FMG's 1–100 range (120 silently fails).
 const setup = (win, params) => {
   const states = Math.min(100, Math.max(1, Math.round(Number(params.states) || 12)));
-  const cultures = Math.min(30, Math.max(1, Math.round(Number(params.cultures) || 8)));
+  const cultures = Math.min(MAX_CULTURES, Math.max(1, Math.round(Number(params.cultures) || 8)));
   // Cities: FMG's burgs = one capital per state + `manors` non-capital towns. The
   // panel's count is a TOTAL, so towns = total − capitals (clamped to FMG's 0–999;
   // 1000 = "auto"). 0/blank leaves manors unlocked → FMG auto-scales cities to the map.

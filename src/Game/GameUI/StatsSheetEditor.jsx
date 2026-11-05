@@ -1,5 +1,5 @@
 /*! Open Historia — scenario-defined National Stats sheet editor © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useRef, useState } from "react";
 import {
   MAX_CUSTOM_STATS,
   MAX_STAT_SECTIONS,
@@ -189,8 +189,7 @@ const StatPreview = ({ stat, minWidth = 0 }) => (
       <span aria-hidden="true" style={{ flex: "0 0 auto", fontSize: "0.9rem", width: "1.15rem" }}>{stat.icon || "◆"}</span>
       <span style={{ color: "rgba(255,255,255,0.91)", flex: "1 1 8rem", fontSize: "0.76rem", fontWeight: 780, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{stat.label}</span>
       <span style={{ color: "rgba(255,255,255,0.28)", flex: "0 1 7rem", fontFamily: "monospace", fontSize: "0.58rem", maxWidth: "35%", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{stat.key}</span>
-      <span style={{ color: "rgba(255,255,255,0.45)", flex: "0 1 auto", fontSize: "0.64rem", fontWeight: 800, marginLeft: "auto", maxWidth: "40%", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{compactPreviewValue(stat)}</span>
-    </div>
+      <span style={{ color: "rgba(255,255,255,0.45)", flex: "0 1 auto", fontSize: "0.64rem", fontWeight: 800, marginLeft: "auto", maxWidth: "40%", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{compactPreviewValue(stat)}</span>    </div>
     {stat.kind === "index" && (
       <div style={{ background: "rgba(255,255,255,0.09)", borderRadius: "999px", height: "5px", marginTop: "0.4rem", overflow: "hidden" }}>
         <div style={{ background: stat.color || "rgba(255,255,255,0.22)", borderRadius: "999px", height: "100%", width: "67%" }} />
@@ -287,16 +286,28 @@ const StatsSheetEditor = ({ value, onChange }) => {
   const [dragItem, setDragItem] = useState(null);
   const touch = useTouchPrimary();
   const isMobile = useIsMobile();
+  // The custom sheet "Use standard sheet" last replaced. The editor has no undo
+  // and nothing is written until the scenario is saved, so "Customize full
+  // sheet" brings this back rather than the default layout.
+  const lastCustomSectionsRef = useRef(null);
 
   const emitSections = (nextSections) => onChange?.({ custom: true, version: 2, sections: nextSections });
 
   const enableCustom = () => {
     setEditingStatKey("");
     setEditingSectionKey("");
-    onChange?.(defaultCustomStatSheetDefinition());
+    const restored = lastCustomSectionsRef.current;
+    onChange?.(restored ? { custom: true, version: 2, sections: restored } : defaultCustomStatSheetDefinition());
   };
 
+  // Replaces every section, stat, description and AI guidance at once: asked first.
   const useStandard = () => {
+    const count = flattenStatSheetRows({ custom: true, sections }).length;
+    const question = count === 1
+      ? "Replace your 1 custom statistic with the standard sheet?"
+      : `Replace your ${count} custom statistics with the standard sheet?`;
+    if (!window.confirm(question)) return;
+    lastCustomSectionsRef.current = sections;
     setEditingStatKey("");
     setEditingSectionKey("");
     onChange?.({ custom: false, version: 2, sections: defaultCustomStatSheetDefinition().sections });
@@ -327,6 +338,15 @@ const StatsSheetEditor = ({ value, onChange }) => {
 
   const removeSection = (sectionKey) => {
     if (sections.length <= 1) return;
+    // A section takes its stats with it: asked first when it has any.
+    const doomed = sections.find((section) => section.key === sectionKey);
+    const count = doomed?.stats?.length || 0;
+    if (count > 0) {
+      const question = count === 1
+        ? `Delete the section "${doomed.label}" and the statistic in it?`
+        : `Delete the section "${doomed.label}" and the ${count} statistics in it?`;
+      if (!window.confirm(question)) return;
+    }
     emitSections(sections.filter((section) => section.key !== sectionKey));
     if (editingSectionKey === sectionKey) setEditingSectionKey("");
   };
@@ -534,20 +554,17 @@ const StatsSheetEditor = ({ value, onChange }) => {
                   onDragEnd={() => setDragItem(null)}
                   style={{ ...buttonStyle(false), cursor: "grab", flex: "0 0 auto", minWidth: "2rem", padding: 0 }}
                 >☰</button>
-              )}
-              <span style={{ fontSize: "0.9rem" }}>{section.icon || "◆"}</span>
+              )}              <span style={{ fontSize: "0.9rem" }}>{section.icon || "◆"}</span>
               <div style={{ flex: 1, minWidth: touch ? "8rem" : 0 }}>
                 <div style={{ color: "rgba(255,255,255,0.9)", fontSize: "0.72rem", fontWeight: 850, letterSpacing: "0.06em", overflow: "hidden", textOverflow: "ellipsis", textTransform: "uppercase", whiteSpace: "nowrap" }}>{section.label}</div>
-                <div style={{ color: "rgba(255,255,255,0.28)", fontFamily: "monospace", fontSize: "0.56rem", marginTop: "0.1rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{section.key} · {section.stats.length} stat{section.stats.length === 1 ? "" : "s"}</div>
-              </div>
+                <div style={{ color: "rgba(255,255,255,0.28)", fontFamily: "monospace", fontSize: "0.56rem", marginTop: "0.1rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{section.key} · {section.stats.length} stat{section.stats.length === 1 ? "" : "s"}</div>              </div>
               {touch ? (
                 <div style={{ display: "flex", flex: "0 0 auto", gap: "0.32rem", marginLeft: "auto" }}>
                   <button type="button" className="oh-tap" aria-label={`Move section ${section.label} up`} title="Move up" disabled={sectionIndex === 0} onClick={() => moveSectionBy(sectionIndex, -1)} style={touchFit({ ...buttonStyle(false), minWidth: "2rem", opacity: sectionIndex === 0 ? 0.4 : 1, padding: 0 }, touch, { icon: true })}>▲</button>
                   <button type="button" className="oh-tap" aria-label={`Move section ${section.label} down`} title="Move down" disabled={sectionIndex === sections.length - 1} onClick={() => moveSectionBy(sectionIndex, 1)} style={touchFit({ ...buttonStyle(false), minWidth: "2rem", opacity: sectionIndex === sections.length - 1 ? 0.4 : 1, padding: 0 }, touch, { icon: true })}>▼</button>
                   {sectionActions}
                 </div>
-              ) : sectionActions}
-            </div>
+              ) : sectionActions}            </div>
 
             {sectionEditing && (
               <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", display: "grid", gap: "0.55rem", gridTemplateColumns: "minmax(0,1fr) 5rem", padding: "0.62rem" }}>
@@ -564,8 +581,7 @@ const StatsSheetEditor = ({ value, onChange }) => {
             )}
 
             <div style={{ display: "grid", gap: "0.48rem", maxWidth: "100%", minWidth: 0, padding: "0.58rem" }}>
-              {section.stats.map((stat, statIndex) => {
-                const editing = editingStatKey === stat.key;
+              {section.stats.map((stat, statIndex) => {                const editing = editingStatKey === stat.key;
                 const canMoveUp = Boolean(statStep(sectionIndex, statIndex, -1));
                 const canMoveDown = Boolean(statStep(sectionIndex, statIndex, 1));
                 return (
@@ -615,8 +631,7 @@ const StatsSheetEditor = ({ value, onChange }) => {
                           </>
                         )}
                         <button type="button" className="oh-tap" aria-label={`Edit ${stat.label}`} title="Edit" onClick={() => setEditingStatKey(editing ? "" : stat.key)} style={touchFit({ ...buttonStyle(false), minWidth: "2rem", padding: 0 }, touch, { icon: true })}>✎</button>
-                        <button type="button" className="oh-tap" aria-label={`Delete ${stat.label}`} title={totalStats <= 1 ? "A custom sheet needs at least one statistic" : "Delete"} disabled={totalStats <= 1} onClick={() => removeStat(section.key, stat.key)} style={touchFit({ ...buttonStyle(false), color: "#fca5a5", minWidth: "2rem", opacity: totalStats <= 1 ? 0.4 : 1, padding: 0 }, touch, { icon: true })}>🗑</button>
-                      </div>
+                        <button type="button" className="oh-tap" aria-label={`Delete ${stat.label}`} title={totalStats <= 1 ? "A custom sheet needs at least one statistic" : "Delete"} disabled={totalStats <= 1} onClick={() => removeStat(section.key, stat.key)} style={touchFit({ ...buttonStyle(false), color: "#fca5a5", minWidth: "2rem", opacity: totalStats <= 1 ? 0.4 : 1, padding: 0 }, touch, { icon: true })}>🗑</button>                      </div>
                     </div>
                     {editing && <StatEditor stat={stat} onPatch={(patch) => patchStat(section.key, stat.key, patch)} />}
                   </div>

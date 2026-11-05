@@ -13,6 +13,9 @@
 // reads is the name it writes back. Pure: no IO, shared by the game, the
 // Workshop export and the tests.
 
+import { normalizeMilitaryStats } from "./militaryStats.js";
+import { populationFigureOf } from "./populationFigure.js";
+
 export const GROUP_NAME_MAX = 80;
 export const GROUP_DESCRIPTION_MAX = 1200;
 export const MAX_GROUPS = 64;
@@ -77,6 +80,10 @@ const normalizeGroup = (key, value) => {
     name,
     description: normalizeGroupDescription(record.description ?? record.note),
     color: normalizeGroupColor(record.color) || defaultGroupColor(name),
+    // Its people when the scenario begins, where its author says (populationFigure.js).
+    ...(populationFigureOf(record) > 0 ? { population: populationFigureOf(record) } : {}),
+    // Its own military figures, where its author gives them (militaryStats.js).
+    ...(normalizeMilitaryStats(record.military) ? { military: normalizeMilitaryStats(record.military) } : {}),
     ...(formerNames.length ? { formerNames } : {}),
   };
 };
@@ -142,6 +149,8 @@ export const normalizeGroupOp = (entry) => {
     ...(color ? { color } : {}),
     regionIds,
     note: clean(entry.note).slice(0, 300),
+    // An area the front engine moved with the line (see normalizeRegionControlOp).
+    ...(entry.by === "front" ? { by: "front" } : {}),
   };
 };
 

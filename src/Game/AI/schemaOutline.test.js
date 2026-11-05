@@ -183,8 +183,8 @@ test("a skip's outline opens with its events, and an event ends with its impacts
   assert.ok(at('"events": [') < at('"stopDate": string'), "the events are written first, so they can be shown as they are written");
   assert.ok(at('"title": string') < at('"description": string'));
   assert.ok(at('"combatants"?: [string]') < at('"impacts"?: {'), "an event's consequences come after its text");
-  assert.ok(at('"projectOps"?: [') > at('"regionClaims"?: ['), "the board after every other consequence");
-  assert.ok(at(`"${AGENT_REPORTS_FIELD}"?: [`) > at('"agreementUpdates"?: string'), "the agents' reports after everything they must agree with");
+  assert.ok(at('"projectOps"?: [') > at('"groupOps"?: ['), "the board after every other consequence");
+  assert.ok(at(`"${AGENT_REPORTS_FIELD}"?: [`) > at('"puppetUpdates"?: string'), "the agents' reports after everything they must agree with");
   assert.ok(outline.trimEnd().endsWith("}"));
 });
 

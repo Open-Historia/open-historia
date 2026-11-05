@@ -1,24 +1,37 @@
 /*! Open Historia — portions (standalone map-editor mode) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Component, lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import UI from "./Game/GameUI/main.jsx";
 
 // Lazy so OpenLayers is only fetched when the editor is actually opened.
 const MapEditor = lazy(() => import("./Editor/MapEditor.jsx"));
 // Lazy too: the map and MapLibre with it (over 1 MB) are fetched and parsed
-// while the startup screen is already up, not before it can draw, and the
-// editor never loads them. Nothing outside Game/Map imports maplibre-gl.
+// only when a game is opened (runtime/gameEntry.js), never for the main menu,
+// and the editor never loads them. Nothing outside Game/Map imports maplibre-gl.
 const WorldMap = lazy(() => import("./Game/Map/World.jsx"));
+// What the update brings, behind the vault door (Game/GameUI/updates/): loaded only when there is one to show.
+const UpdateNotice = lazy(() => import("./Game/GameUI/updates/UpdateNotice.jsx"));
+// The first-time setup (language, then theme), before the door: once a device.
+const FirstSetup = lazy(() => import("./Game/GameUI/FirstSetup.jsx"));
 import StartupScreen from "./runtime/StartupScreen.jsx";
 import ErrorBoundary from "./runtime/ErrorBoundary.jsx";
 import AppUpdateBanner from "./runtime/AppUpdateBanner.jsx";
 import {
   STARTUP_TIME_BUDGET_MS,
-  createInitialStartupState,
+  createMenuStartupState,
   runStartupPreload,
 } from "./runtime/preload.js";
 import { ensureLibraryCatalog, useLibraryState } from "./runtime/library.js";
+import { hasEnteredGame, useGameEntered } from "./runtime/gameEntry.js";
+import { VaultDoor } from "./Game/GameUI/VaultDoor.jsx";
+import { holdMusicBehindDoor } from "./runtime/ambientMusic.js";
+import { vaultDoorAlways } from "./runtime/mapSettings.js";
+import { decideVaultDoor, rememberVaultDoorBuild } from "./runtime/vaultDoorDue.js";
+import { pendingUpdates, previewedUpdates, rememberUpdate } from "./Game/GameUI/updates/updateNotices.js";
+import { firstSetupDue } from "./runtime/firstSetupDue.js";
+import { appBuildId } from "./runtime/buildId.js";
 import { announceMapRerender } from "./runtime/mapReadiness.js";
 import { prefetchGameplay } from "./Game/AI/gameplayLazy.js";
+import { isConstrainedDevice } from "./runtime/deviceProfile.js";
 
 const WorldShell = {
   backgroundColor: "#000",
@@ -31,14 +44,100 @@ const WorldShell = {
   touchAction: "none",
 };
 
+// The vault door is an ornament, and the main menu is behind it: should the
+// door ever fail to draw, it is taken away and the menu is simply there,
+// rather than the whole page going to the error screen with the menu shut in.
+class DoorFrame extends Component {
+  state = { failed: false };
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  componentDidCatch(error) {
+    console.warn("The vault door could not be drawn:", error);
+    this.props.onFailed?.();
+  }
+
+  render() {
+    return this.state.failed ? null : this.props.children;
+  }
+}
+
 function GameApp() {
   const mapRef = useRef(null);
-  const preloadStartedAtRef = useRef(null);
-  const preloadFinishedRef = useRef(false);
   const worldIdleRef = useRef(false);
-  const [startupState, setStartupState] = useState(createInitialStartupState);
+  const [startupState] = useState(createMenuStartupState);
   const [isReady, setIsReady] = useState(false);
-  const [hasFirstWorldIdle, setHasFirstWorldIdle] = useState(false);
+  // The page starts on the main menu with no game loaded behind it: no map,
+  // none of a game's regions, tiles, borders or labels. The map is mounted when
+  // the player opens a game (runtime/gameEntry.js says who counts as opening
+  // one), and from then on stays, as it always has, behind a menu gone back to.
+  const gameEntered = useGameEntered();
+  // What the player meets once the startup screen is done: a vault door, shut
+  // over the main menu, to be opened by its wheel (GameUI/VaultDoor.jsx). The
+  // menu's music waits behind it and begins as the leaves part. Once a page:
+  // going back to the menu from a game does not shut it again.
+  //
+  // It shows the first time the game opens after an update, or at every
+  // opening with Every time the game opens on (runtime/vaultDoorDue.js), so
+  // whether this opening is one is decided first ("deciding"): the running
+  // build is asked of the desktop app's own server (runtime/buildId.js), and
+  // the music is held meanwhile.
+  const [door, setDoor] = useState(() => {
+    holdMusicBehindDoor(true);
+    return "deciding";
+  });
+  // The first-time setup (GameUI/FirstSetup.jsx) comes before the door, once a
+  // device: on a new install and the first time a build with it runs. The door
+  // shuts behind it whatever the build, so the setup always gives onto it.
+  const [setupDue, setSetupDue] = useState(() => firstSetupDue());
+  const setupRef = useRef(setupDue);
+  // The build the door is shown for, kept when it has opened.
+  const doorBuildRef = useRef("");
+  useEffect(() => {
+    if (door !== "deciding") return undefined;
+    let live = true;
+    decideVaultDoor({
+      always: vaultDoorAlways(),
+      resolveBuild: () => appBuildId({ env: import.meta.env }),
+    })
+      .catch(() => ({ show: false, build: "" }))
+      .then(({ show, build }) => {
+        if (!live) return;
+        doorBuildRef.current = build;
+        const shut = show || setupRef.current;
+        // Not this time: there is nothing for the music to wait behind.
+        if (!shut) holdMusicBehindDoor(false);
+        setDoor(shut ? "shut" : "open");
+      });
+    return () => {
+      live = false;
+    };
+  }, [door]);
+  // What the update brings (Game/GameUI/updates/notes.js): each new update once a device, behind the door, so
+  // the door opens onto it; shown as the leaves part (or at once, with the door off). ?updateNotice=<id> shows
+  // one whatever was seen, and keeps nothing.
+  const [notice, setNotice] = useState(() => {
+    const asked = typeof window === "undefined" ? null : previewedUpdates(window.location.search);
+    return asked ? { updates: asked, preview: true } : { updates: pendingUpdates(), preview: false };
+  });
+  const [parting, setParting] = useState(false);
+  const closeNotice = useCallback(() => setNotice((now) => ({ updates: [], preview: now.preview })), []);
+  const letMusicIn = useCallback(() => {
+    setParting(true);
+    holdMusicBehindDoor(false);
+  }, []);
+  const doorGone = useCallback(() => {
+    holdMusicBehindDoor(false);
+    setDoor("open");
+  }, []);
+  // Opened: not shown again for this build. A door that could not be drawn,
+  // or a page closed before the door opened, is shown again next time.
+  const doorOpened = useCallback(() => {
+    rememberVaultDoorBuild(doorBuildRef.current);
+    doorGone();
+  }, [doorGone]);
   const [isGlobeEnabled, setIsGlobeEnabled] = useState(() => {
     const saved = localStorage.getItem("Globe");
     return saved !== null ? JSON.parse(saved) : false;
@@ -46,11 +145,9 @@ function GameApp() {
   const [isTerrainEnabled, setIsTerrainEnabled] = useState(() => {
     const saved = localStorage.getItem("Terrain");
     if (saved !== null) return JSON.parse(saved);
-    const isMobile = typeof window !== "undefined" && (
-      window.innerWidth <= 768 ||
-      /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
-    ); // default to false for mobile, true for desktop
-    return !isMobile;
+    // Terrain is the map's most memory-hungry option: off to start with on the
+    // devices the rest of the map treats as short of memory (deviceProfile.js).
+    return !isConstrainedDevice();
   });
   // Key the map/UI on the active GAME id, not the library token. The token also
   // bumps on scenario/asset writes, so Apply & Play (which saves the scenario and
@@ -69,7 +166,9 @@ function GameApp() {
   }, [isGlobeEnabled]);
   const setGlobeEnabled = useCallback((next) => {
     const value = typeof next === "function" ? next(globeRef.current) : Boolean(next);
-    if (value !== globeRef.current) announceMapRerender();
+    // Switched from the main menu's Settings before any game was opened, there
+    // is no map to redraw and nothing for the opening screen to cover.
+    if (value !== globeRef.current && hasEnteredGame()) announceMapRerender();
     setIsGlobeEnabled(value);
   }, []);
 
@@ -81,122 +180,83 @@ function GameApp() {
     localStorage.setItem("Terrain", JSON.stringify(isTerrainEnabled));
   }, [isTerrainEnabled]);
 
+  // The startup screen ends when the main menu has what it needs, which is the
+  // list of games and scenarios and nothing else. It used to wait for the
+  // active game's warm-ups and for its world to be drawn as well; no world is
+  // drawn at startup any more. A catalog that cannot be read ends it too (the
+  // menu says so, and asks again), and so does the time budget, should the
+  // request never answer.
   useEffect(() => {
-    preloadStartedAtRef.current = performance.now();
     let isActive = true;
-    let frameId = 0;
-
-    const frame = () => {
-      if (!isActive) return;
-      const elapsedMs = Math.min(
-        STARTUP_TIME_BUDGET_MS,
-        Math.round(performance.now() - preloadStartedAtRef.current),
-      );
-
-      setStartupState((current) => {
-        if (!preloadStartedAtRef.current || current.elapsedMs === elapsedMs) {
-          return current;
-        }
-
-        return {
-          ...current,
-          elapsedMs,
-        };
-      });
-
-      if (elapsedMs >= STARTUP_TIME_BUDGET_MS) {
-        setIsReady(true);
-        return;
-      }
-
-      if (preloadFinishedRef.current && worldIdleRef.current) {
-        setIsReady(true);
-        return;
-      }
-
-      frameId = requestAnimationFrame(frame);
-    };
-
-    frameId = requestAnimationFrame(frame);
-
-    setStartupState((current) => ({
-      ...current,
-      stage: "Syncing games and scenarios",
-    }));
+    const ceiling = setTimeout(() => {
+      if (isActive) setIsReady(true);
+    }, STARTUP_TIME_BUDGET_MS);
 
     ensureLibraryCatalog()
       .catch((error) => {
-        console.warn("Failed to load library catalog before startup preload:", error);
+        console.warn("Failed to load library catalog at startup:", error);
       })
       .finally(() => {
-        if (!isActive) return;
-
-        runStartupPreload({
-          onProgress: (nextState) => {
-            if (!isActive) return;
-            setStartupState((current) => ({ ...current, ...nextState }));
-          },
-        }).finally(() => {
-          preloadFinishedRef.current = true;
-          if (!isActive) return;
-
-          if (worldIdleRef.current) {
-            setIsReady(true);
-          } else {
-            setStartupState((current) => ({
-              ...current,
-              done: true,
-            }));
-          }
-        });
+        if (isActive) setIsReady(true);
       });
 
     return () => {
       isActive = false;
-      cancelAnimationFrame(frameId);
+      clearTimeout(ceiling);
     };
   }, []);
+
+  // A game's warm-ups (runtime/preload.js: its documents, the first map
+  // textures, the city and border archives) start with the first game opened
+  // rather than with the page, once a page. Nothing waits for them and nothing
+  // shows them: the cover a game opens under is held by the map itself
+  // (runtime/mapReadiness.js), which draws correctly with or without a warm-up.
+  useEffect(() => {
+    if (!gameEntered) return;
+    runStartupPreload().catch((error) => {
+      console.warn("The game's preload failed:", error);
+    });
+  }, [gameEntered]);
+
+  // The startup screen waits for the door to be decided as well, so the menu
+  // never shows for a moment before a door shuts over it. The decision takes
+  // no time on the website and in the Android app, and one request to this
+  // computer's own server in the desktop app (at most a second and a half).
+  const menuReady = isReady && door !== "deciding";
+  const setupShown = menuReady && setupDue;
+  const setupDone = useCallback(() => setSetupDue(false), []);
+  // What the update brings is shown once the menu is ready and the door is open or opening; it is kept as shown the
+  // moment it is shown, not when it is closed, so a page closed on it does not show it again.
+  const noticeShown = menuReady && notice.updates.length > 0 && (door === "open" || parting);
+  useEffect(() => {
+    if (noticeShown && !notice.preview) rememberUpdate(notice.updates[0].id);
+  }, [noticeShown, notice]);
 
   const handleFirstWorldIdle = () => {
     if (worldIdleRef.current) return;
     worldIdleRef.current = true;
-    setHasFirstWorldIdle(true);
 
     // Warm the AI chunk now that the map has settled, so the player's first turn
     // pays for the turn and not for the download too.
     prefetchGameplay();
-
-    if (preloadFinishedRef.current) {
-      setIsReady(true);
-    }
   };
-
-  const startupOverlayState = useMemo(() => {
-    if (isReady || hasFirstWorldIdle || !startupState.done) {
-      return startupState;
-    }
-
-    return {
-      ...startupState,
-      progress: Math.max(startupState.progress, 97),
-      stage: "Finalizing first world render",
-    };
-  }, [hasFirstWorldIdle, isReady, startupState]);
 
   return (
     <>
     <div style={WorldShell}>
-    <Suspense fallback={null}>
-    <WorldMap
-    key={`map-${activeGameId || "default"}`}
-    mapRef={mapRef}
-    projection={isGlobeEnabled ? "globe" : "mercator"}
-    terrainEnabled={isTerrainEnabled}
-    onInitialIdle={handleFirstWorldIdle}
-    />
-    </Suspense>
+    {gameEntered && (
+      <Suspense fallback={null}>
+      <WorldMap
+      key={`map-${activeGameId || "default"}`}
+      mapRef={mapRef}
+      projection={isGlobeEnabled ? "globe" : "mercator"}
+      terrainEnabled={isTerrainEnabled}
+      onInitialIdle={handleFirstWorldIdle}
+      />
+      </Suspense>
+    )}
     </div>
-    {isReady && (
+    {menuReady && (
       <UI
       key={`ui-${activeGameId || "default"}`}
       isGlobeEnabled={isGlobeEnabled}
@@ -206,7 +266,22 @@ function GameApp() {
       setIsTerrainEnabled={setIsTerrainEnabled}
       />
     )}
-    {!isReady && <StartupScreen {...startupOverlayState} />}
+    {noticeShown && (
+      <Suspense fallback={null}>
+      <UpdateNotice updates={notice.updates} onClose={closeNotice} />
+      </Suspense>
+    )}
+    {setupShown && (
+      <Suspense fallback={<div style={{ background: "#0f0f11", inset: 0, position: "fixed", zIndex: 2147482500 }} />}>
+      <FirstSetup onDone={setupDone} />
+      </Suspense>
+    )}
+    {menuReady && !setupDue && door === "shut" && (
+      <DoorFrame onFailed={doorGone}>
+      <VaultDoor onOpening={letMusicIn} onOpened={doorOpened} />
+      </DoorFrame>
+    )}
+    {!menuReady && <StartupScreen {...startupState} />}
     </>
   );
 }

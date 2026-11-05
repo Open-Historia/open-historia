@@ -4,7 +4,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { formatAspect, moveFeatureCoords, moveUnits, parseAspect, planBasemapChange, projectionChoice } from "./projectionConvert.js";
+import { DETAILED_MAP_CONVERSION_MESSAGE, DETAILED_MAP_PROJECTION_MESSAGE, detailedMapFits, formatAspect, moveFeatureCoords, moveUnits, moveWarShapes, parseAspect, planBasemapChange, projectionChoice } from "./projectionConvert.js";
 import { MAX_REDRAWN_WIDTH, redrawnSize, reprojectPixels } from "./projectionImage.js";
 import { convertDisplayPoint, geoToDisplay, sheetBounds } from "../../server/mapProjection.js";
 
@@ -43,6 +43,33 @@ test("a vector basemap moves with the map, and the built-in tiles give way to a 
   assert.deepEqual(planBasemapChange({ from: "mercator", to: "miller", background: { kind: "raster" } }), { kind: "none" }, "a session-only reference is left alone");
 });
 
+test("a map on a detailed map is not converted: the detailed map cannot move with it", () => {
+  // A detailed map is a Mercator tile archive; the regions and the drawn
+  // basemap would move and it would not, so nothing moves.
+  const drawn = { kind: "vector" };
+  assert.deepEqual(
+    planBasemapChange({ from: "mercator", to: "robinson", background: drawn, detailedMap: true }),
+    { kind: "blocked", reason: DETAILED_MAP_CONVERSION_MESSAGE },
+  );
+  // It sends the author to taking the detailed maps out of the scenario's
+  // maps, which keeps the drawn maps under them, not to picking another basemap.
+  assert.match(DETAILED_MAP_CONVERSION_MESSAGE, /This scenario's maps/);
+  assert.doesNotMatch(DETAILED_MAP_CONVERSION_MESSAGE, /pick a basemap/);
+  // Nothing to convert, nothing to block; and without one the map converts.
+  assert.deepEqual(planBasemapChange({ from: "mercator", to: "mercator", background: drawn, detailedMap: true }), { kind: "none" });
+  assert.deepEqual(planBasemapChange({ from: "mercator", to: "robinson", background: drawn }), { kind: "vector" });
+});
+
+test("a detailed map is only put on a map in Mercator", () => {
+  // Its tiles are Mercator: on a map converted to another projection they would
+  // lie under regions drawn for that one.
+  assert.equal(detailedMapFits(undefined), true);
+  assert.equal(detailedMapFits({ type: "mercator", globe: false }), true);
+  assert.equal(detailedMapFits("robinson"), false);
+  assert.equal(detailedMapFits({ type: "freeform", aspect: 2 }), false);
+  assert.match(DETAILED_MAP_PROJECTION_MESSAGE, /Mercator/);
+});
+
 test("cities, features and units go where their map goes", () => {
   const features = [{ id: "a", name: "Lothal", coord: [42.705, -58.725] }, { id: "b", coord: null }, { id: "c", coord: [1, 2, 3] }];
   const moved = moveFeatureCoords(features, "mercator", "equirectangular");
@@ -55,6 +82,16 @@ test("cities, features and units go where their map goes", () => {
 
   const units = moveUnits([{ id: "u", lng: 10, lat: 60, strength: 5 }], "mercator", "equirectangular");
   assert.deepEqual(units, [{ id: "u", lng: 10, lat: geoToDisplay("equirectangular", 10, 60)[1], strength: 5 }]);
+});
+
+test("terrain, fortified lines and climate zones go where their map goes, every point of them", () => {
+  const at = (lon, lat) => convertDisplayPoint("mercator", "equirectangular", lon, lat);
+  const [area] = moveWarShapes([{ id: "alps", level: 8, rings: [[[6, 45], [11, 45], [11, 48], [6, 45]]] }], "mercator", "equirectangular");
+  assert.deepEqual(area, { id: "alps", level: 8, rings: [[at(6, 45), at(11, 45), at(11, 48), at(6, 45)]] });
+  const [wall] = moveWarShapes([{ id: "wall", level: 5, points: [[20, 60], [25, 62]], breaches: [[1, 2]] }], "mercator", "equirectangular");
+  assert.deepEqual(wall.points, [at(20, 60), at(25, 62)]);
+  assert.deepEqual(wall.breaches, [[1, 2]], "what is measured along the line is left as it is");
+  assert.deepEqual(moveWarShapes(null, "mercator", "miller"), []);
 });
 
 test("a shape is typed any of the usual ways and shown as a ratio", () => {

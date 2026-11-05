@@ -3,42 +3,50 @@ import React, { useState, useRef, useEffect } from "react";
 import { Chart, registerables } from "chart.js";
 import { sendMessage, startChat, loadHistory } from "../AI/main.jsx";
 import { requestDiplomaticChat } from "./chat.jsx";
-import { JSON_URLS, readJson, writeJson } from "../../runtime/assets.js";
+import { JSON_URLS, readJson } from "../../runtime/assets.js";
 import { formatReportFields, logDebugEvent } from "../../runtime/debugLog.js";
 import { useFailureReportButton } from "../../runtime/saveDebugLog.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, useTouchPrimary } from "../../runtime/mobileUi.js";
-import { chatLanguageDiffersFromUi, isRtlLanguage, resolveChatLanguage } from "../../runtime/i18n.js";
-import { applyProjectOpsToWorld, normalizeActionEntry, readActionsState, readWorldState, viewAsSeen, writeActionsState, writeWorldState } from "../../runtime/gameState.js";
-import { describeReplyProblems, extractFencedJson, looksLikeProjectOps, validateChartConfig } from "./advisorBlocks.js";
-import { buildMessageDrafts, splitAtBlockquotes } from "./advisorDrafts.js";
+import { isComposerSendKey } from "../../runtime/composerKeys.js";
+import { chatLanguageDiffersFromUi, chatTextDirection } from "../../runtime/i18n.js";
+import { uiString } from "../../runtime/translator.js";
+import { applyProjectOpsToWorld, mutateActionsState, mutateAdvisorState, mutateWorldState, normalizeActionEntry, readAdvisorMessages, viewAsSeen } from "../../runtime/gameState.js";
+import { ADVISOR_RECIPIENT_TYPES, CHIEF_ADVISOR_THREAD, advisorContacts, advisorMessagesFor, advisorOfficeStatus, advisorRecipientType, archiveAdvisorContact, chiefAdvisorProfile, createAdvisorContact, politicalAdvisorOffices, replaceAdvisorThread, resetChiefAdvisorProfile, reviseAdvisorContact, saveChiefAdvisorProfile } from "../../runtime/advisorThreads.js";
+import { getPoliticalProfile } from "../../runtime/politicalActors.js";
+import StorageProblemNotice from "./storageProblemNotice.jsx";
+import AdvisorRecipients from "./AdvisorRecipients.jsx";
+import AdvisorMic from "./AdvisorMic.jsx";
+import { describeReplyProblems, extractFencedJson, looksLikeProjectOps } from "./advisorBlocks.js";
+import { actionProposalsFromReply, recordAdvisorActionReceipt } from "./advisorActionReview.js";
+import { approveAdvisorAction } from "./advisorActionApproval.js";
+import { applyAdvisorProjectProposal, canAdvisorApplyProjectOps } from "./advisorProjectRouting.js";
+import { sentLetterDate, splitAtBlockquotes } from "./advisorDrafts.js";
+import { repeatedOrder } from "../AI/playerFocus.js";
+import { institutionDraftButtonLabel } from "./advisorInstitutionDrafts.js";
+import { parseAdvisorReply } from "./advisorReply.js";
 import { ADVISOR_SLIDE } from "./advisorSlide.js";
 import Markdown, { MarkdownStyleInjector } from "./markdown.jsx";
-import StatsPane from "./stats.jsx";
+import "./advisorDossier.css";
 import { buildCatchUpNote } from "../AI/conversationCatchUp.js";
+import { publicCharacterEvents } from "../AI/characterConversations.js";
+import { splitAdvisorMemory, stripAdvisorMemory } from "../AI/advisorMemory.js";
+import { commitWithVotingRuleBackfill } from "../AI/institutionGovernanceRetry.js";
 import { gmChangesSince } from "../../runtime/gmChanges.js";
 import { compareGameDates, formatGameDateReadable } from "../../runtime/gameDates.js";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
 import { useUnseenEventIds } from "./useUnseenEvents.js";
+import { commitInstitutionGovernanceCommand, commitInstitutionalPlayerProposal, commitInstitutionalPlayerVoteRequest } from "../../runtime/institutionalGovernance.js";
+import { commitInstitutionLifecycleCommand } from "../../runtime/institutionLifecycle.js";
+import { getLibraryState } from "../../runtime/library.js";
+import { campaignChanged } from "../../runtime/campaignGuard.js";
+import { TURN_RUNNING_NOTE, assertNoTurnRunning, isSimulationBusy } from "../AI/simulationStatus.js";
 
 Chart.register(...registerables);
 
+// The drawer's width when the parent passes none; main.jsx keeps its own
+// (ADVISOR_DEFAULT_WIDTH) and always passes one.
 const ADVISOR_PANEL_WIDTH = "min(20rem, calc(100vw - 1rem))";
-
-const baseStyle = {
-    position: "fixed",
-    backgroundColor: "rgba(24, 24, 27, 0.9)",
-    backdropFilter: "blur(4px)",
-    zIndex: 9999,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    color: "white",
-    fontFamily: "sans-serif",
-    borderRadius: "12px",
-    border: "1px solid rgba(255,255,255,0.1)",
-    boxShadow: "0 4px 6px -1px rgba(0,0,0,0.2)",
-};
 
 const ThinkingDots = () => {
     const [dots, setDots] = React.useState(0);
@@ -52,121 +60,11 @@ const ThinkingDots = () => {
 // extractFencedJson now lives in advisorBlocks.js so it can be unit-tested (this
 // file cannot be — JSX, and it reaches maplibre-gl through assets.js).
 
-const UNIT_TYPES_ALLOWED = new Set(["infantry", "armor", "air", "naval", "artillery", "garrison"]);
+// Taking a reply apart (its prose, and the chart, drafts, deployments and
+// board edits in its fences) lives in advisorReply.js, where it is tested.
 
-// A ```chart fence that never closed (the reply ran out) is not matched by
-// extractFencedJson and would print its JSON into the bubble.
-const UNCLOSED_CHART = /```chart[\s\S]*$/;
-
-const parseMessage = (rawText) => {
-    const { rest: chartRest, json: chartJson, reason: chartReason } = extractFencedJson(rawText, "chart");
-    const unclosedChart = !chartJson && !chartReason && UNCLOSED_CHART.test(chartRest);
-    const afterChart = unclosedChart ? chartRest.replace(UNCLOSED_CHART, "") : chartRest;
-    // Checked before it is drawn (advisorBlocks.js validateChartConfig): a chart
-    // the panel cannot lay out is replaced by a line saying why, and the advisor
-    // is told the same thing before the next question.
-    const chart = chartJson
-        ? validateChartConfig(chartJson)
-        : { config: null, problem: chartReason ? `the chart block was ${chartReason}` : unclosedChart ? "the chart block was cut off before it closed" : "" };
-    const chartConfig = chart.config;
-    const { rest: afterActions, json: actionsRaw } = extractFencedJson(afterChart, "actions");
-    const { rest: afterDrafts, json: draftsRaw } = extractFencedJson(afterActions, "senddraft");
-    const { rest: afterDeploy, json: deployRaw } = extractFencedJson(afterDrafts, "deploy");
-    const { rest, json: projectsRaw, truncated: projectsTruncated } = extractFencedJson(afterDeploy, "projects", { salvageTruncated: true });
-    const messageDrafts = Array.isArray(draftsRaw) ? buildMessageDrafts(draftsRaw, afterActions) : null;
-    // A deployment the advisor is recommending, ready to place with one click.
-    // Filtered hard: a button that places a unit somewhere unusable is worse
-    // than no button, so anything missing a real type or real coordinates goes.
-    const deployments = Array.isArray(deployRaw)
-        ? deployRaw.filter((entry) => entry
-            && UNIT_TYPES_ALLOWED.has(String(entry.type ?? "").toLowerCase())
-            && String(entry.name ?? "").trim()
-            && Number.isFinite(Number(entry.lng)) && Number.isFinite(Number(entry.lat))
-            && !(Number(entry.lng) === 0 && Number(entry.lat) === 0))
-        : null;
-    return {
-        text: rest.trim(),
-        chartConfig,
-        chartProblem: chart.problem,
-        actionsProposal: Array.isArray(actionsRaw) ? actionsRaw : null,
-        messageDrafts,
-        deployments: deployments && deployments.length ? deployments : null,
-        projectsProposal: Array.isArray(projectsRaw) ? projectsRaw : null,
-        projectsTruncated,
-    };
-};
-
-// Applies the advisor's ```actions proposal to the real queue (readActionsState/
-// writeActionsState — the same storage the Actions panel reads and writes) and
-// reports what actually happened, so the confirmation card shows real outcomes
-// rather than just echoing the model's request back. Runs ONCE, right when a
-// reply arrives (see handleSend) — never at render time, since parseMessage
-// above runs on every re-render and must stay a pure read.
-// `problems` collects, in sentences, what the advisor asked for and did not get
-// — its receipt, told to it before the next question (advisorBlocks.js).
-const applyAdvisorActions = async (proposal, problems = []) => {
-    if (!Array.isArray(proposal) || proposal.length === 0) return null;
-
-    const current = await readActionsState({ force: true });
-    let next = [...current];
-    const items = [];
-
-    for (const raw of proposal) {
-        if (!raw || typeof raw !== "object") {
-            problems.push("an entry was not an object and was ignored");
-            continue;
-        }
-        const id = String(raw.id ?? "").trim();
-
-        if (raw.remove) {
-            if (!id) {
-                problems.push("a removal named no id, so nothing was removed");
-                continue;
-            }
-            const before = next.length;
-            next = next.filter((action) => action.id !== id);
-            if (next.length < before) items.push({ change: "removed", title: raw.title || id });
-            else problems.push(`the removal of ${id} matched no queued action, so nothing was removed`);
-            continue;
-        }
-
-        const existingIndex = id ? next.findIndex((action) => action.id === id) : -1;
-        if (existingIndex !== -1) {
-            const existing = next[existingIndex];
-            const updated = {
-                ...existing,
-                ...(raw.title ? { title: String(raw.title) } : {}),
-                ...(raw.text ? { text: String(raw.text) } : {}),
-                ...(raw.kind === "chat" || raw.kind === "action" ? { kind: raw.kind } : {}),
-            };
-            next[existingIndex] = updated;
-            items.push({ change: "updated", title: updated.title });
-            continue;
-        }
-
-        // No id, or an id that doesn't match anything current — either a genuinely
-        // new proposal, or the model referencing a stale/already-resolved id. Both
-        // land as a fresh queued action rather than being silently dropped — and
-        // the second is said, because the advisor believes it edited something.
-        if (id) problems.push(`the edit of ${id} matched no queued action, so it was queued as a new one`);
-        const created = normalizeActionEntry({
-            title: raw.title,
-            text: raw.text,
-            kind: raw.kind === "chat" ? "chat" : "action",
-            source: "advisor",
-            status: "planned",
-        });
-        if (created) {
-            next.push(created);
-            items.push({ change: "added", title: created.title });
-        }
-    }
-
-    if (items.length === 0) return null;
-    await writeActionsState(next);
-    return items;
-};
-
+// M3C: Action blocks are saved as proposals on the reply. The player's
+// explicit Proceed click is the only path to the canonical Actions writer.
 // Saves the diagnostics log with this failure attached at the top, or copies
 // the failure alone while logging is off (runtime/saveDebugLog.js).
 const ReportButton = ({ buildIncident, tone = "rgba(255,255,255,0.2)", color = "rgba(255,255,255,0.6)" }) => {
@@ -254,75 +152,6 @@ const AdvisorErrorDetails = ({ message, diagnostics, onRetry, retrying }) => {
     );
 };
 
-// Applies the advisor's ```projects proposal to the real board (world.projects,
-// the same field events write through impacts.projectOps) and reports what
-// actually happened, so the confirmation card shows real outcomes rather than
-// echoing the model's request back. Runs ONCE, right when a reply arrives (see
-// handleSend) — never at render time, since parseMessage runs on every re-render
-// and must stay a pure read.
-//
-// The read-modify-write spreads the WHOLE world back. A shallow patch here would
-// drop polityOverrides / regionOwnershipOverrides / ownerCodes and blank the map
-// — the same trap saveGame documents in libraryBar.jsx.
-// `round` matters as much as the date: applyProjectOps stamps it onto
-// updatedRound, which is the ONLY thing deriveProjectFlags uses to decide whether a
-// programme has gone quiet. Without it an advisor update kept whatever round the
-// last EVENT stamped, so asking the advisor to brief you on a project — it updates
-// the board, the receipt card says "1 updated" — left the card still wearing "No
-// recent progress". The event path has always passed it (gameplay.js); this one had
-// not.
-const applyAdvisorProjects = async (proposal, gameDate, round) => {
-    if (!Array.isArray(proposal) || proposal.length === 0) return null;
-
-    const world = await readWorldState({ force: true });
-    const before = new Map(world.projects.map((project) => [project.id, project]));
-
-    // applyProjectOpsToWorld normalizes defensively, so the raw parsed ops are
-    // fine here; it also drops anything aimed at a project that does not exist.
-    //
-    // Not bare applyProjectOps: a project the advisor COMPLETES may carry
-    // onComplete effects — a border it hands over, a polity it renames — and those
-    // have to land whoever completed it. This is the same door the event path uses,
-    // in the same order, so a completion from chat and a completion from a jump
-    // change the world identically.
-    const { deferredProjectIds, world: nextWorld } = applyProjectOpsToWorld({
-        date: String(gameDate || ""),
-        ops: proposal,
-        round: Number(round) || 0,
-        world,
-    });
-    const next = nextWorld.projects;
-
-    const items = [];
-    for (const project of next) {
-        const previous = before.get(project.id);
-        if (!previous) {
-            items.push({ change: "opened", title: project.name });
-        } else if (previous.updatedAt !== project.updatedAt) {
-            items.push({
-                change: project.status === "complete" && previous.status !== "complete" ? "completed" : "updated",
-                title: project.name,
-            });
-        }
-    }
-    for (const project of world.projects) {
-        if (!next.some((entry) => entry.id === project.id)) {
-            items.push({ change: "closed", title: project.name });
-        }
-    }
-    // A project whose completion would change the world is NOT closed from here —
-    // only an event may move a border or rename a polity. Say so on the card rather
-    // than silently doing nothing, or the advisor claims it finished something the
-    // board still shows as running and nobody can tell why.
-    for (const id of deferredProjectIds) {
-        const project = next.find((entry) => entry.id === id);
-        if (project) items.push({ change: "deferred", title: project.name });
-    }
-    if (items.length === 0) return null;
-    await writeWorldState(nextWorld);
-    return items;
-};
-
 // Inline confirmation for what the advisor just did to the projects board. Same
 // "advisor creates, I review" contract as the actions card below it: nothing the
 // advisor changes happens silently.
@@ -369,6 +198,11 @@ const AdvisorProjectsCard = ({ items, onOpenProjects }) => {
 // outcome — the player sees a wall of JSON in the chat, the board stays empty,
 // and nothing anywhere explains why. The overwhelmingly common cause is the
 // reply hitting its token cap partway through a long array.
+//
+// "Ask for the next batch" puts this in the composer, in the interface's
+// language (uiString): named, so the string catalog reads it whole.
+const RETRY_PROJECTS_TEXT = "Continue putting my projects and operations on the board — the last reply was cut off. Pick up from where you stopped and skip anything already on the board. Send no more than ten, one sentence each. Only include efforts that genuinely appear in our history — if everything real is already on the board, just tell me that and add nothing.";
+
 const AdvisorProjectsProblem = ({ kind, detail, excerpt, onRetry }) => {
     const [showExcerpt, setShowExcerpt] = useState(false);
     const message = kind === "truncated"
@@ -420,7 +254,7 @@ const AdvisorProjectsProblem = ({ kind, detail, excerpt, onRetry }) => {
     );
 };
 
-// Inline confirmation for what the advisor just did to the Actions queue —
+// Historical inline confirmation for previously auto-applied Chief Actions —
 // the "review" half of "advisor creates, I review": nothing here is silent.
 const AdvisorActionsCard = ({ items, onOpenActions }) => {
     const counts = items.reduce((acc, item) => {
@@ -453,6 +287,60 @@ const AdvisorActionsCard = ({ items, onOpenActions }) => {
     );
 };
 
+// A proposed Action is NOT yet on the board. Only a human Proceed click may
+// queue it. Each card owns its transient error/busy state; accepted receipts
+// are stored on the originating message and survive campaign reload.
+const AdvisorActionProposalCard = ({ proposal, receipt, onDiscuss, onProceed, onOpenActions, disabled }) => {
+    const [busy, setBusy] = useState(false);
+    const [error, setError] = useState("");
+    const name = proposal.title || proposal.text || (proposal.operation === "remove" ? "Remove queued Action" : "Change queued Action");
+    const label = proposal.operation === "remove" ? "Remove proposed Action"
+        : proposal.operation === "edit" ? "Proposed Action change" : "Proposed Action";
+    const confirmed = !!receipt;
+    const proceed = async () => {
+        if (busy || disabled || confirmed || !onProceed) return;
+        setBusy(true);
+        setError("");
+        try {
+            const result = await onProceed();
+            if (!result?.ok) setError(result?.error || "The Action was not queued.");
+        } catch (failure) {
+            setError(failure?.message || "The Action was not queued.");
+        } finally {
+            setBusy(false);
+        }
+    };
+    return (
+        <div style={{ marginTop: "0.6rem", background: "rgba(255,255,255,0.035)", border: "1px solid rgba(255,255,255,0.2)", borderRadius: "9px", padding: "0.6rem 0.7rem" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.5rem" }}>
+            <strong style={{ fontSize: "0.76rem" }}>📋 {label}</strong>
+            <span style={{ fontSize: "0.67rem", color: confirmed ? "#86efac" : "#e4e4e7" }}>
+                {confirmed ? (receipt.status === "queued" ? "Queued" : receipt.status === "updated" ? "Updated" : "Removed") : "Proposed"}
+            </span>
+        </div>
+        <div style={{ fontSize: "0.78rem", fontWeight: 700, marginTop: "0.4rem" }} data-no-translate>{name}</div>
+        {proposal.text && proposal.text !== name && (
+            <div data-no-translate style={{ fontSize: "0.73rem", opacity: 0.77, marginTop: "0.3rem" }}>{proposal.text}</div>
+        )}
+        {proposal.targetId && (
+            <div style={{ fontSize: "0.65rem", opacity: 0.55, marginTop: "0.3rem" }}>Existing Action: <span data-no-translate>{proposal.targetId}</span></div>
+        )}
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.4rem", marginTop: "0.6rem", flexWrap: "wrap" }}>
+        {confirmed ? (
+            onOpenActions && <button type="button" onClick={onOpenActions} style={{ border: "1px solid rgba(255,255,255,0.22)", borderRadius: "7px", background: "transparent", color: "#e4e4e7", padding: "0.3rem 0.55rem", cursor: "pointer" }}>Open Actions</button>
+        ) : (
+            <>
+            <button type="button" disabled={busy || disabled} onClick={onDiscuss} style={{ border: "1px solid rgba(255,255,255,0.25)", borderRadius: "7px", background: "transparent", color: "#e4e4e7", padding: "0.3rem 0.55rem", cursor: busy || disabled ? "default" : "pointer" }}>Discuss</button>
+            <button type="button" disabled={busy || disabled} onClick={proceed} style={{ border: "1px solid rgba(147,197,253,0.6)", borderRadius: "7px", background: "rgba(59,130,246,0.22)", color: "#dbeafe", padding: "0.3rem 0.55rem", cursor: busy || disabled ? "default" : "pointer" }}>{busy ? "Queueing…" : proposal.operation === "remove" ? "Proceed / Remove" : "Proceed / Queue"}</button>
+            </>
+        )}
+        </div>
+        {confirmed && <div style={{ fontSize: "0.68rem", marginTop: "0.35rem", color: "rgba(255,255,255,0.65)" }}>Confirmed by Actions board. Execution still requires game-time resolution.</div>}
+        {error && <div role="alert" style={{ fontSize: "0.72rem", color: "#fca5a5", marginTop: "0.4rem" }}>{error}</div>}
+        </div>
+    );
+};
+
 // Puts the drafted letter in the recipient's diplomacy composer. It does NOT
 // send it, deliberately: the player reads it over in the chat window, edits it
 // if they want, and presses send there.
@@ -464,6 +352,9 @@ const AdvisorActionsCard = ({ items, onOpenActions }) => {
 // to fail: at worst the chat opens with the text waiting in it.
 const AdvisorDraftSend = ({ draft, onDraft }) => {
     const [handedOff, setHandedOff] = useState(false);
+    // The same letter already in the chat with that country (advisorDrafts.js):
+    // the advisor re-drafts letters the player has sent, and nothing said so.
+    const sentOn = useRuntimeState("chat", (chats) => sentLetterDate(draft, chats));
     const resetTimer = useRef(null);
 
     useEffect(() => () => clearTimeout(resetTimer.current), []);
@@ -489,8 +380,13 @@ const AdvisorDraftSend = ({ draft, onDraft }) => {
             fontFamily: "sans-serif", fontSize: "0.76rem", fontWeight: 600, padding: "0.35rem 0.65rem",
             textAlign: "left",
         }}>
-        {handedOff ? "✓ In Diplomacy — press send there" : `✉️ Draft to ${draft.country}`}
+        {handedOff ? "✓ In Diplomacy — press send there" : `✉️ Draft to ${draft.targetType === "institution-council" ? `Council · ${draft.institutionId}` : draft.targetType === "institution-lifecycle" ? `hearing · ${draft.country || draft.institutionId}` : draft.country}`}
         </button>
+        {sentOn && (
+            <div style={{ color: "rgba(253,230,138,0.9)", fontFamily: "sans-serif", fontSize: "0.7rem", marginTop: "0.25rem" }}>
+            Already sent to {draft.country}{sentOn === "earlier" ? "" : ` on ${formatGameDateReadable(sentOn) || sentOn}`}.
+            </div>
+        )}
         </div>
     );
 };
@@ -501,18 +397,22 @@ const AdvisorDraftSend = ({ draft, onDraft }) => {
 // as a translucent pending unit with a queued order for the AI to adjudicate.
 const AdvisorDeployPlace = ({ deployment, placed, onPlace }) => {
     const [status, setStatus] = useState(placed ? "placed" : "idle");
+    const [error, setError] = useState("");
 
     useEffect(() => { if (placed) setStatus("placed"); }, [placed]);
 
     const handleClick = async () => {
         if (status !== "idle") return;
         setStatus("placing");
+        setError("");
         const result = await onPlace();
         setStatus(result?.ok ? "placed" : "idle");
+        if (!result?.ok) setError(result?.error || "The unit could not be placed. Try again.");
     };
 
     const busy = status !== "idle";
     return (
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
         <button type="button" onClick={handleClick} disabled={busy} style={{
             display: "flex", alignItems: "center", gap: "0.4rem",
             background: status === "placed" ? "rgba(52,211,153,0.12)" : "rgba(255,255,255,0.06)",
@@ -528,6 +428,63 @@ const AdvisorDeployPlace = ({ deployment, placed, onPlace }) => {
                 ? `Placing ${deployment.name}…`
                 : `📍 Place ${deployment.name} here`}
         </button>
+        {error && <span role="alert" style={{ color: "#fca5a5", fontSize: "0.7rem", lineHeight: 1.35 }}>{error}</span>}
+        </div>
+    );
+};
+
+
+// A formal institution action the Advisor recommends. The model only prepares
+// this typed draft; nothing canonical happens until the human clicks here. The
+// click then goes through the same native commit functions as Institutions UI,
+// so current membership, lifecycle, proposal and ballot rules are revalidated.
+const AdvisorInstitutionDraftAction = ({ draft, completed, onExecute }) => {
+    const [status, setStatus] = useState(completed ? "completed" : "idle");
+    const [error, setError] = useState("");
+
+    useEffect(() => { if (completed) setStatus("completed"); }, [completed]);
+
+    const handleClick = async () => {
+        if (status !== "idle") return;
+        setStatus("working");
+        setError("");
+        const result = await onExecute();
+        if (result?.ok) setStatus("completed");
+        else {
+            setStatus("idle");
+            setError(result?.error || "The institution action could not be completed.");
+        }
+    };
+
+    const detail = draft.type === "table-proposal"
+        ? draft.title
+        : draft.type === "vote"
+            ? `${draft.proposalId} · ${String(draft.choice || "").toUpperCase()}`
+            : draft.type === "submit-proposal"
+                ? draft.proposalId
+                : `${draft.polity} · ${draft.requestedStatus}`;
+    const busy = status !== "idle";
+
+    return (
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+        <button type="button" onClick={handleClick} disabled={busy} title={detail} style={{
+            display: "flex", alignItems: "center", gap: "0.4rem",
+            background: status === "completed" ? "rgba(52,211,153,0.12)" : "rgba(245,158,11,0.13)",
+            border: `1px solid ${status === "completed" ? "rgba(52,211,153,0.4)" : "rgba(245,158,11,0.42)"}`,
+            borderRadius: "8px",
+            color: status === "completed" ? "rgba(167,243,208,0.95)" : "rgba(253,230,138,0.95)",
+            cursor: busy ? "default" : "pointer",
+            fontFamily: "sans-serif", fontSize: "0.76rem", fontWeight: 600, padding: "0.35rem 0.65rem",
+            textAlign: "left",
+        }}>
+        {status === "completed"
+            ? `✓ ${institutionDraftButtonLabel(draft)}`
+            : status === "working"
+                ? "Applying institution action…"
+                : `🏛️ ${institutionDraftButtonLabel(draft)}`}
+        </button>
+        {error && <span style={{ color: "#fca5a5", fontSize: "0.7rem", lineHeight: 1.35 }}>{error}</span>}
+        </div>
     );
 };
 
@@ -627,49 +584,41 @@ const AdvisorChart = ({ config }) => {
     );
 };
 
-const AdvisorButton = ({ isAdvisorOpen, rightShift, onToggle }) => (
-    <button onClick={onToggle} style={{
-        ...baseStyle,
-        bottom: "0.5rem", right: rightShift,
-        height: "4rem", width: "4rem",
-        cursor: "pointer", fontSize: "1.5rem",
-        transition: "right 0.35s cubic-bezier(0.4, 0, 0.2, 1)",
-    }}>🧭</button>
-);
+// The saved conversation could not be read: nothing is saved until it is, as
+// the list in hand is not the player's. Module-level, like the saves that check
+// it, which run from callbacks with no component state in reach; and each
+// save's result goes to the panel for its "not saved" strip.
+let advisorLoadFailed = false;
+let onAdvisorSaveResult = null;
 
-const saveMessages = async (messages) => {
+const saveMessages = async (messages, threadId = CHIEF_ADVISOR_THREAD, options = {}) => {
+    if (advisorLoadFailed) return false;
     try {
-        await writeJson(JSON_URLS.advisor, messages);
-    } catch (err) { console.error("Failed to save messages:", err); }
+        // The turn may be posting documents to this same file. Merge inside
+        // its canonical write queue, modifying *only* this recipient's messages.
+        await mutateAdvisorState((stored) => replaceAdvisorThread(stored, threadId, messages, options));
+        onAdvisorSaveResult?.(true);
+        return true;
+    } catch (err) {
+        console.error("Failed to save advisor conversation:", err);
+        onAdvisorSaveResult?.(false);
+        return false;
+    }
 };
 
+// null when the read FAILED, never []: an empty conversation here would be
+// saved over the real one by the next message.
 const loadMessages = async () => {
     try {
-        return await readJson(JSON_URLS.advisor, { defaultValue: [] });
-    } catch { return []; }
+        const saved = await readAdvisorMessages();
+        advisorLoadFailed = false;
+        return saved;
+    } catch (err) {
+        advisorLoadFailed = true;
+        logDebugEvent("advisor", "The advisor conversation could not be loaded; nothing is saved until it is.", err, { problem: true });
+        return null;
+    }
 };
-
-const TabButton = ({ icon, label, active, onClick }) => (
-    <button
-    onClick={onClick}
-    style={{
-        alignItems: "center",
-        background: "none",
-        border: "none",
-        borderBottom: active ? "2px solid #3b82f6" : "2px solid transparent",
-        color: active ? "white" : "rgba(255,255,255,0.55)",
-        cursor: "pointer",
-        display: "flex",
-        fontFamily: "sans-serif",
-        fontSize: "0.88rem",
-        fontWeight: active ? 700 : 500,
-        gap: "0.4rem",
-        padding: "0.9rem 0.85rem",
-    }}
-    >
-    <span style={{ fontSize: "1rem" }}>{icon}</span> {label}
-    </button>
-);
 
 // An advisor reply's prose, with each drafted letter's Send button rendered
 // immediately under the letter it would send.
@@ -682,9 +631,12 @@ const TabButton = ({ icon, label, active, onClick }) => (
 //
 // A reply with no drafts renders as ONE markdown block, exactly as before: the
 // split is only worth its cost when there is something to interleave.
-const AdvisorReplyBody = ({ text, drafts, onDraftMessage }) => {
+// `written`: the advisor's own words, in the player's language already, so the
+// interface translator leaves them alone (the draft buttons between them are
+// interface, and are translated).
+const AdvisorReplyBody = ({ text, drafts, onDraftMessage, written = false }) => {
     if (!drafts || drafts.length === 0) {
-        return <Markdown className="advisor-markdown">{text}</Markdown>;
+        return <Markdown className="advisor-markdown" written={written}>{text}</Markdown>;
     }
 
     const byQuote = new Map();
@@ -708,7 +660,7 @@ const AdvisorReplyBody = ({ text, drafts, onDraftMessage }) => {
     const segments = splitAtBlockquotes(text);
     const rendered = segments.map((segment, index) => (
         <React.Fragment key={index}>
-        <Markdown className="advisor-markdown">{segment.content}</Markdown>
+        <Markdown className="advisor-markdown" written={written}>{segment.content}</Markdown>
         {segment.type === "quote" && (byQuote.get(segment.quoteIndex) ?? []).map(button)}
         </React.Fragment>
     ));
@@ -752,7 +704,7 @@ const readSeenMoment = async (gameDate) => {
 // the time that passed, the newest events since, and the Game Master's changes by
 // hand. A fresh conversation has nothing to catch up on — it reads the present.
 // A note that cannot be built is no note: the question still goes.
-const buildAdvisorCatchUp = async (messages, moment) => {
+const buildAdvisorCatchUp = async (messages, moment, { publicOnly = false } = {}) => {
     const previous = [...(Array.isArray(messages) ? messages : [])].reverse()
         .find((msg) => (msg.role === "user" || msg.role === "advisor") && !msg.streaming);
     if (!previous) return { text: "", label: "" };
@@ -761,11 +713,14 @@ const buildAdvisorCatchUp = async (messages, moment) => {
         return buildCatchUpNote({
             previousDate: previous.time || "",
             currentDate: date || "",
-            events,
-            gmChanges: previous.at ? gmChangesSince(world, previous.at) : [],
+            // Character contacts get PUBLIC timeline changes only. Private
+            // Game Master edits, scoped intelligence events and receipts are
+            // never injected through a system-side catch-up message.
+            events: publicOnly ? publicCharacterEvents(events, { gameDate: date }) : events,
+            gmChanges: publicOnly ? [] : previous.at ? gmChangesSince(world, previous.at) : [],
             // The advisor's receipt for its own last reply: a chart not drawn, a
             // block that half landed.
-            replyProblems: previous.role === "advisor" ? describeReplyProblems(previous) : [],
+            replyProblems: !publicOnly && previous.role === "advisor" ? describeReplyProblems(previous) : [],
             compareDates: compareGameDates,
             formatDate: (value) => formatGameDateReadable(value),
         });
@@ -788,10 +743,10 @@ const formatAdvisorDate = (dateStr) => {
 
 // One chat bubble, memoized. AdvisorPanel's `input` (the composer text) used to
 // live in the SAME component as the whole message history, so every keystroke
-// re-rendered every bubble in the conversation: re-running parseMessage's
+// re-rendered every bubble in the conversation: re-running parseAdvisorReply's
 // regex/JSON.parse over each message's full text, re-parsing every markdown
 // body, and — the expensive part — handing AdvisorChart a BRAND NEW config
-// object each time (parseMessage's JSON.parse always returns a fresh
+// object each time (parseAdvisorReply's JSON.parse always returns a fresh
 // reference), which tore down and rebuilt every historical Chart.js chart on
 // every keystroke. None of that scales with the length of the conversation —
 // it's exactly why a long chat felt laggy while a short one didn't. Wrapped
@@ -799,14 +754,14 @@ const formatAdvisorDate = (dateStr) => {
 // new message appended, or the streaming placeholder being replaced); memo's
 // default shallow prop comparison skips everything else, including every
 // keystroke in the composer below.
-const AdvisorMessageRow = React.memo(({ msg, msgIndex, chatDiffers, chatDir, onOpenActions, onOpenProjects, onRetryProjects, onRetry, retrying, onDraftMessage, onPlaceDeployment }) => {
-    const { text, chartConfig, chartProblem, messageDrafts, deployments } = msg.role === "advisor"
-        ? parseMessage(msg.text)
-        : { text: msg.text, chartConfig: null, chartProblem: "", messageDrafts: null, deployments: null };
+const AdvisorMessageRow = React.memo(({ msg, msgIndex, speakerName = "Advisor", canExecute = true, canDraft = true, canReviewActions = true, allowedUnitTypes, chatDiffers, chatDir, onOpenActions, onOpenProjects, onRetryProjects, onRetry, retrying, onDraftMessage, onDiscussAction, onProceedAction, onExecuteInstitutionDraft, onPlaceDeployment }) => {
+    const { text, chartConfig, chartProblem, messageDrafts, institutionDrafts, deployments } = msg.role === "advisor"
+        ? parseAdvisorReply(msg.text, { allowedUnitTypes: allowedUnitTypes ? allowedUnitTypes.split(",") : null, streaming: Boolean(msg.streaming) })
+        : { text: msg.text, chartConfig: null, chartProblem: "", messageDrafts: null, institutionDrafts: null, deployments: null };
     const asWritten = msg.role === "advisor" && chatDiffers;
 
     return (
-        <div style={{ display: "flex", flexDirection: "column", alignItems: msg.role === "user" ? "flex-end" : "flex-start" }}>
+        <div className="oh-advisor-message-row" data-role={msg.role}>
         {/* The world moved on before this question; the advisor was told how
             (the whole note is in the tooltip). */}
         {msg.role === "user" && msg.catchUpLabel && (
@@ -815,25 +770,18 @@ const AdvisorMessageRow = React.memo(({ msg, msgIndex, chatDiffers, chatDir, onO
             </span>
         )}
         {msg.role !== "user" && (
-            <span style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.4)", marginBottom: "0.25rem" }}>
-            {msg.role === "error" ? "⚠️ Error" : "🧭 Advisor"}
+            <span className="oh-advisor-speaker">
+            {msg.role === "error" ? "⚠️ Error" : `🧭 ${speakerName}`}
             </span>
         )}
         {/* Player-typed text stays verbatim under UI translation. */}
-        <div data-no-translate={msg.role === "user" || asWritten ? "" : undefined} dir={asWritten ? chatDir : undefined} style={{
-            maxWidth: "90%", width: chartConfig ? "90%" : undefined,
-            padding: "0.6rem 0.85rem",
-            borderRadius: msg.role === "user" ? "12px 12px 2px 12px" : "12px 12px 12px 2px",
-            backgroundColor: msg.role === "user" ? "#3b82f6" : msg.role === "error" ? "rgba(239,68,68,0.2)" : "rgba(255,255,255,0.08)",
-            fontSize: "0.85rem", lineHeight: "1.5", whiteSpace: "pre-wrap", wordBreak: "break-word",
-            border: msg.role === "error" ? "1px solid rgba(239,68,68,0.3)" : "none",
-            boxSizing: "border-box",
-        }}>
+        <div className="oh-advisor-message-body" data-role={msg.role} data-no-translate={msg.role === "user" || asWritten ? "" : undefined} dir={asWritten ? chatDir : undefined}>
         {msg.role === "user" ? text : (
             <AdvisorReplyBody
             text={text}
-            drafts={messageDrafts}
-            onDraftMessage={onDraftMessage}
+            written={msg.role === "advisor"}
+            drafts={canDraft ? messageDrafts : null}
+            onDraftMessage={canDraft ? onDraftMessage : undefined}
             />
         )}
         {chartConfig && <AdvisorChart config={chartConfig} />}
@@ -843,25 +791,59 @@ const AdvisorMessageRow = React.memo(({ msg, msgIndex, chatDiffers, chatDir, onO
             📉 The chart could not be drawn: {chartProblem}.
             </div>
         )}
+        {msg.suggestionsNotApplied && !msg.streaming && (
+            <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.72rem", marginTop: "0.6rem" }}>
+            This official's suggested Actions or Projects were not applied. Authorize them through your chief advisor or the relevant panel.
+            </div>
+        )}
         {msg.actionsSummary &&<AdvisorActionsCard items={msg.actionsSummary} onOpenActions={onOpenActions} />}
+        {Array.isArray(msg.actionsProblems) && msg.actionsProblems.length > 0 && (
+            <div role="alert" style={{ marginTop: "0.5rem", fontSize: "0.72rem", color: "#fca5a5" }}>Some Action proposals could not be reviewed: {msg.actionsProblems.join(" ")}</div>
+        )}
+        {canReviewActions && Array.isArray(msg.actionProposals) && msg.actionProposals.map((proposal) => (
+            <AdvisorActionProposalCard
+                key={proposal.id}
+                proposal={proposal}
+                receipt={msg.actionReceipts?.[proposal.id]}
+                onDiscuss={() => onDiscussAction(msg.id, proposal)}
+                onProceed={() => onProceedAction(msg.id, proposal.id)}
+                onOpenActions={onOpenActions}
+                disabled={retrying}
+            />
+        ))}
         {msg.projectsSummary && <AdvisorProjectsCard items={msg.projectsSummary} onOpenProjects={onOpenProjects} />}
         {msg.projectsProblem && <AdvisorProjectsProblem kind={msg.projectsProblem} detail={msg.projectsDetail} excerpt={msg.projectsExcerpt} onRetry={onRetryProjects} />}
         {msg.role === "error" && <AdvisorErrorDetails message={msg.text} diagnostics={msg.diagnostics} onRetry={onRetry} retrying={retrying} />}
-        {deployments && deployments.length > 0 && (
+        {canExecute && institutionDrafts && institutionDrafts.length > 0 && (
             <div style={{ marginTop: "0.75rem", display: "flex", flexDirection: "column", gap: "0.4rem" }}>
-            {deployments.map((deployment, deployIndex) => (
+            {institutionDrafts.map((draft, draftIndex) => (
+                <AdvisorInstitutionDraftAction
+                key={`${draft.type}:${draft.institutionId}:${draft.proposalId || draft.polity || draft.title || draftIndex}`}
+                draft={draft}
+                completed={!!msg.completedInstitutionDrafts?.includes(draftIndex)}
+                onExecute={() => onExecuteInstitutionDraft(msgIndex, draftIndex, draft)}
+                />
+            ))}
+            </div>
+        )}
+        {canExecute && deployments && deployments.length > 0 && (
+            <div style={{ marginTop: "0.75rem", display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+            {/* deployment.index, not the position here: placedDeployments is
+                keyed on it, and it holds when the scenario's allowed types
+                hide a button (advisorBlocks.js filterAdvisorDeployments). */}
+            {deployments.map((deployment) => (
                 <AdvisorDeployPlace
-                key={deployIndex}
+                key={deployment.index}
                 deployment={deployment}
-                placed={!!msg.placedDeployments?.includes(deployIndex)}
-                onPlace={() => onPlaceDeployment(msgIndex, deployIndex, deployment)}
+                placed={!!msg.placedDeployments?.includes(deployment.index)}
+                onPlace={() => onPlaceDeployment(msgIndex, deployment.index, deployment)}
                 />
             ))}
             </div>
         )}
         </div>
         {msg.time && msg.role !== "user" && (
-            <span style={{ fontSize: "0.65rem", color: "rgba(255,255,255,0.3)", marginTop: "0.25rem" }}>
+            <span className="oh-advisor-message-time">
             {formatAdvisorDate(msg.time)}
             </span>
         )}
@@ -890,7 +872,7 @@ const AdvisorDocumentNotice = ({ notice }) => {
     return (
         <div style={{ alignItems: "flex-start", display: "flex", flexDirection: "column" }}>
             <span style={{ color: "rgba(255,255,255,0.4)", fontSize: "0.7rem", marginBottom: "0.25rem" }}>🧭 Advisor</span>
-            <div style={{ background: "rgba(250,204,21,0.06)", border: "1px solid rgba(250,204,21,0.22)", borderRadius: "12px 12px 12px 2px", boxSizing: "border-box", fontSize: "0.82rem", lineHeight: 1.5, maxWidth: "90%", padding: "0.55rem 0.8rem" }}>
+            <div className="oh-advisor-notice">
                 <div>
                     📄 A new paper on your desk: <span data-no-translate style={{ fontWeight: 800 }}>{report.title}</span>, {noticeHow(notice)}.
                 </div>
@@ -925,31 +907,55 @@ const mergeNotices = (current, stored) => {
     return last?.streaming ? [...kept.slice(0, -1), ...added, last] : [...kept, ...added];
 };
 
+// A long conversation renders its recent tail first; older messages come in
+// on demand, as a diplomacy thread's do (chat.jsx). advisor.json is never
+// trimmed, and every reply shown runs the parse and the markdown renderer and
+// mounts a Chart.js canvas per chart, so drawing it all made the drawer slow to
+// open in a long campaign.
+const ADVISOR_INITIAL_RENDER_WINDOW = 12;
+const ADVISOR_RENDER_WINDOW_STEP = 20;
+
 // The whole scrollable history, also memoized as a unit — so a keystroke in
 // the composer (state that lives in AdvisorPanel, outside this component)
 // never even reaches AdvisorMessageRow's own per-row check above.
-const AdvisorMessageList = React.memo(({ messages, isLoading, chatDiffers, chatDir, onOpenActions, onOpenProjects, onRetryProjects, onRetry, retrying, onDraftMessage, onPlaceDeployment, messagesEndRef, containerRef, onScroll }) => (
-    <div ref={containerRef} onScroll={onScroll} style={{ padding: "0.75rem", flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", gap: "1rem", scrollbarWidth: "none" }}>
+//
+// Only the last `visibleLimit` messages are drawn. `i` stays the index into
+// the WHOLE transcript: placedDeployments and completedInstitutionDrafts are
+// written back through it.
+const AdvisorMessageList = React.memo(({ messages, visibleLimit, onShowEarlier, isLoading, speakerName = "Advisor", emptyMessage = "No messages yet. Ask your advisor something!", canExecute = true, canDraft = true, canReviewActions = true, allowedUnitTypes, chatDiffers, chatDir, onOpenActions, onOpenProjects, onRetryProjects, onRetry, retrying, onDraftMessage, onDiscussAction, onProceedAction, onExecuteInstitutionDraft, onPlaceDeployment, messagesEndRef, containerRef, onScroll }) => (
+    <div className="oh-advisor-messages" ref={containerRef} onScroll={onScroll}>
     {messages.length === 0 && (
         <p style={{ fontSize: "0.85rem", color: "rgba(255,255,255,0.5)", marginTop: 0 }}>
-        No messages yet. Ask your advisor something!
+        {emptyMessage}
         </p>
+    )}
+
+    {messages.length > visibleLimit && (
+        <button
+            type="button"
+            className="oh-tap-row oh-advisor-message-history"
+            onClick={onShowEarlier}
+        >
+            {Math.min(messages.length - visibleLimit, ADVISOR_RENDER_WINDOW_STEP) === 1
+                ? "Show 1 earlier message"
+                : `Show ${Math.min(messages.length - visibleLimit, ADVISOR_RENDER_WINDOW_STEP)} earlier messages`}
+        </button>
     )}
 
     {/* The retry is offered on the LAST message only, and only when it is the
         error: retrying anything older would re-ask a question the conversation
         has already moved past. */}
-    {messages.map((msg, i) => (msg.role === "notice"
+    {messages.map((msg, i) => (i < messages.length - visibleLimit ? null : msg.role === "notice"
         ? <AdvisorDocumentNotice key={msg.id || i} notice={msg} />
         : (
-        <AdvisorMessageRow key={i} msg={msg} msgIndex={i} chatDiffers={chatDiffers} chatDir={chatDir} onOpenActions={onOpenActions} onOpenProjects={onOpenProjects} onRetryProjects={onRetryProjects} onDraftMessage={onDraftMessage} onPlaceDeployment={onPlaceDeployment}
+        <AdvisorMessageRow key={i} msg={msg} msgIndex={i} speakerName={speakerName} canExecute={canExecute} canDraft={canDraft} canReviewActions={canReviewActions} allowedUnitTypes={allowedUnitTypes} chatDiffers={chatDiffers} chatDir={chatDir} onOpenActions={onOpenActions} onOpenProjects={onOpenProjects} onRetryProjects={onRetryProjects} onDraftMessage={onDraftMessage} onDiscussAction={onDiscussAction} onProceedAction={onProceedAction} onExecuteInstitutionDraft={onExecuteInstitutionDraft} onPlaceDeployment={onPlaceDeployment}
         onRetry={i === messages.length - 1 && msg.role === "error" ? onRetry : undefined} retrying={retrying} />
     )))}
 
     {isLoading && !(messages[messages.length - 1]?.role === "advisor" && messages[messages.length - 1]?.streaming) && (
         <div style={{ display: "flex", alignItems: "flex-start", flexDirection: "column", gap: "0.25rem" }}>
-        <span style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.4)" }}>🧭 Advisor</span>
-        <div style={{ padding: "0.6rem 0.85rem", borderRadius: "12px 12px 12px 4px", backgroundColor: "rgba(255,255,255,0.08)", fontSize: "0.85rem" }}>
+        <span style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.4)" }}>🧭 {speakerName}</span>
+        <div className="oh-advisor-thinking">
         <ThinkingDots />
         </div>
         </div>
@@ -958,11 +964,47 @@ const AdvisorMessageList = React.memo(({ messages, isLoading, chatDiffers, chatD
     </div>
 ));
 
+// The scenario's deployable troop types (world.allowedUnitTypes), joined into
+// one string: a primitive, so the memoized rows re-render only when the list
+// itself changes. "" means every type is allowed.
+const selectAllowedUnitTypes = (world) => (Array.isArray(world?.allowedUnitTypes) ? world.allowedUnitTypes.join(",") : "");
+
 const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResizeEnd, onOpenActions, onOpenProjects, requestedPrompt, onConsumeRequest }) => {
     const [messages, setMessages]   = useState([]);
     const [input, setInput]         = useState("");
+    const [typed, setTyped]         = useState(false);
     const [isLoading, setIsLoading] = useState(false);
+    const [contacts, setContacts] = useState([]);
+    const [chiefProfile, setChiefProfile] = useState(null);
+    const [activeThreadId, setActiveThreadId] = useState(CHIEF_ADVISOR_THREAD);
+    const activeThreadIdRef = useRef(CHIEF_ADVISOR_THREAD);
+    const contactDraftsRef = useRef(new Map());
+    const threadSwitchingRef = useRef(false);
+    const contactMutationRef = useRef(false);
+    const [contactsBusy, setContactsBusy] = useState(false);
+    const sideEffectPendingRef = useRef(0);
+    const [sideEffectsBusy, setSideEffectsBusy] = useState(false);
+    const playerPolity = useRuntimeState("game", (game) => String(game?.country || ""));
+    // Only the player's government, as text: the whole world re-rendered this panel on every write a turn made.
+    const governmentText = useRuntimeState("world", (world) => JSON.stringify(getPoliticalProfile(world || {}, playerPolity)?.government ?? null), playerPolity);
+    const politicalWorld = React.useMemo(() => {
+        const government = JSON.parse(governmentText);
+        return government ? { politicalActors: { byPolity: { [playerPolity]: { polityKey: playerPolity, government } } } } : {};
+    }, [governmentText, playerPolity]);
+    const offices = React.useMemo(() => politicalAdvisorOffices(politicalWorld, playerPolity), [politicalWorld, playerPolity]);
+    const selectedContact = contacts.find((contact) => contact.id === activeThreadId) || null;
+    const recipientUnavailableReason = selectedContact?.archived
+        ? "This contact is retired — restore to reply"
+        : selectedContact && !advisorRecipientType(selectedContact)
+            ? "Unsupported recipient type — cannot open conversation"
+            : "";
+    const recipientLocked = Boolean(recipientUnavailableReason);
     const messagesEndRef            = useRef(null);
+    const [visibleMessageLimit, setVisibleMessageLimit] = useState(ADVISOR_INITIAL_RENDER_WINDOW);
+    const handleShowEarlier = React.useCallback(() => {
+        setVisibleMessageLimit((current) => current + ADVISOR_RENDER_WINDOW_STEP);
+    }, []);
+    const allowedUnitTypes          = useRuntimeState("world", selectAllowedUnitTypes);
     // The scrollable history div, and whether it should be kept pinned to the
     // bottom as new content (streaming tokens, a new reply) arrives. Starts
     // true (a fresh reply should follow); flips false the moment the player
@@ -975,7 +1017,16 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
     // The transcript and the current runTurn, readable from a stable callback
     // (handleRetryTurn) without making that callback depend on either.
     const messagesRef               = useRef(messages);
+    // Maintain the transcript ref synchronously. Streaming and canonical writes
+    // must not depend on React flushing a queued functional state updater.
+    const updateMessages = React.useCallback((change) => {
+        const next = typeof change === "function" ? change(messagesRef.current) : change;
+        messagesRef.current = next;
+        setMessages(next);
+        return next;
+    }, []);
     const runTurnRef                = useRef(null);
+    const turnInFlightRef           = useRef(false);
     const handleMessagesScroll = React.useCallback(() => {
         const el = messagesContainerRef.current;
         if (!el) return;
@@ -984,7 +1035,13 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
     }, []);
     const [hasOpened, setHasOpened] = useState(isAdvisorOpen);
     const [hasBootstrapped, setHasBootstrapped] = useState(false);
-    const [activeTab, setActiveTab] = useState("advisor");
+    const [loadFailed, setLoadFailed] = useState(false);
+    const [saveFailed, setSaveFailed] = useState(false);
+    const [storageRetrying, setStorageRetrying] = useState(false);
+    useEffect(() => {
+        onAdvisorSaveResult = (ok) => setSaveFailed(!ok);
+        return () => { onAdvisorSaveResult = null; };
+    }, []);
     const inputRef = useRef(null);
     const [isResizing, setIsResizing] = useState(false);
     const [handleHover, setHandleHover] = useState(false);
@@ -1031,7 +1088,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
     // A reply already in the chat language must skip the UI translator, which
     // would render it back into the interface language.
     const chatDiffers = chatLanguageDiffersFromUi();
-    const chatDir = chatDiffers && isRtlLanguage(resolveChatLanguage()) ? "rtl" : undefined;
+    const chatDir = chatTextDirection();
 
     useEffect(() => {
         if (isAdvisorOpen) setHasOpened(true);
@@ -1042,16 +1099,19 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         let cancelled = false;
         loadMessages().then((saved) => {
             if (cancelled) return;
-            if (saved.length > 0) {
-                setMessages(saved);
-                loadHistory(saved);   // restore advisor history — no prompt arg = advisor mode
+            if (saved === null) {
+                setLoadFailed(true);
             } else {
-                startChat();          // fresh start — no prompt arg = advisor mode
+                setContacts(advisorContacts(saved));
+                setChiefProfile(chiefAdvisorProfile(saved));
+                const chiefMessages = advisorMessagesFor(saved, CHIEF_ADVISOR_THREAD);
+                updateMessages(chiefMessages);
+                loadHistory(chiefMessages, CHIEF_ADVISOR_THREAD);
             }
             setHasBootstrapped(true);
         });
         return () => { cancelled = true; };
-    }, [hasBootstrapped, isAdvisorOpen]);
+    }, [hasBootstrapped, isAdvisorOpen, updateMessages]);
 
     // A turn flags new papers in the file while the panel holds the conversation
     // (and an undo takes them back): merge them in (mergeNotices), so they show
@@ -1061,11 +1121,15 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         if (!hasBootstrapped) return undefined;
         const onRuntimeUpdate = (event) => {
             if (event?.detail?.url !== JSON_URLS.advisor) return;
-            setMessages((prev) => mergeNotices(prev, event.detail.value));
+            setContacts(advisorContacts(event.detail.value));
+            setChiefProfile(chiefAdvisorProfile(event.detail.value));
+            if (activeThreadIdRef.current === CHIEF_ADVISOR_THREAD) {
+                updateMessages((prev) => mergeNotices(prev, advisorMessagesFor(event.detail.value, CHIEF_ADVISOR_THREAD)));
+            }
         };
         window.addEventListener("oh:runtime-json-updated", onRuntimeUpdate);
         return () => window.removeEventListener("oh:runtime-json-updated", onRuntimeUpdate);
-    }, [hasBootstrapped]);
+    }, [hasBootstrapped, updateMessages]);
 
     useEffect(() => {
         if (!shouldAutoScrollRef.current) return;
@@ -1115,6 +1179,108 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         resizeTextarea();
     }, [input, resizeTextarea]);
 
+    // Recipient navigation does not replace the campaign's chief advisor.
+    // Every contact has its own saved transcript and model history. Switching
+    // while a reply is in flight is forbidden: its streaming UI and write receipt
+    // must reach the conversation it was asked in.
+    const selectRecipient = async (id) => {
+        if (!hasBootstrapped || loadFailed || turnInFlightRef.current || sideEffectPendingRef.current || threadSwitchingRef.current) return;
+        if (activeThreadIdRef.current === id) return;
+        threadSwitchingRef.current = true;
+        try {
+            const saved = await readAdvisorMessages({ force: true });
+            if (id !== CHIEF_ADVISOR_THREAD && !advisorContacts(saved).some((contact) => contact.id === id)) {
+                throw new Error("The selected Advisor recipient no longer exists.");
+            }
+            contactDraftsRef.current.set(activeThreadIdRef.current, input);
+            const selectedMessages = advisorMessagesFor(saved, id);
+            activeThreadIdRef.current = id;
+            setActiveThreadId(id);
+            setContacts(advisorContacts(saved));
+            setChiefProfile(chiefAdvisorProfile(saved));
+            updateMessages(selectedMessages);
+            setInput(contactDraftsRef.current.get(id) || "");
+            setVisibleMessageLimit(ADVISOR_INITIAL_RENDER_WINDOW);
+            loadHistory(selectedMessages, id);
+            shouldAutoScrollRef.current = true;
+        } catch (error) {
+            setLoadFailed(true);
+            logDebugEvent("advisor", "Advisor contact could not be selected.", error, { problem: true });
+        } finally {
+            threadSwitchingRef.current = false;
+        }
+    };
+
+    const createRecipient = async (draft) => {
+        if (turnInFlightRef.current || sideEffectPendingRef.current || contactMutationRef.current || threadSwitchingRef.current || loadFailed || saveFailed) throw new Error("Cannot add a recipient while the Advisor is busy.");
+        contactMutationRef.current = true;
+        setContactsBusy(true);
+        const random = globalThis.crypto?.randomUUID?.().replace(/-/g, "")
+            || `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 15)}`;
+        const id = `advisor-${random}`;
+        try {
+            await mutateAdvisorState((all) => createAdvisorContact(all, { ...draft, id }));
+            setContacts(advisorContacts(await readAdvisorMessages({ force: true })));
+        } finally {
+            contactMutationRef.current = false;
+            setContactsBusy(false);
+        }
+        await selectRecipient(id);
+    };
+
+    const reviseRecipient = async (id, draft) => {
+        if (turnInFlightRef.current || sideEffectPendingRef.current || contactMutationRef.current || threadSwitchingRef.current || loadFailed || saveFailed) throw new Error("Cannot edit a recipient while the Advisor is busy.");
+        contactMutationRef.current = true;
+        setContactsBusy(true);
+        try {
+            await mutateAdvisorState((all) => reviseAdvisorContact(all, id, draft));
+            setContacts(advisorContacts(await readAdvisorMessages({ force: true })));
+        } finally {
+            contactMutationRef.current = false;
+            setContactsBusy(false);
+        }
+    };
+
+    const saveChiefProfile = async (draft) => {
+        if (turnInFlightRef.current || sideEffectPendingRef.current || contactMutationRef.current || threadSwitchingRef.current || loadFailed || saveFailed) throw new Error("Cannot edit the chief advisor while the Advisor is busy.");
+        contactMutationRef.current = true;
+        setContactsBusy(true);
+        try {
+            await mutateAdvisorState((all) => saveChiefAdvisorProfile(all, draft));
+            setChiefProfile(chiefAdvisorProfile(await readAdvisorMessages({ force: true })));
+        } finally {
+            contactMutationRef.current = false;
+            setContactsBusy(false);
+        }
+    };
+
+    const restoreChiefProfile = async () => {
+        if (turnInFlightRef.current || sideEffectPendingRef.current || contactMutationRef.current || threadSwitchingRef.current || loadFailed || saveFailed) throw new Error("Cannot restore the chief advisor while the Advisor is busy.");
+        contactMutationRef.current = true;
+        setContactsBusy(true);
+        try {
+            await mutateAdvisorState((all) => resetChiefAdvisorProfile(all));
+            setChiefProfile(chiefAdvisorProfile(await readAdvisorMessages({ force: true })));
+        } finally {
+            contactMutationRef.current = false;
+            setContactsBusy(false);
+        }
+    };
+
+    const retireRecipient = async (id, archived) => {
+        if (turnInFlightRef.current || sideEffectPendingRef.current || contactMutationRef.current || threadSwitchingRef.current || loadFailed || saveFailed) throw new Error("Cannot retire a recipient while the Advisor is busy.");
+        contactMutationRef.current = true;
+        setContactsBusy(true);
+        try {
+            await mutateAdvisorState((all) => archiveAdvisorContact(all, id, archived));
+            setContacts(advisorContacts(await readAdvisorMessages({ force: true })));
+        } finally {
+            contactMutationRef.current = false;
+            setContactsBusy(false);
+        }
+        if (archived && activeThreadIdRef.current === id) await selectRecipient(CHIEF_ADVISOR_THREAD);
+    };
+
     // One turn with the advisor, from either entry point: the composer
     // (handleSend) or the Retry button on a failed turn (handleRetryTurn).
     //
@@ -1123,8 +1289,33 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
     // original question stays where it is, so the transcript reads as one
     // exchange. sendMessage pops its own history entry when a call throws (see
     // main.jsx), so the model never sees the question twice either.
-    const runTurn = async (text, { replaceTrailingError = false } = {}) => {
-        if (!text || isLoading) return;
+    //
+    // One turn at a time, checked through a ref: `isLoading` is this render's
+    // value and was set only after the awaits below, so a quick double-click on
+    // Retry sent the question twice, spending two requests, doubling the
+    // reply and queueing its actions twice.
+    const runTurn = async (text, options) => {
+        if (!text || !hasBootstrapped || loadFailed || saveFailed || turnInFlightRef.current || sideEffectPendingRef.current || contactMutationRef.current || threadSwitchingRef.current || recipientLocked) return;
+        turnInFlightRef.current = true;
+        setIsLoading(true);
+        try {
+            await askAdvisor(text, options);
+        } finally {
+            turnInFlightRef.current = false;
+            setIsLoading(false);
+        }
+    };
+
+    const askAdvisor = async (text, { replaceTrailingError = false } = {}) => {
+        const threadId = activeThreadIdRef.current;
+        const recipient = threadId === CHIEF_ADVISOR_THREAD ? null
+            : contacts.find((contact) => contact.id === threadId && !contact.archived);
+        if (threadId !== CHIEF_ADVISOR_THREAD && !recipient) throw new Error("This recipient is unavailable.");
+        // The campaign the question is asked in. Its orders, projects and
+        // transcript are written through endpoints that follow the open
+        // campaign, so a reply that lands after a switch writes nothing.
+        const campaignId = String(getLibraryState()?.activeGameId || "").trim();
+        const leftCampaign = () => campaignChanged(campaignId, getLibraryState()?.activeGameId);
 
         // `round` rides along with the date for applyAdvisorProjects — see its
         // comment for why a project update without one reads as stale.
@@ -1142,13 +1333,15 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         const askedOn = moment.date || gameDate;
         const catchUp = replaceTrailingError
             ? { text: askedBefore?.catchUp || "", label: askedBefore?.catchUpLabel || "" }
-            : await buildAdvisorCatchUp(messagesRef.current, moment);
+            : await buildAdvisorCatchUp(messagesRef.current, moment, {
+                publicOnly: Boolean(recipient && advisorRecipientType(recipient) !== ADVISOR_RECIPIENT_TYPES.MINISTER),
+            });
 
         // A fresh question re-engages auto-scroll even if the player had
         // paused it reading up through history — the pause is scoped to the
         // reply they scrolled away from, not the whole session.
         shouldAutoScrollRef.current = true;
-        setMessages(prev => (replaceTrailingError
+        updateMessages(prev => (replaceTrailingError
             ? (prev[prev.length - 1]?.role === "error" ? prev.slice(0, -1) : prev.slice())
             : [...prev, {
                 role: "user",
@@ -1159,56 +1352,71 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
                 at: new Date().toISOString(),
                 ...(catchUp.text ? { catchUp: catchUp.text, catchUpLabel: catchUp.label } : {}),
             }]));
-        setIsLoading(true);
-
         // Streaming: the ThinkingDots show until the first token, then a live
         // advisor bubble fills as tokens arrive. It carries a `streaming` flag so
         // it can be found and finalised; intermediate text is NOT persisted.
-        const showStreaming = (fullText) => setMessages(prev => {
+        const showStreaming = (fullText) => updateMessages(prev => {
             const next = prev.slice();
             const last = next[next.length - 1];
             if (last && last.role === "advisor" && last.streaming) {
-                next[next.length - 1] = { ...last, text: fullText };
+                next[next.length - 1] = { ...last, text: stripAdvisorMemory(fullText) };
             } else {
-                next.push({ role: "advisor", text: fullText, time: askedOn, streaming: true });
+                next.push({ role: "advisor", text: stripAdvisorMemory(fullText), time: askedOn, streaming: true });
             }
             return next;
         });
 
         try {
-            const reply = await sendMessage(text, { onChunk: (_delta, full) => showStreaming(full), catchUp: catchUp.text });
-            // Apply any ```actions proposal in the reply to the real queue BEFORE
-            // finalising the message, so the confirmation card that renders with it
-            // reflects what actually happened — not a re-derivation done later at
-            // render time (which can't know what the queue looked like when this
-            // reply arrived).
-            const { json: actionsProposal, reason: actionsReason } = extractFencedJson(reply, "actions");
-            // What the advisor asked for and did not get, kept on the reply and
-            // told to it before the next question (advisorBlocks.js).
-            const actionsProblems = actionsReason ? [`it was ${actionsReason}, so nothing in it was applied`] : [];
-            const { chartProblem } = parseMessage(reply);
-            const actionsSummary = await applyAdvisorActions(actionsProposal, actionsProblems).catch((error) => {
-                console.error("Failed to apply advisor-proposed actions:", error);
-                return null;
+            const raw = await sendMessage(text, { threadId, recipient, onChunk: (_delta, full) => showStreaming(full), catchUp: catchUp.text });
+            if (leftCampaign()) {
+                logDebugEvent("advisor", "Advisor reply dropped: the campaign was switched while it was being written, so none of its orders or projects were applied.");
+                return;
+            }
+            // The hidden ADVISOR_MEMORY line (AI/advisorMemory.js) is kept on the
+            // message, never in its text: loadHistory sends the newest one ahead
+            // of the history after a reload.
+            const { reply, memory } = splitAdvisorMemory(raw);
+            // No reply is authority to write an Action. Persist one durable
+            // message-bound proposal per valid fenced op, then wait for Proceed.
+            const replyId = `advisor-reply-${globalThis.crypto?.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 14)}`}`;
+            // Parse once for BOTH the displayed text and persisted proposals.
+            // A provider may emit multiple fenced Action arrays; each must be
+            // reviewable, with none silently left as raw JSON in the message.
+            const { actionsProposal, actionBlockProblems, chartProblem, draftProblems, institutionDraftProblems, deployProblems } = parseAdvisorReply(reply, {
+                allowedUnitTypes: Array.isArray(moment.world?.allowedUnitTypes) ? moment.world.allowedUnitTypes : null,
             });
+            const { proposals: actionProposals, problems: invalidProposals } =
+                (threadId === CHIEF_ADVISOR_THREAD || advisorRecipientType(recipient) === ADVISOR_RECIPIENT_TYPES.MINISTER)
+                    ? actionProposalsFromReply(actionsProposal, replyId)
+                    : { proposals: [], problems: [] };
+            const actionsProblems = [...actionBlockProblems, ...invalidProposals];
             // Same one-shot treatment for the projects board, with truncation
             // salvage: a full backfill of a long campaign is the one block big
             // enough to be cut off mid-array by the reply token cap.
             const { json: projectsProposal, truncated: projectsTruncated, reason: projectsReason,
                 dropped: projectsDropped, excerpt: projectsExcerpt } =
                 extractFencedJson(reply, "projects", { salvageTruncated: true });
-            const projectsSummary = await applyAdvisorProjects(projectsProposal, gameDate, gameRound).catch((error) => {
-                console.error("Failed to apply advisor-proposed projects:", error);
-                return null;
-            });
+            const canApplyProjects = canAdvisorApplyProjectOps(threadId, recipient);
+            const projectsSummary = canApplyProjects
+                ? await applyAdvisorProjectProposal({
+                    proposal: projectsProposal,
+                    gameDate,
+                    round: gameRound,
+                    mutateWorldState,
+                    applyProjectOpsToWorld,
+                }).catch((error) => {
+                    console.error("Failed to apply advisor-proposed projects:", error);
+                    return null;
+                }) : null;
             // Every way this can fail used to look identical to the player: a wall
             // of JSON in the chat and a board that never moved. If the model
             // plainly tried and nothing landed, say so and offer the retry.
             // "Some of it landed" is its own outcome, and the most common one now
             // that a single malformed entry no longer costs the batch.
-            const projectsProblem = projectsSummary
-                ? (projectsTruncated ? "truncated" : (projectsDropped > 0 ? "partial" : ""))
-                : (looksLikeProjectOps(reply) ? (projectsTruncated ? "truncated-empty" : "unusable") : "");
+            const projectsProblem = !canApplyProjects ? ""
+                : projectsSummary
+                    ? (projectsTruncated ? "truncated" : (projectsDropped > 0 ? "partial" : ""))
+                    : (looksLikeProjectOps(reply) ? (projectsTruncated ? "truncated-empty" : "unusable") : "");
             // "None of the ops applied" is a distinct failure from "we could not
             // read them": the block parsed fine and every op named a project that
             // does not exist. Telling them apart is the difference between "ask
@@ -1231,19 +1439,24 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             // apart, and it is logged whether or not anything went wrong so the
             // "it worked, the player looked at the wrong panel" case is on the
             // record too.
-            logDebugEvent("advisor", "Advisor reply blocks applied.", {
+            logDebugEvent("advisor", "Advisor reply blocks reviewed.", {
                 actionsBlock: actionsProposal ? `${Array.isArray(actionsProposal) ? actionsProposal.length : 1} op(s)` : "(none in the reply)",
-                actionsApplied: actionsSummary ? `${actionsSummary.length} change(s)` : "nothing",
+                actionsProposed: `${actionProposals.length} pending review (zero auto-queued)`,
                 projectsBlock: projectsProposal ? `${Array.isArray(projectsProposal) ? projectsProposal.length : 1} op(s)` : "(none in the reply)",
                 projectsApplied: projectsSummary ? `${projectsSummary.length} change(s)` : "nothing",
                 projectsProblem: projectsProblem || "(none)",
                 projectsDetail: projectsDetail || "",
                 projectsExcerpt: projectsExcerptText || "",
             }, { verbose: true });
-            setMessages(prev => {
+            const next = updateMessages(prev => {
                 const next = prev.slice();
                 const last = next[next.length - 1];
-                const finalMessage = { role: "advisor", text: reply, time: askedOn, at: new Date().toISOString(), ...(chartProblem ? { chartProblem } : {}), ...(actionsProblems.length ? { actionsProblems } : {}), ...(actionsSummary ? { actionsSummary } : {}), ...(projectsSummary ? { projectsSummary } : {}), ...(projectsProblem ? { projectsProblem } : {}), ...(projectsDetail ? { projectsDetail } : {}), ...(projectsExcerptText ? { projectsExcerpt: projectsExcerptText } : {}) };
+                const actionSuggestionsBlocked = threadId !== CHIEF_ADVISOR_THREAD && advisorRecipientType(recipient) !== ADVISOR_RECIPIENT_TYPES.MINISTER && actionsProposal;
+                const projectsNotApplied = !canApplyProjects && projectsProposal;
+                // Keep the upstream localization fix: the notice is UI metadata, not part of the
+                // reply text or the future model context. Ordinary Action proposals stay reviewable.
+                const suggestionsNotApplied = Boolean(actionSuggestionsBlocked || projectsNotApplied);
+                const finalMessage = { id: replyId, role: "advisor", text: reply, time: askedOn, at: new Date().toISOString(), ...(suggestionsNotApplied ? { suggestionsNotApplied: true } : {}), ...(memory ? { memory } : {}), ...(chartProblem ? { chartProblem } : {}), ...(actionsProblems.length ? { actionsProblems } : {}), ...(actionProposals.length ? { actionProposals } : {}), ...(draftProblems.length ? { draftProblems } : {}), ...(institutionDraftProblems.length ? { institutionDraftProblems } : {}), ...(deployProblems.length ? { deployProblems } : {}), ...(projectsSummary ? { projectsSummary } : {}), ...(projectsProblem ? { projectsProblem } : {}), ...(projectsDetail ? { projectsDetail } : {}), ...(projectsExcerptText ? { projectsExcerpt: projectsExcerptText } : {}) };
                 // Finalise the streaming bubble, or append the full reply if the
                 // provider never streamed a chunk.
                 if (last && last.role === "advisor" && last.streaming) {
@@ -1251,11 +1464,12 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
                 } else {
                     next.push(finalMessage);
                 }
-                saveMessages(next);
                 return next;
             });
+            await saveMessages(next, threadId);
         } catch (err) {
-            setMessages(prev => {
+            if (leftCampaign()) return;
+            const updated = updateMessages(prev => {
                 const last = prev[prev.length - 1];
                 const base = last && last.role === "advisor" && last.streaming ? prev.slice(0, -1) : prev.slice();
                 // Keep whatever the transport managed to learn about the failure,
@@ -1266,17 +1480,16 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
                     time: askedOn,
                     ...(err?.diagnostics ? { diagnostics: err.diagnostics } : {}),
                 }];
-                saveMessages(updated);
                 return updated;
             });
-        } finally {
-            setIsLoading(false);
+            await saveMessages(updated, threadId);
         }
     };
 
-    const handleSend = () => {
-        const text = input.trim();
-        if (!text || isLoading) return;
+    // The microphone (AdvisorMic) passes what it heard; a click passes its event.
+    const handleSend = (spoken) => {
+        const text = (typeof spoken === "string" ? spoken : input).trim();
+        if (!text || !hasBootstrapped || loadFailed || saveFailed || turnInFlightRef.current || sideEffectPendingRef.current || contactMutationRef.current || threadSwitchingRef.current || recipientLocked) return;
         setInput("");
         return runTurn(text);
     };
@@ -1293,28 +1506,108 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
     }, []);
 
     useEffect(() => { messagesRef.current = messages; }, [messages]);
+
+    // Retry for a conversation that could not be read: once it is, what was
+    // said meanwhile (kept here, unsaved) follows it and is saved with it.
+    const retryLoad = async () => {
+        setStorageRetrying(true);
+        try {
+            const saved = await loadMessages();
+            if (saved === null) return;
+            setLoadFailed(false);
+            // Not the notices: a turn's arrive in the file and were merged in
+            // here (mergeNotices), so the stored copy already holds them.
+            const threadId = activeThreadIdRef.current;
+            const savedThread = advisorMessagesFor(saved, threadId);
+            const storedIds = new Set(savedThread.map((message) => message?.id).filter(Boolean));
+            const said = messagesRef.current.filter((message) => !(message?.id && storedIds.has(message.id)));
+            const merged = [...savedThread, ...said];
+            setContacts(advisorContacts(saved));
+            setChiefProfile(chiefAdvisorProfile(saved));
+            updateMessages(merged);
+            loadHistory(merged, threadId);
+            if (said.length) await saveMessages(merged, threadId);
+        } finally {
+            setStorageRetrying(false);
+        }
+    };
+
+    // Retry for a save that failed: the conversation as it stands now.
+    const retrySave = async () => {
+        setStorageRetrying(true);
+        try {
+            await saveMessages(messagesRef.current, activeThreadIdRef.current);
+        } finally {
+            setStorageRetrying(false);
+        }
+    };
     useEffect(() => { runTurnRef.current = runTurn; });
 
     const handleKeyDown = (e) => {
-        if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); }
+        if (isComposerSendKey(e, { touch: isTouch })) { e.preventDefault(); handleSend(); }
     };
 
-    // Sends one drafted message (see ADVISOR_MESSAGE_DRAFT_DIRECTIVE in main.jsx)
-    // straight to its country's diplomatic chat, then marks it sent on the
-    // ADVISOR message itself (not just local UI state) so the button stays
-    // "✓ Sent" across a reload instead of reappearing clickable. A stable
-    // reference (no deps) so it never breaks AdvisorMessageList's memoization —
-    // see the comment on that component for why that matters.
+    // "Ask for the next batch" under a projects block that was cut off. A
+    // stable reference (no deps) so it never breaks AdvisorMessageList's
+    // memoization — see the comment on that component for why that matters.
     // Puts the follow-up in the composer rather than sending it: the player may
     // want to narrow what they are asking for, and this file has never auto-sent
     // anything on the player's behalf (see the requestedPrompt effect above).
     const handleRetryProjects = React.useCallback(() => {
-        setInput("Continue putting my projects and operations on the board — the last reply was cut off. "
-            + "Pick up from where you stopped and skip anything already on the board. Send no more than ten, "
-            + "one sentence each. Only include efforts that genuinely appear in our history — if everything real "
-            + "is already on the board, just tell me that and add nothing.");
+        setInput(uiString(RETRY_PROJECTS_TEXT));
         inputRef.current?.focus();
     }, []);
+
+    // Discuss is a local composer handoff: it neither sends a message nor
+    // writes an Action. Preserve any draft the player was already typing.
+    const handleDiscussAction = React.useCallback((_messageId, proposal) => {
+        if (turnInFlightRef.current || sideEffectPendingRef.current || threadSwitchingRef.current) return;
+        const subject = String(proposal?.title || proposal?.text || "this Action").trim().slice(0, 240);
+        const prompt = `Let's discuss the proposed Action "${subject}" before I authorize it.`;
+        setInput((current) => current.trim() ? `${current.replace(/\s+$/, "")}\n\n${prompt}` : prompt);
+        inputRef.current?.focus();
+    }, []);
+
+    // Canonical approval: re-fetch the stored message and recipient, then
+    // re-plan against the latest queue IN its existing canonical write queue.
+    // An already-saved Action ID is idempotent after a click retry/reload.
+    const handleProceedAction = React.useCallback(async (messageId, proposalId) => {
+        if (turnInFlightRef.current || sideEffectPendingRef.current || threadSwitchingRef.current || advisorLoadFailed) {
+            return { ok: false, error: "The Advisor is busy. Try again when the current operation finishes." };
+        }
+        const threadId = activeThreadIdRef.current;
+        const campaignId = String(getLibraryState()?.activeGameId || "").trim();
+        sideEffectPendingRef.current += 1;
+        setSideEffectsBusy(true);
+        try {
+            assertNoTurnRunning();
+            const { round } = await readJson(JSON_URLS.game, { defaultValue: { round: 0 }, force: true });
+            if (campaignChanged(campaignId, getLibraryState()?.activeGameId)) {
+                throw new Error("The campaign changed before the Action could be queued.");
+            }
+            const receipt = await approveAdvisorAction({
+                threadId, messageId, proposalId,
+                readAdvisorMessages, mutateActionsState, mutateAdvisorState,
+                normalizeAction: normalizeActionEntry,
+                repeatOf: (queue, title) => repeatedOrder(queue, title, { round: Number(round) || 0 }),
+                assertReady: assertNoTurnRunning,
+            });
+            if (campaignChanged(campaignId, getLibraryState()?.activeGameId)) {
+                throw new Error("The campaign changed while the Action was being reviewed. Reopen the correct game.");
+            }
+            updateMessages((previous) => recordAdvisorActionReceipt(previous, threadId, messageId, proposalId, receipt));
+            logDebugEvent("advisor", `Player confirmed Advisor Action proposal ${proposalId}: ${receipt.status}.`, {
+                messageId, actionId: receipt.actionId,
+            }, { verbose: true });
+            return { ok: true };
+        } catch (error) {
+            console.warn("[advisor] the Action proposal was not fully confirmed:", error);
+            return { ok: false, error: `${error?.message || String(error)} If a write succeeded before an error, retrying uses the same Action ID.` };
+        } finally {
+            sideEffectPendingRef.current -= 1;
+            if (!sideEffectPendingRef.current) setSideEffectsBusy(false);
+        }
+    }, [updateMessages]);
 
     // Hands the drafted letter to the diplomacy panel: opens (or reuses) the
     // chat with that country and drops the text in its composer, where the
@@ -1325,10 +1618,118 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         // separately by the diplomacy path (AI/main.jsx), after whatever the
         // player edited in the composer — and the pair is the only way to answer
         // "the advisor drafted one thing and something else went out".
-        logDebugEvent("advisor", `Draft handed to the Diplomacy composer for ${draft.country}.`, draft.text, { verbose: true });
-        requestDiplomaticChat({ name: draft.country }, { draft: draft.text });
+        const target = draft.targetType === "institution-council"
+            ? { targetType: "institution-council", institutionId: draft.institutionId, threadId: draft.threadId || "", name: draft.country || draft.institutionId }
+            : draft.targetType === "institution-lifecycle"
+                ? { targetType: "institution-lifecycle", institutionId: draft.institutionId, caseId: draft.caseId, threadId: draft.threadId || "", name: draft.country || draft.institutionId }
+                : { targetType: "private", country: draft.country, name: draft.country };
+        const destination = target.targetType === "private"
+            ? draft.country
+            : `${target.targetType === "institution-council" ? "Council" : "hearing"} ${draft.institutionId}${draft.caseId ? ` / ${draft.caseId}` : ""}`;
+        logDebugEvent("advisor", `Draft handed to the Diplomacy composer for ${destination}.`, draft.text, { verbose: true });
+        requestDiplomaticChat(target, { draft: draft.text });
         stepAsideRef.current?.();
     }, []);
+
+    // Executes one typed formal institution draft ONLY after the human clicks
+    // its button. This is the player-authority boundary: the Advisor may prepare
+    // the operation, but these native commit seams re-read and revalidate the
+    // current institution before any canonical mutation is published.
+    const handleExecuteInstitutionDraft = React.useCallback(async (msgIndex, draftIndex, draft) => {
+        if (activeThreadIdRef.current !== CHIEF_ADVISOR_THREAD) {
+            return { ok: false, error: "Additional officials advise only. Authorize an institutional action through the appropriate game panel." };
+        }
+        sideEffectPendingRef.current += 1;
+        setSideEffectsBusy(true);
+        const threadId = activeThreadIdRef.current;
+        try {
+            // The institution lives in the world a running turn writes back.
+            assertNoTurnRunning();
+            const game = await readJson(JSON_URLS.game, {
+                defaultValue: { gameDate: "", country: "" },
+                force: true,
+            });
+            const playerCountry = String(game?.country || "").trim();
+            const date = String(game?.gameDate || "").trim();
+            const expectedGameId = String(getLibraryState()?.activeGameId || "").trim();
+            if (!playerCountry) throw new Error("No player polity is active.");
+
+            if (draft.type === "table-proposal") {
+                await commitInstitutionalPlayerProposal({
+                    institutionId: draft.institutionId,
+                    playerCountry,
+                    date,
+                    expectedGameId,
+                    proposal: {
+                        type: draft.proposalType || "resolution",
+                        title: draft.title,
+                        summary: draft.summary || "",
+                    },
+                });
+            } else if (draft.type === "submit-proposal") {
+                await commitWithVotingRuleBackfill(() => commitInstitutionalPlayerVoteRequest({
+                    institutionId: draft.institutionId,
+                    proposalId: draft.proposalId,
+                    playerCountry,
+                    date,
+                    expectedGameId,
+                }), { institutionId: draft.institutionId, proposalId: draft.proposalId, expectedGameId });
+            } else if (draft.type === "vote") {
+                await commitInstitutionGovernanceCommand({
+                    institutionId: draft.institutionId,
+                    playerCountry,
+                    date,
+                    expectedGameId,
+                    command: {
+                        type: "vote",
+                        proposalId: draft.proposalId,
+                        polity: playerCountry,
+                        choice: draft.choice,
+                        reason: draft.reason || "",
+                        authority: "player",
+                        finalizeWhenComplete: true,
+                        implementWhenPassed: true,
+                    },
+                });
+            } else if (draft.type === "invite") {
+                await commitInstitutionLifecycleCommand({
+                    playerCountry,
+                    date,
+                    expectedGameId,
+                    command: {
+                        type: "invite",
+                        institutionId: draft.institutionId,
+                        initiatedBy: playerCountry,
+                        polity: draft.polity,
+                        requestedStatus: draft.requestedStatus || "member",
+                        reason: draft.reason || "",
+                        authority: "player",
+                    },
+                });
+            } else {
+                throw new Error(`Unsupported Advisor institution draft ${draft.type || "<blank>"}.`);
+            }
+
+            logDebugEvent("advisor", `Player confirmed Advisor institution action: ${draft.type}.`, JSON.stringify(draft), { verbose: true });
+            const next = updateMessages((prev) => {
+                const next = prev.slice();
+                const target = next[msgIndex];
+                if (!target) return prev;
+                const completed = new Set(target.completedInstitutionDrafts || []);
+                completed.add(draftIndex);
+                next[msgIndex] = { ...target, completedInstitutionDrafts: [...completed] };
+                return next;
+            });
+            await saveMessages(next, threadId);
+            return { ok: true };
+        } catch (err) {
+            console.warn("[advisor] could not execute the recommended institution action:", err);
+            return { ok: false, error: err?.message || String(err) };
+        } finally {
+            sideEffectPendingRef.current -= 1;
+            if (!sideEffectPendingRef.current) setSideEffectsBusy(false);
+        }
+    }, [updateMessages]);
 
     // Places one deployment the advisor recommended, through the very same
     // deployUnit the Forces panel uses — so it lands as a pending unit with a
@@ -1337,9 +1738,17 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
     // message (not local state) so the button stays "✓ placed" across a reload.
     // Stable reference, for the same memoization reason as handleDraftMessage.
     const handlePlaceDeployment = React.useCallback(async (msgIndex, deployIndex, deployment) => {
+        if (activeThreadIdRef.current !== CHIEF_ADVISOR_THREAD) {
+            return { ok: false, error: "Additional officials advise only. Authorize a deployment through the Forces panel." };
+        }
+        sideEffectPendingRef.current += 1;
+        setSideEffectsBusy(true);
+        const threadId = activeThreadIdRef.current;
         try {
             const { deployUnit } = await import("../Map/unitsController.js");
-            await deployUnit({
+            // Null: nothing was placed, as a turn is running or the scenario
+            // does not allow that troop type (unitsController.js).
+            const placed = await deployUnit({
                 type: String(deployment.type).toLowerCase(),
                 strength: Math.max(1, Math.min(100, Number(deployment.strength) || 100)),
                 name: String(deployment.name).trim(),
@@ -1347,11 +1756,17 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
                 lng: Number(deployment.lng),
                 lat: Number(deployment.lat),
             });
+            if (placed === null) {
+                if (isSimulationBusy()) return { ok: false, error: TURN_RUNNING_NOTE };
+                throw new Error("This scenario does not allow that troop type, so the unit was not placed.");
+            }
+            // Not saved: no flight to a unit that is not there, no "placed" mark.
+            if (!placed?.ok) return { ok: false, error: placed?.error };
             mapRef?.current?.getMap?.()?.flyTo?.({
                 center: [Number(deployment.lng), Number(deployment.lat)],
                 zoom: 4.5,
             });
-            setMessages((prev) => {
+            const next = updateMessages((prev) => {
                 const next = prev.slice();
                 const target = next[msgIndex];
                 if (!target) return prev;
@@ -1359,22 +1774,25 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
                     ...target,
                     placedDeployments: [...(target.placedDeployments || []), deployIndex],
                 };
-                saveMessages(next);
                 return next;
             });
+            await saveMessages(next, threadId);
             return { ok: true };
         } catch (err) {
             console.warn("[advisor] could not place the recommended deployment:", err);
-            return { ok: false };
+            return { ok: false, error: err?.message || String(err) };
+        } finally {
+            sideEffectPendingRef.current -= 1;
+            if (!sideEffectPendingRef.current) setSideEffectsBusy(false);
         }
-    }, [mapRef]);
+    }, [mapRef, updateMessages]);
 
     if (!hasOpened) return null;
 
     return (
         <>
         <MarkdownStyleInjector />
-        <div style={{
+        <div className="oh-advisor-drawer" style={{
             // Pinned to the top and the bottom rather than given a height. 100vh
             // is the height a phone shows with its address bar HIDDEN, so while
             // the bar showed, a 100vh drawer anchored at the bottom ran off the
@@ -1397,7 +1815,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             ...(isMobile
                 ? { left: 0, paddingTop: SAFE_TOP, paddingBottom: SAFE_BOTTOM, paddingLeft: SAFE_LEFT, paddingRight: SAFE_RIGHT, boxSizing: "border-box" }
                 : { width: `calc(${width || ADVISOR_PANEL_WIDTH} + ${SAFE_RIGHT})`, paddingTop: SAFE_TOP, paddingBottom: SAFE_BOTTOM, paddingRight: SAFE_RIGHT, boxSizing: "border-box", borderLeft: "1px solid rgba(255,255,255,0.1)" }),
-            backgroundColor: "rgba(24, 24, 27, 0.95)", backdropFilter: "blur(8px)",
+            backdropFilter: "blur(8px)",
             // Phones: above every HUD button/panel (toolbar 9999, forces 10000,
             // library panels 10031) so nothing covers the full-screen sheet;
             // below the editor (10050) and server-down (10060) overlays.
@@ -1434,26 +1852,34 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
                 }} />
             </div>
         )}
-        {/* Header: tabs to flip between the advisor chat and national stats. */}
-        <div style={{ alignItems: "center", borderBottom: "1px solid rgba(255,255,255,0.1)", display: "flex", padding: "0 0.75rem 0 0.35rem" }}>
-        <TabButton icon="🧭" label="Advisor" active={activeTab === "advisor"} onClick={() => setActiveTab("advisor")} />
-        <TabButton icon="📊" label="Stats" active={activeTab === "stats"} onClick={() => setActiveTab("stats")} />
+        {/* Advisor is its own system. Country/Stats lives in the separate flag drawer. */}
+        <div className="oh-advisor-header">
+        <span className="oh-advisor-header-mark" aria-hidden="true">◇</span>
+        <span className="oh-advisor-header-title">Advisor</span>
         <div style={{ flex: 1 }} />
-        {activeTab === "advisor" && (
-            <button
-            className="oh-tap"
-            onClick={async () => {
-                if (isTouch && !confirmingClear) { setConfirmingClear(true); return; }
-                setConfirmingClear(false);
-                setMessages([]); startChat(); await saveMessages([]);
-            }}
-            title={confirmingClear ? "Tap again to clear the chat" : "Clear chat"}
-            aria-label={confirmingClear ? "Confirm clearing the chat" : "Clear chat"}
-            style={confirmingClear
-                ? { background: "rgba(239,68,68,0.18)", border: "1px solid rgba(239,68,68,0.55)", borderRadius: "8px", color: "#fca5a5", cursor: "pointer", fontFamily: "sans-serif", fontSize: "0.8rem", fontWeight: 600, lineHeight: 1, padding: "0 0.6rem", display: "flex", alignItems: "center" }
-                : { background: "none", border: "none", color: "rgba(255,255,255,0.4)", cursor: "pointer", fontSize: "1.35rem", lineHeight: 1, padding: 0, display: "flex", alignItems: "center" }}
-            >{confirmingClear ? "Clear?" : "🗑"}</button>
-        )}
+        <button
+        className="oh-tap"
+        onClick={async () => {
+            if (!hasBootstrapped || loadFailed || saveFailed || contactMutationRef.current || turnInFlightRef.current || sideEffectPendingRef.current || threadSwitchingRef.current) return;
+            if (isTouch && !confirmingClear) { setConfirmingClear(true); return; }
+            setConfirmingClear(false);
+            const threadId = activeThreadIdRef.current;
+            threadSwitchingRef.current = true;
+            try {
+                updateMessages([]);
+                startChat(threadId);
+                await saveMessages([], threadId, { clearNotices: true });
+            } finally {
+                threadSwitchingRef.current = false;
+            }
+        }}
+        disabled={!hasBootstrapped || loadFailed || isLoading || sideEffectsBusy}
+        title={confirmingClear ? "Tap again to clear the chat" : "Clear chat"}
+        aria-label={confirmingClear ? "Confirm clearing the chat" : "Clear chat"}
+        style={confirmingClear
+            ? { background: "rgba(239,68,68,0.18)", border: "1px solid rgba(239,68,68,0.55)", borderRadius: "8px", color: "#fca5a5", cursor: "pointer", fontFamily: "sans-serif", fontSize: "0.8rem", fontWeight: 600, lineHeight: 1, padding: "0 0.6rem", display: "flex", alignItems: "center" }
+            : { background: "none", border: "none", color: "rgba(255,255,255,0.4)", cursor: "pointer", fontSize: "1.35rem", lineHeight: 1, padding: 0, display: "flex", alignItems: "center" }}
+        >{confirmingClear ? "Clear?" : "🗑"}</button>
         {/* The way out. On a phone the advisor is the whole screen and this ✕
             (or Back) is all that closes it, so it is finger-sized there. */}
         {onClose && (
@@ -1467,18 +1893,42 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         )}
         </div>
 
-        {/* National stats pane — kept mounted so flipping tabs is instant. */}
-        <div style={{ display: activeTab === "stats" ? "flex" : "none", flex: 1, flexDirection: "column", minHeight: 0 }}>
-        <StatsPane active={isAdvisorOpen && activeTab === "stats"} />
-        </div>
+        <AdvisorRecipients
+            contacts={contacts}
+            activeId={activeThreadId}
+            chiefProfile={chiefProfile}
+            offices={offices}
+            statusOf={(contact) => advisorOfficeStatus(contact, politicalWorld)}
+            busy={!hasBootstrapped || isLoading || contactsBusy || sideEffectsBusy || saveFailed || storageRetrying || threadSwitchingRef.current || loadFailed}
+            onSelect={selectRecipient}
+            onCreate={createRecipient}
+            onRevise={reviseRecipient}
+            onArchive={retireRecipient}
+            onSaveChief={saveChiefProfile}
+            onResetChief={restoreChiefProfile}
+        />
 
-        <div style={{ display: activeTab === "advisor" ? "flex" : "none", flex: 1, flexDirection: "column", minHeight: 0 }}>
+        {loadFailed ? (
+            <StorageProblemNotice title="Could not load your conversation with the advisor." detail="Nothing new is saved until it loads." onRetry={retryLoad} retrying={storageRetrying} retryIcon={<RetryIcon />} />
+        ) : saveFailed ? (
+            <StorageProblemNotice title="Your latest messages were not saved." detail="They are kept here until a save works." onRetry={retrySave} retrying={storageRetrying} retryIcon={<RetryIcon />} />
+        ) : null}
+
+        <div style={{ display: "flex", flex: 1, flexDirection: "column", minHeight: 0 }}>
         {/* Messages — memoized as its own component so typing below (state that
             lives in AdvisorPanel) doesn't re-render the whole history on every
             keystroke. See AdvisorMessageRow's comment for why that mattered. */}
         <AdvisorMessageList
         messages={messages}
+        speakerName={selectedContact?.name || chiefProfile?.name || "Advisor"}
+        emptyMessage={selectedContact && advisorRecipientType(selectedContact) !== ADVISOR_RECIPIENT_TYPES.MINISTER ? "No messages yet. Start your conversation." : "No messages yet. Ask your advisor something!"}
+        canExecute={activeThreadId === CHIEF_ADVISOR_THREAD}
+        canDraft={activeThreadId === CHIEF_ADVISOR_THREAD || advisorRecipientType(selectedContact) === ADVISOR_RECIPIENT_TYPES.MINISTER}
+        canReviewActions={!recipientLocked && (activeThreadId === CHIEF_ADVISOR_THREAD || advisorRecipientType(selectedContact) === ADVISOR_RECIPIENT_TYPES.MINISTER)}
+        visibleLimit={visibleMessageLimit}
+        onShowEarlier={handleShowEarlier}
         isLoading={isLoading}
+        allowedUnitTypes={allowedUnitTypes}
         chatDiffers={chatDiffers}
         chatDir={chatDir}
         onOpenActions={onOpenActions}
@@ -1487,6 +1937,9 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         onRetry={handleRetryTurn}
         retrying={isLoading}
         onDraftMessage={handleDraftMessage}
+        onDiscussAction={handleDiscussAction}
+        onProceedAction={handleProceedAction}
+        onExecuteInstitutionDraft={handleExecuteInstitutionDraft}
         onPlaceDeployment={handlePlaceDeployment}
         messagesEndRef={messagesEndRef}
         containerRef={messagesContainerRef}
@@ -1494,27 +1947,44 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         />
 
         {/* Input */}
-        <div style={{ padding: "1rem", borderTop: "1px solid rgba(255,255,255,0.1)", display: "flex", alignItems: "center", gap: "0.5rem" }}>
+        <div className="oh-advisor-composer">
+        <div className="oh-advisor-composer-field">
         <textarea
+        className="oh-advisor-composer-input"
         ref={inputRef}
-        // A phone's keyboard has no Shift+Enter to speak of.
-        placeholder={isTouch ? "Ask your advisor…" : "Ask your advisor…  (Shift+Enter for a new line)"}
+        placeholder={recipientUnavailableReason || undefined}
         rows={1} value={input}
+        disabled={recipientLocked}
+        enterKeyHint="enter"
         onChange={e => {
             setInput(e.target.value);
+            setTyped(Boolean(e.target.value.trim()));
             resizeTextarea();
         }}
         onKeyDown={handleKeyDown}
-        style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.2)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: "10px", color: "white", fontSize: "0.875rem", padding: "0.6rem 0.75rem", resize: "none", outline: "none", fontFamily: "sans-serif", lineHeight: "1.5", overflowY: "auto", scrollbarWidth: "none", transition: "border-color 0.2s" }}
-        onFocus={e => e.target.style.borderColor = "rgba(59,130,246,0.6)"}
-        onBlur={e => e.target.style.borderColor = "rgba(255,255,255,0.15)"}
+
         />
+        <AdvisorMic
+        disabled={isLoading || recipientLocked || !hasBootstrapped || loadFailed || saveFailed}
+        hidden={typed && Boolean(input.trim())}
+        input={input}
+        onInput={(text) => { setTyped(false); setInput(text); }}
+        onSend={handleSend}
+        threadKey={activeThreadId}
+        />
+        </div>
         <button
-        onClick={handleSend} disabled={isLoading || !input.trim()}
-        style={{ backgroundColor: isLoading || !input.trim() ? "rgba(59,130,246,0.4)" : "#3b82f6", border: "none", borderRadius: "10px", width: "2.5rem", height: "2.5rem", display: "flex", alignItems: "center", justifyContent: "center", cursor: isLoading || !input.trim() ? "not-allowed" : "pointer", flexShrink: 0, fontSize: "1rem", transition: "background-color 0.2s" }}
-        onMouseEnter={e => { if (!isLoading && input.trim()) e.currentTarget.style.backgroundColor = "#2563eb"; }}
-        onMouseLeave={e => { if (!isLoading && input.trim()) e.currentTarget.style.backgroundColor = "#3b82f6"; }}
-        >🚀</button>
+        type="button"
+        className="oh-advisor-send"
+        aria-label="Send message"
+        title="Send message"
+        onClick={handleSend}
+        disabled={isLoading || recipientLocked || !hasBootstrapped || loadFailed || saveFailed || !input.trim()}
+        >
+          <svg aria-hidden="true" focusable="false" width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 19V5m-7 7 7-7 7 7" />
+          </svg>
+        </button>
         </div>
         </div>
         </div>
@@ -1522,4 +1992,4 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
     );
 };
 
-export { ADVISOR_PANEL_WIDTH, AdvisorButton, AdvisorPanel };
+export { AdvisorPanel };

@@ -183,8 +183,7 @@ test("array-length bounds on an array of objects become words, everywhere; an ar
   assert.equal(objects.properties.rows.minItems, undefined, "inside a union, the same");
   assert.equal(objects.properties.rows.maxItems, undefined);
   assert.equal(objects.properties.rows.description, "Between 2 and 10 entries.");
-  assert.equal(strings.properties.words.minItems, 2);
-});
+  assert.equal(strings.properties.words.minItems, 2);});
 
 // And the guard on the live schemas, so the next bound on an object array is
 // caught here rather than by a player's new game.

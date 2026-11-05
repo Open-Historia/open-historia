@@ -1,0 +1,50 @@
+The music of Open Historia
+
+All seven pieces are by Scott Buckley (https://www.scottbuckley.com.au/) and are
+released under the Creative Commons Attribution 4.0 International License
+(CC BY 4.0): https://creativecommons.org/licenses/by/4.0/
+
+Changes: the files are the composer's own recordings, re-encoded at a lower
+bitrate (MP3, about half the size together) so that the game is smaller to
+download. Nothing else about them is changed: every piece is whole, at its
+own length. Each file names its piece, its composer and this licence in its
+tags.
+
+passage-of-time.mp3
+    "Passage Of Time" by Scott Buckley
+    https://www.scottbuckley.com.au/library/passage-of-time/
+    Plays on the menu, as far as its build, and from its build on while a
+    game opens.
+
+clear-skies.mp3
+    "Clear Skies" by Scott Buckley
+    https://www.scottbuckley.com.au/library/clear-skies/
+    Plays on the menu, in turn with Passage Of Time, and from its own build
+    on while a game opened under it loads.
+
+frankincense-and-myrrh.mp3
+    "Frankincense and Myrrh" by Scott Buckley
+    https://www.scottbuckley.com.au/library/frankincense-and-myrrh/
+    Plays in a game, in the background.
+
+honour-among-thieves.mp3
+    "Honour Among Thieves" by Scott Buckley
+    https://www.scottbuckley.com.au/library/honour-among-thieves/
+    Plays in a game, in the background.
+
+discovery.mp3
+    "Discovery" by Scott Buckley
+    https://www.scottbuckley.com.au/library/discovery/
+    Plays in a game, in the background.
+
+legionnaire.mp3
+    "Legionnaire (2022 Remaster)" by Scott Buckley
+    https://www.scottbuckley.com.au/library/legionnaire/
+    Plays in the war room and while a battlefield is shown.
+
+vanguard.mp3
+    "Vanguard" by Scott Buckley
+    https://www.scottbuckley.com.au/library/vanguard/
+    Plays in the war room and while a battlefield is shown.
+
+The game's own licence (AGPL) does not cover these files; CC BY 4.0 does.

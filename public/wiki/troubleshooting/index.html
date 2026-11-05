@@ -118,9 +118,10 @@
 did, and every error and API failure along the way. <strong>🔎 View log</strong> reads it in place. It usually
 explains the problem immediately, and it is what to attach to a bug report.</p>
 <h2 id="the-map-is-blank">The map is blank</h2>
-<p><strong>In the browser.</strong> The map files come from openhistoria.com itself, with the rest of the page.
-Reload; if it persists, clear the site&#39;s cache and try again, or use the desktop or Android
-app, which keep the map on the device.</p>
+<p><strong>In the browser.</strong> The map files come with the site and load from openhistoria.com while the
+game starts; the first visit downloads about 35 MB of them. Reload; if it persists, clear the
+site&#39;s cache and try again, check that nothing (an ad blocker, a firewall) is blocking the site&#39;s
+own files, or use the desktop or Android app, which keep the map on the device.</p>
 <p><strong>On desktop.</strong> The map data failed to download on first launch. It is fetched separately from
 the installer, once, behind the <strong>Setting up Open Historia</strong> screen. Restart the app and let that
 screen finish. From a source checkout, run <code>node scripts/fetch-map-assets.mjs</code>.</p>
@@ -161,8 +162,9 @@ thousand tokens cannot take it. A turn needs <strong>32k tokens or more</strong>
 The error says the context window was exceeded and how big the request was. Once a model has
 said how big its window is, the game remembers and does not send it a request that cannot fit:
 the call goes to the next model in the list instead, or, if none can take it, is not sent at
-all and says so. If a model can now take more — a provider raised its limit — open its entry in
-Settings → AI and press <strong>Forget this window</strong> under <strong>This model only</strong>.</li>
+all and says so. If a model can now take more — a provider raised its limit — the game tries it
+again by itself once what it learned lapses: a week after a refusal, or a month after the model
+stated its window.</li>
 <li><strong>A local model you loaded with a bigger window is still refused.</strong> A model on your own machine
 or network is never held to a window learned from its refusals, since you set its window when
 you load it. Older builds did hold it, for a month: forget the window as above, or update the
@@ -344,7 +346,13 @@ shared; save, and publish again. Regions you paste or import on beta are simplif
 arrive, by a switch on the paste and import panels that is on by default.</p><h2 id="windows-says-the-installer-is-unsafe">Windows says the installer is unsafe</h2>
 <p>The installer is not code-signed yet. Choose <strong>More info → Run anyway</strong> in SmartScreen.</p>
 <h2 id="macos-will-not-open-the-app">macOS will not open the app</h2>
-<p>Also not code-signed. Right-click the app and choose <strong>Open</strong>, then confirm. Once only.</p>
+<p>Also not code-signed. If the app closes as soon as it opens, with a message that macOS cannot
+check it for malicious software, choose <strong>Done</strong>, then <strong>System Settings → Privacy &amp; Security →
+Open Anyway</strong>, and confirm. On macOS 14 and earlier, right-click the app and choose <strong>Open</strong>
+instead. Once only.</p>
+<p>If it still closes at once, send the bug report below with the crash report macOS wrote: in
+Finder, <strong>Go → Go to Folder…</strong> <code>~/Library/Logs/DiagnosticReports</code>, and the newest file whose name
+starts with <code>Open Historia</code>.</p>
 <h2 id="reporting-a-bug">Reporting a bug</h2>
 <p><strong>Turn on detailed logging first</strong> — ☰ → Settings → Advanced → Diagnostics — then reproduce the
 problem. It records

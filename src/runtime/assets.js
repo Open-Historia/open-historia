@@ -9,23 +9,43 @@ import { resolvePolityIdentity, resolveStockCountryCode } from "./polityIdentity
 import { mergeStockAndDeclaredPolities } from "./countryList.js";
 import { WholeFileSource } from "./wholeFileSource.js";
 import { isNativeBuild } from "./native/bridge.js";
+import { MAP_POLITIES_READY_EVENT, mapIsOpening } from "./mapReadiness.js";
 
 // v2: v1 could serve a stale archive forever (no freshness check), which
 // left months-old map data — countries missing their names — in every
 // browser even after the files on disk were updated. Bumping the name
 // flushes everyone once; the HEAD check below keeps it fresh from now on.
 const PRELOAD_CACHE_NAME = "open-historia-preload-v2";
+// The music a scenario played, kept so it is not downloaded again
+// (keptMusic.js KEPT_MUSIC_CACHE; named here, not imported, because nearly
+// every file imports this one and a worker among them). It is not an older
+// version's cache: the sweep below must leave it.
+const KEPT_MUSIC_CACHE_NAME = "oh-music-v1";
 
 // Drop caches from older versions once. Not the one holding saves on their way
 // from the site's http address: the service worker fills it just before the game
 // starts, and web/saveMove.js empties it once they are in the library.
 const SAVE_MOVE_CACHE_NAME = "oh-save-move";
+// The translator's model on this device, downloaded once (translationWorker.js
+// MODEL_CACHE): not an older version's cache either.
+const TRANSLATION_MODEL_CACHE_NAME = "oh-translation-model-v1";
+// The Advisor microphone's Whisper model (speechWorker.js WHISPER_CACHE,
+// Transformers.js's own name for its cache): swept on every start before, so
+// the model was downloaded again each time the game opened.
+const WHISPER_CACHE_NAME = "transformers-cache";
+const KEPT_CACHE_NAMES = new Set([
+  PRELOAD_CACHE_NAME,
+  KEPT_MUSIC_CACHE_NAME,
+  SAVE_MOVE_CACHE_NAME,
+  TRANSLATION_MODEL_CACHE_NAME,
+  WHISPER_CACHE_NAME,
+]);
 if (typeof caches !== "undefined" && caches?.keys) {
   caches
     .keys()
     .then((keys) => {
       for (const key of keys) {
-        if (key !== PRELOAD_CACHE_NAME && key !== SAVE_MOVE_CACHE_NAME) caches.delete(key).catch(() => {});
+        if (!KEPT_CACHE_NAMES.has(key)) caches.delete(key).catch(() => {});
       }
     })
     .catch(() => {});
@@ -67,6 +87,8 @@ const buildAbsoluteUrl = (pathname) => {
   const relativePath = withRuntimeToken(pathname);
   return origin ? new URL(relativePath, origin).toString() : relativePath;
 };
+// For archives served outside the runtime set: a Tiled Basemap's, by id.
+export const runtimeAbsoluteUrl = (pathname) => buildAbsoluteUrl(pathname);
 
 export const JSON_URLS = {
   advisor: "",
@@ -82,49 +104,136 @@ export const JSON_URLS = {
   regionsGeojson: "",
   citiesGeojson: "",
   backgroundData: "",
+  ownBasemapsData: "",
   world: "",
   intercepts: "",
 };
 
 // ESRI / ArcGIS Online basemaps — all public and token-free. `service` is the
 // path under .../rest/services/; `maxZoom` is that layer's deepest native level
-// (past it MapLibre overscales instead of requesting tiles that 404).
+// (past it MapLibre overscales instead of requesting tiles that 404). `sea`
+// is its open-sea colour (measured at z8), painted under the tiles so a tile
+// that has not arrived yet, or failed, reads as sea instead of black.
 export const ESRI_BASEMAPS = [
   // Relief-first political canvas: World Ocean Base carries ocean bathymetry
   // plus shaded land relief; World.jsx applies a darker dedicated grade.
   { id: "atlas-relief", label: "Atlas Relief", service: "Ocean/World_Ocean_Base", maxZoom: 13 },
   { id: "atlas-relief-dark", label: "Atlas Relief - Dark", service: "Ocean/World_Ocean_Base", maxZoom: 13 },
-  { id: "imagery", label: "Satellite", service: "World_Imagery", maxZoom: 19 },
-  { id: "streets", label: "Streets", service: "World_Street_Map", maxZoom: 19 },
-  { id: "topo", label: "Topographic", service: "World_Topo_Map", maxZoom: 19 },
-  { id: "terrain", label: "Terrain", service: "World_Terrain_Base", maxZoom: 13 },
-  { id: "shaded", label: "Shaded Relief", service: "World_Shaded_Relief", maxZoom: 13 },
-  { id: "physical", label: "Physical", service: "World_Physical_Map", maxZoom: 8 },
-  { id: "natgeo", label: "National Geographic", service: "NatGeo_World_Map", maxZoom: 16 },
+  // Very dark, label-free physical canvas for political overlays. World.jsx
+  // composes this from World Terrain Base + ETOPO relief, so no baked country
+  // names or modern political borders sit underneath live OpenHistoria canon.
+  { id: "midnight-terrain", label: "Midnight Terrain", service: "World_Terrain_Base", maxZoom: 13 },
+  { id: "imagery", label: "Satellite", service: "World_Imagery", maxZoom: 19, sea: "#0a2836" },
+  { id: "streets", label: "Streets", service: "World_Street_Map", maxZoom: 19, sea: "#99d9f2" },
+  { id: "topo", label: "Topographic", service: "World_Topo_Map", maxZoom: 19, sea: "#bbe8ff" },
+  { id: "terrain", label: "Terrain", service: "World_Terrain_Base", maxZoom: 13, sea: "#bde6e0" },
+  { id: "shaded", label: "Shaded Relief", service: "World_Shaded_Relief", maxZoom: 13, sea: "#9ebcd8" },
+  { id: "physical", label: "Physical", service: "World_Physical_Map", maxZoom: 8, sea: "#7bb6de" },
+  { id: "natgeo", label: "National Geographic", service: "NatGeo_World_Map", maxZoom: 16, sea: "#74abd8" },
   // Promotional/screenshot variant. Runtime World.jsx replaces this registry
   // entry with the official NatGeo World_Basemap_v2 vector style, darkened and
   // stripped of political/place labels while preserving physical/water labels.
   // The raster service remains here as a semantic/fallback source and keeps the
   // built-in basemap registry/editor contract simple.
   { id: "natgeo-dark", label: "National Geographic - Dark", service: "NatGeo_World_Map", maxZoom: 16 },
-  { id: "ocean", label: "Ocean", service: "Ocean/World_Ocean_Base", maxZoom: 13 },
+  { id: "ocean", label: "Ocean", service: "Ocean/World_Ocean_Base", maxZoom: 13, sea: "#94b9e6" },
   { id: "ocean-dark", label: "Ocean - Dark", service: "Ocean/World_Ocean_Base", maxZoom: 13 },
-  { id: "light-gray", label: "Light Gray Canvas", service: "Canvas/World_Light_Gray_Base", maxZoom: 16 },
-  { id: "dark-gray", label: "Dark Gray Canvas", service: "Canvas/World_Dark_Gray_Base", maxZoom: 16 },
+  { id: "light-gray", label: "Light Gray Canvas", service: "Canvas/World_Light_Gray_Base", maxZoom: 16, sea: "#d0cfd4" },
+  { id: "dark-gray", label: "Dark Gray Canvas", service: "Canvas/World_Dark_Gray_Base", maxZoom: 16, sea: "#232227" },
 ];
 export const DEFAULT_BASEMAP_ID = "ocean";
-// Mirrors mapSettings.js's MAP_SETTING_KEYS.basemapStyle key.
-const BASEMAP_STORAGE_KEY = "map_basemap_style";
+// Mirror runtime/basemapPick.js's keys (it imports this module); the last is
+// the one pick for every game before picks were kept per game.
+const DEFAULT_BASEMAP_STORAGE_KEY = "map_basemap_default";
+const DEFAULT_BASEMAP_ON_STORAGE_KEY = "map_basemap_default_on";
+export const LEGACY_BASEMAP_STORAGE_KEY = "map_basemap_style";
 
 export const isBuiltinBasemapId = (id) => ESRI_BASEMAPS.some((basemap) => basemap.id === id);
-// The player's basemap pick (Settings > Map) as it applies to the scenario on
-// screen: a built-in basemap's id, or "" for the scenario's own. It replaces a
-// built-in basemap only. A scenario with a map of its own (a picture, a drawn
-// map, the plain sea of a flat sheet) keeps it: its regions are drawn for that
-// map, and a built-in basemap under them is the Earth under another world.
-export const basemapOverrideFor = (pickedId, { scenarioHasOwnMap = false } = {}) => (
-  !scenarioHasOwnMap && isBuiltinBasemapId(pickedId) ? pickedId : ""
+// Which built-in maps a scenario lets players switch to in Settings → Map
+// (world.allowedBasemaps, chosen in the Map Editor): null or absent = all of
+// them, as before; a list = only those; an empty list = only the scenario's own
+// map, as a made-up world wants. Unknown ids are ignored.
+export const normalizeAllowedBasemaps = (value) => (Array.isArray(value)
+  ? ESRI_BASEMAPS.map((basemap) => basemap.id).filter((id) => value.includes(id))
+  : null);
+export const allowedBuiltinBasemaps = (allowed) => (allowed == null
+  ? ESRI_BASEMAPS
+  : ESRI_BASEMAPS.filter((basemap) => allowed.includes(basemap.id)));
+// The list as world state carries it (one comma-joined string, so an unchanged
+// list keeps its identity between polls: useWorldState.js), read back.
+export const decodeAllowedBasemaps = (key) => (key == null ? null : String(key).split(",").filter(Boolean));
+// Whether a scenario has a map of its own: a world.background of any kind (a
+// picture, a drawn map, the plain sea of a flat sheet). The game, Settings and
+// the Map Editor (exportPreset.js scenarioHasOwnMap) all ask this.
+export const hasOwnMap = (background) => Boolean(background?.kind);
+// The built-in maps Settings → Map offers on a scenario. One with a map of its
+// own that never chose (allowedBasemaps null) offers none, so a made-up world
+// saved before the choice existed never gets the Earth under it; a list it
+// chose in the Map Editor is offered as on any scenario.
+export const builtinBasemapChoices = (allowed, { scenarioHasOwnMap = false } = {}) => (
+  scenarioHasOwnMap && allowed == null ? [] : allowedBuiltinBasemaps(allowed)
 );
+
+// A scenario's other basemaps of its own (world.ownBasemaps: [{ id, name,
+// kind }]), which players may switch to beside its main one. Each payload
+// ({ dataUrl } or { geojson }) rides in the ownBasemapsData asset, keyed by id,
+// so world.json stays light. A pick of one is stored as "own:<id>".
+export const OWN_BASEMAP_PREFIX = "own:";
+export const ownBasemapPick = (id) => `${OWN_BASEMAP_PREFIX}${id}`;
+export const ownBasemapIdOf = (pick) => (typeof pick === "string" && pick.startsWith(OWN_BASEMAP_PREFIX) ? pick.slice(OWN_BASEMAP_PREFIX.length) : "");
+// A detailed map among them (docs/adr/0007) is named, never carried, and has
+// no payload: { id, name, kind: "tiled", tiled: { id, version } | { hash },
+// fillOpacity?, over }, shown over another entry's drawing (`over`, its id) or
+// the starting map's ("").
+const DETAILED_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
+const DETAILED_CHECKSUM = /^[a-f0-9]{64}$/;
+export const detailedNamingOf = (tiled) => {
+  const id = DETAILED_ID.test(String(tiled?.id || "")) ? String(tiled.id) : "";
+  const hash = DETAILED_CHECKSUM.test(String(tiled?.hash || "").toLowerCase()) ? String(tiled.hash).toLowerCase() : "";
+  if (id) {
+    const version = Number(tiled.version);
+    return { id, version: Number.isInteger(version) && version >= 1 ? version : 1 };
+  }
+  return hash ? { hash } : null;
+};
+// One entry, checked on its own: null when it is not one.
+export const normalizeOwnBasemap = (entry) => {
+  if (!(entry && typeof entry.id === "string" && entry.id && ["image", "vector", "tiled"].includes(entry.kind))) return null;
+  const name = String(entry.name || "").trim() || "Basemap";
+  if (entry.kind !== "tiled") return { id: entry.id, name, kind: entry.kind };
+  const tiled = detailedNamingOf(entry.tiled);
+  if (!tiled) return null;
+  return {
+    id: entry.id,
+    name,
+    kind: "tiled",
+    tiled,
+    ...(Array.isArray(entry.fillOpacity) ? { fillOpacity: entry.fillOpacity } : {}),
+    over: typeof entry.over === "string" ? entry.over : "",
+  };
+};
+// The list: a detailed map shown over a map that is not a drawn one of the
+// list is dropped.
+export const normalizeOwnBasemaps = (value) => (Array.isArray(value) ? value : [])
+  .map(normalizeOwnBasemap)
+  .filter(Boolean)
+  .filter((entry, _, list) => entry.kind !== "tiled" || entry.over === "" || list.some((other) => other.id === entry.over && other.kind === "vector"));
+// The list as world state carries it (one string, as allowedBasemaps), read back.
+export const encodeOwnBasemaps = (value) => {
+  const list = normalizeOwnBasemaps(value);
+  return list.length ? JSON.stringify(list) : null;
+};
+export const decodeOwnBasemaps = (key) => {
+  if (key == null) return [];
+  try {
+    return normalizeOwnBasemaps(JSON.parse(key));
+  } catch {
+    return [];
+  }
+};
+
+// Which map a player sees, of the scenario's maps, is runtime/basemapPick.js
+// basemapShownFor; this is the built-in map drawn when it is one.
 export const resolveBasemapId = ({ overrideId = "", scenarioId = "", fallbackId = DEFAULT_BASEMAP_ID } = {}) => {
   if (isBuiltinBasemapId(overrideId)) return overrideId;
   if (isBuiltinBasemapId(scenarioId)) return scenarioId;
@@ -150,15 +259,19 @@ const esriServiceTemplate = (service) =>
 // cache-warming. The high-zoom source goes through basemapProtocolTemplate().
 export const esriTileTemplate = (id) => esriServiceTemplate(basemapById(id).service);
 export const basemapMaxZoom = (id) => basemapById(id).maxZoom;
+export const basemapSeaColour = (id) => basemapById(id).sea ?? null;
 // The high-res source goes through this protocol, with the basemap id baked in
 // so switching styles refetches, and so ESRI's "Map Data Not Yet Available"
 // placeholders can be swapped for an upscaled crop of the nearest real ancestor.
 export const basemapProtocolTemplate = (id) => `ohbase://${basemapById(id).id}/{z}/{y}/{x}`;
-// The picked basemap id straight from localStorage — used by preload before
-// React mounts (mapSettings.js drives it reactively once mounted).
+// The player's default basemap straight from localStorage, when they turned it
+// on (runtime/basemapPick.js) — used by preload to warm its tiles before React
+// mounts. A pick made before picks were kept per game counts the same.
 export const selectedBasemapId = () => {
   try {
-    return resolveBasemapId({ overrideId: localStorage.getItem(BASEMAP_STORAGE_KEY) });
+    const legacy = localStorage.getItem(LEGACY_BASEMAP_STORAGE_KEY);
+    const chosen = localStorage.getItem(DEFAULT_BASEMAP_ON_STORAGE_KEY) === "1" ? localStorage.getItem(DEFAULT_BASEMAP_STORAGE_KEY) : legacy;
+    return resolveBasemapId({ overrideId: chosen });
   } catch {
     return DEFAULT_BASEMAP_ID;
   }
@@ -396,8 +509,77 @@ const invalidateDerivedCachesForWrite = (url, { emitEvents = true } = {}) => {
 };
 let vectorTileModulesPromise = null;
 
+// A server file kept in Cache Storage is a second copy, made to save a download.
+// Two things were wrong with how the game kept them, and together they were the
+// folder players found grown to 20-30 GB (Service Worker/CacheStorage in the
+// desktop app's data, the site's storage in a browser):
+//
+//   * Every world file's address carries ?v=<token>, and the token names the
+//     game, its last save and its scenario's last save. So each sitting of each
+//     game stored the whole world again under a new address (the regions
+//     archive is 101 MB; with the countries archive and the regions GeoJSON
+//     about 215 MB a time) and nothing deleted the copies before it. One month
+//     of light play measured 5.6 GB: 26 identical copies of the one archive.
+//   * In the desktop app the download being saved is a read of this machine's
+//     own disk through localhost. The copy saved nothing at all.
+//
+// So nothing served by this machine's own server is kept, and what is kept
+// elsewhere (the website) is swept when the token moves on.
+export const isLoopbackHost = (hostname) =>
+  /^(localhost|127(?:\.\d{1,3}){3}|\[?::1\]?)$/i.test(String(hostname ?? "").trim());
+
+const servedFromThisMachine = (() => {
+  try {
+    return isLoopbackHost(new URL(origin).hostname);
+  } catch {
+    return false;
+  }
+})();
+
+// Whether a persisted entry is a copy nothing will read again.
+export const isStalePersistedCopy = (
+  entryUrl,
+  { token = runtimeAssetToken, local = servedFromThisMachine } = {},
+) => {
+  let url;
+  try {
+    url = new URL(String(entryUrl ?? ""), origin || "https://open-historia.local");
+  } catch {
+    return false;
+  }
+  // Payloads computed here (writeRuntimeJson) are keyed by their own version.
+  if (url.pathname.startsWith("/__runtime-cache/")) return false;
+  if (local) return true;
+  // Until the library has answered there is no token to compare with.
+  if (!token) return false;
+  const version = url.searchParams.get("v");
+  if (version === null) return url.pathname.startsWith("/api/runtime/");
+  return version !== token;
+};
+
+// Delete those copies. Best-effort, as the cache's writes are; resolves to how
+// many entries went.
+export const sweepPersistedCopies = async (options) => {
+  if (typeof caches === "undefined") return 0;
+  let removed = 0;
+  try {
+    const cache = await caches.open(PRELOAD_CACHE_NAME);
+    for (const request of await cache.keys()) {
+      // Decided entry by entry, at the moment of deleting: the token may have
+      // moved again while the list was being walked.
+      if (!isStalePersistedCopy(request?.url, options)) continue;
+      if (await cache.delete(request)) removed += 1;
+    }
+  } catch {
+    // A cache that cannot be opened or listed keeps its entries until the next sweep.
+  }
+  return removed;
+};
+let persistedCopiesSwept = false;
+
 export const setRuntimeAssetEndpoints = ({ token = "" } = {}) => {
   const nextToken = String(token ?? "").trim();
+  const tokenMoved = nextToken !== runtimeAssetToken;
 
   // Every JSON_URL carries ?v=<token>, and the value caches are keyed by that
   // full URL with no eviction, no cap and no TTL anywhere. When the token changes
@@ -454,6 +636,14 @@ export const setRuntimeAssetEndpoints = ({ token = "" } = {}) => {
   }
 
   runtimeAssetToken = nextToken;
+  // The copies on disk rotate with the token as the ones in memory do above:
+  // the old addresses cannot be rebuilt, so nothing would ever read or replace
+  // them. Also once per page load, which is what clears an install that grew
+  // before this sweep existed.
+  if (tokenMoved || !persistedCopiesSwept) {
+    persistedCopiesSwept = true;
+    void sweepPersistedCopies().catch(() => {});
+  }
 
   JSON_URLS.advisor = withRuntimeToken("/api/runtime/json/advisor");
   JSON_URLS.actions = withRuntimeToken("/api/runtime/json/actions");
@@ -470,6 +660,7 @@ export const setRuntimeAssetEndpoints = ({ token = "" } = {}) => {
   JSON_URLS.regionsGeojson = withRuntimeToken("/api/runtime/json/regionsGeojson");
   JSON_URLS.citiesGeojson = withRuntimeToken("/api/runtime/json/citiesGeojson");
   JSON_URLS.backgroundData = withRuntimeToken("/api/runtime/json/backgroundData");
+  JSON_URLS.ownBasemapsData = withRuntimeToken("/api/runtime/json/ownBasemapsData");
   JSON_URLS.world = withRuntimeToken("/api/runtime/json/world");
   JSON_URLS.intercepts = withRuntimeToken("/api/runtime/json/intercepts");
 
@@ -491,7 +682,6 @@ export const resolveCountryDisplayName = (name, code) => countryNameResolver(nam
 setRuntimeAssetEndpoints();
 
 const PERF_WARN_MS = 50;
-const PERF_STALL_MS = 120;
 
 // Performance telemetry stays active, but routine console noise is opt-in.
 // Temporary diagnostics can be re-enabled at runtime with:
@@ -513,15 +703,6 @@ export const reportPerfOperation = (
 ) => {
   const numeric = Number(elapsed);
   if (!Number.isFinite(numeric)) return numeric;
-  if (typeof window !== "undefined") {
-    window.__OH_LAST_PERF_OPERATION__ = {
-      operation: String(operation || "unknown"),
-      elapsed: numeric,
-      at: perfNow(),
-      wallTime: Date.now(),
-      extra: String(extra || ""),
-    };
-  }
   if (numeric >= warnAt && isPerfConsoleVerbose()) {
     console.warn(
       `[OH PERF] ${operation} took ${numeric.toFixed(1)}ms${extra ? ` · ${extra}` : ""}`,
@@ -536,91 +717,6 @@ const warnSlowJson = (operation, url, startedAt, extra = "") =>
     perfNow() - startedAt,
     { extra },
   );
-
-// Temporary stabilization watchdog. Named timers cannot see GC, browser layout,
-// React commits, MapLibre rendering, compositor stalls, etc. This catches any
-// visible frame gap and correlates it with recent input/map motion/named OH work.
-export const installPerformanceWatchdog = () => {
-  if (typeof window === "undefined" || typeof document === "undefined") return () => {};
-  if (window.__OH_PERF_WATCHDOG_INSTALLED__) return () => {};
-  window.__OH_PERF_WATCHDOG_INSTALLED__ = true;
-
-  let rafId = 0;
-  let lastFrame = perfNow();
-  let mapMoving = Boolean(window.__OH_MAP_MOVING__);
-  let lastInput = { type: "none", at: 0 };
-  let longTaskObserver = null;
-
-  const noteInput = (event) => {
-    lastInput = { type: event?.type || "input", at: perfNow() };
-  };
-  const onMapMotion = (event) => {
-    mapMoving = Boolean(event?.detail?.active);
-    window.__OH_MAP_MOVING__ = mapMoving;
-  };
-
-  const inputEvents = ["pointerdown", "pointermove", "wheel", "keydown", "click"];
-  for (const type of inputEvents) {
-    window.addEventListener(type, noteInput, { capture: true, passive: true });
-  }
-  window.addEventListener("oh:map-motion", onMapMotion);
-
-  try {
-    if (typeof PerformanceObserver !== "undefined") {
-      longTaskObserver = new PerformanceObserver((list) => {
-        for (const entry of list.getEntries()) {
-          if (entry.duration < PERF_STALL_MS) continue;
-          const last = window.__OH_LAST_PERF_OPERATION__;
-          const recentNamed = last && Math.abs(perfNow() - Number(last.at || 0)) < 1800;
-          if (isPerfConsoleVerbose()) {
-            console.warn(
-              `[OH PERF LONG TASK] ${entry.duration.toFixed(1)}ms` +
-              `${mapMoving ? " · map moving" : ""}` +
-              `${recentNamed ? ` · last OH: ${last.operation} ${Number(last.elapsed || 0).toFixed(1)}ms` : " · no recent named OH operation"}`,
-            );
-          }
-        }
-      });
-      longTaskObserver.observe({ entryTypes: ["longtask"] });
-    }
-  } catch {
-    longTaskObserver = null;
-  }
-
-  const frame = (now) => {
-    const gap = now - lastFrame;
-    if (gap >= PERF_STALL_MS && document.visibilityState === "visible") {
-      const inputAge = now - Number(lastInput.at || 0);
-      const last = window.__OH_LAST_PERF_OPERATION__;
-      const opAge = last ? now - Number(last.at || 0) : Infinity;
-      if (isPerfConsoleVerbose()) {
-        console.warn(
-          `[OH PERF STALL] frame gap ${gap.toFixed(1)}ms` +
-          ` · map moving: ${mapMoving ? "yes" : "no"}` +
-          ` · recent input: ${inputAge < 2000 ? `${lastInput.type} ${Math.max(0, inputAge).toFixed(0)}ms ago` : "none"}` +
-          ` · last OH operation: ${opAge < 2000 ? `${last.operation} (${Number(last.elapsed || 0).toFixed(1)}ms, ${Math.max(0, opAge).toFixed(0)}ms ago)` : "none"}`,
-        );
-      }
-    }
-    lastFrame = now;
-    rafId = window.requestAnimationFrame(frame);
-  };
-
-  rafId = window.requestAnimationFrame((now) => {
-    lastFrame = now;
-    rafId = window.requestAnimationFrame(frame);
-  });
-
-  return () => {
-    if (rafId) window.cancelAnimationFrame(rafId);
-    longTaskObserver?.disconnect?.();
-    for (const type of inputEvents) {
-      window.removeEventListener(type, noteInput, true);
-    }
-    window.removeEventListener("oh:map-motion", onMapMotion);
-    window.__OH_PERF_WATCHDOG_INSTALLED__ = false;
-  };
-};
 
 const cloneJson = (value) => {
   if (value == null) return value;
@@ -677,7 +773,9 @@ const fetchWithPersistence = async (
   url,
   { bypassPersistentCache = false, signal } = {},
 ) => {
-  if (!bypassPersistentCache) {
+  // No second copy of a file this machine's own server reads off this disk.
+  const persistent = !bypassPersistentCache && !servedFromThisMachine;
+  if (persistent) {
     const cached = await readPersistedResponse(url);
     if (cached) {
       // Updates replace assets on disk; a cached copy must not outlive them.
@@ -706,10 +804,14 @@ const fetchWithPersistence = async (
     signal,
   });
   if (!response.ok) {
-    throw new Error(`Failed to load ${url}: HTTP ${response.status}`);
+    // The status rides on the error: a 404 is a document that does not exist
+    // yet, which some readers take as empty, where anything else is a failure.
+    const error = new Error(`Failed to load ${url}: HTTP ${response.status}`);
+    error.status = response.status;
+    throw error;
   }
 
-  if (!bypassPersistentCache) {
+  if (persistent) {
     persistResponse(url, response.clone());
   }
   return { response, fromCache: false };
@@ -773,13 +875,28 @@ export const registerPmtilesArchive = (url) => {
 const PLACEHOLDER_MIN_ZOOM = 9;
 const placeholderRefByService = new Map();
 
+// A tile that fails on a busy connection is asked for twice more before it is
+// given up on: MapLibre does not ask again for a failed tile until it leaves
+// the view, and until then the gap shows the colour under the map.
+const TILE_RETRIES = 2;
 const fetchBasemapTileBytes = async (service, z, y, x, signal) => {
   const url = buildTileUrl(esriServiceTemplate(service), { x, y, z });
-  const response = await fetch(url, { cache: "force-cache", signal });
-  if (!response.ok) {
-    throw new Error(`Failed to load basemap tile ${z}/${y}/${x}: HTTP ${response.status}`);
+  for (let attempt = 0; ; attempt += 1) {
+    let response = null;
+    try {
+      response = await fetch(url, { cache: "force-cache", signal });
+    } catch (error) {
+      if (signal?.aborted || attempt >= TILE_RETRIES) throw error;
+    }
+    if (response?.ok) return response.arrayBuffer();
+    // A 4xx (other than rate limiting) will not change on asking again.
+    const retryable = !response || response.status >= 500 || response.status === 429;
+    if (response && (!retryable || attempt >= TILE_RETRIES)) {
+      throw new Error(`Failed to load basemap tile ${z}/${y}/${x}: HTTP ${response.status}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 400 * (attempt + 1)));
+    if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
   }
-  return response.arrayBuffer();
 };
 
 const bytesEqual = (a, b) => {
@@ -896,13 +1013,30 @@ export const readJson = async (url, { cache, defaultValue, force = false, signal
 
   // Even with force: true, batch concurrent requests to the same URL so
   // multiple independent 5s pollers (Nations, Cities, background, units)
-  // don't each fire their own network fetch.
-  if (jsonRequestCache.has(url)) {
-    const pending = await jsonRequestCache.get(url);
-    return clone ? cloneJsonFor(url, pending) : pending;
+  // don't each fire their own network fetch. The shared request carries no
+  // default: each caller falls back to its OWN below, so one that asked for
+  // none is never handed another caller's empty default for a failed read.
+  let request = jsonRequestCache.get(url);
+  if (!request) {
+    request = startJsonRequest(url, { signal, store });
+    jsonRequestCache.set(url, request);
   }
 
-  const request = (async () => {
+  let value;
+  try {
+    value = await request;
+  } catch (error) {
+    if (defaultValue !== undefined) {
+      // Serve the fallback but do NOT cache it — a transient failure must not
+      // pin the default for the rest of the session; the next read retries.
+      return clone ? cloneJsonFor(url, defaultValue) : defaultValue;
+    }
+    throw error;
+  }
+  return clone ? cloneJsonFor(url, value) : value;
+};
+
+const startJsonRequest = (url, { signal, store }) => (async () => {
     const fetchStartedAt = perfNow();
     const { response } = await fetchWithPersistence(url, {
       bypassPersistentCache: isMutableRuntimeJsonUrl(url),
@@ -927,33 +1061,18 @@ export const readJson = async (url, { cache, defaultValue, force = false, signal
     const parseStartedAt = perfNow();
     const data = text ? JSON.parse(text) : null;
     warnSlowJson("JSON.parse", url, parseStartedAt, `${Math.round(text.length / 1024)} KiB`);
-    // Recorded INSIDE the try, before the catch below: a failed read must leave
+    // Recorded only once the document has parsed: a failed read must leave
     // this false so loadRegionCatalog retries instead of pinning a stock-only
-    // catalog. "Did we get a value?" is not a usable substitute — an originator
-    // carrying a defaultValue resolves the SHARED batched promise to that
-    // default on failure, so every awaiter sees a value either way.
+    // catalog. "Did we get a value?" is not a usable substitute — a caller
+    // carrying a defaultValue gets that default on failure.
     jsonLoadedUrls.add(url);
     jsonByteLengths.set(url, text.length);
     if (store) jsonValueCache.set(url, data);
     return data;
   })()
-    .catch((error) => {
-      if (defaultValue !== undefined) {
-        // Serve the fallback but do NOT cache it — a transient failure must not
-        // pin the default for the rest of the session; the next read retries.
-        return clone ? cloneJsonFor(url, defaultValue) : defaultValue;
-      }
-
-      throw error;
-    })
-    .finally(() => {
-      jsonRequestCache.delete(url);
-    });
-
-  jsonRequestCache.set(url, request);
-  const value = await request;
-  return clone ? cloneJsonFor(url, value) : value;
-};
+  .finally(() => {
+    jsonRequestCache.delete(url);
+  });
 
 // Did the document come back, or is this a defaultValue served after a failed read?
 export const jsonReadSucceeded = (url) => jsonLoadedUrls.has(url);
@@ -989,6 +1108,49 @@ export const primeJson = (url, data, { cache, clone = true } = {}) => {
   return clone ? cloneJson(snapshot) : snapshot;
 };
 
+// Publish a set of already-persisted JSON assets into the client caches as ONE
+// visible generation. This is the client half of the whole-turn commit seam:
+// every cache is primed and every derived memo invalidated BEFORE any consumer
+// event fires, so a listener reacting to world/game/colors cannot observe the
+// other turn assets from the previous generation.
+export const publishJsonWriteBatch = (entries, { emitEvents = true } = {}) => {
+  const list = Array.isArray(entries)
+    ? entries.filter((entry) => entry?.url)
+    : [];
+
+  for (const entry of list) {
+    primeJson(entry.url, entry.value, {
+      clone: entry.cacheClone ?? entry.url !== JSON_URLS.world,
+    });
+  }
+  for (const entry of list) {
+    invalidateDerivedCachesForWrite(entry.url, { emitEvents: false });
+  }
+
+  if (emitEvents && typeof window !== "undefined") {
+    const urls = new Set(list.map((entry) => entry.url));
+    if (urls.has(JSON_URLS.colors)) window.dispatchEvent(new CustomEvent("oh:colors-updated"));
+    if (urls.has(JSON_URLS.flags)) window.dispatchEvent(new CustomEvent("oh:flags-updated"));
+
+    for (const entry of list) {
+      const { url, value, normalized = false } = entry;
+      if (url === JSON_URLS.world) {
+        window.dispatchEvent(new CustomEvent("oh:world-updated", { detail: { world: value } }));
+      }
+      if (url === JSON_URLS.game) {
+        window.dispatchEvent(new CustomEvent("oh:game-updated", { detail: { game: value } }));
+      }
+      if (isMutableRuntimeJsonUrl(url)) {
+        window.dispatchEvent(new CustomEvent("oh:runtime-json-updated", {
+          detail: { key: runtimeAssetLabel(url), url, value, normalized: Boolean(normalized) },
+        }));
+      }
+    }
+  }
+
+  return list.map((entry) => entry.value);
+};
+
 export const writeJson = async (
   url,
   data,
@@ -1005,6 +1167,12 @@ export const writeJson = async (
     // worth reading back. Asks for none (Prefer: return=minimal) and caches what
     // was sent; a store that answers with the record anyway is not parsed.
     echo = true,
+    // The caller normalized `data` before writing it (gameState.js
+    // writeWorldState). Carried on oh:runtime-json-updated so the runtime store
+    // does not normalize the whole document a second time, with the text the
+    // saved value was parsed from, so the store can tell a no-op write by
+    // comparing texts rather than deep-comparing the whole document.
+    normalized = false,
   } = {},
 ) => {
   const stringifyStartedAt = perfNow();
@@ -1066,7 +1234,7 @@ export const writeJson = async (
 
   primeJson(url, saved, { clone: cacheClone });
   invalidateDerivedCachesForWrite(url, { emitEvents: emitDerivedEvents });
-  if (!isMutableRuntimeJsonUrl(url)) {
+  if (!isMutableRuntimeJsonUrl(url) && !servedFromThisMachine) {
     persistResponse(
       url,
       new Response(savedPayload, {
@@ -1087,7 +1255,13 @@ export const writeJson = async (
   }
   if (emitEvents && typeof window !== "undefined" && isMutableRuntimeJsonUrl(url)) {
     window.dispatchEvent(new CustomEvent("oh:runtime-json-updated", {
-      detail: { key: runtimeAssetLabel(url), url, value: saved },
+      detail: {
+        key: runtimeAssetLabel(url),
+        url,
+        value: saved,
+        normalized: Boolean(normalized),
+        ...(normalized ? { text: savedPayload } : {}),
+      },
     }));
   }
 
@@ -1152,6 +1326,30 @@ export const writeRuntimeJson = async (
   );
 
   return clone ? cloneJson(data) : data;
+};
+
+// Drop every persisted runtime payload whose key starts with `prefix`: a cache
+// family nothing reads any more. Best-effort like the writes above; resolves to
+// how many entries went.
+export const deleteRuntimeJsonByPrefix = async (prefix) => {
+  const key = String(prefix ?? "");
+  if (!key) return 0;
+  for (const cachedKey of [...runtimeJsonValueCache.keys()]) {
+    if (String(cachedKey).startsWith(key)) runtimeJsonValueCache.delete(cachedKey);
+  }
+  const cache = await getPersistentCache();
+  if (!cache) return 0;
+  const marker = buildRuntimeCacheUrl(key).replace(/\.json$/, "");
+  let removed = 0;
+  try {
+    for (const request of await cache.keys()) {
+      if (!String(request?.url ?? "").startsWith(marker)) continue;
+      if (await cache.delete(request)) removed += 1;
+    }
+  } catch {
+    // A cache that cannot be listed keeps its entries; nothing reads them.
+  }
+  return removed;
 };
 
 export const buildTileUrl = (template, { x, y, z }) =>
@@ -1275,9 +1473,13 @@ export const warmPmtilesArchive = async (url, { signal } = {}) => {
   }
 
   const request = (async () => {
-    // Every build reads its archives from its own assets/ (assetsBase.js).
+    let buffer = null;
+    // The archive is this build's own copy on every build: the desktop's local
+    // server, the Android app's APK, the website's own /assets. Nothing is
+    // fetched from a third party, so there is no swarm to try first and no
+    // manifest to hold the bytes to.
     const { response } = await fetchWithPersistence(url, { signal });
-    const buffer = await response.arrayBuffer();
+    buffer = await response.arrayBuffer();
     primePmtilesArchive(url, buffer);
     return buffer;
   })().finally(() => {
@@ -1491,14 +1693,40 @@ export const loadCountryNames = async ({ force = false } = {}) => {
 // The map already pays the unavoidable parse cost of regions.geojson once.
 // Project a tiny metadata-only catalog while that geometry is in memory so
 // country panels/AI/cheats never reparse it just to learn province names.
-export const primeCustomRegionCatalogEntries = (
-  rawEntries,
-  {
-    url = JSON_URLS.regionsGeojson,
-    invalidateCatalog = true,
-  } = {},
-) => {
-  const startedAt = perfNow();
+// A regions file's features as the catalog's raw rows (the primers below).
+const customRegionRawEntries = (geojson) => {
+  const rawEntries = [];
+  for (const feature of geojson?.features ?? []) {
+    const props = feature?.properties ?? {};
+    // The same id vocabulary the AI's Preview resolver reads from these features
+    // (resolveRegionTransfers in gameplay.js), so an id Preview accepted is never
+    // "missing" from the compact catalog when Apply revalidates it.
+    const rawId = props.id ?? props.GID_1 ?? props.gid_1 ?? props.HASC_1 ?? feature?.id;
+    const id = rawId != null ? String(rawId) : "";
+    if (!id) continue;
+    const centroid = props?.centroid?.coordinates;
+    rawEntries.push({
+      // A drawn region's baked owner is its `owner` property; carrying it as the
+      // catalog's base country lets the prompt tell a real change from the seed.
+      country: props.country ? String(props.country) : props.owner ? String(props.owner) : "",
+      countryCode: props.gid0 ? String(props.gid0) : props.GID_0 ? String(props.GID_0) : "",
+      id,
+      name: props.name ?? props.NAME_1 ?? props.name_1 ?? id,
+      lng: Array.isArray(centroid) ? centroid[0] : props?.lng ?? props?.longitude,
+      lat: Array.isArray(centroid) ? centroid[1] : props?.lat ?? props?.latitude,
+      tags: Array.isArray(props?.tags) ? props.tags : [],
+      type: props?.type ?? "",
+      typeId: props?.typeId ?? "",
+      adjacencies: Array.isArray(props?.adjacencies) ? props.adjacencies : [],
+      bounds: geometryBounds(feature?.geometry),
+      claimants: Array.isArray(props?.claimants) ? props.claimants : [],
+    });
+  }
+  return rawEntries;
+};
+
+// Raw rows as the compact catalog keeps them.
+const compactCustomRegionEntries = (rawEntries) => {
   const entries = [];
   for (const raw of rawEntries ?? []) {
     const id = raw?.id != null ? String(raw.id) : "";
@@ -1520,12 +1748,32 @@ export const primeCustomRegionCatalogEntries = (
       lat: Number.isFinite(lat) ? lat : null,
       tags: Array.isArray(raw?.tags) ? raw.tags.map((value) => String(value)) : [],
       type: raw?.type ? String(raw.type) : "",
+      // Its Workshop region type (runtime/regionTypes.js): the AI's placement
+      // rules name the regions of a type the scenario gives rules to.
+      ...(raw?.typeId ? { typeId: String(raw.typeId) } : {}),
       adjacencies: Array.isArray(raw?.adjacencies)
         ? raw.adjacencies.map((value) => String(value)).filter(Boolean)
         : [],
       ...(isBox(raw?.bounds) ? { bounds: raw.bounds } : {}),
+      // The map file's own claimants: what the world is read with when it has
+      // no row for the region (runtime/mapClaims.js).
+      ...(Array.isArray(raw?.claimants) && raw.claimants.length
+        ? { claimants: raw.claimants.map((value) => String(value ?? "").trim()).filter(Boolean) }
+        : {}),
     });
   }
+  return entries;
+};
+
+export const primeCustomRegionCatalogEntries = (
+  rawEntries,
+  {
+    url = JSON_URLS.regionsGeojson,
+    invalidateCatalog = true,
+  } = {},
+) => {
+  const startedAt = perfNow();
+  const entries = compactCustomRegionEntries(rawEntries);
   primedCustomRegionCatalog = entries;
   primedCustomRegionCatalogKey = String(url || "");
   if (invalidateCatalog) {
@@ -1596,31 +1844,7 @@ export const primeCustomRegionCatalog = (
   geojson,
   options = {},
 ) => {
-  const rawEntries = [];
-  for (const feature of geojson?.features ?? []) {
-    const props = feature?.properties ?? {};
-    // The same id vocabulary the AI's Preview resolver reads from these features
-    // (resolveRegionTransfers in gameplay.js), so an id Preview accepted is never
-    // "missing" from the compact catalog when Apply revalidates it.
-    const rawId = props.id ?? props.GID_1 ?? props.gid_1 ?? props.HASC_1 ?? feature?.id;
-    const id = rawId != null ? String(rawId) : "";
-    if (!id) continue;
-    const centroid = props?.centroid?.coordinates;
-    rawEntries.push({
-      // A drawn region's baked owner is its `owner` property; carrying it as the
-      // catalog's base country lets the prompt tell a real change from the seed.
-      country: props.country ? String(props.country) : props.owner ? String(props.owner) : "",
-      countryCode: props.gid0 ? String(props.gid0) : props.GID_0 ? String(props.GID_0) : "",
-      id,
-      name: props.name ?? props.NAME_1 ?? props.name_1 ?? id,
-      lng: Array.isArray(centroid) ? centroid[0] : props?.lng ?? props?.longitude,
-      lat: Array.isArray(centroid) ? centroid[1] : props?.lat ?? props?.latitude,
-      tags: Array.isArray(props?.tags) ? props.tags : [],
-      type: props?.type ?? "",
-      adjacencies: Array.isArray(props?.adjacencies) ? props.adjacencies : [],
-      bounds: geometryBounds(feature?.geometry),
-    });
-  }
+  const rawEntries = customRegionRawEntries(geojson);
   return primeCustomRegionCatalogEntries(rawEntries, options);
 };
 
@@ -1634,6 +1858,31 @@ export const getPrimedScenarioRegionCatalog = ({ url = JSON_URLS.regionsGeojson 
   return null;
 };
 
+// While a game opens, its map's border worker is already reading the regions file and hands its
+// catalog over (Nations.jsx). A catalog asked for meanwhile waits for that copy: reading the same
+// 50 MB on the page as well held the page for over a second, and twice the memory, as the game opened.
+const MAP_CATALOG_WAIT_MS = 60_000;
+const mapRegionCatalogSoon = (url) => {
+  const primed = () => (primedCustomRegionCatalog && primedCustomRegionCatalogKey === String(url || "") ? primedCustomRegionCatalog : null);
+  if (primed() || typeof window === "undefined" || !mapIsOpening()) return Promise.resolve(primed());
+  return new Promise((resolve) => {
+    let timer = 0;
+    const finish = () => {
+      clearTimeout(timer);
+      window.removeEventListener("oh:region-catalog-primed", onPrimed);
+      window.removeEventListener(MAP_POLITIES_READY_EVENT, finish);
+      resolve(primed());
+    };
+    const onPrimed = () => {
+      if (primed()) finish();
+    };
+    timer = setTimeout(finish, MAP_CATALOG_WAIT_MS);
+    window.addEventListener("oh:region-catalog-primed", onPrimed);
+    // The map gave up on its borders, or finished without priming: read the file after all.
+    window.addEventListener(MAP_POLITIES_READY_EVENT, finish);
+  });
+};
+
 export const loadScenarioRegionCatalog = async ({ force = false } = {}) => {
   if (
     !force &&
@@ -1641,6 +1890,10 @@ export const loadScenarioRegionCatalog = async ({ force = false } = {}) => {
     primedCustomRegionCatalogKey === JSON_URLS.regionsGeojson
   ) {
     return primedCustomRegionCatalog;
+  }
+  if (!force) {
+    const fromMap = await mapRegionCatalogSoon(JSON_URLS.regionsGeojson);
+    if (fromMap) return fromMap;
   }
 
   // Cold-start compatibility only. In normal gameplay Nations has already loaded
@@ -1661,6 +1914,17 @@ export const loadScenarioRegionCatalog = async ({ force = false } = {}) => {
   });
 };
 
+// The region catalog for a map that is not the active game's — a scenario's,
+// in the Workshop (gameplay.js generateScenarioPrehistory): the stock regions
+// with the map's own over them, read from its regions file. Nothing is primed
+// or cached, so the active game's catalog is left as it was.
+export const buildRegionCatalogForMap = async (regionsGeojson) => {
+  const seen = new Map();
+  await readStockRegionEntries(seen);
+  mergeCustomRegionEntries(seen, compactCustomRegionEntries(customRegionRawEntries(regionsGeojson)));
+  return sortedRegionCatalog(seen);
+};
+
 // The server's derived projection of the restore points: id/round/dates only.
 // snapshots.json itself carries every prior world and hits 8+ MB late in a game.
 export const loadRollbackSnapshotIndex = async () => {
@@ -1672,7 +1936,121 @@ export const loadRollbackSnapshotIndex = async () => {
   return Array.isArray(data?.entries) ? data.entries : [];
 };
 
-export const loadRollbackSnapshotCount = async () => (await loadRollbackSnapshotIndex()).length;
+// One restore point by id, or null when the game has none by that id. From the
+// archive when this tab already holds it (a turn's capture primes it), else just
+// that one from the store (/api/runtime/snapshots/:id): the staged reveal and
+// viewAsSeen want one world, and the archive is up to twelve. Shared, not a
+// copy: a caller that changes any of it copies that part first.
+export const loadRollbackSnapshot = async (snapshotId) => {
+  const id = String(snapshotId ?? "").trim();
+  if (!id) return null;
+  const held = jsonValueCache.get(JSON_URLS.snapshots);
+  if (Array.isArray(held)) return held.find((snap) => snap?.id === id) ?? null;
+  try {
+    const { response } = await fetchWithPersistence(withRuntimeToken(`/api/runtime/snapshots/${encodeURIComponent(id)}`), {
+      bypassPersistentCache: true,
+    });
+    return await response.json();
+  } catch (error) {
+    if (error?.status === 404) return null;
+    throw error;
+  }
+};
+
+// The restore point a turn started from, found by its dates (fromDate, toDate)
+// in the index and read alone, or null. Only one that holds a world counts.
+export const loadTurnRestorePoint = async ({ fromDate, toDate } = {}) => {
+  const spans = (entry) => entry?.fromDate === fromDate && entry?.toDate === toDate;
+  const held = jsonValueCache.get(JSON_URLS.snapshots);
+  if (Array.isArray(held)) return held.find((snap) => snap?.state?.world && spans(snap)) ?? null;
+  const entry = (await loadRollbackSnapshotIndex()).find(spans);
+  const snap = entry?.id ? await loadRollbackSnapshot(entry.id) : null;
+  return snap?.state?.world && spans(snap) ? snap : null;
+};
+
+// The stock world's regions into `seen` (id -> { country, countryCode, id,
+// name }), from the tile archive. Shared by the active game's catalog and by a
+// catalog built for any map (buildRegionCatalogForMap).
+const readStockRegionEntries = async (seen) => {
+  // The stock world's regions, from the tile archive — ONE of two sources,
+  // and the optional one. This used to return an empty catalog the moment
+  // the archive could not be read, before the scenario's own regions below
+  // had been looked at: a hand-drawn map with every region named in its
+  // geojson lost all of them to a missing tile file, and with them every
+  // lookup, every place name the engine reads, and every prompt's region
+  // list. The archive is tried; the scenario's geometry is always merged.
+  let layer = null;
+  try {
+    const pmtiles = getPmtilesArchive(PMTILES_ARCHIVES.regions);
+    const tileData = await pmtiles.getZxy(0, 0, 0);
+    const tile = tileData?.data ? await decodeVectorTile(tileData.data) : null;
+    layer = tile?.layers?.regions ?? null;
+  } catch (error) {
+    console.warn("The stock region tiles could not be read; the catalog carries the scenario's own regions only.", error);
+  }
+
+  for (let index = 0; index < (layer ? layer.length : 0); index += 1) {
+    const props = layer.feature(index).properties;
+    const id = props?.GID_1 || props?.gid_1 || props?.HASC_1 || props?.fid;
+    // A few GADM regions carry the literal placeholder "NA" as their name (England
+    // among them). Correct the known ones and treat the rest as nameless, so the
+    // `!name` skip below drops them instead of teaching the model a region called
+    // "NA" that it can never meaningfully transfer.
+    const name = resolveRegionName(id, props?.NAME_1 || props?.name_1 || props?.NAME || props?.name);
+    const countryCode = props?.GID_0 || props?.gid_0 || "";
+    const country = resolveCountryDisplayName(
+      props?.COUNTRY || props?.Country || props?.country,
+      countryCode,
+    );
+
+    if (!id || !name) {
+      continue;
+    }
+
+    const key = String(id);
+    if (!seen.has(key)) {
+      seen.set(key, {
+        country,
+        countryCode,
+        id: key,
+        name: String(name),
+      });
+    }
+  }
+};
+
+// A map's own regions over the stock ones: a drawn region is added, a stock one
+// takes the map's name and country.
+const mergeCustomRegionEntries = (seen, customEntries) => {
+  for (const entry of customEntries ?? []) {
+    const id = String(entry?.id ?? "");
+    if (!id) continue;
+    const existing = seen.get(id);
+    if (existing) {
+      if (entry.name) existing.name = String(entry.name);
+      if (entry.country) existing.country = String(entry.country);
+      if (entry.countryCode) existing.countryCode = String(entry.countryCode);
+      existing.custom = true;
+      continue;
+    }
+    seen.set(id, {
+      country: entry.country ? String(entry.country) : "",
+      countryCode: entry.countryCode ? String(entry.countryCode) : "",
+      custom: true,
+      id,
+      name: entry.name ? String(entry.name) : id,
+    });
+  }
+};
+
+const sortedRegionCatalog = (seen) => Array.from(seen.values()).sort((left, right) => {
+  const countrySort = left.country.localeCompare(right.country);
+  if (countrySort !== 0) {
+    return countrySort;
+  }
+
+  return left.name.localeCompare(right.name);
+});
 
 export const loadRegionCatalog = async ({ force = false } = {}) => {
   // Keyed on BOTH sources: switching games/scenarios (new runtime token) must
@@ -1688,51 +2066,7 @@ export const loadRegionCatalog = async ({ force = false } = {}) => {
     try {
       const seen = new Map();
 
-      // The stock world's regions, from the tile archive — ONE of two sources,
-      // and the optional one. This used to return an empty catalog the moment
-      // the archive could not be read, before the scenario's own regions below
-      // had been looked at: a hand-drawn map with every region named in its
-      // geojson lost all of them to a missing tile file, and with them every
-      // lookup, every place name the engine reads, and every prompt's region
-      // list. The archive is tried; the scenario's geometry is always merged.
-      let layer = null;
-      try {
-        const pmtiles = getPmtilesArchive(PMTILES_ARCHIVES.regions);
-        const tileData = await pmtiles.getZxy(0, 0, 0);
-        const tile = tileData?.data ? await decodeVectorTile(tileData.data) : null;
-        layer = tile?.layers?.regions ?? null;
-      } catch (error) {
-        console.warn("The stock region tiles could not be read; the catalog carries the scenario's own regions only.", error);
-      }
-
-      for (let index = 0; index < (layer ? layer.length : 0); index += 1) {
-        const props = layer.feature(index).properties;
-        const id = props?.GID_1 || props?.gid_1 || props?.HASC_1 || props?.fid;
-        // A few GADM regions carry the literal placeholder "NA" as their name (England
-        // among them). Correct the known ones and treat the rest as nameless, so the
-        // `!name` skip below drops them instead of teaching the model a region called
-        // "NA" that it can never meaningfully transfer.
-        const name = resolveRegionName(id, props?.NAME_1 || props?.name_1 || props?.NAME || props?.name);
-        const countryCode = props?.GID_0 || props?.gid_0 || "";
-        const country = resolveCountryDisplayName(
-          props?.COUNTRY || props?.Country || props?.country,
-          countryCode,
-        );
-
-        if (!id || !name) {
-          continue;
-        }
-
-        const key = String(id);
-        if (!seen.has(key)) {
-          seen.set(key, {
-            country,
-            countryCode,
-            id: key,
-            name: String(name),
-          });
-        }
-      }
+      await readStockRegionEntries(seen);
 
       // Regions the stock tiles don't know — shapes DRAWN in the map editor
       // (reg_* ids) and seed-only regions — get their names from the active
@@ -1741,11 +2075,9 @@ export const loadRegionCatalog = async ({ force = false } = {}) => {
       let customRegionsResolved = true;
       try {
         let customEntries = null;
-        if (
-          primedCustomRegionCatalog &&
-          primedCustomRegionCatalogKey === JSON_URLS.regionsGeojson
-        ) {
-          customEntries = primedCustomRegionCatalog;
+        const fromMap = await mapRegionCatalogSoon(JSON_URLS.regionsGeojson);
+        if (fromMap) {
+          customEntries = fromMap;
         } else {
           // Cold-start fallback only. Once Nations loads the custom map, the
           // compact primer makes this giant geometry read disappear thereafter.
@@ -1760,23 +2092,7 @@ export const loadRegionCatalog = async ({ force = false } = {}) => {
           });
         }
 
-        for (const entry of customEntries ?? []) {
-          const id = String(entry?.id ?? "");
-          if (!id) continue;
-          const existing = seen.get(id);
-          if (existing) {
-            if (entry.name) existing.name = String(entry.name);
-            if (entry.country) existing.country = String(entry.country);
-            if (entry.countryCode) existing.countryCode = String(entry.countryCode);
-            continue;
-          }
-          seen.set(id, {
-            country: entry.country ? String(entry.country) : "",
-            countryCode: entry.countryCode ? String(entry.countryCode) : "",
-            id,
-            name: entry.name ? String(entry.name) : id,
-          });
-        }
+        mergeCustomRegionEntries(seen, customEntries);
       } catch {
         customRegionsResolved = false;
       }
@@ -1786,14 +2102,7 @@ export const loadRegionCatalog = async ({ force = false } = {}) => {
         regionCatalogPromise = null;
       }
 
-      return Array.from(seen.values()).sort((left, right) => {
-        const countrySort = left.country.localeCompare(right.country);
-        if (countrySort !== 0) {
-          return countrySort;
-        }
-
-        return left.name.localeCompare(right.name);
-      });
+      return sortedRegionCatalog(seen);
     } catch (error) {
       console.error("Failed to load region catalog (will retry):", error);
       // One failed load used to pin an EMPTY catalog for the rest of the

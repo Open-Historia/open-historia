@@ -14,13 +14,26 @@
 // Import-free apart from the seeded draw espionage already rolls with.
 import { draw } from "./spycraft.js";
 
-// The dice: a skip with an event worth playing out offers it one time in three,
-export const INTERACTIVE_OFFER_CHANCE = 1 / 3;
-// and never within this many rounds of the last offer, so offers stay rare.
-export const INTERACTIVE_OFFER_COOLDOWN = 3;
+// The dice: a skip with an event worth playing out offers it one time in four,
+export const INTERACTIVE_OFFER_CHANCE = 1 / 4;
+// and never within this many skips of the last offer, so offers stay rare.
+export const INTERACTIVE_OFFER_COOLDOWN = 2;
 
 const text = (value) => String(value ?? "").trim();
 const whole = (value) => (Number.isFinite(Number(value)) ? Math.max(0, Math.trunc(Number(value))) : 0);
+
+const SKIP_MODES = new Set(["jump", "auto"]);
+
+export const skipsSinceOffer = ({ history = [], round = 0, lastOfferRound = 0 } = {}) => {
+  const last = whole(lastOfferRound);
+  if (!last) return Infinity;
+  const landing = whole(round);
+  const between = (Array.isArray(history) ? history : []).filter((turn) => {
+    const at = whole(turn?.round);
+    return at > last && at < landing && SKIP_MODES.has(text(turn?.mode));
+  });
+  return between.length + 1;
+};
 
 // How much an event weighs: "normally minor or major" (the jump schema), with
 // the odd critical or high. Minor events are never offered.
@@ -46,17 +59,17 @@ export const chooseInteractiveOffer = ({
   events = [],
   round = 0,
   lastOfferRound = 0,
+  history = [],
   chance = INTERACTIVE_OFFER_CHANCE,
   cooldown = INTERACTIVE_OFFER_COOLDOWN,
 } = {}) => {
   const list = Array.isArray(events) ? events : [];
   const landing = whole(round);
-  const last = whole(lastOfferRound);
-  if (last && landing - last < cooldown) return null;
+  if (skipsSinceOffer({ history, round: landing, lastOfferRound }) < cooldown) return null;
   const candidates = list.filter(isOfferableEvent);
   if (!candidates.length) return null;
   // Seeded by the turn's first event, which an Intervene always keeps.
-  if (draw(`interactive-offer|${landing}|${text(list[0]?.id)}`) >= chance) return null;
+  if (draw(`interactive-offer|${landing}|${text(list[0]?.id)}|${text(list[0]?.title)}`) >= chance) return null;
   // The weightiest; a notable one (an auto-jump's stop) above its peers; the
   // latest of equals, which is the moment closest to where the player stands.
   const weigh = (event) => (IMPORTANCE_WEIGHT[text(event.importance).toLowerCase()] ?? 0) * 2 + (event.notable === true ? 1 : 0);

@@ -52,6 +52,80 @@ test("a mimicked tool call missing its outer bracket still yields the arguments"
   assert.equal(args.clearActions, true);
 });
 
+// A player's log (a small local model behind koboldcpp): after its lookup
+// rounds the model "answered … without calling the output function" and wrote
+// the call out as text, in the OpenAI wire's own shape. The Projects board
+// rejected it, "$ must be object; received array", and held a turn whose
+// events were already written. The envelope below is the one in that log.
+const wireCall = (args, name = TOOL) => `[
+{
+"id": "call_001",
+"type": "function",
+"function": {
+"name": ${JSON.stringify(name)},
+"arguments": ${args}
+}
+}
+]`;
+
+test("an answer written as the wire's own tool call yields the arguments", () => {
+  const raw = wireCall(`{
+"events": [
+{
+"date": "2014-04-25",
+"title": "Putin Travels to Army Bases for Reforms",
+"description": "Vladimir Putin departed for multiple army garrisons.",
+"playerRelated": true,
+"impacts": { "actionIds": ["order-0-muufk1ha-2mpuvlu"] }
+}
+],
+"stopDate": "2014-05-25",
+"summary": "The period saw the implementation of military reforms."
+}`);
+  const parsed = extractJsonPayload(raw);
+  assert.ok(Array.isArray(parsed), "the text itself parses to the array the schema refused");
+  const args = unwrapMimickedToolCall(parsed, TOOL);
+  assert.equal(args.stopDate, "2014-05-25");
+  assert.equal(args.events.length, 1);
+  assert.deepEqual(args.events[0].impacts.actionIds, ["order-0-muufk1ha-2mpuvlu"]);
+});
+
+test("the wire's call is unwrapped whether its arguments are an object or the JSON string the wire carries", () => {
+  const payload = { stopDate: "2014-05-25", events: [{ title: "Путин начал инспекцию военных баз" }] };
+  const asString = wireCall(JSON.stringify(JSON.stringify(payload)));
+  assert.deepEqual(unwrapMimickedToolCall(extractJsonPayload(asString), TOOL), payload);
+  const asObject = wireCall(JSON.stringify(payload));
+  assert.deepEqual(unwrapMimickedToolCall(extractJsonPayload(asObject), TOOL), payload);
+  // Not in an array, and without the id and type a model may leave out.
+  const bare = { function: { name: TOOL, arguments: payload } };
+  assert.deepEqual(unwrapMimickedToolCall(bare, TOOL), payload);
+  assert.deepEqual(unwrapMimickedToolCall({ index: 0, id: "call_1", type: "function", function: { name: TOOL, arguments: payload } }, TOOL), payload);
+});
+
+test("a wire call to another function is not the answer", () => {
+  // A lookup the model wrote out instead of making: there is no payload in it.
+  const lookup = extractJsonPayload(wireCall('{"owner": "Russian Federation", "limit": 100}', "list_regions"));
+  assert.equal(unwrapMimickedToolCall(lookup, TOOL), lookup);
+});
+
+test("only a wire call is unwrapped: a payload with a field named function is left alone", () => {
+  const payload = { stopDate: "2014-05-25", events: [] };
+  // With no tool to check the name against, the call has to be nothing but a call.
+  assert.deepEqual(unwrapMimickedToolCall([{ id: "call_001", type: "function", function: { name: "anything", arguments: payload } }], null), payload);
+  const withMore = { id: "call_001", type: "function", function: { name: "anything", arguments: payload, note: "extra" } };
+  assert.equal(unwrapMimickedToolCall(withMore, null), withMore);
+  // Fields the wire does not have beside `function`: a payload of its own.
+  const record = { function: { name: TOOL, arguments: payload }, summary: "A quarter passes." };
+  assert.equal(unwrapMimickedToolCall(record, TOOL), record);
+  const otherType = { id: "call_001", type: "custom", function: { name: TOOL, arguments: payload } };
+  assert.equal(unwrapMimickedToolCall(otherType, TOOL), otherType);
+  // Arguments that are no object leave the answer as it was, for the schema to refuse.
+  for (const args of ["not json", [payload], 7, null]) {
+    const call = { id: "call_001", type: "function", function: { name: TOOL, arguments: args } };
+    assert.equal(unwrapMimickedToolCall(call, TOOL), call);
+  }
+});
+
 test("a brace inside a string is not counted as structure", () => {
   const parsed = extractJsonPayload('Here you go: {"summary":"the {plan} is set","events":[{"title":"a [b] c"}]} done.');
   assert.equal(parsed.summary, "the {plan} is set");
@@ -341,4 +415,94 @@ test("a turn cut off before its riders is never closed and applied", () => {
   assert.equal(parseWithoutTrailingFields(`{"events":[],"stopDate":"2016-01-31","summary":"S"`, RIDERS), null);
   assert.equal(parseWithoutTrailingFields("no object here", RIDERS), null);
   assert.equal(parseWithoutTrailingFields(`${TURN}${REPORTS}}`, []), null, "and no riders named means none to drop");
+});
+
+// ---- The answer is the object the contract asks for (a player's log, 2026-10-12) -----------------
+// A time skip on an OpenAI-compatible endpoint came back as the model's
+// planning, some thirty thousand characters of it, with small JSON in it. The
+// first fragment that parsed was taken for the answer and the skip fell back
+// with "$.events is required." The words below are that log's.
+
+const PLANNING = [
+  "The previous answer failed validation - it seems I returned an array instead of an object. Let me construct the correct JSON object now.",
+  "",
+  "I need to produce the submit_jump_result JSON object with:",
+  "- summary (string)",
+  '- stopDate: "2016-01-04"',
+  "- events: 3-6 events",
+  "",
+  '3. Jan 3: President Obama signs directive establishing joint anti-kaiju program (the player\'s order outcome). actionIds: ["action-0-mv5syueg-okgdywp"]. Build marker: "Joint Anti-Kaiju Program Office" at region: Washington DC, country: United States.',
+  'unitOps: {"op":"spawn","unit":{"name":"Armed Forces of the Philippines Joint Task Force Kalasag","type":"infantry","at":"city: Manila, country: Philippines"}} and then the storyline.',
+  'Both allowed: "impacts.createdChats when an event prompts it, diplomaticOutreach for an approach of their own".',
+].join("\n");
+const ANSWER = { summary: "Three days.", stopDate: "2016-01-04", events: [{ date: "2016-01-02", title: "Landfall at Manila Bay", description: "It came ashore at dawn." }] };
+const REQUIRED = ["events", "stopDate", "summary"];
+const fit = (value) => (value && typeof value === "object" && !Array.isArray(value) ? REQUIRED.filter((key) => value[key] !== undefined).length : 0);
+const byContract = (text, options = {}) => extractJsonPayload(text, { prefer: fit, fullFit: REQUIRED.length, ...options });
+
+test("without a contract to go by, the first fragment of the planning is what was taken", () => {
+  // What the reader did, and still does for a caller that names no contract.
+  assert.equal(extractJsonPayload(`${PLANNING}\n\n${JSON.stringify(ANSWER)}`).op, "spawn");
+});
+
+test("planning followed by the answer: the answer is taken, wherever it stands", () => {
+  assert.deepEqual(byContract(`${PLANNING}\n\n${JSON.stringify(ANSWER)}`), ANSWER);
+  assert.deepEqual(byContract(`${PLANNING}\n\n\`\`\`json\n${JSON.stringify(ANSWER, null, 2)}\n\`\`\`\nThat is the turn.`), ANSWER);
+  // In the middle, with more planning after it.
+  assert.deepEqual(byContract(`${PLANNING}\n${JSON.stringify(ANSWER)}\nCount check: {"ok":true}`), ANSWER);
+});
+
+test("planning with no answer in it yields nothing, and never a scrap of the planning", () => {
+  assert.equal(byContract(PLANNING), null);
+  assert.equal(byContract(`${PLANNING}\nEvent list final: [1, 2, 3]`), null);
+});
+
+test("a draft and then the answer: the one that has more of the contract, and of two that have it all, the last", () => {
+  const draft = { events: [] };
+  const first = { ...ANSWER, summary: "A first go." };
+  assert.deepEqual(byContract(`Draft: ${JSON.stringify(draft)}\nFinal: ${JSON.stringify(ANSWER)}`), ANSWER);
+  assert.deepEqual(byContract(`Final: ${JSON.stringify(ANSWER)}\nA scrap: ${JSON.stringify(draft)}`), ANSWER);
+  assert.deepEqual(byContract(`${JSON.stringify(first)}\nNo, better:\n${JSON.stringify(ANSWER)}`), ANSWER);
+});
+
+test("the whole reply being one value, it is the answer, fitting or not", () => {
+  // The caller's own check says what is wrong with it.
+  assert.deepEqual(byContract('{"timelineEvents":[]}'), { timelineEvents: [] });
+  assert.deepEqual(byContract("[1,2]"), [1, 2]);
+  assert.deepEqual(byContract(JSON.stringify(ANSWER)), ANSWER);
+});
+
+test("an answer in the wrong shape with a line of words round it is still handed on", () => {
+  const misshapen = { timelineEvents: [{ date: "2016-01-02", title: "Landfall", description: "It came ashore at dawn, and the city woke to sirens." }] };
+  assert.deepEqual(byContract(`Here is the turn:\n${JSON.stringify(misshapen)}`), misshapen);
+});
+
+test("a bracket the planning left open does not hide the answer after it", () => {
+  const text = `Plan [Action Planning: first the landfall, then { the program\n${PLANNING}\n${JSON.stringify(ANSWER)}`;
+  assert.deepEqual(byContract(text), ANSWER);
+  // The older reader stops at that bracket, which is what kept it from half-landing a cut answer.
+  assert.equal(extractJsonPayload(`Plan [Action Planning: ${JSON.stringify(ANSWER)}`), null);
+});
+
+test("an answer that was cut off is not half-landed by reading on inside it", () => {
+  const cut = JSON.stringify({ ...ANSWER, events: [...ANSWER.events, { date: "2016-01-03", title: "A second event", description: "Cut he" }] }).slice(0, -30);
+  assert.equal(byContract(cut), null);
+  assert.equal(byContract(`Here it is: ${cut}`), null);
+  // The finished event inside it would fit a list of events; it is a piece of an answer and is left.
+  const fitsEvents = (value) => (Array.isArray(value) ? 3 : fit(value));
+  assert.equal(extractJsonPayload(cut, { prefer: fitsEvents, fullFit: 3 }), null);
+});
+
+test("read for the whole contract or nothing, reasoning gives up only a complete answer", () => {
+  const whole = (text) => byContract(text, { minFit: REQUIRED.length });
+  assert.equal(whole(PLANNING), null);
+  assert.equal(whole(`${PLANNING}\n{"events":[]}`), null);
+  assert.equal(whole('{"events":[]}'), null);
+  assert.deepEqual(whole(`${PLANNING}\n${JSON.stringify(ANSWER)}`), ANSWER);
+});
+
+test("a think block is taken off before anything is read", () => {
+  assert.deepEqual(byContract(`<think>${PLANNING}</think>${JSON.stringify(ANSWER)}`), ANSWER);
+  assert.deepEqual(byContract(`${PLANNING}</think>\n${JSON.stringify(ANSWER)}`), ANSWER);
+  assert.equal(byContract(`<think>${PLANNING} ${JSON.stringify(ANSWER)}</think>`), null);
 });

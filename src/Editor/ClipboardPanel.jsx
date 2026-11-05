@@ -10,7 +10,7 @@
 import Panel from "./Panel.jsx";
 import Icon from "./Icon.jsx";
 import { pillButton } from "./editorStyles.js";
-import { describeClipboard } from "./regionClipboard.js";
+import { describeClipboard, formatCopiedDay } from "./regionClipboard.js";
 
 const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
@@ -22,10 +22,10 @@ const ago = (iso) => {
   if (minutes < 60) return `${minutes} min ago`;
   const hours = Math.round(minutes / 60);
   if (hours < 24) return `${plural(hours, "hour")} ago`;
-  return new Date(then).toLocaleDateString();
+  return formatCopiedDay(then);
 };
 
-const ClipboardPanel = ({ clipboard, selectionCount = 0, result = null, onCopySelection, onPaste, onClear, onClose }) => {
+const ClipboardPanel = ({ clipboard, selectionCount = 0, result = null, simplify = true, onSimplifyChange, onCopySelection, onPaste, onClear, onClose }) => {
   const summary = describeClipboard(clipboard);
   return (
     <Panel
@@ -42,13 +42,6 @@ const ClipboardPanel = ({ clipboard, selectionCount = 0, result = null, onCopySe
         ) : null
       }
     >
-      <div style={{ fontSize: 12, lineHeight: 1.45, color: "rgba(255,255,255,0.62)" }}>
-        Build a map from pieces of others. Select regions on any map and copy them; open the map you are building and
-        paste. Pasted regions take their land from whatever is already there: a region underneath keeps what is not
-        covered, one covered entirely is removed. Countries this map does not know yet arrive with their colour, flag and
-        tags; ones it already has keep yours. The clipboard survives closing the Workshop and switching scenarios, and a
-        paste is one undo step.
-      </div>
 
       {selectionCount > 0 && (
         <button
@@ -88,6 +81,10 @@ const ClipboardPanel = ({ clipboard, selectionCount = 0, result = null, onCopySe
           >
             <Icon name="paint" size={14} /> Paste into this map
           </button>
+          <label style={{ fontSize: 11.5, display: "flex", alignItems: "center", gap: 6 }}>
+            <input type="checkbox" checked={simplify} onChange={(e) => onSimplifyChange?.(e.target.checked)} />
+            Simplify to this map's detail
+          </label>
         </>
       ) : (
         <div style={{ fontSize: 11.5, color: "rgba(255,255,255,0.5)", padding: "6px 2px" }}>

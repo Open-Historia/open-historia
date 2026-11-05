@@ -5,24 +5,36 @@ import { SettingsButton, SettingsMenu } from "./settings";
 import { Presence } from "./presence.jsx";
 import { LibraryTopBar, TOP_BAR_OFFSET, openLibraryTab, useMainMenuOpen } from "./libraryBar";
 import { ApiSetupPrompt } from "./apiSetupPrompt.jsx";
-import { GameLoadingScreen, useGameLoading } from "./gameLoadingScreen.jsx";
-import { useLibraryState } from "../../runtime/library.js";
+import { GameLoadingScreen, LOADING_CEILING_MS, useGameLoading } from "./gameLoadingScreen.jsx";
+import { setOpenGameCountry, useLibraryState } from "../../runtime/library.js";
+import { playerAtWar } from "../../runtime/playerAtWar.js";
+import { enterGame, useGameEntered } from "../../runtime/gameEntry.js";
+import { useActiveFeatures, activeWars } from "../../runtime/gameFeatures.js";
+import { useRuntimeState } from "../../runtime/useRuntimeState.js";
+import { brushedMetalUrl } from "./brushedMetal.js";
+import { fightingIn, playerFrontsKey } from "./warRoomData.js";
 import { presenceFor, useDiscordPresence } from "../../runtime/discordPresence.js";
+import { musicSceneOf, setMusicScene } from "../../runtime/ambientMusic.js";
+import { followScenarioMusic } from "../../runtime/scenarioMusic.js";
+import { useWarRoom } from "../Map/warRoomStore.js";
 import { DISCORD_URL, GITHUB_URL, REDDIT_URL } from "../../runtime/communityLinks.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
 import { DateWidget } from "./time";
 import { Other } from "./other";
 import { Toolbar } from "./chat";
+import MapModeSelector from "./MapModeSelector.jsx";
 import { Search } from "./search";
 import { ForcesPanel } from "./forces";
 import { ADVISOR_SLIDE } from "./advisorSlide.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { useBackToClose } from "../../runtime/backToClose.js";
-import { MAP_CARD_OPENED, SAFE_BOTTOM, SAFE_RIGHT } from "../../runtime/mobileUi.js";
+import { MAP_CARD_OPENED, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT } from "../../runtime/mobileUi.js";
+import { DOCK_BOTTOM_REM, DOCK_HEIGHT_REM, DOCK_LEFT_REM, WAR_ROOM_BUTTON_REM, useDockGeometry } from "./hudDock.js";
+import { showEveryTroop } from "../Map/troopDetail.js";
 import { dismissRegionPopup } from "../Selection/Regions.jsx";
 import { dismissUnitPopup } from "../Selection/Units.jsx";
 import { dismissFeaturePopup } from "../Selection/Features.jsx";
-import { openCountryPanel } from "../Selection/CountryPanel.jsx";
+import { OPEN_COUNTRY_STATS_EVENT, openCountryPanel } from "../Selection/CountryPanel.jsx";
 import { logDebugEvent, logSettingChange } from "../../runtime/debugLog.js";
 import {
   describeProviderSetupNeed,
@@ -32,6 +44,10 @@ import {
   syncAiDebugContext,
 } from "../AI/providerConfig.js";
 import { FallbackSwitchNotice } from "./fallbackSwitchNotice.jsx";
+import { AgentWaitingNotice } from "./agentWaitingNotice.jsx";
+import { BordersFallbackNotice } from "./bordersFallbackNotice.jsx";
+import { WarAndPeaceCards } from "./warAndPeace.jsx";
+import { PLAYER_ACTIVITY_EVENTS, createPlayerActivity } from "../../runtime/playerActivity.js";
 
 // Whether anything in the Fallback list has what its provider needs, and the
 // top entry's provider for the start-of-game prompt's wording. Re-read whenever
@@ -46,6 +62,7 @@ const readAiSetup = () => {
 // localStorage, and clamped to a readable min and a max that keeps the HUD
 // in view.
 const ADVISOR_WIDTH_VAR = "--oh-advisor-width";
+const RIGHT_DRAWER_SAFE_OFFSET_VAR = "--oh-right-drawer-safe-offset";
 const ADVISOR_MIN_WIDTH = 280;
 const ADVISOR_DEFAULT_WIDTH = 320; // 20rem, the old fixed width
 // The drawer may cover the map but not the HUD on its left. The tightest fit is
@@ -89,6 +106,18 @@ const baseStyle = {
 
 const LazyAdvisorPanel = lazy(() =>
   import("./advisor").then((module) => ({ default: module.AdvisorPanel })),
+);
+const LazyCountryPanel = lazy(() =>
+  import("./countryPanel.jsx").then((module) => ({ default: module.CountryPanel })),
+);
+// The war room (warRoom.jsx): nothing of it loads until there is a war and the
+// player opens it.
+// A war's after-action report, put before the player once a battlefield of theirs closes (afterAction.jsx).
+const LazyAfterActionReports = lazy(() =>
+  import("./afterAction.jsx").then((module) => ({ default: module.AfterActionReports })),
+);
+const LazyWarRoomPanel = lazy(() =>
+  import("./warRoom.jsx").then((module) => ({ default: module.WarRoomPanel })),
 );
 const LazyCheatsPanel = lazy(() =>
   import("./cheats").then((module) => ({ default: module.CheatsPanel })),
@@ -190,7 +219,7 @@ const AdvisorDockIcon = () => (
   </svg>
 );
 
-const AdvisorButton = ({ isAdvisorOpen, dockStyle, onToggle }) => (
+const AdvisorButton = ({ isAdvisorOpen, isMobile, dockStyle, onToggle }) => (
   <button
     type="button"
     title="Advisor"
@@ -199,12 +228,16 @@ const AdvisorButton = ({ isAdvisorOpen, dockStyle, onToggle }) => (
     style={{
       ...baseStyle,
       ...dockStyle,
-      bottom: `calc(0.5rem + ${SAFE_BOTTOM})`,
+      // Above the map switch at the foot of the stack (MapModeSelector.jsx).
+      bottom: `calc(${isMobile ? "3.6rem" : "3rem"} + ${SAFE_BOTTOM})`,
       // Rides beside the advisor drawer, so a wide drawer carries it over the
       // Actions/Projects/chat panels (9998); an open panel stays on top.
       zIndex: 9997,
-      height: "4rem", width: "4rem",
-      cursor: "pointer", fontSize: "1.5rem",
+      height: isMobile ? "3.2rem" : "4rem",
+      width: isMobile ? "3.2rem" : "4rem",
+      cursor: "pointer",
+      fontSize: isMobile ? "1.25rem" : "1.5rem",
+      borderRadius: isMobile ? "12px" : "14px",
       background: isAdvisorOpen
         ? "rgba(255,255,255,0.085)"
         : "rgba(35,35,39,0.53)",
@@ -214,6 +247,76 @@ const AdvisorButton = ({ isAdvisorOpen, dockStyle, onToggle }) => (
     <AdvisorDockIcon />
   </button>
 );
+
+// The war room's button: a disc of red metal brushed in circles
+// (brushedMetal.js), with crossed swords cut into it. It is on screen only
+// while the player's troops are on a battlefield, and stands beside the
+// launcher dock where Search otherwise is (Search moves over: hudDock.js). On
+// a phone there is no room beside the dock, so it stands above it.
+const WarRoomIcon = () => (
+  <svg width="30" height="30" viewBox="0 0 24 24" fill="none" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    {/* Cut into the metal: a pale lip under each stroke, the dark of the cut over it. */}
+    <g stroke="rgba(255,214,214,0.5)" strokeWidth="2.1" transform="translate(0.45 0.6)">
+      <path d="M5 4l12.5 12.5M16 19l3-3M18.2 17.8l2 2" />
+      <path d="M19 4L6.5 16.5M8 19l-3-3M5.8 17.8l-2 2" />
+    </g>
+    <g stroke="rgba(34,4,6,0.88)" strokeWidth="2.1">
+      <path d="M5 4l12.5 12.5M16 19l3-3M18.2 17.8l2 2" />
+      <path d="M19 4L6.5 16.5M8 19l-3-3M5.8 17.8l-2 2" />
+    </g>
+  </svg>
+);
+
+// How far in from the corner it stands while the war room is open: clear of the frame's strips.
+const WAR_ROOM_OPEN_INSET_REM = 1.1;
+const WarRoomButton = ({ open, isMobile, onToggle }) => {
+  const buttonSize = isMobile ? "3rem" : `${WAR_ROOM_BUTTON_REM}rem`;
+  const dock = useDockGeometry();
+  return (
+  <button
+    type="button"
+    title="War room"
+    aria-label="War room"
+    aria-pressed={open}
+    data-oh-war-room-button=""
+    onClick={onToggle}
+    style={{
+      ...baseStyle,
+      // While the war room is open the dock it stood beside is out of sight, so
+      // it goes to the corner of the screen, inside the frame round the map.
+      left: `calc(${open ? `${WAR_ROOM_OPEN_INSET_REM}rem` : isMobile ? `${DOCK_LEFT_REM}rem` : dock.besideDockLeft} + ${SAFE_LEFT})`,
+      bottom: `calc(${open ? WAR_ROOM_OPEN_INSET_REM : isMobile ? DOCK_BOTTOM_REM + DOCK_HEIGHT_REM + 0.35 : DOCK_BOTTOM_REM}rem + ${SAFE_BOTTOM})`,
+      height: buttonSize, width: buttonSize,
+      borderRadius: "50%",
+      cursor: "pointer",
+      backdropFilter: "none",
+      backgroundColor: "#a8181e",
+      backgroundImage: `url(${brushedMetalUrl(160)})`,
+      backgroundSize: "cover",
+      border: "1px solid rgba(0,0,0,0.6)",
+      boxShadow: open
+        ? "0 0 0 2px rgba(255,255,255,0.85), 0 3px 12px rgba(0,0,0,0.55)"
+        : "0 3px 12px rgba(0,0,0,0.55)",
+      transition: "left 0.3s ease, bottom 0.3s ease, box-shadow 0.15s ease",
+      // Under an open Actions, Projects or Diplomacy panel (9998), as the
+      // advisor's button is: on a phone it stands where their foot is, over the
+      // Submit button ("it covers the submit action button in the action tab",
+      // a player, 2026-10-28). Over everything while the war room is open.
+      zIndex: open ? 9999 : 9997,
+    }}
+  >
+    <WarRoomIcon />
+  </button>
+  );
+};
+
+// The wrapper round the HUD's own controls: nothing of its own to lay out
+// while they show, and all of them gone with it while the war room is open.
+const HUD_IN_SIGHT = Object.freeze({ display: "contents" });
+const HUD_OUT_OF_SIGHT = Object.freeze({ display: "none" });
+
+// The country a game's own record names, or null while there is no record yet.
+const selectPlayedCountry = (game) => (game ? String(game.country ?? "").trim() : null);
 
 const Main = ({
   mapRef,
@@ -226,28 +329,62 @@ const Main = ({
   // Which workspace section the menu opens on; null is the quick menu. Set by
   // the AI setup prompt's Configure button, cleared whenever the menu closes.
   const [settingsInitialSection, setSettingsInitialSection] = useState(null);
+  // The main menu's Settings are for every game; a game's ☰ adds its own.
+  const [settingsScope, setSettingsScope] = useState("game");
   const [isCheatsOpen, setIsCheatsOpen] = useState(false);
   const [shouldLoadCheats, setShouldLoadCheats] = useState(false);
   const [isDebugConsoleOpen, setIsDebugConsoleOpen] = useState(false);
   const [shouldLoadDebugConsole, setShouldLoadDebugConsole] = useState(false);
   const [isInteractiveOpen, setIsInteractiveOpen] = useState(false);
   const [isAdvisorOpen, setIsAdvisorOpen] = useState(false);
+  const [isCountryOpen, setIsCountryOpen] = useState(false);
+  const [isWarRoomOpen, setIsWarRoomOpen] = useState(false);
+  const [shouldLoadWarRoom, setShouldLoadWarRoom] = useState(false);
   const [advisorWidth, setAdvisorWidth] = useState(readAdvisorWidth);
   // A starter message queued for the advisor's input box — set when something
   // OUTSIDE the advisor panel (the Actions panel's "Help brainstorm actions"
   // button) opens it wanting to prime the conversation, rather than opening it
   // blank. Consumed (cleared) once AdvisorPanel has placed it in its input.
   const [pendingAdvisorPrompt, setPendingAdvisorPrompt] = useState("");
+  // The polity a map card's Stats button asked the Country drawer to show.
+  // Consumed (cleared) once the drawer's Stats pane has taken it, so the flag
+  // button still opens the drawer on the player's own country.
+  const [pendingCountryTarget, setPendingCountryTarget] = useState("");
+  // Stable, so the memoized StatsPane still skips this component's re-renders.
+  const consumeCountryTarget = useCallback(() => setPendingCountryTarget(""), []);
   const [isForcesOpen, setIsForcesOpen] = useState(false);
   const [activeBottomPanel, setActiveBottomPanel] = useState(null);
+  // Which tab the Actions panel is asked to show (actions.jsx): Projects &
+  // Operations is its second tab, which the advisor's board card opens. A new
+  // object each time, so asking twice for the same tab still switches to it.
+  const [actionsTab, setActionsTab] = useState(null);
   const [shouldLoadAdvisor, setShouldLoadAdvisor] = useState(false);
+  const [shouldLoadCountry, setShouldLoadCountry] = useState(false);
   const [isFullscreenEnabled, setIsFullscreenEnabled] = useState(false);
   const [showWebGLWarning, setShowWebGLWarning] = useState(false);
 
   const [aiSetup, setAiSetup] = useState(readAiSetup);
   const { activeGame, games, loaded, runtimeScenario } = useLibraryState();
-  // The game menu names the campaign the way the library does.
-  const activeCountryName = useCountryDisplayName(activeGame?.country || "");
+  // The page starts on the main menu with no game loaded behind it, and this
+  // UI is what draws that menu. Until the player opens a game
+  // (runtime/gameEntry.js) the library's active game is only the one last
+  // played: none of the game's own controls is mounted, and nothing here reads
+  // it, reports it or runs anything for it.
+  const gameEntered = useGameEntered();
+  // Which country the open game is played as, from the game's own record: the
+  // library's list has it as it stood when the list was last read, and it
+  // changes in play (the Play As Country cheat first of all). Told to the
+  // library, so everything that reads the list's entry, here and elsewhere,
+  // names the country the game is really played as. Null until the record is
+  // read; a game with no country says so with an empty name.
+  const playedCountry = useRuntimeState("game", selectPlayedCountry);
+  useEffect(() => {
+    if (gameEntered && activeGame?.id && playedCountry !== null) setOpenGameCountry(activeGame.id, playedCountry);
+  }, [gameEntered, activeGame?.id, playedCountry]);
+  // The game menu names the campaign the way the library does. (Not before a
+  // game is opened: looking the name up reads the game's world and the country
+  // tiles.)
+  const activeCountryName = useCountryDisplayName(activeGame?.country || "", { wait: !gameEntered });
   // No games -> nothing to simulate (the main menu covers the empty world).
   const hasNoGames = loaded && (games?.length ?? 0) === 0;
 
@@ -255,17 +392,30 @@ const Main = ({
   // per session, offering the AI settings. It goes away the moment a key is
   // typed into the settings, because every edit announces itself.
   const mainMenuOpen = useMainMenuOpen();
+  // The menu was closed to open the page's first game, and that game has not
+  // landed yet (the library enters it when it has; a flow that fails opens the
+  // menu again). There is no game to show under the closed menu, so the cover
+  // is up from the press itself.
+  const awaitingGame = !gameEntered && !mainMenuOpen;
+  // And it does not stay up over nothing: should the game never land and the
+  // menu never come back, the game the library holds is entered once the
+  // cover's own ceiling has passed.
+  useEffect(() => {
+    if (!awaitingGame) return undefined;
+    const timer = setTimeout(enterGame, LOADING_CEILING_MS);
+    return () => clearTimeout(timer);
+  }, [awaitingGame]);
   // The screen a game opens under, until the map has drawn it (this UI is
   // remounted per game, so it starts over with every game opened).
   const gameLoading = useGameLoading();
-  const showGameLoading = gameLoading.active && Boolean(activeGame?.id);
+  const showGameLoading = awaitingGame || (gameLoading.active && Boolean(activeGame?.id));
   // Discord's "Playing Open Historia", with who, where and when under it
   // (runtime/discordPresence.js; the desktop app and the local server only).
   useDiscordPresence(presenceFor({
     activeGame,
     playerName: activeCountryName || activeGame?.country || "",
     scenarioName: runtimeScenario?.name || "",
-    inMenu: mainMenuOpen || hasNoGames,
+    inMenu: mainMenuOpen || hasNoGames || !gameEntered,
   }));
   const providerReady = aiSetup.ready;
   const [apiPromptAnsweredFor, setApiPromptAnsweredFor] = useState(() => {
@@ -311,27 +461,45 @@ const Main = ({
       isSettingsOpen && "settings",
       isCheatsOpen && "cheats",
       isAdvisorOpen && "advisor",
+      isCountryOpen && "country",
       isForcesOpen && "forces",
     ].filter(Boolean);
     logDebugEvent("ui", `Open panels: ${open.length ? open.join(", ") : "(none)"}`, undefined, { verbose: true });
-  }, [activeBottomPanel, isSettingsOpen, isCheatsOpen, isAdvisorOpen, isForcesOpen]);
+  }, [activeBottomPanel, isSettingsOpen, isCheatsOpen, isAdvisorOpen, isCountryOpen, isForcesOpen]);
 
   // Idle diplomacy drip: each real-world minute the game is open (and has a
   // running game), there is a small chance a polity messages the player's
   // inbox unprompted. Everything that could break it is guarded inside
   // maybeSendIdleDiplomacy — it skips entirely while a time skip, game-master
   // command, or interactive event stage is in flight, never overlaps itself, and stays
-  // silent on any failure. Hidden tabs don't roll the dice.
+  // silent on any failure. Hidden tabs don't roll the dice, and neither does a
+  // window nobody has touched for ten minutes (runtime/playerActivity.js): each
+  // attempt is a background request, and a window left open while the player
+  // was away spent the day's cap on notes nobody was there to read.
   useEffect(() => {
-    if (hasNoGames) return undefined;
+    // The main menu owns Scenario Workshop / Map Editor as overlays while the
+    // previously active campaign may still exist underneath. Idle diplomacy is
+    // gameplay activity, not background app activity, so do not let a country
+    // message the player while they are browsing/editing outside the campaign.
+    // Nor for a game that has not been opened: the menu is closed for a moment
+    // while the page's first game is on its way, and the active game is still
+    // the one last played.
+    if (hasNoGames || mainMenuOpen || !gameEntered) return undefined;
+    const activity = createPlayerActivity();
+    const listenerOptions = { capture: true, passive: true };
+    for (const type of PLAYER_ACTIVITY_EVENTS) window.addEventListener(type, activity.note, listenerOptions);
     const iv = setInterval(() => {
       if (document.visibilityState !== "visible") return;
+      if (!activity.isPresent()) return;
       import("../AI/gameplay.js")
         .then(({ maybeSendIdleDiplomacy }) => maybeSendIdleDiplomacy())
         .catch(() => {});
     }, 60000);
-    return () => clearInterval(iv);
-  }, [hasNoGames]);
+    return () => {
+      clearInterval(iv);
+      for (const type of PLAYER_ACTIVITY_EVENTS) window.removeEventListener(type, activity.note, listenerOptions);
+    };
+  }, [hasNoGames, mainMenuOpen, gameEntered]);
 
   // Spy reports, on the same rhythm and with the same guards: a roll each
   // minute the tab is visible, at odds that work out to roughly one report
@@ -340,8 +508,10 @@ const Main = ({
   // own); this is what makes
   // them tick while the player is simply playing, and it is why there is no
   // Gather button — an agent is a trickle of intelligence, not a thing to farm.
+  // Not in the main menu or the Workshop: each report is an AI request, spent
+  // on a campaign the player has not entered.
   useEffect(() => {
-    if (hasNoGames) return undefined;
+    if (hasNoGames || mainMenuOpen || !gameEntered) return undefined;
     const iv = setInterval(() => {
       if (document.visibilityState !== "visible") return;
       import("../AI/gameplay.js")
@@ -349,15 +519,15 @@ const Main = ({
         .catch(() => {});
     }, 60000);
     return () => clearInterval(iv);
-  }, [hasNoGames]);
+  }, [hasNoGames, mainMenuOpen, gameEntered]);
 
   useEffect(() => {
     if (isAdvisorOpen) setShouldLoadAdvisor(true);
   }, [isAdvisorOpen]);
 
   useEffect(() => {
-    localStorage.setItem("Fullscreen", JSON.stringify(isFullscreenEnabled));
-  }, [isFullscreenEnabled]);
+    if (isCountryOpen) setShouldLoadCountry(true);
+  }, [isCountryOpen]);
 
   // The report header names the top of the Fallback list from the moment the
   // game loads; every later change to the list keeps it in step.
@@ -405,6 +575,7 @@ const Main = ({
   }, []);
 
   const openAdvisor = useCallback((seedPrompt) => {
+    setIsCountryOpen(false);
     setIsAdvisorOpen(true);
     if (typeof seedPrompt === "string" && seedPrompt) setPendingAdvisorPrompt(seedPrompt);
   }, []);
@@ -462,23 +633,97 @@ const Main = ({
   const isMobile = useIsMobile();
   // (Either way it keeps clear of a notch or rounded corner on the right, like
   // the drawer; the inset is 0 on a desktop.)
+  const rightDrawerOpen = isAdvisorOpen || isCountryOpen || isWarRoomOpen;
+  // The diplomacy toasts (chat.jsx) sit left of the open drawer rather than
+  // over the reply the player is reading in it; following the width variable
+  // keeps them there through a drag. Not on a phone, where the drawer is the
+  // whole screen.
+  //
+  // The same value serves the fixed workspaces that need to coexist with the
+  // drawer (the diplomacy workspace in chat.jsx). It points at
+  // --oh-advisor-width rather than copying pixels, so dragging the
+  // Advisor/Country edge updates consumers in the same frame without a React
+  // render.
+  const rightDrawerSafeOffset = rightDrawerOpen && !isMobile
+    ? `var(${ADVISOR_WIDTH_VAR}, ${advisorWidth}px)`
+    : "0px";
+  useLayoutEffect(() => {
+    document.documentElement.style.setProperty(RIGHT_DRAWER_SAFE_OFFSET_VAR, rightDrawerSafeOffset);
+    return () => document.documentElement.style.removeProperty(RIGHT_DRAWER_SAFE_OFFSET_VAR);
+  }, [rightDrawerSafeOffset]);
+  // The country badge opens the drawer; on a phone, where the badge is hidden,
+  // the country name in the date widget does.
+  const toggleCountry = () => {
+    setIsWarRoomOpen(false);
+    setIsAdvisorOpen(false);
+    setIsCountryOpen((open) => !open);
+  };
+  // The war room's button is there while the player's troops are on a
+  // battlefield where a war is being fought or is frozen by a ceasefire, or
+  // are built up on a border in peace (warRoomData.js), and fronts are
+  // switched on for this game.
+  useActiveFeatures();
+  // Nobody is playing a game that has not been opened: no country, so no war.
+  const playerCountry = gameEntered ? activeGame?.country || "" : "";
+  const warFronts = useRuntimeState("world", (world) => playerFrontsKey(world?.battlefields, playerCountry, world?.wars), playerCountry);
+  const hasFronts = Boolean(warFronts) && activeWars().battlefields;
+  // (Forces built up in peace are no war: the music does not go to war for them.)
+  const atWar = hasFronts && fightingIn(warFronts);
+  // For the music, at war is wider than the war room's button: the player's
+  // country on a side of a war being fought (the war ledger), whether or not
+  // there is a battlefield for it or fronts are switched on.
+  const inWar = useRuntimeState("world", (world) => playerAtWar(world?.wars, playerCountry), playerCountry);
+  // The music plays the open game's scenario's own tracks where the scenario
+  // names any (runtime/scenarioMusic.js). Told again only when the record
+  // itself changes, since the library hands out a new object on every refresh;
+  // and told before the scene below, so a game opening starts on the right
+  // music rather than changing to it. No game is open before one is entered:
+  // the game last played has no say in the music, and nothing of its
+  // scenario's is asked of the hub.
+  const scenarioMusicKey = JSON.stringify((gameEntered && activeGame?.id && runtimeScenario?.music) || null);
+  useEffect(() => { followScenarioMusic(JSON.parse(scenarioMusicKey)); }, [scenarioMusicKey]);
+  // And it follows where the player is (runtime/ambientMusic.js): the menu, a
+  // game opening under its cover, the game, the game with the player at war,
+  // and the war room or a battlefield being shown, which the war room's own
+  // store knows.
+  const battlefieldShown = useWarRoom((room) => room.open || Boolean(room.battlefield));
+  const musicScene = musicSceneOf({ inMenu: mainMenuOpen || hasNoGames, loading: showGameLoading, atWar: atWar || inWar, war: battlefieldShown });
+  useEffect(() => { setMusicScene(musicScene); }, [musicScene]);
+  const closeWarRoomPanel = useCallback(() => setIsWarRoomOpen(false), []);
+  const toggleWarRoom = () => {
+    setShouldLoadWarRoom(true);
+    setIsAdvisorOpen(false);
+    setIsCountryOpen(false);
+    setIsWarRoomOpen((open) => !open);
+  };
   const advisorDockStyle = useMemo(() => (isMobile
     ? { right: `calc(0.5rem + ${SAFE_RIGHT})`, transform: "none", transition: `transform ${ADVISOR_SLIDE}` }
     : {
       right: `calc(${advisorCssWidth} + 0.5rem + ${SAFE_RIGHT})`,
-      transform: isAdvisorOpen ? "none" : `translateX(${advisorCssWidth})`,
+      transform: rightDrawerOpen ? "none" : `translateX(${advisorCssWidth})`,
       transition: `transform ${ADVISOR_SLIDE}`,
-    }), [advisorCssWidth, isAdvisorOpen, isMobile]);
+    }), [advisorCssWidth, rightDrawerOpen, isMobile]);
   const toggleBottomPanel = useCallback((panelName) => {
     setActiveBottomPanel((currentPanel) => (
       currentPanel === panelName ? null : panelName
     ));
   }, []);
 
+  // While the Events panel is open the map shows every troop of a battlefield
+  // from far off, as the war room does (Map/troopDetail.js): what happened is
+  // read in the panel, and where it happened is looked for on the map.
+  const eventsOpen = activeBottomPanel === "history";
+  useEffect(() => {
+    showEveryTroop("events", eventsOpen);
+    return () => showEveryTroop("events", false);
+  }, [eventsOpen]);
+
   // On a phone, Back closes the panel on top instead of leaving the game
   // (runtime/backToClose.js; with a mouse nothing changes).
   useBackToClose(Boolean(activeBottomPanel), () => setActiveBottomPanel(null));
   useBackToClose(isAdvisorOpen, () => setIsAdvisorOpen(false));
+  useBackToClose(isCountryOpen, () => setIsCountryOpen(false));
+  useBackToClose(isWarRoomOpen, () => setIsWarRoomOpen(false));
   useBackToClose(isForcesOpen, () => setIsForcesOpen(false));
   useBackToClose(isCheatsOpen, () => setIsCheatsOpen(false));
   useBackToClose(isDebugConsoleOpen, () => setIsDebugConsoleOpen(false));
@@ -491,8 +736,9 @@ const Main = ({
   // On a phone a map card and a bottom panel take turns (runtime/mobileUi.js):
   // both sit at the bottom of the screen, and a card opened by a tap on the
   // strip of map above an open panel came up underneath it, unseen. A panel
-  // opening also puts away the screen-sized sheets (the advisor, a country's
-  // panel): a diplomacy toast, which shows above them, opens the chat, and
+  // opening also puts away the screen-sized sheets (the advisor, the country
+  // drawer, a country's panel): a diplomacy toast, which shows above them,
+  // opens the chat, and
   // the chat came up underneath them.
   useEffect(() => {
     if (!isMobile || !activeBottomPanel) return undefined;
@@ -501,10 +747,23 @@ const Main = ({
     dismissFeaturePopup();
     openCountryPanel(null);
     setIsAdvisorOpen(false);
+    setIsCountryOpen(false);
     const onCardOpened = () => setActiveBottomPanel(null);
     window.addEventListener(MAP_CARD_OPENED, onCardOpened);
     return () => window.removeEventListener(MAP_CARD_OPENED, onCardOpened);
   }, [isMobile, activeBottomPanel]);
+
+  useEffect(() => {
+    const openCountryStats = (event) => {
+      const country = String(event?.detail?.country || "").trim();
+      if (!country) return;
+      setIsAdvisorOpen(false);
+      setPendingCountryTarget(country);
+      setIsCountryOpen(true);
+    };
+    window.addEventListener(OPEN_COUNTRY_STATS_EVENT, openCountryStats);
+    return () => window.removeEventListener(OPEN_COUNTRY_STATS_EVENT, openCountryStats);
+  }, []);
 
   // An interactive event opens from the card of the event a time skip offered,
   // and from the time panel's note while one is offered or in progress (time.jsx
@@ -515,37 +774,88 @@ const Main = ({
     return () => window.removeEventListener("oh:open-interactive-event", openInteractive);
   }, []);
 
+  // While the war room is open it is the whole of the screen's business: every
+  // other control is put out of sight, the bar across the top with the game's
+  // name and the way out of it, the date, the launchers, Search, the forces,
+  // the country badge, the advisor and the menu. Out of sight, not unmounted:
+  // the date widget goes on running the game. They come back when it is shut.
+  const warRoomShown = isWarRoomOpen && !mainMenuOpen && !hasNoGames;
+  const hudStyle = warRoomShown ? HUD_OUT_OF_SIGHT : HUD_IN_SIGHT;
+
   return (
     <>
       {showWebGLWarning && <WebGLWarningPopup />}
-      <LibraryTopBar />
-      <DateWidget
-        activePanel={activeBottomPanel}
-        mapRef={mapRef}
-        onSetPanel={setActiveBottomPanel}
-        onTogglePanel={toggleBottomPanel}
-        dockStyle={advisorDockStyle}
-        topOffset={TOP_BAR_OFFSET}
-      />
-      <Toolbar
-        onOpenAdvisor={openAdvisor}
-        activePanel={activeBottomPanel}
-        onTogglePanel={toggleBottomPanel}
-        mapRef={mapRef}
-      />
-      <Other dockStyle={advisorDockStyle} />
-      <Search mapRef={mapRef} />
-      <ForcesPanel
-        mapRef={mapRef}
-        topOffset={TOP_BAR_OFFSET}
-        open={isForcesOpen}
-        onToggle={() => setIsForcesOpen((v) => !v)}
-      />
-      <AdvisorButton
-        isAdvisorOpen={isAdvisorOpen}
-        dockStyle={advisorDockStyle}
-        onToggle={() => setIsAdvisorOpen(!isAdvisorOpen)}
-      />
+      <div data-oh-hud="" style={hudStyle}>
+        <LibraryTopBar onOpenSettings={() => {
+          setSettingsScope("app");
+          setSettingsInitialSection("general");
+          setIsSettingsOpen(true);
+        }} />
+        {/* The game's own controls, and with them everything they run (the
+            date widget runs the game), are mounted when a game is opened and
+            not before: at startup the menu above is all there is. */}
+        {gameEntered && (
+          <>
+            <DateWidget
+              activePanel={activeBottomPanel}
+              mapRef={mapRef}
+              onSetPanel={setActiveBottomPanel}
+              onTogglePanel={toggleBottomPanel}
+              dockStyle={advisorDockStyle}
+              topOffset={TOP_BAR_OFFSET}
+              onToggleCountry={toggleCountry}
+              countryOpen={isCountryOpen}
+            />
+            <Toolbar
+              onOpenAdvisor={openAdvisor}
+              activePanel={activeBottomPanel}
+              onTogglePanel={toggleBottomPanel}
+              mapRef={mapRef}
+              actionsTab={actionsTab}
+            />
+            <MapModeSelector dockStyle={advisorDockStyle} />
+            <Other
+              dockStyle={advisorDockStyle}
+              active={isCountryOpen}
+              onToggle={toggleCountry}
+            />
+            <Search mapRef={mapRef} besideWarRoom={hasFronts} />
+            <ForcesPanel
+              mapRef={mapRef}
+              topOffset={TOP_BAR_OFFSET}
+              open={isForcesOpen}
+              onToggle={() => setIsForcesOpen((v) => !v)}
+            />
+            <AdvisorButton
+              isAdvisorOpen={isAdvisorOpen}
+              isMobile={isMobile}
+              dockStyle={advisorDockStyle}
+              onToggle={() => {
+                setIsWarRoomOpen(false);
+                setIsCountryOpen(false);
+                setIsAdvisorOpen((open) => !open);
+              }}
+            />
+          </>
+        )}
+      </div>
+      {(hasFronts || isWarRoomOpen) && (
+        <WarRoomButton open={warRoomShown} isMobile={isMobile} onToggle={toggleWarRoom} />
+      )}
+      <Suspense fallback={null}>
+        <LazyAfterActionReports />
+      </Suspense>
+      <Suspense fallback={null}>
+        {shouldLoadWarRoom && (
+          <LazyWarRoomPanel
+            open={warRoomShown}
+            onClose={closeWarRoomPanel}
+            width={advisorCssWidth}
+            onResize={handleAdvisorResize}
+            onResizeEnd={handleAdvisorResizeEnd}
+          />
+        )}
+      </Suspense>
       <Suspense fallback={null}>
         {shouldLoadAdvisor && (
           <LazyAdvisorPanel
@@ -557,10 +867,24 @@ const Main = ({
             onResizeEnd={handleAdvisorResizeEnd}
             // A phone's advisor covers the screen, so it steps aside for the
             // panel it opens.
-            onOpenActions={() => { setActiveBottomPanel("actions"); if (isMobile) setIsAdvisorOpen(false); }}
-            onOpenProjects={() => { setActiveBottomPanel("projects"); if (isMobile) setIsAdvisorOpen(false); }}
+            onOpenActions={() => { setActionsTab({ tab: "actions" }); setActiveBottomPanel("actions"); if (isMobile) setIsAdvisorOpen(false); }}
+            onOpenProjects={() => { setActionsTab({ tab: "projects" }); setActiveBottomPanel("actions"); if (isMobile) setIsAdvisorOpen(false); }}
             requestedPrompt={pendingAdvisorPrompt}
             onConsumeRequest={() => setPendingAdvisorPrompt("")}
+          />
+        )}
+      </Suspense>
+      <Suspense fallback={null}>
+        {shouldLoadCountry && (
+          <LazyCountryPanel
+            open={isCountryOpen}
+            onClose={() => setIsCountryOpen(false)}
+            requestedTarget={pendingCountryTarget}
+            onConsumeTarget={consumeCountryTarget}
+            width={advisorCssWidth}
+            onResize={handleAdvisorResize}
+            onResizeEnd={handleAdvisorResizeEnd}
+            mapRef={mapRef}
           />
         )}
       </Suspense>
@@ -591,8 +915,7 @@ const Main = ({
           countryName={activeCountryName || activeGame?.country || ""}
           // The game's own cover when it uploaded one, else its scenario's
           // (the server already folds the two into the game's coverImageUrl).
-          coverUrl={activeGame?.coverImageUrl || runtimeScenario?.coverImageUrl || ""}
-          phase={gameLoading.phase}
+          coverUrl={activeGame?.coverImageUrl || runtimeScenario?.coverImageUrl || ""}          phase={gameLoading.phase}
         />
       </Presence>
       <Presence open={showApiPrompt}>
@@ -602,6 +925,7 @@ const Main = ({
           onDismiss={answerApiPrompt}
           onConfigure={() => {
             answerApiPrompt();
+            setSettingsScope("game");
             setSettingsInitialSection("ai");
             setIsSettingsOpen(true);
           }}
@@ -609,8 +933,9 @@ const Main = ({
       </Presence>
       <SettingsButton
         topOffset={TOP_BAR_OFFSET}
-        hidden={isSettingsOpen}
+        hidden={isSettingsOpen || warRoomShown}
         onToggle={() => {
+          setSettingsScope("game");
           setSettingsInitialSection(null);
           setIsSettingsOpen(!isSettingsOpen);
         }}
@@ -628,6 +953,7 @@ const Main = ({
             date: activeGame?.currentDate || "",
           }}
           initialSection={settingsInitialSection}
+          scope={settingsScope}
           onClose={() => {
             setSettingsInitialSection(null);
             setIsSettingsOpen(false);
@@ -664,7 +990,13 @@ const Main = ({
           }}
         />
       </Presence>
+      {/* Same place on screen: the lasting borders note goes first so a
+          passing fallback-switch notice draws over it, not under it. */}
+      <BordersFallbackNotice />
       <FallbackSwitchNotice />
+      <AgentWaitingNotice />
+      {/* An offer of peace or a call to arms that waits for the player's answer. */}
+      <WarAndPeaceCards />
     </>
   );
 };

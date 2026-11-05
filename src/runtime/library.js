@@ -1,6 +1,7 @@
 /*! Open Historia — portions (scenario-map editor seeding) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import { useSyncExternalStore } from "react";
 import { announceGameOpening, setReadinessGame } from "./mapReadiness.js";
+import { enterGame } from "./gameEntry.js";
 import {
   JSON_URLS,
   readJson,
@@ -15,6 +16,7 @@ import { withScenarioLicense } from "./scenarioLicense.js";
 const LIBRARY_API_ROOT = "/api/library";
 const SCENARIOS_API_ROOT = "/api/scenarios";
 const GAMES_API_ROOT = "/api/games";
+const TRASH_API_ROOT = "/api/trash";
 
 const INITIAL_LIBRARY_STATE = {
   activeGame: null,
@@ -153,8 +155,26 @@ const requestJson = async (pathname, { body, method = "GET" } = {}) => {
   }
 };
 
+let lastCatalog = null;
+
+// Which country a game is played as is in the game's own record (game.json),
+// and the library's list has it as it stood when the list was last read. It
+// changes in play, and the list is not read again for that: the Play As
+// Country cheat wrote the record and everything that reads the record (the AI
+// first of all) took the player for the new country, while everything that
+// reads the list (the country in the game's bar, its drawer, the war room's
+// button, the music) kept the old one, or none. So while a game is open its
+// entry names the country its own record names (setOpenGameCountry, told by
+// the game's screen).
+let openGameCountry = null; // { gameId, country }
+
+const withOpenGameCountry = (game) => (openGameCountry && game?.id === openGameCountry.gameId && game.country !== openGameCountry.country
+  ? { ...game, country: openGameCountry.country }
+  : game);
+
 const applyLibraryCatalog = (catalog) => {
-  const games = Array.isArray(catalog?.games) ? catalog.games : [];
+  lastCatalog = catalog;
+  const games = Array.isArray(catalog?.games) ? catalog.games.map((game) => withOpenGameCountry(game)) : [];
   const scenarios = Array.isArray(catalog?.scenarios) ? catalog.scenarios : [];
   const activeGameId = catalog?.activeGameId ?? games[0]?.id ?? null;
   const selectedScenarioId = catalog?.selectedScenarioId ?? scenarios[0]?.id ?? null;
@@ -222,6 +242,20 @@ const applyLibraryCatalog = (catalog) => {
   return libraryState;
 };
 
+// The country the open game's own record names, or (no game id) nothing. The
+// library's listeners are woken only when that changes what an entry shows.
+export const setOpenGameCountry = (gameId, country) => {
+  const next = gameId ? { gameId: String(gameId), country: String(country ?? "").trim() } : null;
+  if (JSON.stringify(next) === JSON.stringify(openGameCountry)) return;
+  // What every entry of the list names, before and after: the game it was
+  // about and the game it is about now may both change.
+  const named = () => (Array.isArray(lastCatalog?.games)
+    ? lastCatalog.games.map((game) => withOpenGameCountry(game)?.country ?? "").join("\n")
+    : "");
+  const before = named();
+  openGameCountry = next;
+  if (lastCatalog && named() !== before) applyLibraryCatalog(lastCatalog);
+};
 
 export const getLibraryState = () => libraryState;
 
@@ -232,6 +266,10 @@ export const subscribeToLibraryState = (listener) => {
 
 export const useLibraryState = () =>
   useSyncExternalStore(subscribeToLibraryState, getLibraryState, getLibraryState);
+
+const getActiveGameCountry = () => String(getLibraryState()?.activeGame?.country || "");
+export const useActiveGameCountry = () =>
+  useSyncExternalStore(subscribeToLibraryState, getActiveGameCountry, getActiveGameCountry);
 
 export const refreshLibraryCatalog = async ({ force = false } = {}) => {
   if (libraryCatalogRequest && !force) {
@@ -262,6 +300,21 @@ export const refreshLibraryCatalog = async ({ force = false } = {}) => {
   return libraryCatalogRequest;
 };
 
+// Every write below refreshes the catalog when it lands: a GET /api/library (a
+// whole IndexedDB catalog build on the web and on Android) and a re-render of
+// everything that reads the library. A caller making several writes in a row —
+// the Workshop's save is a scenario save and six asset writes — passes
+// { refresh: false } to each and runs them inside this instead, so the catalog
+// is rebuilt once, after the last write, whether or not the writes succeeded.
+export const withSingleLibraryRefresh = async (write) => {
+  try {
+    return await write();
+  } finally {
+    // The catalog records its own failure; the writes' outcome is what the caller gets.
+    await refreshLibraryCatalog({ force: true }).catch(() => {});
+  }
+};
+
 export const ensureLibraryCatalog = async () => {
   if (libraryState.loaded) {
     return libraryState;
@@ -285,13 +338,13 @@ export const createScenario = async (payload) => {
   return details;
 };
 
-export const saveScenario = async (scenarioId, payload) => {
+export const saveScenario = async (scenarioId, payload, { refresh = true } = {}) => {
   const details = await requestJson(`${SCENARIOS_API_ROOT}/${encodeURIComponent(scenarioId)}`, {
     body: payload,
     method: "PUT",
   });
   enqueueContentStrings(payload);
-  await refreshLibraryCatalog({ force: true });
+  if (refresh) await refreshLibraryCatalog({ force: true });
   return details;
 };
 
@@ -327,23 +380,23 @@ const toUploadBuffer = async (file) => {
 };
 
 // Fetch a scenario's JSON asset (regions/cities geojson, colors). Returns null
-// when the scenario has no such asset (404) instead of throwing — callers treat
-// a missing asset as "use the default".
+// when the scenario has no such asset (404) — callers treat a missing asset as
+// "use the default". Any other failure THROWS: a download that failed, or a
+// file too big to parse on a phone, is not an absent asset, and a caller that
+// took it for one wrote the default back over the author's flags, tags,
+// background and geometry on the next save.
 // `coarse` asks for the regions coarsened for a zoomed-out preview (the
 // country picker) instead of the full-resolution file: a few MB, not 221.
 export const downloadScenarioJsonAsset = async (scenarioId, assetKey, { coarse = false } = {}) => {
-  try {
-    const response = await fetch(
-      `${SCENARIOS_API_ROOT}/${encodeURIComponent(scenarioId)}/assets/${encodeURIComponent(assetKey)}${coarse ? "?coarse=1" : ""}`,
-    );
-    if (!response.ok) return null;
-    return await response.json();
-  } catch {
-    return null;
-  }
+  const response = await fetch(
+    `${SCENARIOS_API_ROOT}/${encodeURIComponent(scenarioId)}/assets/${encodeURIComponent(assetKey)}${coarse ? "?coarse=1" : ""}`,
+  );
+  if (response.status === 404) return null;
+  if (!response.ok) throw new Error(`One of this scenario's files could not be loaded (HTTP ${response.status}).`);
+  return response.json();
 };
 
-export const uploadScenarioAsset = async (scenarioId, assetKey, file) => {
+export const uploadScenarioAsset = async (scenarioId, assetKey, file, { refresh = true } = {}) => {
   const response = await fetch(
     `${SCENARIOS_API_ROOT}/${encodeURIComponent(scenarioId)}/assets/${encodeURIComponent(assetKey)}`,
     {
@@ -356,22 +409,22 @@ export const uploadScenarioAsset = async (scenarioId, assetKey, file) => {
   );
 
   const details = await parseApiResponse(response);
-  await refreshLibraryCatalog({ force: true });
+  if (refresh) await refreshLibraryCatalog({ force: true });
   return details;
 };
 
-export const clearScenarioAsset = async (scenarioId, assetKey) => {
+export const clearScenarioAsset = async (scenarioId, assetKey, { refresh = true } = {}) => {
   const details = await requestJson(
     `${SCENARIOS_API_ROOT}/${encodeURIComponent(scenarioId)}/assets/${encodeURIComponent(assetKey)}`,
     {
       method: "DELETE",
     },
   );
-  await refreshLibraryCatalog({ force: true });
+  if (refresh) await refreshLibraryCatalog({ force: true });
   return details;
 };
 
-export const uploadGameAsset = async (gameId, assetKey, file) => {
+export const uploadGameAsset = async (gameId, assetKey, file, { refresh = true } = {}) => {
   const response = await fetch(
     `${GAMES_API_ROOT}/${encodeURIComponent(gameId)}/assets/${encodeURIComponent(assetKey)}`,
     {
@@ -384,18 +437,18 @@ export const uploadGameAsset = async (gameId, assetKey, file) => {
   );
 
   const details = await parseApiResponse(response);
-  await refreshLibraryCatalog({ force: true });
+  if (refresh) await refreshLibraryCatalog({ force: true });
   return details;
 };
 
-export const clearGameAsset = async (gameId, assetKey) => {
+export const clearGameAsset = async (gameId, assetKey, { refresh = true } = {}) => {
   const details = await requestJson(
     `${GAMES_API_ROOT}/${encodeURIComponent(gameId)}/assets/${encodeURIComponent(assetKey)}`,
     {
       method: "DELETE",
     },
   );
-  await refreshLibraryCatalog({ force: true });
+  if (refresh) await refreshLibraryCatalog({ force: true });
   return details;
 };
 
@@ -467,6 +520,18 @@ export const writeGameSnapshotsText = async (gameId, snapshotsText) => {
   if (!response.ok) throw new Error(`Could not restore this game's restore points (HTTP ${response.status}).`);
 };
 
+// A time skip that finished while another game was open, kept for its own game
+// until the player applies or discards it there (src/Game/AI/parkedTurn.js).
+// By id: it is written while another game is the active one. null when none.
+export const readGameParkedTurn = async (gameId) =>
+  requestJson(`${GAMES_API_ROOT}/${encodeURIComponent(gameId)}/parked-turn`);
+
+export const writeGameParkedTurn = async (gameId, parkedTurn) =>
+  requestJson(`${GAMES_API_ROOT}/${encodeURIComponent(gameId)}/parked-turn`, { body: parkedTurn, method: "PUT" });
+
+export const removeGameParkedTurn = async (gameId) =>
+  requestJson(`${GAMES_API_ROOT}/${encodeURIComponent(gameId)}/parked-turn`, { method: "DELETE" });
+
 export const loadGameDetails = async (gameId) =>
   requestJson(`${GAMES_API_ROOT}/${encodeURIComponent(gameId)}`);
 
@@ -484,16 +549,22 @@ export const createGame = async (payload) => {
   // Card text edits translate (and reach the server language pack) right away.
   enqueueContentStrings(payload);
   await refreshLibraryCatalog({ force: true });
+  // A game made to be played at once (a new game, a clone, Apply & Play) is
+  // the game the player opened: entered once the library holds it as the
+  // active one, never before, so the map does not start on the game that is
+  // on its way out (gameEntry.js). One made without `setActive` (a shared
+  // game's stand-in) is opened by activateGame below.
+  if (payload?.setActive) enterGame();
   return details;
 };
 
-export const saveGame = async (gameId, payload) => {
+export const saveGame = async (gameId, payload, { refresh = true } = {}) => {
   const details = await requestJson(`${GAMES_API_ROOT}/${encodeURIComponent(gameId)}`, {
     body: payload,
     method: "PUT",
   });
   enqueueContentStrings(payload);
-  await refreshLibraryCatalog({ force: true });
+  if (refresh) await refreshLibraryCatalog({ force: true });
   return details;
 };
 
@@ -505,7 +576,14 @@ export const activateGame = async (gameId) => {
     body: { gameId },
     method: "PUT",
   });
-  return applyLibraryCatalog(catalog);
+  const state = applyLibraryCatalog(catalog);
+  // Opening a game is what enters one (gameEntry.js): the page loads no game
+  // until the player opens it, and this is every Play. After the catalog is
+  // applied, so the map mounts for the game that was asked for; and whether or
+  // not the active id changed, since Play on the game that was already the
+  // active one changes nothing else.
+  enterGame();
+  return state;
 };
 
 export const removeGame = async (gameId) => {
@@ -519,7 +597,32 @@ export const removeGame = async (gameId) => {
   return applyLibraryCatalog(catalog);
 };
 
-export const resolveScenarioCountryName = (name, code) =>
-  resolveCountryNameOverride(libraryState.runtimeScenario?.countryNameOverrides, name, code);
+// What delete moved to the trash, for the library's Recently deleted shelves:
+// { entries: [{ entry, kind, id, name, deletedAt, bytes? }], keepDays, keepCount? }.
+// The desktop serves it to the machine it runs on only; anywhere else this
+// throws and the shelves stay hidden.
+export const listTrash = async () => requestJson(TRASH_API_ROOT);
+
+export const restoreFromTrash = async (entry) => {
+  const result = await requestJson(`${TRASH_API_ROOT}/${encodeURIComponent(entry)}/restore`, { method: "POST" });
+  applyLibraryCatalog(result.library);
+  return result;
+};
+
+// kind "game" or "scenario" empties that shelf only.
+export const emptyTrash = async (kind) =>
+  requestJson(`${TRASH_API_ROOT}${kind ? `?kind=${encodeURIComponent(kind)}` : ""}`, { method: "DELETE" });
+
+// A scenario's community basemap that could not be downloaded when it was
+// imported or updated, downloaded since (src/runtime/missingBasemap.js):
+// payload is { dataUrl } or { geojson }.
+export const restoreScenarioBasemap = async (scenarioId, payload) => {
+  const details = await requestJson(`${SCENARIOS_API_ROOT}/${encodeURIComponent(scenarioId)}/basemap`, {
+    body: { payload },
+    method: "PUT",
+  });
+  await refreshLibraryCatalog({ force: true });
+  return details;
+};
 
 syncLibraryRuntime();

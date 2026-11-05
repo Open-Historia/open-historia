@@ -8,8 +8,8 @@ name: Build Android APK
 #
 # The app is the web bundle built with `--mode android`, with the world map
 # INSIDE the APK: the library lives on the phone, the three pmtiles archives and
-# the regions GeoJSON ride under www/assets, and nothing is streamed. The
-# community hub and the player's own AI provider are
+# the regions GeoJSON ride under www/assets, and nothing is streamed from the
+# network any more. The community hub and the player's own AI provider are
 # the only network use. It used to be the website's bundle verbatim, and before
 # that a thin WebView pointed at a server the player ran themselves.
 #
@@ -66,13 +66,13 @@ jobs:
           npm ci
           npm run build:android
 
-      # The six map files are pinned by sha256 in mobile/map-assets.android.json;
+      # The six map files are pinned by sha256 in scripts/map-assets.web.json, the list the website's build reads too;
       # a cache hit skips ~70 MB of downloads and the verify still runs.
       - name: Restore the map data
         uses: actions/cache@v4
         with:
-          path: mobile/map-cache
-          key: android-map-data-${{ hashFiles('mobile/map-assets.android.json') }}
+          path: map-cache
+          key: android-map-data-${{ hashFiles('scripts/map-assets.web.json') }}
 
       - name: Build the APK
         env:

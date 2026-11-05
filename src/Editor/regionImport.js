@@ -13,26 +13,38 @@
 // map; the user re-owns/edits from there.
 
 import GeoJSON from "ol/format/GeoJSON";
-import { ASSETS_BASE } from "../runtime/assetsBase.js";
 import COUNTRY_NAMES from "../runtime/generated/countryNames.js";
+import { worldFileUrl } from "../runtime/worldFiles.js";
 
-// The seed is in the build's own assets/ (runtime/assetsBase.js).
-const CONTENT_BASE = ASSETS_BASE;
-export const SEED_URL = `${CONTENT_BASE}/regions-seed.geojson`;
+// Every build reads the seed from its own /assets folder (runtime/worldFiles.js):
+// the desktop's is fetched at first launch (scripts/fetch-map-assets.mjs), the
+// website's and the Android app's are laid into the build
+// (scripts/stage-map-assets.mjs). A build without it answers with the SPA's
+// fallback page, which parses to zero regions.
+export const SEED_URL = worldFileUrl("seed");
+
+export const WORLD_MAP_KIND = "fault-lines";
+export const LEGACY_MAP_KIND = "modern-day";
+const SEED_URLS = {
+  [WORLD_MAP_KIND]: "/api/runtime/earlier-maps/fault-lines-2014-v1",
+  [LEGACY_MAP_KIND]: "/api/scenarios/default/assets/regionsGeojson",
+};
+export const SEEDED_KINDS = ["import-world", WORLD_MAP_KIND, LEGACY_MAP_KIND];
+export const seedUrlOf = (kind) => SEED_URLS[kind] || SEED_URL;
 
 // Fetch + parse the seed FeatureCollection into OL features (EPSG:3857).
 // Returns [] and warns if the seed asset is missing (run the extract script).
-export const loadSeedFeatures = async ({ signal } = {}) => {
+export const loadSeedFeatures = async ({ signal, url = SEED_URL } = {}) => {
   let res;
   try {
-    res = await fetch(SEED_URL, { signal });
+    res = await fetch(url, { signal });
   } catch (err) {
     console.warn("[editor] failed to fetch region seed:", err);
     return [];
   }
   if (!res.ok) {
     console.warn(
-      `[editor] ${SEED_URL} not found (${res.status}). ` +
+      `[editor] ${url} not found (${res.status}). ` +
         "Run: node scripts/extract-regions.mjs",
     );
     return [];

@@ -210,6 +210,27 @@ test("segments merge into one round's result", () => {
   assert.equal(merged.clearActions, true);
 });
 
+// Every skip is built from this merge, segmented or not: a ledger family it
+// leaves out never reaches the apply. Puppet changes once were.
+test("every segment's ledger records ride into the merged round, in order", () => {
+  const merged = mergeSegmentPayloads([
+    {
+      events: [{ id: "s1-e1", title: "Minsk" }],
+      puppetUpdates: [{ id: "puppet-update-0", op: "install", overlord: "Russia", puppet: "Belarus", eventIds: ["s1-e1"] }],
+      warUpdates: [{ id: "war-1", op: "start", eventIds: ["s1-e1"] }],
+    },
+    {
+      events: [{ id: "s2-e1", title: "Minsk again" }],
+      puppetUpdates: [{ id: "puppet-update-0", op: "loyalty", overlord: "Russia", puppet: "Belarus", loyalty: 30, eventIds: ["s2-e1"] }],
+      agreementUpdates: "update~pact~a~b~~~1~note",
+    },
+  ]);
+  assert.deepEqual(merged.puppetUpdates.map((update) => update.op), ["install", "loyalty"]);
+  assert.equal(merged.warUpdates.length, 1);
+  assert.deepEqual(merged.agreementUpdates, ["update~pact~a~b~~~1~note"], "a raw line is kept as a line");
+  assert.deepEqual(mergeSegmentPayloads([{ events: [] }]).puppetUpdates, []);
+});
+
 test("the final segment has the last word on whether orders resolved", () => {
   assert.equal(mergeSegmentPayloads([{ clearActions: true }, { clearActions: false }]).clearActions, false);
   assert.equal(mergeSegmentPayloads([{ clearActions: false }, { clearActions: true }]).clearActions, true);

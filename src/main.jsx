@@ -1,4 +1,5 @@
 import { createRoot } from "react-dom/client";
+import { installUiTheme } from "./runtime/uiTheme.js";
 import { installAppHeight } from "./runtime/mobileUi.js";
 import { installNativeBackgroundPause } from "./runtime/native/backgroundPause.js";
 import { reportRendererRestart } from "./runtime/native/rendererRestart.js";
@@ -10,14 +11,21 @@ import {
     setDebugLogContext,
     withConsoleCaptureMuted,
 } from "./runtime/debugLog.js";
+import { buildLabel } from "./runtime/buildLabel.js";
 import { countVisit } from "./runtime/visitCount.js";
+import { startMusic } from "./runtime/ambientMusic.js";
 // Registers the Logging file's settings snapshot (every setting's current value).
 import "./runtime/settingsLog.js";
 import App from "./App.jsx";
 import "maplibre-gl/dist/maplibre-gl.css";
 import "./styles.css";
 
+// The website and the local server (a normal browser tab that can be installed
+// as an app) register public/sw.js. The Android app does not: mobile/scripts/
+// stage-www.mjs leaves sw.js out of the APK as website-only, so registering it
+// there was a 404 and a "registration failed" line opening every phone's log.
 const registerServiceWorker = () => {
+    if (import.meta.env.VITE_OH_NATIVE) return;
     if (!import.meta.env.DEV && "serviceWorker" in navigator) {
         window.addEventListener("load", () => {
             navigator.serviceWorker.register("/sw.js").catch((error) => {
@@ -31,6 +39,7 @@ const mount = () => {
     // Before the first render: every panel sizes itself from the visible height
     // (runtime/mobileUi.js), which on a phone is not 100vh.
     installAppHeight();
+    installUiTheme();
     // MapLibre is configured by the map's own chunk as it loads
     // (Game/Map/mapLibreSetup.js), so the library stays out of this one.
     createRoot(document.getElementById("root"), {
@@ -45,6 +54,13 @@ const mount = () => {
     // Live-translates the UI when a non-English language is set in Settings.
     startTranslator();
     registerServiceWorker();
+    // Listen in kept the feeds it had shown in IndexedDB (oh-listen-in). Rostra,
+    // the social network, took its place on 2026-11-02 and nothing reads them now.
+    try {
+        globalThis.indexedDB?.deleteDatabase("oh-listen-in");
+    } catch {
+        // Storage refused: there is nothing kept to clear.
+    }
     // The Android app rests in the background once nothing is being generated
     // (runtime/native/backgroundPause.js).
     if (import.meta.env.VITE_OH_NATIVE) installNativeBackgroundPause(isGenerating);
@@ -59,7 +75,7 @@ const mount = () => {
 // console the packaged app has no way to open.
 installDebugLogCapture();
 setDebugLogContext({
-    build: import.meta.env.VITE_OH_WEB ? "web" : (import.meta.env.DEV ? "dev" : "desktop/local"),
+    build: buildLabel(import.meta.env),
     language: typeof navigator !== "undefined" ? navigator.language : "",
 });
 logDebugEvent("app", "Open Historia started.");
@@ -68,6 +84,11 @@ logDebugEvent("app", "Open Historia started.");
 // waits for it, and a development run counts nothing. The Android app loads no
 // analytics: asked here, so that its build carries none of the counter.
 if (!import.meta.env.VITE_OH_NATIVE) void countVisit({ env: import.meta.env });
+
+// The music (runtime/ambientMusic.js): it waits for the player's first click
+// or key press, and asks for a file only when it is about to play and only
+// while music is on. The game's screen tells it where the player is.
+startMusic({ env: import.meta.env });
 
 if (import.meta.env.VITE_OH_WEB) {
     // Web build (the hosted website): install the IndexedDB-backed /api

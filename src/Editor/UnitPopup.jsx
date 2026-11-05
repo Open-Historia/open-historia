@@ -7,7 +7,7 @@
 // clicked — the units a scenario starts with (world.units, source "scenario").
 // Mirrors CityPopup: Escape/Enter closes, Delete removes.
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { panelSurface, inputStyle, pillButton } from "./editorStyles.js";
 import { UNIT_TYPES } from "../runtime/gameState.js";
 
@@ -28,6 +28,12 @@ const clampStrength = (value) => {
 
 const UnitPopup = ({ unit, x, y, isNew, polities = [], onChange, onDelete, onClose }) => {
   const nameRef = useRef(null);
+  // The strength as typed, for the unit it was typed for. Clamping each
+  // keystroke made an emptied box read 1 at once, so 75 could not be typed
+  // over 100; the unit takes a value only once it is a whole 1..100, and the
+  // box shows the unit's own strength again when it is left.
+  const [typedStrength, setTypedStrength] = useState(null);
+  const strengthDraft = typedStrength && typedStrength.id === unit?.id ? typedStrength.text : null;
 
   useEffect(() => {
     if (!nameRef.current) return;
@@ -84,8 +90,14 @@ const UnitPopup = ({ unit, x, y, isNew, polities = [], onChange, onDelete, onClo
             type="number"
             min="1"
             max="100"
-            value={unit.strength ?? 100}
-            onChange={(e) => onChange({ strength: clampStrength(e.target.value) })}
+            value={strengthDraft ?? unit.strength ?? 100}
+            onChange={(e) => {
+              const text = e.target.value;
+              setTypedStrength({ id: unit.id, text });
+              const n = Number(text);
+              if (text.trim() !== "" && Number.isFinite(n) && n >= 1 && n <= 100) onChange({ strength: clampStrength(n) });
+            }}
+            onBlur={() => setTypedStrength(null)}
             style={{ ...inputStyle, padding: "5px 6px", width: 62 }}
             aria-label="Unit strength percent"
           />

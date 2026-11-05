@@ -33,6 +33,7 @@ The text at [CLA.md](CLA.md) is the canonical copy. The [Gist that CLA Assistant
 - Say where anything in the change came from if it is not your own work: a library, a dataset, a map, an image, a translation, or code produced with substantial help from an AI tool. Name the source and its licence.
 - Do not add third-party material under a licence that would apply to the whole Project. Anything under a copyleft licence other than the Project's own needs a discussion first.
 - Run `npm test` and `npx eslint .` before you push. A pull request that changes what the app does should say how you checked it.
+- A change players will notice carries its update notice: an entry in `src/Game/GameUI/updates/notes.js` (and, for a major update, banners themed for it). See [docs/update-notices.md](docs/update-notices.md). Coding agents follow [AGENTS.md](AGENTS.md).
 - Target `main` unless a maintainer has pointed you at another branch.
 
 ## Reporting problems

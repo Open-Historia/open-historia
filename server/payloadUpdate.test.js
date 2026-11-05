@@ -17,7 +17,7 @@ import test from "node:test";
 const require = createRequire(import.meta.url);
 const { chunkAssetName, headOf, planPayload, sha256 } = require("../electron/payloadChunks.cjs");
 const boot = require("../electron/payloadBoot.cjs");
-const { createPayloadUpdater, indexLocal, listFiles } = require("../electron/payloadUpdate.cjs");
+const { createPayloadUpdater, indexFromManifest, indexLocal, listFiles } = require("../electron/payloadUpdate.cjs");
 const { createLayeredUpdater } = require("../electron/layeredUpdate.cjs");
 
 const noise = (bytes, seed = 1) => {
@@ -216,7 +216,7 @@ test("a chunk that arrives damaged is asked for again, and one that stays damage
   // One of the chunks this update needs, with its last bit flipped the first
   // time it is served: the second asking is good.
   const { planUpdate } = require("../electron/payloadChunks.cjs");
-  const needed = planUpdate(manifest, indexLocal(place.app)).fetch;
+  const needed = planUpdate(manifest, await indexLocal(place.app)).fetch;
   let served = 0;
   release.tamper.set(chunkAssetName(needed[0]), (body) => {
     served += 1;
@@ -231,7 +231,7 @@ test("a chunk that arrives damaged is asked for again, and one that stays damage
   const release2 = await publish(t, newer());
   const updater2 = updaterFor(place2, release2);
   const answer2 = await updater2.check();
-  const needed2 = planUpdate(answer2.manifest, indexLocal(place2.app)).fetch;
+  const needed2 = planUpdate(answer2.manifest, await indexLocal(place2.app)).fetch;
   release2.tamper.set(chunkAssetName(needed2[0]), (body) => body.subarray(0, body.length - 3));
   await assert.rejects(updater2.apply(answer2.manifest), /could not be downloaded/);
   assert.equal(release2.asked.filter((name) => name === chunkAssetName(needed2[0])).length, 3);
@@ -254,7 +254,7 @@ test("a chunk the release does not have fails at once, and a cancelled update st
   const updater = updaterFor(place, release);
   const { manifest } = await updater.check();
   const { planUpdate } = require("../electron/payloadChunks.cjs");
-  const [missing] = planUpdate(manifest, indexLocal(place.app)).fetch;
+  const [missing] = planUpdate(manifest, await indexLocal(place.app)).fetch;
   release.files.delete(chunkAssetName(missing));
   await assert.rejects(updater.apply(manifest), /could not be downloaded.*404/);
   assert.equal(release.asked.filter((name) => name === chunkAssetName(missing)).length, 1, "not asked for three times");
@@ -405,8 +405,8 @@ test("an update that can be made of chunks is, and the installer is never asked"
   assert.deepEqual(result, { isUpdateAvailable: true, updateInfo: { version: "0.0.200" } });
   await updater.downloadUpdate();
   updater.quitAndInstall(true, true);
-  // One bar for both halves of the wait: the download is its first 60%, putting the files in place the rest.
-  assert.deepEqual(events, ["checking-for-update", "update-available", "download-progress:24", "download-progress:60", "download-progress:100", "update-downloaded"]);
+  // One bar for the whole wait: reading the files that are running is its first 25%, the download the next 35%, putting the files in place the rest.
+  assert.deepEqual(events, ["checking-for-update", "update-available", "download-progress:0", "download-progress:39", "download-progress:60", "download-progress:100", "update-downloaded"]);
   assert.deepEqual(installer.calls, []);
   assert.equal(relaunched, 1, "restarting is all there is to installing it");
 });
@@ -451,7 +451,7 @@ test("chunks that fail partway fall back to the installer, and without one the u
   await updater.downloadUpdate();
   updater.quitAndInstall(true, true);
   assert.deepEqual(installer.calls, ["check", "download", "install:true,true"]);
-  assert.deepEqual(events, ["checking-for-update", "update-available", "download-progress:24", "update-available", "download-progress:50", "update-downloaded"]);
+  assert.deepEqual(events, ["checking-for-update", "update-available", "download-progress:0", "download-progress:39", "update-available", "download-progress:50", "update-downloaded"]);
 
   const alone = createLayeredUpdater({ installer: null, payload: fakePayload(AVAILABLE, { fail: true }), runningVersion: "0.0.100", relaunch: () => {} });
   const lonely = heard(alone);
@@ -469,4 +469,55 @@ test("with no installer that can run in place, chunks are still an update", asyn
   assert.equal(relaunched, 1);
   const none = createLayeredUpdater({ installer: null, payload: fakePayload({ state: "installer", build: "200", reason: "runtime" }), relaunch: () => {} });
   assert.equal((await none.checkForUpdates()).isUpdateAvailable, false);
+});
+test("reading the files that are running lets the app answer in between", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "oh-index-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  for (let i = 0; i < 300; i += 1) fs.writeFileSync(path.join(root, `f${i}.js`), `// file ${i}\n`.repeat(50));
+  let ticks = 0;
+  const timer = setInterval(() => { ticks += 1; }, 0);
+  let ticksBeforeEnd = 0;
+  const local = await indexLocal(root, { sliceMs: 0, onFile: (read, total) => { if (read === total) ticksBeforeEnd = ticks; } });
+  clearInterval(timer);
+  assert.equal(local.files.size, 300);
+  assert.ok(ticksBeforeEnd > 0, "a timer ran while the files were read");
+});
+
+test("an update made over an earlier one reads that one's list instead of every file", async (t) => {
+  const place = install(t);
+  const first = await publish(t, newer());
+  const done = await updaterFor(place, first).apply((await updaterFor(place, first).check()).manifest);
+
+  const fromList = await indexFromManifest(done.root);
+  const fromFiles = await indexLocal(done.root);
+  const kept = (index) => [...index.files.keys()].filter((key) => key !== sha256(fs.readFileSync(path.join(done.root, boot.MANIFEST_FILE)))).sort();
+  assert.deepEqual([...fromList.files.keys()].sort(), kept(fromFiles));
+  for (const [id, at] of fromList.chunks) {
+    const read = fromFiles.chunks.get(id);
+    assert.ok(read, `chunk ${id} is found by reading too`);
+    assert.equal(read.size, at.size);
+    if (read.file === at.file) assert.equal(read.offset, at.offset);
+  }
+  assert.equal(await indexFromManifest(place.app), null, "a copy as installed has no list, and is read file by file");
+
+  const third = newer().map((entry) => (entry.path === "electron/build-id.json" ? { ...entry, data: Buffer.from('{"build":"300"}') } : entry));
+  const second = await publish(t, third, { build: "300", version: "0.0.300" });
+  const reads = [];
+  const counting = { ...fs, readFileSync: (target, ...rest) => {
+    const name = String(target);
+    if (name.startsWith(done.root) && !name.endsWith(boot.MANIFEST_FILE)) reads.push(name);
+    return fs.readFileSync(target, ...rest);
+  } };
+  const updater = updaterFor({ ...place, app: done.root }, second, { currentBuild: "200", fs: counting });
+  const found = await updater.check();
+  const next = await updater.apply(found.manifest);
+  assert.deepEqual(reads, [], "no file of the running set was read whole");
+  const want = new Map(third.map((entry) => [entry.path, sha256(entry.data)]));
+  want.set(boot.MANIFEST_FILE, sha256(Buffer.from(JSON.stringify(second.manifest))));
+  assert.deepEqual([...readTree(next.root)].sort(), [...want].sort());
+  assert.ok(second.asked.filter((name) => name.startsWith("c-")).length <= 2, "only what changed came down");
+
+  fs.writeFileSync(path.join(done.root, "server", "server.js"), "short");
+  const damaged = await indexFromManifest(done.root);
+  assert.equal(damaged.files.size, fromList.files.size - 1, "a file whose size is wrong is not reused");
 });

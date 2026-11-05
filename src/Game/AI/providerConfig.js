@@ -2,6 +2,7 @@
 import { logDebugEvent, logSettingMessage, setDebugLogContext } from "../../runtime/debugLog.js";
 import { entryStatus } from "./fallbackRunner.js";
 import { FORMER_TASK_KEYS, readUnderTaskKey } from "./formerTaskKeys.js";
+import { BACKGROUND_REQUEST, SKIP_SPENDERS, spenderBase } from "./requestBudget.js";
 
 export const DEFAULT_PROVIDER = "gemini";
 
@@ -29,6 +30,12 @@ const FORMER_GEMINI_DEFAULT = "gemini-3.5-flash-lite";
 // request and still guessed; naming the one the game is built around is both
 // quicker and better. A model the player types is theirs instead.
 export const OPENAI_DEFAULT_MODEL = "gpt-6-luna";
+
+// An Agent Connection (docs/adr/0008-subscription-agents-answer-through-the-game.md):
+// answered by the player's own Claude Code, Codex, OpenCode or Antigravity CLI through
+// the local server's Agent queue, never by a provider's API. Desktop only,
+// since the queue lives on the local server.
+export const AGENT_PROVIDER = "agent";
 
 export const PROVIDER_OPTIONS = [
     {
@@ -66,7 +73,47 @@ export const PROVIDER_OPTIONS = [
         description: "Self-hosted proxy that speaks the Anthropic Messages API",
         searchTerms: ["claude", "anthropic", "messages api", "proxy", "gateway", "self-hosted"],
     },
+    {
+        value: AGENT_PROVIDER,
+        label: "Your own Agent",
+        group: "Your subscription",
+        description: "Claude Code, Codex, OpenCode or Antigravity CLI answers what you start when you type /answer",
+        searchTerms: ["claude code", "codex", "opencode", "open code", "antigravity", "subscription", "pro", "max", "plus", "/answer", "/skip", "agent"],
+    },
 ];
+
+// What an Agent Connection may answer: the kinds of request the player starts
+// (ADR 0008). A time skip, with what the game does right after it; the
+// advisor; replies to the player's diplomatic messages; Game Master commands;
+// interactive events. The player ticks which on the entry; all are ticked
+// when it is added.
+export const AGENT_KINDS = Object.freeze(["skip", "advisor", "diplomacy", "gameMaster", "interactive"]);
+
+// The provider choices a build can offer. Without a local server (the web
+// build, the Android app) an Agent Connection could never be answered.
+export const providerOptionsFor = ({ localServer }) =>
+    PROVIDER_OPTIONS.filter((option) => localServer || option.value !== AGENT_PROVIDER);
+
+// Whether an entry answers this call at all (fallbackRunner `serves`). An Agent
+// entry answers only what the player started, of a kind it ticks, while it is
+// not paused. A call says the player started it with `agentKind`, or with the
+// time skip's `spender`; one that says neither (the game's own work, and every
+// background call) never waits on a terminal nobody may be at. Every other
+// entry answers every call.
+// `skipPassedOn`: the player sent the rest of the running skip to their key
+// (Use API key).
+export function entryServesCall(entry, { agentKind = "", spender = "", requestKind = "", skipPassedOn = false } = {}) {
+    if (entry?.provider !== AGENT_PROVIDER) return true;
+    if (entry.paused === true) return false;
+    // The game's own follow-up to a skip (a first stat-sheet reading as it
+    // lands) is still the skip the player started; anything else in the
+    // background has nobody at the terminal.
+    if (requestKind === BACKGROUND_REQUEST && agentKind !== "skip") return false;
+    const kind = agentKind || (spender && SKIP_SPENDERS.includes(spenderBase(spender)) ? "skip" : "");
+    if (!kind || (kind === "skip" && skipPassedOn)) return false;
+    const kinds = Array.isArray(entry.kinds) ? entry.kinds : AGENT_KINDS;
+    return kinds.includes(kind);
+}
 
 const PROVIDER_SETTINGS = {
     gemini: {
@@ -193,33 +240,56 @@ export const AI_TASK_ROUTING = [
     { key: "jumpForward", label: "Time skip", hint: "Strongest model — the main simulation call", group: "Simulation" },
     { key: "autoJumpForward", label: "Auto time skip", hint: "Strongest model — the main simulation call", group: "Simulation" },
     // While AI requests are being saved (requestBudget.js) the time skip itself
-    // does the work of the curator, both directors, the projects pass and every
-    // spy intercept below, and their own picks are not used. This task is those
-    // checks as one request after the skip, asked only when a provider refused
-    // the skip that carries them (gameplay.js runTurnReview).
+    // does the work of the curator, the three directors, the projects pass and
+    // every spy intercept below, and their own picks are not used. This task is
+    // those checks as one request after the skip, asked only when a provider
+    // refused the skip that carries them (gameplay.js runTurnReview).
     { key: "turnReview", label: "After-skip checks", hint: "Rarely asked: the checks as one request, only when a provider refuses the single-request time skip", group: "Simulation" },
     { key: "worldMotionRepair", label: "World motion repair", hint: "Mid-tier: rewrites a static jump", group: "Simulation" },
     { key: "worldBreadthRepair", label: "World breadth repair", hint: "Mid-tier: widens a narrow jump", group: "Simulation" },
+    { key: "politicalClaimRepair", label: "Political claim repair", hint: "Mid/high-tier: reconcile generated political outcomes with Political World", group: "Simulation" },
     { key: "timelineCurator", label: "Timeline curator", hint: "Small/mid-tier: event pruning", group: "Simulation" },
     { key: "unitDirector", label: "Unit director", hint: "Mid-tier: unit movement", group: "Simulation" },
     { key: "territoryDirector", label: "Territory director", hint: "Mid-tier: front outcomes", group: "Simulation" },
+    { key: "structureDirector", label: "Structure director", hint: "Mid-tier: new structures on the map", group: "Simulation" },
     { key: "geographyResolver", label: "Geography resolver", hint: "Small model: place-name matching", group: "Simulation" },
     { key: "eventConsolidator", label: "Event consolidator", hint: "Small/mid-tier: pure summarization", group: "Simulation" },
     { key: "projects", label: "Projects & operations", hint: "Mid-tier model", group: "Simulation" },
     { key: "pregameHistory", label: "Pre-game history", hint: "Mid-tier model", group: "Simulation" },
+    { key: "politicalWorldGeneration", label: "Political world generation", hint: "Mid/high-tier: bounded scenario political seeding", group: "Simulation" },
+    { key: "politicalWorldVerification", label: "Political world verification", hint: "Mid/high-tier: exact-date identity cross-check", group: "Simulation" },
     { key: "gameMaster", label: "Game Master", hint: "High-tier model (direct world edits)", group: "Player" },
     { key: "actions", label: "Action suggestions", hint: "Small/mid-tier: short suggestions", group: "Player" },
     { key: "descriptionToAction", label: "Action parsing", hint: "Small model: text to a structured command", group: "Player" },
-    { key: "nextSpeaker", label: "Next speaker", hint: "Smallest model: single-field pick", group: "Player" },
     { key: "idleDiplomacy", label: "Idle diplomacy", hint: "Small/mid-tier model", group: "Player" },
     { key: "countryStatSheet", label: "Stat sheet", hint: "Mid-tier model", group: "Player" },
+    { key: "countryBriefing", label: "Advisor Report", hint: "Mid-tier: a short briefing on one country", group: "Player" },
+    { key: "rostraFeed", label: "Rostra Refresh", hint: "Small/mid-tier: short posts by public figures", group: "Player" },
+    { key: "placeFeed", label: "Rostra Search", hint: "Small/mid-tier: short posts in everyday voices", group: "Player" },
+    { key: "warRoom", label: "War room", hint: "Mid-tier: the generals' answers and the orders they take", group: "Player" },
+    { key: "politicalLandscape", label: "Political parties", hint: "Mid-tier model", group: "Player" },
+    { key: "goalProgress", label: "Goal progress", hint: "Mid-tier model", group: "Player" },
     { key: "interactiveCreation", label: "Interactive event creation", hint: "Mid-tier model", group: "Player" },
     { key: "interactiveExecutor", label: "Interactive event execution", hint: "Mid-tier model", group: "Player" },
     { key: "interactiveSummary", label: "Interactive event summary", hint: "Small model", group: "Player" },
     { key: "spyIntercept", label: "Spy intercept", hint: "Small/mid-tier model", group: "Player" },
+    { key: "intelligenceAssessment", label: "Intelligence assessment", hint: "Mid-tier model", group: "Player" },
+    { key: "demandCheck", label: "Demand check", hint: "Small model: reads a leader's answer to a demand", group: "Player" },
     { key: "advisor", label: "Advisor chat", hint: "Mid/high-tier: long conversational replies", group: "Chat" },
     { key: "diplomacy", label: "Leader chat", hint: "Mid/high-tier: in-character leaders", group: "Chat" },
+    { key: "chatActions", label: "Group chat", hint: "Mid/high-tier: group chats and councils, on the Leader chat model unless set", group: "Chat" },
 ];
+
+// A task with no pick of its own that starts where a related task's pick does:
+// both halves of one authored Political World bootstrap on the same model, and
+// a group chat or council on the model the player chose for leaders.
+const INHERITED_TASK_PICKS = Object.freeze({
+    politicalWorldVerification: "politicalWorldGeneration",
+    chatActions: "diplomacy",
+    // The Advisor Report ran as the stat-sheet task until it had its own key;
+    // a player's stat-sheet pick still covers it until they give it one.
+    countryBriefing: "countryStatSheet",
+});
 
 // The host of an endpoint, for the diagnostics log: "localhost:11434" or
 // "openrouter.ai" says which server a report is about; the path, the query and
@@ -260,6 +330,7 @@ export function syncAiDebugContext() {
 // start prompt asks for it up front instead of letting the first turn fail.
 export function providerSetupRequirement(provider) {
     const normalized = normalizeProvider(provider);
+    if (normalized === AGENT_PROVIDER) return "none";
     return normalized === "openai-compatible" || normalized === "anthropic-compatible" ? "endpoint" : "apiKey";
 }
 
@@ -339,6 +410,10 @@ const writeJsonSetting = (key, value) => {
     localStorage.setItem(key, JSON.stringify(value));
 };
 
+// The kinds an Agent Connection ticks, in AGENT_KINDS order. One saved before
+// there were kinds (it named time-skip tasks) answers every kind, as a new one does.
+const agentKinds = (kinds) => (Array.isArray(kinds) ? AGENT_KINDS.filter((kind) => kinds.includes(kind)) : [...AGENT_KINDS]);
+
 // Names and models are stored as typed — the Settings fields save on every
 // keystroke — and trimmed where they are used.
 const normalizeConnection = (connection) => ({
@@ -350,6 +425,7 @@ const normalizeConnection = (connection) => ({
     customParams: String(connection?.customParams ?? ""),
     toolStrict: connection?.toolStrict === true,
     suggestedModel: String(connection?.suggestedModel ?? ""),
+    ...(normalizeProvider(connection?.provider) === AGENT_PROVIDER ? { kinds: agentKinds(connection?.kinds), paused: connection?.paused === true } : {}),
 });
 
 const normalizeEntry = (entry) => ({
@@ -586,6 +662,7 @@ const resolveEntry = (entry, connectionsById) => {
         structuredMode: entry.structuredMode,
         toolStrict: connection.toolStrict,
         label: describeEntry(model, connectionDisplayName(connection)),
+        ...(connection.provider === AGENT_PROVIDER ? { kinds: connection.kinds, paused: connection.paused } : {}),
     };
 };
 
@@ -598,7 +675,20 @@ export function getResolvedFallbackList() {
 
 // Whether an entry has what its provider needs before a call can go out: a
 // hosted provider its key, a self-hosted one its endpoint.
-const entryIsConfigured = (entry) => String(entry[providerSetupRequirement(entry.provider)] ?? "").trim().length > 0;
+const entryIsConfigured = (entry) => {
+    const requirement = providerSetupRequirement(entry.provider);
+    return requirement === "none" || String(entry[requirement] ?? "").trim().length > 0;
+};
+
+// Whether something below the player's own Agent can take a request it was
+// waiting on (Use API key).
+export function agentHasEntryBelow(at = Date.now()) {
+    const list = getResolvedFallbackList();
+    const first = list.findIndex((entry) => entry.provider === AGENT_PROVIDER);
+    return first >= 0 && list.slice(first + 1).some((entry) => entry.provider !== AGENT_PROVIDER
+        && entryIsConfigured(entry)
+        && !["spent", "unusable"].includes(entryStatus(fallbackStateStore.get(entry.id), at).status));
+}
 
 export function isFallbackListConfigured() {
     return getResolvedFallbackList().some(entryIsConfigured);
@@ -792,12 +882,26 @@ const CONNECTION_EDIT_LOG = {
     suggestedModel: (connection) => `suggested model set to ${connection.suggestedModel || "(none)"}`,
 };
 
+// A key belongs to the service that issued it. Switching a Connection's
+// provider changes where the key is sent — a Gemini key went to OpenRouter as
+// a Bearer token, unseen in its password field, and came back a 401 nobody
+// could explain — so the key is left behind. Except between the two
+// self-hosted kinds, whose key goes to the same endpoint as before. A patch
+// that brings its own key keeps it.
+const keyLeftBehind = (before, patch) => {
+    if (patch?.provider === undefined || "apiKey" in patch) return {};
+    const provider = normalizeProvider(patch.provider);
+    if (provider === before.provider) return {};
+    const sameServer = providerSetupRequirement(before.provider) === "endpoint" && providerSetupRequirement(provider) === "endpoint";
+    return sameServer ? {} : { apiKey: "" };
+};
+
 export function updateConnection(id, patch) {
     const connections = getConnections();
     const index = connections.findIndex((connection) => connection.id === id);
     if (index === -1) return false;
     const before = connections[index];
-    const next = normalizeConnection({ ...before, ...patch, id });
+    const next = normalizeConnection({ ...before, ...keyLeftBehind(before, patch), ...patch, id });
     connections[index] = next;
     saveConnections(connections);
     // A new key or address may well have a fresh allowance, so every mark on
@@ -932,6 +1036,33 @@ export function setTaskPick(taskKey, entryId) {
     const entry = getResolvedFallbackList().find((candidate) => candidate.id === entryId);
     logDebugEvent("setting", `${task} ${entry ? `tries ${entry.label} first` : "uses the Fallback list from the top"}.`);
     notifyFallbackChange();
+}
+
+// Resolve the effective starting entry for a task without mutating the player's
+// stored Fallback list. A task in INHERITED_TASK_PICKS with no dedicated choice
+// starts at its related task's pick (Political World verification at
+// generation's, a group chat at Leader chat's, the Advisor Report at the stat
+// sheet's); a dedicated pick still wins.
+// All other tasks keep Beta's ordinary Fallback-list behavior.
+export function resolveTaskFallbackEntries(taskKey, sourceEntries = null) {
+    const key = String(taskKey ?? "").trim();
+    const entries = Array.isArray(sourceEntries) ? [...sourceEntries] : getResolvedFallbackList();
+    if (!key || entries.length === 0) return { entries, preferredEntryId: "", implicit: false };
+
+    const explicitPick = getTaskPick(key);
+    if (explicitPick && entries.some((entry) => entry.id === explicitPick)) {
+        return { entries, preferredEntryId: explicitPick, implicit: false };
+    }
+
+    const inheritedFrom = Object.hasOwn(INHERITED_TASK_PICKS, key) ? INHERITED_TASK_PICKS[key] : "";
+    if (inheritedFrom) {
+        const inheritedPick = getTaskPick(inheritedFrom);
+        if (inheritedPick && entries.some((entry) => entry.id === inheritedPick)) {
+            return { entries, preferredEntryId: inheritedPick, implicit: true };
+        }
+    }
+
+    return { entries, preferredEntryId: "", implicit: false };
 }
 
 // --- When an entry is Rate limited ---

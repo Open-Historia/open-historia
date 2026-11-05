@@ -51,6 +51,9 @@ const entries = new Map(
     loaded: false,
     stale: false,
     canonicalAt: 0,
+    // The JSON text `value` was taken from, when a write applied as it is
+    // carried it (applyValue). null when the value came any other way.
+    text: null,
     pending: null,
     subscribers: new Set(),
   }]),
@@ -78,6 +81,10 @@ export const deepEqual = (a, b) => {
 
 // The newest turn published, so a background read cannot revert a fresh jump.
 let gameStamp = { round: 0, date: "" };
+
+// Bumped by a switch to another save. A read begun before the switch is the
+// previous save's, whatever it returns, and is never applied.
+let generation = 0;
 
 export const runtimeGameStamp = (game) => ({
   round: Number(game?.round) || 0,
@@ -108,14 +115,35 @@ const notifyOne = (sub, value) => {
   sub.notify(slice);
 };
 
-const applyValue = (key, raw, { normalize = true } = {}) => {
+// `text` is the JSON a write applied as it is was parsed from (writeJson's
+// echo). Comparing it with the text the held document came from answers
+// "changed or not" without walking the document: deepEqual over a long
+// campaign's world is a full walk on a no-op write (tens of ms on a desktop,
+// several times that on a phone), where the texts compare in well under one.
+// Two different texts of one document (keys in another order) only cost a
+// notification nobody needed, and one writer writes the same content the same
+// way, so that cannot repeat. Without a text on both sides it falls back to
+// deepEqual.
+const applyValue = (key, raw, { normalize = true, text = null } = {}) => {
   const entry = entries.get(key);
   if (!entry) return false;
+  const known = !normalize && typeof text === "string" && entry.loaded && typeof entry.text === "string";
+  if (known && entry.text === text) {
+    entry.stale = false;
+    if (key === "game") gameStamp = runtimeGameStamp(entry.value);
+    return false;
+  }
   const next = normalize ? SOURCES[key].normalize(raw) : raw;
+  const nextText = !normalize && typeof text === "string" ? text : null;
   entry.stale = false;
   if (key === "game") gameStamp = runtimeGameStamp(next);
-  if (entry.loaded && deepEqual(entry.value, next)) return false;
+  if (!known && entry.loaded && deepEqual(entry.value, next)) {
+    // Still the held document; a text for it serves the next write.
+    if (nextText !== null) entry.text = nextText;
+    return false;
+  }
   entry.value = next;
+  entry.text = nextText;
   entry.loaded = true;
   for (const sub of [...entry.subscribers]) notifyOne(sub, next);
   return true;
@@ -124,22 +152,27 @@ const applyValue = (key, raw, { normalize = true } = {}) => {
 const readOne = (key, force) => {
   const entry = entries.get(key);
   if (entry.pending) return entry.pending;
-  entry.pending = SOURCES[key].read({ force })
-    .then((value) => ({ key, value }), () => null)
-    .finally(() => { entry.pending = null; });
-  return entry.pending;
+  const readIn = generation;
+  const pending = SOURCES[key].read({ force })
+    .then((value) => ({ key, value, generation: readIn }), () => null)
+    // Only its own: a switch may already have replaced it with the new save's.
+    .finally(() => { if (entry.pending === pending) entry.pending = null; });
+  entry.pending = pending;
+  return pending;
 };
 
 const refreshKeys = (keys, { force = true } = {}) => {
   const wanted = keys.filter((key) => entries.has(key));
   if (!wanted.length) return Promise.resolve();
-  return Promise.all(wanted.map((key) => readOne(key, force))).then((results) => {
+  return Promise.all(wanted.map((key) => readOne(key, force))).then((read) => {
+    // Reads from before a switch to another save carry that save's documents.
+    const results = read.filter((result) => result?.generation === generation);
     // The whole batch goes, not just the game: world and events belong to that
     // same stale turn.
     const game = results.find((result) => result?.key === "game");
     if (game && isStaleGameRead(game.value, gameStamp)) return;
     for (const result of results) {
-      if (result) applyValue(result.key, result.value, { normalize: false });
+      applyValue(result.key, result.value, { normalize: false });
     }
   });
 };
@@ -197,11 +230,19 @@ const openChannel = () => {
 };
 
 // Authoritative on arrival: take the object writeJson holds, skip the fetch.
+// A writer that normalized the document before saving it says so
+// (detail.normalized), and it is not normalized again: for the world that was
+// a second full normalization on the main thread on every write. Such a write
+// also carries the text it was parsed from (detail.text), which is how the
+// store tells a no-op write without a deepEqual over the whole document.
 const onRuntimeJsonUpdated = (event) => {
   const key = keyForUrl(event?.detail?.url);
   if (!key) return;
   entries.get(key).canonicalAt = Date.now();
-  applyValue(key, event.detail.value);
+  applyValue(key, event.detail.value, {
+    normalize: event.detail.normalized !== true,
+    text: event.detail.text,
+  });
   // BroadcastChannel never echoes to its own sender, so this cannot loop.
   channel?.postMessage({ key });
 };
@@ -214,11 +255,16 @@ const onRolledBack = () => {
 
 const onActiveGameChanged = () => {
   gameStamp = { round: 0, date: "" };
+  generation += 1;
   for (const [key, entry] of entries) {
     entry.value = SOURCES[key].empty;
     entry.loaded = false;
     entry.stale = false;
     entry.canonicalAt = 0;
+    entry.text = null;
+    // A read still in flight is the previous save's: the next one starts afresh
+    // rather than joining it.
+    entry.pending = null;
   }
   void refreshKeys(activeKeys());
 };
@@ -292,6 +338,7 @@ export const __resetRuntimeStoreForTests = () => {
     entry.loaded = false;
     entry.stale = false;
     entry.canonicalAt = 0;
+    entry.text = null;
     entry.pending = null;
     entry.subscribers.clear();
   }

@@ -114,6 +114,10 @@ about you, of real weight, written by the simulation. Its card carries a yellow 
 replaces it. A skip with such an event makes an offer one time in three, and never within three
 turns of the last.
 
+<p class="beta-note"><b>On beta offers come about one skip in five.</b> A skip with such an event
+makes an offer one time in four, never on the skip right after the last offer, and a scene you play
+or a Game Master command in between does not count as a skip.</p>
+
 **Play it out** opens the scene on that event. You can add an **angle** of your own — what you
 want the scene to be about — then play it: take one of the offered choices or write your own
 move, take a move back and choose again, and finally **End the scene**, which writes it into the

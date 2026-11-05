@@ -86,6 +86,10 @@ The camera runs from zoom **2.25** (the whole world) to **16** (street level, wh
 supports it). Vertical panning is bounded at roughly 80°S to 85°N — there is no reason to fly off
 the top of the map.
 
+<p class="beta-note"><b>On beta the camera also turns and tilts</b>, all the way round and up to
+60° from looking straight down, on the flat map and the globe alike. The controls are in
+<a href="/wiki/interface/">the interface</a>.</p>
+
 ## Basemaps
 
 The imagery under the political fills. **Settings → Map → Basemap** starts on **Scenario
@@ -142,7 +146,7 @@ the switch then says *The 3D globe is disabled for this scenario's map.*
 ## 3D terrain
 
 **Settings → Map → 3D Terrain**, marked experimental and honestly so. It raises real elevation
-with a heavy 15× exaggeration so that mountain ranges actually read at world scale, plus light
+with a 7.5× exaggeration so that mountain ranges actually read at world scale, plus light
 hillshading. A scenario with a custom background has no elevation data to raise, so it stays off
 there.
 

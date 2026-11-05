@@ -1,0 +1,391 @@
+{
+  "name": "troops",
+  "file": "best.json",
+  "trained": {
+    "round": 285,
+    "id": 1541,
+    "score": 78.0913
+  },
+  "reward": {
+    "landTaken": 0.2,
+    "landLost": 0.3,
+    "townTaken": 4,
+    "townLost": 5,
+    "capitalTaken": 12,
+    "capitalLost": 30,
+    "troopsTaken": 3,
+    "troopsLost": 4,
+    "encompassed": 2
+  },
+  "wars": 150,
+  "against": {
+    "the scripted staff": {
+      "wars": 150,
+      "margin": 47.122,
+      "error": 8.415,
+      "better": 92,
+      "level": 0,
+      "worse": 58,
+      "parts": {
+        "landTaken": 27.351,
+        "landLost": 15.491,
+        "townTaken": 1.503,
+        "townLost": 0.958,
+        "capitalTaken": 0.707,
+        "capitalLost": 0.433,
+        "troopsTaken": 0.516,
+        "troopsLost": 0.387,
+        "encompassed": 0.468
+      }
+    },
+    "always advancing": {
+      "wars": 150,
+      "margin": -2.957,
+      "error": 4.767,
+      "better": 85,
+      "level": 0,
+      "worse": 65,
+      "parts": {
+        "landTaken": 20.455,
+        "landLost": 21.123,
+        "townTaken": 1.207,
+        "townLost": 1.233,
+        "capitalTaken": 0.55,
+        "capitalLost": 0.573,
+        "troopsTaken": 0.484,
+        "troopsLost": 0.481,
+        "encompassed": 0.449
+      }
+    },
+    "always holding": {
+      "wars": 150,
+      "margin": 160.598,
+      "error": 6.838,
+      "better": 150,
+      "level": 0,
+      "worse": 0,
+      "parts": {
+        "landTaken": 38.748,
+        "landLost": 0.053,
+        "townTaken": 2.017,
+        "townLost": 0.01,
+        "capitalTaken": 0.963,
+        "capitalLost": 0,
+        "troopsTaken": 0.528,
+        "troopsLost": 0.33,
+        "encompassed": 0.538
+      }
+    },
+    "always digging in": {
+      "wars": 150,
+      "margin": 134.154,
+      "error": 6.903,
+      "better": 147,
+      "level": 0,
+      "worse": 3,
+      "parts": {
+        "landTaken": 31.898,
+        "landLost": 0.004,
+        "townTaken": 1.678,
+        "townLost": 0,
+        "capitalTaken": 0.797,
+        "capitalLost": 0,
+        "troopsTaken": 0.574,
+        "troopsLost": 0.341,
+        "encompassed": 0.478
+      }
+    },
+    "going for the cities, troop by troop": {
+      "wars": 150,
+      "margin": 53.374,
+      "error": 8.129,
+      "better": 93,
+      "level": 0,
+      "worse": 57,
+      "parts": {
+        "landTaken": 26.907,
+        "landLost": 15.616,
+        "townTaken": 1.568,
+        "townLost": 0.873,
+        "capitalTaken": 0.717,
+        "capitalLost": 0.397,
+        "troopsTaken": 0.606,
+        "troopsLost": 0.476,
+        "encompassed": 0.67
+      }
+    },
+    "the trained staff of the whole side": {
+      "wars": 150,
+      "margin": 3.843,
+      "error": 5.109,
+      "better": 77,
+      "level": 0,
+      "worse": 73,
+      "parts": {
+        "landTaken": 20.957,
+        "landLost": 20.639,
+        "townTaken": 1.285,
+        "townLost": 1.192,
+        "capitalTaken": 0.573,
+        "capitalLost": 0.557,
+        "troopsTaken": 0.495,
+        "troopsLost": 0.471,
+        "encompassed": 0.457
+      }
+    }
+  },
+  "alwaysAdvancingAgainstTheScriptedStaff": {
+    "wars": 150,
+    "margin": 48.905,
+    "error": 8.48,
+    "better": 69,
+    "level": 0,
+    "worse": 81,
+    "parts": {
+      "landTaken": 27.461,
+      "landLost": 15.567,
+      "townTaken": 1.508,
+      "townLost": 0.938,
+      "capitalTaken": 0.723,
+      "capitalLost": 0.43,
+      "troopsTaken": 0.504,
+      "troopsLost": 0.382,
+      "encompassed": 0.392
+    }
+  },
+  "againstTheScriptedStaffBy": [
+    {
+      "label": "one against one",
+      "wars": 85,
+      "margin": 29.27,
+      "error": 6.99,
+      "better": 52,
+      "level": 0,
+      "worse": 33,
+      "parts": {
+        "landTaken": 20.1,
+        "landLost": 14.426,
+        "townTaken": 1.391,
+        "townLost": 0.985,
+        "capitalTaken": 0.582,
+        "capitalLost": 0.412,
+        "troopsTaken": 0.501,
+        "troopsLost": 0.398,
+        "encompassed": 0.442
+      }
+    },
+    {
+      "label": "two against one, or one against two",
+      "wars": 51,
+      "margin": 33.943,
+      "error": 12.131,
+      "better": 30,
+      "level": 0,
+      "worse": 21,
+      "parts": {
+        "landTaken": 23.782,
+        "landLost": 16.675,
+        "townTaken": 1.299,
+        "townLost": 0.873,
+        "capitalTaken": 0.676,
+        "capitalLost": 0.471,
+        "troopsTaken": 0.485,
+        "troopsLost": 0.382,
+        "encompassed": 0.392
+      }
+    },
+    {
+      "label": "two against two",
+      "wars": 14,
+      "margin": 203.512,
+      "error": 51.37,
+      "better": 10,
+      "level": 0,
+      "worse": 4,
+      "parts": {
+        "landTaken": 84.378,
+        "landLost": 17.644,
+        "townTaken": 2.929,
+        "townLost": 1.107,
+        "capitalTaken": 1.571,
+        "capitalLost": 0.429,
+        "troopsTaken": 0.723,
+        "troopsLost": 0.344,
+        "encompassed": 0.908
+      }
+    },
+    {
+      "label": "the team that began is much the weaker (under 0.7)",
+      "wars": 61,
+      "margin": 2.178,
+      "error": 2.114,
+      "better": 35,
+      "level": 0,
+      "worse": 26,
+      "parts": {
+        "landTaken": 20.468,
+        "landLost": 20.182,
+        "townTaken": 1.172,
+        "townLost": 1.16,
+        "capitalTaken": 0.566,
+        "capitalLost": 0.549,
+        "troopsTaken": 0.434,
+        "troopsLost": 0.421,
+        "encompassed": 0.342
+      }
+    },
+    {
+      "label": "about even (0.7 to 1.4)",
+      "wars": 47,
+      "margin": 143.635,
+      "error": 20.356,
+      "better": 37,
+      "level": 0,
+      "worse": 10,
+      "parts": {
+        "landTaken": 43.784,
+        "landLost": 6.634,
+        "townTaken": 2.149,
+        "townLost": 0.505,
+        "capitalTaken": 1.053,
+        "capitalLost": 0.223,
+        "troopsTaken": 0.68,
+        "troopsLost": 0.304,
+        "encompassed": 0.728
+      }
+    },
+    {
+      "label": "the team that began is much the stronger (over 1.4)",
+      "wars": 42,
+      "margin": 4.394,
+      "error": 4.369,
+      "better": 20,
+      "level": 0,
+      "worse": 22,
+      "parts": {
+        "landTaken": 18.957,
+        "landLost": 18.59,
+        "townTaken": 1.262,
+        "townLost": 1.173,
+        "capitalTaken": 0.524,
+        "capitalLost": 0.5,
+        "troopsTaken": 0.452,
+        "troopsLost": 0.433,
+        "encompassed": 0.362
+      }
+    },
+    {
+      "label": "contested (two to one or closer)",
+      "wars": 85,
+      "margin": 83.044,
+      "error": 13.646,
+      "better": 55,
+      "level": 0,
+      "worse": 30,
+      "parts": {
+        "landTaken": 33.406,
+        "landLost": 12.476,
+        "townTaken": 1.809,
+        "townLost": 0.847,
+        "capitalTaken": 0.859,
+        "capitalLost": 0.376,
+        "troopsTaken": 0.577,
+        "troopsLost": 0.358,
+        "encompassed": 0.586
+      }
+    },
+    {
+      "label": "before 1900",
+      "wars": 53,
+      "margin": 39.333,
+      "error": 13.899,
+      "better": 31,
+      "level": 0,
+      "worse": 22,
+      "parts": {
+        "landTaken": 25.087,
+        "landLost": 16.21,
+        "townTaken": 1.552,
+        "townLost": 1.066,
+        "capitalTaken": 0.689,
+        "capitalLost": 0.453,
+        "troopsTaken": 0.519,
+        "troopsLost": 0.424,
+        "encompassed": 0.478
+      }
+    },
+    {
+      "label": "from 1900",
+      "wars": 97,
+      "margin": 51.377,
+      "error": 10.596,
+      "better": 61,
+      "level": 0,
+      "worse": 36,
+      "parts": {
+        "landTaken": 28.588,
+        "landLost": 15.099,
+        "townTaken": 1.477,
+        "townLost": 0.899,
+        "capitalTaken": 0.716,
+        "capitalLost": 0.423,
+        "troopsTaken": 0.515,
+        "troopsLost": 0.367,
+        "encompassed": 0.463
+      }
+    }
+  ],
+  "whatItSaid": {
+    "hold": 0,
+    "dig in": 0.023,
+    "push": 0.72,
+    "strike": 0.082,
+    "go round": 0.159,
+    "take a city": 0.006,
+    "take a capital": 0,
+    "guard a city": 0.01,
+    "shore up": 0
+  },
+  "againstAlwaysAdvancingBy": [
+    {
+      "label": "contested (two to one or closer)",
+      "wars": 85,
+      "margin": -5.56,
+      "error": 8.422,
+      "better": 47,
+      "level": 0,
+      "worse": 38,
+      "parts": {
+        "landTaken": 21.254,
+        "landLost": 22.415,
+        "townTaken": 1.285,
+        "townLost": 1.332,
+        "capitalTaken": 0.582,
+        "capitalLost": 0.624,
+        "troopsTaken": 0.503,
+        "troopsLost": 0.52,
+        "encompassed": 0.531
+      }
+    },
+    {
+      "label": "lopsided",
+      "wars": 65,
+      "margin": 0.447,
+      "error": 0.168,
+      "better": 38,
+      "level": 0,
+      "worse": 27,
+      "parts": {
+        "landTaken": 19.411,
+        "landLost": 19.433,
+        "townTaken": 1.104,
+        "townLost": 1.104,
+        "capitalTaken": 0.508,
+        "capitalLost": 0.508,
+        "troopsTaken": 0.46,
+        "troopsLost": 0.431,
+        "encompassed": 0.343
+      }
+    }
+  ]
+}

@@ -29,34 +29,29 @@ import { fromLonLat } from "ol/proj";
 import Panel from "./Panel.jsx";
 import { labelDim, pillButton } from "./editorStyles.js";
 import { PROJECTIONS, sameProjection } from "../../server/mapProjection.js";
+import { ESRI_BASEMAPS } from "../runtime/assets.js";
 import {
   REVIEW_SECTIONS,
-  applyMapChange,
-  changeDependencies,
+  acceptMapChanges,
   changeTargets,
+  createRegionCache,
+  decisionOf,
+  decisionsFor,
   inSuggestedProjection,
   mapChangeStatus,
   sectionOfChange,
+  undoRefusal,
 } from "./suggestionReview.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 
 // ---- the review's state ---------------------------------------------------------
 
-// The projection first, then countries and groups: the rest of a suggestion's
-// changes may need them.
-const APPLY_ORDER = ["projection", "polity-add", "polity-rename", "group-add", "polity-change", "group-change"];
-const applyRank = (change) => {
-  const index = APPLY_ORDER.indexOf(change.kind);
-  return index < 0 ? APPLY_ORDER.length : index;
-};
-
 export const useSuggestionReview = ({ review, api, d, setBackground, convertProjection, regionEpoch }) => {
   const changes = useMemo(
     () => (review?.suggestion?.changes ?? []).filter((change) => change.area === "map"),
     [review?.suggestion],
   );
-  const byId = useMemo(() => new Map(changes.map((change) => [change.id, change])), [changes]);
   const [decisions, setDecisions] = useState(() => ({
     accepted: new Set(review?.decisions?.accepted ?? []),
     rejected: new Set(review?.decisions?.rejected ?? []),
@@ -73,15 +68,28 @@ export const useSuggestionReview = ({ review, api, d, setBackground, convertProj
   const renamesRef = useRef(renames);
   renamesRef.current = renames;
 
+  // Region shapes and who holds which regions, read once per state of the
+  // regions: a document edit re-measures nothing.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const regionCache = useMemo(() => createRegionCache(), [api, regionEpoch]);
+
+  // Worked out again on every document edit, but handed on as the same object
+  // while every status stays as it was, so the markup is not redrawn for an
+  // edit that changes none of them.
+  const statusesRef = useRef({});
   const statuses = useMemo(() => {
     if (!api || !review) return {};
     // A suggestion that moves the map to another projection is written for the
     // map there: until that is accepted, the rest is checked against the map
     // as the new projection would have it (inSuggestedProjection).
     const placed = inSuggestedProjection(ctx, changes);
-    return Object.fromEntries(changes.map((change) => [change.id, mapChangeStatus(change, change.kind === "projection" ? ctx : placed, { renames })]));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [api, review, changes, ctx, renames, regionEpoch]);
+    const next = Object.fromEntries(changes.map((change) => [change.id, mapChangeStatus(change, change.kind === "projection" ? ctx : placed, { renames, cache: regionCache })]));
+    const previous = statusesRef.current;
+    const ids = Object.keys(next);
+    if (ids.length === Object.keys(previous).length && ids.every((id) => previous[id] === next[id])) return previous;
+    statusesRef.current = next;
+    return next;
+  }, [api, review, changes, ctx, renames, regionCache]);
 
   const decide = useCallback((ids, kind) => {
     setDecisions((current) => {
@@ -97,62 +105,36 @@ export const useSuggestionReview = ({ review, api, d, setBackground, convertProj
     });
   }, []);
 
-  // Accept a list of changes: what they need first, then each in turn, the
-  // ownership rows batched by the country they go to (one map step each).
+  // Accept a list of changes (acceptMapChanges: what they need first, the
+  // ownership rows batched by the country they go to).
   const accept = useCallback((list) => {
     if (!api) return;
-    const done = new Set([...decisions.accepted]);
-    const order = [];
-    const visit = (change, depth = 0) => {
-      if (!change || done.has(change.id) || depth > 6) return;
-      for (const id of changeDependencies(change, changes, ctxRef.current)) visit(byId.get(id), depth + 1);
-      if (done.has(change.id)) return;
-      done.add(change.id);
-      order.push(change);
-    };
-    [...list].sort((a, b) => applyRank(a) - applyRank(b)).forEach((change) => visit(change));
-    if (!order.length) return;
-    const localRenames = { ...renamesRef.current };
-    const accepted = [];
-    const owners = new Map(); // target owner -> changes
-    // The document stays as it was for the whole batch. Once the batch has
-    // moved the map to the suggested projection, the changes after it look
-    // their cities and units up where the conversion has put them.
-    let live = ctxRef.current;
-    for (const change of order) {
-      if (change.kind === "region-owner") {
-        const to = clean(change.to);
-        if (!owners.has(to)) owners.set(to, []);
-        owners.get(to).push(change);
-        continue;
-      }
-      const undo = applyMapChange(change, live, { renames: localRenames });
-      if (change.kind === "projection") live = inSuggestedProjection(live, [change], { regions: false });
-      if (undo) undoers.current.set(change.id, undo);
-      if (change.kind === "polity-rename") localRenames[change.from] = change.to;
-      accepted.push(change.id);
-    }
-    for (const [to, group] of owners) {
-      let target = to;
-      for (let guard = 0; guard < 8 && localRenames[target]; guard += 1) target = localRenames[target];
-      const ids = group.map((change) => String(change.regionId));
-      const before = ids.map((id) => [id, api.getRegionSummary(id)?.owner ?? null]);
-      api.setRegionAttrs(ids, { owner: target || null });
-      for (const [index, change] of group.entries()) {
-        const [id, owner] = before[index];
-        undoers.current.set(change.id, () => api.setRegionAttrs([id], { owner }));
-        accepted.push(change.id);
-      }
-    }
-    setRenames(localRenames);
-    decide(accepted, "accepted");
-  }, [api, byId, changes, decide, decisions.accepted]);
+    const result = acceptMapChanges(list, ctxRef.current, { changes, accepted: decisions.accepted, renames: renamesRef.current });
+    // Refused whole, nothing accepted (a projection change on a map with a
+    // detailed map).
+    if (result.refused) window.alert(result.refused);
+    if (!result.accepted.length) return;
+    for (const [id, undo] of result.undoers) undoers.current.set(id, undo);
+    setRenames(result.renames);
+    decide(result.accepted, "accepted");
+  }, [api, changes, decide, decisions.accepted]);
 
   const reject = useCallback((list) => decide(list.map((change) => change.id), "rejected"), [decide]);
 
+  // An acceptance can be taken back only in the review that made it: one
+  // loaded from an earlier review has no undo, and clearing its decision
+  // would leave the change on the map marked undecided.
+  const canUndo = useCallback((id) => !decisions.accepted.has(id) || undoers.current.has(id), [decisions.accepted]);
+
   const undo = useCallback((change) => {
     if (decisions.accepted.has(change.id)) {
-      undoers.current.get(change.id)?.();
+      if (!undoers.current.has(change.id)) return;
+      const refused = undoRefusal(change, ctxRef.current);
+      if (refused) {
+        window.alert(refused);
+        return;
+      }
+      undoers.current.get(change.id)();
       undoers.current.delete(change.id);
       if (change.kind === "polity-rename") {
         setRenames((current) => {
@@ -165,24 +147,14 @@ export const useSuggestionReview = ({ review, api, d, setBackground, convertProj
     decide([change.id], null);
   }, [decide, decisions.accepted]);
 
-  // What a save should record: the author's decisions, with what is already on
-  // the map counted as accepted and what is no longer on it as rejected.
-  const decisionsForSave = useCallback(() => {
-    const accepted = new Set(decisions.accepted);
-    const rejected = new Set(decisions.rejected);
-    for (const change of changes) {
-      if (accepted.has(change.id) || rejected.has(change.id)) continue;
-      if (statuses[change.id] === "applied") accepted.add(change.id);
-      else if (statuses[change.id] === "missing") rejected.add(change.id);
-    }
-    return { accepted: [...accepted], rejected: [...rejected] };
-  }, [changes, decisions, statuses]);
+  // What a save should record (decisionsFor).
+  const decisionsForSave = useCallback(() => decisionsFor(changes, decisions, statuses), [changes, decisions, statuses]);
 
-  const pendingCount = changes.filter((change) => !decisions.accepted.has(change.id) && !decisions.rejected.has(change.id) && statuses[change.id] !== "applied" && statuses[change.id] !== "missing").length;
+  const pendingCount = changes.filter((change) => !decisionOf(change, decisions, statuses)).length;
 
   return useMemo(
-    () => ({ active: Boolean(review), changes, decisions, statuses, renames, focusId, setFocusId, accept, reject, undo, decisionsForSave, pendingCount, ctx }),
-    [review, changes, decisions, statuses, renames, focusId, accept, reject, undo, decisionsForSave, pendingCount, ctx],
+    () => ({ active: Boolean(review), changes, decisions, statuses, renames, focusId, setFocusId, accept, reject, undo, canUndo, decisionsForSave, pendingCount, ctx, regionCache }),
+    [review, changes, decisions, statuses, renames, focusId, accept, reject, undo, canUndo, decisionsForSave, pendingCount, ctx, regionCache],
   );
 };
 
@@ -231,67 +203,103 @@ const markupStyle = (feature) => {
   return style;
 };
 
-const stateOf = (change, review) => {
-  if (review.decisions.accepted.has(change.id)) return "accepted";
-  if (review.decisions.rejected.has(change.id)) return "rejected";
-  if (review.statuses[change.id] === "applied") return "accepted";
-  if (review.statuses[change.id] === "missing") return "rejected";
-  return review.statuses[change.id] === "conflict" ? "conflict" : "pending";
+const stateOf = (change, review) => decisionOf(change, review.decisions, review.statuses)
+  || (review.statuses[change.id] === "conflict" ? "conflict" : "pending");
+
+// One change's markup: its regions' outlines (each region once across the
+// changes drawn together), the suggested shapes when `withShapes`, its dots.
+const markupFeatures = (api, change, targets, state, focused, withShapes, outlined = new Set()) => {
+  const format = new GeoJSON();
+  const features = [];
+  for (const id of targets.regionIds) {
+    if (outlined.has(id)) continue;
+    outlined.add(id);
+    const region = api.regionSource.getFeatureById(id);
+    if (!region) continue;
+    features.push(new Feature({ geometry: region.getGeometry().clone(), kind: "region", state, focused, changeId: change.id }));
+  }
+  if (withShapes) {
+    for (const shape of targets.shapes) {
+      try {
+        const geometry = format.readGeometry(shape.geometry, { dataProjection: "EPSG:4326", featureProjection: "EPSG:3857" });
+        features.push(new Feature({ geometry, kind: "shape", state, focused, changeId: change.id }));
+      } catch {
+        // A shape this map cannot read is simply not drawn.
+      }
+    }
+  }
+  for (const [lng, lat] of targets.points) {
+    features.push(new Feature({ geometry: new Point(fromLonLat([Number(lng), Number(lat)])), kind: "point", state, focused, changeId: change.id }));
+  }
+  return features;
 };
 
 // The markup layer: a region outline per change about a region on this map,
 // the suggested shape of every border change, a dot per city, unit or feature.
+// The focused change is drawn again, in white, on a layer of its own, so a
+// click redraws that one change and nothing else.
 export const useSuggestionMarkup = (api, review, regionEpoch) => {
   const sourceRef = useRef(null);
+  const focusSourceRef = useRef(null);
   useEffect(() => {
     if (!api?.map || !review.active) return undefined;
     const source = new VectorSource();
     const layer = new VectorLayer({ source, style: markupStyle, zIndex: 57, updateWhileInteracting: false });
     layer.set("name", "suggestion-review");
+    const focusSource = new VectorSource();
+    const focusLayer = new VectorLayer({ source: focusSource, style: markupStyle, zIndex: 58, updateWhileInteracting: false });
+    focusLayer.set("name", "suggestion-review-focus");
     api.map.addLayer(layer);
+    api.map.addLayer(focusLayer);
     sourceRef.current = source;
+    focusSourceRef.current = focusSource;
     return () => {
       api.map.removeLayer(layer);
+      api.map.removeLayer(focusLayer);
       sourceRef.current = null;
+      focusSourceRef.current = null;
     };
   }, [api, review.active]);
+
+  // Where each change is: worked out again only when the changes, the renames
+  // or the regions change, never on a click or a document edit.
+  const { active, changes, renames, regionCache, decisions, statuses, focusId } = review;
+  const targets = useMemo(() => {
+    const out = new globalThis.Map();
+    if (!api || !active) return out;
+    for (const change of changes) out.set(change.id, changeTargets(change, { api }, { changes, renames, cache: regionCache }));
+    return out;
+  }, [api, active, changes, renames, regionCache]);
+  const states = useMemo(
+    () => new globalThis.Map(changes.map((change) => [change.id, stateOf(change, { decisions, statuses })])),
+    [changes, decisions, statuses],
+  );
 
   useEffect(() => {
     const source = sourceRef.current;
     if (!source || !api?.regionSource) return;
-    const format = new GeoJSON();
     const features = [];
     const outlined = new Set();
-    for (const change of review.changes) {
-      const state = stateOf(change, review);
-      const focused = review.focusId === change.id;
-      const targets = changeTargets(change, review.ctx, { changes: review.changes, renames: review.renames });
-      for (const id of targets.regionIds) {
-        const key = `${id}|${focused ? 1 : 0}`;
-        if (outlined.has(key) && !focused) continue;
-        outlined.add(key);
-        const region = api.regionSource.getFeatureById(id);
-        if (!region) continue;
-        features.push(new Feature({ geometry: region.getGeometry().clone(), kind: "region", state, focused, changeId: change.id }));
-      }
+    for (const change of changes) {
+      const state = states.get(change.id);
+      const found = targets.get(change.id);
+      if (!found) continue;
       // A border change the author has not accepted yet: show where it would put the borders.
-      if (state === "pending" || state === "conflict" || focused) {
-        for (const shape of targets.shapes) {
-          try {
-            const geometry = format.readGeometry(shape.geometry, { dataProjection: "EPSG:4326", featureProjection: "EPSG:3857" });
-            features.push(new Feature({ geometry, kind: "shape", state, focused, changeId: change.id }));
-          } catch {
-            // A shape this map cannot read is simply not drawn.
-          }
-        }
-      }
-      for (const [lng, lat] of targets.points) {
-        features.push(new Feature({ geometry: new Point(fromLonLat([Number(lng), Number(lat)])), kind: "point", state, focused, changeId: change.id }));
-      }
+      features.push(...markupFeatures(api, change, found, state, false, state === "pending" || state === "conflict", outlined));
     }
     source.clear(true);
     source.addFeatures(features);
-  }, [api, review, regionEpoch]);
+    // regionEpoch: the outlines are copies of the regions' shapes.
+  }, [api, active, changes, targets, states, regionEpoch]);
+
+  useEffect(() => {
+    const source = focusSourceRef.current;
+    if (!source || !api?.regionSource) return;
+    source.clear(true);
+    const change = changes.find((entry) => entry.id === focusId);
+    const found = change ? targets.get(change.id) : null;
+    if (found) source.addFeatures(markupFeatures(api, change, found, states.get(change.id), true, true));
+  }, [api, active, changes, targets, states, focusId, regionEpoch]);
 };
 
 // ---- the panel ----------------------------------------------------------------
@@ -307,15 +315,23 @@ const SECTION_TITLES = {
   units: "Units",
   features: "Map features",
   puppets: "Puppet states",
+  basemaps: "Basemaps",
+  detailedMap: "Detailed map",
   settings: "Map settings",
 };
+// What a scenario draws on its map for war, as the War map panel and the Layers panel name it.
+const WAR_MAP_LABELS = { terrainAreas: "Terrain", fortifications: "Fortified lines", climateZones: "Climate zones", freezingRegions: "Water that can freeze" };
 const FIELD_CHIP_LABELS = { name: "Name", aliases: "Other names", code: "Code", note: "Note", status: "Status", color: "Colour", flag: "Flag", tags: "Tags", extra: "Other details" };
 
 const polityName = (doc, key) => clean(doc?.polities?.[key]?.name) || clean(key);
+const builtinNames = (ids) => ESRI_BASEMAPS.filter((basemap) => ids.includes(basemap.id)).map((basemap) => basemap.label).join(", ");
 
 // One line saying what the change does, in the names a person uses.
 const changeText = (change, doc) => {
   const name = (key) => polityName(doc, key);
+  // One of the scenario's other maps, by the name the map has (or the
+  // suggestion's id for one it adds).
+  const ownMapName = (key) => (Array.isArray(doc?.metadata?.ownBasemaps) ? doc.metadata.ownBasemaps.find((own) => own?.id === key)?.name : "") || key;
   switch (change.kind) {
     case "polity-add": return `New country: ${clean(change.record?.name) || change.key}`;
     case "polity-remove": return `Remove ${name(change.key)}`;
@@ -351,8 +367,36 @@ const changeText = (change, doc) => {
       const projection = PROJECTIONS.find((entry) => entry.id === change.to?.type)?.name ?? change.to?.type;
       return `Map projection: ${projection}`;
     }
-    case "map-field": return change.field === "author" ? `Map author: ${change.to || "—"}` : `New basemap: ${change.to || "—"}`;
+    case "map-field":
+      if (change.field === "author") return `Map author: ${change.to || "—"}`;
+      if (change.field === "startingMapName") return `Name the starting map: ${change.to || "—"}`;
+      return `New basemap: ${change.to || "—"}`;
+    case "war-map": return WAR_MAP_LABELS[change.field] || change.field;
     case "background": return change.to ? "New custom basemap" : "Remove the custom basemap";
+    case "allowed-basemaps":
+      return change.to === null
+        ? "Built-in maps players can switch to: the default"
+        : change.to.length ? `Built-in maps players can switch to: ${builtinNames(change.to)}` : "Players can switch to no built-in map";
+    case "own-basemap-add":
+      return change.to?.kind === "tiled"
+        ? `Add the detailed map ${change.to?.name || change.key} to this scenario's maps`
+        : `Offer another basemap: ${change.to?.name || change.key}`;
+    case "own-basemap-remove": return `Stop offering the basemap ${change.from?.name || change.key}`;
+    case "own-basemap-change":
+      if (change.from?.name && change.to?.name && change.from.name !== change.to.name && change.from.hash === change.to.hash) {
+        return `Rename the basemap ${change.from.name} to ${change.to.name}`;
+      }
+      return change.to?.kind === "tiled"
+        ? `Change the detailed map ${change.to?.name || change.key}, shown over ${change.to.data?.over ? ownMapName(change.to.data.over) : "the starting map"}`
+        : `New version of the basemap ${change.to?.name || change.key}`;
+    case "detailed-map": {
+      if (!change.to) return change.from?.name ? `Take the detailed map ${change.from.name} off` : "Take the detailed map off";
+      const mapName = change.to.name || change.to.id || "a detailed map";
+      const sameMap = change.from && ((change.to.id && change.from.id === change.to.id) || (change.to.hash && change.from.hash === change.to.hash));
+      if (!sameMap) return `Detailed map: ${mapName}`;
+      if (change.to.version && change.from.version !== change.to.version) return `Use version ${change.to.version} of the detailed map ${mapName}`;
+      return `Change how strongly countries are coloured over the detailed map ${mapName}`;
+    }
     default: return change.id;
   }
 };
@@ -376,7 +420,9 @@ const Decision = ({ change, review }) => {
         <span style={{ color: decided === "accepted" ? "#86efac" : "rgba(255,255,255,0.5)", fontSize: 11, fontWeight: 700 }}>
           {decided === "accepted" ? "Accepted" : "Rejected"}
         </span>
-        <button type="button" onClick={(event) => { event.stopPropagation(); review.undo(change); }} style={{ ...pillButton(false), padding: "3px 7px", fontSize: 11 }}>Undo</button>
+        {review.canUndo(change.id)
+          ? <button type="button" onClick={(event) => { event.stopPropagation(); review.undo(change); }} style={{ ...pillButton(false), padding: "3px 7px", fontSize: 11 }}>Undo</button>
+          : <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 10.5 }}>To undo it, change it back by hand.</span>}
       </span>
     );
   }
@@ -448,7 +494,7 @@ const OwnershipGroups = ({ changes, review, doc, onFocus }) => {
     return [...byPair.values()].sort((a, b) => b.items.length - a.items.length);
   }, [changes]);
   return groups.map((group) => {
-    const pending = group.items.filter((change) => !review.decisions.accepted.has(change.id) && !review.decisions.rejected.has(change.id) && !["applied", "missing"].includes(review.statuses[change.id]));
+    const pending = group.items.filter((change) => !decisionOf(change, review.decisions, review.statuses));
     const fromLabel = group.from ? polityName(doc, group.from) : "Unowned";
     const toLabel = group.to ? polityName(doc, group.to) : "Unowned";
     return (
@@ -480,8 +526,7 @@ const OwnershipGroups = ({ changes, review, doc, onFocus }) => {
 
 const SuggestionReviewPanel = ({ review, doc, api, suggestion, onClose }) => {
   const [hideDecided, setHideDecided] = useState(false);
-  const decided = (change) => review.decisions.accepted.has(change.id) || review.decisions.rejected.has(change.id)
-    || ["applied", "missing"].includes(review.statuses[change.id]);
+  const decided = (change) => Boolean(decisionOf(change, review.decisions, review.statuses));
   const visible = hideDecided ? review.changes.filter((change) => !decided(change)) : review.changes;
   const total = review.changes.length;
   const settled = review.changes.filter(decided).length;
@@ -489,7 +534,7 @@ const SuggestionReviewPanel = ({ review, doc, api, suggestion, onClose }) => {
 
   const focus = (change) => {
     review.setFocusId(change.id);
-    const targets = changeTargets(change, review.ctx, { changes: review.changes, renames: review.renames });
+    const targets = changeTargets(change, review.ctx, { changes: review.changes, renames: review.renames, cache: review.regionCache });
     if (targets.regionIds.length) {
       api?.zoomToSelection?.(targets.regionIds);
     } else if (targets.shapes.length) {

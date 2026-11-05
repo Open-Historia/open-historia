@@ -161,3 +161,55 @@ test("a city stands for the region it is in", () => {
     assert.equal(found[0].regionId, "77");
     assert.equal(found[0].place, "Aleppo");
 });
+
+// ---- stated anywhere: the per-event check and the annexations of a skip ----------
+
+test("a capture of a named place is stated, wherever the place is", async () => {
+    const { statesCapture } = await import("./narratedCapture.js");
+    for (const sentence of [
+        "Russian forces captured Kharkiv after a week of fighting.",
+        "The Syrian army took full control of Aleppo.",
+        "Kharkiv fell to Russian forces on Tuesday.",
+        "Kharkiv was captured by the 3rd Army.",
+    ]) assert.ok(statesCapture(sentence), sentence);
+});
+
+test("land seized long ago, occupied territories, an aim or a statistic state no capture", async () => {
+    const { statesCapture } = await import("./narratedCapture.js");
+    // The first four are from real saves (2026-10-29), none of which moved land.
+    for (const sentence of [
+        "The FARC demanded compensation for 8 million hectares of rural land seized or abandoned during the conflict.",
+        "Supplies reached front-line positions across the occupied territories.",
+        "Renewed junta offensives aimed at recapturing territory held by the KNLA.",
+        "The DAANES consolidated de facto control over their respective territories.",
+        "Support fell to 20 percent.",
+        "Japanese officers attempted to seize the Prime Minister's residence.",
+        "The army secured funding from Parliament.",
+        "Troops captured the outskirts of Kharkiv.",
+    ]) assert.equal(statesCapture(sentence), null, sentence);
+});
+
+test("a whole polity annexed, and by whom; a part of one, or a plan, is not", async () => {
+    const { statedAnnexations } = await import("./narratedCapture.js");
+    const powers = ["Indonesia", "Timor-Leste", "Russia", "Ukraine", "Germany", "Austria", "Syria"];
+    const pair = (text) => statedAnnexations(text, powers).map(({ annexer, annexed }) => [annexer, annexed]);
+    assert.deepEqual(pair("Indonesia formally annexes Timor-Leste after the treaty."), [["Indonesia", "Timor-Leste"]]);
+    assert.deepEqual(pair("Timor-Leste was annexed by Indonesia."), [["Indonesia", "Timor-Leste"]]);
+    assert.deepEqual(pair("Austria is incorporated into Germany."), [["Germany", "Austria"]]);
+    assert.deepEqual(pair("Germany completes the annexation of Austria."), [["Germany", "Austria"]]);
+    assert.deepEqual(pair("Russia annexed the eastern provinces of Ukraine."), []);
+    assert.deepEqual(pair("Indonesia plans to annex Timor-Leste."), []);
+    assert.deepEqual(pair("Protesters demand the annexation of Timor-Leste by Indonesia."), []);
+    assert.deepEqual(pair("Syrian officials rejected incorporation into any central authority."), []);
+});
+
+test("turns check each event on its own, and a skip writes the annexation it tells of", async () => {
+    const { readFileSync } = await import("node:fs");
+    const gameplay = readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
+    const validate = gameplay.slice(gameplay.indexOf("export const validateGeneratedWorldChanges"));
+    assert.match(validate, /const captured = ownTerritory === 0 \? statesCapture\(description\) : null;/);
+    assert.match(validate, /statedAnnexations\(description, powers\)\[0\]/);
+    const completing = validate.indexOf("await completeNarratedAnnexations(containers");
+    assert.ok(completing > 0 && completing < validate.indexOf("await resolveRegionTransfers(containers, world"), "written before transfers are resolved, so it is expanded");
+    assert.match(gameplay, /regionId: `country: \$\{from\}`, fromCode: from, toCode: to, wholeCountry: true, basis: "annexation"/);
+});

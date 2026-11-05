@@ -11,13 +11,27 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-import { cleanJsxText, extractFromSource, extractTree } from "../../scripts/i18n/extractStrings.mjs";
+import { cleanJsxText, extractFromSource, extractTree, interfaceFiles } from "../../scripts/i18n/extractStrings.mjs";
 
 const extract = (code) => {
   const result = extractFromSource(code, "src/Game/GameUI/probe.jsx", {});
   assert.equal(result.error, undefined);
   return { exact: [...result.exact.keys()], patterns: [...result.patterns.keys()] };
+};
+
+// What the game's own source files yield for the catalog (every string,
+// patterns too), read the way extractTree reads them.
+const catalogOf = (files) => {
+  const found = new Set();
+  for (const rel of files) {
+    const jsx = rel.endsWith(".jsx");
+    const result = extractFromSource(fs.readFileSync(rel, "utf8"), rel, { jsx, catchAll: jsx, messages: jsx });
+    assert.equal(result.error, undefined);
+    for (const text of [...result.exact.keys(), ...result.patterns.keys()]) found.add(text);
+  }
+  return found;
 };
 
 test("JSX text is read with React's whitespace rules", () => {
@@ -132,6 +146,50 @@ test("technical strings are not interface text", () => {
   assert.deepEqual(patterns, []);
 });
 
+test("a difficulty level's profile values and effect bullets are read", () => {
+  const result = extractFromSource(
+    "const LEVEL = { profile: { playerLeniency: \"Very high\", npcCompetence: \"Relaxed\", consequencePressure: \"Low\", diplomaticFirmness: \"Soft\" },\n" +
+    "  effects: [\"NPCs react promptly to threats.\", \"Mistakes have durable consequences.\"], directives: { simulation: \"Resolve uncertainty generously.\" } };\n" +
+    "const other = { effects: [\"boost-economy\"] };",
+    "src/runtime/difficulty.js",
+    { jsx: false, catchAll: false },
+  );
+  assert.deepEqual([...result.exact.keys()].sort(), [
+    "Low", "Mistakes have durable consequences.", "NPCs react promptly to threats.", "Relaxed", "Soft", "Very high",
+  ], "the model's directives and an id list are not interface text");
+  const real = catalogOf(["src/runtime/difficulty.js"]);
+  for (const text of ["Interest-based", "Low–medium", "Ambiguous but reasonable player intent is interpreted generously."]) {
+    assert.ok(real.has(text), `${text} is in the catalog`);
+  }
+});
+
+test("the sentences the game puts in a composer are in the catalog whole", () => {
+  // uiString looks these up by their own key, so the key must be the whole
+  // sentence exactly as the code passes it.
+  const real = catalogOf(["src/Game/GameUI/actions.jsx", "src/Game/GameUI/advisor.jsx", "src/Game/GameUI/projects.jsx", "src/Game/GameUI/chat.jsx"]);
+  for (const text of [
+    "Let's brainstorm a plan of concrete actions for this round. Ask me what I'm trying to accomplish, then propose specific ones we can queue.",
+    "Continue putting my projects and operations on the board — the last reply was cut off. Pick up from where you stopped and skip anything already on the board. Send no more than ten, one sentence each. Only include efforts that genuinely appear in our history — if everything real is already on the board, just tell me that and add nothing.",
+    "Put my current projects and operations on the board — the sustained efforts, mine and any belonging to other powers that we know about. Start with the TEN most significant and stop there; I will ask for the next batch after. Keep each summary to one sentence, and give each only the milestones still ahead of it plus the single most recent one already achieved. Only include efforts that genuinely appear in our history — never invent one to round out the list — and say plainly if you are unsure about any of them.",
+    "We accept: {{summary}}.",
+    "We have reconsidered. We accept: {{summary}}.",
+    "We refuse this demand.",
+    "We have reconsidered. {{text}}",
+    "We accept your alternative: {{alternative}}.",
+    "No. The demand stands: {{summary}}.",
+    "Brief me in full on the operation \"{{name}}\". Where does it actually stand right now, what has moved since the last round, what does the next milestone need from me, and what is most likely to go wrong? Be specific and tell me if the board is out of date.",
+    "Brief me in full on the project \"{{name}}\". Where does it actually stand right now, what has moved since the last round, what does the next milestone need from me, and what is most likely to go wrong? Be specific and tell me if the board is out of date.",
+    "Brief me on {{owner}}'s operation \"{{name}}\". What do we actually know, how good is the sourcing, what has changed since we last looked, and what does it mean for us if it succeeds? Be honest about how much of this is inference rather than intelligence.",
+    "Brief me on the foreign operation \"{{name}}\". What do we actually know, how good is the sourcing, what has changed since we last looked, and what does it mean for us if it succeeds? Be honest about how much of this is inference rather than intelligence.",
+    "Brief me on {{owner}}'s programme \"{{name}}\". What do we actually know, how good is the sourcing, what has changed since we last looked, and what does it mean for us if it succeeds? Be honest about how much of this is inference rather than intelligence.",
+    "Brief me on the foreign programme \"{{name}}\". What do we actually know, how good is the sourcing, what has changed since we last looked, and what does it mean for us if it succeeds? Be honest about how much of this is inference rather than intelligence.",
+    "What can we actually do about {{owner}}'s \"{{name}}\"? Lay out the realistic options — diplomatic, economic, covert, or simply outpacing them — with what each would cost us and how it could go wrong. If we settle on one, open it as our own effort.",
+    "What can we actually do about this \"{{name}}\"? Lay out the realistic options — diplomatic, economic, covert, or simply outpacing them — with what each would cost us and how it could go wrong. If we settle on one, open it as our own effort.",
+  ]) {
+    assert.ok(real.has(text), `${text.slice(0, 60)}… is in the catalog`);
+  }
+});
+
 test("tab lists and status messages are read", () => {
   const { exact, patterns } = extract(
     "const TABS = [[\"map\", \"World map\"], [\"stats\", \"Statistics\"]];\n" +
@@ -139,4 +197,30 @@ test("tab lists and status messages are read", () => {
   );
   assert.deepEqual(exact.sort(), ["Statistics", "World map"]);
   assert.deepEqual(patterns, ["Saved {{file}}."]);
+});
+
+test("the Android saved notice's words reach the catalog", () => {
+  // Plain DOM, not JSX: its text was set by textContent, which the extractor
+  // cannot see, so every pack left it in English.
+  const root = fileURLToPath(new URL("../../", import.meta.url));
+  const rel = "src/runtime/native/savedNotice.js";
+  const listed = interfaceFiles(root).map((file) => path.relative(root, file).split(path.sep).join("/"));
+  assert.ok(listed.includes(rel), "the notice's module is an interface file");
+  const { exact } = extractFromSource(fs.readFileSync(path.join(root, rel), "utf8"), rel, { jsx: false, catchAll: false });
+  for (const text of ["Saved to your Downloads folder", "Share", "Close"]) assert.ok(exact.has(text), text);
+});
+
+test("the bare \"Features\" is the editors' gameplay tab, and nothing on the map", () => {
+  // A pack has one translation for each English string. The Workshop's list of
+  // cities, bases and ports was titled "Features" as well, so a language could
+  // label only one of the two rightly: most put the map's word on the gameplay
+  // tab ("地物", "Objecten"), French and German the gameplay word on the list.
+  const root = fileURLToPath(new URL("../../", import.meta.url));
+  const mapSide = interfaceFiles(root)
+    .map((file) => path.relative(root, file).split(path.sep).join("/"))
+    .filter((rel) => /^src\/(?:Editor|Game\/Map|Game\/Selection)\//.test(rel))
+    // Only a file that could hold the word by itself is worth parsing.
+    .filter((rel) => /["'`>]\s*Features\s*["'`<]/.test(fs.readFileSync(path.join(root, rel), "utf8")));
+  assert.deepEqual(mapSide.filter((rel) => catalogOf([rel]).has("Features")), []);
+  assert.ok(catalogOf(["src/Editor/FeatureManager.jsx"]).has("Map features"), "the Workshop's list has its own title");
 });

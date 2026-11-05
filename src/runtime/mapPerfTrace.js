@@ -1,6 +1,30 @@
 const TRACE_LIMIT = 500;
 const FREEZE_TRACE_COUNT = 80;
-const trace = [];
+// A ring: once full, each entry overwrites the oldest one in place instead of
+// shifting the whole array down.
+const trace = new Array(TRACE_LIMIT);
+let traceNext = 0;
+let traceCount = 0;
+
+// The map's frame sampler, per-pan console summary and per-event trace
+// listeners (World.jsx) cost something on every frame, so they run only when
+// the player or a developer asks for them, with the same switch as assets.js's
+// performance console output:
+//   window.__OH_PERF_VERBOSE__ = true
+// The listeners are attached when a map mounts, so set it before opening a game.
+export const isMapPerfVerbose = () =>
+  typeof globalThis !== "undefined" && globalThis.__OH_PERF_VERBOSE__ === true;
+
+// The recorded entries, oldest first.
+export const getMapTrace = (last = TRACE_LIMIT) => {
+  const count = Math.max(0, Math.min(traceCount, Math.floor(Number(last) || 0)));
+  const out = new Array(count);
+  const start = traceNext - count + TRACE_LIMIT;
+  for (let index = 0; index < count; index += 1) {
+    out[index] = trace[(start + index) % TRACE_LIMIT];
+  }
+  return out;
+};
 
 const nowMs = () => (
   typeof performance !== "undefined" && typeof performance.now === "function"
@@ -36,9 +60,19 @@ const sanitize = (detail) => {
   return out;
 };
 
+// window.__OH_MAP_TRACE__ reads as the ordered entries, as it did when the
+// trace was a plain array.
 const expose = () => {
   if (typeof globalThis === "undefined") return;
-  globalThis.__OH_MAP_TRACE__ = trace;
+  try {
+    Object.defineProperty(globalThis, "__OH_MAP_TRACE__", {
+      configurable: true,
+      enumerable: false,
+      get: () => getMapTrace(),
+    });
+  } catch {
+    // A frozen or locked-down global keeps working without the console handle.
+  }
 };
 
 export const recordMapTrace = (type, detail = null) => {
@@ -47,9 +81,9 @@ export const recordMapTrace = (type, detail = null) => {
     type: String(type || "unknown"),
     detail: sanitize(detail),
   };
-  trace.push(entry);
-  if (trace.length > TRACE_LIMIT) trace.splice(0, trace.length - TRACE_LIMIT);
-  expose();
+  trace[traceNext] = entry;
+  traceNext = (traceNext + 1) % TRACE_LIMIT;
+  if (traceCount < TRACE_LIMIT) traceCount += 1;
   return entry;
 };
 
@@ -79,7 +113,7 @@ export const recordMapFreeze = ({ deltaMs, map = null, counters = null } = {}) =
     rotating: Boolean(map?.isRotating?.()),
     tilesLoaded: Boolean(map?.areTilesLoaded?.()),
     counters: counters && typeof counters === "object" ? { ...counters } : {},
-    recent: trace.slice(-FREEZE_TRACE_COUNT),
+    recent: getMapTrace(FREEZE_TRACE_COUNT),
   };
   if (typeof globalThis !== "undefined") {
     globalThis.__OH_LAST_MAP_FREEZE__ = freeze;
@@ -102,8 +136,9 @@ export const recordMapFreeze = ({ deltaMs, map = null, counters = null } = {}) =
 };
 
 export const clearMapTrace = () => {
-  trace.length = 0;
-  expose();
+  trace.fill(undefined);
+  traceNext = 0;
+  traceCount = 0;
   if (typeof globalThis !== "undefined") {
     globalThis.__OH_LAST_MAP_FREEZE__ = null;
     globalThis.__OH_MAP_FREEZES__ = [];

@@ -2,15 +2,15 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 // Exercise the exact worker-safe label engine used by Political Cartography v2.
-// Runtime countryLabels.js still owns stock-map loading/caching, but geometry
-// regressions belong against production vNext layout rather than its legacy copy.
 import {
   POLITY_LABEL_TIERS,
   buildPolityLabelCollections,
   curveMinZoomForPolityLabelTier,
   selectPolityPointFallbacks,
+  summarizePolityLabelDiagnostics,
 } from "../src/Game/Map/vnext/polityLabels.js";
-import { derivePolitySurfaces } from "../src/Game/Map/vnext/politySurfaces.js";
+// The per-owner geometry the boundary worker hands the label engine.
+import { aggregatePolityGeometry } from "../src/Game/Map/vnext/polityGeometry.js";
 
 const surface = (owner, coordinates) => ({
   type: "Feature",
@@ -40,58 +40,6 @@ const gentleContinentalArc = (owner, offset = 0) => surface(owner, [[[
   [offset + 0, 10],
   [offset + 0, 0],
 ]]]);
-
-const summarizePolityLabelDiagnostics = (collections) => {
-  const features = Array.isArray(collections?.labelData?.features)
-    ? collections.labelData.features
-    : [
-        ...(collections?.lineLabelData?.features ?? []),
-        ...(collections?.pointLabelData?.features ?? []),
-      ];
-  const counts = new Map();
-  for (const feature of features) {
-    const owner = String(feature?.properties?.owner ?? "");
-    counts.set(owner, (counts.get(owner) ?? 0) + 1);
-  }
-  return features.map((feature) => {
-    const props = feature?.properties ?? {};
-    return {
-      owner: props.owner,
-      name: props.name,
-      labelCount: counts.get(String(props.owner ?? "")) ?? 0,
-      mode: props.mode,
-      tier: props.tier,
-      minZoom: props.minZoom,
-      curveMinZoom: props.curveMinZoom,
-      curveBand: props.curveBand,
-      baselineKind: props.baselineKind,
-      placementBendRatio: Number(Number(props.placementBendRatio ?? 0).toFixed(4)),
-      safeWarp: props.safeWarp,
-      forceOverlapZoom: props.forceOverlapZoom,
-      visibilityScale: props.visibilityScale,
-      fontPxAtZoom4: props.fontPxAtZoom4,
-      letterSpacing: props.letterSpacing,
-      targetOccupancy: props.targetOccupancy,
-      estimatedOccupancy: props.estimatedOccupancy,
-      lineFontPxAtZoom4: props.lineFontPxAtZoom4,
-      lineLetterSpacing: props.lineLetterSpacing,
-      lineEstimatedOccupancy: props.lineEstimatedOccupancy,
-      shapeWidth: Number(Number(props.shapeWidth ?? 0).toFixed(1)),
-      shapeHeight: Number(Number(props.shapeHeight ?? 0).toFixed(1)),
-      axisSpan: Number(Number(props.axisSpan ?? 0).toFixed(1)),
-      crossSpan: Number(Number(props.crossSpan ?? 0).toFixed(1)),
-      pathLength: Number(Number(props.pathLength ?? 0).toFixed(1)),
-      pathWidth: Number(Number(props.pathWidth ?? 0).toFixed(1)),
-      pathTurnDegrees: props.pathTurnDegrees,
-      warpPointCount: props.warpPointCount,
-      warpMaxSegmentTurnDegrees: props.warpMaxSegmentTurnDegrees,
-      warpDetourRatio: props.warpDetourRatio,
-      rotation: Number(Number(props.rotation ?? 0).toFixed(2)),
-      anchorLng: Number(Number(props.anchorLng ?? 0).toFixed(3)),
-      anchorLat: Number(Number(props.anchorLat ?? 0).toFixed(3)),
-    };
-  });
-};
 
 const byOwner = (result, owner) => result.labelData.features
   .find((feature) => feature.properties.owner === owner);
@@ -237,9 +185,9 @@ test("live polity labels expand when ownership transfers add territory", () => {
   };
   const labelFor = (surfaces, owner) => byOwner(buildPolityLabelCollections(surfaces), owner);
 
-  const before = labelFor(derivePolitySurfaces(regions).data, "Ukraine");
+  const before = labelFor(aggregatePolityGeometry(regions), "Ukraine");
   const after = labelFor(
-    derivePolitySurfaces(regions, { "border-zone": "Ukraine" }).data,
+    aggregatePolityGeometry(regions, { "border-zone": "Ukraine" }),
     "Ukraine",
   );
 
@@ -567,24 +515,82 @@ test("R8 never removes point-persistent labels when another polity warps", () =>
   assert.equal(selected.features.some((feature) => feature.properties.owner === "Finland"), true);
 });
 
-test("R8 keeps DENMARK on its core and adds GREENLAND as a territory label", () => {
-  const result = buildPolityLabelCollections({
-    type: "FeatureCollection",
-    features: [surface("Kingdom of Denmark", [
-      [[[-52, 60], [-18, 60], [-18, 82], [-52, 82], [-52, 60]]],
-      [[[8, 54], [13, 54], [13, 58], [8, 58], [8, 54]]],
-    ])],
-  }, { nameResolver: () => "DENMARK" });
+const region = (id, owner, gid0, west, south, east, north) => ({
+  type: "Feature",
+  properties: { id, owner, gid0 },
+  geometry: {
+    type: "Polygon",
+    coordinates: [[[west, south], [east, south], [east, north], [west, north], [west, south]]],
+  },
+});
+const JUTLAND_WEST = region("dk-w", "Kingdom of Denmark", "DNK", 8, 54, 10.5, 58);
+const JUTLAND_EAST = region("dk-e", "Kingdom of Denmark", "DNK", 10.5, 54, 13, 58);
+const GREENLAND = region("gl", "Kingdom of Denmark", "GRL", -52, 60, -18, 82);
+const ownerParts = (result, owner) => result.pointLabelData.features.filter((feature) => (
+  feature.properties.labelKind === "territory" && feature.properties.sourceOwner === owner
+));
 
-  assert.equal(result.labelData.features.length, 1, "territory labels must not create a second polity record");
+test("R8 keeps the polity's label on its home ground when a dependency is larger", () => {
+  const result = buildPolityLabelCollections(
+    aggregatePolityGeometry({ type: "FeatureCollection", features: [JUTLAND_WEST, JUTLAND_EAST, GREENLAND] }),
+    { nameResolver: () => "DENMARK" },
+  );
+
+  assert.equal(result.labelData.features.length, 1, "a dependency must not create a second polity record");
   const denmark = byOwner(result, "Kingdom of Denmark");
   assert.ok(denmark.geometry.coordinates[0] > 0, `DENMARK should anchor on Europe, got ${denmark.geometry.coordinates[0]}`);
 
-  const greenland = result.pointLabelData.features.find((feature) => feature.properties.labelKind === "territory");
-  assert.ok(greenland, "GREENLAND supplemental territory label should exist");
-  assert.equal(greenland.properties.name, "GREENLAND");
-  assert.ok(greenland.geometry.coordinates[0] < -10);
-  assert.equal(summarizePolityLabelDiagnostics(result).length, 1, "territory labels stay outside polity diagnostics");
+  const parts = ownerParts(result, "Kingdom of Denmark");
+  assert.equal(parts.length, 1, "Greenland carries the owner's name like any landmass of consequence");
+  assert.equal(parts[0].properties.name, "DENMARK");
+  assert.equal(parts[0].properties.labelSiteRole, "sovereign-secondary");
+  assert.ok(parts[0].geometry.coordinates[0] < -10);
+  assert.equal(summarizePolityLabelDiagnostics(result).length, 1, "part labels stay outside polity diagnostics");
+});
+
+test("R8 labels every landmass of a union whose name contains another polity's", () => {
+  const regions = [
+    JUTLAND_WEST,
+    JUTLAND_EAST,
+    GREENLAND,
+    region("no", "Denmark-Norway", "NOR", 5, 59, 31, 71),
+    region("is", "Denmark-Norway", "ISL", -17, 63.5, -12, 66.5),
+  ].map((feature) => ({ ...feature, properties: { ...feature.properties, owner: "Denmark-Norway" } }));
+  const result = buildPolityLabelCollections(
+    aggregatePolityGeometry({ type: "FeatureCollection", features: regions }),
+    { nameResolver: () => "DENMARK-NORWAY" },
+  );
+
+  const core = byOwner(result, "Denmark-Norway");
+  assert.ok(core.geometry.coordinates[0] > 7 && core.geometry.coordinates[1] < 58.5,
+    `the core label sits on the home ground, got ${core.geometry.coordinates}`);
+  const parts = ownerParts(result, "Denmark-Norway");
+  const inside = (feature, west, south, east, north) => {
+    const [lng, lat] = feature.geometry.coordinates;
+    return lng >= west && lng <= east && lat >= south && lat <= north;
+  };
+  assert.ok(parts.some((feature) => inside(feature, 5, 59, 31, 71)), "Norway carries a label");
+  assert.ok(parts.some((feature) => inside(feature, -17, 63.5, -12, 66.5)), "Iceland carries a label");
+  assert.ok(parts.some((feature) => inside(feature, -52, 60, -18, 82)), "Greenland carries a label");
+  const names = new Set(result.pointLabelData.features.map((feature) => feature.properties.name));
+  assert.deepEqual([...names], ["DENMARK-NORWAY"], "no label is named after a hard-coded territory");
+});
+
+test("R8 special-cases no polity name: without stock countries the largest landmass is the core", () => {
+  const geometry = (owner) => surface(owner, [
+    [[[-52, 60], [-18, 60], [-18, 82], [-52, 82], [-52, 60]]],
+    [[[8, 54], [13, 54], [13, 58], [8, 58], [8, 54]]],
+  ]);
+  const denmark = buildPolityLabelCollections({ type: "FeatureCollection", features: [geometry("Kingdom of Denmark")] },
+    { nameResolver: () => "NORTHLAND" });
+  const other = buildPolityLabelCollections({ type: "FeatureCollection", features: [geometry("Northland")] },
+    { nameResolver: () => "NORTHLAND" });
+
+  assert.deepEqual(
+    denmark.pointLabelData.features.map((feature) => feature.geometry.coordinates),
+    other.pointLabelData.features.map((feature) => feature.geometry.coordinates),
+  );
+  assert.ok(byOwner(denmark, "Kingdom of Denmark").geometry.coordinates[0] < -10);
 });
 
 

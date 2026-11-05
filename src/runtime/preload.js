@@ -3,6 +3,7 @@ import {
   PMTILES_ARCHIVES,
   TERRAIN_TILE_TEMPLATE,
   buildTileUrl,
+  deleteRuntimeJsonByPrefix,
   esriTileTemplate,
   loadCountryNames,
   readJson,
@@ -11,7 +12,6 @@ import {
   warmPmtilesArchive,
   warmRemoteResources,
 } from "./assets.js";
-import { warmCountryLabelCollections } from "./countryLabels.js";
 import { warmsWholeMapArchives } from "./deviceProfile.js";
 import { logDebugEvent } from "./debugLog.js";
 import { isBrowserOnline } from "./networkStatus.js";
@@ -99,6 +99,12 @@ const buildInitialViewportTextureUrls = (
 // carries no abort signal — the time budget is a ceiling on the wait, and must
 // not cancel work nothing is waiting on. Only warms qualify: a background task
 // may make the map faster later, but the map has to render correctly without it.
+//
+// (They no longer run as the page starts. The page starts on the main menu
+// with no game loaded, and App.jsx runs these when the first game is opened,
+// in the background, beside the map that is being drawn. No screen waits for
+// any of them now: a "gating" task is one that is counted in the progress and
+// is cancelled at the time budget, and every one of them is a warm.)
 const STARTUP_TASKS = [
   {
     id: "state",
@@ -175,14 +181,6 @@ const STARTUP_TASKS = [
     run: () => loadCountryNames(),
   },
   {
-    id: "country-labels",
-    label: "Building country labels",
-    weight: 14,
-    // Same z0-only read as country-index — see the note there.
-    deps: [],
-    run: () => warmCountryLabelCollections(),
-  },
-  {
     id: "cities",
     label: "Caching city layer",
     weight: 10,
@@ -242,25 +240,23 @@ const buildStepState = (activeIds, completedIds) =>
       : "pending",
   }));
 
-export const createInitialStartupState = () => ({
-  activeId: null,
-  completed: 0,
-  done: false,
-  elapsedMs: 0,
-  errors: [],
+// What the startup screen shows while the page starts (App.jsx). The page
+// starts on the main menu, which needs the list of games and scenarios and
+// nothing of a game, so that is its one step. The tasks above are a GAME's
+// warm-ups: they run when the first game is opened (runtime/gameEntry.js),
+// with no screen of their own.
+export const createMenuStartupState = () => ({
   loadedBytes: 0,
   progress: 0,
-  stage: "Starting preload",
-  steps: buildStepState(new Set(), new Set()),
+  stage: "Syncing games and scenarios",
+  steps: [{ id: "library", label: "Syncing games and scenarios", status: "active" }],
   timeBudgetMs: STARTUP_TIME_BUDGET_MS,
   timedOut: false,
-  total: GATING_TASKS.length,
 });
 
-// Held at module scope so a background warm that outlives runStartupPreload stays
-// reachable — and its rejection stays handled — after the caller has moved on.
-let backgroundWarms = [];
-
+// Runs the warm-ups for the game being opened. Called once a page, when the
+// first game is entered, and not awaited by anything on screen: `onProgress`
+// is there for a caller that wants to show it.
 export const runStartupPreload = async ({
   onProgress,
   timeBudgetMs = STARTUP_TIME_BUDGET_MS,
@@ -298,6 +294,13 @@ export const runStartupPreload = async ({
   };
 
   publish("Preparing the world");
+
+  // The stock modern-country label atlas ("country-labels-v3-…") was built
+  // here on every launch and cached per language and owner set, though no
+  // served world ever draws it (every world is a custom one). The task is gone;
+  // this clears what earlier versions left in Cache Storage. Off the startup
+  // path, and a no-op once they are gone.
+  void deleteRuntimeJsonByPrefix("country-labels-").catch(() => {});
 
   // One controller for the whole gating set rather than one per task: with tasks
   // running concurrently there is no "remaining budget for this step" left to
@@ -353,13 +356,13 @@ export const runStartupPreload = async ({
     return promise;
   };
 
-  // Launched alongside the gating set, then deliberately not awaited.
-  backgroundWarms = STARTUP_TASKS.filter((task) => task.background).map((task) =>
+  // Launched alongside the gating set, then deliberately not awaited; a
+  // failure is logged here, after the caller has moved on.
+  for (const task of STARTUP_TASKS.filter((entry) => entry.background)) {
     runTask(task).catch((error) => {
       console.warn(`Background preload task "${task.id}" failed:`, error);
-      return null;
-    }),
-  );
+    });
+  }
 
   await Promise.all(
     GATING_TASKS.map((task) =>
@@ -411,8 +414,3 @@ export const runStartupPreload = async ({
     timedOut,
   };
 };
-
-// The archives still warming after the startup screen dismissed. Awaiting this is
-// optional — the map renders from range reads meanwhile — but a caller that
-// genuinely needs a whole archive resident (a bulk export, say) can.
-export const whenBackgroundWarmsSettle = () => Promise.allSettled(backgroundWarms);

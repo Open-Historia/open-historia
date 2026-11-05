@@ -4,7 +4,10 @@ import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { APP_HEIGHT, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, useTouchPrimary } from "../../runtime/mobileUi.js";
 import { useBackToClose } from "../../runtime/backToClose.js";
 import { useWorldState } from "../Map/useWorldState.js";
-import { focusFeature } from "../Selection/Features.jsx";
+import { dismissFeaturePopup, focusFeature } from "../Selection/Features.jsx";
+import { focusUnit } from "../Selection/Units.jsx";
+import { dismissRegionPopup } from "../Selection/Regions.jsx";
+import { getUnits, subscribeUnits } from "../Map/unitsController.js";
 import {
   buildLocalPlaceEntries,
   dedupeGeocodedPlaces,
@@ -16,7 +19,7 @@ import {
   searchLocalPlaces,
   subscribeWorldPlaceIndex,
 } from "../../runtime/placeSearch.js";
-import { BESIDE_DOCK_LEFT, DOCK_BOTTOM_REM, DOCK_BUTTON_BOTTOM, DOCK_HEIGHT_REM, DOCK_LEFT_REM } from "./hudDock.js";
+import { DOCK_BOTTOM_REM, DOCK_BUTTON_BOTTOM, DOCK_HEIGHT_REM, DOCK_LEFT_REM, useDockGeometry } from "./hudDock.js";
 
 // A small magnifier beside the launcher dock, not a fifth launcher: smaller
 // than the dock's buttons and sitting on the same baseline as their bottoms.
@@ -30,6 +33,7 @@ const PHONE_BAR_SIZE = "3rem";
 // Photon, not Nominatim: the OSM foundation's Nominatim policy forbids client-side autocomplete outright, and it shows, since it answers "berl" with an office block in Brussels. Photon is the same data, indexed for search as you type.
 const SEARCH_ENDPOINT = "https://photon.komoot.io/api/";
 const SEARCH_RESULT_CACHE = new Map();
+const SEARCH_RESULT_CACHE_MOST = 100;
 const SEARCH_DEBOUNCE_MS = 300;
 const REMOTE_FETCH_LIMIT = 10;
 
@@ -54,6 +58,7 @@ const fetchPlaces = async (query, limit, { signal } = {}) => {
   const data = await response.json();
   const results = rankGeocodedPlaces(dedupeGeocodedPlaces(data?.features)).slice(0, limit);
   SEARCH_RESULT_CACHE.set(cacheKey, results);
+  if (SEARCH_RESULT_CACHE.size > SEARCH_RESULT_CACHE_MOST) SEARCH_RESULT_CACHE.delete(SEARCH_RESULT_CACHE.keys().next().value);
   return results;
 };
 
@@ -124,11 +129,12 @@ const KIND_ICON = {
 };
 
 // The world's own places outrank the geocoder's and are worth a closer camera.
-const FAMILY_ICON = { settlement: ICON_CITY, polity: ICON_GLOBE };
+const FAMILY_ICON = { settlement: ICON_CITY, polity: ICON_GLOBE, group: ICON_REGION };
 const LOCAL_RESULT_LIMIT = 4;
 const SUGGESTION_LIMIT = 7;
 const LOCAL_ZOOM = 7;
 const POLITY_ZOOM = 4;
+const GROUP_ZOOM = 5;
 const NO_LOCAL_PLACES = [];
 const NO_REMOTE_RESULTS = { query: "", results: [] };
 
@@ -154,21 +160,27 @@ const localEntry = (place) => ({
   region: place.detail,
   lng: place.lng,
   lat: place.lat,
-  zoom: place.source === "polity" ? POLITY_ZOOM : LOCAL_ZOOM,
+  zoom: place.source === "polity" ? POLITY_ZOOM : place.source === "group" ? GROUP_ZOOM : LOCAL_ZOOM,
   payload: place.payload,
   lookup: place.lookup,
 });
 
-const Search = memo(({ mapRef }) => {
+// `besideWarRoom`: the war room's button is standing beside the dock (main.jsx),
+// so Search begins beyond it. (Not on a phone, where that button is above the dock.)
+const Search = memo(({ mapRef, besideWarRoom = false }) => {
   const isMobile = useIsMobile();
+  // As wide as the launchers the game shows (Rostra can be switched off).
+  const dock = useDockGeometry();
   const isTouch = useTouchPrimary();
   const [expanded, setExpanded] = useState(false);
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState(null);
   const [remote, setRemote] = useState(NO_REMOTE_RESULTS);
   const [selectedIndex, setSelectedIndex] = useState(-1);
-  const { markers, cityRenames, polityOverrides } = useWorldState();
+  const { markers, cityRenames, polityOverrides, groups, fictionalWorld } = useWorldState();
   const placeIndex = useSyncExternalStore(subscribeWorldPlaceIndex, getWorldPlaceIndex, getWorldPlaceIndex);
+  // The units as the map shows them, a turn's unrevealed ones hidden (unitsController.js).
+  const units = useSyncExternalStore(subscribeUnits, getUnits, getUnits);
   const inputRef = useRef(null);
   const debounceRef = useRef(null);
   const searchAbortRef = useRef(null);
@@ -180,7 +192,9 @@ const Search = memo(({ mapRef }) => {
   }, [expanded]);
 
   useEffect(() => {
-    if (!query.trim() || query.length < 2) {
+    // A fictional world has no real places: asking the geocoder for "Valyria"
+    // only buries the world's own places under towns in Iowa and Ontario.
+    if (fictionalWorld || !query.trim() || query.length < 2) {
       clearTimeout(debounceRef.current);
       searchAbortRef.current?.abort();
       setRemote(NO_REMOTE_RESULTS);
@@ -210,7 +224,7 @@ const Search = memo(({ mapRef }) => {
       clearTimeout(debounceRef.current);
       searchAbortRef.current?.abort();
     };
-  }, [query]);
+  }, [query, fictionalWorld]);
 
   // All in memory already, so no network and no debounce, and only while the bar is open.
   const localPlaces = useMemo(
@@ -221,9 +235,12 @@ const Search = memo(({ mapRef }) => {
         markers,
         cityRenames,
         polityOverrides,
+        groups: placeIndex.groups,
+        groupRecords: groups,
+        units,
       })
       : NO_LOCAL_PLACES),
-    [expanded, placeIndex, markers, cityRenames, polityOverrides],
+    [expanded, placeIndex, markers, cityRenames, polityOverrides, groups, units],
   );
 
   const suggestions = useMemo(() => {
@@ -282,8 +299,15 @@ const Search = memo(({ mapRef }) => {
       });
     }
 
-    // The popup tracks the camera, so it can open before the flight lands.
-    if (entry.payload) focusFeature(entry.payload);
+    // The popup tracks the camera, so it can open before the flight lands. A
+    // unit's card takes over from any other, as a click on the unit would.
+    if (entry.payload?.source === "unit") {
+      dismissRegionPopup();
+      dismissFeaturePopup();
+      focusUnit(entry.payload);
+    } else if (entry.payload) {
+      focusFeature(entry.payload);
+    }
 
     close();
   };
@@ -341,9 +365,9 @@ const Search = memo(({ mapRef }) => {
 
   const hasSuggestions = expanded && suggestions.length > 0;
   const phoneBar = expanded && isMobile;
-  const size = phoneBar ? PHONE_BAR_SIZE : isTouch ? TOUCH_SIZE : COMPACT_SIZE;
+  const size = phoneBar ? PHONE_BAR_SIZE : isMobile ? "3.2rem" : isTouch ? TOUCH_SIZE : COMPACT_SIZE;
   // Up from the home indicator and in from a notch, with the dock (0 elsewhere).
-  const bottom = `calc(${phoneBar ? `${DOCK_BOTTOM_REM + DOCK_HEIGHT_REM + 0.5}rem` : DOCK_BUTTON_BOTTOM} + ${SAFE_BOTTOM})`;
+  const bottom = `calc(${phoneBar ? `${DOCK_BOTTOM_REM + DOCK_HEIGHT_REM + 0.5}rem` : isMobile ? `${DOCK_BOTTOM_REM + (DOCK_HEIGHT_REM - 3.2) / 2}rem` : DOCK_BUTTON_BOTTOM} + ${SAFE_BOTTOM})`;
 
   return (
     <div
@@ -355,7 +379,7 @@ const Search = memo(({ mapRef }) => {
         bottom,
         // hudDock.js derives this from the dock's launcher count, so a new
         // launcher can't end up underneath it.
-        left: `calc(${phoneBar ? `${DOCK_LEFT_REM}rem` : BESIDE_DOCK_LEFT} + ${SAFE_LEFT})`,
+        left: `calc(${phoneBar ? `${DOCK_LEFT_REM}rem` : besideWarRoom && !isMobile ? dock.besideWarRoomLeft : dock.besideDockLeft} + ${SAFE_LEFT})`,
         height: size,
         width: expanded ? (isMobile ? `calc(100vw - 1rem - ${SAFE_LEFT} - ${SAFE_RIGHT})` : "17rem") : size,
         overflow: "visible",
@@ -364,7 +388,7 @@ const Search = memo(({ mapRef }) => {
         display: "flex",
         alignItems: "center",
         zIndex: 9999,
-        borderRadius: hasSuggestions ? "0 0 10px 10px" : "10px",
+        borderRadius: hasSuggestions ? "0 0 12px 12px" : "12px",
         backgroundColor: "var(--oh-hud-bg)",
         backdropFilter: "var(--oh-hud-blur)",
         border: "1px solid var(--oh-hud-border)",

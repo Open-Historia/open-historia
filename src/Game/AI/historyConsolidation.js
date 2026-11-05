@@ -91,6 +91,20 @@ export const planHistoryConsolidation = (bundle, { force = false, round: asRound
   };
 };
 
+// Whether a pass that comes back later (a batch job) still has something to
+// fold in the campaign as it stands now. A pass that folded the same events —
+// or, for a chats-only pass, the same closed chats — in the meantime
+// supersedes it: two summaries of the same weeks would double the campaign's
+// memory of them.
+export const deferredConsolidationStillDue = ({ throughEvent = null, closedChats = [] } = {}, currentBundle) => {
+  const world = normalizeWorldState(currentBundle?.world);
+  if (throughEvent) {
+    return getUnconsolidatedEvents(currentBundle?.events, world).some((event) => event.id === throughEvent.id);
+  }
+  const foldedChatIds = new Set(world.consolidatedHistory.flatMap((entry) => entry.chatIds));
+  return (Array.isArray(closedChats) ? closedChats : []).some((chat) => !foldedChatIds.has(chat?.id));
+};
+
 // The document as the consolidator should see it before a pass: the live one,
 // or — for a campaign consolidated before the document existed — its ledger
 // of pass summaries, which the first document pass rewrites into one text.
@@ -180,6 +194,8 @@ export const applyHistoryDocumentUpdate = (worldLike, {
 // the events the skip itself writes are never part of it. The field is
 // HISTORY_FIELD (gameplaySchemas.js, beside the contract that declares it).
 const historyJobFence = (edge) => `########## ${edge} OF A SEPARATE JOB: THE HISTORY DOCUMENT ##########`;
+// The job's two fences, for what reads the assembled prompt (promptDedupe.js collapseRepeatsInsideJob).
+export const HISTORY_JOB_FENCES = Object.freeze({ begin: historyJobFence("BEGINNING"), end: historyJobFence("END") });
 
 // `brief`: the system prompt the consolidator's own request would have carried.
 export const buildSkipHistoryJob = (brief) => {

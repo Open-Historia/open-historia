@@ -10,6 +10,8 @@ import assert from "node:assert/strict";
 import {
   attachAttemptOutcome,
   attachCallMetrics,
+  attachRequestOutcome,
+  attachSkipTiming,
   clearAiRecords,
   exportTelemetryCsv,
   finishAiRecord,
@@ -17,15 +19,63 @@ import {
   isRatingEnabled,
   isTelemetryEnabled,
   normalizeParsedSummary,
+  requestCount,
   setGenerationRating,
+  setTelemetryEnabled,
   startAiRecord,
 } from "./telemetry.js";
 
 test.beforeEach(async () => { await clearAiRecords(); });
 
+test("a time skip's whole time goes on its own request's generations, beside the request's", () => {
+  // "it reports that the jump forward was 16.6 seconds but the time skip took much longer than that" (the owner, 2026-10-15).
+  const before = startAiRecord({ taskKey: "jumpForward" });
+  before.startedAt -= 60000;
+  finishAiRecord(before, { ok: true });
+  const since = Date.now() - 1;
+  const jump = startAiRecord({ taskKey: "jumpForward" });
+  finishAiRecord(jump, { ok: true });
+  const review = startAiRecord({ taskKey: "turnReview" });
+  finishAiRecord(review, { ok: true });
+  const summary = { totalMs: 152300, phases: [{ phase: "fighting", label: "Fighting the war", ms: 80500, requests: 0 }, { phase: "writing", label: "Writing the events", ms: 16600, requests: 1 }] };
+  assert.equal(attachSkipTiming(since, summary), 1);
+  assert.equal(jump.skip.totalMs, 152300);
+  assert.deepEqual(jump.skip.phases[0], { label: "Fighting the war", ms: 80500, requests: 0 });
+  assert.equal(before.skip, undefined, "an earlier skip's request is not this one's");
+  assert.equal(review.skip, undefined, "only the skip's own request");
+  assert.equal(attachSkipTiming(since, summary), 0, "marked once");
+  assert.equal(attachSkipTiming(since, { totalMs: 0, phases: [] }), 0);
+});
+
 test("recording defaults to on and rating to off when nothing is stored", () => {
   assert.equal(isTelemetryEnabled(), true);
   assert.equal(isRatingEnabled(), false);
+});
+
+test("in the Android app recording is off until the player turns it on", (t) => {
+  const saved = { window: globalThis.window, localStorage: globalThis.localStorage };
+  t.after(() => {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete globalThis[key];
+      else globalThis[key] = value;
+    }
+  });
+  const local = new Map();
+  globalThis.localStorage = {
+    getItem: (key) => (local.has(key) ? local.get(key) : null),
+    setItem: (key, value) => { local.set(key, String(value)); },
+  };
+  globalThis.window = Object.assign(new EventTarget(), { Capacitor: {} });
+  assert.equal(isTelemetryEnabled(), false, "nothing stored: off on Android");
+  setTelemetryEnabled(true);
+  assert.equal(isTelemetryEnabled(), true, "the player's choice stands");
+  setTelemetryEnabled(false);
+  assert.equal(isTelemetryEnabled(), false);
+
+  // The same stored nothing everywhere else is on.
+  local.clear();
+  delete globalThis.window.Capacitor;
+  assert.equal(isTelemetryEnabled(), true);
 });
 
 test("a direct call's record is complete when it finishes", async () => {
@@ -89,7 +139,7 @@ test("ratings clamp to 1-10 and land on the record", async () => {
 test("the parsed summary counts beta's payload shape", () => {
   const summary = normalizeParsedSummary("jumpForward", {
     events: [
-      { impacts: { regionTransfers: [{}, {}], regionControlOps: [{}], polityChanges: [], unitOps: [{}] } },
+      { impacts: { regionTransfers: [{}, {}], regionControlOps: [{}], polityChanges: [], politicalActorOps: [{}], unitOps: [{}] } },
       { impacts: { regionTransfers: [{}] } },
       {},
     ],
@@ -105,6 +155,7 @@ test("the parsed summary counts beta's payload shape", () => {
     regionTransferCount: 3,
     controlOpCount: 1,
     polityChangeCount: 0,
+    politicalActorOpCount: 1,
     unitOpCount: 1,
     chatCount: 3,
     warUpdateCount: 1,
@@ -112,7 +163,6 @@ test("the parsed summary counts beta's payload shape", () => {
     storylineUpdateCount: 1,
     stopDate: "2014-05-01",
   });
-  assert.equal(normalizeParsedSummary("nextSpeaker", { speaker: "FR" }), null);
   assert.equal(normalizeParsedSummary("x", null), null);
   assert.equal(normalizeParsedSummary("eventConsolidator", { summary: "s" }).eventCount, 0);
 });
@@ -129,7 +179,7 @@ test("the CSV export is one row per record with quoted free text", async () => {
   assert.ok(row.includes(",openai,gpt-x,jumpForward,"));
   assert.ok(row.includes(",100,20,60,"));
   assert.ok(row.includes('"bad ""shape"", really"'));
-  assert.ok(row.endsWith(",failed,\"bad \"\"shape\"\", really\",,2,,,,"), row);
+  assert.ok(row.endsWith(",failed,\"bad \"\"shape\"\", really\",,2,,,,,,,"), row);
 });
 
 test("clearing forgets the session", async () => {
@@ -175,8 +225,22 @@ test("lookup rounds are kept on the record, whole, and exported", async () => {
   finishAiRecord(record, { ok: true, rawResponse: "{}" });
   attachAttemptOutcome(record, { ok: true });
   const csv = exportTelemetryCsv(await getAiRecords());
-  assert.match(csv.split("\n")[0], /lookupRounds,lookupCalls,lookupNames$/);
-  assert.match(csv, /,2,3,list_powers list_regions region_info$/m);
+  assert.match(csv.split("\n")[0], /lookupRounds,lookupCalls,lookupNames,requestsOk,requestsRefused,requestsFailed$/);
+  assert.match(csv, /,2,3,list_powers list_regions region_info,,,$/m);
+});
+
+test("a generation counts its own HTTP requests, the way the request budget does", async () => {
+  // Two lookup rounds, a 429 on the first entry, then a server error and the
+  // answer: five requests for one generation.
+  const record = startAiRecord({ taskKey: "jumpForward", provider: "gemini" });
+  assert.equal(requestCount(record), null, "nothing counted yet");
+  for (const status of [200, 200, 429, 503, 200]) attachRequestOutcome(record, status);
+  assert.deepEqual(record.requests, { ok: 3, refused: 1, failed: 1 });
+  assert.equal(requestCount(record), 5);
+  attachRequestOutcome(null, 200);
+  finishAiRecord(record, { ok: true, rawResponse: "{}" });
+  assert.match(exportTelemetryCsv([record]), /,3,1,1$/m);
+  assert.equal(requestCount({}), null, "a record from before requests were counted");
 });
 
 test("a record without lookups exports empty lookup columns and attachLookupRound tolerates no record", async () => {
@@ -185,5 +249,5 @@ test("a record without lookups exports empty lookup columns and attachLookupRoun
   const record = startAiRecord({ taskKey: "advisor", provider: "gemini" });
   finishAiRecord(record, { ok: true, rawResponse: "hi" });
   assert.equal(record.lookups, null);
-  assert.match(exportTelemetryCsv([record]), /,,,$/m);
+  assert.match(exportTelemetryCsv([record]), /,,,,,,$/m);
 });

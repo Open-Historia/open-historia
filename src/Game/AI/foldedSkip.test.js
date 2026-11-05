@@ -54,6 +54,28 @@ test("an answered request, a busy model and a rate limit are not the contract's 
   assert.equal(providerRefusedContract(null), false);
 });
 
+// The statuses cannot tell these apart from a refusal: the call gave way on
+// something else first (a 400), and then the connection went. The task runner
+// says how the call ended.
+test("a call that ended on the connection was not refused, whatever statuses came before it", () => {
+  // The JSON-text form refused, then the server could not be reached for the second request.
+  assert.equal(providerRefusedContract([400]), true);
+  assert.equal(providerRefusedContract([400], { transportFailure: true }), false);
+  assert.equal(providerRefusedContract([422, 400], { transportFailure: true }), false);
+  assert.equal(providerRefusedContract([429, 400], { transportFailure: true }), false);
+  // A server that was never reached sent nothing at all, and one that closed
+  // mid-answer had answered 200: neither was a refusal to begin with.
+  assert.equal(providerRefusedContract([], { transportFailure: true }), false);
+  assert.equal(providerRefusedContract([200], { transportFailure: true }), false);
+  assert.equal(providerRefusedContract([400, 200], { transportFailure: true }), false);
+  // An answer cut at the model's output limit came with a 200.
+  assert.equal(providerRefusedContract([200]), false);
+  // And a refusal stays one: the word is only ever the task runner's, about the connection.
+  assert.equal(providerRefusedContract([400], { transportFailure: false }), true);
+  assert.equal(providerRefusedContract([400], {}), true);
+  assert.equal(providerRefusedContract([400, 400]), true, "refused as JSON text and again as a function call");
+});
+
 // ---------------------------------------------------------------------------
 // The board's ops, lifted off the events
 
@@ -212,6 +234,7 @@ test("the history a skip folds is planned before it and written from its own ans
   const prepare = functionBody("prepareSkipHistoryFold");
   assert.match(prepare, /planHistoryConsolidation\(bundle, \{ round: \(Number\(bundle\.game\?\.round\) \|\| 0\) \+ 1 \}\)/, "for the round the skip is about to produce");
   assert.match(prepare, /if \(!plan\.due\) return null;/);
+  assert.match(prepare, /if \(hasPendingBatch\("eventConsolidator", campaignId\)\) return \{ separate: true \};/);
   assert.match(prepare, /if \(batchBackgroundTasksEnabled\(\) && providerSupportsBatch\("eventConsolidator"\)\) return \{ separate: true \};/, "a player who sends this pass as a batch still does");
   assert.match(prepare, /buildTaskSystemPrompt\("eventConsolidator", \{ variables, lookups: null, reminders: false \}\)/, "the consolidator's own prompt, whole");
 
@@ -225,7 +248,7 @@ test("the history a skip folds is planned before it and written from its own ans
   assert.match(review, /\.\.\.judgeSkipHistoryAnswer\(state\.foldedHistoryAnswer, \{ currentText: fold\.currentText \}\),/);
 
   // Read by the pass that used to make the request.
-  assert.match(gameplaySource, /\{ requests, skipFold: review\?\.history \?\? null \}\);/);
+  assert.match(gameplaySource, /\{ requests, signal: projects\?\.signal, campaignId, replay, skipFold: review\?\.history \?\? null \}\);/);
   const pass = functionBody("compactHistoryIfNeeded");
   assert.match(pass, /if \(skipFold && !force\) \{\s*\n\s*if \(!skipFold\.due\) return world;/, "nothing was due before the skip: nothing is asked after it");
   const written = pass.slice(pass.indexOf("if (skipFold.ok) {"), pass.indexOf("const waiting ="));
@@ -235,8 +258,8 @@ test("the history a skip folds is planned before it and written from its own ans
 
 test("a refused folded request is asked again the old way, and only a refusal is", () => {
   const body = functionBody("runJumpSegments");
-  assert.match(body, /refused = answer\.generation\?\.source === "fallback" && providerRefusedContract\(statuses\);/);
-  assert.match(body, /if \(signal\?\.aborted \|\| error\?\.name === "AbortError" \|\| !\(tooBig \|\| providerRefusedContract\(statuses\)\)\) throw error;/, "a cancel is never swallowed");
+  assert.match(body, /refused = answer\.generation\?\.source === "fallback" && providerRefusedContract\(statuses, \{ transportFailure: answer\.transportFailure === true \}\);/);
+  assert.match(body, /if \(signal\?\.aborted \|\| error\?\.name === "AbortError" \|\| !\(tooBig \|\| providerRefusedContract\(statuses, \{ transportFailure: error\?\.transportFailure === true \}\)\)\) throw error;/, "a cancel is never swallowed");
   const retry = body.slice(body.indexOf("if (refused) {"), body.indexOf("const { generation: segmentGeneration"));
   assert.match(retry, /state\.folded = false;/);
   assert.match(retry, /answer = await askSegment\(false\);/);
@@ -244,10 +267,23 @@ test("a refused folded request is asked again the old way, and only a refusal is
   assert.ok(retry.indexOf("state.folded = false;") < retry.indexOf("answer = await askSegment(false);"));
 });
 
+// How the skip knows a call ended on the connection: the task runner says so,
+// beside a fallback's result (a single-request skip) and on the error it throws
+// (a segment of a longer one, which has no fallback).
+test("the task runner says when a call ended on the connection, on its result and on the error it throws", () => {
+  const body = functionBody("runJsonTask");
+  assert.match(body, /transportFailure = connectionClosed \|\| isUnreachableError\(actualError\);/, "a server never reached, or a connection that closed mid-answer");
+  assert.match(body, /payload: await fallback\(\),[^}]*\.\.\.\(transportFailure \? \{ transportFailure: true \} : \{\}\),\s*\};/, "beside the generation, which is written into the game's history");
+  assert.match(body, /throw Object\.assign\(new Error\(`AI task "\$\{taskKey\}" failed: \$\{failureReason\}`\), transportFailure \? \{ transportFailure: true \} : \{\}\);/);
+  assert.match(gameplaySource, /import \{ OUTPUT_LIMIT_MESSAGE, [^}]*\bisUnreachableError \} from "\.\/providerErrors\.js";/);
+});
+
 test("the finish reads a folded skip's review off its own answer, and asks for one only when it was not folded", () => {
   const body = functionBody("finishTimelineJump");
   assert.match(body, /const folded = Boolean\(state\.folded\);/);
-  assert.match(body, /const review = folded\s*\n\s*\? foldedTurnReview\(\{ context, merged, state \}\)\s*\n\s*: await runTurnReview\(\{ context, merged, signal, state \}\);/);
+  // A review that has to be asked is one of the turn's checks (turnChecks.js):
+  // a failed one holds the turn. The folded one makes no request and cannot fail.
+  assert.match(body, /const review = folded\s*\n\s*\? foldedTurnReview\(\{ context, merged, state \}\)\s*\n\s*: await checks\.run\("review", \(\) => runTurnReview\(\{ context, merged, signal, state \}\), reviewFailure, \{ copy: copyReviewParts \}\);/);
   const strip = body.slice(body.indexOf("if (!folded) {"), body.indexOf("const review ="));
   assert.match(strip, /merged\.events = normalizeArray\(merged\.events\)\.map\(withoutBoardOps\);/, "a board op is never left on an event the board pass will also move");
   assert.match(strip, /state\.hiddenEvents = normalizeArray\(state\.hiddenEvents\)\.map\(withoutBoardOps\);/);
@@ -259,21 +295,27 @@ test("nothing after a skip is a request of its own: no director, no agent, no at
   const finish = functionBody("finishTimelineJump");
   assert.equal(/runJsonTask\(/.test(finish), false, "the finish makes no request");
   assert.equal(/savingRequests\(\)|requests\?\.saving/.test(finish), false, "and reads no setting");
-  for (const part of ["units", "territory"]) {
-    assert.ok(finish.includes(`review.parts.${part} ??`), `the ${part} check is the review's part, or none`);
+  // The three Directors run in mapConsequences.js, each answered from the
+  // review's part (directorAnalyzers), which holds no request either.
+  const directors = functionBody("directorAnalyzers");
+  assert.equal(/runJsonTask\(|checks\.run\(/.test(directors), false, "a Director never asks");
+  for (const part of ["units", "territory", "structures"]) {
+    assert.ok(directors.includes(`review.parts.${part} ??`), `the ${part} check is the review's part, or none`);
   }
-  for (const gone of ["runJsonTask(\"unitDirector\"", "runJsonTask(\"territoryDirector\""]) {
+  assert.match(finish, /analyze: directorAnalyzers\(\{ bundle, review, receipt: state\.receipt \}\),/);
+  for (const gone of ["runStandaloneActionOutcomeReview", "refreshSpyIntercepts", "runJsonTask(\"unitDirector\"", "runJsonTask(\"territoryDirector\"", "runJsonTask(\"structureDirector\""]) {
     assert.equal(gameplaySource.includes(gone), false, `${gone} is gone`);
   }
-  // A skip always has a review record, so the per-agent requests are never
-  // reached after one: they are left for a turn that is not a skip.
-  assert.match(gameplaySource, /if \(review\) await fileReviewedAgentReports\(review\);\s*\n\s*else if \(!savingRequests\(\)\) await refreshSpyIntercepts\(\);/);
   // What a skip may spend on is one list (requestBudget.js), and no budget is
   // without a cap: nothing in the game can ask for one.
   const requests = functionBody("createJumpRequests");
   assert.match(requests, /createJumpBudget\(\{ cap: jumpRequestCap\(\{ segments: pieces \}\), only: SKIP_SPENDERS \}\);/);
   assert.equal(/\bunlimited\b/.test(gameplaySource), false);
   assert.match(requests, /budget\.reserve\("jump", pieces\);/, "every segment keeps its own request");
+  // Upkeep already due keeps its request, one at a time, the history first.
+  assert.ok(requests.includes('if (upkeep?.history) budget.reserve("history", 1);') && requests.includes('else if (upkeep?.stats) budget.reserve("stats", 1);'));
+  assert.equal(gameplaySource.split("upkeep: skipUpkeepDue(").length - 1, 4, "every budget a skip is given");
+  assert.ok(functionBody("trackedStatsPutOff").includes('requests?.budget.release?.("history");'));
   // The two that asked outside the list are told no before they build anything.
   assert.match(gameplaySource, /const insideSkip = Boolean\(requests\?\.budget\) && !requests\.budget\.allows\("geography"\);/);
   assert.match(functionBody("repairSkipStorylineMotion"), /const noRepairRequests = Boolean\(state\?\.requests\?\.budget\) && !state\.requests\.budget\.allows\("repair"\);/);
@@ -281,7 +323,7 @@ test("nothing after a skip is a request of its own: no director, no agent, no at
 
 test("function calling inside a skip spends the skip's budget: a round is a request", () => {
   const task = functionBody("runJsonTask");
-  assert.match(task, /const lookupRounds = budget && Array\.isArray\(lookups\?\.tools\) && lookups\.tools\.length\s*\n\s*\? budget\.free\s*\n\s*: null;/);
+  assert.match(task, /const lookupRounds = budget && Array\.isArray\(lookups\?\.tools\) && lookups\.tools\.length\s*\n\s*\? carriedRoundCount\(lookupCarry\) \+ budget\.free\s*\n\s*: null;/);
   assert.match(task, /maxRounds: Number\.isInteger\(lookups\.maxRounds\) \? Math\.min\(lookups\.maxRounds, lookupRounds\) : lookupRounds/);
   assert.match(task, /budget\?\.take\(`\$\{spender \|\| taskKey\}Lookup`\);/, "recorded as it is made");
   // Decided after the attempt's own request is taken, so `free` is what is left.
@@ -305,9 +347,26 @@ test("every check after a skip always runs: no switch is read anywhere in the tu
   assert.equal(/reviewSection\(/.test(gameplaySource), false);
   assert.equal(/requestSettings\b/.test(gameplaySource), false, "the settings module is no longer needed here at all");
   const review = functionBody("runTurnReview");
-  for (const builder of ["buildUnitDirectorInput(", "buildTerritoryDirectorInput(", "buildCuratorInput("]) {
+  for (const builder of ["buildUnitDirectorInput(", "buildTerritoryDirectorInput(", "buildStructureDirectorInput(", "buildCuratorInput("]) {
     assert.ok(review.includes(`= ${builder}`) || review.includes(`= await ${builder}`), `${builder} is called unconditionally`);
   }
+});
+
+// A scenario's region types can carry rules for moving and placing (an
+// impassable sea, land out of play). They were told to the unit and structure
+// directors only, in the requests those made anyway. A folded skip asks neither
+// director, and moves the units and builds the structures itself.
+test("a folded skip is told the map's own rules for moving and placing, as the directors were", () => {
+  assert.match(functionBody("prepareFoldedSkip"), /regionTypeRules: await regionTypeRulesFor\(bundle\.world\)\.catch\(\(\) => ""\),/);
+  assert.match(functionBody("runJumpSegments"), /foldedRegionTypeRules: normalizeString\(state\.foldedPrep\?\.regionTypeRules\),/);
+  const live = functionBody("buildJumpLiveState");
+  assert.match(live, /const regionTypes = foldedSkip \? regionTypesBlock\(variables\.foldedRegionTypeRules\) : "";\s*\n\s*if \(regionTypes\) blocks\.push\(regionTypes\);/);
+  assert.ok(live.indexOf("blocks.push(FOLDED_SKIP_CONSEQUENCES)") < live.indexOf("regionTypesBlock(variables.foldedRegionTypeRules)"), "after the rule that the events place things themselves");
+  // One wording for both readers.
+  const block = functionBody("regionTypesBlock");
+  assert.match(block, /\[Region types\]\\nThe scenario's author gave these kinds of region rules for moving units and placing things\. Keep every move, new unit and structure to them:/);
+  assert.match(block, /return text\s*\n\s*\? /, "a map whose types have no rules adds nothing");
+  assert.match(gameplaySource, /\["unitDirector", "structureDirector"\]\.includes\(taskKey\) && normalizeString\(variables\?\.regionTypeRules\)\) \{\s*\n\s*systemPrompt = `\$\{systemPrompt\}\\n\\n\$\{regionTypesBlock\(variables\.regionTypeRules\)\}`;/);
 });
 
 test("the folded rules reach the prompt only for a folded skip", () => {
@@ -321,4 +380,33 @@ test("the folded rules reach the prompt only for a folded skip", () => {
     assert.ok(rules.includes(lever), `the rules name ${lever}`);
   }
   assert.match(rules, /Nothing checks your events afterwards\./);
+  // The history fold is the last block of the prompt: nothing of the skip's follows it.
+  assert.match(body, /const historyJob = foldedSkip \? normalizeString\(variables\.foldedHistoryJob\) : "";/);
+  assert.match(body, /if \(historyJob\) blocks\.push\(historyJob\);\s*\n\s*\n\s*return blocks\.filter\(Boolean\)\.join\("\\n\\n"\);/);
+});
+
+// What the player is told a skip costs, under the skip buttons and in Settings.
+test("the time panel says one request, and three only while function calling can add to it", () => {
+  const time = readFileSync(new URL("../GameUI/time.jsx", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  const caption = time.slice(time.indexOf("const RequestsTodayCaption = () => {"), time.indexOf("const JumpNode ="));
+  // Both switches are held as state. A value read from storage while rendering
+  // is one the compiler keeps from the first render: seen in the app, where the
+  // line went on saying "1 request" after Save AI requests was switched off.
+  assert.match(caption, /const \[saving, setSaving\] = useState\(\(\) => savingRequests\(\)\);/);
+  assert.match(caption, /setSaving\(savingRequests\(\)\);/);
+  assert.match(caption, /const lookupsOn = useMapSettingValue\(MAP_SETTING_KEYS\.lookupFunctions, "1"\) !== "0";/);
+  assert.match(caption, /const cost = describeJumpCost\(\{ lookups: !saving && lookupsOn \}\);/);
+  for (const line of [
+    "\"a skip uses 1 request\"",
+    "\"a skip uses 1 request, plus one per extra segment\"",
+    "`a skip uses 1 request, at most ${cost.max} when the model looks things up`",
+    "`a skip uses 1 request, at most ${cost.max} when the model looks things up, plus one per extra segment`",
+  ]) assert.ok(caption.includes(line), line);
+  assert.equal(/twenty/.test(caption), false, "no mode in which a skip is twenty requests is left to describe");
+
+  const settings = readFileSync(new URL("../GameUI/settings.jsx", import.meta.url), "utf8");
+  assert.match(settings, /"On \(default\): a time skip is one request\. /);
+  assert.match(settings, /`Off: for a key with no daily limit\. A time skip is still one request, [^`]*so a skip never uses more than \$\{lookupCap\}\. /);
+  assert.match(settings, /const lookupCap = describeJumpCost\(\{ lookups: true \}\)\.max;/);
+  assert.equal(/each checked by a request of their own|twenty requests or more/.test(settings), false);
 });

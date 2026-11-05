@@ -6,10 +6,10 @@
 // Turns whatever flag file a map-maker drags in into one normalized PNG data URL.
 //
 // We never store the upload as-is. Every flag ends up in flags.json, which is
-// base64'd into the scenario bundle — and a bundle is already ~17MB and gets
-// published as a GitHub issue attachment (~25MB ceiling). A single careless 4MB
-// PNG, times a few countries, pushes a scenario past the point where it can be
-// shared at all. Downscaling here is what keeps that from happening, and it costs
+// base64'd into the scenario bundle — and a bundle is already ~17MB, and every
+// megabyte of it is downloaded by everyone who installs the scenario from the
+// hub. A single careless 4MB PNG, times a few countries, would outweigh the map
+// itself. Downscaling here is what keeps that from happening, and it costs
 // nothing: a flag is never drawn larger than a panel header or a profile circle.
 //
 // SVG is accepted because that is the format flags actually come in (the game's own
@@ -75,11 +75,4 @@ export const fileToFlagDataUrl = async (file) => {
   // PNG, not JPEG: flags have hard edges and often transparency, and JPEG ringing
   // on a two-colour flag looks worse than the bytes it saves.
   return canvas.toDataURL("image/png");
-};
-
-export const dataUrlBytes = (dataUrl) => {
-  const comma = String(dataUrl || "").indexOf(",");
-  if (comma < 0) return 0;
-  // base64 -> bytes, ignoring padding.
-  return Math.floor((String(dataUrl).length - comma - 1) * 3 / 4);
 };

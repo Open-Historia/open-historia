@@ -1,0 +1,67 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { normalizeInstitutionChatAction, partitionInstitutionChatActions } from "./institutionChatActions.js";
+
+test("normalizes formal institutional actions without treating chat prose as law", () => {
+  assert.deepEqual(normalizeInstitutionChatAction({
+    type: "institution_vote", actorName: "France", proposalId: "aid-package", voteChoice: "YES", reason: "Support.",
+  }), {
+    type: "institution_vote", actorName: "France", proposalId: "aid-package", voteChoice: "yes", reason: "Support.",
+  });
+  assert.equal(normalizeInstitutionChatAction({ type: "send_message", actorName: "France", content: "Aye." }), null);
+  assert.equal(normalizeInstitutionChatAction({ type: "institution_vote", actorName: "France", proposalId: "aid-package", voteChoice: "maybe" }), null);
+});
+
+test("partitions formal governance actions from ordinary Beta chat actions", () => {
+  const source = [
+    { type: "send_message", actorName: "France", content: "We support it." },
+    { type: "institution_lodge_proposal", actorName: "Germany", title: "Aid", summary: "Approve assistance." },
+  ];
+  const result = partitionInstitutionChatActions(source);
+  assert.equal(result.formal.length, 1);
+  assert.equal(result.conversational.length, 1);
+  assert.equal(result.formal[0].proposalType, "resolution");
+});
+
+test("malformed formal institution actions stay in the formal lane with a precise validation error", () => {
+  const source = [
+    {
+      type: "institution_resolve_amendment",
+      actorName: "Estonia",
+      proposalId: "regional-connectivity",
+      amendmentStatus: "accepted",
+      // amendmentId intentionally missing: this is the live-playtest failure shape.
+    },
+    { type: "send_message", actorName: "Estonia", content: "We support the finalized text." },
+  ];
+  const result = partitionInstitutionChatActions(source);
+  assert.equal(result.formal.length, 1);
+  assert.equal(result.conversational.length, 1);
+  assert.equal(result.formal[0].type, "institution_invalid");
+  assert.equal(result.formal[0].rawType, "institution_resolve_amendment");
+  assert.match(result.formal[0].validationError, /requires amendmentId/i);
+});
+
+test("malformed resolve-amendment preserves enough identity for unambiguous native repair", () => {
+  const result = partitionInstitutionChatActions([{
+    type: "institution_resolve_amendment",
+    actorName: "Estonia",
+    proposalId: "regional-connectivity",
+    amendmentStatus: "accepted",
+  }]);
+  assert.equal(result.formal.length, 1);
+  assert.deepEqual({
+    type: result.formal[0].type,
+    rawType: result.formal[0].rawType,
+    actorName: result.formal[0].actorName,
+    proposalId: result.formal[0].proposalId,
+    amendmentStatus: result.formal[0].amendmentStatus,
+  }, {
+    type: "institution_invalid",
+    rawType: "institution_resolve_amendment",
+    actorName: "Estonia",
+    proposalId: "regional-connectivity",
+    amendmentStatus: "accepted",
+  });
+  assert.match(result.formal[0].validationError, /requires amendmentId/i);
+});

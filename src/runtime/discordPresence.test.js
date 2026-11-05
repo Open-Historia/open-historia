@@ -5,9 +5,9 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
 
-import { PRESENCE_GONE, presenceAllowed, presenceFor } from "./discordPresence.js";
+import { PRESENCE_GONE, PRESENCE_HEARTBEAT_MS, presenceAllowed, presenceFor } from "./discordPresence.js";
 import { MAP_SETTING_KEYS } from "./mapSettings.js";
-import { normalizePresence } from "../../server/discordPresence.js";
+import { normalizePresence, PRESENCE_STALE_MS } from "../../server/discordPresence.js";
 
 const game = { id: "g1", country: "FRA", currentDate: "2016-01-01" };
 
@@ -34,6 +34,15 @@ test("what the page sends is what the server accepts", () => {
   const sent = presenceFor({ activeGame: game, playerName: "France", scenarioName: "Modern Day" });
   assert.deepEqual(normalizePresence(JSON.parse(JSON.stringify(sent))), sent);
   assert.deepEqual(normalizePresence(presenceFor({})), { scene: "menu" });
+});
+
+test("the page's goodbye clears the activity, and its heartbeat outpaces the server's timeout", () => {
+  assert.equal(normalizePresence(JSON.parse(JSON.stringify(PRESENCE_GONE))), null);
+  // The beacon goes as text/plain, which the route's JSON parser leaves alone.
+  assert.equal(normalizePresence(undefined), null);
+  // Two missed beats (a background tab's timers are throttled to a minute) must
+  // not take a player who is still playing off Discord.
+  assert.ok(PRESENCE_HEARTBEAT_MS * 2 < PRESENCE_STALE_MS);
 });
 
 test("the HUD reports it, and the server only takes it from this computer", () => {
@@ -69,18 +78,20 @@ test("the player's switch is on unless it was turned off", () => {
 
 test("switched off, the page reports nothing more and says goodbye once", () => {
   const page = fs.readFileSync(new URL("./discordPresence.js", import.meta.url), "utf8");
-  // No report is armed while the switch is off, and flipping it runs the
-  // effect again.
-  assert.match(page, /if \(!onLocalServer\(\) \|\| !allowed\) return undefined;\s*const timer = setTimeout\(\(\) => postPresence\(body\), PRESENCE_DEBOUNCE_MS\);/);
+  // No report and no heartbeat is armed while the switch is off, and flipping
+  // it runs the effect again.
+  assert.match(page, /if \(!onLocalServer\(\) \|\| !allowed\) return undefined;\s*const timer = setTimeout\(\(\) => postPresence\(body\), PRESENCE_DEBOUNCE_MS\);\s*const heartbeat = setInterval\(\(\) => postPresence\(body\), PRESENCE_HEARTBEAT_MS\);/);
   assert.match(page, /\}, \[allowed, body\]\);/);
   // The goodbye goes on the way from on to off, and at no other time: this
   // effect follows the switch alone, not what is on screen.
   assert.match(page, /if \(wasAllowed\.current && !allowed && onLocalServer\(\)\) postPresence\(JSON\.stringify\(PRESENCE_GONE\)\);\s*wasAllowed\.current = allowed;\s*\}, \[allowed\]\);/);
   // And the goodbye is what the server reads as nothing to show.
   assert.equal(normalizePresence(JSON.parse(JSON.stringify(PRESENCE_GONE))), null);
+  // Nothing was reported, so closing the page has nothing to take back.
+  assert.match(page, /const leave = \(\) => \{[\s\S]{0,160}if \(!presenceAllowed\(\)\) return;\s*try \{\s*navigator\.sendBeacon/);
   // Those are the only places the page talks to the route.
-  assert.equal(page.split("postPresence(").length - 1, 2, "the report and the goodbye");
-  assert.equal(page.split("/api/presence").length - 1, 1, "the one request");
+  assert.equal(page.split("postPresence(").length - 1, 3, "the report, its heartbeat and the goodbye");
+  assert.equal(page.split("/api/presence").length - 1, 2, "the request and the beacon");
   // The switch is followed from this window and from another one of the same game.
   assert.match(page, /window\.addEventListener\("mapSettings:updated", read\);\s*window\.addEventListener\("storage", read\);/);
 });

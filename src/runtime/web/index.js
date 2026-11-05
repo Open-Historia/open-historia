@@ -10,17 +10,22 @@
 // the stores it pulls in — is bundled into the local download.
 
 import { installWebApiRouter } from "./router.js";
-import { ensureSeeded } from "./libraryStore.js";
+import { ensureSeeded, migrateStoreLayout } from "./libraryStore.js";
 import * as idb from "./idb.js";
 import { bringHttpSavesAcross } from "./saveMove.js";
-import { markEntered, showHomePage, shouldShowHome } from "./homePage.js";
+import { showDemoNotice, shouldShowDemoNotice } from "./demoNotice.js";
 import { isNativeApp, showNativeBoot } from "./nativeBoot.js";
 import { forgetRetiredAccount } from "./retiredAccount.js";
+import { setBootTranslations } from "./bootTexts.js";
+import { loadShippedPack } from "./settingsStore.js";
+import { kvGet } from "./idb.js";
+import { DEFAULT_LANGUAGE, getStoredLanguage, hasShippedPack } from "../i18n.js";
 
 // Everything the player owns lives in this origin's storage: the games and
-// scenarios in IndexedDB, and — on the website — the ~215MB of map archives in
-// the preload Cache. (The Android app carries the map inside the APK instead,
-// and its http origin has no Cache Storage to begin with.)
+// scenarios in IndexedDB, and — on the website — the map archives in the
+// preload Cache, kept there after their first read from the site. (The Android
+// app carries the map inside the APK, and its http origin has no Cache Storage
+// to begin with.)
 // By default that is "best-effort" storage, which the browser or the OS may
 // evict under pressure — losing saved games outright, and turning the next
 // launch into a full re-download of the world map.
@@ -39,12 +44,38 @@ const requestPersistentStorage = async () => {
   }
 };
 
+// The demo notice and the Android boot screen are drawn before the
+// game (and its translator) starts, so they read their text from the player's
+// shipped language pack themselves (bootTexts.js). The language is the one
+// Settings stored: mirrored in localStorage, else the ui-settings row. A
+// language without a shipped pack stays English here, and the translator
+// handles it once the game is up, as it does everywhere else. Bounded, so a
+// slow pack fetch only costs the first screen its translation.
+const BOOT_LANGUAGE_WAIT_MS = 1500;
+const STORE_LAYOUT_DELAY_MS = 15000;
+const loadBootLanguage = async () => {
+  try {
+    let code = getStoredLanguage();
+    if (code === DEFAULT_LANGUAGE) code = (await kvGet("ui-settings", {}))?.language || DEFAULT_LANGUAGE;
+    if (!hasShippedPack(code)) return;
+    const pack = await Promise.race([
+      loadShippedPack(code),
+      new Promise((resolve) => setTimeout(() => resolve(null), BOOT_LANGUAGE_WAIT_MS)),
+    ]);
+    setBootTranslations(pack);
+  } catch {
+    /* English it is */
+  }
+};
+
 export const installWebBackend = async () => {
   // The Android app paints its boot screen FIRST, before the seeding below. The
   // native splash comes down the moment the WebView has a document, and a white
   // gap where it was is most of the difference between an app and a web page in a
   // shell. Everything after this point is the same on both.
   const boot = isNativeApp() ? showNativeBoot() : null;
+  const bootLanguage = loadBootLanguage();
+  if (boot) bootLanguage.then(() => boot.relabel());
 
   // Saves this browser holds under the site's http address come across first,
   // so the library below already has them (saveMove.js). Never in the app.
@@ -58,19 +89,30 @@ export const installWebBackend = async () => {
   }
   installWebApiRouter();
   requestPersistentStorage();
+  // Saves written before covers and restore points had stores of their own are
+  // moved into them once (libraryStore.js migrateStoreLayout). Everything reads
+  // the old places meanwhile, so it waits until the game is up.
+  setTimeout(() => {
+    migrateStoreLayout().catch((error) => console.warn("Moving saves into the current storage layout failed:", error));
+  }, STORE_LAYOUT_DELAY_MS);
   forgetRetiredAccount();
 
-  // The website's home page, once a tab session. The app has no entry screen
-  // and nothing to press: the player already chose to be here by opening it.
-  // Its map is its own (assets/), so there is nothing to wait for; the boot
-  // screen still holds its minimum, so a fast phone does not flash it.
+  // The whole world is under this build's own /assets, on the website as in
+  // the app: there is nothing to find or connect to before the game can start,
+  // and no entry screen in front of it. The website's Play the demo button leads
+  // straight here: the demo notice comes up over the game and dismissing it is
+  // the way in.
   try {
     if (boot) {
-      markEntered();
-      boot.settle(true);
-    } else if (shouldShowHome()) showHomePage();
+      // The game mounts behind the boot screen, which still holds its minimum,
+      // so a fast phone does not flash it.
+      boot.settle();
+    } else if (shouldShowDemoNotice()) {
+      await bootLanguage;
+      showDemoNotice();
+    }
   } catch (error) {
-    if (boot) boot.settle(null);
-    console.warn("Home page failed:", error.message);
+    if (boot) boot.settle();
+    console.warn("Demo notice failed:", error.message);
   }
 };

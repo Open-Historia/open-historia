@@ -114,11 +114,11 @@ test("an Unusable entry moves the call down, and says what went wrong", async ()
     assert.deepEqual(aWeekLater.tried, ["a"], "a key the player has since fixed answers again on its own");
 });
 
-test("a busy entry is marked for ten minutes, waits at the back until then, and is tried first again after", async () => {
+test("a busy entry is marked for one minute, waits at the back until then, and is tried first again after", async () => {
     const store = createMemoryStateStore();
     const entries = [entry("a"), entry("b")];
     await runWithFallback({ entries, store, now: () => 0, attempt: scripted({ a: fail("busy") }).attempt });
-    assert.deepEqual(store.get("a"), { skipUntil: 600_000, skipReason: "busy" }, "the row says busy for ten minutes");
+    assert.deepEqual(store.get("a"), { skipUntil: 60_000, skipReason: "busy" }, "the row says busy for one minute");
 
     // A 503 is the provider saying it is overloaded, and a night's log showed
     // the refusals coming 10-70 s apart when asked again within the minute: so
@@ -127,18 +127,18 @@ test("a busy entry is marked for ten minutes, waits at the back until then, and 
     const soon = scripted({});
     await runWithFallback({ entries, store, now: () => 1000, attempt: soon.attempt });
     assert.deepEqual(soon.tried, ["b"], "the backup answers; the busy entry is not asked");
-    assert.deepEqual(store.get("a"), { skipUntil: 600_000, skipReason: "busy" }, "and its mark stands");
+    assert.deepEqual(store.get("a"), { skipUntil: 60_000, skipReason: "busy" }, "and its mark stands");
 
     // Nothing else answering, the busy entry is still tried rather than dropped.
     const alone = scripted({ b: fail("unusable", { reason: "model not found (404)" }) });
     await runWithFallback({ entries, store, now: () => 2000, attempt: alone.attempt });
     assert.deepEqual(alone.tried, ["b", "a"], "busy comes after everything that might answer, never out of the order");
 
-    // Ten minutes on, the strongest model is asked first again.
+    // A minute on, the strongest model is asked first again.
     const later = scripted({});
-    await runWithFallback({ entries, store, now: () => 600_001, attempt: later.attempt });
+    await runWithFallback({ entries, store, now: () => 60_001, attempt: later.attempt });
     assert.deepEqual(later.tried, ["a"]);
-    assert.deepEqual(store.get("a"), { lastAnsweredAt: 600_001 }, "it answered, so the mark is gone");
+    assert.deepEqual(store.get("a"), { lastAnsweredAt: 60_001 }, "it answered, so the mark is gone");
 });
 
 test("Rate limited on 'wait' fails as it always did, without falling back", async () => {
@@ -182,7 +182,7 @@ test("busy and Spent marks move an entry back; Unusable and rate limited keep th
     });
 
     // `c` may have caught the provider in a bad moment, so it is asked again
-    // where it stands. `a` sits out its ten minutes behind everything that
+    // where it stands. `a` sits out its minute behind everything that
     // might answer, and `b` — which said its allowance is gone until a reset —
     // behind that.
     const retry = scripted({ c: fail("unusable", { reason: "model not found (404)" }) });
@@ -232,6 +232,46 @@ test("the provider is told whether there is anything left to fall back to", asyn
     };
     await runWithFallback({ entries: [entry("a"), entry("b"), entry("c")], store: createMemoryStateStore(), now: () => 0, attempt });
     assert.deepEqual(seen, { a: true, b: true, c: false }, "the last one keeps its full retries");
+});
+
+// The busy top entry keeps its retries when nothing below could take the
+// request: a backup too small for it, or one that is Spent, Unusable or busy.
+test("a backup that cannot take the request is not something to fall back to", async () => {
+    const seen = {};
+    const attempt = async (e, context) => { seen[e.id] = context.canFallBack; return "ok"; };
+    await runWithFallback({
+        entries: [entry("gemini"), entry("ollama", "openai-compatible")],
+        store: createMemoryStateStore(),
+        now: () => 0,
+        canAttempt: (e) => (e.id === "ollama" ? "its window is 32768 tokens" : ""),
+        attempt,
+    });
+    assert.deepEqual(seen, { gemini: false }, "the only backup is refused for size");
+
+    const store = createMemoryStateStore({
+        spent: { spentUntil: 5000 },
+        broken: { unusable: "key rejected (401)" },
+        busy: { skipUntil: 5000, skipReason: "busy" },
+    });
+    const later = {};
+    await runWithFallback({
+        entries: [entry("top"), entry("spent"), entry("broken"), entry("busy")],
+        store,
+        now: () => 0,
+        attempt: async (e, context) => { later[e.id] = context.canFallBack; return "ok"; },
+    });
+    assert.deepEqual(later, { top: false });
+});
+
+test("a rate-limited backup still counts: it keeps its place and may answer", async () => {
+    const seen = {};
+    await runWithFallback({
+        entries: [entry("a"), entry("b")],
+        store: createMemoryStateStore({ b: { skipUntil: 5000, skipReason: "rate limited" } }),
+        now: () => 0,
+        attempt: async (e, context) => { seen[e.id] = context.canFallBack; return "ok"; },
+    });
+    assert.deepEqual(seen, { a: true });
 });
 
 test("a streamed reply never falls back once part of it has been shown", async () => {
@@ -379,7 +419,7 @@ test("every mark is reported, for the Diagnostics log", async () => {
     });
     assert.deepEqual(marks, [
         ["a", { unusable: "key rejected (401)" }],
-        ["b", { skipUntil: 600_000, skipReason: "busy" }],
+        ["b", { skipUntil: 60_000, skipReason: "busy" }],
     ]);
 });
 
@@ -403,11 +443,11 @@ test("each row says whether its entry is ready, Spent, Unusable or busy, and whe
     const at = 2000;
     assert.deepEqual(entryStatus(store.get("a"), at), { status: "unusable", reason: "key rejected (401)", until: null, lastAnsweredAt: null });
     assert.deepEqual(entryStatus(store.get("b"), at), { status: "spent", reason: "", until: 1000 + 60 * 60 * 1000, lastAnsweredAt: null });
-    assert.deepEqual(entryStatus(store.get("c"), at), { status: "busy", reason: "busy", until: 601_000, lastAnsweredAt: null });
+    assert.deepEqual(entryStatus(store.get("c"), at), { status: "busy", reason: "busy", until: 61_000, lastAnsweredAt: null });
     assert.deepEqual(entryStatus(store.get("d"), at), { status: "ready", reason: "", until: null, lastAnsweredAt: 1000 });
     assert.deepEqual(entryStatus(undefined, at), { status: "ready", reason: "", until: null, lastAnsweredAt: null });
     // A mark that has run out reads as ready again.
-    assert.equal(entryStatus(store.get("c"), 601_000).status, "ready");
+    assert.equal(entryStatus(store.get("c"), 61_000).status, "ready");
 });
 
 test("a Spent entry on another provider is marked for an hour", async () => {
@@ -487,4 +527,102 @@ test("a request every model refused as too big fails with the last model's own w
         runWithFallback({ entries: [entry("a", "openai"), entry("b", "openai")], store: createMemoryStateStore(), now: () => 0, attempt }),
         /tooBig failure/,
     );
+});
+
+// --- an Agent Connection (docs/adr/0008-subscription-agents-answer-through-the-game.md) ---
+// An Agent entry answers only the tasks it names. Every other call passes over
+// it without a request, a mark or a notice, so a chat keeps using the key below.
+
+const agentEntry = (id = "agent") => ({ id, provider: "agent", label: id });
+
+test("an entry the call is not served by is passed over without a request, a mark or a notice", async () => {
+    const store = createMemoryStateStore();
+    const { attempt, tried } = scripted({});
+    const marks = [];
+    const switches = [];
+    const outcome = await runWithFallback({
+        entries: [agentEntry(), entry("key")],
+        store, now: () => 0, attempt,
+        serves: (candidate) => candidate.provider !== "agent",
+        onMark: (mark) => marks.push(mark),
+        onSwitch: (detail) => switches.push(detail),
+    });
+    assert.equal(outcome.entry.id, "key");
+    assert.deepEqual(tried, ["key"]);
+    assert.deepEqual(marks, [], "passing over is not a failure");
+    assert.deepEqual(switches, [], "nothing to tell the player: the entry was never meant for this call");
+    assert.equal(entryStatus(store.get("agent"), 1).status, "ready");
+});
+
+test("an entry the call is not served by is not counted as too big", async () => {
+    const { attempt } = scripted({});
+    await assert.rejects(
+        runWithFallback({
+            entries: [agentEntry(), entry("small", "openai")],
+            store: createMemoryStateStore(), now: () => 0, attempt,
+            serves: (candidate) => candidate.provider !== "agent",
+            canAttempt: (candidate) => (candidate.id === "small" ? "too big" : ""),
+            tooBigError: (refused) => new Error(`nothing fits: ${refused.map((r) => r.entry.id).join(",")}`),
+        }),
+        /nothing fits: small$/,
+    );
+});
+
+test("a list whose only entries do not serve the call fails before anything is sent, and says why", async () => {
+    const { attempt, tried } = scripted({});
+    await assert.rejects(
+        runWithFallback({
+            entries: [agentEntry()],
+            store: createMemoryStateStore(), now: () => 0, attempt,
+            serves: () => false,
+        }),
+        /answers time skips only|does not answer this/i,
+    );
+    assert.deepEqual(tried, []);
+});
+
+test("an Agent attempt that waits a long time leaves no Busy, Rate limited or Spent mark", async () => {
+    const store = createMemoryStateStore();
+    let clock = 0;
+    const attempt = async () => {
+        clock += 6 * 60 * 60 * 1000; // six hours at the terminal
+        return "answer from the agent";
+    };
+    const outcome = await runWithFallback({ entries: [agentEntry(), entry("key")], store, now: () => clock, attempt, serves: () => true });
+    assert.equal(outcome.entry.id, "agent");
+    assert.equal(entryStatus(store.get("agent"), clock).status, "ready");
+});
+
+test("a cancel while the Agent is waiting fails the call as a cancel, and the entry below is not tried", async () => {
+    const store = createMemoryStateStore();
+    const { attempt, tried } = scripted({ agent: new DOMException("Timeline jump cancelled.", "AbortError") });
+    await assert.rejects(
+        runWithFallback({ entries: [agentEntry(), entry("key")], store, now: () => 0, attempt, serves: () => true }),
+        (error) => error.name === "AbortError",
+    );
+    assert.deepEqual(tried, ["agent"]);
+    assert.equal(entryStatus(store.get("agent"), 1).status, "ready", "cancelling cancels the call, not the entry");
+});
+
+test("an answer from an Agent entry comes back as from any other entry", async () => {
+    const { attempt } = scripted({ agent: { rawText: "{\"events\":[]}", toolInput: null } });
+    const outcome = await runWithFallback({ entries: [agentEntry(), entry("key")], store: createMemoryStateStore(), now: () => 0, attempt, serves: () => true });
+    assert.equal(outcome.entry.id, "agent");
+    assert.deepEqual(outcome.result, { rawText: "{\"events\":[]}", toolInput: null });
+});
+
+test("an Agent call the player passes on (Use API key) goes to the next entry, with no mark and no notice", async () => {
+    const store = createMemoryStateStore();
+    const marks = [];
+    const switches = [];
+    const { attempt, tried } = scripted({ agent: fail("passedOn", { reason: "the player chose their API key" }) });
+    const outcome = await runWithFallback({
+        entries: [agentEntry(), entry("key")], store, now: () => 0, attempt, serves: () => true,
+        onMark: (mark) => marks.push(mark), onSwitch: (detail) => switches.push(detail),
+    });
+    assert.equal(outcome.entry.id, "key");
+    assert.deepEqual(tried, ["agent", "key"]);
+    assert.equal(entryStatus(store.get("agent"), 1).status, "ready");
+    assert.deepEqual(marks, []);
+    assert.deepEqual(switches, []);
 });

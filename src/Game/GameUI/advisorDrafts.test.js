@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { buildMessageDrafts, extractBlockquotes, splitAtBlockquotes, toPlainText } from "./advisorDrafts.js";
+import { buildMessageDrafts, extractBlockquotes, sentLetterDate, splitAtBlockquotes, toPlainText } from "./advisorDrafts.js";
 
 // The diplomacy composer shows the player's own message verbatim, so markup
 // handed over with the letter arrives as literal asterisks.
@@ -139,4 +139,51 @@ test("empty and nullish input are safe", () => {
   assert.deepEqual(splitAtBlockquotes(""), []);
   assert.deepEqual(splitAtBlockquotes(null), []);
   assert.deepEqual(buildMessageDrafts([], ""), []);
+});
+
+test("typed private drafts preserve deterministic bilateral destination metadata", () => {
+  const drafts = buildMessageDrafts([{ targetType: "private", country: "Russian Empire" }], "> Private note.");
+  assert.deepEqual(drafts.map(({ targetType, country, institutionId, caseId, text }) => ({ targetType, country, institutionId, caseId, text })), [{
+    targetType: "private", country: "Russian Empire", institutionId: "", caseId: "", text: "Private note.",
+  }]);
+});
+
+test("typed institution Council and lifecycle drafts preserve exact thread identity", () => {
+  const reply = "> Council note.\n\n> Hearing note.";
+  const drafts = buildMessageDrafts([
+    { targetType: "institution-council", institutionId: "mitteleuropa" },
+    { targetType: "institution-lifecycle", institutionId: "mitteleuropa", caseId: "case-1", country: "Austria-Hungary" },
+  ], reply);
+  assert.deepEqual(drafts.map(({ targetType, country, institutionId, caseId }) => ({ targetType, country, institutionId, caseId })), [
+    { targetType: "institution-council", country: "", institutionId: "mitteleuropa", caseId: "" },
+    { targetType: "institution-lifecycle", country: "Austria-Hungary", institutionId: "mitteleuropa", caseId: "case-1" },
+  ]);
+});
+
+// The advisor drafted Winterfell's acceptance of the Tyrell barley offer again a
+// week after it had gone, and the player sent the same letter twice. A draft
+// that matches a letter already sent to that recipient says so on its button.
+const tyrellChat = {
+  id: "chat-tyrell",
+  countries: [{ code: "House Tyrell", name: "House Tyrell" }],
+  messages: [
+    { role: "user", time: "0298-10-06", text: "My lord Tyrell, Winterfell accepts House Tyrell's offer of three hundred sacks of barley on the terms your letter set: silver paid in full at our granary, the sacks held for our cog." },
+    { role: "leader", time: "0298-10-06", text: "Lord Stark, Highgarden will sell three hundred sacks of barley on the terms we gave." },
+  ],
+};
+
+test("a draft matching a letter already sent to that recipient reports when it went", () => {
+  const draft = { targetType: "private", country: "House Tyrell", text: "My lord Tyrell, Winterfell accepts House Tyrell's offer of three hundred sacks of barley on the terms your letter set: silver paid in full at our granary, the sacks held for our cog." };
+  assert.equal(sentLetterDate(draft, [tyrellChat]), "0298-10-06");
+});
+
+test("a new letter to the same recipient, another recipient's chat, or the leader's own words do not count", () => {
+  const newer = { targetType: "private", country: "House Tyrell", text: "My lord Tyrell, Winterfell names 20 October as the day we ask for the three hundred sacks of barley to be ready at your granary." };
+  assert.equal(sentLetterDate(newer, [tyrellChat]), "");
+  const elsewhere = { targetType: "private", country: "House Bolton", text: tyrellChat.messages[0].text };
+  assert.equal(sentLetterDate(elsewhere, [tyrellChat]), "");
+  const echo = { targetType: "private", country: "House Tyrell", text: tyrellChat.messages[1].text };
+  assert.equal(sentLetterDate(echo, [tyrellChat]), "");
+  assert.equal(sentLetterDate({ targetType: "institution-council", institutionId: "iron-throne", text: "x" }, [tyrellChat]), "");
+  assert.equal(sentLetterDate(newer, undefined), "");
 });

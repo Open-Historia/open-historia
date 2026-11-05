@@ -15,6 +15,8 @@
 // projection and the five-decimal rounding), and this decides what travels. The
 // other half, applying the result to the stored map, is server/regionDelta.js.
 
+import { regionDeltaKey } from "../../server/regionDelta.js";
+
 // A stamp for one written region. FNV-1a with the length mixed in: cheap, and a
 // collision would only ever mean one region's edit rode in the next save rather
 // than this one.
@@ -28,11 +30,10 @@ export const hashRegionText = (text) => {
 };
 
 // GeoJSON puts a feature's id at the top level; the editor's own regions also
-// carry it in properties, and a scenario's geometry is keyed by that.
-export const regionIdOf = (written) => {
-    const id = written?.id ?? written?.properties?.id;
-    return id === undefined || id === null || id === "" ? null : String(id);
-};
+// carry it in properties, and a scenario's geometry is keyed by that. The store
+// matches the difference against the stored map by the same function, so the
+// two sides cannot disagree about which region is which.
+export const regionIdOf = regionDeltaKey;
 
 // `writtenFeatures` is an iterable of written GeoJSON features — a generator, so
 // a map that cannot travel as a difference is abandoned without having built the

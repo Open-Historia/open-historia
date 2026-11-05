@@ -192,3 +192,94 @@ export const makeRegionStyle = ({ getTypesById, getColors, getSelectedIds, getZo
     return styled;
   };
 };
+
+const HIDDEN_LOOK = Object.freeze({ visible: false, striped: false, fill: [0, 0, 0, 0], stroke: [0, 0, 0, 0], width: 0, baseRgb: NEUTRAL, baseAlpha: 0, strokeOpacity: 1 });
+
+const over = (topRgb, topAlpha, rgb, alpha) => {
+  const out = topAlpha + alpha * (1 - topAlpha);
+  if (out <= 0) return [rgb[0], rgb[1], rgb[2], 0];
+  const mix = (i) => Math.round((topRgb[i] * topAlpha + rgb[i] * alpha * (1 - topAlpha)) / out);
+  return [mix(0), mix(1), mix(2), out];
+};
+
+export const makeRegionLook = ({ getTypesById, getColors, getZoom, getGroupColors }) => {
+  const cache = new Map();
+  let cachedPalette = null;
+  let cachedGroupColors = null;
+  let cachedTypes = null;
+  return (feature) => {
+    const palette = getColors();
+    const groupColors = getGroupColors?.() ?? null;
+    const typesById = getTypesById();
+    if (palette !== cachedPalette || groupColors !== cachedGroupColors || typesById !== cachedTypes) {
+      cachedPalette = palette;
+      cachedGroupColors = groupColors;
+      cachedTypes = typesById;
+      cache.clear();
+    }
+    const typeId = feature.get("typeId") || "land";
+    const type = typesById[typeId] || FALLBACK_TYPE;
+    const band = pickZoomBand(type, getZoom());
+    if (band === null) return HIDDEN_LOOK;
+    const owner = feature.get("owner") || null;
+    const claimants = feature.get("claimants");
+    const claimantKey = Array.isArray(claimants) && claimants.length ? claimants.join(",") : "";
+    const group = feature.get("group") || "";
+    const key = `${typeId}|${owner || "-"}|${band.minZoom ?? 0}-${band.maxZoom ?? 24}|${claimantKey}|${group}`;
+    const hit = cache.get(key);
+    if (hit) return hit;
+
+    const ownerRgb = (name) => asRgb(palette[name] || codeToColor(name));
+    const baseRgb = type.overrideColor ? asRgb(type.overrideColor) : owner ? ownerRgb(owner) : NEUTRAL;
+    const baseAlpha = owner ? (band.opacity ?? type.opacity) : type.unownedOpacity;
+    let striped = false;
+    if (claimantKey) {
+      const seen = new Set();
+      for (const name of (owner ? [owner, ...claimants] : claimants)) {
+        const trimmed = String(name ?? "").trim();
+        if (trimmed) seen.add(trimmed);
+      }
+      striped = seen.size >= 2;
+    }
+    const groupRgb = group ? hexRgb(groupColors?.[group]) : null;
+    const strokeOpacity = type.strokeOpacity ?? 1;
+    const width = band.strokeWidth ?? type.strokeWidth;
+    const look = striped
+      ? { visible: true, striped, fill: [0, 0, 0, 0], stroke: [0, 0, 0, 0], width, baseRgb, baseAlpha, strokeOpacity }
+      : {
+        visible: true,
+        striped,
+        fill: groupRgb ? over(groupRgb, GROUP_TINT_ALPHA, baseRgb, baseAlpha) : [...baseRgb, baseAlpha],
+        stroke: [...asRgb(type.strokeColor), strokeOpacity],
+        width,
+        baseRgb,
+        baseAlpha,
+        strokeOpacity,
+      };
+    cache.set(key, look);
+    return look;
+  };
+};
+
+export const makeRegionOverlayStyle = ({ look, canvasStyle, getSelectedIds, originalOf = (feature) => feature }) => {
+  const cache = new Map();
+  return (feature, resolution) => {
+    const original = originalOf(feature);
+    const seen = look(original);
+    if (!seen.visible) return null;
+    if (seen.striped) return canvasStyle(original, resolution);
+    if (!getSelectedIds().has(original.getId())) return null;
+    const key = `${seen.baseRgb.join("_")}|${seen.baseAlpha}|${seen.width}|${seen.strokeOpacity}`;
+    const hit = cache.get(key);
+    if (hit) return hit;
+    const a = Math.max(0, Math.min(1, seen.baseAlpha));
+    const lifted = a >= 1 ? 0 : Math.max(0, 1 - (1 - Math.min(1, a + 0.22)) / (1 - a));
+    const style = new Style({
+      zIndex: 999,
+      fill: new Fill({ color: rgba(seen.baseRgb, lifted) }),
+      stroke: new Stroke({ color: rgba(ACCENT_RGB, seen.strokeOpacity), width: Math.max(2.25, seen.width + 1) }),
+    });
+    cache.set(key, style);
+    return style;
+  };
+};

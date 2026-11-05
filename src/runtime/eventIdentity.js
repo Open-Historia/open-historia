@@ -65,16 +65,24 @@ export const allocateCanonicalTurnEventIds = ({
   return { events, idMap };
 };
 
+// A record's eventIndexes count the events of the segment it was written in.
+// Once it carries the round's ids they would point at other events of the
+// round (Intervene's cut, the apply's fallback when an id is not found), so a
+// record with ids leaves them behind.
 export const remapLedgerEventIds = (updates, idMap) => {
   if (!(idMap instanceof Map) || idMap.size === 0) {
     return Array.isArray(updates) ? updates : [];
   }
-  return (Array.isArray(updates) ? updates : []).map((update) => ({
-    ...(update && typeof update === "object" ? update : {}),
-    eventIds: [...new Set(
+  return (Array.isArray(updates) ? updates : []).map((update) => {
+    const eventIds = [...new Set(
       (Array.isArray(update?.eventIds) ? update.eventIds : [])
         .map((value) => idMap.get(norm(value)) || norm(value))
         .filter(Boolean),
-    )].slice(0, 24),
-  }));
+    )].slice(0, 24);
+    return {
+      ...(update && typeof update === "object" ? update : {}),
+      eventIds,
+      ...(eventIds.length && Array.isArray(update?.eventIndexes) ? { eventIndexes: [] } : {}),
+    };
+  });
 };

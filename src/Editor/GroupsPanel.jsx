@@ -11,9 +11,10 @@
 // inspector. The export writes world.groups and world.groupAreas, which the game
 // outlines and tints and the AI reads, changes and erases (exportPreset.js).
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Panel from "./Panel.jsx";
 import { inputStyle, labelDim, pillButton } from "./editorStyles.js";
+import { formatPopulationFigure, readPopulationFigure } from "../runtime/populationFigure.js";
 import {
   GROUP_DESCRIPTION_MAX,
   GROUP_NAME_MAX,
@@ -24,6 +25,10 @@ import {
   normalizeGroupDescription,
   normalizeGroupName,
 } from "../runtime/groups.js";
+import { groupEraseSteps, groupRenameSteps } from "./documentUndo.js";
+import MilitaryFields from "./MilitaryFields.jsx";
+import { rateMilitaryFigures } from "../Game/AI/militaryRating.js";
+import { militaryScaleOf } from "./militaryForm.js";
 
 const Swatch = ({ color, size = 14 }) => (
   <span
@@ -32,7 +37,9 @@ const Swatch = ({ color, size = 14 }) => (
   />
 );
 
-const GroupsPanel = ({ api, groups = {}, setGroups, selection = [], regionEpoch = 0, onClose }) => {
+// militaryDefaults: what a military figure left empty stands for in the
+// scenario (militaryForm.js militaryDefaultsFor); null for a map on its own.
+const GroupsPanel = ({ api, groups = {}, setGroups, selection = [], regionEpoch = 0, militaryDefaults = null, onClose }) => {
   const [current, setCurrent] = useState("");
   const [draftName, setDraftName] = useState("");
   const [newName, setNewName] = useState("");
@@ -85,8 +92,14 @@ const GroupsPanel = ({ api, groups = {}, setGroups, selection = [], regionEpoch 
     }
   };
 
+  // A rename or an erase undone from the map's stack can leave the group open
+  // here under a name that no longer exists; go back to the list.
+  useEffect(() => {
+    if (current && !names.includes(current)) setCurrent("");
+  }, [current, names]);
+
   // Renaming re-keys the record and every region in the area, as one step on
-  // the map's undo stack.
+  // the map's undo stack (the record moves back and forth with the regions).
   const rename = () => {
     const to = normalizeGroupName(draftName);
     if (!current || !to || to === current) {
@@ -100,14 +113,9 @@ const GroupsPanel = ({ api, groups = {}, setGroups, selection = [], regionEpoch 
       return;
     }
     const from = current;
-    api?.retagGroup(from, to);
-    setGroups((registry) => {
-      const next = { ...registry };
-      const moved = { ...recordOf(from), ...(registry?.[from] ?? {}), name: to };
-      delete next[from];
-      next[to] = moved;
-      return next;
-    });
+    const steps = groupRenameSteps(setGroups, from, to, recordOf(from));
+    if (api?.retagGroup) api.retagGroup(from, to, steps);
+    else steps.redo();
     setCurrent(to);
     setDraftName(to);
     setNote(`Renamed to ${to}.`);
@@ -115,12 +123,9 @@ const GroupsPanel = ({ api, groups = {}, setGroups, selection = [], regionEpoch 
 
   const erase = () => {
     const name = current;
-    api?.retagGroup(name, null);
-    setGroups((registry) => {
-      const next = { ...registry };
-      delete next[name];
-      return next;
-    });
+    const steps = groupEraseSteps(setGroups, name, groups?.[name] ?? null);
+    if (api?.retagGroup) api.retagGroup(name, null, steps);
+    else steps.redo();
     setCurrent("");
     setDeleteArmed(false);
     setNote(`${name} erased, and its area with it.`);
@@ -128,9 +133,6 @@ const GroupsPanel = ({ api, groups = {}, setGroups, selection = [], regionEpoch 
 
   return (
     <Panel title="Groups" icon="list" onClose={onClose} width={340}>
-      <div style={{ fontSize: 12, lineHeight: 1.45, color: "rgba(255,255,255,0.7)" }}>
-        A group — a cartel, a militia, a zombie outbreak — controls an area without owning it. The regions stay their countries'; the game outlines the group's area and tints it in the group's colour, and the AI is told what the group is.
-      </div>
 
       {!current && (
         <>
@@ -198,6 +200,36 @@ const GroupsPanel = ({ api, groups = {}, setGroups, selection = [], regionEpoch 
             onBlur={(e) => patchRecord(current, { description: normalizeGroupDescription(e.target.value) })}
             rows={5}
             style={{ ...inputStyle, padding: "6px 7px", resize: "vertical", fontFamily: "inherit", fontSize: 12.5 }}
+          />
+          <div style={labelDim}>Population when the scenario begins</div>
+          <input
+            key={`population-${current}`}
+            defaultValue={formatPopulationFigure(record.population)}
+            inputMode="numeric"
+            placeholder="Leave empty and the game goes by the land it holds"
+            onBlur={(e) => {
+              const people = readPopulationFigure(e.target.value);
+              e.target.value = formatPopulationFigure(people);
+              patchRecord(current, { population: people > 0 ? people : undefined });
+            }}
+            style={{ ...inputStyle, padding: "5px 7px" }}
+          />
+          {/* Its own military figures, as a country's (MilitaryFields.jsx): a
+              group fights on a battlefield like any side. */}
+          <MilitaryFields
+            recordKey={current}
+            value={record.military}
+            defaults={militaryDefaults}
+            onChange={(military) => patchRecord(current, { military: military ?? undefined })}
+            onRate={() => rateMilitaryFigures({
+              name: current,
+              note: record.description,
+              population: record.population,
+              rated: militaryScaleOf({}, groups),
+              date: militaryDefaults?.gameDate,
+              era: Number.isInteger(militaryDefaults?.era) ? militaryDefaults.era : null,
+              rules: militaryDefaults?.rules,
+            })}
           />
           <div style={labelDim}>Tint colour</div>
           <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 5 }}>

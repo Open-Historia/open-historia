@@ -13,10 +13,22 @@ export const DIPLOMATIC_RECENT_TRANSCRIPT_MESSAGES = 18;
 // memory block is accepted across several lines defensively even though the
 // prompt asks for one compact line; it is hidden metadata and must never leak
 // into the chat bubble.
+//
+// A leader at war with the player may also end with a hidden PEACE line
+// (AI/warStatsPrompt.js describePeaceTalk): what it decides of peace, read by
+// runtime/peaceTerms.js readPeaceVerdict. It is taken out wherever it stands,
+// and returned as `peace` ("" for none).
 export const parseDiplomaticEnvelope = (raw) => {
   let text = clean(raw);
   let reaction = null;
   let memorySummary = "";
+  let peace = "";
+
+  const peaceMatch = text.match(/^[ \t]*PEACE[ \t]*:[ \t]*(.+)$/im);
+  if (peaceMatch) {
+    peace = peaceMatch[1].trim();
+    text = `${text.slice(0, peaceMatch.index)}${text.slice(peaceMatch.index + peaceMatch[0].length)}`.replace(/\n{3,}/g, "\n\n").trim();
+  }
 
   const reactionMatch = text.match(/\n?\s*REACTION\s*:\s*(\S+)\s*$/i);
   if (reactionMatch) {
@@ -30,7 +42,15 @@ export const parseDiplomaticEnvelope = (raw) => {
     text = text.slice(0, memoryMatch.index).trimEnd();
   }
 
-  return { reply: text, reaction, memorySummary };
+  // Metadata alone cannot stand in for a leader speaking. Failing here makes
+  // both ordinary and advisor-drafted diplomacy take their existing error path,
+  // rather than persisting a blank, apparently successful chat bubble. A PEACE
+  // line is the exception: it is the leader's answer, and the reply carries the
+  // peace offer it settles (chat.jsx answerPeaceInChat). Refusing it lost the
+  // verdict and asked the player to spend a second request on a Retry.
+  if (!text && !peace) throw new Error("Diplomatic AI response contained no visible diplomatic reply.");
+
+  return { reply: text, reaction, memorySummary, peace };
 };
 
 // The newest durable memory a saved transcript carries, with the game date of

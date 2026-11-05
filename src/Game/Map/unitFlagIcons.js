@@ -15,7 +15,9 @@
 //   * A failure is cached per owner+URL too. A bad old URL must not poison a
 //     later replacement flag for the same stable polity identity.
 
-import { gidToAlpha2 } from "../../runtime/countryFlags.js";
+import { bundledFlagUrl } from "../../runtime/countryFlags.js";
+import { resolvePolityFlag } from "../../runtime/polityFlags.js";
+import { buildPolityIdentityIndex } from "../../runtime/polityIdentity.js";
 
 // Rasterised at 64px and scaled down by icon-size. Comfortably above the largest
 // counter (16px radius => a ~26px disc at z12), so the flag stays supersampled
@@ -28,18 +30,32 @@ const iconIdFor = (ownerCode) => `unit-flag:${ownerCode}`;
 // Take the raster here: an SVG drawn into a canvas has no reliable intrinsic
 // size (a viewBox-only file reports 0, or 300x150), and guessing it wrong
 // stretches the flag.
-const isoFlagUrl = (ownerCode) => {
-  const alpha2 = gidToAlpha2(ownerCode);
-  return alpha2 ? `https://flagcdn.com/w160/${alpha2}.png` : null;
+const FLAGCDN_SVG = /^https:\/\/flagcdn\.com\/([a-z-]+)\.svg$/i;
+const rasterFlagUrl = (url) => {
+  const match = FLAGCDN_SVG.exec(url);
+  return match ? `https://flagcdn.com/w160/${match[1].toLowerCase()}.png` : url;
 };
 
-// Same precedence as the country panel (see resolveEraFlagInfo in Selection/Regions):
-// a flag the map-maker uploaded wins, then a scenario polity's own, then the ISO
-// flag the owner name resolves to.
-export const resolveUnitFlagUrl = (ownerCode, customFlags, polities) => {
+// The same flag the country panel, the chat and the flag picker show: the one
+// shared resolver (runtime/polityFlags.js). This used to be its own lookup —
+// an exact flags.json key, the polity record's own flag, or an ISO country
+// NAMED exactly like the owner — so a renamed polity (the United Kingdom
+// reconstituted as the British Empire) found nothing on all three and its
+// counters fell back to the unit-type letters while its panel showed the flag.
+// The shared resolver follows the polity's identity: its aliases, its map
+// references and its stock country.
+// `identityIndex`: unitFlagIdentityIndex(polities), for a caller resolving every owner at once.
+export const resolveUnitFlagUrl = (ownerCode, customFlags, polities, identityIndex = null) => {
   if (!ownerCode) return null;
-  return customFlags?.[ownerCode] || polities?.[ownerCode]?.flag || isoFlagUrl(ownerCode);
+  const { imageUrl } = resolvePolityFlag({
+    polity: { name: ownerCode, code: ownerCode },
+    world: { polityOverrides: polities ?? {} },
+    flags: customFlags ?? {},
+    identityIndex,
+  });
+  return imageUrl ? rasterFlagUrl(imageUrl) : null;
 };
+export const unitFlagIdentityIndex = (polities) => buildPolityIdentityIndex({ polityOverrides: polities ?? {} });
 
 // ownerCode + URL -> ImageData, or null once that exact URL has failed. Stable
 // polity identity deliberately does NOT change when the display name or regime
@@ -157,7 +173,9 @@ const loadFlagPixels = (url) =>
     image.crossOrigin = "anonymous";
     image.onload = () => resolve(toCircularImageData(image));
     image.onerror = () => reject(new Error(`flag image failed: ${url}`));
-    image.src = url;
+    // The copy that shipped with the game, as a PNG: a canvas cannot size an SVG
+    // that has no width (countryFlags.js bundledFlagUrl).
+    image.src = bundledFlagUrl(url, { raster: true });
   });
 
 // Make sure every owner in `wanted` has its flag on the map, and report which

@@ -141,7 +141,9 @@ test("the pieces are wired: the worker keeps the file, the game looks for it fir
   assert.ok(boot.indexOf("bringHttpSavesAcross({ db: idb })") < boot.indexOf("await ensureSeeded()"), "saves come across before the library is seeded and read");
   assert.match(read("../../../scripts/assemble-site.mjs"), /"save-move"/);
   // The game drops every cache it does not know as it loads; the arriving saves must not be one of them.
-  assert.match(read("../assets.js"), /key !== PRELOAD_CACHE_NAME && key !== SAVE_MOVE_CACHE_NAME/);
+  // (Beside the kept music's cache, which the sweep spares too: runtime/keptMusic.js.)
+  assert.match(read("../assets.js"), /const KEPT_CACHE_NAMES = new Set\(\[[^\]]*\bSAVE_MOVE_CACHE_NAME,/);
+  assert.match(read("../assets.js"), /if \(!KEPT_CACHE_NAMES\.has\(key\)\) caches\.delete\(key\)/);
   assert.match(read("../assets.js"), /SAVE_MOVE_CACHE_NAME = "oh-save-move"/);
   assert.match(read("../../../public/save-move/index.html"), /data-save-move="sender"/);
 });

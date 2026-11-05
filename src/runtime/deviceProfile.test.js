@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { classifyDevice, mapRuntimeLimits, warmsWholeMapArchives } from "./deviceProfile.js";
+import { classifyDevice, describeDeviceProfile, deviceProfileReason, mapRuntimeLimits, warmsWholeMapArchives } from "./deviceProfile.js";
 
 test("the Android app and touch-only screens take the constrained path", () => {
   assert.equal(classifyDevice({ native: true }), true);
@@ -49,4 +49,23 @@ test("only the map imports maplibre-gl, so the first download goes without it", 
   assert.doesNotMatch(read("../main.jsx"), /configureMapRuntime/);
   assert.match(read("../App.jsx"), /const WorldMap = lazy\(\(\) => import\("\.\/Game\/Map\/World\.jsx"\)\)/);
   assert.match(read("../Game/Map/World.jsx"), /\nconfigureMapRuntime\(\);/);
+});
+
+test("the Logging file names the profile and the signal that decided it", () => {
+  assert.equal(deviceProfileReason({ native: true, touchOnly: true }), "Android app");
+  assert.equal(deviceProfileReason({ touchOnly: true, deviceMemoryGb: 8 }), "touch-only screen");
+  assert.equal(deviceProfileReason({ deviceMemoryGb: 4 }), "4 GB of memory reported");
+  assert.equal(deviceProfileReason({ deviceMemoryGb: 8 }), "8 GB of memory reported");
+  assert.equal(deviceProfileReason({}), "memory not reported");
+  assert.equal(deviceProfileReason({ native: true, override: "full" }), "override");
+  assert.equal(deviceProfileReason({ native: true, override: "something else" }), "Android app");
+
+  assert.equal(describeDeviceProfile({ running: { touchOnly: true } }), "low memory (touch-only screen)");
+  assert.equal(describeDeviceProfile({ running: { deviceMemoryGb: 8 } }), "full (8 GB of memory reported)");
+  // Chosen in Settings after the page loaded: the running profile, then the next.
+  assert.equal(
+    describeDeviceProfile({ running: { touchOnly: true }, now: { touchOnly: true, override: "full" } }),
+    "low memory (touch-only screen); full after a reload",
+  );
+  assert.equal(describeDeviceProfile({ running: { touchOnly: true }, now: { touchOnly: true, override: "constrained" } }), "low memory (touch-only screen)");
 });

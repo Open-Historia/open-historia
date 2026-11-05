@@ -9,7 +9,8 @@
 // is what should stop them.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import http from "node:http";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -121,6 +122,34 @@ describe("LAN sharing", () => {
     assert.equal(state.lockedByEnv, false);
   });
 
+  // DNS rebinding: a page on attacker.example re-points its name at 127.0.0.1.
+  // The browser then arrives over loopback with Origin and Host both saying
+  // attacker.example, which every same-origin and loopback check accepts.
+  test("a rebinding page's host name is refused, even over loopback with a matching Origin", async () => {
+    const ask = (host, method = "GET") => new Promise((resolve, reject) => {
+      const request = http.request({
+        host: "127.0.0.1",
+        port,
+        method,
+        path: method === "GET" ? "/api/games" : "/api/server/network",
+        headers: { Host: host, Origin: `http://${host}`, "Content-Type": "application/json" },
+      }, (response) => {
+        response.resume();
+        response.on("end", () => resolve(response.statusCode));
+      });
+      request.on("error", reject);
+      request.end(method === "GET" ? undefined : JSON.stringify({ lanEnabled: true }));
+    });
+
+    assert.equal(await ask(`attacker.example:${port}`), 403, "reading the saves");
+    assert.equal(await ask(`attacker.example:${port}`, "POST"), 403, "switching LAN sharing on");
+    assert.equal(await ask(`localhost:${port}`), 200);
+    assert.equal(await ask(`127.0.0.1:${port}`), 200);
+
+    const state = await (await fetch(`http://127.0.0.1:${port}/api/server/network`)).json();
+    assert.equal(state.lanEnabled, false, "the refused request changed nothing");
+  });
+
   test("turning the setting on lets other devices in, without a restart", async () => {
     const { status, body } = await setLan(port, true);
     assert.equal(status, 200);
@@ -144,6 +173,91 @@ describe("LAN sharing", () => {
     const lan = lanAddress();
     if (lan) {
       assert.equal(await reachable(lan, port), false);
+    }
+  });
+
+  // The rebind lands 250 ms after the reply. A second flip inside that window
+  // used to compare itself with the binding that had not moved yet, match it
+  // and do nothing — so on-then-off showed Off while the server went to
+  // 0.0.0.0 and the saved setting said on.
+  test("flipping the switch twice in a row settles on the last answer", async () => {
+    const flip = async (lanEnabled) => {
+      const response = await fetch(`http://127.0.0.1:${port}/api/server/network`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Origin: `http://127.0.0.1:${port}` },
+        body: JSON.stringify({ lanEnabled }),
+      });
+      return (await response.json()).lanEnabled;
+    };
+    const settle = async () => {
+      await new Promise((resolve) => setTimeout(resolve, 900));
+      const state = await (await fetch(`http://127.0.0.1:${port}/api/server/network`)).json();
+      const saved = JSON.parse(readFileSync(path.join(dataDir, "network-settings.json"), "utf8"));
+      return { lanEnabled: state.lanEnabled, saved: saved.lanAccess };
+    };
+    const lan = lanAddress();
+
+    assert.equal(await flip(true), true);
+    assert.equal(await flip(false), false);
+    assert.deepEqual(await settle(), { lanEnabled: false, saved: false });
+    if (lan) assert.equal(await reachable(lan, port), false, "the network must not be let in");
+
+    assert.equal(await flip(true), true);
+    assert.equal(await flip(false), false);
+    assert.equal(await flip(true), true);
+    assert.deepEqual(await settle(), { lanEnabled: true, saved: true });
+    if (lan) assert.equal(await reachable(lan, port), true);
+
+    await setLan(port, false);
+  });
+
+  // The rebind used to closeAllConnections(), which destroyed requests in
+  // flight as well as idle ones: a local model's relayed generation died the
+  // moment the player flipped the switch, and the time skip with it.
+  test("flipping the switch does not cut a request that is still running", async () => {
+    const upstream = http.createServer((req, res) => {
+      req.resume();
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      let n = 0;
+      const tick = setInterval(() => {
+        n += 1;
+        res.write(`data: {"n":${n}}\n\n`);
+        if (n === 8) {
+          clearInterval(tick);
+          res.end("data: [DONE]\n\n");
+        }
+      }, 250);
+    });
+    await new Promise((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/api/ai/relay`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Origin: `http://127.0.0.1:${port}` },
+        body: JSON.stringify({ url: `http://127.0.0.1:${upstream.address().port}/v1/chat/completions`, payload: {} }),
+      });
+      assert.equal(response.status, 200);
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let text = decoder.decode((await reader.read()).value);
+
+      // On, then off again, both while the answer is still streaming.
+      const flips = (async () => {
+        await setLan(port, true);
+        await setLan(port, false);
+      })();
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        text += decoder.decode(value, { stream: true });
+      }
+      await flips;
+
+      assert.match(text, /"n":8/);
+      assert.match(text, /\[DONE\]/);
+      const state = await (await fetch(`http://127.0.0.1:${port}/api/server/network`)).json();
+      assert.equal(state.lanEnabled, false);
+    } finally {
+      await new Promise((resolve) => upstream.close(resolve));
     }
   });
 
@@ -243,5 +357,118 @@ describe("LAN sharing", () => {
     } finally {
       await new Promise((resolve) => squatter.close(resolve));
     }
+  });
+});
+
+// A browser on another computer using this server, with its AI on this one
+// (LM Studio, Ollama) refusing browser calls from other sites, has to go
+// through the relay — which answers only this machine unless the player says
+// otherwise. That used to take OH_ALLOW_REMOTE_RELAY=1, which a desktop player
+// cannot set; now it is a switch beside "Let other devices connect".
+describe("the AI relay for other devices", () => {
+  let dataDir;
+  let port;
+  let child;
+  let upstream;
+
+  const start = async (env = {}) => {
+    child = spawn(process.execPath, [SERVER], {
+      env: { ...process.env, OH_DATA_DIR: dataDir, PORT: String(port), OH_HOST: "", OH_ALLOW_REMOTE_RELAY: "", ...env },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    child.stdout.resume();
+    child.stderr.resume();
+    await waitForServer(port, child);
+  };
+  const stop = async () => {
+    if (!child || child.exitCode !== null) return;
+    child.kill();
+    await new Promise((resolve) => child.once("exit", resolve));
+  };
+  const state = async () => (await fetch(`http://127.0.0.1:${port}/api/server/network`)).json();
+  const setRelay = async (relayForLan) => {
+    const response = await fetch(`http://127.0.0.1:${port}/api/server/network`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: `http://127.0.0.1:${port}` },
+      body: JSON.stringify({ relayForLan }),
+    });
+    return { status: response.status, body: await response.json() };
+  };
+  // A relay call as a browser on another computer makes it: to this machine's
+  // LAN address, so the server sees a non-loopback caller.
+  const relayFrom = (host) => fetch(`http://${host}:${port}/api/ai/relay`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Origin: `http://${host}:${port}` },
+    body: JSON.stringify({ url: `http://127.0.0.1:${upstream.address().port}/v1/models`, method: "GET" }),
+  });
+
+  before(async () => {
+    dataDir = mkdtempSync(path.join(os.tmpdir(), "oh-relay-lan-test-"));
+    port = await freePort();
+    upstream = http.createServer((req, res) => {
+      req.resume();
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ data: [{ id: "local-model" }] }));
+    });
+    await new Promise((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+  });
+
+  after(async () => {
+    await stop();
+    await new Promise((resolve) => upstream.close(resolve));
+    rmSync(dataDir, { force: true, recursive: true });
+  });
+
+  test("off by default; turning it on lets another device relay, at once and after a restart", async () => {
+    await start();
+    assert.deepEqual(
+      (({ relayForLan, relayLockedByEnv }) => ({ relayForLan, relayLockedByEnv }))(await state()),
+      { relayForLan: false, relayLockedByEnv: false },
+    );
+
+    // The relay switch alone leaves LAN sharing as it was.
+    await setLan(port, true);
+    const { status, body } = await setRelay(true);
+    assert.equal(status, 200);
+    assert.equal(body.relayForLan, true);
+    assert.equal(body.lanEnabled, true, "setting the relay does not touch the binding");
+    const saved = JSON.parse(readFileSync(path.join(dataDir, "network-settings.json"), "utf8"));
+    assert.deepEqual(saved, { lanAccess: true, relayForLan: true });
+
+    const lan = lanAddress();
+    if (lan) {
+      const allowed = await relayFrom(lan);
+      assert.equal(allowed.status, 200);
+      assert.deepEqual(await allowed.json(), { data: [{ id: "local-model" }] });
+
+      await setRelay(false);
+      const refused = await relayFrom(lan);
+      assert.equal(refused.status, 403);
+      assert.equal(refused.headers.get("x-oh-relay"), "refused", "the page can tell the relay's refusal from the model's");
+      assert.match((await refused.json()).error, /Let other devices send AI calls through this server/);
+      await setRelay(true);
+    }
+
+    await stop();
+    await start();
+    assert.equal((await state()).relayForLan, true, "remembered across a restart");
+    await setLan(port, false);
+    assert.deepEqual(
+      JSON.parse(readFileSync(path.join(dataDir, "network-settings.json"), "utf8")),
+      { lanAccess: false, relayForLan: true },
+      "changing LAN sharing keeps the relay setting",
+    );
+  });
+
+  test("OH_ALLOW_REMOTE_RELAY wins and locks the switch", async () => {
+    await stop();
+    await start({ OH_ALLOW_REMOTE_RELAY: "1" });
+    await setRelay(false).then(({ status, body }) => {
+      assert.equal(status, 409);
+      assert.match(body.error, /OH_ALLOW_REMOTE_RELAY/);
+    });
+    const current = await state();
+    assert.equal(current.relayForLan, true);
+    assert.equal(current.relayLockedByEnv, true);
   });
 });

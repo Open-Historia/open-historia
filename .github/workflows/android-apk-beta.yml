@@ -74,8 +74,8 @@ jobs:
       - name: Restore the map data
         uses: actions/cache@v4
         with:
-          path: mobile/map-cache
-          key: android-map-data-${{ hashFiles('mobile/map-assets.android.json') }}
+          path: map-cache
+          key: android-map-data-${{ hashFiles('scripts/map-assets.web.json') }}
 
       - name: Build the APK
         env:

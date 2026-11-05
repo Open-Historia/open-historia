@@ -128,6 +128,59 @@ test("reporting that nothing moved is valid", () => {
 });
 
 // The reason all of this was worth doing.
+test("jump-only schema compaction keeps internal impact guidance intact", () => {
+  const jumpImpacts = GAMEPLAY_TOOLS.jumpForward.schema.properties.events.items.properties.impacts.properties;
+  const gmImpacts = GAME_MASTER_SCHEMA.properties.events.items.properties.impacts.properties;
+
+  for (const key of ["markerOps", "institutionLifecycleOps"]) {
+    assert.equal(
+      JSON.stringify(jumpImpacts[key].items).includes('"description"'),
+      false,
+      `${key} nested descriptions should stay out of the every-turn jump schema`,
+    );
+    assert.equal(
+      JSON.stringify(gmImpacts[key].items).includes('"description"'),
+      true,
+      `${key} internal/Game Master schema must retain its field guidance`,
+    );
+    assert.equal(typeof jumpImpacts[key].description, "string", `${key} should keep its jump-level meaning`);
+  }
+});
+
+test("jump quote guidance stays compact while Game Master keeps the full quotation contract", () => {
+  const jumpQuote = GAMEPLAY_TOOLS.jumpForward.schema.properties.events.items.properties.quote;
+  const gmQuote = GAME_MASTER_SCHEMA.properties.events.items.properties.quote;
+
+  assert.equal(
+    JSON.stringify(jumpQuote.properties).includes('"description"'),
+    false,
+    "jump quote fields should not repeat nested prose on every generated event",
+  );
+  assert.equal(
+    JSON.stringify(gmQuote.properties).includes('"description"'),
+    true,
+    "Game Master should retain the full quote-field guidance",
+  );
+  assert.match(jumpQuote.description, /quotation/i);
+});
+
+test("Political World claims stay a compact optional jump transport", () => {
+  const jumpSchema = GAMEPLAY_TOOLS.jumpForward.schema;
+  const claims = jumpSchema.properties.politicalClaims;
+
+  assert.equal(claims.type, "string");
+  assert.equal(jumpSchema.required.includes("politicalClaims"), false, "migration metadata must not discard an otherwise valid provider answer when omitted");
+  assert.ok(claims.description.length < 80, "politicalClaims schema guidance should stay in the live prompt, not bloat the tool schema");
+
+  const verdict = validateGameplayPayload("jumpForward", {
+    events: [],
+    stopDate: "2026-09-29",
+    summary: "No structural political changes.",
+    politicalClaims: "",
+  });
+  assert.equal(verdict.valid, true, verdict.error);
+});
+
 test("the board no longer costs the jump anything", () => {
   const jumpSchema = GAMEPLAY_TOOLS.jumpForward.schema;
   const jumpChars = JSON.stringify(jumpSchema).length;
@@ -146,8 +199,27 @@ test("the board no longer costs the jump anything", () => {
   // prompt-size guard, not a provider limit: a new impact family that saves a
   // REQUEST may raise it, on purpose, here — which is what reports did
   // (26,363: ~1,450 chars for impacts.reports, against a whole request per turn
-  // if documents had taken a call of their own, as the board did).
-  assert.ok(jumpChars < 28000, `the jump schema grew back to ${jumpChars} chars`);
+  // if documents had taken a call of their own, as the board did). The transient
+  // Political World claim ledger stays top-level and compact rather than adding
+  // a nested semantic object to every event. Wars and Fronts Pt.2 (lab)
+  // raised it by 200, on purpose, for polityChanges[].military (~160 chars,
+  // its five keys named in words): a country's military figures move with the
+  // story, not in a re-rating request of their own.
+  // spiesOnPlayer raised it by 100, on purpose (~90 chars): the skip names the
+  // polities that would plant an agent in the player, which asks nothing more.
+  // The Discord spike raised it by 100 for events[].audience: a covert act's outcome
+  // is shown only to the polities that know of it, not to every player of a shared game.
+  // Shared games' letters raised it by about 230 for a chat's `to` (in createdChats
+  // and diplomaticOutreach alike): each letter reaches the player it was written
+  // to, where every one used to go to the host's.
+  // Peace through the diplomatic chats raised it by about 560, on purpose: a
+  // letter's peaceOffer (its terms, four flat fields) and the peaceTreaties line
+  // field, so that a country offers peace when the skip says so, in the skip's
+  // one request, and never by a formula of the game's.
+  // Rostra, the social network, raised it by about 400, on purpose: the posts of
+  // the period (socialPosts, seven flat fields named in words) ride in the skip's
+  // one answer, where a feed of its own would have been a request a skip.
+  assert.ok(jumpChars < 29650, `the jump schema grew back to ${jumpChars} chars`);
 
   // ...and the game master, which has no second pass to hand the board to, keeps
   // it on its authored events (the provider sees a shallow transport; the

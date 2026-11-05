@@ -16,12 +16,18 @@ export const MAX_TAG_LEN = 32;
 // closed list could never cover it; these exist so the common cases converge on
 // one spelling instead of "anti-nato" / "anti nato" / "antiNATO" splitting the
 // model's attention three ways.
+//
+// "client-state" and "puppet-state" are deliberately NOT here. A subordination
+// is a modelled relationship now (world.puppets), and a tag saying the same
+// thing is a second answer to one question that nothing keeps in step. The
+// vocabulary is open, so a model may still write either as free text — nothing
+// steers it there, and an old save carrying one keeps it harmlessly as flavour.
 export const TAG_SUGGESTIONS = [
   "socialist", "communist", "capitalist", "social-democratic", "liberal",
   "conservative", "fascist", "monarchist", "theocratic", "technocratic",
   "authoritarian", "totalitarian", "democratic", "one-party", "military-junta",
   "nato-aligned", "anti-nato", "warsaw-pact", "non-aligned", "neutral",
-  "great-power", "regional-power", "client-state", "puppet-state", "colonial",
+  "great-power", "regional-power", "colonial",
   "nuclear", "isolationist", "expansionist", "revanchist", "pariah",
 ];
 

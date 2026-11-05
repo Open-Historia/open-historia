@@ -40,9 +40,6 @@ const UnitsPanel = ({ units = [], polityName = (key) => key, activeTool, setActi
         </div>
       }
     >
-      <div style={{ fontSize: 12, lineHeight: 1.45, color: "rgba(255,255,255,0.62)" }}>
-        Units placed here exist from round one: the simulator moves them, fights with them and reports on them like any other formation. Pick the Unit tool, click the map where a formation stands, and give it a name, type, owner and strength.
-      </div>
       <button
         type="button"
         onClick={() => setActiveTool?.(placing ? "select" : "unit")}

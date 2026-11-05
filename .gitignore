@@ -14,9 +14,12 @@ dist-web
 # mobile/scripts/stage-map-assets.mjs downloads for it.
 dist-android
 mobile/map-cache
-# The website's map files, fetched and verified by scripts/stage-map-assets.mjs.
+# The web build's map files (the website and the Android app), fetched and
+# verified by scripts/stage-map-assets.mjs.
 /map-cache
 /public/assets/default-regions.geojson
+# Which map files scripts/fetch-map-assets.mjs has hashed and passed (per install).
+.map-assets-verified.json
 # Assembled by scripts/assemble-site.mjs from dist-web + site/. Build output, and
 # big enough that a stray `git add -A` commits a whole copy of the website.
 dist-site
@@ -30,6 +33,9 @@ release
 # in the local build).
 /src/runtime/web/generated/
 
+# The system speech programs, built by scripts/build-speech-helpers.mjs.
+/electron/speech/oh-speech-windows.exe
+/electron/speech/oh-speech-macos
 # Vendored Fantasy Map Generator (fetched at runtime by scripts/fetch-fmg.mjs)
 /fmg/
 # Runtime state only. The built-in scenario's seed lives in server/seed/ and is
@@ -44,7 +50,11 @@ server/data/
 /public/assets/regions-seed.geojson
 /public/assets/cities-seed.json
 .key
+# A Claude Code session's own notes stay out; the project's own instructions for
+# every agent (CLAUDE.md at the root, which reads AGENTS.md) are kept.
 CLAUDE.md
+!/CLAUDE.md
+CLAUDE.local.md
 
 # Editor directories and files
 .vscode/*
@@ -57,7 +67,7 @@ CLAUDE.md
 *.sln
 *.sw?
 
-# Content-node runtime store (hash-named blobs, populated by scripts/populate-node.mjs)
+# Content store left in old checkouts by a removed in-repo stub (hash-named blobs)
 /node-content/
 
 # Offline root signing PRIVATE key — never commit

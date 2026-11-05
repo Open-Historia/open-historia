@@ -151,6 +151,21 @@ export const unitHandles = (units) => {
     return handles;
 };
 
+// Of units that cannot be told apart (the same name, owner and kind), the one
+// raised last, for an order that removes one of them: a twin left on the map by
+// an earlier turn goes, and the first of them stays. Null when the written name
+// fits units that differ, or none.
+export const newestTwinByRef = (written, units) => {
+    const ref = readNameRef(asText(written));
+    if (!ref.name || (ref.kind && ref.kind !== "unit")) return null;
+    const twins = asArray(units).filter((unit) => foldName(unit?.name) === foldName(ref.name)
+        && (!ref.bracket || foldName(unit?.ownerCode) === foldName(ref.bracket)));
+    if (twins.length < 2) return null;
+    const [first] = twins;
+    if (!twins.every((unit) => foldName(unit?.ownerCode) === foldName(first?.ownerCode) && foldName(unit?.type) === foldName(first?.type))) return null;
+    return [...twins].sort((a, b) => String(a?.createdAt ?? "").localeCompare(String(b?.createdAt ?? "")))[twins.length - 1];
+};
+
 // The unit a written reference means, or null when it means none or could
 // mean two. `owner`: whose unit the operation says it is, when it says.
 // `context`: the event's own words, which name the owner when nothing else does.

@@ -18,7 +18,7 @@ import { defineConfig, globalIgnores } from 'eslint/config'
 // ignored. They are visible, and the correctness rules that matter — no-undef
 // above all — are hard errors.
 export default defineConfig([
-  globalIgnores(['dist', 'dist-web', 'dist-site', 'release', 'server/data', 'mobile/www', 'mobile/android', 'fmg', 'node-content']),
+  globalIgnores(['dist', 'dist-web', 'dist-site', 'dist-android', 'release', 'server/data', 'mobile/www', 'mobile/android', 'fmg', 'node-content']),
   {
     files: ['**/*.{js,jsx,ts,tsx}'],
     extends: [

@@ -2,26 +2,41 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { APP_HEIGHT } from "../../runtime/mobileUi.js";
 import Map from "react-map-gl/maplibre";
-import { useCustomBackground } from "./useCustomBackground.js";
+import { useCustomBackground, useOwnBasemap } from "./useCustomBackground.js";
+import { useDetailedMap } from "./useDetailedMap.js";
+import { useGameBasemapPick } from "./useBasemapPick.js";
+import { basemapShownFor, scenarioMapsOfWorld } from "../../runtime/basemapPick.js";
+import { buildScenarioTerrainStyle, publishShownRelief } from "./scenarioTerrain.js";
+import TiledBasemapOffer from "./TiledBasemapOffer.jsx";
+import { dismissTiledUpdate, isTiledUpdateDismissed } from "../../runtime/tiledBasemaps.js";
 import MapScene from "./MapScene.jsx";
 import { loadNatGeoDarkStyle } from "./natGeoDarkStyle.js";
 
-import { recordMapFreeze, recordMapTrace } from "../../runtime/mapPerfTrace.js";
+import { isMapPerfVerbose, recordMapFreeze, recordMapTrace } from "../../runtime/mapPerfTrace.js";
+import { attachMapInstrumentation } from "./mapInstrumentation.js";
+import { attachMapGestures } from "./mapGestures.js";
+import { attachTerrainCaches } from "./terrainCaches.js";
+import { attachClippingMasks } from "./clippingMasks.js";
+import { attachSourceCaches } from "./sourceCaches.js";
+import { reduceMotionEnabled } from "../../runtime/mapSettings.js";
 import {
   DEFAULT_BASEMAP_ID,
   TERRAIN_TILE_TEMPLATE,
   basemapMaxZoom,
-  basemapOverrideFor,
+  basemapSeaColour,
   basemapProtocolTemplate,
   buildBasemapRenderKey,
+  decodeAllowedBasemaps,
+  decodeOwnBasemaps,
   esriTileTemplate,
+  ownBasemapIdOf,
   resolveBasemapId,
 } from "../../runtime/assets.js";
 import { configureMapRuntime, ensureBasemapProtocol } from "./mapLibreSetup.js";
-import { MAP_SETTING_KEYS, useMapSettingValue } from "../../runtime/mapSettings.js";
 import { useBrowserOnline } from "../../runtime/networkStatus.js";
 import { markMapIdle } from "../../runtime/mapReadiness.js";
 import { imageQuad } from "../../../server/mapProjection.js";
+import { cameraMaxBounds } from "./cameraBounds.js";
 import { useWorldBackground } from "./useWorldState.js";
 
 // MapLibre's worker pool is made with the first map, so this goes first.
@@ -220,7 +235,61 @@ const RELIEF_TERRAIN_ATLAS_DARK_PAINT = {
   ],
 };
 
+// Midnight Terrain is deliberately quiet rather than colourful. Physical
+// geography survives as low-luminance relief, while the live political layer
+// owns essentially all strong colour. Brightness caps keep mountain/desert
+// highlights from turning into a second visual foreground. Both inputs remain
+// label-free so no modern names or borders sit underneath scenario canon.
+const WORLD_RELIEF_MIDNIGHT_PAINT = {
+  "raster-resampling": "linear",
+  "raster-fade-duration": 0,
+  "raster-saturation": -0.96,
+  "raster-contrast": 0.30,
+  "raster-brightness-min": 0.0,
+  "raster-brightness-max": 0.16,
+  "raster-opacity": [
+    "interpolate", ["linear"], ["zoom"],
+    0, 0.82,
+    3.0, 0.82,
+    3.50, 0.66,
+    4.00, 0.38,
+    4.45, 0.15,
+    4.85, 0,
+  ],
+};
+
+const RELIEF_TERRAIN_MIDNIGHT_PAINT = {
+  "raster-resampling": "linear",
+  "raster-fade-duration": 0,
+  "raster-saturation": -0.92,
+  // Keep the palette nearly monochrome, but recover enough local relief at
+  // regional/close zoom for mountains and broad terrain structure to survive
+  // beneath political colour. This stays substantially darker than Atlas Dark.
+  "raster-contrast": 0.38,
+  "raster-brightness-min": 0.0,
+  "raster-brightness-max": 0.20,
+  "raster-opacity": [
+    "interpolate", ["linear"], ["zoom"],
+    0, 0,
+    2.75, 0.02,
+    3.20, 0.11,
+    3.65, 0.34,
+    4.10, 0.54,
+    4.60, 0.66,
+    5.40, 0.70,
+    6.50, 0.74,
+    8.0, 0.76,
+    12, 0.78,
+  ],
+};
+
 const getReliefPaints = (basemapId) => {
+  if (basemapId === "midnight-terrain") {
+    return {
+      world: WORLD_RELIEF_MIDNIGHT_PAINT,
+      terrain: RELIEF_TERRAIN_MIDNIGHT_PAINT,
+    };
+  }
   if (basemapId === "ocean-dark") {
     return {
       world: WORLD_RELIEF_OCEAN_DARK_PAINT,
@@ -265,15 +334,21 @@ const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe, terra
       layers: [
         // Solid base beneath the image so no edge/pole ever shows a transparent hole.
         { id: "custom-bg-base", type: "background", paint: { "background-color": "#0b1a2b" } },
-        { id: "custom-bg-layer", type: "raster", source: "custom-bg", paint: { "raster-fade-duration": 0 } },
+        // "nearest" only when zoomed past the picture's own pixels (MapLibre
+        // still mipmaps it smoothly zoomed out), so a pixel map stays crisp.
+        { id: "custom-bg-layer", type: "raster", source: "custom-bg", paint: { "raster-fade-duration": 0, "raster-resampling": "nearest" } },
       ],
       sky: { "atmosphere-blend": 0 },
     };
   }
   if (customBg?.kind === "vector" && customBg.geojson) {
+    // Relief tiles, when the scenario ships them and the player wants them, draw
+    // over the vector shapes; the shapes stay beneath as the fallback wherever a
+    // tile is missing (Map/scenarioTerrain.js).
+    const relief = buildScenarioTerrainStyle(customBg.terrain, customBg.terrain?.url);
     return {
       version: 8,
-      sources: { "custom-bg-vec": { type: "geojson", data: customBg.geojson } },
+      sources: { "custom-bg-vec": { type: "geojson", data: customBg.geojson }, ...relief.sources },
       layers: [
         { id: "custom-bg-sea", type: "background", paint: { "background-color": "#0b1a2b" } },
         // A fill layer only draws (Multi)Polygons, so no geometry-type filter is
@@ -282,6 +357,7 @@ const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe, terra
         // its own biome colour in `fill`.
         { id: "custom-bg-fill", type: "fill", source: "custom-bg-vec", paint: { "fill-color": ["coalesce", ["get", "fill"], "#33435c"] } },
         { id: "custom-bg-line", type: "line", source: "custom-bg-vec", paint: { "line-color": "rgba(0,0,0,0.18)", "line-width": 0.4 } },
+        ...relief.layers,
       ],
       sky: { "atmosphere-blend": 0 },
     };
@@ -319,9 +395,10 @@ const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe, terra
       sky: { "atmosphere-blend": 0 },
     };
   }
-  // The scenario's basemap is the basemap, at every zoom. Atlas Relief and the
-  // physically-dark Ocean variant are composed looks of their own (ETOPO global
-  // relief fading into label-free World Terrain Base); other raster ids render
+  // The scenario's basemap is the basemap, at every zoom. Atlas Relief, the
+  // physically-dark Ocean variant and Midnight Terrain are composed looks of
+  // their own (ETOPO global relief fading into label-free World Terrain Base);
+  // other raster ids render
   // the ESRI service they name. National Geographic - Dark is handled by the
   // async vector-style adapter in World() below.
   // The renderer used to swap Ocean and a scenario-default Dark Gray for that
@@ -330,7 +407,8 @@ const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe, terra
   // had faded out around z5.
   const useComposedRelief = basemapId === "atlas-relief"
     || basemapId === "atlas-relief-dark"
-    || basemapId === "ocean-dark";
+    || basemapId === "ocean-dark"
+    || basemapId === "midnight-terrain";
   const reliefPaints = getReliefPaints(basemapId);
   const basemapPaint = useComposedRelief
     ? reliefPaints.terrain
@@ -340,10 +418,16 @@ const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe, terra
   // World Terrain Base is the useful middle ground for the relief presets:
   // label-free shaded land relief + bathymetry + coastal water context.
   const renderedBasemapId = useComposedRelief ? "terrain" : basemapId;
-  const darkPhysicalVariant = basemapId === "ocean-dark" || basemapId === "atlas-relief-dark";
-  const physicalBackground = darkPhysicalVariant
-    ? (basemapId === "ocean-dark" ? "#030a14" : "#050609")
-    : "#0b1017";
+  const darkPhysicalVariant = basemapId === "ocean-dark"
+    || basemapId === "atlas-relief-dark"
+    || basemapId === "midnight-terrain";
+  // Under a light basemap, its own sea colour: a tile still on its way, or one
+  // that failed, then reads as sea instead of a black hole in it.
+  const physicalBackground = basemapId === "midnight-terrain"
+    ? "#000205"
+    : darkPhysicalVariant
+      ? (basemapId === "ocean-dark" ? "#030a14" : "#050609")
+      : basemapSeaColour(renderedBasemapId) ?? "#0b1017";
 
   // THE BLACK TILES. The renderer before vNext put a second raster layer UNDER
   // the basemap: "satellite-lowres", z0-2 only, levels that always have real
@@ -452,6 +536,9 @@ const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe, terra
   return style;
 };
 
+// How long basemap tiles must keep loading before "Loading tiles…" shows.
+const LOADING_TOAST_DELAY_MS = 700;
+
 function World({ mapRef, projection: requestedProjection, terrainEnabled, onInitialIdle }) {
   // What the scenario allows of its map (world.projection): a flat sheet may
   // not be wrapped round the 3D globe, whatever the player's setting says, and
@@ -461,6 +548,7 @@ function World({ mapRef, projection: requestedProjection, terrainEnabled, onInit
   const hasReportedInitialIdleRef = useRef(false);
   const [loading, setLoading] = useState(false);
   const loadTimerRef = useRef(null);
+  const loadingPendingRef = useRef(false);
   const [basemapTransition, setBasemapTransition] = useState({
     active: false,
     progress: 0,
@@ -531,27 +619,68 @@ function World({ mapRef, projection: requestedProjection, terrainEnabled, onInit
   });
   // A custom uploaded map (image or vector) replaces the ESRI basemap; otherwise
   // the scenario's basemap does, unless the player picked one in Settings → Map.
-  // `declared` flips on from the light world.json poll (before the heavy payload)
-  // so the map drops ESRI immediately rather than flashing satellite Earth.
-  const { background: customBg, declared: bgDeclared, basemap: worldBasemap } = useCustomBackground();
+  // A scenario with a map of its own keeps it whatever the player picked.
+  // `declared` flips on from the background descriptor in world.json (before
+  // the heavy payload) so the map drops ESRI immediately rather than flashing
+  // satellite Earth.
+  const { background: customBg, declared: bgDeclared, basemap: worldBasemap, missingTiled, tiledUpdate, allowedBasemaps: worldAllowedBasemaps, ownBasemaps: worldOwnBasemaps } = useCustomBackground();
+  // A newer version of the detailed map is offered once: "Not now" is
+  // remembered for that version, unless the scenario was made on it.
+  const [dismissedUpdate, setDismissedUpdate] = useState("");
   const isGlobe = projection === "globe";
-  // The player's basemap pick (Settings → Map) is local to this browser and
-  // reversible. Empty — the default — leaves the scenario author's basemap
-  // authoritative; only a real built-in id replaces it, so a stray value left
-  // in localStorage by an older build changes nothing.
-  //
-  // It replaces a built-in basemap only. A scenario with a map of its own (a
-  // picture, a drawn map, or the plain sea of a flat sheet: `bgDeclared`)
-  // keeps it: its regions are drawn for that map, and a built-in basemap under
-  // them is the Earth under another world. The pick stays stored, and applies
-  // again in a scenario that has none (settings.jsx BasemapField says so).
-  const basemapOverride = useMapSettingValue(MAP_SETTING_KEYS.basemapStyle);
-  const validBasemapOverride = basemapOverrideFor(basemapOverride, { scenarioHasOwnMap: bgDeclared });
-  const useScenarioBackground = !validBasemapOverride;
-  const effectiveCustomBg = useScenarioBackground ? customBg : null;
-  const effectiveBgDeclared = useScenarioBackground ? bgDeclared : false;
+  // The map the player sees, one of the scenario's maps (CONTEXT.md, ADR
+  // 0007; runtime/basemapPick.js): this game's own pick (Settings → Map, kept
+  // on this device), else their default basemap where the scenario offers it,
+  // else its starting map. Only maps the author offers count: the regions are
+  // drawn for them, so a made-up world never gets the Earth under it.
+  const { background: worldBackground } = useWorldBackground();
+  const { gamePick, defaultBasemap, useDefault, showDetailed } = useGameBasemapPick();
+  const scenarioMapList = useMemo(() => scenarioMapsOfWorld({
+    background: worldBackground,
+    basemap: worldBasemap,
+    allowedBasemaps: decodeAllowedBasemaps(worldAllowedBasemaps),
+    ownBasemaps: decodeOwnBasemaps(worldOwnBasemaps),
+  }), [worldBackground, worldBasemap, worldAllowedBasemaps, worldOwnBasemaps]);
+  const shownMap = basemapShownFor({ maps: scenarioMapList, gamePick, defaultBasemap, useDefault, showDetailed });
+  const useScenarioBackground = shownMap.pick === "";
+  const builtinOverride = shownMap.kind === "builtin" && !shownMap.starting ? shownMap.pick : "";
+  // The starting map's drawing alone: the drawn map under a detailed starting
+  // map, or what another detailed map is shown over.
+  const startingDrawn = useMemo(() => (customBg?.terrain ? { ...customBg, terrain: undefined } : customBg), [customBg]);
+  // Another of the scenario's maps in place of the starting one: a picture or
+  // drawn map of its own (its payload loaded on its own), or a detailed map,
+  // over the drawn map it is shown over. Until its payload has loaded, or if it
+  // is missing, the starting map's drawing stays on screen.
+  const otherDrawnPick = shownMap.kind === "detailed" ? shownMap.over : shownMap.pick;
+  const ownPick = ownBasemapIdOf(otherDrawnPick);
+  const ownPickBg = useOwnBasemap(ownPick);
+  const otherDetailed = useDetailedMap(shownMap.starting ? null : shownMap.detailed, shownMap.fillOpacity);
+  const shownOwnBg = useMemo(() => {
+    if (shownMap.starting || shownMap.kind === "builtin") return null;
+    const base = ownPick ? ownPickBg : startingDrawn;
+    if (!base) return null;
+    return shownMap.kind === "detailed" && otherDetailed.tiles && base.kind === "vector" ? { ...base, terrain: otherDetailed.tiles } : base;
+  }, [shownMap.starting, shownMap.kind, ownPick, ownPickBg, startingDrawn, otherDetailed.tiles]);
+  const otherMapShown = !shownMap.starting && shownMap.kind !== "builtin";
+  const effectiveCustomBg = otherMapShown ? shownOwnBg || startingDrawn : useScenarioBackground ? customBg : null;
+  // The download offer is for the detailed map on screen: the starting map's
+  // (useCustomBackground) or the one picked.
+  const offeredMissing = shownMap.pick === "" ? missingTiled : shownMap.kind === "detailed" ? otherDetailed.missing : null;
+  const offeredUpdate = shownMap.pick === "" ? tiledUpdate : shownMap.kind === "detailed" ? otherDetailed.update : null;
+  const updateKey = offeredUpdate ? `${offeredUpdate.id}@${offeredUpdate.version}` : "";
+  const shownUpdate = offeredUpdate && dismissedUpdate !== updateKey && (offeredUpdate.needed || !isTiledUpdateDismissed(offeredUpdate.id, offeredUpdate.version))
+    ? offeredUpdate
+    : null;
+  // Tell the political layers whether relief tiles are actually on screen, so
+  // a scenario's lighter fill ramp applies only then (Map/scenarioTerrain.js).
+  const shownRelief = effectiveCustomBg?.terrain || null;
+  useEffect(() => {
+    publishShownRelief(shownRelief);
+    return () => publishShownRelief(null);
+  }, [shownRelief]);
+  const effectiveBgDeclared = otherMapShown ? Boolean(shownOwnBg) || bgDeclared : useScenarioBackground ? bgDeclared : false;
   const effectiveBasemap = resolveBasemapId({
-    overrideId: validBasemapOverride,
+    overrideId: builtinOverride,
     scenarioId: worldBasemap,
     fallbackId: DEFAULT_BASEMAP_ID,
   });
@@ -608,6 +737,16 @@ function World({ mapRef, projection: requestedProjection, terrainEnabled, onInit
 
   const mapProjection = useMemo(() => ({ type: projection }), [projection]);
   const styleUsesGlobeCoords = effectiveCustomBg?.kind === "image" && isGlobe;
+  // How far the camera goes (Map/cameraBounds.js): the real Earth to 80°S, a
+  // scenario's picture to its own edges, and a map that does not repeat to its
+  // left and right edges.
+  const boundsKind = effectiveCustomBg?.kind ?? "";
+  const boundsBox = effectiveCustomBg?.kind === "image" ? JSON.stringify(effectiveCustomBg.bounds ?? null) : "";
+  const maxBounds = useMemo(() => cameraMaxBounds({
+    customBg: boundsKind ? { kind: boundsKind, bounds: boundsBox ? JSON.parse(boundsBox) : null } : null,
+    noWrap,
+    globe: isGlobe,
+  }), [boundsKind, boundsBox, noWrap, isGlobe]);
 
   // The old NatGeo preset is a baked raster, so hiding country/city/province
   // names selectively is impossible. The screenshot variant uses Esri's public
@@ -689,7 +828,12 @@ function World({ mapRef, projection: requestedProjection, terrainEnabled, onInit
   const basemapRenderKey = buildBasemapRenderKey({
     projection,
     basemapId: effectiveBasemap,
-    backgroundKind: effectiveBgDeclared ? effectiveCustomBg?.kind || "declared" : "builtin",
+    // Relief tiles on or off is a different style too: remount rather than swap
+    // sources under a live React Source tree. So is another of the scenario's
+    // own basemaps in place of its main one.
+    backgroundKind: effectiveBgDeclared
+      ? `${effectiveCustomBg?.kind || "declared"}${effectiveCustomBg?.terrain ? "+relief" : ""}${otherMapShown && shownOwnBg ? `+map:${shownMap.pick}` : ""}`
+      : "builtin",
   });
   // Remount once the remote vector style becomes ready. MapLibre style swaps
   // otherwise destroy/recreate style-owned layers under a live React Source
@@ -707,34 +851,36 @@ function World({ mapRef, projection: requestedProjection, terrainEnabled, onInit
   // real ESRI/NOAA basemap — a custom uploaded image or vector background has
   // no DEM data to deform against, so terrain stays off in those cases even if
   // the player has the setting enabled.
+  // The globe is not excluded: MapLibre 5 draws terrain on the globe, and a
+  // projection change remounts the map (it is in mapInstanceKey), so the old
+  // worry about GL state carried across projections no longer applies.
   const terrain = useMemo(
     () =>
       terrainEnabled && online && !effectiveCustomBg && !effectiveBgDeclared
         ? {
             source: "terrain-source",
-            exaggeration: 15,
+            // Half what it was (15): "half the intensity of 3d terrain
+            // ingame" (the owner, 2026-11-03). GlobeEffects.jsx reads it from
+            // here for the globe's own allowance.
+            exaggeration: 7.5,
           }
         : null,
     [terrainEnabled, online, effectiveCustomBg, effectiveBgDeclared],
   );
-  // R5.1: use one renderer density for the entire session.
-  // R5.0 switched between 1x and native DPR around z4.5/z5.0.
-  // MapLibre setPixelRatio() rebuilds its render targets, producing a
-  // catastrophic hitch exactly when the player zooms through that boundary.
-  // The low-zoom live test showed the 1x framebuffer performs well, so keep it
-  // fixed instead of reallocating the renderer during navigation.
-  const fixedPixelRatioAppliedRef = useRef(false);
-  const applyFixedPixelRatio = useCallback(() => {
-    if (fixedPixelRatioAppliedRef.current) return;
-    const mapInstance = mapRef?.current?.getMap?.();
-    if (!mapInstance || typeof mapInstance.setPixelRatio !== "function") return;
-    fixedPixelRatioAppliedRef.current = true;
-    mapInstance.setPixelRatio(1);
-  }, [mapRef]);
+  // The basemap's own style sources, which the "Loading tiles…" toast watches.
+  const basemapSourceIds = useMemo(
+    () => new Set(Object.keys(worldStyle?.sources ?? {})),
+    [worldStyle],
+  );
+  const basemapSourceIdsRef = useRef(basemapSourceIds);
+  useEffect(() => {
+    basemapSourceIdsRef.current = basemapSourceIds;
+  }, [basemapSourceIds]);
 
   const emitMapMotion = useCallback((active) => {
     if (typeof window === "undefined") return;
     const moving = Boolean(active);
+    if (window.__OH_MAP_MOVING__ === moving) return;
     window.__OH_MAP_MOVING__ = moving;
     window.dispatchEvent(new CustomEvent("oh:map-motion", {
       detail: { active: moving },
@@ -742,6 +888,9 @@ function World({ mapRef, projection: requestedProjection, terrainEnabled, onInit
   }, []);
   const handleMoveStart = useCallback(() => {
     emitMapMotion(true);
+    // The frame sampler (and the freeze detector inside it) is a debugging
+    // aid: it costs a callback on every frame of every pan.
+    if (!isMapPerfVerbose()) return;
     const perf = dragPerfRef.current;
     if (perf.raf) cancelAnimationFrame(perf.raf);
     perf.active = true;
@@ -849,17 +998,15 @@ function World({ mapRef, projection: requestedProjection, terrainEnabled, onInit
       + `${summary.longFrames100ms} frame(s) >=100ms. Full object: window.__OH_LAST_MAP_PERF__`,
     );
   }, [emitMapMotion]);
-  const handleSourceData = useCallback((event) => {
-    const sourceId = String(event?.sourceId ?? event?.source?.id ?? "");
-    if (!sourceId) return;
-    recordMapTrace("map:sourcedata", {
-      sourceId,
-      sourceDataType: event?.sourceDataType ?? "",
-      loaded: event?.isSourceLoaded === true,
-    });
-    if (sourceReadyRef.current.has(sourceId) || event?.isSourceLoaded !== true) return;
+  const handleSourceLoaded = useCallback((sourceId) => {
+    if (sourceReadyRef.current.has(sourceId)) return;
     const now = typeof performance !== "undefined" ? performance.now() : Date.now();
     sourceReadyRef.current.set(sourceId, Math.round((now - mapMountedAtRef.current) * 10) / 10);
+  }, []);
+  const stopLoadingToast = useCallback(() => {
+    loadingPendingRef.current = false;
+    clearTimeout(loadTimerRef.current);
+    setLoading(false);
   }, []);
   const handleIdle = useCallback(() => {
     recordMapTrace("map:idle");
@@ -867,7 +1014,6 @@ function World({ mapRef, projection: requestedProjection, terrainEnabled, onInit
     // waits for the one that follows the polity layers (mapReadiness.js).
     markMapIdle();
     emitMapMotion(false);
-    applyFixedPixelRatio();
 
     const transition = basemapTransitionRef.current;
     if (transition.active) {
@@ -896,28 +1042,37 @@ function World({ mapRef, projection: requestedProjection, terrainEnabled, onInit
     }
 
     if (hasReportedInitialIdleRef.current) {
-      setLoading(false);
+      stopLoadingToast();
       return;
     }
     hasReportedInitialIdleRef.current = true;
     onInitialIdle?.();
-    setLoading(false);
+    stopLoadingToast();
   }, [
-    applyFixedPixelRatio,
     emitMapMotion,
     finishBasemapTransition,
     natGeoDarkActive,
     natGeoDarkStyle,
     noteBasemapTransitionProgress,
     onInitialIdle,
+    stopLoadingToast,
   ]);
-  const handleLoading = useCallback(() => {
+  // A basemap tile started loading (mapInstrumentation.js filters out the
+  // game's own sources). This fires per tile, so it touches React state only
+  // once per loading spell, and the toast shows only when tiles are still
+  // loading LOADING_TOAST_DELAY_MS later: local tiles land before then, so a
+  // pan does not flash it. The next idle hides it; the 8 s timer is the backstop.
+  const handleBasemapTileLoading = useCallback(() => {
+    if (basemapTransitionRef.current.active) noteBasemapTransitionProgress(68);
+    if (loadingPendingRef.current) return;
+    loadingPendingRef.current = true;
     recordMapTrace("map:loading");
-    setLoading(true);
-    noteBasemapTransitionProgress(68);
     clearTimeout(loadTimerRef.current);
-    loadTimerRef.current = setTimeout(() => setLoading(false), 8000);
-  }, [noteBasemapTransitionProgress]);
+    loadTimerRef.current = setTimeout(() => {
+      setLoading(true);
+      loadTimerRef.current = setTimeout(stopLoadingToast, 8000);
+    }, LOADING_TOAST_DELAY_MS);
+  }, [noteBasemapTransitionProgress, stopLoadingToast]);
   const handleMapLoad = useCallback(() => {
     recordMapTrace("map:load");
     noteBasemapTransitionProgress(84);
@@ -934,113 +1089,93 @@ function World({ mapRef, projection: requestedProjection, terrainEnabled, onInit
     perf.raf = 0;
   }, [emitMapMotion]);
 
+  // Keyed on the map instance, not only the projection: a basemap or
+  // background change remounts <Map> (mapInstanceKey) with the projection
+  // unchanged, and the listeners have to move to the new instance.
   React.useEffect(() => {
-    fixedPixelRatioAppliedRef.current = false;
     let disposed = false;
     let frame = 0;
-    let canvas = null;
-    let mapInstance = null;
+    let detach = null;
 
     const attach = () => {
       if (disposed) return;
-      mapInstance = mapRef?.current?.getMap?.() || null;
-      canvas = mapInstance?.getCanvas?.() || null;
-      if (!canvas || !mapInstance) {
+      const mapInstance = mapRef?.current?.getMap?.() || null;
+      const canvas = mapInstance?.getCanvas?.() || null;
+      if (!canvas || !mapInstance || mapInstance._removed) {
         frame = requestAnimationFrame(attach);
         return;
       }
-
-      const perf = dragPerfRef.current;
-      const noteSource = (event) => {
-        if (perf.active) {
-          perf.sourceEvents += 1;
-          if (event?.sourceDataType === "content" || event?.sourceDataType === "metadata") {
-            perf.sourceLoads += 1;
-          }
-          if (event?.isSourceLoaded === true) perf.sourceLoaded += 1;
-        }
-        const sourceId = String(event?.sourceId ?? "");
-        if (sourceId) {
-          recordMapTrace("map:source-event", {
-            sourceId,
-            sourceDataType: event?.sourceDataType ?? "",
-            loaded: event?.isSourceLoaded === true,
-          });
-        }
-      };
-      const noteData = () => {
-        if (perf.active) perf.dataEvents += 1;
-      };
-      const noteStyle = () => {
-        if (perf.active) perf.styleEvents += 1;
-        recordMapTrace("map:styledata");
-      };
-      const noteStyleLoading = () => {
-        if (perf.active) perf.styleLoadingEvents += 1;
-        recordMapTrace("map:styledataloading");
-      };
-      const noteRender = () => {
-        if (perf.active) perf.renders += 1;
-      };
-      const noteIdle = () => {
-        if (perf.active) perf.idles += 1;
-        recordMapTrace("map:idle-event");
-      };
-      const noteZoomStart = () => {
-        if (perf.active) perf.zoomStarts += 1;
-        recordMapTrace("camera:zoom-start", { zoom: mapInstance.getZoom?.() ?? 0 });
-      };
-      const noteZoomEnd = () => {
-        if (perf.active) perf.zoomEnds += 1;
-        recordMapTrace("camera:zoom-end", { zoom: mapInstance.getZoom?.() ?? 0 });
-      };
-      const onLost = (event) => {
-        if (perf.active) perf.webglLosses += 1;
-        recordMapTrace("gpu:webgl-lost", { status: event?.statusMessage ?? "" });
-        console.warn(
-          `[OH PERF GPU] WebGL context lost${event?.statusMessage ? ` · ${event.statusMessage}` : ""}`,
-        );
-      };
-      const onRestored = () => {
-        recordMapTrace("gpu:webgl-restored");
-        console.warn("[OH PERF GPU] WebGL context restored");
-      };
-
-      canvas.addEventListener("webglcontextlost", onLost);
-      canvas.addEventListener("webglcontextrestored", onRestored);
-      mapInstance.on?.("sourcedata", noteSource);
-      mapInstance.on?.("data", noteData);
-      mapInstance.on?.("styledata", noteStyle);
-      mapInstance.on?.("styledataloading", noteStyleLoading);
-      mapInstance.on?.("render", noteRender);
-      mapInstance.on?.("idle", noteIdle);
-      mapInstance.on?.("zoomstart", noteZoomStart);
-      mapInstance.on?.("zoomend", noteZoomEnd);
-
-      recordMapTrace("map:instrumentation-attached");
-
-      canvas.__ohPerfGpuCleanup = () => {
-        canvas.removeEventListener("webglcontextlost", onLost);
-        canvas.removeEventListener("webglcontextrestored", onRestored);
-        mapInstance?.off?.("sourcedata", noteSource);
-        mapInstance?.off?.("data", noteData);
-        mapInstance?.off?.("styledata", noteStyle);
-        mapInstance?.off?.("styledataloading", noteStyleLoading);
-        mapInstance?.off?.("render", noteRender);
-        mapInstance?.off?.("idle", noteIdle);
-        mapInstance?.off?.("zoomstart", noteZoomStart);
-        mapInstance?.off?.("zoomend", noteZoomEnd);
-      };
+      detach = attachMapInstrumentation({
+        map: mapInstance,
+        canvas,
+        perf: dragPerfRef.current,
+        verbose: isMapPerfVerbose(),
+        onSourceLoaded: handleSourceLoaded,
+        onBasemapTileLoading: handleBasemapTileLoading,
+        basemapSourceIds: () => basemapSourceIdsRef.current,
+      });
     };
 
     attach();
     return () => {
       disposed = true;
       if (frame) cancelAnimationFrame(frame);
-      canvas?.__ohPerfGpuCleanup?.();
-      if (canvas) delete canvas.__ohPerfGpuCleanup;
+      detach?.();
+      stopLoadingToast();
     };
-  }, [mapRef, projection]);
+  }, [handleBasemapTileLoading, handleSourceLoaded, mapInstanceKey, mapRef, stopLoadingToast]);
+
+  // Two fingers on a trackpad zoom, and with Shift held turn and tilt the map;
+  // a mouse wheel zooms (mapGestures.js). Put on each map instance, as the listeners above.
+  React.useEffect(() => {
+    let disposed = false;
+    let frame = 0;
+    let detach = null;
+    const attach = () => {
+      if (disposed) return;
+      const mapInstance = mapRef?.current?.getMap?.() || null;
+      if (!mapInstance?.getCanvasContainer || mapInstance._removed) {
+        frame = requestAnimationFrame(attach);
+        return;
+      }
+      detach = attachMapGestures(mapInstance, { still: reduceMotionEnabled });
+    };
+    attach();
+    return () => {
+      disposed = true;
+      if (frame) cancelAnimationFrame(frame);
+      detach?.();
+    };
+  }, [mapInstanceKey, mapRef]);
+
+  // Work that does not change from frame to frame is kept (terrainCaches.js, clippingMasks.js, sourceCaches.js).
+  React.useEffect(() => {
+    let disposed = false;
+    let frame = 0;
+    let detach = null;
+    const attach = () => {
+      if (disposed) return;
+      const mapInstance = mapRef?.current?.getMap?.() || null;
+      if (!mapInstance?.on || mapInstance._removed) {
+        frame = requestAnimationFrame(attach);
+        return;
+      }
+      const detachCaches = attachTerrainCaches(mapInstance);
+      const detachMasks = attachClippingMasks(mapInstance);
+      const detachSources = attachSourceCaches(mapInstance);
+      detach = () => {
+        detachCaches();
+        detachMasks();
+        detachSources();
+      };
+    };
+    attach();
+    return () => {
+      disposed = true;
+      if (frame) cancelAnimationFrame(frame);
+      detach?.();
+    };
+  }, [mapInstanceKey, mapRef]);
 
 
   return (
@@ -1095,16 +1230,27 @@ function World({ mapRef, projection: requestedProjection, terrainEnabled, onInit
         minZoom={2.25}
         maxZoom={16}
         doubleClickZoom={false}
-        maxBounds={[
-          [-Infinity, -80],
-          [Infinity, 85],
-        ]}
+        maxBounds={maxBounds}
         cursor="default"
         attributionControl={false}
-        dragRotate={false}
+        // A right-button drag turns the map (sideways) and tilts it (up and
+        // down), and two fingers on a trackpad do the same (mapGestures.js,
+        // which turns only while dragRotate is on). MapLibre keeps the
+        // browser's menu off the map, as it did, so a right-button click
+        // without a drag still does nothing. The tilt stops at 60°, MapLibre's
+        // own limit and the native app's.
+        dragRotate={true}
+        pitchWithRotate={true}
+        maxPitch={60}
+        // Touch screens as before: a pinch zooms, a twist turns, and two
+        // fingers do not tilt. Asked for trackpads and mice; a tilted map
+        // reaches far more tiles, and phones are where memory runs out.
         touchPitch={false}
-        pitchWithRotate={false}
-        dragPan
+        dragPan={{
+          linearity: 0.1,
+          deceleration: 5000,
+          maxSpeed: 2400,
+        }}
         fadeDuration={0}
         collectResourceTiming={false}
         // R5.0 keeps the original cross-source collision policy for visual fidelity.
@@ -1127,16 +1273,23 @@ function World({ mapRef, projection: requestedProjection, terrainEnabled, onInit
         // structure and are never evicted by this, so it never re-fetches what's on
         // screen. Orthogonal to the fixed R5.1 framebuffer density.
         maxTileCacheSize={256}
+        // R5.1: one renderer density for the whole session. R5.0 switched
+        // between 1x and native DPR around z4.5/z5.0, and setPixelRatio()
+        // rebuilds the render targets: a hitch exactly as the player zoomed
+        // through that boundary. The 1x framebuffer performs well, and on a
+        // 2x-3x phone screen native density is 4-9 times the pixels (heat,
+        // RAM). A constructor option, so every instance starts at 1x: a
+        // basemap or background change remounts the map, and a ratio set
+        // after the first mount's idle was lost with that instance.
+        pixelRatio={1}
         projection={mapProjection}
         terrain={terrain}
         mapStyle={worldStyle}
         onLoad={handleMapLoad}
         onIdle={handleIdle}
-        onLoading={handleLoading}
         onMoveStart={handleMoveStart}
         onMove={handleMove}
         onMoveEnd={handleMoveEnd}
-        onSourceData={handleSourceData}
       >
         <MapScene isGlobe={isGlobe} />
       </Map>
@@ -1222,6 +1375,28 @@ function World({ mapRef, projection: requestedProjection, terrainEnabled, onInit
         }}>
           Loading tiles…
         </div>
+      )}
+      {/* The scenario names a Tiled Basemap the player does not have: its basic
+          map is on screen; offer the download. Or they have it, and the
+          official list has a newer version: offer that, never forced
+          (Map/TiledBasemapOffer.jsx). The same on another basemap of the
+          scenario's own, which the detailed map draws on too. */}
+      {offeredMissing && (
+        <TiledBasemapOffer
+          key={`${offeredMissing.id || offeredMissing.hash}@${offeredMissing.version || ""}`}
+          basemap={offeredMissing}
+          moreDetailedMaps={shownMap.otherDetailed.length}
+        />
+      )}
+      {!offeredMissing && shownUpdate && (
+        <TiledBasemapOffer
+          key={updateKey}
+          basemap={shownUpdate}
+          onDismiss={() => {
+            if (!shownUpdate.needed) dismissTiledUpdate(shownUpdate.id, shownUpdate.version);
+            setDismissedUpdate(updateKey);
+          }}
+        />
       )}
     </div>
   );

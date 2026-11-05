@@ -4,6 +4,8 @@
 // device that plays through it — desktop browser and the Android app see the
 // same choice) and mirrored in localStorage so boot doesn't wait on a fetch.
 // "en" (the authored language) means no translation work happens at all.
+import { translationModelFor } from "./translationModels.js";
+
 const STORAGE_KEY = "ui_language";
 export const DEFAULT_LANGUAGE = "en";
 
@@ -76,8 +78,8 @@ const RTL_LANGUAGES = new Set(["ar", "he", "fa", "ur"]);
 // never sent to the AI: the pack has it, and a string it lacks stays English
 // rather than costing the player a request. Only what a scenario or a player
 // made (scenario and game names and descriptions, custom polities, custom
-// stats, region names on a hand-drawn map, community posts) is translated live.
-// Every other language in the picker still translates the interface live.
+// stats, the region names of a map that is not built in, community posts) is
+// translated live.
 export const SHIPPED_PACK_LANGUAGES = Object.freeze([
   "ar", "bn", "de", "es", "fa", "fr", "hi", "id", "it", "ja", "ko", "nl",
   "pl", "pt", "ru", "sv", "th", "tr", "uk", "ur", "vi", "zh",
@@ -85,12 +87,28 @@ export const SHIPPED_PACK_LANGUAGES = Object.freeze([
 
 export const hasShippedPack = (code) => SHIPPED_PACK_LANGUAGES.includes(code);
 
+// The languages the interface can be shown in: English, a shipped pack, or a
+// translation model on the device (translationModels.js). No translation is
+// an AI request, so a language with neither is not offered.
+export const canTranslateTo = (code) => code === DEFAULT_LANGUAGE || hasShippedPack(code) || Boolean(translationModelFor(code));
+
+// Every language, for what the AI writes in (the chat language).
 export const getLanguageOptions = () => LANGUAGES;
+
+// The languages the interface can be shown in, for its picker.
+export const getUiLanguageOptions = () => LANGUAGES.filter((entry) => canTranslateTo(entry.code));
 
 export const languageDisplayName = (code) =>
   LANGUAGES.find((entry) => entry.code === code)?.name || code;
 
+// The server's choice for this page only, when this device could not store it
+// (syncLanguageFromServer). Null while the stored copy is the truth.
+let heldLanguage = null;
+// Per tab: the language a boot already reloaded for (syncLanguageFromServer).
+const RELOADED_KEY = "ui_language_reloaded";
+
 export const getStoredLanguage = () => {
+  if (heldLanguage) return heldLanguage;
   try {
     const stored = localStorage.getItem(STORAGE_KEY);
     return stored && stored.trim() ? stored.trim() : DEFAULT_LANGUAGE;
@@ -126,8 +144,35 @@ export const setStoredLanguage = async (code) => {
   }
 };
 
-// Boot-time reconcile: the server's choice wins. Returns true when the local
-// value changed (caller reloads so the translator restarts cleanly).
+// The tab's record of the language a boot reloaded for. Null when this tab
+// cannot keep one.
+const readReloaded = () => {
+  try {
+    return sessionStorage.getItem(RELOADED_KEY);
+  } catch {
+    return null;
+  }
+};
+
+const writeReloaded = (code) => {
+  try {
+    if (code) sessionStorage.setItem(RELOADED_KEY, code);
+    else sessionStorage.removeItem(RELOADED_KEY);
+  } catch {
+    // No session storage: the read-back in syncLanguageFromServer still guards.
+  }
+};
+
+// Boot-time reconcile: the server's choice wins. Returns true when this device
+// now holds it and the caller should reload, so the translator restarts
+// cleanly.
+//
+// A reload only helps if the choice survives it. With storage full or blocked
+// the write fails quietly, the next boot reads the old value, and asking again
+// reloaded the page every second for good. So the choice is read back before a
+// reload is asked for, and a tab reloads at most once for one language. When
+// either says no, the choice is held for this page instead (getStoredLanguage
+// returns it) and the caller applies it where it can without a reload.
 export const syncLanguageFromServer = async () => {
   try {
     const response = await fetch("/api/ui-settings");
@@ -142,7 +187,14 @@ export const syncLanguageFromServer = async () => {
 
     if (serverLanguage !== getStoredLanguage()) {
       writeLocalLanguage(serverLanguage);
-      return true;
+      if (getStoredLanguage() === serverLanguage && readReloaded() !== serverLanguage) {
+        writeReloaded(serverLanguage);
+        return true;
+      }
+      heldLanguage = serverLanguage;
+    } else if (readReloaded()) {
+      // The reload landed on the choice: a later change may reload again.
+      writeReloaded("");
     }
   } catch {
     // Server unreachable: keep the local value.
@@ -181,6 +233,15 @@ export const chatLanguageDiffersFromUi = () => resolveChatLanguage() !== getStor
 
 export const isRtlLanguage = (code) => RTL_LANGUAGES.has(code);
 
+// The text direction of a reply written in the chat language (the advisor's,
+// a leader's), when that is not the interface's: under an Arabic interface an
+// English reply still reads left to right, and the other way round.
+// undefined: the interface's own direction applies.
+export const chatTextDirection = () => {
+  if (!chatLanguageDiffersFromUi()) return undefined;
+  return isRtlLanguage(resolveChatLanguage()) ? "rtl" : "ltr";
+};
+
 // Appended to every AI system prompt (see callAI) so replies arrive in the
 // player's language natively instead of being machine-translated after.
 export const languageDirective = (code = getStoredLanguage(), { force = false } = {}) => {
@@ -213,4 +274,19 @@ export const chatLanguageDirective = () => {
   }
 
   return `${directive} Reply in ${languageDisplayName(code)} regardless of the language of earlier messages.`;
+};
+
+// The language a prompt names where it says "write in ${language}"
+// (promptContext.js): the one the player reads, the same the directive above
+// gives every call. A save's own language is the fallback, for a player who
+// reads English: a campaign set to French is then still written in French. The
+// save used to come first, and it says "English" unless its author changed it,
+// so an Arabic player's prompt told the model "English" three times and Arabic
+// once, and the suggested actions came back in English (2026-10-29).
+// `chat`: the advisor and the leaders, who answer in the chat language.
+export const readingLanguageName = (saveLanguage = "", { chat = false } = {}) => {
+  const code = chat ? resolveChatLanguage() : getStoredLanguage();
+  if (code && code !== DEFAULT_LANGUAGE) return languageDisplayName(code);
+  const saved = typeof saveLanguage === "string" ? saveLanguage.trim() : "";
+  return saved || "English";
 };

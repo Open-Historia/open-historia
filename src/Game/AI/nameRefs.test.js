@@ -141,7 +141,7 @@ test("the model is shown names and no ids: regions, units and structures", () =>
     assert.ok(!/id \$\{unit\.id\}/.test(context), "standing orders name their unit");
     assert.ok(!/region \$\{unit\.regionId\}/.test(context), "a unit's line carries no region id");
     assert.ok(!/id \$\{unit\.id\}/.test(read("./forcePosture.js")));
-
+    assert.ok(!/\(\$\{row\.regionId\}\)/.test(read("./standingContext.js")));
     const vocab = read("./regionVocab.js");
     assert.match(vocab, /options\.regionIds === true/, "region ids are listed only when a caller asks");
     assert.match(vocab, /region: <name>/);

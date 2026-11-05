@@ -14,6 +14,7 @@
 import COUNTRY_NAMES from "./generated/countryNames.js";
 import OFFICIAL_COUNTRY_CODES_BY_NAME from "./generated/officialCountryAliases.js";
 import { toCountryName } from "./ownerNames.js";
+import { lookedUp } from "./worldLookups.js";
 
 const normalizeString = (value) => String(value ?? "").trim();
 
@@ -216,9 +217,7 @@ const countOwnedRegions = (world) => {
   return counts;
 };
 
-const buildDeclaredPolities = (world) => {
-  const ownershipCounts = countOwnedRegions(world);
-
+const buildDeclaredPolities = (world, ownershipCounts) => {
   return Object.entries(
     world?.polityOverrides || {},
   )
@@ -300,9 +299,13 @@ const chooseUnique = (candidates) => {
   };
 };
 
-export const buildPolityIdentityIndex = (world) => ({
-  declared: buildDeclaredPolities(world),
-  ownershipCounts: countOwnedRegions(world),
+// (Every region's owner counted once for both: it is most of the index's cost.)
+export const buildPolityIdentityIndex = (world) => lookedUp(world, "polityIdentityIndex", () => {
+  const ownershipCounts = countOwnedRegions(world);
+  return {
+    declared: buildDeclaredPolities(world, ownershipCounts),
+    ownershipCounts,
+  };
 });
 
 export const resolvePolityIdentity = (
@@ -533,33 +536,3 @@ export const resolvePolityIdentity = (
       ),
   };
 };
-
-// Territory is stricter than metadata. A dormant historical identity does not
-// suddenly get land because the model used an old/base name. A same-event
-// create/restore/rename becomes status=active before transfers are resolved, so
-// newborn or restored states still work without a hardcoded exception list.
-export const resolveTerritorialPolityIdentity = (
-  token,
-  world,
-) =>
-  resolvePolityIdentity(
-    token,
-    world,
-    {
-      allowUnknown: false,
-      requireActive: true,
-      allowCoreMatch: true,
-      allowStockBase: true,
-    },
-  );
-
-export const resolvePolityName = (
-  token,
-  world,
-  options,
-) =>
-  resolvePolityIdentity(
-    token,
-    world,
-    options,
-  ).resolved;

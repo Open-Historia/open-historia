@@ -4,11 +4,66 @@ Copyright (C) 2026 Open Historia
 
 This project is licensed under the terms of the GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later). See the [LICENSE](LICENSE) file for details.
 
+Contributions are accepted under the [Contributor Copyright Assignment Agreement](CLA.md), which assigns the copyright in contributions to the Open Historia Organisation. CLA Assistant asks you to sign it on your first pull request; see [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## Scenarios Are Released Under CC BY 4.0
 
 The licence above covers the game's code. **Scenarios are different: every scenario made in Open Historia that is posted or shared in any way is released under the [Creative Commons Attribution 4.0 International](https://creativecommons.org/licenses/by/4.0/) licence (CC BY 4.0).** The same goes for changes suggested to a scenario on the [Scenario Hub](https://github.com/Open-Historia/Open-historia-scenarios).
 
 The game says so on the screens a scenario leaves it from, and writes it into every exported file (`LICENSE.txt` in a `.zip`, a `license` record in the scenario's JSON). It does not cover material that was never the poster's to license, or a detailed map or a music track a scenario only names, each of which keeps the licence on its own post.
+
+## Music
+
+The game's music is by Scott Buckley ([www.scottbuckley.com.au](https://www.scottbuckley.com.au/)): "Passage Of Time", "Clear Skies", "Frankincense and Myrrh", "Discovery", "Honour Among Thieves", "Legionnaire (2022 Remaster)" and "Vanguard", all released under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). The files are in [public/audio](public/audio), re-encoded at a lower bitrate to make the game smaller and otherwise unchanged, with their credits beside them; that licence, not the game's, covers them.
+
+## Privacy
+
+What the game keeps on your device, what it sends and to whom, and what the project holds: see the [privacy policy](https://openhistoria.com/privacy/) (source: [public/privacy/index.html](public/privacy/index.html)).
+
+<!-- Open Historia — portions (install, Android app, hub & preset docs) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). -->
+<h1 align="center">Open Historia</h1>
+
+<div align="center">
+  <strong>An open-source, better alternative to <a href="https://www.paxhistoria.co/games">Pax Historia</a>.</strong>
+</div>
+
+> **Open Historia is an independent, open-source project** and is not affiliated with, endorsed, sponsored, approved, or authorized by Pax Historia. Pax Historia has no involvement in the development, operation, or distribution of Open Historia. Pax Historia™ and all associated trademarks, trade names, and logos are the exclusive property of Pax Historia.
+
+<br />
+
+<div align="center">
+  <!-- Discord -->
+  <a href="https://discord.gg/QaqAK7fQAg">
+    <img src="https://img.shields.io/badge/discord-join-5865F2.svg?style=flat-square&logo=discord&logoColor=white"
+      alt="Discord" />
+  </a>
+  <!-- Reddit -->
+  <a href="https://www.reddit.com/r/OpenHistoria">
+    <img src="https://img.shields.io/badge/reddit-r%2FOpenHistoria-FF4500.svg?style=flat-square&logo=reddit&logoColor=white"
+      alt="Reddit" />
+  </a>
+  <!-- License -->
+  <a href="LICENSE">
+    <img src="https://img.shields.io/badge/license-AGPL--3.0-blue.svg?style=flat-square"
+      alt="License: AGPL-3.0" />
+  </a>
+  <!-- Status -->
+  <a href="#">
+    <img src="https://img.shields.io/badge/status-early%20development-orange.svg?style=flat-square"
+      alt="Early Development" />
+  </a>
+</div>
+
+<div align="center">
+  <sub>Built with ❤︎ by <a href="https://github.com/Open-Historia/open-historia/graphs/contributors">contributors</a>.
+</div>
+
+<br />
+<br />
+
+![](https://github.com/Open-Historia/open-historia/blob/main/public/screenshot.png?raw=true)
+
+---
 
 ## ✨ Features
 
@@ -37,22 +92,17 @@ desktop app below needs no such setup.
 
 ### Desktop (offline, single-player)
 
-Download **[`Open-Historia.zip`](https://github.com/Open-Historia/open-historia/releases/tag/app-stable)**
-(~186 MB — code *and* all map data), unzip it anywhere, then:
+Download the installer for your platform from the
+**[Open Historia for Desktop release](https://github.com/Open-Historia/open-historia/releases/tag/desktop-stable)**, then:
 
 - **Windows:** run **`Open-Historia-Setup.exe`**, then open Open Historia from the Start Menu
-- **macOS:** unzip and drag **Open Historia** to Applications (first run: right-click -> *Open*)
+- **macOS:** unzip and drag **Open Historia** to Applications (first run: macOS closes it once as unsigned; choose *Done*, then System Settings -> Privacy & Security -> *Open Anyway*; on macOS 14 and earlier, right-click -> *Open*)
 - **Linux:** `chmod +x Open-Historia-x86_64.AppImage` and run it
 
-The launcher checks Node.js, downloads the map data, installs dependencies, builds,
-and opens the game. To update an existing install later, run the matching
-newest installer from the downloads page and run it over the top - your saves
-while preserving your saves, scenarios, and map data.
-
-> [!TIP]
-> Run the launcher **normally** — it does not need (and works better without)
-> administrator rights: an elevated window gets the admin account's environment,
-> which can hide a Node.js that was installed for your own account.
+The app comes ready to run; the world map downloads the first time it opens. On
+Windows and Linux it offers new versions itself. On macOS, or to update by hand,
+install the newest download from the same release over the top: your saves,
+scenarios and map data are kept.
 
 
 #### Android app
@@ -62,8 +112,7 @@ Download **`open-historia.apk`** from the
 and open it to install (allow installs from your browser when Android asks).
 Everything is on the phone: your saves and scenarios, the scenario workshop and
 the world map — it plays in airplane mode from the first launch. The community
-hub, your own AI provider, the update check and the map's imagery and flags are what
-use the network; the [privacy policy](https://openhistoria.com/privacy/) lists them. A model
+hub and your own AI provider are the only things that use the network. A model
 running on your own network (Ollama, LM Studio) works too, with no CORS setup.
 
 <details>
@@ -108,7 +157,7 @@ Out of the box the server answers **only the machine it runs on** — which cove
 the desktop app, Termux on the same phone, and a browser on the same computer.
 
 To play from your phone or another computer, turn on
-**Settings → Network → "Let other devices connect"**. It takes effect
+**Settings → Advanced → Network → "Let other devices connect"**. It takes effect
 immediately (no restart), it is remembered for next time, and it shows you the
 exact address to type into the Android app, so you never have to go and find
 your own IP:
@@ -134,7 +183,7 @@ OH_HOST=192.168.1.20 node server/server.js # one interface only
 | Variable | Default | What it does |
 | --- | --- | --- |
 | `OH_HOST` | unset | Which interface to listen on. Overrides the Settings toggle and locks it. Anything but loopback puts the API on your network. |
-| `OH_ALLOW_REMOTE_RELAY` | off | Lets other devices use this server's AI relay. Off means the relay only answers this machine, so it can't be used as a proxy by anyone else on the network. |
+| `OH_ALLOW_REMOTE_RELAY` | off | Lets other devices use this server's AI relay. Off means the relay only answers this machine, so it can't be used as a proxy by anyone else on the network. The same switch is in Settings → Advanced → Network ("Let other devices send AI calls through this server", shown while sharing is on); this variable overrides it and locks it. |
 | `OH_RATE_LIMIT` | `1200` | Requests per minute per network client (loopback is exempt). |
 
 > [!TIP]
@@ -156,8 +205,10 @@ OH_HOST=192.168.1.20 node server/server.js # one interface only
 > **Note:** the large map binaries (`*.pmtiles`, `public/assets/*-seed.*`, and the stock
 > world `server/data/stock/regions.geojson`) are **not** in the repo — they are
 > hosted as [GitHub Release assets](https://github.com/Open-Historia/open-historia/releases/tag/map-data)
-> and downloaded by `scripts/fetch-map-assets.mjs`. The launcher script for your platform
-> runs this for you automatically, so a plain ZIP download works too — no Git LFS needed.
+> and downloaded by `scripts/fetch-map-assets.mjs`. Run it once after cloning
+> (`node scripts/fetch-map-assets.mjs`); the desktop app runs it for you on first
+> launch — no Git LFS needed. The website and the Android app carry their own web-sized
+> set, which their builds download themselves (`scripts/stage-map-assets.mjs`).
 
 ---
 
@@ -187,3 +238,11 @@ Open any scenario's editor and click **🗺️ Open Map Editor** (or visit
 `http://localhost:3000/?editor=1` for the standalone editor). Draw regions, split and
 merge borders freehand, paint owners, import 70k cities, sign your map, then
 **Apply & Play**.
+
+## 🖥️ Host the game yourself
+
+Every build has its own copy of the map: the website and the Android app carry it, and the
+desktop app downloads it from the
+[`map-data` release](https://github.com/Open-Historia/open-historia/releases/tag/map-data)
+the first time it opens. To host the game yourself, see [WEB-DEPLOY.md](WEB-DEPLOY.md) for
+the website, or the manual install above for a local server.

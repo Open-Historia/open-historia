@@ -94,6 +94,12 @@ test("the narration says what changed and how to treat it, and nothing when noth
   assert.equal(renderGmChangeNarration([]), "");
 });
 
+test("a hand edit of the puppet ledger is its own kind of change", () => {
+  const world = recordGmChange({}, { kind: "puppets", summary: "Released Poland from being USSR's puppet state by hand.", round: 4, at: at(1) });
+  assert.equal(world.gmChanges[0].kind, "puppets");
+  assert.match(renderGmChangeNarration(world.gmChanges), /- Released Poland from being USSR's puppet state by hand\. \(puppet states\)/);
+});
+
 test("a busy round lists its newest changes and counts the rest", () => {
   const many = Array.from({ length: 15 }, (_unused, index) => ({ kind: "feature", summary: `Change ${index + 1}.`, round: 2, at: at(index) }));
   const block = renderGmChangeNarration(many, { max: 12 });

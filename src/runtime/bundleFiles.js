@@ -26,7 +26,7 @@ const ASSET_DIR = "assets/";
 // dies on, and a bundle carrying its own tiles is exactly the case this exists
 // for.
 const CHUNK = 0x8000;
-const bytesToBase64 = (bytes) => {
+export const bytesToBase64 = (bytes) => {
   const array = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
   let binary = "";
   for (let at = 0; at < array.length; at += CHUNK) {

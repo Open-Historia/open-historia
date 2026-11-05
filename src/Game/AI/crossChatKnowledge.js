@@ -60,28 +60,54 @@ export const unseenInThread = (thread, polity, cursors = {}, { projectAsSeenBy, 
             text: asText(message?.text),
         })),
         cursor: asText(fresh.at(-1)?.id) || seen,
+        // When the newest unseen line was said (a game date, or blank).
+        time: asText(fresh.at(-1)?.time),
     };
 };
 
 // The block a leader is shown before it speaks, and the cursors to store once
 // it has been shown. `threads` are the OTHER threads this polity is party to
-// (the caller has already filtered by visibility), newest last.
+// (the caller has already filtered by visibility), in any order.
+//
+// Which threads make the cut is decided by what is in them, not by where they
+// sit in the list: the store keeps chats newest-CREATED first, and a turn
+// appends a fresh cable to an old thread in place, so neither end of the list
+// is "the latest". Only threads with something unseen compete, the one whose
+// newest unseen line is latest first (`compareTime`, the game-date comparator;
+// without one, and on a tie, the thread listed first wins, as the store lists
+// the newest first). The chosen blocks read oldest to newest. A thread left out
+// keeps its cursor, so what it holds is still unseen next time; one with
+// nothing new has its cursor moved to its end.
 export const buildCrossChatKnowledge = ({
     threads = [],
     polity = "",
     cursors = {},
     projectAsSeenBy = null,
     maxThreads = MAX_EXTERNAL_THREADS,
+    compareTime = null,
 } = {}) => {
     const speaker = asText(polity);
     if (!speaker) return { text: "", cursors: {} };
 
-    const blocks = [];
     const nextCursors = {};
-    for (const thread of asArray(threads).slice(-Math.max(1, maxThreads))) {
-        const { lines, cursor } = unseenInThread(thread, speaker, cursors, { projectAsSeenBy });
+    const candidates = [];
+    asArray(threads).forEach((thread, index) => {
+        const unseen = unseenInThread(thread, speaker, cursors, { projectAsSeenBy });
+        if (unseen.lines.length) candidates.push({ thread, index, ...unseen });
+        else if (unseen.cursor) nextCursors[cursorKey(thread?.id, speaker)] = unseen.cursor;
+    });
+    // An undated line counts as older than any dated one.
+    const byTime = (left, right) => {
+        if (typeof compareTime !== "function") return 0;
+        if (!left.time || !right.time) return (right.time ? 1 : 0) - (left.time ? 1 : 0);
+        return compareTime(right.time, left.time);
+    };
+    const newestFirst = (left, right) => byTime(left, right) || left.index - right.index;
+    const chosen = candidates.sort(newestFirst).slice(0, Math.max(1, maxThreads)).reverse();
+
+    const blocks = [];
+    for (const { thread, lines, cursor } of chosen) {
         if (cursor) nextCursors[cursorKey(thread?.id, speaker)] = cursor;
-        if (!lines.length) continue;
         const id = escapeForFence(asText(thread?.id) || "chat");
         const title = escapeForFence(asText(thread?.title) || "untitled");
         const body = lines.map((line) => `${escapeForFence(line.speaker)}: ${escapeForFence(line.text)}`).join("\n");

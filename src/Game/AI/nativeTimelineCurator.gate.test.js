@@ -149,3 +149,94 @@ test("known opening: a process frame only the analyst sees", async () => {
     const dropped = result.dropped.find((row) => row.title === "Observatory opens on Mount Elbrus");
     assert.equal(dropped?.route, "NATIVE_PROCESS_FILLER");
 });
+
+test("the player's Cancel during the analyst's request reaches the skip; any other failure keeps everything", async () => {
+    const controller = new AbortController();
+    await assert.rejects(
+        curateGeneratedEventsWithHidden({
+            events: MIXED, priorEvents: PRIOR, mode: "jump", signal: controller.signal,
+            analyzeBatch: async () => {
+                controller.abort(new DOMException("Timeline jump cancelled.", "AbortError"));
+                throw controller.signal.reason;
+            },
+        }),
+        (error) => error?.name === "AbortError",
+    );
+    const kept = await curateWith(async () => { throw new Error("model unavailable"); });
+    assert.equal(kept.events.length, MIXED.length);
+});
+
+test("the curator makes no request when no event is worth a judgment", async () => {
+    let asked = 0;
+    const counting = (analyst) => async (input) => { asked += 1; return analyst(input); };
+    // Every event has a hard consequence: kept whatever the analyst would say.
+    const consequential = [
+        event("Artillery exchanges continue near Donetsk airport", "Batteries trade fire around Donetsk airport.", { warId: "war-1" }),
+        event("Finance ministers convene in Astana", "Delegations meet to review customs procedures.", { impacts: { regionTransfers: [{ regionId: "r1", fromCode: "A", toCode: "B" }] } }),
+        event("Icebreaker launched at Murmansk", "The nuclear icebreaker Sibir slides down the ways.", { impacts: { unitOps: [{ op: "strength", unitId: "u1", strength: 300 }] } }),
+    ];
+    const quiet = await curateGeneratedEventsWithHidden({
+        events: consequential, priorEvents: PRIOR, mode: "jump", analyzeBatch: counting(harshAnalyst()),
+    });
+    assert.equal(asked, 0);
+    assert.equal(quiet.events.length, consequential.length);
+    // One event it could remove is enough to ask.
+    await curateWith(counting(harshAnalyst()));
+    assert.equal(asked, 1);
+});
+
+// --- a timeline that is not written in Latin letters ---
+//
+// The word-for-word check compares two events of one date by their text with
+// case and punctuation folded away, and the fold kept a-z0-9 only. An event
+// written in Russian or Chinese was then nothing but the Latin letters and
+// digits in it, usually nothing at all: a new event dated the same day as one
+// on record was "the same text" as it, and was removed as an exact repeat with
+// no analyst asked. Found reading the code for a player whose game is played
+// in Russian (2026-10-05); the two events below are removed by the old fold.
+const RU_PRIOR = [
+    event("Правительство утверждает бюджет", "Кабинет министров одобрил проект бюджета на следующий год и направил его в Думу.", { id: "ru-p1", date: "2014-09-12" }),
+    event("Начало учебного года", "По всей стране открылись школы.", { id: "ru-p2", date: "2014-09-01" }),
+];
+const ZH_PRIOR = [
+    event("政府批准预算", "内阁批准了明年的预算草案并提交议会审议。", { id: "zh-p1", date: "2014-09-12" }),
+];
+
+test("different events of one day are different events in Cyrillic and in Chinese", async () => {
+    for (const [prior, events] of [
+        [RU_PRIOR, [
+            event("Черноморский флот выходит в море", "Отряд кораблей покинул Севастополь и взял курс на юг.", { id: "ru-n1", date: "2014-09-12" }),
+            event("Землетрясение на Камчатке", "Подземные толчки ощущались в Петропавловске; разрушений нет.", { id: "ru-n2", date: "2014-09-12" }),
+        ]],
+        [ZH_PRIOR, [
+            event("黑海舰队出海", "一支舰艇编队离开塞瓦斯托波尔向南航行。", { id: "zh-n1", date: "2014-09-12" }),
+            event("堪察加发生地震", "彼得罗巴甫洛夫斯克有震感，未造成破坏。", { id: "zh-n2", date: "2014-09-12" }),
+        ]],
+    ]) {
+        const result = await curateGeneratedEventsWithHidden({ events, priorEvents: prior, game: {}, world: {}, actions: [], mode: "jump", analyzeBatch: null });
+        assert.deepEqual(result.events.map((entry) => entry.id), events.map((entry) => entry.id), "both are kept");
+        assert.deepEqual(result.dropped, []);
+    }
+});
+
+test("a word-for-word repeat is still removed in Cyrillic, case and punctuation aside", async () => {
+    const repeat = { ...RU_PRIOR[0], id: "ru-again", title: "ПРАВИТЕЛЬСТВО УТВЕРЖДАЕТ БЮДЖЕТ!" };
+    assert.deepEqual(candidatesWorthJudging({ events: [repeat], priorEvents: RU_PRIOR }), []);
+    const result = await curateGeneratedEventsWithHidden({ events: [repeat], priorEvents: RU_PRIOR, game: {}, world: {}, actions: [], mode: "jump", analyzeBatch: null });
+    assert.deepEqual(result.events, []);
+    assert.equal(result.dropped[0]?.route, "EXACT_DUPLICATE");
+});
+
+// The gate that decides whether the timeline review is asked for reads the
+// same words. With none to read, nothing in such a game ever resembled what
+// was on record, and the review was never asked for there.
+test("an event that closely resembles recent history is worth a judgment in Cyrillic too", () => {
+    const prior = [
+        event("Артиллерийские обстрелы у донецкого аэропорта продолжаются", "Правительственные и сепаратистские батареи обмениваются огнём у донецкого аэропорта; позиции не меняются.", { id: "ru-a1", date: "2014-02-12" }),
+        event("Артиллерийские обстрелы у донецкого аэропорта не прекращаются", "Обстрелы вокруг донецкого аэропорта идут всю неделю; линии не сдвинулись.", { id: "ru-a2", date: "2014-02-20" }),
+    ];
+    const again = [event("Артиллерийские обстрелы у донецкого аэропорта продолжаются", "Правительственные и сепаратистские батареи снова обмениваются огнём у донецкого аэропорта; позиции не меняются.", { id: "ru-a3", date: "2014-03-10" })];
+    assert.deepEqual(candidatesWorthJudging({ events: again, priorEvents: prior }), [0], "it has words to resemble them by");
+    const fresh = [event("Ледокол спущен на воду в Мурманске", "Атомный ледокол сошёл со стапеля на глазах у рабочих верфи.", { id: "ru-a4", date: "2014-03-10" })];
+    assert.deepEqual(candidatesWorthJudging({ events: fresh, priorEvents: prior }), []);
+});

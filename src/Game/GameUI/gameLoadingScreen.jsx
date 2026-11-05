@@ -8,6 +8,7 @@ import {
   politiesReady,
   politiesSettled,
 } from "../../runtime/mapReadiness.js";
+import { useGameEntered } from "../../runtime/gameEntry.js";
 
 // The screen a game opens under: the logo turning over a dark ground until the
 // map has read the world, derived and drawn its borders and labels, and gone
@@ -18,16 +19,24 @@ import {
 // map has gone idle since (runtime/mapReadiness.js stamps every mark with the
 // game it was made for), and a hard ceiling makes sure a derivation that never
 // answers cannot keep the player out.
+//
+// Nothing is opening until the player has opened a game (runtime/gameEntry.js):
+// the page starts on the main menu with no map behind it, and this UI is
+// mounted there all the same. So the wait starts when a game is entered, not
+// when the hook mounts, and so does its ceiling: armed at mount, it would have
+// run out under somebody who sat on the menu for a minute, and their first
+// game would have opened with no cover at all.
 const PHASES = {
   world: "Reading the world…",
   polities: "Drawing borders and labels…",
   settling: "Settling the map…",
   done: "",
 };
-const LOADING_CEILING_MS = 60000;
+export const LOADING_CEILING_MS = 60000;
 
 export const useGameLoading = () => {
-  const { worldKnown } = useWorldState();
+  const entered = useGameEntered();
+  const { worldKnown } = useWorldState({ wait: !entered });
   const [phase, setPhase] = useState(() => (worldKnown && politiesSettled() ? "done" : "world"));
   const knownRef = useRef(worldKnown);
   useEffect(() => {
@@ -35,6 +44,7 @@ export const useGameLoading = () => {
   }, [worldKnown]);
 
   useEffect(() => {
+    if (!entered) return undefined;
     let settled = false;
     const timers = [];
     const later = (fn, ms) => timers.push(setTimeout(fn, ms));
@@ -74,20 +84,23 @@ export const useGameLoading = () => {
       window.removeEventListener(GAME_OPENING_EVENT, reopen);
       timers.forEach(clearTimeout);
     };
-  }, []);
+  }, [entered]);
 
   // The world store hydrating is a signal too: a stock map is ready the moment
   // it is known to be one.
   useEffect(() => {
-    if (!worldKnown || phase === "done") return undefined;
+    if (!entered || !worldKnown || phase === "done") return undefined;
     const timer = setTimeout(() => {
       if (politiesSettled()) setPhase("done");
       else if (politiesReady()) setPhase((current) => (current === "done" ? current : "settling"));
     }, 0);
     return () => clearTimeout(timer);
-  }, [phase, worldKnown]);
+  }, [entered, phase, worldKnown]);
 
-  return { active: phase !== "done", phase };
+  // Before a game is entered there is no map to wait for. (The cover is up all
+  // the same between a press of Play and the game landing: GameUI/main.jsx
+  // `awaitingGame`.)
+  return { active: entered && phase !== "done", phase };
 };
 
 // The card image the library shows for a scenario with no cover of its own
@@ -151,8 +164,7 @@ export const GameLoadingScreen = ({ gameName = "", scenarioName = "", countryNam
           </div>
         )}
         <div style={{ color: "rgba(255,255,255,0.58)", fontSize: "0.7rem", letterSpacing: "0.1em", marginTop: "0.9rem", textShadow, textTransform: "uppercase" }}>
-          {PHASES[phase] ?? PHASES.world}
-        </div>
+          {PHASES[phase] ?? PHASES.world}        </div>
       </div>
       <img className="oh-loading-logo" src="/logo.png" alt="" style={{ flexShrink: 0, height: "4rem", width: "4rem" }} />
     </div>

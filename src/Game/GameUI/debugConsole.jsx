@@ -19,20 +19,23 @@ import {
     downloadFile,
     exportTelemetryCsv,
     getAiRecords,
+    releaseAiRecords,
+    requestCount,
     setGenerationRating,
 } from "../AI/telemetry.js";
 import { readWorldState } from "../../runtime/gameState.js";
+import { copyToClipboard } from "../../runtime/clipboard.js";
 import { SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, useTouchPrimary } from "../../runtime/mobileUi.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 
 const COLORS = {
-    bg: "#0a0e11",
-    panel: "#101518",
-    raised: "#1a1a1c",
-    border: "#353538",
-    text: "#cdcdd1",
-    muted: "#8b949e",
-    accent: "#3b82f6",
+    bg: "var(--oh-ui-bg, #0a0e11)",
+    panel: "var(--oh-ui-header, #101518)",
+    raised: "var(--oh-ui-surface, #1a1a1c)",
+    border: "var(--oh-ui-line, #353538)",
+    text: "var(--oh-ui-text, #cdcdd1)",
+    muted: "var(--oh-ui-muted, #8b949e)",
+    accent: "var(--oh-ui-active, #3b82f6)",
     danger: "#f85149",
     gold: "#d29922",
     ok: "#3fb950",
@@ -60,7 +63,7 @@ const buttonStyle = {
     padding: "0.35rem 0.7rem",
     borderRadius: "8px",
     border: `1px solid ${COLORS.border}`,
-    backgroundColor: "#262628",
+    backgroundColor: "var(--oh-ui-raised, #262628)",
     color: "white",
     fontSize: "0.72rem",
     fontWeight: 700,
@@ -82,7 +85,7 @@ const selectStyle = {
 
 const tableStyle = { width: "100%", borderCollapse: "collapse", fontSize: "0.72rem", color: COLORS.text };
 const thStyle = { textAlign: "left", padding: "0.45rem 0.6rem", backgroundColor: COLORS.raised, color: COLORS.muted, fontSize: "0.62rem", textTransform: "uppercase", letterSpacing: "0.08em" };
-const tdStyle = { padding: "0.35rem 0.6rem", borderTop: `1px solid #262628` };
+const tdStyle = { padding: "0.35rem 0.6rem", borderTop: "1px solid var(--oh-ui-line, #262628)" };
 const monoTd = { ...tdStyle, fontFamily: MONO };
 
 const Card = ({ label, value, sub, accent }) => (
@@ -92,7 +95,7 @@ const Card = ({ label, value, sub, accent }) => (
         padding: "0.8rem",
         borderRadius: "10px",
         border: `1px solid ${accent ? "rgba(59,130,246,0.5)" : COLORS.border}`,
-        backgroundColor: accent ? "rgba(59,130,246,0.06)" : COLORS.raised,
+        backgroundColor: accent ? "var(--oh-ui-active, rgba(59,130,246,0.06))" : COLORS.raised,
     }}>
         <div style={{ fontSize: "0.6rem", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.1em", color: COLORS.muted, marginBottom: "0.25rem" }}>{label}</div>
         <div style={{ fontSize: "1.2rem", fontWeight: 800, color: "white", lineHeight: 1 }}>{value}</div>
@@ -130,7 +133,7 @@ const RatingWidget = ({ rating, onRate }) => {
                     padding: "0.15rem 0.35rem",
                     fontSize: "0.68rem",
                     color: rating >= value ? COLORS.gold : COLORS.muted,
-                    backgroundColor: rating >= value ? "rgba(210,153,34,0.15)" : "#262628",
+                    backgroundColor: rating >= value ? "rgba(210,153,34,0.15)" : "var(--oh-ui-raised, #262628)",
                 }}
             >
                 {value}
@@ -141,8 +144,10 @@ const RatingWidget = ({ rating, onRate }) => {
     );
 };
 
+// Through the shared helper, which falls back where navigator.clipboard is
+// missing (LAN play over http, the Android app), and says when even that fails.
 const CopyButton = ({ text }) => {
-    const [copied, setCopied] = useState(false);
+    const [result, setResult] = useState(""); // "" | copied | failed
     if (!text) return null;
     return (
         <button
@@ -151,14 +156,11 @@ const CopyButton = ({ text }) => {
             style={{ ...buttonStyle, padding: "0.15rem 0.5rem", fontSize: "0.66rem" }}
             title="Copy to clipboard"
             onClick={async () => {
-                try {
-                    await navigator.clipboard.writeText(text);
-                    setCopied(true);
-                    setTimeout(() => setCopied(false), 1200);
-                } catch { /* clipboard unavailable */ }
+                setResult((await copyToClipboard(text)) ? "copied" : "failed");
+                setTimeout(() => setResult(""), 1200);
             }}
         >
-            {copied ? "Copied" : "Copy"}
+            {result === "copied" ? "Copied" : result === "failed" ? "Copy failed" : "Copy"}
         </button>
     );
 };
@@ -166,7 +168,7 @@ const CopyButton = ({ text }) => {
 const Section = ({ title, right, children }) => (
     <div style={{ marginBottom: "1.4rem" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.5rem" }}>
-            <h3 style={{ margin: 0, fontSize: "0.7rem", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.1em", color: "#60a5fa" }}>{title}</h3>
+            <h3 style={{ margin: 0, fontSize: "0.7rem", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--oh-ui-accent, #60a5fa)" }}>{title}</h3>
             {right}
         </div>
         {children}
@@ -246,8 +248,8 @@ const GenerationRow = ({ record, selected, onSelect, compact = false }) => {
             textAlign: "left",
             padding: "0.45rem 0.7rem",
             border: "none",
-            borderBottom: "1px solid #262628",
-            backgroundColor: selected ? "rgba(0,0,0,0.42)" : "transparent",
+            borderBottom: "1px solid var(--oh-ui-line, #262628)",
+            backgroundColor: selected ? "var(--oh-ui-active, rgba(0,0,0,0.42))" : "transparent",
             color: COLORS.text,
             cursor: "pointer",
             display: "flex",
@@ -266,13 +268,26 @@ const GenerationRow = ({ record, selected, onSelect, compact = false }) => {
         <span style={{ ...figure("4.2rem"), flexShrink: 0, textAlign: "right", color: COLORS.muted, fontFamily: MONO, ...(compact && !record.lookups?.calls ? { display: "none" } : null) }} title={record.lookups?.calls ? `${record.lookups.calls} lookup call${record.lookups.calls === 1 ? "" : "s"} over ${record.lookups.rounds} round${record.lookups.rounds === 1 ? "" : "s"}` : undefined}>
             {record.lookups?.calls ? `fn ×${record.lookups.calls}` : ""}
         </span>
+        <span style={{ ...figure("3.6rem"), flexShrink: 0, textAlign: "right", color: requestCount(record) > 1 ? COLORS.gold : COLORS.muted, fontFamily: MONO, ...(compact && requestCount(record) == null ? { display: "none" } : null) }} title={requestCount(record) == null ? undefined : requestsTitle(record)}>
+            {requestCount(record) == null ? "" : `req ×${requestCount(record)}`}
+        </span>
         <span style={{ ...figure("8rem"), flexShrink: 0, textAlign: "right", color: COLORS.muted, fontFamily: MONO }}>
             {record.usage ? `↑${fmtInt(record.usage.promptTokens)} ↓${fmtInt(record.usage.outputTokens)}` : "no usage"}
         </span>
-        <span style={{ ...figure("3.5rem"), flexShrink: 0, textAlign: "right", color: COLORS.muted, fontFamily: MONO }}>{fmtMs(record.latencyMs)}</span>
+        <span style={{ ...figure("3.5rem"), flexShrink: 0, textAlign: "right", color: COLORS.muted, fontFamily: MONO }} title={record.skip ? `The request ${fmtMs(record.latencyMs)}; the whole time skip ${fmtMs(record.skip.totalMs)}` : undefined}>{fmtMs(record.latencyMs)}</span>
+        {/* A time skip's own request: the whole skip's time beside it (telemetry.js attachSkipTiming). */}
+        <span style={{ ...figure("5.4rem"), flexShrink: 0, textAlign: "right", color: COLORS.gold, fontFamily: MONO, ...(compact && !record.skip ? { display: "none" } : null) }}>
+            {record.skip ? `skip ${fmtMs(record.skip.totalMs)}` : ""}
+        </span>
         <span style={{ ...figure("2.8rem"), flexShrink: 0, textAlign: "right", color: COLORS.gold, fontFamily: MONO }}>{record.rating ? `${record.rating}/10` : ""}</span>
     </button>
     );
+};
+
+// What a generation's HTTP requests came to (telemetry.js attachRequestOutcome).
+const requestsTitle = (record) => {
+    const requests = record?.requests ?? {};
+    return `${requests.ok ?? 0} answered · ${requests.refused ?? 0} refused (429) · ${requests.failed ?? 0} failed`;
 };
 
 const SUMMARY_FIELDS = [
@@ -280,6 +295,7 @@ const SUMMARY_FIELDS = [
     ["regionTransferCount", "transfers"],
     ["controlOpCount", "control ops"],
     ["polityChangeCount", "polity changes"],
+    ["politicalActorOpCount", "political actor ops"],
     ["unitOpCount", "unit ops"],
     ["warUpdateCount", "war updates"],
     ["relationUpdateCount", "relation updates"],
@@ -311,6 +327,20 @@ const GenerationDetail = ({ record, onRate }) => {
                 <Card label="Tokens in" value={fmtInt(usage.promptTokens)} sub={usage.cachedTokens ? `${fmtInt(usage.cachedTokens)} from cache` : undefined} />
                 <Card label="Tokens out" value={fmtInt(usage.outputTokens)} sub={usage.thinkingTokens ? `${fmtInt(usage.thinkingTokens)} thinking` : undefined} />
                 <Card label="Latency" value={fmtMs(record.latencyMs)} sub={Number.isFinite(record.firstByteMs) ? `first byte ${fmtMs(record.firstByteMs)}` : undefined} />
+                {record.skip ? (
+                    <Card label="Whole time skip" value={fmtMs(record.skip.totalMs)} sub={`this request ${fmtMs(record.latencyMs)}`} />
+                ) : null}
+                {requestCount(record) != null ? (
+                    <Card label="Requests" value={fmtInt(requestCount(record))} sub={requestsTitle(record)} />
+                ) : null}
+                {record.skip?.phases?.length ? (
+                    <div style={{ flex: "1 1 100%", fontSize: "0.66rem", color: COLORS.muted, fontFamily: MONO }}>
+                        <div style={{ fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: "0.2rem" }}>Where the time skip's time went</div>
+                        {record.skip.phases.map((line) => (
+                            <div key={line.label}>{`${line.label} · ${fmtMs(line.ms)}${line.requests ? ` · ${line.requests} request${line.requests === 1 ? "" : "s"}` : ""}`}</div>
+                        ))}
+                    </div>
+                ) : null}
                 {record.lookups?.calls ? (
                     <Card
                         label="Lookups"
@@ -353,6 +383,18 @@ const GenerationDetail = ({ record, onRate }) => {
 
             {record.lookups?.entries?.length ? (
                 <Section title="Function calls" right={<span style={{ color: COLORS.muted, fontFamily: MONO, fontSize: "0.62rem" }}>{record.lookups.rounds} round{record.lookups.rounds === 1 ? "" : "s"} before the answer</span>}>
+                    {/* What each round's request cost: every round is a whole request. */}
+                    {(record.lookups.roundUsage ?? []).length ? (
+                        <div style={{ marginBottom: "0.6rem", fontSize: "0.66rem", color: COLORS.muted, fontFamily: MONO, lineHeight: 1.6 }}>
+                            {record.lookups.roundUsage.map((round, index) => (
+                                <div key={`usage-${round.round}-${index}`}>
+                                    {round.cachedTokens
+                                        ? `round ${round.round} · ↑${fmtInt(round.promptTokens)} ↓${fmtInt(round.outputTokens)} · ${fmtInt(round.cachedTokens)} cached · ${fmtMs(round.elapsedMs)}`
+                                        : `round ${round.round} · ↑${fmtInt(round.promptTokens)} ↓${fmtInt(round.outputTokens)} · ${fmtMs(round.elapsedMs)}`}
+                                </div>
+                            ))}
+                        </div>
+                    ) : null}
                     {record.lookups.entries.map((entry, index) => (
                         <PreBlock
                             key={`${entry.round}-${index}`}
@@ -380,6 +422,7 @@ const emptyRow = (label) => ({
     calls: 0,
     failed: 0,
     lookups: 0,
+    requests: 0,
     tokensIn: 0,
     tokensOut: 0,
     cacheRead: 0,
@@ -393,6 +436,7 @@ const addRecordToRow = (row, record) => {
     row.calls += 1;
     if (record.ok === false) row.failed += 1;
     row.lookups += record.lookups?.calls ?? 0;
+    row.requests += requestCount(record) ?? 0;
     if (record.usage) {
         row.tokensIn += record.usage.promptTokens ?? 0;
         row.tokensOut += record.usage.outputTokens ?? 0;
@@ -411,6 +455,7 @@ const RowsTable = ({ rows, firstHeader }) => (
                     <th style={thStyle}>Calls</th>
                     <th style={thStyle}>Failed</th>
                     <th style={thStyle}>Lookups</th>
+                    <th style={thStyle}>Requests</th>
                     <th style={thStyle}>Tokens in</th>
                     <th style={thStyle}>Tokens out</th>
                     <th style={thStyle}>Cache read</th>
@@ -425,6 +470,7 @@ const RowsTable = ({ rows, firstHeader }) => (
                         <td style={monoTd}>{row.calls}</td>
                         <td style={monoTd}>{row.failed || ""}</td>
                         <td style={monoTd}>{row.lookups || ""}</td>
+                        <td style={monoTd}>{row.requests || ""}</td>
                         <td style={monoTd}>{fmtInt(row.tokensIn)}</td>
                         <td style={monoTd}>{fmtInt(row.tokensOut)}</td>
                         <td style={monoTd}>{fmtInt(row.cacheRead)}</td>
@@ -447,6 +493,7 @@ export const DebugConsole = ({ open, onClose }) => {
     const [modelFilter, setModelFilter] = useState("");
     const [statusFilter, setStatusFilter] = useState("all");
     const [search, setSearch] = useState("");
+    const [sortBy, setSortBy] = useState("newest");
     const isMobile = useIsMobile();
     // A phone held sideways gets the desktop layout, where the list shares the
     // width with an open record; there too the rows wrap instead of running on
@@ -470,6 +517,8 @@ export const DebugConsole = ({ open, onClose }) => {
         return () => {
             cancelled = true;
             window.removeEventListener(GENERATION_COMPLETE_EVENT, handler);
+            // The stored history was read for this visit only.
+            releaseAiRecords();
         };
     }, [open, refresh]);
 
@@ -491,8 +540,11 @@ export const DebugConsole = ({ open, onClose }) => {
                 }
                 return true;
             })
+            // The most expensive generations first: a record from before
+            // requests were counted sorts last.
+            .sort((a, b) => (sortBy === "requests" ? (requestCount(b) ?? -1) - (requestCount(a) ?? -1) : 0))
             .slice(0, 200);
-    }, [records, taskFilter, modelFilter, statusFilter, search]);
+    }, [records, taskFilter, modelFilter, statusFilter, search, sortBy]);
 
     const selected = filtered.find((record) => record.id === selectedId) ?? null;
 
@@ -636,6 +688,10 @@ export const DebugConsole = ({ open, onClose }) => {
                                     <option value="ok">OK</option>
                                     <option value="failed">Failed</option>
                                 </select>
+                                <select className="oh-tap-row" value={sortBy} onChange={(event) => setSortBy(event.target.value)} style={selectStyle}>
+                                    <option value="newest">Newest first</option>
+                                    <option value="requests">Most requests first</option>
+                                </select>
                                 <input
                                     className="oh-tap-row"
                                     value={search}
@@ -656,7 +712,7 @@ export const DebugConsole = ({ open, onClose }) => {
                                         ) : (
                                             <>
                                                 <div style={{ padding: "0.25rem 0.7rem", fontSize: "0.6rem", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.1em", color: COLORS.muted, borderBottom: "1px solid #262628", backgroundColor: COLORS.bg }}>
-                                                    {filtered.length} shown (newest first)
+                                                    {sortBy === "requests" ? `${filtered.length} shown (most requests first)` : `${filtered.length} shown (newest first)`}
                                                 </div>
                                                 {filtered.map((record) => (
                                                     <GenerationRow key={record.id} record={record} selected={selected?.id === record.id} onSelect={setSelectedId} compact={isMobile || (touch && Boolean(selected))} />

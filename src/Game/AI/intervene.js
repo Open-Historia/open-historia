@@ -13,7 +13,10 @@
 // every check that would ask a model switched off — the events were checked
 // when they were made.
 //
-// DELIBERATELY IMPORT-FREE: the rules on the journal, tested on their own.
+// Imports only the game-date rules (runtime/gameDates.js, itself import-free):
+// the rules on the journal, tested on their own.
+
+import { compareGameDates, isGameDate } from "../../runtime/gameDates.js";
 
 const asArray = (value) => (Array.isArray(value) ? value : []);
 const asText = (value) => String(value ?? "").trim();
@@ -28,13 +31,19 @@ export const journalTurn = ({
     warUpdates = [],
     relationUpdates = [],
     agreementUpdates = [],
+    puppetUpdates = [],
+    frontOrders = [],
     storylineUpdates = [],
     stopDate = "",
     summary = "",
     outreach = [],
+    peaceTreaties = [],
+    socialPosts = [],
+    pollResults = [],
     clearActions = true,
     mode = "jump",
     receipt = null,
+    covertOperations = [],
 } = {}) => {
     const excluded = new Set(asArray(excludeEventIds).map(asText).filter(Boolean));
     return {
@@ -42,15 +51,26 @@ export const journalTurn = ({
         warUpdates: asArray(warUpdates),
         relationUpdates: asArray(relationUpdates),
         agreementUpdates: asArray(agreementUpdates),
+        puppetUpdates: asArray(puppetUpdates),
+        // The battlefields' orders: the front engine runs again over the kept
+        // events when a turn is cut short, from these.
+        frontOrders: asArray(frontOrders),
         storylineUpdates: asArray(storylineUpdates),
         stopDate: asText(stopDate),
         summary: asText(summary),
         outreach: asArray(outreach),
+        // The peaces the skip said two countries nobody plays made (peaceTerms.js readTreatyLines).
+        peaceTreaties: asArray(peaceTreaties),
+        // Rostra's posts of the period, as the answer wrote them (runtime/socialFeed.js reads them again).
+        socialPosts: asArray(socialPosts),
+        // The public's answers to the player's polls (runtime/socialFeed.js readSkipPollResults).
+        pollResults: asArray(pollResults),
         clearActions: clearActions !== false,
         mode: asText(mode) || "jump",
         // What the turn's answer lost on its way in (runtime/applicationReceipt.js):
         // still true of the kept prefix, and told again with the intervention.
         receipt: receipt && typeof receipt === "object" ? receipt : null,
+        covertOperations: asArray(covertOperations),
     };
 };
 
@@ -77,11 +97,12 @@ const referencesKept = (update, journalIds, keptIds) => {
 // going to advance at all — a turn that moves the clock nowhere reads as a
 // turn that did not happen.
 export const closingDateAfterIntervene = ({ keptEvents = [], originDate = "", minimumDate = "" } = {}) => {
-    const dates = asArray(keptEvents).map((event) => asText(event?.date)).filter(Boolean).sort();
+    const dates = asArray(keptEvents).map((event) => asText(event?.date)).filter(Boolean).sort(compareGameDates);
     const last = dates.length ? dates[dates.length - 1] : "";
     const floor = asText(minimumDate) || asText(originDate);
     if (!last) return floor;
-    return floor && last < floor ? floor : last;
+    // By the calendar, never the text: -0217-01-15 comes after -0218-12-20.
+    return floor && compareGameDates(last, floor) < 0 ? floor : last;
 };
 
 // The journal cut down to its first `keptCount` events — the ones revealed —
@@ -102,12 +123,22 @@ export const truncateTurn = (journal, keptCount, { originDate = "", minimumDate 
             warUpdates: keepUpdates(journal?.warUpdates),
             relationUpdates: keepUpdates(journal?.relationUpdates),
             agreementUpdates: keepUpdates(journal?.agreementUpdates),
+            puppetUpdates: keepUpdates(journal?.puppetUpdates),
+            frontOrders: keepUpdates(journal?.frontOrders),
             storylineUpdates: keepUpdates(journal?.storylineUpdates),
             stopDate: closingDate,
             summary: asText(journal?.summary),
             outreach: asArray(journal?.outreach),
+            peaceTreaties: asArray(journal?.peaceTreaties),
+            // The posts written by the closing date; a later one never was. Each
+            // keeps its place in the list (an empty one where a post went), so
+            // a quote of the answer's own "#n" still names the post it named.
+            socialPosts: asArray(journal?.socialPosts).map((post) => (isGameDate(post?.date) && compareGameDates(post.date, closingDate) > 0 ? null : post)),
+            // A poll's answer is the whole period's: cut short, the poll stays open.
+            pollResults: [],
             clearActions: journal?.clearActions !== false,
             mode: asText(journal?.mode) || "jump",
+            covertOperations: asArray(journal?.covertOperations),
         },
         kept,
         dropped,

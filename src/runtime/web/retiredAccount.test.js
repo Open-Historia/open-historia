@@ -37,7 +37,8 @@ test("a browser that never signed in is a no-op", async () => {
 test("the website drops it at boot, and asks the registry for no account, sync or presence", () => {
   const boot = readFileSync(new URL("./index.js", import.meta.url), "utf8");
   assert.match(boot, /import \{ forgetRetiredAccount \} from "\.\/retiredAccount\.js";/);
-  assert.match(boot, /installWebApiRouter\(\);\s*requestPersistentStorage\(\);\s*forgetRetiredAccount\(\);/);
+  // (Saves are moved into the current storage layout in between, on a timer.)
+  assert.match(boot, /installWebApiRouter\(\);\s*requestPersistentStorage\(\);[\s\S]{0,600}?forgetRetiredAccount\(\);/);
 
   // The sign-in, the sync engine and the corner chip are gone, and nothing in
   // the web backend names their routes.
@@ -58,7 +59,7 @@ test("the website asks no content node for anything, and reads its map from its 
     const text = readFileSync(new URL(name, import.meta.url), "utf8");
     assert.doesNotMatch(text, /VITE_OH_PMTILES_URL|VITE_OH_DIRECTORY_URL|node-directory|content-manifest|\/oh\/v1\//, name);
   }
-  const base = readFileSync(new URL("../assetsBase.js", import.meta.url), "utf8");
+  const base = readFileSync(new URL("../worldFiles.js", import.meta.url), "utf8");
   assert.match(base, /import\.meta\.env\.BASE_URL/);
   const env = readFileSync(new URL("../../../.env.web", import.meta.url), "utf8");
   assert.doesNotMatch(env, /VITE_OH_PMTILES_URL|VITE_OH_DIRECTORY_URL/);

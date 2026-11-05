@@ -69,6 +69,16 @@ test("a missing required field takes its list item with it, and only that item",
     assert.deepEqual(result.removed.map((entry) => [entry.kind, entry.path]), [["item", "$.orders[1]"]]);
 });
 
+
+test("protected path prefixes fail closed instead of deleting canonical state", () => {
+    const answer = { summary: "x", orders: [{ unit: "1st Army" }, { strength: 10 }] };
+    const result = salvageBySchema(answer, validateOrders, { protectedPathPrefixes: ["$.orders"] });
+    assert.equal(result.valid, false);
+    assert.match(result.error, /\$\.orders\[1\]\.unit is required/);
+    assert.deepEqual(result.removed, []);
+    assert.deepEqual(answer.orders, [{ unit: "1st Army" }, { strength: 10 }]);
+});
+
 test("two faulty items in a row both go (the second moves into the first one's place)", () => {
     const answer = { summary: "x", orders: [{ strength: 1 }, { strength: 2 }, { unit: "3rd Army" }] };
     const result = salvageBySchema(answer, validateOrders);

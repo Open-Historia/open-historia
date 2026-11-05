@@ -11,13 +11,20 @@
 // per version of the record and handed out again; the previous one is revoked
 // when the cover changes. Nothing stores these URLs: they are for showing
 // only, and they end with the page.
+//
+// A cover is either its bytes ({ contentType, bytes }) or the marker a record
+// keeps once its bytes live in the covers store ({ contentType, byteLength });
+// both name the same version, so `known` can answer from the marker alone and
+// the bytes are read only for a URL not made yet.
 
 export const createCoverUrlCache = ({
   createObjectURL = (blob) => URL.createObjectURL(blob),
   revokeObjectURL = (url) => URL.revokeObjectURL(url),
 } = {}) => {
   const byKey = new Map(); // "scenario:<id>" | "game:<id>" -> { token, url }
-  return (key, token, cover) => {
+  const versionOf = (token, cover) =>
+    `${token}|${cover.bytes?.byteLength ?? cover.byteLength ?? 0}|${cover.contentType || "application/octet-stream"}`;
+  const urlFor = (key, token, cover) => {
     const known = byKey.get(key);
     if (!cover?.bytes) {
       if (known) {
@@ -27,13 +34,19 @@ export const createCoverUrlCache = ({
       return null;
     }
     const contentType = cover.contentType || "application/octet-stream";
-    const version = `${token}|${cover.bytes.byteLength}|${contentType}`;
+    const version = versionOf(token, cover);
     if (known?.token === version) return known.url;
     if (known) revokeObjectURL(known.url);
     const url = createObjectURL(new Blob([cover.bytes], { type: contentType }));
     byKey.set(key, { token: version, url });
     return url;
   };
+  // The URL already made for this version of the cover, or null.
+  urlFor.known = (key, token, cover) => {
+    const known = byKey.get(key);
+    return cover && known?.token === versionOf(token, cover) ? known.url : null;
+  };
+  return urlFor;
 };
 
 export const coverObjectUrl = createCoverUrlCache();

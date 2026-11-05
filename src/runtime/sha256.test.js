@@ -7,6 +7,7 @@
 // duplicate on the phone.
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import { sha256Hex, sha256HexPure } from "./sha256.js";
 
 // The one everybody knows.
@@ -36,4 +37,10 @@ test("without WebCrypto the answer is the same", async () => {
   } finally {
     if (saved) Object.defineProperty(globalThis, "crypto", saved); else delete globalThis.crypto;
   }
+});
+
+test("flag uploads use the shared Android-safe SHA-256 implementation", () => {
+  const flagStore = fs.readFileSync(new URL("./web/flagStore.js", import.meta.url), "utf8");
+  assert.match(flagStore, /import \{ sha256Hex \} from "\.\.\/sha256\.js"/);
+  assert.doesNotMatch(flagStore, /crypto\.subtle\.digest/);
 });

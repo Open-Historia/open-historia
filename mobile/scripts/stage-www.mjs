@@ -1,14 +1,17 @@
 /*! Open Historia — stage the Android build into the Capacitor shell © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // The Android app is the web bundle built with `--mode android`
 // (npm run build:android → dist-android/), plus the world map inside the APK.
-// Everything the game needs is on the phone, and what still uses the network is the community hub, the player's own AI
-// provider, the update check, and what a map draws from other services
-// (imagery, flags, place search). public/privacy/index.html lists them.
+// It used to be the website's bundle verbatim, which streamed every tile over
+// the network; now everything the game needs is on the phone, and what still
+// uses the network is the community hub, the player's own AI provider, the
+// update check, and what a map draws from other services (imagery, flags,
+// place search). public/privacy/index.html lists them.
 //
 // This copies dist-android/ into mobile/www/ (Capacitor's webDir), drops the
 // website-only files that ride along in the output (marketing pages, the
-// sitemap), and lays the
-// verified map data from map-cache/ under www/assets/. Nothing in mobile/www is
+// sitemap), and lays the verified map data from map-cache/ under www/assets/:
+// the same files, from the same list, that `npm run build:web` lays into the
+// website (scripts/stage-map-assets.mjs). Nothing in mobile/www is
 // committed except its .gitignore.
 
 import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
@@ -28,8 +31,8 @@ const SITE_ONLY = [
   "guides", "get-started", "how-to-play", "self-hosting", "pax-historia-alternative", "privacy",
   "sitemap.xml", "sitemap.txt", "robots.txt",
   "sw.js", "version.json",
-  // The gate that asks before the visit counters load, and the website's fonts.
-  // The app counts nothing and never adds the gate (src/runtime/visitCount.js).
+  // The gate that asks before the visit counters load. The app counts nothing
+  // and never adds it (src/runtime/visitCount.js), so it does not carry it.
   "consent.js", "fonts",
 ];
 

@@ -1,8 +1,9 @@
 /*! Open Historia — when an agent is due a report: tests © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Run: node --test src/Game/AI/agentReports.test.js
 //
-// These pin the calendar the turn review asks for the agents' reports on, and
-// which agents report in a time skip's own answer.
+// Each report is a whole request. With saving off every agent used to report
+// after every applied turn — five agents, five requests a skip, the interactive
+// scenes included. These pin the calendar both paths now share.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -36,7 +37,7 @@ test("an agent with nothing on file, or a report from a round an undo took back,
     assert.deepEqual(targets(overdue), ["Belarus", "Ukraine"]);
 });
 
-test("the turn review asks only on collection rounds; without them an overdue agent is due on any round", () => {
+test("the turn review asks only on collection rounds; the per-agent reports do not wait for one", () => {
     const agents = [agent("Belarus")];
     const filed = { Belarus: { round: 1 } };
     const at = (round, collectionRounds) => targets(agentsDueToReport({ agents, filed, round, originDate: "2014-06-01", collectionRounds }).overdue);

@@ -174,6 +174,9 @@ three chance when it has such an event, and never within three turns of the last
 and the time panel mentions the offer until the next skip replaces it. See
 [interactive events](/wiki/events/#interactive-events).
 
+<p class="beta-note"><b>On beta offers come about one skip in five:</b> one in four when a skip
+has such an event, and never on the skip right after the last offer.</p>
+
 **Time stands still while one is in progress.** The skip controls are replaced by a note that
 leads back to the scene; end it or set it aside to carry on.
 

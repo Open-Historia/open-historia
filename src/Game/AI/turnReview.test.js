@@ -20,6 +20,7 @@ import {
     normalizeReviewJobs,
     readTurnReviewAnswer,
     remapBoardOps,
+    reviewFailure,
     shareRepeatedBlocks,
 } from "./turnReview.js";
 
@@ -198,4 +199,40 @@ test("an op that named no usable event keeps naming none, for the board's own fa
 
 test("with nothing to map, nothing comes back", () => {
     assert.deepEqual(remapBoardOps(), { ops: [], dropped: 0 });
+});
+
+// ---- A review that did not come back ------------------------------------------
+// It used to land the turn anyway, with nothing on the map moved for it and no
+// word to the player. A failure now holds the turn (turnChecks.js); a check
+// with nothing to change is not a failure.
+
+const review = (overrides = {}) => ({ asked: true, parts: {}, reasons: [], failure: null, missing: [], ...overrides });
+
+test("a review whose request failed is a failure, and says why", () => {
+    const failed = review({ failure: new Error("503 The model is overloaded"), missing: ["units", "board"] });
+    assert.equal(reviewFailure(failed), "503 The model is overloaded");
+});
+
+test("a review with a broken part is a failure, whichever job it was", () => {
+    assert.equal(reviewFailure(review({ missing: ["board"] })), "no usable answer for board");
+    assert.equal(reviewFailure(review({ missing: ["units", "territory"] })), "no usable answer for units, territory");
+});
+
+test("a review never asked, or with every part usable, is not a failure", () => {
+    assert.equal(reviewFailure(review({ asked: false })), "");
+    // Nothing to change is an empty list in a present field: a usable part.
+    assert.equal(reviewFailure(review({ parts: { units: { eventOrders: [] }, board: { projectOps: [] } } })), "");
+});
+
+test("every job's field is required, so a job with nothing to do still answers", () => {
+    const tool = buildTurnReviewTool([
+        { key: "units", title: "move the units", prompt: "u", schema: { type: "object" } },
+        { key: "board", title: "move the board", prompt: "b", schema: { type: "object" } },
+    ]);
+    assert.deepEqual(tool.schema.required, ["units", "board"]);
+});
+
+test("a review the request budget refused is a failure, though it was never asked", () => {
+    const refused = review({ asked: false, failure: new Error("this time skip used all 3 of its requests before the checks") });
+    assert.match(reviewFailure(refused), /used all 3 of its requests/);
 });

@@ -13,7 +13,8 @@
 const { EventEmitter } = require("node:events");
 
 // How much of the progress bar is the download when an update is made of chunks.
-const DOWNLOAD_SHARE = 0.6;
+const READING_SHARE = 0.25;
+const DOWNLOAD_SHARE = 0.35;
 
 const createLayeredUpdater = ({
   installer = null,
@@ -98,8 +99,9 @@ const createLayeredUpdater = ({
         // of the wait on a fast line (a few megabytes); putting ten thousand
         // files in place is the rest.
         onProgress: (progress) => {
-          if (progress.phase === "downloading") events.emit("download-progress", { percent: Math.round(progress.percent * DOWNLOAD_SHARE) });
-          else if (progress.phase === "building") events.emit("download-progress", { percent: Math.round(100 * DOWNLOAD_SHARE + progress.percent * (1 - DOWNLOAD_SHARE)) });
+          if (progress.phase === "reading") events.emit("download-progress", { percent: Math.round(progress.percent * READING_SHARE) });
+          else if (progress.phase === "downloading") events.emit("download-progress", { percent: Math.round(100 * READING_SHARE + progress.percent * DOWNLOAD_SHARE) });
+          else if (progress.phase === "building") events.emit("download-progress", { percent: Math.round(100 * (READING_SHARE + DOWNLOAD_SHARE) + progress.percent * (1 - READING_SHARE - DOWNLOAD_SHARE)) });
         },
       });
       events.emit("update-downloaded", { version });

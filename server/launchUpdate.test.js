@@ -118,6 +118,33 @@ test("an update found at launch downloads with progress, then quits into the ins
   assert.equal(updater.listenerCount("download-progress"), 0);
 });
 
+// A Mac report, 2026-11-04: "when clicking the app to open it, it opens then
+// immediately closes". An unsigned Mac app opened where it was downloaded runs
+// from macOS's temporary copy of it, and a restart from there is not to be
+// relied on; the update waits for the next start and the game opens now.
+test("an update found where the app cannot restart is left for the next start, and the game opens", async (t) => {
+  const s = setup(t);
+  const logs = [];
+  const updater = fakeUpdater({ check: available("0.0.117"), download: async () => {} });
+  const result = await s.run(updater, { canRestart: () => false, log: (...entry) => logs.push(entry) });
+  assert.deepEqual(result, { installing: false, reason: "next-start", version: "0.0.117" });
+  assert.deepEqual(s.sent.at(-1), { version: "0.0.117", opening: true });
+  s.timers.forEach((timer) => timer.fn());
+  assert.equal(updater.installs.length, 0, "no restart");
+  assert.equal(s.record()?.failures, undefined, "an update in place is not a failure");
+  assert.ok(logs.some(([, event]) => event === "updater.launchNextStart"));
+});
+
+test("main.cjs restarts into a launch update except from macOS's temporary copy of the app", () => {
+  const main = fs.readFileSync(path.join(ROOT, "electron", "main.cjs"), "utf8");
+  assert.match(main, /canRestart: \(\) => !runsTranslocated\(\)/);
+  const start = main.indexOf("const runsTranslocated = ");
+  const runsTranslocated = (platform, execPath) => new Function("process", `${main.slice(start, main.indexOf("\n", start))}\nreturn runsTranslocated();`)({ platform, execPath });
+  assert.equal(runsTranslocated("darwin", "/private/var/folders/x1/T/AppTranslocation/0F3C/d/Open Historia Beta.app/Contents/MacOS/Open Historia Beta"), true);
+  assert.equal(runsTranslocated("darwin", "/Applications/Open Historia Beta.app/Contents/MacOS/Open Historia Beta"), false);
+  assert.equal(runsTranslocated("win32", "C:\\AppTranslocation\\Open Historia.exe"), false);
+});
+
 test("'Open the game now' opens the game and leaves the download running", async (t) => {
   const s = setup(t);
   const updater = fakeUpdater({ check: available("0.0.40"), download: () => new Promise(() => {}) });
@@ -162,6 +189,22 @@ test("main.cjs runs the launch update before the server and stops for an install
   assert.match(main, /return autoUpdater;\n\};/, "installAutoUpdater hands boot() the updater");
 });
 
+// Every installer keeps one name on a rolling release, so the block map
+// electron-updater takes for the installed version's is the new one. A player's
+// log: old and new block-map addresses the same file, "To download: 0 KB (0%)",
+// then "Cannot download differentially, fallback to full download: Error:
+// sha512 checksum mismatch", on every update.
+test("an update is downloaded in full: no differential download is tried", () => {
+  const main = fs.readFileSync(path.join(ROOT, "electron/main.cjs"), "utf8").replace(/\r\n/g, "\n");
+  // The installer's own updater; the chunked update in front of it downloads no installer at all.
+  const setup = main.slice(main.indexOf("const setupInstallerUpdater = () => {"), main.indexOf("const setupPayloadUpdater = () => {"));
+  assert.match(setup, /autoUpdater\.autoDownload = false;\n(?: *\/\/[^\n]*\n)* *autoUpdater\.disableDifferentialDownload = true;\n/);
+  // The reason it cannot work: no installer's name carries its version.
+  const build = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8")).build;
+  const beta = fs.readFileSync(path.join(ROOT, "electron-builder.beta.yml"), "utf8");
+  assert.doesNotMatch(`${JSON.stringify(build)}\n${beta.replace(/^\s*#.*$/gm, "")}`, /artifactName[^\n,}]*\$\{version\}/);
+});
+
 test("the setup window can show the update and offer to open the game now", () => {
   const preload = fs.readFileSync(path.join(ROOT, "electron/preload.cjs"), "utf8");
   const page = fs.readFileSync(path.join(ROOT, "electron/setup.html"), "utf8");
@@ -193,7 +236,17 @@ test("the stable app's update screen offers the beta, opened in the player's bro
   assert.match(mapMode, /beta\.hidden = true;/);
 });
 
-test("updates download in full: a rolling release has no old block map to compare with", () => {
-  const main = fs.readFileSync(path.join(ROOT, "electron/main.cjs"), "utf8");
-  assert.match(main, /autoUpdater\.disableDifferentialDownload = true;/);
+// The Android app's update cover (AppUpdateBanner.jsx) makes the same offer.
+test("the stable Android app's update cover offers the Android beta", () => {
+  const banner = fs.readFileSync(path.join(ROOT, "src/runtime/AppUpdateBanner.jsx"), "utf8");
+  assert.match(
+    banner,
+    /const ANDROID_BETA_APK = "https:\/\/github\.com\/Open-Historia\/open-historia\/releases\/download\/android-beta\/open-historia-beta\.apk";/,
+  );
+  assert.match(banner, /const offerBeta = isApp && APP_TRACK !== "beta";/, "the stable app only: not the beta, not the website");
+  assert.match(banner, /\{offerBeta \? \(/);
+  assert.match(banner, /onClick=\{openBetaDownload\}/);
+  // Only while the update downloads: the offer sits in the cover's download stage.
+  const cover = banner.slice(banner.indexOf("if (launch) {"));
+  assert.ok(cover.indexOf("Not now") < cover.indexOf("{offerBeta ? ("), "after the cover's own button");
 });

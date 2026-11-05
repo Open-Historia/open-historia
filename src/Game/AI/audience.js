@@ -69,13 +69,6 @@ export const normalizeAudience = (value) => {
   return clean(value) ? viewerAudience([value]) : SIMULATION_AUDIENCE;
 };
 
-// A stable key for caches and cursors: two audiences with the same identity are
-// shown the same things.
-export const audienceIdentity = (audience) => {
-  if (isSimulationAudience(audience)) return "simulation";
-  return `viewer:${audiencePolities(audience).map(fold).sort().join("|")}`;
-};
-
 /**
  * Does one participant entry refer to `polity`?
  *
@@ -115,9 +108,6 @@ export const audienceSeesChat = (audience, chat, { player = "" } = {}) => {
   return audienceAmong(audience, chat?.countries);
 };
 
-export const filterChatsForAudience = (chats, audience, options) =>
-  (Array.isArray(chats) ? chats : []).filter((chat) => audienceSeesChat(audience, chat, options));
-
 /**
  * May this audience see something carrying a distribution list?
  *
@@ -133,6 +123,24 @@ export const audienceSeesScoped = (audience, visibleTo) => {
 };
 
 /**
+ * May this audience read this document (runtime/reports.js)?
+ *
+ * Its holders and the public by the distribution list, as audienceSeesScoped —
+ * and a government whose agents stole a copy (`interceptedBy`) as well: a
+ * stolen paper is on its desk like any other. Which OTHER services stole one
+ * is the narrator's alone; this answers only for the audience asking.
+ */
+export const audienceSeesReport = (audience, report) =>
+  audienceSeesScoped(audience, report?.visibleTo) || audienceAmong(audience, report?.interceptedBy);
+
+// Did this audience come by the document only through its agents? Never for
+// the narrator, which holds everything openly.
+export const audienceStoleReport = (audience, report) =>
+  !isSimulationAudience(audience)
+  && !audienceSeesScoped(audience, report?.visibleTo)
+  && audienceAmong(audience, report?.interceptedBy);
+
+/**
  * What this audience may know about one agent, or null when it may know nothing.
  *
  * An intelligence service knows its own people — but not that one of them has
@@ -143,7 +151,7 @@ export const audienceSeesScoped = (audience, visibleTo) => {
  * exposed. An undetected agent is invisible to everyone but its owner and the
  * narrator.
  */
-const KNOWN_TO_TARGET = new Set(["discovered", "turned", "exposed"]);
+const KNOWN_TO_TARGET = new Set(["discovered", "turned", "exposed", "dead"]);
 export const spyAsSeenBy = (audience, spy) => {
   if (!spy || typeof spy !== "object") return null;
   if (isSimulationAudience(audience)) return spy;
@@ -153,6 +161,9 @@ export const spyAsSeenBy = (audience, spy) => {
     const { coverStory: _coverStory, turnedAt: _turnedAt, ...own } = spy;
     return { ...own, status: compromised ? "active" : status, suspected: spy.suspected === true };
   }
-  if (audienceIncludes(audience, spy.target) && KNOWN_TO_TARGET.has(status)) return spy;
+  if (audienceIncludes(audience, spy.target) && KNOWN_TO_TARGET.has(status)) {
+    const { focus: _focus, mission: _mission, assets: _assets, operations: _operations, ...caught } = spy;
+    return spy.identified === false ? { ...caught, owner: "" } : caught;
+  }
   return null;
 };

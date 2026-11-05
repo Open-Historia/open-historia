@@ -1,15 +1,16 @@
 /*! Open Historia — portions (reasoning toggle + small-screen menu) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-import React, { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import React, { lazy, Suspense, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { APP_HEIGHT, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, useTouchPrimary } from "../../runtime/mobileUi.js";
 import { useBackToClose } from "../../runtime/backToClose.js";
 import { createPortal } from "react-dom";
 import {
+    AGENT_KINDS,
+    AGENT_PROVIDER,
     AI_TASK_ROUTING,
     CONNECTION_TEMPLATES,
     DEFAULT_PROVIDER,
     GEMINI_DEFAULT_CHAIN,
     OPENAI_DEFAULT_MODEL,
-    PROVIDER_OPTIONS,
     addConnection,
     addEntry,
     clearFallbackList,
@@ -26,6 +27,7 @@ import {
     getResolvedFallbackList,
     getTaskPick,
     moveEntry,
+    providerOptionsFor,
     providerSetupRequirement,
     removeConnection,
     removeEntry,
@@ -37,10 +39,16 @@ import {
     updateEntry,
 } from "../AI/providerConfig.js";
 import { formatResetTime } from "../AI/fallbackRunner.js";
-import { contextWindowKey, createContextWindowMemory, describeRememberedWindow } from "../AI/contextWindow.js";
-import { announceRequestBudgetChange, describeJumpCost, requestDay, requestSettings } from "../AI/requestBudget.js";
 import { useWorldBackground } from "../Map/useWorldState.js";
-import { endpointIsLocal } from "../AI/localEndpoint.js";
+import { announceRequestBudgetChange, describeJumpCost, requestDay, requestSettings, requestsByTask } from "../AI/requestBudget.js";
+import {
+    AI_REQUEST_CONTROL_EVENT,
+    cancelAllAiRequests,
+    getActiveAiRequestCount,
+} from "../AI/aiRequestControl.js";
+import { PLAYER_FOCUS_LEVELS, normalizePlayerFocus } from "../AI/playerFocus.js";
+import { getActivePlayerFocus, useActiveFeatures } from "../../runtime/gameFeatures.js";
+import { playerFocusOf, withFeatureOverride } from "../../../server/gameFeatures.js";
 import {
     isRatingEnabled,
     isTelemetryEnabled,
@@ -55,26 +63,31 @@ import {
     normalizeStructuredMode,
 } from "../AI/structuredMode.js";
 import {
-    DEFAULT_LANGUAGE,
     getLanguageOptions,
-    hasShippedPack,
+    getUiLanguageOptions,
     languageDisplayName,
     getStoredChatLanguage,
     getStoredLanguage,
     setStoredChatLanguage,
-    setStoredLanguage,
 } from "../../runtime/i18n.js";
-import { LABEL_FONT_SUGGESTIONS, MAP_SETTING_KEYS, getMapSetting, getMapSettingDefaultOn, setMapSetting, setMapSettingValue, useMapSettingValue } from "../../runtime/mapSettings.js";
-import { getLibraryState } from "../../runtime/library.js";
+import { LABEL_FONT_SUGGESTIONS, MAP_SETTING_KEYS, getMapSetting, getMapSettingDefaultOn, setMapSetting, setMapSettingValue, useMapSetting, useMapSettingValue, useSystemReducedMotion } from "../../runtime/mapSettings.js";
+import { SCENARIO_TERRAIN_PAINTED } from "../Map/scenarioTerrain.js";
+// The Map Editor's basemap window, opened here to browse, download and manage
+// maps without opening the editor. Loaded on first use: it brings the editor's
+// file readers with it.
+const BasemapPicker = lazy(() => import("../../Editor/BasemapPicker.jsx"));
+import { getLibraryState, saveGame, useLibraryState } from "../../runtime/library.js";
 import { DISCORD_URL, REDDIT_URL } from "../../runtime/communityLinks.js";
 import { CommunityTile, DISCORD_BLURPLE, DiscordMark, REDDIT_ORANGERED, RedditMark } from "./communityLogos.jsx";
 import { copyToClipboard } from "../../runtime/clipboard.js";
+import { openAgentFolder, readAgentFolder } from "../AI/agentConnection.js";
 import {
     buildLoggingFile,
     clearDebugLog,
     fetchDesktopLog,
     formatLogSize,
     getDebugLogBytes,
+    getDebugLogDroppedCount,
     getDebugLogLimitBytes,
     getDebugLogSize,
     getLoggingFileEntries,
@@ -82,6 +95,7 @@ import {
     isDebugLogVerbose,
     logDebugEvent,
     logSettingChange,
+    logSettingMessage,
     setDebugLogEnabled,
     setDebugLogVerbose,
     subscribeToDebugLog,
@@ -90,9 +104,25 @@ import { saveDebugLogFile } from "../../runtime/saveDebugLog.js";
 import { buildGameZipBlob, formatZipSize, saveGameZipToDisk } from "../../runtime/gameZip.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { usePresenceLeaving } from "./presence.jsx";
-import { ESRI_BASEMAPS, isBuiltinBasemapId } from "../../runtime/assets.js";
+import { switchLanguage, uiString } from "../../runtime/translator.js";
+import { DEFAULT_BASEMAP_ID, ESRI_BASEMAPS, decodeAllowedBasemaps, decodeOwnBasemaps, isBuiltinBasemapId } from "../../runtime/assets.js";
+import { DEFAULT_BASEMAP_KEY, DEFAULT_BASEMAP_ON_KEY, basemapShownFor, scenarioMapsOfWorld } from "../../runtime/basemapPick.js";
+import { useGameBasemapPick } from "../Map/useBasemapPick.js";
+import UiThemeSettings from "./UiThemeSettings.jsx";
+import { formatBytes, subscribeTiledBasemaps } from "../../runtime/tiledBasemaps.js";
+import { detailedMapOffers, detailedMapsDownloadLine, lookUpDetailedMaps } from "../Map/detailedMapOffers.js";
+import DetailedMapsInstallOffer from "../Map/DetailedMapsInstallOffer.jsx";
+import { getDeviceProfileOverride, isConstrainedDevice, setDeviceProfileOverride } from "../../runtime/deviceProfile.js";
 import { presenceAvailable } from "../../runtime/discordPresence.js";
+import { MUSIC_CREDIT, MUSIC_TRACKS, getNowPlaying, musicVolumeOf, subscribeNowPlaying } from "../../runtime/ambientMusic.js";
+import { creditSiteOf } from "../../runtime/scenarioMusic.js";
+import { clearKeptMusic, keptMusicUsage } from "../../runtime/keptMusic.js";
 import { setVisitConsent, useVisitConsent } from "../../runtime/visitConsent.js";
+import {
+    APP_UPDATE_MANUAL_CHECK_RESULT_EVENT,
+    appUpdateCheckDescription,
+    requestAppUpdateCheck,
+} from "../../runtime/appUpdateManualCheck.js";
 
 const baseStyle = {
     position: "fixed",
@@ -111,50 +141,55 @@ const baseStyle = {
 
 const labelStyle = {
     display: "block",
-    fontSize: "0.82rem",
-    marginBottom: "0.45rem",
-    color: "rgba(255,255,255,0.92)",
+    fontSize: "0.78rem",
+    fontWeight: 650,
+    marginBottom: "0.4rem",
+    color: "rgba(255,255,255,0.88)",
     cursor: "text",
 };
 
 const inputStyle = {
     width: "100%",
-    padding: "0.65rem 0.7rem",
+    padding: "0.55rem 0.75rem",
     borderRadius: "8px",
-    border: "1px solid rgba(255,255,255,0.16)",
-    backgroundColor: "rgba(0,0,0,0.22)",
-    color: "white",
-    fontSize: "0.85rem",
+    border: "1px solid rgba(255,255,255,0.1)",
+    backgroundColor: "rgba(255,255,255,0.04)",
+    color: "#f8fafc",
+    fontSize: "0.82rem",
     outline: "none",
     boxSizing: "border-box",
     cursor: "text",
+    transition: "border-color 150ms ease, background-color 150ms ease",
 };
 
 const helperStyle = {
     marginTop: "0.35rem",
-    fontSize: "0.74rem",
-    color: "rgba(255,255,255,0.58)",
+    fontSize: "0.72rem",
+    color: "rgba(255,255,255,0.48)",
     lineHeight: 1.45,
 };
 
 const fieldGroupStyle = {
-    marginBottom: "0.85rem",
+    marginBottom: "0.9rem",
 };
 
 const smallButtonStyle = {
-    padding: "0.4rem 0.7rem",
+    padding: "0.45rem 0.75rem",
     borderRadius: "8px",
-    border: "1px solid rgba(255,255,255,0.16)",
-    backgroundColor: "rgba(255,255,255,0.08)",
-    color: "white",
+    border: "1px solid rgba(255,255,255,0.1)",
+    backgroundColor: "rgba(255,255,255,0.06)",
+    color: "#f8fafc",
     fontSize: "0.78rem",
+    fontWeight: 600,
     cursor: "pointer",
+    transition: "background-color 150ms ease",
 };
 
 const primaryButtonStyle = {
     ...smallButtonStyle,
-    backgroundColor: "rgba(59,130,246,0.35)",
-    borderColor: "rgba(59,130,246,0.6)",
+    backgroundColor: "rgba(59,130,246,0.22)",
+    borderColor: "rgba(96,165,250,0.45)",
+    color: "#93c5fd",
 };
 
 const listCardStyle = {
@@ -162,10 +197,10 @@ const listCardStyle = {
     alignItems: "center",
     justifyContent: "space-between",
     gap: "0.5rem",
-    padding: "0.55rem 0.7rem",
+    padding: "0.6rem 0.75rem",
     borderRadius: "8px",
-    border: "1px solid rgba(255,255,255,0.12)",
-    backgroundColor: "rgba(0,0,0,0.18)",
+    border: "1px solid rgba(255,255,255,0.08)",
+    backgroundColor: "rgba(255,255,255,0.025)",
     marginBottom: "0.45rem",
 };
 
@@ -206,13 +241,8 @@ function groupProviders(options) {
     return groups;
 }
 
-// A language whose interface ships translated (runtime/i18n.js): no AI request
-// is spent on the game's own text in it.
-const isBuiltInLanguage = (code) => code === DEFAULT_LANGUAGE || hasShippedPack(code);
-
-const LanguagePicker = ({ label, current, onSelect, saving = false, helperText, markBuiltIn = false }) => {
+const LanguagePicker = ({ label, current, onSelect, saving = false, helperText, options = getLanguageOptions() }) => {
     const [query, setQuery] = useState("");
-    const options = getLanguageOptions();
     const normalizedQuery = query.trim().toLowerCase();
     const filtered = normalizedQuery
         ? options.filter((option) =>
@@ -222,31 +252,44 @@ const LanguagePicker = ({ label, current, onSelect, saving = false, helperText, 
 
     return (
         <div style={fieldGroupStyle}>
-        <label style={labelStyle}>{label}</label>
-        <input
-        style={{ ...inputStyle, marginBottom: "0.4rem" }}
-        type="text"
-        value={query}
-        placeholder="Search languages..."
-        onChange={(event) => setQuery(event.target.value)}
-        />
-        <select
-        data-no-translate
-        value={listed ? current : ""}
-        onChange={(event) => onSelect(event.target.value)}
-        style={{ ...inputStyle, cursor: "pointer", opacity: saving ? 0.6 : 1 }}
-        >
-        {!listed && (
-            <option value="" disabled>
-            {filtered.length ? `${filtered.length} matches — pick one` : "No matching language"}
-            </option>
-        )}
-        {filtered.map((option) => (
-            <option key={option.code} value={option.code} style={{ color: "black" }}>
-            {option.name}{option.native && option.native !== option.name ? ` — ${option.native}` : ""}{markBuiltIn && isBuiltInLanguage(option.code) ? " ✓" : ""}
-            </option>
-        ))}
-        </select>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: "0.4rem" }}>
+            <label style={{ ...labelStyle, marginBottom: 0 }}>{label}</label>
+            {query && (
+                <button
+                type="button"
+                onClick={() => setQuery("")}
+                style={{ background: "none", border: "none", color: "#60a5fa", fontSize: "0.7rem", cursor: "pointer", padding: 0 }}
+                >
+                Clear
+                </button>
+            )}
+        </div>
+        <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+            <select
+            data-no-translate
+            value={listed ? current : ""}
+            onChange={(event) => onSelect(event.target.value)}
+            style={{ ...inputStyle, flex: "1 1 200px", cursor: "pointer", opacity: saving ? 0.6 : 1, borderColor: "rgba(96,165,250,0.3)" }}
+            >
+            {!listed && (
+                <option value="" disabled>
+                {filtered.length ? `${filtered.length} matches — pick one` : "No matching language"}
+                </option>
+            )}
+            {filtered.map((option) => (
+                <option key={option.code} value={option.code} style={{ color: "black" }}>
+                {option.name}{option.native && option.native !== option.name ? ` — ${option.native}` : ""}
+                </option>
+            ))}
+            </select>
+            <input
+            style={{ ...inputStyle, flex: "0 1 180px", minWidth: "130px" }}
+            type="text"
+            value={query}
+            placeholder="Search languages..."
+            onChange={(event) => setQuery(event.target.value)}
+            />
+        </div>
         {helperText && (
             <div style={helperStyle}>
             {helperText}
@@ -256,9 +299,16 @@ const LanguagePicker = ({ label, current, onSelect, saving = false, helperText, 
     );
 };
 
+// Changed where the player is (runtime/translator.js switchLanguage): a
+// language with a translation model asks to download it first, over Settings.
 const LanguageSelector = () => {
     const [saving, setSaving] = useState(false);
-    const current = getStoredLanguage();
+    const [current, setCurrent] = useState(getStoredLanguage);
+    useEffect(() => {
+        const follow = () => setCurrent(getStoredLanguage());
+        window.addEventListener("oh:ui-language-changed", follow);
+        return () => window.removeEventListener("oh:ui-language-changed", follow);
+    }, []);
 
     const applyLanguage = async (code) => {
         if (!code || code === current || saving) {
@@ -266,13 +316,13 @@ const LanguageSelector = () => {
         }
 
         setSaving(true);
-        // Before the reload below; the log is flushed on pagehide.
-        logSettingChange("UI language", languageDisplayName(code));
-        // Saves on the server too, so the phone app follows the same choice.
-        await setStoredLanguage(code);
-        // Reload so the translator starts (or stops) cleanly and every
-        // already-rendered string goes through it from scratch.
-        window.location.reload();
+        try {
+            const shown = await switchLanguage(code);
+            if (shown === code) logSettingChange("UI language", languageDisplayName(code));
+        } finally {
+            setCurrent(getStoredLanguage());
+            setSaving(false);
+        }
     };
 
     return (
@@ -281,10 +331,7 @@ const LanguageSelector = () => {
         current={current}
         onSelect={applyLanguage}
         saving={saving}
-        markBuiltIn
-        helperText={isBuiltInLanguage(current)
-            ? "Languages marked ✓ ship with the game translated. What scenarios add (names, descriptions, custom stats) is translated by your AI model, once."
-            : "This language is translated by your AI model as you play, once per string. Languages marked ✓ ship with the game translated."}
+        options={getUiLanguageOptions()}
         />
     );
 };
@@ -292,6 +339,12 @@ const LanguageSelector = () => {
 // Steers prompts only, so no reload — the next message picks it up.
 const ChatLanguageSelector = () => {
     const [current, setCurrent] = useState(getStoredChatLanguage);
+    // With no choice of its own it follows the interface's, changed in place.
+    useEffect(() => {
+        const follow = () => setCurrent(getStoredChatLanguage());
+        window.addEventListener("oh:ui-language-changed", follow);
+        return () => window.removeEventListener("oh:ui-language-changed", follow);
+    }, []);
 
     const applyLanguage = (code) => {
         if (!code || code === current) {
@@ -313,80 +366,245 @@ const ChatLanguageSelector = () => {
     );
 };
 
-// The Basemap pick, which replaces a scenario's built-in basemap on this
-// device. A scenario with a map of its own (a picture, a drawn map, the plain
-// sea of a flat sheet) keeps it (World.jsx), so there the pick is switched off
-// and says why. What was picked stays stored for the scenarios it applies to.
-const BasemapField = ({ value, onChange }) => {
-    const { background } = useWorldBackground();
-    const ownMap = Boolean(background?.kind);
+// The Basemap pick of the game on screen: one of the scenario's maps
+// (CONTEXT.md, docs/adr/0007; runtime/basemapPick.js), by name, the starting
+// map first. Kept for this game only, on this device (Map/useBasemapPick.js).
+// A detailed map the player does not have says what it costs to download;
+// picked, the map shows the drawn map under it and offers the download.
+const BASEMAP_GROUP_LABELS = { own: "This scenario's maps", builtin: "Built-in maps" };
+const BASEMAP_OPTION_LABELS = {
+    starting: "{{name}} (starting map)",
+    detailed: "{{name}} (detailed map)",
+    detailedToDownload: "{{name}} (detailed map, {{size}} to download)",
+    detailedNotHere: "{{name}} (detailed map, not on this device)",
+};
+// Each of the scenario's detailed maps looked up on this device and the
+// official list (Map/detailedMapOffers.js), again whenever the library
+// changes; [] until then, and always in the browser version, which shows the
+// drawn maps and never downloads one.
+const useDetailedMapLookups = (maps) => {
+    const key = JSON.stringify(maps.filter((map) => map.kind === "detailed"));
+    const [lookups, setLookups] = useState([]);
+    const [libraryVersion, setLibraryVersion] = useState(0);
+    useEffect(() => subscribeTiledBasemaps(() => setLibraryVersion((v) => v + 1)), []);
+    useEffect(() => {
+        const detailed = JSON.parse(key);
+        if (!detailed.length || import.meta.env.VITE_OH_WEB) return undefined;
+        let cancelled = false;
+        lookUpDetailedMaps(detailed).then((found) => { if (!cancelled) setLookups(found); }, () => {});
+        return () => { cancelled = true; };
+    }, [key, libraryVersion]);
+    return lookups;
+};
+// Whether this device has each one, and the size of one it does not:
+// { [pick]: { have, bytes } }.
+const detailedMapStatus = (lookups) => Object.fromEntries(lookups.map(({ map, installed, official }) => {
+    const latest = official?.versions?.[official.versions.length - 1] || null;
+    return [map.pick, { have: Boolean(installed), bytes: latest?.bytes || null }];
+}));
+// The game's scenario's maps, its detailed ones looked up, and the one shown
+// (whether detailed maps are on or off here): what the Basemap and Detailed
+// maps fields both read.
+const useGameScenarioMaps = () => {
+    const { background, basemap, allowedBasemaps, ownBasemaps } = useWorldBackground();
+    const pick = useGameBasemapPick();
+    const maps = useMemo(() => scenarioMapsOfWorld({
+        background,
+        basemap,
+        allowedBasemaps: decodeAllowedBasemaps(allowedBasemaps),
+        ownBasemaps: decodeOwnBasemaps(ownBasemaps),
+    }), [background, basemap, allowedBasemaps, ownBasemaps]);
+    const lookups = useDetailedMapLookups(maps);
+    const { gamePick, defaultBasemap, useDefault } = pick;
+    const shown = basemapShownFor({ maps, gamePick, defaultBasemap, useDefault });
+    return { maps, lookups, shown, setGamePick: pick.setGamePick };
+};
+const GameBasemapField = () => {
+    const { maps, lookups, shown, setGamePick } = useGameScenarioMaps();
+    const status = useMemo(() => detailedMapStatus(lookups), [lookups]);
+    const only = maps.length === 1;
+    const labelOf = (map) => {
+        if (map.starting) return uiString(BASEMAP_OPTION_LABELS.starting, { name: map.name });
+        if (map.kind !== "detailed") return map.name;
+        const here = status[map.pick];
+        if (!here || here.have) return uiString(BASEMAP_OPTION_LABELS.detailed, { name: map.name });
+        return here.bytes
+            ? uiString(BASEMAP_OPTION_LABELS.detailedToDownload, { name: map.name, size: formatBytes(here.bytes) })
+            : uiString(BASEMAP_OPTION_LABELS.detailedNotHere, { name: map.name });
+    };
+    const option = (map) => <option key={map.pick || "start"} value={map.pick} style={{ color: "black" }}>{labelOf(map)}</option>;
+    const scenarioOwn = maps.filter((map) => !map.starting && map.kind !== "builtin");
+    const builtin = maps.filter((map) => !map.starting && map.kind === "builtin");
+    const grouped = scenarioOwn.length > 0 && builtin.length > 0;
     return (
         <div style={fieldGroupStyle}>
             <label style={labelStyle} htmlFor="game-basemap-style">Basemap</label>
-            <select id="game-basemap-style" data-no-translate value={ownMap ? "" : value} disabled={ownMap} onChange={(event) => onChange(event.target.value)} style={{ ...inputStyle, cursor: ownMap ? "not-allowed" : "pointer", opacity: ownMap ? 0.6 : 1 }}>
-                <option value="" style={{ color: "black" }}>Scenario default</option>
-                {ESRI_BASEMAPS.map((basemap) => <option key={basemap.id} value={basemap.id} style={{ color: "black" }}>{basemap.label}</option>)}
+            <select
+                id="game-basemap-style"
+                data-no-translate
+                value={shown.pick}
+                disabled={only}
+                onChange={(event) => setGamePick(event.target.value)}
+                style={{ ...inputStyle, cursor: only ? "not-allowed" : "pointer", opacity: only ? 0.6 : 1 }}
+            >
+                {option(maps[0])}
+                {grouped ? (
+                    <>
+                        <optgroup label={uiString(BASEMAP_GROUP_LABELS.own)}>{scenarioOwn.map(option)}</optgroup>
+                        <optgroup label={uiString(BASEMAP_GROUP_LABELS.builtin)}>{builtin.map(option)}</optgroup>
+                    </>
+                ) : [...scenarioOwn, ...builtin].map(option)}
             </select>
-            <div style={helperStyle}>{ownMap ? "This scenario uses its own basemap, which cannot be replaced." : "Scenario default uses the map chosen by the scenario author. Overrides apply immediately."}</div>
+            <div style={helperStyle}>
+                {only
+                    ? "This scenario has one map."
+                    : "The maps this scenario offers. Your pick is kept for this game only, and applies at once."}
+            </div>
         </div>
+    );
+};
+
+// The game's detailed maps this device lacks or has an older version of, to
+// download in one go (Map/detailedMapOffers.js); nothing when there are none.
+const GameDetailedMapsDownloadField = () => {
+    const { lookups, shown } = useGameScenarioMaps();
+    const offers = useMemo(() => detailedMapOffers(lookups, { optionalUpdates: true }), [lookups]);
+    const [downloading, setDownloading] = useState(false);
+    if (!offers.length) return null;
+    return (
+        <div style={fieldGroupStyle}>
+            {downloading ? (
+                <DetailedMapsInstallOffer
+                    // The map on screen ticked, else the starting one.
+                    offers={offers.map((offer) => ({ ...offer, ticked: offers.some((other) => other.pick === shown.pick) ? offer.pick === shown.pick : offer.starting }))}
+                    title="Download detailed maps"
+                    intro="Large terrain maps, sharp up close. Each downloads once, and every scenario on it shares it. Your basemap pick stays as it is."
+                    onDone={() => setDownloading(false)}
+                />
+            ) : (
+                <div style={{ ...helperStyle, display: "flex", alignItems: "center", gap: 10 }}>
+                    <span data-no-translate style={{ flex: 1 }}>{detailedMapsDownloadLine(offers, uiString)}</span>
+                    <button type="button" style={smallButtonStyle} onClick={() => setDownloading(true)}>Download…</button>
+                </div>
+            )}
+        </div>
+    );
+};
+
+// The main menu's: the default basemap, a built-in map every game starts on
+// wherever its scenario offers it, unless that game has a pick of its own.
+const DefaultBasemapField = () => {
+    const useDefault = useMapSetting(DEFAULT_BASEMAP_ON_KEY);
+    const stored = useMapSettingValue(DEFAULT_BASEMAP_KEY, "");
+    const value = isBuiltinBasemapId(stored) ? stored : DEFAULT_BASEMAP_ID;
+    return (
+        <>
+            <Toggle
+                label="Use my default basemap"
+                enabled={useDefault}
+                onToggle={() => {
+                    if (!useDefault && !isBuiltinBasemapId(stored)) setMapSettingValue(DEFAULT_BASEMAP_KEY, value);
+                    setMapSetting(DEFAULT_BASEMAP_ON_KEY, !useDefault);
+                }}
+            />
+            <div style={fieldGroupStyle}>
+                <label style={labelStyle} htmlFor="default-basemap">Default basemap</label>
+                <select
+                    id="default-basemap"
+                    data-no-translate
+                    value={value}
+                    disabled={!useDefault}
+                    onChange={(event) => setMapSettingValue(DEFAULT_BASEMAP_KEY, event.target.value)}
+                    style={{ ...inputStyle, cursor: useDefault ? "pointer" : "not-allowed", opacity: useDefault ? 1 : 0.6 }}
+                >
+                    {ESRI_BASEMAPS.map((basemap) => <option key={basemap.id} value={basemap.id} style={{ color: "black" }}>{basemap.label}</option>)}
+                </select>
+                <div style={helperStyle}>
+                    {useDefault
+                        ? "Games start on this map wherever their scenario offers it, and on the scenario's starting map elsewhere. Each game's own settings can still pick another."
+                        : "Off: every game starts on its scenario's starting map. Each game's own settings can pick another."}
+                </div>
+            </div>
+        </>
+    );
+};
+
+// The 3D Globe switch, which a scenario can take away: its map may be a flat
+// sheet that is not to be wrapped round a globe (world.projection.globe).
+const GlobeToggle = ({ enabled, onToggle }) => {
+    const { noGlobe } = useWorldBackground();
+    return (
+        <Toggle
+        label="3D Globe"
+        enabled={enabled && !noGlobe}
+        disabled={noGlobe}
+        inactive={noGlobe ? "The 3D globe is disabled for this scenario's map." : ""}
+        onToggle={onToggle}
+        />
     );
 };
 
 // On a touch screen the whole row is the switch: the pill alone is 28 px tall,
 // under a thumb's width, and the label beside it is what a thumb goes for. The
 // pill keeps its size and stops shrinking when a long label wraps beside it.
-// The 3D Globe switch, which a scenario can take away: its map may be a flat
-// sheet that is not to be wrapped round a globe (world.projection.globe).
-const GlobeToggle = ({ enabled, onToggle }) => {
-    const { noGlobe } = useWorldBackground();
-    return (
-        <>
-        <Toggle label="3D Globe" enabled={enabled && !noGlobe} onToggle={noGlobe ? () => {} : onToggle} />
-        {noGlobe ? <div style={{ ...helperStyle, marginTop: "-0.6rem", marginBottom: "0.9rem" }}>The 3D globe is disabled for this scenario&apos;s map.</div> : null}
-        </>
-    );
-};
-
-const Toggle = ({ label, enabled, onToggle }) => {
+// disabled: the switch shows its state but is held there by something else
+// (the system's reduced-motion setting), so it does not respond.
+// `inactive`: the switch keeps its stored choice and can still be flipped, but
+// something else stops it working for now, which the line under the label says.
+const Toggle = ({ label, enabled, onToggle, disabled = false, inactive = "" }) => {
     const touch = useTouchPrimary();
     return (
     <div
     className="oh-tap-row"
-    onClick={touch ? onToggle : undefined}
+    onClick={touch && !disabled ? onToggle : undefined}
     style={{
         display: "flex",
         justifyContent: "space-between",
         alignItems: "center",
-        marginBottom: "1rem",
-        ...(touch ? { cursor: "pointer", gap: "0.75rem" } : null),
+        padding: "0.35rem 0",
+        marginBottom: "0.65rem",
+        ...(touch ? { cursor: disabled ? "default" : "pointer", gap: "0.75rem" } : null),
     }}
     >
-    <span style={{ fontSize: "0.9rem" }}>{label}</span>
+    {inactive
+        ? (
+            <span style={{ minWidth: 0, paddingRight: "0.5rem" }}>
+            <span style={{ display: "block", fontSize: "0.86rem", fontWeight: 550, color: "rgba(255,255,255,0.9)" }}>{label}</span>
+            <span style={{ color: "rgba(255,255,255,0.45)", display: "block", fontSize: "0.7rem", marginTop: "0.15rem" }}>{inactive}</span>
+            </span>
+        )
+        : <span style={{ fontSize: "0.86rem", fontWeight: 550, color: "rgba(255,255,255,0.9)", paddingRight: "0.5rem" }}>{label}</span>}
     <button
-    onClick={touch ? undefined : onToggle}
+    type="button"
+    onClick={touch || disabled ? undefined : onToggle}
+    disabled={disabled}
+    aria-label={label}
     style={{
-        width: "3.5rem",
-        height: "1.75rem",
-        borderRadius: "1rem",
+        width: "2.75rem",
+        height: "1.5rem",
+        borderRadius: "9999px",
         border: "none",
-        cursor: "pointer",
+        cursor: disabled ? "default" : "pointer",
+        opacity: disabled ? 0.45 : 1,
         position: "relative",
-        transition: "0.3s",
-        backgroundColor: enabled ? "#3b82f6" : "#55555b",
-        ...(touch ? { flexShrink: 0 } : null),
+        padding: "2px",
+        boxSizing: "border-box",
+        transition: "background-color 150ms ease, box-shadow 150ms ease",
+        backgroundColor: enabled ? (inactive ? "rgba(59,130,246,0.35)" : "#3b82f6") : "rgba(255,255,255,0.14)",
+        boxShadow: enabled && !inactive ? "0 0 10px rgba(59,130,246,0.35)" : "none",
+        flexShrink: 0,
+        outline: "none",
     }}
     >
     <div
     style={{
-        position: "absolute",
-        top: "2px",
-        left: enabled ? "1.8rem" : "2px",
-        width: "1.5rem",
-        height: "1.5rem",
-        backgroundColor: "white",
+        width: "1.25rem",
+        height: "1.25rem",
+        backgroundColor: "#ffffff",
         borderRadius: "50%",
-        transition: "0.3s",
-        boxShadow: "0 1px 2px rgba(0,0,0,0.2)",
+        transform: enabled ? "translateX(1.25rem)" : "translateX(0px)",
+        transition: "transform 150ms cubic-bezier(0.2, 0, 0, 1)",
+        boxShadow: "0 1px 3px rgba(0,0,0,0.35)",
         pointerEvents: "none",
     }}
     />
@@ -400,7 +618,9 @@ const ApiProviderSelector = ({ provider, onProviderChange }) => {
     const [query, setQuery] = useState("");
     const selectedProvider = getProviderMeta(provider);
     const normalizedQuery = query.trim().toLowerCase();
-    const filteredProviders = PROVIDER_OPTIONS.filter((option) => providerMatchesQuery(option, normalizedQuery));
+    // The player's own Agent only where the local server runs (ADR 0008).
+    const filteredProviders = providerOptionsFor({ localServer: !import.meta.env.VITE_OH_WEB })
+        .filter((option) => providerMatchesQuery(option, normalizedQuery));
     const groupedProviders = groupProviders(filteredProviders);
 
     useEffect(() => {
@@ -540,51 +760,12 @@ const ApiProviderSelector = ({ provider, onProviderChange }) => {
 //
 // Never a lock: whatever is chosen, the ladder can still step down from it, so a
 // setting made months ago cannot strand a campaign when a provider changes.
-// What each model has said about its context window (contextWindow.js), read
-// from the same storage the AI calls keep it in (main.jsx contextWindows).
-const contextWindowMemory = createContextWindowMemory({
-    getItem: (key) => { try { return localStorage.getItem(key); } catch { return null; } },
-    setItem: (key, value) => { try { localStorage.setItem(key, value); } catch { /* this session only */ } },
-});
-
-// A model's context window: what was learned from its refusals, which keeps a
-// request it cannot fit from being sent to it, and the player's own figure,
-// which beats that. Forget clears either — for a local model whose window was
-// raised, or a provider that raised its limit — and the next request is sent.
-const ContextWindowField = ({ entry }) => {
-    const [, setRevision] = useState(0);
-    if (!entry) return null;
-    const key = contextWindowKey(entry);
-    // Nothing learned from a server on this machine or network is in force
-    // (main.jsx windowIsLearned), so only the player's own figure is shown for it.
-    const known = contextWindowMemory.remembered(key, { trustLearned: !endpointIsLocal(entry.endpoint) });
-    const changed = () => setRevision((value) => value + 1);
-    return (
-        <div>
-        <SettingsInput
-        label="Context window (tokens)"
-        type="number"
-        value={known?.source === "declared" ? String(known.limitTokens) : ""}
-        onChange={(value) => { contextWindowMemory.declare(key, Number(value)); changed(); }}
-        placeholder="Not set"
-        helperText={describeRememberedWindow(known)}
-        />
-        {known && (
-            <button type="button" className="oh-tap-row" onClick={() => { contextWindowMemory.forget(key); changed(); }} style={{ ...smallButtonStyle, marginTop: "-0.5rem", marginBottom: "0.9rem" }}>
-            Forget this window
-            </button>
-        )}
-        </div>
-    );
-};
-
 const StructuredModeSelect = ({ onChange, value }) => {
     const mode = normalizeStructuredMode(value);
     return (
         <div style={fieldGroupStyle}>
         <label style={labelStyle}>How the AI answers</label>
         <select
-        data-no-translate
         value={mode}
         onChange={(event) => onChange(event.target.value)}
         style={{ ...inputStyle, cursor: "pointer" }}
@@ -604,6 +785,20 @@ const StructuredModeSelect = ({ onChange, value }) => {
     );
 };
 
+const EyeIcon = ({ size = 18 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+    <circle cx="12" cy="12" r="3" />
+  </svg>
+);
+
+const EyeOffIcon = ({ size = 18 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
+    <line x1="1" y1="1" x2="23" y2="23" />
+  </svg>
+);
+
 const SettingsInput = ({
     label,
     value,
@@ -618,6 +813,10 @@ const SettingsInput = ({
 }) => {
     const listId = useId();
     const list = Array.isArray(suggestions) && suggestions.length ? suggestions : null;
+    const [revealed, setRevealed] = useState(false);
+    const isPassword = type === "password";
+    const effectiveType = isPassword ? (revealed ? "text" : "password") : type;
+
     return (
         <div style={fieldGroupStyle}>
         <label style={labelStyle}>
@@ -633,6 +832,56 @@ const SettingsInput = ({
             spellCheck={false}
             style={{ ...inputStyle, fontFamily: "monospace", resize: "vertical" }}
             />
+        ) : isPassword ? (
+            <div style={{ alignItems: "center", display: "flex", position: "relative" }}>
+                <input
+                type={effectiveType}
+                value={value}
+                onChange={(event) => onChange(event.target.value)}
+                placeholder={placeholder}
+                autoComplete="off"
+                spellCheck={false}
+                list={list ? listId : undefined}
+                style={{ ...inputStyle, paddingRight: "2.5rem" }}
+                />
+                <button
+                  type="button"
+                  className="oh-tap"
+                  onClick={() => setRevealed((v) => !v)}
+                  title={revealed ? "Hide API key" : "Show API key"}
+                  aria-label={revealed ? "Hide API key" : "Show API key"}
+                  style={{
+                    alignItems: "center",
+                    background: "transparent",
+                    border: "none",
+                    borderRadius: "6px",
+                    color: revealed ? "#38bdf8" : "inherit",
+                    cursor: "pointer",
+                    display: "inline-flex",
+                    height: "2rem",
+                    justifyContent: "center",
+                    opacity: revealed ? 1 : 0.65,
+                    padding: "0",
+                    position: "absolute",
+                    right: "0.35rem",
+                    top: "50%",
+                    transform: "translateY(-50%)",
+                    transition: "opacity 0.2s ease, background-color 0.2s ease, color 0.2s ease",
+                    width: "2.1rem",
+                    zIndex: 20,
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.opacity = "1";
+                    e.currentTarget.style.background = "rgba(128, 128, 128, 0.18)";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.opacity = revealed ? "1" : "0.65";
+                    e.currentTarget.style.background = "transparent";
+                  }}
+                >
+                  {revealed ? <EyeOffIcon size={18} /> : <EyeIcon size={18} />}
+                </button>
+            </div>
         ) : (
             <input
             type={type}
@@ -742,12 +991,94 @@ const StatusChip = ({ status, at }) => {
 // The first Connection, made if there is none: an entry cannot exist without one.
 const ensureConnectionId = (connections) => connections[0]?.id ?? addConnection({ provider: DEFAULT_PROVIDER });
 
+// The commands that open each Agent in the Agent folder. The game never runs
+// them: the player does, in their own terminal (ADR 0008).
+const AGENT_COMMANDS = [
+    { name: "Claude Code", command: "claude" },
+    { name: "Codex", command: "codex" },
+    { name: "OpenCode", command: "opencode" },
+    { name: "Antigravity CLI", command: "agy" },
+];
+
+// An Agent Connection has no key, endpoint or model: what the player needs is
+// where to open their Agent, and how.
+// What the player may send to their Agent, one tick each (providerConfig.js AGENT_KINDS).
+const AGENT_KIND_LABELS = [
+    { kind: "skip", label: "Time skips" },
+    { kind: "advisor", label: "Advisor" },
+    { kind: "diplomacy", label: "Diplomacy" },
+    { kind: "gameMaster", label: "Game Master" },
+    { kind: "interactive", label: "Interactive events" },
+];
+
+const AgentConnectionHelp = ({ connection = null }) => {
+    const [folder, setFolder] = useState("");
+    const [copied, setCopied] = useState("");
+    useEffect(() => {
+        let live = true;
+        readAgentFolder().then((path) => { if (live) setFolder(path); }).catch(() => {});
+        return () => { live = false; };
+    }, []);
+    const copy = async (command) => {
+        // A shell command, not interface text: built so no language pack sees it.
+        if (await copyToClipboard(["cd", JSON.stringify(folder) + ";", command].join(" "))) setCopied(command);
+    };
+    return (
+        <div style={fieldGroupStyle}>
+        <div style={helperStyle}>
+        <p style={{ margin: "0 0 0.5rem" }}>What you start (the kinds ticked below) waits for your own Agent, on your own subscription. No API key is used.</p>
+        <p style={{ margin: "0 0 0.5rem" }}>Open a terminal in the Agent folder, start Claude Code, Codex, OpenCode or Antigravity CLI there, signed in with your own account, and type /answer whenever something is waiting. One /answer answers all of it, a whole time skip included.</p>
+        <p style={{ margin: "0 0 0.5rem" }}>The first /answer asks which models to use for Open Historia. The game never starts your Agent and never reads its sign-in.</p>
+        <p style={{ margin: "0 0 0.5rem" }}>Anything unticked, and what the game starts by itself (background diplomacy, idle chats, automatic stat tracking), goes to the entry below it.</p>
+        <p style={{ margin: 0 }}>With nothing below it, those don't run. Add an entry below it, such as a free Gemini key, to keep them.</p>
+        </div>
+        {connection && (
+            <div style={{ marginTop: "0.6rem" }}>
+            {AGENT_KIND_LABELS.map(({ kind, label }) => (
+                <Toggle
+                key={kind}
+                label={label}
+                enabled={connection.kinds?.includes(kind) ?? true}
+                onToggle={() => {
+                    const kinds = connection.kinds ?? AGENT_KINDS;
+                    updateConnection(connection.id, { kinds: kinds.includes(kind) ? kinds.filter((value) => value !== kind) : [...kinds, kind] });
+                }}
+                />
+            ))}
+            <Toggle label="Pause my Agent" enabled={connection.paused === true} onToggle={() => updateConnection(connection.id, { paused: connection.paused !== true })} />
+            <div style={{ ...helperStyle, marginTop: "-0.4rem" }}>While paused, everything goes to the entry below, for when you are away from your terminal.</div>
+            </div>
+        )}
+        {folder && (
+            <div data-no-translate style={{ ...helperStyle, marginTop: "0.5rem", overflowWrap: "anywhere", fontFamily: "monospace" }}>{folder}</div>
+        )}
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem", marginTop: "0.6rem" }}>
+        <button type="button" style={smallButtonStyle} onClick={() => { void openAgentFolder(); }}>Open the Agent folder</button>
+        {folder && AGENT_COMMANDS.map(({ name, command }) => (
+            <button key={command} type="button" style={smallButtonStyle} onClick={() => { void copy(command); }}>
+            {copied === command ? "Copied" : `Copy the command for ${name}`}
+            </button>
+        ))}
+        </div>
+        </div>
+    );
+};
+
 // A Connection's own fields: where it is and what reaches it. Shared by every
 // entry that uses it, which the editor says when it is more than one.
 const ConnectionFields = ({ connection, sharedBy = 1 }) => {
     const set = (field) => (value) => updateConnection(connection.id, { [field]: value });
     const selfHosted = providerSetupRequirement(connection.provider) === "endpoint";
     const meta = getProviderMeta(connection.provider);
+    if (connection.provider === AGENT_PROVIDER) {
+        return (
+            <>
+            <ApiProviderSelector provider={connection.provider} onProviderChange={set("provider")} />
+            <SettingsInput label="Connection name" value={connection.name} onChange={set("name")} placeholder={meta.label} />
+            <AgentConnectionHelp connection={connection} />
+            </>
+        );
+    }
     return (
         <>
         <ApiProviderSelector provider={connection.provider} onProviderChange={set("provider")} />
@@ -757,12 +1088,17 @@ const ConnectionFields = ({ connection, sharedBy = 1 }) => {
             label="API endpoint"
             value={connection.endpoint}
             onChange={set("endpoint")}
-            placeholder={connection.provider === "openai-compatible" ? "http://localhost:11434/v1" : "https://my-proxy.example/v1"}
+            // On a phone localhost is the phone itself, so the example is a LAN address.
+            placeholder={connection.provider === "openai-compatible" ? (import.meta.env.VITE_OH_NATIVE ? "http://192.168.1.20:11434/v1" : "http://localhost:11434/v1") : "https://my-proxy.example/v1"}
             // A server on the player's own machine works from the website too, but only
             // if it allows this origin — otherwise the browser silently drops the reply.
             // Say so up front here rather than letting it surface as "Failed to fetch".
+            // The Android app has no such limit (native HTTP, runtime/native/http.js),
+            // but reaches the server over the network and without streaming.
             helperText={connection.provider === "openai-compatible"
-                ? (import.meta.env.VITE_OH_WEB
+                ? (import.meta.env.VITE_OH_NATIVE
+                    ? "Base URL that exposes /chat/completions and /models. A server on your network (Ollama, LM Studio) works directly. Use the computer's network address, such as http://192.168.1.20:11434/v1, not localhost, which on a phone means the phone itself. The server has to listen on that address: start Ollama with OLLAMA_HOST=0.0.0.0. Its replies arrive whole rather than word by word."
+                    : import.meta.env.VITE_OH_WEB
                     ? "Base URL that exposes /chat/completions and /models. A server on your own machine (Ollama, LM Studio) also has to allow this site: start Ollama with OLLAMA_ORIGINS set to this site's address, or use the desktop app."
                     : "Base URL that exposes /chat/completions and /models.")
                 : "Base URL of a self-hosted proxy that speaks the Anthropic Messages API (POST /messages)."}
@@ -822,6 +1158,8 @@ const EntryEditor = ({ entry, connections, entries }) => {
             </div>
         )}
         {connection && <ConnectionFields connection={connection} sharedBy={sharedBy} />}
+        {provider !== AGENT_PROVIDER && (
+        <>
         <SettingsInput
         label="Model"
         value={entry.model}
@@ -843,8 +1181,9 @@ const EntryEditor = ({ entry, connections, entries }) => {
         helperText="Replaces the connection's custom parameters for this entry — e.g. the same model with a larger max_tokens, picked by the Time skip task."
         />
         <StructuredModeSelect value={entry.structuredMode} onChange={set("structuredMode")} />
-        <ContextWindowField entry={entry.resolved} />
         </details>
+        </>
+        )}
         </div>
     );
 };
@@ -917,7 +1256,7 @@ const FallbackListSection = () => {
     return (
         <SettingsSection
         title="Models"
-        description="Backup models: when one runs out, the next one takes over. Every AI call starts at the top of the list and moves down only when a model can't answer — including the call right after one failed, so a model is back in use the moment it can answer again."
+        description="Backup models: when one runs out, the next one takes over. Every AI call starts at the top of the list and moves down only when a model can't answer — including the call right after a busy moment, so a model is back in use the moment it can answer again. One that has used up its allowance is passed over until it resets, and tried again only if nothing else answers."
         >
         {entries.length === 0 && (
             <div style={{ ...helperStyle, marginTop: 0, marginBottom: "0.7rem" }}>No models yet. Add one to let the game write turns and replies.</div>
@@ -1019,7 +1358,7 @@ const ConnectionsSection = () => {
                 <div style={{ fontSize: "0.82rem", fontWeight: 650, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{connectionDisplayName(connection)}</div>
                 <div style={{ ...helperStyle, marginTop: "0.1rem" }}>
                 {getProviderMeta(connection.provider).label}
-                {selfHosted ? ` · ${connection.endpoint || "no endpoint"}` : ` · key ${connection.apiKey.trim() ? "set" : "not set"}`}
+                {connection.provider === AGENT_PROVIDER ? (connection.paused ? " · paused" : " · answers through /answer") : selfHosted ? ` · ${connection.endpoint || "no endpoint"}` : ` · key ${connection.apiKey.trim() ? "set" : "not set"}`}
                 {` · used by ${using} entr${using === 1 ? "y" : "ies"}`}
                 </div>
                 </div>
@@ -1118,8 +1457,9 @@ const ReasoningSection = () => {
 // storage and its own change event, so it sits outside mapSettings.
 //
 // No switch for each check after a skip any more (units, occupied land,
-// repeats, the Projects board, the agents' reports): they are part of the
-// skip's own request now, and always on (gameplay.js, "The folded time skip").
+// structures, repeats, the Projects board, the agents' reports): they are part
+// of the skip's own request now, and always on (gameplay.js, "The folded time
+// skip").
 const useRequestDay = () => {
     const [day, setDay] = useState(() => requestDay());
     useEffect(() => {
@@ -1135,17 +1475,59 @@ const useRequestDay = () => {
     return day;
 };
 
+// Whether requests are being saved, following the switch in AI requests.
+const useSavingRequests = () => {
+    const [saving, setSaving] = useState(() => requestSettings.saveRequests());
+    useEffect(() => {
+        const refresh = () => setSaving(requestSettings.saveRequests());
+        window.addEventListener("ai:request-budget", refresh);
+        return () => window.removeEventListener("ai:request-budget", refresh);
+    }, []);
+    return saving;
+};
+
+// Task keys the request count holds that are not per-task models
+// (AI_TASK_ROUTING): translation requests counted by an older build the same
+// day, and a call that named no task.
+const OTHER_REQUEST_TASKS = [
+    { key: "translation", label: "Translation" },
+    { key: "other", label: "Other" },
+    { key: "direct", label: "Other" },
+];
+const REQUEST_TASK_LABELS = Object.fromEntries([...AI_TASK_ROUTING, ...OTHER_REQUEST_TASKS].map(({ key, label }) => [key, label]));
+
 const RequestBudgetSection = () => {
     const day = useRequestDay();
+    const touch = useTouchPrimary();
+    const tasks = requestsByTask(day.byTask, REQUEST_TASK_LABELS);
+    const [activeAiRequests, setActiveAiRequests] = useState(() => getActiveAiRequestCount());
+    const [cancelNotice, setCancelNotice] = useState("");
     const [saving, setSaving] = useState(() => requestSettings.saveRequests());
     const [background, setBackground] = useState(() => requestSettings.backgroundAi());
     const [dailyLimit, setDailyLimit] = useState(() => String(requestSettings.dailyLimit()));
     const [backgroundCap, setBackgroundCap] = useState(() => String(requestSettings.backgroundDailyCap()));
 
+    useEffect(() => {
+        const refresh = () => setActiveAiRequests(getActiveAiRequestCount());
+        window.addEventListener(AI_REQUEST_CONTROL_EVENT, refresh);
+        return () => window.removeEventListener(AI_REQUEST_CONTROL_EVENT, refresh);
+    }, []);
+
     const apply = (message, write) => {
         write();
         logDebugEvent("setting", message);
         announceRequestBudgetChange();
+    };
+
+    const cancelActiveRequests = () => {
+        const cancelled = cancelAllAiRequests();
+        setActiveAiRequests(getActiveAiRequestCount());
+        setCancelNotice(cancelled
+            ? `Cancel requested for ${cancelled} active AI request${cancelled === 1 ? "" : "s"}.`
+            : "No AI requests are currently running.");
+        logDebugEvent("ai", cancelled
+            ? `Player cancelled ${cancelled} active AI request${cancelled === 1 ? "" : "s"} from Settings.`
+            : "Player pressed Cancel all AI requests, but none were active.");
     };
     // The most a skip is when function calling may add to it (Save AI requests off).
     const lookupCap = describeJumpCost({ lookups: true }).max;
@@ -1173,8 +1555,49 @@ const RequestBudgetSection = () => {
                     {day.lastJump ? <>Your last time skip used <span data-no-translate>{day.lastJump.used}</span>. </> : null}
                     {day.background > 0 ? <>Background AI has used <span data-no-translate>{day.background}</span> of its <span data-no-translate>{day.backgroundCap}</span>. </> : null}
                     {day.refused > 0 ? <>The provider turned away <span data-no-translate>{day.refused}</span> for coming too fast; those cost a wait, not allowance. </> : null}
+                    {day.failed > 0 ? <>{day.failed === 1 ? "1 request failed with an error." : `${day.failed} requests failed with an error.`} </> : null}
                     Counted on this device, from midnight Pacific time, which is when a Gemini key&apos;s day begins.
                 </div>
+                {tasks.length > 0 && (
+                    <details style={{ marginTop: "0.4rem" }}>
+                        <summary style={{ cursor: "pointer", fontSize: "0.74rem", color: "rgba(255,255,255,0.62)", ...(touch ? TOUCH_SUMMARY : null) }}>Used today, by task</summary>
+                        <div style={{ display: "grid", gap: "0.15rem", marginTop: "0.3rem" }}>
+                            {tasks.map((row) => (
+                                <div key={row.label} style={{ color: "rgba(255,255,255,0.72)", display: "flex", fontSize: "0.72rem", gap: "0.5rem", justifyContent: "space-between" }}>
+                                    {/* A task this table does not name is shown as it was counted. */}
+                                    <span data-no-translate={row.named ? undefined : true} style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.label}</span>
+                                    <span data-no-translate>{row.count}</span>
+                                </div>
+                            ))}
+                        </div>
+                    </details>
+                )}
+            </div>
+
+            <div style={{ border: "1px solid rgba(248,113,113,0.18)", borderRadius: "10px", background: "rgba(239,68,68,0.055)", marginBottom: "0.95rem", padding: "0.7rem 0.75rem" }}>
+                <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.6rem", justifyContent: "space-between" }}>
+                    <div style={{ minWidth: 0 }}>
+                        <div style={{ color: "rgba(255,255,255,0.9)", fontSize: "0.76rem", fontWeight: 800 }}>Emergency AI stop</div>
+                        <div style={{ ...helperStyle, marginTop: "0.2rem" }}>
+                            Cancels all live AI generation requests the client can abort, including retries and fallback attempts. It does not undo finished work; an already-submitted provider batch job, or an Android native-LAN request already inside the native HTTP plugin, cannot be recalled.
+                        </div>
+                    </div>
+                    <button
+                    type="button"
+                    onClick={cancelActiveRequests}
+                    style={{
+                        ...smallButtonStyle,
+                        backgroundColor: activeAiRequests ? "rgba(239,68,68,0.18)" : "rgba(255,255,255,0.06)",
+                        borderColor: activeAiRequests ? "rgba(248,113,113,0.4)" : "rgba(255,255,255,0.13)",
+                        color: activeAiRequests ? "#fecaca" : "rgba(255,255,255,0.72)",
+                        flexShrink: 0,
+                        fontWeight: 800,
+                    }}
+                    >
+                        Cancel all AI requests{activeAiRequests ? ` (${activeAiRequests})` : ""}
+                    </button>
+                </div>
+                {cancelNotice && <div role="status" style={{ ...helperStyle, color: "rgba(255,255,255,0.68)", marginTop: "0.45rem" }}>{cancelNotice}</div>}
             </div>
 
             <Toggle
@@ -1190,7 +1613,7 @@ const RequestBudgetSection = () => {
                 pack translates it whole (docs/i18n.md). */}
             <div style={settingsHelper}>
                 {saving
-                    ? "On (default): a time skip is one request. Each event arrives as soon as it is written, already carrying what it changed: the map, your units and structures, your orders and your Projects board. Your spies' reports come back in the same answer, and so does the history document when older events are due to be folded into it. The model is handed the names it needs instead of looking them up, and a small mistake in its answer is cut out rather than asked for again. A skip takes a second request only when its answer could not be used at all, when a provider refuses the single-request form, or on a turn where something you switched on yourself falls due: the automatic Stats refresh."
+                    ? "On (default): a time skip is one request. Each event arrives as soon as it is written, already carrying what it changed: the map, your units and structures, your orders and your Projects board. Your spies' reports come back in the same answer, and so does the history document when older events are due to be folded into it. The model is handed the names it needs instead of looking them up, and a small mistake in its answer is cut out rather than asked for again. A skip takes a second request only when its answer could not be used at all, when a provider refuses the single-request form, or on a turn where something you switched on yourself falls due: the automatic Stats refresh, or NPC votes in an institution."
                     : `Off: for a key with no daily limit. A time skip is still one request, and with AI lookup functions on (below) the model may look things up before it answers: each round of questions is another request, two at most, so a skip never uses more than ${lookupCap}. On Gemini such a skip shows its events together at the end instead of one at a time. Outside a skip, a task may look things up in up to three extra requests, and a flawed answer is sent back to be redone instead of being cut down.`}
             </div>
 
@@ -1288,34 +1711,39 @@ const SocialLinks = ({ discordUrl, redditUrl, githubUrl }) => {
     );
 };
 
-// Same corner and size as always (the top bar's session pill is laid out from
-// it), in the glass finish and with the menu glyph.
+// Same corner and size as the top bar (the session pill and Exit Game button
+// are laid out from it with matching 2.85rem height and 12px corners on desktop),
+// in the glass finish and with the menu glyph.
 // `hidden` while the menu is open: the menu grows out of this button and
 // shrinks back into it, so the button itself steps aside meanwhile.
-const SettingsButton = ({ onToggle, topOffset = "0.5rem", hidden = false }) => (
-    <button
-    type="button"
-    aria-label="Open game menu"
-    title="Game menu"
-    onClick={onToggle}
-    style={{
-        ...baseStyle,
-        top: topOffset,
-        left: `calc(0.5rem + ${SAFE_LEFT})`,
-        height: "4rem",
-        width: "4rem",
-        cursor: "pointer",
-        fontSize: "1.5rem",
-        fontWeight: 800,
-        background: "rgba(35,35,39,0.53)",
-        opacity: hidden ? 0 : 1,
-        pointerEvents: hidden ? "none" : "auto",
-        transition: "opacity 180ms ease 40ms",
-    }}
-    >
-    ☰
-    </button>
-);
+const SettingsButton = ({ onToggle, topOffset = "0.5rem", hidden = false }) => {
+    const isMobile = useIsMobile();
+    return (
+        <button
+        type="button"
+        aria-label="Open game menu"
+        title="Game menu"
+        onClick={onToggle}
+        style={{
+            ...baseStyle,
+            top: topOffset,
+            left: `calc(0.5rem + ${SAFE_LEFT})`,
+            height: isMobile ? "3.2rem" : "2.85rem",
+            width: isMobile ? "3.2rem" : "2.85rem",
+            cursor: "pointer",
+            fontSize: isMobile ? "1.3rem" : "1.2rem",
+            fontWeight: 800,
+            borderRadius: isMobile ? "12px" : "12px",
+            background: "rgba(35,35,39,0.53)",
+            opacity: hidden ? 0 : 1,
+            pointerEvents: hidden ? "none" : "auto",
+            transition: "opacity 180ms ease 40ms",
+        }}
+        >
+        ☰
+        </button>
+    );
+};
 
 // --- Network: let other devices connect -------------------------------------
 // The server binds loopback by default, which is right for the desktop app and
@@ -1357,26 +1785,39 @@ const NetworkSharing = () => {
         );
     }
 
-    const toggle = async () => {
-        if (busy || state.lockedByEnv) return;
+    // One switch's change: the server answers with the whole network state.
+    const change = async (body, label, key) => {
+        if (busy) return;
         setBusy(true);
         setError("");
-        const next = !state.lanEnabled;
         try {
             const response = await fetch("/api/server/network", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ lanEnabled: next }),
+                body: JSON.stringify(body),
             });
             const data = await response.json();
             if (!response.ok) throw new Error(data?.error || "Could not change this.");
             setState(data);
-            logSettingChange("Let other devices connect", Boolean(data?.lanEnabled));
+            logSettingChange(label, Boolean(data?.[key]));
         } catch (nextError) {
             setError(nextError.message);
         } finally {
             setBusy(false);
         }
+    };
+
+    const toggle = () => {
+        if (state.lockedByEnv) return;
+        change({ lanEnabled: !state.lanEnabled }, "Let other devices connect", "lanEnabled");
+    };
+
+    // A browser on another device reaches a model on this computer (LM Studio,
+    // Ollama) through the relay when the model refuses browser calls from other
+    // sites. The relay answers only this machine unless the player says so here.
+    const toggleRelay = () => {
+        if (state.relayLockedByEnv) return;
+        change({ relayForLan: !state.relayForLan }, "Let other devices send AI calls through this server", "relayForLan");
     };
 
     return (
@@ -1397,6 +1838,23 @@ const NetworkSharing = () => {
             <div style={helperTextStyle}>
             On: the Android app and browsers on other computers can reach this server. Off (default): only this machine can.
             </div>
+        )}
+
+        {state.lanEnabled && (
+            <>
+            <div style={state.relayLockedByEnv ? { opacity: 0.5, pointerEvents: "none" } : undefined}>
+            <Toggle
+            label="Let other devices send AI calls through this server"
+            enabled={Boolean(state.relayForLan)}
+            onToggle={toggleRelay}
+            />
+            </div>
+            <div style={helperTextStyle}>
+            {state.relayLockedByEnv
+                ? "Set by the OH_ALLOW_REMOTE_RELAY environment variable, so this switch is read-only."
+                : "For a browser on another device whose AI runs on this computer (LM Studio, Ollama) and refuses calls from other sites. Anyone on your network could send requests through this server while it is on."}
+            </div>
+            </>
         )}
 
         {state.lanEnabled && state.addresses?.length > 0 && (
@@ -1438,6 +1896,93 @@ const NetworkSharing = () => {
 
         {error && (
             <div style={{ color: "#fca5a5", fontSize: "0.72rem", lineHeight: 1.4, marginBottom: "0.4rem" }}>{error}</div>
+        )}
+        </div>
+    );
+};
+
+// --- Storage: the community download cache ------------------------------------
+// Every scenario, basemap and flag downloaded from the community is kept on the
+// server's disk (server/hubCache.js), so opening it again needs no download and
+// does not count on GitHub again. It is capped at 1 GB, the files used longest
+// ago going first, but a player who wants the space back now should not have to
+// go looking for a hidden folder. Server-backed builds only, like Network.
+const formatCacheSize = (bytes) => (bytes < 1024 * 1024
+    ? `${Math.max(1, Math.round(bytes / 1024))} KB`
+    : `${(bytes / (1024 * 1024)).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0)} MB`);
+
+const DownloadCache = () => {
+    const [usage, setUsage] = useState(null);   // null until we know there is a server
+    const [busy, setBusy] = useState(false);
+    const [error, setError] = useState("");
+
+    useEffect(() => {
+        if (import.meta.env.VITE_OH_WEB) return undefined;
+        let cancelled = false;
+        (async () => {
+            try {
+                const response = await fetch("/api/hub/cache", { cache: "no-store" });
+                if (!response.ok) return;
+                const data = await response.json();
+                if (!cancelled) setUsage(data);
+            } catch {
+                /* no server behind this build — nothing is stored here */
+            }
+        })();
+        return () => { cancelled = true; };
+    }, []);
+
+    if (!usage) {
+        return (
+            <div style={{ ...helperStyle, marginTop: 0 }}>
+            No local server is behind this build, so nothing is stored here.
+            </div>
+        );
+    }
+
+    const clear = async () => {
+        if (busy) return;
+        setBusy(true);
+        setError("");
+        try {
+            const response = await fetch("/api/hub/cache", { method: "DELETE" });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data?.error || "Could not clear the download cache.");
+            setUsage(data);
+            logSettingMessage("download-cache", "Download cache cleared.");
+        } catch (nextError) {
+            setError(nextError.message);
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const size = formatCacheSize(usage.bytes);
+    return (
+        <div>
+        <div style={{ alignItems: "center", display: "flex", gap: "0.5rem", justifyContent: "space-between", marginBottom: "0.5rem" }}>
+        <span style={{ fontSize: "0.8rem" }}>
+        {usage.files === 0
+            ? "No community downloads are stored."
+            : usage.files === 1
+            ? `1 community download is stored (${size}).`
+            : `${usage.files} community downloads are stored (${size}).`}
+        </span>
+        <button
+        type="button"
+        className="oh-tap-row"
+        onClick={clear}
+        disabled={busy || usage.files === 0}
+        style={{ ...diagnosticsButton, opacity: busy || usage.files === 0 ? 0.5 : 1, whiteSpace: "nowrap" }}
+        >
+        Clear download cache
+        </button>
+        </div>
+        <div style={{ ...helperStyle, marginTop: 0 }}>
+        Scenarios, maps and flags you download from the community are kept so opening them again needs no new download. Past 1 GB, the ones used longest ago are removed on their own.
+        </div>
+        {error && (
+            <div style={{ color: "#fca5a5", fontSize: "0.72rem", lineHeight: 1.4, marginTop: "0.4rem" }}>{error}</div>
         )}
         </div>
     );
@@ -1565,6 +2110,9 @@ const DiagnosticsPanel = () => {
     // player should say so, rather than pasting an empty report.
     const [count, setCount] = useState(() => getDebugLogSize());
     const [bytes, setBytes] = useState(() => getDebugLogBytes());
+    // How many of the oldest entries the size cap has rolled off: a log that
+    // no longer reaches back to the bug should say so before it is sent.
+    const [dropped, setDropped] = useState(() => getDebugLogDroppedCount());
     // Both toggles are read from the module rather than held only here, because
     // the module is where the persisted answer lives — this panel is unmounted
     // every time the menu closes, and a useState default would otherwise be a
@@ -1575,6 +2123,7 @@ const DiagnosticsPanel = () => {
     useEffect(() => subscribeToDebugLog(() => {
         setCount(getDebugLogSize());
         setBytes(getDebugLogBytes());
+        setDropped(getDebugLogDroppedCount());
     }), []);
 
     const toggleEnabled = () => {
@@ -1583,6 +2132,7 @@ const DiagnosticsPanel = () => {
         setEnabled(next);
         setCount(getDebugLogSize());
         setBytes(getDebugLogBytes());
+        setDropped(getDebugLogDroppedCount());
     };
 
     const toggleVerbose = () => {
@@ -1715,6 +2265,11 @@ const DiagnosticsPanel = () => {
             : cleared
             ? "Cleared."
             : `${count} ${count === 1 ? "entry" : "entries"} · ${formatLogSize(bytes)} of ${formatLogSize(getDebugLogLimitBytes())}`}
+        {enabled && !cleared && dropped > 0 && (
+            <span style={{ display: "block" }}>
+            {dropped === 1 ? "1 older entry dropped to stay within the limit" : `${dropped} older entries dropped to stay within the limit`}
+            </span>
+        )}
         </span>
         <button
         type="button"
@@ -1737,7 +2292,10 @@ const DiagnosticsPanel = () => {
 
         <Toggle label="Keep a diagnostics log" enabled={enabled} onToggle={toggleEnabled} />
         <div style={helperTextStyle}>
-        On by default. Off: nothing is recorded and the log on this device is deleted. The desktop app still notes its own start-up and server errors, which never include your campaign. Remembered across save changes and restarts.
+        {/* The desktop app's own log exists only on desktop. */}
+        {import.meta.env.VITE_OH_WEB
+            ? "On by default. Off: nothing is recorded and the log on this device is deleted. Remembered across save changes and restarts."
+            : "On by default. Off: nothing is recorded and the log on this device is deleted. The desktop app still notes its own start-up and server errors, which never include your campaign. Remembered across save changes and restarts."}
         </div>
 
         <Toggle label="Detailed logging" enabled={verbose} onToggle={toggleVerbose} />
@@ -1796,16 +2354,18 @@ const diagnosticsButton = {
 // system, network sharing, diagnostics) sit inside those four sections rather
 // than adding sections of their own.
 
-// The privacy policy is a site page: the desktop serves its own copy and the
-// website its root page. The Android app leaves it out of the APK
+// The guides are site pages. The Android app leaves them out of the APK
 // (mobile/scripts/stage-www.mjs), so there it opens the website's copy.
+const GUIDES_HREF = import.meta.env.VITE_OH_NATIVE ? "https://openhistoria.com/guides/" : "/guides/";
+// The privacy policy, from the same place as the guides: the desktop serves its
+// own copy, the website its root page, and the Android app links to the website.
 const PRIVACY_HREF = import.meta.env.VITE_OH_NATIVE ? "https://openhistoria.com/privacy/" : "/privacy/";
 
 const QuickAction = ({ title, description, symbol, tone = "neutral", onClick, href, compact = false }) => {
     const tones = {
-        neutral: { background: "rgba(255,255,255,0.04)", border: "rgba(255,255,255,0.08)", icon: "rgba(255,255,255,0.08)", color: "#f8fafc" },
-        slate: { background: "rgba(255,255,255,0.05)", border: "rgba(255,255,255,0.12)", icon: "rgba(255,255,255,0.08)", color: "#e4e4e7" },
-        blue: { background: "rgba(59,130,246,0.08)", border: "rgba(96,165,250,0.18)", icon: "rgba(59,130,246,0.16)", color: "#dbeafe" },
+        neutral: { background: "var(--oh-ui-overlay-card, rgba(255,255,255,0.04))", border: "var(--oh-ui-line, rgba(255,255,255,0.08))", icon: "var(--oh-ui-overlay-card, rgba(255,255,255,0.08))", color: "#f8fafc" },
+        slate: { background: "var(--oh-ui-overlay-card, rgba(255,255,255,0.05))", border: "var(--oh-ui-line, rgba(255,255,255,0.12))", icon: "var(--oh-ui-overlay-card, rgba(255,255,255,0.08))", color: "#e4e4e7" },
+        blue: { background: "var(--oh-ui-active, rgba(59,130,246,0.08))", border: "var(--oh-ui-line, rgba(96,165,250,0.18))", icon: "var(--oh-ui-active, rgba(59,130,246,0.16))", color: "var(--oh-ui-text, #dbeafe)" },
         amber: { background: "rgba(245,158,11,0.07)", border: "rgba(251,191,36,0.17)", icon: "rgba(245,158,11,0.14)", color: "#fde68a" },
     };
     const palette = tones[tone] ?? tones.neutral;
@@ -1835,18 +2395,205 @@ const QuickAction = ({ title, description, symbol, tone = "neutral", onClick, hr
         </>
     );
 
+    // Always a new window, never this one: a page opened in place ends the
+    // running skip or AI call, and the desktop window has no back button to
+    // return by (electron/main.cjs sends a new window to the system browser).
     if (href) {
-        return <a href={href} target={href.startsWith("/") ? undefined : "_blank"} rel="noopener noreferrer" style={common}>{content}</a>;
+        return <a href={href} target="_blank" rel="noopener noreferrer" style={common}>{content}</a>;
     }
     return <button type="button" onClick={onClick} style={common}>{content}</button>;
 };
 
+// Which path the map takes on this device (runtime/deviceProfile.js). Auto is
+// the guess; the choice is read once, when the game loads.
+const PERFORMANCE_MODES = [
+    { key: "", label: "Auto" },
+    { key: "constrained", label: "Low memory" },
+    { key: "full", label: "Full" },
+];
+
+const PerformanceModeSetting = () => {
+    const [mode, setMode] = useState(() => getDeviceProfileOverride());
+    const running = isConstrainedDevice();
+    const choose = (value) => {
+        setDeviceProfileOverride(value);
+        const next = getDeviceProfileOverride();
+        setMode(next);
+        logSettingChange("Performance mode", PERFORMANCE_MODES.find((entry) => entry.key === next)?.label ?? "Auto");
+    };
+    return (
+        <div style={fieldGroupStyle}>
+        <label style={labelStyle} htmlFor="game-performance-mode">Performance mode</label>
+        <select id="game-performance-mode" value={mode} onChange={(event) => choose(event.target.value)} style={{ ...inputStyle, cursor: "pointer" }}>
+        {PERFORMANCE_MODES.map((entry) => <option key={entry.key || "auto"} value={entry.key} style={{ color: "black" }}>{entry.label}</option>)}
+        </select>
+        <div style={helperStyle}>
+        Auto picks Low memory in the Android app, on a touch screen with no mouse, and on a device with 4 GB of memory or less: the map loads in smaller steps with fewer workers. Full is faster on a strong tablet, and Low memory can steady a weak computer. A change applies after the game is reloaded.
+        </div>
+        <div style={helperStyle}>{running ? "Running now: Low memory." : "Running now: Full."}</div>
+        </div>
+    );
+};
+
+// How much of each time skip is about the player's own country (AI/playerFocus.js).
+// Kept with the GAME rather than on this device, unlike its neighbours in this
+// section: a Spotlight war campaign should not decide how the next sandbox game
+// reads. Existing games have none stored and start on Balanced.
+const PLAYER_FOCUS_HINTS = {
+    "world-first": "The world comes first. At least a quarter of each skip is about you when you have something going on; the rest of the world gets the room.",
+    balanced: "The default. At least 40% of each skip is about you when you have orders, Projects or open threads.",
+    focused: "Your country leads. At least 60% of each skip is about you, and other powers' plans take up less of what the AI is shown.",
+    spotlight: "The story follows you. At least three quarters of each skip is about you, and the wider world is kept to what matters most.",
+};
+
+const DisplayModeSelector = ({ isFullscreenEnabled, onToggleFullscreen }) => {
+    const stored = useMapSettingValue(MAP_SETTING_KEYS.displayMode, "");
+    const [desktopStatus, setDesktopStatus] = useState(null);
+
+    // Read again whenever the window changes size: Esc, F11 or the window's own
+    // buttons change the mode without this selector.
+    useEffect(() => {
+        let mounted = true;
+        const refresh = () => {
+            fetch("/api/desktop/display-mode")
+                .then((r) => (r.ok ? r.json() : null))
+                .then((data) => {
+                    if (mounted && data?.supported) setDesktopStatus(data);
+                })
+                .catch(() => {});
+        };
+        refresh();
+        window.addEventListener("resize", refresh);
+        return () => {
+            mounted = false;
+            window.removeEventListener("resize", refresh);
+        };
+    }, []);
+
+    const isDesktop = Boolean(desktopStatus?.supported);
+    const activeMode = isDesktop
+        ? (desktopStatus?.mode || stored || "windowed")
+        : (isFullscreenEnabled ? "fullscreen" : "windowed");
+
+    const selectMode = (mode) => {
+        setMapSettingValue(MAP_SETTING_KEYS.displayMode, mode);
+        if (isDesktop) {
+            setDesktopStatus((prev) => (prev ? { ...prev, mode } : { supported: true, mode }));
+            // The window's own answer, not the choice: a refused change shows the mode the window is in.
+            fetch("/api/desktop/display-mode", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ mode }),
+            })
+                .then((r) => (r.ok ? r.json() : fetch("/api/desktop/display-mode").then((again) => (again.ok ? again.json() : null))))
+                .then((data) => { if (data?.supported) setDesktopStatus(data); })
+                .catch(() => {});
+        } else {
+            if (mode === "fullscreen" && !isFullscreenEnabled) onToggleFullscreen();
+            else if (mode !== "fullscreen" && isFullscreenEnabled) onToggleFullscreen();
+        }
+    };
+
+    return (
+        <div style={fieldGroupStyle}>
+            <label style={labelStyle} htmlFor="game-display-mode">Display mode</label>
+            <select
+                id="game-display-mode"
+                style={inputStyle}
+                value={activeMode}
+                onChange={(event) => selectMode(event.target.value)}
+            >
+                <option value="windowed">Windowed</option>
+                {isDesktop && <option value="maximized">Maximized</option>}
+                <option value="fullscreen">Fullscreen</option>
+            </select>
+            <div style={helperStyle}>
+                {activeMode === "maximized"
+                    ? "The game's window fills your screen, with its title bar."
+                    : activeMode === "fullscreen"
+                        ? "The game covers your whole screen, without borders."
+                        : "Runs the game in a standard resizable desktop window."}
+            </div>
+        </div>
+    );
+};
+
+const PlayerFocusSetting = () => {
+    // The scenario's default under this game's own choice (server/gameFeatures.js).
+    // Kept with the GAME, not on this device: a Spotlight war campaign should not
+    // decide how the next sandbox game reads. A scenario author sets where new
+    // games start, in the library's Features tab.
+    useActiveFeatures();
+    const library = useLibraryState();
+    const [saving, setSaving] = useState(false);
+    const [error, setError] = useState("");
+    const gameId = library.activeGameId;
+    const scenarioLevel = normalizePlayerFocus(playerFocusOf(library.runtimeScenario?.features));
+    const override = library.activeGame?.features?.playerFocus?.level;
+    const focus = normalizePlayerFocus(getActivePlayerFocus());
+    const following = !override;
+
+    const choose = async (value) => {
+        if (!gameId) { setError("No game is open, so there is nothing to set it on."); return; }
+        setSaving(true);
+        setError("");
+        try {
+            // null clears the override, so the game follows its scenario again.
+            // The stores take `features` as the game's complete override set,
+            // so the others (Espionage off, its own idle diplomacy) are sent
+            // along rather than wiped.
+            const features = withFeatureOverride(library.activeGame?.features, "playerFocus", value ? { level: value } : null);
+            await saveGame(gameId, { features });
+        } catch (problem) {
+            setError(problem?.message || "That could not be saved.");
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    const scenarioLabel = PLAYER_FOCUS_LEVELS.find((level) => level.key === scenarioLevel)?.label ?? scenarioLevel;
+    return (
+        <div style={fieldGroupStyle}>
+        <label style={{ ...labelStyle, fontWeight: 700 }}>Player focus — for this game</label>
+        <select
+        disabled={saving || !gameId}
+        value={following ? "" : focus}
+        onChange={(event) => choose(event.target.value || null)}
+        style={{ ...inputStyle, cursor: "pointer" }}
+        >
+        <option value="" style={{ color: "black" }}>{`Scenario default (${scenarioLabel})`}</option>
+        {PLAYER_FOCUS_LEVELS.map((level) => (
+            <option key={level.key} value={level.key} style={{ color: "black" }}>
+            {level.label}
+            </option>
+        ))}
+        </select>
+        <div style={helperStyle}>
+        {/* Every level, not only the one selected: the choice is between four
+            feels, and a player cannot compare them one at a time. */}
+        {PLAYER_FOCUS_LEVELS.map((level) => (
+            <div key={level.key} style={{ marginBottom: 4, opacity: level.key === focus ? 1 : 0.65 }}>
+            <strong>{level.label}</strong> — {PLAYER_FOCUS_HINTS[level.key]}
+            </div>
+        ))}
+        <div style={{ marginTop: 6 }}>
+        It never invents events for you: in a quiet stretch the world fills the skip as usual, and what you have going on — orders, milestones due, wars, open threads — is what the share is measured against.
+        </div>
+        {error ? <div style={{ color: "#fca5a5", marginTop: 6 }}>{error}</div> : null}
+        </div>
+        </div>
+    );
+};
+
 const SettingsSection = ({ title, description, right, children }) => (
-    <section style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "12px", padding: "1rem" }}>
-        <div style={{ alignItems: "flex-start", display: "flex", gap: "0.75rem", justifyContent: "space-between", marginBottom: "0.9rem" }}>
+    <section style={{ background: "var(--oh-ui-surface, rgba(255,255,255,0.025))", border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.06))", borderRadius: "14px", padding: "1.1rem 1.25rem" }}>
+        <div style={{ alignItems: "flex-start", display: "flex", gap: "0.75rem", justifyContent: "space-between", marginBottom: "0.85rem" }}>
             <div style={{ minWidth: 0 }}>
-                <div style={{ color: "rgba(255,255,255,0.92)", fontSize: "0.88rem", fontWeight: 850 }}>{title}</div>
-                {description && <div style={{ color: "rgba(255,255,255,0.36)", fontSize: "0.66rem", lineHeight: 1.45, marginTop: "0.2rem" }}>{description}</div>}
+                <div style={{ alignItems: "center", display: "flex", gap: "0.5rem" }}>
+                    <span style={{ backgroundColor: "#3b82f6", borderRadius: "2px", display: "inline-block", height: "0.85rem", width: "3px" }} />
+                    <span style={{ color: "#f8fafc", fontSize: "0.92rem", fontWeight: 750, letterSpacing: "-0.01em" }}>{title}</span>
+                </div>
+                {description && <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.72rem", lineHeight: 1.45, marginTop: "0.22rem", paddingLeft: "0.7rem" }}>{description}</div>}
             </div>
             {right}
         </div>
@@ -1860,7 +2607,122 @@ const ExperimentalPill = ({ children = "Experimental" }) => (
     </div>
 );
 
-const settingsHelper = { ...helperStyle, marginTop: "-0.55rem", marginBottom: "0.85rem" };
+const settingsHelper = { ...helperStyle, marginTop: "-0.45rem", marginBottom: "0.75rem" };
+
+// --- Sound ---------------------------------------------------------------------
+// The music a scenario played is downloaded once and kept on this device, so
+// the same song is not fetched again for another scenario (runtime/keptMusic.js;
+// on the desktop the server keeps the files, on the website the browser does).
+// It is limited, and what no scenario uses any more is deleted with the last
+// scenario that did, but a player should still see what is there and be able
+// to have the space back: how much is kept, and Clear. Nothing is shown where
+// that cannot be known (a browser that keeps none, a server on another
+// machine).
+const DownloadedMusic = () => {
+    const [usage, setUsage] = useState(null);
+    const [busy, setBusy] = useState(false);
+
+    useEffect(() => {
+        let shown = true;
+        keptMusicUsage().then((next) => { if (shown) setUsage(next); });
+        return () => { shown = false; };
+    }, []);
+
+    if (!usage) return null;
+
+    const clear = async () => {
+        if (busy) return;
+        if (!window.confirm("Delete the music downloaded to this device? It will be downloaded again when a scenario plays it.")) return;
+        setBusy(true);
+        const left = await clearKeptMusic();
+        if (left) {
+            setUsage(left);
+            logSettingMessage("downloaded-music", "Downloaded music cleared.");
+        }
+        setBusy(false);
+    };
+
+    const count = usage.tracks;
+    const size = formatCacheSize(usage.bytes);
+    return (
+        <div style={{ alignItems: "center", display: "flex", gap: "0.75rem", justifyContent: "space-between", marginBottom: "0.85rem" }}>
+            <span style={{ fontSize: "0.9rem" }}>
+                {count === 0
+                    ? "Downloaded music: none"
+                    : count === 1
+                    ? `Downloaded music: 1 track, ${size}`
+                    : `Downloaded music: ${count} tracks, ${size}`}
+            </span>
+            <button
+            type="button"
+            className="oh-tap-row"
+            onClick={clear}
+            disabled={busy || count === 0}
+            style={{ ...diagnosticsButton, opacity: busy || count === 0 ? 0.5 : 1, whiteSpace: "nowrap" }}
+            >
+            Clear
+            </button>
+        </div>
+    );
+};
+
+// The music's switch and volume (runtime/ambientMusic.js), and whose music it
+// is: the pieces' licence asks for exactly that to be said. A scenario's own
+// track comes from the community hub's list, and its licence asks the same:
+// the one sounding now is credited under the game's own, in the hub's words.
+// The game's own pieces by the names their composer gives them, never
+// translated: every piece the game ships, so a new one is credited by being
+// added to MUSIC_TRACKS.
+const MUSIC_WORKS = Object.values(MUSIC_TRACKS).filter(Boolean).map((track) => `“${track.work}”`).join(", ");
+
+const SoundSection = ({ musicOn, onToggleMusic, effectsOn, onToggleEffects }) => {
+    const stored = useMapSettingValue(MAP_SETTING_KEYS.musicVolume, "");
+    const volume = musicVolumeOf(stored);
+    const nowPlaying = useSyncExternalStore(subscribeNowPlaying, getNowPlaying, getNowPlaying);
+    const nowPlayingSite = creditSiteOf(nowPlaying?.source);
+    return (
+        <SettingsSection title="Sound" description="The game's music and sound effects.">
+            <Toggle label="Music" enabled={musicOn} onToggle={onToggleMusic} />
+            <label style={{ alignItems: "center", display: "flex", gap: "0.75rem", justifyContent: "space-between", marginBottom: "0.85rem", opacity: musicOn ? 1 : 0.5 }}>
+                <span style={{ fontSize: "0.9rem" }}>{"Music volume"}</span>
+                <span style={{ alignItems: "center", display: "flex", gap: "0.6rem" }}>
+                    <input
+                    type="range"
+                    min="0"
+                    max="100"
+                    step="1"
+                    value={volume}
+                    disabled={!musicOn}
+                    onChange={(event) => setMapSettingValue(MAP_SETTING_KEYS.musicVolume, String(musicVolumeOf(event.target.value)))}
+                    aria-label="Music volume"
+                    style={{ accentColor: "#3b82f6", width: "9rem" }}
+                    />
+                    <span data-no-translate style={{ color: "#93c5fd", fontSize: "0.78rem", minWidth: "2.6rem", textAlign: "right", fontWeight: 650 }}>{`${volume}%`}</span>
+                </span>
+            </label>
+            <Toggle label="Sound effects" enabled={effectsOn} onToggle={onToggleEffects} />
+            <DownloadedMusic />
+            <div style={{ ...helperStyle, marginTop: 0, marginBottom: 0 }}>
+                <span>{"Music by Scott Buckley, released under CC BY 4.0:"}</span>
+                {" "}
+                <span data-no-translate>{MUSIC_WORKS}</span>
+                {" "}
+                <a data-no-translate href={MUSIC_CREDIT.siteUrl} target="_blank" rel="noopener noreferrer" style={{ color: "inherit" }}>{MUSIC_CREDIT.site}</a>
+            </div>
+            {nowPlaying?.credit && (
+                <div style={{ ...helperStyle, marginTop: "0.45rem", marginBottom: 0, overflowWrap: "anywhere" }}>
+                    <span>{"Now playing:"}</span>
+                    {" "}
+                    <span data-no-translate>{nowPlaying.credit}</span>
+                    {nowPlayingSite && " "}
+                    {nowPlayingSite && (
+                        <a data-no-translate href={nowPlaying.source} target="_blank" rel="noopener noreferrer" style={{ color: "inherit" }}>{nowPlayingSite}</a>
+                    )}
+                </div>
+            )}
+        </SettingsSection>
+    );
+};
 
 // --- Privacy -------------------------------------------------------------------
 // The two things the game tells somebody else about the player that the player
@@ -1881,7 +2743,7 @@ const PrivacyPolicyLink = () => {
         target="_blank"
         rel="noopener noreferrer"
         className="oh-tap-row"
-        style={{ background: "rgba(59,130,246,0.12)", border: "1px solid rgba(96,165,250,0.24)", borderRadius: "8px", color: "#bfdbfe", fontSize: "0.72rem", fontWeight: 750, padding: "0.45rem 0.65rem", textDecoration: "none", whiteSpace: "nowrap", ...(touch ? { alignItems: "center", display: "inline-flex" } : null) }}
+        style={{ background: "rgba(59,130,246,0.12)", border: "1px solid rgba(96,165,250,0.28)", borderRadius: "8px", color: "#93c5fd", fontSize: "0.72rem", fontWeight: 750, padding: "0.45rem 0.65rem", textDecoration: "none", whiteSpace: "nowrap", transition: "background-color 140ms ease", ...(touch ? { alignItems: "center", display: "inline-flex" } : null) }}
         >
         {"Privacy policy"}
         </a>
@@ -1924,7 +2786,8 @@ const PrivacySection = ({ discordPresenceOn, onToggleDiscordPresence }) => {
 };
 
 const SETTINGS_SECTIONS = [
-    { key: "general", label: "General", icon: "◫", description: "Language, display, accessibility and privacy" },
+    { key: "general", label: "General", icon: "◫", description: "Language, display, accessibility, sound and privacy" },
+    { key: "sound", label: "Sound", icon: "♫", description: "The game's music and sound effects." },
     { key: "map", label: "Map", icon: "◇", description: "Basemap, labels, globe and camera" },
     { key: "ai", label: "AI", icon: "✦", description: "Models, backups, keys and reasoning" },
     { key: "advanced", label: "Advanced", icon: "⌘", description: "Per-task models and expert controls" },
@@ -1986,8 +2849,8 @@ const SettingsWorkspace = ({
     onToggleTerrain,
     mapSettings,
     updateMapSetting,
-    basemapStyle,
-    updateBasemapStyle,
+    scenarioTerrain,
+    updateScenarioTerrain,
     labelFont,
     updateLabelFont,
     telemetryOn,
@@ -1995,10 +2858,23 @@ const SettingsWorkspace = ({
     ratingOn,
     onToggleRating,
     context,
+    // "app": opened from the main menu, so only settings that apply to every
+    // game. "game" (in a game's own menu): those too, plus this game's own.
+    scope = "game",
 }) => {
+    const forGame = scope !== "app";
     const isMobile = useIsMobile();
     const leaving = usePresenceLeaving();
     const cardRef = useRef(null);
+    const [basemapsOpen, setBasemapsOpen] = useState(false);
+    const mapMode = useMapSettingValue(MAP_SETTING_KEYS.mapMode, "political");
+    const updateMapMode = (value) => setMapSettingValue(MAP_SETTING_KEYS.mapMode, value);
+    // The system asks for reduced motion: the motion switches are on whatever
+    // is stored, so they show on and stay put (mapSettings.js).
+    const systemReducedMotion = useSystemReducedMotion();
+    // Lookups run only while requests are not being saved (gameplay.js
+    // lookupFunctionsEnabled), so the switch shows as paused meanwhile.
+    const savingRequests = useSavingRequests();
     useWorkspaceMorph(cardRef, fromRect, closing);
 
     useEffect(() => {
@@ -2018,7 +2894,7 @@ const SettingsWorkspace = ({
     // Side by side at 9.6rem each only two fitted, and nothing said the strip
     // scrolled to the other two.
     const nav = (
-        <nav style={{ display: "flex", flexDirection: isMobile ? "row" : "column", gap: "0.35rem", overflowX: isMobile ? "auto" : "visible", padding: isMobile ? "0.65rem" : "0.85rem", scrollbarWidth: "none" }}>
+        <nav style={{ display: "flex", flexDirection: isMobile ? "row" : "column", gap: "0.35rem", overflowX: isMobile ? "auto" : "visible", padding: isMobile ? "0.65rem" : "0.75rem 0.65rem", scrollbarWidth: "none" }}>
             {SETTINGS_SECTIONS.map((section) => {
                 const selected = section.key === activeSection;
                 return (
@@ -2029,26 +2905,27 @@ const SettingsWorkspace = ({
                     onClick={() => onSectionChange(section.key)}
                     style={{
                         alignItems: "center",
-                        background: selected ? "rgba(0,0,0,0.42)" : "transparent",
-                        border: `1px solid ${selected ? "rgba(255,255,255,0.28)" : "transparent"}`,
-                        borderRadius: "9px",
-                        color: selected ? "#f4f4f5" : "rgba(255,255,255,0.58)",
+                        background: selected ? "var(--oh-ui-active, rgba(59,130,246,0.12))" : "transparent",
+                        border: `1px solid ${selected ? "rgba(96,165,250,0.3)" : "transparent"}`,
+                        borderRadius: "10px",
+                        color: selected ? "var(--oh-ui-text, #ffffff)" : "rgba(255,255,255,0.6)",
                         cursor: "pointer",
                         display: "flex",
                         flex: isMobile ? "1 1 0" : "none",
                         fontFamily: "inherit",
                         gap: "0.65rem",
                         minWidth: 0,
-                        padding: "0.62rem 0.65rem",
+                        padding: "0.55rem 0.65rem",
                         textAlign: "left",
                         width: isMobile ? "auto" : "100%",
-                        ...(isMobile ? { flexDirection: "column", gap: "0.3rem", justifyContent: "center", padding: "0.45rem 0.2rem", textAlign: "center" } : null),
+                        transition: "background-color 140ms ease, border-color 140ms ease, color 140ms ease",
+                        ...(isMobile ? { flexDirection: "column", gap: "0.25rem", justifyContent: "center", padding: "0.45rem 0.2rem", textAlign: "center" } : null),
                     }}
                     >
-                        <span aria-hidden="true" style={{ alignItems: "center", background: selected ? "rgba(0,0,0,0.42)" : "rgba(255,255,255,0.05)", borderRadius: "7px", display: "inline-flex", flexShrink: 0, fontSize: "0.76rem", fontWeight: 900, height: "1.8rem", justifyContent: "center", width: "1.8rem" }}>{section.icon}</span>
+                        <span aria-hidden="true" style={{ alignItems: "center", background: selected ? "var(--oh-ui-active, rgba(59,130,246,0.24))" : "rgba(255,255,255,0.04)", border: `1px solid ${selected ? "rgba(96,165,250,0.4)" : "transparent"}`, borderRadius: "8px", color: selected ? "var(--oh-ui-accent, #60a5fa)" : "rgba(255,255,255,0.7)", display: "inline-flex", flexShrink: 0, fontSize: "0.85rem", fontWeight: 700, height: "1.9rem", justifyContent: "center", width: "1.9rem", transition: "all 140ms ease" }}>{section.icon}</span>
                         <span>
-                            <span style={{ display: "block", fontSize: "0.74rem", fontWeight: 850 }}>{section.label}</span>
-                            {!isMobile && <span style={{ color: "rgba(255,255,255,0.3)", display: "block", fontSize: "0.57rem", lineHeight: 1.35, marginTop: "0.12rem" }}>{section.description}</span>}
+                            <span style={{ display: "block", fontSize: "0.8rem", fontWeight: selected ? 750 : 600, color: selected ? "var(--oh-ui-accent, #bfdbfe)" : "inherit" }}>{section.label}</span>
+                            {!isMobile && <span style={{ color: selected ? "rgba(191,219,254,0.65)" : "rgba(255,255,255,0.32)", display: "block", fontSize: "0.62rem", lineHeight: 1.35, marginTop: "0.12rem" }}>{section.description}</span>}
                         </span>
                     </button>
                 );
@@ -2061,10 +2938,13 @@ const SettingsWorkspace = ({
     const pageDescription = page?.description ?? "";
 
     const content = (
-        <div key={activeSection} className="oh-surface-in" style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
-            <div style={{ marginBottom: "0.1rem" }}>
-                <div style={{ color: "#f8fafc", fontSize: "1rem", fontWeight: 900 }}>{pageTitle}</div>
-                <div style={{ color: "rgba(255,255,255,0.38)", fontSize: "0.66rem", marginTop: "0.18rem" }}>{pageDescription}</div>
+        <div key={activeSection} className="oh-surface-in" style={{ display: "flex", flexDirection: "column", gap: "0.85rem" }}>
+            <div style={{ marginBottom: "0.2rem" }}>
+                <div style={{ alignItems: "center", display: "flex", gap: "0.5rem" }}>
+                    <span style={{ color: "var(--oh-ui-accent, #60a5fa)", fontSize: "0.95rem" }}>{page?.icon}</span>
+                    <span style={{ color: "#f8fafc", fontSize: "1.1rem", fontWeight: 800, letterSpacing: "-0.01em" }}>{pageTitle}</span>
+                </div>
+                <div style={{ color: "rgba(255,255,255,0.48)", fontSize: "0.72rem", marginTop: "0.2rem" }}>{pageDescription}</div>
             </div>
 
             {activeSection === "general" && (
@@ -2074,18 +2954,32 @@ const SettingsWorkspace = ({
                     <ChatLanguageSelector />
                 </SettingsSection>
                 <SettingsSection title="Display" description="Window and presentation preferences that apply to the game client.">
-                    <Toggle label="Fullscreen" enabled={isFullscreenEnabled} onToggle={onToggleFullscreen} />
+                    <DisplayModeSelector isFullscreenEnabled={isFullscreenEnabled} onToggleFullscreen={onToggleFullscreen} />
+                    {/* The vault door shows the first time the game opens after an
+                        update (runtime/vaultDoorDue.js); this shows it at every
+                        opening. */}
+                    <Toggle
+                    label="Show the vault door every time"
+                    enabled={mapSettings.vaultDoorAlways}
+                    onToggle={() => updateMapSetting("vaultDoorAlways", MAP_SETTING_KEYS.vaultDoorAlways, !mapSettings.vaultDoorAlways)}
+                    />
+                    <div style={{ ...helperStyle, marginTop: "-0.6rem", marginBottom: "0.6rem" }}>{"On: the vault door appears every time you start the game. Off: only the first time you start it after an update."}</div>
                 </SettingsSection>
-                <SettingsSection title="Accessibility" description="Reduce automatic camera motion without changing simulation behavior.">
+                <SettingsSection title="Interface appearance" description="Choose the colours of the main menu, the panels and the popups.">
+                    <UiThemeSettings />
+                </SettingsSection>
+                <SettingsSection title="Accessibility" description="Reduce automatic camera motion and map animations without changing simulation behavior.">
                     <Toggle
                     label="Reduce motion"
-                    enabled={mapSettings.disableIdleRotation && mapSettings.disableEventCamera}
+                    enabled={systemReducedMotion || (mapSettings.disableIdleRotation && mapSettings.disableEventCamera)}
+                    disabled={systemReducedMotion}
                     onToggle={() => {
                         const next = !(mapSettings.disableIdleRotation && mapSettings.disableEventCamera);
                         updateMapSetting("disableIdleRotation", MAP_SETTING_KEYS.disableIdleRotation, next);
                         updateMapSetting("disableEventCamera", MAP_SETTING_KEYS.disableEventCamera, next);
                     }}
                     />
+                    {systemReducedMotion && <div style={{ ...helperStyle, marginTop: "-0.6rem", marginBottom: "0.6rem" }}>On, following your system setting for reduced motion.</div>}
                 </SettingsSection>
                 <PrivacySection
                 discordPresenceOn={mapSettings.discordPresence}
@@ -2094,10 +2988,65 @@ const SettingsWorkspace = ({
                 </>
             )}
 
+            {activeSection === "sound" && (
+                <>
+                <SoundSection
+                musicOn={mapSettings.ambientMusic}
+                onToggleMusic={() => updateMapSetting("ambientMusic", MAP_SETTING_KEYS.ambientMusic, !mapSettings.ambientMusic)}
+                effectsOn={mapSettings.soundEffects}
+                onToggleEffects={() => updateMapSetting("soundEffects", MAP_SETTING_KEYS.soundEffects, !mapSettings.soundEffects)}
+                />
+                </>
+            )}
+
             {activeSection === "map" && (
                 <>
-                <SettingsSection title="Map presentation" description="Choose the visual base and which political labels are shown.">
-                    <BasemapField value={basemapStyle} onChange={updateBasemapStyle} />
+                <SettingsSection title="Map presentation" description="Choose the map mode and visual presentation options.">
+                    <div style={fieldGroupStyle}>
+                        <label style={labelStyle} htmlFor="game-map-mode">Map mode</label>
+                        <select
+                            id="game-map-mode"
+                            style={inputStyle}
+                            value={mapMode || "political"}
+                            onChange={(event) => updateMapMode(event.target.value)}
+                        >
+                            <option value="political">Political (Countries and borders)</option>
+                            <option value="diplomatic">Diplomatic (Allies, enemies, trade partners)</option>
+                        </select>
+                        <div style={helperStyle}>Diplomatic mode colours each country by where it stands with you: your puppets, allies, friends, hostile countries and enemies at war.</div>
+                    </div>
+                </SettingsSection>
+                {/* In a game, this game's own pick among the scenario's maps
+                    (detailed maps among them); in the main menu, what every
+                    game starts on (Map/useBasemapPick.js). */}
+                <SettingsSection title="Basemap" description="The flat map drawn under the countries.">
+                    {forGame ? <GameBasemapField /> : <DefaultBasemapField />}
+                </SettingsSection>
+                <SettingsSection title="Detailed maps" description="Large terrain maps, sharp when zoomed in. A scenario offers them among its maps, each drawn over one of its drawn maps.">
+                    {!forGame && (
+                        <>
+                            <Toggle
+                                label="Show detailed maps"
+                                enabled={scenarioTerrain !== SCENARIO_TERRAIN_PAINTED}
+                                onToggle={() => updateScenarioTerrain(scenarioTerrain === SCENARIO_TERRAIN_PAINTED ? "" : SCENARIO_TERRAIN_PAINTED)}
+                            />
+                            <div style={helperStyle}>On: a detailed map is drawn when you have it. Off, in every game: the drawn map under it, which is lighter.</div>
+                        </>
+                    )}
+                    {forGame && <GameDetailedMapsDownloadField />}
+                    <div style={fieldGroupStyle}>
+                        <button type="button" onClick={() => setBasemapsOpen(true)} style={{ ...inputStyle, width: "auto", cursor: "pointer" }}>
+                            Browse and download maps…
+                        </button>
+                        <div style={helperStyle}>Your basemaps and detailed maps, and the community&apos;s. To use one in a scenario, open that scenario in the Map Editor.</div>
+                        {basemapsOpen && (
+                            <Suspense fallback={null}>
+                                <BasemapPicker open browse onClose={() => setBasemapsOpen(false)} />
+                            </Suspense>
+                        )}
+                    </div>
+                </SettingsSection>
+                <SettingsSection title="Labels" description="Which political labels are shown, and in what font.">
                     {/* Labels rasterize from the player's LOCAL fonts (the style
                         has no glyph server), so any installed family works - the
                         list only suggests common safe ones. Empty = whatever the
@@ -2119,6 +3068,19 @@ const SettingsWorkspace = ({
                         <div style={helperStyle}>Empty uses the font the scenario author chose. Any font installed on this computer works; overrides apply immediately.</div>
                     </div>
                     <Toggle label="Hide country labels" enabled={mapSettings.hideCountryLabels} onToggle={() => updateMapSetting("hideCountryLabels", MAP_SETTING_KEYS.hideCountryLabels, !mapSettings.hideCountryLabels)} />
+                    <Toggle label="Seasons and weather" enabled={mapSettings.seasonsWeather} onToggle={() => updateMapSetting("seasonsWeather", MAP_SETTING_KEYS.seasonsWeather, !mapSettings.seasonsWeather)} />
+                    <div style={settingsHelper}>
+                    On (default): the map is tinted by the season and shows its weather. Frozen water is drawn as ice either way.
+                    </div>
+                    {mapSettings.seasonsWeather && (
+                        <>
+                            <Toggle label="Weather effects" enabled={mapSettings.weatherEffects} onToggle={() => updateMapSetting("weatherEffects", MAP_SETTING_KEYS.weatherEffects, !mapSettings.weatherEffects)} />
+                            <div style={settingsHelper}>
+                            On (default): rain, snow, frost, fog and the other weathers are drawn over the land they fall on. Off: no weather is drawn; the season's tint and the ice stay, and the advisor can still tell you the weather.
+                            </div>
+                        </>
+                    )}
+                    <PerformanceModeSetting />
                 </SettingsSection>
                 <SettingsSection title="3D map" description="Globe and terrain rendering are presentation features; they do not change world state.">
                     <ExperimentalPill />
@@ -2126,8 +3088,9 @@ const SettingsWorkspace = ({
                     <Toggle label="3D Terrain" enabled={isTerrainEnabled} onToggle={onToggleTerrain} />
                 </SettingsSection>
                 <SettingsSection title="Camera behavior" description="Fine-grained controls for automatic map movement.">
-                    <Toggle label="Disable idle globe rotation" enabled={mapSettings.disableIdleRotation} onToggle={() => updateMapSetting("disableIdleRotation", MAP_SETTING_KEYS.disableIdleRotation, !mapSettings.disableIdleRotation)} />
-                    <Toggle label="Disable camera movement during events" enabled={mapSettings.disableEventCamera} onToggle={() => updateMapSetting("disableEventCamera", MAP_SETTING_KEYS.disableEventCamera, !mapSettings.disableEventCamera)} />
+                    <Toggle label="Disable idle globe rotation" enabled={systemReducedMotion || mapSettings.disableIdleRotation} disabled={systemReducedMotion} onToggle={() => updateMapSetting("disableIdleRotation", MAP_SETTING_KEYS.disableIdleRotation, !mapSettings.disableIdleRotation)} />
+                    <Toggle label="Disable camera movement during events" enabled={systemReducedMotion || mapSettings.disableEventCamera} disabled={systemReducedMotion} onToggle={() => updateMapSetting("disableEventCamera", MAP_SETTING_KEYS.disableEventCamera, !mapSettings.disableEventCamera)} />
+                    {systemReducedMotion && <div style={{ ...helperStyle, marginTop: "-0.6rem", marginBottom: "0.6rem" }}>On, following your system setting for reduced motion.</div>}
                 </SettingsSection>
                 </>
             )}
@@ -2139,6 +3102,11 @@ const SettingsWorkspace = ({
                 <ReasoningSection />
                 <RequestBudgetSection />
                 <SettingsSection title="Generation behavior" description="Bound model waiting behavior without changing the deterministic fallback path.">
+                    {forGame ? <PlayerFocusSetting /> : (
+                        <div style={{ ...helperStyle, marginBottom: "0.8rem" }}>
+                            Player focus is set for each game on its own: open the game, then ☰ → Settings → AI.
+                        </div>
+                    )}
                     <Toggle label="Limit AI generation" enabled={mapSettings.limitAiGeneration} onToggle={() => updateMapSetting("limitAiGeneration", MAP_SETTING_KEYS.limitAiGeneration, !mapSettings.limitAiGeneration)} />
                     <div style={settingsHelper}>
                     Off (default): waits as long as the model needs, however stuck. On: the game stops waiting and falls back to canned events when the model goes quiet — 5 minutes of silence part-way through an answer, or 15 minutes with no answer at all. A model that is still writing is never interrupted, however long it takes. Cancel works either way.
@@ -2147,13 +3115,17 @@ const SettingsWorkspace = ({
                     <div style={settingsHelper}>
                     Off (default): the whole skip is generated in a single request. On: skips of more than a few months are generated in several shorter requests and merged into one round — slower and costlier in tokens, but far less likely to time out on a hosted provider.
                     </div>
-                    <Toggle label="AI lookup functions" enabled={mapSettings.lookupFunctions} onToggle={() => updateMapSetting("lookupFunctions", MAP_SETTING_KEYS.lookupFunctions, !mapSettings.lookupFunctions)} />
+                    <Toggle label="AI lookup functions" enabled={mapSettings.lookupFunctions} inactive={savingRequests ? "Paused while Save AI requests is on" : ""} onToggle={() => updateMapSetting("lookupFunctions", MAP_SETTING_KEYS.lookupFunctions, !mapSettings.lookupFunctions)} />
                     <div style={settingsHelper}>
                     Only used while Save AI requests (above) is off, because every lookup is a whole extra request. On: before it answers, the model can call lookup functions — the exact power and region names, a region's neighbours, the war ledger, a chat — in up to three extra requests per task, and two inside a time skip. Off: one request per task, with the region lists and ledgers written into the prompt instead. Needs a provider that supports function calling.
                     </div>
                     <Toggle label="Show time skip events as they are written" enabled={mapSettings.liveSkipEvents} onToggle={() => updateMapSetting("liveSkipEvents", MAP_SETTING_KEYS.liveSkipEvents, !mapSettings.liveSkipEvents)} />
                     <div style={settingsHelper}>
                     On (default): a skip opens the Events panel and fills it as the model writes, with the spinner and Cancel underneath. Reveal with Next event as they arrive, and the map and camera follow; wherever you get to is kept when the turn lands. Off: the skip stays behind the Timeline panel's spinner and the round appears at the end. The turn itself is the same either way. On Gemini, a skip that may look things up (Save AI requests off) still arrives all at once.
+                    </div>
+                    <Toggle label="Stop when my events fail" enabled={mapSettings.stopOnPlayerFailures} onToggle={() => updateMapSetting("stopOnPlayerFailures", MAP_SETTING_KEYS.stopOnPlayerFailures, !mapSettings.stopOnPlayerFailures)} />
+                    <div style={settingsHelper}>
+                    Off (default): an event about your country that the game refuses is left out, and an order of yours that got no outcome carries over to the next skip as overdue. On: the skip stops before anything is saved and lists what failed. Retry the failed events (one more request, for the same dates), retry the whole skip, or keep it and move on.
                     </div>
                     <Toggle label="Batch background AI tasks" enabled={mapSettings.batchBackgroundTasks} onToggle={() => updateMapSetting("batchBackgroundTasks", MAP_SETTING_KEYS.batchBackgroundTasks, !mapSettings.batchBackgroundTasks)} />
                     <div style={{ ...settingsHelper, marginBottom: 0 }}>
@@ -2209,6 +3181,11 @@ const SettingsWorkspace = ({
                         <NetworkSharing />
                     </SettingsSection>
                 )}
+                {!import.meta.env.VITE_OH_WEB && (
+                    <SettingsSection title="Storage" description="What this server keeps on disk for you.">
+                        <DownloadCache />
+                    </SettingsSection>
+                )}
                 <SettingsSection title="Diagnostics" description="The log a bug report needs. Copy it for Discord, save it for a GitHub issue.">
                     <DiagnosticsPanel />
                 </SettingsSection>
@@ -2221,25 +3198,27 @@ const SettingsWorkspace = ({
     // is widened by the notch and the home indicator so neither covers the ←, the
     // ✕ or the bottom of the page.
     return createPortal(
-        <div role="dialog" aria-modal="true" aria-label="Game settings" className={leaving ? "oh-fade-out" : closing ? "oh-fade-out-slow" : fromRect ? undefined : "oh-fade-in"} style={{ alignItems: "center", background: "rgba(6,6,7,0.42)", backdropFilter: "blur(18px) saturate(1.2)", display: "flex", inset: 0, justifyContent: "center", padding: isMobile ? `calc(0.45rem + ${SAFE_TOP}) calc(0.45rem + ${SAFE_RIGHT}) calc(0.45rem + ${SAFE_BOTTOM}) calc(0.45rem + ${SAFE_LEFT})` : "clamp(0.8rem, 2vw, 1.6rem)", position: "fixed", zIndex: 2147483000 }}>
-            <div ref={cardRef} className="oh-ws-card" style={{ background: "rgba(32,32,35,0.67)", backdropFilter: "var(--oh-hud-blur)", WebkitBackdropFilter: "var(--oh-hud-blur)", border: "1px solid var(--oh-hud-border)", borderRadius: isMobile ? "12px" : "18px", boxShadow: "var(--oh-hud-shadow)", color: "white", display: "flex", flexDirection: "column", fontFamily: "sans-serif", height: isMobile ? `calc(${APP_HEIGHT} - 0.9rem - ${SAFE_TOP} - ${SAFE_BOTTOM})` : `min(800px, calc(${APP_HEIGHT} - 2.4rem))`, maxWidth: "1120px", overflow: "hidden", width: isMobile ? `calc(100vw - 0.9rem - ${SAFE_LEFT} - ${SAFE_RIGHT})` : "min(94vw, 1120px)" }}>
-                <div aria-hidden="true" className="oh-ws-tint" style={{ background: "rgba(32,32,35,0.63)", borderRadius: "inherit", inset: 0, pointerEvents: "none", position: "absolute" }} />
-                <div style={{ alignItems: "center", borderBottom: "1px solid rgba(255,255,255,0.08)", display: "flex", gap: "0.75rem", padding: "0.8rem 0.9rem" }}>
-                    <button type="button" className="oh-tap" onClick={onBack} aria-label="Back to game menu" title="Back to game menu" style={{ alignItems: "center", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: "8px", color: "rgba(255,255,255,0.66)", cursor: "pointer", display: "flex", fontSize: "1rem", height: "2.25rem", justifyContent: "center", width: "2.25rem" }}>←</button>
+        <div role="dialog" aria-modal="true" aria-label="Game settings" className={leaving ? "oh-fade-out" : closing ? "oh-fade-out-slow" : fromRect ? undefined : "oh-fade-in"} style={{ alignItems: "center", background: "rgba(8,9,11,0.75)", display: "flex", inset: 0, justifyContent: "center", padding: isMobile ? `calc(0.45rem + ${SAFE_TOP}) calc(0.45rem + ${SAFE_RIGHT}) calc(0.45rem + ${SAFE_BOTTOM}) calc(0.45rem + ${SAFE_LEFT})` : "clamp(0.8rem, 2vw, 1.6rem)", position: "fixed", zIndex: 2147483000, contain: "strict" }}>
+            <div ref={cardRef} className="oh-ws-card" style={{ background: "var(--oh-ui-bg, rgba(20,21,24,0.97))", border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.08))", borderRadius: isMobile ? "12px" : "18px", boxShadow: "0 24px 60px rgba(0,0,0,0.55), 0 0 0 1px rgba(255,255,255,0.04)", color: "white", display: "flex", flexDirection: "column", fontFamily: "sans-serif", height: isMobile ? `calc(${APP_HEIGHT} - 0.9rem - ${SAFE_TOP} - ${SAFE_BOTTOM})` : `min(800px, calc(${APP_HEIGHT} - 2.4rem))`, maxWidth: "1120px", overflow: "hidden", width: isMobile ? `calc(100vw - 0.9rem - ${SAFE_LEFT} - ${SAFE_RIGHT})` : "min(94vw, 1120px)" }}>
+                <div style={{ alignItems: "center", borderBottom: "1px solid rgba(255,255,255,0.07)", display: "flex", gap: "0.75rem", padding: "0.85rem 1.1rem" }}>
+                    <button type="button" className="oh-tap" onClick={onBack} aria-label="Back to game menu" title="Back to game menu" style={{ alignItems: "center", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "8px", color: "rgba(255,255,255,0.7)", cursor: "pointer", display: "flex", fontSize: "1rem", height: "2.1rem", justifyContent: "center", width: "2.1rem", transition: "background-color 140ms ease, color 140ms ease" }}>←</button>
                     <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ alignItems: "baseline", display: "flex", flexWrap: "wrap", gap: "0.35rem 0.65rem" }}>
-                            <span style={{ color: "#f8fafc", fontSize: "1rem", fontWeight: 900 }}>Settings</span>
-                            {context?.scenarioName && <span style={{ color: "rgba(255,255,255,0.48)", fontSize: "0.72rem", fontWeight: 700 }}>{context.scenarioName}</span>}
+                        <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.45rem 0.65rem" }}>
+                            <span style={{ backgroundColor: "var(--oh-ui-accent, #3b82f6)", borderRadius: "3px", display: "inline-block", height: "1.05rem", width: "4px" }} />
+                            <span style={{ color: "#f8fafc", fontSize: "1.04rem", fontWeight: 800 }}>Settings</span>
+                            {forGame && context?.scenarioName && <span style={{ backgroundColor: "rgba(59,130,246,0.15)", border: "1px solid rgba(96,165,250,0.3)", borderRadius: "6px", color: "#93c5fd", fontSize: "0.7rem", fontWeight: 700, padding: "0.15rem 0.45rem" }}>{context.scenarioName}</span>}
                         </div>
-                        <div style={{ color: "rgba(255,255,255,0.3)", fontSize: "0.61rem", marginTop: "0.12rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                            {[context?.countryName ? `Playing as ${context.countryName}` : "", context?.date || ""].filter(Boolean).join(" · ") || "Game preferences"}
+                        <div style={{ color: "rgba(255,255,255,0.4)", fontSize: "0.66rem", marginTop: "0.12rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {forGame
+                                ? [context?.countryName ? `Playing as ${context.countryName}` : "", context?.date || ""].filter(Boolean).join(" · ") || "Game preferences"
+                                : "For every game. A game's own settings are in its ☰ menu."}
                         </div>
                     </div>
-                    <button type="button" className="oh-tap" onClick={onClose} aria-label="Close settings" style={{ alignItems: "center", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: "8px", color: "rgba(255,255,255,0.62)", cursor: "pointer", display: "flex", fontSize: "1rem", height: "2.25rem", justifyContent: "center", width: "2.25rem" }}>×</button>
+                    <button type="button" className="oh-tap" onClick={onClose} aria-label="Close settings" style={{ alignItems: "center", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "8px", color: "rgba(255,255,255,0.7)", cursor: "pointer", display: "flex", fontSize: "1.1rem", height: "2.1rem", justifyContent: "center", width: "2.1rem", transition: "background-color 140ms ease, color 140ms ease" }}>×</button>
                 </div>
                 <div style={{ display: "grid", flex: 1, gridTemplateColumns: isMobile ? "minmax(0, 1fr)" : "235px minmax(0, 1fr)", gridTemplateRows: isMobile ? "auto minmax(0, 1fr)" : "minmax(0, 1fr)", minHeight: 0 }}>
-                    <aside style={{ backgroundColor: "rgba(9,9,10,0.24)", borderBottom: isMobile ? "1px solid rgba(255,255,255,0.07)" : "none", borderRight: isMobile ? "none" : "1px solid rgba(255,255,255,0.07)", minHeight: 0, overflowY: isMobile ? "visible" : "auto" }}>{nav}</aside>
-                    <main style={{ minHeight: 0, overflowY: "auto", padding: isMobile ? "0.8rem" : "1rem 1.05rem 1.2rem" }}>{content}</main>
+                    <aside style={{ backgroundColor: "rgba(0,0,0,0.18)", borderBottom: isMobile ? "1px solid rgba(255,255,255,0.06)" : "none", borderRight: isMobile ? "none" : "1px solid rgba(255,255,255,0.06)", minHeight: 0, overflowY: isMobile ? "visible" : "auto" }}>{nav}</aside>
+                    <main style={{ minHeight: 0, overflowY: "auto", padding: isMobile ? "0.8rem" : "1.1rem 1.25rem 1.4rem", contain: "paint" }}>{content}</main>
                 </div>
             </div>
         </div>,
@@ -2262,8 +3241,8 @@ const QuickMenuTabButton = ({ label, selected, onClick, fill = false }) => (
     className="oh-tap-row"
     onClick={onClick}
     style={{
-        background: selected ? "rgba(0,0,0,0.42)" : "transparent",
-        border: `1px solid ${selected ? "rgba(255,255,255,0.28)" : "transparent"}`,
+        background: selected ? "var(--oh-ui-active, rgba(0,0,0,0.42))" : "transparent",
+        border: `1px solid ${selected ? "var(--oh-ui-accent, rgba(255,255,255,0.28))" : "transparent"}`,
         borderRadius: "8px",
         color: selected ? "#f4f4f5" : "rgba(255,255,255,0.56)",
         cursor: "pointer",
@@ -2298,7 +3277,7 @@ const ContextSummaryCard = ({ context }) => {
     ];
 
     return (
-        <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "11px", padding: "0.8rem 0.85rem" }}>
+        <div style={{ background: "var(--oh-ui-overlay-card, rgba(255,255,255,0.03))", border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.07))", borderRadius: "11px", padding: "0.8rem 0.85rem" }}>
             <div style={{ color: "rgba(255,255,255,0.82)", fontSize: "0.74rem", fontWeight: 800, marginBottom: "0.6rem" }}>Current session</div>
             <div style={{ display: "grid", gap: "0.45rem" }}>
                 {rows.map((row) => (
@@ -2333,10 +3312,14 @@ const SettingsMenu = ({
     // A workspace section to open on straight away (the AI setup prompt sends
     // the player to "ai"); null opens the quick menu.
     initialSection = null,
+    // "app" from the main menu: settings for every game, straight to the
+    // workspace, with no game menu behind it. "game" from a game's ☰.
+    scope = "game",
 }) => {
     const isMobile = useIsMobile();
     const [activeSettingsSection, setActiveSettingsSection] = useState(initialSection || null);
     const [activeQuickTab, setActiveQuickTab] = useState(initialSection ? "settings" : "tools");
+    const [updateCheckResult, setUpdateCheckResult] = useState({ status: "idle" });
     // The small menu's card: measured when a section opens so the workspace can
     // grow out of it, and told the button's size so it can grow out of the
     // button (the --oh-grow-* ratios the CSS keyframes read). Coming back from
@@ -2353,37 +3336,59 @@ const SettingsMenu = ({
         if (!el) return;
         const rect = el.getBoundingClientRect();
         if (!rect.width || !rect.height) return;
-        el.style.setProperty("--oh-grow-x", (64 / rect.width).toFixed(4));
-        el.style.setProperty("--oh-grow-y", (64 / rect.height).toFixed(4));
+        const buttonDim = isMobile ? 64 : 45.6;
+        el.style.setProperty("--oh-grow-x", (buttonDim / rect.width).toFixed(4));
+        el.style.setProperty("--oh-grow-y", (buttonDim / rect.height).toFixed(4));
     });
-    // The basemap override is a value setting (a basemap id, or empty for the
-    // scenario's own), read live so the picker follows a change made elsewhere.
-    const storedBasemapStyle = useMapSettingValue(MAP_SETTING_KEYS.basemapStyle);
-    const basemapStyle = isBuiltinBasemapId(storedBasemapStyle) ? storedBasemapStyle : "";
+    // Relief tiles or the painted vector map, for scenarios that ship both.
+    const scenarioTerrain = useMapSettingValue(MAP_SETTING_KEYS.scenarioTerrain) === SCENARIO_TERRAIN_PAINTED ? SCENARIO_TERRAIN_PAINTED : "";
 
     const [mapSettings, setMapSettingsState] = useState(() => ({
         hideCountryLabels: getMapSetting(MAP_SETTING_KEYS.hideCountryLabels),
         disableIdleRotation: getMapSetting(MAP_SETTING_KEYS.disableIdleRotation),
         disableEventCamera: getMapSetting(MAP_SETTING_KEYS.disableEventCamera),
-        // Not getMapSetting: this one ships ON, and an absent key must read as
-        // on rather than off (see mapSettings.js).
+        // Off by default, so getMapSetting: an absent key reads as off.
         limitAiGeneration: getMapSetting(MAP_SETTING_KEYS.limitAiGeneration),
-        // Same again: ships ON.
+        // Off by default too.
         chunkLongJumps: getMapSetting(MAP_SETTING_KEYS.chunkLongJumps),
         // Ships ON: an absent key reads as on (see mapSettings.js).
         lookupFunctions: getMapSettingDefaultOn(MAP_SETTING_KEYS.lookupFunctions),
         // Ships ON too.
         liveSkipEvents: getMapSettingDefaultOn(MAP_SETTING_KEYS.liveSkipEvents),
+        stopOnPlayerFailures: getMapSetting(MAP_SETTING_KEYS.stopOnPlayerFailures),
         batchBackgroundTasks: getMapSetting(MAP_SETTING_KEYS.batchBackgroundTasks),
         // Ships ON as well: Discord's "Playing Open Historia" (General → Privacy).
         discordPresence: getMapSettingDefaultOn(MAP_SETTING_KEYS.discordPresence),
+        // And the music (General → Sound).
+        ambientMusic: getMapSettingDefaultOn(MAP_SETTING_KEYS.ambientMusic),
+        // And the sound effects (the vault door's; General → Sound).
+        soundEffects: getMapSettingDefaultOn(MAP_SETTING_KEYS.soundEffects),
+        // Off by default: the vault door shows the first time the game opens
+        // after an update, unless this asks for every time (General → Display).
+        vaultDoorAlways: getMapSetting(MAP_SETTING_KEYS.vaultDoorAlways),
+        // And the seasons and weather on the map (Map → Map presentation),
+        // and the weather's patterns among them.
+        seasonsWeather: getMapSettingDefaultOn(MAP_SETTING_KEYS.seasonsWeather),
+        weatherEffects: getMapSettingDefaultOn(MAP_SETTING_KEYS.weatherEffects),
     }));
 
     const updateMapSetting = (stateKey, settingKey, value) => {
         setMapSetting(settingKey, value);
         setMapSettingsState((current) => ({ ...current, [stateKey]: value }));
     };
-    const updateBasemapStyle = (value) => setMapSettingValue(MAP_SETTING_KEYS.basemapStyle, value);
+    const updateScenarioTerrain = (value) => setMapSettingValue(MAP_SETTING_KEYS.scenarioTerrain, value);
+
+    useEffect(() => {
+        const onUpdateCheckResult = (event) => setUpdateCheckResult(event?.detail || { status: "error" });
+        window.addEventListener(APP_UPDATE_MANUAL_CHECK_RESULT_EVENT, onUpdateCheckResult);
+        return () => window.removeEventListener(APP_UPDATE_MANUAL_CHECK_RESULT_EVENT, onUpdateCheckResult);
+    }, []);
+
+    const checkForUpdatesNow = () => {
+        if (updateCheckResult.status === "checking") return;
+        setUpdateCheckResult({ status: "checking" });
+        if (!requestAppUpdateCheck()) setUpdateCheckResult({ status: "unsupported" });
+    };
     const labelFont = useMapSettingValue(MAP_SETTING_KEYS.labelFont);
     // The field shows the keystrokes; the setting stores them trimmed. Storing
     // on every keystroke through setMapSettingValue's trim and echoing the
@@ -2397,7 +3402,8 @@ const SettingsMenu = ({
         setMapSettingValue(MAP_SETTING_KEYS.labelFont, value);
     };
 
-    // Telemetry switches (telemetry.js): their own keys, both on by default.
+    // Telemetry switches (telemetry.js): their own keys; recording is on by
+    // default (off in the Android app), rating off.
     const [telemetryOn, setTelemetryOn] = useState(() => isTelemetryEnabled());
     const [ratingOn, setRatingOn] = useState(() => isRatingEnabled());
     // Logged here rather than in telemetry.js, which imports nothing on purpose.
@@ -2441,9 +3447,10 @@ const SettingsMenu = ({
     if (activeSettingsSection) {
         return (
             <SettingsWorkspace
+            scope={scope}
             activeSection={activeSettingsSection}
             onSectionChange={setActiveSettingsSection}
-            onBack={backToMenu}
+            onBack={scope === "app" ? () => onClose?.() : backToMenu}
             fromRect={fromRect}
             closing={workspaceClosing}
             onClose={() => onClose?.()}
@@ -2456,8 +3463,8 @@ const SettingsMenu = ({
             onToggleTerrain={onToggleTerrain}
             mapSettings={mapSettings}
             updateMapSetting={updateMapSetting}
-            basemapStyle={basemapStyle}
-            updateBasemapStyle={updateBasemapStyle}
+            scenarioTerrain={scenarioTerrain}
+            updateScenarioTerrain={updateScenarioTerrain}
             labelFont={labelFontShown}
             updateLabelFont={updateLabelFont}
             telemetryOn={telemetryOn}
@@ -2484,8 +3491,9 @@ const SettingsMenu = ({
         panelContent = (
             <QuickMenuPanel title="Settings" description="Jump straight into the options category you want.">
                 <div style={grid}>
-                    <QuickAction title="General" description="Language, display, accessibility and privacy" symbol="◫" tone="blue" onClick={() => openSettingsSection("general")} />
-                    <QuickAction title="Map" description="Basemap, labels, globe and camera" symbol="◇" tone="blue" onClick={() => openSettingsSection("map")} />
+                    <QuickAction title="General" description="Language, display, accessibility, sound and privacy" symbol="◫" onClick={() => openSettingsSection("general")} />
+                    <QuickAction title="Sound" description="The game's music and sound effects." symbol="♫" onClick={() => openSettingsSection("sound")} />
+                    <QuickAction title="Map" description="Basemap, labels, globe and camera" symbol="◇" onClick={() => openSettingsSection("map")} />
                     <QuickAction title="AI" description="Models, backups, keys and reasoning" symbol="✦" onClick={() => openSettingsSection("ai")} />
                     <QuickAction title="Advanced" description="Per-task models and expert controls" symbol="⌘" onClick={() => openSettingsSection("advanced")} />
                 </div>
@@ -2496,6 +3504,13 @@ const SettingsMenu = ({
             <QuickMenuPanel title="Help" description="Guides, bug reporting and community links.">
                 <div style={grid}>
                     <QuickAction title="Wiki" description="How-to pages and setup help" symbol="?" href="/wiki/" />
+                    <QuickAction
+                        title={updateCheckResult.status === "checking" ? "Checking for updates…" : "Check for updates"}
+                        description={appUpdateCheckDescription(updateCheckResult)}
+                        symbol="↻"
+                        tone="blue"
+                        onClick={checkForUpdatesNow}
+                    />
                     {reportBugUrl && <QuickAction title="Report a Bug" description="Open the issue/report page" symbol="!" tone="amber" href={reportBugUrl} />}
                     <QuickAction title="Privacy" description="What the game keeps and sends" symbol="§" href={PRIVACY_HREF} />
                 </div>
@@ -2553,8 +3568,8 @@ const SettingsMenu = ({
             alignItems: "stretch",
             justifyContent: "flex-start",
             height: "auto",
-            background: "rgba(32,32,35,0.63)",
-            border: "1px solid var(--oh-hud-border)",
+            background: "var(--oh-ui-overlay, rgba(32,32,35,0.63))",
+            border: "1px solid var(--oh-ui-line, var(--oh-hud-border))",
             boxShadow: "var(--oh-hud-shadow)",
         }}
         >
@@ -2571,7 +3586,7 @@ const SettingsMenu = ({
                 <button type="button" className="oh-tap" onClick={() => onClose?.()} aria-label="Close game menu" style={{ alignItems: "center", background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "8px", color: "rgba(255,255,255,0.58)", cursor: "pointer", display: "flex", fontSize: "1rem", height: "2rem", justifyContent: "center", width: "2rem" }}>×</button>
             </div>
 
-            <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "10px", display: "flex", gap: "0.2rem", padding: "0.2rem", marginBottom: "0.8rem", overflowX: "auto", scrollbarWidth: "none" }}>
+            <div style={{ background: "var(--oh-ui-overlay-card, rgba(255,255,255,0.03))", border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.07))", borderRadius: "10px", display: "flex", gap: "0.2rem", padding: "0.2rem", marginBottom: "0.8rem", overflowX: "auto", scrollbarWidth: "none" }}>
                 {QUICK_MENU_TABS.map((tab) => (
                     <QuickMenuTabButton key={tab.key} label={tab.label} selected={activeQuickTab === tab.key} onClick={() => setActiveQuickTab(tab.key)} fill={isMobile} />
                 ))}

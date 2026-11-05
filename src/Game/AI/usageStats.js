@@ -128,6 +128,46 @@ export const sumUsage = (a, b) => {
     return out;
 };
 
+// The usage a streamed text answer reported, as the envelope normalizeUsage and
+// stoppedAtOutputLimit (providerErrors.js) read from a buffered one. A stream
+// says it in frames: Gemini repeats usageMetadata as the answer grows (the last
+// is the whole), an OpenAI-shaped gateway sends usage on a frame of its own at
+// the end, and Anthropic gives the prompt in message_start and the output in
+// message_delta. The advisor's streamed replies read none of them, and the AI
+// debug console showed "no usage" for every one (a real-key test, 2026-10-28).
+//
+// note(frame) for each frame; envelope() is null when nothing was reported.
+export const createStreamUsage = () => {
+    let usageMetadata = null;
+    let usage = null;
+    let finishReason = "";
+    let geminiFinish = "";
+    let stopReason = "";
+    return {
+        note(frame) {
+            if (!frame || typeof frame !== "object") return;
+            if (frame.usageMetadata && typeof frame.usageMetadata === "object") usageMetadata = frame.usageMetadata;
+            if (frame.usage && typeof frame.usage === "object") usage = { ...usage, ...frame.usage };
+            if (frame.type === "message_start" && frame.message?.usage && typeof frame.message.usage === "object") {
+                usage = { ...frame.message.usage, ...usage };
+            }
+            if (frame.choices?.[0]?.finish_reason) finishReason = frame.choices[0].finish_reason;
+            if (frame.candidates?.[0]?.finishReason) geminiFinish = frame.candidates[0].finishReason;
+            if (frame.delta?.stop_reason) stopReason = frame.delta.stop_reason;
+        },
+        envelope() {
+            if (!usageMetadata && !usage) return null;
+            return {
+                ...(usageMetadata ? { usageMetadata } : {}),
+                ...(usage ? { usage } : {}),
+                ...(finishReason ? { choices: [{ finish_reason: finishReason }] } : {}),
+                ...(geminiFinish ? { candidates: [{ finishReason: geminiFinish }] } : {}),
+                ...(stopReason ? { stop_reason: stopReason } : {}),
+            };
+        },
+    };
+};
+
 /**
  * A first-byte stopwatch that piggybacks on the activity signal the streaming
  * readers already emit.

@@ -37,8 +37,9 @@
 // Kept free of browser/PMTiles imports so it is unit-testable: time.jsx does the
 // tile reading and hands the decoded geometry in.
 
-import { normalizeEventPlaces } from "../../runtime/eventPlaces.js";
 import { normalizeGroupOp } from "../../runtime/groups.js";
+import { normalizeEventPlaces } from "../../runtime/eventPlaces.js";
+
 // ---------------------------------------------------------------------------
 // Bounds helpers. A bounds is [[west, south], [east, north]]; `east` may exceed
 // 180 for a box that crosses the antimeridian, which is what MapLibre's
@@ -349,6 +350,21 @@ const transferBounds = (transfer, context) =>
   ?? regionBoundsByName(transfer?.regionName, context)
   ?? regionBoundsByName(transfer?.regionId, context);
 
+// The regions a group operation names (runtime/groups.js), as the region
+// references a transfer carries. Read through the normalizer, so a streamed
+// card's loose shape (`regions`, a lone `regionId`) names the same places.
+const groupOpRegions = (impacts) => (impacts?.groupOps ?? []).flatMap((raw) =>
+  (normalizeGroupOp(raw)?.regionIds ?? []).map((regionId) => ({ regionId })));
+
+// Every region the event moved, held, contested, claimed or spread a group
+// into: the exact places it happened.
+const eventRegionRefs = (impacts) => [
+  ...(impacts?.regionTransfers ?? []),
+  ...(impacts?.regionControlOps ?? []),
+  ...(impacts?.regionClaims ?? []),
+  ...groupOpRegions(impacts),
+];
+
 // Every region a polity currently holds, merged. This is the LIVE map rather than
 // GADM's modern one, which is the whole point of the game: it is the only way to
 // frame an invented or era polity ("Free Ireland", "the Soviet Union") that has
@@ -423,12 +439,6 @@ const placeBounds = (place, context) => {
   return point();
 };
 
-// The regions a group operation names (runtime/groups.js), as the region
-// references a transfer carries. Read through the normalizer, so a streamed
-// card's loose shape (`regions`, a lone `regionId`) names the same places.
-const groupOpRegions = (impacts) => (impacts?.groupOps ?? []).flatMap((raw) =>
-  (normalizeGroupOp(raw)?.regionIds ?? []).map((regionId) => ({ regionId })));
-
 const eventPlaces = (event) => normalizeEventPlaces(event?.places);
 
 // The polities a chat the event opens is between.
@@ -452,7 +462,7 @@ export const deriveEventFocusBounds = (event, context) => {
   const impacts = event?.impacts ?? {};
 
   const tiers = [
-    () => [...(impacts.regionTransfers ?? []), ...groupOpRegions(impacts)].map((transfer) => transferBounds(transfer, context)),
+    () => eventRegionRefs(impacts).map((entry) => transferBounds(entry, context)),
     () => impactPointBounds(impacts),
     () => eventPlaces(event).map((place) => placeBounds(place, context)),
     () => (impacts.polityChanges ?? []).map((change) => resolvePolityBounds(change?.code, context)),

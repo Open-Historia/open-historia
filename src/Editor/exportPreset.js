@@ -14,8 +14,15 @@
 
 import COUNTRY_NAMES from "../runtime/generated/countryNames.js";
 import { OWNER_SCHEMA } from "./documentMigration.js";
-import { boundsFillSquare, normalizeImageBounds, normalizeProjection, projectionIsDefault } from "../../server/mapProjection.js";
 import { findGroupKey, normalizeGroupAreas, normalizeGroups } from "../runtime/groups.js";
+import { buildMarkersForGame, isMapFeature } from "./mapFeatures.js";
+import { buildPuppetsForGame } from "./scenarioPuppets.js";
+import { buildOwnBasemapsForGame } from "./ownBasemaps.js";
+import { populationByYearField } from "../runtime/cityPopulation.js";
+import { normalizeRegionTypes } from "../runtime/regionTypes.js";
+import { hasOwnMap } from "../runtime/assets.js";
+import { boundsFillSquare, normalizeImageBounds, normalizeProjection, projectionIsDefault } from "../../server/mapProjection.js";
+import { warGeographyForGame } from "./warGeographyDoc.js";
 
 // GADM ids contain a dot ("DEU.2_1", "Z01.14_1", "CHN.HKG"); regions drawn in the
 // editor use "reg_..." ids. Only the latter are custom geometry that tier-1 (stock
@@ -105,7 +112,7 @@ const normalizeRegionsForGame = (regionsFC) => {
 // a merged region, or is a from-scratch (blank) document — anything the stock
 // pmtiles cannot reproduce. Pure re-ownership world maps stay tier 1.
 const detectCustomGeometry = (regionsFC, kind) => {
-  if (kind === "blank") return true;
+  if (kind !== "import-world") return true;
   for (const f of regionsFC?.features || []) {
     const props = f.properties || {};
     const id = props.id != null ? String(props.id) : f.id != null ? String(f.id) : "";
@@ -125,11 +132,12 @@ const cityTier = (f) => {
   return pop >= 1000000 ? 3 : pop >= 100000 ? 2 : 1;
 };
 
-// The document's point features (cities) as the game-ready cities.geojson.
+// The document's cities as the game-ready cities.geojson. A map feature that is
+// not a city (a base, a port: mapFeatures.js) goes to world.markers instead.
 const buildCitiesForGame = (features) => ({
   type: "FeatureCollection",
   features: (features || [])
-
+    .filter((f) => !isMapFeature(f))
     .filter((f) => Array.isArray(f.coord) && f.coord.length === 2 && f.coord[0] != null && f.coord[1] != null)
     .map((f) => ({
       type: "Feature",
@@ -139,10 +147,62 @@ const buildCitiesForGame = (features) => ({
         population: f.population || 0,
         capital: (f.tags || []).includes("capital") ? "primary" : "",
         tier: cityTier(f),
-
+        // The population by year, which the game reads for its date
+        // (runtime/cityPopulation.js).
+        ...(f.populationByYear && typeof f.populationByYear === "object" && Object.keys(f.populationByYear).length
+          ? { populationByYear: { ...f.populationByYear } }
+          : {}),
+        // What the Features panel edits besides, written only when it says
+        // something the rest does not: the tags beyond city/capital, a symbol
+        // other than the square, the country. The game passes them through
+        // (normalizeCustomCityFeature keeps unknown properties); they are here
+        // so reopening the scenario's map gives them back (gameCityToFeature).
+        ...(authoredCityTags(f) ? { tags: authoredCityTags(f) } : {}),
+        ...(f.symbol && f.symbol !== "square" ? { symbol: String(f.symbol) } : {}),
+        ...(f.country ? { country: String(f.country) } : {}),
       },
     })),
 });
+
+// The tags a city is given back from `capital` alone: ["city"], or
+// ["city", "capital"].
+const defaultCityTags = (capital) => (capital ? ["city", "capital"] : ["city"]);
+const authoredCityTags = (f) => {
+  const tags = Array.isArray(f.tags) ? f.tags.map((t) => String(t)) : [];
+  if (!tags.length) return null;
+  const fallback = defaultCityTags(tags.includes("capital"));
+  return tags.length === fallback.length && tags.every((t) => fallback.includes(t)) ? null : tags;
+};
+
+// One city of a scenario's cities.geojson as a Workshop feature — the way
+// opening a scenario's map reads its cities back (MapEditor.jsx). null when it
+// has no point. The size, the population by year, and the tags, symbol and
+// country buildCitiesForGame wrote all come back.
+export const gameCityToFeature = (f, id) => {
+  const props = f?.properties || {};
+  const coord = Array.isArray(f?.geometry?.coordinates) ? f.geometry.coordinates.slice(0, 2) : null;
+  if (!coord) return null;
+  const capital = props.capital === "primary";
+  const tags = Array.isArray(props.tags) && props.tags.length ? props.tags.map((t) => String(t)) : defaultCityTags(capital);
+  if (capital && !tags.includes("capital")) tags.push("capital");
+  const tier = Number(props.tier);
+  return {
+    id,
+    name: props.city ? String(props.city) : "",
+    type: "Coordinate",
+    symbol: typeof props.symbol === "string" && props.symbol ? props.symbol : "square",
+    coord,
+    country: typeof props.country === "string" ? props.country : "",
+    owner: null,
+    regionId: null,
+    population: props.population || 0,
+    tags,
+    // Its size and its population by year come back too: a round trip
+    // lost the tier, and would lose the series.
+    ...(tier >= 1 && tier <= 3 ? { tier: Math.round(tier) } : {}),
+    ...populationByYearField(props),
+  };
+};
 
 // Turn the editor's persisted custom background (doc.metadata.customBackground)
 // into what the game needs: a light descriptor for world.json (just the kind) and
@@ -151,8 +211,32 @@ const buildCitiesForGame = (features) => ({
 // to fully replace Earth; vectors carry their GeoJSON. Raster uploads
 // (GeoTIFF/PMTiles) are editor-only reference and don't persist, so they never
 // reach here. Returns { background: null } when there's nothing.
-const buildBackgroundForGame = (customBackground) => {
+//
+// A Tiled Basemap the author chose (doc.metadata.tiledBasemap: { id, version,
+// name, fillOpacity } for an official map, { hash, name, fillOpacity } for
+// their own) is NAMED on a vector background, never carried (docs/adr/0005,
+// 0006). The vector drawing on screen is its basemap, and a scenario on a
+// detailed map must have one: a player who does not download the detailed map,
+// or whose game cannot show it, still gets a map, never empty sea.
+export const DETAILED_MAP_NEEDS_BASIC_MAP_MESSAGE = "A detailed map is shown over one of this scenario's drawn maps: it is what players see if they don't download the detailed map.\n\nAdd a drawn map first: click one in Your basemaps (or add one with “⬆ Add basemap or detailed map”), or draw one in the editor. Then add the detailed map again.";
+// `name`: the starting map's name (doc.metadata.startingMapName), which
+// Settings → Map shows players.
+export const buildBackgroundForGame = (customBackground, tiledBasemap = null, { name = "" } = {}) => {
+  const built = backgroundForGame(customBackground, tiledBasemap);
+  const named = String(name || "").trim().slice(0, 80);
+  return built.background && named ? { ...built, background: { ...built.background, name: named } } : built;
+};
+const backgroundForGame = (customBackground, tiledBasemap) => {
   const bg = customBackground;
+  if (tiledBasemap?.id || tiledBasemap?.hash) {
+    const { fillOpacity, onlyMap: _onlyMap, bytes: _bytes, hubUrl: _hubUrl, ...named } = tiledBasemap;
+    const drawn = bg?.kind === "vector" && Array.isArray(bg.geojson?.features) && bg.geojson.features.length > 0;
+    if (!drawn) throw new Error(DETAILED_MAP_NEEDS_BASIC_MAP_MESSAGE);
+    return {
+      background: { kind: "vector", tiled: named, ...(Array.isArray(fillOpacity) ? { fillOpacity } : {}) },
+      backgroundData: { geojson: bg.geojson },
+    };
+  }
   if (!bg || typeof bg !== "object") return { background: null, backgroundData: null };
   if (bg.kind === "image" && bg.dataUrl) {
     // Its bounds ride in the light descriptor: where the game lays the picture.
@@ -174,6 +258,11 @@ const buildBackgroundForGame = (customBackground) => {
   }
   return { background: null, backgroundData: null };
 };
+
+// Whether the game will treat this scenario as having a map of its own (its
+// world.background): then players see only it until the author ticks built-in
+// maps they may switch to (runtime/assets.js builtinBasemapChoices).
+export const scenarioHasOwnMap = (doc) => hasOwnMap(buildBackgroundForGame(doc?.metadata?.customBackground).background);
 
 // Every country the stock world already knows by name. An owner in here is a real
 // GADM country the game can name, colour and flag on its own; an owner outside it
@@ -234,6 +323,17 @@ export const buildGameSeed = (doc, regionsFC, palette = {}, { playerCountry } = 
   const kind = doc.metadata?.kind || "import-world";
   const hasCustomGeometry = detectCustomGeometry(regionsFC, kind);
   const gameRegions = normalizeRegionsForGame(regionsFC);
+
+  // Every dispute the map declares, as the world's own list too. The AI, the
+  // region card and the Region Inspector read world.regionClaimants, and in the
+  // game a world row wins over the map file — so a scenario that inherited the
+  // built-in world's rows hid the author's edits to those regions, and a dispute
+  // drawn only in the map was one the AI never heard of.
+  const regionClaimants = {};
+  for (const feature of gameRegions.features) {
+    const list = feature.properties?.claimants;
+    if (Array.isArray(list) && list.length) regionClaimants[feature.properties.id] = [...new Set(list)];
+  }
 
   // Groups (runtime/groups.js): the registry, with any group a region names that
   // the registry lacks (still a group to the game, in its default colour), and
@@ -308,17 +408,35 @@ export const buildGameSeed = (doc, regionsFC, palette = {}, { playerCountry } = 
 
   const author = (doc.metadata?.author || "").trim();
   const gameCities = buildCitiesForGame(doc.features);
-  const { background, backgroundData } = buildBackgroundForGame(doc.metadata?.customBackground);
+  const { background, backgroundData } = buildBackgroundForGame(doc.metadata?.customBackground, doc.metadata?.tiledBasemap, { name: doc.metadata?.startingMapName });
+  const { ownBasemaps, ownBasemapsData } = buildOwnBasemapsForGame(doc.metadata?.ownBasemaps);
   const world = {
     ownerSchema: doc.ownerSchema ?? OWNER_SCHEMA,
     regionOwnershipOverrides,
     polityOverrides,
+    // The map's disputes (above). A scenario is a starting point, so nothing in
+    // it is a dispute that already ended.
+    regionClaimants,
+    settledRegionClaims: [],
     // The groups and the areas they control (above).
     groups,
     groupAreas,
     // The starting units the author placed (Units panel / Unit tool).
     units: buildUnitsForGame(doc.units),
-
+    // The structures the author placed with the Map feature tool, and any the
+    // scenario already had (the Workshop opened with them).
+    markers: buildMarkersForGame(doc.features),
+    // The puppet states the scenario starts with (Countries panel).
+    puppets: buildPuppetsForGame(doc.puppets, { startDate: doc.metadata?.startDate || "" }),
+    // The map's region types (Region Types panel). Each region names its type
+    // by typeId in the regions file; the game draws a type's colour, opacity,
+    // border and zoom range, and tells the AI its movement rules
+    // (runtime/regionTypes.js). The Workshop opens with them again.
+    regionTypes: normalizeRegionTypes(doc.types),
+    // What the scenario draws on its map for war (warGeographyDoc.js): terrain
+    // areas, fortified lines and climate zones as the Workshop drew them, and
+    // the water regions that can freeze, those still water on this map.
+    ...warGeographyForGame(doc, regionsFC),
     // A custom background replaces Earth, so it must also hide the stock modern
     // political overlay (country fills, borders, "Russia"/"France" labels) — those
     // are gated on customRegions in the game, so force it on whenever there's a
@@ -337,6 +455,13 @@ export const buildGameSeed = (doc, regionsFC, palette = {}, { playerCountry } = 
     // basemap, not always the ocean default. Ignored when a custom background
     // replaces it. Falls back to ocean in-game if unset/unknown.
     basemap: doc.metadata?.basemap || null,
+    // Which built-in maps players may switch to in Settings → Map (null = any,
+    // or none on a scenario with a map of its own; [] = none). Chosen in the
+    // basemap picker.
+    allowedBasemaps: Array.isArray(doc.metadata?.allowedBasemaps) ? doc.metadata.allowedBasemaps : null,
+    // The scenario's other basemaps of its own players may switch to
+    // (ownBasemaps.js); their payloads ride in the seed's ownBasemapsData.
+    ownBasemaps,
     // Authored cities replace the modern city labels. A custom-geometry map with
     // no cities still sets the flag — modern names over invented land would be
     // wrong — while a pure re-ownership map without cities keeps the stock set.
@@ -388,5 +513,8 @@ export const buildGameSeed = (doc, regionsFC, palette = {}, { playerCountry } = 
     // Heavy background payload ({ dataUrl } or { geojson }) — uploaded as the
     // backgroundData scenario asset; null when there's no custom background.
     backgroundData,
+    // The other basemaps' payloads, by id: the ownBasemapsData scenario asset;
+    // null when there are none.
+    ownBasemapsData,
   };
 };

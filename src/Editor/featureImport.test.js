@@ -1,6 +1,51 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mergeImportedFeatures, parseFeatureImport } from "./featureImport.js";
+import { buildMarkersForGame, isMapFeature, newMapFeature } from "./mapFeatures.js";
+
+test("a Workshop document's bases, ports and landmarks stay map features", () => {
+  const base = { ...newMapFeature({ id: "feat_1", coord: [30.5, 50.4], owner: "Ukraine" }), name: "Hostomel", kind: "airfield", status: "damaged", note: "Contested since morning", markerId: "m-7", markerExtra: { builtBy: "ai", createdAt: "2022-02-24T00:00:00.000Z" } };
+  const city = { id: "feat_2", name: "Kyiv", type: "Coordinate", symbol: "star", coord: [30.52, 50.45], country: "Ukraine", owner: null, population: 2900000, tags: ["city", "capital"], tier: 3 };
+  const { features, format } = parseFeatureImport(JSON.stringify({ name: "Doc", features: [base, city] }));
+  assert.equal(format, "document");
+  const [feature, town] = features;
+  assert.equal(isMapFeature(feature), true);
+  assert.equal(feature.kind, "airfield");
+  assert.equal(feature.status, "damaged");
+  assert.equal(feature.note, "Contested since morning");
+  assert.equal(feature.owner, "Ukraine");
+  assert.equal(feature.symbol, "diamond");
+  assert.equal(feature.markerId, "m-7");
+  // What the game gets back is the marker it gave.
+  const [marker] = buildMarkersForGame(features);
+  assert.equal(marker.id, "m-7");
+  assert.equal(marker.kind, "airfield");
+  assert.equal(marker.ownerCode, "Ukraine");
+  assert.equal(marker.builtBy, "ai");
+  // A city stays a city, and keeps its size.
+  assert.equal(isMapFeature(town), false);
+  assert.equal(town.tier, 3);
+  assert.equal(town.symbol, "star");
+});
+
+test("a GeoJSON 'kind' is only a tag: a file of towns imports as cities", () => {
+  const { features } = parseFeatureImport({
+    type: "FeatureCollection",
+    features: [{ type: "Feature", properties: { name: "Arles", kind: "town", tier: 2 }, geometry: { type: "Point", coordinates: [4.63, 43.68] } }],
+  });
+  assert.deepEqual(features[0].tags, ["town"]);
+  assert.equal(features[0].kind, undefined);
+  assert.equal(isMapFeature(features[0]), false);
+  assert.equal(features[0].tier, 2);
+});
+
+test("a list of rows with `coord` and a 'kind' is not taken for a Workshop document: its towns import as cities", () => {
+  const { features, format } = parseFeatureImport([{ name: "Arles", coord: [4.63, 43.68], kind: "town" }]);
+  assert.equal(format, "rows");
+  assert.deepEqual(features[0].tags, ["town"]);
+  assert.equal(features[0].kind, undefined);
+  assert.equal(isMapFeature(features[0]), false);
+});
 
 test("GeoJSON points become features; other geometries are counted as skipped", () => {
   const { features, skipped, format } = parseFeatureImport(JSON.stringify({

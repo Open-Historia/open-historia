@@ -352,8 +352,8 @@ test("the game downloads hub files through hubFiles.js only, asks GitHub's API f
   const proxyCallers = sources.filter((file) => /fetch\(\s*[`"']\/api\/hub\/file/.test(fs.readFileSync(file, "utf8"))).map(rel);
   assert.deepEqual(proxyCallers, ["src/runtime/hubFiles.js"]);
 
-  // GitHub's API: named in hubIssues.js (the address) and asked by
-  // hubPosts.js, for one post's comments.
+  // GitHub's API: named in hubIssues.js (the address, and the paging that
+  // follows only it) and asked by hubPosts.js, for one post's comments.
   const apiUsers = sources.filter((file) => /\bHUB_API\b|api\.github\.com/.test(code(file))).map(rel).sort();
   assert.deepEqual(apiUsers, ["src/runtime/hubIssues.js", "src/runtime/hubPosts.js"]);
   const apiCalls = code(path.join(ROOT, "src/runtime/hubPosts.js")).match(/`\$\{HUB_API\}[^`]*`/g);
@@ -391,7 +391,7 @@ test("an Update with no update copy, or one just gone, downloads the counted cop
   assert.deepEqual(gone, [HUB_INDEX_URL, proxy(UPDATE), proxy(COPY)]);
 });
 
-test("the Scenarios tab's Update asks for the update copy; the Community tab's Import does not", () => {
+test("the Scenarios tab's Update asks for the update copy; the Community tab's Import only when importing again (hubReimport.test.js)", () => {
   const bar = fs.readFileSync(path.join(ROOT, "src/Game/GameUI/libraryBar.jsx"), "utf8");
   const hub = fs.readFileSync(path.join(ROOT, "src/Game/GameUI/communityHub.jsx"), "utf8");
   assert.ok(bar.includes("downloadHubScenario({ postId: post.id, bundleUrl: post.bundleUrl, title: post.title, author: post.author, flatMap: post.flatMap, update: true })"));

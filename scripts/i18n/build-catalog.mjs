@@ -3,8 +3,12 @@
 //
 //   public/lang/catalog-en.json          every fixed interface string, read out
 //                                        of the source (extractStrings.mjs),
-//                                        plus every stock country name and the
-//                                        preset scenarios' card text;
+//                                        plus the gameplay features' labels and
+//                                        descriptions (server/gameFeatures.js),
+//                                        every stock country name, the
+//                                        names of the cities the map labels, the
+//                                        built-in scenarios' region names and
+//                                        the preset scenarios' card text;
 //   public/lang/prompts/catalog-en.json  every guidance passage of the default
 //                                        prompts (promptGuidance.js), which the
 //                                        packs carry translated too.
@@ -20,12 +24,13 @@
 //   node scripts/i18n/build-catalog.mjs --also ../beta-checkout --also ../main-checkout
 //
 // A tree given with --also needs only its src/ (and scripts/presets/ for the
-// scenario cards): `git archive origin/beta src scripts/presets | tar -x -C dir`.
+// scenario cards, server/gameFeatures.js for the features' own text):
+// `git archive origin/beta src scripts/presets server/gameFeatures.js | tar -x -C dir`.
 
 import fs from "node:fs";
 import path from "node:path";
 import url from "node:url";
-import { extractTree } from "./extractStrings.mjs";
+import { catalogText, extractTree, featureDefinitionStrings } from "./extractStrings.mjs";
 
 const ROOT = path.resolve(path.dirname(url.fileURLToPath(import.meta.url)), "../..");
 const LANG_DIR = path.join(ROOT, "public", "lang");
@@ -77,6 +82,69 @@ const seedPolityNames = (root) => {
   return out;
 };
 
+// The names of the cities the map labels (Cities.jsx), which it looks up in the
+// pack without ever asking the AI: every city of the built-in scenarios
+// (server/seed/<id>/cities.geojson; at close zoom every tier is labelled), and
+// of the stock cities (public/assets/cities-seed.json, from cities.pmtiles) the
+// capitals and the rest above the label filter's lowest threshold. The names
+// are exact: a translation is the city's usual name in that language (Munich,
+// Moscow), and a city without one keeps the name it has.
+const STOCK_CITY_LABEL_MIN_POPULATION = 250000;
+const cityNames = (root) => {
+  const out = [];
+  const seedDir = path.join(root, "server", "seed");
+  if (fs.existsSync(seedDir)) {
+    for (const seed of fs.readdirSync(seedDir)) {
+      const file = path.join(seedDir, seed, "cities.geojson");
+      if (!fs.existsSync(file)) continue;
+      try {
+        for (const feature of JSON.parse(fs.readFileSync(file, "utf8"))?.features ?? []) {
+          const name = feature?.properties?.city ?? feature?.properties?.name;
+          if (typeof name === "string" && name.trim()) out.push(name.trim());
+        }
+      } catch {
+        // An unreadable seed adds no names.
+      }
+    }
+  }
+  const stockFile = path.join(root, "public", "assets", "cities-seed.json");
+  if (fs.existsSync(stockFile)) {
+    try {
+      for (const city of JSON.parse(fs.readFileSync(stockFile, "utf8"))) {
+        if (!city?.capital && !(Number(city?.population) > STOCK_CITY_LABEL_MIN_POPULATION)) continue;
+        if (typeof city?.name === "string" && city.name.trim()) out.push(city.name.trim());
+      }
+    } catch {
+      // Without the map assets the previous catalog's names are kept (below).
+    }
+  }
+  return out;
+};
+
+// The names of the built-in scenarios' regions (server/seed/<id>/regions.geojson:
+// 4,848 on the built-in map). The translator looks each one up in the pack
+// before it would ask the AI, so a shipped name costs no request. As with
+// cities, a translation is the region's usual name in that language, and a
+// region without one keeps the name it has.
+const regionNames = (root) => {
+  const out = [];
+  const seedDir = path.join(root, "server", "seed");
+  if (!fs.existsSync(seedDir)) return out;
+  for (const seed of fs.readdirSync(seedDir)) {
+    const file = path.join(seedDir, seed, "regions.geojson");
+    if (!fs.existsSync(file)) continue;
+    try {
+      for (const feature of JSON.parse(fs.readFileSync(file, "utf8"))?.features ?? []) {
+        const name = feature?.properties?.name;
+        if (typeof name === "string" && name.trim()) out.push(name.trim());
+      }
+    } catch {
+      // An unreadable seed adds no names.
+    }
+  }
+  return out;
+};
+
 // Every stock country's name, from the shipped countries archive.
 const countryNames = async () => {
   try {
@@ -85,6 +153,20 @@ const countryNames = async () => {
   } catch (error) {
     console.warn(`  country names skipped (${error.message}); the previous catalog's are kept`);
     return null;
+  }
+};
+
+// The Features tab's own text (server/gameFeatures.js), which extractTree never
+// sees: it reads src/, and the definitions live under server/ for the stores.
+const featureStrings = async (root) => {
+  const file = path.join(root, "server", "gameFeatures.js");
+  if (!fs.existsSync(file)) return [];
+  try {
+    const { FEATURE_DEFINITIONS } = await import(url.pathToFileURL(file));
+    return featureDefinitionStrings(FEATURE_DEFINITIONS);
+  } catch (error) {
+    console.warn(`  feature definitions skipped for ${path.relative(ROOT, root) || "."} (${error.message})`);
+    return [];
   }
 };
 
@@ -115,6 +197,9 @@ const main = async () => {
     patternCount += patterns.size;
     specStrings(root).forEach((text) => strings.add(text));
     seedPolityNames(root).forEach((text) => strings.add(text));
+    (await featureStrings(root)).forEach((text) => strings.add(text));
+    cityNames(root).forEach((text) => strings.add(text));
+    regionNames(root).forEach((text) => strings.add(text));
     console.log(`  ${path.relative(ROOT, root) || "."}: ${exact.size} strings, ${patterns.size} patterns`);
   }
 
@@ -129,7 +214,7 @@ const main = async () => {
     } catch { /* first run */ }
   }
 
-  const catalog = [...strings].map((s) => s.trim()).filter((s) => s.length > 1 && /[A-Za-z]{2}/.test(s)).sort();
+  const catalog = [...strings].map(catalogText).filter(Boolean).sort();
   fs.mkdirSync(LANG_DIR, { recursive: true });
   fs.writeFileSync(path.join(LANG_DIR, "catalog-en.json"), `${JSON.stringify([...new Set(catalog)], null, 1)}\n`);
   const patterns = catalog.filter((s) => s.includes("{{")).length;

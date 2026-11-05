@@ -22,10 +22,28 @@ test("the envelope splits the reply, the hidden memory line and the reaction", (
 });
 
 test("a reply without the envelope parts is returned whole, and a multi-line memory is folded", () => {
-  assert.deepEqual(parseDiplomaticEnvelope("  Plain words.  "), { reply: "Plain words.", reaction: null, memorySummary: "" });
+  assert.deepEqual(parseDiplomaticEnvelope("  Plain words.  "), { reply: "Plain words.", reaction: null, memorySummary: "", peace: "" });
   const folded = parseDiplomaticEnvelope("Reply.\nDIPLOMATIC_MEMORY: first line\n   second line\nthird");
   assert.equal(folded.reply, "Reply.");
   assert.equal(folded.memorySummary, "first line second line third");
+});
+
+test("a metadata-only diplomatic response is not a visible leader reply", () => {
+  for (const raw of [
+    "",
+    "  \n ",
+    "DIPLOMATIC_MEMORY: A prior commitment remains in effect.",
+    "REACTION:🤨",
+    "DIPLOMATIC_MEMORY: No new decisions.\nREACTION:🤨",
+  ]) {
+    assert.throws(() => parseDiplomaticEnvelope(raw), /visible diplomatic reply/i);
+  }
+});
+
+test("a reply that is only a PEACE line keeps the leader's verdict", () => {
+  const parsed = parseDiplomaticEnvelope("PEACE: accept\nREACTION:🤝");
+  assert.equal(parsed.peace, "accept");
+  assert.equal(parsed.reply, "");
 });
 
 test("the newest stored memory wins and is dated by its message", () => {

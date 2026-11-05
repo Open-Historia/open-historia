@@ -12,6 +12,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   applyEventImpactsToWorld,
+  normalizeUnitEntry,
   normalizeWorldState,
   resumeStandingOrders,
 } from "./gameState.js";
@@ -154,4 +155,12 @@ test("a save with only classic-era unit fields opens with sane defaults", () => 
     motion,
   });
   assert.equal(next.units.length, 1);
+});
+
+test("a unit placed on a world copy past the date line is stored in range", () => {
+  const unit = normalizeUnitEntry({ ownerCode: "United States", lng: 210, lat: 61 });
+  assert.equal(unit.lng, -150);
+  assert.equal(unit.lat, 61);
+  assert.equal(normalizeUnitEntry({ ownerCode: "United States", lng: -155.5, lat: 19.6 }).lng, -155.5);
+  assert.equal(normalizeUnitEntry({ ownerCode: "United States", lng: 360, lat: 0 }), null, "a wrapped 0,0 is still no position");
 });

@@ -12,26 +12,31 @@ const random = (() => {
   };
 })();
 
-const buildStars = () => Array.from({ length: STAR_COUNT }, (_, index) => {
-  const inMilkyWay = index >= 1100;
-  const longitude = random() * Math.PI * 2;
-  const latitude = inMilkyWay
-    ? (random() + random() + random() - 1.5) * 0.16
-    : Math.asin(random() * 2 - 1);
-  const latitudeScale = Math.cos(latitude);
-  const brightness = Math.pow(random(), 4);
-  const warmth = random();
-  return {
-    direction: [
-      Math.sin(longitude) * latitudeScale,
-      Math.sin(latitude),
-      Math.cos(longitude) * latitudeScale,
-    ],
-    alpha: (inMilkyWay ? 0.2 : 0.3) + brightness * 0.7,
-    radius: 0.35 + brightness * 1.45,
-    color: warmth > 0.92 ? "255,224,190" : warmth < 0.08 ? "190,218,255" : "238,244,255",
-  };
-});
+const buildStars = () => {
+  const stars = Array.from({ length: STAR_COUNT }, (_, index) => {
+    const inMilkyWay = index >= 1100;
+    const longitude = random() * Math.PI * 2;
+    const latitude = inMilkyWay
+      ? (random() + random() + random() - 1.5) * 0.16
+      : Math.asin(random() * 2 - 1);
+    const latitudeScale = Math.cos(latitude);
+    const brightness = Math.pow(random(), 4);
+    const warmth = random();
+    const dirX = Math.sin(longitude) * latitudeScale;
+    const dirY = Math.sin(latitude);
+    const dirZ = Math.cos(longitude) * latitudeScale;
+    return {
+      direction: [dirX, dirY, dirZ],
+      cx: dirX * 64, // CELESTIAL_RADIUS = 64 pre-multiplied
+      cy: dirY * 64,
+      cz: dirZ * 64,
+      alpha: (inMilkyWay ? 0.2 : 0.3) + brightness * 0.7,
+      radius: 0.35 + brightness * 1.45,
+      color: warmth > 0.92 ? "255,224,190" : warmth < 0.08 ? "190,218,255" : "238,244,255",
+    };
+  });
+  return stars.sort((a, b) => a.color.localeCompare(b.color));
+};
 
 const STARS = buildStars();
 
@@ -59,16 +64,43 @@ export const drawCelestialStars = ({ canvas, matrix, width, height, opacity }) =
   context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
   context.clearRect(0, 0, width, height);
 
-  for (const star of STARS) {
-    const point = projectCelestialDirection({ direction: star.direction, matrix, width, height });
-    if (!point || point.x < -4 || point.x > width + 4 || point.y < -4 || point.y > height + 4) continue;
+  const m0 = matrix[0], m1 = matrix[1], m2 = matrix[2], m3 = matrix[3];
+  const m4 = matrix[4], m5 = matrix[5], m6 = matrix[6], m7 = matrix[7];
+  const m8 = matrix[8], m9 = matrix[9], m10 = matrix[10], m11 = matrix[11];
+  const m12 = matrix[12], m13 = matrix[13], m14 = matrix[14], m15 = matrix[15];
+
+  const minX = -4;
+  const maxX = width + 4;
+  const minY = -4;
+  const maxY = height + 4;
+  let lastColor = "";
+  let lastAlphaInt = -1;
+
+  for (let i = 0; i < STAR_COUNT; i++) {
+    const star = STARS[i];
+    const clipW = m3 * star.cx + m7 * star.cy + m11 * star.cz + m15;
+    if (clipW <= 0) continue;
+    const invW = 1 / clipW;
+    const normX = (m0 * star.cx + m4 * star.cy + m8 * star.cz + m12) * invW;
+    if (normX < -1.1 || normX > 1.1) continue;
+    const normY = (m1 * star.cx + m5 * star.cy + m9 * star.cz + m13) * invW;
+    if (normY < -1.1 || normY > 1.1) continue;
+    const x = (normX * 0.5 + 0.5) * width;
+    const y = (0.5 - normY * 0.5) * height;
+    if (x < minX || x > maxX || y < minY || y > maxY) continue;
+
     const alpha = star.alpha * opacity;
-    context.fillStyle = `rgba(${star.color},${alpha.toFixed(3)})`;
+    const alphaInt = (alpha * 100) | 0;
+    if (star.color !== lastColor || alphaInt !== lastAlphaInt) {
+      context.fillStyle = `rgba(${star.color},${(alphaInt / 100).toFixed(2)})`;
+      lastColor = star.color;
+      lastAlphaInt = alphaInt;
+    }
     if (star.radius < 0.75) {
-      context.fillRect(point.x, point.y, 0.8, 0.8);
+      context.fillRect(x, y, 0.8, 0.8);
     } else {
       context.beginPath();
-      context.arc(point.x, point.y, star.radius, 0, Math.PI * 2);
+      context.arc(x, y, star.radius, 0, Math.PI * 2);
       context.fill();
     }
   }

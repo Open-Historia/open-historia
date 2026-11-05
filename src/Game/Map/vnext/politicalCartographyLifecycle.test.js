@@ -6,7 +6,6 @@ import {
   buildOwnershipPresentationDelta,
   createPoliticalCartographyScheduler,
   diffPoliticalOwnership,
-  splitOwnershipPresentationDelta,
 } from "./politicalCartographyLifecycle.js";
 
 const manualTimers = () => {
@@ -102,23 +101,6 @@ test("ownership presentation delta is canonical current state minus acknowledged
     { id: "A.1", fromOwner: "Old", toOwner: "New" },
     { id: "island", fromOwner: "Old", toOwner: "New" },
   ]);
-
-  assert.deepEqual(splitOwnershipPresentationDelta(delta, []), {
-    stockIds: ["A.1"],
-    authoredIds: ["island"],
-  });
-  assert.deepEqual(splitOwnershipPresentationDelta(delta, ["A.1"]), {
-    stockIds: [],
-    authoredIds: ["A.1", "island"],
-  });
-  assert.deepEqual(
-    splitOwnershipPresentationDelta(delta, [], { preferScenarioGeometry: true }),
-    {
-      stockIds: [],
-      authoredIds: ["A.1", "island"],
-    },
-    "scenario maps must never flash stock PMTiles geometry for a live ownership delta",
-  );
 });
 
 test("ownership presentation delta disappears when worker catches up", () => {

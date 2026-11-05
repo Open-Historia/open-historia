@@ -199,7 +199,9 @@ export const renderGlobeLightingPixels = ({
 export const buildGlobeLightingWorkerSource = () => `
   const renderGlobeLightingPixels = ${renderGlobeLightingPixels.toString()};
   self.onmessage = ({ data }) => {
-    const pixels = renderGlobeLightingPixels(data);
+    // The page hands back the last frame's buffer (globeCanvasLighting.js).
+    const outputPixels = data.outputBuffer ? new Uint8ClampedArray(data.outputBuffer) : undefined;
+    const pixels = renderGlobeLightingPixels({ ...data, outputPixels });
     self.postMessage({
       pixels: pixels.buffer,
       width: data.pixelWidth,

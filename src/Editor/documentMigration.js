@@ -39,6 +39,11 @@ const ownerName = (owner) => {
 
 // Migrate a loaded document in place-safe copies. Returns the doc unchanged when it
 // is already name-keyed, so this is safe to call on every open.
+//
+// Only region owners, colorOverrides, flags and tags are re-keyed, on purpose: they
+// are the owner-keyed parts a document had when createDocument began stamping
+// OWNER_SCHEMA. polities, units, groups and puppets were added to documents after
+// that, so every document carrying them was name-keyed from the start.
 export const migrateDocumentOwners = (doc) => {
   if (!doc || typeof doc !== "object") return doc;
   if (!docNeedsOwnerMigration(doc)) return doc;

@@ -14,6 +14,7 @@ import assert from "node:assert/strict";
 
 import {
     CHAT_EVENTS_LIMIT,
+    createPlayerPollEvent,
     eventsFromLegacyChat,
     membersAtEvent,
     normalizeChatEvent,
@@ -56,6 +57,25 @@ test("the projection is the shape every existing reader already expects", () => 
     assert.equal(projected.messages[0].speaker, "France");
     assert.equal(projected.messages[0].text, "We propose talks at Nancy.");
     assert.deepEqual(projected.messages[1].reactions, { Prussia: { emoji: "🤨", code: "" } });
+});
+
+test("multiple reactions from the same participant are preserved instead of overwritten", () => {
+    const projected = projectChatThread([
+        { id: "c1", kind: "chat_created", time: "1815-01-01" },
+        { id: "j1", kind: "member_joined", member: { name: "France", code: "FRA" } },
+        { id: "m1", kind: "message", by: "Player", role: "user", text: "Agreed." },
+        { id: "r1", kind: "reaction", by: "France", code: "FRA", target: "m1", emoji: "🤝" },
+        { id: "r2", kind: "reaction", by: "France", code: "FRA", target: "m1", emoji: "👍" },
+    ]);
+
+    assert.deepEqual(projected.messages[0].reactions, {
+        France: { emoji: "🤝", code: "FRA" },
+        "France#2": { emoji: "👍", code: "FRA", country: "France" },
+    });
+
+    const roundTrip = eventsFromLegacyChat({ countries: projected.countries, messages: projected.messages });
+    const reactionActors = roundTrip.filter((event) => event.kind === "reaction").map((event) => event.by);
+    assert.deepEqual(reactionActors, ["France", "France"]);
 });
 
 test("migration is idempotent: a log projected and migrated again is the same log", () => {
@@ -180,4 +200,73 @@ test("a message the log already has, by id or by speaker and words, is not added
     ]);
     assert.deepEqual(same, normalizeChatEvents(log));
     assert.deepEqual(withUnloggedMessages([], [{ speaker: "France", text: "hi" }]), [], "no log, nothing to fold into");
+});
+
+test("a line said again word for word, with its own id, is kept: the player said it twice", () => {
+    const log = [
+        { id: "c", kind: "chat_created", title: "Demands" },
+        { id: "j1", kind: "member_joined", member: "Prussia" },
+        { id: "msg-1", kind: "message", by: "Bavaria", role: "user", text: "We refuse this demand." },
+        { id: "m2", kind: "message", by: "Prussia", role: "leader", text: "Then reconsider." },
+    ];
+    const messages = [
+        ...projectChatThread(log).messages,
+        { id: "msg-2", role: "user", speaker: "Bavaria", text: "We refuse this demand.", time: "1866-06-01" },
+    ];
+    const folded = withUnloggedMessages(log, messages, { threadId: "chat-4" });
+    assert.deepEqual(projectChatThread(folded).messages.map((message) => message.id), ["msg-1", "m2", "msg-2"]);
+    assert.deepEqual(withUnloggedMessages(folded, projectChatThread(folded).messages, { threadId: "chat-4" }), folded, "and read again, it is there once");
+});
+
+test("a copy of the thread under other ids is matched line for line, and only a line it adds is new", () => {
+    // A legacy thread read twice gets fresh ids each time; the log came from one
+    // read, the panel's messages from the other.
+    const log = [
+        { id: "c", kind: "chat_created", title: "Talks" },
+        { id: "j1", kind: "member_joined", member: "France" },
+        { id: "b1", kind: "message", by: "Bavaria", role: "user", text: "Agreed." },
+        { id: "b2", kind: "message", by: "France", role: "leader", text: "Good." },
+    ];
+    const copy = [
+        { id: "a1", role: "user", speaker: "Bavaria", text: "Agreed." },
+        { id: "a2", role: "leader", speaker: "France", text: "Good." },
+        { id: "a3", role: "user", speaker: "Bavaria", text: "Agreed." },
+    ];
+    const folded = withUnloggedMessages(log, copy);
+    assert.deepEqual(projectChatThread(folded).messages.map((message) => message.id), ["b1", "b2", "a3"],
+        "the copy's first two lines are the logged ones; its second Agreed. is new");
+});
+
+test("player-created conversational polls use the canonical chat event log", () => {
+    let seq = 0;
+    const event = createPlayerPollEvent({
+        player: "Latvia",
+        question: "Adopt the joint LNG coordination framework?",
+        options: ["Yes", "No", "Abstain"],
+        time: "2026-04-16",
+        idFor: (prefix) => `${prefix}-test-${++seq}`,
+    });
+    assert.ok(event);
+    assert.equal(event.kind, "poll_created");
+    assert.equal(event.by, "Latvia");
+    assert.equal(event.options.length, 3);
+
+    const projected = projectChatThread([
+        { id: "created", kind: "chat_created", time: "2026-04-16", by: "", title: "Sweden & Finland" },
+        { id: "join-lv", kind: "member_joined", time: "2026-04-16", by: "", member: { name: "Latvia" } },
+        { id: "join-se", kind: "member_joined", time: "2026-04-16", by: "", member: { name: "Sweden" } },
+        { id: "join-fi", kind: "member_joined", time: "2026-04-16", by: "", member: { name: "Finland" } },
+        event,
+    ]);
+    assert.equal(projected.polls.length, 1);
+    assert.equal(projected.polls[0].question, "Adopt the joint LNG coordination framework?");
+    assert.deepEqual(projected.polls[0].options.map((option) => option.label), ["Yes", "No", "Abstain"]);
+});
+
+test("player-created poll validation is fail-closed and de-duplicates option labels", () => {
+    const idFor = (prefix) => `${prefix}-1`;
+    assert.equal(createPlayerPollEvent({ player: "Latvia", question: "Vote?", options: ["Yes"], idFor }), null);
+    assert.equal(createPlayerPollEvent({ player: "", question: "Vote?", options: ["Yes", "No"], idFor }), null);
+    const event = createPlayerPollEvent({ player: "Latvia", question: "Vote?", options: ["Yes", " yes ", "No"], idFor });
+    assert.deepEqual(event.options.map((option) => option.label), ["Yes", "No"]);
 });

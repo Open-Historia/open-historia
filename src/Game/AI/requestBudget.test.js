@@ -28,6 +28,7 @@ import {
     describeDay,
     describeJumpCost,
     jumpRequestCap,
+    requestsByTask,
 } from "./requestBudget.js";
 
 // 2026-09-17 12:00 in Los Angeles (UTC-7 in September).
@@ -61,12 +62,12 @@ test("only an explicit choice changes a default", () => {
     assert.equal(storage.getItem(REQUEST_BUDGET_KEYS.backgroundAi), "0");
 });
 
-// The five switches for the checks after a time skip are gone: the checks are
+// The six switches for the checks after a time skip are gone: the checks are
 // part of the skip. A player who once turned one off gets it back, because the
 // key they set is no longer read by anything.
 test("a check a player once switched off is on again: there is no switch left to read", () => {
     const { settings } = setup({ stored: {
-        ai_review_units: "0", ai_review_territory: "0",
+        ai_review_units: "0", ai_review_territory: "0", ai_review_structures: "0",
         ai_review_timeline: "0", ai_review_board: "0", ai_review_spies: "0",
     } });
     assert.equal(settings.reviewSection, undefined);
@@ -228,7 +229,38 @@ test("a skip spends at most its cap, in the order it is asked", () => {
     assert.deepEqual(budget.log.map((entry) => entry.granted), [true, true, true, false, false]);
 });
 
-test("no budget is without a cap", () => {
+
+test("a reserved institutional ballot slot cannot be consumed by earlier optional work", () => {
+    const budget = createJumpBudget();
+    budget.reserve("institutionBallots", 1);
+    assert.equal(budget.reserved, 1);
+    assert.equal(budget.take("jump"), true);
+    assert.equal(budget.take("review"), true);
+    assert.equal(budget.take("history"), false, "history yields to already-open formal governance");
+    assert.equal(budget.take("stats"), false, "tracked stats cannot consume the reserved legal-governance slot");
+    assert.equal(budget.take("institutionBallots"), true);
+    assert.equal(budget.spent, 3);
+    assert.equal(budget.reserved, 0);
+    assert.deepEqual(budget.skipped, ["history", "stats"]);
+});
+
+test("a budget carried over a restart spends on from where it was, reservation and all", () => {
+    const budget = createJumpBudget({ cap: 4 });
+    budget.reserve("institutionBallots", 1);
+    budget.take("jump");
+    budget.take("review");
+    budget.take("history");
+    const carried = JSON.parse(JSON.stringify({ cap: budget.cap, state: budget.state }));
+    const resumed = createJumpBudget({ cap: carried.cap, state: carried.state });
+    assert.equal(resumed.spent, 3);
+    assert.equal(resumed.reserved, 1);
+    assert.equal(resumed.take("stats"), false, "the slot left is still the ballots'");
+    assert.equal(resumed.take("institutionBallots"), true);
+    assert.deepEqual(resumed.log.map((entry) => entry.spender), ["jump", "review", "history", "stats", "institutionBallots"]);
+    assert.deepEqual(resumed.skipped, ["stats"]);
+});
+
+test("no budget is without a cap: the one the A/B lab's runs had went with them", () => {
     // Asking for one changes nothing.
     const budget = createJumpBudget({ unlimited: true, only: SKIP_SPENDERS });
     assert.equal("unlimited" in budget, false);
@@ -246,9 +278,10 @@ test("no budget is without a cap", () => {
 // The owner's rule (2026-10): a time skip is ONE request; function calling is
 // what can make it more, and never more than three.
 
-const skipBudget = ({ segments = 1 } = {}) => {
+const skipBudget = ({ segments = 1, ballots = false } = {}) => {
     const budget = createJumpBudget({ cap: jumpRequestCap({ segments }), only: SKIP_SPENDERS });
     budget.reserve("jump", segments);
+    if (ballots) budget.reserve("institutionBallots", 1);
     return budget;
 };
 
@@ -265,7 +298,7 @@ test("a skip with no function calling is one request, with two left that only it
     assert.equal(budget.spent, 1, "none of them cost anything");
     assert.deepEqual(budget.skipped, [], "nor were they put off for the cap: a skip does not ask for them at all");
     assert.deepEqual(budget.denied, ["geography", "repair", "spies", "unitDirector", "timelineCurator", "projects"]);
-    assert.deepEqual(SKIP_SPENDERS, ["jump", "review", "history", "stats"]);
+    assert.deepEqual(SKIP_SPENDERS, ["jump", "review", "history", "stats", "institutionBallots"]);
 });
 
 test("function calling is the skip asking again: two rounds make three requests, and then it answers", () => {
@@ -304,6 +337,28 @@ test("every segment keeps its own request, whatever asks first", () => {
     assert.equal(budget.spent, 5);
 });
 
+test("an open ballot keeps its request, and function calling gets what is left", () => {
+    const budget = skipBudget({ ballots: true });
+    budget.take("jump");
+    assert.equal(budget.free, 1);
+    assert.equal(budget.take("jumpLookup"), true);
+    assert.equal(budget.take("jumpLookup"), false);
+    assert.equal(budget.take("institutionBallots"), true);
+    assert.equal(budget.spent, 3);
+});
+
+test("what a skip spends on survives a restart with the rest of its budget", () => {
+    const budget = skipBudget();
+    budget.take("jump");
+    budget.take("geography");
+    const carried = JSON.parse(JSON.stringify({ cap: budget.cap, only: budget.only, state: budget.state }));
+    const resumed = createJumpBudget({ cap: carried.cap, only: carried.only, state: carried.state });
+    assert.equal(resumed.allows("repair"), false);
+    assert.equal(resumed.allows("history"), true);
+    assert.deepEqual(resumed.denied, ["geography"]);
+    assert.equal(resumed.spent, 1);
+});
+
 test("a segmented skip pays one request per segment and the cap moves with it", () => {
     assert.equal(jumpRequestCap({ segments: 1 }), 3);
     assert.equal(jumpRequestCap({ segments: 4 }), 6);
@@ -328,4 +383,67 @@ test("the day is described for the panel: used, left, and never less than nothin
     assert.equal(day.limit, 2);
     assert.equal(day.left, 0);
     assert.deepEqual(day.byTask, { jumpForward: 1, afterJumpReview: 1, advisor: 1 });
+});
+
+test("Settings lists today's requests by task, most first, under their names", () => {
+    const { ledger } = setup();
+    for (const taskKey of ["advisor", "jumpForward", "jumpForward", "translation", "other", "direct", "diplomacy → France"]) {
+        ledger.note({ status: 200, taskKey });
+    }
+    ledger.note({ status: 429, taskKey: "advisor" });
+    const labels = { jumpForward: "Time skip", advisor: "Advisor chat", translation: "Translation", other: "Other", direct: "Other" };
+    assert.deepEqual(requestsByTask(ledger.today().byTask, labels), [
+        { label: "Other", named: true, count: 2 },
+        { label: "Time skip", named: true, count: 2 },
+        { label: "Advisor chat", named: true, count: 1 },
+        { label: "Translation", named: true, count: 1 },
+        { label: "diplomacy → France", named: false, count: 1 },
+    ]);
+    assert.deepEqual(requestsByTask({}, labels), []);
+    assert.deepEqual(requestsByTask(null), []);
+    assert.deepEqual(requestsByTask({ toString: 3 }), [{ label: "toString", named: false, count: 3 }], "a key is never read off the prototype");
+});
+
+// A player's log, 2026-10-12: Stats last refreshed in 1921 with the date at
+// 1929. The model looked things up on every skip, the rounds used the budget,
+// and the refresh was put off on every skip for good.
+test("upkeep that is due keeps its request: function calling cannot starve it", () => {
+    const starved = createJumpBudget({ cap: jumpRequestCap({ segments: 1 }), only: SKIP_SPENDERS });
+    starved.reserve("jump", 1);
+    assert.equal(starved.take("jump"), true);
+    assert.equal(starved.take("jumpLookup"), true);
+    assert.equal(starved.take("jumpLookup"), true);
+    assert.equal(starved.take("stats"), false, "what happened on every skip before");
+
+    const kept = createJumpBudget({ cap: jumpRequestCap({ segments: 1 }), only: SKIP_SPENDERS });
+    kept.reserve("jump", 1);
+    kept.reserve("stats", 1);
+    assert.equal(kept.free, 1, "one request is still free for a lookup or for being asked again");
+    assert.equal(kept.take("jump"), true);
+    assert.equal(kept.take("jumpLookup"), true);
+    assert.equal(kept.take("jumpLookup"), false);
+    assert.equal(kept.take("stats"), true);
+    assert.equal(kept.spent, 3, "never past the cap");
+
+    // In segments too: four segments, the model looking up twice.
+    const segmented = createJumpBudget({ cap: jumpRequestCap({ segments: 4 }), only: SKIP_SPENDERS });
+    segmented.reserve("jump", 4);
+    segmented.reserve("stats", 1);
+    for (let index = 0; index < 4; index += 1) assert.equal(segmented.take("jump"), true);
+    assert.equal(segmented.take("jumpLookup"), true);
+    assert.equal(segmented.take("jumpLookup"), false);
+    assert.equal(segmented.take("stats"), true);
+});
+
+test("a request kept for the history fold and not needed goes to the Stats refresh", () => {
+    const budget = createJumpBudget({ cap: jumpRequestCap({ segments: 1 }), only: SKIP_SPENDERS });
+    budget.reserve("jump", 1);
+    budget.reserve("history", 1);
+    assert.equal(budget.take("jump"), true);
+    assert.equal(budget.take("jumpLookup"), true);
+    assert.equal(budget.take("stats"), false, "held for the history while it may still ask");
+    assert.equal(budget.release("history"), 1);
+    assert.equal(budget.release("history"), 0);
+    assert.equal(budget.take("stats"), true);
+    assert.equal(budget.spent, 3);
 });

@@ -393,6 +393,66 @@ body {
   pointer-events: none !important;
 }
 
+/* Scrollbars: thin and dark, so they do not stand out against the dark
+   interface (the owner: "restyle all the scroll bars so they dont stand out
+   so much being white"). The thumb is a faint light grey on no track, a little
+   brighter while the pointer is over what scrolls. `scrollbar-color` is
+   inherited, so this reaches every scrolling element; `scrollbar-width` is
+   not, so it is set on each, and a style that hides a scrollbar outright
+   (scrollbarWidth: "none" written inline) still wins. Browsers that do not
+   know these properties are given the same look the older way. */
+:root {
+  scrollbar-color: rgba(255, 255, 255, 0.16) transparent;
+}
+* {
+  scrollbar-width: thin;
+}
+*:hover {
+  scrollbar-color: rgba(255, 255, 255, 0.28) transparent;
+}
+@supports not (scrollbar-color: auto) {
+  ::-webkit-scrollbar {
+    background: transparent;
+    height: 10px;
+    width: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background-clip: padding-box;
+    background-color: rgba(255, 255, 255, 0.16);
+    border: 2px solid transparent;
+    border-radius: 999px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(255, 255, 255, 0.28);
+  }
+  ::-webkit-scrollbar-track,
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+}
+
+/* A dropdown's list is drawn by the system, not by the page: on the system's
+   own light ground unless it is told otherwise, while its entries took the
+   dark interface's white text. White on white, readable only where the
+   pointer was (a player: "the drop down is white but the text is also white
+   so you cant see what it says until you hover over the option"). Some
+   dropdowns had been given black entries for that light ground, others a dark
+   ground of their own, most nothing. One rule for all of them, and it wins
+   over what a dropdown says for itself: a dark list with light text, like the
+   panels it opens from. `color-scheme` is for the systems that draw the list
+   as a menu of their own and take no colours from the page. */
+select {
+  color-scheme: dark;
+}
+select option,
+select optgroup {
+  background-color: #1f1f23 !important;
+  color: #f4f4f5 !important;
+}
+select option:disabled {
+  color: #8b8b93 !important;
+}
+
 button,
 [role="button"],
 a,
@@ -410,6 +470,50 @@ summary {
 }
 button:active:not(:disabled) {
   transform: scale(0.97);
+}
+
+/* The main menu's skeletons (GameUI/menuSkeleton.jsx): while a page's games,
+   scenarios or community posts are on their way, the outlines of their cards stand
+   where the cards will be and a glimmer passes over them, in place of the word
+   "Loading" (the owner: "show outlines of where all the games/scenarios go
+   with a glimmer animation (like youtube loading does)"). The glimmer is a
+   flat band of light carried across each card and clipped to its corners, not
+   a fade (noGradients.test.js); it crosses, then rests off the card for a
+   moment. Under reduced motion (the rule below) it runs once in no time and
+   ends where it began, off the card, so the outlines stand still. */
+.oh-skeleton {
+  overflow: hidden;
+  position: relative;
+}
+.oh-skeleton::after {
+  animation: oh-skeleton-glimmer 1.9s ease-in-out infinite;
+  background: rgba(255, 255, 255, 0.06);
+  bottom: 0;
+  content: "";
+  left: 0;
+  pointer-events: none;
+  position: absolute;
+  top: 0;
+  transform: translateX(-100%);
+  width: 40%;
+}
+@keyframes oh-skeleton-glimmer {
+  0% { transform: translateX(-100%); }
+  65%, 100% { transform: translateX(250%); }
+}
+
+/* Read by a screen reader and not seen: what a skeleton stands for. */
+.oh-visually-hidden {
+  border: 0;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  padding: 0;
+  position: absolute;
+  white-space: nowrap;
+  width: 1px;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -500,6 +604,14 @@ button:active:not(:disabled) {
   pointer-events: none !important;
 }
 
+/* A button that is working (the library's scenario Update, libraryBar.jsx
+   ButtonIcon "working"): its ring turns, the same turn as the logo's, until
+   the work is done. Under reduced motion the rule above stops it and the ring
+   stays as drawn; the button's label says what it is doing either way. */
+.oh-working-ring {
+  animation: oh-logo-spin 0.7s linear infinite;
+}
+
 /* Touch screens (a finger is the main pointer): every control a thumb has to
    hit is at least 44 px across. The classes sit on the controls a phone needs
    to reach, above all the close buttons, which were 14-26 px; with a mouse the
@@ -519,3 +631,39 @@ button:active:not(:disabled) {
     min-height: 2.75rem;
   }
 }
+
+/* OpenLayers controls inside country picker and editors */
+.ol-zoom {
+  position: absolute !important;
+  right: auto !important;
+  bottom: auto !important;
+  width: auto !important;
+  top: 0.75rem !important;
+  left: 0.75rem !important;
+  background: rgba(18, 20, 26, 0.75) !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  border-radius: 8px !important;
+  padding: 3px !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 2px !important;
+}
+.ol-zoom button {
+  background: rgba(255, 255, 255, 0.08) !important;
+  color: #fff !important;
+  border: none !important;
+  border-radius: 6px !important;
+  width: 28px !important;
+  height: 28px !important;
+  font-size: 1.1rem !important;
+  font-weight: 700 !important;
+  cursor: pointer !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  transition: background 0.15s ease !important;
+}
+.ol-zoom button:hover {
+  background: rgba(255, 255, 255, 0.22) !important;
+}
+

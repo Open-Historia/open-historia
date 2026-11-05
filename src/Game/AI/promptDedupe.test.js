@@ -63,7 +63,8 @@ test("an empty marker or prompt never claims the rule is present", () => {
 // there is nothing left to de-duplicate — only this to hold.
 test("the jump's levers ride in its live records, not after its template", () => {
   const gameplay = readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
-  assert.match(gameplay, /blocks\.push\(JUMP_LEVERS\)/);
+  // Pushed as they are, or without the groups lever while groups are off.
+  assert.match(gameplay, /blocks\.push\([^;]*JUMP_LEVERS/);
   assert.doesNotMatch(gameplay, /ACTIONS_REFERENCE/);
   assert.doesNotMatch(gameplay, /\[Units on the Map\]/);
 });
@@ -206,4 +207,39 @@ test("missing variables leave the prompt untouched", () => {
   const prompt = `${RULES}\n${worldSummary}`;
   assert.equal(collapseRepeatedWorldContext(prompt, {}), prompt);
   assert.equal(collapseRepeatedWorldContext(prompt, null), prompt);
+});
+
+// --- what a fenced job repeats from before it (collapseRepeatsInsideJob) ---
+
+import { EARLIER_TEXT_POINTER, collapseRepeatsInsideJob } from "./promptDedupe.js";
+
+const fences = { begin: "#### BEGIN JOB ####", end: "#### END JOB ####" };
+const paragraph = (word) => `${word} `.repeat(60).trim();
+
+test("inside a job, a long line the prompt already gave becomes a pointer; its title and anything new stay", () => {
+  const story = paragraph("galleys");
+  const document = paragraph("charter");
+  const prompt = [
+    "[Event History]", "- 0354-01-05: The Townsmen found Saltport", `  ${story}`, "", document,
+    fences.begin,
+    "Fold these events:", "- 0354-01-05: The Townsmen found Saltport", `  ${story}`, "", `  ${document}`, "  Territorial shifts: Port Gullhaven -> Saltport",
+    `- 0354-01-06: Something only the job has`, `  ${paragraph("ledger")}`,
+    fences.end, "After the job.",
+  ].join("\n");
+  const out = collapseRepeatsInsideJob(prompt, fences);
+  const job = out.slice(out.indexOf(fences.begin), out.indexOf(fences.end));
+  assert.equal(job.split(EARLIER_TEXT_POINTER).length - 1, 1, "two repeated paragraphs in a row are one pointer");
+  assert.match(job, /- 0354-01-05: The Townsmen found Saltport/, "the job still names what it covers");
+  assert.match(job, /Territorial shifts: Port Gullhaven -> Saltport/, "a short line stays");
+  assert.ok(job.includes(paragraph("ledger")), "what only the job has stays");
+  assert.ok(!job.includes(story) && !job.includes(document));
+  assert.equal(out.slice(0, out.indexOf(fences.begin)), prompt.slice(0, prompt.indexOf(fences.begin)), "nothing before the job changes");
+  assert.ok(out.endsWith(`${fences.end}\nAfter the job.`), "nor after it");
+});
+
+test("a job repeats nothing when what it has is not given earlier, and a prompt without the job is left alone", () => {
+  const prompt = ["Intro.", fences.begin, `  ${paragraph("ledger")}`, fences.end, `  ${paragraph("ledger")}`].join("\n");
+  assert.equal(collapseRepeatsInsideJob(prompt, fences), prompt, "a repeat AFTER the job does not count");
+  assert.equal(collapseRepeatsInsideJob("No job here.", fences), "No job here.");
+  assert.equal(collapseRepeatsInsideJob(`${fences.begin} unterminated ${paragraph("x")}`, fences), `${fences.begin} unterminated ${paragraph("x")}`);
 });

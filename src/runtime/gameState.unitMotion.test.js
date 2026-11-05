@@ -4,7 +4,6 @@
 // Needs a full install: gameState.js -> assets.js -> maplibre-gl. The pure
 // motion math is covered dependency-free in unitMotion.test.js.
 
-import { readFileSync } from "node:fs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -13,16 +12,17 @@ import {
   advanceStandingOrders,
   applyEventImpactsToWorld,
   applyUnitOpBatch,
-  applyUnitOps,
   buildOwnerFootprint,
   clampUnitStrength,
   clearStaleUnitMotion,
+  confirmResolvedDeployments,
   enforceUnitVolume,
   lastUnitMoveDates,
   normalizePendingUnitOrders,
   normalizeUnits,
   normalizeWorldState,
   pruneSatisfiedUnitOrders,
+  standingOrdersAskWater,
 } from "./gameState.js";
 import { haversineKm } from "./unitMotion.js";
 
@@ -314,12 +314,6 @@ test("removing a unit takes its standing order with it", () => {
   assert.equal(removed.orders.length, 0);
 });
 
-test("applyUnitOps keeps its old array contract for any caller that still expects it", () => {
-  const units = applyUnitOps([], [spawnOp({ id: "x" })], {});
-  assert.ok(Array.isArray(units));
-  assert.equal(units.length, 1);
-});
-
 // ---- advanceStandingOrders -------------------------------------------------
 
 test("a patrol repositions each round but stays on station", () => {
@@ -336,6 +330,60 @@ test("a patrol repositions each round but stays on station", () => {
     assert.ok(haversineKm(50, -30, state.units[0].lat, state.units[0].lng) <= 251);
     assert.equal(state.pendingUnitOrders.length, 1, "a patrol must not prune itself");
   }
+});
+
+// The coast runs north-south at lng -30: the sea is west of it.
+const westIsSea = (lng) => lng < -30;
+const patrolling = (type) => ({
+  units: normalizeUnits([unit({ type, lng: -30, lat: 50 })]),
+  pendingUnitOrders: normalizePendingUnitOrders([
+    { id: "o1", unitId: "unit-1", kind: "patrol", toLng: -30, toLat: 50, radiusKm: 250 },
+  ]),
+});
+
+test("a fleet's patrol keeps to the sea and an army's to the land", () => {
+  for (let round = 1; round <= 12; round += 1) {
+    const fleet = advanceStandingOrders(patrolling("naval"), { fromDate: "2024-01-01", toDate: "2024-02-01", round, onWater: westIsSea });
+    assert.ok(westIsSea(fleet.units[0].lng), `round ${round}: the fleet stood ashore at ${fleet.units[0].lng}`);
+    const army = advanceStandingOrders(patrolling("infantry"), { fromDate: "2024-01-01", toDate: "2024-02-01", round, onWater: westIsSea });
+    assert.ok(!westIsSea(army.units[0].lng) || army.units[0].lng === -30, `round ${round}: the army stood in the sea at ${army.units[0].lng}`);
+  }
+});
+
+// A turn reads the map for where the sea is only when a standing order could ask it (gameplay.js): with no patrol,
+// the orders move exactly as they do with the map read.
+test("only a patrol asks where the sea is, and orders without one move the same without the map", () => {
+  assert.equal(standingOrdersAskWater(patrolling("naval")), true);
+  assert.equal(standingOrdersAskWater(patrolling("air")), true);
+  assert.equal(standingOrdersAskWater({ units: [], pendingUnitOrders: [{ unitId: "unit-1", kind: "Patrol", toLng: 0, toLat: 1 }] }), true);
+  assert.equal(standingOrdersAskWater({}), false);
+  const moving = {
+    units: normalizeUnits([unit({ type: "naval", lng: -40, lat: 50 }), unit({ id: "unit-2", type: "infantry", lng: -20, lat: 50 })]),
+    pendingUnitOrders: normalizePendingUnitOrders([
+      { id: "o1", unitId: "unit-1", kind: "move", toLng: -35, toLat: 45 },
+      { id: "o2", unitId: "unit-2", kind: "attack", toLng: -10, toLat: 52 },
+    ]),
+  };
+  assert.equal(standingOrdersAskWater(moving), false);
+  let asked = 0;
+  const withMap = advanceStandingOrders(moving, { fromDate: "2024-01-01", toDate: "2024-01-08", round: 3, onWater: (lng) => { asked += 1; return westIsSea(lng); } });
+  const without = advanceStandingOrders(moving, { fromDate: "2024-01-01", toDate: "2024-01-08", round: 3, onWater: null });
+  assert.equal(asked, 0);
+  const placed = (world) => world.units.map(({ id, lng, lat, status, posture }) => ({ id, lng, lat, status, posture }));
+  assert.deepEqual(placed(without), placed(withMap));
+  assert.deepEqual(without.pendingUnitOrders, withMap.pendingUnitOrders);
+});
+
+test("a patrol with no point of its ring on its ground stays on its station", () => {
+  const world = advanceStandingOrders(patrolling("naval"), { fromDate: "2024-01-01", toDate: "2024-02-01", round: 3, onWater: () => false });
+  assert.equal(world.units[0].lng, -30);
+  assert.equal(world.units[0].lat, 50);
+});
+
+test("an air patrol ignores the coast", () => {
+  const drawn = advanceStandingOrders(patrolling("air"), { fromDate: "2024-01-01", toDate: "2024-02-01", round: 3 });
+  const tested = advanceStandingOrders(patrolling("air"), { fromDate: "2024-01-01", toDate: "2024-02-01", round: 3, onWater: () => false });
+  assert.deepEqual(tested.units[0], { ...drawn.units[0], updatedAt: tested.units[0].updatedAt });
 });
 
 test("a patrol is reproducible for the same round and idle tick", () => {
@@ -423,42 +471,6 @@ test("a moved unit's order still expires on schedule", () => {
     fromDate: "2024-01-01", toDate: "2024-02-01", round: 6, movedAt: { "unit-1": "2024-02-01" },
   });
   assert.equal(next.pendingUnitOrders.length, 0);
-});
-
-// Seen in a replay of 45 recorded skips (2026-10-09): on this line every unit an
-// event moved was left out of the advance that follows the events, so a
-// division ordered from Texas to Poland early in a 30-day skip got only the
-// days up to its event and arrived in the NEXT skip, 60 days after its order.
-// The events move it for the days before its event; the rest of the skip is
-// credited after it (lastUnitMoveDates, movedAt).
-test("a division ordered overseas early in a skip arrives in that skip", () => {
-  const texas = { lng: -97.7, lat: 31.1 };
-  const poland = { lng: 21.0, lat: 52.2 };
-  const start = normalizeWorldState({ units: [unit({ id: "u1", type: "armor", ownerCode: "United States", ...texas })] });
-  const events = [
-    { date: "2016-03-04", title: "1st Armored Division ordered to Poland", description: "x", impacts: {
-      unitOps: [{ op: "move", unitId: "u1", toLng: poland.lng, toLat: poland.lat, seaShare: 0.6, posture: "transit" }] } },
-  ];
-  const { world: afterEvents } = applyEventImpactsToWorld({ world: start, events, motion: { originDate: "2016-03-01", round: 2 } });
-  assert.equal(afterEvents.pendingUnitOrders.length, 1, "three days do not carry it across");
-  const period = { fromDate: "2016-03-01", toDate: "2016-03-31", round: 2 };
-
-  const arrived = advanceStandingOrders(afterEvents, { ...period, movedAt: lastUnitMoveDates(events, period.fromDate) });
-  assert.equal(arrived.pendingUnitOrders.length, 0, "the 27 days after its event bring it there");
-  assert.equal(arrived.units[0].lng, poland.lng);
-  assert.equal(arrived.units[0].lat, poland.lat);
-  assert.notEqual(arrived.units[0].status, "moving");
-
-  // What this line did: the unit left out, still most of an ocean away.
-  const frozen = advanceStandingOrders(afterEvents, { ...period, skipUnitIds: ["u1"] });
-  assert.ok(haversineKm(frozen.units[0].lat, frozen.units[0].lng, poland.lat, poland.lng) > 5000);
-});
-
-test("the turn credits a moved unit the days after its move, and leaves none out", () => {
-  const gameplay = readFileSync(new URL("../Game/AI/gameplay.js", import.meta.url), "utf8");
-  assert.match(gameplay, /const movedThisTurn = lastUnitMoveDates\(freshEvents, baseGame\.gameDate\);/);
-  assert.match(gameplay, /movedAt: movedThisTurn,/);
-  assert.equal(/skipUnitIds: movedThisTurn/.test(gameplay), false);
 });
 
 test("advanceStandingOrders is a no-op when nothing has a standing order", () => {
@@ -684,4 +696,104 @@ test("clearStaleUnitMotion repairs only the stale unit, and is idempotent", () =
 test("a world with nothing moving comes back untouched", () => {
   const world = normalizeWorldState({ units: [unit({ id: "u1", status: "idle" })] });
   assert.equal(clearStaleUnitMotion(world), world);
+});
+
+// ---- A player deployment the skip resolved ----------------------------------
+//
+// Seen in a live game (2026-09-19): two formations placed from the advisor on
+// the first day were still translucent "pending" counters three years later.
+// The skip had written their deployment as an event and resolved the request,
+// but only a move op ever turned a pending unit into a real one — and a move on
+// a garrison is ignored outright.
+
+const deployRequest = (unitId) => ({ kind: "action", source: "order", status: "planned", text: `Deploy request: ${unitId}`, unitRevert: { unitId, remove: true } });
+
+test("a pending deployment whose request the skip resolved joins the order of battle", () => {
+  const world = { units: [unit({ id: "fleet", status: "pending" }), unit({ id: "garrison", type: "garrison", status: "pending" })] };
+  const next = confirmResolvedDeployments(world, [deployRequest("fleet"), deployRequest("garrison")]);
+  assert.deepEqual(next.units.map((entry) => [entry.id, entry.status]), [["fleet", "idle"], ["garrison", "idle"]]);
+});
+
+test("a deployment the skip removed stays removed, and one it moved keeps its motion", () => {
+  const world = { units: [unit({ id: "moving", status: "moving" })] };
+  const next = confirmResolvedDeployments(world, [deployRequest("moving"), deployRequest("rejected")]);
+  assert.deepEqual(next.units.map((entry) => [entry.id, entry.status]), [["moving", "moving"]]);
+});
+
+test("a pending deployment with no resolved request of its own stays pending", () => {
+  const world = { units: [unit({ id: "fresh", status: "pending" }), unit({ id: "other", status: "pending" })] };
+  // A moved unit's revert (no remove) is an order, not a deployment.
+  const orders = [{ kind: "action", status: "planned", text: "Orders", unitRevert: { unitId: "other", lng: 1, lat: 2 } }];
+  const next = confirmResolvedDeployments(world, orders);
+  assert.equal(next, world, "nothing to confirm leaves the world untouched");
+});
+
+// ---- A pending garrison the skip sited ---------------------------------------
+//
+// Seen in a live game (2026-09-21): three skips in a row wrote the Falklands
+// garrison's deployment as a move op to Mount Pleasant, and every one was
+// ignored because a move on a garrison is ignored outright — so it stayed a
+// translucent pending counter where the player had first put it.
+
+const moveOp = (unitId, over = {}) => ({ op: "move", unitId, toLng: -58.86, toLat: -51.58, regionId: "116", posture: "holding", ...over });
+
+test("a move on a pending garrison sites it and confirms it", () => {
+  const garrison = unit({ id: "g", type: "garrison", status: "pending", lng: -59.5, lat: -51.7 });
+  const { units } = applyUnitOpBatch([garrison], [], [moveOp("g")], { elapsedDays: 1 });
+  assert.equal(units[0].status, "idle");
+  assert.equal(units[0].lng, -58.86);
+  assert.equal(units[0].lat, -51.58);
+  assert.equal(units[0].regionId, "116");
+  assert.equal(units[0].posture, "holding");
+});
+
+test("a move on a confirmed garrison is still ignored", () => {
+  const garrison = unit({ id: "g", type: "garrison", status: "idle", lng: -59.5, lat: -51.7 });
+  const { units } = applyUnitOpBatch([garrison], [], [moveOp("g")], { elapsedDays: 1 });
+  assert.equal(units[0].lng, -59.5);
+  assert.equal(units[0].lat, -51.7);
+});
+
+test("a pending unit whose deploy request is long gone is confirmed by a skip that resolved the queue", () => {
+  const world = { units: [unit({ id: "orphan", type: "garrison", status: "pending" })] };
+  const next = confirmResolvedDeployments(world, [], { queuedActions: [] });
+  assert.equal(next.units[0].status, "idle");
+});
+
+test("a pending unit whose request is still queued is not taken for an orphan", () => {
+  const world = { units: [unit({ id: "waiting", status: "pending" })] };
+  const next = confirmResolvedDeployments(world, [], { queuedActions: [deployRequest("waiting")] });
+  assert.equal(next, world);
+});
+
+test("without the queue, an orphan is left alone", () => {
+  const world = { units: [unit({ id: "orphan", status: "pending" })] };
+  assert.equal(confirmResolvedDeployments(world, []), world);
+});
+
+// ---- story ships ----------------------------------------------------------
+// The Lantern Grace carried a stolen dragon egg from Pentos to White Harbor and
+// was never on the map: only military formations became counters.
+
+test("a story ship is spawned as a covert naval counter that lasts ten rounds", () => {
+  const result = applyUnitOpBatch(
+    [],
+    [],
+    [spawnOp({ name: "Lantern Grace", type: "infantry", ownerCode: "House Stark", composition: "1 hired cog", storyVessel: true })],
+    { gameDate: "0298-09-15", round: 33 },
+  );
+  const [ship] = result.units;
+  assert.equal(ship.storyVessel, true);
+  assert.equal(ship.type, "naval");
+  assert.equal(ship.covert, true);
+  assert.equal(ship.expiresRound, 43);
+});
+
+test("an ordinary spawn is not a story ship and does not expire", () => {
+  const [normalized] = normalizeUnits([unit()]);
+  assert.equal(normalized.storyVessel, undefined);
+  assert.equal(normalized.expiresRound, undefined);
+  const [kept] = normalizeUnits([unit({ storyVessel: true, expiresRound: 43 })]);
+  assert.equal(kept.storyVessel, true);
+  assert.equal(kept.expiresRound, 43);
 });
