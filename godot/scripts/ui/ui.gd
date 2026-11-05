@@ -67,12 +67,13 @@ static func repo_path(relative: String) -> String:
 
 
 static func font(weight := 400, family := "Arial", spacing := 0) -> Font:
-	var key := "%s:%d:%d" % [family, weight, spacing]
+	var face := 700 if weight > 700 and weight < 800 else weight
+	var key := "%s:%d:%d" % [family, face, spacing]
 	if _fonts.has(key):
 		return _fonts[key]
 	var system := SystemFont.new()
 	system.font_names = PackedStringArray([family, "Segoe UI", "Helvetica", "Liberation Sans", "Segoe UI Emoji", "Segoe UI Symbol", "sans-serif"])
-	system.font_weight = weight
+	system.font_weight = face
 	system.antialiasing = TextServer.FONT_ANTIALIASING_GRAY
 	system.hinting = TextServer.HINTING_LIGHT
 	system.subpixel_positioning = TextServer.SUBPIXEL_POSITIONING_AUTO

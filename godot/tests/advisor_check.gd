@@ -52,6 +52,29 @@ func _until(condition: Callable, seconds: float) -> bool:
 	return false
 
 
+func _cover_gone() -> void:
+	var shell: Variant = main.get("shell")
+	if shell == null or shell.get("loading") == null:
+		return
+	var deadline := Time.get_ticks_msec() + 90000
+	while (shell.loading as GameLoadingScreen).is_open() and Time.get_ticks_msec() < deadline:
+		await process_frame
+	await _wait(0.5)
+
+
+func _shoot2x(name: String) -> void:
+	if shots.is_empty():
+		return
+	var before := root.size
+	root.size = Vector2i(before.x * 2, before.y * 2)
+	root.content_scale_factor = 2.0
+	await _frames(10)
+	root.get_viewport().get_texture().get_image().save_png(shots.path_join(name + "@2x.png"))
+	root.size = before
+	root.content_scale_factor = 1.0
+	await _frames(6)
+
+
 func _shoot(name: String) -> void:
 	await _frames(4)
 	await RenderingServer.frame_post_draw
@@ -182,6 +205,7 @@ func _run() -> void:
 	await main._on_country_chosen("France", "medium")
 	_say("game open")
 	await _wait(1.0)
+	await _cover_gone()
 
 	panel = AdvisorPanel.new()
 	main.hud.add_child(panel)
