@@ -973,6 +973,7 @@ const selectAllowedUnitTypes = (world) => (Array.isArray(world?.allowedUnitTypes
 const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResizeEnd, onOpenActions, onOpenProjects, requestedPrompt, onConsumeRequest }) => {
     const [messages, setMessages]   = useState([]);
     const [input, setInput]         = useState("");
+    const [typed, setTyped]         = useState(false);
     const [isLoading, setIsLoading] = useState(false);
     const [contacts, setContacts] = useState([]);
     const [chiefProfile, setChiefProfile] = useState(null);
@@ -1949,16 +1950,17 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
 
         {/* Input */}
         <div className="oh-advisor-composer">
+        <div className="oh-advisor-composer-field">
         <textarea
         className="oh-advisor-composer-input"
         ref={inputRef}
-        // A phone's keyboard has no Shift+Enter to speak of.
-        placeholder={recipientUnavailableReason || (selectedContact ? `Message ${selectedContact.name}…` : chiefProfile ? `Message ${chiefProfile.name}…` : isTouch ? "Ask your advisor…" : "Ask your advisor…  (Shift+Enter for a new line)")}
+        placeholder={recipientUnavailableReason || undefined}
         rows={1} value={input}
         disabled={recipientLocked}
         enterKeyHint="enter"
         onChange={e => {
             setInput(e.target.value);
+            setTyped(Boolean(e.target.value.trim()));
             resizeTextarea();
         }}
         onKeyDown={handleKeyDown}
@@ -1966,11 +1968,13 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         />
         <AdvisorMic
         disabled={isLoading || recipientLocked || !hasBootstrapped || loadFailed || saveFailed}
+        hidden={typed && Boolean(input.trim())}
         input={input}
-        onInput={setInput}
+        onInput={(text) => { setTyped(false); setInput(text); }}
         onSend={handleSend}
         threadKey={activeThreadId}
         />
+        </div>
         <button
         type="button"
         className="oh-advisor-send"

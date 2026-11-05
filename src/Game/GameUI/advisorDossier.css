@@ -301,10 +301,25 @@
   gap: .5rem;
   padding: .72rem .82rem;
 }
-.oh-advisor-composer-input {
+.oh-advisor-composer-field {
+  align-items: flex-end;
   background: var(--oh-ui-surface, #192b3b);
   border: 1px solid rgba(133, 183, 210, .3);
   border-radius: 6px;
+  box-sizing: border-box;
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  transition: background-color .15s, border-color .15s;
+}
+.oh-advisor-composer-field:focus-within {
+  background: var(--oh-ui-hover, #1c3246);
+  border-color: var(--oh-ui-accent, #82c8e5);
+  box-shadow: 0 0 0 1px rgba(130, 200, 229, .2);
+}
+.oh-advisor-composer-input {
+  background: transparent;
+  border: 0;
   box-sizing: border-box;
   color: #f0f6fa;
   flex: 1 1 auto;
@@ -320,11 +335,7 @@
   scrollbar-width: thin;
 }
 .oh-advisor-composer-input::placeholder { color: #859caf; }
-.oh-advisor-composer-input:focus {
-  background: var(--oh-ui-hover, #1c3246);
-  border-color: #82c8e5;
-  box-shadow: 0 0 0 1px rgba(130, 200, 229, .2);
-}
+.oh-advisor-composer-input:focus { background: transparent; }
 .oh-advisor-composer-input:disabled {
   color: #8d9baa;
   cursor: not-allowed;
@@ -353,46 +364,44 @@
   cursor: not-allowed;
   opacity: .7;
 }
-/* The microphone beside Send (AdvisorMic.jsx): the quiet grey of the composer
-   at rest, the accent while it listens. Its notes sit just above the bar. */
+/* The microphone inside the input box (AdvisorMic.jsx): a quiet icon at rest,
+   the accent while it listens. Its notes sit just above the bar. */
 .oh-advisor-composer { position: relative; }
 .oh-advisor-mic-wrap { display: flex; flex: 0 0 auto; }
 .oh-advisor-mic {
   align-items: center;
-  background: #192b3b;
-  border: 1px solid rgba(133, 183, 210, .3);
-  border-radius: 6px;
-  color: #c3d2dd;
+  background: transparent;
+  border: 0;
+  border-radius: 999px;
+  color: #8fa3b3;
   cursor: pointer;
   display: flex;
-  flex: 0 0 2.6rem;
-  height: 2.6rem;
+  flex: 0 0 2rem;
+  height: 2rem;
   justify-content: center;
+  margin: .3rem .3rem .3rem 0;
   padding: 0;
-  transition: background-color .15s, border-color .15s, color .15s;
-  width: 2.6rem;
+  transition: background-color .15s, color .15s;
+  width: 2rem;
 }
-.oh-advisor-mic:hover:not(:disabled) { background: #1c3246; border-color: #82c8e5; color: #f0f6fa; }
-.oh-advisor-mic:focus-visible { outline: 2px solid #a3def4; outline-offset: 2px; }
+.oh-advisor-mic:hover:not(:disabled) { background: rgba(255, 255, 255, .07); color: #f0f6fa; }
+.oh-advisor-mic:focus-visible { outline: 2px solid var(--oh-ui-accent, #a3def4); outline-offset: 1px; }
 .oh-advisor-mic[data-listening="true"] {
-  background: rgba(43, 193, 243, .16);
-  border-color: #2bc1f3;
-  color: #2bc1f3;
+  background: rgba(43, 193, 243, .14);
+  color: var(--oh-ui-accent, #2bc1f3);
   animation: oh-advisor-mic-pulse 1.6s ease-in-out infinite;
 }
 .oh-advisor-mic:disabled {
-  background: #1a2a38;
-  border-color: #2a4152;
-  color: #6f8494;
+  color: #5d7080;
   cursor: not-allowed;
-  opacity: .7;
+  opacity: .6;
 }
 @keyframes oh-advisor-mic-pulse {
   0%, 100% { box-shadow: 0 0 0 0 rgba(43, 193, 243, .35); }
   50% { box-shadow: 0 0 0 4px rgba(43, 193, 243, 0); }
 }
 .oh-advisor-mic-note {
-  background: #14212e;
+  background: var(--oh-ui-surface, #14212e);
   border: 1px solid rgba(133, 183, 210, .3);
   border-radius: 6px;
   bottom: calc(100% + .35rem);
@@ -420,13 +429,14 @@
   min-height: 2rem;
   padding: .25rem .7rem;
 }
-.oh-advisor-mic-button-primary { background: rgba(43, 193, 243, .16); border-color: #2bc1f3; color: #e6f8fe; }
+.oh-advisor-mic-button-primary { background: var(--oh-ui-active, rgba(43, 193, 243, .16)); border-color: var(--oh-ui-accent, #2bc1f3); color: #e6f8fe; }
 .oh-advisor-mic-button:hover { border-color: #82c8e5; }
 .oh-advisor-mic-progress { background: #192b3b; border-radius: 3px; height: 4px; margin-top: .45rem; overflow: hidden; }
-.oh-advisor-mic-progress span { background: #2bc1f3; display: block; height: 100%; transition: width .25s; }
+.oh-advisor-mic-progress span { background: var(--oh-ui-accent, #2bc1f3); display: block; height: 100%; transition: width .25s; }
 @media (max-width: 450px) {
   .oh-advisor-mic-note { right: .7rem; }
   .oh-advisor-mic-button { min-height: 2.45rem; }
+  .oh-advisor-mic { flex-basis: 2.3rem; height: 2.3rem; width: 2.3rem; }
 }
 @media (max-width: 450px) {
   .oh-advisor-recipients { padding: .5rem .65rem; }

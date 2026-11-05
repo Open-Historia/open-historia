@@ -230,7 +230,7 @@ export const ApiSetupPrompt = ({ providerLabel = "the selected provider", missin
     >
       <div
         style={{
-          background: "rgba(32,32,35,0.965)",
+          background: "var(--oh-ui-overlay-strong, rgba(32,32,35,0.965))",
           border: "1px solid var(--oh-hud-border)",
           borderRadius: "16px",
           boxShadow: "var(--oh-hud-shadow)",

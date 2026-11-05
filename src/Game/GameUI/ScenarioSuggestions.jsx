@@ -71,7 +71,7 @@ const buttonStyle = {
   minHeight: "2.1rem",
   padding: "0 0.9rem",
 };
-const primaryButtonStyle = { ...buttonStyle, background: "rgba(43,193,243,0.22)", borderColor: "rgba(43,193,243,0.5)", color: "#fff" };
+const primaryButtonStyle = { ...buttonStyle, background: "color-mix(in srgb, var(--oh-ui-accent, #2bc1f3) 22%, transparent)", borderColor: "color-mix(in srgb, var(--oh-ui-accent, #2bc1f3) 50%, transparent)", color: "#fff" };
 const quietTextStyle = { color: "rgba(255,255,255,0.58)", fontSize: "0.78rem", lineHeight: 1.5 };
 const labelStyle = {
   color: "rgba(255,255,255,0.72)",
@@ -425,7 +425,7 @@ const DialogFrame = ({ title, subtitle, onClose, children, footer }) => {
         role="dialog"
         aria-modal="true"
         style={{
-          background: "#1b1b1e",
+          background: "var(--oh-ui-surface, #1b1b1e)",
           border: "1px solid rgba(255,255,255,0.12)",
           borderRadius: isMobile ? 0 : 22,
           boxShadow: "0 24px 64px rgba(0,0,0,0.55)",
@@ -934,7 +934,7 @@ const ContributorSuggestions = ({ login, refs, reviews, busy, touch, onReview, o
       </div>
     )}
     {refs.map((ref) => (
-      <div key={ref.id} style={{ alignItems: "center", background: "rgba(43,193,243,0.08)", border: "1px solid rgba(43,193,243,0.25)", borderRadius: 12, display: "flex", flexWrap: "wrap", gap: "0.5rem", padding: "0.5rem 0.65rem" }}>
+      <div key={ref.id} style={{ alignItems: "center", background: "color-mix(in srgb, var(--oh-ui-accent, #2bc1f3) 8%, transparent)", border: "1px solid color-mix(in srgb, var(--oh-ui-accent, #2bc1f3) 25%, transparent)", borderRadius: 12, display: "flex", flexWrap: "wrap", gap: "0.5rem", padding: "0.5rem 0.65rem" }}>
         <div style={{ flex: 1, minWidth: "10rem" }}>
           <div style={{ fontSize: "0.84rem", fontWeight: 700 }}>
             {ref.author ? `Suggested changes from @${ref.author}` : "Suggested changes"}
@@ -1115,7 +1115,7 @@ export const SuggestionCountBadge = ({ count, onClick }) => {
       type="button"
       onClick={onClick}
       title="People have suggested changes to this scenario"
-      style={{ alignItems: "center", background: "rgba(43,193,243,0.22)", border: "1px solid rgba(43,193,243,0.55)", borderRadius: 999, color: "#fff", cursor: "pointer", display: "inline-flex", fontSize: "0.7rem", fontWeight: 700, gap: "0.3rem", padding: "0.3rem 0.6rem", position: "relative", zIndex: 3 }}
+      style={{ alignItems: "center", background: "color-mix(in srgb, var(--oh-ui-accent, #2bc1f3) 22%, transparent)", border: "1px solid color-mix(in srgb, var(--oh-ui-accent, #2bc1f3) 55%, transparent)", borderRadius: 999, color: "#fff", cursor: "pointer", display: "inline-flex", fontSize: "0.7rem", fontWeight: 700, gap: "0.3rem", padding: "0.3rem 0.6rem", position: "relative", zIndex: 3 }}
     >
       {count === 1 ? "💬 1 suggestion" : `💬 ${count} suggestions`}
     </button>
@@ -1129,7 +1129,7 @@ export const SuggestionsBanner = ({ scenarios, onOpen }) => {
     .filter((row) => row.count > 0);
   if (!rows.length) return null;
   return (
-    <div style={{ alignItems: "center", background: "rgba(43,193,243,0.1)", border: "1px solid rgba(43,193,243,0.3)", borderRadius: 16, display: "flex", flexWrap: "wrap", gap: "0.6rem", marginBottom: "1rem", padding: "0.7rem 0.9rem" }}>
+    <div style={{ alignItems: "center", background: "color-mix(in srgb, var(--oh-ui-accent, #2bc1f3) 10%, transparent)", border: "1px solid color-mix(in srgb, var(--oh-ui-accent, #2bc1f3) 30%, transparent)", borderRadius: 16, display: "flex", flexWrap: "wrap", gap: "0.6rem", marginBottom: "1rem", padding: "0.7rem 0.9rem" }}>
       <span style={{ fontSize: "0.86rem", fontWeight: 700 }}>💬 People have suggested changes to your scenarios</span>
       <span style={{ flex: 1 }} />
       {rows.map(({ scenario, count }) => (

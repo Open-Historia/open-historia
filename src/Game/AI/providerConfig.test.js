@@ -646,16 +646,17 @@ test("Political World generation and verification keep independent/inherited tas
   assert.equal(plan.implicit, false);
 });
 
-test("group chats, intelligence, demand checks and translation can have a model of their own", () => {
-  for (const key of ["chatActions", "intelligenceAssessment", "demandCheck", "translation"]) {
+test("group chats, intelligence and demand checks can have a model of their own; translation is no AI task", () => {
+  for (const key of ["chatActions", "intelligenceAssessment", "demandCheck"]) {
     assert.ok(config.AI_TASK_ROUTING.some((entry) => entry.key === key), key);
   }
+  assert.ok(!config.AI_TASK_ROUTING.some((entry) => entry.key === "translation"), "translation runs on the device");
   const [top] = config.getResolvedFallbackList();
   const small = config.addEntry({ connectionId: top.connectionId, model: "small-model" });
-  config.setTaskPick("translation", small);
-  assert.equal(config.resolveTaskFallbackEntries("translation").preferredEntryId, small);
-  config.setTaskPick("translation", "");
-  assert.equal(config.resolveTaskFallbackEntries("translation").preferredEntryId, "");
+  config.setTaskPick("demandCheck", small);
+  assert.equal(config.resolveTaskFallbackEntries("demandCheck").preferredEntryId, small);
+  config.setTaskPick("demandCheck", "");
+  assert.equal(config.resolveTaskFallbackEntries("demandCheck").preferredEntryId, "");
 });
 
 test("a group chat starts on the Leader chat model until it is given its own", () => {

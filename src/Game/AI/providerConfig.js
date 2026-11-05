@@ -275,7 +275,6 @@ export const AI_TASK_ROUTING = [
     { key: "spyIntercept", label: "Spy intercept", hint: "Small/mid-tier model", group: "Player" },
     { key: "intelligenceAssessment", label: "Intelligence assessment", hint: "Mid-tier model", group: "Player" },
     { key: "demandCheck", label: "Demand check", hint: "Small model: reads a leader's answer to a demand", group: "Player" },
-    { key: "translation", label: "Translation", hint: "Small/mid-tier: game text in your language", group: "Player" },
     { key: "advisor", label: "Advisor chat", hint: "Mid/high-tier: long conversational replies", group: "Chat" },
     { key: "diplomacy", label: "Leader chat", hint: "Mid/high-tier: in-character leaders", group: "Chat" },
     { key: "chatActions", label: "Group chat", hint: "Mid/high-tier: group chats and councils, on the Leader chat model unless set", group: "Chat" },

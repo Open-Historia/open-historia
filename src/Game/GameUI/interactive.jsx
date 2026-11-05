@@ -29,7 +29,7 @@ const selectScene = (world) => (isSceneInProgress(world?.activeInteractive) ? wo
 const selectOffer = (world) => world?.interactiveOffer ?? null;
 
 const panelStyle = {
-    background: "rgba(18,18,22,0.97)",
+    background: "var(--oh-ui-overlay-strong, rgba(18,18,22,0.97))",
     border: "1px solid rgba(250,204,21,0.38)",
     borderRadius: "16px",
     boxShadow: "0 18px 60px rgba(0,0,0,0.6), 0 0 0 1px rgba(250,204,21,0.06) inset",

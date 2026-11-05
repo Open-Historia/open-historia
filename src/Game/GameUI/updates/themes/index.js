@@ -23,9 +23,11 @@ import { MUSIC_CHROME } from "./musicChrome.js";
 import { ROSTRA_CHROME } from "./rostraChrome.js";
 import { SEASONS_CHROME } from "./seasonsChrome.js";
 import { SWARMS_CHROME } from "./swarmsChrome.js";
+import { THEMES_CHROME } from "./themesChrome.js";
 import { WARS_AND_FRONTS_2_CHROME } from "./warsAndFronts2Chrome.js";
 
 export const THEMES = Object.freeze({
+  themes: { Page: lazy(() => import("./Themes.jsx")), chrome: THEMES_CHROME },
   rostra: { Page: lazy(() => import("./Rostra.jsx")), chrome: ROSTRA_CHROME },
   airRaid: { Page: lazy(() => import("./AirRaid.jsx")), chrome: AIR_RAID_CHROME },
   espionage2: { Page: lazy(() => import("./Espionage2.jsx")), chrome: ESPIONAGE_2_CHROME },

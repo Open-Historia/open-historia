@@ -14,7 +14,7 @@ import { hostSharedGame, joinSharedGame, useSharedGame } from "../client/sharedG
 import PublicLobbies from "./PublicLobbies.jsx";
 
 const card = {
-  background: "#12141a",
+  background: "var(--oh-ui-surface, #12141a)",
   border: "1px solid rgba(255,255,255,0.09)",
   boxShadow: "0 14px 32px rgba(0,0,0,0.45)",
   borderRadius: "18px",
@@ -29,7 +29,7 @@ const button = {
   color: "rgba(246,246,248,0.94)", cursor: "pointer", display: "inline-flex", fontSize: "0.84rem", fontWeight: 650, gap: "0.4rem",
   justifyContent: "center", minHeight: "2.3rem", padding: "0 1.1rem",
 };
-const primary = { ...button, background: "rgba(43,193,243,0.18)", borderColor: "rgba(43,193,243,0.55)", color: "#e6f8ff" };
+const primary = { ...button, background: "color-mix(in srgb, var(--oh-ui-accent, #2bc1f3) 18%, transparent)", borderColor: "color-mix(in srgb, var(--oh-ui-accent, #2bc1f3) 55%, transparent)", color: "#e6f8ff" };
 const note = { color: "rgba(255,255,255,0.55)", fontSize: "0.78rem", lineHeight: 1.5, margin: "0.8rem 0 0" };
 const errorText = { color: "#fca5a5", fontSize: "0.82rem", margin: "0.7rem 0 0" };
 const grid = { display: "grid", gap: "0.85rem", gridTemplateColumns: "repeat(auto-fit, minmax(12rem, 1fr))" };

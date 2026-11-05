@@ -7,66 +7,56 @@
 //    built from the source by scripts/i18n/. This module applies it to the DOM
 //    as it renders: exact strings, patterns built around a value
 //    (phraseBook.js), and a run of text nodes React rendered from one template
-//    ("Found ", "12", " regions") read as the one string it is. In those
-//    languages the interface never costs an AI request. A string the pack
-//    lacks stays English and is listed in window.__ohI18n.missing, for the
-//    next pack.
+//    ("Found ", "12", " regions") read as the one string it is. A string the
+//    pack lacks stays English and is listed in window.__ohI18n.missing, for
+//    the next pack.
 // 2. CONTENT, what a scenario's author or a player made (scenario and game
 //    names and descriptions, polities and their roles, a scenario's own
 //    events, custom stats, region names, country names the pack lacks,
-//    Community posts), is translated by the configured AI model, in as few
-//    requests as possible, and saved to the server's language pack so each
-//    string is paid for once. Nobody pressed a button for these: they are
-//    background requests, sent only while Background AI allows
-//    (AI/requestBudget.js). Region names go only once they are shown.
-//    Where a small open model translates English into the player's language
-//    well (translationModels.js), it does this on the device instead, once
-//    the player has seen its size and said yes, and the AI gets only what the
-//    model could not do (translationModel.js, translationWorker.js).
+//    Community posts), is translated on this device by a translation model
+//    (translationModels.js, translationModel.js, translationWorker.js), and
+//    saved to the server's language pack so each string is translated once.
+//    Region names go only once they are shown. A language the model covers
+//    and no pack does (Danish, Hungarian, Romanian) has its interface
+//    translated by it as well.
 // 3. What the AI writes during play (events, chats, the advisor) arrives in
 //    the player's language already (languageDirective) and is left alone.
 //
-// A language without a shipped pack still works the old way: there the
-// interface goes through the AI as well, a batch at a time, and is saved to
-// the server's pack like content.
+// Nothing here is ever an AI request. A language with a model is played in
+// only once the player has said yes to its download (switchLanguage); said no,
+// the game is in English. The interface language changes where the player is,
+// without a reload: what was written over the page is put back to English and
+// the new language is laid over it.
 //
-// What is sent, and what of the answer is kept, is decided in
-// translationRules.js, which the tests call directly.
+// What is translated is decided in translationRules.js, which the tests call
+// directly.
 
-import { BACKGROUND_REQUEST, backgroundAiAllowance } from "../Game/AI/requestBudget.js";
 import {
   DEFAULT_LANGUAGE,
   LANGUAGES,
+  canTranslateTo,
   getStoredLanguage,
   hasShippedPack,
   isRtlLanguage,
   languageDisplayName,
+  setStoredLanguage,
   syncLanguageFromServer,
 } from "./i18n.js";
 import { createDateLocalizer } from "./localDates.js";
 import { createPhraseBook, fillSlots } from "./phraseBook.js";
-import { loadPromptTranslations } from "./promptTranslations.js";
+import { loadPromptTranslations, setPromptTranslations } from "./promptTranslations.js";
 import {
-  ENGINES,
   formatModelSize,
   modelChoiceKey,
   planModelBatch,
   readModelChoice,
-  splitPendingByEngine,
-  translationEngineFor,
   translationModelFor,
 } from "./translationModels.js";
 import {
-  BATCH_MAX_STRINGS,
-  BATCH_MIN_STRINGS,
-  aiWaitIsOver,
   authoredEventText,
-  chooseTranslationBatch,
   collectContentText,
   isNumericDate,
   isTranslatable,
-  readTranslationFailure,
-  readTranslationReply,
   routeUnknownText,
 } from "./translationRules.js";
 
@@ -78,19 +68,10 @@ const LEGACY_CACHE_PREFIX = "i18n_cache_";
 const CACHE_LIMIT = 8000;
 const MISSING_LIMIT = 3000;
 const SCAN_DEBOUNCE_MS = 350;
-const MAX_CONSECUTIVE_FAILURES = 3;
-// A run of failures pauses translation for a minute; the second run in a
-// session stops it until the game is reloaded, and the pill says so. Before,
-// the next DOM change restarted the cycle with the same strings, for as long
-// as the game was open. A call that found nothing in the Fallback list able to
-// answer is not one of these failures: see waitForAi.
-const MAX_COOLDOWNS = 2;
-const COOLDOWN_MS = 60000;
-// How long the AI settings must be left alone before a wait for them ends
-// (waitForAi): a key typed a character at a time is a change per character,
-// and each one would otherwise be tried as the key.
-const AI_SETTINGS_SETTLE_MS = 4000;
 const NOTICE_MS = 12000;
+// The download prompt is over everything, Settings and the first-time setup
+// included (Settings is 2147483000).
+const CARD_Z = 2147483200;
 const TRANSLATED_ATTRIBUTES = ["placeholder", "title", "aria-label", "aria-description", "alt"];
 
 // Elements whose text is user-authored, machine-formatted, or must stay
@@ -101,8 +82,7 @@ const TRANSLATED_ATTRIBUTES = ["placeholder", "title", "aria-label", "aria-descr
 // Text a player typed is theirs wherever it is shown, not only while it is in
 // the box they typed it in. A queued order, shown in the Actions panel once it
 // was written, was read as interface text: in a language with no shipped pack
-// it went to the AI and came back "translated" over the player's own words,
-// and with a pack a `{{slot}}` pattern or a " / " list could rewrite a piece
+// it was translated over the player's own words, and with a pack a `{{slot}}` pattern or a " / " list could rewrite a piece
 // of it (a player's report, 2026-11-02: "the client overwrites text inputs
 // through translation layers"). Such text, and the Game Master's preview the
 // model wrote in the player's language, carry data-no-translate (actions.jsx,
@@ -114,63 +94,51 @@ const ATTRIBUTE_SKIP_SELECTOR = "script, style, noscript, [contenteditable], [da
 // The progress pill's text: a pattern in the packs like any other string.
 const PROGRESS_TEXT = {
   label: "Translating to {{language}}…",
-  paused: "Translation paused — check your AI model in Settings → AI",
 };
 
-// The on-device model's prompt and its download (translationModels.js).
+// The translation model's prompt and its download (translationModels.js).
 const MODEL_PROMPT_TEXT = {
-  ask: "Translate on this device instead of with your AI model? It needs a one-time download of the Opus-MT translation model ({{size}}).",
+  ask: "Playing in {{language}} needs a one-time download of its translation model ({{size}}).",
   download: "Download",
-  decline: "Use my AI model",
+  keepEnglish: "Keep English",
+  cancel: "Cancel",
   downloading: "Downloading the translation model… {{progress}}%",
-  failed: "The translation model could not be downloaded or loaded. Your AI model translates instead.",
+  failed: "The translation model could not be downloaded.",
+  retry: "Try again",
+  unavailable: "The translation model could not be loaded. What it translates stays in English.",
 };
 
 let language = DEFAULT_LANGUAGE;
-// A shipped pack covers the interface: only content goes to the AI.
+// A shipped pack covers the interface: only content goes to the model.
 let packed = false;
 // Everything known: the server's pack (shipped + saved), over what this device
 // translated itself; and the game's dates, written the player's way
-// (localDates.js). Made for the language in startTranslator.
+// (localDates.js). Made for the language in startInLanguage.
 let book = createPhraseBook();
-// Translations the AI made on this device, kept until the server has them.
+// Translations the model made on this device, kept until the server has them.
 let learned = new Map();
 let pending = new Set();
-// The queued strings that are content only (queueContent): sent as background
-// requests while Background AI allows. Anything else in `pending` is the
-// interface of a language without a pack.
-const contentQueued = new Set();
 // The map's region names, not queued up front (a few thousand of them on the
-// built-in map): one goes to the AI once it is shown (routeUnknownText).
+// built-in map): one goes to the model once it is shown (routeUnknownText).
 let regionNames = new Set();
-// Strings the model answered with an empty or non-text entry: not kept, and
-// not asked about again this session.
-const unusable = new Set();
-const missing = new Set();
-let inFlight = false;
+// Strings the model gave no usable answer for: left in English, and not asked
+// about again this session.
+let unusable = new Set();
+let missing = new Set();
+// The generation of the language in use: each start in a language is a new
+// one, and work begun for an older one is dropped when it ends.
+let generation = 0;
+// The generation whose queue is being worked through, or 0.
+let inFlight = 0;
 let stopped = false;
-let cooldownUntil = 0;
-let failureCount = 0;
-let cooldownCount = 0;
-// Set by repeated failures (MAX_COOLDOWNS): nothing more is sent this session.
-let halted = false;
-// Nothing in the Fallback list can answer (waitForAi): { until }, the time the
-// first Spent model comes back when that is known. Nothing is sent meanwhile.
-let waitingForAi = null;
-let aiSettingsTimer = null;
-// The reason last logged for a wait, so the same one is said once.
-let lastAiWaitReason = "";
-let aiWaitNoticeShown = false;
-// Content is waiting on Background AI: the pill is not shown for it.
-let heldBack = false;
-// The on-device model (translationModels.js): loaded this session, or failed
-// to download or load (then the AI translates, as without one); the strings
-// whose answer from it was refused (they go to the AI); the prompt asking the
-// player, and the download's progress, both plain DOM like the pill.
+// The translation model (translationModels.js): loaded this session, failed to
+// load (what it would translate stays English), or on its way; the language
+// a switch already loaded it for; the prompt's card, plain DOM like the pill.
 let modelReady = false;
 let modelFailed = false;
 let modelLoading = null;
-const modelRefused = new Set();
+let preparedModel = "";
+let modelDownloading = false;
 let modelCardEl = null;
 let noticeTimer = null;
 let observer = null;
@@ -181,6 +149,8 @@ let unsyncedEntries = {};
 let syncTimer = null;
 let updatedEventTimer = null;
 let translatorActive = false;
+let listenersInstalled = false;
+let switching = null;
 
 // node → { english, written }: the English last rendered there, and what this
 // module wrote over it. A value equal to `written` is ours; anything else is
@@ -197,24 +167,28 @@ const runsThisPass = new Set();
 const cacheKey = () => `${CACHE_PREFIX}${language}`;
 
 // New translations are pushed to the server's language pack (debounced), so
-// every device — and every future session — reuses them instead of paying
-// for the same AI call again. The pack lives under server/data, which the
-// update script never touches.
+// every device, and every future session, reuses them instead of translating
+// them again. The pack lives under server/data, which the update script never
+// touches.
+const sendEntries = async (code, entries) => {
+  if (Object.keys(entries).length === 0) return;
+  try {
+    await fetch(`/api/lang/${code}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ entries }),
+    });
+  } catch {
+    // Old server / offline: localStorage still has them for this device.
+  }
+};
+
 const syncEntriesToServer = () => {
   clearTimeout(syncTimer);
-  syncTimer = setTimeout(async () => {
+  syncTimer = setTimeout(() => {
     const entries = unsyncedEntries;
     unsyncedEntries = {};
-    if (Object.keys(entries).length === 0) return;
-    try {
-      await fetch(`/api/lang/${language}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ entries }),
-      });
-    } catch {
-      // Old server / offline: localStorage still has them for this device.
-    }
+    void sendEntries(language, entries);
   }, 2000);
 };
 
@@ -253,16 +227,19 @@ const loadCache = () => {
   book.setAll(learned);
 };
 
+const writeCache = () => {
+  if (language === DEFAULT_LANGUAGE || !learned.size) return;
+  try {
+    const entries = Array.from(learned.entries()).slice(-CACHE_LIMIT);
+    localStorage.setItem(cacheKey(), JSON.stringify(Object.fromEntries(entries)));
+  } catch {
+    // Storage full/blocked: translations still work for this session.
+  }
+};
+
 const persistCache = () => {
   clearTimeout(persistTimer);
-  persistTimer = setTimeout(() => {
-    try {
-      const entries = Array.from(learned.entries()).slice(-CACHE_LIMIT);
-      localStorage.setItem(cacheKey(), JSON.stringify(Object.fromEntries(entries)));
-    } catch {
-      // Storage full/blocked: translations still work for this session.
-    }
-  }, 1500);
+  persistTimer = setTimeout(writeCache, 1500);
 };
 
 // ---- progress pill (plain DOM — must exist before/outside React) ----
@@ -272,17 +249,17 @@ const showProgress = () => {
   progressEl = document.createElement("div");
   progressEl.setAttribute("data-no-translate", "");
   progressEl.style.cssText =
-    "position:fixed;bottom:5.2rem;left:50%;transform:translateX(-50%);z-index:10075;" +
-    "background:rgba(24,24,27,0.96);border:1px solid rgba(255,255,255,0.25);border-radius:999px;" +
-    "color:#fff;font-family:sans-serif;font-size:0.8rem;font-weight:600;padding:0.45rem 0.95rem;" +
+    `position:fixed;bottom:5.2rem;left:50%;transform:translateX(-50%);z-index:${CARD_Z};` +
+    "background:var(--oh-ui-surface,rgba(24,24,27,0.96));border:1px solid var(--oh-ui-line,rgba(255,255,255,0.25));border-radius:999px;" +
+    "color:var(--oh-ui-text,#fff);font-family:sans-serif;font-size:0.8rem;font-weight:600;padding:0.45rem 0.95rem;" +
     "box-shadow:0 6px 24px rgba(0,0,0,0.5);pointer-events:none;";
   document.body.appendChild(progressEl);
 };
 
 const updateProgress = () => {
-  // Halted, or waiting for the AI: the pill holds its notice until it times out.
-  if (!progressEl || halted || waitingForAi) return;
-  if (pending.size === 0 || heldBack || modelCardEl) {
+  // The download's own words stay in the pill while it lasts.
+  if (!progressEl || modelDownloading) return;
+  if (pending.size === 0 || modelCardEl || !modelInUse()) {
     progressEl.remove();
     progressEl = null;
     return;
@@ -308,7 +285,7 @@ const showNotice = (english) => {
 
 // A rendered string the book has nothing for (translationRules.js
 // routeUnknownText). With a shipped pack the interface stays English and is
-// listed for the next pack; without one it goes to the AI. A region name is
+// listed for the next pack; without one it goes to the model. A region name is
 // content either way.
 const noteUnknown = (trimmed) => {
   if (unusable.has(trimmed)) return;
@@ -317,9 +294,7 @@ const noteUnknown = (trimmed) => {
     queueContent(trimmed);
   } else if (route === "missing") {
     if (missing.size < MISSING_LIMIT) missing.add(trimmed);
-  } else {
-    // Needed by the interface now, whatever queued it first.
-    contentQueued.delete(trimmed);
+  } else if (modelInUse()) {
     pending.add(trimmed);
   }
 };
@@ -477,9 +452,9 @@ const scheduleScan = () => {
   scanTimer = setTimeout(scan, SCAN_DEBOUNCE_MS);
 };
 
-// Mutations apply what is known SYNCHRONOUSLY (no debounce, no AI wait) so new
-// panels open translated instead of flashing English; only new content waits
-// for the debounced scan and the AI round-trip.
+// Mutations apply what is known SYNCHRONOUSLY (no debounce, no model wait) so
+// new panels open translated instead of flashing English; only new content
+// waits for the debounced scan and the model.
 const handleMutations = (mutations) => {
   if (stopped) return;
   runsThisPass.clear();
@@ -505,67 +480,38 @@ const handleMutations = (mutations) => {
   scheduleScan();
 };
 
-// ---- translation calls ----
-
-// `kind` (translationRules.js chooseTranslationBatch): "interface" or
-// "content". Either way nobody pressed a button for it, so it is counted as a
-// background request.
-const translateBatch = async (strings, kind) => {
-  // Late import: translator boots at app start, before the AI module's
-  // dependency chain (prompt packs, provider config) needs to exist.
-  const { callAI } = await import("../Game/AI/main.jsx");
-  const name = languageDisplayName(language);
-
-  const systemPrompt =
-    `You are the translation engine for a grand-strategy game. ` +
-    (packed
-      ? `The strings are the game's content: names of countries, polities and places, scenario and saved-game names and descriptions, custom statistics, community posts. `
-      : `The strings are its interface and its content. `) +
-    `Translate each English string in the user's JSON array into ${name} (${language}).\n` +
-    `Rules:\n` +
-    `- Answer with ONLY a JSON array of ${strings.length} strings: the translations, same order, same length.\n` +
-    `- Keep numbers, dates' meaning, emoji, punctuation style, and placeholders such as \${...} intact.\n` +
-    `- Country, region, and place names take their standard ${name} forms when they exist; otherwise keep them unchanged.\n` +
-    `- If a string is already in ${name} or is a proper name/code with no translation, return it unchanged.\n` +
-    `- Never add commentary, keys, or markdown.`;
-
-  // Named, so the request count (AI/requestBudget.js) can say what these were:
-  // a first pass over a new language is requests nobody pressed a button for,
-  // and "Used today, by task" is where a player finds that out.
-  return callAI(systemPrompt, [
-    { role: "user", parts: [{ text: JSON.stringify(strings) }] },
-  ], {
-    languageMode: "none",
-    logLabel: kind === "content" ? "content translation" : "interface translation",
-    taskKey: "translation",
-    requestKind: BACKGROUND_REQUEST,
-  });
-};
-
-// Shrinks on failure, recovers on success (see BATCH_MIN_STRINGS).
-let batchStrings = BATCH_MAX_STRINGS;
-
-// Background AI's say (the switch, its daily cap, the reserve), asked before
-// each batch of content. The interface of a language without a pack is not
-// held back by it: without it that language cannot be read at all.
-const contentAllowed = () => {
-  try {
-    return backgroundAiAllowance().allowed;
-  } catch {
-    return false;
-  }
-};
-
 // Done with: translated, or given up on for this session.
 const settle = (source) => {
   pending.delete(source);
-  contentQueued.delete(source);
+};
+
+// Everything this module wrote over the page, put back to the English React
+// rendered, so another language can be laid over it (or none).
+const restoreEnglish = () => {
+  if (typeof document === "undefined" || !document.body) return;
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const record = nodeRecords.get(node);
+    if (!record) continue;
+    if (node.nodeValue === record.written) node.nodeValue = record.english;
+    nodeRecords.delete(node);
+  }
+  for (const element of document.body.querySelectorAll(ATTRIBUTE_SELECTOR)) {
+    const records = attributeRecords.get(element);
+    if (!records) continue;
+    for (const [attribute, record] of Object.entries(records)) {
+      if (element.getAttribute(attribute) === record.written) element.setAttribute(attribute, record.english);
+    }
+    attributeRecords.delete(element);
+  }
+  if (titleRecord && document.title === titleRecord.written) document.title = titleRecord.english;
+  titleRecord = null;
 };
 
 // ---- the translation model on this device ----
 
-// The player's answer for this language (translationModels.js modelChoiceKey).
-const storedModelChoice = (code = language) => {
+// The player's answer for a language (translationModels.js modelChoiceKey).
+const storedModelChoice = (code) => {
   try {
     return readModelChoice(localStorage.getItem(modelChoiceKey(code)));
   } catch {
@@ -574,16 +520,22 @@ const storedModelChoice = (code = language) => {
 };
 
 // What was answered this session, for a device that cannot store it.
-let sessionModelChoice = "";
+const sessionModelChoices = new Map();
 
-const storeModelChoice = (choice, code = language) => {
+const modelChoice = (code = language) => storedModelChoice(code) || sessionModelChoices.get(code) || "";
+
+const storeModelChoice = (choice, code) => {
+  sessionModelChoices.set(code, choice);
   try {
     localStorage.setItem(modelChoiceKey(code), choice);
   } catch {
     // Storage blocked: the answer holds for this session.
   }
-  if (code === language) sessionModelChoice = choice;
 };
+
+// The model translates for the language in use: it has one, the player said
+// yes to it, and it has not failed this session.
+const modelInUse = () => Boolean(translationModelFor(language)) && modelChoice() === "yes" && !modelFailed;
 
 const loadModelModule = () => import("./translationModel.js");
 
@@ -592,32 +544,51 @@ const removeModelCard = () => {
   modelCardEl = null;
 };
 
-// The card the prompt and the download share: where the pill is, grey, with
-// the accent on what the player is asked to press.
-const modelCard = () => {
+// The card the prompt and the download share, over whatever is on screen: a
+// game, a menu, Settings or the first-time setup. In the interface theme's
+// colours (runtime/uiTheme.js), the original grey without one.
+const modelCard = (code) => {
   if (typeof document === "undefined" || !document.body) return null;
   removeModelCard();
-  if (progressEl) {
-    progressEl.remove();
-    progressEl = null;
-  }
   modelCardEl = document.createElement("div");
   modelCardEl.setAttribute("data-no-translate", "");
   modelCardEl.style.cssText =
-    "position:fixed;bottom:5.2rem;left:50%;transform:translateX(-50%);z-index:10075;" +
-    "width:min(26rem,calc(100vw - 2rem));box-sizing:border-box;" +
-    "background:rgba(24,24,27,0.97);border:1px solid rgba(255,255,255,0.18);border-radius:10px;" +
-    "color:#fff;font-family:sans-serif;font-size:0.8rem;line-height:1.4;padding:0.75rem 0.9rem;" +
-    "box-shadow:0 6px 24px rgba(0,0,0,0.5);";
+    `position:fixed;inset:0;z-index:${CARD_Z};display:flex;align-items:center;justify-content:center;` +
+    "padding:1rem;box-sizing:border-box;background:rgba(0,0,0,0.55);";
+  const card = document.createElement("div");
+  card.setAttribute("role", "dialog");
+  card.setAttribute("aria-modal", "true");
+  card.dir = isRtlLanguage(code) ? "rtl" : "ltr";
+  card.style.cssText =
+    "width:min(26rem,100%);box-sizing:border-box;background:var(--oh-ui-surface,#1b1b1e);" +
+    "border:1px solid var(--oh-ui-line,rgba(255,255,255,0.14));border-radius:12px;" +
+    "color:var(--oh-ui-text,#f4f4f5);font-family:sans-serif;font-size:0.88rem;line-height:1.45;" +
+    "padding:1rem 1.1rem;box-shadow:0 18px 48px rgba(0,0,0,0.55);";
+  modelCardEl.append(card);
   document.body.appendChild(modelCardEl);
-  return modelCardEl;
+  return card;
 };
 
-// A text of the card in the player's language: the slots filled, then looked
-// up whole, as the pill's is.
-const say = (english, slots = {}) => {
+// A text of the card in a language: the slots filled, then looked up whole,
+// as the pill's is.
+const say = (english, slots = {}, words = book) => {
   const filled = english.replace(/\{\{(\w+)\}\}/g, (match, name) => (name in slots ? String(slots[name]) : match));
-  return book.translate(filled) ?? filled;
+  return words.translate(filled) ?? filled;
+};
+
+// The words of the language being chosen, so it is asked about in itself: its
+// shipped pack, where it has one, else English.
+const wordsFor = async (code) => {
+  if (code === language) return book;
+  const words = createPhraseBook({ localizeValue: createDateLocalizer(code) });
+  if (!hasShippedPack(code)) return words;
+  try {
+    const response = await fetch(`/api/lang/${code}`);
+    if (response.ok) words.setAll(await response.json());
+  } catch {
+    // Offline: asked in English.
+  }
+  return words;
 };
 
 const cardButton = (label, primary, onClick) => {
@@ -625,102 +596,153 @@ const cardButton = (label, primary, onClick) => {
   button.type = "button";
   button.textContent = label;
   button.style.cssText =
-    "font:inherit;font-weight:600;border-radius:6px;padding:0.35rem 0.8rem;cursor:pointer;" +
+    "font:inherit;font-weight:600;border-radius:7px;padding:0.45rem 0.95rem;cursor:pointer;" +
     (primary
-      ? "background:#2bc1f3;color:#0b0b0d;border:1px solid #2bc1f3;"
-      : "background:transparent;color:rgba(255,255,255,0.85);border:1px solid rgba(255,255,255,0.25);");
+      ? "background:var(--oh-ui-text,#f4f4f5);color:var(--oh-ui-bg,#0b0b0d);border:1px solid var(--oh-ui-text,#f4f4f5);"
+      : "background:transparent;color:var(--oh-ui-text,rgba(255,255,255,0.85));border:1px solid var(--oh-ui-line,rgba(255,255,255,0.25));");
   button.addEventListener("click", onClick);
   return button;
 };
 
-// Asked once per language, the first time something needs translating; the
-// queue waits for the answer, so nothing goes to the AI meanwhile.
-const askAboutModel = () => {
-  if (modelCardEl) return;
-  const entry = translationModelFor(language);
-  const card = modelCard();
-  if (!card || !entry) return;
-  card.setAttribute("role", "dialog");
-  const text = document.createElement("p");
-  text.style.margin = "0 0 0.6rem";
-  text.textContent = say(MODEL_PROMPT_TEXT.ask, { size: formatModelSize(entry.bytes) });
+const cardText = (card, text) => {
+  const paragraph = document.createElement("p");
+  paragraph.style.margin = "0 0 0.8rem";
+  paragraph.textContent = text;
+  card.append(paragraph);
+  return paragraph;
+};
+
+const cardActions = (card, ...buttons) => {
   const actions = document.createElement("div");
-  actions.style.cssText = "display:flex;justify-content:flex-end;gap:0.5rem;";
-  const answer = (choice) => () => {
-    storeModelChoice(choice);
-    removeModelCard();
-    void processQueue();
-  };
-  actions.append(
-    cardButton(say(MODEL_PROMPT_TEXT.decline), false, answer("no")),
-    cardButton(say(MODEL_PROMPT_TEXT.download), true, answer("yes")),
-  );
-  card.append(text, actions);
+  actions.style.cssText = "display:flex;justify-content:flex-end;flex-wrap:wrap;gap:0.5rem;";
+  actions.append(...buttons);
+  card.append(actions);
 };
 
-const showModelProgress = (percent) => {
-  if (!modelCardEl || modelCardEl.getAttribute("role") !== "status") {
-    const card = modelCard();
-    if (!card) return;
-    card.setAttribute("role", "status");
-    const text = document.createElement("p");
-    text.style.margin = "0 0 0.5rem";
-    const track = document.createElement("div");
-    track.style.cssText = "height:4px;border-radius:2px;background:rgba(255,255,255,0.12);overflow:hidden;";
-    const fill = document.createElement("span");
-    fill.style.cssText = "display:block;height:100%;width:0;background:#2bc1f3;";
-    track.append(fill);
-    card.append(text, track);
+// Downloads (once) and loads a language's model, with its progress.
+const prepareModel = async (code, onProgress) => {
+  const { loadTranslationModel, translationModelCached } = await loadModelModule();
+  const cached = await translationModelCached(code);
+  await loadTranslationModel(code, ({ loaded, total }) => {
+    if (!cached && total) onProgress((loaded / total) * 100);
+  });
+  preparedModel = code;
+};
+
+// Asked before a language with a model is played in: its size, and Download
+// or Keep English. A yes downloads it there and then, the card showing how far
+// it is. Resolves true once the model is ready, false when the player keeps
+// the language they had.
+const askForModel = (code) => new Promise((resolve) => {
+  const entry = translationModelFor(code);
+  if (!entry) {
+    resolve(true);
+    return;
   }
-  const value = Math.max(0, Math.min(100, Math.floor(percent)));
-  modelCardEl.firstChild.textContent = say(MODEL_PROMPT_TEXT.downloading, { progress: value });
-  modelCardEl.lastChild.firstChild.style.width = `${value}%`;
-};
+  let settled = false;
+  const finish = (value) => {
+    if (settled) return;
+    settled = true;
+    removeModelCard();
+    resolve(value);
+  };
+  void wordsFor(code).then((words) => {
+    const native = LANGUAGES.find((item) => item.code === code)?.native || languageDisplayName(code);
+    const declineLabel = language === DEFAULT_LANGUAGE || language === code ? MODEL_PROMPT_TEXT.keepEnglish : MODEL_PROMPT_TEXT.cancel;
+    const decline = () => {
+      storeModelChoice("no", code);
+      finish(false);
+    };
+    const download = () => {
+      storeModelChoice("yes", code);
+      const card = modelCard(code);
+      if (!card) {
+        finish(false);
+        return;
+      }
+      card.setAttribute("role", "status");
+      const text = cardText(card, say(MODEL_PROMPT_TEXT.downloading, { progress: 0 }, words));
+      const track = document.createElement("div");
+      track.style.cssText = "height:4px;border-radius:2px;background:rgba(255,255,255,0.12);overflow:hidden;";
+      const fill = document.createElement("span");
+      fill.style.cssText = "display:block;height:100%;width:0;background:var(--oh-ui-text,#f4f4f5);transition:width .25s;";
+      track.append(fill);
+      card.append(track);
+      prepareModel(code, (percent) => {
+        const value = Math.max(0, Math.min(100, Math.floor(percent)));
+        text.textContent = say(MODEL_PROMPT_TEXT.downloading, { progress: value }, words);
+        fill.style.width = `${value}%`;
+      }).then(() => finish(true), (error) => {
+        console.warn(`[i18n] the translation model did not download (${error?.message || "unknown"}).`);
+        failed();
+      });
+    };
+    const failed = () => {
+      const card = modelCard(code);
+      if (!card) {
+        finish(false);
+        return;
+      }
+      cardText(card, say(MODEL_PROMPT_TEXT.failed, {}, words));
+      cardActions(card,
+        cardButton(say(declineLabel, {}, words), false, decline),
+        cardButton(say(MODEL_PROMPT_TEXT.retry, {}, words), true, download));
+    };
+    const card = modelCard(code);
+    if (!card) {
+      finish(false);
+      return;
+    }
+    cardText(card, say(MODEL_PROMPT_TEXT.ask, { language: native, size: formatModelSize(entry.bytes) }, words));
+    cardActions(card,
+      cardButton(say(declineLabel, {}, words), false, decline),
+      cardButton(say(MODEL_PROMPT_TEXT.download, {}, words), true, download));
+  });
+});
 
-// Downloads the model if this device does not have it yet (the player said
-// yes to its size), and loads it. A failure leaves the AI translating, as it
-// would without a model, for the rest of the session.
+// Loads the model the player already said yes to: from this device, or
+// downloaded again (the pill says how far) should its copy have gone. One that
+// will not load leaves what it would translate in English for the session.
 const ensureModel = () => {
   if (!modelLoading) {
+    const code = language;
+    const run = generation;
     modelLoading = (async () => {
       const { loadTranslationModel, translationModelCached } = await loadModelModule();
-      const cached = await translationModelCached(language);
-      if (!cached) showModelProgress(0);
-      await loadTranslationModel(language, ({ loaded, total }) => {
-        if (!cached && total) showModelProgress((loaded / total) * 100);
+      const cached = await translationModelCached(code);
+      if (!cached) modelDownloading = true;
+      await loadTranslationModel(code, ({ loaded, total }) => {
+        if (cached || !total || run !== generation) return;
+        showProgress();
+        if (progressEl) progressEl.textContent = say(MODEL_PROMPT_TEXT.downloading, { progress: Math.floor((loaded / total) * 100) });
       });
-      removeModelCard();
+      modelDownloading = false;
+      if (run !== generation) return;
       modelReady = true;
+      updateProgress();
     })().catch((error) => {
-      removeModelCard();
+      modelDownloading = false;
+      if (run !== generation) return;
       modelFailed = true;
-      console.warn(`[i18n] the translation model is not available (${error?.message || "unknown"}); the AI model translates instead.`);
-      showNotice(MODEL_PROMPT_TEXT.failed);
+      console.warn(`[i18n] the translation model is not available (${error?.message || "unknown"}); what it would translate stays in English.`);
+      showNotice(MODEL_PROMPT_TEXT.unavailable);
     });
   }
   return modelLoading;
 };
 
-// Who translates now: the model, the AI, or nobody until the player answers.
-const engineNow = async () => {
-  const choice = storedModelChoice() || sessionModelChoice;
-  const engine = translationEngineFor({ language, choice, failed: modelFailed });
-  if (engine !== ENGINES.MODEL || modelReady) return engine;
-  await ensureModel();
-  return modelFailed ? ENGINES.AI : ENGINES.MODEL;
-};
-
-// One batch through the model. What it answers well is kept as the AI's answer
-// is; the rest is refused and stays queued for the AI. A model that stops
-// working hands everything back to the AI.
-const translateOnDevice = async (batch) => {
+// One batch through the model. What it answers well is kept and saved to the
+// server's pack; what it does not stays English for the session.
+const translateOnDevice = async (batch, run) => {
   try {
     const { translateWithModel } = await loadModelModule();
     const answers = await translateWithModel(language, batch);
+    if (run !== generation) return;
     batch.forEach((source, index) => {
       const value = answers[index];
       if (value == null) {
-        modelRefused.add(source);
+        unusable.add(source);
+        settle(source);
         return;
       }
       book.set(source, value);
@@ -729,210 +751,27 @@ const translateOnDevice = async (batch) => {
       settle(source);
     });
   } catch (error) {
+    if (run !== generation) return;
     modelFailed = true;
-    console.warn(`[i18n] the translation model stopped (${error?.message || "unknown"}); the AI model translates instead.`);
+    console.warn(`[i18n] the translation model stopped (${error?.message || "unknown"}); what it would translate stays in English.`);
   }
-};
-
-// For Settings: the model for the language the game is in, and the answer.
-export const translationModelOffer = () => {
-  const code = getStoredLanguage();
-  const entry = code === DEFAULT_LANGUAGE ? null : translationModelFor(code);
-  if (!entry) return null;
-  const choice = storedModelChoice(code) || (code === language ? sessionModelChoice : "");
-  return { size: formatModelSize(entry.bytes), on: choice === "yes" };
-};
-
-// Settings' switch. Off removes the download from this device.
-export const setTranslationModelOn = async (on) => {
-  const code = getStoredLanguage();
-  if (!translationModelFor(code)) return;
-  storeModelChoice(on ? "yes" : "no", code);
-  if (code !== language) return;
-  removeModelCard();
-  if (on) {
-    modelFailed = false;
-    if (!modelReady) modelLoading = null;
-    modelRefused.clear();
-    void processQueue();
-    return;
-  }
-  modelReady = false;
-  modelLoading = null;
-  try {
-    const { forgetTranslationModel } = await loadModelModule();
-    await forgetTranslationModel(code);
-  } catch {
-    // Nothing was downloaded.
-  }
-  void processQueue();
-};
-
-// A run of failures pauses for a minute; the MAX_COOLDOWNS-th run stops
-// translation for the session and says so in the pill.
-const noteFailure = (error) => {
-  failureCount += 1;
-  if (failureCount < MAX_CONSECUTIVE_FAILURES) return;
-  failureCount = 0;
-  cooldownCount += 1;
-  if (cooldownCount >= MAX_COOLDOWNS) {
-    halted = true;
-    console.warn(
-      `[i18n] translation stopped for this session after repeated failures (${error?.message || "unknown"}). ` +
-      `Untranslated text stays in English; check the AI provider settings and reload to try again.`,
-    );
-    showNotice(PROGRESS_TEXT.paused);
-    return;
-  }
-  cooldownUntil = Date.now() + COOLDOWN_MS;
-  console.warn(
-    `[i18n] translation paused for 60s after repeated failures (${error?.message || "unknown"}). ` +
-    `Check the AI provider settings; untranslated text stays in English meanwhile.`,
-  );
-  if (progressEl) {
-    progressEl.remove();
-    progressEl = null;
-  }
-};
-
-// Nothing in the Fallback list can answer (translationRules.js
-// readTranslationFailure): no key yet, or every model Unusable or Spent. That
-// is not counted towards a pause, because asking again cannot work. Nothing
-// more is sent until the Fallback list says it changed and something in it can
-// answer (onFallbackChanged), or a Spent model's allowance is back. The log
-// hears each reason once, and the pill says it once.
-const waitForAi = (error, failure) => {
-  waitingForAi = { until: failure.until };
-  failureCount = 0;
-  const reason = error?.message || "unknown";
-  if (reason !== lastAiWaitReason) {
-    lastAiWaitReason = reason;
-    console.warn(
-      `[i18n] translation is waiting for an AI model that can answer (${reason}). ` +
-      `Untranslated text stays in English; it goes on by itself once a model in Settings → AI can answer.`,
-    );
-  }
-  if (!aiWaitNoticeShown) {
-    aiWaitNoticeShown = true;
-    showNotice(PROGRESS_TEXT.paused);
-  } else if (progressEl) {
-    progressEl.remove();
-    progressEl = null;
-  }
-};
-
-// Whether anything in the Fallback list can answer now. Asked only while
-// waiting. The modules are the AI's, loaded late as callAI is.
-const fallbackListCanAnswer = async () => {
-  try {
-    const [{ fallbackStateStore, getResolvedFallbackList }, { fallbackAvailability }] = await Promise.all([
-      import("../Game/AI/providerConfig.js"),
-      import("../Game/AI/fallbackRunner.js"),
-    ]);
-    const entries = getResolvedFallbackList();
-    return entries.length > 0 && fallbackAvailability({ entries, store: fallbackStateStore }).canAnswer;
-  } catch {
-    return false;
-  }
-};
-
-// The Fallback list changed: an edit in Settings, or a mark a call left on an
-// entry (providerConfig.js announces both, this module's own failed call
-// included, which is why the list is asked rather than taken at its word).
-// While waiting, and once the settings have been left alone for a moment,
-// translation goes on if something can answer.
-const onFallbackChanged = () => {
-  if (!waitingForAi || stopped) return;
-  clearTimeout(aiSettingsTimer);
-  aiSettingsTimer = setTimeout(async () => {
-    if (!waitingForAi || stopped) return;
-    if (!aiWaitIsOver(waitingForAi, { canAnswer: await fallbackListCanAnswer() })) return;
-    waitingForAi = null;
-    void processQueue();
-  }, AI_SETTINGS_SETTLE_MS);
 };
 
 const processQueue = async () => {
-  if (inFlight || stopped || halted || pending.size === 0 || Date.now() < cooldownUntil) {
+  const run = generation;
+  if (inFlight === run || stopped || pending.size === 0 || !modelInUse()) {
     return;
   }
-  // Waiting for the AI. A change to the Fallback list ends that
-  // (onFallbackChanged); here only the clock can, when a Spent model is back.
-  if (waitingForAi) {
-    if (!aiWaitIsOver(waitingForAi)) return;
-    waitingForAi = null;
-  }
 
-  inFlight = true;
+  inFlight = run;
   try {
-    while (pending.size > 0 && !stopped && !halted && !waitingForAi && Date.now() >= cooldownUntil) {
-      // The model on this device takes what it can; the AI gets the rest, or
-      // everything in a language it does not cover. Until the player has
-      // answered the prompt, nothing is sent anywhere.
-      const engine = await engineNow();
-      if (engine === ENGINES.ASK) {
-        askAboutModel();
-        break;
+    while (pending.size > 0 && !stopped && run === generation && modelInUse()) {
+      if (!modelReady) {
+        await ensureModel();
+        if (!modelReady || run !== generation) break;
       }
-      const share = splitPendingByEngine(pending, { engine, refused: modelRefused });
-      if (share.model.length) {
-        await translateOnDevice(planModelBatch(share.model));
-        updateProgress();
-        persistCache();
-        syncEntriesToServer();
-        announceUpdate();
-        scan();
-        continue;
-      }
-      // ONE request at a time: a big batch in flight on its own, rather than
-      // three racing each other into a per-minute rate limit.
-      const next = chooseTranslationBatch(share.ai, {
-        isContent: (text) => contentQueued.has(text),
-        contentAllowed,
-        maxStrings: batchStrings,
-      });
-      // Only content is left and Background AI says no: it waits, in English.
-      heldBack = !next;
-      if (!next) break;
-      const batch = next.strings;
-      const result = await translateBatch(batch, next.kind)
-        .then((raw) => ({ reply: readTranslationReply(raw, batch) }))
-        .catch((error) => ({ error }));
-      const failure = result.error ? readTranslationFailure(result.error) : null;
-      if (failure?.kind === "unavailable") {
-        // Not this batch's doing, and not a failure to count: see waitForAi.
-        waitForAi(result.error, failure);
-      } else if (result.error) {
-        if (result.error.misaligned) {
-          // Paired by position, so none of it is kept. Asked again in halves;
-          // a single string the model cannot answer as one is given up on.
-          if (batch.length === 1) {
-            unusable.add(batch[0]);
-            settle(batch[0]);
-          }
-          batchStrings = Math.max(1, Math.floor(Math.min(batchStrings, batch.length) / 2));
-        } else {
-          batchStrings = Math.max(BATCH_MIN_STRINGS, Math.floor(batchStrings / 2));
-        }
-        noteFailure(result.error);
-      } else {
-        if (batchStrings < BATCH_MAX_STRINGS) batchStrings = BATCH_MAX_STRINGS;
-        failureCount = 0;
-        // An answer ends the wait's story: the same reason later is news again.
-        lastAiWaitReason = "";
-        for (const [source, value] of result.reply.pairs) {
-          book.set(source, value);
-          learned.set(source, value);
-          unsyncedEntries[source] = value;
-          settle(source);
-        }
-        // Never saved as their own translation: left in English, not asked again.
-        for (const source of result.reply.unusable) {
-          unusable.add(source);
-          settle(source);
-        }
-      }
-
+      await translateOnDevice(planModelBatch([...pending]), run);
+      if (run !== generation) break;
       updateProgress();
       persistCache();
       syncEntriesToServer();
@@ -941,20 +780,19 @@ const processQueue = async () => {
       scan();
     }
   } finally {
-    inFlight = false;
+    if (inFlight === run) inFlight = 0;
     updateProgress();
   }
 };
 
 // ---- content ----
 
-// A content string for the AI: once, and only when nothing has it yet.
+// A content string for the model: once, and only when nothing has it yet.
 const queueContent = (value) => {
-  if (typeof value !== "string") return false;
+  if (typeof value !== "string" || !modelInUse()) return false;
   const trimmed = value.trim();
   if (!trimmed || !isTranslatable(trimmed) || book.has(trimmed) || pending.has(trimmed) || unusable.has(trimmed)) return false;
   pending.add(trimmed);
-  contentQueued.add(trimmed);
   return true;
 };
 
@@ -1016,9 +854,9 @@ const collectContentStrings = async () => {
   } catch { /* hub unreachable — translated when the tab fetches them */ }
 
   // Region names — the big set (tags, owned-region pills, event impacts):
-  // 4,848 on the built-in map, twenty-odd requests if all were sent up front,
-  // most of them for names the player never looks at. So they are only
-  // remembered here, and each goes to the AI once it is shown (noteUnknown).
+  // 4,848 on the built-in map, most of them names the player never looks at.
+  // So they are only remembered here, and each goes to the model once it is
+  // shown (noteUnknown).
   // Only the map in use: a scenario with its own map shows its own regions
   // (the stock ones are not drawn over it, or share its ids and take its names).
   try {
@@ -1030,9 +868,10 @@ const collectContentStrings = async () => {
 };
 
 const collectAndTranslate = async () => {
+  const run = generation;
   await collectContentStrings();
-  if (stopped) return;
-  if (pending.size > 10 && !halted) {
+  if (stopped || run !== generation) return;
+  if (pending.size > 10) {
     showProgress();
     updateProgress();
   }
@@ -1042,8 +881,8 @@ const collectAndTranslate = async () => {
 // ---- public lookups (map labels, proactive callers) ----
 
 // Synchronous best-effort translation for text drawn OUTSIDE the DOM (map
-// country labels): names, so content. Unknown ones are queued, and an
-// "i18n:updated" event fires once they resolve, so callers can rebuild.
+// country labels): names, so content. Unknown ones are queued for the model,
+// and an "i18n:updated" event fires once they resolve, so callers can rebuild.
 export const translateLabel = (text) => {
   if (!translatorActive || typeof text !== "string") {
     return text;
@@ -1084,8 +923,7 @@ export const lookupLabel = (text) => {
 // (textareas are skipped, and the player's bubbles are data-no-translate).
 // `text` is the English as the packs key it, a `{{slot}}` pattern included,
 // and `params` fill its slots. Synchronous, from the shipped pack and what
-// the server's pack has learned; never sent to the AI: without an entry it
-// is the English.
+// the server's pack has learned: without an entry it is the English.
 export const uiString = (text, params = {}) => book.format(text, params) ?? fillSlots(text, params);
 
 // Proactively queue content that exists as data but may not be rendered yet
@@ -1159,6 +997,15 @@ const whenStartupScreenGone = () => new Promise((resolve) => {
   check();
 });
 
+// A language the game can be shown in (i18n.js canTranslateTo), else English,
+// kept so: a language with neither a pack nor a model was translated by the
+// AI, which no longer translates.
+const usableLanguage = (code) => {
+  if (canTranslateTo(code)) return code;
+  void setStoredLanguage(DEFAULT_LANGUAGE);
+  return DEFAULT_LANGUAGE;
+};
+
 export const startTranslator = () => {
   if (typeof document === "undefined") {
     return;
@@ -1173,14 +1020,25 @@ export const startTranslator = () => {
     } else if (language === DEFAULT_LANGUAGE && getStoredLanguage() !== DEFAULT_LANGUAGE) {
       // This device could not store the choice (i18n.js holds it for the
       // page), so a reload would come back in English: start in it now.
-      startInLanguage(getStoredLanguage());
+      startInLanguage(usableLanguage(getStoredLanguage()));
     }
   });
 
-  startInLanguage(getStoredLanguage());
+  startInLanguage(usableLanguage(getStoredLanguage()));
+};
+
+const installListeners = () => {
+  if (listenersInstalled) return;
+  listenersInstalled = true;
+  // A switch to another save brings its scenario's content.
+  window.addEventListener("oh:active-game-changed", () => {
+    if (translatorActive) void collectAndTranslate();
+  });
 };
 
 const startInLanguage = (code) => {
+  generation += 1;
+  const run = generation;
   language = code;
   if (language === DEFAULT_LANGUAGE) {
     return;
@@ -1189,16 +1047,14 @@ const startInLanguage = (code) => {
   book = createPhraseBook({ localizeValue: createDateLocalizer(language) });
   // The prompts' guidance passages in this language, before any prompt is built.
   if (packed) void loadPromptTranslations(language);
-  // For bug reports and tests: what is queued for the AI, what the pack lacks,
-  // and a way to walk the page again.
+  // For bug reports and tests: what is queued for the model, what the pack
+  // lacks, and a way to walk the page again.
   window.__ohI18n = { language, packed, pending, missing, unusable, rescan: () => scan() };
 
   document.documentElement.lang = language;
-  if (isRtlLanguage(language)) {
-    // Text direction only — flipping the whole HUD layout would fight the
-    // fixed-position map UI, so panels stay put but text reads correctly.
-    document.body.style.direction = "rtl";
-  }
+  // Text direction only — flipping the whole HUD layout would fight the
+  // fixed-position map UI, so panels stay put but text reads correctly.
+  document.body.style.direction = isRtlLanguage(language) ? "rtl" : "";
 
   loadCache();
 
@@ -1206,9 +1062,10 @@ const startInLanguage = (code) => {
     // Server pack first (cheap, instant), then wait out the loading screen.
     await loadServerPack();
     await whenStartupScreenGone();
-    if (stopped) return;
+    if (stopped || run !== generation) return;
 
     translatorActive = true;
+    installListeners();
     observer = new MutationObserver(handleMutations);
     observer.observe(document.body, {
       attributeFilter: TRANSLATED_ATTRIBUTES,
@@ -1220,16 +1077,90 @@ const startInLanguage = (code) => {
     scan();
     announceUpdate();
 
+    // A language with a model is played in once the player has said yes to
+    // its download; said no, the game goes back to English.
+    if (translationModelFor(language) && modelChoice() !== "yes") {
+      const kept = await askForModel(language);
+      if (run !== generation) return;
+      if (!kept) {
+        await switchLanguage(DEFAULT_LANGUAGE);
+        return;
+      }
+      modelReady = preparedModel === language;
+      scan();
+    }
+
     // Content, translated once: on later boots the server pack already has it
-    // and this drains without a request. A switch to another save brings its
-    // scenario's content.
-    window.addEventListener("oh:active-game-changed", () => {
-      void collectAndTranslate();
-    });
-    // What ends a wait for an AI model that can answer (waitForAi).
-    window.addEventListener("ai:fallback-changed", onFallbackChanged);
+    // and this drains without a model run.
     await collectAndTranslate();
   })();
+};
+
+// Leaves the language in use: what it wrote over the page goes back to
+// English, what it learned is saved, and its queue is dropped.
+const leaveLanguage = () => {
+  observer?.disconnect();
+  observer = null;
+  clearTimeout(scanTimer);
+  clearTimeout(noticeTimer);
+  clearTimeout(persistTimer);
+  writeCache();
+  clearTimeout(syncTimer);
+  void sendEntries(language, unsyncedEntries);
+  unsyncedEntries = {};
+  translatorActive = false;
+  restoreEnglish();
+  progressEl?.remove();
+  progressEl = null;
+  pending = new Set();
+  missing = new Set();
+  unusable = new Set();
+  regionNames = new Set();
+  learned = new Map();
+  modelReady = false;
+  modelFailed = false;
+  modelLoading = null;
+  modelDownloading = false;
+};
+
+const restartIn = (code) => {
+  leaveLanguage();
+  if (code === DEFAULT_LANGUAGE) {
+    generation += 1;
+    language = DEFAULT_LANGUAGE;
+    packed = false;
+    book = createPhraseBook();
+    setPromptTranslations(DEFAULT_LANGUAGE, {});
+    document.documentElement.lang = DEFAULT_LANGUAGE;
+    document.body.style.direction = "";
+    delete window.__ohI18n;
+  } else {
+    if (code !== language) setPromptTranslations(DEFAULT_LANGUAGE, {});
+    startInLanguage(code);
+    modelReady = preparedModel === code;
+  }
+  window.dispatchEvent(new Event("i18n:updated"));
+  window.dispatchEvent(new CustomEvent("oh:ui-language-changed", { detail: { language } }));
+};
+
+// The interface language, changed where the player is: no reload, so a game
+// on screen stays as it was. A language with a translation model is asked
+// about first, and its model downloaded on a yes; on a no the game keeps the
+// language it had. Resolves to the language the game is in afterwards.
+export const switchLanguage = (code) => {
+  if (switching) return switching;
+  switching = (async () => {
+    const wanted = canTranslateTo(code) ? code : DEFAULT_LANGUAGE;
+    if (translationModelFor(wanted) && modelChoice(wanted) !== "yes" && !(await askForModel(wanted))) {
+      return language;
+    }
+    await setStoredLanguage(wanted);
+    if (wanted !== language || (wanted !== DEFAULT_LANGUAGE && !translatorActive)) restartIn(wanted);
+    return language;
+  })().finally(() => {
+    switching = null;
+  });
+  return switching;
 };
 
 export const stopTranslator = () => {
@@ -1238,8 +1169,6 @@ export const stopTranslator = () => {
   observer?.disconnect();
   clearTimeout(scanTimer);
   clearTimeout(noticeTimer);
-  clearTimeout(aiSettingsTimer);
-  if (typeof window !== "undefined") window.removeEventListener?.("ai:fallback-changed", onFallbackChanged);
   progressEl?.remove();
   progressEl = null;
   removeModelCard();

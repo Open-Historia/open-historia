@@ -1,15 +1,13 @@
 // Run: node --test src/runtime/translationModels.test.js
 //
 // "can you also get a translator model to replace the ai requests for
-// translation?" (the owner, 2026-11-05). Where a small open model translates
-// English into the player's language well, it does so on the device; the AI
-// keeps every language, string and failure the model cannot take.
+// translation?" and "remove the option to use your api. it should make you use
+// the model if you want to translate the game at all" (the owner, 2026-11-05).
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
 import { SHIPPED_PACK_LANGUAGES } from "./i18n.js";
 import {
-  ENGINES,
   MODEL_BATCH_CHARS,
   MODEL_BATCH_STRINGS,
   MODEL_FILES,
@@ -22,14 +20,12 @@ import {
   planModelBatch,
   readModelChoice,
   splitForModel,
-  splitPendingByEngine,
-  translationEngineFor,
   translationModelFor,
 } from "./translationModels.js";
 
 const read = (file) => fs.readFileSync(new URL(`../../${file}`, import.meta.url), "utf8").replace(/\r\n/g, "\n");
 
-test("a model only where one reads right; the rest of the 22 stay with the AI", () => {
+test("a model only where one reads right; the rest of the 22 have their packs alone", () => {
   const covered = SHIPPED_PACK_LANGUAGES.filter((code) => translationModelFor(code));
   assert.deepEqual(covered, ["ar", "de", "es", "fr", "id", "it", "nl", "pt", "ru", "zh"]);
   for (const code of ["bn", "fa", "hi", "ja", "ko", "pl", "sv", "th", "tr", "uk", "ur", "vi"]) {
@@ -62,27 +58,12 @@ test("every model is pinned, int8, about 110 MB, from the Transformers.js copies
   assert.equal(TRANSLATION_MODELS.de.token, "");
 });
 
-test("who translates: the model once the player said yes, the AI otherwise, nobody while asking", () => {
-  assert.equal(translationEngineFor({ language: "de" }), ENGINES.ASK, "not asked yet: asked, and nothing is sent");
-  assert.equal(translationEngineFor({ language: "de", choice: "yes" }), ENGINES.MODEL);
-  assert.equal(translationEngineFor({ language: "de", choice: "no" }), ENGINES.AI, "declined: the AI, as before");
-  assert.equal(translationEngineFor({ language: "de", choice: "yes", failed: true }), ENGINES.AI, "would not load: the AI");
-  assert.equal(translationEngineFor({ language: "ja", choice: "yes" }), ENGINES.AI, "no model for it: the AI");
-  assert.equal(translationEngineFor({ language: "ja" }), ENGINES.AI, "and it is never asked about");
-  assert.equal(translationEngineFor({ language: "de", choice: "maybe" }), ENGINES.ASK);
+test("the player's answer is kept per language", () => {
   assert.equal(readModelChoice("yes"), "yes");
+  assert.equal(readModelChoice("no"), "no");
+  assert.equal(readModelChoice("maybe"), "");
   assert.equal(readModelChoice(null), "");
   assert.equal(modelChoiceKey("pt-BR"), "oh:translation-model:pt");
-});
-
-test("the model takes the queue; the AI gets only what the model's answer was refused for", () => {
-  const pending = new Set(["Kingdom of Bavaria", "Wessex", "Grain reserves"]);
-  assert.deepEqual(splitPendingByEngine(pending, { engine: ENGINES.MODEL, refused: new Set(["Wessex"]) }), {
-    model: ["Kingdom of Bavaria", "Grain reserves"],
-    ai: ["Wessex"],
-  });
-  assert.deepEqual(splitPendingByEngine(pending, { engine: ENGINES.AI }), { model: [], ai: [...pending] });
-  assert.deepEqual(splitPendingByEngine(pending, { engine: ENGINES.ASK }), { model: [], ai: [] }, "asking: nothing goes anywhere");
 });
 
 test("small batches bounded by count and characters; rows grouped by length", () => {
@@ -135,12 +116,19 @@ test("an answer that ran on, echoed its token or lost a number or a slot is refu
 });
 
 // The page's side needs a browser, so it is read in its source.
-test("the translator asks before anything is sent, and the model's cache survives the start-up sweep", () => {
+test("the translator never asks the AI; a language with a model is used only after a yes", () => {
   const translator = read("src/runtime/translator.js");
+  assert.doesNotMatch(translator, /callAI|requestBudget|fallbackRunner|Background AI/, "no AI request anywhere");
   const queue = translator.slice(translator.indexOf("const processQueue = async () => {"), translator.indexOf("// ---- content ----"));
-  assert.match(queue, /const engine = await engineNow\(\);\n\s*if \(engine === ENGINES\.ASK\) \{\n\s*askAboutModel\(\);\n\s*break;/);
-  assert.ok(queue.indexOf("translateOnDevice(") < queue.indexOf("translateBatch("), "the model before the AI");
-  assert.match(queue, /chooseTranslationBatch\(share\.ai, \{/, "the AI gets the model's leftovers");
+  assert.match(queue, /!modelInUse\(\)\) \{\n\s*return;/, "nothing is translated without the model");
+  assert.match(queue, /translateOnDevice\(planModelBatch\(\[\.\.\.pending\]\), run\)/);
+  assert.match(translator, /const modelInUse = \(\) => Boolean\(translationModelFor\(language\)\) && modelChoice\(\) === "yes" && !modelFailed;/);
+  const switching = translator.slice(translator.indexOf("export const switchLanguage = "), translator.indexOf("export const stopTranslator"));
+  assert.match(switching, /modelChoice\(wanted\) !== "yes" && !\(await askForModel\(wanted\)\)\) \{\n\s*return language;/, "declined: the language the game had");
+  assert.ok(switching.indexOf("askForModel(") < switching.indexOf("setStoredLanguage("), "asked before it is kept");
+  assert.doesNotMatch(switching, /location\.reload/, "no reload: the player stays where they are");
+  const start = translator.slice(translator.indexOf("const startInLanguage = "), translator.indexOf("const leaveLanguage = "));
+  assert.match(start, /if \(!kept\) \{\n\s*await switchLanguage\(DEFAULT_LANGUAGE\);/, "said no at start: English");
 
   const worker = read("src/runtime/translationWorker.js");
   const name = worker.match(/const MODEL_CACHE = "([^"]+)";/)[1];

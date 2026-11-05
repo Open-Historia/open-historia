@@ -14,6 +14,8 @@ const DiscordInvites = lazy(() => import("./multiplayer/ui/DiscordInvites.jsx"))
 const WorldMap = lazy(() => import("./Game/Map/World.jsx"));
 // What the update brings, behind the vault door (Game/GameUI/updates/): loaded only when there is one to show.
 const UpdateNotice = lazy(() => import("./Game/GameUI/updates/UpdateNotice.jsx"));
+// The first-time setup (language, then theme), before the door: once a device.
+const FirstSetup = lazy(() => import("./Game/GameUI/FirstSetup.jsx"));
 import StartupScreen from "./runtime/StartupScreen.jsx";
 import ErrorBoundary from "./runtime/ErrorBoundary.jsx";
 import AppUpdateBanner from "./runtime/AppUpdateBanner.jsx";
@@ -29,6 +31,7 @@ import { holdMusicBehindDoor } from "./runtime/ambientMusic.js";
 import { vaultDoorAlways } from "./runtime/mapSettings.js";
 import { decideVaultDoor, rememberVaultDoorBuild } from "./runtime/vaultDoorDue.js";
 import { pendingUpdates, previewedUpdates, rememberUpdate } from "./Game/GameUI/updates/updateNotices.js";
+import { firstSetupDue } from "./runtime/firstSetupDue.js";
 import { appBuildId } from "./runtime/buildId.js";
 import { announceMapRerender } from "./runtime/mapReadiness.js";
 import { prefetchGameplay } from "./Game/AI/gameplayLazy.js";
@@ -89,6 +92,11 @@ function GameApp() {
     holdMusicBehindDoor(true);
     return "deciding";
   });
+  // The first-time setup (GameUI/FirstSetup.jsx) comes before the door, once a
+  // device: on a new install and the first time a build with it runs. The door
+  // shuts behind it whatever the build, so the setup always gives onto it.
+  const [setupDue, setSetupDue] = useState(() => firstSetupDue());
+  const setupRef = useRef(setupDue);
   // The build the door is shown for, kept when it has opened.
   const doorBuildRef = useRef("");
   useEffect(() => {
@@ -102,9 +110,10 @@ function GameApp() {
       .then(({ show, build }) => {
         if (!live) return;
         doorBuildRef.current = build;
+        const shut = show || setupRef.current;
         // Not this time: there is nothing for the music to wait behind.
-        if (!show) holdMusicBehindDoor(false);
-        setDoor(show ? "shut" : "open");
+        if (!shut) holdMusicBehindDoor(false);
+        setDoor(shut ? "shut" : "open");
       });
     return () => {
       live = false;
@@ -218,6 +227,8 @@ function GameApp() {
   // no time on the website and in the Android app, and one request to this
   // computer's own server in the desktop app (at most a second and a half).
   const menuReady = isReady && door !== "deciding";
+  const setupShown = menuReady && setupDue;
+  const setupDone = useCallback(() => setSetupDue(false), []);
   // What the update brings is shown once the menu is ready and the door is open or opening; it is kept as shown the
   // moment it is shown, not when it is closed, so a page closed on it does not show it again.
   const noticeShown = menuReady && notice.updates.length > 0 && (door === "open" || parting);
@@ -264,7 +275,12 @@ function GameApp() {
       <UpdateNotice updates={notice.updates} onClose={closeNotice} />
       </Suspense>
     )}
-    {menuReady && door === "shut" && (
+    {setupShown && (
+      <Suspense fallback={<div style={{ background: "#0f0f11", inset: 0, position: "fixed", zIndex: 2147482500 }} />}>
+      <FirstSetup onDone={setupDone} />
+      </Suspense>
+    )}
+    {menuReady && !setupDue && door === "shut" && (
       <DoorFrame onFailed={doorGone}>
       <VaultDoor onOpening={letMusicIn} onOpened={doorOpened} />
       </DoorFrame>
