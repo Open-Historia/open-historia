@@ -53,6 +53,23 @@ import { PAST_UPDATES } from "./notesPast.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // The Advisor's microphone (GameUI/AdvisorMic.jsx, runtime/speechInput.js): the browser's or the phone's own
+    // recogniser where there is one, otherwise Whisper base (80 MB) on the device. No AI request.
+    id: "2026-11-advisor-microphone",
+    kind: "minor",
+    date: "2026-11-05",
+    channel: "beta",
+    banners: [
+      {
+        title: "Speak to your advisor",
+        items: [
+          "The Advisor's input bar has a microphone beside Send. Press it and speak: what you say appears in the box, and it sends itself once you have been quiet for 3 seconds. Press it again to stop without sending.",
+          "It costs no AI requests. In the desktop app the speech is recognised on your computer, by a model downloaded once when you first press it.",
+        ],
+      },
+    ],
+  },
+  {
     // Military power counts the men in full, each soldier's worth raised to the scenario's importance of technology
     // (runtime/militaryPower.js, warSettings.technologyWeight; the Wars feature's field); the owner's ask, 2026-11-04.
     id: "2026-11-importance-of-technology",

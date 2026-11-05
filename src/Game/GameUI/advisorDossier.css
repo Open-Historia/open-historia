@@ -353,6 +353,81 @@
   cursor: not-allowed;
   opacity: .7;
 }
+/* The microphone beside Send (AdvisorMic.jsx): the quiet grey of the composer
+   at rest, the accent while it listens. Its notes sit just above the bar. */
+.oh-advisor-composer { position: relative; }
+.oh-advisor-mic-wrap { display: flex; flex: 0 0 auto; }
+.oh-advisor-mic {
+  align-items: center;
+  background: #192b3b;
+  border: 1px solid rgba(133, 183, 210, .3);
+  border-radius: 6px;
+  color: #c3d2dd;
+  cursor: pointer;
+  display: flex;
+  flex: 0 0 2.6rem;
+  height: 2.6rem;
+  justify-content: center;
+  padding: 0;
+  transition: background-color .15s, border-color .15s, color .15s;
+  width: 2.6rem;
+}
+.oh-advisor-mic:hover:not(:disabled) { background: #1c3246; border-color: #82c8e5; color: #f0f6fa; }
+.oh-advisor-mic:focus-visible { outline: 2px solid #a3def4; outline-offset: 2px; }
+.oh-advisor-mic[data-listening="true"] {
+  background: rgba(43, 193, 243, .16);
+  border-color: #2bc1f3;
+  color: #2bc1f3;
+  animation: oh-advisor-mic-pulse 1.6s ease-in-out infinite;
+}
+.oh-advisor-mic:disabled {
+  background: #1a2a38;
+  border-color: #2a4152;
+  color: #6f8494;
+  cursor: not-allowed;
+  opacity: .7;
+}
+@keyframes oh-advisor-mic-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(43, 193, 243, .35); }
+  50% { box-shadow: 0 0 0 4px rgba(43, 193, 243, 0); }
+}
+.oh-advisor-mic-note {
+  background: #14212e;
+  border: 1px solid rgba(133, 183, 210, .3);
+  border-radius: 6px;
+  bottom: calc(100% + .35rem);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .35);
+  color: #dce7ef;
+  font-size: .8rem;
+  line-height: 1.45;
+  max-width: calc(100% - 1.4rem);
+  padding: .55rem .7rem;
+  position: absolute;
+  right: .82rem;
+  width: 19rem;
+  z-index: 2;
+}
+.oh-advisor-mic-note p { margin: 0; }
+.oh-advisor-mic-note-problem { border-color: rgba(239, 68, 68, .55); color: #fca5a5; }
+.oh-advisor-mic-actions { display: flex; gap: .45rem; justify-content: flex-end; margin-top: .5rem; }
+.oh-advisor-mic-button {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, .25);
+  border-radius: 6px;
+  color: #e4e4e7;
+  cursor: pointer;
+  font: inherit;
+  min-height: 2rem;
+  padding: .25rem .7rem;
+}
+.oh-advisor-mic-button-primary { background: rgba(43, 193, 243, .16); border-color: #2bc1f3; color: #e6f8fe; }
+.oh-advisor-mic-button:hover { border-color: #82c8e5; }
+.oh-advisor-mic-progress { background: #192b3b; border-radius: 3px; height: 4px; margin-top: .45rem; overflow: hidden; }
+.oh-advisor-mic-progress span { background: #2bc1f3; display: block; height: 100%; transition: width .25s; }
+@media (max-width: 450px) {
+  .oh-advisor-mic-note { right: .7rem; }
+  .oh-advisor-mic-button { min-height: 2.45rem; }
+}
 @media (max-width: 450px) {
   .oh-advisor-recipients { padding: .5rem .65rem; }
   .oh-advisor-messages { padding: .8rem .7rem 1rem; }
@@ -361,5 +436,6 @@
   .oh-advisor-add-contact, .oh-advisor-contact-action { min-height: 2.45rem; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .oh-advisor-send { transition: none; }
+  .oh-advisor-send, .oh-advisor-mic, .oh-advisor-mic-progress span { transition: none; }
+  .oh-advisor-mic[data-listening="true"] { animation: none; }
 }

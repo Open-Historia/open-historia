@@ -40,7 +40,7 @@
     <img class="logo" src="/logo.png" alt="Open Historia logo" width="64" height="64" />
 
     <h1>Privacy Policy</h1>
-    <p class="tagline">Last updated and in effect from 3 November 2026</p>
+    <p class="tagline">Last updated and in effect from 4 November 2026</p>
 
     <p>Open Historia is a free, open-source strategy game. It runs on your own device: in the browser at openhistoria.com, as a desktop app for Windows, macOS and Linux, and as an Android app. This policy covers all of them, in their stable and beta versions. It explains what the game keeps on your device, what it sends elsewhere and to whom, what the project itself holds about you, and the rights you have.</p>
     <p><strong>Who is responsible.</strong> "We" means Nicholas Krol, an individual in the United States who runs the Open Historia project and its servers, and who is the data controller for what this policy describes. You can reach us at <a href="mailto:nichojkrol@gmail.com">nichojkrol@gmail.com</a>. Open Historia is a non-commercial project: it has no advertising, sells nothing and has no paid accounts.</p>
@@ -69,6 +69,7 @@
       <li>on the desktop, downloaded community scenarios: a cache of up to 1 GB that you can clear in Settings in the beta versions; in the stable version it has no limit, and is cleared by deleting the <code>hub-cache</code> folder in the app's data folder;</li>
       <li>music a scenario plays (beta versions): each track is downloaded from the community hub once and kept on your device, in the desktop app and on the website, so that it is not downloaded again when another scenario plays it. It stays until you clear it in Settings, until the last scenario that plays it is deleted, or until it is replaced by newer tracks at the limit (1 GB in the desktop app, 300 MB on the website). The Android app keeps none: it plays a track from the hub each time;</li>
       <li>detailed maps you download (beta versions, desktop app): each is downloaded from the community hub once, checked, and kept in the app's data folder for every scenario that uses it;</li>
+      <li>the speech model for the Advisor's microphone, if you downloaded one (beta versions; see <a href="#microphone">The Advisor's Microphone</a>), kept in the game's storage until you clear it;</li>
       <li>if you use your own Agent (beta versions, on the desktop; see <a href="#your-ai">Your AI Provider</a>): a folder in the app's data folder holding the instructions the game writes for your Agent, and each prompt waiting for it, deleted as soon as it is answered or cancelled;</li>
       <li>for shared games (beta versions): the name you chose, a key that identifies your installation to the hosts you join, and, if you host, your invite codes;</li>
       <li>your answer about counting visits (see <a href="#choices">Counting Visits</a>).</li>
@@ -83,7 +84,7 @@
           <tr><th>What</th><th>Set by</th><th>Why</th><th>How long</th></tr>
         </thead>
         <tbody>
-          <tr><td>The game's own storage (local storage, IndexedDB, a cache of map files and a cache of scenario music)</td><td>The game</td><td>Needed to play: your games, scenarios, settings, AI keys, logs, map data and music a scenario plays, as listed above</td><td>Until you delete it</td></tr>
+          <tr><td>The game's own storage (local storage, IndexedDB, a cache of map files and a cache of scenario music)</td><td>The game</td><td>Needed to play: your games, scenarios, settings, AI keys, logs, map data, music a scenario plays and a speech model you downloaded, as listed above</td><td>Until you delete it</td></tr>
           <tr><td><code>oh:analytics-consent</code> (local storage)</td><td>The website and the game</td><td>Needed to remember your answer about counting visits</td><td>180 days, then you are asked again</td></tr>
           <tr><td><code>oh:asset-sizes:v1</code> (local storage)</td><td>The website's front page</td><td>Remembers the download sizes it showed you, so they need not be fetched again. It identifies nobody</td><td>6 hours</td></tr>
           <tr><td><code>_ga</code> and <code>_ga_H9EQ4JFZXZ</code> (cookies)</td><td>Google Analytics</td><td>To tell a returning visitor from a new one. <strong>Set only after you say yes</strong></td><td>Up to two years; deleted at once if you take your yes back</td></tr>
@@ -134,6 +135,7 @@
           <tr><td>Pictures a scenario names on another website (whoever runs that website)</td><td>A scenario file can give a web address for a flag, a background or an emblem, and the picture is loaded from there when it is shown. The community hub refuses scenarios that do this (flagcdn.com aside), so it concerns scenario files you got elsewhere</td><td>Which picture is shown</td></tr>
           <tr><td>Download sizes (GitHub)</td><td>The website's front page</td><td>Nothing beyond the request</td></tr>
           <tr><td>Spellchecker (Google)</td><td>The desktop app on Windows and Linux may download a dictionary the first time one is needed</td><td>Which language's dictionary to download</td></tr>
+          <tr><td>Speech model for the Advisor's microphone (Hugging Face, United States; beta versions)</td><td>Where the microphone runs a model on your device (see <a href="#microphone">The Advisor's Microphone</a>): once, after you press Download, and again briefly whenever the model is loaded, to look up its list of files</td><td>Which model is downloaded. Nothing you say</td></tr>
         </tbody>
       </table>
     </div>
@@ -141,6 +143,15 @@
 
     <h3>Discord (desktop app)</h3>
     <p>When the Discord app is running on the same computer, the desktop app (and a copy of the game's server you start yourself) tells it what you are playing: the country you lead, the scenario and the in-game date, with how long you have been playing and a link to openhistoria.com. Discord shows this on your profile to people who can see your activity. This passes between the two apps on your computer and never reaches us; Discord's own privacy policy covers what it shows and keeps. To stop it, switch off "Show what I am playing on Discord" under Settings → General → Privacy, or turn off activity sharing in Discord (User Settings → Activity Privacy). In versions without that setting, only Discord's own switch stops it.</p>
+
+    <h3 id="microphone">The Advisor's Microphone (beta versions)</h3>
+    <p>The microphone on the Advisor's input bar turns what you say into a message. It never uses your AI provider: only the text you send reaches it, as if you had typed it. Which recogniser listens depends on where you play:</p>
+    <ul>
+      <li><strong>In the desktop app, and in a browser with no speech recognition of its own</strong> (such as Firefox), a speech model runs on your device: Whisper base, for every language (about 80 MB). It is downloaded from Hugging Face the first time, only after you press Download, and kept in the game's storage. <strong>Your voice never leaves your device.</strong> On macOS the system asks you once whether the app may use the microphone.</li>
+      <li><strong>In a browser that has speech recognition</strong> (such as Chrome, Edge or Safari), the game uses the browser's. The browser may send your voice to its maker's service to be recognised (Chrome sends it to Google), under that company's privacy policy.</li>
+      <li><strong>In the Android app</strong>, the phone's own speech recognition service listens (on most phones, Google's). Depending on the phone and its settings, it may recognise speech on the phone or send it to that service.</li>
+    </ul>
+    <p>Nothing you say is recorded or sent to us. The microphone listens only from when you press it until your message is sent or you press it again.</p>
 
     <h3>The World Map (website only)</h3>
     <p>On the website, the world map is part of the site: its files are loaded from openhistoria.com itself, like the rest of the page, and nothing else is contacted for them.</p>
@@ -181,8 +192,9 @@
       <li><strong>Internet</strong> and <strong>network state</strong>: to reach your AI provider, the community hub, the map and updates, and to tell whether you are online.</li>
       <li><strong>Install packages</strong> (beta versions): to install its own updates. Android asks you to confirm each one. The stable app does not ask for it: it opens the update's download in your browser.</li>
       <li><strong>Storage</strong> (Android 10 and older only): to save exported games and scenarios to your Downloads folder.</li>
+      <li><strong>Microphone</strong> (beta versions): for the Advisor's microphone, which hands what you say to the phone's speech recognition (see <a href="#microphone">The Advisor's Microphone</a>). Android asks the first time you press it.</li>
     </ul>
-    <p>The app asks for no location, contacts, camera, microphone or advertising identifier, and contains no advertising or analytics software.</p>
+    <p>The app asks for no location, contacts, camera or advertising identifier, and contains no advertising or analytics software.</p>
 
     <h2>What We Hold, and for How Long</h2>
     <div class="table-scroll">

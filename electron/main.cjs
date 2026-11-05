@@ -20,6 +20,7 @@ const { BETA_APP_NAME, readChannel } = require("./channel.cjs");
 const { MULTIPLAYER_APP_NAME } = require("./channel.cjs");
 const { createLayeredUpdater } = require("./layeredUpdate.cjs");
 const { attachZoomKeys } = require("./zoomKeys.cjs");
+const { installMicrophonePermission } = require("./microphone.cjs");
 const { createPayloadUpdater } = require("./payloadUpdate.cjs");
 const payloadBoot = require("./payloadBoot.cjs");
 const { clearOtherPortsCaches } = require("./staleCaches.cjs");
@@ -863,6 +864,11 @@ const createMainWindow = () => {
   });
   // Ctrl+= zooms in as Ctrl+- zooms out (zoomKeys.cjs).
   attachZoomKeys(win.webContents);
+  // The Advisor's microphone, for the game's own page only (microphone.cjs).
+  installMicrophonePermission(win.webContents.session, {
+    origin: () => `http://localhost:${process.env.PORT || 3000}`,
+    systemPreferences: require("electron").systemPreferences,
+  });
   // Links to GitHub/Discord open in the real browser rather than replacing the
   // game with a page the player cannot navigate back from.
   //

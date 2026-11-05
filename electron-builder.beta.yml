@@ -134,6 +134,10 @@ mac:
         - arm64
   icon: electron/beta-assets/icon-beta.png
   category: public.app-category.strategy-games
+  # macOS shows this when the Advisor's microphone first asks; without it the
+  # system ends the app at the first getUserMedia (electron/microphone.cjs).
+  extendInfo:
+    NSMicrophoneUsageDescription: "The Advisor's microphone turns what you say into a message. The speech is recognised on this Mac and never leaves it."
   artifactName: Open-Historia-Beta-mac-${arch}.${ext}
 
 linux:
