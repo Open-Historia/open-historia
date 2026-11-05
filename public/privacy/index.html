@@ -40,7 +40,7 @@
     <img class="logo" src="/logo.png" alt="Open Historia logo" width="64" height="64" />
 
     <h1>Privacy Policy</h1>
-    <p class="tagline">Last updated and in effect from 29 October 2026</p>
+    <p class="tagline">Last updated and in effect from 4 November 2026</p>
 
     <p>Open Historia is a free, open-source strategy game. It runs on your own device: in the browser at openhistoria.com, as a desktop app for Windows, macOS and Linux, and as an Android app. This policy covers all of them, in their stable and beta versions. It explains what the game keeps on your device, what it sends elsewhere and to whom, what the project itself holds about you, and the rights you have.</p>
     <p><strong>Who is responsible.</strong> "We" means Nicholas Krol, an individual in the United States who runs the Open Historia project and its servers, and who is the data controller for what this policy describes. You can reach us at <a href="mailto:nichojkrol@gmail.com">nichojkrol@gmail.com</a>. Open Historia is a non-commercial project: it has no advertising, sells nothing and has no paid accounts.</p>
@@ -51,6 +51,7 @@
         <li><strong>There is no account.</strong> Your games, scenarios and settings stay on your device. We never see them.</li>
         <li><strong>You bring your own AI.</strong> Your AI key and the game's prompts go from your device to the AI provider you chose, not to us.</li>
         <li><strong>Visits are counted only after you say yes.</strong> We would like to count visits with Google Analytics and Umami. Neither is loaded until you agree, saying no is one click, and you can <a href="#choices">change your answer</a> whenever you like. The Android app loads neither.</li>
+        <li><strong>Each install is counted once.</strong> Each app downloads one small file from GitHub once, after it is installed or updated, and GitHub's download count tells us how many installs there are. Nothing about you is sent with it (<a href="#install-counts">more below</a>).</li>
         <li><strong>A few other services are contacted</strong> to draw the map, check for updates, run the community hub and connect shared games. Each is listed below with what it receives.</li>
         <li><strong>We don't sell personal information,</strong> share it for advertising, or build profiles of anyone.</li>
       </ul>
@@ -133,6 +134,7 @@
           <tr><td>Institution emblems (Wikimedia Commons, asean.org; beta versions)</td><td>When an institution's emblem is shown</td><td>Which emblem is shown</td></tr>
           <tr><td>Pictures a scenario names on another website (whoever runs that website)</td><td>A scenario file can give a web address for a flag, a background or an emblem, and the picture is loaded from there when it is shown. The community hub refuses scenarios that do this (flagcdn.com aside), so it concerns scenario files you got elsewhere</td><td>Which picture is shown</td></tr>
           <tr><td>Download sizes (GitHub)</td><td>The website's front page</td><td>Nothing beyond the request</td></tr>
+          <tr><td>Install counts (GitHub)</td><td>Once per install: the desktop app, the desktop beta, the native app and the two Android apps each download their own small file the first time they start after being installed, or after updating to the version that added this, and never again. The website never does. See <a href="#install-counts">Install Counts</a> below</td><td>Nothing beyond the request</td></tr>
           <tr><td>Spellchecker (Google)</td><td>The desktop app on Windows and Linux may download a dictionary the first time one is needed</td><td>Which language's dictionary to download</td></tr>
         </tbody>
       </table>
@@ -144,6 +146,10 @@
 
     <h3>The World Map (website only)</h3>
     <p>On the website, the world map is part of the site: its files are loaded from openhistoria.com itself, like the rest of the page, and nothing else is contacted for them.</p>
+
+    <h3 id="install-counts">Install Counts</h3>
+    <p>To know how many people install the game, each app downloads one small text file of its own from the game's GitHub releases: <code>main app.txt</code> (the desktop app), <code>beta app.txt</code> (the desktop beta), <code>native app.txt</code> (the native app), <code>android app.txt</code> and <code>android beta app.txt</code> (the two Android apps). It does this once, the first time it starts after being installed, or after being updated to the version that added this. GitHub counts how many times each file is downloaded, and those counts are public on the release page. The request carries nothing about you or your games: no identifier, no settings and nothing added to the address. As with any website, GitHub sees your IP address and basic details of the connection, and GitHub's <a href="https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement" target="_blank" rel="noopener">privacy statement</a> applies.</p>
+    <p>The app then notes on your device that it has done this (in its own data folder, or in the Android app's own settings) and never downloads the file again. If you are offline it tries again on a later start, until one download goes through. It happens once per install whatever you answered about counting visits, because it counts installs, not visits. Removing the app together with its data and installing it again counts again. The website, and a copy of the game run from its source code, never download these files.</p>
 
     <h3>Import Counts</h3>
     <p>The hub shows how many times each scenario's file has been downloaded. GitHub counts that itself when the game downloads the file from the hub, and the count is public. The game reports nothing of its own.</p>
@@ -195,6 +201,7 @@
           <tr><td>Analytics, if you said yes</td><td>Google Analytics, United States</td><td>At most 14 months for the detailed data</td></tr>
           <tr><td>Visit counts, and which application was used, if you said yes</td><td>Umami Cloud, in the United States</td><td>For as long as the project runs. They hold no name, email address, IP address or cookie</td></tr>
           <tr><td>How many times each hub file was downloaded</td><td>GitHub (public)</td><td>While the hub shows them</td></tr>
+          <tr><td>How many times each app's install file was downloaded</td><td>GitHub (public)</td><td>While the release holds the files. The counts are totals: no name, email address, IP address or cookie</td></tr>
           <tr><td>Hashed IP addresses from the old import counter</td><td>Our import counter on Cloudflare</td><td>Up to 365 days from when each was written; no new ones are written</td></tr>
           <tr><td>Old account data, if you had an account</td><td>Our server on Cloudflare</td><td>Until you ask us to delete it, or until we delete all of it, whichever comes first</td></tr>
           <tr><td>Your hub posts, comments and likes</td><td>GitHub (public)</td><td>Until you or we remove them</td></tr>
@@ -217,6 +224,7 @@
           <tr><td>Playing the setup video from YouTube</td><td><strong>Your consent,</strong> given by pressing Play</td></tr>
           <tr><td>Serving the website and the game's files, keeping them secure and available (Cloudflare)</td><td><strong>Our legitimate interest</strong> in running the site you asked to visit, safely</td></tr>
           <tr><td>Drawing the map, flags and emblems, place search, hub browsing and downloads, update checks and downloads</td><td><strong>Our legitimate interest</strong> in providing the features of the game you are using; each sends no more than the request itself</td></tr>
+          <tr><td>Counting installs (each app downloads its own file from GitHub once)</td><td><strong>Our legitimate interest</strong> in knowing how many people install each app; the download sends no more than the request itself, and happens once per install</td></tr>
           <tr><td>Connecting a shared game</td><td><strong>Our legitimate interest</strong> in connecting you to the players you chose to play with, at your request</td></tr>
           <tr><td>Showing what you play in Discord</td><td><strong>Our legitimate interest</strong> in a feature of the app; it happens on your computer and you can switch it off</td></tr>
           <tr><td>Old account data</td><td>Kept only so that you can ask for it or have it deleted (<strong>legitimate interest</strong>); it is used for nothing</td></tr>
