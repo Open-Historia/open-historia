@@ -8,12 +8,15 @@
 // the button are dressed as the banner shown is: by its theme's chrome, the
 // default's palette, or plainly for a minor one. How to add one: notes.js.
 
-import React, { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import React, { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 
 import { SAFE_BOTTOM, SAFE_TOP } from "../../../runtime/mobileUi.js";
 import { THEMES } from "./themes/index.js";
 import { ACCENT, Brackets, Emblem, FeatureCards, NOTICE_Z, Plate, Reveal, Rule, motion, noticeDate, useStill } from "./updateKit.jsx";
 import { noticePages } from "./updateNotices.js";
+
+// A release's announcement (notesReleases.js), a page of its own: loaded only when one is shown.
+const ReleaseNotice = lazy(() => import("./ReleaseNotice.jsx"));
 
 const INK = "#f4f4f5";
 const SOFT = "rgba(244,244,245,0.72)";
@@ -118,7 +121,7 @@ const arrow = (disabled) => ({
 });
 
 // The notice: every banner of `updates` as a page, and the way between them.
-export const UpdateNotice = ({ updates = [], onClose }) => {
+const NoticePages = ({ updates = [], onClose }) => {
   const pages = useMemo(() => noticePages(updates), [updates]);
   const [at, setAt] = useState(0);
   const still = useStill();
@@ -203,5 +206,10 @@ export const UpdateNotice = ({ updates = [], onClose }) => {
     </div>
   );
 };
+
+// A release is shown as its own scrolling page; anything else as the notice's pages.
+export const UpdateNotice = ({ updates = [], onClose }) => (updates[0]?.kind === "release"
+  ? <Suspense fallback={null}><ReleaseNotice onClose={onClose} update={updates[0]} /></Suspense>
+  : <NoticePages onClose={onClose} updates={updates} />);
 
 export default UpdateNotice;
