@@ -1,12 +1,14 @@
 /*! Open Historia — speech to text for the Advisor's microphone © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // One way in for every platform (speechEngines.js picks the recogniser):
 //
-//   speechEngineFor(language)        the engine, or null to hide the microphone
+//   speechEngineFor(language, { skipSystem })
+//                                    the engine, or null to hide the microphone
 //   speechModelFor(engine)           { name, bytes } for an on-device engine
 //   speechModelReady(engine)         whether its model is downloaded already
 //   downloadSpeechModel(engine, fn)  downloads it, fn({ loaded, total })
-//   startSpeech({ language, onPartial, onFinal, onState, onError })
-//                                    → { stop() }
+//   startSpeech({ engine, language, onPartial, onFinal, onState, onError })
+//                                    → { stop() }; engine defaults to
+//                                    speechEngineFor(language)
 //
 // onPartial(text) shows what has been heard so far; onFinal(text, { send })
 // ends the turn, with send true when it ended on three seconds of silence and
@@ -14,11 +16,13 @@
 // model is coming off storage), "listening" or "finishing" (the last
 // transcription). Errors carry a code: "permission" (the microphone was
 // refused), "browser" (the browser's recogniser failed; the next press uses the
-// on-device model), "model" (the model would not download or load), "failed".
-// No engine here spends an AI request.
+// on-device model), "system" (the system's recogniser could not start; the
+// error's `fallback` is why, systemFallbackReason, and the press goes on with
+// speechEngineFor(language, { skipSystem: true })), "model" (the model would
+// not download or load), "failed". No engine here spends an AI request.
 
 import { isNativeBuild, capacitor, nativePlugin } from "./native/bridge.js";
-import { ON_DEVICE_MODELS, SPEECH_ENGINES, modelBytes, pickSpeechEngine, speechLocale } from "./speechEngines.js";
+import { ON_DEVICE_MODELS, SPEECH_ENGINES, modelBytes, pickSpeechEngine, speechLocale, systemFallbackReason, systemSpeechPlatform } from "./speechEngines.js";
 import { createSilenceWatch } from "./speechSilence.js";
 import { microphoneAvailable } from "./speechCapture.js";
 
@@ -47,12 +51,23 @@ const onDeviceAvailable = () =>
   && typeof WebAssembly !== "undefined"
   && microphoneAvailable();
 
-export const speechEngineFor = (language) => pickSpeechEngine({
+// Set when the desktop app turns out to have no program for the system's
+// recogniser (a Linux build, or one made without a compiler): from then on
+// presses go straight to Whisper. Every other failure is tried again on the
+// next press, so a player who turns Windows' online speech recognition on, or
+// allows it in macOS's settings, gets the system's at once.
+let systemAbsent = false;
+
+// skipSystem: the engine a press falls back to when the system's recogniser
+// could not listen.
+export const speechEngineFor = (language, { skipSystem = false } = {}) => pickSpeechEngine({
   language,
   native: isNativeBuild(),
   nativeRecognizer: isNativeBuild() && nativeRecognizer(),
   browserRecognizer: Boolean(browserRecognizer()),
   electron: isElectron(),
+  systemRecognizer: !isNativeBuild() && !systemAbsent && systemSpeechPlatform(typeof navigator !== "undefined" ? navigator.userAgent : ""),
+  skipSystem,
   browserBroken,
   onDevice: onDeviceAvailable(),
 });
@@ -219,6 +234,112 @@ const startAndroid = ({ language, onPartial, onFinal, onState, onError }) => {
   return { stop: () => end(joinText(committed, current), false) };
 };
 
+// The system's own recogniser, in the desktop app: the game's server starts
+// its program for the turn and passes on what it writes, one JSON line per
+// event (electron/speechSystem.cjs). Letting go of the request stops it. Its
+// hypotheses mark speech for the silence rule; a finished phrase only counts
+// when no hypothesis came before it, as it arrives a moment after the player
+// stopped and would otherwise stretch the three seconds.
+const startSystem = ({ language, onPartial, onFinal, onState, onError }) => {
+  const controller = new AbortController();
+  let committed = "";
+  let current = "";
+  let ready = false;
+  let active = true;
+  let watch = null;
+  const text = () => joinText(committed, current);
+  const end = turnEnder({
+    onFinal,
+    cleanup: () => {
+      active = false;
+      watch?.stop();
+      controller.abort();
+    },
+  });
+  const fail = (code) => {
+    if (!active) return;
+    const spoke = Boolean(text());
+    if (code === "microphone") {
+      end(text(), false);
+      onError?.(speechError("permission", code));
+      return;
+    }
+    if (ready && spoke) {
+      // It stopped part way: what was heard stays in the box.
+      end(text(), false);
+      onError?.(speechError("failed", code));
+      return;
+    }
+    const reason = systemFallbackReason(code);
+    if (reason === "absent") systemAbsent = true;
+    end("", false);
+    onError?.(Object.assign(speechError("system", code), { fallback: reason }));
+  };
+  const handle = (event) => {
+    if (!active || !event) return;
+    if (event.type === "ready") {
+      ready = true;
+      watch = createSilenceWatch({ onVerdict: (verdict) => end(text(), verdict === "send") });
+      onState?.("listening");
+    } else if (event.type === "partial" && ready) {
+      current = String(event.text || "");
+      watch.heard();
+      onPartial?.(text());
+    } else if (event.type === "final" && ready) {
+      if (!current) watch.heard();
+      committed = joinText(committed, event.text);
+      current = "";
+      onPartial?.(text());
+    } else if (event.type === "error") {
+      fail(event.code);
+    } else if (event.type === "end") {
+      // It ended by itself, with no error: what was heard stays, unsent.
+      if (ready) end(text(), false);
+      else fail("failed");
+    }
+  };
+  (async () => {
+    let response;
+    try {
+      response = await fetch("/api/desktop/speech/listen", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ language: speechLocale(language) }),
+        signal: controller.signal,
+      });
+    } catch {
+      fail("failed");
+      return;
+    }
+    // A server from before the system's recogniser has no such route.
+    if (!response.ok || !response.body) {
+      fail(response.status === 404 ? "unavailable" : "failed");
+      return;
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let newline;
+        while ((newline = buffer.indexOf("\n")) >= 0) {
+          const line = buffer.slice(0, newline).trim();
+          buffer = buffer.slice(newline + 1);
+          if (!line) continue;
+          try { handle(JSON.parse(line)); } catch { /* not a line of its */ }
+        }
+      }
+    } catch {
+      // Aborted by stop(), or the server went away.
+    }
+    handle({ type: "end" });
+  })();
+  return { stop: () => end(text(), false) };
+};
+
 // The on-device model starts once its module is in; a stop pressed before
 // that ends the turn without opening the microphone.
 const startOnDeviceTurn = (handlers) => {
@@ -244,11 +365,12 @@ const startOnDeviceTurn = (handlers) => {
   };
 };
 
-export const startSpeech = ({ language, onPartial, onFinal, onState, onError } = {}) => {
-  const engine = speechEngineFor(language);
+export const startSpeech = ({ engine: chosen, language, onPartial, onFinal, onState, onError } = {}) => {
+  const engine = chosen || speechEngineFor(language);
   const handlers = { language, onPartial, onFinal, onState, onError };
   if (engine === SPEECH_ENGINES.ANDROID) return startAndroid(handlers);
   if (engine === SPEECH_ENGINES.BROWSER) return startBrowser(handlers);
+  if (engine === SPEECH_ENGINES.SYSTEM) return startSystem(handlers);
   if (engine === SPEECH_ENGINES.WHISPER) return startOnDeviceTurn({ engine, ...handlers });
   onError?.(speechError("failed"));
   return { stop() {} };

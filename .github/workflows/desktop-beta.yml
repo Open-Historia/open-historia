@@ -178,6 +178,14 @@ jobs:
       - name: Vendor the map generator
         run: node scripts/fetch-fmg.mjs --required
 
+      # The program the Advisor microphone hears the player through with the
+      # system's own speech recognition (electron/speechSystem.cjs): C# with
+      # Windows' own compiler, Swift with Xcode's; nothing on Linux, which has
+      # none. --required: a Windows or macOS installer without it would quietly
+      # use Whisper for everyone.
+      - name: Build the system speech program
+        run: node scripts/build-speech-helpers.mjs ${{ matrix.args }} --required
+
       - name: Build the client
         run: npm run build
 

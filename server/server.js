@@ -813,6 +813,39 @@ app.post("/api/desktop/display-mode", jsonParser, (req, res) => {
   res.json(bridge.set(mode));
 });
 
+// The Advisor's microphone through the system's own speech recognition
+// (electron/speechSystem.cjs): one turn per request, answered as JSON lines
+// (ready, partial, final, error, end) as they come. The turn ends when the
+// program says "end" or when the page lets go of the request. A POST, so the
+// write guard keeps other websites from opening the microphone; and only for
+// this machine's own window, as another device's microphone is not this one.
+app.post("/api/desktop/speech/listen", jsonParser, (req, res) => {
+  const bridge = isLoopbackAddress(req.socket?.remoteAddress) ? globalThis.__ohSystemSpeech || null : null;
+  res.status(200);
+  res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("X-Accel-Buffering", "no");
+  const write = (event) => {
+    if (!res.writableEnded) res.write(`${JSON.stringify(event)}\n`);
+  };
+  if (!bridge) {
+    write({ type: "error", code: "unavailable" });
+    write({ type: "end" });
+    res.end();
+    return;
+  }
+  res.flushHeaders?.();
+  const session = bridge.listen({
+    language: req.body?.language,
+    onEvent: (event) => {
+      write(event);
+      if (event.type === "end" && !res.writableEnded) res.end();
+    },
+  });
+  // The page stopping the turn (or going away) closes the request.
+  res.on("close", () => session.stop());
+});
+
 app.get("/api/scenarios/:scenarioId", (req, res) => {
   try {
     res.json(getScenarioDetails(req.params.scenarioId));

@@ -40,7 +40,7 @@
     <img class="logo" src="/logo.png" alt="Open Historia logo" width="64" height="64" />
 
     <h1>Privacy Policy</h1>
-    <p class="tagline">Last updated and in effect from 4 November 2026</p>
+    <p class="tagline">Last updated and in effect from 5 November 2026</p>
 
     <p>Open Historia is a free, open-source strategy game. It runs on your own device: in the browser at openhistoria.com, as a desktop app for Windows, macOS and Linux, and as an Android app. This policy covers all of them, in their stable and beta versions. It explains what the game keeps on your device, what it sends elsewhere and to whom, what the project itself holds about you, and the rights you have.</p>
     <p><strong>Who is responsible.</strong> "We" means Nicholas Krol, an individual in the United States who runs the Open Historia project and its servers, and who is the data controller for what this policy describes. You can reach us at <a href="mailto:nichojkrol@gmail.com">nichojkrol@gmail.com</a>. Open Historia is a non-commercial project: it has no advertising, sells nothing and has no paid accounts.</p>
@@ -137,6 +137,7 @@
           <tr><td>Download sizes (GitHub)</td><td>The website's front page</td><td>Nothing beyond the request</td></tr>
           <tr><td>Install counts (GitHub)</td><td>Once per install: the desktop app, the desktop beta, the native app and the two Android apps each download their own small file the first time they start after being installed, or after updating to the version that added this, and never again. The website never does. See <a href="#install-counts">Install Counts</a> below</td><td>Nothing beyond the request</td></tr>
           <tr><td>Spellchecker (Google)</td><td>The desktop app on Windows and Linux may download a dictionary the first time one is needed</td><td>Which language's dictionary to download</td></tr>
+          <tr><td>Speech recognition in the desktop app (Microsoft on Windows; Apple on macOS where the Mac cannot do it itself; beta versions)</td><td>While the Advisor's microphone listens through the system's own speech recognition (see <a href="#microphone">The Advisor's Microphone</a>)</td><td>Your voice while it listens, sent by Windows or macOS, not by the game</td></tr>
           <tr><td>Speech model for the Advisor's microphone (Hugging Face, United States; beta versions)</td><td>Where the microphone runs a model on your device (see <a href="#microphone">The Advisor's Microphone</a>): once, after you press Download, and again briefly whenever the model is loaded, to look up its list of files</td><td>Which model is downloaded. Nothing you say</td></tr>
         </tbody>
       </table>
@@ -149,7 +150,9 @@
     <h3 id="microphone">The Advisor's Microphone (beta versions)</h3>
     <p>The microphone on the Advisor's input bar turns what you say into a message. It never uses your AI provider: only the text you send reaches it, as if you had typed it. Which recogniser listens depends on where you play:</p>
     <ul>
-      <li><strong>In the desktop app, and in a browser with no speech recognition of its own</strong> (such as Firefox), a speech model runs on your device: Whisper base, for every language (about 80 MB). It is downloaded from Hugging Face the first time, only after you press Download, and kept in the game's storage. <strong>Your voice never leaves your device.</strong> On macOS the system asks you once whether the app may use the microphone.</li>
+      <li><strong>In the desktop app on Windows</strong>, Windows' own speech recognition listens first. Windows recognises dictation through Microsoft's online speech service, so <strong>while it listens your voice is sent to Microsoft</strong>, under Microsoft's privacy statement. It only works if you have turned on Online speech recognition in Windows (Settings → Privacy &amp; security → Speech); the game never turns it on for you. Where it is off, or Windows has no speech recognition for your language, the speech model below is used instead.</li>
+      <li><strong>In the desktop app on macOS</strong>, macOS's own speech recognition listens first. Where the Mac has the language's model, it recognises your speech on the Mac and nothing is sent; otherwise macOS sends your voice to Apple to be recognised, under Apple's privacy policy. macOS asks you once whether the app may use speech recognition and the microphone. If you say no, or it cannot listen, the speech model below is used instead.</li>
+      <li><strong>In the desktop app on Linux, wherever the system's speech recognition cannot listen, and in a browser with no speech recognition of its own</strong> (such as Firefox), a speech model runs on your device: Whisper base, for every language (about 80 MB). It is downloaded from Hugging Face the first time, only after you press Download, and kept in the game's storage. <strong>With it, your voice never leaves your device.</strong></li>
       <li><strong>In a browser that has speech recognition</strong> (such as Chrome, Edge or Safari), the game uses the browser's. The browser may send your voice to its maker's service to be recognised (Chrome sends it to Google), under that company's privacy policy.</li>
       <li><strong>In the Android app</strong>, the phone's own speech recognition service listens (on most phones, Google's). Depending on the phone and its settings, it may recognise speech on the phone or send it to that service.</li>
     </ul>
@@ -273,7 +276,7 @@
     </ul>
 
     <h2>Where Data Is Processed</h2>
-    <p>We are based in the United States, and so are most of the services above: Cloudflare, Google, Umami, GitHub, Esri, Amazon, Discord and most AI providers. Komoot is in Germany. The relay servers shared games use are run by their own operators in various countries. Your data may therefore be processed in the United States and other countries whose laws differ from yours.</p>
+    <p>We are based in the United States, and so are most of the services above: Cloudflare, Google, Umami, GitHub, Esri, Amazon, Discord, Microsoft, Apple and most AI providers. Komoot is in Germany. The relay servers shared games use are run by their own operators in various countries. Your data may therefore be processed in the United States and other countries whose laws differ from yours.</p>
     <p>For personal data from the European Economic Area, the United Kingdom and Switzerland, these transfers rest on the European Commission's and the UK's adequacy decisions for US companies certified under the Data Privacy Framework, where the provider is certified, and otherwise on standard contractual clauses in the provider's terms, or on the fact that the transfer is needed to do what you asked for, such as connecting a shared game or fetching a file. Email us if you would like to know which applies to a particular provider.</p>
 
     <h2>Children</h2>
