@@ -17,6 +17,7 @@
 
 import React, { useEffect } from "react";
 import { useWarRoom } from "../Map/warRoomStore.js";
+import { placeName } from "./warRoomData.js";
 import { besideRailStyle } from "./warRoomFortify.jsx";
 import { AMBER, BONE, BONE_SOFT, keyStyle, linkStyle, stencilStyle, trayStyle } from "./warRoomTheme.js";
 
@@ -68,7 +69,7 @@ const LossLine = ({ strike }) => (
 );
 
 // What is struck, by its name.
-const TargetName = ({ order }) => <span data-no-translate>{order.target || order.battlefield || order.country}</span>;
+const TargetName = ({ order }) => <span data-no-translate>{placeName(order.target) || order.battlefield || order.country}</span>;
 
 // A heading stencilled on the plate, ruled off to the right (as the drawer's own are).
 const Heading = ({ children, style = null }) => (
