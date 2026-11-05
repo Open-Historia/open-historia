@@ -53,6 +53,23 @@ import { PAST_UPDATES } from "./notesPast.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // "A file downloaded by everyone who downloads the main app, a different file for the beta app ... only downloaded
+    // once when the app is installed or when people update to this update and never again" (the owner, 2026-11-04).
+    // The app shells do it (electron/appFile.cjs, mobile/android .../AppFile.java); the page and the website never do.
+    id: "2026-11-install-count",
+    kind: "minor",
+    date: "2026-11-05",
+    channel: "beta",
+    banners: [
+      {
+        title: "Counting installs",
+        items: [
+          "The app now downloads one small file from GitHub once, after it is installed or updated, so we can count how many people install it. Nothing about you is sent with it.",
+        ],
+      },
+    ],
+  },
+  {
     // Two chats the owner sent, 2026-11-04: a "Meccan Alliance" condemnation of Iran shown twice, as Iran's own words,
     // and a "GSSTO" ultimatum to Tokyo and Toronto shown as Japan's. A chat's first line is said by whom the skip named
     // (AI/chatSpeaker.js), and a line the same sender just said is not added again (AI/chatFold.js).
