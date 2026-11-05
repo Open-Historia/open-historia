@@ -43,6 +43,8 @@ var refresh_step := ""
 var selected_party := ""
 var hovered_party := ""
 var institutions_all := false
+var landscape_view := ""
+var landscape_polity := ""
 var findings_all := false
 var tracking_search := ""
 var chart_keys: Array = []
@@ -1025,9 +1027,9 @@ func _render_politics() -> void:
 	var compile: Variant = politics.get("compile")
 	if typeof(compile) == TYPE_DICTIONARY:
 		_render_compile(compile)
-	var landscape: Variant = politics.get("landscape")
-	if typeof(landscape) == TYPE_DICTIONARY:
-		_render_landscape(landscape)
+	var landscapes: Variant = politics.get("landscapes")
+	if typeof(landscapes) == TYPE_DICTIONARY:
+		_render_landscape(landscapes, str(politics.get("polityKey", "")))
 	var goals: Array = politics.get("goals", [])
 	if not goals.is_empty():
 		var box := _secondary(14)
@@ -1073,7 +1075,18 @@ func _render_compile(compile: Dictionary) -> void:
 	box.add_child(stack)
 
 
-func _render_landscape(landscape: Dictionary) -> void:
+func _render_landscape(views: Dictionary, polity: String) -> void:
+	var can_switch: bool = views.get("canSwitch", false)
+	var active := str(views.get("defaultView", ""))
+	if can_switch and landscape_polity == polity and not landscape_view.is_empty() and typeof(views.get(landscape_view)) == TYPE_DICTIONARY:
+		active = landscape_view
+	var chosen: Variant = views.get(active) if not active.is_empty() else null
+	if typeof(chosen) != TYPE_DICTIONARY:
+		return
+	var landscape: Dictionary = chosen
+	var entries: Array = landscape.get("entries", [])
+	if entries.is_empty():
+		return
 	page.add_child(gap(17))
 	var stack := column(0)
 	stack.add_child(gap(4))
@@ -1093,11 +1106,14 @@ func _render_landscape(landscape: Dictionary) -> void:
 		values.add_child(rough)
 	top.add_child(values)
 	stack.add_child(top)
-	var entries: Array = landscape.get("entries", [])
 	var slices: Array = landscape.get("slices", [])
-	if not slices.is_empty():
+	if active == "parties" and not slices.is_empty():
 		stack.add_child(_landscape_overview(landscape, slices, entries))
-	if str(landscape.get("mode", "party")) == "party":
+	if active == "blocs":
+		stack.add_child(_bloc_ledger(entries))
+	if can_switch:
+		stack.add_child(_landscape_switch(active, views, polity))
+	if active == "parties":
 		stack.add_child(gap(6))
 		var rows := column(0)
 		var first := true
@@ -1105,52 +1121,135 @@ func _render_landscape(landscape: Dictionary) -> void:
 			rows.add_child(_party_row(item, first))
 			first = false
 		stack.add_child(rows)
-		page.add_child(stack)
-		return
-	var legend := GridContainer.new()
-	legend.columns = 2
-	legend.add_theme_constant_override("h_separation", 7)
-	legend.add_theme_constant_override("v_separation", 5)
-	legend.mouse_filter = Control.MOUSE_FILTER_PASS
-	for item in entries:
-		var party: Dictionary = item
-		var chosen := str(party.get("id", "")) == selected_party
-		var cell := StatClickable.new(UI.box(Color(1, 1, 1, 0.07) if chosen else Color(0, 0, 0, 0), Color(1, 1, 1, 0.1) if chosen else Color(0, 0, 0, 0), 7, 1, Vector4(6, 5, 6, 5)), UI.box(Color(1, 1, 1, 0.07), Color(1, 1, 1, 0.1), 7, 1, Vector4(6, 5, 6, 5)))
-		cell.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		var line := row(6)
-		var dot := StatDot.new()
-		dot.color = tone(str(party.get("color", "")))
-		dot.custom_minimum_size = Vector2(8, 8)
-		dot.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-		line.add_child(dot)
-		line.add_child(clipped(str(party.get("shortName", party.get("name", ""))), 10, Color(1, 1, 1, 0.66)))
-		line.add_child(UI.label(str(party.get("valueText", "")), 10, Color(1, 1, 1, 0.43), 800))
-		cell.add_child(line)
-		cell.clicked.connect(_pick_party.bind(str(party.get("id", ""))))
-		cell.mouse_entered.connect(_hover_party.bind(str(party.get("id", ""))))
-		cell.mouse_exited.connect(_hover_party.bind(""))
-		legend.add_child(cell)
-	stack.add_child(gap(6))
-	stack.add_child(legend)
-	for item in entries:
-		var party: Dictionary = item
-		if str(party.get("id", "")) == selected_party and not selected_party.is_empty():
-			stack.add_child(gap(11))
-			stack.add_child(_party_detail(party, false))
 	page.add_child(stack)
+
+
+func _choose_view(value: String, views: Dictionary, polity: String, active: String) -> void:
+	if value == active or typeof(views.get(value)) != TYPE_DICTIONARY:
+		return
+	landscape_view = value
+	landscape_polity = polity
+	selected_party = ""
+	hovered_party = ""
+	_render()
+
+
+func _landscape_switch(active: String, views: Dictionary, polity: String) -> Control:
+	var holder := column(0)
+	holder.add_child(gap(9))
+	var centre := CenterContainer.new()
+	centre.mouse_filter = Control.MOUSE_FILTER_PASS
+	var frame := PanelContainer.new()
+	frame.mouse_filter = Control.MOUSE_FILTER_PASS
+	frame.add_theme_stylebox_override("panel", UI.box(Color("#1b2c3c"), Color(142 / 255.0, 188 / 255.0, 215 / 255.0, 0.2), 6, 1, Vector4(3, 3, 3, 3)))
+	var line := row(3)
+	for pair in [["parties", "Political parties"], ["blocs", "Power blocs"]]:
+		var key: String = pair[0]
+		var picked := key == active
+		var button := Button.new()
+		button.text = str(pair[1])
+		button.focus_mode = Control.FOCUS_NONE
+		button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+		button.custom_minimum_size.y = 34
+		button.add_theme_font_override("font", UI.font(800))
+		button.add_theme_font_size_override("font_size", 11)
+		var ink := Color("#f4faff") if picked else Color("#91a8ba")
+		for state in ["font_color", "font_pressed_color", "font_focus_color"]:
+			button.add_theme_color_override(state, ink)
+		button.add_theme_color_override("font_hover_color", Color("#f4faff") if picked else Color("#e1edf7"))
+		button.add_theme_color_override("font_hover_pressed_color", Color("#f4faff") if picked else Color("#e1edf7"))
+		var face := edged(Color("#28475e"), Color("#89d2ed"), Vector4(0, 0, 0, 2), Vector4(12, 5, 12, 5), 4) if picked else UI.box(CLEAR, CLEAR, 4, 0, Vector4(12, 5, 12, 5))
+		for state in ["normal", "hover", "pressed", "focus", "hover_pressed", "disabled"]:
+			button.add_theme_stylebox_override(state, face)
+		button.set_meta("view", key)
+		button.set_meta("pressed", picked)
+		button.pressed.connect(_choose_view.bind(key, views, polity, active))
+		line.add_child(button)
+	frame.add_child(line)
+	centre.add_child(frame)
+	holder.add_child(centre)
+	holder.add_child(gap(11))
+	return holder
+
+
+func _bloc_ledger(entries: Array) -> Control:
+	var ledger := column(0)
+	ledger.add_child(gap(11))
+	ledger.add_child(line_rule(Color(142 / 255.0, 188 / 255.0, 215 / 255.0, 0.24)))
+	for item in entries:
+		var bloc: Dictionary = item
+		var id := str(bloc.get("id", ""))
+		var open := not id.is_empty() and id == selected_party
+		var entry := PanelContainer.new()
+		entry.mouse_filter = Control.MOUSE_FILTER_PASS
+		entry.set_meta("bloc", id)
+		entry.add_theme_stylebox_override("panel", edged(Color(60 / 255.0, 127 / 255.0, 166 / 255.0, 0.09) if open else CLEAR, Color(142 / 255.0, 188 / 255.0, 215 / 255.0, 0.16), Vector4(0, 0, 0, 1)))
+		var stack := column(0)
+		var head := StatClickable.new(UI.box(CLEAR, CLEAR, 0, 0, Vector4(4, 13, 4, 13)), UI.box(Color(121 / 255.0, 180 / 255.0, 214 / 255.0, 0.055), CLEAR, 0, 0, Vector4(4, 13, 4, 13)))
+		head.clicked.connect(_pick_party.bind(id))
+		head.mouse_entered.connect(_hover_party.bind(id))
+		head.mouse_exited.connect(_hover_party.bind(""))
+		var inner := column(0)
+		var heading := row(10)
+		var named := text(str(bloc.get("name", "")), 13, Color("#e7eff6"), 850)
+		named.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+		heading.add_child(named)
+		var shown := str(bloc.get("displayValue", ""))
+		var amount := plain(shown if not shown.is_empty() else "Not quantified", 12, Color("#a6d9ee"), 850)
+		amount.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		amount.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+		heading.add_child(amount)
+		inner.add_child(heading)
+		var strength: Variant = bloc.get("influence")
+		if typeof(strength) == TYPE_INT or typeof(strength) == TYPE_FLOAT:
+			inner.add_child(gap(8))
+			var track := _bar(float(strength), tone(str(bloc.get("color", ""))), 6.0)
+			track.track = Color("#2a3645")
+			inner.add_child(track)
+			inner.add_child(gap(7))
+		else:
+			inner.add_child(gap(4))
+			inner.add_child(text("Qualitative influence assessment" if not str(bloc.get("influenceLabel", "")).is_empty() else "No numeric influence recorded", 10, Color("#879bad")))
+		var facts: PackedStringArray = []
+		if not str(bloc.get("kind", "")).is_empty():
+			facts.append(_escape(str(bloc["kind"]).replace("_", " ")))
+		for key in ["leader", "status"]:
+			if not str(bloc.get(key, "")).is_empty():
+				facts.append(_escape(str(bloc[key])))
+		if not facts.is_empty():
+			inner.add_child(gap(6))
+			var meta := _rich(10, Color("#8ea2b5"))
+			meta.text = "[color=#688399]  ·  [/color]".join(facts)
+			inner.add_child(meta)
+		if bloc.get("influenceApproximate", false):
+			inner.add_child(gap(6))
+			inner.add_child(caps("Approximate", 9, Color("#d5bb79"), 800, 1))
+		head.add_child(inner)
+		stack.add_child(head)
+		if open:
+			var room := MarginContainer.new()
+			for side in [["margin_left", 4], ["margin_right", 4], ["margin_top", 11], ["margin_bottom", 14]]:
+				room.add_theme_constant_override(side[0], side[1])
+			room.mouse_filter = Control.MOUSE_FILTER_PASS
+			room.add_child(_party_detail(bloc, false))
+			stack.add_child(room)
+		entry.add_child(stack)
+		ledger.add_child(entry)
+	return ledger
 
 
 func _landscape_overview(landscape: Dictionary, slices: Array, entries: Array) -> Control:
 	var holder := PanelContainer.new()
 	holder.mouse_filter = Control.MOUSE_FILTER_PASS
-	holder.add_theme_stylebox_override("panel", edged(CLEAR, DOSSIER_LINE, Vector4(0, 0, 0, 1), Vector4(0, 5, 0, 11)))
-	var split := row(10)
+	holder.add_theme_stylebox_override("panel", edged(CLEAR, DOSSIER_LINE, Vector4(0, 0, 0, 1), Vector4(0, 6, 0, 11)))
+	var split := row(8)
 	split.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_donut = StatDonut.new()
-	_donut.limit = 160.0
-	_donut.custom_minimum_size = Vector2(145, 150)
+	_donut.limit = 185.0
+	_donut.least_height = 172.0
+	_donut.custom_minimum_size = Vector2(170, 172)
 	_donut.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_donut.size_flags_stretch_ratio = 0.9
+	_donut.size_flags_stretch_ratio = 1.05
 	_donut.slices = slices
 	_donut.selected = selected_party
 	_donut.hovered = hovered_party
@@ -3181,6 +3280,7 @@ class StatDonut extends Control:
 	var center_label := "Political"
 	var center_sub := "landscape"
 	var limit := 0.0
+	var least_height := 150.0
 	var _segments: Array = []
 
 	func _init() -> void:
@@ -3295,7 +3395,7 @@ class StatDonut extends Control:
 		if what == NOTIFICATION_MOUSE_EXIT and not hovered.is_empty():
 			hovering.emit("")
 		elif what == NOTIFICATION_RESIZED and limit > 0.0:
-			var want: float = max(150.0, min(size.x, limit))
+			var want: float = max(least_height, min(size.x, limit))
 			if not is_equal_approx(custom_minimum_size.y, want):
 				custom_minimum_size.y = want
 			queue_redraw()
