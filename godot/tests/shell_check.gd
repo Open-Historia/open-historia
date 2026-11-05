@@ -7,9 +7,9 @@ var failures: PackedStringArray = []
 var played: PackedStringArray = []
 var only := ""
 
-const NEWEST_UPDATES := ["2026-11-native-advisor-contacts", "2026-11-ships-from-ports", "2026-11-aircraft-key", "2026-11-gentler-terrain"]
-const NEWEST_TITLES := ["The same size on every screen", "Troops sail from a port", "The Aircraft key works", "Gentler 3D terrain"]
-const FIRST_OPENING := ["2026-11-rostra", "2026-11-deploy-aircraft", "2026-10-espionage-part-2", "2026-11-native-advisor-contacts"]
+const NEWEST_UPDATES := ["2026-11-native-sharp-at-any-size", "2026-11-native-advisor-contacts", "2026-11-ships-from-ports", "2026-11-aircraft-key"]
+const NEWEST_TITLES := ["Sharp at any size", "The same size on every screen", "Troops sail from a port", "The Aircraft key works"]
+const FIRST_OPENING := ["2026-11-rostra", "2026-11-deploy-aircraft", "2026-10-espionage-part-2", "2026-11-native-sharp-at-any-size"]
 
 
 func _update_ids(updates: Array) -> Array:
@@ -519,6 +519,7 @@ func _notice_and_history(shell: ShellBoot) -> void:
 		var history_ids := _update_ids(shell.history._updates)
 		_check("the update history lists the newest updates", (NEWEST_UPDATES + ["2026-10-peace-and-weariness"]).all(func(id: String) -> bool: return history_ids.has(id)), ", ".join(PackedStringArray(history_ids.slice(0, 6))))
 		_check("the browser map's notice of smoother zooming is left out of the native history", not history_ids.has("2026-11-smoother-zooming"))
+		_check("beta's notice of picture edges and strike targets is told in the native one instead", not history_ids.has("2026-11-picture-edges-and-strike-targets") and history_ids.has("2026-11-native-sharp-at-any-size"))
 		shell.history.view("2026-10-peace-and-weariness")
 		await _wait(1.6)
 		var viewed := _texts(shell.history.viewing(), PackedStringArray()) if shell.history.viewing() else PackedStringArray()
