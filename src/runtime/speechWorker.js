@@ -1,34 +1,23 @@
-/*! Open Historia — the on-device speech models, off the main thread © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-// Runs one on-device recogniser for the Advisor's microphone (speechInput.js):
-// Parakeet TDT 0.6B v3 through parakeet.js, or Whisper base through
-// Transformers.js. A model the size of Parakeet's would hold the page up for
-// seconds per transcription, so it lives here.
+/*! Open Historia — the on-device speech model, off the main thread © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
+// Runs Whisper base through Transformers.js for the Advisor's microphone
+// (speechInput.js). Each reading takes seconds of the CPU, which would hold the
+// page up, so it lives here.
 //
-// The weights come from the model host once and stay in the browser's storage
-// (parakeet.js keeps them in IndexedDB, Transformers.js in the Cache API); the
-// ONNX Runtime each one runs on is part of the build (vite.config.ts), so the
-// audio and the runtime never leave the device and only the first use needs a
-// connection.
+// The weights come from the model host once and stay in the browser's Cache
+// API; the ONNX Runtime it runs on is part of the build (vite.config.ts), so
+// the audio and the runtime never leave the device and only the first use
+// needs a connection.
 //
-// Messages in:  { type: "status" }                       → { type: "status", cached }
-//               { type: "load" }                         → progress…, then ready | error
+// Messages in:  { type: "status" }                         → { type: "status", cached }
+//               { type: "load" }                           → progress…, then ready | error
 //               { type: "transcribe", id, audio, language } → { type: "text", id, text }
-// Every message names its engine; the first one fixes it, so one worker is one
-// model.
 
-import parakeetOrtWasm from "oh-ort-parakeet/ort-wasm-simd-threaded.wasm?url";
 import whisperOrtWasm from "oh-ort-whisper/ort-wasm-simd-threaded.wasm?url";
 import { ON_DEVICE_MODELS, SPEECH_ENGINES, modelBytes } from "./speechEngines.js";
 
-let engine = null;
-let MODEL = null;
-let TOTAL = 0;
-const fixEngine = (name) => {
-  if (engine) return;
-  engine = name === SPEECH_ENGINES.WHISPER ? SPEECH_ENGINES.WHISPER : SPEECH_ENGINES.PARAKEET;
-  MODEL = ON_DEVICE_MODELS[engine];
-  TOTAL = modelBytes(engine);
-};
+const MODEL = ON_DEVICE_MODELS[SPEECH_ENGINES.WHISPER];
+const TOTAL = modelBytes(SPEECH_ENGINES.WHISPER);
+const SAMPLE_RATE = 16000;
 
 // Threads need a cross-origin-isolated page, which the game is not (its map
 // tiles and flags come from other hosts); one thread it is.
@@ -39,7 +28,7 @@ let recognise = null;
 
 const post = (message) => self.postMessage(message);
 
-// Progress over the whole model, from the per-file reports both libraries give.
+// Progress over the whole model, from the per-file reports Transformers.js gives.
 const progressTracker = () => {
   const loaded = new Map();
   let last = 0;
@@ -55,65 +44,17 @@ const progressTracker = () => {
   };
 };
 
-// ---------------------------------------------------------------------------
-// Is the model already here? Read straight from each library's storage, so a
-// player who cleared site data is asked again rather than surprised by 670 MB.
+// Is the model already here? Read straight from Transformers.js's cache, so a
+// player who cleared site data is asked again rather than surprised by the
+// download. Its key is the file's URL on the model host.
+const fileUrl = (file) => `https://huggingface.co/${MODEL.repo}/resolve/${MODEL.revision}/${file}`;
 
-const PARAKEET_DB = "parakeet-cache-db";
-const PARAKEET_STORE = "file-store";
-// parakeet.js's own cache key (src/hub.js getModelFile).
-const parakeetKey = (file) => `hf-${MODEL.repo}-${MODEL.revision}--${file}`;
-
-const parakeetCached = () => new Promise((resolve) => {
-  let request;
-  try {
-    request = indexedDB.open(PARAKEET_DB, 1);
-  } catch {
-    resolve(false);
-    return;
-  }
-  request.onupgradeneeded = () => {
-    const db = request.result;
-    if (!db.objectStoreNames.contains(PARAKEET_STORE)) db.createObjectStore(PARAKEET_STORE);
-  };
-  request.onerror = () => resolve(false);
-  request.onsuccess = () => {
-    const db = request.result;
-    try {
-      const store = db.transaction([PARAKEET_STORE], "readonly").objectStore(PARAKEET_STORE);
-      const files = Object.keys(MODEL.files);
-      let found = 0;
-      let answered = false;
-      const answer = (value) => {
-        if (answered) return;
-        answered = true;
-        db.close();
-        resolve(value);
-      };
-      for (const file of files) {
-        const get = store.getKey(parakeetKey(file));
-        get.onsuccess = () => {
-          if (get.result === undefined) answer(false);
-          else if (++found === files.length) answer(true);
-        };
-        get.onerror = () => answer(false);
-      }
-    } catch {
-      db.close();
-      resolve(false);
-    }
-  };
-});
-
-// Transformers.js's Cache API key is the file's URL on the model host.
-const whisperUrl = (file) => `https://huggingface.co/${MODEL.repo}/resolve/${MODEL.revision}/${file}`;
-
-const whisperCached = async () => {
+const cached = async () => {
   try {
     if (typeof caches === "undefined") return false;
     const cache = await caches.open("transformers-cache");
     for (const file of Object.keys(MODEL.files)) {
-      if (!(await cache.match(whisperUrl(file)))) return false;
+      if (!(await cache.match(fileUrl(file)))) return false;
     }
     return true;
   } catch {
@@ -121,35 +62,12 @@ const whisperCached = async () => {
   }
 };
 
-// ---------------------------------------------------------------------------
-// Loading.
-
-const loadParakeet = async () => {
-  // The same module instance parakeet.js imports (vite.config.ts points both at
-  // the CPU build), so the runtime it creates reads the build's own WebAssembly
-  // instead of the CDN parakeet.js would otherwise fill in.
-  const ortModule = await import("onnxruntime-web");
-  const ort = ortModule.default || ortModule;
-  ort.env.wasm.wasmPaths = { wasm: new URL(parakeetOrtWasm, self.location.href).href };
-  ort.env.wasm.numThreads = THREADS;
-  const { fromHub } = await import("parakeet.js");
-  const report = progressTracker();
-  const model = await fromHub("parakeet-tdt-0.6b-v3", {
-    revision: MODEL.revision,
-    backend: "wasm",
-    encoderQuant: "int8",
-    decoderQuant: "int8",
-    preprocessorBackend: "js",
-    cpuThreads: THREADS,
-    progress: ({ file, loaded }) => report(file, loaded),
-  });
-  // Parakeet finds the language itself; it only has to be one it speaks, which
-  // speechEngines.js made sure of before choosing it.
-  return async (audio) => {
-    const result = await model.transcribe(audio, 16000, { enableProfiling: false });
-    return String(result?.utterance_text || "");
-  };
-};
+// The longest reading Whisper's decoder may write for a stretch of audio. Its
+// window holds 448 tokens; a reading that runs away (Whisper repeating itself
+// over noise) would otherwise write all of them, a few seconds of decoding on
+// one thread, after the player has finished. Speech in any of the game's
+// languages stays well under 25 tokens a second.
+const maxTokensFor = (samples) => Math.min(440, 32 + Math.ceil((samples / SAMPLE_RATE) * 25));
 
 const loadWhisper = async () => {
   const { pipeline, env } = await import("@huggingface/transformers");
@@ -167,12 +85,17 @@ const loadWhisper = async () => {
       if (event?.status === "progress") report(event.file, event.loaded);
     },
   });
+  // The page hands over pieces of a turn cut at pauses, none longer than
+  // Whisper's 30-second window (speechOnDevice.js), so each is one pass of the
+  // encoder and none needs the pipeline's overlapping chunks. The language is
+  // the player's, given to the decoder rather than guessed from the audio.
   return async (audio, language) => {
+    const long = audio.length > 30 * SAMPLE_RATE;
     const result = await asr(audio, {
       language: language || null,
       task: "transcribe",
-      chunk_length_s: 30,
-      stride_length_s: 5,
+      return_timestamps: false,
+      ...(long ? { chunk_length_s: 30, stride_length_s: 5 } : { max_new_tokens: maxTokensFor(audio.length) }),
     });
     return String((Array.isArray(result) ? result[0]?.text : result?.text) || "").trim();
   };
@@ -180,7 +103,7 @@ const loadWhisper = async () => {
 
 const load = () => {
   if (!loading) {
-    loading = (engine === SPEECH_ENGINES.WHISPER ? loadWhisper() : loadParakeet())
+    loading = loadWhisper()
       .then((fn) => {
         recognise = fn;
         post({ type: "ready" });
@@ -193,16 +116,14 @@ const load = () => {
   return loading;
 };
 
-// Transcriptions run one at a time: a partial asked for while one is running
-// is dropped by the page (speechInput.js), so the queue never grows.
+// Readings run one at a time; the page sends the next piece only once the last
+// has come back (speechOnDevice.js), so the queue never grows.
 let chain = Promise.resolve();
 
 self.onmessage = (event) => {
   const message = event.data || {};
-  fixEngine(message.engine);
   if (message.type === "status") {
-    (engine === SPEECH_ENGINES.WHISPER ? whisperCached() : parakeetCached())
-      .then((cached) => post({ type: "status", cached }));
+    cached().then((value) => post({ type: "status", cached: value }));
     return;
   }
   if (message.type === "load") {

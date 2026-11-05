@@ -61,7 +61,6 @@
     "maplibre-gl": "^5.19.0",
     "ol": "^10.9.0",
     "ol-pmtiles": "^2.0.2",
-    "parakeet.js": "1.4.4",
     "pmtiles": "^4.4.0",
     "polygon-clipping": "^0.15.7",
     "react": "^19.2.4",

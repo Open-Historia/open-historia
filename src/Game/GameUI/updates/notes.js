@@ -54,7 +54,7 @@ import { PAST_UPDATES } from "./notesPast.js";
 const NEW_UPDATES = [
   {
     // The Advisor's microphone (GameUI/AdvisorMic.jsx, runtime/speechInput.js): the browser's or the phone's own
-    // recogniser where there is one, otherwise Parakeet TDT 0.6B v3 or Whisper base on the device. No AI request.
+    // recogniser where there is one, otherwise Whisper base (80 MB) on the device. No AI request.
     id: "2026-11-advisor-microphone",
     kind: "minor",
     date: "2026-11-05",

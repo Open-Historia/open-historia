@@ -45,7 +45,6 @@ const onDeviceAvailable = () =>
   !isNativeBuild()
   && typeof Worker !== "undefined"
   && typeof WebAssembly !== "undefined"
-  && typeof indexedDB !== "undefined"
   && microphoneAvailable();
 
 export const speechEngineFor = (language) => pickSpeechEngine({
@@ -63,7 +62,7 @@ export const speechModelFor = (engine) =>
 
 // The on-device half, loaded on first use. The Android build never calls it
 // (the literal below is true there) and swaps the module for an empty one
-// (vite.config.ts dropOnDeviceSpeech), so the worker and runtimes behind it
+// (vite.config.ts dropOnDeviceSpeech), so the worker and runtime behind it
 // stay out of the APK.
 const onDevice = () => {
   if (import.meta.env.VITE_OH_NATIVE) return Promise.reject(speechError("failed"));
@@ -220,7 +219,7 @@ const startAndroid = ({ language, onPartial, onFinal, onState, onError }) => {
   return { stop: () => end(joinText(committed, current), false) };
 };
 
-// The on-device models start once their module is in; a stop pressed before
+// The on-device model starts once its module is in; a stop pressed before
 // that ends the turn without opening the microphone.
 const startOnDeviceTurn = (handlers) => {
   let session = null;
@@ -250,7 +249,7 @@ export const startSpeech = ({ language, onPartial, onFinal, onState, onError } =
   const handlers = { language, onPartial, onFinal, onState, onError };
   if (engine === SPEECH_ENGINES.ANDROID) return startAndroid(handlers);
   if (engine === SPEECH_ENGINES.BROWSER) return startBrowser(handlers);
-  if (engine === SPEECH_ENGINES.PARAKEET || engine === SPEECH_ENGINES.WHISPER) return startOnDeviceTurn({ engine, ...handlers });
+  if (engine === SPEECH_ENGINES.WHISPER) return startOnDeviceTurn({ engine, ...handlers });
   onError?.(speechError("failed"));
   return { stop() {} };
 };

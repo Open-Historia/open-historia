@@ -5,9 +5,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { LANGUAGES } from "./i18n.js";
-import { ON_DEVICE_MODELS, PARAKEET_LANGUAGES, SPEECH_ENGINES, baseLanguage, formatModelSize, modelBytes, onDeviceEngineFor, parakeetSpeaks, pickSpeechEngine, speechLocale, whisperLanguage } from "./speechEngines.js";
+import { ON_DEVICE_MODELS, SPEECH_ENGINES, baseLanguage, formatModelSize, modelBytes, onDeviceEngineFor, pickSpeechEngine, speechLocale, whisperLanguage } from "./speechEngines.js";
 
-const { ANDROID, BROWSER, PARAKEET, WHISPER } = SPEECH_ENGINES;
+const { ANDROID, BROWSER, WHISPER } = SPEECH_ENGINES;
 
 test("Android uses the phone's recogniser, or nothing: never a model download", () => {
   assert.equal(pickSpeechEngine({ language: "en", native: true, nativeRecognizer: true, onDevice: true }), ANDROID);
@@ -21,28 +21,20 @@ test("a browser with a working Web Speech API uses it, in every language", () =>
   }
 });
 
-test("Electron has the Web Speech constructor but no service behind it: the on-device model runs", () => {
-  assert.equal(pickSpeechEngine({ language: "en", browserRecognizer: true, electron: true, onDevice: true }), PARAKEET);
-  assert.equal(pickSpeechEngine({ language: "de", browserRecognizer: true, electron: true, onDevice: true }), PARAKEET);
-  assert.equal(pickSpeechEngine({ language: "ja", browserRecognizer: true, electron: true, onDevice: true }), WHISPER);
+test("Electron has the Web Speech constructor but no service behind it: Whisper runs on the device", () => {
+  for (const language of ["en", "de", "ja"]) {
+    assert.equal(pickSpeechEngine({ language, browserRecognizer: true, electron: true, onDevice: true }), WHISPER, language);
+  }
 });
 
-test("a browser recogniser that failed this session falls through to the on-device model", () => {
-  assert.equal(pickSpeechEngine({ language: "es", browserRecognizer: true, browserBroken: true, onDevice: true }), PARAKEET);
+test("a browser recogniser that failed this session falls through to Whisper", () => {
+  assert.equal(pickSpeechEngine({ language: "es", browserRecognizer: true, browserBroken: true, onDevice: true }), WHISPER);
   assert.equal(pickSpeechEngine({ language: "es", browserRecognizer: true, browserBroken: true, onDevice: false }), null);
 });
 
-test("Parakeet for its 25 European languages, Whisper for the rest of the game's", () => {
-  assert.equal(PARAKEET_LANGUAGES.size, 25);
-  for (const code of ["en", "es", "fr", "pt", "ru", "de", "it", "pl", "uk", "ro", "nl", "el", "cs", "hu", "sv", "fi", "da"]) {
-    assert.equal(onDeviceEngineFor(code), PARAKEET, code);
-  }
-  // parakeet.js lists these as v3's; the model was not trained on them.
-  for (const code of ["ja", "ko", "zh", "ar", "bn", "fa", "hi", "id", "th", "tr", "ur", "vi"]) {
-    assert.equal(onDeviceEngineFor(code), WHISPER, code);
-  }
-  // Every language of the game's picker has an on-device engine.
-  for (const { code } of LANGUAGES) assert.ok(onDeviceEngineFor(code), code);
+test("Whisper is the on-device engine for every language of the game's picker", () => {
+  assert.deepEqual(Object.keys(ON_DEVICE_MODELS), [WHISPER]);
+  for (const { code } of LANGUAGES) assert.equal(onDeviceEngineFor(code), WHISPER, code);
 });
 
 test("no recogniser anywhere hides the microphone", () => {
@@ -62,13 +54,11 @@ test("language codes: the game's, the recognisers' locales, Whisper's", () => {
   for (const { code } of LANGUAGES) assert.match(speechLocale(code), /^[a-z]{2,3}-[A-Z]{2}$/, code);
   assert.equal(whisperLanguage("fil"), "tl");
   assert.equal(whisperLanguage("ja-JP"), "ja");
+  assert.equal(whisperLanguage("de-AT"), "de");
   assert.equal(whisperLanguage("xx"), null);
-  assert.equal(parakeetSpeaks("de-AT"), true);
 });
 
-test("the download prompt's sizes are the pinned files'", () => {
-  assert.equal(modelBytes(PARAKEET), 670488135);
-  assert.equal(formatModelSize(modelBytes(PARAKEET)), "670 MB");
+test("the download prompt's size is the pinned files'", () => {
   assert.equal(modelBytes(WHISPER), 79664191);
   assert.equal(formatModelSize(modelBytes(WHISPER)), "80 MB");
   assert.equal(formatModelSize(1_500_000_000), "1.5 GB");

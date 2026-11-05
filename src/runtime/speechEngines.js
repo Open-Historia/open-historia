@@ -9,10 +9,9 @@
 //   browser   the Web Speech API of a browser that has one. Not in Electron: it
 //             has the constructor, but no key for Google's service behind it,
 //             so every start fails with "network".
-//   parakeet  NVIDIA's Parakeet TDT 0.6B v3 in a worker (parakeet.js on ONNX
-//             Runtime Web), for the 25 European languages it was trained on.
-//   whisper   OpenAI's Whisper base in a worker (Transformers.js), for the
-//             game's other languages, which Parakeet does not speak.
+//   whisper   OpenAI's Whisper base in a worker (Transformers.js on ONNX
+//             Runtime Web), for every language of the game: it was trained on
+//             all fifty, and its download is small enough to ask for.
 //
 // Pure: everything about the platform comes in as arguments, so the choice is
 // tested without a browser.
@@ -20,16 +19,8 @@
 export const SPEECH_ENGINES = Object.freeze({
   ANDROID: "android",
   BROWSER: "browser",
-  PARAKEET: "parakeet",
   WHISPER: "whisper",
 });
-
-// Parakeet TDT 0.6B v3's languages (its model card). parakeet.js lists ja, ko
-// and zh as well; the model was not trained on them.
-export const PARAKEET_LANGUAGES = Object.freeze(new Set([
-  "bg", "hr", "cs", "da", "nl", "en", "et", "fi", "fr", "de", "el", "hu", "it",
-  "lv", "lt", "mt", "pl", "pt", "ro", "sk", "sl", "es", "sv", "ru", "uk",
-]));
 
 // Whisper's codes for the game's languages where they differ from the game's.
 const WHISPER_CODES = Object.freeze({ fil: "tl" });
@@ -76,15 +67,9 @@ export const whisperLanguage = (code) => {
   return WHISPER_LANGUAGES.has(mapped) ? mapped : null;
 };
 
-export const parakeetSpeaks = (code) => PARAKEET_LANGUAGES.has(baseLanguage(code));
-
-// The on-device engine for a language: Parakeet where it was trained, Whisper
-// for the rest, null when neither speaks it.
-export const onDeviceEngineFor = (code) => {
-  if (parakeetSpeaks(code)) return SPEECH_ENGINES.PARAKEET;
-  if (whisperLanguage(code)) return SPEECH_ENGINES.WHISPER;
-  return null;
-};
+// The on-device engine for a language: Whisper, or null where it does not
+// speak the language.
+export const onDeviceEngineFor = (code) => (whisperLanguage(code) ? SPEECH_ENGINES.WHISPER : null);
 
 // Which engine runs, or null where none can (the microphone is then hidden).
 //   native            the Android app's build
@@ -93,7 +78,7 @@ export const onDeviceEngineFor = (code) => {
 //   electron          the page runs in the desktop app
 //   browserBroken     the browser's recogniser failed this session (network,
 //                     refused by the browser, language not offered)
-//   onDevice          a worker, WebAssembly, the microphone and storage are there
+//   onDevice          a worker, WebAssembly and the microphone are there
 export const pickSpeechEngine = ({
   language,
   native = false,
@@ -103,27 +88,19 @@ export const pickSpeechEngine = ({
   browserBroken = false,
   onDevice = false,
 } = {}) => {
-  // A 670 MB model is no thing to put on a phone that has a recogniser of its
-  // own, and the Android WebView has no Web Speech API.
+  // A model download is no thing to put on a phone that has a recogniser of
+  // its own, and the Android WebView has no Web Speech API.
   if (native) return nativeRecognizer ? SPEECH_ENGINES.ANDROID : null;
   if (browserRecognizer && !electron && !browserBroken) return SPEECH_ENGINES.BROWSER;
   if (!onDevice) return null;
   return onDeviceEngineFor(language);
 };
 
-// The models an on-device engine downloads once, pinned to a revision so what
-// is cached is what was measured. Sizes are the files' own, in bytes.
+// The model an on-device engine downloads once, pinned to a revision so what
+// is cached is what was measured. Sizes are the files' own, in bytes. Whisper
+// small would read better, but its 8-bit files come to 250 MB and its encoder
+// is several times the work of base's, on one thread.
 export const ON_DEVICE_MODELS = Object.freeze({
-  [SPEECH_ENGINES.PARAKEET]: Object.freeze({
-    name: "Parakeet TDT 0.6B v3",
-    repo: "ysdede/parakeet-tdt-0.6b-v3-onnx",
-    revision: "e5356bf6e24bdb7a269536b0e9e7869bc034b893",
-    files: Object.freeze({
-      "encoder-model.int8.onnx": 652183999,
-      "decoder_joint-model.int8.onnx": 18202004,
-      "vocab.txt": 102132,
-    }),
-  }),
   [SPEECH_ENGINES.WHISPER]: Object.freeze({
     name: "Whisper base",
     repo: "onnx-community/whisper-base",
@@ -143,7 +120,7 @@ export const ON_DEVICE_MODELS = Object.freeze({
 export const modelBytes = (engine) =>
   Object.values(ON_DEVICE_MODELS[engine]?.files || {}).reduce((sum, bytes) => sum + bytes, 0);
 
-// "670 MB", "80 MB": the size the download prompt shows, in decimal megabytes
+// "80 MB", "1.5 GB": the size the download prompt shows, in decimal megabytes
 // as a browser's download list counts them.
 export const formatModelSize = (bytes) => {
   const mb = Number(bytes) / 1e6;

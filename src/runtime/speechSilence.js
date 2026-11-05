@@ -3,8 +3,8 @@
 // three seconds. Silence before the first word does not count: a player who
 // presses the microphone and then thinks is not done. A press that never hears
 // a word gives up after a while rather than holding the microphone open, and a
-// very long turn is cut off and sent, since the on-device models slow down with
-// every second they have to read.
+// very long turn is cut off and sent, since the on-device model slows down with
+// every second it has to read.
 //
 // Pure apart from the clock and the interval it is handed, so the tests step a
 // mocked clock through it.

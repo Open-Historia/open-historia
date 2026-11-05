@@ -1,8 +1,8 @@
 /*! Open Historia — the microphone, as 16 kHz mono blocks © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-// What the on-device speech models hear (speechInput.js): the microphone as
+// What the on-device speech model hears (speechInput.js): the microphone as
 // blocks of 16 kHz mono samples, a tenth of a second each, which is the rate
-// both Parakeet and Whisper were trained on. Nothing is recorded to disk and
-// nothing is sent anywhere; the blocks go to the caller and nowhere else.
+// Whisper was trained on. Nothing is recorded to disk and nothing is sent
+// anywhere; the blocks go to the caller and nowhere else.
 
 export const SPEECH_SAMPLE_RATE = 16000;
 export const BLOCK_SAMPLES = 1600;
