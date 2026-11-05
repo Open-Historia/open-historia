@@ -1153,7 +1153,6 @@ const OlMap = ({
     // are shown only while they are worked on (showTerrain, showClimate).
     const toggleableLayers = { regions: regionLayer, labels: labelLayer, features: pointLayer, units: unitLayer, groups: groupOutlineLayer, ...war.toggles };
     requestAnimationFrame(() => map.updateSize());
-    if (typeof window !== "undefined") window.__editorMap = map;
 
     const deleteFeature = (feature) => {
       if (!feature) return;

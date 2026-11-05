@@ -33,6 +33,7 @@ const PHONE_BAR_SIZE = "3rem";
 // Photon, not Nominatim: the OSM foundation's Nominatim policy forbids client-side autocomplete outright, and it shows, since it answers "berl" with an office block in Brussels. Photon is the same data, indexed for search as you type.
 const SEARCH_ENDPOINT = "https://photon.komoot.io/api/";
 const SEARCH_RESULT_CACHE = new Map();
+const SEARCH_RESULT_CACHE_MOST = 100;
 const SEARCH_DEBOUNCE_MS = 300;
 const REMOTE_FETCH_LIMIT = 10;
 
@@ -57,6 +58,7 @@ const fetchPlaces = async (query, limit, { signal } = {}) => {
   const data = await response.json();
   const results = rankGeocodedPlaces(dedupeGeocodedPlaces(data?.features)).slice(0, limit);
   SEARCH_RESULT_CACHE.set(cacheKey, results);
+  if (SEARCH_RESULT_CACHE.size > SEARCH_RESULT_CACHE_MOST) SEARCH_RESULT_CACHE.delete(SEARCH_RESULT_CACHE.keys().next().value);
   return results;
 };
 

@@ -513,3 +513,16 @@ It is **not a second log** — its entries appear in the Diagnostics log's Loggi
 The Electron process's writes use the same rules through `require()` of `server/logRedaction.js`; an older Electron whose Node cannot `require()` an ES module falls back to replacing the home folder only, and everything is redacted in full again as it is read back.
 
 Tests: `server/desktopLog.test.js` — the store against a throwaway data folder, and the routes on a real server in a child process (including a LAN caller being refused the clear).
+
+## World lookups (`worldLookups.js`)
+
+A world cannot change during one synchronous read of it, yet building an AI prompt asks it the same whole-world questions thousands of times: `getPoliticalProfile` read every region's owner for each name it could not place, and each government's capsule rebuilt the power reference and normalized every institution. On the modern world that froze the page for half a second on a fast computer.
+
+`readingWorld(world, read)` marks such a read, and inside it `lookedUp(world, question, work, key)` keeps each answer. `buildBoundedPoliticalDecisionContextSet` is one, so turns and the idle pulse share it.
+
+- **Outside a read nothing is kept.** Worlds are edited in place between reads (`gameState.js`), so an answer must never outlive the read that asked. This is why `normalizeWorldState` is not cached by object.
+- **`read` must be synchronous and must not change the world.** Never wrap anything that writes to it.
+- **Answers are shared objects.** What is kept with `lookedUp` must only be read by its callers.
+- **Another world is never answered from this one's:** the world is compared by identity.
+
+To check a change here, compare what the builders say on every real save before and after, byte for byte (`server/data/games/`). The idle pulse also hands `nextTask` to `buildTemplateVariables` as `pause`, so the map draws between its stages; nothing else passes it, and a turn builds as it always did.

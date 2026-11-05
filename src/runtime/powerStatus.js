@@ -3,6 +3,7 @@
 import { institutionsForPolity, institutionStrategicPriority } from "./institutions.js";
 import { buildPolityIdentityIndex, resolvePolityIdentity } from "./polityIdentity.js";
 import { collectActiveScenarioPolityKeys } from "./scenarioPolities.js";
+import { lookedUp } from "./worldLookups.js";
 
 export const POWER_STATUS_SCHEMA_VERSION = 1;
 export const POWER_TIERS = Object.freeze(["minor-power", "regional-power", "major-power"]);
@@ -131,7 +132,7 @@ const percentileRank = (value, sorted) => {
   return clamp((below + Math.max(0, equal - 1) / 2) / (sorted.length - 1), 0, 1);
 };
 
-export const buildPowerReference = (world) => {
+export const buildPowerReference = (world) => lookedUp(world, "powerReference", () => {
   const polities = activePowerPolities(world);
   const gdp = [];
   const population = [];
@@ -157,7 +158,7 @@ export const buildPowerReference = (world) => {
     totalGdp,
     totalPopulation,
   };
-};
+});
 
 const legacyPowerTier = (world, polity) => {
   const tags = [

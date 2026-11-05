@@ -24,6 +24,7 @@ import {
 import { resolvePolityIdentity } from "./polityIdentity.js";
 import { addGameDays, compareGameDatesNewestFirst, diffGameDays, isGameDate } from "./gameDates.js";
 import { stableAsciiId } from "./stableId.js";
+import { lookedUp } from "./worldLookups.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const lower = (value) => clean(value).toLocaleLowerCase();
@@ -540,7 +541,7 @@ export const institutionLifecycleConversationState = (world = {}, { institutionI
 export const institutionLifecycleCasesForPolity = (world = {}, polityInput = "", { pendingOnly = true } = {}) => {
   const polity = canonicalPolity(polityInput, world);
   if (!polity) return [];
-  const institutions = normalizeInstitutions(world.institutions, world);
+  const institutions = lookedUp(world, "normalizedInstitutions", () => normalizeInstitutions(world.institutions, world));
   const rows = [];
   for (const institution of Object.values(institutions.byId)) {
     for (const entry of Object.values(institution.lifecycleCases || {})) {

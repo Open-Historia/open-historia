@@ -16,6 +16,8 @@ import { isMapPerfVerbose, recordMapFreeze, recordMapTrace } from "../../runtime
 import { attachMapInstrumentation } from "./mapInstrumentation.js";
 import { attachMapGestures } from "./mapGestures.js";
 import { attachTerrainCaches } from "./terrainCaches.js";
+import { attachClippingMasks } from "./clippingMasks.js";
+import { attachSourceCaches } from "./sourceCaches.js";
 import { reduceMotionEnabled } from "../../runtime/mapSettings.js";
 import {
   DEFAULT_BASEMAP_ID,
@@ -1146,7 +1148,7 @@ function World({ mapRef, projection: requestedProjection, terrainEnabled, onInit
     };
   }, [mapInstanceKey, mapRef]);
 
-  // Terrain work that does not change from frame to frame is kept (terrainCaches.js).
+  // Work that does not change from frame to frame is kept (terrainCaches.js, clippingMasks.js, sourceCaches.js).
   React.useEffect(() => {
     let disposed = false;
     let frame = 0;
@@ -1158,7 +1160,14 @@ function World({ mapRef, projection: requestedProjection, terrainEnabled, onInit
         frame = requestAnimationFrame(attach);
         return;
       }
-      detach = attachTerrainCaches(mapInstance);
+      const detachCaches = attachTerrainCaches(mapInstance);
+      const detachMasks = attachClippingMasks(mapInstance);
+      const detachSources = attachSourceCaches(mapInstance);
+      detach = () => {
+        detachCaches();
+        detachMasks();
+        detachSources();
+      };
     };
     attach();
     return () => {
