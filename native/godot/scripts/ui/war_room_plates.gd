@@ -490,7 +490,7 @@ func _render_aircraft() -> void:
 			orders.add_child(stop)
 		column.add_child(orders)
 		if typeof(order) == TYPE_DICTIONARY:
-			column.add_child(T.soft("Ordered to strike %s when time next passes." % str((order as Dictionary).get("target", ""))))
+			column.add_child(T.soft("Ordered to strike %s when time next passes." % target_name(order as Dictionary)))
 		var last: Dictionary = {}
 		for entry in air.get("flown", []):
 			if str((entry as Dictionary).get("unitId", "")) == id:
@@ -505,6 +505,17 @@ func _render_aircraft() -> void:
 		_place(_aircraft, scroll, column.get_combined_minimum_size().y)
 
 
+static func target_name(entry: Dictionary) -> String:
+	var kind := RegEx.create_from_string("(?i)^(city|region)\\s*:\\s*")
+	for key in ["target", "battlefield", "country"]:
+		var text := str(entry.get(key, "")).strip_edges()
+		if key == "target":
+			text = kind.sub(text, "")
+		if not text.is_empty():
+			return text
+	return ""
+
+
 static func strike_text(strike: Dictionary, named: bool) -> RichTextLabel:
 	var rich := RichTextLabel.new()
 	rich.fit_content = true
@@ -516,7 +527,7 @@ static func strike_text(strike: Dictionary, named: bool) -> RichTextLabel:
 	rich.add_theme_color_override("default_color", T.BONE_SOFT)
 	rich.add_theme_constant_override("line_separation", 3)
 	rich.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	var said := ("%s: " % str(strike.get("target", ""))) if named else ""
+	var said := ("%s: " % target_name(strike)) if named else ""
 	said += W.strike_outcome(strike)
 	rich.add_text(said)
 	for part in W.strike_done(strike):

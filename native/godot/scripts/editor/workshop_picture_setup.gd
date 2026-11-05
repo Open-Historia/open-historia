@@ -173,7 +173,7 @@ func _apply() -> void:
 	_busy = true
 	_error = ""
 	_render()
-	var args := {"type": _type, "centre": float(_centre) if _number(_centre) else 0.0, "aspect": info.get("aspect"), "deleteProvinces": _delete_provinces, "thumbnail": str(info.get("thumbnail", ""))}
+	var args := {"type": _type, "centre": float(_centre) if _number(_centre) else 0.0, "aspect": info.get("aspect"), "deleteProvinces": _delete_provinces, "thumbnail": str(info.get("thumbnail", "")), "box": _box.duplicate(), "bounds": _exact_bounds}
 	var reply := await host.request_raw("workshop.maps.pictureSetup", args)
 	if not is_instance_valid(self):
 		return

@@ -622,7 +622,7 @@ export const register = (ctx) => {
         const data = await engine.readJson(engine.JSON_URLS.ownBasemapsData, { force: true }).catch(() => null);
         const own = data && typeof data === "object" ? data[ownPick] : null;
         const sheet = engine.mxMapProjection.projectionIsDefault(world?.projection) ? null : engine.mxMapProjection.sheetBounds(world.projection);
-        if (entry.kind === "image" && own?.dataUrl) ownPickBg = { kind: "image", imageUrl: own.dataUrl, bounds: sheet ? engine.mxMapProjection.normalizeImageBounds(sheet) : null };
+        if (entry.kind === "image" && own?.dataUrl) ownPickBg = { kind: "image", imageUrl: own.dataUrl, bounds: engine.mxMapProjection.normalizeImageBounds(own.bounds) ?? (sheet ? engine.mxMapProjection.normalizeImageBounds(sheet) : null) };
         else if (entry.kind === "vector" && own?.geojson) ownPickBg = { kind: "vector", geojson: own.geojson };
       }
     }

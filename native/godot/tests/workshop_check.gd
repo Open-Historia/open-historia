@@ -1389,6 +1389,7 @@ func _basemaps(w: Workshop) -> void:
 		await _shoot("ws-30a-picture-setup")
 		setup._type = "mercator"
 		setup._centre = 0.0
+		setup._exact_bounds = null
 		setup._render()
 		await _frames(2)
 		var use := _find_button(setup, "Use this picture")
