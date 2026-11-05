@@ -53,6 +53,78 @@ import { PAST_UPDATES } from "./notesPast.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // The interface themes (runtime/uiTheme.js, kernely's PR #955) reach the main menu (libraryBar.jsx), the popups
+    // and the translation prompt; the first-time setup (GameUI/FirstSetup.jsx) asks for a language and a theme before
+    // the vault door; the language changes where the player is (runtime/translator.js switchLanguage), a language
+    // with a model only after its download, and no translation is an AI request; the Advisor's box lost its
+    // placeholder and holds the microphone (AdvisorMic.jsx). The owner, 2026-11-05.
+    id: "2026-11-themes",
+    kind: "major",
+    date: "2026-11-05",
+    channel: "beta",
+    banners: [
+      {
+        theme: "themes",
+        scene: "palettes",
+        title: "Themes",
+        subtitle: "The game in your colours",
+        lead: "Choose one of five palettes or mix your own, and the whole interface follows: the main menu, Settings, the panels and the popups.",
+        sections: [
+          {
+            heading: "Five palettes",
+            icon: "palette",
+            items: [
+              "Midnight Navy, Graphite, Forest, Oxblood and Sepia, or the original look.",
+              "Or mix your own from a background, a surface and an accent colour.",
+            ],
+          },
+          {
+            heading: "Everywhere you look",
+            icon: "star",
+            items: [
+              "The main menu, Settings, the Advisor, Diplomacy, Events and the popups all take your theme.",
+              "Map, country and party colours never change, so they still mean what they did.",
+            ],
+          },
+          {
+            heading: "Where to find it",
+            icon: "gear",
+            items: [
+              "Settings → General → Interface appearance, and in the first-time setup.",
+            ],
+          },
+        ],
+      },
+      {
+        theme: "themes",
+        scene: "welcome",
+        title: "Hello, in your language",
+        subtitle: "A first-time setup",
+        lead: "The first time the game opens it greets you in many languages, then asks for your language and your theme before the vault door.",
+        sections: [
+          {
+            heading: "Your language",
+            icon: "people",
+            items: [
+              "Changing the language in Settings now happens where you are, without going back to the main menu.",
+              "Where a language needs its translation model, the game asks to download it once. Say no and the game stays in English.",
+              "Translation never uses AI requests any more.",
+            ],
+          },
+          {
+            heading: "A cleaner Advisor",
+            icon: "note",
+            items: [
+              "The message box no longer has words in it, and the microphone sits inside it.",
+              "Start typing and the microphone steps aside.",
+            ],
+          },
+        ],
+        button: "Make it yours",
+      },
+    ],
+  },
+  {
     // MapLibre never kept a tile's painted terrain between frames once there were two stacks of layers: it does now,
     // ended by what changes it (Map/terrainCaches.js). Clipping masks are kept while the tiles are the same
     // (Map/clippingMasks.js), sources share what they work out (Map/sourceCaches.js), and the idle pulse asks the

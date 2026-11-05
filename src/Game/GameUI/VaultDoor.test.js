@@ -115,7 +115,8 @@ test("with Reduce motion on nothing shakes, turns or slides: a click fades the d
 });
 
 test("the app shows the door once the startup screen is done, over the menu, and takes it away when it has opened", () => {
-  assert.match(app, /\{menuReady && door === "shut" && \(\s+<DoorFrame onFailed=\{doorGone\}>\s+<VaultDoor onOpening=\{letMusicIn\} onOpened=\{doorOpened\} \/>/);
+  // After the first-time setup, when it is owed (GameUI/FirstSetup.jsx).
+  assert.match(app, /\{menuReady && !setupDue && door === "shut" && \(\s+<DoorFrame onFailed=\{doorGone\}>\s+<VaultDoor onOpening=\{letMusicIn\} onOpened=\{doorOpened\} \/>/);
   // The menu is already there behind it.
   assert.ok(app.indexOf("{menuReady && (\r\n      <UI") > 0 || app.indexOf("{menuReady && (\n      <UI") > 0);
   // Whether this opening shows the door is decided before the startup screen
@@ -126,7 +127,7 @@ test("the app shows the door once the startup screen is done, over the menu, and
   // The menu's music waits behind the door and begins as it opens; with the
   // door not shown this time, there is no door and nothing waits.
   assert.match(app, /useState\(\(\) => \{\s+holdMusicBehindDoor\(true\);\s+return "deciding";\s+\}\)/);
-  assert.match(app, /if \(!show\) holdMusicBehindDoor\(false\);\s+setDoor\(show \? "shut" : "open"\);/);
+  assert.match(app, /const shut = show \|\| setupRef\.current;\s+\/\/[^\n]*\n\s+if \(!shut\) holdMusicBehindDoor\(false\);\s+setDoor\(shut \? "shut" : "open"\);/);
   // (As the leaves part, what the update brings is shown behind them: Game/GameUI/updates/.)
   assert.match(app, /const letMusicIn = useCallback\(\(\) => \{\s+setParting\(true\);\s+holdMusicBehindDoor\(false\);\s+\}, \[\]\);/);
   // A door that cannot be drawn does not shut the menu in.

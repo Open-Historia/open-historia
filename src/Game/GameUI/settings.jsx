@@ -63,14 +63,12 @@ import {
     normalizeStructuredMode,
 } from "../AI/structuredMode.js";
 import {
-    DEFAULT_LANGUAGE,
     getLanguageOptions,
-    hasShippedPack,
+    getUiLanguageOptions,
     languageDisplayName,
     getStoredChatLanguage,
     getStoredLanguage,
     setStoredChatLanguage,
-    setStoredLanguage,
 } from "../../runtime/i18n.js";
 import { LABEL_FONT_SUGGESTIONS, MAP_SETTING_KEYS, getMapSetting, getMapSettingDefaultOn, setMapSetting, setMapSettingValue, useMapSetting, useMapSettingValue, useSystemReducedMotion } from "../../runtime/mapSettings.js";
 import { SCENARIO_TERRAIN_PAINTED } from "../Map/scenarioTerrain.js";
@@ -106,7 +104,7 @@ import { saveDebugLogFile } from "../../runtime/saveDebugLog.js";
 import { buildGameZipBlob, formatZipSize, saveGameZipToDisk } from "../../runtime/gameZip.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { usePresenceLeaving } from "./presence.jsx";
-import { setTranslationModelOn, translationModelOffer, uiString } from "../../runtime/translator.js";
+import { switchLanguage, uiString } from "../../runtime/translator.js";
 import { DEFAULT_BASEMAP_ID, ESRI_BASEMAPS, decodeAllowedBasemaps, decodeOwnBasemaps, isBuiltinBasemapId } from "../../runtime/assets.js";
 import { DEFAULT_BASEMAP_KEY, DEFAULT_BASEMAP_ON_KEY, basemapShownFor, scenarioMapsOfWorld } from "../../runtime/basemapPick.js";
 import { useGameBasemapPick } from "../Map/useBasemapPick.js";
@@ -243,13 +241,8 @@ function groupProviders(options) {
     return groups;
 }
 
-// A language whose interface ships translated (runtime/i18n.js): no AI request
-// is spent on the game's own text in it.
-const isBuiltInLanguage = (code) => code === DEFAULT_LANGUAGE || hasShippedPack(code);
-
-const LanguagePicker = ({ label, current, onSelect, saving = false, helperText, markBuiltIn = false }) => {
+const LanguagePicker = ({ label, current, onSelect, saving = false, helperText, options = getLanguageOptions() }) => {
     const [query, setQuery] = useState("");
-    const options = getLanguageOptions();
     const normalizedQuery = query.trim().toLowerCase();
     const filtered = normalizedQuery
         ? options.filter((option) =>
@@ -285,7 +278,7 @@ const LanguagePicker = ({ label, current, onSelect, saving = false, helperText, 
             )}
             {filtered.map((option) => (
                 <option key={option.code} value={option.code} style={{ color: "black" }}>
-                {option.name}{option.native && option.native !== option.name ? ` — ${option.native}` : ""}{markBuiltIn && isBuiltInLanguage(option.code) ? " ✓" : ""}
+                {option.name}{option.native && option.native !== option.name ? ` — ${option.native}` : ""}
                 </option>
             ))}
             </select>
@@ -306,13 +299,16 @@ const LanguagePicker = ({ label, current, onSelect, saving = false, helperText, 
     );
 };
 
+// Changed where the player is (runtime/translator.js switchLanguage): a
+// language with a translation model asks to download it first, over Settings.
 const LanguageSelector = () => {
     const [saving, setSaving] = useState(false);
-    const current = getStoredLanguage();
-    // The translation model for this language, where there is one
-    // (runtime/translationModels.js), and whether the player uses it.
-    const [modelOffer, setModelOffer] = useState(translationModelOffer);
-    const modelOn = Boolean(modelOffer?.on);
+    const [current, setCurrent] = useState(getStoredLanguage);
+    useEffect(() => {
+        const follow = () => setCurrent(getStoredLanguage());
+        window.addEventListener("oh:ui-language-changed", follow);
+        return () => window.removeEventListener("oh:ui-language-changed", follow);
+    }, []);
 
     const applyLanguage = async (code) => {
         if (!code || code === current || saving) {
@@ -320,52 +316,35 @@ const LanguageSelector = () => {
         }
 
         setSaving(true);
-        // Before the reload below; the log is flushed on pagehide.
-        logSettingChange("UI language", languageDisplayName(code));
-        // Saves on the server too, so the phone app follows the same choice.
-        await setStoredLanguage(code);
-        // Reload so the translator starts (or stops) cleanly and every
-        // already-rendered string goes through it from scratch.
-        window.location.reload();
-    };
-
-    const toggleModel = () => {
-        const next = !modelOn;
-        logSettingChange("Translate on this device", next ? "on" : "off");
-        setModelOffer((offer) => (offer ? { ...offer, on: next } : offer));
-        void setTranslationModelOn(next);
+        try {
+            const shown = await switchLanguage(code);
+            if (shown === code) logSettingChange("UI language", languageDisplayName(code));
+        } finally {
+            setCurrent(getStoredLanguage());
+            setSaving(false);
+        }
     };
 
     return (
-        <>
         <LanguagePicker
         label="UI language"
         current={current}
         onSelect={applyLanguage}
         saving={saving}
-        markBuiltIn
-        helperText={isBuiltInLanguage(current)
-            ? (modelOn
-                ? "Languages marked ✓ ship with the game translated. What scenarios add (names, descriptions, custom stats) is translated on this device, once."
-                : "Languages marked ✓ ship with the game translated. What scenarios add (names, descriptions, custom stats) is translated by your AI model, once.")
-            : (modelOn
-                ? "This language is translated on this device as you play, once per string. Languages marked ✓ ship with the game translated."
-                : "This language is translated by your AI model as you play, once per string. Languages marked ✓ ship with the game translated.")}
+        options={getUiLanguageOptions()}
         />
-        {modelOffer && (
-            <Toggle
-            label={`Translate on this device (${modelOffer.size})`}
-            enabled={modelOn}
-            onToggle={toggleModel}
-            />
-        )}
-        </>
     );
 };
 
 // Steers prompts only, so no reload — the next message picks it up.
 const ChatLanguageSelector = () => {
     const [current, setCurrent] = useState(getStoredChatLanguage);
+    // With no choice of its own it follows the interface's, changed in place.
+    useEffect(() => {
+        const follow = () => setCurrent(getStoredChatLanguage());
+        window.addEventListener("oh:ui-language-changed", follow);
+        return () => window.removeEventListener("oh:ui-language-changed", follow);
+    }, []);
 
     const applyLanguage = (code) => {
         if (!code || code === current) {
@@ -1508,7 +1487,8 @@ const useSavingRequests = () => {
 };
 
 // Task keys the request count holds that are not per-task models
-// (AI_TASK_ROUTING): the translator's requests, and a call that named no task.
+// (AI_TASK_ROUTING): translation requests counted by an older build the same
+// day, and a call that named no task.
 const OTHER_REQUEST_TASKS = [
     { key: "translation", label: "Translation" },
     { key: "other", label: "Other" },
@@ -2985,7 +2965,7 @@ const SettingsWorkspace = ({
                     />
                     <div style={{ ...helperStyle, marginTop: "-0.6rem", marginBottom: "0.6rem" }}>{"On: the vault door appears every time you start the game. Off: only the first time you start it after an update."}</div>
                 </SettingsSection>
-                <SettingsSection title="Interface appearance" description="Choose interface colors for Country, Diplomacy, Advisor, Actions and Projects.">
+                <SettingsSection title="Interface appearance" description="Choose the colours of the main menu, the panels and the popups.">
                     <UiThemeSettings />
                 </SettingsSection>
                 <SettingsSection title="Accessibility" description="Reduce automatic camera motion and map animations without changing simulation behavior.">

@@ -4,6 +4,8 @@
 // device that plays through it — desktop browser and the Android app see the
 // same choice) and mirrored in localStorage so boot doesn't wait on a fetch.
 // "en" (the authored language) means no translation work happens at all.
+import { translationModelFor } from "./translationModels.js";
+
 const STORAGE_KEY = "ui_language";
 export const DEFAULT_LANGUAGE = "en";
 
@@ -78,7 +80,6 @@ const RTL_LANGUAGES = new Set(["ar", "he", "fa", "ur"]);
 // made (scenario and game names and descriptions, custom polities, custom
 // stats, the region names of a map that is not built in, community posts) is
 // translated live.
-// Every other language in the picker still translates the interface live.
 export const SHIPPED_PACK_LANGUAGES = Object.freeze([
   "ar", "bn", "de", "es", "fa", "fr", "hi", "id", "it", "ja", "ko", "nl",
   "pl", "pt", "ru", "sv", "th", "tr", "uk", "ur", "vi", "zh",
@@ -86,7 +87,16 @@ export const SHIPPED_PACK_LANGUAGES = Object.freeze([
 
 export const hasShippedPack = (code) => SHIPPED_PACK_LANGUAGES.includes(code);
 
+// The languages the interface can be shown in: English, a shipped pack, or a
+// translation model on the device (translationModels.js). No translation is
+// an AI request, so a language with neither is not offered.
+export const canTranslateTo = (code) => code === DEFAULT_LANGUAGE || hasShippedPack(code) || Boolean(translationModelFor(code));
+
+// Every language, for what the AI writes in (the chat language).
 export const getLanguageOptions = () => LANGUAGES;
+
+// The languages the interface can be shown in, for its picker.
+export const getUiLanguageOptions = () => LANGUAGES.filter((entry) => canTranslateTo(entry.code));
 
 export const languageDisplayName = (code) =>
   LANGUAGES.find((entry) => entry.code === code)?.name || code;

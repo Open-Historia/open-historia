@@ -28,7 +28,7 @@ const MicIcon = ({ listening }) => (
 
 // phase: idle | asking (the download prompt) | downloading | loading |
 // listening | finishing
-const AdvisorMic = ({ disabled, input, onInput, onSend, threadKey }) => {
+const AdvisorMic = ({ disabled, hidden = false, input, onInput, onSend, threadKey }) => {
   const [phase, setPhase] = useState("idle");
   const [progress, setProgress] = useState(0);
   const [problem, setProblem] = useState("");
@@ -155,6 +155,8 @@ const AdvisorMic = ({ disabled, input, onInput, onSend, threadKey }) => {
 
   const active = phase === "listening" || phase === "loading" || phase === "finishing";
   const label = active ? "Stop listening" : "Speak to the advisor";
+  // Typed words take its place: the microphone is for an empty box.
+  const showButton = !(hidden && phase === "idle");
 
   return (
     <div className="oh-advisor-mic-wrap">
@@ -204,7 +206,7 @@ const AdvisorMic = ({ disabled, input, onInput, onSend, threadKey }) => {
           )}
         </div>
       )}
-      <button
+      {showButton && <button
         type="button"
         className="oh-advisor-mic"
         data-listening={active ? "true" : undefined}
@@ -215,7 +217,7 @@ const AdvisorMic = ({ disabled, input, onInput, onSend, threadKey }) => {
         disabled={!active && phase !== "asking" && (disabled || phase === "downloading")}
       >
         <MicIcon listening={active} />
-      </button>
+      </button>}
     </div>
   );
 };

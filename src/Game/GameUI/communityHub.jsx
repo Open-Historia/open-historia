@@ -97,7 +97,7 @@ const CARD_WIDTH = "min(21rem, calc(100vw - 2rem))";
 // displays instead of stopping at a resolution-specific max width.
 const COMMUNITY_GRID_TEMPLATE = "repeat(auto-fill, minmax(min(100%, 16.5rem), 1fr))";
 const cardSurface = {
-  background: "#12141a",
+  background: "var(--oh-ui-surface, #12141a)",
   border: "1px solid rgba(255,255,255,0.09)",
   borderRadius: "16px",
   boxShadow: "0 14px 32px rgba(0,0,0,0.45)",

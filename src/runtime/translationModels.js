@@ -1,12 +1,11 @@
 /*! Open Historia — which languages a translation model on the device covers © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-// The translator (translator.js) sends what no language pack has (a scenario's
-// names and descriptions, a map's region names, the interface of a language
-// with no pack) to the player's AI model, a request at a time. On a free key a
-// request is scarce, so where a small open model translates English into the
-// player's language well, that model does it on the device instead, after the
-// player has seen its size and said yes. Everything it cannot do (a language it
-// does not cover, an answer that fails the checks below, a model that would not
-// load) goes to the AI as before.
+// What no language pack has (a scenario's names and descriptions, a map's
+// region names, the interface of a language with no pack) is translated on the
+// device by a small open model, where one translates English into the
+// player's language well. A language with a model is played in only once the
+// player has seen its size and said yes (translator.js switchLanguage); no
+// translation is ever an AI request. A language with a pack and no model shows
+// what its pack has, and an answer that fails the checks below stays English.
 //
 // The models are Opus-MT (Language Technology Research Group, University of
 // Helsinki; https://github.com/Helsinki-NLP/Opus-MT), one per language pair,
@@ -72,38 +71,12 @@ export const modelFileUrl = (entry, file) => `${MODEL_HOST}/${entry.repo}/resolv
 export const formatModelSize = (bytes) => `${Math.max(1, Math.round((Number(bytes) || 0) / 1e6))} MB`;
 
 // ---------------------------------------------------------------------------
-// Who translates.
-//
 // The player's answer to the download prompt, per language, kept on this
-// device: "yes" (download it, and use it), "no" (the AI, as before). No answer
-// yet: the translator asks the first time it has something to translate, and
-// holds it meanwhile, so nothing is spent on the AI before the player chose.
+// device: "yes" (downloaded, and in use) or "no" (the game stayed English).
 
 export const MODEL_CHOICE_PREFIX = "oh:translation-model:";
 export const modelChoiceKey = (language) => `${MODEL_CHOICE_PREFIX}${baseLanguage(language)}`;
 export const readModelChoice = (value) => (value === "yes" || value === "no" ? value : "");
-
-export const ENGINES = Object.freeze({ MODEL: "model", AI: "ai", ASK: "ask" });
-
-// `failed`: the model would not download or load this session.
-export const translationEngineFor = ({ language, choice = "", failed = false } = {}) => {
-  if (!translationModelFor(language) || failed) return ENGINES.AI;
-  const answer = readModelChoice(choice);
-  if (answer === "no") return ENGINES.AI;
-  if (answer === "yes") return ENGINES.MODEL;
-  return ENGINES.ASK;
-};
-
-// Which of the queued strings the model takes and which go to the AI. With the
-// model in use, the AI gets only what the model's answer was refused for.
-export const splitPendingByEngine = (pending, { engine, refused = new Set() } = {}) => {
-  const all = [...(pending ?? [])];
-  if (engine !== ENGINES.MODEL) return { model: [], ai: engine === ENGINES.AI ? all : [] };
-  return {
-    model: all.filter((text) => !refused.has(text)),
-    ai: all.filter((text) => refused.has(text)),
-  };
-};
 
 // ---------------------------------------------------------------------------
 // Batching.
@@ -176,7 +149,7 @@ export const splitForModel = (text, { maxChars = MODEL_PIECE_CHARS } = {}) => {
 //
 // A small model sometimes runs on (repeating a word or a mark to the end of its
 // budget), echoes its language token, or drops a number. Such an answer is not
-// kept; the string goes to the AI instead (splitPendingByEngine).
+// kept; the string stays English.
 
 const PLACEHOLDER = /\{\{\s*[^}]+?\s*\}\}|\$\{[^}]*\}/g;
 const ARABIC_INDIC = /[٠-٩۰-۹]/g;

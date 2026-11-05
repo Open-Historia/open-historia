@@ -109,7 +109,7 @@ export const forgetTranslationModel = async (language) => {
 let nextId = 0;
 
 // The model's translation of each string, or null where it gave none that
-// passes acceptModelOutput (that string goes to the AI). Long strings are sent
+// passes acceptModelOutput (that string stays English). Long strings are sent
 // as their lines and sentences (splitForModel) and put back together.
 export const translateWithModel = async (language, strings) => {
   const splits = strings.map((text) => splitForModel(text));

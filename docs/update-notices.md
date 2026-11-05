@@ -83,7 +83,7 @@ A **major** update. It has one banner per headline: several banners are paged wi
 
 An update that reached players first on a test channel says so with `channel: "beta"` or `channel: "alpha"`; the history marks it.
 
-`icon` is one of the kit's `ICONS`: `chess`, `swords`, `snow`, `wall`, `plane`, `ship`, `flag`, `eye`, `map`, `gear`, `star`, `book`, `people`, `phone` or `note`. Add one to `ICONS` if none fits.
+`icon` is one of the kit's `ICONS`: `chess`, `swords`, `snow`, `sun`, `rain`, `leaf`, `wall`, `plane`, `ship`, `flag`, `eye`, `map`, `gear`, `star`, `book`, `people`, `phone`, `palette` or `note`. Add one to `ICONS` if none fits.
 
 ### 2. Write for a player
 

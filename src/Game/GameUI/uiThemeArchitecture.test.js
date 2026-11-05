@@ -33,10 +33,28 @@ test("Country and Advisor use a shared chrome palette without editing charts or 
   assert.match(country, /\.oh-country-landscape-switch\s*\{[\s\S]*?background: var\(--oh-ui-surface,/);
   assert.match(advisor, /--oh-advisor-bg: var\(--oh-ui-bg,/);
   assert.match(advisor, /--oh-advisor-accent: var\(--oh-ui-accent,/);
-  assert.match(advisor, /\.oh-advisor-composer-input\s*\{[\s\S]*?background: var\(--oh-ui-surface,/);
+  assert.match(advisor, /\.oh-advisor-composer-field\s*\{[\s\S]*?background: var\(--oh-ui-surface,/);
   assert.match(advisor, /\.oh-advisor-message-body\[data-role="error"\]/);
   assert.doesNotMatch(palette, /writeWorldState|writeJson|saveGame|countryColor|partyColor/);
 });
+test("the main menu, its pages and the popups take the theme, the original colours as fallbacks", () => {
+  const menu = read("./libraryBar.jsx");
+  assert.match(menu, /background:\r?\n\s*"var\(--oh-ui-bg, #0f0f11\)",/);
+  assert.match(menu, /background: "var\(--oh-ui-header, #0b0b0d\)",\r?\n\s*borderRight:/, "the rail");
+  assert.match(menu, /const themeSurfaceStyle = \{\r?\n\s*background: "var\(--oh-ui-surface, #12141a\)",/, "cards and dialogs");
+  assert.match(menu, /background: active \? "var\(--oh-ui-active, rgba\(255,255,255,0\.11\)\)"/);
+  assert.doesNotMatch(menu, /"#12141a"/);
+  assert.match(read("./communityHub.jsx"), /background: "var\(--oh-ui-surface, #12141a\)",/);
+  assert.match(read("../../multiplayer/ui/LobbiesTab.jsx"), /background: "var\(--oh-ui-surface, #12141a\)",/);
+  for (const toast of ["generationRatingToast", "fallbackSwitchNotice", "agentWaitingNotice", "bordersFallbackNotice"]) {
+    assert.match(read(`./${toast}.jsx`), /backgroundColor: "var\(--oh-ui-overlay-strong, rgba\(16,21,24,0\.96\)\)"/, toast);
+  }
+  assert.match(read("../../runtime/AppUpdateBanner.jsx"), /background: "var\(--oh-ui-surface, #131315\)",/);
+  const translator = read("../../runtime/translator.js");
+  assert.match(translator, /background:var\(--oh-ui-surface,#1b1b1e\);/, "the translation prompt");
+  assert.match(translator, /background:var\(--oh-ui-text,#f4f4f5\);color:var\(--oh-ui-bg,#0b0b0d\)/, "no blue in the prompt");
+});
+
 test("Actions, Projects and diplomatic conversation chrome consume tokens while status colors remain semantic", () => {
   assert.match(actions, /backgroundColor: "var\(--oh-ui-bg,/);
   assert.match(projects, /const cardStyle = \{[\s\S]*?backgroundColor: "var\(--oh-ui-surface,/);
