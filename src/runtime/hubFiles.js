@@ -143,7 +143,7 @@ export const normalizeHubIndex = (raw) => {
     if (/^\d+$/.test(post) && Number.isSafeInteger(number) && number >= 0) imports[post] = number;
   }
   if (!(Number(source.version) >= 2) || !Array.isArray(source.posts)) {
-    return { listed: false, files: {}, imports, posts: [], suggestions: {} };
+    return { listed: false, files: {}, imports, posts: [], suggestions: {}, updates: {} };
   }
   const files = {};
   for (const [from, to] of Object.entries(record(source.files) ?? {})) {
@@ -166,7 +166,16 @@ export const normalizeHubIndex = (raw) => {
     if (!/^\d{1,20}$/.test(commentId) || !Number.isSafeInteger(post) || post <= 0) continue;
     if (zip.length <= MAX_ADDRESS && COMMENT_ZIP_ADDRESS.test(zip)) suggestions[commentId] = { post, zip };
   }
-  return { listed: true, files, imports, posts, suggestions };
+  // A checked copy's update copy (updateCopyOf): both in the hub's own releases,
+  // and only for a copy the index gives out.
+  const copies = new Set(Object.values(files));
+  const updates = {};
+  for (const [from, to] of Object.entries(record(source.updates) ?? {})) {
+    const copy = hubReleaseUrl(from);
+    const update = hubReleaseUrl(to);
+    if (copy && update && copies.has(copy)) updates[copy] = update;
+  }
+  return { listed: true, files, imports, posts, suggestions, updates };
 };
 
 // What fetchHubIndex answers with when the hub's file could not be had at all.
@@ -177,6 +186,7 @@ const UNREAD_INDEX = Object.freeze({
   imports: Object.freeze({}),
   posts: Object.freeze([]),
   suggestions: Object.freeze({}),
+  updates: Object.freeze({}),
 });
 
 // Why an index gives no list and no files, as a sentence for the player, or
@@ -253,6 +263,14 @@ export const releaseCopyOf = (index, fileUrl) => {
   return derivedOf(index).copies.has(url) ? url : null;
 };
 
+// A scenario file's update copy, or null when the hub has none (yet): the same
+// bytes as its checked copy `release`, in a file of their own whose downloads
+// the hub does not count, so that updating a scenario is not an import.
+export const updateCopyOf = (index, release) => {
+  const copy = record(index?.updates) ? index.updates[String(release ?? "")] : null;
+  return typeof copy === "string" && copy ? copy : null;
+};
+
 // A scenario post's import count, or null when nothing has counted it yet.
 export const importCountOf = (index, postId) => {
   const count = record(index?.imports) && Object.hasOwn(index.imports, String(postId)) ? index.imports[String(postId)] : null;
@@ -283,9 +301,20 @@ const proxied = (url) => fetch(`/api/hub/file?url=${encodeURIComponent(url)}`);
 // with no copy is not fetched from its post instead: the call fails, with a
 // sentence a player can read. `copy: false` is for what is never copied, a
 // suggestion on a post: it is fetched from its comment, once the index lists
-// that file as one the hub has checked.
-export const fetchHubFile = async (fileUrl, { copy = true } = {}) => {
-  if (copy) return proxied(await requireReleaseCopy(fileUrl));
+// that file as one the hub has checked. `update: true` is for updating a
+// scenario a player has: the copy's update copy where the hub has one
+// (updateCopyOf), so the download is not counted as an import.
+export const fetchHubFile = async (fileUrl, { copy = true, update = false } = {}) => {
+  if (copy) {
+    const release = await requireReleaseCopy(fileUrl);
+    const updateCopy = update ? updateCopyOf(await fetchHubIndex(), release) : null;
+    if (updateCopy) {
+      // One the hub has just replaced is the counted copy's to answer.
+      const response = await proxied(updateCopy);
+      if (response.ok) return response;
+    }
+    return proxied(release);
+  }
   const index = await fetchHubIndex();
   const problem = hubIndexProblem(index);
   if (problem) throw new Error(problem);

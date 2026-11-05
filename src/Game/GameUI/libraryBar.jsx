@@ -2044,7 +2044,7 @@ const LibraryTopBar = () => {
     try {
       // The checked copy of the post's file, stamped with the link to renew:
       // the post, its file, and the release copy that was downloaded.
-      const bundle = await downloadHubScenario({ postId: post.id, bundleUrl: post.bundleUrl, title: post.title, author: post.author, flatMap: post.flatMap });
+      const bundle = await downloadHubScenario({ postId: post.id, bundleUrl: post.bundleUrl, title: post.title, author: post.author, flatMap: post.flatMap, update: true });
       await updateScenarioFromBundle(scenario.id, bundle);
       // A drawer open on this scenario still holds what was replaced. It is
       // loaded again, so its Save cannot write the old form over the new file.
