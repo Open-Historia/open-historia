@@ -1,5 +1,5 @@
 /*! Open Historia — portions (era polity names/flags + intel briefing) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useMap } from "react-map-gl/maplibre";
 import { getNationFlags, getPrimedScenarioRegionCatalog, resolveCountryDisplayName } from "../../runtime/assets.js";
@@ -20,7 +20,7 @@ import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { APP_HEIGHT, MAP_CARD_OPENED, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, useShortTouchScreen, useTouchPrimary } from "../../runtime/mobileUi.js";
 import { useBackToClose } from "../../runtime/backToClose.js";
 import { copyToClipboard } from "../../runtime/clipboard.js";
-import { isSameRegionSelection, regionControlStatus, useCardScreenPos } from "./mapCards.js";
+import { clampAnchoredCardTop, isSameRegionSelection, regionControlStatus, useCardScreenPos } from "./mapCards.js";
 import { regionInfoFor } from "./regionInfo.js";
 import { getWorldPlaceIndex } from "../../runtime/placeSearch.js";
 import { resolveRegionName } from "../../runtime/regionNameFixes.js";
@@ -344,6 +344,8 @@ const RegionPopup = () => {
     const isTouch = useTouchPrimary();
     const [selection, setSelection] = useState(null);
     const [animKey, setAnimKey] = useState(0);
+    const popupBodyRef = useRef(null);
+    const [popupBodyHeight, setPopupBodyHeight] = useState(0);
     const [dismissing, setDismissing] = useState(false);
     // The Region info section (regionInfo.js), shut again for each region.
     const [showRegionInfo, setShowRegionInfo] = useState(false);
@@ -568,6 +570,29 @@ const RegionPopup = () => {
     // A phone's sheet follows no point on the map, so nothing is tracked
     // (mapCards.js).
     const screenPos = useCardScreenPos(map, selection?.lngLat, Boolean(selection) && !asSheet);
+    const floatingCardVisible = Boolean(selection && screenPos && !asSheet);
+
+    // True-sized flags and expandable region details alter the card height.
+    // Observe the laid-out body (not the animated bounding box) so a card near
+    // the viewport edge moves up rather than losing its controls off-screen.
+    useEffect(() => {
+        if (!floatingCardVisible) return undefined;
+        const body = popupBodyRef.current;
+        if (!body) return undefined;
+        const measure = () => {
+            const height = body.offsetHeight;
+            setPopupBodyHeight((previous) => Math.abs(previous - height) < 1 ? previous : height);
+        };
+        const frame = window.requestAnimationFrame(measure);
+        const observer = typeof ResizeObserver === "function" ? new ResizeObserver(measure) : null;
+        observer?.observe(body);
+        window.addEventListener("resize", measure);
+        return () => {
+            window.cancelAnimationFrame(frame);
+            observer?.disconnect();
+            window.removeEventListener("resize", measure);
+        };
+    }, [floatingCardVisible, animKey]);
 
     // A card that is not on screen has no fade-out to play, and the fade's end
     // is what clears the selection: without this a dismiss left it selected.
@@ -675,7 +700,7 @@ const RegionPopup = () => {
             position: "fixed",
             ...(asSheet ? (isMobile ? SHEET_PLACEMENT : SIDEWAYS_SHEET_PLACEMENT) : {
                 left: screenPos.x - POPUP_WIDTH / 2,
-                top: screenPos.y - 10,
+                top: clampAnchoredCardTop(screenPos.y, popupBodyHeight, window.innerHeight),
                 width: `${POPUP_WIDTH}px`,
             }),
             zIndex: 20,
@@ -686,32 +711,34 @@ const RegionPopup = () => {
         }}
         >
         <div
+        ref={popupBodyRef}
         style={{
             backgroundColor: "rgba(24, 24, 27, 0.95)",
             backdropFilter: "blur(4px)",
             WebkitBackdropFilter: "blur(4px)",
             borderRadius: "12px",
-            overflow: asSheet ? "auto" : "hidden",
-            maxHeight: asSheet ? (isMobile ? SHEET_MAX_HEIGHT : SIDEWAYS_SHEET_MAX_HEIGHT) : undefined,
+            overflowX: "hidden",
+            overflowY: "auto",
+            maxHeight: asSheet ? (isMobile ? SHEET_MAX_HEIGHT : SIDEWAYS_SHEET_MAX_HEIGHT) : "calc(100dvh - 1rem)",
             fontFamily: "sans-serif",
             boxShadow: "0 8px 32px rgba(0,0,0,0.5), 0 2px 8px rgba(0,0,0,0.3)",
             border: "1px solid rgba(255,255,255,0.12)",
             color: "white",
         }}
         >
-        <div style={{ position: "relative", width: "100%", height: "96px", background: "rgba(41,41,45,0.6)" }}>
+        <div style={{ position: "relative", width: "100%", background: "rgba(41,41,45,0.6)" }}>
         {showFlagImage ? (
             <img
             src={bundledFlagUrl(flagState.imageUrl)}
             alt={displayCountry}
-            style={{ width: "100%", height: "100%", objectFit: "cover", display: "block", opacity: 0.9 }}
+            style={{ width: "100%", height: "auto", maxHeight: "min(320px, 40dvh)", objectFit: "contain", display: "block", opacity: 0.9 }}
             onError={() => setFlagImageFailed(true)}
             />
         ) : (
             <div
             style={{
                 width: "100%",
-                height: "100%",
+                height: "96px",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
