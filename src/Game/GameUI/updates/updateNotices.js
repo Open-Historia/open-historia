@@ -84,8 +84,26 @@ export const pendingUpdates = ({ updates = NOTICE_UPDATES, seen = seenUpdate(), 
   if (updates.length === 0 || !keeps) return [];
   const at = seen ? updates.findIndex((update) => update.id === seen) : -1;
   if (at === 0) return [];
+  // A release (notesReleases.js) tells everything under it: a device owed one is shown it alone.
+  if (updates[0].kind === "release") return [updates[0]];
   if (at < 0) return updates.filter((update, index) => index === 0 || (update.kind === "major" && daysBetween(update.date, updates[0].date) <= FIRST_LOOK_DAYS)).slice(0, UPDATES_SHOWN_MOST);
   return updates.slice(0, Math.min(at, UPDATES_SHOWN_MOST));
+};
+
+// A release chapter's every line, update by update, as their notices told them (notesReleases.js `updates`):
+// [{ key, title, date, lines }], less the release's `omit` lines and any update left with none.
+export const releaseChapterEntries = (release, chapter, updates = UPDATES) => {
+  const omit = new Set(release?.omit ?? []);
+  return (chapter?.updates ?? []).map((ref) => {
+    const [id, at] = String(ref).split("#");
+    const update = updates.find((entry) => entry.id === id);
+    if (!update) return null;
+    const banners = at === undefined ? update.banners ?? [] : [update.banners?.[Number(at)]].filter(Boolean);
+    const lines = banners
+      .flatMap((banner) => [...(banner.items ?? []), ...(banner.sections ?? []).flatMap((section) => section.items ?? [])])
+      .filter((line) => !omit.has(line));
+    return lines.length ? { key: ref, title: banners[0]?.title ?? "", date: update.date, lines } : null;
+  }).filter(Boolean);
 };
 
 // The update a preview asks for (?updateNotice=<id> or latest), as a list, or null for none asked.
