@@ -32,6 +32,7 @@
     "dist:win:multiplayer": "node scripts/stamp-channel.mjs multiplayer && node scripts/fetch-fmg.mjs && npm run build && node scripts/package-desktop.mjs --win --config electron-builder.multiplayer.yml"
   },
   "dependencies": {
+    "@huggingface/transformers": "4.3.1",
     "@noble/ciphers": "^2.4.0",
     "@noble/curves": "^2.4.0",
     "@noble/hashes": "^2.4.0",
@@ -60,6 +61,7 @@
     "maplibre-gl": "^5.19.0",
     "ol": "^10.9.0",
     "ol-pmtiles": "^2.0.2",
+    "parakeet.js": "1.4.4",
     "pmtiles": "^4.4.0",
     "polygon-clipping": "^0.15.7",
     "react": "^19.2.4",
@@ -161,6 +163,9 @@
       ],
       "icon": "public/icon-512.png",
       "category": "public.app-category.strategy-games",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "The Advisor's microphone turns what you say into a message. The speech is recognised on this Mac and never leaves it."
+      },
       "artifactName": "Open-Historia-mac-${arch}.${ext}"
     },
     "linux": {

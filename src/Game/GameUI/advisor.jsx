@@ -16,6 +16,7 @@ import { ADVISOR_RECIPIENT_TYPES, CHIEF_ADVISOR_THREAD, advisorContacts, advisor
 import { getPoliticalProfile } from "../../runtime/politicalActors.js";
 import StorageProblemNotice from "./storageProblemNotice.jsx";
 import AdvisorRecipients from "./AdvisorRecipients.jsx";
+import AdvisorMic from "./AdvisorMic.jsx";
 import { describeReplyProblems, extractFencedJson, looksLikeProjectOps } from "./advisorBlocks.js";
 import { actionProposalsFromReply, recordAdvisorActionReceipt } from "./advisorActionReview.js";
 import { approveAdvisorAction } from "./advisorActionApproval.js";
@@ -1488,8 +1489,9 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         }
     };
 
-    const handleSend = () => {
-        const text = input.trim();
+    // The microphone (AdvisorMic) passes what it heard; a click passes its event.
+    const handleSend = (spoken) => {
+        const text = (typeof spoken === "string" ? spoken : input).trim();
         if (!text || !hasBootstrapped || loadFailed || saveFailed || turnInFlightRef.current || sideEffectPendingRef.current || contactMutationRef.current || threadSwitchingRef.current || recipientLocked) return;
         setInput("");
         return runTurn(text);
@@ -1964,6 +1966,13 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         }}
         onKeyDown={handleKeyDown}
 
+        />
+        <AdvisorMic
+        disabled={isLoading || recipientLocked || !hasBootstrapped || loadFailed || saveFailed}
+        input={input}
+        onInput={setInput}
+        onSend={handleSend}
+        threadKey={activeThreadId}
         />
         <button
         type="button"
