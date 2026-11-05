@@ -5231,6 +5231,8 @@
  "Imported {{count}} regions",
  "Imported {{count}} regions and {{count2}} city markers",
  "Imported {{name}}. Save the scenario to persist these prompt edits.",
+ "Importing a Community scenario you have imported before, even one you have since deleted, no longer adds to its number of imports.",
+ "Importing again is not an import",
  "Importing…",
  "Impossible",
  "Improve action failed",

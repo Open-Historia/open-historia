@@ -6,6 +6,7 @@
 // UI settings persist in IndexedDB. Only bundled into the web build (VITE_OH_WEB).
 
 import { kvGet, kvUpdate } from "./idb.js";
+import { HUB_IMPORTED_KEY, mergeHubImported } from "../../../server/hubImported.js";
 import { jsonResponse, errorResponse } from "./util.js";
 
 const isLangCode = (code) => /^[a-z]{2,3}$/.test(code);
@@ -95,6 +96,10 @@ export const handleUiSettings = async (ctx) => {
       const merged = { ...(current || {}) };
       if (typeof ctx.body?.language === "string" && ctx.body.language.trim().length <= 16) {
         merged.language = ctx.body.language.trim();
+      }
+      // Hub posts imported (server/hubImported.js): added to, never replaced.
+      if (Array.isArray(ctx.body?.[HUB_IMPORTED_KEY])) {
+        merged[HUB_IMPORTED_KEY] = mergeHubImported(merged[HUB_IMPORTED_KEY], ctx.body[HUB_IMPORTED_KEY]);
       }
       return merged;
     }, {});

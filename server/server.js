@@ -98,6 +98,7 @@ import {
   latestOfficialVersion,
 } from "./officialBasemaps.js";
 import { listFlags, createFlag, deleteFlag } from "./flagStore.js";
+import { HUB_IMPORTED_KEY, mergeHubImported } from "./hubImported.js";
 import { HUB_CACHE_NAMES_MARKER, renameHubCacheBundles, renameScenarioBundleBytes, writeFileAtomic } from "./scenarioBundleNames.js";
 import {
   clearHubCache,
@@ -536,6 +537,10 @@ app.put("/api/ui-settings", jsonParser, (req, res) => {
     const next = { ...readUiSettings() };
     if (typeof req.body?.language === "string" && req.body.language.trim().length <= 16) {
       next.language = req.body.language.trim();
+    }
+    // Hub posts imported (hubImported.js): added to, never replaced.
+    if (Array.isArray(req.body?.[HUB_IMPORTED_KEY])) {
+      next[HUB_IMPORTED_KEY] = mergeHubImported(next[HUB_IMPORTED_KEY], req.body[HUB_IMPORTED_KEY]);
     }
     fs.mkdirSync(path.dirname(uiSettingsFile), { recursive: true });
     fs.writeFileSync(uiSettingsFile, JSON.stringify(next, null, 2));

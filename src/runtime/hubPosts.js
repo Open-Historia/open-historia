@@ -30,6 +30,7 @@ import {
 import { checkedSuggestionsOf, fetchHubFile, fetchHubIndex, importCountOf, releaseCopyOf, requireReleaseCopy } from "./hubFiles.js";
 import { HUB_API, HUB_URL, fetchHubPages, fetchHubScenarioIssues, firstHubImage } from "./hubIssues.js";
 import { FLAT_MAP_LABEL, declareFlatMapFromPost, postSaysFlatMap } from "../../server/mapProjection.js";
+import { HUB_IMPORTED_KEY, hubImportedIncludes, normalizeHubImported } from "../../server/hubImported.js";
 
 export { HUB_OWNER, HUB_REPO, HUB_URL } from "./hubIssues.js";
 export const HUB_NEW_POST_URL = `${HUB_URL}/issues/new?template=scenario.yml`;
@@ -282,6 +283,34 @@ export const readScenarioBundleBytes = async (bytes) => {
 // downloadHubScenario, which also says where the bundle came from.
 export const downloadHubBundle = async (bundleUrl, { update = false } = {}) => readScenarioBundleBytes(await downloadHubFile(bundleUrl, { update }));
 
+// Whether this player has imported a post before (server/hubImported.js): read
+// from ui-settings, the desktop server's file or the website's own storage.
+// Unreadable = not before, so the import is counted as it always was.
+export const hubPostImportedBefore = async (postId) => {
+  try {
+    const response = await fetch("/api/ui-settings");
+    if (!response.ok) return false;
+    return hubImportedIncludes((await response.json())?.[HUB_IMPORTED_KEY], postId);
+  } catch {
+    return false;
+  }
+};
+
+// Notes a post as imported, once its file is downloaded. A failed write only
+// means its next import is counted again.
+export const rememberHubImport = async (postId) => {
+  if (!normalizeHubImported([postId]).length) return;
+  try {
+    await fetch("/api/ui-settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ [HUB_IMPORTED_KEY]: [postId] }),
+    });
+  } catch {
+    // Nothing else depends on it.
+  }
+};
+
 // A post's scenario file, ready for import and stamped with where it came from
 // (bundle.hubOrigin, which the stores keep with the scenario:
 // server/hubProvenance.js): the post, the file as the post names it, and
@@ -292,9 +321,17 @@ export const downloadHubBundle = async (bundleUrl, { update = false } = {}) => r
 // one the bytes came from, even if the index is read again in between. An
 // Update (`update: true`) downloads the same bytes from the copy's update copy,
 // which the hub leaves out of the import count; the link still names `release`.
-export const downloadHubScenario = async ({ postId, bundleUrl, title, author, syncedAt, flatMap = false, update = false } = {}) => {
+//
+// Importing a post again is not an import either: a post this player has
+// imported before (hubPostImportedBefore, kept even after the scenario is
+// deleted), or one the caller knows is in the library (`again`), downloads the
+// update copy too. Where the hub has no update copy yet (it makes them a few
+// at a time) the counted copy is all there is, and that download still counts.
+export const downloadHubScenario = async ({ postId, bundleUrl, title, author, syncedAt, flatMap = false, update = false, again = false } = {}) => {
   const release = await requireReleaseCopy(bundleUrl);
-  const downloaded = await downloadHubBundle(release, { update });
+  const importedBefore = await hubPostImportedBefore(postId);
+  const downloaded = await downloadHubBundle(release, { update: update || again || importedBefore });
+  if (!importedBefore) await rememberHubImport(postId);
   // What the hub's maintainers said of the post (parseScenarioPost flatMap),
   // for a file that declares no projection of its own.
   const bundle = flatMap ? declareFlatMapFromPost(downloaded, { labels: [FLAT_MAP_LABEL] }) : downloaded;
