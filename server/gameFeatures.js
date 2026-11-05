@@ -59,16 +59,6 @@ export const FEATURE_DEFINITIONS = Object.freeze([
         defaultValue: true,
         description: "Fleets on the map: they fight at sea, blockade coasts and carry troops across water. Off: no fleet is raised or sails, nothing is carried by sea, the War Room has no fleets, and the simulator is told the war has none.",
       }),
-      Object.freeze({
-        key: "pace",
-        label: "Pace of an advance",
-        unit: "% of the usual ground gained in a day",
-        min: 25,
-        max: 300,
-        step: 5,
-        defaultValue: 100,
-        description: "How fast troops gain ground when they have the strength to. 100 is the built-in pace: on foot at two to one, about five kilometres a day in the modern era. Lower for a war of position, higher for a war of movement. It changes how far an attack gets, never who wins it.",
-      }),
     ]),
   }),
   // Rostra, the social network (src/runtime/socialFeed.js, src/Game/GameUI/social.jsx):

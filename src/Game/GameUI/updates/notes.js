@@ -180,6 +180,22 @@ const NEW_UPDATES = [
     ],
   },
   {
+    // The Wars feature's Pace of an advance setting removed: every game advances at the built-in pace (AI/frontsGate.js
+    // frontsPace); the owner's ask, 2026-11-04.
+    id: "2026-11-one-advance-pace",
+    kind: "minor",
+    date: "2026-11-05",
+    channel: "beta",
+    banners: [
+      {
+        title: "Advances at one pace",
+        items: [
+          "The Wars feature no longer has a Pace of an advance setting. Troops in every game advance at the built-in pace, including games and scenarios that had changed it.",
+        ],
+      },
+    ],
+  },
+  {
     // "When map looping is disabled in a scenario, you shouldn't be able to continue infinitely anyway", and the Third
     // Great Ninja War's picture (freeform, ±72°) showed empty ground past its top and bottom. The camera's bounds had
     // infinite longitudes, which switched off MapLibre's one-world hold, and the square's ±85° for every picture

@@ -92,24 +92,22 @@ test("the Wars feature is listed, always on, with Fronts, Air units and Navies s
     ["battlefields", "toggle", undefined, undefined, true],
     ["air", "toggle", undefined, undefined, true],
     ["navies", "toggle", undefined, undefined, true],
-    ["pace", "number", 25, 300, 100],
   ]);
-  const all = { enabled: true, battlefields: true, air: true, navies: true, pace: 100 };
+  const all = { enabled: true, battlefields: true, air: true, navies: true };
   assert.deepEqual(featureDefaults().fronts, all);
   // A scenario saved before the feature existed has it on.
   assert.deepEqual(normalizeFeatureSettings({ espionage: false }).fronts, all);
   // One saved with fronts off, before the parts had switches, has its battlefields off and nothing else.
-  assert.deepEqual(normalizeFeatureSettings({ fronts: { enabled: false, pace: 1000 } }).fronts, { ...all, battlefields: false, pace: 300 });
-  assert.deepEqual(normalizeFeatureSettings({ fronts: { pace: 3 } }).fronts, { ...all, pace: 25 });
+  // A pace an older scenario saved (the setting is gone, 2026-11-04) is dropped.
+  assert.deepEqual(normalizeFeatureSettings({ fronts: { enabled: false, pace: 1000 } }).fronts, { ...all, battlefields: false });
+  assert.deepEqual(normalizeFeatureSettings({ fronts: { pace: 3 } }).fronts, all);
   assert.deepEqual(normalizeFeatureSettings({ fronts: { air: "off", navies: false } }).fronts, { ...all, air: false, navies: false });
 
   assert.equal(frontsOn(), true, "and a game that says nothing plays with it");
   assert.equal(frontsPace(), 0.4, "the built-in pace of a front: four tenths of a formation's on the move");
   try {
-    setActiveFeatures({ fronts: { pace: 250 } }, null);
-    assert.equal(frontsPace(), 1);
     setActiveFeatures({ fronts: { pace: 250 } }, { fronts: { pace: 25 } });
-    assert.equal(frontsPace(), 0.1, "a game's own setting over its scenario's");
+    assert.equal(frontsPace(), 0.4, "an old saved pace changes nothing: every game advances at the built-in pace");
     setActiveFeatures({ fronts: { enabled: false } }, null);
     assert.equal(frontsOn(), false);
     setActiveFeatures({ fronts: { enabled: false } }, { fronts: { enabled: true } });
