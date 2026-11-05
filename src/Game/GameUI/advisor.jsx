@@ -26,6 +26,7 @@ import { institutionDraftButtonLabel } from "./advisorInstitutionDrafts.js";
 import { parseAdvisorReply } from "./advisorReply.js";
 import { ADVISOR_SLIDE } from "./advisorSlide.js";
 import Markdown, { MarkdownStyleInjector } from "./markdown.jsx";
+import "./advisorDossier.css";
 import { buildCatchUpNote } from "../AI/conversationCatchUp.js";
 import { publicCharacterEvents } from "../AI/characterConversations.js";
 import { splitAdvisorMemory, stripAdvisorMemory } from "../AI/advisorMemory.js";
@@ -760,7 +761,7 @@ const AdvisorMessageRow = React.memo(({ msg, msgIndex, speakerName = "Advisor", 
     const asWritten = msg.role === "advisor" && chatDiffers;
 
     return (
-        <div style={{ display: "flex", flexDirection: "column", alignItems: msg.role === "user" ? "flex-end" : "flex-start" }}>
+        <div className="oh-advisor-message-row" data-role={msg.role}>
         {/* The world moved on before this question; the advisor was told how
             (the whole note is in the tooltip). */}
         {msg.role === "user" && msg.catchUpLabel && (
@@ -769,20 +770,12 @@ const AdvisorMessageRow = React.memo(({ msg, msgIndex, speakerName = "Advisor", 
             </span>
         )}
         {msg.role !== "user" && (
-            <span style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.4)", marginBottom: "0.25rem" }}>
+            <span className="oh-advisor-speaker">
             {msg.role === "error" ? "⚠️ Error" : `🧭 ${speakerName}`}
             </span>
         )}
         {/* Player-typed text stays verbatim under UI translation. */}
-        <div data-no-translate={msg.role === "user" || asWritten ? "" : undefined} dir={asWritten ? chatDir : undefined} style={{
-            maxWidth: "90%", width: chartConfig ? "90%" : undefined,
-            padding: "0.6rem 0.85rem",
-            borderRadius: msg.role === "user" ? "12px 12px 2px 12px" : "12px 12px 12px 2px",
-            backgroundColor: msg.role === "user" ? "#3b82f6" : msg.role === "error" ? "rgba(239,68,68,0.2)" : "rgba(255,255,255,0.08)",
-            fontSize: "0.85rem", lineHeight: "1.5", whiteSpace: "pre-wrap", wordBreak: "break-word",
-            border: msg.role === "error" ? "1px solid rgba(239,68,68,0.3)" : "none",
-            boxSizing: "border-box",
-        }}>
+        <div className="oh-advisor-message-body" data-role={msg.role} data-no-translate={msg.role === "user" || asWritten ? "" : undefined} dir={asWritten ? chatDir : undefined}>
         {msg.role === "user" ? text : (
             <AdvisorReplyBody
             text={text}
@@ -850,7 +843,7 @@ const AdvisorMessageRow = React.memo(({ msg, msgIndex, speakerName = "Advisor", 
         )}
         </div>
         {msg.time && msg.role !== "user" && (
-            <span style={{ fontSize: "0.65rem", color: "rgba(255,255,255,0.3)", marginTop: "0.25rem" }}>
+            <span className="oh-advisor-message-time">
             {formatAdvisorDate(msg.time)}
             </span>
         )}
@@ -879,7 +872,7 @@ const AdvisorDocumentNotice = ({ notice }) => {
     return (
         <div style={{ alignItems: "flex-start", display: "flex", flexDirection: "column" }}>
             <span style={{ color: "rgba(255,255,255,0.4)", fontSize: "0.7rem", marginBottom: "0.25rem" }}>🧭 Advisor</span>
-            <div style={{ background: "rgba(250,204,21,0.06)", border: "1px solid rgba(250,204,21,0.22)", borderRadius: "12px 12px 12px 2px", boxSizing: "border-box", fontSize: "0.82rem", lineHeight: 1.5, maxWidth: "90%", padding: "0.55rem 0.8rem" }}>
+            <div className="oh-advisor-notice">
                 <div>
                     📄 A new paper on your desk: <span data-no-translate style={{ fontWeight: 800 }}>{report.title}</span>, {noticeHow(notice)}.
                 </div>
@@ -930,7 +923,7 @@ const ADVISOR_RENDER_WINDOW_STEP = 20;
 // the WHOLE transcript: placedDeployments and completedInstitutionDrafts are
 // written back through it.
 const AdvisorMessageList = React.memo(({ messages, visibleLimit, onShowEarlier, isLoading, speakerName = "Advisor", emptyMessage = "No messages yet. Ask your advisor something!", canExecute = true, canDraft = true, canReviewActions = true, allowedUnitTypes, chatDiffers, chatDir, onOpenActions, onOpenProjects, onRetryProjects, onRetry, retrying, onDraftMessage, onDiscussAction, onProceedAction, onExecuteInstitutionDraft, onPlaceDeployment, messagesEndRef, containerRef, onScroll }) => (
-    <div ref={containerRef} onScroll={onScroll} style={{ padding: "0.75rem", flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", gap: "1rem", scrollbarWidth: "none" }}>
+    <div className="oh-advisor-messages" ref={containerRef} onScroll={onScroll}>
     {messages.length === 0 && (
         <p style={{ fontSize: "0.85rem", color: "rgba(255,255,255,0.5)", marginTop: 0 }}>
         {emptyMessage}
@@ -940,9 +933,8 @@ const AdvisorMessageList = React.memo(({ messages, visibleLimit, onShowEarlier, 
     {messages.length > visibleLimit && (
         <button
             type="button"
-            className="oh-tap-row"
+            className="oh-tap-row oh-advisor-message-history"
             onClick={onShowEarlier}
-            style={{ alignSelf: "center", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: "999px", color: "rgba(255,255,255,0.58)", cursor: "pointer", flexShrink: 0, fontSize: "0.68rem", padding: "0.35rem 0.65rem" }}
         >
             {Math.min(messages.length - visibleLimit, ADVISOR_RENDER_WINDOW_STEP) === 1
                 ? "Show 1 earlier message"
@@ -963,7 +955,7 @@ const AdvisorMessageList = React.memo(({ messages, visibleLimit, onShowEarlier, 
     {isLoading && !(messages[messages.length - 1]?.role === "advisor" && messages[messages.length - 1]?.streaming) && (
         <div style={{ display: "flex", alignItems: "flex-start", flexDirection: "column", gap: "0.25rem" }}>
         <span style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.4)" }}>🧭 {speakerName}</span>
-        <div style={{ padding: "0.6rem 0.85rem", borderRadius: "12px 12px 12px 4px", backgroundColor: "rgba(255,255,255,0.08)", fontSize: "0.85rem" }}>
+        <div className="oh-advisor-thinking">
         <ThinkingDots />
         </div>
         </div>
@@ -1802,7 +1794,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
     return (
         <>
         <MarkdownStyleInjector />
-        <div style={{
+        <div className="oh-advisor-drawer" style={{
             // Pinned to the top and the bottom rather than given a height. 100vh
             // is the height a phone shows with its address bar HIDDEN, so while
             // the bar showed, a 100vh drawer anchored at the bottom ran off the
@@ -1825,7 +1817,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             ...(isMobile
                 ? { left: 0, paddingTop: SAFE_TOP, paddingBottom: SAFE_BOTTOM, paddingLeft: SAFE_LEFT, paddingRight: SAFE_RIGHT, boxSizing: "border-box" }
                 : { width: `calc(${width || ADVISOR_PANEL_WIDTH} + ${SAFE_RIGHT})`, paddingTop: SAFE_TOP, paddingBottom: SAFE_BOTTOM, paddingRight: SAFE_RIGHT, boxSizing: "border-box", borderLeft: "1px solid rgba(255,255,255,0.1)" }),
-            backgroundColor: "rgba(24, 24, 27, 0.95)", backdropFilter: "blur(8px)",
+            backdropFilter: "blur(8px)",
             // Phones: above every HUD button/panel (toolbar 9999, forces 10000,
             // library panels 10031) so nothing covers the full-screen sheet;
             // below the editor (10050) and server-down (10060) overlays.
@@ -1863,9 +1855,9 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             </div>
         )}
         {/* Advisor is its own system. Country/Stats lives in the separate flag drawer. */}
-        <div style={{ alignItems: "center", borderBottom: "1px solid rgba(255,255,255,0.1)", display: "flex", gap: "0.5rem", padding: "0.78rem 0.75rem" }}>
-        <span aria-hidden="true" style={{ fontSize: "1rem" }}>🧭</span>
-        <span style={{ fontSize: "0.9rem", fontWeight: 800 }}>Advisor</span>
+        <div className="oh-advisor-header">
+        <span className="oh-advisor-header-mark" aria-hidden="true">◇</span>
+        <span className="oh-advisor-header-title">Advisor</span>
         <div style={{ flex: 1 }} />
         <button
         className="oh-tap"
@@ -1957,8 +1949,9 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         />
 
         {/* Input */}
-        <div style={{ padding: "1rem", borderTop: "1px solid rgba(255,255,255,0.1)", display: "flex", alignItems: "center", gap: "0.5rem" }}>
+        <div className="oh-advisor-composer">
         <textarea
+        className="oh-advisor-composer-input"
         ref={inputRef}
         // A phone's keyboard has no Shift+Enter to speak of.
         placeholder={recipientUnavailableReason || (selectedContact ? `Message ${selectedContact.name}…` : chiefProfile ? `Message ${chiefProfile.name}…` : isTouch ? "Ask your advisor…" : "Ask your advisor…  (Shift+Enter for a new line)")}
@@ -1970,16 +1963,20 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             resizeTextarea();
         }}
         onKeyDown={handleKeyDown}
-        style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.2)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: "10px", color: "white", fontSize: "0.875rem", padding: "0.6rem 0.75rem", resize: "none", outline: "none", fontFamily: "sans-serif", lineHeight: "1.5", overflowY: "auto", scrollbarWidth: "none", transition: "border-color 0.2s" }}
-        onFocus={e => e.target.style.borderColor = "rgba(59,130,246,0.6)"}
-        onBlur={e => e.target.style.borderColor = "rgba(255,255,255,0.15)"}
+
         />
         <button
-        onClick={handleSend} disabled={isLoading || recipientLocked || !hasBootstrapped || loadFailed || saveFailed || !input.trim()}
-        style={{ backgroundColor: isLoading || recipientLocked || !input.trim() ? "rgba(59,130,246,0.4)" : "#3b82f6", border: "none", borderRadius: "10px", width: "2.5rem", height: "2.5rem", display: "flex", alignItems: "center", justifyContent: "center", cursor: isLoading || !input.trim() ? "not-allowed" : "pointer", flexShrink: 0, fontSize: "1rem", transition: "background-color 0.2s" }}
-        onMouseEnter={e => { if (!isLoading && !recipientLocked && input.trim()) e.currentTarget.style.backgroundColor = "#2563eb"; }}
-        onMouseLeave={e => { if (!isLoading && !recipientLocked && input.trim()) e.currentTarget.style.backgroundColor = "#3b82f6"; }}
-        >🚀</button>
+        type="button"
+        className="oh-advisor-send"
+        aria-label="Send message"
+        title="Send message"
+        onClick={handleSend}
+        disabled={isLoading || recipientLocked || !hasBootstrapped || loadFailed || saveFailed || !input.trim()}
+        >
+          <svg aria-hidden="true" focusable="false" width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 19V5m-7 7 7-7 7 7" />
+          </svg>
+        </button>
         </div>
         </div>
         </div>
