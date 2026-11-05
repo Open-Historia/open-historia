@@ -573,7 +573,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     }
     const entry = ownBasemapFromLibrary(
       meta || { id: name, name, kind: normalized.kind },
-      normalized.kind === "vector" ? { geojson: normalized.geojson } : { dataUrl: normalized.dataUrl },
+      normalized.kind === "vector" ? { geojson: normalized.geojson } : { dataUrl: normalized.dataUrl, bounds: bg.bounds, aspect: normalized.aspect },
     );
     const added = Boolean(entry) && applyMaps(addOwnMap(d.doc?.metadata, entry));
     return { added, ...(libraryError ? { libraryError } : {}) };

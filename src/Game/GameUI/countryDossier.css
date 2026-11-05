@@ -238,10 +238,10 @@
 }
 .oh-country-landscape-overview {
   display: grid;
-  grid-template-columns: minmax(145px, .9fr) minmax(0, 1fr);
+  grid-template-columns: minmax(170px, 1.05fr) minmax(0, 1fr);
   align-items: center;
-  gap: .65rem;
-  padding: .3rem 0 .7rem;
+  gap: .5rem;
+  padding: .4rem 0 .7rem;
   border-bottom: 1px solid var(--dossier-line);
 }
 .oh-country-landscape-top {
@@ -584,4 +584,129 @@
   .oh-country-dossier .oh-country-economic-datum,
   .oh-country-dossier .oh-country-index-datum,
   .oh-country-dossier .oh-country-relation-row { transition: none !important; }
+}
+
+/* Two public political rosters, one canonical representation model. */
+.oh-country-landscape-switch {
+  display: flex;
+  width: max-content;
+  max-width: 100%;
+  gap: .18rem;
+  margin: .58rem auto .68rem;
+  padding: 3px;
+  background: #1b2c3c;
+  border: 1px solid rgba(142, 188, 215, .2);
+  border-radius: 6px;
+}
+.oh-country-landscape-switch button {
+  appearance: none;
+  min-width: 0;
+  min-height: 2.1rem;
+  padding: .32rem .75rem;
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  color: #91a8ba;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: .67rem;
+  font-weight: 800;
+  text-align: center;
+}
+.oh-country-landscape-switch button:hover { color: #e1edf7; }
+.oh-country-landscape-switch button[aria-pressed="true"] {
+  background: #28475e;
+  box-shadow: inset 0 -2px #89d2ed;
+  color: #f4faff;
+}
+.oh-country-bloc-ledger {
+  border-top: 1px solid rgba(142, 188, 215, .24);
+  margin-top: .68rem;
+}
+.oh-country-bloc-entry {
+  border-bottom: 1px solid rgba(142, 188, 215, .16);
+}
+.oh-country-bloc-entry[data-expanded="true"] {
+  background: rgba(60, 127, 166, .09);
+}
+.oh-country-bloc-button {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  color: #dce8f1;
+  cursor: pointer;
+  display: block;
+  font-family: inherit;
+  padding: .83rem .25rem .8rem;
+  text-align: left;
+  width: 100%;
+}
+.oh-country-bloc-button:hover { background: rgba(121, 180, 214, .055); }
+.oh-country-bloc-heading {
+  align-items: baseline;
+  display: flex;
+  justify-content: space-between;
+  gap: .6rem;
+  line-height: 1.42;
+}
+.oh-country-bloc-name {
+  color: #e7eff6;
+  font-size: .79rem;
+  font-weight: 850;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.oh-country-bloc-value {
+  color: #a6d9ee;
+  flex: 0 0 auto;
+  font-size: .77rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 850;
+  text-align: right;
+}
+.oh-country-bloc-track {
+  background: #2a3645;
+  border-radius: 999px;
+  height: 6px;
+  margin: .52rem 0 .46rem;
+  overflow: hidden;
+}
+.oh-country-bloc-fill {
+  border-radius: 999px;
+  height: 100%;
+  max-width: 100%;
+}
+.oh-country-bloc-qualitative {
+  color: #879bad;
+  font-size: .62rem;
+  margin-top: .23rem;
+}
+.oh-country-bloc-meta {
+  color: #8ea2b5;
+  display: flex;
+  flex-wrap: wrap;
+  font-size: .62rem;
+  gap: .2rem .65rem;
+  margin-top: .36rem;
+}
+.oh-country-bloc-meta span + span::before {
+  color: #688399;
+  content: "·";
+  margin-right: .65rem;
+}
+.oh-country-bloc-approximate {
+  color: #d5bb79;
+  font-size: .57rem;
+  font-weight: 800;
+  letter-spacing: .035em;
+  margin-top: .35rem;
+  text-transform: uppercase;
+}
+.oh-country-bloc-entry > div:not(.oh-country-bloc-button) {
+  margin: .1rem .22rem .9rem;
+}
+@media (max-width: 375px) {
+  .oh-country-bloc-heading { align-items: flex-start; }
+  .oh-country-bloc-value { max-width: 40%; overflow-wrap: anywhere; }
+  .oh-country-landscape-switch button { font-size: .68rem; }
 }

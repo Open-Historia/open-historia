@@ -2,14 +2,14 @@ import React, { useState } from "react";
 import { ADVISOR_PERSONALITY_MAX_CHARS, ADVISOR_RECIPIENT_TYPES, ADVISOR_RECIPIENT_TYPE_LABELS, CHIEF_ADVISOR_THREAD, advisorRecipientType } from "../../runtime/advisorThreads.js";
 
 const field = {
-  background: "rgba(0,0,0,0.22)", border: "1px solid rgba(255,255,255,0.17)",
-  borderRadius: 7, boxSizing: "border-box", color: "#f8fafc",
-  fontFamily: "inherit", fontSize: "0.76rem", padding: "0.42rem", width: "100%",
+  background: "#112131", border: "1px solid rgba(133, 191, 219, .28)",
+  borderRadius: 5, boxSizing: "border-box", color: "#f0f6fa",
+  fontFamily: "inherit", fontSize: "0.76rem", padding: "0.45rem", width: "100%",
 };
-const subtle = { color: "rgba(255,255,255,0.5)", fontSize: "0.68rem" };
+const subtle = { color: "#97acbd", fontSize: "0.68rem" };
 const button = {
-  background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.17)",
-  borderRadius: 7, color: "#e2e8f0", cursor: "pointer",
+  background: "#203648", border: "1px solid rgba(133, 191, 219, .2)",
+  borderRadius: 5, color: "#d8e5ee", cursor: "pointer",
   fontFamily: "inherit", fontSize: "0.72rem", padding: "0.4rem 0.55rem",
 };
 const blank = () => ({ name: "", title: "", personality: "", recipientType: ADVISOR_RECIPIENT_TYPES.MINISTER, binding: null, officeKey: "" });
@@ -99,39 +99,41 @@ export default function AdvisorRecipients({
   };
 
   return (
-    <section style={{ borderBottom: "1px solid rgba(255,255,255,0.1)", flexShrink: 0, padding: "0.4rem 0.65rem" }} aria-label="Advisor conversations">
-      <div style={{ alignItems: "center", display: "flex", gap: 8 }}>
-        <button type="button" onClick={() => setExpanded((old) => !old)} style={{ ...button, flex: 1, textAlign: "left" }}>
-          {selected ? selected.name : chiefName} {selected?.archived ? "(retired)" : ""} {expanded ? "▴" : "▾"}
+    <section className="oh-advisor-recipients" aria-label="Advisor conversations">
+      <div className="oh-advisor-recipient-top">
+        <button type="button" className="oh-advisor-recipient-trigger" aria-expanded={expanded} onClick={() => setExpanded((old) => !old)}>
+          <span className="oh-advisor-recipient-trigger-name">{selected ? selected.name : chiefName}</span>
+          {selected?.archived && <span style={subtle}>(retired)</span>}
+          <span className="oh-advisor-recipient-chevron" aria-hidden="true">{expanded ? "▴" : "▾"}</span>
         </button>
-        <button type="button" disabled={busy || saving} onClick={() => openEditor()} title="Add an official or advisor" style={{ ...button, opacity: busy ? 0.5 : 1 }} aria-label="Add advisor recipient">+ Contact</button>
+        <button type="button" className="oh-advisor-add-contact" disabled={busy || saving} onClick={() => openEditor()} title="Add an official or advisor" aria-label="Add advisor recipient">+ Contact</button>
       </div>
-      {(selected || chiefProfile) && <div style={{ ...subtle, marginTop: 3 }}>{selected ? selected.title : chiefTitle}{selected?.binding ? " · Political World" : ""}</div>}
+      {(selected || chiefProfile) && <div className="oh-advisor-recipient-title">{selected ? selected.title : chiefTitle}{selected?.binding ? " · Political World" : ""}</div>}
       {selected && advisorRecipientType(selected) !== ADVISOR_RECIPIENT_TYPES.MINISTER && (
         <div role="status" style={{ ...subtle, marginTop: 5 }}>
           This character uses only the public scenario timeline and their own conversation history. Private government records and diplomacy are not shared.
         </div>
       )}
       {expanded && (
-        <div style={{ maxHeight: "min(58vh, 410px)", overflowY: "auto", paddingTop: 8, display: "flex", flexDirection: "column", gap: 5 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-            <button type="button" disabled={busy || saving} onClick={() => { onSelect(CHIEF_ADVISOR_THREAD); setEditor(null); setConfirmArchive(""); }} style={{ ...button, flex: 1, minWidth: 0, textAlign: "left", background: activeId === CHIEF_ADVISOR_THREAD ? "rgba(59,130,246,0.24)" : button.background }}>
-              {chiefName} <span style={subtle}>· Original conversation</span>
-              {chiefProfile && <div style={subtle}>{chiefTitle}</div>}
+        <div className="oh-advisor-contact-list">
+          <div className="oh-advisor-contact-row">
+            <button type="button" className="oh-advisor-contact-select" aria-current={activeId === CHIEF_ADVISOR_THREAD ? "true" : undefined} disabled={busy || saving} onClick={() => { onSelect(CHIEF_ADVISOR_THREAD); setEditor(null); setConfirmArchive(""); setExpanded(false); }}>
+              <span className="oh-advisor-contact-name">{chiefName} <span style={subtle}>· Original conversation</span></span>
+              {chiefProfile && <span className="oh-advisor-contact-detail">{chiefTitle}</span>}
             </button>
-            <button type="button" disabled={busy || saving} title="Edit chief advisor" onClick={openChiefEditor} style={button}>Edit</button>
+            <button type="button" className="oh-advisor-contact-action" disabled={busy || saving} title="Edit chief advisor" onClick={openChiefEditor}>Edit</button>
           </div>
           {visible.map((contact) => {
             const officeStatus = statusOf(contact);
             return (
-              <div key={contact.id} style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                  <button type="button" disabled={busy || saving} onClick={() => { onSelect(contact.id); setEditor(null); setConfirmArchive(""); }} style={{ ...button, flex: 1, minWidth: 0, textAlign: "left", background: activeId === contact.id ? "rgba(59,130,246,0.24)" : button.background }}>
-                    <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{contact.name} {contact.archived ? "· Retired" : ""}</div>
-                    <div style={subtle}>{contact.title} · {ADVISOR_RECIPIENT_TYPE_LABELS[advisorRecipientType(contact)] || "Unsupported recipient type"}{["changed", "vacant"].includes(officeStatus) ? " · No longer in office" : ""}</div>
+              <div key={contact.id}>
+                <div className="oh-advisor-contact-row">
+                  <button type="button" className="oh-advisor-contact-select" aria-current={activeId === contact.id ? "true" : undefined} disabled={busy || saving} onClick={() => { onSelect(contact.id); setEditor(null); setConfirmArchive(""); setExpanded(false); }}>
+                    <span className="oh-advisor-contact-name">{contact.name} {contact.archived ? "· Retired" : ""}</span>
+                    <span className="oh-advisor-contact-detail">{contact.title} · {ADVISOR_RECIPIENT_TYPE_LABELS[advisorRecipientType(contact)] || "Unsupported recipient type"}{["changed", "vacant"].includes(officeStatus) ? " · No longer in office" : ""}</span>
                   </button>
-                  <button type="button" disabled={busy || saving} title={"Edit " + contact.name} onClick={() => openEditor(contact)} style={button}>Edit</button>
-                  <button type="button" disabled={busy || saving} title={contact.archived ? "Restore contact" : "Retire contact"} onClick={() => contact.archived ? retire(contact, false) : (setConfirmArchive(contact.id), setError(""))} style={button}>
+                  <button type="button" className="oh-advisor-contact-action" disabled={busy || saving} title={"Edit " + contact.name} onClick={() => openEditor(contact)}>Edit</button>
+                  <button type="button" className="oh-advisor-contact-action" disabled={busy || saving} title={contact.archived ? "Restore contact" : "Retire contact"} onClick={() => contact.archived ? retire(contact, false) : (setConfirmArchive(contact.id), setError(""))}>
                     {contact.archived ? "Restore" : "Retire"}
                   </button>
                 </div>
@@ -154,7 +156,7 @@ export default function AdvisorRecipients({
             </button>
           )}
           {editor && (
-            <div style={{ border: "1px solid rgba(96,165,250,0.4)", borderRadius: 9, display: "flex", flexDirection: "column", gap: 7, padding: 9 }}>
+            <div className="oh-advisor-contact-editor">
               <strong style={{ fontSize: "0.75rem" }}>{editor === "new" ? "Add recipient" : editor === "chief" ? "Edit chief advisor" : "Edit recipient"}</strong>
               {editor !== "chief" && (
                 <label style={subtle}>Recipient type

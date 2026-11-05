@@ -49,7 +49,7 @@ test("the new Diplomatic ledger does not bypass canonical visibility or war cont
 });
 
 test("political composition is still driven by the bounded public projection", () => {
-  assert.match(politics, /buildPoliticalLandscape\(profile\)/);
+  assert.match(politics, /buildPoliticalLandscapeViews\(profile\)/);
   assert.match(politics, /<GovernmentOverview profile=\{profile\}/);
   assert.match(politics, /className="oh-country-landscape-overview"/);
   assert.match(politics, /landscape\.entries\.slice\(0, 4\)\.map/);
@@ -133,4 +133,51 @@ test("Ranking ledger retains actual values, tie ranks, canonical flags and count
   assert.match(css, /\.oh-country-ranking-row\[data-rank-tier="top"\]/);
   assert.match(css, /\.oh-country-ranking-row\[data-mine="true"\]/);
   assert.match(css, /@media \(max-width: 375px\)/);
+});
+
+test("Politics switches between public parties and blocs without mutating representation", () => {
+  assert.match(politics, /buildPoliticalLandscapeViews\(profile\)/);
+  assert.match(politics, /views\.canSwitch &&/);
+  assert.match(politics, /const activeView = views\.canSwitch && viewChoice\.polityKey === polityKey/);
+  assert.match(politics, /className="oh-country-landscape-switch"/);
+  assert.match(politics, /aria-label="Political structure view"/);
+  assert.match(politics, /aria-pressed=\{activeView === "parties"\}/);
+  assert.match(politics, /aria-pressed=\{activeView === "blocs"\}/);
+  assert.match(politics, /onClick=\{\(\) => chooseView\("parties"\)\}/);
+  assert.match(politics, /onClick=\{\(\) => chooseView\("blocs"\)\}/);
+  assert.match(politics, /setSelectedId\(""\)/);
+  assert.match(politics, /activeView === "parties" && landscape\.slices\.length > 0/);
+  assert.match(politics, /activeView === "blocs" && <PowerBlocLedger/);
+  assert.doesNotMatch(politics, /setPoliticalRepresentation/);
+});
+
+test("power bloc ledger displays independent recorded influence and retains qualitative details", () => {
+  assert.match(politics, /className="oh-country-bloc-ledger"/);
+  assert.match(politics, /className="oh-country-bloc-entry"/);
+  assert.match(politics, /aria-expanded=\{selectedId === bloc\.id\}/);
+  assert.match(politics, /Number\.isFinite\(bloc\.influence\)/);
+  assert.match(politics, /role="meter" aria-valuemin=\{0\} aria-valuemax=\{100\} aria-valuenow=\{bloc\.influence\}/);
+  assert.match(politics, /bloc\.displayValue \|\| "Not quantified"/);
+  assert.match(politics, /width: `\$\{bloc\.influence\}%`/);
+  assert.match(politics, /<PowerBlocDetail bloc=\{bloc\}/);
+  assert.match(css, /\.oh-country-bloc-track\s*\{/);
+  assert.match(css, /\.oh-country-bloc-entry\[data-expanded="true"\]/);
+});
+test("a compact rectangular view switch stays below the displayed chart or bloc ledger", () => {
+  const chartIndex = politics.indexOf('className="oh-country-landscape-overview"');
+  const blocIndex = politics.indexOf('activeView === "blocs" && <PowerBlocLedger');
+  const switchIndex = politics.indexOf('className="oh-country-landscape-switch"');
+  const rowsIndex = politics.indexOf('className="oh-country-landscape-party-list"');
+  assert.ok(chartIndex >= 0 && chartIndex < blocIndex && blocIndex < switchIndex && switchIndex < rowsIndex,
+    "the single selector must follow either visual display and precede the party record list");
+  assert.equal(politics.match(/className="oh-country-landscape-switch"/g)?.length, 1);
+  assert.match(politics, /maxWidth: "185px"/);
+  assert.match(css, /\.oh-country-landscape-overview\s*\{[\s\S]*?grid-template-columns: minmax\(170px, 1\.05fr\) minmax\(0, 1fr\);/);
+  const switchStyle = css.split(".oh-country-landscape-switch {")[1]?.split("}")[0] || "";
+  const buttonStyle = css.split(".oh-country-landscape-switch button {")[1]?.split("}")[0] || "";
+  assert.match(switchStyle, /width:\s*max-content;/);
+  assert.match(switchStyle, /border-radius:\s*6px;/);
+  assert.match(buttonStyle, /min-height:\s*2\.1rem;/);
+  assert.match(buttonStyle, /border-radius:\s*4px;/);
+  assert.doesNotMatch(switchStyle + buttonStyle, /999px|999rem|50%/);
 });

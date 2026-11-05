@@ -156,7 +156,7 @@ export function useOwnBasemap(id) {
         if (cancelled) return;
         const payload = data && typeof data === "object" ? data[id] : null;
         const background = kind === "image" && payload?.dataUrl
-          ? { kind: "image", imageUrl: payload.dataUrl, bounds: null }
+          ? { kind: "image", imageUrl: payload.dataUrl, bounds: normalizeImageBounds(payload.bounds) }
           : kind === "vector" && payload?.geojson ? { kind: "vector", geojson: payload.geojson } : null;
         setLoaded({ id, background });
       });
@@ -166,5 +166,5 @@ export function useOwnBasemap(id) {
   }, [id, kind]);
 
   const background = entry && loaded.id === id ? loaded.background : null;
-  return useMemo(() => (background?.kind === "image" ? { ...background, bounds } : background), [background, bounds]);
+  return useMemo(() => (background?.kind === "image" ? { ...background, bounds: background.bounds ?? bounds } : background), [background, bounds]);
 }

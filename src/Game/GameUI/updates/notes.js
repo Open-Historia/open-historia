@@ -53,6 +53,26 @@ import { PAST_UPDATES } from "./notesPast.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    id: "2026-11-picture-edges-and-strike-targets",
+    kind: "minor",
+    date: "2026-11-04",
+    channel: "beta",
+    banners: [
+      {
+        title: "Map pictures keep their edges",
+        items: [
+          "A picture you add to a scenario's maps in the Workshop now keeps the edges its setup gave it, Q-BAM's exact ones included, so it stays lined up with the coastlines in the Workshop and in the game.",
+        ],
+      },
+      {
+        title: "Strike targets by name",
+        items: [
+          "In the War Room, an air strike sent at troops names the town nearest them plainly, without \"city:\" in front of it.",
+        ],
+      },
+    ],
+  },
+  {
     // The province outline reads no feature-state on a map without region types, so a tile that loads applies the
     // regions' state to its fill alone (Map/provinceOutlineStyle.js); a playing paints and writes only what a frame
     // changes (Map/frontPaint.js unlessUnchanged, writeFrontField); MapLibre's worker drops its spare copies of the

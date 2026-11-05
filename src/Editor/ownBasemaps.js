@@ -59,7 +59,7 @@ export const ownBasemapIdOfLibrary = (bm) => String(bm?.contentHash || bm?.id ||
 export const ownBasemapFromLibrary = (bm, payload) => {
   const background = savedBackgroundOf(bm?.kind === "vector"
     ? { kind: "vector", geojson: payload?.geojson }
-    : { kind: "image", dataUrl: payload?.dataUrl });
+    : { kind: "image", dataUrl: payload?.dataUrl, bounds: payload?.bounds, aspect: payload?.aspect ?? bm?.aspect });
   if (!background) return null;
   const [own] = normalizeOwnBasemaps([{ id: ownBasemapIdOfLibrary(bm), name: bm.name, kind: background.kind }]);
   return own ? { id: own.id, name: own.name, background } : null;
@@ -77,7 +77,7 @@ export const buildOwnBasemapsForGame = (value) => {
       : { id, name, kind: background.kind }))),
     ownBasemapsData: Object.fromEntries(list.filter((entry) => entry.background).map(({ id, background }) => [
       id,
-      background.kind === "image" ? { dataUrl: background.dataUrl } : { geojson: background.geojson },
+      background.kind === "image" ? { dataUrl: background.dataUrl, ...(background.bounds ? { bounds: background.bounds } : {}) } : { geojson: background.geojson },
     ])),
   };
 };
@@ -96,7 +96,14 @@ export const ownBasemapsFromGame = (descriptors, data) => normalizeEditorOwnBase
 // when there is nothing to move.
 export const moveOwnBasemapsBetween = (value, from, to) => {
   const list = normalizeEditorOwnBasemaps(value);
-  if (!list.length || sameProjection(from, to) || !list.some((entry) => entry.background?.kind === "vector")) return null;
+  const changes = (entry) => entry.background?.kind === "vector" || Boolean(entry.background?.bounds);
+  if (!list.length || sameProjection(from, to) || !list.some(changes)) return null;
   const move = (lon, lat) => convertDisplayPoint(from, to, lon, lat);
-  return list.map((entry) => (entry.background ? { ...entry, background: moveBasemapPayload(entry.background, move) } : entry));
+  return list.map((entry) => {
+    if (entry.background?.kind === "image") {
+      const { bounds: _bounds, ...background } = entry.background;
+      return { ...entry, background };
+    }
+    return entry.background ? { ...entry, background: moveBasemapPayload(entry.background, move) } : entry;
+  });
 };
