@@ -1566,7 +1566,7 @@ func _air_list(block: VBoxContainer) -> void:
 		var column := VBoxContainer.new()
 		column.add_theme_constant_override("separation", 0)
 		column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		var title := T.line("%s → %s" % [str(order.get("name", "")), str(order.get("target", ""))])
+		var title := T.line("%s → %s" % [str(order.get("name", "")), WarRoomPlates.target_name(order)])
 		title.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
 		column.add_child(title)
 		column.add_child(T.soft("Flies when time next passes."))
@@ -1584,7 +1584,7 @@ func _air_list(block: VBoxContainer) -> void:
 		tray.set_meta("struck", str(strike.get("id", "")))
 		var column := VBoxContainer.new()
 		column.add_theme_constant_override("separation", 0)
-		var title := T.line("%s → %s" % [str(strike.get("unit", "")), str(strike.get("target", ""))])
+		var title := T.line("%s → %s" % [str(strike.get("unit", "")), WarRoomPlates.target_name(strike)])
 		title.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
 		column.add_child(title)
 		column.add_child(WarRoomPlates.strike_text(strike, false))

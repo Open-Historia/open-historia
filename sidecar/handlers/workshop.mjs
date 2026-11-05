@@ -3223,7 +3223,7 @@ export const register = (ctx) => {
 
   const normalizedUpload = (upload, aspect) => (upload.kind === "image" ? { kind: "image", dataUrl: upload.dataUrl, aspect: Number(aspect) || null } : { kind: "vector", geojson: upload.geojson });
 
-  const addUploaded = async (s, upload, thumbnail, aspect) => {
+  const addUploaded = async (s, upload, thumbnail, aspect, bounds = null) => {
     const normalized = normalizedUpload(upload, aspect);
     let meta = null;
     let libraryError = null;
@@ -3233,7 +3233,7 @@ export const register = (ctx) => {
       console.warn("[editor] save basemap to library failed:", error);
       libraryError = error?.message || String(error);
     }
-    const entry = engine.wsOwnBasemaps.ownBasemapFromLibrary(meta || { id: upload.name, name: upload.name, kind: normalized.kind }, normalized.kind === "vector" ? { geojson: normalized.geojson } : { dataUrl: normalized.dataUrl });
+    const entry = engine.wsOwnBasemaps.ownBasemapFromLibrary(meta || { id: upload.name, name: upload.name, kind: normalized.kind }, normalized.kind === "vector" ? { geojson: normalized.geojson } : { dataUrl: normalized.dataUrl, bounds: engine.wsMapProjection.normalizeImageBounds(bounds), aspect: normalized.aspect });
     const result = entry ? applyMaps(s, engine.wsScenarioMaps.addOwnMap(s.doc.metadata, entry)) : { refused: "" };
     return { added: Boolean(entry) && !result.refused, ...(result.refused ? { refused: result.refused } : {}), ...(libraryError ? { libraryError } : {}) };
   };
@@ -4620,7 +4620,7 @@ export const register = (ctx) => {
         return { error: message, vectorTiles: /vector tiles/i.test(message) };
       }
     },
-    "workshop.maps.pictureSetup": async ({ session: id, type = "", centre = 0, aspect = null, deleteProvinces = false, thumbnail = "" } = {}) => {
+    "workshop.maps.pictureSetup": async ({ session: id, type = "", centre = 0, aspect = null, deleteProvinces = false, thumbnail = "", box = null, bounds = null } = {}) => {
       const s = need(id);
       const upload = s.upload;
       if (!upload || upload.kind !== "image") return { ...delta(s, {}), error: "Choose the map again." };
@@ -4646,7 +4646,10 @@ export const register = (ctx) => {
         }
         patchMetadata(s, { projection: to, ...(movedOwnBasemaps ? { ownBasemaps: movedOwnBasemaps } : {}) });
         s.upload = null;
-        const added = await addUploaded(s, upload, thumbnail, aspect);
+        const edges = { north: Number(box?.north ?? 90), south: Number(box?.south ?? -90), west: Number(box?.west ?? -180), east: Number(box?.east ?? 180) };
+        const exact = bounds && typeof bounds === "object" ? bounds : null;
+        const lies = freeform ? projection.sheetBounds(chosen) : exact ?? projection.geoBoxOnSheet(chosen, edges);
+        const added = await addUploaded(s, upload, thumbnail, aspect, lies);
         return { ...delta(s, { all: true }), ...added };
       } catch (error) {
         return { ...delta(s, { all: true }), error: error?.message || String(error) };
