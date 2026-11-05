@@ -66,7 +66,25 @@ const sameNegotiation = (chat, built) => {
   return asArray(built.lifecycleCaseIds).some((id) => cases.has(clean(id)));
 };
 
-const messageKey = (msg) => [msg?.role, msg?.speaker, msg?.text, msg?.time].map(clean).join("\u001f");
+// A thread's messages with the incoming ones after them, less any that says
+// again, word for word, what the same speaker said directly before it. A skip
+// can carry one letter twice (an event's createdChats and the skip's own
+// outreach, or two events opening the same chat), and both copies landed in the
+// one thread: the same condemnation shown twice in a row (the owner, 2026-11-04).
+const sameLineKey = (msg) => `${participantNameKey(msg?.speaker)}\u001f${clean(msg?.text).replace(/\s+/g, " ")}`;
+const appendMessages = (messages, incoming) => {
+  const out = [...asArray(messages)];
+  for (const msg of asArray(incoming)) {
+    const previous = out[out.length - 1];
+    // The first copy stays: the skip folds its own outreach first, so a peace
+    // offer's letter keeps the message id the offer is shown on.
+    if (previous && clean(msg?.text) && sameLineKey(previous) === sameLineKey(msg)) continue;
+    out.push(msg);
+  }
+  return out;
+};
+
+const messageKey = (msg) =>[msg?.role, msg?.speaker, msg?.text, msg?.time].map(clean).join("\u001f");
 
 // The negotiation with the incoming one's cases added and its messages after its
 // own, less any it already holds.
@@ -148,7 +166,7 @@ export const foldGeneratedChatsIntoStorage = (storageChats, builtChats, { stampT
       }
       logGeneratedChat(built, "appended to an existing thread");
       chats = chats.map((chat, index) => (index === existingIdx
-        ? { ...chat, messages: [...chat.messages, ...stamp(built.messages)] }
+        ? { ...chat, messages: appendMessages(chat.messages, stamp(built.messages)) }
         : chat));
       continue;
     }
@@ -158,11 +176,11 @@ export const foldGeneratedChatsIntoStorage = (storageChats, builtChats, { stampT
       && chatParticipantKey(chat.countries) === key) : -1;
     if (createdIdx !== -1) {
       logGeneratedChat(built, "merged into another note from the same turn");
-      created[createdIdx] = { ...created[createdIdx], messages: [...created[createdIdx].messages, ...stamp(built.messages)] };
+      created[createdIdx] = { ...created[createdIdx], messages: appendMessages(created[createdIdx].messages, stamp(built.messages)) };
       continue;
     }
     logGeneratedChat(built, "opened a new thread");
-    created.push({ ...built, messages: stamp(built.messages) });
+    created.push({ ...built, messages: appendMessages([], stamp(built.messages)) });
   }
 
   const result = [...created, ...chats];
