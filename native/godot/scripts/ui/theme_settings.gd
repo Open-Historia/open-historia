@@ -42,7 +42,7 @@ func _render() -> void:
 		child.queue_free()
 	add_child(_text("Keep the original interface or choose five themed palettes or your own. Map and gameplay colors are not affected.", 12, UiTheme.pick("muted", MUTED), 18))
 	var grid := GridContainer.new()
-	grid.columns = 3
+	grid.columns = 2 if _narrow() else 3
 	grid.add_theme_constant_override("h_separation", 9)
 	grid.add_theme_constant_override("v_separation", 9)
 	grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -118,7 +118,7 @@ func _custom_editor() -> Control:
 	spacer.custom_minimum_size.y = 11
 	column.add_child(spacer)
 	var grid := GridContainer.new()
-	grid.columns = 3
+	grid.columns = 1 if _narrow() else 3
 	grid.add_theme_constant_override("h_separation", 9)
 	grid.add_theme_constant_override("v_separation", 9)
 	for field in FIELDS:
@@ -156,7 +156,10 @@ func _color_field(key: String, label: String) -> Control:
 	var field := LineEdit.new()
 	field.text = draft
 	field.max_length = 7
-	field.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	if _narrow():
+		field.custom_minimum_size.x = 192
+	else:
+		field.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	field.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
 	field.tooltip_text = label + " hex color"
 	field.add_theme_font_override("font", _mono())
@@ -204,8 +207,12 @@ func _update(key: String, value: String, redraw := true) -> void:
 		_render()
 
 
+func _narrow() -> bool:
+	return UI.phone() and get_viewport_rect().size.x <= 480.0
+
+
 func _footer() -> Control:
-	var line := HBoxContainer.new()
+	var line: BoxContainer = VBoxContainer.new() if _narrow() else HBoxContainer.new()
 	line.add_theme_constant_override("separation", 11)
 	var preview := HBoxContainer.new()
 	preview.add_theme_constant_override("separation", 9)
@@ -223,6 +230,8 @@ func _footer() -> Control:
 	reset.focus_mode = Control.FOCUS_NONE
 	reset.custom_minimum_size.y = 36
 	reset.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	if _narrow():
+		reset.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	reset.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	reset.add_theme_font_override("font", UI.font(700))
 	reset.add_theme_font_size_override("font_size", 11)

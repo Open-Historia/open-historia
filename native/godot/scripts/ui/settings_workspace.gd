@@ -123,7 +123,7 @@ var _card: PanelContainer
 var _card_body: VBoxContainer
 var _title_pill: PanelContainer
 var _subtitle: Label
-var _nav: VBoxContainer
+var _nav: BoxContainer
 var _scroll: ScrollContainer
 var _content: VBoxContainer
 var _confirm_layer: Control
@@ -164,7 +164,7 @@ func _exit_tree() -> void:
 
 
 func _card_style() -> StyleBoxFlat:
-	return UI.box(UiTheme.pick("bg", Color(20 / 255.0, 21 / 255.0, 24 / 255.0, 0.97)), UiTheme.pick("line", Color(1, 1, 1, 0.08)), 18, 1)
+	return UI.box(UiTheme.pick("bg", Color(20 / 255.0, 21 / 255.0, 24 / 255.0, 0.97)), UiTheme.pick("line", Color(1, 1, 1, 0.08)), 12 if UI.phone() else 18, 1)
 
 
 func _section_style() -> StyleBoxFlat:
@@ -301,6 +301,9 @@ func _for_game() -> bool:
 
 func _card_rect() -> Rect2:
 	var view := get_viewport_rect().size if is_inside_tree() else Vector2(1440, 900)
+	if UI.phone():
+		var safe := UI.safe_insets()
+		return Rect2(Vector2(7.2 + safe.x, 7.2 + safe.y), Vector2(view.x - 14.4 - safe.x - safe.z, view.y - 14.4 - safe.y - safe.w))
 	var width := minf(view.x * 0.94, 1120.0)
 	var height := minf(800.0, view.y - 38.4)
 	return Rect2((view - Vector2(width, height)) * 0.5, Vector2(width, height))
@@ -342,7 +345,7 @@ func _animate_in() -> void:
 
 func _build_card() -> void:
 	_card = PanelContainer.new()
-	_card.add_theme_stylebox_override("panel", UI.box(Color(20 / 255.0, 21 / 255.0, 24 / 255.0, 0.97), Color(1, 1, 1, 0.08), 18, 1))
+	_card.add_theme_stylebox_override("panel", UI.box(Color(20 / 255.0, 21 / 255.0, 24 / 255.0, 0.97), Color(1, 1, 1, 0.08), 12 if UI.phone() else 18, 1))
 	_card.clip_contents = true
 	_card.mouse_filter = Control.MOUSE_FILTER_STOP
 	add_child(_card)
@@ -356,6 +359,7 @@ func _build_card() -> void:
 	var back := _square_button("←", 16)
 	back.tooltip_text = "Back to game menu"
 	back.pressed.connect(go_back)
+	UI.tap_size(back)
 	back.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	row.add_child(back)
 	var titles := VBoxContainer.new()
@@ -383,36 +387,51 @@ func _build_card() -> void:
 	var close_button := _square_button("×", 18)
 	close_button.tooltip_text = "Close settings"
 	close_button.pressed.connect(close)
+	UI.tap_size(close_button)
 	close_button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	row.add_child(close_button)
 	header.add_child(row)
 	_card_body.add_child(header)
 	_card_body.add_child(_rule(Color(1, 1, 1, 0.07)))
-	var body := HBoxContainer.new()
+	var phone := UI.phone()
+	var body: BoxContainer = VBoxContainer.new() if phone else HBoxContainer.new()
 	body.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	body.add_theme_constant_override("separation", 0)
 	var aside := PanelContainer.new()
 	aside.add_theme_stylebox_override("panel", UI.box(Color(0, 0, 0, 0.18)))
-	aside.custom_minimum_size.x = 234
 	var aside_margin := MarginContainer.new()
-	_margins(aside_margin, 10.4, 12, 10.4, 12)
-	_nav = VBoxContainer.new()
-	_nav.add_theme_constant_override("separation", 6)
+	if phone:
+		_margins(aside_margin, 10.4, 10.4, 10.4, 10.4)
+		_nav = HBoxContainer.new()
+		_nav.add_theme_constant_override("separation", 6)
+	else:
+		aside.custom_minimum_size.x = 234
+		_margins(aside_margin, 10.4, 12, 10.4, 12)
+		_nav = VBoxContainer.new()
+		_nav.add_theme_constant_override("separation", 6)
 	aside_margin.add_child(_nav)
 	aside.add_child(aside_margin)
 	body.add_child(aside)
 	var divider := ColorRect.new()
 	divider.color = Color(1, 1, 1, 0.06)
-	divider.custom_minimum_size.x = 1
+	if phone:
+		divider.custom_minimum_size.y = 1
+	else:
+		divider.custom_minimum_size.x = 1
 	divider.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	body.add_child(divider)
 	_scroll = ScrollContainer.new()
 	_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	if phone:
+		_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	_style_scrollbar(_scroll)
 	var main_margin := MarginContainer.new()
 	main_margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_margins(main_margin, 20, 17.6, 20, 22.4)
+	if phone:
+		_margins(main_margin, 12.8, 12.8, 12.8, 12.8)
+	else:
+		_margins(main_margin, 20, 17.6, 20, 22.4)
 	_content = VBoxContainer.new()
 	_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_content.add_theme_constant_override("separation", 14)
@@ -443,6 +462,9 @@ func _build_nav() -> void:
 	for child in _nav.get_children():
 		_nav.remove_child(child)
 		child.queue_free()
+	if UI.phone():
+		_build_phone_nav()
+		return
 	for entry: Dictionary in SECTIONS:
 		var key: String = entry["key"]
 		var selected := key == section
@@ -485,6 +507,45 @@ func _build_nav() -> void:
 		row.offset_top = 8.8
 		row.offset_bottom = -8.8
 		button.custom_minimum_size = Vector2(212, 62)
+		button.pressed.connect(func() -> void: set_section(key))
+		_nav.add_child(button)
+
+
+func _build_phone_nav() -> void:
+	for entry: Dictionary in SECTIONS:
+		var key: String = entry["key"]
+		var selected := key == section
+		var button := Button.new()
+		button.focus_mode = Control.FOCUS_NONE
+		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		var normal := UI.box(UiTheme.pick("active", Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.12)) if selected else Color(0, 0, 0, 0), Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.3) if selected else Color(0, 0, 0, 0), 10, 1)
+		for state in ["normal", "focus", "disabled", "hover", "pressed", "hover_pressed"]:
+			button.add_theme_stylebox_override(state, normal)
+		var column := VBoxContainer.new()
+		column.add_theme_constant_override("separation", 4)
+		column.alignment = BoxContainer.ALIGNMENT_CENTER
+		column.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var tile := PanelContainer.new()
+		tile.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		tile.custom_minimum_size = Vector2(30.4, 30.4)
+		tile.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+		tile.add_theme_stylebox_override("panel", UI.box(UiTheme.pick("active", Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.24)) if selected else Color(1, 1, 1, 0.04), Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.4) if selected else Color(0, 0, 0, 0), 8, 1))
+		var glyph := UI.label(str(entry["icon"]), _fs(0.85), UiTheme.pick("accent", BLUE_LIGHT) if selected else Color(1, 1, 1, 0.7), 700)
+		glyph.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		glyph.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		tile.add_child(glyph)
+		column.add_child(tile)
+		var label := UI.label(str(entry["label"]), _fs(0.8), UiTheme.pick("accent", BLUE_PALE) if selected else Color(1, 1, 1, 0.6), 750 if selected else 600)
+		label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		label.clip_text = true
+		column.add_child(label)
+		button.add_child(column)
+		column.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		column.offset_left = 3.2
+		column.offset_right = -3.2
+		column.offset_top = 7.2
+		column.offset_bottom = -7.2
+		button.custom_minimum_size = Vector2(0, 7.2 + 30.4 + 4.0 + ceilf(label.get_minimum_size().y) + 7.2)
 		button.pressed.connect(func() -> void: set_section(key))
 		_nav.add_child(button)
 
@@ -738,6 +799,16 @@ func _add_toggle(parent: Control, label_text: String, enabled: bool, on_toggle: 
 	var switch := Switch.new(enabled, not inactive.is_empty())
 	switch.tooltip_text = label_text
 	switch.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	if UI.phone():
+		switch.set_meta("oh_tap_exempt", true)
+		wrap.custom_minimum_size.y = UI.PHONE_TAP
+		if not disabled:
+			wrap.mouse_filter = Control.MOUSE_FILTER_STOP
+			wrap.gui_input.connect(func(event: InputEvent) -> void:
+				var click := event as InputEventMouseButton
+				if click and click.button_index == MOUSE_BUTTON_LEFT and not click.pressed and wrap.get_global_rect().has_point(click.global_position):
+					wrap.accept_event()
+					switch.pressed.emit())
 	if disabled:
 		switch.disabled = true
 		switch.modulate.a = 0.45
@@ -1120,10 +1191,11 @@ func _build_general() -> void:
 		if typeof(reply) == TYPE_DICTIONARY:
 			_values = reply
 		_rerender(), false))
-	var display := _section("Display", "Window and presentation preferences that apply to the game client.")
-	_display_mode(display)
-	_add_toggle(display, "Show the vault door every time", _flag("vault_door_every_time"), func() -> void: _set_flag("vault_door_every_time", not _flag("vault_door_every_time")))
-	_add_toggle_note(display, "On: the vault door appears every time you start the game. Off: only the first time you start it after an update.")
+	if not UI.phone():
+		var display := _section("Display", "Window and presentation preferences that apply to the game client.")
+		_display_mode(display)
+		_add_toggle(display, "Show the vault door every time", _flag("vault_door_every_time"), func() -> void: _set_flag("vault_door_every_time", not _flag("vault_door_every_time")))
+		_add_toggle_note(display, "On: the vault door appears every time you start the game. Off: only the first time you start it after an update.")
 	_section("Interface appearance", "Choose the colours of the main menu, the panels and the popups.").add_child(ThemeSettings.new())
 	var access := _section("Accessibility", "Reduce automatic camera motion and map animations without changing simulation behavior.")
 	var reduced := _system_reduced or (_flag("map_disable_idle_rotation") and _flag("map_disable_event_camera"))
@@ -1141,6 +1213,8 @@ func _build_general() -> void:
 	if UI.has_feature("discord"):
 		_add_toggle(privacy, "Show what I am playing on Discord", _flag("privacy_discord_presence"), func() -> void: _set_flag("privacy_discord_presence", not _flag("privacy_discord_presence")))
 		_add_settings_helper(privacy, "Discord shows the country you play, the scenario and the in-game date to people who can see your activity. Desktop app only.", 0)
+	else:
+		privacy.add_child(_helper("Nothing to switch off here: this build does not count visits and cannot reach Discord."))
 
 
 func _display_mode(parent: VBoxContainer) -> void:
@@ -1327,6 +1401,8 @@ func _build_sound() -> void:
 		var text := "Downloaded music: none" if count == 0 else ("Downloaded music: 1 track, %s" % size if count == 1 else "Downloaded music: %d tracks, %s" % [count, size])
 		var label := UI.label(text, _fs(0.9), UI.WHITE)
 		label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		if UI.phone():
+			label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		row.add_child(label)
 		var clear := _button("Clear", func() -> void:
 			if _music_busy:
@@ -2349,7 +2425,7 @@ func _build_requests_section() -> void:
 	stop.add_theme_stylebox_override("panel", UI.box(Color(239 / 255.0, 68 / 255.0, 68 / 255.0, 0.055), Color(248 / 255.0, 113 / 255.0, 113 / 255.0, 0.18), 10, 1, Vector4(12, 11.2, 12, 11.2)))
 	var stop_column := VBoxContainer.new()
 	stop_column.add_theme_constant_override("separation", 0)
-	var stop_row := HBoxContainer.new()
+	var stop_row: BoxContainer = VBoxContainer.new() if UI.phone() else HBoxContainer.new()
 	stop_row.add_theme_constant_override("separation", 10)
 	var stop_texts := VBoxContainer.new()
 	stop_texts.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -2370,6 +2446,8 @@ func _build_requests_section() -> void:
 	cancel.add_theme_font_override("font", UI.font(800))
 	cancel.add_theme_color_override("font_color", Color("#fecaca") if active > 0 else Color(1, 1, 1, 0.72))
 	cancel.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	if UI.phone():
+		cancel.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	stop_row.add_child(cancel)
 	stop_column.add_child(stop_row)
 	if not _cancel_notice.is_empty():
@@ -2680,6 +2758,8 @@ func _download_cache(body: VBoxContainer) -> void:
 	var text := "No community downloads are stored." if files == 0 else ("1 community download is stored (%s)." % size if files == 1 else "%d community downloads are stored (%s)." % [files, size])
 	var label := UI.label(text, _fs(0.8), UI.WHITE)
 	label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	if UI.phone():
+		label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	row.add_child(label)
 	var clear := _button("Clear download cache", func() -> void:
 		if _cache_busy:

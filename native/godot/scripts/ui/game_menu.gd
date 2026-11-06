@@ -245,6 +245,9 @@ func _fit_card() -> void:
 	if not _card:
 		return
 	var view := get_viewport_rect().size
+	if UI.phone():
+		_fit_phone_card(view)
+		return
 	var max_height := view.y - 8.0 - 16.0
 	_card.custom_minimum_size = Vector2(minf(464.0, view.x - 16.0), minf(352.0, max_height))
 	_card.size = Vector2(minf(464.0, view.x - 16.0), 0)
@@ -253,9 +256,43 @@ func _fit_card() -> void:
 		_card.size.y = max_height
 
 
+func _phone_corner() -> Vector2:
+	var safe := UI.safe_insets()
+	return Vector2(8.0 + safe.x, 8.0 + safe.y)
+
+
+func _fit_phone_card(view: Vector2) -> void:
+	var safe := UI.safe_insets()
+	var corner := _phone_corner()
+	var width := view.x - 16.0 - safe.x - safe.z
+	var max_height := view.y - safe.w - corner.y - 16.0
+	_card.position = corner
+	_card.custom_minimum_size = Vector2(width, 0)
+	_card.size = Vector2(width, 0)
+	_fit_phone_tabs(width - 28.0)
+	_card.reset_size()
+	if _card.size.y > max_height:
+		_card.size.y = max_height
+
+
+func _fit_phone_tabs(strip_width: float) -> void:
+	var inner := strip_width - 2.0 - 6.4
+	var natural := {}
+	var total := 0.0
+	for key: String in _tab_buttons.keys():
+		var button: Button = _tab_buttons[key]
+		var font := button.get_theme_font("font")
+		var width := font.get_string_size(button.text, HORIZONTAL_ALIGNMENT_LEFT, -1, button.get_theme_font_size("font_size")).x + 16.4
+		natural[key] = width
+		total += width
+	var share := maxf(0.0, inner - total - 3.0 * (_tab_buttons.size() - 1)) / maxf(1.0, _tab_buttons.size())
+	for key: String in _tab_buttons.keys():
+		(_tab_buttons[key] as Button).custom_minimum_size.x = floorf(float(natural[key]) + share)
+
+
 func _show_card(grow: bool) -> void:
 	_card.visible = true
-	_card.position = Vector2(8, 8)
+	_card.position = _phone_corner() if UI.phone() else Vector2(8, 8)
 	_fit_card()
 	await get_tree().process_frame
 	_fit_card()
@@ -322,6 +359,7 @@ func _build_card() -> void:
 	close_button.add_theme_color_override("font_color", Color(1, 1, 1, 0.58))
 	close_button.add_theme_color_override("font_hover_color", UI.WHITE)
 	close_button.pressed.connect(close)
+	UI.tap_size(close_button)
 	header.add_child(close_button)
 	_card_column.add_child(header)
 	var under := Control.new()
@@ -370,7 +408,7 @@ func _style_tabs() -> void:
 	for key: String in _tab_buttons.keys():
 		var button: Button = _tab_buttons[key]
 		var selected := key == tab
-		var normal := UI.box(UiTheme.pick("active", Color(0, 0, 0, 0.42)) if selected else Color(0, 0, 0, 0), UiTheme.pick("accent", Color(1, 1, 1, 0.28)) if selected else Color(0, 0, 0, 0), 8, 1, Vector4(12.8, 0, 12.8, 0))
+		var normal := UI.box(UiTheme.pick("active", Color(0, 0, 0, 0.42)) if selected else Color(0, 0, 0, 0), UiTheme.pick("accent", Color(1, 1, 1, 0.28)) if selected else Color(0, 0, 0, 0), 8, 1, Vector4(7.2, 0, 7.2, 0) if UI.phone() else Vector4(12.8, 0, 12.8, 0))
 		var hover := normal.duplicate() as StyleBoxFlat
 		if not selected:
 			hover.bg_color = Color(1, 1, 1, 0.04)
@@ -425,8 +463,9 @@ func _show_tab(key: String) -> void:
 			panel = _quick_panel("Help", "Guides, bug reporting and community links.")
 			var grid := _grid()
 			grid.add_child(_quick_action("Wiki", "How-to pages and setup help", "?", "neutral", func() -> void: OS.shell_open(WIKI_URL)))
-			var checking := str(_update_check.get("status", "")) == "checking"
-			grid.add_child(_quick_action("Checking for updates…" if checking else "Check for updates", _update_check_text(), "↻", "blue", _check_for_updates))
+			if UI.has_feature("updater"):
+				var checking := str(_update_check.get("status", "")) == "checking"
+				grid.add_child(_quick_action("Checking for updates…" if checking else "Check for updates", _update_check_text(), "↻", "blue", _check_for_updates))
 			grid.add_child(_quick_action("Report a Bug", "Open the issue/report page", "!", "amber", func() -> void: OS.shell_open(REPORT_BUG_URL)))
 			grid.add_child(_quick_action("Privacy", "What the game keeps and sends", "§", "neutral", func() -> void: OS.shell_open(PRIVACY_URL)))
 			panel.add_child(grid)
@@ -434,11 +473,19 @@ func _show_tab(key: String) -> void:
 			row.add_theme_constant_override("separation", 9)
 			var community := UI.label("Community", _fs(0.6), Color(1, 1, 1, 0.24))
 			community.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-			row.add_child(community)
-			row.add_child(UI.spacer())
+			if UI.phone():
+				var stack := VBoxContainer.new()
+				stack.add_theme_constant_override("separation", 9)
+				stack.add_child(community)
+				row.add_theme_constant_override("separation", 6)
+				stack.add_child(row)
+				panel.add_child(stack)
+			else:
+				row.add_child(community)
+				row.add_child(UI.spacer())
+				panel.add_child(row)
 			for link: Array in [["Discord", DISCORD_URL], ["Reddit", REDDIT_URL], ["GitHub", GITHUB_URL]]:
 				row.add_child(_social_link(str(link[0]), str(link[1])))
-			panel.add_child(row)
 			if _version_text.is_empty():
 				_load_version()
 			else:
@@ -552,7 +599,7 @@ func _quick_panel(title: String, description: String) -> VBoxContainer:
 
 func _grid() -> GridContainer:
 	var grid := GridContainer.new()
-	grid.columns = 2
+	grid.columns = 1 if UI.phone() else 2
 	grid.add_theme_constant_override("h_separation", 9)
 	grid.add_theme_constant_override("v_separation", 9)
 	grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -1039,7 +1086,7 @@ https://www.youtube-nocookie.com/"
 	func _play_video() -> void:
 		if video_playing:
 			return
-		if not WebPanel.is_available():
+		if not UI.has_feature("webview") or not WebPanel.is_available():
 			_open_outside(TUTORIAL_VIDEO_URL)
 			return
 		video_playing = true
