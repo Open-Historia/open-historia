@@ -94,6 +94,19 @@ export const register = (ctx) => {
         },
       };
     },
+    "look.releases": async () => {
+      const notes = engine.shellNotes ?? {};
+      const all = Array.isArray(notes.UPDATES) ? notes.UPDATES : [];
+      return {
+        releases: all.filter((entry) => entry?.kind === "release").map((entry) => ({
+          id: String(entry.id),
+          version: String(entry.version ?? ""),
+          title: String(entry.title ?? ""),
+          subtitle: String(entry.subtitle ?? ""),
+          lead: String(entry.lead ?? ""),
+        })),
+      };
+    },
     "look.languages": async () => {
       const i18n = engine.shellI18n ?? {};
       let options = [];
