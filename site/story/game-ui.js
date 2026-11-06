@@ -138,9 +138,10 @@
     ["Release", '<path d="M3.5 19.5h17"/><path d="M12 4v10.5M7.8 10.6L12 14.8l4.2-4.2"/>'],
     ["Withdraw", '<path d="M20.5 4.5v15"/><path d="M16 12H4M8.5 7.5L4 12l4.5 4.5"/>'],
     null,
-    ["Transport", '<rect x="8" y="2.5" width="8" height="8" rx="1.6"/><rect x="8" y="13" width="8" height="8.5" rx="1"/><path d="M12 10.5V13"/>'],
+    ["Transport", '<path d="M12 2.5l4.5 6v10L14 21.5h-4l-2.5-3v-10z"/><path d="M12 7v10"/>'],
     ["Diversion", '<path d="M4 18c2-7 6-9 14-10" stroke-dasharray="3.2 3.4"/><path d="M14.5 4.6L18.4 8l-3.2 3.9"/>'],
     ["Deploy", '<path d="M3 19h18"/><path d="M4.5 11h4v4h-4z"/><path d="M10 11h4v4h-4z"/><path d="M15.5 11h4v4h-4z"/>'],
+    ["Aircraft", '<path d="M12 2.5l1.2 5.5 6.8 4v1.7l-6.8-1.9-.4 3.6 2.2 1.6v1.2L12 17.5l-3 .7V17l2.2-1.6-.4-3.6L4 13.7V12l6.8-4z"/><path d="M7 20.5h.01M12 21.5h.01M17 20.5h.01" stroke-width="2.6"/>'],
     null,
     ["Fortify", '<path d="M3.5 20.5v-11h3v-3h3v3h5v-3h3v3h3v11z"/><path d="M10 20.5v-4.5h4v4.5"/>'],
     ["Fleets", '<path d="M3 15.5h18l-2.8 4.5H5.8z"/><path d="M12 3.5v12"/><path d="M12 5.5l6.5 8H12"/>'],
@@ -321,9 +322,9 @@
       '<div class="gx-topbar gx-hud"><div class="gx-pill gx-surface"><img src="/play/icon-192.png" alt="Open Historia" /><div class="gx-pill-text"><b>Open Historia</b><small id="gxSession">Modern Day / France / 2016-01-01</small></div></div>' +
       '<a class="gx-exit gx-surface" href="#download">⌂ Exit Game</a></div>' +
       // time.jsx: the date widget
-      '<div class="gx-base gx-date gx-hud"><button type="button" class="gx-arrow" id="gxEventsBtn" aria-label="Events" title="Events">«</button>' +
+      '<div class="gx-base gx-date gx-hud"><button type="button" class="gx-arrow" id="gxEventsBtn" aria-label="Events">«</button>' +
       '<div class="gx-date-mid"><button type="button" class="gx-date-country" id="gxCountryName" title="France · Open country panel">France</button><span class="gx-date-day" id="gxDate">January 1st, 2016</span></div>' +
-      '<button type="button" class="gx-arrow" id="gxSkipBtn" aria-label="Timeline" title="Time skip: on to the next chapter">»</button></div>' +
+      '<button type="button" class="gx-arrow" id="gxSkipBtn" aria-label="Timeline">»</button></div>' +
       // time.jsx PanelChrome: the Events panel and the dock's windows
       '<div class="gx-panel gx-hud" id="gxPanel" hidden><div class="gx-panel-head"><div><div class="gx-panel-title" id="gxPanelTitle">Events</div><div class="gx-panel-sub" id="gxPanelSub"></div></div>' +
       '<button type="button" class="gx-x" id="gxPanelClose" aria-label="Close">' + X_ICON + '</button></div><div class="gx-panel-body" id="gxPanelBody"></div></div>' +
@@ -335,27 +336,36 @@
       '<div class="gx-panel dock-panel rs gx-hud" id="gxSocial" role="dialog" aria-label="Rostra" hidden></div>' +
       // chat.jsx Toolbar
       '<div class="gx-base gx-dock gx-hud" role="toolbar" aria-label="Game windows">' +
-      '<button type="button" class="gx-launch" data-pop="chat" title="Chat" aria-label="Diplomacy"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4Z"/><path d="M8 9h8"/><path d="M8 13h5"/></svg><span class="gx-badge" id="gxChatBadge" hidden></span></button>' +
+      '<button type="button" class="gx-launch" data-pop="chat" title="Chat" aria-label="Diplomacy"><span class="rs-dock"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4Z"/><path d="M8 9h8"/><path d="M8 13h5"/></svg><span class="gx-badge" id="gxChatBadge" hidden></span></span></button>' +
       '<button type="button" class="gx-launch" data-pop="actions" title="Actions and Projects" aria-label="Actions"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L13.5 9.5L21 11L13.5 12.5L12 20L10.5 12.5L3 11L10.5 9.5L12 2Z"/></svg></button>' +
       '<button type="button" class="gx-launch" data-pop="social" title="Rostra" aria-label="Rostra" id="gxSocialBtn"><span class="rs-dock">' + ROSTRA_ICON + '<span class="gx-badge rs-badge" id="gxSocialBadge" hidden></span></span></button></div>' +
       // search.jsx
-      '<button type="button" class="gx-base gx-search gx-hud" id="gxSearch" title="Search place" aria-label="Search place"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><input type="text" placeholder="Search place…" aria-label="Search place" hidden /></button>' +
+      '<div class="gx-base gx-search gx-hud" id="gxSearch" role="button" tabindex="0" title="Search place" aria-label="Search place"><span class="gx-search-ic"><svg class="mag" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><line x1="16.5" y1="16.5" x2="22" y2="22"/></svg><svg class="cls" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></span>' +
+      '<input type="text" placeholder="Search place..." aria-label="Search place" hidden /><span class="gx-search-go" aria-hidden="true"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></span><div class="gx-search-list" hidden></div></div>' +
+      // MapModeSelector.jsx: Political / Diplomatic, under the advisor button, with the diplomatic legend
+      '<div class="gx-mapmode gx-hud" id="gxMapMode"><div class="gx-mm-legend" hidden><div class="hd"><span>Diplomacy</span><button type="button" data-mm="hide" title="Close legend">✕</button></div>' +
+      [["You", "rgb(37, 99, 235)"], ["Puppets", "rgb(20, 184, 166)"], ["Allies", "rgb(56, 189, 248)"], ["Friendly / Trade", "rgb(34, 197, 94)"], ["Hostile", "rgb(249, 115, 22)"], ["At War", "rgb(239, 68, 68)"], ["Neutral", "rgb(100, 116, 139)"]].map(function (r) { return '<div class="row"><i style="background:' + r[1] + ";box-shadow:0 0 6px " + r[1].replace("rgb", "rgba").replace(")", ", 0.33)") + '"></i>' + r[0] + "</div>"; }).join("") + "</div>" +
+      '<div class="gx-mm-bar"><button type="button" class="on" data-mm="political" title="Political map mode"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="3 6 9 3 15 6 21 3 21 18 15 21 9 18 3 21"/><line x1="9" y1="3" x2="9" y2="18"/><line x1="15" y1="6" x2="15" y2="21"/></svg><span>Political</span></button>' +
+      '<button type="button" class="dip" data-mm="diplomatic" title="Diplomatic map mode"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg><span>Diplomatic</span></button></div></div>' +
       // other.jsx flag badge, main.jsx AdvisorButton
       '<button type="button" class="gx-base gx-flag-btn gx-hud" id="gxFlagBtn" title="France" aria-label="Country">' + tricolour() + '</button>' +
       '<button type="button" class="gx-base gx-advisor-btn gx-hud" id="gxAdvisorBtn" title="Advisor" aria-label="Advisor"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z"/><path d="M4.5 21c.8-4.2 3.3-6.3 7.5-6.3s6.7 2.1 7.5 6.3"/></svg></button>' +
-      // advisor.jsx
-      '<aside class="gx-drawer gx-hud" id="gxAdvisor" aria-label="Advisor"><span class="gx-grip"></span>' +
-      '<div class="gx-drawer-head"><span class="ic">🧭</span><b>Advisor</b><span class="sp"></span><button type="button" class="gx-hbtn" id="gxClear" title="Clear chat" aria-label="Clear chat">🗑</button><button type="button" class="gx-hbtn close" data-close aria-label="Close">✕</button></div>' +
+      // advisor.jsx + AdvisorRecipients.jsx + AdvisorMic.jsx: the Advisor dossier
+      '<aside class="gx-drawer gx-adv gx-hud" id="gxAdvisor" aria-label="Advisor"><span class="gx-grip"></span>' +
+      '<div class="gx-adv-head"><span class="mark" aria-hidden="true">◇</span><span class="title">Advisor</span><span class="sp"></span><button type="button" class="gx-adv-hbtn" id="gxClear" title="Clear chat" aria-label="Clear chat">🗑</button><button type="button" class="gx-adv-hbtn close" data-close aria-label="Close advisor">✕</button></div>' +
+      '<section class="gx-adv-recipients" aria-label="Advisor conversations"><div class="gx-adv-rtop"><button type="button" class="gx-adv-trigger" id="gxRecipient" aria-expanded="false"><span>Chief advisor</span><span class="chev">▾</span></button><button type="button" class="gx-adv-contact" id="gxContact">+ Contact</button></div>' +
+      '<div class="gx-adv-list" id="gxRecipientList" hidden><button type="button" class="gx-adv-row on"><b>Chief advisor</b> · Original conversation<small>Your government\'s chief advisor</small></button></div></section>' +
       '<div class="gx-msgs" id="gxMsgs" aria-live="polite"></div>' +
-      '<form class="gx-composer" id="gxAsk"><textarea rows="1" placeholder="Ask your advisor…  (Shift+Enter for a new line)" aria-label="Ask your advisor"></textarea><button type="submit" class="gx-send" aria-label="Send">🚀</button></form></aside>' +
-      // countryPanel.jsx + stats.jsx
-      '<aside class="gx-drawer gx-hud" id="gxCountry" aria-label="Country"><span class="gx-grip"></span>' +
-      '<div class="gx-drawer-head"><span class="ic">🏳</span><div><b>Country</b><small>Politics, diplomacy and national statistics</small></div><span class="sp"></span><button type="button" class="gx-hbtn close" data-close aria-label="Close">✕</button></div>' +
-      '<div class="gx-stats"><div class="gx-nation"><span class="gx-nation-flag">' + tricolour() + '</span><div style="flex:1;min-width:0"><div class="gx-nation-name"><b>France</b><span class="gx-yours">Your country</span></div>' +
-      '<div class="l1">Paris · Europe</div><div class="l2">Semi-presidential republic</div><div class="l3">Leader: President of the Republic</div>' +
-      '<div class="gx-chips"><span class="gx-chip-tier">Great power</span><span class="gx-chip-tag">Security Council</span><span class="gx-chip-tag">European Union</span><span class="gx-chip-tag">NATO</span></div></div></div>' +
-      '<div class="gx-subtabs"><button type="button" class="gx-subtab" data-view="politics">🏛 Politics</button><button type="button" class="gx-subtab" data-view="diplomacy">🤝 Diplomacy</button><button type="button" class="gx-subtab" data-view="economy">📈 Economy</button><button type="button" class="gx-subtab" data-view="ranking">🏆 Ranking</button></div>' +
-      '<div id="gxView"></div></div></aside>' +
+      '<form class="gx-adv-composer" id="gxAsk"><div class="gx-adv-field"><textarea rows="1" aria-label="Ask your advisor"></textarea>' +
+      '<button type="button" class="gx-adv-mic" aria-label="Speak to the advisor"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button></div>' +
+      '<button type="submit" class="gx-adv-send" aria-label="Send message" disabled><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5m-7 7 7-7 7 7"/></svg></button></form></aside>' +
+      // countryPanel.jsx + stats.jsx: the Country dossier
+      '<aside class="gx-drawer gx-dos gx-hud" id="gxCountry" aria-label="Country"><span class="gx-grip"></span>' +
+      '<div class="gx-dos-toolbar"><span class="mark" aria-hidden="true">◈</span><span class="title">Country</span><span class="sp"></span><button type="button" class="gx-dos-close" data-close aria-label="Close country panel">✕</button></div>' +
+      '<div class="gx-dos-scroll" id="gxDosScroll"><div class="gx-dos-hero"><div class="gx-dos-flag">' + tricolour() + '</div><div class="gx-dos-id"><div class="gx-dos-namerow"><span class="gx-dos-name">France</span><span class="gx-dos-yours">Your country</span></div>' +
+      '<div class="gx-dos-place">Paris · Europe</div><div class="gx-dos-chips"><span class="tier">Major power</span><span>Security Council</span><span>European Union</span><span>NATO</span></div></div><span class="gx-dos-refresh" id="gxDosRefresh" aria-hidden="true">↻</span></div>' +
+      '<div class="gx-dos-tabs" role="navigation" aria-label="Country"><button type="button" data-view="politics">🏛 Politics</button><button type="button" data-view="diplomacy">🤝 Diplomacy</button><button type="button" data-view="economy">📈 Economy</button><button type="button" data-view="ranking">🏆 Ranking</button></div>' +
+      '<div class="gx-dos-content" id="gxView"></div></div></aside>' +
       // main.jsx WarRoomButton
       '<button type="button" class="gx-base gx-war-btn" id="gxWarBtn" title="War room" aria-label="War room" hidden><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke-linecap="round" stroke-linejoin="round"><g stroke="rgba(255,214,214,0.5)" stroke-width="2.1" transform="translate(0.45 0.6)"><path d="M5 4l12.5 12.5M16 19l3-3M18.2 17.8l2 2"/><path d="M19 4L6.5 16.5M8 19l-3-3M5.8 17.8l-2 2"/></g><g stroke="rgba(34,4,6,0.88)" stroke-width="2.1"><path d="M5 4l12.5 12.5M16 19l3-3M18.2 17.8l2 2"/><path d="M19 4L6.5 16.5M8 19l-3-3M5.8 17.8l-2 2"/></g></svg></button>' +
       // warRoom.jsx: the frame round the map, the rail, the drawer
@@ -376,10 +386,12 @@
       '<div class="as-back" id="gxAdvanced" hidden></div>';
   }
 
-  // ---- the Advisor drawer ---------------------------------------------------------------------------
+  // ---- the Advisor dossier (advisor.jsx, advisorDossier.css) ------------------------------------------
+  // The advisor's replies are a column under a rule, not bubbles; only the player's own words are a bubble.
   function messageHtml(who, text, date, chart) {
-    if (who === "u") return '<div class="gx-msg user"><div class="gx-bubble">' + esc(text) + "</div></div>";
-    return '<div class="gx-msg"><span class="gx-msg-label">🧭 Advisor</span><div class="gx-bubble' + (chart ? " has-chart" : "") + '">' + (text === null ? '<span class="gx-thinking">Thinking' + ".".repeat(Math.floor(Date.now() / 500) % 4) + "</span>" : esc(text)) + (chart ? chartHtml(chart) : "") + "</div>" + (date ? '<span class="gx-msg-time">' + date + "</span>" : "") + "</div>";
+    if (who === "u") return '<div class="gx-msg user"><div class="gx-adv-body user">' + esc(text) + "</div></div>";
+    if (text === null) return '<div class="gx-msg thinking"><span class="gx-adv-thinklabel">🧭 Advisor</span><div class="gx-adv-thinking"><span>Thinking…&nbsp;</span>' + ".".repeat(Math.floor(Date.now() / 500) % 4) + "</div></div>";
+    return '<div class="gx-msg"><span class="gx-msg-label">🧭 Advisor</span><div class="gx-adv-body">' + esc(text) + (chart ? chartHtml(chart) : "") + "</div>" + (date ? '<span class="gx-msg-time">' + date + "</span>" : "") + "</div>";
   }
   function renderAdvisor(T) {
     var shown = ADVISOR.filter(function (m) { return m[0] <= T; });
@@ -400,12 +412,19 @@
     drawCharts(el.msgs);
     el.msgs.scrollTop = el.msgs.scrollHeight;
   }
+  // AdvisorMic.jsx: the mic sits in the box until something is typed; the send arrow wakes with the text.
+  function syncComposer() {
+    var typedText = !!el.ask.querySelector("textarea").value.trim();
+    el.ask.querySelector(".gx-adv-mic").hidden = typedText;
+    el.ask.querySelector(".gx-adv-send").disabled = !typedText;
+  }
   function ask(event) {
     event.preventDefault();
     var input = el.ask.querySelector("textarea");
     var text = input.value.trim();
     if (!text) return;
     input.value = "";
+    syncComposer();
     state.extra.push(["u", text]);
     var reply = ["a", null];
     state.extra.push(reply);
@@ -536,7 +555,7 @@
     tipBox.style.top = Math.max(4, y - tipBox.offsetHeight - 8) + "px";
   }
 
-  // ---- the Country drawer (stats.jsx) -------------------------------------------------------------------
+  // ---- the Country dossier (stats.jsx, PoliticalOverview.jsx, countryDossier.css) ------------------------
   function figuresAt(T) {
     var x = Math.max(0, T - 0.5);
     var i = Math.min(FIGURES.length - 1, Math.floor(x));
@@ -546,6 +565,59 @@
     for (var key in FIGURES[i]) out[key] = FIGURES[i][key] + (FIGURES[j][key] - FIGURES[i][key]) * e;
     return out;
   }
+  // Small flags for the countries the dossier lists, drawn as the game shows its flag images (3:2, contained).
+  var FLAGS = {
+    "France": '<rect width="3" height="2" fill="#fff"/><rect width="1" height="2" fill="#0055a4"/><rect x="2" width="1" height="2" fill="#ef4135"/>',
+    "Italy": '<rect width="3" height="2" fill="#fff"/><rect width="1" height="2" fill="#009246"/><rect x="2" width="1" height="2" fill="#ce2b37"/>',
+    "Germany": '<rect width="3" height="2" fill="#ffce00"/><rect width="3" height=".667" fill="#000"/><rect y=".667" width="3" height=".667" fill="#dd0000"/>',
+    "Russia": '<rect width="3" height="2" fill="#d52b1e"/><rect width="3" height=".667" fill="#fff"/><rect y=".667" width="3" height=".667" fill="#0039a6"/>',
+    "Japan": '<rect width="3" height="2" fill="#fff"/><circle cx="1.5" cy="1" r=".6" fill="#bc002d"/>',
+    "China": '<rect width="3" height="2" fill="#de2910"/><path d="M.5 .25l.12.36h.38l-.31.22.12.36-.31-.22-.31.22.12-.36-.31-.22h.38z" fill="#ffde00"/>',
+    "United States": '<rect width="3" height="2" fill="#fff"/><path d="M0 0h3v.154H0zm0 .308h3v.154H0zm0 .308h3v.154H0zm0 .308h3v.154H0zm0 .308h3v.154H0zm0 .308h3v.154H0zm0 .308h3v.154H0z" fill="#b22234"/><rect width="1.2" height="1.077" fill="#3c3b6e"/>',
+    "United Kingdom": '<rect width="3" height="2" fill="#012169"/><path d="M0 0l3 2M3 0L0 2" stroke="#fff" stroke-width=".4"/><path d="M0 0l3 2M3 0L0 2" stroke="#c8102e" stroke-width=".13"/><path d="M1.5 0v2M0 1h3" stroke="#fff" stroke-width=".55"/><path d="M1.5 0v2M0 1h3" stroke="#c8102e" stroke-width=".3"/>',
+    "India": '<rect width="3" height="2" fill="#fff"/><rect width="3" height=".667" fill="#ff9933"/><rect y="1.333" width="3" height=".667" fill="#138808"/><circle cx="1.5" cy="1" r=".24" fill="none" stroke="#000080" stroke-width=".05"/>',
+    "Brazil": '<rect width="3" height="2" fill="#009c3b"/><path d="M1.5 .2L2.75 1 1.5 1.8.25 1z" fill="#ffdf00"/><circle cx="1.5" cy="1" r=".42" fill="#002776"/>',
+    "Canada": '<rect width="3" height="2" fill="#fff"/><rect width=".75" height="2" fill="#d52b1e"/><rect x="2.25" width=".75" height="2" fill="#d52b1e"/><path d="M1.5 .45l.14.3.25-.08-.08.36.22.06-.3.24.05.17H1.56v.3h-.12v-.3H1.22l.05-.17-.3-.24.22-.06-.08-.36.25.08z" fill="#d52b1e"/>',
+    "South Korea": '<rect width="3" height="2" fill="#fff"/><circle cx="1.5" cy="1" r=".5" fill="#003478"/><path d="M1 1a.5.5 0 0 1 1 0 .25.25 0 0 1-.5 0 .25.25 0 0 0-.5 0z" fill="#c60c30"/>',
+    "North Korea": '<rect width="3" height="2" fill="#024fa2"/><rect y=".33" width="3" height="1.34" fill="#fff"/><rect y=".4" width="3" height="1.2" fill="#ed1c27"/><circle cx="1" cy="1" r=".4" fill="#fff"/><path d="M1 .68l.09.27h.29l-.24.17.09.28L1 1.23l-.23.17.09-.28-.24-.17h.29z" fill="#ed1c27"/>',
+    "Australia": '<rect width="3" height="2" fill="#012169"/><path d="M0 0l1.5 1M1.5 0L0 1" stroke="#fff" stroke-width=".2"/><path d="M.75 0v1M0 .5h1.5" stroke="#fff" stroke-width=".3"/><path d="M.75 0v1M0 .5h1.5" stroke="#c8102e" stroke-width=".16"/><circle cx=".75" cy="1.5" r=".18" fill="#fff"/><circle cx="2.25" cy=".5" r=".08" fill="#fff"/><circle cx="2.25" cy="1.6" r=".09" fill="#fff"/><circle cx="2.6" cy="1" r=".08" fill="#fff"/>',
+    "Turkey": '<rect width="3" height="2" fill="#e30a17"/><circle cx="1.15" cy="1" r=".5" fill="#fff"/><circle cx="1.27" cy="1" r=".4" fill="#e30a17"/><circle cx="1.85" cy="1" r=".16" fill="#fff"/>'
+  };
+  function flagSvg(name) { return FLAGS[name] ? '<svg viewBox="0 0 3 2" aria-hidden="true">' + FLAGS[name] + "</svg>" : ""; }
+  // The Assemblée as it sat in 2016, and who stood where in the polls.
+  var PARTIES = [
+    { name: "Socialist Party", abbr: "PS", native: "Parti socialiste", colour: "#e75480", role: "Governing", family: "Social Democracy", sub: "Third Way", leader: "Jean-Christophe Cambadélis", seats: 280, support: 19.5, founded: 1969 },
+    { name: "The Republicans", abbr: "LR", native: "Les Républicains", colour: "#2b6cb8", role: "Opposition", family: "Social Conservatism", sub: "Gaullism", leader: "Nicolas Sarkozy", seats: 194, support: 22, founded: 2015 },
+    { name: "National Front", abbr: "FN", native: "Front national", colour: "#24345e", role: "Opposition", family: "National Populism", sub: "Souverainism", leader: "Marine Le Pen", seats: 2, support: 26, founded: 1972 },
+    { name: "Left Front", abbr: "FG", native: "Front de gauche", colour: "#c9182b", role: "Opposition", family: "Radical Socialism", sub: "Democratic socialism", leader: "Jean-Luc Mélenchon", seats: 10, support: 12, founded: 2008 },
+    { name: "Union of Democrats and Independents", abbr: "UDI", native: "Union des démocrates et indépendants", colour: "#00a3d9", role: "Opposition", family: "Social Liberalism", sub: "Christian democracy", leader: "Jean-Christophe Lagarde", seats: 27, support: 5, founded: 2012 },
+    { name: "Europe Ecology – The Greens", abbr: "EELV", native: "Europe Écologie Les Verts", colour: "#3fa535", role: "Opposition", family: "Social Democracy", sub: "Green politics", leader: "David Cormand", seats: 16, support: 4, founded: 2010 },
+    { name: "Radical Party of the Left", abbr: "PRG", native: "Parti radical de gauche", colour: "#f2b134", role: "Coalition partner", family: "Social Liberalism", sub: "Radicalism", leader: "Sylvia Pinel", seats: 17, support: 1.5, founded: 1972 }
+  ];
+  var ROLE_TONES = { "Governing": "#fbbf24", "Coalition partner": "#fcd34d", "Opposition": "#93c5fd", "Outside parliament": "#94a3b8" };
+  var FAMILY_COLOURS = { "Radical Socialism": "#f0506e", "Social Democracy": "#f28cb1", "Social Liberalism": "#f2c94c", "Market Liberalism": "#e8e25a", "Social Conservatism": "#5aa9e6", "National Populism": "#6b4226" };
+  var MEMBERSHIPS = [["United Nations", "since 24 Oct 1945 · permanent seat on the Security Council", "member / founder"], ["European Union", "since 1 Nov 1993 · the Communities since 1 Jan 1958", "member / founder"], ["North Atlantic Treaty Organization", "since 4 Apr 1949", "member / founder"], ["Group of Seven", "since 15 Nov 1975", "member / founder"], ["Council of Europe", "since 5 May 1949", "member / founder"]];
+  var RELATION_NOTES = {
+    de: "The closest partner in Europe: the two capitals agree before Brussels does.",
+    us: "An old ally, shaken by launches nobody in Washington will yet explain.",
+    uk: "Neighbours and fellow permanent members, with a referendum between them.",
+    cn: "A trading partner that holds Pyongyang's ear.",
+    ru: "Sanctions over Ukraine, and now the fires at its missile fields.",
+    kp: "No embassy in Paris, and a war in the South."
+  };
+  // [key, label, value of each country (France's from its figures where it has them), format]
+  var RANKINGS = [
+    ["population", "Population", { "China": 1379, "India": 1324, "United States": 323, "Brazil": 206, "Russia": 144, "Japan": 127, "Germany": 82.5, "Turkey": 79.5, "France": null, "United Kingdom": 65.6, "Italy": 60.6, "South Korea": 51.2, "Canada": 36.3, "North Korea": 25.4, "Australia": 24.1 }, function (v) { return v.toFixed(1) + "M"; }],
+    ["economy", "Economy", { "United States": 18.7, "China": 11.2, "Japan": 4.9, "Germany": 3.5, "United Kingdom": 2.7, "France": null, "India": 2.3, "Italy": 1.9, "Brazil": 1.8, "Canada": 1.5, "South Korea": 1.4, "Russia": 1.3, "Australia": 1.2, "Turkey": 0.86, "North Korea": 0.03 }, function (v) { return "€" + (v >= 1 ? v.toFixed(1) + "T" : Math.round(v * 1000) + "B"); }],
+    ["wealth", "Wealth per person", { "United States": 57900, "Australia": 49900, "Canada": 42300, "Germany": 42100, "United Kingdom": 41100, "Japan": 38900, "France": null, "Italy": 30500, "South Korea": 27600, "Russia": 8700, "Turkey": 10900, "China": 8100, "Brazil": 8700, "India": 1700, "North Korea": 1200 }, function (v) { return "€" + Math.round(v / 100) * 100 >= 0 ? "€" + (Math.round(v / 100) * 100).toLocaleString("en") : ""; }],
+    ["military", "Military power", { "United States": 94.2, "Russia": 86.5, "China": 82.1, "India": 64.8, "France": 61.3, "United Kingdom": 59.7, "Japan": 52.4, "South Korea": 51.6, "Turkey": 47.9, "Germany": 46.2, "Italy": 42.5, "Brazil": 39.8, "North Korea": 38.4, "Australia": 33.1, "Canada": 27.6 }, function (v) { return v.toFixed(1); }],
+    ["land", "Land held", { "Russia": 85, "Canada": 72, "United States": 186, "China": 34, "Brazil": 27, "Australia": 8, "India": 36, "France": 66, "Turkey": 81, "Germany": 16, "Japan": 47, "Italy": 20, "United Kingdom": 72, "South Korea": 17, "North Korea": 13 }, function (v) { return String(Math.round(v)); }],
+    ["stability", "Stability", { "Canada": 81, "Australia": 79, "Germany": 77, "Japan": 76, "United Kingdom": 66, "France": null, "Italy": 61, "United States": 58, "South Korea": 55, "China": 72, "India": 57, "Brazil": 44, "Turkey": 41, "Russia": 49, "North Korea": 38 }, function (v) { return String(Math.round(v)); }],
+    ["reputation", "Reputation", { "Canada": 86, "Germany": 84, "Japan": 82, "Australia": 79, "France": null, "United Kingdom": 74, "Italy": 70, "South Korea": 69, "United States": 61, "Brazil": 58, "India": 60, "Turkey": 43, "China": 47, "Russia": 31, "North Korea": 8 }, function (v) { return String(Math.round(v)); }],
+    ["weariness", "War weariness", { "North Korea": 41, "South Korea": 47, "Russia": 22, "United States": 9, "France": 0, "Germany": 0, "United Kingdom": 0, "Japan": 3, "China": 2, "India": 0, "Italy": 0, "Brazil": 0, "Canada": 0, "Australia": 0, "Turkey": 0 }, function (v) { return String(Math.round(v)); }]
+  ];
+  RANKINGS[2][3] = function (v) { return "€" + (Math.round(v / 100) * 100).toLocaleString("en"); };
+  var dossier = { rank: "economy", openRank: "France", openRelation: "", relSearch: "", relSort: "strongest" };
   function bar(value, colour) { return '<div class="gx-bar"><i style="width:' + Math.max(0, Math.min(100, value)).toFixed(1) + "%;background-color:" + colour + '"></i></div>'; }
   function stabilityColour(v) { return v < 40 ? "#ef4444" : v < 70 ? "#f59e0b" : "#22c55e"; }
   function relationTone(v) {
@@ -554,67 +626,152 @@
     if (v >= -10) return ["Neutral", "#d1d1d5"];
     if (v >= -30) return ["Cautious", "#fbbf24"];
     if (v >= -60) return ["Strained", "#fb923c"];
-    return ["Hostile", "#f87171"];
+    if (v > -90) return ["Hostile", "#f87171"];
+    return ["Rival", "#f87171"];
   }
   function signed(v, digits) { return (v >= 0 ? "+" : "") + v.toFixed(digits); }
+  function badge(text, tone, extra) { return '<span class="gx-badge-s" style="background:' + tone + "1f;border-color:" + tone + "66;color:" + tone + (extra || "") + '">' + esc(text) + "</span>"; }
+  // PoliticalOverview.jsx: the support donut, segments clockwise from twelve o'clock with a hair of a gap.
+  function donut(parties, other) {
+    var slices = parties.map(function (p) { return [p.support, p.colour]; }).concat([[other, "rgba(148,163,184,0.72)"]]);
+    var a = 0, svg = '<svg viewBox="0 0 180 180"><circle cx="90" cy="90" r="78" fill="rgba(255,255,255,0.025)" stroke="rgba(255,255,255,0.05)"/>';
+    var pt = function (r, deg) { var rad = (deg - 90) * Math.PI / 180; return (90 + r * Math.cos(rad)).toFixed(2) + " " + (90 + r * Math.sin(rad)).toFixed(2); };
+    slices.forEach(function (s) {
+      var span = s[0] * 3.6, gap = span < 7 ? 0.25 : 1.2, from = a + gap / 2, to = a + span - gap / 2;
+      if (to > from) {
+        var large = to - from > 180 ? 1 : 0;
+        svg += '<path d="M' + pt(78, from) + " A78 78 0 " + large + " 1 " + pt(78, to) + " L" + pt(50, to) + " A50 50 0 " + large + " 0 " + pt(50, from) + 'Z" fill="' + s[1] + '" opacity="0.9" stroke="rgba(11,15,23,0.88)" stroke-width="1.5"/>';
+      }
+      a += span;
+    });
+    return svg + '<circle cx="90" cy="90" r="47" fill="rgba(18,20,27,0.98)" stroke="rgba(255,255,255,0.07)"/><text x="90" y="85" text-anchor="middle" fill="rgba(255,255,255,0.94)" font-size="11" font-weight="800">Political</text><text x="90" y="101" text-anchor="middle" fill="rgba(255,255,255,0.36)" font-size="9" font-weight="700">landscape</text></svg>';
+  }
+  function politicsHtml(T, v) {
+    var pm = T >= 4.5 ? "Bernard Cazeneuve" : "Manuel Valls";
+    var mapped = PARTIES.reduce(function (s, p) { return s + p.support; }, 0);
+    var sorted = PARTIES.slice().sort(function (a, b) { return b.seats - a.seats; });
+    var html = '<div class="gx-dos-politics"><section class="gx-dos-gov"><div class="gx-dos-label">Government</div><div class="form">Semi-presidential republic</div>' +
+      '<div class="offices"><div><small>Head of state</small><b class="hos">François Hollande</b></div><div><small>Head of government</small><b>' + pm + "</b></div></div>" +
+      '<div class="line"><span>Government:</span> Socialist Party | Radical Party of the Left</div>' +
+      '<div class="leg"><div><span>Legislature</span> National Assembly (577 seats)</div><div><span>Next election</span> June 2017</div></div>' +
+      '<div class="seats">' + sorted.map(function (p) { return '<i style="width:' + (p.seats / 577 * 100).toFixed(2) + "%;background:" + p.colour + '"></i>'; }).join("") + '<i style="width:' + ((577 - PARTIES.reduce(function (s, p) { return s + p.seats; }, 0)) / 577 * 100).toFixed(2) + '%;background:rgba(148,163,184,0.72)"></i></div></section>';
+    html += '<div class="gx-dos-strip"><button type="button" class="gx-dos-link">Compile the government and parties again</button></div>';
+    html += '<section class="gx-dos-landscape"><div class="head"><div><div class="gx-dos-label">Political landscape</div><small>Click a party to inspect public information</small></div><span class="mapped">' + Math.round(mapped) + "% support mapped</span></div>" +
+      '<div class="overview"><div class="donut">' + donut(PARTIES.slice().sort(function (a, b) { return b.support - a.support; }), 100 - mapped) + '</div><div class="legend">' +
+      PARTIES.slice().sort(function (a, b) { return b.support - a.support; }).slice(0, 4).map(function (p) { return '<div><i style="background:' + p.colour + '"></i><span>' + p.abbr + "</span><b>" + p.support.toFixed(1) + "%</b></div>"; }).join("") + "</div></div>";
+    html += '<div class="parties">' + PARTIES.map(function (p) {
+      var tone = ROLE_TONES[p.role];
+      return '<div class="party" style="border-left-color:' + p.colour + '"><div class="top"><div><div class="pname">' + esc(p.name) + " <span>(" + p.abbr + ')</span></div><div class="native">' + esc(p.native) + '</div></div><span class="role" style="border-color:' + tone + "55;color:" + tone + '">' + p.role + "</span></div>" +
+        '<div class="ideo"><span style="color:' + (FAMILY_COLOURS[p.family] || "#cbd5e1") + '">' + p.family + "</span> · " + esc(p.sub) + '</div><div class="meta"><span>Leader: <b>' + esc(p.leader) + "</b></span><span>" + p.seats + "/577 seats</span><span>" + p.support.toFixed(1) + "% support</span><span>Founded " + p.founded + "</span></div></div>";
+    }).join("") + '<div class="party other" style="border-left-color:rgba(148,163,184,0.72)"><div class="top"><div class="pname">Other political support</div><span class="oth">' + (100 - mapped).toFixed(1) + "%</span></div></div></div></section>";
+    html += '<div class="gx-dos-strip"><div class="gx-dos-label">National priorities</div><div class="bullets"><div>• Keep the Republic out of a war it did not start</div><div>• Bring the powers to one table</div><div>• Hold the Union together after the British vote</div><div>• Win back the unions before the election</div></div></div>';
+    html += '<section class="gx-dos-inst"><div class="ihead"><div><div class="gx-dos-label">Institutions</div><small>Canonical memberships and institutional history</small></div><span class="count">' + (MEMBERSHIPS.length + (T >= 8.3 ? 1 : 0)) + '</span></div><div class="ilist">' +
+      MEMBERSHIPS.concat(T >= 8.3 ? [["Commission of Strasbourg", "since 2 Mar 2017", "member / founder"]] : []).map(function (m) {
+        return '<div class="irow"><span class="dot"></span><div><div class="iname">' + esc(m[0]) + '</div><div class="imeta">' + esc(m[1]) + '</div></div><span class="istatus">' + m[2] + "</span></div>";
+      }).join("") + "</div></section></div>";
+    return html;
+  }
+  function diplomacyHtml(T, v) {
+    var agreements = [["North Atlantic Treaty", "Alliance · NATO members", "Active"], ["Treaty on European Union", "Union treaty · European Union members", "Active"], ["Paris Agreement", "Climate agreement · Multilateral agreement", T >= 0.95 ? "Active" : "Signed"]];
+    if (T >= 8.3) agreements.unshift(["The Final Act of Strasbourg", "Peace treaty · United States · Russia · China · North Korea · South Korea", "Active"]);
+    var html = '<div class="gx-dos-summary"><div><small>Relations</small><b style="color:#91d4f4">' + RELATIONS.length + '</b></div><div><small>Active agreements</small><b style="color:#6dd7b5">' + agreements.filter(function (a) { return a[2] === "Active"; }).length + '</b></div><div><small>Conflicts</small><b style="color:#9aabb8">0</b></div></div>';
+    var rows = RELATIONS.map(function (r) { return { key: r[0], name: r[1], score: Math.round(v[r[0]]) }; });
+    var q = (fields["dos-rel"] || "").toLowerCase();
+    var shown = rows.filter(function (r) { return !q || r.name.toLowerCase().indexOf(q) >= 0 || relationTone(r.score)[0].toLowerCase().indexOf(q) >= 0; });
+    shown.sort(dossier.relSort === "weakest" ? function (a, b) { return a.score - b.score; } : dossier.relSort === "name" ? function (a, b) { return a.name.localeCompare(b.name); } : function (a, b) { return b.score - a.score; });
+    html += '<section class="gx-dos-ledger"><div class="lhead"><span>Bilateral relations</span><small>−100 to +100 · ' + rows.length + ' recorded</small></div><div class="gx-dos-reltools"><input type="search" data-field="dos-rel" placeholder="Find country or relation…" aria-label="Find country or relation" /><select data-dos="sort" aria-label="Sort relations">' +
+      [["strongest", "Strongest first"], ["weakest", "Weakest first"], ["name", "Name A–Z"]].map(function (o) { return '<option value="' + o[0] + '"' + (dossier.relSort === o[0] ? " selected" : "") + ">" + o[1] + "</option>"; }).join("") + "</select></div>";
+    html += shown.length ? shown.map(function (r) {
+      var tone = relationTone(r.score);
+      var w = Math.abs(r.score) / 2;
+      var open = dossier.openRelation === r.key;
+      return '<div class="gx-dos-rel"><button type="button" data-rel="' + r.key + '"' + (open ? ' class="open"' : "") + '><span class="rname">' + r.name + '</span><span class="sig"><b style="color:' + tone[1] + '">' + signed(r.score, 0) + '</b><i class="meter"><i class="tick"></i><i class="fill" style="background:' + tone[1] + ";width:" + w.toFixed(1) + "%;left:" + (r.score < 0 ? "calc(50% - " + w.toFixed(1) + "%)" : "50%") + '"></i></i></span>' + badge(tone[0], tone[1], ";min-width:3.9rem;justify-content:center") + '<span class="chev">⌄</span></button>' +
+        (open ? '<div class="rdetail"><p>' + esc(RELATION_NOTES[r.key] || "Tracked bilateral relationship.") + '</p><span class="ilink">Inspect country ›</span></div>' : "") + "</div>";
+    }).join("") : '<div class="gx-dos-empty">No relationships match the search. ' + rows.length + " records are still available.</div>";
+    html += "</section>";
+    html += '<section class="gx-dos-ledger"><div class="lhead"><span>Formal agreements</span></div>' + agreements.map(function (a) {
+      var tone = a[2] === "Active" ? "#34d399" : a[2] === "Suspended" ? "#fbbf24" : "#94a3b8";
+      return '<div class="gx-dos-agree"><div><div class="t">' + esc(a[0]) + '</div><div class="s">' + esc(a[1]) + "</div></div>" + badge(a[2], tone) + "</div>";
+    }).join("") + "</section>";
+    html += '<section class="gx-dos-ledger"><div class="lhead"><span>Current conflicts</span></div><div class="gx-dos-empty plain">No active or ceasefire canonical conflicts involving this polity.</div></section>';
+    return html;
+  }
+  function economyHtml(T, v) {
+    var html = '<div class="gx-dos-card stab"><div class="gx-row"><span class="cap">⚠ National stability</span><span class="val">' + Math.round(v.stability) + "/100</span></div>" + bar(v.stability, stabilityColour(v.stability)) + "</div>";
+    html += '<div class="gx-dos-intel"><div class="gx-row"><span class="cap">🕵 Intelligence service</span><span class="val">' + Math.round(v.intel) + "/100</span></div>" + bar(v.intel, "#38bdf8") + "</div>";
+    html += '<div class="gx-dos-title econ">⚑ Strategic indices</div><div class="gx-dos-indices">' + INDICES.map(function (row) {
+      return '<div class="gx-dos-index"><div class="lab">' + row[0] + " " + row[1] + '</div><div class="num">' + Math.round(v[row[2]]) + "<span> / 100</span></div>" + bar(v[row[2]], row[3]) + "</div>";
+    }).join("") + "</div>";
+    html += '<div class="gx-dos-title econ">👥 Population</div><div class="gx-dos-card"><div class="k">Total population</div><div class="pop">' + v.population.toFixed(1) + "M</div></div>";
+    html += '<div class="gx-dos-title econ">📈 Economy</div><div class="gx-dos-econ">' + [
+      ["GDP", "€" + v.gdp.toFixed(2) + "T", "Growth " + signed(v.growth, 1) + "% · 2026-EUR eq.", "#34d399"],
+      ["GDP/capita", "€" + (Math.round(v.gdpc / 10) * 10).toLocaleString("en"), "Whole polity", "#e7e7e9"],
+      ["Inflation", v.inflation.toFixed(1) + "%", "", "#34d399"],
+      ["Unemployment", v.unemployment.toFixed(1) + "%", "", "#34d399"],
+      ["Public debt", v.debt.toFixed(1) + "%", "of GDP", "#34d399"],
+      ["Budget balance", signed(v.balance, 1) + "%", (v.balance < 0 ? "Deficit" : "Surplus") + " · of GDP", v.balance < 0 ? "#f87171" : "#34d399"]
+    ].map(function (c) { return '<div class="cell"><div class="k">' + c[0] + '</div><div class="v" style="color:' + c[3] + '">' + c[1] + "</div>" + (c[2] ? '<div class="s">' + c[2] + "</div>" : "") + "</div>"; }).join("") + "</div>";
+    html += '<div class="gx-dos-currency">Domestic currency: EUR · GDP accounting shown in 2026-EUR-equivalent values.</div>';
+    html += '<div class="gx-dos-card gdp"><div class="t">GDP breakdown</div><div class="stack"><i style="width:2%;background:#22c55e"></i><i style="width:19%;background:#3b82f6"></i><i style="width:79%;background:#f59e0b"></i></div>' +
+      '<div class="legend"><span><i style="background:#22c55e"></i>Agriculture 2%</span><span><i style="background:#3b82f6"></i>Industry 19%</span><span><i style="background:#f59e0b"></i>Services 79%</span></div></div>';
+    var weariness = T >= 1 && T < 5 ? 4 : 0;
+    var military = [["Troop quality", 72, "own"], ["Technology", 81, "own"], ["Spending", 64, "own"], ["Manpower share", 0.3, "share"], ["War weariness", weariness, "weary"], ["Land", 58, "own"], ["Naval", 66, "own"], ["Air", 70, "own"]];
+    html += '<div class="gx-dos-title econ">⚔ Military</div><div class="gx-dos-card mil"><div class="gx-row"><span class="cap">Military power</span><span class="mval">61.3</span></div><div class="rows">' + military.map(function (m) {
+      var pct = m[2] === "share" ? m[1] / 1.5 * 100 : m[1];
+      var fill = m[2] === "weary" ? (m[1] > 0 ? "#f59e0b" : "rgba(255,255,255,0.32)") : "#2bc1f3";
+      return '<div class="mrow"><span>' + m[0] + '</span><span class="mbar"><i style="width:' + Math.min(100, pct).toFixed(1) + "%;background:" + fill + '"></i><b></b></span><em>' + (m[2] === "share" ? m[1].toFixed(1) + "%" : Math.round(m[1]) + "/100") + "</em></div>";
+    }).join("") + '</div><div class="foot">In colour: its own figures. In grey: what every country has. The mark on a bar is where every country stands.</div></div>';
+    html += '<button type="button" class="gx-advanced" data-open-advanced><span class="ic">📊</span><span class="tx"><b>Advanced statistics</b><small>Explore campaign trends and historical snapshots</small></span><span class="ch">›</span></button>';
+    html += '<button type="button" class="gx-advanced tracking"><span class="ic">⚙</span><span class="tx"><b>Historical tracking</b><small>Auto-refresh: Manual only · Tracked: 1/8</small><small class="names">France</small></span><span class="ch">›</span></button>';
+    return html;
+  }
+  function rankingHtml(T, v) {
+    var def = RANKINGS.filter(function (r) { return r[0] === dossier.rank; })[0] || RANKINGS[1];
+    var own = { population: v.population, economy: v.gdp, wealth: v.gdpc, stability: v.stability, reputation: v.reputation };
+    var rows = Object.keys(def[2]).map(function (name) { var value = def[2][name]; return { name: name, value: value == null ? own[def[0]] : value }; }).filter(function (r) { return r.value != null; });
+    rows.sort(function (a, b) { return b.value - a.value; });
+    var rank = 0;
+    rows.forEach(function (r, i) { if (!i || r.value !== rows[i - 1].value) rank = i + 1; r.rank = rank; });
+    var mine = rows.filter(function (r) { return r.name === "France"; })[0];
+    var html = '<div class="gx-dos-rank"><div class="picker"><label for="gxRankBy">Ranked by</label><select id="gxRankBy" data-dos="rank">' + RANKINGS.map(function (r) { return '<option value="' + r[0] + '"' + (r[0] === def[0] ? " selected" : "") + ">" + r[1] + "</option>"; }).join("") + "</select></div>" +
+      '<div class="context"><div><b class="accent">#' + (mine ? mine.rank : "—") + '</b><small>Selected country</small></div><div><b>' + rows.length + "<span> / " + rows.length + "</span></b><small>Countries ranked</small></div></div>" +
+      '<div class="colhead"><span>Rank</span><span></span><span>Country</span><span>Value</span></div><div class="list">' + rows.map(function (r) {
+        var tier = r.rank === 1 ? "gold" : r.rank === 2 ? "silver" : r.rank === 3 ? "bronze" : "";
+        return '<button type="button" class="rrow' + (r.name === "France" ? " mine" : "") + (dossier.openRank === r.name ? " open" : "") + '" data-rank-row="' + esc(r.name) + '"><span class="rk ' + tier + '">' + (r.rank < 10 ? "0" : "") + r.rank + '</span><span class="rflag">' + flagSvg(r.name) + '</span><span class="rname">' + esc(r.name) + '</span><span class="rval">' + def[3](r.value) + "</span></button>";
+      }).join("") + "</div></div>";
+    return html;
+  }
   function renderCountry(T) {
     var v = figuresAt(T);
-    var key = state.view + ":" + Object.keys(v).map(function (k) { return Math.round(v[k] * 10); }).join(",");
+    var key = state.view + ":" + dossier.rank + ":" + dossier.openRank + ":" + dossier.openRelation + ":" + dossier.relSort + ":" + (fields["dos-rel"] || "") + ":" + (T >= 4.5) + (T >= 8.3) + ":" + Object.keys(v).map(function (k) { return Math.round(v[k] * 10); }).join(",");
     if (!changed("country", key)) return;
-    Array.prototype.forEach.call(el.country.querySelectorAll(".gx-subtab"), function (b) { b.classList.toggle("on", b.getAttribute("data-view") === state.view); });
-    var html = "";
-    if (state.view === "economy") {
-      html += '<div class="gx-cardbox" style="margin-top:1rem"><div class="gx-row"><span class="cap">⚠ National stability</span><span class="val">' + Math.round(v.stability) + "/100</span></div>" + bar(v.stability, stabilityColour(v.stability)) + "</div>";
-      html += '<div class="gx-cardbox" style="margin-top:0.6rem"><div class="gx-row"><span class="cap">🕵 Intelligence service</span><span class="val">' + Math.round(v.intel) + "/100</span></div>" + bar(v.intel, "#38bdf8") + "</div>";
-      html += '<div class="gx-section">⚑ Strategic indices</div><div class="gx-indices">';
-      INDICES.forEach(function (row) {
-        html += '<div class="gx-cardbox"><div class="gx-row"><span class="lab">' + row[0] + " " + row[1] + '</span><span class="pct">' + Math.round(v[row[2]]) + "%</span></div>" + bar(v[row[2]], row[3]) + "</div>";
-      });
-      html += '</div><div class="gx-section">👥 Population</div><div class="gx-cardbox gx-pop"><div class="k">Total population</div><div class="v">' + v.population.toFixed(1) + "M</div></div>";
-      html += '<div class="gx-section">📈 Economy</div><div class="gx-econ">';
-      var cards = [
-        ["GDP", "€" + v.gdp.toFixed(2) + "T", "Growth " + signed(v.growth, 1) + "% · 2016-EUR eq.", "#34d399"],
-        ["GDP/capita", "€" + (Math.round(v.gdpc / 10) * 10).toLocaleString("en"), "Whole polity", "#e7e7e9"],
-        ["Inflation", v.inflation.toFixed(1) + "%", "", "#34d399"],
-        ["Unemployment", v.unemployment.toFixed(1) + "%", "", "#34d399"],
-        ["Public debt", v.debt.toFixed(1) + "%", "of GDP", "#34d399"],
-        ["Budget balance", signed(v.balance, 1) + "%", (v.balance < 0 ? "Deficit" : "Surplus") + " · of GDP", v.balance < 0 ? "#f87171" : "#34d399"]
-      ];
-      cards.forEach(function (c) { html += '<div class="gx-cardbox"><div class="k">' + c[0] + '</div><div class="v" style="color:' + c[3] + '">' + c[1] + "</div>" + (c[2] ? '<div class="s">' + c[2] + "</div>" : "") + "</div>"; });
-      html += '</div><div class="gx-currency">Domestic currency: EUR · GDP accounting shown in 2016-EUR-equivalent values.</div>';
-      html += '<div class="gx-cardbox gx-gdp"><div class="t">GDP breakdown</div><div class="stack"><i style="width:2%;background:#22c55e"></i><i style="width:19%;background:#3b82f6"></i><i style="width:79%;background:#f59e0b"></i></div>' +
-        '<div class="legend"><span><i style="background:#22c55e"></i>Agriculture 2%</span><span><i style="background:#3b82f6"></i>Industry 19%</span><span><i style="background:#f59e0b"></i>Services 79%</span></div></div>';
-      html += '<button type="button" class="gx-advanced" data-open-advanced><span class="ic">📊</span><span class="tx"><b>Advanced statistics</b><small>Explore campaign trends and historical snapshots</small></span><span class="ch">›</span></button>';
-    } else if (state.view === "diplomacy") {
-      var conflicts = 0;
-      html += '<div class="gx-section">🤝 Diplomacy</div><div class="gx-dipl">' +
-        '<div class="gx-cardbox"><div class="k">Relations</div><div class="v" style="color:#60a5fa">' + RELATIONS.length + "</div></div>" +
-        '<div class="gx-cardbox"><div class="k">Active agreements</div><div class="v" style="color:#34d399">' + Math.round(v.agreements) + "</div></div>" +
-        '<div class="gx-cardbox"><div class="k">Conflicts</div><div class="v" style="color:' + (conflicts ? "#f87171" : "#94a3b8") + '">' + conflicts + "</div></div></div>";
-      html += '<div class="gx-cardbox gx-rels"><div class="gx-rels-head">Bilateral relations<small>−100 to +100</small></div>';
-      RELATIONS.forEach(function (r) {
-        var score = Math.round(v[r[0]]);
-        var tone = relationTone(score);
-        var left = score < 0 ? 50 + score / 2 : 50;
-        html += '<div class="gx-rel"><div class="gx-rel-top"><span>' + r[1] + '</span><span class="gx-status" style="background-color:' + tone[1] + "1f;border:1px solid " + tone[1] + "66;color:" + tone[1] + '">' + tone[0] + '</span><b style="color:' + tone[1] + '">' + signed(score, 0) + "</b></div>" +
-          '<div class="gx-meter"><i style="left:' + left.toFixed(1) + "%;width:" + (Math.abs(score) / 2).toFixed(1) + "%;background:" + tone[1] + '"></i></div></div>';
-      });
-      html += '</div><div class="gx-note">Click any country on the map to inspect it.</div>';
-    } else if (state.view === "politics") {
-      html += '<div class="gx-section">🏛 Government</div><div class="gx-cardbox"><div class="gx-row"><span class="lab">Semi-presidential republic</span></div><div class="wr-soft" style="color:rgba(255,255,255,0.55)">Head of state: President of the Republic · Head of government: Prime Minister</div></div>';
-      html += '<div class="gx-cardbox" style="margin-top:0.6rem"><div class="gx-row"><span class="cap">Public approval</span><span class="val">' + Math.round(v.stability * 0.82) + '%</span></div>' + bar(v.stability * 0.82, stabilityColour(v.stability)) + "</div>";
-      html += '<div class="gx-section">🗳 Assemblée nationale · 577 seats</div><div class="gx-cardbox"><div class="gx-seats"><i style="width:17%;background:#c0392b"></i><i style="width:50%;background:#3b82f6"></i><i style="width:20%;background:#f59e0b"></i><i style="width:13%;background:#64748b"></i></div>' +
-        '<div class="gx-gdp" style="margin:0"><div class="legend"><span><i style="background:#c0392b"></i>Left 98</span><span><i style="background:#3b82f6"></i>Governing majority 289</span><span><i style="background:#f59e0b"></i>Right 115</span><span><i style="background:#64748b"></i>Others 75</span></div></div></div>';
-      if (state.T >= 7) html += '<div class="gx-cardbox" style="margin-top:0.6rem"><div class="gx-row"><span class="lab">Vote: the Congress of Strasbourg</span><span class="pct" style="color:#34d399">Passed</span></div><div class="wr-soft" style="color:rgba(255,255,255,0.55)">341 for · 156 against · 80 abstaining</div></div>';
-    } else {
-      html += '<div class="gx-section">🏆 Ranking · GDP</div><div class="gx-cardbox" style="padding:0">';
-      RANKING.forEach(function (r, i) {
-        var value = r[0] === "France" ? v.gdp : r[1];
-        html += '<div class="gx-rank' + (r[0] === "France" ? " me" : "") + '"><em>' + (i + 1) + "</em><span>" + r[0] + "</span><b>€" + value.toFixed(2) + "T</b></div>";
-      });
-      html += "</div>";
-    }
+    Array.prototype.forEach.call(el.country.querySelectorAll(".gx-dos-tabs [data-view]"), function (b) { b.classList.toggle("on", b.getAttribute("data-view") === state.view); b.setAttribute("aria-pressed", String(b.getAttribute("data-view") === state.view)); });
+    $("gxDosRefresh").hidden = state.view !== "economy";
+    var focus = document.activeElement && document.activeElement.getAttribute && document.activeElement.getAttribute("data-field");
+    var html = state.view === "economy" ? economyHtml(T, v) : state.view === "diplomacy" ? diplomacyHtml(T, v) : state.view === "politics" ? politicsHtml(T, v) : rankingHtml(T, v);
+    html += '<p class="gx-dos-hint">Click any country on the map to inspect it, or open its card and choose Stats.</p>';
+    el.view.setAttribute("data-view", state.view);
     el.view.innerHTML = html;
+    var search = el.view.querySelector('[data-field="dos-rel"]');
+    if (search) { search.value = fields["dos-rel"] || ""; if (focus === "dos-rel") { search.focus(); search.setSelectionRange(search.value.length, search.value.length); } }
+  }
+  function dossierClick(event) {
+    var rel = event.target.closest("[data-rel]");
+    var row = event.target.closest("[data-rank-row]");
+    if (rel) dossier.openRelation = dossier.openRelation === rel.getAttribute("data-rel") ? "" : rel.getAttribute("data-rel");
+    else if (row) dossier.openRank = row.getAttribute("data-rank-row");
+    else return;
+    state.keys.country = "";
+    renderCountry(state.T);
+  }
+  function dossierInput(event) {
+    var target = event.target;
+    if (target.getAttribute("data-field") === "dos-rel") fields["dos-rel"] = target.value;
+    else if (target.getAttribute("data-dos") === "sort") dossier.relSort = target.value;
+    else if (target.getAttribute("data-dos") === "rank") dossier.rank = target.value;
+    else return;
+    state.keys.country = "";
+    renderCountry(state.T);
   }
 
   // ---- Advanced statistics (stats.jsx AdvancedStatsModal + AdvancedLineChart) ---------------------------
@@ -767,45 +924,155 @@
     renderAdvanced(state.T);
   }
 
-  // ---- the Events panel and the dock's windows ----------------------------------------------------------
+  // ---- the Events panel (time.jsx: PanelChrome, TurnPicker, EventCard) and the Timeline -------------------
+  // eventTags.js: the six tags the game knows, in the order the filter chips take.
+  var EVENT_TAGS = ["Military", "Diplomacy", "Economy", "Politics", "Culture", "Disaster"];
+  var TAG_OF = { War: "Military", Peace: "Diplomacy" };
+  // A time skip is one turn: each chapter's events are its own turn, from the chapter before's date.
+  var events = { turn: -1, filter: {} };
+  function eventTurns(T) {
+    var turns = [];
+    EVENTS.forEach(function (e) {
+      if (e[0] > T) return;
+      var chapter = Math.floor(e[0]);
+      var last = turns[turns.length - 1];
+      if (last && last.chapter === chapter) last.items.push(e); else turns.push({ chapter: chapter, items: [e] });
+    });
+    return turns;
+  }
   function eventCard(e) {
     var d = parseDate(e[1]);
-    return '<div class="gx-card"><div class="gx-card-head"><span class="gx-metric">' + CALENDAR + (d ? shortDate(d) : "") + '</span></div><div class="gx-card-body"><div class="gx-tags">' +
-      e[2].map(function (t) { return '<span class="gx-tag">' + t + "</span>"; }).join("") + e[5].map(function (p) { return '<span class="gx-link"><i>⚑</i>' + p + "</span>"; }).join("") +
-      '</div><div class="gx-card-title">' + esc(e[3]) + '</div><div class="gx-card-text"><p>' + bold(e[4]) + "</p></div></div></div>";
+    var tags = [];
+    e[2].forEach(function (t) { var tag = TAG_OF[t] || t; if (tags.indexOf(tag) < 0) tags.push(tag); });
+    return '<div class="gx-cardwrap"><div class="gx-card"><div class="gx-card-head"><span class="gx-metric">' + CALENDAR + (d ? shortDate(d) : "") + '</span></div><div class="gx-card-body"><div class="gx-tags">' +
+      tags.map(function (t) { return '<span class="gx-tag">' + t + "</span>"; }).join("") + e[5].map(function (p) { return '<span class="gx-link"><i>⚑</i>' + p + "</span>"; }).join("") +
+      '</div><div class="gx-card-title">' + esc(e[3]) + '</div><div class="gx-card-text"><p>' + bold(e[4]) + "</p></div></div></div></div>";
   }
+  function turnRange(turn) {
+    var from = turn.chapter > 0 ? chapterDate(STEPS[turn.chapter - 1]) : parseDate("2016-01-01");
+    var to = parseDate(turn.items[turn.items.length - 1][1]);
+    return shortDate(from) + " -> " + shortDate(to);
+  }
+  function addDays(d, days) { return new Date(+d + days * 86400000); }
+  function addMonths(d, months) { var n = new Date(+d); n.setUTCMonth(n.getUTCMonth() + months); return n; }
+  function mdy(d) { return (d.getUTCMonth() + 1) + "/" + d.getUTCDate() + "/" + d.getUTCFullYear(); }
+  var JUMPS = [["6 hours", 0.25], ["1 day", 1], ["3 days", 3], ["1 week", 7], ["1 month", "1m"], ["3 months", "3m"], ["6 months", "6m"], ["1 year", "12m"]];
   function renderPanel(T) {
     var which = state.pop;
     if (!which) return;
     var title = "", sub = "", html = "";
     if (which === "events") {
-      var shown = EVENTS.filter(function (e) { return e[0] <= T; });
-      var later = EVENTS.length - shown.length;
+      var turns = eventTurns(T);
       title = "Events";
-      sub = "Jan 1, 2016 -> " + shortDate(dateAt(T, state.korea));
-      html = shown.length ? shown.slice().reverse().map(eventCard).join("") : '<div class="gx-empty-box">No world events were recorded for this time skip.</div>';
-      html += '<button type="button" class="gx-ghost" data-go="next"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m6 9 6 6 6-6"/></svg>Next event</button>';
-      if (later) html += '<button type="button" class="gx-ghost" data-go="end" style="min-height:1.9rem;opacity:0.75">Skip to end (' + later + " more)</button>";
+      if (!turns.length) {
+        html = '<div class="gx-empty-box">No world events were recorded for this time skip.</div>';
+      } else {
+        var at = events.turn < 0 || events.turn >= turns.length ? turns.length - 1 : events.turn;
+        var turn = turns[at];
+        sub = turns.length > 1 ? '<span class="gx-turns"><button type="button" data-turn="-1"' + (at ? "" : " disabled") + ">‹</button>Round " + (at + 1) + " · " + turnRange(turn) + '<button type="button" data-turn="1"' + (at < turns.length - 1 ? "" : " disabled") + ">›</button></span>" : turnRange(turn);
+        var present = EVENT_TAGS.filter(function (tag) { return turn.items.some(function (e) { return e[2].some(function (t) { return (TAG_OF[t] || t) === tag; }); }); });
+        var picked = present.filter(function (tag) { return events.filter[tag]; });
+        html = present.length > 1 ? '<div class="gx-echips">' + present.map(function (tag) { return '<button type="button" class="' + (events.filter[tag] ? "on" : "") + '" data-etag="' + tag + '">' + tag + "</button>"; }).join("") + "</div>" : "";
+        var items = turn.items.filter(function (e) { return !picked.length || e[2].some(function (t) { return picked.indexOf(TAG_OF[t] || t) >= 0; }); });
+        html += '<div class="gx-ecol">' + items.map(eventCard).join("") + "</div>";
+        // The rest of the turn is told as the reader goes on: the next event is the next chapter's.
+        var later = EVENTS.filter(function (e) { return e[0] > T; }).length;
+        if (later && at === turns.length - 1) {
+          html += '<button type="button" class="gx-ghost" data-go="next"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m6 9 6 6 6-6"/></svg>Next event</button>';
+          html += '<button type="button" class="gx-ghost" data-go="end" style="min-height:1.9rem;opacity:0.75">Skip to end (' + later + " more)</button>";
+        }
+      }
+    } else if (which === "timeline") {
+      title = "Timeline";
+      var now = dateAt(T, state.korea);
+      var custom = +(fields["tl-n"] || 0);
+      var unit = fields["tl-unit"] || "days";
+      var lands = custom > 0 ? (unit === "hours" ? addDays(now, custom / 24) : unit === "days" ? addDays(now, custom) : unit === "weeks" ? addDays(now, custom * 7) : unit === "months" ? addMonths(now, custom) : addMonths(now, custom * 12)) : null;
+      html = '<div class="gx-tl"><span class="gx-tl-date">' + mdy(now) + "</span>" + JUMPS.map(function (j) {
+        var to = typeof j[1] === "number" ? addDays(now, j[1]) : addMonths(now, parseInt(j[1], 10));
+        return '<i class="gx-tl-link"></i><button type="button" class="gx-tl-node" data-go="next"><b>' + mdy(to) + "</b><span>" + j[0] + "</span></button>";
+      }).join("") + '<i class="gx-tl-link"></i><button type="button" class="gx-tl-auto" data-go="next">Auto-jump</button><i class="gx-tl-link"></i>' +
+        '<div class="gx-tl-custom"><input type="number" min="1" data-field="tl-n" placeholder="Custom" aria-label="Custom length" /><select data-field="tl-unit" aria-label="Unit">' + ["hours", "days", "weeks", "months", "years"].map(function (u) { return '<option value="' + u + '"' + (u === unit ? " selected" : "") + ">" + u + "</option>"; }).join("") + '</select><button type="button" data-go="next"' + (custom > 0 ? "" : ' class="off"') + ">Go</button></div>" +
+        (lands ? '<div class="gx-tl-lands">Lands on ' + mdy(lands) + "</div>" : "") +
+        '<div class="gx-tl-cap">' + Math.min(500, Math.floor(T)) + " of 500 AI requests used today<br />a skip uses 1 request</div></div>";
     }
     var key = which + title + sub + html;
     if (!changed("panel", key)) return;
+    var focus = document.activeElement && el.panel.contains(document.activeElement) ? document.activeElement.getAttribute("data-field") : null;
     el.panelTitle.textContent = title;
-    el.panelSub.textContent = sub;
+    el.panelSub.innerHTML = sub;
+    el.panelSub.hidden = !sub;
     el.panelBody.innerHTML = html;
+    Array.prototype.forEach.call(el.panelBody.querySelectorAll("[data-field]"), function (input) {
+      var key = input.getAttribute("data-field");
+      if (fields[key] != null) input.value = fields[key];
+      if (key === focus) input.focus();
+    });
+    if (which === "events") el.panelBody.scrollTop = el.panelBody.scrollHeight;
   }
-  // ---- Projects & Operations, the Actions panel's second tab (projects.jsx ProjectsBoard) --------------------
+  // ---- Projects & Operations, the Actions panel's second tab (projects.jsx ProjectsBoard, ProjectCard) -------
+  var PROJECT_TONES = { Proposed: ["#93c5fd", "rgba(59,130,246,0.16)"], Active: ["#4ade80", "rgba(34,197,94,0.16)"], Stalled: ["#fbbf24", "rgba(245,158,11,0.18)"], Paused: ["rgba(255,255,255,0.6)", "rgba(255,255,255,0.08)"], Complete: ["#67e8f9", "rgba(6,182,212,0.16)"], Failed: ["#f87171", "rgba(239,68,68,0.18)"], Cancelled: ["rgba(255,255,255,0.45)", "rgba(255,255,255,0.06)"] };
+  var projects = { view: "mine", closed: false, sort: "updated", priority: {} };
+  function daysBetween(a, b) { return Math.round((+b - +a) / 86400000); }
   function projectsAt(T) {
+    var now = dateAt(T, state.korea);
+    var list = [];
     var congress = clamp((T - 4.4) / 3.9);
-    var deterrence = T >= 1.3 ? (T >= 8.3 ? "Stood down" : "Active") : "";
-    var list = [["The Congress of Strasbourg", '<div class="gx-action gx-project"><p><strong>The Congress of Strasbourg</strong></p><small class="' + (congress >= 1 ? "ok" : "") + '">' + (congress >= 1 ? "Complete" : T >= 4.4 ? "In progress · " + Math.round(congress * 100) + "%" : "Not begun") + "</small>" + bar(congress * 100, congress >= 1 ? "#34d399" : "#3b82f6") + "</div>"]];
-    if (deterrence) list.push(["Deterrence alert", '<div class="gx-action gx-project"><p><strong>Deterrence alert</strong> · Forces on alert across the Republic</p><small class="' + (deterrence === "Stood down" ? "ok" : "") + '">' + deterrence + "</small></div>"]);
+    list.push({ id: "congress", glyph: "🔬", name: "The Congress of Strasbourg", owner: "France", status: T < 4.4 ? "Proposed" : congress >= 1 ? "Complete" : "Active", priority: projects.priority.congress || "High",
+      summary: "A peace congress at Strasbourg for the war in Korea, with Washington, Moscow and Beijing at the table and Pyongyang brought by China.", tags: ["Diplomacy", "Peace"],
+      from: parseDate("2016-12-01"), to: parseDate("2017-03-02"), progress: Math.round(congress * 100), next: congress < 0.5 ? "The delegations arrive in Strasbourg — Feb 2017" : congress < 1 ? "The Final Act is signed — Mar 2017" : "",
+      update: T >= 7.3 ? "The Assemblée backed the congress, 341 to 156." : T >= 5.2 ? "Washington and Moscow accepted; Beijing will bring Pyongyang." : "", activity: T >= 7.3 ? 4 : T >= 5.2 ? 2 : 1 });
+    if (T >= 1.3) list.push({ id: "deterrence", glyph: "⚔", name: "Deterrence alert", owner: "France", secret: "🔒", status: T >= 8.3 ? "Complete" : "Active", ongoing: true, priority: projects.priority.deterrence || "Normal",
+      summary: "The forces of deterrence on alert across the Republic until the launches are explained.", tags: ["Military"], from: parseDate("2016-08-09"), progress: T >= 8.3 ? 100 : 40, update: T >= 8.3 ? "Stood down with the Final Act." : "", activity: T >= 8.3 ? 2 : 1 });
+    if (T >= 2.05) list.push({ id: "offensive", glyph: "⚔", name: "The march on Busan", owner: "North Korea", foreign: true, status: T >= 5.2 ? "Stalled" : "Active", ongoing: false,
+      summary: "Pyongyang's armies push south toward Busan and the sea.", tags: ["Military", "War"], from: parseDate("2016-09-02"), to: parseDate("2016-12-31"), progress: Math.min(92, Math.round(state.korea >= 0 ? 30 + state.korea * 3 : 30)), update: T >= 5.2 ? "The guns have gone quiet in Busan." : "", activity: 3 });
+    list.forEach(function (p) {
+      if (!p.to) { p.when = "Began " + shortDate(p.from) + " · ongoing"; return; }
+      var left = daysBetween(now, p.to);
+      p.overdue = left < 0 && p.status === "Active";
+      p.when = shortDate(p.from) + " → " + shortDate(p.to) + (p.status === "Complete" ? "" : left >= 0 ? " (" + left + "d left)" : " (" + -left + "d overdue)");
+    });
     return list;
   }
+  function projectCard(p) {
+    var tone = PROJECT_TONES[p.status];
+    var closed = p.status === "Complete" || p.status === "Failed" || p.status === "Cancelled";
+    var barColour = p.status === "Complete" ? "#22d3ee" : p.overdue ? "#ef4444" : p.status === "Stalled" ? "#f59e0b" : closed ? "rgba(255,255,255,0.25)" : "#22c55e";
+    var html = '<div class="pj-card"><div class="pj-top"><span class="pj-glyph">' + p.glyph + '</span><b>' + esc(p.name) + "</b>" + (p.secret ? '<span class="pj-secret">' + p.secret + "</span>" : "") + '<span class="sp"></span>' +
+      (p.priority === "High" ? '<span class="pj-pill" style="color:#fcd34d;background:rgba(245,158,11,0.16)">High</span>' : p.priority === "Low" ? '<span class="pj-pill" style="color:rgba(255,255,255,0.5);background:rgba(255,255,255,0.07)">Low</span>' : "") +
+      (p.ongoing ? '<span class="pj-pill" style="color:rgba(255,255,255,0.6);background:rgba(255,255,255,0.07)">Ongoing</span>' : "") + '<span class="pj-status" style="color:' + tone[0] + ";background:" + tone[1] + '">' + p.status + "</span></div>" +
+      '<div class="pj-owner' + (p.foreign ? " foreign" : "") + '">' + (p.owner === "France" ? tricolour(null, "pj-flag") : tricolour(["#024fa2", "#ed1c27", "#024fa2"], "pj-flag across")) + "<span>" + esc(p.owner) + "</span>" + (p.foreign ? '<span class="pj-pill foreign">Foreign</span>' : "") + "</div>" +
+      '<div class="pj-sum">' + esc(p.summary) + '</div><div class="pj-tags">' + p.tags.map(function (t) { return "<span>" + t + "</span>"; }).join("") + "</div>" +
+      '<div class="pj-when"><span>' + esc(p.when) + "</span><span>" + p.progress + '%</span></div><div class="pj-bar"><i style="width:' + p.progress + "%;background:" + barColour + '"></i></div>' +
+      (p.next && !closed ? '<div class="pj-next">▸ Next: ' + esc(p.next) + "</div>" : "") + (p.update ? '<div class="pj-update">' + esc(p.update) + "</div>" : "") +
+      (p.overdue ? '<div class="pj-warn">⚠ Overdue</div>' : "") +
+      '<div class="pj-btns">' + (p.foreign ? '<button type="button">🧭 What do we know?</button><button type="button">⚖ Our options</button>' : '<button type="button">🧭 Ask advisor</button>') + '<button type="button">📍 Show on map</button><button type="button">▸ Activity (' + p.activity + ")</button></div>";
+    if (!p.foreign && !closed) html += '<div class="pj-own"><span class="pj-prio">' + [["High", "▲"], ["Normal", "●"], ["Low", "▼"]].map(function (x) { return '<button type="button" data-ac="prio" data-id="' + p.id + '" data-prio="' + x[0] + '" class="' + (p.priority === x[0] ? "on" : "") + '" title="' + x[0] + ' priority">' + x[1] + "</button>"; }).join("") + '</span><button type="button" class="pj-abandon">Abandon</button></div>';
+    else if (p.foreign) html += '<div class="pj-note">' + esc(p.owner) + " runs this — you can watch it and act against it, but its priority and its cancellation are not yours to set.</div>";
+    return html + "</div>";
+  }
   function projectsBoard(T) {
+    var all = projectsAt(T);
     var find = (fields["pj-search"] || "").trim().toLowerCase();
-    var list = projectsAt(T).filter(function (p) { return !find || p[0].toLowerCase().indexOf(find) >= 0; });
-    return '<div class="ac-board"><p class="ac-board-sub">What France is working at, turn by turn</p><input type="search" class="ac-input ac-find" data-field="pj-search" placeholder="Search projects…" aria-label="Search projects" />' +
-      (list.length ? list.map(function (p) { return p[1]; }).join("") : '<p class="ac-none">No project matches.</p>') + "</div>";
+    var isClosed = function (p) { return p.status === "Complete" || p.status === "Failed" || p.status === "Cancelled"; };
+    var mine = all.filter(function (p) { return !p.foreign && !isClosed(p); }).length;
+    var foreign = all.filter(function (p) { return p.foreign && !isClosed(p); }).length;
+    var closedN = all.filter(isClosed).length;
+    var list = all.filter(function (p) {
+      if (projects.closed ? !isClosed(p) : isClosed(p)) return false;
+      if (projects.view === "mine" && p.foreign) return false;
+      if (projects.view === "foreign" && !p.foreign) return false;
+      return !find || (p.name + " " + p.summary + " " + p.tags.join(" ")).toLowerCase().indexOf(find) >= 0;
+    });
+    if (projects.sort === "name") list.sort(function (a, b) { return a.name.localeCompare(b.name); });
+    else if (projects.sort === "progress") list.sort(function (a, b) { return b.progress - a.progress; });
+    var chip = function (key, label) { return '<button type="button" class="pj-chip' + ((key === "closed" ? projects.closed : !projects.closed && projects.view === key) ? " on" : "") + '" data-ac="pjview" data-view="' + key + '">' + label + "</button>"; };
+    var html = '<div class="ac-board"><div class="pj-filters"><label class="pj-find"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><input type="search" data-field="pj-search" placeholder="Search projects…" aria-label="Search projects" /></label>' +
+      '<div class="pj-row"><select data-field="pj-sort" aria-label="Sort projects">' + [["updated", "Recently updated"], ["priority", "Priority"], ["milestone", "Next milestone"], ["progress", "Progress"], ["name", "Name"], ["status", "Status"]].map(function (o) { return '<option value="' + o[0] + '"' + (projects.sort === o[0] ? " selected" : "") + ">" + o[1] + "</option>"; }).join("") + "</select>" +
+      chip("all", "All") + chip("mine", "Mine (" + mine + ")") + (foreign ? chip("foreign", "Foreign (" + foreign + ")") : "") + (closedN ? (projects.closed ? '<button type="button" class="pj-chip on" data-ac="pjview" data-view="running">← Running (' + (mine + foreign) + ")</button>" : chip("closed", "Closed (" + closedN + ")")) : "") + "</div></div>" +
+      '<div class="pj-list">' + (list.length ? list.map(projectCard).join("") : '<p class="ac-none">' + (projects.closed ? "No closed entries match those filters." : "Nothing matches those filters.") + (foreign && projects.view === "mine" ? " " + foreign + " entries belong to another power — show Foreign." : "") + "</p>") +
+      '<button type="button" class="pj-review">🧭 Ask the advisor to review or extend the board</button></div></div>';
+    return html;
   }
 
   // ---- the Actions panel (actions.jsx ActionsPanel, StandingGoal, ActionItem, SuggestionCard) ----------
@@ -924,6 +1191,8 @@
     if (what === "tab") acts.tab = act.getAttribute("data-tab");
     else if (what === "delete") { acts.deleted[act.getAttribute("data-id")] = true; delete acts.queued[act.getAttribute("data-id")]; }
     else if (what === "section") acts.open = act.getAttribute("data-open");
+    else if (what === "prio") projects.priority[act.getAttribute("data-id")] = act.getAttribute("data-prio");
+    else if (what === "pjview") { var view = act.getAttribute("data-view"); if (view === "closed") projects.closed = true; else if (view === "running") projects.closed = false; else { projects.view = view; projects.closed = false; } }
     else if (what === "goal-edit") { acts.editing = true; fields["ac-goal"] = goalAt(state.T); }
     else if (what === "goal-cancel") acts.editing = false;
     else if (what === "goal-clear") { acts.goal = ""; acts.editing = false; }
@@ -956,16 +1225,24 @@
   // The posts of the people who make the news, out as the story passes them, and France's own: the reader
   // posts as France, and Quote under a post puts it in the box. Drawn as the game draws it: a phone that
   // rises from the dock, its tabs along the foot of the screen; on a phone, the app alone (game-ui.css).
-  var ROSTRA_ICON = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7.5 21h9l-1.4-8.5H8.9z"/><path d="M5.5 12.5h13"/><path d="M12 12.5V8.2"/><circle cx="12" cy="6.4" r="1.6"/><path d="M16.6 4.2a4.2 4.2 0 0 1 0 4.6"/><path d="M7.4 4.2a4.2 4.2 0 0 0 0 4.6"/></svg>';
+  // The dock launcher: a smartphone (social.jsx RostraIcon).
+  var ROSTRA_ICON = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5.5" y="2" width="13" height="20" rx="3"/><path d="M10.5 5h3"/><path d="M9.5 19h5"/></svg>';
   var ROSTRA_MARK = '<svg width="26" height="26" viewBox="0 0 32 32" aria-hidden="true"><path d="M6 3h20a4 4 0 0 1 4 4v14a4 4 0 0 1-4 4H13l-6 5v-5H6a4 4 0 0 1-4-4V7a4 4 0 0 1 4-4z" fill="#2bc1f3"/><path d="M12 21h8l-1.2-7.5h-5.6z" fill="#0b1a20"/><path d="M9.5 13.5h13" stroke="#0b1a20" stroke-width="1.8" stroke-linecap="round"/><circle cx="16" cy="9" r="2" fill="#0b1a20"/></svg>';
   var QUOTE_ICON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 7h4v4c0 2.5-1.3 4-4 5"/><path d="M14 7h4v4c0 2.5-1.3 4-4 5"/></svg>';
   var REPOST_ICON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 3l3 3-3 3"/><path d="M4 12V9a3 3 0 0 1 3-3h13"/><path d="M7 21l-3-3 3-3"/><path d="M20 12v3a3 3 0 0 1-3 3H4"/></svg>';
   var HEART_ICON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.5 5.8a5 5 0 0 0-7.1 0L12 7.2l-1.4-1.4a5 5 0 0 0-7.1 7.1L12 21.4l8.5-8.5a5 5 0 0 0 0-7.1z"/></svg>';
   var CLOSE_ICON = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+  var PEN_ICON = '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 21l3.4-9.4 3.8-1.8 4 4-1.8 3.8z"/><path d="M10.2 9.8l4.6-4.6a1.4 1.4 0 0 1 2 0l2 2a1.4 1.4 0 0 1 0 2l-4.6 4.6"/><path d="M3 21l5.6-5.6"/><circle cx="10" cy="14" r="1.4"/></svg>';
+  var POLL_ICON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h11"/><path d="M4 12h16"/><path d="M4 18h7"/></svg>';
+  var REFRESH_ICON = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 4v6h-6"/><path d="M3 20v-6h6"/><path d="M5.2 9a8 8 0 0 1 13.6-2.6L21 10"/><path d="M18.8 15a8 8 0 0 1-13.6 2.6L3 14"/></svg>';
+  var MAG_ICON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.5-4.5"/></svg>';
+  var PIN_ICON = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21s-6.5-6.1-6.5-11a6.5 6.5 0 0 1 13 0c0 4.9-6.5 11-6.5 11z"/><circle cx="12" cy="10" r="2.3"/></svg>';
+  var FLAGPOLE_ICON = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 21V4"/><path d="M5 4.5c4.5-2 7.5 2 14 0v9c-6.5 2-9.5-2-14 0"/></svg>';
+  var REPLY_ICON = '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5a8.4 8.4 0 0 1-12.2 7.5L3 21l2-5.6A8.4 8.4 0 1 1 21 11.5z"/></svg>';
   var TAB_ICON = function (paths) { return '<svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + paths + "</svg>"; };
   var RS_TABS = [
     ["all", "For you", TAB_ICON('<path d="M4 10.5L12 4l8 6.5V20h-5.5v-5.5h-5V20H4z"/>')],
-    ["country", "Your country", TAB_ICON('<path d="M5 21V4"/><path d="M5 4.5c4.5-2 7.5 2 14 0v9c-6.5 2-9.5-2-14 0"/>')],
+    ["search", "Search", TAB_ICON('<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.5-4.5"/>')],
     ["mentions", "Mentions", TAB_ICON('<path d="M18 9a6 6 0 1 0-12 0c0 7-3 8-3 8h18s-3-1-3-8"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/>')],
     ["mine", "Your posts", TAB_ICON('<circle cx="12" cy="8" r="4"/><path d="M4.5 21c.8-4.2 3.3-6.3 7.5-6.3s6.7 2.1 7.5 6.3"/>')]
   ];
@@ -974,13 +1251,25 @@
     '<svg width="14" height="10" viewBox="0 0 15 11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M1 4.2a9.2 9.2 0 0 1 13 0"/><path d="M3.4 6.7a5.8 5.8 0 0 1 8.2 0"/><circle cx="7.5" cy="9.3" r="0.9" fill="currentColor" stroke="none"/></svg>' +
     '<svg width="22" height="10" viewBox="0 0 24 11" fill="none"><rect x="0.5" y="0.5" width="20" height="10" rx="2.6" stroke="currentColor" opacity="0.45"/><rect x="2" y="2" width="14" height="7" rx="1.4" fill="currentColor"/><rect x="21.6" y="3.4" width="1.6" height="4.2" rx="0.8" fill="currentColor" opacity="0.5"/></svg>';
   var RS_EMPTY = {
-    all: "Nothing has been posted yet. The people who make the news post as time passes, and you can post first.",
-    country: "Nobody from your country has posted yet.",
     mentions: "Nobody has mentioned you yet. Post something, and the answers come with the next time skip.",
     mine: "You have not posted yet."
   };
   var RS_MAX = 280;
-  var social = { tab: "all", seen: 0, user: [], quoting: "", posted: false, drawn: {} };
+  // socialFeed.js playerAccount: the player posts as the leader, with the leader's title.
+  var ME = { author: "The President of France", role: "Leader of France", country: "France", kind: "player" };
+  // France asks its public before the congress (a poll: the public votes until the next time skip).
+  POSTS.push({ t: 7.15, id: "p15", author: ME.author, role: ME.role, country: "France", date: "2017-02-09", kind: "player", round: 7, text: "If Strasbourg holds, should France send soldiers to keep the armistice in Korea?",
+    poll: { choices: ["Yes, under the UN flag", "Observers only", "No French soldiers"], results: { shares: [46, 38, 16], votes: 1284000, consensus: "Most would back a UN mission, but few want French soldiers on the line itself." } }, reposts: 31000, likes: 240000 });
+  POSTS.forEach(function (p) { if (p.kind === "player") { p.author = ME.author; p.role = ME.role; } });
+  // Rostra's Search (rostraSearch.jsx): the places it knows, and what ordinary people there post.
+  var PLACES = [["France", "country"], ["Île-de-France", "region", "France"], ["Provence-Alpes-Côte d'Azur", "region", "France"], ["Germany", "country"], ["Bavaria", "region", "Germany"], ["United Kingdom", "country"], ["Italy", "country"], ["Russia", "country"], ["Moscow Oblast", "region", "Russia"], ["China", "country"], ["United States", "country"], ["California", "region", "United States"], ["North Korea", "country"], ["South Korea", "country"], ["Gyeonggi-do", "region", "South Korea"], ["Busan", "region", "South Korea"]];
+  var PEOPLE = {
+    "France": [["Élodie Marchand", "elodie_lyon", "Teacher, Lyon", "5m", "Third strike notice this month at the lycée. The pupils are thrilled. I am not.", 412], ["Karim Benali", "karim_b75", "Taxi driver, Paris", "18m", "Everyone in my cab today has an opinion on Korea. Nobody has one on the traffic, which is the real war.", 1240], ["Juliette Fabre", "jufabre", "Student, Bordeaux", "1h", "If Strasbourg works I am naming my next cat Armistice.", 3400], ["Gilles Poirier", "gpoirier_vin", "Winemaker, Burgundy", "2h", "Frost forecast for the weekend. Forget the missiles, pray for the vines.", 286], ["Nadia Haddad", "nadia.hd", "Nurse, Marseille", "3h", "Twelve-hour shift, two coffees, one patient who called me an angel. Good day.", 2100]],
+    "*": [["Anna Keller", "anna_k", "Baker", "4m", "Queue out of the door since six this morning. Everyone wants to talk about the news, nobody wants the rye.", 318], ["Tomás Ortega", "tortega", "Bus driver", "27m", "Route 12 is running again after the snow. You're welcome, {place}.", 960], ["Mei Lin", "meilin.reads", "Librarian", "1h", "Record day for the history shelf. People want to know how the last congress went.", 1530], ["Yusuf Demir", "ydemir", "Shopkeeper", "2h", "Prices up again. My customers blame the war, the government blames the weather, I blame my supplier.", 204]]
+  };
+  var TRENDS = { "France": ["#Strasbourg", "#Grève", "Korea", "Hollande", "Bourgogne"], "*": ["#Strasbourg", "Korea", "Prices", "{place}"] };
+  var AVATAR_HUES = ["#3f6f9f", "#2f8577", "#5a8a45", "#8a7f3a", "#b0792a", "#b8643a", "#a44e48", "#5f6875"];
+  var social = { tab: "all", seen: 0, user: [], quoting: "", posted: false, drawn: {}, composing: false, pollOn: false, choices: 2, refreshed: false, refreshing: false, place: "France", placeTab: "region", people: {}, liked: {} };
   function initials(name) {
     var words = String(name || "").trim().split(/\s+/).filter(Boolean);
     var letters = words.length > 1 ? [words[0], words[words.length - 1]] : words;
@@ -993,17 +1282,18 @@
     return (shown >= 100 ? Math.round(shown) : Math.round(shown * 10) / 10) + (n < 1e6 ? "K" : "M");
   }
   function postDate(text) { var d = parseDate(text); return d ? d.getUTCDate() + " " + MONTHS[d.getUTCMonth()].slice(0, 3) + " " + d.getUTCFullYear() : ""; }
+  // rostraRefresh.jsx: before anyone has posted, Refresh brings the first posts in (one AI request in the game).
   function feedAt(T) {
-    return POSTS.filter(function (p) { return p.t <= T; }).concat(social.user).sort(function (a, b) { return b.t - a.t || (b.n || 0) - (a.n || 0); });
+    var upTo = social.refreshed ? Math.max(T, 0.8) : T;
+    return POSTS.filter(function (p) { return p.t <= upTo; }).concat(social.user).sort(function (a, b) { return b.t - a.t || (b.n || 0) - (a.n || 0); });
   }
   function findPost(feed, id) { for (var i = 0; i < feed.length; i += 1) if (feed[i].id === id) return feed[i]; return null; }
   function isMention(p, feed) {
     if (p.kind === "player") return false;
     var quoted = p.quote && findPost(feed, p.quote);
-    return !!(quoted && quoted.kind === "player") || /\bFrance\b/.test(p.text);
+    return !!(quoted && quoted.kind === "player") || /\bFrance\b|President of France/.test(p.text);
   }
   function inTab(p, tab, feed) {
-    if (tab === "country") return p.country === "France";
     if (tab === "mentions") return isMention(p, feed);
     if (tab === "mine") return p.kind === "player";
     return true;
@@ -1025,16 +1315,76 @@
     if (!p) return '<div class="rs-quoted gone">This post is no longer available.</div>';
     return '<div class="rs-quoted"><div class="rs-qtop">' + avatar(p, true) + "<b>" + esc(p.author) + "</b>" + (p.role ? '<span class="rs-qrole">' + esc(p.role) + "</span>" : "") + "<small>" + postDate(p.date) + '</small></div><div class="rs-qtext">' + esc(p.text) + "</div></div>";
   }
+  // PollCard: open until the round has passed, then its results.
+  function pollCard(p, T) {
+    var closed = p.poll.results && Math.floor(T) > p.round;
+    var r = p.poll.results;
+    var top = closed ? Math.max.apply(null, r.shares) : -1;
+    var winner = closed && r.shares.filter(function (s) { return s === top; }).length === 1 ? r.shares.indexOf(top) : -1;
+    return '<div class="rs-poll"><div class="rs-pchoices">' + p.poll.choices.map(function (c, i) {
+      if (!closed) return '<div class="rs-pchoice open">' + esc(c) + "</div>";
+      return '<div class="rs-pchoice"><i style="width:' + r.shares[i] + "%;background:" + (i === winner ? "rgba(43,193,243,0.28)" : "rgba(255,255,255,0.1)") + '"></i><span class="' + (i === winner ? "win" : "") + '"><b>' + (i === winner ? "✓ " : "") + esc(c) + "</b><em>" + r.shares[i] + "%</em></span></div>";
+    }).join("") + '</div><div class="rs-pfoot">' + (closed ? "<span>" + r.votes.toLocaleString("en") + " votes</span><span>Final results</span>" : "<span>The public votes until the next time skip.</span>") + "</div>" +
+      (closed && r.consensus ? '<div class="rs-consensus"><strong>Public consensus:</strong> ' + esc(r.consensus) + "</div>" : "") + "</div>";
+  }
   function postCard(p, feed, T) {
     var mine = p.kind === "player";
     var e = engagement(p, feed, T);
     var meta = [p.role, p.country && p.country !== p.author ? p.country : ""].filter(Boolean).join(" · ");
     var fresh = !social.drawn[p.id];
     return '<article class="rs-post' + (fresh ? " fresh" : "") + '">' + avatar(p) + '<div class="rs-main"><div class="rs-top"><b>' + esc(p.author) + "</b>" + (mine ? '<span class="rs-you">You</span>' : "") + "<small>" + postDate(p.date) + "</small></div>" +
-      (meta ? '<div class="rs-meta">' + esc(meta) + "</div>" : "") + '<div class="rs-text">' + esc(p.text) + "</div>" + (p.quote ? quotedPost(findPost(feed, p.quote)) : "") +
+      (meta || p.poll ? '<div class="rs-meta">' + (p.poll ? '<span class="rs-pollchip">Poll</span>' : "") + "<span>" + esc(meta) + "</span></div>" : "") + '<div class="rs-text">' + esc(p.text) + "</div>" + (p.poll ? pollCard(p, T) : "") + (p.quote ? quotedPost(findPost(feed, p.quote)) : "") +
       '<div class="rs-acts"><button type="button" class="rs-act" data-rs="quote" data-id="' + p.id + '" title="Quote this post" aria-label="Quote this post">' + QUOTE_ICON + "<span>" + compact(e.quotes) + "</span></button>" +
       (e.waiting ? '<span class="rs-wait">The world answers with the next time skip.</span>' : '<span class="rs-count" title="Reposts">' + REPOST_ICON + "<span>" + compact(e.reposts) + '</span></span><span class="rs-count" title="Likes">' + HEART_ICON + "<span>" + compact(e.likes) + "</span></span>") +
       "</div></div></article>";
+  }
+  function composerHtml(feed) {
+    var quoting = social.quoting ? findPost(feed, social.quoting) : null;
+    var html = '<div class="rs-compose">' + avatar(ME) + '<div class="rs-main"><div class="rs-as">Posting as <b>' + esc(ME.author) + ", " + esc(ME.role) + "</b></div>" +
+      '<textarea class="rs-input" data-field="rs-input" rows="2" aria-label="Your post" placeholder="' + (social.pollOn ? "Ask the public a question" : "What would you like to tell the world?") + '"></textarea>';
+    if (social.pollOn) {
+      html += '<div class="rs-pedit">';
+      for (var i = 0; i < social.choices; i += 1) html += '<div class="rs-prow"><input class="rs-pin" data-field="rs-c' + i + '" maxlength="40" placeholder="Choice ' + (i + 1) + '" aria-label="Choice ' + (i + 1) + '" />' + (social.choices > 2 ? '<button type="button" class="rs-prm" data-rs="rmchoice" data-i="' + i + '" aria-label="Remove choice ' + (i + 1) + '">' + CLOSE_ICON + "</button>" : "") + "</div>";
+      html += '<div class="rs-pmore">' + (social.choices < 4 ? '<button type="button" class="rs-addc" data-rs="addchoice">Add a choice</button>' : "<span></span>") + "<span>The public votes until the next time skip.</span></div></div>";
+    }
+    html += (quoting ? '<div class="rs-quoting">' + quotedPost(quoting) + '<button type="button" class="rs-unquote" data-rs="unquote" title="Remove the quote" aria-label="Remove the quote">' + CLOSE_ICON + "</button></div>" : "") +
+      '<div class="rs-cfoot"><button type="button" class="rs-polltog' + (social.pollOn ? " on" : "") + '" data-rs="poll" title="' + (social.pollOn ? "Remove the poll" : "Add a poll") + '">' + POLL_ICON + 'Poll</button><span class="rs-len"></span><button type="button" class="rs-send" data-rs="post">Post</button></div></div></div>';
+    return html;
+  }
+  function personPost(p, place, i) {
+    var hue = AVATAR_HUES[Math.floor(hash(i, p[0].length, 3) * AVATAR_HUES.length)];
+    var key = place + ":" + i;
+    var liked = social.liked[key];
+    return '<div class="rs-post rs-person"><span class="rs-pav" style="background:' + hue + '">' + esc(initials(p[0])) + '</span><div class="rs-main"><div class="rs-top"><b>' + esc(p[0]) + "</b><em>@" + esc(p[1]) + " · " + p[3] + '</em></div><div class="rs-about">' + esc(p[2]) + '</div><div class="rs-text">' + esc(p[4].replace("{place}", place)) + "</div>" +
+      '<div class="rs-pacts"><span>' + REPLY_ICON + "</span><span>" + REPOST_ICON + '</span><button type="button" class="rs-like' + (liked ? " on" : "") + '" data-rs="like" data-key="' + esc(key) + '">' + HEART_ICON + "<span>" + compact(p[5] + (liked ? 1 : 0)) + "</span></button></div></div></div>";
+  }
+  function searchHtml(feed, T) {
+    var q = (fields["rs-search"] || "").trim().toLowerCase();
+    var html = '<div class="rs-sbox"><label class="rs-sfield">' + MAG_ICON + '<input type="search" data-field="rs-search" placeholder="Search countries and regions" aria-label="Search countries and regions" />' + (q ? '<button type="button" class="rs-sclear" data-rs="sclear" aria-label="Clear the search">' + CLOSE_ICON + "</button>" : "") + "</label></div>";
+    if (q) {
+      var hits = PLACES.filter(function (p) { return p[0].toLowerCase().indexOf(q) >= 0; });
+      return html + (hits.length ? hits.map(function (p) {
+        return '<button type="button" class="rs-hit" data-rs="pick" data-place="' + esc(p[0]) + '"><span class="ic">' + (p[1] === "region" ? PIN_ICON : FLAGPOLE_ICON) + '</span><span><b>' + esc(p[0]) + "</b><small>" + (p[1] === "region" ? esc(p[2]) : "Country") + "</small></span></button>";
+      }).join("") : '<div class="rs-none">No country or region by that name.</div>');
+    }
+    var place = PLACES.filter(function (p) { return p[0] === social.place; })[0] || PLACES[0];
+    var country = place[1] === "region" ? place[2] : place[0];
+    var shown = place[1] === "region" && social.placeTab === "country" ? country : place[0];
+    var day = dateAt(T, state.korea);
+    html += '<div class="rs-place"><div><b>' + esc(place[0]) + "</b><small>" + day.getUTCDate() + " " + MONTHS[day.getUTCMonth()] + " " + day.getUTCFullYear() + "</small></div>" + (place[0] !== "France" ? '<button type="button" class="rs-home-pill" data-rs="pick" data-place="France">Your country</button>' : "") +
+      '<button type="button" class="rs-ricon" data-rs="refresh" title="Load new posts (one AI request)" aria-label="Load new posts (one AI request)">' + REFRESH_ICON + "</button></div>";
+    if (place[1] === "region") html += '<div class="rs-ptabs"><button type="button" class="' + (social.placeTab !== "country" ? "on" : "") + '" data-rs="ptab" data-ptab="region">' + esc(place[0]) + '</button><button type="button" class="' + (social.placeTab === "country" ? "on" : "") + '" data-rs="ptab" data-ptab="country">' + esc(country) + "</button></div>";
+    var people = social.people[shown];
+    if (people === "done") html += '<div class="rs-trend"><div class="rs-label">Trending</div><div class="chips">' + (TRENDS[shown] || TRENDS["*"]).map(function (t) { return "<span>" + esc(t.replace("{place}", shown)) + "</span>"; }).join("") + "</div></div>";
+    if (place[1] === "country" || social.placeTab === "country") {
+      var own = feed.filter(function (p) { return p.country === country; }).slice(0, 6);
+      html += '<div class="rs-label pad">On Rostra</div>' + (own.length ? own.map(function (p) { return postCard(p, feed, T); }).join("") : '<p class="rs-empty">Nobody from ' + esc(country) + " has posted on Rostra yet.</p>");
+    }
+    html += '<div class="rs-label pad">What people are saying</div>';
+    if (people === "loading") html += '<div class="rs-tuning">Tuning in…</div>' + [0, 1, 2].map(function () { return '<div class="rs-skel"><i class="av"></i><div><i style="width:45%"></i><i style="width:92%"></i><i style="width:70%"></i></div></div>'; }).join("");
+    else if (people === "done") html += (PEOPLE[shown] || PEOPLE["*"]).map(function (p, i) { return personPost(p, shown, i); }).join("") + '<div class="rs-written">Written by your AI model. Each new feed is one AI request.</div>';
+    else html += '<div class="rs-refresh"><b>Nothing has been posted here yet.</b><span>Refresh to see what ordinary people in ' + esc(shown) + ' are posting.</span><button type="button" class="rs-rbtn" data-rs="refresh">' + REFRESH_ICON + 'Refresh</button><small>One AI request</small></div>';
+    return html;
   }
   function renderSocial(T) {
     if (state.pop !== "social") return;
@@ -1042,19 +1392,17 @@
     var feed = feedAt(T);
     var posts = feed.filter(function (p) { return inTab(p, social.tab, feed); });
     var mentions = feed.filter(function (p) { return isMention(p, feed) && p.t >= Math.floor(T); }).length;
-    var quoting = social.quoting ? findPost(feed, social.quoting) : null;
-    var me = { author: "France", country: "France", kind: "player" };
     var day = postDate(isoDate(dateAt(T, state.korea)));
     var html = '<span class="rs-side one" aria-hidden="true"></span><span class="rs-side two" aria-hidden="true"></span><span class="rs-side three" aria-hidden="true"></span><div class="rs-screen">' +
       '<div class="rs-status" aria-hidden="true"><span>' + day + '</span><i class="rs-island"></i><span class="rs-marks">' + STATUS_MARKS + "</span></div>" +
       '<div class="rs-head">' + ROSTRA_MARK + '<div class="rs-name"><b>Rostra</b><small>What the world is saying</small></div><span class="rs-day">' + day + "</span>" +
+      '<button type="button" class="rs-pen' + (social.composing ? " on" : "") + '" data-rs="pen" aria-pressed="' + social.composing + '" title="' + (social.composing ? "Put the post away" : "Write a post") + '" aria-label="' + (social.composing ? "Put the post away" : "Write a post") + '">' + PEN_ICON + "</button>" +
       '<button type="button" class="rs-x" data-rs="close" aria-label="Close Rostra">' + CLOSE_ICON + "</button></div>";
-    html += '<div class="rs-scroll"><div class="rs-compose">' + avatar(me) + '<div class="rs-main"><div class="rs-as">Posting as <b>France</b></div>' +
-      '<textarea class="rs-input" data-field="rs-input" rows="2" aria-label="Your post" placeholder="What would you like to tell the world?"></textarea>' +
-      (quoting ? '<div class="rs-quoting">' + quotedPost(quoting) + '<button type="button" class="rs-unquote" data-rs="unquote" title="Remove the quote" aria-label="Remove the quote">' + CLOSE_ICON + "</button></div>" : "") +
-      (social.posted ? '<div class="rs-note">Posted. The world answers with the next time skip.</div>' : "") +
-      '<div class="rs-cfoot"><span class="rs-len"></span><button type="button" class="rs-send" data-rs="post">Post</button></div></div></div>';
-    html += posts.length ? posts.map(function (p) { return postCard(p, feed, T); }).join("") : '<p class="rs-empty">' + RS_EMPTY[social.tab] + "</p>";
+    if (social.posted && !social.composing) html += '<div class="rs-posted">Posted. The world answers with the next time skip.</div>';
+    html += '<div class="rs-scroll">' + (social.composing ? composerHtml(feed) : "");
+    if (social.tab === "search") html += searchHtml(feed, T);
+    else if (social.tab === "all" && !posts.length) html += '<div class="rs-refresh"><b>Nothing has been posted yet.</b><span>Refresh to see what the people who make the news are posting.</span><button type="button" class="rs-rbtn" data-rs="first"' + (social.refreshing ? " disabled" : "") + ">" + REFRESH_ICON + (social.refreshing ? "Refreshing…" : "Refresh") + "</button><small>One AI request</small></div>";
+    else html += posts.length ? posts.map(function (p) { return postCard(p, feed, T); }).join("") : '<p class="rs-empty">' + RS_EMPTY[social.tab] + "</p>";
     html += '</div><div class="rs-bar" role="tablist">' + RS_TABS.map(function (tab) {
       var on = social.tab === tab[0];
       var count = tab[0] === "mentions" ? mentions : 0;
@@ -1066,12 +1414,19 @@
     var scroller = el.social.querySelector(".rs-scroll");
     var scroll = scroller ? scroller.scrollTop : 0;
     el.social.innerHTML = html;
-    var input = el.social.querySelector(".rs-input");
-    input.value = fields["rs-input"] || "";
-    if (focused) { input.focus(); try { input.setSelectionRange(caret, caret); } catch (error) { /* no caret */ } }
+    Array.prototype.forEach.call(el.social.querySelectorAll("[data-field]"), function (input) {
+      var key = input.getAttribute("data-field");
+      input.value = fields[key] || "";
+      if (key === focused) { input.focus(); try { input.setSelectionRange(caret, caret); } catch (error) { /* no caret */ } }
+    });
     el.social.querySelector(".rs-scroll").scrollTop = scroll;
     posts.forEach(function (p) { social.drawn[p.id] = true; });
     syncPost();
+  }
+  function pollChoices() {
+    var out = [];
+    for (var i = 0; i < social.choices; i += 1) { var c = (fields["rs-c" + i] || "").trim(); if (c) out.push(c); }
+    return out;
   }
   function syncPost() {
     var input = el.social.querySelector(".rs-input");
@@ -1080,17 +1435,31 @@
     var len = el.social.querySelector(".rs-len");
     len.textContent = length + "/" + RS_MAX;
     len.classList.toggle("over", length > RS_MAX);
-    el.social.querySelector(".rs-send").classList.toggle("on", length > 0 && length <= RS_MAX);
+    el.social.querySelector(".rs-send").classList.toggle("on", length > 0 && length <= RS_MAX && (!social.pollOn || pollChoices().length >= 2));
   }
   function submitPost() {
     var text = (fields["rs-input"] || "").trim();
     if (!text || Array.from(text).length > RS_MAX) return;
+    var choices = social.pollOn ? pollChoices() : null;
+    if (social.pollOn && choices.length < 2) return;
     var n = social.user.length + 1;
-    social.user.push({ t: state.T, n: n, id: "u" + n, author: "France", country: "France", date: isoDate(dateAt(state.T, state.korea)), kind: "player", round: Math.floor(state.T), user: true, quote: social.quoting, text: text });
+    var post = { t: state.T, n: n, id: "u" + n, author: ME.author, role: ME.role, country: "France", date: isoDate(dateAt(state.T, state.korea)), kind: "player", round: Math.floor(state.T), user: true, quote: social.quoting, text: text };
+    if (choices) {
+      var raw = choices.map(function (c, i) { return 1 + hash(n, i, 13) * 4; });
+      var sum = raw.reduce(function (a, b) { return a + b; }, 0);
+      var shares = raw.map(function (r) { return Math.round(r / sum * 100); });
+      shares[0] += 100 - shares.reduce(function (a, b) { return a + b; }, 0);
+      post.poll = { choices: choices, results: { shares: shares, votes: Math.round(400000 + hash(n, 5, 9) * 1200000), consensus: "" } };
+    }
+    social.user.push(post);
     fields["rs-input"] = "";
+    for (var i = 0; i < 4; i += 1) fields["rs-c" + i] = "";
     social.quoting = "";
+    social.pollOn = false;
+    social.choices = 2;
     social.posted = true;
-    if (social.tab === "mentions" || social.tab === "country") social.tab = "all";
+    social.composing = false;
+    if (social.tab !== "all" && social.tab !== "mine") social.tab = "all";
   }
   function socialClick(event) {
     var act = event.target.closest("[data-rs]");
@@ -1101,14 +1470,36 @@
     if (what === "tab") social.tab = act.getAttribute("data-tab");
     else if (what === "unquote") social.quoting = "";
     else if (what === "post") submitPost();
-    else if (what === "quote") {
-      social.quoting = act.getAttribute("data-id");
+    else if (what === "pen") {
+      social.composing = !social.composing;
       social.posted = false;
-    } else return;
+      if (!social.composing) { social.quoting = ""; social.pollOn = false; social.choices = 2; }
+    } else if (what === "quote") { social.quoting = act.getAttribute("data-id"); social.posted = false; social.composing = true; }
+    else if (what === "poll") { social.pollOn = !social.pollOn; social.choices = 2; fields["rs-c0"] = fields["rs-c1"] = fields["rs-c2"] = fields["rs-c3"] = ""; }
+    else if (what === "addchoice") social.choices = Math.min(4, social.choices + 1);
+    else if (what === "rmchoice") {
+      for (var i = +act.getAttribute("data-i"); i < 3; i += 1) fields["rs-c" + i] = fields["rs-c" + (i + 1)] || "";
+      fields["rs-c3"] = "";
+      social.choices = Math.max(2, social.choices - 1);
+    } else if (what === "first") {
+      social.refreshing = true;
+      setTimeout(function () { social.refreshing = false; social.refreshed = true; state.keys.social = ""; renderSocial(state.T); }, 1200);
+    } else if (what === "pick") { social.place = act.getAttribute("data-place"); social.placeTab = "region"; fields["rs-search"] = ""; }
+    else if (what === "sclear") fields["rs-search"] = "";
+    else if (what === "ptab") social.placeTab = act.getAttribute("data-ptab");
+    else if (what === "refresh") {
+      var place = PLACES.filter(function (p) { return p[0] === social.place; })[0] || PLACES[0];
+      var shown = place[1] === "region" && social.placeTab === "country" ? place[2] : place[0];
+      if (social.people[shown] === "loading") return;
+      social.people[shown] = "loading";
+      setTimeout(function () { social.people[shown] = "done"; state.keys.social = ""; renderSocial(state.T); }, 1200);
+    } else if (what === "like") { var key = act.getAttribute("data-key"); social.liked[key] = !social.liked[key]; }
+    else return;
     renderSocial(state.T);
-    if (what === "quote") {
+    if (what === "pen" || what === "quote") {
       el.social.querySelector(".rs-scroll").scrollTop = 0;
-      el.social.querySelector(".rs-input").focus();
+      var input = el.social.querySelector(".rs-input");
+      if (input) setTimeout(function () { input.focus(); }, 60);
     }
   }
   function socialBadge(T) {
@@ -1125,7 +1516,7 @@
   var INTELLIGENCE = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>';
   var dip = { view: "list", thread: -1, tab: "chats", typed: {}, seen: {} };
   function threadLines(i, T) {
-    var shown = CHATS[i].lines.filter(function (l) { return l[0] <= T; }).map(function (l) { return [l[1], typed(l[2], l[0], 0.06, T)]; });
+    var shown = CHATS[i].lines.filter(function (l) { return l[0] <= T; }).map(function (l) { return [l[1], typed(l[2], l[0], 0.06, T), l[0]]; });
     return shown.concat(dip.typed[i] || []);
   }
   function threadUnread(i, T) {
@@ -1140,11 +1531,18 @@
       var thread = CHATS[dip.thread];
       var lines = threadLines(dip.thread, T);
       html += '<div class="dp-convhead"><button type="button" class="dp-back" data-dip="back" aria-label="Back to diplomacy">' + BACK + "</button>" + tricolour(thread.flag, "dp-flag") +
-        '<div class="dp-convtitle"><b>' + thread.with + '</b><small>Direct diplomatic channel</small></div><button type="button" class="dp-x" data-dip="back" aria-label="Close conversation">✕</button></div>';
+        '<div class="dp-convtitle"><b>' + thread.with + ' <span class="dp-edit" title="Rename"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3l4 4L8 20H4v-4z"/></svg></span></b><small>Direct diplomatic channel</small></div><button type="button" class="dp-add"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>Add Country</button><button type="button" class="dp-ic env" title="Mark unread" aria-label="Mark unread"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg></button><button type="button" class="dp-ic trash" title="Delete chat" aria-label="Delete chat"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/></svg></button><button type="button" class="dp-x" data-dip="back" aria-label="Close conversation">✕</button></div>';
+      // ConversationView: the country speaks under its own name; each game day opens with its date.
+      var lastDay = "", lastWho = "";
       html += '<div class="dp-msgs">' + (lines.length ? lines.map(function (l) {
-        return '<div class="dp-msg' + (l[0] === "u" ? " me" : "") + '">' + (l[0] === "u" ? "" : '<span class="dp-speaker">' + thread.leader + "</span>") + '<div class="dp-bubble" style="--accent:' + thread.flag[thread.flag.length - 1] + '">' + esc(l[1]) + "</div></div>";
-      }).join("") : '<div class="dp-empty">No messages yet. Write the first one.</div>') + "</div>";
-      html += '<form class="dp-compose" data-dip="send"><textarea rows="1" placeholder="Send a diplomatic message…" aria-label="Send a diplomatic message"></textarea><button type="submit" aria-label="Send">🚀</button></form>';
+        var day = shortDate(dateAt(l[2] != null ? l[2] : state.T, state.korea));
+        var out = day !== lastDay ? '<div class="dp-day"><span>' + day + "</span></div>" : "";
+        var same = l[0] === lastWho && day === lastDay;
+        lastDay = day;
+        lastWho = l[0];
+        return out + '<div class="dp-msg' + (l[0] === "u" ? " me" : "") + (same ? " same" : "") + '">' + (l[0] === "u" || same ? "" : '<span class="dp-speaker">' + tricolour(thread.flag, "dp-sflag") + "<strong>" + thread.with + "</strong></span>") + '<div class="dp-bubble" style="--accent:' + thread.flag[thread.flag.length - 1] + '">' + esc(l[1]) + "</div>" + (l[0] === "u" ? "" : '<span class="dp-when">' + day + "</span>") + "</div>";
+      }).join("") : '<div class="dp-empty">Begin the diplomatic conversation.</div>') + "</div>";
+      html += '<form class="dp-compose" data-dip="send"><div class="dp-crow"><textarea rows="1" placeholder="Send a diplomatic message…" aria-label="Send a diplomatic message"></textarea><button type="submit" aria-label="Send"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="m22 2-7 20-4-9-9-4Z"/></svg></button></div><div class="dp-hint">Enter to send · Shift+Enter for a new line</div></form>';
     } else {
       var unread = CHATS.filter(function (c, i) { return threadUnread(i, T); }).length;
       html += '<div class="dp-head"><div class="dp-title"><span class="dp-icon">' + CONTACTS + '</span><div><b>Diplomacy</b><small>Conversations, institutions and statecraft</small></div></div><button type="button" class="dp-x" data-dip="close" aria-label="Close diplomacy panel">✕</button></div>';
@@ -1153,16 +1551,24 @@
       }).join("") + "</div>";
       if (dip.tab === "chats") {
         var open = CHATS.map(function (c, i) { return i; }).filter(function (i) { return threadLines(i, T).length; });
+        if (open.length) html += '<div class="dp-unreadbar"><button type="button" class="dp-unread' + (dip.unreadOnly ? " on" : "") + '" data-dip="unread">' + (dip.unreadOnly ? "<i></i>" : "") + "Unread (" + unread + ")</button>" + (unread ? '<button type="button" class="dp-markall" data-dip="markall">Mark all read</button>' : "") + "</div>";
         html += '<div class="dp-list">';
+        var listed = open.filter(function (i) { return !dip.unreadOnly || threadUnread(i, T); });
         if (!open.length) html += '<div class="dp-empty">No diplomatic conversations yet.<br>Start one below.</div>';
+        else if (!listed.length) html += '<div class="dp-empty">No unread chats — you\'re all caught up.</div>';
         else {
-          html += '<div class="dp-group">Recent</div>';
-          open.slice().reverse().forEach(function (i) {
+          // ChatList: grouped under the date of each chat's last message.
+          var group = "";
+          listed.slice().reverse().forEach(function (i) {
             var lines = threadLines(i, T);
             var last = lines[lines.length - 1];
+            var lastT = CHATS[i].lines.filter(function (l) { return l[0] <= T; }).map(function (l) { return l[0]; }).pop();
+            var d = dateAt(lastT == null ? T : lastT, state.korea);
+            var label = MONTHS[d.getUTCMonth()] + " " + d.getUTCDate() + ", " + d.getUTCFullYear();
+            if (label !== group) { html += '<div class="dp-group">' + label + "</div>"; group = label; }
             var isUnread = threadUnread(i, T);
-            html += '<button type="button" class="dp-row' + (isUnread ? " unread" : "") + '" data-thread="' + i + '"><span class="dp-dot">' + (isUnread ? "<i></i>" : "") + "</span>" + tricolour(CHATS[i].flag, "dp-flag") +
-              '<span class="dp-rowtext"><span class="dp-rowtop"><b>' + CHATS[i].with + '</b><em>Direct channel</em></span><span class="dp-preview">' + esc(last ? last[1] : "No messages yet") + '</span></span><span class="dp-chev">›</span></button>';
+            html += '<div class="dp-rowwrap"><button type="button" class="dp-row' + (isUnread ? " unread" : "") + '" data-thread="' + i + '"><span class="dp-dot">' + (isUnread ? "<i></i>" : "") + "</span>" + tricolour(CHATS[i].flag, "dp-flag") +
+              '<span class="dp-rowtext"><span class="dp-rowtop"><b>' + CHATS[i].with + '</b><em>Direct channel</em></span><span class="dp-preview">' + esc(last ? last[1] : "No messages yet") + '</span></span></button><span class="dp-rowacts"><button type="button" class="dp-ic env" data-dip="markread" data-i="' + i + '" title="Mark read" aria-label="Mark read"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg></button><button type="button" class="dp-ic trash" title="Delete chat" aria-label="Delete chat"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/></svg></button></span></div>';
           });
         }
         html += '</div><div class="dp-foot"><button type="button" class="dp-new" data-dip="new">Start New Chat</button></div>';
@@ -1202,6 +1608,9 @@
     else if (tab) dip.tab = tab.getAttribute("data-tab");
     else if (act && act.getAttribute("data-dip") === "back") { dip.view = "list"; state.manual.pop = "chat"; }
     else if (act && act.getAttribute("data-dip") === "close") { setPop(null, true); return; }
+    else if (act && act.getAttribute("data-dip") === "unread") dip.unreadOnly = !dip.unreadOnly;
+    else if (act && act.getAttribute("data-dip") === "markall") CHATS.forEach(function (c, i) { dip.seen[i] = c.lines.filter(function (l) { return l[0] <= state.T && l[1] === "t"; }).length; });
+    else if (act && act.getAttribute("data-dip") === "markread") { var mi = +act.getAttribute("data-i"); dip.seen[mi] = CHATS[mi].lines.filter(function (l) { return l[0] <= state.T && l[1] === "t"; }).length; }
     else if (act && act.getAttribute("data-dip") === "new") {
       var fresh = CHATS.map(function (c, i) { return i; }).filter(function (i) { return !threadLines(i, state.T).length; })[0];
       dip.view = "thread";
@@ -1597,7 +2006,7 @@
     state.pop = which;
     state.keys.panel = "";
     state.keys.dip = "";
-    el.panel.hidden = which !== "events";
+    el.panel.hidden = which !== "events" && which !== "timeline";
     el.actions.hidden = which !== "actions";
     state.keys.actions = "";
     el.social.hidden = which !== "social";
@@ -1607,6 +2016,7 @@
     // main.jsx: on a phone a bottom panel opening closes the advisor and the country panel.
     if (which && byHand && phone()) setDrawer(null, true);
     el.eventsBtn.classList.toggle("on", which === "events");
+    $("gxSkipBtn").classList.toggle("on", which === "timeline");
     Array.prototype.forEach.call(el.root.querySelectorAll("[data-pop]"), function (b) { b.classList.toggle("on", b.getAttribute("data-pop") === which); });
     renderPanel(state.T);
     renderDip(state.T);
@@ -1645,7 +2055,7 @@
       var left = Math.max(1, g[2] - Math.floor((k + i) / 5));
       var strength = Math.max(18, 92 - k * 4 - i * 3);
       var lit = state.tool === "Select" && i === 0;
-      html += '<div class="wr-general wr-tray' + (lit ? " lit" : "") + '"><span class="wr-num"' + (lit ? ' style="background:#c9a54c;color:#1c1608"' : "") + ">" + (i + 1) + '</span><div class="who"><b>' + g[0] + ' <span class="wr-stencil army">' + g[1] + '</span></b><div class="wr-soft">' + left + " formations at " + strength + "% · holding the line before " + esc(next) + '</div><div class="orders">Ordered: ' + (i % 2 ? "Dig in" : "Fall back toward " + esc(after)) + '</div></div><button type="button" class="wr-link">Pick</button></div>';
+      html += '<div class="wr-general wr-tray' + (lit ? " lit" : "") + '"><span class="wr-num"' + (lit ? ' style="background:#c9a54c;color:#1c1608"' : "") + ">" + (i + 1) + '</span><div class="who"><b>' + g[0] + ' <span class="wr-stencil army">' + g[1] + '</span></b><div class="wr-soft">' + left + " formations at " + strength + "% · holding the line near " + esc(next) + '</div><div class="orders">Ordered: ' + (i % 2 ? "Dig in" : "Fall back toward " + esc(after)) + '</div></div><button type="button" class="wr-link">Pick</button></div>';
     });
     html += heading("Weather ahead") + '<div class="wr-soft" style="margin-top:0.3rem">' + WEATHER[Math.min(WEATHER.length - 1, Math.floor(k / 4))] + ".</div>";
     html += heading("Planned movements");
@@ -1660,11 +2070,16 @@
     }).join("") : '<div class="wr-soft" style="font-size:0.78rem;line-height:1.45">Speak to your generals. Tell them what you want done and they will say what they think of it; an order they accept is carried out when time next passes.</div>';
     el.warLines.scrollTop = el.warLines.scrollHeight;
   }
+  // warRoomRail.jsx: the count is the troops picked out (Select picks the 1st Army's); the orders that need
+  // troops wait until some are picked, and Aircraft until the side has air units.
+  var NEEDS_TROOPS = ["Route", "Advance", "Dig in", "Hold", "Fall back", "Release", "Transport"];
   function renderRail() {
-    var html = '<span class="wr-rivet" style="left:0.25rem"></span><span class="wr-rivet" style="right:0.25rem"></span><span class="wr-stencil lbl">Troops</span><span class="wr-count">14</span><span class="wr-rule"></span>';
+    var picked = state.tool === "Select" ? GENERALS[0][2] : 0;
+    var html = '<span class="wr-rivet" style="left:0.25rem"></span><span class="wr-rivet" style="right:0.25rem"></span><span class="wr-stencil lbl">Troops</span><span class="wr-count' + (picked ? " on" : "") + '">' + picked + '</span><span class="wr-rule"></span>';
     RAIL.forEach(function (key) {
       if (!key) { html += '<span class="wr-rule"></span>'; return; }
-      html += '<button type="button" class="wr-railkey' + (state.tool === key[0] ? " on" : "") + '" data-tool="' + key[0] + '"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + key[1] + "</svg>" + key[0] + "</button>";
+      var off = (!picked && NEEDS_TROOPS.indexOf(key[0]) >= 0) || key[0] === "Aircraft";
+      html += '<button type="button" class="wr-railkey' + (state.tool === key[0] ? " on" : "") + (off ? " off" : "") + '" data-tool="' + key[0] + '"' + (off ? ' aria-disabled="true"' : "") + '><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + key[1] + "</svg>" + key[0] + "</button>";
     });
     el.rail.innerHTML = html;
   }
@@ -1748,7 +2163,7 @@
     else if (!state.manual.war) setWar(step === "korea" && T > 2.3 && T < 2.9);
     var date = dateAt(T, state.korea);
     if (changed("date", isoDate(date))) {
-      el.date.textContent = step === "yours" ? "Your turn" : longDate(date);
+      el.date.textContent = step === "yours" ? "Your turn" : phone() ? MONTHS[date.getUTCMonth()].slice(0, 3) + " " + ordinal(date.getUTCDate()) + ", " + date.getUTCFullYear() : longDate(date);
       el.session.textContent = "Modern Day / France / " + isoDate(date);
     }
     if (state.drawer === "advisor") renderAdvisor(T);
@@ -1759,7 +2174,7 @@
     renderSocial(T);
     socialBadge(T);
     var unread = CHATS.filter(function (c, i) { return threadUnread(i, T); }).length;
-    el.chatBadge.hidden = !unread;
+    el.chatBadge.hidden = !unread || state.pop === "chat";
     el.chatBadge.textContent = unread > 9 ? "9+" : String(unread);
     if (state.war) renderWar(T, state.korea);
     if (advanced.open) renderAdvanced(T);
@@ -1797,11 +2212,20 @@
     el.flagBtn.addEventListener("click", function () { setDrawer(state.drawer === "country" ? null : "country", true); });
     Array.prototype.forEach.call(el.root.querySelectorAll("[data-close]"), function (b) { b.addEventListener("click", function () { setDrawer(null, true); }); });
     $("gxClear").addEventListener("click", function () { state.extra = []; state.keys.advisor = ""; renderAdvisor(state.T); });
-    // advisor.jsx: a touch screen's placeholder leaves out the Shift+Enter hint.
-    if (window.matchMedia && window.matchMedia("(pointer: coarse)").matches) el.ask.querySelector("textarea").placeholder = "Ask your advisor…";
+    el.ask.querySelector("textarea").addEventListener("input", syncComposer);
+    $("gxRecipient").addEventListener("click", function () {
+      var list = $("gxRecipientList");
+      list.hidden = !list.hidden;
+      $("gxRecipient").setAttribute("aria-expanded", String(!list.hidden));
+      $("gxRecipient").querySelector(".chev").textContent = list.hidden ? "▾" : "▴";
+    });
+    $("gxContact").addEventListener("click", function () { $("gxRecipientList").hidden = false; $("gxRecipient").setAttribute("aria-expanded", "true"); $("gxRecipient").querySelector(".chev").textContent = "▴"; });
+    el.view.addEventListener("click", dossierClick);
+    el.view.addEventListener("input", dossierInput);
+    el.view.addEventListener("change", dossierInput);
     el.ask.addEventListener("submit", ask);
     el.ask.querySelector("textarea").addEventListener("keydown", function (event) { if (event.key === "Enter" && !event.shiftKey) ask(event); });
-    el.country.querySelector(".gx-subtabs").addEventListener("click", function (event) {
+    el.country.querySelector(".gx-dos-tabs").addEventListener("click", function (event) {
       var button = event.target.closest("[data-view]");
       if (button) { setView(button.getAttribute("data-view"), true); renderCountry(state.T); }
     });
@@ -1813,31 +2237,87 @@
     $("gxPanelClose").addEventListener("click", function () { setPop(null, true); });
     el.panelBody.addEventListener("click", function (event) {
       var go = event.target.closest("[data-go]");
-      if (!go) return;
+      var tag = event.target.closest("[data-etag]");
+      if (tag) { events.filter[tag.getAttribute("data-etag")] = !events.filter[tag.getAttribute("data-etag")]; state.keys.panel = ""; renderPanel(state.T); return; }
+      if (!go || go.classList.contains("off")) return;
+      if (state.pop === "timeline") setPop(null, true);
       opts.goTo(go.getAttribute("data-go") === "end" ? STEPS.length - 1 : Math.floor(state.T) + 1);
     });
-    // » is the time skip: on to the next chapter.
-    $("gxSkipBtn").addEventListener("click", function () { opts.goTo(Math.floor(state.T) + 1); });
+    el.panelSub.addEventListener("click", function (event) {
+      var turn = event.target.closest("[data-turn]");
+      if (!turn || turn.disabled) return;
+      var count = eventTurns(state.T).length;
+      var at = events.turn < 0 || events.turn >= count ? count - 1 : events.turn;
+      events.turn = Math.max(0, Math.min(count - 1, at + +turn.getAttribute("data-turn")));
+      state.manual.pop = "events";
+      state.keys.panel = "";
+      renderPanel(state.T);
+    });
+    var timelineField = function (event) {
+      var key = event.target.getAttribute && event.target.getAttribute("data-field");
+      if (!key) return;
+      fields[key] = event.target.value;
+      state.keys.panel = "";
+      renderPanel(state.T);
+    };
+    el.panelBody.addEventListener("input", timelineField);
+    el.panelBody.addEventListener("change", timelineField);
+    // » opens the Timeline (time.jsx TimelineSkipPanel); any length skips on to the next chapter.
+    $("gxSkipBtn").addEventListener("click", function () { setPop(state.pop === "timeline" ? null : "timeline", true); });
     var menuButton = $("gxMenuBtn");
     var menu = $("gxMenu");
     menuButton.addEventListener("click", function () { menu.hidden = !menu.hidden; menuButton.setAttribute("aria-expanded", String(!menu.hidden)); });
     var search = $("gxSearch");
-    search.addEventListener("click", function () {
+    var searchInput = search.querySelector("input");
+    var searchList = search.querySelector(".gx-search-list");
+    var closeSearch = function () { search.classList.remove("open", "listing"); searchInput.value = ""; searchInput.hidden = true; searchList.hidden = true; };
+    search.addEventListener("click", function (event) {
+      if (event.target.closest(".gx-search-ic") && search.classList.contains("open")) { closeSearch(); return; }
+      var hit = event.target.closest("[data-place]");
+      if (hit) { closeSearch(); return; }
       if (search.classList.contains("open")) return;
       search.classList.add("open");
-      var input = search.querySelector("input");
-      input.hidden = false;
-      input.focus();
+      searchInput.hidden = false;
+      searchInput.focus();
     });
-    search.querySelector("input").addEventListener("blur", function (event) { if (!event.target.value) { search.classList.remove("open"); event.target.hidden = true; } });
+    // The places it finds, opening upwards from the bar (search.jsx): countries, cities and regions on the map.
+    var SEARCH_PLACES = [["France", "Country", "globe"], ["Paris", "Île-de-France · France", "city"], ["Strasbourg", "Grand Est · France", "city"], ["Germany", "Country", "globe"], ["Berlin", "Berlin · Germany", "city"], ["Russia", "Country", "globe"], ["Moscow", "Moscow · Russia", "city"], ["Plesetsk", "Arkhangelsk Oblast · Russia", "pin"], ["United States", "Country", "globe"], ["Washington", "District of Columbia · United States", "city"], ["Montana", "United States", "region"], ["China", "Country", "globe"], ["Beijing", "Beijing · China", "city"], ["North Korea", "Country", "globe"], ["Pyongyang", "Pyongyang · North Korea", "city"], ["South Korea", "Country", "globe"], ["Seoul", "Seoul · South Korea", "city"], ["Busan", "Busan · South Korea", "city"], ["Daejeon", "Daejeon · South Korea", "city"]];
+    var SEARCH_ICONS = { globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>', city: '<path d="M4 21V9l6-4v16M10 21V3l10 4v14M4 21h16"/>', region: '<path d="M3 7l6-3 6 3 6-3v13l-6 3-6-3-6 3z"/>', pin: '<path d="M12 21s-6.5-6.1-6.5-11a6.5 6.5 0 0 1 13 0c0 4.9-6.5 11-6.5 11z"/><circle cx="12" cy="10" r="2.3"/>' };
+    searchInput.addEventListener("input", function () {
+      var q = searchInput.value.trim().toLowerCase();
+      var hits = q ? SEARCH_PLACES.filter(function (p) { return p[0].toLowerCase().indexOf(q) >= 0; }).slice(0, 7) : [];
+      search.classList.toggle("listing", hits.length > 0);
+      searchList.hidden = !hits.length;
+      searchInput.placeholder = "Search place...";
+      search.classList.toggle("missing", !!q && !hits.length);
+      searchList.innerHTML = hits.map(function (p, i) { return '<button type="button" class="' + (i ? "" : "hi") + '" data-place="' + esc(p[0]) + '"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' + SEARCH_ICONS[p[2]] + "</svg><b>" + esc(p[0]) + "</b><small>" + esc(p[1]) + "</small>" + (p[2] === "globe" ? "" : "<em>In world</em>") + "</button>"; }).join("");
+    });
+    searchInput.addEventListener("keydown", function (event) { if (event.key === "Escape" || event.key === "Enter") closeSearch(); });
+    searchInput.addEventListener("blur", function () { setTimeout(function () { if (!searchInput.value && document.activeElement !== searchInput) closeSearch(); }, 150); });
+    // Political / Diplomatic: the story's map takes France's stance towards each country.
+    var mapMode = $("gxMapMode");
+    mapMode.addEventListener("click", function (event) {
+      var button = event.target.closest("[data-mm]");
+      if (!button) return;
+      var mode = button.getAttribute("data-mm");
+      var legend = mapMode.querySelector(".gx-mm-legend");
+      if (mode === "hide") { legend.hidden = true; return; }
+      Array.prototype.forEach.call(mapMode.querySelectorAll(".gx-mm-bar button"), function (b) { b.classList.toggle("on", b.getAttribute("data-mm") === mode); });
+      legend.hidden = mode !== "diplomatic";
+      if (opts.mapMode) opts.mapMode(mode);
+    });
     el.actions = $("gxActions");
     el.actions.addEventListener("click", actionsClick);
     el.actions.addEventListener("input", function (event) {
       var key = event.target.getAttribute("data-field");
       if (!key) return;
       fields[key] = event.target.value;
-      if (key === "pj-search") renderActions(state.T);
+      if (key === "pj-sort") projects.sort = event.target.value;
+      if (key === "pj-search" || key === "pj-sort") { state.keys.actions = ""; renderActions(state.T); }
       else syncSend();
+    });
+    el.actions.addEventListener("change", function (event) {
+      if (event.target.getAttribute && event.target.getAttribute("data-field") === "pj-sort") { projects.sort = event.target.value; fields["pj-sort"] = event.target.value; state.keys.actions = ""; renderActions(state.T); }
     });
     el.actions.addEventListener("keydown", function (event) {
       var key = event.target.getAttribute && event.target.getAttribute("data-field");
@@ -1850,12 +2330,20 @@
     el.socialBadge = $("gxSocialBadge");
     el.social.addEventListener("click", socialClick);
     el.social.addEventListener("input", function (event) {
-      if (event.target.getAttribute("data-field") !== "rs-input") return;
-      fields["rs-input"] = event.target.value;
-      if (social.posted) { social.posted = false; renderSocial(state.T); }
+      var key = event.target.getAttribute("data-field");
+      if (!key) return;
+      fields[key] = event.target.value;
+      if (key === "rs-search") { state.keys.social = ""; renderSocial(state.T); return; }
+      if (key === "rs-input" && social.posted) { social.posted = false; renderSocial(state.T); }
       syncPost();
     });
     el.social.addEventListener("keydown", function (event) {
+      if (event.target.getAttribute("data-field") === "rs-search" && (event.key === "Enter" || event.key === "Escape")) {
+        var first = event.key === "Enter" && el.social.querySelector(".rs-hit");
+        if (first) socialClick({ target: first }); else { fields["rs-search"] = ""; state.keys.social = ""; renderSocial(state.T); }
+        event.preventDefault();
+        return;
+      }
       if (event.target.getAttribute("data-field") !== "rs-input" || event.key !== "Enter" || event.shiftKey || (window.matchMedia && window.matchMedia("(pointer: coarse)").matches)) return;
       event.preventDefault();
       socialClick({ target: el.social.querySelector('[data-rs="post"]') });
@@ -1893,7 +2381,7 @@
     el.warAsk.addEventListener("submit", warSay);
     el.rail.addEventListener("click", function (event) {
       var key = event.target.closest("[data-tool]");
-      if (!key) return;
+      if (!key || key.classList.contains("off")) return;
       state.tool = state.tool === key.getAttribute("data-tool") ? "" : key.getAttribute("data-tool");
       renderRail();
       state.keys.war = "";
