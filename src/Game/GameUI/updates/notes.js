@@ -73,6 +73,20 @@ const NEW_UPDATES = [
     ],
   },
   {
+    id: "2026-11-native-slower-welcome",
+    kind: "minor",
+    date: "2026-11-06",
+    banners: [
+      {
+        title: "A slower welcome",
+        items: [
+          "The first-time setup's greeting now stays on each language for about four seconds, and fades one out before the next fades in.",
+          "The Diplomatic map mode's button turns blue when it is chosen, like the other map modes.",
+        ],
+      },
+    ],
+  },
+  {
     // "get rid of this and instead have the country send you a message requesting assistance and the buttons appear
     // there. it should not explain what happens if you choose each option as that breaks immersion" (the owner,
     // 2026-11-06): the card over the map is gone; the ally that was attacked asks in a message (AI/gameplay.js) and
