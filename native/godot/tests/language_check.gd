@@ -112,16 +112,37 @@ func _run() -> void:
 	var reply: Dictionary = await main.engine.request("translation.languages")
 	var options: Array = reply.get("result", {}).get("options", []) if reply.get("ok", false) else []
 	var codes: Array = options.map(func(entry: Dictionary) -> String: return str(entry.get("code", "")))
-	_check("the interface is offered in the 28 languages a pack or a model covers", codes.size() == 28, str(codes.size()))
+	_check("the interface is offered in the 36 languages a pack or a model covers", codes.size() == 36, str(codes.size()))
 	_check("Czech, Finnish, Danish, Hungarian and Romanian are offered through their models", ["cs", "fi", "da", "hu", "ro"].all(func(code: String) -> bool: return codes.has(code)))
-	_check("languages with neither a pack nor a model are not offered for the interface", not codes.has("sw") and not codes.has("he") and not codes.has("el"))
+	_check("Latvian, Lithuanian, Slovak, Estonian, Greek, Hebrew, Irish and Maltese are offered through their models", ["lv", "lt", "sk", "et", "el", "he", "ga", "mt"].all(func(code: String) -> bool: return codes.has(code)), " ".join(PackedStringArray(codes)))
+	_check("they come last, after the fifty, in beta's order", " ".join(PackedStringArray(codes.slice(30))) == "lv lt sk et ga mt", " ".join(PackedStringArray(codes.slice(30))))
+	_check("languages with neither a pack nor a model are not offered for the interface", not codes.has("sw") and not codes.has("am") and not codes.has("yo"))
+	var sizes := {}
+	for code in ["lv", "lt", "sk", "et", "el", "he", "ga", "mt", "sv"]:
+		var each: Dictionary = (await main.engine.request("translation.offer", {"code": code})).get("result", {})
+		sizes[code] = "%s %s%s%s" % [str(each.get("native", "")), str(each.get("size", "")), " rtl" if bool(each.get("rtl", false)) else "", " packed" if bool(each.get("packed", false)) else ""]
+	_check("each new model is its converted Opus-MT download, at beta's size", JSON.stringify(sizes) == JSON.stringify({"lv": "Latviešu 139 MB", "lt": "Lietuvių 139 MB", "sk": "Slovenčina 140 MB", "et": "Eesti 138 MB", "el": "Ελληνικά 148 MB", "he": "עברית 149 MB rtl", "ga": "Gaeilge 135 MB", "mt": "Malti 134 MB", "sv": "Svenska 135 MB packed"}), JSON.stringify(sizes))
+	var heard := {}
+	for code in ["lv", "lt", "sk", "et", "mt", "el", "he", "ga"]:
+		heard[code] = str((await main.engine.request("speech.engine", {"language": code})).get("result", {}).get("onDevice", ""))
+	_check("the microphone's on-device model hears every new language but Irish", ["lv", "lt", "sk", "et", "mt", "el", "he"].all(func(code: String) -> bool: return heard[code] == "whisper") and heard["ga"] == "", JSON.stringify(heard))
+	var codes_greeted: Array = FirstSetup.GREETINGS.map(func(entry: Array) -> String: return str(entry[0]))
+	_check("the first-time setup greets in the eight new languages too", codes_greeted.size() == 36 and " ".join(PackedStringArray(codes_greeted.slice(28))) == "el he sk lt lv et ga mt", " ".join(PackedStringArray(codes_greeted)))
+	var setup := FirstSetup.new()
+	var hebrew: VBoxContainer = setup._greeting_words(codes_greeted.find("he"))
+	var latvian: VBoxContainer = setup._greeting_words(codes_greeted.find("lv"))
+	var hebrew_hello := hebrew.get_child(0) as Label
+	_check("Hebrew's greeting reads right to left, Latvian's left to right", hebrew_hello.text == "שלום" and hebrew_hello.text_direction == Control.TEXT_DIRECTION_RTL and (hebrew.get_child(1) as Label).text == "ברוכים הבאים" and (latvian.get_child(0) as Label).text_direction == Control.TEXT_DIRECTION_LTR and (latvian.get_child(1) as Label).text == "Laipni lūdzam")
+	hebrew.free()
+	latvian.free()
+	setup.free()
 	var values: Dictionary = (await main.engine.request("settings.values")).get("result", {})
 	var settings := SettingsWorkspace.new()
 	settings._values = values
 	var listed: Array = settings._language_options("", "en", true)[0]
 	var labels: Array = listed.map(func(pair: Array) -> String: return str(pair[1]))
-	_check("Settings' UI language list holds those 28, with no ✓ marks", listed.size() == 28 and labels.has("Czech — Čeština") and labels.has("Finnish — Suomi") and not labels.any(func(text: String) -> bool: return text.contains("✓")), "%d %s" % [listed.size(), ", ".join(PackedStringArray(labels.slice(0, 6)))])
-	_check("the AI chat language list keeps all fifty", (settings._language_options("", "en", false)[0] as Array).size() == 50)
+	_check("Settings' UI language list holds those 36, with no ✓ marks", listed.size() == 36 and labels.has("Latvian — Latviešu") and labels.has("Hebrew — עברית") and labels.has("Czech — Čeština") and labels.has("Finnish — Suomi") and not labels.any(func(text: String) -> bool: return text.contains("✓")), "%d %s" % [listed.size(), ", ".join(PackedStringArray(labels.slice(0, 6)))])
+	_check("the AI chat language list keeps all fifty and the six more", (settings._language_options("", "en", false)[0] as Array).size() == 56)
 	settings.free()
 
 	var offer: Dictionary = (await main.engine.request("translation.offer", {"code": "cs"})).get("result", {})
@@ -164,6 +185,24 @@ func _run() -> void:
 	await _until(func() -> bool: return not str(switching[0]).is_empty(), 10.0)
 	_check("back to English needs no prompt", i18n.language == "en" and not i18n.card_shown())
 
+	switching[0] = ""
+	run_switch.call("he")
+	await _until(func() -> bool: return i18n.card_shown(), 10.0)
+	_check("Hebrew asks for its model the same way", i18n.card_text() == "Playing in עברית needs a one-time download of its translation model (149 MB).", i18n.card_text())
+	await _shoot("language-04-hebrew-prompt")
+	_press(i18n, "Download")
+	_check("once downloaded the game is in Hebrew", await _until(func() -> bool: return str(switching[0]) == "he", 20.0) and i18n.language == "he", "%s %s" % [switching[0], i18n.language])
+	await _frames(3)
+	var flipped := _rtl_rows(main.menu)
+	_check("Hebrew is laid out right to left, as Arabic is", i18n.rtl and flipped > 0, "%d rows flipped" % flipped)
+	TranslationServer.translate(unpacked)
+	_check("Hebrew's own model translates on the device", await _until(func() -> bool: return i18n.book.translate(unpacked) == "HE·" + unpacked, 120.0), str(i18n.book.translate(unpacked)))
+	await _shoot("language-05-hebrew")
+	switching[0] = ""
+	run_switch.call("en")
+	await _until(func() -> bool: return not str(switching[0]).is_empty(), 10.0)
+	_check("back in English the layout is left to right again", i18n.language == "en" and not i18n.rtl and _rtl_rows(main.menu) == 0)
+
 	await i18n.set_language("da")
 	i18n.active = false
 	var kept: Array = [false]
@@ -179,6 +218,15 @@ func _run() -> void:
 
 	_say("%d failures" % failures.size())
 	_finish(0 if failures.is_empty() else 1)
+
+
+func _rtl_rows(node: Node) -> int:
+	var count := 0
+	if node is Control and (node as Control).layout_direction == Control.LAYOUT_DIRECTION_RTL:
+		count += 1
+	for child in node.get_children():
+		count += _rtl_rows(child)
+	return count
 
 
 func _finish(code: int) -> void:

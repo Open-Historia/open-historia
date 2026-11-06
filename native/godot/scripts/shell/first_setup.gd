@@ -14,7 +14,10 @@ const GREETINGS := [
 	["id", "Halo", "Selamat datang"], ["uk", "Привіт", "Ласкаво просимо"], ["vi", "Xin chào", "Chào mừng"], ["th", "สวัสดี", "ยินดีต้อนรับ"],
 	["sv", "Hej", "Välkommen"], ["bn", "নমস্কার", "স্বাগতম"], ["ro", "Salut", "Bun venit"], ["hu", "Szia", "Üdvözöljük"],
 	["ur", "آداب", "خوش آمدید"], ["da", "Goddag", "Velkommen"], ["cs", "Ahoj", "Vítejte"], ["fi", "Hei", "Tervetuloa"],
+	["el", "Γεια σας", "Καλώς ήρθατε"], ["he", "שלום", "ברוכים הבאים"], ["sk", "Ahoj", "Vitajte"], ["lt", "Labas", "Sveiki atvykę"],
+	["lv", "Sveiki", "Laipni lūdzam"], ["et", "Tere", "Tere tulemast"], ["ga", "Dia duit", "Fáilte"], ["mt", "Bonġu", "Merħba"],
 ]
+const RTL_GREETINGS := ["ar", "he", "fa", "ur"]
 const BG := Color("#0f0f11")
 const INK := Color("#f4f4f5")
 const MUTED := Color(231 / 255.0, 231 / 255.0, 234 / 255.0, 0.62)
@@ -179,13 +182,18 @@ func _greeting_words(index: int) -> VBoxContainer:
 	var words := VBoxContainer.new()
 	words.add_theme_constant_override("separation", 6)
 	words.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var direction := Control.TEXT_DIRECTION_RTL if str(entry[0]) in RTL_GREETINGS else Control.TEXT_DIRECTION_LTR
 	var hello := UI.label(str(entry[1]), 74, UiTheme.pick("text", INK), 800, "Arial", -2)
 	hello.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	hello.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+	hello.text_direction = direction
+	hello.language = str(entry[0])
 	words.add_child(hello)
 	var welcome := UI.label(str(entry[2]), 22, UiTheme.pick("muted", SOFT), 600)
 	welcome.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	welcome.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+	welcome.text_direction = direction
+	welcome.language = str(entry[0])
 	words.add_child(welcome)
 	words.set_meta("greeting", str(entry[0]))
 	return words
