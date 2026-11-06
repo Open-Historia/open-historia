@@ -4849,6 +4849,54 @@ class Conversation extends VBoxContainer:
 		await refresh_peace()
 
 
+	func _call_card(asked: Dictionary) -> Control:
+		var id := ChatPanel.t(asked.get("id", ""))
+		var holder := MarginContainer.new()
+		holder.add_theme_constant_override("margin_top", 6)
+		holder.add_theme_constant_override("margin_bottom", 6)
+		var column := VBoxContainer.new()
+		column.add_theme_constant_override("separation", 6)
+		var error := ChatPanel.t(peace_errors.get(id, ""))
+		if not error.is_empty():
+			column.add_child(UI.wrapped(error, 12, Color("#fca5a5")))
+		if asked.get("open", false) == true:
+			var busy: bool = peace_busy.get(id, false)
+			var buttons := HBoxContainer.new()
+			buttons.add_theme_constant_override("separation", 8)
+			var honour := ChatPanel.solid_button("Honour the alliance", 12, Color("#04141a"), 800, UI.ACCENT, UI.ACCENT, UI.ACCENT.lightened(0.08), UI.ACCENT, 8, Vector4(10, 6, 10, 6))
+			var refuse := ChatPanel.solid_button("Break the treaty", 12, Color8(231, 233, 234), 800, UiTheme.pick("hover", Color(1, 1, 1, 0.06)), Color(1, 1, 1, 0.18), UiTheme.pick("line", Color(1, 1, 1, 0.1)), Color(1, 1, 1, 0.26), 8, Vector4(10, 6, 10, 6))
+			for button in [honour, refuse]:
+				button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+				button.custom_minimum_size.y = 37
+				button.disabled = busy
+				buttons.add_child(button)
+			honour.pressed.connect(func() -> void: answer_call(asked, "honour"))
+			refuse.pressed.connect(func() -> void: answer_call(asked, "refuse"))
+			column.add_child(buttons)
+		else:
+			column.add_child(UI.label(ChatPanel.t(asked.get("state", "")), 11, Color(1, 1, 1, 0.5), 700))
+		holder.add_child(column)
+		return holder
+
+
+	func answer_call(asked: Dictionary, op: String) -> void:
+		var id := ChatPanel.t(asked.get("id", ""))
+		if id.is_empty() or peace_busy.get(id, false):
+			return
+		peace_busy[id] = true
+		peace_errors.erase(id)
+		render_messages(false)
+		var reply := await panel.engine.request("country.answer", {"op": op, "ref": id})
+		peace_busy.erase(id)
+		var result := ChatPanel.d(reply.get("result", {})) if reply.get("ok", false) else {"ok": false, "said": str(reply.get("error", "That could not be done."))}
+		if not result.get("ok", false):
+			peace_errors[id] = ChatPanel.t(result.get("said", "That could not be done."))
+			render_messages(false)
+			return
+		panel.world_changed.emit()
+		await refresh_peace()
+
+
 	func render_messages(scroll_down: bool) -> void:
 		if chat_id.is_empty() or _box == null:
 			return
@@ -4920,6 +4968,18 @@ class Conversation extends VBoxContainer:
 				peace_by_message[message_id] = placed
 			elif record.get("open", false) == true and not (not message_id.is_empty() and waiting.has(message_id)):
 				peace_stranded.append(record)
+		var present := {}
+		for message in source:
+			present[ChatPanel.t(ChatPanel.d(message).get("id", ""))] = true
+		var calls_by_message := {}
+		var calls_stranded: Array = []
+		for asked in ChatPanel.a(peace_info.get("calls", [])):
+			var record := ChatPanel.d(asked)
+			var message_id := ChatPanel.t(record.get("messageId", ""))
+			if not message_id.is_empty() and present.has(message_id):
+				calls_by_message[message_id] = record
+			elif record.get("open", false) == true and record.get("withAlly", false) == true:
+				calls_stranded.append(record)
 		var area := _area_width()
 		for i in range(window_entries.size()):
 			var message := ChatPanel.d(window_entries[i]["msg"])
@@ -4953,12 +5013,16 @@ class Conversation extends VBoxContainer:
 				_box.add_child(_demand_card(ChatPanel.d(demand)))
 			for offer in ChatPanel.a(peace_by_message.get(ChatPanel.t(message.get("id", "")), [])):
 				_box.add_child(_peace_card(ChatPanel.d(offer)))
+			if calls_by_message.has(ChatPanel.t(message.get("id", ""))):
+				_box.add_child(_call_card(ChatPanel.d(calls_by_message[ChatPanel.t(message.get("id", ""))])))
 		for poll in ChatPanel.a(chat.get("polls", [])):
 			_box.add_child(_poll_card(ChatPanel.d(poll)))
 		for demand in stranded:
 			_box.add_child(_demand_card(ChatPanel.d(demand)))
 		for offer in peace_stranded:
 			_box.add_child(_peace_card(ChatPanel.d(offer)))
+		for asked in calls_stranded:
+			_box.add_child(_call_card(ChatPanel.d(asked)))
 		var list := countries()
 		var lifecycle_thinking := is_lifecycle_conversation() and loading and speaking.is_empty() and staged_speaker.is_empty() and list.size() > 1
 		var group_thinking := is_group() and not is_lifecycle_conversation() and loading and speaking.is_empty()

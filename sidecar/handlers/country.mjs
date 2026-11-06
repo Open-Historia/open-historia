@@ -20,7 +20,6 @@ const EXTRA_MODULES = Object.freeze({
   warSettings: "ctWarSettings",
   attrition: "ctAttrition",
   warResources: "ctWarResources",
-  alliances: "ctAlliances",
   peaceTerms: "ctPeaceTerms",
   warWeariness: "ctWarWeariness",
   afterActionData: "ctAfterActionData",
@@ -450,35 +449,6 @@ export const answerDiplomacy = async (ctx, op, ref, terms = null, where = {}) =>
   } catch (error) {
     return { ok: false, error: cleanText(error?.message) || "That could not be done.", accepted: false, to: "" };
   }
-};
-
-export const warPeaceState = async (ctx) => {
-  const extras = await loadExtras(ctx);
-  const [world, game] = await Promise.all([
-    ctx.engine.readJson(ctx.engine.JSON_URLS.world, { defaultValue: {}, force: false }).catch(() => ({})),
-    ctx.engine.gameState.readGameData({ force: false }).catch(() => ({})),
-  ]);
-  const country = cleanText(game?.country);
-  if (!country) return { country: "", waiting: 0, calls: [] };
-  const calls = extras.alliances.openCallsFor(asArray(world?.callsToArms), country);
-  const reputation = extras.alliances.TREATY_BROKEN_REPUTATION;
-  return {
-    country,
-    waiting: calls.length,
-    calls: calls.map((call) => ({
-      id: cleanText(call.id),
-      title: "Call to arms",
-      yes: "Honour the alliance",
-      no: "Break the treaty",
-      yesOp: "honour",
-      noOp: "refuse",
-      lines: [
-        { text: `${call.defender} has been attacked by ${asArray(call.attackers).join(", ") || "an enemy"} and calls on you to defend it.`, tone: "main" },
-        ...(call.via?.title ? [{ text: `You are bound by ${call.via.title}.`, tone: "soft" }] : []),
-        { text: `Honouring it puts you at war. Breaking the treaty costs ${reputation} of your reputation, and ends it. Left unanswered, it counts as broken.`, tone: "soft", gap: true },
-      ],
-    })),
-  };
 };
 
 export const register = (ctx) => {
@@ -1966,7 +1936,6 @@ export const register = (ctx) => {
       const answer = await answerDiplomacy(ctx, op, ref);
       return { ok: answer.ok, said: answer.ok ? "" : refusalText(answer.error) };
     },
-    "country.warpeace": async () => warPeaceState(ctx),
     "country.width": async ({ width = 0 } = {}) => {
       const next = Math.round(Number(width) || 0);
       if (next > 0) {

@@ -496,7 +496,8 @@ func _run() -> void:
 		var made: Dictionary = offer.get("result", {}) if offer.get("ok", false) else {}
 		if str(made.get("id", "")).is_empty():
 			break
-		await main.hud.war_cards._answer("accept", str(made["id"]))
+		await main.engine.request("country.answer", {"op": "accept", "ref": str(made["id"])})
+		main.hud.world_changed.emit()
 		accepted += 1
 	_check("an offer of peace is accepted from its card", accepted > 0)
 	var gone := await _until(func() -> bool: return not button.visible, 20.0)

@@ -339,6 +339,16 @@ export const register = (ctx) => {
   });
   engine.simulationStatus.subscribeChatGeneration((value) => emit("chat.generating", { generating: value === true }));
 
+  const testRoutes = standIn ? {
+    "chat.test.callAsked": async ({ callId = "", messageId = "" } = {}) => {
+      await gs.mutateWorldState((world) => ({
+        ...world,
+        callsToArms: list(world?.callsToArms).map((call) => (call?.id === callId ? { ...call, messageId: clean(messageId) } : call)),
+      }));
+      return { ok: true };
+    },
+  } : {};
+
   if (standIn) {
     const replies = [
       (who, player) => `${player} will find ${who} a willing partner. Our ministers can meet within the week to set out the terms in writing.`,
@@ -558,8 +568,21 @@ export const register = (ctx) => {
         };
       });
       const myOpenTerms = shown.some((offer) => offer.open && offer.mine);
+      const callStatusText = { honoured: "You answered the call", refused: "You refused", lapsed: "No longer open" };
+      const calls = list(world?.callsToArms)
+        .filter((call) => same(call?.ally, me))
+        .map((call) => ({
+          id: clean(call.id),
+          messageId: clean(call.messageId),
+          defender: clean(call.defender),
+          status: clean(call.status),
+          open: call.status === "open",
+          state: callStatusText[call.status] ?? "",
+          withAlly: Boolean(enemy) && same(call.defender, enemy),
+        }));
       return {
         offers: shown,
+        calls,
         war: war ? { id: clean(war.id), enemy } : null,
         canPropose: Boolean(war) && !myOpenTerms,
         territoryChoices: [
@@ -842,5 +865,6 @@ export const register = (ctx) => {
       storage.setItem(SOUND_KEY, enabled ? "1" : "0");
       return { enabled: Boolean(enabled) };
     },
+    ...testRoutes,
   };
 };
