@@ -30,6 +30,8 @@ func _ready() -> void:
 
 
 func start() -> bool:
+	if OS.get_name() == "Android":
+		return _start_android()
 	var node := OS.get_environment("OH_NODE")
 	if node.is_empty():
 		var bundled := UI.repo_path("runtime/node.exe")
@@ -41,6 +43,43 @@ func start() -> bool:
 	if not override.is_empty():
 		script = override
 	return _sidecar.start(node, PackedStringArray([script]), script.get_base_dir(), {})
+
+
+func _start_android() -> bool:
+	var library := str(ClassDB.class_call_static(&"Sidecar", &"library_dir"))
+	if library.is_empty():
+		_on_diagnostic("[android] the app's native library folder was not found")
+		return false
+	var payload := AndroidPayload.new()
+	add_child(payload)
+	payload.finished.connect(func(error: String) -> void:
+		if payload.extracted:
+			_on_diagnostic("[android] engine files unpacked in %d ms" % payload.elapsed_ms)
+		payload.queue_free()
+		if not error.is_empty():
+			_on_diagnostic("[android] " + error)
+			engine_stopped.emit(error)
+			return
+		_spawn_android(library))
+	payload.begin()
+	return true
+
+
+func _spawn_android(library: String) -> void:
+	var data_root := OS.get_user_data_dir().path_join("data")
+	DirAccess.make_dir_recursive_absolute(data_root)
+	var environment := {
+		"LD_LIBRARY_PATH": library,
+		"HOME": OS.get_user_data_dir(),
+		"TMPDIR": OS.get_cache_dir(),
+		"OH_NATIVE_ROOT": data_root,
+		"OH_RUST_FRONTS_HOST": library.path_join("libohfronts.so"),
+		"OH_DISCORD_PRESENCE": "0",
+	}
+	var script := UI.repo_path("native/sidecar/main.mjs")
+	_on_diagnostic("[android] starting the engine: %s %s" % [library.path_join("libohnode.so"), script])
+	if not _sidecar.start(library.path_join("libohnode.so"), PackedStringArray([script]), script.get_base_dir(), environment):
+		engine_stopped.emit("The game engine could not be started.")
 
 
 func is_ready() -> bool:
@@ -163,6 +202,8 @@ func _deliver(line: String, parsed: Variant) -> void:
 
 
 func _on_diagnostic(line: String) -> void:
+	if OS.get_name() == "Android":
+		print("[engine] ", line)
 	_diagnostics.append(line)
 	if _diagnostics.size() > 400:
 		_diagnostics = _diagnostics.slice(_diagnostics.size() - 200)

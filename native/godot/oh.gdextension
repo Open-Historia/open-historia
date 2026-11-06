@@ -12,8 +12,14 @@ linux.debug.x86_64 = "res://bin/liboh_gdext.so"
 linux.release.x86_64 = "res://bin/liboh_gdext.so"
 macos.debug = "res://bin/liboh_gdext.dylib"
 macos.release = "res://bin/liboh_gdext.dylib"
+android.debug.x86_64 = "res://bin/android/x86_64/liboh_gdext.so"
+android.release.x86_64 = "res://bin/android/x86_64/liboh_gdext.so"
+android.debug.arm64 = "res://bin/android/arm64-v8a/liboh_gdext.so"
+android.release.arm64 = "res://bin/android/arm64-v8a/liboh_gdext.so"
 
 [dependencies]
 
 windows.x86_64 = { "res://bin/WebView2Loader.dll": "" }
 linux.x86_64 = { "res://bin/libohweb.so": "" }
+android.x86_64 = { "res://bin/android/x86_64/libnode.so": "", "res://bin/android/x86_64/libohnode.so": "", "res://bin/android/x86_64/libohfronts.so": "" }
+android.arm64 = { "res://bin/android/arm64-v8a/libnode.so": "", "res://bin/android/arm64-v8a/libohnode.so": "", "res://bin/android/arm64-v8a/libohfronts.so": "" }

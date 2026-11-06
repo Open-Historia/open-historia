@@ -85,3 +85,5 @@ dist-wiki-preview/
 /native/godot/bin/
 /native/sidecar/ohfronts/
 /native/out/
+/native/godot/android_payload/
+/native/android/out/

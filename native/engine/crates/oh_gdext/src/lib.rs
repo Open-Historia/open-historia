@@ -172,6 +172,23 @@ impl Sidecar {
     }
 
     #[func]
+    fn library_dir() -> GString {
+        let maps = std::fs::read_to_string("/proc/self/maps").unwrap_or_default();
+        for line in maps.lines() {
+            let Some(at) = line.find('/') else {
+                continue;
+            };
+            let file = std::path::Path::new(&line[at..]);
+            if file.file_name().and_then(|name| name.to_str()) == Some("liboh_gdext.so") {
+                if let Some(dir) = file.parent() {
+                    return GString::from(dir.to_string_lossy().as_ref());
+                }
+            }
+        }
+        GString::new()
+    }
+
+    #[func]
     fn stop(&mut self) {
         self.stdin = None;
         if let Some(mut child) = self.child.take() {

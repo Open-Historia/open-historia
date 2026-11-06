@@ -51,7 +51,12 @@ struct Api {
 
 const ABI_VERSION: u32 = 2;
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "android")]
+fn load_api() -> Result<Api, String> {
+    Err("web views are not built for Android yet".into())
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
 fn load_api() -> Result<Api, String> {
     unsafe {
         Ok(Api {

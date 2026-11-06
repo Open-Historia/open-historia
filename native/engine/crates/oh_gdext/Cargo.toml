@@ -13,7 +13,7 @@ godot.workspace = true
 ohmap = { path = "../ohmap" }
 ohfronts = { path = "../ohfronts" }
 
-[target.'cfg(not(target_os = "linux"))'.dependencies]
+[target.'cfg(not(any(target_os = "linux", target_os = "android")))'.dependencies]
 ohweb = { path = "../ohweb" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
