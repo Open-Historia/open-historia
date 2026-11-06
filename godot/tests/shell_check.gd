@@ -410,7 +410,7 @@ func _parts() -> void:
 	press.pressed = true
 	Input.parse_input_event(press)
 	await _frames(3)
-	_check("Ctrl+= zooms in one step", is_equal_approx(root.content_scale_factor, pow(1.2, 0.5) * Hotkeys.screen_scale()), str(root.content_scale_factor))
+	_check("Ctrl+= zooms in one step", is_equal_approx(root.content_scale_factor, pow(1.2, 0.5) * Hotkeys.window_scale(Vector2(root.size))), str(root.content_scale_factor))
 	var steps := [[KEY_EQUAL, false, 1.0], [KEY_EQUAL, true, 1.5], [KEY_KP_ADD, false, 2.0], [KEY_MINUS, false, 1.5], [KEY_KP_SUBTRACT, false, 1.0]]
 	var landed: Array = []
 	for step in steps:
@@ -435,7 +435,7 @@ func _parts() -> void:
 	reset.pressed = true
 	Input.parse_input_event(reset)
 	await _frames(3)
-	_check("Ctrl+0 resets the zoom", is_equal_approx(root.content_scale_factor, Hotkeys.screen_scale()) and is_equal_approx(before, Hotkeys.screen_scale()), str(root.content_scale_factor))
+	_check("Ctrl+0 resets the zoom", is_equal_approx(root.content_scale_factor, Hotkeys.window_scale(Vector2(root.size))) and is_equal_approx(before, Hotkeys.window_scale(Vector2(root.size))), str(root.content_scale_factor))
 	var sizes := [[Vector2(1920, 1080), 1.0], [Vector2(1920, 1200), 1.0], [Vector2(1366, 768), 1.0], [Vector2(2560, 1440), 2560.0 / 1920.0], [Vector2(3440, 1440), 1440.0 / 1080.0], [Vector2(3840, 2160), 2.0], [Vector2(5120, 2880), 5120.0 / 1920.0], [Vector2(2160, 3840), 2160.0 / 1920.0]]
 	var off: Array = []
 	for pair in sizes:
@@ -443,6 +443,19 @@ func _parts() -> void:
 			off.append("%s -> %.3f" % [str(pair[0]), Hotkeys.resolution_scale(pair[0])])
 	_check("the interface is as big against the screen on 1440p, ultrawide, 4K and 5K as on 1080p, and never smaller than designed", off.is_empty(), ", ".join(PackedStringArray(off)))
 	_check("this screen's scale is what its resolution asks for", is_equal_approx(Hotkeys.screen_scale(), maxf(Hotkeys.os_scale(), Hotkeys.resolution_scale(Vector2(DisplayServer.screen_get_size(DisplayServer.window_get_current_screen()))))), str(Hotkeys.screen_scale()))
+	var windows := [[Vector2(1440, 900), 1.0], [Vector2(2880, 1920), 2.0], [Vector2(2880, 1800), 2.0], [Vector2(3840, 2160), 2.40625], [Vector2(1920, 1080), 1.203125], [Vector2(1280, 720), 1.0], [Vector2(720, 450), 1.0], [Vector2(390, 844), 1.0], [Vector2(3440, 1440), 1.59375]]
+	var window_off: Array = []
+	for pair in windows:
+		if not is_equal_approx(Hotkeys.window_scale(pair[0]), float(pair[1])):
+			window_off.append("%s -> %.4f" % [str(pair[0]), Hotkeys.window_scale(pair[0])])
+	_check("the interface keeps its proportion to any window bigger than designed, and never shrinks below it", window_off.is_empty(), ", ".join(PackedStringArray(window_off)))
+	var old_size := root.size
+	root.size = Vector2i(2880, 1920)
+	await _frames(3)
+	var grown := root.content_scale_factor
+	root.size = old_size
+	await _frames(3)
+	_check("resizing the window rescales the interface with it", is_equal_approx(grown, 2.0) and is_equal_approx(root.content_scale_factor, Hotkeys.window_scale(Vector2(old_size))), "%.4f then %.4f at %s" % [grown, root.content_scale_factor, str(root.size)])
 	var escapes := [0]
 	hotkeys.escape_pressed.connect(func() -> void: escapes[0] += 1)
 	await _key(KEY_ESCAPE)
