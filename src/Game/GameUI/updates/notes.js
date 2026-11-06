@@ -54,6 +54,23 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // "the hello welcome introduction switches languages about 2 times too fast. also it should fade out the last
+    // language and fade in the new one" (the owner, 2026-11-06, of the native app), then: "make the greeting thing on
+    // the electron apps be the same as on native": a greeting every 4.4 s, 0.6 s in and 0.6 s out (FirstSetup.jsx).
+    id: "2026-11-slower-welcome",
+    kind: "minor",
+    date: "2026-11-06",
+    channel: "beta",
+    banners: [
+      {
+        title: "A slower welcome",
+        items: [
+          "The first-time setup's greeting now stays on each language for about four seconds, and fades one out before the next fades in.",
+        ],
+      },
+    ],
+  },
+  {
     // The owner's file, 2026-11-06: "add this as an ingame song", then "for this one dont actually flatten the
     // loudness, let it be" (runtime/ambientMusic.js aKindOfHope, no `loud` table; public/audio/CREDITS.txt).
     id: "2026-11-a-kind-of-hope",

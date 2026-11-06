@@ -22,7 +22,7 @@ import { switchLanguage } from "../../runtime/translator.js";
 import { DEFAULT_UI_THEME, UI_THEME_PRESETS, selectUiTheme, useUiTheme } from "../../runtime/uiTheme.js";
 import "./firstSetup.css";
 
-const GREETING_MS = 2200;
+const GREETING_MS = 4400;
 
 // What the Default (Original) card shows: the interface's own greys.
 const ORIGINAL_COLORS = { background: "#131315", surface: "#232327", accent: "#D4D4D8" };
