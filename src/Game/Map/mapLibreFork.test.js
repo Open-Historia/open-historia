@@ -1,4 +1,5 @@
-// The game's MapLibre (vendor/maplibre-gl) against what it replaced, where that can be tested without a GPU.
+// The game's MapLibre (the package built from Open-Historia/maplibre-gl-js) against what it replaced, where that can be
+// tested without a GPU.
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -7,17 +8,21 @@ import { build } from "esbuild";
 import { GeoJSONVT as UpstreamTiles } from "@maplibre/geojson-vt";
 import { shippedFile, shippedLibrary } from "./shippedMapLibre.js";
 
-const vendored = (file) => fileURLToPath(new URL(`../../../vendor/maplibre-gl/src/${file}`, import.meta.url));
+const vendored = (file) => fileURLToPath(new URL(`../../../node_modules/maplibre-gl/src/${file}`, import.meta.url));
+
+// MapLibre is built with useDefineForClassFields off (its tsconfig.json, which the package does not carry): with it on,
+// a field a subclass declares is reset after the parent's constructor set it.
+const TSCONFIG = { compilerOptions: { useDefineForClassFields: false } };
 
 // TypeScript with extensionless imports: bundled so Node can load it.
 const load = async (file) => {
-  const { outputFiles } = await build({ entryPoints: [vendored(file)], bundle: true, format: "esm", write: false, logLevel: "silent" });
+  const { outputFiles } = await build({ entryPoints: [vendored(file)], bundle: true, format: "esm", write: false, logLevel: "silent", tsconfigRaw: TSCONFIG });
   return import(`data:text/javascript;base64,${Buffer.from(outputFiles[0].text).toString("base64")}`);
 };
 
 // Several modules in one bundle, for code that compares classes across them.
 const loadTogether = async (contents) => {
-  const { outputFiles } = await build({ stdin: { contents, resolveDir: vendored(""), loader: "ts" }, bundle: true, format: "esm", write: false, logLevel: "silent" });
+  const { outputFiles } = await build({ stdin: { contents, resolveDir: vendored(""), loader: "ts" }, bundle: true, format: "esm", write: false, logLevel: "silent", tsconfigRaw: TSCONFIG });
   return import(`data:text/javascript;base64,${Buffer.from(outputFiles[0].text).toString("base64")}`);
 };
 
@@ -203,10 +208,15 @@ test("a custom layer's projection data is made once a frame, and only for a pass
 
 test("nothing imports the published tile index, and the fork's build settings are in place", () => {
   assert.equal(/^import .*from '@maplibre\/geojson-vt'/m.test(shippedLibrary()), false);
-  const config = JSON.parse(fs.readFileSync(new URL("../../../vendor/maplibre-gl/tsconfig.json", import.meta.url), "utf8"));
-  assert.equal(config.compilerOptions.useDefineForClassFields, false);
-  const vite = fs.readFileSync(new URL("../../../vite.config.ts", import.meta.url), "utf8");
-  assert.ok(vite.includes("vendor/maplibre-gl/entry.js"));
+  const manifest = JSON.parse(fs.readFileSync(new URL("../../../package.json", import.meta.url), "utf8"));
+  for (const field of ["dependencies", "devDependencies"]) {
+    assert.match(manifest[field]["maplibre-gl"], /^https:\/\/github\.com\/Open-Historia\/maplibre-gl-js\/releases\/download\/v[\d.]+-openhistoria\.\d+\//, field);
+  }
+  const lock = JSON.parse(fs.readFileSync(new URL("../../../package-lock.json", import.meta.url), "utf8"));
+  assert.match(lock.packages["node_modules/maplibre-gl"].integrity, /^sha512-/, "pinned by its hash");
+  const installed = JSON.parse(fs.readFileSync(new URL("../../../node_modules/maplibre-gl/package.json", import.meta.url), "utf8"));
+  assert.match(installed.version, /-openhistoria\.\d+$/);
+  assert.match(fs.readFileSync(new URL("./mapLibreSetup.js", import.meta.url), "utf8"), /^setWorkerUrl\(mapLibreWorkerUrl\);$/m);
 });
 
 // Masks kept from source to source are only right while whatever else writes to the stencil says so.
