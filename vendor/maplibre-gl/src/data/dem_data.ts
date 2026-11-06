@@ -1,0 +1,233 @@
+import {RGBAImage} from '../util/image.ts';
+import {warnOnce} from '../util/util.ts';
+import {register} from '../util/web_worker_transfer.ts';
+
+/**
+ * The possible DEM encoding types
+ */
+export type DEMEncoding = 'mapbox' | 'terrarium' | 'custom';
+
+/**
+ * DEMData is a data structure for decoding, backfilling, and storing elevation data for processing in the hillshade shaders
+ * data can be populated either from a png raw image tile or from serialized data sent back from a worker. When data is initially
+ * loaded from a image tile, we decode the pixel values using the appropriate decoding formula, but we store the
+ * elevation data as an Int32 value. we add 65536 (2^16) to eliminate negative values and enable the use of
+ * integer overflow when creating the texture used in the hillshadePrepare step.
+ *
+ * DEMData also handles the backfilling of data from a tile's neighboring tiles. This is necessary because we use a pixel's 8
+ * surrounding pixel values to compute the slope at that pixel, and we cannot accurately calculate the slope at pixels on a
+ * tile's edge without backfilling from neighboring tiles.
+ */
+export class DEMData {
+    private static readonly byteViewCache = new WeakMap<DEMData, Uint8Array>();
+
+    uid: string | number;
+    data: Uint32Array;
+    stride: number;
+    dim: number;
+    min: number;
+    max: number;
+    redFactor: number;
+    greenFactor: number;
+    blueFactor: number;
+    baseShift: number;
+
+    /**
+     * Constructs a `DEMData` object
+     * @param uid - the tile's unique id
+     * @param data - RGBAImage data has uniform 2px padding on all sides: square tile edge size defines stride
+    // and dim is calculated as stride - 4.
+     * @param encoding - the encoding type of the data
+     * @param redFactor - the red channel factor used to unpack the data, used for `custom` encoding only
+     * @param greenFactor - the green channel factor used to unpack the data, used for `custom` encoding only
+     * @param blueFactor - the blue channel factor used to unpack the data, used for `custom` encoding only
+     * @param baseShift - the base shift used to unpack the data, used for `custom` encoding only
+     */
+    constructor(uid: string | number, data: RGBAImage | ImageData, encoding: DEMEncoding, redFactor = 1.0, greenFactor = 1.0, blueFactor = 1.0, baseShift = 0.0) {
+        this.uid = uid;
+        if (data.height !== data.width) throw new RangeError('DEM tiles must be square');
+        if (encoding && !['mapbox', 'terrarium', 'custom'].includes(encoding)) {
+            warnOnce(`"${encoding}" is not a valid encoding type. Valid types include "mapbox", "terrarium" and "custom".`);
+            return;
+        }
+        this.stride = data.height;
+        const dim = this.dim = data.height - 4;
+        this.data = new Uint32Array(data.data.buffer);
+        DEMData.byteViewCache.set(this, new Uint8Array(this.data.buffer));
+        switch (encoding) {
+            case 'terrarium':
+                // unpacking formula for mapzen terrarium:
+                // https://aws.amazon.com/public-datasets/terrain/
+                this.redFactor = 256.0;
+                this.greenFactor = 1.0;
+                this.blueFactor = 1.0 / 256.0;
+                this.baseShift = 32768.0;
+                break;
+            case 'custom':
+                this.redFactor = redFactor;
+                this.greenFactor = greenFactor;
+                this.blueFactor = blueFactor;
+                this.baseShift = baseShift;
+                break;
+            case 'mapbox':
+            default:
+                // unpacking formula for mapbox.terrain-rgb:
+                // https://www.mapbox.com/help/access-elevation-data/#mapbox-terrain-rgb
+                this.redFactor = 6553.6;
+                this.greenFactor = 25.6;
+                this.blueFactor = 0.1;
+                this.baseShift = 10000.0;
+                break;
+        }
+
+        // in order to avoid flashing seams between tiles, here we are initially populating a 2px border of pixels around the image
+        // with the data of the nearest pixel from the image. this data is eventually replaced when the tile's neighboring
+        // tiles are loaded and the accurate data can be backfilled using DEMData#backfillBorder
+        for (let y = -2; y < dim + 2; y++) {
+            const offset = this._idx(0, Math.max(0, Math.min(dim - 1, y)));
+            if (y < 0 || y >= dim) this.data.copyWithin(this._idx(0, y), offset, offset + dim);
+            this.data.fill(this.data[offset], this._idx(-2, y), this._idx(0, y));
+            this.data.fill(this.data[offset + dim - 1], this._idx(dim, y), this._idx(dim + 1, y) + 1);
+        }
+
+        // calculate min/max values
+        const pixels = this._getByteView();
+        this.min = Number.MAX_SAFE_INTEGER;
+        this.max = Number.MIN_SAFE_INTEGER;
+        for (let x = 0; x < dim; x++) {
+            for (let y = 0; y < dim; y++) {
+                const index = this._idx(x, y) * 4;
+                const ele = this._unpackAtIndex(pixels, index);
+                if (ele > this.max) this.max = ele;
+                if (ele < this.min) this.min = ele;
+            }
+        }
+    }
+
+    get(x: number, y: number): number {
+        const pixels = this._getByteView();
+        const index = this._idx(x, y) * 4;
+        return this._unpackAtIndex(pixels, index);
+    }
+
+    sampleBilinear(x: number, y: number): number {
+        const cx = Math.floor(x);
+        const cy = Math.floor(y);
+        if (cx < -1 || cx >= this.dim || cy < -1 || cy >= this.dim) throw new RangeError(`Out of range source coordinates for DEM data. x: ${x}, y: ${y}, dim: ${this.dim}`);
+
+        const pixels = this._getByteView();
+        const index = ((cy + 2) * this.stride + cx + 2) * 4;
+        const strideByteWidth = this.stride * 4;
+        const tx = x - cx;
+        const ty = y - cy;
+        const z00 = this._unpackAtIndex(pixels, index);
+        const z10 = this._unpackAtIndex(pixels, index + 4);
+        const z01 = this._unpackAtIndex(pixels, index + strideByteWidth);
+        const z11 = this._unpackAtIndex(pixels, index + strideByteWidth + 4);
+
+        return (
+            z00 * (1 - tx) * (1 - ty) +
+            z10 * tx * (1 - ty) +
+            z01 * (1 - tx) * ty +
+            z11 * tx * ty
+        );
+    }
+
+    getUnpackVector(): number[] {
+        return [this.redFactor, this.greenFactor, this.blueFactor, this.baseShift];
+    }
+
+    _idx(x: number, y: number): number {
+        if (x < -2 || x >= this.dim + 2 ||  y < -2 || y >= this.dim + 2) throw new RangeError(`Out of range source coordinates for DEM data. x: ${x}, y: ${y}, dim: ${this.dim}`);
+        return (y + 2) * this.stride + (x + 2);
+    }
+
+    unpack(r: number, g: number, b: number): number {
+        return (r * this.redFactor + g * this.greenFactor + b * this.blueFactor - this.baseShift);
+    }
+
+    pack(v: number): {r: number; g: number; b: number} {
+        return packDEMData(v, this.getUnpackVector());
+    }
+
+    getPixels(): RGBAImage {
+        return new RGBAImage({width: this.stride, height: this.stride}, this._getByteView());
+    }
+
+    backfillBorder(borderTile: DEMData, dx: number, dy: number): void {
+        if (this.dim !== borderTile.dim) throw new Error('dem dimension mismatch');
+
+        let xMin = dx * this.dim,
+            xMax = dx * this.dim + this.dim,
+            yMin = dy * this.dim,
+            yMax = dy * this.dim + this.dim;
+
+        switch (dx) {
+            case -1:
+                xMin = xMax - 2;
+                break;
+            case 1:
+                xMax = xMin + 2;
+                break;
+        }
+
+        switch (dy) {
+            case -1:
+                yMin = yMax - 2;
+                break;
+            case 1:
+                yMax = yMin + 2;
+                break;
+        }
+
+        const ox = -dx * this.dim;
+        const oy = -dy * this.dim;
+        for (let y = yMin; y < yMax; y++) {
+            for (let x = xMin; x < xMax; x++) {
+                this.data[this._idx(x, y)] = borderTile.data[this._idx(x + ox, y + oy)];
+            }
+        }
+    }
+
+    private _getByteView(): Uint8Array {
+        let byteView = DEMData.byteViewCache.get(this);
+        if (byteView?.buffer !== this.data.buffer) {
+            byteView = new Uint8Array(this.data.buffer);
+            DEMData.byteViewCache.set(this, byteView);
+        }
+        return byteView;
+    }
+
+    private _unpackAtIndex(pixels: Uint8Array, index: number): number {
+        return this.unpack(pixels[index], pixels[index + 1], pixels[index + 2]);
+    }
+}
+
+/**
+ * Packs an elevation into the RGB channels that {@link DEMData.unpack} decodes with the given
+ * unpack vector `[redFactor, greenFactor, blueFactor, baseShift]`.
+ *
+ * A channel whose factor is 0 contributes nothing to the decoded elevation, so it packs to 0 and
+ * takes no part in the scale the other channels are quantized by. When all three factors are 0
+ * every color decodes to `-baseShift`, and the packed color is black.
+ */
+export function packDEMData(v: number, unpackVector: number[]): {r: number; g: number; b: number} {
+    const redFactor = unpackVector[0];
+    const greenFactor = unpackVector[1];
+    const blueFactor = unpackVector[2];
+    const baseShift = unpackVector[3];
+    const factors = [redFactor, greenFactor, blueFactor].filter(factor => factor !== 0);
+    if (factors.length === 0) {
+        return {r: 0, g: 0, b: 0};
+    }
+    const minScale = Math.min(...factors);
+    const vScaled = Math.round((v + baseShift)/minScale);
+    const packChannel = (factor: number) => factor === 0 ? 0 : Math.floor(vScaled*minScale/factor) % 256;
+    return {
+        r: packChannel(redFactor),
+        g: packChannel(greenFactor),
+        b: packChannel(blueFactor)
+    };
+}
+
+register('DEMData', DEMData);

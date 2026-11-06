@@ -1,0 +1,63 @@
+import {OverscaledTileID} from '../../tile/tile_id.ts';
+import {Aabb} from '../../util/primitives/aabb.ts';
+import {clamp} from '../../util/util.ts';
+
+import type {LngLat} from '../lng_lat.ts';
+import type {MercatorCoordinate} from '../mercator_coordinate.ts';
+import type {IReadonlyTransform} from '../transform_interface.ts';
+import type {CoveringTilesOptionsInternal} from './covering_tiles.ts';
+import type {CoveringTilesDetailsProvider} from './covering_tiles_details_provider.ts';
+import type {IBoundingVolume} from '../../util/primitives/bounding_volume.ts';
+
+export class MercatorCoveringTilesDetailsProvider implements CoveringTilesDetailsProvider {
+
+    getCenter(transform: IReadonlyTransform): LngLat {
+        return transform.center;
+    }
+
+    distanceToTile2d(pointX: number, pointY: number, _tileID: {x: number; y: number; z: number}, boundingVolume: IBoundingVolume): number {
+        const aabb = boundingVolume as Aabb;
+        const distanceX = aabb.distanceX([pointX, pointY]);
+        const distanceY = aabb.distanceY([pointX, pointY]);
+        return Math.hypot(distanceX, distanceY);
+    }
+
+    /**
+     * Returns the wrap value for a given tile, computed so that tiles will remain loaded when crossing the antimeridian.
+     */
+    getWrap(centerCoord: MercatorCoordinate, tileID: {x:number; y: number; z: number}, parentWrap: number): number {
+        return parentWrap;
+    }
+
+    /**
+     * Returns the AABB of the specified tile.
+     * @param tileID - Tile x, y and z for zoom.
+     */
+    getTileBoundingVolume(tileID: {x: number; y: number; z: number}, wrap: number, elevation: number, options: CoveringTilesOptionsInternal): Aabb {
+        let minElevation = Math.min(0, elevation);
+        let maxElevation = Math.max(0, elevation);
+        if (options?.terrain) {
+            const overscaledTileID = new OverscaledTileID(tileID.z, wrap, tileID.z, tileID.x, tileID.y);
+            const minMax = options.terrain.getMinMaxElevation(overscaledTileID);
+            minElevation = minMax.minElevation ?? minElevation;
+            maxElevation = minMax.maxElevation ?? maxElevation;
+        }
+        const numTiles = 1 << tileID.z;
+        return new Aabb([wrap + tileID.x / numTiles, tileID.y / numTiles, minElevation],
+            [wrap + (tileID.x + 1) / numTiles, (tileID.y + 1) / numTiles, maxElevation]);
+    }
+    
+    allowVariableZoom(transform: IReadonlyTransform, options: CoveringTilesOptionsInternal): boolean {
+        const zfov = transform.fov * (Math.abs(Math.cos(transform.rollInRadians)) * transform.height + Math.abs(Math.sin(transform.rollInRadians)) * transform.width) / transform.height;
+        const maxConstantZoomPitch = clamp(78.5 - zfov / 2, 0.0, 60.0);
+        return (!!options.terrain || transform.pitch > maxConstantZoomPitch);
+    }
+
+    allowWorldCopies(): boolean {
+        return true;
+    }
+
+    prepareNextFrame(): void { 
+        // Do nothing
+    }
+}

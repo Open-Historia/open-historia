@@ -57,7 +57,13 @@ body {
   --oh-grey-faint: rgba(231, 231, 234, 0.38);
   --oh-hud-shadow: 0 20px 56px rgba(0, 0, 0, 0.34), inset 0 1px 0 rgba(255,255,255,0.12), inset 0 -1px 0 rgba(255,255,255,0.03);
   --oh-hud-shadow-soft: 0 10px 28px rgba(0, 0, 0, 0.26), inset 0 1px 0 rgba(255,255,255,0.1);
-  --oh-hud-blur: blur(14px) saturate(1.18);
+  --oh-hud-glass: blur(14px) saturate(1.18);
+  --oh-hud-blur: var(--oh-hud-glass);
+}
+
+/* While the map paints the glass itself (Map/frostedPanels.js). */
+:root.oh-map-frost {
+  --oh-hud-blur: none;
 }
 
 .startup-shell {
