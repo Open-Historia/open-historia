@@ -52,6 +52,24 @@ jobs:
 
       - uses: actions/checkout@v5
 
+      # latest.json is the feed every app installed under the earlier id reads,
+      # forever: its update banner installs whatever APK it names. It used to
+      # name open-historia-beta.apk, which is now the app under its new id, a different
+      # app: offered as an update it would install beside the old one, without
+      # the player's games. So until a handover build has been published (and
+      # latest.json names it), a run without the handover variables stops here.
+      - name: Keep the earlier id's feed off the new app
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LEGACY_APP_ID: ${{ vars.ANDROID_LEGACY_APP_ID }}
+        run: |
+          if [ -n "$LEGACY_APP_ID" ]; then exit 0; fi
+          if gh release download android-beta --repo "${{ github.repository }}" -p latest.json -O feed-now.json 2>/dev/null \
+            && grep -q '/open-historia-beta.apk"' feed-now.json; then
+            echo "::error::android-beta/latest.json still offers open-historia-beta.apk to the apps installed under the earlier id. Set the repository variables ANDROID_LEGACY_APP_ID and ANDROID_LEGACY_HOST (docs/mobile.md) so this run publishes the handover build."
+            exit 1
+          fi
+
       - uses: actions/setup-node@v5
         with:
           node-version: 24
@@ -80,16 +98,29 @@ jobs:
       - name: Build the APK
         env:
           # This workflow's own run numbers: the beta is its own app, and its
-          # versionCode only has to rise from one beta build to the next.
+          # versionCode only has to rise from one beta build to the next (the
+          # handover build's too, over the beta builds made under the earlier id).
           OH_ANDROID_BUILD: ${{ github.run_number }}
           OH_ANDROID_CHANNEL: beta
-          # The same key as the stable app. A different package, so nothing is
-          # shared by it; one key is one thing to keep safe.
+          # One keystore across builds, or an APK cannot install over its
+          # predecessor (each fresh debug keystore is a different certificate).
+          # Without the secrets the build falls back to debug signing.
           ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          # The handover build (docs/mobile.md, "Moving to the new app id"): the
+          # same code under the application id and WebView address the app had
+          # until November 2026, for the phones that still have it installed.
+          # Both come from repository variables, so neither is in the repository;
+          # with both set, this run builds it after the app.
+          LEGACY_APP_ID: ${{ vars.ANDROID_LEGACY_APP_ID }}
+          LEGACY_HOST: ${{ vars.ANDROID_LEGACY_HOST }}
         run: |
+          if [ -n "$LEGACY_APP_ID$LEGACY_HOST" ] && { [ -z "$LEGACY_APP_ID" ] || [ -z "$LEGACY_HOST" ]; }; then
+            echo "::error::The repository variables ANDROID_LEGACY_APP_ID and ANDROID_LEGACY_HOST go together: set both or neither."
+            exit 1
+          fi
           cd mobile
           npm ci
           npm run map
@@ -100,38 +131,65 @@ jobs:
           if [ -n "$ANDROID_KEYSTORE_B64" ]; then
             echo "$ANDROID_KEYSTORE_B64" | base64 -d > app/release.keystore
             export OH_ANDROID_KEYSTORE="$PWD/app/release.keystore"
-            ./gradlew assembleRelease --no-daemon
-            cp app/build/outputs/apk/release/app-release.apk ../../open-historia-beta.apk
+            TASK=assembleRelease
+            BUILT=app/build/outputs/apk/release/app-release.apk
           else
             echo "No ANDROID_KEYSTORE_B64 secret: debug-signed build (cannot upgrade in place over a build signed with another key)."
-            ./gradlew assembleDebug --no-daemon
-            cp app/build/outputs/apk/debug/app-debug.apk ../../open-historia-beta.apk
+            TASK=assembleDebug
+            BUILT=app/build/outputs/apk/debug/app-debug.apk
+          fi
+          ./gradlew "$TASK" --no-daemon
+          cp "$BUILT" ../../open-historia-beta.apk
+          if [ -n "$LEGACY_APP_ID" ]; then
+            # The same web bundle; the earlier id, and the earlier address the
+            # page opens at (that is where the WebView keeps its saves).
+            OH_ANDROID_LEGACY_APP_ID="$LEGACY_APP_ID" OH_ANDROID_LEGACY_HOST="$LEGACY_HOST" node ../scripts/legacy-config.mjs
+            OH_ANDROID_LEGACY_APP_ID="$LEGACY_APP_ID" ./gradlew "$TASK" --no-daemon
+            cp "$BUILT" ../../open-historia-beta-handover.apk
+            node ../scripts/legacy-config.mjs
           fi
 
       - uses: actions/upload-artifact@v6
         with:
           name: open-historia-beta.apk
-          path: open-historia-beta.apk
+          path: |
+            open-historia-beta.apk
+            open-historia-beta-handover.apk
+          if-no-files-found: ignore
 
-      # latest.json is what the beta's update banner reads. The asset name
-      # open-historia-beta.apk is contractual: latest.json and the release notes
+      # update.json is what the beta's update banner reads; latest.json is the
+      # earlier id's feed, written only with the handover build. The asset name
+      # open-historia-beta.apk is contractual: update.json and the release notes
       # link it by name.
       - name: Publish to the "android-beta" pre-release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cat > latest.json <<EOF
+          cat > update.json <<EOF
           {
             "build": ${{ github.run_number }},
             "apk": "https://github.com/${{ github.repository }}/releases/download/android-beta/open-historia-beta.apk",
             "notes": "Beta build ${{ github.run_number }}: what is on the beta branch now, ahead of the stable app."
           }
           EOF
+          ASSETS="open-historia-beta.apk update.json"
+          if [ -f open-historia-beta-handover.apk ]; then
+            cat > latest.json <<EOF
+          {
+            "build": ${{ github.run_number }},
+            "apk": "https://github.com/${{ github.repository }}/releases/download/android-beta/open-historia-beta-handover.apk",
+            "notes": "One last update: it installs the new Open Historia Beta app beside this one and moves your games to it."
+          }
+          EOF
+            ASSETS="$ASSETS open-historia-beta-handover.apk latest.json"
+          fi
           NOTES="Open Historia Beta for Android: the game as it is on the beta branch, ahead of the stable app and less tested. Download open-historia-beta.apk below and open it to install (allow installs from your browser when Android asks).
 
           It is a separate app. It installs beside Open Historia rather than over it, with its own icon (the compass with a BETA banner) and its own saves: a game started in one does not appear in the other, though Export and Import carry games and scenarios across. It updates itself from this release and never offers you the stable build. Like the stable app, everything is on the device, and the community hub and your own AI provider are the only network use.
 
+          Already had Open Historia Beta on your phone? The app has a new Android id, so this one installs beside it instead of over it. The one you had updates itself one last time and then shows you the way across: tap Install the new app, then Move my games. Your games and settings come with you, and nothing in the old app is deleted. (open-historia-beta-handover.apk and latest.json are that last update; the old app downloads them itself.)
+
           Build: ${{ github.run_number }}"
           gh release create android-beta --title "Android app — Beta" --prerelease --notes "$NOTES" 2>/dev/null \
             || gh release edit android-beta --prerelease --notes "$NOTES"
-          gh release upload android-beta open-historia-beta.apk latest.json --clobber
+          gh release upload android-beta $ASSETS --clobber

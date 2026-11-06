@@ -59,6 +59,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(UpdatePlugin.class);
         registerPlugin(BackgroundPausePlugin.class);
         registerPlugin(RendererRestartPlugin.class);
+        registerPlugin(SaveMovePlugin.class);
         super.onCreate(savedInstanceState);
         // This app's own file, downloaded once per install or update and never
         // again (AppFile): how installs are counted. On its own thread.
@@ -131,6 +132,18 @@ public class MainActivity extends BridgeActivity {
                 setEnabled(true);
             }
         });
+    }
+
+    // The games the app's earlier id handed over (SaveMoveActivity) are waiting.
+    // A page already running is told, and starts again to merge them first
+    // (src/runtime/native/appMove.js); a page still to start finds them anyway.
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        if (intent == null || !SaveMoveActivity.ACTION_SAVES_ARRIVED.equals(intent.getAction())) return;
+        WebView view = webView();
+        if (view == null || rendererGone) return;
+        view.evaluateJavascript("window.dispatchEvent(new Event('oh:saves-arrived'))", null);
     }
 
     // Android asks for memory back: the app went to the background, or memory
