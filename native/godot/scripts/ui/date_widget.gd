@@ -5,6 +5,7 @@ signal panel_changed(name: String)
 signal turn_landed(view: Dictionary)
 signal open_interactive
 signal busy_changed(busy: bool)
+signal country_toggled
 
 const JUMPS := [["6 hours", 0.25], ["1 day", 1.0], ["3 days", 3.0], ["1 week", 7.0], ["1 month", 30.0], ["3 months", 90.0], ["6 months", 180.0], ["1 year", 365.0]]
 const UNITS := [["hours", 1.0 / 24.0], ["days", 1.0], ["weeks", 7.0], ["months", 30.0], ["years", 365.0]]
@@ -25,6 +26,7 @@ const AMBER_BG := Color(120 / 255.0, 53 / 255.0, 15 / 255.0, 0.28)
 const AMBER_BORDER := Color(251 / 255.0, 191 / 255.0, 36 / 255.0, 0.35)
 const AMBER_INK := Color("#fde68a")
 const CONNECTOR := Color(1, 1, 1, 0.1)
+const MONTHS := ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
 
 var engine: EngineLink
 var map_view: MapView
@@ -88,6 +90,7 @@ var _fronts_running := false
 var _fronts_timer: Timer
 var _offer_serial := 0
 var _shared_active := false
+var _country_button: Button
 
 
 func _ready() -> void:
@@ -100,6 +103,9 @@ func _ready() -> void:
 	events_panel.closed.connect(func() -> void: set_panel(""))
 	add_child(events_panel)
 	_build_pill()
+	if UI.phone():
+		_place_phone()
+		get_viewport().size_changed.connect(_place_phone)
 	_clock = Timer.new()
 	_clock.wait_time = 1.0
 	_clock.timeout.connect(_tick)
@@ -144,18 +150,38 @@ func _build_pill() -> void:
 	_back_button = _arrow("«", "Events")
 	_back_button.pressed.connect(func() -> void: toggle_panel("history"))
 	row.add_child(_back_button)
-	var middle := HBoxContainer.new()
+	var phone := UI.phone()
+	var middle: BoxContainer = VBoxContainer.new() if phone else HBoxContainer.new()
 	middle.alignment = BoxContainer.ALIGNMENT_CENTER
 	middle.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	middle.add_theme_constant_override("separation", 8)
+	middle.add_theme_constant_override("separation", 2 if phone else 8)
 	middle.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_country_label = UI.label("", 13, UI.HUD_BLUE, 700, "Arial", 1)
+	_country_label = UI.label("", 11 if phone else 13, UI.HUD_BLUE, 700, "Arial", 1)
 	_country_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	middle.add_child(_country_label)
-	_date_label = UI.label("Loading...", 15, Color(1, 1, 1, 0.94))
+	_date_label = UI.label("Loading...", 13 if phone else 15, Color(1, 1, 1, 0.94))
 	_date_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	middle.add_child(_date_label)
-	row.add_child(middle)
+	if phone:
+		for label in [_country_label, _date_label]:
+			label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+			label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_country_label.clip_text = true
+		_country_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		_country_button = Button.new()
+		_country_button.flat = true
+		_country_button.focus_mode = Control.FOCUS_NONE
+		_country_button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+		_country_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_country_button.set_meta("oh_tap_exempt", true)
+		for state in ["normal", "hover", "pressed", "focus", "hover_pressed"]:
+			_country_button.add_theme_stylebox_override(state, StyleBoxEmpty.new())
+		_country_button.pressed.connect(func() -> void: country_toggled.emit())
+		middle.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		_country_button.add_child(middle)
+		row.add_child(_country_button)
+	else:
+		row.add_child(middle)
 	_forward_button = _arrow("»", "Timeline")
 	_forward_button.pressed.connect(func() -> void:
 		if is_loading:
@@ -178,6 +204,7 @@ func _arrow(glyph: String, tip: String) -> Button:
 	button.focus_mode = Control.FOCUS_NONE
 	button.tooltip_text = tip
 	button.custom_minimum_size = Vector2(32, 32)
+	UI.tap_size(button)
 	button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	button.add_theme_font_override("font", UI.font(900))
@@ -191,9 +218,43 @@ func _arrow(glyph: String, tip: String) -> Button:
 	return button
 
 
+func _place_phone() -> void:
+	var inset := UI.safe_insets()
+	var view := get_viewport_rect().size
+	var width := minf(24.0 * 16.0, view.x - 4.5 * 16.0)
+	_pill.set_radius(12.0)
+	_pill.offset_right = -8.0 - inset.z
+	_pill.offset_left = _pill.offset_right - width
+	_pill.offset_top = 8.0 + inset.y
+	_pill.offset_bottom = _pill.offset_top + 3.2 * 16.0
+	for panel in [timeline, events_panel]:
+		panel.anchor_right = 1.0
+		panel.offset_left = 8.0 + inset.x
+		panel.offset_right = -8.0 - inset.z
+
+
+func set_country_open(open: bool) -> void:
+	if _country_button:
+		_country_label.add_theme_color_override("font_color", Color("#bfdbfe") if open else UI.HUD_BLUE)
+
+
+static func short_month(text: String) -> String:
+	for month in MONTHS:
+		if text.begins_with(month + " "):
+			return month.substr(0, 3) + text.substr(month.length())
+	return text
+
+
 func _render_pill() -> void:
 	var country := str(status.get("playerCountry", ""))
 	_country_label.text = country.to_upper()
+	if _country_button:
+		_country_label.visible = not country.is_empty()
+		_country_button.disabled = country.is_empty()
+		var shown := str(status.get("displayDate", "Loading..."))
+		_date_label.text = short_month(shown) if not country.is_empty() else shown
+		_render_arrows()
+		return
 	_country_label.clip_text = false
 	var wide := UI.font(700, "Arial", 1).get_string_size(_country_label.text, HORIZONTAL_ALIGNMENT_LEFT, -1, 13).x
 	if wide > 120.0:
@@ -205,6 +266,10 @@ func _render_pill() -> void:
 		_country_label.custom_minimum_size.x = 0
 	_country_label.visible = not country.is_empty()
 	_date_label.text = str(status.get("displayDate", "Loading..."))
+	_render_arrows()
+
+
+func _render_arrows() -> void:
 	_back_button.add_theme_color_override("font_color", Color("#bfdbfe") if open_panel == "history" else Color(1, 1, 1, 0.7))
 	_forward_button.add_theme_color_override("font_color", Color("#e4e4e7") if open_panel == "skip" else Color(1, 1, 1, 0.7))
 	_forward_spinner.visible = is_loading
@@ -1695,7 +1760,7 @@ func _confirm_intervene() -> void:
 
 
 func set_right_inset(width: float) -> void:
-	if not _pill:
+	if not _pill or UI.phone():
 		return
 	if _pill_tween and _pill_tween.is_valid():
 		_pill_tween.kill()

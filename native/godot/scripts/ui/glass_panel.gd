@@ -83,6 +83,13 @@ func set_tint(color: Color) -> void:
 	_material.set_shader_parameter("tint", tint)
 
 
+func set_radius(corner: float) -> void:
+	radius = corner
+	_material.set_shader_parameter("radius", radius)
+	var frame := UI.box(Color(0, 0, 0, 0), Color(0, 0, 0, 0), int(corner), 1, padding)
+	add_theme_stylebox_override("panel", frame)
+
+
 func set_border(color: Color) -> void:
 	border = color
 	_material.set_shader_parameter("border_color", border)

@@ -13,6 +13,7 @@ signal world_changed
 signal dock_resized
 
 const DOCK_LAUNCHERS := [["chat", "Chat", 18], ["actions", "Actions and Projects", 16], ["social", "Rostra", 18]]
+const PHONE_BUTTON := 3.2 * 16.0
 const PANEL_FILES := ["map_cards", "chat_panel", "actions_panel", "projects_panel", "rostra_panel", "rostra_search", "advisor_panel", "country_panel", "search_box", "diplomatic_legend", "chat_notices", "war_peace_cards"]
 
 var date_widget: DateWidget
@@ -56,6 +57,10 @@ var _typing_timer: Timer
 var _typing_dots := 1
 var _advisor_button: Button
 var _flag_info: Dictionary = {}
+var _menu_frame: GlassPanel
+var _pill_frame: GlassPanel
+var _exit_frame: GlassPanel
+var _mode_frame: GlassPanel
 
 
 func _ready() -> void:
@@ -69,6 +74,7 @@ func _ready() -> void:
 	date_widget.panel_changed.connect(_on_date_panel)
 	date_widget.turn_landed.connect(func(view: Dictionary) -> void: turn_landed.emit(view))
 	date_widget.open_interactive.connect(func() -> void: open_interactive.emit())
+	date_widget.country_toggled.connect(toggle_country)
 	_typing_timer = Timer.new()
 	_typing_timer.wait_time = 0.45
 	_typing_timer.timeout.connect(func() -> void:
@@ -126,12 +132,17 @@ func _flat_button(text: String, size := 13, weight := 600, ink := UI.BUTTON_INK)
 
 
 func _build_top_left() -> void:
+	if UI.phone():
+		_build_phone_top_left()
+		return
 	var menu := _glass(UI.HUD_BUTTON, 12, Rect2(8, 8, 46, 46))
+	_menu_frame = menu
 	var menu_button := _flat_button("☰", 19, 800, UI.WHITE)
 	menu_button.tooltip_text = "Game menu"
 	menu_button.pressed.connect(func() -> void: open_menu.emit())
 	menu.add_child(menu_button)
 	var pill := _glass(UI.HUD_PILL, 12, Rect2(61, 8, 240, 46), Vector4(0, 0, 0, 0), Vector4(12, 0, 12, 0))
+	_pill_frame = pill
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 9)
 	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -157,6 +168,23 @@ func _build_top_left() -> void:
 	exit_button.tooltip_text = "Leave this game and return to the main menu"
 	exit_button.pressed.connect(func() -> void: exit_game.emit())
 	exit.add_child(exit_button)
+	_exit_frame = exit
+
+
+func _build_phone_top_left() -> void:
+	var inset := UI.safe_insets()
+	var menu := _glass(UI.HUD_BUTTON, 12, Rect2(8 + inset.x, 8 + inset.y, PHONE_BUTTON, PHONE_BUTTON))
+	_menu_frame = menu
+	var menu_button := _flat_button("☰", 21, 800, UI.WHITE)
+	menu_button.tooltip_text = "Game menu"
+	menu_button.pressed.connect(func() -> void: open_menu.emit())
+	menu.add_child(menu_button)
+	var exit := _glass(UI.HUD_PILL, 12, Rect2(8 + inset.x, 64 + inset.y, PHONE_BUTTON, PHONE_BUTTON))
+	_exit_frame = exit
+	var exit_button := _flat_button("⌂", 16, 600)
+	exit_button.tooltip_text = "Leave this game and return to the main menu"
+	exit_button.pressed.connect(func() -> void: exit_game.emit())
+	exit.add_child(exit_button)
 
 
 func _launcher_style(open: bool, hovered: bool) -> StyleBoxFlat:
@@ -166,7 +194,8 @@ func _launcher_style(open: bool, hovered: bool) -> StyleBoxFlat:
 
 
 func _build_dock() -> void:
-	var dock := _glass(UI.HUD_BG, 14, Rect2(8, -72, 205, 64), Vector4(0, 1, 0, 1), Vector4(11, 5, 11, 5))
+	var inset := UI.safe_insets()
+	var dock := _glass(UI.HUD_BG, 14, Rect2(8 + inset.x, -72 - inset.w, 205, 64), Vector4(0, 1, 0, 1), Vector4(11, 5, 11, 5))
 	_dock = dock
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 12)
@@ -224,6 +253,9 @@ func _build_dock() -> void:
 	search_slot.offset_right = 259
 	search_slot.offset_bottom = -14
 	search_slot.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	if UI.phone():
+		search_slot.offset_top = -14.4 - PHONE_BUTTON - inset.w
+		search_slot.offset_bottom = -14.4 - inset.w
 	add_child(search_slot)
 
 
@@ -287,7 +319,7 @@ func set_social_enabled(on: bool) -> void:
 
 
 func beside_dock_left() -> float:
-	return 8.0 + _dock_width() + 8.0
+	return 8.0 + UI.safe_insets().x + _dock_width() + 8.0
 
 
 func _dock_width() -> float:
@@ -298,9 +330,9 @@ func _dock_width() -> float:
 func _place_dock() -> void:
 	if _dock:
 		_dock.offset_right = _dock.offset_left + _dock_width()
-	var left := beside_dock_left() + (72.0 if _beside_war_room else 0.0)
+	var left := beside_dock_left() + (72.0 if _beside_war_room and not UI.phone() else 0.0)
 	search_slot.offset_left = left
-	search_slot.offset_right = left + 38.0
+	search_slot.offset_right = left + (PHONE_BUTTON if UI.phone() else 38.0)
 
 
 func open_rostra(place: Dictionary) -> void:
@@ -325,6 +357,8 @@ func toggle_dock(name: String) -> void:
 func set_active_panel(name: String) -> void:
 	var previous := active_panel
 	active_panel = name
+	if not name.is_empty():
+		_phone_panel_opened()
 	for key in panels.keys():
 		var panel: Control = panels[key]
 		if is_instance_valid(panel):
@@ -359,6 +393,7 @@ func _on_date_panel(name: String) -> void:
 	if active_panel != name:
 		var previous := active_panel
 		active_panel = name
+		_phone_panel_opened()
 		if panels.has(previous) and is_instance_valid(panels[previous]):
 			(panels[previous] as Control).call("set_open", false)
 		if _launchers.has(previous):
@@ -366,12 +401,36 @@ func _on_date_panel(name: String) -> void:
 			dock_panel.emit(previous, false)
 
 
+func _phone_panel_opened() -> void:
+	if not UI.phone():
+		return
+	_invoke(map_cards, "dismiss_all")
+	if not open_drawer.is_empty():
+		close_drawer()
+
+
+func _phone_card_opened() -> void:
+	if UI.phone() and not active_panel.is_empty():
+		set_active_panel("")
+
+
+func toggle_country() -> void:
+	if open_drawer == "country":
+		close_drawer()
+		return
+	open_country.emit()
+	show_country(str(_game.get("country", "")))
+
+
 func _build_bottom_right() -> void:
 	_right_layer = Control.new()
 	_right_layer.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_right_layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_right_layer)
+	var phone := UI.phone()
+	var inset := UI.safe_insets()
 	_flag_frame = _glass(UI.HUD_BUTTON, 14, Rect2(-72, -180, 64, 64), Vector4(1, 1, 1, 1), Vector4(8, 8, 8, 8), _right_layer)
+	_flag_frame.visible = not phone
 	_flag = TextureRect.new()
 	_flag.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	_flag.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
@@ -389,14 +448,10 @@ func _build_bottom_right() -> void:
 	flag_button.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	flag_button.add_theme_stylebox_override("hover", StyleBoxEmpty.new())
 	flag_button.add_theme_stylebox_override("pressed", StyleBoxEmpty.new())
-	flag_button.pressed.connect(func() -> void:
-		if open_drawer == "country":
-			close_drawer()
-			return
-		open_country.emit()
-		show_country(str(_game.get("country", ""))))
+	flag_button.pressed.connect(toggle_country)
 	_flag_frame.add_child(flag_button)
-	_advisor_frame = _glass(UI.HUD_BUTTON, 14, Rect2(-72, -112, 64, 64), Vector4(1, 1, 1, 1), Vector4(0, 0, 0, 0), _right_layer)
+	var advisor_rect := Rect2(-8 - inset.z - PHONE_BUTTON, -57.6 - inset.w - PHONE_BUTTON, PHONE_BUTTON, PHONE_BUTTON) if phone else Rect2(-72, -112, 64, 64)
+	_advisor_frame = _glass(UI.HUD_BUTTON, 12 if phone else 14, advisor_rect, Vector4(1, 1, 1, 1), Vector4(0, 0, 0, 0), _right_layer)
 	var advisor := _flat_button("", 12)
 	_advisor_button = advisor
 	advisor.tooltip_text = "Advisor"
@@ -406,15 +461,20 @@ func _build_bottom_right() -> void:
 		open_advisor.emit()
 		toggle_drawer("advisor"))
 	_advisor_frame.add_child(advisor)
-	var toggle := _glass(UI.HUD_BG, 12, Rect2(-206, -44, 198, 36), Vector4(1, 1, 1, 1), Vector4(4, 4, 4, 4), _right_layer)
+	var toggle_rect := Rect2(-8 - inset.z - 78, -8 - inset.w - 36, 78, 36) if phone else Rect2(-206, -44, 198, 36)
+	var toggle := _glass(UI.HUD_BG, 12, toggle_rect, Vector4(1, 1, 1, 1), Vector4(4, 4, 4, 4), _right_layer)
+	_mode_frame = toggle
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 4)
 	for entry in [["political", "Political", 87], ["diplomatic", "Diplomatic", 99]]:
 		var mode: String = entry[0]
 		var button := Button.new()
-		button.text = entry[1]
+		button.text = "" if phone else entry[1]
 		button.focus_mode = Control.FOCUS_NONE
-		button.custom_minimum_size = Vector2(entry[2], 28)
+		button.custom_minimum_size = Vector2(33 if phone else entry[2], 28)
+		if phone:
+			button.set_meta("oh_tap_exempt", true)
+			button.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 		button.add_theme_font_size_override("font_size", 12)
 		button.pressed.connect(func() -> void:
@@ -454,7 +514,8 @@ func set_game(view: Dictionary, game_name: String) -> void:
 	if country.is_empty():
 		country = str(view.get("country", ""))
 	var date := str(view.get("gameDate", ""))
-	_pill_subtitle.text = "%s / %s / %s" % [game_name, country if not country.is_empty() else "No country", date if not date.is_empty() else "No date"]
+	if _pill_subtitle:
+		_pill_subtitle.text = "%s / %s / %s" % [game_name, country if not country.is_empty() else "No country", date if not date.is_empty() else "No date"]
 	if not str(view.get("country", "")).is_empty():
 		_game["country"] = str(view.get("country", ""))
 		if view.has("countryName"):
@@ -568,6 +629,7 @@ func mount_panels(game: Dictionary) -> void:
 		_hook(map_cards, "open_stats", func(name: String) -> void: show_country(name))
 		_hook(map_cards, "flag_changed", func(_key: String) -> void: _reload_flag_and_map())
 		_hook(map_cards, "open_rostra", open_rostra)
+		_hook(map_cards, "card_opened", _phone_card_opened)
 		var cards_ctx := ctx.duplicate()
 		if forces and is_instance_valid(forces) and forces.has_method("begin_structure_place"):
 			cards_ctx["move_structure"] = func(marker_id: String) -> void:
@@ -626,6 +688,9 @@ func mount_panels(game: Dictionary) -> void:
 	search = _make("search_box")
 	if search:
 		search_slot.add_child(search)
+		if UI.phone():
+			var room := (PHONE_BUTTON - float(search.get("offset_bottom"))) * 0.5
+			search.position = Vector2(room, room)
 		_hook(search, "fly_to", func(lon: float, lat: float, zoom: float) -> void: _map.fly_to_lonlat(lon, lat, zoom))
 		_hook(search, "fit_bounds", func(west: float, south: float, east: float, north: float) -> void:
 			_map.fit_lonlat_bounds([[west, south], [east, north]]))
@@ -661,6 +726,9 @@ func mount_panels(game: Dictionary) -> void:
 				tile.tooltip_text = DOCK_LAUNCHERS.filter(func(item: Array) -> bool: return item[0] == entry[0])[0][1]
 	move_child(_right_layer, get_child_count() - 1)
 	move_child(date_widget, get_child_count() - 1)
+	if UI.phone():
+		for drawer in drawers.values():
+			move_child(drawer, get_child_count() - 1)
 	var saved := await _engine.request("hud.mapMode")
 	if saved.get("ok", false):
 		set_map_mode(str(saved["result"].get("mode", "political")), true)
@@ -729,6 +797,8 @@ func _right_offset() -> float:
 
 
 func set_right_inset(width: float) -> void:
+	if UI.phone():
+		width = 0.0
 	if _inset_tween and _inset_tween.is_valid():
 		_inset_tween.kill()
 	_inset_tween = create_tween().set_parallel(true).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
@@ -873,3 +943,4 @@ func _refresh_flag_badge() -> void:
 	for child in _flag_frame.get_children():
 		if child is Button:
 			(child as Button).tooltip_text = "%s · Open country panel" % name
+	date_widget.set_country_open(open)

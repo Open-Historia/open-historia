@@ -7,6 +7,7 @@ signal open_stats(name: String)
 signal region_opened(index: int)
 signal flag_changed(polity_key: String)
 signal open_rostra(place: Dictionary)
+signal card_opened
 
 const Country := preload("res://scripts/ui/country_panel.gd")
 const CARD_TINT := Color(24 / 255.0, 24 / 255.0, 27 / 255.0, 0.95)
@@ -301,6 +302,9 @@ func _feature_key(payload: Dictionary) -> String:
 func _process(_delta: float) -> void:
 	if not _floating or not map_view:
 		return
+	if UI.phone():
+		_place_sheet()
+		return
 	var screen := map_view.world_to_screen(_floating_anchor)
 	var view := get_viewport_rect().size
 	var shown := screen.x >= 0.0 and screen.y >= 0.0 and screen.x <= view.x and screen.y <= view.y
@@ -327,10 +331,29 @@ static func clamp_anchored_card_top(preferred: float, card_height: float, viewpo
 	return max(inset, min(preferred, viewport_height - tall - inset))
 
 
+static func sheet_width(view_width: float) -> float:
+	var inset := UI.safe_insets()
+	return view_width - 16.0 - inset.x - inset.z
+
+
+func _place_sheet() -> void:
+	var inset := UI.safe_insets()
+	var view := get_viewport_rect().size
+	_floating.visible = true
+	if _floating_kind == "region":
+		_fit_region_body(view.y)
+	var height := _floating.get_combined_minimum_size().y
+	var wide := sheet_width(view.x)
+	if not is_equal_approx(_floating.size.y, height) or not is_equal_approx(_floating.size.x, wide):
+		_floating.size = Vector2(wide, height)
+	_floating.position = Vector2(8.0 + inset.x, round(view.y - 80.0 - inset.w - height + _floating_rise))
+
+
 func _fit_region_body(viewport_height: float) -> void:
 	if not is_instance_valid(_region_scroll) or not is_instance_valid(_region_content):
 		return
-	var cap: float = max(96.0, viewport_height - 32.0)
+	var inset := UI.safe_insets()
+	var cap: float = max(96.0, viewport_height - 176.0 - inset.y - inset.w) if UI.phone() else max(96.0, viewport_height - 32.0)
 	var want: float = min(_region_content.get_combined_minimum_size().y, cap)
 	if not is_equal_approx(_region_scroll.custom_minimum_size.y, want):
 		_region_scroll.custom_minimum_size.y = want
@@ -370,6 +393,10 @@ func _mount_floating(card: Control, kind: String, width: float, lift: float, ani
 		tween.tween_property(self, "_floating_rise", 0.0, 0.22)
 	else:
 		_floating_rise = 0.0
+	if UI.phone() and map_view:
+		_place_sheet()
+	if animate:
+		card_opened.emit()
 
 
 func _shader_material(width: float, height: float) -> ShaderMaterial:
@@ -389,6 +416,7 @@ func _icon_button(glyph: String, title: String, size := 22) -> Button:
 	node.tooltip_text = title
 	node.focus_mode = Control.FOCUS_NONE
 	node.custom_minimum_size = Vector2(size, size)
+	UI.tap_size(node)
 	node.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	node.add_theme_font_override("font", UI.font(400, "Segoe UI Symbol" if glyph == "ⓘ" else "Arial"))
 	node.add_theme_font_size_override("font_size", 11)
@@ -491,7 +519,8 @@ func _load_region(index: int, region_id: String, region_name: String, owner: Str
 
 
 func _build_region(animate: bool) -> void:
-	var width := 238.0
+	var phone := UI.phone()
+	var width := sheet_width(get_viewport_rect().size.x) if phone else 238.0
 	var root := Country.column(0)
 	root.custom_minimum_size.x = width
 	var card := GlassPanel.new(CARD_TINT, 12.0)
@@ -529,7 +558,7 @@ func _build_region(animate: bool) -> void:
 		none.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 		top.add_child(none)
 	var shut := _close_button("Close region card")
-	shut.position = Vector2(width - 29, 7)
+	shut.position = Vector2(width - 7 - maxf(22.0, shut.custom_minimum_size.x), 7)
 	shut.pressed.connect(_close_floating)
 	top.add_child(shut)
 	stack.add_child(top)
@@ -697,10 +726,11 @@ func _build_region(animate: bool) -> void:
 	_region_content = stack
 	card.add_child(body)
 	root.add_child(card)
-	var pointer := CardPointer.new()
-	pointer.custom_minimum_size = Vector2(width, 9)
-	root.add_child(pointer)
-	_region_pointer = pointer
+	if not phone:
+		var pointer := CardPointer.new()
+		pointer.custom_minimum_size = Vector2(width, 9)
+		root.add_child(pointer)
+		_region_pointer = pointer
 	_mount_floating(root, "region", width, 1.0, animate)
 
 
