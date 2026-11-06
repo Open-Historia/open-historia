@@ -3,7 +3,8 @@ extends Control
 
 signal finished
 
-const GREETING_SECONDS := 2.2
+const GREETING_SECONDS := 4.4
+const GREETING_FADE := 0.6
 const ORIGINAL_COLORS := {"background": "#131315", "surface": "#232327", "accent": "#D4D4D8"}
 const GREETINGS := [
 	["en", "Hello", "Welcome"], ["es", "Hola", "Bienvenido"], ["fr", "Bonjour", "Bienvenue"], ["de", "Hallo", "Willkommen"],
@@ -193,13 +194,25 @@ func _greeting_words(index: int) -> VBoxContainer:
 func _show_greeting() -> void:
 	if not is_instance_valid(_greeting):
 		return
+	var leaving := false
 	for child in _greeting.get_children():
-		_greeting.remove_child(child)
-		child.queue_free()
+		var old := child as Control
+		if still or old == null or old.modulate.a <= 0.01:
+			_greeting.remove_child(child)
+			child.queue_free()
+			continue
+		leaving = true
+		old.set_meta("leaving", true)
+		var from := old.position.y
+		var out := old.create_tween().set_parallel(true)
+		out.tween_property(old, "modulate:a", 0.0, GREETING_FADE).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
+		out.tween_property(old, "position:y", from - 12.0, GREETING_FADE).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
+		out.chain().tween_callback(old.queue_free)
 	var words := _greeting_words(_greeting_at)
 	_greeting.add_child(words)
 	if not still:
 		words.modulate.a = 0.0
+		words.set_meta("lift", 18.0)
 	_place_greeting.call_deferred()
 	if still:
 		return
@@ -208,20 +221,18 @@ func _show_greeting() -> void:
 			words.set_meta("lift", value)
 			_place_greeting()
 	var tween := words.create_tween()
-	tween.set_parallel(true)
-	tween.tween_property(words, "modulate:a", 1.0, GREETING_SECONDS * 0.14).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
-	tween.tween_method(rise, 18.0, 0.0, GREETING_SECONDS * 0.14).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
-	tween.set_parallel(false)
-	tween.tween_interval(GREETING_SECONDS * 0.7)
-	tween.set_parallel(true)
-	tween.tween_property(words, "modulate:a", 0.0, GREETING_SECONDS * 0.16).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
-	tween.tween_method(rise, 0.0, -12.0, GREETING_SECONDS * 0.16).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
+	if leaving:
+		tween.tween_interval(GREETING_FADE)
+	tween.tween_property(words, "modulate:a", 1.0, GREETING_FADE).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
+	tween.parallel().tween_method(rise, 18.0, 0.0, GREETING_FADE).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
 
 
 func _place_greeting() -> void:
 	if not is_instance_valid(_greeting) or _greeting.get_child_count() == 0:
 		return
 	var words := _greeting.get_child(_greeting.get_child_count() - 1) as Control
+	if words == null or words.has_meta("leaving"):
+		return
 	var natural := words.get_combined_minimum_size()
 	words.size = Vector2(_greeting.size.x, natural.y)
 	words.position = Vector2(0, (_greeting.size.y - natural.y) * 0.5 + float(words.get_meta("lift", 0.0)))
