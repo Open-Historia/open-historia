@@ -156,19 +156,30 @@ export const describeRole = (row, { overlord, puppet, foreign }) => {
 
 // What each kind MEANS, in words a player reads once and understands. The kind
 // says which powers the Overlord holds; a satellite is what most people mean by
-// a "puppet state", so it says so. `who` is "we" (the viewer is the Overlord),
-// or the Overlord's name; `whose` is "its" or, seen from the Puppet, "our".
+// a "puppet state", so it says so.
 // THE THREE KINDS, in the player's words. A "puppet state" is what people
 // actually call a satellite, so that is what the game calls it; `kind` in the
 // ledger is unchanged. Each sentence says what the Overlord holds, from the
 // viewer's own side of the arrangement.
 const KIND_LABELS = { protectorate: "protectorate", satellite: "puppet state", client: "client state" };
+// Whole sentences, one for each side of the arrangement, so a language pack can
+// translate each as it reads (pieces joined in English word order could not be).
 const KIND_MEANINGS = {
-  protectorate: ({ holder, runs, its, governs }) => `${holder} ${runs("run")} ${its} foreign policy and defence. ${governs} at home.`,
-  satellite: ({ holder, runs, its, keeps, decisions }) =>
-    `${holder} ${runs("control")} ${its} government. ${keeps} the flag and the name; the decisions are ${decisions}.`,
-  client: ({ government, backing, makes, its }) =>
-    `${government} depends on ${backing} backing and follows its lead, but ${makes} most of ${its} own decisions.`,
+  protectorate: {
+    overlord: () => "We run its foreign policy and defence. It governs itself at home.",
+    puppet: (overlord) => `${overlord} runs our foreign policy and defence. We govern ourselves at home.`,
+    other: (overlord) => `${overlord} runs its foreign policy and defence. It governs itself at home.`,
+  },
+  satellite: {
+    overlord: () => "We control its government. It keeps the flag and the name; the decisions are ours.",
+    puppet: (overlord) => `${overlord} controls our government. We keep the flag and the name; the decisions are theirs.`,
+    other: (overlord) => `${overlord} controls its government. It keeps the flag and the name; the decisions are ${overlord}'s.`,
+  },
+  client: {
+    overlord: () => "Its government depends on our backing and follows its lead, but it makes most of its own decisions.",
+    puppet: (overlord) => `Our government depends on ${overlord}'s backing and follows its lead, but we make most of our own decisions.`,
+    other: (overlord) => `Its government depends on ${overlord}'s backing and follows its lead, but it makes most of its own decisions.`,
+  },
 };
 
 export const puppetKindLabel = (kind) => KIND_LABELS[String(kind ?? "").trim()] || String(kind ?? "").trim();
@@ -181,21 +192,12 @@ export const puppetKindMeaning = (row) => {
   if (!meaning) return "";
   const ours = row.role === "overlord";
   const mine = row.role === "puppet";
-  return meaning({
-    holder: ours ? "We" : row.overlord,
-    runs: (verb) => (ours ? verb : `${verb}s`),
-    its: mine ? "our" : "its",
-    governs: mine ? "We govern ourselves" : "It governs itself",
-    keeps: mine ? "We keep" : "It keeps",
-    decisions: ours ? "ours" : mine ? "theirs" : `${row.overlord}'s`,
-    government: mine ? "Our government" : "Its government",
-    backing: ours ? "our" : `${row.overlord}'s`,
-    makes: mine ? "we make" : "it makes",
-  });
+  return meaning[ours ? "overlord" : mine ? "puppet" : "other"](row.overlord);
 };
 
 // "2016-01-10" as "10 January 2016" — a date a player reads, not a key. Left
 // alone if it is not a plain calendar date (a scenario may use its own).
+// i18n-ignore: month names a date is written with, not interface text.
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const readableDate = (value) => {
   const text = String(value ?? "").trim();
@@ -298,6 +300,7 @@ export const puppetBriefingFor = (world, viewer, { present = [] } = {}) => {
 // The briefing as prompt text, or "" when there is nothing to say. Shared by the
 // one-on-one leader and the group turn so the two cannot describe the same
 // arrangement differently.
+// i18n-ignore: the model's briefing, never shown.
 export const describePuppetBriefing = ({ own = [], learned = [] } = {}, viewer = "") => {
   if (!own.length && !learned.length) return "";
   const lines = [];

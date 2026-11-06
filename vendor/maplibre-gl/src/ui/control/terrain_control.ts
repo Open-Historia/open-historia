@@ -1,0 +1,78 @@
+import {DOM} from '../../util/dom.ts';
+
+import type {Map} from '../map.ts';
+import type {IControl} from './control.ts';
+import type {TerrainSpecification} from '@maplibre/maplibre-gl-style-spec';
+
+/**
+ * A `TerrainControl` control contains a button for turning the terrain on and off.
+ *
+ * @group Markers and Controls
+ *
+ * @example
+ * ```ts
+ * let map = new Map({TerrainControl: false})
+ *     .addControl(new TerrainControl({
+ *         source: "terrain"
+ *     }));
+ * ```
+ * @see [3D Terrain](https://maplibre.org/maplibre-gl-js/docs/examples/3d-terrain/)
+ * @see [Create a Heatmap layer on a globe with terrain elevation](https://maplibre.org/maplibre-gl-js/docs/examples/create-a-heatmap-layer-on-a-globe-with-terrain-elevation/)
+ * @see [Display a hybrid satellite map with terrain elevation](https://maplibre.org/maplibre-gl-js/docs/examples/display-a-hybrid-satellite-map-with-terrain-elevation/)
+ * @see [Sky, Fog, Terrain](https://maplibre.org/maplibre-gl-js/docs/examples/sky-fog-terrain/)
+ */
+export class TerrainControl implements IControl {
+    options: TerrainSpecification;
+    _map: Map;
+    _container: HTMLElement;
+    _terrainButton: HTMLButtonElement;
+
+    /**
+     * @param options - the control's options
+     */
+    constructor(options: TerrainSpecification) {
+        this.options = options;
+    }
+
+    /** {@inheritDoc IControl.onAdd} */
+    onAdd(map: Map): HTMLElement {
+        this._map = map;
+        this._container = DOM.create('div', 'maplibregl-ctrl maplibregl-ctrl-group');
+        this._terrainButton = DOM.create('button', 'maplibregl-ctrl-terrain', this._container);
+        DOM.create('span', 'maplibregl-ctrl-icon', this._terrainButton).setAttribute('aria-hidden', 'true');
+        this._terrainButton.type = 'button';
+        this._terrainButton.addEventListener('click', this._toggleTerrain);
+
+        this._updateTerrainIcon();
+        this._map.on('terrain', this._updateTerrainIcon);
+        return this._container;
+    }
+
+    /** {@inheritDoc IControl.onRemove} */
+    onRemove(): void {
+        this._container.remove();
+        this._map.off('terrain', this._updateTerrainIcon);
+        this._map = undefined;
+    }
+
+    _toggleTerrain = (): void => {
+        if (this._map.getTerrain()) {
+            this._map.setTerrain(null);
+        } else {
+            this._map.setTerrain(this.options);
+        }
+        this._updateTerrainIcon();
+    };
+
+    _updateTerrainIcon = (): void => {
+        this._terrainButton.classList.remove('maplibregl-ctrl-terrain');
+        this._terrainButton.classList.remove('maplibregl-ctrl-terrain-enabled');
+        if (this._map.terrain) {
+            this._terrainButton.classList.add('maplibregl-ctrl-terrain-enabled');
+            this._terrainButton.title = this._map._getUIString('TerrainControl.Disable');
+        } else {
+            this._terrainButton.classList.add('maplibregl-ctrl-terrain');
+            this._terrainButton.title = this._map._getUIString('TerrainControl.Enable');
+        }
+    };
+}

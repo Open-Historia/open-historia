@@ -339,6 +339,7 @@ export const difficultyPriorityBlock = (value) => {
 //   pregameHistory               the history before the game starts, with no player in it
 //   politicalWorldGeneration     a scenario's political world, made in the Workshop
 //   politicalWorldVerification   and its check
+//   scenarioTranslation          a scenario's own text in other languages, in the Workshop
 export const TASKS_WITHOUT_DIFFICULTY = Object.freeze(new Set([
   "translation",
   "geographyResolver",
@@ -352,6 +353,7 @@ export const TASKS_WITHOUT_DIFFICULTY = Object.freeze(new Set([
   "pregameHistory",
   "politicalWorldGeneration",
   "politicalWorldVerification",
+  "scenarioTranslation",
 ]));
 
 // A call that does not say which task it is (a connection test) gets nothing.

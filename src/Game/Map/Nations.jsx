@@ -16,7 +16,8 @@ import {
 } from "./unitsController.js";
 import { recordMapTrace, recordMapWork } from "../../runtime/mapPerfTrace.js";
 import { logDebugEvent } from "../../runtime/debugLog.js";
-import { ensurePmtilesProtocol, forgetWorkerSourceCopies } from "./mapLibreSetup.js";
+import { ensurePmtilesProtocol } from "./mapLibreSetup.js";
+import { resolveMissingImages } from "./missingImages.js";
 import { getShownRelief, subscribeShownRelief } from "./scenarioTerrain.js";
 import {
   JSON_URLS,
@@ -33,7 +34,6 @@ import { isConstrainedDevice } from "../../runtime/deviceProfile.js";
 import { useWorkerFetchableUrl } from "./useWorkerFetchableUrl.js";
 import {
   REGIONS_PARSE_HOLD_MS,
-  forgetParsedSourceCopy,
   holdUntilSourceLoaded,
 } from "./regionsSourceMemory.js";
 import { publishGroupIndex, publishPolityIndex } from "../../runtime/placeSearch.js";
@@ -280,7 +280,7 @@ const shallowEqualColors = (a, b) => {
 // A region whose `claimants` list names the countries contesting it renders
 // striped in their colors (current administrator first). The stripe tile's
 // image id encodes the rgb list itself ("oh-stripes-r_g_b-r_g_b"), so the
-// styleimagemissing handler can rebuild any tile the style asks for — including
+// missing-image resolver can rebuild any tile the style asks for — including
 // after the globe/mercator toggle remounts the map and its images are gone.
 const STRIPE_PREFIX = "oh-stripes-";
 const STRIPE_BAND_PX = 8;
@@ -671,18 +671,16 @@ const WorldMap = ({ isGlobe = false }) => {
   useEffect(() => {
     const mapInstance = map?.getMap ? map.getMap() : map;
     if (!mapInstance?.on) return undefined;
-    const onMissing = (event) => {
-      const colors = parseStripeImageId(event?.id);
+    return resolveMissingImages(mapInstance, (id) => {
+      const colors = parseStripeImageId(id);
       if (!colors) return;
-      if (mapInstance.hasImage?.(event.id)) return;
+      if (mapInstance.hasImage?.(id)) return;
       try {
-        mapInstance.addImage(event.id, buildStripeImage(colors), { pixelRatio: 1 });
+        mapInstance.addImage(id, buildStripeImage(colors), { pixelRatio: 1 });
       } catch (error) {
         console.warn("Failed to build stripe tile:", error);
       }
-    };
-    mapInstance.on("styleimagemissing", onMissing);
-    return () => mapInstance.off("styleimagemissing", onMissing);
+    });
   }, [map]);
 
   // Pipeline v2: live polity label geometry is worker-owned. The UI thread only
@@ -1417,23 +1415,6 @@ const WorldMap = ({ isGlobe = false }) => {
     };
   }, [map, derivedSourceEpoch]);
 
-  // MapLibre keeps copies of the whole parsed regions file on the page and in its
-  // worker once it has loaded it; they are dropped as soon as it lands
-  // (regionsSourceMemory.js).
-  const regionsFetchUrlRef = useRef("");
-  regionsFetchUrlRef.current = regionsGeojsonFetchUrl || "";
-  useEffect(() => {
-    const mapInstance = map?.getMap ? map.getMap() : map;
-    if (!mapInstance?.on) return undefined;
-    const forget = (event) => {
-      if (event?.sourceId !== "custom-regions-source") return;
-      if (forgetParsedSourceCopy(mapInstance, "custom-regions-source", regionsFetchUrlRef.current)) forgetWorkerSourceCopies("custom-regions-source");
-    };
-    mapInstance.on("sourcedata", forget);
-    forget({ sourceId: "custom-regions-source" });
-    return () => mapInstance.off?.("sourcedata", forget);
-  }, [map]);
-
   // Political Cartography Pipeline v2. Canonical per-region ownership remains
   // the visual truth. The worker owns topology, political borders and polity
   // label geometry; only a result for the newest desired political revision may
@@ -1592,7 +1573,6 @@ const WorldMap = ({ isGlobe = false }) => {
           onRelease: (reason) => {
             parseHeld = false;
             recordMapTrace("nations:regions-parse-released", { reason });
-            if (forgetParsedSourceCopy(holdMap, "custom-regions-source", regionsGeojsonFetchUrl)) forgetWorkerSourceCopies("custom-regions-source");
             const message = heldMessage;
             heldMessage = null;
             if (message && worker === polityBoundaryWorkerRef.current) worker.postMessage(message);

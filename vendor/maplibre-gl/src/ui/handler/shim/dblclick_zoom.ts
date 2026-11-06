@@ -1,0 +1,64 @@
+import type {ClickZoomHandler} from '../click_zoom.ts';
+import type {TapZoomHandler} from './../tap_zoom.ts';
+
+/**
+ * The `DoubleClickZoomHandler` allows the user to zoom the map at a point by
+ * double clicking or double tapping.
+ *
+ * @group Handlers
+ */
+export class DoubleClickZoomHandler {
+
+    _clickZoom: ClickZoomHandler;
+    _tapZoom: TapZoomHandler;
+
+    /** @internal */
+    constructor(clickZoom: ClickZoomHandler, TapZoom: TapZoomHandler) {
+        this._clickZoom = clickZoom;
+        this._tapZoom = TapZoom;
+    }
+
+    /**
+     * Enables the "double click to zoom" interaction.
+     *
+     * @example
+     * ```ts
+     * map.doubleClickZoom.enable();
+     * ```
+     */
+    enable(): void {
+        this._clickZoom.enable();
+        this._tapZoom.enable();
+    }
+
+    /**
+     * Disables the "double click to zoom" interaction.
+     *
+     * @example
+     * ```ts
+     * map.doubleClickZoom.disable();
+     * ```
+     */
+    disable(): void {
+        this._clickZoom.disable();
+        this._tapZoom.disable();
+    }
+
+    /**
+     * Returns a Boolean indicating whether the "double click to zoom" interaction is enabled.
+     *
+     * @returns `true` if the "double click to zoom" interaction is enabled.
+     */
+    isEnabled(): boolean {
+        return this._clickZoom.isEnabled() && this._tapZoom.isEnabled();
+    }
+
+    /**
+     * Returns a Boolean indicating whether the "double click to zoom" interaction is active, i.e. currently being used.
+     *
+     * @returns `true` if the "double click to zoom" interaction is active.
+     */
+    isActive(): boolean {
+        return this._clickZoom.isActive() || this._tapZoom.isActive();
+    }
+}

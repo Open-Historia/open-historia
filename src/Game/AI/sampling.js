@@ -18,6 +18,9 @@ export const TASK_TEMPERATURES = Object.freeze({
   territoryDirector: 0.2,
   timelineCurator: 0.2,
   unitDirector: 0.2,
+  // A scenario's language packs (runtime/scenarioLanguagePacks.js): one right
+  // name for a place, and the same term every time.
+  scenarioTranslation: 0.2,
 
   // Bounded estimation: the model must supply what the record does not.
   countryStatSheet: 0.3,

@@ -53,6 +53,7 @@ export const BUNDLE_LINK_PATTERN =
 
 // The key the Publish button writes into a post (the form's technical field),
 // which is how an install recognises the post as the one its player made.
+// i18n-ignore: a marker the hub's posts carry, never translated.
 export const SCENARIO_KEY_LINE = "Scenario-Key";
 const SCENARIO_KEY_PATTERN = /^\s*Scenario-Key:\s*([A-Za-z0-9-]{8,64})\s*$/im;
 
@@ -132,6 +133,8 @@ export const parsePost = (issue, hubIndex) => {
     installs,
     coverImageUrl,
     startDate: typeof issue.scenario_date === "string" ? issue.scenario_date.slice(0, 40) : "",
+    // The languages it ships its own text in (hubFiles.js), or none.
+    languages: Array.isArray(issue.scenario_languages) ? issue.scenario_languages : [],
     scenarioKey: normalizeHubKey(body.match(SCENARIO_KEY_PATTERN)?.[1]),
     // { comment id -> its .zip }: the comments on this post that the hub has
     // checked as suggestions (refreshPublishedRecord offers no others).
@@ -361,6 +364,7 @@ export const hubOriginalGone = (origin, hubIndex) => !origin?.release || !releas
 // ends with this marker line. A comment is a suggestion when it carries a .zip
 // attachment and either the marker or a file named like one: a player who
 // forgot to paste the text but dragged the file in has still suggested it.
+// i18n-ignore: a marker the hub's posts carry, never translated.
 export const SUGGESTION_MARKER = "Open-Historia-Suggestion";
 const SUGGESTION_MARKER_PATTERN = /^\s*Open-Historia-Suggestion:\s*([A-Za-z0-9-]{4,80})\s*$/im;
 const ZIP_ATTACHMENT_PATTERN =

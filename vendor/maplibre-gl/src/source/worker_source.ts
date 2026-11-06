@@ -1,0 +1,143 @@
+import type {ExpiryData, RequestParameters} from '../util/ajax.ts';
+import type {RGBAImage, AlphaImage} from '../util/image.ts';
+import type {GlyphPositions} from '../render/glyph_atlas.ts';
+import type {ImageAtlas} from '../render/image_atlas.ts';
+import type {CanonicalTileID, OverscaledTileID} from '../tile/tile_id.ts';
+import type {Bucket} from '../data/bucket.ts';
+import type {FeatureIndex} from '../data/feature_index.ts';
+import type {CollisionBoxArray} from '../data/array_types.g.ts';
+import type {DEMEncoding} from '../data/dem_data.ts';
+import type {GlyphMap} from '../style/style_glyph.ts';
+import type {StyleImage} from '../style/style_image.ts';
+import type {PromoteIdSpecification} from '@maplibre/maplibre-gl-style-spec';
+import type {RemoveSourceParams} from '../util/actor_messages.ts';
+import type {IActor} from '../util/actor.ts';
+import type {StyleLayerIndex} from '../style/style_layer_index.ts';
+import type {SubdivisionGranularitySetting} from '../render/subdivision_granularity_settings.ts';
+import type {DashEntry} from '../render/line_atlas.ts';
+
+export type TileEncoding = 'mlt' | 'mvt';
+
+/**
+ * Parameters to identify a tile
+ */
+export type TileParameters = {
+    type: string;
+    source: string;
+    uid: string | number;
+};
+
+/**
+ * Parameters that are send when requesting to load a tile to the worker
+ */
+export type WorkerTileParameters = TileParameters & {
+    tileID: OverscaledTileID;
+    request?: RequestParameters;
+    zoom: number;
+    maxZoom?: number;
+    tileSize: number;
+    promoteId: PromoteIdSpecification;
+    pixelRatio: number;
+    showCollisionBoxes: boolean;
+    collectResourceTiming?: boolean;
+    returnDependencies?: boolean;
+    subdivisionGranularity: SubdivisionGranularitySetting;
+    encoding?: TileEncoding;
+    /**
+     * Provide this property when the requested tile has a higher canonical Z than source maxzoom.
+     * This allows the worker to know that it needs to overzoom from a source tile.
+     */
+    overzoomParameters?: OverzoomParameters;
+    etag?: string;
+};
+
+/**
+ * Parameters needed in order to load a tile that is overzoomed from a source tile
+ */
+export type OverzoomParameters = {
+    maxZoomTileID: CanonicalTileID;
+    overzoomRequest: RequestParameters;
+};
+
+/**
+ * The parameters needed in order to load a DEM tile
+ */
+export type WorkerDEMTileParameters = TileParameters & {
+    rawImageData: RGBAImage | ImageBitmap | ImageData;
+    encoding: DEMEncoding;
+    redFactor: number;
+    greenFactor: number;
+    blueFactor: number;
+    baseShift: number;
+};
+
+/**
+ * The worker tile's result type
+ */
+export type WorkerTileWithData = ExpiryData & {
+    buckets: Bucket[];
+    imageAtlas: ImageAtlas;
+    dashPositions: Record<string, DashEntry>;
+    glyphAtlasImage: AlphaImage;
+    featureIndex: FeatureIndex;
+    collisionBoxArray: CollisionBoxArray;
+    rawTileData?: ArrayBuffer;
+    encoding?: TileEncoding;
+    resourceTiming?: PerformanceResourceTiming[];
+    // Only used for benchmarking:
+    glyphMap?: GlyphMap | null;
+    iconMap?: {
+        [_: string]: StyleImage;
+    } | null;
+    glyphPositions?: GlyphPositions | null;
+    etagUnmodified?: false;
+};
+
+export type WorkerTileWithoutData = ExpiryData & {
+    etagUnmodified: true;  // Strict for type narrowing
+    resourceTiming?: PerformanceResourceTiming[];
+};
+
+export type WorkerTileResult = WorkerTileWithData | WorkerTileWithoutData;
+
+/**
+ * This is how the @see {@link WorkerSource} constructor should look like.
+ */
+export interface WorkerSourceConstructor {
+    new (actor: IActor, layerIndex: StyleLayerIndex, availableImages: string[]): WorkerSource;
+}
+
+/**
+ * `WorkerSource` should be implemented by custom source types to provide code that can be run on the WebWorkers.
+ * Each of the methods has a relevant event that triggers it from the main thread with the relevant parameters.
+ * @see {@link Map.addSourceType}
+ */
+export interface WorkerSource {
+    availableImages: string[];
+
+    /**
+     * Loads a tile from the given params and parse it into buckets ready to send
+     * back to the main thread for rendering.  Should call the callback with:
+     * `{ buckets, featureIndex, collisionIndex, rawTileData}`.
+     */
+    loadTile(params: WorkerTileParameters): Promise<WorkerTileResult>;
+    /**
+     * Re-parses a tile that has already been loaded.  Yields the same data as
+     * {@link WorkerSource.loadTile}.
+     */
+    reloadTile(params: WorkerTileParameters): Promise<WorkerTileResult>;
+    /**
+     * Aborts loading a tile that is in progress.
+     */
+    abortTile(params: TileParameters): Promise<void>;
+    /**
+     * Removes this tile from any local caches.
+     */
+    removeTile(params: TileParameters): Promise<void>;
+    /**
+     * Tells the WorkerSource to abort in-progress tasks and release resources.
+     * The foreground Source is responsible for ensuring that 'removeSource' is
+     * the last message sent to the WorkerSource.
+     */
+    removeSource?: (params: RemoveSourceParams) => Promise<void>;
+}

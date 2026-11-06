@@ -91,6 +91,7 @@ test("a zoom range hides a type outside it, counted in the Workshop's zoom level
 test("the map's paint reads the state with the game's own values as the fallback", () => {
   const fill = createPropertyExpression(
     ["coalesce", TYPE_FILL_STATE, ["feature-state", "fillColor"], "rgb(88, 98, 110)"],
+    "layers[0].paint.fill-color",
     latest.paint_fill["fill-color"],
   );
   assert.equal(fill.result, "success", JSON.stringify(fill.value));
@@ -99,7 +100,7 @@ test("the map's paint reads the state with the game's own values as the fallback
   assert.equal(colour({ fillColor: "rgb(200, 0, 0)", typeFill: "rgb(20, 60, 140)" }), "rgba(20,60,140,1)");
 
   const ramp = ["interpolate", ["linear"], ["zoom"], 2, withTypeFillOpacity(0.5), 8, withTypeFillOpacity(0.7)];
-  const opacity = createPropertyExpression(ramp, latest.paint_fill["fill-opacity"]);
+  const opacity = createPropertyExpression(ramp, "layers[0].paint.fill-opacity", latest.paint_fill["fill-opacity"]);
   assert.equal(opacity.result, "success", JSON.stringify(opacity.value));
   const at = (state) => opacity.value.evaluate({ zoom: 2 }, { properties: {} }, state);
   assert.equal(at({}), 0.5, "no state is the game's opacity");

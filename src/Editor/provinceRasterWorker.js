@@ -418,6 +418,7 @@ export const vectorizeColorGrid = (width, height, colors, options = {}, progress
 
     const sourceType = meta?.type || "";
     const props = {
+      // i18n-ignore: a new region's name, which is the scenario's own text.
       name: meta?.id != null ? `Province ${meta.id}` : `Province ${colorHex(color)}`,
       owner: null,
       typeId: sourceType && sourceType !== "land" ? "water" : "land",
