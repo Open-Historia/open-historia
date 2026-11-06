@@ -78,6 +78,78 @@ const NEW_UPDATES = [
     ],
   },
   {
+    // "I ordered my spy to assassinate head of state it succeed but nothing happened he still alive" (a player's
+    // report, 2026-11-06): the skip was told only that the operation succeeded, wrote the death, and left the record's
+    // leader in office. AI/covertOperationsDirective.js now says the target is dead and that the same event carries
+    // the change of leader.
+    id: "2026-11-assassinations-take-effect",
+    kind: "minor",
+    date: "2026-11-05",
+    channel: "beta",
+    banners: [
+      {
+        title: "Assassinations take effect",
+        items: [
+          "A leader your agents assassinate is now gone for good: a successor takes their office in the same event.",
+        ],
+      },
+    ],
+  },
+  {
+    // Opus-MT en-bat (Latvian, Lithuanian), en-sk, en-et, en-el, en-he, en-ga, en-mt and en-gmq (Swedish), converted
+    // for the game from Helsinki-NLP's models (none had a Transformers.js copy) and tried on the game's own kind of
+    // text, 2026-11-06. Nobody publishes them on Hugging Face: they are read from the scenario repository's
+    // translation-models branch (runtime/translationModels.js MIRROR, modelSources).
+    id: "2026-11-nine-languages",
+    kind: "minor",
+    date: "2026-11-06",
+    channel: "beta",
+    banners: [
+      {
+        title: "Translation in nine more languages",
+        items: [
+          "You can now play in Latvian, Lithuanian, Slovak, Estonian, Greek, Hebrew, Irish and Maltese: a translation model, downloaded once, translates the game on your device.",
+          "In Swedish, a translation model on your device now also translates the names and descriptions of scenarios and maps.",
+        ],
+      },
+    ],
+  },
+  {
+    // "get rid of this and instead have the country send you a message requesting assistance and the buttons appear
+    // there. it should not explain what happens if you choose each option as that breaks immersion" (the owner,
+    // 2026-11-06): the card over the map is gone; the ally that was attacked asks in a message (AI/gameplay.js) and
+    // is answered under it (GameUI/warAndPeace.jsx CallToArmsCard).
+    id: "2026-11-calls-to-arms-by-message",
+    kind: "minor",
+    date: "2026-11-05",
+    channel: "beta",
+    banners: [
+      {
+        title: "Calls to arms come by message",
+        items: [
+          "An ally that is attacked now writes to you itself, and you answer it in the chat.",
+        ],
+      },
+    ],
+  },
+  {
+    // "it doesnt look like missile strikes actually ever happen despite the feature technically existing" / "make story
+    // events be able to do strikes" (the owner, 2026-11-05): a strike was a battlefield line only (frontOrders), read
+    // with Fronts on and a war under way. Events now carry their own (impacts.strikes), placed by frontTurn.js
+    // placeStrikes and kept for the map whatever the battlefields do.
+    id: "2026-11-strikes-on-the-map",
+    kind: "minor",
+    date: "2026-11-05",
+    channel: "beta",
+    banners: [
+      {
+        title: "Missile strikes on the map",
+        items: [
+          "Missile launches and bombing runs the story tells of are now drawn on the map in every game, not only on a battlefield.",
+        ],
+      },
+    ],
+  },  {
     // "while scrolling, sometimes some ui elements trail behind for some reason creating a really wierd effect" (the
     // owner, 2026-11-05): a wheel scroll moved lists under a still cursor, and every row and button that passed under
     // it lit up and eased back out (styles.css control transitions). runtime/scrollHoverFreeze.js holds hover still

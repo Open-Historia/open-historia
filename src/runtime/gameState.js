@@ -3638,6 +3638,7 @@ const normalizeEventImpacts = (value, event = null) => {
       regionTransfers: [],
       reports: [],
       spyOps: [],
+      strikes: [],
       unitOps: [],
     };
   }
@@ -3661,6 +3662,13 @@ const normalizeEventImpacts = (value, event = null) => {
     // The player's espionage orders this event carried (runtime/spycraft.js).
     // Kept on the stored event so a reloaded campaign can replay them.
     spyOps: normalizeArray(value.spyOps).map(normalizeSpyOp).filter(Boolean),
+    // The missiles and bombing runs the event tells of, one line each as written (side~weapon~from~target~count~shot
+    // down): placed and kept for the map by the turn (Game/AI/gameplay.js, runtime/strikes.js). A string of lines is
+    // read as its lines.
+    strikes: (Array.isArray(value.strikes) ? value.strikes : String(value.strikes ?? "").split(/\r?\n/))
+      .map((line) => (typeof line === "string" ? line.replace(/\s+/g, " ").trim().slice(0, 300) : ""))
+      .filter((line) => line.includes("~"))
+      .slice(0, 8),
     // Say WHY a unit op was thrown away. A dropped op is the difference between an
     // event that narrates a deployment and troops that actually appear on the map,
     // and it used to vanish into .filter(Boolean) without a word — leaving no way

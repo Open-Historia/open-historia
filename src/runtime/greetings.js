@@ -32,4 +32,12 @@ export const GREETINGS = Object.freeze([
   { code: "da", hello: "Goddag", welcome: "Velkommen" },
   { code: "cs", hello: "Ahoj", welcome: "Vítejte" },
   { code: "fi", hello: "Hei", welcome: "Tervetuloa" },
+  { code: "el", hello: "Γεια σας", welcome: "Καλώς ήρθατε" },
+  { code: "he", hello: "שלום", welcome: "ברוכים הבאים" },
+  { code: "sk", hello: "Ahoj", welcome: "Vitajte" },
+  { code: "lt", hello: "Labas", welcome: "Sveiki atvykę" },
+  { code: "lv", hello: "Sveiki", welcome: "Laipni lūdzam" },
+  { code: "et", hello: "Tere", welcome: "Tere tulemast" },
+  { code: "ga", hello: "Dia duit", welcome: "Fáilte" },
+  { code: "mt", hello: "Bonġu", welcome: "Merħba" },
 ]);

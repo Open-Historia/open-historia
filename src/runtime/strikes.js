@@ -100,9 +100,11 @@ export const withTurnStrikes = (before, added, round) => {
 
 // ---- finding its places ----------------------------------------------------------------
 
-// A name as it is written with its kind before it: "city: Kyiv" -> { kind: "city", name: "Kyiv" }.
+// A name as it is written with its kind before it: "city: Kyiv" -> { kind: "city", name: "Kyiv" }. What the skip
+// teaches a model to add after it, the country or region it lies in ("city: Isfahan, country: Iran"), is no part of
+// the name.
 export const parsePlace = (value) => {
-  const text = clean(value);
+  const text = clean(value).replace(/\s*,\s*(?:country|region|state|province)\s*:.*$/i, "");
   const marked = /^(city|region|country|group|structure|unit|sea)\s*:\s*(.+)$/i.exec(text);
   return marked ? { kind: marked[1].toLowerCase(), name: clean(marked[2]) } : { kind: "", name: text };
 };

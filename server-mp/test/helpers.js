@@ -13,7 +13,7 @@ import WebSocket from "ws";
 import { createServer } from "../src/server.js";
 import { canonicalJson } from "../src/signatures.js";
 
-export const ORIGIN = "http://app.paxhistoria";
+export const ORIGIN = "http://app.openhistoria";
 export const VERSION = "0.0.51-alpha";
 
 export const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));

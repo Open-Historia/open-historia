@@ -87,11 +87,13 @@ export const RELEASES = [
         ],
         updates: [
           "2026-11-deploy-aircraft",
+          "2026-11-strikes-on-the-map",
           "2026-11-aircraft-key",
           "2026-11-picture-edges-and-strike-targets#1",
           "2026-10-fleets-at-sea",
           "2026-11-ships-from-ports",
           "2026-10-espionage-part-2",
+          "2026-11-assassinations-take-effect",
           "2026-10-spies-with-reason",
         ],
       },
@@ -108,6 +110,7 @@ export const RELEASES = [
         ],
         updates: [
           "2026-10-war-and-peace#0",
+          "2026-11-calls-to-arms-by-message",
           "2026-10-peace-and-weariness",
           "2026-10-peace-in-the-chats",
           "2026-11-peace-on-any-terms",

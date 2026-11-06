@@ -32,7 +32,6 @@ const stableWorkflow = read(".github/workflows/android-apk.yml");
 const router = read("src/runtime/web/router.js");
 
 const STABLE_ID = JSON.parse(read("mobile/capacitor.config.json")).appId;
-const BETA_ID = `${STABLE_ID}.beta`;
 const REPO = "https://github.com/Open-Historia/open-historia";
 
 // `gh release <verb> <tag>` lines in a workflow, as [verb, tag].
@@ -40,7 +39,10 @@ const releaseCommands = (workflow) => [...workflow.matchAll(/gh release (create|
 
 test("the channel gives the beta its own id, name and icon, and the stable app keeps its own", () => {
   assert.match(gradle, /def ohChannel = System\.getenv\("OH_ANDROID_CHANNEL"\) \?: "stable"/);
-  assert.ok(gradle.includes(`applicationId ohBeta ? "${BETA_ID}" : "${STABLE_ID}"`), "applicationId by channel");
+  assert.ok(gradle.includes(`def ohAppId = "${STABLE_ID}"`), "the app's id is capacitor.config.json's");
+  assert.ok(gradle.includes(`def ohSuffix = ohBeta ? ".beta" : ""`), "the beta's id is the stable id + .beta");
+  // Only the handover build (androidAppMove.test.js) takes another id.
+  assert.ok(gradle.includes("applicationId((ohLegacyAppId ?: ohAppId) + ohSuffix)"), "applicationId by channel");
   assert.match(gradle, /appLabel: ohBeta \? "Open Historia Beta" : "Open Historia"/);
   assert.match(gradle, /appIcon: ohBeta \? "@mipmap\/ic_launcher_beta" : "@mipmap\/ic_launcher"/);
   assert.match(gradle, /appIconRound: ohBeta \? "@mipmap\/ic_launcher_beta_round" : "@mipmap\/ic_launcher_round"/);
@@ -83,9 +85,11 @@ test("the beta workflow builds the beta channel from beta, and publishes only to
   assert.ok(commands.length >= 3, "create, edit and upload");
   for (const [verb, tag] of commands) assert.equal(tag, "android-beta", `gh release ${verb} ${tag}`);
   assert.match(betaWorkflow, /gh release create android-beta [^\n]*--prerelease/);
-  assert.match(betaWorkflow, /gh release upload android-beta open-historia-beta\.apk latest\.json --clobber/);
+  assert.match(betaWorkflow, /ASSETS="open-historia-beta\.apk update\.json"/);
+  assert.match(betaWorkflow, /gh release upload android-beta \$ASSETS --clobber/);
   assert.ok(betaWorkflow.includes(`"apk": "https://github.com/\${{ github.repository }}/releases/download/android-beta/open-historia-beta.apk"`));
-  assert.match(betaWorkflow, /cp app\/build\/outputs\/apk\/release\/app-release\.apk \.\.\/\.\.\/open-historia-beta\.apk/);
+  assert.match(betaWorkflow, /BUILT=app\/build\/outputs\/apk\/release\/app-release\.apk/);
+  assert.match(betaWorkflow, /cp "\$BUILT" \.\.\/\.\.\/open-historia-beta\.apk/);
 });
 
 test("the stable workflow stays the stable app, from main, on the android release", () => {
@@ -105,6 +109,6 @@ test("the stable workflow stays the stable app, from main, on the android releas
 });
 
 test("each track's update banner reads its own release", () => {
-  assert.ok(router.includes(`stable: "${REPO}/releases/download/android/latest.json"`));
-  assert.ok(router.includes(`beta: "${REPO}/releases/download/android-beta/latest.json"`));
+  assert.ok(router.includes(`stable: "${REPO}/releases/download/android/update.json"`));
+  assert.ok(router.includes(`beta: "${REPO}/releases/download/android-beta/update.json"`));
 });

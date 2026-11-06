@@ -104,7 +104,9 @@ export const isBoundToDefend = (world, ally, country) => defendersOf(world, coun
 
 // ---- calls to arms ------------------------------------------------------------------------
 
-// world.callsToArms: { id, warId, ally, defender, attackers: [names], via: { kind, id, title }, date, round, status, answeredRound? }
+// world.callsToArms: { id, warId, ally, defender, attackers: [names], via: { kind, id, title }, date, round, status, answeredRound?, messageId? }
+//   messageId   the message in which the defender asks the ally for help (Game/AI/gameplay.js), under which the
+//               ally answers it (GameUI/warAndPeace.jsx CallToArmsCard)
 export const normalizeCallToArms = (raw) => {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
   const id = clean(raw.id, 120);
@@ -125,6 +127,7 @@ export const normalizeCallToArms = (raw) => {
     round: Math.max(0, Math.round(figure(raw.round))),
     status,
     ...(status !== "open" && answered > 0 ? { answeredRound: answered } : {}),
+    ...(clean(raw.messageId, 160) ? { messageId: clean(raw.messageId, 160) } : {}),
   };
 };
 

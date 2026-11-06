@@ -303,3 +303,74 @@ test("a contact keeps its personality's line breaks, and an unnamed officeholder
   const bound = { binding: { polity: "Testland", office: "headOfState", name: "Old King", personId: "person-0001" } };
   assert.equal(advisorOfficeStatus(bound, world), "changed", "a successor known only by id is still a change");
 });
+
+// The Russia-campaign regression: the canonical receipt was committed while
+// React still held a stale transcript without that acknowledgement.
+const verifiedProposal = {
+  id: "proposal-0", actionId: "action-advisor-reply-verified001-0",
+  operation: "create", kind: "action", title: "Certify", text: "Verify certification",
+};
+const verifiedReply = {
+  role: "advisor", id: "advisor-reply-verified001", text: "Proposed",
+  actionProposals: [verifiedProposal],
+};
+const verifiedReceipt = { status: "queued", actionId: verifiedProposal.actionId, title: verifiedProposal.title };
+
+test("stale chief transcript saves retain previously acknowledged native Action receipts", () => {
+  const receiptSaved = { ...verifiedReply, actionReceipts: { [verifiedProposal.id]: verifiedReceipt } };
+  const stored = [
+    m("user", "Do it"),
+    { role: "notice", id: "report-preserved", text: "Still delivered" },
+    receiptSaved,
+  ];
+  const snapshot = [m("user", "Do it"), verifiedReply, m("user", "One more request")];
+  const next = replaceAdvisorThread(stored, CHIEF_ADVISOR_THREAD, snapshot);
+  assert.deepEqual(advisorMessagesFor(next).find((entry) => entry.id === verifiedReply.id).actionReceipts?.[verifiedProposal.id], verifiedReceipt);
+  assert.equal(advisorMessagesFor(next).at(-1).text, "One more request");
+  assert.equal(next[1].id, "report-preserved", "native notices retain their canonical position");
+  assert.equal(stored[2], receiptSaved, "canonical input must not be mutated");
+  assert.equal(verifiedReply.actionReceipts, undefined, "incoming UI snapshot remains unchanged");
+  const repeated = replaceAdvisorThread(next, CHIEF_ADVISOR_THREAD, snapshot);
+  assert.deepEqual(repeated, next, "repeated stale saves must not erase the receipt");
+});
+
+test("recipient-scoped saves preserve the newest cancelled/requeued receipt over a stale UI snapshot", () => {
+  const saved = make([{ ...verifiedReply, text: "Chief-only reply" }]);
+  const minister = { ...verifiedReply, id: "advisor-reply-minister001" };
+  const queued = { ...verifiedReceipt, actionId: verifiedProposal.actionId, status: "queued" };
+  const acknowledged = replaceAdvisorThread(saved, "advisor-marina-001", [minister]);
+  const canonical = acknowledged.map((entry) => entry.id === minister.id
+    ? { ...entry, actionReceipts: { "proposal-0": { ...queued, status: "cancelled" } } }
+    : entry);
+  const stale = [{ ...minister, actionReceipts: { "proposal-0": queued } }];
+  const next = replaceAdvisorThread(canonical, "advisor-marina-001", stale);
+  assert.equal(advisorMessagesFor(next, "advisor-marina-001")[0].actionReceipts["proposal-0"].status, "cancelled");
+  assert.equal(advisorMessagesFor(next)[0].actionReceipts, undefined, "the chief thread is untouched");
+  assert.deepEqual(advisorContacts(next), advisorContacts(canonical));
+});
+
+test("a stale thread snapshot cannot erase an entire acknowledged reply, but explicit clear still can", () => {
+  const approved = { ...verifiedReply, actionReceipts: { "proposal-0": verifiedReceipt } };
+  const persisted = [m("user", "First"), approved, m("user", "Second")];
+  const stale = [m("user", "First"), m("user", "Second"), m("user", "New question")];
+  const retained = replaceAdvisorThread(persisted, CHIEF_ADVISOR_THREAD, stale);
+  const replies = retained.filter((entry) => entry.id === verifiedReply.id);
+  assert.equal(replies.length, 1);
+  assert.deepEqual(replies[0].actionReceipts["proposal-0"], verifiedReceipt);
+  assert.equal(retained.at(-1).text, "New question");
+  assert.deepEqual(replaceAdvisorThread(persisted, CHIEF_ADVISOR_THREAD, [], { clearNotices: true }), []);
+});
+
+test("generic conversation saves cannot forge, retarget, duplicate or change Action receipts", () => {
+  const canonical = [{ ...verifiedReply, actionReceipts: { "proposal-0": verifiedReceipt } }];
+  const staleWithoutReceipt = { ...verifiedReply, actionReceipts: undefined };
+  assert.deepEqual(replaceAdvisorThread(canonical, CHIEF_ADVISOR_THREAD, [staleWithoutReceipt])[0].actionReceipts, canonical[0].actionReceipts);
+  assert.throws(() => replaceAdvisorThread([verifiedReply], CHIEF_ADVISOR_THREAD, [canonical[0]]), /receipt.*conversation/i);
+  assert.throws(() => replaceAdvisorThread(canonical, CHIEF_ADVISOR_THREAD, [
+    { ...verifiedReply, actionProposals: [{ ...verifiedProposal, actionId: "action-substituted" }] },
+  ]), /proposal.*identity|receipt.*identity/i);
+  assert.throws(() => replaceAdvisorThread(canonical, CHIEF_ADVISOR_THREAD, [
+    verifiedReply, verifiedReply,
+  ]), /duplicate.*Advisor.*message/i);
+  assert.throws(() => replaceAdvisorThread([...canonical, canonical[0]], CHIEF_ADVISOR_THREAD, [verifiedReply]), /duplicate.*Advisor.*message/i);
+});
