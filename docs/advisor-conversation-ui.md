@@ -1,6 +1,6 @@
 # Advisor conversation UI — scoped visual contract
 
-Status: Advisor conversation visual redesign is merged in Beta source via PR #952 (merge `13aadc1e`, 2026-11-05). The separate multi-Action-fence parsing hotfix below is local source only until separately committed, merged, and released.
+Status: Advisor conversation visual redesign is merged in Beta source via PR #952 (merge `13aadc1e`, 2026-11-05). Multi-Action-fence parsing was subsequently integrated through PR #957. The 2026-11-06 Action queue-state and cancellation improvement described below is a separate local candidate, not yet committed, merged, or released.
 
 ## Purpose and ownership
 
@@ -30,7 +30,7 @@ Implementation is owned by `src/Game/GameUI/advisor.jsx`, `AdvisorRecipients.jsx
 
 Development note: the previous Political World Parties/Power Blocs switch is on a separate uncommitted feature track in the same local checkout. Keep the Advisor's overlay archive scoped only to its own modified/new files and this document. Do not mix commits, PRs or release claims across these tracks.
 
-## 2026-11-05 — multiple fenced Advisor Action proposals (local hotfix)
+## 2026-11-05 — multiple fenced Advisor Action proposals (merged PR #957)
 
 A provider can emit several separate ```actions JSON arrays in one reply, even though the prompt asks for a single array. Previously `parseAdvisorReply` stripped only the first `actions` fence and `advisor.jsx` independently extracted that same first block when constructing persistent proposal attachments. Later Action arrays were displayed as raw horizontal-scrolling JSON code instead of reviewable cards. This is a parser contract bug, not a consequence of the Advisor visual stylesheet or a change in the Actions simulation.
 
@@ -39,3 +39,15 @@ A provider can emit several separate ```actions JSON arrays in one reply, even t
 Existing persisted Advisor messages are not rewritten or silently reinterpreted as newly authorized proposals. Future replies can show all accepted Action cards; old messages with missing proposal attachments cannot safely be auto-backfilled without a separate migration/authority decision. The reporter supplied screenshots (Gemma4:31b; Cold War scenario), not the underlying raw model transcript; the repeated correctly labeled fence diagnosis is reproduced in native tests, while alternate raw fence labels or malformed provider syntax have not been independently observed in that live report.
 
 Regression evidence: `src/Game/GameUI/advisorReply.test.js` reproduces three separate Action arrays with two subsequent raw-code leaks, verifies stable proposal identities across the complete sequence, preserves the global 24-proposal bound across separate fences and rejects malformed/incomplete secondary blocks. The full project suite, production builds and user-facing retest must be recorded as separate gates before release.
+
+## 2026-11-06 - Advisor Action queue state and cancellation (local candidate)
+
+A live Russia campaign revealed a false failure after Proceed / Queue. Four Action proposals were correctly written to the planned Actions queue and all four queued receipts were durably saved in advisor.json, yet their Advisor cards continued to display Proposed and the error "The original Advisor Action proposal is no longer available." The failure came from a second, strict attempt to stamp that already-persisted receipt onto the in-memory visible transcript. It could throw when the displayed conversation was stale or different, even though both canonical writes had succeeded. The error was misleading; no campaign repairs or speculative resubmissions are justified.
+
+The repair separates canonical authorization/receipt writes from non-authoritative local view synchronization. The native approval service continues to validate the stored message, recipient type, proposal source index, stable Action ID and native queue inside existing mutation locks. The local view merger updates only a matching displayed message and otherwise leaves a stale view untouched without turning successful persistence into a failure. The card also subscribes to the actual Actions queue, so it shows Queued whenever that exact proposal-created Action remains planned, independently of whether the receipt has reached the component.
+
+For CREATE proposals, a confirmed pending item displays Discuss and Cancel, rather than another Proceed / Queue. Cancel removes only the unchanged, exact, still-planned native Action and records a cancelled receipt. It rejects resolved, modified, non-Advisor, duplicate-ID, unit-backed, forged or shared-game Actions without changing them. A cancelled CREATE may be queued again with the original deterministic Action ID and the native receipt transitions back to queued. Resolved Actions never offer destructive Cancel; approved edits/removals retain their own completed status.
+
+Discuss remains a deliberate, editable Advisor-composer handoff, not an automatic AI message or a new queued Action. On a still-queued CREATE, it first cancels that exact order through the same native safeguard and only then prepares the discussion prompt in the Advisor composer. If cancellation fails, it neither claims the Action was withdrawn nor silently dispatches a discussion. The player's draft is retained. No new model call, canonical simulation operation, permission bypass, additional receipt authority or multiplayer host route is introduced.
+
+Focused regression coverage: advisorActionLifecycle.test.js covers the live saved-queue/stale-view failure class, Queued/Cancelled/Resolved status, cancellation/requeue/idempotency, same-ID identity and provenance protection, malformed queue rejection, authority boundaries, and UI wiring. Existing Advisor approval and review tests still enforce preapproval, host authority, unit reversion, receipt persistence and retry invariants. Record full-suite/build/installed-app acceptance separately; this checkpoint is not a released feature.
