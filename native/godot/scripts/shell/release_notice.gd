@@ -1040,7 +1040,6 @@ class GoldButton:
 	func _ready() -> void:
 		focus_mode = Control.FOCUS_NONE
 		mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-		flat = true
 		custom_minimum_size.y = 51.2
 		text = text.to_upper()
 		var spaced := FontVariation.new()
