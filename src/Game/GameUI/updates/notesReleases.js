@@ -87,6 +87,7 @@ export const RELEASES = [
         ],
         updates: [
           "2026-11-deploy-aircraft",
+          "2026-11-strikes-on-the-map",
           "2026-11-aircraft-key",
           "2026-11-picture-edges-and-strike-targets#1",
           "2026-10-fleets-at-sea",
