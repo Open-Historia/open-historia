@@ -235,6 +235,25 @@ test("separate Action fences are all hidden and returned in stable review order"
   assert.deepEqual(problems, []);
 });
 
+test("two complete adjacent Action arrays in one fence remain distinct review-only proposals", () => {
+  const raw = '[{"title":"Forensic archive audit","text":"Review archive seizure."}] '
+    + '[{"title":"Energy hub study","text":"Prepare the technical plan."}]';
+  const parsed = parseAdvisorReply(fence("actions", raw));
+  assert.deepEqual(parsed.actionsProposal?.map((item) => item.title), ["Forensic archive audit", "Energy hub study"]);
+  assert.deepEqual(parsed.actionBlockProblems, []);
+  const { proposals } = actionProposalsFromReply(parsed.actionsProposal, "advisor-reply-adjacent-array");
+  assert.equal(proposals.length, 2, "still awaiting manual approval; no Action is auto-queued");
+});
+
+test("an invalid second Action array is not salvaged into automatic or partial proposals", () => {
+  const raw = '[{"title":"Valid order","text":"Review."}] '
+    + '[{"title":"Unfinished"';
+  const parsed = parseAdvisorReply(fence("actions", raw));
+  assert.deepEqual(parsed.actionsProposal, []);
+  assert.equal(parsed.actionBlockProblems.length, 1);
+  assert.match(parsed.actionBlockProblems[0], /invalid JSON/);
+});
+
 test("the existing 24-proposal ceiling still rejects excessive proposals split across fences", () => {
   const reply = Array.from({ length: 25 }, (_, index) =>
     fence("actions", JSON.stringify([{ title: `Order ${index + 1}` }]))).join("\n");

@@ -28,6 +28,7 @@ import { buildOwnerAliasMap, createOwnerResolver, isRealCountryName, toCountryNa
 import { foundPolityIfUnknown } from "./polityFounding.js";
 import { normalizeTerritoryBasis, screenTerritoryBasis } from "./territoryBasis.js";
 import { normalizeApplicationReceipt } from "./applicationReceipt.js";
+import { hasMalformedRelationSummary } from "./relationSummary.js";
 import { normalizeFiledEvents } from "./filedEvents.js";
 import { applyReportOps, normalizeReportOp, normalizeReports } from "./reports.js";
 import { normalizeGmChanges, normalizeReminders } from "./gmChanges.js";
@@ -4153,7 +4154,9 @@ const normalizeWorldRelation = (entry, identityWorld, index = 0) => {
     b: ordered[1],
     score,
     status,
-    summary: normalizeTextLike(entry.summary),
+    // Legacy saves may contain several compact relation records swallowed by
+    // one explanation. Keep the scored pair; never display that payload as prose.
+    summary: hasMalformedRelationSummary(entry.summary) ? "" : normalizeTextLike(entry.summary),
     lastUpdatedDate: canonicalizeDateString(entry.lastUpdatedDate),
     sourceEventIds: [...new Set(normalizeActionParticipants(entry.sourceEventIds))].slice(-24),
     createdRound: Number.isFinite(Number(entry.createdRound)) ? Math.max(0, Math.trunc(Number(entry.createdRound))) : 0,

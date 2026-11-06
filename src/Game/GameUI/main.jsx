@@ -225,6 +225,7 @@ const AdvisorButton = ({ isAdvisorOpen, isMobile, dockStyle, onToggle }) => (
     type="button"
     title="Advisor"
     aria-label="Advisor"
+    data-oh-theme-hud=""
     onClick={onToggle}
     style={{
       ...baseStyle,
@@ -242,6 +243,7 @@ const AdvisorButton = ({ isAdvisorOpen, isMobile, dockStyle, onToggle }) => (
       background: isAdvisorOpen
         ? "var(--oh-ui-glass-active, rgba(255,255,255,0.085))"
         : "var(--oh-ui-glass-pill, rgba(35,35,39,0.53))",
+      borderColor: isAdvisorOpen ? "var(--oh-ui-glass-active-line, var(--oh-hud-border))" : "var(--oh-hud-border)",
       transition: `${dockStyle.transition}, background 0.15s ease`,
     }}
   >
