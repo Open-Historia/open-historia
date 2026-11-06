@@ -1043,8 +1043,8 @@ func _game_card(game: Dictionary, active: bool) -> Control:
 	badges.offset_right = -13
 	badges.add_theme_constant_override("separation", 6)
 	var eyebrow := str(game.get("eyebrow", ""))
-	badges.add_child(UI.pill("Current Game" if active else (eyebrow if not eyebrow.is_empty() else "Game"), Color(accent, 0.533) if active else Color(10 / 255.0, 12 / 255.0, 18 / 255.0, 0.72), Color(1, 1, 1, 0.18), Color(0.973, 0.973, 0.98, 0.96), true))
-	var scenario_pill := UI.pill(str(game.get("scenarioName", "")), Color(10 / 255.0, 12 / 255.0, 18 / 255.0, 0.72), Color(1, 1, 1, 0.12), Color(1, 1, 1, 0.85))
+	badges.add_child(UI.pill("Current Game" if active else (eyebrow if not eyebrow.is_empty() else "Game"), Color(accent, 0.8) if active else Color(10 / 255.0, 12 / 255.0, 18 / 255.0, 0.85), Color(1, 1, 1, 0.18), Color(0.973, 0.973, 0.98, 0.96), true))
+	var scenario_pill := UI.pill(str(game.get("scenarioName", "")), Color(10 / 255.0, 12 / 255.0, 18 / 255.0, 0.85), Color(1, 1, 1, 0.12), Color(1, 1, 1, 0.85))
 	scenario_pill.tooltip_text = str(game.get("scenarioName", ""))
 	scenario_pill.clip_contents = true
 	scenario_pill.custom_minimum_size.x = 0
@@ -1057,7 +1057,7 @@ func _game_card(game: Dictionary, active: bool) -> Control:
 	menu.focus_mode = Control.FOCUS_NONE
 	menu.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	menu.tooltip_text = "More for %s" % str(game.get("name", ""))
-	var menu_style := UI.box(Color(10 / 255.0, 12 / 255.0, 18 / 255.0, 0.72), Color(1, 1, 1, 0.12), 9, 1)
+	var menu_style := UI.box(Color(10 / 255.0, 12 / 255.0, 18 / 255.0, 0.85), Color(1, 1, 1, 0.12), 9, 1)
 	menu.add_theme_stylebox_override("normal", menu_style)
 	menu.add_theme_stylebox_override("hover", UI.box(Color(1, 1, 1, 0.18), Color(1, 1, 1, 0.2), 9, 1))
 	menu.add_theme_stylebox_override("pressed", UI.box(Color(1, 1, 1, 0.18), Color(1, 1, 1, 0.2), 9, 1))
@@ -1471,16 +1471,16 @@ func _scenario_card(scenario: Dictionary) -> Control:
 	badges.offset_top = 13
 	badges.offset_right = -13
 	badges.add_theme_constant_override("separation", 6)
-	badges.add_child(UI.pill("Scenario", Color(accent, 0.533), Color(1, 1, 1, 0.18), Color(0.973, 0.973, 0.98, 0.96), true))
+	badges.add_child(UI.pill("Scenario", Color(accent, 0.8), Color(1, 1, 1, 0.18), Color(0.973, 0.973, 0.98, 0.96), true))
 	if scenario.get("builtIn", false):
-		badges.add_child(UI.pill("Built-In", Color(10 / 255.0, 12 / 255.0, 18 / 255.0, 0.72), Color(1, 1, 1, 0.22), UI.WHITE, true))
+		badges.add_child(UI.pill("Built-In", Color(10 / 255.0, 12 / 255.0, 18 / 255.0, 0.85), Color(1, 1, 1, 0.22), UI.WHITE, true))
 	badges.add_child(UI.spacer())
 	var badge := _suggestion_badge(str(scenario.get("id", "")))
 	if badge:
 		badge.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		badges.add_child(badge)
 	var count := int(scenario.get("games", 0))
-	badges.add_child(UI.pill("%d game%s" % [count, "" if count == 1 else "s"], Color(10 / 255.0, 12 / 255.0, 18 / 255.0, 0.72), Color(1, 1, 1, 0.12), Color(1, 1, 1, 0.85)))
+	badges.add_child(UI.pill("%d game%s" % [count, "" if count == 1 else "s"], Color(10 / 255.0, 12 / 255.0, 18 / 255.0, 0.85), Color(1, 1, 1, 0.12), Color(1, 1, 1, 0.85)))
 	top.add_child(badges)
 	column.add_child(top)
 	var body := MarginContainer.new()
