@@ -255,7 +255,7 @@ func _language_button(item: Dictionary) -> Choice:
 	var column := VBoxContainer.new()
 	column.add_theme_constant_override("separation", 2)
 	column.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	column.alignment = BoxContainer.ALIGNMENT_CENTER
+	column.alignment = BoxContainer.ALIGNMENT_BEGIN
 	var native := str(item.get("native", code))
 	var english := str(item.get("name", code))
 	var first := UI.wrapped(native, 16, UiTheme.pick("text", INK), 700)
