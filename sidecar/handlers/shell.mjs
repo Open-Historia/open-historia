@@ -54,7 +54,7 @@ const walkFiles = (dir, found = []) => {
   return found;
 };
 
-const NOT_ON_NATIVE = new Set(["2026-11-smoother-zooming", "2026-11-picture-edges-and-strike-targets", "2026-11-less-for-the-gpu", "2026-11-mac-opening", "2026-11-slower-welcome"]);
+const NOT_ON_NATIVE = new Set(["2026-11-smoother-zooming", "2026-11-picture-edges-and-strike-targets", "2026-11-less-for-the-gpu", "2026-11-mac-opening", "2026-11-slower-welcome", "2026-11-smoother-lighter-map"]);
 
 export const register = (ctx) => {
   const { engine, api, emit, plain, storage, clean, list, cacheDir, standIn } = ctx;
