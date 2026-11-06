@@ -48,6 +48,9 @@ var _camera: Camera2D
 var _list: VBoxContainer
 var _dragging := false
 var _drag := 0.0
+var _phone := false
+var _phone_default: VBoxContainer
+var _list_scroll: ScrollContainer
 
 
 func _ready() -> void:
@@ -59,13 +62,28 @@ func _ready() -> void:
 		if event is InputEventMouseButton and (event as InputEventMouseButton).pressed and (event as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT:
 			_close())
 	add_child(dim)
-	var centre := CenterContainer.new()
-	centre.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	centre.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(centre)
+	_phone = UI.phone()
 	_modal = PanelContainer.new()
-	_modal.add_theme_stylebox_override("panel", UI.box(SURFACE, Color(1, 1, 1, 0.14), 18, 1, Vector4(24, 20, 24, 20)))
-	centre.add_child(_modal)
+	if _phone:
+		var top := VBoxContainer.new()
+		top.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		top.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		top.add_theme_constant_override("separation", 0)
+		add_child(top)
+		var lead := Control.new()
+		lead.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		lead.custom_minimum_size.y = 12.0 + UI.safe_insets().y
+		top.add_child(lead)
+		_modal.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+		_modal.add_theme_stylebox_override("panel", UI.box(SURFACE, Color(1, 1, 1, 0.14), 18, 1, Vector4(16, 16, 16, 16)))
+		top.add_child(_modal)
+	else:
+		var centre := CenterContainer.new()
+		centre.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		centre.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		add_child(centre)
+		_modal.add_theme_stylebox_override("panel", UI.box(SURFACE, Color(1, 1, 1, 0.14), 18, 1, Vector4(24, 20, 24, 20)))
+		centre.add_child(_modal)
 	_content = VBoxContainer.new()
 	_content.add_theme_constant_override("separation", 0)
 	_modal.add_child(_content)
@@ -95,6 +113,27 @@ func _build_map() -> void:
 	_viewport.size_changed.connect(_camera.force_update_scroll)
 	_container.add_child(_viewport)
 	_map_frame.add_child(_container)
+	if _phone:
+		_map_frame.add_child(_zoom_buttons())
+
+
+func _zoom_buttons() -> Control:
+	var layer := Control.new()
+	layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var box := PanelContainer.new()
+	box.add_theme_stylebox_override("panel", UI.box(Color(18 / 255.0, 20 / 255.0, 26 / 255.0, 0.75), Color(1, 1, 1, 0.12), 8, 1, Vector4(3, 3, 3, 3)))
+	box.position = Vector2(12, 12)
+	var stack := VBoxContainer.new()
+	stack.add_theme_constant_override("separation", 2)
+	for entry in [["+", 1.5], ["−", 1.0 / 1.5]]:
+		var factor: float = entry[1]
+		var zoom := EventCards.button(entry[0], Color(1, 1, 1, 0.08), Color(0, 0, 0, 0), UI.WHITE, 6, 18, 700, Vector4(0, 0, 0, 0), Color(1, 1, 1, 0.22))
+		zoom.custom_minimum_size = Vector2(UI.PHONE_TAP, UI.PHONE_TAP)
+		zoom.pressed.connect(func() -> void: _zoom(_container.size * 0.5, factor))
+		stack.add_child(zoom)
+	box.add_child(stack)
+	layer.add_child(box)
+	return layer
 
 
 func open(data: Dictionary) -> void:
@@ -140,8 +179,17 @@ func is_play_mode() -> bool:
 	return not _play_game_id.is_empty()
 
 
+func _phone_map_height() -> float:
+	return clampf(get_viewport_rect().size.y - 448.0, 150.0, 320.0)
+
+
 func _size_modal() -> void:
 	var view := get_viewport_rect().size
+	if _phone:
+		var tall := view.y - 24.0 - UI.safe_insets().y - UI.safe_insets().w
+		_modal.custom_minimum_size = Vector2(minf(460.0, view.x * 0.92) if not _pick.is_empty() else minf(640.0, view.x * 0.94), tall if _pick.is_empty() and _tab == "group" and not is_play_mode() else 0.0)
+		_modal.reset_size()
+		return
 	if not _pick.is_empty():
 		_modal.custom_minimum_size = Vector2(minf(460.0, view.x * 0.92), 0)
 	else:
@@ -150,6 +198,7 @@ func _size_modal() -> void:
 
 
 func _clear() -> void:
+	_map_frame.visible = true
 	if _map_frame.get_parent():
 		_map_frame.get_parent().remove_child(_map_frame)
 	for child in _content.get_children():
@@ -181,6 +230,10 @@ func _render() -> void:
 		_set_mode("regions" if not _creator.is_empty() and not bool(_creator.get("landless", true)) else "country")
 		return
 	_set_mode("country")
+	if _phone:
+		_render_phone_body()
+		_render_footer()
+		return
 	var body := HBoxContainer.new()
 	body.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	body.add_theme_constant_override("separation", 20)
@@ -202,7 +255,7 @@ func _render() -> void:
 
 
 func _render_header() -> void:
-	var header := HBoxContainer.new()
+	var header: BoxContainer = VBoxContainer.new() if _phone else HBoxContainer.new()
 	header.add_theme_constant_override("separation", 10)
 	var titles := VBoxContainer.new()
 	titles.add_theme_constant_override("separation", 3)
@@ -216,7 +269,7 @@ func _render_header() -> void:
 	eyebrow.add_child(chip)
 	eyebrow.add_child(UI.label(str(_data.get("scenario", {}).get("name", "")), 13, Color(1, 1, 1, 0.8), 600))
 	titles.add_child(eyebrow)
-	titles.add_child(UI.label("Play as a group" if _tab == "group" else "Choose your country", 21, UI.WHITE, 800, "Arial", -1))
+	titles.add_child(UI.label("Play as a group" if _tab == "group" else "Choose your country", 18 if _phone else 21, UI.WHITE, 800, "Arial", -1))
 	header.add_child(titles)
 	if is_play_mode():
 		var plain := MarginContainer.new()
@@ -238,6 +291,8 @@ func _render_header() -> void:
 			_render())
 		row.add_child(tab)
 	tabs.add_child(row)
+	if _phone:
+		tabs.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	header.add_child(tabs)
 	var spaced := MarginContainer.new()
 	spaced.add_theme_constant_override("margin_bottom", 12)
@@ -310,6 +365,55 @@ func _render_list() -> Control:
 	return column
 
 
+func _render_phone_body() -> void:
+	var body := VBoxContainer.new()
+	body.add_theme_constant_override("separation", 10)
+	var search := LineEdit.new()
+	search.placeholder_text = "Search countries…"
+	search.text = _query
+	search.custom_minimum_size.y = UI.PHONE_TAP
+	search.add_theme_stylebox_override("normal", UI.box(Color(0, 0, 0, 0.32), Color(1, 1, 1, 0.16), 8, 1, Vector4(12, 0, 12, 0)))
+	search.add_theme_stylebox_override("focus", UI.box(Color(0, 0, 0, 0.32), Color(1, 1, 1, 0.26), 8, 1, Vector4(12, 0, 12, 0)))
+	search.add_theme_font_override("font", UI.font(400))
+	search.add_theme_font_size_override("font_size", 14)
+	search.add_theme_color_override("font_placeholder_color", Color(1, 1, 1, 0.38))
+	search.text_changed.connect(func(text: String) -> void:
+		_query = text
+		_fill_list())
+	var map_column := VBoxContainer.new()
+	map_column.add_theme_constant_override("separation", 6)
+	map_column.add_child(search)
+	_map_frame.custom_minimum_size = Vector2(0, _phone_map_height())
+	_map_frame.size_flags_vertical = Control.SIZE_FILL
+	map_column.add_child(_map_frame)
+	body.add_child(map_column)
+	var list_column := VBoxContainer.new()
+	list_column.add_theme_constant_override("separation", 0)
+	_phone_default = VBoxContainer.new()
+	_phone_default.add_theme_constant_override("separation", 0)
+	list_column.add_child(_phone_default)
+	_list_scroll = ScrollContainer.new()
+	_list_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_list = VBoxContainer.new()
+	_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_list.add_theme_constant_override("separation", 3)
+	_list_scroll.add_child(_list)
+	list_column.add_child(_list_scroll)
+	body.add_child(list_column)
+	_content.add_child(body)
+	_fill_list()
+
+
+func _fit_phone_list(rows: int, more: bool) -> void:
+	var searching := not _query.strip_edges().is_empty()
+	_map_frame.visible = not searching
+	var tallest := 240.0 if searching else 120.0
+	var natural := float(rows) * UI.PHONE_TAP + float(maxi(0, rows - 1)) * 3.0 + (30.0 if more else 0.0)
+	_list_scroll.custom_minimum_size.y = minf(natural, tallest)
+	_list_scroll.scroll_vertical = 0
+	_size_modal()
+
+
 func _filtered() -> Array:
 	var needle := _query.strip_edges().to_lower()
 	if needle.is_empty():
@@ -323,19 +427,26 @@ func _fill_list() -> void:
 	for child in _list.get_children():
 		_list.remove_child(child)
 		child.queue_free()
+	if _phone:
+		for child in _phone_default.get_children():
+			_phone_default.remove_child(child)
+			child.queue_free()
 	if _query.strip_edges().is_empty():
 		var standard := _default_row()
 		standard.pressed.connect(func() -> void: _choose(""))
-		_list.add_child(standard)
 		var gap := Control.new()
-		gap.custom_minimum_size.y = 3
+		gap.custom_minimum_size.y = 6 if _phone else 3
 		gap.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		_list.add_child(gap)
+		var holder: Container = _phone_default if _phone else _list
+		holder.add_child(standard)
+		holder.add_child(gap)
 	var options := _filtered()
 	var limit := 30 if not _query.strip_edges().is_empty() else 12
 	for index in range(mini(limit, options.size())):
 		var option: Dictionary = options[index]
 		_list.add_child(_country_row(option))
+	if _phone:
+		_fit_phone_list(mini(limit, options.size()), options.size() > limit)
 	if options.size() > limit:
 		var more := UI.label("%d more… type to search" % (options.size() - limit), 12, Color(1, 1, 1, 0.45))
 		more.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -350,7 +461,7 @@ func _country_row(option: Dictionary) -> Button:
 	var row := Button.new()
 	row.focus_mode = Control.FOCUS_NONE
 	row.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-	row.custom_minimum_size.y = 34
+	row.custom_minimum_size.y = UI.PHONE_TAP if _phone else 34.0
 	var rgb: Array = option.get("color", [160, 165, 175])
 	var stripe := Color8(int(rgb[0]), int(rgb[1]), int(rgb[2]))
 	var normal := UI.box(Color(1, 1, 1, 0.05), Color(1, 1, 1, 0.08), 8, 1)
@@ -926,6 +1037,11 @@ func _blend(shade: Array) -> Array:
 
 
 func _on_map_input(event: InputEvent) -> void:
+	if _phone and event is InputEventMagnifyGesture:
+		var pinch := event as InputEventMagnifyGesture
+		_zoom(pinch.position, pinch.factor)
+		_dragging = false
+		return
 	if event is InputEventMouseButton:
 		var button := event as InputEventMouseButton
 		if button.button_index == MOUSE_BUTTON_WHEEL_UP and button.pressed:

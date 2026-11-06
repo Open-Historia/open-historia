@@ -340,7 +340,7 @@ static func community(count := 8, with_header := false) -> Control:
 		page.add_child(_shape(16.0, 0.76, 6.0))
 		page.add_child(_gap(0.7))
 	var grid := FillGrid.new(16.5 * REM, 0.8 * REM)
-	for index in range(count):
+	for index in range(mini(count, 3) if UI.phone() else count):
 		grid.add_child(community_card())
 	page.add_child(grid)
 	page.add_child(_gap(0.35))

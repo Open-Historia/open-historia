@@ -53,10 +53,15 @@ var _missing_busy := false
 var _missing_layer: Control
 var _page_bg: ColorRect
 var _rail_panel: PanelContainer
+var _phone := false
+var _page_parent: Container
+var _phone_actions: Container
+var _phone_column: VBoxContainer
 
 
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_phone = UI.phone()
 	_page_bg = ColorRect.new()
 	_page_bg.color = UiTheme.pick("bg", UI.PAGE)
 	_page_bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -64,7 +69,14 @@ func _ready() -> void:
 	add_child(_page_bg)
 	loader = ImageLoader.new()
 	add_child(loader)
-	_build_rail()
+	if _phone:
+		_phone_column = VBoxContainer.new()
+		_phone_column.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		_phone_column.add_theme_constant_override("separation", 0)
+		add_child(_phone_column)
+		_build_phone_bar()
+	else:
+		_build_rail()
 	_build_content()
 	resized.connect(_fit_grids)
 	_show_page("games")
@@ -73,7 +85,10 @@ func _ready() -> void:
 
 func _on_theme_changed() -> void:
 	_page_bg.color = UiTheme.pick("bg", UI.PAGE)
-	_rail_panel.add_theme_stylebox_override("panel", UI.box(UiTheme.pick("header", UI.RAIL), Color(0, 0, 0, 0), 0, 0, Vector4(12, 16, 12, 16)))
+	if _phone:
+		_rail_panel.add_theme_stylebox_override("panel", _phone_bar_style())
+	else:
+		_rail_panel.add_theme_stylebox_override("panel", UI.box(UiTheme.pick("header", UI.RAIL), Color(0, 0, 0, 0), 0, 0, Vector4(12, 16, 12, 16)))
 	var key := _page
 	_page = ""
 	_show_page(key)
@@ -112,7 +127,7 @@ func set_editing_enabled(enabled: bool) -> void:
 func set_creating(busy: bool) -> void:
 	_creating = busy
 	if _page_root:
-		var grid := _page_root.get_node_or_null("LibraryGrid")
+		var grid := _named("LibraryGrid")
 		if grid and grid.get_child_count() > 0 and grid.get_child(0) is DashedCard:
 			(grid.get_child(0) as DashedCard).set_busy(busy)
 
@@ -182,6 +197,8 @@ func set_status(text: String, problem := false) -> void:
 	_status.text = text
 	_status.add_theme_color_override("font_color", UI.PROBLEM if problem else UI.SOFT)
 	_status.visible = not text.is_empty()
+	if _phone:
+		(_status.get_parent() as Control).visible = _status.visible
 
 
 func _build_rail() -> void:
@@ -259,7 +276,80 @@ func _rail_tile(key: String, text: String) -> Button:
 	return tile
 
 
+func _phone_bar_style() -> StyleBoxFlat:
+	var safe := UI.safe_insets()
+	var style := UI.box(UiTheme.pick("overlay_strong", Color(15 / 255.0, 15 / 255.0, 17 / 255.0, 0.92)), Color(1, 1, 1, 0.08), 0, 0, Vector4(10.4 + safe.x, 5.6 + safe.y, 10.4 + safe.z, 5.6))
+	style.border_width_bottom = 1
+	return style
+
+
+func _build_phone_bar() -> void:
+	var bar := PanelContainer.new()
+	_rail_panel = bar
+	bar.add_theme_stylebox_override("panel", _phone_bar_style())
+	bar.custom_minimum_size.y = 54.4 + UI.safe_insets().y
+	_phone_column.add_child(bar)
+	var scroll := ScrollContainer.new()
+	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_NEVER
+	scroll.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	bar.add_child(scroll)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 7)
+	scroll.add_child(row)
+	var brand := Button.new()
+	brand.flat = true
+	brand.focus_mode = Control.FOCUS_NONE
+	brand.custom_minimum_size = Vector2(UI.PHONE_TAP, UI.PHONE_TAP)
+	brand.tooltip_text = "Update history: every update to Open Historia"
+	brand.pressed.connect(func() -> void: open_history.emit())
+	var mark := TextureRect.new()
+	mark.texture = UI.logo()
+	mark.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	mark.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	mark.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	mark.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
+	mark.offset_left = -16.8
+	mark.offset_right = 12.8
+	mark.offset_top = -14.8
+	mark.offset_bottom = 14.8
+	brand.add_child(mark)
+	row.add_child(brand)
+	for entry in [["games", "Games"], ["scenarios", "Scenarios"], ["community", "Community"], ["lobbies", "Lobbies"]]:
+		if entry[0] == "lobbies" and not UI.has_feature("multiplayer"):
+			continue
+		var key: String = entry[0]
+		var tab := Button.new()
+		tab.text = entry[1]
+		tab.focus_mode = Control.FOCUS_NONE
+		tab.custom_minimum_size.y = UI.PHONE_TAP
+		tab.set_meta("key", key)
+		tab.set_meta("phone", true)
+		tab.pressed.connect(func() -> void: _show_page(key))
+		_tiles[key] = tab
+		_style_tile(tab, false)
+		row.add_child(tab)
+
+
+func _style_phone_tab(tab: Button, active: bool) -> void:
+	var style := UI.box(UiTheme.pick("grey_selected", Color("#0e0e10")) if active else Color(1, 1, 1, 0.04), UiTheme.pick("grey_border_strong", Color(1, 1, 1, 0.22)) if active else Color(1, 1, 1, 0.08), 10, 1, Vector4(13.6, 0, 13.6, 0))
+	var hover := style.duplicate() as StyleBoxFlat
+	if not active:
+		hover.bg_color = Color(1, 1, 1, 0.08)
+	for state in ["normal", "focus", "disabled"]:
+		tab.add_theme_stylebox_override(state, style)
+	for state in ["hover", "pressed", "hover_pressed"]:
+		tab.add_theme_stylebox_override(state, hover)
+	tab.add_theme_font_override("font", UI.font(700 if active else 500))
+	tab.add_theme_font_size_override("font_size", 14)
+	for state in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_hover_pressed_color"]:
+		tab.add_theme_color_override(state, Color(246 / 255.0, 246 / 255.0, 248 / 255.0, 0.92))
+
+
 func _style_tile(tile: Button, active: bool) -> void:
+	if tile.has_meta("phone"):
+		_style_phone_tab(tile, active)
+		return
 	var style := UI.box(UiTheme.pick("active", Color(1, 1, 1, 0.11)) if active else Color(1, 1, 1, 0.035), UiTheme.pick("accent", Color(1, 1, 1, 0.24)) if active else Color(1, 1, 1, 0.07), 16, 1)
 	var hover := style.duplicate() as StyleBoxFlat
 	if not active:
@@ -277,14 +367,18 @@ func _style_tile(tile: Button, active: bool) -> void:
 
 func _build_content() -> void:
 	var margin := MarginContainer.new()
-	margin.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	margin.add_theme_constant_override("margin_left", 136)
-	margin.add_theme_constant_override("margin_right", 26)
-	margin.add_theme_constant_override("margin_top", 14)
 	margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(margin)
+	if _phone:
+		margin.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		_phone_column.add_child(margin)
+	else:
+		margin.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		margin.add_theme_constant_override("margin_left", 136)
+		margin.add_theme_constant_override("margin_right", 26)
+		margin.add_theme_constant_override("margin_top", 14)
+		add_child(margin)
 	var column := VBoxContainer.new()
-	column.add_theme_constant_override("separation", 18)
+	column.add_theme_constant_override("separation", 0 if _phone else 18)
 	margin.add_child(column)
 	var header := HBoxContainer.new()
 	header.custom_minimum_size.y = 35
@@ -296,13 +390,34 @@ func _build_content() -> void:
 	_actions.add_theme_constant_override("separation", 8)
 	header.add_child(_actions)
 	column.add_child(header)
+	header.visible = not _phone
 	_status = UI.label("", 13, UI.SOFT)
 	_status.visible = false
-	column.add_child(_status)
+	if _phone:
+		_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		var status_margin := MarginContainer.new()
+		var safe := UI.safe_insets()
+		for side in [["margin_left", 12.8 + safe.x], ["margin_right", 12.8 + safe.z], ["margin_top", 10]]:
+			status_margin.add_theme_constant_override(side[0], roundi(side[1]))
+		status_margin.add_child(_status)
+		status_margin.visible = false
+		column.add_child(status_margin)
+	else:
+		column.add_child(_status)
 	_body = ScrollContainer.new()
 	_body.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_body.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	column.add_child(_body)
+	_page_parent = _body
+	if _phone:
+		_body.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_NEVER
+		var pad := MarginContainer.new()
+		pad.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		var safe := UI.safe_insets()
+		for side in [["margin_left", 12.8 + safe.x], ["margin_right", 12.8 + safe.z], ["margin_top", 17.6], ["margin_bottom", 40 + safe.w]]:
+			pad.add_theme_constant_override(side[0], roundi(side[1]))
+		_body.add_child(pad)
+		_page_parent = pad
 
 
 func _show_page(key: String) -> void:
@@ -318,7 +433,7 @@ func _show_page(key: String) -> void:
 	if is_instance_valid(_suggestions) and _suggestions.get_parent():
 		_suggestions.get_parent().remove_child(_suggestions)
 	if _page_root:
-		_body.remove_child(_page_root)
+		_page_parent.remove_child(_page_root)
 		_page_root.queue_free()
 	_community = null
 	_lobbies = null
@@ -326,7 +441,17 @@ func _show_page(key: String) -> void:
 	_page_root = VBoxContainer.new()
 	_page_root.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_page_root.add_theme_constant_override("separation", 14)
-	_body.add_child(_page_root)
+	_page_parent.add_child(_page_root)
+	_phone_actions = null
+	if _phone:
+		_phone_actions = PhoneActions.new()
+		var settings := UI.button("Settings", "header", "settings")
+		settings.pressed.connect(func() -> void: open_settings.emit())
+		_add_action(settings)
+		var spaced := MarginContainer.new()
+		spaced.add_theme_constant_override("margin_bottom", 6)
+		spaced.add_child(_phone_actions)
+		_page_root.add_child(spaced)
 	if key == "community":
 		_title.text = "Community"
 		_build_community_page()
@@ -338,13 +463,13 @@ func _show_page(key: String) -> void:
 		refresh.pressed.connect(func() -> void:
 			refresh_trash()
 			refresh_requested.emit())
-		_actions.add_child(refresh)
+		_add_action(refresh)
 		_add_suggestions_banner()
 		if key == "scenarios":
 			_title.text = "Scenarios"
 			var import_scenario := UI.button("Import Scenario", "header", "import")
 			import_scenario.pressed.connect(func() -> void: _import("scenario"))
-			_actions.add_child(import_scenario)
+			_add_action(import_scenario)
 			_build_scenarios_page()
 			if entering and _hub_updates():
 				_updates.call("refresh")
@@ -352,9 +477,68 @@ func _show_page(key: String) -> void:
 			_title.text = "Games"
 			var import_game := UI.button("Import Game", "header", "import")
 			import_game.pressed.connect(func() -> void: _import("game"))
-			_actions.add_child(import_game)
+			_add_action(import_game)
 			_build_games_page()
 	_fit_grids.call_deferred()
+
+
+func _add_action(button: Control) -> void:
+	if _phone and is_instance_valid(_phone_actions):
+		button.custom_minimum_size = Vector2(0, UI.PHONE_TAP)
+		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_phone_actions.add_child(button)
+	else:
+		_actions.add_child(button)
+
+
+class PhoneActions extends Container:
+	const LEAST := 136.0
+	const GAP := 8.8
+
+	func _columns() -> int:
+		var count := 0
+		for child in get_children():
+			if child is Control and (child as Control).visible:
+				count += 1
+		if count == 0 or size.x <= 0.0:
+			return maxi(1, count)
+		return clampi(int(floor((size.x + GAP) / (LEAST + GAP))), 1, count)
+
+	func _shown() -> Array[Control]:
+		var shown: Array[Control] = []
+		for child in get_children():
+			if child is Control and (child as Control).visible:
+				shown.append(child as Control)
+		return shown
+
+	func _get_minimum_size() -> Vector2:
+		var shown := _shown()
+		if shown.is_empty():
+			return Vector2.ZERO
+		var columns := _columns()
+		var height := 0.0
+		for start in range(0, shown.size(), columns):
+			var tallest := 0.0
+			for index in range(start, mini(start + columns, shown.size())):
+				tallest = maxf(tallest, shown[index].get_combined_minimum_size().y)
+			height += tallest + GAP
+		return Vector2(0, height - GAP)
+
+	func _notification(what: int) -> void:
+		if what != NOTIFICATION_SORT_CHILDREN:
+			return
+		var shown := _shown()
+		var columns := _columns()
+		var width := (size.x - GAP * float(columns - 1)) / float(columns)
+		var y := 0.0
+		for start in range(0, shown.size(), columns):
+			var tallest := 0.0
+			for index in range(start, mini(start + columns, shown.size())):
+				tallest = maxf(tallest, shown[index].get_combined_minimum_size().y)
+			for index in range(start, mini(start + columns, shown.size())):
+				fit_child_in_rect(shown[index], Rect2(Vector2(float(index - start) * (width + GAP), y), Vector2(width, tallest)))
+			y += tallest + GAP
+		update_minimum_size()
 
 
 func _build_community_page() -> void:
@@ -415,20 +599,20 @@ func _build_games_page() -> void:
 			if str(b["id"]) == active:
 				return false
 			return _touched_at(a) > _touched_at(b))
-		var shelf := recent.slice(0, 6)
+		var shelf := recent.slice(0, _shelf_count())
 		if not shelf.is_empty():
 			_page_root.add_child(_menu_row("▶", "Continue Playing", "Pick up exactly where you left off.", null))
 			var row := _grid()
 			for game in shelf:
 				row.add_child(_game_card(game, str(game["id"]) == active))
-			_page_root.add_child(row)
-			_page_root.add_child(_gap(18))
+			_page_root.add_child(_shelf(row))
+			_page_root.add_child(_gap(0 if _phone else 18))
 		_page_root.add_child(_collection_header("All Games", "One library for every campaign. Search, sort or show archived saves without duplicating them into another shelf.", _game_controls()))
 		var grid := _grid()
 		grid.name = "GamesGrid"
-		_page_root.add_child(grid)
+		_page_root.add_child(_shelf(grid))
 		_refill_games_grid()
-		_page_root.add_child(_gap(24))
+		_page_root.add_child(_gap(0 if _phone else 24))
 	var deleted := _deleted_row("game")
 	if deleted:
 		_page_root.add_child(deleted)
@@ -473,7 +657,7 @@ func _browsed_games() -> Array:
 
 
 func _refill_games_grid() -> void:
-	var grid := _page_root.get_node_or_null("GamesGrid") as GridContainer
+	var grid := _named("GamesGrid") as GridContainer
 	if not grid:
 		return
 	for child in grid.get_children():
@@ -481,12 +665,12 @@ func _refill_games_grid() -> void:
 		child.queue_free()
 	var active := str(_library.get("activeGameId", ""))
 	var games := _browsed_games()
-	var empty := _page_root.get_node_or_null("GamesEmpty")
+	var empty := _named("GamesEmpty")
 	if empty:
 		_page_root.remove_child(empty)
 		empty.queue_free()
 	if not loaded:
-		for skeleton in MenuSkeleton.cards("game", 8, CARD_WIDTH):
+		for skeleton in MenuSkeleton.cards("game", 3 if _phone else 8, _card_width()):
 			grid.add_child(skeleton)
 		_fit_grids.call_deferred()
 		return
@@ -496,7 +680,7 @@ func _refill_games_grid() -> void:
 		note.add_theme_stylebox_override("panel", UI.box(Color(0, 0, 0, 0), Color(1, 1, 1, 0.12), 16, 1, Vector4(16, 16, 16, 16)))
 		note.add_child(UI.label("No games match your search." if not _game_search.is_empty() else "No games in this view.", 14, Color(1, 1, 1, 0.48)))
 		_page_root.add_child(note)
-		_page_root.move_child(note, grid.get_index() + 1)
+		_page_root.move_child(note, _shelf_root(grid).get_index() + 1)
 		return
 	for game in games:
 		grid.add_child(_game_card(game, str(game["id"]) == active))
@@ -512,19 +696,55 @@ func _game_controls() -> Control:
 		_game_search = text
 		_refill_games_grid())
 	controls.add_child(search)
+	var pills: Container = controls
+	if _phone:
+		pills = HBoxContainer.new()
+		pills.add_theme_constant_override("separation", 6)
+		pills.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	for entry in [["active", "Active"], ["all", "All"], ["archived", "Archived"]]:
 		var key: String = entry[0]
-		var pill := _browse_pill(entry[1], key == _game_view)
+		var pill := _browse_pill(entry[1], key == _game_view, 6.4)
 		pill.pressed.connect(func() -> void:
 			_game_view = key
 			_show_page("games"))
-		controls.add_child(pill)
+		pills.add_child(pill)
 	var sort := _select(["Recently played", "Most turns", "Most played", "Name"], ["recent", "turns", "played", "name"].find(_game_sort))
 	sort.item_selected.connect(func(index: int) -> void:
 		_game_sort = ["recent", "turns", "played", "name"][index]
 		_refill_games_grid())
+	if _phone:
+		return _phone_controls(controls, search, pills as HBoxContainer, sort, false)
 	controls.add_child(sort)
 	return controls
+
+
+func _phone_controls(controls: HBoxContainer, search: LineEdit, pills: HBoxContainer, sort: OptionButton, scrolls: bool) -> Control:
+	controls.remove_child(search)
+	controls.queue_free()
+	var stack := VBoxContainer.new()
+	stack.add_theme_constant_override("separation", 8)
+	search.custom_minimum_size.x = 0
+	search.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	stack.add_child(search)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 7)
+	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	for pill in pills.get_children():
+		(pill as Control).size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(pills)
+	sort.size_flags_horizontal = Control.SIZE_SHRINK_END
+	sort.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	row.add_child(sort)
+	if not scrolls:
+		stack.add_child(row)
+		return stack
+	var slide := ScrollContainer.new()
+	slide.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	slide.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_NEVER
+	slide.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	slide.add_child(row)
+	stack.add_child(slide)
+	return stack
 
 
 func _search_box(placeholder: String, value: String, width: float) -> LineEdit:
@@ -537,13 +757,17 @@ func _search_box(placeholder: String, value: String, width: float) -> LineEdit:
 	search.add_theme_font_override("font", UI.font(400))
 	search.add_theme_font_size_override("font_size", 13)
 	search.add_theme_color_override("font_placeholder_color", Color(1, 1, 1, 0.38))
+	if _phone:
+		search.set_meta("oh_tap_exempt", true)
+		search.custom_minimum_size.y = 38
 	return search
 
 
-func _browse_pill(text: String, active: bool) -> Button:
+func _browse_pill(text: String, active: bool, phone_pad := 14.0) -> Button:
 	var pill := UI.button(text, "small")
 	pill.custom_minimum_size.y = 37
-	var normal := UI.box(Color(1, 1, 1, 0.12) if active else Color(1, 1, 1, 0.05), Color(1, 1, 1, 0.26) if active else Color(1, 1, 1, 0.08), 9, 1, Vector4(14, 0, 14, 0))
+	var pad := phone_pad if _phone else 14.0
+	var normal := UI.box(Color(1, 1, 1, 0.12) if active else Color(1, 1, 1, 0.05), Color(1, 1, 1, 0.26) if active else Color(1, 1, 1, 0.08), 9, 1, Vector4(pad, 0, pad, 0))
 	pill.add_theme_stylebox_override("normal", normal)
 	pill.add_theme_stylebox_override("focus", normal)
 	for name in ["font_color", "font_focus_color"]:
@@ -563,6 +787,9 @@ func _select(items: Array, selected: int) -> OptionButton:
 	select.add_theme_stylebox_override("focus", UI.box(Color(1, 1, 1, 0.05), Color(1, 1, 1, 0.1), 9, 1, Vector4(14, 0, 14, 0)))
 	select.add_theme_font_override("font", UI.font(600))
 	select.add_theme_font_size_override("font_size", 13)
+	if _phone:
+		select.set_meta("oh_tap_exempt", true)
+		select.custom_minimum_size.y = 38
 	return select
 
 
@@ -582,7 +809,7 @@ func _menu_row(icon: String, title: String, description: String, action: Control
 	heading.add_theme_constant_override("separation", 9)
 	if not icon.is_empty():
 		heading.add_child(UI.label(icon, 16, UI.WHITE))
-	heading.add_child(UI.label(title, 18, Color(1, 1, 1, 0.94), 800, "Arial", -1))
+	heading.add_child(UI.label(title, 16 if _phone else 18, Color(1, 1, 1, 0.94), 800, "Arial", -1))
 	row.add_child(heading)
 	var rule := ColorRect.new()
 	rule.color = Color(1, 1, 1, 0.08)
@@ -600,12 +827,24 @@ func _menu_row(icon: String, title: String, description: String, action: Control
 		indent.add_child(words)
 		column.add_child(indent)
 	var margin := MarginContainer.new()
-	margin.add_theme_constant_override("margin_bottom", 4)
+	margin.add_theme_constant_override("margin_bottom", 0 if _phone else 4)
 	margin.add_child(column)
 	return margin
 
 
 func _collection_header(title: String, description: String, controls: Control) -> Control:
+	if _phone:
+		var stack := VBoxContainer.new()
+		stack.add_theme_constant_override("separation", 13)
+		var heading := VBoxContainer.new()
+		heading.add_theme_constant_override("separation", 4)
+		heading.add_child(UI.label(title, 17, Color(1, 1, 1, 0.96), 800, "Arial", -1))
+		if not description.is_empty():
+			heading.add_child(UI.wrapped(description, 14, Color(1, 1, 1, 0.58)))
+		stack.add_child(heading)
+		if controls:
+			stack.add_child(controls)
+		return stack
 	var row := HFlowContainer.new()
 	row.add_theme_constant_override("h_separation", 13)
 	row.add_theme_constant_override("v_separation", 10)
@@ -688,13 +927,13 @@ func _deleted_row(kind: String) -> Control:
 	var grid := _grid()
 	for entry in entries:
 		grid.add_child(_deleted_card(entry))
-	section.add_child(grid)
+	section.add_child(_shelf(grid))
 	return section
 
 
 func _deleted_card(entry: Dictionary) -> Control:
 	var card := PanelContainer.new()
-	card.custom_minimum_size = Vector2(CARD_WIDTH, 0)
+	card.custom_minimum_size = Vector2(_card_width(), 0)
 	card.add_theme_stylebox_override("panel", UI.box(UiTheme.pick("surface", UI.CARD), Color(1, 1, 1, 0.09), 24, 1, Vector4(19, 18, 19, 18)))
 	var stack := VBoxContainer.new()
 	stack.add_theme_constant_override("separation", 13)
@@ -737,7 +976,51 @@ func refresh_trash() -> void:
 		_show_page(_page)
 
 
+func _phone_empty_state() -> Control:
+	var holder := CenterContainer.new()
+	var view := get_viewport_rect().size if is_inside_tree() else Vector2(412, 915)
+	holder.custom_minimum_size.y = view.y * 0.6
+	holder.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var column := VBoxContainer.new()
+	column.alignment = BoxContainer.ALIGNMENT_CENTER
+	column.add_theme_constant_override("separation", 0)
+	var mark := TextureRect.new()
+	mark.texture = UI.logo()
+	mark.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	mark.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	mark.custom_minimum_size = Vector2(80, 80)
+	mark.modulate.a = 0.9
+	column.add_child(mark)
+	column.add_child(_gap(19))
+	var heading := UI.label("No games yet", 24, UI.WHITE, 800, "Arial", -1)
+	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	column.add_child(heading)
+	column.add_child(_gap(10))
+	var text := UI.wrapped("Start a new game from one of your scenarios, or grab new scenarios from the community first.", 15, Color(1, 1, 1, 0.55))
+	text.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	text.add_theme_constant_override("line_spacing", 6)
+	text.custom_minimum_size.x = minf(416.0, view.x - 25.6)
+	column.add_child(text)
+	column.add_child(_gap(26))
+	var row := HFlowContainer.new()
+	row.alignment = FlowContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("h_separation", 11)
+	row.add_theme_constant_override("v_separation", 11)
+	row.custom_minimum_size.x = view.x - 25.6
+	var start := UI.button("Start from a scenario", "hero")
+	start.pressed.connect(func() -> void: _show_page("scenarios"))
+	row.add_child(start)
+	var browse := UI.button("Browse community scenarios", "hero_quiet")
+	browse.pressed.connect(func() -> void: _show_page("community"))
+	row.add_child(browse)
+	column.add_child(row)
+	holder.add_child(column)
+	return holder
+
+
 func _empty_state() -> Control:
+	if _phone:
+		return _phone_empty_state()
 	var holder := CenterContainer.new()
 	holder.custom_minimum_size.y = 560
 	holder.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -777,15 +1060,15 @@ func _build_scenarios_page() -> void:
 		_page_root.add_child(_menu_row("🕐", "Recently Used", "The scenarios behind your latest games and edits.", null))
 		var recent_grid := _grid()
 		recent_grid.name = "RecentGrid"
-		_page_root.add_child(recent_grid)
+		_page_root.add_child(_shelf(recent_grid))
 		_refill_recent_grid()
-		_page_root.add_child(_gap(18))
+		_page_root.add_child(_gap(0 if _phone else 18))
 	_page_root.add_child(_collection_header("Scenario Library", "Everything you can start a new game from, in one place.", _scenario_controls()))
 	var grid := _grid()
 	grid.name = "LibraryGrid"
-	_page_root.add_child(grid)
+	_page_root.add_child(_shelf(grid))
 	_refill_library_grid()
-	_page_root.add_child(_gap(24))
+	_page_root.add_child(_gap(0 if _phone else 24))
 	var deleted := _deleted_row("scenario")
 	if deleted:
 		_page_root.add_child(deleted)
@@ -800,18 +1083,25 @@ func _scenario_controls() -> Control:
 		_search = text
 		_refill_library_grid())
 	controls.add_child(search)
+	var pills: Container = controls
+	if _phone:
+		pills = HBoxContainer.new()
+		pills.add_theme_constant_override("separation", 6)
+		pills.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	for entry in [["all", "All"], ["yours", "Yours"], ["community", "Community"], ["updates", "Updates"]]:
 		var key: String = entry[0]
-		var pill := _browse_pill(entry[1], key == _filter)
+		var pill := _browse_pill(entry[1], key == _filter, 7.2)
 		pill.pressed.connect(func() -> void:
 			_filter = key
 			_show_page("scenarios"))
-		controls.add_child(pill)
+		pills.add_child(pill)
 	var keys := ["recent", "updated", "played", "name"]
 	var sort := _select(["Recently used", "Recently updated", "Most played", "Name"], keys.find(_sort))
 	sort.item_selected.connect(func(index: int) -> void:
 		_sort = keys[index]
 		_refill_library_grid())
+	if _phone:
+		return _phone_controls(controls, search, pills as HBoxContainer, sort, true)
 	controls.add_child(sort)
 	return controls
 
@@ -856,14 +1146,14 @@ func _recent_scenarios() -> Array:
 			continue
 		seen[str(scenario.get("id", ""))] = true
 		recent.append(scenario)
-		if recent.size() >= 6:
+		if recent.size() >= _shelf_count():
 			break
 	for scenario in _by_updated(scenarios):
 		if seen.has(str(scenario.get("id", ""))):
 			continue
 		seen[str(scenario.get("id", ""))] = true
 		recent.append(scenario)
-		if recent.size() >= 6:
+		if recent.size() >= _shelf_count():
 			break
 	return recent
 
@@ -916,7 +1206,7 @@ func _browsed_scenarios() -> Array:
 
 
 func _refill_recent_grid() -> void:
-	var grid := _page_root.get_node_or_null("RecentGrid") as GridContainer
+	var grid := _named("RecentGrid") as GridContainer
 	if not grid:
 		return
 	for child in grid.get_children():
@@ -928,13 +1218,13 @@ func _refill_recent_grid() -> void:
 
 
 func _refill_library_grid() -> void:
-	var grid := _page_root.get_node_or_null("LibraryGrid") as GridContainer
+	var grid := _named("LibraryGrid") as GridContainer
 	if not grid:
 		return
 	for child in grid.get_children():
 		grid.remove_child(child)
 		child.queue_free()
-	var empty := _page_root.get_node_or_null("LibraryEmpty")
+	var empty := _named("LibraryEmpty")
 	if empty:
 		_page_root.remove_child(empty)
 		empty.queue_free()
@@ -942,7 +1232,7 @@ func _refill_library_grid() -> void:
 	if with_create:
 		grid.add_child(_create_card())
 	if not loaded:
-		for skeleton in MenuSkeleton.cards("scenario", 7, CARD_WIDTH):
+		for skeleton in MenuSkeleton.cards("scenario", 3 if _phone else 7, _card_width()):
 			grid.add_child(skeleton)
 		_fit_grids.call_deferred()
 		return
@@ -953,7 +1243,7 @@ func _refill_library_grid() -> void:
 		note.add_theme_stylebox_override("panel", UI.box(Color(0, 0, 0, 0), Color(1, 1, 1, 0.12), 16, 1, Vector4(16, 16, 16, 16)))
 		note.add_child(UI.label("No scenarios match your search." if not _search.is_empty() else "No scenarios in this view.", 14, Color(1, 1, 1, 0.48)))
 		_page_root.add_child(note)
-		_page_root.move_child(note, grid.get_index() + 1)
+		_page_root.move_child(note, _shelf_root(grid).get_index() + 1)
 		return
 	for scenario in scenarios:
 		grid.add_child(_scenario_card(scenario))
@@ -962,14 +1252,58 @@ func _refill_library_grid() -> void:
 
 func _grid() -> GridContainer:
 	var grid := GridContainer.new()
-	grid.add_theme_constant_override("h_separation", CARD_GAP)
+	grid.add_theme_constant_override("h_separation", 14 if _phone else CARD_GAP)
 	grid.add_theme_constant_override("v_separation", CARD_GAP)
 	grid.columns = 4
 	_grids.append(grid)
 	return grid
 
 
+func _named(node_name: String) -> Node:
+	return _page_root.find_child(node_name, true, false) if _page_root else null
+
+
+func _shelf(grid: GridContainer) -> Control:
+	if not _phone:
+		return grid
+	var row := ScrollContainer.new()
+	row.set_meta("oh_shelf", true)
+	row.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	row.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_NEVER
+	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var pad := MarginContainer.new()
+	pad.add_theme_constant_override("margin_bottom", 6)
+	pad.add_child(grid)
+	row.add_child(pad)
+	return row
+
+
+func _shelf_root(grid: Control) -> Node:
+	var node: Node = grid
+	while node.get_parent() and node.get_parent() != _page_root:
+		node = node.get_parent()
+	return node
+
+
+func _shelf_count() -> int:
+	return 5 if _phone else 6
+
+
+func _card_width() -> float:
+	if not _phone:
+		return CARD_WIDTH
+	var view := get_viewport_rect().size.x if is_inside_tree() else UI.phone_preview().x
+	if view <= 0.0:
+		view = 412.0
+	return minf(336.0, view - 38.4)
+
+
 func _fit_grids() -> void:
+	if _phone:
+		for grid in _grids:
+			if is_instance_valid(grid):
+				grid.columns = maxi(1, grid.get_child_count())
+		return
 	var width := _body.size.x
 	if width <= 0:
 		return
@@ -981,15 +1315,16 @@ func _fit_grids() -> void:
 
 func _card_frame(active: bool, accent: Color, height: float) -> PanelContainer:
 	var card := PanelContainer.new()
-	card.custom_minimum_size = Vector2(CARD_WIDTH, height)
+	card.custom_minimum_size = Vector2(_card_width(), height)
+	card.set_meta("oh_card", true)
 	var style := UI.box(UiTheme.pick("surface", UI.CARD), Color(accent, 0.533) if active else Color(1, 1, 1, 0.09), 24, 1, Vector4(1, 1, 1, 1))
 	card.add_theme_stylebox_override("panel", style)
 	return card
 
 
-func _cover(url: String, accent: Color, glow: float) -> CoverRect:
+func _cover(url: String, accent: Color, glow: float, height := 154.0) -> CoverRect:
 	var cover := CoverRect.new(accent, glow)
-	cover.custom_minimum_size = Vector2(CARD_WIDTH - 2, 154)
+	cover.custom_minimum_size = Vector2(_card_width() - 2, height)
 	var held: WeakRef = weakref(cover)
 	loader.fetch(url, func(texture: Texture2D) -> void:
 		var target: Variant = held.get_ref()
@@ -1027,13 +1362,14 @@ func _game_card(game: Dictionary, active: bool) -> Control:
 	var accent_text := str(game.get("accentColor", ""))
 	var accent := Color(accent_text if not accent_text.is_empty() else "#2bc1f3")
 	var archived: bool = game.get("archived", false)
-	var card := _card_frame(active, accent, 463 if archived else 424)
+	var cover_height := 120.0 if _phone else 154.0
+	var card := _card_frame(active, accent, (463 if archived else 424) - (52 if _phone else 0))
 	var column := VBoxContainer.new()
 	column.add_theme_constant_override("separation", 0)
 	card.add_child(column)
 	var top := Control.new()
-	top.custom_minimum_size = Vector2(CARD_WIDTH - 2, 154)
-	var cover := _cover(str(game.get("coverImageUrl", "")), accent, 1.0)
+	top.custom_minimum_size = Vector2(_card_width() - 2, cover_height)
+	var cover := _cover(str(game.get("coverImageUrl", "")), accent, 1.0, cover_height)
 	cover.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	top.add_child(cover)
 	var badges := HBoxContainer.new()
@@ -1073,7 +1409,7 @@ func _game_card(game: Dictionary, active: bool) -> Control:
 		body.add_theme_constant_override(side[0], side[1])
 	var stack := VBoxContainer.new()
 	stack.add_theme_constant_override("separation", 7)
-	var title := UI.label(str(game.get("name", "")), 17, UI.WHITE, 800, "Arial", 0)
+	var title := UI.label(str(game.get("name", "")), 16 if _phone else 17, UI.WHITE, 800, "Arial", 0)
 	title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	stack.add_child(title)
 	var country := str(game.get("country", ""))
@@ -1087,7 +1423,7 @@ func _game_card(game: Dictionary, active: bool) -> Control:
 	row.add_child(_info_tile("Round", str(max(1, int(game.get("round", 1))))))
 	stack.add_child(row)
 	var description_text := str(game.get("description", ""))
-	var description := UI.wrapped(description_text if not description_text.is_empty() else "Playable campaign session.", 13, UI.MUTED, 400, 3)
+	var description := UI.wrapped(description_text if not description_text.is_empty() else "Playable campaign session.", 13, UI.MUTED, 400, 2 if _phone else 3)
 	description.tooltip_text = description_text
 	description.mouse_filter = Control.MOUSE_FILTER_PASS
 	description.custom_minimum_size.y = 38
@@ -1461,7 +1797,7 @@ func _scenario_card(scenario: Dictionary) -> Control:
 	column.add_theme_constant_override("separation", 0)
 	card.add_child(column)
 	var top := Control.new()
-	top.custom_minimum_size = Vector2(CARD_WIDTH - 2, 154)
+	top.custom_minimum_size = Vector2(_card_width() - 2, 154)
 	var cover := _cover(str(scenario.get("coverImageUrl", "")), accent, 0.6)
 	cover.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	top.add_child(cover)
@@ -1528,7 +1864,7 @@ func _scenario_card(scenario: Dictionary) -> Control:
 
 func _create_card() -> Control:
 	var card := DashedCard.new()
-	card.custom_minimum_size = Vector2(CARD_WIDTH, 363)
+	card.custom_minimum_size = Vector2(_card_width(), 363)
 	card.pressed.connect(func() -> void: create_scenario.emit())
 	card.set_busy(_creating)
 	return card
