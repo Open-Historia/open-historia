@@ -91,7 +91,7 @@ export const forgetModel = (cacheDir, repo) => {
 
 const fileUrl = (host, repo, revision, file) => `${host}/${repo}/resolve/${revision}/${file}`;
 
-export const downloadModel = async (cacheDir, { host = "https://huggingface.co", repo, revision, files, sizes = {}, total = 0 }, { onProgress, signal, fetcher = globalThis.fetch } = {}) => {
+export const downloadModel = async (cacheDir, { host = "https://huggingface.co", repo, revision, files, sizes = {}, total = 0, urlOf = null }, { onProgress, signal, fetcher = globalThis.fetch } = {}) => {
   if (modelCached(cacheDir, { repo, revision, files })) return false;
   const dir = modelDir(cacheDir, repo);
   fs.mkdirSync(dir, { recursive: true });
@@ -110,7 +110,7 @@ export const downloadModel = async (cacheDir, { host = "https://huggingface.co",
   for (const file of files) {
     const target = path.join(dir, file);
     fs.mkdirSync(path.dirname(target), { recursive: true });
-    const response = await fetcher(fileUrl(host, repo, revision, file), { signal });
+    const response = await fetcher(urlOf ? urlOf(file) : fileUrl(host, repo, revision, file), { signal });
     if (!response.ok || !response.body) throw new Error(`${file}: ${response.status}`);
     const part = `${target}.part`;
     const out = fs.createWriteStream(part);
@@ -184,7 +184,7 @@ export const createTranslationRunner = ({ cacheDir, models }) => {
   const download = async (code, onProgress) => {
     const entry = models.translationModelFor(code);
     if (!entry) throw new Error("No translation model for this language.");
-    await downloadModel(cacheDir, { host: models.MODEL_HOST, ...filesOf(entry), total: entry.bytes }, { onProgress });
+    await downloadModel(cacheDir, { host: models.MODEL_HOST, ...filesOf(entry), total: entry.bytes, urlOf: (file) => models.modelFileUrl(entry, file) }, { onProgress });
   };
 
   const load = (code) => {

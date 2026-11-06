@@ -73,7 +73,8 @@ const LANGUAGES = [
   ["sv", "Swedish", "Svenska"], ["he", "Hebrew", "עברית"], ["ms", "Malay", "Bahasa Melayu"], ["fil", "Filipino", "Filipino"],
   ["am", "Amharic", "አማርኛ"], ["ne", "Nepali", "नेपाली"], ["si", "Sinhala", "සිංහල"], ["km", "Khmer", "ខ្មែរ"],
   ["so", "Somali", "Soomaali"], ["az", "Azerbaijani", "Azərbaycanca"], ["uz", "Uzbek", "Oʻzbekcha"], ["yo", "Yoruba", "Yorùbá"],
-  ["fi", "Finnish", "Suomi"], ["da", "Danish", "Dansk"],
+  ["fi", "Finnish", "Suomi"], ["da", "Danish", "Dansk"], ["lv", "Latvian", "Latviešu"], ["lt", "Lithuanian", "Lietuvių"],
+  ["sk", "Slovak", "Slovenčina"], ["et", "Estonian", "Eesti"], ["ga", "Irish", "Gaeilge"], ["mt", "Maltese", "Malti"],
 ].map(([code, name, native]) => ({ code, name, native }));
 
 const SHIPPED_PACKS = new Set(["ar", "bn", "de", "es", "fa", "fr", "hi", "id", "it", "ja", "ko", "nl", "pl", "pt", "ru", "sv", "th", "tr", "uk", "ur", "vi", "zh"]);
