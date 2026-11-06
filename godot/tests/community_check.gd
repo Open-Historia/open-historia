@@ -122,7 +122,8 @@ func _run() -> void:
 			return
 		await process_frame
 	_say("menu ready")
-	await _until(func() -> bool: return main.menu._trash != null, 20.0)
+	var started_up := await _until(func() -> bool: return main.menu.loaded and main.menu._trash != null, 180.0)
+	_check(started_up, "the menu has its library and its trash before a page is mounted over it")
 	await _wait(1.0)
 	var only := OS.get_environment("OH_ONLY")
 	if only == "lobbies":
