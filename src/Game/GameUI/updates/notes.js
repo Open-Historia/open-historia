@@ -56,7 +56,7 @@ const NEW_UPDATES = [
   {
     // PR #969 (a contributor's, rebuilt on beta): the desktop app on a port the system picks once every port near the
     // usual one is taken (electron/main.cjs findFreePort), where it used not to open (2026-11-06). Its right-to-left
-    // plugin was dropped: MapLibre 6, coming back as a package built from Open-Historia/maplibre-gl-js, shapes Arabic and orders right-to-left text itself.
+    // plugin was dropped: MapLibre 6 (the package built from Open-Historia/maplibre-gl-js) shapes Arabic and orders right-to-left text itself.
     id: "2026-11-desktop-opens-on-another-port",
     kind: "minor",
     date: "2026-11-06",
@@ -66,6 +66,30 @@ const NEW_UPDATES = [
         title: "The desktop app always opens",
         items: [
           "The desktop app now opens even when every port it usually uses is taken.",
+        ],
+      },
+    ],
+  },
+  {
+    // MapLibre 6.16 with the game's own changes (Open-Historia/maplibre-gl-js, OPEN-HISTORIA.md): placement paced, sources
+    // sharing their tile walks, clipping masks kept, tiles stored compactly. Measured on the production builds with the CPU
+    // slowed 6x: panning 24 to 46 fps with terrain, 29 to 49 without; memory 3.1 GB to 1.9 GB. The land mask waits until the
+    // map has stayed put (FrontLayers.jsx). On phones the browser's backdrop blur held the map to half its frame rate whatever
+    // its strength, so the map paints the glass itself (Map/frostedPanels.js): 52 to 88 fps on the owner's phone.
+    id: "2026-11-smoother-lighter-map",
+    kind: "minor",
+    date: "2026-11-06",
+    channel: "beta",
+    banners: [
+      {
+        title: "A smoother, lighter map",
+        items: [
+          "On modest computers the map now moves about twice as smoothly as you drag it around, with 3D terrain on or off, and battles replay more smoothly too.",
+          "On phones the map now moves much more smoothly as you drag and pinch it, with the same frosted panels over it.",
+          "On phones, country names on the far side of the globe no longer show through it.",
+          "On a computer the game now uses over a third less memory with a big map open, and on a phone a little less.",
+          "The map no longer catches for a moment when you let go of it near a war, and small, slow moves run without stutter.",
+          "The map looks the same, though a few labels may sit a little differently, and while you move one can take a moment to appear.",
         ],
       },
     ],
@@ -404,6 +428,7 @@ const NEW_UPDATES = [
     // (Map/clippingMasks.js), sources share what they work out (Map/sourceCaches.js), and the idle pulse asks the
     // world each whole-map question once and lets the map draw between its stages (runtime/worldLookups.js).
     // Every pixel and every prompt checked identical; on the owner's phone the pulse's freeze fell from 1.6 s to 0.45 s.
+    // (Those three files have since become the game's own MapLibre: 2026-11-smoother-lighter-map.)
     id: "2026-11-less-for-the-gpu",
     kind: "minor",
     date: "2026-11-05",
