@@ -154,7 +154,7 @@ const BACKGROUND = { kind: "image", opacity: 0.5 };
 
 // A bundle in the shape both exporters write today: the geometry as parsed JSON.
 const scenarioBundle = (name, extra = {}) => ({
-  schema: "pax-historia-scenario-bundle/2",
+  schema: "old-scenario-bundle/2",
   version: 2,
   scenario: { id: "hub-map", name },
   data: { game: { country: "Testland" }, world: { ownerSchema: 4, polityOverrides: { Testland: { name: "Testland" } } } },

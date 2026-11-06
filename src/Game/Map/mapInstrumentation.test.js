@@ -137,7 +137,7 @@ test("a lost context is logged as lost, but a removed map's own teardown is not"
 test("the loading toast hears basemap tile loads only", () => {
   const map = fakeMap();
   const heard = [];
-  const ids = new Set(["satellite", "satellite-lowres", "pax-world-relief"]);
+  const ids = new Set(["satellite", "satellite-lowres", "world-relief"]);
   const detach = attachMapInstrumentation({
     map,
     canvas: fakeCanvas(),

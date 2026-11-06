@@ -60,7 +60,7 @@ const update = (root, bundle) => {
 };
 
 const newVersion = (backgroundData) => ({
-  schema: "pax-historia-scenario-bundle/2",
+  schema: "old-scenario-bundle/2",
   scenario: { name: "Hub Copy v2" },
   data: { world: { ownerSchema: OWNER_SCHEMA, background: { kind: "vector" } }, game: { country: "Testland", gameDate: "2030-01-01" } },
   assets: backgroundData ? { backgroundData } : {},

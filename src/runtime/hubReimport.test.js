@@ -36,7 +36,7 @@ const INDEX = {
   updates: { [COPY(1)]: UPDATE(1), [COPY(2)]: UPDATE(2), [COPY(3)]: UPDATE(3) },
 };
 
-const zip = new Uint8Array(await (await zipBundle({ "scenario.json": JSON.stringify({ schema: "pax-historia-scenario-bundle/2", scenario: { name: "S" }, data: {}, assets: {} }) })).arrayBuffer());
+const zip = new Uint8Array(await (await zipBundle({ "scenario.json": JSON.stringify({ schema: "old-scenario-bundle/2", scenario: { name: "S" }, data: {}, assets: {} }) })).arrayBuffer());
 const downloads = [];
 // ui-settings is answered by the website's own store (settingsStore.js), which
 // keeps it as the desktop server does.
