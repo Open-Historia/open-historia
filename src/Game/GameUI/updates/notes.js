@@ -54,6 +54,81 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // "the hello welcome introduction switches languages about 2 times too fast. also it should fade out the last
+    // language and fade in the new one" (the owner, 2026-11-06, of the native app), then: "make the greeting thing on
+    // the electron apps be the same as on native": a greeting every 4.4 s, 0.6 s in and 0.6 s out (FirstSetup.jsx).
+    id: "2026-11-slower-welcome",
+    kind: "minor",
+    date: "2026-11-06",
+    channel: "beta",
+    banners: [
+      {
+        title: "A slower welcome",
+        items: [
+          "The first-time setup's greeting now stays on each language for about four seconds, and fades one out before the next fades in.",
+        ],
+      },
+    ],
+  },
+  {
+    // The owner's file, 2026-11-06: "add this as an ingame song", then "for this one dont actually flatten the
+    // loudness, let it be" (runtime/ambientMusic.js aKindOfHope, no `loud` table; public/audio/CREDITS.txt).
+    id: "2026-11-a-kind-of-hope",
+    kind: "minor",
+    date: "2026-11-06",
+    channel: "beta",
+    banners: [
+      {
+        title: "A new song in a game",
+        items: [
+          "“A Kind Of Hope” by Scott Buckley now plays in a game, in turn with the others, as it was recorded.",
+        ],
+      },
+    ],
+  },
+  {
+    // A player's log, 2026-11-06 (round 637, desktop beta): time skips refused by Gemini as sent, 400 "Request contains an
+    // invalid argument", each to the stand-in events (AI/main.jsx geminiFunctionCallRefusals); every restore point refused
+    // by the server as too large (runtime/restorePointBudget.js); the world city list served as the app's page on the
+    // desktop (server.js MAP_ASSETS_DIR); a landless State of Israel raised at its own name every skip (gameplay.js
+    // raiseMissingCombatants); the Advisor's actions lost to a list closed over an open object
+    // (GameUI/advisorBlocks.js closeObjectsBeforeList); and a third of the log one font warning per letter.
+    id: "2026-11-long-campaign-fixes",
+    kind: "minor",
+    date: "2026-11-05",
+    channel: "beta",
+    banners: [
+      {
+        title: "Fixes for long campaigns",
+        items: [
+          "A time skip Gemini refuses in the form it was asked is asked again at once in the other form, instead of ending in the stand-in events.",
+          "Long campaigns keep their restore points: the oldest are let go once the archive grows too large to save, so undo keeps working.",
+          "On the desktop app, the time skip can find towns from the world's city list again when it places forces.",
+          "A country at war with no land left is no longer sent an army it has nowhere to stand.",
+          "The Advisor's suggested actions are no longer lost when its list of them is closed one bracket short.",
+        ],
+      },
+    ],
+  },
+  {
+    // "I ordered my spy to assassinate head of state it succeed but nothing happened he still alive" (a player's
+    // report, 2026-11-06): the skip was told only that the operation succeeded, wrote the death, and left the record's
+    // leader in office. AI/covertOperationsDirective.js now says the target is dead and that the same event carries
+    // the change of leader.
+    id: "2026-11-assassinations-take-effect",
+    kind: "minor",
+    date: "2026-11-05",
+    channel: "beta",
+    banners: [
+      {
+        title: "Assassinations take effect",
+        items: [
+          "A leader your agents assassinate is now gone for good: a successor takes their office in the same event.",
+        ],
+      },
+    ],
+  },
+  {
     // Opus-MT en-bat (Latvian, Lithuanian), en-sk, en-et, en-el, en-he, en-ga, en-mt and en-gmq (Swedish), converted
     // for the game from Helsinki-NLP's models (none had a Transformers.js copy) and tried on the game's own kind of
     // text, 2026-11-06. Nobody publishes them on Hugging Face: they are read from the scenario repository's

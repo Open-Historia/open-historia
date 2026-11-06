@@ -219,6 +219,14 @@ export const MUSIC_TRACKS = Object.freeze({
       ]),
     }),
   }),
+  // Not levelled, at the owner's word ("for this one dont actually flatten the
+  // loudness, let it be"): no `loud` table, so it plays as recorded, its quiet
+  // opening quiet and its climax full, at the game's level.
+  aKindOfHope: Object.freeze({
+    file: "audio/a-kind-of-hope.mp3",
+    work: "A Kind Of Hope",
+    ...COMPOSER,
+  }),
 });
 // The war room's pieces (names in MUSIC_TRACKS): one after the other, round
 // again at the end. Which of them a game's war room starts on is picked at
@@ -227,7 +235,7 @@ export const MUSIC_WAR_PIECES = Object.freeze(["war", "vanguard"]);
 // The pieces that play in a game (names in MUSIC_TRACKS), in the background:
 // one after the other, round again at the end, and which of them a game
 // starts on is picked at random.
-export const MUSIC_GAME_PIECES = Object.freeze(["frankincenseAndMyrrh", "discovery", "honourAmongThieves"]);
+export const MUSIC_GAME_PIECES = Object.freeze(["frankincenseAndMyrrh", "discovery", "honourAmongThieves", "aKindOfHope"]);
 // The menu's other pieces (names in MUSIC_TRACKS). The menu's pieces are
 // Passage Of Time and these: which of them a visit to the menu plays is
 // picked at random, and on a menu left idle they follow one another, each
