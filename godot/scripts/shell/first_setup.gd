@@ -14,7 +14,6 @@ const GREETINGS := [
 	["sv", "Hej", "Välkommen"], ["bn", "নমস্কার", "স্বাগতম"], ["ro", "Salut", "Bun venit"], ["hu", "Szia", "Üdvözöljük"],
 	["ur", "آداب", "خوش آمدید"], ["da", "Goddag", "Velkommen"], ["cs", "Ahoj", "Vítejte"], ["fi", "Hei", "Tervetuloa"],
 ]
-const RTL := ["ar", "fa", "ur", "he"]
 const BG := Color("#0f0f11")
 const INK := Color("#f4f4f5")
 const MUTED := Color(231 / 255.0, 231 / 255.0, 234 / 255.0, 0.62)
@@ -263,7 +262,6 @@ func _language_button(item: Dictionary) -> Choice:
 	first.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
 	first.add_theme_constant_override("line_spacing", 0)
 	first.custom_minimum_size.x = 1
-	first.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT if code in RTL else HORIZONTAL_ALIGNMENT_LEFT
 	column.add_child(first)
 	if native != english:
 		var second := UI.wrapped(english, 12, UiTheme.pick("muted", NAME_INK))

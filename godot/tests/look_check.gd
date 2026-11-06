@@ -174,8 +174,11 @@ func _theme_runtime() -> void:
 	await _frames(4)
 	_check(_same(main.menu.get("_page_bg").color, Color("#121E19")), "Forest recolours the main menu at once")
 	await _shoot("look-menu-forest")
+	await _wait(0.5)
 	var stored: Dictionary = await main.engine.request("look.theme.get")
-	_check(str(((stored.get("result", {}) as Dictionary).get("theme", {}) as Dictionary).get("preset", "")) == "forest", "the choice is kept on the device")
+	var result: Variant = stored.get("result")
+	var kept: Variant = (result as Dictionary).get("theme") if typeof(result) == TYPE_DICTIONARY else null
+	_check(typeof(kept) == TYPE_DICTIONARY and str((kept as Dictionary).get("preset", "")) == "forest", "the choice is kept on the device", str(stored))
 	UiTheme.reset()
 	await _frames(4)
 	_check(_same(main.menu.get("_page_bg").color, UI.PAGE), "Reset to default brings the original back")
@@ -358,12 +361,16 @@ func _game_part() -> void:
 	await _until(func() -> bool: return bool(main.game_menu.call("is_open")), 8.0)
 	main.game_menu.call("_show_tab", "settings")
 	await _wait(0.5)
-	var marks: Dictionary = main.game_menu.get("_marks")
 	var colours: Array = []
 	for title in ["General", "Sound", "Map", "AI", "Advanced"]:
-		var tile: Variant = marks.get(title)
-		if tile != null and is_instance_valid(tile):
-			colours.append(_bg(tile as Control))
+		for label in _labels(main.game_menu, title):
+			var node: Node = label
+			while node != null and node.get("_normal") == null:
+				node = node.get_parent()
+			if node != null:
+				var style := node.get("_normal") as StyleBoxFlat
+				colours.append(style.bg_color if style else Color(0, 0, 0, 0))
+				break
 	_check(colours.size() == 5 and colours.count(colours[0]) == 5, "Settings' General, Sound and Map cards look like the others", str(colours.size()))
 	await _shoot("look-game-menu-settings")
 	main.game_menu.call("close")
