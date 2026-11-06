@@ -187,9 +187,9 @@ const smallButtonStyle = {
 
 const primaryButtonStyle = {
     ...smallButtonStyle,
-    backgroundColor: "rgba(59,130,246,0.22)",
-    borderColor: "rgba(96,165,250,0.45)",
-    color: "#93c5fd",
+    backgroundColor: "var(--oh-ui-active, rgba(59,130,246,0.22))",
+    borderColor: "var(--oh-ui-accent, rgba(96,165,250,0.45))",
+    color: "var(--oh-ui-text, #93c5fd)",
 };
 
 const listCardStyle = {
@@ -590,8 +590,8 @@ const Toggle = ({ label, enabled, onToggle, disabled = false, inactive = "" }) =
         padding: "2px",
         boxSizing: "border-box",
         transition: "background-color 150ms ease, box-shadow 150ms ease",
-        backgroundColor: enabled ? (inactive ? "rgba(59,130,246,0.35)" : "#3b82f6") : "rgba(255,255,255,0.14)",
-        boxShadow: enabled && !inactive ? "0 0 10px rgba(59,130,246,0.35)" : "none",
+        backgroundColor: enabled ? (inactive ? "var(--oh-ui-hover, rgba(59,130,246,0.35))" : "var(--oh-ui-active, #3b82f6)") : "rgba(255,255,255,0.14)",
+        boxShadow: enabled && !inactive ? "0 0 10px var(--oh-ui-line, rgba(59,130,246,0.35))" : "none",
         flexShrink: 0,
         outline: "none",
     }}
@@ -1723,6 +1723,7 @@ const SettingsButton = ({ onToggle, topOffset = "0.5rem", hidden = false }) => {
         type="button"
         aria-label="Open game menu"
         title="Game menu"
+        data-oh-theme-hud=""
         onClick={onToggle}
         style={{
             ...baseStyle,

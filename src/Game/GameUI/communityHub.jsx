@@ -115,8 +115,8 @@ const cardSurface = {
 
 const pillButton = {
   alignItems: "center",
-  background: "rgba(255,255,255,0.06)",
-  border: "1px solid rgba(255,255,255,0.12)",
+  background: "var(--oh-ui-overlay-card, rgba(255,255,255,0.06))",
+  border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.12))",
   borderRadius: "9px",
   color: "rgba(246,246,248,0.92)",
   cursor: "pointer",
@@ -143,8 +143,8 @@ const rowTitleStyle = {
 };
 
 const searchInputStyle = {
-  background: "rgba(255,255,255,0.06)",
-  border: "1px solid rgba(255,255,255,0.12)",
+  background: "var(--oh-ui-overlay-card, rgba(255,255,255,0.06))",
+  border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.12))",
   borderRadius: "9px",
   color: "#fff",
   fontSize: "0.8rem",

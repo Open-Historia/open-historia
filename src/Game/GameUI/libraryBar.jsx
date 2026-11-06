@@ -239,14 +239,15 @@ const actionButtonStyle = {
 
 const themeButtonStyle = {
   ...actionButtonStyle,
-  border: "1px solid rgba(255,255,255,0.12)",
+  background: "var(--oh-ui-overlay-card, rgba(255,255,255,0.06))",
+  border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.12))",
   borderRadius: "9px",
   boxShadow: "none",
 };
 
 const themeSurfaceStyle = {
   background: "var(--oh-ui-surface, #12141a)",
-  border: "1px solid rgba(255,255,255,0.09)",
+  border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.09))",
   boxShadow: "0 14px 32px rgba(0,0,0,0.45)",
 };
 
@@ -441,7 +442,7 @@ const MenuRail = ({ activeTab, onTab, onOpenSettings, onOpenHistory }) => (
     style={{
       alignItems: "center",
       background: "var(--oh-ui-header, #0b0b0d)",
-      borderRight: "1px solid rgba(255,255,255,0.08)",
+      borderRight: "1px solid var(--oh-ui-line, rgba(255,255,255,0.08))",
       display: "flex",
       flexDirection: "column",
       flexShrink: 0,
@@ -473,6 +474,7 @@ const MenuRail = ({ activeTab, onTab, onOpenSettings, onOpenHistory }) => (
       <button
         key={tab.id}
         aria-current={activeTab === tab.id ? "page" : undefined}
+        data-oh-theme-nav=""
         className="oh-tap-row"
         onClick={() => onTab(tab.id)}
         style={railButtonStyle(activeTab === tab.id)}
@@ -484,7 +486,7 @@ const MenuRail = ({ activeTab, onTab, onOpenSettings, onOpenHistory }) => (
     ))}
     <div style={{ flex: 1, minHeight: "0.6rem" }} />
     {typeof onOpenSettings === "function" && (
-      <button className="oh-tap-row" onClick={onOpenSettings} style={railButtonStyle(false)} type="button">
+      <button className="oh-tap-row" data-oh-theme-nav="" onClick={onOpenSettings} style={railButtonStyle(false)} type="button">
         <ButtonIcon kind="settings" size={MENU_RAIL_ICON} />
         <span>Settings</span>
       </button>
@@ -1841,8 +1843,8 @@ const CreateScenarioTile = ({ busy, onCreate }) => (
     type="button"
     style={{
       alignItems: "center",
-      background: "rgba(255,255,255,0.03)",
-      border: "2px dashed rgba(255,255,255,0.24)",
+      background: "var(--oh-ui-overlay-card, rgba(255,255,255,0.03))",
+      border: "2px dashed var(--oh-ui-line, rgba(255,255,255,0.24))",
       borderRadius: "24px",
       color: "rgba(255,255,255,0.78)",
       cursor: busy ? "wait" : "pointer",
@@ -1910,8 +1912,8 @@ const EditorSectionIcon = ({ kind, size = 17 }) => {
 
 const editorNavButtonStyle = (active) => ({
   ...themeButtonStyle,
-  background: active ? "rgba(255,255,255,0.1)" : "transparent",
-  border: `1px solid ${active ? "rgba(255,255,255,0.18)" : "transparent"}`,
+  background: active ? "var(--oh-ui-active, rgba(255,255,255,0.1))" : "transparent",
+  border: `1px solid ${active ? "var(--oh-ui-accent, rgba(255,255,255,0.18))" : "transparent"}`,
   color: active ? "#fff" : "rgba(236,236,240,0.72)",
   fontWeight: active ? 700 : 600,
   gap: "0.6rem",
@@ -5210,6 +5212,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
                   <button
                     key={tab.id}
                     aria-current={activeTab === tab.id ? "page" : undefined}
+                    data-oh-theme-nav=""
                     className="oh-tap-row"
                     onClick={() => setActiveTab(tab.id)}
                     style={touchFit({
