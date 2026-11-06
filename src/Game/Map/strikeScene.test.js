@@ -483,9 +483,9 @@ test("who asks the map to play a strike: an event coming into view, or a card th
 });
 
 test("the strikes are wired to the map and to the Events panel", () => {
-  // Above everything else the map draws, under only the interface's glass, which blurs them too.
+  // Above everything else the map draws.
   assert.equal(STRIKE_LAYER_ID, "strikes-flight");
-  assert.equal(MAP_LAYER_ORDER.at(-2), STRIKE_LAYER_ID);
+  assert.equal(MAP_LAYER_ORDER.at(-1), STRIKE_LAYER_ID);
   assert.ok(MAP_LAYER_ORDER.indexOf(STRIKE_LAYER_ID) > MAP_LAYER_ORDER.indexOf("units-name"));
   assert.match(read("./MapScene.jsx"), /<TransportLayers \/>\s*<StrikeLayers \/>/);
   const layers = read("./StrikeLayers.jsx");

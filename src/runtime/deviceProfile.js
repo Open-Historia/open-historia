@@ -120,11 +120,9 @@ export const mapRuntimeLimits = ({ hardwareThreads, constrained = false } = {}) 
 };
 
 // The map's two large archives, regions (~101 MB) and countries (~60 MB), are
-// loaded whole in the background at startup and kept in memory on a desktop
-// browser at the website, so every later tile is a memory read
-// (runtime/preload.js). The desktop app does not: its own server answers range
-// reads on the same machine, and a whole copy was 160 MB of page memory to save
-// a local round trip a tile. A browser on a phone does not do that either: the downloads
+// downloaded whole in the background at startup, hashed against the signed
+// content manifest and kept in memory, so every later tile is a memory read
+// (runtime/preload.js). A browser on a phone does not do that: the downloads
 // land, and are hashed (a second copy each), just as the loading screen hands
 // over to the map, which is when the tile workers and the regions parse peak
 // too. That was the moment iOS Safari killed the tab ("A problem repeatedly
@@ -133,5 +131,5 @@ export const mapRuntimeLimits = ({ hardwareThreads, constrained = false } = {}) 
 // needs one 40 KB tile of each. The Android app still loads them whole: its
 // APK assets cannot be range-read (wholeFileSource.js), and it ships the
 // trimmed z8 archives.
-export const warmsWholeMapArchives = ({ native = isNativeBuild(), constrained = isConstrainedDevice(), localServer = !import.meta.env?.VITE_OH_WEB } = {}) =>
-  native || (!constrained && !localServer);
+export const warmsWholeMapArchives = ({ native = isNativeBuild(), constrained = isConstrainedDevice() } = {}) =>
+  native || !constrained;

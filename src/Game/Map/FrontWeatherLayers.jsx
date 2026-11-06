@@ -27,7 +27,6 @@ import { warSettingsOf } from "../../runtime/warSettings.js";
 import { climateZonesOf } from "../../runtime/worldGeographyDefaults.js";
 import { zoneWeatherFor } from "../../runtime/zoneWeather.js";
 import { WEATHER_DRAWN, WEATHER_LAYERS, weatherImageId, weatherPattern } from "./mapPatterns.js";
-import { resolveMissingImages } from "./missingImages.js";
 import { useLayerOrder } from "./useLayerOrder.js";
 import { weatherPatchFeatures, zoneWeatherById } from "./weatherPatches.js";
 
@@ -87,12 +86,13 @@ const FrontWeatherLayers = () => {
     if (!map || !shown) return undefined;
     const ids = stateKey.split("|").filter(Boolean).flatMap((state) => WEATHER_LAYERS.map((_, layer) => weatherImageId(state, layer)));
     const again = () => ids.forEach((id) => provide(map, id));
-    const stopAsking = resolveMissingImages(map, (id) => provide(map, id));
+    const asked = (event) => provide(map, event?.id);
     again();
     map.on("styledata", again);
+    map.on("styleimagemissing", asked);
     return () => {
       map.off("styledata", again);
-      stopAsking();
+      map.off("styleimagemissing", asked);
     };
   }, [map, shown, stateKey]);
 
