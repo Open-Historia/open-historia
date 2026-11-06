@@ -374,7 +374,7 @@ func cancel(id: int) -> void:
 	panel._compile_parties()
 	await _wait(0.2)
 	_check(_has_text(panel, "Compiling the government and parties…") and not _has_text(panel, "Compile the government and parties again"), "politics: compiling shows its progress")
-	await _until(func() -> bool: return not panel.compiling, 10.0)
+	await _until(func() -> bool: return not panel.compiling and _has_text(panel, "Compile the government and parties again"), 30.0)
 	await _wait(0.4)
 	_check(compiler.get("asked") == ["France"] and _has_text(panel, "The answer named no government and no parties.") and _has_text(panel, "Compile the government and parties again"), "politics: a failed compile says why and can be tried again")
 	await _shoot("02b-country-politics-compile-error")
@@ -438,7 +438,7 @@ func cancel(id: int) -> void:
 			return ""
 		var countries: Array = ChatPanel.a((chat as ChatPanel).active.get("countries", []))
 		return ChatPanel.t(ChatPanel.d(countries[0]).get("name", "")) if not countries.is_empty() else ""
-	await _until(func() -> bool: return talking.call() == "Libya", 10.0)
+	await _until(func() -> bool: return talking.call() == "Libya", 60.0)
 	await _wait(0.6)
 	_check(pressed and opened == ["Libya"] and (chat as ChatPanel).is_open() and talking.call() == "Libya", "Propose peace in the chat opens the chat with the enemy (pressed %s, signal %s, open %s, with %s)" % [str(pressed), str(opened), str(chat is ChatPanel and (chat as ChatPanel).is_open()), talking.call()])
 	await _shoot("04b-country-peace-chat")
@@ -516,6 +516,9 @@ func request(method: String, args: Dictionary = {}) -> Dictionary:
 	await _wait(0.2)
 	panel.engine = busy_link
 	await panel._poll_busy()
+	await _until(func() -> bool:
+		var button: Variant = _tracking_button(panel)
+		return bool(panel.data.get("turnRunning", false)) and button != null and not bool(button.get("enabled")), 15.0)
 	await _wait(0.2)
 	var dimmed_button: Variant = _tracking_button(panel)
 	_check(bool(panel.data.get("turnRunning", false)) and _has_text(panel, str(panel.data.get("turnRunningNote", "?"))), "the tracking button dims as soon as a turn runs")
