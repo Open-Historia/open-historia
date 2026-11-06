@@ -94,6 +94,16 @@ func _find_button(node: Node, text: String) -> Button:
 	return null
 
 
+func _receipt_status(index: int) -> String:
+	if panel.messages.size() <= index:
+		return ""
+	var receipts: Variant = (panel.messages[index] as Dictionary).get("actionReceipts")
+	if typeof(receipts) != TYPE_DICTIONARY:
+		return ""
+	var entry: Variant = (receipts as Dictionary).get("proposal-0")
+	return str((entry as Dictionary).get("status", "")) if typeof(entry) == TYPE_DICTIONARY else ""
+
+
 func _find_text(node: Node, text: String) -> bool:
 	if node is Label and (node as Label).text == text and (node as Label).is_visible_in_tree():
 		return true
@@ -277,7 +287,7 @@ func _run() -> void:
 		await _scroll_to(proceed)
 		await _shoot("advisor-04b-proposal")
 		proceed.pressed.emit()
-		_check("Proceed queues the Action", await _until(func() -> bool: return _find_text(panel, "Queued"), 20.0))
+		_check("Proceed queues the Action", await _until(func() -> bool: return _find_text(panel, "Queued") and _receipt_status(1) == "queued", 20.0))
 		await _frames(3)
 		actions = await _doc("actions")
 		_check("the Action is on the Actions board once", JSON.stringify(actions).count("Convene the budget cabinet") == 1, JSON.stringify(actions).left(300))
@@ -712,7 +722,7 @@ func _cancel_and_requeue() -> void:
 	await _scroll_to(_find_button(panel, "Proceed / Queue"))
 	await _shoot("advisor-04e-proposal-cancelled")
 	_find_button(panel, "Proceed / Queue").pressed.emit()
-	_check("Proceed queues it again", await _until(func() -> bool: return _find_text(panel, "Queued"), 20.0))
+	_check("Proceed queues it again", await _until(func() -> bool: return _find_text(panel, "Queued") and _receipt_status(1) == "queued", 20.0))
 	await _frames(3)
 	var got_2: Variant = await _budget_orders()
 	var got_3: Variant = await _saved_receipt(reply_id)

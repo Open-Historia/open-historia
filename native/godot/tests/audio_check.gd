@@ -162,7 +162,7 @@ func _run() -> void:
 		var track: Dictionary = entry
 		if not FileAccess.file_exists(str(track.get("file", ""))):
 			missing.append(str(track.get("file", "")))
-	_check("every piece the game ships is found on disk", (tracks.get("own", []) as Array).size() == 7 and missing.is_empty(), "%d pieces, missing %s" % [(tracks.get("own", []) as Array).size(), ", ".join(missing)])
+	_check("every piece the game ships is found on disk", (tracks.get("own", []) as Array).size() == 8 and missing.is_empty(), "%d pieces, missing %s" % [(tracks.get("own", []) as Array).size(), ", ".join(missing)])
 	_say("menu pieces %s, game pieces %s, war pieces %s, volumes %s" % [JSON.stringify(tracks.get("menu", [])), JSON.stringify(tracks.get("game", [])), JSON.stringify(tracks.get("war", [])), JSON.stringify(tracks.get("volumes", {}))])
 
 	var settings: Dictionary = await sound.apply_settings({"music": true, "volume": 25, "effects": true})
