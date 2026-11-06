@@ -83,7 +83,7 @@ static func button(value: String, bg: Color, border: Color, ink: Color, radius :
 
 
 static func ghost(value: String, min_height := 0.0) -> Button:
-	var node := button(value, GHOST_BG, GHOST_BORDER, GHOST_INK, 10, 12, 600, Vector4(12, 8, 12, 8), Color(1, 1, 1, 0.08))
+	var node := button(value, GHOST_BG, GHOST_BORDER, GHOST_INK, 10, 12, 600, Vector4(12, 8, 12, 8), UiTheme.pick("line", Color(1, 1, 1, 0.08)))
 	node.custom_minimum_size.y = min_height
 	node.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	return node
@@ -98,11 +98,11 @@ static func set_busy(control: Control, busy: bool, dim := 0.6) -> void:
 
 static func metric(value: String, tone := "default", icon_name := "", active := false) -> Button:
 	var tones := {
-		"default": [Color(148 / 255.0, 163 / 255.0, 184 / 255.0, 0.12), Color(148 / 255.0, 163 / 255.0, 184 / 255.0, 0.18), Color(232 / 255.0, 232 / 255.0, 234 / 255.0, 0.84)],
-		"accent": [Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.12), Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.22), Color("#bfdbfe")],
+		"default": [UiTheme.pick("overlay_card", Color(148 / 255.0, 163 / 255.0, 184 / 255.0, 0.12)), UiTheme.pick("line", Color(148 / 255.0, 163 / 255.0, 184 / 255.0, 0.18)), Color(232 / 255.0, 232 / 255.0, 234 / 255.0, 0.84)],
+		"accent": [UiTheme.pick("active", Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.12)), UiTheme.pick("accent", Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.22)), UiTheme.pick("text", Color("#bfdbfe"))],
 	}
 	var spec: Array = tones.get(tone, tones["default"])
-	var bg: Color = Color(0, 0, 0, 0.42) if active else spec[0]
+	var bg: Color = UiTheme.pick("overlay_strong", Color(0, 0, 0, 0.42)) if active else spec[0]
 	var node := button(value, bg, spec[1], spec[2], 999, 11, 600, Vector4(10, 4, 10, 5))
 	if not icon_name.is_empty():
 		node.icon = icon(icon_name, 14, spec[2])
@@ -113,7 +113,7 @@ static func metric(value: String, tone := "default", icon_name := "", active := 
 
 static func tag(value: String) -> PanelContainer:
 	var holder := PanelContainer.new()
-	holder.add_theme_stylebox_override("panel", UI.box(Color(1, 1, 1, 0.04), Color(1, 1, 1, 0.08), 999, 1, Vector4(9, 4, 9, 4)))
+	holder.add_theme_stylebox_override("panel", UI.box(UiTheme.pick("overlay_card", Color(1, 1, 1, 0.04)), UiTheme.pick("line", Color(1, 1, 1, 0.08)), 999, 1, Vector4(9, 4, 9, 4)))
 	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	holder.add_child(UI.label(value, 11, Color(230 / 255.0, 230 / 255.0, 233 / 255.0, 0.74), 600))
 	return holder
@@ -211,14 +211,14 @@ static func document(report: Dictionary) -> Control:
 static func card(event: Dictionary, options: Dictionary = {}) -> Control:
 	var filed: Variant = event.get("filed")
 	var is_filed := typeof(filed) == TYPE_DICTIONARY
-	var outer := frame(Color(1, 1, 1, 0.045), Color(1, 1, 1, 0.14) if is_filed else Color(1, 1, 1, 0.08), 16)
+	var outer := frame(UiTheme.pick("overlay_card", Color(1, 1, 1, 0.045)), Color(1, 1, 1, 0.14) if is_filed else UiTheme.pick("line", Color(1, 1, 1, 0.08)), 16)
 	outer.set_meta("event_id", str(event.get("id", "")))
 	if is_filed:
 		outer.modulate.a = 0.6
 	var stack := column(0)
 	if is_filed:
 		stack.add_child(filed_note(str(filed.get("fate", "")), str(filed.get("note", ""))))
-	var head := frame(Color(1, 1, 1, 0.02), Color(0, 0, 0, 0), 0, Vector4(16, 14, 16, 11))
+	var head := frame(UiTheme.pick("overlay_header", Color(1, 1, 1, 0.02)), Color(0, 0, 0, 0), 0, Vector4(16, 14, 16, 11))
 	var pills := flow(7)
 	pills.add_child(metric(str(event.get("dateLabel", "")), "default", "calendar"))
 	var changes: Array = event.get("mapChanges", [])
@@ -235,7 +235,7 @@ static func card(event: Dictionary, options: Dictionary = {}) -> Control:
 		var on_toggle: Callable = options.get("on_toggle_map", Callable())
 		toggle.pressed.connect(func() -> void:
 			change_box.visible = not change_box.visible
-			var tones := Color(0, 0, 0, 0.42) if change_box.visible else Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.12)
+			var tones := UiTheme.pick("overlay_strong", Color(0, 0, 0, 0.42)) if change_box.visible else UiTheme.pick("active", Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.12))
 			for state in ["normal", "hover", "pressed", "focus"]:
 				var style := (toggle.get_theme_stylebox(state) as StyleBoxFlat).duplicate() as StyleBoxFlat
 				style.bg_color = tones
@@ -248,7 +248,7 @@ static func card(event: Dictionary, options: Dictionary = {}) -> Control:
 	head.add_child(pills)
 	stack.add_child(head)
 	var rule := ColorRect.new()
-	rule.color = Color(1, 1, 1, 0.05)
+	rule.color = UiTheme.pick("overlay_card", Color(1, 1, 1, 0.05))
 	rule.custom_minimum_size.y = 1
 	stack.add_child(rule)
 	var body := frame(Color(0, 0, 0, 0), Color(0, 0, 0, 0), 0, Vector4(16, 15, 16, 16))
@@ -270,7 +270,7 @@ static func card(event: Dictionary, options: Dictionary = {}) -> Control:
 		var on_focus: Callable = options.get("on_focus", Callable())
 		for link in links:
 			var glyph: String = LINK_GLYPHS.get(str(link.get("kind", "")), "⌖")
-			var chip := button("%s  %s" % [glyph, str(link.get("label", ""))], Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.07), Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.2), Color(219 / 255.0, 234 / 255.0, 254 / 255.0, 0.86), 999, 11, 600, Vector4(9, 4, 9, 4))
+			var chip := button("%s  %s" % [glyph, str(link.get("label", ""))], UiTheme.pick("active", Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.07)), UiTheme.pick("line", Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.2)), Color(219 / 255.0, 234 / 255.0, 254 / 255.0, 0.86), 999, 11, 600, Vector4(9, 4, 9, 4))
 			chip.tooltip_text = "Show %s on the map" % str(link.get("label", ""))
 			var bounds: Array = link.get("bounds", [])
 			chip.pressed.connect(func() -> void:
@@ -366,7 +366,7 @@ static func engine_changes(receipt: Variant) -> Control:
 	if typeof(receipt) != TYPE_DICTIONARY:
 		return null
 	var count := int(receipt.get("count", 0))
-	var holder := frame(Color(1, 1, 1, 0.03), Color(1, 1, 1, 0.08), 12)
+	var holder := frame(Color(1, 1, 1, 0.03), UiTheme.pick("line", Color(1, 1, 1, 0.08)), 12)
 	var stack := column(0)
 	var title := "What the engine changed: 1 note" if count == 1 else "What the engine changed: %d notes" % count
 	var head := button(title + "  ▾", Color(0, 0, 0, 0), Color(0, 0, 0, 0), Color(228 / 255.0, 228 / 255.0, 231 / 255.0, 0.78), 12, 12, 700, Vector4(12, 9, 12, 9), Color(1, 1, 1, 0.03))
@@ -405,7 +405,7 @@ static func engine_changes(receipt: Variant) -> Control:
 
 
 static func empty_state(value: String) -> Control:
-	var holder := frame(Color(1, 1, 1, 0.03), Color(1, 1, 1, 0.1), 16, Vector4(18, 18, 18, 18))
+	var holder := frame(Color(1, 1, 1, 0.03), UiTheme.pick("line", Color(1, 1, 1, 0.1)), 16, Vector4(18, 18, 18, 18))
 	holder.custom_minimum_size.y = 152
 	var label := text(value, 12.5, Color(229 / 255.0, 229 / 255.0, 232 / 255.0, 0.48))
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER

@@ -96,7 +96,7 @@ func _init() -> void:
 	_pill.offset_top = -5.2 * REM
 	_pill.grow_horizontal = Control.GROW_DIRECTION_BOTH
 	_pill.grow_vertical = Control.GROW_DIRECTION_BEGIN
-	_pill.add_theme_stylebox_override("panel", UI.box(Color(24 / 255.0, 24 / 255.0, 27 / 255.0, 0.96), Color(1, 1, 1, 0.25), 999, 1, Vector4(0.95 * REM, 0.45 * REM, 0.95 * REM, 0.45 * REM)))
+	_pill.add_theme_stylebox_override("panel", UI.box(UiTheme.pick("surface", Color(24 / 255.0, 24 / 255.0, 27 / 255.0, 0.96)), UiTheme.pick("line", Color(1, 1, 1, 0.25)), 999, 1, Vector4(0.95 * REM, 0.45 * REM, 0.95 * REM, 0.45 * REM)))
 	_pill_label = ShellFonts.label("", 0.8 * REM, Color(1, 1, 1), "sans-serif", 600)
 	_pill_label.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
 	_pill.add_child(_pill_label)

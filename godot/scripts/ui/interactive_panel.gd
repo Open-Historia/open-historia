@@ -37,7 +37,7 @@ func _ready() -> void:
 	backdrop.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	add_child(backdrop)
 	_card = PanelContainer.new()
-	_card.add_theme_stylebox_override("panel", UI.box(Color(18 / 255.0, 18 / 255.0, 22 / 255.0, 0.97), Color(250 / 255.0, 204 / 255.0, 21 / 255.0, 0.38), 16, 1))
+	_card.add_theme_stylebox_override("panel", UI.box(UiTheme.pick("overlay_strong", Color(18 / 255.0, 18 / 255.0, 22 / 255.0, 0.97)), Color(250 / 255.0, 204 / 255.0, 21 / 255.0, 0.38), 16, 1))
 	_card.clip_contents = true
 	add_child(_card)
 	var column := VBoxContainer.new()

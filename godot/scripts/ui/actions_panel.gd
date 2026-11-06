@@ -227,7 +227,7 @@ func _restyle_close() -> void:
 	close_button.add_theme_font_override("font", UI.font(400))
 	close_button.add_theme_font_size_override("font_size", 18)
 	var rest := UI.box(Color(0, 0, 0, 0), Color(0, 0, 0, 0), 6, 0, Vector4(5, 2, 5, 2))
-	var lit := UI.box(Color(1, 1, 1, 0.08), Color(0, 0, 0, 0), 6, 0, Vector4(5, 2, 5, 2))
+	var lit := UI.box(UiTheme.pick("overlay_card", Color(1, 1, 1, 0.08)), Color(0, 0, 0, 0), 6, 0, Vector4(5, 2, 5, 2))
 	for state in [["normal", rest], ["focus", rest], ["disabled", rest], ["hover", lit], ["pressed", lit], ["hover_pressed", lit]]:
 		close_button.add_theme_stylebox_override(state[0], state[1])
 	for slot in ["font_color", "font_focus_color"]:
@@ -317,7 +317,7 @@ func _style_tabs() -> void:
 		count_holder.visible = key == "projects" and _project_count > 0
 		count_value.text = str(_project_count)
 		count_value.add_theme_color_override("font_color", UI.WHITE if chosen else Color(1, 1, 1, 0.6))
-		count_holder.add_theme_stylebox_override("panel", UI.box(Color(1, 1, 1, 0.14) if chosen else Color(1, 1, 1, 0.08), Color(0, 0, 0, 0), 999, 0, Vector4(4, 0, 4, 0)))
+		count_holder.add_theme_stylebox_override("panel", UI.box(Color(1, 1, 1, 0.14) if chosen else UiTheme.pick("overlay_card", Color(1, 1, 1, 0.08)), Color(0, 0, 0, 0), 999, 0, Vector4(4, 0, 4, 0)))
 		var row := caption.get_parent() as HBoxContainer
 		tab.custom_minimum_size.x = row.get_combined_minimum_size().x + 26
 
@@ -502,13 +502,13 @@ static func _send_key(event: InputEvent) -> int:
 func _build_buttons() -> Control:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 8)
-	_brainstorm = _styled_button("Brainstorm", 13, 500, ZINC, _style(Color(1, 1, 1, 0.05), Color(1, 1, 1, 0.2), 10, Vector4(16, 9, 16, 9)), _style(Color(1, 1, 1, 0.1), Color(1, 1, 1, 0.28), 10, Vector4(16, 9, 16, 9)))
+	_brainstorm = _styled_button("Brainstorm", 13, 500, ZINC, _style(Color(1, 1, 1, 0.05), Color(1, 1, 1, 0.2), 10, Vector4(16, 9, 16, 9)), _style(UiTheme.pick("line", Color(1, 1, 1, 0.1)), Color(1, 1, 1, 0.28), 10, Vector4(16, 9, 16, 9)))
 	_brainstorm.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_brainstorm.size_flags_stretch_ratio = 1.0
 	_brainstorm.custom_minimum_size.y = 37
 	_brainstorm.pressed.connect(func() -> void: open_advisor.emit(BRAINSTORM_TEXT))
 	row.add_child(_brainstorm)
-	_suggest_button = _styled_button("", 13, 400, Color(1, 1, 1, 0.82), _style(Color(1, 1, 1, 0.05), Color(1, 1, 1, 0.12), 10, Vector4(16, 8, 16, 8)), _style(Color(1, 1, 1, 0.09), Color(1, 1, 1, 0.18), 10, Vector4(16, 8, 16, 8)))
+	_suggest_button = _styled_button("", 13, 400, Color(1, 1, 1, 0.82), _style(Color(1, 1, 1, 0.05), Color(1, 1, 1, 0.12), 10, Vector4(16, 8, 16, 8)), _style(Color(1, 1, 1, 0.09), UiTheme.pick("line", Color(1, 1, 1, 0.18)), 10, Vector4(16, 8, 16, 8)))
 	_suggest_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_suggest_button.size_flags_stretch_ratio = 1.0
 	_suggest_button.custom_minimum_size.y = 37
@@ -545,7 +545,7 @@ func _build_composer() -> Control:
 	holder.custom_minimum_size.y = 62
 	_composer = _text_edit(COMPOSER_HINT, 13)
 	_composer.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	_composer_style = _style(Color(0, 0, 0, 0.2), Color(1, 1, 1, 0.15), 10, Vector4(14, 11, 45, 11))
+	_composer_style = _style(Color(0, 0, 0, 0.2), UiTheme.pick("line", Color(1, 1, 1, 0.15)), 10, Vector4(14, 11, 45, 11))
 	_composer.add_theme_stylebox_override("normal", _composer_style)
 	_composer.add_theme_stylebox_override("focus", _style(Color(0, 0, 0, 0.2), Color(1, 1, 1, 0.25), 10, Vector4(14, 11, 45, 11)))
 	_composer.focus_exited.connect(func() -> void: _composer_style.border_color = Color(1, 1, 1, 0.12))
@@ -766,7 +766,7 @@ func _goal_label() -> Label:
 
 func _goal_card(goal: String) -> Control:
 	var card := PanelContainer.new()
-	card.add_theme_stylebox_override("panel", _style(Color(1, 1, 1, 0.08), Color(1, 1, 1, 0.15), 10, Vector4(12, 9, 12, 9)))
+	card.add_theme_stylebox_override("panel", _style(UiTheme.pick("overlay_card", Color(1, 1, 1, 0.08)), UiTheme.pick("line", Color(1, 1, 1, 0.15)), 10, Vector4(12, 9, 12, 9)))
 	var column := VBoxContainer.new()
 	column.add_theme_constant_override("separation", 5)
 	var row := HBoxContainer.new()
@@ -783,7 +783,7 @@ func _goal_card(goal: String) -> Control:
 		edit.add_theme_stylebox_override(state, empty)
 	edit.add_theme_font_override("font", UI.font(400))
 	edit.add_theme_font_size_override("font_size", 12)
-	var ink := Color(1, 1, 1, 0.18) if _turn_running else Color(1, 1, 1, 0.28)
+	var ink := UiTheme.pick("line", Color(1, 1, 1, 0.18)) if _turn_running else Color(1, 1, 1, 0.28)
 	for slot in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_hover_pressed_color", "font_disabled_color"]:
 		edit.add_theme_color_override(slot, ink)
 	edit.disabled = _turn_running
@@ -833,7 +833,7 @@ func _goal_progress() -> Control:
 	bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	bar.add_theme_stylebox_override("background", UI.box(Color(1, 1, 1, 0.1), Color(0, 0, 0, 0), 3, 0, Vector4.ZERO))
+	bar.add_theme_stylebox_override("background", UI.box(UiTheme.pick("line", Color(1, 1, 1, 0.1)), Color(0, 0, 0, 0), 3, 0, Vector4.ZERO))
 	var fill := UI.box(Color("#7dd3fc"), Color(0, 0, 0, 0), 3, 0, Vector4.ZERO)
 	if score < 100:
 		fill.corner_radius_top_right = 0
@@ -917,13 +917,13 @@ func _assess_goal() -> void:
 
 func _goal_editor(goal: String) -> Control:
 	var card := PanelContainer.new()
-	card.add_theme_stylebox_override("panel", _style(Color(1, 1, 1, 0.08), Color(1, 1, 1, 0.18), 10, Vector4(12, 10, 12, 10)))
+	card.add_theme_stylebox_override("panel", _style(UiTheme.pick("overlay_card", Color(1, 1, 1, 0.08)), UiTheme.pick("line", Color(1, 1, 1, 0.18)), 10, Vector4(12, 10, 12, 10)))
 	var column := VBoxContainer.new()
 	column.add_theme_constant_override("separation", 7)
 	column.add_child(_goal_label())
 	_goal_edit = _text_edit(GOAL_PLACEHOLDER, 13)
 	_goal_edit.custom_minimum_size.y = 58
-	var field := _style(Color(0, 0, 0, 0.25), Color(1, 1, 1, 0.15), 8, Vector4(10, 8, 10, 8))
+	var field := _style(UiTheme.pick("bg", Color(0, 0, 0, 0.25)), UiTheme.pick("line", Color(1, 1, 1, 0.15)), 8, Vector4(10, 8, 10, 8))
 	_goal_edit.add_theme_stylebox_override("normal", field)
 	_goal_edit.add_theme_stylebox_override("focus", field)
 	_goal_edit.get_v_scroll_bar().modulate.a = 0.0
@@ -960,7 +960,7 @@ func _goal_editor(goal: String) -> Control:
 
 func _goal_button(text: String, primary: bool) -> Button:
 	var pad := Vector4(11, 5, 11, 5)
-	var normal := _style(Color(1, 1, 1, 0.1) if primary else Color(0, 0, 0, 0), Color(1, 1, 1, 0.28) if primary else Color(1, 1, 1, 0.14), 8, pad)
+	var normal := _style(UiTheme.pick("line", Color(1, 1, 1, 0.1)) if primary else Color(0, 0, 0, 0), Color(1, 1, 1, 0.28) if primary else Color(1, 1, 1, 0.14), 8, pad)
 	var button := _styled_button(text, 12, 600, Color(1, 1, 1, 0.9), normal, normal, Color(1, 1, 1, 0.4))
 	if primary:
 		button.add_theme_stylebox_override("disabled", _style(Color(1, 1, 1, 0.07), Color(1, 1, 1, 0.28), 8, pad))
@@ -1185,7 +1185,7 @@ func _italic_line(text: String, size: int) -> Label:
 
 func _suggestion_card(topic: Dictionary, queued: Array) -> Control:
 	var card := PanelContainer.new()
-	card.add_theme_stylebox_override("panel", _style(Color(1, 1, 1, 0.04), Color(1, 1, 1, 0.08), 12, Vector4(13, 11, 13, 11)))
+	card.add_theme_stylebox_override("panel", _style(Color(1, 1, 1, 0.04), UiTheme.pick("overlay_card", Color(1, 1, 1, 0.08)), 12, Vector4(13, 11, 13, 11)))
 	var column := VBoxContainer.new()
 	column.add_theme_constant_override("separation", 9)
 	var head := VBoxContainer.new()
@@ -1232,7 +1232,7 @@ func _clickable(look: StyleBoxFlat, action: Callable, enabled := true) -> PanelC
 func _action_row(entry: Dictionary) -> Control:
 	var locked := _turn_running and bool(entry.get("movesUnit", false))
 	var normal := _style(Color(1, 1, 1, 0.05), Color(1, 1, 1, 0.07), 10, Vector4(14, 9, 14, 9))
-	var hover := _style(Color(1, 1, 1, 0.08), Color(1, 1, 1, 0.07), 10, Vector4(14, 9, 14, 9))
+	var hover := _style(UiTheme.pick("overlay_card", Color(1, 1, 1, 0.08)), Color(1, 1, 1, 0.07), 10, Vector4(14, 9, 14, 9))
 	var row := PanelContainer.new()
 	row.add_theme_stylebox_override("panel", normal)
 	row.mouse_filter = Control.MOUSE_FILTER_PASS
@@ -1269,7 +1269,7 @@ func _action_row(entry: Dictionary) -> Control:
 	var shown := UI.box(Color(0, 0, 0, 0) if locked else Color(RED, 0.1), Color(0, 0, 0, 0), 6, 0)
 	for state in ["normal", "focus", "disabled", "hover", "pressed", "hover_pressed"]:
 		remove.add_theme_stylebox_override(state, shown)
-	var ink := Color(1, 1, 1, 0.18) if locked else Color(RED, 0.95)
+	var ink := UiTheme.pick("line", Color(1, 1, 1, 0.18)) if locked else Color(RED, 0.95)
 	for slot in ["font_color", "font_focus_color", "font_pressed_color", "font_hover_color", "font_hover_pressed_color", "font_disabled_color"]:
 		remove.add_theme_color_override(slot, ink)
 	remove.disabled = locked

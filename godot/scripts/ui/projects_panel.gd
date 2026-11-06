@@ -134,6 +134,9 @@ func _init() -> void:
 
 
 func _ready() -> void:
+	UiTheme.events().changed.connect(func() -> void:
+		if _open:
+			_render())
 	get_viewport().size_changed.connect(func() -> void:
 		if _menu_open:
 			_place_menu.call_deferred())
@@ -389,7 +392,7 @@ func _build_filters() -> void:
 	_search = LineEdit.new()
 	_search.placeholder_text = "Search projects…"
 	_search.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	var field := _style(Color(1, 1, 1, 0.06), Color(1, 1, 1, 0.12), 9, Vector4(27, 0, 8, 0))
+	var field := _style(UiTheme.pick("surface", Color(1, 1, 1, 0.06)), Color(1, 1, 1, 0.12), 9, Vector4(27, 0, 8, 0))
 	_search.add_theme_stylebox_override("normal", field)
 	_search.add_theme_stylebox_override("focus", field)
 	_search.add_theme_font_override("font", UI.font(400))
@@ -420,7 +423,7 @@ func _build_filters() -> void:
 
 func _chip(text: String, active: bool, tooltip: String, action: Callable) -> Button:
 	var pad := Vector4(9, 3, 9, 3)
-	var normal := _style(Color(0, 0, 0, 0.39) if active else Color(1, 1, 1, 0.05), Color(1, 1, 1, 0.28) if active else Color(1, 1, 1, 0.1), 999, pad)
+	var normal := _style(Color(0, 0, 0, 0.39) if active else UiTheme.pick("surface", Color(1, 1, 1, 0.05)), Color(1, 1, 1, 0.28) if active else Color(1, 1, 1, 0.1), 999, pad)
 	var button := _styled_button(text, 11, 600, Color("#f4f4f5") if active else Color(1, 1, 1, 0.6), normal, normal)
 	button.custom_minimum_size.y = 24
 	button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
@@ -442,7 +445,7 @@ func _render_chips() -> void:
 	sort.custom_minimum_size.y = 24
 	sort.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	sort.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-	var select_style := _style(Color(1, 1, 1, 0.06), Color(1, 1, 1, 0.12), 8, Vector4(6, 3, 6, 3))
+	var select_style := _style(UiTheme.pick("surface", Color(1, 1, 1, 0.06)), Color(1, 1, 1, 0.12), 8, Vector4(6, 3, 6, 3))
 	for state in ["normal", "hover", "pressed", "focus", "hover_pressed"]:
 		sort.add_theme_stylebox_override(state, select_style)
 	sort.add_theme_font_override("font", UI.font(400))
@@ -480,7 +483,7 @@ func _render_chips() -> void:
 func _tags_chip() -> Button:
 	var lit := _menu_open or not _tags.is_empty()
 	var pad := Vector4(9, 3, 9, 3)
-	var normal := _style(Color(0, 0, 0, 0.39) if lit else Color(1, 1, 1, 0.05), Color(1, 1, 1, 0.28) if lit else Color(1, 1, 1, 0.1), 999, pad)
+	var normal := _style(Color(0, 0, 0, 0.39) if lit else UiTheme.pick("surface", Color(1, 1, 1, 0.05)), Color(1, 1, 1, 0.28) if lit else Color(1, 1, 1, 0.1), 999, pad)
 	var ink := Color("#f4f4f5") if lit else Color(1, 1, 1, 0.6)
 	var button := _styled_button("", 11, 600, ink, normal, normal)
 	button.focus_mode = Control.FOCUS_ALL
@@ -615,7 +618,7 @@ func _empty_board() -> Control:
 	gap2.custom_minimum_size.y = 14
 	column.add_child(gap2)
 	var pad := Vector4(13, 7, 13, 7)
-	var look := _style(Color(1, 1, 1, 0.06), Color(1, 1, 1, 0.25), 10, pad)
+	var look := _style(UiTheme.pick("surface", Color(1, 1, 1, 0.06)), Color(1, 1, 1, 0.25), 10, pad)
 	var button := _styled_button("🧭 Ask your advisor to populate this", 12, 600, UI.WHITE, look, look)
 	button.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	column.add_child(_advisor_button(button, BACKFILL_PROMPT))
@@ -697,7 +700,7 @@ func _card(card: Dictionary) -> Control:
 	var flags: Dictionary = card.get("flags", {})
 	var owner_label := str(card.get("ownerLabel", ""))
 	var panel := PanelContainer.new()
-	panel.add_theme_stylebox_override("panel", _style(Color(1, 1, 1, 0.05), Color(1, 1, 1, 0.08), 12, Vector4(13, 11, 13, 11)))
+	panel.add_theme_stylebox_override("panel", _style(UiTheme.pick("surface", Color(1, 1, 1, 0.05)), Color(1, 1, 1, 0.08), 12, Vector4(13, 11, 13, 11)))
 	var column := VBoxContainer.new()
 	column.add_theme_constant_override("separation", 0)
 	var top := HBoxContainer.new()
@@ -749,7 +752,7 @@ func _card(card: Dictionary) -> Control:
 		tag_row.add_theme_constant_override("v_separation", 4)
 		for tag in tags:
 			var chip := PanelContainer.new()
-			chip.add_theme_stylebox_override("panel", UI.box(Color(1, 1, 1, 0.06), Color(0, 0, 0, 0), 999, 0, Vector4(6, 1, 6, 2)))
+			chip.add_theme_stylebox_override("panel", UI.box(UiTheme.pick("surface", Color(1, 1, 1, 0.06)), Color(0, 0, 0, 0), 999, 0, Vector4(6, 1, 6, 2)))
 			chip.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			chip.add_child(UI.label(str(tag), 10, Color(1, 1, 1, 0.5)))
 			tag_row.add_child(chip)
@@ -1057,7 +1060,7 @@ func _build_menu() -> void:
 	_menu = PanelContainer.new()
 	_menu.top_level = true
 	_menu.visible = false
-	_menu.add_theme_stylebox_override("panel", UI.box(Color("#1b1b1e"), Color(1, 1, 1, 0.14), 10, 1))
+	_menu.add_theme_stylebox_override("panel", UI.box(UiTheme.pick("surface", Color("#1b1b1e")), Color(1, 1, 1, 0.14), 10, 1))
 	var column := VBoxContainer.new()
 	column.add_theme_constant_override("separation", 0)
 	var head := PanelContainer.new()
@@ -1071,8 +1074,8 @@ func _build_menu() -> void:
 	_menu_search.placeholder_text = "Find a tag…"
 	_menu_search.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_menu_search.custom_minimum_size.y = 26
-	_menu_search.add_theme_stylebox_override("normal", _style(Color(1, 1, 1, 0.06), Color(1, 1, 1, 0.12), 8, Vector4(8, 0, 8, 0)))
-	_menu_search.add_theme_stylebox_override("focus", _style(Color(1, 1, 1, 0.06), Color(43 / 255.0, 193 / 255.0, 243 / 255.0, 0.6), 8, Vector4(8, 0, 8, 0)))
+	_menu_search.add_theme_stylebox_override("normal", _style(UiTheme.pick("surface", Color(1, 1, 1, 0.06)), Color(1, 1, 1, 0.12), 8, Vector4(8, 0, 8, 0)))
+	_menu_search.add_theme_stylebox_override("focus", _style(UiTheme.pick("surface", Color(1, 1, 1, 0.06)), Color(43 / 255.0, 193 / 255.0, 243 / 255.0, 0.6), 8, Vector4(8, 0, 8, 0)))
 	_menu_search.add_theme_font_override("font", UI.font(400))
 	_menu_search.add_theme_font_size_override("font_size", 12)
 	_menu_search.add_theme_color_override("font_color", UI.WHITE)

@@ -24,7 +24,7 @@ func _init() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_bar = PanelContainer.new()
 	_bar.mouse_filter = Control.MOUSE_FILTER_STOP
-	_bar.add_theme_stylebox_override("panel", UI.box(Color(16 / 255.0, 21 / 255.0, 24 / 255.0, 0.96), Color(1, 1, 1, 0.16), 12, 1, Vector4(0.8 * REM, 0.55 * REM, 0.8 * REM, 0.55 * REM)))
+	_bar.add_theme_stylebox_override("panel", UI.box(UiTheme.pick("overlay_strong", Color(16 / 255.0, 21 / 255.0, 24 / 255.0, 0.96)), Color(1, 1, 1, 0.16), 12, 1, Vector4(0.8 * REM, 0.55 * REM, 0.8 * REM, 0.55 * REM)))
 	_bar.anchor_left = 0.5
 	_bar.anchor_right = 0.5
 	_bar.anchor_top = 1.0

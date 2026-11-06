@@ -162,7 +162,7 @@ func _build_pill() -> void:
 			set_panel("skip")
 			return
 		toggle_panel("skip"))
-	_forward_spinner = Spinner.new(15, Color(1, 1, 1, 0.28))
+	_forward_spinner = Spinner.new(15, UiTheme.pick("accent", Color(1, 1, 1, 0.28)))
 	_forward_spinner.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
 	_forward_spinner.visible = false
 	_forward_button.add_child(_forward_spinner)
@@ -521,11 +521,11 @@ func _refresh_progress_rows() -> void:
 			var buttons := HBoxContainer.new()
 			buttons.alignment = BoxContainer.ALIGNMENT_CENTER
 			buttons.add_theme_constant_override("separation", 6)
-			var open_folder := EventCards.button("Open the Agent folder", Color(1, 1, 1, 0.08), Color(1, 1, 1, 0.18), UI.WHITE, 8, 12, 400, Vector4(11, 4, 11, 4))
+			var open_folder := EventCards.button("Open the Agent folder", UiTheme.pick("line", Color(1, 1, 1, 0.08)), UiTheme.pick("line", Color(1, 1, 1, 0.18)), UI.WHITE, 8, 12, 400, Vector4(11, 4, 11, 4))
 			open_folder.pressed.connect(func() -> void: engine.request("turn.agentFolder"))
 			buttons.add_child(open_folder)
 			if bool(request_state.get("agentBelow", false)):
-				var pass_on := EventCards.button("Use API key", Color(1, 1, 1, 0.08), Color(1, 1, 1, 0.18), UI.WHITE, 8, 12, 600, Vector4(11, 4, 11, 4))
+				var pass_on := EventCards.button("Use API key", UiTheme.pick("line", Color(1, 1, 1, 0.08)), UiTheme.pick("line", Color(1, 1, 1, 0.18)), UI.WHITE, 8, 12, 600, Vector4(11, 4, 11, 4))
 				pass_on.pressed.connect(func() -> void: engine.request("turn.agentPassOn"))
 				buttons.add_child(pass_on)
 			activity.add_child(buttons)
@@ -533,7 +533,7 @@ func _refresh_progress_rows() -> void:
 
 
 func _progress_row(fallback: String, with_cancel := true) -> Control:
-	var holder := EventCards.frame(Color(1, 1, 1, 0.04), Color(1, 1, 1, 0.08), 12, Vector4(13, 11, 13, 11))
+	var holder := EventCards.frame(UiTheme.pick("overlay_card", Color(1, 1, 1, 0.04)), UiTheme.pick("line", Color(1, 1, 1, 0.08)), 12, Vector4(13, 11, 13, 11))
 	var stack := EventCards.column(6)
 	var row := HBoxContainer.new()
 	row.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -626,7 +626,7 @@ func _render_timeline() -> void:
 		ladder.add_child(_centered(undo))
 		_connector(ladder)
 	var today := PanelContainer.new()
-	today.add_theme_stylebox_override("panel", UI.box(Color(1, 1, 1, 0.07), Color(1, 1, 1, 0.28), 999, 2, Vector4(0, 5, 0, 6)))
+	today.add_theme_stylebox_override("panel", UI.box(UiTheme.pick("line", Color(1, 1, 1, 0.07)), UiTheme.pick("accent", Color(1, 1, 1, 0.28)), 999, 2, Vector4(0, 5, 0, 6)))
 	today.custom_minimum_size.x = 88
 	var today_label := UI.label(str(status.get("datePill", "")), 11, Color("#e4e4e7"), 700, "Arial", 1)
 	today_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -636,7 +636,7 @@ func _render_timeline() -> void:
 	for index in range(JUMPS.size()):
 		_connector(ladder)
 		var jump: Array = JUMPS[index]
-		var node := _stacked_button(str(landings[index]) if index < landings.size() else "", str(jump[0]), Color(1, 1, 1, 0.05), Color(1, 1, 1, 0.18), UI.WHITE, Color("#e4e4e7"))
+		var node := _stacked_button(str(landings[index]) if index < landings.size() else "", str(jump[0]), UiTheme.pick("overlay_card", Color(1, 1, 1, 0.05)), UiTheme.pick("line", Color(1, 1, 1, 0.18)), UI.WHITE, Color("#e4e4e7"))
 		if blocked:
 			node.modulate.a = 0.7
 		var days: float = jump[1]
@@ -645,7 +645,7 @@ func _render_timeline() -> void:
 				run_jump(days, "jump"))
 		ladder.add_child(_centered(node))
 	_connector(ladder)
-	var auto := EventCards.button("Auto-jump", Color(37 / 255.0, 99 / 255.0, 235 / 255.0, 0.2), Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.45), UI.WHITE, 12, 14, 700, Vector4(11, 9, 11, 9), Color(37 / 255.0, 99 / 255.0, 235 / 255.0, 0.3))
+	var auto := EventCards.button("Auto-jump", UiTheme.pick("active", Color(37 / 255.0, 99 / 255.0, 235 / 255.0, 0.2)), UiTheme.pick("accent", Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.45)), UI.WHITE, 12, 14, 700, Vector4(11, 9, 11, 9), Color(37 / 255.0, 99 / 255.0, 235 / 255.0, 0.3))
 	auto.custom_minimum_size.x = 200
 	if blocked:
 		auto.modulate.a = 0.72
@@ -722,7 +722,7 @@ func _yellow_box(lead: String, bold: String, action: String, bg_alpha: float, bo
 
 
 func _custom_row(blocked: bool) -> Control:
-	var holder := EventCards.frame(Color(1, 1, 1, 0.04), Color(1, 1, 1, 0.1), 12, Vector4(8, 7, 8, 7))
+	var holder := EventCards.frame(UiTheme.pick("overlay_card", Color(1, 1, 1, 0.04)), UiTheme.pick("line", Color(1, 1, 1, 0.1)), 12, Vector4(8, 7, 8, 7))
 	holder.custom_minimum_size.x = 200
 	holder.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	var row := HBoxContainer.new()
@@ -732,9 +732,9 @@ func _custom_row(blocked: bool) -> Control:
 	input.text = custom_value
 	input.custom_minimum_size = Vector2(54, 26)
 	input.editable = not blocked
-	input.add_theme_stylebox_override("normal", UI.box(Color(0, 0, 0, 0.25), Color(1, 1, 1, 0.16), 8, 1, Vector4(6, 0, 6, 0)))
-	input.add_theme_stylebox_override("focus", UI.box(Color(0, 0, 0, 0.25), Color(1, 1, 1, 0.26), 8, 1, Vector4(6, 0, 6, 0)))
-	input.add_theme_stylebox_override("read_only", UI.box(Color(0, 0, 0, 0.25), Color(1, 1, 1, 0.16), 8, 1, Vector4(6, 0, 6, 0)))
+	input.add_theme_stylebox_override("normal", UI.box(UiTheme.pick("overlay_strong", Color(0, 0, 0, 0.25)), UiTheme.pick("line", Color(1, 1, 1, 0.16)), 8, 1, Vector4(6, 0, 6, 0)))
+	input.add_theme_stylebox_override("focus", UI.box(UiTheme.pick("overlay_strong", Color(0, 0, 0, 0.25)), Color(1, 1, 1, 0.26), 8, 1, Vector4(6, 0, 6, 0)))
+	input.add_theme_stylebox_override("read_only", UI.box(UiTheme.pick("overlay_strong", Color(0, 0, 0, 0.25)), UiTheme.pick("line", Color(1, 1, 1, 0.16)), 8, 1, Vector4(6, 0, 6, 0)))
 	input.add_theme_font_size_override("font_size", 13)
 	input.text_changed.connect(func(value: String) -> void:
 		var cleaned := ""
@@ -757,15 +757,15 @@ func _custom_row(blocked: bool) -> Control:
 	unit.focus_mode = Control.FOCUS_NONE
 	unit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	unit.custom_minimum_size.y = 26
-	unit.add_theme_stylebox_override("normal", UI.box(Color(0, 0, 0, 0.25), Color(1, 1, 1, 0.16), 8, 1, Vector4(6, 0, 6, 0)))
+	unit.add_theme_stylebox_override("normal", UI.box(UiTheme.pick("overlay_strong", Color(0, 0, 0, 0.25)), UiTheme.pick("line", Color(1, 1, 1, 0.16)), 8, 1, Vector4(6, 0, 6, 0)))
 	unit.add_theme_stylebox_override("hover", UI.box(Color(0, 0, 0, 0.3), Color(1, 1, 1, 0.22), 8, 1, Vector4(6, 0, 6, 0)))
-	unit.add_theme_stylebox_override("disabled", UI.box(Color(0, 0, 0, 0.25), Color(1, 1, 1, 0.16), 8, 1, Vector4(6, 0, 6, 0)))
+	unit.add_theme_stylebox_override("disabled", UI.box(UiTheme.pick("overlay_strong", Color(0, 0, 0, 0.25)), UiTheme.pick("line", Color(1, 1, 1, 0.16)), 8, 1, Vector4(6, 0, 6, 0)))
 	unit.add_theme_font_size_override("font_size", 13)
 	unit.item_selected.connect(func(index: int) -> void:
 		custom_unit = index
 		_update_custom_landing())
 	row.add_child(unit)
-	_custom_go = EventCards.button("Go", Color(1, 1, 1, 0.1), Color(1, 1, 1, 0.28), UI.WHITE, 8, 13, 700, Vector4(10, 4, 10, 4), Color(1, 1, 1, 0.16))
+	_custom_go = EventCards.button("Go", UiTheme.pick("line", Color(1, 1, 1, 0.1)), UiTheme.pick("accent", Color(1, 1, 1, 0.28)), UI.WHITE, 8, 13, 700, Vector4(10, 4, 10, 4), UiTheme.pick("line", Color(1, 1, 1, 0.16)))
 	_custom_go.set_meta("blocked", blocked)
 	_custom_go.pressed.connect(_run_custom)
 	row.add_child(_custom_go)
@@ -837,7 +837,7 @@ func _amber_box() -> PanelContainer:
 
 
 func _amber_button(value: String, primary: bool, working: bool) -> Button:
-	var node := EventCards.button(value, Color(251 / 255.0, 191 / 255.0, 36 / 255.0, 0.18) if primary else Color(1, 1, 1, 0.06), Color(251 / 255.0, 191 / 255.0, 36 / 255.0, 0.4) if primary else Color(1, 1, 1, 0.16), AMBER_INK if primary else Color(1, 1, 1, 0.72), 12, 12, 400, Vector4(11, 8, 11, 8))
+	var node := EventCards.button(value, Color(251 / 255.0, 191 / 255.0, 36 / 255.0, 0.18) if primary else Color(1, 1, 1, 0.06), Color(251 / 255.0, 191 / 255.0, 36 / 255.0, 0.4) if primary else UiTheme.pick("line", Color(1, 1, 1, 0.16)), AMBER_INK if primary else Color(1, 1, 1, 0.72), 12, 12, 400, Vector4(11, 8, 11, 8))
 	node.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	node.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	if working:
@@ -961,11 +961,11 @@ func _mode_suggestion(suggestion: Dictionary) -> Control:
 	stack.add_child(EventCards.text("You can undo this any time under Settings → AI: edit that model, then How the AI answers.", 11.5, Color(191 / 255.0, 219 / 255.0, 254 / 255.0, 0.62)))
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 8)
-	var yes := EventCards.button("Yes, speed up turns", Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.2), Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.42), Color("#bfdbfe"), 12, 12, 400, Vector4(11, 8, 11, 8))
+	var yes := EventCards.button("Yes, speed up turns", UiTheme.pick("line", Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.2)), Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.42), UiTheme.pick("text", Color("#bfdbfe")), 12, 12, 400, Vector4(11, 8, 11, 8))
 	yes.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	yes.pressed.connect(func() -> void: _answer_mode(true))
 	row.add_child(yes)
-	var no := EventCards.button("No thanks", Color(1, 1, 1, 0.06), Color(1, 1, 1, 0.16), Color(1, 1, 1, 0.72), 12, 12, 400, Vector4(11, 8, 11, 8))
+	var no := EventCards.button("No thanks", Color(1, 1, 1, 0.06), UiTheme.pick("line", Color(1, 1, 1, 0.16)), Color(1, 1, 1, 0.72), 12, 12, 400, Vector4(11, 8, 11, 8))
 	no.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	no.pressed.connect(func() -> void: _answer_mode(false))
 	row.add_child(no)
@@ -1171,7 +1171,7 @@ func _category_chips(record: Dictionary) -> Control:
 	var chips := EventCards.flow(6)
 	for value in tags:
 		var on := active == str(value)
-		var chip := EventCards.button(str(value), Color(0, 0, 0, 0.42) if on else Color(1, 1, 1, 0.06), Color(1, 1, 1, 0.28) if on else Color(1, 1, 1, 0.16), UI.WHITE, 999, 11, 700, Vector4(10, 3, 10, 3))
+		var chip := EventCards.button(str(value), UiTheme.pick("overlay_strong", Color(0, 0, 0, 0.42)) if on else Color(1, 1, 1, 0.06), UiTheme.pick("accent", Color(1, 1, 1, 0.28)) if on else UiTheme.pick("line", Color(1, 1, 1, 0.16)), UI.WHITE, 999, 11, 700, Vector4(10, 3, 10, 3))
 		var tag := str(value)
 		chip.pressed.connect(func() -> void:
 			category = {"record": str(record.get("id", "")), "tag": "" if on else tag}

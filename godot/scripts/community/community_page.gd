@@ -523,7 +523,7 @@ func _card(post: Dictionary, fill: bool) -> Control:
 	var status := _status_of(post)
 	var busy := _busy_id == id
 	var armed := _armed_id == id
-	var card := CommunityKit.panel(CommunityKit.CARD_BG, CommunityKit.CARD_BORDER, 16, Vector4(14, 14, 14, 14))
+	var card := CommunityKit.panel(UiTheme.pick("surface", CommunityKit.CARD_BG), CommunityKit.CARD_BORDER, 16, Vector4(14, 14, 14, 14))
 	card.mouse_filter = Control.MOUSE_FILTER_STOP
 	card.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	if fill:
