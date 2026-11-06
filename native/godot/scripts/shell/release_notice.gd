@@ -365,10 +365,10 @@ func _chapter(chapter: Dictionary, index: int, _count: int) -> Control:
 	shade.size = Vector2(shade_wide, _vh)
 	shade.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	stage.add_child(shade)
-	var numeral := _outlined(NUMERALS[index], clampf(_vw * 0.22, 128.0, 320.0), Color(1, 1, 1, 0.16), 900, 2.0)
+	var numeral_px := clampf(_vw * 0.22, 128.0, 320.0)
+	var numeral := _outlined(NUMERALS[index], numeral_px, Color(1, 1, 1, 0.16), 900, 2.0)
 	stage.add_child(numeral)
-	var numeral_size := numeral.get_combined_minimum_size()
-	numeral.position = Vector2(160, _vh * 0.97 - numeral_size.y * 0.9)
+	numeral.position = Vector2(160, _vh * 0.97 - numeral_px)
 	var passages := VBoxContainer.new()
 	passages.add_theme_constant_override("separation", 0)
 	passages.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -377,8 +377,11 @@ func _chapter(chapter: Dictionary, index: int, _count: int) -> Control:
 	title_block.add_theme_constant_override("separation", 0)
 	var kicker := HBoxContainer.new()
 	kicker.add_theme_constant_override("separation", 10)
-	kicker.add_child(_text("Chapter", 13.1, GOLD, true, 700, 0.32, true))
+	var kicker_word := _text("Chapter", 13.1, GOLD, true, 700, 0.32, true)
+	kicker_word.autowrap_mode = TextServer.AUTOWRAP_OFF
+	kicker.add_child(kicker_word)
 	var kicker_number := _text(NUMERALS[index], 13.1, GOLD, true, 700, 0.32, true)
+	kicker_number.autowrap_mode = TextServer.AUTOWRAP_OFF
 	kicker_number.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
 	kicker.add_child(kicker_number)
 	title_block.add_child(kicker)
