@@ -3959,12 +3959,15 @@ const DateWidget = ({
             top: topOffset,
             height: isMobile ? "3.2rem" : "3.5rem",
             // The player's country sits beside the date. On phones the standalone
-            // pill would cover the date, so stretch the widget; on desktop cap the
-            // width so a long fantasy country name ellipsizes instead of sprawling.
+            // pill would cover the date, so stretch the widget; on desktop it grows
+            // with the name from the usual width up to a cap, past which a long
+            // fantasy name ellipsizes instead of sprawling. The surface's fixed
+            // width has to give way for that: with it the cap never applied, and
+            // "Yugoslavia" read "YUGOS…" in a bar with room to spare.
             ...(isMobile
                 ? { width: "min(24rem, calc(100vw - 4.5rem))", borderRadius: "12px" }
                 : playerCountry
-                ? { maxWidth: "min(28rem, calc(100vw - 8rem))" }
+                ? { width: "auto", minWidth: widgetSurface.width, maxWidth: "min(28rem, calc(100vw - 8rem))" }
                 : null),
         }}
         >
@@ -4006,6 +4009,8 @@ const DateWidget = ({
             }}
             >
             <span
+            // The whole name, for one past the cap.
+            title={playerCountry}
             style={{
                 color: countryButton && countryOpen ? "#bfdbfe" : "rgba(147,197,253,0.88)",
                 fontSize: isMobile ? "0.68rem" : "0.8rem",
