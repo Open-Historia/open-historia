@@ -59,7 +59,7 @@ func _init(accent := UI.ACCENT, glow := 1.0) -> void:
 	_material = ShaderMaterial.new()
 	_material.shader = _shader
 	_material.set_shader_parameter("accent", accent)
-	_material.set_shader_parameter("card", UI.CARD)
+	_material.set_shader_parameter("card", UiTheme.pick("surface", UI.CARD))
 	_material.set_shader_parameter("glow", glow)
 	_under = CommunityKit.placeholder_cover()
 	_material.set_shader_parameter("has_under", _under != null)

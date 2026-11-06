@@ -51,21 +51,32 @@ var _missing_game := {}
 var _missing_error := ""
 var _missing_busy := false
 var _missing_layer: Control
+var _page_bg: ColorRect
+var _rail_panel: PanelContainer
 
 
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	var page := ColorRect.new()
-	page.color = UI.PAGE
-	page.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	page.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(page)
+	_page_bg = ColorRect.new()
+	_page_bg.color = UiTheme.pick("bg", UI.PAGE)
+	_page_bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_page_bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_page_bg)
 	loader = ImageLoader.new()
 	add_child(loader)
 	_build_rail()
 	_build_content()
 	resized.connect(_fit_grids)
 	_show_page("games")
+	UiTheme.events().changed.connect(_on_theme_changed)
+
+
+func _on_theme_changed() -> void:
+	_page_bg.color = UiTheme.pick("bg", UI.PAGE)
+	_rail_panel.add_theme_stylebox_override("panel", UI.box(UiTheme.pick("header", UI.RAIL), Color(0, 0, 0, 0), 0, 0, Vector4(12, 16, 12, 16)))
+	var key := _page
+	_page = ""
+	_show_page(key)
 
 
 func set_origin(origin: String) -> void:
@@ -175,7 +186,8 @@ func set_status(text: String, problem := false) -> void:
 
 func _build_rail() -> void:
 	var rail := PanelContainer.new()
-	rail.add_theme_stylebox_override("panel", UI.box(UI.RAIL, Color(0, 0, 0, 0), 0, 0, Vector4(12, 16, 12, 16)))
+	_rail_panel = rail
+	rail.add_theme_stylebox_override("panel", UI.box(UiTheme.pick("header", UI.RAIL), Color(0, 0, 0, 0), 0, 0, Vector4(12, 16, 12, 16)))
 	rail.anchor_bottom = 1.0
 	rail.offset_right = 110
 	add_child(rail)
@@ -248,7 +260,7 @@ func _rail_tile(key: String, text: String) -> Button:
 
 
 func _style_tile(tile: Button, active: bool) -> void:
-	var style := UI.box(Color(1, 1, 1, 0.11 if active else 0.035), Color(1, 1, 1, 0.24 if active else 0.07), 16, 1)
+	var style := UI.box(UiTheme.pick("active", Color(1, 1, 1, 0.11)) if active else Color(1, 1, 1, 0.035), UiTheme.pick("accent", Color(1, 1, 1, 0.24)) if active else Color(1, 1, 1, 0.07), 16, 1)
 	var hover := style.duplicate() as StyleBoxFlat
 	if not active:
 		hover.bg_color = Color(1, 1, 1, 0.07)
@@ -683,7 +695,7 @@ func _deleted_row(kind: String) -> Control:
 func _deleted_card(entry: Dictionary) -> Control:
 	var card := PanelContainer.new()
 	card.custom_minimum_size = Vector2(CARD_WIDTH, 0)
-	card.add_theme_stylebox_override("panel", UI.box(UI.CARD, Color(1, 1, 1, 0.09), 24, 1, Vector4(19, 18, 19, 18)))
+	card.add_theme_stylebox_override("panel", UI.box(UiTheme.pick("surface", UI.CARD), Color(1, 1, 1, 0.09), 24, 1, Vector4(19, 18, 19, 18)))
 	var stack := VBoxContainer.new()
 	stack.add_theme_constant_override("separation", 13)
 	var title := UI.label(str(entry.get("name", "")), 16, UI.WHITE, 800)
@@ -970,7 +982,7 @@ func _fit_grids() -> void:
 func _card_frame(active: bool, accent: Color, height: float) -> PanelContainer:
 	var card := PanelContainer.new()
 	card.custom_minimum_size = Vector2(CARD_WIDTH, height)
-	var style := UI.box(UI.CARD, Color(accent, 0.533) if active else Color(1, 1, 1, 0.09), 24, 1, Vector4(1, 1, 1, 1))
+	var style := UI.box(UiTheme.pick("surface", UI.CARD), Color(accent, 0.533) if active else Color(1, 1, 1, 0.09), 24, 1, Vector4(1, 1, 1, 1))
 	card.add_theme_stylebox_override("panel", style)
 	return card
 
@@ -1271,7 +1283,7 @@ func _render_missing_prompt(fade := false) -> void:
 	layer.add_child(centre)
 	var card := PanelContainer.new()
 	card.mouse_filter = Control.MOUSE_FILTER_STOP
-	card.add_theme_stylebox_override("panel", UI.box(UI.CARD, Color(1, 1, 1, 0.09), 16, 1, Vector4(17.6, 17.6, 17.6, 17.6)))
+	card.add_theme_stylebox_override("panel", UI.box(UiTheme.pick("surface", UI.CARD), Color(1, 1, 1, 0.09), 16, 1, Vector4(17.6, 17.6, 17.6, 17.6)))
 	var view := get_viewport_rect().size if is_inside_tree() else Vector2(1440, 900)
 	card.custom_minimum_size.x = minf(430.0, view.x * 0.92)
 	centre.add_child(card)

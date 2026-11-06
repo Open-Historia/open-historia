@@ -108,6 +108,7 @@ var _cache_busy := false
 var _cache_error := ""
 var _music_busy := false
 var _copied_command := ""
+var _header_bar: Control
 var _daily_limit_draft := ""
 var _background_cap_draft := ""
 var _label_font_draft := ""
@@ -154,6 +155,32 @@ func _ready() -> void:
 	resized.connect(_layout)
 	resized.connect(_refresh_display_mode)
 	_layout()
+	UiTheme.events().changed.connect(_on_theme_changed)
+
+
+func _exit_tree() -> void:
+	if UiTheme.events().changed.is_connected(_on_theme_changed):
+		UiTheme.events().changed.disconnect(_on_theme_changed)
+
+
+func _card_style() -> StyleBoxFlat:
+	return UI.box(UiTheme.pick("bg", Color(20 / 255.0, 21 / 255.0, 24 / 255.0, 0.97)), UiTheme.pick("line", Color(1, 1, 1, 0.08)), 18, 1)
+
+
+func _section_style() -> StyleBoxFlat:
+	return UI.box(UiTheme.pick("surface", Color(1, 1, 1, 0.025)), UiTheme.pick("line", Color(1, 1, 1, 0.06)), 14, 1, Vector4(20, 17.6, 20, 17.6))
+
+
+func _on_theme_changed() -> void:
+	if not is_instance_valid(_card):
+		return
+	_card.add_theme_stylebox_override("panel", _card_style())
+	if is_instance_valid(_header_bar):
+		_header_bar.add_theme_stylebox_override("panel", UI.box(UiTheme.pick("accent", BLUE), Color(0, 0, 0, 0), 3, 0))
+	_build_nav()
+	for child in _content.get_children():
+		if child is PanelContainer and child.has_meta("settings_section"):
+			child.add_theme_stylebox_override("panel", _section_style())
 
 
 func setup(engine_link: EngineLink, setup_context: Dictionary) -> void:
@@ -336,9 +363,9 @@ func _build_card() -> void:
 	titles.add_theme_constant_override("separation", 2)
 	var title_row := HBoxContainer.new()
 	title_row.add_theme_constant_override("separation", 10)
-	var bar := _bar(4, 17, 3)
-	bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	title_row.add_child(bar)
+	_header_bar = _bar(4, 17, 3, UiTheme.pick("accent", BLUE))
+	_header_bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	title_row.add_child(_header_bar)
 	var title := UI.label("Settings", _fs(1.04), SLATE_INK, 800)
 	title.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	title_row.add_child(title)
@@ -422,7 +449,7 @@ func _build_nav() -> void:
 		var button := Button.new()
 		button.focus_mode = Control.FOCUS_NONE
 		button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-		var normal := UI.box(Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.12) if selected else Color(0, 0, 0, 0), Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.3) if selected else Color(0, 0, 0, 0), 10, 1, Vector4(10.4, 8.8, 10.4, 8.8))
+		var normal := UI.box(UiTheme.pick("active", Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.12)) if selected else Color(0, 0, 0, 0), Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.3) if selected else Color(0, 0, 0, 0), 10, 1, Vector4(10.4, 8.8, 10.4, 8.8))
 		var hover := normal.duplicate() as StyleBoxFlat
 		if not selected:
 			hover.bg_color = Color(1, 1, 1, 0.04)
@@ -437,8 +464,8 @@ func _build_nav() -> void:
 		tile.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		tile.custom_minimum_size = Vector2(30, 30)
 		tile.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-		tile.add_theme_stylebox_override("panel", UI.box(Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.24) if selected else Color(1, 1, 1, 0.04), Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.4) if selected else Color(0, 0, 0, 0), 8, 1))
-		var glyph := UI.label(str(entry["icon"]), _fs(0.85), BLUE_LIGHT if selected else Color(1, 1, 1, 0.7), 700)
+		tile.add_theme_stylebox_override("panel", UI.box(UiTheme.pick("active", Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.24)) if selected else Color(1, 1, 1, 0.04), Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.4) if selected else Color(0, 0, 0, 0), 8, 1))
+		var glyph := UI.label(str(entry["icon"]), _fs(0.85), UiTheme.pick("accent", BLUE_LIGHT) if selected else Color(1, 1, 1, 0.7), 700)
 		glyph.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		glyph.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 		tile.add_child(glyph)
@@ -447,7 +474,7 @@ func _build_nav() -> void:
 		texts.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		texts.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		texts.add_theme_constant_override("separation", 2)
-		texts.add_child(UI.label(str(entry["label"]), _fs(0.8), BLUE_PALE if selected else Color(1, 1, 1, 0.6), 750 if selected else 600))
+		texts.add_child(UI.label(str(entry["label"]), _fs(0.8), UiTheme.pick("accent", BLUE_PALE) if selected else Color(1, 1, 1, 0.6), 750 if selected else 600))
 		var description := UI.wrapped(str(entry["description"]), _fs(0.62), Color(191 / 255.0, 219 / 255.0, 254 / 255.0, 0.65) if selected else Color(1, 1, 1, 0.32))
 		texts.add_child(description)
 		row.add_child(texts)
@@ -546,7 +573,7 @@ func _page_header() -> Control:
 	column.add_theme_constant_override("separation", 3)
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 8)
-	row.add_child(UI.label(str(page["icon"]), _fs(0.95), BLUE_LIGHT))
+	row.add_child(UI.label(str(page["icon"]), _fs(0.95), UiTheme.pick("accent", BLUE_LIGHT)))
 	row.add_child(UI.label(str(page["label"]), _fs(1.1), SLATE_INK, 800))
 	column.add_child(row)
 	column.add_child(UI.label(str(page["description"]), _fs(0.72), HELPER_INK))
@@ -558,7 +585,8 @@ func _page_header() -> Control:
 
 func _section(title: String, description := "", right: Control = null) -> VBoxContainer:
 	var card := PanelContainer.new()
-	card.add_theme_stylebox_override("panel", UI.box(Color(1, 1, 1, 0.025), Color(1, 1, 1, 0.06), 14, 1, Vector4(20, 17.6, 20, 17.6)))
+	card.add_theme_stylebox_override("panel", _section_style())
+	card.set_meta("settings_section", true)
 	card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	var column := VBoxContainer.new()
 	column.add_theme_constant_override("separation", 0)
@@ -630,10 +658,10 @@ func _rule(color: Color) -> ColorRect:
 	return rule
 
 
-func _bar(width: float, height: float, radius: int) -> Control:
+func _bar(width: float, height: float, radius: int, tint := BLUE) -> Control:
 	var bar := Panel.new()
 	bar.custom_minimum_size = Vector2(width, height)
-	bar.add_theme_stylebox_override("panel", UI.box(BLUE, Color(0, 0, 0, 0), radius, 0))
+	bar.add_theme_stylebox_override("panel", UI.box(tint, Color(0, 0, 0, 0), radius, 0))
 	bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	return bar
 
@@ -1096,6 +1124,7 @@ func _build_general() -> void:
 	_display_mode(display)
 	_add_toggle(display, "Show the vault door every time", _flag("vault_door_every_time"), func() -> void: _set_flag("vault_door_every_time", not _flag("vault_door_every_time")))
 	_add_toggle_note(display, "On: the vault door appears every time you start the game. Off: only the first time you start it after an update.")
+	_section("Interface appearance", "Choose the colours of the main menu, the panels and the popups.").add_child(ThemeSettings.new())
 	var access := _section("Accessibility", "Reduce automatic camera motion and map animations without changing simulation behavior.")
 	var reduced := _system_reduced or (_flag("map_disable_idle_rotation") and _flag("map_disable_event_camera"))
 	_add_toggle(access, "Reduce motion", reduced, func() -> void:
