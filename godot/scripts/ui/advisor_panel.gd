@@ -143,6 +143,9 @@ var _themed_rules: Array[ColorRect] = []
 var _header_band: Control
 var _header_mark: Label
 var _tray: PanelContainer
+var _field: PanelContainer
+var _mic: AdvisorMic
+var _typed := false
 
 
 func _init() -> void:
@@ -412,6 +415,9 @@ func _ensure_bootstrap() -> void:
 		views.append({})
 	_take_contacts(result)
 	_has_bootstrapped = true
+	if _mic and engine:
+		_mic.setup(engine, _tray)
+		_mic.probe()
 	_render_strip()
 	_render_recipients()
 	_apply_composer()
@@ -699,13 +705,40 @@ func _accent() -> Color:
 
 
 func _style_input() -> void:
-	var normal := UI.box(UiTheme.pick("surface", Color("#192b3b")), Color(133 / 255.0, 183 / 255.0, 210 / 255.0, 0.3), 6, 1, Vector4(12, 9, 6, 9))
-	var focus := UI.box(UiTheme.pick("hover", Color("#1c3246")), UiTheme.pick("accent", Color("#82c8e5")), 6, 1, Vector4(12, 9, 6, 9))
-	focus.shadow_color = Color(130 / 255.0, 200 / 255.0, 229 / 255.0, 0.2)
-	focus.shadow_size = 1
-	_input.add_theme_stylebox_override("normal", normal)
-	_input.add_theme_stylebox_override("read_only", normal)
-	_input.add_theme_stylebox_override("focus", focus)
+	var bare := UI.box(CLEAR, CLEAR, 0, 0, Vector4(11.5, 9, 11.5, 9))
+	_input.add_theme_stylebox_override("normal", bare)
+	_input.add_theme_stylebox_override("read_only", bare)
+	_input.add_theme_stylebox_override("focus", bare)
+	_style_field()
+
+
+func _style_field() -> void:
+	if not is_instance_valid(_field):
+		return
+	if is_instance_valid(_input) and _input.has_focus():
+		var focus := UI.box(UiTheme.pick("hover", Color("#1c3246")), UiTheme.pick("accent", Color("#82c8e5")), 6, 1)
+		focus.shadow_color = Color(130 / 255.0, 200 / 255.0, 229 / 255.0, 0.2)
+		focus.shadow_size = 1
+		_field.add_theme_stylebox_override("panel", focus)
+	else:
+		_field.add_theme_stylebox_override("panel", UI.box(UiTheme.pick("surface", Color("#192b3b")), Color(133 / 255.0, 183 / 255.0, 210 / 255.0, 0.3), 6, 1))
+
+
+func _on_mic_heard(text: String) -> void:
+	_typed = false
+	_input.text = text
+	var last_line := _input.get_line_count() - 1
+	_input.set_caret_line(last_line)
+	_input.set_caret_column(_input.get_line(last_line).length())
+	_resize_input()
+	_update_send()
+
+
+func _on_mic_send(text: String) -> void:
+	_typed = false
+	_input.text = text
+	_resize_input()
+	_send_from_composer()
 
 
 func _style_send() -> void:
@@ -759,14 +792,28 @@ func _build_composer() -> Control:
 	_input.add_theme_color_override("font_placeholder_color", Color("#859caf"))
 	_input.add_theme_color_override("caret_color", FIELD_INK)
 	_input.add_theme_color_override("selection_color", Color(130 / 255.0, 200 / 255.0, 229 / 255.0, 0.35))
+	_field = PanelContainer.new()
+	_field.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_field.size_flags_vertical = Control.SIZE_SHRINK_END
 	_style_input()
 	_input.get_v_scroll_bar().modulate.a = 0.0
 	_input.text_changed.connect(func() -> void:
+		_typed = not _input.text.strip_edges().is_empty()
 		_resize_input()
 		_update_send())
+	_input.focus_entered.connect(_style_field)
+	_input.focus_exited.connect(_style_field)
 	_input.gui_input.connect(_on_input_key)
 	_input.resized.connect(func() -> void: _resize_input.call_deferred())
-	row.add_child(_input)
+	var field_row := HBoxContainer.new()
+	field_row.add_theme_constant_override("separation", 0)
+	field_row.add_child(_input)
+	_mic = AdvisorMic.new()
+	_mic.heard.connect(_on_mic_heard)
+	_mic.send_requested.connect(_on_mic_send)
+	field_row.add_child(_mic)
+	_field.add_child(field_row)
+	row.add_child(_field)
 	_send_button = Button.new()
 	_send_button.icon = _svg(ARROW_SVG, 19, UI.WHITE)
 	_send_button.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -807,6 +854,11 @@ func _update_send() -> void:
 	var blocked := _loading or _recipient_locked() or not _has_bootstrapped or _load_failed or _save_failed or _input.text.strip_edges().is_empty()
 	_send_button.disabled = blocked
 	_send_button.modulate.a = 0.7 if blocked else 1.0
+	if _mic:
+		_mic.set_thread(active_thread)
+		_mic.set_input_text(_input.text)
+		_mic.set_disabled(_loading or _recipient_locked() or not _has_bootstrapped or _load_failed or _save_failed)
+		_mic.set_hidden_by_typing(_typed and not _input.text.strip_edges().is_empty())
 	_send_button.mouse_default_cursor_shape = Control.CURSOR_FORBIDDEN if _loading or _input.text.strip_edges().is_empty() else Control.CURSOR_POINTING_HAND
 	if _clear_button:
 		_clear_button.disabled = not _has_bootstrapped or _load_failed or _loading or _side_effects > 0

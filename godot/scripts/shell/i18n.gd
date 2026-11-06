@@ -607,6 +607,7 @@ func _card_button(text: String, primary: bool, choice: String) -> Button:
 	button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	button.add_theme_font_override("font", ShellFonts.font("sans-serif", 600))
 	button.add_theme_font_size_override("font_size", int(round(0.88 * REM)))
+	button.custom_minimum_size.y = roundf(0.88 * REM * 1.45 + 0.9 * REM + 2.0)
 	var ink := UiTheme.pick("text", Color("#f4f4f5"))
 	var margin := Vector4(0.95 * REM, 0.45 * REM, 0.95 * REM, 0.45 * REM)
 	var style := UI.box(ink, ink, 7, 1, margin) if primary else UI.box(Color(0, 0, 0, 0), UiTheme.pick("line", Color(1, 1, 1, 0.25)), 7, 1, margin)
