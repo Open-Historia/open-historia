@@ -2532,15 +2532,15 @@ func _proposal_card(message_id: String, proposal: Dictionary, card_state: String
 	return card
 
 
-func _settled(limit_seconds := 5.0) -> bool:
+func _settled(st: Dictionary, limit_seconds := 10.0) -> bool:
 	var until := Time.get_ticks_msec() + int(limit_seconds * 1000.0)
-	while (_loading or _side_effects > 0 or _thread_switching) and Time.get_ticks_msec() < until and is_inside_tree():
+	while (bool(st.get("busy", false)) or _loading or _side_effects > 0 or _thread_switching) and Time.get_ticks_msec() < until and is_inside_tree():
 		await get_tree().process_frame
-	return not (_loading or _side_effects > 0 or _thread_switching)
+	return not (bool(st.get("busy", false)) or _loading or _side_effects > 0 or _thread_switching)
 
 
 func _discuss_pressed(message_id: String, proposal: Dictionary, queued: bool, needs_new_action: bool, st: Dictionary) -> void:
-	if bool(st.get("busy", false)) or not await _settled():
+	if not await _settled(st):
 		return
 	if queued:
 		var cancelled := await _cancel_action(message_id, str(proposal.get("id", "")), st)
