@@ -1,8 +1,9 @@
 /*! Open Historia — the translation model, off the main thread © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Runs one Opus-MT model (translationModels.js) for the translator, through
 // Transformers.js on ONNX Runtime's CPU build. The weights come from the model
-// host once and stay on the device (modelStore.js: the browser's Cache Storage
-// under MODEL_CACHE, which the page's sweep of old caches in assets.js leaves
+// host (Hugging Face, or the scenario repository for a model converted for the
+// game: translationModels.js modelSources) once and stay on the device
+// (modelStore.js: the browser's Cache Storage under MODEL_CACHE, which the page's sweep of old caches in assets.js leaves
 // alone, or IndexedDB where there is none, as in the Android app); the runtime's
 // WebAssembly is part of the build (vite.config.ts), so only the first use
 // needs a connection and the text never leaves the device.
@@ -15,7 +16,7 @@
 // gave none. One worker is one model: the first message names its language.
 
 import ortWasm from "oh-ort-transformers/ort-wasm-simd-threaded.wasm?url";
-import { MODEL_FILES, groupByLength, modelFileUrl, translationModelFor } from "./translationModels.js";
+import { MODEL_FILES, groupByLength, modelFileUrl, modelSources, translationModelFor } from "./translationModels.js";
 import { deleteModelCache, openModelCache } from "./modelStore.js";
 
 // Named here and in assets.js (whose sweep of old caches keeps it), not
@@ -116,7 +117,12 @@ const load = () => {
         for (const value of loaded.values()) sum += value;
         post({ type: "progress", loaded: Math.min(sum, total), total });
       };
-      const options = { revision: entry.revision, progress_callback };
+      // Where this model is read from, as Transformers.js is told it: the same
+      // URLs modelFileUrl gives, so the cache keys match.
+      const [source] = modelSources(entry);
+      env.remoteHost = source.host;
+      env.remotePathTemplate = source.path;
+      const options = { revision: source.revision, progress_callback };
       // Not AutoTokenizer.from_pretrained: Transformers.js 4.3.1 first asks the
       // model host whether the "main" revision has a tokenizer_config.json
       // (get_tokenizer_files drops the revision), which is never in the cache,
@@ -124,7 +130,7 @@ const load = () => {
       // are read here, through the same cache, at the pinned revision.
       const [tokenizerJson, tokenizerConfig] = await Promise.all([readJson("tokenizer.json"), readJson("tokenizer_config.json")]);
       tokenizer = new MarianTokenizer(tokenizerJson, tokenizerConfig);
-      model = await AutoModelForSeq2SeqLM.from_pretrained(entry.repo, { ...options, device: "wasm", dtype: "q8" });
+      model = await AutoModelForSeq2SeqLM.from_pretrained(source.model, { ...options, device: "wasm", dtype: "q8" });
       languageId = entry.token ? tokenizer.get_vocab().get(entry.token) : undefined;
       prune();
     })()
