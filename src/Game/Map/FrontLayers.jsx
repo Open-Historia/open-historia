@@ -41,7 +41,7 @@ import { enforceMapLayerOrder } from "./mapLayerOrder.js";
 import { POLITICAL_FILL_OPACITY_STOPS, politicalFillOpacityAtZoom } from "./vnext/presentationPolicy.js";
 import { getFrontTargets, settleFront, startFrontsSync, subscribeFronts } from "./frontsController.js";
 import { arrowDetailAt, frontArrowFeatures, frontArrowRgb, frontAt, frontShownOn, frontTroopFeatures, stageOf } from "./frontGeometry.js";
-import { createFrontField, createPaintPlayer, landMask, paintPixels, paintScaleFor, pictureCorners, pictureFits, touchedCells, viewWithin, writeFrontField } from "./frontPaint.js";
+import { createFrontField, createPaintPlayer, landMask, paintPixels, paintScaleFor, pictureCorners, pictureFits, touchedCells, writeFrontField } from "./frontPaint.js";
 import { FRONT_BASEMAP_PUT_LAYER_ID, FRONT_BASEMAP_TAKE_LAYER_ID, createFrontBasemapLayers, markPicturePainted, picturePaintedTimes } from "./frontBasemapLayer.js";
 import { FRONT_GROUND_LAYER_ID, createFrontGroundLayer } from "./frontGroundLayer.js";
 import { getGroundHeldIds, getGroundMeshes, setGroundAreas, setGroundWantedIds, subscribeGroundHeldIds, subscribeGroundMeshes } from "./frontGround.js";
@@ -71,7 +71,6 @@ const PLAY_FRAMES_PER_SECOND = 24;
 const PLAY_FRAMES_PER_SECOND_TOUCH = 12;
 // The sources of the map whose regions give the land its shape.
 const MASK_SOURCES = ["custom-regions-source", "custom-regions-repair-source"];
-const REMASK_STILL_MS = 300;
 
 const UNOWNED_COLOR = "rgb(120, 120, 120)";
 const UNOWNED_RGB = [120, 120, 120];
@@ -698,7 +697,6 @@ const FrontLayers = () => {
     // for the part of the map on the screen, which is all the map has loaded:
     // the rest goes by the cells until it is looked at.
     let maskedFor = "";
-    let maskedView = null;
     const fold = (name) => String(name ?? "").trim().toLowerCase();
     const maskOf = (entry, bounds, featuresOf) => {
       const { picture } = entry;
@@ -767,14 +765,12 @@ const FrontLayers = () => {
       const bounds = mapInstance?.getBounds?.();
       if (!bounds) return;
       const key = [
-        (mapInstance.getZoom?.() ?? 0).toFixed(1),
+        (mapInstance.getZoom?.() ?? 0).toFixed(1), bounds.getWest().toFixed(2), bounds.getSouth().toFixed(2),
+        bounds.getEast().toFixed(2), bounds.getNorth().toFixed(2),
         ...[...playRef.current.values()].map((entry) => `${entry.target.name}:${entry.picture.canvas.width}`),
       ].join("|");
-      const view = { west: bounds.getWest(), south: bounds.getSouth(), east: bounds.getEast(), north: bounds.getNorth() };
-      // Ground already cut to the land at this zoom has nothing new to give.
-      if (key === maskedFor && ownersRef.current === maskedOwners && viewWithin(view, maskedView)) return;
+      if (key === maskedFor && ownersRef.current === maskedOwners) return;
       maskedFor = key;
-      maskedView = view;
       maskedOwners = ownersRef.current;
       // Read once for every battlefield: the map's regions are the same for each.
       const queried = new Map();
@@ -800,15 +796,7 @@ const FrontLayers = () => {
       if (any) paint(true);
     };
     let maskedOwners = null;
-    // It reads the drawing back and paints every picture again: a stall, so it waits until the map has stayed put.
-    let remaskTimer = null;
-    const holdRemask = () => clearTimeout(remaskTimer);
-    const remaskWhenStill = () => {
-      clearTimeout(remaskTimer);
-      remaskTimer = setTimeout(remask, REMASK_STILL_MS);
-    };
-    mapInstance?.on?.("idle", remaskWhenStill);
-    mapInstance?.on?.("movestart", holdRemask);
+    mapInstance?.on?.("idle", remask);
 
     let declared = "";
     const sync = () => {
@@ -945,9 +933,7 @@ const FrontLayers = () => {
     return () => {
       mapInstance?.off?.("styledata", onStyleData);
       mapInstance?.off?.("moveend", onMoveEnd);
-      mapInstance?.off?.("idle", remaskWhenStill);
-      mapInstance?.off?.("movestart", holdRemask);
-      clearTimeout(remaskTimer);
+      mapInstance?.off?.("idle", remask);
       repaintRef.current = () => {};
       handOverAllRef.current = () => {};
       stop();

@@ -1,4 +1,4 @@
-import { MercatorCoordinate } from "maplibre-gl";
+import mapLibreGl from "maplibre-gl";
 import {
   canonicalSingleArcFromPolyline,
   cumulativeArcLengths,
@@ -18,6 +18,10 @@ import {
   scalePolityTextSupportPoints,
 } from "./polityTextLayout.js";
 import { optimizeTerritorialArcPlacement } from "./polityTextPlacement.js";
+
+// The default export, as mapLibreSetup.js takes it: maplibre-gl is a CommonJS
+// bundle, so node (the tests) cannot pick a named export out of it.
+const { MercatorCoordinate } = mapLibreGl;
 
 export const POLITY_TEXT_RENDERER_LAYER_ID = "polity-text-renderer";
 const RASTER_FONT_SIZE_PX = 128;
@@ -203,32 +207,6 @@ export const buildRibbonVertices = ({ points, aspectRatio }) => {
 
 const buildLineVertices = (points) => new Float32Array(points.flat());
 
-// Where a point of a label lies on the globe, as MapLibre's shaders put it (projectToSphere).
-const onSphere = (x, y) => {
-  const longitude = x * Math.PI * 2 + Math.PI;
-  const latitude = 2 * Math.atan(Math.exp(Math.PI - y * Math.PI * 2)) - Math.PI / 2;
-  const radius = Math.cos(latitude);
-  return [Math.sin(longitude) * radius, Math.sin(latitude), Math.cos(longitude) * radius];
-};
-
-// A few points along a ribbon, worked out once: enough to tell a label has gone over the horizon.
-const GLOBE_SAMPLES = 5;
-export const globeSamples = (vertices) => {
-  const count = Math.floor((vertices?.length ?? 0) / 4);
-  if (!count) return [];
-  const samples = [];
-  for (let index = 0; index < GLOBE_SAMPLES; index += 1) {
-    const at = Math.round((index / (GLOBE_SAMPLES - 1)) * (count - 1)) * 4;
-    samples.push(onSphere(Number(vertices[at]), Number(vertices[at + 1])));
-  }
-  return samples;
-};
-
-// A phone's GPU can let a far-side label through the shader's clipping plane, mirrored, so those are not drawn. The margin leaves the rim to the shader.
-const HORIZON_MARGIN = 0.05;
-export const behindGlobe = (samples, plane) => samples.length > 0
-  && samples.every(([x, y, z]) => x * plane[0] + y * plane[1] + z * plane[2] + plane[3] < -HORIZON_MARGIN);
-
 const boundsFromRibbonVertices = (vertices) => {
   if (!vertices?.length) return null;
   let minX = Infinity;
@@ -292,33 +270,13 @@ const sortPreparedEntries = (entries) => [...entries].sort((left, right) => (
   Number(left?.record?.priorityScale ?? 0) - Number(right?.record?.priorityScale ?? 0)
 ));
 
-// A label's vertex layout, kept in a vertex array: a bind in place of a buffer and two pointers, for each label, each frame.
-const bindRibbon = (gl, entry, locations) => {
-  if (entry.ribbonArray && entry.ribbonArrayFor === locations) {
-    gl.bindVertexArray(entry.ribbonArray);
-    return;
-  }
-  if (entry.ribbonArray) gl.deleteVertexArray(entry.ribbonArray);
-  entry.ribbonArray = gl.createVertexArray();
-  entry.ribbonArrayFor = locations;
-  gl.bindVertexArray(entry.ribbonArray);
-  gl.bindBuffer(gl.ARRAY_BUFFER, entry.ribbonBuffer);
-  gl.enableVertexAttribArray(locations.position);
-  gl.enableVertexAttribArray(locations.uv);
-  gl.vertexAttribPointer(locations.position, 2, gl.FLOAT, false, 16, 0);
-  gl.vertexAttribPointer(locations.uv, 2, gl.FLOAT, false, 16, 8);
-};
-
 const releaseEntryGpuResources = (gl, entry) => {
   if (!entry) return;
   if (gl && !gl.isContextLost?.()) {
-    try { if (entry.ribbonArray) gl.deleteVertexArray(entry.ribbonArray); } catch { /* the context is gone */ }
     try { if (entry.ribbonBuffer) gl.deleteBuffer(entry.ribbonBuffer); } catch {}
     try { if (entry.lineBuffer) gl.deleteBuffer(entry.lineBuffer); } catch {}
     try { if (entry.texture) gl.deleteTexture(entry.texture); } catch {}
   }
-  entry.ribbonArray = null;
-  entry.ribbonArrayFor = null;
   entry.ribbonBuffer = null;
   entry.lineBuffer = null;
   entry.texture = null;
@@ -560,7 +518,6 @@ export const finalizePolityTextRenderRecord = ({
     rasterOptions,
     supportPoints,
     ribbonVertices,
-    globeSamples: globeSamples(ribbonVertices),
     mercatorBounds: boundsFromRibbonVertices(ribbonVertices),
     lineVertices: buildLineVertices(supportPoints),
     supportLength,
@@ -930,8 +887,6 @@ export const createPolityTextCustomLayer = ({
         }
       }
 
-      // Only on the whole globe: part way to the flat map the plane does not say what is behind.
-      const globePlane = Number(projection.projectionTransition ?? 0) > 0.999 ? projection.clippingPlane : null;
       let visibleCount = 0;
       for (const entry of this._drawOrder) {
         const opacity = polityTextOpacityAtZoom({
@@ -942,7 +897,6 @@ export const createPolityTextCustomLayer = ({
           fadeOutStartZoom: entry.record.fadeOutStartZoom,
         });
         if (opacity <= 0.002 || !boundsOverlap(entry.mercatorBounds, viewportBounds)) continue;
-        if (globePlane && behindGlobe(entry.globeSamples ?? [], globePlane)) continue;
         this._visibleEntries[visibleCount] = entry;
         this._visibleOpacity[visibleCount] = opacity;
         visibleCount += 1;
@@ -1006,16 +960,19 @@ export const createPolityTextCustomLayer = ({
       this._applyProjectionUniforms(gl, this._textureLocations, projection);
       gl.activeTexture(gl.TEXTURE0);
       gl.uniform1i(this._textureLocations.texture, 0);
+      gl.enableVertexAttribArray(this._textureLocations.position);
+      gl.enableVertexAttribArray(this._textureLocations.uv);
 
       for (let index = 0; index < visibleCount; index += 1) {
         const entry = this._visibleEntries[index];
         if (!entry?.texture || !entry.ribbonBuffer) continue;
         gl.uniform1f(this._textureLocations.opacity, this._visibleOpacity[index]);
         gl.bindTexture(gl.TEXTURE_2D, entry.texture);
-        bindRibbon(gl, entry, this._textureLocations);
+        gl.bindBuffer(gl.ARRAY_BUFFER, entry.ribbonBuffer);
+        gl.vertexAttribPointer(this._textureLocations.position, 2, gl.FLOAT, false, 16, 0);
+        gl.vertexAttribPointer(this._textureLocations.uv, 2, gl.FLOAT, false, 16, 8);
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, entry.ribbonVertexCount);
       }
-      gl.bindVertexArray(null);
     },
 
     onRemove(_map, gl) {

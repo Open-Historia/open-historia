@@ -94,33 +94,65 @@ R5.1 uses one renderer density for the whole session. R5.0 switched between 1× 
 
 Left unset, MapLibre sizes this cache dynamically to roughly `(ceil(w/256)+1)*(ceil(h/256)+1)*5` tiles **per source** — ~270 at 1080p but ~800 on a 4K viewport. With `renderWorldCopies`, panning E/W feeds successive wrapped world-copy tiles into that cache, so retained GPU textures climb until the tab OOMs. `256` caps the 4K case ~3× while being a no-op on phones. In-view tiles are a separate structure and are never evicted by this, so on-screen tiles are never re-fetched. This is orthogonal to the fixed 1× density (which bounds framebuffer pixels, not tiles).
 
-### The game's own MapLibre (`vendor/maplibre-gl`)
+### Terrain caches (`terrainCaches.js`)
 
-MapLibre is compiled from source with the game, version 6.16.0, through an alias in `vite.config.ts`: the game imports `maplibre-gl` as usual. Its changes are for frame time and memory, and `vendor/maplibre-gl/README.md` lists each one with why, and how to upgrade. In short:
+Attached to every map instance. With terrain on, MapLibre 5.19 repeats work whose answer has not changed. Nothing here changes a pixel; screenshots of the same camera before and after are identical.
 
-- **Memory.** The regions file's tile index keeps tiles as typed arrays and gives back tiles it can cut again. A file loaded from a URL is not posted back to the page. Paint arrays and outline indexes that no program reads are not made.
-- **Frame time.** Symbol placement is skipped while nothing it reads has changed and paced while the camera moves, so a label can appear or go up to 100 ms late while moving. Sources share one walk of the tile tree, and retained tiles and tile lists are kept while nothing changed. Clipping masks are kept from source to source. Terrain data has a uniform buffer for each tile.
-- **GL calls.** Uniforms a shader does not have are not set, a raster reads its second texture only while fading, and terrain textures are bound only when they change.
+| What | Cost before | Now |
+|---|---|---|
+| **`getTerrainCoords`.** Every tile of every source asks where it lies on every terrain tile | About 3,800 new objects and matrices a frame at 1080p | Kept per tile until the set of terrain tiles changes |
+| **`getTerrainData`.** Asked per tile, per source and per label | 8% of the main thread | Kept for one frame, and forgotten on `render` and `sourcedata` |
+| **`u_terrain_matrix`.** Made by MapLibre as a `Float64Array` (its empty one a plain array) and set on every draw call; Chrome copies anything but a `Float32Array` into WebGL a number at a time | About a fifth of the main thread while panning | Handed over as a `Float32Array` (`asFloat32Matrix`), only when every number is the same in 32 bits, so elevation read from it on the CPU is unchanged too |
 
-With terrain on, flat layers (`background`, `fill`, `line`, `raster`, `hillshade`, `color-relief`) are not drawn to the screen. Each terrain tile paints them into a texture, its **drape**, and the terrain mesh is drawn with it. Custom layers and symbols split the layers into stacks, each with its own drape. Since 6.x MapLibre keeps these itself: a drape that differs only by zoom is kept while the camera moves and painted again one tile a frame once it stops, so lines can look soft for a moment after a zoom.
+Each patch is skipped if the method it relies on has gone, and `terrainCaches.test.js` fails on an upgrade to say so.
 
-**To test a change here:** compare fixed cameras byte for byte against a build of the published package on the same game code, with two runs of that build as the noise floor, terrain on and off, with symbols and custom layers hidden as well as shown. Include the poles, the date line, high zoom, and tilt with rotation: a bug that only showed near Antarctica passed nine cameras elsewhere. An opening view compares the same way only straight after the game opens, as city labels pick their side from how the camera got there.
+#### Drapes
 
+With terrain on, the flat layers (`background`, `fill`, `line`, `raster`, `hillshade`, `color-relief`) are not drawn to the screen. Each terrain tile paints them into a 1024 px texture, its **drape**, and the terrain mesh is drawn with it. Custom layers and symbols split the layers into **stacks**, each with its own drape, so a game with a war has 3 or 4. Drapes are meant to last between frames, and a pan changes none of them.
 
-### The interface's glass (`frostedPanels.js`, `FrostLayer.jsx`)
+MapLibre's own pool never let them last. It reused any free slot before making a new one, and each stack freed its slots as it ended, so the next stack overwrote them: with two stacks or more, every tile was painted again every frame, on a map that had not changed. `rememberDrapes` makes the cache work:
 
-On a phone the browser's `backdrop-filter` held the map to half its frame rate: each blurred panel stops the page's drawing to read what is behind it, every frame the map moves. Its strength makes no difference (1px to 8px were all about 50 fps at 90 Hz), and neither does any one panel, and with it on, an empty map ran no faster than a full one. So the map paints the glass itself instead, on every device: its top layer copies the finished frame, blurs a copy an eighth of the size, and paints that where the panels are. The Galaxy A15 went from 52 to 88 fps. The main menu keeps the browser's blur, as it covers the map.
+| What | Why |
+|---|---|
+| **A slot holding a drape on screen is not reused** (`getOrCreateFreeObject`) | The fix itself. When there are more drapes than slots it gives up the newest free slot, not the oldest: oldest first loses them all on a cycle through the tiles |
+| **All slots share one depth and stencil buffer** | Painting a drape tests no depth and clears its stencil first. A slot is 4 MB in place of 8 |
+| **64 slots** in place of 30 | Room for every stack of a full screen (12 tiles at z4.2 and 3 stacks is 36), in about the memory the 30 took |
+| **Tiles of sources that are not draped are ignored** (`keepDrapesFromOtherTiles`) | Units, labels and cities reloading freed the tile's drapes though nothing in them changed |
 
-- **Which panels:** those reading `--oh-hud-blur`, found by their inline style. A new one is picked up by itself.
-- **Overlays keep the browser's blur.** The map can only blur itself, so a menu or drawer would show the interface it covers sharply through it. A panel over 120px tall (`isOverlay`) counts as one. It costs nothing while the map stands still behind it, and the map does with one open.
-- **The panels move on their own:** they are looked for every 150ms, and the map draws for a moment after one moves, so a panel that goes leaves no patch behind.
-- **Nothing may read the map's canvas for a picture of the map:** the glass is in it.
-- **The frame is taken with `blitFramebuffer`.** `copyTexSubImage2D` from the canvas stalled the GPU for about 500ms at a time on the globe, though not on the flat map.
-- **If the shaders fail, or the graphics context is lost,** `FROST_CLASS` comes off and the browser blurs again.
+Once drapes last, anything that changes their pixels has to end them, or the map shows stale paint. MapLibre watches sources, the style and feature state. The rest is here, and each was seen to go wrong when left out:
 
-### Labels behind the globe (`polityTextCustomLayer.js`)
+| Changes a drape | Ended by |
+|---|---|
+| **Zoom:** every line (its width in tile units) and any paint that varies with zoom | `drapeView` |
+| **Bearing:** the hillshade's light | `drapeView` |
+| **Pitch** (raster filtering), **pixel scale** (line widths on the globe), **the map's size** (line edges) | `drapeView` |
+| **Anything in transition:** paint easing, a canvas playing | `style.hasTransitions()`: drapes last one frame, and one more after it ends |
+| **A canvas source taking up its picture.** It fires no event, and its `pause()` uploads once more | Counting uploads in `prepare`. Canvas sources are found by `source.canvas`: their `type` says `"image"` |
+| **An elevation tile arriving.** `backfillDEM` rewrites its neighbours' borders too, and MapLibre frees only the tile's own drape: a one-pixel line of stale hillshade along tile edges | Every drape is freed. It is rare, and depends on the order tiles arrive, so one clean test run proves nothing: run it several times |
 
-The far side of the globe is hidden by a clipping plane in the shader, and a phone's GPU can let a country's name through it, mirrored on the front of the globe. It was seen on a Galaxy A15 (Mali-G57), on MapLibre 5.19 and 6.16 alike, and never on the PC. So a label whose points are all past the horizon is not drawn at all (`behindGlobe`), which on the globe also skips about half of them. The margin leaves anything near the rim to the shader, and it applies only on the whole globe: part way to the flat map the plane does not say what is behind.
+So a pan reuses the drapes and a zoom paints them all, as it always did. At a still frame in a war game the GPU's work falls by three quarters and the draw calls by half.
+
+Tried and dropped: keeping a stack through a zoom when its evaluated paint has not changed. The bottom stack is the expensive one and has no lines, but its relief's `raster-opacity` varies from z3 to z4.85, the range most played in.
+
+**To test a change here:** compare a frame against the same frame after `map.terrain.tileManager.freeRtt()`, byte for byte (`gl.readPixels` straight after `map.redraw()`), after each kind of change. Move the camera by `map.transform.setZoom()` too: `jumpTo` fires `zoomend`, which frees the drapes by another route and hides a stale one, and a wheel zoom fires nothing between its frames. Turn off the globe's idle spin first (`map_disable_idle_rotation`), or the map moves between the two frames.
+
+### Clipping masks (`clippingMasks.js`)
+
+Each tile's fills and lines are clipped to the tile by a mask in the stencil buffer. MapLibre draws the masks again whenever the source changes from one layer to the next: about 30 times a frame, each about a screenful of stencil writes. Most sources share their tiles, and then the stencil already holds exactly those masks. `attachClippingMasks` keeps them when the tiles, the framebuffer and the kind of target are the same.
+
+On a flat map with terrain off this was half of all draw calls and two thirds of the GPU's work, which matters most on the phones where terrain starts off. Whatever else writes to the stencil clears `currentStencilSource`, and the masks are drawn again after it: `clippingMasks.test.js` checks that MapLibre still does, and that no custom layer of this game writes to the stencil.
+
+### Source caches (`sourceCaches.js`)
+
+MapLibre works out each source on its own, every frame, though a game has about 25 in use and 20 of them share the same tile size and zoom range. `attachSourceCaches` shares what is the same. Nothing here changes a pixel; each keeps exactly what would be worked out again.
+
+| What | Cost before | Now |
+|---|---|---|
+| **Tile zoom.** With terrain on, each tile visited costs 30 powers and cosines, for every source | The top item of the main thread's own time while panning | One `calculateTileZoom` for all sources, kept by its arguments. MapLibre keeps its default to itself, so `setSourceTileLodParams` is asked for it with the default's own numbers |
+| **Tile boxes.** Each tile's bounding box, with its elevation looked up, for every source | Half of `coveringTiles` | Kept for one `style._updateSources`. Outside that sweep they are worked out as before: the terrain's own update runs between sweeps, and nothing can load or move during one |
+| **Tile state.** A tile coming back from the cache read every feature to apply their state, changed or not | A spike on each tile that returns while panning or zooming, larger on bigger maps | Skipped while the source's state `revision` and the tile's `buckets` are as they were when it was last applied: a change bumps the revision and a reload makes new buckets |
+
+The first two use numbers for keys (`tileBoxKey`): text keys, made from floats on every tile visited, cost what the caches saved. Keeping `getVisibleCoordinates` for a frame was tried and dropped: two of its three calls differ by `symbolLayer`, and it saved a tenth of a small item.
 
 ### `terrain` memo
 
@@ -223,7 +255,7 @@ Two constants in `World.jsx` give the image-source corners:
 
 **`regions-source` is mounted on custom maps too** (when their region ids match the tiles) — this is load-bearing. On a re-ownership scenario (Modern Day, Rome, WWII: stock GADM geometry, nothing hand-drawn) `regions-fill` is the *only* thing painting owners above z6.5, because `custom-regions-fill-far` stops at `maxzoom 7` and `FAR_FILL_FADE` has already faded it to 0 by z6.5. Unmounting it once left every such map blank past 6.5 and (via the `getLayer()` filter in the click handler) unclickable too.
 
-**What the regions file costs in memory.** The modern world's file is 58 MB. MapLibre's GeoJSON worker tiles it with a tolerance of nearly nothing, so every zoom level's tiles hold nearly every point: the price of exact shared borders, left alone because any other tolerance or buffer moves pixels. Its tile index (`vendor/maplibre-gl/src/geojson-vt`) keeps tiles as typed arrays, builds them eagerly only to z3 and gives back deeper tiles past a limit, cutting them again identically when asked: about 190 MB in place of about 700. The file itself is dropped once tiled, and never posted to the page. The political worker keeps the parsed file and the frontier topology; its boundary state keeps the 1.1 million shared segments as typed-array rows (`SegmentTable` in `vnext/politicalBoundaryTopology.js`), built into a segment (`{ id, regionIndexes, a, b }`) only when one is asked for: 210 MB, and ids, order and every patch are the same as when each segment was an object.
+**What the regions file costs in memory.** The modern world's file is 58 MB, and two workers keep it for the whole sitting. MapLibre's GeoJSON worker tiles it with a tolerance of nearly nothing, so every zoom level's tiles hold nearly every point, and it keeps every tile it has cut (about 600 MB in Chrome, and growing as the player looks around: the price of exact shared borders, left alone because any other tolerance or buffer moves pixels). Beside that index it kept two copies only `getData()` and `updateData()` read, and nothing calls either on this source: `regionsSourceMemory.js` drops the page's copy, and `WORKER_COPY_SWEEP`, run in each map worker through `importScriptInWorkers` (`mapLibreSetup.js` `forgetWorkerSourceCopies`), drops the worker's (about 120 MB). The political worker keeps the parsed file and the frontier topology; its boundary state keeps the 1.1 million shared segments as typed-array rows (`SegmentTable` in `vnext/politicalBoundaryTopology.js`), built into a segment (`{ id, regionIndexes, a, b }`) only when one is asked for: the worker went from about 415 MB to 210 MB, and ids, order and every patch are the same as when each segment was an object. Together these took the desktop app with the modern world open from about 2.35 GB to 1.97 GB.
 
 ### 4.2 The crossfade constants
 
@@ -289,9 +321,9 @@ A region whose `claimants` list names contesting countries renders **diagonally 
 | `stripeImageId(rgbList)` | `Nations.jsx` | Encodes the rgb list into an image id: `oh-stripes-r_g_b-r_g_b…` |
 | `parseStripeImageId(id)` | `Nations.jsx` | Decodes it back |
 | `buildStripeImage(rgbList)` | `Nations.jsx` | Raw RGBA diagonal-stripe tile; band = `(x+y) mod period` (tiles seamlessly), `STRIPE_BAND_PX = 8` |
-| Missing-image resolver (`missingImages.js`) | `Nations.jsx` | On demand, builds and `addImage`s any stripe tile the style asks for |
+| `styleimagemissing` handler | `Nations.jsx` | On demand, builds and `addImage`s any stripe tile the style asks for |
 
-Because the image id **encodes its own colours**, the resolver can rebuild *any* combination — including after a globe↔mercator remount wipes all GL images. This is why stripes are reactive rather than pre-registered.
+Because the image id **encodes its own colours**, the `styleimagemissing` handler can rebuild *any* combination — including after a globe↔mercator remount wipes all GL images. This is why stripes are reactive rather than pre-registered.
 
 Claimants come from `world.regionClaimants[id]` first (how the modern-world scenario declares disputes, since its geometry is an immutable seed), else the region feature's own `claimants` prop (editor maps). A region the world has a say on uses the world's list even when it is empty: `useWorldState.js` `withSettledClaims` puts every `world.settledRegionClaims` region into the map's view with no claimants, and the worker's `deriveDisputedData`, the stock-tile stripes and the region click test the key's presence, so a dispute the world ended does not come back from the feature. `enrichedCustomRegionData` bakes a `_stripes` property (the image id) onto disputed features; layers select on `["has","_stripes"]` and paint with `fill-pattern` instead of the solid fill:
 

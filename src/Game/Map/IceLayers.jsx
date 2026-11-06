@@ -20,7 +20,6 @@ import React, { useEffect, useMemo, useState } from "react";
 import { Layer, useMap } from "react-map-gl/maplibre";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
 import { featureIdsOf, iceFilters, iceRegionIds } from "./iceFeatures.js";
-import { resolveMissingImages } from "./missingImages.js";
 import { ICE_LAYERS, ICE_TINT, iceImageId, icePattern } from "./mapPatterns.js";
 import { useLayerOrder } from "./useLayerOrder.js";
 
@@ -115,12 +114,13 @@ const IceLayers = () => {
   useEffect(() => {
     if (!map || !any) return undefined;
     const again = () => Object.keys(PICTURES).forEach((id) => provide(map, id));
-    const stopAsking = resolveMissingImages(map, (id) => provide(map, id));
+    const asked = (event) => provide(map, event?.id);
     again();
     map.on("styledata", again);
+    map.on("styleimagemissing", asked);
     return () => {
       map.off("styledata", again);
-      stopAsking();
+      map.off("styleimagemissing", asked);
     };
   }, [map, any]);
   useLayerOrder(map, LAYERS, any);

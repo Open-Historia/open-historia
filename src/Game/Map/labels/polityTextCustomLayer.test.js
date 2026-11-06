@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { behindGlobe, createPolityTextCustomLayer, globeSamples } from "./polityTextCustomLayer.js";
+import { createPolityTextCustomLayer } from "./polityTextCustomLayer.js";
 
 // Just enough WebGL for the layer: every resource is a tagged object, every
 // other call is a no-op, and textures bound for a draw are recorded.
@@ -119,30 +119,4 @@ test("the layer logs nothing per label unless diagnostics are on", (t) => {
   loud.onAdd(fakeMap(), gl);
   loud.render(gl, frame);
   assert.ok(info.mock.callCount() >= 2, "onAdd, shader compile and first render log when asked");
-});
-
-// The plane the map gave for a view of the Atlantic at 23W, read from a running game.
-const ATLANTIC_VIEW = [-0.4029, 0, 0.9152, -0.4115];
-const ribbonAt = (longitude, latitude) => {
-  const x = (longitude + 180) / 360;
-  const y = 0.5 - Math.log(Math.tan(Math.PI / 4 + (latitude * Math.PI) / 360)) / (Math.PI * 2);
-  return new Float32Array([x - 0.01, y, 0, 0, x, y, 0.5, 0, x + 0.01, y, 1, 0]);
-};
-
-test("a label on the far side of the globe is not drawn, and one in view is", () => {
-  assert.equal(behindGlobe(globeSamples(ribbonAt(134, -25)), ATLANTIC_VIEW), true, "Australia, from over the Atlantic");
-  assert.equal(behindGlobe(globeSamples(ribbonAt(-23, 0)), ATLANTIC_VIEW), false, "the middle of the view");
-  assert.equal(behindGlobe(globeSamples(ribbonAt(-14, 14)), ATLANTIC_VIEW), false, "Dakar");
-});
-
-test("the rim is left to the shader, and a label reaching back over the horizon stays", () => {
-  const horizon = Math.acos(0.4115) * (180 / Math.PI);
-  assert.equal(behindGlobe(globeSamples(ribbonAt(-23 + horizon, 0)), ATLANTIC_VIEW), false, "on the horizon");
-  const reaching = new Float32Array([...ribbonAt(134, -25), ...ribbonAt(-23, 0)]);
-  assert.equal(behindGlobe(globeSamples(reaching), ATLANTIC_VIEW), false);
-});
-
-test("nothing is held back on a flat map, where the plane is zero, or for a label with no shape", () => {
-  assert.equal(behindGlobe(globeSamples(ribbonAt(134, -25)), [0, 0, 0, 0]), false);
-  assert.equal(behindGlobe([], ATLANTIC_VIEW), false);
 });

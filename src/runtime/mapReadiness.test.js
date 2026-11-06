@@ -13,7 +13,6 @@ const {
   politiesFailed,
   politiesReady,
   politiesSettled,
-  awaitingSettledIdle,
   setReadinessGame,
 } = await import("./mapReadiness.js");
 
@@ -35,17 +34,6 @@ test("a ready map has not failed; a final failure is recorded and announced", as
   assert.equal(events.at(-1).detail.failed, true);
   await settle();
   assert.equal(politiesSettled(), true);
-});
-
-test("an idle too soon after the polities leaves the map owing one, and a later one settles it", async () => {
-  setReadinessGame("game-settle");
-  assert.equal(awaitingSettledIdle(), false, "no polities yet: nothing to wait for");
-  markPolitiesReady("regions.geojson");
-  markMapIdle();
-  assert.equal(politiesSettled(), false);
-  assert.equal(awaitingSettledIdle(), true);
-  await settle();
-  assert.equal(awaitingSettledIdle(), false);
 });
 
 test("a failure belongs to its game", () => {

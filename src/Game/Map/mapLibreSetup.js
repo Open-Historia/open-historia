@@ -6,11 +6,14 @@
 // could draw, and in the Scenario Workshop, which never shows a MapLibre map.
 // World.jsx, Nations.jsx and Cities.jsx call these as they load, before any
 // map exists; each is idempotent.
-import { addProtocol, setMaxParallelImageRequests, setWorkerCount } from "maplibre-gl";
+import mapLibreGl from "maplibre-gl";
 import { basemapTileLoader, pmtilesProtocol } from "../../runtime/assets.js";
 import { RELIEF_PROTOCOL, createReliefTileLoader } from "./scenarioTerrain.js";
 import { SEASON_TINT_PROTOCOL, seasonTintTileLoader } from "./seasonTintTiles.js";
 import { isConstrainedDevice, mapRuntimeLimits } from "../../runtime/deviceProfile.js";
+import { workerCopySweepScript } from "./regionsSourceMemory.js";
+
+const { addProtocol, importScriptInWorkers, setMaxParallelImageRequests, setWorkerCount } = mapLibreGl;
 
 let runtimeConfigured = false;
 let pmtilesRegistered = false;
@@ -26,6 +29,23 @@ export const configureMapRuntime = () => {
   setWorkerCount(workerCount);
   setMaxParallelImageRequests(parallelImageRequests);
   runtimeConfigured = true;
+};
+
+// Drops the copies of a URL source's file MapLibre's workers keep beside its
+// tile index (regionsSourceMemory.js WORKER_COPY_SWEEP). Resolves false where it
+// cannot run; nothing drawn depends on it.
+export const forgetWorkerSourceCopies = (sourceId) => {
+  if (typeof importScriptInWorkers !== "function" || typeof Blob === "undefined" || typeof URL?.createObjectURL !== "function") return Promise.resolve(false);
+  let url = "";
+  try {
+    url = URL.createObjectURL(new Blob([workerCopySweepScript(sourceId)], { type: "text/javascript" }));
+    return Promise.resolve(importScriptInWorkers(url))
+      .then(() => true, () => false)
+      .finally(() => URL.revokeObjectURL(url));
+  } catch {
+    if (url) URL.revokeObjectURL(url);
+    return Promise.resolve(false);
+  }
 };
 
 // pmtiles:// URLs. Archives are added to the protocol by runtime/assets.js,
