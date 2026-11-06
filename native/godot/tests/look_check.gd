@@ -421,9 +421,34 @@ func _themed_panels() -> void:
 			await _shoot("look-%s-debug-console" % preset)
 			main.debug_console.call("close")
 			await _wait(0.5)
+		await _update_banner(preset)
 	var chat_panel: Variant = main.hud.get("panels").get("chat")
 	_check(chat_panel != null, "the Diplomacy panel is there to theme")
 	UiTheme.reset()
+	await _wait(0.4)
+
+
+func _update_banner(preset: String) -> void:
+	var updater: Variant = main.get("app_update")
+	if updater == null:
+		return
+	var kept: Dictionary = updater.state
+	updater.state = {"supported": true, "available": true, "canInstall": false, "latest": {"build": "20261105120000", "notes": ""}}
+	updater.call("_refresh_banner")
+	await _wait(0.6)
+	var style := (updater.banner as Control).get_theme_stylebox("panel") as StyleBoxFlat
+	_check(updater.banner.visible and style != null and _same(style.bg_color, UiTheme.pick("surface", Color(0, 0, 0, 0))), "the update banner takes the palette (%s)" % preset)
+	await _shoot("look-%s-update-banner" % preset)
+	updater.call("_show_cover", updater.LEDE_BUILD, true)
+	updater._cover_bar.fraction = 0.42
+	updater._cover_bar.queue_redraw()
+	updater._cover_pct.text = "42%"
+	await _wait(0.6)
+	_check(_same(updater._cover_page.color, UiTheme.pick("surface", Color(0, 0, 0, 0))), "the update cover takes the palette (%s)" % preset)
+	await _shoot("look-%s-update-cover" % preset)
+	updater.cover.visible = false
+	updater.state = kept
+	updater.call("_refresh_banner")
 	await _wait(0.4)
 
 
