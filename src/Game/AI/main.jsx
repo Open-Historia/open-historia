@@ -533,6 +533,15 @@ function getGeminiStreamUrl(model, apiKey) {
 // the field reaches this API, asking for it is the only change.
 const geminiJsonAnswerRefusals = new Set();
 
+// The other way round: a model that refuses a task's function call as a request,
+// 400 "Request contains an invalid argument" before a word is written (a
+// player's log, 2026-11-06: thirty time skips, every one to the canned events),
+// is asked again at once with the contract written into the prompt as JSON text,
+// which has no grammar to outgrow, and that way for the rest of the session. A
+// skip that also declares lookup functions keeps the call: the text form cannot
+// carry their questions.
+const geminiFunctionCallRefusals = new Set();
+
 // The whole answer of a JSON-mode request, or null when it is not one object
 // (cut off, fenced, prose around it): the task's own salvage reads those from
 // the raw text.
@@ -1323,13 +1332,18 @@ async function callGemini(systemPrompt, history, {
     // The answer as JSON text rather than a function call, so a watched skip's
     // events arrive one at a time (see geminiJsonAnswerRefusals above for when,
     // and for what happens when it is refused).
-    let jsonAnswer = Boolean(tool && typeof onToolStream === "function" && !lookupDeclarations.length)
-        && !geminiJsonAnswerRefusals.has(model);
+    const canAnswerAsText = Boolean(tool && !lookupDeclarations.length);
+    let jsonAnswer = canAnswerAsText && (geminiFunctionCallRefusals.has(model)
+        || (typeof onToolStream === "function" && !geminiJsonAnswerRefusals.has(model)));
     let jsonAnswerRefused = false;
-    // Events first: they are what the panel shows as they are written.
-    const answerFormat = jsonAnswer
-        ? buildAnswerFormatBlock(tool.schema, { first: Object.keys(tool.schema?.properties ?? {})[0] || "" })
-        : "";
+    let functionCallRefused = false;
+    // Events first: they are what the panel shows as they are written. Built the
+    // first time the text form is asked for, which may be after a refused call.
+    let answerFormat = "";
+    const answerFormatBlock = () => {
+        answerFormat ||= buildAnswerFormatBlock(tool.schema, { first: Object.keys(tool.schema?.properties ?? {})[0] || "" });
+        return answerFormat;
+    };
 
     for (let attempt = 1; attempt <= retries; attempt++) {
         // Tool calls stream, for the same reason they do on the other three
@@ -1360,7 +1374,7 @@ async function callGemini(systemPrompt, history, {
                 // one a function-call request has.
                 system_instruction: { parts: [
                     { text: systemPrompt },
-                    ...(jsonAnswer ? [{ text: answerFormat }] : []),
+                    ...(jsonAnswer ? [{ text: answerFormatBlock() }] : []),
                 ] },
                 contents: geminiContentsFromHistory(history),
                 ...(Object.keys(generationConfig).length ? { generationConfig } : {}),
@@ -1408,11 +1422,27 @@ async function callGemini(systemPrompt, history, {
             // at once as the function call it always was. Not one of the
             // attempts, which are for a busy model; a key, a missing model or a
             // request too large fails the same either way and is not asked twice.
-            if (jsonAnswer && [400, 422].includes(response.status) && !waitingCannotFix(failure) && failure.kind !== "tooBig") {
+            if (jsonAnswer && !functionCallRefused && [400, 422].includes(response.status) && !waitingCannotFix(failure) && failure.kind !== "tooBig") {
                 jsonAnswer = false;
                 jsonAnswerRefused = true;
                 console.warn("[ai] Gemini refused the skip's JSON-text form; asking again as a function call (its events will arrive together).");
                 logDebugEvent("ai", "Gemini refused a JSON-mode request; asked again as a function call.", {
+                    model,
+                    status: response.status,
+                    detail: extractErrorMessage(payload, "").slice(0, 300),
+                }, { verbose: true });
+                attempt -= 1;
+                continue;
+            }
+            // The function call refused as a request: asked again at once as JSON
+            // text (geminiFunctionCallRefusals above). Once a call, and never after
+            // the text form was itself refused in this one.
+            if (!jsonAnswer && canAnswerAsText && !functionCallRefused && !jsonAnswerRefused
+                && [400, 422].includes(response.status) && failure.kind === "other") {
+                jsonAnswer = true;
+                functionCallRefused = true;
+                console.warn("[ai] Gemini refused the function call; asking again with the answer as JSON text.");
+                logDebugEvent("ai", "Gemini refused a function-call request; asked again as JSON text.", {
                     model,
                     status: response.status,
                     detail: extractErrorMessage(payload, "").slice(0, 300),
@@ -1429,6 +1459,7 @@ async function callGemini(systemPrompt, history, {
         // it was the form that was refused, so this model is asked the function
         // way for the rest of the session.
         if (jsonAnswerRefused) geminiJsonAnswerRefusals.add(model);
+        if (functionCallRefused) geminiFunctionCallRefusals.add(model);
 
         // Branch on what actually came back, not on what was asked for: an edge
         // or proxy that ignored alt=sse still answers plain JSON, and that must

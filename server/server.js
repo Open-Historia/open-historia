@@ -58,6 +58,7 @@ import {
   writeGameParkedTurn,
   writeRuntimeJsonAsset,
   writeRuntimeTurnState,
+  MAP_ASSETS_DIR,
 } from "./libraryStore.js";
 import {
   createMapEditorDocument,
@@ -2342,6 +2343,20 @@ if (fs.existsSync(fmgDistDir)) {
 }
 
 app.use(express.static(distDir));
+
+// The map files a packaged build downloads after install (scripts/map-assets.json,
+// electron/main.cjs OH_ASSETS_DIR) are in none of dist/: the world's cities
+// (cities-seed.json, the time skip's place finder, AI/worldCities.js) and the
+// editor's seed world. Served from where they were downloaded, after the build's
+// own files. Where dist/ is the source checkout's public/ copy the folder is the
+// same one and nothing changes. A player's log, 2026-11-06: "the world city list
+// could not be read", every skip, on the desktop beta.
+if (MAP_ASSETS_DIR && path.resolve(MAP_ASSETS_DIR) !== path.resolve(distDir, "assets")) {
+  app.use("/assets", express.static(MAP_ASSETS_DIR, { index: false }));
+}
+// A file under /assets that is nowhere is a 404, never the app's own page: the
+// page came back with a 200 where the city list was asked for.
+app.use("/assets", (_req, res) => { res.status(404).type("text/plain").send("Not found"); });
 
 app.get("*splat", (_req, res) => {
   res.sendFile(path.join(distDir, "index.html"));

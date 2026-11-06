@@ -4,6 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  closeObjectsBeforeList,
   extractFencedJson,
   looksLikeProjectOps,
   recoverOpsElementwise,
@@ -294,4 +295,17 @@ test("a closed block parses the same whether or not the reply is streaming", () 
   const complete = extractFencedJson(text, "projects", { salvageTruncated: true });
   assert.deepEqual(streaming, complete);
   assert.deepEqual(complete.json, [{ op: "create", name: "Dam" }]);
+});
+
+// A player's log, 2026-11-06: the suggested actions lost eighteen times to a list closed over an open object.
+test("a list closed while its last object is still open gets the brace it lacks, and nothing else", () => {
+  const body = '[\n  {"title":"A","kind":"action"},\n  {"title":"B","text":"x ] y {","kind":"action"]';
+  assert.deepEqual(extractFencedJson(fence("actions", body), "actions", { streaming: true }).json, [
+    { title: "A", kind: "action" },
+    { title: "B", text: "x ] y {", kind: "action" },
+  ]);
+  assert.equal(closeObjectsBeforeList('[{"a":1}]'), null, "valid JSON is left alone");
+  assert.equal(closeObjectsBeforeList('{"a":"]"}'), null, "a bracket inside a string is not one");
+  // Cut off rather than mis-closed: still nothing, as before (an incomplete fence is never an Action).
+  assert.equal(extractFencedJson(fence("actions", '[{"title":"A","kind":"action"},{"title":"B"'), "actions", { streaming: true }).json, null);
 });
