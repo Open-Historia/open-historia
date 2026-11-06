@@ -284,7 +284,7 @@ func _run() -> void:
 		saved = await _doc("advisor")
 		var receipts: Variant = panel.messages[1].get("actionReceipts")
 		_check("the receipt is kept on the reply and in the file", typeof(receipts) == TYPE_DICTIONARY and str(((receipts as Dictionary).get("proposal-0", {}) as Dictionary).get("status", "")) == "queued" and JSON.stringify(saved).contains("\"actionReceipts\""))
-		_check("a confirmed card says the board took it", _find_text(panel, "Confirmed by Actions board. Execution still requires game-time resolution.") and _find_button(panel, "Proceed / Queue") == null and _find_button(panel, "Discuss") == null)
+		_check("a queued card says the board took it and offers Discuss and Cancel", _find_text(panel, "Queued on the Actions board. It will resolve when game time advances.") and _find_button(panel, "Proceed / Queue") == null and _find_button(panel, "Discuss") != null and _find_button(panel, "Cancel") != null and _find_button(panel, "Open Actions") == null)
 		var again: Dictionary = await main.engine.request("advisor.proceed", {"threadId": "chief", "messageId": str(panel.messages[1].get("id", "")), "proposalId": "proposal-0"})
 		var again_result: Dictionary = again.get("result", {}) if again.get("ok", false) else {}
 		_check("approving the same proposal twice queues it once", bool(again_result.get("ok", false)) and JSON.stringify(await _doc("actions")).count("Convene the budget cabinet") == 1, JSON.stringify(again_result))
@@ -302,8 +302,11 @@ func _run() -> void:
 		panel.views.pop_back()
 		panel._render()
 		await _frames(2)
-		await _scroll_to(_find_button(panel, "Open Actions"))
+		await _scroll_to(_find_button(panel, "Cancel"))
 		await _shoot("advisor-04c-proposal-queued")
+		await _stale_targets()
+		await _cancel_and_requeue()
+		await _receipts_kept()
 	var chart := _find_chart(panel)
 	_check("the chart is drawn natively", chart != null)
 	if chart:
@@ -324,10 +327,7 @@ func _run() -> void:
 	await _frames(3)
 	await _shoot("advisor-06-reply-top")
 
-	var open_actions_button := _find_button(panel, "Open Actions")
-	_check("Open Actions is offered", open_actions_button != null)
-	if open_actions_button:
-		open_actions_button.pressed.emit()
+	_check("a queued proposal has no Open Actions", _find_button(panel, "Open Actions") == null)
 	_check("Open Actions asks for the Actions panel", opened_actions == 1)
 	var open_projects_button := _find_button(panel, "Open Projects")
 	if open_projects_button:
@@ -635,6 +635,127 @@ func _run() -> void:
 	await _contacts()
 	_say("%d failures" % failures.size())
 	_finish(0 if failures.is_empty() else 1)
+
+
+func _rich_texts(node: Node) -> PackedStringArray:
+	var out: PackedStringArray = []
+	if node is RichTextLabel and (node as RichTextLabel).is_visible_in_tree():
+		out.append((node as RichTextLabel).get_parsed_text())
+	for child in node.get_children():
+		out.append_array(_rich_texts(child))
+	return out
+
+
+func _budget_orders() -> int:
+	return JSON.stringify(await _doc("actions")).count("Convene the budget cabinet")
+
+
+func _saved_receipt(message_id: String) -> String:
+	var saved: Variant = await _doc("advisor")
+	if typeof(saved) != TYPE_ARRAY:
+		return ""
+	for entry in saved:
+		if typeof(entry) == TYPE_DICTIONARY and str((entry as Dictionary).get("id", "")) == message_id:
+			var receipts: Variant = (entry as Dictionary).get("actionReceipts")
+			if typeof(receipts) == TYPE_DICTIONARY:
+				return str(((receipts as Dictionary).get("proposal-0", {}) as Dictionary).get("status", ""))
+	return ""
+
+
+func _stale_targets() -> void:
+	await main.engine.request("actions.testSeed", {"actions": [{"id": "action-done-stalecheck-0001", "title": "Hold the budget summit", "text": "Hold the budget summit", "kind": "action", "source": "player", "status": "resolved"}]})
+	var missing := {"role": "advisor", "id": "advisor-reply-stalecheck-0001", "text": "We could widen it.", "time": "2016-01-01", "actionProposals": [{"id": "proposal-0", "actionId": "action-advisor-reply-stalecheck-0001-0", "operation": "edit", "targetId": "action-gone-stalecheck-0001", "title": "Widen the budget talks", "text": "Widen the budget talks"}]}
+	var resolved := {"role": "advisor", "id": "advisor-reply-stalecheck-0002", "text": "We could revisit it.", "time": "2016-01-01", "actionProposals": [{"id": "proposal-0", "actionId": "action-advisor-reply-stalecheck-0002-0", "operation": "edit", "targetId": "action-done-stalecheck-0001", "title": "Reopen the budget summit", "text": "Reopen the budget summit"}]}
+	var reply: Dictionary = (await main.engine.request("advisor.views", {"json": JSON.stringify([missing, resolved], "", false, true)})).get("result", {})
+	var stale_views: Array = reply.get("views", [{}, {}])
+	_check("an edit of a missing order reads Target unavailable, of a resolved one Target resolved", str(((stale_views[0] as Dictionary).get("proposalStates", {}) as Dictionary).get("proposal-0", "")) == "target-unavailable" and str(((stale_views[1] as Dictionary).get("proposalStates", {}) as Dictionary).get("proposal-0", "")) == "target-resolved", JSON.stringify(stale_views).left(300))
+	panel.messages.append(missing)
+	panel.views.append(stale_views[0])
+	panel.messages.append(resolved)
+	panel.views.append(stale_views[1])
+	panel._render()
+	await _wait(0.4)
+	_check("a stale edit has no Proceed, says so, and offers Discuss and Open Actions", _find_text(panel, "Target unavailable") and _find_text(panel, "Target resolved") and _find_button(panel, "Proceed / Queue") == null and _count_buttons(panel, "Open Actions") == 2 and _labels_with(panel, "The referenced Action is no longer queued. Discuss a new Action if further work is needed."))
+	await _scroll_to(_find_button(panel, "Open Actions"))
+	await _shoot("advisor-04f-stale-targets")
+	var stale_open := _find_button(panel, "Open Actions")
+	if stale_open:
+		stale_open.pressed.emit()
+	panel._input.text = ""
+	panel._discuss_action(missing["actionProposals"][0], true)
+	await _frames(2)
+	_check("Discuss on a stale edit asks for a new Action instead", panel._input.text == "The proposed change \"Widen the budget talks\" targets an Action that is no longer queued. If this is genuinely new work, propose a new Action for my approval instead of editing a missing or resolved order.", panel._input.text)
+	panel._input.text = ""
+	panel._resize_input()
+	panel._update_send()
+	panel.messages.pop_back()
+	panel.views.pop_back()
+	panel.messages.pop_back()
+	panel.views.pop_back()
+	panel._render()
+	await _frames(2)
+
+
+func _cancel_and_requeue() -> void:
+	var reply_id := str(panel.messages[1].get("id", ""))
+	var cancel := _find_button(panel, "Cancel")
+	_check("the queued card has its Cancel", cancel != null)
+	if cancel == null:
+		return
+	cancel.pressed.emit()
+	_check("Cancel takes the Action off the board", await _until(func() -> bool: return _find_text(panel, "Cancelled"), 20.0))
+	await _frames(3)
+	var got_0: Variant = await _budget_orders()
+	var got_1: Variant = await _saved_receipt(reply_id)
+	_check("the cancelled order is gone and its receipt says cancelled", got_0 == 0 and got_1 == "cancelled")
+	_check("a cancelled card can be queued again", _find_button(panel, "Proceed / Queue") != null and _find_button(panel, "Discuss") != null and _find_button(panel, "Cancel") == null)
+	await _scroll_to(_find_button(panel, "Proceed / Queue"))
+	await _shoot("advisor-04e-proposal-cancelled")
+	_find_button(panel, "Proceed / Queue").pressed.emit()
+	_check("Proceed queues it again", await _until(func() -> bool: return _find_text(panel, "Queued"), 20.0))
+	await _frames(3)
+	var got_2: Variant = await _budget_orders()
+	var got_3: Variant = await _saved_receipt(reply_id)
+	_check("the requeued order keeps its id and is on the board once", got_2 == 1 and got_3 == "queued")
+	panel._input.text = ""
+	_find_button(panel, "Discuss").pressed.emit()
+	_check("Discuss on a queued Action cancels it first", await _until(func() -> bool: return _find_text(panel, "Cancelled") and not panel._input.text.is_empty(), 20.0), "%s | %s | %s" % [panel._input.text, JSON.stringify(panel.views[1].get("proposalStates", {})), " / ".join(PackedStringArray(Array(_rich_texts(panel)).filter(func(t: String) -> bool: return t.contains("Action") or t.contains("busy"))))])
+	await _frames(3)
+	var got_4: Variant = await _budget_orders()
+	_check("then puts it in the composer", panel._input.text == "Let's discuss the proposed Action \"Convene the budget cabinet\" before I authorize it." and got_4 == 0, panel._input.text)
+	panel._input.text = ""
+	panel._resize_input()
+	panel._update_send()
+	_find_button(panel, "Proceed / Queue").pressed.emit()
+	await _until(func() -> bool: return _find_text(panel, "Queued"), 20.0)
+	await _frames(3)
+	var refused: Dictionary = await main.engine.request("advisor.cancel", {"threadId": "chief", "messageId": reply_id, "proposalId": "proposal-9"})
+	var got_5: Variant = await _budget_orders()
+	_check("a cancel of a proposal that is not there changes nothing", not bool((refused.get("result", {}) as Dictionary).get("ok", true)) and got_5 == 1)
+
+
+func _receipts_kept() -> void:
+	var reply_id := str(panel.messages[1].get("id", ""))
+	var stale: Array = []
+	for message in panel.messages:
+		var copy: Dictionary = (message as Dictionary).duplicate(true)
+		copy.erase("actionReceipts")
+		stale.append(copy)
+	var saved: Dictionary = await main.engine.request("advisor.save", {"json": JSON.stringify(stale, "", false, true), "threadId": "chief"})
+	var got_6: Variant = await _saved_receipt(reply_id)
+	_check("a stale save without the receipt keeps it", bool((saved.get("result", {}) as Dictionary).get("saved", false)) and got_6 == "queued", JSON.stringify(saved))
+	saved = await main.engine.request("advisor.save", {"json": JSON.stringify([stale[0]], "", false, true), "threadId": "chief"})
+	var got_7: Variant = await _saved_receipt(reply_id)
+	_check("a stale save that leaves the reply out keeps it", bool((saved.get("result", {}) as Dictionary).get("saved", false)) and got_7 == "queued")
+	var forged: Array = []
+	for message in panel.messages:
+		forged.append((message as Dictionary).duplicate(true))
+	(forged[1] as Dictionary)["actionReceipts"] = {"proposal-0": {"status": "queued", "actionId": "x"}, "proposal-7": {"status": "queued", "actionId": "action-advisor-reply-forged-0001-7"}}
+	saved = await main.engine.request("advisor.save", {"json": JSON.stringify(forged, "", false, true), "threadId": "chief"})
+	var got_8: Variant = await _saved_receipt(reply_id)
+	_check("a conversation save cannot write a receipt", not bool((saved.get("result", {}) as Dictionary).get("saved", true)) and got_8 == "queued")
+	saved = await main.engine.request("advisor.save", {"json": JSON.stringify(panel.messages, "", false, true), "threadId": "chief"})
+	_check("the conversation saves again as it is", bool((saved.get("result", {}) as Dictionary).get("saved", false)))
 
 
 func _tone(seconds: float, amplitude: float, hertz: float) -> PackedFloat32Array:

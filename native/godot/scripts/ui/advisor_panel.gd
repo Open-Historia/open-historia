@@ -479,6 +479,9 @@ func _on_engine_event(event_name: String, data: Variant) -> void:
 	elif event_name == "advisor.allowed":
 		if _has_bootstrapped:
 			_refresh_views()
+	elif event_name == "advisor.actions":
+		if _has_bootstrapped:
+			_refresh_views()
 
 
 func _refresh_views() -> void:
@@ -2080,13 +2083,17 @@ func _message_row(message: Dictionary, view: Dictionary, index: int, retry_here:
 	if not proposals.is_empty():
 		var receipts: Dictionary = message.get("actionReceipts", {}) if typeof(message.get("actionReceipts")) == TYPE_DICTIONARY else {}
 		var targets: Dictionary = view.get("proposalTargets", {}) if typeof(view.get("proposalTargets")) == TYPE_DICTIONARY else {}
+		var card_states: Dictionary = view.get("proposalStates", {}) if typeof(view.get("proposalStates")) == TYPE_DICTIONARY else {}
 		for item in proposals:
 			if typeof(item) != TYPE_DICTIONARY:
 				continue
 			var proposal: Dictionary = item
 			var proposal_id := str(proposal.get("id", ""))
+			var card_state := str(card_states.get(proposal_id, ""))
+			if card_state.is_empty():
+				card_state = _fallback_card_state(proposal, receipts.get(proposal_id, {}) if typeof(receipts.get(proposal_id)) == TYPE_DICTIONARY else {})
 			content.add_child(_gap(9.6))
-			content.add_child(_proposal_card(str(message.get("id", "")), proposal, receipts.get(proposal_id, {}) if typeof(receipts.get(proposal_id)) == TYPE_DICTIONARY else {}, str(targets.get(proposal_id, "")), state))
+			content.add_child(_proposal_card(str(message.get("id", "")), proposal, card_state, str(targets.get(proposal_id, "")), state))
 		full = true
 	if typeof(message.get("projectsSummary")) == TYPE_ARRAY:
 		content.add_child(_gap(12))
@@ -2406,7 +2413,16 @@ func _actions_card(items: Array) -> Control:
 	return card
 
 
-func _proposal_card(message_id: String, proposal: Dictionary, receipt: Dictionary, target: String, row_state: Dictionary) -> Control:
+func _fallback_card_state(proposal: Dictionary, receipt: Dictionary) -> String:
+	var status := str(receipt.get("status", ""))
+	if str(proposal.get("operation", "")) != "create":
+		return status if status == "updated" or status == "removed" else "proposed"
+	if status == "cancelled":
+		return "cancelled"
+	return "queued" if status == "queued" else "proposed"
+
+
+func _proposal_card(message_id: String, proposal: Dictionary, card_state: String, target: String, row_state: Dictionary) -> Control:
 	var states: Dictionary = row_state.get("proposals", {})
 	row_state["proposals"] = states
 	var proposal_id := str(proposal.get("id", ""))
@@ -2418,7 +2434,12 @@ func _proposal_card(message_id: String, proposal: Dictionary, receipt: Dictionar
 	var body_text := str(proposal.get("text", ""))
 	var name := title_text if not title_text.is_empty() else (body_text if not body_text.is_empty() else ("Remove queued Action" if operation == "remove" else "Change queued Action"))
 	var label := "Remove proposed Action" if operation == "remove" else ("Proposed Action change" if operation == "edit" else "Proposed Action")
-	var confirmed := not receipt.is_empty()
+	var queued := card_state == "queued"
+	var stale_target := card_state == "target-unavailable" or card_state == "target-resolved"
+	var can_proceed := card_state == "proposed" or (card_state == "cancelled" and operation == "create")
+	var can_discuss := not ["updated", "removed"].has(card_state)
+	var status := str({"queued": "Queued", "cancelled": "Cancelled", "resolved": "Resolved", "updated": "Updated", "removed": "Removed", "conflict": "Review Actions", "no-longer-queued": "No longer queued", "target-unavailable": "Target unavailable", "target-resolved": "Target resolved", "proposed": "Proposed"}.get(card_state, "Proposed"))
+	var settled := ["queued", "updated", "removed", "resolved"].has(card_state)
 	var card := PanelContainer.new()
 	card.add_theme_stylebox_override("panel", UI.box(Color(1, 1, 1, 0.035), Color(1, 1, 1, 0.2), 9, 1, Vector4(11, 10, 11, 10)))
 	var column := VBoxContainer.new()
@@ -2430,10 +2451,7 @@ func _proposal_card(message_id: String, proposal: Dictionary, receipt: Dictionar
 	heading.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	heading.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	head.add_child(heading)
-	var status := "Proposed"
-	if confirmed:
-		status = str({"queued": "Queued", "updated": "Updated"}.get(str(receipt.get("status", "")), "Removed"))
-	var badge := UI.label(status, 11, Color("#86efac") if confirmed else Color("#e4e4e7"))
+	var badge := UI.label(status, 11, Color("#86efac") if settled else Color("#e4e4e7"))
 	badge.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	head.add_child(badge)
 	column.add_child(head)
@@ -2458,58 +2476,79 @@ func _proposal_card(message_id: String, proposal: Dictionary, receipt: Dictionar
 	buttons.add_theme_constant_override("v_separation", 6)
 	column.add_child(buttons)
 	var pad := Vector4(9, 5, 9, 5)
-	var error := _rich("", 12, ERROR_INK, 1.35)
-	error.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
-	var error_gap := _gap(6.4)
-	var show_error := func() -> void:
-		if not is_instance_valid(error) or not is_instance_valid(error_gap):
-			return
-		error.text = _escape(str(st.get("error", "")))
-		error.visible = not str(st.get("error", "")).is_empty()
-		error_gap.visible = error.visible
-	if confirmed:
+	var discuss: Button = null
+	var cancel: Button = null
+	var proceed: Button = null
+	if can_discuss:
+		discuss = _chip("Discuss", Color(0, 0, 0, 0), Color(1, 1, 1, 0.25), Color("#e4e4e7"), 13, 400, pad, 7)
+		buttons.add_child(discuss)
+		discuss.pressed.connect(func() -> void: _discuss_pressed(message_id, proposal, queued, stale_target, st))
+	if queued:
+		cancel = _chip("Cancel", Color(251 / 255.0, 191 / 255.0, 36 / 255.0, 0.08), Color(251 / 255.0, 191 / 255.0, 36 / 255.0, 0.4), Color("#fde68a"), 13, 400, pad, 7)
+		buttons.add_child(cancel)
+		cancel.pressed.connect(func() -> void: _cancel_action(message_id, proposal_id, st))
+	if can_proceed:
+		proceed = _chip("", Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.22), Color(147 / 255.0, 197 / 255.0, 253 / 255.0, 0.6), Color("#dbeafe"), 13, 400, pad, 7)
+		buttons.add_child(proceed)
+		proceed.pressed.connect(func() -> void: _proceed_action(message_id, proposal_id, st))
+	if ["resolved", "updated", "removed", "conflict", "no-longer-queued", "target-unavailable", "target-resolved"].has(card_state):
 		var open := _chip("Open Actions", Color(0, 0, 0, 0), Color(1, 1, 1, 0.22), Color("#e4e4e7"), 13, 400, pad, 7)
 		open.pressed.connect(func() -> void: open_actions.emit())
 		buttons.add_child(open)
+	if queued:
 		column.add_child(_gap(5.6))
-		column.add_child(_lined(UI.wrapped("Confirmed by Actions board. Execution still requires game-time resolution.", 11, Color(1, 1, 1, 0.65)), 11, 400, 17.7))
-	else:
-		var discuss := _chip("Discuss", Color(0, 0, 0, 0), Color(1, 1, 1, 0.25), Color("#e4e4e7"), 13, 400, pad, 7)
-		buttons.add_child(discuss)
-		var proceed := _chip("", Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.22), Color(147 / 255.0, 197 / 255.0, 253 / 255.0, 0.6), Color("#dbeafe"), 13, 400, pad, 7)
-		buttons.add_child(proceed)
-		var apply := func() -> void:
-			if not is_instance_valid(proceed):
-				return
-			var busy := bool(st.get("busy", false))
-			proceed.text = "Queueing…" if busy else ("Proceed / Remove" if operation == "remove" else "Proceed / Queue")
-			var off := busy or _loading
-			proceed.disabled = off
-			discuss.disabled = off
-			proceed.mouse_default_cursor_shape = Control.CURSOR_ARROW if off else Control.CURSOR_POINTING_HAND
-			discuss.mouse_default_cursor_shape = Control.CURSOR_ARROW if off else Control.CURSOR_POINTING_HAND
-			show_error.call()
-		st["apply"] = apply
-		discuss.pressed.connect(func() -> void: _discuss_action(proposal))
-		proceed.pressed.connect(func() -> void: _proceed_action(message_id, proposal_id, st))
+		column.add_child(_lined(UI.wrapped("Queued on the Actions board. It will resolve when game time advances.", 11, Color(1, 1, 1, 0.65)), 11, 400, 17.7))
+	if card_state == "conflict":
+		column.add_child(_gap(5.6))
+		column.add_child(_lined(UI.wrapped("This Action ID now refers to different contents. Review the Actions board before proceeding.", 11, Color("#fde68a")), 11, 400, 17.7))
+	if stale_target:
+		column.add_child(_gap(5.6))
+		column.add_child(_lined(UI.wrapped("The referenced Action is no longer queued. Discuss a new Action if further work is needed.", 11, Color("#fde68a")), 11, 400, 17.7))
+	var error := _rich("", 12, ERROR_INK, 1.35)
+	error.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+	var error_gap := _gap(6.4)
 	column.add_child(error_gap)
 	column.add_child(error)
-	if confirmed:
-		st.erase("apply")
-		show_error.call()
-	else:
-		(st["apply"] as Callable).call()
+	var apply := func() -> void:
+		if not is_instance_valid(error) or not is_instance_valid(error_gap):
+			return
+		var busy := bool(st.get("busy", false))
+		var off := busy or _loading
+		for button in [discuss, cancel, proceed]:
+			if button == null or not is_instance_valid(button):
+				continue
+			(button as Button).disabled = off
+			(button as Button).mouse_default_cursor_shape = Control.CURSOR_ARROW if off else Control.CURSOR_POINTING_HAND
+		if cancel != null and is_instance_valid(cancel):
+			cancel.text = "Cancelling…" if busy else "Cancel"
+		if proceed != null and is_instance_valid(proceed):
+			proceed.text = "Queueing…" if busy else ("Proceed / Remove" if operation == "remove" else "Proceed / Queue")
+		error.text = _escape(str(st.get("error", "")))
+		error.visible = not str(st.get("error", "")).is_empty()
+		error_gap.visible = error.visible
+	st["apply"] = apply
+	apply.call()
 	card.add_child(column)
 	return card
 
 
-func _discuss_action(proposal: Dictionary) -> void:
+func _discuss_pressed(message_id: String, proposal: Dictionary, queued: bool, needs_new_action: bool, st: Dictionary) -> void:
+	if bool(st.get("busy", false)) or _loading:
+		return
+	if queued:
+		var cancelled := await _cancel_action(message_id, str(proposal.get("id", "")), st)
+		if not cancelled:
+			return
+	_discuss_action(proposal, needs_new_action)
+
+
+func _discuss_action(proposal: Dictionary, needs_new_action := false) -> void:
 	if _turn_in_flight or _side_effects > 0 or _thread_switching:
 		return
 	var title_text := str(proposal.get("title", ""))
 	var body_text := str(proposal.get("text", ""))
 	var subject := (title_text if not title_text.is_empty() else (body_text if not body_text.is_empty() else "this Action")).strip_edges().left(240)
-	var prompt := "Let's discuss the proposed Action \"%s\" before I authorize it." % subject
+	var prompt := ("The proposed change \"%s\" targets an Action that is no longer queued. If this is genuinely new work, propose a new Action for my approval instead of editing a missing or resolved order." % subject) if needs_new_action else ("Let's discuss the proposed Action \"%s\" before I authorize it." % subject)
 	var current := _input.text
 	_input.text = (_regex("\\s+$").sub(current, "") + "\n\n" + prompt) if not current.strip_edges().is_empty() else prompt
 	_input.grab_focus()
@@ -2521,8 +2560,16 @@ func _discuss_action(proposal: Dictionary) -> void:
 
 
 func _proceed_action(message_id: String, proposal_id: String, st: Dictionary) -> void:
+	await _card_request("advisor.proceed", message_id, proposal_id, st, "The Action was not queued.")
+
+
+func _cancel_action(message_id: String, proposal_id: String, st: Dictionary) -> bool:
+	return await _card_request("advisor.cancel", message_id, proposal_id, st, "The Action could not be removed from the queue.")
+
+
+func _card_request(route: String, message_id: String, proposal_id: String, st: Dictionary, fallback: String) -> bool:
 	if bool(st.get("busy", false)) or _loading or engine == null:
-		return
+		return false
 	st["busy"] = true
 	st["error"] = ""
 	if st.has("apply"):
@@ -2533,20 +2580,22 @@ func _proceed_action(message_id: String, proposal_id: String, st: Dictionary) ->
 	else:
 		var thread := active_thread
 		_side_effect(1)
-		var reply: Dictionary = await engine.request("advisor.proceed", {"threadId": thread, "messageId": message_id, "proposalId": proposal_id})
+		var reply: Dictionary = await engine.request(route, {"threadId": thread, "messageId": message_id, "proposalId": proposal_id})
 		_side_effect(-1)
 		outcome = reply.get("result", {}) if reply.get("ok", false) and typeof(reply.get("result")) == TYPE_DICTIONARY else {"ok": false, "error": str(reply.get("error", ""))}
 		if bool(outcome.get("ok", false)) and thread == active_thread:
-			_take_receipts(message_id, outcome.get("receipts", {}))
+			_take_receipts(message_id, outcome.get("receipts", {}), outcome.get("states", {}))
 	st["busy"] = false
-	if not bool(outcome.get("ok", false)):
+	var ok := bool(outcome.get("ok", false))
+	if not ok:
 		var why := str(outcome.get("error", ""))
-		st["error"] = why if not why.is_empty() else "The Action was not queued."
+		st["error"] = why if not why.is_empty() else fallback
 	if st.has("apply"):
 		(st["apply"] as Callable).call()
+	return ok
 
 
-func _take_receipts(message_id: String, receipts: Variant) -> void:
+func _take_receipts(message_id: String, receipts: Variant, card_states: Variant = {}) -> void:
 	if typeof(receipts) != TYPE_DICTIONARY:
 		return
 	for index in range(messages.size()):
@@ -2556,6 +2605,10 @@ func _take_receipts(message_id: String, receipts: Variant) -> void:
 		var updated := message.duplicate()
 		updated["actionReceipts"] = (receipts as Dictionary).duplicate(true)
 		messages[index] = updated
+		if typeof(card_states) == TYPE_DICTIONARY and not (card_states as Dictionary).is_empty() and index < views.size() and typeof(views[index]) == TYPE_DICTIONARY:
+			var view: Dictionary = (views[index] as Dictionary).duplicate()
+			view["proposalStates"] = (card_states as Dictionary).duplicate(true)
+			views[index] = view
 		_render(false)
 		return
 
