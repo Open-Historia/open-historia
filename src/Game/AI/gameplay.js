@@ -153,6 +153,7 @@ import {
   validatePregameBootstrapCoverage,
 } from "./pregameBootstrapCoverage.js";
 import { validateGameMasterRequestedPuppetCompleteness, requestExplicitlyInstallsPuppet } from "./gameMasterRequestCompleteness.js";
+import { GAME_MASTER_EDIT_TOOL, applyGameMasterPreviewEdits, validateGameMasterEditResponse } from "./gameMasterPreviewEdit.js";
 import { generatedInstitutionOutcomeIntegrityIssue } from "./institutionOutcomeIntegrity.js";
 import { POLITICAL_TRAIT_KEYS } from "../../runtime/politicalTraitRegistry.js";
 import {
@@ -3647,6 +3648,12 @@ const runJsonTask = async (taskKey, {
   // the already-wide submit_chat_actions declaration, while native validation
   // still checks the exact same CHAT_ACTIONS_SCHEMA after parsing.
   toolOverride = undefined,
+  // GM preview edits use the regular GM model, agent, timeout, transport and
+  // correction retry, but return a small patch rather than a fresh transaction.
+  // No other task's output contract or decoder changes.
+  customToolPayload = false,
+  validateToolPayload = null,
+  systemPromptSuffix = "",
   // The task's own output function, reshaped for this call: a folded time skip
   // adds the board and the agents' reports to the contract it is sent
   // (gameplaySchemas.js foldJumpTool). Applied to the tool the task would have
@@ -3685,7 +3692,11 @@ const runJsonTask = async (taskKey, {
   // run in the Workshop (generateScenarioPrehistory).
   promptPack = null,
 }) => {
-  const { prompts, promptTemplate, staticPromptPrefix, systemPrompt, statContract } = await buildTaskSystemPrompt(taskKey, { variables, lookups, promptPack });
+  const { prompts, promptTemplate, staticPromptPrefix, systemPrompt: baseSystemPrompt, statContract } = await buildTaskSystemPrompt(taskKey, { variables, lookups, promptPack });
+  const systemPrompt = systemPromptSuffix ? `${baseSystemPrompt}\n\n${systemPromptSuffix}` : baseSystemPrompt;
+  const checkToolPayload = (candidate) => (customToolPayload && typeof validateToolPayload === "function"
+    ? validateToolPayload(candidate)
+    : validateGameplayPayload(taskKey, candidate));
   const { customFullStatSheet, customStatRows, statIndexRows, statIndexKeys, customStatIndices } = statContract;
 
   // Batch routing (see the parameter): a deferred task leaves here with no
@@ -4046,7 +4057,10 @@ const runJsonTask = async (taskKey, {
         const held = contractKeys.filter((key) => shaped[key] !== undefined).length;
         if (!held) return 0;
         let whole = false;
-        try { whole = validateGameplayPayload(taskKey, shaped).valid === true; } catch { whole = false; }
+        try {
+          if (customToolPayload) whole = checkToolPayload(shaped).valid === true;
+          else whole = validateGameplayPayload(taskKey, shaped).valid === true;
+        } catch { whole = false; }
         return whole ? WHOLE_ANSWER : held;
       };
       const readAnswer = (text, options = {}) => (contractKeys.length
@@ -4093,7 +4107,7 @@ const runJsonTask = async (taskKey, {
       // subsystem); decode it here so schema validation sees the structured
       // transaction and a broken array is reported like any other invalid payload.
       let transportDecodeError = "";
-      if (taskKey === "gameMaster" && parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      if (taskKey === "gameMaster" && !customToolPayload && parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
         const decoded = decodeGameMasterTransportPayload(parsed);
         transportDecodeError = normalizeString(decoded?.error);
         parsed = decoded?.payload;
@@ -4328,7 +4342,7 @@ const runJsonTask = async (taskKey, {
       let validation = parsed
         ? (taskKey === "countryStatSheet" && customFullStatSheet
           ? { valid: true, error: "" }
-          : validateGameplayPayload(taskKey, parsed))
+          : checkToolPayload(parsed))
         : {
           valid: false,
           // Reasoning and nothing else, whether the provider returned it apart
@@ -4348,7 +4362,7 @@ const runJsonTask = async (taskKey, {
       const checkAnswer = (candidate) => {
         const verdict = taskKey === "countryStatSheet" && statContract.customFullStatSheet
           ? { valid: true, error: "" }
-          : validateGameplayPayload(taskKey, candidate);
+          : checkToolPayload(candidate);
         if (!verdict.valid) return verdict;
         const contractError = validateStatContract(taskKey, candidate, statContract);
         return contractError ? { valid: false, error: contractError } : verdict;
@@ -20119,6 +20133,125 @@ export const previewGameMasterCommand = async (requestText, { mode = "world-inte
         diplomaticOutreach: normalizeArray(payload?.diplomaticOutreach),
       },
       generation,
+      previewOnly: true,
+    };
+  } finally {
+    endSimulation();
+  }
+};
+
+// A pending preview can be revised without asking the GM to recreate its
+// entire transaction. The model returns only targeted patches. Native code
+// applies them to a COPY of the previous, validated transaction, then runs
+// the same canonical validation as Apply. Unmentioned operations survive.
+const GM_PREVIEW_EDIT_DIRECTIVE = `PREVIEW REVISION MODE — OVERRIDES THE NORMAL GM OUTPUT CONTRACT FOR THIS REQUEST.
+The administrator has already generated a valid, un-applied GM transaction. It is provided in the user message as BASE TRANSACTION. Use the supplied submit_game_master_preview_edits tool ONLY. Do not regenerate a complete transaction, do not create a new inauguration/event unless asked, and do not silently remove or reorder existing operations.
+Produce only targeted JSON Pointer edits. Each edit is {"op":"replace|add|remove","path":"/...","valueJson":"JSON encoded value"}. For remove use valueJson "". For append to an existing operation array use /-; for replacement/removal use the existing index. Existing events and their IDs cannot be replaced, added, deleted, or reordered.
+Examples: replacing an office inside a political operation uses path /events/0/impacts/politicalActorOps/0/argsJson/office with valueJson holding the JSON string literal for headOfState, including its quotes. To append a political operation to the existing event, use /events/0/impacts/politicalActorOps/- with valueJson containing that one complete operation as JSON text. To edit a ledger entry use /relationUpdates/0/score, etc.
+Only modify the exact fields required by the administrator's new revision instruction. The engine preserves every other field and operation deterministically. Include a replace edit for /summary with a concise, accurate description of the COMPLETE revised transaction. Use existing canonical IDs and valid operation shapes. This is preview only; no Apply and no new canonical state yet.`;
+
+export const previewGameMasterRevision = async (previousPreview, requestedEdit) => {
+  const amendment = normalizeString(requestedEdit);
+  const prior = previousPreview;
+  const mode = normalizeString(prior?.mode);
+  if (!amendment) throw new Error("Describe what you want to change in the existing preview.");
+  if (!prior?.previewOnly || !normalizeString(prior?.id) || !prior?.transaction || !normalizeString(prior?.baseFingerprint)) {
+    throw new Error("The previous GM preview is missing its validated transaction. Generate a fresh preview.");
+  }
+  if (!GAME_MASTER_MODE_SET.has(mode)) throw new Error("The previous GM preview mode is invalid.");
+  assertNoTurnRunning();
+
+  beginSimulation();
+  try {
+    const [bundle, colors] = await Promise.all([
+      readGameStateBundle({ force: true }),
+      readJson(JSON_URLS.colors, { defaultValue: {}, force: true }),
+    ]);
+    const liveFingerprint = gameMasterStateFingerprint({
+      game: bundle.game, world: bundle.world, events: bundle.events, colors,
+    });
+    if (liveFingerprint !== prior.baseFingerprint) {
+      throw new Error("Canonical state changed since this preview was generated. Generate a fresh preview before editing.");
+    }
+    if (normalizeArray(bundle.world?.gmAudit).some((entry) => normalizeString(entry?.transactionId) === prior.id)) {
+      throw new Error("This GM preview was already applied and cannot be edited.");
+    }
+    const geography = await loadGameMasterBaseGeographyCatalog(bundle.world);
+    const variables = {
+      ...(await buildTemplateVariables(bundle, {
+        taskKey: "gameMaster",
+        gameMasterRequest: `${normalizeString(prior.request)}\n${amendment}`,
+        lookups: true,
+      })),
+      gameMasterMode: mode,
+      gameMasterBaseGeographyCatalog: renderGameMasterBaseGeographyCatalog(geography),
+    };
+    // The previous preview must travel in this request itself: no chat history
+    // or prior model call is implicitly available to the GM.
+    const userMessage = `EDIT THIS PENDING GM PREVIEW. Nothing has been applied.
+BASE TRANSACTION:
+${JSON.stringify(prior.transaction)}
+
+ORIGINAL REQUEST:
+${normalizeString(prior.request)}
+
+ADMINISTRATOR'S REVISION:
+${amendment}
+
+Retain all unaffected operations and the original authored event. Output only your targeted edit instructions using the edit tool.`;
+    const revisionCount = Math.max(0, Number(prior.revisionCount) || 0) + 1;
+    let notes = [];
+    const validateEdits = async (response) => {
+      const currentNotes = [];
+      const result = validateGameMasterEditResponse(response);
+      if (!result.valid) return result.error;
+      if (!response.edits.some((entry) => entry.path === "/summary" && entry.op === "replace")) {
+        return "Include a /summary replacement describing the entire revised transaction.";
+      }
+      let amended;
+      try { amended = applyGameMasterPreviewEdits(prior.transaction, response); }
+      catch (error) { return error.message; }
+      const candidate = gameMasterTransactionCandidate(amended);
+      const beforeValidation = JSON.stringify(candidate);
+      const error = await validateGameMasterPreviewPayload(candidate, {
+        mode,
+        world: bundle.world,
+        game: bundle.game,
+        request: amendment,
+        resolvedRegionIdsOnly: true,
+        finalAttempt: false,
+        notes: currentNotes,
+      });
+      if (error) return error;
+      if (JSON.stringify(candidate) !== beforeValidation) {
+        return "Native validation would modify other parts of this revision. Supply canonical operations that already validate exactly.";
+      }
+      notes = currentNotes;
+      return "";
+    };
+    const { generation, payload } = await runJsonTask("gameMaster", {
+      agentKind: "gameMaster",
+      lookups: buildTaskLookups(bundle),
+      toolOverride: GAME_MASTER_EDIT_TOOL,
+      customToolPayload: true,
+      validateToolPayload: validateGameMasterEditResponse,
+      systemPromptSuffix: GM_PREVIEW_EDIT_DIRECTIVE,
+      userMessage,
+      variables,
+      validatePayload: validateEdits,
+    });
+    // Repeat the deterministic merge on the exact accepted edit list, never
+    // on a regenerated full transaction. Keep original event and transaction
+    // identity so Apply's existing id/fingerprint safeguards still apply.
+    const transaction = applyGameMasterPreviewEdits(prior.transaction, payload);
+    return {
+      ...prior,
+      request: `${normalizeString(prior.request)}\n[GM preview revision ${revisionCount}]: ${amendment}`,
+      summary: normalizeString(transaction.summary),
+      notes: [...new Set([...normalizeArray(prior.notes), ...notes])],
+      transaction,
+      generation,
+      revisionCount,
       previewOnly: true,
     };
   } finally {

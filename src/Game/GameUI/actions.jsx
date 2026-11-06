@@ -962,7 +962,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
                 aria-selected={active}
                 className="oh-tap-row"
                 onClick={() => setTab(key)}
-                style={{ alignItems: "center", background: active ? "var(--oh-grey-selected)" : "rgba(255,255,255,.025)", border: "1px solid " + (active ? "var(--oh-grey-border-strong)" : "rgba(255,255,255,.07)"), borderRadius: "8px", color: active ? "white" : "rgba(255,255,255,0.48)", cursor: "pointer", display: "flex", flex: "0 0 auto", fontFamily: "sans-serif", fontSize: ".8rem", fontWeight: 750, gap: ".38rem", padding: isTouch ? ".3rem .62rem" : ".36rem .74rem", whiteSpace: "nowrap" }}
+                style={{ alignItems: "center", background: active ? "var(--oh-ui-active, var(--oh-grey-selected))" : "rgba(255,255,255,.025)", border: "1px solid " + (active ? "var(--oh-ui-accent, var(--oh-grey-border-strong))" : "rgba(255,255,255,.07)"), borderRadius: "8px", color: active ? "white" : "rgba(255,255,255,0.48)", cursor: "pointer", display: "flex", flex: "0 0 auto", fontFamily: "sans-serif", fontSize: ".8rem", fontWeight: 750, gap: ".38rem", padding: isTouch ? ".3rem .62rem" : ".36rem .74rem", whiteSpace: "nowrap" }}
                 >
                 <span aria-hidden="true" style={{ display: "inline-flex", opacity: .8 }}>{key === "projects" ? <ProjectsTabIcon /> : <OrdersTabIcon />}</span>
                 <span>{label}</span>
@@ -1028,8 +1028,8 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
         // suggestions above offer.
         onClick={() => onOpenAdvisor(uiString("Let's brainstorm a plan of concrete actions for this round. Ask me what I'm trying to accomplish, then propose specific ones we can queue."))}
         style={{
-            background: "rgba(255,255,255,0.05)",
-            border: "1px solid rgba(255,255,255,0.2)",
+            background: "var(--oh-ui-overlay-card, rgba(255,255,255,0.05))",
+            border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.2))",
             borderRadius: "10px",
             color: "#e4e4e7",
             cursor: "pointer",
@@ -1042,12 +1042,12 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
             minWidth: 0,
         }}
         onMouseEnter={(event) => {
-            event.currentTarget.style.background = "rgba(255,255,255,0.1)";
-            event.currentTarget.style.borderColor = "rgba(255,255,255,0.28)";
+            event.currentTarget.style.background = "var(--oh-ui-hover, rgba(255,255,255,0.1))";
+            event.currentTarget.style.borderColor = "var(--oh-ui-accent, rgba(255,255,255,0.28))";
         }}
         onMouseLeave={(event) => {
-            event.currentTarget.style.background = "rgba(255,255,255,0.05)";
-            event.currentTarget.style.borderColor = "rgba(255,255,255,0.2)";
+            event.currentTarget.style.background = "var(--oh-ui-overlay-card, rgba(255,255,255,0.05))";
+            event.currentTarget.style.borderColor = "var(--oh-ui-line, rgba(255,255,255,0.2))";
         }}
         >
         Brainstorm
@@ -1059,8 +1059,8 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
         onClick={refreshSuggestions}
         style={{
             alignItems: "center",
-            background: "rgba(255,255,255,0.05)",
-            border: "1px solid rgba(255,255,255,0.12)",
+            background: "var(--oh-ui-overlay-card, rgba(255,255,255,0.05))",
+            border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.12))",
             borderRadius: "10px",
             color: "rgba(255,255,255,0.82)",
             cursor: "pointer",
@@ -1074,12 +1074,12 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
             minWidth: 0,
         }}
         onMouseEnter={(event) => {
-            event.currentTarget.style.background = "rgba(255,255,255,0.09)";
-            event.currentTarget.style.borderColor = "rgba(255,255,255,0.18)";
+            event.currentTarget.style.background = "var(--oh-ui-hover, rgba(255,255,255,0.09))";
+            event.currentTarget.style.borderColor = "var(--oh-ui-accent, rgba(255,255,255,0.18))";
         }}
         onMouseLeave={(event) => {
-            event.currentTarget.style.background = "rgba(255,255,255,0.05)";
-            event.currentTarget.style.borderColor = "rgba(255,255,255,0.12)";
+            event.currentTarget.style.background = "var(--oh-ui-overlay-card, rgba(255,255,255,0.05))";
+            event.currentTarget.style.borderColor = "var(--oh-ui-line, rgba(255,255,255,0.12))";
         }}
         >
         {isSuggesting && <SpinnerRing size={14} />}
@@ -1205,8 +1205,8 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
         onChange={(event) => setInputValue(event.target.value)}
         onKeyDown={handleKeyDown}
         style={{
-            background: "rgba(0,0,0,0.2)",
-            border: "1px solid rgba(255,255,255,0.15)",
+            background: "var(--oh-ui-overlay-strong, rgba(0,0,0,0.2))",
+            border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.15))",
             borderRadius: "10px",
             boxSizing: "border-box",
             color: "white",
@@ -1223,10 +1223,10 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
             width: "100%",
         }}
         onFocus={(event) => {
-            event.target.style.borderColor = "rgba(255,255,255,0.25)";
+            event.target.style.borderColor = "var(--oh-ui-focus, rgba(255,255,255,0.25))";
         }}
         onBlur={(event) => {
-            event.target.style.borderColor = "rgba(255,255,255,0.12)";
+            event.target.style.borderColor = "var(--oh-ui-line, rgba(255,255,255,0.12))";
         }}
         />
         <button
@@ -1240,7 +1240,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
             background: "none",
             border: "none",
             borderRadius: "8px",
-            color: isImproving || inputValue.trim() ? "#e4e4e7" : "rgba(255,255,255,0.45)",
+            color: isImproving || inputValue.trim() ? "var(--oh-ui-accent, #e4e4e7)" : "rgba(255,255,255,0.45)",
             cursor: isImproving || inputValue.trim() ? "pointer" : "default",
             display: "flex",
             height: "1.8rem",
@@ -1266,8 +1266,9 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
         aria-label="Submit action"
         style={{
             alignItems: "center",
-            background: inputValue.trim() && !isSubmitting && !isImproving ? "#3b82f6" : "rgba(59,130,246,0.3)",
+            background: inputValue.trim() && !isSubmitting && !isImproving ? "var(--oh-ui-active, #3b82f6)" : "var(--oh-ui-overlay-card, rgba(59,130,246,0.3))",
             border: "none",
+            boxShadow: "inset 0 0 0 1px var(--oh-ui-accent, transparent)",
             borderRadius: "10px",
             color: "white",
             cursor: inputValue.trim() && !isSubmitting && !isImproving ? "pointer" : "not-allowed",
@@ -1280,12 +1281,12 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
         }}
         onMouseEnter={(event) => {
             if (inputValue.trim() && !isSubmitting && !isImproving) {
-                event.currentTarget.style.background = "#2563eb";
+                event.currentTarget.style.background = "var(--oh-ui-hover, #2563eb)";
             }
         }}
         onMouseLeave={(event) => {
             if (inputValue.trim() && !isSubmitting && !isImproving) {
-                event.currentTarget.style.background = "#3b82f6";
+                event.currentTarget.style.background = "var(--oh-ui-active, #3b82f6)";
             }
         }}
         >
