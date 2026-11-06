@@ -84,8 +84,10 @@ export const pendingUpdates = ({ updates = NOTICE_UPDATES, seen = seenUpdate(), 
   if (updates.length === 0 || !keeps) return [];
   const at = seen ? updates.findIndex((update) => update.id === seen) : -1;
   if (at === 0) return [];
-  // A release (notesReleases.js) tells everything under it: a device owed one is shown it alone.
-  if (updates[0].kind === "release") return [updates[0]];
+  // A release (notesReleases.js) tells everything under it: a device owed one is shown it alone, even when updates
+  // have come since (the first after 2.5, 2026-11-06, hid it), and those come at the next opening, the release kept.
+  const owedRelease = (at < 0 ? updates : updates.slice(0, at)).find((update) => update.kind === "release");
+  if (owedRelease) return [owedRelease];
   if (at < 0) return updates.filter((update, index) => index === 0 || (update.kind === "major" && daysBetween(update.date, updates[0].date) <= FIRST_LOOK_DAYS)).slice(0, UPDATES_SHOWN_MOST);
   return updates.slice(0, Math.min(at, UPDATES_SHOWN_MOST));
 };

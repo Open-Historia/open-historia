@@ -43,7 +43,7 @@ globalThis.fetch = async (input) => {
   return new Response(file, { headers: { "content-type": "application/octet-stream" } });
 };
 
-const scenario = (assets) => ({ schema: "pax-historia-scenario-bundle/2", scenario: { name: "Shared Relief" }, data: { world: { background: { kind: "image" } } }, assets });
+const scenario = (assets) => ({ schema: "old-scenario-bundle/2", scenario: { name: "Shared Relief" }, data: { world: { background: { kind: "image" } } }, assets });
 const zipBytes = async (entries) => new Uint8Array(await (await zipBundle(entries)).arrayBuffer());
 const backgroundOf = (bundle) => JSON.parse(Buffer.from(bundle.assets.backgroundData.data, "base64").toString("utf-8"));
 const communityRef = { mode: "communityRef", hash: "f".repeat(64), via: "image", url: BASEMAP_URL, fileName: "background.json" };

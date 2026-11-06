@@ -87,6 +87,7 @@ export const RELEASES = [
         ],
         updates: [
           "2026-11-deploy-aircraft",
+          "2026-11-strikes-on-the-map",
           "2026-11-aircraft-key",
           "2026-11-picture-edges-and-strike-targets#1",
           "2026-10-fleets-at-sea",
@@ -108,6 +109,7 @@ export const RELEASES = [
         ],
         updates: [
           "2026-10-war-and-peace#0",
+          "2026-11-calls-to-arms-by-message",
           "2026-10-peace-and-weariness",
           "2026-10-peace-in-the-chats",
           "2026-11-peace-on-any-terms",
@@ -185,12 +187,13 @@ export const RELEASES = [
         subtitle: "Your colours, your language",
         lead: "The game opens on a steel vault door, greets you in your own language and dresses itself in the colours you choose.",
         highlights: [
-          { heading: "Themes", text: "Five palettes or your own, across the main menu, the panels and every popup." },
+          { heading: "Themes", text: "Five palettes or your own, across the main menu, the panels, the controls over the map and every popup." },
           { heading: "Your language", text: "A first-time setup in 28 languages, and translation on your own device, never with AI requests." },
           { heading: "Through the vault door", text: "A new way into the game: turn the wheel, and the main menu is waiting behind it." },
         ],
         updates: [
           "2026-11-themes",
+          "2026-11-hud-themes",
           "2026-11-czech-finnish",
           "2026-10-war-and-peace#2",
           "2026-11-translation-model",
@@ -217,6 +220,7 @@ export const RELEASES = [
         ],
         updates: [
           "2026-11-faster-turns",
+          "2026-11-smoother-scrolling",
           "2026-10-skip-freeze",
           "2026-11-places-as-written",
           "2026-10-newer-claude",

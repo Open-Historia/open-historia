@@ -75,13 +75,13 @@
 </script>
 <link rel="stylesheet" href="/fonts/fonts.css" />
 <link rel="stylesheet" href="/story/vendor/maplibre-gl.css?v=761a1130f0" />
-<link rel="stylesheet" href="/story/story.css?v=bd31b3a887" />
+<link rel="stylesheet" href="/story/story.css?v=5a661784bb" />
 <link rel="stylesheet" href="/story/game-ui.css?v=5abfb562f4" />
 <script defer src="/story/vendor/maplibre-gl.js?v=28ab0f7e9d"></script>
 <script defer src="/story/map-data.js?v=b0c663183f"></script>
 <script defer src="/story/game-ui.js?v=6a36f67c9d"></script>
 <script defer src="/story/story.js?v=f98868daba"></script>
-<script defer src="/story/site.js?v=c3bb6b8e82"></script>
+<script defer src="/story/site.js?v=f08d2a3a48"></script>
 </head>
 <body>
 
@@ -201,8 +201,7 @@
     </h1>
     <p class="lede">Lead any nation on a living world map. Say what it does in your own words, and an AI plays out the rest of the world. <em>The history you make is yours.</em></p>
     <div class="cta-row">
-      <a id="primaryDownload" class="btn btn-primary" href="#download"><span class="i">⬇</span> <span id="primaryLabel">Download for Desktop</span></a>
-      <a id="betaDownload" class="btn btn-ghost" href="#download"><span class="i">⬇</span> <span id="betaLabel">Download the Beta</span></a>
+      <a id="primaryDownload" class="btn btn-primary" href="#download" data-download-app><span class="i">⬇</span> Download the App</a>
       <a class="btn btn-ghost" href="/play/"><span class="i">▶</span> Demo in your browser</a>
     </div>
     <p class="hero-note" id="heroNote">The browser version is a demo — it streams the world map over the network, so expect lag. The <a href="#download">desktop app</a> runs locally and is how the game is meant to be played.</p>
@@ -382,7 +381,7 @@
         <h2>The next chapter is yours</h2>
         <p class="drop">That was one year of one campaign. Every game writes its own: the pins on the map are a few that others have dreamed up. <strong>Yours may never fire a shot.</strong></p>
         <div class="cta-row">
-          <a class="btn btn-primary" href="#download"><span class="i">⬇</span> Download</a>
+          <a class="btn btn-primary" href="#download" data-download-app><span class="i">⬇</span> Download the App</a>
           <a class="btn btn-ghost" href="/play/"><span class="i">▶</span> Try the demo</a>
         </div>
         <span class="stamp green">Your move</span>
@@ -516,6 +515,8 @@
         <div class="meta">Windows 10 &amp; 11 · <span data-size="Open-Historia-Setup.exe">~136 MB</span></div>
         <p>An ordinary installer. Run it and Open Historia lands in your Start Menu like any other app — no Node.js, no setup script, no terminal window. The world map downloads itself the first time you open it.</p>
         <a class="btn btn-primary" href="https://github.com/Open-Historia/open-historia/releases/download/desktop-stable/Open-Historia-Setup.exe">⬇ Download Installer</a>
+        <div class="beta-line"><b>Native</b> · runs smoothest, with the best performance. Updates shortly after the beta.</div>
+        <a class="btn btn-ghost" data-native href="https://github.com/Open-Historia/open-historia/releases/download/native-experimental/Open-Historia-Native-Setup.exe">⬇ Native Installer</a>
         <div class="beta-line"><b>Beta</b> · the newest features first. A separate app with its own saves.</div>
         <a class="btn btn-ghost" data-beta href="https://github.com/Open-Historia/open-historia/releases/download/desktop-beta/Open-Historia-Beta-Setup.exe">⬇ Beta Installer</a>
       </div>
@@ -526,6 +527,8 @@
         <p>Unzip and drag Open Historia to your Applications folder. First launch: macOS closes it once because it isn't code-signed yet. Choose <b>Done</b>, then <b>System Settings → Privacy &amp; Security → Open Anyway</b> (macOS 14 and earlier: right-click it and choose <b>Open</b>).</p>
         <a class="btn btn-ghost" href="https://github.com/Open-Historia/open-historia/releases/download/desktop-stable/Open-Historia-mac-arm64.zip">⬇ Apple Silicon</a>
         <a class="btn btn-ghost" href="https://github.com/Open-Historia/open-historia/releases/download/desktop-stable/Open-Historia-mac-x64.zip">⬇ Intel</a>
+        <div class="beta-line"><b>Native</b> · runs smoothest, with the best performance. Updates shortly after the beta.</div>
+        <a class="btn btn-ghost" data-native href="https://github.com/Open-Historia/open-historia/releases/download/native-experimental/Open-Historia-Native-macOS.dmg">⬇ Native for macOS</a>
         <div class="beta-line"><b>Beta</b> · the newest features first. A separate app with its own saves.</div>
         <a class="btn btn-ghost" data-beta href="https://github.com/Open-Historia/open-historia/releases/download/desktop-beta/Open-Historia-Beta-mac-arm64.zip">⬇ Beta · Apple Silicon</a>
         <a class="btn btn-ghost" data-beta href="https://github.com/Open-Historia/open-historia/releases/download/desktop-beta/Open-Historia-Beta-mac-x64.zip">⬇ Beta · Intel</a>
@@ -537,6 +540,8 @@
         <p>The .deb installs like any other package on Debian, Ubuntu and their derivatives. The AppImage is one portable file for every other distribution: make it executable and launch it — nothing to install, no packages to add.</p>
         <a class="btn btn-ghost" href="https://github.com/Open-Historia/open-historia/releases/download/desktop-stable/Open-Historia-amd64.deb">⬇ Download .deb</a>
         <a class="btn btn-ghost" href="https://github.com/Open-Historia/open-historia/releases/download/desktop-stable/Open-Historia-x86_64.AppImage">⬇ Download .AppImage</a>
+        <div class="beta-line"><b>Native</b> · runs smoothest, with the best performance. Updates shortly after the beta.</div>
+        <a class="btn btn-ghost" data-native href="https://github.com/Open-Historia/open-historia/releases/download/native-experimental/Open-Historia-Native-Linux-x86_64.tar.gz">⬇ Native .tar.gz</a>
         <div class="beta-line"><b>Beta</b> · the newest features first. A separate app with its own saves.</div>
         <a class="btn btn-ghost" data-beta href="https://github.com/Open-Historia/open-historia/releases/download/desktop-beta/Open-Historia-Beta-amd64.deb">⬇ Beta .deb</a>
         <a class="btn btn-ghost" data-beta href="https://github.com/Open-Historia/open-historia/releases/download/desktop-beta/Open-Historia-Beta-x86_64.AppImage">⬇ Beta .AppImage</a>
@@ -581,7 +586,7 @@
     <h2 class="rise">The next page is blank.</h2>
     <p class="lead rise">Download once, open it, and you're playing.</p>
     <div class="cta-row rise">
-      <a id="bandDownload" class="btn btn-primary" href="#download"><span class="i">⬇</span> <span id="bandLabel">Download Open Historia</span></a>
+      <a id="bandDownload" class="btn btn-primary" href="#download" data-download-app><span class="i">⬇</span> Download the App</a>
       <a class="btn btn-ghost" href="/play/"><span class="i">▶</span> Play now in your browser</a>
     </div>
   </div>

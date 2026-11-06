@@ -203,3 +203,10 @@ test("an event's strikes, and the box round where they fly for the camera", () =
   assert.equal(strikeBounds([strike({ to: { name: "city: Nowhere" } })]), null);
   assert.equal(strikeBounds([]), null);
 });
+
+test("a place qualified by its country is found by its own name", () => {
+  assert.deepEqual(parsePlace("city: Isfahan, country: Iran"), { kind: "city", name: "Isfahan" });
+  assert.deepEqual(findStrikePlace("city: Isfahan, country: Iran", { cities: [{ name: "Isfahan", lng: 51.67, lat: 32.65 }] }), { lng: 51.67, lat: 32.65 });
+  // A name with a comma of its own keeps it.
+  assert.deepEqual(parsePlace("city: Washington, D.C."), { kind: "city", name: "Washington, D.C." });
+});

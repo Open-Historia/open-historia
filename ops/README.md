@@ -82,7 +82,7 @@ In `.env`:
 - `TURN_URLS`: the same name, three times. Leave the `turns:` URL out until coturn has its certificate (step 8).
 - `TURN_EXTERNAL_IP` (required): `<public>/<private>`, e.g. `203.0.113.10/10.0.0.12`. The VM only knows its private address, and without this coturn would hand clients an address they cannot reach. The public address is also the only one the relay may send to: TURN-only players meet at it, so coturn refuses every other destination (the internet, the VM's own services, the cloud's metadata service), and it won't start without it.
 - `TURN_TTL_SECONDS`: how long a credential lasts, 900 seconds unless set (at most 3600). A game connection that must outlive its credential asks server-mp for a new one and restarts ICE with it; see [../server-mp/README.md](../server-mp/README.md#turn).
-- `ALLOWED_ORIGINS`: the pages that may connect. The example lists the web game, the Android app (`http://app.paxhistoria`) and the desktop app (`http://localhost:*`, `http://127.0.0.1:*`).
+- `ALLOWED_ORIGINS`: the pages that may connect. The example lists the web game, the Android app (`http://app.openhistoria`) and the desktop app (`http://localhost:*`, `http://127.0.0.1:*`). Android players who have not moved to the app's current id yet still play in the handover build, at the app's earlier address (`http://` + the `ANDROID_LEGACY_HOST` repository variable, [../docs/mobile.md](../docs/mobile.md#moving-to-the-new-app-id)): add that origin too until they have moved.
 
 server-mp checks every value and refuses to start on one it cannot use, naming it (`docker compose logs server-mp`). coturn refuses to start without a secret of at least 32 characters.
 

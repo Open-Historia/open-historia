@@ -38,8 +38,11 @@ export const setBootTranslations = (pack) => {
 // up again and list it as missing.
 export const bootTranslated = () => translations !== null;
 
-export const bootText = (key) => {
-  const english = BOOT_TEXTS[key] ?? key;
+// Any English string in the player's pack, else the English: for other screens
+// drawn before the game, with their own *_TEXTS table (native/appMoveCard.js).
+export const bootTranslate = (english) => {
   const translated = translations?.[english];
   return typeof translated === "string" && translated.trim() ? translated : english;
 };
+
+export const bootText = (key) => bootTranslate(BOOT_TEXTS[key] ?? key);
