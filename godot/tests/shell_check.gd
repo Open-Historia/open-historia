@@ -7,9 +7,9 @@ var failures: PackedStringArray = []
 var played: PackedStringArray = []
 var only := ""
 
-const NEWEST_UPDATES := ["2026-11-native-sharp-at-any-size", "2026-11-native-advisor-contacts", "2026-11-ships-from-ports", "2026-11-aircraft-key"]
-const NEWEST_TITLES := ["Sharp at any size", "The same size on every screen", "Troops sail from a port", "The Aircraft key works"]
-const FIRST_OPENING := ["2026-11-rostra", "2026-11-deploy-aircraft", "2026-10-espionage-part-2", "2026-11-native-sharp-at-any-size"]
+const NEWEST_UPDATES := ["2026-11-czech-finnish", "2026-11-themes", "2026-11-translation-model", "2026-11-install-count"]
+const NEWEST_TITLES := ["Czech and Finnish", "Themes", "Translation without AI requests", "Counting installs"]
+const RELEASE := "2026-11-version-2-5"
 
 
 func _update_ids(updates: Array) -> Array:
@@ -37,21 +37,35 @@ func _missed_updates(shell: ShellBoot) -> void:
 	shell._notice_started = false
 	await shell.prepare()
 	shell._maybe_show_notice()
-	var mounted := await _until(func() -> bool: return shell.notice != null and is_instance_valid(shell.notice) and shell.notice.page_count() > 0, 10.0)
-	var ids := _update_ids(shell.notice._pages.map(func(page: Dictionary) -> Dictionary: return page.get("update", {}))) if mounted else []
-	_check("the vault-door notice shows every update a device missed, newest first", mounted and ids.slice(0, NEWEST_UPDATES.size()) == NEWEST_UPDATES, ", ".join(PackedStringArray(ids)))
-	var found := {}
-	for index in range(shell.notice.page_count() if mounted else 0):
-		shell.notice.show_page(index)
-		await _wait(0.5)
-		for title in NEWEST_TITLES:
-			if Array(_texts(shell.notice, PackedStringArray())).any(func(value: String) -> bool: return value.contains(title)):
-				found[title] = true
-	_check("their pages read as written", found.size() == 4, ", ".join(PackedStringArray(found.keys())))
-	await _shoot("s-10b-missed-notice")
+	var mounted := await _until(func() -> bool: return shell.notice != null and is_instance_valid(shell.notice) and shell.notice.get_children().any(func(child: Node) -> bool: return child is ReleaseNotice), 10.0)
+	_check("a device that missed updates is shown the release that tells them, alone", mounted)
+	await _shoot("s-10b-missed-release")
 	await _key(KEY_ESCAPE)
 	await _frames(4)
-	_check("the missed updates' notice closes onto the menu", shell.notice == null and main.menu.visible)
+	_check("the missed updates' release closes onto the menu", shell.notice == null and main.menu.visible)
+	var reply: Dictionary = await main.engine.request("shell.updates")
+	var listed: Array = reply.get("result", {}).get("updates", [])
+	var newest := listed.filter(func(update: Variant) -> bool: return update is Dictionary and str((update as Dictionary).get("kind", "")) != "release").slice(0, NEWEST_UPDATES.size())
+	var paged := UpdateNotice.new()
+	shell.overlay.add_child(paged)
+	await paged.setup(main.engine, newest, {"reduceMotion": true})
+	var ids := _update_ids(paged._pages.map(func(page: Dictionary) -> Dictionary: return page.get("update", {})))
+	var have := ids.duplicate()
+	have.sort()
+	var want := NEWEST_UPDATES.duplicate()
+	want.sort()
+	_check("the newest updates after the release are the ones native has", have == want, ", ".join(PackedStringArray(ids)))
+	var found := {}
+	for index in range(paged.page_count()):
+		paged.show_page(index)
+		await _wait(0.5)
+		for title in NEWEST_TITLES:
+			if Array(_texts(paged, PackedStringArray())).any(func(value: String) -> bool: return value.contains(title)):
+				found[title] = true
+	_check("their pages read as written", found.size() == 4, ", ".join(PackedStringArray(found.keys())))
+	await _shoot("s-10c-newest-notices")
+	paged.queue_free()
+	await _frames(3)
 
 
 func _initialize() -> void:
@@ -318,7 +332,7 @@ func _themes(shell: ShellBoot) -> void:
 	window.size = before
 	await _frames(4)
 	var stop := _update_ids(listed).find("2026-11-native-editor-map")
-	var since: Array = listed.slice(0, stop) if stop > 0 else []
+	var since: Array = (listed.slice(0, stop) if stop > 0 else []).filter(func(update: Variant) -> bool: return update is Dictionary and str((update as Dictionary).get("kind", "")) != "release")
 	var every := UpdateNotice.new()
 	shell.overlay.add_child(every)
 	await every.setup(main.engine, since, {"reduceMotion": true})
@@ -508,12 +522,10 @@ func _notice_and_history(shell: ShellBoot) -> void:
 	var notice := shell.notice
 	await _wait(1.2)
 	var pages := notice.page_count()
-	_check("the notice pages through the updates", pages >= 2, str(pages))
-	var shown_ids := _update_ids(notice._pages.map(func(page: Dictionary) -> Dictionary: return page.get("update", {})))
-	_check("a first opening's notice shows the major updates first, then the newest", shown_ids == FIRST_OPENING, ", ".join(PackedStringArray(shown_ids)))
+	_check("a first opening shows the 2.5 release alone, on its own scrolling page", notice.get_children().any(func(child: Node) -> bool: return child is ReleaseNotice), str(pages))
 	var state: Dictionary = await main.engine.request("shell.state")
 	var remembered: Dictionary = state.get("result", {})
-	_check("the newest update is remembered the moment it shows", str(remembered.get("seen", "")) == NEWEST_UPDATES[0], str(remembered))
+	_check("the release is remembered the moment it shows", str(remembered.get("seen", "")) == RELEASE, str(remembered))
 	await _shoot("s-08-notice-page-1")
 	for index in range(1, mini(pages, 4)):
 		notice.show_page(index)
@@ -533,6 +545,7 @@ func _notice_and_history(shell: ShellBoot) -> void:
 		_check("the update history lists the newest updates", (NEWEST_UPDATES + ["2026-10-peace-and-weariness"]).all(func(id: String) -> bool: return history_ids.has(id)), ", ".join(PackedStringArray(history_ids.slice(0, 6))))
 		_check("the browser map's notice of smoother zooming is left out of the native history", not history_ids.has("2026-11-smoother-zooming"))
 		_check("beta's notice of picture edges and strike targets is told in the native one instead", not history_ids.has("2026-11-picture-edges-and-strike-targets") and history_ids.has("2026-11-native-sharp-at-any-size"))
+		_check("the browser map's graphics work and the Mac opening are left out, and native tells its window instead", not history_ids.has("2026-11-less-for-the-gpu") and not history_ids.has("2026-11-mac-opening") and history_ids.has("2026-11-native-fits-the-window"))
 		shell.history.view("2026-10-peace-and-weariness")
 		await _wait(1.6)
 		var viewed := _texts(shell.history.viewing(), PackedStringArray()) if shell.history.viewing() else PackedStringArray()
