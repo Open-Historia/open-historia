@@ -39,7 +39,8 @@ fs.rmSync(stage, { recursive: true, force: true });
 fs.mkdirSync(stage, { recursive: true });
 
 const sidecar = path.join(native, "sidecar");
-for (const name of ["main.mjs", "shims.js", "standin.js", "serverWorker.mjs", "workers.js", "workerHost.mjs", "updateChunks.mjs", "dataPaths.mjs", "rustFronts.mjs"]) copy(path.join(sidecar, name), path.join(stage, "native", "sidecar", name));
+const SIDECAR_SKIP = new Set(["build.mjs", "smoke.mjs"]);
+for (const name of fs.readdirSync(sidecar).filter((entry) => /.(mjs|js|cjs)$/.test(entry) && !SIDECAR_SKIP.has(entry))) copy(path.join(sidecar, name), path.join(stage, "native", "sidecar", name));
 copy(path.join(sidecar, "dist"), path.join(stage, "native", "sidecar", "dist"), noMaps);
 copy(path.join(sidecar, "handlers"), path.join(stage, "native", "sidecar", "handlers"), (file, isDir) => isDir || file.endsWith(".mjs") || file.endsWith(".cjs"));
 copy(path.join(repo, "server"), path.join(stage, "server"), (file, isDir) => {
@@ -49,6 +50,7 @@ copy(path.join(repo, "server"), path.join(stage, "server"), (file, isDir) => {
 fs.writeFileSync(path.join(stage, "package.json"), `${JSON.stringify({ name: "open-historia-native", private: true, type: "module" }, null, 2)}\n`);
 
 const wanted = ["express", "jszip", "pmtiles"];
+const ANDROID_SKIP = ["node-datachannel", "@node-datachannel", "@huggingface/transformers", "onnxruntime-node", "onnxruntime-web", "onnxruntime-common", "sharp", "@img"];
 const builtins = new Set((await import("node:module")).builtinModules);
 for (const name of fs.readdirSync(path.join(sidecar, "handlers")).filter((entry) => entry.endsWith(".mjs"))) {
   const source = fs.readFileSync(path.join(sidecar, "handlers", name), "utf8");
@@ -56,7 +58,7 @@ for (const name of fs.readdirSync(path.join(sidecar, "handlers")).filter((entry)
     const specifier = match[1];
     if (specifier.startsWith("node:") || builtins.has(specifier)) continue;
     const packageName = specifier.startsWith("@") ? specifier.split("/").slice(0, 2).join("/") : specifier.split("/")[0];
-    if (packageName === "node-datachannel") continue;
+    if (ANDROID_SKIP.some((skip) => packageName === skip || packageName.startsWith(`${skip}/`))) continue;
     if (!wanted.includes(packageName)) wanted.push(packageName);
   }
 }
@@ -77,7 +79,9 @@ const visit = (name, from) => {
   if (!dir || seen.has(dir)) return;
   seen.add(dir);
   const manifest = JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf8"));
-  for (const dependency of Object.keys({ ...(manifest.dependencies ?? {}), ...(manifest.optionalDependencies ?? {}) })) visit(dependency, dir);
+  for (const dependency of Object.keys({ ...(manifest.dependencies ?? {}), ...(manifest.optionalDependencies ?? {}) })) {
+    if (!ANDROID_SKIP.some((skip) => dependency === skip || dependency.startsWith(`${skip}/`))) visit(dependency, dir);
+  }
 };
 for (const name of wanted) visit(name, repo);
 for (const dir of seen) copy(dir, path.join(stage, path.relative(repo, dir)), noMaps);
@@ -117,6 +121,11 @@ measure(stage);
 console.log(`staged ${stagedFiles} files, ${(stagedBytes / 1048576).toFixed(1)} MB`);
 
 fs.mkdirSync(payloadDir, { recursive: true });
+const bootDir = path.join(payloadDir, "boot");
+fs.rmSync(bootDir, { recursive: true, force: true });
+const bootFiles = ["public/logo.png", "public/icon-192.png", ...fs.readdirSync(path.join(publicDir, "fonts")).filter((name) => name.endsWith(".woff2")).map((name) => `public/fonts/${name}`)];
+for (const relative of bootFiles) copy(path.join(repo, relative), path.join(bootDir, `${relative}.bin`));
+console.log(`boot files in the pck: ${bootFiles.length}`);
 const zip = path.join(payloadDir, "app.zip");
 fs.rmSync(zip, { force: true });
 const tar = process.platform === "win32" ? path.join(process.env.SystemRoot || "C:\\Windows", "System32", "tar.exe") : "zip";

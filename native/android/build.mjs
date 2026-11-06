@@ -19,7 +19,9 @@ const abis = option("abi", "arm64-v8a,x86_64").split(",").map((abi) => abi.trim(
 for (const abi of abis) if (!ABIS[abi]) throw new Error(`Unknown ABI ${abi}; use ${Object.keys(ABIS).join(", ")}.`);
 const nodeDir = path.resolve(option("node", path.join(here, "node", "out")));
 const godotExe = option("godot", process.env.OH_GODOT_EXE || "");
-const apk = path.resolve(option("out", path.join(here, "out", "open-historia-native-debug.apk")));
+const outDir = path.resolve(option("out", path.join(here, "out")));
+const kind = flag("release") ? "release" : "debug";
+const together = flag("one-apk");
 
 const run = (command, args, options = {}) => {
   console.log(`> ${command} ${args.join(" ")}`);
@@ -52,17 +54,24 @@ if (!flag("no-stage")) run(process.execPath, [path.join(here, "stage.mjs"), ...(
 if (godotExe) {
   const presets = path.join(godot, "export_presets.cfg");
   const original = fs.readFileSync(presets, "utf8");
-  let edited = original;
-  for (const abi of Object.keys(ABIS)) edited = edited.replace(new RegExp(`^architectures/${abi}=.*$`, "m"), `architectures/${abi}=${abis.includes(abi)}`);
-  fs.writeFileSync(presets, edited);
+  const builds = together ? [abis] : abis.map((abi) => [abi]);
+  const made = [];
   try {
-    fs.mkdirSync(path.dirname(apk), { recursive: true });
+    fs.mkdirSync(outDir, { recursive: true });
     run(godotExe, ["--headless", "--path", godot, "--import"]);
-    run(godotExe, ["--headless", "--path", godot, flag("release") ? "--export-release" : "--export-debug", "Android", apk]);
+    for (const group of builds) {
+      let edited = original;
+      for (const abi of Object.keys(ABIS)) edited = edited.replace(new RegExp(`^architectures/${abi}=.*$`, "m"), `architectures/${abi}=${group.includes(abi)}`);
+      fs.writeFileSync(presets, edited);
+      const apk = path.join(outDir, `open-historia-native-${group.join("+")}-${kind}.apk`);
+      fs.rmSync(apk, { force: true });
+      run(godotExe, ["--headless", "--path", godot, kind === "release" ? "--export-release" : "--export-debug", "Android", apk]);
+      made.push(apk);
+    }
   } finally {
     fs.writeFileSync(presets, original);
   }
-  console.log(`apk ${apk} ${(fs.statSync(apk).size / 1048576).toFixed(1)} MB`);
+  for (const apk of made) console.log(`apk ${apk} ${(fs.statSync(apk).size / 1048576).toFixed(1)} MB`);
 } else {
   console.log("Pass --godot <Godot 4.7.2 console exe> (with ANDROID_HOME and JAVA_HOME set) to export the APK.");
 }

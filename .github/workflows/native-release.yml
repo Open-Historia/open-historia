@@ -20,6 +20,11 @@ on:
         required: false
         type: string
         default: ""
+      android:
+        description: Also build the Android APKs (Node for Android comes from the cache, or is built once per Node version and ABI)
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -916,6 +921,196 @@ jobs:
           echo "tour 2x: ${{ steps.tour2x.outcome }}"
           test "${{ steps.desktop.outcome }}" = success
           if [ "${{ inputs.tours }}" = true ]; then test "${{ steps.tour.outcome }}" = success && test "${{ steps.tour2x.outcome }}" = success; fi
+
+  android-node:
+    name: Build Node for Android (${{ matrix.abi }})
+    if: github.event_name == 'workflow_dispatch' && inputs.android
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        abi: [arm64-v8a, x86_64]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore Node for Android from the cache
+        id: node-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: native/android/node/out/${{ matrix.abi }}
+          key: node-android-v${{ env.NODE_VERSION }}-${{ matrix.abi }}-${{ hashFiles('native/android/node/build.sh') }}
+
+      - name: Build Node for Android with the NDK (only when the cache missed)
+        if: steps.node-cache.outputs.cache-hit != 'true'
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost "$AGENT_TOOLSDIRECTORY"
+          df -h /
+          mkdir -p "$RUNNER_TEMP/node-work" native/android/node/out
+          docker run --rm -e NODE_VERSION="v$NODE_VERSION" \
+            -v "$RUNNER_TEMP/node-work:/work" \
+            -v "$PWD/native/android/node:/build:ro" \
+            -v "$PWD/native/android/node/out:/out" \
+            ubuntu:22.04 bash /build/build.sh "${{ matrix.abi }}" "$(nproc)"
+          sudo chown -R "$(id -u):$(id -g)" native/android/node/out
+
+      - name: Check the build
+        run: |
+          ls -la "native/android/node/out/${{ matrix.abi }}"
+          file "native/android/node/out/${{ matrix.abi }}/node.stripped"
+          test "$(cat "native/android/node/out/${{ matrix.abi }}/VERSION")" = "v$NODE_VERSION"
+
+      - name: Save Node for Android to the cache
+        if: steps.node-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: native/android/node/out/${{ matrix.abi }}
+          key: node-android-v${{ env.NODE_VERSION }}-${{ matrix.abi }}-${{ hashFiles('native/android/node/build.sh') }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: node-android-${{ matrix.abi }}
+          path: native/android/node/out/${{ matrix.abi }}
+          retention-days: 7
+          if-no-files-found: error
+
+  android:
+    name: Build the Android app
+    needs: android-node
+    if: github.event_name == 'workflow_dispatch' && inputs.android
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    env:
+      NDK_VERSION: 29.0.14206865
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Install the NDK
+        run: |
+          echo "y" | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$NDK_VERSION" "platform-tools" "build-tools;35.0.0" "platforms;android-35" >/dev/null
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
+          ls "$ANDROID_HOME/ndk/$NDK_VERSION"
+
+      - name: Install the Rust toolchain for Android
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --target aarch64-linux-android --target x86_64-linux-android
+          cargo install cargo-ndk --version 4.1.2 --locked
+          cargo ndk --version
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native/engine -> target
+          key: android
+          cache-on-failure: true
+
+      - name: Read the Godot checksums
+        id: godot
+        run: |
+          curl -fsSL "$GODOT_BASE/SHA512-SUMS.txt" -o "$RUNNER_TEMP/godot-sums.txt"
+          editor=$(awk '$2 == "Godot_v4.7.2-stable_linux.x86_64.zip" {print $1}' "$RUNNER_TEMP/godot-sums.txt")
+          templates=$(awk '$2 == "Godot_v4.7.2-stable_export_templates.tpz" {print $1}' "$RUNNER_TEMP/godot-sums.txt")
+          test ${#editor} -eq 128 && test ${#templates} -eq 128
+          echo "editor=$editor" >> "$GITHUB_OUTPUT"
+          echo "templates=$templates" >> "$GITHUB_OUTPUT"
+          echo "key=godot-android-4.7.2-${editor:0:16}-${templates:0:16}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Godot from the cache
+        id: godot-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/godot-cache
+          key: ${{ steps.godot.outputs.key }}
+
+      - name: Download Godot and its Android templates (sha512 checked)
+        if: steps.godot-cache.outputs.cache-hit != 'true'
+        env:
+          EDITOR_SHA: ${{ steps.godot.outputs.editor }}
+          TEMPLATES_SHA: ${{ steps.godot.outputs.templates }}
+        run: |
+          mkdir -p ~/godot-cache "$RUNNER_TEMP/godot-dl"
+          cd "$RUNNER_TEMP/godot-dl"
+          curl -fsSL --retry 3 "$GODOT_BASE/Godot_v4.7.2-stable_linux.x86_64.zip" -o editor.zip
+          echo "$EDITOR_SHA  editor.zip" | sha512sum -c -
+          curl -fsSL --retry 3 "$GODOT_BASE/Godot_v4.7.2-stable_export_templates.tpz" -o templates.tpz
+          echo "$TEMPLATES_SHA  templates.tpz" | sha512sum -c -
+          unzip -q -o editor.zip -d ~/godot-cache
+          unzip -q -j templates.tpz templates/android_debug.apk templates/android_release.apk templates/version.txt -d ~/godot-cache
+          chmod +x ~/godot-cache/Godot_v4.7.2-stable_linux.x86_64
+          cat ~/godot-cache/version.txt
+          rm -rf "$RUNNER_TEMP/godot-dl"
+
+      - name: Save Godot to the cache
+        if: steps.godot-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/godot-cache
+          key: ${{ steps.godot.outputs.key }}
+
+      - name: Set Godot up for Android exports (templates, SDK, a throwaway debug key)
+        run: |
+          templates="$HOME/.local/share/godot/export_templates/4.7.2.stable"
+          mkdir -p "$templates" "$HOME/.config/godot"
+          cp ~/godot-cache/android_debug.apk ~/godot-cache/android_release.apk ~/godot-cache/version.txt "$templates/"
+          keytool -genkeypair -keystore "$RUNNER_TEMP/debug.keystore" -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US" >/dev/null 2>&1
+          for name in editor_settings-4.7.tres editor_settings-4.tres; do
+            {
+              echo '[gd_resource type="EditorSettings" format=3]'
+              echo
+              echo '[resource]'
+              echo "export/android/android_sdk_path = \"$ANDROID_HOME\""
+              echo "export/android/java_sdk_path = \"$JAVA_HOME\""
+              echo "export/android/debug_keystore = \"$RUNNER_TEMP/debug.keystore\""
+              echo 'export/android/debug_keystore_user = "androiddebugkey"'
+              echo 'export/android/debug_keystore_pass = "android"'
+            } > "$HOME/.config/godot/$name"
+          done
+          echo "OH_GODOT_EXE=$HOME/godot-cache/Godot_v4.7.2-stable_linux.x86_64" >> "$GITHUB_ENV"
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: node-android-*
+          path: native/android/node/out
+
+      - name: Lay out the Node builds by ABI
+        run: |
+          cd native/android/node/out
+          for abi in arm64-v8a x86_64; do
+            if [ -d "node-android-$abi" ]; then rm -rf "$abi"; mv "node-android-$abi" "$abi"; fi
+            ls -la "$abi"
+          done
+
+      - name: Install the server and sidecar packages
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          cd native/sidecar && npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Build the APKs (one per ABI)
+        run: node native/android/build.mjs --abi arm64-v8a,x86_64 --godot "$OH_GODOT_EXE"
+
+      - name: Sizes
+        run: ls -la native/android/out/*.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Open-Historia-Native-Android-debug
+          path: native/android/out/*.apk
+          retention-days: 7
+          if-no-files-found: error
 
   publish:
     name: Publish to Open-Historia/open-historia
