@@ -416,6 +416,7 @@ export const register = (ctx) => {
   let loadFailed = false;
   let storedNotices = [];
   let lastNoticeViews = "";
+  let lastActionStates = null;
 
   if (ctx.standIn) {
     ctx.addStandIn(({ tool, text, body }) => {
@@ -517,6 +518,33 @@ export const register = (ctx) => {
     return targets;
   };
 
+  const actionsById = (actions) => {
+    const found = {};
+    for (const action of list(actions)) {
+      if (typeof action?.id !== "string" || !action.id) continue;
+      found[action.id] = action;
+    }
+    return found;
+  };
+
+  const proposalStatesOf = (message, actions) => {
+    const states = {};
+    const proposals = list(message?.actionProposals);
+    if (!proposals.length) return states;
+    const byId = actionsById(actions);
+    const receipts = message?.actionReceipts && typeof message.actionReceipts === "object" ? message.actionReceipts : {};
+    for (const proposal of proposals) {
+      const id = String(proposal?.id ?? "");
+      if (!id) continue;
+      states[id] = engine.advisorActionReview.advisorActionCardState(proposal, receipts[id], byId[proposal.actionId], byId[proposal.targetId]);
+    }
+    return states;
+  };
+
+  const actionStatesStamp = (actions) => JSON.stringify(list(actions)
+    .filter((action) => typeof action?.id === "string" && action.id)
+    .map((action) => [action.id, action.title, action.text, action.kind, action.source, action.status]));
+
   const viewOf = (message, world, unseen = null, chats = null, actions = null) => {
     const role = message?.role;
     if (role === "notice") return noticeView(message, world, unseen ?? unseenOf(world));
@@ -525,6 +553,7 @@ export const register = (ctx) => {
       const drafts = parsed.messageDrafts ? parsed.messageDrafts.map((draft) => ({ ...draft, sentNote: sentNote(draft, chats) })) : null;
       return {
         proposalTargets: proposalTargetsOf(message, actions),
+        proposalStates: proposalStatesOf(message, actions),
         text: parsed.text,
         md: normalizeMarkdown(parsed.text),
         chartConfig: parsed.chartConfig,
@@ -552,6 +581,13 @@ export const register = (ctx) => {
       };
     }
     return { text: String(message?.text ?? "") };
+  };
+
+  const settledReceipts = async (thread, messageId, proposalId, receipt) => {
+    const [saved, actions] = await Promise.all([gameState.readAdvisorMessages({ force: true }), readActions()]);
+    const stored = threads.advisorMessagesFor(saved, thread).find((entry) => entry?.role === "advisor" && entry.id === String(messageId));
+    const receipts = stored?.actionReceipts ?? { [String(proposalId)]: receipt };
+    return { receipts, states: stored ? proposalStatesOf(stored, actions) : {} };
   };
 
   const viewsOf = async (messages) => {
@@ -708,6 +744,13 @@ export const register = (ctx) => {
 
   if (typeof globalThis.addEventListener === "function") {
     globalThis.addEventListener("oh:runtime-json-updated", (event) => {
+      if (event?.detail?.url === urls.actions) {
+        const stamp = actionStatesStamp(event.detail.value);
+        if (stamp === lastActionStates) return;
+        lastActionStates = stamp;
+        emit("advisor.actions", {});
+        return;
+      }
       if (event?.detail?.url !== urls.advisor) return;
       storedNotices = noticesOf(event.detail.value);
       scheduleNotices();
@@ -804,12 +847,37 @@ export const register = (ctx) => {
         if (campaignChanged(campaignId, engine.getLibraryState()?.activeGameId)) {
           throw new Error("The campaign changed while the Action was being reviewed. Reopen the correct game.");
         }
-        const saved = await gameState.readAdvisorMessages({ force: true });
-        const stored = threads.advisorMessagesFor(saved, thread).find((entry) => entry?.role === "advisor" && entry.id === String(messageId));
-        return plain({ ok: true, receipt, receipts: stored?.actionReceipts ?? { [String(proposalId)]: receipt } });
+        return plain({ ok: true, receipt, ...(await settledReceipts(thread, messageId, proposalId, receipt)) });
       } catch (error) {
         console.warn("[advisor] the Action proposal was not fully confirmed:", error?.message ?? error);
         return { ok: false, error: `${error?.message || String(error)} If a write succeeded before an error, retrying uses the same Action ID.` };
+      }
+    },
+    "advisor.cancel": async ({ threadId = CHIEF, messageId = "", proposalId = "" } = {}) => {
+      const thread = threadOf(threadId);
+      const campaignId = clean(engine.getLibraryState()?.activeGameId);
+      try {
+        engine.simulationStatus.assertNoTurnRunning();
+        if (campaignChanged(campaignId, engine.getLibraryState()?.activeGameId)) {
+          throw new Error("The campaign changed before the Action could be cancelled.");
+        }
+        const receipt = await engine.advisorActionApproval.cancelApprovedAdvisorAction({
+          threadId: thread,
+          messageId: String(messageId),
+          proposalId: String(proposalId),
+          readAdvisorMessages: gameState.readAdvisorMessages,
+          mutateActionsState: gameState.mutateActionsState,
+          mutateAdvisorState: gameState.mutateAdvisorState,
+          sharedGame: engine.mpBridge.inSharedGame(),
+          assertReady: engine.simulationStatus.assertNoTurnRunning,
+        });
+        if (campaignChanged(campaignId, engine.getLibraryState()?.activeGameId)) {
+          throw new Error("The campaign changed while the Action was being cancelled. Reopen the correct game.");
+        }
+        return plain({ ok: true, receipt, ...(await settledReceipts(thread, messageId, proposalId, receipt)) });
+      } catch (error) {
+        console.warn("[advisor] the Action cancellation was not fully confirmed:", error?.message ?? error);
+        return { ok: false, error: `${error?.message || String(error)} If the Action is already absent from the board, do not repeat a separate manual removal.` };
       }
     },
     "advisor.history": async ({ messages = [], json = "", threadId = CHIEF } = {}) => {
