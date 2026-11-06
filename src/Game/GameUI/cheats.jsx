@@ -43,7 +43,7 @@ import { PUPPET_COUP_LOYALTY, puppetKindLabel } from "../../runtime/puppets.js";
 import { PUPPET_KIND_OPTIONS, PUPPET_SECRECY_OPTIONS } from "../../Editor/scenarioPuppets.js";
 import { applyGmPuppetChange, gmPuppetRows } from "./puppetStatesTool.js";
 import { DIFFICULTY_LEVELS, normalizeDifficulty } from "../../runtime/difficulty.js";
-import { applyGameMasterPreview, consolidateHistoryNow, previewGameMasterCommand } from "../AI/gameplayLazy.js";
+import { applyGameMasterPreview, consolidateHistoryNow, previewGameMasterCommand, previewGameMasterRevision } from "../AI/gameplayLazy.js";
 import { HISTORY_CONSOLIDATION, countWords, describeHistoryConsolidation, planHistoryConsolidation } from "../AI/historyConsolidation.js";
 import {
     POLITICAL_TRAIT_REGISTRY,
@@ -3256,6 +3256,8 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
     const [text, setText] = useState("");
     const [gmMode, setGmMode] = useState("auto");
     const [gmPreview, setGmPreview] = useState(null);
+    const [gmEditOpen, setGmEditOpen] = useState(false);
+    const [gmEditText, setGmEditText] = useState("");
     const [gmApplyResult, setGmApplyResult] = useState(null);
     const [gmExpandedSections, setGmExpandedSections] = useState({});
     const [target, setTarget] = useState("");
@@ -3374,6 +3376,8 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
         setItems(null);
         setEditingId(null);
         setGmPreview(null);
+        setGmEditOpen(false);
+        setGmEditText("");
         setGmApplyResult(null);
         setGmExpandedSections({});
         setSearch("");
@@ -3672,7 +3676,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                                 key={option.id}
                                 type="button"
                                 disabled={busy}
-                                onClick={() => { setGmMode(option.id); setGmPreview(null); setGmApplyResult(null); setGmExpandedSections({}); }}
+                                onClick={() => { setGmMode(option.id); setGmPreview(null); setGmEditOpen(false); setGmEditText(""); setGmApplyResult(null); setGmExpandedSections({}); }}
                                 style={{
                                     ...buttonStyle,
                                     alignItems: "flex-start",
@@ -3696,7 +3700,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                 <label style={labelStyle}>GM request</label>
                 <textarea
                     value={text}
-                    onChange={(event) => { setText(event.target.value); setGmPreview(null); setGmApplyResult(null); setGmExpandedSections({}); }}
+                    onChange={(event) => { setText(event.target.value); setGmPreview(null); setGmEditOpen(false); setGmEditText(""); setGmApplyResult(null); setGmExpandedSections({}); }}
                     placeholder={gmMode === "auto"
                         ? 'Example: "A major Berlin bank collapses, triggering a prolonged financial panic. Let the game reflect the consequences over time."'
                         : gmMode === "direct"
@@ -3714,6 +3718,8 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                     onClick={() => runBusy(async () => {
                         const result = await previewGameMasterCommand(text.trim(), { mode: gmMode });
                         setGmPreview(result);
+                        setGmEditOpen(false);
+                        setGmEditText("");
                         setGmApplyResult(null);
                         setGmExpandedSections({});
                         return result?.summary
@@ -3722,7 +3728,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                     })}
                     style={{ ...primaryButtonStyle, marginTop: "0.6rem", opacity: busy || !text.trim() ? 0.6 : 1, width: "100%" }}
                 >
-                    {busy ? "Planning canonical transaction…" : gmPreview ? "Regenerate Preview" : "Generate Preview"}
+                    {busy ? "Planning canonical transaction…" : gmPreview ? "Generate New Preview" : "Generate Preview"}
                 </button>
                 <div style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.69rem", lineHeight: 1.4, marginTop: "0.45rem" }}>
                     AI interpretation is constrained by the live native GM schema. Wars, relations, agreements and subordinations are structured objects now — no encoded string mini-language and no turn simulation path.
@@ -3756,6 +3762,61 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                             <div style={{ border: "1px solid rgba(147,197,253,0.2)", borderRadius: 8, color: "rgba(219,234,254,0.88)", fontSize: "0.68rem", lineHeight: 1.4, marginTop: "0.5rem", padding: "0.48rem 0.55rem" }}>
                                 <strong>Auto mode selected:</strong> {modeOptions.find((option) => option.id === gmPreview.mode)?.title || gmPreview.mode}.
                                 <span data-no-translate={gmPreview.modeReason ? "" : undefined}> {gmPreview.modeReason || "The selected native GM mode governs all proposed operations."}</span>
+                            </div>
+                        )}
+
+                        {!gmApplied && (
+                            <div style={{ marginTop: "0.65rem" }}>
+                                <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.45rem", justifyContent: "space-between" }}>
+                                    <button
+                                        type="button"
+                                        className="oh-tap-row"
+                                        disabled={busy}
+                                        onClick={() => { setGmEditOpen((open) => !open); setGmEditText(""); }}
+                                        style={{ ...buttonStyle, fontSize: "0.68rem", padding: "0.38rem 0.65rem" }}
+                                    >
+                                        {gmEditOpen ? "Cancel Edit" : "Edit Preview"}
+                                    </button>
+                                    {gmPreview.revisionCount > 0 && (
+                                        <span style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.64rem" }}>
+                                            {`Revision ${gmPreview.revisionCount}`}
+                                        </span>
+                                    )}
+                                </div>
+                                {gmEditOpen && (
+                                    <div style={{ background: "rgba(255,255,255,0.035)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, marginTop: "0.5rem", padding: "0.55rem" }}>
+                                        <label style={labelStyle} htmlFor="gm-preview-revision">What should change?</label>
+                                        <textarea
+                                            id="gm-preview-revision"
+                                            aria-label="GM preview revision instructions"
+                                            value={gmEditText}
+                                            onChange={(event) => setGmEditText(event.target.value)}
+                                            placeholder='Example: Change only the REPLACE-LEADER office to headOfState. Preserve the coalition, strategy and event.'
+                                            rows={3}
+                                            style={{ ...inputStyle, marginTop: "0.35rem", resize: "vertical" }}
+                                        />
+                                        <div style={{ color: "rgba(255,255,255,0.48)", fontSize: "0.63rem", lineHeight: 1.35, marginTop: "0.35rem" }}>
+                                            Unmentioned operations stay in the preview. Nothing is applied until you approve the full revised transaction.
+                                        </div>
+                                        <button
+                                            type="button"
+                                            className="oh-tap-row"
+                                            disabled={busy || !gmEditText.trim()}
+                                            onClick={() => runBusy(async () => {
+                                                const result = await previewGameMasterRevision(gmPreview, gmEditText.trim());
+                                                setGmPreview(result);
+                                                setGmEditOpen(false);
+                                                setGmEditText("");
+                                                setGmApplyResult(null);
+                                                setGmExpandedSections({});
+                                                return result?.summary ? `Edited preview ready - ${result.summary}` : "Edited preview ready. Nothing applied.";
+                                            })}
+                                            style={{ ...primaryButtonStyle, marginTop: "0.55rem", opacity: busy || !gmEditText.trim() ? 0.55 : 1, width: "100%" }}
+                                        >
+                                            {busy ? "Editing Preview…" : "Generate Edited Preview"}
+                                        </button>
+                                    </div>
+                                )}
                             </div>
                         )}
 

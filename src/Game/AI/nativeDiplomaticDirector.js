@@ -16,6 +16,7 @@ import { toCountryName } from "../../runtime/ownerNames.js";
 import { resolvePolityIdentity, buildPolityIdentityIndex } from "../../runtime/polityIdentity.js";
 import { compareGameDates, isGameDate } from "../../runtime/gameDates.js";
 import { receiptPlayerNote } from "../../runtime/receiptPlayerNotes.js";
+import { hasMalformedRelationSummary as relationSummaryHasReservedSeparator } from "../../runtime/relationSummary.js";
 
 export const DIPLOMATIC_LEDGER_VERSION = 1;
 export const DIPLOMATIC_DIRECTOR_VERSION = "0.1.7-round-zero-baseline";
@@ -267,6 +268,7 @@ export const buildPregameRelationBaselineRecord = ({
   const numeric = Number(score);
   if (!left || !right || !pairKey) return { record: null, error: "Round-Zero relation requires two distinct current polities." };
   if (!Number.isFinite(numeric)) return { record: null, error: `Round-Zero relation ${left} ↔ ${right} requires a finite absolute score.` };
+  if (relationSummaryHasReservedSeparator(summary)) return { record: null, error: `Round-Zero relation ${left} ↔ ${right} has a summary containing a reserved compact-record separator.` };
   const ordered = [left, right].sort((x, y) => lower(x).localeCompare(lower(y)));
   const clamped = clamp(Math.round(numeric), -100, 100);
   const date = clean(observedDate);
@@ -1394,6 +1396,10 @@ export const salvageDiplomaticLedgerPayload = (candidate, { world, playerNotes =
     else if (lower(a) === lower(b)) { why = "both sides are the same polity"; key = "relationSameCountry"; }
     else if (!Number.isFinite(update.score)) why = "it carries no score from -100 to 100";
     else if (!RELATION_STATUS_SET.has(update.status)) why = `"${update.status}" is not a relation status`;
+    else if (relationSummaryHasReservedSeparator(update.summary)) {
+      why = "its summary contains a reserved compact-record separator";
+      key = "relationIncomplete";
+    }
     // A side the model left blank has no name to show the player.
     if (key === "relationUnknownCountry" && (!clean(update.a) || !clean(update.b))) key = "relationUnnamed";
     if (why) {
@@ -1478,6 +1484,14 @@ export const validateDiplomaticLedgerPayload = (
     // The GM/admin preview (allowNativeBinding false) stays fail-closed: an
     // administrator naming an agreement that does not exist should be told so.
     normalizeUnknownAgreementLifecycle(candidate, world);
+  }
+
+  // Summaries are one pair's plain-text reason, not additional packed relation
+  // records. Check before score/binding repairs can give malformed text authority.
+  for (const update of decodeRelationUpdates(candidate?.relationUpdates)) {
+    if (relationSummaryHasReservedSeparator(update.summary)) {
+      return `Relation update ${update.a} ↔ ${update.b} has a summary containing a reserved compact-record separator (~).`;
+    }
   }
 
   // A declared status that contradicts the absolute score is the model writing
@@ -1600,7 +1614,7 @@ export const applyRelationUpdates = ({ world, updates, events = [], stopDate = "
     const a = canonicalDiplomaticPolity(update.a, nextWorld);
     const b = canonicalDiplomaticPolity(update.b, nextWorld);
     const key = relationPairKey(a, b);
-    if (!a || !b || !key || !Number.isFinite(update.score) || !RELATION_STATUS_SET.has(update.status)) {
+    if (!a || !b || !key || !Number.isFinite(update.score) || !RELATION_STATUS_SET.has(update.status) || relationSummaryHasReservedSeparator(update.summary)) {
       console.warn(`[OH diplomacy] dropped invalid relation update ${update.a} ↔ ${update.b}.`);
       continue;
     }

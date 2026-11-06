@@ -646,6 +646,28 @@ button:active:not(:disabled) {
   }
 }
 
+/* Only opt-in appearance presets tint the Rostra navigation on hover.
+   Scenario cards, map colors and Default (Original) keep their own finishes. */
+@media (hover: hover) {
+  [data-oh-ui-theme]:not([data-oh-ui-theme="default"]) [data-oh-theme-nav]:hover:not(:disabled) {
+    outline: 1px solid color-mix(in srgb, var(--oh-ui-accent) 38%, transparent);
+    outline-offset: -1px;
+  }
+}
+[data-oh-ui-theme]:not([data-oh-ui-theme="default"]) [data-oh-theme-nav]:focus-visible {
+  outline: 2px solid var(--oh-ui-focus);
+  outline-offset: 2px;
+}
+/* The map dock keeps its own glass/flag surfaces; only the interaction rim is themed. */
+[data-oh-ui-theme]:not([data-oh-ui-theme="default"]) [data-oh-theme-hud]:hover:not(:disabled) {
+  outline: 1px solid var(--oh-ui-accent);
+  outline-offset: 1px;
+}
+[data-oh-ui-theme]:not([data-oh-ui-theme="default"]) [data-oh-theme-hud]:focus-visible {
+  outline: 2px solid var(--oh-ui-focus);
+  outline-offset: 2px;
+}
+
 /* OpenLayers controls inside country picker and editors */
 .ol-zoom {
   position: absolute !important;

@@ -160,6 +160,7 @@ export const MapModeSelector = memo(function MapModeSelector({ dockStyle = DEFAU
           type="button"
           onClick={() => setMode("political")}
           title="Political map mode"
+          data-oh-theme-hud=""
           style={{
             display: "flex",
             alignItems: "center",
@@ -186,6 +187,7 @@ export const MapModeSelector = memo(function MapModeSelector({ dockStyle = DEFAU
             setShowLegend(true);
           }}
           title="Diplomatic map mode"
+          data-oh-theme-hud=""
           style={{
             display: "flex",
             alignItems: "center",
