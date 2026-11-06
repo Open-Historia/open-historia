@@ -188,6 +188,7 @@ func _run() -> void:
 		_say("FAIL the main scene did not load")
 		_finish(1)
 		return
+	await process_frame
 	while not main.menu.visible:
 		if Time.get_ticks_msec() - started > 90000:
 			_say("FAIL the menu never appeared")

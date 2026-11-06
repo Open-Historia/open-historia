@@ -108,6 +108,7 @@ func _run() -> void:
 		_say("FAIL set OH_AVIF_SAMPLE to an AVIF file")
 		_finish()
 		return
+	await process_frame
 	while not main.menu.visible:
 		if Time.get_ticks_msec() - started > 120000:
 			_say("FAIL the menu never appeared")
