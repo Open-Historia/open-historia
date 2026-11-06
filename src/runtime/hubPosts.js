@@ -53,6 +53,7 @@ export const BUNDLE_LINK_PATTERN =
 
 // The key the Publish button writes into a post (the form's technical field),
 // which is how an install recognises the post as the one its player made.
+// i18n-ignore: a marker the hub's posts carry, never translated.
 export const SCENARIO_KEY_LINE = "Scenario-Key";
 const SCENARIO_KEY_PATTERN = /^\s*Scenario-Key:\s*([A-Za-z0-9-]{8,64})\s*$/im;
 
@@ -363,6 +364,7 @@ export const hubOriginalGone = (origin, hubIndex) => !origin?.release || !releas
 // ends with this marker line. A comment is a suggestion when it carries a .zip
 // attachment and either the marker or a file named like one: a player who
 // forgot to paste the text but dragged the file in has still suggested it.
+// i18n-ignore: a marker the hub's posts carry, never translated.
 export const SUGGESTION_MARKER = "Open-Historia-Suggestion";
 const SUGGESTION_MARKER_PATTERN = /^\s*Open-Historia-Suggestion:\s*([A-Za-z0-9-]{4,80})\s*$/im;
 const ZIP_ATTACHMENT_PATTERN =

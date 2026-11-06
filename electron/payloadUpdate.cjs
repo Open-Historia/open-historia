@@ -18,6 +18,7 @@
 // (server/payloadUpdate.test.js).
 
 const nodeFs = require("node:fs");
+const { uiWord } = require("./uiWords.cjs");
 const nodePath = require("node:path");
 const { LARGE_FILE_BYTES, chunkAssetName, chunksOfFile, planUpdate, readHead, readManifest, sha256 } = require("./payloadChunks.cjs");
 const { CURRENT_FILE, MANIFEST_FILE, compareBuilds, readState, sameShell, writeJsonAtomically } = require("./payloadBoot.cjs");
@@ -39,7 +40,7 @@ const slicer = (sliceMs = SLICE_MS) => {
 };
 
 const abortError = () => {
-  const error = new Error("The update was cancelled.");
+  const error = new Error(uiWord("The update was cancelled."));
   error.name = "AbortError";
   return error;
 };
@@ -313,7 +314,7 @@ const createPayloadUpdater = ({
         if (attempt < CHUNK_ATTEMPTS) await new Promise((resolve) => setTimeout(resolve, retryDelayMs * attempt));
       }
     }
-    throw new Error(`The update could not be downloaded: ${last?.message || "a chunk failed"}`);
+    throw new Error(uiWord("The update could not be downloaded: {{reason}}", { reason: last?.message || "a chunk failed" }));
   };
 
   // Put the manifest's files together under payloadDir/<build> and point the
@@ -377,7 +378,7 @@ const createPayloadUpdater = ({
     onProgress({ phase: "building", percent: 0 });
     fs.rmSync(stagingDir, { recursive: true, force: true });
     const put = (relative, data, expected) => {
-      if (sha256(data) !== expected) throw new Error(`The update could not be put together: ${relative} is not what the release published.`);
+      if (sha256(data) !== expected) throw new Error(uiWord("The update could not be put together: {{relative}} is not what the release published.", { relative }));
       const file = nodePath.join(stagingDir, ...relative.split("/"));
       fs.mkdirSync(nodePath.dirname(file), { recursive: true });
       fs.writeFileSync(file, data);

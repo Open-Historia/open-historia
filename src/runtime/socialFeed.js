@@ -503,6 +503,7 @@ const PROMPT_TEXT_LIMIT = 280;
 export const wantsEverydayPost = (feed, round) => !list(feed).some((post) =>
   post?.kind === "everyday" && Number(round) - Number(post.round) < 1);
 
+// i18n-ignore: a post as the model reads it.
 const describePost = (post, feed, round) => {
   const who = [clean(post.author), clean(post.role), clean(post.country)].filter(Boolean).join(", ");
   const marks = [];
@@ -516,6 +517,7 @@ const describePost = (post, feed, round) => {
 };
 
 // A poll's choices, and what the public answered once it has.
+// i18n-ignore: a poll as the model reads it.
 const pollLine = (poll) => {
   if (!poll) return "";
   const results = poll.results;
@@ -529,7 +531,9 @@ const pollLine = (poll) => {
 // no posts, it should say refresh page with a refresh button to generate
 // them", the owner, 2026-11-03). The same people and rules as a skip's posts,
 // about the world as it stands. `date` the game's day.
+// i18n-ignore: the model's instructions, never shown.
 export const ROSTRA_REFRESH_POSTS = "8 to 12";
+// i18n-ignore: the model's instructions, never shown.
 export const rostraRefreshRules = ({ players = [], date = "" } = {}) => {
   const people = list(players).map(clean).filter(Boolean);
   const playerNames = people.length ? people.join(", ") : "the player's polity";
@@ -587,6 +591,7 @@ export const promptPosts = (feed, { round = 0 } = {}) => {
 // statements that can move events, and what the skip is to write in its
 // socialPosts field. `players` the polities people play (their leaders' posts
 // are theirs alone to write); `round` the round being simulated.
+// i18n-ignore: the model's instructions, never shown.
 export const socialFeedPromptBlock = ({ feed = [], players = [], round = 0 } = {}) => {
   const people = list(players).map(clean).filter(Boolean);
   const playerNames = people.length ? people.join(", ") : "the player's polity";

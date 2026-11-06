@@ -78,6 +78,26 @@ const NEW_UPDATES = [
     ],
   },
   {
+    // A sweep for the text players read that no language pack held (2026-11-06): the update notices' lines, the
+    // refusals and messages modules return (War Room, fleets, Workshop imports, shared games, a stopped skip), the
+    // browser's own confirm() and alert() boxes (runtime/nativeDialogs.js) and the desktop app's menus and dialogs
+    // (electron/uiWords.cjs). scripts/i18n/extractStrings.mjs now reads them, so the catalog test guards them.
+    id: "2026-11-more-translated",
+    kind: "minor",
+    date: "2026-11-06",
+    channel: "beta",
+    banners: [
+      {
+        title: "More of the game in your language",
+        items: [
+          "Much more of the game is now translated: the update notices and their history, what the War Room and your fleets answer, the Workshop's imports and border check, joining a shared game, and why a time skip stopped.",
+          "The boxes that ask you to confirm something, or tell you something went wrong, are in your language too.",
+          "On the desktop app, the right-click menu and the box shown when the game's page stops are translated as well.",
+        ],
+      },
+    ],
+  },
+  {
     // "add a feature to ship high quality api generated language packs with scenarios" (the owner, 2026-11-06):
     // scenario.languages (server/scenarioLanguages.js), the Workshop's Languages tab (ScenarioLanguagesPanel.jsx),
     // read first in a game (translator.js setScenarioLanguagePack).
