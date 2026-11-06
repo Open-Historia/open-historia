@@ -410,6 +410,7 @@ func _run() -> void:
 				await _wait(2.0)
 				await _shoot("chat-18-council-reply")
 	await _peace_in_chat()
+	await _call_to_arms()
 	_finish()
 
 
@@ -535,6 +536,58 @@ func _peace_in_chat() -> void:
 	await _wait(0.6)
 	_check("a declined offer is answered and leaves the foot of the chat", _button(view._box, "Accept") == null and not _labels(view._box).has("Peace offered"))
 	await _shoot("chat-23-peace-declined")
+	panel.leave_active()
+	await _wait(0.3)
+
+
+func _holds(node: Node, text: String) -> bool:
+	if node is Label and (node as Label).text.contains(text):
+		return true
+	if node is RichTextLabel and (node as RichTextLabel).get_parsed_text().contains(text):
+		return true
+	for child in node.get_children():
+		if _holds(child, text):
+			return true
+	return false
+
+
+func _row_of(box: Node, wanted: Callable) -> int:
+	var children := box.get_children()
+	for index in range(children.size()):
+		if wanted.call(children[index]):
+			return index
+	return -1
+
+
+func _call_to_arms() -> void:
+	await _close_notice()
+	var seeded: Dictionary = await main.engine.request("country.standin_seed")
+	_check("the stand-in call to arms is seeded", seeded.get("ok", false))
+	_check("no call to arms card sits over the map", not ("war_cards" in main.hud) and not FileAccess.file_exists("res://scripts/ui/war_peace_cards.gd"))
+	panel.open()
+	panel._set_view("chats")
+	panel.open_chat("Germany", "")
+	await _until(func() -> bool: return panel.conversation_visible() and not ChatPanel.a(panel.conversation.peace_info.get("calls", [])).is_empty(), 15.0)
+	await _wait(0.6)
+	var view := panel.conversation
+	_check("a call asked before calls had messages waits at the foot of the chat with that ally", _button(view._box, "Honour the alliance") != null and _button(view._box, "Break the treaty") != null and _row_of(view._box, func(row: Node) -> bool: return _button(row, "Honour the alliance") != null) == view._box.get_child_count() - 1)
+	_check("its answers say nothing of what each does", not _holds(view._box, "puts you at war") and not _holds(view._box, "reputation"))
+	await _shoot("chat-24-call-to-arms-foot")
+	var ask := "We have been attacked by Russia. Under the Élysée Treaty, we call on you to come to our defence."
+	await view._append_events([{"id": "msg-call-call-germany", "kind": "message", "time": panel.game_date, "by": "Germany", "role": "leader", "code": "", "text": ask}])
+	await main.engine.request("chat.test.callAsked", {"callId": "call-germany", "messageId": "msg-call-call-germany"})
+	await view.refresh_peace()
+	await _until(func() -> bool: return _holds(view._box, ask), 10.0)
+	await _wait(0.4)
+	var asked_row := _row_of(view._box, func(row: Node) -> bool: return _holds(row, ask))
+	var answer_row := _row_of(view._box, func(row: Node) -> bool: return _button(row, "Honour the alliance") != null)
+	_check("the ally's message carries the answers right under it", asked_row >= 0 and answer_row == asked_row + 1, "%d %d" % [asked_row, answer_row])
+	await _shoot("chat-25-call-to-arms-message")
+	_button(view._box, "Break the treaty").pressed.emit()
+	await _until(func() -> bool: return _labels(view._box).has("You refused"), 15.0)
+	await _wait(0.4)
+	_check("an answered call says what the answer was, under its message", _labels(view._box).has("You refused") and _button(view._box, "Honour the alliance") == null)
+	await _shoot("chat-26-call-to-arms-refused")
 	panel.leave_active()
 	await _wait(0.3)
 

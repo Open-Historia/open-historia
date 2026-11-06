@@ -295,12 +295,10 @@ func _run() -> void:
 	await _wait(1.0)
 	var seeded: Dictionary = await main.engine.request("country.standin_seed", {"blocs": true})
 	_check(seeded.get("ok", false), "stand-in world seeded")
-	main.hud.move_child(main.hud.war_cards, main.hud.map_cards.get_index() + 1)
 	await _country_panel()
 	await _map_cards()
 	await _search()
 	await _legend()
-	await _war_and_peace()
 	_say("static memory %.1f MB" % (OS.get_static_memory_usage() / 1048576.0))
 	_say("done: %d failure(s) %s" % [failures.size(), ", ".join(failures)])
 	_finish(0 if failures.is_empty() else 1)
@@ -755,21 +753,6 @@ func _legend() -> void:
 	await _shoot("24-diplomatic-legend")
 	main.hud.set_map_mode("political", true)
 	await main.hud._apply_map_mode()
-
-
-func _war_and_peace() -> void:
-	var cards_wp = main.hud.war_cards
-	await cards_wp.refresh()
-	await _wait(0.5)
-	_check(cards_wp.visible and _has_text(cards_wp, "Honour the alliance") and _has_text(cards_wp, "CALL TO ARMS") and not _has_text(cards_wp, "PEACE OFFERED"), "the cards over the map hold the call to arms, not the offer of peace")
-	await _shoot("25-war-peace")
-	cards_wp.folded = true
-	cards_wp._render()
-	await _wait(0.3)
-	_check(_has_text(cards_wp, "Waiting for your answer: 1"), "folded")
-	await _shoot("26-war-peace-folded")
-	cards_wp.folded = false
-	cards_wp._render()
 
 
 func _finish(code: int) -> void:

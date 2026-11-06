@@ -13,7 +13,7 @@ signal world_changed
 signal dock_resized
 
 const DOCK_LAUNCHERS := [["chat", "Chat", 18], ["actions", "Actions and Projects", 16], ["social", "Rostra", 18]]
-const PANEL_FILES := ["map_cards", "chat_panel", "actions_panel", "projects_panel", "rostra_panel", "rostra_search", "advisor_panel", "country_panel", "search_box", "diplomatic_legend", "chat_notices", "war_peace_cards"]
+const PANEL_FILES := ["map_cards", "chat_panel", "actions_panel", "projects_panel", "rostra_panel", "rostra_search", "advisor_panel", "country_panel", "search_box", "diplomatic_legend", "chat_notices"]
 
 var date_widget: DateWidget
 var search_slot: Control
@@ -40,7 +40,6 @@ var map_cards: Control
 var search: Control
 var legend: Control
 var chat_notices: Control
-var war_cards: Control
 var open_drawer := ""
 var _engine: EngineLink
 var _right_layer: Control
@@ -549,7 +548,7 @@ func _invoke(node: Object, method: String, args: Array = []) -> Variant:
 func mount_panels(game: Dictionary) -> void:
 	_game = game
 	_unavailable.clear()
-	var old: Array = panels.values() + drawers.values() + [map_cards, search, legend, chat_notices, war_cards]
+	var old: Array = panels.values() + drawers.values() + [map_cards, search, legend, chat_notices]
 	for node in old:
 		if node is Node and is_instance_valid(node):
 			(node as Node).queue_free()
@@ -641,13 +640,6 @@ func mount_panels(game: Dictionary) -> void:
 		add_child(chat_notices)
 		_hook(chat_notices, "open_thread", open_chat_thread)
 		_setup(chat_notices, {"chat_panel": chat, "game": game, "right_offset": _right_offset})
-	war_cards = _make("war_peace_cards")
-	if war_cards:
-		add_child(war_cards)
-		if map_cards:
-			move_child(war_cards, map_cards.get_index() + 1)
-		_hook(war_cards, "answered", func(_op: String, _ref: String) -> void: world_changed.emit())
-		_setup(war_cards, {"poll_seconds": 5.0, "game": game})
 	set_rostra_badge(0)
 	for entry in [["chat", "chat_panel"], ["actions", "actions_panel"], ["social", "rostra_panel"]]:
 		var tile: Button = _launchers.get(entry[0])
@@ -770,7 +762,7 @@ func open_chat_thread(chat_id: String) -> void:
 
 
 func refresh_panels() -> void:
-	for node in panels.values() + drawers.values() + [map_cards, war_cards, chat_notices]:
+	for node in panels.values() + drawers.values() + [map_cards, chat_notices]:
 		_invoke(node, "refresh")
 	if map_mode == "diplomatic":
 		_apply_map_mode()
