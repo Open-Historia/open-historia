@@ -1,8 +1,9 @@
 /*! Open Historia — the translation model, off the main thread © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Runs one Opus-MT model (translationModels.js) for the translator, through
 // Transformers.js on ONNX Runtime's CPU build. The weights come from the model
-// host once and stay in the browser's Cache Storage (MODEL_CACHE, which the
-// page's sweep of old caches in assets.js leaves alone); the runtime's
+// host once and stay on the device (modelStore.js: the browser's Cache Storage
+// under MODEL_CACHE, which the page's sweep of old caches in assets.js leaves
+// alone, or IndexedDB where there is none, as in the Android app); the runtime's
 // WebAssembly is part of the build (vite.config.ts), so only the first use
 // needs a connection and the text never leaves the device.
 //
@@ -15,6 +16,7 @@
 
 import ortWasm from "oh-ort-transformers/ort-wasm-simd-threaded.wasm?url";
 import { MODEL_FILES, groupByLength, modelFileUrl, translationModelFor } from "./translationModels.js";
+import { deleteModelCache, openModelCache } from "./modelStore.js";
 
 // Named here and in assets.js (whose sweep of old caches keeps it), not
 // imported: assets.js would bring half the game into this worker.
@@ -35,8 +37,9 @@ const post = (message) => self.postMessage(message);
 
 const cached = async () => {
   try {
-    if (!entry || typeof caches === "undefined") return false;
-    const cache = await caches.open(MODEL_CACHE);
+    if (!entry) return false;
+    const cache = await openModelCache(MODEL_CACHE);
+    if (!cache) return false;
     for (const file of MODEL_FILES) {
       if (!(await cache.match(modelFileUrl(entry, file)))) return false;
     }
@@ -46,19 +49,13 @@ const cached = async () => {
   }
 };
 
-const forget = async () => {
-  try {
-    if (typeof caches !== "undefined") await caches.delete(MODEL_CACHE);
-  } catch {
-    // Nothing to remove.
-  }
-};
+const forget = () => deleteModelCache(MODEL_CACHE);
 
 // A small file of the model, from the cache or else from the model host (then
 // kept), under the same key Transformers.js uses: the file's URL.
 const readJson = async (file) => {
   const url = modelFileUrl(entry, file);
-  const cache = typeof caches === "undefined" ? null : await caches.open(MODEL_CACHE).catch(() => null);
+  const cache = await openModelCache(MODEL_CACHE).catch(() => null);
   let response = await cache?.match(url);
   if (!response) {
     response = await fetch(url);
@@ -72,7 +69,7 @@ const readJson = async (file) => {
 // player who switched, is removed once this one has loaded.
 const prune = async () => {
   try {
-    const cache = await caches.open(MODEL_CACHE);
+    const cache = await openModelCache(MODEL_CACHE);
     const ours = modelFileUrl(entry, "");
     for (const request of await cache.keys()) {
       if (!request.url.startsWith(ours)) await cache.delete(request);
@@ -98,6 +95,12 @@ const load = () => {
       env.allowLocalModels = false;
       env.useBrowserCache = true;
       env.cacheKey = MODEL_CACHE;
+      // The same store this file reads (modelStore.js), which is not Cache
+      // Storage where the page has none.
+      const store = await openModelCache(MODEL_CACHE);
+      if (!store) throw new Error("This device cannot keep a translation model.");
+      env.useCustomCache = true;
+      env.customCache = store;
       // The runtime's glue is in the bundle; only its WebAssembly is a file.
       env.backends.onnx.wasm.wasmPaths = { wasm: new URL(ortWasm, self.location.href).href };
       env.backends.onnx.wasm.numThreads = THREADS;

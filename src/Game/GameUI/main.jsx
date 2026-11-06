@@ -240,8 +240,8 @@ const AdvisorButton = ({ isAdvisorOpen, isMobile, dockStyle, onToggle }) => (
       fontSize: isMobile ? "1.25rem" : "1.5rem",
       borderRadius: isMobile ? "12px" : "14px",
       background: isAdvisorOpen
-        ? "rgba(255,255,255,0.085)"
-        : "rgba(35,35,39,0.53)",
+        ? "var(--oh-ui-glass-active, rgba(255,255,255,0.085))"
+        : "var(--oh-ui-glass-pill, rgba(35,35,39,0.53))",
       transition: `${dockStyle.transition}, background 0.15s ease`,
     }}
   >
