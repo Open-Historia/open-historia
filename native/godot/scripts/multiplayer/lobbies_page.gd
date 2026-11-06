@@ -146,7 +146,7 @@ func _shared_mode() -> String:
 
 func _card() -> PanelContainer:
 	var card := PanelContainer.new()
-	card.add_theme_stylebox_override("panel", UI.box(CARD_BG, CARD_BORDER, 18, 1, Vector4(21, 19, 21, 19)))
+	card.add_theme_stylebox_override("panel", UI.box(UiTheme.pick("surface", CARD_BG), CARD_BORDER, 18, 1, Vector4(21, 19, 21, 19)))
 	card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	return card
 
@@ -191,8 +191,8 @@ func _text_input(value: String, placeholder: String, max_length: int) -> LineEdi
 
 func _button(caption: String, primary := false, height := 37.0) -> Button:
 	return CommunityKit.pill_button(caption, {
-		"bg": PRIMARY_BG if primary else BUTTON_BG,
-		"border": PRIMARY_BORDER if primary else BUTTON_BORDER,
+		"bg": UiTheme.accented(PRIMARY_BG) if primary else BUTTON_BG,
+		"border": UiTheme.accented(PRIMARY_BORDER) if primary else BUTTON_BORDER,
 		"ink": PRIMARY_INK if primary else BUTTON_INK,
 		"size": 13,
 		"weight": 650,

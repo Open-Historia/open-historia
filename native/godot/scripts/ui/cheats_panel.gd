@@ -118,9 +118,12 @@ var _live_kinds: Dictionary = {}
 
 
 func _ready() -> void:
+	UiTheme.events().changed.connect(func() -> void:
+		if _open:
+			_render())
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_panel = GlassPanel.new(Color(24 / 255.0, 24 / 255.0, 27 / 255.0, 0.96), 18.0, Vector4(14, 14, 12, 14), Color(1, 1, 1, 0.1))
+	_panel = GlassPanel.new(UiTheme.pick("overlay", Color(24 / 255.0, 24 / 255.0, 27 / 255.0, 0.96)), 18.0, Vector4(14, 14, 12, 14), UiTheme.pick("line", Color(1, 1, 1, 0.1)))
 	_panel.anchor_left = 1.0
 	_panel.anchor_right = 1.0
 	_panel.grow_horizontal = Control.GROW_DIRECTION_BEGIN
@@ -414,7 +417,7 @@ func _fit() -> void:
 
 func _build_toast() -> void:
 	_toast = PanelContainer.new()
-	_toast.add_theme_stylebox_override("panel", UI.box(Color(24 / 255.0, 24 / 255.0, 27 / 255.0, 0.96), Color(0, 0, 0, 0.19), 12, 1, Vector4(14, 9, 14, 9)))
+	_toast.add_theme_stylebox_override("panel", UI.box(UiTheme.pick("overlay", Color(24 / 255.0, 24 / 255.0, 27 / 255.0, 0.96)), Color(0, 0, 0, 0.19), 12, 1, Vector4(14, 9, 14, 9)))
 	_toast.anchor_left = 0.5
 	_toast.anchor_right = 0.5
 	_toast.offset_top = PANEL_TOP
@@ -596,23 +599,23 @@ func _btn(text: String, kind := "plain", size := 13) -> Button:
 	node.text = text
 	node.focus_mode = Control.FOCUS_NONE
 	node.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-	var bg := Color(1, 1, 1, 0.06)
-	var border := Color(1, 1, 1, 0.12)
+	var bg := UiTheme.pick("overlay_card", Color(1, 1, 1, 0.06))
+	var border := UiTheme.pick("line", Color(1, 1, 1, 0.12))
 	var ink := UI.WHITE
 	match kind:
 		"primary":
-			bg = Color(1, 1, 1, 0.1)
-			border = Color(1, 1, 1, 0.28)
+			bg = UiTheme.pick("line", Color(1, 1, 1, 0.1))
+			border = UiTheme.pick("line", Color(1, 1, 1, 0.28))
 		"danger":
 			border = Color(244 / 255.0, 63 / 255.0, 94 / 255.0, 0.32)
 			ink = ROSE
 		"active":
 			bg = Color(0, 0, 0, 0.42)
-			border = Color(1, 1, 1, 0.28)
+			border = UiTheme.pick("line", Color(1, 1, 1, 0.28))
 			ink = Color("#f4f4f5")
 		"quiet":
 			bg = Color(1, 1, 1, 0.05)
-			border = Color(1, 1, 1, 0.1)
+			border = UiTheme.pick("line", Color(1, 1, 1, 0.1))
 			ink = Color(1, 1, 1, 0.7)
 		"link":
 			bg = Color(0, 0, 0, 0)
@@ -651,9 +654,9 @@ func _line(value: String, placeholder: String, on_change: Callable) -> LineEdit:
 	node.placeholder_text = placeholder
 	node.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	node.custom_minimum_size.y = 32
-	node.add_theme_stylebox_override("normal", UI.box(Color(0, 0, 0, 0.28), Color(1, 1, 1, 0.16), 8, 1, Vector4(9, 4, 9, 4)))
+	node.add_theme_stylebox_override("normal", UI.box(UiTheme.pick("overlay_strong", Color(0, 0, 0, 0.28)), UiTheme.pick("line", Color(1, 1, 1, 0.16)), 8, 1, Vector4(9, 4, 9, 4)))
 	node.add_theme_stylebox_override("focus", UI.box(Color(0, 0, 0, 0.32), Color(1, 1, 1, 0.3), 8, 1, Vector4(9, 4, 9, 4)))
-	node.add_theme_stylebox_override("read_only", UI.box(Color(0, 0, 0, 0.2), Color(1, 1, 1, 0.1), 8, 1, Vector4(9, 4, 9, 4)))
+	node.add_theme_stylebox_override("read_only", UI.box(Color(0, 0, 0, 0.2), UiTheme.pick("line", Color(1, 1, 1, 0.1)), 8, 1, Vector4(9, 4, 9, 4)))
 	node.add_theme_font_override("font", UI.font(400))
 	node.add_theme_font_size_override("font_size", 13)
 	node.add_theme_color_override("font_color", UI.WHITE)
@@ -732,9 +735,9 @@ func _area(value: String, placeholder: String, rows: int, on_change: Callable, m
 	node.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	node.custom_minimum_size.y = rows * 19 + 16
 	node.scroll_fit_content_height = false
-	node.add_theme_stylebox_override("normal", UI.box(Color(0, 0, 0, 0.28), Color(1, 1, 1, 0.16), 8, 1, Vector4(9, 7, 9, 7)))
+	node.add_theme_stylebox_override("normal", UI.box(UiTheme.pick("overlay_strong", Color(0, 0, 0, 0.28)), UiTheme.pick("line", Color(1, 1, 1, 0.16)), 8, 1, Vector4(9, 7, 9, 7)))
 	node.add_theme_stylebox_override("focus", UI.box(Color(0, 0, 0, 0.32), Color(1, 1, 1, 0.3), 8, 1, Vector4(9, 7, 9, 7)))
-	node.add_theme_stylebox_override("read_only", UI.box(Color(0, 0, 0, 0.22), Color(1, 1, 1, 0.1), 8, 1, Vector4(9, 7, 9, 7)))
+	node.add_theme_stylebox_override("read_only", UI.box(Color(0, 0, 0, 0.22), UiTheme.pick("line", Color(1, 1, 1, 0.1)), 8, 1, Vector4(9, 7, 9, 7)))
 	node.add_theme_font_override("font", UI.font(400))
 	node.add_theme_font_size_override("font_size", 13)
 	node.add_theme_color_override("font_color", UI.WHITE)
@@ -755,10 +758,10 @@ func _select(options: Array, value: String, placeholder: String, on_change: Call
 	node.custom_minimum_size.y = 32
 	node.fit_to_longest_item = false
 	node.clip_text = true
-	node.add_theme_stylebox_override("normal", UI.box(Color(0, 0, 0, 0.28), Color(1, 1, 1, 0.16), 8, 1, Vector4(9, 4, 9, 4)))
+	node.add_theme_stylebox_override("normal", UI.box(UiTheme.pick("overlay_strong", Color(0, 0, 0, 0.28)), UiTheme.pick("line", Color(1, 1, 1, 0.16)), 8, 1, Vector4(9, 4, 9, 4)))
 	node.add_theme_stylebox_override("hover", UI.box(Color(0, 0, 0, 0.32), Color(1, 1, 1, 0.24), 8, 1, Vector4(9, 4, 9, 4)))
 	node.add_theme_stylebox_override("pressed", UI.box(Color(0, 0, 0, 0.32), Color(1, 1, 1, 0.24), 8, 1, Vector4(9, 4, 9, 4)))
-	node.add_theme_stylebox_override("disabled", UI.box(Color(0, 0, 0, 0.2), Color(1, 1, 1, 0.1), 8, 1, Vector4(9, 4, 9, 4)))
+	node.add_theme_stylebox_override("disabled", UI.box(Color(0, 0, 0, 0.2), UiTheme.pick("line", Color(1, 1, 1, 0.1)), 8, 1, Vector4(9, 4, 9, 4)))
 	node.add_theme_font_override("font", UI.font(400))
 	node.add_theme_font_size_override("font_size", 13)
 	node.add_theme_color_override("font_color", UI.WHITE)
@@ -904,7 +907,7 @@ func _tool_meta(id: String) -> Dictionary:
 
 func _icon_tile(glyph: String, size := 32.0) -> PanelContainer:
 	var tile := PanelContainer.new()
-	tile.add_theme_stylebox_override("panel", UI.box(Color(1, 1, 1, 0.06), Color(1, 1, 1, 0.1), 8, 1))
+	tile.add_theme_stylebox_override("panel", UI.box(UiTheme.pick("overlay_card", Color(1, 1, 1, 0.06)), UiTheme.pick("line", Color(1, 1, 1, 0.1)), 8, 1))
 	tile.custom_minimum_size = Vector2(size, size)
 	tile.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	var label := UI.label(glyph, 14, Color("#f4f4f5"), 800)
@@ -916,7 +919,7 @@ func _icon_tile(glyph: String, size := 32.0) -> PanelContainer:
 
 func _render_home() -> void:
 	_header("Cheats", "Game Master, world editing, and simulation administration")
-	var intro: Array = _box(Color(1, 1, 1, 0.04), Color(1, 1, 1, 0.09), 11, Vector4(11, 10, 11, 10))
+	var intro: Array = _box(UiTheme.pick("overlay_card", Color(1, 1, 1, 0.04)), UiTheme.pick("line", Color(1, 1, 1, 0.09)), 11, Vector4(11, 10, 11, 10))
 	var intro_row := HBoxContainer.new()
 	intro_row.add_theme_constant_override("separation", 10)
 	intro_row.add_child(_icon_tile("⌘", 34.0))
@@ -975,8 +978,8 @@ func _tool_tile(glyph: String, title: String, subtitle: String, badge: String, a
 	if not badge.is_empty():
 		row.add_child(_pill_label(badge.to_upper(), Color(1, 1, 1, 0.52), Color(1, 1, 1, 0.06), Color(1, 1, 1, 0.1)))
 	tile.add_child(row)
-	var normal := UI.box(Color(1, 1, 1, 0.04), Color(1, 1, 1, 0.09), 10, 1, Vector4(11, 10, 11, 10))
-	var hover := UI.box(Color(1, 1, 1, 0.08), Color(1, 1, 1, 0.16), 10, 1, Vector4(11, 10, 11, 10))
+	var normal := UI.box(UiTheme.pick("overlay_card", Color(1, 1, 1, 0.04)), UiTheme.pick("line", Color(1, 1, 1, 0.09)), 10, 1, Vector4(11, 10, 11, 10))
+	var hover := UI.box(Color(1, 1, 1, 0.08), UiTheme.pick("line", Color(1, 1, 1, 0.16)), 10, 1, Vector4(11, 10, 11, 10))
 	_clickable(tile, normal, hover, func() -> void:
 		if not tile.has_meta("dimmed"):
 			action.call())
@@ -1059,7 +1062,7 @@ func _render_gm() -> void:
 		column.add_child(_note(str(option["title"]), 12, Color("#f4f4f5") if active else Color(1, 1, 1, 0.8), 600))
 		column.add_child(_note(str(option["description"]), 10, Color(1, 1, 1, 0.42)))
 		card.add_child(column)
-		var normal := UI.box(Color(0, 0, 0, 0.42) if active else Color(1, 1, 1, 0.04), Color(1, 1, 1, 0.28) if active else Color(1, 1, 1, 0.1), 8, 1, Vector4(9, 9, 9, 9))
+		var normal := UI.box(Color(0, 0, 0, 0.42) if active else UiTheme.pick("overlay_card", Color(1, 1, 1, 0.04)), UiTheme.pick("line", Color(1, 1, 1, 0.28)) if active else UiTheme.pick("line", Color(1, 1, 1, 0.1)), 8, 1, Vector4(9, 9, 9, 9))
 		var hover := UI.box(Color(0, 0, 0, 0.42) if active else Color(1, 1, 1, 0.08), Color(1, 1, 1, 0.3), 8, 1, Vector4(9, 9, 9, 9))
 		_clickable(card, normal, hover, func() -> void:
 			if _busy:
@@ -1187,7 +1190,7 @@ func _gm_preview_box(view: Dictionary) -> Control:
 		column.add_child(_field_label("Authored events", 11))
 		for event_entry in events:
 			var event: Dictionary = event_entry
-			var card: Array = _box(Color(1, 1, 1, 0.04), Color(1, 1, 1, 0.08), 8, Vector4(9, 8, 9, 8), 4)
+			var card: Array = _box(UiTheme.pick("overlay_card", Color(1, 1, 1, 0.04)), Color(1, 1, 1, 0.08), 8, Vector4(9, 8, 9, 8), 4)
 			var inner: VBoxContainer = card[1]
 			inner.add_child(UI.label(str(event.get("heading", "")), 10, Color(147 / 255.0, 197 / 255.0, 253 / 255.0, 0.82)))
 			var badges := HFlowContainer.new()
@@ -1328,7 +1331,7 @@ func _render_reminders() -> void:
 	for entry_value in reminders:
 		var entry: Dictionary = entry_value
 		var id := str(entry.get("id", ""))
-		var card: Array = _box(Color(1, 1, 1, 0.04), Color(1, 1, 1, 0.08), 8, Vector4(9, 8, 9, 8), 5)
+		var card: Array = _box(UiTheme.pick("overlay_card", Color(1, 1, 1, 0.04)), Color(1, 1, 1, 0.08), 8, Vector4(9, 8, 9, 8), 5)
 		var card_column: VBoxContainer = card[1]
 		if editing == id:
 			card_column.add_child(_area(_sv("rem_edit_text"), "", 3, func(text: String) -> void: _s["rem_edit_text"] = text, max_chars))
@@ -1389,7 +1392,7 @@ func _render_reminders() -> void:
 		told_column.add_child(_note("Nothing has been changed by hand this round.", 11))
 	for change_value in pending:
 		var change: Dictionary = change_value
-		var card: Array = _box(Color(1, 1, 1, 0.04), Color(1, 1, 1, 0.08), 8, Vector4(9, 8, 9, 8), 2)
+		var card: Array = _box(UiTheme.pick("overlay_card", Color(1, 1, 1, 0.04)), Color(1, 1, 1, 0.08), 8, Vector4(9, 8, 9, 8), 2)
 		(card[1] as VBoxContainer).add_child(_rich("[b][color=#e4e4e7]%s[/color][/b]  %s" % [_esc(str(change.get("kind", "")).to_upper()), _esc(str(change.get("summary", "")))], 11, UI.WHITE))
 		told_column.add_child(card[0])
 	_body.add_child(told[0])
@@ -1411,7 +1414,7 @@ func _render_rollback() -> void:
 		var point: Dictionary = points[index]
 		var id := str(point.get("id", ""))
 		var date := str(point.get("fromDate", ""))
-		var card: Array = _box(Color(1, 1, 1, 0.04), Color(1, 1, 1, 0.08), 8, Vector4(9, 8, 9, 8))
+		var card: Array = _box(UiTheme.pick("overlay_card", Color(1, 1, 1, 0.04)), Color(1, 1, 1, 0.08), 8, Vector4(9, 8, 9, 8))
 		var row := HBoxContainer.new()
 		row.add_theme_constant_override("separation", 6)
 		var text := VBoxContainer.new()
@@ -1481,7 +1484,7 @@ func _render_difficulty() -> void:
 			current_meta = level
 	if current_meta.is_empty() and levels.size() > 2:
 		current_meta = levels[2]
-	var info: Array = _box(Color(1, 1, 1, 0.06), Color(1, 1, 1, 0.21), 9, Vector4(11, 9, 11, 9), 4)
+	var info: Array = _box(UiTheme.pick("overlay_card", Color(1, 1, 1, 0.06)), Color(1, 1, 1, 0.21), 9, Vector4(11, 9, 11, 9), 4)
 	var info_column: VBoxContainer = info[1]
 	info_column.add_child(UI.label("HOW THINGS GO FOR YOU", 11, Color("#f4f4f5"), 700))
 	info_column.add_child(_note("Difficulty decides how things tend to go for you. On the easy levels your orders usually succeed and luck breaks your way; on Medium the world is realistic; on the hard levels your orders fall short and luck breaks against you. At every level each outcome has a cause, and what you order is always attempted.", 11, Color(1, 1, 1, 0.72)))
@@ -1520,8 +1523,8 @@ func _render_difficulty() -> void:
 		column.add_child(top)
 		column.add_child(_note(str(level.get("description", "")), 9, Color(1, 1, 1, 0.58)))
 		card.add_child(column)
-		var normal := UI.box(Color(0, 0, 0, 0.42) if active else Color(1, 1, 1, 0.05), Color(1, 1, 1, 0.28) if active else Color(1, 1, 1, 0.1), 8, 1, Vector4(10, 9, 10, 9))
-		var hover := UI.box(Color(0, 0, 0, 0.42) if active else Color(1, 1, 1, 0.09), Color(1, 1, 1, 0.3), 8, 1, Vector4(10, 9, 10, 9))
+		var normal := UI.box(Color(0, 0, 0, 0.42) if active else Color(1, 1, 1, 0.05), UiTheme.pick("line", Color(1, 1, 1, 0.28)) if active else UiTheme.pick("line", Color(1, 1, 1, 0.1)), 8, 1, Vector4(10, 9, 10, 9))
+		var hover := UI.box(Color(0, 0, 0, 0.42) if active else UiTheme.pick("line", Color(1, 1, 1, 0.09)), Color(1, 1, 1, 0.3), 8, 1, Vector4(10, 9, 10, 9))
 		_clickable(card, normal, hover, func() -> void:
 			if _busy:
 				return
@@ -1550,7 +1553,7 @@ func _render_difficulty() -> void:
 		profile_grid.add_theme_constant_override("v_separation", 5)
 		var profile: Dictionary = current_meta.get("profile", {})
 		for pair in [["Player leniency", "playerLeniency"], ["NPC competence", "npcCompetence"], ["Consequence pressure", "consequencePressure"], ["Diplomatic firmness", "diplomaticFirmness"]]:
-			var cell: Array = _box(Color(1, 1, 1, 0.04), Color(1, 1, 1, 0.07), 7, Vector4(7, 6, 7, 6), 1)
+			var cell: Array = _box(UiTheme.pick("overlay_card", Color(1, 1, 1, 0.04)), Color(1, 1, 1, 0.07), 7, Vector4(7, 6, 7, 6), 1)
 			(cell[1] as VBoxContainer).add_child(UI.label(str(pair[0]).to_upper(), 8, Color(1, 1, 1, 0.4), 800, "Arial", 1))
 			(cell[1] as VBoxContainer).add_child(UI.label(str(profile.get(pair[1], "")), 11, Color(1, 1, 1, 0.82), 700))
 			profile_grid.add_child(cell[0])
@@ -1648,7 +1651,7 @@ func _valid_hex(text: String) -> bool:
 
 func _render_country_editor() -> void:
 	_header(str(_tool_meta(_tool).get("title", "")), "Identity, Political World, national baseline, and present-state administration")
-	var banner: Array = _box(Color(1, 1, 1, 0.05), Color(1, 1, 1, 0.12), 11, Vector4(11, 10, 11, 10), 3)
+	var banner: Array = _box(Color(1, 1, 1, 0.05), UiTheme.pick("line", Color(1, 1, 1, 0.12)), 11, Vector4(11, 10, 11, 10), 3)
 	(banner[1] as VBoxContainer).add_child(UI.label("CANONICAL NOW · EVOLVABLE LATER", 10, Color("#f4f4f5"), 900, "Arial", 1))
 	(banner[1] as VBoxContainer).add_child(_note("A manual edit sets the country's current baseline. Later wars, annexations, losses, growth, crises, and other world events remain free to change it.", 11, Color(1, 1, 1, 0.52)))
 	_body.add_child(banner[0])
@@ -1849,7 +1852,7 @@ func _render_country_form(target: String) -> void:
 		derived.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		derived.add_child(UI.label("GDP / CAPITA · DERIVED", 10, Color(1, 1, 1, 0.75), 700, "Arial", 1))
 		var derived_box := PanelContainer.new()
-		derived_box.add_theme_stylebox_override("panel", UI.box(Color(0, 0, 0, 0.28), Color(1, 1, 1, 0.16), 8, 1, Vector4(9, 7, 9, 7)))
+		derived_box.add_theme_stylebox_override("panel", UI.box(UiTheme.pick("overlay_strong", Color(0, 0, 0, 0.28)), UiTheme.pick("line", Color(1, 1, 1, 0.16)), 8, 1, Vector4(9, 7, 9, 7)))
 		derived_box.add_child(per_capita_label)
 		derived.add_child(derived_box)
 		grid.add_child(derived)
@@ -2081,7 +2084,7 @@ func _render_regions() -> void:
 		claims_column.add_child(_note("No active claimants.", 11, Color(1, 1, 1, 0.42)))
 	for claimant_value in claimants:
 		var claimant := str(claimant_value)
-		var row_box: Array = _box(Color(1, 1, 1, 0.08), Color(1, 1, 1, 0.1), 8, Vector4(8, 5, 8, 5))
+		var row_box: Array = _box(Color(1, 1, 1, 0.08), UiTheme.pick("line", Color(1, 1, 1, 0.1)), 8, Vector4(8, 5, 8, 5))
 		var row := HBoxContainer.new()
 		var claimant_label := UI.label(_name_of(claimant), 12, Color("#f4f4f5"), 700)
 		claimant_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -2127,7 +2130,7 @@ func _render_regions() -> void:
 				var entry: Dictionary = entry_value
 				if str(entry.get("name", "")) == group:
 					color = Color(str(entry.get("color", "#888888")))
-			var group_box: Array = _box(Color(1, 1, 1, 0.08), Color(1, 1, 1, 0.1), 8, Vector4(8, 5, 8, 5))
+			var group_box: Array = _box(Color(1, 1, 1, 0.08), UiTheme.pick("line", Color(1, 1, 1, 0.1)), 8, Vector4(8, 5, 8, 5))
 			var row := HBoxContainer.new()
 			row.add_theme_constant_override("separation", 6)
 			row.add_child(_swatch(color, 12))
@@ -2250,7 +2253,7 @@ func _render_groups() -> void:
 			row.add_child(label)
 			row.add_child(UI.label("1 region" if count == 1 else "%d regions" % count, 10, Color(1, 1, 1, 0.45)))
 			row_panel.add_child(row)
-			_clickable(row_panel, UI.box(Color(1, 1, 1, 0.06), Color(1, 1, 1, 0.12), 8, 1, Vector4(11, 8, 11, 8)), UI.box(Color(1, 1, 1, 0.1), Color(1, 1, 1, 0.2), 8, 1, Vector4(11, 8, 11, 8)), func() -> void:
+			_clickable(row_panel, UI.box(UiTheme.pick("overlay_card", Color(1, 1, 1, 0.06)), UiTheme.pick("line", Color(1, 1, 1, 0.12)), 8, 1, Vector4(11, 8, 11, 8)), UI.box(UiTheme.pick("line", Color(1, 1, 1, 0.1)), Color(1, 1, 1, 0.2), 8, 1, Vector4(11, 8, 11, 8)), func() -> void:
 				_s["gr_selected"] = name
 				_s["gr_form"] = {"name": name, "description": str(group.get("description", "")), "color": str(group.get("color", palette[0]))}
 				_s["gr_armed"] = false
@@ -2444,7 +2447,7 @@ func _render_puppet_list(data: Dictionary) -> void:
 		column.add_child(_note(str(row.get("title", "")), 13, UI.WHITE, 750))
 		column.add_child(_note(str(row.get("meta", "")), 10, Color(1, 1, 1, 0.5), 500))
 		panel.add_child(column)
-		_clickable(panel, UI.box(Color(1, 1, 1, 0.06), Color(1, 1, 1, 0.12), 8, 1, Vector4(11, 8, 11, 8)), UI.box(Color(1, 1, 1, 0.1), Color(1, 1, 1, 0.2), 8, 1, Vector4(11, 8, 11, 8)), func() -> void:
+		_clickable(panel, UI.box(UiTheme.pick("overlay_card", Color(1, 1, 1, 0.06)), UiTheme.pick("line", Color(1, 1, 1, 0.12)), 8, 1, Vector4(11, 8, 11, 8)), UI.box(UiTheme.pick("line", Color(1, 1, 1, 0.1)), Color(1, 1, 1, 0.2), 8, 1, Vector4(11, 8, 11, 8)), func() -> void:
 			_s["pp_editing"] = _pp_key(row)
 			_s["pp_form"] = {"overlord": str(row.get("overlord", "")), "puppet": str(row.get("puppet", "")), "kind": str(row.get("kind", "client")), "secrecy": "covert" if str(row.get("secrecy", "")) == "covert" else "open", "loyalty": clampi(int(row.get("loyalty", 50)), 0, 100)}
 			_s["pp_armed"] = ""
@@ -3040,7 +3043,7 @@ func _mono_box(text: String, max_height: float) -> TextEdit:
 	node.editable = false
 	node.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
 	node.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	var style := UI.box(Color(0, 0, 0, 0.3), Color(1, 1, 1, 0.1), 8, 1, Vector4(9, 9, 9, 9))
+	var style := UI.box(Color(0, 0, 0, 0.3), UiTheme.pick("line", Color(1, 1, 1, 0.1)), 8, 1, Vector4(9, 9, 9, 9))
 	for state in ["normal", "focus", "read_only"]:
 		node.add_theme_stylebox_override(state, style)
 	node.add_theme_font_override("font", UI.font(400, "Consolas"))
@@ -3121,7 +3124,7 @@ func _render_feature_editor() -> void:
 	var custom_cities := bool(data.get("customCities", false))
 	var default_tab := "runtime" if (not markers.is_empty() or not custom_cities) else "cities"
 	var tab := _sv("fe_tab", default_tab)
-	var intro: Array = _box(Color(1, 1, 1, 0.04), Color(1, 1, 1, 0.1), 10, Vector4(10, 9, 10, 9))
+	var intro: Array = _box(UiTheme.pick("overlay_card", Color(1, 1, 1, 0.04)), UiTheme.pick("line", Color(1, 1, 1, 0.1)), 10, Vector4(10, 9, 10, 9))
 	(intro[1] as VBoxContainer).add_child(_rich("[b][color=#f4f4f5]Two native layers, one editor.[/color][/b] Runtime features live in the canonical world and coexist with cities. Scenario cities are the authored historical city set used when this scenario has custom cities enabled.", 11, Color(1, 1, 1, 0.55)))
 	_body.add_child(intro[0])
 	_body.add_child(_gap(9))
@@ -3220,7 +3223,7 @@ func _fe_marker_card(marker: Dictionary) -> Control:
 	var key := "marker:" + id
 	var editing := _sv("fe_editing") == key
 	var name := str(marker.get("name", ""))
-	var card: Array = _box(Color(1, 1, 1, 0.04), Color(0, 0, 0, 0.5) if editing else Color(1, 1, 1, 0.09), 10, Vector4(10, 9, 10, 9), 6)
+	var card: Array = _box(UiTheme.pick("overlay_card", Color(1, 1, 1, 0.04)), Color(0, 0, 0, 0.5) if editing else UiTheme.pick("line", Color(1, 1, 1, 0.09)), 10, Vector4(10, 9, 10, 9), 6)
 	var column: VBoxContainer = card[1]
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 6)
@@ -3390,7 +3393,7 @@ func _fe_city_card(city: Dictionary) -> Control:
 	var editing := _sv("fe_editing") == key
 	var name := str(city.get("name", ""))
 	var tier := int(city.get("tier", 2))
-	var card: Array = _box(Color(1, 1, 1, 0.04), Color(1, 1, 1, 0.28) if editing else Color(1, 1, 1, 0.09), 10, Vector4(10, 9, 10, 9), 6)
+	var card: Array = _box(UiTheme.pick("overlay_card", Color(1, 1, 1, 0.04)), UiTheme.pick("line", Color(1, 1, 1, 0.28)) if editing else UiTheme.pick("line", Color(1, 1, 1, 0.09)), 10, Vector4(10, 9, 10, 9), 6)
 	var column: VBoxContainer = card[1]
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 6)
@@ -3621,7 +3624,7 @@ func _render_clear_features() -> void:
 	var custom := bool(data.get("customCities", false))
 	var grid := _two_columns()
 	for pair in [["Runtime features", str(marker_count)], ["Scenario cities", str(city_count) if custom else "Stock"]]:
-		var cell: Array = _box(Color(1, 1, 1, 0.04), Color(1, 1, 1, 0.08), 9, Vector4(9, 9, 9, 9), 2)
+		var cell: Array = _box(UiTheme.pick("overlay_card", Color(1, 1, 1, 0.04)), Color(1, 1, 1, 0.08), 9, Vector4(9, 9, 9, 9), 2)
 		(cell[1] as VBoxContainer).add_child(UI.label(str(pair[0]).to_upper(), 10, Color(1, 1, 1, 0.42), 800))
 		(cell[1] as VBoxContainer).add_child(UI.label(str(pair[1]), 16, UI.WHITE, 850))
 		grid.add_child(cell[0])
@@ -3793,7 +3796,7 @@ func _ev_form_editor(form_key: String, parent: VBoxContainer, with_date_hint: bo
 func _render_events() -> void:
 	_meta_header()
 	var data := _sd("ev")
-	var intro: Array = _box(Color(1, 1, 1, 0.045), Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.2), 10, Vector4(10, 9, 10, 9))
+	var intro: Array = _box(UiTheme.pick("overlay_card", Color(1, 1, 1, 0.045)), Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.2), 10, Vector4(10, 9, 10, 9))
 	(intro[1] as VBoxContainer).add_child(_rich("[b][color=#dbeafe]Canonical history editor.[/color][/b] Text, optional quotations, and metadata edits immediately change the persistent timeline. Already-applied state effects are deliberately not replayed, reverted, or reinterpreted here.", 11, Color(219 / 255.0, 234 / 255.0, 254 / 255.0, 0.78)))
 	_body.add_child(intro[0])
 	_body.add_child(_gap(9))
@@ -3920,7 +3923,7 @@ func _ev_card(row_value: Variant) -> Control:
 	var row: Dictionary = row_value
 	var index := int(row.get("index", -1))
 	var editing := int(_s.get("ev_editing", -1)) == index
-	var card: Array = _box(Color(0, 0, 0, 0.22), Color(1, 1, 1, 0.23) if editing else Color(1, 1, 1, 0.1), 9, Vector4(9, 9, 9, 9), 6)
+	var card: Array = _box(Color(0, 0, 0, 0.22), Color(1, 1, 1, 0.23) if editing else UiTheme.pick("line", Color(1, 1, 1, 0.1)), 9, Vector4(9, 9, 9, 9), 6)
 	var column: VBoxContainer = card[1]
 	var head := HBoxContainer.new()
 	head.add_theme_constant_override("separation", 6)
@@ -4190,7 +4193,7 @@ func _ie_fill_list() -> void:
 	for row_value in rows:
 		var row: Dictionary = row_value
 		var revealing := bool(row.get("revealing", false))
-		var card: Array = _box(Color(1, 1, 1, 0.04), Color(1, 1, 1, 0.08), 8, Vector4(9, 8, 9, 8), 5)
+		var card: Array = _box(UiTheme.pick("overlay_card", Color(1, 1, 1, 0.04)), Color(1, 1, 1, 0.08), 8, Vector4(9, 8, 9, 8), 5)
 		var column: VBoxContainer = card[1]
 		column.add_child(_note(str(row.get("title", "")), 12, UI.WHITE, 700))
 		var line := HBoxContainer.new()
@@ -4314,7 +4317,7 @@ func _render_history() -> void:
 		var inner := _details("%d pass%s so far — what each one folded" % [passes.size(), "" if passes.size() == 1 else "es"], "hd_passes", false, holder, 12, 400)
 		for pass_value in passes:
 			var entry: Dictionary = pass_value
-			var card: Array = _box(Color(1, 1, 1, 0.04), Color(1, 1, 1, 0.08), 8, Vector4(9, 8, 9, 8), 4)
+			var card: Array = _box(UiTheme.pick("overlay_card", Color(1, 1, 1, 0.04)), Color(1, 1, 1, 0.08), 8, Vector4(9, 8, 9, 8), 4)
 			(card[1] as VBoxContainer).add_child(UI.label(str(entry.get("meta", "")), 11, Color(1, 1, 1, 0.45)))
 			(card[1] as VBoxContainer).add_child(_note(str(entry.get("summary", "")), 12, Color(1, 1, 1, 0.78)))
 			inner.add_child(card[0])
@@ -4338,7 +4341,7 @@ class CheatsDateField extends PanelContainer:
 	func _init(initial := "") -> void:
 		custom_minimum_size.y = 32
 		size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		add_theme_stylebox_override("panel", UI.box(Color(0, 0, 0, 0.28), Color(1, 1, 1, 0.16), 8, 1, Vector4(9, 0, 6, 0)))
+		add_theme_stylebox_override("panel", UI.box(UiTheme.pick("overlay_strong", Color(0, 0, 0, 0.28)), UiTheme.pick("line", Color(1, 1, 1, 0.16)), 8, 1, Vector4(9, 0, 6, 0)))
 		var row := HBoxContainer.new()
 		row.add_theme_constant_override("separation", 0)
 		add_child(row)
@@ -4506,7 +4509,7 @@ class CheatsDateField extends PanelContainer:
 
 	func _build_popup() -> void:
 		_popup = PopupPanel.new()
-		_popup.add_theme_stylebox_override("panel", UI.box(Color(32 / 255.0, 33 / 255.0, 36 / 255.0, 0.99), Color(1, 1, 1, 0.16), 6, 1, Vector4(8, 8, 8, 8)))
+		_popup.add_theme_stylebox_override("panel", UI.box(Color(32 / 255.0, 33 / 255.0, 36 / 255.0, 0.99), UiTheme.pick("line", Color(1, 1, 1, 0.16)), 6, 1, Vector4(8, 8, 8, 8)))
 		add_child(_popup)
 		var column := VBoxContainer.new()
 		column.add_theme_constant_override("separation", 6)
@@ -4592,7 +4595,7 @@ class CheatsDateField extends PanelContainer:
 			var picked := value == chosen + ("%02d" % day)
 			var is_today := int(now["year"]) == _shown_year and int(now["month"]) == _shown_month and int(now["day"]) == day
 			var rest := UI.box(Color(138 / 255.0, 180 / 255.0, 248 / 255.0, 1.0) if picked else Color(0, 0, 0, 0), Color(138 / 255.0, 180 / 255.0, 248 / 255.0, 0.9) if is_today and not picked else Color(0, 0, 0, 0), 4, 1 if is_today else 0)
-			var lit := UI.box(Color(138 / 255.0, 180 / 255.0, 248 / 255.0, 1.0) if picked else Color(1, 1, 1, 0.1), Color(0, 0, 0, 0), 4, 0)
+			var lit := UI.box(Color(138 / 255.0, 180 / 255.0, 248 / 255.0, 1.0) if picked else UiTheme.pick("line", Color(1, 1, 1, 0.1)), Color(0, 0, 0, 0), 4, 0)
 			for slot in ["normal", "focus", "disabled"]:
 				cell.add_theme_stylebox_override(slot, rest)
 			for slot in ["hover", "pressed", "hover_pressed"]:

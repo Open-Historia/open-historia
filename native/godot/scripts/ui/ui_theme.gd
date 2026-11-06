@@ -37,6 +37,12 @@ static func pick(token: String, fallback: Color) -> Color:
 	return _tokens[token]
 
 
+static func accented(fallback: Color) -> Color:
+	if preset == DEFAULT or not _tokens.has("accent"):
+		return fallback
+	return Color(_tokens["accent"] as Color, fallback.a)
+
+
 static func preset_named(id: String) -> Dictionary:
 	for item in PRESETS:
 		if str(item["id"]) == id:

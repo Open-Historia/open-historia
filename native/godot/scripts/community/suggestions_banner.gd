@@ -16,7 +16,7 @@ var _panel: PanelContainer
 func _init() -> void:
 	add_theme_constant_override("margin_bottom", 16)
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_panel = CommunityKit.panel(BANNER_BG, BANNER_BORDER, 16, Vector4(14, 11, 14, 11))
+	_panel = CommunityKit.panel(UiTheme.accented(BANNER_BG), UiTheme.accented(BANNER_BORDER), 16, Vector4(14, 11, 14, 11))
 	add_child(_panel)
 	visible = false
 
@@ -67,8 +67,8 @@ static func count_badge(count: int) -> Button:
 	if count <= 0:
 		return null
 	var badge := CommunityKit.pill_button("💬 1 suggestion" if count == 1 else "💬 %d suggestions" % count, {
-		"bg": BADGE_BG,
-		"border": BADGE_BORDER,
+		"bg": UiTheme.accented(BADGE_BG),
+		"border": UiTheme.accented(BADGE_BORDER),
 		"ink": Color(1, 1, 1),
 		"size": 11,
 		"weight": 700,

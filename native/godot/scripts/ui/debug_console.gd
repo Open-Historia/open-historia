@@ -49,6 +49,9 @@ var _body: Control
 
 
 func _ready() -> void:
+	UiTheme.events().changed.connect(func() -> void:
+		if _open:
+			_render())
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	visible = false
@@ -163,7 +166,7 @@ func _button(text: String, on_press: Callable, primary := false, tooltip := "") 
 	node.focus_mode = Control.FOCUS_NONE
 	node.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	node.tooltip_text = tooltip
-	var bg := ACCENT if primary else Color("#262628")
+	var bg := ACCENT if primary else UiTheme.pick("raised", Color("#262628"))
 	var border := ACCENT if primary else BORDER
 	var normal := UI.box(bg, border, 8, 1, Vector4(11.2, 5.6, 11.2, 5.6))
 	var hover := UI.box(bg.lightened(0.08), border.lightened(0.1), 8, 1, Vector4(11.2, 5.6, 11.2, 5.6))
@@ -323,7 +326,7 @@ func _card_tile(title: String, value: String, sub := "", accent := false) -> Con
 	var tile := PanelContainer.new()
 	tile.custom_minimum_size.x = 150
 	tile.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	tile.add_theme_stylebox_override("panel", UI.box(Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.06) if accent else RAISED, Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.5) if accent else BORDER, 10, 1, Vector4(12.8, 12.8, 12.8, 12.8)))
+	tile.add_theme_stylebox_override("panel", UI.box(UiTheme.pick("active", Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.06)) if accent else RAISED, Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.5) if accent else BORDER, 10, 1, Vector4(12.8, 12.8, 12.8, 12.8)))
 	var column := VBoxContainer.new()
 	column.add_theme_constant_override("separation", 4)
 	column.add_child(_label(title.to_upper(), 10, MUTED, 800, false, 1))
@@ -501,8 +504,8 @@ func _generation_row(record: Dictionary) -> Control:
 	button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	button.custom_minimum_size.y = 30
 	button.clip_contents = true
-	var normal := UI.box(Color(0, 0, 0, 0.42) if selected else Color(0, 0, 0, 0), Color(0, 0, 0, 0), 0, 0)
-	var hover := UI.box(Color(0, 0, 0, 0.42) if selected else Color(1, 1, 1, 0.03), Color(0, 0, 0, 0), 0, 0)
+	var normal := UI.box(UiTheme.pick("active", Color(0, 0, 0, 0.42)) if selected else Color(0, 0, 0, 0), Color(0, 0, 0, 0), 0, 0)
+	var hover := UI.box(UiTheme.pick("active", Color(0, 0, 0, 0.42)) if selected else Color(1, 1, 1, 0.03), Color(0, 0, 0, 0), 0, 0)
 	for state in ["normal", "focus"]:
 		button.add_theme_stylebox_override(state, normal)
 	for state in ["hover", "pressed", "hover_pressed"]:
@@ -666,7 +669,7 @@ func _rating(rating: int) -> Control:
 		button.focus_mode = Control.FOCUS_NONE
 		button.tooltip_text = "Rate %d/10" % value
 		button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-		var normal := UI.box(Color(210 / 255.0, 153 / 255.0, 34 / 255.0, 0.15) if on else Color("#262628"), BORDER, 8, 1, Vector4(5.6, 2.4, 5.6, 2.4))
+		var normal := UI.box(Color(210 / 255.0, 153 / 255.0, 34 / 255.0, 0.15) if on else UiTheme.pick("raised", Color("#262628")), BORDER, 8, 1, Vector4(5.6, 2.4, 5.6, 2.4))
 		for state in ["normal", "focus", "hover", "pressed", "hover_pressed"]:
 			button.add_theme_stylebox_override(state, normal)
 		button.add_theme_font_override("font", UI.font(700))
