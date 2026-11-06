@@ -54,6 +54,23 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // "add an toggle to do translation with your api (still must require downloading the translation model, this
+    // option exists if they are unhappy with the models quality)" (the owner, 2026-11-06): runtime/aiTranslation.js,
+    // Settings → General → Language.
+    id: "2026-11-translate-with-my-ai",
+    kind: "minor",
+    date: "2026-11-06",
+    channel: "beta",
+    banners: [
+      {
+        title: "Translate with your own AI",
+        items: [
+          "Languages with a translation model have a new switch in Settings → General → Language: Translate with my AI. Turned on, your AI provider translates what the model on this device would, in a few large requests that count against your AI requests. The model is still downloaded, and takes over whenever your AI does not answer.",
+        ],
+      },
+    ],
+  },
+  {
     // A player's report (2026-11-06, 1836 France): every time skip fell back to the stand-in events, "Storyline
     // storyline-fr-franchise-1836 lowers pressure by 47 point(s), but its linked event(s) contain escalation/failure
     // cues": reforms that passed over a bloc that "rejects" them. AI/nativeWorldDirector.js holdUnjustifiedPressureDrops
