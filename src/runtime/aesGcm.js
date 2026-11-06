@@ -1,7 +1,8 @@
 /*! Open Historia — AES-GCM without WebCrypto © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // A pure-JS AES-GCM for spySeal.js, used only where crypto.subtle is missing.
 //
-// Why: the Android app's WebView is served from http://app.paxhistoria, which is
+// Why: the Android app's WebView is served over plain http (http:// + the
+// hostname in mobile/capacitor.config.json, its androidScheme), which is
 // not a secure context, so Chromium withholds crypto.subtle there (sha256.js has
 // the same story for hashing). Spy intercepts are sealed with AES-GCM; without
 // this, every agent report on the phone spent its AI request and then failed to

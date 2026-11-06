@@ -1,4 +1,4 @@
-/*! Open Historia — language setting & top-50 language catalog © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
+/*! Open Historia — language setting & language catalog © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 
 // UI language: chosen in Settings, stored on the SERVER (shared by every
 // device that plays through it — desktop browser and the Android app see the
@@ -15,8 +15,9 @@ export const DEFAULT_LANGUAGE = "en";
 // Device-local: it only steers prompts.
 const CHAT_STORAGE_KEY = "ai_chat_language";
 
-// The 50 most spoken languages, hand-curated: recognizable English name
-// first, endonym after. A full ISO dump read like random letters here.
+// The 50 most spoken languages, hand-curated, and the few more a translation
+// model covers: recognizable English name first, endonym after. A full ISO
+// dump read like random letters here.
 export const LANGUAGES = [
   { code: "en", name: "English", native: "English" },
   { code: "zh", name: "Chinese (Mandarin)", native: "中文" },
@@ -68,6 +69,14 @@ export const LANGUAGES = [
   { code: "yo", name: "Yoruba", native: "Yorùbá" },
   { code: "fi", name: "Finnish", native: "Suomi" },
   { code: "da", name: "Danish", native: "Dansk" },
+  // Not among the fifty, but a translation model on the device covers them
+  // (translationModels.js), so the interface can be played in them.
+  { code: "lv", name: "Latvian", native: "Latviešu" },
+  { code: "lt", name: "Lithuanian", native: "Lietuvių" },
+  { code: "sk", name: "Slovak", native: "Slovenčina" },
+  { code: "et", name: "Estonian", native: "Eesti" },
+  { code: "ga", name: "Irish", native: "Gaeilge" },
+  { code: "mt", name: "Maltese", native: "Malti" },
 ];
 
 const RTL_LANGUAGES = new Set(["ar", "he", "fa", "ur"]);

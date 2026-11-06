@@ -1010,6 +1010,11 @@ const impactsSchema = {
         + "changed hands is regionTransfers.",
       items: regionClaimSchema,
     },
+    strikes: {
+      type: "array",
+      description: "Missiles and bombing runs this event tells of, drawn on the map, one line each: side~weapon~from~target~count~shot down.",
+      items: { type: "string" },
+    },
     groupOps: {
       type: "array",
       description:
@@ -4569,6 +4574,7 @@ const PAYLOAD_IMPACT_ARRAYS = [
   "regionTransfers",
   "regionControlOps",
   "regionClaims",
+  "strikes",
   "groupOps",
   "unitOps",
   "markerOps",
@@ -4621,6 +4627,7 @@ const normalizeEventShape = (entry) => {
       regionTransfers: ["transfers", "territoryChanges"],
       regionControlOps: ["controlOps", "controlChanges"],
       regionClaims: ["claims"],
+      strikes: ["strikeOps", "missileStrikes"],
       groupOps: ["groups", "groupOperations"],
       polityChanges: ["polities", "countryChanges"],
       unitOps: ["units", "unitOperations"],

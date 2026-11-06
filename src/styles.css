@@ -453,6 +453,14 @@ select option:disabled {
   color: #8b8b93 !important;
 }
 
+/* While a list scrolls under a still cursor, what passes under it takes no
+   hover (runtime/scrollHoverFreeze.js): each row and button lit up and eased
+   back out as it went by, a smear that trailed the scroll. The list itself
+   still takes the wheel. */
+[data-oh-scrolling] * {
+  pointer-events: none !important;
+}
+
 button,
 [role="button"],
 a,

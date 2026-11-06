@@ -989,11 +989,11 @@ const Social = ({ hovered, isOpen, onToggle, setHovered }) => {
         style={{
           alignItems: "center",
           background: isOpen
-            ? "rgba(59,130,246,0.16)"
+            ? "var(--oh-ui-glass-active, rgba(59,130,246,0.16))"
             : hovered
-              ? "rgba(255,255,255,0.08)"
-              : "rgba(255,255,255,0.04)",
-          border: isOpen ? "1px solid rgba(96,165,250,0.34)" : "1px solid rgba(255,255,255,0.1)",
+              ? "var(--oh-ui-glass-hover, rgba(255,255,255,0.08))"
+              : "var(--oh-ui-glass-chip, rgba(255,255,255,0.04))",
+          border: isOpen ? "1px solid var(--oh-ui-glass-active-line, rgba(96,165,250,0.34))" : "1px solid var(--oh-ui-glass-line, rgba(255,255,255,0.1))",
           borderRadius: "10px",
           boxShadow: "inset 0 1px 0 rgba(255,255,255,0.05)",
           color: "white",

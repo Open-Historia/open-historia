@@ -18,8 +18,8 @@ import StorageProblemNotice from "./storageProblemNotice.jsx";
 import AdvisorRecipients from "./AdvisorRecipients.jsx";
 import AdvisorMic from "./AdvisorMic.jsx";
 import { describeReplyProblems, extractFencedJson, looksLikeProjectOps } from "./advisorBlocks.js";
-import { actionProposalsFromReply, recordAdvisorActionReceipt } from "./advisorActionReview.js";
-import { approveAdvisorAction } from "./advisorActionApproval.js";
+import { actionProposalsFromReply, advisorActionCardState, mergeAdvisorActionReceiptIntoView } from "./advisorActionReview.js";
+import { approveAdvisorAction, cancelApprovedAdvisorAction } from "./advisorActionApproval.js";
 import { applyAdvisorProjectProposal, canAdvisorApplyProjectOps } from "./advisorProjectRouting.js";
 import { sentLetterDate, splitAtBlockquotes } from "./advisorDrafts.js";
 import { repeatedOrder } from "../AI/playerFocus.js";
@@ -290,32 +290,77 @@ const AdvisorActionsCard = ({ items, onOpenActions }) => {
 // A proposed Action is NOT yet on the board. Only a human Proceed click may
 // queue it. Each card owns its transient error/busy state; accepted receipts
 // are stored on the originating message and survive campaign reload.
-const AdvisorActionProposalCard = ({ proposal, receipt, onDiscuss, onProceed, onOpenActions, disabled }) => {
+// The native Actions board, not an in-memory receipt, controls each card's
+// current state. Include targets of EDIT/REMOVE proposals too: those IDs need
+// not be advisor-generated, and a resolved target must block Proceed.
+const selectReviewedAdvisorActions = (actions) => {
+    const found = {};
+    for (const action of Array.isArray(actions) ? actions : []) {
+        if (typeof action?.id !== "string" || !action.id) continue;
+        found[action.id] = {
+            id: action.id, title: action.title, text: action.text,
+            kind: action.kind, source: action.source, status: action.status,
+        };
+    }
+    return found;
+};
+
+const AdvisorActionProposalCard = ({ proposal, receipt, queueAction, targetAction, onDiscuss, onProceed, onCancel, onOpenActions, disabled }) => {
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState("");
     const name = proposal.title || proposal.text || (proposal.operation === "remove" ? "Remove queued Action" : "Change queued Action");
     const label = proposal.operation === "remove" ? "Remove proposed Action"
         : proposal.operation === "edit" ? "Proposed Action change" : "Proposed Action";
-    const confirmed = !!receipt;
-    const proceed = async () => {
-        if (busy || disabled || confirmed || !onProceed) return;
+    const state = advisorActionCardState(proposal, receipt, queueAction, targetAction);
+    const queued = state === "queued";
+    const staleTarget = state === "target-unavailable" || state === "target-resolved";
+    const canProceed = state === "proposed" || (state === "cancelled" && proposal.operation === "create");
+    const canDiscuss = !["updated", "removed"].includes(state);
+    const statusLabel = {
+        queued: "Queued", cancelled: "Cancelled", resolved: "Resolved",
+        updated: "Updated", removed: "Removed", conflict: "Review Actions",
+        "no-longer-queued": "No longer queued", "target-unavailable": "Target unavailable",
+        "target-resolved": "Target resolved", proposed: "Proposed",
+    }[state] || "Proposed";
+
+    const doAction = async (handler, fallback) => {
+        if (busy || disabled || !handler) return false;
         setBusy(true);
         setError("");
         try {
-            const result = await onProceed();
-            if (!result?.ok) setError(result?.error || "The Action was not queued.");
+            const result = await handler();
+            if (!result?.ok) {
+                setError(result?.error || fallback);
+                return false;
+            }
+            return true;
         } catch (failure) {
-            setError(failure?.message || "The Action was not queued.");
+            setError(failure?.message || fallback);
+            return false;
         } finally {
             setBusy(false);
         }
     };
+
+    // Discuss still hands a prompt to the player's composer for review.
+    // If the proposal was already queued, cancel the canonical order FIRST.
+    // An unsuccessful cancellation must never leave a supposedly withdrawn
+    // Action executing on the next time skip.
+    const discuss = async () => {
+        if (busy || disabled || !onDiscuss) return;
+        if (queued) {
+            const cancelled = await doAction(onCancel, "The Action could not be removed from the queue.");
+            if (!cancelled) return;
+        }
+        onDiscuss(staleTarget);
+    };
+
     return (
         <div style={{ marginTop: "0.6rem", background: "rgba(255,255,255,0.035)", border: "1px solid rgba(255,255,255,0.2)", borderRadius: "9px", padding: "0.6rem 0.7rem" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.5rem" }}>
             <strong style={{ fontSize: "0.76rem" }}>📋 {label}</strong>
-            <span style={{ fontSize: "0.67rem", color: confirmed ? "#86efac" : "#e4e4e7" }}>
-                {confirmed ? (receipt.status === "queued" ? "Queued" : receipt.status === "updated" ? "Updated" : "Removed") : "Proposed"}
+            <span aria-live="polite" style={{ fontSize: "0.67rem", color: ["queued", "updated", "removed", "resolved"].includes(state) ? "#86efac" : "#e4e4e7" }}>
+                {statusLabel}
             </span>
         </div>
         <div style={{ fontSize: "0.78rem", fontWeight: 700, marginTop: "0.4rem" }} data-no-translate>{name}</div>
@@ -326,16 +371,22 @@ const AdvisorActionProposalCard = ({ proposal, receipt, onDiscuss, onProceed, on
             <div style={{ fontSize: "0.65rem", opacity: 0.55, marginTop: "0.3rem" }}>Existing Action: <span data-no-translate>{proposal.targetId}</span></div>
         )}
         <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.4rem", marginTop: "0.6rem", flexWrap: "wrap" }}>
-        {confirmed ? (
-            onOpenActions && <button type="button" onClick={onOpenActions} style={{ border: "1px solid rgba(255,255,255,0.22)", borderRadius: "7px", background: "transparent", color: "#e4e4e7", padding: "0.3rem 0.55rem", cursor: "pointer" }}>Open Actions</button>
-        ) : (
-            <>
-            <button type="button" disabled={busy || disabled} onClick={onDiscuss} style={{ border: "1px solid rgba(255,255,255,0.25)", borderRadius: "7px", background: "transparent", color: "#e4e4e7", padding: "0.3rem 0.55rem", cursor: busy || disabled ? "default" : "pointer" }}>Discuss</button>
-            <button type="button" disabled={busy || disabled} onClick={proceed} style={{ border: "1px solid rgba(147,197,253,0.6)", borderRadius: "7px", background: "rgba(59,130,246,0.22)", color: "#dbeafe", padding: "0.3rem 0.55rem", cursor: busy || disabled ? "default" : "pointer" }}>{busy ? "Queueing…" : proposal.operation === "remove" ? "Proceed / Remove" : "Proceed / Queue"}</button>
-            </>
-        )}
+            {canDiscuss && (
+                <button type="button" disabled={busy || disabled} onClick={discuss} style={{ border: "1px solid rgba(255,255,255,0.25)", borderRadius: "7px", background: "transparent", color: "#e4e4e7", padding: "0.3rem 0.55rem", cursor: busy || disabled ? "default" : "pointer" }}>Discuss</button>
+            )}
+            {queued && (
+                <button type="button" disabled={busy || disabled} onClick={() => doAction(onCancel, "The Action could not be removed from the queue.")} style={{ border: "1px solid rgba(251,191,36,0.4)", borderRadius: "7px", background: "rgba(251,191,36,0.08)", color: "#fde68a", padding: "0.3rem 0.55rem", cursor: busy || disabled ? "default" : "pointer" }}>{busy ? "Cancelling…" : "Cancel"}</button>
+            )}
+            {canProceed && (
+                <button type="button" disabled={busy || disabled} onClick={() => doAction(onProceed, "The Action was not queued.")} style={{ border: "1px solid rgba(147,197,253,0.6)", borderRadius: "7px", background: "rgba(59,130,246,0.22)", color: "#dbeafe", padding: "0.3rem 0.55rem", cursor: busy || disabled ? "default" : "pointer" }}>{busy ? "Queueing…" : proposal.operation === "remove" ? "Proceed / Remove" : "Proceed / Queue"}</button>
+            )}
+            {["resolved", "updated", "removed", "conflict", "no-longer-queued", "target-unavailable", "target-resolved"].includes(state) && onOpenActions && (
+                <button type="button" onClick={onOpenActions} style={{ border: "1px solid rgba(255,255,255,0.22)", borderRadius: "7px", background: "transparent", color: "#e4e4e7", padding: "0.3rem 0.55rem", cursor: "pointer" }}>Open Actions</button>
+            )}
         </div>
-        {confirmed && <div style={{ fontSize: "0.68rem", marginTop: "0.35rem", color: "rgba(255,255,255,0.65)" }}>Confirmed by Actions board. Execution still requires game-time resolution.</div>}
+        {queued && <div style={{ fontSize: "0.68rem", marginTop: "0.35rem", color: "rgba(255,255,255,0.65)" }}>Queued on the Actions board. It will resolve when game time advances.</div>}
+        {state === "conflict" && <div style={{ fontSize: "0.68rem", marginTop: "0.35rem", color: "#fde68a" }}>This Action ID now refers to different contents. Review the Actions board before proceeding.</div>}
+        {staleTarget && <div style={{ fontSize: "0.68rem", marginTop: "0.35rem", color: "#fde68a" }}>The referenced Action is no longer queued. Discuss a new Action if further work is needed.</div>}
         {error && <div role="alert" style={{ fontSize: "0.72rem", color: "#fca5a5", marginTop: "0.4rem" }}>{error}</div>}
         </div>
     );
@@ -754,7 +805,7 @@ const formatAdvisorDate = (dateStr) => {
 // new message appended, or the streaming placeholder being replaced); memo's
 // default shallow prop comparison skips everything else, including every
 // keystroke in the composer below.
-const AdvisorMessageRow = React.memo(({ msg, msgIndex, speakerName = "Advisor", canExecute = true, canDraft = true, canReviewActions = true, allowedUnitTypes, chatDiffers, chatDir, onOpenActions, onOpenProjects, onRetryProjects, onRetry, retrying, onDraftMessage, onDiscussAction, onProceedAction, onExecuteInstitutionDraft, onPlaceDeployment }) => {
+const AdvisorMessageRow = React.memo(({ msg, msgIndex, speakerName = "Advisor", canExecute = true, canDraft = true, canReviewActions = true, allowedUnitTypes, chatDiffers, chatDir, actionStates, onOpenActions, onOpenProjects, onRetryProjects, onRetry, retrying, onDraftMessage, onDiscussAction, onProceedAction, onCancelAction, onExecuteInstitutionDraft, onPlaceDeployment }) => {
     const { text, chartConfig, chartProblem, messageDrafts, institutionDrafts, deployments } = msg.role === "advisor"
         ? parseAdvisorReply(msg.text, { allowedUnitTypes: allowedUnitTypes ? allowedUnitTypes.split(",") : null, streaming: Boolean(msg.streaming) })
         : { text: msg.text, chartConfig: null, chartProblem: "", messageDrafts: null, institutionDrafts: null, deployments: null };
@@ -805,8 +856,11 @@ const AdvisorMessageRow = React.memo(({ msg, msgIndex, speakerName = "Advisor", 
                 key={proposal.id}
                 proposal={proposal}
                 receipt={msg.actionReceipts?.[proposal.id]}
-                onDiscuss={() => onDiscussAction(msg.id, proposal)}
+                queueAction={actionStates?.[proposal.actionId]}
+                targetAction={actionStates?.[proposal.targetId]}
+                onDiscuss={(needsNewAction) => onDiscussAction(msg.id, proposal, needsNewAction)}
                 onProceed={() => onProceedAction(msg.id, proposal.id)}
+                onCancel={() => onCancelAction(msg.id, proposal.id)}
                 onOpenActions={onOpenActions}
                 disabled={retrying}
             />
@@ -922,7 +976,7 @@ const ADVISOR_RENDER_WINDOW_STEP = 20;
 // Only the last `visibleLimit` messages are drawn. `i` stays the index into
 // the WHOLE transcript: placedDeployments and completedInstitutionDrafts are
 // written back through it.
-const AdvisorMessageList = React.memo(({ messages, visibleLimit, onShowEarlier, isLoading, speakerName = "Advisor", emptyMessage = "No messages yet. Ask your advisor something!", canExecute = true, canDraft = true, canReviewActions = true, allowedUnitTypes, chatDiffers, chatDir, onOpenActions, onOpenProjects, onRetryProjects, onRetry, retrying, onDraftMessage, onDiscussAction, onProceedAction, onExecuteInstitutionDraft, onPlaceDeployment, messagesEndRef, containerRef, onScroll }) => (
+const AdvisorMessageList = React.memo(({ messages, visibleLimit, onShowEarlier, isLoading, speakerName = "Advisor", emptyMessage = "No messages yet. Ask your advisor something!", canExecute = true, canDraft = true, canReviewActions = true, allowedUnitTypes, chatDiffers, chatDir, actionStates, onOpenActions, onOpenProjects, onRetryProjects, onRetry, retrying, onDraftMessage, onDiscussAction, onProceedAction, onCancelAction, onExecuteInstitutionDraft, onPlaceDeployment, messagesEndRef, containerRef, onScroll }) => (
     <div className="oh-advisor-messages" ref={containerRef} onScroll={onScroll}>
     {messages.length === 0 && (
         <p style={{ fontSize: "0.85rem", color: "rgba(255,255,255,0.5)", marginTop: 0 }}>
@@ -948,7 +1002,7 @@ const AdvisorMessageList = React.memo(({ messages, visibleLimit, onShowEarlier, 
     {messages.map((msg, i) => (i < messages.length - visibleLimit ? null : msg.role === "notice"
         ? <AdvisorDocumentNotice key={msg.id || i} notice={msg} />
         : (
-        <AdvisorMessageRow key={i} msg={msg} msgIndex={i} speakerName={speakerName} canExecute={canExecute} canDraft={canDraft} canReviewActions={canReviewActions} allowedUnitTypes={allowedUnitTypes} chatDiffers={chatDiffers} chatDir={chatDir} onOpenActions={onOpenActions} onOpenProjects={onOpenProjects} onRetryProjects={onRetryProjects} onDraftMessage={onDraftMessage} onDiscussAction={onDiscussAction} onProceedAction={onProceedAction} onExecuteInstitutionDraft={onExecuteInstitutionDraft} onPlaceDeployment={onPlaceDeployment}
+        <AdvisorMessageRow key={i} msg={msg} msgIndex={i} speakerName={speakerName} canExecute={canExecute} canDraft={canDraft} canReviewActions={canReviewActions} allowedUnitTypes={allowedUnitTypes} chatDiffers={chatDiffers} chatDir={chatDir} actionStates={actionStates} onOpenActions={onOpenActions} onOpenProjects={onOpenProjects} onRetryProjects={onRetryProjects} onDraftMessage={onDraftMessage} onDiscussAction={onDiscussAction} onProceedAction={onProceedAction} onCancelAction={onCancelAction} onExecuteInstitutionDraft={onExecuteInstitutionDraft} onPlaceDeployment={onPlaceDeployment}
         onRetry={i === messages.length - 1 && msg.role === "error" ? onRetry : undefined} retrying={retrying} />
     )))}
 
@@ -1005,6 +1059,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         setVisibleMessageLimit((current) => current + ADVISOR_RENDER_WINDOW_STEP);
     }, []);
     const allowedUnitTypes          = useRuntimeState("world", selectAllowedUnitTypes);
+    const actionStates = useRuntimeState("actions", selectReviewedAdvisorActions);
     // The scrollable history div, and whether it should be kept pinned to the
     // bottom as new content (streaming tokens, a new reply) arrives. Starts
     // true (a fresh reply should follow); flips false the moment the player
@@ -1560,13 +1615,53 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
 
     // Discuss is a local composer handoff: it neither sends a message nor
     // writes an Action. Preserve any draft the player was already typing.
-    const handleDiscussAction = React.useCallback((_messageId, proposal) => {
+    const handleDiscussAction = React.useCallback((_messageId, proposal, needsNewAction = false) => {
         if (turnInFlightRef.current || sideEffectPendingRef.current || threadSwitchingRef.current) return;
         const subject = String(proposal?.title || proposal?.text || "this Action").trim().slice(0, 240);
-        const prompt = `Let's discuss the proposed Action "${subject}" before I authorize it.`;
+        const prompt = needsNewAction
+            ? `The proposed change "${subject}" targets an Action that is no longer queued. If this is genuinely new work, propose a new Action for my approval instead of editing a missing or resolved order.`
+            : `Let's discuss the proposed Action "${subject}" before I authorize it.`;
         setInput((current) => current.trim() ? `${current.replace(/\s+$/, "")}\n\n${prompt}` : prompt);
         inputRef.current?.focus();
     }, []);
+
+    // Cancel is a native queue mutation, not a cosmetic toggle. The original
+    // proposal, recipient authority and the exact still-planned order are all
+    // revalidated before anything is removed.
+    const handleCancelAction = React.useCallback(async (messageId, proposalId) => {
+        if (turnInFlightRef.current || sideEffectPendingRef.current || threadSwitchingRef.current || advisorLoadFailed) {
+            return { ok: false, error: "The Advisor is busy. Try again when the current operation finishes." };
+        }
+        const threadId = activeThreadIdRef.current;
+        const campaignId = String(getLibraryState()?.activeGameId || "").trim();
+        sideEffectPendingRef.current += 1;
+        setSideEffectsBusy(true);
+        try {
+            assertNoTurnRunning();
+            if (campaignChanged(campaignId, getLibraryState()?.activeGameId)) {
+                throw new Error("The campaign changed before the Action could be cancelled.");
+            }
+            const receipt = await cancelApprovedAdvisorAction({
+                threadId, messageId, proposalId,
+                readAdvisorMessages, mutateActionsState, mutateAdvisorState,
+                assertReady: assertNoTurnRunning,
+            });
+            if (campaignChanged(campaignId, getLibraryState()?.activeGameId)) {
+                throw new Error("The campaign changed while the Action was being cancelled. Reopen the correct game.");
+            }
+            updateMessages((previous) => mergeAdvisorActionReceiptIntoView(previous, threadId, messageId, proposalId, receipt));
+            logDebugEvent("advisor", "Player cancelled Advisor Action proposal " + proposalId + ".", {
+                messageId, actionId: receipt.actionId,
+            }, { verbose: true });
+            return { ok: true, receipt };
+        } catch (error) {
+            console.warn("[advisor] the Action cancellation was not fully confirmed:", error);
+            return { ok: false, error: (error?.message || String(error)) + " If the Action is already absent from the board, do not repeat a separate manual removal." };
+        } finally {
+            sideEffectPendingRef.current -= 1;
+            if (!sideEffectPendingRef.current) setSideEffectsBusy(false);
+        }
+    }, [updateMessages]);
 
     // Canonical approval: re-fetch the stored message and recipient, then
     // re-plan against the latest queue IN its existing canonical write queue.
@@ -1595,7 +1690,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             if (campaignChanged(campaignId, getLibraryState()?.activeGameId)) {
                 throw new Error("The campaign changed while the Action was being reviewed. Reopen the correct game.");
             }
-            updateMessages((previous) => recordAdvisorActionReceipt(previous, threadId, messageId, proposalId, receipt));
+            updateMessages((previous) => mergeAdvisorActionReceiptIntoView(previous, threadId, messageId, proposalId, receipt));
             logDebugEvent("advisor", `Player confirmed Advisor Action proposal ${proposalId}: ${receipt.status}.`, {
                 messageId, actionId: receipt.actionId,
             }, { verbose: true });
@@ -1929,6 +2024,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         onShowEarlier={handleShowEarlier}
         isLoading={isLoading}
         allowedUnitTypes={allowedUnitTypes}
+        actionStates={actionStates}
         chatDiffers={chatDiffers}
         chatDir={chatDir}
         onOpenActions={onOpenActions}
@@ -1939,6 +2035,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         onDraftMessage={handleDraftMessage}
         onDiscussAction={handleDiscussAction}
         onProceedAction={handleProceedAction}
+        onCancelAction={handleCancelAction}
         onExecuteInstitutionDraft={handleExecuteInstitutionDraft}
         onPlaceDeployment={handlePlaceDeployment}
         messagesEndRef={messagesEndRef}

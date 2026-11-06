@@ -599,8 +599,10 @@ app.get("/api/library", (_req, res) => {
 // thousands of clients polling don't each hit GitHub. We read the tiny latest.json
 // release asset (a CDN download, not the rate-limited REST API) for the app's track.
 const APP_UPDATE_MANIFESTS = {
-  stable: "https://github.com/Open-Historia/open-historia/releases/download/android/latest.json",
-  beta: "https://github.com/Open-Historia/open-historia/releases/download/android-beta/latest.json",
+  // The Android app's own feeds (src/runtime/web/router.js). latest.json beside
+  // them is the feed of the apps installed under the app's earlier id.
+  stable: "https://github.com/Open-Historia/open-historia/releases/download/android/update.json",
+  beta: "https://github.com/Open-Historia/open-historia/releases/download/android-beta/update.json",
   // The desktop app checks through here rather than from the page: a release asset
   // sends no CORS headers, and the GitHub API is rate limited per IP. Exactly the
   // reason the Android tracks are served this way.

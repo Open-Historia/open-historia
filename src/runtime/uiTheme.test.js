@@ -44,8 +44,12 @@ test("theme preferences create only chrome variables, not gameplay semantic colo
   const tokens = uiThemeTokens(normalizeUiTheme({ preset: "forest" }));
   assert.equal(tokens["--oh-ui-bg"], "#121E19");
   assert.equal(tokens["--oh-ui-accent"], "#78C8A1");
-  assert.ok(!Object.keys(tokens).some((key) => /party|relationship|diplomac|military|war|map-|hud-/i.test(key)));
-  assert.equal(Object.keys(tokens).length, 24);
+  assert.ok(!Object.keys(tokens).some((key) => /party|relationship|diplomac|military|war|map-/i.test(key)));
+  // The HUD's glass is chrome; its text and blue/amber/red signals are not.
+  assert.deepEqual(Object.keys(tokens).filter((key) => key.startsWith("--oh-hud-")),
+    ["--oh-hud-bg", "--oh-hud-bg-strong", "--oh-hud-bg-soft", "--oh-hud-border", "--oh-hud-border-strong"]);
+  assert.ok(tokens["--oh-hud-bg"].startsWith("rgba("), "the HUD stays see-through");
+  assert.equal(Object.keys(tokens).length, 36);
   assert.ok(tokens["--oh-ui-overlay"].startsWith("rgba("), "floating panels retain translucency");
   assert.deepEqual(uiThemeTokens(normalizeUiTheme({ preset: DEFAULT_UI_THEME })), {}, "original UI must not override panel chrome");
 });
@@ -125,7 +129,7 @@ test("theme persists across app initialization and synchronizes storage changes"
 });
 
 test("Default (Original) removes every theme override and preserves unrelated HUD tokens", () => {
-  const values = new Map([["--oh-hud-bg", "original-hud"]]);
+  const values = new Map([["--oh-hud-red", "original-hud"]]);
   const attrs = new Map();
   const root = {
     style: {
@@ -139,7 +143,7 @@ test("Default (Original) removes every theme override and preserves unrelated HU
   assert.ok(values.has("--oh-grey-bg"));
   applyUiTheme({ preset: "default" }, root);
   assert.equal(attrs.get("data-oh-ui-theme"), "default");
-  assert.deepEqual([...values.entries()], [["--oh-hud-bg", "original-hud"]],
+  assert.deepEqual([...values.entries()], [["--oh-hud-red", "original-hud"]],
     "original panel and :root CSS colors must take over, without changing the game HUD");
   assert.equal(selectUiTheme("default"), true);
   assert.equal(getUiTheme().preset, "default");

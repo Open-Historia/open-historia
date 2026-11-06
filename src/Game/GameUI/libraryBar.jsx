@@ -203,7 +203,7 @@ const accentGlowStyle = (accentColor, { at, alpha, reach }) => ({
 
 const surfaceStyle = {
   background:
-    "rgba(34,34,37,0.53)",
+    "var(--oh-ui-glass-pill, rgba(34,34,37,0.53))",
   border: "1px solid var(--oh-hud-border)",
   boxShadow: "var(--oh-hud-shadow-soft)",
   backdropFilter: "var(--oh-hud-blur)",
@@ -994,8 +994,7 @@ const ScenarioCard = ({ onClone, onEdit, onPlay, onSelect, onUpdate, scenario, s
           <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.4rem" }}>
             <span
               style={{
-                backdropFilter: "blur(8px)",
-                background: selected ? `${scenario.accentColor}88` : "rgba(10,12,18,0.72)",
+                background: selected ? `${scenario.accentColor}cc` : "rgba(10,12,18,0.85)",
                 border: "1px solid rgba(255,255,255,0.18)",
                 borderRadius: "999px",
                 color: "rgba(248,248,250,0.96)",
@@ -1013,8 +1012,7 @@ const ScenarioCard = ({ onClone, onEdit, onPlay, onSelect, onUpdate, scenario, s
             {isBuiltIn && (
               <span
                 style={{
-                  backdropFilter: "blur(8px)",
-                  background: "rgba(10,12,18,0.72)",
+                  background: "rgba(10,12,18,0.85)",
                   border: "1px solid rgba(255,255,255,0.22)",
                   borderRadius: "999px",
                   color: "#fff",
@@ -1035,8 +1033,7 @@ const ScenarioCard = ({ onClone, onEdit, onPlay, onSelect, onUpdate, scenario, s
             <SuggestionCountBadge count={openSuggestionsOf(scenario).length} onClick={() => onEdit(scenario.id)} />
             <span
               style={{
-                backdropFilter: "blur(8px)",
-                background: "rgba(10,12,18,0.72)",
+                background: "rgba(10,12,18,0.85)",
                 border: "1px solid rgba(255,255,255,0.12)",
                 borderRadius: "999px",
                 color: "rgba(255,255,255,0.85)",
@@ -1352,8 +1349,7 @@ const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onDelete
       >
         <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.4rem", minWidth: 0 }}>
           <span style={{
-                backdropFilter: "blur(8px)",
-                background: active ? `${game.accentColor}88` : "rgba(10,12,18,0.72)",
+                background: active ? `${game.accentColor}cc` : "rgba(10,12,18,0.85)",
                 border: "1px solid rgba(255,255,255,0.18)",
                 borderRadius: "999px",
                 color: "rgba(248,248,250,0.96)",
@@ -1371,8 +1367,7 @@ const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onDelete
           </span>
           <span
             style={{
-              backdropFilter: "blur(8px)",
-              background: "rgba(10,12,18,0.72)",
+              background: "rgba(10,12,18,0.85)",
               border: "1px solid rgba(255,255,255,0.12)",
               borderRadius: "999px",
               color: "rgba(255,255,255,0.85)",
@@ -1401,8 +1396,7 @@ const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onDelete
             onClick={() => setCardMenuOpen((open) => !open)}
             style={touchFit({
               ...themeButtonStyle,
-              backdropFilter: "blur(8px)",
-              background: cardMenuOpen ? "rgba(255,255,255,0.18)" : "rgba(10,12,18,0.72)",
+              background: cardMenuOpen ? "rgba(255,255,255,0.18)" : "rgba(10,12,18,0.85)",
               cursor: busy ? "progress" : "pointer",
               fontSize: "1.05rem",
               lineHeight: 1,

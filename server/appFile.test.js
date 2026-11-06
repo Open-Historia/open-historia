@@ -115,8 +115,11 @@ test("the page never downloads an app file: only the app shells name the release
 
 test("each Android app downloads its own file once, never from a debuggable build, and keeps its mark outside the WebView", () => {
   const java = read("mobile/android/app/src/main/java/io/github/arkniem/openhistoria/AppFile.java");
-  assert.match(java, /"io\.github\.arkniem\.paxhistoria"[\s\S]*?"android\.app\.txt"/);
-  assert.match(java, /"io\.github\.arkniem\.paxhistoria\.beta"[\s\S]*?"android\.beta\.app\.txt"/);
+  // The file is named in build.gradle, beside the application id each channel
+  // gets; the handover build (an old id) downloads none.
+  assert.match(java, /fileFor\(BuildConfig\.OH_APP_FILE\)/);
+  const gradle = read("mobile/android/app/build.gradle");
+  assert.match(gradle, /buildConfigField "String", "OH_APP_FILE", "\\"" \+ \(ohLegacyAppId \? "" : ohBeta \? "android\.beta\.app\.txt" : "android\.app\.txt"\) \+ "\\""/);
   assert.ok(java.includes(APP_FILE_RELEASE), "the same release as the desktop apps");
   assert.match(java, /FLAG_DEBUGGABLE/);
   assert.match(java, /getSharedPreferences\(/);

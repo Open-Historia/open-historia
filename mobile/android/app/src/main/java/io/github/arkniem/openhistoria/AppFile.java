@@ -28,12 +28,13 @@ final class AppFile {
     private AppFile() {
     }
 
-    // The file this app downloads, by its application id; null for any other
-    // build. GitHub serves an uploaded "android app.txt" as android.app.txt.
-    static String fileFor(String packageName) {
-        if ("io.github.arkniem.paxhistoria".equals(packageName)) return "android.app.txt";
-        if ("io.github.arkniem.paxhistoria.beta".equals(packageName)) return "android.beta.app.txt";
-        return null;
+    // The file this app downloads, or null. build.gradle names it from the
+    // channel, next to the application id it gives the channel: android.app.txt
+    // for the stable app, android.beta.app.txt for the beta (GitHub serves an
+    // uploaded "android app.txt" as android.app.txt), and none for the handover
+    // build, whose player is counted when the app it installs starts.
+    static String fileFor(String configured) {
+        return configured == null || configured.isEmpty() ? null : configured;
     }
 
     static boolean shouldFetch(String file, boolean debuggable, boolean doneBefore) {
@@ -44,7 +45,7 @@ final class AppFile {
     // there is one, runs on its own thread and never touches the page.
     static void fetchOnce(Context context) {
         final Context app = context.getApplicationContext();
-        final String file = fileFor(app.getPackageName());
+        final String file = fileFor(BuildConfig.OH_APP_FILE);
         final boolean debuggable = (app.getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0;
         final SharedPreferences prefs = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         if (!shouldFetch(file, debuggable, prefs.getBoolean("done", false))) return;
