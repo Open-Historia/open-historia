@@ -99,6 +99,7 @@ export const register = (ctx) => {
     hasBundle: Boolean(post?.bundleUrl),
     coverImageUrl: clean(post?.coverImageUrl),
     startDate: clean(post?.startDate),
+    languages: list(post?.languages).map((code) => list(engine.shellI18n.LANGUAGES).find((entry) => entry.code === code)?.native || String(code)),
   });
 
   const statusesOf = (posts) => {
@@ -383,6 +384,7 @@ export const register = (ctx) => {
     if (change.kind === "stats") return { tab: "Stats", title: "National Stats sheet", detail: "" };
     if (change.kind === "institutionLogos") return { tab: "Politics", title: "Institution logos", detail: "" };
     if (change.kind === "music") return { tab: "Music", title: "Scenario music", detail: "" };
+    if (change.kind === "languages") return { tab: "Languages", title: "Language pack", detail: engine.shellI18n.languageDisplayName(change.code) };
     if (change.kind === "cover") return { tab: "Assets", title: "Cover Image", detail: "" };
     return { tab: "", title: change.kind, detail: "" };
   };
@@ -438,6 +440,16 @@ export const register = (ctx) => {
       };
     }
     if (change.kind === "institutionLogos") return { type: "text", text: "Changed" };
+    if (change.kind === "languages") {
+      const kit = engine.scenarioLanguages;
+      const before = kit.scenarioLanguagePack({ [change.code]: change.from }, change.code);
+      const after = kit.scenarioLanguagePack({ [change.code]: change.to }, change.code);
+      return {
+        type: "languages",
+        changed: Object.keys(after).filter((source) => before[source] !== after[source]).length,
+        removed: Object.keys(before).filter((source) => !Object.hasOwn(after, source)).length,
+      };
+    }
     if (change.kind === "music") {
       const music = engine.scenarioMusic;
       const before = music.normalizeScenarioMusic(change.from);

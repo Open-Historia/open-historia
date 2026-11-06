@@ -28,6 +28,31 @@ func _say(text: String) -> void:
 	print("[editor_check %6d ms] %s" % [Time.get_ticks_msec() - started, text])
 
 
+func _languages_flow() -> void:
+	editor._go_section("languages")
+	var ready := await _until(func() -> bool: return _button(editor._content, "Generate") != null and _label(editor._content, "German · Deutsch") != null, 30.0)
+	_check(ready, "the Languages tab lists the languages ticked to begin with")
+	_check(str(ScenarioEditor.SECTION_BLURBS["languages"]) == "Its own text in other languages, translated once by your AI and shipped with it." and ScenarioEditor.SECTION_GROUPS[0][1] == ["overview", "assets", "music", "languages"], "it sits under Presentation, after Music, with beta's blurb")
+	var planned := await _until(func() -> bool: return _find_all(editor._content, func(entry: Node) -> bool: return entry is Label and (entry as Label).text.ends_with("requests to your AI"), []).size() > 0, 30.0)
+	_check(planned, "the number of requests is said before Generate")
+	await _shoot("ed-14-languages")
+	var edit := _button(editor._content, "Edit strings")
+	_check(edit != null, "each language has Edit strings")
+	if edit:
+		_press(edit)
+		var listed := await _until(func() -> bool: return _button(editor._content, "Hide strings") != null and _find_all(editor._content, func(entry: Node) -> bool: return entry is TextEdit, []).size() > 0, 20.0)
+		_check(listed, "Edit strings lists the scenario's strings, each with its translation")
+		await _shoot("ed-15-languages-strings")
+		_press(_button(editor._content, "Hide strings"))
+		await _wait(0.3)
+	_press(_button(editor._content, "Generate"))
+	var done := await _until(func() -> bool: return _label(editor._content, "Generated. Save the scenario to keep them.") != null, 120.0)
+	_check(done, "Generate asks the AI and says to save")
+	var languages: Variant = editor._form.get("languages")
+	_check(languages is Dictionary and (languages as Dictionary).has("de") and _label(editor._content, "Up to date") != null, "the packs are in the form and every language is up to date")
+	await _shoot("ed-16-languages-generated")
+
+
 func _check(ok: bool, text: String) -> void:
 	if ok:
 		_say("ok   " + text)
@@ -199,9 +224,9 @@ func _scenario_flow() -> void:
 	await _shoot("ed-01-overview")
 	_check(_label(editor._content, "On its card") != null and _label(editor._content, "Its headline") != null, "the overview shows both cards")
 	_check(not ScenarioEditor.SCENARIO_SECTIONS.has("fronts") and str(ScenarioEditor.SECTION_BLURBS["features"]).contains("under Wars"), "the war tab is part of Features, under Wars")
-	for key in ["world", "history", "politics", "stats", "features", "prompts", "assets", "music", "bundles"]:
+	for key in ["world", "history", "politics", "stats", "features", "prompts", "assets", "music", "languages", "bundles"]:
 		editor._go_section(key)
-		await _wait(1.2 if key in ["music", "features"] else 0.6)
+		await _wait(1.2 if key in ["music", "features", "languages"] else 0.6)
 		if key == "politics":
 			var generation := await _until(func() -> bool: return _button(editor._content, "Generate Political World") != null, 20.0)
 			_check(generation, "the Political World panel loaded its generator")
@@ -239,6 +264,7 @@ func _scenario_flow() -> void:
 			await _shoot("ed-04-music-chosen")
 	else:
 		_say("note the hub's music list could not be read; the music picker was not exercised")
+	await _languages_flow()
 	editor._go_section("overview")
 	await _wait(0.3)
 	var subtitle := _field_input("Subtitle")

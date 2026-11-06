@@ -14,6 +14,7 @@ const SECTION_LABELS := {
 	"bundles": "Bundles",
 	"features": "Features",
 	"history": "Pre-history",
+	"languages": "Languages",
 	"music": "Music",
 	"overview": "Overview",
 	"politics": "Politics",
@@ -22,7 +23,7 @@ const SECTION_LABELS := {
 	"world": "World",
 }
 const SECTION_GROUPS := [
-	["Presentation", ["overview", "assets", "music"]],
+	["Presentation", ["overview", "assets", "music", "languages"]],
 	["Setting", ["world", "history", "politics"]],
 	["Rules and AI", ["stats", "features", "prompts"]],
 	["Sharing", ["bundles"]],
@@ -31,6 +32,7 @@ const SECTION_BLURBS := {
 	"overview": "How it appears in the library: its name, colour and the words on its card.",
 	"assets": "The cover and the files the map is drawn from.",
 	"music": "The hub's tracks it plays while a game opens, in the game, at war and in the war room.",
+	"languages": "Its own text in other languages, translated once by your AI and shipped with it.",
 	"world": "Where play begins: the player's country, the date, the troops and the story so far.",
 	"history": "The events that led to the start date.",
 	"politics": "Governments, parties and institutions.",
@@ -39,12 +41,13 @@ const SECTION_BLURBS := {
 	"prompts": "The instructions the AI follows.",
 	"bundles": "Download it as one file to share or keep.",
 }
-const SCENARIO_SECTIONS := ["overview", "world", "history", "politics", "stats", "features", "prompts", "assets", "music", "bundles"]
+const SCENARIO_SECTIONS := ["overview", "world", "history", "politics", "stats", "features", "prompts", "assets", "music", "languages", "bundles"]
 const GAME_SECTIONS := ["overview", "world", "features", "prompts", "assets"]
 const SECTION_ICONS := {
 	"overview": "<rect x='3.5' y='4.5' width='17' height='15' rx='2.5'/><path d='M7 9h10M7 13h6'/>",
 	"assets": "<rect x='3.5' y='5' width='17' height='14' rx='2.5'/><circle cx='9' cy='10' r='1.6'/><path d='m4 17 5-4.5 4 3.5 3-2.5 4 3.5'/>",
 	"music": "<path d='M9 17.5V6l10-2v11.5'/><circle cx='6.5' cy='17.5' r='2.5'/><circle cx='16.5' cy='15.5' r='2.5'/>",
+	"languages": "<path d='M4 5.5h8M8 4v1.5c0 3.5-1.8 6.3-4 7.5M5.5 9c1 1.8 2.8 3.2 5 3.8'/><path d='m12 19.5 3.5-8.5 3.5 8.5M13.2 16.8h4.6'/>",
 	"world": "<circle cx='12' cy='12' r='8.5'/><path d='M3.5 12h17M12 3.5c2.3 2.3 3.5 5.2 3.5 8.5s-1.2 6.2-3.5 8.5c-2.3-2.3-3.5-5.2-3.5-8.5s1.2-6.2 3.5-8.5z'/>",
 	"history": "<path d='M5 4.5h11.5a2 2 0 0 1 2 2v13H7a2 2 0 0 1-2-2z'/><path d='M5 17.5a2 2 0 0 1 2-2h11.5M9 8.5h6'/>",
 	"politics": "<path d='M4 9.5 12 5l8 4.5M5.5 19.5h13M7 10.5v7M12 10.5v7M17 10.5v7'/>",
@@ -797,6 +800,8 @@ func _render_section() -> void:
 			_render_assets()
 		"music":
 			_render_music()
+		"languages":
+			_render_languages()
 		"bundles":
 			_render_bundles()
 
@@ -1099,6 +1104,13 @@ func _render_features() -> void:
 func _render_music() -> void:
 	_content.add_theme_constant_override("separation", 15)
 	_host(EditorMusicPanel.new(), {"value": _form.get("music"), "value_field": "music"}, func(value: Variant) -> void: _set_form("music", value))
+
+
+func _render_languages() -> void:
+	_content.add_theme_constant_override("separation", 15)
+	_host(EditorLanguagesPanel.new(), {"value": _form.get("languages"), "value_field": "languages", "scenarioId": _id}, func(value: Variant) -> void:
+		_set_form("languages", value)
+		_update_panels())
 
 
 func _prompt_catalog_ready() -> void:
