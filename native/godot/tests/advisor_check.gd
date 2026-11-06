@@ -989,6 +989,7 @@ func _contacts() -> void:
 	await _character()
 	await _chief_identity()
 	await _unsupported_type()
+	await _several_action_fences()
 
 
 func _character() -> void:
@@ -1079,6 +1080,33 @@ func _chief_identity() -> void:
 		await _frames(3)
 	stored = JSON.stringify(await _doc("advisor"))
 	_check("Restore scenario defaults brings back the scenario's advisor and keeps the conversation", panel.chief_profile.is_empty() and _trigger("Chief advisor", "▴") != null and not stored.contains("advisor-chief-profile") and stored.contains("Who am I speaking with?") and panel.messages.size() == before + 2 and panel._recipient_editor.is_empty())
+
+
+func _count_buttons(node: Node, text: String) -> int:
+	var count := 1 if node is Button and (node as Button).text == text and (node as Button).is_visible_in_tree() else 0
+	for child in node.get_children():
+		count += _count_buttons(child, text)
+	return count
+
+
+func _several_action_fences() -> void:
+	await panel._select_recipient("chief")
+	await _frames(3)
+	var before := panel.messages.size()
+	_check("the chief advisor answers with three Action blocks", await _ask_panel("Give me each order separately.", before + 2), str(panel.messages.size()))
+	await _wait(0.6)
+	var reply: Dictionary = panel.messages[panel.messages.size() - 1]
+	var proposals: Array = reply.get("actionProposals", []) if typeof(reply.get("actionProposals")) == TYPE_ARRAY else []
+	var titles := JSON.stringify(proposals)
+	_check("every fenced Action block is offered for review, in order", proposals.size() == 2 and titles.find("Recall the ambassador from Tripoli") >= 0 and titles.find("Open talks with Berlin on the fiscal rules") > titles.find("Recall the ambassador from Tripoli") and not reply.has("actionsSummary"), titles.left(300))
+	var problems: Array = reply.get("actionsProblems", []) if typeof(reply.get("actionsProblems")) == TYPE_ARRAY else []
+	_check("the block that is not a list is reported and offers nothing", problems.has("Action block 2 was not a list; no proposals were offered from it.") and not titles.contains("Not a list of orders"), JSON.stringify(problems))
+	_check("both proposals have their card and no fence is left as raw code", _count_buttons(panel, "Proceed / Queue") >= 2 and _labels_with(panel, "Recall the ambassador from Tripoli") and _labels_with(panel, "Open talks with Berlin on the fiscal rules") and not _labels_with(panel, "Not a list of orders") and not _labels_with(panel, "```"))
+	_check("nothing from the reply is queued before Proceed", not JSON.stringify(await _doc("actions")).contains("Recall the ambassador from Tripoli"))
+	var card := _find_button(panel, "Proceed / Queue")
+	if card:
+		await _scroll_to(card)
+	await _shoot("advisor-28-several-action-fences")
 
 
 func _unsupported_type() -> void:
