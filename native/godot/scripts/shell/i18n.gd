@@ -656,8 +656,13 @@ func _build_card(code: String, text: String, buttons: Array, with_progress := fa
 	_card_text.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
 	_card_text.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_card_text.custom_minimum_size.x = 1
-	_card_text.add_theme_constant_override("line_spacing", int(round(size_px * 1.45 - ShellFonts.font("sans-serif", 400).get_height(size_px))))
-	column.add_child(_card_text)
+	var leading := size_px * 1.45 - ShellFonts.font("sans-serif", 400).get_height(size_px)
+	_card_text.add_theme_constant_override("line_spacing", int(round(leading)))
+	var line_box := MarginContainer.new()
+	line_box.add_theme_constant_override("margin_top", int(round(leading * 0.5)))
+	line_box.add_theme_constant_override("margin_bottom", int(round(leading * 0.5)))
+	line_box.add_child(_card_text)
+	column.add_child(line_box)
 	_card_fill = null
 	if with_progress:
 		var track := Panel.new()
