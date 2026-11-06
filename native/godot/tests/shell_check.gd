@@ -7,9 +7,9 @@ var failures: PackedStringArray = []
 var played: PackedStringArray = []
 var only := ""
 
-const NEWEST_UPDATES := ["2026-11-native-sharp-at-any-size", "2026-11-native-advisor-contacts", "2026-11-ships-from-ports", "2026-11-aircraft-key"]
-const NEWEST_TITLES := ["Sharp at any size", "The same size on every screen", "Troops sail from a port", "The Aircraft key works"]
-const FIRST_OPENING := ["2026-11-rostra", "2026-11-deploy-aircraft", "2026-10-espionage-part-2", "2026-11-native-sharp-at-any-size"]
+const NEWEST_UPDATES := ["2026-11-czech-finnish", "2026-11-themes", "2026-11-translation-model", "2026-11-install-count"]
+const NEWEST_TITLES := ["Czech and Finnish", "Themes", "Translation without AI requests", "Counting installs"]
+const RELEASE := "2026-11-version-2-5"
 
 
 func _update_ids(updates: Array) -> Array:
@@ -37,21 +37,35 @@ func _missed_updates(shell: ShellBoot) -> void:
 	shell._notice_started = false
 	await shell.prepare()
 	shell._maybe_show_notice()
-	var mounted := await _until(func() -> bool: return shell.notice != null and is_instance_valid(shell.notice) and shell.notice.page_count() > 0, 10.0)
-	var ids := _update_ids(shell.notice._pages.map(func(page: Dictionary) -> Dictionary: return page.get("update", {}))) if mounted else []
-	_check("the vault-door notice shows every update a device missed, newest first", mounted and ids.slice(0, NEWEST_UPDATES.size()) == NEWEST_UPDATES, ", ".join(PackedStringArray(ids)))
-	var found := {}
-	for index in range(shell.notice.page_count() if mounted else 0):
-		shell.notice.show_page(index)
-		await _wait(0.5)
-		for title in NEWEST_TITLES:
-			if Array(_texts(shell.notice, PackedStringArray())).any(func(value: String) -> bool: return value.contains(title)):
-				found[title] = true
-	_check("their pages read as written", found.size() == 4, ", ".join(PackedStringArray(found.keys())))
-	await _shoot("s-10b-missed-notice")
+	var mounted := await _until(func() -> bool: return shell.notice != null and is_instance_valid(shell.notice) and shell.notice.get_children().any(func(child: Node) -> bool: return child is ReleaseNotice), 10.0)
+	_check("a device that missed updates is shown the release that tells them, alone", mounted)
+	await _shoot("s-10b-missed-release")
 	await _key(KEY_ESCAPE)
 	await _frames(4)
-	_check("the missed updates' notice closes onto the menu", shell.notice == null and main.menu.visible)
+	_check("the missed updates' release closes onto the menu", shell.notice == null and main.menu.visible)
+	var reply: Dictionary = await main.engine.request("shell.updates")
+	var listed: Array = reply.get("result", {}).get("updates", [])
+	var newest := listed.filter(func(update: Variant) -> bool: return update is Dictionary and str((update as Dictionary).get("kind", "")) != "release").slice(0, NEWEST_UPDATES.size())
+	var paged := UpdateNotice.new()
+	shell.overlay.add_child(paged)
+	await paged.setup(main.engine, newest, {"reduceMotion": true})
+	var ids := _update_ids(paged._pages.map(func(page: Dictionary) -> Dictionary: return page.get("update", {})))
+	var have := ids.duplicate()
+	have.sort()
+	var want := NEWEST_UPDATES.duplicate()
+	want.sort()
+	_check("the newest updates after the release are the ones native has", have == want, ", ".join(PackedStringArray(ids)))
+	var found := {}
+	for index in range(paged.page_count()):
+		paged.show_page(index)
+		await _wait(0.5)
+		for title in NEWEST_TITLES:
+			if Array(_texts(paged, PackedStringArray())).any(func(value: String) -> bool: return value.contains(title)):
+				found[title] = true
+	_check("their pages read as written", found.size() == 4, ", ".join(PackedStringArray(found.keys())))
+	await _shoot("s-10c-newest-notices")
+	paged.queue_free()
+	await _frames(3)
 
 
 func _initialize() -> void:
@@ -318,7 +332,7 @@ func _themes(shell: ShellBoot) -> void:
 	window.size = before
 	await _frames(4)
 	var stop := _update_ids(listed).find("2026-11-native-editor-map")
-	var since: Array = listed.slice(0, stop) if stop > 0 else []
+	var since: Array = (listed.slice(0, stop) if stop > 0 else []).filter(func(update: Variant) -> bool: return update is Dictionary and str((update as Dictionary).get("kind", "")) != "release")
 	var every := UpdateNotice.new()
 	shell.overlay.add_child(every)
 	await every.setup(main.engine, since, {"reduceMotion": true})
@@ -410,7 +424,7 @@ func _parts() -> void:
 	press.pressed = true
 	Input.parse_input_event(press)
 	await _frames(3)
-	_check("Ctrl+= zooms in one step", is_equal_approx(root.content_scale_factor, pow(1.2, 0.5) * Hotkeys.screen_scale()), str(root.content_scale_factor))
+	_check("Ctrl+= zooms in one step", is_equal_approx(root.content_scale_factor, pow(1.2, 0.5) * Hotkeys.window_scale(Vector2(root.size))), str(root.content_scale_factor))
 	var steps := [[KEY_EQUAL, false, 1.0], [KEY_EQUAL, true, 1.5], [KEY_KP_ADD, false, 2.0], [KEY_MINUS, false, 1.5], [KEY_KP_SUBTRACT, false, 1.0]]
 	var landed: Array = []
 	for step in steps:
@@ -435,7 +449,7 @@ func _parts() -> void:
 	reset.pressed = true
 	Input.parse_input_event(reset)
 	await _frames(3)
-	_check("Ctrl+0 resets the zoom", is_equal_approx(root.content_scale_factor, Hotkeys.screen_scale()) and is_equal_approx(before, Hotkeys.screen_scale()), str(root.content_scale_factor))
+	_check("Ctrl+0 resets the zoom", is_equal_approx(root.content_scale_factor, Hotkeys.window_scale(Vector2(root.size))) and is_equal_approx(before, Hotkeys.window_scale(Vector2(root.size))), str(root.content_scale_factor))
 	var sizes := [[Vector2(1920, 1080), 1.0], [Vector2(1920, 1200), 1.0], [Vector2(1366, 768), 1.0], [Vector2(2560, 1440), 2560.0 / 1920.0], [Vector2(3440, 1440), 1440.0 / 1080.0], [Vector2(3840, 2160), 2.0], [Vector2(5120, 2880), 5120.0 / 1920.0], [Vector2(2160, 3840), 2160.0 / 1920.0]]
 	var off: Array = []
 	for pair in sizes:
@@ -443,6 +457,19 @@ func _parts() -> void:
 			off.append("%s -> %.3f" % [str(pair[0]), Hotkeys.resolution_scale(pair[0])])
 	_check("the interface is as big against the screen on 1440p, ultrawide, 4K and 5K as on 1080p, and never smaller than designed", off.is_empty(), ", ".join(PackedStringArray(off)))
 	_check("this screen's scale is what its resolution asks for", is_equal_approx(Hotkeys.screen_scale(), maxf(Hotkeys.os_scale(), Hotkeys.resolution_scale(Vector2(DisplayServer.screen_get_size(DisplayServer.window_get_current_screen()))))), str(Hotkeys.screen_scale()))
+	var windows := [[Vector2(1440, 900), 1.0], [Vector2(2880, 1920), 2.0], [Vector2(2880, 1800), 2.0], [Vector2(3840, 2160), 2.40625], [Vector2(1920, 1080), 1.203125], [Vector2(1280, 720), 1.0], [Vector2(720, 450), 1.0], [Vector2(390, 844), 1.0], [Vector2(3440, 1440), 1.59375]]
+	var window_off: Array = []
+	for pair in windows:
+		if not is_equal_approx(Hotkeys.window_scale(pair[0]), float(pair[1])):
+			window_off.append("%s -> %.4f" % [str(pair[0]), Hotkeys.window_scale(pair[0])])
+	_check("the interface keeps its proportion to any window bigger than designed, and never shrinks below it", window_off.is_empty(), ", ".join(PackedStringArray(window_off)))
+	var old_size := root.size
+	root.size = Vector2i(2880, 1920)
+	await _frames(3)
+	var grown := root.content_scale_factor
+	root.size = old_size
+	await _frames(3)
+	_check("resizing the window rescales the interface with it", is_equal_approx(grown, 2.0) and is_equal_approx(root.content_scale_factor, Hotkeys.window_scale(Vector2(old_size))), "%.4f then %.4f at %s" % [grown, root.content_scale_factor, str(root.size)])
 	var escapes := [0]
 	hotkeys.escape_pressed.connect(func() -> void: escapes[0] += 1)
 	await _key(KEY_ESCAPE)
@@ -474,7 +501,7 @@ func _boot_door(shell: ShellBoot) -> void:
 	await _shoot("s-07-door-opening-60")
 	await _until(func() -> bool: return shell.parting or shell.door == null, 6.0)
 	_check("the notice is mounted as the leaves part", shell.notice != null and is_instance_valid(shell.notice))
-	await _until(func() -> bool: return shell.door == null or (shell.notice != null and is_instance_valid(shell.notice) and shell.notice.page_count() > 0), 4.0)
+	await _until(func() -> bool: return shell.door == null or (shell.notice != null and is_instance_valid(shell.notice) and (shell.notice.page_count() > 0 or shell.notice.get_children().any(func(child: Node) -> bool: return child is ReleaseNotice))), 4.0)
 	await _frames(2)
 	await _shoot("s-07b-door-parting-over-notice")
 	var parting := shell.notice != null and is_instance_valid(shell.notice) and is_instance_valid(door)
@@ -495,12 +522,10 @@ func _notice_and_history(shell: ShellBoot) -> void:
 	var notice := shell.notice
 	await _wait(1.2)
 	var pages := notice.page_count()
-	_check("the notice pages through the updates", pages >= 2, str(pages))
-	var shown_ids := _update_ids(notice._pages.map(func(page: Dictionary) -> Dictionary: return page.get("update", {})))
-	_check("a first opening's notice shows the major updates first, then the newest", shown_ids == FIRST_OPENING, ", ".join(PackedStringArray(shown_ids)))
+	_check("a first opening shows the 2.5 release alone, on its own scrolling page", notice.get_children().any(func(child: Node) -> bool: return child is ReleaseNotice), str(pages))
 	var state: Dictionary = await main.engine.request("shell.state")
 	var remembered: Dictionary = state.get("result", {})
-	_check("the newest update is remembered the moment it shows", str(remembered.get("seen", "")) == NEWEST_UPDATES[0], str(remembered))
+	_check("the release is remembered the moment it shows", str(remembered.get("seen", "")) == RELEASE, str(remembered))
 	await _shoot("s-08-notice-page-1")
 	for index in range(1, mini(pages, 4)):
 		notice.show_page(index)
@@ -520,6 +545,7 @@ func _notice_and_history(shell: ShellBoot) -> void:
 		_check("the update history lists the newest updates", (NEWEST_UPDATES + ["2026-10-peace-and-weariness"]).all(func(id: String) -> bool: return history_ids.has(id)), ", ".join(PackedStringArray(history_ids.slice(0, 6))))
 		_check("the browser map's notice of smoother zooming is left out of the native history", not history_ids.has("2026-11-smoother-zooming"))
 		_check("beta's notice of picture edges and strike targets is told in the native one instead", not history_ids.has("2026-11-picture-edges-and-strike-targets") and history_ids.has("2026-11-native-sharp-at-any-size"))
+		_check("the browser map's graphics work and the Mac opening are left out, and native tells its window instead", not history_ids.has("2026-11-less-for-the-gpu") and not history_ids.has("2026-11-mac-opening") and history_ids.has("2026-11-native-fits-the-window"))
 		shell.history.view("2026-10-peace-and-weariness")
 		await _wait(1.6)
 		var viewed := _texts(shell.history.viewing(), PackedStringArray()) if shell.history.viewing() else PackedStringArray()

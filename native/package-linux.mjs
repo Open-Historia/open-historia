@@ -124,6 +124,9 @@ for (const name of fs.readdirSync(sidecar).filter((entry) => /\.(?:mjs|cjs|js)$/
 copy(path.join(sidecar, "dist"), path.join(stage, "native", "sidecar", "dist"), (file, isDir) => isDir || !file.endsWith(".map"));
 copy(path.join(sidecar, "handlers"), path.join(stage, "native", "sidecar", "handlers"), (file, isDir) => isDir || file.endsWith(".mjs") || file.endsWith(".cjs"));
 if (fs.existsSync(path.join(sidecar, "node_modules"))) copy(path.join(sidecar, "node_modules"), path.join(stage, "native", "sidecar", "node_modules"));
+const onDevicePack = await import(pathToFileURL(path.join(here, "onDevicePack.mjs")).href);
+const onDeviceRuntime = onDevicePack.pruneOnDeviceRuntime(path.join(stage, "native", "sidecar", "node_modules"), { platform: "linux", arches: ["x64"] });
+console.log(`staged the on-device model runtime ${(onDeviceRuntime.bytes / 1048576).toFixed(1)} MB (native: ${onDeviceRuntime.native?.join(", ") || "none"}, wasm: ${onDeviceRuntime.wasm?.join(", ") || "none"})`);
 const prebuild = path.join(stage, "native", "sidecar", "node_modules", "@node-datachannel", "linux-x64-gnu", "node_datachannel.node");
 if (fs.existsSync(path.join(sidecar, "node_modules", "node-datachannel")) && !fs.existsSync(prebuild)) throw new Error("The linux-x64-gnu node-datachannel prebuild is missing from native/sidecar/node_modules.");
 

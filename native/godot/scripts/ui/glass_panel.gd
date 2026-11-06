@@ -81,3 +81,8 @@ func _notification(what: int) -> void:
 func set_tint(color: Color) -> void:
 	tint = color
 	_material.set_shader_parameter("tint", tint)
+
+
+func set_border(color: Color) -> void:
+	border = color
+	_material.set_shader_parameter("border_color", border)

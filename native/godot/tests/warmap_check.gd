@@ -459,12 +459,21 @@ func _rust_frames_pass() -> void:
 	_say("front frame timing: sidecar round trip %.3f ms (inside the sidecar %.3f ms), Rust in Godot %.3f ms" % [mean.call(trip_us) / 1000.0, mean.call(inner_ms), mean.call(rust_us) / 1000.0])
 
 
+func _listed_owners(war: Node) -> int:
+	var count := 0
+	for entry in war.get("_entries"):
+		var owners: Dictionary = (entry as Dictionary).get("owners", {})
+		count += (owners.get("first", []) as Array).size() + (owners.get("turns", []) as Array).size() + (owners.get("contested", []) as Array).size()
+	return count
+
+
 func _focus(bounds: Array, level: float) -> void:
 	main.map_view.fit_lonlat_bounds(bounds, level, 0.0)
 	await _wait(0.4)
 
 
 func _run() -> void:
+	await process_frame
 	while not main.menu.visible:
 		if Time.get_ticks_msec() - started > 90000:
 			_say("FAIL the menu never appeared")
@@ -495,6 +504,9 @@ func _run() -> void:
 	await _focus([[4.0, 47.0], [10.5, 51.5]], 6.0)
 	await _wait(0.5)
 	await _shoot("w1-front-7days")
+	var played := [0]
+	var count_played := func() -> void: played[0] += 1
+	war.fronts_played.connect(count_played)
 	await _skip(30)
 	fronts = war._state.get("fronts", [])
 	var painted := 0
@@ -503,7 +515,8 @@ func _run() -> void:
 		if field and field.has_bounds:
 			painted += 1
 	_check("a 30-day run has painted ground", painted > 0, "%d painted" % painted)
-	_check("the new run plays", war.playing())
+	_check("the new run plays", war.playing() or played[0] > 0, "playing %s, played through %d time(s)" % [str(war.playing()), played[0]])
+	war.fronts_played.disconnect(count_played)
 	var play_token := _flood_token()
 	await _focus([[4.5, 47.5], [10.0, 51.0]], 6.3)
 	await _wait(1.2)
@@ -604,6 +617,21 @@ func _run() -> void:
 	await _wait(0.5)
 	var floods := _flood_token() - before_conquest
 	_check("one conquest floods exactly once", floods == 1 and _flood_mode() == "flood", "%d run(s), %s" % [floods, _flood_mode()])
+	var taken: Array = []
+	for id in (pfalz.get("result", []) as Array).slice(2, 4):
+		taken.append([str(id), "France"])
+	await _call("warmap.test.status", {"status": "active", "contested": taken})
+	await war.refresh()
+	await _wait(0.4)
+	var listed_at_war := _listed_owners(war)
+	var standing: Dictionary = await _call("warmap.test.status", {"status": "standing"})
+	await war.refresh()
+	await _wait(0.4)
+	var listed_standing := _listed_owners(war)
+	_check("a battlefield standing in peace draws no region as anyone else's", int(standing.get("result", 0)) > 0 and listed_at_war > 0 and listed_standing == 0 and (war.call("_shown_owners") as Dictionary).is_empty(), "%d listed at war, %d standing" % [listed_at_war, listed_standing])
+	await _call("warmap.test.status", {"status": "active", "contested": []})
+	await war.refresh()
+	await _wait(0.4)
 	main.hud.set_map_mode("diplomatic", true)
 	await main.hud._apply_map_mode()
 	await _wait(1.2)

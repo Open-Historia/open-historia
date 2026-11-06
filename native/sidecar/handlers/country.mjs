@@ -845,7 +845,7 @@ export const register = (ctx) => {
       worn = null;
     }
     return {
-      power: profile.power === null ? "—" : (Math.round(profile.power * 10) / 10).toLocaleString(),
+      power: extras.militaryPower.formatMilitaryPower(profile.power),
       rows: MILITARY_FIGURE_ORDER.filter((key) => key !== "resources" || profile.supplied).map((key) => {
         const value = Number(figures?.[key]) || 0;
         const low = (key === "weariness" && value > 0) || (key === "resources" && value < RESOURCES_SHORT_FROM);
@@ -1425,7 +1425,7 @@ export const register = (ctx) => {
       if (metric.kind === "money") return formatEuroTotal(value);
       if (metric.kind === "money each") return formatEuroPerCapita(value);
       if (metric.kind === "index") return String(Math.round(value));
-      if (metric.kind === "weight") return (Math.round(value * 10) / 10).toLocaleString();
+      if (metric.kind === "weight") return extras.militaryPower.formatMilitaryPower(value);
       return formatCompactNumber(value);
     };
     const shown = showAll ? ranking.rows : ranking.rows.slice(0, RANKING_ROWS_FIRST);

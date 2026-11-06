@@ -128,6 +128,7 @@ func _clear_shell() -> void:
 		await process_frame
 
 func _run() -> void:
+	await process_frame
 	while not main.menu.visible:
 		if Time.get_ticks_msec() - started > 120000:
 			_say("FAIL the menu never appeared")

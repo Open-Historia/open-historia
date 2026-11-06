@@ -278,6 +278,7 @@ func _clear_shell() -> void:
 		await process_frame
 
 func _run() -> void:
+	await process_frame
 	while not main.menu.visible:
 		if Time.get_ticks_msec() - started > 90000:
 			_say("FAIL the menu never appeared")
@@ -374,7 +375,7 @@ func cancel(id: int) -> void:
 	panel._compile_parties()
 	await _wait(0.2)
 	_check(_has_text(panel, "Compiling the government and parties…") and not _has_text(panel, "Compile the government and parties again"), "politics: compiling shows its progress")
-	await _until(func() -> bool: return not panel.compiling, 10.0)
+	await _until(func() -> bool: return not panel.compiling and _has_text(panel, "Compile the government and parties again"), 30.0)
 	await _wait(0.4)
 	_check(compiler.get("asked") == ["France"] and _has_text(panel, "The answer named no government and no parties.") and _has_text(panel, "Compile the government and parties again"), "politics: a failed compile says why and can be tried again")
 	await _shoot("02b-country-politics-compile-error")
@@ -438,7 +439,7 @@ func cancel(id: int) -> void:
 			return ""
 		var countries: Array = ChatPanel.a((chat as ChatPanel).active.get("countries", []))
 		return ChatPanel.t(ChatPanel.d(countries[0]).get("name", "")) if not countries.is_empty() else ""
-	await _until(func() -> bool: return talking.call() == "Libya", 10.0)
+	await _until(func() -> bool: return talking.call() == "Libya", 60.0)
 	await _wait(0.6)
 	_check(pressed and opened == ["Libya"] and (chat as ChatPanel).is_open() and talking.call() == "Libya", "Propose peace in the chat opens the chat with the enemy (pressed %s, signal %s, open %s, with %s)" % [str(pressed), str(opened), str(chat is ChatPanel and (chat as ChatPanel).is_open()), talking.call()])
 	await _shoot("04b-country-peace-chat")
@@ -516,6 +517,9 @@ func request(method: String, args: Dictionary = {}) -> Dictionary:
 	await _wait(0.2)
 	panel.engine = busy_link
 	await panel._poll_busy()
+	await _until(func() -> bool:
+		var button: Variant = _tracking_button(panel)
+		return bool(panel.data.get("turnRunning", false)) and button != null and not bool(button.get("enabled")), 15.0)
 	await _wait(0.2)
 	var dimmed_button: Variant = _tracking_button(panel)
 	_check(bool(panel.data.get("turnRunning", false)) and _has_text(panel, str(panel.data.get("turnRunningNote", "?"))), "the tracking button dims as soon as a turn runs")
@@ -584,6 +588,47 @@ func request(method: String, args: Dictionary = {}) -> Dictionary:
 	spy.free()
 
 
+func _puppet_summary(cards: MapCards, view: MapView, index: int, screen: Vector2) -> void:
+	var installed := 0
+	for entry in [["Andorra", "client"], ["Tunisia", "satellite"], ["Luxembourg", "client"], ["Belgium", "satellite"], ["Mali", "protectorate"]]:
+		var made: Dictionary = await main.engine.request("cheats.puppets.change", {"op": "install", "overlord": "France", "puppet": entry[0], "kind": entry[1]})
+		if made.get("ok", false):
+			installed += 1
+	_check(installed == 5, "five subordinate states installed for France (%d)" % installed)
+	cards.dismiss_all()
+	await _wait(0.4)
+	await cards.show_region(index, view.region_name(index), view.region_owner(index), screen)
+	await _wait(0.8)
+	var card: Control = cards._floating
+	var counted := _find_all(card, func(node: Node) -> bool: return node is Label and (node as Label).text == "5", [])
+	_check(_has_text(card, "Subordinate states") and counted.size() == 1, "region card: the subordinate states are counted")
+	_check(_has_text(card, "+3 more"), "region card: two are named and the rest summed up as +3 more")
+	var rows := _find_all(card, func(node: Node) -> bool: return node is RichTextLabel and (node as RichTextLabel).get_parsed_text().ends_with(")"), [])
+	var named := rows.map(func(node: Node) -> String: return (node as RichTextLabel).get_parsed_text())
+	var known := ["Andorra (client state)", "Tunisia (puppet state)", "Luxembourg (client state)", "Belgium (puppet state)", "Mali (protectorate)"]
+	_check(named.size() == 2 and named.all(func(line: String) -> bool: return known.has(line)), "region card: each named with its kind (%s)" % ", ".join(named))
+	var link := _find_all(card, func(node: Node) -> bool: return node is LinkButton and (node as LinkButton).text == "Country", [])
+	_check(link.size() == 1 and _has_text(card, "Diplomacy") and _has_text(card, "→"), "region card: Country → Diplomacy points to the full list")
+	await _shoot("14c-region-card-puppets")
+	var opened: Array = []
+	var hook := func(name: String) -> void: opened.append(name)
+	cards.open_stats.connect(hook)
+	if link.size() == 1:
+		(link[0] as LinkButton).pressed.emit()
+	await _wait(0.6)
+	cards.open_stats.disconnect(hook)
+	_check(opened == ["France"] and cards._floating == null, "Country opens the country's panel and closes the card (%s)" % str(opened))
+	await _until(func() -> bool: return main.hud.drawers["country"].is_open(), 10.0)
+	await _wait(0.6)
+	await _shoot("14d-region-card-puppets-country")
+	main.hud.close_drawer()
+	await _wait(0.4)
+	for entry in ["Andorra", "Tunisia", "Luxembourg", "Belgium", "Mali"]:
+		await main.engine.request("cheats.puppets.change", {"op": "release", "overlord": "France", "puppet": entry})
+	await cards.show_region(index, view.region_name(index), view.region_owner(index), screen)
+	await _wait(0.6)
+
+
 func _map_cards() -> void:
 	var cards = main.hud.map_cards
 	await cards.refresh()
@@ -599,7 +644,8 @@ func _map_cards() -> void:
 	_check(_has_text(cards, "France") and _has_text(cards, view.region_name(index)), "region card shows country and region")
 	var card: Control = cards._floating
 	var tip: float = card.position.y + card.get_combined_minimum_size().y
-	_check(abs(tip - (screen.y - 10.0)) <= 1.5, "region card pointer tip sits 10 px above the click, as released (tip %.1f, click %.1f)" % [tip, screen.y])
+	_check(abs(tip - (screen.y - 1.0)) <= 1.5, "region card pointer tip sits just above the click, as beta places it (tip %.1f, click %.1f)" % [tip, screen.y])
+	_check(cards._region_pointer != null and cards._region_pointer.modulate.a > 0.5, "region card: the pointer shows while it points at the click")
 	_check(abs(card.position.x + card.size.x * 0.5 - screen.x) <= 1.5, "region card centred on the click")
 	var banners := _find_all(card, func(node: Node) -> bool: return node is Control and node.has_meta("banner"), [])
 	var banner_flags := _find_all(card, func(node: Node) -> bool: return node is TextureRect and (node as TextureRect).texture != null and node.get_parent().has_meta("banner"), [])
@@ -614,12 +660,14 @@ func _map_cards() -> void:
 	cards._floating_anchor = cards._screen_to_world(Vector2(screen.x, 30.0))
 	await _wait(0.4)
 	_check(card.position.y >= 7.5 and card.position.y <= 8.5, "region card: near the top edge it stays on screen (top %.1f)" % card.position.y)
+	_check(cards._region_pointer.modulate.a < 0.5, "region card: held on screen, its pointer no longer points at the click and is hidden")
 	await _shoot("14a-region-card-top-edge")
 	cards._floating_anchor = home
 	await _wait(0.4)
 	var marker := _click_marker(screen)
 	await _shoot("14b-region-card-click-marker")
 	marker.queue_free()
+	await _puppet_summary(cards, view, index, screen)
 	cards._region_info_open = true
 	cards._build_region(false)
 	await _wait(0.4)

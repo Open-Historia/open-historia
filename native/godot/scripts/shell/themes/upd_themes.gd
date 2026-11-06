@@ -8,8 +8,9 @@ const Swarms := preload("res://scripts/shell/themes/theme_swarms.gd")
 const Espionage2 := preload("res://scripts/shell/themes/theme_espionage.gd")
 const Rostra := preload("res://scripts/shell/themes/theme_rostra.gd")
 const AirRaid := preload("res://scripts/shell/themes/theme_air_raid.gd")
+const Themes := preload("res://scripts/shell/themes/theme_themes.gd")
 
-const REGISTERED := ["rostra", "airRaid", "espionage2", "swarms", "warsAndFronts2", "seasonsAndWeather", "music", "chronicle"]
+const REGISTERED := ["themes", "rostra", "airRaid", "espionage2", "swarms", "warsAndFronts2", "seasonsAndWeather", "music", "chronicle"]
 
 
 static func px(value: float) -> float:
@@ -31,6 +32,8 @@ static func page(banner: Dictionary, update: Dictionary, ctx: Dictionary) -> Con
 	if str(update.get("kind", "")) != "major":
 		return minor_banner(banner, update, ctx)
 	match str(banner.get("theme", "")):
+		"themes":
+			return Themes.page(banner, update, ctx)
 		"rostra":
 			return Rostra.page(banner, update, ctx)
 		"airRaid":
@@ -59,6 +62,8 @@ static func chrome(banner: Dictionary, update: Dictionary) -> Dictionary:
 			"skip": {},
 		}
 	match str(banner.get("theme", "")):
+		"themes":
+			return Themes.chrome()
 		"rostra":
 			return Rostra.chrome()
 		"airRaid":

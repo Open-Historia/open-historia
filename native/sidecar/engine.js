@@ -275,6 +275,7 @@ export * as mxBasemapPick from "../../src/runtime/basemapPick.js";
 export * as mxDetailedOffers from "../../src/Game/Map/detailedMapOffers.js";
 export * as mxTiledWording from "../../src/Game/Map/tiledBasemapWording.js";
 export * as mxMapProjection from "../../server/mapProjection.js";
+export * as mxCameraBounds from "../../src/Game/Map/cameraBounds.js";
 export * as mxOwnerNames from "../../src/runtime/ownerNames.js";
 export * as mxDeviceProfile from "../../src/runtime/deviceProfile.js";
 export * as newGameWorld from "../../src/runtime/newGameWorld.js";
@@ -372,3 +373,8 @@ export * as advisorActionReview from "../../src/Game/GameUI/advisorActionReview.
 export * as advisorActionApproval from "../../src/Game/GameUI/advisorActionApproval.js";
 export * as advisorProjectRouting from "../../src/Game/GameUI/advisorProjectRouting.js";
 export * as characterConversations from "../../src/Game/AI/characterConversations.js";
+export * as tlModels from "../../src/runtime/translationModels.js";
+export * as speechEngines from "../../src/runtime/speechEngines.js";
+export * as speechSilence from "../../src/runtime/speechSilence.js";
+export * as speechPieces from "../../src/runtime/speechPieces.js";
+export * as speechSystem from "../../electron/speechSystem.cjs";

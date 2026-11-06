@@ -163,8 +163,8 @@ func _button(caption: String, primary: bool) -> Button:
 	for state in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_hover_pressed_color"]:
 		node.add_theme_color_override(state, ink)
 	node.add_theme_color_override("font_disabled_color", Color(ink, 0.5))
-	var bg := PRIMARY_BG if primary else BUTTON_BG
-	var border := PRIMARY_BORDER if primary else BUTTON_BORDER
+	var bg := UiTheme.accented(PRIMARY_BG) if primary else BUTTON_BG
+	var border := UiTheme.accented(PRIMARY_BORDER) if primary else BUTTON_BORDER
 	var normal := UI.box(bg, border, 10, 1, Vector4(16, 0, 16, 0))
 	var hover := UI.box(Color(bg, minf(1.0, bg.a + 0.08)), Color(border, minf(1.0, border.a + 0.15)), 10, 1, Vector4(16, 0, 16, 0))
 	for state in ["normal", "focus", "disabled"]:

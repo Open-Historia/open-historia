@@ -324,7 +324,7 @@ func _on_setting_changed(key: String, value: Variant) -> void:
 	if redraw:
 		shell.end_game_loading()
 	if key == "ui_language":
-		await i18n.set_language(str(value))
+		await i18n.switch_language(str(value))
 		_plain_title()
 	elif key == "map_mode":
 		hud.set_map_mode(str(value))
@@ -522,6 +522,10 @@ func _build_boot() -> void:
 		devtools.call("setup", engine, self)
 		hotkeys.devtools_requested.connect(func() -> void: _call(devtools, "toggle"))
 	shell = ShellBoot.new()
+	shell.language_switch = func(code: String) -> String:
+		var shown: String = await i18n.switch_language(code)
+		_plain_title()
+		return shown
 	add_child(shell)
 	shell.map_view = map_view
 	shell.setup(engine, menu.loader, hud)
@@ -615,6 +619,7 @@ func _on_engine_ready(_data: Dictionary) -> void:
 	if app_update and bool(await app_update.call("run_launch")):
 		return
 	await i18n.start(engine)
+	await UiTheme.install(engine)
 	await shell.prepare()
 	_show("menu")
 	shell.reveal()

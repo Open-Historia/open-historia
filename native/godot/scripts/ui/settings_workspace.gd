@@ -108,6 +108,7 @@ var _cache_busy := false
 var _cache_error := ""
 var _music_busy := false
 var _copied_command := ""
+var _header_bar: Control
 var _daily_limit_draft := ""
 var _background_cap_draft := ""
 var _label_font_draft := ""
@@ -154,6 +155,32 @@ func _ready() -> void:
 	resized.connect(_layout)
 	resized.connect(_refresh_display_mode)
 	_layout()
+	UiTheme.events().changed.connect(_on_theme_changed)
+
+
+func _exit_tree() -> void:
+	if UiTheme.events().changed.is_connected(_on_theme_changed):
+		UiTheme.events().changed.disconnect(_on_theme_changed)
+
+
+func _card_style() -> StyleBoxFlat:
+	return UI.box(UiTheme.pick("bg", Color(20 / 255.0, 21 / 255.0, 24 / 255.0, 0.97)), UiTheme.pick("line", Color(1, 1, 1, 0.08)), 18, 1)
+
+
+func _section_style() -> StyleBoxFlat:
+	return UI.box(UiTheme.pick("surface", Color(1, 1, 1, 0.025)), UiTheme.pick("line", Color(1, 1, 1, 0.06)), 14, 1, Vector4(20, 17.6, 20, 17.6))
+
+
+func _on_theme_changed() -> void:
+	if not is_instance_valid(_card):
+		return
+	_card.add_theme_stylebox_override("panel", _card_style())
+	if is_instance_valid(_header_bar):
+		_header_bar.add_theme_stylebox_override("panel", UI.box(UiTheme.pick("accent", BLUE), Color(0, 0, 0, 0), 3, 0))
+	_build_nav()
+	for child in _content.get_children():
+		if child is PanelContainer and child.has_meta("settings_section"):
+			child.add_theme_stylebox_override("panel", _section_style())
 
 
 func setup(engine_link: EngineLink, setup_context: Dictionary) -> void:
@@ -336,9 +363,9 @@ func _build_card() -> void:
 	titles.add_theme_constant_override("separation", 2)
 	var title_row := HBoxContainer.new()
 	title_row.add_theme_constant_override("separation", 10)
-	var bar := _bar(4, 17, 3)
-	bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	title_row.add_child(bar)
+	_header_bar = _bar(4, 17, 3, UiTheme.pick("accent", BLUE))
+	_header_bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	title_row.add_child(_header_bar)
 	var title := UI.label("Settings", _fs(1.04), SLATE_INK, 800)
 	title.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	title_row.add_child(title)
@@ -422,7 +449,7 @@ func _build_nav() -> void:
 		var button := Button.new()
 		button.focus_mode = Control.FOCUS_NONE
 		button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-		var normal := UI.box(Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.12) if selected else Color(0, 0, 0, 0), Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.3) if selected else Color(0, 0, 0, 0), 10, 1, Vector4(10.4, 8.8, 10.4, 8.8))
+		var normal := UI.box(UiTheme.pick("active", Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.12)) if selected else Color(0, 0, 0, 0), Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.3) if selected else Color(0, 0, 0, 0), 10, 1, Vector4(10.4, 8.8, 10.4, 8.8))
 		var hover := normal.duplicate() as StyleBoxFlat
 		if not selected:
 			hover.bg_color = Color(1, 1, 1, 0.04)
@@ -437,8 +464,8 @@ func _build_nav() -> void:
 		tile.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		tile.custom_minimum_size = Vector2(30, 30)
 		tile.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-		tile.add_theme_stylebox_override("panel", UI.box(Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.24) if selected else Color(1, 1, 1, 0.04), Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.4) if selected else Color(0, 0, 0, 0), 8, 1))
-		var glyph := UI.label(str(entry["icon"]), _fs(0.85), BLUE_LIGHT if selected else Color(1, 1, 1, 0.7), 700)
+		tile.add_theme_stylebox_override("panel", UI.box(UiTheme.pick("active", Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.24)) if selected else Color(1, 1, 1, 0.04), Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.4) if selected else Color(0, 0, 0, 0), 8, 1))
+		var glyph := UI.label(str(entry["icon"]), _fs(0.85), UiTheme.pick("accent", BLUE_LIGHT) if selected else Color(1, 1, 1, 0.7), 700)
 		glyph.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		glyph.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 		tile.add_child(glyph)
@@ -447,7 +474,7 @@ func _build_nav() -> void:
 		texts.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		texts.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		texts.add_theme_constant_override("separation", 2)
-		texts.add_child(UI.label(str(entry["label"]), _fs(0.8), BLUE_PALE if selected else Color(1, 1, 1, 0.6), 750 if selected else 600))
+		texts.add_child(UI.label(str(entry["label"]), _fs(0.8), UiTheme.pick("accent", BLUE_PALE) if selected else Color(1, 1, 1, 0.6), 750 if selected else 600))
 		var description := UI.wrapped(str(entry["description"]), _fs(0.62), Color(191 / 255.0, 219 / 255.0, 254 / 255.0, 0.65) if selected else Color(1, 1, 1, 0.32))
 		texts.add_child(description)
 		row.add_child(texts)
@@ -546,7 +573,7 @@ func _page_header() -> Control:
 	column.add_theme_constant_override("separation", 3)
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 8)
-	row.add_child(UI.label(str(page["icon"]), _fs(0.95), BLUE_LIGHT))
+	row.add_child(UI.label(str(page["icon"]), _fs(0.95), UiTheme.pick("accent", BLUE_LIGHT)))
 	row.add_child(UI.label(str(page["label"]), _fs(1.1), SLATE_INK, 800))
 	column.add_child(row)
 	column.add_child(UI.label(str(page["description"]), _fs(0.72), HELPER_INK))
@@ -558,7 +585,8 @@ func _page_header() -> Control:
 
 func _section(title: String, description := "", right: Control = null) -> VBoxContainer:
 	var card := PanelContainer.new()
-	card.add_theme_stylebox_override("panel", UI.box(Color(1, 1, 1, 0.025), Color(1, 1, 1, 0.06), 14, 1, Vector4(20, 17.6, 20, 17.6)))
+	card.add_theme_stylebox_override("panel", _section_style())
+	card.set_meta("settings_section", true)
 	card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	var column := VBoxContainer.new()
 	column.add_theme_constant_override("separation", 0)
@@ -630,10 +658,10 @@ func _rule(color: Color) -> ColorRect:
 	return rule
 
 
-func _bar(width: float, height: float, radius: int) -> Control:
+func _bar(width: float, height: float, radius: int, tint := BLUE) -> Control:
 	var bar := Panel.new()
 	bar.custom_minimum_size = Vector2(width, height)
-	bar.add_theme_stylebox_override("panel", UI.box(BLUE, Color(0, 0, 0, 0), radius, 0))
+	bar.add_theme_stylebox_override("panel", UI.box(tint, Color(0, 0, 0, 0), radius, 0))
 	bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	return bar
 
@@ -1078,8 +1106,14 @@ func _export_dir() -> String:
 func _build_general() -> void:
 	var language := _section("Language", "Interface language affects the UI. Chat language steers advisor and diplomatic replies.")
 	language.add_child(_language_picker("ui", "UI language", str(_values.get("uiLanguage", "en")), func(code: String) -> void:
-		_values["uiLanguage"] = code
-		setting_changed.emit("ui_language", code)
+		if code == str(_values.get("uiLanguage", "en")) or I18n.current == null:
+			return
+		var shown := await I18n.current.switch_language(code)
+		setting_changed.emit("ui_language", shown)
+		var reply: Variant = await _req("settings.values")
+		if typeof(reply) == TYPE_DICTIONARY:
+			_values = reply
+		_values["uiLanguage"] = shown
 		_rerender(), true))
 	language.add_child(_language_picker("chat", "AI chat language", str(_values.get("chatLanguage", "en")), func(code: String) -> void:
 		var reply: Variant = await _req("settings.chatLanguage", {"code": code})
@@ -1090,6 +1124,7 @@ func _build_general() -> void:
 	_display_mode(display)
 	_add_toggle(display, "Show the vault door every time", _flag("vault_door_every_time"), func() -> void: _set_flag("vault_door_every_time", not _flag("vault_door_every_time")))
 	_add_toggle_note(display, "On: the vault door appears every time you start the game. Off: only the first time you start it after an update.")
+	_section("Interface appearance", "Choose the colours of the main menu, the panels and the popups.").add_child(ThemeSettings.new())
 	var access := _section("Accessibility", "Reduce automatic camera motion and map animations without changing simulation behavior.")
 	var reduced := _system_reduced or (_flag("map_disable_idle_rotation") and _flag("map_disable_event_camera"))
 	_add_toggle(access, "Reduce motion", reduced, func() -> void:
@@ -1138,11 +1173,11 @@ func _refresh_display_mode() -> void:
 	_show_display_mode(ShellBoot.display_mode())
 
 
-func _language_options(query: String, current: String, mark_built_in: bool) -> Array:
+func _language_options(query: String, current: String, interface_list: bool) -> Array:
 	var options: Array = []
 	var needle := query.strip_edges().to_lower()
 	var listed := false
-	for language: Dictionary in _values.get("languages", []):
+	for language: Dictionary in _values.get("uiLanguages" if interface_list else "languages", _values.get("languages", [])):
 		var code := str(language.get("code", ""))
 		var name := str(language.get("name", ""))
 		var native := str(language.get("native", ""))
@@ -1151,16 +1186,14 @@ func _language_options(query: String, current: String, mark_built_in: bool) -> A
 		var text := name
 		if not native.is_empty() and native != name:
 			text += " — " + native
-		if mark_built_in and bool(language.get("builtIn", false)):
-			text += " ✓"
 		options.append([code, text])
 		if code == current:
 			listed = true
 	return [options, listed]
 
 
-func _fill_language_select(select: OptionButton, query: String, current: String, mark_built_in: bool) -> void:
-	var found: Array = _language_options(query, current, mark_built_in)
+func _fill_language_select(select: OptionButton, query: String, current: String, interface_list: bool) -> void:
+	var found: Array = _language_options(query, current, interface_list)
 	var options: Array = found[0]
 	var listed: bool = found[1]
 	select.clear()
@@ -1181,7 +1214,7 @@ func _fill_language_select(select: OptionButton, query: String, current: String,
 		select.select(chosen)
 
 
-func _language_picker(key: String, label_text: String, current: String, on_select: Callable, mark_built_in: bool) -> Control:
+func _language_picker(key: String, label_text: String, current: String, on_select: Callable, interface_list: bool) -> Control:
 	var group := VBoxContainer.new()
 	group.add_theme_constant_override("separation", 0)
 	var head := HBoxContainer.new()
@@ -1207,37 +1240,25 @@ func _language_picker(key: String, label_text: String, current: String, on_selec
 	var select := _select([], "", on_select)
 	select.size_flags_stretch_ratio = 1.6
 	select.add_theme_stylebox_override("normal", UI.box(Color(1, 1, 1, 0.04), Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.3), 8, 1, Vector4(12, 6, 12, 6)))
-	_fill_language_select(select, query, current, mark_built_in)
+	_fill_language_select(select, query, current, interface_list)
 	row.add_child(select)
 	var search := _line(query, "Search languages...")
 	search.custom_minimum_size.x = 130
 	search.text_changed.connect(func(text: String) -> void:
 		_language_query[key] = text
 		clear.visible = not text.is_empty()
-		_fill_language_select(select, text, current, mark_built_in))
+		_fill_language_select(select, text, current, interface_list))
 	clear.pressed.connect(func() -> void:
 		_language_query[key] = ""
 		search.text = ""
 		clear.visible = false
-		_fill_language_select(select, "", current, mark_built_in))
+		_fill_language_select(select, "", current, interface_list))
 	row.add_child(search)
 	group.add_child(row)
-	var built_in := current == "en" or _language_built_in(current)
-	var helper := ""
-	if key == "ui":
-		helper = "Languages marked ✓ ship with the game translated. What scenarios add (names, descriptions, custom stats) is translated by your AI model, once." if built_in else "This language is translated by your AI model as you play, once per string. Languages marked ✓ ship with the game translated."
-	else:
-		helper = "What the advisor and diplomatic chats reply in. Defaults to your interface language."
-	_add_helper(group, helper)
+	if key != "ui":
+		_add_helper(group, "What the advisor and diplomatic chats reply in. Defaults to your interface language.")
 	_gap(group, 14.4)
 	return group
-
-
-func _language_built_in(code: String) -> bool:
-	for language: Dictionary in _values.get("languages", []):
-		if str(language.get("code", "")) == code:
-			return bool(language.get("builtIn", false))
-	return false
 
 
 func _audio_set(change: Dictionary) -> void:

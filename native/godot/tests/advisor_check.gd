@@ -191,6 +191,7 @@ func _clear_shell() -> void:
 		await process_frame
 
 func _run() -> void:
+	await process_frame
 	while not main.menu.visible:
 		if Time.get_ticks_msec() - started > 90000:
 			_say("FAIL the menu never appeared")
@@ -630,9 +631,105 @@ func _run() -> void:
 	var cleared: Variant = await _doc("advisor")
 	_check("Clear chat empties the conversation and the file", panel.messages.is_empty() and typeof(cleared) == TYPE_ARRAY and (cleared as Array).is_empty())
 	await _shoot("advisor-19-cleared")
+	await _microphone()
 	await _contacts()
 	_say("%d failures" % failures.size())
 	_finish(0 if failures.is_empty() else 1)
+
+
+func _tone(seconds: float, amplitude: float, hertz: float) -> PackedFloat32Array:
+	var samples := PackedFloat32Array()
+	var count := int(seconds * AdvisorMic.SAMPLE_RATE)
+	samples.resize(count)
+	for index in range(count):
+		samples[index] = amplitude * (sin(TAU * hertz * index / AdvisorMic.SAMPLE_RATE) if hertz > 0.0 else randf_range(-1.0, 1.0))
+	return samples
+
+
+func _feed_live(mic: AdvisorMic, seconds: float, amplitude: float, hertz: float) -> void:
+	var blocks := int(round(seconds * 10.0))
+	for index in range(blocks):
+		mic.feed(_tone(0.1, amplitude, hertz))
+		await _wait(0.1)
+
+
+func _microphone() -> void:
+	var mic: AdvisorMic = panel._mic
+	mic.capture_microphone = false
+	await mic.probe()
+	await _frames(3)
+	_check("the microphone sits inside the empty box, right of the text", mic.visible and mic.get_parent().get_parent() == panel._field and mic.get_index() == 1, "%s %s" % [mic.visible, mic.speech_engine])
+	_check("the microphone is 2rem round and says what it does", mic.button().size.is_equal_approx(Vector2(32, 32)) and mic.button().tooltip_text == "Speak to the advisor", str(mic.button().size))
+	_check("the box has no placeholder", panel._input.placeholder_text.is_empty(), panel._input.placeholder_text)
+	await _shoot("advisor-20-mic-idle")
+	panel._input.text = "Is the fleet ready?"
+	panel._input.text_changed.emit()
+	await _frames(2)
+	_check("typed words take the microphone's place", not mic.visible)
+	panel._input.text = ""
+	panel._input.text_changed.emit()
+	await _frames(2)
+	_check("an empty box brings the microphone back", mic.visible)
+	mic.press()
+	_check("the system's recogniser is tried first and, missing, the press asks for Whisper", await _until(func() -> bool: return mic.phase == "asking", 10.0), mic.phase)
+	var prompt := mic.note_text()
+	_check("the prompt names the model and its size, with no reason when there is no system program", prompt == "Speech is recognised on this device. It needs a one-time download of the Whisper base model (80 MB).", prompt)
+	_check("the prompt offers Cancel and Download", _find_button(mic.note(), "Cancel") != null and _find_button(mic.note(), "Download") != null)
+	await _shoot("advisor-21-mic-download-prompt")
+	_find_button(mic.note(), "Cancel").pressed.emit()
+	await _frames(2)
+	_check("Cancel closes the prompt", mic.phase == "idle" and mic.note() == null)
+	mic.press()
+	await _until(func() -> bool: return mic.phase == "asking", 10.0)
+	_find_button(mic.note(), "Download").pressed.emit()
+	_check("Download shows the progress", await _until(func() -> bool: return mic.phase == "downloading" and mic.progress > 0, 5.0), "%s %d" % [mic.phase, mic.progress])
+	await _shoot("advisor-22-mic-downloading")
+	_check("once downloaded it listens", await _until(func() -> bool: return mic.phase == "listening", 15.0), mic.phase)
+	await _frames(3)
+	_check("listening: the note says when it sends, the button stops", mic.note_text() == "Listening. It sends after 3 seconds of silence." and mic.button().tooltip_text == "Stop listening", mic.note_text())
+	await _shoot("advisor-23-mic-listening")
+	var asked := panel.messages.size()
+	await _feed_live(mic, 1.0, 0.002, 0.0)
+	await _feed_live(mic, 2.0, 0.2, 220.0)
+	var quiet_from := Time.get_ticks_msec()
+	var sent: Array = [0]
+	var on_send := func(_text: String) -> void: sent[0] = Time.get_ticks_msec()
+	mic.send_requested.connect(on_send)
+	var heard_live := false
+	while Time.get_ticks_msec() - quiet_from < 8000 and int(sent[0]) == 0:
+		mic.feed(_tone(0.1, 0.002, 0.0))
+		await _wait(0.1)
+		if not heard_live and panel._input.text == "Hold the northern line":
+			heard_live = true
+	mic.send_requested.disconnect(on_send)
+	var waited := (int(sent[0]) - quiet_from) / 1000.0
+	await _until(func() -> bool: return panel.messages.size() > asked, 20.0)
+	_check("what is heard appears in the box before it sends", heard_live)
+	_check("three seconds of silence send it", int(sent[0]) > 0 and waited >= 2.9 and waited <= 4.0, "%.2f s" % waited)
+	_check("it goes through the Advisor's own Send", panel.messages.size() > asked and str(panel.messages[asked].get("text", "")) == "Hold the northern line")
+	_check("the box is empty again after the send", panel._input.text.is_empty())
+	await _until(func() -> bool: return not panel._loading, 60.0)
+	await _wait(0.5)
+	panel._input.text = "About the fleet,"
+	panel._update_send()
+	mic.press()
+	await _until(func() -> bool: return mic.phase == "listening", 10.0)
+	await _feed_live(mic, 1.0, 0.002, 0.0)
+	await _feed_live(mic, 1.5, 0.2, 220.0)
+	var paused_at := Time.get_ticks_msec()
+	while panel._input.text != "About the fleet, Hold the northern line" and Time.get_ticks_msec() - paused_at < 2000:
+		mic.feed(_tone(0.1, 0.002, 0.0))
+		await _wait(0.1)
+	_check("what is heard is added after what was typed", panel._input.text == "About the fleet, Hold the northern line", panel._input.text)
+	var before := panel.messages.size()
+	mic.press()
+	await _until(func() -> bool: return mic.phase == "idle", 10.0)
+	await _wait(0.6)
+	_check("pressing again stops without sending and keeps what was heard after what was typed", panel.messages.size() == before and panel._input.text == "About the fleet, Hold the northern line", panel._input.text)
+	panel._input.text = ""
+	panel._update_send()
+	panel._on_clear_pressed()
+	await _wait(1.0)
 
 
 func _trigger(name: String, chevron: String, retired := false) -> Button:
@@ -659,8 +756,10 @@ func _conversation_look() -> void:
 	_check("the drawer is a dark navy conversation surface", panel.tint == Color("#111d2a"))
 	_check("the header reads ADVISOR beside a ◇", panel.header_title.uppercase and panel.header_title.get_parent().get_parent().get_child(0) is Label and (panel.header_title.get_parent().get_parent().get_child(0) as Label).text == "◇")
 	_check("the send button is a conventional arrow, not a rocket", panel._send_button.text.is_empty() and panel._send_button.icon != null and panel._send_button.tooltip_text == "Send message" and panel._send_button.custom_minimum_size == Vector2(42, 42) and _find_button(panel, "🚀") == null)
-	var normal := panel._input.get_theme_stylebox("normal") as StyleBoxFlat
-	_check("the composer is a rectangular navy field", normal != null and normal.bg_color == Color("#192b3b") and normal.corner_radius_top_left == 6 and panel._input.custom_minimum_size.y >= 42.0)
+	panel._input.release_focus()
+	panel._style_field()
+	var normal := panel._field.get_theme_stylebox("panel") as StyleBoxFlat
+	_check("the composer is a rectangular navy field holding the box and the microphone", normal != null and normal.bg_color == Color("#192b3b") and normal.corner_radius_top_left == 6 and panel._input.custom_minimum_size.y >= 42.0 and panel._mic.get_parent().get_parent() == panel._field)
 	var users := _bubbles("user")
 	var replies := _bubbles("advisor")
 	var user_style: StyleBoxFlat = (users[0] as PanelContainer).get_theme_stylebox("panel") as StyleBoxFlat if not users.is_empty() else null
@@ -812,7 +911,7 @@ func _contacts() -> void:
 	_check("the contact is kept with its link, type and personality", not valls.is_empty() and str(valls.get("title", "")) == "Head of government" and typeof(valls.get("binding")) == TYPE_DICTIONARY and str(valls.get("recipientType", "")) == "advisor-minister" and str(valls.get("personality", "")) == "Blunt about the deficit.\nLoyal to the President." and str(valls.get("status", "")) == "current", JSON.stringify(valls))
 	_check("the bar names the contact and its office", _trigger("Manuel Valls", "▴") != null and _find_text(panel, "Head of government · Political World"))
 	_check("the list gives the contact's type", _labels_with(panel, "Head of government · Advisor / Minister"))
-	_check("the composer is addressed to the contact", panel._input.placeholder_text == "Message Manuel Valls…" and panel.messages.is_empty(), panel._input.placeholder_text)
+	_check("the composer has no placeholder for a contact", panel._input.placeholder_text.is_empty() and panel.messages.is_empty(), panel._input.placeholder_text)
 	var actions_before := JSON.stringify(await _doc("actions")).count("Convene the budget cabinet")
 	_check("the contact answers", await _ask_panel("What do you make of the budget?", 2), str(panel.messages.size()))
 	await _wait(0.8)
@@ -839,7 +938,7 @@ func _contacts() -> void:
 	await _shoot("advisor-21-contact-reply")
 	var contact_thread: String = panel.active_thread
 	await panel._select_recipient("chief")
-	_check("the chief advisor's conversation is its own", panel.active_thread == "chief" and panel.messages.is_empty() and panel._input.placeholder_text.begins_with("Ask your advisor…"))
+	_check("the chief advisor's conversation is its own", panel.active_thread == "chief" and panel.messages.is_empty() and panel._input.placeholder_text.is_empty())
 	await panel._select_recipient(contact_thread)
 	_check("and the contact's comes back with it", panel.active_thread == contact_thread and panel.messages.size() == 2)
 	await _frames(3)
@@ -891,6 +990,7 @@ func _contacts() -> void:
 	await _character()
 	await _chief_identity()
 	await _unsupported_type()
+	await _several_action_fences()
 
 
 func _character() -> void:
@@ -913,7 +1013,7 @@ func _character() -> void:
 	await _frames(3)
 	var jeanne := _contact_named("Jeanne Martin")
 	_check("the character is kept as a Citizen / Civilian with no office", str(jeanne.get("recipientType", "")) == "citizen-civilian" and typeof(jeanne.get("binding")) != TYPE_DICTIONARY, JSON.stringify(jeanne))
-	_check("a character's conversation says what it can see", _find_text(panel, "This character uses only the public scenario timeline and their own conversation history. Private government records and diplomacy are not shared.") and _find_text(panel, "No messages yet. Start your conversation.") and panel._input.placeholder_text == "Message Jeanne Martin…", panel._input.placeholder_text)
+	_check("a character's conversation says what it can see", _find_text(panel, "This character uses only the public scenario timeline and their own conversation history. Private government records and diplomacy are not shared.") and _find_text(panel, "No messages yet. Start your conversation.") and panel._input.placeholder_text.is_empty(), panel._input.placeholder_text)
 	_check("the list gives the character's type", _labels_with(panel, "Baker in Lyon · Citizen / Civilian"))
 	var actions_before := JSON.stringify(await _doc("actions")).count("Hold a rally for the budget")
 	_check("the character answers", await _ask_panel("What are people saying about the budget?", 2), str(panel.messages.size()))
@@ -958,7 +1058,7 @@ func _chief_identity() -> void:
 	panel._recipient_draft["personality"] = "Candid and pragmatic; challenges weak arguments."
 	await panel._submit_recipient()
 	await _frames(3)
-	_check("the chief advisor takes its new name and title", str(panel.chief_profile.get("name", "")) == "Dmitri Orlov" and _trigger("Dmitri Orlov", "▴") != null and _find_text(panel, "Chief of Staff") and _labels_with(panel, "Dmitri Orlov · Original conversation") and panel._input.placeholder_text == "Message Dmitri Orlov…", panel._input.placeholder_text)
+	_check("the chief advisor takes its new name and title", str(panel.chief_profile.get("name", "")) == "Dmitri Orlov" and _trigger("Dmitri Orlov", "▴") != null and _find_text(panel, "Chief of Staff") and _labels_with(panel, "Dmitri Orlov · Original conversation") and panel._input.placeholder_text.is_empty(), panel._input.placeholder_text)
 	var stored := JSON.stringify(await _doc("advisor"))
 	_check("the identity is kept as its own record", stored.contains("advisor-chief-profile") and stored.contains("Candid and pragmatic"))
 	await _shoot("advisor-26-chief-customised")
@@ -981,6 +1081,33 @@ func _chief_identity() -> void:
 		await _frames(3)
 	stored = JSON.stringify(await _doc("advisor"))
 	_check("Restore scenario defaults brings back the scenario's advisor and keeps the conversation", panel.chief_profile.is_empty() and _trigger("Chief advisor", "▴") != null and not stored.contains("advisor-chief-profile") and stored.contains("Who am I speaking with?") and panel.messages.size() == before + 2 and panel._recipient_editor.is_empty())
+
+
+func _count_buttons(node: Node, text: String) -> int:
+	var count := 1 if node is Button and (node as Button).text == text and (node as Button).is_visible_in_tree() else 0
+	for child in node.get_children():
+		count += _count_buttons(child, text)
+	return count
+
+
+func _several_action_fences() -> void:
+	await panel._select_recipient("chief")
+	await _frames(3)
+	var before := panel.messages.size()
+	_check("the chief advisor answers with three Action blocks", await _ask_panel("Give me each order separately.", before + 2), str(panel.messages.size()))
+	await _wait(0.6)
+	var reply: Dictionary = panel.messages[panel.messages.size() - 1]
+	var proposals: Array = reply.get("actionProposals", []) if typeof(reply.get("actionProposals")) == TYPE_ARRAY else []
+	var titles := JSON.stringify(proposals)
+	_check("every fenced Action block is offered for review, in order", proposals.size() == 2 and titles.find("Recall the ambassador from Tripoli") >= 0 and titles.find("Open talks with Berlin on the fiscal rules") > titles.find("Recall the ambassador from Tripoli") and not reply.has("actionsSummary"), titles.left(300))
+	var problems: Array = reply.get("actionsProblems", []) if typeof(reply.get("actionsProblems")) == TYPE_ARRAY else []
+	_check("the block that is not a list is reported and offers nothing", problems.has("Action block 2 was not a list; no proposals were offered from it.") and not titles.contains("Not a list of orders"), JSON.stringify(problems))
+	_check("both proposals have their card and no fence is left as raw code", _count_buttons(panel, "Proceed / Queue") >= 2 and _labels_with(panel, "Recall the ambassador from Tripoli") and _labels_with(panel, "Open talks with Berlin on the fiscal rules") and not _labels_with(panel, "Not a list of orders") and not _labels_with(panel, "```"))
+	_check("nothing from the reply is queued before Proceed", not JSON.stringify(await _doc("actions")).contains("Recall the ambassador from Tripoli"))
+	var card := _find_button(panel, "Proceed / Queue")
+	if card:
+		await _scroll_to(card)
+	await _shoot("advisor-28-several-action-fences")
 
 
 func _unsupported_type() -> void:

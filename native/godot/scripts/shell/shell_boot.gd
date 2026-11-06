@@ -30,6 +30,9 @@ var map_view: MapView
 var _settle_serial := 0
 var _driven := false
 var _display_applied := false
+var first_setup: FirstSetup
+var language_switch: Callable
+var _setup_due := false
 
 
 static func display_mode() -> String:
@@ -126,8 +129,10 @@ func prepare() -> void:
 	var told: Dictionary = result.get("notice", {})
 	notice_updates = told.get("updates", [])
 	notice_preview = bool(told.get("preview", false))
+	var due: Dictionary = await engine.request("look.setup.due")
+	_setup_due = due.get("ok", false) and bool((due.get("result", {}) as Dictionary).get("due", false))
 	var decided: Dictionary = result.get("door", {})
-	if not bool(decided.get("show", false)):
+	if not bool(decided.get("show", false)) and not _setup_due:
 		door_state = "open"
 		_hold_music(false)
 		return
@@ -145,8 +150,27 @@ func reveal() -> void:
 	startup.finish()
 	if door and is_instance_valid(door) and door_state == "shut":
 		overlay.move_child(door, overlay.get_child_count() - 1)
+	if _setup_due:
+		_setup_due = false
+		show_first_setup()
 	overlay.move_child(loading, overlay.get_child_count() - 1)
 	_maybe_show_notice()
+
+
+func show_first_setup() -> FirstSetup:
+	if first_setup and is_instance_valid(first_setup):
+		return first_setup
+	first_setup = FirstSetup.new()
+	overlay.add_child(first_setup)
+	first_setup.finished.connect(_on_setup_finished)
+	first_setup.open(engine, language_switch, bool(prefs.get("reduceMotion", false)))
+	return first_setup
+
+
+func _on_setup_finished() -> void:
+	if first_setup and is_instance_valid(first_setup):
+		first_setup.queue_free()
+	first_setup = null
 
 
 func _on_door_opening() -> void:

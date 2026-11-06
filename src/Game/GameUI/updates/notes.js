@@ -338,6 +338,22 @@ const NEW_UPDATES = [
     ],
   },
   {
+    id: "2026-11-native-fits-the-window",
+    kind: "minor",
+    date: "2026-11-05",
+    banners: [
+      {
+        title: "In proportion to the window",
+        items: [
+          "The game now grows with its window: make the window larger and everything in it grows in the same proportion, on a laptop as on a 4K monitor. In a window smaller than usual, everything keeps its usual size.",
+          "Rounded cards and buttons, and the arrows of these notices, no longer show a bright rim along their curves.",
+          "The message that the game was updated now shows once, after the update, and names the day of the new build.",
+          "If the game cannot start because the connection it uses on your computer is taken, it says so instead of closing without a word.",
+        ],
+      },
+    ],
+  },
+  {
     // A Mac report, 2026-11-04: the app "opens then immediately closes". The packed Mac build starts as far as its
     // window in a simulated run; what is left to it is said and logged now (electron/main.cjs app.alreadyRunning,
     // window.shown, the system and folder in app.files, updater.relaunch; a launch update from a translocated copy waits for the next start; server.js EADDRINUSE through __ohFatal) and an Intel Mac's banner

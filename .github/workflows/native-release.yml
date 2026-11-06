@@ -124,7 +124,7 @@ jobs:
       - name: Install the sidecar packages
         working-directory: native/sidecar
         run: |
-          npm ci --no-audit --no-fund
+          npm ci --no-audit --no-fund --onnxruntime-node-install=skip
           ls node_modules/@node-datachannel
 
       - name: Build the engine library and the front engine
@@ -299,7 +299,7 @@ jobs:
       - name: Install the sidecar packages with both darwin node-datachannel builds
         working-directory: native/sidecar
         run: |
-          npm ci --no-audit --no-fund
+          npm ci --no-audit --no-fund --onnxruntime-node-install=skip
           version=$(node -p 'require("./package-lock.json").packages["node_modules/@node-datachannel/darwin-x64"].version')
           integrity=$(node -p 'require("./package-lock.json").packages["node_modules/@node-datachannel/darwin-x64"].integrity')
           for arch in arm64 x64; do
@@ -712,7 +712,7 @@ jobs:
       - name: Install the sidecar packages and check the linux-x64 node-datachannel build against the lockfile
         working-directory: native/sidecar
         run: |
-          npm ci --no-audit --no-fund
+          npm ci --no-audit --no-fund --onnxruntime-node-install=skip
           target="node_modules/@node-datachannel/linux-x64-gnu"
           version=$(node -p 'require("./package-lock.json").packages["node_modules/@node-datachannel/linux-x64-gnu"].version')
           want=$(node -p 'require("./package-lock.json").packages["node_modules/@node-datachannel/linux-x64-gnu"].integrity')

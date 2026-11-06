@@ -652,6 +652,11 @@ export const register = (ctx) => {
       stubDownloads = on === true;
       return true;
     };
+    standInMethods["community.standin.imported"] = async () => {
+      const response = await fetch("/api/ui-settings");
+      const settings = response.ok ? await response.json() : {};
+      return list(settings?.hubImported).map(Number);
+    };
   }
 
   return {
@@ -671,7 +676,8 @@ export const register = (ctx) => {
     "community.import": async ({ postId } = {}) => {
       const post = shown.find((entry) => Number(entry.id) === Number(postId));
       if (!post?.bundleUrl) throw new Error("This post has no scenario file attached");
-      const bundle = await hub.downloadHubScenario({ postId: post.id, bundleUrl: post.bundleUrl, title: post.title, author: post.author, flatMap: post.flatMap });
+      const again = Boolean(statusesOf([post])[String(post.id)]?.status);
+      const bundle = await hub.downloadHubScenario({ postId: post.id, bundleUrl: post.bundleUrl, title: post.title, author: post.author, flatMap: post.flatMap, again });
       const details = await lib.importScenarioBundle(bundle);
       const { offers, count } = await installOffersFor(bundle).catch(() => ({ offers: [], count: 0 }));
       engine.missingBasemap.noteMissingBasemapTried(details?.scenario);

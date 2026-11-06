@@ -188,6 +188,7 @@ func _run() -> void:
 		_say("FAIL the main scene did not load")
 		_finish(1)
 		return
+	await process_frame
 	while not main.menu.visible:
 		if Time.get_ticks_msec() - started > 90000:
 			_say("FAIL the menu never appeared")
@@ -226,20 +227,13 @@ func _features_scenario(details: Dictionary, form: Dictionary) -> void:
 	await _shoot("rules-1-features-scenario")
 	await _press(_find_button(section, "Off", 0), "Espionage Off")
 	_check(last_features is Dictionary and (last_features as Dictionary)["espionage"]["enabled"] == false, "Espionage Off emits enabled false")
-	var pace := _find_line(section, "", 0)
-	await _type(pace, "150")
-	_check(str((last_features as Dictionary)["fronts"]["pace"]) == "150", "typing the pace emits the typed text")
-	pace.release_focus()
-	await _frames(3)
-	_check(float((last_features as Dictionary)["fronts"]["pace"]) == 150.0 and not ((last_features as Dictionary)["fronts"]["pace"] is String), "leaving the pace settles a number")
-	await _type(pace, "999")
-	pace.release_focus()
-	await _frames(3)
-	_check(float((last_features as Dictionary)["fronts"]["pace"]) == 300.0 and pace.text == "300", "a pace above 300 settles at 300")
 	var shown: Array = []
 	_collect(section, shown)
 	var words := shown.filter(func(node: Node) -> bool: return node is Label and (node as Label).is_visible_in_tree()).map(func(node: Node) -> String: return (node as Label).text)
 	_check(words.has("Wars") and words.has("FRONTS") and words.has("AIR UNITS") and words.has("NAVIES") and words.has("Social media") and not words.has("Listen in"), "Features has Wars with Fronts, Air units and Navies, and Social media")
+	_check(not words.any(func(word: String) -> bool: return word.to_lower().contains("pace of an advance")) and not ((last_features as Dictionary).get("fronts", {}) as Dictionary).has("pace"), "the Wars feature has no Pace of an advance setting")
+	var legacy_pace := EditorFeaturesModel.normalize_settings({"fronts": {"enabled": true, "pace": 150}}, EditorFeaturesSection.definitions.get("features", []))
+	_check(not (legacy_pace["fronts"] as Dictionary).has("pace"), "a pace saved before is dropped when it is read: %s" % str(legacy_pace["fronts"]))
 	await _press(_find_button(section, "Off", 3), "Air units Off")
 	var wars: Dictionary = (last_features as Dictionary)["fronts"]
 	_check(wars.get("air") == false and wars.get("battlefields") == true and wars.get("navies") == true and wars.get("enabled") == true, "Air units Off leaves fronts and navies on")

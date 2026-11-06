@@ -47,7 +47,7 @@ static func narrow() -> bool:
 static func top_panel(edge: Color, inner: Vector4) -> PanelContainer:
 	var panel := PanelContainer.new()
 	panel.mouse_filter = Control.MOUSE_FILTER_STOP
-	panel.add_theme_stylebox_override("panel", UI.box(PANEL, edge, 12, 1, inner))
+	panel.add_theme_stylebox_override("panel", UI.box(UiTheme.pick("overlay_strong", PANEL), edge, 12, 1, inner))
 	panel.anchor_left = 0.5
 	panel.anchor_right = 0.5
 	panel.anchor_top = 0.0

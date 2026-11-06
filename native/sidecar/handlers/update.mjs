@@ -28,6 +28,9 @@ export const NATIVE_LINUX_UPDATE_MANIFEST = `${NATIVE_RELEASE_BASE}/${NATIVE_LIN
 export const NATIVE_LINUX_ARCHIVE_URL = `${NATIVE_RELEASE_BASE}/${NATIVE_LINUX_ARCHIVE_NAME}`;
 export const LINUX_UPDATER = "native/sidecar/linuxUpdater.mjs";
 export const INSTALL_MARKER = ".oh-native-install";
+export const APP_FILE_RELEASE = "https://github.com/Open-Historia/open-historia/releases/download/app-files/";
+export const NATIVE_APP_FILE = "native.app.txt";
+export const APP_FILE_MARK = "app-file.json";
 export const LAUNCH_CHECK_TIMEOUT_MS = 6000;
 export const LAUNCH_FAILURE_LIMIT = 2;
 export const CHECK_TIMEOUT_MS = 6000;
@@ -171,6 +174,42 @@ const readCount = (file) => {
     return Math.max(0, Number.parseInt(fs.readFileSync(file, "utf8"), 10) || 0);
   } catch {
     return 0;
+  }
+};
+
+export const fetchAppFileOnce = async ({
+  installed,
+  markFile,
+  fetchImpl = (...args) => fetch(...args),
+  log = () => {},
+  timeoutMs = 30_000,
+  now = () => new Date(),
+}) => {
+  if (!installed || !markFile) return "not-counted";
+  try {
+    if (fs.existsSync(markFile)) return "done-before";
+  } catch {
+    return "failed";
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  timer.unref?.();
+  try {
+    const response = await fetchImpl(`${APP_FILE_RELEASE}${NATIVE_APP_FILE}`, { method: "GET", redirect: "follow", cache: "no-store", credentials: "omit", signal: controller.signal });
+    if (!response?.ok) {
+      log("info", `app file: GitHub answered ${response?.status ?? "nothing"}; the next start tries again`);
+      return "failed";
+    }
+    await response.arrayBuffer?.();
+    fs.mkdirSync(path.dirname(markFile), { recursive: true });
+    fs.writeFileSync(markFile, JSON.stringify({ file: NATIVE_APP_FILE, at: now().toISOString() }));
+    log("info", `app file: ${NATIVE_APP_FILE} downloaded once; it will not be downloaded again`);
+    return "downloaded";
+  } catch (error) {
+    log("info", `app file: ${String(error?.message || error)}; the next start tries again`);
+    return "failed";
+  } finally {
+    clearTimeout(timer);
   }
 };
 
@@ -947,6 +986,11 @@ export const register = (ctx) => {
   });
   if (current) ctx.engine?.debugLog?.setDebugLogContext?.({ build: buildLabel(current) });
   updater.prefetch();
+  void fetchAppFileOnce({
+    installed: Boolean(current?.build) && !ctx.standIn && exists(path.join(installRoot, INSTALL_MARKER)),
+    markFile: path.join(ctx.dataRoot, APP_FILE_MARK),
+    log,
+  });
   return {
     "update.state": async () => updater.snapshot(),
     "update.launch": async () => updater.launch(),

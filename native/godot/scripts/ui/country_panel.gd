@@ -74,7 +74,9 @@ var _relation_ask := 0
 var _overlay: Control
 var _strip: Control
 var _sticky: Control
-var _toolbar_style: StyleBoxFlat
+var _toolbar_header: Control
+var _toolbar_mark: Label
+var _toolbar_rule: ColorRect
 var _busy_timer: Timer
 var _tracking_model: Dictionary = {}
 var compiling := false
@@ -84,7 +86,8 @@ var _compile_call := 0
 
 func _init() -> void:
 	super._init("Country", "", "drawer", DEFAULT_WIDTH)
-	set_tint(Color(24 / 255.0, 24 / 255.0, 27 / 255.0, 0.95))
+	set_tint(UiTheme.pick("bg", Color(24 / 255.0, 24 / 255.0, 27 / 255.0, 0.95)))
+	UiTheme.events().changed.connect(_on_theme_changed)
 	_material.set_shader_parameter("radius", 0.0)
 	_material.set_shader_parameter("highlight", 0.0)
 	_material.set_shader_parameter("border_color", CLEAR)
@@ -216,6 +219,24 @@ func current_width() -> float:
 	return _drawer_width
 
 
+func _line() -> Color:
+	return UiTheme.pick("line", DOSSIER_LINE)
+
+
+func _on_theme_changed() -> void:
+	set_tint(UiTheme.pick("bg", Color(24 / 255.0, 24 / 255.0, 27 / 255.0, 0.95)))
+	if is_instance_valid(_toolbar_header):
+		_toolbar_header.queue_redraw()
+	if is_instance_valid(_toolbar_mark):
+		_toolbar_mark.add_theme_color_override("font_color", UiTheme.pick("accent", Color("#8ecbe8")))
+	if is_instance_valid(_toolbar_rule):
+		_toolbar_rule.color = _line()
+	header_title.add_theme_color_override("font_color", UiTheme.pick("text", Color("#d7e5f0")))
+	scroll.add_theme_stylebox_override("panel", UI.box(UiTheme.pick("bg", DOSSIER_PAGE), CLEAR, 0, 0))
+	if is_open() and not target.is_empty():
+		_render()
+
+
 func _restyle_header() -> void:
 	var titles := header_title.get_parent() as VBoxContainer
 	var row := titles.get_parent() as HBoxContainer
@@ -225,14 +246,15 @@ func _restyle_header() -> void:
 	header.custom_minimum_size.y = 47
 	row.add_theme_constant_override("separation", 9)
 	titles.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	_toolbar_style = UI.box(DOSSIER_TOOLBAR, CLEAR, 0, 0)
-	header.draw.connect(func() -> void: header.draw_style_box(_toolbar_style, Rect2(Vector2.ZERO, header.size)))
+	_toolbar_header = header
+	header.draw.connect(func() -> void: header.draw_style_box(UI.box(UiTheme.pick("header", DOSSIER_TOOLBAR), CLEAR, 0, 0), Rect2(Vector2.ZERO, header.size)))
 	header_title.add_theme_font_override("font", UI.font(850, "Arial", 1))
 	header_title.add_theme_font_size_override("font_size", 12)
-	header_title.add_theme_color_override("font_color", Color("#d7e5f0"))
+	header_title.add_theme_color_override("font_color", UiTheme.pick("text", Color("#d7e5f0")))
 	header_title.uppercase = true
 	header_subtitle.visible = false
-	var mark := UI.label("◈", 18, Color("#8ecbe8"))
+	var mark := UI.label("◈", 18, UiTheme.pick("accent", Color("#8ecbe8")))
+	_toolbar_mark = mark
 	mark.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	row.add_child(mark)
 	row.move_child(mark, 0)
@@ -253,13 +275,13 @@ func _restyle_header() -> void:
 			close_button.add_theme_color_override(state, Color(1, 1, 1, 0.55))
 	var rule := header.get_parent().get_child(1) as ColorRect
 	if rule:
-		rule.color = DOSSIER_LINE
+		rule.color = _line()
+		_toolbar_rule = rule
 
 
 func _style_scroll() -> void:
 	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_NEVER
-	var sheet := UI.box(DOSSIER_PAGE, CLEAR, 0, 0)
-	scroll.add_theme_stylebox_override("panel", sheet)
+	scroll.add_theme_stylebox_override("panel", UI.box(UiTheme.pick("bg", DOSSIER_PAGE), CLEAR, 0, 0))
 	var bar := scroll.get_v_scroll_bar()
 	var grab := UI.box(Color(148 / 255.0, 187 / 255.0, 209 / 255.0, 0.3), CLEAR, 999, 0)
 	var held := UI.box(Color(148 / 255.0, 187 / 255.0, 209 / 255.0, 0.45), CLEAR, 999, 0)
@@ -784,7 +806,7 @@ func _render() -> void:
 
 func _render_header() -> void:
 	var hero := DossierHero.new()
-	hero.add_theme_stylebox_override("panel", edged(Color("#1b3248"), Color(128 / 255.0, 180 / 255.0, 213 / 255.0, 0.25), Vector4(0, 0, 0, 1), Vector4(16, 20, 16, 19)))
+	hero.add_theme_stylebox_override("panel", edged(UiTheme.pick("surface", Color("#1b3248")), UiTheme.pick("line", Color(128 / 255.0, 180 / 255.0, 213 / 255.0, 0.25)), Vector4(0, 0, 0, 1), Vector4(16, 20, 16, 19)))
 	var line := row(14)
 	var frame := PanelContainer.new()
 	frame.custom_minimum_size = Vector2(74, 50)
@@ -811,7 +833,7 @@ func _render_header() -> void:
 	line.add_child(frame)
 	var info := column(0)
 	var title_row := flow(8, 6)
-	var title := text(str(data.get("name", target)), 21, DOSSIER_TEXT, 850)
+	var title := text(str(data.get("name", target)), 21, UiTheme.pick("text", DOSSIER_TEXT), 850)
 	tight(title, 21, 850, 24.1)
 	title.custom_minimum_size.x = 160
 	title_row.add_child(title)
@@ -915,7 +937,7 @@ func _render_tabs() -> void:
 
 func _tab_strip(floating: bool) -> PanelContainer:
 	var strip := PanelContainer.new()
-	var style := edged(Color(14 / 255.0, 20 / 255.0, 30 / 255.0, 0.97), Color(143 / 255.0, 183 / 255.0, 210 / 255.0, 0.17), Vector4(0, 0, 0, 1), Vector4(10, 0, 10, 0))
+	var style := edged(UiTheme.pick("header", Color(14 / 255.0, 20 / 255.0, 30 / 255.0, 0.97)), Color(143 / 255.0, 183 / 255.0, 210 / 255.0, 0.17), Vector4(0, 0, 0, 1), Vector4(10, 0, 10, 0))
 	style.shadow_color = Color(0, 0, 0, 0.25)
 	style.shadow_size = 10
 	style.shadow_offset = Vector2(0, 6)
@@ -980,7 +1002,7 @@ func _secondary(top: float) -> PanelContainer:
 	var holder := PanelContainer.new()
 	holder.mouse_filter = Control.MOUSE_FILTER_PASS
 	holder.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	holder.add_theme_stylebox_override("panel", edged(CLEAR, DOSSIER_LINE, Vector4(0, 1, 0, 0), Vector4(2, 13, 2, 13)))
+	holder.add_theme_stylebox_override("panel", edged(CLEAR, _line(), Vector4(0, 1, 0, 0), Vector4(2, 13, 2, 13)))
 	page.add_child(holder)
 	return holder
 
@@ -996,7 +1018,7 @@ func _render_politics() -> void:
 	if typeof(government) == TYPE_DICTIONARY:
 		var info: Dictionary = government
 		var box := GovernmentCard.new()
-		var briefing := UI.box(Color("#1d3348"), Color(129 / 255.0, 187 / 255.0, 217 / 255.0, 0.2), 12, 1, Vector4(15, 15, 15, 15))
+		var briefing := UI.box(UiTheme.pick("active", Color("#1d3348")), Color(129 / 255.0, 187 / 255.0, 217 / 255.0, 0.2), 12, 1, Vector4(15, 15, 15, 15))
 		briefing.shadow_color = Color(0, 0, 0, 0.14)
 		briefing.shadow_size = 12
 		briefing.shadow_offset = Vector2(0, 10)
@@ -1194,7 +1216,7 @@ func _landscape_switch(active: String, views: Dictionary, polity: String) -> Con
 	centre.mouse_filter = Control.MOUSE_FILTER_PASS
 	var frame := PanelContainer.new()
 	frame.mouse_filter = Control.MOUSE_FILTER_PASS
-	frame.add_theme_stylebox_override("panel", UI.box(Color("#1b2c3c"), Color(142 / 255.0, 188 / 255.0, 215 / 255.0, 0.2), 6, 1, Vector4(3, 3, 3, 3)))
+	frame.add_theme_stylebox_override("panel", UI.box(UiTheme.pick("surface", Color("#1b2c3c")), Color(142 / 255.0, 188 / 255.0, 215 / 255.0, 0.2), 6, 1, Vector4(3, 3, 3, 3)))
 	var line := row(3)
 	for pair in [["parties", "Political parties"], ["blocs", "Power blocs"]]:
 		var key: String = pair[0]
@@ -1211,7 +1233,7 @@ func _landscape_switch(active: String, views: Dictionary, polity: String) -> Con
 			button.add_theme_color_override(state, ink)
 		button.add_theme_color_override("font_hover_color", Color("#f4faff") if picked else Color("#e1edf7"))
 		button.add_theme_color_override("font_hover_pressed_color", Color("#f4faff") if picked else Color("#e1edf7"))
-		var face := edged(Color("#28475e"), Color("#89d2ed"), Vector4(0, 0, 0, 2), Vector4(12, 5, 12, 5), 4) if picked else UI.box(CLEAR, CLEAR, 4, 0, Vector4(12, 5, 12, 5))
+		var face := edged(UiTheme.pick("active", Color("#28475e")), UiTheme.pick("accent", Color("#89d2ed")), Vector4(0, 0, 0, 2), Vector4(12, 5, 12, 5), 4) if picked else UI.box(CLEAR, CLEAR, 4, 0, Vector4(12, 5, 12, 5))
 		for state in ["normal", "hover", "pressed", "focus", "hover_pressed", "disabled"]:
 			button.add_theme_stylebox_override(state, face)
 		button.set_meta("view", key)
@@ -1257,7 +1279,7 @@ func _bloc_ledger(entries: Array) -> Control:
 		if typeof(strength) == TYPE_INT or typeof(strength) == TYPE_FLOAT:
 			inner.add_child(gap(8))
 			var track := _bar(float(strength), tone(str(bloc.get("color", ""))), 6.0)
-			track.track = Color("#2a3645")
+			track.track = UiTheme.pick("bg", Color("#2a3645"))
 			inner.add_child(track)
 			inner.add_child(gap(7))
 		else:
@@ -1295,7 +1317,7 @@ func _bloc_ledger(entries: Array) -> Control:
 func _landscape_overview(landscape: Dictionary, slices: Array, entries: Array) -> Control:
 	var holder := PanelContainer.new()
 	holder.mouse_filter = Control.MOUSE_FILTER_PASS
-	holder.add_theme_stylebox_override("panel", edged(CLEAR, DOSSIER_LINE, Vector4(0, 0, 0, 1), Vector4(0, 6, 0, 11)))
+	holder.add_theme_stylebox_override("panel", edged(CLEAR, _line(), Vector4(0, 0, 0, 1), Vector4(0, 6, 0, 11)))
 	var split := row(8)
 	split.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_donut = StatDonut.new()
@@ -1834,7 +1856,9 @@ func _ledger(title: String, top: float, right := "", frame: StyleBox = null) -> 
 	return stack
 
 
-func _record(margins: Vector4, line := DOSSIER_LINE, bar := false) -> RecordRow:
+func _record(margins: Vector4, line := Color(0, 0, 0, 0), bar := false) -> RecordRow:
+	if line.a == 0.0:
+		line = _line()
 	var cell := RecordRow.new(edged(CLEAR, line, Vector4(0, 0, 0, 1), margins), edged(RECORD_HOVER, line, Vector4(0, 0, 0, 1), margins))
 	cell.bar = bar
 	return cell
@@ -1851,7 +1875,7 @@ func _ledger_empty(stack: VBoxContainer, value: String) -> void:
 func _summary_strip(metrics: Array) -> Control:
 	var holder := PanelContainer.new()
 	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	holder.add_theme_stylebox_override("panel", UI.box(Color("#1b2b3b"), CLEAR, 0, 0))
+	holder.add_theme_stylebox_override("panel", UI.box(UiTheme.pick("surface", Color("#1b2b3b")), CLEAR, 0, 0))
 	var stack := column(0)
 	stack.add_child(line_rule(Color(145 / 255.0, 195 / 255.0, 220 / 255.0, 0.28)))
 	var cells := row(0)
@@ -1859,7 +1883,7 @@ func _summary_strip(metrics: Array) -> Control:
 	for index in range(metrics.size()):
 		var metric: Dictionary = metrics[index]
 		if index > 0:
-			cells.add_child(line_rule(DOSSIER_LINE, true))
+			cells.add_child(line_rule(_line(), true))
 		var cell := MarginContainer.new()
 		for side in [["margin_left", 10], ["margin_right", 10], ["margin_top", 11], ["margin_bottom", 11]]:
 			cell.add_theme_constant_override(side[0], side[1])
@@ -1875,7 +1899,7 @@ func _summary_strip(metrics: Array) -> Control:
 		cell.add_child(inner)
 		cells.add_child(cell)
 	stack.add_child(cells)
-	stack.add_child(line_rule(DOSSIER_LINE))
+	stack.add_child(line_rule(_line()))
 	holder.add_child(stack)
 	return holder
 
@@ -1952,7 +1976,7 @@ func _render_diplomacy() -> void:
 		_ledger_empty(agreements, "No canonical formal agreements involving this polity.")
 	for item in agreement_rows:
 		var agreement: Dictionary = item
-		var cell := _record(Vector4(11, 11, 4, 11), DOSSIER_LINE, true)
+		var cell := _record(Vector4(11, 11, 4, 11), _line(), true)
 		var line := row(9)
 		var words := column(2)
 		words.add_child(text(str(agreement.get("title", "")), 12, Color(1, 1, 1, 0.86), 750))
@@ -2032,7 +2056,7 @@ func _relation_tools() -> Control:
 	field.add_theme_color_override("font_color", Color("#f4f4f5"))
 	field.add_theme_color_override("font_placeholder_color", Color(1, 1, 1, 0.42))
 	field.add_theme_stylebox_override("normal", UI.box(Color(0, 0, 0, 0.2), Color(1, 1, 1, 0.13), 7, 1, Vector4(9, 5, 9, 5)))
-	field.add_theme_stylebox_override("focus", UI.box(Color("#1e2a39"), Color("#91ddf5"), 7, 2, Vector4(9, 5, 9, 5)))
+	field.add_theme_stylebox_override("focus", UI.box(UiTheme.pick("surface", Color("#1e2a39")), UiTheme.pick("focus", Color("#91ddf5")), 7, 2, Vector4(9, 5, 9, 5)))
 	field.add_theme_icon_override("clear", UI.icon("close", 12, Color(1, 1, 1, 0.5)))
 	field.text_changed.connect(_search_relations)
 	field.focus_entered.connect(func() -> void: _relation_focus = true)
@@ -2386,7 +2410,7 @@ func _bar(value: float, color: Color, height := 6.0, mark := -1.0) -> StatBar:
 
 
 func _index_datum(label: String, value: Variant, color: Color) -> StatHover:
-	var cell := StatHover.new(edged(CLEAR, DOSSIER_LINE, Vector4(0, 0, 0, 1), Vector4(8, 10, 8, 10)), edged(DATUM_HOVER, DOSSIER_LINE, Vector4(0, 0, 0, 1), Vector4(8, 10, 8, 10)))
+	var cell := StatHover.new(edged(CLEAR, _line(), Vector4(0, 0, 0, 1), Vector4(8, 10, 8, 10)), edged(DATUM_HOVER, _line(), Vector4(0, 0, 0, 1), Vector4(8, 10, 8, 10)))
 	var stack := column(0)
 	var title := text(label, 11, Color(1, 1, 1, 0.72))
 	title.custom_minimum_size.y = 21
@@ -2403,7 +2427,7 @@ func _index_datum(label: String, value: Variant, color: Color) -> StatHover:
 
 
 func _value_datum(label: String, value: String, sub: String, ink: Color) -> StatHover:
-	var cell := StatHover.new(edged(CLEAR, DOSSIER_LINE, Vector4(0, 0, 0, 1), Vector4(8, 10, 8, 10)), edged(DATUM_HOVER, DOSSIER_LINE, Vector4(0, 0, 0, 1), Vector4(8, 10, 8, 10)))
+	var cell := StatHover.new(edged(CLEAR, _line(), Vector4(0, 0, 0, 1), Vector4(8, 10, 8, 10)), edged(DATUM_HOVER, _line(), Vector4(0, 0, 0, 1), Vector4(8, 10, 8, 10)))
 	cell.size_flags_vertical = Control.SIZE_FILL
 	var inner := column(0)
 	inner.add_child(text(label, 10, Color(1, 1, 1, 0.45), 700, true, 1))
@@ -2417,11 +2441,18 @@ func _value_datum(label: String, value: String, sub: String, ink: Color) -> Stat
 
 
 func _intelligence_card(value: float) -> PanelContainer:
-	var box := card()
-	var stack := column(7)
-	var line := row(6)
-	line.add_child(text("🕵 INTELLIGENCE SERVICE", 11, Color(1, 1, 1, 0.55), 700, true, 1))
-	line.add_child(UI.label("%d/100" % int(value), 14, UI.WHITE, 800))
+	var box := PanelContainer.new()
+	box.mouse_filter = Control.MOUSE_FILTER_PASS
+	box.add_theme_stylebox_override("panel", edged(CLEAR, _line(), Vector4(0, 0, 0, 1), Vector4(7.7, 9.3, 7.7, 13.6)))
+	var stack := column(9)
+	var line := row(8)
+	var label := caps("🕵 Intelligence service", 11, UiTheme.pick("muted", Color("#91a3b4")), 800, 1)
+	label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	line.add_child(label)
+	var amount := UI.label("%d/100" % int(value), 15, UiTheme.pick("text", DOSSIER_TEXT), 850)
+	amount.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+	line.add_child(amount)
 	stack.add_child(line)
 	stack.add_child(_bar(value, Color("#38bdf8")))
 	box.add_child(stack)
@@ -2561,8 +2592,8 @@ func _metric_select() -> OptionButton:
 	select.fit_to_longest_item = false
 	select.clip_text = true
 	select.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-	var shut := UI.box(Color("#213245"), Color(147 / 255.0, 194 / 255.0, 221 / 255.0, 0.28), 7, 1, Vector4(10, 8, 10, 8))
-	var lit := UI.box(Color("#213245"), Color(147 / 255.0, 207 / 255.0, 236 / 255.0, 0.65), 7, 1, Vector4(10, 8, 10, 8))
+	var shut := UI.box(UiTheme.pick("surface", Color("#213245")), Color(147 / 255.0, 194 / 255.0, 221 / 255.0, 0.28), 7, 1, Vector4(10, 8, 10, 8))
+	var lit := UI.box(UiTheme.pick("surface", Color("#213245")), Color(147 / 255.0, 207 / 255.0, 236 / 255.0, 0.65), 7, 1, Vector4(10, 8, 10, 8))
 	for state in [["normal", shut], ["focus", shut], ["disabled", shut], ["hover", lit], ["pressed", lit], ["hover_pressed", lit]]:
 		select.add_theme_stylebox_override(state[0], state[1])
 	select.add_theme_font_override("font", UI.font(800))
@@ -2583,12 +2614,12 @@ func _metric_select() -> OptionButton:
 func _ranking_context() -> Control:
 	var holder := PanelContainer.new()
 	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	holder.add_theme_stylebox_override("panel", UI.box(Color("#1c2e40"), CLEAR, 0, 0))
+	holder.add_theme_stylebox_override("panel", UI.box(UiTheme.pick("surface", Color("#1c2e40")), CLEAR, 0, 0))
 	var stack := column(0)
 	stack.add_child(line_rule(Color(143 / 255.0, 187 / 255.0, 212 / 255.0, 0.29)))
 	var cells := row(0)
 	cells.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	var picked := plain(str(ranking.get("selectedRank", "—")), 26, Color("#8fd3f1"), 850)
+	var picked := plain(str(ranking.get("selectedRank", "—")), 26, UiTheme.pick("accent", Color("#8fd3f1")), 850)
 	tight(picked, 26, 850, 30.1)
 	cells.add_child(_ranking_summary(picked, "Selected country"))
 	cells.add_child(line_rule(Color(143 / 255.0, 187 / 255.0, 212 / 255.0, 0.16), true))
@@ -2628,7 +2659,7 @@ func _ranking_row(entry: Dictionary) -> RankRow:
 	var normal: StyleBoxFlat
 	var hover: StyleBoxFlat
 	if opened:
-		normal = UI.box(Color("#244055"), Color(132 / 255.0, 204 / 255.0, 238 / 255.0, 0.48), 0, 1, pad)
+		normal = UI.box(UiTheme.pick("active", Color("#244055")), Color(132 / 255.0, 204 / 255.0, 238 / 255.0, 0.48), 0, 1, pad)
 		hover = normal
 	elif mine:
 		normal = edged(Color(46 / 255.0, 107 / 255.0, 145 / 255.0, 0.17), rule, Vector4(0, 0, 0, 1), pad)
@@ -3499,7 +3530,7 @@ class DossierHero extends PanelContainer:
 		var wide := size.x
 		var tall := size.y
 		draw_colored_polygon(PackedVector2Array([Vector2(wide * 0.78, 0), Vector2(wide, 0), Vector2(wide, tall), Vector2(wide * 0.95, tall)]), Color(159 / 255.0, 208 / 255.0, 232 / 255.0, 0.16 * 0.25))
-		draw_rect(Rect2(0, tall - 4.0, wide * 0.42, 3.0), Color("#78bedc"))
+		draw_rect(Rect2(0, tall - 4.0, wide * 0.42, 3.0), UiTheme.pick("accent", Color("#78bedc")))
 
 
 class GovernmentCard extends PanelContainer:
@@ -3616,7 +3647,7 @@ class RankRow extends StatClickable:
 
 	func _draw() -> void:
 		if mine_bar:
-			draw_rect(Rect2(0, 0, 3.0, size.y), Color("#8acde6"))
+			draw_rect(Rect2(0, 0, 3.0, size.y), UiTheme.pick("accent", Color("#8acde6")))
 
 
 class StatChart extends Control:

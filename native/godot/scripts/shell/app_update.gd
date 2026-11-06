@@ -29,7 +29,8 @@ const NOT_ROLLED_BACK := "The previous version could not be put back. Opening th
 const INSTALLING := "Installing — the game reopens by itself in a few seconds."
 const ROLLING_BACK := "Putting back the previous version — the game reopens by itself."
 const HEADLINE := "A new super-experimental native build of Open Historia is ready."
-const UPDATED_VERSION := "Open Historia Native was updated to version %s."
+const UPDATED_ON := "Open Historia Native was updated to the build of %s."
+const MONTHS := ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
 const UPDATED_BUILD := "Open Historia Native was updated."
 const ROLLED_BACK := "The last update did not start properly, so the version you had was put back."
 const ROLLED_BACK_SUB := "It is offered again as a full download — your games are kept."
@@ -40,6 +41,7 @@ var engine: EngineLink
 var state := {}
 var launching := false
 var cover: Control
+var _cover_page: ColorRect
 var banner: PanelContainer
 var _cover_title: Label
 var _cover_lede: Label
@@ -64,6 +66,7 @@ var _toasted := ""
 var _last_phase := ""
 var _confirmed := false
 var _news_closed := false
+var _news_kept: Dictionary = {}
 
 
 class Bar extends Control:
@@ -95,7 +98,7 @@ class Bar extends Control:
 		if fraction <= 0.0:
 			return
 		var fill := StyleBoxFlat.new()
-		fill.bg_color = UI.ACCENT
+		fill.bg_color = UiTheme.pick("accent", UI.ACCENT)
 		fill.set_corner_radius_all(99)
 		fill.anti_aliasing = true
 		draw_style_box(fill, Rect2(Vector2.ZERO, Vector2(maxf(size.y, size.x * fraction), size.y)))
@@ -105,6 +108,8 @@ func _init() -> void:
 	layer = LAYER
 	_build_cover()
 	_build_banner()
+	_paint()
+	UiTheme.events().changed.connect(_paint)
 	_timer = Timer.new()
 	_timer.wait_time = CHECK_INTERVAL
 	_timer.timeout.connect(_probe)
@@ -124,11 +129,11 @@ func _build_cover() -> void:
 	cover.mouse_filter = Control.MOUSE_FILTER_STOP
 	cover.visible = false
 	add_child(cover)
-	var page := ColorRect.new()
-	page.color = PAGE
-	page.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	page.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	cover.add_child(page)
+	_cover_page = ColorRect.new()
+	_cover_page.color = PAGE
+	_cover_page.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_cover_page.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	cover.add_child(_cover_page)
 	var centre := CenterContainer.new()
 	centre.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	centre.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -215,6 +220,26 @@ func _build_banner() -> void:
 	_banner_close.tooltip_text = "Dismiss update notice"
 	_banner_close.pressed.connect(_on_dismiss)
 	row.add_child(_banner_close)
+
+
+func _paint() -> void:
+	var surface := UiTheme.pick("surface", PAGE)
+	_cover_page.color = surface
+	var style := banner.get_theme_stylebox("panel") as StyleBoxFlat
+	if style:
+		style.bg_color = surface
+	var accent := UiTheme.pick("accent", UI.ACCENT)
+	for state in ["normal", "focus", "disabled"]:
+		var box := _banner_button.get_theme_stylebox(state) as StyleBoxFlat
+		if box:
+			box.bg_color = accent
+			box.border_color = accent
+	for state in ["hover", "pressed", "hover_pressed"]:
+		var box := _banner_button.get_theme_stylebox(state) as StyleBoxFlat
+		if box:
+			box.bg_color = accent.lightened(0.12)
+			box.border_color = box.bg_color
+	_cover_bar.queue_redraw()
 
 
 func _gap(height: float) -> Control:
@@ -490,17 +515,33 @@ func is_banner_ready() -> bool:
 	return banner.visible and _restart_ready
 
 
+static func build_day(build: String) -> String:
+	if not build.is_valid_int() or build.length() < 8:
+		return ""
+	var month := build.substr(4, 2).to_int()
+	if month < 1 or month > 12:
+		return ""
+	return "%d %s %s" % [build.substr(6, 2).to_int(), MONTHS[month - 1], build.substr(0, 4)]
+
+
 func _news() -> Dictionary:
 	if _news_closed:
 		return {}
+	if not _news_kept.is_empty():
+		return _news_kept
+	var news := {}
 	if not str(state.get("rolledBack", "")).is_empty():
-		return {"head": ROLLED_BACK, "sub": ROLLED_BACK_SUB}
+		news = {"head": ROLLED_BACK, "sub": ROLLED_BACK_SUB}
 	var done: Variant = state.get("justUpdated")
-	if done is Dictionary and not str((done as Dictionary).get("build", "")).is_empty():
-		var version := str((done as Dictionary).get("version", ""))
+	if news.is_empty() and done is Dictionary and not str((done as Dictionary).get("build", "")).is_empty():
+		var day := build_day(str((done as Dictionary).get("build", "")))
 		var notes := str((done as Dictionary).get("notes", ""))
-		return {"head": UPDATED_VERSION % version if not version.is_empty() else UPDATED_BUILD, "sub": notes if not notes.is_empty() else "Your games are kept."}
-	return {}
+		news = {"head": UPDATED_ON % day if not day.is_empty() else UPDATED_BUILD, "sub": notes if not notes.is_empty() else "Your games are kept."}
+	if not news.is_empty():
+		_news_kept = news
+		if engine:
+			engine.request("update.seen")
+	return news
 
 
 func _refresh_banner() -> void:
@@ -587,8 +628,6 @@ func _on_dismiss() -> void:
 	if _offer().is_empty():
 		_news_closed = true
 		_refresh_banner()
-		if engine:
-			engine.request("update.seen")
 		return
 	var build := str(_offer().get("build", ""))
 	state["dismissed"] = build

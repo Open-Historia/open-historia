@@ -143,10 +143,10 @@ var _modal_tween: Tween
 
 func _init() -> void:
 	super._init("Diplomacy", "Conversations, institutions and statecraft", "bottom", PANEL_MAX_WIDTH)
-	set_tint(Color(24 / 255.0, 24 / 255.0, 27 / 255.0, 0.95))
+	set_tint(UiTheme.pick("overlay", Color(24 / 255.0, 24 / 255.0, 27 / 255.0, 0.95)))
 	radius = 16.0
 	_material.set_shader_parameter("radius", 16.0)
-	_material.set_shader_parameter("border_color", Color(1, 1, 1, 0.1))
+	_material.set_shader_parameter("border_color", UiTheme.pick("line", Color(1, 1, 1, 0.1)))
 	_material.set_shader_parameter("highlight", 0.06)
 	_restyle_header()
 	scroll.visible = false
@@ -184,6 +184,14 @@ func _init() -> void:
 func _ready() -> void:
 	get_viewport().size_changed.connect(func() -> void: _place(is_open(), false))
 	_place(is_open(), false)
+	UiTheme.events().changed.connect(_on_theme_changed)
+
+
+func _on_theme_changed() -> void:
+	set_tint(UiTheme.pick("overlay", Color(24 / 255.0, 24 / 255.0, 27 / 255.0, 0.95)))
+	_material.set_shader_parameter("border_color", UiTheme.pick("line", Color(1, 1, 1, 0.1)))
+	if is_open() and engine:
+		refresh()
 
 
 func setup(engine_link: EngineLink, setup_context: Dictionary = {}) -> void:
@@ -974,7 +982,7 @@ func _restyle_header() -> void:
 	badge.add_child(icon_rect("contacts", 15, GREY_TEXT))
 	row.add_child(badge)
 	row.move_child(badge, 0)
-	var close := text_button("✕", 18, Color(1, 1, 1, 0.5), UI.WHITE, 400, Color(1, 1, 1, 0.08))
+	var close := text_button("✕", 18, Color(1, 1, 1, 0.5), UI.WHITE, 400, UiTheme.pick("line", Color(1, 1, 1, 0.08)))
 	close.tooltip_text = "Close diplomacy panel"
 	close.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	close.pressed.connect(func() -> void: closed.emit())
@@ -1043,7 +1051,7 @@ func _style_tabs() -> void:
 	for key in _tab_buttons:
 		var tab: Button = _tab_buttons[key]
 		var chosen: bool = key == current
-		var style := UI.box(GREY_SELECTED if chosen else Color(1, 1, 1, 0.025), GREY_BORDER_STRONG if chosen else Color(1, 1, 1, 0.07), 8, 1)
+		var style := UI.box(GREY_SELECTED if chosen else UiTheme.pick("overlay_card", Color(1, 1, 1, 0.025)), GREY_BORDER_STRONG if chosen else UiTheme.pick("line", Color(1, 1, 1, 0.07)), 8, 1)
 		for state in ["normal", "hover", "pressed", "hover_pressed", "focus", "disabled"]:
 			tab.add_theme_stylebox_override(state, style)
 		var ink := UI.WHITE if chosen else Color(1, 1, 1, 0.48)
@@ -1217,7 +1225,7 @@ func _build_workspace() -> void:
 	_filter_bar = PanelContainer.new()
 	var filter_style := StyleBoxFlat.new()
 	filter_style.bg_color = Color(0, 0, 0, 0)
-	filter_style.border_color = Color(1, 1, 1, 0.06)
+	filter_style.border_color = UiTheme.pick("hover", Color(1, 1, 1, 0.06))
 	filter_style.border_width_bottom = 1
 	filter_style.content_margin_left = 20
 	filter_style.content_margin_right = 20
@@ -1260,14 +1268,14 @@ func _build_workspace() -> void:
 	_footer = PanelContainer.new()
 	var footer_style := StyleBoxFlat.new()
 	footer_style.bg_color = Color(0, 0, 0, 0)
-	footer_style.border_color = Color(1, 1, 1, 0.07)
+	footer_style.border_color = UiTheme.pick("line", Color(1, 1, 1, 0.07))
 	footer_style.border_width_top = 1
 	footer_style.content_margin_left = 16
 	footer_style.content_margin_right = 16
 	footer_style.content_margin_top = 12
 	footer_style.content_margin_bottom = 12
 	_footer.add_theme_stylebox_override("panel", footer_style)
-	var start := solid_button("Start New Chat", 14, Color(1, 1, 1, 0.85), 500, Color(1, 1, 1, 0.07), Color(1, 1, 1, 0.12), Color(1, 1, 1, 0.12), Color(1, 1, 1, 0.12), 10)
+	var start := solid_button("Start New Chat", 14, Color(1, 1, 1, 0.85), 500, UiTheme.pick("line", Color(1, 1, 1, 0.07)), UiTheme.pick("line", Color(1, 1, 1, 0.12)), UiTheme.pick("line", Color(1, 1, 1, 0.12)), UiTheme.pick("line", Color(1, 1, 1, 0.12)), 10)
 	start.custom_minimum_size.y = 43
 	start.pressed.connect(_open_selector)
 	_footer.add_child(start)
@@ -1342,7 +1350,7 @@ func render_list() -> void:
 	var unread_total := unread.size()
 	_unread_chip.text = "Unread" + (" (%d)" % unread_total if unread_total > 0 else "")
 	_unread_chip.icon = _dot_texture() if unread_only else null
-	var chip_style := UI.box(Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.18) if unread_only else Color(1, 1, 1, 0.05), Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.5) if unread_only else Color(1, 1, 1, 0.12), 999, 1, Vector4(10, 4, 10, 4))
+	var chip_style := UI.box(UiTheme.pick("active", Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.18)) if unread_only else UiTheme.pick("overlay_card", Color(1, 1, 1, 0.05)), UiTheme.pick("accent", Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.5)) if unread_only else UiTheme.pick("line", Color(1, 1, 1, 0.12)), 999, 1, Vector4(10, 4, 10, 4))
 	for state in ["normal", "hover", "pressed", "hover_pressed", "focus"]:
 		_unread_chip.add_theme_stylebox_override(state, chip_style)
 	for state in ["font_color", "font_hover_color", "font_pressed_color", "font_hover_pressed_color", "font_focus_color"]:
@@ -1404,7 +1412,7 @@ func _group_header(label_text: String) -> Control:
 
 func _generating_banner() -> Control:
 	var banner := PanelContainer.new()
-	banner.add_theme_stylebox_override("panel", UI.box(Color(1, 1, 1, 0.08), Color(1, 1, 1, 0.15), 10, 1, Vector4(13, 10, 13, 10)))
+	banner.add_theme_stylebox_override("panel", UI.box(UiTheme.pick("line", Color(1, 1, 1, 0.08)), Color(1, 1, 1, 0.15), 10, 1, Vector4(13, 10, 13, 10)))
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 9)
 	row.add_child(UI.label("🖊", 16, UI.WHITE))
@@ -1451,8 +1459,8 @@ func _chat_row(chat: Dictionary) -> Control:
 	var row := PanelContainer.new()
 	row.mouse_filter = Control.MOUSE_FILTER_PASS
 	row.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-	var border := Color(1, 1, 1, 0.13) if hovered else (Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.15) if is_new else Color(1, 1, 1, 0.07))
-	var bg := Color(1, 1, 1, 0.065) if hovered else (Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.035) if is_new else Color(1, 1, 1, 0.025))
+	var border := UiTheme.pick("accent", Color(1, 1, 1, 0.13)) if hovered else (UiTheme.pick("line", Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.15)) if is_new else UiTheme.pick("line", Color(1, 1, 1, 0.07)))
+	var bg := UiTheme.pick("line", Color(1, 1, 1, 0.065)) if hovered else (UiTheme.pick("overlay_card", Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.035)) if is_new else UiTheme.pick("overlay_card", Color(1, 1, 1, 0.025)))
 	row.add_theme_stylebox_override("panel", UI.box(bg, border, 12, 1))
 	var margin := MarginContainer.new()
 	margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -1526,7 +1534,7 @@ func _chat_row(chat: Dictionary) -> Control:
 	actions.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	actions.add_theme_constant_override("separation", 4)
 	if hovered:
-		var envelope := icon_button("envelope_filled" if is_new else "envelope", 14, Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.78), Color(24 / 255.0, 24 / 255.0, 27 / 255.0, 0.86), Color(1, 1, 1, 0.08))
+		var envelope := icon_button("envelope_filled" if is_new else "envelope", 14, UiTheme.pick("accent", Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.78)), UiTheme.pick("overlay_strong", Color(24 / 255.0, 24 / 255.0, 27 / 255.0, 0.86)), UiTheme.pick("line", Color(1, 1, 1, 0.08)))
 		envelope.tooltip_text = "Mark as read" if is_new else "Mark as unread"
 		envelope.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		envelope.pressed.connect(func() -> void:
@@ -1538,7 +1546,7 @@ func _chat_row(chat: Dictionary) -> Control:
 			trash = solid_button("Delete?", 11, RED_SOFT, 650, Color(239 / 255.0, 68 / 255.0, 68 / 255.0, 0.18), Color(239 / 255.0, 68 / 255.0, 68 / 255.0, 0.55), Color(239 / 255.0, 68 / 255.0, 68 / 255.0, 0.18), Color(239 / 255.0, 68 / 255.0, 68 / 255.0, 0.55), 7, Vector4(8, 5, 8, 5))
 			trash.tooltip_text = "Click again to delete this chat"
 		else:
-			trash = icon_button("trash", 14, Color(239 / 255.0, 68 / 255.0, 68 / 255.0, 0.68), Color(24 / 255.0, 24 / 255.0, 27 / 255.0, 0.86), Color(1, 1, 1, 0.08))
+			trash = icon_button("trash", 14, Color(239 / 255.0, 68 / 255.0, 68 / 255.0, 0.68), UiTheme.pick("overlay_strong", Color(24 / 255.0, 24 / 255.0, 27 / 255.0, 0.86)), UiTheme.pick("line", Color(1, 1, 1, 0.08)))
 			trash.tooltip_text = "Delete chat"
 		trash.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		trash.pressed.connect(func() -> void:
@@ -1800,7 +1808,7 @@ func _build_modal() -> void:
 	_modal_subtitle = UI.label("Select countries to invite to the conversation", 12, Color(1, 1, 1, 0.4))
 	titles.add_child(_modal_subtitle)
 	title_row.add_child(titles)
-	var close := text_button("✕", 18, Color(1, 1, 1, 0.5), UI.WHITE, 400, Color(1, 1, 1, 0.08))
+	var close := text_button("✕", 18, Color(1, 1, 1, 0.5), UI.WHITE, 400, UiTheme.pick("line", Color(1, 1, 1, 0.08)))
 	close.tooltip_text = "Close"
 	close.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	close.pressed.connect(_close_selector)
@@ -1808,7 +1816,7 @@ func _build_modal() -> void:
 	head_column.add_child(title_row)
 	head_column.add_child(gap(14))
 	var selected_box := PanelContainer.new()
-	selected_box.add_theme_stylebox_override("panel", UI.box(Color(1, 1, 1, 0.05), Color(1, 1, 1, 0.1), 10, 1, Vector4(14, 10, 14, 10)))
+	selected_box.add_theme_stylebox_override("panel", UI.box(UiTheme.pick("overlay_card", Color(1, 1, 1, 0.05)), UiTheme.pick("line", Color(1, 1, 1, 0.1)), 10, 1, Vector4(14, 10, 14, 10)))
 	var selected_column := VBoxContainer.new()
 	selected_column.add_theme_constant_override("separation", 3)
 	_modal_selected_label = UI.label("Selected Countries (0):", 13, Color(1, 1, 1, 0.8), 600)
@@ -1823,8 +1831,8 @@ func _build_modal() -> void:
 	_modal_search = LineEdit.new()
 	_modal_search.placeholder_text = "Search countries..."
 	_modal_search.custom_minimum_size.y = 36
-	_modal_search.add_theme_stylebox_override("normal", UI.box(Color(1, 1, 1, 0.05), Color(1, 1, 1, 0.12), 10, 1, Vector4(35, 0, 14, 0)))
-	_modal_search.add_theme_stylebox_override("focus", UI.box(Color(1, 1, 1, 0.05), Color(1, 1, 1, 0.25), 10, 1, Vector4(35, 0, 14, 0)))
+	_modal_search.add_theme_stylebox_override("normal", UI.box(UiTheme.pick("overlay_card", Color(1, 1, 1, 0.05)), UiTheme.pick("line", Color(1, 1, 1, 0.12)), 10, 1, Vector4(35, 0, 14, 0)))
+	_modal_search.add_theme_stylebox_override("focus", UI.box(UiTheme.pick("overlay_card", Color(1, 1, 1, 0.05)), Color(1, 1, 1, 0.25), 10, 1, Vector4(35, 0, 14, 0)))
 	_modal_search.add_theme_font_override("font", UI.font(400))
 	_modal_search.add_theme_font_size_override("font_size", 13)
 	_modal_search.add_theme_color_override("font_placeholder_color", Color(1, 1, 1, 0.35))
@@ -1861,7 +1869,7 @@ func _build_modal() -> void:
 	var foot := PanelContainer.new()
 	var foot_style := StyleBoxFlat.new()
 	foot_style.bg_color = Color(0, 0, 0, 0)
-	foot_style.border_color = Color(1, 1, 1, 0.07)
+	foot_style.border_color = UiTheme.pick("line", Color(1, 1, 1, 0.07))
 	foot_style.border_width_top = 1
 	foot_style.content_margin_left = 16
 	foot_style.content_margin_right = 16
@@ -1870,7 +1878,7 @@ func _build_modal() -> void:
 	foot.add_theme_stylebox_override("panel", foot_style)
 	var foot_row := HBoxContainer.new()
 	foot_row.add_theme_constant_override("separation", 8)
-	var cancel := solid_button("Cancel", 14, Color(1, 1, 1, 0.8), 500, Color(1, 1, 1, 0.06), Color(1, 1, 1, 0.12), Color(1, 1, 1, 0.1), Color(1, 1, 1, 0.12), 10)
+	var cancel := solid_button("Cancel", 14, Color(1, 1, 1, 0.8), 500, UiTheme.pick("hover", Color(1, 1, 1, 0.06)), UiTheme.pick("line", Color(1, 1, 1, 0.12)), UiTheme.pick("line", Color(1, 1, 1, 0.1)), UiTheme.pick("line", Color(1, 1, 1, 0.12)), 10)
 	cancel.custom_minimum_size.y = 42
 	cancel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	cancel.size_flags_stretch_ratio = 1.0
@@ -1960,8 +1968,8 @@ func _country_tile(entry: Dictionary) -> Control:
 	tile.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	tile.custom_minimum_size = Vector2(0, 88)
 	tile.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	var normal := UI.box(Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.18) if chosen else Color(1, 1, 1, 0.04), Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.6) if chosen else Color(1, 1, 1, 0.07), 10, 1)
-	var hover := UI.box(Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.18) if chosen else Color(1, 1, 1, 0.07), Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.6) if chosen else Color(1, 1, 1, 0.15), 10, 1)
+	var normal := UI.box(Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.18) if chosen else Color(1, 1, 1, 0.04), Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.6) if chosen else UiTheme.pick("line", Color(1, 1, 1, 0.07)), 10, 1)
+	var hover := UI.box(Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.18) if chosen else UiTheme.pick("line", Color(1, 1, 1, 0.07)), Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.6) if chosen else Color(1, 1, 1, 0.15), 10, 1)
 	for state in ["normal", "focus", "disabled"]:
 		tile.add_theme_stylebox_override(state, normal)
 	for state in ["hover", "pressed", "hover_pressed"]:
@@ -2097,7 +2105,7 @@ func flag_box(country_name: String, box_size: Vector2, path := "") -> Control:
 		return fallback
 	var frame := PanelContainer.new()
 	frame.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	frame.add_theme_stylebox_override("panel", UI.box(Color(1, 1, 1, 0.12), Color(0, 0, 0, 0), 2, 0, Vector4(1, 1, 1, 1)))
+	frame.add_theme_stylebox_override("panel", UI.box(UiTheme.pick("line", Color(1, 1, 1, 0.12)), Color(0, 0, 0, 0), 2, 0, Vector4(1, 1, 1, 1)))
 	frame.custom_minimum_size = box_size
 	frame.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	var rect := TextureRect.new()
@@ -2430,7 +2438,7 @@ static func icon_rect(icon_key: String, px: int, color: Color) -> TextureRect:
 	return rect
 
 
-static func style_flat(button: Button, bg: Color, border: Color, corner: int, pad: Vector4, hover_bg := Color(1, 1, 1, 0.08), hover_border := Color(-1, -1, -1, -1)) -> void:
+static func style_flat(button: Button, bg: Color, border: Color, corner: int, pad: Vector4, hover_bg := UiTheme.pick("line", Color(1, 1, 1, 0.08)), hover_border := Color(-1, -1, -1, -1)) -> void:
 	var normal := UI.box(bg, border, corner, 1, pad)
 	var hover := UI.box(hover_bg, border if hover_border.r < 0.0 else hover_border, corner, 1, pad)
 	for state in ["normal", "focus", "disabled"]:
@@ -2447,7 +2455,7 @@ static func icon_button(icon_key: String, px: int, color: Color, bg: Color, bord
 	button.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	for state in ["icon_normal_color", "icon_hover_color", "icon_pressed_color", "icon_hover_pressed_color", "icon_focus_color", "icon_disabled_color"]:
 		button.add_theme_color_override(state, color)
-	style_flat(button, bg, border, 7, Vector4(5, 5, 5, 5), Color(bg.r, bg.g, bg.b, minf(1.0, bg.a + 0.06)) if bg.a > 0.0 else Color(1, 1, 1, 0.08))
+	style_flat(button, bg, border, 7, Vector4(5, 5, 5, 5), Color(bg.r, bg.g, bg.b, minf(1.0, bg.a + 0.06)) if bg.a > 0.0 else UiTheme.pick("line", Color(1, 1, 1, 0.08)))
 	return button
 
 
@@ -2887,7 +2895,7 @@ static func markdown_view(source: String, px: int, color := UI.WHITE) -> Control
 			node = hr
 		elif kind == "pre":
 			var pre := PanelContainer.new()
-			pre.add_theme_stylebox_override("panel", UI.box(Color(0, 0, 0, 0.32), Color(1, 1, 1, 0.08), 8, 1, Vector4(12, 10, 12, 10)))
+			pre.add_theme_stylebox_override("panel", UI.box(Color(0, 0, 0, 0.32), UiTheme.pick("line", Color(1, 1, 1, 0.08)), 8, 1, Vector4(12, 10, 12, 10)))
 			var code_label := UI.label(String(block["text"]), int(round(px * 0.8)), color)
 			code_label.add_theme_font_override("font", mono_font())
 			pre.add_child(code_label)
@@ -2952,7 +2960,7 @@ static func markdown_view(source: String, px: int, color := UI.WHITE) -> Control
 						cell_bg = Color(MD_ACCENT.r * 0.16 + 0.04, MD_ACCENT.g * 0.16 + 0.04, MD_ACCENT.b * 0.16 + 0.04, 0.2)
 					elif row_index % 2 == 0:
 						cell_bg = Color(1, 1, 1, 0.04)
-					cell.add_theme_stylebox_override("panel", UI.box(cell_bg, Color(1, 1, 1, 0.1), 0, 1, Vector4(8, 5, 8, 5)))
+					cell.add_theme_stylebox_override("panel", UI.box(cell_bg, UiTheme.pick("line", Color(1, 1, 1, 0.1)), 0, 1, Vector4(8, 5, 8, 5)))
 					cell.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 					var cell_color := Color(1, 1, 1, 0.95) if row_index == 0 else (Color(1, 1, 1, 0.9) if column_index == 0 else color)
 					var cell_weight := 700 if row_index == 0 else (600 if column_index == 0 else 400)
@@ -3092,7 +3100,7 @@ class Conversation extends VBoxContainer:
 		_terminal = PanelContainer.new()
 		var terminal_style := StyleBoxFlat.new()
 		terminal_style.bg_color = Color(13 / 255.0, 13 / 255.0, 16 / 255.0, 0.46)
-		terminal_style.border_color = Color(1, 1, 1, 0.08)
+		terminal_style.border_color = UiTheme.pick("line", Color(1, 1, 1, 0.08))
 		terminal_style.border_width_top = 1
 		terminal_style.corner_radius_bottom_left = 16
 		terminal_style.corner_radius_bottom_right = 16
@@ -3122,8 +3130,8 @@ class Conversation extends VBoxContainer:
 	func _build_header() -> void:
 		_header = PanelContainer.new()
 		var style := StyleBoxFlat.new()
-		style.bg_color = Color(15 / 255.0, 15 / 255.0, 18 / 255.0, 0.26)
-		style.border_color = Color(1, 1, 1, 0.07)
+		style.bg_color = UiTheme.pick("header", Color(15 / 255.0, 15 / 255.0, 18 / 255.0, 0.26))
+		style.border_color = UiTheme.pick("line", Color(1, 1, 1, 0.07))
 		style.border_width_bottom = 1
 		style.corner_radius_top_left = 16
 		style.corner_radius_top_right = 16
@@ -3197,7 +3205,7 @@ class Conversation extends VBoxContainer:
 		_subtitle.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 		titles.add_child(_subtitle)
 		row.add_child(titles)
-		_add_country = ChatPanel.icon_text_button("Add Country", "plus", 11, Color(1, 1, 1, 0.85), Color(1, 1, 1, 0.06), Color(1, 1, 1, 0.14), 7, Vector4(8, 4, 8, 4))
+		_add_country = ChatPanel.icon_text_button("Add Country", "plus", 11, Color(1, 1, 1, 0.85), UiTheme.pick("hover", Color(1, 1, 1, 0.06)), Color(1, 1, 1, 0.14), 7, Vector4(8, 4, 8, 4))
 		_add_country.add_theme_font_override("font", UI.font(700))
 		for state in ["font_hover_color", "font_pressed_color", "font_hover_pressed_color", "icon_hover_color", "icon_pressed_color", "icon_hover_pressed_color"]:
 			_add_country.add_theme_color_override(state, UI.WHITE)
@@ -3221,7 +3229,7 @@ class Conversation extends VBoxContainer:
 				confirm_delete = true
 				refresh_chrome())
 		row.add_child(_trash)
-		var close := ChatPanel.text_button("✕", 16, Color(1, 1, 1, 0.4), UI.WHITE, 400, Color(1, 1, 1, 0.08))
+		var close := ChatPanel.text_button("✕", 16, Color(1, 1, 1, 0.4), UI.WHITE, 400, UiTheme.pick("line", Color(1, 1, 1, 0.08)))
 		close.tooltip_text = "Close conversation"
 		close.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		close.pressed.connect(func() -> void: panel.leave_active())
@@ -3234,8 +3242,8 @@ class Conversation extends VBoxContainer:
 	func _build_composer() -> void:
 		_composer_panel = PanelContainer.new()
 		var style := StyleBoxFlat.new()
-		style.bg_color = Color(0, 0, 0, 0) if embedded else Color(13 / 255.0, 13 / 255.0, 16 / 255.0, 0.56)
-		style.border_color = Color(1, 1, 1, 0.08)
+		style.bg_color = Color(0, 0, 0, 0) if embedded else UiTheme.pick("header", Color(13 / 255.0, 13 / 255.0, 16 / 255.0, 0.56))
+		style.border_color = UiTheme.pick("line", Color(1, 1, 1, 0.08))
 		style.border_width_top = 1
 		if not embedded:
 			style.corner_radius_bottom_left = 16
@@ -3263,7 +3271,7 @@ class Conversation extends VBoxContainer:
 		_lifecycle_box.visible = false
 		column.add_child(ChatPanel.spaced_bottom(_lifecycle_box, 7))
 		_poll_box = PanelContainer.new()
-		_poll_box.add_theme_stylebox_override("panel", UI.box(Color(1, 1, 1, 0.03), Color(1, 1, 1, 0.1), 10, 1, Vector4(10, 9, 10, 9)))
+		_poll_box.add_theme_stylebox_override("panel", UI.box(UiTheme.pick("overlay_card", Color(1, 1, 1, 0.03)), UiTheme.pick("line", Color(1, 1, 1, 0.1)), 10, 1, Vector4(10, 9, 10, 9)))
 		var poll_column := VBoxContainer.new()
 		poll_column.add_theme_constant_override("separation", 0)
 		poll_column.add_child(UI.label("Call a conversational vote", 9, ChatPanel.GREY_TEXT, 820))
@@ -3271,7 +3279,7 @@ class Conversation extends VBoxContainer:
 		_poll_question = LineEdit.new()
 		_poll_question.placeholder_text = "What should this group decide?"
 		_poll_question.max_length = 500
-		ChatPanel.style_input(_poll_question, 11, Color(0, 0, 0, 0.2), Color(1, 1, 1, 0.12))
+		ChatPanel.style_input(_poll_question, 11, Color(0, 0, 0, 0.2), UiTheme.pick("line", Color(1, 1, 1, 0.12)))
 		_poll_question.text_changed.connect(func(_text: String) -> void:
 			poll_error = ""
 			_poll_error_label.visible = false)
@@ -3280,7 +3288,7 @@ class Conversation extends VBoxContainer:
 		_poll_options.placeholder_text = "One option per line\nYes\nNo"
 		_poll_options.text = "Yes\nNo\nAbstain"
 		_poll_options.custom_minimum_size.y = 62
-		ChatPanel.style_text_edit(_poll_options, 10, Color(0, 0, 0, 0.2), Color(1, 1, 1, 0.12), Color(1, 1, 1, 0.2), 8, Vector4(8, 6, 8, 6))
+		ChatPanel.style_text_edit(_poll_options, 10, Color(0, 0, 0, 0.2), UiTheme.pick("line", Color(1, 1, 1, 0.12)), Color(1, 1, 1, 0.2), 8, Vector4(8, 6, 8, 6))
 		_poll_options.text_changed.connect(func() -> void:
 			if _poll_options.text.length() > 1200:
 				_poll_options.text = _poll_options.text.left(1200)
@@ -3293,7 +3301,7 @@ class Conversation extends VBoxContainer:
 		var poll_buttons := HBoxContainer.new()
 		poll_buttons.alignment = BoxContainer.ALIGNMENT_END
 		poll_buttons.add_theme_constant_override("separation", 6)
-		var poll_cancel := ChatPanel.solid_button("Cancel", 9, Color(1, 1, 1, 0.58), 400, Color(0, 0, 0, 0), Color(1, 1, 1, 0.1), Color(1, 1, 1, 0.05), Color(1, 1, 1, 0.16), 8, Vector4(8, 5, 8, 5))
+		var poll_cancel := ChatPanel.solid_button("Cancel", 9, Color(1, 1, 1, 0.58), 400, Color(0, 0, 0, 0), UiTheme.pick("line", Color(1, 1, 1, 0.1)), UiTheme.pick("overlay_card", Color(1, 1, 1, 0.05)), Color(1, 1, 1, 0.16), 8, Vector4(8, 5, 8, 5))
 		poll_cancel.pressed.connect(func() -> void:
 			poll_open = false
 			poll_error = ""
@@ -3368,9 +3376,9 @@ class Conversation extends VBoxContainer:
 		_composer.custom_minimum_size.y = 42
 		_composer.scroll_fit_content_height = false
 		if embedded:
-			ChatPanel.style_text_edit(_composer, 14, Color(0, 0, 0, 0.2), Color(1, 1, 1, 0.12), Color(1, 1, 1, 0.42), 12, Vector4(12, 9, 12, 9))
+			ChatPanel.style_text_edit(_composer, 14, Color(0, 0, 0, 0.2), UiTheme.pick("line", Color(1, 1, 1, 0.12)), Color(1, 1, 1, 0.42), 12, Vector4(12, 9, 12, 9))
 		else:
-			ChatPanel.style_text_edit(_composer, 14, Color(9 / 255.0, 9 / 255.0, 12 / 255.0, 0.58), Color(1, 1, 1, 0.12), Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.6), 12, Vector4(12, 9, 12, 9))
+			ChatPanel.style_text_edit(_composer, 14, Color(9 / 255.0, 9 / 255.0, 12 / 255.0, 0.58), UiTheme.pick("line", Color(1, 1, 1, 0.12)), Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.6), 12, Vector4(12, 9, 12, 9))
 		_composer.text_changed.connect(fit_composer)
 		_composer.gui_input.connect(_on_composer_input)
 		row.add_child(_composer)
@@ -3733,7 +3741,7 @@ class Conversation extends VBoxContainer:
 		var can_vote := can_call_vote()
 		var can_demand := they_are() == "puppet"
 		_vote_button.visible = can_vote
-		ChatPanel.style_flat(_vote_button, Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.2) if poll_open else Color(1, 1, 1, 0.05), Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.6) if poll_open else Color(1, 1, 1, 0.15), 10, Vector4(10, 0, 10, 0), Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.2) if poll_open else Color(1, 1, 1, 0.05), Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.6) if poll_open else Color(1, 1, 1, 0.15))
+		ChatPanel.style_flat(_vote_button, Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.2) if poll_open else UiTheme.pick("overlay_card", Color(1, 1, 1, 0.05)), Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.6) if poll_open else Color(1, 1, 1, 0.15), 10, Vector4(10, 0, 10, 0), Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.2) if poll_open else UiTheme.pick("overlay_card", Color(1, 1, 1, 0.05)), Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.6) if poll_open else Color(1, 1, 1, 0.15))
 		for state_name in ["font_color", "font_hover_color", "font_pressed_color", "font_hover_pressed_color", "font_focus_color"]:
 			_vote_button.add_theme_color_override(state_name, ChatPanel.SKY_PALE if poll_open else Color(1, 1, 1, 0.7))
 		_poll_holder.visible = can_vote and poll_open
@@ -3746,7 +3754,7 @@ class Conversation extends VBoxContainer:
 		if not list.is_empty():
 			first_name = ChatPanel.t(ChatPanel.d(list[0]).get("name", ""))
 		_demand_button.tooltip_text = "This message is a demand. Click to send it as an ordinary message." if make_demand else "Make this message a demand of %s" % first_name
-		ChatPanel.style_flat(_demand_button, Color(234 / 255.0, 179 / 255.0, 8 / 255.0, 0.22) if make_demand else Color(1, 1, 1, 0.05), Color(234 / 255.0, 179 / 255.0, 8 / 255.0, 0.7) if make_demand else Color(1, 1, 1, 0.15), 10, Vector4(10, 0, 10, 0), Color(234 / 255.0, 179 / 255.0, 8 / 255.0, 0.22) if make_demand else Color(1, 1, 1, 0.05), Color(234 / 255.0, 179 / 255.0, 8 / 255.0, 0.7) if make_demand else Color(1, 1, 1, 0.15))
+		ChatPanel.style_flat(_demand_button, Color(234 / 255.0, 179 / 255.0, 8 / 255.0, 0.22) if make_demand else UiTheme.pick("overlay_card", Color(1, 1, 1, 0.05)), Color(234 / 255.0, 179 / 255.0, 8 / 255.0, 0.7) if make_demand else Color(1, 1, 1, 0.15), 10, Vector4(10, 0, 10, 0), Color(234 / 255.0, 179 / 255.0, 8 / 255.0, 0.22) if make_demand else UiTheme.pick("overlay_card", Color(1, 1, 1, 0.05)), Color(234 / 255.0, 179 / 255.0, 8 / 255.0, 0.7) if make_demand else Color(1, 1, 1, 0.15))
 		for state_name in ["font_color", "font_hover_color", "font_pressed_color", "font_hover_pressed_color", "font_focus_color"]:
 			_demand_button.add_theme_color_override(state_name, Color(250 / 255.0, 204 / 255.0, 21 / 255.0) if make_demand else Color(1, 1, 1, 0.7))
 		if can_demand and make_demand:
@@ -3767,7 +3775,7 @@ class Conversation extends VBoxContainer:
 		if cases.is_empty():
 			return holder
 		var box := PanelContainer.new()
-		box.add_theme_stylebox_override("panel", UI.box(Color(34 / 255.0, 197 / 255.0, 94 / 255.0, 0.045) if concluded else Color(1, 1, 1, 0.025), Color(34 / 255.0, 197 / 255.0, 94 / 255.0, 0.2) if concluded else ChatPanel.GREY_BORDER, 9, 1, Vector4(10, 9, 10, 9)))
+		box.add_theme_stylebox_override("panel", UI.box(Color(34 / 255.0, 197 / 255.0, 94 / 255.0, 0.045) if concluded else UiTheme.pick("overlay_card", Color(1, 1, 1, 0.025)), Color(34 / 255.0, 197 / 255.0, 94 / 255.0, 0.2) if concluded else ChatPanel.GREY_BORDER, 9, 1, Vector4(10, 9, 10, 9)))
 		var column := VBoxContainer.new()
 		column.add_theme_constant_override("separation", 7)
 		var top := HBoxContainer.new()
@@ -3782,7 +3790,7 @@ class Conversation extends VBoxContainer:
 			texts.add_child(UI.label("%s is now %s." % [institution_name if not institution_name.is_empty() else "Institution", ChatPanel.t(institution.get("status", "")).replace("-", " ").replace("_", " ")], 8, Color(1, 1, 1, 0.4)))
 		top.add_child(texts)
 		if concluded:
-			var view_button := ChatPanel.solid_button("View institution →", 9, ChatPanel.GREY_TEXT, 760, Color(1, 1, 1, 0.055), ChatPanel.GREY_BORDER, Color(1, 1, 1, 0.09), ChatPanel.GREY_BORDER_STRONG, 8, Vector4(7, 4, 7, 4))
+			var view_button := ChatPanel.solid_button("View institution →", 9, ChatPanel.GREY_TEXT, 760, UiTheme.pick("overlay_card", Color(1, 1, 1, 0.055)), ChatPanel.GREY_BORDER, Color(1, 1, 1, 0.09), ChatPanel.GREY_BORDER_STRONG, 8, Vector4(7, 4, 7, 4))
 			view_button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 			view_button.pressed.connect(func() -> void: panel.navigate_institution(_institution_id(), "members"))
 			top.add_child(view_button)
@@ -3829,7 +3837,7 @@ class Conversation extends VBoxContainer:
 		_lifecycle_box.visible = showing
 		if not showing:
 			return
-		_lifecycle_box.add_theme_stylebox_override("panel", UI.box(Color(1, 1, 1, 0.03), ChatPanel.GREY_BORDER, 9, 1, Vector4(9, 8, 9, 8)))
+		_lifecycle_box.add_theme_stylebox_override("panel", UI.box(UiTheme.pick("overlay_card", Color(1, 1, 1, 0.03)), ChatPanel.GREY_BORDER, 9, 1, Vector4(9, 8, 9, 8)))
 		var row := HBoxContainer.new()
 		row.add_theme_constant_override("separation", 9)
 		var texts := VBoxContainer.new()
@@ -3851,7 +3859,7 @@ class Conversation extends VBoxContainer:
 			var buttons := HBoxContainer.new()
 			buttons.add_theme_constant_override("separation", 4)
 			buttons.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-			for spec in [["Accept", "accept", Color(34 / 255.0, 197 / 255.0, 94 / 255.0, 0.09), Color(34 / 255.0, 197 / 255.0, 94 / 255.0, 0.25), Color("#bbf7d0"), 760], ["Observer instead", "seek-observer", Color(1, 1, 1, 0.055), ChatPanel.GREY_BORDER, ChatPanel.GREY_TEXT, 400], ["Later", "delay", Color(245 / 255.0, 158 / 255.0, 11 / 255.0, 0.07), Color(245 / 255.0, 158 / 255.0, 11 / 255.0, 0.2), Color("#fde68a"), 400], ["Reject", "reject", Color(239 / 255.0, 68 / 255.0, 68 / 255.0, 0.07), Color(239 / 255.0, 68 / 255.0, 68 / 255.0, 0.2), ChatPanel.RED_SOFT, 400]]:
+			for spec in [["Accept", "accept", Color(34 / 255.0, 197 / 255.0, 94 / 255.0, 0.09), Color(34 / 255.0, 197 / 255.0, 94 / 255.0, 0.25), Color("#bbf7d0"), 760], ["Observer instead", "seek-observer", UiTheme.pick("overlay_card", Color(1, 1, 1, 0.055)), ChatPanel.GREY_BORDER, ChatPanel.GREY_TEXT, 400], ["Later", "delay", Color(245 / 255.0, 158 / 255.0, 11 / 255.0, 0.07), Color(245 / 255.0, 158 / 255.0, 11 / 255.0, 0.2), Color("#fde68a"), 400], ["Reject", "reject", Color(239 / 255.0, 68 / 255.0, 68 / 255.0, 0.07), Color(239 / 255.0, 68 / 255.0, 68 / 255.0, 0.2), ChatPanel.RED_SOFT, 400]]:
 				var decision: String = spec[1]
 				var choice := ChatPanel.solid_button(spec[0], 9, spec[4], spec[5], spec[2], spec[3], Color((spec[2] as Color).r, (spec[2] as Color).g, (spec[2] as Color).b, (spec[2] as Color).a + 0.06), spec[3], 8, Vector4(7, 5, 7, 5))
 				choice.disabled = loading
@@ -4532,7 +4540,7 @@ class Conversation extends VBoxContainer:
 
 	func _tag_chip(country_name: String) -> Control:
 		var chip := PanelContainer.new()
-		var normal := UI.box(Color(1, 1, 1, 0.06), Color(1, 1, 1, 0.12), 999, 1, Vector4(7, 3, 7, 3))
+		var normal := UI.box(UiTheme.pick("hover", Color(1, 1, 1, 0.06)), UiTheme.pick("line", Color(1, 1, 1, 0.12)), 999, 1, Vector4(7, 3, 7, 3))
 		var hover := UI.box(Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.2), Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.5), 999, 1, Vector4(7, 3, 7, 3))
 		chip.add_theme_stylebox_override("panel", normal)
 		chip.mouse_filter = Control.MOUSE_FILTER_STOP
@@ -4585,7 +4593,7 @@ class Conversation extends VBoxContainer:
 		_peace_button.tooltip_text = "Propose peace to %s" % peace_enemy()
 		var open_now := can and peace_form_open
 		var accent := UI.ACCENT
-		ChatPanel.style_flat(_peace_button, Color(accent, 0.16) if open_now else Color(1, 1, 1, 0.05), Color(accent, 0.6) if open_now else Color(1, 1, 1, 0.15), 10, Vector4(10, 0, 10, 0), Color(accent, 0.16) if open_now else Color(1, 1, 1, 0.08), Color(accent, 0.6) if open_now else Color(1, 1, 1, 0.22))
+		ChatPanel.style_flat(_peace_button, Color(accent, 0.16) if open_now else UiTheme.pick("overlay_card", Color(1, 1, 1, 0.05)), Color(accent, 0.6) if open_now else Color(1, 1, 1, 0.15), 10, Vector4(10, 0, 10, 0), Color(accent, 0.16) if open_now else UiTheme.pick("line", Color(1, 1, 1, 0.08)), Color(accent, 0.6) if open_now else Color(1, 1, 1, 0.22))
 		for state_name in ["font_color", "font_hover_color", "font_pressed_color", "font_hover_pressed_color", "font_focus_color"]:
 			_peace_button.add_theme_color_override(state_name, accent if open_now else Color(1, 1, 1, 0.7))
 		ChatPanel.clear(_peace_holder)
@@ -4596,7 +4604,7 @@ class Conversation extends VBoxContainer:
 
 	func _peace_form() -> Control:
 		var box := PanelContainer.new()
-		box.add_theme_stylebox_override("panel", UI.box(Color(1, 1, 1, 0.03), Color(1, 1, 1, 0.1), 10, 1, Vector4(10, 9, 10, 9)))
+		box.add_theme_stylebox_override("panel", UI.box(UiTheme.pick("overlay_card", Color(1, 1, 1, 0.03)), UiTheme.pick("line", Color(1, 1, 1, 0.1)), 10, 1, Vector4(10, 9, 10, 9)))
 		var column := VBoxContainer.new()
 		column.add_theme_constant_override("separation", 6)
 		column.add_child(UI.label("Propose peace", 9, ChatPanel.GREY_TEXT, 820))
@@ -4643,7 +4651,7 @@ class Conversation extends VBoxContainer:
 		var buttons := HBoxContainer.new()
 		buttons.alignment = BoxContainer.ALIGNMENT_END
 		buttons.add_theme_constant_override("separation", 6)
-		var cancel := ChatPanel.solid_button("Cancel", 9, Color(1, 1, 1, 0.58), 400, Color(0, 0, 0, 0), Color(1, 1, 1, 0.1), Color(1, 1, 1, 0.05), Color(1, 1, 1, 0.16), 8, Vector4(8, 5, 8, 5))
+		var cancel := ChatPanel.solid_button("Cancel", 9, Color(1, 1, 1, 0.58), 400, Color(0, 0, 0, 0), UiTheme.pick("line", Color(1, 1, 1, 0.1)), UiTheme.pick("overlay_card", Color(1, 1, 1, 0.05)), Color(1, 1, 1, 0.16), 8, Vector4(8, 5, 8, 5))
 		cancel.pressed.connect(func() -> void:
 			peace_form_open = false
 			peace_said = ""
@@ -4808,7 +4816,7 @@ class Conversation extends VBoxContainer:
 			var buttons := HBoxContainer.new()
 			buttons.add_theme_constant_override("separation", 8)
 			var accept := ChatPanel.solid_button("Accept", 12, Color("#04141a"), 800, UI.ACCENT, UI.ACCENT, UI.ACCENT.lightened(0.08), UI.ACCENT, 8, Vector4(10, 6, 10, 6))
-			var decline := ChatPanel.solid_button("Decline", 12, Color8(231, 233, 234), 800, Color(1, 1, 1, 0.06), Color(1, 1, 1, 0.18), Color(1, 1, 1, 0.1), Color(1, 1, 1, 0.26), 8, Vector4(10, 6, 10, 6))
+			var decline := ChatPanel.solid_button("Decline", 12, Color8(231, 233, 234), 800, UiTheme.pick("hover", Color(1, 1, 1, 0.06)), Color(1, 1, 1, 0.18), UiTheme.pick("line", Color(1, 1, 1, 0.1)), Color(1, 1, 1, 0.26), 8, Vector4(10, 6, 10, 6))
 			for button in [accept, decline]:
 				button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 				button.custom_minimum_size.y = 37
@@ -4866,7 +4874,7 @@ class Conversation extends VBoxContainer:
 			_box.add_child(ChatPanel.spaced(empty, 32))
 		if hidden > 0:
 			var step := mini(hidden, ChatPanel.WINDOW_STEP)
-			var more := ChatPanel.solid_button("Show %d earlier message%s (%d hidden)" % [step, "" if step == 1 else "s", hidden], 11, Color(1, 1, 1, 0.58), 400, Color(1, 1, 1, 0.04), Color(1, 1, 1, 0.09), Color(1, 1, 1, 0.07), Color(1, 1, 1, 0.14), 999, Vector4(10, 6, 10, 6))
+			var more := ChatPanel.solid_button("Show %d earlier message%s (%d hidden)" % [step, "" if step == 1 else "s", hidden], 11, Color(1, 1, 1, 0.58), 400, Color(1, 1, 1, 0.04), Color(1, 1, 1, 0.09), UiTheme.pick("line", Color(1, 1, 1, 0.07)), Color(1, 1, 1, 0.14), 999, Vector4(10, 6, 10, 6))
 			more.pressed.connect(func() -> void:
 				visible_limit += ChatPanel.WINDOW_STEP
 				render_messages(false))
@@ -5050,16 +5058,16 @@ class Conversation extends VBoxContainer:
 		var bubble := PanelContainer.new()
 		bubble.mouse_filter = Control.MOUSE_FILTER_PASS
 		var accent := panel.accent_for(speaker_name, ChatPanel.t(message.get("code", "")))
-		var bg := Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.92)
+		var bg := UiTheme.pick("active", Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.92))
 		var border := Color(147 / 255.0, 197 / 255.0, 253 / 255.0, 0.2)
 		if is_error:
 			bg = Color(239 / 255.0, 68 / 255.0, 68 / 255.0, 0.16)
 			border = Color(239 / 255.0, 68 / 255.0, 68 / 255.0, 0.3)
 		elif not is_player:
-			var base := Color(35 / 255.0, 35 / 255.0, 39 / 255.0, 0.96)
+			var base := UiTheme.pick("surface", Color(35 / 255.0, 35 / 255.0, 39 / 255.0, 0.96))
 			var alpha := 0.04 + 0.96 * base.a
 			bg = Color((accent.r * 0.04 + base.r * 0.96 * base.a) / alpha, (accent.g * 0.04 + base.g * 0.96 * base.a) / alpha, (accent.b * 0.04 + base.b * 0.96 * base.a) / alpha, alpha)
-			border = Color(1, 1, 1, 0.08)
+			border = UiTheme.pick("line", Color(1, 1, 1, 0.08))
 		var style := UI.box(bg, border, 13, 1, Vector4(0, 0, 0, 0))
 		if is_player:
 			style.corner_radius_bottom_right = 3
@@ -5190,7 +5198,7 @@ class Conversation extends VBoxContainer:
 			var chip := PanelContainer.new()
 			chip.mouse_filter = Control.MOUSE_FILTER_PASS
 			chip.custom_minimum_size.y = 25
-			chip.add_theme_stylebox_override("panel", UI.box(Color(31 / 255.0, 31 / 255.0, 35 / 255.0, 0.94), Color(1, 1, 1, 0.12), 999, 1, Vector4(7, 3, 7, 3)))
+			chip.add_theme_stylebox_override("panel", UI.box(Color(31 / 255.0, 31 / 255.0, 35 / 255.0, 0.94), UiTheme.pick("line", Color(1, 1, 1, 0.12)), 999, 1, Vector4(7, 3, 7, 3)))
 			var names: PackedStringArray = []
 			for member in members:
 				names.append(ChatPanel.t(member["name"]))
@@ -5220,7 +5228,7 @@ class Conversation extends VBoxContainer:
 		tip.top_level = true
 		tip.z_index = 4000
 		tip.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		var tip_style := UI.box(Color(18 / 255.0, 18 / 255.0, 21 / 255.0, 0.98), Color(1, 1, 1, 0.12), 8, 1, Vector4(8, 5, 8, 5))
+		var tip_style := UI.box(Color(18 / 255.0, 18 / 255.0, 21 / 255.0, 0.98), UiTheme.pick("line", Color(1, 1, 1, 0.12)), 8, 1, Vector4(8, 5, 8, 5))
 		tip_style.shadow_color = Color(0, 0, 0, 0.35)
 		tip_style.shadow_size = 12
 		tip_style.shadow_offset = Vector2(0, 8)
@@ -5259,7 +5267,7 @@ class Conversation extends VBoxContainer:
 		var row := HBoxContainer.new()
 		row.add_theme_constant_override("separation", 10)
 		var left := ColorRect.new()
-		left.color = Color(1, 1, 1, 0.08)
+		left.color = UiTheme.pick("line", Color(1, 1, 1, 0.08))
 		left.custom_minimum_size.y = 1
 		left.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		left.size_flags_vertical = Control.SIZE_SHRINK_CENTER
@@ -5267,7 +5275,7 @@ class Conversation extends VBoxContainer:
 		var label := ChatPanel.long_date(value)
 		row.add_child(UI.label(label if not label.is_empty() else value, 11, Color(1, 1, 1, 0.32), 600))
 		var right := ColorRect.new()
-		right.color = Color(1, 1, 1, 0.08)
+		right.color = UiTheme.pick("line", Color(1, 1, 1, 0.08))
 		right.custom_minimum_size.y = 1
 		right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		right.size_flags_vertical = Control.SIZE_SHRINK_CENTER
@@ -5287,7 +5295,7 @@ class Conversation extends VBoxContainer:
 		header.add_child(UI.label(speaker_name, 11, Color(1, 1, 1, 0.4)))
 		column.add_child(ChatPanel.spaced_bottom(header, 4))
 		var bubble := PanelContainer.new()
-		var style := UI.box(Color(1, 1, 1, 0.08), Color(0, 0, 0, 0), 12, 0, Vector4(14, 10, 14, 10))
+		var style := UI.box(UiTheme.pick("line", Color(1, 1, 1, 0.08)), Color(0, 0, 0, 0), 12, 0, Vector4(14, 10, 14, 10))
 		style.corner_radius_bottom_left = 4
 		bubble.add_theme_stylebox_override("panel", style)
 		bubble.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
@@ -5308,7 +5316,7 @@ class Conversation extends VBoxContainer:
 		var heading := ("%d invited governments" % count if count > 1 else "Invited government") if lifecycle_kind else ("%d governments" % count if count > 1 else "Government")
 		column.add_child(ChatPanel.spaced_bottom(UI.label(heading, 11, Color(1, 1, 1, 0.42)), 4))
 		var bubble := PanelContainer.new()
-		var style := UI.box(Color(1, 1, 1, 0.035) if lifecycle_kind else Color(1, 1, 1, 0.08), ChatPanel.GREY_BORDER if lifecycle_kind else Color(0, 0, 0, 0), 12, 1 if lifecycle_kind else 0, Vector4(14, 10, 14, 10))
+		var style := UI.box(Color(1, 1, 1, 0.035) if lifecycle_kind else UiTheme.pick("line", Color(1, 1, 1, 0.08)), ChatPanel.GREY_BORDER if lifecycle_kind else Color(0, 0, 0, 0), 12, 1 if lifecycle_kind else 0, Vector4(14, 10, 14, 10))
 		style.corner_radius_bottom_left = 4
 		bubble.add_theme_stylebox_override("panel", style)
 		bubble.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
@@ -5352,7 +5360,7 @@ class Conversation extends VBoxContainer:
 			button.focus_mode = Control.FOCUS_NONE
 			button.custom_minimum_size.y = 31
 			button.tooltip_text = ", ".join(voters) if not voters.is_empty() else "No vote yet"
-			var base_style := UI.box(Color(1, 1, 1, 0.05), Color(1, 1, 1, 0.28) if chosen else Color(1, 1, 1, 0.12), 8, 1)
+			var base_style := UI.box(UiTheme.pick("overlay_card", Color(1, 1, 1, 0.05)), Color(1, 1, 1, 0.28) if chosen else UiTheme.pick("line", Color(1, 1, 1, 0.12)), 8, 1)
 			for state in ["normal", "hover", "pressed", "hover_pressed", "focus", "disabled"]:
 				button.add_theme_stylebox_override(state, base_style)
 			var can_vote := mine.is_empty()
@@ -5470,7 +5478,7 @@ class Conversation extends VBoxContainer:
 
 
 	func _demand_choice(caption: String, tone: String, busy: bool) -> Button:
-		var bg := Color(1, 1, 1, 0.06)
+		var bg := UiTheme.pick("hover", Color(1, 1, 1, 0.06))
 		var border := Color(1, 1, 1, 0.16)
 		if tone == "danger":
 			bg = Color(248 / 255.0, 113 / 255.0, 113 / 255.0, 0.14)

@@ -11,6 +11,10 @@ boot_splash/show_image=false
 boot_splash/bg_color=Color(0.0745098, 0.0745098, 0.0823529, 1)
 boot_splash/minimum_display_time=0
 
+[audio]
+
+driver/enable_input=true
+
 [display]
 
 window/size/viewport_width=1440

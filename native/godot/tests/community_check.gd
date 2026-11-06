@@ -115,6 +115,7 @@ func _mount_menu_page(key: String, title: String, page: Control, actions: Array 
 
 
 func _run() -> void:
+	await process_frame
 	while not main.menu.visible:
 		if Time.get_ticks_msec() - started > 90000:
 			_say("FAIL the menu never appeared")
@@ -122,7 +123,8 @@ func _run() -> void:
 			return
 		await process_frame
 	_say("menu ready")
-	await _until(func() -> bool: return main.menu._trash != null, 20.0)
+	var started_up := await _until(func() -> bool: return main.menu.loaded and main.menu._trash != null, 180.0)
+	_check(started_up, "the menu has its library and its trash before a page is mounted over it")
 	await _wait(1.0)
 	var only := OS.get_environment("OH_ONLY")
 	if only == "lobbies":
@@ -235,6 +237,8 @@ func _imports() -> void:
 	_check(page._notice.begins_with("Imported \""), "import notice: %s" % page._notice.substr(0, 60))
 	_check(page._status_of(post) == "current", "the post now says it is in the library")
 	_check(changed[0] == 1, "the library is told it changed")
+	var remembered: Dictionary = await main.engine.request("community.standin.imported")
+	_check(remembered.get("ok", false) and (remembered.get("result", []) as Array).map(func(value: Variant) -> int: return int(value)).has(int(post.get("id", 0))), "the post is remembered as imported, by its number, so importing it again is not counted (%s)" % str(remembered.get("result")))
 	_check(_has_text(page, "In your library") and _has_text(page, "Import again"), "badge and Import again")
 	await _wait(1.0)
 	await _shoot("c09-imported")

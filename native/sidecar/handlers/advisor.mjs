@@ -55,6 +55,23 @@ const STAND_IN_CHARACTER_REPLY = [
   "ADVISOR_MEMORY: The player asked a citizen about the budget.",
 ].join("\n");
 
+const STAND_IN_FENCES_REPLY = [
+  "Three orders, each on its own, as you asked.",
+  "```actions",
+  "[{\"title\":\"Recall the ambassador from Tripoli\",\"text\":\"Recall our ambassador from Tripoli for consultations.\",\"kind\":\"action\"}]",
+  "```",
+  "The second I could not put in order.",
+  "```actions",
+  "{\"title\":\"Not a list of orders\"}",
+  "```",
+  "```actions",
+  "[{\"title\":\"Open talks with Berlin on the fiscal rules\",\"text\":\"Open talks with Berlin on a common line on the fiscal rules.\",\"kind\":\"action\"}]",
+  "```",
+  "ADVISOR_MEMORY: The player asked for each order separately.",
+].join("\n");
+
+const FENCES_MARK = "each order separately";
+
 const ADVISOR_MARK = "[Drafting Messages to Send]";
 const CHARACTER_MARK = "[Character Conversation — Public Context Only]";
 const PRIVATE_MARKS = ["[Action Planning]", "[Current Planned Actions]", "[Current Projects]", ADVISOR_MARK];
@@ -410,7 +427,7 @@ export const register = (ctx) => {
       const asked = lastUserText(body).toLowerCase();
       if (asked.includes(FAIL_MARK)) return null;
       const named = /Your name is (.+?), and your position is/.exec(String(text));
-      const reply = asked.includes("institution") ? STAND_IN_INSTITUTION_REPLY : STAND_IN_REPLY;
+      const reply = asked.includes(FENCES_MARK) ? STAND_IN_FENCES_REPLY : asked.includes("institution") ? STAND_IN_INSTITUTION_REPLY : STAND_IN_REPLY;
       return { text: named ? `I am ${named[1]}.\n\n${reply}` : reply };
     });
     installStreamingStandIn();
@@ -918,18 +935,14 @@ export const register = (ctx) => {
         const { reply, memory } = engine.advisorMemory.splitAdvisorMemory(raw);
         const blocks = engine.advisorBlocks;
         const replyId = newReplyId();
-        const { json: actionsProposal, reason: actionsReason } = blocks.extractFencedJson(reply, "actions");
+        const { actionsProposal, actionBlockProblems, chartProblem, draftProblems, institutionDraftProblems, deployProblems } = engine.advisorReply.parseAdvisorReply(reply, {
+          allowedUnitTypes: Array.isArray(moment.world?.allowedUnitTypes) ? moment.world.allowedUnitTypes : null,
+        });
         const minister = thread === CHIEF || threads.advisorRecipientType(recipient) === threads.ADVISOR_RECIPIENT_TYPES.MINISTER;
         const { proposals: actionProposals, problems: invalidProposals } = minister
           ? engine.advisorActionReview.actionProposalsFromReply(actionsProposal, replyId)
           : { proposals: [], problems: [] };
-        const actionsProblems = [
-          ...(actionsReason ? [`the Action block was ${actionsReason}; no Action was queued`] : []),
-          ...invalidProposals,
-        ];
-        const { chartProblem, draftProblems, institutionDraftProblems, deployProblems } = engine.advisorReply.parseAdvisorReply(reply, {
-          allowedUnitTypes: Array.isArray(moment.world?.allowedUnitTypes) ? moment.world.allowedUnitTypes : null,
-        });
+        const actionsProblems = [...(Array.isArray(actionBlockProblems) ? actionBlockProblems : []), ...invalidProposals];
         const { json: projectsProposal, truncated: projectsTruncated, reason: projectsReason,
           dropped: projectsDropped, excerpt: projectsExcerpt } = blocks.extractFencedJson(reply, "projects", { salvageTruncated: true });
         const canApplyProjects = engine.advisorProjectRouting.canAdvisorApplyProjectOps(thread, recipient);

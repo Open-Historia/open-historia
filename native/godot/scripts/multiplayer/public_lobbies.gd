@@ -50,7 +50,7 @@ var _veil: ColorRect
 
 
 func _init() -> void:
-	add_theme_stylebox_override("panel", UI.box(CARD_BG, CARD_BORDER, 18, 1, Vector4(21, 19, 21, 19)))
+	add_theme_stylebox_override("panel", UI.box(UiTheme.pick("surface", CARD_BG), CARD_BORDER, 18, 1, Vector4(21, 19, 21, 19)))
 	clip_contents = true
 	var stack := Control.new()
 	stack.mouse_filter = Control.MOUSE_FILTER_IGNORE

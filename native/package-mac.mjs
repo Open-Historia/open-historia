@@ -166,6 +166,11 @@ for (const name of fs.readdirSync(sidecar).filter((entry) => /\.(?:mjs|cjs|js)$/
 copy(path.join(sidecar, "dist"), path.join(stage, "native", "sidecar", "dist"), (file, isDir) => isDir || !file.endsWith(".map"));
 copy(path.join(sidecar, "handlers"), path.join(stage, "native", "sidecar", "handlers"), (file, isDir) => isDir || file.endsWith(".mjs") || file.endsWith(".cjs"));
 if (fs.existsSync(path.join(sidecar, "node_modules"))) copy(path.join(sidecar, "node_modules"), path.join(stage, "native", "sidecar", "node_modules"));
+const onDevicePack = await import(pathToFileURL(path.join(here, "onDevicePack.mjs")).href);
+const onDeviceRuntime = onDevicePack.pruneOnDeviceRuntime(path.join(stage, "native", "sidecar", "node_modules"), { platform: "darwin", arches: ["arm64", "x64"] });
+console.log(`staged the on-device model runtime ${(onDeviceRuntime.bytes / 1048576).toFixed(1)} MB (native: ${onDeviceRuntime.native?.join(", ") || "none"}, wasm: ${onDeviceRuntime.wasm?.join(", ") || "none"})`);
+const speechHelper = onDevicePack.buildSpeechHelper("darwin", path.join(stage, "native", "sidecar"));
+if (speechHelper.ok) console.log(`staged ${path.basename(speechHelper.file)} ${(speechHelper.bytes / 1024).toFixed(0)} KB`);
 for (const arch of ["arm64", "x64"]) {
   const prebuild = path.join(stage, "native", "sidecar", "node_modules", "@node-datachannel", `darwin-${arch}`, "node_datachannel.node");
   if (fs.existsSync(path.join(sidecar, "node_modules", "node-datachannel")) && !fs.existsSync(prebuild)) throw new Error(`The darwin-${arch} node-datachannel prebuild is missing from native/sidecar/node_modules.`);
@@ -275,6 +280,9 @@ const plist = path.join(contents, "Info.plist");
 for (const [key, value] of [["CFBundleName", appName], ["CFBundleDisplayName", appName], ["CFBundleShortVersionString", stamp.version], ["CFBundleVersion", stamp.build]]) {
   const set = capture("/usr/libexec/PlistBuddy", ["-c", `Set :${key} ${value}`, plist]);
   if (set.status !== 0) run("/usr/libexec/PlistBuddy", ["-c", `Add :${key} string ${value}`, plist]);
+}
+for (const [key, value] of [["NSMicrophoneUsageDescription", "The Advisor's microphone turns what you say into a message."], ["NSSpeechRecognitionUsageDescription", "The Advisor's microphone uses macOS's speech recognition to turn what you say into a message. It runs on this Mac where macOS can; otherwise Apple recognises it."]]) {
+  run("/usr/bin/plutil", ["-replace", key, "-string", value, plist]);
 }
 const plistKeys = JSON.parse(capture("/usr/bin/plutil", ["-convert", "json", "-o", "-", plist]).stdout || "{}");
 for (const key of ["CFBundleShortVersionString", "CFBundleVersion", chunkKit.MAC_SHELL_KEY]) delete plistKeys[key];
