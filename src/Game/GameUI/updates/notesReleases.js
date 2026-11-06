@@ -223,6 +223,7 @@ export const RELEASES = [
           "2026-11-faster-turns",
           "2026-11-smoother-scrolling",
           "2026-11-long-campaign-fixes",
+          "2026-11-storyline-pressure-held",
           "2026-10-skip-freeze",
           "2026-11-places-as-written",
           "2026-10-newer-claude",

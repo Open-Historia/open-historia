@@ -54,6 +54,25 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // A player's report (2026-11-06, 1836 France): every time skip fell back to the stand-in events, "Storyline
+    // storyline-fr-franchise-1836 lowers pressure by 47 point(s), but its linked event(s) contain escalation/failure
+    // cues": reforms that passed over a bloc that "rejects" them. AI/nativeWorldDirector.js holdUnjustifiedPressureDrops
+    // keeps the old pressure instead, and STORYLINE_DEESCALATION_RE knows a bill passing.
+    id: "2026-11-storyline-pressure-held",
+    kind: "minor",
+    date: "2026-11-05",
+    channel: "beta",
+    banners: [
+      {
+        title: "Easing storylines no longer cost a time skip",
+        items: [
+          "When a time skip eased a storyline's pressure while its events still read as a crisis, the whole skip was thrown away for the stand-in events. Now that storyline keeps its old pressure and the rest of the skip stands.",
+          "A bill or reform that passes now counts as easing the crisis around it.",
+        ],
+      },
+    ],
+  },
+  {
     // "the hello welcome introduction switches languages about 2 times too fast. also it should fade out the last
     // language and fade in the new one" (the owner, 2026-11-06, of the native app), then: "make the greeting thing on
     // the electron apps be the same as on native": a greeting every 4.4 s, 0.6 s in and 0.6 s out (FirstSetup.jsx).

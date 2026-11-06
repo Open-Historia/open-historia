@@ -116,6 +116,7 @@ import {
   normalizeWorldStorylineEventLinks,
   settleMotionRepairCall,
   settleSkipStorylineUpdates,
+  holdUnjustifiedPressureDrops,
   stripQuietDeferredStorylineUpdates,
   validateWorldEventConsequencePayload,
   validateWorldStorylinePayload,
@@ -1064,6 +1065,16 @@ const validateSegmentStorylines = (candidate, {
     normalizeWorldStorylineEventLinks(candidate, { world });
   }
   const deferredSalvage = stripQuietDeferredStorylineUpdates(candidate, analysis?.deferredStorylines);
+  // A pressure drop its events do not bear out keeps the old pressure; the
+  // answer stands (nativeWorldDirector.js holdUnjustifiedPressureDrops).
+  const heldPressure = holdUnjustifiedPressureDrops(candidate, {
+    existingStorylines: world?.storylines,
+    selectedStorylines: analysis?.attentionStorylines,
+    world,
+  });
+  if (heldPressure.length) {
+    console.warn(`[OH world director] kept the pressure of ${heldPressure.join(", ")}: the drop was not borne out by the linked events. The segment stands.`);
+  }
   if (deferredSalvage.strippedIds.length) {
     console.warn(
       `[OH world director] stripped ${deferredSalvage.strippedIds.length} quiet or non-material deferred storyline update(s): ` +
@@ -11384,6 +11395,7 @@ const runTargetedWorldMotionRepair = async ({
       stopDate: targetDate,
     };
 
+    holdUnjustifiedPressureDrops(validationCandidate, { existingStorylines: [prior], selectedStorylines: [prior], world: bundle?.world ?? null });
     const storylineError = validateWorldStorylinePayload(validationCandidate, {
       existingStorylines: [prior],
       selectedStorylines: [prior],
