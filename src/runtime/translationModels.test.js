@@ -35,7 +35,7 @@ test("a model only where one reads right; the rest of the 22 have their packs al
   assert.equal(translationModelFor("pt-BR"), TRANSLATION_MODELS.pt, "a regional code is its language");
   assert.equal(translationModelFor(" DE "), TRANSLATION_MODELS.de);
   // Three without a pack, whose whole interface would otherwise be AI requests.
-  for (const code of ["da", "hu", "ro"]) assert.ok(translationModelFor(code), code);
+  for (const code of ["da", "hu", "ro", "cs", "fi"]) assert.ok(translationModelFor(code), code);
 });
 
 test("every model is pinned, int8, about 110 MB, from the Transformers.js copies of Opus-MT", () => {

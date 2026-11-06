@@ -55,6 +55,8 @@ export const TRANSLATION_MODELS = Object.freeze({
   da: model("Xenova/opus-mt-en-da", "33862dc071a5cc43e821e60742553c501c587e77", 112558991),
   hu: model("Xenova/opus-mt-en-hu", "1b7df958c1bd8f094eff1ce76d536468923ed7e3", 116699316),
   ro: model("Xenova/opus-mt-en-ro", "3d816891778276930df2a45cbfb70689b3fe8981", 113247006),
+  cs: model("Xenova/opus-mt-en-cs", "ed163ca109a93297e2f055eb3397bd33230141ad", 116695526),
+  fi: model("Xenova/opus-mt-en-fi", "4e5799273dbd7cce94c1e99cc9d3acb9f191b8eb", 119429988),
 });
 
 // "pt-BR", " DE " → "pt", "de".
