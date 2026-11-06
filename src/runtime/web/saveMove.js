@@ -18,6 +18,11 @@
 // answers, and the site sends https://<host>/save-move/ back to http (which is
 // how a browser that upgrades http by itself is made to stay on it). Until the
 // site is set up that way this does nothing at all. Web build only.
+//
+// The Android app moves its saves from one of its ids to another in the same
+// file format (appMove.js): it writes the file with createSavesWriter below, a
+// piece at a time, and merges it with mergePackedSaves, its settings winning
+// over the new app's.
 
 import { DEFAULT_SCENARIO_ID } from "./storeConstants.js";
 
@@ -39,24 +44,20 @@ const isLoopback = (hostname) => hostname === "localhost" || hostname === "127.0
 
 // --- Reading the packed file ---------------------------------------------------
 
-const decodeRecord = (json, bins) => {
-  const walk = (value) => {
-    if (value === null || typeof value !== "object") return value;
-    if (Array.isArray(value)) return value.map(walk);
-    if (typeof value[DATE] === "number") return new Date(value[DATE]);
-    if (typeof value[BIN] === "number") {
-      const buffer = bins[value[BIN]];
-      if (value.kind === "buffer") return buffer;
-      if (value.kind === "blob") return new Blob([buffer], { type: value.type || "" });
-      const View = VIEWS[value.kind] ?? Uint8Array;
-      return View === DataView ? new DataView(buffer) : new View(buffer);
-    }
-    const out = {};
-    for (const key of Object.keys(value)) out[key] = walk(value[key]);
-    return out;
-  };
-  return walk(JSON.parse(json));
-};
+// The markers are turned back as JSON.parse builds the record, rather than in
+// a second copy of it afterwards: a record can be a 50 MB map.
+const decodeRecord = (json, bins) => JSON.parse(json, (_key, value) => {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return value;
+  if (typeof value[DATE] === "number") return new Date(value[DATE]);
+  if (typeof value[BIN] === "number") {
+    const buffer = bins[value[BIN]];
+    if (value.kind === "buffer") return buffer;
+    if (value.kind === "blob") return new Blob([buffer], { type: value.type || "" });
+    const View = VIEWS[value.kind] ?? Uint8Array;
+    return View === DataView ? new DataView(buffer) : new View(buffer);
+  }
+  return value;
+});
 
 // The file's index, and a reader that unpacks one record at a time, so a library
 // with a 100 MB map in it is never held twice.
@@ -78,6 +79,103 @@ export const openPackedSaves = async (blob) => {
   };
 };
 
+// --- Writing one -----------------------------------------------------------------
+
+// The file public/save-move/sender.js writes. That page imports nothing, so it
+// keeps its own copy; saveMove.test.js holds the two to the same bytes. A record
+// as JSON text plus the binary values taken out of it, in order.
+// JSON.stringify's replacer takes the binaries and dates out as it goes, so a
+// big record is not copied first; the text is the same as sender.js's.
+const encodeRecord = (record) => {
+  const bins = [];
+  const json = JSON.stringify(record, function replace(key, value) {
+    const original = this[key];
+    if (original instanceof Date) return { [DATE]: original.getTime() };
+    if (original === null || typeof original !== "object") return value;
+    if (typeof Blob !== "undefined" && original instanceof Blob) {
+      bins.push(original);
+      return { [BIN]: bins.length - 1, kind: "blob", type: original.type || "" };
+    }
+    if (original instanceof ArrayBuffer) {
+      bins.push(original);
+      return { [BIN]: bins.length - 1, kind: "buffer" };
+    }
+    if (ArrayBuffer.isView(original)) {
+      bins.push(original.buffer.slice(original.byteOffset, original.byteOffset + original.byteLength));
+      return { [BIN]: bins.length - 1, kind: original.constructor.name };
+    }
+    return value;
+  });
+  return { json, bins };
+};
+
+// Text as UTF-8, a slice at a time: a 50 MB record's text is never encoded
+// whole. A slice never ends between the two halves of a surrogate pair.
+const TEXT_SLICE = 1024 * 1024;
+const textPieces = function* textPieces(text) {
+  const encoder = new TextEncoder();
+  for (let at = 0; at < text.length;) {
+    let end = Math.min(text.length, at + TEXT_SLICE);
+    const last = text.charCodeAt(end - 1);
+    if (end < text.length && last >= 0xd800 && last <= 0xdbff) end += 1;
+    yield encoder.encode(text.slice(at, end));
+    at = end;
+  }
+};
+
+// Writes the file a record at a time: each record's text and binaries go to
+// `write` (a Uint8Array or a Blob, awaited) as soon as they are made, so a big
+// library is never held whole. The index comes last, from head(settings): the
+// magic, the index's length (4 bytes, little-endian) and the index (JSON), which
+// go IN FRONT of everything written, at the offsets the index gives.
+export const createSavesWriter = (write) => {
+  const entries = [];
+  let offset = 0;
+  const place = async (part) => {
+    let size = 0;
+    if (typeof part === "string") {
+      for (const piece of textPieces(part)) {
+        size += piece.byteLength;
+        await write(piece);
+      }
+    } else {
+      const piece = part instanceof Blob ? part : new Uint8Array(part);
+      size = piece instanceof Blob ? piece.size : piece.byteLength;
+      await write(piece);
+    }
+    const at = [offset, size];
+    offset += size;
+    return at;
+  };
+  return {
+    add: async (store, record) => {
+      const { json, bins } = encodeRecord(record);
+      const entry = { store, json: await place(json), bins: [] };
+      for (const bin of bins) entry.bins.push(await place(bin));
+      entries.push(entry);
+    },
+    get written() { return offset; },
+    head: (settings = {}) => {
+      const indexText = new TextEncoder().encode(JSON.stringify({ version: 1, settings, entries }));
+      const head = new Uint8Array(SAVE_MOVE_MAGIC.length + 4 + indexText.byteLength);
+      head.set(new TextEncoder().encode(SAVE_MOVE_MAGIC), 0);
+      new DataView(head.buffer).setUint32(SAVE_MOVE_MAGIC.length, indexText.byteLength, true);
+      head.set(indexText, SAVE_MOVE_MAGIC.length + 4);
+      return head;
+    },
+  };
+};
+
+// The same file as one Blob, for tests and small libraries.
+export const createSavesPacker = () => {
+  const parts = [];
+  const writer = createSavesWriter(async (piece) => { parts.push(piece instanceof Blob ? piece : new Blob([piece])); });
+  return {
+    add: writer.add,
+    finish: (settings = {}) => new Blob([writer.head(settings), ...parts], { type: "application/octet-stream" }),
+  };
+};
+
 // --- Merging it into this library ----------------------------------------------
 
 const freeId = (wanted, taken) => {
@@ -89,11 +187,31 @@ const freeId = (wanted, taken) => {
 
 const sameSave = (a, b) => Boolean(a?.meta?.updatedAt) && a.meta.updatedAt === b?.meta?.updatedAt;
 
+// A record as it was when it arrived, so a later move can tell it came already.
+export const movedKey = (store, record) => `${store}:${record?.id ?? ""}@${record?.meta?.updatedAt ?? ""}`;
+
+// A kept time skip (libraryStore.js parkedTurnKey) belongs to one game.
+const PARKED_TURN = "parked-turn:";
+
 // `db` is idb.js's surface (idbGet, idbGetAllKeys, idbPut, kvGet, kvPut, STORES),
 // passed in so this runs under node:test against a stand-in.
-export const mergePackedSaves = async (packed, db, storage) => {
+// The options are for the Android app's move from one of its ids to another
+// (appMove.js):
+//   settingsWin  the file's settings replace the ones here, where otherwise
+//                only what this place lacks is taken;
+//   seen         movedKey()s of what an earlier move brought: none of it comes
+//                a second time, even when the copy here has changed since;
+//   keep         settings keys of this place's own that the file never writes.
+// `carried` in the answer is the movedKey of every record in the file.
+export const mergePackedSaves = async (packed, db, storage, { settingsWin = false, seen = null, keep = [] } = {}) => {
   const { STORES } = db;
   const moved = { games: 0, scenarios: 0, others: 0 };
+  const carried = [];
+  const cameBefore = (store, record) => {
+    const key = movedKey(store, record);
+    carried.push(key);
+    return Boolean(seen?.has(key));
+  };
   const scenarioIds = new Set(await db.idbGetAllKeys(STORES.scenarios));
   const gameIds = new Set(await db.idbGetAllKeys(STORES.games));
   const scenarioIdMap = new Map();
@@ -105,7 +223,7 @@ export const mergePackedSaves = async (packed, db, storage) => {
 
   for (const entry of byStore("scenarios")) {
     const record = await packed.read(entry);
-    if (!record?.id) continue;
+    if (!record?.id || cameBefore("scenarios", record)) continue;
     if (scenarioIds.has(record.id)) {
       // The built-in scenario is this build's own, and the same download from
       // the hub is the same scenario: neither is carried a second time.
@@ -123,7 +241,7 @@ export const mergePackedSaves = async (packed, db, storage) => {
 
   for (const entry of byStore("games")) {
     const record = await packed.read(entry);
-    if (!record?.id) continue;
+    if (!record?.id || cameBefore("games", record)) continue;
     const from = record.id;
     if (gameIds.has(record.id)) {
       if (sameSave(record, await db.idbGet(STORES.games, record.id))) continue;
@@ -145,15 +263,49 @@ export const mergePackedSaves = async (packed, db, storage) => {
     const have = new Set(await db.idbGetAllKeys(STORES[store]));
     for (const entry of byStore(store)) {
       const record = await packed.read(entry);
-      if (!record?.id || have.has(record.id)) continue;
+      if (!record?.id || cameBefore(store, record) || have.has(record.id)) continue;
       await db.idbPut(STORES[store], record);
       moved.others += 1;
     }
   }
 
+  // A game's restore points, when they come as rows of their own (appMove.js):
+  // its index row first, then each restore point, both under the id the game
+  // has here. A game that did not come brings none of them.
+  if (STORES.snapshotIndex && STORES.snapshots) {
+    const slots = new Map();
+    for (const entry of byStore("snapshotIndex")) {
+      const row = await packed.read(entry);
+      const to = gameIdMap.get(row?.id);
+      if (!to || !Array.isArray(row.entries)) continue;
+      const entries = row.entries.map((item) => {
+        const slot = String(item?.slot ?? "");
+        const moved = slot.startsWith(`${row.id}/`) ? `${to}/${slot.slice(row.id.length + 1)}` : `${to}/${slot}`;
+        slots.set(slot, moved);
+        return { ...item, slot: moved };
+      });
+      await db.idbPut(STORES.snapshotIndex, { ...row, id: to, entries });
+    }
+    for (const entry of byStore("snapshots")) {
+      const row = await packed.read(entry);
+      const slot = slots.get(String(row?.id ?? ""));
+      if (!slot) continue;
+      await db.idbPut(STORES.snapshots, { ...row, id: slot });
+    }
+  }
+
+  const parkedTurns = [];
   for (const entry of byStore("kv")) {
     const record = await packed.read(entry);
-    if (record?.key) manifests[record.key] = record.value;
+    if (!record?.key) continue;
+    if (String(record.key).startsWith(PARKED_TURN)) parkedTurns.push(record);
+    else manifests[record.key] = record.value;
+  }
+  // A kept time skip goes with its game, under the id the game has here.
+  for (const { key, value } of parkedTurns) {
+    const id = gameIdMap.get(String(key).slice(PARKED_TURN.length));
+    if (!id || !value || typeof value !== "object" || (await db.kvGet(`${PARKED_TURN}${id}`, null)) != null) continue;
+    await db.kvPut(`${PARKED_TURN}${id}`, { ...value, campaignId: id });
   }
 
   // The lists the library is drawn from: what arrived goes after what is here,
@@ -179,20 +331,41 @@ export const mergePackedSaves = async (packed, db, storage) => {
     const activeGameId = here?.activeGameId || theirActive || "";
     await db.kvPut("game-manifest", { activeGameId, order });
   }
-  if (manifests["ui-settings"] && (await db.kvGet("ui-settings", null)) == null) {
+  if (manifests["ui-settings"] && (settingsWin || (await db.kvGet("ui-settings", null)) == null)) {
     await db.kvPut("ui-settings", manifests["ui-settings"]);
   }
+  // The basemaps' and the Workshop documents' lists: what is here first, then
+  // what arrived (the lists show every one anyway; these keep the order and the
+  // basemaps' duplicate check).
+  for (const key of ["basemaps-manifest", "mapeditor-manifest"]) {
+    const theirs = manifests[key];
+    if (!theirs || typeof theirs !== "object") continue;
+    const here = (await db.kvGet(key, null)) ?? {};
+    const order = [...new Set([...(Array.isArray(here.order) ? here.order : []), ...(Array.isArray(theirs.order) ? theirs.order : [])])];
+    const merged = { ...theirs, ...here, version: here.version ?? theirs.version ?? 1, order };
+    if (theirs.byHash || here.byHash) merged.byHash = { ...(theirs.byHash ?? {}), ...(here.byHash ?? {}) };
+    await db.kvPut(key, merged);
+  }
+  // Interface text the player's AI translated for a language without a shipped
+  // pack (settingsStore.js), each language's own row.
+  for (const [key, value] of Object.entries(manifests)) {
+    if (!key.startsWith("lang:") || !value || typeof value !== "object") continue;
+    const here = (await db.kvGet(key, null)) ?? {};
+    await db.kvPut(key, settingsWin ? { ...here, ...value } : { ...value, ...here });
+  }
 
-  // Settings and the AI key: only what this address does not have yet.
+  // Settings and the AI key: only what this address does not have yet, or with
+  // settingsWin every one of them.
   let settings = 0;
   for (const [key, value] of Object.entries(packed.settings)) {
     try {
-      if (key === SAVE_MOVE_STATE_KEY || typeof value !== "string" || storage.getItem(key) !== null) continue;
+      if (key === SAVE_MOVE_STATE_KEY || keep.includes(key) || typeof value !== "string") continue;
+      if (!settingsWin && storage.getItem(key) !== null) continue;
       storage.setItem(key, value);
       settings += 1;
     } catch { /* full or closed: the games are what matter */ }
   }
-  return { ...moved, settings };
+  return { ...moved, settings, carried };
 };
 
 // --- The trip ------------------------------------------------------------------

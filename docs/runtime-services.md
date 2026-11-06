@@ -153,7 +153,7 @@ Owns the UI-language *choice* and static catalog. The choice is stored on the **
 | Export | Purpose |
 |---|---|
 | `DEFAULT_LANGUAGE` | `"en"` |
-| `LANGUAGES` | 50-entry array of `{ code, name, native }` (top-50 most-spoken, English name + endonym) |
+| `LANGUAGES` | 56-entry array of `{ code, name, native }` (top-50 most-spoken, then the six a translation model covers that are not: `lv lt sk et ga mt`; English name + endonym) |
 | `getLanguageOptions()` | Returns `LANGUAGES` |
 | `languageDisplayName(code)` | English display name, falls back to the code |
 | `getStoredLanguage()` | Reads localStorage; returns `DEFAULT_LANGUAGE` on miss/error |

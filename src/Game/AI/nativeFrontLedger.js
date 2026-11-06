@@ -283,6 +283,25 @@ export const decodeFrontOrders = (value, { limit = MAX_FRONT_ORDERS_PER_PASS } =
   return records.filter(Boolean).slice(0, limit);
 };
 
+// An event's own strikes (impacts.strikes), one line each: side~weapon~from~target~count~shot down. A line written
+// the battlefield way (strike~side~weapon~from~eventNumbers~target~shot down~count) is read as that. Each is bound to
+// the event that carries it; the unusable ones come back with `problem`, as a frontOrders line does.
+export const EVENT_STRIKES_MOST = 8;
+export const decodeEventStrikes = (value, eventId = "") => {
+  const lines = (Array.isArray(value) ? value : String(value ?? "").split(/\r?\n/)).map((line) => clean(line)).filter((line) => line && isRecordLine(line));
+  return lines.slice(0, EVENT_STRIKES_MOST).map((line, index) => {
+    const fields = line.split(FRONT_ORDER_SEPARATOR).map(clean);
+    const id = `event-strike-${index}`;
+    const record = fold(fields[0]) === STRIKE_WORD
+      ? { ...parseFrontOrderLine(line, index), id }
+      : (() => {
+        const [side = "", weapon = "", from = "", target = "", count = "", down = ""] = fields;
+        return strikeRecord({ id, side, weapon, from, eventIndexes: [], eventIds: [], objective: target, count, down });
+      })();
+    return { ...record, eventIndexes: [], eventIds: clean(eventId) ? [clean(eventId)] : [] };
+  });
+};
+
 // The records tied to the ids of the events they named by number. A record that
 // already carries ids crossed a pass with them, and its old numbers are never
 // read against a later batch (the war ledger's rule).

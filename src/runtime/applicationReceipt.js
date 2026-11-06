@@ -58,6 +58,7 @@ const APPLIED_LABELS = Object.freeze({
   regionTransfers: ["region transfer", "region transfers"],
   regionControlOps: ["control operation", "control operations"],
   regionClaims: ["claim", "claims"],
+  strikes: ["strike", "strikes"],
   groupOps: ["group operation", "group operations"],
   polityChanges: ["polity change", "polity changes"],
   politicalActorOps: ["political actor operation", "political actor operations"],

@@ -22,6 +22,7 @@ import { describeBasisAction, sameRegionChange, screenTerritoryBasis } from "../
 import { PLAYER_GROUP_JUMP_RULE, describeGroupsForPrompt, describePlayerGroupForPrompt, normalizeGroupOp, withoutGroupOpsLines } from "../../runtime/groups.js";
 import { effectiveCityPopulation } from "../../runtime/cityPopulation.js";
 import { humanCountriesOf } from "../../runtime/humanPolities.js";
+import { uiString } from "../../runtime/translator.js";
 import { withTurnSeaBattles } from "../../runtime/naval/record.js";
 import { withFrontFortifications } from "../../runtime/warGeography.js";
 import { zoneWeatherFor } from "../../runtime/zoneWeather.js";
@@ -220,12 +221,13 @@ import {
 } from "./gameplaySchemas.js";
 import { placeRostraLines, readSkipPollResults, readSkipPosts, rostraRefreshRules, socialFeedPromptBlock, withSkipPosts } from "../../runtime/socialFeed.js";
 import { knownPolityNames } from "../../runtime/countryInfoPanel.js";
-import { frontsOn, strategyNetOn, warPartsOffBlock } from "./frontsGate.js";
+import { airOn, frontsOn, strategyNetOn, warPartsOffBlock } from "./frontsGate.js";
+import { placeStrikes } from "./frontTurn.js";
 import { engineerLines } from "../../runtime/fronts/engineer.js";
 import { foreseeFronts } from "./foreseenFronts.js";
 import { offPageAvailable } from "./frontWorkerClient.js";
 import { applyTurnFronts, citiesFollowCountries, withAirStrikes, withFrontManpower, withBlockadeEconomy, turnBlockades, regionHoldingsOf, forecastTurnFronts, frontsListBlock, frontPlansBlock, frontPowers, frontRegionTest, frontWarJoins, frontWarStarts, frontsLiveBlock, openScenarioFronts, routesIntoOthers, transportWaysFor, readFrontCities, scenarioFrontsPending, warRoomChartFor, warRoomIntelText, withFrontUnits, withoutFrontPowers } from "./frontApply.js";
-import { withTurnStrikes } from "../../runtime/strikes.js";
+import { STRIKES_PER_TURN_MOST, fliesAsAircraft, withTurnStrikes } from "../../runtime/strikes.js";
 import { airStrikeVisuals } from "../../runtime/fronts/airStrike.js";
 import { answerPeaceProposal, offerPeace, playerDiplomacy, turnDays, turnWarAndPeace } from "./warAndPeace.js";
 import { holdPlayersWars } from "./playersWarsHold.js";
@@ -239,7 +241,7 @@ import { takersFor } from "../../runtime/fronts/constants.js";
 import { pointInFrame } from "../../runtime/fronts/frame.js";
 import { normalizeBattlefields } from "../../runtime/fronts/record.js";
 import { readWarRoomAnswer, warRoomRequest, warRoomStanding, warRoomVariables } from "./warRoomContext.js";
-import { bindFrontOrdersToEvents, describeDroppedFrontOrders, frontOrderProseLines, screenFrontOrders } from "./nativeFrontLedger.js";
+import { bindFrontOrdersToEvents, decodeEventStrikes, describeDroppedFrontOrders, frontOrderProseLines, screenFrontOrders } from "./nativeFrontLedger.js";
 import { buildOwnerAliasMap, canonicalOwnerName, toCountryName } from "../../runtime/ownerNames.js";
 import { countryGidFromIdentity } from "../../runtime/countryFlags.js";
 import { editDistance, foldRegionKey, matchRegionName, stripRegionAffixes } from "./regionMatch.js";
@@ -1580,6 +1582,7 @@ const JUMP_LEVERS = [
   `When an election or a new government is the first settled politics of a young polity, set up its parties, governing force, system, goals and traits in the same event; while results are still being counted, narrate the count, not a result. Traits use only these keys: ${POLITICAL_TRAIT_KEYS.join(", ")}. Never use set-political-pressures or set-behavioral-disposition.`,
   "• institutionLifecycleOps: found, invite, apply, respond, withdraw, expel, suspend, reinstate or dissolve, each naming its actorPolity by exact current name; an existing institution by its exact institutionId, and respond with the pending caseId. Governments join, refuse or leave by their own interests and politics, never because relations are friendly, and never for the human player's own membership. An invitation or application is not membership: the institution's own rules decide it. A government that is already an observer, candidate, participant or associate may be invited to, or apply for, a higher status in the same institution; one that holds that status already, a full member and a suspended member may not.",
   "• markerOps {\"op\":\"build\",\"marker\":{\"name\":\"\",\"kind\":\"city | military base | port | embassy | airfield | …\",\"ownerCode\":\"\",\"at\":\"\",\"note\":\"\",\"foundedAt\":\"\"}} · {\"op\":\"remove\",\"name\":\"<exact name>\",\"note\":\"\"} · {\"op\":\"rename\",\"name\":\"<current name>\",\"newName\":\"\",\"note\":\"\"} · {\"op\":\"population\",\"name\":\"<city>\",\"population\":\"<the new total>\",\"note\":\"\"}. rename and population work on every city on the map.",
+  "• strikes: a missile launch or a bombing run the event tells of, one line each: side~weapon~from~target~count~shot down. weapon: silo missile | submarine missile | nuclear bomber (these three are nuclear) | missile strike | bombing run. from: where it is launched (city: X, structure: X, unit: X) or blank for the game to pick; target: the place hit; count: how many missiles or aircraft; shot down: how many were intercepted on the way, a number or all | most | half | some | none, which an event telling of interceptions owes. It is drawn on the map and changes nothing itself: what it destroyed or took is the event's other operations. Example: Russia~missile strike~~city: Kyiv~12~some",
   "• groupOps {\"op\":\"create | update | dissolve | take | release\",\"name\":\"<exact group name>\",\"newName\":\"\",\"description\":\"<what it is and wants>\",\"color\":\"#RRGGBB\",\"regionIds\":[\"region: <name>\"],\"note\":\"\"}; create founds a group (with its first regions if it holds any), take adds regions to its area, release gives them back (all of them when regionIds is empty), dissolve erases it.",
   "• regionClaims {\"regionId\":\"\",\"claimantCode\":\"<full name>\",\"note\":\"\"}, with \"drop\":true when a claim is given up; the region stays striped until a transfer or a drop settles it.",
   "• actionIds: the ids of the player's orders an event resolves, so the game can clear them.",
@@ -9455,6 +9458,29 @@ const applySimulationResult = async ({
   if (turnFronts) freshEvents.splice(0, freshEvents.length, ...turnFronts.events);
   if (phaseBeforeWar) phases?.enter(phaseBeforeWar);
 
+  // The missiles and bombing runs the events tell of (impacts.strikes), placed for the map like those of the
+  // battlefields' lines, and kept whether or not the battlefields ran: a strike is something to show, and what it
+  // did is what its event's own operations say. "it doesnt look like missile strikes actually ever happen" (the
+  // owner, 2026-11-05): a strike was a frontOrders line only, and with Fronts off or no war there was none.
+  // (With no air units in the scenario no aircraft strikes; runtime/strikes.js STRIKES_PER_TURN_MOST in all.)
+  const struckByEvents = freshEvents
+    .flatMap((event) => decodeEventStrikes(event?.impacts?.strikes, event?.id))
+    .filter((strike) => !strike.problem && (airOn() || !fliesAsAircraft(strike.weapon)))
+    .slice(0, STRIKES_PER_TURN_MOST);
+  const eventStrikes = struckByEvents.length
+    ? await placeStrikes(struckByEvents, {
+      events: freshEvents,
+      world: baseWorld,
+      strikePlaces: createStrikePlaceReader(baseWorld),
+      fromDate: baseGame.gameDate,
+      toDate: nextGame.gameDate,
+      idPrefix: "event-strike",
+    }).catch((error) => {
+      console.warn("[strikes] the events' strikes could not be placed; they are left off the map.", error);
+      return [];
+    })
+    : [];
+
   const impactMerge = applyEventImpactsToWorld({
     colors: baseColors,
     events: freshEvents,
@@ -9474,7 +9500,10 @@ const applySimulationResult = async ({
       ...(turnFronts?.transports ? { transports: turnFronts.transports } : null),
       // The missiles and bombing runs this answer told of, for the map to play; those of older turns are let go.
       // (With the war room's air strikes, flown as the period began: runtime/fronts/airStrike.js.)
-      ...(turnFronts ? { strikes: withTurnStrikes(baseWorld?.strikes, [...turnFronts.strikes, ...airStrikeVisuals(turnFronts.airStrikes)], nextGame.round) } : null),
+      // (And the ones the events tell of, above.)
+      ...(turnFronts || eventStrikes.length
+        ? { strikes: withTurnStrikes(baseWorld?.strikes, [...(turnFronts?.strikes ?? []), ...eventStrikes, ...(turnFronts ? airStrikeVisuals(turnFronts.airStrikes) : [])], nextGame.round) }
+        : null),
       // And the battles its fleets fought, for the map to mark (runtime/naval/record.js); those of older turns are let go.
       ...(turnFronts ? { seaBattles: withTurnSeaBattles(baseWorld?.seaBattles, turnFronts.sea?.battles, nextGame.round) } : null),
       ...(turnFronts?.sea ? { naviesRaised: turnFronts.sea.raised } : null),
@@ -10253,6 +10282,40 @@ const applySimulationResult = async ({
     } else {
       logDebugEvent("turn", `A letter from ${from} offered ${to} peace, and the offer was not kept: ${made.reason}.`);
     }
+  }
+
+  // A call to arms (runtime/alliances.js) that a person is asked this turn comes as a message from the country that
+  // was attacked, in the thread with it (folded into one already open), and the person answers it there
+  // (GameUI/warAndPeace.jsx CallToArmsCard): "have the country send you a message requesting assistance and the
+  // buttons appear there" (the owner, 2026-11-06). In the game's language, from the packs, and never a request.
+  for (const call of normalizeArray(worldWithImpacts?.callsToArms)) {
+    if (call?.status !== "open" || Number(call.round) !== Number(nextGame.round) || normalizeString(call.messageId)) continue;
+    if (!people.some((person) => regionKey(person) === regionKey(call.ally))) continue;
+    const attackers = normalizeArray(call.attackers).map(normalizeString).filter(Boolean);
+    const enemy = attackers.length > 1 ? `${attackers.slice(0, -1).join(", ")} & ${attackers[attackers.length - 1]}` : attackers[0] || "";
+    const treaty = normalizeString(call.via?.title);
+    const ask = enemy
+      ? (treaty
+        ? uiString("We have been attacked by {{enemy}}. Under {{treaty}}, we call on you to come to our defence.", { enemy, treaty })
+        : uiString("We have been attacked by {{enemy}}. As our ally, we call on you to come to our defence.", { enemy }))
+      : (treaty
+        ? uiString("We have been attacked. Under {{treaty}}, we call on you to come to our defence.", { treaty })
+        : uiString("We have been attacked. As our ally, we call on you to come to our defence."));
+    const messageId = `msg-call-${regionKey(call.id).replace(/[^a-z0-9]+/g, "-")}`;
+    const nextChat = await opening({
+      countries: [call.defender],
+      to: call.ally,
+      speaker: call.defender,
+      title: uiString("A call for help"),
+      openingMessage: ask,
+      openingMessageId: messageId,
+      source: "call-to-arms",
+    }, "", { revealWith: lastTurnEventId });
+    if (!nextChat) continue;
+    nextChats.unshift(nextChat);
+    generatedChats.unshift(nextChat);
+    worldWithImpacts = { ...worldWithImpacts, callsToArms: normalizeArray(worldWithImpacts.callsToArms).map((entry) => (entry?.id === call.id ? { ...entry, messageId } : entry)) };
+    nextWorld = worldWithImpacts;
   }
 
   // A document the player now holds with other governments is filed in the
