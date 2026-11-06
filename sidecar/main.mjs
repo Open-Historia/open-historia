@@ -49,6 +49,11 @@ const serverWorker = new Worker(path.join(here, "serverWorker.mjs"), {
 });
 serverWorker.stdout.on("data", (chunk) => process.stderr.write(chunk));
 serverWorker.stderr.on("data", (chunk) => process.stderr.write(chunk));
+serverWorker.on("message", (message) => {
+  if (message?.type !== "fatal") return;
+  emit("sidecar.fatal", { message: `The game's server stopped: ${message.message}` });
+  process.exit(1);
+});
 serverWorker.on("error", (error) => {
   emit("sidecar.fatal", { message: `The game's server stopped: ${error?.message ?? error}` });
   process.exit(1);
