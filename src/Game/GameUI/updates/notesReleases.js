@@ -162,7 +162,6 @@ export const RELEASES = [
           { heading: "Smoother everywhere", text: "A quarter of the graphics work with 3D terrain on, shorter pauses when zooming, and far less heat on laptops and phones." },
         ],
         updates: [
-          "2026-11-right-to-left-map",
           "2026-10-war-and-peace#1",
           "2026-10-diplomatic-map",
           "2026-10-turn-and-tilt",
@@ -221,9 +220,11 @@ export const RELEASES = [
           { heading: "Lighter app", text: "About 40 MB less to download on Windows, 100 MB less on disk, and updates that finish in seconds." },
         ],
         updates: [
+          "2026-11-desktop-opens-on-another-port",
           "2026-11-faster-turns",
           "2026-11-smoother-scrolling",
           "2026-11-long-campaign-fixes",
+          "2026-11-storyline-pressure-held",
           "2026-10-skip-freeze",
           "2026-11-places-as-written",
           "2026-10-newer-claude",

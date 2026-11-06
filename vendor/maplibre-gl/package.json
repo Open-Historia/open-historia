@@ -1,0 +1,7 @@
+{
+  "name": "maplibre-gl",
+  "version": "6.16.0",
+  "private": true,
+  "license": "BSD-3-Clause",
+  "type": "module"
+}

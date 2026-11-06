@@ -382,6 +382,7 @@ export const publishBasemap = async (meta, payload) => {
     dropWhat = `${safe}.zip`;
     downloadFile(zip, dropWhat);
   }
+  // i18n-ignore: lines the hub reads, never translated.
   const technical = `Basemap-Hash: ${meta.contentHash || ""}\nBasemap-Kind: ${kind}`;
   const query = [
     "template=basemap.yml",

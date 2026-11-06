@@ -42,7 +42,7 @@
 }
 .oh-setup-greeting-words {
   align-items: center;
-  animation: ohSetupGreet 2.2s cubic-bezier(.4, 0, .2, 1) both;
+  animation: ohSetupGreet 4.4s cubic-bezier(.4, 0, .2, 1) both;
   display: flex;
   flex-direction: column;
   gap: .35rem;
@@ -184,8 +184,8 @@
 }
 @keyframes ohSetupGreet {
   0% { opacity: 0; transform: translateY(18px); }
-  14% { opacity: 1; transform: none; }
-  84% { opacity: 1; transform: none; }
+  13.6% { opacity: 1; transform: none; }
+  86.4% { opacity: 1; transform: none; }
   100% { opacity: 0; transform: translateY(-12px); }
 }
 @keyframes ohSetupBusy {

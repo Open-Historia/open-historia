@@ -59,6 +59,8 @@ import { compactWarSettings } from "./scenarioWarSettings.js";
 import { militaryDefaultsFor } from "../../Editor/militaryForm.js";
 import ScenarioMusicPanel, { ScenarioMusicCredits } from "./ScenarioMusicPanel.jsx";
 import { normalizeScenarioMusic } from "../../runtime/scenarioMusic.js";
+import ScenarioLanguagesPanel from "./ScenarioLanguagesPanel.jsx";
+import { normalizeScenarioLanguages } from "../../../server/scenarioLanguages.js";
 const PoliticalWorldAuthoringPanel = lazy(() => import("./PoliticalWorldAuthoringPanel.jsx"));
 const PoliticalWorldGenerationPanel = lazy(() => import("./PoliticalWorldGenerationPanel.jsx"));
 import { isFeatureEnabled, normalizeFeatureOverrides, normalizeFeatureSettings } from "../../runtime/gameFeatures.js";
@@ -239,14 +241,15 @@ const actionButtonStyle = {
 
 const themeButtonStyle = {
   ...actionButtonStyle,
-  border: "1px solid rgba(255,255,255,0.12)",
+  background: "var(--oh-ui-overlay-card, rgba(255,255,255,0.06))",
+  border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.12))",
   borderRadius: "9px",
   boxShadow: "none",
 };
 
 const themeSurfaceStyle = {
   background: "var(--oh-ui-surface, #12141a)",
-  border: "1px solid rgba(255,255,255,0.09)",
+  border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.09))",
   boxShadow: "0 14px 32px rgba(0,0,0,0.45)",
 };
 
@@ -441,7 +444,7 @@ const MenuRail = ({ activeTab, onTab, onOpenSettings, onOpenHistory }) => (
     style={{
       alignItems: "center",
       background: "var(--oh-ui-header, #0b0b0d)",
-      borderRight: "1px solid rgba(255,255,255,0.08)",
+      borderRight: "1px solid var(--oh-ui-line, rgba(255,255,255,0.08))",
       display: "flex",
       flexDirection: "column",
       flexShrink: 0,
@@ -473,6 +476,7 @@ const MenuRail = ({ activeTab, onTab, onOpenSettings, onOpenHistory }) => (
       <button
         key={tab.id}
         aria-current={activeTab === tab.id ? "page" : undefined}
+        data-oh-theme-nav=""
         className="oh-tap-row"
         onClick={() => onTab(tab.id)}
         style={railButtonStyle(activeTab === tab.id)}
@@ -484,7 +488,7 @@ const MenuRail = ({ activeTab, onTab, onOpenSettings, onOpenHistory }) => (
     ))}
     <div style={{ flex: 1, minHeight: "0.6rem" }} />
     {typeof onOpenSettings === "function" && (
-      <button className="oh-tap-row" onClick={onOpenSettings} style={railButtonStyle(false)} type="button">
+      <button className="oh-tap-row" data-oh-theme-nav="" onClick={onOpenSettings} style={railButtonStyle(false)} type="button">
         <ButtonIcon kind="settings" size={MENU_RAIL_ICON} />
         <span>Settings</span>
       </button>
@@ -568,6 +572,7 @@ const editorSectionLabels = {
   bundles: "Bundles",
   features: "Features",
   history: "Pre-history",
+  languages: "Languages",
   music: "Music",
   overview: "Overview",
   politics: "Politics",
@@ -597,6 +602,8 @@ const buildScenarioEditorState = (details) => {
     language: game.language ?? world.language ?? "English",
     // The hub tracks it plays, by situation (the Music tab), or null for none.
     music: normalizeScenarioMusic(scenario.music),
+    // Its own text in other languages (the Languages tab), or null for none.
+    languages: normalizeScenarioLanguages(scenario.languages),
     name: scenario.name ?? "",
     prompts,
     labelFont: world.labelFont ?? "",
@@ -1841,8 +1848,8 @@ const CreateScenarioTile = ({ busy, onCreate }) => (
     type="button"
     style={{
       alignItems: "center",
-      background: "rgba(255,255,255,0.03)",
-      border: "2px dashed rgba(255,255,255,0.24)",
+      background: "var(--oh-ui-overlay-card, rgba(255,255,255,0.03))",
+      border: "2px dashed var(--oh-ui-line, rgba(255,255,255,0.24))",
       borderRadius: "24px",
       color: "rgba(255,255,255,0.78)",
       cursor: busy ? "wait" : "pointer",
@@ -1861,7 +1868,7 @@ const CreateScenarioTile = ({ busy, onCreate }) => (
 );
 
 const EDITOR_SECTION_GROUPS = Object.freeze([
-  Object.freeze({ label: "Presentation", sections: Object.freeze(["overview", "assets", "music"]) }),
+  Object.freeze({ label: "Presentation", sections: Object.freeze(["overview", "assets", "music", "languages"]) }),
   Object.freeze({ label: "Setting", sections: Object.freeze(["world", "history", "politics"]) }),
   Object.freeze({ label: "Rules and AI", sections: Object.freeze(["stats", "features", "prompts"]) }),
   Object.freeze({ label: "Sharing", sections: Object.freeze(["bundles"]) }),
@@ -1871,6 +1878,7 @@ const EDITOR_SECTION_BLURBS = Object.freeze({
   overview: "How it appears in the library: its name, colour and the words on its card.",
   assets: "The cover and the files the map is drawn from.",
   music: "The hub's tracks it plays while a game opens, in the game, at war and in the war room.",
+  languages: "Its own text in other languages, translated once by your AI and shipped with it.",
   world: "Where play begins: the player's country, the date, the troops and the story so far.",
   history: "The events that led to the start date.",
   politics: "Governments, parties and institutions.",
@@ -1897,6 +1905,7 @@ const EditorSectionIcon = ({ kind, size = 17 }) => {
     overview: <><rect x="3.5" y="4.5" width="17" height="15" rx="2.5" /><path d="M7 9h10M7 13h6" /></>,
     assets: <><rect x="3.5" y="5" width="17" height="14" rx="2.5" /><circle cx="9" cy="10" r="1.6" /><path d="m4 17 5-4.5 4 3.5 3-2.5 4 3.5" /></>,
     music: <><path d="M9 17.5V6l10-2v11.5" /><circle cx="6.5" cy="17.5" r="2.5" /><circle cx="16.5" cy="15.5" r="2.5" /></>,
+    languages: <><path d="M4 5.5h8M8 4v1.5c0 3.5-1.8 6.3-4 7.5M5.5 9c1 1.8 2.8 3.2 5 3.8" /><path d="m12 19.5 3.5-8.5 3.5 8.5M13.2 16.8h4.6" /></>,
     world: <><circle cx="12" cy="12" r="8.5" /><path d="M3.5 12h17M12 3.5c2.3 2.3 3.5 5.2 3.5 8.5s-1.2 6.2-3.5 8.5c-2.3-2.3-3.5-5.2-3.5-8.5s1.2-6.2 3.5-8.5z" /></>,
     history: <><path d="M5 4.5h11.5a2 2 0 0 1 2 2v13H7a2 2 0 0 1-2-2z" /><path d="M5 17.5a2 2 0 0 1 2-2h11.5M9 8.5h6" /></>,
     politics: <><path d="M4 9.5 12 5l8 4.5M5.5 19.5h13M7 10.5v7M12 10.5v7M17 10.5v7" /></>,
@@ -1910,8 +1919,8 @@ const EditorSectionIcon = ({ kind, size = 17 }) => {
 
 const editorNavButtonStyle = (active) => ({
   ...themeButtonStyle,
-  background: active ? "rgba(255,255,255,0.1)" : "transparent",
-  border: `1px solid ${active ? "rgba(255,255,255,0.18)" : "transparent"}`,
+  background: active ? "var(--oh-ui-active, rgba(255,255,255,0.1))" : "transparent",
+  border: `1px solid ${active ? "var(--oh-ui-accent, rgba(255,255,255,0.18))" : "transparent"}`,
   color: active ? "#fff" : "rgba(236,236,240,0.72)",
   fontWeight: active ? 700 : 600,
   gap: "0.6rem",
@@ -1967,7 +1976,7 @@ const EditorDrawer = ({
   const record = kind === "scenario" ? details.scenario : details.game;
   const visibleSections =
     kind === "scenario"
-      ? ["overview", "world", "history", "politics", "stats", "features", "prompts", "assets", "music", "bundles"]
+      ? ["overview", "world", "history", "politics", "stats", "features", "prompts", "assets", "music", "languages", "bundles"]
       : ["overview", "world", "features", "prompts", "assets"];
   const groups = EDITOR_SECTION_GROUPS
     .map((group) => ({ ...group, sections: group.sections.filter((key) => visibleSections.includes(key)) }))
@@ -2543,6 +2552,16 @@ const EditorDrawer = ({
         <ScenarioMusicPanel
           music={formState.music}
           onChange={(next) => onChange("music", next)}
+        />
+      )}
+
+      {/* Its own text in other languages, generated with the author's AI
+          (ScenarioLanguagesPanel.jsx). Part of the form: Save below writes it. */}
+      {editorSection === "languages" && kind === "scenario" && (
+        <ScenarioLanguagesPanel
+          details={details}
+          formState={formState}
+          onChange={(next) => onChange("languages", next)}
         />
       )}
 
@@ -3667,6 +3686,8 @@ const LibraryTopBar = ({ onOpenSettings }) => {
           heroTitle: editorState.heroTitle,
           // null (no track in any situation) takes the scenario's music away.
           music: editorState.music ?? null,
+          // null (no pack in any language) takes them away.
+          languages: normalizeScenarioLanguages(editorState.languages),
           name: editorState.name,
           prompts,
           subtitle: editorState.subtitle,
@@ -5210,6 +5231,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
                   <button
                     key={tab.id}
                     aria-current={activeTab === tab.id ? "page" : undefined}
+                    data-oh-theme-nav=""
                     className="oh-tap-row"
                     onClick={() => setActiveTab(tab.id)}
                     style={touchFit({

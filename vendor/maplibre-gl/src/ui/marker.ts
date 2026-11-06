@@ -1,0 +1,1083 @@
+import {DOM} from '../util/dom.ts';
+import {throttle} from '../util/throttle.ts';
+import {LngLat} from '../geo/lng_lat.ts';
+import {smartWrap} from '../util/smart_wrap.ts';
+import {anchorTranslate, applyAnchorClass} from './anchor.ts';
+import {Event, Evented} from '../util/evented.ts';
+import Point from '@mapbox/point-geometry';
+
+import type {PositionAnchor} from './anchor.ts';
+import type {Map} from './map.ts';
+import type {Popup, Offset} from './popup.ts';
+import type {LngLatLike} from '../geo/lng_lat.ts';
+import type {MapMouseEvent, MapTouchEvent} from './events.ts';
+import type {PointLike} from './camera.ts';
+import type {Terrain} from '../render/terrain.ts';
+
+/**
+ * Alignment options of rotation and pitch
+ */
+export type Alignment = 'map' | 'viewport' | 'auto';
+
+/**
+ * Screen-pixel deltas applied when a focused draggable marker is moved with the arrow keys.
+ */
+const ARROW_KEY_DELTAS: Partial<Record<KeyboardEvent['key'], [number, number]>> = {
+    ArrowLeft: [-1, 0],
+    ArrowRight: [1, 0],
+    ArrowUp: [0, -1],
+    ArrowDown: [0, 1]
+};
+
+const KEYBOARD_DRAG_SMALL_STEP = 1;
+const KEYBOARD_DRAG_LARGE_STEP = 10;
+
+/** Fill color of the default marker when {@link MarkerOptions.color} is not given. */
+const DEFAULT_MARKER_COLOR = '#3FB1CE';
+/** Height in CSS pixels of the default marker SVG at scale 1. */
+const DEFAULT_MARKER_HEIGHT = 41;
+/** Width in CSS pixels of the default marker SVG at scale 1. */
+const DEFAULT_MARKER_WIDTH = 27;
+
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+/** Creates an SVG element with the given attributes, set in the order given, and children. */
+function svgElement(tag: string, attributes: Record<string, string>, children: Element[] = []): Element {
+    const element = DOM.createNS(SVG_NS, tag);
+    for (const name in attributes) element.setAttributeNS(null, name, attributes[name]);
+    for (const child of children) element.appendChild(child);
+    return element;
+}
+
+/** The default marker SVG at scale 1 in the default color, built on first use and cloned per marker. */
+let defaultMarkerTemplate: Element;
+
+/**
+ * Returns the shared default marker SVG, building it the first time it is asked for. Assembling
+ * the pin takes about fifty DOM calls, so each default {@link Marker} deep-clones this template
+ * and overrides only its size and its fill, see {@link defaultMarkerFillGroup}.
+ */
+function getDefaultMarkerTemplate(): Element {
+    if (defaultMarkerTemplate) return defaultMarkerTemplate;
+
+    const shadowRadii = [
+        ['10.5', '5.25002273'],
+        ['10.5', '5.25002273'],
+        ['9.5', '4.77275007'],
+        ['8.5', '4.29549936'],
+        ['7.5', '3.81822308'],
+        ['6.5', '3.34094679'],
+        ['5.5', '2.86367051'],
+        ['4.5', '2.38636864']
+    ];
+    const shadow = svgElement('g', {transform: 'translate(3.0, 29.0)', fill: '#000000'},
+        shadowRadii.map(([rx, ry]) => svgElement('ellipse', {opacity: '0.04', cx: '10.5', cy: '5.80029008', rx, ry})));
+    const background = svgElement('g', {fill: DEFAULT_MARKER_COLOR}, [
+        svgElement('path', {d: 'M27,13.5 C27,19.074644 20.250001,27.000002 14.75,34.500002 C14.016665,35.500004 12.983335,35.500004 12.25,34.500002 C6.7499993,27.000002 0,19.222562 0,13.5 C0,6.0441559 6.0441559,0 13.5,0 C20.955844,0 27,6.0441559 27,13.5 Z'})
+    ]);
+    const border = svgElement('g', {opacity: '0.25', fill: '#000000'}, [
+        svgElement('path', {d: 'M13.5,0 C6.0441559,0 0,6.0441559 0,13.5 C0,19.222562 6.7499993,27 12.25,34.5 C13,35.522727 14.016664,35.500004 14.75,34.5 C20.250001,27 27,19.074644 27,13.5 C27,6.0441559 20.955844,0 13.5,0 Z M13.5,1 C20.415404,1 26,6.584596 26,13.5 C26,15.898657 24.495584,19.181431 22.220703,22.738281 C19.945823,26.295132 16.705119,30.142167 13.943359,33.908203 C13.743445,34.180814 13.612715,34.322738 13.5,34.441406 C13.387285,34.322738 13.256555,34.180814 13.056641,33.908203 C10.284481,30.127985 7.4148684,26.314159 5.015625,22.773438 C2.6163816,19.232715 1,15.953538 1,13.5 C1,6.584596 6.584596,1 13.5,1 Z'})
+    ]);
+    const maki = svgElement('g', {transform: 'translate(6.0, 7.0)', fill: '#FFFFFF'});
+    const circles = svgElement('g', {transform: 'translate(8.0, 8.0)'}, [
+        svgElement('circle', {fill: '#000000', opacity: '0.25', cx: '5.5', cy: '5.5', r: '5.4999962'}),
+        svgElement('circle', {fill: '#FFFFFF', cx: '5.5', cy: '5.5', r: '5.4999962'})
+    ]);
+
+    defaultMarkerTemplate = svgElement('svg', {
+        display: 'block',
+        height: `${DEFAULT_MARKER_HEIGHT}px`,
+        width: `${DEFAULT_MARKER_WIDTH}px`,
+        viewBox: `0 0 ${DEFAULT_MARKER_WIDTH} ${DEFAULT_MARKER_HEIGHT}`
+    }, [svgElement('g', {'fill-rule': 'nonzero'}, [shadow, background, border, maki, circles])]);
+    return defaultMarkerTemplate;
+}
+
+/** The group of a default marker SVG that carries the pin's fill color: the second child of its single top-level group. */
+function defaultMarkerFillGroup(svg: Element): Element {
+    return svg.firstElementChild.children[1];
+}
+
+/**
+ * The {@link Marker} options object
+ */
+export type MarkerOptions = {
+    /**
+     * DOM element to use as a marker. The default is a light blue, droplet-shaped SVG marker.
+     */
+    element?: HTMLElement;
+    /**
+     * Space-separated CSS class names to add to marker element.
+     */
+    className?: string;
+    /**
+     * The offset in pixels as a {@link PointLike} object to apply relative to the element's center. Negatives indicate left and up.
+     */
+    offset?: PointLike;
+    /**
+     * A string indicating the part of the Marker that should be positioned closest to the coordinate set via {@link Marker.setLngLat}.
+     * Options are `'center'`, `'top'`, `'bottom'`, `'left'`, `'right'`, `'top-left'`, `'top-right'`, `'bottom-left'`, and `'bottom-right'`.
+     * @defaultValue 'center'
+     * */
+    anchor?: PositionAnchor;
+    /**
+     * The color to use for the default marker if options.element is not provided. The default is light blue.
+     * @defaultValue '#3FB1CE'
+     */
+    color?: string;
+    /**
+     * The scale to use for the default marker if options.element is not provided. The default scale corresponds to a height of `41px` and a width of `27px`.
+     * @defaultValue 1
+     */
+    scale?: number;
+    /**
+     * A boolean indicating whether or not a marker is able to be dragged to a new position on the map.
+     * A draggable default marker also becomes keyboard focusable and, while focused, moves by
+     * 1 screen pixel per arrow-key press (10 with Shift), firing the same `dragstart`/`drag`/`dragend`
+     * events as pointer dragging. Markers with a custom `element` keep their focusability and
+     * keyboard behavior application-owned.
+     * @defaultValue false
+     */
+    draggable?: boolean;
+    /**
+     * The max number of pixels a user can shift the mouse pointer during a click on the marker for it to be considered a valid click (as opposed to a marker drag). The default is to inherit map's clickTolerance.
+     * @defaultValue 0
+     */
+    clickTolerance?: number;
+    /**
+     * The rotation angle of the marker in degrees, relative to its respective `rotationAlignment` setting. A positive value will rotate the marker clockwise.
+     * @defaultValue 0
+     */
+    rotation?: number;
+    /**
+     * `map` aligns the `Marker`'s rotation relative to the map, maintaining a bearing as the map rotates. `viewport` aligns the `Marker`'s rotation relative to the viewport, agnostic to map rotations. `auto` is equivalent to `viewport`.
+     * @defaultValue 'auto'
+     */
+    rotationAlignment?: Alignment;
+    /**
+     * `map` aligns the `Marker` to the plane of the map. `viewport` aligns the `Marker` to the plane of the viewport. `auto` automatically matches the value of `rotationAlignment`.
+     * @defaultValue 'auto'
+     */
+    pitchAlignment?: Alignment;
+    /**
+     * Marker's opacity when it's in clear view (not behind 3d terrain)
+     * Accepts any valid CSS opacity value as a number or string.
+     * @defaultValue 1
+     */
+    opacity?: string | number;
+    /**
+     * Marker's opacity when it's behind 3d terrain
+     * Accepts any valid CSS opacity value as a number or string.
+     * @defaultValue 0.2
+     */
+    opacityWhenCovered?: string | number;
+    /**
+      * If `true`, rounding is disabled for placement of the marker, allowing for
+      * subpixel positioning and smoother movement when the marker is translated.
+      * @defaultValue false
+      */
+    subpixelPositioning?: boolean;
+};
+
+/**
+ * The event class for marker drag events (`dragstart`, `drag` and `dragend`).
+ *
+ * @group Event Related
+ */
+export class MarkerDragEvent extends Event {
+    type: 'dragstart' | 'drag' | 'dragend';
+    /**
+     * The `Marker` object that fired the event.
+     */
+    target: Marker;
+}
+
+/**
+ * The event class for the marker `click` event.
+ *
+ * @group Event Related
+ */
+export class MarkerClickEvent extends Event {
+    type: 'click';
+    /**
+     * The `Marker` object that fired the event.
+     */
+    target: Marker;
+    /**
+     * The DOM event which caused the marker click event.
+     */
+    originalEvent: MouseEvent;
+}
+
+/**
+ * `MarkerEventType` - a mapping between the marker event name and the event value.
+ * These events are used with the {@link Marker.on} method.
+ *
+ * @group Event Related
+ */
+export type MarkerEventType = {
+    /**
+     * Fired when dragging starts.
+     */
+    dragstart: MarkerDragEvent;
+    /**
+     * Fired while dragging.
+     */
+    drag: MarkerDragEvent;
+    /**
+     * Fired when the marker is finished being dragged.
+     */
+    dragend: MarkerDragEvent;
+    /**
+     * Fired when the marker is clicked.
+     */
+    click: MarkerClickEvent;
+};
+
+/**
+ * Creates a marker component
+ *
+ * @group Markers and Controls
+ *
+ * @example
+ * ```ts
+ * let marker = new Marker()
+ *   .setLngLat([30.5, 50.5])
+ *   .addTo(map);
+ * ```
+ *
+ * @example
+ * Set options
+ * ```ts
+ * let marker = new Marker({
+ *     color: "#FFFFFF",
+ *     draggable: true
+ *   }).setLngLat([30.5, 50.5])
+ *   .addTo(map);
+ * ```
+ * @see [Add a default marker](https://maplibre.org/maplibre-gl-js/docs/examples/add-a-default-marker/)
+ * @see [Add custom icons with Markers](https://maplibre.org/maplibre-gl-js/docs/examples/add-custom-icons-with-markers/)
+ * @see [Create a draggable Marker](https://maplibre.org/maplibre-gl-js/docs/examples/create-a-draggable-marker/)
+ * @see [Animate a marker](https://maplibre.org/maplibre-gl-js/docs/examples/animate-a-marker/)
+ * @see [Attach a popup to a marker instance](https://maplibre.org/maplibre-gl-js/docs/examples/attach-a-popup-to-a-marker-instance/)
+ *
+ * ## Events
+ *
+ * **Event** `dragstart` of type {@link MarkerDragEvent} will be fired when dragging starts.
+ *
+ * **Event** `drag` of type {@link MarkerDragEvent} will be fired while dragging.
+ *
+ * **Event** `dragend` of type {@link MarkerDragEvent} will be fired when the marker is finished being dragged.
+ *
+ * **Event** `click` of type {@link MarkerClickEvent} will be fired when the marker is clicked.
+ *
+ * ## CSS Classes
+ *
+ * **CSS class** `maplibregl-marker-covered` is toggled on the marker element when the marker
+ * is hidden behind 3D terrain or on the back of a globe.
+ * Use this class to apply custom styles to covered markers.
+ *
+ * @example
+ * ```css
+ * .maplibregl-marker-covered {
+ *     pointer-events: none;
+ *     cursor: default;
+ * }
+ * ```
+ */
+export class Marker extends Evented<MarkerEventType> {
+    _map: Map;
+    _anchor: PositionAnchor;
+    _offset: Point;
+    _element: HTMLElement;
+    _popup: Popup;
+    _lngLat: LngLat;
+    _pos: Point;
+    _flatPos: Point;
+    _color: string;
+    _scale: number;
+    _defaultMarker: boolean;
+    _draggable: boolean;
+    _clickTolerance: number;
+    _isDragging: boolean;
+    _state: 'inactive' | 'pending' | 'active'; // used for handling drag events
+    _positionDelta: Point;
+    _pointerdownPos: Point;
+    _rotation: number;
+    _pitchAlignment: Alignment;
+    _rotationAlignment: Alignment;
+    _opacity: string;
+    _opacityWhenCovered: string;
+    _subpixelPositioning: boolean;
+    _roleManaged: boolean;
+    _tabIndexManaged: boolean;
+    _keyboardDragActive: boolean;
+
+    /**
+     * @param options - the options
+     */
+    constructor(options?: MarkerOptions) {
+        super();
+
+        this._anchor = options?.anchor || 'center';
+        this._color = options?.color || DEFAULT_MARKER_COLOR;
+        this._scale = options?.scale || 1;
+        this._draggable = options?.draggable || false;
+        this._clickTolerance = options?.clickTolerance || 0;
+        this._subpixelPositioning = options?.subpixelPositioning || false;
+        this._isDragging = false;
+        this._roleManaged = false;
+        this._tabIndexManaged = false;
+        this._keyboardDragActive = false;
+        this._state = 'inactive';
+        this._rotation = options?.rotation || 0;
+        this._rotationAlignment = options?.rotationAlignment || 'auto';
+        this._pitchAlignment = options?.pitchAlignment && options.pitchAlignment !== 'auto' ?  options.pitchAlignment : this._rotationAlignment;
+        this.setOpacity(options?.opacity, options?.opacityWhenCovered);
+
+        if (!options?.element) {
+            this._defaultMarker = true;
+            this._element = DOM.create('div');
+
+            const svg = getDefaultMarkerTemplate().cloneNode(true) as Element;
+            svg.setAttributeNS(null, 'height', `${DEFAULT_MARKER_HEIGHT * this._scale}px`);
+            svg.setAttributeNS(null, 'width', `${DEFAULT_MARKER_WIDTH * this._scale}px`);
+            defaultMarkerFillGroup(svg).setAttributeNS(null, 'fill', this._color);
+
+            this._element.appendChild(svg);
+
+            // if no element and no offset option given apply an offset for the default marker
+            // the -14 as the y value of the default marker offset was determined as follows
+            //
+            // the marker tip is at the center of the shadow ellipse from the default svg
+            // the y value of the center of the shadow ellipse relative to the svg top left is "shadow transform translate-y (29.0) + ellipse cy (5.80029008)"
+            // offset to the svg center "height (41 / 2)" gives (29.0 + 5.80029008) - (41 / 2) and rounded for an integer pixel offset gives 14
+            // negative is used to move the marker up from the center so the tip is at the Marker lngLat
+            this._offset = Point.convert(options?.offset || [0, -14]);
+        } else {
+            this._element = options.element;
+            this._offset = Point.convert(options?.offset || [0, 0]);
+        }
+
+        this._element.classList.add('maplibregl-marker');
+        this._element.addEventListener('dragstart', (e: DragEvent) => {
+            e.preventDefault();
+        });
+        this._element.addEventListener('mousedown', (e: MouseEvent) => {
+            // prevent focusing on click
+            e.preventDefault();
+        });
+        applyAnchorClass(this._element, this._anchor, 'marker');
+
+        if (options?.className) {
+            for (const name of options.className.split(' ')) {
+                this._element.classList.add(name);
+            }
+        }
+
+        this._popup = null;
+    }
+
+    /**
+     * Attaches the `Marker` to a `Map` object.
+     * @param map - The MapLibre GL JS map to add the marker to.
+     * @example
+     * ```ts
+     * let marker = new Marker()
+     *   .setLngLat([30.5, 50.5])
+     *   .addTo(map); // add the marker to the map
+     * ```
+     */
+    addTo(map: Map): this {
+        this.remove();
+        this._map = map;
+
+        if (this._defaultMarker && !this._element.hasAttribute('aria-label')) {
+            this._element.setAttribute('aria-label', map._getUIString('Marker.Title'));
+        }
+
+        this._updateAccessibilityRole();
+
+        map.getCanvasContainer().appendChild(this._element);
+        map.on('move', this._update);
+        map.on('moveend', this._update);
+        map.on('terrain', this._update);
+        map.on('projectiontransition', this._update);
+        map.on('idle', this._update);
+
+        this._element.addEventListener('click', this._onClick);
+        this.setDraggable(this._draggable);
+        this._update();
+
+        // If we attached the `click` listener to the marker element, the popup
+        // would close once the event propagated to `map` due to the
+        // `Popup._onClickClose` listener.
+        this._map.on('click', this._onMapClick);
+
+        return this;
+    }
+
+    /**
+     * Removes the marker from a map
+     * @example
+     * ```ts
+     * let marker = new Marker().addTo(map);
+     * marker.remove();
+     * ```
+     */
+    remove(): this {
+        if (this._map) {
+            this._map.off('click', this._onMapClick);
+            this._map.off('move', this._update);
+            this._map.off('moveend', this._update);
+            this._map.off('terrain', this._update);
+            this._map.off('projectiontransition', this._update);
+            this._map.off('idle', this._update);
+            this._map.off('mousedown', this._addDragHandler);
+            this._map.off('touchstart', this._addDragHandler);
+            this._map.off('mouseup', this._onUp);
+            this._map.off('touchend', this._onUp);
+            this._map.off('mousemove', this._onMove);
+            this._map.off('touchmove', this._onMove);
+            delete this._map;
+        }
+        this._element.removeEventListener('click', this._onClick);
+        this._element.removeEventListener('keydown', this._onKeyDown);
+        this._element.removeEventListener('keyup', this._onKeyUp);
+        this._element.removeEventListener('blur', this._onBlur);
+        this._element.removeEventListener('keypress', this._onKeyPress);
+        // Drop any in-flight keyboard drag silently, like a pointer drag interrupted by remove().
+        this._keyboardDragActive = false;
+        this._element.remove();
+        if (this._popup) this._popup.remove();
+        return this;
+    }
+
+    /**
+     * Get the marker's geographical location.
+     *
+     * The longitude of the result may differ by a multiple of 360 degrees from the longitude previously
+     * set by `setLngLat` because `Marker` wraps the anchor longitude across copies of the world to keep
+     * the marker on screen.
+     *
+     * @returns A {@link LngLat} describing the marker's location.
+     * @example
+     * ```ts
+     * // Store the marker's longitude and latitude coordinates in a variable
+     * let lngLat = marker.getLngLat();
+     * // Print the marker's longitude and latitude values in the console
+     * console.log('Longitude: ' + lngLat.lng + ', Latitude: ' + lngLat.lat )
+     * ```
+     * @see [Create a draggable Marker](https://maplibre.org/maplibre-gl-js/docs/examples/create-a-draggable-marker/)
+     */
+    getLngLat(): LngLat {
+        return this._lngLat;
+    }
+
+    /**
+     * Set the marker's geographical position and move it.
+     * @param lnglat - A {@link LngLat} describing where the marker should be located.
+     * @example
+     * Create a new marker, set the longitude and latitude, and add it to the map
+     * ```ts
+     * new Marker()
+     *   .setLngLat([-65.017, -16.457])
+     *   .addTo(map);
+     * ```
+     * @see [Add custom icons with Markers](https://maplibre.org/maplibre-gl-js/docs/examples/add-custom-icons-with-markers/)
+     * @see [Create a draggable Marker](https://maplibre.org/maplibre-gl-js/docs/examples/create-a-draggable-marker/)
+     */
+    setLngLat(lnglat: LngLatLike): this {
+        this._lngLat = LngLat.convert(lnglat);
+        this._pos = null;
+        this._update();
+        if (this._popup) this._popup.setLngLat(this._lngLat);
+        return this;
+    }
+
+    /**
+     * Returns the `Marker`'s HTML element.
+     * @returns element
+     */
+    getElement(): HTMLElement {
+        return this._element;
+    }
+
+    /**
+     * Binds a {@link Popup} to the {@link Marker}.
+     * @param popup - An instance of the {@link Popup} class. If undefined or null, any popup
+     * set on this {@link Marker} instance is unset.
+     * @example
+     * ```ts
+     * let marker = new Marker()
+     *  .setLngLat([0, 0])
+     *  .setPopup(new Popup().setHTML("<h1>Hello World!</h1>")) // add popup
+     *  .addTo(map);
+     * ```
+     * @see [Attach a popup to a marker instance](https://maplibre.org/maplibre-gl-js/docs/examples/attach-a-popup-to-a-marker-instance/)
+     */
+    setPopup(popup?: Popup | null): this {
+        if (this._popup) {
+            this._popup.remove();
+            this._popup = null;
+            this._element.removeEventListener('keypress', this._onKeyPress);
+        }
+
+        if (popup) {
+            if (!('offset' in popup.options)) {
+                const markerHeight = 41 - (5.8 / 2);
+                const markerRadius = 13.5;
+                const linearOffset = Math.abs(markerRadius) / Math.SQRT2;
+                popup.options.offset = this._defaultMarker ? {
+                    'top': [0, 0],
+                    'top-left': [0, 0],
+                    'top-right': [0, 0],
+                    'bottom': [0, -markerHeight],
+                    'bottom-left': [linearOffset, (markerHeight - markerRadius + linearOffset) * -1],
+                    'bottom-right': [-linearOffset, (markerHeight - markerRadius + linearOffset) * -1],
+                    'left': [markerRadius, (markerHeight - markerRadius) * -1],
+                    'right': [-markerRadius, (markerHeight - markerRadius) * -1]
+                } as Offset : this._offset;
+            }
+            this._popup = popup;
+
+            this._element.addEventListener('keypress', this._onKeyPress);
+        }
+
+        this._updateTabIndex();
+        this._updateAccessibilityRole();
+        return this;
+    }
+
+    /**
+      * Set the option to allow subpixel positioning of the marker by passing a boolean
+      *
+      * @param value - when set to `true`, subpixel positioning is enabled for the marker.
+      *
+      * @example
+      * ```ts
+      * let marker = new Marker()
+      * marker.setSubpixelPositioning(true);
+      * ```
+      */
+    setSubpixelPositioning(value: boolean): this {
+        this._subpixelPositioning = value;
+        return this;
+    }
+
+    _onClick = (e: MouseEvent): void => {
+        this.fire(new MarkerClickEvent('click', {originalEvent: e}));
+    };
+
+    _onKeyPress = (e: KeyboardEvent): void => {
+        if (e.code === 'Space' || e.code === 'Enter') {
+            this.togglePopup();
+        }
+    };
+
+    /**
+     * Move a focused draggable default marker with the arrow keys
+     * (1 screen pixel per keydown; 10 with Shift).
+     * Mirrors the pointer drag gesture: the position updates before `dragstart`
+     * fires on the first movement, every movement fires `drag`, and releasing
+     * the arrow key (or losing focus) fires `dragend`. Holding a key down
+     * produces repeated `drag` events within a single gesture.
+     */
+    _onKeyDown = (e: KeyboardEvent): void => {
+        // Custom marker elements own their keyboard behavior (#7790).
+        if (!this._defaultMarker || !this._draggable || !this._map || !this._lngLat) return;
+        // Leave keys originating from elements nested inside the marker to the application.
+        if (e.composedPath()[0] !== this._element) return;
+        // Leave Alt/Ctrl/Meta shortcuts to the browser and the application.
+        if (e.altKey || e.ctrlKey || e.metaKey) return;
+
+        const delta = ARROW_KEY_DELTAS[e.key];
+        if (!delta) return;
+
+        e.preventDefault();
+        // The marker element lives in the canvas container, so without this the
+        // map's KeyboardHandler would also pan (or rotate/pitch with Shift) the camera.
+        e.stopPropagation();
+
+        const step = e.shiftKey ? KEYBOARD_DRAG_LARGE_STEP : KEYBOARD_DRAG_SMALL_STEP;
+        const pos = this._map.project(this._lngLat);
+        this.setLngLat(this._map.unproject(new Point(pos.x + delta[0] * step, pos.y + delta[1] * step)));
+
+        if (!this._keyboardDragActive) {
+            this._keyboardDragActive = true;
+            this.fire(new MarkerDragEvent('dragstart'));
+        }
+        this.fire(new MarkerDragEvent('drag'));
+    };
+
+    _onKeyUp = (e: KeyboardEvent): void => {
+        if (!ARROW_KEY_DELTAS[e.key]) return;
+        this._endKeyboardDrag();
+    };
+
+    _onBlur = (): void => {
+        this._endKeyboardDrag();
+    };
+
+    _endKeyboardDrag(): void {
+        if (this._keyboardDragActive) {
+            this._keyboardDragActive = false;
+            this.fire(new MarkerDragEvent('dragend'));
+        }
+    }
+
+    _onMapClick = (e: MapMouseEvent): void => {
+        const targetElement = e.originalEvent.target;
+        const element = this._element;
+
+        if (this._popup && (targetElement === element || element.contains(targetElement as any))) {
+            this.togglePopup();
+        }
+    };
+
+    /**
+     * Returns the {@link Popup} instance that is bound to the {@link Marker}.
+     * @returns popup
+     * @example
+     * ```ts
+     * let marker = new Marker()
+     *  .setLngLat([0, 0])
+     *  .setPopup(new Popup().setHTML("<h1>Hello World!</h1>"))
+     *  .addTo(map);
+     *
+     * console.log(marker.getPopup()); // return the popup instance
+     * ```
+     */
+    getPopup(): Popup {
+        return this._popup;
+    }
+
+    /**
+     * Opens or closes the {@link Popup} instance that is bound to the {@link Marker}, depending on the current state of the {@link Popup}.
+     * @example
+     * ```ts
+     * let marker = new Marker()
+     *  .setLngLat([0, 0])
+     *  .setPopup(new Popup().setHTML("<h1>Hello World!</h1>"))
+     *  .addTo(map);
+     *
+     * marker.togglePopup(); // toggle popup open or closed
+     * ```
+     */
+    togglePopup(): this {
+        const popup = this._popup;
+
+        if (this._element.style.opacity === this._opacityWhenCovered) return this;
+
+        if (!popup) return this;
+        else if (popup.isOpen()) popup.remove();
+        else {
+            popup.setLngLat(this._lngLat);
+            popup.addTo(this._map);
+        }
+        return this;
+    }
+
+    _updateOpacity(): void {
+        if (!this._isInViewport()) return;
+
+        const terrain = this._map?.terrain;
+        const occluded = this._map._camera.transform.isLocationOccluded(this._lngLat);
+        if (!terrain || occluded) {
+            const targetOpacity = occluded ? this._opacityWhenCovered : this._opacity;
+            if (this._element.style.opacity !== targetOpacity) {
+                this._element.style.opacity = targetOpacity;
+                this._element.classList.toggle('maplibregl-marker-covered', occluded);
+            }
+            return;
+        }
+        this._updateCovered();
+    }
+
+    /**
+     * @internal
+     * Whether the viewport shows the marker's position. There is nothing to compute for one it does not.
+     */
+    _isInViewport(): boolean {
+        const {width, height} = this._map._camera.transform;
+        return !!this._pos && this._pos.x >= 0 && this._pos.y >= 0 && this._pos.x <= width && this._pos.y <= height;
+    }
+
+    /**
+     * @internal
+     * Applies `opacityWhenCovered` and the covered class while the terrain covers the marker, closing its popup;
+     * `_updateCovered` runs it at most once per 100 ms. Nothing to do once the marker, the terrain or the viewport's
+     * view of the marker is gone.
+     */
+    _updateCoveredUnthrottled = (): void => {
+        const terrain = this._map?.terrain;
+        if (!terrain || !this._isInViewport()) return;
+        const covered = this._isCovered(terrain);
+        if (covered && this._popup?.isOpen()) this._popup.remove();
+        this._element.style.opacity = covered ? this._opacityWhenCovered : this._opacity;
+        this._element.classList.toggle('maplibregl-marker-covered', covered);
+    };
+
+    /**
+     * @internal
+     * The terrain check, at most once per 100 ms while the map moves; the last call in a window runs when the window closes.
+     */
+    _updateCovered: () => ReturnType<typeof setTimeout> = throttle(this._updateCoveredUnthrottled, 100);
+
+    /**
+     * @internal
+     * Whether the terrain covers the marker's center: the location raised by the height `offset` lifts the element
+     * above it on screen, or the location itself when the offset lowers the element.
+     */
+    _isCovered(terrain: Terrain): boolean {
+        const transform = this._map._camera.transform;
+        const elevation = terrain.getElevationForLngLat(this._lngLat, transform.tileZoom);
+        const metersToCenter = Math.max(0, -this._offset.y) / transform.pixelsPerMeter;
+        const elevationToCenter = Math.sin(this._map.getPitch() * Math.PI / 180) * metersToCenter;
+        return transform.isLocationOccluded(this._lngLat, terrain, elevation + elevationToCenter);
+    }
+
+    /**
+     * @internal
+     * Positions the marker and updates its opacity. As terrain tiles load, the map can adjust to the ground beneath
+     * its center without firing a `move` event. The `idle` event triggers a final marker update once the map has
+     * finished loading and rendering.
+     */
+    _update = (e?: { type: 'move' | 'moveend' | 'terrain' | 'projectiontransition' | 'idle' }): void => {
+        if (!this._map) return;
+
+        this._lngLat = smartWrap(this._lngLat, this._flatPos, this._map._camera.transform);
+
+        this._flatPos = this._pos = this._map.project(this._lngLat)._add(this._offset);
+        if (this._map.terrain) {
+            // flat position is saved because smartWrap needs non-elevated points
+            this._flatPos = this._map._camera.transform.locationToScreenPoint(this._lngLat)._add(this._offset);
+        }
+
+        let rotation = '';
+        if (this._rotationAlignment === 'viewport' || this._rotationAlignment === 'auto') {
+            rotation = `rotateZ(${this._rotation}deg)`;
+        } else if (this._rotationAlignment === 'map') {
+            rotation = `rotateZ(${this._rotation - this._map.getBearing()}deg)`;
+        }
+
+        let pitch = '';
+        if (this._pitchAlignment === 'viewport' || this._pitchAlignment === 'auto') {
+            pitch = 'rotateX(0deg)';
+        } else if (this._pitchAlignment === 'map') {
+            pitch = `rotateX(${this._map.getPitch()}deg)`;
+        }
+
+        // rounding the coordinates at every `move` event causes stuttered zooming,
+        // so the position is rounded only once the movement has stopped
+        if (!this._subpixelPositioning && e?.type !== 'move') {
+            this._pos = this._pos.round();
+        }
+
+        this._element.style.transform = `${anchorTranslate[this._anchor]} translate(${this._pos.x}px, ${this._pos.y}px) ${pitch} ${rotation}`;
+
+        this._updateOpacity();
+    };
+
+    /**
+     * Get the marker's offset.
+     * @returns The marker's screen coordinates in pixels.
+     */
+    getOffset(): Point {
+        return this._offset;
+    }
+
+    /**
+     * Sets the offset of the marker
+     * @param offset - The offset in pixels as a {@link PointLike} object to apply relative to the element's center. Negatives indicate left and up.
+     */
+    setOffset(offset: PointLike): this {
+        this._offset = Point.convert(offset);
+        this._update();
+        return this;
+    }
+
+    /**
+     * Adds a CSS class to the marker element.
+     *
+     * @param className - on-empty string with CSS class name to add to marker element
+     *
+     * @example
+     * ```
+     * let marker = new Marker()
+     * marker.addClassName('some-class')
+     * ```
+     */
+    addClassName(className: string): void {
+        this._element.classList.add(className);
+    }
+
+    /**
+     * Removes a CSS class from the marker element.
+     *
+     * @param className - Non-empty string with CSS class name to remove from marker element
+     *
+     * @example
+     * ```ts
+     * let marker = new Marker()
+     * marker.removeClassName('some-class')
+     * ```
+     */
+    removeClassName(className: string): void {
+        this._element.classList.remove(className);
+    }
+
+    /**
+     * Add or remove the given CSS class on the marker element, depending on whether the element currently has that class.
+     *
+     * @param className - Non-empty string with CSS class name to add/remove
+     *
+     * @returns if the class was removed return false, if class was added, then return true
+     *
+     * @example
+     * ```ts
+     * let marker = new Marker()
+     * marker.toggleClassName('toggleClass')
+     * ```
+     */
+    toggleClassName(className: string): boolean {
+        return this._element.classList.toggle(className);
+    }
+
+    _onMove = (e: MapMouseEvent | MapTouchEvent): void => {
+        if (!this._isDragging) {
+            const clickTolerance = this._clickTolerance || this._map._clickTolerance;
+            this._isDragging = e.point.dist(this._pointerdownPos) >= clickTolerance;
+        }
+        if (!this._isDragging) return;
+
+        this._pos = e.point.sub(this._positionDelta);
+        this._lngLat = this._map.unproject(this._pos);
+        this.setLngLat(this._lngLat);
+        // suppress click event so that popups don't toggle on drag
+        this._element.style.pointerEvents = 'none';
+
+        // make sure dragstart only fires on the first move event after mousedown.
+        // this can't be on mousedown because that event doesn't necessarily
+        // imply that a drag is about to happen.
+        if (this._state === 'pending') {
+            this._state = 'active';
+            this.fire(new MarkerDragEvent('dragstart'));
+        }
+        this.fire(new MarkerDragEvent('drag'));
+    };
+
+    _onUp = (): void => {
+        // revert to normal pointer event handling
+        this._element.style.pointerEvents = 'auto';
+        this._positionDelta = null;
+        this._pointerdownPos = null;
+        this._isDragging = false;
+        this._map.off('mousemove', this._onMove);
+        this._map.off('touchmove', this._onMove);
+
+        // only fire dragend if it was preceded by at least one drag event
+        if (this._state === 'active') {
+            this.fire(new MarkerDragEvent('dragend'));
+        }
+
+        this._state = 'inactive';
+    };
+
+    _addDragHandler = (e: MapMouseEvent | MapTouchEvent): void => {
+        if (this._element.contains(e.originalEvent.target as any)) {
+            e.preventDefault();
+
+            // We need to calculate the pixel distance between the click point
+            // and the marker position, with the offset accounted for. Then we
+            // can subtract this distance from the mousemove event's position
+            // to calculate the new marker position.
+            // If we don't do this, the marker 'jumps' to the click position
+            // creating a jarring UX effect.
+            this._positionDelta = e.point.sub(this._pos).add(this._offset);
+
+            this._pointerdownPos = e.point;
+
+            this._state = 'pending';
+            this._map.on('mousemove', this._onMove);
+            this._map.on('touchmove', this._onMove);
+            this._map.once('mouseup', this._onUp);
+            this._map.once('touchend', this._onUp);
+        }
+    };
+
+    /**
+     * Sets the `draggable` property and functionality of the marker.
+     * A draggable default marker is also keyboard focusable and movable with the
+     * arrow keys (see {@link MarkerOptions.draggable}); custom marker elements keep
+     * their focusability and keyboard behavior application-owned.
+     * @param shouldBeDraggable - Turns drag functionality on/off
+     */
+    setDraggable(shouldBeDraggable?: boolean): this {
+        this._draggable = !!shouldBeDraggable; // convert possible undefined value to false
+        this._element.classList.toggle('maplibregl-marker-draggable', this._draggable);
+
+        // handle case where map may not exist yet
+        // e.g. when setDraggable is called before addTo
+        if (this._map) {
+            if (shouldBeDraggable) {
+                this._map.on('mousedown', this._addDragHandler);
+                this._map.on('touchstart', this._addDragHandler);
+            } else {
+                this._map.off('mousedown', this._addDragHandler);
+                this._map.off('touchstart', this._addDragHandler);
+            }
+        }
+
+        if (this._defaultMarker) {
+            if (this._draggable) {
+                this._element.addEventListener('keydown', this._onKeyDown);
+                this._element.addEventListener('keyup', this._onKeyUp);
+                this._element.addEventListener('blur', this._onBlur);
+            } else {
+                this._element.removeEventListener('keydown', this._onKeyDown);
+                this._element.removeEventListener('keyup', this._onKeyUp);
+                this._element.removeEventListener('blur', this._onBlur);
+                this._endKeyboardDrag();
+            }
+        }
+
+        this._updateTabIndex();
+        this._updateAccessibilityRole();
+        return this;
+    }
+
+    /**
+     * Returns true if the marker can be dragged
+     * @returns True if the marker is draggable.
+     */
+    isDraggable(): boolean {
+        return this._draggable;
+    }
+
+    /**
+     * Keep the marker element focusable while it has built-in keyboard behavior.
+     * A popup makes any marker element interactive; dragging only manages
+     * focusability for the default marker so custom elements stay
+     * application-owned (#7790). A tabindex supplied by the application is
+     * never added, changed, or removed here.
+     */
+    _updateTabIndex(): void {
+        const needsTabIndex = !!this._popup || (this._defaultMarker && this._draggable);
+        if (needsTabIndex) {
+            if (!this._element.hasAttribute('tabindex')) {
+                this._element.setAttribute('tabindex', '0');
+                this._tabIndexManaged = true;
+            }
+        } else if (this._tabIndexManaged) {
+            // Only remove the value we set; the application may have overridden it since.
+            if (this._element.getAttribute('tabindex') === '0') {
+                this._element.removeAttribute('tabindex');
+            }
+            this._tabIndexManaged = false;
+        }
+    }
+
+    /**
+     * Keep the default marker role aligned with interactivity.
+     * Default markers need a role because `aria-label` is set in {@link Marker.addTo}.
+     * Non-interactive markers use `role=img`; interactive ones (draggable or with a popup) use `role=button`.
+     * Click listeners are application-owned and do not automatically change the role.
+     * Custom marker elements are left alone so applications own their a11y tree.
+     * Explicit roles set by the application are preserved.
+     */
+    _updateAccessibilityRole(): void {
+        if (!this._defaultMarker) {
+            return;
+        }
+
+        // Preserve an explicit role chosen by the application unless we previously managed it.
+        if (this._element.hasAttribute('role') && !this._roleManaged) {
+            return;
+        }
+
+        const role = (this._draggable || !!this._popup) ? 'button' : 'img';
+        this._element.setAttribute('role', role);
+        this._roleManaged = true;
+    }
+
+    /**
+     * Sets the `rotation` property of the marker.
+     * @param rotation - The rotation angle of the marker (clockwise, in degrees), relative to its respective {@link Marker.setRotationAlignment} setting.
+     */
+    setRotation(rotation?: number): this {
+        this._rotation = rotation || 0;
+        this._update();
+        return this;
+    }
+
+    /**
+     * Returns the current rotation angle of the marker (in degrees).
+     * @returns The current rotation angle of the marker.
+     */
+    getRotation(): number {
+        return this._rotation;
+    }
+
+    /**
+     * Sets the `rotationAlignment` property of the marker.
+     * @param alignment - Sets the `rotationAlignment` property of the marker. defaults to 'auto'
+     */
+    setRotationAlignment(alignment?: Alignment): this {
+        this._rotationAlignment = alignment || 'auto';
+        this._update();
+        return this;
+    }
+
+    /**
+     * Returns the current `rotationAlignment` property of the marker.
+     * @returns The current rotational alignment of the marker.
+     */
+    getRotationAlignment(): Alignment {
+        return this._rotationAlignment;
+    }
+
+    /**
+     * Sets the `pitchAlignment` property of the marker.
+     * @param alignment - Sets the `pitchAlignment` property of the marker. If alignment is 'auto', it will automatically match `rotationAlignment`.
+     */
+    setPitchAlignment(alignment?: Alignment): this {
+        this._pitchAlignment = alignment && alignment !== 'auto' ? alignment : this._rotationAlignment;
+        this._update();
+        return this;
+    }
+
+    /**
+     * Returns the current `pitchAlignment` property of the marker.
+     * @returns The current pitch alignment of the marker in degrees.
+     */
+    getPitchAlignment(): Alignment {
+        return this._pitchAlignment;
+    }
+
+    /**
+     * Sets the `opacity` and `opacityWhenCovered` properties of the marker.
+     * When called without arguments, resets opacity and opacityWhenCovered to defaults
+     * @param opacity - Sets the `opacity` property of the marker.
+     * @param opacityWhenCovered - Sets the `opacityWhenCovered` property of the marker.
+     */
+    setOpacity(opacity?: string | number, opacityWhenCovered?: string | number): this {
+        // Reset opacity when called without params or from constructor
+        if (this._opacity === undefined || (opacity === undefined && opacityWhenCovered === undefined)) {
+            this._opacity = '1';
+            this._opacityWhenCovered = '0.2';
+        }
+
+        if (opacity !== undefined) {
+            this._opacity = String(opacity);
+        }
+        if (opacityWhenCovered !== undefined) {
+            this._opacityWhenCovered = String(opacityWhenCovered);
+        }
+
+        if (this._map) {
+            this._updateOpacity();
+        }
+        return this;
+    }
+}

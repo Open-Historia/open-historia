@@ -1,0 +1,133 @@
+import type {MousePitchHandler, MouseRollHandler, MouseRotateHandler} from '../mouse.ts';
+
+/**
+ * Options object for `DragRotateHandler`.
+ */
+export type DragRotateHandlerOptions = {
+    /**
+     * Control the map pitch in addition to the bearing
+     * @defaultValue true
+     */
+    pitchWithRotate: boolean;
+    /**
+     * Control the map roll in addition to the bearing
+     * @defaultValue false
+     */
+    rollEnabled: boolean;
+    /**
+     * The {@link DragRotateOptions.movement} to use when none is passed, `'circular'` if `true` and `'linear'` if `false`
+     * @defaultValue true
+     */
+    aroundCenter?: boolean;
+};
+
+/**
+ * Options object for {@link DragRotateHandler.enable}. A drag around the pointer always turns the map linearly,
+ * so `movement` is only set with `around: 'center'`.
+ */
+export type DragRotateOptions = {
+    /**
+     * The map turns and tilts around its center.
+     * @defaultValue 'center'
+     */
+    around?: 'center';
+    /**
+     * How a drag around the center turns the map. If `'circular'` is passed, the map follows the pointer around the center like a wheel,
+     * so the same drag turns it one way above the center and the other way below. If `'linear'` is passed, the bearing follows
+     * the horizontal movement of the pointer, the same way anywhere on the map.
+     * @defaultValue 'circular', or 'linear' if {@link MapOptions.aroundCenter} is `false`
+     */
+    movement?: 'circular' | 'linear';
+} | {
+    /**
+     * The map turns and tilts around the point under the pointer where the drag starts, on the terrain where there is any,
+     * which keeps its place on the screen and its distance from the camera, so tilting also zooms. The bearing follows the
+     * horizontal movement of the pointer. A drag that starts in the sky turns around the center.
+     */
+    around: 'pointer';
+};
+
+/**
+ * The `DragRotateHandler` allows the user to rotate the map by clicking and
+ * dragging the cursor while holding the right mouse button or `ctrl` key.
+ *
+ * @group Handlers
+ */
+export class DragRotateHandler {
+
+    _mouseRotate: MouseRotateHandler;
+    _mousePitch: MousePitchHandler;
+    _mouseRoll: MouseRollHandler;
+    _pitchWithRotate: boolean;
+    _rollEnabled: boolean;
+    _defaultMovement: 'circular' | 'linear';
+    /** @internal */
+    around: 'center' | 'pointer';
+    /** @internal */
+    movement: 'circular' | 'linear';
+
+    /** @internal */
+    constructor(options: DragRotateHandlerOptions, mouseRotate: MouseRotateHandler, mousePitch: MousePitchHandler, mouseRoll: MouseRollHandler) {
+        this._pitchWithRotate = options.pitchWithRotate;
+        this._rollEnabled = options.rollEnabled;
+        this._mouseRotate = mouseRotate;
+        this._mousePitch = mousePitch;
+        this._mouseRoll = mouseRoll;
+        const {aroundCenter = true} = options;
+        this._defaultMovement = aroundCenter ? 'circular' : 'linear';
+        this.around = 'center';
+        this.movement = this._defaultMovement;
+    }
+
+    /**
+     * Enables the "drag to rotate" interaction.
+     *
+     * @param options - Options object
+     * @example
+     * ```ts
+     * map.dragRotate.enable();
+     * map.dragRotate.enable({around: 'pointer'});
+     * map.dragRotate.enable({around: 'center', movement: 'linear'});
+     * ```
+     */
+    enable(options?: DragRotateOptions | boolean): void {
+        const enableOptions: DragRotateOptions = typeof options === 'object' ? options : {};
+        this.around = enableOptions.around ?? 'center';
+        this.movement = enableOptions.around === 'pointer' ? 'linear' : enableOptions.movement ?? this._defaultMovement;
+        this._mouseRotate.enable();
+        if (this._pitchWithRotate) this._mousePitch.enable();
+        if (this._rollEnabled) this._mouseRoll.enable();
+    }
+
+    /**
+     * Disables the "drag to rotate" interaction.
+     *
+     * @example
+     * ```ts
+     * map.dragRotate.disable();
+     * ```
+     */
+    disable(): void {
+        this._mouseRotate.disable();
+        this._mousePitch.disable();
+        this._mouseRoll.disable();
+    }
+
+    /**
+     * Returns a Boolean indicating whether the "drag to rotate" interaction is enabled.
+     *
+     * @returns `true` if the "drag to rotate" interaction is enabled.
+     */
+    isEnabled(): boolean {
+        return this._mouseRotate.isEnabled() && (!this._pitchWithRotate || this._mousePitch.isEnabled()) && (!this._rollEnabled || this._mouseRoll.isEnabled());
+    }
+
+    /**
+     * Returns a Boolean indicating whether the "drag to rotate" interaction is active, i.e. currently being used.
+     *
+     * @returns `true` if the "drag to rotate" interaction is active.
+     */
+    isActive(): boolean {
+        return this._mouseRotate.isActive() || this._mousePitch.isActive() || this._mouseRoll.isActive();
+    }
+}

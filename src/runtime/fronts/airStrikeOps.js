@@ -85,6 +85,7 @@ export const airReachOf = (world, date) => {
 // arms are whole again each run. None for a country with an air unit of its own
 // (it flies that), one whose air arm is worth nothing (its military figures:
 // air 0), or one with no troops there.
+// i18n-ignore: a key prefix.
 export const AIR_ARM_UNIT = "air-arm:";
 export const airArmsOf = (world, player) => {
   const wanted = fold(player);

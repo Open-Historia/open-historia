@@ -23,9 +23,9 @@ const card = {
 const heading = { color: "#fff", fontSize: "1.1rem", fontWeight: 800, letterSpacing: "-0.01em", margin: "0 0 0.35rem" };
 const lead = { color: "rgba(255,255,255,0.62)", fontSize: "0.86rem", lineHeight: 1.55, margin: "0 0 1rem" };
 const label = { color: "rgba(255,255,255,0.72)", display: "block", fontSize: "0.72rem", fontWeight: 600, letterSpacing: "0.04em", marginBottom: "0.4rem", textTransform: "uppercase" };
-const input = { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "9px", color: "#f8fafc", fontSize: "0.9rem", outline: "none", padding: "0.7rem 0.85rem", width: "100%", boxSizing: "border-box" };
+const input = { background: "var(--oh-ui-overlay-card, rgba(255,255,255,0.04))", border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.1))", borderRadius: "9px", color: "#f8fafc", fontSize: "0.9rem", outline: "none", padding: "0.7rem 0.85rem", width: "100%", boxSizing: "border-box" };
 const button = {
-  alignItems: "center", background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: "9px",
+  alignItems: "center", background: "var(--oh-ui-overlay-card, rgba(255,255,255,0.06))", border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.12))", borderRadius: "9px",
   color: "rgba(246,246,248,0.94)", cursor: "pointer", display: "inline-flex", fontSize: "0.84rem", fontWeight: 650, gap: "0.4rem",
   justifyContent: "center", minHeight: "2.3rem", padding: "0 1.1rem",
 };

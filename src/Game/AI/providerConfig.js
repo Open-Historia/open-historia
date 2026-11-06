@@ -258,6 +258,9 @@ export const AI_TASK_ROUTING = [
     { key: "pregameHistory", label: "Pre-game history", hint: "Mid-tier model", group: "Simulation" },
     { key: "politicalWorldGeneration", label: "Political world generation", hint: "Mid/high-tier: bounded scenario political seeding", group: "Simulation" },
     { key: "politicalWorldVerification", label: "Political world verification", hint: "Mid/high-tier: exact-date identity cross-check", group: "Simulation" },
+    // The Workshop's Languages tab (runtime/scenarioLanguagePacks.js): asked by
+    // a scenario's author, never during play.
+    { key: "scenarioTranslation", label: "Scenario language packs", hint: "Strong model: translates a scenario's own text in the Workshop", group: "Simulation" },
     { key: "gameMaster", label: "Game Master", hint: "High-tier model (direct world edits)", group: "Player" },
     { key: "actions", label: "Action suggestions", hint: "Small/mid-tier: short suggestions", group: "Player" },
     { key: "descriptionToAction", label: "Action parsing", hint: "Small model: text to a structured command", group: "Player" },
@@ -275,6 +278,8 @@ export const AI_TASK_ROUTING = [
     { key: "spyIntercept", label: "Spy intercept", hint: "Small/mid-tier model", group: "Player" },
     { key: "intelligenceAssessment", label: "Intelligence assessment", hint: "Mid-tier model", group: "Player" },
     { key: "demandCheck", label: "Demand check", hint: "Small model: reads a leader's answer to a demand", group: "Player" },
+    // Only with Translate with my AI on (runtime/aiTranslation.js).
+    { key: "translation", label: "Translation", hint: "Small/mid-tier: game text in your language, with Translate with my AI on", group: "Player" },
     { key: "advisor", label: "Advisor chat", hint: "Mid/high-tier: long conversational replies", group: "Chat" },
     { key: "diplomacy", label: "Leader chat", hint: "Mid/high-tier: in-character leaders", group: "Chat" },
     { key: "chatActions", label: "Group chat", hint: "Mid/high-tier: group chats and councils, on the Leader chat model unless set", group: "Chat" },

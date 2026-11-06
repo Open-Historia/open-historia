@@ -1,0 +1,152 @@
+import {classifyRings} from '@mapbox/vector-tile';
+import {JSON_PREFIX} from './util.ts';
+import {mercatorWorldCoordinateHelper} from '../geo/mercator_coordinate.ts';
+
+import type Point from '@mapbox/point-geometry';
+import type {LayerSpecification} from '@maplibre/maplibre-gl-style-spec';
+import type {VectorTileFeatureLike} from '@maplibre/vt-pbf';
+import type {WorldCoordinateHelper} from '../geo/transform_interface.ts';
+
+/**
+ * A helper for type to omit a property from a type
+ */
+export type DistributiveKeys<T> = T extends T ? keyof T : never;
+/**
+ * A helper for type to omit a property from a type
+ */
+export type DistributiveOmit<T, K extends DistributiveKeys<T>> = T extends unknown
+    ? Omit<T, K>
+    : never;
+
+/**
+ * An extended geojson feature used by the events to return data to the listener
+ */
+export type MapGeoJSONFeature = GeoJSONFeature & {
+    layer: DistributiveOmit<LayerSpecification, 'source'> & {source: string};
+    source: string;
+    sourceLayer?: string;
+    state: { [key: string]: any };
+};
+
+/**
+ * A geojson feature
+ */
+export class GeoJSONFeature {
+    /**
+     * The map projection's world-to-lng/lat mapping of each feature, kept only when it is not the mercator one so
+     * mercator query output stays float-identical to the inline formula in `projectPoint`. It is held here and not
+     * on the feature because a registered projection's definition holds functions, which would keep the feature
+     * from being cloned with `structuredClone` or sent with `postMessage`.
+     */
+    private static readonly worldCoordinateHelpers = new WeakMap<GeoJSONFeature, WorldCoordinateHelper>();
+
+    type: 'Feature';
+    _geometry: GeoJSON.Geometry;
+    properties: { [name: string]: any };
+    id: number | string | undefined;
+    _x: number;
+    _y: number;
+    _z: number;
+
+    _vectorTileFeature: VectorTileFeatureLike;
+
+    constructor(vectorTileFeature: VectorTileFeatureLike, z: number, x: number, y: number, id: string | number | undefined, worldCoordinateHelper: WorldCoordinateHelper) {
+        this.type = 'Feature';
+        this._vectorTileFeature = vectorTileFeature;
+        this._x = x;
+        this._y = y;
+        this._z = z;
+        if (worldCoordinateHelper !== mercatorWorldCoordinateHelper) {
+            GeoJSONFeature.worldCoordinateHelpers.set(this, worldCoordinateHelper);
+        }
+
+        for (const key in vectorTileFeature.properties) {
+            if (typeof vectorTileFeature.properties[key] !== 'string' || !vectorTileFeature.properties[key].startsWith(JSON_PREFIX)) {
+                continue;
+            }
+            // JSON parsing the special case of a json prefix that is serialized in geojson worker source.
+            vectorTileFeature.properties[key] = JSON.parse(vectorTileFeature.properties[key].slice(JSON_PREFIX.length));
+        }
+        this.properties = vectorTileFeature.properties;
+        this.id = id;
+    }
+
+    private projectPoint(p: Point, x0: number, y0: number, size: number, worldCoordinateHelper: WorldCoordinateHelper | undefined): [number, number] {
+        if (worldCoordinateHelper) {
+            const lngLat = worldCoordinateHelper.lngLatFromWorld((p.x + x0) / size, (p.y + y0) / size);
+            return [lngLat.lng, lngLat.lat];
+        }
+        return [
+            (p.x + x0) * 360 / size - 180,
+            360 / Math.PI * Math.atan(Math.exp((1 - (p.y + y0) * 2 / size) * Math.PI)) - 90
+        ];
+    }
+
+    private projectLine(line: Point[], x0: number, y0: number, size: number, worldCoordinateHelper: WorldCoordinateHelper | undefined) {
+        return line.map(p => this.projectPoint(p, x0, y0, size, worldCoordinateHelper));
+    }
+
+    get geometry(): GeoJSON.Geometry {
+        if (this._geometry) return this._geometry;
+
+        const feature = this._vectorTileFeature;
+        const worldCoordinateHelper = GeoJSONFeature.worldCoordinateHelpers.get(this);
+
+        // Copied from https://github.com/mapbox/vector-tile-js/blob/f1457ee47d0a261e6246d68c959fbd12bf56aeeb/index.js
+        const size = feature.extent * Math.pow(2, this._z);
+        const x0 = feature.extent * this._x;
+        const y0 = feature.extent * this._y;
+        const vtCoords = feature.loadGeometry();
+
+        switch (feature.type) {
+            case 1: {
+                const points = [];
+                for (const line of vtCoords) {
+                    points.push(line[0]);
+                }
+                const coordinates = this.projectLine(points, x0, y0, size, worldCoordinateHelper);
+                this._geometry = points.length === 1 ?
+                    {type: 'Point', coordinates: coordinates[0]} :
+                    {type: 'MultiPoint', coordinates};
+                break;
+            }
+            case 2: {
+                const coordinates = vtCoords.map(coord => this.projectLine(coord, x0, y0, size, worldCoordinateHelper));
+                this._geometry = coordinates.length === 1 ?
+                    {type: 'LineString', coordinates: coordinates[0]} :
+                    {type: 'MultiLineString', coordinates};
+                break;
+            }
+            case 3: {
+                const polygons = classifyRings(vtCoords);
+                const coordinates = [];
+                for (const polygon of polygons) {
+                    coordinates.push(polygon.map(coord => this.projectLine(coord, x0, y0, size, worldCoordinateHelper)));
+                }
+                this._geometry = coordinates.length === 1 ?
+                    {type: 'Polygon', coordinates: coordinates[0]} :
+                    {type: 'MultiPolygon', coordinates};
+                break;
+            }
+            default:
+                throw new Error(`unknown feature type: ${feature.type}`);
+        }
+
+        return this._geometry;
+    }
+
+    set geometry(g: GeoJSON.Geometry) {
+        this._geometry = g;
+    }
+
+    toJSON(): GeoJSON.Feature {
+        const json: any = {
+            geometry: this.geometry
+        };
+        for (const i in this) {
+            if (i === '_geometry' || i === '_vectorTileFeature' || i === '_x' || i === '_y' || i === '_z') continue;
+            json[i] = (this)[i];
+        }
+        return json;
+    }
+}

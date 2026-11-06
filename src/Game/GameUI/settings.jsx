@@ -104,7 +104,7 @@ import { saveDebugLogFile } from "../../runtime/saveDebugLog.js";
 import { buildGameZipBlob, formatZipSize, saveGameZipToDisk } from "../../runtime/gameZip.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { usePresenceLeaving } from "./presence.jsx";
-import { switchLanguage, uiString } from "../../runtime/translator.js";
+import { aiTranslationAvailable, switchLanguage, uiString } from "../../runtime/translator.js";
 import { DEFAULT_BASEMAP_ID, ESRI_BASEMAPS, decodeAllowedBasemaps, decodeOwnBasemaps, isBuiltinBasemapId } from "../../runtime/assets.js";
 import { DEFAULT_BASEMAP_KEY, DEFAULT_BASEMAP_ON_KEY, basemapShownFor, scenarioMapsOfWorld } from "../../runtime/basemapPick.js";
 import { useGameBasemapPick } from "../Map/useBasemapPick.js";
@@ -187,9 +187,9 @@ const smallButtonStyle = {
 
 const primaryButtonStyle = {
     ...smallButtonStyle,
-    backgroundColor: "rgba(59,130,246,0.22)",
-    borderColor: "rgba(96,165,250,0.45)",
-    color: "#93c5fd",
+    backgroundColor: "var(--oh-ui-active, rgba(59,130,246,0.22))",
+    borderColor: "var(--oh-ui-accent, rgba(96,165,250,0.45))",
+    color: "var(--oh-ui-text, #93c5fd)",
 };
 
 const listCardStyle = {
@@ -326,6 +326,7 @@ const LanguageSelector = () => {
     };
 
     return (
+        <>
         <LanguagePicker
         label="UI language"
         current={current}
@@ -333,6 +334,28 @@ const LanguageSelector = () => {
         saving={saving}
         options={getUiLanguageOptions()}
         />
+        <AiTranslationToggle language={current} />
+        </>
+    );
+};
+
+// Translate with my AI (runtime/aiTranslation.js): only in a language whose
+// translation model the player downloaded; elsewhere there is nothing the
+// model translates, so no switch.
+const AiTranslationToggle = ({ language }) => {
+    const on = useMapSetting(MAP_SETTING_KEYS.translateWithAi);
+    // Read at each render: the language it is offered for comes in as a prop.
+    const offered = Boolean(language) && aiTranslationAvailable();
+    if (!offered) return null;
+    return (
+        <>
+        <Toggle
+        label="Translate with my AI"
+        enabled={on}
+        onToggle={() => setMapSetting(MAP_SETTING_KEYS.translateWithAi, !on)}
+        />
+        <div style={{ ...helperStyle, marginTop: "-0.6rem", marginBottom: "0.6rem" }}>{"Uses your AI provider instead of the translation model, and spends its requests."}</div>
+        </>
     );
 };
 
@@ -590,8 +613,8 @@ const Toggle = ({ label, enabled, onToggle, disabled = false, inactive = "" }) =
         padding: "2px",
         boxSizing: "border-box",
         transition: "background-color 150ms ease, box-shadow 150ms ease",
-        backgroundColor: enabled ? (inactive ? "rgba(59,130,246,0.35)" : "#3b82f6") : "rgba(255,255,255,0.14)",
-        boxShadow: enabled && !inactive ? "0 0 10px rgba(59,130,246,0.35)" : "none",
+        backgroundColor: enabled ? (inactive ? "var(--oh-ui-hover, rgba(59,130,246,0.35))" : "var(--oh-ui-active, #3b82f6)") : "rgba(255,255,255,0.14)",
+        boxShadow: enabled && !inactive ? "0 0 10px var(--oh-ui-line, rgba(59,130,246,0.35))" : "none",
         flexShrink: 0,
         outline: "none",
     }}
@@ -1487,10 +1510,8 @@ const useSavingRequests = () => {
 };
 
 // Task keys the request count holds that are not per-task models
-// (AI_TASK_ROUTING): translation requests counted by an older build the same
-// day, and a call that named no task.
+// (AI_TASK_ROUTING): a call that named no task.
 const OTHER_REQUEST_TASKS = [
-    { key: "translation", label: "Translation" },
     { key: "other", label: "Other" },
     { key: "direct", label: "Other" },
 ];
@@ -1723,6 +1744,7 @@ const SettingsButton = ({ onToggle, topOffset = "0.5rem", hidden = false }) => {
         type="button"
         aria-label="Open game menu"
         title="Game menu"
+        data-oh-theme-hud=""
         onClick={onToggle}
         style={{
             ...baseStyle,

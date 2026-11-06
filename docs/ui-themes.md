@@ -1,6 +1,19 @@
 # Interface themes — Beta visual contract
 
-Status: local Beta feature implementation, 2026-11-05; review, PR, and release pending.
+Status: original theme system merged in PR #955 and released in Beta 0.0.120. The "Themes everywhere" expansion (commit e5d1d04d) is part of upstream Beta. The controls-only follow-up below remains a local candidate, not merged or released.
+
+## 2026-11-06: Interface Appearance V2 reconciliation
+
+The initial V2 proposal overlapped with Arkniem's later "Themes everywhere" update. Its main menu shell, initial setup, translation, primary Community/Lobbies cards, popups, and existing themed navigation are now inherited unchanged from upstream Beta. This follow-up does not recreate or replace them.
+
+- Rostra: remaining neutral button/surface borders, the Create Scenario tile, editor navigation and subtle desktop/mobile menu hover or keyboard focus accents use the existing appearance tokens.
+- Community and Lobbies: remaining generic search inputs, pills and lobby buttons use palette surfaces and borders. The primary lobby action retains the upstream accent-blended styling.
+- Actions: the composer, submission/Brainstorm controls, hover states and selected tabs consume existing appearance tokens.
+- In-game HUD: active Advisor/Country controls, map-mode choices, the game-menu control and keyboard focus outlines have restrained theme accents. Reconciliation preserves newer upstream `--oh-ui-glass-*` translucent backgrounds and borders rather than replacing them with opaque general-purpose active colors.
+- Settings: generic primary actions and enabled toggle surfaces no longer force blue for opt-in themes.
+- Default (Original) uses the former authored fallbacks. Scenario identity colors, flags, political/terrain/ownership maps, military warnings and Discord branding remain independently meaningful. No new preset, wallpaper, schema, AI path, persistence key or canonical state change is introduced.
+
+Local source checkpoint: the 12-file controls follow-up was reconciled on `fix/beta-bugfix-sweep-2026-11-06` from merged upstream Beta `bc2ffb941b1f5d28be59986e863d86749f9d0168` (includes Advisor PR #968). Focused appearance tests: 17/17. Full Beta suite: 8,529 passed, 0 failed, 2 skipped, 2 TODO (8,533 total). Targeted ESLint: 0 errors, 5 warnings. Desktop and web production builds passed; the web map staging verified six files (66.1 MB). These are local test/build results, **not** an upstream PR, shipped installer or in-game visual acceptance; live visual review remains open.
 
 ## Purpose
 
