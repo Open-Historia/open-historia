@@ -8,7 +8,7 @@ import { dedupeByName, landHolderNames, pickableCountries } from "../../runtime/
 import ReactDOM from "react-dom";
 import { sendDiplomaticMessage, startDiplomaticChat, loadDiplomaticHistory } from "../AI/main.jsx";
 import { SharedGameRefusal, answerPeaceInChat, checkDemandReply, ensureCountryAssessed, processPendingEventOutreach, runChatActionBatch } from "../AI/gameplayLazy.js";
-import { PeaceOfferCard, PeaceTermsForm, sendPeaceAnswer } from "./warAndPeace.jsx";
+import { CallToArmsCard, PeaceOfferCard, PeaceTermsForm, sendPeaceAnswer } from "./warAndPeace.jsx";
 import { describeTerms, warBetween } from "../../runtime/peaceTerms.js";
 import { peaceOffersForThread, placePeaceOffers } from "./peacePlacement.js";
 import { createPlayerPollEvent, eventsFromLegacyChat, projectChatThread } from "../../runtime/chatThreads.js";
@@ -1166,6 +1166,7 @@ const useTouchDisarm = (armed, setArmed) => {
 // Peace in a chat (warAndPeace.jsx): read live from the world, where an answer lands.
 const NO_PEACE_ROWS = Object.freeze([]);
 const selectPeaceOffers = (world) => (Array.isArray(world?.peaceOffers) ? world.peaceOffers : NO_PEACE_ROWS);
+const selectCallsToArms = (world) => (Array.isArray(world?.callsToArms) ? world.callsToArms : NO_PEACE_ROWS);
 const selectWars = (world) => (Array.isArray(world?.wars) ? world.wars : NO_PEACE_ROWS);
 
 const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete, onBack, onMessagesUpdate, onThreadUpdate, unread = false, onToggleRead, draft = "", onDraftApplied, onInstitutionNavigate, onLifecycleResult, onInstitutionBusinessOpened, embeddedInstitution = false, puppetMarkers = {}, availableCountries = [] }) => {    // Two-step delete, matching the list row. Disarms on blur so a half-pressed
@@ -1348,6 +1349,19 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
         messageIds: presentedMessages.map((msg) => String(msg?.id ?? "")),
         counterpart: peaceCounterpart?.name ?? "",
     }), [peaceOffersAll, presentedMessages, playerCountry, chat?.id, peaceCounterpart]);
+    // CALLS TO ARMS (runtime/alliances.js): those the ally that was attacked asked of the player in this thread,
+    // each under its message (warAndPeace.jsx CallToArmsCard); an open one whose message is not here (asked before
+    // calls had messages) waits at the foot of the one-on-one thread with that ally.
+    const callsAll = useRuntimeState("world", selectCallsToArms);
+    const threadCalls = useMemo(() => {
+        const mine = (Array.isArray(callsAll) ? callsAll : []).filter((call) => String(call?.ally ?? "").trim().toLowerCase() === String(playerCountry ?? "").trim().toLowerCase());
+        const ids = new Set(presentedMessages.map((msg) => String(msg?.id ?? "")));
+        const withAlly = String(peaceCounterpart?.name ?? "").trim().toLowerCase();
+        return {
+            byMessage: new Map(mine.filter((call) => call.messageId && ids.has(String(call.messageId))).map((call) => [String(call.messageId), call])),
+            stranded: mine.filter((call) => call.status === "open" && !(call.messageId && ids.has(String(call.messageId))) && withAlly && String(call.defender ?? "").trim().toLowerCase() === withAlly),
+        };
+    }, [callsAll, presentedMessages, playerCountry, peaceCounterpart]);
     const myOpenTerms = threadOffers.some((offer) => offer.status === "open" && String(offer.from).trim().toLowerCase() === String(playerCountry ?? "").trim().toLowerCase());
     const canProposePeace = Boolean(peaceWar) && !myOpenTerms;
     const [peaceFormOpen, setPeaceFormOpen] = useState(false);
@@ -2383,6 +2397,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                             onRetry={msg.retry && !isLoading && index === messages.length - 1 ? () => handleRetry(index) : undefined} />}
                     {(demandsByMessage.get(msg.id) ?? []).map(renderDemandCard)}
                     {(peaceByMessage.get(String(msg.id ?? "")) ?? []).map(renderPeaceCard)}
+                    {threadCalls.byMessage.has(String(msg.id ?? "")) ? <CallToArmsCard call={threadCalls.byMessage.get(String(msg.id ?? ""))} viewer={playerCountry} /> : null}
                     </React.Fragment>
                 );
             })}
@@ -2404,6 +2419,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                 foot of the thread rather than nowhere. */}
             {strandedDemands.map(renderDemandCard)}
             {strandedPeace.map(renderPeaceCard)}
+            {threadCalls.stranded.map((call) => <CallToArmsCard key={call.id} call={call} viewer={playerCountry} />)}
             {isLoading && lifecycleGroupThinking
                 ? <LifecycleThinkingBubble count={lifecycleState.responseCases.length || countries.length} />
                 : isLoading && ordinaryGroupThinking
