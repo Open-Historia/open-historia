@@ -421,12 +421,13 @@ pub fn read_regions(battle: &mut Battle, run: &Run) {
     let count = arena.ids.len();
     let mut region_side = vec![-1i8; count];
     let mut home_side = vec![-1i8; count];
+    let at_peace = battle.status == "standing";
     for index in 1..count {
         let id = &arena.ids[index];
         let group = side_of_name(battle, &run.group_of(id));
         region_side[index] = if group >= 0 { group as i8 } else { side_of_name(battle, &run.controller_of(id)) as i8 };
         home_side[index] = if group >= 0 { group as i8 } else { side_of_name(battle, &run.sovereign_of(id)) as i8 };
-        if !battle.shown.has(id) || region_side[index] < 0 {
+        if !battle.shown.has(id) || region_side[index] < 0 || at_peace {
             let holder = holder_of(battle, run, id);
             battle.shown.set(id.clone(), Val::Str(holder));
         }
