@@ -501,7 +501,7 @@ func _boot_door(shell: ShellBoot) -> void:
 	await _shoot("s-07-door-opening-60")
 	await _until(func() -> bool: return shell.parting or shell.door == null, 6.0)
 	_check("the notice is mounted as the leaves part", shell.notice != null and is_instance_valid(shell.notice))
-	await _until(func() -> bool: return shell.door == null or (shell.notice != null and is_instance_valid(shell.notice) and shell.notice.page_count() > 0), 4.0)
+	await _until(func() -> bool: return shell.door == null or (shell.notice != null and is_instance_valid(shell.notice) and (shell.notice.page_count() > 0 or shell.notice.get_children().any(func(child: Node) -> bool: return child is ReleaseNotice))), 4.0)
 	await _frames(2)
 	await _shoot("s-07b-door-parting-over-notice")
 	var parting := shell.notice != null and is_instance_valid(shell.notice) and is_instance_valid(door)
