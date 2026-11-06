@@ -924,7 +924,7 @@ export const buildActionHistoryText = (actions, { includeResolved = false, inclu
     const kindLabel = `${action.kind === "chat" ? "chat" : "action"}${action.ownerCode ? `, ${action.ownerCode}` : ""}`;
     const statusLabel = action.status !== "planned" ? ` [${action.status}]` : "";
     // Sandbox mode (runtime/sandbox.js): an order given for another polity says whose it is.
-    const actorLabel = action.actor ? ` (as ${action.actor})` : "";
+    const actorLabel = `${action.actor ? ` (as ${action.actor})` : ""}${action.decree ? " (decree)" : ""}`;
     return `- (${kindLabel})${actorLabel} ${action.title}${statusLabel}: ${buildActionDisplayText(action)}`;
   };
 

@@ -138,7 +138,7 @@ export const collectPlayerMaterial = ({
     // Sandbox mode (runtime/sandbox.js): an order given for another polity says whose it is.
     const actor = asText(action.actor);
     const text = asText(action.text || action.rawInput);
-    const label = [owner && `(${owner})`, actor && `(as ${actor})`, text].filter(Boolean).join(" ");
+    const label = [owner && `(${owner})`, actor && `(as ${actor})`, action.decree === true && "(decree)", text].filter(Boolean).join(" ");
     items.push({ kind: "order", id: asText(action.id), label, overdue: action.overdue === true, required: true });
   }
 

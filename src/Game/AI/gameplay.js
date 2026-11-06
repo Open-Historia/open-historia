@@ -15592,11 +15592,11 @@ export const generateCountryStatSheet = async ({ code, name, forceReassess = fal
 };
 
 
-export const refinePlayerAction = async (rawInput, { persist = true, signal, actor = "" } = {}) => {
+export const refinePlayerAction = async (rawInput, { persist = true, signal, actor = "", decree = true } = {}) => {
   const bundle = await readSeenGameStateBundle({ force: true });
   const variables = await buildTemplateVariables(bundle, { actionInput: rawInput, taskKey: "descriptionToAction", lookups: true });
   // Sandbox mode (runtime/sandbox.js): what happens, not the player's attempt.
-  const sandbox = describeSandboxForRefine(bundle.game, actor);
+  const sandbox = describeSandboxForRefine(bundle.game, actor, { decree });
   const { payload, generation } = await runJsonTask("descriptionToAction", {
     lookups: buildTaskLookups(bundle),
     fallback: () => fallbackDescriptionToAction(rawInput, bundle),

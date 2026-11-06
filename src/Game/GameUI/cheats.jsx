@@ -45,6 +45,7 @@ import { PUPPET_KIND_OPTIONS, PUPPET_SECRECY_OPTIONS } from "../../Editor/scenar
 import { applyGmPuppetChange, gmPuppetRows } from "./puppetStatesTool.js";
 import { DIFFICULTY_LEVELS, normalizeDifficulty } from "../../runtime/difficulty.js";
 import { isObserver, isSandbox, withSandbox } from "../../runtime/sandbox.js";
+import { sharedGameOpen } from "./sandboxHere.js";
 import { applyGameMasterPreview, consolidateHistoryNow, previewGameMasterCommand } from "../AI/gameplayLazy.js";
 import { HISTORY_CONSOLIDATION, countWords, describeHistoryConsolidation, planHistoryConsolidation } from "../AI/historyConsolidation.js";
 import {
@@ -4436,8 +4437,10 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
     }
 
     if (tool === "sandbox") {
-        const sandboxOn = isSandbox(game);
-        const observerOn = isObserver(game);
+        // Single player only (runtime/sandbox.js): in a shared game both stay off.
+        const shared = sharedGameOpen();
+        const sandboxOn = isSandbox(game) && !shared;
+        const observerOn = isObserver(game) && !shared;
         const setMode = (next, summary) => runBusy(async () => {
             await mutateGameData((current) => withSandbox(current, next));
             await noteGmChange("polity", summary);
@@ -4457,18 +4460,24 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
             <>
             {header(meta.title, meta.subtitle)}
             <div>
+            {shared && (
+                <div style={{ color: "rgba(253,186,116,0.9)", fontSize: "0.76rem", lineHeight: 1.45 }}>
+                Sandbox mode is for single player only: in a shared game, steering every country would steer the other players' too.
+                </div>
+            )}
             {row(
                 "Sandbox",
                 "Each order can be given for any country (an “Acting as” picker appears in the Actions panel), and Write event and GM command buttons sit beside the order box. The turn treats an order for another country as that government's own decision.",
                 sandboxOn,
                 () => setMode({ sandbox: !sandboxOn }, sandboxOn ? "Sandbox mode is off." : "Sandbox mode is on: orders can be given for any polity."),
+                shared,
             )}
             {row(
                 "Observer — lead no one",
                 `You lead no country: the AI runs every power${game?.country ? `, ${nameOf(game.country)} included` : ""}, foreign leaders stop writing to you, the advisor becomes an impartial analyst, and every order needs a country to act as.`,
                 observerOn,
                 () => setMode({ observer: !observerOn }, observerOn ? `The player leads ${nameOf(game?.country)} again.` : "The player now leads no one and watches as an observer."),
-                !sandboxOn,
+                !sandboxOn || shared,
             )}
             {statusLine}
             </div>

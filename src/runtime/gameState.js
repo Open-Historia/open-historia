@@ -583,6 +583,8 @@ export const normalizeActionEntry = (entry, index = 0) => {
     // Sandbox mode (runtime/sandbox.js): the polity this order is given for,
     // when it is not the player's own.
     ...(normalizeOptionalString(entry.actor) ? { actor: normalizeOptionalString(entry.actor) } : {}),
+    // Sandbox mode: an order that happens as written, not one the turn judges.
+    ...(entry.decree === true ? { decree: true } : {}),
   };
 };
 

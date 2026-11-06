@@ -63,10 +63,31 @@ test("Improve action text writes what happens in sandbox mode, not an attempt to
   assert.match(plain, /never turn it into another power funding, backing, supporting/);
   assert.match(plain, /never hedge it/);
   assert.match(describeSandboxForRefine({ sandbox: true }, "Serbia"), /given as Serbia: write it as Serbia's own decision/);
-  assert.match(describeSandboxForSimulation({ country: "Croatia", sandbox: true }), /is the game master's decree: it happens as written/);
+  assert.match(describeSandboxForSimulation({ country: "Croatia", sandbox: true }), /An order marked \(decree\) is the game master.s decree: it happens as written/);
+  assert.match(describeSandboxForSimulation({ country: "Croatia", sandbox: true }), /An order without that mark is an attempt/);
   const { readFileSync } = await import("node:fs");
   const gameplay = readFileSync(new URL("../Game/AI/gameplay.js", import.meta.url), "utf8");
-  assert.match(gameplay, /const sandbox = describeSandboxForRefine\(bundle\.game, actor\);/);
+  assert.match(gameplay, /const sandbox = describeSandboxForRefine\(bundle\.game, actor, \{ decree \}\);/);
+});
+
+test("an attempt is improved as what the acting polity does, its outcome left to the turn", async () => {
+  const { describeSandboxForRefine } = await import("./sandbox.js");
+  const attempt = describeSandboxForRefine({ sandbox: true }, "Serbia", { decree: false });
+  assert.match(attempt, /what its government does to carry it out/);
+  assert.match(attempt, /Its outcome is for the simulation to decide/);
+  assert.doesNotMatch(attempt, /stated as a fact/);
+  assert.equal(describeSandboxForRefine({ sandbox: true }, "", { decree: false }), "", "an attempt for the player's own country is improved as usual");
+});
+
+test("a decree is kept through a save and marked in both order lists", async () => {
+  const { normalizeActionEntry } = await import("./gameState.js");
+  const { buildActionHistoryText } = await import("../Game/AI/promptContext.js");
+  const { collectPlayerMaterial } = await import("../Game/AI/playerFocus.js");
+  const order = normalizeActionEntry({ id: "a1", title: "Coup in Belgrade", text: "Coup in Belgrade", status: "planned", actor: "Serbia", decree: true });
+  assert.equal(order.decree, true);
+  assert.equal(normalizeActionEntry({ title: "x", text: "x", decree: "yes" }).decree, undefined);
+  assert.match(buildActionHistoryText([order]), /^- \(action\) \(as Serbia\) \(decree\) Coup in Belgrade: /);
+  assert.equal(collectPlayerMaterial({ actions: [order] }).find((item) => item.kind === "order").label, "(as Serbia) (decree) Coup in Belgrade");
 });
 
 test("the orders a turn must answer say whose they are in sandbox mode", async () => {
@@ -83,4 +104,19 @@ test("the orders a turn must answer say whose they are in sandbox mode", async (
     "Fund the shipyard",
     "(Croatia) (as Slovenia) Hold talks",
   ]);
+});
+
+test("sandbox is single player only: an engine hosting a shared game ignores it", async () => {
+  const { setHostingSharedGame } = await import("./humanPolities.js");
+  const game = { country: "Croatia", sandbox: true, observer: true };
+  try {
+    setHostingSharedGame(true, { host: "Croatia" });
+    assert.equal(isSandbox(game), false);
+    assert.equal(isObserver(game), false);
+    assert.equal(describeSandboxForSimulation(game), "", "a shared game's turn hears nothing of it");
+    assert.deepEqual(withSandbox(game, { observer: false }), { country: "Croatia", sandbox: true, observer: false }, "the saved switches are kept for single player");
+  } finally {
+    setHostingSharedGame(false);
+  }
+  assert.equal(isSandbox(game), true);
 });

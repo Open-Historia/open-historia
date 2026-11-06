@@ -28,7 +28,7 @@ import { useFailureReportButton } from "../../runtime/saveDebugLog.js";
 import { queuedActionIds, selectSavedSuggestions, suggestionsFellBack } from "./actionSuggestions.js";
 import { ProjectsBoard, ProjectsTabIcon } from "./projects.jsx";
 import { loadCountryNames } from "../../runtime/assets.js";
-import { isObserver, isSandbox } from "../../runtime/sandbox.js";
+import { observerHere, sandboxHere } from "./sandboxHere.js";
 
 dayjs.extend(advancedFormat);
 
@@ -37,8 +37,8 @@ const selectGameHeader = (game) => ({
     country: game?.country || "",
     gameDate: game?.gameDate || "",
     round: Number(game?.round) || 0,
-    sandbox: isSandbox(game),
-    observer: isObserver(game),
+    sandbox: sandboxHere(game),
+    observer: observerHere(game),
 });
 
 const ACTIONS_STYLE_ID = "actions-style";
@@ -151,7 +151,7 @@ const aiFailureIncident = (kind, title, { reason = "", rawResponse = "" } = {}) 
 const ORDER_NOT_SAVED = "Your order could not be saved, so the next time skip would not see it. Try again.";
 const ORDER_NOT_REMOVED = "The order could not be removed, so the next time skip would still carry it out. Try again.";
 
-const createManualAction = (input, actor = "") =>
+const createManualAction = (input, actor = "", decree = false) =>
 normalizeActionEntry({
     kind: "action",
     rawInput: input,
@@ -160,12 +160,14 @@ normalizeActionEntry({
     text: input,
     title: input,
     ...(actor ? { actor } : {}),
+    ...(decree ? { decree: true } : {}),
 });
 
 // Sandbox mode (runtime/sandbox.js): the polity an order is given for, typed or
-// picked from the names the map knows, and the Write event and GM command
+// picked from the names the map knows; whether it is an attempt the turn judges
+// or a decree that happens as written; and the Write event and GM command
 // shortcuts into the Cheats panel. Outside sandbox it is not shown.
-const SandboxBar = ({ country, observer, actor, onActorChange }) => {
+const SandboxBar = ({ country, observer, actor, onActorChange, decree, onDecreeChange }) => {
     const [names, setNames] = React.useState([]);
     React.useEffect(() => {
         let cancelled = false;
@@ -193,6 +195,14 @@ const SandboxBar = ({ country, observer, actor, onActorChange }) => {
         />
         <datalist id="oh-sandbox-actors">{names.map((name) => <option key={name} value={name} />)}</datalist>
         </label>
+        <div role="group" aria-label="Order type" style={{ display: "flex", gap: "0.2rem" }}>
+        {[[false, "Attempt", "The turn decides how it turns out, by the usual rules"], [true, "Decree", "It happens as written; the turn only tells how"]].map(([value, label, title]) => (
+            <button key={label} type="button" className="oh-tap-row" aria-pressed={decree === value} onClick={() => onDecreeChange(value)} title={title}
+            style={{ ...chip, background: decree === value ? "rgba(125,211,252,0.18)" : "none", borderColor: decree === value ? "rgba(125,211,252,0.6)" : "rgba(255,255,255,0.14)" }}>
+            {label}
+            </button>
+        ))}
+        </div>
         <button type="button" className="oh-tap-row" style={chip} onClick={() => openCheats("events")} title="Write an event onto the timeline yourself">Write event</button>
         <button type="button" className="oh-tap-row" style={chip} onClick={() => openCheats("master-ai")} title="Describe any change and the AI applies it to the world">GM command</button>
         </div>
@@ -247,6 +257,11 @@ const ActionItem = ({ action, onDelete, locked = false }) => {
         }}
         >
         <div style={{ flex: 1, minWidth: 0 }}>
+        {normalized.decree && (
+            <div style={{ color: "#fcd34d", fontSize: "0.68rem", fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase" }}>
+            Decree
+            </div>
+        )}
         {normalized.actor && (
             <div style={{ color: "#7dd3fc", fontSize: "0.68rem", fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase" }}>
             {`As ${normalized.actor}`}
@@ -692,7 +707,11 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
     const [inputValue, setInputValue] = React.useState("");
     // Sandbox mode: whom the next order is given for ("" = the player's country).
     const [actor, setActor] = React.useState("");
+    // Attempt or decree for the next order; a decree by default for an observer,
+    // who directs the world rather than playing a part in it.
+    const [decreeChoice, setDecreeChoice] = React.useState(null);
     const game = useRuntimeState("game", selectGameHeader);
+    const decree = decreeChoice ?? game.observer;
     const country = game.country || "your nation";
     // Full display name for the header, never the code.
     const countryDisplayName = useCountryDisplayName(country);
@@ -813,7 +832,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
         }
         setOpenSection("submitted");
 
-        const nextAction = createManualAction(trimmed, actingAs && actingAs !== game.country ? actingAs : "");
+        const nextAction = createManualAction(trimmed, actingAs && actingAs !== game.country ? actingAs : "", game.sandbox && decree);
         if (!nextAction) {
             return;
         }
@@ -860,7 +879,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
         const controller = new AbortController();
         improveAbortRef.current = controller;
         try {
-            const refined = await refinePlayerAction(trimmed, { persist: false, signal: controller.signal, actor: game.sandbox ? actor.trim() : "" });
+            const refined = await refinePlayerAction(trimmed, { persist: false, signal: controller.signal, actor: game.sandbox ? actor.trim() : "", decree: game.sandbox && decree });
             // The canned template is no improvement on what the player wrote:
             // their text stays, and the panel says the AI failed.
             if (refined?.source === "fallback") {
@@ -1241,7 +1260,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
 
         {game.sandbox && (
             <div style={{ backgroundColor: "rgba(0,0,0,0.2)" }}>
-            <SandboxBar country={countryDisplayName} observer={game.observer} actor={actor} onActorChange={setActor} />
+            <SandboxBar country={countryDisplayName} observer={game.observer} actor={actor} onActorChange={setActor} decree={decree} onDecreeChange={setDecreeChoice} />
             </div>
         )}
         <div

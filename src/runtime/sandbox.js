@@ -11,11 +11,19 @@
 //     places read it as "the country in focus"; it is simply no longer the
 //     player's, and the turn simulates it like every other power.
 //
-// Import-free: the rules on plain data, tested under bare node.
+// Single player only: in a shared game one person steering every country would
+// steer the other players' too. The engine hosting a shared game ignores the
+// switches (a sandbox save opened to friends plays as an ordinary game), and
+// the panels grey them out on a host's or a guest's page.
+//
+// Pure rules on plain data, tested under bare node; humanPolities.js is the
+// one import, for whether this engine is hosting a shared game.
+
+import { hostingSharedGame } from "./humanPolities.js";
 
 const asText = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 
-export const isSandbox = (game) => game?.sandbox === true;
+export const isSandbox = (game) => game?.sandbox === true && !hostingSharedGame();
 export const isObserver = (game) => isSandbox(game) && game?.observer === true;
 
 // The polity an order is given for: its own actor, else the player's country.
@@ -25,8 +33,8 @@ export const actorOf = (action, game) => asText(action?.actor) || (isObserver(ga
 // The game with sandbox switched on or off. Observer needs sandbox, so turning
 // sandbox off turns observer off too.
 export const withSandbox = (game, { sandbox, observer } = {}) => {
-  const nextSandbox = sandbox ?? isSandbox(game);
-  return { ...game, sandbox: nextSandbox, observer: nextSandbox ? (observer ?? isObserver(game)) : false };
+  const nextSandbox = sandbox ?? game?.sandbox === true;
+  return { ...game, sandbox: nextSandbox, observer: nextSandbox ? (observer ?? game?.observer === true) : false };
 };
 
 // What every turn is told, LAST in its prompt so it outranks the player-centred
@@ -37,8 +45,8 @@ export const describeSandboxForSimulation = (game) => {
   const orders = "The player may give orders for ANY polity; each such order is marked (as <polity>) in the order list. "
     + "An order marked (as X) is X's own government's decision: carry it out as X's sovereign act, authorised exactly as the player's own orders are, "
     + "with the same rules for consent, means and plausible outcomes. Cite its id in actionIds like any other order. "
-    + "An order written as a plain statement of what happens (\"the opposition topples the government\", not \"we back the opposition\") is the game master's decree: "
-    + "it happens as written, in an event with the operations that make it real; how it happens is yours to tell.";
+    + "An order marked (decree) is the game master's decree: it happens as written, in an event with the operations that make it real; how it happens is yours to tell, whether it happens is not. "
+    + "An order without that mark is an attempt, and its outcome is yours to judge, however it is worded.";
   if (isObserver(game)) {
     return "[Sandbox Mode — Observer]\n"
       + "No polity is human-controlled in this game. The player watches the world and intervenes from outside it. "
@@ -52,13 +60,19 @@ export const describeSandboxForSimulation = (game) => {
 };
 
 // What Improve action text (the descriptionToAction task) is told in sandbox
-// mode: the player directs the world, so the order is what HAPPENS, not a
-// government's attempt to make it happen. "student lead movement topples
-// corrupt Vučić's government" became "Provide covert backing to the opposition
-// ... to topple the Vučić government": a foreign power funding a hope.
-export const describeSandboxForRefine = (game, actor = "") => {
+// mode. A decree is what HAPPENS, not a government's attempt to make it happen:
+// "student lead movement topples corrupt Vučić's government" became "Provide
+// covert backing to the opposition ... to topple the Vučić government", a
+// foreign power funding a hope. An attempt is what the acting polity does, its
+// outcome left to the turn.
+export const describeSandboxForRefine = (game, actor = "", { decree = true } = {}) => {
   if (!isSandbox(game)) return "";
   const as = asText(actor);
+  if (!decree) {
+    return as
+      ? `[Sandbox Mode]\nThis order is given as ${as}: write it as ${as}'s own decision and what its government does to carry it out, with ${as} as the subject. Its outcome is for the simulation to decide.`
+      : "";
+  }
   return "[Sandbox Mode]\n"
     + "The player is directing the world as its game master, not petitioning as a government. "
     + (as
