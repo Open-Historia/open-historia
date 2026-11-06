@@ -359,6 +359,7 @@ func _game_part() -> void:
 	await _wait(0.6)
 	main.game_menu.call("toggle")
 	await _until(func() -> bool: return bool(main.game_menu.call("is_open")), 8.0)
+	await _wait(1.0)
 	main.game_menu.call("_show_tab", "settings")
 	await _wait(0.5)
 	var colours: Array = []

@@ -522,9 +522,10 @@ func _build_boot() -> void:
 		devtools.call("setup", engine, self)
 		hotkeys.devtools_requested.connect(func() -> void: _call(devtools, "toggle"))
 	shell = ShellBoot.new()
-	shell.language_switch = func(code: String) -> void:
-		await i18n.set_language(code)
+	shell.language_switch = func(code: String) -> String:
+		var shown: String = await i18n.switch_language(code)
 		_plain_title()
+		return shown
 	add_child(shell)
 	shell.map_view = map_view
 	shell.setup(engine, menu.loader, hud)
