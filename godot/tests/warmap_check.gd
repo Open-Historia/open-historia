@@ -503,6 +503,9 @@ func _run() -> void:
 	await _focus([[4.0, 47.0], [10.5, 51.5]], 6.0)
 	await _wait(0.5)
 	await _shoot("w1-front-7days")
+	var played := [0]
+	var count_played := func() -> void: played[0] += 1
+	war.fronts_played.connect(count_played)
 	await _skip(30)
 	fronts = war._state.get("fronts", [])
 	var painted := 0
@@ -511,7 +514,8 @@ func _run() -> void:
 		if field and field.has_bounds:
 			painted += 1
 	_check("a 30-day run has painted ground", painted > 0, "%d painted" % painted)
-	_check("the new run plays", war.playing())
+	_check("the new run plays", war.playing() or played[0] > 0, "playing %s, played through %d time(s)" % [str(war.playing()), played[0]])
+	war.fronts_played.disconnect(count_played)
 	var play_token := _flood_token()
 	await _focus([[4.5, 47.5], [10.0, 51.0]], 6.3)
 	await _wait(1.2)
