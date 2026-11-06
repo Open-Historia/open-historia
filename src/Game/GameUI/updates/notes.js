@@ -54,6 +54,23 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // "it doesnt look like missile strikes actually ever happen despite the feature technically existing" / "make story
+    // events be able to do strikes" (the owner, 2026-11-05): a strike was a battlefield line only (frontOrders), read
+    // with Fronts on and a war under way. Events now carry their own (impacts.strikes), placed by frontTurn.js
+    // placeStrikes and kept for the map whatever the battlefields do.
+    id: "2026-11-strikes-on-the-map",
+    kind: "minor",
+    date: "2026-11-05",
+    channel: "beta",
+    banners: [
+      {
+        title: "Missile strikes on the map",
+        items: [
+          "Missile launches and bombing runs the story tells of are now drawn on the map in every game, not only on a battlefield.",
+        ],
+      },
+    ],
+  },  {
     // "while scrolling, sometimes some ui elements trail behind for some reason creating a really wierd effect" (the
     // owner, 2026-11-05): a wheel scroll moved lists under a still cursor, and every row and button that passed under
     // it lit up and eased back out (styles.css control transitions). runtime/scrollHoverFreeze.js holds hover still
