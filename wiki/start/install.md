@@ -33,8 +33,11 @@ Download the zip that matches your Mac — **`Open-Historia-mac-arm64.zip`** for
 (M1 and later) or **`Open-Historia-mac-x64.zip`** for Intel — then unzip it and drag
 **Open Historia** to your Applications folder.
 
-The app is not code-signed, so on first launch macOS will refuse to open it by double-click.
-Right-click the app and choose **Open**, then confirm. You only have to do this once.
+The app is not code-signed, so on first launch macOS will refuse to open it: it says it cannot
+check the app for malicious software, and the app closes. Choose **Done**, then open
+**System Settings → Privacy & Security**, scroll down to the line about Open Historia and choose
+**Open Anyway**, then confirm. On macOS 14 and earlier, right-clicking the app and choosing
+**Open** does the same. You only have to do this once.
 
 If macOS says instead that the app is *damaged*, it has quarantined the download. Clear that in
 Terminal and open the app again:

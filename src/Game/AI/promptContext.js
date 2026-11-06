@@ -1903,6 +1903,7 @@ export const buildPromptContext = async (bundle, {
   // A map that is not the active game's — a scenario's, in the Workshop
   // (gameplay.js generateScenarioPrehistory): { regionCatalog, nationTags }.
   mapSource = null,
+  pause = null,
   requiredKeys = null,
   respondingPolityName = "",
   targetDate = "",
@@ -1947,10 +1948,12 @@ export const buildPromptContext = async (bundle, {
     });
   }
 
+  await pause?.();
   if (wants("citiesSummary")) {
     result.citiesSummary = await buildCityCatalogText(bundle.world);
   }
 
+  await pause?.();
   if (wants("recentEvents")) {
     result.recentEvents = buildEventHistoryText(bundle.events, { currentDate: bundle.game?.gameDate,
       limit: eventLimit,

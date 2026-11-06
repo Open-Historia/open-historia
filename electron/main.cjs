@@ -20,9 +20,12 @@ const { BETA_APP_NAME, readChannel } = require("./channel.cjs");
 const { MULTIPLAYER_APP_NAME } = require("./channel.cjs");
 const { createLayeredUpdater } = require("./layeredUpdate.cjs");
 const { attachZoomKeys } = require("./zoomKeys.cjs");
+const { installMicrophonePermission } = require("./microphone.cjs");
+const { createSystemSpeech } = require("./speechSystem.cjs");
 const { createPayloadUpdater } = require("./payloadUpdate.cjs");
 const payloadBoot = require("./payloadBoot.cjs");
 const { clearOtherPortsCaches } = require("./staleCaches.cjs");
+const { fetchAppFileOnce } = require("./appFile.cjs");
 
 // The map is drawn with WebGL, and without it the game is a black window with
 // "WebGL Not Available" on it (seen on a player's Mac, 2026-10-12, in the middle
@@ -335,6 +338,7 @@ const setupAutoUpdater = () => {
     runningVersion: runningVersion(),
     // Nothing to install: the files are in place, and a new start runs them.
     relaunch: () => {
+      logMain("info", "updater.relaunch", "Restarting into the updated files.");
       app.relaunch();
       app.exit(0);
     },
@@ -519,6 +523,12 @@ const installDesktopDisplayMode = () => {
       return { supported: true, mode };
     },
   };
+};
+
+// The Advisor's microphone through the system's own speech recognition
+// (speechSystem.cjs), for POST /api/desktop/speech/listen.
+const installSystemSpeech = () => {
+  globalThis.__ohSystemSpeech = createSystemSpeech({ log: (level, event, message) => logMain(level, event, message) });
 };
 
 // --- map data ---------------------------------------------------------------
@@ -862,6 +872,11 @@ const createMainWindow = () => {
   });
   // Ctrl+= zooms in as Ctrl+- zooms out (zoomKeys.cjs).
   attachZoomKeys(win.webContents);
+  // The Advisor's microphone, for the game's own page only (microphone.cjs).
+  installMicrophonePermission(win.webContents.session, {
+    origin: () => `http://localhost:${process.env.PORT || 3000}`,
+    systemPreferences: require("electron").systemPreferences,
+  });
   // Links to GitHub/Discord open in the real browser rather than replacing the
   // game with a page the player cannot navigate back from.
   //
@@ -934,6 +949,9 @@ const createMainWindow = () => {
     // The display mode chosen last time (installDesktopDisplayMode).
     if (currentDisplayMode !== "windowed") applyDisplayMode(win, currentDisplayMode);
     win.show();
+    // How far a start got: an app that closes before this line never showed
+    // its window.
+    logMain("info", "window.shown", `The game's window is up (${currentDisplayMode}).`);
     // The game's window is up. When these files are a set an update put
     // together, that is what says they start (electron/bootstrap.cjs counts a
     // start that never gets here, and gives the set up after two).
@@ -1032,11 +1050,36 @@ const startServer = async () => {
   await import(`file://${path.join(APP_ROOT, "server", "server.js").replace(/\\/g, "/")}`);
 };
 
+// An unsigned Mac app opened where it was downloaded, rather than from the
+// Applications folder it was dragged to, is run by macOS from a temporary
+// read-only copy (App Translocation). Restarting from that copy is not to be
+// relied on: an update installed at launch that restarts the app can leave the
+// player with a window that opened and closed. There the update is left for the
+// next start, which runs it, and the game opens at once.
+const runsTranslocated = () => process.platform === "darwin" && process.execPath.includes("/AppTranslocation/");
+
 const boot = async () => {
   // Which copy of the app's files this start runs: the installed ones, or a
   // set an update put together (electron/bootstrap.cjs decided, and says why).
   const files = globalThis.__ohPayload;
-  logMain("info", "app.files", files?.root ? `update ${files.build}, from ${files.root}` : `as installed (${files?.reason || "no bootstrap"})`);
+  logMain("info", "app.files", files?.root ? `update ${files.build}, from ${files.root}` : `as installed (${files?.reason || "no bootstrap"})`, {
+    // Which computer this start is on: a report of an app that will not open
+    // says little without the system and the chip.
+    system: `${process.platform} ${process.arch} ${(() => {
+      try {
+        return require("node:os").release();
+      } catch {
+        return "";
+      }
+    })()}`,
+    electron: process.versions.electron,
+    // Where the app runs from: the Applications folder, where it was
+    // downloaded, or macOS's temporary copy of it (runsTranslocated).
+    from: path.dirname(process.execPath),
+  });
+  // The server's port can be taken after the free one was found; it reports
+  // that here, so the player is told rather than the app closing (server.js).
+  globalThis.__ohFatal = reportFatalBootError;
   const updater = installAutoUpdater();
   // Opening the game installs a waiting update before anything else starts
   // (electron/launchUpdate.cjs); the banner is for one found while it is open.
@@ -1050,6 +1093,7 @@ const boot = async () => {
     // beta has nothing newer to offer.
     send: (payload) => sendToSetup("setup:update", { ...payload, betaOffer: !IS_BETA }),
     waitForLater: waitForUpdateLater,
+    canRestart: () => !runsTranslocated(),
     log: logMain,
   }).catch((error) => {
     logMain("warn", "updater.launchFailed", String(error?.message || error));
@@ -1058,8 +1102,20 @@ const boot = async () => {
   ipcMain.removeHandler("setup:update-later");
   // Quitting into the installer, which reopens the game on the new version.
   if (launchUpdate.installing) return;
+  // This app's own file, downloaded once per install or update and never
+  // again (electron/appFile.cjs): how installs are counted. In the background;
+  // the game opens whether it goes through or not.
+  void fetchAppFileOnce({
+    channel: CHANNEL,
+    packaged: app.isPackaged,
+    markFile: path.join(USER_ROOT, "app-file.json"),
+    fs,
+    fetchImpl: (url, init) => require("electron").net.fetch(url, init),
+    log: logMain,
+  });
   installSharedGameEngine();
   installDesktopDisplayMode();
+  installSystemSpeech();
   relocateLegacyStockMap();
   relocateOwnFolderMap();
   let pending = missingAssets();
@@ -1158,20 +1214,31 @@ const registerDiscordLaunch = () => {
   }
 };
 
+// The game's window, brought forward: by a second launch, and on macOS by a
+// click on the app in the Dock or in Finder while it is running, which starts
+// nothing new and used to show nothing either.
+const bringGameForward = () => {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  if (!mainWindow.isVisible()) mainWindow.show();
+  mainWindow.focus();
+};
+
 if (!app.requestSingleInstanceLock()) {
+  // Another copy of the app holds the lock and is brought forward instead.
+  // Said in the log, because from outside this start looks like an app that
+  // opens and closes at once.
+  logMain("info", "app.alreadyRunning", "Another copy of the app is running; it was brought forward and this start closed.");
   app.quit();
 } else {
   registerDiscordLaunch();
-  app.on("second-instance", () => {
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) mainWindow.restore();
-      mainWindow.focus();
-    }
-  });
+  app.on("second-instance", bringGameForward);
+  app.on("activate", bringGameForward);
   app.whenReady().then(boot).catch(reportFatalBootError);
   app.on("window-all-closed", () => app.quit());
   app.on("before-quit", () => {
     quitting = true;
+    globalThis.__ohSystemSpeech?.stopAll();
   });
   ipcMain.handle("setup:cancel", () => app.quit());
   // "Download the beta" on the update screen: in the player's own browser, so

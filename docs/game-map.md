@@ -106,7 +106,53 @@ Attached to every map instance. With terrain on, MapLibre 5.19 repeats work whos
 
 Each patch is skipped if the method it relies on has gone, and `terrainCaches.test.js` fails on an upgrade to say so.
 
-**Known and left alone: the drape pool thrashes.** Each terrain tile keeps one 1024 px texture per stack of layers. Custom layers and symbols split the stacks, so a game with a war has 4. MapLibre's render pool reuses any slot not in use at that moment before it makes a new one, and each stack frees its slots when it ends, so the next stack overwrites them. With 8 tiles and 4 stacks, every tile is redrawn every frame. Growing the pool to `tiles × stacks` (8 MB of video memory a slot) cut the main thread's work while panning by a further quarter, but it added about 300 MB of video memory and a stall of 0.5 to 1.9 s on the first pan of every session, even with the slots made and cleared ahead of time. MapLibre 6 reworks the pool.
+#### Drapes
+
+With terrain on, the flat layers (`background`, `fill`, `line`, `raster`, `hillshade`, `color-relief`) are not drawn to the screen. Each terrain tile paints them into a 1024 px texture, its **drape**, and the terrain mesh is drawn with it. Custom layers and symbols split the layers into **stacks**, each with its own drape, so a game with a war has 3 or 4. Drapes are meant to last between frames, and a pan changes none of them.
+
+MapLibre's own pool never let them last. It reused any free slot before making a new one, and each stack freed its slots as it ended, so the next stack overwrote them: with two stacks or more, every tile was painted again every frame, on a map that had not changed. `rememberDrapes` makes the cache work:
+
+| What | Why |
+|---|---|
+| **A slot holding a drape on screen is not reused** (`getOrCreateFreeObject`) | The fix itself. When there are more drapes than slots it gives up the newest free slot, not the oldest: oldest first loses them all on a cycle through the tiles |
+| **All slots share one depth and stencil buffer** | Painting a drape tests no depth and clears its stencil first. A slot is 4 MB in place of 8 |
+| **64 slots** in place of 30 | Room for every stack of a full screen (12 tiles at z4.2 and 3 stacks is 36), in about the memory the 30 took |
+| **Tiles of sources that are not draped are ignored** (`keepDrapesFromOtherTiles`) | Units, labels and cities reloading freed the tile's drapes though nothing in them changed |
+
+Once drapes last, anything that changes their pixels has to end them, or the map shows stale paint. MapLibre watches sources, the style and feature state. The rest is here, and each was seen to go wrong when left out:
+
+| Changes a drape | Ended by |
+|---|---|
+| **Zoom:** every line (its width in tile units) and any paint that varies with zoom | `drapeView` |
+| **Bearing:** the hillshade's light | `drapeView` |
+| **Pitch** (raster filtering), **pixel scale** (line widths on the globe), **the map's size** (line edges) | `drapeView` |
+| **Anything in transition:** paint easing, a canvas playing | `style.hasTransitions()`: drapes last one frame, and one more after it ends |
+| **A canvas source taking up its picture.** It fires no event, and its `pause()` uploads once more | Counting uploads in `prepare`. Canvas sources are found by `source.canvas`: their `type` says `"image"` |
+| **An elevation tile arriving.** `backfillDEM` rewrites its neighbours' borders too, and MapLibre frees only the tile's own drape: a one-pixel line of stale hillshade along tile edges | Every drape is freed. It is rare, and depends on the order tiles arrive, so one clean test run proves nothing: run it several times |
+
+So a pan reuses the drapes and a zoom paints them all, as it always did. At a still frame in a war game the GPU's work falls by three quarters and the draw calls by half.
+
+Tried and dropped: keeping a stack through a zoom when its evaluated paint has not changed. The bottom stack is the expensive one and has no lines, but its relief's `raster-opacity` varies from z3 to z4.85, the range most played in.
+
+**To test a change here:** compare a frame against the same frame after `map.terrain.tileManager.freeRtt()`, byte for byte (`gl.readPixels` straight after `map.redraw()`), after each kind of change. Move the camera by `map.transform.setZoom()` too: `jumpTo` fires `zoomend`, which frees the drapes by another route and hides a stale one, and a wheel zoom fires nothing between its frames. Turn off the globe's idle spin first (`map_disable_idle_rotation`), or the map moves between the two frames.
+
+### Clipping masks (`clippingMasks.js`)
+
+Each tile's fills and lines are clipped to the tile by a mask in the stencil buffer. MapLibre draws the masks again whenever the source changes from one layer to the next: about 30 times a frame, each about a screenful of stencil writes. Most sources share their tiles, and then the stencil already holds exactly those masks. `attachClippingMasks` keeps them when the tiles, the framebuffer and the kind of target are the same.
+
+On a flat map with terrain off this was half of all draw calls and two thirds of the GPU's work, which matters most on the phones where terrain starts off. Whatever else writes to the stencil clears `currentStencilSource`, and the masks are drawn again after it: `clippingMasks.test.js` checks that MapLibre still does, and that no custom layer of this game writes to the stencil.
+
+### Source caches (`sourceCaches.js`)
+
+MapLibre works out each source on its own, every frame, though a game has about 25 in use and 20 of them share the same tile size and zoom range. `attachSourceCaches` shares what is the same. Nothing here changes a pixel; each keeps exactly what would be worked out again.
+
+| What | Cost before | Now |
+|---|---|---|
+| **Tile zoom.** With terrain on, each tile visited costs 30 powers and cosines, for every source | The top item of the main thread's own time while panning | One `calculateTileZoom` for all sources, kept by its arguments. MapLibre keeps its default to itself, so `setSourceTileLodParams` is asked for it with the default's own numbers |
+| **Tile boxes.** Each tile's bounding box, with its elevation looked up, for every source | Half of `coveringTiles` | Kept for one `style._updateSources`. Outside that sweep they are worked out as before: the terrain's own update runs between sweeps, and nothing can load or move during one |
+| **Tile state.** A tile coming back from the cache read every feature to apply their state, changed or not | A spike on each tile that returns while panning or zooming, larger on bigger maps | Skipped while the source's state `revision` and the tile's `buckets` are as they were when it was last applied: a change bumps the revision and a reload makes new buckets |
+
+The first two use numbers for keys (`tileBoxKey`): text keys, made from floats on every tile visited, cost what the caches saved. Keeping `getVisibleCoordinates` for a frame was tried and dropped: two of its three calls differ by `symbolLayer`, and it saved a tenth of a small item.
 
 ### `terrain` memo
 

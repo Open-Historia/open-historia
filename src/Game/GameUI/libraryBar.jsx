@@ -195,7 +195,7 @@ const DEFAULT_SCENARIO_COVER = "/scenario-placeholder.webp";
 const COVER_TINT = "inset 0 0 0 100vmax rgba(4,6,12,0.56)";
 const CARD_COVER_FADE_STYLE = {
   bottom: 0,
-  boxShadow: "inset 0 -0.8rem 0.5rem 0 #12141a",
+  boxShadow: "inset 0 -0.8rem 0.5rem 0 var(--oh-ui-surface, #12141a)",
   height: "1.2rem",
   inset: "auto 0 0 0",
   pointerEvents: "none",
@@ -245,7 +245,7 @@ const themeButtonStyle = {
 };
 
 const themeSurfaceStyle = {
-  background: "#12141a",
+  background: "var(--oh-ui-surface, #12141a)",
   border: "1px solid rgba(255,255,255,0.09)",
   boxShadow: "0 14px 32px rgba(0,0,0,0.45)",
 };
@@ -413,8 +413,8 @@ const MENU_RAIL_ICON = 22;
 // A page's button on the rail: a rounded square, its icon over its name.
 const railButtonStyle = (active) => ({
   alignItems: "center",
-  background: active ? "rgba(255,255,255,0.11)" : "rgba(255,255,255,0.035)",
-  border: `1px solid ${active ? "rgba(255,255,255,0.24)" : "rgba(255,255,255,0.07)"}`,
+  background: active ? "var(--oh-ui-active, rgba(255,255,255,0.11))" : "rgba(255,255,255,0.035)",
+  border: `1px solid ${active ? "var(--oh-ui-accent, rgba(255,255,255,0.24))" : "rgba(255,255,255,0.07)"}`,
   borderRadius: "16px",
   boxShadow: active ? "inset 0 1px 0 rgba(255,255,255,0.06), 0 8px 20px rgba(0,0,0,0.28)" : "none",
   color: active ? "#ffffff" : "rgba(236,236,240,0.7)",
@@ -440,7 +440,7 @@ const MenuRail = ({ activeTab, onTab, onOpenSettings, onOpenHistory }) => (
   <nav
     style={{
       alignItems: "center",
-      background: "#0b0b0d",
+      background: "var(--oh-ui-header, #0b0b0d)",
       borderRight: "1px solid rgba(255,255,255,0.08)",
       display: "flex",
       flexDirection: "column",
@@ -957,7 +957,7 @@ const ScenarioCard = ({ onClone, onEdit, onPlay, onSelect, onUpdate, scenario, s
     <div
       style={{
         ...themeSurfaceStyle,
-        background: "#12141a",
+        background: "var(--oh-ui-surface, #12141a)",
         borderColor: selected ? `${scenario.accentColor}88` : "rgba(255,255,255,0.09)",
         borderRadius: "24px",
         boxShadow: selected ? `0 0 0 1px ${scenario.accentColor}66, 0 16px 38px rgba(0,0,0,0.55)` : "0 14px 32px rgba(0,0,0,0.45)",
@@ -1886,10 +1886,10 @@ const EDITOR_SECTION_BLURBS = Object.freeze({
   bundles: "Download it as one file to share or keep.",
 });
 
-const EDITOR_PANEL = "#12141a";
-const EDITOR_NAV = "#0d0f14";
+const EDITOR_PANEL = "var(--oh-ui-surface, #12141a)";
+const EDITOR_NAV = "var(--oh-ui-header, #0d0f14)";
 const editorCardStyle = {
-  background: "#171a22",
+  background: "var(--oh-ui-raised, #171a22)",
   border: "1px solid rgba(255,255,255,0.08)",
   borderRadius: "16px",
   marginBottom: "0.95rem",
@@ -2019,7 +2019,7 @@ const EditorDrawer = ({
           className="oh-tap-row"
           onClick={onSuggestChanges}
           title="Send your changes to this community scenario's author, who can accept or reject each one."
-          style={touchFit({ ...themeButtonStyle, background: "rgba(43,193,243,0.18)", borderColor: "rgba(43,193,243,0.45)", color: "#fff", flex: isMobile ? "1 1 9rem" : undefined, width: isMobile ? undefined : "100%" }, touch)}
+          style={touchFit({ ...themeButtonStyle, background: "color-mix(in srgb, var(--oh-ui-accent, #2bc1f3) 18%, transparent)", borderColor: "color-mix(in srgb, var(--oh-ui-accent, #2bc1f3) 45%, transparent)", color: "#fff", flex: isMobile ? "1 1 9rem" : undefined, width: isMobile ? undefined : "100%" }, touch)}
           type="button"
         >
           Suggest changes
@@ -4711,7 +4711,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         <div style={{ position: "fixed", inset: 0, zIndex: 10050 }}>
           <Suspense
             fallback={
-              <div style={{ position: "fixed", inset: 0, background: "#111113", color: "white", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "sans-serif" }}>
+              <div style={{ position: "fixed", inset: 0, background: "var(--oh-ui-bg, #111113)", color: "white", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "sans-serif" }}>
                 Loading map editor…
               </div>
             }
@@ -4780,7 +4780,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
             onClick={(e) => e.stopPropagation()}
             style={{
               ...themeSurfaceStyle,
-              background: "#11141a",
+              background: "var(--oh-ui-surface, #11141a)",
               border: "1px solid rgba(255,255,255,0.14)",
               boxShadow: "0 24px 64px rgba(0,0,0,0.85), 0 0 0 1px rgba(255,255,255,0.06)",
               borderRadius: 18,
@@ -5185,7 +5185,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         <div
           style={{
             background:
-              "#0f0f11",
+              "var(--oh-ui-bg, #0f0f11)",
             color: "#fff",
             display: "flex",
             flexDirection: isMobile ? "column" : "row",
@@ -5196,7 +5196,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
           }}
         >
           {isMobile ? (
-            <div style={{ background: "rgba(15,15,17,0.92)", backdropFilter: "blur(14px)", borderBottom: "1px solid rgba(255,255,255,0.08)", flexShrink: 0 }}>
+            <div style={{ background: "var(--oh-ui-overlay-strong, rgba(15,15,17,0.92))", backdropFilter: "blur(14px)", borderBottom: "1px solid rgba(255,255,255,0.08)", flexShrink: 0 }}>
               <div
                 style={{
                   alignItems: "center",

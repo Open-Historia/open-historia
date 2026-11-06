@@ -506,11 +506,9 @@ test("the game's map turns and tilts with the right button and the trackpad, and
   assert.match(world, /pitchWithRotate=\{true\}/);
   assert.match(world, /maxPitch=\{60\}/);
   assert.match(world, /touchPitch=\{false\}/);
-  // The camera reaches the whole Mercator square on a scenario's own map; the
-  // real Earth stops at 80°S (Avatar: Resurrection lost its southern rows).
+  // How far the camera goes is cameraBounds.js's (its own tests).
   assert.match(world, /maxBounds=\{maxBounds\}/);
-  assert.match(world, /\[-Infinity, ownMapShown \? -MERCATOR_MAX_LAT : -80\]/);
-  assert.match(world, /const ownMapShown = effectiveCustomBg\?\.kind === "image" \|\| effectiveCustomBg\?\.kind === "vector";/);
+  assert.match(world, /const maxBounds = useMemo\(\(\) => cameraMaxBounds\(\{/);
   assert.doesNotMatch(world, /dragRotate=\{false\}/);
   assert.match(world, /attachMapGestures\(mapInstance, \{ still: reduceMotionEnabled \}\)/);
   const tools = read("WarRoomTools.jsx");

@@ -14,6 +14,7 @@ Both read one list: `src/Game/GameUI/updates/notes.js`. **Writing that list is p
 | `src/Game/GameUI/updates/UpdateNotice.jsx` | The notice. It pages through banners (‹ › arrows, markers, Skip, Next and the last banner's button), and draws a minor banner (`MinorBanner`), a major banner without a theme (`DefaultBanner`), or a theme's own page. |
 | `src/Game/GameUI/updates/UpdateHistory.jsx` | The timeline opened from the menu's logo (`libraryBar.jsx` `MenuRail`). |
 | `src/Game/GameUI/updates/updateKit.jsx` | The parts a theme is built from (see [The kit](#the-kit)). |
+| `src/Game/GameUI/updates/notesReleases.js`, `ReleaseNotice.jsx`, `releaseNotice.css` | Releases: a version jump told as a page that scrolls (see [Releases](#releases-a-version-jump-told-in-full)). |
 | `src/Game/GameUI/updates/themes/` | One theme per major update that has its own look: `<Name>.jsx` (its pages), `<name>Chrome.js` (its arrows, markers, Skip and button), `index.js` (the registry), and `ThemeTemplate.jsx` to copy. |
 | `src/App.jsx` | Shows the notice as the door's leaves part, or at once when the door is off. |
 
@@ -83,7 +84,7 @@ A **major** update. It has one banner per headline: several banners are paged wi
 
 An update that reached players first on a test channel says so with `channel: "beta"` or `channel: "alpha"`; the history marks it.
 
-`icon` is one of the kit's `ICONS`: `chess`, `swords`, `snow`, `wall`, `plane`, `ship`, `flag`, `eye`, `map`, `gear`, `star`, `book`, `people`, `phone` or `note`. Add one to `ICONS` if none fits.
+`icon` is one of the kit's `ICONS`: `chess`, `swords`, `snow`, `sun`, `rain`, `leaf`, `wall`, `plane`, `ship`, `flag`, `eye`, `map`, `gear`, `star`, `book`, `people`, `phone`, `palette` or `note`. Add one to `ICONS` if none fits.
 
 ### 2. Write for a player
 
@@ -149,6 +150,17 @@ node --test src/Game/GameUI/updates/updateNotices.test.js src/noGradients.test.j
 - every icon exists.
 
 Then run the full suite, `npm test`.
+
+## Releases: a version jump told in full
+
+A **release** is a version jump on the stable channel (2.5.0 was the first). It is not a banner but a page of its own that scrolls (`ReleaseNotice.jsx`, `releaseNotice.css`): a panorama the page opens on, the contents, then each chapter's picture held in place while its words pass over it and the picture plays out with the scroll, every line of every update in the chapter, and a way out at the end. The pictures run through the whole page, never only at the top.
+
+- Write it in `src/Game/GameUI/updates/notesReleases.js` (`RELEASES`), not in `notes.js`: `{ id, kind: "release", version, date, title, subtitle, lead, button, chapters, omit, leftOut }`.
+- A **chapter** is `{ key, scene, title, subtitle, lead, highlights: [{ heading, text }], updates: [ref] }`. `scene` is one of `RELEASE_SCENES` (`front`, `skies`, `table`, `world`, `map`, `yours`, `engine`); a new scene is a component in `ReleaseNotice.jsx` and its rules in `releaseNotice.css`, moved by `--p` (how far the page has scrolled through the chapter, 0 to 1) and `data-step` (which passage is in view).
+- `updates` names the updates the chapter tells: an id for the whole update, `<id>#<n>` for one banner. The page lists every line of them in their own words, which are already in the language packs, less the lines in `omit` (what a later update in the same release undid). Every notice since the release before must be named by exactly one chapter, or be in `leftOut` with why: `releaseNotice.test.js` checks.
+- A device owed a release is shown it alone (`pendingUpdates`): it tells everything under it. The history lists it as Version x.y.z, and View opens the page.
+- The release's own words (titles, leads, highlights) go into `catalog-en.json` and the 22 packs like any notice's.
+- Look at it with `?updateNotice=<its id>`.
 
 ## How a device is shown updates
 

@@ -8,7 +8,7 @@ import { decodeTroops } from "./fronts/codec.js";
 import { runFronts } from "./fronts/engine.js";
 import { frontInput, syntheticMap } from "./fronts/syntheticMap.js";
 import { eraOf, kmPerDay, yearInEra } from "./unitMotion.js";
-import { WAR_MECHANICS, eraSettingOf, normalizeMusterPoints, normalizeWarSettings, warSettingsOf } from "./warSettings.js";
+import { TECHNOLOGY_WEIGHT_MODERN, TECHNOLOGY_WEIGHT_MOST, WAR_MECHANICS, eraSettingOf, normalizeMusterPoints, normalizeWarSettings, warSettingsOf } from "./warSettings.js";
 
 test("an era is read off a year of any length, and a scenario may set it outright", () => {
   // Years of one or two digits are years (they were read as the present).
@@ -41,7 +41,7 @@ test("war settings: kept as set, every mechanic on unless the scenario turned it
   assert.equal(normalizeWarSettings(null), null);
   assert.equal(normalizeWarSettings([1]), null);
   const kept = normalizeWarSettings({ mechanics: { fatigue: false, air: true, bogus: false, weather: "no" }, era: 2, menPerCounter: 500.4, manpowerShare: 60, muster: [[1, 90], [0.5, 21]] });
-  assert.deepEqual(kept, { mechanics: { fatigue: false, air: true }, era: 2, menPerCounter: 500, manpowerShare: 60, muster: [[0.5, 21], [1, 90]] });
+  assert.deepEqual(kept, { mechanics: { fatigue: false, air: true }, era: 2, menPerCounter: 500, manpowerShare: 60, technologyWeight: null, muster: [[0.5, 21], [1, 90]] });
   const settings = warSettingsOf({ warSettings: kept });
   assert.deepEqual(Object.keys(settings.mechanics), [...WAR_MECHANICS]);
   assert.equal(settings.mechanics.fatigue, false);
@@ -54,6 +54,14 @@ test("war settings: kept as set, every mechanic on unless the scenario turned it
   assert.equal(normalizeWarSettings({ era: 4, manpowerShare: 0, menPerCounter: -3 }).era, null);
   assert.equal(normalizeWarSettings({ manpowerShare: 0 }).manpowerShare, null);
   assert.equal(normalizeWarSettings({ menPerCounter: -3 }).menPerCounter, null);
+  // The importance of technology (militaryPower.js): 0 to TECHNOLOGY_WEIGHT_MOST, to a tenth; 0 counts the men alone.
+  assert.equal(normalizeWarSettings({ technologyWeight: 2.46 }).technologyWeight, 2.5);
+  assert.equal(normalizeWarSettings({ technologyWeight: 0 }).technologyWeight, 0);
+  assert.equal(normalizeWarSettings({ technologyWeight: TECHNOLOGY_WEIGHT_MOST + 1 }).technologyWeight, null);
+  assert.equal(normalizeWarSettings({ technologyWeight: -1 }).technologyWeight, null);
+  assert.equal(normalizeWarSettings({ technologyWeight: "" }).technologyWeight, null);
+  assert.equal(warSettingsOf({}).technologyWeight, null, "the modern world's, TECHNOLOGY_WEIGHT_MODERN");
+  assert.equal(TECHNOLOGY_WEIGHT_MODERN, 4.5);
 });
 
 test("a mustering curve's two points: the smaller share first, with fewer days", () => {

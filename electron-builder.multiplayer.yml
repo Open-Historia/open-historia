@@ -40,6 +40,7 @@ files:
   - "!server/data/**"
   - "!server/**/*.test.js"
   - electron/**
+  - "!electron/speech/*.{cs,swift,plist}"
   - scripts/fetch-map-assets.mjs
   - scripts/map-assets.json
   - fmg/dist/**
@@ -48,6 +49,9 @@ files:
 
 asarUnpack:
   - scripts/**
+  # The system speech programs (electron/speechSystem.cjs; their sources stay
+  # out, above): nothing can be started from inside the archive.
+  - electron/speech/**
 
 afterPack: ./scripts/mac-adhoc-sign.cjs
 
@@ -85,6 +89,13 @@ mac:
         - arm64
   icon: electron/multiplayer-assets/icon-multiplayer.png
   category: public.app-category.strategy-games
+  # macOS shows these when the Advisor's microphone first asks; without them the
+  # system ends the app at the first getUserMedia (electron/microphone.cjs), and
+  # refuses its speech recognition program (electron/speech/macos.swift), whose
+  # prompts name this app.
+  extendInfo:
+    NSMicrophoneUsageDescription: "The Advisor's microphone turns what you say into a message."
+    NSSpeechRecognitionUsageDescription: "The Advisor's microphone uses macOS's speech recognition to turn what you say into a message. It runs on this Mac where macOS can; otherwise Apple recognises it."
   artifactName: Open-Historia-Multiplayer-mac-${arch}.${ext}
 
 linux:

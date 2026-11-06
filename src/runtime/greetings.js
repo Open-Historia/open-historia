@@ -1,0 +1,35 @@
+/*! Open Historia — "Hello" and "Welcome" in many languages © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
+// Each in its own language, never translated: the first-time setup
+// (GameUI/FirstSetup.jsx) shows them in turn, and the update notice about it
+// (updates/themes/Themes.jsx) scatters them round a globe.
+
+export const GREETINGS = Object.freeze([
+  { code: "en", hello: "Hello", welcome: "Welcome" },
+  { code: "es", hello: "Hola", welcome: "Bienvenido" },
+  { code: "fr", hello: "Bonjour", welcome: "Bienvenue" },
+  { code: "de", hello: "Hallo", welcome: "Willkommen" },
+  { code: "zh", hello: "你好", welcome: "欢迎" },
+  { code: "ar", hello: "مرحبا", welcome: "أهلاً وسهلاً" },
+  { code: "pt", hello: "Olá", welcome: "Bem-vindo" },
+  { code: "ru", hello: "Привет", welcome: "Добро пожаловать" },
+  { code: "ja", hello: "こんにちは", welcome: "ようこそ" },
+  { code: "hi", hello: "नमस्ते", welcome: "स्वागत है" },
+  { code: "it", hello: "Ciao", welcome: "Benvenuto" },
+  { code: "ko", hello: "안녕하세요", welcome: "환영합니다" },
+  { code: "tr", hello: "Merhaba", welcome: "Hoş geldiniz" },
+  { code: "nl", hello: "Hoi", welcome: "Welkom" },
+  { code: "pl", hello: "Cześć", welcome: "Witamy" },
+  { code: "fa", hello: "سلام", welcome: "خوش آمدید" },
+  { code: "id", hello: "Halo", welcome: "Selamat datang" },
+  { code: "uk", hello: "Привіт", welcome: "Ласкаво просимо" },
+  { code: "vi", hello: "Xin chào", welcome: "Chào mừng" },
+  { code: "th", hello: "สวัสดี", welcome: "ยินดีต้อนรับ" },
+  { code: "sv", hello: "Hej", welcome: "Välkommen" },
+  { code: "bn", hello: "নমস্কার", welcome: "স্বাগতম" },
+  { code: "ro", hello: "Salut", welcome: "Bun venit" },
+  { code: "hu", hello: "Szia", welcome: "Üdvözöljük" },
+  { code: "ur", hello: "آداب", welcome: "خوش آمدید" },
+  { code: "da", hello: "Goddag", welcome: "Velkommen" },
+  { code: "cs", hello: "Ahoj", welcome: "Vítejte" },
+  { code: "fi", hello: "Hei", welcome: "Tervetuloa" },
+]);

@@ -171,8 +171,9 @@ Storage rule: writing `en` (or empty) **removes** the key rather than storing it
 Puts the running game into the player's language. The full design (the three kinds of text, the packs, patterns and runs, content, the prompts, regenerating the packs) is in **[Languages & Translation](i18n.md)**. In short:
 
 1. **The interface** comes from the shipped pack (`public/lang/<code>.json`) in the 22 languages that have one (`SHIPPED_PACK_LANGUAGES`), applied to the DOM by a `MutationObserver` as it renders: exact strings, `{{slot}}` patterns and runs of text nodes (`phraseBook.js`). It never costs an AI request there.
-2. **Content** (what a scenario's author or a player made) is gathered up front, at boot and on every switch of save, and translated by the AI in a few big background requests, only while Background AI allows, then saved to the server's pack. Region names go only once they are shown.
-3. In a language **without** a pack, the interface goes through the AI as well, as content does.
+2. **Content** (what a scenario's author or a player made) is gathered up front, at boot and on every switch of save, and translated on the device by the translation model (`translationModels.js`, `translationModel.js`, `translationWorker.js`) where the language has one and the player said yes to its download, then saved to the server's pack. Region names go only once they are shown. Nothing is ever an AI request.
+3. In a language **without** a pack (only `da hu ro`, which the model covers), the interface goes to the model as well, as content does.
+4. **Switching language** (`switchLanguage(code)`) happens in place, with no reload: a language with a model asks first (a card over whatever is on screen) and downloads the model on a yes; the translator then puts every node it wrote back to English (`restoreEnglish`) and starts in the new language, firing `i18n:updated` and `oh:ui-language-changed`. Declined, the game keeps the language it had; declined at start, it goes to English.
 
 ### Lifecycle
 
@@ -198,22 +199,17 @@ The map's label builders call `translateLabel(...)` so map labels follow the UI 
 ### Server language pack
 
 - `loadServerPack()` — GET `/api/lang/:language` (shipped over saved) laid over this device's cache, so a stale local translation never hides the pack's; what the device learned that the server lacks is sent to it again.
-- `syncEntriesToServer()` — debounced (2 s) PUT `/api/lang/:language` `{ entries }` pushing newly-generated translations so every device and future session reuses them instead of paying for the same AI call.
+- `syncEntriesToServer()` — debounced (2 s) PUT `/api/lang/:language` `{ entries }` pushing newly-generated translations so every device and future session reuses them instead of translating them again. A switch of language sends what is left at once, for the language it was learned in.
 
-### Translation engine + config
+### Translation model + config
 
-`translateBatch()` (`translator.js`) late-imports `callAI` from `../Game/AI/main.jsx` and sends a strict JSON-array prompt (same length/order, keep numbers/emoji/placeholders, proper names unchanged), as a background request (`requestKind: BACKGROUND_REQUEST`). `processQueue()` sends **one batch at a time** (`chooseTranslationBatch` in `translationRules.js`: the interface of a language without a pack first, content only while `backgroundAiAllowance()` allows, never both in one request), keeps an answer only when it has one entry per string (`readTranslationReply`; a misaligned answer is dropped whole and asked again in halves, an empty entry leaves its string in English for the session), writes results into both `learned` and `unsyncedEntries`, and backs off on repeated failure, stopping for the session after the second run of failures with a line in the progress pill. It used to send 60 strings × 3 batches in parallel, which made a first pass over a new language dozens of requests nobody pressed a button for — on a free key, where a few hundred a day is the whole allowance, and where three concurrent requests is also the surest way to trip the per-MINUTE limit. A batch is now up to 240 strings or 6,000 source characters, whichever comes first: a quarter of the requests for the same language, one request in flight. On a failure the size halves (down to `BATCH_MIN_STRINGS`) and recovers on the next success, so a model that cannot hold a big batch still finishes. Live check (the probe `live-translation-probe.mjs`, in the private lab, not in this repo; Gemini, Japanese — the worst case for output tokens): 240 strings, 9.3 KB in, a complete 240-entry array back in 9 s.
+`processQueue()` (`translator.js`) runs only while the model is in use for the language (`modelInUse()`: it has one, the player said yes, it has not failed this session). It loads the model once (`ensureModel`; a copy gone from the cache downloads again, the pill showing how far), then sends batches of `MODEL_BATCH_STRINGS` (8) or `MODEL_BATCH_CHARS` (1,200) to the worker one after another; what the model answers badly (`acceptModelOutput`) stays English for the session. Each language start is a `generation`, and work begun for an older one is dropped when it ends. Until 2026-11-05 the player's AI model translated in batches of up to 240 strings; that path is gone.
 
 | Constant | Value | Meaning |
 |---|---|---|
-| `CACHE_PREFIX` | `i18n_v2_` | localStorage key prefix (`+language`): what the AI translated on this device and the server does not have yet. The pre-pack `i18n_cache_*` keys are removed on boot |
+| `CACHE_PREFIX` | `i18n_v2_` | localStorage key prefix (`+language`): what the model translated on this device and the server does not have yet. The pre-pack `i18n_cache_*` keys are removed on boot |
 | `CACHE_LIMIT` | `8000` | Max cached entries persisted (most-recent kept) |
-| `BATCH_MAX_STRINGS` | `240` | Strings per AI call, at most |
-| `BATCH_MAX_CHARS` | `6000` | Source characters per call, at most (whichever ceiling binds first) |
-| `BATCH_MIN_STRINGS` | `30` | What the batch halves down to after a failure, recovering on the next success |
 | `SCAN_DEBOUNCE_MS` | `350` | Debounce before a DOM scan |
-| `MAX_CONSECUTIVE_FAILURES` | `3` | Failures before a 60 s cooldown |
-| `MAX_COOLDOWNS` | `2` | The run of failures that stops translation for the session instead of cooling down |
 | `TRANSLATED_ATTRIBUTES` | `placeholder, title, aria-label, aria-description, alt` | Attributes also translated (and observed as they change) |
 | `SKIP_SELECTOR` | `script, style, noscript, input, textarea, [contenteditable], [data-no-translate]` | Never-translated nodes; opt out with `data-no-translate` |
 
@@ -513,3 +509,16 @@ It is **not a second log** — its entries appear in the Diagnostics log's Loggi
 The Electron process's writes use the same rules through `require()` of `server/logRedaction.js`; an older Electron whose Node cannot `require()` an ES module falls back to replacing the home folder only, and everything is redacted in full again as it is read back.
 
 Tests: `server/desktopLog.test.js` — the store against a throwaway data folder, and the routes on a real server in a child process (including a LAN caller being refused the clear).
+
+## World lookups (`worldLookups.js`)
+
+A world cannot change during one synchronous read of it, yet building an AI prompt asks it the same whole-world questions thousands of times: `getPoliticalProfile` read every region's owner for each name it could not place, and each government's capsule rebuilt the power reference and normalized every institution. On the modern world that froze the page for half a second on a fast computer.
+
+`readingWorld(world, read)` marks such a read, and inside it `lookedUp(world, question, work, key)` keeps each answer. `buildBoundedPoliticalDecisionContextSet` is one, so turns and the idle pulse share it.
+
+- **Outside a read nothing is kept.** Worlds are edited in place between reads (`gameState.js`), so an answer must never outlive the read that asked. This is why `normalizeWorldState` is not cached by object.
+- **`read` must be synchronous and must not change the world.** Never wrap anything that writes to it.
+- **Answers are shared objects.** What is kept with `lookedUp` must only be read by its callers.
+- **Another world is never answered from this one's:** the world is compared by identity.
+
+To check a change here, compare what the builders say on every real save before and after, byte for byte (`server/data/games/`). The idle pulse also hands `nextTask` to `buildTemplateVariables` as `pause`, so the map draws between its stages; nothing else passes it, and a turn builds as it always did.

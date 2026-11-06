@@ -83,9 +83,9 @@ const CountryPanel = ({ open, onClose, width, onResize, onResizeEnd, mapRef, req
       )}
 
       <div className="oh-country-dossier-toolbar" style={{ alignItems: "center", borderBottom: "1px solid rgba(255,255,255,0.1)", display: "flex", gap: "0.55rem", padding: "0.65rem 0.8rem" }}>
-        <span aria-hidden="true" style={{ color: "#8ecbe8", fontSize: "1.1rem", lineHeight: 1 }}>◈</span>
+        <span aria-hidden="true" style={{ color: "var(--oh-ui-accent, #8ecbe8)", fontSize: "1.1rem", lineHeight: 1 }}>◈</span>
         <div style={{ minWidth: 0 }}>
-          <div style={{ color: "#d7e5f0", fontSize: "0.72rem", fontWeight: 850, letterSpacing: "0.13em", textTransform: "uppercase" }}>Country</div>
+          <div style={{ color: "var(--oh-ui-text, #d7e5f0)", fontSize: "0.72rem", fontWeight: 850, letterSpacing: "0.13em", textTransform: "uppercase" }}>Country</div>
         </div>
         <div style={{ flex: 1 }} />
         <button

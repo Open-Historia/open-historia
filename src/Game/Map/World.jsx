@@ -16,6 +16,8 @@ import { isMapPerfVerbose, recordMapFreeze, recordMapTrace } from "../../runtime
 import { attachMapInstrumentation } from "./mapInstrumentation.js";
 import { attachMapGestures } from "./mapGestures.js";
 import { attachTerrainCaches } from "./terrainCaches.js";
+import { attachClippingMasks } from "./clippingMasks.js";
+import { attachSourceCaches } from "./sourceCaches.js";
 import { reduceMotionEnabled } from "../../runtime/mapSettings.js";
 import {
   DEFAULT_BASEMAP_ID,
@@ -33,7 +35,8 @@ import {
 import { configureMapRuntime, ensureBasemapProtocol } from "./mapLibreSetup.js";
 import { useBrowserOnline } from "../../runtime/networkStatus.js";
 import { markMapIdle } from "../../runtime/mapReadiness.js";
-import { MERCATOR_MAX_LAT, imageQuad } from "../../../server/mapProjection.js";
+import { imageQuad } from "../../../server/mapProjection.js";
+import { cameraMaxBounds } from "./cameraBounds.js";
 import { useWorldBackground } from "./useWorldState.js";
 
 // MapLibre's worker pool is made with the first map, so this goes first.
@@ -734,15 +737,16 @@ function World({ mapRef, projection: requestedProjection, terrainEnabled, onInit
 
   const mapProjection = useMemo(() => ({ type: projection }), [projection]);
   const styleUsesGlobeCoords = effectiveCustomBg?.kind === "image" && isGlobe;
-  // How far north and south the camera goes. The real Earth stops at 80°S, with
-  // nothing south of Antarctica's coast worth the space; a scenario's own map
-  // (a picture or drawn shapes) fills the whole Mercator square, and its last
-  // rows to 85°S were out of reach.
-  const ownMapShown = effectiveCustomBg?.kind === "image" || effectiveCustomBg?.kind === "vector";
-  const maxBounds = useMemo(() => [
-    [-Infinity, ownMapShown ? -MERCATOR_MAX_LAT : -80],
-    [Infinity, ownMapShown ? MERCATOR_MAX_LAT : 85],
-  ], [ownMapShown]);
+  // How far the camera goes (Map/cameraBounds.js): the real Earth to 80°S, a
+  // scenario's picture to its own edges, and a map that does not repeat to its
+  // left and right edges.
+  const boundsKind = effectiveCustomBg?.kind ?? "";
+  const boundsBox = effectiveCustomBg?.kind === "image" ? JSON.stringify(effectiveCustomBg.bounds ?? null) : "";
+  const maxBounds = useMemo(() => cameraMaxBounds({
+    customBg: boundsKind ? { kind: boundsKind, bounds: boundsBox ? JSON.parse(boundsBox) : null } : null,
+    noWrap,
+    globe: isGlobe,
+  }), [boundsKind, boundsBox, noWrap, isGlobe]);
 
   // The old NatGeo preset is a baked raster, so hiding country/city/province
   // names selectively is impossible. The screenshot variant uses Esri's public
@@ -1144,7 +1148,7 @@ function World({ mapRef, projection: requestedProjection, terrainEnabled, onInit
     };
   }, [mapInstanceKey, mapRef]);
 
-  // Terrain work that does not change from frame to frame is kept (terrainCaches.js).
+  // Work that does not change from frame to frame is kept (terrainCaches.js, clippingMasks.js, sourceCaches.js).
   React.useEffect(() => {
     let disposed = false;
     let frame = 0;
@@ -1156,7 +1160,14 @@ function World({ mapRef, projection: requestedProjection, terrainEnabled, onInit
         frame = requestAnimationFrame(attach);
         return;
       }
-      detach = attachTerrainCaches(mapInstance);
+      const detachCaches = attachTerrainCaches(mapInstance);
+      const detachMasks = attachClippingMasks(mapInstance);
+      const detachSources = attachSourceCaches(mapInstance);
+      detach = () => {
+        detachCaches();
+        detachMasks();
+        detachSources();
+      };
     };
     attach();
     return () => {

@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import url from "node:url";
+import { HELPERS, buildSpeechHelper } from "./build-speech-helpers.mjs";
 
 const ROOT = path.join(path.dirname(url.fileURLToPath(import.meta.url)), "..");
 
@@ -22,7 +23,29 @@ export const packagedManifest = (manifest) => {
   return { ...rest, dependencies: kept, devDependencies: moved };
 };
 
+// The system speech program the target needs (scripts/build-speech-helpers.mjs),
+// unless one at least as new as its source is there already (the release
+// workflows build it in a step of their own). Without one the app uses Whisper.
+const ensureSpeechHelper = (args) => {
+  const platform = args.includes("--win") ? "win32" : args.includes("--mac") ? "darwin" : null;
+  if (!platform) return;
+  const binary = path.join(ROOT, "electron", "speech", HELPERS[platform]);
+  const source = path.join(ROOT, "electron", "speech", platform === "win32" ? "windows.cs" : "macos.swift");
+  try {
+    if (fs.statSync(binary).mtimeMs >= fs.statSync(source).mtimeMs) return;
+  } catch { /* not built yet */ }
+  const result = buildSpeechHelper(platform);
+  if (result.ok) {
+    console.log(`[package-desktop] built electron/speech/${HELPERS[platform]}`);
+    return;
+  }
+  const message = `[package-desktop] no system speech program for this build; it will use Whisper on the device.\n${result.output}`;
+  if (process.env.CI) throw new Error(message);
+  console.warn(message);
+};
+
 const main = () => {
+  ensureSpeechHelper(process.argv.slice(2));
   const file = path.join(ROOT, "package.json");
   const original = fs.readFileSync(file, "utf8");
   // Ctrl+C reaches electron-builder as well: this stays alive to put package.json back.

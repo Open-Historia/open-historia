@@ -48,10 +48,316 @@
 // `icon` is one of updateKit.jsx ICONS.
 
 import { PAST_UPDATES } from "./notesPast.js";
+import { RELEASES } from "./notesReleases.js";
 
 // The updates since the notice existed, newest first (new ones at the top); with the past (notesPast.js) they
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
+  {
+    // Opus-MT en-cs and en-fi (runtime/translationModels.js): tried on the game's own kind of text, 2026-11-05.
+    // Latvian and Slovene had no model that read right (en-mul) or that the browser can fetch (en-bat, en-sla).
+    id: "2026-11-czech-finnish",
+    kind: "minor",
+    date: "2026-11-05",
+    channel: "beta",
+    banners: [
+      {
+        title: "Czech and Finnish",
+        items: [
+          "You can now play in Czech and Finnish: a translation model, downloaded once, translates the game on your device.",
+        ],
+      },
+    ],
+  },
+  {
+    // The interface themes (runtime/uiTheme.js, kernely's PR #955) reach the main menu (libraryBar.jsx), the popups
+    // and the translation prompt; the first-time setup (GameUI/FirstSetup.jsx) asks for a language and a theme before
+    // the vault door; the language changes where the player is (runtime/translator.js switchLanguage), a language
+    // with a model only after its download, and no translation is an AI request; the Advisor's box lost its
+    // placeholder and holds the microphone (AdvisorMic.jsx). The owner, 2026-11-05.
+    id: "2026-11-themes",
+    kind: "major",
+    date: "2026-11-05",
+    channel: "beta",
+    banners: [
+      {
+        theme: "themes",
+        scene: "palettes",
+        title: "Themes",
+        subtitle: "The game in your colours",
+        lead: "Choose one of five palettes or mix your own, and the whole interface follows: the main menu, Settings, the panels and the popups.",
+        sections: [
+          {
+            heading: "Five palettes",
+            icon: "palette",
+            items: [
+              "Midnight Navy, Graphite, Forest, Oxblood and Sepia, or the original look.",
+              "Or mix your own from a background, a surface and an accent colour.",
+            ],
+          },
+          {
+            heading: "Everywhere you look",
+            icon: "star",
+            items: [
+              "The main menu, Settings, the Advisor, Diplomacy, Events and the popups all take your theme.",
+              "Map, country and party colours never change, so they still mean what they did.",
+            ],
+          },
+          {
+            heading: "Where to find it",
+            icon: "gear",
+            items: [
+              "Settings → General → Interface appearance, and in the first-time setup.",
+            ],
+          },
+        ],
+      },
+      {
+        theme: "themes",
+        scene: "welcome",
+        title: "Hello, in your language",
+        subtitle: "A first-time setup",
+        lead: "The first time the game opens it greets you in many languages, then asks for your language and your theme before the vault door.",
+        sections: [
+          {
+            heading: "Your language",
+            icon: "people",
+            items: [
+              "Changing the language in Settings now happens where you are, without going back to the main menu.",
+              "Where a language needs its translation model, the game asks to download it once. Say no and the game stays in English.",
+              "Translation never uses AI requests any more.",
+            ],
+          },
+          {
+            heading: "A cleaner Advisor",
+            icon: "note",
+            items: [
+              "The message box no longer has words in it, and the microphone sits inside it.",
+              "Start typing and the microphone steps aside.",
+            ],
+          },
+        ],
+        button: "Make it yours",
+      },
+    ],
+  },
+  {
+    // MapLibre never kept a tile's painted terrain between frames once there were two stacks of layers: it does now,
+    // ended by what changes it (Map/terrainCaches.js). Clipping masks are kept while the tiles are the same
+    // (Map/clippingMasks.js), sources share what they work out (Map/sourceCaches.js), and the idle pulse asks the
+    // world each whole-map question once and lets the map draw between its stages (runtime/worldLookups.js).
+    // Every pixel and every prompt checked identical; on the owner's phone the pulse's freeze fell from 1.6 s to 0.45 s.
+    id: "2026-11-less-for-the-gpu",
+    kind: "minor",
+    date: "2026-11-05",
+    channel: "beta",
+    banners: [
+      {
+        title: "Less work for your graphics card",
+        items: [
+          "With 3D terrain on, the map now takes about a quarter of the graphics work it did while you look around it, so it runs smoother and cooler, above all on computers with modest graphics.",
+          "Pinching to zoom on a phone stutters less.",
+          "The freeze you could feel when a country was deciding whether to write to you is about a quarter as long, and the map keeps moving through most of it.",
+          "The map looks just as it did: only the work behind it has changed.",
+        ],
+      },
+    ],
+  },
+  {
+    // The translator's on-device model (runtime/translationModels.js, translationWorker.js): Opus-MT for ar de es fr
+    // id it nl pt ru zh (and da hu ro, which have no pack), downloaded once after the player says yes; the AI keeps
+    // every other language and whatever the model's answer was refused for. The owner, 2026-11-05.
+    id: "2026-11-translation-model",
+    kind: "minor",
+    date: "2026-11-05",
+    channel: "beta",
+    banners: [
+      {
+        title: "Translation without AI requests",
+        items: [
+          "In German, French, Spanish, Italian, Portuguese, Dutch, Russian, Chinese, Arabic and Indonesian, names and descriptions a scenario adds can now be translated on your device by a model downloaded once, instead of by your AI model. The game asks before it downloads.",
+        ],
+      },
+    ],
+  },
+  {
+    // "A file downloaded by everyone who downloads the main app, a different file for the beta app ... only downloaded
+    // once when the app is installed or when people update to this update and never again" (the owner, 2026-11-04).
+    // The app shells do it (electron/appFile.cjs, mobile/android .../AppFile.java); the page and the website never do.
+    id: "2026-11-install-count",
+    kind: "minor",
+    date: "2026-11-05",
+    channel: "beta",
+    banners: [
+      {
+        title: "Counting installs",
+        items: [
+          "The app now downloads one small file from GitHub once, after it is installed or updated, so we can count how many people install it. Nothing about you is sent with it.",
+        ],
+      },
+    ],
+  },
+  {
+    // Two chats the owner sent, 2026-11-04: a "Meccan Alliance" condemnation of Iran shown twice, as Iran's own words,
+    // and a "GSSTO" ultimatum to Tokyo and Toronto shown as Japan's. A chat's first line is said by whom the skip named
+    // (AI/chatSpeaker.js), and a line the same sender just said is not added again (AI/chatFold.js).
+    id: "2026-11-chat-opener-speaker",
+    kind: "minor",
+    date: "2026-11-05",
+    channel: "beta",
+    banners: [
+      {
+        title: "Who wrote to you",
+        items: [
+          "A letter an alliance or organisation sends you is shown under its own name, no longer as the words of a country it is writing to.",
+          "A country that writes first in a chat is added to that chat if it was not in it.",
+          "The same letter no longer appears twice in a row in a chat.",
+        ],
+      },
+    ],
+  },
+  {
+    // The Advisor's microphone (GameUI/AdvisorMic.jsx, runtime/speechInput.js): the browser's or the phone's own
+    // recogniser where there is one; in the desktop app Windows' or macOS's own (electron/speechSystem.cjs), and
+    // Whisper base (80 MB) on the device where that cannot listen and on Linux. No AI request.
+    id: "2026-11-advisor-microphone",
+    kind: "minor",
+    date: "2026-11-05",
+    channel: "beta",
+    banners: [
+      {
+        title: "Speak to your advisor",
+        items: [
+          "The Advisor's input bar has a microphone beside Send. Press it and speak: what you say appears in the box, and it sends itself once you have been quiet for 3 seconds. Press it again to stop without sending.",
+          "It costs no AI requests. In the desktop app, Windows or macOS recognises the speech itself; where it cannot, and on Linux, a speech model downloaded once does it on your computer.",
+        ],
+      },
+    ],
+  },
+  {
+    // Military power counts the men in full, each soldier's worth raised to the scenario's importance of technology
+    // (runtime/militaryPower.js, warSettings.technologyWeight; the Wars feature's field); the owner's ask, 2026-11-04.
+    id: "2026-11-importance-of-technology",
+    kind: "minor",
+    date: "2026-11-05",
+    channel: "beta",
+    banners: [
+      {
+        title: "Importance of technology",
+        items: [
+          "A country's military power now counts all the men it can put under arms, times what each of them is worth by its arms, training and funding.",
+          "Scenario authors set how much better arms outweigh more men in the scenario editor, under Wars in the Features tab. Left empty it is configured for the modern world; lower it for a world where numbers decided wars.",
+        ],
+      },
+    ],
+  },
+  {
+    // A post imported before (kept by post number in ui-settings `hubImported`, server/hubImported.js), or one the
+    // library holds, is downloaded from its uncounted update copy (runtime/hubPosts.js downloadHubScenario); a post
+    // with no update copy yet still counts. The owner's ask, 2026-11-04.
+    id: "2026-11-reimports-not-imports",
+    kind: "minor",
+    date: "2026-11-05",
+    channel: "beta",
+    banners: [
+      {
+        title: "Importing again is not an import",
+        items: [
+          "Importing a Community scenario you have imported before, even one you have since deleted, no longer adds to its number of imports.",
+        ],
+      },
+    ],
+  },
+  {
+    // The Wars feature's Pace of an advance setting removed: every game advances at the built-in pace (AI/frontsGate.js
+    // frontsPace); the owner's ask, 2026-11-04.
+    id: "2026-11-one-advance-pace",
+    kind: "minor",
+    date: "2026-11-05",
+    channel: "beta",
+    banners: [
+      {
+        title: "Advances at one pace",
+        items: [
+          "The Wars feature no longer has a Pace of an advance setting. Troops in every game advance at the built-in pace, including games and scenarios that had changed it.",
+        ],
+      },
+    ],
+  },
+  {
+    // "When map looping is disabled in a scenario, you shouldn't be able to continue infinitely anyway", and the Third
+    // Great Ninja War's picture (freeform, ±72°) showed empty ground past its top and bottom. The camera's bounds had
+    // infinite longitudes, which switched off MapLibre's one-world hold, and the square's ±85° for every picture
+    // (Map/cameraBounds.js). The owner, 2026-11-05: all custom basemaps, not just freeform ones.
+    id: "2026-11-map-edges",
+    kind: "minor",
+    date: "2026-11-05",
+    channel: "beta",
+    banners: [
+      {
+        title: "The map stops at its edges",
+        items: [
+          "A scenario drawn on its own picture now stops at the picture's edges: you can no longer pan or zoom out past its top and bottom.",
+          "With map looping turned off, the map now stops at its left and right edges instead of going on for ever.",
+        ],
+      },
+    ],
+  },
+  {
+    // An annexed Tunisia stayed in its own colour and name on the map though a click said its land was Italy's: the
+    // player's forces at home (a battlefield standing in peace) kept listing its regions as "taken in name only", which
+    // nothing standing ever finishes (runtime/fronts/battle.js readRegions; Map/frontOwnership.js drawnOwnersOf).
+    // A player's report, 2026-11-05.
+    id: "2026-11-annexed-land-on-the-map",
+    kind: "minor",
+    date: "2026-11-05",
+    channel: "beta",
+    banners: [
+      {
+        title: "Annexed land on the map",
+        items: [
+          "A country you annex while your forces are built up at home now takes your colour and name on the map at once, instead of keeping its own. A game where this happened is drawn right as soon as it is opened.",
+        ],
+      },
+    ],
+  },
+  {
+    // The skip's build-up line was written `home: X~X~...`; Poland's ordered build-up came back with no line at all
+    // and nobody was called up. The line now names the player (AI/frontPrompt.js playerRule). A player's report, 2026-11-05.
+    id: "2026-11-build-up-line-named",
+    kind: "minor",
+    date: "2026-11-05",
+    channel: "beta",
+    banners: [
+      {
+        title: "Build-ups you order",
+        items: [
+          "A time skip is now told your own country's name in the line that calls up your forces at home, so a build-up you order is called up more reliably.",
+        ],
+      },
+    ],
+  },
+  {
+    // A Mac report, 2026-11-04: the app "opens then immediately closes". The packed Mac build starts as far as its
+    // window in a simulated run; what is left to it is said and logged now (electron/main.cjs app.alreadyRunning,
+    // window.shown, the system and folder in app.files, updater.relaunch; a launch update from a translocated copy waits for the next start; server.js EADDRINUSE through __ohFatal) and an Intel Mac's banner
+    // download is its own zip (server/desktopDownload.js).
+    id: "2026-11-mac-opening",
+    kind: "minor",
+    date: "2026-11-04",
+    channel: "beta",
+    banners: [
+      {
+        title: "Opening the game on a Mac",
+        items: [
+          "If you open the game from where you downloaded it rather than from Applications, an update it finds as it opens is installed the next time you open it, and the game opens straight away instead of restarting.",
+          "Clicking the game in the Dock while it is running brings its window forward.",
+          "On an Intel Mac, the download the update banner offers is the one built for Intel Macs.",
+          "If the game cannot start because the connection it uses on your computer is taken, it says so instead of closing without a word.",
+        ],
+      },
+    ],
+  },
   {
     id: "2026-11-picture-edges-and-strike-targets",
     kind: "minor",
@@ -1717,8 +2023,8 @@ const newestFirst = (list) => Object.freeze(list
   .sort((a, b) => (a.update.date < b.update.date ? 1 : a.update.date > b.update.date ? -1 : a.index - b.index))
   .map(({ update }) => update));
 // Every update, for the history.
-export const UPDATES = newestFirst([...NEW_UPDATES, ...PAST_UPDATES]);
+export const UPDATES = newestFirst([...RELEASES, ...NEW_UPDATES, ...PAST_UPDATES]);
 // The updates a device may be shown behind the door: those written as notices, never the history from before
 // notices existed (notesPast.js). "make sure people ONLY see the update popup things for the updates that are
 // actually being added (plus the music one), not for every update in the history" (the owner, 2026-10-16).
-export const NOTICE_UPDATES = newestFirst(NEW_UPDATES);
+export const NOTICE_UPDATES = newestFirst([...RELEASES, ...NEW_UPDATES]);

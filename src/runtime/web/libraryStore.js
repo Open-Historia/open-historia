@@ -697,9 +697,9 @@ const coarseRegions = createCoarseRegionsCache((source) => serializeJsonValue(co
 // fetches and builds afresh.
 onMemoryPressure(() => {
   coarseRegions.clear();
-  builtInCoarseTextPromise = null;
-  builtInRegionsTextPromise = null;
-  builtInRegionsPromise = null;
+  builtInCoarseTextPromises.clear();
+  builtInRegionsTextPromises.clear();
+  builtInRegionsPromises.clear();
   defaultRegionsGeojsonPromise = null;
 });
 

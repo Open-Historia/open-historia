@@ -16,6 +16,7 @@ import { ADVISOR_RECIPIENT_TYPES, CHIEF_ADVISOR_THREAD, advisorContacts, advisor
 import { getPoliticalProfile } from "../../runtime/politicalActors.js";
 import StorageProblemNotice from "./storageProblemNotice.jsx";
 import AdvisorRecipients from "./AdvisorRecipients.jsx";
+import AdvisorMic from "./AdvisorMic.jsx";
 import { describeReplyProblems, extractFencedJson, looksLikeProjectOps } from "./advisorBlocks.js";
 import { actionProposalsFromReply, recordAdvisorActionReceipt } from "./advisorActionReview.js";
 import { approveAdvisorAction } from "./advisorActionApproval.js";
@@ -972,6 +973,7 @@ const selectAllowedUnitTypes = (world) => (Array.isArray(world?.allowedUnitTypes
 const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResizeEnd, onOpenActions, onOpenProjects, requestedPrompt, onConsumeRequest }) => {
     const [messages, setMessages]   = useState([]);
     const [input, setInput]         = useState("");
+    const [typed, setTyped]         = useState(false);
     const [isLoading, setIsLoading] = useState(false);
     const [contacts, setContacts] = useState([]);
     const [chiefProfile, setChiefProfile] = useState(null);
@@ -1378,20 +1380,17 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             // No reply is authority to write an Action. Persist one durable
             // message-bound proposal per valid fenced op, then wait for Proceed.
             const replyId = `advisor-reply-${globalThis.crypto?.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 14)}`}`;
-            const { json: actionsProposal, reason: actionsReason } = extractFencedJson(reply, "actions");
+            // Parse once for BOTH the displayed text and persisted proposals.
+            // A provider may emit multiple fenced Action arrays; each must be
+            // reviewable, with none silently left as raw JSON in the message.
+            const { actionsProposal, actionBlockProblems, chartProblem, draftProblems, institutionDraftProblems, deployProblems } = parseAdvisorReply(reply, {
+                allowedUnitTypes: Array.isArray(moment.world?.allowedUnitTypes) ? moment.world.allowedUnitTypes : null,
+            });
             const { proposals: actionProposals, problems: invalidProposals } =
                 (threadId === CHIEF_ADVISOR_THREAD || advisorRecipientType(recipient) === ADVISOR_RECIPIENT_TYPES.MINISTER)
                     ? actionProposalsFromReply(actionsProposal, replyId)
                     : { proposals: [], problems: [] };
-            const actionsProblems = [
-                ...(actionsReason ? [`the Action block was ${actionsReason}; no Action was queued`] : []),
-                ...invalidProposals,
-            ];
-            // The buttons a reply offers are drawn at render time; which ones
-            // could not be drawn is worked out once, here, for the receipt.
-            const { chartProblem, draftProblems, institutionDraftProblems, deployProblems } = parseAdvisorReply(reply, {
-                allowedUnitTypes: Array.isArray(moment.world?.allowedUnitTypes) ? moment.world.allowedUnitTypes : null,
-            });
+            const actionsProblems = [...actionBlockProblems, ...invalidProposals];
             // Same one-shot treatment for the projects board, with truncation
             // salvage: a full backfill of a long campaign is the one block big
             // enough to be cut off mid-array by the reply token cap.
@@ -1488,8 +1487,9 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         }
     };
 
-    const handleSend = () => {
-        const text = input.trim();
+    // The microphone (AdvisorMic) passes what it heard; a click passes its event.
+    const handleSend = (spoken) => {
+        const text = (typeof spoken === "string" ? spoken : input).trim();
         if (!text || !hasBootstrapped || loadFailed || saveFailed || turnInFlightRef.current || sideEffectPendingRef.current || contactMutationRef.current || threadSwitchingRef.current || recipientLocked) return;
         setInput("");
         return runTurn(text);
@@ -1950,21 +1950,31 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
 
         {/* Input */}
         <div className="oh-advisor-composer">
+        <div className="oh-advisor-composer-field">
         <textarea
         className="oh-advisor-composer-input"
         ref={inputRef}
-        // A phone's keyboard has no Shift+Enter to speak of.
-        placeholder={recipientUnavailableReason || (selectedContact ? `Message ${selectedContact.name}…` : chiefProfile ? `Message ${chiefProfile.name}…` : isTouch ? "Ask your advisor…" : "Ask your advisor…  (Shift+Enter for a new line)")}
+        placeholder={recipientUnavailableReason || undefined}
         rows={1} value={input}
         disabled={recipientLocked}
         enterKeyHint="enter"
         onChange={e => {
             setInput(e.target.value);
+            setTyped(Boolean(e.target.value.trim()));
             resizeTextarea();
         }}
         onKeyDown={handleKeyDown}
 
         />
+        <AdvisorMic
+        disabled={isLoading || recipientLocked || !hasBootstrapped || loadFailed || saveFailed}
+        hidden={typed && Boolean(input.trim())}
+        input={input}
+        onInput={(text) => { setTyped(false); setInput(text); }}
+        onSend={handleSend}
+        threadKey={activeThreadId}
+        />
+        </div>
         <button
         type="button"
         className="oh-advisor-send"

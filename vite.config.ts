@@ -3,6 +3,7 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import fs from 'node:fs'
 import path from 'node:path'
+import { createRequire } from 'node:module'
 
 // The big map binaries live in public/ so the dev server and the Express server can
 // serve them off disk, but NEITHER build serves them from the bundle: the desktop
@@ -111,6 +112,39 @@ const dropWebAnalytics = (isAndroid: boolean) => ({
   },
 })
 
+// Two features run a model in a worker on Transformers.js and the copy of ONNX
+// Runtime it pins: the Advisor's microphone (Whisper, src/runtime/speechWorker.js)
+// and the translator (Opus-MT, src/runtime/translationWorker.js). Both import the
+// runtime's WebAssembly from `oh-ort-transformers/`, so it is emitted into the
+// build once, from that package, and never fetched from a CDN; only the model
+// weights come from the model host. Both run on the CPU build of the runtime
+// (their 8-bit models gain nothing from WebGPU), which is half the size of the
+// WebGPU one Transformers.js imports by default.
+const ortDistOf = (fromFile: string) =>
+  path.dirname(createRequire(new URL(fromFile, import.meta.url)).resolve('onnxruntime-web/ort-wasm-simd-threaded.wasm')).replace(/\\/g, '/')
+// The Android app listens through the phone's own recogniser and never runs a
+// model, but a dead `import()` is still loaded, and loading speechOnDevice.js
+// emits its worker and the runtime's WebAssembly (14 MB) into the APK. There
+// it is a module that has nothing to offer.
+const dropOnDeviceSpeech = (isAndroid: boolean) => ({
+  name: 'oh-drop-on-device-speech',
+  enforce: 'pre' as const,
+  resolveId(id: string, importer?: string) {
+    if (isAndroid && id === './speechOnDevice.js' && importer?.replace(/\\/g, '/').endsWith('/src/runtime/speechInput.js')) return '\0oh-no-on-device-speech'
+    return null
+  },
+  load(id: string) {
+    if (id !== '\0oh-no-on-device-speech') return null
+    return 'const no = () => Promise.reject(Object.assign(new Error("failed"), { code: "failed" }));\n'
+      + 'export const modelReady = no;\nexport const downloadModel = no;\nexport const startOnDevice = () => { throw Object.assign(new Error("failed"), { code: "failed" }); };\n'
+  },
+})
+
+const transformersRuntimeAliases = [
+  { find: /^onnxruntime-web(?:\/webgpu)?$/, replacement: 'onnxruntime-web/wasm' },
+  { find: /^oh-ort-transformers\//, replacement: `${ortDistOf('./node_modules/@huggingface/transformers/dist/transformers.web.js')}/` },
+]
+
 // https://vite.dev/config/
 // `--mode web` (npm run build:web / build:site / dev:web) builds the website,
 // `--mode android` (npm run build:android) the Android app's bundle — the web
@@ -142,6 +176,9 @@ export default defineConfig(({ mode }) => ({
   worker: {
     format: 'es',
   },
+  resolve: {
+    alias: transformersRuntimeAliases,
+  },
   plugins: [
     react({
       babel: {
@@ -151,6 +188,7 @@ export default defineConfig(({ mode }) => ({
     dropMapBinaries(mode === 'web' || mode === 'android'),
     emitWebVersion(mode === 'web'),
     dropWebAnalytics(mode === 'android'),
+    dropOnDeviceSpeech(mode === 'android'),
   ],
   // Proxy API calls to the Express server during `npm run dev` so the map editor's
   // save/load (and the game's runtime endpoints) work with hot-reload too.

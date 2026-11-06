@@ -181,3 +181,29 @@ test("a compact rectangular view switch stays below the displayed chart or bloc 
   assert.match(buttonStyle, /border-radius:\s*4px;/);
   assert.doesNotMatch(switchStyle + buttonStyle, /999px|999rem|50%/);
 });
+test("Country toolbar follows opt-in palette and retains original styling as CSS fallback", () => {
+  assert.match(css, /\.oh-country-dossier-toolbar\s*\{[\s\S]*?background: var\(--oh-ui-header, rgba\(10, 16, 25, \.74\)\);/);
+  assert.match(drawer, /aria-hidden="true" style=\{\{ color: "var\(--oh-ui-accent, #8ecbe8\)"/);
+  assert.match(drawer, /color: "var\(--oh-ui-text, #d7e5f0\)"[\s\S]*?>Country<\/div>/);
+  assert.match(css, /\.oh-country-dossier-toolbar\s*\{[\s\S]*?backdrop-filter: blur\(12px\)/,
+    "toolbar must remain a legible translucent header in Original mode");
+});
+
+test("Live Intelligence Service matches National ledger without replacing its canonical intelligence score", () => {
+  const card = stats.split("const IntelligenceServiceCard = ")[1]?.split("// ---- the Military card")[0] || "";
+  assert.match(card, /className="oh-country-intelligence-stat"/);
+  assert.match(card, /className="oh-country-intelligence-stat-heading"/);
+  assert.match(card, /className="oh-country-intelligence-stat-label"/);
+  assert.match(card, /className="oh-country-intelligence-stat-value">\{value\}\/100<\/span>/);
+  assert.match(card, /<Bar value=\{value\} color="#38bdf8" \/>/);
+  assert.doesNotMatch(card, /\.\.\.cardStyle|backgroundColor: "rgba\(/,
+    "the legacy boxed stats treatment must not return");
+  assert.match(css, /\.oh-country-intelligence-stat\s*\{[\s\S]*?background: transparent;[\s\S]*?border-bottom: 1px solid var\(--dossier-line\)/);
+  assert.match(css, /\.oh-country-intelligence-stat-label\s*\{[\s\S]*?color: var\(--dossier-muted\)/);
+  assert.match(css, /\.oh-country-intelligence-stat-value\s*\{[\s\S]*?color: var\(--dossier-text\)/);
+  assert.match(stats, /const intelligence = targetCountry && worldSnapshot \? intelligenceOf\(worldSnapshot, targetCountry\) : null;/);
+  assert.equal((stats.match(/intelligence !== null && <IntelligenceServiceCard value=\{intelligence\}/g) || []).length, 2,
+    "both custom and standard National sheets must retain the live service rating");
+  assert.match(stats, /hiddenKeys=\{intelligence !== null \? LIVE_INTELLIGENCE_STAT_KEYS : \[\]\}/,
+    "the live rating must not be doubled with a generated custom metric");
+});

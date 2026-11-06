@@ -33,6 +33,9 @@ release
 # in the local build).
 /src/runtime/web/generated/
 
+# The system speech programs, built by scripts/build-speech-helpers.mjs.
+/electron/speech/oh-speech-windows.exe
+/electron/speech/oh-speech-macos
 # Vendored Fantasy Map Generator (fetched at runtime by scripts/fetch-fmg.mjs)
 /fmg/
 # Runtime state only. The built-in scenario's seed lives in server/seed/ and is

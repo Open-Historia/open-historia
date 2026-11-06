@@ -8,6 +8,7 @@ import { takeCells } from "./field.js";
 import { projectorOf } from "./frame.js";
 import { frontInput, syntheticMap } from "./syntheticMap.js";
 import { battlefieldOn } from "./testKit.js";
+import { shownOwnersAt } from "./replay.js";
 
 // A region changes hands twice. In name, when more than six tenths of it are
 // held: that is the flip the game is told of, and nothing on the map changes.
@@ -265,4 +266,24 @@ test("a defender that has won back all but the last of a region finishes it too,
   // advance takes across a region's border are not handed back at night.
   const held = follow(frontInput(world, { battlefields: [start([{ lng, lat, state: 4, dig: 1 }])], days: 3, steering: steady }));
   for (let day = 1; day <= 3; day += 1) assert.equal(shareOf(held.seen[day], cells), strip.length / cells.length, `day ${day}: the strip is still Aland's`);
+});
+
+test("on forces standing in peace a region the story hands over is drawn as its new holder's at once", () => {
+  // Aland's forces stand at home, Borduria across the border, and Neutralia's
+  // two regions to the west lie on the same frame. The story annexes one of
+  // them to Aland halfway through the run. Nothing is fought on a standing
+  // battlefield, so nothing would ever take the region "in full": it must not
+  // be kept drawn as Neutralia's, its colour and its name left on the map.
+  const world = syntheticMap({ layout: ["NABBBB", "NABBBB"], legend: { N: "Neutralia", A: "Aland", B: "Borduria" }, west: 20, north: 51, step: 1, stepLat: 1 });
+  const record = battlefieldOn(world, { status: "standing", troops: [row(21.5, 49.2, 50.8, 4), row(23.5, 49.2, 50.8, 4)] });
+  const result = runFronts(frontInput(world, {
+    battlefields: [record],
+    wars: [],
+    days: 3,
+    moments: [{ day: 1, type: "control", regionId: "r0-0", to: "Aland" }],
+  }));
+  const [saved] = result.battlefields;
+  assert.equal(saved.status, "standing");
+  assert.deepEqual(saved.contested, [], "no region is held back as anyone else's");
+  assert.equal(shownOwnersAt(saved.replay, 3)?.["r0-0"], undefined, "nor does the run's replay draw it as Neutralia's");
 });

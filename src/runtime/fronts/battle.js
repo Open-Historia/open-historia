@@ -87,18 +87,22 @@ export const holderOf = (battle, run, id) => {
 // whose home ground it is for supply: the same for a group's area, else the
 // side of its lawful sovereign. And who the map draws it as belonging to: a
 // region new to the battle is shown as whoever holds it in name, and so is
-// one outside the war, where the engine has no say.
+// one outside the war, where the engine has no say. So is every region of a
+// battlefield standing in peace: nothing is fought there, so nothing would
+// ever take a region in full, and one the story handed over (an annexation)
+// would be drawn as its old holder's, colour and name, for good.
 export const readRegions = (battle, run) => {
   const { arena } = battle;
   const count = arena.ids.length;
   const regionSide = new Int8Array(count).fill(-1);
   const homeSide = new Int8Array(count).fill(-1);
+  const atPeace = battle.status === "standing";
   for (let index = 1; index < count; index += 1) {
     const id = arena.ids[index];
     const group = sideOfName(battle, run.groupOf(id));
     regionSide[index] = group >= 0 ? group : sideOfName(battle, run.controllerOf(id));
     homeSide[index] = group >= 0 ? group : sideOfName(battle, run.sovereignOf(id));
-    if (!battle.shown.has(id) || regionSide[index] < 0) battle.shown.set(id, holderOf(battle, run, id));
+    if (!battle.shown.has(id) || regionSide[index] < 0 || atPeace) battle.shown.set(id, holderOf(battle, run, id));
   }
   battle.regionSide = regionSide;
   battle.homeSide = homeSide;

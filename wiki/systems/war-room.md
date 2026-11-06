@@ -35,7 +35,7 @@ ashore open one round the place they land. At most 12 battlefields are open in a
 - **Under a ceasefire** a battlefield stays, marked as such, and its fighting halts.
 
 The **Fronts** feature switches all of this on or off for a scenario or a game, in the Features
-tab, with a **Pace of an advance** from 25% to 300% of the usual (100 by default). Off, land war is
+tab. Off, land war is
 the formations and the regions the story hands over, as on the stable build.
 
 ## Opening the War Room

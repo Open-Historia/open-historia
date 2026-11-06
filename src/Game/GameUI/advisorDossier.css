@@ -4,18 +4,18 @@
  * one rendered message remains one original memoized message.
  */
 .oh-advisor-drawer {
-  --oh-advisor-bg: #111d2a;
-  --oh-advisor-surface: #192b3b;
-  --oh-advisor-active: #25465d;
-  --oh-advisor-accent: #85cbe6;
-  --oh-advisor-border: rgba(139, 190, 219, .19);
-  --oh-advisor-muted: #94aabb;
+  --oh-advisor-bg: var(--oh-ui-bg, #111d2a);
+  --oh-advisor-surface: var(--oh-ui-surface, #192b3b);
+  --oh-advisor-active: var(--oh-ui-active, #25465d);
+  --oh-advisor-accent: var(--oh-ui-accent, #85cbe6);
+  --oh-advisor-border: var(--oh-ui-line, rgba(139, 190, 219, .19));
+  --oh-advisor-muted: var(--oh-ui-muted, #94aabb);
   background-color: var(--oh-advisor-bg);
   color: #edf3f8;
 }
 .oh-advisor-header {
   align-items: center;
-  background: #0c1622;
+  background: var(--oh-ui-header, #0c1622);
   border-bottom: 1px solid var(--oh-advisor-border);
   display: flex;
   flex: 0 0 auto;
@@ -41,7 +41,7 @@
   outline-offset: 3px;
 }
 .oh-advisor-recipients {
-  background: #152434;
+  background: var(--oh-ui-bg, #152434);
   border-bottom: 1px solid var(--oh-advisor-border);
   flex: 0 0 auto;
   padding: .62rem .8rem .7rem;
@@ -53,7 +53,7 @@
 }
 .oh-advisor-recipient-trigger {
   align-items: center;
-  background: #20374a;
+  background: var(--oh-ui-surface, #20374a);
   border: 1px solid rgba(141, 194, 222, .27);
   border-radius: 6px;
   color: #f3f8fc;
@@ -73,7 +73,7 @@
 .oh-advisor-recipient-trigger:hover,
 .oh-advisor-recipient-trigger[aria-expanded="true"] {
   border-color: rgba(133, 203, 230, .63);
-  background: #29485e;
+  background: var(--oh-ui-hover, #29485e);
 }
 .oh-advisor-recipient-trigger-name {
   overflow: hidden;
@@ -164,7 +164,7 @@
   margin-top: .15rem;
 }
 .oh-advisor-contact-editor {
-  background: #192b3b;
+  background: var(--oh-ui-surface, #192b3b);
   border: 1px solid rgba(133, 203, 230, .32);
   border-radius: 6px;
   display: flex;
@@ -223,7 +223,7 @@
 }
 .oh-advisor-message-body[data-role="user"] {
   align-self: flex-end;
-  background: #27475e;
+  background: var(--oh-ui-active, #27475e);
   border: 1px solid rgba(133, 203, 230, .28);
   border-radius: 7px 7px 3px 7px;
   color: #f1f8fc;
@@ -268,7 +268,7 @@
 }
 .oh-advisor-message-history {
   align-self: center;
-  background: #1b2d3d;
+  background: var(--oh-ui-surface, #1b2d3d);
   border: 1px solid var(--oh-advisor-border);
   border-radius: 5px;
   color: #b8cddd;
@@ -294,17 +294,32 @@
 }
 .oh-advisor-composer {
   align-items: flex-end;
-  background: #101a26;
+  background: var(--oh-ui-header, #101a26);
   border-top: 1px solid var(--oh-advisor-border);
   display: flex;
   flex: 0 0 auto;
   gap: .5rem;
   padding: .72rem .82rem;
 }
-.oh-advisor-composer-input {
-  background: #192b3b;
+.oh-advisor-composer-field {
+  align-items: flex-end;
+  background: var(--oh-ui-surface, #192b3b);
   border: 1px solid rgba(133, 183, 210, .3);
   border-radius: 6px;
+  box-sizing: border-box;
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  transition: background-color .15s, border-color .15s;
+}
+.oh-advisor-composer-field:focus-within {
+  background: var(--oh-ui-hover, #1c3246);
+  border-color: var(--oh-ui-accent, #82c8e5);
+  box-shadow: 0 0 0 1px rgba(130, 200, 229, .2);
+}
+.oh-advisor-composer-input {
+  background: transparent;
+  border: 0;
   box-sizing: border-box;
   color: #f0f6fa;
   flex: 1 1 auto;
@@ -320,11 +335,7 @@
   scrollbar-width: thin;
 }
 .oh-advisor-composer-input::placeholder { color: #859caf; }
-.oh-advisor-composer-input:focus {
-  background: #1c3246;
-  border-color: #82c8e5;
-  box-shadow: 0 0 0 1px rgba(130, 200, 229, .2);
-}
+.oh-advisor-composer-input:focus { background: transparent; }
 .oh-advisor-composer-input:disabled {
   color: #8d9baa;
   cursor: not-allowed;
@@ -332,8 +343,8 @@
 }
 .oh-advisor-send {
   align-items: center;
-  background: #326e93;
-  border: 1px solid #4c94b9;
+  background: var(--oh-ui-active, #326e93);
+  border: 1px solid var(--oh-ui-accent, #4c94b9);
   border-radius: 6px;
   color: #fff;
   cursor: pointer;
@@ -344,14 +355,88 @@
   padding: 0;
   transition: background-color .15s, border-color .15s;
 }
-.oh-advisor-send:hover:not(:disabled) { background: #4285a9; border-color: #86cce8; }
+.oh-advisor-send:hover:not(:disabled) { background: var(--oh-ui-hover, #4285a9); border-color: #86cce8; }
 .oh-advisor-send:focus-visible { outline: 2px solid #a3def4; outline-offset: 2px; }
 .oh-advisor-send:disabled {
-  background: #243b4d;
+  background: var(--oh-ui-surface, #243b4d);
   border-color: #314c60;
   color: #91a5b5;
   cursor: not-allowed;
   opacity: .7;
+}
+/* The microphone inside the input box (AdvisorMic.jsx): a quiet icon at rest,
+   the accent while it listens. Its notes sit just above the bar. */
+.oh-advisor-composer { position: relative; }
+.oh-advisor-mic-wrap { display: flex; flex: 0 0 auto; }
+.oh-advisor-mic {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 999px;
+  color: #8fa3b3;
+  cursor: pointer;
+  display: flex;
+  flex: 0 0 2rem;
+  height: 2rem;
+  justify-content: center;
+  margin: .3rem .3rem .3rem 0;
+  padding: 0;
+  transition: background-color .15s, color .15s;
+  width: 2rem;
+}
+.oh-advisor-mic:hover:not(:disabled) { background: rgba(255, 255, 255, .07); color: #f0f6fa; }
+.oh-advisor-mic:focus-visible { outline: 2px solid var(--oh-ui-accent, #a3def4); outline-offset: 1px; }
+.oh-advisor-mic[data-listening="true"] {
+  background: rgba(43, 193, 243, .14);
+  color: var(--oh-ui-accent, #2bc1f3);
+  animation: oh-advisor-mic-pulse 1.6s ease-in-out infinite;
+}
+.oh-advisor-mic:disabled {
+  color: #5d7080;
+  cursor: not-allowed;
+  opacity: .6;
+}
+@keyframes oh-advisor-mic-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(43, 193, 243, .35); }
+  50% { box-shadow: 0 0 0 4px rgba(43, 193, 243, 0); }
+}
+.oh-advisor-mic-note {
+  background: var(--oh-ui-surface, #14212e);
+  border: 1px solid rgba(133, 183, 210, .3);
+  border-radius: 6px;
+  bottom: calc(100% + .35rem);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .35);
+  color: #dce7ef;
+  font-size: .8rem;
+  line-height: 1.45;
+  max-width: calc(100% - 1.4rem);
+  padding: .55rem .7rem;
+  position: absolute;
+  right: .82rem;
+  width: 19rem;
+  z-index: 2;
+}
+.oh-advisor-mic-note p { margin: 0; }
+.oh-advisor-mic-note-problem { border-color: rgba(239, 68, 68, .55); color: #fca5a5; }
+.oh-advisor-mic-actions { display: flex; gap: .45rem; justify-content: flex-end; margin-top: .5rem; }
+.oh-advisor-mic-button {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, .25);
+  border-radius: 6px;
+  color: #e4e4e7;
+  cursor: pointer;
+  font: inherit;
+  min-height: 2rem;
+  padding: .25rem .7rem;
+}
+.oh-advisor-mic-button-primary { background: var(--oh-ui-active, rgba(43, 193, 243, .16)); border-color: var(--oh-ui-accent, #2bc1f3); color: #e6f8fe; }
+.oh-advisor-mic-button:hover { border-color: #82c8e5; }
+.oh-advisor-mic-progress { background: #192b3b; border-radius: 3px; height: 4px; margin-top: .45rem; overflow: hidden; }
+.oh-advisor-mic-progress span { background: var(--oh-ui-accent, #2bc1f3); display: block; height: 100%; transition: width .25s; }
+@media (max-width: 450px) {
+  .oh-advisor-mic-note { right: .7rem; }
+  .oh-advisor-mic-button { min-height: 2.45rem; }
+  .oh-advisor-mic { flex-basis: 2.3rem; height: 2.3rem; width: 2.3rem; }
 }
 @media (max-width: 450px) {
   .oh-advisor-recipients { padding: .5rem .65rem; }
@@ -361,5 +446,6 @@
   .oh-advisor-add-contact, .oh-advisor-contact-action { min-height: 2.45rem; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .oh-advisor-send { transition: none; }
+  .oh-advisor-send, .oh-advisor-mic, .oh-advisor-mic-progress span { transition: none; }
+  .oh-advisor-mic[data-listening="true"] { animation: none; }
 }

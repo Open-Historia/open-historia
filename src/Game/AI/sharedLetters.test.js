@@ -31,6 +31,8 @@ test("a person named among the other side is the one it was written to (the Copp
   assert.deepEqual(letter.chat.countries, [copperleaf]);
   assert.equal(letter.owner, "Saltport");
   assert.equal(sharedLetterOf({ countries: ["Saltport"], speaker: "Saltport" }, { people, host }), null, "no government left to write it");
+  // A letter a person is named as sending is never put in a government's mouth (chatSpeaker.js, 2026-11-04).
+  assert.equal(sharedLetterOf({ countries: [copperleaf, "Saltport"], speaker: "Saltport", openingMessage: "Our terms." }, { people, host }), null, "a person's own words are theirs to write");
 });
 
 test("the same governments writing to two players are two conversations", () => {

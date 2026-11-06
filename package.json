@@ -32,6 +32,7 @@
     "dist:win:multiplayer": "node scripts/stamp-channel.mjs multiplayer && node scripts/fetch-fmg.mjs && npm run build && node scripts/package-desktop.mjs --win --config electron-builder.multiplayer.yml"
   },
   "dependencies": {
+    "@huggingface/transformers": "4.3.1",
     "@noble/ciphers": "^2.4.0",
     "@noble/curves": "^2.4.0",
     "@noble/hashes": "^2.4.0",
@@ -106,6 +107,7 @@
       "!server/data/**",
       "!server/**/*.test.js",
       "electron/**",
+      "!electron/speech/*.{cs,swift,plist}",
       "scripts/fetch-map-assets.mjs",
       "scripts/map-assets.json",
       "fmg/dist/**",
@@ -113,7 +115,8 @@
       "!**/*.map"
     ],
     "asarUnpack": [
-      "scripts/**"
+      "scripts/**",
+      "electron/speech/**"
     ],
     "afterPack": "./scripts/mac-adhoc-sign.cjs",
     "publish": [
@@ -161,6 +164,10 @@
       ],
       "icon": "public/icon-512.png",
       "category": "public.app-category.strategy-games",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "The Advisor's microphone turns what you say into a message.",
+        "NSSpeechRecognitionUsageDescription": "The Advisor's microphone uses macOS's speech recognition to turn what you say into a message. It runs on this Mac where macOS can; otherwise Apple recognises it."
+      },
       "artifactName": "Open-Historia-mac-${arch}.${ext}"
     },
     "linux": {

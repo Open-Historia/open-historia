@@ -33,6 +33,11 @@ export const sharedLetterOf = (chatLike, { people = [], host = "" } = {}) => {
   // Only a person was named: the speaker is the government writing.
   if (!countries.length && clean(chatLike.speaker) && !personOf(chatLike.speaker)) countries = [clean(chatLike.speaker)];
   if (!countries.length) return null;
+  // A letter in a person's name is that person's to write: the AI never says it
+  // for them, nor puts it in the mouth of a government in the letter
+  // (chatSpeaker.js). The engine's own chat for a person's order carries that
+  // person's line as theirs, in its messages.
+  if (personOf(chatLike.speaker) && !list(chatLike.messages).length) return null;
   if (!to) to = clean(host);
   return { chat: { ...chatLike, countries }, to, owner: same(to, host) ? "" : to };
 };

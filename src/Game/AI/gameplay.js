@@ -185,6 +185,7 @@ import { eventReactionAfterFailure } from "./eventReactionRetry.js";
 import { formalAgendaProposals } from "./formalAgenda.js";
 import { abandonWorkerJob, createWorkerFailureStreak } from "./statsWorkerJobs.js";
 import { chatParticipantKey, foldGeneratedChatsIntoStorage, isLifecycleNegotiationChat, logGeneratedChat } from "./chatFold.js";
+import { openingSpeaker } from "./chatSpeaker.js";
 import { sharedLetterOf } from "./sharedLetters.js";
 import { extractJsonPayload, parseWithoutTrailingFields, unwrapMimickedToolCall } from "./jsonSalvage.js";
 import { OUTPUT_LIMIT_MESSAGE, REASONING_ONLY_MESSAGE, REASONING_ONLY_NOTE, isUnreachableError } from "./providerErrors.js";
@@ -1492,6 +1493,8 @@ const buildTemplateVariables = async (bundle, options = {}) => {
   // A task that declares the lookup functions gets the slim prompt (the
   // functions carry the detail); with the setting off it gets the full one.
   const lookups = Boolean(options?.lookups) && lookupFunctionsEnabled();
+  // Background work hands in nextTask: nobody is waiting on it, and the map may be moving.
+  const pause = options?.pause;
   const variables = await buildPromptContext(bundle, { ...options, lookups, requiredKeys, taskKey });
   await nextTask();
   // The diplomatic slice is bounded to the player plus, for a chat task, the
@@ -1502,6 +1505,7 @@ const buildTemplateVariables = async (bundle, options = {}) => {
   if (wants("canonicalWarContext")) {
     variables.canonicalWarContext = buildCanonicalWarContext(bundle.world, { round: bundle?.game?.round });
   }
+  await pause?.();
   if (wants("canonicalDiplomaticContext")) {
     variables.canonicalDiplomaticContext = buildBoundedDiplomaticContext(bundle.world, {
       playerPolity: normalizeString(bundle?.game?.country),
@@ -1509,17 +1513,21 @@ const buildTemplateVariables = async (bundle, options = {}) => {
       maxActors: 8,
     }).text;
   }
+  await pause?.();
   if (wants("territorialControlContext")) {
     variables.territorialControlContext = await buildTerritorialControlContext(bundle.world, lookups ? { maxRows: 24, viaLookups: true } : {});
   }
   // Groups switched off for this game (server/gameFeatures.js): no task is
   // given them, which also leaves out the time skip's [Groups] rule and the
   // Game Master's block (both read these).
+  await pause?.();
   const groupsOn = isActiveFeatureEnabled("groups");
   variables.groupsContext = groupsOn ? await buildGroupsContext(bundle.world, { regionCatalog: options?.mapSource?.regionCatalog }) : "";
+  await pause?.();
   variables.playerGroupContext = groupsOn
     ? await buildPlayerGroupContext(bundle.world, bundle.game?.country, { regionCatalog: options?.mapSource?.regionCatalog })
     : "";
+  await pause?.();
   if (wants("canonicalStorylineContext")) {
     variables.canonicalStorylineContext = buildGameMasterStorylineContext(bundle.world);
   }
@@ -1530,9 +1538,11 @@ const buildTemplateVariables = async (bundle, options = {}) => {
       bundle?.game?.country,
     );
   }
+  await pause?.();
   if (wants("playerPolityReputationContext")) {
     variables.playerPolityReputationContext = await buildPlayerPolityReputationText(bundle);
   }
+  await pause?.();
   if (wants("playerPolityIntelligenceContext")) {
     variables.playerPolityIntelligenceContext = buildPlayerPolityIntelligenceText(bundle);
   }
@@ -5712,18 +5722,22 @@ export const buildGeneratedChat = async (chatLike, linkEventId, world, { fallbac
   // A chat's countries are the OTHER side; the player is implicit
   // (chatVisibility.js). A note naming the player among them is a note to the
   // player, and keeping them there forks a duplicate of the thread already open.
-  const countries = withoutPlayerParticipant(await resolveInvitees(countriesInput, world), playerName);
-  if (countries.length === 0) return null;
+  const participants = withoutPlayerParticipant(await resolveInvitees(countriesInput, world), playerName);
+  if (participants.length === 0) return null;
 
-  // The initiating polity speaks first — and it is never the player, who is no
-  // longer in the list. When the model names no speaker (or names the player, or
-  // someone who is not a participant), attribute the opener to the first one.
-  const speakerKey = normalizeString(chatLike?.speaker).toUpperCase();
-  const initiator =
-    countries.find((country) =>
-      speakerKey
-      && (normalizeString(country.name).toUpperCase() === speakerKey || normalizeString(country.code).toUpperCase() === speakerKey))
-    ?? countries[0];
+  // The opener is said by the one the model named, never by another participant
+  // in its place (chatSpeaker.js): a polity it named joins the chat, an
+  // institution, a group or a name the world does not know speaks under its own
+  // name, and a note it put in the player's mouth has no opener.
+  const named = normalizeString(chatLike?.speaker);
+  const [speakerPolity] = named ? await resolveInvitees([named], world) : [];
+  const { countries, speaker: initiator } = openingSpeaker({
+    named,
+    countries: participants,
+    speakerPolity: speakerPolity ?? null,
+    speakerIsPlayer: Boolean(named && normalizeString(playerName) && withoutPlayerParticipant([speakerPolity ?? { name: named }], playerName).length === 0),
+    world,
+  });
 
   const entry = normalizeChatEntry({
     countries,
@@ -5732,7 +5746,7 @@ export const buildGeneratedChat = async (chatLike, linkEventId, world, { fallbac
     messages: withReveal(
       Array.isArray(chatLike?.messages) && chatLike.messages.length > 0
         ? chatLike.messages
-        : chatLike?.openingMessage
+        : chatLike?.openingMessage && initiator
         ? [
             {
               // A letter offering peace names its message, so the offer it
@@ -5740,7 +5754,7 @@ export const buildGeneratedChat = async (chatLike, linkEventId, world, { fallbac
               ...(normalizeString(chatLike?.openingMessageId) ? { id: normalizeString(chatLike.openingMessageId) } : {}),
               code: initiator?.code || "",
               role: "leader",
-              speaker: initiator?.name || normalizeString(chatLike?.speaker),
+              speaker: initiator.name,
               text: chatLike.openingMessage,
               time: "",
             },
@@ -8611,6 +8625,10 @@ const fallbackJumpSimulation = async ({ bundle, days, mode, targetDate }) => {
               ? [
                   {
                     countries: action.invitees,
+                    // The player's own opening line, said by the player: a
+                    // chat's opener is only ever another government's words
+                    // (buildGeneratedChat), and this one is the player's order.
+                    messages: [{ role: "user", speaker: bundle.game.country, text: action.chatStarter, time: "" }],
                     openingMessage: action.chatStarter,
                     speaker: bundle.game.country,
                     title: action.title,
@@ -20483,6 +20501,8 @@ const noteVoiceText = (player) => [
   "You write as the polity named in speaker, and only as it: in its own first person (\"we\", \"our government\"),"
   + ` addressed to ${player}'s government, leader or capital.`,
   `The note is never ${player}'s words and never says ${player}'s side of anything, and it never addresses the speaker's own government, capital or leader.`,
+  // A bloc's condemnation of Iran was shown as Iran's own words (the owner, 2026-11-04).
+  "speaker is one of the governments in countries, spelled as there. An alliance, bloc or organisation writes through one of its member governments, never through the country it is writing about.",
 ].join("\n");
 
 export const processPendingEventOutreach = async ({ debug = false } = {}) => {
@@ -21674,13 +21694,15 @@ export const maybeSendIdleDiplomacy = async () => {
     if (Math.random() >= idlePulseBackoff.share(fingerprint)) return null;
     // Nobody is waiting on this, and the map may be moving: it draws between the stages.
     await nextTask();
-    const variables = await buildTemplateVariables(bundle, { taskKey: "idleDiplomacy", lookups: true });
+    const variables = await buildTemplateVariables(bundle, { taskKey: "idleDiplomacy", lookups: true, pause: nextTask });
     await nextTask();
     const institutionRoutingContext = buildIdleInstitutionRoutingContext(bundle.world, bundle.game.country);
+    await nextTask();
     // Every government that may write, the most relevant first with their
     // background; any other's is fetched with government_background
     // (idlePoliticalDiplomacyContext.js).
     const politicalDecisionSet = buildIdleDiplomacyPoliticalDecisionSet(bundle);
+    await nextTask();
     const pulseLookups = idleDiplomacyLookups(buildTaskLookups(bundle), { world: bundle.world, decisionSet: politicalDecisionSet, canFetch: !savingRequests() });
     const politicalDecisionContext = idleDiplomacyPoliticalContextText(politicalDecisionSet, {
       canFetch: Boolean(pulseLookups?.tools?.some((tool) => tool?.name === GOVERNMENT_BACKGROUND_FUNCTION)),

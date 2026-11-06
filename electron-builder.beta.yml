@@ -46,6 +46,7 @@ files:
   - "!server/data/**"
   - "!server/**/*.test.js"
   - electron/**
+  - "!electron/speech/*.{cs,swift,plist}"
   - scripts/fetch-map-assets.mjs
   - scripts/map-assets.json
   - fmg/dist/**
@@ -54,6 +55,9 @@ files:
 
 asarUnpack:
   - scripts/**
+  # The system speech programs (electron/speechSystem.cjs; their sources stay
+  # out, above): nothing can be started from inside the archive.
+  - electron/speech/**
 
 # Ad-hoc code-signs the packaged .app on macOS. Without it the build ships with
 # only the stock Electron binary's linker signature and no sealed resources, and
@@ -134,6 +138,13 @@ mac:
         - arm64
   icon: electron/beta-assets/icon-beta.png
   category: public.app-category.strategy-games
+  # macOS shows these when the Advisor's microphone first asks; without them the
+  # system ends the app at the first getUserMedia (electron/microphone.cjs), and
+  # refuses its speech recognition program (electron/speech/macos.swift), whose
+  # prompts name this app.
+  extendInfo:
+    NSMicrophoneUsageDescription: "The Advisor's microphone turns what you say into a message."
+    NSSpeechRecognitionUsageDescription: "The Advisor's microphone uses macOS's speech recognition to turn what you say into a message. It runs on this Mac where macOS can; otherwise Apple recognises it."
   artifactName: Open-Historia-Beta-mac-${arch}.${ext}
 
 linux:

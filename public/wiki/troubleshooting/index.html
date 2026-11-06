@@ -346,7 +346,13 @@ shared; save, and publish again. Regions you paste or import on beta are simplif
 arrive, by a switch on the paste and import panels that is on by default.</p><h2 id="windows-says-the-installer-is-unsafe">Windows says the installer is unsafe</h2>
 <p>The installer is not code-signed yet. Choose <strong>More info → Run anyway</strong> in SmartScreen.</p>
 <h2 id="macos-will-not-open-the-app">macOS will not open the app</h2>
-<p>Also not code-signed. Right-click the app and choose <strong>Open</strong>, then confirm. Once only.</p>
+<p>Also not code-signed. If the app closes as soon as it opens, with a message that macOS cannot
+check it for malicious software, choose <strong>Done</strong>, then <strong>System Settings → Privacy &amp; Security →
+Open Anyway</strong>, and confirm. On macOS 14 and earlier, right-click the app and choose <strong>Open</strong>
+instead. Once only.</p>
+<p>If it still closes at once, send the bug report below with the crash report macOS wrote: in
+Finder, <strong>Go → Go to Folder…</strong> <code>~/Library/Logs/DiagnosticReports</code>, and the newest file whose name
+starts with <code>Open Historia</code>.</p>
 <h2 id="reporting-a-bug">Reporting a bug</h2>
 <p><strong>Turn on detailed logging first</strong> — ☰ → Settings → Advanced → Diagnostics — then reproduce the
 problem. It records

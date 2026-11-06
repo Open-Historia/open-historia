@@ -391,7 +391,7 @@ test("an Update with no update copy, or one just gone, downloads the counted cop
   assert.deepEqual(gone, [HUB_INDEX_URL, proxy(UPDATE), proxy(COPY)]);
 });
 
-test("the Scenarios tab's Update asks for the update copy; the Community tab's Import does not", () => {
+test("the Scenarios tab's Update asks for the update copy; the Community tab's Import only when importing again (hubReimport.test.js)", () => {
   const bar = fs.readFileSync(path.join(ROOT, "src/Game/GameUI/libraryBar.jsx"), "utf8");
   const hub = fs.readFileSync(path.join(ROOT, "src/Game/GameUI/communityHub.jsx"), "utf8");
   assert.ok(bar.includes("downloadHubScenario({ postId: post.id, bundleUrl: post.bundleUrl, title: post.title, author: post.author, flatMap: post.flatMap, update: true })"));

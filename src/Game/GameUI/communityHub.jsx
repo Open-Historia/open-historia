@@ -97,7 +97,7 @@ const CARD_WIDTH = "min(21rem, calc(100vw - 2rem))";
 // displays instead of stopping at a resolution-specific max width.
 const COMMUNITY_GRID_TEMPLATE = "repeat(auto-fill, minmax(min(100%, 16.5rem), 1fr))";
 const cardSurface = {
-  background: "#12141a",
+  background: "var(--oh-ui-surface, #12141a)",
   border: "1px solid rgba(255,255,255,0.09)",
   borderRadius: "16px",
   boxShadow: "0 14px 32px rgba(0,0,0,0.45)",
@@ -721,7 +721,10 @@ const CommunityPanel = ({ fullPage = false, onPlay }) => {
       // Update button while the copy is unedited; once the player edits it the
       // link stays, marked edited, so they can suggest their changes back to
       // the post (server/hubProvenance.js).
-      const bundle = await downloadHubScenario({ postId: post.id, bundleUrl: post.bundleUrl, title: post.title, author: post.author, flatMap: post.flatMap });
+      // A post already in the library, or imported before and deleted since,
+      // is fetched from its uncounted update copy: importing again is not an
+      // import (hubPosts.js downloadHubScenario).
+      const bundle = await downloadHubScenario({ postId: post.id, bundleUrl: post.bundleUrl, title: post.title, author: post.author, flatMap: post.flatMap, again: Boolean(libraryOf(post).status) });
       // Nothing is reported anywhere: the download of the post's file from the
       // hub's releases, just above, is what counts the import (hubFiles.js).
       const details = await importScenarioBundle(bundle);

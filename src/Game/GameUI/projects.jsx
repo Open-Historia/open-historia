@@ -162,7 +162,7 @@ const VERIFICATION_BADGE = {
 };
 
 const cardStyle = {
-  backgroundColor: "rgba(255,255,255,0.05)",
+  backgroundColor: "var(--oh-ui-surface, rgba(255,255,255,0.05))",
   border: "1px solid rgba(255,255,255,0.08)",
   borderRadius: "12px",
   padding: "0.7rem 0.8rem",
@@ -180,7 +180,7 @@ const chipBase = {
 };
 
 const selectStyle = {
-  backgroundColor: "rgba(255,255,255,0.06)",
+  backgroundColor: "var(--oh-ui-surface, rgba(255,255,255,0.06))",
   border: "1px solid rgba(255,255,255,0.12)",
   borderRadius: "8px",
   color: "white",
@@ -191,7 +191,7 @@ const selectStyle = {
 };
 
 const ghostButtonStyle = {
-  background: "rgba(255,255,255,0.06)",
+  background: "var(--oh-ui-raised, rgba(255,255,255,0.06))",
   border: "1px solid rgba(255,255,255,0.12)",
   borderRadius: "8px",
   color: "rgba(255,255,255,0.85)",
@@ -751,7 +751,7 @@ const TAG_MENU_MAX_HEIGHT_SCROLLING = `min(18rem, max(11rem, calc(${PANEL_HEIGHT
 const TAG_ITEM_SELECTOR = "[role=\"menuitemcheckbox\"]";
 
 const tagMenuBoxStyle = {
-  backgroundColor: "#1b1b1e",
+  backgroundColor: "var(--oh-ui-surface, #1b1b1e)",
   border: "1px solid rgba(255,255,255,0.14)",
   borderRadius: "10px",
   boxShadow: "0 12px 30px rgba(0,0,0,0.5)",

@@ -98,6 +98,7 @@ import {
   latestOfficialVersion,
 } from "./officialBasemaps.js";
 import { listFlags, createFlag, deleteFlag } from "./flagStore.js";
+import { HUB_IMPORTED_KEY, mergeHubImported } from "./hubImported.js";
 import { HUB_CACHE_NAMES_MARKER, renameHubCacheBundles, renameScenarioBundleBytes, writeFileAtomic } from "./scenarioBundleNames.js";
 import {
   clearHubCache,
@@ -129,6 +130,7 @@ import {
   sanitizeRelayHeaders,
 } from "./security.js";
 import { appendLog, clearLog, readLogSince } from "./logStore.js";
+import { desktopDownloadFor } from "./desktopDownload.js";
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 import { DATA_DIR } from "./dataDir.js";
@@ -536,6 +538,10 @@ app.put("/api/ui-settings", jsonParser, (req, res) => {
     if (typeof req.body?.language === "string" && req.body.language.trim().length <= 16) {
       next.language = req.body.language.trim();
     }
+    // Hub posts imported (hubImported.js): added to, never replaced.
+    if (Array.isArray(req.body?.[HUB_IMPORTED_KEY])) {
+      next[HUB_IMPORTED_KEY] = mergeHubImported(next[HUB_IMPORTED_KEY], req.body[HUB_IMPORTED_KEY]);
+    }
     fs.mkdirSync(path.dirname(uiSettingsFile), { recursive: true });
     fs.writeFileSync(uiSettingsFile, JSON.stringify(next, null, 2));
     res.json(next);
@@ -655,6 +661,15 @@ app.get("/api/app-kind", (req, res) => {
 const APP_UPDATE_TTL_MS = 3 * 60 * 1000;
 const appUpdateCache = new Map(); // track -> { at, data }
 
+// The feed is remote, but the running app knows its own build and updater
+// capability even when GitHub is unreachable. Do not cache these local values
+// with the release metadata, or return an empty object when the feed fails.
+const appUpdateReply = (res, feed = {}) => res.json({
+  ...feed,
+  current: String(process.env.OH_DESKTOP_BUILD || ""),
+  autoUpdate: Boolean(desktopUpdater()),
+});
+
 app.get("/api/app-update", async (req, res) => {
   const track = String(req.query.track || "stable");
   const manifestUrl = APP_UPDATE_MANIFESTS[track];
@@ -664,13 +679,13 @@ app.get("/api/app-update", async (req, res) => {
   }
   const cached = appUpdateCache.get(track);
   if (cached && Date.now() - cached.at < APP_UPDATE_TTL_MS) {
-    res.json(cached.data);
+    appUpdateReply(res, cached.data);
     return;
   }
   try {
     const response = await fetch(manifestUrl, { signal: AbortSignal.timeout(6000) });
     if (!response.ok) {
-      res.json(cached ? cached.data : {}); // stale-if-error, else empty
+      appUpdateReply(res, cached?.data); // stale-if-error, else local capability only
       return;
     }
     const raw = await response.json();
@@ -682,20 +697,12 @@ app.get("/api/app-update", async (req, res) => {
       // Desktop ids are opaque strings (a CI run id), not the ascending integer the
       // Android tracks use, so they are kept as text and compared for INEQUALITY.
       buildId: String((raw && raw.build) ?? ""),
-      // Set only when this server is the one running inside the desktop app. That is
-      // how the page can tell it is there at all — it is otherwise an ordinary
-      // localhost page — and it is absent everywhere else, so no banner appears.
-      current: String(process.env.OH_DESKTOP_BUILD || ""),
-      download: str(raw && raw[{ win32: "windows", darwin: "mac", linux: "linux" }[process.platform]]),
-      // True when this app can install the update itself. False on a build that
-      // cannot (unsigned macOS, an unpackaged dev run), and the banner then offers
-      // the download link exactly as it did before.
-      autoUpdate: Boolean(desktopUpdater()),
+      download: desktopDownloadFor(raw),
     };
     appUpdateCache.set(track, { at: Date.now(), data });
-    res.json(data);
+    appUpdateReply(res, data);
   } catch {
-    res.json(cached ? cached.data : {}); // offline / timeout -> fail-open
+    appUpdateReply(res, cached?.data); // offline / timeout -> fail-open
   }
 });
 
@@ -805,6 +812,39 @@ app.post("/api/desktop/display-mode", jsonParser, (req, res) => {
     return;
   }
   res.json(bridge.set(mode));
+});
+
+// The Advisor's microphone through the system's own speech recognition
+// (electron/speechSystem.cjs): one turn per request, answered as JSON lines
+// (ready, partial, final, error, end) as they come. The turn ends when the
+// program says "end" or when the page lets go of the request. A POST, so the
+// write guard keeps other websites from opening the microphone; and only for
+// this machine's own window, as another device's microphone is not this one.
+app.post("/api/desktop/speech/listen", jsonParser, (req, res) => {
+  const bridge = isLoopbackAddress(req.socket?.remoteAddress) ? globalThis.__ohSystemSpeech || null : null;
+  res.status(200);
+  res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("X-Accel-Buffering", "no");
+  const write = (event) => {
+    if (!res.writableEnded) res.write(`${JSON.stringify(event)}\n`);
+  };
+  if (!bridge) {
+    write({ type: "error", code: "unavailable" });
+    write({ type: "end" });
+    res.end();
+    return;
+  }
+  res.flushHeaders?.();
+  const session = bridge.listen({
+    language: req.body?.language,
+    onEvent: (event) => {
+      write(event);
+      if (event.type === "end" && !res.writableEnded) res.end();
+    },
+  });
+  // The page stopping the turn (or going away) closes the request.
+  res.on("close", () => session.stop());
 });
 
 app.get("/api/scenarios/:scenarioId", (req, res) => {
@@ -2430,6 +2470,13 @@ httpServer.on("error", (error) => {
     console.error(`Port ${PORT} is already in use — Open Historia is probably already running.`);
     console.error("Close the other instance (the ⏻ button in the game stops it), or set the");
     console.error(`PORT environment variable to run this one on a different port.`);
+    // Inside the desktop app this is the app's own process, and exiting it
+    // closed the app without a word, a window or a line in its log. The app
+    // says what happened and quits instead (electron/main.cjs).
+    if (typeof globalThis.__ohFatal === "function") {
+      globalThis.__ohFatal(error);
+      return;
+    }
     process.exit(1);
   }
   throw error;

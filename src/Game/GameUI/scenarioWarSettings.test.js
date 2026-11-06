@@ -13,7 +13,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { formDiffers } from "../../runtime/editorForm.js";
-import { WAR_MECHANICS, warSettingsOf } from "../../runtime/warSettings.js";
+import { TECHNOLOGY_WEIGHT_MODERN, WAR_MECHANICS, warSettingsOf } from "../../runtime/warSettings.js";
 import { compactWarSettings, warNumberText, withWarMechanic, withWarNumber, withWarSettings } from "./scenarioWarSettings.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -24,7 +24,7 @@ test("a scenario that sets nothing holds nothing, and a switch turned off and on
     assert.equal(compactWarSettings(nothing), null, JSON.stringify(nothing));
   }
   const off = withWarMechanic(null, "weather", false);
-  assert.deepEqual(off, { mechanics: { weather: false }, era: null, menPerCounter: null, manpowerShare: null, muster: null });
+  assert.deepEqual(off, { mechanics: { weather: false }, era: null, menPerCounter: null, manpowerShare: null, technologyWeight: null, muster: null });
   assert.equal(withWarMechanic(off, "weather", true), null);
   assert.equal(formDiffers({ warSettings: withWarMechanic(off, "weather", true) }, { warSettings: compactWarSettings({}) }), false);
   // The same settings make the same form however they were written.
@@ -36,12 +36,19 @@ test("the era, the men a counter stands for, the share of people who can fight a
   const era = withWarSettings(null, { era: 2 });
   assert.equal(era.era, 2);
   assert.equal(withWarSettings(era, { era: null }), null, "automatic again");
-  assert.deepEqual(withWarNumber(null, "menPerCounter", "2k"), { settings: { mechanics: {}, era: null, menPerCounter: 2000, manpowerShare: null, muster: null }, ok: true });
+  assert.deepEqual(withWarNumber(null, "menPerCounter", "2k"), { settings: { mechanics: {}, era: null, menPerCounter: 2000, manpowerShare: null, technologyWeight: null, muster: null }, ok: true });
   assert.equal(withWarNumber(null, "menPerCounter", "5,000,000").settings.menPerCounter, 1000000, "held to the most");
   assert.equal(withWarNumber(null, "manpowerShare", "0.5").settings.manpowerShare, 1, "held to the least");
   assert.equal(withWarNumber(null, "manpowerShare", "60%").settings.manpowerShare, 60);
   assert.equal(withWarNumber(withWarNumber(null, "manpowerShare", "60").settings, "manpowerShare", "").settings, null, "an empty field is the default again");
   assert.deepEqual(withWarNumber(era, "menPerCounter", "lots"), { settings: era, ok: false });
+  // The importance of technology (militaryPower.js): 0 is the men alone, and it is held to 0..10.
+  assert.equal(withWarNumber(null, "technologyWeight", "0").settings.technologyWeight, 0);
+  assert.equal(withWarNumber(null, "technologyWeight", "1,5").settings.technologyWeight, 1.5);
+  assert.equal(withWarNumber(null, "technologyWeight", "40").settings.technologyWeight, 10, "held to the most");
+  assert.equal(withWarNumber(null, "technologyWeight", "-2").ok, false);
+  assert.equal(withWarNumber(withWarNumber(null, "technologyWeight", "2").settings, "technologyWeight", "").settings, null, "empty: the modern world's again");
+  assert.equal(warNumberText({ technologyWeight: 2.5 }, "technologyWeight"), "2.5");
   assert.deepEqual([warNumberText({ menPerCounter: 12000 }, "menPerCounter"), warNumberText({ manpowerShare: 12.5 }, "manpowerShare"), warNumberText(null, "manpowerShare")], ["12,000", "12.5", ""]);
   const curve = withWarSettings(null, { muster: [[0.4, 10], [1, 120]] });
   assert.deepEqual(curve.muster, [[0.4, 10], [1, 120]]);
@@ -69,4 +76,9 @@ test("the Wars feature carries the settings, and Save writes them with the scena
     assert.ok(panel.includes(`"${label}"`) || panel.includes(`>${label}<`), label);
   }
   assert.ok(panel.includes("<MusterChart"));
+  // The importance of technology, the modern world's by default, and saying so: "by default set it to a multiplier
+  // good for modern day and have it say that by default its configured for the modern world" (the owner, 2026-11-04).
+  assert.ok(panel.includes(">Importance of technology<"));
+  assert.ok(panel.includes('onText={typed("technologyWeight")}'));
+  assert.ok(panel.includes(`>Empty: ${TECHNOLOGY_WEIGHT_MODERN}, configured for the modern world.<`));
 });

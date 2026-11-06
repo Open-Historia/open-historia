@@ -24,6 +24,34 @@ const blockProblems = (json, reason) => {
   return [];
 };
 
+// A provider may emit several independent ```actions arrays even though the
+// prompt asks for one. The old single-block extractor rendered every later
+// machine-readable array as raw code and only offered the first for review.
+// Reuse the existing strict fenced parser for EACH block, in appearance order;
+// a bad block contributes no operations and is reported instead of silently
+// swallowing the other proposals. An incomplete final fence is never salvaged
+// into a potentially unintended Action, even after streaming has ended.
+const extractActionBlocks = (rawText, { streaming }) => {
+  let rest = rawText;
+  let found = 0;
+  const operations = [];
+  const problems = [];
+  while (true) {
+    // In streaming mode the existing extractor hides an unfinished fence.
+    // Use that mode here also for a final truncated fence, then explicitly
+    // report it; other structured block types keep their established policy.
+    const block = extractFencedJson(rest, "actions", { streaming: true });
+    if (block.rest === rest) break;
+    found += 1;
+    rest = block.rest;
+    if (Array.isArray(block.json)) operations.push(...block.json);
+    else if (block.json !== null) problems.push(`Action block ${found} was not a list; no proposals were offered from it.`);
+    else if (block.reason) problems.push(`Action block ${found} was ${block.reason}; no proposals were offered from it.`);
+    else if (!streaming) problems.push(`Action block ${found} was cut off before it closed; no proposals were offered from it.`);
+  }
+  return { rest, json: found ? operations : null, problems };
+};
+
 // `allowedUnitTypes` is the scenario's world.allowedUnitTypes: a deployment of
 // any other type gets no button.
 // `streaming`: the reply is still arriving, so an open fence is hidden rather
@@ -38,7 +66,7 @@ export const parseAdvisorReply = (rawText, { allowedUnitTypes = null, streaming 
   const chart = chartJson
     ? validateChartConfig(chartJson)
     : { config: null, problem: chartReason ? `the chart block was ${chartReason}` : unclosedChart ? "the chart block was cut off before it closed" : "" };
-  const { rest: afterActions, json: actionsRaw } = extractFencedJson(afterChart, "actions", { streaming });
+  const { rest: afterActions, json: actionsRaw, problems: actionBlockProblems } = extractActionBlocks(afterChart, { streaming });
   const { rest: afterDrafts, json: draftsRaw, reason: draftsReason } = extractFencedJson(afterActions, "senddraft", { streaming });
   const { rest: afterInstitutionDrafts, json: institutionDraftsRaw, reason: institutionDraftsReason } = extractFencedJson(afterDrafts, "institutiondraft", { streaming });
   const { rest: afterDeploy, json: deployRaw, reason: deployReason } = extractFencedJson(afterInstitutionDrafts, "deploy", { streaming });
@@ -57,6 +85,7 @@ export const parseAdvisorReply = (rawText, { allowedUnitTypes = null, streaming 
     chartConfig: chart.config,
     chartProblem: chart.problem,
     actionsProposal: Array.isArray(actionsRaw) ? actionsRaw : null,
+    actionBlockProblems,
     messageDrafts,
     institutionDrafts: institutionDrafts.length ? institutionDrafts : null,
     deployments: deployments.length ? deployments : null,

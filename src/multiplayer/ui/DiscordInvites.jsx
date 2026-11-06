@@ -42,7 +42,7 @@ const rememberedName = () => {
 };
 
 const glass = {
-  background: "rgba(20,20,23,0.94)",
+  background: "var(--oh-ui-overlay-strong, rgba(20,20,23,0.94))",
   border: "1px solid rgba(255,255,255,0.12)",
   borderRadius: "14px",
   boxShadow: "0 18px 50px rgba(0,0,0,0.5)",
@@ -60,7 +60,7 @@ const button = {
   minHeight: "2.4rem",
   padding: "0 1rem",
 };
-const primary = { ...button, background: "rgba(43,193,243,0.18)", borderColor: "rgba(43,193,243,0.55)", color: "#e6f8ff" };
+const primary = { ...button, background: "color-mix(in srgb, var(--oh-ui-accent, #2bc1f3) 18%, transparent)", borderColor: "color-mix(in srgb, var(--oh-ui-accent, #2bc1f3) 55%, transparent)", color: "#e6f8ff" };
 
 const Card = ({ children }) => (
   <div role="alertdialog" style={{ ...glass, bottom: "calc(1.2rem + env(safe-area-inset-bottom, 0px))", left: "50%", maxWidth: "calc(100vw - 2rem)", padding: "1rem 1.1rem", position: "fixed", transform: "translateX(-50%)", width: "24rem", zIndex: 2147483300 }}>

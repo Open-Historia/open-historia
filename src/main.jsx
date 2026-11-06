@@ -1,4 +1,5 @@
 import { createRoot } from "react-dom/client";
+import { installUiTheme } from "./runtime/uiTheme.js";
 import { installAppHeight } from "./runtime/mobileUi.js";
 import { installNativeBackgroundPause } from "./runtime/native/backgroundPause.js";
 import { reportRendererRestart } from "./runtime/native/rendererRestart.js";
@@ -39,6 +40,7 @@ const mount = () => {
     // Before the first render: every panel sizes itself from the visible height
     // (runtime/mobileUi.js), which on a phone is not 100vh.
     installAppHeight();
+    installUiTheme();
     // MapLibre is configured by the map's own chunk as it loads
     // (Game/Map/mapLibreSetup.js), so the library stays out of this one.
     createRoot(document.getElementById("root"), {

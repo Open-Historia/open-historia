@@ -22,7 +22,7 @@ import { MEN_PER_FORMATION_BY_ERA } from "../../runtime/fronts/constants.js";
 import { DEFAULT_MUSTER } from "../../runtime/mustering.js";
 import { formatPopulationFigure } from "../../runtime/populationFigure.js";
 import { eraOf } from "../../runtime/unitMotion.js";
-import { ERA_LABELS, FRONTS_FROM_YEAR, WAR_MECHANICS, normalizeWarSettings, warfareOf } from "../../runtime/warSettings.js";
+import { ERA_LABELS, FRONTS_FROM_YEAR, TECHNOLOGY_WEIGHT_MODERN, WAR_MECHANICS, normalizeWarSettings, warfareOf } from "../../runtime/warSettings.js";
 import MusterChart from "../../Editor/MusterChart.jsx";
 import { warNumberText, withWarMechanic, withWarNumber, withWarOutcome, withWarSettings, withoutWarOutcome } from "./scenarioWarSettings.js";
 
@@ -156,7 +156,7 @@ const NumberField = ({ text, placeholder, label, onText }) => {
 //   onChange   (next): the form's warSettings
 const ScenarioWarSettings = ({ value, gameDate = "", onChange }) => {
   const touch = useTouchPrimary();
-  const settings = normalizeWarSettings(value) ?? { mechanics: {}, era: null, menPerCounter: null, manpowerShare: null, muster: null };
+  const settings = normalizeWarSettings(value) ?? { mechanics: {}, era: null, menPerCounter: null, manpowerShare: null, technologyWeight: null, muster: null };
   const dateEra = eraOf(gameDate, null);
   const era = settings.era ?? dateEra;
   // How its wars' troops come when nobody deploys them otherwise, as the date (and era) would have it.
@@ -228,6 +228,19 @@ const ScenarioWarSettings = ({ value, gameDate = "", onChange }) => {
             text={warNumberText(value, "manpowerShare")}
           />
           <div style={{ ...hintStyle, marginTop: "0.3rem" }}>Empty: 12, as every country had.</div>
+        </div>
+        <div>
+          <label style={labelStyle}>Importance of technology</label>
+          <NumberField
+            label="Importance of technology"
+            onText={typed("technologyWeight")}
+            placeholder={String(TECHNOLOGY_WEIGHT_MODERN)}
+            text={warNumberText(value, "technologyWeight")}
+          />
+          <div style={{ ...hintStyle, marginTop: "0.3rem" }}>Empty: 4.5, configured for the modern world.</div>
+          <div style={{ ...hintStyle, marginTop: "0.3rem" }}>
+            How far better armed, trained and funded soldiers outweigh more of them in a country&apos;s military power. At 1 the men and their arms count alike; at 0 only the men count.
+          </div>
         </div>
       </div>
 

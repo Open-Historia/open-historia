@@ -11,7 +11,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { spendingFactor } from "../../runtime/militaryFunding.js";
-import { MANPOWER_PERCENT, MEN_AT, MEN_POWER, POWER_SCALE } from "../../runtime/militaryPower.js";
+import { MANPOWER_PERCENT, MEN_AT, POWER_SCALE } from "../../runtime/militaryPower.js";
+import { TECHNOLOGY_WEIGHT_MODERN } from "../../runtime/warSettings.js";
 import { RANKING_METRICS, buildRanking, openingMetric, rankingMetricsFor, rankingValue, regionCountsOf } from "./countryRanking.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -71,7 +72,7 @@ test("a figure from a country's sheet ranks the countries that have one and coun
 });
 
 // What a country's men under arms and its spending come to in its power, at every other figure 50 (militaryPower.js).
-const menOf = (people, spending = 50) => POWER_SCALE * ((people * MANPOWER_PERCENT) / 100 / MEN_AT) ** MEN_POWER * spendingFactor(spending);
+const menOf = (people, spending = 50) => POWER_SCALE * ((people * MANPOWER_PERCENT) / 100 / MEN_AT) * spendingFactor(spending) ** TECHNOLOGY_WEIGHT_MODERN;
 const tenth = (value) => Math.round(value * 10) / 10;
 
 test("military power is what the AI rated each country's forces at; a country never rated is left out, whatever its people", () => {
@@ -94,10 +95,11 @@ test("a country's own military figures move its power: quality, technology, its 
   const of = (extra, key = "Cisland") => rank("military", extra).rows.find((row) => row.key === key)?.value;
   const usual = menOf(12e6);
   assert.equal(of(figures({})), tenth(usual));
-  assert.equal(of(figures({ quality: 100 })), tenth(usual * 1.8));
-  assert.equal(of(figures({ technology: 0 })), tenth(usual * 0.5));
+  // What each soldier is worth, raised to the importance of technology (the modern world's: militaryPower.js).
+  assert.equal(of(figures({ quality: 100 })), tenth(usual * 1.8 ** TECHNOLOGY_WEIGHT_MODERN));
+  assert.equal(of(figures({ technology: 0 })), tenth(usual * 0.5 ** TECHNOLOGY_WEIGHT_MODERN));
   assert.ok(of(figures({ manpowerShare: 48 })) > of(figures({})), "more of its people fit to fight, more power");
-  assert.equal(of(figures({ sea: 0 })), tenth(usual * 0.75), "no navy");
+  assert.equal(of(figures({ sea: 0 })), tenth(usual * 0.75 ** TECHNOLOGY_WEIGHT_MODERN), "no navy");
   assert.equal(of(figures({ land: 0, sea: 0, air: 0 })), 0, "no forces at all");
   assert.equal(of({ ...figures({}), warWeariness: [{ country: "Cisland", value: 100 }] }), tenth(usual * 0.6));
   // A scenario that does not count countries' own figures ranks them by their rating alone.
