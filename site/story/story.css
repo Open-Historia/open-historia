@@ -448,3 +448,33 @@ img { max-width: 100%; display: block; }
 .oh-lite .site-head { backdrop-filter: none; -webkit-backdrop-filter: none; background: rgba(13, 13, 15, 0.94); }
 /* Below the story, a section is laid out and painted only when it comes near the screen. */
 .section { content-visibility: auto; contain-intrinsic-size: auto 900px; }
+
+/* ---- the Download the App popup: Stable, Native (recommended) and Beta (site.js) ---- */
+.dlp { position: fixed; inset: 0; z-index: 200; display: flex; align-items: center; justify-content: center; padding: 20px; background: rgba(9, 9, 11, 0.82); }
+.dlp[hidden] { display: none; }
+html.dlp-open { overflow: hidden; }
+.dlp-box { position: relative; width: min(980px, 100%); max-height: calc(100vh - 40px); max-height: calc(100svh - 40px); overflow-y: auto; background: var(--bg2); border: 1px solid var(--line2); border-top: 3px solid var(--gold); border-radius: 6px; padding: clamp(22px, 4vw, 38px); box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6); }
+.dlp-box h2 { margin: 0 0 6px; font: 700 clamp(26px, 2vw + 16px, 38px) / 1.1 var(--display); color: var(--paper); }
+.dlp-box .eyebrow { margin-bottom: 10px; }
+.dlp-for { margin: 0 0 24px; color: var(--muted); font-size: 15px; }
+.dlp-x { position: absolute; top: 14px; right: 14px; width: 38px; height: 38px; border-radius: 50%; border: 1px solid var(--line2); background: transparent; color: var(--paper2); font-size: 16px; cursor: pointer; }
+.dlp-x:hover { color: var(--paper); border-color: var(--paper); }
+.dlp-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 16px; align-items: stretch; }
+.dlp-rec { position: relative; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding: 14px; border: 2px solid var(--gold); border-radius: 8px; background: rgba(201, 165, 90, 0.08); box-shadow: 0 0 0 4px rgba(201, 165, 90, 0.12); }
+.dlp-card { position: relative; display: flex; flex-direction: column; gap: 10px; padding: 22px 20px 20px; border: 1px solid var(--line2); border-radius: 6px; background: rgba(13, 13, 15, 0.55); }
+.dlp-card h3 { margin: 0; font: 700 22px/1.1 var(--display); letter-spacing: 0.04em; color: var(--paper); }
+.dlp-card p { margin: 0; flex: 1; color: var(--paper2); font-size: 16px; line-height: 1.5; }
+.dlp-card.featured { border-color: rgba(201, 165, 90, 0.4); background: rgba(13, 13, 15, 0.45); }
+.dlp-rec .tag { position: absolute; top: -12px; left: 18px; padding: 4px 10px; border-radius: 999px; background: var(--gold); color: var(--bg); font: 700 11px/1 var(--display); letter-spacing: 0.14em; text-transform: uppercase; }
+.dlp-btns { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.dlp-btns .btn { padding: 12px 18px; font-size: 13px; }
+.dlp-btns .btn { white-space: nowrap; }
+.dlp-rec .dlp-btns .btn { padding: 12px 14px; font-size: 12px; gap: 8px; }
+.dlp-none { color: var(--muted); font-size: 14px; font-style: italic; }
+.dlp-foot { margin: 22px 0 0; color: var(--muted); font-size: 14px; }
+@media (max-width: 760px) {
+  .dlp { align-items: flex-end; padding: 0; }
+  .dlp-box { border-radius: 10px 10px 0 0; max-height: 92vh; max-height: 92svh; }
+  .dlp-grid { grid-template-columns: 1fr; gap: 18px; }
+  .dlp-rec { grid-template-columns: 1fr; order: -1; padding: 18px 12px 12px; }
+}
