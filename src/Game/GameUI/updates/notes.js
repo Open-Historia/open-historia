@@ -54,6 +54,24 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // "while scrolling, sometimes some ui elements trail behind for some reason creating a really wierd effect" (the
+    // owner, 2026-11-05): a wheel scroll moved lists under a still cursor, and every row and button that passed under
+    // it lit up and eased back out (styles.css control transitions). runtime/scrollHoverFreeze.js holds hover still
+    // while a list scrolls; the menu cards' badges lost a blur that lagged their card.
+    id: "2026-11-smoother-scrolling",
+    kind: "minor",
+    date: "2026-11-05",
+    channel: "beta",
+    banners: [
+      {
+        title: "Smoother scrolling",
+        items: [
+          "Rows and buttons in the menu, Settings and other lists no longer light up and trail behind as they scroll past the cursor.",
+        ],
+      },
+    ],
+  },
+  {
     // The HUD's glass and its buttons take the theme (runtime/uiTheme.js --oh-hud-bg…, --oh-ui-glass-*; the owner's
     // screenshots of the dock, date widget, map-mode switch and top bar, 2026-11-06). The translation model never
     // downloaded on Android: the app's http origin has no Cache Storage, so it is kept in IndexedDB
