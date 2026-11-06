@@ -216,11 +216,62 @@ export const replaceAdvisorThread = (entries, threadId, messages, { clearNotices
   if (messages.some((entry) => entry.threadId && entry.threadId !== threadId)) {
     throw new Error("A message cannot be moved between Advisor recipients.");
   }
+  // Action approvals are written by recordAdvisorActionReceipt in the
+  // canonical document queue. A UI conversation snapshot is never authority
+  // to create, cancel or overwrite one of those receipts.
+  const savedReplies = new Map();
+  for (const entry of source) {
+    if (entry?.role !== "advisor" || threadOf(entry) !== threadId || !entry.id) continue;
+    const prior = savedReplies.get(entry.id);
+    if (prior && (prior.actionReceipts || entry.actionReceipts)) {
+      throw new Error("Duplicate Advisor message IDs prevent safe receipt preservation.");
+    }
+    savedReplies.set(entry.id, entry);
+  }
+  const incomingReplyIds = new Set();
   const notices = new Set(source.filter((entry) => entry?.role === "notice").map((entry) => entry.id));
   const own = messages
     .filter((entry) => !entry.streaming && (entry.role !== "notice" || (threadId === CHIEF_ADVISOR_THREAD && !clearNotices && notices.has(entry.id))))
     .map((entry) => {
       const record = { ...entry };
+      if (record.role === "advisor" && record.id) {
+        if (incomingReplyIds.has(record.id)) {
+          throw new Error("Duplicate Advisor message IDs prevent safe receipt preservation.");
+        }
+        incomingReplyIds.add(record.id);
+        const saved = savedReplies.get(record.id);
+        const receipts = saved?.actionReceipts;
+        const incoming = record.actionReceipts;
+        if (incoming != null && (typeof incoming !== "object" || Array.isArray(incoming))) {
+          throw new Error("Malformed Advisor Action receipts in conversation snapshot.");
+        }
+        if (receipts != null && (typeof receipts !== "object" || Array.isArray(receipts))) {
+          throw new Error("Malformed canonical Advisor Action receipts.");
+        }
+        const confirmed = Object.keys(receipts || {});
+        if (confirmed.length) {
+          // A receipt belongs to its original reply AND proposal. Matching by
+          // list index would attach it to an unrelated message after a stale
+          // UI snapshot or an interleaved native notice.
+          for (const proposalId of confirmed) {
+            const previous = saved.actionProposals?.filter((item) => item?.id === proposalId) || [];
+            const current = record.actionProposals?.filter((item) => item?.id === proposalId) || [];
+            const identity = ["id", "actionId", "operation", "targetId", "title", "text", "kind"];
+            if (previous.length !== 1 || current.length !== 1
+                || identity.some((key) => previous[0][key] !== current[0][key])) {
+              throw new Error("Advisor Action proposal identity changed since the receipt was saved.");
+            }
+          }
+          if (Object.keys(incoming || {}).some((id) => !Object.hasOwn(receipts, id))) {
+            throw new Error("Action receipts cannot be created by an Advisor conversation save.");
+          }
+          record.actionReceipts = { ...receipts };
+        } else if (incoming && Object.keys(incoming).length) {
+          throw new Error("Action receipts cannot be created by an Advisor conversation save.");
+        } else {
+          delete record.actionReceipts;
+        }
+      }
       if (threadId === CHIEF_ADVISOR_THREAD) delete record.threadId;
       else record.threadId = threadId;
       return record;
@@ -230,11 +281,18 @@ export const replaceAdvisorThread = (entries, threadId, messages, { clearNotices
   // their exact positions (verified against the 413-entry Russia campaign).
   const next = [];
   const replacements = own.filter((entry) => entry.role !== "notice");
+  const retainedReplyIds = new Set(replacements.filter((entry) => entry.role === "advisor" && entry.id).map((entry) => entry.id));
   let used = 0;
   for (const entry of source) {
     if (MESSAGE_ROLES.has(entry?.role) && threadOf(entry) === threadId) {
       if (entry.role === "notice") {
         if (!clearNotices) next.push(entry);
+      } else if (!clearNotices && entry.role === "advisor" && entry.id
+          && Object.keys(entry.actionReceipts || {}).length && !retainedReplyIds.has(entry.id)) {
+        // The UI omitted this reply entirely. Preserve an acknowledged native
+        // decision instead of replacing it with an unrelated older message.
+        // Explicit conversation clearing still removes the full thread.
+        next.push(entry);
       } else if (used < replacements.length) {
         next.push(replacements[used++]);
       }
