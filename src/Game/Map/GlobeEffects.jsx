@@ -132,9 +132,11 @@ const GlobeEffects = ({ active }) => {
       const canvas = mapInstance.getCanvas();
       const width = canvas.clientWidth;
       const height = canvas.clientHeight;
-      const matrix = mapInstance.transform?.modelViewProjectionMatrix;
+      // (MapLibre 6 keeps the camera's transform to itself: nothing public gives these.)
+      const transform = mapInstance._camera?.transform;
+      const matrix = transform?.modelViewProjectionMatrix;
       const projectionTransition = globeTransitionOpacity(
-        mapInstance.transform
+        transform
           ?.getProjectionDataForCustomLayer?.(true)
           ?.projectionTransition,
       );
@@ -203,7 +205,7 @@ const GlobeEffects = ({ active }) => {
           drawGlobeLighting({
             canvas: lightingCanvas,
             matrix,
-            cameraPosition: mapInstance.transform?.cameraPosition,
+            cameraPosition: transform?.cameraPosition,
             sunDirection,
             width,
             height,
