@@ -324,7 +324,7 @@ func _on_setting_changed(key: String, value: Variant) -> void:
 	if redraw:
 		shell.end_game_loading()
 	if key == "ui_language":
-		await i18n.set_language(str(value))
+		await i18n.switch_language(str(value))
 		_plain_title()
 	elif key == "map_mode":
 		hud.set_map_mode(str(value))

@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { translationRunnerFor } from "../onDevice.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const sidecarDir = path.resolve(here, "..");
@@ -20,7 +21,6 @@ const LEGACY_CACHE_PREFIX = "i18n_cache_";
 const CACHE_LIMIT = 8000;
 const ZOOM_KEY = "oh-native-zoom-level";
 const DISPLAY_MODES = ["windowed", "maximized", "fullscreen"];
-const TRANSLATION_PROMPT_MARK = "You are the translation engine for a grand-strategy game.";
 
 const attempt = async (work) => {
   try {
@@ -57,7 +57,7 @@ const walkFiles = (dir, found = []) => {
 const NOT_ON_NATIVE = new Set(["2026-11-smoother-zooming", "2026-11-picture-edges-and-strike-targets"]);
 
 export const register = (ctx) => {
-  const { engine, api, emit, plain, storage, clean, list, cacheDir, addStandIn, standIn } = ctx;
+  const { engine, api, emit, plain, storage, clean, list, cacheDir, standIn } = ctx;
   const notes = engine.shellNotes;
   const onNative = (update) => !NOT_ON_NATIVE.has(clean(update?.id));
   const notices = engine.shellNotices;
@@ -278,43 +278,6 @@ export const register = (ctx) => {
     packed: i18n.hasShippedPack(code) === true,
   });
 
-  const translateBatch = async (code, strings, kind, packed) => {
-    const name = i18n.languageDisplayName(code);
-    const systemPrompt =
-      `You are the translation engine for a grand-strategy game. ` +
-      (packed
-        ? `The strings are the game's content: names of countries, polities and places, scenario and saved-game names and descriptions, custom statistics, community posts. `
-        : `The strings are its interface and its content. `) +
-      `Translate each English string in the user's JSON array into ${name} (${code}).\n` +
-      `Rules:\n` +
-      `- Answer with ONLY a JSON array of ${strings.length} strings: the translations, same order, same length.\n` +
-      `- Keep numbers, dates' meaning, emoji, punctuation style, and placeholders such as \${...} intact.\n` +
-      `- Country, region, and place names take their standard ${name} forms when they exist; otherwise keep them unchanged.\n` +
-      `- If a string is already in ${name} or is a proper name/code with no translation, return it unchanged.\n` +
-      `- Never add commentary, keys, or markdown.`;
-    return engine.aiMain.callAI(systemPrompt, [
-      { role: "user", parts: [{ text: JSON.stringify(strings) }] },
-    ], {
-      languageMode: "none",
-      logLabel: kind === "content" ? "content translation" : "interface translation",
-      taskKey: "translation",
-      requestKind: engine.requestBudget.BACKGROUND_REQUEST,
-    });
-  };
-
-  if (standIn) {
-    addStandIn(({ tool, body, text }) => {
-      if (tool || !String(text).includes(TRANSLATION_PROMPT_MARK)) return null;
-      try {
-        const contents = list(body?.contents);
-        const asked = JSON.parse(String(contents[contents.length - 1]?.parts?.[0]?.text ?? "[]"));
-        return { text: JSON.stringify(list(asked).map((entry) => String(entry))) };
-      } catch {
-        return null;
-      }
-    });
-  }
-
   const agentState = () => {
     try {
       const waits = engine.agentConnection.agentClient.waits() ?? {};
@@ -415,38 +378,30 @@ export const register = (ctx) => {
       fs.renameSync(`${file}.${process.pid}.tmp`, file);
       return { ...languageInfo(lang), file, count: Object.keys(merged).length, dates: dateTemplates(lang) };
     },
-    "shell.language.translate": async ({ code = "", strings = [], kind = "interface" } = {}) => {
+    "shell.language.translate": async ({ code = "", strings = [] } = {}) => {
       const lang = clean(code).toLowerCase();
       const batch = list(strings).map((entry) => String(entry));
       try {
-        const raw = await translateBatch(lang, batch, kind, i18n.hasShippedPack(lang));
-        const reply = rules.readTranslationReply(raw, batch);
+        const answers = await translationRunnerFor({ cacheDir, models: engine.tlModels, standIn }).translate(lang, batch);
         const learned = learnedFor(lang);
         const entries = {};
-        for (const [source, value] of reply.pairs) {
+        const pairs = [];
+        const unusable = [];
+        batch.forEach((source, index) => {
+          const value = answers[index];
+          if (value == null) {
+            unusable.push(source);
+            return;
+          }
           learned.set(source, value);
           entries[source] = value;
-        }
+          pairs.push([source, value]);
+        });
         persistLearned(lang);
         void syncEntries(lang, entries);
-        return { ok: true, pairs: reply.pairs, unusable: reply.unusable };
+        return { ok: true, pairs, unusable };
       } catch (error) {
-        return { ok: false, error: clean(error?.message) || "unknown", misaligned: error?.misaligned === true, failure: plain(rules.readTranslationFailure(error)) };
-      }
-    },
-    "shell.language.allowance": async () => {
-      try {
-        return { allowed: engine.requestBudget.backgroundAiAllowance().allowed === true };
-      } catch {
-        return { allowed: false };
-      }
-    },
-    "shell.language.canAnswer": async () => {
-      try {
-        const entries = engine.providerConfig.getResolvedFallbackList();
-        return { canAnswer: entries.length > 0 && engine.fallbackRunner.fallbackAvailability({ entries, store: engine.providerConfig.fallbackStateStore }).canAnswer === true };
-      } catch {
-        return { canAnswer: false };
+        return { ok: false, error: clean(error?.message) || "unknown" };
       }
     },
     "shell.language.content": async () => {

@@ -324,6 +324,7 @@ export const register = (ctx) => {
       uiLanguage,
       chatLanguage,
       languages: LANGUAGES.map((entry) => ({ ...entry, builtIn: entry.code === "en" || SHIPPED_PACKS.has(entry.code) })),
+      uiLanguages: (engine.shellI18n?.getUiLanguageOptions?.() ?? LANGUAGES).map((entry) => ({ code: entry.code, name: entry.name, native: entry.native })),
       deviceProfile: deviceOverride === "constrained" || deviceOverride === "full" ? deviceOverride : "",
       labelFonts: list(ms()?.LABEL_FONT_SUGGESTIONS).length ? [...ms().LABEL_FONT_SUGGESTIONS] : ["Georgia", "Times New Roman", "Garamond", "Palatino Linotype", "Impact", "Arial Black", "Arial", "Trebuchet MS", "Verdana", "Courier New", "Comic Sans MS"],
       basemaps: list(engine.assets?.ESRI_BASEMAPS).map((entry) => ({ id: clean(entry?.id), label: clean(entry?.label) })),

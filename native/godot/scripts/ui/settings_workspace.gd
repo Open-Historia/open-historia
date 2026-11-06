@@ -1078,8 +1078,14 @@ func _export_dir() -> String:
 func _build_general() -> void:
 	var language := _section("Language", "Interface language affects the UI. Chat language steers advisor and diplomatic replies.")
 	language.add_child(_language_picker("ui", "UI language", str(_values.get("uiLanguage", "en")), func(code: String) -> void:
-		_values["uiLanguage"] = code
-		setting_changed.emit("ui_language", code)
+		if code == str(_values.get("uiLanguage", "en")) or I18n.current == null:
+			return
+		var shown := await I18n.current.switch_language(code)
+		setting_changed.emit("ui_language", shown)
+		var reply: Variant = await _req("settings.values")
+		if typeof(reply) == TYPE_DICTIONARY:
+			_values = reply
+		_values["uiLanguage"] = shown
 		_rerender(), true))
 	language.add_child(_language_picker("chat", "AI chat language", str(_values.get("chatLanguage", "en")), func(code: String) -> void:
 		var reply: Variant = await _req("settings.chatLanguage", {"code": code})
@@ -1138,11 +1144,11 @@ func _refresh_display_mode() -> void:
 	_show_display_mode(ShellBoot.display_mode())
 
 
-func _language_options(query: String, current: String, mark_built_in: bool) -> Array:
+func _language_options(query: String, current: String, interface_list: bool) -> Array:
 	var options: Array = []
 	var needle := query.strip_edges().to_lower()
 	var listed := false
-	for language: Dictionary in _values.get("languages", []):
+	for language: Dictionary in _values.get("uiLanguages" if interface_list else "languages", _values.get("languages", [])):
 		var code := str(language.get("code", ""))
 		var name := str(language.get("name", ""))
 		var native := str(language.get("native", ""))
@@ -1151,16 +1157,14 @@ func _language_options(query: String, current: String, mark_built_in: bool) -> A
 		var text := name
 		if not native.is_empty() and native != name:
 			text += " — " + native
-		if mark_built_in and bool(language.get("builtIn", false)):
-			text += " ✓"
 		options.append([code, text])
 		if code == current:
 			listed = true
 	return [options, listed]
 
 
-func _fill_language_select(select: OptionButton, query: String, current: String, mark_built_in: bool) -> void:
-	var found: Array = _language_options(query, current, mark_built_in)
+func _fill_language_select(select: OptionButton, query: String, current: String, interface_list: bool) -> void:
+	var found: Array = _language_options(query, current, interface_list)
 	var options: Array = found[0]
 	var listed: bool = found[1]
 	select.clear()
@@ -1181,7 +1185,7 @@ func _fill_language_select(select: OptionButton, query: String, current: String,
 		select.select(chosen)
 
 
-func _language_picker(key: String, label_text: String, current: String, on_select: Callable, mark_built_in: bool) -> Control:
+func _language_picker(key: String, label_text: String, current: String, on_select: Callable, interface_list: bool) -> Control:
 	var group := VBoxContainer.new()
 	group.add_theme_constant_override("separation", 0)
 	var head := HBoxContainer.new()
@@ -1207,37 +1211,25 @@ func _language_picker(key: String, label_text: String, current: String, on_selec
 	var select := _select([], "", on_select)
 	select.size_flags_stretch_ratio = 1.6
 	select.add_theme_stylebox_override("normal", UI.box(Color(1, 1, 1, 0.04), Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.3), 8, 1, Vector4(12, 6, 12, 6)))
-	_fill_language_select(select, query, current, mark_built_in)
+	_fill_language_select(select, query, current, interface_list)
 	row.add_child(select)
 	var search := _line(query, "Search languages...")
 	search.custom_minimum_size.x = 130
 	search.text_changed.connect(func(text: String) -> void:
 		_language_query[key] = text
 		clear.visible = not text.is_empty()
-		_fill_language_select(select, text, current, mark_built_in))
+		_fill_language_select(select, text, current, interface_list))
 	clear.pressed.connect(func() -> void:
 		_language_query[key] = ""
 		search.text = ""
 		clear.visible = false
-		_fill_language_select(select, "", current, mark_built_in))
+		_fill_language_select(select, "", current, interface_list))
 	row.add_child(search)
 	group.add_child(row)
-	var built_in := current == "en" or _language_built_in(current)
-	var helper := ""
-	if key == "ui":
-		helper = "Languages marked ✓ ship with the game translated. What scenarios add (names, descriptions, custom stats) is translated by your AI model, once." if built_in else "This language is translated by your AI model as you play, once per string. Languages marked ✓ ship with the game translated."
-	else:
-		helper = "What the advisor and diplomatic chats reply in. Defaults to your interface language."
-	_add_helper(group, helper)
+	if key != "ui":
+		_add_helper(group, "What the advisor and diplomatic chats reply in. Defaults to your interface language.")
 	_gap(group, 14.4)
 	return group
-
-
-func _language_built_in(code: String) -> bool:
-	for language: Dictionary in _values.get("languages", []):
-		if str(language.get("code", "")) == code:
-			return bool(language.get("builtIn", false))
-	return false
 
 
 func _audio_set(change: Dictionary) -> void:
