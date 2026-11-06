@@ -10288,6 +10288,7 @@ const applySimulationResult = async ({
   // was attacked, in the thread with it (folded into one already open), and the person answers it there
   // (GameUI/warAndPeace.jsx CallToArmsCard): "have the country send you a message requesting assistance and the
   // buttons appear there" (the owner, 2026-11-06). In the game's language, from the packs, and never a request.
+  const people = humanCountriesOf(baseGame);
   for (const call of normalizeArray(worldWithImpacts?.callsToArms)) {
     if (call?.status !== "open" || Number(call.round) !== Number(nextGame.round) || normalizeString(call.messageId)) continue;
     if (!people.some((person) => regionKey(person) === regionKey(call.ally))) continue;
