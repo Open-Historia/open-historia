@@ -258,6 +258,7 @@ import { eraSettingOf } from "../../runtime/warSettings.js";
 import { PLACEMENT_DIRECTIVE, describeApproximatePlacement, describeOtherKind, distanceKm as placementDistanceKm, hashText as placementHash, homeWaters, isOpenSea, nearestInteriorPoint, nearestSea, pointInGeometry, regionWithinContainer, resolvePlacement, resolveRegionPlacement, seasForMap } from "./placement.js";
 import { loadWorldCities } from "./worldCities.js";
 import { FOOTPRINT_KM, obstaclesOf, spaceOut } from "../../runtime/featureSpacing.js";
+import { restorePointsWithin } from "../../runtime/restorePointBudget.js";
 import { LOOKUP_DIRECTIVE, buildLookupContext, executeLookup, lookupToolsFor, placesNamedIn } from "./lookupTools.js";
 import { FRONT_ORDER_FUNCTION, withFrontOrderFunction } from "./frontOrderFunction.js";
 import { carriedRoundCount, createLookupCarry } from "./toolTurns.js";
@@ -8670,7 +8671,8 @@ const normalizeGeneratedEvent = (entry, index = 0) => {
   };
 };
 
-const MAX_ROLLBACK_SNAPSHOTS = 12;
+// At most twelve restore points, and no more than fit the server's limit for the archive
+// (runtime/restorePointBudget.js restorePointsWithin).
 
 // flags.json as a rename is about to rewrite it, or null when it could not be
 // read. Read with no default: getNationFlags answers {} on an error, and the
@@ -8742,9 +8744,10 @@ const captureRollbackSnapshot = async ({ campaignId = "", round, fromDate, toDat
       },
       ...(turn ? { turn: cloneValue(turn) } : {}),
     };
+    snapshot.bytes = JSON.stringify(snapshot).length;
     // The read and the copies above took a moment: the list is this campaign's.
     assertCampaignUnchanged(campaignId, activeCampaignId(), "restore point");
-    await writeJson(JSON_URLS.snapshots, [snapshot, ...list].slice(0, MAX_ROLLBACK_SNAPSHOTS), {
+    await writeJson(JSON_URLS.snapshots, restorePointsWithin([snapshot, ...list]), {
       cacheClone: false,
       cloneResult: false,
       echo: false,
@@ -18040,6 +18043,14 @@ const raiseMissingCombatants = async (answer, input, bundle) => {
     }
     // No event names a place on the map (a live check, 2026-10-02: "off Odesa"
     // where the map says Odessa, and "the Black Sea"): the power's own land.
+    // A power that holds none (fighting on in exile, its land all taken) has
+    // nowhere to be raised: its name named no place, and the same formation was
+    // refused at every skip (a player's log, 2026-11-06: the State of Israel,
+    // twenty-six times). Its war goes on in the story.
+    if (!chosen && !normalizeArray(context?.rows).some((row) => normalizeString(row?.owner).toLowerCase() === normalizeString(power).toLowerCase())) {
+      logDebugEvent("turn", `${power} is at war with no unit on the map and holds no land to raise one on.`, null, { verbose: true });
+      continue;
+    }
     chosen ??= { eventIndex: events[0].eventIndex, at: power };
     payload.eventOrders.push({ eventIndex: chosen.eventIndex, unitOps: [nativeCombatantSpawn(power, chosen.at, warId)] });
     logDebugEvent("turn", `${power} is at war with no unit on the map: one formation is raised at ${chosen.at}.`);

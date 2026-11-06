@@ -251,6 +251,19 @@ test("C4 entries that differ in detail are kept apart", () => {
     assert.equal(getDebugLogEntries().length, 2);
 });
 
+test("C4b a font range MapLibre cannot load folds into one entry, whichever characters it drew instead", () => {
+    reset();
+    for (const code of ["0074", "0076", "0079", "00FC", "0045"]) {
+        logDebugEvent("warn", `Unable to load glyph range 0, 0-255. Rendering codepoint U+${code} locally instead. Error: Unimplemented type: 3`);
+    }
+    logDebugEvent("warn", "Unable to load glyph range 1, 256-511. Rendering codepoint U+0100 locally instead. Error: Unimplemented type: 3");
+    const list = getDebugLogEntries();
+    assert.deepEqual(list.map((entry) => [entry.message, entry.repeat || 1]), [
+        ["Unable to load glyph range 0, 0-255. Rendering its characters locally instead. Error: Unimplemented type: 3", 5],
+        ["Unable to load glyph range 1, 256-511. Rendering its characters locally instead. Error: Unimplemented type: 3", 1],
+    ]);
+});
+
 test("C5 a repeat is shown with its count and last time, a single entry is not", () => {
     reset();
     logDebugEvent("error", "Failed to fetch tile");
