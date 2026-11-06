@@ -250,6 +250,10 @@ import { describeUndeployedPost, isMilitaryPost, postWantsFormation } from "./mi
 import { findUnitByRef, newestTwinByRef, readNameRef, stripKindTags } from "./nameRefs.js";
 import { areaRegionsFor, buildAreaIndex, findArea, readAreaName } from "./namedAreas.js";
 import { CAPTURE_REACH_KM, findNarratedCaptures, mayNarrateCapture, statedAnnexations, statesCapture } from "./narratedCapture.js";
+import { createStoryCheckTally, describeStoryChecks } from "./storyChecks.js";
+
+// The map/story checks' counts for the turn being written, logged as it lands.
+const storyChecks = createStoryCheckTally();
 import { EVENT_PLACES_RULE, findEventPlace, findEventPlaces, placesAsWritten, readEventPlace } from "./eventPlaces.js";
 import { normalizeEventPlaces } from "../../runtime/eventPlaces.js";
 import { describeTravelPace, eraOf, kmOnMap, seaShareOf } from "../../runtime/unitMotion.js";
@@ -7650,6 +7654,7 @@ const completeNarratedCaptures = async (containers, world, { receipt = null, ren
       console.info(`[narrated capture] ${container.path}: ${capture.regionName} (${capture.regionId}) ${capture.fromCode} -> ${taker || group}, from "${capture.sentence}".`);
     }
   }
+  storyChecks.note("filledCapture", added);
   return added;
 };
 
@@ -7693,6 +7698,7 @@ const completeNarratedAnnexations = async (containers, { receipt = null, lookupC
       console.info(`[narrated annexation] ${path}: ${from} -> ${to}, from "${sentence}".`);
     }
   }
+  storyChecks.note("filledAnnexation", added);
   return added;
 };
 
@@ -7797,6 +7803,7 @@ const marchCapturersIn = async (containers, world, { receipt = null, renderedReg
     }
     if (refused.length) impacts.regionControlOps = normalizeArray(impacts.regionControlOps).filter((op) => !refused.includes(op));
   }
+  storyChecks.note("marched", moved);
   return moved;
 };
 
@@ -8198,12 +8205,14 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
       const controlEvent = candidate.events.find((event) =>
         CONTROL_CHANGE_LANGUAGE.test(text(event)) && !LEGAL_TRANSFER_LANGUAGE.test(text(event)));
       if (controlEvent) {
+        storyChecks.note("turnCapture");
         return `Your events describe a wartime capture/occupation/control change (e.g. "${normalizeString(controlEvent.title) || "an event"}") but the payload contains ZERO impacts.regionControlOps. Either add the matching control operations (op=control for a capture/occupation/liberation, op=contest while a region is actively disputed; regionId = the region's name as the map spells it, written "region: <name>", or the grounded place wording; fromCode = the current controller) or rewrite the event so that no control changed hands.`;
       }
     }
     if (totalTransfers === 0) {
       const legalEvent = candidate.events.find((event) => LEGAL_TRANSFER_LANGUAGE.test(text(event)));
       if (legalEvent) {
+        storyChecks.note("turnSettlement");
         return `Your events describe a legal territorial settlement (e.g. "${normalizeString(legalEvent.title) || "an event"}") but the payload contains ZERO impacts.regionTransfers. Either add the matching legal transfers (one per region as "region: <name>", or regionId "country: <name>" for a total annexation/unification) or rewrite the event so that no sovereignty changed.`;
       }
     }
@@ -8217,6 +8226,7 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
         + normalizeArray(impacts?.groupOps).filter((op) => normalizeArray(op?.regionIds).length).length;
       const captured = ownTerritory === 0 ? statesCapture(description) : null;
       if (captured) {
+        storyChecks.note("eventCapture");
         return `The event "${title}" states a capture ("${captured}") but carries no territory operation of its own. Either add the regionControlOps control entry to THAT event (regionId "region: <name>" as the map spells it, fromCode = the current controller) or rewrite the sentence so that no place changed hands.`;
       }
       if (normalizeArray(impacts?.regionTransfers).length === 0 && /\b(annex|incorporated|absorbed)/i.test(description)) {
@@ -8228,6 +8238,7 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
         }
         const annexation = statedAnnexations(description, powers)[0];
         if (annexation) {
+          storyChecks.note("eventAnnexation");
           return `The event "${title}" states that ${annexation.annexer} annexed ${annexation.annexed} but carries no regionTransfers. Either add the transfer to THAT event (regionId "country: ${annexation.annexed}", fromCode "${annexation.annexed}", toCode "${annexation.annexer}", wholeCountry true, basis "annexation") or rewrite it so that no sovereignty changed.`;
         }
       }
@@ -9450,6 +9461,9 @@ const applySimulationResult = async ({
   // Everything that could keep an event or an operation out has now run, so what
   // is left is what the world is about to receive.
   tallyAppliedEvents(receipt, freshEvents);
+  // How often the map/story checks acted on the way here (storyChecks.js).
+  const storyCheckCounts = storyChecks.take();
+  logDebugEvent("story-checks", describeStoryChecks(storyCheckCounts), storyCheckCounts.turn);
 
   // The land war (frontApply.js): the front engine is run over the days this
   // turn covers, from the orders the events carry, and each region that changed
