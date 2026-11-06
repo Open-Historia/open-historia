@@ -23,6 +23,16 @@
             </intent-filter>
         </activity>
 
+        <!-- Takes the games the app's earlier id hands over (SaveMovePlugin.java,
+             the handover build). Exported so that app can start it; it accepts
+             only an app signed with this app's key (SaveMoveActivity.java). -->
+        <activity
+            android:name=".SaveMoveActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode|navigation"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
@@ -31,6 +41,12 @@
             <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/file_paths" />
         </provider>
     </application>
+
+    <!-- The handover build looks for the app it moves the games to, by id
+         (build.gradle ohMoveTo); in the app this names the app itself. -->
+    <queries>
+        <package android:name="${ohMoveTo}" />
+    </queries>
 
     <!-- Permissions -->
 
