@@ -21,7 +21,7 @@ func _initialize() -> void:
 
 
 func _watchdog() -> void:
-	await create_timer(900.0).timeout
+	await create_timer(1500.0).timeout
 	if not finished:
 		_say("FAIL the check did not finish in time")
 		_finish(1)
@@ -325,12 +325,30 @@ func _release_part() -> void:
 	await _frames(4)
 
 
+func _close_notices() -> void:
+	var shell: ShellBoot = main.get("shell") as ShellBoot
+	if shell and shell.notice != null and is_instance_valid(shell.notice):
+		shell.notice.closed.emit()
+	for page in _find_all(root, func(item: Node) -> bool: return item is ReleaseNotice or item is UpdateNotice, []):
+		(page as Node).queue_free()
+	await _frames(6)
+
+
 func _game_part() -> void:
+	_say("game: starting the scenario")
 	await main._start_scenario("default")
+	await _wait(0.4)
+	_say("game: choosing France")
 	main.picker._choose("France")
+	await _wait(0.2)
 	await main._on_country_chosen("France", "medium")
-	await _until(func() -> bool: return main.hud.drawers.has("country") and main.hud.map_cards != null, 20.0)
+	_say("game: country chosen")
+	var entered := await _until(func() -> bool: return main.hud.drawers.has("country") and main.hud.map_cards != null, 120.0)
+	_check(entered, "a game opens to theme its panels")
+	if not entered:
+		return
 	await _cover_gone()
+	await _close_notices()
 	UiTheme.select("midnight")
 	var panel = main.hud.drawers["country"]
 	await main.hud.show_country("France")
@@ -376,6 +394,62 @@ func _game_part() -> void:
 	await _shoot("look-game-menu-settings")
 	main.game_menu.call("close")
 	await _wait(0.4)
+	await _themed_panels()
+	await _themes_notice()
+
+
+func _themed_panels() -> void:
+	await _close_notices()
+	for preset in ["forest", "midnight"]:
+		UiTheme.select(preset)
+		await _wait(0.4)
+		for name in ["chat", "actions", "history"]:
+			main.hud.set_active_panel(name)
+			await _wait(1.2)
+			await _shoot("look-%s-%s" % [preset, name])
+		main.hud.set_active_panel("")
+		await _wait(0.5)
+		if main.cheats:
+			main.cheats.call("open")
+			await _wait(1.0)
+			await _shoot("look-%s-cheats" % preset)
+			main.cheats.call("close")
+			await _wait(0.5)
+		if main.debug_console:
+			main.debug_console.call("open")
+			await _wait(1.0)
+			await _shoot("look-%s-debug-console" % preset)
+			main.debug_console.call("close")
+			await _wait(0.5)
+	var chat_panel: Variant = main.hud.get("panels").get("chat")
+	_check(chat_panel != null, "the Diplomacy panel is there to theme")
+	UiTheme.reset()
+	await _wait(0.4)
+
+
+func _themes_notice() -> void:
+	var reply: Dictionary = await main.engine.request("shell.updates")
+	var updates: Array = (reply.get("result", {}) as Dictionary).get("updates", []) if reply.get("ok", false) else []
+	var found := {}
+	for item in updates:
+		if str((item as Dictionary).get("id", "")) == "2026-11-themes":
+			found = item
+	_check(not found.is_empty(), "the themes notice is on native")
+	if found.is_empty():
+		return
+	for preset in ["default", "forest"]:
+		UiTheme.select(preset)
+		var notice := UpdateNotice.new()
+		main.shell.overlay.add_child(notice)
+		await notice.setup(main.engine, [found], {"reduceMotion": true})
+		await _wait(1.2)
+		await _shoot("look-themes-notice-%s-1" % preset)
+		notice.call("show_page", 1)
+		await _wait(1.2)
+		await _shoot("look-themes-notice-%s-2" % preset)
+		notice.queue_free()
+		await _wait(0.4)
+	UiTheme.reset()
 
 
 func _finish(code: int) -> void:
