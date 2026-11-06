@@ -58,6 +58,7 @@ func _until(condition: Callable, seconds: float) -> bool:
 
 
 func _shoot(name: String) -> void:
+	await _door_gone()
 	await _frames(4)
 	await RenderingServer.frame_post_draw
 	if shots.is_empty():
@@ -116,18 +117,30 @@ func _clear_shell() -> void:
 		shell = main.get("shell") as ShellBoot
 	if shell == null:
 		return
-	var deadline := Time.get_ticks_msec() + 30000
-	while shell.door_state == "deciding" and Time.get_ticks_msec() < deadline:
-		await process_frame
-	if shell.door != null and is_instance_valid(shell.door):
-		shell.door.opened.emit()
+	await _door_gone()
+	_check(shell.door == null and shell.door_state == "open", "the vault door is open before the shots", shell.door_state)
 	if not shell.notice_updates.is_empty():
-		deadline = Time.get_ticks_msec() + 5000
+		var deadline := Time.get_ticks_msec() + 5000
 		while not (shell.notice != null and is_instance_valid(shell.notice)) and Time.get_ticks_msec() < deadline:
 			await process_frame
 		if shell.notice != null and is_instance_valid(shell.notice):
 			shell.notice.closed.emit()
 	await _frames(10)
+
+
+func _door_gone() -> void:
+	if not is_instance_valid(main):
+		return
+	var shell := main.get("shell") as ShellBoot
+	if shell == null:
+		return
+	if shell.door_state == "deciding":
+		await _until(func() -> bool: return shell.door_state != "deciding", 600.0)
+	if shell.door != null and is_instance_valid(shell.door):
+		_say("the vault door is shut (%s); opening it" % shell.door_state)
+		shell.door.opened.emit()
+		await _until(func() -> bool: return shell.door == null, 10.0)
+		await _frames(2)
 
 
 func _cover_gone() -> void:
@@ -152,6 +165,7 @@ func _run() -> void:
 	await _settings_part()
 	await _setup_part()
 	await _release_part()
+	await _history_part()
 	await _game_part()
 	UiTheme.reset()
 	await _wait(0.5)
@@ -260,6 +274,7 @@ func _setup_part() -> void:
 	await _shoot("look-setup-language")
 	await _wait(GREETING_WAIT)
 	_check(_labels(setup, "Hello").is_empty(), "the greeting turns to another language")
+	await _czech_card(setup)
 	setup.call("_choose", "en")
 	await _until(func() -> bool: return not _labels(setup, "Choose your theme").is_empty(), 10.0)
 	_check(not _labels(setup, "Choose your theme").is_empty(), "then the theme")
@@ -285,6 +300,57 @@ func _setup_part() -> void:
 const GREETING_WAIT := 2.4
 
 
+class HeldLink extends EngineLink:
+	signal let_go(result: Dictionary)
+
+	var real: EngineLink
+	var holding := false
+
+	func request(method: String, args: Dictionary = {}) -> Dictionary:
+		if method == "translation.prepare":
+			holding = true
+			var result: Dictionary = await let_go
+			holding = false
+			return {"ok": true, "result": result}
+		return await real.request(method, args)
+
+
+func _czech_card(setup: FirstSetup) -> void:
+	var words := I18n.current
+	_check(words != null, "the language switch is there")
+	if words == null:
+		return
+	var kept := words.engine
+	var held := HeldLink.new()
+	held.real = kept
+	words.engine = held
+	setup.call("_choose", "cs")
+	await _until(words.card_shown, 20.0)
+	_check(words.card_shown(), "Czech asks for its translation model first")
+	_check(words.card_text() == "Playing in Čeština needs a one-time download of its translation model (117 MB).", "the card names the language and the size as beta's", words.card_text())
+	_check(str(setup.get("_busy")) == "cs", "the Czech card stays chosen while it asks")
+	await _wait(0.6)
+	await _shoot("look-setup-czech-ask")
+	words.answer_card("download")
+	await _until(func() -> bool: return held.holding and words.card_text().begins_with("Downloading"), 20.0)
+	_check(words.card_text() == "Downloading the translation model… 0%", "a download shows its progress", words.card_text())
+	await _wait(0.6)
+	await _shoot("look-setup-czech-downloading")
+	held.let_go.emit({"ok": false, "error": "stand-in"})
+	await _until(func() -> bool: return words.card_text() == "The translation model could not be downloaded.", 20.0)
+	_check(words.card_text() == "The translation model could not be downloaded.", "a failed download says so and offers to try again", words.card_text())
+	await _wait(0.6)
+	await _shoot("look-setup-czech-failed")
+	words.answer_card("decline")
+	await _until(func() -> bool: return not words.card_shown() and str(setup.get("_busy")).is_empty(), 20.0)
+	_check(not words.card_shown() and I18n.code() == "en", "Keep English keeps the game in English", I18n.code())
+	_check(not _labels(setup, "Choose your language").is_empty(), "and the setup stays on the language")
+	await _wait(0.6)
+	await _shoot("look-setup-czech-kept-english")
+	words.engine = kept
+	held.free()
+
+
 func _release_part() -> void:
 	var page := ReleaseNotice.new()
 	main.shell.overlay.add_child(page)
@@ -300,29 +366,117 @@ func _release_part() -> void:
 		listed += ((chapter as Dictionary).get("entries", []) as Array).size()
 	_check(listed > 20, "every chapter lists the updates under it", str(listed))
 	_check(not _labels(page, "Skip").is_empty() or not _labels(page, "SKIP").is_empty() or not _find_all(page, func(item: Node) -> bool: return item is Button and (item as Button).text.to_upper() == "SKIP", []).is_empty(), "a way out at the top")
-	await _shoot("look-release-hero")
+	await _settled(page)
+	var views: Array = page.scenes_in_view()
+	_check(views.size() == 1 and is_zero_approx((views[0] as ReleaseScene).progress), "with Reduce motion the panorama stands at its start")
+	await _shoot("look-release-still-hero")
 	var scroll: ScrollContainer = page.get("_scroll")
 	var sections: Array = page.get("_chapters")
-	scroll.scroll_vertical = int(page.get("_vh") * 2.1)
-	await _frames(6)
-	await _shoot("look-release-intro")
-	if not sections.is_empty():
-		scroll.scroll_vertical = int((sections[0] as Control).position.y)
-		await _frames(6)
-		await _shoot("look-release-chapter-1")
-		scroll.scroll_vertical = int((sections[0] as Control).position.y + page.get("_vh") * 1.0)
-		await _frames(6)
-		await _shoot("look-release-chapter-1-card")
-		scroll.scroll_vertical = int((sections[0] as Control).position.y + (sections[0] as Control).size.y)
-		await _frames(6)
-		await _shoot("look-release-ledger-1")
-	scroll.scroll_vertical = int((page.get("_page") as Control).size.y)
-	await _frames(6)
-	await _shoot("look-release-finale")
+	scroll.scroll_vertical = int((sections[0] as Control).position.y + page.get("_vh") * 0.5)
+	await _settled(page)
+	views = page.scenes_in_view()
+	_check(not views.is_empty() and is_equal_approx((views[0] as ReleaseScene).progress, 1.0), "with Reduce motion each chapter's picture stands finished")
+	await _shoot("look-release-still-chapter-1")
 	page.close()
 	_check(shut[0], "the button closes it")
 	page.queue_free()
 	await _frames(4)
+	page = ReleaseNotice.new()
+	main.shell.overlay.add_child(page)
+	await page.open(main.engine, "", false)
+	await _wait(0.8)
+	await _settled(page)
+	var grain := page.get("_grain") as ColorRect
+	_check(grain != null and grain.material is ShaderMaterial, "a film grain lies over the page")
+	await _shoot("look-release-p-hero")
+	scroll = page.get("_scroll")
+	sections = page.get("_chapters")
+	var vh: float = page.get("_vh")
+	var copy := page.get("_hero_copy") as Control
+	scroll.scroll_vertical = int(vh * 0.5)
+	await _settled(page)
+	_check(copy.modulate.a < 0.7 and copy.position.y < vh * 0.24 - 20.0 and copy.scale.x > 1.0, "the title lifts, grows and fades as the panorama scrolls", "%s %s" % [copy.modulate.a, copy.position.y])
+	scroll.scroll_vertical = int(vh)
+	await _settled(page)
+	await _shoot("look-release-p-hero-2")
+	scroll.scroll_vertical = int(vh * 2.1)
+	await _frames(3)
+	var rising := _find_all(page, func(item: Node) -> bool: return item is Container and item.get("rise") != null and float(item.get("rise")) > 0.5 and float(item.get("rise")) < 41.5, [])
+	await _wait(0.12)
+	rising = _find_all(page, func(item: Node) -> bool: return item is Container and item.get("rise") != null and float(item.get("rise")) > 0.5 and float(item.get("rise")) < 41.5, []) if rising.is_empty() else rising
+	_check(not rising.is_empty(), "words rise as they fade in")
+	await _wait(1.0)
+	await _settled(page)
+	await _shoot("look-release-p-intro")
+	for index in range(sections.size()):
+		var section: Control = sections[index]
+		var highlights: Array = (chapters[index] as Dictionary).get("highlights", [])
+		var tops: Array = [0.0, vh * 0.5 + vh * 0.95 * 0.5]
+		if highlights.size() > 1:
+			tops.append(vh * 0.5 + vh * 0.95 * (highlights.size() - 0.5))
+		var seen: Array = []
+		for at in range(tops.size()):
+			scroll.scroll_vertical = int(section.position.y + float(tops[at]))
+			await _wait(0.9)
+			await _settled(page)
+			var in_view: Array = page.scenes_in_view()
+			var view: ReleaseScene = in_view[0] if not in_view.is_empty() else null
+			seen.append(view.progress if view else -1.0)
+			await _shoot("look-release-p-ch%d-%d" % [index + 1, at])
+		var scene := str((chapters[index] as Dictionary).get("scene", ""))
+		_check(seen.size() >= 2 and float(seen[0]) < 0.05 and float(seen[seen.size() - 1]) > float(seen[0]) + 0.3, "chapter %d's picture plays out with the scroll (%s)" % [index + 1, scene], str(seen))
+		if scene == "map":
+			var map_view: ReleaseScene = page.scenes_in_view()[0]
+			var plane := map_view.get("_plane") as ColorRect
+			_check(plane != null and plane.visible and (plane.material as ShaderMaterial).get_shader_parameter("lift") > 0.0, "the map tilts back as the page scrolls")
+		if scene == "yours":
+			var yours: ReleaseScene = page.scenes_in_view()[0]
+			_check((yours.get("_greetings") as PackedStringArray).size() == 12, "greetings drift across chapter six")
+		if index == 0:
+			scroll.scroll_vertical = int(section.position.y + section.size.y)
+			await _wait(1.0)
+			await _shoot("look-release-p-ledger-1")
+	scroll.scroll_vertical = int((page.get("_page") as Control).size.y)
+	await _wait(0.9)
+	await _settled(page)
+	await _shoot("look-release-p-finale")
+	page.close()
+	page.queue_free()
+	await _frames(4)
+
+
+func _settled(page: ReleaseNotice) -> void:
+	await _until(page.is_settled, 30.0)
+	await _frames(3)
+
+
+func _history_part() -> void:
+	var shell: ShellBoot = main.shell
+	shell.open_history()
+	var texts := func() -> PackedStringArray:
+		var found := PackedStringArray()
+		if shell.history == null:
+			return found
+		for item in _find_all(shell.history, func(node: Node) -> bool: return node is Label or node is RichTextLabel, []):
+			found.append((item as Label).text if item is Label else (item as RichTextLabel).get_parsed_text())
+		return found
+	await _until(func() -> bool: return Array(texts.call()).has("Open Historia 2.5 · Total war, a living world, and a game that is yours"), 30.0)
+	var shown: PackedStringArray = texts.call()
+	_check(Array(shown).has("Open Historia 2.5 · Total war, a living world, and a game that is yours"), "the history names the release by its title")
+	_check(Array(shown).has("Version") and Array(shown).has(" 2.5.0"), "and by its version", ", ".join(shown.slice(0, 6)))
+	await _wait(1.0)
+	await _shoot("look-history-p1")
+	var scroll: ScrollContainer = shell.history.get("_scroll")
+	for page_at in [2, 3]:
+		scroll.scroll_vertical += int(scroll.size.y)
+		await _wait(0.6)
+		await _shoot("look-history-p%d" % page_at)
+	scroll.scroll_vertical = 0
+	shell.history.view("2026-11-version-2-5")
+	await _until(func() -> bool: return not _find_all(shell.history, func(node: Node) -> bool: return node is ReleaseNotice, []).is_empty(), 20.0)
+	_check(not _find_all(shell.history, func(node: Node) -> bool: return node is ReleaseNotice, []).is_empty(), "View opens the release page")
+	shell.close_history()
+	await _frames(6)
 
 
 func _close_notices() -> void:
