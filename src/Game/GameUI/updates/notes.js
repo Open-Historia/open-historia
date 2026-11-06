@@ -54,6 +54,24 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // "I ordered my spy to assassinate head of state it succeed but nothing happened he still alive" (a player's
+    // report, 2026-11-06): the skip was told only that the operation succeeded, wrote the death, and left the record's
+    // leader in office. AI/covertOperationsDirective.js now says the target is dead and that the same event carries
+    // the change of leader.
+    id: "2026-11-assassinations-take-effect",
+    kind: "minor",
+    date: "2026-11-05",
+    channel: "beta",
+    banners: [
+      {
+        title: "Assassinations take effect",
+        items: [
+          "A leader your agents assassinate is now gone for good: a successor takes their office in the same event.",
+        ],
+      },
+    ],
+  },
+  {
     // Opus-MT en-bat (Latvian, Lithuanian), en-sk, en-et, en-el, en-he, en-ga, en-mt and en-gmq (Swedish), converted
     // for the game from Helsinki-NLP's models (none had a Transformers.js copy) and tried on the game's own kind of
     // text, 2026-11-06. Nobody publishes them on Hugging Face: they are read from the scenario repository's
