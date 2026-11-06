@@ -150,7 +150,7 @@ var _typed := false
 
 func _init() -> void:
 	super._init("Advisor", "", "drawer", DEFAULT_WIDTH)
-	_touch = OS.has_feature("mobile")
+	_touch = OS.has_feature("mobile") or UI.phone()
 	set_tint(UiTheme.pick("bg", DRAWER_BG))
 	_material.set_shader_parameter("radius", 0.0)
 	_material.set_shader_parameter("highlight", 0.0)
@@ -181,7 +181,8 @@ func _init() -> void:
 	scroll.get_v_scroll_bar().value_changed.connect(_on_list_scrolled)
 	scroll.resized.connect(_relayout)
 	var margin := body.get_parent() as MarginContainer
-	for side in [["margin_left", 14], ["margin_right", 14], ["margin_top", 15], ["margin_bottom", 19]]:
+	var message_pad := [11, 11, 13, 16] if UI.phone() else [14, 14, 15, 19]
+	for side in [["margin_left", message_pad[0]], ["margin_right", message_pad[1]], ["margin_top", message_pad[2]], ["margin_bottom", message_pad[3]]]:
 		margin.add_theme_constant_override(side[0], side[1])
 	body.add_theme_constant_override("separation", 20)
 	_live_holder = VBoxContainer.new()
@@ -214,7 +215,7 @@ func _init() -> void:
 func _build_header() -> void:
 	var row: HBoxContainer = header_extra.get_parent() as HBoxContainer
 	var header := row.get_parent() as MarginContainer
-	for side in [["margin_left", 14], ["margin_right", 14], ["margin_top", 7], ["margin_bottom", 7]]:
+	for side in [["margin_left", 14], ["margin_right", 14], ["margin_top", 9 if UI.phone() else 7], ["margin_bottom", 10 if UI.phone() else 7]]:
 		header.add_theme_constant_override(side[0], side[1])
 	header.custom_minimum_size.y = 45
 	_header_band = header
@@ -240,6 +241,7 @@ func _build_header() -> void:
 	_clear_button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	_clear_button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_clear_button.pressed.connect(_on_clear_pressed)
+	UI.tap_size(_clear_button)
 	header_extra.add_child(_clear_button)
 	_style_clear_button()
 	var close := row.get_child(row.get_child_count() - 1) as Button
@@ -273,6 +275,9 @@ func setup(link: EngineLink, setup_context: Dictionary = {}) -> void:
 
 func _ready() -> void:
 	get_viewport().size_changed.connect(func() -> void: _apply_width(_width, false))
+	if phone_sheet():
+		_handle.get_parent().visible = false
+		_apply_width(_width, false)
 
 
 func open() -> void:
@@ -293,6 +298,11 @@ func set_open(open_state: bool) -> void:
 	mouse_filter = Control.MOUSE_FILTER_STOP if open_state else Control.MOUSE_FILTER_IGNORE
 	if _slide:
 		_slide.kill()
+	if open_state:
+		fit_safe_area()
+		if phone_sheet():
+			_width = clamp_width(_width)
+			set_meta("width", _width)
 	var start := offset_left
 	var target := -_width if open_state else 0.0
 	_slide = create_tween()
@@ -762,7 +772,7 @@ func _on_theme_changed() -> void:
 	if is_instance_valid(_header_mark):
 		_header_mark.add_theme_color_override("font_color", _accent())
 	if is_instance_valid(_tray):
-		_tray.add_theme_stylebox_override("panel", UI.box(UiTheme.pick("header", Color("#101a26")), CLEAR, 0, 0, Vector4(13, 12, 13, 12)))
+		_tray.add_theme_stylebox_override("panel", UI.box(UiTheme.pick("header", Color("#101a26")), CLEAR, 0, 0, Vector4(11, 10, 11, 10) if UI.phone() else Vector4(13, 12, 13, 12)))
 	if is_instance_valid(_input):
 		_style_input()
 	if is_instance_valid(_send_button):
@@ -774,7 +784,7 @@ func _on_theme_changed() -> void:
 func _build_composer() -> Control:
 	var tray := PanelContainer.new()
 	_tray = tray
-	tray.add_theme_stylebox_override("panel", UI.box(UiTheme.pick("header", Color("#101a26")), CLEAR, 0, 0, Vector4(13, 12, 13, 12)))
+	tray.add_theme_stylebox_override("panel", UI.box(UiTheme.pick("header", Color("#101a26")), CLEAR, 0, 0, Vector4(11, 10, 11, 10) if UI.phone() else Vector4(13, 12, 13, 12)))
 	var margin := MarginContainer.new()
 	tray.add_child(margin)
 	var row := HBoxContainer.new()
@@ -1275,6 +1285,9 @@ func _contact_action(text: String) -> Button:
 	button.focus_mode = Control.FOCUS_NONE
 	button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	button.custom_minimum_size.y = 34
+	if UI.phone():
+		button.custom_minimum_size.y = 39
+		button.set_meta("oh_tap_exempt", true)
 	button.add_theme_font_override("font", UI.font(700))
 	button.add_theme_font_size_override("font_size", 11)
 	var resting := UI.box(CLEAR, ACTION_BORDER, 5, 1, Vector4(8, 6, 8, 6))
@@ -1384,7 +1397,7 @@ func _render_recipients() -> void:
 	_recipient_trigger = null
 	var busy := _recipients_busy()
 	var section := PanelContainer.new()
-	var section_style := UI.box(UiTheme.pick("bg", Color("#152434")), UiTheme.pick("line", EDGE), 0, 0, Vector4(13, 10, 13, 11))
+	var section_style := UI.box(UiTheme.pick("bg", Color("#152434")), UiTheme.pick("line", EDGE), 0, 0, Vector4(10, 8, 10, 8) if UI.phone() else Vector4(13, 10, 13, 11))
 	section_style.border_width_bottom = 1
 	section.add_theme_stylebox_override("panel", section_style)
 	var stack := VBoxContainer.new()
@@ -2130,7 +2143,7 @@ func _message_row(message: Dictionary, view: Dictionary, index: int, retry_here:
 			return 100000.0
 		if not pictured.is_empty() and not full:
 			return maxf(fixed, _markdown_width(pictured) + pad)
-		return fixed, _inner_hooks, 0.89 if user else 1.0, pad)
+		return fixed, _inner_hooks, (0.94 if UI.phone() else 0.89) if user else 1.0, pad)
 	_inner_hooks = []
 	var date := str(view.get("date", ""))
 	if not user and not str(message.get("time", "")).is_empty() and not date.is_empty():
@@ -3013,6 +3026,8 @@ func _on_handle_input(event: InputEvent) -> void:
 
 func clamp_width(px: float) -> float:
 	var viewport_width := get_viewport_rect().size.x if is_inside_tree() else 1440.0
+	if phone_sheet() and is_inside_tree():
+		return viewport_width
 	var most: float = max(viewport_width - LEFT_CLEARANCE, min(DEFAULT_WIDTH, viewport_width - 16.0))
 	return round(min(max(px, min(MIN_WIDTH, most)), most))
 

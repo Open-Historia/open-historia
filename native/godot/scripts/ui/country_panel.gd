@@ -194,6 +194,10 @@ func _reset_relations() -> void:
 
 func set_open(open_state: bool) -> void:
 	_open = open_state
+	if open_state and phone_sheet():
+		fit_safe_area()
+		_drawer_width = sheet_width(_drawer_width)
+		set_meta("width", _drawer_width)
 	var tween := create_tween().set_parallel(true).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 	tween.tween_property(self, "offset_left", -_drawer_width if open_state else 0.0, 0.3)
 	tween.tween_property(self, "offset_right", 0.0 if open_state else _drawer_width, 0.3)
@@ -205,10 +209,18 @@ func set_drawer_width(width: float) -> void:
 	var viewport := get_viewport_rect().size.x if is_inside_tree() else 1440.0
 	var most: float = max(viewport - LEFT_CLEARANCE, min(DEFAULT_WIDTH, viewport - 16.0))
 	_drawer_width = round(clamp(width, min(MIN_WIDTH, most), most))
+	if phone_sheet() and is_inside_tree():
+		_drawer_width = viewport
 	set_meta("width", _drawer_width)
 	if is_open():
 		offset_left = -_drawer_width
 		offset_right = 0.0
+
+
+func _ready() -> void:
+	super._ready()
+	if phone_sheet():
+		get_viewport().size_changed.connect(func() -> void: set_drawer_width(_drawer_width))
 
 
 func drawer_width() -> float:
@@ -241,7 +253,7 @@ func _restyle_header() -> void:
 	var titles := header_title.get_parent() as VBoxContainer
 	var row := titles.get_parent() as HBoxContainer
 	var header := row.get_parent() as MarginContainer
-	for side in [["margin_left", 13], ["margin_right", 13], ["margin_top", 8], ["margin_bottom", 8]]:
+	for side in [["margin_left", 13], ["margin_right", 13], ["margin_top", 10 if UI.phone() else 8], ["margin_bottom", 11 if UI.phone() else 8]]:
 		header.add_theme_constant_override(side[0], side[1])
 	header.custom_minimum_size.y = 47
 	row.add_theme_constant_override("separation", 9)
@@ -307,6 +319,7 @@ func _build_handle() -> void:
 	edge.anchor_bottom = 1.0
 	edge.offset_right = 1.0
 	edge.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	edge.visible = not phone_sheet()
 	overlay.add_child(edge)
 	var handle := Control.new()
 	handle.anchor_bottom = 1.0
@@ -314,6 +327,7 @@ func _build_handle() -> void:
 	handle.mouse_filter = Control.MOUSE_FILTER_STOP
 	handle.mouse_default_cursor_shape = Control.CURSOR_HSIZE
 	handle.tooltip_text = "Drag to resize"
+	handle.visible = not phone_sheet()
 	overlay.add_child(handle)
 	var grip := Panel.new()
 	_handle_style = UI.box(Color(1, 1, 1, 0.22), Color(0, 0, 0, 0), 2, 0)
@@ -952,7 +966,7 @@ func _tab_strip(floating: bool) -> PanelContainer:
 		var button := Button.new()
 		button.focus_mode = Control.FOCUS_NONE
 		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		button.custom_minimum_size = Vector2(1, 45)
+		button.custom_minimum_size = Vector2(1, 48 if UI.phone() else 45)
 		button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 		button.tooltip_text = ""
 		var under := Color("#86c9e7") if chosen else CLEAR

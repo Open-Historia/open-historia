@@ -53,6 +53,8 @@ func _init(title := "", subtitle := "", frame_kind := "bottom", width := 0.0) ->
 	close.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	close.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	close.pressed.connect(func() -> void: closed.emit())
+	if frame_kind == "drawer":
+		UI.tap_size(close)
 	row.add_child(close)
 	header.add_child(row)
 	column.add_child(header)
@@ -109,6 +111,31 @@ func _ready() -> void:
 func bottom_height() -> float:
 	var view := get_viewport_rect().size.y if is_inside_tree() else 1080.0
 	return maxf(160.0, minf(view - 144.0, maxf(view - 528.0, BOTTOM_HEIGHT)))
+
+
+func phone_sheet() -> bool:
+	return kind == "drawer" and UI.phone()
+
+
+func sheet_width(width: float) -> float:
+	if not phone_sheet() or not is_inside_tree():
+		return width
+	return get_viewport_rect().size.x
+
+
+func fit_safe_area() -> void:
+	if not phone_sheet():
+		return
+	var frame := get_theme_stylebox("panel")
+	if frame == null:
+		return
+	var insets := UI.safe_insets()
+	var padded := frame.duplicate() as StyleBox
+	padded.content_margin_left = insets.x
+	padded.content_margin_top = insets.y
+	padded.content_margin_right = insets.z
+	padded.content_margin_bottom = insets.w
+	add_theme_stylebox_override("panel", padded)
 
 
 func set_subtitle(text: String) -> void:

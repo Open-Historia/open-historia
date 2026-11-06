@@ -122,7 +122,7 @@ func setup(link: EngineLink, host: Control) -> void:
 
 
 func probe() -> void:
-	if engine == null:
+	if engine == null or not UI.has_feature("microphone"):
 		return
 	var reply: Dictionary = await engine.request("speech.engine", {"microphone": capture_microphone_available()})
 	var result: Dictionary = reply.get("result", {}) if reply.get("ok", false) else {}
@@ -332,7 +332,7 @@ func _show_problem(code: String) -> void:
 
 
 func _refresh() -> void:
-	var shown := _probed and not speech_engine.is_empty()
+	var shown := _probed and not speech_engine.is_empty() and UI.has_feature("microphone")
 	visible = shown and not (hidden_by_typing and phase == "idle")
 	var active := is_active()
 	_button.disabled = not active and phase != "asking" and (disabled or phase == "downloading")
