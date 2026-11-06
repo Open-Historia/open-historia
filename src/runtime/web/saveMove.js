@@ -44,24 +44,20 @@ const isLoopback = (hostname) => hostname === "localhost" || hostname === "127.0
 
 // --- Reading the packed file ---------------------------------------------------
 
-const decodeRecord = (json, bins) => {
-  const walk = (value) => {
-    if (value === null || typeof value !== "object") return value;
-    if (Array.isArray(value)) return value.map(walk);
-    if (typeof value[DATE] === "number") return new Date(value[DATE]);
-    if (typeof value[BIN] === "number") {
-      const buffer = bins[value[BIN]];
-      if (value.kind === "buffer") return buffer;
-      if (value.kind === "blob") return new Blob([buffer], { type: value.type || "" });
-      const View = VIEWS[value.kind] ?? Uint8Array;
-      return View === DataView ? new DataView(buffer) : new View(buffer);
-    }
-    const out = {};
-    for (const key of Object.keys(value)) out[key] = walk(value[key]);
-    return out;
-  };
-  return walk(JSON.parse(json));
-};
+// The markers are turned back as JSON.parse builds the record, rather than in
+// a second copy of it afterwards: a record can be a 50 MB map.
+const decodeRecord = (json, bins) => JSON.parse(json, (_key, value) => {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return value;
+  if (typeof value[DATE] === "number") return new Date(value[DATE]);
+  if (typeof value[BIN] === "number") {
+    const buffer = bins[value[BIN]];
+    if (value.kind === "buffer") return buffer;
+    if (value.kind === "blob") return new Blob([buffer], { type: value.type || "" });
+    const View = VIEWS[value.kind] ?? Uint8Array;
+    return View === DataView ? new DataView(buffer) : new View(buffer);
+  }
+  return value;
+});
 
 // The file's index, and a reader that unpacks one record at a time, so a library
 // with a 100 MB map in it is never held twice.
@@ -88,31 +84,43 @@ export const openPackedSaves = async (blob) => {
 // The file public/save-move/sender.js writes. That page imports nothing, so it
 // keeps its own copy; saveMove.test.js holds the two to the same bytes. A record
 // as JSON text plus the binary values taken out of it, in order.
+// JSON.stringify's replacer takes the binaries and dates out as it goes, so a
+// big record is not copied first; the text is the same as sender.js's.
 const encodeRecord = (record) => {
   const bins = [];
-  const walk = (value) => {
-    if (value === null || typeof value !== "object") return value;
-    if (value instanceof Date) return { [DATE]: value.getTime() };
-    if (typeof Blob !== "undefined" && value instanceof Blob) {
-      bins.push(value);
-      return { [BIN]: bins.length - 1, kind: "blob", type: value.type || "" };
+  const json = JSON.stringify(record, function replace(key, value) {
+    const original = this[key];
+    if (original instanceof Date) return { [DATE]: original.getTime() };
+    if (original === null || typeof original !== "object") return value;
+    if (typeof Blob !== "undefined" && original instanceof Blob) {
+      bins.push(original);
+      return { [BIN]: bins.length - 1, kind: "blob", type: original.type || "" };
     }
-    if (value instanceof ArrayBuffer) {
-      bins.push(value);
+    if (original instanceof ArrayBuffer) {
+      bins.push(original);
       return { [BIN]: bins.length - 1, kind: "buffer" };
     }
-    if (ArrayBuffer.isView(value)) {
-      bins.push(value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength));
-      return { [BIN]: bins.length - 1, kind: value.constructor.name };
+    if (ArrayBuffer.isView(original)) {
+      bins.push(original.buffer.slice(original.byteOffset, original.byteOffset + original.byteLength));
+      return { [BIN]: bins.length - 1, kind: original.constructor.name };
     }
-    if (Array.isArray(value)) return value.map((item) => (item === undefined ? null : walk(item)));
-    const out = {};
-    for (const key of Object.keys(value)) {
-      if (value[key] !== undefined) out[key] = walk(value[key]);
-    }
-    return out;
-  };
-  return { json: JSON.stringify(walk(record)), bins };
+    return value;
+  });
+  return { json, bins };
+};
+
+// Text as UTF-8, a slice at a time: a 50 MB record's text is never encoded
+// whole. A slice never ends between the two halves of a surrogate pair.
+const TEXT_SLICE = 1024 * 1024;
+const textPieces = function* textPieces(text) {
+  const encoder = new TextEncoder();
+  for (let at = 0; at < text.length;) {
+    let end = Math.min(text.length, at + TEXT_SLICE);
+    const last = text.charCodeAt(end - 1);
+    if (end < text.length && last >= 0xd800 && last <= 0xdbff) end += 1;
+    yield encoder.encode(text.slice(at, end));
+    at = end;
+  }
 };
 
 // Writes the file a record at a time: each record's text and binaries go to
@@ -124,11 +132,17 @@ export const createSavesWriter = (write) => {
   const entries = [];
   let offset = 0;
   const place = async (part) => {
-    const piece = typeof part === "string" ? new TextEncoder().encode(part)
-      : part instanceof Blob ? part
-        : new Uint8Array(part);
-    const size = piece instanceof Blob ? piece.size : piece.byteLength;
-    await write(piece);
+    let size = 0;
+    if (typeof part === "string") {
+      for (const piece of textPieces(part)) {
+        size += piece.byteLength;
+        await write(piece);
+      }
+    } else {
+      const piece = part instanceof Blob ? part : new Uint8Array(part);
+      size = piece instanceof Blob ? piece.size : piece.byteLength;
+      await write(piece);
+    }
     const at = [offset, size];
     offset += size;
     return at;

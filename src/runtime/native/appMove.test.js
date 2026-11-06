@@ -299,3 +299,19 @@ test("Capacitor's call log is off while the move runs, and back after", async ()
     delete globalThis.window;
   }
 });
+
+test("a record's text bigger than a slice comes back whole, a character split across slices too", async () => {
+  // The JSON text starts {"id":"t","text":" (17 characters), so the emoji's two
+  // halves sit either side of the first slice's end.
+  const text = `${"a".repeat(1024 * 1024 - 18)}😀${"é".repeat(300000)}`;
+  const record = { id: "t", text, when: new Date(1700000000000), bytes: new Uint8Array([1, 2, 3]) };
+  const packer = createSavesPacker();
+  await packer.add("games", record);
+  const file = packer.finish({});
+  const packed = await openPackedSaves(file);
+  const back = await packed.read(packed.entries[0]);
+  assert.equal(back.text, text);
+  assert.equal(back.when.getTime(), 1700000000000);
+  assert.deepEqual([...back.bytes], [1, 2, 3]);
+  assert.deepEqual(new Uint8Array(await file.arrayBuffer()), new Uint8Array(await senderPack([{ store: "games", record }], {}).arrayBuffer()));
+});
