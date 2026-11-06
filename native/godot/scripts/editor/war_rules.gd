@@ -6,6 +6,8 @@ const ERA_LABELS := ["Before 1500", "1500 to 1850", "1850 to 1945", "From 1945"]
 const ERA_STARTS := [1500, 1850, 1945]
 const MEN_PER_COUNTER_MOST := 1000000
 const MUSTER_DAYS_MOST := 3650
+const TECHNOLOGY_WEIGHT_MODERN := 4.5
+const TECHNOLOGY_WEIGHT_MOST := 10.0
 const FRONTS_FROM_YEAR := 1900
 const WARFARE_FORMS := ["front", "swarm"]
 const MEN_PER_FORMATION_BY_ERA := [2000, 5000, 12000, 10000]
@@ -283,12 +285,14 @@ static func normalize_war_settings(value: Variant) -> Variant:
 			mechanics[key] = (given as Dictionary)[key]
 	var men: Variant = _number_in(source.get("menPerCounter"), 1.0, float(MEN_PER_COUNTER_MOST))
 	var share: Variant = _number_in(source.get("manpowerShare"), 1.0, 100.0)
+	var weight: Variant = _number_in(source.get("technologyWeight"), 0.0, TECHNOLOGY_WEIGHT_MOST)
 	var outcomes := normalize_war_outcomes(source.get("outcomes"))
 	var kept := {
 		"mechanics": mechanics,
 		"era": normalize_era(source.get("era")),
 		"menPerCounter": null if men == null else int(roundf(float(men))),
 		"manpowerShare": null if share == null else roundf(float(share) * 10.0) / 10.0,
+		"technologyWeight": null if weight == null else roundf(float(weight) * 10.0) / 10.0,
 		"muster": normalize_muster_points(source.get("muster")),
 	}
 	if not outcomes.is_empty():
@@ -312,18 +316,19 @@ static func compact_war_settings(value: Variant) -> Variant:
 		"era": kept["era"],
 		"menPerCounter": kept["menPerCounter"],
 		"manpowerShare": kept["manpowerShare"],
+		"technologyWeight": kept["technologyWeight"],
 		"muster": kept["muster"],
 	}
 	if (kept as Dictionary).has("outcomes"):
 		compact["outcomes"] = kept["outcomes"]
 	if (kept as Dictionary).has("warfare"):
 		compact["warfare"] = kept["warfare"]
-	var empty := mechanics.is_empty() and compact["era"] == null and compact["menPerCounter"] == null and compact["manpowerShare"] == null and compact["muster"] == null and not compact.has("outcomes") and not compact.has("warfare")
+	var empty := mechanics.is_empty() and compact["era"] == null and compact["menPerCounter"] == null and compact["manpowerShare"] == null and compact["technologyWeight"] == null and compact["muster"] == null and not compact.has("outcomes") and not compact.has("warfare")
 	return null if empty else compact
 
 
 static func _empty_settings() -> Dictionary:
-	return {"mechanics": {}, "era": null, "menPerCounter": null, "manpowerShare": null, "muster": null, "warfare": null}
+	return {"mechanics": {}, "era": null, "menPerCounter": null, "manpowerShare": null, "technologyWeight": null, "muster": null, "warfare": null}
 
 
 static func with_war_settings(value: Variant, patch: Dictionary) -> Variant:
@@ -383,9 +388,10 @@ static func with_war_number(value: Variant, key: String, text: String) -> Dictio
 	else:
 		var cleaned := RegEx.create_from_string("\\s*%$").sub(raw, "").replace(",", ".")
 		number = to_number(cleaned) if not cleaned.strip_edges().is_empty() else 0.0
-	if not is_finite_number(number) or number <= 0.0:
+	var least_ok := number >= 0.0 if key == "technologyWeight" else number > 0.0
+	if not is_finite_number(number) or not least_ok:
 		return {"settings": compact_war_settings(value), "ok": false}
-	var held := clampf(roundf(number), 1.0, float(MEN_PER_COUNTER_MOST)) if key == "menPerCounter" else clampf(number, 1.0, 100.0)
+	var held := clampf(roundf(number), 1.0, float(MEN_PER_COUNTER_MOST)) if key == "menPerCounter" else (clampf(number, 0.0, TECHNOLOGY_WEIGHT_MOST) if key == "technologyWeight" else clampf(number, 1.0, 100.0))
 	return {"settings": with_war_settings(value, {key: held}), "ok": true}
 
 
