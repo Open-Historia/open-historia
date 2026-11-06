@@ -427,6 +427,15 @@ function trimToBudget() {
     return dropped;
 }
 
+// A message that names the one thing it happened to, where the same failure
+// happens to hundreds of them, is told without it so its repeats fold. MapLibre
+// warns once per CHARACTER when a basemap's font server has no copy of a label
+// font ("Unable to load glyph range 0, 0-255. Rendering codepoint U+0074 locally
+// instead."): a player's log, 2026-11-06, was a third such lines, and the older
+// entries were what made room for them.
+const foldVariants = (message) => message
+    .replace(/Rendering codepoint U\+[0-9A-F]{4,6} locally instead\./, "Rendering its characters locally instead.");
+
 // The recent entry that `entry` repeats — same category, message and detail,
 // within COALESCE_WINDOW entries and COALESCE_MS of its last occurrence — or
 // null. One test for both foldings: the page's, as entries are recorded, and the
@@ -463,7 +472,7 @@ export const logDebugEvent = (category, message, detail, { verbose = false, prob
     // of it went the older entries the budget could no longer hold. The
     // category is always a literal at the call site, so it is not redacted.
     const safeCategory = String(category || "app");
-    const safeMessage = redactAndTruncate(String(message ?? ""));
+    const safeMessage = foldVariants(redactAndTruncate(String(message ?? "")));
     const flatDetail = describeDetail(detail);
     const safeDetail = flatDetail ? redactAndTruncate(flatDetail) : "";
     const now = Date.now();

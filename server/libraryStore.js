@@ -53,6 +53,9 @@ const GAME_MANIFEST_PATH = path.join(SERVER_DATA_DIR, "game-manifest.json");
 const PMTILES_ASSETS_DIR = process.env.OH_ASSETS_DIR
   ? path.resolve(process.env.OH_ASSETS_DIR)
   : path.join(PUBLIC_DIR, "assets");
+// The same folder, for server.js to serve at /assets: the world's cities and the
+// editor's seed world are in it, and on a packaged build nowhere else.
+export const MAP_ASSETS_DIR = PMTILES_ASSETS_DIR;
 
 const DEFAULT_SCENARIO_ID = "default";
 const DEFAULT_GAME_ID = "default";

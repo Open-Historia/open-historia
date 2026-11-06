@@ -214,6 +214,39 @@ export const repairTruncatedJsonArray = (text) => {
   return ops.length > 0 ? ops : null;
 };
 
+// An object the model forgot to close before closing the list around it:
+// {"kind":"action"] for {"kind":"action"}] (a player's log, 2026-11-06: the
+// Advisor's suggested actions lost eighteen times to it). A `]` that meets an open
+// `{` is never valid JSON, so the missing `}` is all it can mean; nothing else is
+// touched. Null when there was nothing of the kind to close.
+export const closeObjectsBeforeList = (body) => {
+  const source = String(body ?? "");
+  const open = [];
+  let out = "";
+  let quoted = false;
+  let escaped = false;
+  let changed = false;
+  for (const char of source) {
+    if (quoted) {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === '"') quoted = false;
+    } else if (char === '"') quoted = true;
+    else if (char === "{" || char === "[") open.push(char);
+    else if (char === "}") open.pop();
+    else if (char === "]") {
+      while (open.length && open[open.length - 1] === "{") {
+        open.pop();
+        out += "}";
+        changed = true;
+      }
+      open.pop();
+    }
+    out += char;
+  }
+  return changed ? out : null;
+};
+
 // The text around the character a JSON parse failed at, for showing the player.
 // V8's message carries "at position N"; without that, fall back to the head of
 // the block, which is still better than nothing.
@@ -259,7 +292,15 @@ export const extractFencedJson = (text, lang, { salvageTruncated = false, stream
     try {
       json = JSON.parse(body.trim());
     } catch (err) {
-      json = salvageTruncated ? repairTruncatedJsonArray(body) : null;
+      const closed = closeObjectsBeforeList(body.trim());
+      if (closed !== null) {
+        try {
+          json = JSON.parse(closed);
+        } catch {
+          json = null;
+        }
+      }
+      if (json === null) json = salvageTruncated ? repairTruncatedJsonArray(body) : null;
       excerpt = excerptAroundError(body, err.message);
       if (json === null) {
         reason = `invalid JSON (${err.message})`;
