@@ -153,7 +153,7 @@ jobs:
             ${{ runner.temp }}/out/Open-Historia-Native-Setup.exe
             ${{ runner.temp }}/out/native-latest.json
           compression-level: 0
-          retention-days: 3
+          retention-days: 1
           if-no-files-found: error
 
       - name: Upload the update chunks
@@ -171,7 +171,7 @@ jobs:
         with:
           name: Open-Historia-Native-Windows-logs
           path: ${{ runner.temp }}/package.log
-          retention-days: 7
+          retention-days: 3
           if-no-files-found: warn
 
   macos:
@@ -471,7 +471,7 @@ jobs:
         with:
           name: Open-Historia-Native-macOS-tour
           path: ${{ runner.temp }}/tour
-          retention-days: 7
+          retention-days: 1
           if-no-files-found: warn
 
       - name: Gather the smoke logs
@@ -497,7 +497,7 @@ jobs:
             ${{ runner.temp }}/out/Open-Historia-Native-macOS.dmg
             ${{ runner.temp }}/out/native-latest-mac.json
           compression-level: 0
-          retention-days: 3
+          retention-days: 1
           if-no-files-found: error
 
       - name: Upload the update chunks
@@ -514,7 +514,7 @@ jobs:
         with:
           name: Open-Historia-Native-macOS-probe
           path: ${{ runner.temp }}/out/probe
-          retention-days: 3
+          retention-days: 1
           if-no-files-found: error
 
       - name: Upload the smoke logs
@@ -523,7 +523,7 @@ jobs:
         with:
           name: Open-Historia-Native-macOS-smoke-logs
           path: ${{ runner.temp }}/logs
-          retention-days: 7
+          retention-days: 3
           if-no-files-found: warn
 
       - name: Stop here if a desktop check failed
@@ -575,7 +575,7 @@ jobs:
         with:
           name: Open-Historia-Native-macOS-smoke-intel
           path: ${{ runner.temp }}/logs
-          retention-days: 7
+          retention-days: 1
           if-no-files-found: warn
 
   linux:
@@ -854,7 +854,7 @@ jobs:
         with:
           name: Open-Historia-Native-Linux-tour
           path: ${{ runner.temp }}/tour
-          retention-days: 7
+          retention-days: 1
           if-no-files-found: warn
 
       - name: Gather the logs
@@ -879,7 +879,7 @@ jobs:
             ${{ runner.temp }}/out/Open-Historia-Native-Linux-x86_64.tar.gz
             ${{ runner.temp }}/out/native-latest-linux.json
           compression-level: 0
-          retention-days: 3
+          retention-days: 1
           if-no-files-found: error
 
       - name: Upload the update chunks
@@ -896,7 +896,7 @@ jobs:
         with:
           name: Open-Historia-Native-Linux-probe
           path: ${{ runner.temp }}/out/probe
-          retention-days: 3
+          retention-days: 1
           if-no-files-found: error
 
       - name: Upload the logs
@@ -905,7 +905,7 @@ jobs:
         with:
           name: Open-Historia-Native-Linux-logs
           path: ${{ runner.temp }}/logs
-          retention-days: 7
+          retention-days: 3
           if-no-files-found: warn
 
       - name: Stop here if a desktop check failed
