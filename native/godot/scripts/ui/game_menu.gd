@@ -797,7 +797,7 @@ class ApiSetupPrompt extends Control:
 		centre.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 		add_child(centre)
 		var card := PanelContainer.new()
-		card.add_theme_stylebox_override("panel", UI.box(Color(32 / 255.0, 32 / 255.0, 35 / 255.0, 0.965), UI.HUD_BORDER, 16, 1, Vector4(22.4, 21.6, 22.4, 19.2)))
+		card.add_theme_stylebox_override("panel", UI.box(UiTheme.pick("overlay_strong", Color(32 / 255.0, 32 / 255.0, 35 / 255.0, 0.965)), UiTheme.pick("hud_border", UI.HUD_BORDER), 16, 1, Vector4(22.4, 21.6, 22.4, 19.2)))
 		_scroll = ScrollContainer.new()
 		_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 		_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_NEVER

@@ -298,7 +298,7 @@ func _setup_part() -> void:
 	await _frames(4)
 
 
-const GREETING_WAIT := 2.4
+const GREETING_WAIT := 5.4
 
 
 class HeldLink extends EngineLink:
@@ -550,6 +550,8 @@ func _game_part() -> void:
 	main.game_menu.call("close")
 	await _wait(0.4)
 	await _themed_panels()
+	await _map_controls()
+	await _scroll_hover()
 	await _themes_notice()
 
 
@@ -581,6 +583,118 @@ func _themed_panels() -> void:
 	_check(chat_panel != null, "the Diplomacy panel is there to theme")
 	UiTheme.reset()
 	await _wait(0.4)
+
+
+func _map_controls() -> void:
+	await _close_notices()
+	var hud: Hud = main.hud
+	var dock: GlassPanel = hud.get("_dock")
+	var toggle := (hud.get("_mode_buttons") as Dictionary)["diplomatic"].get_parent().get_parent() as GlassPanel
+	var advisor_frame: GlassPanel = hud.get("_advisor_frame")
+	var expected := {
+		"default": {"dock": UI.HUD_BG, "edge": UI.HUD_BORDER, "pill": UI.HUD_BUTTON, "diplo": Color(37 / 255.0, 99 / 255.0, 235 / 255.0, 0.3), "diplo_ink": Color("#60a5fa"), "diplo_line": Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.4), "open": Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.16), "rest": Color(1, 1, 1, 0.04)},
+	}
+	for preset in ["forest", "oxblood"]:
+		var palette: Dictionary = UiTheme.preset_named(preset)["colors"]
+		var bg := Color(str(palette["background"]))
+		var surface := Color(str(palette["surface"]))
+		var accent := Color(str(palette["accent"]))
+		expected[preset] = {
+			"dock": Color(bg, 0.58), "edge": Color(Color(UiTheme.mix(str(palette["surface"]), "#FFFFFF", 0.55)), 0.2), "pill": Color(surface, 0.6),
+			"diplo": Color(accent, 0.22), "diplo_ink": Color(UiTheme.mix(str(palette["accent"]), "#FFFFFF", 0.3)), "diplo_line": Color(accent, 0.45),
+			"open": Color(accent, 0.22), "rest": Color(Color(UiTheme.mix(str(palette["surface"]), "#FFFFFF", 0.08)), 0.42),
+		}
+	for preset in ["default", "forest", "oxblood"]:
+		UiTheme.select(preset)
+		((hud.get("_mode_buttons") as Dictionary)["diplomatic"] as Button).pressed.emit()
+		hud.set_active_panel("")
+		await _wait(0.9)
+		await _shoot("look-%s-map-controls" % preset)
+		hud.set_active_panel("actions")
+		await _wait(0.9)
+		var want: Dictionary = expected[preset]
+		var diplo: Button = (hud.get("_mode_buttons") as Dictionary)["diplomatic"]
+		var political: Button = (hud.get("_mode_buttons") as Dictionary)["political"]
+		var diplo_style := diplo.get_theme_stylebox("normal") as StyleBoxFlat
+		var launchers: Dictionary = hud.get("_launchers")
+		var open_style := (launchers["actions"] as Button).get_theme_stylebox("normal") as StyleBoxFlat
+		var rest_style := (launchers["chat"] as Button).get_theme_stylebox("normal") as StyleBoxFlat
+		_check(_same(dock.tint, want["dock"]) and _same(dock.border, want["edge"]) and _same(toggle.tint, want["dock"]), "the dock and the map-mode switch take the glass of %s" % preset, "%s %s" % [dock.tint, toggle.tint])
+		_check(_same(advisor_frame.tint, want["pill"]) and _same(advisor_frame.border, want["edge"]), "the Advisor button takes the pill of %s" % preset, str(advisor_frame.tint))
+		_check(diplo_style != null and _same(diplo_style.bg_color, want["diplo"]) and _same(diplo.get_theme_color("font_color"), want["diplo_ink"]) and _same(_border_of(diplo_style), want["diplo_line"]), "Diplomatic, chosen, is drawn as beta's in %s" % preset, "%s %s" % [diplo_style.bg_color if diplo_style else Color(), diplo.get_theme_color("font_color")])
+		_check(_same(political.get_theme_color("font_color"), Color(1, 1, 1, 0.55)), "Political, not chosen, stays dimmed white in %s" % preset)
+		_check(open_style != null and _same(open_style.bg_color, want["open"]) and rest_style != null and _same(rest_style.bg_color, want["rest"]), "the dock's open and resting buttons take %s" % preset, "%s %s" % [open_style.bg_color if open_style else Color(), rest_style.bg_color if rest_style else Color()])
+		await _shoot("look-%s-map-controls-open" % preset)
+		political.pressed.emit()
+		await _wait(0.4)
+		var political_style := political.get_theme_stylebox("normal") as StyleBoxFlat
+		_check(political_style != null and _same(political_style.bg_color, Color(1, 1, 1, 0.14) if preset == "default" else Color(want["diplo"])), "Political, chosen, takes %s" % preset, str(political_style.bg_color if political_style else Color()))
+		await _shoot("look-%s-map-controls-political" % preset)
+		hud.set_active_panel("")
+	UiTheme.reset()
+	await _wait(0.4)
+
+
+func _border_of(style: StyleBoxFlat) -> Color:
+	if style.has_meta(StyleSettle.TINT_FROM):
+		return style.get_meta(StyleSettle.TINT_FROM)
+	return style.border_color
+
+
+func _scroll_hover() -> void:
+	var holder := ScrollContainer.new()
+	holder.position = Vector2(40, 140)
+	holder.size = Vector2(260, 220)
+	var rows := VBoxContainer.new()
+	rows.custom_minimum_size = Vector2(240, 0)
+	for index in range(30):
+		var row := Button.new()
+		row.text = "Row %d" % index
+		row.custom_minimum_size = Vector2(240, 30)
+		rows.add_child(row)
+	holder.add_child(rows)
+	var layer := CanvasLayer.new()
+	layer.layer = 120
+	layer.add_child(holder)
+	main.add_child(layer)
+	await _frames(3)
+	_check(holder.has_meta(ScrollHoverFreeze.HOOKED), "a list put on screen is watched for the wheel")
+	var lists: Array = _find_all(main, func(node: Node) -> bool: return node is ScrollContainer, [])
+	_check(lists.all(func(node: Node) -> bool: return node.has_meta(ScrollHoverFreeze.HOOKED)), "every list in the game is", "%d lists" % lists.size())
+	var at := holder.global_position + Vector2(120, 100)
+	var move := InputEventMouseMotion.new()
+	move.position = at
+	move.global_position = at
+	root.get_viewport().push_input(move)
+	await _frames(2)
+	holder.scroll_vertical = 90
+	await _frames(2)
+	_check(not ScrollHoverFreeze.scrolling(holder) and rows.mouse_behavior_recursive == Control.MOUSE_BEHAVIOR_INHERITED, "a list that scrolls itself keeps taking the pointer")
+	var wheel := InputEventMouseButton.new()
+	wheel.button_index = MOUSE_BUTTON_WHEEL_DOWN
+	wheel.pressed = true
+	wheel.factor = 1.0
+	wheel.position = at
+	wheel.global_position = at
+	root.get_viewport().push_input(wheel)
+	var up := wheel.duplicate() as InputEventMouseButton
+	up.pressed = false
+	root.get_viewport().push_input(up)
+	await _frames(2)
+	_check(holder.scroll_vertical > 90, "the wheel scrolls the list", str(holder.scroll_vertical))
+	_check(ScrollHoverFreeze.scrolling(holder) and rows.mouse_behavior_recursive == Control.MOUSE_BEHAVIOR_DISABLED, "while the wheel scrolls it, what is inside takes no hover")
+	root.get_viewport().push_input(wheel)
+	root.get_viewport().push_input(up)
+	await _frames(2)
+	_check(ScrollHoverFreeze.scrolling(holder) and rows.mouse_behavior_recursive == Control.MOUSE_BEHAVIOR_DISABLED, "the wheel still reaches the list while it is held")
+	var hovered: Array = rows.get_children().filter(func(row: Button) -> bool: return row.is_hovered())
+	_check(hovered.is_empty(), "no row lights up as it passes under the cursor", "%d hovered" % hovered.size())
+	await _wait(0.1)
+	_check(ScrollHoverFreeze.scrolling(holder), "it is held until the list has been still a moment")
+	await _wait(0.12)
+	_check(not ScrollHoverFreeze.scrolling(holder) and rows.mouse_behavior_recursive == Control.MOUSE_BEHAVIOR_INHERITED, "150 ms after the last turn of the wheel the rows take the pointer again")
+	layer.queue_free()
+	await _frames(2)
 
 
 func _update_banner(preset: String) -> void:

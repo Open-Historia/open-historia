@@ -130,7 +130,7 @@ func busy() -> bool:
 
 
 func _build_pill() -> void:
-	var pill := GlassPanel.new(UI.HUD_BG_STRONG, 14, Vector4(8, 0, 8, 0))
+	var pill := GlassPanel.new(UI.HUD_BG_STRONG, 14, Vector4(8, 0, 8, 0)).theme_as("hud_bg_strong", "hud_border")
 	_pill = pill
 	pill.anchor_left = 1.0
 	pill.anchor_right = 1.0

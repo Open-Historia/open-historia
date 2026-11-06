@@ -171,6 +171,18 @@ static func tokens_for(selection: String, palette: Dictionary) -> Dictionary:
 		"grey_text": Color(TEXT),
 		"grey_muted": Color("#B4C4D0"),
 		"grey_faint": Color("#839AAA"),
+		"hud_bg": _alpha(bg, 0.58),
+		"hud_bg_strong": _alpha(bg, 0.72),
+		"hud_bg_soft": _alpha(surface, 0.5),
+		"hud_border": _alpha(mix(surface, "#FFFFFF", 0.55), 0.2),
+		"hud_border_strong": _alpha(mix(surface, "#FFFFFF", 0.6), 0.32),
+		"glass_pill": _alpha(surface, 0.6),
+		"glass_chip": _alpha(mix(surface, "#FFFFFF", 0.08), 0.42),
+		"glass_line": _alpha(mix(surface, "#FFFFFF", 0.5), 0.16),
+		"glass_hover": _alpha(mix(surface, accent, 0.3), 0.55),
+		"glass_active": _alpha(accent, 0.22),
+		"glass_active_line": _alpha(accent, 0.45),
+		"glass_active_text": Color(mix(accent, "#FFFFFF", 0.3)),
 	}
 
 
