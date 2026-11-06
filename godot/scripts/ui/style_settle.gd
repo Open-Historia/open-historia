@@ -6,65 +6,64 @@ const FROM := &"oh_border_from"
 const TINT_FROM := &"oh_border_tint_from"
 const TINT_LAID := &"oh_border_tint_laid"
 
-static var _installed := false
+static var _one: StyleSettle
 static var _names: Dictionary = {}
 static var _busy := false
 
 
 static func install() -> void:
-	if _installed:
+	if _one != null:
 		return
 	var tree := Engine.get_main_loop() as SceneTree
 	if tree == null or tree.root == null:
 		return
-	_installed = true
-	tree.node_added.connect(_on_node_added)
-	_sweep(tree.root)
+	_one = StyleSettle.new()
+	tree.node_added.connect(_one._on_node_added)
+	_one._sweep(tree.root)
 
 
-static func _sweep(node: Node) -> void:
+func _sweep(node: Node) -> void:
 	_on_node_added(node)
 	for child in node.get_children():
 		_sweep(child)
 
 
-static func _on_node_added(node: Node) -> void:
+func _on_node_added(node: Node) -> void:
 	if not (node is Control or node is Window):
 		return
 	var held: WeakRef = weakref(node)
 	if not node.has_meta(SETTLED):
 		node.set_meta(SETTLED, true)
-		node.connect("theme_changed", Callable(StyleSettle, "_settle_node").bind(held))
+		node.connect("theme_changed", _settle_node.bind(held))
 	_settle_node(held)
 
 
-static func _settle_node(ref: WeakRef) -> void:
+func _settle_node(ref: WeakRef) -> void:
 	var node: Node = ref.get_ref()
 	if node == null:
 		return
 	for item in _names_for(node.get_class()):
 		if node.call("has_theme_stylebox_override", item):
-			settle(node.call("get_theme_stylebox", item))
+			_settle_box(node.call("get_theme_stylebox", item))
 	var own: Variant = node.get("theme")
 	if own is Theme:
-		settle_theme(own)
+		_settle_theme(own)
 
 
-static func settle_theme(theme: Theme) -> void:
+func _settle_theme(theme: Theme) -> void:
 	if not theme.has_meta(SETTLED):
 		theme.set_meta(SETTLED, true)
-		var held: WeakRef = weakref(theme)
-		theme.changed.connect(func() -> void:
-			var again: Theme = held.get_ref()
-			if again:
-				_settle_theme_boxes(again))
-	_settle_theme_boxes(theme)
+		theme.changed.connect(_on_theme_changed.bind(weakref(theme)))
+	_on_theme_changed(weakref(theme))
 
 
-static func _settle_theme_boxes(theme: Theme) -> void:
+func _on_theme_changed(ref: WeakRef) -> void:
+	var theme: Theme = ref.get_ref()
+	if theme == null:
+		return
 	for type in theme.get_stylebox_type_list():
 		for item in theme.get_stylebox_list(type):
-			settle(theme.get_stylebox(item, type))
+			_settle_box(theme.get_stylebox(item, type))
 
 
 static func _names_for(kind: String) -> Array:
@@ -83,18 +82,20 @@ static func _names_for(kind: String) -> Array:
 	return _names[kind]
 
 
-static func settle(box: StyleBox) -> void:
+func _settle_box(box: StyleBox) -> void:
 	var flat := box as StyleBoxFlat
 	if flat == null:
 		return
 	if not flat.has_meta(SETTLED):
 		flat.set_meta(SETTLED, true)
-		var held: WeakRef = weakref(flat)
-		flat.changed.connect(func() -> void:
-			var again: StyleBoxFlat = held.get_ref()
-			if again:
-				lay_border(again))
+		flat.changed.connect(_on_box_changed.bind(weakref(flat)))
 	lay_border(flat)
+
+
+func _on_box_changed(ref: WeakRef) -> void:
+	var flat: StyleBoxFlat = ref.get_ref()
+	if flat:
+		lay_border(flat)
 
 
 static func lay_border(flat: StyleBoxFlat) -> void:
