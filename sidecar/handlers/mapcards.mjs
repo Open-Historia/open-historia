@@ -283,8 +283,10 @@ export const register = (ctx) => {
         provenance: cleanText(subordination.provenance),
       } : null,
       puppets: heldPuppets.length ? {
-        label: heldPuppets[0].role === "overlord" ? "Our puppets: " : "Puppets: ",
-        text: heldPuppets.map((entry) => `${entry.puppet} (${extras.puppets.puppetKindLabel(entry.kind)})`).join(", "),
+        count: heldPuppets.length,
+        preview: heldPuppets.slice(0, 2).map((entry) => ({ puppet: String(entry.puppet ?? ""), kind: extras.puppets.puppetKindLabel(entry.kind) })),
+        more: Math.max(0, heldPuppets.length - 2),
+        country: controllerKey,
       } : null,
       info: info && (info.cities.length > 0 || info.neighbours.length > 0) ? {
         cities: info.cities.map((city) => (city.population > 0 ? `${city.name} (${city.population.toLocaleString()})` : city.name)).join(", "),
