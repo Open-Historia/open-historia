@@ -66,6 +66,8 @@ const lookupFunctionsState = () => {
 registerSettingsSnapshot("Display", () => [
     ["UI language", languageDisplayName(getStoredLanguage())],
     ["AI chat language", languageDisplayName(getStoredChatLanguage())],
+    // Stored like the others; offered only in a language with a downloaded model.
+    ["Translate with my AI", onOff(getMapSetting(MAP_SETTING_KEYS.translateWithAi))],
     ["Fullscreen", onOff(typeof document !== "undefined" && document.fullscreenElement)],
     // The vault door at every opening, not only after an update.
     ["Show the vault door every time", onOff(getMapSetting(MAP_SETTING_KEYS.vaultDoorAlways))],
