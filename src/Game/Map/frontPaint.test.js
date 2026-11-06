@@ -7,7 +7,7 @@ import { HOLDER_SIDE_A, HOLDER_SIDE_B, HOLDER_WALL } from "../../runtime/fronts/
 import { frontViewOf, normalizeBattlefield } from "../../runtime/fronts/record.js";
 import { createReplayRecorder } from "../../runtime/fronts/replay.js";
 import { projectorOf } from "../../runtime/fronts/frame.js";
-import { FILL_DAYS, createFrontField, createPaintPlayer, landMask, paintPixels, paintScaleFor, pictureFits, pictureCorners, touchedCells, writeFrontField } from "./frontPaint.js";
+import { FILL_DAYS, createFrontField, createPaintPlayer, landMask, paintPixels, paintScaleFor, pictureFits, pictureCorners, touchedCells, writeFrontField , viewWithin } from "./frontPaint.js";
 
 const COLS = 24;
 const ROWS = 12;
@@ -484,4 +484,13 @@ test("a frame of a playing whose cells are as the last left them paints nothing,
   }
   const layers = fs.readFileSync(new URL("./FrontLayers.jsx", import.meta.url), "utf8");
   assert.ok(layers.includes("const area = paintPixels(player, picture.palette, target, null, { unlessUnchanged: !atRest && !redressed && !picture.blank });"));
+});
+
+test("a view inside the one already masked needs no new mask", () => {
+  const masked = { west: -10, south: 30, east: 40, north: 60 };
+  assert.equal(viewWithin({ west: -5, south: 35, east: 35, north: 55 }, masked), true);
+  assert.equal(viewWithin(masked, masked), true);
+  assert.equal(viewWithin({ west: -11, south: 35, east: 35, north: 55 }, masked), false);
+  assert.equal(viewWithin({ west: -5, south: 35, east: 35, north: 61 }, masked), false);
+  assert.equal(viewWithin(masked, null), false);
 });
