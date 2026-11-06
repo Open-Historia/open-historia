@@ -87,3 +87,4 @@ dist-wiki-preview/
 /native/out/
 /native/godot/android_payload/
 /native/android/out/
+/native/android/node/out/
