@@ -20,8 +20,9 @@
 // site is set up that way this does nothing at all. Web build only.
 //
 // The Android app moves its saves from one of its ids to another in the same
-// file format (appMove.js): it writes the file with createSavesPacker below and
-// merges it with mergePackedSaves, its settings winning over the new app's.
+// file format (appMove.js): it writes the file with createSavesWriter below, a
+// piece at a time, and merges it with mergePackedSaves, its settings winning
+// over the new app's.
 
 import { DEFAULT_SCENARIO_ID } from "./storeConstants.js";
 
@@ -114,33 +115,50 @@ const encodeRecord = (record) => {
   return { json: JSON.stringify(walk(record)), bins };
 };
 
-// Packs one record at a time: each part becomes a Blob as soon as it is made,
-// which the browser may keep out of the page's memory, so a library with a big
-// map in it is not held as text while it is packed. finish(settings) gives the
-// file: the magic, the index's length (4 bytes, little-endian), the index
-// (JSON), then every record's text and binaries at the offsets the index gives.
-export const createSavesPacker = () => {
-  const parts = [];
+// Writes the file a record at a time: each record's text and binaries go to
+// `write` (a Uint8Array or a Blob, awaited) as soon as they are made, so a big
+// library is never held whole. The index comes last, from head(settings): the
+// magic, the index's length (4 bytes, little-endian) and the index (JSON), which
+// go IN FRONT of everything written, at the offsets the index gives.
+export const createSavesWriter = (write) => {
   const entries = [];
   let offset = 0;
-  const place = (part) => {
-    const blob = part instanceof Blob ? part : new Blob([part]);
-    parts.push(blob);
-    const at = [offset, blob.size];
-    offset += blob.size;
+  const place = async (part) => {
+    const piece = typeof part === "string" ? new TextEncoder().encode(part)
+      : part instanceof Blob ? part
+        : new Uint8Array(part);
+    const size = piece instanceof Blob ? piece.size : piece.byteLength;
+    await write(piece);
+    const at = [offset, size];
+    offset += size;
     return at;
   };
   return {
-    add: (store, record) => {
+    add: async (store, record) => {
       const { json, bins } = encodeRecord(record);
-      entries.push({ store, json: place(json), bins: bins.map(place) });
+      const entry = { store, json: await place(json), bins: [] };
+      for (const bin of bins) entry.bins.push(await place(bin));
+      entries.push(entry);
     },
-    finish: (settings = {}) => {
+    get written() { return offset; },
+    head: (settings = {}) => {
       const indexText = new TextEncoder().encode(JSON.stringify({ version: 1, settings, entries }));
-      const length = new Uint8Array(4);
-      new DataView(length.buffer).setUint32(0, indexText.byteLength, true);
-      return new Blob([SAVE_MOVE_MAGIC, length, indexText, ...parts], { type: "application/octet-stream" });
+      const head = new Uint8Array(SAVE_MOVE_MAGIC.length + 4 + indexText.byteLength);
+      head.set(new TextEncoder().encode(SAVE_MOVE_MAGIC), 0);
+      new DataView(head.buffer).setUint32(SAVE_MOVE_MAGIC.length, indexText.byteLength, true);
+      head.set(indexText, SAVE_MOVE_MAGIC.length + 4);
+      return head;
     },
+  };
+};
+
+// The same file as one Blob, for tests and small libraries.
+export const createSavesPacker = () => {
+  const parts = [];
+  const writer = createSavesWriter(async (piece) => { parts.push(piece instanceof Blob ? piece : new Blob([piece])); });
+  return {
+    add: writer.add,
+    finish: (settings = {}) => new Blob([writer.head(settings), ...parts], { type: "application/octet-stream" }),
   };
 };
 
@@ -237,6 +255,31 @@ export const mergePackedSaves = async (packed, db, storage, { settingsWin = fals
     }
   }
 
+  // A game's restore points, when they come as rows of their own (appMove.js):
+  // its index row first, then each restore point, both under the id the game
+  // has here. A game that did not come brings none of them.
+  if (STORES.snapshotIndex && STORES.snapshots) {
+    const slots = new Map();
+    for (const entry of byStore("snapshotIndex")) {
+      const row = await packed.read(entry);
+      const to = gameIdMap.get(row?.id);
+      if (!to || !Array.isArray(row.entries)) continue;
+      const entries = row.entries.map((item) => {
+        const slot = String(item?.slot ?? "");
+        const moved = slot.startsWith(`${row.id}/`) ? `${to}/${slot.slice(row.id.length + 1)}` : `${to}/${slot}`;
+        slots.set(slot, moved);
+        return { ...item, slot: moved };
+      });
+      await db.idbPut(STORES.snapshotIndex, { ...row, id: to, entries });
+    }
+    for (const entry of byStore("snapshots")) {
+      const row = await packed.read(entry);
+      const slot = slots.get(String(row?.id ?? ""));
+      if (!slot) continue;
+      await db.idbPut(STORES.snapshots, { ...row, id: slot });
+    }
+  }
+
   const parkedTurns = [];
   for (const entry of byStore("kv")) {
     const record = await packed.read(entry);
@@ -276,6 +319,25 @@ export const mergePackedSaves = async (packed, db, storage, { settingsWin = fals
   }
   if (manifests["ui-settings"] && (settingsWin || (await db.kvGet("ui-settings", null)) == null)) {
     await db.kvPut("ui-settings", manifests["ui-settings"]);
+  }
+  // The basemaps' and the Workshop documents' lists: what is here first, then
+  // what arrived (the lists show every one anyway; these keep the order and the
+  // basemaps' duplicate check).
+  for (const key of ["basemaps-manifest", "mapeditor-manifest"]) {
+    const theirs = manifests[key];
+    if (!theirs || typeof theirs !== "object") continue;
+    const here = (await db.kvGet(key, null)) ?? {};
+    const order = [...new Set([...(Array.isArray(here.order) ? here.order : []), ...(Array.isArray(theirs.order) ? theirs.order : [])])];
+    const merged = { ...theirs, ...here, version: here.version ?? theirs.version ?? 1, order };
+    if (theirs.byHash || here.byHash) merged.byHash = { ...(theirs.byHash ?? {}), ...(here.byHash ?? {}) };
+    await db.kvPut(key, merged);
+  }
+  // Interface text the player's AI translated for a language without a shipped
+  // pack (settingsStore.js), each language's own row.
+  for (const [key, value] of Object.entries(manifests)) {
+    if (!key.startsWith("lang:") || !value || typeof value !== "object") continue;
+    const here = (await db.kvGet(key, null)) ?? {};
+    await db.kvPut(key, settingsWin ? { ...here, ...value } : { ...value, ...here });
   }
 
   // Settings and the AI key: only what this address does not have yet, or with

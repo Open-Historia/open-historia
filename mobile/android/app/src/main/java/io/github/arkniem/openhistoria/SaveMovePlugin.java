@@ -21,9 +21,12 @@ import com.getcapacitor.annotation.ActivityCallback;
 import com.getcapacitor.annotation.CapacitorPlugin;
 
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
+import java.io.RandomAccessFile;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -36,8 +39,11 @@ import java.util.concurrent.Executors;
 // In the handover build (BuildConfig.OH_MOVE_TO names the new app):
 //   info()            whether the new app is installed, and signed like this one;
 //   begin(), append() the page writes its packed saves into this app's cache,
-//                     a piece at a time (the bridge only carries text);
-//   send()            hands that file to the new app's SaveMoveActivity, by an
+//                     a piece at a time as it packs them (the bridge only
+//                     carries text, so each piece is base64);
+//   send({ head })    puts the file's head (its index, made last) in front of
+//                     those pieces and hands the file to the new app's
+//                     SaveMoveActivity, by an
 //                     explicit intent with a read grant on a content:// address
 //                     of this app's FileProvider, and answers once the new app
 //                     has kept its copy;
@@ -46,8 +52,8 @@ import java.util.concurrent.Executors;
 // names the old one.
 //
 // In the app (OH_MOVE_TO empty), the file SaveMoveActivity kept waits in
-// files/save-move/ until the page has merged it: info() gives its path, done()
-// deletes it.
+// files/save-move/ until the page has merged it: info() gives its path, read()
+// gives the page a piece of it at a time, done() deletes it.
 @CapacitorPlugin(name = "OhSaveMove")
 public class SaveMovePlugin extends Plugin {
     private static final String TAG = "OpenHistoria";
@@ -106,6 +112,27 @@ public class SaveMovePlugin extends Plugin {
         call.resolve(answer);
     }
 
+    // The app: up to 4 MB of the file that arrived, from `offset`, as base64;
+    // "" past its end.
+    @PluginMethod
+    public void read(PluginCall call) {
+        long offset = call.getLong("offset", 0L);
+        int length = Math.max(0, Math.min(call.getInt("length", 0), 4 * 1024 * 1024));
+        executor.execute(() -> {
+            File incoming = incomingFile(getContext());
+            try (RandomAccessFile file = new RandomAccessFile(incoming, "r")) {
+                byte[] buffer = new byte[(int) Math.max(0, Math.min(length, file.length() - offset))];
+                file.seek(offset);
+                file.readFully(buffer);
+                JSObject answer = new JSObject();
+                answer.put("data", Base64.encodeToString(buffer, Base64.NO_WRAP));
+                call.resolve(answer);
+            } catch (IOException error) {
+                call.reject("The games that arrived could not be read: " + error.getMessage());
+            }
+        });
+    }
+
     // The app: the page has merged the file (or given up on it).
     @PluginMethod
     public void done(PluginCall call) {
@@ -154,11 +181,26 @@ public class SaveMovePlugin extends Plugin {
             call.reject("The new app is not installed.");
             return;
         }
+        String head = call.getString("head", "");
         executor.execute(() -> {
             File file = outgoingFile();
-            if (!outgoingPart().renameTo(file)) {
+            File part = outgoingPart();
+            if (!part.isFile()) {
                 call.reject("The packed games are missing.");
                 return;
+            }
+            try (OutputStream out = new FileOutputStream(file);
+                 InputStream in = new FileInputStream(part)) {
+                out.write(Base64.decode(head, Base64.DEFAULT));
+                byte[] buffer = new byte[256 * 1024];
+                int read;
+                while ((read = in.read(buffer)) != -1) out.write(buffer, 0, read);
+            } catch (IOException | IllegalArgumentException error) {
+                file.delete();
+                call.reject("The games could not be packed: " + error.getMessage());
+                return;
+            } finally {
+                part.delete();
             }
             Context context = getContext();
             Uri uri = FileProvider.getUriForFile(context, context.getPackageName() + ".fileprovider", file);

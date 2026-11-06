@@ -6,7 +6,7 @@
 // boot screen's is (bootTexts.js).
 
 import { bootTranslate, bootTranslated } from "../web/bootTexts.js";
-import { canInstallUpdates, installUpdate } from "./appInstaller.js";
+import { canInstallUpdates, cancelUpdateDownload, installUpdate } from "./appInstaller.js";
 import { appMoveInfo, gamesWereMoved, moveGamesToApp, openApp } from "./appMove.js";
 
 // Every word the card and the notice say; the string catalog reads this table.
@@ -97,6 +97,7 @@ export const showHandoverCard = ({ db, track = "stable", storage = localStorage 
   document.body.append(root);
 
   let busy = false;
+  let cancelled = false;
   let error = "";
   const close = () => {
     document.removeEventListener("visibilitychange", onVisible);
@@ -114,6 +115,7 @@ export const showHandoverCard = ({ db, track = "stable", storage = localStorage 
     const text = { install: "intro", other: "other", ready: "ready", moved: "moved", downloading: "downloading", moving: "moving" }[stage];
     const acts = make("div", { className: "oh-am-acts" });
     if (stage === "install") acts.append(button("install", install, true), button("later", close));
+    if (stage === "downloading") acts.append(button("later", () => { cancelled = true; cancelUpdateDownload(); }));
     if (stage === "other") acts.append(button("close", close));
     if (stage === "ready") acts.append(button("move", move, true), button("later", close));
     if (stage === "moved") acts.append(button("open", () => { openApp().catch(() => {}); }, true), button("moveAgain", move), button("close", close));
@@ -138,13 +140,14 @@ export const showHandoverCard = ({ db, track = "stable", storage = localStorage 
     if (busy) return;
     if (!canInstallUpdates()) { error = "installFailed"; refresh(); return; }
     busy = true;
+    cancelled = false;
     error = "";
     draw("downloading", 0);
     try {
       // build 0: never the update this app may have kept for itself.
       await installUpdate(await newAppApk(track), { build: 0, onProgress: (percent) => draw("downloading", percent / 100) });
     } catch {
-      error = "installFailed";
+      error = cancelled ? "" : "installFailed";
     }
     busy = false;
     refresh();

@@ -13,9 +13,11 @@
 //      opens Android's installer on it (UpdatePlugin), which installs it beside
 //      this one;
 //   2. "Move my games" packs the whole library and the settings into one file,
-//      in the format the website's own move uses (saveMove.js), writes it into
-//      the app's cache and hands it to the new app (SaveMovePlugin.java), which
-//      takes it only from an app signed with its own key (SaveMoveActivity.java);
+//      in the format the website's own move uses (saveMove.js), a record at a
+//      time straight into the app's cache (so a library of hundreds of MB is
+//      never held in the page), and hands it to the new app
+//      (SaveMovePlugin.java), which takes it only from an app signed with its
+//      own key (SaveMoveActivity.java);
 //   3. the new app's page merges it before anything reads the library
 //      (takeMovedSaves, called from web/index.js), the old app's settings
 //      winning over the ones the fresh install wrote, and starts again once.
@@ -27,7 +29,7 @@
 // (.github/workflows/android-apk.yml, web/router.js).
 
 import { nativePlugin } from "./bridge.js";
-import { createSavesPacker, mergePackedSaves, openPackedSaves } from "../web/saveMove.js";
+import { createSavesWriter, mergePackedSaves, openPackedSaves } from "../web/saveMove.js";
 
 // The new app's note of what moves brought (`seen`), and whether to say so.
 export const APP_MOVE_STATE_KEY = "oh:app-move";
@@ -88,30 +90,24 @@ const writeJson = (storage, key, value) => {
 // What the library is made of. The lean scenarioMeta/gameMeta/mapeditorMeta
 // rows are rebuilt by the game from the records; the trash stays behind.
 const RECORD_STORES = ["scenarios", "games", "mapeditorDocs", "basemapMeta", "basemapPayload", "flags"];
-const KV_KEYS = ["game-manifest", "scenario-manifest", "ui-settings"];
-const PARKED_TURN = "parked-turn:";
+const KV_KEYS = ["game-manifest", "scenario-manifest", "ui-settings", "basemaps-manifest", "mapeditor-manifest"];
+// Rows per game (a kept time skip) and per language (text the player's AI
+// translated), carried too.
+const KV_PREFIXES = ["parked-turn:", "lang:"];
 
-// A scenario's or game's own rows go inside it, the way a record written before
-// covers and restore points had stores of their own carried them (idb.js
-// version 5): the cover's bytes, and a game's restore points as `snapshots`,
-// newest first. The game reads that layout and moves it into the stores again
-// (libraryStore.js readCover, readRestorePoints, migrateStoreLayout), and a
-// game whose id is taken in the new app arrives under another one with its
-// restore points still its own.
-export const inlineRecordRows = async (db, kind, record) => {
+// A scenario's or game's cover goes inside it, the way a record written before
+// covers had a store of their own carried it (idb.js version 5); the game reads
+// that layout and moves it out again (libraryStore.js readCover,
+// migrateStoreLayout). A game's restore points do not: they can be most of a
+// library, so each goes as a row of its own after the game (packLibraryForMove),
+// and the merge files them under the id the game gets in the new app.
+export const inlineCover = async (db, kind, record) => {
   const { STORES } = db;
   const cover = record.cover;
   if (cover && !cover.bytes && STORES.covers) {
     const row = await db.idbGet(STORES.covers, cover.key || `${kind}:${record.id}`);
     if (row?.bytes) record.cover = { contentType: row.contentType || cover.contentType || "application/octet-stream", bytes: row.bytes };
     else delete record.cover;
-  }
-  if (kind === "game" && STORES.snapshotIndex && !Array.isArray(record.snapshots) && !Array.isArray(record.json?.snapshots)) {
-    const entries = (await db.idbGet(STORES.snapshotIndex, record.id))?.entries ?? [];
-    if (entries.length) {
-      const rows = await db.idbGetMany(STORES.snapshots, entries.map((entry) => entry.slot));
-      record.snapshots = rows.filter((row) => row?.snapshot && typeof row.snapshot === "object").map((row) => row.snapshot);
-    }
   }
   return record;
 };
@@ -131,30 +127,48 @@ export const readSettingsForMove = (storage) => {
   return settings;
 };
 
-// The whole library and the settings as one file (saveMove.js format), read one
-// record at a time.
-export const packLibraryForMove = async (db, storage) => {
+// The whole library and the settings as one file (saveMove.js format), read
+// one record and written one record at a time: `write` gets every piece as it
+// is made, and the answer's `head` goes in front of them all. `onRecord(done,
+// total)` counts the records.
+export const packLibraryForMove = async (db, storage, write, { onRecord } = {}) => {
   const { STORES } = db;
-  const packer = createSavesPacker();
+  const writer = createSavesWriter(write);
   const counts = { games: 0, scenarios: 0 };
+  const keys = [];
   for (const store of RECORD_STORES) {
     if (!STORES[store]) continue;
-    for (const key of await db.idbGetAllKeys(STORES[store])) {
-      const record = await db.idbGet(STORES[store], key);
-      if (!record) continue;
-      if (store === "games" || store === "scenarios") {
-        await inlineRecordRows(db, store === "games" ? "game" : "scenario", record);
-        counts[store] += 1;
+    for (const key of await db.idbGetAllKeys(STORES[store])) keys.push([store, key]);
+  }
+  const kvKeys = (await db.idbGetAllKeys(STORES.kv)).filter((key) => KV_KEYS.includes(key) || KV_PREFIXES.some((prefix) => String(key).startsWith(prefix)));
+  const total = keys.length + kvKeys.length;
+  let done = 0;
+  for (const [store, key] of keys) {
+    const record = await db.idbGet(STORES[store], key);
+    onRecord?.(++done, total);
+    if (!record) continue;
+    if (store === "games" || store === "scenarios") {
+      await inlineCover(db, store === "games" ? "game" : "scenario", record);
+      counts[store] += 1;
+    }
+    await writer.add(store, record);
+    // A game's restore points, one row at a time, after the game.
+    if (store === "games" && STORES.snapshotIndex && !Array.isArray(record.snapshots) && !Array.isArray(record.json?.snapshots)) {
+      const index = await db.idbGet(STORES.snapshotIndex, record.id);
+      if (!Array.isArray(index?.entries) || !index.entries.length) continue;
+      await writer.add("snapshotIndex", index);
+      for (const entry of index.entries) {
+        const row = await db.idbGet(STORES.snapshots, entry.slot);
+        if (row) await writer.add("snapshots", row);
       }
-      packer.add(store, record);
     }
   }
-  for (const key of await db.idbGetAllKeys(STORES.kv)) {
-    if (!KV_KEYS.includes(key) && !String(key).startsWith(PARKED_TURN)) continue;
+  for (const key of kvKeys) {
     const record = await db.idbGet(STORES.kv, key);
-    if (record) packer.add("kv", record);
+    onRecord?.(++done, total);
+    if (record) await writer.add("kv", record);
   }
-  return { file: packer.finish(readSettingsForMove(storage)), ...counts };
+  return { head: writer.head(readSettingsForMove(storage)), size: writer.written, ...counts };
 };
 
 // Bytes as base64, a slice at a time (String.fromCharCode takes only so many
@@ -165,23 +179,55 @@ export const bytesToBase64 = (bytes) => {
   return btoa(text);
 };
 
-// Writes the file into the app's cache through the plugin, `onProgress(0..1)`
-// as it goes, and hands it to the new app. Resolves once the new app has kept
-// its copy; it then opens itself and merges it.
-export const sendFileToApp = async (file, { bridge = plugin(), onProgress } = {}) => {
-  if (!bridge) throw new Error("This app cannot move its games.");
-  await bridge.begin();
-  for (let at = 0; at < file.size; at += PIECE_BYTES) {
-    const piece = new Uint8Array(await file.slice(at, at + PIECE_BYTES).arrayBuffer());
-    await bridge.append({ data: bytesToBase64(piece) });
-    onProgress?.(Math.min(1, (at + piece.length) / file.size));
-  }
-  await bridge.send();
+// What the page writes goes to the plugin in pieces of PIECE_BYTES: small
+// records are gathered into one piece, a big one is cut into several, a Blob is
+// read a slice at a time. Nothing bigger than a piece is held for the bridge.
+export const createPieceSender = (bridge) => {
+  let held = [];
+  let heldBytes = 0;
+  const send = async (bytes) => { await bridge.append({ data: bytesToBase64(bytes) }); };
+  const flush = async () => {
+    if (!heldBytes) return;
+    const piece = new Uint8Array(heldBytes);
+    let at = 0;
+    for (const part of held) { piece.set(part, at); at += part.byteLength; }
+    held = [];
+    heldBytes = 0;
+    await send(piece);
+  };
+  const write = async (part) => {
+    if (part instanceof Blob) {
+      for (let at = 0; at < part.size; at += PIECE_BYTES) await write(new Uint8Array(await part.slice(at, at + PIECE_BYTES).arrayBuffer()));
+      return;
+    }
+    if (heldBytes + part.byteLength <= PIECE_BYTES) {
+      held.push(part);
+      heldBytes += part.byteLength;
+      if (heldBytes === PIECE_BYTES) await flush();
+      return;
+    }
+    await flush();
+    for (let at = 0; at < part.byteLength; at += PIECE_BYTES) {
+      const slice = part.subarray(at, at + PIECE_BYTES);
+      if (slice.byteLength === PIECE_BYTES) await send(slice);
+      else { held.push(slice); heldBytes += slice.byteLength; }
+    }
+  };
+  return { write, flush };
 };
 
-export const moveGamesToApp = async ({ db, storage = localStorage, onProgress } = {}) => {
-  const { file, games, scenarios } = await packLibraryForMove(db, storage);
-  await sendFileToApp(file, { onProgress });
+// Packs the library straight into the app's cache through the plugin and hands
+// the file to the new app. Resolves once the new app has kept its copy; it then
+// opens itself and merges it. `onProgress(0..1)` follows the records.
+export const moveGamesToApp = async ({ db, storage = localStorage, bridge = plugin(), onProgress } = {}) => {
+  if (!bridge) throw new Error("This app cannot move its games.");
+  await bridge.begin();
+  const sender = createPieceSender(bridge);
+  const { head, games, scenarios } = await packLibraryForMove(db, storage, sender.write, {
+    onRecord: (done, total) => onProgress?.(total ? done / total : 1),
+  });
+  await sender.flush();
+  await bridge.send({ head: bytesToBase64(head) });
   writeJson(storage, APP_MOVED_KEY, { at: Date.now(), games, scenarios });
   return { games, scenarios };
 };
@@ -194,6 +240,37 @@ export const openApp = async () => {
 
 // --- The app: taking what arrived --------------------------------------------
 
+export const base64ToBytes = (text) => {
+  const binary = atob(text);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+};
+
+// The file that arrived, read where it lies: openPackedSaves asks for one
+// record's bytes at a time (slice), and the plugin reads them from the file in
+// pieces, so the page never holds the whole file, as it would as a Blob.
+export const nativeFileSource = (bridge, path) => ({
+  slice: (start, end) => {
+    const bytes = async () => {
+      const out = new Uint8Array(Math.max(0, end - start));
+      let at = 0;
+      while (at < out.length) {
+        const { data } = await bridge.read({ path, offset: start + at, length: Math.min(PIECE_BYTES, out.length - at) });
+        const piece = base64ToBytes(String(data ?? ""));
+        if (!piece.length) throw new Error("The file that arrived is shorter than its index says.");
+        out.set(piece, at);
+        at += piece.length;
+      }
+      return out;
+    };
+    return {
+      arrayBuffer: async () => (await bytes()).buffer,
+      text: async () => new TextDecoder().decode(await bytes()),
+    };
+  },
+});
+
 // Merges the file the handover build sent, if one is waiting, and says whether
 // the page should start again (it then holds the old app's settings, and
 // everything that read the old ones at load has to read them again). Called
@@ -205,12 +282,8 @@ export const takeMovedSaves = async ({ db, storage = localStorage, info = null, 
   const state = readJson(storage, APP_MOVE_STATE_KEY);
   const seen = new Set(Array.isArray(state.seen) ? state.seen : []);
   try {
-    const read = fetchFile ?? (async (path) => {
-      const response = await fetch(window.Capacitor.convertFileSrc(path), { cache: "no-store" });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      return response.blob();
-    });
-    const moved = await mergePackedSaves(await openPackedSaves(await read(about.incoming)), db, storage, { settingsWin: true, seen, keep: OWN_KEYS });
+    const source = fetchFile ? await fetchFile(about.incoming) : nativeFileSource(bridge, about.incoming);
+    const moved = await mergePackedSaves(await openPackedSaves(source), db, storage, { settingsWin: true, seen, keep: OWN_KEYS });
     writeJson(storage, APP_MOVE_STATE_KEY, {
       at: Date.now(),
       seen: [...new Set([...seen, ...moved.carried])],
@@ -218,8 +291,8 @@ export const takeMovedSaves = async ({ db, storage = localStorage, info = null, 
       games: moved.games,
       scenarios: moved.scenarios,
     });
-    // What arrived carries its covers and restore points inside the records:
-    // the store layout pass moves them into their own stores once more.
+    // What arrived carries its covers inside the records: the store layout
+    // pass moves them into their own store once more.
     try { await db.kvPut("store-layout", 0); } catch { /* read in place meanwhile */ }
   } catch (error) {
     console.warn("The games from the app's earlier id could not be merged:", error);

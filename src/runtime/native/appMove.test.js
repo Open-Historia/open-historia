@@ -6,8 +6,8 @@ import test from "node:test";
 import { packSaves as senderPack } from "../../../public/save-move/sender.js";
 import { createSavesPacker, openPackedSaves } from "../web/saveMove.js";
 import {
-  APP_MOVE_STATE_KEY, APP_MOVED_KEY, bytesToBase64, inlineRecordRows, packLibraryForMove,
-  readSettingsForMove, sendFileToApp, takeMoveNotice, takeMovedSaves,
+  APP_MOVE_STATE_KEY, APP_MOVED_KEY, bytesToBase64, createPieceSender, inlineCover, moveGamesToApp,
+  packLibraryForMove, readSettingsForMove, takeMoveNotice, takeMovedSaves,
 } from "./appMove.js";
 import { APP_MOVE_TEXTS, cardStage, fallbackAppApk, newAppApk } from "./appMoveCard.js";
 
@@ -58,14 +58,23 @@ const oldApp = () => ({
       { key: "scenario-manifest", value: { order: ["default", "mine"], selectedScenarioId: "mine" } },
       { key: "ui-settings", value: { language: "fr", theme: "slate" } },
       { key: "parked-turn:rome", value: { campaignId: "rome", round: 8 } },
+      { key: "basemaps-manifest", value: { version: 1, order: ["relief"], byHash: { h1: "relief" } } },
+      { key: "lang:eo", value: { Hello: "Saluton" } },
       { key: "seeded", value: true },
     ],
   }),
   storage: fakeStorage({ "oh-ai-key": "sk-old", "oh-theme": "slate", oh_debug_log_v1: "x".repeat(10), [APP_MOVED_KEY]: "{}" }),
 });
 
+// The file as the plugin assembles it: the head, then every piece written.
+const packFile = async (db, storage) => {
+  const parts = [];
+  const packed = await packLibraryForMove(db, storage, async (piece) => { parts.push(piece); });
+  return { ...packed, file: new Blob([packed.head, ...parts]) };
+};
+
 const moveOnce = async (from, to, toStorage) => {
-  const { file } = await packLibraryForMove(from.db, from.storage);
+  const { file } = await packFile(from.db, from.storage);
   return takeMovedSaves({ db: to, storage: toStorage, info: { moveTo: "", target: "none", incoming: "/data/x/incoming.ohmv" }, fetchFile: async () => file });
 };
 
@@ -73,21 +82,25 @@ test("the packer writes the bytes the website's sender writes", async () => {
   const record = { id: "a", when: new Date(1700000000000), cover: new Uint8Array([1, 2, 3]), blob: new Blob(["hi"], { type: "image/png" }), text: "Ünïcode ✓", gone: undefined };
   const entries = [{ store: "games", record }, { store: "kv", record: { key: "game-manifest", value: { order: ["a"] } } }];
   const packer = createSavesPacker();
-  for (const { store, record: item } of entries) packer.add(store, item);
+  for (const { store, record: item } of entries) await packer.add(store, item);
   const mine = new Uint8Array(await packer.finish({ theme: "dark" }).arrayBuffer());
   const theirs = new Uint8Array(await senderPack(entries, { theme: "dark" }).arrayBuffer());
   assert.deepEqual(mine, theirs);
 });
 
-test("a game's cover and restore points travel inside it", async () => {
-  const { db } = oldApp();
-  const record = await inlineRecordRows(db, "game", await db.idbGet("games", "rome"));
+test("a game's cover travels inside it, its restore points as rows after it", async () => {
+  const { db, storage } = oldApp();
+  const record = await inlineCover(db, "game", await db.idbGet("games", "rome"));
   assert.deepEqual([...record.cover.bytes], [7, 8, 9]);
   assert.equal(record.cover.contentType, "image/webp");
-  assert.deepEqual(record.snapshots.map((snap) => snap.id), ["s2", "s1"], "newest first, as the index lists them");
-  const bare = await inlineRecordRows(db, "game", game("plain", "x", { cover: { key: "game:missing" } }));
+  const bare = await inlineCover(db, "game", game("plain", "x", { cover: { key: "game:missing" } }));
   assert.equal("cover" in bare, false, "a marker whose bytes are gone is dropped");
-  assert.equal("snapshots" in bare, false);
+  const { file } = await packFile(db, storage);
+  const packed = await openPackedSaves(file);
+  const order = packed.entries.map((entry) => entry.store);
+  const at = order.indexOf("games");
+  assert.deepEqual(order.slice(at, at + 4), ["games", "snapshotIndex", "snapshots", "snapshots"]);
+  assert.equal("snapshots" in (await packed.read(packed.entries[at])), false, "the game record carries none");
 });
 
 test("settings go but the diagnostics log and the notes about moves", () => {
@@ -101,7 +114,8 @@ test("everything arrives in the new app, its settings win, and a second move bri
   const to = fakeDb({
     scenarios: [scenario("default", "2026-11-05")],
     games: [game("fresh", "2026-11-05")],
-    kv: [{ key: "game-manifest", value: { activeGameId: "fresh", order: ["fresh"] } }, { key: "ui-settings", value: { language: "en" } }, { key: "store-layout", value: 5 }],
+    kv: [{ key: "game-manifest", value: { activeGameId: "fresh", order: ["fresh"] } }, { key: "ui-settings", value: { language: "en" } }, { key: "store-layout", value: 5 },
+      { key: "basemaps-manifest", value: { version: 1, order: ["mine"], byHash: { h2: "mine" } } }, { key: "lang:eo", value: { Hello: "Saluton!", Yes: "Jes" } }],
   });
   const toStorage = fakeStorage({ "oh-theme": "default", "oh-new-only": "1" });
   assert.equal(await moveOnce(from, to, toStorage), true, "the page starts again");
@@ -109,11 +123,14 @@ test("everything arrives in the new app, its settings win, and a second move bri
   assert.deepEqual([...to.stores.games.keys()].sort(), ["fresh", "rome"]);
   const rome = to.stores.games.get("rome");
   assert.deepEqual([...rome.cover.bytes], [7, 8, 9]);
-  assert.deepEqual(rome.snapshots.map((snap) => snap.id), ["s2", "s1"]);
+  assert.deepEqual(to.stores.snapshotIndex.get("rome").entries.map((entry) => entry.slot), ["rome/s2", "rome/s1"]);
+  assert.deepEqual(to.stores.snapshots.get("rome/s1").snapshot, { id: "s1", round: 1 });
   assert.deepEqual([...to.stores.scenarios.get("mine").cover.bytes], [1, 2]);
   assert.equal(to.stores.scenarios.get("default").meta.updatedAt, "2026-11-05", "the built-in scenario is the new app's own");
   assert.ok(to.stores.flags.has("flag-1"));
   assert.deepEqual(to.stores.kv.get("parked-turn:rome").value, { campaignId: "rome", round: 8 });
+  assert.deepEqual(to.stores.kv.get("basemaps-manifest").value, { version: 1, order: ["mine", "relief"], byHash: { h1: "relief", h2: "mine" } });
+  assert.deepEqual(to.stores.kv.get("lang:eo").value, { Hello: "Saluton", Yes: "Jes" });
   assert.deepEqual(to.stores.kv.get("ui-settings").value, { language: "fr", theme: "slate" }, "the old app's settings win");
   assert.equal(to.stores.kv.get("store-layout").value, 0, "the layout pass moves covers and restore points out again");
   assert.deepEqual(to.stores.kv.get("game-manifest").value, { activeGameId: "fresh", order: ["fresh", "rome"] });
@@ -140,7 +157,9 @@ test("a game whose id is taken arrives beside it, with its own restore points an
   await moveOnce(from, to, fakeStorage());
   const moved = to.stores.games.get("rome-moved");
   assert.equal(moved.meta.id, "rome-moved");
-  assert.deepEqual(moved.snapshots.map((snap) => snap.id), ["s2", "s1"]);
+  assert.deepEqual(to.stores.snapshotIndex.get("rome-moved").entries.map((entry) => entry.slot), ["rome-moved/s2", "rome-moved/s1"]);
+  assert.deepEqual(to.stores.snapshots.get("rome-moved/s2").snapshot, { id: "s2", round: 2 });
+  assert.equal(to.stores.snapshotIndex.has("rome"), false, "the game here keeps its own restore points");
   assert.deepEqual(to.stores.kv.get("parked-turn:rome-moved").value, { campaignId: "rome-moved", round: 8 });
   assert.equal(to.stores.kv.has("parked-turn:rome"), false);
 });
@@ -162,22 +181,48 @@ test("a file that cannot be read is dropped and said so; no file, nothing happen
   }
 });
 
-test("the file goes to the plugin in pieces that add up to it", async () => {
-  const bytes = new Uint8Array(7 * 1024 * 1024 + 5).map((_, i) => (i * 31) % 251);
+test("the library goes to the plugin in pieces as it is packed, and the head goes in front", async () => {
+  const from = oldApp();
+  // A big binary (a basemap's bytes) among small records.
+  const big = new Uint8Array(7 * 1024 * 1024 + 5).map((_, i) => (i * 31) % 251);
+  from.db.stores.basemapPayload.set("big", { id: "big", bytes: big });
   const pieces = [];
   const calls = [];
+  let head = null;
   const bridge = {
     begin: async () => calls.push("begin"),
     append: async ({ data }) => { calls.push("append"); pieces.push(Buffer.from(data, "base64")); },
-    send: async () => calls.push("send"),
+    send: async (options) => { calls.push("send"); head = Buffer.from(options.head, "base64"); },
   };
   const progress = [];
-  await sendFileToApp(new Blob([bytes]), { bridge, onProgress: (share) => progress.push(share) });
-  assert.deepEqual(calls, ["begin", "append", "append", "append", "send"]);
-  assert.deepEqual(new Uint8Array(Buffer.concat(pieces)), bytes);
+  const storage = from.storage;
+  assert.deepEqual(await moveGamesToApp({ db: from.db, storage, bridge, onProgress: (share) => progress.push(share) }), { games: 1, scenarios: 2 });
+  assert.equal(calls[0], "begin");
+  assert.equal(calls.at(-1), "send");
+  assert.ok(pieces.every((piece) => piece.length <= 3 * 1024 * 1024), "no piece is bigger than a piece");
+  assert.ok(pieces.length >= 3);
   assert.equal(progress.at(-1), 1);
+  assert.ok(JSON.parse(storage.getItem(APP_MOVED_KEY)).at);
+  // What the plugin assembles opens, and the big record is whole.
+  const packed = await openPackedSaves(new Blob([head, ...pieces]));
+  const entry = packed.entries.find((item) => item.store === "basemapPayload");
+  assert.deepEqual(new Uint8Array((await packed.read(entry)).bytes), big);
   assert.equal(bytesToBase64(new Uint8Array([0, 255, 10])), "AP8K");
-  await assert.rejects(sendFileToApp(new Blob(["x"]), { bridge: null }));
+  await assert.rejects(moveGamesToApp({ db: from.db, storage, bridge: null }));
+});
+
+test("the piece sender gathers small writes and cuts big ones", async () => {
+  const sent = [];
+  const sender = createPieceSender({ append: async ({ data }) => { sent.push(Buffer.from(data, "base64")); } });
+  const MB = 1024 * 1024;
+  await sender.write(new Uint8Array(10).fill(1));
+  await sender.write(new Uint8Array(20).fill(2));
+  assert.equal(sent.length, 0, "small writes wait");
+  await sender.write(new Uint8Array(7 * MB).fill(3));
+  await sender.write(new Blob([new Uint8Array(4 * MB).fill(4)]));
+  await sender.flush();
+  assert.deepEqual(sent.map((piece) => piece.length), [30, 3 * MB, 3 * MB, MB, 3 * MB, MB]);
+  assert.equal(Buffer.concat(sent).length, 30 + 11 * MB);
 });
 
 test("what the card shows, and where it gets the new app", async () => {
@@ -202,9 +247,35 @@ test("the player's words are short and never name anything but Open Historia", (
 
 test("the packed file opens like any other", async () => {
   const { db, storage } = oldApp();
-  const { file, games, scenarios } = await packLibraryForMove(db, storage);
+  const { file, games, scenarios } = await packFile(db, storage);
   assert.deepEqual({ games, scenarios }, { games: 1, scenarios: 2 });
   const packed = await openPackedSaves(file);
-  assert.deepEqual(packed.entries.map((entry) => entry.store).sort(), ["flags", "games", "kv", "kv", "kv", "kv", "scenarios", "scenarios"]);
+  assert.deepEqual(packed.entries.map((entry) => entry.store).sort(), ["flags", "games", "kv", "kv", "kv", "kv", "kv", "kv", "scenarios", "scenarios", "snapshotIndex", "snapshots", "snapshots"]);
   assert.equal(packed.settings["oh-ai-key"], "sk-old");
+});
+
+test("the app reads the file that arrived from the plugin, a piece at a time", async () => {
+  const from = oldApp();
+  from.db.stores.basemapPayload.set("big", { id: "big", bytes: new Uint8Array(5 * 1024 * 1024).fill(9) });
+  const bytes = new Uint8Array(await (await packFile(from.db, from.storage)).file.arrayBuffer());
+  const reads = [];
+  let done = 0;
+  const bridge = {
+    read: async ({ offset, length }) => {
+      reads.push(length);
+      return { data: Buffer.from(bytes.subarray(offset, offset + length)).toString("base64") };
+    },
+    done: async () => { done += 1; },
+  };
+  globalThis.window = { Capacitor: { Plugins: { OhSaveMove: bridge } } };
+  try {
+    const to = fakeDb({ scenarios: [scenario("default", "x")] });
+    assert.equal(await takeMovedSaves({ db: to, storage: fakeStorage(), info: { moveTo: "", target: "none", incoming: "/data/x/incoming.ohmv" } }), true);
+    assert.equal(done, 1);
+    assert.ok(to.stores.games.has("rome"));
+    assert.equal(to.stores.basemapPayload.get("big").bytes.byteLength, 5 * 1024 * 1024);
+    assert.ok(Math.max(...reads) <= 3 * 1024 * 1024, "never more than a piece per read");
+  } finally {
+    delete globalThis.window;
+  }
 });

@@ -89,6 +89,12 @@ test("the app takes the games only from an app signed with its own key", () => {
   assert.match(plugin, /checkSignatures\(getContext\(\)\.getPackageName\(\), target\) == PackageManager\.SIGNATURE_MATCH/);
   assert.match(plugin, /FLAG_GRANT_READ_URI_PERMISSION/);
   assert.match(plugin, /startActivityForResult\(call, intent, "sent"\)/);
+  // The file is written as it is packed and read where it lies: the page never
+  // holds the whole library (appMove.js).
+  assert.match(plugin, /String head = call\.getString\("head", ""\)/);
+  assert.match(plugin, /public void read\(PluginCall call\)/);
+  assert.match(plugin, /new RandomAccessFile\(incoming, "r"\)/);
+  assert.match(appMove, /nativeFileSource\(bridge, about\.incoming\)/);
   assert.match(activity, /registerPlugin\(SaveMovePlugin\.class\)/);
   assert.match(activity, /oh:saves-arrived/);
   assert.match(appMove, /addEventListener\("oh:saves-arrived"/);
