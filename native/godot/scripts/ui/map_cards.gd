@@ -79,6 +79,7 @@ var _info_footer_margin: MarginContainer
 var _flag_picker: FlagPicker
 var _region_scroll: ScrollContainer
 var _region_content: Control
+var _region_pointer: Control
 
 
 func _init() -> void:
@@ -313,6 +314,8 @@ func _process(_delta: float) -> void:
 		var top := screen.y - _floating_lift - height
 		if _floating_kind == "region":
 			top = clamp_anchored_card_top(top, height, view.y)
+			if is_instance_valid(_region_pointer):
+				_region_pointer.modulate.a = 1.0 if absf(top + height - screen.y) <= 12.0 else 0.0
 		_floating.position = Vector2(round(screen.x - max(_floating_width, _floating.size.x) * 0.5), round(top + _floating_rise))
 
 
@@ -327,7 +330,7 @@ static func clamp_anchored_card_top(preferred: float, card_height: float, viewpo
 func _fit_region_body(viewport_height: float) -> void:
 	if not is_instance_valid(_region_scroll) or not is_instance_valid(_region_content):
 		return
-	var cap: float = max(96.0, viewport_height - 16.0)
+	var cap: float = max(96.0, viewport_height - 32.0)
 	var want: float = min(_region_content.get_combined_minimum_size().y, cap)
 	if not is_equal_approx(_region_scroll.custom_minimum_size.y, want):
 		_region_scroll.custom_minimum_size.y = want
@@ -568,17 +571,8 @@ func _build_region(animate: bool) -> void:
 		_subordination(inner, subordination)
 	var puppets: Variant = _region.get("puppets")
 	if typeof(puppets) == TYPE_DICTIONARY:
-		inner.add_child(Country.gap(7))
-		var line := RichTextLabel.new()
-		line.add_theme_font_override("normal_font", UI.font(400))
-		line.bbcode_enabled = true
-		line.fit_content = true
-		line.scroll_active = false
-		line.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		line.add_theme_font_size_override("normal_font_size", 11)
-		line.add_theme_color_override("default_color", Color(1, 1, 1, 0.8))
-		line.text = "[color=#ffffff73]%s[/color]%s" % [str((puppets as Dictionary).get("label", "")), str((puppets as Dictionary).get("text", "")).replace("[", "[lb]")]
-		inner.add_child(line)
+		inner.add_child(Country.gap(8))
+		inner.add_child(_puppet_summary(puppets))
 	inner.add_child(_divider())
 	var region_row := Country.row(6)
 	region_row.custom_minimum_size.y = 22
@@ -706,7 +700,71 @@ func _build_region(animate: bool) -> void:
 	var pointer := CardPointer.new()
 	pointer.custom_minimum_size = Vector2(width, 9)
 	root.add_child(pointer)
-	_mount_floating(root, "region", width, 10.0, animate)
+	_region_pointer = pointer
+	_mount_floating(root, "region", width, 1.0, animate)
+
+
+func _puppet_summary(puppets: Dictionary) -> VBoxContainer:
+	var box := Country.column(0)
+	box.mouse_filter = Control.MOUSE_FILTER_PASS
+	var head := Country.row(6)
+	var heading := Country.text("Subordinate states", 11, Color(1, 1, 1, 0.7), 700)
+	heading.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	head.add_child(heading)
+	var count := Country.text(str(int(puppets.get("count", 0))), 11, Color(1, 1, 1, 0.92), 800, false)
+	head.add_child(count)
+	box.add_child(head)
+	box.add_child(Country.gap(2))
+	for item in puppets.get("preview", []):
+		var entry: Dictionary = item
+		box.add_child(Country.gap(3))
+		var line := RichTextLabel.new()
+		line.add_theme_font_override("normal_font", UI.font(400))
+		line.bbcode_enabled = true
+		line.fit_content = true
+		line.scroll_active = false
+		line.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		line.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		line.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		line.add_theme_font_size_override("normal_font_size", 11)
+		line.add_theme_color_override("default_color", Color(1, 1, 1, 0.8))
+		line.text = "%s [color=#ffffff80](%s)[/color]" % [str(entry.get("puppet", "")).replace("[", "[lb]"), str(entry.get("kind", "")).replace("[", "[lb]")]
+		box.add_child(line)
+	var more := int(puppets.get("more", 0))
+	if more > 0:
+		box.add_child(Country.gap(3))
+		box.add_child(Country.text("+%d more" % more, 11, Color(1, 1, 1, 0.55)))
+	box.add_child(Country.gap(7))
+	var route := Country.row(4)
+	var link := LinkButton.new()
+	link.text = "Country"
+	link.tooltip_text = "Country"
+	link.underline = LinkButton.UNDERLINE_MODE_ALWAYS
+	link.focus_mode = Control.FOCUS_NONE
+	link.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	link.add_theme_font_override("font", UI.font(700))
+	link.add_theme_font_size_override("font_size", 11)
+	for state in ["font_color", "font_hover_color", "font_pressed_color", "font_hover_pressed_color", "font_focus_color"]:
+		link.add_theme_color_override(state, Color("#8acde6"))
+	link.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	var target := str(puppets.get("country", ""))
+	link.pressed.connect(func() -> void: _open_country_dossier(target))
+	route.add_child(link)
+	var arrow := Country.text("→", 11, Color(1, 1, 1, 0.55), 400, false)
+	arrow.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	route.add_child(arrow)
+	var tab := Country.text("Diplomacy", 11, Color(1, 1, 1, 0.68), 400, false)
+	tab.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	route.add_child(tab)
+	box.add_child(route)
+	return box
+
+
+func _open_country_dossier(country: String) -> void:
+	if country.is_empty():
+		return
+	open_stats.emit(country)
+	_close_floating()
 
 
 func _open_country_from_region() -> void:
