@@ -698,6 +698,16 @@ func _render_detail() -> void:
 	stats.add_child(_text_link("👍 %d liked" % int(post.get("upvotes", 0)), url, "Like this scenario on its GitHub post"))
 	stats.add_child(_text_link("💬 %d comments" % int(post.get("comments", 0)), url, "Comment on its GitHub post"))
 	_detail_view.add_child(CommunityKit.margin_below(stats, 9))
+	var languages: Array = post.get("languages", []) if post.get("languages") is Array else []
+	if not languages.is_empty():
+		var spoken := CommunityKit.row(4)
+		spoken.add_child(CommunityKit.text("Languages:", 13, Color(1, 1, 1, 0.65)))
+		var names := CommunityKit.text(", ".join(PackedStringArray(languages.map(func(entry: Variant) -> String: return str(entry)))), 13, Color(1, 1, 1, 0.65))
+		names.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+		names.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		names.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		spoken.add_child(names)
+		_detail_view.add_child(CommunityKit.margin_below(spoken, 9))
 	var note := CommunityKit.para("Likes and comments live on the scenario's GitHub post — tap 👍 or 💬 above (or the button below) to open it and react there.", 12, CommunityKit.ZINC, 400, 1.25)
 	_detail_view.add_child(CommunityKit.margin_below(note, 16))
 	var full := str(post.get("fullDescription", ""))

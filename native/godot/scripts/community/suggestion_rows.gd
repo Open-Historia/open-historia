@@ -123,6 +123,13 @@ static func value_view(value: Dictionary) -> Control:
 			if value.get("more", false):
 				column.add_child(CommunityDialog.quiet("…"))
 			return column
+		"languages":
+			var column := CommunityKit.column(3)
+			if int(value.get("changed", 0)) > 0:
+				column.add_child(UI.label("%d new or changed translations" % int(value["changed"]), 12, Color("#bbf7d0")))
+			if int(value.get("removed", 0)) > 0:
+				column.add_child(UI.label("%d translations taken out" % int(value["removed"]), 12, Color("#fecaca")))
+			return column
 		"music":
 			var column := CommunityKit.column(3)
 			for entry in value.get("volumes", []):
