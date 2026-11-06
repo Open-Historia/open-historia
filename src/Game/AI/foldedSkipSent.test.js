@@ -17,8 +17,9 @@ test("the folded skip with everything a game can send stays under what Gemini to
   // (Built as the turn builds it: gameplay.js forActiveFeatures, then the posts, then folded.)
   const sent = toGeminiSchema(foldJumpTool(withSocialPosts(withWarFigures(withFrontOrders(withEventImpacts(withEventAudience(getGameplayTool("jumpForward"), false)))), true)).schema);
   const size = JSON.stringify(sent).length;
-  // 2026-11-03: 30,239 characters went through, 32,672 did not.
-  assert.ok(size < 30300, `the folded skip is ${size} characters`);
+  // 2026-11-03: 30,239 characters went through, 32,672 did not. 2026-11-05: 30,489 went through (gemini-3.5-flash-lite),
+  // with a province, state or region renamed (regionRenames, PR #945) on every event.
+  assert.ok(size < 30550, `the folded skip is ${size} characters`);
   assert.ok(!JSON.stringify(sent).includes("partyOps"));
 });
 

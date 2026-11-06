@@ -32,7 +32,7 @@
 // An event's impacts (gameplaySchemas.js impactsSchema and the folded skip's projectOps).
 export const EVENT_IMPACT_KEYS = Object.freeze([
   "actionIds", "createdChats", "polityChanges", "politicalActorOps", "regionTransfers", "regionControlOps",
-  "unitOps", "markerOps", "spyOps", "institutionLifecycleOps", "reports", "regionClaims", "groupOps", "projectOps",
+  "unitOps", "markerOps", "spyOps", "institutionLifecycleOps", "reports", "regionClaims", "regionRenames", "groupOps", "projectOps",
 ]);
 // The answer's ledgers whose readers take a record as a line or an object (nativeWarLedger.js
 // decodeWarUpdates, nativeDiplomaticDirector.js, nativeWorldDirector.js decodeWorldStorylineUpdates,

@@ -54,6 +54,23 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // PR #945 (a contributor's report): a time skip told a province's rename and wrote it as a change to the
+    // country or not at all, so the map kept the old name. Events now carry regionRenames, written into
+    // world.regionRenames (runtime/gameState.js), which the map's labels and the region card read (2026-11-05).
+    id: "2026-11-region-renaming",
+    kind: "minor",
+    date: "2026-11-05",
+    channel: "beta",
+    banners: [
+      {
+        title: "Renaming provinces and regions",
+        items: [
+          "An order or event that renames a province, state or region now changes its name on the map and in the region card.",
+        ],
+      },
+    ],
+  },
+  {
     // The interface themes (runtime/uiTheme.js, kernely's PR #955) reach the main menu (libraryBar.jsx), the popups
     // and the translation prompt; the first-time setup (GameUI/FirstSetup.jsx) asks for a language and a theme before
     // the vault door; the language changes where the player is (runtime/translator.js switchLanguage), a language

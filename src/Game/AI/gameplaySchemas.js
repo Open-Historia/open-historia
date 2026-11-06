@@ -1011,6 +1011,20 @@ const impactsSchema = {
         + "changed hands is regionTransfers.",
       items: regionClaimSchema,
     },
+    regionRenames: {
+      type: "array",
+      description:
+        "A province, state or region renamed: region as \"region: <name>\".",
+      items: {
+        type: "object",
+        properties: {
+          region: { type: "string" },
+          newName: { type: "string" },
+        },
+        required: ["region", "newName"],
+        additionalProperties: false,
+      },
+    },
     groupOps: {
       type: "array",
       description:
@@ -4577,6 +4591,7 @@ const PAYLOAD_IMPACT_ARRAYS = [
   "regionTransfers",
   "regionControlOps",
   "regionClaims",
+  "regionRenames",
   "groupOps",
   "unitOps",
   "markerOps",
@@ -4629,6 +4644,7 @@ const normalizeEventShape = (entry) => {
       regionTransfers: ["transfers", "territoryChanges"],
       regionControlOps: ["controlOps", "controlChanges"],
       regionClaims: ["claims"],
+      regionRenames: ["renames", "regionNames"],
       groupOps: ["groups", "groupOperations"],
       polityChanges: ["polities", "countryChanges"],
       unitOps: ["units", "unitOperations"],

@@ -165,6 +165,7 @@ export const RELEASES = [
           "2026-11-shift-to-turn",
           "2026-10-zoom-keys",
           "2026-10-globe-and-renames",
+          "2026-11-region-renaming",
           "2026-11-map-distances",
           "2026-11-map-edges",
           "2026-11-converted-maps-line-up",

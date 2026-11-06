@@ -1142,6 +1142,15 @@ const normalizeRegionTransfer = (entry) => {
 // `drop` is the other half, and it matters as much: a claim renounced, or a
 // claimant defeated, has to be able to clear its stripes. A dispute nothing can
 // end is worse than no dispute at all.
+// A province, state or region renamed by an event (impacts.regionRenames): { region, newName }, the region by its
+// name without the "region:" prefix. Null without either.
+const normalizeRegionRename = (entry) => {
+  if (!entry || typeof entry !== "object") return null;
+  const region = normalizeOptionalString(entry.region || entry.regionId || entry.name || entry.from).replace(/^region:\s*/i, "").trim();
+  const newName = normalizeOptionalString(entry.newName || entry.to);
+  return region && newName ? { region, newName } : null;
+};
+
 const normalizeRegionClaim = (entry) => {
   if (!entry || typeof entry !== "object") {
     return null;
@@ -3635,6 +3644,7 @@ const normalizeEventImpacts = (value, event = null) => {
       projectOps: [],
       regionClaims: [],
       regionControlOps: [],
+      regionRenames: [],
       regionTransfers: [],
       reports: [],
       spyOps: [],
@@ -3655,6 +3665,7 @@ const normalizeEventImpacts = (value, event = null) => {
     projectOps: normalizeArray(value.projectOps).map(normalizeProjectOp).filter(Boolean),
     regionClaims: normalizeArray(value.regionClaims).map(normalizeRegionClaim).filter(Boolean),
     regionControlOps: normalizeArray(value.regionControlOps).map(normalizeRegionControlOp).filter(Boolean),
+    regionRenames: normalizeArray(value.regionRenames).map(normalizeRegionRename).filter(Boolean),
     regionTransfers: normalizeArray(value.regionTransfers).map(normalizeRegionTransfer).filter(Boolean),
     // Documents the event writes or widens (runtime/reports.js).
     reports: normalizeArray(value.reports).map(normalizeReportOp).filter(Boolean),
@@ -6099,6 +6110,13 @@ export const applyEventImpactsToWorld = ({
           };
         }
       }
+    }
+
+    // Provinces, states and regions renamed (impacts.regionRenames): the same override the map's labels and the
+    // region card read (regionNameFixes.js resolveRegionName), keyed by the region's name in lower case.
+    if (event.impacts.regionRenames?.length) {
+      nextWorld.regionRenames = { ...(nextWorld.regionRenames || {}) };
+      for (const { region, newName } of event.impacts.regionRenames) nextWorld.regionRenames[region.toLowerCase()] = newName;
     }
 
     // The documents this event writes or widens (runtime/reports.js). Holders
