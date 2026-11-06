@@ -12,5 +12,7 @@ for (const method of ["log", "info", "debug"]) {
   console[method] = (...args) => console.error(...args);
 }
 
+globalThis.__ohFatal = (error) => parentPort.postMessage({ type: "fatal", message: String(error?.message ?? error) });
+
 await import(pathToFileURL(path.join(workerData.repo, "server", "server.js")).href);
 parentPort.postMessage({ type: "imported" });
