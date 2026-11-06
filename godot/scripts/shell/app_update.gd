@@ -41,6 +41,7 @@ var engine: EngineLink
 var state := {}
 var launching := false
 var cover: Control
+var _cover_page: ColorRect
 var banner: PanelContainer
 var _cover_title: Label
 var _cover_lede: Label
@@ -97,7 +98,7 @@ class Bar extends Control:
 		if fraction <= 0.0:
 			return
 		var fill := StyleBoxFlat.new()
-		fill.bg_color = UI.ACCENT
+		fill.bg_color = UiTheme.pick("accent", UI.ACCENT)
 		fill.set_corner_radius_all(99)
 		fill.anti_aliasing = true
 		draw_style_box(fill, Rect2(Vector2.ZERO, Vector2(maxf(size.y, size.x * fraction), size.y)))
@@ -107,6 +108,8 @@ func _init() -> void:
 	layer = LAYER
 	_build_cover()
 	_build_banner()
+	_paint()
+	UiTheme.events().changed.connect(_paint)
 	_timer = Timer.new()
 	_timer.wait_time = CHECK_INTERVAL
 	_timer.timeout.connect(_probe)
@@ -126,11 +129,11 @@ func _build_cover() -> void:
 	cover.mouse_filter = Control.MOUSE_FILTER_STOP
 	cover.visible = false
 	add_child(cover)
-	var page := ColorRect.new()
-	page.color = PAGE
-	page.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	page.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	cover.add_child(page)
+	_cover_page = ColorRect.new()
+	_cover_page.color = PAGE
+	_cover_page.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_cover_page.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	cover.add_child(_cover_page)
 	var centre := CenterContainer.new()
 	centre.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	centre.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -217,6 +220,26 @@ func _build_banner() -> void:
 	_banner_close.tooltip_text = "Dismiss update notice"
 	_banner_close.pressed.connect(_on_dismiss)
 	row.add_child(_banner_close)
+
+
+func _paint() -> void:
+	var surface := UiTheme.pick("surface", PAGE)
+	_cover_page.color = surface
+	var style := banner.get_theme_stylebox("panel") as StyleBoxFlat
+	if style:
+		style.bg_color = surface
+	var accent := UiTheme.pick("accent", UI.ACCENT)
+	for state in ["normal", "focus", "disabled"]:
+		var box := _banner_button.get_theme_stylebox(state) as StyleBoxFlat
+		if box:
+			box.bg_color = accent
+			box.border_color = accent
+	for state in ["hover", "pressed", "hover_pressed"]:
+		var box := _banner_button.get_theme_stylebox(state) as StyleBoxFlat
+		if box:
+			box.bg_color = accent.lightened(0.12)
+			box.border_color = box.bg_color
+	_cover_bar.queue_redraw()
 
 
 func _gap(height: float) -> Control:
