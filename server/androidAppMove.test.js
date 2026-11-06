@@ -93,6 +93,12 @@ test("the app takes the games only from an app signed with its own key", () => {
   // holds the whole library (appMove.js).
   assert.match(plugin, /String head = call\.getString\("head", ""\)/);
   assert.match(plugin, /public void read\(PluginCall call\)/);
+  // getLong would answer 0 for every offset JSON holds as an Integer.
+  assert.match(plugin, /call\.getData\(\)\.optLong\("offset", 0L\)/);
+  assert.doesNotMatch(plugin, /call\.getLong\("offset"/);
+  // Capacitor's debug log keeps every piece it is shown: off while moving.
+  assert.match(appMove, /export const moveGamesToApp = \(options = \{\}\) => withQuietBridge\(/);
+  assert.match(appMove, /withQuietBridge\(async \(\) => mergePackedSaves\(/);
   assert.match(plugin, /new RandomAccessFile\(incoming, "r"\)/);
   assert.match(appMove, /nativeFileSource\(bridge, about\.incoming\)/);
   assert.match(activity, /registerPlugin\(SaveMovePlugin\.class\)/);

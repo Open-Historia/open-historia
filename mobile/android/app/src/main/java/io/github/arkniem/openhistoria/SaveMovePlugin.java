@@ -116,8 +116,10 @@ public class SaveMovePlugin extends Plugin {
     // "" past its end.
     @PluginMethod
     public void read(PluginCall call) {
-        long offset = call.getLong("offset", 0L);
-        int length = Math.max(0, Math.min(call.getInt("length", 0), 4 * 1024 * 1024));
+        // From the call's data itself: PluginCall.getLong answers its default for
+        // a number the JSON held as an Integer, which every offset under 2 GB is.
+        long offset = Math.max(0L, call.getData().optLong("offset", 0L));
+        int length = Math.max(0, Math.min(call.getData().optInt("length", 0), 4 * 1024 * 1024));
         executor.execute(() -> {
             File incoming = incomingFile(getContext());
             try (RandomAccessFile file = new RandomAccessFile(incoming, "r")) {

@@ -45,6 +45,22 @@ const PIECE_BYTES = 3 * 1024 * 1024;
 
 const plugin = () => (typeof window !== "undefined" && window.Capacitor ? nativePlugin(PLUGIN) : null);
 
+// In a debuggable build Capacitor logs every plugin call and every answer to
+// the console, data and all, and the console keeps them: moving a 350 MB
+// library took the page past 1.4 GB on the emulator, all of it 3 MB pieces held
+// for the log (30 calls of 4 MB: +120 MB logged, +4 MB not). The log is off while
+// the move runs. A release build never logs them.
+export const withQuietBridge = async (run) => {
+  const bridge = typeof window !== "undefined" ? window.Capacitor : null;
+  const was = bridge?.isLoggingEnabled;
+  if (was) bridge.isLoggingEnabled = false;
+  try {
+    return await run();
+  } finally {
+    if (was) bridge.isLoggingEnabled = was;
+  }
+};
+
 let infoPromise = null;
 
 // { moveTo, target, incoming } from the app, or null on the website, the
@@ -219,7 +235,9 @@ export const createPieceSender = (bridge) => {
 // Packs the library straight into the app's cache through the plugin and hands
 // the file to the new app. Resolves once the new app has kept its copy; it then
 // opens itself and merges it. `onProgress(0..1)` follows the records.
-export const moveGamesToApp = async ({ db, storage = localStorage, bridge = plugin(), onProgress } = {}) => {
+export const moveGamesToApp = (options = {}) => withQuietBridge(() => packAndSend(options));
+
+const packAndSend = async ({ db, storage = localStorage, bridge = plugin(), onProgress } = {}) => {
   if (!bridge) throw new Error("This app cannot move its games.");
   await bridge.begin();
   const sender = createPieceSender(bridge);
@@ -283,7 +301,7 @@ export const takeMovedSaves = async ({ db, storage = localStorage, info = null, 
   const seen = new Set(Array.isArray(state.seen) ? state.seen : []);
   try {
     const source = fetchFile ? await fetchFile(about.incoming) : nativeFileSource(bridge, about.incoming);
-    const moved = await mergePackedSaves(await openPackedSaves(source), db, storage, { settingsWin: true, seen, keep: OWN_KEYS });
+    const moved = await withQuietBridge(async () => mergePackedSaves(await openPackedSaves(source), db, storage, { settingsWin: true, seen, keep: OWN_KEYS }));
     writeJson(storage, APP_MOVE_STATE_KEY, {
       at: Date.now(),
       seen: [...new Set([...seen, ...moved.carried])],

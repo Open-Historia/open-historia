@@ -279,3 +279,23 @@ test("the app reads the file that arrived from the plugin, a piece at a time", a
     delete globalThis.window;
   }
 });
+
+test("Capacitor's call log is off while the move runs, and back after", async () => {
+  const from = oldApp();
+  const seen = [];
+  globalThis.window = { Capacitor: { isLoggingEnabled: true } };
+  try {
+    const bridge = {
+      begin: async () => {},
+      append: async () => { seen.push(window.Capacitor.isLoggingEnabled); },
+      send: async () => { seen.push(window.Capacitor.isLoggingEnabled); },
+    };
+    await moveGamesToApp({ db: from.db, storage: from.storage, bridge });
+    assert.ok(seen.length >= 2 && seen.every((value) => value === false));
+    assert.equal(window.Capacitor.isLoggingEnabled, true);
+    await assert.rejects(moveGamesToApp({ db: from.db, storage: from.storage, bridge: { begin: async () => { throw new Error("no"); } } }));
+    assert.equal(window.Capacitor.isLoggingEnabled, true, "restored after a failure too");
+  } finally {
+    delete globalThis.window;
+  }
+});
