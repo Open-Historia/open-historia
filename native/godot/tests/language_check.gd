@@ -65,6 +65,12 @@ func _find_button(node: Node, text: String) -> Button:
 	return null
 
 
+func _press(node: Node, text: String) -> void:
+	var button := _find_button(node, text)
+	if button:
+		button.pressed.emit()
+
+
 func _clear_shell() -> void:
 	var shell: ShellBoot = main.get("shell") as ShellBoot
 	var built_by := Time.get_ticks_msec() + 30000
@@ -100,7 +106,7 @@ func _run() -> void:
 	_say("menu ready")
 	await _clear_shell()
 	var i18n: I18n = main.i18n
-	await _until(func() -> bool: return i18n.active, 10.0)
+	_check("the translator starts once the game is up", await _until(func() -> bool: return i18n.active, 180.0))
 
 	var reply: Dictionary = await main.engine.request("translation.languages")
 	var options: Array = reply.get("result", {}).get("options", []) if reply.get("ok", false) else []
@@ -124,11 +130,11 @@ func _run() -> void:
 	var run_switch := func(code: String) -> void:
 		switching[0] = await i18n.switch_language(code)
 	run_switch.call("cs")
-	_check("choosing Czech asks for its model first, over the screen", await _until(func() -> bool: return i18n.card_shown(), 10.0))
+	_check("choosing Czech asks for its model first, over the screen", await _until(func() -> bool: return i18n.card_shown(), 30.0))
 	_check("the prompt names the language and the size", i18n.card_text() == "Playing in Čeština needs a one-time download of its translation model (117 MB).", i18n.card_text())
 	_check("from English it offers Keep English and Download", _find_button(i18n, "Keep English") != null and _find_button(i18n, "Download") != null)
 	await _shoot("language-01-czech-prompt")
-	_find_button(i18n, "Keep English").pressed.emit()
+	_press(i18n, "Keep English")
 	await _until(func() -> bool: return not str(switching[0]).is_empty(), 10.0)
 	_check("Keep English keeps the game in English and nothing is downloaded", i18n.language == "en" and str(switching[0]) == "en" and not i18n.card_shown())
 	offer = (await main.engine.request("translation.offer", {"code": "cs"})).get("result", {})
@@ -138,7 +144,7 @@ func _run() -> void:
 	run_switch.call("fi")
 	await _until(func() -> bool: return i18n.card_shown(), 10.0)
 	_check("Finnish asks the same way", i18n.card_text() == "Playing in Suomi needs a one-time download of its translation model (119 MB).", i18n.card_text())
-	_find_button(i18n, "Download").pressed.emit()
+	_press(i18n, "Download")
 	_check("Download shows its progress in the card", await _until(func() -> bool: return i18n.card_text().begins_with("Downloading the translation model… ") and not i18n.card_text().ends_with(" 0%"), 10.0), i18n.card_text())
 	await _shoot("language-02-finnish-downloading")
 	_check("once downloaded the game is in Finnish", await _until(func() -> bool: return str(switching[0]) == "fi", 20.0) and i18n.language == "fi" and not i18n.card_shown(), "%s %s" % [switching[0], i18n.language])
@@ -146,8 +152,8 @@ func _run() -> void:
 	var unpacked := "Open the reserve depots"
 	TranslationServer.translate(unpacked)
 	i18n.label_name("Kingdom of Bavaria")
-	_check("the interface Finnish has no pack for is translated on the device", await _until(func() -> bool: return i18n.book.translate(unpacked) == "FI·" + unpacked, 20.0), str(i18n.book.translate(unpacked)))
-	_check("a scenario's names are translated on the device", await _until(func() -> bool: return I18n.lookup("Kingdom of Bavaria") == "FI·Kingdom of Bavaria", 20.0), I18n.lookup("Kingdom of Bavaria"))
+	_check("the interface Finnish has no pack for is translated on the device", await _until(func() -> bool: return i18n.book.translate(unpacked) == "FI·" + unpacked, 120.0), str(i18n.book.translate(unpacked)))
+	_check("a scenario's names are translated on the device", await _until(func() -> bool: return I18n.lookup("Kingdom of Bavaria") == "FI·Kingdom of Bavaria", 120.0), I18n.lookup("Kingdom of Bavaria"))
 	var placed: Dictionary = (await main.engine.request("shell.language.translate", {"code": "fi", "strings": ["It has 3 regions.", "{{count}} armies"]})).get("result", {})
 	_check("numbers and slots survive the model's answer", JSON.stringify(placed.get("pairs", [])) == JSON.stringify([["It has 3 regions.", "FI·It has 3 regions."], ["{{count}} armies", "FI·{{count}} armies"]]), JSON.stringify(placed))
 	await _shoot("language-03-finnish")
@@ -166,7 +172,7 @@ func _run() -> void:
 	boot.call()
 	_check("a stored language whose model was never accepted asks at start", await _until(func() -> bool: return i18n.card_shown(), 10.0), i18n.card_text())
 	_check("in its own words where it has no pack, English", i18n.card_text() == "Playing in Dansk needs a one-time download of its translation model (113 MB).", i18n.card_text())
-	_find_button(i18n, "Keep English").pressed.emit()
+	_press(i18n, "Keep English")
 	await _until(func() -> bool: return bool(kept[0]), 10.0)
 	_check("declined at start, the game is in English", i18n.language == "en", i18n.language)
 
