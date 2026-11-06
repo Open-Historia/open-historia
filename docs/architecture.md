@@ -12,7 +12,7 @@ This page is the map of the codebase. Each subsystem has its own page; follow th
 |---|---|---|
 | UI framework | React 19 (+ `babel-plugin-react-compiler`) | `package.json`, `vite.config.ts` |
 | Bundler / dev server | Vite 7 | `vite.config.ts`, `package.json` scripts |
-| Map renderer | MapLibre GL 6, the game's own build of it (`vendor/maplibre-gl`), via `react-map-gl/maplibre` | `src/Game/Map/World.jsx` |
+| Map renderer | MapLibre GL 5 via `react-map-gl/maplibre` | `src/Game/Map/World.jsx` |
 | Vector tiles | PMTiles 4 (`pmtiles`, `ol-pmtiles`) — regions / countries / cities archives | `src/runtime/assets.js`, `src/runtime/preload.js` |
 | Map editor renderer | OpenLayers 10 (`ol`) — lazy-loaded, editor route only | `src/App.jsx`, `src/Editor/OlMap.jsx` |
 | Geometry / GIS | `@turf/*`, `d3-geo`, `polygon-clipping`, `shpjs`, `geotiff` | `package.json` deps |

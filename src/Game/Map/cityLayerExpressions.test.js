@@ -6,7 +6,7 @@ import { capitalNamesOf } from "./useWorldState.js";
 
 // Evaluate the real filters with MapLibre's own expression engine.
 const shows = (filter, zoom, properties) => {
-  const compiled = featureFilter(filter, "layers[0].filter");
+  const compiled = featureFilter(filter);
   return compiled.filter({ zoom }, { type: 1, properties, geometry: [] });
 };
 

@@ -15,7 +15,7 @@ import { MAP_FEATURE_KINDS } from "../../../Editor/mapFeatures.js";
 test("the conquest flood draws at the strength MapLibre gives the political fill", () => {
   // The ramp Nations.jsx builds from the same stops, evaluated by MapLibre.
   const ramp = ["interpolate", ["linear"], ["zoom"], ...POLITICAL_FILL_OPACITY_STOPS.flat()];
-  const compiled = createPropertyExpression(ramp, "layers[0].paint.fill-opacity", latest.paint_fill["fill-opacity"]);
+  const compiled = createPropertyExpression(ramp, latest.paint_fill["fill-opacity"]);
   assert.equal(compiled.result, "success", JSON.stringify(compiled.value));
   for (let zoom = 0; zoom <= 16; zoom += 0.25) {
     const expected = compiled.value.evaluate({ zoom });

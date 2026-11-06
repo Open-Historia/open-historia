@@ -158,10 +158,6 @@ export const pictureFits = (picture, frame) => {
   return haveWest === west && haveNorth === north && haveEast === east && haveSouth === south;
 };
 
-// Whether a view, as { west, south, east, north }, lies inside another.
-export const viewWithin = (view, within) => Boolean(within)
-  && view.west >= within.west && view.east <= within.east && view.south >= within.south && view.north <= within.north;
-
 // A picture's land mask (`target.mask` below), written into `mask`: inside the window [x0, x1) by [y0, y1)
 // it is the alpha of `shape` (RGBA of that window alone), elsewhere 255 on any cell but a wall.
 export const landMask = (mask, { width, height, scale, cols, rows, state, shape, x0, x1, y0, y1 }) => {

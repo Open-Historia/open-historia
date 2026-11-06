@@ -1,2 +1,0 @@
-// This file is generated. Edit build/generate-shaders.ts, then run `npm run codegen`.
-export default 'uniform vec2 u_fill_translate;layout(location=0) in vec2 a_pos;\n#pragma maplibre: define highp vec4 color\n#pragma maplibre: define lowp float opacity\nvoid main() {\n#pragma maplibre: initialize highp vec4 color\n#pragma maplibre: initialize lowp float opacity\nif (opacity < 0.01) {gl_Position=vec4(-2.0,-2.0,-2.0,1.0);return;}gl_Position=projectTile(a_pos+u_fill_translate,a_pos);}';

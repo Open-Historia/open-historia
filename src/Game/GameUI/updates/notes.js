@@ -54,30 +54,6 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
-    // MapLibre 6.16, built from source with the game's own changes (vendor/maplibre-gl/README.md): placement paced, sources
-    // sharing their tile walks, clipping masks kept, tiles stored compactly. Measured on the production builds with the CPU
-    // slowed 6x: panning 24 to 46 fps with terrain, 29 to 49 without; memory 3.1 GB to 1.9 GB. The land mask waits until the
-    // map has stayed put (FrontLayers.jsx). On phones the browser's backdrop blur held the map to half its frame rate whatever
-    // its strength, so the map paints the glass itself (Map/frostedPanels.js): 52 to 88 fps on the owner's phone.
-    id: "2026-11-smoother-lighter-map",
-    kind: "minor",
-    date: "2026-11-06",
-    channel: "beta",
-    banners: [
-      {
-        title: "A smoother, lighter map",
-        items: [
-          "On modest computers the map now moves about twice as smoothly as you drag it around, with 3D terrain on or off, and battles replay more smoothly too.",
-          "On phones the map now moves much more smoothly as you drag and pinch it, with the same frosted panels over it.",
-          "On phones, country names on the far side of the globe no longer show through it.",
-          "On a computer the game now uses over a third less memory with a big map open, and on a phone a little less.",
-          "The map no longer catches for a moment when you let go of it near a war, and small, slow moves run without stutter.",
-          "The map looks the same, though a few labels may sit a little differently, and while you move one can take a moment to appear.",
-        ],
-      },
-    ],
-  },
-  {
     // A sweep for the text players read that no language pack held (2026-11-06): the update notices' lines, the
     // refusals and messages modules return (War Room, fleets, Workshop imports, shared games, a stopped skip), the
     // browser's own confirm() and alert() boxes (runtime/nativeDialogs.js) and the desktop app's menus and dialogs
@@ -411,7 +387,6 @@ const NEW_UPDATES = [
     // (Map/clippingMasks.js), sources share what they work out (Map/sourceCaches.js), and the idle pulse asks the
     // world each whole-map question once and lets the map draw between its stages (runtime/worldLookups.js).
     // Every pixel and every prompt checked identical; on the owner's phone the pulse's freeze fell from 1.6 s to 0.45 s.
-    // (Those three files have since become the game's own MapLibre: 2026-11-smoother-lighter-map.)
     id: "2026-11-less-for-the-gpu",
     kind: "minor",
     date: "2026-11-05",
