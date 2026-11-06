@@ -7,8 +7,8 @@ var failures: PackedStringArray = []
 var played: PackedStringArray = []
 var only := ""
 
-const NEWEST_UPDATES := ["2026-11-nine-languages", "2026-11-native-slower-welcome", "2026-11-calls-to-arms-by-message", "2026-11-strikes-on-the-map"]
-const NEWEST_TITLES := ["Translation in nine more languages", "A slower welcome", "Calls to arms come by message", "Missile strikes on the map"]
+const NEWEST_UPDATES := ["2026-11-a-kind-of-hope", "2026-11-nine-languages", "2026-11-native-slower-welcome", "2026-11-long-campaign-fixes"]
+const NEWEST_TITLES := ["A new song in a game", "Translation in nine more languages", "A slower welcome", "Fixes for long campaigns"]
 const RELEASE := "2026-11-version-2-5"
 
 
@@ -546,6 +546,7 @@ func _notice_and_history(shell: ShellBoot) -> void:
 		_check("the browser map's notice of smoother zooming is left out of the native history", not history_ids.has("2026-11-smoother-zooming"))
 		_check("beta's notice of picture edges and strike targets is told in the native one instead", not history_ids.has("2026-11-picture-edges-and-strike-targets") and history_ids.has("2026-11-native-sharp-at-any-size"))
 		_check("the browser map's graphics work and the Mac opening are left out, and native tells its window instead", not history_ids.has("2026-11-less-for-the-gpu") and not history_ids.has("2026-11-mac-opening") and history_ids.has("2026-11-native-fits-the-window"))
+		_check("beta's notice of the slower welcome is told in the native one instead", not history_ids.has("2026-11-slower-welcome") and history_ids.has("2026-11-native-slower-welcome"))
 		shell.history.view("2026-10-peace-and-weariness")
 		await _wait(1.6)
 		var viewed := _texts(shell.history.viewing(), PackedStringArray()) if shell.history.viewing() else PackedStringArray()
