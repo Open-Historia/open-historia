@@ -67,3 +67,21 @@ test("a region rename is recorded only from a markerOps rename of a region: name
   assert.equal(nextWorld.regionRenames["wallonia"], undefined);
   assert.equal(nextWorld.cityRenames["wallonia"], "Southern Belgium");
 });
+
+// PR #945: a time skip renames a province, state or region with impacts.regionRenames, a field of its own. Live, with
+// markerOps the only way, Gemini told the rename and wrote it as a change to the country or as a transfer of the region
+// to itself.
+test("an event's regionRenames rename the region on the map, kept through the answer's reader", async () => {
+  const { normalizeGameplayPayload } = await import("../Game/AI/gameplaySchemas.js");
+  const { EVENT_IMPACT_KEYS } = await import("../Game/AI/jumpAnswerShelves.js");
+  assert.ok(EVENT_IMPACT_KEYS.includes("regionRenames"), "a misplaced one is put back on its event");
+  const answer = normalizeGameplayPayload("jumpForward", { summary: "", events: [{ date: "2026-02-01", title: "Texas becomes Tejas", description: "", impacts: { regionRenames: [{ region: "region: Texas", newName: "Tejas" }] } }] });
+  const event = answer.events[0];
+  assert.deepEqual(event.impacts.regionRenames, [{ region: "region: Texas", newName: "Tejas" }]);
+  const { world } = applyEventImpactsToWorld({ world: normalizeWorldState({ regionRenames: {} }), events: [{ id: "e1", ...event }] });
+  assert.deepEqual(world.regionRenames, { texas: "Tejas" });
+  assert.equal(resolveRegionName("USA.44_1", "Texas", world.regionRenames), "Tejas");
+  // Without the prefix, or with only one half, it is the same, or nothing.
+  const bare = applyEventImpactsToWorld({ world: normalizeWorldState({}), events: [{ id: "e2", date: "2026-02-01", title: "t", impacts: { regionRenames: [{ region: "Bavaria", newName: "Bayern" }, { region: "Saxony" }] } }] }).world;
+  assert.deepEqual(bare.regionRenames, { bavaria: "Bayern" });
+});
