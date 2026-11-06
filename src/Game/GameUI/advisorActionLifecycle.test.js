@@ -155,3 +155,30 @@ test("UI wires queued, Cancel and Discuss to the native order, keeping composer 
   assert.match(jsx, /const cancelled = await doAction\(onCancel,/);
   assert.match(jsx, /setInput\(\(current\) => current\.trim\(\)/);
 });
+
+test("Edit/Remove cards are actionable only while their exact canonical target remains planned", () => {
+  const [edit, remove] = actionProposalsFromReply([
+    { id: "action-previous-pending", title: "Update repatriation", text: "Revise next shipment" },
+    { id: "action-previous-pending", remove: true },
+  ], messageId).proposals;
+  const plannedTarget = normalize({ id: "action-previous-pending", title: "Original", text: "Original", status: "planned" });
+  for (const proposed of [edit, remove]) {
+    assert.equal(advisorActionCardState(proposed, undefined, undefined, plannedTarget), "proposed");
+    assert.equal(advisorActionCardState(proposed, undefined, undefined, { ...plannedTarget, status: "resolved" }), "target-resolved");
+    assert.equal(advisorActionCardState(proposed, undefined, undefined, undefined), "target-unavailable");
+    assert.equal(advisorActionCardState(proposed, undefined, undefined, { ...plannedTarget, id: "wrong-target" }), "target-unavailable");
+  }
+  assert.equal(advisorActionCardState(edit, { status: "updated" }, undefined, undefined), "updated");
+  assert.equal(advisorActionCardState(remove, { status: "removed" }, undefined, undefined), "removed");
+  assert.throws(() => planApprovedAdvisorAction([{ ...plannedTarget, status: "resolved" }], edit, normalize), /no longer awaiting/);
+});
+
+test("the UI observes Edit/Remove target IDs and never exposes Proceed on unavailable targets", () => {
+  const jsx = readFileSync(new URL("./advisor.jsx", import.meta.url), "utf8");
+  assert.match(jsx, /targetAction=\{actionStates\?\.\[proposal\.targetId\]\}/);
+  assert.match(jsx, /advisorActionCardState\(proposal, receipt, queueAction, targetAction\)/);
+  assert.match(jsx, /target-unavailable/);
+  assert.match(jsx, /target-resolved/);
+  assert.match(jsx, /state === "proposed"/);
+  assert.match(jsx, /The referenced Action is no longer queued/);
+});

@@ -11751,6 +11751,8 @@
  "Tarbes",
  "Target",
  "Target date passed {{abs}} days ago",
+ "Target resolved",
+ "Target unavailable",
  "Targovishte",
  "Targu Jiu",
  "Targu Mures",
@@ -12137,6 +12139,7 @@
  "The reaction request failed {{pendingReactionAttempts}} times. Trying again in {{pendingReactionSeconds}}s.",
  "The reaction request failed, so it was given up. No chat message was sent.",
  "The record is empty: play a turn first.",
+ "The referenced Action is no longer queued. Discuss a new Action if further work is needed.",
  "The referenced outcome no longer exists. Pick another outcome before saving.",
  "The report \"{{title}}\" was not written: none of the governments meant to hold it is a country on this map.",
  "The report \"{{title}}\" went only to {{holders}}: the other governments it named are not countries on this map.",
@@ -15769,6 +15772,8 @@
  "⬇ Most Installed",
  "⬇ {{installs}} imported",
  "ⱶ Filters",
+ "＋ Found institution",
+ "＋ Table a matter",
  "🌍 Drag to pan • Scroll to zoom • Click any nation to select",
  "🎯 Projects",
  "🎯 Projects {{summary}}",
@@ -15826,7 +15831,5 @@
  "🧭 Ask advisor",
  "🧭 Ask the advisor to review or extend the board",
  "🧭 Ask your advisor to populate this",
- "🧭 What do we know?",
- "＋ Found institution",
- "＋ Table a matter"
+ "🧭 What do we know?"
 ]

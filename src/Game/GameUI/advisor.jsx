@@ -291,13 +291,13 @@ const AdvisorActionsCard = ({ items, onOpenActions }) => {
 // A proposed Action is NOT yet on the board. Only a human Proceed click may
 // queue it. Each card owns its transient error/busy state; accepted receipts
 // are stored on the originating message and survive campaign reload.
-// The native queue, not an in-memory message receipt, tells a player whether
-// the Action is currently pending. The selector returns primitive-valued
-// records so unrelated board changes do not wake every historical reply.
+// The native Actions board, not an in-memory receipt, controls each card's
+// current state. Include targets of EDIT/REMOVE proposals too: those IDs need
+// not be advisor-generated, and a resolved target must block Proceed.
 const selectReviewedAdvisorActions = (actions) => {
     const found = {};
     for (const action of Array.isArray(actions) ? actions : []) {
-        if (typeof action?.id !== "string" || !action.id.startsWith("action-advisor-reply-")) continue;
+        if (typeof action?.id !== "string" || !action.id) continue;
         found[action.id] = {
             id: action.id, title: action.title, text: action.text,
             kind: action.kind, source: action.source, status: action.status,
@@ -306,20 +306,22 @@ const selectReviewedAdvisorActions = (actions) => {
     return found;
 };
 
-const AdvisorActionProposalCard = ({ proposal, receipt, queueAction, onDiscuss, onProceed, onCancel, onOpenActions, disabled }) => {
+const AdvisorActionProposalCard = ({ proposal, receipt, queueAction, targetAction, onDiscuss, onProceed, onCancel, onOpenActions, disabled }) => {
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState("");
     const name = proposal.title || proposal.text || (proposal.operation === "remove" ? "Remove queued Action" : "Change queued Action");
     const label = proposal.operation === "remove" ? "Remove proposed Action"
         : proposal.operation === "edit" ? "Proposed Action change" : "Proposed Action";
-    const state = advisorActionCardState(proposal, receipt, queueAction);
+    const state = advisorActionCardState(proposal, receipt, queueAction, targetAction);
     const queued = state === "queued";
+    const staleTarget = state === "target-unavailable" || state === "target-resolved";
     const canProceed = state === "proposed" || (state === "cancelled" && proposal.operation === "create");
     const canDiscuss = !["updated", "removed"].includes(state);
     const statusLabel = {
         queued: "Queued", cancelled: "Cancelled", resolved: "Resolved",
         updated: "Updated", removed: "Removed", conflict: "Review Actions",
-        "no-longer-queued": "No longer queued", proposed: "Proposed",
+        "no-longer-queued": "No longer queued", "target-unavailable": "Target unavailable",
+        "target-resolved": "Target resolved", proposed: "Proposed",
     }[state] || "Proposed";
 
     const doAction = async (handler, fallback) => {
@@ -351,7 +353,7 @@ const AdvisorActionProposalCard = ({ proposal, receipt, queueAction, onDiscuss, 
             const cancelled = await doAction(onCancel, "The Action could not be removed from the queue.");
             if (!cancelled) return;
         }
-        onDiscuss();
+        onDiscuss(staleTarget);
     };
 
     return (
@@ -379,12 +381,13 @@ const AdvisorActionProposalCard = ({ proposal, receipt, queueAction, onDiscuss, 
             {canProceed && (
                 <button type="button" disabled={busy || disabled} onClick={() => doAction(onProceed, "The Action was not queued.")} style={{ border: "1px solid rgba(147,197,253,0.6)", borderRadius: "7px", background: "rgba(59,130,246,0.22)", color: "#dbeafe", padding: "0.3rem 0.55rem", cursor: busy || disabled ? "default" : "pointer" }}>{busy ? "Queueing…" : proposal.operation === "remove" ? "Proceed / Remove" : "Proceed / Queue"}</button>
             )}
-            {["resolved", "updated", "removed", "conflict", "no-longer-queued"].includes(state) && onOpenActions && (
+            {["resolved", "updated", "removed", "conflict", "no-longer-queued", "target-unavailable", "target-resolved"].includes(state) && onOpenActions && (
                 <button type="button" onClick={onOpenActions} style={{ border: "1px solid rgba(255,255,255,0.22)", borderRadius: "7px", background: "transparent", color: "#e4e4e7", padding: "0.3rem 0.55rem", cursor: "pointer" }}>Open Actions</button>
             )}
         </div>
         {queued && <div style={{ fontSize: "0.68rem", marginTop: "0.35rem", color: "rgba(255,255,255,0.65)" }}>Queued on the Actions board. It will resolve when game time advances.</div>}
         {state === "conflict" && <div style={{ fontSize: "0.68rem", marginTop: "0.35rem", color: "#fde68a" }}>This Action ID now refers to different contents. Review the Actions board before proceeding.</div>}
+        {staleTarget && <div style={{ fontSize: "0.68rem", marginTop: "0.35rem", color: "#fde68a" }}>The referenced Action is no longer queued. Discuss a new Action if further work is needed.</div>}
         {error && <div role="alert" style={{ fontSize: "0.72rem", color: "#fca5a5", marginTop: "0.4rem" }}>{error}</div>}
         </div>
     );
@@ -855,7 +858,8 @@ const AdvisorMessageRow = React.memo(({ msg, msgIndex, speakerName = "Advisor", 
                 proposal={proposal}
                 receipt={msg.actionReceipts?.[proposal.id]}
                 queueAction={actionStates?.[proposal.actionId]}
-                onDiscuss={() => onDiscussAction(msg.id, proposal)}
+                targetAction={actionStates?.[proposal.targetId]}
+                onDiscuss={(needsNewAction) => onDiscussAction(msg.id, proposal, needsNewAction)}
                 onProceed={() => onProceedAction(msg.id, proposal.id)}
                 onCancel={() => onCancelAction(msg.id, proposal.id)}
                 onOpenActions={onOpenActions}
@@ -1612,10 +1616,12 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
 
     // Discuss is a local composer handoff: it neither sends a message nor
     // writes an Action. Preserve any draft the player was already typing.
-    const handleDiscussAction = React.useCallback((_messageId, proposal) => {
+    const handleDiscussAction = React.useCallback((_messageId, proposal, needsNewAction = false) => {
         if (turnInFlightRef.current || sideEffectPendingRef.current || threadSwitchingRef.current) return;
         const subject = String(proposal?.title || proposal?.text || "this Action").trim().slice(0, 240);
-        const prompt = `Let's discuss the proposed Action "${subject}" before I authorize it.`;
+        const prompt = needsNewAction
+            ? `The proposed change "${subject}" targets an Action that is no longer queued. If this is genuinely new work, propose a new Action for my approval instead of editing a missing or resolved order.`
+            : `Let's discuss the proposed Action "${subject}" before I authorize it.`;
         setInput((current) => current.trim() ? `${current.replace(/\s+$/, "")}\n\n${prompt}` : prompt);
         inputRef.current?.focus();
     }, []);

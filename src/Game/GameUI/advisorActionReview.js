@@ -173,9 +173,12 @@ const matchesProposedOrder = (proposal, action) =>
   && action.kind === (proposal.kind || "action")
   && action.source === "advisor";
 
-export const advisorActionCardState = (proposal, receipt, action) => {
+export const advisorActionCardState = (proposal, receipt, action, targetAction) => {
   if (proposal?.operation !== "create") {
-    return receipt?.status === "updated" || receipt?.status === "removed" ? receipt.status : "proposed";
+    if (receipt?.status === "updated" || receipt?.status === "removed") return receipt.status;
+    if (!targetAction || targetAction.id !== proposal?.targetId) return "target-unavailable";
+    if (targetAction.status === "resolved") return "target-resolved";
+    return targetAction.status === "planned" ? "proposed" : "target-unavailable";
   }
   if (action?.id === proposal.actionId) {
     if (!matchesProposedOrder(proposal, action)) return "conflict";
