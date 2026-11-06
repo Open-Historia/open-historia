@@ -686,6 +686,11 @@ export const register = (ctx) => {
         }),
       };
     }
+    const cameraBox = engine.mxCameraBounds.cameraMaxBounds({
+      customBg: effective?.kind ? { kind: effective.kind, bounds: effective.kind === "image" ? effective.bounds ?? null : null } : null,
+      noWrap: view.noWrap,
+      globe: false,
+    });
     const relief = effective?.terrain
       ? { url: effective.terrain.url, minzoom: effective.terrain.minzoom, maxzoom: effective.terrain.maxzoom, bounds: effective.terrain.bounds ?? null, fillOpacity: effective.terrain.fillOpacity ?? null }
       : null;
@@ -693,6 +698,7 @@ export const register = (ctx) => {
       key,
       noGlobe: view.noGlobe,
       noWrap: view.noWrap,
+      camera: cameraBox.map(([lng, lat]) => [Number.isFinite(lng) ? lng : null, lat]),
       basemapId,
       kind: effective?.kind ?? (effectiveDeclared ? "declared" : "builtin"),
       sea: BACKGROUND_SEA,

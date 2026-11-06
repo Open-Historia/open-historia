@@ -411,19 +411,44 @@ func constrain_camera() -> void:
 	var zoom := camera.zoom.x
 	if zoom < MapView.MIN_ZOOM:
 		zoom = MapView.MIN_ZOOM
-	var own_map := str(background.get("kind", "builtin")) in ["image", "vector"]
-	var top := GlobeView.world_of_lonlat(0.0, GlobeView.MERCATOR_LIMIT if own_map else LAT_NORTH).y
-	var bottom := GlobeView.world_of_lonlat(0.0, -GlobeView.MERCATOR_LIMIT if own_map else LAT_SOUTH).y
+	var bounds := camera_bounds()
+	var top := GlobeView.world_of_lonlat(0.0, float(bounds["north"])).y
+	var bottom := GlobeView.world_of_lonlat(0.0, float(bounds["south"])).y
 	if (bottom - top) * zoom < size.y:
 		zoom = size.y / (bottom - top)
+	var sides := bool(bounds["sides"])
+	var left := (float(bounds["west"]) + 180.0) / 360.0 * MapView.WORLD_WIDTH
+	var right := (float(bounds["east"]) + 180.0) / 360.0 * MapView.WORLD_WIDTH
+	if sides and (right - left) * zoom < size.x:
+		zoom = size.x / (right - left)
 	camera.zoom = Vector2.ONE * zoom
 	var half := size.y * 0.5 / zoom
 	if camera.position.y - half < top:
 		camera.position.y = top + half
 	if camera.position.y + half > bottom:
 		camera.position.y = bottom - half
-	if bool(world.get("noWrap", false)):
-		camera.position.x = clampf(camera.position.x, 0.0, MapView.WORLD_WIDTH)
+	if sides:
+		var half_width := size.x * 0.5 / zoom
+		camera.position.x = clampf(camera.position.x, left + half_width, maxf(left + half_width, right - half_width))
+
+
+func camera_bounds() -> Dictionary:
+	var own_map := str(background.get("kind", "builtin")) in ["image", "vector"]
+	var bounds := {"south": -GlobeView.MERCATOR_LIMIT if own_map else LAT_SOUTH, "north": GlobeView.MERCATOR_LIMIT if own_map else LAT_NORTH, "west": -180.0, "east": 180.0, "sides": false}
+	var box: Variant = background.get("camera")
+	var given_sides := false
+	if box is Array and (box as Array).size() == 2 and box[0] is Array and box[1] is Array and (box[0] as Array).size() == 2 and (box[1] as Array).size() == 2:
+		bounds["south"] = float(box[0][1])
+		bounds["north"] = float(box[1][1])
+		if box[0][0] != null and box[1][0] != null and float(box[1][0]) > float(box[0][0]):
+			bounds["west"] = float(box[0][0])
+			bounds["east"] = float(box[1][0])
+			given_sides = true
+	bounds["sides"] = bool(world.get("noWrap", background.get("noWrap", false)))
+	if not bool(bounds["sides"]) or not given_sides:
+		bounds["west"] = -180.0
+		bounds["east"] = 180.0
+	return bounds
 
 
 func render_view() -> Array:
