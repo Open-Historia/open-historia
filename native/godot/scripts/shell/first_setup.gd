@@ -279,12 +279,14 @@ func _choose(code: String) -> void:
 		return
 	_busy = code
 	_render()
+	var shown := code
 	if choose_language.is_valid():
-		await choose_language.call(code)
-	_current = code
+		shown = str(await choose_language.call(code))
+	_current = shown
 	_busy = ""
-	step = 1
-	_greeting_timer.stop()
+	if shown == code:
+		step = 1
+		_greeting_timer.stop()
 	_render()
 
 
