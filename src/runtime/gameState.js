@@ -580,6 +580,11 @@ export const normalizeActionEntry = (entry, index = 0) => {
     // The polity whose order this is, in a shared game (runtime/humanPolities.js).
     // Single player's orders name none: they are the player's.
     ...(normalizeOptionalString(entry.ownerCode) ? { ownerCode: normalizeOptionalString(entry.ownerCode) } : {}),
+    // Sandbox mode (runtime/sandbox.js): the polity this order is given for,
+    // when it is not the player's own.
+    ...(normalizeOptionalString(entry.actor) ? { actor: normalizeOptionalString(entry.actor) } : {}),
+    // Sandbox mode: an order that happens as written, not one the turn judges.
+    ...(entry.decree === true ? { decree: true } : {}),
   };
 };
 

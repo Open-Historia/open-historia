@@ -27,6 +27,8 @@ import { uiString } from "../../runtime/translator.js";
 import { useFailureReportButton } from "../../runtime/saveDebugLog.js";
 import { queuedActionIds, selectSavedSuggestions, suggestionsFellBack } from "./actionSuggestions.js";
 import { ProjectsBoard, ProjectsTabIcon } from "./projects.jsx";
+import { loadCountryNames } from "../../runtime/assets.js";
+import { observerHere, sandboxHere } from "./sandboxHere.js";
 
 dayjs.extend(advancedFormat);
 
@@ -35,6 +37,8 @@ const selectGameHeader = (game) => ({
     country: game?.country || "",
     gameDate: game?.gameDate || "",
     round: Number(game?.round) || 0,
+    sandbox: sandboxHere(game),
+    observer: observerHere(game),
 });
 
 const ACTIONS_STYLE_ID = "actions-style";
@@ -147,7 +151,7 @@ const aiFailureIncident = (kind, title, { reason = "", rawResponse = "" } = {}) 
 const ORDER_NOT_SAVED = "Your order could not be saved, so the next time skip would not see it. Try again.";
 const ORDER_NOT_REMOVED = "The order could not be removed, so the next time skip would still carry it out. Try again.";
 
-const createManualAction = (input) =>
+const createManualAction = (input, actor = "", decree = false) =>
 normalizeActionEntry({
     kind: "action",
     rawInput: input,
@@ -155,7 +159,55 @@ normalizeActionEntry({
     status: "planned",
     text: input,
     title: input,
+    ...(actor ? { actor } : {}),
+    ...(decree ? { decree: true } : {}),
 });
+
+// Sandbox mode (runtime/sandbox.js): the polity an order is given for, typed or
+// picked from the names the map knows; whether it is an attempt the turn judges
+// or a decree that happens as written; and the Write event and GM command
+// shortcuts into the Cheats panel. Outside sandbox it is not shown.
+const SandboxBar = ({ country, observer, actor, onActorChange, decree, onDecreeChange }) => {
+    const [names, setNames] = React.useState([]);
+    React.useEffect(() => {
+        let cancelled = false;
+        void (async () => {
+            const [stock, world] = await Promise.all([loadCountryNames().catch(() => []), readWorldState({ force: false }).catch(() => ({}))]);
+            const custom = Object.values(world?.polityOverrides ?? {}).map((polity) => polity?.name);
+            const all = [...new Set([...custom, ...(stock ?? []).map((entry) => entry?.name)].map((name) => String(name ?? "").trim()).filter(Boolean))].sort();
+            if (!cancelled) setNames(all);
+        })();
+        return () => { cancelled = true; };
+    }, []);
+    const openCheats = (tool) => window.dispatchEvent(new CustomEvent("oh:open-cheats", { detail: { tool } }));
+    const chip = { ...goalButtonStyle(true), padding: "0.25rem 0.6rem", whiteSpace: "nowrap" };
+    return (
+        <div style={{ alignItems: "center", borderTop: "1px solid rgba(255,255,255,0.07)", display: "flex", flexWrap: "wrap", gap: "0.45rem", padding: "0.55rem 1rem 0" }}>
+        <label style={{ alignItems: "center", color: "rgba(255,255,255,0.6)", display: "flex", flex: "1 1 12rem", fontSize: "0.74rem", gap: "0.4rem" }}>
+        Acting as
+        <input
+        list="oh-sandbox-actors"
+        value={actor}
+        onChange={(event) => onActorChange(event.target.value)}
+        placeholder={observer ? "Choose a country" : country}
+        aria-label="Acting as"
+        style={{ background: "rgba(0,0,0,0.25)", border: `1px solid ${observer && !actor.trim() ? "rgba(253,186,116,0.6)" : "rgba(255,255,255,0.15)"}`, borderRadius: "8px", color: "white", flex: 1, fontSize: "0.78rem", minWidth: 0, padding: "0.3rem 0.5rem" }}
+        />
+        <datalist id="oh-sandbox-actors">{names.map((name) => <option key={name} value={name} />)}</datalist>
+        </label>
+        <div role="group" aria-label="Order type" style={{ display: "flex", gap: "0.2rem" }}>
+        {[[false, "Attempt", "The turn decides how it turns out, by the usual rules"], [true, "Decree", "It happens as written; the turn only tells how"]].map(([value, label, title]) => (
+            <button key={label} type="button" className="oh-tap-row" aria-pressed={decree === value} onClick={() => onDecreeChange(value)} title={title}
+            style={{ ...chip, background: decree === value ? "rgba(125,211,252,0.18)" : "none", borderColor: decree === value ? "rgba(125,211,252,0.6)" : "rgba(255,255,255,0.14)" }}>
+            {label}
+            </button>
+        ))}
+        </div>
+        <button type="button" className="oh-tap-row" style={chip} onClick={() => openCheats("events")} title="Write an event onto the timeline yourself">Write event</button>
+        <button type="button" className="oh-tap-row" style={chip} onClick={() => openCheats("master-ai")} title="Describe any change and the AI applies it to the world">GM command</button>
+        </div>
+    );
+};
 
 const normalizeSuggestionAction = (action) =>
 normalizeActionEntry({
@@ -205,6 +257,16 @@ const ActionItem = ({ action, onDelete, locked = false }) => {
         }}
         >
         <div style={{ flex: 1, minWidth: 0 }}>
+        {normalized.decree && (
+            <div style={{ color: "#fcd34d", fontSize: "0.68rem", fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase" }}>
+            Decree
+            </div>
+        )}
+        {normalized.actor && (
+            <div style={{ color: "#7dd3fc", fontSize: "0.68rem", fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase" }}>
+            {`As ${normalized.actor}`}
+            </div>
+        )}
         {/* The player's own order, as typed: never the interface's to translate. */}
         {showTitle && (
             <div data-no-translate style={{ color: "rgba(255,255,255,0.95)", fontSize: "0.78rem", fontWeight: 700, marginBottom: "0.15rem" }}>
@@ -643,7 +705,13 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
     }, [tab]);
     const [actions, setActions] = React.useState([]);
     const [inputValue, setInputValue] = React.useState("");
+    // Sandbox mode: whom the next order is given for ("" = the player's country).
+    const [actor, setActor] = React.useState("");
+    // Attempt or decree for the next order; a decree by default for an observer,
+    // who directs the world rather than playing a part in it.
+    const [decreeChoice, setDecreeChoice] = React.useState(null);
     const game = useRuntimeState("game", selectGameHeader);
+    const decree = decreeChoice ?? game.observer;
     const country = game.country || "your nation";
     // Full display name for the header, never the code.
     const countryDisplayName = useCountryDisplayName(country);
@@ -751,14 +819,20 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
                                            [actions],
     );
 
+    // An observer's order needs a country to act as (runtime/sandbox.js).
+    const needsActor = game.observer && !actor.trim();
+    const canSubmit = Boolean(inputValue.trim()) && !isSubmitting && !isImproving && !needsActor;
+
     const handleSubmit = async () => {
         const trimmed = inputValue.trim();
-        if (!trimmed || isSubmitting || isImproving) {
+        // An observer leads no one, so every order needs somebody to act as.
+        const actingAs = game.sandbox ? actor.trim() : "";
+        if (!trimmed || isSubmitting || isImproving || (game.observer && !actingAs)) {
             return;
         }
         setOpenSection("submitted");
 
-        const nextAction = createManualAction(trimmed);
+        const nextAction = createManualAction(trimmed, actingAs && actingAs !== game.country ? actingAs : "", game.sandbox && decree);
         if (!nextAction) {
             return;
         }
@@ -805,7 +879,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
         const controller = new AbortController();
         improveAbortRef.current = controller;
         try {
-            const refined = await refinePlayerAction(trimmed, { persist: false, signal: controller.signal });
+            const refined = await refinePlayerAction(trimmed, { persist: false, signal: controller.signal, actor: game.sandbox ? actor.trim() : "", decree: game.sandbox && decree });
             // The canned template is no improvement on what the player wrote:
             // their text stays, and the panel says the AI failed.
             if (refined?.source === "fallback") {
@@ -1184,11 +1258,16 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
             </div>
         )}
 
+        {game.sandbox && (
+            <div style={{ backgroundColor: "rgba(0,0,0,0.2)" }}>
+            <SandboxBar country={countryDisplayName} observer={game.observer} actor={actor} onActorChange={setActor} decree={decree} onDecreeChange={setDecreeChoice} />
+            </div>
+        )}
         <div
         style={{
             alignItems: "center",
             backgroundColor: "rgba(0,0,0,0.2)",
-            borderTop: "1px solid rgba(255,255,255,0.07)",
+            borderTop: game.sandbox ? "none" : "1px solid rgba(255,255,255,0.07)",
             display: "flex",
             gap: "0.5rem",
             padding: "0.75rem 1rem",
@@ -1262,15 +1341,16 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
         type="button"
         className="oh-tap"
         onClick={handleSubmit}
-        disabled={!inputValue.trim() || isSubmitting || isImproving}
+        disabled={!canSubmit}
+        title={needsActor ? "Choose a country to act as" : undefined}
         aria-label="Submit action"
         style={{
             alignItems: "center",
-            background: inputValue.trim() && !isSubmitting && !isImproving ? "#3b82f6" : "rgba(59,130,246,0.3)",
+            background: canSubmit ? "#3b82f6" : "rgba(59,130,246,0.3)",
             border: "none",
             borderRadius: "10px",
             color: "white",
-            cursor: inputValue.trim() && !isSubmitting && !isImproving ? "pointer" : "not-allowed",
+            cursor: canSubmit ? "pointer" : "not-allowed",
             display: "flex",
             flexShrink: 0,
             height: "2.2rem",
@@ -1279,12 +1359,12 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef, requestedTab = n
             width: "2.2rem",
         }}
         onMouseEnter={(event) => {
-            if (inputValue.trim() && !isSubmitting && !isImproving) {
+            if (canSubmit) {
                 event.currentTarget.style.background = "#2563eb";
             }
         }}
         onMouseLeave={(event) => {
-            if (inputValue.trim() && !isSubmitting && !isImproving) {
+            if (canSubmit) {
                 event.currentTarget.style.background = "#3b82f6";
             }
         }}
