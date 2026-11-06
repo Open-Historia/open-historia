@@ -438,6 +438,7 @@ export const register = (ctx) => {
   };
 
   const shownOwnersFor = (target, regions, kit) => {
+    if (!target.record || target.record.status === "standing") return { first: [], turns: [], contested: [] };
     const replay = target.record?.replay;
     const first = Array.isArray(replay?.o) ? replay.o : [];
     const turns = Array.isArray(replay?.f) ? replay.f : [];
@@ -1033,6 +1034,13 @@ export const register = (ctx) => {
       if (claimants && typeof claimants === "object") next.regionClaimants = { ...(world.regionClaimants ?? {}), ...claimants };
       await engine.gameState.writeWorldState(next);
       return true;
+    },
+    "warmap.test.status": async ({ status = "", contested = null } = {}) => {
+      if (!ctx.standIn) throw new Error("Only the stand-in model may seed a test war.");
+      const world = await engine.gameState.readWorldState({ force: true });
+      const battlefields = list(world.battlefields).map((battlefield) => ({ ...battlefield, status: clean(status) || battlefield.status, ...(Array.isArray(contested) ? { contested } : {}) }));
+      await engine.gameState.writeWorldState({ ...world, battlefields });
+      return battlefields.length;
     },
     "warmap.test.owner": async ({ ids = [], owner = "" } = {}) => {
       if (!ctx.standIn) throw new Error("Only the stand-in model may seed a test war.");
