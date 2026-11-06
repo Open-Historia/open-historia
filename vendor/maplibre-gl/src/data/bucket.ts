@@ -1,0 +1,163 @@
+import type {CollisionBoxArray} from './array_types.g.ts';
+import type {Style} from '../style/style.ts';
+import type {TypedStyleLayer} from '../style/style_layer/typed_style_layer.ts';
+import type {FeatureIndex} from './feature_index.ts';
+import type {Context} from '../webgl/context.ts';
+import type {FeatureStates} from '../source/source_state.ts';
+import type {ImagePosition} from '../render/image_atlas.ts';
+import type {CanonicalTileID} from '../tile/tile_id.ts';
+import type Point from '@mapbox/point-geometry';
+import type {SubdivisionGranularitySetting} from '../render/subdivision_granularity_settings.ts';
+import type {DashEntry} from '../render/line_atlas.ts';
+import type {Feature as StyleFeature} from '@maplibre/maplibre-gl-style-spec';
+import type {VectorTileFeatureLike, VectorTileLayerLike} from '@maplibre/vt-pbf';
+import type {GetImagesResponse} from '../util/actor_messages.ts';
+import type {GlyphPositions} from '../render/glyph_atlas.ts';
+import type {GlyphMap} from '../style/style_glyph.ts';
+
+export type BucketParameters<Layer extends TypedStyleLayer> = {
+    index: number;
+    layers: Layer[];
+    zoom: number;
+    pixelRatio: number;
+    overscaling: number;
+    collisionBoxArray: CollisionBoxArray;
+    sourceLayerIndex: number;
+    sourceID: string;
+};
+
+export type PopulateParameters = {
+    featureIndex: FeatureIndex;
+    iconDependencies: Record<string, boolean>;
+    patternDependencies: Record<string, boolean>;
+    /**
+     * The glyphs each fontstack is asked for, keyed by grapheme cluster: usually a single character,
+     * but sometimes a letter with the marks written on it, which no single codepoint stands for.
+     * Glyphs are requested separately for each variant.
+     * @example
+     * ```json
+     * {"SomeFontName": {"default": {"a": true, "b": true}}}
+     * ```
+     */
+    glyphDependencies: Record<string, Record<string, Record<string, boolean>>>;
+    dashDependencies: Record<string, {round: boolean; dasharray: number[]}>;
+    availableImages: string[];
+    subdivisionGranularity: SubdivisionGranularitySetting;
+};
+
+/**
+ * The asynchronously loaded tile content a bucket may need to finalize its
+ * features. Every image, glyph, and dash entry referenced by the bucket's
+ * layers arrives here after the worker has fetched it; pattern maps belong to
+ * fill, fill-extrusion, and line buckets, icon maps and glyph maps to symbol
+ * buckets.
+ */
+export type BucketDependencyParameters = {
+    options: PopulateParameters;
+    canonical: CanonicalTileID;
+    glyphMap: GlyphMap;
+    glyphPositions: GlyphPositions;
+    iconMap: GetImagesResponse;
+    iconPositions: Record<string, ImagePosition>;
+    patternMap: GetImagesResponse;
+    patternPositions: Record<string, ImagePosition>;
+    dashPositions: Record<string, DashEntry>;
+    showCollisionBoxes: boolean;
+};
+
+export type IndexedFeature = {
+    feature: VectorTileFeatureLike;
+    id: number | string;
+    index: number;
+    sourceLayerIndex: number;
+};
+
+export type BucketFeature = {
+    index: number;
+    sourceLayerIndex: number;
+    geometry: Point[][];
+    properties: any;
+    type: 0 | 1 | 2 | 3;
+    id?: any;
+    readonly patterns: {
+        [_: string]: {
+            'min': string;
+            'mid': string;
+            'max': string;
+        };
+    };
+    readonly dashes?: NonNullable<StyleFeature['dashes']>;
+    sortKey?: number;
+};
+
+/**
+ * @hidden
+ * The `Bucket` interface is the single point of knowledge about turning vector
+ * tiles into WebGL buffers.
+ *
+ * `Bucket` is an abstract interface. An implementation exists for each style layer type.
+ * Create a bucket via the `StyleLayer.createBucket` method.
+ *
+ * The concrete bucket types, using layout options from the style layer,
+ * transform feature geometries into vertex and index data for use by the
+ * vertex shader.  They also (via `ProgramConfiguration`) use feature
+ * properties and the zoom level to populate the attributes needed for
+ * data-driven styling.
+ *
+ * Buckets are designed to be built on a worker thread and then serialized and
+ * transferred back to the main thread for rendering.  On the worker side, a
+ * bucket's vertex, index, and attribute data is stored in `bucket.arrays: ArrayGroup`.
+ * When a bucket's data is serialized and sent back to the main thread,
+ * is gets deserialized (using `new Bucket(serializedBucketData)`, with
+ * the array data now stored in `bucket.buffers: BufferGroup`. BufferGroups
+ * hold the same data as ArrayGroups, but are tuned for consumption by WebGL.
+ */
+export interface Bucket {
+    layerIds: string[];
+    hasDependencies: boolean;
+    readonly layers: any[];
+    readonly stateDependentLayers: any[];
+    readonly stateDependentLayerIds: string[];
+    populate(features: IndexedFeature[], options: PopulateParameters, canonical: CanonicalTileID): void;
+    addFeatures(parameters: BucketDependencyParameters): void;
+    update(states: FeatureStates, vtLayer: VectorTileLayerLike, imagePositions: {[_: string]: ImagePosition}, dashPositions: Record<string, DashEntry>): void;
+    isEmpty(): boolean;
+    upload(context: Context): void;
+    uploadPending(): boolean;
+    /**
+     * Release the WebGL resources associated with the buffers. Note that because
+     * buckets are shared between layers having the same layout properties, they
+     * must be destroyed in groups (all buckets for a tile, or all symbol buckets).
+     */
+    destroy(): void;
+}
+
+export function deserialize(input: Bucket[], style: Style): {[_: string]: Bucket} {
+    const output = {};
+
+    // Guard against the case where the map's style has been set to null while
+    // this bucket has been parsing.
+    if (!style) return output;
+
+    for (const bucket of input) {
+        const layers = bucket.layerIds
+            .map((id) => style.getLayer(id))
+            .filter(Boolean);
+
+        if (layers.length === 0) {
+            continue;
+        }
+
+        // look up StyleLayer objects from layer ids (since we don't
+        // want to waste time serializing/copying them from the worker)
+        (bucket as any).layers = layers;
+        if (bucket.stateDependentLayerIds) {
+            (bucket as any).stateDependentLayers = bucket.stateDependentLayerIds.map((lId) => layers.filter((l) => l.id === lId)[0]);
+        }
+        for (const layer of layers) {
+            output[layer.id] = bucket;
+        }
+    }
+
+    return output;
+}

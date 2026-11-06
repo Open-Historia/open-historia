@@ -1,0 +1,604 @@
+import {uniqueId, parseCacheControl} from '../util/util.ts';
+import {deserialize as deserializeBucket} from '../data/bucket.ts';
+import {GEOJSON_TILE_LAYER_NAME, type FeatureIndex, type QueryResults} from '../data/feature_index.ts';
+import {GeoJSONFeature} from '../util/vectortile_to_geojson.ts';
+import {featureFilter} from '@maplibre/maplibre-gl-style-spec';
+import {SymbolBucket} from '../data/bucket/symbol_bucket.ts';
+import {CollisionBoxArray} from '../data/array_types.g.ts';
+import {Texture} from '../webgl/texture.ts';
+import {now} from '../util/time_control.ts';
+import {toEvaluationFeature} from '../data/evaluation_feature.ts';
+import {EvaluationParameters} from '../style/evaluation_parameters.ts';
+import {rtlMainThreadPluginFactory} from '../source/rtl_text_plugin_main_thread.ts';
+
+import type {SourceFeatureState} from '../source/source_state.ts';
+import type {Bucket} from '../data/bucket.ts';
+import type {StyleLayer} from '../style/style_layer.ts';
+import type {TileEncoding, WorkerTileResult} from '../source/worker_source.ts';
+import type {Actor} from '../util/actor.ts';
+import type {DEMData} from '../data/dem_data.ts';
+import type {AlphaImage} from '../util/image.ts';
+import type {ImageAtlas} from '../render/image_atlas.ts';
+import type {ImageManager} from '../render/image_manager.ts';
+import type {Context} from '../webgl/context.ts';
+import type {OverscaledTileID} from './tile_id.ts';
+import type {Framebuffer} from '../webgl/framebuffer.ts';
+import type {IReadonlyTransform, GetElevation} from '../geo/transform_interface.ts';
+import type {LayerFeatureStates} from '../source/source_state.ts';
+import type Point from '@mapbox/point-geometry';
+import type {mat4} from 'gl-matrix';
+import type {ExpiryData} from '../util/ajax.ts';
+import type {QueryRenderedFeaturesOptionsStrict, QuerySourceFeatureOptionsStrict} from '../source/query_features.ts';
+import type {DashEntry} from '../render/line_atlas.ts';
+import type {VectorTileLayerLike} from '@maplibre/vt-pbf';
+import type {Painter, RTTObject} from '../render/painter.ts';
+import type {Style} from '../style/style.ts';
+import type {RTTFingerprint} from '../webgl/rtt_fingerprint.ts';
+
+const CLOCK_SKEW_RETRY_TIMEOUT = 30000;
+
+/**
+ * The tile's state, can be:
+ *
+ * - `loading` Tile data is in the process of loading.
+ * - `loaded` Tile data has been loaded. Tile can be rendered.
+ * - `reloading` Tile data has been loaded and is being updated. Tile can be rendered.
+ * - `unloaded` Tile data has been deleted.
+ * - `errored` Tile data was not loaded because of an error.
+ * - `expired` Tile data was previously loaded, but has expired per its HTTP headers and is in the process of refreshing.
+ */
+export type TileState = 'loading' | 'loaded' | 'reloading' | 'unloaded' | 'errored' | 'expired';
+
+/** @internal */
+type CrossFadeArgs = {
+    fadingRole: FadingRoles;
+    fadingDirection: FadingDirections;
+    fadingParentID?: OverscaledTileID;
+    fadeEndTime: number;
+};
+
+export enum FadingRoles {
+    Base, Parent
+}
+export enum FadingDirections {
+    Departing, Incoming
+}
+
+/**
+ * A tile object is the combination of a Coordinate, which defines
+ * its place, as well as a unique ID and data tracking for its content
+ */
+export class Tile {
+    tileID: OverscaledTileID;
+    uid: number;
+    uses: number;
+    tileSize: number;
+    buckets: {[_: string]: Bucket};
+    latestFeatureIndex: FeatureIndex | null;
+    latestRawTileData: ArrayBuffer;
+    latestEncoding: TileEncoding;
+    imageAtlas: ImageAtlas;
+    imageAtlasTexture: Texture;
+    dashPositions: {[_: string]: DashEntry};
+    glyphAtlasImage: AlphaImage;
+    glyphAtlasTexture: Texture;
+    etag?: string;
+    expirationTime: any;
+    expiredRequestCount: number;
+    state: TileState;
+    fadingRole: FadingRoles;
+    fadingDirection: FadingDirections;
+    fadingParentID: OverscaledTileID;
+    selfFading: boolean;
+    timeAdded: number = 0;
+    fadeEndTime: number = 0;
+    fadeOpacity: number = 1;
+    collisionBoxArray: CollisionBoxArray;
+    redoWhenDone: boolean;
+    showCollisionBoxes: boolean;
+    placementSource: any;
+    actor: Actor;
+    vtLayers: {[_: string]: VectorTileLayerLike};
+
+    neighboringTiles: Record<string, {backfilled: boolean}>;
+    dem: DEMData;
+    demMatrix: mat4;
+    aborted: boolean;
+    needsHillshadePrepare: boolean;
+    needsTerrainPrepare: boolean;
+    needsColorReliefPrepare: boolean;
+    abortController: AbortController;
+    texture: any;
+    fbo: Framebuffer;
+    demTexture: Texture;
+    refreshedUponExpiration: boolean;
+    reloadPromise: {resolve: () => void; reject: () => void};
+    resourceTiming: PerformanceResourceTiming[];
+    queryPadding: number;
+
+    symbolFadeHoldUntil: number;
+    dataRevision: number = 0;
+    hasSymbolBuckets: boolean;
+    hasRTLText: boolean;
+    dependencies: any;
+    /**
+     * @internal
+     * Caches the result of rendering this 2D tile into a texture so it can be
+     * draped over 3D terrain. Indexed by stack index, where a stack is a
+     * contiguous run of RTT-eligible layers (fill, line, raster, etc.) split
+     * by non-RTT layers like symbols. So `_rttObjects[0]` holds the texture
+     * for layers below the first symbol break, `_rttObjects[1]` for layers
+     * between the first and second symbol breaks, and so on. Each entry
+     * survives across frames until the tile is unloaded or its source data
+     * changes.
+     */
+    rttObjects: Array<RTTObject | undefined>;
+    rttFingerprint: Record<string, RTTFingerprint>;
+
+    featureStateRevision: number;
+
+    /**
+     * @param tileID - the tile ID
+     * @param size - The tile size
+     */
+    constructor(tileID: OverscaledTileID, size: number) {
+        this.tileID = tileID;
+        this.uid = uniqueId();
+        this.uses = 0;
+        this.tileSize = size;
+        this.buckets = {};
+        this.expirationTime = null;
+        this.queryPadding = 0;
+        this.hasSymbolBuckets = false;
+        this.hasRTLText = false;
+        this.dependencies = {};
+        this.rttObjects = [];
+        this.rttFingerprint = {};
+
+        // Counts the number of times a response was already expired when
+        // received. We're using this to add a delay when making a new request
+        // so we don't have to keep retrying immediately in case of a server
+        // serving expired tiles.
+        this.expiredRequestCount = 0;
+
+        this.state = 'loading';
+        this.featureStateRevision = -1;
+    }
+
+    /**
+     * Incoming and self-fading raster tiles must remain renderable at zero opacity because
+     * drawing advances their opacity. Only transparent departing tiles have finished fading.
+     */
+    isRenderable(symbolLayer: boolean): boolean {
+        return (
+            this.hasData() &&
+            (!this.fadeEndTime || this.fadingDirection !== FadingDirections.Departing || this.fadeOpacity > 0) &&
+            (symbolLayer || !this.holdingForSymbolFade())   // symbol fading
+        );
+    }
+
+    /**
+     * @internal
+     * Many-to-one crossfade between a base tile and parent/ancestor tile (when zooming)
+     */
+    setCrossFadeLogic({fadingRole, fadingDirection, fadingParentID, fadeEndTime}: CrossFadeArgs): void {
+        this.resetFadeLogic();
+
+        this.fadingRole = fadingRole;
+        this.fadingDirection = fadingDirection;
+        this.fadingParentID = fadingParentID;
+        this.fadeEndTime = fadeEndTime;
+    }
+
+    /**
+     * Self fading for edge tiles (when panning map)
+     */
+    setSelfFadeLogic(fadeEndTime: number): void {
+        this.resetFadeLogic();
+        this.selfFading = true;
+        this.fadeEndTime = fadeEndTime;
+    }
+
+    resetFadeLogic(): void {
+        this.fadingRole = null;
+        this.fadingDirection = null;
+        this.fadingParentID = null;
+        this.selfFading = false;
+
+        this.timeAdded = now();
+        this.fadeEndTime = 0;
+        this.fadeOpacity = 1;
+    }
+
+    wasRequested(): boolean {
+        return this.state === 'errored' || this.state === 'loaded' || this.state === 'reloading';
+    }
+
+    clearTextures(painter: Painter): void {
+        if (this.demTexture) painter.saveTileTexture(this.demTexture);
+        this.demTexture = null;
+    }
+
+    /**
+     * @internal
+     * Returns the cached RTT object for this stack, or undefined on a cache miss.
+     */
+    getRTT(stack: number): RTTObject | undefined {
+        return this.rttObjects[stack];
+    }
+
+    /**
+     * @internal
+     * Allocates a fresh RTT object from the painter's pool and stores it at the
+     * given stack slot. Callers should check {@link getRTT} first; calling this
+     * over an existing slot leaks the previous object.
+     */
+    acquireRTT(painter: Painter, stack: number, size: number): RTTObject {
+        return this.rttObjects[stack] = painter.acquireRTT(size);
+    }
+
+    /**
+     * @internal
+     * Returns all cached RTT slots to the painter's pool.
+     */
+    releaseRTT(painter: Painter): void {
+        if (this.rttObjects.length === 0) return;
+        for (const obj of this.rttObjects) {
+            // Release RTT only if defined (undefined for holes in sparse array)
+            if (obj) painter.releaseRTT(obj);
+        }
+        this.rttObjects.length = 0;
+    }
+
+    /**
+     * @internal
+     * Returns the cached RTT slot of the stack to the painter's pool.
+     */
+    releaseRTTStack(painter: Painter, stack: number): void {
+        const obj = this.rttObjects[stack];
+        if (!obj) return;
+        painter.releaseRTT(obj);
+        this.rttObjects[stack] = undefined;
+    }
+
+    /**
+     * Given a data object with a 'buffers' property, load it into
+     * this tile's elementGroups and buffers properties and set loaded
+     * to true. If the data is null, like in the case of an empty
+     * GeoJSON tile, no-op but still set loaded to true.
+     * @param data - The data from the worker
+     * @param style - the style the tile's layers belong to
+     * @param justReloaded - `true` to just reload
+     */
+    loadVectorData(data: WorkerTileResult, style: Style, justReloaded?: boolean | null): void {
+        if (data?.etagUnmodified === true) {
+            this.state = 'loaded';
+            return;
+        }
+
+        if (this.hasData()) {
+            this.unloadVectorData();
+        }
+
+        this.state = 'loaded';
+        this.dataRevision++;
+
+        // empty GeoJSON tile
+        if (!data) {
+            this.collisionBoxArray = new CollisionBoxArray();
+            return;
+        }
+
+        if (data.featureIndex) {
+            this.latestFeatureIndex = data.featureIndex;
+            if (data.rawTileData) {
+                // Only vector tiles have rawTileData, and they won't update it for
+                // 'reloadTile'
+                this.latestRawTileData = data.rawTileData;
+                this.latestEncoding = data.encoding;
+                this.latestFeatureIndex.rawTileData = data.rawTileData;
+                this.latestFeatureIndex.encoding = data.encoding;
+            } else if (this.latestRawTileData) {
+                // If rawTileData hasn't updated, hold onto a pointer to the last
+                // one we received
+                this.latestFeatureIndex.rawTileData = this.latestRawTileData;
+                this.latestFeatureIndex.encoding = this.latestEncoding;
+            }
+        }
+        this.collisionBoxArray = data.collisionBoxArray;
+        this.buckets = deserializeBucket(data.buckets, style);
+
+        this.hasSymbolBuckets = false;
+        for (const id in this.buckets) {
+            const bucket = this.buckets[id];
+            if (bucket instanceof SymbolBucket) {
+                this.hasSymbolBuckets = true;
+                if (justReloaded) {
+                    bucket.justReloaded = true;
+                } else {
+                    break;
+                }
+            }
+        }
+
+        this.hasRTLText = false;
+        if (this.hasSymbolBuckets) {
+            for (const id in this.buckets) {
+                const bucket = this.buckets[id];
+                if (bucket instanceof SymbolBucket) {
+                    if (bucket.hasRTLText) {
+                        this.hasRTLText = true;
+                        rtlMainThreadPluginFactory().lazyLoad();
+                        break;
+                    }
+                }
+            }
+        }
+
+        this.queryPadding = 0;
+        for (const id in this.buckets) {
+            const bucket = this.buckets[id];
+            this.queryPadding = Math.max(this.queryPadding, style.getLayer(id).queryRadius(bucket));
+        }
+
+        if (data.imageAtlas) {
+            this.imageAtlas = data.imageAtlas;
+        }
+        if (data.glyphAtlasImage) {
+            this.glyphAtlasImage = data.glyphAtlasImage;
+        }
+        this.dashPositions = data.dashPositions;
+    }
+
+    /**
+     * Release any data or WebGL resources referenced by this tile.
+     */
+    unloadVectorData(): void {
+        for (const id in this.buckets) {
+            this.buckets[id].destroy();
+        }
+        this.buckets = {};
+
+        if (this.imageAtlasTexture) {
+            this.imageAtlasTexture.destroy();
+        }
+
+        if (this.glyphAtlasTexture) {
+            this.glyphAtlasTexture.destroy();
+        }
+
+        this.imageAtlas = null;
+        this.dashPositions = null;
+        this.latestFeatureIndex = null;
+        this.state = 'unloaded';
+    }
+
+    getBucket(layer: StyleLayer): Bucket {
+        return this.buckets[layer.id];
+    }
+
+    upload(context: Context): void {
+        for (const id in this.buckets) {
+            const bucket = this.buckets[id];
+            if (bucket.uploadPending()) {
+                bucket.upload(context);
+            }
+        }
+
+        const gl = context.gl;
+        if (this.imageAtlas && !this.imageAtlas.uploaded) {
+            this.imageAtlasTexture = new Texture(context, this.imageAtlas.image, gl.RGBA);
+            this.imageAtlas.uploaded = true;
+        }
+
+        if (this.glyphAtlasImage) {
+            this.glyphAtlasTexture = new Texture(context, this.glyphAtlasImage, gl.ALPHA);
+            this.glyphAtlasImage = null;
+        }
+    }
+
+    prepare(imageManager: ImageManager): void {
+        if (this.imageAtlas) {
+            this.imageAtlas.patchUpdatedImages(imageManager, this.imageAtlasTexture);
+        }
+    }
+
+    // Queries non-symbol features rendered for this tile.
+    // Symbol features are queried globally
+    queryRenderedFeatures(
+        layers: {[_: string]: StyleLayer},
+        serializedLayers: {[_: string]: any},
+        sourceFeatureState: SourceFeatureState,
+        queryGeometry: Point[],
+        cameraQueryGeometry: Point[],
+        scale: number,
+        params: Pick<QueryRenderedFeaturesOptionsStrict, 'filter' | 'layers' | 'availableImages'> | undefined,
+        transform: IReadonlyTransform,
+        maxPitchScaleFactor: number,
+        pixelPosMatrix: mat4,
+        getElevation: GetElevation | undefined
+    ): QueryResults {
+        if (!this.latestFeatureIndex?.rawTileData)
+            return {};
+
+        return this.latestFeatureIndex.query({
+            queryGeometry,
+            cameraQueryGeometry,
+            scale,
+            tileSize: this.tileSize,
+            pixelPosMatrix,
+            transform,
+            params,
+            queryPadding: this.queryPadding * maxPitchScaleFactor,
+            getElevation
+        }, layers, serializedLayers, sourceFeatureState);
+    }
+
+    querySourceFeatures(result: GeoJSONFeature[], params: QuerySourceFeatureOptionsStrict): void {
+        const featureIndex = this.latestFeatureIndex;
+        if (!featureIndex?.rawTileData) return;
+
+        const vtLayers = featureIndex.loadVTLayers();
+
+        const sourceLayer = params.sourceLayer ? params.sourceLayer : '';
+        const layer = vtLayers[GEOJSON_TILE_LAYER_NAME] || vtLayers[sourceLayer];
+
+        if (!layer) return;
+
+        const filter = featureFilter(params.filter, `querySourceFeatures[${sourceLayer}].filter`, params.globalState);
+        const {z, x, y} = this.tileID.canonical;
+        const coord = {z, x, y};
+
+        for (let i = 0; i < layer.length; i++) {
+            const feature = layer.feature(i);
+            if (filter.needGeometry) {
+                const evaluationFeature = toEvaluationFeature(feature, true);
+                if (!filter.filter(new EvaluationParameters(this.tileID.overscaledZ), evaluationFeature, this.tileID.canonical)) continue;
+            } else if (!filter.filter(new EvaluationParameters(this.tileID.overscaledZ), feature)) {
+                continue;
+            }
+            const id = featureIndex.getId(feature, sourceLayer);
+            const geojsonFeature = new GeoJSONFeature(feature, z, x, y, id, params.worldCoordinateHelper);
+            (geojsonFeature as any).tile = coord;
+            result.push(geojsonFeature);
+        }
+    }
+
+    hasData(): boolean {
+        return this.state === 'loaded' || this.state === 'reloading' || this.state === 'expired';
+    }
+
+    patternsLoaded(): boolean {
+        return this.imageAtlas && !!Object.keys(this.imageAtlas.patternPositions).length;
+    }
+
+    setExpiryData(data: ExpiryData): void {
+        const prior = this.expirationTime;
+
+        if (data.cacheControl) {
+            const parsedCC = parseCacheControl(data.cacheControl);
+            if (parsedCC['max-age']) this.expirationTime = Date.now() + parsedCC['max-age'] * 1000;
+        } else if (data.expires) {
+            this.expirationTime = new Date(data.expires).getTime();
+        }
+
+        if (this.expirationTime) {
+            const now = Date.now();
+            let isExpired = false;
+
+            if (this.expirationTime > now) {
+                isExpired = false;
+            } else if (!prior) {
+                isExpired = true;
+            } else if (this.expirationTime < prior) {
+                // Expiring date is going backwards:
+                // fall back to exponential backoff
+                isExpired = true;
+
+            } else {
+                const delta = this.expirationTime - prior;
+
+                if (!delta) {
+                    // Server is serving the same expired resource over and over: fall
+                    // back to exponential backoff.
+                    isExpired = true;
+
+                } else {
+                    // Assume that either the client or the server clock is wrong and
+                    // try to interpolate a valid expiration date (from the client POV)
+                    // observing a minimum timeout.
+                    this.expirationTime = now + Math.max(delta, CLOCK_SKEW_RETRY_TIMEOUT);
+
+                }
+            }
+
+            if (isExpired) {
+                this.expiredRequestCount++;
+                this.state = 'expired';
+            } else {
+                this.expiredRequestCount = 0;
+            }
+        }
+    }
+
+    getExpiryTimeout(): number {
+        if (this.expirationTime) {
+            if (this.expiredRequestCount) {
+                return 1000 * (1 << Math.min(this.expiredRequestCount - 1, 31));
+            } else {
+                // Max value for `setTimeout` implementations is a 32 bit integer; cap this accordingly
+                return Math.min(this.expirationTime - new Date().getTime(), Math.pow(2, 31) - 1);
+            }
+        }
+    }
+
+    setFeatureState(states: LayerFeatureStates, style: Style, revision: number): void {
+        if (!this.latestFeatureIndex?.rawTileData ||
+            Object.keys(states).length === 0) {
+            return;
+        }
+
+        // Skip bucket updates if we already processed this revision
+        if (this.featureStateRevision === revision) {
+            return;
+        }
+        this.featureStateRevision = revision;
+
+        const vtLayers = this.latestFeatureIndex.loadVTLayers();
+
+        for (const id in this.buckets) {
+            if (!style.hasLayer(id)) continue;
+
+            const bucket = this.buckets[id];
+            // Buckets are grouped by common source-layer
+            const sourceLayerId = bucket.layers[0]['sourceLayer'] || GEOJSON_TILE_LAYER_NAME;
+            const sourceLayer = vtLayers[sourceLayerId];
+            const sourceLayerStates = states[sourceLayerId];
+            if (!sourceLayer || !sourceLayerStates || sourceLayerStates.length === 0) continue;
+
+            bucket.update(sourceLayerStates, sourceLayer, this.imageAtlas?.patternPositions || {}, this.dashPositions || {});
+            const layer = style.getLayer(id);
+            if (layer) {
+                this.queryPadding = Math.max(this.queryPadding, layer.queryRadius(bucket));
+            }
+        }
+    }
+
+    holdingForSymbolFade(): boolean {
+        return this.symbolFadeHoldUntil !== undefined;
+    }
+
+    symbolFadeFinished(): boolean {
+        return !this.symbolFadeHoldUntil || this.symbolFadeHoldUntil < now();
+    }
+
+    clearSymbolFadeHold(): void {
+        this.symbolFadeHoldUntil = undefined;
+    }
+
+    setSymbolHoldDuration(duration: number): void {
+        this.symbolFadeHoldUntil = now() + duration;
+    }
+
+    setDependencies(namespace: string, dependencies: string[]): void {
+        const index = {};
+        for (const dep of dependencies) {
+            index[dep] = true;
+        }
+        this.dependencies[namespace] = index;
+    }
+
+    hasDependency(namespaces: string[], keys: string[]): boolean {
+        for (const namespace of namespaces) {
+            const dependencies = this.dependencies[namespace];
+            if (dependencies) {
+                for (const key of keys) {
+                    if (dependencies[key]) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+}

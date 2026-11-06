@@ -1,0 +1,452 @@
+import packageJSON from '../package.json' with {type: 'json'};
+import {Map, type MapOptions, type MissingStyleImageResolver, type StyleImageSource, type WebGLContextAttributesWithType} from './ui/map.ts';
+import {NavigationControl, type NavigationControlOptions} from './ui/control/navigation_control.ts';
+import {GeolocateControl, GeolocateEvent, GeolocatePositionEvent, GeolocateErrorEvent, type GeolocateControlEventType, type GeolocateControlOptions} from './ui/control/geolocate_control.ts';
+import {AttributionControl, type AttributionControlOptions} from './ui/control/attribution_control.ts';
+import {LogoControl, type LogoControlOptions} from './ui/control/logo_control.ts';
+import {ScaleControl, type ScaleControlOptions, type Unit} from './ui/control/scale_control.ts';
+import {FullscreenControl, FullscreenEvent, type FullscreenControlEventType, type FullscreenControlOptions} from './ui/control/fullscreen_control.ts';
+import {TerrainControl} from './ui/control/terrain_control.ts';
+import {GlobeControl} from './ui/control/globe_control.ts';
+import {type Offset, Popup, PopupEvent, type PopupEventType, type PopupOptions} from './ui/popup.ts';
+import {type Alignment, Marker, MarkerDragEvent, MarkerClickEvent, type MarkerEventType, type MarkerOptions} from './ui/marker.ts';
+import {type AddLayerObject, type FeatureIdentifier, Style, type StyleOptions, type StyleSetterOptions, type StyleSwapOptions, type TransformStyleFunction} from './style/style.ts';
+import {LngLat, type LngLatLike} from './geo/lng_lat.ts';
+import {LngLatBounds, type LngLatBoundsLike} from './geo/lng_lat_bounds.ts';
+import Point from '@mapbox/point-geometry';
+import {MercatorCoordinate} from './geo/mercator_coordinate.ts';
+import {Evented, ErrorEvent, Event, type ErrorEventType, type EventedParentData, type EventTypeMap, type Listener} from './util/evented.ts';
+import {type AddProtocolAction, type AddProtocolResponseData, config} from './util/config.ts';
+import {rtlMainThreadPluginFactory} from './source/rtl_text_plugin_main_thread.ts';
+import {now, setNow, restoreNow, isTimeFrozen} from './util/time_control.ts';
+import {WorkerPool} from './util/worker_pool.ts';
+import {prewarm, clearPrewarmedResources} from './util/global_worker_pool.ts';
+import {AJAXError, type ExpiryData, type GetResourceResponse, type RequestParameters} from './util/ajax.ts';
+import {GeoJSONSource, type GetClusterOptions, type SetClusterOptions} from './source/geojson_source.ts';
+import {CanvasSource, type CanvasSourceSpecification} from './source/canvas_source.ts';
+import {type CanonicalTileRange, type Coordinates, type ImageSourceImage, ImageSource, type ImageSourceWarp, type UpdateImageOptions} from './source/image_source.ts';
+import {RasterDEMTileSource} from './source/raster_dem_tile_source.ts';
+import {RasterTileSource} from './source/raster_tile_source.ts';
+import {VectorTileSource, type LoadTileResult} from './source/vector_tile_source.ts';
+import {VideoSource} from './source/video_source.ts';
+import {type Source, type SourceClass, addSourceType} from './source/source.ts';
+import {addProtocol, removeProtocol} from './source/protocol_crud.ts';
+import {addProjection, removeProjection} from './geo/projection/projection_crud.ts';
+import {type GlobalDispatcher, type GlobalDispatcherEventType, type CustomMessageHandler, getGlobalDispatcher} from './util/global_dispatcher.ts';
+import {EdgeInsets, type PaddingOptions} from './geo/edge_insets.ts';
+import {MapTerrainEvent, MapStyleImageMissingEvent, MapStyleDataEvent, MapStyleLoadEvent, MapSourceDataEvent, MapBoxZoomEvent, MapLibreEvent, MapMovementEvent, type MapLayerTouchEvent, type MapLayerMouseEvent, type MapLayerEventType, type MapEventType, MapContextEvent, MapWheelEvent, MapTouchEvent, MapMouseEvent, type MapSourceDataType, type SourceEventType, MapProjectionEvent} from './ui/events.ts';
+import {BoxZoomHandler, type BoxZoomEndHandler, type BoxZoomHandlerOptions} from './ui/handler/box_zoom.ts';
+import {DragRotateHandler, type DragRotateOptions} from './ui/handler/shim/drag_rotate.ts';
+import {DragPanHandler, type DragPanOptions} from './ui/handler/shim/drag_pan.ts';
+import {ScrollZoomHandler} from './ui/handler/scroll_zoom.ts';
+import {TwoFingersTouchZoomRotateHandler} from './ui/handler/shim/two_fingers_touch.ts';
+import {Hash} from './ui/hash.ts';
+import {CooperativeGesturesHandler, type GestureOptions} from './ui/handler/cooperative_gestures.ts';
+import {DoubleClickZoomHandler} from './ui/handler/shim/dblclick_zoom.ts';
+import {KeyboardHandler} from './ui/handler/keyboard.ts';
+import {TwoFingersTouchPitchHandler, TwoFingersTouchRotateHandler, TwoFingersTouchZoomHandler, type AroundCenterOptions} from './ui/handler/two_fingers_touch.ts';
+import {createTileMesh, type CreateTileMeshOptions, type IndicesType, type TileMesh} from './util/create_tile_mesh.ts';
+import {GPUInitializationError} from './util/gpu_initialization_error.ts';
+import {EXTENT} from './data/extent.ts';
+
+import type {Dispatcher} from './util/dispatcher.ts';
+import type {MessageType, ActorMessage, RequestResponseMessageMap} from './util/actor_messages.ts';
+import type {ControlPosition, IControl} from './ui/control/control.ts';
+import type {CustomRenderMethod, CustomLayerInterface, CustomRenderMethodInput, CustomLayerProjectionDataParams, CustomTerrainRenderInput, UnwrappedTileIDLiteral} from './style/style_layer/custom_style_layer.ts';
+import type {AnchoredCameraOptions, AnimationOptions, CameraForBoundsOptions, CameraOptions, CameraUpdateTransformFunction, CenterZoomBearing, EaseToOptions, FitBoundsOptions, FlyToOptions, JumpToOptions, PointLike} from './ui/camera.ts';
+import type {DistributiveKeys, DistributiveOmit, GeoJSONFeature, MapGeoJSONFeature} from './util/vectortile_to_geojson.ts';
+import type {Handler, HandlerResult} from './ui/handler_manager.ts';
+import type {Complete, Mat4f32, Mat4f64, RequireAtLeastOne, Subscription} from './util/util.ts';
+import type {CalculateTileZoomFunction, CoveringTilesOptions} from './geo/projection/covering_tiles.ts';
+import type {TransformConstrainFunction} from './geo/transform_interface.ts';
+import type {StyleImage, StyleImageData, StyleImageInterface, StyleImageMetadata, StyleImageWebGLData, StyleImageWebGLTarget, TextFit} from './style/style_image.ts';
+import type {StyleLayer, PaintPropertyEntry} from './style/style_layer.ts';
+import type {Tile} from './tile/tile.ts';
+import type {GeoJSONFeatureDiff, GeoJSONFeatureId, GeoJSONSourceDiff} from './source/geojson_source_diff.ts';
+import type {QueryRenderedFeaturesOptions, QuerySourceFeatureOptions} from './source/query_features.ts';
+import type {RequestTransformFunction, ResourceType} from './util/request_manager.ts';
+import type {OverscaledTileID} from './tile/tile_id.ts';
+import type {PositionAnchor} from './ui/anchor.ts';
+import type {CustomLayerProjectionData, ProjectionData, ProjectionDataParams, ProjectionMatrix, RendererProjectionData} from './geo/projection/projection_data.ts';
+import type {CRS} from './geo/projection/crs.ts';
+import type {TileMatrixSet} from './geo/projection/tile_matrix_set.ts';
+import type {WorkerTileResult} from './source/worker_source.ts';
+import type {Actor, IActor, MessageHandler} from './util/actor.ts';
+import type {Bucket} from './data/bucket.ts';
+import type {CollisionBoxArray} from './data/array_types.g.ts';
+import type {AlphaImage} from './util/image.ts';
+import type {GlyphPosition, GlyphPositions} from './render/glyph_atlas.ts';
+import type {ImageAtlas} from './render/image_atlas.ts';
+import type {GlyphMap, StyleGlyph} from './style/style_glyph.ts';
+import type {FeatureIndex} from './data/feature_index.ts';
+import type {DashEntry} from './render/line_atlas.ts';
+import type {Painter} from './render/painter.ts';
+import type {WorkerGlobalScopeInterface} from './util/web_worker.ts';
+import type {TerrainHeightMapTarget} from './render/terrain.ts';
+const version = packageJSON.version;
+
+export type * from '@maplibre/maplibre-gl-style-spec';
+
+/**
+ * Sets the map's [RTL text plugin](https://www.mapbox.com/mapbox-gl-js/plugins/#mapbox-gl-rtl-text).
+ *
+ * @deprecated MapLibre shapes Arabic and reorders bidirectional text itself, so nothing has to be
+ * loaded for right-to-left languages to be drawn correctly. A plugin set here still replaces the
+ * built-in implementation, but this will be removed in a future release.
+ * @param pluginURL - URL pointing to the Mapbox RTL text plugin source.
+ * @param lazy - If set to `true`, maplibre will defer loading the plugin until rtl text is encountered,
+ * rtl text will then be rendered only after the plugin finishes loading.
+ * @example
+ * ```ts
+ * setRTLTextPlugin('https://unpkg.com/@mapbox/mapbox-gl-rtl-text@0.3.0/dist/mapbox-gl-rtl-text.js', false);
+ * ```
+ * @see [Add support for right-to-left scripts](https://maplibre.org/maplibre-gl-js/docs/examples/add-support-for-right-to-left-scripts/)
+ * @see [Display and style rich text labels](https://maplibre.org/maplibre-gl-js/docs/examples/display-and-style-rich-text-labels/)
+ */
+function setRTLTextPlugin(pluginURL: string, lazy: boolean): Promise<void> {
+    return rtlMainThreadPluginFactory().setRTLTextPlugin(pluginURL, lazy);
+}
+/**
+ * Gets the map's [RTL text plugin](https://www.mapbox.com/mapbox-gl-js/plugins/#mapbox-gl-rtl-text) status.
+ * The status can be `unavailable` (i.e. not requested or removed), `loading`, `loaded` or `error`.
+ * If the status is `loaded` and the plugin is requested again, an error will be thrown.
+ *
+ * @deprecated The status says nothing about whether right-to-left text can be drawn, which it always
+ * can be. It reports only on a plugin set through the deprecated {@link setRTLTextPlugin}.
+ * @example
+ * ```ts
+ * const pluginStatus = getRTLTextPluginStatus();
+ * ```
+ */
+function getRTLTextPluginStatus(): string {
+    return rtlMainThreadPluginFactory().getRTLTextPluginStatus();
+}
+/**
+ * Returns the package version of the library
+ * @returns Package version of the library
+ */
+function getVersion(): string { return version; }
+/**
+ * Gets the number of web workers instantiated on a page with GL JS maps.
+ * By default, workerCount is 1 except for Safari browser where it is set to half the number of CPU cores (capped at 3).
+ * Make sure to set this property before creating any map instances for it to have effect.
+ *
+ * @returns Number of workers currently configured.
+ * @example
+ * ```ts
+ * const workerCount = getWorkerCount()
+ * ```
+ */
+function getWorkerCount(): number { return WorkerPool.workerCount; }
+/**
+ * Sets the number of web workers instantiated on a page with GL JS maps.
+ * By default, workerCount is 1 except for Safari browser where it is set to half the number of CPU cores (capped at 3).
+ * Make sure to set this property before creating any map instances for it to have effect.
+ *
+ * @example
+ * ```ts
+ * setWorkerCount(2);
+ * ```
+ */
+function setWorkerCount(count: number): void { WorkerPool.workerCount = count; }
+/**
+ * Gets and sets the maximum number of images (raster tiles, sprites, icons) to load in parallel,
+ * which affects performance in raster-heavy maps. 16 by default.
+ *
+ * @returns Number of parallel requests currently configured.
+ * @example
+ * ```ts
+ * getMaxParallelImageRequests();
+ * ```
+ */
+function getMaxParallelImageRequests(): number { return config.MAX_PARALLEL_IMAGE_REQUESTS; }
+/**
+ * Sets the maximum number of images (raster tiles, sprites, icons) to load in parallel,
+ * which affects performance in raster-heavy maps. 16 by default.
+ *
+ * @example
+ * ```ts
+ * setMaxParallelImageRequests(10);
+ * ```
+ */
+function setMaxParallelImageRequests(numRequests: number): void { config.MAX_PARALLEL_IMAGE_REQUESTS = numRequests; }
+/**
+ * Gets the worker url
+ * @returns The worker url
+ */
+function getWorkerUrl(): string { return config.WORKER_URL; }
+/**
+ * Sets the worker url
+ */
+function setWorkerUrl(value: string): void { config.WORKER_URL = value; }
+/**
+ * Allows loading javascript code in the worker thread.
+ * *Note* that since this is using some very internal classes and flows it is considered experimental and can break at any point.
+ *
+ * It can be useful for the following examples:
+ * 1. Using `self.addProtocol` in the worker thread - note that you might need to also register the protocol on the main thread.
+ * 2. Using `self.registerWorkerSource(workerSource: WorkerSource)` to register a worker source, which should come with `addSourceType` usually.
+ * 3. using `self.actor.registerMessageHandler` to override some internal worker operations
+ *
+ * Each url is imported once, and imported again automatically whenever the pooled workers are
+ * recreated.
+ * @param workerUrl - the worker url e.g. a url of a javascript file to load in the worker
+ * @returns
+ *
+ * @example
+ * ```ts
+ * // below is an example of sending a js file to the worker to load the method there
+ * // Note that you'll need to call the global function `addProtocol` in the worker to register the protocol there.
+ * // add-protocol-worker.js
+ * async function loadFn(params, abortController) {
+ *     const t = await fetch(`https://${params.url.split("://")[1]}`);
+ *     if (t.status == 200) {
+ *         const buffer = await t.arrayBuffer();
+ *         return {data: buffer}
+ *     } else {
+ *         throw new Error(`Tile fetch error: ${t.statusText}`);
+ *     }
+ * }
+ * self.addProtocol('custom', loadFn);
+ *
+ * // main.js
+ * importScriptInWorkers('add-protocol-worker.js');
+ * ```
+ */
+async function importScriptInWorkers(workerUrl: string): Promise<void> { await getGlobalDispatcher().importScript(workerUrl); }
+
+export {
+    Map,
+    Map as MapLibreMap,
+    NavigationControl,
+    GeolocateControl,
+    GeolocateEvent,
+    GeolocatePositionEvent,
+    GeolocateErrorEvent,
+    AttributionControl,
+    LogoControl,
+    ScaleControl,
+    FullscreenControl,
+    FullscreenEvent,
+    TerrainControl,
+    GlobeControl,
+    Hash,
+    Popup,
+    PopupEvent,
+    Marker,
+    MarkerDragEvent,
+    MarkerClickEvent,
+    Style,
+    LngLat,
+    LngLatBounds,
+    Point,
+    MercatorCoordinate,
+    Evented,
+    Event,
+    AJAXError,
+    GPUInitializationError,
+    config,
+    CanvasSource,
+    GeoJSONSource,
+    ImageSource,
+    RasterDEMTileSource,
+    RasterTileSource,
+    VectorTileSource,
+    LoadTileResult,
+    VideoSource,
+    EdgeInsets,
+    BoxZoomHandler,
+    DragRotateHandler,
+    DragPanHandler,
+    ScrollZoomHandler,
+    TwoFingersTouchZoomRotateHandler,
+    CooperativeGesturesHandler,
+    DoubleClickZoomHandler,
+    KeyboardHandler,
+    TwoFingersTouchZoomHandler,
+    TwoFingersTouchRotateHandler,
+    TwoFingersTouchPitchHandler,
+    MapWheelEvent,
+    MapTouchEvent,
+    MapMouseEvent,
+    MapProjectionEvent,
+    MapTerrainEvent,
+    MapStyleImageMissingEvent,
+    MapStyleDataEvent,
+    MapStyleLoadEvent,
+    MapSourceDataEvent,
+    MapBoxZoomEvent,
+    MapLibreEvent,
+    MapMovementEvent,
+    MapContextEvent,
+    ErrorEvent,
+    type Handler,
+    type RequireAtLeastOne,
+    type CameraUpdateTransformFunction,
+    type TransformConstrainFunction,
+    type CustomRenderMethod,
+    type CalculateTileZoomFunction,
+    type MapSourceDataType,
+    type TileMesh,
+    type CreateTileMeshOptions,
+    type ControlPosition,
+    type Subscription,
+    type Complete,
+    type CameraOptions,
+    type AnchoredCameraOptions,
+    type CenterZoomBearing,
+    type StyleImage,
+    type StyleImageData,
+    type StyleImageMetadata,
+    type StyleLayer,
+    type PaintPropertyEntry,
+    type GetResourceResponse,
+    type MapGeoJSONFeature,
+    type Alignment,
+    type AddProtocolAction,
+    type AddProtocolResponseData,
+    type SourceClass,
+    type IndicesType,
+    type AttributionControlOptions,
+    type CanonicalTileRange,
+    type Tile,
+    type Listener,
+    type EventTypeMap,
+    type ErrorEventType,
+    type EventedParentData,
+    type Coordinates,
+    type ImageSourceWarp,
+    type ImageSourceImage,
+    type UpdateImageOptions,
+    type DragPanOptions,
+    type DragRotateOptions,
+    type FullscreenControlOptions,
+    type GetClusterOptions,
+    type SetClusterOptions,
+    type GeoJSONSourceDiff,
+    type GeolocateControlOptions,
+    type LogoControlOptions,
+    type StyleImageInterface,
+    type StyleImageWebGLData,
+    type StyleImageWebGLTarget,
+    type AddLayerObject,
+    type StyleSetterOptions,
+    type CameraForBoundsOptions,
+    type EaseToOptions,
+    type FitBoundsOptions,
+    type FlyToOptions,
+    type FeatureIdentifier,
+    type JumpToOptions,
+    type QueryRenderedFeaturesOptions,
+    type QuerySourceFeatureOptions,
+    type AnimationOptions,
+    type StyleSwapOptions,
+    type StyleOptions,
+    type RequestTransformFunction,
+    type MarkerOptions,
+    type NavigationControlOptions,
+    type PopupOptions,
+    type Offset,
+    type OverscaledTileID,
+    type ScaleControlOptions,
+    type Unit,
+    type AroundCenterOptions,
+    type BoxZoomEndHandler,
+    type BoxZoomHandlerOptions,
+    type HandlerResult,
+    type CustomRenderMethodInput,
+    type CustomTerrainRenderInput,
+    type ExpiryData,
+    type PositionAnchor,
+    type ProjectionData,
+    type ProjectionDataParams,
+    type CustomLayerProjectionData,
+    type Mat4f32,
+    type Mat4f64,
+    type ProjectionMatrix,
+    type RendererProjectionData,
+    type CRS,
+    type TileMatrixSet,
+    type GeoJSONFeatureId,
+    type GeoJSONFeatureDiff,
+    type TextFit,
+    type TransformStyleFunction,
+    type DistributiveOmit,
+    type DistributiveKeys,
+    type RequestParameters,
+    type RequestResponseMessageMap,
+    type WorkerTileResult,
+    type ResourceType,
+    type Dispatcher,
+    type GlobalDispatcher,
+    type GlobalDispatcherEventType,
+    type CustomMessageHandler,
+    type Actor,
+    type IActor,
+    type ActorMessage,
+    type MessageHandler,
+    type Bucket,
+    type CollisionBoxArray,
+    type FeatureIndex,
+    type AlphaImage,
+    type GlyphPositions,
+    type GlyphPosition,
+    type GlyphMap,
+    type ImageAtlas,
+    type MessageType,
+    type StyleGlyph,
+    type MapOptions,
+    type MissingStyleImageResolver,
+    type StyleImageSource,
+    type GestureOptions,
+    type WebGLContextAttributesWithType,
+    type IControl,
+    type CustomLayerInterface,
+    type CustomLayerProjectionDataParams,
+    type TerrainHeightMapTarget,
+    type UnwrappedTileIDLiteral,
+    type CanvasSourceSpecification,
+    type PaddingOptions,
+    type LngLatLike,
+    type PointLike,
+    type LngLatBoundsLike,
+    type Source,
+    type MapLayerTouchEvent,
+    type MapLayerMouseEvent,
+    type MapLayerEventType,
+    type MapEventType,
+    type SourceEventType,
+    type GeolocateControlEventType,
+    type FullscreenControlEventType,
+    type PopupEventType,
+    type MarkerEventType,
+    type GeoJSONFeature,
+    type CoveringTilesOptions,
+    type DashEntry,
+    type Painter,
+    type WorkerGlobalScopeInterface,
+    setRTLTextPlugin,
+    getRTLTextPluginStatus,
+    prewarm,
+    clearPrewarmedResources,
+    getVersion,
+    getWorkerCount,
+    setWorkerCount,
+    getMaxParallelImageRequests,
+    setMaxParallelImageRequests,
+    getWorkerUrl,
+    setWorkerUrl,
+    addProtocol,
+    removeProtocol,
+    addProjection,
+    removeProjection,
+    addSourceType,
+    importScriptInWorkers,
+    createTileMesh,
+    now,
+    setNow,
+    restoreNow,
+    isTimeFrozen,
+    getGlobalDispatcher,
+    EXTENT
+};

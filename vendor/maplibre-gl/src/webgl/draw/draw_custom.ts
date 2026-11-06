@@ -1,0 +1,118 @@
+import {DepthMode} from '../depth_mode.ts';
+import {StencilMode} from '../stencil_mode.ts';
+import {OverscaledTileID} from '../../tile/tile_id.ts';
+import {drawTerrainHeightMap} from './draw_terrain.ts';
+
+import type {Painter} from '../../render/painter.ts';
+import type {FrameRenderContext} from '../../render/frame_render_context.ts';
+import type {TileManager} from '../../tile/tile_manager.ts';
+import type {CustomLayerProjectionDataParams, CustomRenderMethodInput, CustomStyleLayer} from '../../style/style_layer/custom_style_layer.ts';
+import type {TerrainHeightMapTarget} from '../../render/terrain.ts';
+
+export function drawCustom(painter: Painter, tileManager: TileManager, layer: CustomStyleLayer, coords: OverscaledTileID[], frameRenderContext: FrameRenderContext): void {
+    if (frameRenderContext.isRenderingToTexture) {
+        drawCustomTerrainTile(painter, layer, coords[0], frameRenderContext);
+        return;
+    }
+
+    const implementation = layer.implementation;
+    // Called in every pass, and most layers draw in one: what follows is not needed in the others.
+    const pass = frameRenderContext.currentPass;
+    if (pass === 'offscreen' ? !implementation.prerender : pass !== 'translucent') return;
+
+    const {isRenderingGlobe, projectionShaderVariant} = frameRenderContext.data;
+    const {terrain} = frameRenderContext;
+    const context = frameRenderContext.context;
+    const transform = frameRenderContext.transform;
+
+    // The same for every custom layer of a frame.
+    const projectionData = frameRenderContext.customLayerProjectionData ??= transform.getProjectionDataForCustomLayer(isRenderingGlobe);
+
+    const customLayerArgs: CustomRenderMethodInput = {
+        farZ: transform.farZ,
+        nearZ: transform.nearZ,
+        fov: transform.fov * Math.PI / 180, // fov converted to radians
+        modelViewProjectionMatrix: transform.modelViewProjectionMatrix,
+        projectionMatrix: transform.projectionMatrix,
+        shaderData: {
+            variantName: projectionShaderVariant.name,
+            vertexShaderPrelude: `const float PI = 3.141592653589793;\nuniform mat4 u_projection_matrix;\n${projectionShaderVariant.prelude.vertexSource}`,
+            define: projectionShaderVariant.define,
+        },
+        defaultProjectionData: projectionData,
+        getProjectionData: (params: CustomLayerProjectionDataParams) => {
+            return transform.getProjectionData({
+                overscaledTileID: new OverscaledTileID(
+                    params.tileID.canonical.z,
+                    params.tileID.wrap ?? 0,
+                    params.tileID.canonical.z,
+                    params.tileID.canonical.x,
+                    params.tileID.canonical.y,
+                ),
+                aligned: params.aligned,
+                applyGlobeMatrix: params.applyGlobeMatrix,
+                applyTerrainMatrix: params.applyTerrainMatrix,
+            });
+        },
+        renderTerrainHeightMap: terrain && frameRenderContext.currentPass === 'offscreen' ? (target: TerrainHeightMapTarget) => drawTerrainHeightMap(frameRenderContext, terrain, target) : undefined
+    };
+
+    const renderingMode = implementation.renderingMode ? implementation.renderingMode : '2d';
+
+    if (frameRenderContext.currentPass === 'offscreen') {
+        const prerender = implementation.prerender;
+        if (prerender) {
+            context.setCustomLayerDefaults();
+            context.setColorMode(frameRenderContext.colorModeForRenderPass());
+
+            prerender.call(implementation, context.gl, customLayerArgs);
+
+            context.setDirty();
+            painter.setBaseState();
+        }
+    } else if (frameRenderContext.currentPass === 'translucent') {
+
+        context.setCustomLayerDefaults();
+
+        context.setColorMode(frameRenderContext.colorModeForRenderPass());
+        context.setStencilMode(StencilMode.disabled);
+
+        const depthMode = renderingMode === '3d' ?
+            frameRenderContext.getDepthModeFor3D() :
+            frameRenderContext.getDepthModeForSublayer(0, DepthMode.ReadOnly);
+
+        context.setDepthMode(depthMode);
+
+        implementation.render(context.gl, customLayerArgs);
+
+        context.setDirty();
+        painter.setBaseState();
+        context.bindFramebuffer.set(null);
+    }
+}
+
+/**
+ * Draws a custom layer into the terrain tile texture that is bound, see {@link CustomLayerInterface.renderToTerrainTile},
+ * and binds that texture again for the layers after it.
+ */
+function drawCustomTerrainTile(painter: Painter, layer: CustomStyleLayer, tileID: OverscaledTileID, frameRenderContext: FrameRenderContext): void {
+    const context = frameRenderContext.context;
+    const framebuffer = context.bindFramebuffer.get();
+    const viewport = context.viewport.get();
+
+    context.setCustomLayerDefaults();
+    context.setColorMode(frameRenderContext.colorModeForRenderPass());
+    context.setDepthMode(DepthMode.disabled);
+    context.setStencilMode(StencilMode.disabled);
+
+    layer.implementation.renderToTerrainTile(context.gl, {
+        tileID: {canonical: tileID.canonical, wrap: tileID.wrap},
+        width: viewport[2],
+        height: viewport[3]
+    });
+
+    context.setDirty();
+    painter.setBaseState();
+    context.bindFramebuffer.set(framebuffer);
+    context.viewport.set(viewport);
+}

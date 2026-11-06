@@ -219,6 +219,7 @@ export const readSuggestionFile = async (input) => {
 // The comment the player pastes on the post, with the file dragged in. Plain
 // English: it is read on GitHub, where the game's language packs do not reach.
 // The marker line is what the author's game looks for.
+// i18n-ignore: the comment posted on the hub, which every author reads in English.
 export const buildSuggestionComment = (suggestion, { fileName = "" } = {}) => {
   const counts = countChanges(suggestion.changes);
   const lines = summarizeChangesForComment(suggestion.changes);
