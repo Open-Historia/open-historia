@@ -162,6 +162,7 @@ export const RELEASES = [
           { heading: "Smoother everywhere", text: "A quarter of the graphics work with 3D terrain on, shorter pauses when zooming, and far less heat on laptops and phones." },
         ],
         updates: [
+          "2026-11-right-to-left-map",
           "2026-10-war-and-peace#1",
           "2026-10-diplomatic-map",
           "2026-10-turn-and-tilt",

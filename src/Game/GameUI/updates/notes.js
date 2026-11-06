@@ -54,6 +54,24 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // PR #969 (a contributor's, rebuilt on beta): MapLibre's right-to-left plugin, loaded only when such a label is
+    // drawn (Map/mapLibreSetup.js), and the desktop app on a port the system picks once every port near the usual one
+    // is taken (electron/main.cjs findFreePort), where it used not to open (2026-11-06).
+    id: "2026-11-right-to-left-map",
+    kind: "minor",
+    date: "2026-11-06",
+    channel: "beta",
+    banners: [
+      {
+        title: "Right-to-left text on the map",
+        items: [
+          "Map labels in Arabic, Persian and Urdu are drawn with their letters joined and in the right order.",
+          "The desktop app now opens even when every port it usually uses is taken.",
+        ],
+      },
+    ],
+  },
+  {
     // "I ordered my spy to assassinate head of state it succeed but nothing happened he still alive" (a player's
     // report, 2026-11-06): the skip was told only that the operation succeeded, wrote the death, and left the record's
     // leader in office. AI/covertOperationsDirective.js now says the target is dead and that the same event carries

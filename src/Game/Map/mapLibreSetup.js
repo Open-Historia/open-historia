@@ -12,8 +12,15 @@ import { RELIEF_PROTOCOL, createReliefTileLoader } from "./scenarioTerrain.js";
 import { SEASON_TINT_PROTOCOL, seasonTintTileLoader } from "./seasonTintTiles.js";
 import { isConstrainedDevice, mapRuntimeLimits } from "../../runtime/deviceProfile.js";
 import { workerCopySweepScript } from "./regionsSourceMemory.js";
+// Arabic, Persian and Urdu labels (a country's name in the player's language,
+// runtime/translator.js translateLabel, or a scenario's own) need MapLibre's
+// right-to-left plugin: without it their letters are drawn unjoined and in the
+// wrong order. The plugin's own file from the package (its WebAssembly is inside
+// it), served by the game with the rest of its files, never from a CDN. By its
+// path: the package's "exports" names only its source, not this built file.
+import rtlTextPluginUrl from "../../../node_modules/@mapbox/mapbox-gl-rtl-text/dist/mapbox-gl-rtl-text.js?url";
 
-const { addProtocol, importScriptInWorkers, setMaxParallelImageRequests, setWorkerCount } = mapLibreGl;
+const { addProtocol, getRTLTextPluginStatus, importScriptInWorkers, setMaxParallelImageRequests, setRTLTextPlugin, setWorkerCount } = mapLibreGl;
 
 let runtimeConfigured = false;
 let pmtilesRegistered = false;
@@ -29,6 +36,11 @@ export const configureMapRuntime = () => {
   setWorkerCount(workerCount);
   setMaxParallelImageRequests(parallelImageRequests);
   runtimeConfigured = true;
+  // Lazy: fetched only once a label in a right-to-left script is drawn, so a
+  // game that has none never loads it. MapLibre takes it once per page.
+  if (typeof setRTLTextPlugin === "function" && getRTLTextPluginStatus?.() === "unavailable") {
+    Promise.resolve(setRTLTextPlugin(rtlTextPluginUrl, true)).catch(() => {});
+  }
 };
 
 // Drops the copies of a URL source's file MapLibre's workers keep beside its
