@@ -381,8 +381,12 @@ test("a patrol with no point of its ring on its ground stays on its station", ()
 });
 
 test("an air patrol ignores the coast", () => {
-  const drawn = advanceStandingOrders(patrolling("air"), { fromDate: "2024-01-01", toDate: "2024-02-01", round: 3 });
-  const tested = advanceStandingOrders(patrolling("air"), { fromDate: "2024-01-01", toDate: "2024-02-01", round: 3, onWater: () => false });
+  // Both runs must start from the same unit creation timestamp. Building two
+  // fixtures independently can cross a millisecond boundary and fail a strict
+  // equality check even when their patrol results are otherwise identical.
+  const initial = patrolling("air");
+  const drawn = advanceStandingOrders(structuredClone(initial), { fromDate: "2024-01-01", toDate: "2024-02-01", round: 3 });
+  const tested = advanceStandingOrders(structuredClone(initial), { fromDate: "2024-01-01", toDate: "2024-02-01", round: 3, onWater: () => false });
   assert.deepEqual(tested.units[0], { ...drawn.units[0], updatedAt: tested.units[0].updatedAt });
 });
 

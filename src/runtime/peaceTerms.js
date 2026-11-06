@@ -336,7 +336,9 @@ export const clampTerms = (raw, { from = "", to = "" } = {}) => {
 //   anything else is a condition, told to the next time skip to carry out
 // `from` and `to` are the two making peace: a country a term names is one of
 // them (clampTerms). Ground it cannot read is the old borders.
+// i18n-ignore: an example for the model and a pattern, never shown.
 export const TERMS_LINE_EXAMPLE = "as held; Borduria cedes Klow, Szohod to Syldavia; Borduria becomes Syldavia's puppet; Borduria pays 2% for 5 years; the border forts are razed";
+// i18n-ignore: a pattern the terms are read with.
 const PUPPET_WORDS = "puppet(?: state)?|satellite|protectorate|client(?: state)?|vassal";
 const puppetKindOf = (word) => {
   const read = fold(word);

@@ -28,7 +28,9 @@ import { DETAILED_MAP_NEEDS_BASIC_MAP_MESSAGE } from "./exportPreset.js";
 
 export const STARTING_MAP_KEY = "start";
 export const STARTING_DRAWN_KEY = STARTING_DRAWN_PICK; // the same key in the game (runtime/basemapPick.js)
+// i18n-ignore: a key prefix.
 const BUILTIN = "builtin:";
+// i18n-ignore: a key prefix.
 const OWN = "own:";
 
 const builtinName = (id) => ESRI_BASEMAPS.find((basemap) => basemap.id === id)?.label || editorBasemapById(id)?.label || id;

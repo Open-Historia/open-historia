@@ -204,6 +204,7 @@ export const communityFlagsHubUrl = () =>
 export const flagPublishQuery = ({ name = "", author = "", polity = "", code = "" } = {}) => {
   const exact = String(polity || "").replace(/[\r\n]+/g, " ").trim();
   const hint = exact || String(code || "").trim();
+  // i18n-ignore: lines the hub reads, never translated.
   const technical = [
     CODE_TOKEN.test(hint) ? `Flag-Code: ${hint.toUpperCase()}` : "",
     exact ? `Flag-Polity: ${exact}` : "",

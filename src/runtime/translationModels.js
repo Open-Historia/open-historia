@@ -4,7 +4,9 @@
 // device by a small open model, where one translates English into the
 // player's language well. A language with a model is played in only once the
 // player has seen its size and said yes (translator.js switchLanguage); no
-// translation is ever an AI request. A language with a pack and no model shows
+// translation is an AI request unless the player turns on Translate with my AI
+// (aiTranslation.js), which needs the model all the same and falls back to it.
+// A language with a pack and no model shows
 // what its pack has, and an answer that fails the checks below stays English.
 //
 // The models are Opus-MT (Language Technology Research Group, University of

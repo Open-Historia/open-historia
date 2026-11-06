@@ -16,6 +16,7 @@ import { fightingIn, playerFrontsKey } from "./warRoomData.js";
 import { presenceFor, useDiscordPresence } from "../../runtime/discordPresence.js";
 import { musicSceneOf, setMusicScene } from "../../runtime/ambientMusic.js";
 import { followScenarioMusic } from "../../runtime/scenarioMusic.js";
+import { useScenarioLanguagePack } from "../../runtime/useScenarioLanguagePack.js";
 import { useWarRoom } from "../Map/warRoomStore.js";
 import { DISCORD_URL, GITHUB_URL, REDDIT_URL } from "../../runtime/communityLinks.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
@@ -223,6 +224,7 @@ const AdvisorButton = ({ isAdvisorOpen, isMobile, dockStyle, onToggle }) => (
     type="button"
     title="Advisor"
     aria-label="Advisor"
+    data-oh-theme-hud=""
     onClick={onToggle}
     style={{
       ...baseStyle,
@@ -240,6 +242,7 @@ const AdvisorButton = ({ isAdvisorOpen, isMobile, dockStyle, onToggle }) => (
       background: isAdvisorOpen
         ? "var(--oh-ui-glass-active, rgba(255,255,255,0.085))"
         : "var(--oh-ui-glass-pill, rgba(35,35,39,0.53))",
+      borderColor: isAdvisorOpen ? "var(--oh-ui-glass-active-line, var(--oh-hud-border))" : "var(--oh-hud-border)",
       transition: `${dockStyle.transition}, background 0.15s ease`,
     }}
   >
@@ -681,6 +684,9 @@ const Main = ({
   // scenario's is asked of the hub.
   const scenarioMusicKey = JSON.stringify((gameEntered && activeGame?.id && runtimeScenario?.music) || null);
   useEffect(() => { followScenarioMusic(JSON.parse(scenarioMusicKey)); }, [scenarioMusicKey]);
+  // The scenario's own text in the player's language, from the pack it ships
+  // (runtime/useScenarioLanguagePack.js), when it has one for that language.
+  useScenarioLanguagePack(activeGame?.id ? runtimeScenario : null);
   // And it follows where the player is (runtime/ambientMusic.js): the menu, a
   // game opening under its cover, the game, the game with the player at war,
   // and the war room or a battlefield being shown, which the war room's own

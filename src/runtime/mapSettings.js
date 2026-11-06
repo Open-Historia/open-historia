@@ -7,6 +7,7 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { logDebugEvent, logSettingChange } from "./debugLog.js";
 import { isConstrainedDevice } from "./deviceProfile.js";
+import { AI_TRANSLATION_SETTING } from "./aiTranslation.js";
 
 // Immediate source of truth for string-valued settings. This also keeps a
 // runtime override functional in privacy/file contexts where localStorage
@@ -119,6 +120,11 @@ export const MAP_SETTING_KEYS = {
     // ON by default, and only while Seasons and weather is on; off, the
     // season's tint and the ice stay. Settings → Map.
     weatherEffects: "map_weather_effects",
+    // Translate with my AI (runtime/aiTranslation.js): what the translation
+    // model would translate goes to the player's AI provider instead. OFF by
+    // default — read with getMapSetting — and offered only in a language whose
+    // model the player downloaded. Settings → General → Language.
+    translateWithAi: AI_TRANSLATION_SETTING,
 };
 
 // Kept for the sitting only, never on the device: whichever map was last shown,
@@ -199,6 +205,7 @@ const SETTING_LABELS = {
     [MAP_SETTING_KEYS.seasonsWeather]: "Seasons and weather",
     [MAP_SETTING_KEYS.weatherEffects]: "Weather effects",
     [MAP_SETTING_KEYS.defaultBasemapOn]: "Use my default basemap",
+    [MAP_SETTING_KEYS.translateWithAi]: "Translate with my AI",
 };
 
 export function setMapSetting(key, value) {
