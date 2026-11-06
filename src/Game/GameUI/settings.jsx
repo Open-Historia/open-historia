@@ -3491,9 +3491,9 @@ const SettingsMenu = ({
         panelContent = (
             <QuickMenuPanel title="Settings" description="Jump straight into the options category you want.">
                 <div style={grid}>
-                    <QuickAction title="General" description="Language, display, accessibility, sound and privacy" symbol="◫" tone="blue" onClick={() => openSettingsSection("general")} />
-                    <QuickAction title="Sound" description="The game's music and sound effects." symbol="♫" tone="blue" onClick={() => openSettingsSection("sound")} />
-                    <QuickAction title="Map" description="Basemap, labels, globe and camera" symbol="◇" tone="blue" onClick={() => openSettingsSection("map")} />
+                    <QuickAction title="General" description="Language, display, accessibility, sound and privacy" symbol="◫" onClick={() => openSettingsSection("general")} />
+                    <QuickAction title="Sound" description="The game's music and sound effects." symbol="♫" onClick={() => openSettingsSection("sound")} />
+                    <QuickAction title="Map" description="Basemap, labels, globe and camera" symbol="◇" onClick={() => openSettingsSection("map")} />
                     <QuickAction title="AI" description="Models, backups, keys and reasoning" symbol="✦" onClick={() => openSettingsSection("ai")} />
                     <QuickAction title="Advanced" description="Per-task models and expert controls" symbol="⌘" onClick={() => openSettingsSection("advanced")} />
                 </div>

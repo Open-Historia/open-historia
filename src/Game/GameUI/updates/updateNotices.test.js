@@ -7,7 +7,8 @@ import { readFileSync, readdirSync } from "node:fs";
 
 import { NOTICE_UPDATES, UPDATES } from "./notes.js";
 import { PAST_UPDATES } from "./notesPast.js";
-import { UPDATES_SHOWN_MOST, UPDATE_NOTE_KEY, canRememberUpdates, noticePages, pendingUpdates, previewedUpdates, rememberUpdate, seenUpdate } from "./updateNotices.js";
+import { RELEASES } from "./notesReleases.js";
+import { UPDATES_SHOWN_MOST, UPDATE_NOTE_KEY, canRememberUpdates, noticePages, pendingUpdates, previewedUpdates, releaseChapterEntries, rememberUpdate, seenUpdate } from "./updateNotices.js";
 
 const memory = () => {
   const kept = new Map();
@@ -45,7 +46,10 @@ test("each update is shown once a device; one that missed several is shown all o
   // Only the updates written as notices, never the history before them: "make sure people ONLY see the update popup
   // things for the updates that are actually being added (plus the music one), not for every update in the history"
   // (the owner, 2026-10-16).
-  assert.deepEqual(firstLook, ["2026-11-region-renaming", "2026-11-themes", "2026-11-rostra", "2026-11-deploy-aircraft"]);
+  // A release tells everything under it, so a device owed one is shown it alone.
+  assert.deepEqual(firstLook, ["2026-11-version-2-5"]);
+  assert.deepEqual(pendingUpdates({ seen: "2026-11-themes", keeps: true }).map((update) => update.id), ["2026-11-version-2-5"]);
+  assert.deepEqual(pendingUpdates({ seen: "2026-11-version-2-5", keeps: true }), []);
   const past = new Set(PAST_UPDATES.map((update) => update.id));
   for (const seen of [null, "gone", ...past]) {
     assert.deepEqual(pendingUpdates({ seen, keeps: true }).filter((update) => past.has(update.id)), [], `seen ${seen}: no history entry`);
@@ -81,6 +85,7 @@ test("the notes are well made: new ids, dates, banners with what their kind need
   const iconsSource = readFileSync(new URL("./updateKit.jsx", import.meta.url), "utf8");
   for (const update of UPDATES) {
     assert.match(update.date, /^\d{4}-\d{2}-\d{2}$/);
+    if (update.kind === "release") continue;
     assert.ok(["major", "minor"].includes(update.kind));
     assert.ok(update.banners.length > 0);
     for (const banner of update.banners) {
