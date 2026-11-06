@@ -378,3 +378,7 @@ export * as speechEngines from "../../src/runtime/speechEngines.js";
 export * as speechSilence from "../../src/runtime/speechSilence.js";
 export * as speechPieces from "../../src/runtime/speechPieces.js";
 export * as speechSystem from "../../electron/speechSystem.cjs";
+export * as aiTranslation from "../../src/runtime/aiTranslation.js";
+export * as scenarioLanguages from "../../server/scenarioLanguages.js";
+export * as scenarioLangPacks from "../../src/runtime/scenarioLanguagePacks.js";
+export * as scenarioTranslation from "../../src/Game/AI/scenarioTranslation.js";
