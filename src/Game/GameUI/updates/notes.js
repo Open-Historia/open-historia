@@ -54,6 +54,22 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // The owner's file, 2026-11-06: "add this as an ingame song", then "for this one dont actually flatten the
+    // loudness, let it be" (runtime/ambientMusic.js aKindOfHope, no `loud` table; public/audio/CREDITS.txt).
+    id: "2026-11-a-kind-of-hope",
+    kind: "minor",
+    date: "2026-11-06",
+    channel: "beta",
+    banners: [
+      {
+        title: "A new song in a game",
+        items: [
+          "“A Kind Of Hope” by Scott Buckley now plays in a game, in turn with the others, as it was recorded.",
+        ],
+      },
+    ],
+  },
+  {
     // A player's log, 2026-11-06 (round 637, desktop beta): time skips refused by Gemini as sent, 400 "Request contains an
     // invalid argument", each to the stand-in events (AI/main.jsx geminiFunctionCallRefusals); every restore point refused
     // by the server as too large (runtime/restorePointBudget.js); the world city list served as the app's page on the
