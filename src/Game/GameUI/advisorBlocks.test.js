@@ -23,6 +23,28 @@ test("extracts a well-formed block and strips it from the prose", () => {
   assert.ok(rest.includes("Here is the plan."));
 });
 
+test("complete adjacent project arrays are one strict payload, not a partially salvaged batch", () => {
+  // A real 2029 campaign report contained "...}] [{\"op\":\"update\"...";
+  // Both independent JSON arrays must survive in source order, with no false
+  // malformed-entry receipt or demand to recover historical projects.
+  const body = '[{"op":"update","id":"energy","name":"Strategic Energy Autonomy","status":"stalled"}] '
+    + '[{"op":"update","id":"assets","name":"Asset Recovery project","progress":28}]';
+  assert.throws(() => JSON.parse(body), /non-whitespace|Unexpected token/);
+  const result = extractFencedJson(fence("projects", body), "projects", { salvageTruncated: true });
+  assert.deepEqual(result.json?.map((op) => op.id), ["energy", "assets"]);
+  assert.equal(result.reason, "");
+  assert.equal(result.dropped, 0);
+  assert.equal(result.truncated, false);
+});
+
+test("adjacent arrays inside string values do not become false top-level splits", () => {
+  const body = '[{"op":"create","name":"Telemetry ] [ reference"}] '
+    + '[{"op":"update","id":"energy","name":"Energy","progress":60}]';
+  const result = extractFencedJson(fence("projects", body), "projects", { salvageTruncated: true });
+  assert.deepEqual(result.json?.map((op) => op.name), ["Telemetry ] [ reference", "Energy"]);
+  assert.equal(result.dropped, 0);
+});
+
 test("a missing block is not an error", () => {
   const { rest, json } = extractFencedJson("Just prose.", "actions");
   assert.equal(json, null);

@@ -94,9 +94,9 @@ R5.1 uses one renderer density for the whole session. R5.0 switched between 1× 
 
 Left unset, MapLibre sizes this cache dynamically to roughly `(ceil(w/256)+1)*(ceil(h/256)+1)*5` tiles **per source** — ~270 at 1080p but ~800 on a 4K viewport. With `renderWorldCopies`, panning E/W feeds successive wrapped world-copy tiles into that cache, so retained GPU textures climb until the tab OOMs. `256` caps the 4K case ~3× while being a no-op on phones. In-view tiles are a separate structure and are never evicted by this, so on-screen tiles are never re-fetched. This is orthogonal to the fixed 1× density (which bounds framebuffer pixels, not tiles).
 
-### The game's own MapLibre (`vendor/maplibre-gl`)
+### The game's own MapLibre (Open-Historia/maplibre-gl-js)
 
-MapLibre is compiled from source with the game, version 6.16.0, through an alias in `vite.config.ts`: the game imports `maplibre-gl` as usual. Its changes are for frame time and memory, and `vendor/maplibre-gl/README.md` lists each one with why, and how to upgrade. In short:
+MapLibre is version 6.16.0 with the game's changes, kept as commits on MapLibre's own release tag in [Open-Historia/maplibre-gl-js](https://github.com/Open-Historia/maplibre-gl-js) (branch `open-historia/v6.16.0`). The game installs the package built from it, attached to that repository's release and pinned by its hash in `package-lock.json`; `Map/mapLibreSetup.js` tells it where its worker went in the bundle. An upgrade is the commits rebased onto the next tag, a new release, and its URL in `package.json`. Its changes are for frame time and memory, and `OPEN-HISTORIA.md` there lists each one with why. In short:
 
 - **Memory.** The regions file's tile index keeps tiles as typed arrays and gives back tiles it can cut again. A file loaded from a URL is not posted back to the page. Paint arrays and outline indexes that no program reads are not made.
 - **Frame time.** Symbol placement is skipped while nothing it reads has changed and paced while the camera moves, so a label can appear or go up to 100 ms late while moving. Sources share one walk of the tile tree, and retained tiles and tile lists are kept while nothing changed. Clipping masks are kept from source to source. Terrain data has a uniform buffer for each tile.

@@ -145,9 +145,6 @@ const transformersRuntimeAliases = [
   { find: /^oh-ort-transformers\//, replacement: `${ortDistOf('./node_modules/@huggingface/transformers/dist/transformers.web.js')}/` },
 ]
 
-// The game's own MapLibre (vendor/maplibre-gl/README.md). Its stylesheet and types still come from the package.
-const mapLibreAlias = { find: /^maplibre-gl$/, replacement: path.resolve('vendor/maplibre-gl/entry.js') }
-
 // https://vite.dev/config/
 // `--mode web` (npm run build:web / build:site / dev:web) builds the website,
 // `--mode android` (npm run build:android) the Android app's bundle — the web
@@ -180,7 +177,7 @@ export default defineConfig(({ mode }) => ({
     format: 'es',
   },
   resolve: {
-    alias: [...transformersRuntimeAliases, mapLibreAlias],
+    alias: transformersRuntimeAliases,
   },
   plugins: [
     react({

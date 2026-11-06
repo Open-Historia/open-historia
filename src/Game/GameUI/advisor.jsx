@@ -199,9 +199,10 @@ const AdvisorProjectsCard = ({ items, onOpenProjects }) => {
 // and nothing anywhere explains why. The overwhelmingly common cause is the
 // reply hitting its token cap partway through a long array.
 //
-// "Ask for the next batch" puts this in the composer, in the interface's
-// language (uiString): named, so the string catalog reads it whole.
-const RETRY_PROJECTS_TEXT = "Continue putting my projects and operations on the board — the last reply was cut off. Pick up from where you stopped and skip anything already on the board. Send no more than ten, one sentence each. Only include efforts that genuinely appear in our history — if everything real is already on the board, just tell me that and add nothing.";
+// "Retry missing entries" puts a narrowly scoped repair request in the
+// composer, in the interface's language (uiString). Never invite a wholesale
+// historical backfill when one block was malformed.
+const RETRY_PROJECTS_TEXT = "Recover only the specific Project operations missing from your immediately previous reply. Its Projects block was malformed or incomplete; this is not a request to backfill history or open new programmes. Skip entries already on the board, and do not turn old reviews, agreements or frameworks into new active projects. Send at most ten concise entries. If you cannot identify exactly what was missed, tell me and add nothing.";
 
 const AdvisorProjectsProblem = ({ kind, detail, excerpt, onRetry }) => {
     const [showExcerpt, setShowExcerpt] = useState(false);
@@ -225,7 +226,7 @@ const AdvisorProjectsProblem = ({ kind, detail, excerpt, onRetry }) => {
         <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem", marginTop: "0.5rem" }}>
         {onRetry && (
             <button type="button" onClick={onRetry} style={{ background: "none", border: "1px solid rgba(245,158,11,0.5)", borderRadius: "6px", color: "rgba(253,230,138,0.95)", cursor: "pointer", fontSize: "0.7rem", fontWeight: 600, padding: "0.2rem 0.5rem" }}>
-            Ask for the next batch
+            Retry missing entries
             </button>
         )}
         {excerpt && (
@@ -996,13 +997,12 @@ const AdvisorMessageList = React.memo(({ messages, visibleLimit, onShowEarlier, 
         </button>
     )}
 
-    {/* The retry is offered on the LAST message only, and only when it is the
-        error: retrying anything older would re-ask a question the conversation
-        has already moved past. */}
+    {/* Retry failed turns and recover missing Project entries only on the
+        newest affected reply; older errors must not reissue stale work. */}
     {messages.map((msg, i) => (i < messages.length - visibleLimit ? null : msg.role === "notice"
         ? <AdvisorDocumentNotice key={msg.id || i} notice={msg} />
         : (
-        <AdvisorMessageRow key={i} msg={msg} msgIndex={i} speakerName={speakerName} canExecute={canExecute} canDraft={canDraft} canReviewActions={canReviewActions} allowedUnitTypes={allowedUnitTypes} chatDiffers={chatDiffers} chatDir={chatDir} actionStates={actionStates} onOpenActions={onOpenActions} onOpenProjects={onOpenProjects} onRetryProjects={onRetryProjects} onDraftMessage={onDraftMessage} onDiscussAction={onDiscussAction} onProceedAction={onProceedAction} onCancelAction={onCancelAction} onExecuteInstitutionDraft={onExecuteInstitutionDraft} onPlaceDeployment={onPlaceDeployment}
+        <AdvisorMessageRow key={i} msg={msg} msgIndex={i} speakerName={speakerName} canExecute={canExecute} canDraft={canDraft} canReviewActions={canReviewActions} allowedUnitTypes={allowedUnitTypes} chatDiffers={chatDiffers} chatDir={chatDir} actionStates={actionStates} onOpenActions={onOpenActions} onOpenProjects={onOpenProjects} onRetryProjects={i === messages.length - 1 && msg.projectsProblem ? onRetryProjects : undefined} onDraftMessage={onDraftMessage} onDiscussAction={onDiscussAction} onProceedAction={onProceedAction} onCancelAction={onCancelAction} onExecuteInstitutionDraft={onExecuteInstitutionDraft} onPlaceDeployment={onPlaceDeployment}
         onRetry={i === messages.length - 1 && msg.role === "error" ? onRetry : undefined} retrying={retrying} />
     )))}
 
@@ -1602,7 +1602,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         if (isComposerSendKey(e, { touch: isTouch })) { e.preventDefault(); handleSend(); }
     };
 
-    // "Ask for the next batch" under a projects block that was cut off. A
+    // Recover only missed project operations from the newest problematic reply. A
     // stable reference (no deps) so it never breaks AdvisorMessageList's
     // memoization — see the comment on that component for why that matters.
     // Puts the follow-up in the composer rather than sending it: the player may
