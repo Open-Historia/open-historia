@@ -104,6 +104,23 @@ export function uiThemeTokens(theme) {
     "--oh-grey-text": textColor,
     "--oh-grey-muted": "#B4C4D0",
     "--oh-grey-faint": "#839AAA",
+    // The HUD's glass (styles.css): the menu button, the session pill and Exit
+    // Game, the date widget, the dock, the search field, the Advisor button and
+    // the map-mode switch, tinted by the palette and still see-through. Its
+    // text and its blue/amber/red signals are not chrome and stay.
+    "--oh-hud-bg": translucent(colors.background, .58),
+    "--oh-hud-bg-strong": translucent(colors.background, .72),
+    "--oh-hud-bg-soft": translucent(colors.surface, .5),
+    "--oh-hud-border": translucent(mix(colors.surface, "#FFFFFF", .55), .2),
+    "--oh-hud-border-strong": translucent(mix(colors.surface, "#FFFFFF", .6), .32),
+    // Buttons on the glass: resting, hovered, chosen.
+    "--oh-ui-glass-pill": translucent(colors.surface, .6),
+    "--oh-ui-glass-chip": translucent(mix(colors.surface, "#FFFFFF", .08), .42),
+    "--oh-ui-glass-line": translucent(mix(colors.surface, "#FFFFFF", .5), .16),
+    "--oh-ui-glass-hover": translucent(mix(colors.surface, colors.accent, .3), .55),
+    "--oh-ui-glass-active": translucent(colors.accent, .22),
+    "--oh-ui-glass-active-line": translucent(colors.accent, .45),
+    "--oh-ui-glass-active-text": mix(colors.accent, "#FFFFFF", .3),
   };
 }
 const base = Object.freeze(normalizeUiTheme({ preset: DEFAULT_UI_THEME }));

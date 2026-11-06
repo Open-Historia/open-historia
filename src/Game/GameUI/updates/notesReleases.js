@@ -185,12 +185,13 @@ export const RELEASES = [
         subtitle: "Your colours, your language",
         lead: "The game opens on a steel vault door, greets you in your own language and dresses itself in the colours you choose.",
         highlights: [
-          { heading: "Themes", text: "Five palettes or your own, across the main menu, the panels and every popup." },
+          { heading: "Themes", text: "Five palettes or your own, across the main menu, the panels, the controls over the map and every popup." },
           { heading: "Your language", text: "A first-time setup in 28 languages, and translation on your own device, never with AI requests." },
           { heading: "Through the vault door", text: "A new way into the game: turn the wheel, and the main menu is waiting behind it." },
         ],
         updates: [
           "2026-11-themes",
+          "2026-11-hud-themes",
           "2026-11-czech-finnish",
           "2026-10-war-and-peace#2",
           "2026-11-translation-model",

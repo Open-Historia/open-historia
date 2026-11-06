@@ -54,6 +54,25 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // The HUD's glass and its buttons take the theme (runtime/uiTheme.js --oh-hud-bg…, --oh-ui-glass-*; the owner's
+    // screenshots of the dock, date widget, map-mode switch and top bar, 2026-11-06). The translation model never
+    // downloaded on Android: the app's http origin has no Cache Storage, so it is kept in IndexedDB
+    // there (runtime/modelStore.js; a player's report, Arabic, Android stable #26).
+    id: "2026-11-hud-themes",
+    kind: "minor",
+    date: "2026-11-05",
+    channel: "beta",
+    banners: [
+      {
+        title: "Themed map controls",
+        items: [
+          "Your theme now colours the controls over the map too: the menu button, the top bar and Exit Game, the date, the dock, search, the Advisor button and the Political and Diplomatic switch.",
+          "On Android, the translation model for your language downloads again. It failed every time before.",
+        ],
+      },
+    ],
+  },
+  {
     // Opus-MT en-cs and en-fi (runtime/translationModels.js): tried on the game's own kind of text, 2026-11-05.
     // Latvian and Slovene had no model that read right (en-mul) or that the browser can fetch (en-bat, en-sla).
     id: "2026-11-czech-finnish",

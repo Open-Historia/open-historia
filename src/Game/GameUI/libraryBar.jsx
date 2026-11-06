@@ -212,7 +212,7 @@ const accentGlowStyle = (accentColor, { at, alpha, reach }) => ({
 
 const surfaceStyle = {
   background:
-    "rgba(34,34,37,0.53)",
+    "var(--oh-ui-glass-pill, rgba(34,34,37,0.53))",
   border: "1px solid var(--oh-hud-border)",
   boxShadow: "var(--oh-hud-shadow-soft)",
   backdropFilter: "var(--oh-hud-blur)",
