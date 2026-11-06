@@ -73,8 +73,8 @@ const NEW_UPDATES = [
   {
     // A player's report (2026-11-06, 1836 France): every time skip fell back to the stand-in events, "Storyline
     // storyline-fr-franchise-1836 lowers pressure by 47 point(s), but its linked event(s) contain escalation/failure
-    // cues": reforms that passed over a bloc that "rejects" them. AI/nativeWorldDirector.js holdUnjustifiedPressureDrops
-    // keeps the old pressure instead, and STORYLINE_DEESCALATION_RE knows a bill passing.
+    // cues": reforms that passed over a bloc that "rejects" them. The check read the events for words; "dont do
+    // keywording its super unreliable" (the owner, 2026-11-06), so it is gone (AI/nativeWorldDirector.js).
     id: "2026-11-storyline-pressure-held",
     kind: "minor",
     date: "2026-11-05",
@@ -83,8 +83,7 @@ const NEW_UPDATES = [
       {
         title: "Easing storylines no longer cost a time skip",
         items: [
-          "When a time skip eased a storyline's pressure while its events still read as a crisis, the whole skip was thrown away for the stand-in events. Now that storyline keeps its old pressure and the rest of the skip stands.",
-          "A bill or reform that passes now counts as easing the crisis around it.",
+          "A time skip that eases a storyline's pressure is no longer thrown away for the stand-in events because of the words in its events: the pressure the skip gives it stands.",
         ],
       },
     ],
