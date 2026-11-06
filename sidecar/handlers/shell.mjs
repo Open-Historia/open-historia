@@ -269,6 +269,56 @@ export const register = (ctx) => {
     await attempt(() => api(`/api/lang/${code}`, { method: "PUT", body: { entries } }));
   };
 
+  const aiKit = () => engine.aiTranslation;
+  const aiEntriesByLanguage = new Map();
+  const aiEntriesFor = (code) => {
+    if (!aiEntriesByLanguage.has(code)) {
+      const stored = readEntries(`${aiKit().AI_CACHE_PREFIX}${code}`) ?? {};
+      aiEntriesByLanguage.set(code, new Map(Object.entries(stored).filter(([, value]) => typeof value === "string")));
+    }
+    return aiEntriesByLanguage.get(code);
+  };
+  const persistAiEntries = (code) => attemptNow(() => {
+    const entries = aiEntriesFor(code);
+    if (!entries.size) return;
+    storage.setItem(`${aiKit().AI_CACHE_PREFIX}${code}`, JSON.stringify(Object.fromEntries(Array.from(entries.entries()).slice(-CACHE_LIMIT))));
+  });
+  const shippedPackFile = (code) => {
+    const dist = path.join(ctx.repo || path.resolve(sidecarDir, "..", ".."), "dist", "lang");
+    const dir = fs.existsSync(dist) ? dist : path.join(ctx.repo || path.resolve(sidecarDir, "..", ".."), "public", "lang");
+    const file = path.join(dir, `${code}.json`);
+    return /^[a-z]{2,3}$/.test(code) && fs.existsSync(file) ? file : "";
+  };
+  const aiOffered = (code) => aiKit().aiTranslationOffered({ language: code, modelChoice: engine.tlModels.readModelChoice(storage.getItem(engine.tlModels.modelChoiceKey(code))) }) === true;
+  const aiSettingOn = () => aiKit().readAiTranslationSetting(storage.getItem(aiKit().AI_TRANSLATION_SETTING)) === true;
+  const routers = new Map();
+  const routerFor = (code) => {
+    if (!routers.has(code)) {
+      const state = { on: false, packed: false, known: new Set(), failed: null, modelFailed: false };
+      const router = aiKit().createTranslationRouter({
+        isAiOn: () => state.on,
+        askAi: async (batch) => engine.aiMain.callAI(aiKit().aiTranslationPrompt({ language: code, name: i18n.languageDisplayName(code), packed: state.packed, count: batch.length }), [
+          { role: "user", parts: [{ text: JSON.stringify(batch) }] },
+        ], { languageMode: "none", taskKey: "translation", requestKind: engine.requestBudget.BACKGROUND_REQUEST }),
+        askModel: async (batch) => {
+          try {
+            return await translationRunnerFor({ cacheDir, models: engine.tlModels, standIn }).translate(code, batch);
+          } catch (error) {
+            state.modelFailed = clean(error?.message) || "unknown";
+            return batch.map(() => null);
+          }
+        },
+        known: (source) => (state.known.has(source) ? true : undefined),
+        cache: aiEntriesFor(code),
+        onAiFailure: (error, { halted }) => {
+          state.failed = { message: clean(error?.message) || "unknown", halted: halted === true };
+        },
+      });
+      routers.set(code, { router, state });
+    }
+    return routers.get(code);
+  };
+
   const languageEntry = (code) => list(i18n.LANGUAGES).find((entry) => entry.code === code) ?? null;
   const languageInfo = (code = language()) => ({
     code,
@@ -402,6 +452,78 @@ export const register = (ctx) => {
         return { ok: true, pairs, unusable };
       } catch (error) {
         return { ok: false, error: clean(error?.message) || "unknown" };
+      }
+    },
+    "shell.language.ai": async ({ code = "", reset = false } = {}) => {
+      const lang = clean(code).toLowerCase();
+      if (!lang || lang === "en") return { setting: false, offered: false, shippedFile: "", entries: {} };
+      if (reset) {
+        routers.delete(lang);
+        aiEntriesByLanguage.delete(lang);
+      }
+      return { setting: aiSettingOn(), offered: aiOffered(lang), shippedFile: i18n.hasShippedPack(lang) === true ? shippedPackFile(lang) : "", entries: Object.fromEntries(aiEntriesFor(lang)) };
+    },
+    "shell.language.step": async ({ code = "", strings = [], known = [], ai = false, packed = false } = {}) => {
+      const lang = clean(code).toLowerCase();
+      const pending = list(strings).map((entry) => String(entry));
+      const { router, state } = routerFor(lang);
+      state.on = ai === true && aiSettingOn() && aiOffered(lang);
+      state.packed = packed === true;
+      state.known = new Set(list(known).map((entry) => String(entry)));
+      state.failed = null;
+      state.modelFailed = false;
+      try {
+        const result = await router.step(pending);
+        const learned = learnedFor(lang);
+        const entries = {};
+        let byAi = false;
+        for (const { source, text, by } of result.translated) {
+          if (by === "ai") {
+            byAi = true;
+            continue;
+          }
+          learned.set(source, text);
+          entries[source] = text;
+        }
+        if (Object.keys(entries).length) {
+          persistLearned(lang);
+          void syncEntries(lang, entries);
+        }
+        if (byAi) persistAiEntries(lang);
+        return {
+          ok: true,
+          translated: plain(result.translated),
+          kept: result.kept,
+          unusable: result.unusable,
+          asked: result.asked ?? "",
+          aiFailed: state.failed,
+          halted: router.halted(),
+          modelFailed: state.modelFailed || "",
+        };
+      } catch (error) {
+        return { ok: false, error: clean(error?.message) || "unknown" };
+      }
+    },
+    "shell.language.scenarioPack": async ({ code = "", id = "" } = {}) => {
+      const lang = clean(code).toLowerCase();
+      const none = { code: "", id: "", version: "", entries: {} };
+      if (!lang || lang === "en") return none;
+      let scenarioId = clean(id);
+      let version = "";
+      if (!scenarioId) {
+        const state = engine.getLibraryState?.() ?? {};
+        const scenario = state.activeGame?.id ? state.runtimeScenario : null;
+        if (!scenario || !list(scenario.languageCodes).includes(lang)) return none;
+        scenarioId = clean(scenario.id);
+        version = `${scenarioId}:${lang}:${clean(scenario.updatedAt)}`;
+      }
+      if (!scenarioId) return none;
+      try {
+        const body = await api(`/api/scenarios/${encodeURIComponent(scenarioId)}/languages/${encodeURIComponent(lang)}`);
+        const strings = body?.strings && typeof body.strings === "object" && !Array.isArray(body.strings) ? body.strings : {};
+        return { code: lang, id: scenarioId, version, entries: plain(strings) };
+      } catch {
+        return { ...none, code: lang, id: scenarioId, version };
       }
     },
     "shell.language.content": async () => {

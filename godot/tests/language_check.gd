@@ -179,6 +179,8 @@ func _run() -> void:
 	var placed: Dictionary = (await main.engine.request("shell.language.translate", {"code": "fi", "strings": ["It has 3 regions.", "{{count}} armies"]})).get("result", {})
 	_check("numbers and slots survive the model's answer", JSON.stringify(placed.get("pairs", [])) == JSON.stringify([["It has 3 regions.", "FI·It has 3 regions."], ["{{count}} armies", "FI·{{count}} armies"]]), JSON.stringify(placed))
 	await _shoot("language-03-finnish")
+	await _check_ai_translation(i18n, unpacked)
+	await _check_scenario_pack(i18n)
 
 	switching[0] = ""
 	run_switch.call("en")
@@ -218,6 +220,88 @@ func _run() -> void:
 
 	_say("%d failures" % failures.size())
 	_finish(0 if failures.is_empty() else 1)
+
+
+func _find_label(node: Node, text: String) -> Label:
+	if node is Label and (node as Label).text == text and (node as Label).is_visible_in_tree():
+		return node as Label
+	for child in node.get_children():
+		var found := _find_label(child, text)
+		if found:
+			return found
+	return null
+
+
+func _open_general(engine: EngineLink) -> SettingsWorkspace:
+	var workspace := SettingsWorkspace.new()
+	workspace.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	var layer := CanvasLayer.new()
+	layer.layer = 90
+	root.add_child(layer)
+	layer.add_child(workspace)
+	workspace.setup(engine, {"scope": "menu", "section": "general"})
+	await workspace.open("general")
+	await _frames(6)
+	return workspace
+
+
+func _close_general(workspace: SettingsWorkspace) -> void:
+	var layer := workspace.get_parent()
+	layer.queue_free()
+	await _frames(2)
+
+
+func _check_ai_translation(i18n: I18n, unpacked: String) -> void:
+	var values: Dictionary = (await main.engine.request("settings.values")).get("result", {})
+	_check("Translate with my AI is offered in a language with a downloaded model", bool(values.get("aiTranslationOffered", false)) and not bool((values.get("flags", {}) as Dictionary).get("i18n_translate_with_ai", true)), JSON.stringify(values.get("aiTranslationOffered")))
+	var workspace := await _open_general(main.engine)
+	var title := _find_label(workspace, "Translate with my AI")
+	var helper := _find_label(workspace, "Uses your AI provider instead of the translation model, and spends its requests.")
+	_check("Settings → General → Language has the switch, with beta's line under it", title != null and helper != null and helper.get_global_rect().position.y > title.get_global_rect().position.y)
+	await _shoot("language-06-translate-with-my-ai")
+	await _close_general(workspace)
+	await main.engine.request("settings.flag", {"key": "i18n_translate_with_ai", "value": true})
+	await i18n.follow_ai_switch()
+	_check("turned on, the player's AI translates for Finnish", i18n.ai_in_use() and i18n.ai_shown)
+	TranslationServer.translate(unpacked)
+	_check("what the model translated is asked of the AI again as it is shown", await _until(func() -> bool: return i18n.book.translate(unpacked) == "AI·" + unpacked, 60.0), str(i18n.book.translate(unpacked)))
+	i18n.label_name("Duchy of Lower Silesia")
+	_check("a scenario's names go to the AI, not the model", await _until(func() -> bool: return I18n.lookup("Duchy of Lower Silesia") == "AI·Duchy of Lower Silesia", 60.0), I18n.lookup("Duchy of Lower Silesia"))
+	var stored: Dictionary = (await main.engine.request("shell.language.ai", {"code": "fi"})).get("result", {})
+	_check("the AI's translations are kept on this device apart from the model's", str((stored.get("entries", {}) as Dictionary).get(unpacked, "")) == "AI·" + unpacked, JSON.stringify(stored.get("entries", {})))
+	var broken := "[stand-in fails] Hold the line"
+	i18n.label_name(broken)
+	_check("a request that fails leaves the batch to the model", await _until(func() -> bool: return I18n.lookup(broken) == "FI·" + broken, 60.0), I18n.lookup(broken))
+	_check("and the pill says so, once a session", i18n._ai_notice_shown and I18n.AI_FAILED_TEXT == "Your AI could not translate, so the translation model on this device did.")
+	await main.engine.request("settings.flag", {"key": "i18n_translate_with_ai", "value": false})
+	await i18n.follow_ai_switch()
+	_check("turned off, the model's translations are back at once", not i18n.ai_shown and i18n.book.translate(unpacked) == "FI·" + unpacked, str(i18n.book.translate(unpacked)))
+
+
+func _check_scenario_pack(i18n: I18n) -> void:
+	var created: Dictionary = await main.engine.request("editor.create")
+	var opened: Dictionary = created.get("result", {}) if created.get("ok", false) and created.get("result") is Dictionary else {}
+	var id := str(opened.get("id", ""))
+	_check("a scenario is made for the pack check", not id.is_empty(), JSON.stringify(created).left(200))
+	if id.is_empty():
+		return
+	await main.engine.request("scenarioLanguages.open", {"id": id})
+	var view: Dictionary = (await main.engine.request("scenarioLanguages.view", {"id": id, "form": {"name": "New Scenario"}, "codes": ["fi", "de"], "languages": {}})).get("result", {})
+	_check("the Languages tab plans its requests before Generate", int(view.get("plan", 0)) >= 1 and (view.get("rows", []) as Array).size() == 2, JSON.stringify(view).left(300))
+	var made: Dictionary = (await main.engine.request("scenarioLanguages.generate", {"id": id, "form": {"name": "New Scenario"}, "codes": ["fi"], "languages": {}})).get("result", {})
+	var packs: Dictionary = made.get("packs", {}) if made.get("packs") is Dictionary else {}
+	var fi: Dictionary = packs.get("fi", {}) if packs.get("fi") is Dictionary else {}
+	_check("Generate asks the author's AI and fills the pack", str(fi.get("New Scenario", "")) == "FI~New Scenario" and str(made.get("failed", "")).is_empty(), JSON.stringify(made).left(300))
+	var form: Dictionary = (opened.get("form", {}) as Dictionary).duplicate(true) if opened.get("form") is Dictionary else {}
+	form["languages"] = packs
+	var saved: Dictionary = await main.engine.request("editor.save", {"kind": "scenario", "id": id, "form": form, "savedForm": opened.get("form", {})})
+	_check("the packs are saved with the scenario", saved.get("ok", false), str(saved.get("error", "")))
+	var read: Dictionary = (await main.engine.request("shell.language.scenarioPack", {"code": "fi", "id": id})).get("result", {})
+	_check("a game reads one language's pack from the library", str((read.get("entries", {}) as Dictionary).get("New Scenario", "")) == "FI~New Scenario", JSON.stringify(read).left(300))
+	i18n.set_scenario_pack("fi", read.get("entries", {}))
+	_check("the scenario's own pack comes first, over the model's", I18n.lookup("New Scenario") == "FI~New Scenario", I18n.lookup("New Scenario"))
+	i18n.set_scenario_pack("", {})
+	_check("and goes when the scenario is left", I18n.lookup("New Scenario") != "FI~New Scenario", I18n.lookup("New Scenario"))
 
 
 func _rtl_rows(node: Node) -> int:

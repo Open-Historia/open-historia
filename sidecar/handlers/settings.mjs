@@ -27,6 +27,7 @@ const MAP_KEYS = {
   vaultDoorAlways: "vault_door_every_time",
   seasonsWeather: "map_seasons_weather",
   weatherEffects: "map_weather_effects",
+  translateWithAi: "i18n_translate_with_ai",
 };
 
 const DEFAULT_ON = new Set([
@@ -51,6 +52,7 @@ const FLAG_LABELS = {
   [MAP_KEYS.seasonsWeather]: "Seasons and weather",
   [MAP_KEYS.weatherEffects]: "Weather effects",
   [MAP_KEYS.defaultBasemapOn]: "Use my default basemap",
+  [MAP_KEYS.translateWithAi]: "Translate with my AI",
 };
 
 const VALUE_LABELS = {
@@ -87,7 +89,6 @@ const PLAYER_FOCUS_LEVELS = [
 ];
 
 const OTHER_REQUEST_TASKS = [
-  { key: "translation", label: "Translation" },
   { key: "other", label: "Other" },
   { key: "direct", label: "Other" },
 ];
@@ -324,6 +325,7 @@ export const register = (ctx) => {
       rating: storage.getItem("ai_rate_generations") === "1",
       uiLanguage,
       chatLanguage,
+      aiTranslationOffered: engine.aiTranslation?.aiTranslationOffered?.({ language: uiLanguage, modelChoice: engine.tlModels?.readModelChoice?.(storage.getItem(engine.tlModels.modelChoiceKey(uiLanguage))) }) === true,
       languages: LANGUAGES.map((entry) => ({ ...entry, builtIn: entry.code === "en" || SHIPPED_PACKS.has(entry.code) })),
       uiLanguages: (engine.shellI18n?.getUiLanguageOptions?.() ?? LANGUAGES).map((entry) => ({ code: entry.code, name: entry.name, native: entry.native })),
       deviceProfile: deviceOverride === "constrained" || deviceOverride === "full" ? deviceOverride : "",

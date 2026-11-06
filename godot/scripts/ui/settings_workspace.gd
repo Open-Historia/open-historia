@@ -1115,6 +1115,12 @@ func _build_general() -> void:
 			_values = reply
 		_values["uiLanguage"] = shown
 		_rerender(), true))
+	if str(_values.get("uiLanguage", "en")) != "en" and bool(_values.get("aiTranslationOffered", false)):
+		_add_toggle(language, "Translate with my AI", _flag("i18n_translate_with_ai"), func() -> void:
+			await _set_flag("i18n_translate_with_ai", not _flag("i18n_translate_with_ai"))
+			if I18n.current != null:
+				I18n.current.follow_ai_switch())
+		_add_toggle_note(language, "Uses your AI provider instead of the translation model, and spends its requests.")
 	language.add_child(_language_picker("chat", "AI chat language", str(_values.get("chatLanguage", "en")), func(code: String) -> void:
 		var reply: Variant = await _req("settings.chatLanguage", {"code": code})
 		if typeof(reply) == TYPE_DICTIONARY:
