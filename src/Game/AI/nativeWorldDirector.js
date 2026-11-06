@@ -70,9 +70,6 @@ const HARD_MILITARY_CONSEQUENCE_RE =
 const STORYLINE_ESCALATION_OR_FAILURE_RE =
   /\b(?:without agreement|fail(?:s|ed|ure|ing)?|break(?:s|ing)? down|collapse(?:s|d)?|walk(?:s|ed)? out|reject(?:s|ed|ion)?|renewed? warnings?|threat(?:s|en|ened|ening)?|ultimatum|missile test|weapons? test|mobiliz(?:e|es|ed|ation)|call(?:s|ed)? up (?:the )?reserves|reserve activation|force concentration|troop buildup|deploy(?:s|ed|ment)|dispers(?:e|es|ed|al)|combat alert|nuclear alert|border incident|airspace violation|blockade|sanction(?:s|ed)?|retaliat(?:e|es|ed|ion)|strike|attack|clash(?:es)?|warning shots?|sabotage|covert operation)\b/i;
 
-const STORYLINE_DEESCALATION_RE =
-  /\b(?:agreement reached|deal reached|ceasefire|armistice|stand(?:s|ing)? down|de[- ]?escalat(?:e|es|ed|ion)|demobiliz(?:e|es|ed|ation)|withdraw(?:s|n|al|ing)?|pulls? back|redeploys? away|sanctions? relief|lifts? sanctions?|reopens? talks|resumes? talks|confidence[- ]building|hotline established|inspection agreement|mediation succeeds?|accepts? mediation|restraint agreement|moratorium|suspends? (?:the )?(?:test|exercise|deployment))\b/i;
-
 
 const UNRESOLVED_CRISIS_CUE_RE =
   /\b(?:crisis|standoff|showdown|deadlock|without agreement|talks? (?:fail|collapse|break down)|missile test|nuclear test|nuclear alert|mobiliz(?:e|es|ed|ation)|reserve call[- ]?up|ultimatum|blockade|border clash|border incident|incursion|airspace violation|coup attempt|mutiny|uprising|rebellion|insurgency|mass protest|general strike|nationwide strike|state of emergency|martial law|banking panic|currency crash|financial panic|government crisis|constitutional crisis|secession crisis|separatist crisis|military confrontation|armed confrontation)\b/i;
@@ -2673,41 +2670,6 @@ export const validateWorldStorylinePayload = (
     // visible milestones, AND semantic state all remained unchanged.
     const prior = existingById.get(id) || normalizeStorylineForDirector(selected);
     const activeWar = Boolean(activeCanonicalWarForStoryline(prior, world));
-
-    // Hidden numeric direction must agree with the linked visible development.
-    // Failed talks + renewed threats cannot quietly lower crisis pressure unless
-    // the same event establishes a concrete de-escalatory fact.
-    //
-    // Only for a storyline that is actually a crisis: pressure already at the
-    // high-pressure threshold, or a war. The cue list is plain keywords, and on
-    // a quiet programme they fire on ordinary words — a player's Iranian cyber
-    // programme at pressure 18 lost a whole jump to the canned fallback because
-    // its event "deploys" new cryptographic hardware and it eased from 18 to 14.
-    // A low-pressure process drifting a few points lower is not crisis pressure
-    // being quietly erased. "Crisis" is judged from the numbers the engine keeps,
-    // not from the storyline's kind label: the model writes that label freely
-    // and could call a hardware rollout a crisis.
-    const crisisStoryline =
-      activeWar ||
-      normalizeString(prior?.kind).toLowerCase() === "war" ||
-      clampPercent(prior?.pressure) >= HIGH_PRESSURE_STAGNATION_THRESHOLD;
-    const linkedEventText = normalizeArray(update?.eventIndexes)
-      .map((eventIndex) => normalizeArray(candidate?.events)[eventIndex])
-      .filter(Boolean)
-      .map((event) =>
-        `${normalizeString(event?.title)} ${normalizeString(event?.description)}`
-      )
-      .join(" ");
-    const pressureDelta =
-      clampPercent(update?.pressure) - clampPercent(prior?.pressure);
-    if (
-      crisisStoryline &&
-      pressureDelta <= -4 &&
-      STORYLINE_ESCALATION_OR_FAILURE_RE.test(linkedEventText) &&
-      !STORYLINE_DEESCALATION_RE.test(linkedEventText)
-    ) {
-      return `Storyline ${id} lowers pressure by ${Math.abs(pressureDelta)} point(s), but its linked event(s) contain escalation/failure cues and no concrete de-escalatory outcome. Keep/increase pressure, or establish the factual de-escalation that justifies the drop.`;
-    }
 
     if (
       passDays >= 21 &&

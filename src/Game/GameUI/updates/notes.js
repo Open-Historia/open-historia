@@ -54,6 +54,104 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // MapLibre 6.16, built from source with the game's own changes (vendor/maplibre-gl/README.md): placement paced, sources
+    // sharing their tile walks, clipping masks kept, tiles stored compactly. Measured on the production builds with the CPU
+    // slowed 6x: panning 24 to 46 fps with terrain, 29 to 49 without; memory 3.1 GB to 1.9 GB. The land mask waits until the
+    // map has stayed put (FrontLayers.jsx). On phones the browser's backdrop blur held the map to half its frame rate whatever
+    // its strength, so the map paints the glass itself (Map/frostedPanels.js): 52 to 88 fps on the owner's phone.
+    id: "2026-11-smoother-lighter-map",
+    kind: "minor",
+    date: "2026-11-06",
+    channel: "beta",
+    banners: [
+      {
+        title: "A smoother, lighter map",
+        items: [
+          "On modest computers the map now moves about twice as smoothly as you drag it around, with 3D terrain on or off, and battles replay more smoothly too.",
+          "On phones the map now moves much more smoothly as you drag and pinch it, with the same frosted panels over it.",
+          "On phones, country names on the far side of the globe no longer show through it.",
+          "On a computer the game now uses over a third less memory with a big map open, and on a phone a little less.",
+          "The map no longer catches for a moment when you let go of it near a war, and small, slow moves run without stutter.",
+          "The map looks the same, though a few labels may sit a little differently, and while you move one can take a moment to appear.",
+        ],
+      },
+    ],
+  },
+  {
+    // A sweep for the text players read that no language pack held (2026-11-06): the update notices' lines, the
+    // refusals and messages modules return (War Room, fleets, Workshop imports, shared games, a stopped skip), the
+    // browser's own confirm() and alert() boxes (runtime/nativeDialogs.js) and the desktop app's menus and dialogs
+    // (electron/uiWords.cjs). scripts/i18n/extractStrings.mjs now reads them, so the catalog test guards them.
+    id: "2026-11-more-translated",
+    kind: "minor",
+    date: "2026-11-06",
+    channel: "beta",
+    banners: [
+      {
+        title: "More of the game in your language",
+        items: [
+          "Much more of the game is now translated: the update notices and their history, what the War Room and your fleets answer, the Workshop's imports and border check, joining a shared game, and why a time skip stopped.",
+          "The boxes that ask you to confirm something, or tell you something went wrong, are in your language too.",
+          "On the desktop app, the right-click menu and the box shown when the game's page stops are translated as well.",
+        ],
+      },
+    ],
+  },
+  {
+    // "add a feature to ship high quality api generated language packs with scenarios" (the owner, 2026-11-06):
+    // scenario.languages (server/scenarioLanguages.js), the Workshop's Languages tab (ScenarioLanguagesPanel.jsx),
+    // read first in a game (translator.js setScenarioLanguagePack).
+    id: "2026-11-scenario-languages",
+    kind: "minor",
+    date: "2026-11-06",
+    channel: "beta",
+    banners: [
+      {
+        title: "Scenarios in your language",
+        items: [
+          "A scenario can now ship its own text translated: its name and description, its countries, regions and cities, its events and its politics.",
+          "Scenario makers: open a scenario's Languages tab, pick the languages and press Generate. Your AI translates it all in a few large requests, and next time only what is new or changed.",
+          "When a scenario has a translation for your language, you read it first, with no request of yours and no translation model.",
+        ],
+      },
+    ],
+  },
+  {
+    // "add an toggle to do translation with your api (still must require downloading the translation model, this
+    // option exists if they are unhappy with the models quality)" (the owner, 2026-11-06): runtime/aiTranslation.js,
+    // Settings → General → Language.
+    id: "2026-11-translate-with-my-ai",
+    kind: "minor",
+    date: "2026-11-06",
+    channel: "beta",
+    banners: [
+      {
+        title: "Translate with your own AI",
+        items: [
+          "Languages with a translation model have a new switch in Settings → General → Language: Translate with my AI. Turned on, your AI provider translates what the model on this device would, in a few large requests that count against your AI requests. The model is still downloaded, and takes over whenever your AI does not answer.",
+        ],
+      },
+    ],
+  },
+  {
+    // A player's report (2026-11-06, 1836 France): every time skip fell back to the stand-in events, "Storyline
+    // storyline-fr-franchise-1836 lowers pressure by 47 point(s), but its linked event(s) contain escalation/failure
+    // cues": reforms that passed over a bloc that "rejects" them. The check read the events for words; "dont do
+    // keywording its super unreliable" (the owner, 2026-11-06), so it is gone (AI/nativeWorldDirector.js).
+    id: "2026-11-storyline-pressure-held",
+    kind: "minor",
+    date: "2026-11-05",
+    channel: "beta",
+    banners: [
+      {
+        title: "Easing storylines no longer cost a time skip",
+        items: [
+          "A time skip that eases a storyline's pressure is no longer thrown away for the stand-in events because of the words in its events: the pressure the skip gives it stands.",
+        ],
+      },
+    ],
+  },
+  {
     // "the hello welcome introduction switches languages about 2 times too fast. also it should fade out the last
     // language and fade in the new one" (the owner, 2026-11-06, of the native app), then: "make the greeting thing on
     // the electron apps be the same as on native": a greeting every 4.4 s, 0.6 s in and 0.6 s out (FirstSetup.jsx).
@@ -313,6 +411,7 @@ const NEW_UPDATES = [
     // (Map/clippingMasks.js), sources share what they work out (Map/sourceCaches.js), and the idle pulse asks the
     // world each whole-map question once and lets the map draw between its stages (runtime/worldLookups.js).
     // Every pixel and every prompt checked identical; on the owner's phone the pulse's freeze fell from 1.6 s to 0.45 s.
+    // (Those three files have since become the game's own MapLibre: 2026-11-smoother-lighter-map.)
     id: "2026-11-less-for-the-gpu",
     kind: "minor",
     date: "2026-11-05",

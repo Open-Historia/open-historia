@@ -944,6 +944,7 @@ export const hotspotsOf = (repairs, pad) =>
 export const touchesHotspot = (extent, hotspots) =>
   hotspots.some((spot) => !(extent[2] < spot[0] || extent[0] > spot[2] || extent[3] < spot[1] || extent[1] > spot[3]));
 
+// i18n-ignore: a count and its noun, looked up whole where it is used.
 const plural = (n, word) => `${formatCount(n)} ${word}${count(n) === 1 ? "" : word.endsWith("s") ? "es" : "s"}`;
 
 // What a heavy map's sweep could not look at, said after the result. The

@@ -16,6 +16,7 @@ import { fightingIn, playerFrontsKey } from "./warRoomData.js";
 import { presenceFor, useDiscordPresence } from "../../runtime/discordPresence.js";
 import { musicSceneOf, setMusicScene } from "../../runtime/ambientMusic.js";
 import { followScenarioMusic } from "../../runtime/scenarioMusic.js";
+import { useScenarioLanguagePack } from "../../runtime/useScenarioLanguagePack.js";
 import { useWarRoom } from "../Map/warRoomStore.js";
 import { DISCORD_URL, GITHUB_URL, REDDIT_URL } from "../../runtime/communityLinks.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
@@ -681,6 +682,9 @@ const Main = ({
   // scenario's is asked of the hub.
   const scenarioMusicKey = JSON.stringify((gameEntered && activeGame?.id && runtimeScenario?.music) || null);
   useEffect(() => { followScenarioMusic(JSON.parse(scenarioMusicKey)); }, [scenarioMusicKey]);
+  // The scenario's own text in the player's language, from the pack it ships
+  // (runtime/useScenarioLanguagePack.js), when it has one for that language.
+  useScenarioLanguagePack(activeGame?.id ? runtimeScenario : null);
   // And it follows where the player is (runtime/ambientMusic.js): the menu, a
   // game opening under its cover, the game, the game with the player at war,
   // and the war room or a battlefield being shown, which the war room's own

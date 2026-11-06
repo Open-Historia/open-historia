@@ -13,6 +13,7 @@
 import { normalizePackGuidance, PROMPT_MODEL_VERSION } from "../Game/AI/promptGuidance.js";
 import { normalizeFeatureSettings } from "../../server/gameFeatures.js";
 import { normalizeScenarioMusic } from "../../server/scenarioMusic.js";
+import { normalizeScenarioLanguages, scenarioLanguagePack } from "../../server/scenarioLanguages.js";
 import { buildScenarioSnapshot, isDetailFieldPath, politicsEntries, POLITICS_FIELDS, POLITICS_LEDGER_KEYS, sameValue } from "./scenarioChanges.js";
 import { CANON_MODEL_VERSION } from "./scenarioCanon.js";
 import { normalizeScenarioPrehistory } from "./scenarioPrehistory.js";
@@ -49,6 +50,8 @@ export const detailValueIn = (snapshot, change) => {
       return snapshot.institutionLogos ?? null;
     case "music":
       return snapshot.music ?? null;
+    case "languages":
+      return snapshot.languages?.[change.code] ?? null;
     case "cover":
       return snapshot.cover?.hash ?? null;
     default:
@@ -58,9 +61,15 @@ export const detailValueIn = (snapshot, change) => {
 
 // A suggestion's music is a file's: read as the stores would keep it, so what
 // is compared and applied is only ever lists of track ids.
+// A language pack the same: only strings, under a language's code.
+const packOrNull = (code, value) => {
+  const pack = scenarioLanguagePack({ [code]: value }, code);
+  return Object.keys(pack).length ? pack : null;
+};
 const sideOf = (change, value) => (change.kind === "cover" ? value?.hash ?? null
   : change.kind === "music" ? normalizeScenarioMusic(value)
-    : value);
+    : change.kind === "languages" ? packOrNull(change.code, value)
+      : value);
 const suggestedValueOf = (change) => sideOf(change, change.to);
 const postedValueOf = (change) => sideOf(change, change.from);
 
@@ -153,6 +162,12 @@ export const applyToSnapshot = (snapshot, change) => {
   } else if (change.kind === "stats") snapshot.stats = value ?? null;
   else if (change.kind === "institutionLogos") snapshot.institutionLogos = value ?? null;
   else if (change.kind === "music") snapshot.music = value ?? null;
+  else if (change.kind === "languages") {
+    const languages = { ...(snapshot.languages ?? {}) };
+    if (value) languages[change.code] = value;
+    else delete languages[change.code];
+    snapshot.languages = Object.keys(languages).length ? languages : null;
+  }
   else if (change.kind === "history") snapshot.history = applyHistoryChange(snapshot.history, change);
   else if (change.kind === "cover") snapshot.cover = value ? { hash: value } : null;
 };
@@ -294,6 +309,14 @@ export const buildDetailSave = (accepted, details) => {
       // A scenario detail like the features: part of the save itself. null
       // takes the author's music away, which is what the suggestion asked.
       patch.music = normalizeScenarioMusic(change.to);
+    } else if (change.kind === "languages") {
+      // The author's packs with this language's replaced, or taken away: the
+      // others stay as they are.
+      const languages = { ...(patch.languages ?? normalizeScenarioLanguages(details?.scenario?.languages) ?? {}) };
+      const pack = packOrNull(change.code, change.to);
+      if (pack) languages[change.code] = pack;
+      else delete languages[change.code];
+      patch.languages = normalizeScenarioLanguages(languages);
     } else if (change.kind === "cover") {
       if (!change.to) clears.push("cover");
       else if (change.to.base64) uploads.push({ key: "cover", base64: change.to.base64, contentType: change.to.contentType || "image/jpeg" });

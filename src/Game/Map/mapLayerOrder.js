@@ -205,6 +205,9 @@ export const MAP_LAYER_ORDER = [
   // What flies over all of it: missiles, aircraft and what they do where they
   // arrive (StrikeLayers.jsx). Nothing in it can be clicked.
   "strikes-flight",
+
+  // The interface's glass, a blur of all of the above (frostedPanels.js).
+  "interface-frost",
 ];
 
 const NATGEO_REFERENCE_TIER_METADATA_KEY = "openhistoria:natgeo-reference-tier";

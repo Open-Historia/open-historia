@@ -1,0 +1,353 @@
+import {Actor, type ActorTarget, type IActor} from '../util/actor.ts';
+import {StyleLayerIndex} from '../style/style_layer_index.ts';
+import {VectorTileWorkerSource} from './vector_tile_worker_source.ts';
+import {RasterDEMTileWorkerSource} from './raster_dem_tile_worker_source.ts';
+import {setProjectionHandler} from './projection_handler_worker.ts';
+import {rtlWorkerPlugin, type RTLTextPlugin} from './rtl_text_plugin_worker.ts';
+import {GeoJSONWorkerSource, type LoadGeoJSONParameters} from './geojson_worker_source.ts';
+import {isWorker} from '../util/util.ts';
+import {addProtocol, removeProtocol} from './protocol_crud.ts';
+import {makeRequest} from '../util/ajax.ts';
+import {
+    MessageType,
+    type ClusterIDAndSource,
+    type GetClusterLeavesParams,
+    type RemoveSourceParams,
+    type UpdateLayersParameters
+} from '../util/actor_messages.ts';
+
+import type {PluginState} from './rtl_text_plugin_status.ts';
+import type {
+    WorkerSource,
+    WorkerSourceConstructor,
+    WorkerTileParameters,
+    WorkerDEMTileParameters,
+    TileParameters
+} from '../source/worker_source.ts';
+import type {WorkerGlobalScopeInterface} from '../util/web_worker.ts';
+import type {LayerSpecification} from '@maplibre/maplibre-gl-style-spec';
+
+/**
+ * Loads an external script into worker (global) scope. The loader picks a
+ * strategy based on what the script actually is:
+ *
+ * - `.mjs` URLs: dynamic `import()` directly, no fetch/sniff overhead. Worker
+ *   CSP needs `script-src` to permit the URL.
+ *
+ * - Other URLs: fetch the source and sniff for ESM syntax (top-level `import`
+ *   or `export`). If ESM is detected, run it through a blob-URL dynamic
+ *   `import()` so the browser parses it as a module; this requires
+ *   `script-src blob:` in the worker CSP. Otherwise treat it as UMD/IIFE and
+ *   run it via `globalThis.eval`, which requires `script-src 'unsafe-eval'`.
+ */
+async function loadScript(url: string): Promise<void> {
+    if (url.endsWith('.mjs')) {
+        await import(/* @vite-ignore */ url);
+        return;
+    }
+    const response = await fetch(url, {credentials: 'same-origin'});
+    if (!response.ok) {
+        throw new Error(`Failed to load ${url}: ${response.status}`);
+    }
+    const code = await response.text();
+    // Top-level `import`/`export` keywords are unique to ESM. UMD scripts
+    // assign to `module.exports` / `exports.foo` — those don't match.
+    if (/^[ \t]*(import|export)\s/m.test(code)) {
+        const blobUrl = URL.createObjectURL(new Blob([code], {type: 'text/javascript'}));
+        try {
+            await import(/* @vite-ignore */ blobUrl);
+        } finally {
+            URL.revokeObjectURL(blobUrl);
+        }
+        return;
+    }
+    // Run the code in the worker's global scope (not inside this function),
+    // so UMD/IIFE plugin scripts can assign to globals like
+    // `self.registerRTLTextPlugin`. Calling eval as a property access
+    // (rather than the bare `eval` identifier) is what makes it global-scope.
+    globalThis.eval(code);
+}
+
+/**
+ * The Worker class responsible for background thread related execution
+ */
+export default class Worker {
+    self: WorkerGlobalScopeInterface & ActorTarget;
+    actor: Actor;
+    layerIndexes: {[_: string]: StyleLayerIndex};
+    availableImages: {[_: string]: string[]};
+    externalWorkerSourceTypes: { [_: string]: WorkerSourceConstructor };
+    /**
+     * This holds a cache for the already created worker source instances.
+     * The cache is build with the following hierarchy:
+     * [mapId][sourceType][sourceName]: worker source instance
+     * sourceType can be 'vector' for example
+     */
+    workerSources: {
+        [_: string]: {
+            [_: string]: {
+                [_: string]: WorkerSource;
+            };
+        };
+    };
+    /**
+     * This holds a cache for the already created DEM worker source instances.
+     * The cache is build with the following hierarchy:
+     * [mapId][sourceType]: DEM worker source instance
+     * sourceType can be 'raster-dem' for example
+     */
+    demWorkerSources: {
+        [_: string]: {
+            [_: string]: RasterDEMTileWorkerSource;
+        };
+    };
+    referrer: string;
+    globalStates: Map<string, Record<string, any>>;
+    /** Scripts imported into this worker, by url, so a url sent twice runs once. */
+    importedScripts: Map<string, Promise<void>>;
+
+    constructor(self: WorkerGlobalScopeInterface & ActorTarget) {
+        this.self = self;
+        this.actor = new Actor(self);
+
+        this.layerIndexes = {};
+        this.availableImages = {};
+
+        this.workerSources = {};
+        this.demWorkerSources = {};
+        this.externalWorkerSourceTypes = {};
+
+        this.globalStates = new Map<string, Record<string, any>>();
+        this.importedScripts = new Map<string, Promise<void>>();
+
+        this.self.registerWorkerSource = (name: string, WorkerSource: WorkerSourceConstructor) => {
+            if (this.externalWorkerSourceTypes[name]) {
+                throw new Error(`Worker source with name "${name}" already registered.`);
+            }
+            this.externalWorkerSourceTypes[name] = WorkerSource;
+        };
+
+        this.self.addProtocol = addProtocol;
+        this.self.removeProtocol = removeProtocol;
+
+        /**
+         * Invoked by a right-to-left text plugin once it has fetched and parsed.
+         *
+         * @deprecated MapLibre shapes Arabic and reorders bidirectional text itself. A plugin
+         * registered here still replaces the built-in implementation, but this will be removed in a
+         * future release.
+         */
+        this.self.registerRTLTextPlugin = (rtlTextPlugin: RTLTextPlugin) => {
+            rtlWorkerPlugin.setMethods(rtlTextPlugin);
+        };
+
+        this.self.makeRequest = makeRequest;
+
+        /**
+         * Invoked by a script loaded with `importScriptInWorkers`, see the custom CRS guide.
+         */
+        this.self.setProjectionHandler = setProjectionHandler;
+
+        this.actor.registerMessageHandler(MessageType.loadDEMTile, (mapId: string, params: WorkerDEMTileParameters) => {
+            return this._getDEMWorkerSource(mapId, params.source).loadTile(params);
+        });
+
+        this.actor.registerMessageHandler(MessageType.removeDEMTile, async (mapId: string, params: TileParameters) => {
+            this._getDEMWorkerSource(mapId, params.source).removeTile(params);
+        });
+
+        this.actor.registerMessageHandler(MessageType.getClusterExpansionZoom, async (mapId: string, params: ClusterIDAndSource) => {
+            return (this._getWorkerSource(mapId, params.type, params.source) as GeoJSONWorkerSource).getClusterExpansionZoom(params);
+        });
+
+        this.actor.registerMessageHandler(MessageType.getClusterChildren, async (mapId: string, params: ClusterIDAndSource) => {
+            return (this._getWorkerSource(mapId, params.type, params.source) as GeoJSONWorkerSource).getClusterChildren(params);
+        });
+
+        this.actor.registerMessageHandler(MessageType.getClusterLeaves, async (mapId: string, params: GetClusterLeavesParams) => {
+            return (this._getWorkerSource(mapId, params.type, params.source) as GeoJSONWorkerSource).getClusterLeaves(params);
+        });
+
+        this.actor.registerMessageHandler(MessageType.loadData, (mapId: string, params: LoadGeoJSONParameters) => {
+            return (this._getWorkerSource(mapId, params.type, params.source) as GeoJSONWorkerSource).loadData(params);
+        });
+
+        this.actor.registerMessageHandler(MessageType.loadTile, (mapId: string, params: WorkerTileParameters) => {
+            return this._getWorkerSource(mapId, params.type, params.source).loadTile(params);
+        });
+
+        this.actor.registerMessageHandler(MessageType.reloadTile, (mapId: string, params: WorkerTileParameters) => {
+            return this._getWorkerSource(mapId, params.type, params.source).reloadTile(params);
+        });
+
+        this.actor.registerMessageHandler(MessageType.abortTile, (mapId: string, params: TileParameters) => {
+            return this._getWorkerSource(mapId, params.type, params.source).abortTile(params);
+        });
+
+        this.actor.registerMessageHandler(MessageType.removeTile, (mapId: string, params: TileParameters) => {
+            return this._getWorkerSource(mapId, params.type, params.source).removeTile(params);
+        });
+
+        this.actor.registerMessageHandler(MessageType.removeSource, async (mapId: string, params: RemoveSourceParams) => {
+            if (!this.workerSources[mapId]?.[params.type]?.[params.source]) {
+                return;
+            }
+
+            const worker = this.workerSources[mapId][params.type][params.source];
+            delete this.workerSources[mapId][params.type][params.source];
+
+            if (worker.removeSource !== undefined) {
+                worker.removeSource(params);
+            }
+        });
+
+        this.actor.registerMessageHandler(MessageType.removeMap, async (mapId: string) => {
+            delete this.layerIndexes[mapId];
+            delete this.availableImages[mapId];
+            delete this.workerSources[mapId];
+            delete this.demWorkerSources[mapId];
+            this.globalStates.delete(mapId);
+        });
+
+        this.actor.registerMessageHandler(MessageType.setReferrer, async (_mapId: string, params: string) => {
+            this.referrer = params;
+        });
+
+        this.actor.registerMessageHandler(MessageType.ping, async () => {});
+
+        this.actor.registerMessageHandler(MessageType.syncRTLPluginState, (mapId: string, params: PluginState) => {
+            return this._syncRTLPluginState(mapId, params);
+        });
+
+        this.actor.registerMessageHandler(MessageType.importScript, (_mapId: string, params: string) => {
+            return this._importScript(params);
+        });
+
+        this.actor.registerMessageHandler(MessageType.setImages, (mapId: string, params: string[]) => {
+            return this._setImages(mapId, params);
+        });
+
+        this.actor.registerMessageHandler(MessageType.updateLayers, async (mapId: string, params: UpdateLayersParameters) => {
+            this._getLayerIndex(mapId).update(params.layers, params.removedIds, this._getGlobalState(mapId));
+        });
+
+        this.actor.registerMessageHandler(MessageType.updateGlobalState, async (mapId: string, params: Record<string, any>) => {
+            const globalState = this._getGlobalState(mapId);
+            for (const key in params) {
+                globalState[key] = params[key];
+            }
+        });
+
+        this.actor.registerMessageHandler(MessageType.setLayers, async (mapId: string, params: LayerSpecification[]) => {
+            this._getLayerIndex(mapId).replace(params, this._getGlobalState(mapId));
+        });
+    }
+
+    /**
+     * Loads a script once per url, so concurrent and repeated imports share one load. A failed load
+     * is forgotten, so the next import of the url tries again.
+     */
+    private async _importScript(url: string): Promise<void> {
+        const existing = this.importedScripts.get(url);
+        if (existing) return existing;
+
+        const importPromise = loadScript(url);
+        this.importedScripts.set(url, importPromise);
+        try {
+            await importPromise;
+        } catch (error) {
+            this.importedScripts.delete(url);
+            throw error;
+        }
+    }
+
+    private _getGlobalState(mapId: string): Record<string, any> {
+        let state = this.globalStates.get(mapId);
+        if (!state) {
+            state = {};
+            this.globalStates.set(mapId, state);
+        }
+        return state;
+    }
+
+    private async _setImages(mapId: string, images: string[]): Promise<void> {
+        this.availableImages[mapId] = images;
+        for (const workerSource in this.workerSources[mapId]) {
+            const ws = this.workerSources[mapId][workerSource];
+            for (const source in ws) {
+                ws[source].availableImages = images;
+            }
+        }
+    }
+
+    private async _syncRTLPluginState(mapId: string, incomingState: PluginState): Promise<PluginState> {
+        return await rtlWorkerPlugin.syncState(incomingState, (url) => this._importScript(url));
+    }
+
+    private _getAvailableImages(mapId: string) {
+        let availableImages = this.availableImages[mapId];
+
+        availableImages ||= [];
+
+        return availableImages;
+    }
+
+    private _getLayerIndex(mapId: string) {
+        let layerIndexes = this.layerIndexes[mapId];
+        layerIndexes ||= this.layerIndexes[mapId] = new StyleLayerIndex();
+        return layerIndexes;
+    }
+
+    /**
+     * This is basically a lazy initialization of a worker per mapId and sourceType and sourceName
+     * @param mapId - the mapId
+     * @param sourceType - the source type - 'vector' for example
+     * @param sourceName - the source name - 'osm' for example
+     * @returns a new instance or a cached one
+     */
+    private _getWorkerSource(mapId: string, sourceType: string, sourceName: string): WorkerSource {
+        this.workerSources[mapId] ||= {};
+        this.workerSources[mapId][sourceType] ||= {};
+
+        if (!this.workerSources[mapId][sourceType][sourceName]) {
+            // use a wrapped actor so that we can attach a target mapId param
+            // to any messages invoked by the WorkerSource, this is very important when there are multiple maps
+            const actor: IActor = {
+                sendAsync: (message, abortController) => {
+                    message.targetMapId = mapId;
+                    return this.actor.sendAsync(message, abortController);
+                }
+            };
+            switch (sourceType) {
+                case 'vector':
+                    this.workerSources[mapId][sourceType][sourceName] = new VectorTileWorkerSource(actor, this._getLayerIndex(mapId), this._getAvailableImages(mapId));
+                    break;
+                case 'geojson':
+                    this.workerSources[mapId][sourceType][sourceName] = new GeoJSONWorkerSource(actor, this._getLayerIndex(mapId), this._getAvailableImages(mapId));
+                    break;
+                default:
+                    this.workerSources[mapId][sourceType][sourceName] = new (this.externalWorkerSourceTypes[sourceType])(actor, this._getLayerIndex(mapId), this._getAvailableImages(mapId));
+                    break;
+            }
+        }
+
+        return this.workerSources[mapId][sourceType][sourceName];
+    }
+
+    /**
+     * This is basically a lazy initialization of a worker per mapId and source
+     * @param mapId - the mapId
+     * @param sourceType - the source type - 'raster-dem' for example
+     * @returns a new instance or a cached one
+     */
+    private _getDEMWorkerSource(mapId: string, sourceType: string) {
+        this.demWorkerSources[mapId] ||= {};
+        this.demWorkerSources[mapId][sourceType] ||= new RasterDEMTileWorkerSource();
+
+        return this.demWorkerSources[mapId][sourceType];
+    }
+}
+
+if (isWorker(self)) {
+    self.worker = new Worker(self);
+}

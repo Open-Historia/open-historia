@@ -24,6 +24,7 @@ import {
   getLibraryCatalog,
   getScenarioCatalog,
   getScenarioDetails,
+  readScenarioLanguagePack,
   importGameBundle,
   importScenarioBundle,
   listScenariosNamingTiledBasemap,
@@ -786,6 +787,16 @@ app.post("/api/desktop/speech/listen", jsonParser, (req, res) => {
 app.get("/api/scenarios/:scenarioId", (req, res) => {
   try {
     res.json(getScenarioDetails(req.params.scenarioId));
+  } catch (error) {
+    sendError(res, 404, error);
+  }
+});
+
+// One language's pack of a scenario's own text (server/scenarioLanguages.js),
+// for a game played in that language: { code, strings }.
+app.get("/api/scenarios/:scenarioId/languages/:code", (req, res) => {
+  try {
+    res.json({ code: req.params.code, strings: readScenarioLanguagePack(req.params.scenarioId, req.params.code) });
   } catch (error) {
     sendError(res, 404, error);
   }

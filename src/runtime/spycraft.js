@@ -683,6 +683,7 @@ export const normalizeIntercepts = (raw) => {
 // rival with a live agent acts on what it stole, a planted story is believed.
 // `intercepts` here are already DECRYPTED by the caller (the simulator knows
 // the truth; only the player is kept in the dark).
+// i18n-ignore: the model's briefing, never shown.
 export const espionageBrief = (world, intercepts, { playerPolity = "", hiddenTargets = [] } = {}) => {
   const player = String(playerPolity ?? "").trim();
   const spies = normalizeSpies(world?.spies);
@@ -734,6 +735,7 @@ export const espionageBrief = (world, intercepts, { playerPolity = "", hiddenTar
 // in the player, it gets the player's private material, redacted by ITS clarity
 // against the player's service; if its agent was turned, it gets the cover
 // story instead and believes it.
+// i18n-ignore: the model's briefing, never shown.
 export const foreignAgentBrief = (world, polity, { playerPolity = "", material = "" } = {}) => {
   const player = String(playerPolity ?? "").trim();
   const spy = normalizeSpies(world?.spies).find((s) => s.owner === polity && s.target === player && isLive(s));

@@ -17,6 +17,7 @@ import { zipBundle, unzipBundle, looksLikeZip } from "./bundleZip.js";
 import { SCENARIO_LICENSE_FILE, SCENARIO_LICENSE_TEXT, scenarioLicense } from "./scenarioLicense.js";
 import { countChanges, isDetailFieldPath, POLITICS_FIELDS, summarizeChangesForComment, WAR_MAP_FIELDS } from "./scenarioChanges.js";
 import { SUGGESTION_MARKER } from "./hubPosts.js";
+import { scenarioLanguageCode } from "../../server/scenarioLanguages.js";
 
 export const SUGGESTION_SCHEMA = "open-historia-scenario-suggestion/1";
 const MAX_NOTE = 1500;
@@ -43,7 +44,7 @@ export const suggestionFileName = (scenarioName) => `${slug(scenarioName)}-sugge
 // in a file is dropped on reading, so a file from a newer or a broken build
 // shows what this build can apply and nothing it would misread.
 export const KNOWN_KINDS = new Set([
-  "field", "politics", "history", "stats", "institutionLogos", "music", "cover",
+  "field", "politics", "history", "stats", "institutionLogos", "music", "languages", "cover",
   "region-owner", "region-name", "region-type", "region-claims", "region-group", "borders",
   "polity-add", "polity-remove", "polity-change", "polity-rename",
   "group-add", "group-remove", "group-change",
@@ -82,6 +83,9 @@ const validChange = (change) => isRecord(change)
   // The music is a record of lists or nothing; what is in it is read track by
   // track when it is shown and when it is applied (server/scenarioMusic.js).
   && (change.kind !== "music" || ((change.to ?? null) === null || isRecord(change.to)))
+  // A language pack names its language, and is a record of strings or nothing;
+  // its strings are read when it is shown and applied (server/scenarioLanguages.js).
+  && (change.kind !== "languages" || (Boolean(scenarioLanguageCode(change.code)) && ((change.to ?? null) === null || isRecord(change.to))))
   && (change.kind !== "borders" || Array.isArray(change.regions))
   && (change.kind !== "projection" || (isRecord(change.to) && typeof change.to.type === "string"))
   && (change.kind !== "war-map" || (WAR_MAP_FIELDS.includes(change.field) && Array.isArray(change.to)))
@@ -215,6 +219,7 @@ export const readSuggestionFile = async (input) => {
 // The comment the player pastes on the post, with the file dragged in. Plain
 // English: it is read on GitHub, where the game's language packs do not reach.
 // The marker line is what the author's game looks for.
+// i18n-ignore: the comment posted on the hub, which every author reads in English.
 export const buildSuggestionComment = (suggestion, { fileName = "" } = {}) => {
   const counts = countChanges(suggestion.changes);
   const lines = summarizeChangesForComment(suggestion.changes);

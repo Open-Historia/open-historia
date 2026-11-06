@@ -273,14 +273,19 @@ const DISPLAY_KEYS = new Set([
   "prompt_label", "noun", "plural", "singular", "verb", "phase", "stage", "step", "publicDescription",
   // A difficulty level's profile (runtime/difficulty.js), shown in the GM panel.
   "playerLeniency", "npcCompetence", "consequencePressure", "diplomaticFirmness",
+  // An update notice's banner (updates/notes.js): its lead and the button that closes it.
+  "lead", "button",
 ]);
 // A camelCase key ending in "Label" (mappedLabel, centerSubLabel) holds display
 // text too, and may be a single lowercase word ("landscape").
 const LABEL_KEY = /^[a-z][A-Za-z0-9]*Label$/;
 const isDisplayKey = (key) => DISPLAY_KEYS.has(key) || LABEL_KEY.test(key ?? "");
 // Keys whose value is a list of display sentences: a difficulty level's
-// `effects` (runtime/difficulty.js), bullets in the GM panel.
-const DISPLAY_LIST_KEYS = new Set(["effects"]);
+// `effects` (runtime/difficulty.js), bullets in the GM panel; an update
+// notice's `items` (updates/notes.js, notesPast.js), the lines of its cards and
+// of the update history. Those were read by nobody until 2026-11-06, and some
+// 380 lines had stayed English in every language.
+const DISPLAY_LIST_KEYS = new Set(["effects", "items"]);
 const STATUS_CALLS = new Set([
   "setStatus", "setError", "setMessage", "setNotice", "setToast", "showToast", "notify", "alert", "confirm",
   "setHint", "setLabel", "setWarning", "setInfo", "setBanner", "setNote", "setSaveMessage", "setStatusText",
@@ -347,10 +352,24 @@ const DISPLAY_CONSTANT_SUFFIX = /(?:^|_)(?:LABELS?|HINTS?|INTRO|NOTES?|TEXTS?|ME
 // Named like display text, but written for the model (schema hints).
 const MODEL_CONSTANTS = new Set(["GENERATED_OP_NOTES", "TERRITORY_BASIS_DESCRIPTION"]);
 
+// Text the player never reads, in a module whose other text they do: a prompt
+// the module writes for the model, a pattern it matches. A comment holding
+// `i18n-ignore` on a statement, a declaration or a property skips everything
+// under it:
+//
+//   // i18n-ignore: the model's briefing, never shown.
+//   export const spyBriefing = (...) => { ... };
+const IGNORE_MARK = /\bi18n-ignore\b/;
+// A `+` that joins text: a piece of a longer string.
+const joinsText = (p) => Boolean(p?.isBinaryExpression?.() && p.node.operator === "+");
+const ignored = (p) => Boolean(p.findParent((q) => q.node?.leadingComments?.some((comment) => IGNORE_MARK.test(comment.value))));
+
 // `messages`: a module whose functions return or throw what the player reads
 // (a provider's failure, why a turn could not run). Its returned and thrown
-// prose is collected as well.
-export const extractFromSource = (code, file, { jsx = true, catchAll = jsx, factories = {}, messages = false } = {}) => {
+// prose is collected as well. `factoriesOnly`: only the arguments of the
+// `factories` calls are read (the desktop app's main process, whose other
+// strings never reach the screen).
+export const extractFromSource = (code, file, { jsx = true, catchAll = jsx, factories = {}, messages = false, factoriesOnly = false } = {}) => {
   const exact = new Map(); // text -> first location
   const patterns = new Map();
   const add = (map, text, node) => {
@@ -495,7 +514,7 @@ export const extractFromSource = (code, file, { jsx = true, catchAll = jsx, fact
     }
   };
 
-  traverse(ast, {
+  const visitors = {
     JSXElement(p) {
       if (hasNoTranslate(p.node.openingElement) || insideNoTranslate(p)) return;
       collectChildren(p);
@@ -552,14 +571,7 @@ export const extractFromSource = (code, file, { jsx = true, catchAll = jsx, fact
           if (shape) addShape(shape, arg, { requireProse: true });
         }
       }
-      const factory = Object.hasOwn(factories, name) ? factories[name] : null;
-      if (factory) {
-        for (const index of factory) {
-          const arg = p.node.arguments[index];
-          const shape = arg ? shapeOf(arg, code) : null;
-          if (shape) addShape(shape, arg);
-        }
-      }
+      factoryArguments(p);
     },
     VariableDeclarator(p) {
       const name = p.node.id?.type === "Identifier" ? p.node.id.name : "";
@@ -584,26 +596,56 @@ export const extractFromSource = (code, file, { jsx = true, catchAll = jsx, fact
       const shape = shapeOf(p.node.argument, code);
       if (shape) addShape(shape, p.node.argument, { requireProse: true });
     },
+    // `(what) => "This " + what + " was…"`: an arrow's body is what it returns.
+    ArrowFunctionExpression(p) {
+      if (!messages || jsx || p.node.body?.type === "BlockStatement") return;
+      const shape = shapeOf(p.node.body, code);
+      if (shape) addShape(shape, p.node.body, { requireProse: true });
+    },
+    // A sentence joined from pieces (`"…" + "…"`) in a .js module: the whole,
+    // where it is not in a technical position, rather than the pieces (which
+    // the .jsx catch-all reads on their own, as it always has).
+    BinaryExpression(p) {
+      if (!catchAll || jsx || !joinsText(p) || joinsText(p.parentPath)) return;
+      if (technicalPosition(p) || insideNoTranslate(p)) return;
+      if (p.findParent((q) => q.isCallExpression() && (calleeName(q.node.callee) === "console" || NON_UI_CALLS.has(calleeName(q.node.callee))))) return;
+      addShape(shapeOf(p.node, code), p.node, { requireProse: true });
+    },
     NewExpression(p) {
       if (!messages || !/Error$/.test(calleeName(p.node.callee)) || !p.node.arguments[0]) return;
       const shape = shapeOf(p.node.arguments[0], code);
       if (shape) addShape(shape, p.node.arguments[0], { requireProse: true });
     },
     StringLiteral(p) {
-      if (!catchAll) return;
+      if (!catchAll || (!jsx && joinsText(p.parentPath))) return;
       if (p.parentPath.isJSXAttribute() || p.parentPath.isObjectProperty() && isDisplayKey(p.parentPath.node.key?.name)) return; // handled above
       if (technicalPosition(p) || insideNoTranslate(p)) return;
       if (p.findParent((q) => q.isCallExpression() && (calleeName(q.node.callee) === "console" || NON_UI_CALLS.has(calleeName(q.node.callee))))) return;
       addText(p.node.value, p.node, { requireProse: true });
     },
     TemplateLiteral(p) {
-      if (!catchAll) return;
+      if (!catchAll || (!jsx && joinsText(p.parentPath))) return;
       if (p.parentPath.isJSXExpressionContainer() || p.parentPath.isTaggedTemplateExpression()) return;
       if (technicalPosition(p) || insideNoTranslate(p)) return;
       if (p.findParent((q) => q.isCallExpression() && (calleeName(q.node.callee) === "console" || NON_UI_CALLS.has(calleeName(q.node.callee))))) return;
       addShape(shapeOf(p.node, code), p.node, { requireProse: true });
     },
-  });
+  };
+
+  const factoryArguments = (p) => {
+    const name = calleeName(p.node.callee);
+    const factory = Object.hasOwn(factories, name) ? factories[name] : null;
+    for (const index of factory ?? []) {
+      const arg = p.node.arguments[index];
+      const shape = arg ? shapeOf(arg, code) : null;
+      if (shape) addShape(shape, arg);
+    }
+  };
+  const active = factoriesOnly ? { CallExpression: factoryArguments } : visitors;
+  // Whatever sits under an i18n-ignore comment is skipped by every visitor.
+  traverse(ast, Object.fromEntries(Object.entries(active).map(([type, visit]) => [type, (p) => {
+    if (!ignored(p)) visit(p);
+  }])));
 
   return { exact, patterns };
 };
@@ -643,20 +685,71 @@ const MESSAGE_FILES = [
   // The GM tools' Puppet States editor: what it refuses with shows in the panel.
   "src/Game/GameUI/puppetStatesTool.js",
 ];
-const JS_REGISTRY_FILES = [
-  "src/Game/AI/gameplayPrompts.js", "src/Game/AI/promptGuidance.js", "src/Game/AI/providerConfig.js",
-  "src/Game/AI/structuredMode.js", "src/Game/AI/playerFocus.js", "src/Game/AI/simulationStatus.js",
-  "src/Game/AI/historyConsolidation.js", "src/Game/AI/interactiveRewind.js", ...MESSAGE_FILES,
-];
 // Plain .js split out of a .jsx panel so node can test it: its prose is the
 // panel's own and is read the way the panel's is, every string that reads like
 // prose included (the pieces a line is built from are looked up on their own).
-const PROSE_FILES = ["src/Game/GameUI/turnReveal.js"];
-const FACTORIES = { segment: [1, 4] }; // promptGuidance.js: segment(id, label, start, end, hint)
+//
+// The rest were found on 2026-11-06, in a sweep for the text the player reads
+// that no catalog held, so every language showed it in English: what these
+// modules return, throw or keep in a constant reaches the screen as it is (a
+// refusal under a War Room key, a line of the Workshop's border report, a
+// shared game's join progress, a native confirm()). Text in them written for
+// the model, not the player, is marked `i18n-ignore` (see `ignored` above).
+const PROSE_FILES = [
+  "src/Game/GameUI/turnReveal.js",
+  // The Workshop: imports, maps, flags and the border check's report.
+  "src/Editor/customBackground.js", "src/Editor/documentIO.js", "src/Editor/exportPreset.js",
+  "src/Editor/featureImport.js", "src/Editor/flagImage.js", "src/Editor/projectionImage.js",
+  "src/Editor/provinceRasterWorker.js", "src/Editor/regionClipboard.js", "src/Editor/scenarioMaps.js",
+  "src/Editor/scenarioPuppets.js", "src/Editor/topologySweep.js",
+  // The game's panels: the Advisor's proposal cards, a failed skip, the map's
+  // cards and detailed maps, the War Room's and the fleets' refusals.
+  "src/Game/GameUI/advisorActionApproval.js", "src/Game/GameUI/advisorActionReview.js",
+  "src/Game/GameUI/jumpErrorCopy.js", "src/Game/Map/tiledBasemapWording.js", "src/Game/Map/unitsController.js",
+  "src/Game/Selection/mapCards.js",
+  "src/runtime/fronts/airStrikeOps.js", "src/runtime/fronts/fortifyOps.js", "src/runtime/fronts/warRoomOps.js",
+  "src/runtime/warRoomWrites.js", "src/runtime/naval/fleetOps.js",
+  "src/runtime/naval/engine.js", "src/runtime/spycraft.js", "src/runtime/socialFeed.js", "src/runtime/puppets.js",
+  "src/runtime/peaceTerms.js", "src/runtime/alliances.js", "src/runtime/filedEvents.js",
+  "src/runtime/strikes.js", "src/runtime/eventTags.js", "src/runtime/scenarioChanges.js",
+  "src/runtime/politicalKnowledge.js", "src/runtime/politicalTraitRegistry.js", "src/runtime/powerStatus.js",
+  "src/runtime/placeSearch.js", "src/runtime/preload.js", "src/runtime/campaignGuard.js",
+  "src/runtime/newGameWorld.js", "src/runtime/polityFlags.js", "src/runtime/structurePlacement.js",
+  "src/runtime/sharedInstitutions.js", "src/runtime/statsSheet.js",
+  // Settings, updates, the logging file's buttons, downloads and the hub.
+  "src/runtime/appUpdate.js", "src/runtime/appUpdateManualCheck.js", "src/runtime/saveDebugLog.js",
+  "src/runtime/saveFile.js", "src/runtime/keptMusic.js", "src/runtime/library.js",
+  "src/runtime/communityBasemaps.js", "src/runtime/communityFlags.js", "src/runtime/hubPosts.js",
+  "src/runtime/tiledBasemaps.js", "src/runtime/gameZip.js", "src/runtime/scenarioSuggestion.js",
+  "src/runtime/basemapLibrary.js", "src/runtime/flagLibrary.js", "src/runtime/web/basemapStore.js",
+  "src/runtime/speechWorker.js", "src/runtime/speechOnDevice.js", "src/runtime/translationModel.js",
+  "src/runtime/translationWorker.js", "src/runtime/modelStore.js",
+  // A time skip's progress and what stopped it.
+  "src/Game/AI/skipPhases.js", "src/Game/AI/turnChecks.js", "src/Game/AI/playerTurnFailures.js",
+  "src/Game/AI/gameplayLazy.js", "src/Game/AI/institutionGovernanceRetry.js", "src/Game/AI/aiRequestControl.js",
+  // The local server's refusals the Workshop, the hub and Settings show.
+  "server/tiledBasemaps.js", "server/musicLibrary.js", "server/flagValidation.js", "server/polityRename.js",
+  "server/hubProvenance.js", "server/officialBasemaps.js", "server/hubCache.js", "server/basemapStore.js",
+];
+// Modules whose returned and thrown sentences are read whole, but whose other
+// strings are pieces of them.
+const MESSAGE_ONLY_FILES = [];
+// Text outside the page: the desktop app's own menus and dialogs, which the
+// main process translates with uiWord() (electron/uiWords.cjs). Only what is
+// handed to uiWord is read.
+const WORD_FILES = ["electron/main.cjs", "electron/payloadUpdate.cjs", "electron/layeredUpdate.cjs"];
+const JS_REGISTRY_FILES = [
+  "src/Game/AI/gameplayPrompts.js", "src/Game/AI/promptGuidance.js", "src/Game/AI/providerConfig.js",
+  "src/Game/AI/structuredMode.js", "src/Game/AI/playerFocus.js", "src/Game/AI/simulationStatus.js",
+  "src/Game/AI/historyConsolidation.js", "src/Game/AI/interactiveRewind.js", ...MESSAGE_FILES, ...MESSAGE_ONLY_FILES,
+  ...PROSE_FILES,
+];
+// promptGuidance.js: segment(id, label, start, end, hint); electron: uiWord(text, params).
+const FACTORIES = { segment: [1, 4], uiWord: [0] };
 
 export const interfaceFiles = (root) => {
   const all = walkFiles(path.join(root, "src"));
-  return all.filter((file) => {
+  const inSrc = all.filter((file) => {
     const rel = path.relative(root, file).split(path.sep).join("/");
     if (/\.test\.|\/__tests__\//.test(rel)) return false;
     if (rel.endsWith(".jsx")) return true;
@@ -665,6 +758,11 @@ export const interfaceFiles = (root) => {
     if (rel.startsWith("src/Game/AI/")) return false;
     return JS_REGISTRY_DIRS.some((dir) => rel.startsWith(`${dir}/`));
   });
+  const outside = [...JS_REGISTRY_FILES, ...WORD_FILES]
+    .filter((rel) => !rel.startsWith("src/"))
+    .map((rel) => path.join(root, ...rel.split("/")))
+    .filter((file) => fs.existsSync(file));
+  return [...inSrc, ...outside];
 };
 
 export const extractTree = (root) => {
@@ -675,12 +773,86 @@ export const extractTree = (root) => {
     const rel = path.relative(root, file).split(path.sep).join("/");
     const code = fs.readFileSync(file, "utf8");
     const jsx = rel.endsWith(".jsx");
-    const result = extractFromSource(code, rel, { jsx, catchAll: jsx || PROSE_FILES.includes(rel), factories: FACTORIES, messages: jsx || MESSAGE_FILES.includes(rel) });
+    const prose = PROSE_FILES.includes(rel);
+    const word = WORD_FILES.includes(rel);
+    const result = extractFromSource(code, rel, {
+      jsx,
+      catchAll: jsx || prose,
+      factories: FACTORIES,
+      factoriesOnly: word,
+      messages: jsx || prose || MESSAGE_FILES.includes(rel) || MESSAGE_ONLY_FILES.includes(rel),
+    });
     if (result.error) errors.push(result.error);
     for (const [t, where] of result.exact) if (!exact.has(t)) exact.set(t, where);
     for (const [t, where] of result.patterns) if (!patterns.has(t)) patterns.set(t, where);
   }
+  for (const [t, where] of androidMessages(root)) if (!exact.has(t) && !patterns.has(t)) (t.includes("{{") ? patterns : exact).set(t, where);
   return { exact, patterns, errors };
+};
+
+// The Android app's own plugins (mobile/android/.../*Plugin.java) refuse a
+// call with a sentence the page shows (an update that failed, games that could
+// not be moved): call.reject("…") and the IOExceptions they reject with. A
+// value joined on (`"…: " + error.getMessage()`) is a slot.
+const ANDROID_JAVA_DIR = "mobile/android/app/src/main/java";
+export const javaMessages = (code) => {
+  const out = [];
+  const opener = /\b(?:call\.reject|new IOException)\(/g;
+  for (let match = opener.exec(code); match; match = opener.exec(code)) {
+    // The argument, up to its closing parenthesis (strings and nested calls skipped).
+    let depth = 1;
+    let i = opener.lastIndex;
+    let inString = false;
+    const start = i;
+    for (; i < code.length && depth > 0; i += 1) {
+      const c = code[i];
+      if (inString) {
+        if (c === "\\") i += 1;
+        else if (c === "\"") inString = false;
+      } else if (c === "\"") inString = true;
+      else if (c === "(") depth += 1;
+      else if (c === ")") depth -= 1;
+    }
+    const argument = code.slice(start, i - 1);
+    // Only the first argument: split at a top-level comma.
+    const parts = [];
+    let piece = "";
+    let level = 0;
+    let quoted = false;
+    for (let j = 0; j < argument.length; j += 1) {
+      const c = argument[j];
+      if (quoted) {
+        piece += c;
+        if (c === "\\") { piece += argument[j + 1] ?? ""; j += 1; } else if (c === "\"") quoted = false;
+        continue;
+      }
+      if (c === "\"") quoted = true;
+      if (c === "(") level += 1;
+      if (c === ")") level -= 1;
+      if (c === "," && level === 0) break;
+      if (c === "+" && level === 0) { parts.push(piece.trim()); piece = ""; continue; }
+      piece += c;
+    }
+    parts.push(piece.trim());
+    if (!parts.some((part) => /^"/.test(part))) continue;
+    let text = "";
+    let slots = 0;
+    for (const part of parts) {
+      if (/^"(?:[^"\\]|\\.)*"$/.test(part)) text += JSON.parse(part);
+      else { slots += 1; text += slots === 1 ? "{{value}}" : `{{value${slots}}}`; }
+    }
+    if (proseLike(text.replace(/\{\{[^}]+\}\}/g, "x"))) out.push(text.trim());
+  }
+  return out;
+};
+const androidMessages = (root) => {
+  const found = new Map();
+  for (const file of walkFiles(path.join(root, ANDROID_JAVA_DIR))) {
+    if (!/Plugin\.java$/.test(file)) continue;
+    const rel = path.relative(root, file).split(path.sep).join("/");
+    for (const text of javaMessages(fs.readFileSync(file, "utf8"))) if (!found.has(text)) found.set(text, `${rel}:0`);
+  }
+  return found;
 };
 
 // The gameplay features a scenario's and a game's editors list (the Features

@@ -51,6 +51,7 @@ import DetailedMapsInstallOffer from "../Map/DetailedMapsInstallOffer.jsx";
 import { detailedMapOffers, lookUpDetailedMaps } from "../Map/detailedMapOffers.js";
 import { scenarioMapsOfWorld } from "../../runtime/basemapPick.js";
 import { dateRangeBound, startsBetween } from "../../runtime/scenarioDateRange.js";
+import { LANGUAGES } from "../../runtime/i18n.js";
 
 const GITHUB_ATTACHMENT_LIMIT = 25 * 1000 * 1000;
 
@@ -448,6 +449,14 @@ const ScenarioDetail = ({ post, busy, onImport, onPlay, onBack, notice, error, t
       <a href={post.url} target="_blank" rel="noopener noreferrer" title="Like this scenario on its GitHub post" style={{ ...detailStat, textDecoration: "none" }}>👍 {post.upvotes} liked</a>
       <a href={post.url} target="_blank" rel="noopener noreferrer" title="Comment on its GitHub post" style={{ ...detailStat, textDecoration: "none" }}>💬 {post.comments} comments</a>
     </div>
+    {/* The languages it ships its own text in (its language packs), each in
+        its own name. */}
+    {post.languages?.length ? (
+      <div style={{ color: "rgba(255,255,255,0.65)", fontSize: "0.8rem", marginBottom: "0.55rem" }}>
+        <span>{"Languages:"}</span>{" "}
+        <span data-no-translate>{post.languages.map((code) => LANGUAGES.find((entry) => entry.code === code)?.native || code).join(", ")}</span>
+      </div>
+    ) : null}
     <div style={{ color: "#e4e4e7", fontSize: "0.78rem", marginBottom: "1rem" }}>
       Likes and comments live on the scenario's GitHub post — tap 👍 or 💬 above (or the button below) to open it and react there.
     </div>

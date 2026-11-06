@@ -1,0 +1,94 @@
+import {type PossiblyEvaluated, Transitionable, type Transitioning, type TransitionParameters} from './properties.ts';
+import {Evented} from '../util/evented.ts';
+import {EvaluationParameters} from './evaluation_parameters.ts';
+import {validateStyle, validateAndEmit, type Validator} from './validate_style.ts';
+import {getProperties, type SkyProps, type SkyPropsPossiblyEvaluated} from './sky_properties.g.ts';
+
+import type {SkySpecification} from '@maplibre/maplibre-gl-style-spec';
+import type {StyleSetterOptions} from './style.ts';
+
+export class Sky extends Evented {
+    properties: PossiblyEvaluated<SkyProps, SkyPropsPossiblyEvaluated>;
+    _transitionable: Transitionable<SkyProps>;
+    _transitioning: Transitioning<SkyProps>;
+
+    constructor(sky: SkySpecification | undefined, globalState: Record<string, any>) {
+        super();
+        this._transitionable = new Transitionable(getProperties(), 'sky', globalState);
+        this.setSky(sky);
+        this._transitioning = this._transitionable.untransitioned();
+        this.recalculate(new EvaluationParameters(0));
+    }
+
+    /**
+     * Validates and applies the sky. Returns false, after firing `error`, when
+     * the value was rejected and nothing changed.
+     */
+    setSky(sky?: SkySpecification, options: StyleSetterOptions = {}): boolean {
+        if (this._validate(validateStyle.sky, sky, options)) return false;
+
+        sky ||= {
+            'sky-color': 'transparent',
+            'horizon-color': 'transparent',
+            'fog-color': 'transparent',
+            'fog-ground-blend': 1,
+            'atmosphere-blend': 0,
+        };
+
+        this._transitionable.setValues(sky);
+        return true;
+    }
+
+    getSky(): SkySpecification {
+        return this._transitionable.serialize();
+    }
+
+    updateTransitions(parameters: TransitionParameters): void {
+        this._transitioning = this._transitionable.transitioned(parameters, this._transitioning);
+    }
+
+    hasTransition(): boolean {
+        return this._transitioning.hasTransition();
+    }
+
+    applyGlobalStateChange(refs: string[], priorGlobalState: Record<string, any>, parameters: TransitionParameters): void {
+        this._transitioning = this._transitionable.applyGlobalStateChange(refs, priorGlobalState, this._transitioning, parameters);
+    }
+
+    recalculate(parameters: EvaluationParameters): void {
+        this.properties = this._transitioning.possiblyEvaluate(parameters);
+    }
+
+    _validate(validate: Validator, value: unknown, options: StyleSetterOptions = {}): boolean {
+        return validateAndEmit(this, validate, {value}, options);
+    }
+
+    /** The sky's values for drawing, as evaluated last. */
+    getEvaluated(): SkyPropsPossiblyEvaluated {
+        return {
+            'sky-color': this.properties.get('sky-color'),
+            'horizon-color': this.properties.get('horizon-color'),
+            'fog-color': this.properties.get('fog-color'),
+            'fog-ground-blend': this.properties.get('fog-ground-blend'),
+            'horizon-fog-blend': this.properties.get('horizon-fog-blend'),
+            'sky-horizon-blend': this.properties.get('sky-horizon-blend'),
+            'atmosphere-blend': this.properties.get('atmosphere-blend'),
+        };
+    }
+}
+
+/**
+ * Currently fog is a very simple implementation, and should only used
+ * to create an atmosphere near the horizon.
+ * But because the fog is drawn from the far-clipping-plane to
+ * map-center, and because the fog does nothing know about the horizon,
+ * this function does a fadeout in respect of pitch. So, when the horizon
+ * gets out of view, which is at about pitch 70, this methods calculates
+ * the corresponding opacity values. Below pitch 60 the fog is completely
+ * invisible.
+ */
+export function calculateFogBlendOpacity(pitch: number): number {
+    if (pitch < 60) return 0; // disable
+    if (pitch < 70) return (pitch - 60) / 10; // fade in
+    return 1;
+}

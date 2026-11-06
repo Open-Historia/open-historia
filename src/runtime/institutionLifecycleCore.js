@@ -458,6 +458,7 @@ const lifecycleAuthority = ({ actor = "", player = "", authority = "" } = {}) =>
   return { allowed: true, authority: auth || (isPlayer ? "player" : "npc") };
 };
 
+// i18n-ignore: the model's context for a membership decision, never shown.
 export const buildInstitutionLifecycleDecisionContext = (world = {}, {
   institutionId = "", caseIds = [], actorPolities = [], playerCountry = "",
 } = {}) => {
