@@ -190,5 +190,10 @@
       "category": "Game",
       "artifactName": "Open-Historia-${arch}.${ext}"
     }
+  },
+  "overrides": {
+    "react-map-gl": {
+      "maplibre-gl": "$maplibre-gl"
+    }
   }
 }
