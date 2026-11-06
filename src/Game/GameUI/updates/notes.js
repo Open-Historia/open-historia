@@ -54,7 +54,7 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
-    // MapLibre 6.16, built from source with the game's own changes (vendor/maplibre-gl/README.md): placement paced, sources
+    // MapLibre 6.16 with the game's own changes (Open-Historia/maplibre-gl-js, OPEN-HISTORIA.md): placement paced, sources
     // sharing their tile walks, clipping masks kept, tiles stored compactly. Measured on the production builds with the CPU
     // slowed 6x: panning 24 to 46 fps with terrain, 29 to 49 without; memory 3.1 GB to 1.9 GB. The land mask waits until the
     // map has stayed put (FrontLayers.jsx). On phones the browser's backdrop blur held the map to half its frame rate whatever

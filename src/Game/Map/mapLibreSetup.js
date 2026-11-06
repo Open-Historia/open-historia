@@ -6,7 +6,13 @@
 // could draw, and in the Scenario Workshop, which never shows a MapLibre map.
 // World.jsx, Nations.jsx and Cities.jsx call these as they load, before any
 // map exists; each is idempotent.
-import { addProtocol, setMaxParallelImageRequests, setWorkerCount } from "maplibre-gl";
+import { addProtocol, setMaxParallelImageRequests, setWorkerCount, setWorkerUrl } from "maplibre-gl";
+// The game's MapLibre is the package built from Open-Historia/maplibre-gl-js (its changes: OPEN-HISTORIA.md there). Its
+// worker is a module of its own, which MapLibre looks for beside its main file; bundled, that file is elsewhere, so it is
+// told where its worker went. Set as this module loads: World.jsx, Nations.jsx and Cities.jsx import it before any map.
+import mapLibreWorkerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?url";
+
+setWorkerUrl(mapLibreWorkerUrl);
 import { basemapTileLoader, pmtilesProtocol } from "../../runtime/assets.js";
 import { RELIEF_PROTOCOL, createReliefTileLoader } from "./scenarioTerrain.js";
 import { SEASON_TINT_PROTOCOL, seasonTintTileLoader } from "./seasonTintTiles.js";
