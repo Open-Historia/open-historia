@@ -54,6 +54,24 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // "get rid of this and instead have the country send you a message requesting assistance and the buttons appear
+    // there. it should not explain what happens if you choose each option as that breaks immersion" (the owner,
+    // 2026-11-06): the card over the map is gone; the ally that was attacked asks in a message (AI/gameplay.js) and
+    // is answered under it (GameUI/warAndPeace.jsx CallToArmsCard).
+    id: "2026-11-calls-to-arms-by-message",
+    kind: "minor",
+    date: "2026-11-05",
+    channel: "beta",
+    banners: [
+      {
+        title: "Calls to arms come by message",
+        items: [
+          "An ally that is attacked now writes to you itself, and you answer it in the chat.",
+        ],
+      },
+    ],
+  },
+  {
     // "it doesnt look like missile strikes actually ever happen despite the feature technically existing" / "make story
     // events be able to do strikes" (the owner, 2026-11-05): a strike was a battlefield line only (frontOrders), read
     // with Fronts on and a war under way. Events now carry their own (impacts.strikes), placed by frontTurn.js

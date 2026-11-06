@@ -22,6 +22,7 @@ import { describeBasisAction, sameRegionChange, screenTerritoryBasis } from "../
 import { PLAYER_GROUP_JUMP_RULE, describeGroupsForPrompt, describePlayerGroupForPrompt, normalizeGroupOp, withoutGroupOpsLines } from "../../runtime/groups.js";
 import { effectiveCityPopulation } from "../../runtime/cityPopulation.js";
 import { hostingSharedGame, humanCountriesOf } from "../../runtime/humanPolities.js";
+import { uiString } from "../../runtime/translator.js";
 import { withTurnSeaBattles } from "../../runtime/naval/record.js";
 import { withFrontFortifications } from "../../runtime/warGeography.js";
 import { zoneWeatherFor } from "../../runtime/zoneWeather.js";
@@ -10320,6 +10321,40 @@ const applySimulationResult = async ({
     } else {
       logDebugEvent("turn", `A letter from ${from} offered ${to} peace, and the offer was not kept: ${made.reason}.`);
     }
+  }
+
+  // A call to arms (runtime/alliances.js) that a person is asked this turn comes as a message from the country that
+  // was attacked, in the thread with it (folded into one already open), and the person answers it there
+  // (GameUI/warAndPeace.jsx CallToArmsCard): "have the country send you a message requesting assistance and the
+  // buttons appear there" (the owner, 2026-11-06). In the game's language, from the packs, and never a request.
+  for (const call of normalizeArray(worldWithImpacts?.callsToArms)) {
+    if (call?.status !== "open" || Number(call.round) !== Number(nextGame.round) || normalizeString(call.messageId)) continue;
+    if (!people.some((person) => regionKey(person) === regionKey(call.ally))) continue;
+    const attackers = normalizeArray(call.attackers).map(normalizeString).filter(Boolean);
+    const enemy = attackers.length > 1 ? `${attackers.slice(0, -1).join(", ")} & ${attackers[attackers.length - 1]}` : attackers[0] || "";
+    const treaty = normalizeString(call.via?.title);
+    const ask = enemy
+      ? (treaty
+        ? uiString("We have been attacked by {{enemy}}. Under {{treaty}}, we call on you to come to our defence.", { enemy, treaty })
+        : uiString("We have been attacked by {{enemy}}. As our ally, we call on you to come to our defence.", { enemy }))
+      : (treaty
+        ? uiString("We have been attacked. Under {{treaty}}, we call on you to come to our defence.", { treaty })
+        : uiString("We have been attacked. As our ally, we call on you to come to our defence."));
+    const messageId = `msg-call-${regionKey(call.id).replace(/[^a-z0-9]+/g, "-")}`;
+    const nextChat = await opening({
+      countries: [call.defender],
+      to: call.ally,
+      speaker: call.defender,
+      title: uiString("A call for help"),
+      openingMessage: ask,
+      openingMessageId: messageId,
+      source: "call-to-arms",
+    }, "", { revealWith: lastTurnEventId });
+    if (!nextChat) continue;
+    nextChats.unshift(nextChat);
+    generatedChats.unshift(nextChat);
+    worldWithImpacts = { ...worldWithImpacts, callsToArms: normalizeArray(worldWithImpacts.callsToArms).map((entry) => (entry?.id === call.id ? { ...entry, messageId } : entry)) };
+    nextWorld = worldWithImpacts;
   }
 
   // A document the player now holds with other governments is filed in the

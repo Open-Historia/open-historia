@@ -46,7 +46,6 @@ import {
 import { FallbackSwitchNotice } from "./fallbackSwitchNotice.jsx";
 import { AgentWaitingNotice } from "./agentWaitingNotice.jsx";
 import { BordersFallbackNotice } from "./bordersFallbackNotice.jsx";
-import { WarAndPeaceCards } from "./warAndPeace.jsx";
 import { PLAYER_ACTIVITY_EVENTS, createPlayerActivity } from "../../runtime/playerActivity.js";
 import { inSharedGame, sharedGameRole, subscribeSharedGameRole } from "../../multiplayer/client/sharedGameBridge.js";
 
@@ -1007,8 +1006,6 @@ const Main = ({
       <BordersFallbackNotice />
       <FallbackSwitchNotice />
       <AgentWaitingNotice />
-      {/* An offer of peace or a call to arms that waits for the player's answer. */}
-      <WarAndPeaceCards />
     </>
   );
 };
