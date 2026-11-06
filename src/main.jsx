@@ -5,7 +5,8 @@ import { installScrollHoverFreeze } from "./runtime/scrollHoverFreeze.js";
 import { installNativeBackgroundPause } from "./runtime/native/backgroundPause.js";
 import { reportRendererRestart } from "./runtime/native/rendererRestart.js";
 import { isGenerating } from "./Game/AI/simulationStatus.js";
-import { startTranslator } from "./runtime/translator.js";
+import { startTranslator, translateNow } from "./runtime/translator.js";
+import { installNativeDialogTranslation } from "./runtime/nativeDialogs.js";
 import {
     installDebugLogCapture,
     logDebugEvent,
@@ -56,6 +57,9 @@ const mount = () => {
     );
     // Live-translates the UI when a non-English language is set in Settings.
     startTranslator();
+    // The browser draws confirm() and alert() itself, where the translator above
+    // never looks: their messages are looked up in the same pack (nativeDialogs.js).
+    installNativeDialogTranslation(window, translateNow);
     registerServiceWorker();
     // Listen in kept the feeds it had shown in IndexedDB (oh-listen-in). Rostra,
     // the social network, took its place on 2026-11-02 and nothing reads them now.

@@ -80,7 +80,9 @@ export const normalizeHubKey = (value) => {
 // The one and only hub. Not configurable by design. Here rather than in the
 // page's hub modules (src/runtime/hubIssues.js hands these on) because the
 // stores check a link's release address against it too.
+// i18n-ignore: the hub's repository.
 export const HUB_OWNER = "Open-Historia";
+// i18n-ignore: the hub's repository.
 export const HUB_REPO = "Open-historia-scenarios";
 
 const MAX_HUB_URL = 600;

@@ -21,6 +21,7 @@
 // from: a version whose link is not one of those releases is dropped, whatever
 // the list says.
 
+// i18n-ignore: the hub's repository.
 const OFFICIAL_REPO = "Open-Historia/Open-historia-scenarios";
 export const OFFICIAL_RELEASES_PREFIX = `https://github.com/${OFFICIAL_REPO}/releases/download/detailed-maps-`;
 export const OFFICIAL_CATALOG_URL =

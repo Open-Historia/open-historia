@@ -53,9 +53,12 @@ const normalizeId = (raw, fallback = "basemap") => {
 
 // get/delete pass the raw route :id here (only create normalizes), so the
 // shared containment guard keeps ..%2f..%2f from escaping BASEMAPS_DIR.
+// i18n-ignore: what a path is called in a refusal for a bad id.
 const metaPath = (id) => resolveChildPath(BASEMAPS_DIR, `${id}.json`, "basemap id");
+// i18n-ignore: what a path is called in a refusal for a bad id.
 const payloadPath = (id) => resolveChildPath(BASEMAPS_DIR, `${id}.payload.json`, "basemap id");
 // A Tiled Basemap's archive: the PMTiles file itself, never read whole.
+// i18n-ignore: what a path is called in a refusal for a bad id.
 const archivePath = (id) => resolveChildPath(BASEMAPS_DIR, `${id}.pmtiles`, "basemap id");
 
 const getManifest = () => {
