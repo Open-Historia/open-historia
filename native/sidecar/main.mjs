@@ -520,6 +520,7 @@ const methods = {
   },
   presence: async ({ visible }) => {
     setVisible(visible !== false);
+    if (visible === false) storage.flush();
     return true;
   },
   cancel: async ({ call }) => {

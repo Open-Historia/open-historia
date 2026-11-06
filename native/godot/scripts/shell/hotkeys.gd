@@ -84,6 +84,8 @@ func zoom_factor() -> float:
 
 
 func ui_factor() -> float:
+	if UI.phone():
+		return zoom_factor() * UI.phone_density()
 	return zoom_factor() * window_scale(Vector2(get_tree().root.size) if is_inside_tree() else Vector2.ZERO)
 
 
@@ -96,6 +98,9 @@ func _apply_scale() -> void:
 
 
 func _fit_screen(resize: bool) -> void:
+	if UI.phone():
+		_fit_phone(resize)
+		return
 	var scale := screen_scale()
 	_scale_now = scale
 	if DisplayServer.window_get_mode() == DisplayServer.WINDOW_MODE_WINDOWED:
@@ -113,12 +118,22 @@ func _fit_screen(resize: bool) -> void:
 	_apply_scale()
 
 
+func _fit_phone(resize: bool) -> void:
+	var preview := UI.phone_preview()
+	if resize and preview != Vector2.ZERO and DisplayServer.window_get_mode() == DisplayServer.WINDOW_MODE_WINDOWED:
+		var size := Vector2i((preview * UI.phone_density()).round())
+		DisplayServer.window_set_size(size)
+		var usable := DisplayServer.screen_get_usable_rect(DisplayServer.window_get_current_screen())
+		DisplayServer.window_set_position(usable.position + Vector2i(maxi(0, (usable.size.x - size.x) / 2), 0))
+	_apply_scale()
+
+
 func _on_dpi_changed() -> void:
 	_watch_screen()
 
 
 func _watch_screen() -> void:
-	if not apply_defaults or not is_inside_tree():
+	if not apply_defaults or not is_inside_tree() or UI.phone():
 		return
 	var windowed := DisplayServer.window_get_mode() == DisplayServer.WINDOW_MODE_WINDOWED
 	var scale := screen_scale()

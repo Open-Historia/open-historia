@@ -56,6 +56,66 @@ static var _logo: Texture2D
 
 
 static var _repo_root := ""
+static var _phone := -1
+
+const PHONE_TAP := 44.0
+const PHONE_FEATURES_OFF := ["multiplayer", "discord", "webview", "avif", "updater", "devtools", "microphone"]
+
+
+static func phone() -> bool:
+	if _phone < 0:
+		_phone = 1 if OS.get_name() in ["Android", "iOS"] or phone_preview() != Vector2.ZERO else 0
+	return _phone == 1
+
+
+static func phone_preview() -> Vector2:
+	var raw := OS.get_environment("OH_PHONE").strip_edges().to_lower()
+	if raw.is_empty() or OS.get_name() in ["Android", "iOS"]:
+		return Vector2.ZERO
+	var parts := raw.split("x")
+	if parts.size() != 2 or not parts[0].is_valid_int() or not parts[1].is_valid_int():
+		return Vector2(412, 915)
+	return Vector2(int(parts[0]), int(parts[1]))
+
+
+static func phone_density() -> float:
+	if OS.get_name() == "Android":
+		var dpi := DisplayServer.screen_get_dpi()
+		return maxf(1.0, float(dpi) / 160.0) if dpi > 0 else 1.0
+	if OS.get_name() == "iOS":
+		return maxf(1.0, DisplayServer.screen_get_scale())
+	var wanted := OS.get_environment("OH_PHONE_SCALE")
+	return clampf(float(wanted), 0.5, 4.0) if wanted.is_valid_float() else 1.0
+
+
+static func has_feature(feature: String) -> bool:
+	if OS.get_name() == "Android" or phone_preview() != Vector2.ZERO:
+		return not PHONE_FEATURES_OFF.has(feature)
+	return true
+
+
+static func safe_insets() -> Vector4:
+	if not phone():
+		return Vector4.ZERO
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree == null or tree.root == null:
+		return Vector4.ZERO
+	var preview := phone_preview()
+	if preview != Vector2.ZERO:
+		var top := float(OS.get_environment("OH_PHONE_SAFE_TOP")) if OS.get_environment("OH_PHONE_SAFE_TOP").is_valid_float() else 0.0
+		return Vector4(0, top, 0, 0)
+	var factor := maxf(0.01, tree.root.content_scale_factor)
+	var screen := Vector2(DisplayServer.screen_get_size())
+	var safe := DisplayServer.get_display_safe_area()
+	if safe.size.x <= 0 or safe.size.y <= 0:
+		return Vector4.ZERO
+	return Vector4(maxf(0.0, safe.position.x) / factor, maxf(0.0, safe.position.y) / factor, maxf(0.0, screen.x - safe.end.x) / factor, maxf(0.0, screen.y - safe.end.y) / factor)
+
+
+static func tap_size(control: Control, least := PHONE_TAP) -> void:
+	if not phone() or control == null:
+		return
+	control.custom_minimum_size = Vector2(maxf(control.custom_minimum_size.x, least), maxf(control.custom_minimum_size.y, least))
 
 
 static func repo_path(relative: String) -> String:
@@ -170,13 +230,28 @@ static func icon_rect(name: String, size := 16, color := WHITE) -> TextureRect:
 	return rect
 
 
+static func boot_file(relative: String) -> String:
+	var path := repo_path(relative)
+	if FileAccess.file_exists(path):
+		return path
+	var packed := "res://android_payload/boot/%s.bin" % relative
+	return packed if FileAccess.file_exists(packed) else path
+
+
 static func logo() -> Texture2D:
 	if _logo:
 		return _logo
-	var image := Image.load_from_file(repo_path("public/logo.png"))
+	var image := _image_at(boot_file("public/logo.png"))
 	if image:
 		_logo = ImageTexture.create_from_image(image)
 	return _logo
+
+
+static func _image_at(path: String) -> Image:
+	if not path.begins_with("res://"):
+		return Image.load_from_file(path)
+	var image := Image.new()
+	return image if image.load_png_from_buffer(FileAccess.get_file_as_bytes(path)) == OK else null
 
 
 static func flag(path: String, height := 32) -> Texture2D:

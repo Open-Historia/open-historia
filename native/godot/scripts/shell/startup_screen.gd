@@ -226,7 +226,7 @@ static func _font_file(file: String) -> FontFile:
 	if _files.has(file):
 		return _files[file]
 	var font := FontFile.new()
-	if font.load_dynamic_font(UI.repo_path("public/fonts/" + file)) != OK:
+	if font.load_dynamic_font(UI.boot_file("public/fonts/" + file)) != OK:
 		font = null
 	_files[file] = font
 	return font

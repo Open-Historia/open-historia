@@ -2,6 +2,7 @@ class_name MapView
 extends Node2D
 
 signal region_clicked(index: int)
+signal region_held(index: int, at: Vector2)
 signal baked(info: Dictionary)
 signal bake_failed(message: String)
 signal camera_moved

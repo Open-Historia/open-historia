@@ -1138,8 +1138,9 @@ func _build_general() -> void:
 		_add_toggle_note(access, SYSTEM_MOTION_NOTE)
 	var policy := _button("Privacy policy", func() -> void: OS.shell_open(PRIVACY_URL), "privacy")
 	var privacy := _section("Privacy", "What the game tells other services about you, and the switches for it.", policy)
-	_add_toggle(privacy, "Show what I am playing on Discord", _flag("privacy_discord_presence"), func() -> void: _set_flag("privacy_discord_presence", not _flag("privacy_discord_presence")))
-	_add_settings_helper(privacy, "Discord shows the country you play, the scenario and the in-game date to people who can see your activity. Desktop app only.", 0)
+	if UI.has_feature("discord"):
+		_add_toggle(privacy, "Show what I am playing on Discord", _flag("privacy_discord_presence"), func() -> void: _set_flag("privacy_discord_presence", not _flag("privacy_discord_presence")))
+		_add_settings_helper(privacy, "Discord shows the country you play, the scenario and the in-game date to people who can see your activity. Desktop app only.", 0)
 
 
 func _display_mode(parent: VBoxContainer) -> void:

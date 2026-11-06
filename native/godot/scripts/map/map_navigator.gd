@@ -34,6 +34,8 @@ const TAP_MAX_INTERVAL_MS := 500
 const TAP_MAX_TOUCH_MS := 500
 const TAP_MAX_DISTANCE := 30.0
 const TAP_DRAG_ZOOM_PIXELS := 128.0
+const HOLD_MS := 500
+const HOLD_DISTANCE := 10.0
 const INERTIA_LINEARITY := 0.3
 const ZOOM_INERTIA_DECELERATION := 20.0
 const ZOOM_INERTIA_MAX_SPEED := 1400.0
@@ -845,6 +847,11 @@ func _apply_centre(ease: Dictionary, k: float) -> void:
 
 
 var _touches := {}
+var _hold_serial := 0
+var _hold_index := -1
+var _hold_point := Vector2.ZERO
+var _hold_moved := false
+var _held := false
 var _touch_moved := false
 var _touch_order: Array[int] = []
 var _touch_cancelled := false
@@ -885,6 +892,7 @@ func _on_touch(touch: InputEventScreenTouch) -> bool:
 		if not _touch_order.has(touch.index):
 			_touch_order.append(touch.index)
 		_tap_on_start(touch.position, now)
+		_hold_on_start(touch.index, touch.position)
 		_swipe_on_start(now)
 		if _touches.size() >= 2 and _pair.is_empty():
 			_pair_begin()
@@ -892,6 +900,7 @@ func _on_touch(touch: InputEventScreenTouch) -> bool:
 		return true
 	if not _touches.has(touch.index):
 		return true
+	_hold_serial += 1
 	_touches.erase(touch.index)
 	_touch_order.erase(touch.index)
 	if touch.canceled:
@@ -918,6 +927,8 @@ func _on_touch_drag(drag: InputEventScreenDrag) -> bool:
 	if not _touches.has(drag.index):
 		return true
 	_touches[drag.index] = drag.position
+	if drag.index == _hold_index and drag.position.distance_to(_hold_point) > HOLD_DISTANCE:
+		_hold_moved = true
 	_tap_on_move(drag.position)
 	_touch_moved = true
 	return true
@@ -968,8 +979,34 @@ func _touch_begin() -> void:
 	_pair_used = false
 
 
+func _hold_on_start(index: int, point: Vector2) -> void:
+	_hold_serial += 1
+	if not UI.phone() or _touches.size() != 1:
+		return
+	_hold_index = index
+	_hold_point = point
+	_hold_moved = false
+	var serial := _hold_serial
+	get_tree().create_timer(HOLD_MS / 1000.0).timeout.connect(func() -> void: _hold_fire(serial))
+
+
+func _hold_fire(serial: int) -> void:
+	if serial != _hold_serial or _hold_moved or _touches.size() != 1 or not _touches.has(_hold_index) or not _pair.is_empty():
+		return
+	_held = true
+	var at: Vector2 = _touches[_hold_index]
+	if globe and globe.active and not globe.screen_hits_globe(at):
+		map_view.region_held.emit(-1, at)
+		return
+	map_view.region_held.emit(map_view.baker.pick(map_view.screen_to_world(at)), at)
+
+
 func _touch_finish(tapped: Array) -> void:
 	_touch_order.clear()
+	if _held:
+		_held = false
+		_touch_record.clear()
+		tapped = []
 	_pan_seen = {}
 	if globe:
 		globe.held = false

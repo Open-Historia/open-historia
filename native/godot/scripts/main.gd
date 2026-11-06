@@ -44,6 +44,7 @@ var shell_notices: Node
 var devtools: Node
 var crash: CrashScreen
 var app_update: Node
+var phone_shell: PhoneShell
 var _extras_ready := false
 var _engine_was_ready := false
 var _fatal_message := ""
@@ -73,6 +74,11 @@ func _ready() -> void:
 	Hud.warm_scripts(BOOT_SCRIPTS)
 	engine = EngineLink.new()
 	add_child(engine)
+	if UI.phone():
+		phone_shell = PhoneShell.new()
+		add_child(phone_shell)
+		move_child(phone_shell, 0)
+		phone_shell.setup(engine, self)
 	var engine_started := engine.start()
 	sound = _make_node("res://scripts/audio/sound_engine.gd")
 	if sound:
@@ -106,7 +112,7 @@ func _ready() -> void:
 	_build_boot()
 	_show("boot")
 	_build_crash()
-	app_update = _make_node("res://scripts/shell/app_update.gd")
+	app_update = _make_node("res://scripts/shell/app_update.gd") if UI.has_feature("updater") else null
 	if app_update:
 		add_child(app_update)
 		app_update.call("setup", engine)
@@ -216,10 +222,10 @@ func _mount_parts() -> void:
 	war_room_button = _make_node("res://scripts/ui/war_room_button.gd")
 	if war_room_button:
 		_place_above(war_room_button, war_room if war_room else hud)
-	shared_overlay = _make_node("res://scripts/multiplayer/shared_game_overlay.gd")
+	shared_overlay = _make_node("res://scripts/multiplayer/shared_game_overlay.gd") if UI.has_feature("multiplayer") else null
 	if shared_overlay:
 		_place_above(shared_overlay, menu)
-	discord_invites = _make_node("res://scripts/multiplayer/discord_invites.gd")
+	discord_invites = _make_node("res://scripts/multiplayer/discord_invites.gd") if UI.has_feature("discord") else null
 	if discord_invites:
 		ui.add_child(discord_invites)
 	editor = _make_node("res://scripts/ui/scenario_editor.gd")
@@ -439,6 +445,26 @@ func _notification(what: int) -> void:
 		get_tree().quit()
 
 
+func close_top() -> bool:
+	if crash and crash.is_shown():
+		return false
+	if settings and settings.visible:
+		settings.visible = false
+		return true
+	if game_menu and bool(_call(game_menu, "is_open")):
+		_call(game_menu, "close")
+		return true
+	if war_room and bool(_call(war_room, "is_open")):
+		_call(war_room, "toggle")
+		return true
+	if picker.visible:
+		picker.call("_close")
+		return true
+	if in_game and _screen == "game":
+		return hud.close_top()
+	return false
+
+
 func _build_crash() -> void:
 	var layer := CanvasLayer.new()
 	layer.layer = 60
@@ -450,6 +476,10 @@ func _build_crash() -> void:
 
 func _on_engine_stopped(message: String) -> void:
 	if _reloading:
+		return
+	if phone_shell and _engine_was_ready and phone_shell.stopped_by_system():
+		PhoneShell.resume_game_id = game_id if in_game else ""
+		_reload_app()
 		return
 	shell.cancel_game_loading(true)
 	if not _engine_was_ready:
@@ -516,7 +546,7 @@ func _build_boot() -> void:
 	add_child(hotkeys)
 	hotkeys.setup(engine)
 	hotkeys.reload_requested.connect(_on_reload_requested)
-	devtools = _make_node("res://scripts/devtools/devtools.gd")
+	devtools = _make_node("res://scripts/devtools/devtools.gd") if UI.has_feature("devtools") else null
 	if devtools:
 		add_child(devtools)
 		devtools.call("setup", engine, self)
@@ -627,6 +657,11 @@ func _on_engine_ready(_data: Dictionary) -> void:
 	i18n.activate()
 	await _refresh_library()
 	menu.refresh_trash()
+	if not PhoneShell.resume_game_id.is_empty():
+		var resume_id := PhoneShell.resume_game_id
+		PhoneShell.resume_game_id = ""
+		if not _game_named(resume_id).is_empty():
+			await _open_game(resume_id)
 
 
 func _refresh_library() -> void:

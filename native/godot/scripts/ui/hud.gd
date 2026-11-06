@@ -84,6 +84,7 @@ func setup(engine: EngineLink, map: MapView) -> void:
 	_map = map
 	date_widget.setup(engine, map)
 	map.region_clicked.connect(_on_region_clicked)
+	map.region_held.connect(_on_region_held)
 	date_widget.turn_landed.connect(func(_view: Dictionary) -> void: refresh_panels())
 
 
@@ -790,14 +791,33 @@ func _apply_map_mode() -> void:
 		_map.set_owner_color_override({}, Color(0, 0, 0, 0))
 
 
-func _on_region_clicked(index: int) -> void:
+func close_top() -> bool:
+	if map_cards and is_instance_valid(map_cards):
+		var floating: Variant = map_cards.get("_floating")
+		if floating is Control and is_instance_valid(floating):
+			_invoke(map_cards, "dismiss_all")
+			return true
+	if not open_drawer.is_empty():
+		close_drawer()
+		return true
+	if not active_panel.is_empty():
+		set_active_panel("")
+		return true
+	return false
+
+
+func _on_region_held(index: int, at: Vector2) -> void:
+	_on_region_clicked(index, at, true)
+
+
+func _on_region_clicked(index: int, at := Vector2(-1, -1), card := false) -> void:
 	if not map_cards or not is_instance_valid(map_cards) or not visible:
 		return
 	if cheats and is_instance_valid(cheats) and cheats.has_method("is_picking") and cheats.call("is_picking") == true:
 		return
 	if forces and is_instance_valid(forces) and forces.has_method("is_placing") and forces.call("is_placing") == true:
 		return
-	var mouse := get_viewport().get_mouse_position()
+	var mouse := at if at.x >= 0.0 else get_viewport().get_mouse_position()
 	if map_cards.has_method("handle_screen_click"):
 		var handled: Variant = await map_cards.call("handle_screen_click", mouse)
 		if handled == true:
@@ -808,6 +828,8 @@ func _on_region_clicked(index: int) -> void:
 		return
 	if open_drawer == "country" and drawers.has("country"):
 		_invoke(drawers["country"], "on_region_selected", [_map.region_owner(index)])
+	if UI.phone() and not card:
+		return
 	_invoke(map_cards, "show_region", [index, _map.region_name(index), _map.region_owner(index), mouse])
 
 

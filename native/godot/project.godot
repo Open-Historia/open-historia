@@ -10,10 +10,12 @@ config/features=PackedStringArray("4.7")
 boot_splash/show_image=false
 boot_splash/bg_color=Color(0.0745098, 0.0745098, 0.0823529, 1)
 boot_splash/minimum_display_time=0
+config/quit_on_go_back=false
 
 [audio]
 
 driver/enable_input=true
+driver/enable_input.android=false
 
 [display]
 
@@ -22,7 +24,7 @@ window/size/viewport_height=900
 window/size/mode=0
 window/energy_saving/keep_screen_on=false
 window/stretch/aspect="expand"
-window/handheld/orientation=4
+window/handheld/orientation=1
 
 [gui]
 

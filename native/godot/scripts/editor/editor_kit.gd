@@ -367,7 +367,7 @@ static func ask(host: Node, text: String, ok_text := "OK", cancel_text := "Cance
 	var dialog := ConfirmationDialog.new()
 	dialog.dialog_text = text
 	dialog.dialog_autowrap = true
-	dialog.min_size = Vector2i(460, 0)
+	dialog.min_size = Vector2i(320 if UI.phone() else 460, 0)
 	dialog.ok_button_text = ok_text
 	dialog.cancel_button_text = cancel_text
 	host.add_child(dialog)
