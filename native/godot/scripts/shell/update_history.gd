@@ -10,11 +10,13 @@ const SOFT := Color(244 / 255.0, 244 / 255.0, 245 / 255.0, 0.66)
 const FAINT := Color(244 / 255.0, 244 / 255.0, 245 / 255.0, 0.42)
 const LINE := Color(1, 1, 1, 0.12)
 const FONT := "sans-serif"
+const RELEASE_GOLD := Color("#d9a441")
 
 var _engine: EngineLink
 var _prefs := {}
 var _still := false
 var _updates: Array = []
+var _releases := {}
 var _viewing: UpdateNotice
 var _scroll: ScrollContainer
 var _timeline: VBoxContainer
@@ -204,6 +206,13 @@ func setup(engine: EngineLink, prefs: Dictionary) -> void:
 	if not reply.get("ok", false):
 		return
 	_updates = (reply.get("result", {}) as Dictionary).get("updates", [])
+	if _updates.any(func(update: Variant) -> bool: return update is Dictionary and str((update as Dictionary).get("kind", "")) == "release"):
+		var listed: Dictionary = await engine.request("look.releases")
+		var found: Variant = listed.get("result")
+		if bool(listed.get("ok", false)) and found is Dictionary:
+			for entry in (found as Dictionary).get("releases", []):
+				if entry is Dictionary:
+					_releases[str((entry as Dictionary).get("id", ""))] = entry
 	_build()
 	var told: Dictionary = await engine.request("update.state")
 	var state: Variant = told.get("result")
@@ -249,11 +258,16 @@ func _build() -> void:
 
 
 func _card(update: Dictionary, delay: float) -> Control:
-	var major := str(update.get("kind", "")) == "major"
+	var release := str(update.get("kind", "")) == "release"
+	var major := str(update.get("kind", "")) == "major" or release
 	var banners: Array = update.get("banners", [])
 	var first: Dictionary = banners[0] if not banners.is_empty() else {}
+	if release:
+		first = _releases.get(str(update.get("id", "")), {})
 	var chrome: Dictionary = Themes.chrome(first, update)
 	var accent: Color = (chrome.get("dot", {}) as Dictionary).get("on", Color.WHITE) if major else Color(244 / 255.0, 244 / 255.0, 245 / 255.0, 0.5)
+	if release:
+		accent = RELEASE_GOLD
 	var item := Item.new()
 	item.major = major
 	item.accent = accent
@@ -276,11 +290,23 @@ func _card(update: Dictionary, delay: float) -> Control:
 	panel.add_theme_stylebox_override("panel", style)
 	var column := UpdateKit.vbox(0)
 	var meta := UpdateKit.hbox(roundi(UpdateKit.px(0.5)))
-	var kind := UpdateKit.text("Major update" if major else "Minor update", UpdateKit.px(0.66), accent if major else FAINT, FONT, 800, false, 0.12, true)
+	var kind := UpdateKit.text("Version" if release else ("Major update" if major else "Minor update"), UpdateKit.px(0.66), accent if major else FAINT, FONT, 800, false, 0.12, true)
 	kind.autowrap_mode = TextServer.AUTOWRAP_OFF
 	kind.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	kind.size_flags_vertical = Control.SIZE_SHRINK_END
-	meta.add_child(kind)
+	if release:
+		var named := UpdateKit.hbox(0)
+		named.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+		named.size_flags_vertical = Control.SIZE_SHRINK_END
+		named.add_child(kind)
+		var number := UpdateKit.text(" " + str(first.get("version", "")), UpdateKit.px(0.66), accent, FONT, 800, false, 0.12, true)
+		number.autowrap_mode = TextServer.AUTOWRAP_OFF
+		number.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+		number.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+		named.add_child(number)
+		meta.add_child(named)
+	else:
+		meta.add_child(kind)
 	var when := UpdateKit.text(str(update.get("dateText", "")), UpdateKit.px(0.72), FAINT, FONT)
 	when.autowrap_mode = TextServer.AUTOWRAP_OFF
 	when.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
@@ -309,7 +335,7 @@ func _card(update: Dictionary, delay: float) -> Control:
 	if major and not str(first.get("lead", "")).is_empty():
 		column.add_child(UpdateKit.gap(UpdateKit.px(0.35)))
 		column.add_child(UpdateKit.para(str(first.get("lead", "")), UpdateKit.px(0.84), SOFT, FONT, 400, false, 1.5))
-	if major and banners.size() > 1:
+	if major and not release and banners.size() > 1:
 		var titles: PackedStringArray = []
 		for banner in banners:
 			titles.append(str((banner as Dictionary).get("title", "")))
