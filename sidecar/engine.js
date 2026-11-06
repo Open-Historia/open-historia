@@ -372,3 +372,8 @@ export * as advisorActionReview from "../../src/Game/GameUI/advisorActionReview.
 export * as advisorActionApproval from "../../src/Game/GameUI/advisorActionApproval.js";
 export * as advisorProjectRouting from "../../src/Game/GameUI/advisorProjectRouting.js";
 export * as characterConversations from "../../src/Game/AI/characterConversations.js";
+export * as tlModels from "../../src/runtime/translationModels.js";
+export * as speechEngines from "../../src/runtime/speechEngines.js";
+export * as speechSilence from "../../src/runtime/speechSilence.js";
+export * as speechPieces from "../../src/runtime/speechPieces.js";
+export * as speechSystem from "../../electron/speechSystem.cjs";
