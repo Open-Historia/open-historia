@@ -135,8 +135,11 @@ export const collectPlayerMaterial = ({
     if (asText(action?.status) !== "planned") continue;
     // In a shared game every order names the polity that gave it (ownerCode).
     const owner = asText(action.ownerCode);
-    const label = asText(action.text || action.rawInput);
-    items.push({ kind: "order", id: asText(action.id), label: owner ? `(${owner}) ${label}` : label, overdue: action.overdue === true, required: true });
+    // Sandbox mode (runtime/sandbox.js): an order given for another polity says whose it is.
+    const actor = asText(action.actor);
+    const text = asText(action.text || action.rawInput);
+    const label = [owner && `(${owner})`, actor && `(as ${actor})`, text].filter(Boolean).join(" ");
+    items.push({ kind: "order", id: asText(action.id), label, overdue: action.overdue === true, required: true });
   }
 
   for (const project of asArray(projects)) {

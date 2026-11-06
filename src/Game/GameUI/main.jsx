@@ -736,6 +736,17 @@ const Main = ({
   useBackToClose(isWarRoomOpen, () => setIsWarRoomOpen(false));
   useBackToClose(isForcesOpen, () => setIsForcesOpen(false));
   useBackToClose(isCheatsOpen, () => setIsCheatsOpen(false));
+  // Sandbox mode's Write event / GM command buttons (actions.jsx SandboxBar)
+  // open the Cheats panel straight at one of its tools.
+  const [cheatsTool, setCheatsTool] = useState(null);
+  useEffect(() => {
+    const open = (event) => {
+      setCheatsTool(event?.detail?.tool || null);
+      setIsCheatsOpen(true);
+    };
+    window.addEventListener("oh:open-cheats", open);
+    return () => window.removeEventListener("oh:open-cheats", open);
+  }, []);
   useBackToClose(isDebugConsoleOpen, () => setIsDebugConsoleOpen(false));
   useBackToClose(isInteractiveOpen, () => setIsInteractiveOpen(false));
   useBackToClose(isSettingsOpen, () => {
@@ -900,7 +911,7 @@ const Main = ({
       </Suspense>
       <Suspense fallback={null}>
         <Presence open={isCheatsOpen}>
-          <LazyCheatsPanel open={isCheatsOpen} onClose={() => setIsCheatsOpen(false)} onOpenForces={() => { setIsCheatsOpen(false); setIsForcesOpen(true); }} />
+          <LazyCheatsPanel open={isCheatsOpen} initialTool={cheatsTool} onClose={() => { setIsCheatsOpen(false); setCheatsTool(null); }} onOpenForces={() => { setIsCheatsOpen(false); setIsForcesOpen(true); }} />
         </Presence>
       </Suspense>
       <Suspense fallback={null}>

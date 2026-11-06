@@ -14,6 +14,7 @@ import {
     applyCountryStatPatchToWorld,
     applyEventImpactsToWorld,
     MARKER_STATUSES,
+    mutateGameData,
     mutateWorldState,
     readEventsState,
     readGameData,
@@ -43,6 +44,7 @@ import { PUPPET_COUP_LOYALTY, puppetKindLabel } from "../../runtime/puppets.js";
 import { PUPPET_KIND_OPTIONS, PUPPET_SECRECY_OPTIONS } from "../../Editor/scenarioPuppets.js";
 import { applyGmPuppetChange, gmPuppetRows } from "./puppetStatesTool.js";
 import { DIFFICULTY_LEVELS, normalizeDifficulty } from "../../runtime/difficulty.js";
+import { isObserver, isSandbox, withSandbox } from "../../runtime/sandbox.js";
 import { applyGameMasterPreview, consolidateHistoryNow, previewGameMasterCommand } from "../AI/gameplayLazy.js";
 import { HISTORY_CONSOLIDATION, countWords, describeHistoryConsolidation, planHistoryConsolidation } from "../AI/historyConsolidation.js";
 import {
@@ -150,6 +152,7 @@ const TOOLS = [
     { id: "reminders", title: "Simulation Reminders", subtitle: "Standing facts every AI in the game is told until you withdraw them — and what the next skip will hear", icon: "❖" },
     { id: "roll-back-turn", title: "Roll Back Turn", subtitle: "Restore the game to the start of an earlier turn", icon: "↶" },
     { id: "your-country", title: "Play As Country", subtitle: "Change which country you're currently controlling", icon: "♛" },
+    { id: "sandbox", title: "Sandbox Mode", subtitle: "Give orders for any country, write events freely, or lead no one and watch", icon: "◎" },
     { id: "difficulty", title: "Difficulty", subtitle: "Decide how things tend to go for you", icon: "◈" },
     { id: "annex-country", title: "Annex Country", subtitle: "Transfer an entire country's mapped territory", icon: "⇢" },
     { id: "annex-regions", title: "Annex Regions", subtitle: "Transfer individual map regions to another country", icon: "⌖" },
@@ -193,7 +196,7 @@ const TOOL_GROUPS = [
         title: "Simulation",
         subtitle: "Change player control and simulation challenge settings.",
         icon: "◈",
-        tools: ["difficulty", "your-country"],
+        tools: ["difficulty", "your-country", "sandbox"],
     },
     {
         id: "map",
@@ -360,7 +363,7 @@ const PolitySelect = ({ polities, value, onChange, placeholder = "Pick a country
     </select>
 );
 
-const CheatsPanel = ({ open, onClose, onOpenForces }) => {
+const CheatsPanel = ({ open, onClose, onOpenForces, initialTool = null }) => {
     const [tool, setTool] = useState(null);
     const [busy, setBusy] = useState(false);
     const [status, setStatus] = useState("");
@@ -391,12 +394,13 @@ const CheatsPanel = ({ open, onClose, onOpenForces }) => {
     useEffect(() => {
         if (open) {
             setStatus("");
+            if (initialTool) setTool(initialTool);
             void refresh();
         } else {
             setTool(null);
             setClickMode(null);
         }
-    }, [open]);
+    }, [open, initialTool]);
 
     useEffect(() => {
         if (!clickMode) {
@@ -4425,6 +4429,47 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
             >
             Switch country
             </button>
+            {statusLine}
+            </div>
+            </>
+        );
+    }
+
+    if (tool === "sandbox") {
+        const sandboxOn = isSandbox(game);
+        const observerOn = isObserver(game);
+        const setMode = (next, summary) => runBusy(async () => {
+            await mutateGameData((current) => withSandbox(current, next));
+            await noteGmChange("polity", summary);
+            await refresh();
+            return summary;
+        });
+        const row = (title, text, on, onToggle, disabled = false) => (
+            <label style={{ alignItems: "flex-start", cursor: disabled ? "not-allowed" : "pointer", display: "flex", gap: "0.6rem", marginTop: "0.7rem", opacity: disabled ? 0.5 : 1 }}>
+            <input type="checkbox" checked={on} disabled={busy || disabled} onChange={onToggle} style={{ marginTop: "0.2rem" }} />
+            <span>
+            <strong style={{ color: "white", fontSize: "0.84rem" }}>{title}</strong>
+            <span style={{ color: "rgba(255,255,255,0.6)", display: "block", fontSize: "0.76rem", lineHeight: 1.45 }}>{text}</span>
+            </span>
+            </label>
+        );
+        return (
+            <>
+            {header(meta.title, meta.subtitle)}
+            <div>
+            {row(
+                "Sandbox",
+                "Each order can be given for any country (an “Acting as” picker appears in the Actions panel), and Write event and GM command buttons sit beside the order box. The turn treats an order for another country as that government's own decision.",
+                sandboxOn,
+                () => setMode({ sandbox: !sandboxOn }, sandboxOn ? "Sandbox mode is off." : "Sandbox mode is on: orders can be given for any polity."),
+            )}
+            {row(
+                "Observer — lead no one",
+                `You lead no country: the AI runs every power${game?.country ? `, ${nameOf(game.country)} included` : ""}, foreign leaders stop writing to you, the advisor becomes an impartial analyst, and every order needs a country to act as.`,
+                observerOn,
+                () => setMode({ observer: !observerOn }, observerOn ? `The player leads ${nameOf(game?.country)} again.` : "The player now leads no one and watches as an observer."),
+                !sandboxOn,
+            )}
             {statusLine}
             </div>
             </>

@@ -2815,7 +2815,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
 
   // Create the game from the scenario with the starting country and difficulty
   // the player chose in the two-step picker, and go straight into it.
-  const startGameForCountry = async (scenario, countryCode, difficulty) => {
+  const startGameForCountry = async (scenario, countryCode, difficulty, modePatch = null) => {
     setCountryPicker(null);
     setCustomRegionData(null); setPickerOwnerOverrides(null); setPickerColors(null); setPickerBackground(null);
     setEditorError(null);
@@ -2829,7 +2829,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
       // itself: patched in a second request, after `setActive` had switched to
       // the game, the opening cover and the HUD named the scenario's default
       // country until it landed.
-      const gamePatch = { ...(countryCode ? { country: countryCode } : null), ...(difficulty ? { difficulty } : null) };
+      const gamePatch = { ...(countryCode ? { country: countryCode } : null), ...(difficulty ? { difficulty } : null), ...modePatch };
       await createGame({
         name: `${scenario.name} Session`,
         scenarioId: scenario.id,
@@ -4429,7 +4429,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
 
   // Country picker resolution: in the Apply-&-Play flow update the active game;
   // in the normal "New Game" flow create a new game.
-  const choosePlayCountry = async (countryCode, difficulty) => {
+  const choosePlayCountry = async (countryCode, difficulty, modePatch = null) => {
     const gid = playGameId;
     setCountryPicker(null);
     setCustomRegionData(null); setPickerOwnerOverrides(null); setPickerColors(null); setPickerBackground(null);
@@ -4437,7 +4437,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     if (!gid) return;
     setMenuOpen(false);
     try {
-      const gamePatch = { ...(countryCode ? { country: countryCode } : null), ...(difficulty ? { difficulty } : null) };
+      const gamePatch = { ...(countryCode ? { country: countryCode } : null), ...(difficulty ? { difficulty } : null), ...modePatch };
       if (Object.keys(gamePatch).length) {
         await saveGame(gid, { gamePatch });
       }
@@ -4468,10 +4468,12 @@ const LibraryTopBar = ({ onOpenSettings }) => {
       return;
     }
     const countryCode = draft?.countryCode || "";
+    // Observing (runtime/sandbox.js): sandbox on, leading no one.
+    const modePatch = draft?.observer ? { sandbox: true, observer: true } : null;
     if (playGameId) {
-      choosePlayCountry(countryCode, difficultyId);
+      choosePlayCountry(countryCode, difficultyId, modePatch);
     } else {
-      startGameForCountry(countryPicker, countryCode, difficultyId);
+      startGameForCountry(countryPicker, countryCode, difficultyId, modePatch);
     }
   };
 
@@ -5010,6 +5012,15 @@ const LibraryTopBar = ({ onOpenSettings }) => {
                       </Suspense>
                     </div>
                     <div style={{ display: "flex", justifyContent: "flex-end", marginTop: isMobile ? "0.6rem" : "0.75rem", borderTop: "1px solid rgba(255,255,255,0.08)", paddingTop: "0.6rem", flexShrink: 0 }}>
+                      <button
+                        type="button"
+                        className="oh-tap-row"
+                        onClick={() => setDifficultyPick({ countryCode: "", observer: true })}
+                        title="Lead no country: the AI runs every power, and you give orders for any of them or write events yourself"
+                        style={touchFit({ ...themeButtonStyle, background: "rgba(255,255,255,0.06)", borderRadius: 8, marginRight: "auto", padding: "0.45rem 1.25rem", fontSize: "0.85rem", fontWeight: 600 }, touch)}
+                      >
+                        Observe — lead no one (sandbox)
+                      </button>
                       <button
                         type="button"
                         className="oh-tap-row"

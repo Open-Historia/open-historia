@@ -142,6 +142,7 @@ import { describeWorldLedgersForAdvisor, polityEntry } from "./advisorLedgers.js
 import { loadStatSheetDefinition } from "../../runtime/statsSheet.js";
 import { renderReminders } from "../../runtime/gmChanges.js";
 import { describeGoalForAdvisor, playerGoalOf } from "../../runtime/playerGoal.js";
+import { describeSandboxForAdvisor } from "../../runtime/sandbox.js";
 import { describeReportsForPrompt, normalizeReports } from "../../runtime/reports.js";
 import { describeDocumentsForAdvisor } from "../../runtime/reportDelivery.js";
 import { viewAsSeen } from "../../runtime/gameState.js";
@@ -3880,6 +3881,8 @@ async function buildAdvisorSystemPrompt({ recipient = null } = {}) {
         // The Game Master's standing reminders (runtime/gmChanges.js): what is
         // true now, whatever the record says. Empty — and so absent — without any.
         renderReminders(worldData?.simulationReminders, { formatDate: formatDateReadable }),
+        // Observer mode (runtime/sandbox.js): no government to serve.
+        describeSandboxForAdvisor(gameData),
         ADVISOR_FORMATTING_DIRECTIVE,
         // Last, as the last thing it writes: the hidden ADVISOR_MEMORY line
         // (advisorMemory.js).
