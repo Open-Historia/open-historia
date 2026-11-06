@@ -130,6 +130,13 @@ func setup(engine: EngineLink, updates: Array, prefs: Dictionary) -> void:
 	_prefs = prefs
 	_still = bool(prefs.get("reduceMotion", false))
 	_pages.clear()
+	if not updates.is_empty() and updates[0] is Dictionary and str((updates[0] as Dictionary).get("kind", "")) == "release":
+		visible = true
+		var page := ReleaseNotice.new()
+		add_child(page)
+		page.closed.connect(func() -> void: closed.emit())
+		await page.open(engine, str((updates[0] as Dictionary).get("id", "")), _still)
+		return
 	var needs_metal := false
 	var ordered: Array = updates.filter(func(update: Variant) -> bool: return update is Dictionary and str((update as Dictionary).get("kind", "")) == "major")
 	ordered.append_array(updates.filter(func(update: Variant) -> bool: return update is Dictionary and str((update as Dictionary).get("kind", "")) != "major"))

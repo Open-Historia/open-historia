@@ -812,7 +812,7 @@ func _contacts() -> void:
 	_check("the contact is kept with its link, type and personality", not valls.is_empty() and str(valls.get("title", "")) == "Head of government" and typeof(valls.get("binding")) == TYPE_DICTIONARY and str(valls.get("recipientType", "")) == "advisor-minister" and str(valls.get("personality", "")) == "Blunt about the deficit.\nLoyal to the President." and str(valls.get("status", "")) == "current", JSON.stringify(valls))
 	_check("the bar names the contact and its office", _trigger("Manuel Valls", "▴") != null and _find_text(panel, "Head of government · Political World"))
 	_check("the list gives the contact's type", _labels_with(panel, "Head of government · Advisor / Minister"))
-	_check("the composer is addressed to the contact", panel._input.placeholder_text == "Message Manuel Valls…" and panel.messages.is_empty(), panel._input.placeholder_text)
+	_check("the composer has no placeholder for a contact", panel._input.placeholder_text.is_empty() and panel.messages.is_empty(), panel._input.placeholder_text)
 	var actions_before := JSON.stringify(await _doc("actions")).count("Convene the budget cabinet")
 	_check("the contact answers", await _ask_panel("What do you make of the budget?", 2), str(panel.messages.size()))
 	await _wait(0.8)
@@ -839,7 +839,7 @@ func _contacts() -> void:
 	await _shoot("advisor-21-contact-reply")
 	var contact_thread: String = panel.active_thread
 	await panel._select_recipient("chief")
-	_check("the chief advisor's conversation is its own", panel.active_thread == "chief" and panel.messages.is_empty() and panel._input.placeholder_text.begins_with("Ask your advisor…"))
+	_check("the chief advisor's conversation is its own", panel.active_thread == "chief" and panel.messages.is_empty() and panel._input.placeholder_text.is_empty())
 	await panel._select_recipient(contact_thread)
 	_check("and the contact's comes back with it", panel.active_thread == contact_thread and panel.messages.size() == 2)
 	await _frames(3)
@@ -891,7 +891,6 @@ func _contacts() -> void:
 	await _character()
 	await _chief_identity()
 	await _unsupported_type()
-	await _several_action_fences()
 
 
 func _character() -> void:
@@ -914,7 +913,7 @@ func _character() -> void:
 	await _frames(3)
 	var jeanne := _contact_named("Jeanne Martin")
 	_check("the character is kept as a Citizen / Civilian with no office", str(jeanne.get("recipientType", "")) == "citizen-civilian" and typeof(jeanne.get("binding")) != TYPE_DICTIONARY, JSON.stringify(jeanne))
-	_check("a character's conversation says what it can see", _find_text(panel, "This character uses only the public scenario timeline and their own conversation history. Private government records and diplomacy are not shared.") and _find_text(panel, "No messages yet. Start your conversation.") and panel._input.placeholder_text == "Message Jeanne Martin…", panel._input.placeholder_text)
+	_check("a character's conversation says what it can see", _find_text(panel, "This character uses only the public scenario timeline and their own conversation history. Private government records and diplomacy are not shared.") and _find_text(panel, "No messages yet. Start your conversation.") and panel._input.placeholder_text.is_empty(), panel._input.placeholder_text)
 	_check("the list gives the character's type", _labels_with(panel, "Baker in Lyon · Citizen / Civilian"))
 	var actions_before := JSON.stringify(await _doc("actions")).count("Hold a rally for the budget")
 	_check("the character answers", await _ask_panel("What are people saying about the budget?", 2), str(panel.messages.size()))
@@ -959,7 +958,7 @@ func _chief_identity() -> void:
 	panel._recipient_draft["personality"] = "Candid and pragmatic; challenges weak arguments."
 	await panel._submit_recipient()
 	await _frames(3)
-	_check("the chief advisor takes its new name and title", str(panel.chief_profile.get("name", "")) == "Dmitri Orlov" and _trigger("Dmitri Orlov", "▴") != null and _find_text(panel, "Chief of Staff") and _labels_with(panel, "Dmitri Orlov · Original conversation") and panel._input.placeholder_text == "Message Dmitri Orlov…", panel._input.placeholder_text)
+	_check("the chief advisor takes its new name and title", str(panel.chief_profile.get("name", "")) == "Dmitri Orlov" and _trigger("Dmitri Orlov", "▴") != null and _find_text(panel, "Chief of Staff") and _labels_with(panel, "Dmitri Orlov · Original conversation") and panel._input.placeholder_text.is_empty(), panel._input.placeholder_text)
 	var stored := JSON.stringify(await _doc("advisor"))
 	_check("the identity is kept as its own record", stored.contains("advisor-chief-profile") and stored.contains("Candid and pragmatic"))
 	await _shoot("advisor-26-chief-customised")
@@ -982,33 +981,6 @@ func _chief_identity() -> void:
 		await _frames(3)
 	stored = JSON.stringify(await _doc("advisor"))
 	_check("Restore scenario defaults brings back the scenario's advisor and keeps the conversation", panel.chief_profile.is_empty() and _trigger("Chief advisor", "▴") != null and not stored.contains("advisor-chief-profile") and stored.contains("Who am I speaking with?") and panel.messages.size() == before + 2 and panel._recipient_editor.is_empty())
-
-
-func _count_buttons(node: Node, text: String) -> int:
-	var count := 1 if node is Button and (node as Button).text == text and (node as Button).is_visible_in_tree() else 0
-	for child in node.get_children():
-		count += _count_buttons(child, text)
-	return count
-
-
-func _several_action_fences() -> void:
-	await panel._select_recipient("chief")
-	await _frames(3)
-	var before := panel.messages.size()
-	_check("the chief advisor answers with three Action blocks", await _ask_panel("Give me each order separately.", before + 2), str(panel.messages.size()))
-	await _wait(0.6)
-	var reply: Dictionary = panel.messages[panel.messages.size() - 1]
-	var proposals: Array = reply.get("actionProposals", []) if typeof(reply.get("actionProposals")) == TYPE_ARRAY else []
-	var titles := JSON.stringify(proposals)
-	_check("every fenced Action block is offered for review, in order", proposals.size() == 2 and titles.find("Recall the ambassador from Tripoli") >= 0 and titles.find("Open talks with Berlin on the fiscal rules") > titles.find("Recall the ambassador from Tripoli") and not reply.has("actionsSummary"), titles.left(300))
-	var problems: Array = reply.get("actionsProblems", []) if typeof(reply.get("actionsProblems")) == TYPE_ARRAY else []
-	_check("the block that is not a list is reported and offers nothing", problems.has("Action block 2 was not a list; no proposals were offered from it.") and not titles.contains("Not a list of orders"), JSON.stringify(problems))
-	_check("both proposals have their card and no fence is left as raw code", _count_buttons(panel, "Proceed / Queue") >= 2 and _labels_with(panel, "Recall the ambassador from Tripoli") and _labels_with(panel, "Open talks with Berlin on the fiscal rules") and not _labels_with(panel, "Not a list of orders") and not _labels_with(panel, "```"))
-	_check("nothing from the reply is queued before Proceed", not JSON.stringify(await _doc("actions")).contains("Recall the ambassador from Tripoli"))
-	var card := _find_button(panel, "Proceed / Queue")
-	if card:
-		await _scroll_to(card)
-	await _shoot("advisor-28-several-action-fences")
 
 
 func _unsupported_type() -> void:

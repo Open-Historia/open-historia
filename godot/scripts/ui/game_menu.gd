@@ -61,6 +61,16 @@ func _ready() -> void:
 	_card.visible = false
 	visible = false
 	get_viewport().size_changed.connect(_fit_card)
+	UiTheme.events().changed.connect(_on_theme_changed)
+
+
+func _on_theme_changed() -> void:
+	if not is_instance_valid(_card):
+		return
+	_card.set_tint(UiTheme.pick("overlay", Color(32 / 255.0, 32 / 255.0, 35 / 255.0, 0.63)))
+	_card.set_border(UiTheme.pick("line", UI.HUD_BORDER))
+	if visible:
+		_show_tab(tab)
 
 
 func setup(engine_link: EngineLink, setup_context: Dictionary) -> void:
@@ -267,7 +277,7 @@ func _show_card(grow: bool) -> void:
 
 
 func _build_card() -> void:
-	_card = GlassPanel.new(Color(32 / 255.0, 32 / 255.0, 35 / 255.0, 0.63), 14.0, Vector4(14, 14, 14, 14))
+	_card = GlassPanel.new(UiTheme.pick("overlay", Color(32 / 255.0, 32 / 255.0, 35 / 255.0, 0.63)), 14.0, Vector4(14, 14, 14, 14), UiTheme.pick("line", UI.HUD_BORDER))
 	_card.mouse_filter = Control.MOUSE_FILTER_STOP
 	add_child(_card)
 	_card_column = VBoxContainer.new()
@@ -360,7 +370,7 @@ func _style_tabs() -> void:
 	for key: String in _tab_buttons.keys():
 		var button: Button = _tab_buttons[key]
 		var selected := key == tab
-		var normal := UI.box(Color(0, 0, 0, 0.42) if selected else Color(0, 0, 0, 0), Color(1, 1, 1, 0.28) if selected else Color(0, 0, 0, 0), 8, 1, Vector4(12.8, 0, 12.8, 0))
+		var normal := UI.box(UiTheme.pick("active", Color(0, 0, 0, 0.42)) if selected else Color(0, 0, 0, 0), UiTheme.pick("accent", Color(1, 1, 1, 0.28)) if selected else Color(0, 0, 0, 0), 8, 1, Vector4(12.8, 0, 12.8, 0))
 		var hover := normal.duplicate() as StyleBoxFlat
 		if not selected:
 			hover.bg_color = Color(1, 1, 1, 0.04)
@@ -405,9 +415,9 @@ func _show_tab(key: String) -> void:
 		"settings":
 			panel = _quick_panel("Settings", "Jump straight into the options category you want.")
 			var grid := _grid()
-			grid.add_child(_quick_action("General", "Language, display, accessibility, sound and privacy", "◫", "blue", func() -> void: _open_workspace("general", "game", _card_rect())))
-			grid.add_child(_quick_action("Sound", "The game's music and sound effects.", "♫", "blue", func() -> void: _open_workspace("sound", "game", _card_rect())))
-			grid.add_child(_quick_action("Map", "Basemap, labels, globe and camera", "◇", "blue", func() -> void: _open_workspace("map", "game", _card_rect())))
+			grid.add_child(_quick_action("General", "Language, display, accessibility, sound and privacy", "◫", "neutral", func() -> void: _open_workspace("general", "game", _card_rect())))
+			grid.add_child(_quick_action("Sound", "The game's music and sound effects.", "♫", "neutral", func() -> void: _open_workspace("sound", "game", _card_rect())))
+			grid.add_child(_quick_action("Map", "Basemap, labels, globe and camera", "◇", "neutral", func() -> void: _open_workspace("map", "game", _card_rect())))
 			grid.add_child(_quick_action("AI", "Models, backups, keys and reasoning", "✦", "neutral", func() -> void: _open_workspace("ai", "game", _card_rect())))
 			grid.add_child(_quick_action("Advanced", "Per-task models and expert controls", "⌘", "neutral", func() -> void: _open_workspace("advanced", "game", _card_rect())))
 			panel.add_child(grid)
@@ -555,6 +565,15 @@ func _quick_action(title: String, description: String, symbol: String, tone: Str
 	var border: Color = palette[1]
 	var icon_bg: Color = palette[2]
 	var ink: Color = palette[3]
+	if tone == "neutral" or tone == "slate":
+		background = UiTheme.pick("overlay_card", background)
+		border = UiTheme.pick("line", border)
+		icon_bg = UiTheme.pick("overlay_card", icon_bg)
+	elif tone == "blue":
+		background = UiTheme.pick("active", background)
+		border = UiTheme.pick("line", border)
+		icon_bg = UiTheme.pick("active", icon_bg)
+		ink = UiTheme.pick("text", ink)
 	var normal := UI.box(background, border, 11, 1, Vector4(12.8, 11.5, 12.8, 11.5))
 	var hover := UI.box(Color(background.r, background.g, background.b, minf(1.0, background.a + 0.03)), Color(border.r, border.g, border.b, minf(1.0, border.a + 0.06)), 11, 1, Vector4(12.8, 11.5, 12.8, 11.5))
 	var action := ActionTile.new(normal, hover)
@@ -592,7 +611,7 @@ func _quick_action(title: String, description: String, symbol: String, tone: Str
 
 func _context_card() -> Control:
 	var card := PanelContainer.new()
-	card.add_theme_stylebox_override("panel", UI.box(Color(1, 1, 1, 0.03), Color(1, 1, 1, 0.07), 11, 1, Vector4(13.6, 12.8, 13.6, 12.8)))
+	card.add_theme_stylebox_override("panel", UI.box(UiTheme.pick("overlay_card", Color(1, 1, 1, 0.03)), UiTheme.pick("line", Color(1, 1, 1, 0.07)), 11, 1, Vector4(13.6, 12.8, 13.6, 12.8)))
 	var column := VBoxContainer.new()
 	column.add_theme_constant_override("separation", 7)
 	column.add_child(UI.label("Current session", _fs(0.74), Color(1, 1, 1, 0.82), 800))
