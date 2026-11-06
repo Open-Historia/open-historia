@@ -118,6 +118,7 @@ const seconds = (ms) => `${(Math.max(0, finite(ms)) / 1000).toFixed(1)} s`;
 // still in the summary.
 export const PHASE_LINE_MIN_MS = 50;
 
+// i18n-ignore: a timing line for the diagnostics log.
 export const formatSkipPhases = (summary) => {
   const phases = (Array.isArray(summary?.phases) ? summary.phases : [])
     .filter((line) => line.requests > 0 || line.ms >= PHASE_LINE_MIN_MS);

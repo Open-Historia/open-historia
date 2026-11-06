@@ -767,6 +767,7 @@ const diffPolitics = (field, from, to, changes) => {
     return;
   }
   const container = shape === "list" ? "list" : "map";
+  // i18n-ignore: a key prefix.
   const within = shape.startsWith("ledger:") ? shape.slice("ledger:".length) : "";
   // The wrapper a first entry is put into, when the author has no ledger yet.
   const ledger = within ? { within, shell: politicsLedgerShellOf(isEmptyValue(to) ? from : to, within) } : {};
