@@ -105,6 +105,8 @@ static func safe_insets() -> Vector4:
 		var top := float(OS.get_environment("OH_PHONE_SAFE_TOP")) if OS.get_environment("OH_PHONE_SAFE_TOP").is_valid_float() else 0.0
 		return Vector4(0, top, 0, 0)
 	var factor := maxf(0.01, tree.root.content_scale_factor)
+	if is_equal_approx(factor, 1.0):
+		factor = phone_density()
 	var screen := Vector2(DisplayServer.screen_get_size())
 	var safe := DisplayServer.get_display_safe_area()
 	if safe.size.x <= 0 or safe.size.y <= 0:

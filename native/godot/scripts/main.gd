@@ -68,7 +68,7 @@ func _ready() -> void:
 	get_window().title = "Open Historia"
 	_plain_title.call_deferred()
 	get_window().title_changed.connect(_plain_title)
-	var mark := Image.load_from_file(UI.repo_path("public/icon-192.png"))
+	var mark := UI._image_at(UI.boot_file("public/icon-192.png"))
 	if mark:
 		DisplayServer.set_icon(mark)
 	Hud.warm_scripts(BOOT_SCRIPTS)

@@ -200,7 +200,7 @@ static func _frames_from(dir: String, manifest: Dictionary) -> Dictionary:
 
 static func avif_frames(body: PackedByteArray) -> Dictionary:
 	var cached := avif_cached_frames(body)
-	if not cached.is_empty() or avif_missing:
+	if not cached.is_empty() or avif_missing or not UI.has_feature("avif"):
 		return cached
 	var engine := _avif_link()
 	if engine == null:
@@ -224,7 +224,7 @@ static func avif_frames(body: PackedByteArray) -> Dictionary:
 
 static func avif_image(body: PackedByteArray) -> Image:
 	var cached := avif_cached(body)
-	if cached != null or avif_missing:
+	if cached != null or avif_missing or not UI.has_feature("avif"):
 		return cached
 	var engine := _avif_link()
 	if engine == null:

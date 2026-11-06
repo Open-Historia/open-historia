@@ -40,7 +40,7 @@ fs.mkdirSync(stage, { recursive: true });
 
 const sidecar = path.join(native, "sidecar");
 const SIDECAR_SKIP = new Set(["build.mjs", "smoke.mjs"]);
-for (const name of fs.readdirSync(sidecar).filter((entry) => /.(mjs|js|cjs)$/.test(entry) && !SIDECAR_SKIP.has(entry))) copy(path.join(sidecar, name), path.join(stage, "native", "sidecar", name));
+for (const name of fs.readdirSync(sidecar).filter((entry) => /\.(mjs|js|cjs)$/.test(entry) && !SIDECAR_SKIP.has(entry))) copy(path.join(sidecar, name), path.join(stage, "native", "sidecar", name));
 copy(path.join(sidecar, "dist"), path.join(stage, "native", "sidecar", "dist"), noMaps);
 copy(path.join(sidecar, "handlers"), path.join(stage, "native", "sidecar", "handlers"), (file, isDir) => isDir || file.endsWith(".mjs") || file.endsWith(".cjs"));
 copy(path.join(repo, "server"), path.join(stage, "server"), (file, isDir) => {
@@ -126,6 +126,10 @@ fs.rmSync(bootDir, { recursive: true, force: true });
 const bootFiles = ["public/logo.png", "public/icon-192.png", ...fs.readdirSync(path.join(publicDir, "fonts")).filter((name) => name.endsWith(".woff2")).map((name) => `public/fonts/${name}`)];
 for (const relative of bootFiles) copy(path.join(repo, relative), path.join(bootDir, `${relative}.bin`));
 console.log(`boot files in the pck: ${bootFiles.length}`);
+const launcherDir = path.join(payloadDir, "launcher");
+fs.rmSync(launcherDir, { recursive: true, force: true });
+const mipmaps = path.join(repo, "mobile", "android", "app", "src", "main", "res", "mipmap-xxxhdpi");
+for (const name of ["ic_launcher.png", "ic_launcher_foreground.png", "ic_launcher_background.png"]) copy(path.join(mipmaps, name), path.join(launcherDir, name));
 const zip = path.join(payloadDir, "app.zip");
 fs.rmSync(zip, { force: true });
 const tar = process.platform === "win32" ? path.join(process.env.SystemRoot || "C:\\Windows", "System32", "tar.exe") : "zip";

@@ -19,6 +19,11 @@ static func root() -> String:
 	return OS.get_user_data_dir().path_join("app")
 
 
+static func is_current() -> bool:
+	var stamp := FileAccess.get_file_as_string(STAMP).strip_edges()
+	return not stamp.is_empty() and FileAccess.get_file_as_string(root().path_join(".stamp")).strip_edges() == stamp
+
+
 func _ready() -> void:
 	set_process(false)
 

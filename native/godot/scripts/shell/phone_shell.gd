@@ -8,6 +8,10 @@ signal resumed
 const BACK_DEVICE := 7331
 const SYSTEM_STOP_GRACE_MS := 20000
 const KEYBOARD_GAP := 12.0
+const REPLAY_DEVICE := 7332
+const SCROLL_SLOP := 10.0
+const FLING_DECAY := 4.0
+const FLING_STOP := 30.0
 
 static var resume_game_id := ""
 
@@ -20,6 +24,18 @@ var _resumed_at := -SYSTEM_STOP_GRACE_MS
 var _lifted_layer: CanvasLayer
 var _lifted_from := Vector2.ZERO
 var _lifted_by := 0.0
+var _touch_index := -1
+var _touch_start := Vector2.ZERO
+var _scroller: ScrollContainer
+var _scroll_axis := Vector2.ZERO
+var _scrolling := false
+var _velocity := Vector2.ZERO
+var _last_drag_ms := 0
+var _fling: ScrollContainer
+var _fling_velocity := Vector2.ZERO
+var _held_press: InputEventMouseButton
+var _router: TouchRouter
+var _debug_timer: Timer
 
 
 func _init() -> void:
@@ -32,6 +48,56 @@ func setup(link: EngineLink, owner_node: Node) -> void:
 	host = owner_node
 	if not get_tree().node_added.is_connected(_on_node_added):
 		get_tree().node_added.connect(_on_node_added)
+	if OS.is_debug_build() and FileAccess.file_exists(OS.get_user_data_dir().path_join("standin-model")) and _debug_timer == null:
+		_debug_timer = Timer.new()
+		_debug_timer.wait_time = 1.0
+		_debug_timer.timeout.connect(_debug_requests)
+		add_child(_debug_timer)
+		_debug_timer.start()
+	if _router == null:
+		_router = TouchRouter.new()
+		_router.shell = self
+		get_tree().root.add_child.call_deferred(_router)
+
+
+func _debug_requests() -> void:
+	var path := OS.get_user_data_dir().path_join("debug-requests.jsonl")
+	if not FileAccess.file_exists(path) or engine == null or not engine.is_ready():
+		return
+	var lines := FileAccess.get_file_as_string(path).split("\n", false)
+	DirAccess.remove_absolute(path)
+	for line in lines:
+		var item: Variant = JSON.parse_string(line)
+		if not (item is Dictionary):
+			continue
+		var method := str((item as Dictionary).get("method", ""))
+		if method == "ui.war_room":
+			host.call("_call", host.get("war_room"), "toggle")
+			print("[debug-request] ui.war_room")
+			continue
+		var started := Time.get_ticks_msec()
+		var reply: Dictionary = await engine.request(method, (item as Dictionary).get("args", {}))
+		print("[debug-request] %s ok=%s in %d ms" % [method, reply.get("ok", false), Time.get_ticks_msec() - started])
+		host.call("_world_changed")
+		host.call("_refresh_war_parts")
+
+
+func _exit_tree() -> void:
+	if _router and is_instance_valid(_router):
+		_router.queue_free()
+	_router = null
+
+
+class TouchRouter extends Node:
+	var shell: PhoneShell
+
+	func _init() -> void:
+		name = "PhoneTouch"
+		process_mode = Node.PROCESS_MODE_ALWAYS
+
+	func _input(event: InputEvent) -> void:
+		if shell and is_instance_valid(shell):
+			shell.route_input(event)
 
 
 func _on_node_added(node: Node) -> void:
@@ -92,6 +158,7 @@ func ask_to_leave() -> void:
 		return
 	asking = true
 	_leave_dialog = ConfirmationDialog.new()
+	_leave_dialog.title = "Open Historia"
 	_leave_dialog.dialog_text = "Leave Open Historia?"
 	_leave_dialog.ok_button_text = "Leave"
 	_leave_dialog.cancel_button_text = "Stay"
@@ -148,7 +215,149 @@ func _typing_in() -> Control:
 	return null
 
 
-func _process(_delta: float) -> void:
+func route_input(event: InputEvent) -> void:
+	if event is InputEventScreenTouch:
+		_on_touch(event as InputEventScreenTouch)
+	elif event is InputEventScreenDrag:
+		_on_drag(event as InputEventScreenDrag)
+	elif event is InputEventMouseButton and event.device == InputEvent.DEVICE_ID_EMULATION:
+		_on_emulated_button(event as InputEventMouseButton)
+	elif _scrolling and event is InputEventMouseMotion and event.device == InputEvent.DEVICE_ID_EMULATION:
+		get_viewport().set_input_as_handled()
+
+
+func _on_emulated_button(button: InputEventMouseButton) -> void:
+	if button.button_index != MOUSE_BUTTON_LEFT:
+		return
+	if button.pressed:
+		_held_press = null
+		if _press_waits(get_viewport().gui_get_hovered_control()):
+			_held_press = button.duplicate() as InputEventMouseButton
+			get_viewport().set_input_as_handled()
+		return
+	if _held_press == null:
+		if _scrolling:
+			get_viewport().set_input_as_handled()
+		return
+	var press := _held_press
+	_held_press = null
+	get_viewport().set_input_as_handled()
+	if _scrolling:
+		return
+	press.device = REPLAY_DEVICE
+	var release := button.duplicate() as InputEventMouseButton
+	release.device = REPLAY_DEVICE
+	_replay.call_deferred(press, release)
+
+
+func _replay(press: InputEventMouseButton, release: InputEventMouseButton) -> void:
+	var viewport := get_viewport()
+	if viewport == null:
+		return
+	viewport.push_input(press, true)
+	viewport.push_input(release, true)
+
+
+func _press_waits(under: Control) -> bool:
+	if under == null or under is Range or under is LineEdit or under is TextEdit:
+		return false
+	var at := under
+	while at != null:
+		if at is ScrollContainer and at.is_visible_in_tree():
+			var scroll := at as ScrollContainer
+			if scroll.get_v_scroll_bar().max_value > scroll.size.y + 1.0 or scroll.get_h_scroll_bar().max_value > scroll.size.x + 1.0:
+				return true
+		at = at.get_parent() as Control
+	return false
+
+
+func _on_touch(touch: InputEventScreenTouch) -> void:
+	if touch.pressed:
+		if _touch_index < 0 or touch.index == _touch_index:
+			_touch_index = touch.index
+			_touch_start = touch.position
+			_scrolling = false
+			_scroller = null
+			_fling = null
+			_velocity = Vector2.ZERO
+		return
+	if touch.index != _touch_index:
+		return
+	_touch_index = -1
+	if not _scrolling:
+		return
+	get_viewport().set_input_as_handled()
+	if _scroller and is_instance_valid(_scroller) and Time.get_ticks_msec() - _last_drag_ms < 80:
+		_fling = _scroller
+		_fling_velocity = _velocity
+	_scroller = null
+
+
+func _on_drag(drag: InputEventScreenDrag) -> void:
+	if drag.index != _touch_index:
+		return
+	if not _scrolling:
+		var moved := drag.position - _touch_start
+		if moved.length() < SCROLL_SLOP:
+			return
+		var found := _scroller_for(moved)
+		if found == null:
+			if _held_press != null:
+				_scrolling = true
+			_touch_index = -1
+			return
+		_scroller = found
+		_scrolling = true
+	if not is_instance_valid(_scroller):
+		_scrolling = false
+		return
+	var step := drag.relative * _scroll_axis
+	_scroll_by(_scroller, -step)
+	var now := Time.get_ticks_msec()
+	var elapsed := maxf(1.0, float(now - _last_drag_ms))
+	_velocity = _velocity.lerp(-step / (elapsed / 1000.0), 0.5) if _last_drag_ms > 0 and elapsed < 100.0 else -step / (elapsed / 1000.0)
+	_last_drag_ms = now
+	get_viewport().set_input_as_handled()
+
+
+func _scroller_for(moved: Vector2) -> ScrollContainer:
+	var under: Control = get_viewport().gui_get_hovered_control()
+	var vertical := absf(moved.y) >= absf(moved.x)
+	while under != null:
+		if under is ScrollContainer and under.is_visible_in_tree():
+			var scroll := under as ScrollContainer
+			if vertical and scroll.vertical_scroll_mode != ScrollContainer.SCROLL_MODE_DISABLED and scroll.get_v_scroll_bar().max_value > scroll.size.y + 1.0:
+				_scroll_axis = Vector2(0, 1)
+				return scroll
+			if not vertical and scroll.horizontal_scroll_mode != ScrollContainer.SCROLL_MODE_DISABLED and scroll.get_h_scroll_bar().max_value > scroll.size.x + 1.0:
+				_scroll_axis = Vector2(1, 0)
+				return scroll
+		under = under.get_parent() as Control
+	return null
+
+
+func _scroll_by(scroll: ScrollContainer, amount: Vector2) -> void:
+	if amount.y != 0.0:
+		scroll.scroll_vertical = int(round(float(scroll.scroll_vertical) + amount.y))
+	if amount.x != 0.0:
+		scroll.scroll_horizontal = int(round(float(scroll.scroll_horizontal) + amount.x))
+
+
+func _fling_step(delta: float) -> void:
+	if _fling == null:
+		return
+	if not is_instance_valid(_fling) or _fling_velocity.length() < FLING_STOP:
+		_fling = null
+		return
+	var before := Vector2(_fling.scroll_horizontal, _fling.scroll_vertical)
+	_scroll_by(_fling, _fling_velocity * delta)
+	_fling_velocity *= exp(-FLING_DECAY * delta)
+	if Vector2(_fling.scroll_horizontal, _fling.scroll_vertical) == before:
+		_fling = null
+
+
+func _process(delta: float) -> void:
+	_fling_step(delta)
 	var field := _typing_in()
 	var height := keyboard_height() if field else 0.0
 	if field == null or height <= 0.0:

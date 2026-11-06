@@ -50,6 +50,8 @@ func _start_android() -> bool:
 	if library.is_empty():
 		_on_diagnostic("[android] the app's native library folder was not found")
 		return false
+	if AndroidPayload.is_current():
+		return _spawn_android(library)
 	var payload := AndroidPayload.new()
 	add_child(payload)
 	payload.finished.connect(func(error: String) -> void:
@@ -65,7 +67,7 @@ func _start_android() -> bool:
 	return true
 
 
-func _spawn_android(library: String) -> void:
+func _spawn_android(library: String) -> bool:
 	var data_root := OS.get_user_data_dir().path_join("data")
 	DirAccess.make_dir_recursive_absolute(data_root)
 	var environment := {
@@ -76,10 +78,14 @@ func _spawn_android(library: String) -> void:
 		"OH_RUST_FRONTS_HOST": library.path_join("libohfronts.so"),
 		"OH_DISCORD_PRESENCE": "0",
 	}
+	if OS.is_debug_build() and FileAccess.file_exists(OS.get_user_data_dir().path_join("standin-model")):
+		environment["OH_STANDIN_MODEL"] = "1"
 	var script := UI.repo_path("native/sidecar/main.mjs")
 	_on_diagnostic("[android] starting the engine: %s %s" % [library.path_join("libohnode.so"), script])
 	if not _sidecar.start(library.path_join("libohnode.so"), PackedStringArray([script]), script.get_base_dir(), environment):
 		engine_stopped.emit("The game engine could not be started.")
+		return false
+	return true
 
 
 func is_ready() -> bool:
