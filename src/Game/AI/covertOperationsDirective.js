@@ -12,6 +12,11 @@ const attempt = (operation) => {
   return `to carry out this covert operation: ${what}`;
 };
 
+// A killing that came off: who it was is dead from this event on, and an office they held is filled in the same event,
+// or the record keeps them in it alive (a player's report, 2026-11-06).
+const KILLED = "The person targeted is dead from this event on. If they held an office, the same event carries the change: politicalActorOps replace-leader for their country (office headOfState or headOfGovernment) naming the successor its own rules make (a vice-president, a deputy, an interim leader), and set-party-leader for a party they led. Never write them alive or acting again.";
+const killed = (operation) => (operation.kind === "assassinate" && operation.outcome === "success" ? ` ${KILLED}` : "");
+
 const NO_CULPRIT = "Nobody in the world knows who was behind it, the target included: name no culprit, and have no government, investigator or press establish one, in this event or in any later one.";
 
 const lineFor = (operation) => {
@@ -27,13 +32,13 @@ const lineFor = (operation) => {
     if (operation.kind === "recruit") {
       return `- In ${target}, a foreign service secretly recruited ${`"${clean(operation.instructions)}"`}, who now works for it in secret. Nobody in ${target} knows. Make no public event of it, but let it be true from now on. ${NO_CULPRIT}`;
     }
-    return `- In ${target}, an operation ${aim} SUCCEEDED and was never traced. Write it as the event it makes, with its consequences. ${NO_CULPRIT}`;
+    return `- In ${target}, an operation ${aim} SUCCEEDED and was never traced. Write it as the event it makes, with its consequences.${killed(operation)} ${NO_CULPRIT}`;
   }
   const how = carriedOut ? "after carrying it out" : "and the attempt failed";
   if (!operation.identified) {
-    return `- In ${target}, a foreign agent was caught trying ${aim}, ${how}. The agent died under interrogation without revealing who sent them. Write the arrest and the death in custody. ${NO_CULPRIT}`;
+    return `- In ${target}, a foreign agent was caught trying ${aim}, ${how}. The agent died under interrogation without revealing who sent them. Write the arrest and the death in custody.${killed(operation)} ${NO_CULPRIT}`;
   }
-  return `- In ${target}, an agent of ${owner} was caught trying ${aim}, ${how}, and ${target} established that ${owner} sent them. Write the arrest, and what follows from it between ${target} and ${owner}.`;
+  return `- In ${target}, an agent of ${owner} was caught trying ${aim}, ${how}, and ${target} established that ${owner} sent them. Write the arrest, and what follows from it between ${target} and ${owner}.${killed(operation)}`;
 };
 
 export const covertOperationsBlock = (operations) => {

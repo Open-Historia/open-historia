@@ -14,7 +14,7 @@ The game says so on the screens a scenario leaves it from, and writes it into ev
 
 ## Music
 
-The game's music is by Scott Buckley ([www.scottbuckley.com.au](https://www.scottbuckley.com.au/)): "Passage Of Time", "Clear Skies", "Frankincense and Myrrh", "Discovery", "Honour Among Thieves", "Legionnaire (2022 Remaster)" and "Vanguard", all released under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). The files are in [public/audio](public/audio), re-encoded at a lower bitrate to make the game smaller and otherwise unchanged, with their credits beside them; that licence, not the game's, covers them.
+The game's music is by Scott Buckley ([www.scottbuckley.com.au](https://www.scottbuckley.com.au/)): "Passage Of Time", "Clear Skies", "Frankincense and Myrrh", "Discovery", "Honour Among Thieves", "A Kind Of Hope", "Legionnaire (2022 Remaster)" and "Vanguard", all released under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). The files are in [public/audio](public/audio), re-encoded at a lower bitrate to make the game smaller and otherwise unchanged (all but "A Kind Of Hope", which is the composer's own file), with their credits beside them; that licence, not the game's, covers them.
 
 ## Privacy
 
