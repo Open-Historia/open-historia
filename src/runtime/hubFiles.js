@@ -45,6 +45,7 @@
 // fetchHubFile.
 
 import { HUB_OWNER, HUB_REPO, hubReleaseUrl } from "../../server/hubProvenance.js";
+import { MAX_SCENARIO_LANGUAGES, scenarioLanguageCode } from "../../server/scenarioLanguages.js";
 
 export const HUB_INDEX_URL = `https://raw.githubusercontent.com/${HUB_OWNER}/${HUB_REPO}/hub-index/index.json`;
 const HUB_POST_URL = `https://github.com/${HUB_OWNER}/${HUB_REPO}/issues/`;
@@ -83,6 +84,11 @@ const COMMENT_ZIP_ADDRESS = /^https:\/\/github\.com\/[^\s"'<>\\?#]+\.zip$/i;
 
 const record = (value) => (value && typeof value === "object" && !Array.isArray(value) ? value : null);
 const cut = (value, max) => (typeof value === "string" ? value.slice(0, max) : "");
+// A post's language codes as the index lists them: codes only, each once,
+// as many as a scenario can carry.
+const hubLanguageCodes = (value) => (Array.isArray(value)
+  ? [...new Set(value.map(scenarioLanguageCode).filter(Boolean))].slice(0, MAX_SCENARIO_LANGUAGES)
+  : []);
 const wholeCount = (value) => (Number.isSafeInteger(value) && value >= 0 ? value : 0);
 const dateText = (value) => (typeof value === "string" && value.length <= 40 && !Number.isNaN(Date.parse(value)) ? value : "");
 
@@ -128,6 +134,9 @@ const normalizeIndexPost = (raw) => {
     ...(typeof source.scenario_date === "string" && source.scenario_date.length <= 40 && !/[\u0000-\u001f]/.test(source.scenario_date)
       ? { scenario_date: source.scenario_date }
       : {}),
+    // The languages the scenario ships its own text in (server/scenarioLanguages.js),
+    // as the hub's check read them: said on its page in the Community tab.
+    ...(hubLanguageCodes(source.scenario_languages).length ? { scenario_languages: hubLanguageCodes(source.scenario_languages) } : {}),
   };
 };
 

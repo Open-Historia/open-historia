@@ -22,6 +22,12 @@
 // 3. What the AI writes during play (events, chats, the advisor) arrives in
 //    the player's language already (languageDirective) and is left alone.
 //
+// A scenario may ship its own text translated by its author's AI
+// (server/scenarioLanguages.js, made in the Workshop's Languages tab). For the
+// open game's scenario that pack is laid over everything else in the book
+// (setScenarioLanguagePack): its strings come from it first, and never reach
+// the model or the player's own AI.
+//
 // Nothing here is an AI request unless the player turned on Translate with my
 // AI (aiTranslation.js): then what the model would translate goes to their AI
 // provider instead, in big batches, and the model takes over whenever a
@@ -628,7 +634,7 @@ const translating = () => modelInUse() || aiInUse();
 // A string the AI may be asked for: not the pack's, not answered by it
 // already, not put to it this session, and not given up on.
 const aiWants = (text) => Boolean(shippedKeys && router) && !shippedKeys.has(text) && !aiEntries.has(text)
-  && !pending.has(text) && !unusable.has(text) && !router.tried(text) && isTranslatable(text) && aiInUse();
+  && !inScenarioPack(text) && !pending.has(text) && !unusable.has(text) && !router.tried(text) && isTranslatable(text) && aiInUse();
 
 // Whether the switch is offered for the interface language (Settings).
 export const aiTranslationAvailable = () => {
@@ -663,10 +669,13 @@ const layBook = () => {
   book = createPhraseBook({ localizeValue: createDateLocalizer(language) });
   book.setAll(learned);
   book.setAll(serverPack);
-  if (!aiShown) return;
-  for (const [source, translated] of aiEntries) {
-    if (!shippedKeys.has(source)) book.set(source, translated);
+  if (aiShown) {
+    for (const [source, translated] of aiEntries) {
+      if (!shippedKeys.has(source)) book.set(source, translated);
+    }
   }
+  // The scenario's own pack over all of it (setScenarioLanguagePack).
+  applyScenarioPack();
 };
 
 // The switch, or whether it applies, changed: the book is laid again and the
@@ -1084,6 +1093,39 @@ const collectAndTranslate = async () => {
   void processQueue();
 };
 
+// ---- a scenario's own pack ----
+
+// The open game's scenario's translations of its own strings into one
+// language (scenarioLanguagePacks.js useScenarioLanguagePack), or none.
+let scenarioPack = { code: "", entries: {} };
+
+// Laid over the book while the game is in that language: after the server's
+// pack and this device's, so the author's translation wins, and anything
+// queued for the model that it has is taken off the queue.
+const applyScenarioPack = () => {
+  if (language === DEFAULT_LANGUAGE || scenarioPack.code !== language) return false;
+  book.setAll(scenarioPack.entries);
+  for (const source of Object.keys(scenarioPack.entries)) pending.delete(source.trim());
+  return true;
+};
+
+// Whether the scenario's pack for the language in use has a string: then it is
+// never asked of the player's AI (aiWants).
+const inScenarioPack = (text) => scenarioPack.code === language && Object.hasOwn(scenarioPack.entries, text);
+
+// The pack of the scenario in play for `code` (source -> translation); an
+// empty one when it has none. Kept for the language it is in, and applied once
+// the game is in it.
+export const setScenarioLanguagePack = (code, entries) => {
+  scenarioPack = {
+    code: typeof code === "string" ? code : "",
+    entries: entries && typeof entries === "object" && !Array.isArray(entries) ? entries : {},
+  };
+  if (!applyScenarioPack() || !translatorActive) return;
+  scan();
+  announceUpdate();
+};
+
 // ---- public lookups (map labels, proactive callers) ----
 
 // Synchronous best-effort translation for text drawn OUTSIDE the DOM (map
@@ -1287,6 +1329,8 @@ const startInLanguage = (code) => {
     if (aiSettingOn()) await loadShippedKeys(run);
     if (run !== generation) return;
     if (aiInUse()) layBook();
+    // The scenario's own pack over it, when there is one for this language.
+    applyScenarioPack();
     await whenStartupScreenGone();
     if (stopped || run !== generation) return;
 

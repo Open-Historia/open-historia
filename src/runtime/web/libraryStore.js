@@ -28,7 +28,7 @@ import {
   normalizeRuntimeWorld, COUNTRY_NAME_REGISTRY, normalizeHubOrigin,
   fetchableHubOrigin, hubLinksAfterWrite, hubOriginForUpdate, normalizeHubReviews, pickHubProvenance,
   GAME_BUNDLE_SCHEMA, ACCEPTED_GAME_BUNDLE_SCHEMAS, GAME_BUNDLE_DATA_KEYS,
-  OPTIONAL_GAME_BUNDLE_KEYS, BUILT_IN_SCENARIO_IDS, missingBasemapField, scenarioMusicField,
+  OPTIONAL_GAME_BUNDLE_KEYS, BUILT_IN_SCENARIO_IDS, missingBasemapField, scenarioMusicField, scenarioLanguagesField,
 } from "./models.js";
 import { normalizeFeatureOverrides, normalizeFeatureSettings } from "../../../server/gameFeatures.js";
 // Imported, not mirrored: server/ownerMigration.js is pure ESM with no node
@@ -44,11 +44,12 @@ import { coverObjectUrl } from "./coverUrls.js";
 import { createCoarseRegionsCache } from "./coarseRegionsCache.js";
 import { onMemoryPressure } from "../memoryPressure.js";
 import { musicTracksDropped, usedMusicTrackIds } from "../../../server/keptMusic.js";
+import { scenarioLanguagePack, withoutScenarioLanguages } from "../../../server/scenarioLanguages.js";
 import { sweepKeptMusic } from "../keptMusic.js";
 
 const SCENARIO_MANIFEST_KEY = "scenario-manifest";
 const GAME_MANIFEST_KEY = "game-manifest";
-const META_KEYS = ["accentColor", "countryNameOverrides", "description", "eyebrow", "features", "heroSubtitle", "heroTitle", "music", "name", "subtitle"];
+const META_KEYS = ["accentColor", "countryNameOverrides", "description", "eyebrow", "features", "heroSubtitle", "heroTitle", "languages", "music", "name", "subtitle"];
 
 // --- Record accessors -----------------------------------------------------
 // scenario record: { id, meta, json:{7}, colors?, geojson:{...}, pmtiles:{...}, cover?:{contentType,byteLength,key} }
@@ -67,9 +68,11 @@ const getGame = (id) => idbGet(STORES.games, id);
 // record so getLibraryCatalog builds the menu from these instead of structured-
 // cloning the full ~100MB records into memory (the reported laptop menu OOM).
 // jsonAsset / getScenarioAssetStatus / getGameAssetStatus resolve at call time.
+// A scenario's language packs stay out of it too (they can be large): the
+// projection's meta says only which languages it has (`languageCodes`).
 const projectScenarioMeta = (record) => ({
   id: record.id,
-  meta: record.meta ?? {},
+  meta: withoutScenarioLanguages(record.meta ?? {}),
   cover: record.cover ?? null,
   assetStatus: getScenarioAssetStatus(record),
 });
@@ -328,6 +331,10 @@ const writeScenarioMeta = (record, updates = {}, { touch = true } = {}) => {
   // (server twin).
   delete next.music;
   Object.assign(next, scenarioMusicField(updates.music !== undefined ? updates.music : current.music));
+  // The language packs the same way (server twin).
+  delete next.languages;
+  delete next.languageCodes;
+  Object.assign(next, scenarioLanguagesField(updates.languages !== undefined ? updates.languages : current.languages));
   record.meta = next;
   return next;
 };
@@ -409,8 +416,12 @@ const getScenarioCatalog = async (scenarioMetas, gameMetas) => {
     const meta = readScenarioMeta(id, proj.meta ?? {});
     const assetStatus = proj.assetStatus ?? {};
     const cacheToken = `${id}-${meta.updatedAt}`;
+    // Which languages it has packs for; the packs stay out of a listing
+    // (projectScenarioMeta, server twin buildScenarioCatalogEntry).
+    const { languageCodes } = withoutScenarioLanguages(proj.meta ?? {});
     return {
-      ...meta,
+      ...withoutScenarioLanguages(meta),
+      ...(Array.isArray(languageCodes) && languageCodes.length ? { languageCodes } : {}),
       assetStatus,
       cacheToken,
       canDelete: true,
@@ -568,7 +579,17 @@ const jsonDataBundle = (record) => {
 const getScenarioDetails = async (id) => {
   const record = await getScenario(id);
   if (!record) throw new Error(`Scenario not found: ${id}`);
-  return { assetStatus: getScenarioAssetStatus(record), data: jsonDataBundle(record), scenario: await getScenarioSummary(id) };
+  // With its language packs, which the listing leaves out (server twin).
+  const scenario = { ...(await getScenarioSummary(id)), ...scenarioLanguagesField(readScenarioMeta(id, record.meta ?? {}).languages) };
+  return { assetStatus: getScenarioAssetStatus(record), data: jsonDataBundle(record), scenario };
+};
+
+// One language's pack of a scenario's own text, for a game in that language
+// (server twin readScenarioLanguagePack).
+const readScenarioLanguagePack = async (id, code) => {
+  const record = await getScenario(id);
+  if (!record) throw new Error(`Scenario not found: ${id}`);
+  return scenarioLanguagePack(readScenarioMeta(id, record.meta ?? {}).languages, code);
 };
 
 const getGameSummary = async (id) => {
@@ -1229,6 +1250,10 @@ const createScenario = async (body = {}) => {
     id,
     // A bundle's music, or the music of the scenario this one is a copy of.
     ...scenarioMusicField(body.music !== undefined ? body.music : sourceSummary?.music),
+    // A bundle's language packs, or those of the scenario this one is a copy
+    // of (which its listing leaves out).
+    ...scenarioLanguagesField(body.languages !== undefined ? body.languages
+      : sourceRecord ? readScenarioMeta(body.seedScenarioId, sourceRecord.meta ?? {}).languages : null),
     name: trimmed(body.name) || "Custom Scenario",
     subtitle: trimmed(body.subtitle) || trimmed(body.description) || sourceSummary?.subtitle || DEFAULT_SCENARIO_META.subtitle,
     updatedAt: createdAt,
@@ -1790,7 +1815,8 @@ const exportScenarioBundle = async (id) => {
     // Its music (which hub tracks, by id and version) is left out of the file
     // altogether when it names none (server twin).
     scenario: { accentColor: meta.accentColor, countryNameOverrides: meta.countryNameOverrides, features: meta.features, description: meta.description,
-      eyebrow: meta.eyebrow, heroSubtitle: meta.heroSubtitle, heroTitle: meta.heroTitle, id: meta.id, ...scenarioMusicField(meta.music), name: meta.name, subtitle: meta.subtitle },
+      eyebrow: meta.eyebrow, heroSubtitle: meta.heroSubtitle, heroTitle: meta.heroTitle, id: meta.id, ...scenarioMusicField(meta.music),
+      ...scenarioLanguagesField(meta.languages), name: meta.name, subtitle: meta.subtitle },
     data, assets,
   };
 };
@@ -1840,7 +1866,8 @@ const importScenarioBundle = async (bundle) => {
   const hubOrigin = normalizeHubOrigin(bundle.hubOrigin);
   // Its music with the rest of the bundle's `scenario` (null for a bundle
   // without any: an import is a copy of the bundle, never of another scenario).
-  const created = await createScenario({ ...(bundle.scenario ?? {}), music: bundle.scenario?.music ?? null, setActive: false });
+  // Its language packs the same way.
+  const created = await createScenario({ ...(bundle.scenario ?? {}), music: bundle.scenario?.music ?? null, languages: bundle.scenario?.languages ?? null, setActive: false });
   const newId = created.scenario.id;
   // Server coerces missing bundle data to empty ({} / []) which then OVERWRITES
   // the seeded default (updateScenario's `game && typeof===object` guard), so a
@@ -1905,6 +1932,8 @@ const updateScenarioFromBundleNow = async (scenarioId, bundle) => {
   // The new version's music, or none: a version that dropped its music must
   // not go on playing the old version's (server twin).
   metaPatch.music = scenario.music ?? null;
+  // Its language packs the same way: the new version's, or none.
+  metaPatch.languages = scenario.languages ?? null;
   // A community basemap the game could not download arrives as its reference:
   // keep the basemap this scenario already has, and the world's note of its
   // kind (server twin: updateScenarioFromBundle).
@@ -2241,6 +2270,10 @@ export const handleScenarios = async ({ method, segments, body, rawBody, content
     if (sub === "import" && method === "PUT") return jsonResponse(await updateScenarioFromBundle(id, body ?? {}));
     if (sub === "basemap" && method === "PUT") return jsonResponse(await restoreScenarioBasemap(id, body?.payload));
     if (sub === "export" && method === "GET") return jsonResponse(await exportScenarioBundle(id));
+    if (sub === "languages" && segments[2] && method === "GET") {
+      const code = decodeURIComponent(segments[2]);
+      return jsonResponse({ code, strings: await readScenarioLanguagePack(id, code) });
+    }
     if (sub === "assets" && segments[2]) {
       const key = decodeURIComponent(segments[2]);
       if (method === "GET") { const record = await getScenario(id); if (!record) throw new Error(`Scenario not found: ${id}`); return await scenarioAssetResponse(record, key, rangeHeader, { coarse: query?.get("coarse") === "1" }); }

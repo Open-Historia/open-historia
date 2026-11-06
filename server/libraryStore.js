@@ -39,6 +39,7 @@ import {
 } from "./hubProvenance.js";
 import { planRestorePointSlots, publicRestorePointIndex } from "./restorePoints.js";
 import { scenarioMusicField } from "./scenarioMusic.js";
+import { scenarioLanguagePack, scenarioLanguagesField, withoutScenarioLanguages } from "./scenarioLanguages.js";
 import { musicTracksDropped, usedMusicTrackIds } from "./keptMusic.js";
 import { musicLibraryUsage, sweepMusicLibrary } from "./musicLibrary.js";
 const SCENARIOS_DIR = path.join(SERVER_DATA_DIR, "scenarios");
@@ -907,6 +908,9 @@ const readScenarioMeta = (scenarioId) => {
     // The hub tracks the scenario plays, by situation (scenarioMusic.js). Only
     // there while it names one.
     ...scenarioMusicField(raw?.music),
+    // Its own text in other languages (scenarioLanguages.js). Only there while
+    // it has a pack; never in a listing (buildScenarioCatalogEntry).
+    ...scenarioLanguagesField(raw?.languages),
     name,
     playCount: normalizePlayCount(raw?.playCount),
     subtitle,
@@ -980,6 +984,11 @@ const writeScenarioMeta = (scenarioId, updates, { touch = true } = {}) => {
   // (null, or four empty lists, takes it away); any other write keeps it.
   delete next.music;
   Object.assign(next, scenarioMusicField(updates?.music !== undefined ? updates.music : current.music));
+  // The language packs the same way: a write that carries them replaces them
+  // (null takes them away), any other write keeps them.
+  delete next.languages;
+  delete next.languageCodes;
+  Object.assign(next, scenarioLanguagesField(updates?.languages !== undefined ? updates.languages : current.languages));
 
   writeJsonFile(getScenarioMetaPath(scenarioId), next);
   // A track this scenario named and no longer does may be nobody's now.
@@ -2046,7 +2055,10 @@ const getScenarioSummary = (scenarioId) => {
 // (buildScenarioCatalog) or only named by a game (getGameScenarioSummary,
 // buildGameCatalog): one shape, built here and nowhere else.
 const buildScenarioCatalogEntry = (scenarioId, { gameCount = 0, canDelete = true, missing = false } = {}) => {
-  const meta = readScenarioMeta(scenarioId);
+  // Without its language packs, which can be large: a listing says only which
+  // languages it has (`languageCodes`), and the packs are read where they are
+  // used (getScenarioDetails, readScenarioLanguagePack).
+  const meta = withoutScenarioLanguages(readScenarioMeta(scenarioId));
   const assetStatus = getScenarioAssetStatus(scenarioId);
   // A scenario that is not there has no updatedAt of its own — readScenarioMeta
   // mints one per read — so its token is fixed, or it would differ on every call.
@@ -2128,8 +2140,21 @@ const getScenarioDetails = (scenarioId) => {
       prompts: readJsonFile(getScenarioJsonPath(scenarioId, "prompts"), {}),
       world: readJsonFile(getScenarioJsonPath(scenarioId, "world"), {}),
     },
-    scenario: summary,
+    // With its language packs, which the listing leaves out: the editor's
+    // Languages tab edits them.
+    scenario: { ...summary, ...scenarioLanguagesField(readScenarioMeta(scenarioId).languages) },
   };
+};
+
+// One language's pack of a scenario (source -> translation), for a game in
+// that language (GET /api/scenarios/:id/languages/:code). Empty when it has
+// none.
+const readScenarioLanguagePack = (scenarioId, code) => {
+  ensureScenarioStore();
+  if (!fs.existsSync(getScenarioDirectory(scenarioId))) {
+    throw new Error(`Scenario not found: ${scenarioId}`);
+  }
+  return scenarioLanguagePack(readScenarioMeta(scenarioId).languages, code);
 };
 
 const getGameDetails = (gameId) => {
@@ -2261,6 +2286,7 @@ const createScenario = ({
   heroSubtitle,
   heroTitle,
   id,
+  languages,
   music,
   name,
   seedScenarioId,
@@ -2336,6 +2362,10 @@ const createScenario = ({
                 DEFAULT_SCENARIO_META.heroTitle,
                 // A bundle's music, or the music of the scenario this one is a copy of.
                 ...scenarioMusicField(music !== undefined ? music : sourceScenario?.music),
+                // A bundle's language packs, or those of the scenario this one
+                // is a copy of (which its listing leaves out).
+                ...scenarioLanguagesField(languages !== undefined ? languages
+                  : sourceScenario ? readScenarioMeta(seedScenarioId).languages : null),
                 name: String(name ?? "").trim() || "Custom Scenario",
                 subtitle:
                 String(subtitle ?? "").trim() ||
@@ -2505,6 +2535,7 @@ const updateScenario = (scenarioId, body = {}) => {
     gamePatch,
     heroSubtitle,
     heroTitle,
+    languages,
     music,
     name,
     prompts,
@@ -2525,7 +2556,7 @@ const updateScenario = (scenarioId, body = {}) => {
   // updatedAt, and must not mark a downloaded copy as changed.
   const provenance = pickHubProvenance(body);
   const edits = [accentColor, countryNameOverrides, description, eyebrow, features, game, gamePatch, heroSubtitle,
-    heroTitle, music, name, prompts, promptsPatch, storage, subtitle, world, worldPatch].some((value) => value !== undefined);
+    heroTitle, languages, music, name, prompts, promptsPatch, storage, subtitle, world, worldPatch].some((value) => value !== undefined);
   if (Object.keys(provenance).length && !edits) {
     writeScenarioMeta(scenarioId, provenance, { touch: false });
     if (setActive) setSelectedScenario(scenarioId);
@@ -2547,6 +2578,8 @@ const updateScenario = (scenarioId, body = {}) => {
                     heroTitle: String(heroTitle ?? currentMeta.heroTitle).trim() || currentMeta.heroTitle,
                     // null takes the music away; a save that does not mention it keeps it.
                     ...(music !== undefined ? { music } : {}),
+                    // The same for its language packs.
+                    ...(languages !== undefined ? { languages } : {}),
                     name: String(name ?? currentMeta.name).trim() || currentMeta.name,
                     subtitle: String(subtitle ?? currentMeta.subtitle).trim() || currentMeta.subtitle,
   });
@@ -4296,6 +4329,8 @@ const exportScenarioBundle = (scenarioId) => {
       // Which hub tracks it plays (ids and versions only): left out of the
       // file altogether when it names none.
       ...scenarioMusicField(summary.music),
+      // Its own text in other languages: left out of the file when it has none.
+      ...scenarioLanguagesField(readScenarioMeta(scenarioId).languages),
       name: summary.name,
       subtitle: summary.subtitle,
     },
@@ -4366,6 +4401,7 @@ const importScenarioBundle = (bundle, { setSelected = true } = {}) => {
     // null rather than nothing for a bundle without any: an import is a copy
     // of the bundle, never of another scenario.
     music: scenario.music ?? null,
+    languages: scenario.languages ?? null,
     name: scenario.name,
     setActive: false,
     subtitle: scenario.subtitle,
@@ -4490,6 +4526,8 @@ const updateScenarioFromBundle = (scenarioId, bundle) => {
   // The new version's music, or none: a version that dropped its music must
   // not go on playing the old version's.
   metaPatch.music = scenario.music ?? null;
+  // Its language packs the same way: the new version's, or none.
+  metaPatch.languages = scenario.languages ?? null;
   writeScenarioMeta(scenarioId, metaPatch);
 
   // A community basemap the game could not download arrives as its reference
@@ -4882,6 +4920,7 @@ export {
   getLibraryCatalog,
   getScenarioCatalog,
   getScenarioDetails,
+  readScenarioLanguagePack,
   importGameBundle,
   importScenarioBundle,
   listTrash,

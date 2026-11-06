@@ -46,6 +46,8 @@ import { PROMPT_EDITOR_SECTIONS } from "../AI/gameplayPrompts.js";
 import { guidanceSegmentsFor } from "../AI/promptGuidance.js";
 import { REVIEW_SECTIONS, sectionOfChange } from "../../runtime/suggestionSections.js";
 import { MUSIC_SITUATION_LABELS, SCENARIO_MUSIC_SITUATIONS, normalizeScenarioMusic, scenarioMusicVolumes } from "../../runtime/scenarioMusic.js";
+import { scenarioLanguagePack } from "../../../server/scenarioLanguages.js";
+import { languageDisplayName } from "../../runtime/i18n.js";
 
 // ---- looks (the library's own) -------------------------------------------------
 
@@ -177,6 +179,7 @@ const describeDetailChange = (change) => {
   if (change.kind === "stats") return { tab: "Stats", title: "National Stats sheet", detail: "" };
   if (change.kind === "institutionLogos") return { tab: "Politics", title: "Institution logos", detail: "" };
   if (change.kind === "music") return { tab: "Music", title: "Scenario music", detail: "" };
+  if (change.kind === "languages") return { tab: "Languages", title: "Language pack", detail: languageDisplayName(change.code) };
   if (change.kind === "cover") return { tab: "Assets", title: "Cover Image", detail: "" };
   return { tab: "", title: change.kind, detail: "" };
 };
@@ -270,6 +273,21 @@ const DetailValue = ({ change, coverBefore }) => {
     );
   }
   if (change.kind === "institutionLogos") return <div style={quietTextStyle}>Changed</div>;
+  if (change.kind === "languages") {
+    // How many translations are new or different, and how many go: the
+    // strings themselves are the author's to read in the Languages tab once
+    // taken. Read as the stores would keep them, since a suggestion is a file.
+    const before = scenarioLanguagePack({ [change.code]: change.from }, change.code);
+    const after = scenarioLanguagePack({ [change.code]: change.to }, change.code);
+    const changed = Object.keys(after).filter((source) => before[source] !== after[source]).length;
+    const removed = Object.keys(before).filter((source) => !Object.hasOwn(after, source)).length;
+    return (
+      <div style={{ display: "grid", gap: "0.2rem", fontSize: "0.76rem" }}>
+        {changed ? <div style={{ color: "#bbf7d0" }}>{`${changed} new or changed translations`}</div> : null}
+        {removed ? <div style={{ color: "#fecaca" }}>{`${removed} translations taken out`}</div> : null}
+      </div>
+    );
+  }
   if (change.kind === "music") {
     // Each situation whose list changed: the tracks it had, then the tracks
     // suggested, by their ids on the hub's list. Read as the stores would keep
