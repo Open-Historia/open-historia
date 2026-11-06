@@ -54,6 +54,25 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // "add a feature to ship high quality api generated language packs with scenarios" (the owner, 2026-11-06):
+    // scenario.languages (server/scenarioLanguages.js), the Workshop's Languages tab (ScenarioLanguagesPanel.jsx),
+    // read first in a game (translator.js setScenarioLanguagePack).
+    id: "2026-11-scenario-languages",
+    kind: "minor",
+    date: "2026-11-06",
+    channel: "beta",
+    banners: [
+      {
+        title: "Scenarios in your language",
+        items: [
+          "A scenario can now ship its own text translated: its name and description, its countries, regions and cities, its events and its politics.",
+          "Scenario makers: open a scenario's Languages tab, pick the languages and press Generate. Your AI translates it all in a few large requests, and next time only what is new or changed.",
+          "When a scenario has a translation for your language, you read it first, with no request of yours and no translation model.",
+        ],
+      },
+    ],
+  },
+  {
     // "add an toggle to do translation with your api (still must require downloading the translation model, this
     // option exists if they are unhappy with the models quality)" (the owner, 2026-11-06): runtime/aiTranslation.js,
     // Settings → General → Language.

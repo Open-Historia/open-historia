@@ -131,6 +131,8 @@ test("the tasks that decide nothing for the player are told nothing of the diffi
     "rostraFeed",
     // The player's own generals in the war room: they advise and take orders, and what comes of one is the front engine's.
     "warRoom",
+    // A scenario's language packs, made in the Workshop.
+    "scenarioTranslation",
   ].sort());
   for (const taskKey of TASKS_WITHOUT_DIFFICULTY) {
     const led = withDifficultyPriority({ systemPrompt: "The template.", taskKey, difficulty: "impossible", staticPrefixEnd: 5 });

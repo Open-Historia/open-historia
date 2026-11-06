@@ -132,6 +132,8 @@ export const parsePost = (issue, hubIndex) => {
     installs,
     coverImageUrl,
     startDate: typeof issue.scenario_date === "string" ? issue.scenario_date.slice(0, 40) : "",
+    // The languages it ships its own text in (hubFiles.js), or none.
+    languages: Array.isArray(issue.scenario_languages) ? issue.scenario_languages : [],
     scenarioKey: normalizeHubKey(body.match(SCENARIO_KEY_PATTERN)?.[1]),
     // { comment id -> its .zip }: the comments on this post that the hub has
     // checked as suggestions (refreshPublishedRecord offers no others).
