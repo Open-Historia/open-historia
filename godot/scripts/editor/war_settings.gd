@@ -41,6 +41,7 @@ var _warfare_hint: Label
 var _men_field: LineEdit
 var _men_hint: Label
 var _share_field: LineEdit
+var _technology_field: LineEdit
 var _chart: EditorWarMusterChart
 var _outcomes_box: VBoxContainer
 var _winner: LineEdit
@@ -81,7 +82,7 @@ func value() -> Variant:
 func _settings() -> Dictionary:
 	var kept: Variant = EditorWarRules.normalize_war_settings(_value)
 	if kept == null:
-		return {"mechanics": {}, "era": null, "menPerCounter": null, "manpowerShare": null, "muster": null}
+		return {"mechanics": {}, "era": null, "menPerCounter": null, "manpowerShare": null, "technologyWeight": null, "muster": null}
 	return kept
 
 
@@ -131,6 +132,10 @@ func _build() -> void:
 	_share_field = _number_field("manpowerShare", "The share of a country's people who can fight, in percent")
 	_share_field.placeholder_text = "12"
 	_grid.add_child(_cell("Manpower (% of people)", _share_field, [EditorWarKit.hint("Empty: 12, as every country had.")]))
+
+	_technology_field = _number_field("technologyWeight", "Importance of technology")
+	_technology_field.placeholder_text = EditorWarRules.js_number(EditorWarRules.TECHNOLOGY_WEIGHT_MODERN)
+	_grid.add_child(_cell("Importance of technology", _technology_field, [EditorWarKit.hint("Empty: 4.5, configured for the modern world."), EditorWarKit.hint("How far better armed, trained and funded soldiers outweigh more of them in a country's military power. At 1 the men and their arms count alike; at 0 only the men count.")]))
 
 	column.add_child(EditorWarKit.gap(14))
 	column.add_child(EditorWarKit.field_label("Mustering"))
@@ -268,6 +273,8 @@ func _sync() -> void:
 		_men_field.text = EditorWarRules.war_number_text(_value, "menPerCounter")
 	if not _share_field.has_focus():
 		_share_field.text = EditorWarRules.war_number_text(_value, "manpowerShare")
+	if not _technology_field.has_focus():
+		_technology_field.text = EditorWarRules.war_number_text(_value, "technologyWeight")
 	_chart.set_points(settings["muster"], EditorWarRules.DEFAULT_MUSTER)
 	EditorKit.clear(_outcomes_box)
 	var outcomes: Array = settings.get("outcomes", [])

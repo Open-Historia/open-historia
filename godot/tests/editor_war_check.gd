@@ -73,6 +73,10 @@ func _line(node: Node, placeholder: String) -> Array:
 	return _find_all(node, func(entry: Node) -> bool: return entry is LineEdit and (entry as LineEdit).placeholder_text == placeholder, [])
 
 
+func _has_label(node: Node, text: String) -> bool:
+	return not _find_all(node, func(found: Node) -> bool: return found is Label and (found as Label).text == text, []).is_empty()
+
+
 func _type(edit: LineEdit, text: String) -> void:
 	edit.text = text
 	edit.text_changed.emit(text)
@@ -280,6 +284,17 @@ func _fronts_tab(details: Dictionary, form: Dictionary) -> void:
 	_type(war._share_field, "15%")
 	war._typed_number("manpowerShare", war._share_field.text, war._share_field)
 	_check(is_equal_approx(float(last_value.get("manpowerShare", 0)), 15.0), "manpower share read")
+	_check(war._technology_field.placeholder_text == "4.5" and war._technology_field.text.is_empty() and _has_label(war, "IMPORTANCE OF TECHNOLOGY") and _has_label(war, "Empty: 4.5, configured for the modern world.") and _has_label(war, "How far better armed, trained and funded soldiers outweigh more of them in a country's military power. At 1 the men and their arms count alike; at 0 only the men count."), "Importance of technology: its field, placeholder 4.5 and hints")
+	_type(war._technology_field, "0")
+	war._typed_number("technologyWeight", war._technology_field.text, war._technology_field)
+	_check(last_value.has("technologyWeight") and is_equal_approx(float(last_value.get("technologyWeight", -1)), 0.0) and war._technology_field.text == "0", "importance of technology may be 0: the men alone")
+	_type(war._technology_field, "12.34")
+	war._typed_number("technologyWeight", war._technology_field.text, war._technology_field)
+	_check(is_equal_approx(float(last_value.get("technologyWeight", 0)), 10.0) and war._technology_field.text == "10", "importance of technology past 10 is held at 10")
+	_type(war._technology_field, "2.75")
+	war._typed_number("technologyWeight", war._technology_field.text, war._technology_field)
+	_check(is_equal_approx(float(last_value.get("technologyWeight", 0)), 2.8), "importance of technology kept to a tenth (%s)" % str(last_value.get("technologyWeight")))
+	await _shoot("war-6b-technology-weight")
 	var weather := _button(war._mechanics, "✓ Seasons and weather")
 	weather.pressed.emit()
 	_check(last_value.get("mechanics", {}).get("weather") == false, "weather switched off")
