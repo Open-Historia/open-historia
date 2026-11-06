@@ -3254,7 +3254,7 @@ const PuppetStatesView = ({ meta, header, busy, status, game, polities, runBusy,
 const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy, beginClickMode, endClickMode, setStatus, navigateTool, closePanel }) => {
     const meta = TOOLS.find((entry) => entry.id === tool);
     const [text, setText] = useState("");
-    const [gmMode, setGmMode] = useState("world-intervention");
+    const [gmMode, setGmMode] = useState("auto");
     const [gmPreview, setGmPreview] = useState(null);
     const [gmApplyResult, setGmApplyResult] = useState(null);
     const [gmExpandedSections, setGmExpandedSections] = useState({});
@@ -3607,6 +3607,11 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
 
         const modeOptions = [
             {
+                id: "auto",
+                title: "Auto - Recommended",
+                description: "Describe the change freely. GM selects one validated mode before preview.",
+            },
+            {
                 id: "direct",
                 title: "Direct / OOC correction",
                 description: "Exact canonical/admin edits with the smallest possible scope.",
@@ -3659,7 +3664,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                 <label style={labelStyle}>Mode</label>
                 {/* One per row on a phone: a third of the panel squeezed each
                     mode's description into a column a word or two wide. */}
-                <div style={{ display: "grid", gap: "0.4rem", gridTemplateColumns: isMobile ? "minmax(0, 1fr)" : "repeat(3, minmax(0, 1fr))", marginBottom: "0.7rem" }}>
+                <div style={{ display: "grid", gap: "0.4rem", gridTemplateColumns: isMobile ? "minmax(0, 1fr)" : "repeat(2, minmax(0, 1fr))", marginBottom: "0.7rem" }}>
                     {modeOptions.map((option) => {
                         const active = gmMode === option.id;
                         return (
@@ -3692,7 +3697,9 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                 <textarea
                     value={text}
                     onChange={(event) => { setText(event.target.value); setGmPreview(null); setGmApplyResult(null); setGmExpandedSections({}); }}
-                    placeholder={gmMode === "direct"
+                    placeholder={gmMode === "auto"
+                        ? 'Example: "A major Berlin bank collapses, triggering a prolonged financial panic. Let the game reflect the consequences over time."'
+                        : gmMode === "direct"
                         ? 'Example: "Germany should have a population of 72 million and GDP of €500 billion. Do not add a timeline event."'
                         : gmMode === "exact-event"
                             ? 'Example: "On 4 March 1927 Britain and Germany sign a naval consultation accord. Make it major and notable, create the agreement, and set relations to +45."'
@@ -3745,6 +3752,12 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                         <div data-no-translate={gmPreview.summary ? "" : undefined} style={{ color: "rgba(255,255,255,0.82)", fontSize: "0.75rem", lineHeight: 1.45, marginTop: "0.55rem" }}>
                             {gmPreview.summary || "No summary returned."}
                         </div>
+                        {gmPreview.requestedMode === "auto" && (
+                            <div style={{ border: "1px solid rgba(147,197,253,0.2)", borderRadius: 8, color: "rgba(219,234,254,0.88)", fontSize: "0.68rem", lineHeight: 1.4, marginTop: "0.5rem", padding: "0.48rem 0.55rem" }}>
+                                <strong>Auto mode selected:</strong> {modeOptions.find((option) => option.id === gmPreview.mode)?.title || gmPreview.mode}.
+                                <span data-no-translate={gmPreview.modeReason ? "" : undefined}> {gmPreview.modeReason || "The selected native GM mode governs all proposed operations."}</span>
+                            </div>
+                        )}
 
                         {gmNotes.length > 0 && (
                             <div style={{ border: "1px solid rgba(255,255,255,0.14)", borderRadius: 8, marginTop: "0.55rem", padding: "0.45rem 0.55rem" }}>
