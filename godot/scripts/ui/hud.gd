@@ -65,6 +65,8 @@ func _ready() -> void:
 	_build_bottom_right()
 	date_widget = DateWidget.new()
 	add_child(date_widget)
+	UiTheme.events().changed.connect(_on_theme_changed)
+	_on_theme_changed()
 	date_widget.panel_changed.connect(_on_date_panel)
 	date_widget.turn_landed.connect(func(view: Dictionary) -> void: turn_landed.emit(view))
 	date_widget.open_interactive.connect(func() -> void: open_interactive.emit())
@@ -76,6 +78,13 @@ func _ready() -> void:
 			_chat_badge_label.text = ".".repeat(_typing_dots)
 			_fit_chat_badge())
 	add_child(_typing_timer)
+
+
+func _on_theme_changed() -> void:
+	set_map_mode(map_mode)
+	for name in _launchers.keys():
+		_style_launcher(str(name), false)
+	_refresh_flag_badge()
 
 
 func setup(engine: EngineLink, map: MapView) -> void:
@@ -124,12 +133,12 @@ func _flat_button(text: String, size := 13, weight := 600, ink := UI.BUTTON_INK)
 
 
 func _build_top_left() -> void:
-	var menu := _glass(UI.HUD_BUTTON, 12, Rect2(8, 8, 46, 46))
+	var menu := _glass(UI.HUD_BUTTON, 12, Rect2(8, 8, 46, 46)).theme_as("glass_pill", "hud_border")
 	var menu_button := _flat_button("☰", 19, 800, UI.WHITE)
 	menu_button.tooltip_text = "Game menu"
 	menu_button.pressed.connect(func() -> void: open_menu.emit())
 	menu.add_child(menu_button)
-	var pill := _glass(UI.HUD_PILL, 12, Rect2(61, 8, 240, 46), Vector4(0, 0, 0, 0), Vector4(12, 0, 12, 0))
+	var pill := _glass(UI.HUD_PILL, 12, Rect2(61, 8, 240, 46), Vector4(0, 0, 0, 0), Vector4(12, 0, 12, 0)).theme_as("glass_pill", "hud_border")
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 9)
 	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -150,7 +159,7 @@ func _build_top_left() -> void:
 	text.add_child(_pill_subtitle)
 	row.add_child(text)
 	pill.add_child(row)
-	var exit := _glass(UI.HUD_PILL, 12, Rect2(308, 8, 92, 46))
+	var exit := _glass(UI.HUD_PILL, 12, Rect2(308, 8, 92, 46)).theme_as("glass_pill", "hud_border")
 	var exit_button := _flat_button("⌂ Exit Game", 11, 600)
 	exit_button.tooltip_text = "Leave this game and return to the main menu"
 	exit_button.pressed.connect(func() -> void: exit_game.emit())
@@ -159,12 +168,13 @@ func _build_top_left() -> void:
 
 func _launcher_style(open: bool, hovered: bool) -> StyleBoxFlat:
 	if open:
-		return UI.box(Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.16), Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.34), 10, 1)
-	return UI.box(Color(1, 1, 1, 0.08 if hovered else 0.04), Color(1, 1, 1, 0.1), 10, 1)
+		return UI.box(UiTheme.pick("glass_active", Color(59 / 255.0, 130 / 255.0, 246 / 255.0, 0.16)), UiTheme.pick("glass_active_line", Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.34)), 10, 1)
+	var fill := UiTheme.pick("glass_hover", Color(1, 1, 1, 0.08)) if hovered else UiTheme.pick("glass_chip", Color(1, 1, 1, 0.04))
+	return UI.box(fill, UiTheme.pick("glass_line", Color(1, 1, 1, 0.1)), 10, 1)
 
 
 func _build_dock() -> void:
-	var dock := _glass(UI.HUD_BG, 14, Rect2(8, -72, 205, 64), Vector4(0, 1, 0, 1), Vector4(11, 5, 11, 5))
+	var dock := _glass(UI.HUD_BG, 14, Rect2(8, -72, 205, 64), Vector4(0, 1, 0, 1), Vector4(11, 5, 11, 5)).theme_as("hud_bg", "hud_border")
 	_dock = dock
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 12)
@@ -369,7 +379,7 @@ func _build_bottom_right() -> void:
 	_right_layer.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_right_layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_right_layer)
-	_flag_frame = _glass(UI.HUD_BUTTON, 14, Rect2(-72, -180, 64, 64), Vector4(1, 1, 1, 1), Vector4(8, 8, 8, 8), _right_layer)
+	_flag_frame = _glass(UI.HUD_BUTTON, 14, Rect2(-72, -180, 64, 64), Vector4(1, 1, 1, 1), Vector4(8, 8, 8, 8), _right_layer).theme_as("", "hud_border")
 	_flag = TextureRect.new()
 	_flag.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	_flag.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
@@ -394,7 +404,7 @@ func _build_bottom_right() -> void:
 		open_country.emit()
 		show_country(str(_game.get("country", ""))))
 	_flag_frame.add_child(flag_button)
-	_advisor_frame = _glass(UI.HUD_BUTTON, 14, Rect2(-72, -112, 64, 64), Vector4(1, 1, 1, 1), Vector4(0, 0, 0, 0), _right_layer)
+	_advisor_frame = _glass(UI.HUD_BUTTON, 14, Rect2(-72, -112, 64, 64), Vector4(1, 1, 1, 1), Vector4(0, 0, 0, 0), _right_layer).theme_as("", "hud_border")
 	var advisor := _flat_button("", 12)
 	_advisor_button = advisor
 	advisor.tooltip_text = "Advisor"
@@ -404,7 +414,7 @@ func _build_bottom_right() -> void:
 		open_advisor.emit()
 		toggle_drawer("advisor"))
 	_advisor_frame.add_child(advisor)
-	var toggle := _glass(UI.HUD_BG, 12, Rect2(-206, -44, 198, 36), Vector4(1, 1, 1, 1), Vector4(4, 4, 4, 4), _right_layer)
+	var toggle := _glass(UI.HUD_BG, 12, Rect2(-206, -44, 198, 36), Vector4(1, 1, 1, 1), Vector4(4, 4, 4, 4), _right_layer).theme_as("hud_bg", "hud_border")
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 4)
 	for entry in [["political", "Political", 87], ["diplomatic", "Diplomatic", 99]]:
@@ -432,12 +442,23 @@ func set_map_mode(mode: String, announce := false) -> void:
 	for key in _mode_buttons.keys():
 		var button: Button = _mode_buttons[key]
 		var on: bool = key == mode
-		button.icon = UI.icon(key, 15, UI.WHITE if on else Color(1, 1, 1, 0.55))
+		var diplomatic: bool = key == "diplomatic"
+		var ink := Color(1, 1, 1, 0.55)
+		var fill := Color(0, 0, 0, 0)
+		var edge := Color(0, 0, 0, 0)
+		if on and diplomatic:
+			ink = UiTheme.pick("glass_active_text", Color("#60a5fa"))
+			fill = UiTheme.pick("glass_active", Color(37 / 255.0, 99 / 255.0, 235 / 255.0, 0.3))
+			edge = UiTheme.pick("glass_active_line", Color(96 / 255.0, 165 / 255.0, 250 / 255.0, 0.4))
+		elif on:
+			ink = UI.WHITE
+			fill = UiTheme.pick("glass_active", Color(1, 1, 1, 0.14))
+		button.icon = UI.icon(key, 15, ink)
 		button.add_theme_font_override("font", UI.font(600 if on else 400))
 		for name in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color"]:
-			button.add_theme_color_override(name, UI.WHITE if on else Color(1, 1, 1, 0.55))
-		var normal: StyleBox = UI.box(Color(1, 1, 1, 0.14), Color(0, 0, 0, 0), 8, 0) if on else StyleBoxEmpty.new()
-		var hover := UI.box(Color(1, 1, 1, 0.16 if on else 0.06), Color(0, 0, 0, 0), 8, 0)
+			button.add_theme_color_override(name, ink)
+		var normal := UI.box(fill, edge, 8, 1 if diplomatic else 0)
+		var hover := normal if on else UI.box(Color(1, 1, 1, 0.06), edge, 8, 1 if diplomatic else 0)
 		button.add_theme_stylebox_override("normal", normal)
 		button.add_theme_stylebox_override("focus", normal)
 		button.add_theme_stylebox_override("hover", hover)
@@ -834,9 +855,9 @@ func _refresh_flag_badge() -> void:
 	if not _flag_frame:
 		return
 	var open := open_drawer == "country"
-	_flag_frame.set_tint(Color(75 / 255.0, 143 / 255.0, 251 / 255.0, 0.17) if open else UI.HUD_BUTTON)
+	_flag_frame.set_tint(UiTheme.pick("glass_active", Color(75 / 255.0, 143 / 255.0, 251 / 255.0, 0.17)) if open else UiTheme.pick("glass_pill", UI.HUD_BUTTON))
 	if _advisor_frame:
-		_advisor_frame.set_tint(Color(1, 1, 1, 0.085) if open_drawer == "advisor" else UI.HUD_BUTTON)
+		_advisor_frame.set_tint(UiTheme.pick("glass_active", Color(1, 1, 1, 0.085)) if open_drawer == "advisor" else UiTheme.pick("glass_pill", UI.HUD_BUTTON))
 	var name := str(_game.get("countryName", ""))
 	if name.is_empty():
 		name = str(date_widget.status.get("playerCountry", _game.get("country", "")))

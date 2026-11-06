@@ -2734,7 +2734,7 @@ func _modal_frame(width: float, height: float) -> VBoxContainer:
 	var view := holder.get_viewport_rect().size
 	var sheet := PanelContainer.new()
 	sheet.custom_minimum_size = Vector2(min(view.x * 0.96, width), min(height, view.y - 38.0))
-	sheet.add_theme_stylebox_override("panel", UI.box(Color(20 / 255.0, 20 / 255.0, 22 / 255.0, 0.995), UI.HUD_BORDER, 18, 1))
+	sheet.add_theme_stylebox_override("panel", UI.box(Color(20 / 255.0, 20 / 255.0, 22 / 255.0, 0.995), UiTheme.pick("hud_border", UI.HUD_BORDER), 18, 1))
 	sheet.clip_contents = true
 	centre.add_child(sheet)
 	var stack := column(0)

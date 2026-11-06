@@ -20,6 +20,7 @@ var _open := false
 
 func _init(title := "", subtitle := "", frame_kind := "bottom", width := 0.0) -> void:
 	super._init(UI.HUD_BG_STRONG, 18.0)
+	theme_as("overlay", "line")
 	kind = frame_kind
 	var column := VBoxContainer.new()
 	column.add_theme_constant_override("separation", 0)
