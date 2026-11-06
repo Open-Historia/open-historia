@@ -275,6 +275,7 @@ export * as mxBasemapPick from "../../src/runtime/basemapPick.js";
 export * as mxDetailedOffers from "../../src/Game/Map/detailedMapOffers.js";
 export * as mxTiledWording from "../../src/Game/Map/tiledBasemapWording.js";
 export * as mxMapProjection from "../../server/mapProjection.js";
+export * as mxCameraBounds from "../../src/Game/Map/cameraBounds.js";
 export * as mxOwnerNames from "../../src/runtime/ownerNames.js";
 export * as mxDeviceProfile from "../../src/runtime/deviceProfile.js";
 export * as newGameWorld from "../../src/runtime/newGameWorld.js";

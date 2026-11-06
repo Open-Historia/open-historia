@@ -203,6 +203,63 @@ func _south_edge(view: MapView) -> float:
 	return GlobeView.lonlat_of_world(Vector2(view.camera.position.x, view.camera.position.y + half)).y
 
 
+func _view_edges(view: MapView) -> Rect2:
+	var size := view.get_viewport_rect().size
+	var half := size * 0.5 / view.camera.zoom.x
+	var north_west := GlobeView.lonlat_of_world(view.camera.position - half)
+	var south_east := GlobeView.lonlat_of_world(view.camera.position + half)
+	return Rect2(north_west.x, south_east.y, south_east.x - north_west.x, north_west.y - south_east.y)
+
+
+func _camera_edges(view: MapView) -> void:
+	var asked: Dictionary = await main.engine.request("mapextras.background", {"globe": false})
+	var box: Variant = (asked.get("result", {}) as Dictionary).get("camera")
+	_check(box is Array and (box as Array).size() == 2 and box[0][0] == null and box[1][0] == null and is_equal_approx(float(box[0][1]), -80.0) and is_equal_approx(float(box[1][1]), 85.0), "the real Earth's camera bounds come from the game's own reckoning: 80 S to 85 N, no sides on a map that loops (%s)" % JSON.stringify(box))
+	var kept_background := extras.background.duplicate(true)
+	var kept_world := extras.world.duplicate(true)
+	var almost := 180.0 - 1e-10
+	extras.background = kept_background.duplicate(true)
+	extras.background["kind"] = "image"
+	extras.background["camera"] = [[-almost, -72.09], [almost, 72.09]]
+	extras.world["noWrap"] = true
+	view.camera.position = GlobeView.world_of_lonlat(0.0, 0.0)
+	view.camera.zoom = Vector2.ONE * 0.01
+	view.call("_after_camera_move")
+	var edges := _view_edges(view)
+	_check(edges.position.x >= -180.01 and edges.end.x <= 180.01, "zoomed all the way out, a map that does not loop shows nothing past its left and right edges (%.2f to %.2f)" % [edges.position.x, edges.end.x])
+	view.camera.position.y = GlobeView.world_of_lonlat(0.0, 89.0).y
+	view.call("_after_camera_move")
+	edges = _view_edges(view)
+	_check(absf(edges.end.y - 72.09) < 0.05, "a scenario's picture stops the camera at its own top (%.2f)" % edges.end.y)
+	await _shoot("port-1b-picture-edges")
+	view.camera.position.y = GlobeView.world_of_lonlat(0.0, -89.0).y
+	view.call("_after_camera_move")
+	edges = _view_edges(view)
+	_check(absf(edges.position.y + 72.09) < 0.05, "and at its bottom (%.2f)" % edges.position.y)
+	view.camera.position.x = MapView.WORLD_WIDTH * 4.0
+	view.call("_after_camera_move")
+	edges = _view_edges(view)
+	_check(absf(edges.end.x - 180.0) < 0.05, "a map that does not loop stops at its right edge instead of going on for ever (%.2f)" % edges.end.x)
+	view.camera.position.x = -MapView.WORLD_WIDTH * 4.0
+	view.call("_after_camera_move")
+	edges = _view_edges(view)
+	_check(absf(edges.position.x + 180.0) < 0.05, "and at its left edge (%.2f)" % edges.position.x)
+	extras.background["camera"] = [[-20.0, -40.0], [60.0, 50.0]]
+	view.camera.position = GlobeView.world_of_lonlat(150.0, 80.0)
+	view.call("_after_camera_move")
+	edges = _view_edges(view)
+	_check(edges.position.x >= -20.01 and edges.end.x <= 60.01 and edges.position.y >= -40.01 and edges.end.y <= 50.01, "a picture laid on part of the world holds the camera inside it (%s)" % str(edges))
+	_check(absf(edges.size.x - 80.0) < 0.05, "and the camera zooms in until the picture fills the view side to side, as MapLibre does (%.2f of 80 degrees)" % edges.size.x)
+	extras.world["noWrap"] = false
+	view.camera.position.x = MapView.WORLD_WIDTH - 1.0
+	view.call("_after_camera_move")
+	_check(view.camera.position.x > MapView.WORLD_WIDTH - 2.0 and _view_edges(view).end.x > 180.0, "a map that loops still pans past its edge onto the next copy of the world")
+	extras.background = kept_background
+	extras.world = kept_world
+	view.fly_to_lonlat(10.0, 45.0, 4.0, 0.0)
+	await _wait(1.0)
+
+
 func _port_checks() -> void:
 	var view: MapView = main.map_view
 	var navigator: MapNavigator = extras.navigator
@@ -224,6 +281,8 @@ func _port_checks() -> void:
 	view.call("_after_camera_move")
 	var builtin_edge := _south_edge(view)
 	_check(kind != "builtin" or absf(builtin_edge + 80.0) < 0.05, "the real Earth stops at 80 degrees south (%.2f)" % builtin_edge)
+	var builtin_camera: Variant = extras.background.get("camera")
+	extras.background.erase("camera")
 	extras.background["kind"] = "image"
 	view.camera.position = GlobeView.world_of_lonlat(0.0, -84.9)
 	view.call("_after_camera_move")
@@ -231,6 +290,9 @@ func _port_checks() -> void:
 	_check(absf(own_edge + GlobeView.MERCATOR_LIMIT) < 0.05, "a scenario's own map reaches 85 degrees south (%.2f)" % own_edge)
 	await _shoot("port-1-own-map-south")
 	extras.background["kind"] = kind
+	if builtin_camera != null:
+		extras.background["camera"] = builtin_camera
+	await _camera_edges(view)
 	view.fly_to_lonlat(10.0, 45.0, 4.0, 0.0)
 	await _wait(1.0)
 	var basemap = view.basemap

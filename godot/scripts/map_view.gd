@@ -632,7 +632,8 @@ func _update_labels() -> void:
 
 
 func _after_camera_move() -> void:
-	camera.position.x = fposmod(camera.position.x, WORLD_WIDTH)
+	if editor_mode or not extras or not bool((extras.call("camera_bounds") as Dictionary).get("sides", false)):
+		camera.position.x = fposmod(camera.position.x, WORLD_WIDTH)
 	camera.position.y = clamp(camera.position.y, 0.0, WORLD_WIDTH)
 	if editor_mode:
 		_editor_constrain()
