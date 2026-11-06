@@ -12,15 +12,38 @@ const FAINT := Color(242 / 255.0, 238 / 255.0, 229 / 255.0, 0.42)
 const PAGE := Color("#06080b")
 const DISPLAY := ["Bahnschrift", "DIN Alternate", "Barlow Condensed", "Roboto Condensed", "Arial Narrow", "sans-serif"]
 const BODY := ["Segoe UI", "Helvetica Neue", "Arial", "sans-serif"]
+const GRAIN_KEYS := [Vector2(0, 0), Vector2(-6, 4), Vector2(5, -6), Vector2(-3, 7), Vector2(7, 2), Vector2(0, 0)]
+const GRAIN_SHADER := """
+shader_type canvas_item;
+uniform sampler2D screen : hint_screen_texture, filter_nearest;
+uniform sampler2D grain : filter_nearest, repeat_enable;
+uniform vec2 origin;
+varying vec2 spot;
+
+void vertex() {
+	spot = VERTEX;
+}
+
+void fragment() {
+	vec4 speck = texture(grain, (spot - origin) / 160.0);
+	vec3 below = texture(screen, SCREEN_UV).rgb;
+	vec3 low = 2.0 * below * speck.rgb;
+	vec3 high = 1.0 - 2.0 * (1.0 - below) * (1.0 - speck.rgb);
+	vec3 blended = mix(low, high, step(0.5, below));
+	COLOR = vec4(mix(below, blended, speck.a * 0.08), 1.0);
+}
+"""
 
 static var _fonts := {}
+static var _grain_tile: ImageTexture
+static var _grain_shader: Shader
 
 var still := false
 var release := {}
 var _scroll: ScrollContainer
 var _page: VBoxContainer
-var _stages: Array = []
-var _reveals: Array = []
+var _stages: Array[Stage] = []
+var _reveals: Array[Riser] = []
 var _chapters: Array = []
 var _rail_items: Array = []
 var _bar_fill: ColorRect
@@ -31,6 +54,30 @@ var _finale_copy: Control
 var _vh := 900.0
 var _vw := 1440.0
 var _active := -1
+var _hud: Control
+var _rail: Control
+var _grain: ColorRect
+var _chevron: Chevron
+var _opened_at := 0
+var _clock := 0.0
+var _factor := 1.0
+var _rise_curve: CubicBezier
+var _ease_io: CubicBezier
+
+
+class Stage:
+	extends RefCounted
+
+	var section: Control
+	var holder: Control
+	var view: ReleaseScene
+	var kind := "chapter"
+	var steps := 0
+	var step := 0
+	var progress := 0.0
+	var numeral: Control
+	var numeral_y := 0.0
+	var shown := false
 
 
 func _ready() -> void:
@@ -40,6 +87,10 @@ func _ready() -> void:
 	backdrop.color = PAGE
 	backdrop.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	add_child(backdrop)
+	_rise_curve = CubicBezier.named("cubic-bezier(0.2, 0.8, 0.2, 1)")
+	_ease_io = CubicBezier.named("ease-in-out")
+	set_process(false)
+	get_viewport().size_changed.connect(_on_viewport_resized)
 
 
 func open(link: EngineLink, id: String, reduce_motion := false) -> void:
@@ -52,10 +103,32 @@ func open(link: EngineLink, id: String, reduce_motion := false) -> void:
 	release = result["release"]
 	_vw = maxf(320.0, get_viewport_rect().size.x)
 	_vh = maxf(320.0, get_viewport_rect().size.y)
+	_opened_at = Time.get_ticks_msec()
+	_factor = _scale_factor()
 	_build()
+	set_process(true)
 	if not still:
 		modulate.a = 0.0
-		create_tween().tween_property(self, "modulate:a", 1.0, 0.6).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+		create_tween().tween_method(func(t: float) -> void: modulate.a = _rise_curve.at(t), 0.0, 1.0, 0.6)
+
+
+func _scale_factor() -> float:
+	return float(get_tree().root.content_scale_factor) if is_inside_tree() else 1.0
+
+
+func is_settled() -> bool:
+	for item in _stages:
+		if item.shown and not item.view.is_ready():
+			return false
+	return true
+
+
+func scenes_in_view() -> Array:
+	var found: Array = []
+	for item in _stages:
+		if item.shown:
+			found.append(item.view)
+	return found
 
 
 static func font(display: bool, weight := 400, stretch := 100) -> Font:
@@ -107,21 +180,11 @@ func _outlined(value: String, size: float, ink: Color, weight: int, stroke: floa
 	return label
 
 
-func _art(key: String, align_bottom := false) -> TextureRect:
-	var rect := TextureRect.new()
-	var source := str(ReleaseArt.SCENES.get(key, ""))
-	var image := Image.new()
-	var native := Vector2(1200, 800) if key != "hero" else Vector2(1600, 900)
-	var scale_by := maxf(_vw / native.x, _vh / native.y) * float(get_tree().root.content_scale_factor if get_tree() else 1.0)
-	if not source.is_empty() and image.load_svg_from_string(source, scale_by) == OK:
-		rect.texture = ImageTexture.create_from_image(image)
-	rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
-	rect.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	if align_bottom:
-		rect.set_meta("bottom", true)
-	return rect
+func _view(key: String) -> ReleaseScene:
+	var view := ReleaseScene.new()
+	view.setup(key, still)
+	view.size = Vector2(_vw, _vh)
+	return view
 
 
 func _section(height: float, bg := PAGE) -> Control:
@@ -137,21 +200,33 @@ func _section(height: float, bg := PAGE) -> Control:
 	return section
 
 
-func _stage(section: Control) -> Control:
-	var stage := Control.new()
-	stage.size = Vector2(_vw, _vh)
-	stage.clip_contents = true
-	stage.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	section.add_child(stage)
-	_stages.append([section, stage])
-	return stage
+func _stage(section: Control, key: String, kind := "chapter", steps := 0) -> Stage:
+	var holder := Control.new()
+	holder.size = Vector2(_vw, _vh)
+	holder.clip_contents = true
+	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	section.add_child(holder)
+	var item := Stage.new()
+	item.section = section
+	item.holder = holder
+	item.kind = kind
+	item.steps = steps
+	item.progress = 0.0 if kind == "hero" or not still else 1.0
+	item.view = _view(key)
+	holder.add_child(item.view)
+	_stages.append(item)
+	return item
 
 
 func _reveal(control: Control) -> Control:
-	if not still:
-		control.modulate.a = 0.0
-		_reveals.append(control)
-	return control
+	if still:
+		return control
+	var riser := Riser.new()
+	riser.add_child(control)
+	riser.modulate.a = 0.0
+	riser.rise = 42.0
+	_reveals.append(riser)
+	return riser
 
 
 func _build() -> void:
@@ -174,14 +249,15 @@ func _build() -> void:
 	_page.add_child(_finale())
 	_build_hud()
 	_build_rail()
+	_build_grain()
 	_scroll.get_v_scroll_bar().value_changed.connect(func(_value: float) -> void: _on_scroll())
+	_page.resized.connect(func() -> void: _on_scroll.call_deferred())
 	_on_scroll.call_deferred()
 
 
 func _hero() -> Control:
 	var section := _section(_vh * 2.1)
-	var stage := _stage(section)
-	stage.add_child(_art("hero", true))
+	var stage := _stage(section, "hero", "hero").holder
 	var copy := VBoxContainer.new()
 	copy.add_theme_constant_override("separation", 0)
 	copy.alignment = BoxContainer.ALIGNMENT_BEGIN
@@ -228,7 +304,8 @@ func _hero() -> Control:
 	word.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	cue.add_child(word)
 	var chevron := Chevron.new()
-	chevron.custom_minimum_size = Vector2(20, 16)
+	_chevron = chevron
+	chevron.custom_minimum_size = Vector2(20, 22)
 	chevron.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	cue.add_child(chevron)
 	stage.add_child(cue)
@@ -341,24 +418,8 @@ func _chapter(chapter: Dictionary, index: int, _count: int) -> Control:
 	var section := _section(height)
 	section.set_meta("chapter_index", index)
 	section.set_meta("chapter_key", str(chapter.get("key", "")))
-	var stage := _stage(section)
-	if scene == "map":
-		var water := ColorRect.new()
-		water.color = Color("#081117")
-		water.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-		stage.add_child(water)
-		var plane := _art("map-plane")
-		plane.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-		stage.add_child(plane)
-		var globe := _art("map-globe")
-		globe.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-		var size_globe := clampf(_vw * 0.12, 90.0, 180.0)
-		globe.set_anchors_preset(Control.PRESET_TOP_LEFT)
-		globe.size = Vector2(size_globe, size_globe)
-		globe.position = Vector2(_vw - minf(704.0, _vw * 0.48) - _vw * 0.03 - size_globe, _vh * 0.92 - size_globe)
-		stage.add_child(globe)
-	else:
-		stage.add_child(_art(scene))
+	var item := _stage(section, scene, "chapter", highlights.size() + 1)
+	var stage := item.holder
 	var shade := Shade.new()
 	var shade_wide := minf(704.0, _vw * 0.48)
 	shade.position = Vector2(_vw - shade_wide, 0)
@@ -369,6 +430,8 @@ func _chapter(chapter: Dictionary, index: int, _count: int) -> Control:
 	var numeral := _outlined(NUMERALS[index], numeral_px, Color(1, 1, 1, 0.16), 900, 2.0)
 	stage.add_child(numeral)
 	numeral.position = Vector2(160, _vh * 0.97 - numeral_px)
+	item.numeral = numeral
+	item.numeral_y = numeral.position.y
 	var passages := VBoxContainer.new()
 	passages.add_theme_constant_override("separation", 0)
 	passages.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -419,14 +482,14 @@ func _passage(content: Control, tall: float) -> Control:
 	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var wide := minf(544.0, _vw * 0.4)
 	content.custom_minimum_size.x = wide
-	holder.add_child(content)
+	var shown := _reveal(content)
+	holder.add_child(shown)
 	var place := func() -> void:
-		if is_instance_valid(content):
-			content.size = Vector2(wide, content.get_combined_minimum_size().y)
-			content.position = Vector2(_vw - _vw * 0.05 - wide, (tall - content.size.y) * 0.5)
+		if is_instance_valid(shown):
+			shown.size = Vector2(wide, shown.get_combined_minimum_size().y)
+			shown.position = Vector2(_vw - _vw * 0.05 - wide, (tall - shown.size.y) * 0.5)
 	place.call_deferred()
-	content.minimum_size_changed.connect(place)
-	_reveal(content)
+	shown.minimum_size_changed.connect(place)
 	return holder
 
 
@@ -561,8 +624,7 @@ func _entry(entry: Dictionary, accent: Color, wide: float) -> Control:
 
 func _finale() -> Control:
 	var section := _section(_vh * 1.8)
-	var stage := _stage(section)
-	stage.add_child(_art("finale"))
+	var stage := _stage(section, "finale", "finale").holder
 	var copy := VBoxContainer.new()
 	copy.add_theme_constant_override("separation", 22)
 	copy.alignment = BoxContainer.ALIGNMENT_END
@@ -636,6 +698,7 @@ func _build_hud() -> void:
 	skip.pressed.connect(close)
 	hud.add_child(skip)
 	add_child(hud)
+	_hud = hud
 
 
 static func _spaced_font(base: Font, spacing: int) -> Font:
@@ -681,6 +744,7 @@ func _build_rail() -> void:
 		rail.add_child(item)
 		_rail_items.append(item)
 	add_child(rail)
+	_rail = rail
 	var natural := rail.get_combined_minimum_size()
 	rail.position = Vector2(17.6, (_vh - natural.y) * 0.5)
 
@@ -707,28 +771,123 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 
 
+func _build_grain() -> void:
+	if _grain_shader == null:
+		_grain_shader = Shader.new()
+		_grain_shader.code = GRAIN_SHADER
+	if _grain_tile == null:
+		var image := Image.create_empty(160, 160, false, Image.FORMAT_RGBA8)
+		var dice := RandomNumberGenerator.new()
+		dice.randomize()
+		for at in range(2600):
+			var shade := 1.0 if dice.randf() > 0.5 else 0.0
+			image.set_pixel(dice.randi_range(0, 159), dice.randi_range(0, 159), Color(shade, shade, shade, snappedf(dice.randf() * 0.5, 0.01)))
+		_grain_tile = ImageTexture.create_from_image(image)
+	_grain = ColorRect.new()
+	_grain.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_grain.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var material := ShaderMaterial.new()
+	material.shader = _grain_shader
+	material.set_shader_parameter("grain", _grain_tile)
+	material.set_shader_parameter("origin", Vector2(-_vw * 0.5, -_vh * 0.5))
+	_grain.material = material
+	add_child(_grain)
+
+
+func _on_viewport_resized() -> void:
+	if release.is_empty() or not is_instance_valid(_scroll):
+		return
+	var now := get_viewport_rect().size
+	if absf(now.x - _vw) >= 2.0 or absf(now.y - _vh) >= 2.0:
+		_relayout.call_deferred()
+
+
+func _relayout() -> void:
+	var now := get_viewport_rect().size
+	if not is_instance_valid(_scroll) or (absf(now.x - _vw) < 2.0 and absf(now.y - _vh) < 2.0):
+		return
+	var bar := _scroll.get_v_scroll_bar()
+	var fraction := float(_scroll.scroll_vertical) / maxf(1.0, bar.max_value - bar.page)
+	for node in [_scroll, _hud, _rail, _grain]:
+		if node != null and is_instance_valid(node):
+			remove_child(node)
+			node.queue_free()
+	_stages.clear()
+	_reveals.clear()
+	_chapters.clear()
+	_rail_items.clear()
+	_rail = null
+	_active = -1
+	_vw = maxf(320.0, now.x)
+	_vh = maxf(320.0, now.y)
+	_build()
+	await get_tree().process_frame
+	await get_tree().process_frame
+	if is_instance_valid(_scroll):
+		bar = _scroll.get_v_scroll_bar()
+		_scroll.scroll_vertical = int(fraction * maxf(0.0, bar.max_value - bar.page))
+
+
+func _process(_delta: float) -> void:
+	var factor := _scale_factor()
+	if not is_equal_approx(factor, _factor):
+		_factor = factor
+		_on_scroll()
+	if still:
+		return
+	_clock = (Time.get_ticks_msec() - _opened_at) / 1000.0
+	for item in _stages:
+		if item.shown:
+			item.view.advance(item.progress, _clock, item.step)
+	if is_instance_valid(_chevron) and is_instance_valid(_cue) and _cue.modulate.a > 0.0:
+		var u := fmod(_clock, 1.8) / 1.8
+		_chevron.bob = 6.0 * _ease_io.at(u / 0.5) if u < 0.5 else 6.0 * (1.0 - _ease_io.at((u - 0.5) / 0.5))
+	if is_instance_valid(_grain):
+		var at := fmod(_clock, 1.2) / 1.2 * 5.0
+		var part := mini(int(at), 4)
+		var f := floorf((at - part) * 6.0) / 6.0
+		var shift: Vector2 = (GRAIN_KEYS[part] as Vector2).lerp(GRAIN_KEYS[part + 1], f) * Vector2(_vw * 2.0, _vh * 2.0) / 100.0
+		(_grain.material as ShaderMaterial).set_shader_parameter("origin", Vector2(-_vw * 0.5, -_vh * 0.5) + shift)
+
+
 func _on_scroll() -> void:
 	if not is_instance_valid(_scroll):
 		return
 	var top := float(_scroll.scroll_vertical)
-	for pair in _stages:
-		var section: Control = pair[0]
-		var stage: Control = pair[1]
-		if is_instance_valid(section) and is_instance_valid(stage):
-			stage.position.y = clampf(top - section.position.y, 0.0, maxf(0.0, section.size.y - _vh))
+	for item in _stages:
+		var section := item.section
+		if not is_instance_valid(section):
+			continue
+		var raw := clampf((top - section.position.y) / maxf(1.0, section.size.y - _vh), 0.0, 1.0)
+		item.holder.position.y = clampf(top - section.position.y, 0.0, maxf(0.0, section.size.y - _vh))
+		item.shown = section.position.y < top + _vh and section.position.y + section.size.y > top
+		item.holder.visible = item.shown
+		if still:
+			item.progress = 0.0 if item.kind == "hero" else 1.0
+		else:
+			item.progress = raw
+		if item.steps > 0:
+			item.step = mini(item.steps - 1, int(floorf(raw * item.steps)))
+		if item.numeral:
+			item.numeral.position.y = item.numeral_y - 60.0 * item.progress
+		if section.position.y < top + _vh * 2.0 and section.position.y + section.size.y > top - _vh:
+			item.view.prepare(_factor)
+		if item.shown:
+			item.view.advance(item.progress, _clock, item.step)
 	var total := maxf(1.0, _page.size.y - _vh)
 	if is_instance_valid(_bar_fill):
 		_bar_fill.size = Vector2(_bar.size.x * clampf(top / total, 0.0, 1.0), 2)
-	if is_instance_valid(_hero_copy) and not still:
-		var hero: Control = _stages[0][0]
-		var p := clampf(top / maxf(1.0, hero.size.y - _vh), 0.0, 1.0)
-		_hero_copy.modulate.a = clampf(1.0 - p * 1.8, 0.0, 1.0)
-		_hero_copy.position.y = _vh * 0.24 - p * 140.0
-		_cue.modulate.a = clampf(1.0 - p * 6.0, 0.0, 1.0)
-	if is_instance_valid(_finale_copy):
-		var finale: Control = _stages[_stages.size() - 1][0]
-		var q := 1.0 if still else clampf((top - finale.position.y) / maxf(1.0, finale.size.y - _vh), 0.0, 1.0)
-		_finale_copy.modulate.a = clampf(q * 2.2 - 0.3, 0.0, 1.0)
+	if not _stages.is_empty():
+		var hero_p := _stages[0].progress
+		if is_instance_valid(_hero_copy):
+			_hero_copy.modulate.a = clampf(1.0 - hero_p * 1.8, 0.0, 1.0)
+			_hero_copy.position.y = _vh * 0.24 - hero_p * 140.0
+			_hero_copy.pivot_offset = _hero_copy.size * 0.5
+			_hero_copy.scale = Vector2.ONE * (1.0 + hero_p * 0.06)
+		if is_instance_valid(_cue):
+			_cue.modulate.a = clampf(1.0 - hero_p * 6.0, 0.0, 1.0)
+		if is_instance_valid(_finale_copy):
+			_finale_copy.modulate.a = clampf(_stages[_stages.size() - 1].progress * 2.2 - 0.3, 0.0, 1.0)
 	var current := -1
 	for section in _chapters:
 		if is_instance_valid(section) and section.position.y <= top + _vh * 0.5:
@@ -737,16 +896,28 @@ func _on_scroll() -> void:
 		_active = current
 		for index in range(_rail_items.size()):
 			(_rail_items[index] as RailItem).active = index == current
-	for control in _reveals.duplicate():
-		if not is_instance_valid(control):
-			_reveals.erase(control)
-			continue
-		var rect: Rect2 = control.get_global_rect()
-		if rect.position.y < _vh - rect.size.y * 0.18 and rect.end.y > 0.0:
-			_reveals.erase(control)
-			var tween: Tween = control.create_tween()
-			tween.tween_property(control, "modulate:a", 1.0, 0.7).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	if _page.size.y < _vh * 3.0:
+		return
+	var index := _reveals.size() - 1
+	while index >= 0:
+		var riser := _reveals[index]
+		if not is_instance_valid(riser):
+			_reveals.remove_at(index)
+		else:
+			var rect := Rect2(riser.global_position - _page.global_position - Vector2(0.0, top), riser.size)
+			var seen := minf(rect.end.y, _vh) - maxf(rect.position.y, 0.0)
+			if rect.size.y > 0.0 and seen >= rect.size.y * 0.18:
+				_reveals.remove_at(index)
+				_rise(riser)
+		index -= 1
 
+
+func _rise(riser: Riser) -> void:
+	var curve := _rise_curve
+	riser.create_tween().tween_method(func(t: float) -> void:
+		var k := curve.at(t)
+		riser.modulate.a = k
+		riser.rise = 42.0 * (1.0 - k), 0.0, 1.0, 0.7)
 
 class GoldRule:
 	extends Control
@@ -767,8 +938,14 @@ class GoldRule:
 class Chevron:
 	extends Control
 
+	var bob := 0.0:
+		set(value):
+			if not is_equal_approx(bob, value):
+				bob = value
+				queue_redraw()
+
 	func _draw() -> void:
-		var c := Vector2(size.x * 0.5, size.y * 0.35)
+		var c := Vector2(size.x * 0.5, size.y * 0.35 - 3.0 + bob)
 		var s := 6.0
 		draw_polyline(PackedVector2Array([c + Vector2(-s, -s * 0.5), c + Vector2(0, s * 0.5), c + Vector2(s, -s * 0.5)]), Color("#d9a441"), 2.0, true)
 
@@ -873,16 +1050,21 @@ class GoldButton:
 		add_theme_font_size_override("font_size", 17)
 		for name in ["font_color", "font_hover_color", "font_pressed_color", "font_hover_pressed_color", "font_focus_color"]:
 			add_theme_color_override(name, Color("#14100a"))
-		var pad := StyleBoxEmpty.new()
+		var pad := Slant.new()
 		pad.content_margin_left = 41.6
 		pad.content_margin_right = 41.6
 		for state in ["normal", "hover", "pressed", "hover_pressed", "focus"]:
 			add_theme_stylebox_override(state, pad)
 
-	func _draw() -> void:
-		var w := size.x
-		var h := size.y
-		draw_colored_polygon(PackedVector2Array([Vector2(14, 0), Vector2(w, 0), Vector2(w - 14, h), Vector2(0, h)]), Color("#d9a441"))
+
+class Slant:
+	extends StyleBox
+
+	func _draw(to_canvas_item: RID, area: Rect2) -> void:
+		var at := area.position
+		var w := area.size.x
+		var h := area.size.y
+		RenderingServer.canvas_item_add_polygon(to_canvas_item, PackedVector2Array([at + Vector2(14, 0), at + Vector2(w, 0), at + Vector2(w - 14, h), at + Vector2(0, h)]), PackedColorArray([Color("#d9a441")]))
 
 
 class RailItem:
@@ -922,3 +1104,28 @@ class RailItem:
 
 	func _draw() -> void:
 		draw_rect(Rect2(0, 0, 2, size.y), accent if active else Color(1, 1, 1, 0.14))
+
+
+class Riser:
+	extends Container
+
+	var rise := 0.0:
+		set(value):
+			rise = value
+			queue_sort()
+
+	func _init() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	func _notification(what: int) -> void:
+		if what == NOTIFICATION_SORT_CHILDREN:
+			for child in get_children():
+				if child is Control:
+					fit_child_in_rect(child as Control, Rect2(Vector2(0.0, rise), size))
+
+	func _get_minimum_size() -> Vector2:
+		var least := Vector2.ZERO
+		for child in get_children():
+			if child is Control and (child as Control).visible:
+				least = least.max((child as Control).get_combined_minimum_size())
+		return least
