@@ -66,6 +66,51 @@ const unwrapOpsArray = (value) => {
   return null;
 };
 
+// Some providers emit two independently valid JSON arrays inside one fence:
+//   [{...}] [{...}]
+// JSON.parse rejects trailing content, and the projects recovery walker then
+// treats the second array as corruption. Split only at verified top-level array
+// boundaries, respecting strings, escapes and nested structures, and require
+// every byte to belong to a complete, strictly valid JSON array. A malformed
+// Action array must still fail closed rather than offering speculative orders.
+export const parseAdjacentJsonArrays = (value) => {
+  const source = String(value ?? "");
+  const arrays = [];
+  let offset = 0;
+  while (offset < source.length) {
+    while (/\s/.test(source[offset] ?? "") && offset < source.length) offset += 1;
+    if (offset === source.length) break;
+    if (source[offset] !== "[") return null;
+
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    let end = -1;
+    for (let index = offset; index < source.length; index += 1) {
+      const char = source[index];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (char === "\\") escaped = true;
+        else if (char === '"') inString = false;
+        continue;
+      }
+      if (char === '"') { inString = true; continue; }
+      if (char === "[" || char === "{") depth += 1;
+      else if (char === "]" || char === "}") {
+        depth -= 1;
+        if (depth < 0) return null;
+        if (depth === 0) { end = index + 1; break; }
+      }
+    }
+    if (end < 0) return null;
+    const array = maybeJsonParse(source.slice(offset, end));
+    if (!Array.isArray(array)) return null;
+    arrays.push(array);
+    offset = end;
+  }
+  return arrays.length > 1 ? arrays.flat() : null;
+};
+
 // Escapes what a model leaves unescaped INSIDE a JSON string value.
 //
 // The failure this exists for, straight from a field report: "Expected ',' or
@@ -259,17 +304,22 @@ export const extractFencedJson = (text, lang, { salvageTruncated = false, stream
     try {
       json = JSON.parse(body.trim());
     } catch (err) {
-      json = salvageTruncated ? repairTruncatedJsonArray(body) : null;
-      excerpt = excerptAroundError(body, err.message);
-      if (json === null) {
-        reason = `invalid JSON (${err.message})`;
-        console.warn(`[advisor] malformed \`\`\`${lang} block, dropping it:`, err.message);
-        console.warn(`[advisor] the block that failed:\n${body.slice(0, 2000)}`);
-      } else {
-        // Something was recovered, but say how much was not: silently importing
-        // eight of ten and implying ten is worse than importing eight and saying so.
-        dropped = Math.max(0, recoverOpsElementwise(body).dropped);
-        console.warn(`[advisor] repaired a malformed \`\`\`${lang} block (${err.message})`);
+      // Multiple complete arrays are valid independent batches, not truncated
+      // JSON. This path is strict for Actions: never salvage incomplete orders.
+      const adjacent = lang === "actions" || lang === "projects" ? parseAdjacentJsonArrays(body) : null;
+      json = adjacent ?? (salvageTruncated ? repairTruncatedJsonArray(body) : null);
+      if (adjacent === null) {
+        excerpt = excerptAroundError(body, err.message);
+        if (json === null) {
+          reason = `invalid JSON (${err.message})`;
+          console.warn(`[advisor] malformed \`\`\`${lang} block, dropping it:`, err.message);
+          console.warn(`[advisor] the block that failed:\n${body.slice(0, 2000)}`);
+        } else {
+          // Something was recovered, but say how much was not: silently importing
+          // eight of ten and implying ten is worse than importing eight and saying so.
+          dropped = Math.max(0, recoverOpsElementwise(body).dropped);
+          console.warn(`[advisor] repaired a malformed \`\`\`${lang} block (${err.message})`);
+        }
       }
     }
     return { rest: text.replace(regex, ""), json, truncated: false, reason, dropped, excerpt };
