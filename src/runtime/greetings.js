@@ -30,4 +30,6 @@ export const GREETINGS = Object.freeze([
   { code: "hu", hello: "Szia", welcome: "Üdvözöljük" },
   { code: "ur", hello: "آداب", welcome: "خوش آمدید" },
   { code: "da", hello: "Goddag", welcome: "Velkommen" },
+  { code: "cs", hello: "Ahoj", welcome: "Vítejte" },
+  { code: "fi", hello: "Hei", welcome: "Tervetuloa" },
 ]);

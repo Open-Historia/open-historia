@@ -54,6 +54,22 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // Opus-MT en-cs and en-fi (runtime/translationModels.js): tried on the game's own kind of text, 2026-11-05.
+    // Latvian and Slovene had no model that read right (en-mul) or that the browser can fetch (en-bat, en-sla).
+    id: "2026-11-czech-finnish",
+    kind: "minor",
+    date: "2026-11-05",
+    channel: "beta",
+    banners: [
+      {
+        title: "Czech and Finnish",
+        items: [
+          "You can now play in Czech and Finnish: a translation model, downloaded once, translates the game on your device.",
+        ],
+      },
+    ],
+  },
+  {
     // The interface themes (runtime/uiTheme.js, kernely's PR #955) reach the main menu (libraryBar.jsx), the popups
     // and the translation prompt; the first-time setup (GameUI/FirstSetup.jsx) asks for a language and a theme before
     // the vault door; the language changes where the player is (runtime/translator.js switchLanguage), a language

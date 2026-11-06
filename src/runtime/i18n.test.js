@@ -13,10 +13,10 @@ import { SHIPPED_PACK_LANGUAGES, canTranslateTo, chatTextDirection, getLanguageO
 test("the interface is offered only in a language a pack or a model on the device covers", () => {
   assert.equal(canTranslateTo("en"), true);
   for (const code of SHIPPED_PACK_LANGUAGES) assert.equal(canTranslateTo(code), true, code);
-  for (const code of ["da", "hu", "ro"]) assert.equal(canTranslateTo(code), true, `${code}: its model translates the interface`);
-  for (const code of ["sw", "mr", "fi", "el", "he"]) assert.equal(canTranslateTo(code), false, `${code}: only the AI could translate it, and it no longer does`);
+  for (const code of ["da", "hu", "ro", "cs", "fi"]) assert.equal(canTranslateTo(code), true, `${code}: its model translates the interface`);
+  for (const code of ["sw", "mr", "el", "he"]) assert.equal(canTranslateTo(code), false, `${code}: only the AI could translate it, and it no longer does`);
   const offered = getUiLanguageOptions().map((entry) => entry.code);
-  assert.equal(offered.length, 26);
+  assert.equal(offered.length, 28);
   assert.ok(offered.every(canTranslateTo));
   assert.equal(getLanguageOptions().length, 50, "the AI still writes in any of the fifty");
 });
