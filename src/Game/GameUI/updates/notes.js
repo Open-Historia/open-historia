@@ -72,6 +72,30 @@ const NEW_UPDATES = [
     ],
   },
   {
+    // A player's log, 2026-11-06 (round 637, desktop beta): time skips refused by Gemini as sent, 400 "Request contains an
+    // invalid argument", each to the stand-in events (AI/main.jsx geminiFunctionCallRefusals); every restore point refused
+    // by the server as too large (runtime/restorePointBudget.js); the world city list served as the app's page on the
+    // desktop (server.js MAP_ASSETS_DIR); a landless State of Israel raised at its own name every skip (gameplay.js
+    // raiseMissingCombatants); the Advisor's actions lost to a list closed over an open object
+    // (GameUI/advisorBlocks.js closeObjectsBeforeList); and a third of the log one font warning per letter.
+    id: "2026-11-long-campaign-fixes",
+    kind: "minor",
+    date: "2026-11-05",
+    channel: "beta",
+    banners: [
+      {
+        title: "Fixes for long campaigns",
+        items: [
+          "A time skip Gemini refuses in the form it was asked is asked again at once in the other form, instead of ending in the stand-in events.",
+          "Long campaigns keep their restore points: the oldest are let go once the archive grows too large to save, so undo keeps working.",
+          "On the desktop app, the time skip can find towns from the world's city list again when it places forces.",
+          "A country at war with no land left is no longer sent an army it has nowhere to stand.",
+          "The Advisor's suggested actions are no longer lost when its list of them is closed one bracket short.",
+        ],
+      },
+    ],
+  },
+  {
     // "I ordered my spy to assassinate head of state it succeed but nothing happened he still alive" (a player's
     // report, 2026-11-06): the skip was told only that the operation succeeded, wrote the death, and left the record's
     // leader in office. AI/covertOperationsDirective.js now says the target is dead and that the same event carries
