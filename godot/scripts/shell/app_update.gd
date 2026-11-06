@@ -29,7 +29,8 @@ const NOT_ROLLED_BACK := "The previous version could not be put back. Opening th
 const INSTALLING := "Installing — the game reopens by itself in a few seconds."
 const ROLLING_BACK := "Putting back the previous version — the game reopens by itself."
 const HEADLINE := "A new super-experimental native build of Open Historia is ready."
-const UPDATED_VERSION := "Open Historia Native was updated to version %s."
+const UPDATED_ON := "Open Historia Native was updated to the build of %s."
+const MONTHS := ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
 const UPDATED_BUILD := "Open Historia Native was updated."
 const ROLLED_BACK := "The last update did not start properly, so the version you had was put back."
 const ROLLED_BACK_SUB := "It is offered again as a full download — your games are kept."
@@ -64,6 +65,7 @@ var _toasted := ""
 var _last_phase := ""
 var _confirmed := false
 var _news_closed := false
+var _news_kept: Dictionary = {}
 
 
 class Bar extends Control:
@@ -490,17 +492,33 @@ func is_banner_ready() -> bool:
 	return banner.visible and _restart_ready
 
 
+static func build_day(build: String) -> String:
+	if not build.is_valid_int() or build.length() < 8:
+		return ""
+	var month := build.substr(4, 2).to_int()
+	if month < 1 or month > 12:
+		return ""
+	return "%d %s %s" % [build.substr(6, 2).to_int(), MONTHS[month - 1], build.substr(0, 4)]
+
+
 func _news() -> Dictionary:
 	if _news_closed:
 		return {}
+	if not _news_kept.is_empty():
+		return _news_kept
+	var news := {}
 	if not str(state.get("rolledBack", "")).is_empty():
-		return {"head": ROLLED_BACK, "sub": ROLLED_BACK_SUB}
+		news = {"head": ROLLED_BACK, "sub": ROLLED_BACK_SUB}
 	var done: Variant = state.get("justUpdated")
-	if done is Dictionary and not str((done as Dictionary).get("build", "")).is_empty():
-		var version := str((done as Dictionary).get("version", ""))
+	if news.is_empty() and done is Dictionary and not str((done as Dictionary).get("build", "")).is_empty():
+		var day := build_day(str((done as Dictionary).get("build", "")))
 		var notes := str((done as Dictionary).get("notes", ""))
-		return {"head": UPDATED_VERSION % version if not version.is_empty() else UPDATED_BUILD, "sub": notes if not notes.is_empty() else "Your games are kept."}
-	return {}
+		news = {"head": UPDATED_ON % day if not day.is_empty() else UPDATED_BUILD, "sub": notes if not notes.is_empty() else "Your games are kept."}
+	if not news.is_empty():
+		_news_kept = news
+		if engine:
+			engine.request("update.seen")
+	return news
 
 
 func _refresh_banner() -> void:
@@ -587,8 +605,6 @@ func _on_dismiss() -> void:
 	if _offer().is_empty():
 		_news_closed = true
 		_refresh_banner()
-		if engine:
-			engine.request("update.seen")
 		return
 	var build := str(_offer().get("build", ""))
 	state["dismissed"] = build
