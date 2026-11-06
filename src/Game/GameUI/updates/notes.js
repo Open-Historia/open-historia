@@ -54,6 +54,25 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // Opus-MT en-bat (Latvian, Lithuanian), en-sk, en-et, en-el, en-he, en-ga, en-mt and en-gmq (Swedish), converted
+    // for the game from Helsinki-NLP's models (none had a Transformers.js copy) and tried on the game's own kind of
+    // text, 2026-11-06. Nobody publishes them on Hugging Face: they are read from the scenario repository's
+    // translation-models branch (runtime/translationModels.js MIRROR, modelSources).
+    id: "2026-11-nine-languages",
+    kind: "minor",
+    date: "2026-11-06",
+    channel: "beta",
+    banners: [
+      {
+        title: "Translation in nine more languages",
+        items: [
+          "You can now play in Latvian, Lithuanian, Slovak, Estonian, Greek, Hebrew, Irish and Maltese: a translation model, downloaded once, translates the game on your device.",
+          "In Swedish, a translation model on your device now also translates the names and descriptions of scenarios and maps.",
+        ],
+      },
+    ],
+  },
+  {
     // "get rid of this and instead have the country send you a message requesting assistance and the buttons appear
     // there. it should not explain what happens if you choose each option as that breaks immersion" (the owner,
     // 2026-11-06): the card over the map is gone; the ally that was attacked asks in a message (AI/gameplay.js) and
