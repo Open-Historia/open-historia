@@ -235,6 +235,8 @@ func _imports() -> void:
 	_check(page._notice.begins_with("Imported \""), "import notice: %s" % page._notice.substr(0, 60))
 	_check(page._status_of(post) == "current", "the post now says it is in the library")
 	_check(changed[0] == 1, "the library is told it changed")
+	var remembered: Dictionary = await main.engine.request("community.standin.imported")
+	_check(remembered.get("ok", false) and (remembered.get("result", []) as Array).map(func(value: Variant) -> int: return int(value)).has(int(post.get("id", 0))), "the post is remembered as imported, by its number, so importing it again is not counted (%s)" % str(remembered.get("result")))
 	_check(_has_text(page, "In your library") and _has_text(page, "Import again"), "badge and Import again")
 	await _wait(1.0)
 	await _shoot("c09-imported")
