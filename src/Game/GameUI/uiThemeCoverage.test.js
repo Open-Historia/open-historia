@@ -21,7 +21,15 @@ test("Default (Original) is first, preserves authored per-panel styles and clear
   assert.match(selector, /UI_THEME_PRESETS\.map/);
   assert.match(selector, /selectUiTheme\("custom"\)/);
   assert.match(time, /const widgetSurface = \{[\s\S]*?backgroundColor: "var\(--oh-hud-bg-strong\)"/);
-  assert.doesNotMatch(theme, /"--oh-hud-/);
+  // The HUD glass is themed; its text and blue/amber/red signals are not.
+  assert.match(theme, /"--oh-hud-bg": translucent\(colors\.background,/);
+  assert.match(theme, /"--oh-hud-border": /);
+  assert.doesNotMatch(theme, /"--oh-hud-(text|muted|faint|blue|amber|red|radius|shadow|blur)/);
+  // The HUD buttons with a grey of their own take the palette too: the menu
+  // button, the Advisor and polity buttons, the dock, the map-mode switch.
+  for (const file of ["./settings.jsx", "./main.jsx", "./other.jsx", "./chat.jsx", "./actions.jsx", "./social.jsx", "./MapModeSelector.jsx", "./libraryBar.jsx"]) {
+    assert.doesNotMatch(read(file), /: "rgba\(35,35,39,0\.53\)"|"rgba\(59,130,246,0\.16\)"|"rgba\(34,34,37,0\.53\)"/, file);
+  }
 });
 
 test("Diplomacy list, tabs, unread filter, thread controls and workspace use themed chrome", () => {

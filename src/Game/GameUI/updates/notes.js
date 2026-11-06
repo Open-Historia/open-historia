@@ -54,6 +54,113 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // Opus-MT en-bat (Latvian, Lithuanian), en-sk, en-et, en-el, en-he, en-ga, en-mt and en-gmq (Swedish), converted
+    // for the game from Helsinki-NLP's models (none had a Transformers.js copy) and tried on the game's own kind of
+    // text, 2026-11-06. Nobody publishes them on Hugging Face: they are read from the scenario repository's
+    // translation-models branch (runtime/translationModels.js MIRROR, modelSources).
+    id: "2026-11-nine-languages",
+    kind: "minor",
+    date: "2026-11-06",
+    channel: "beta",
+    banners: [
+      {
+        title: "Translation in nine more languages",
+        items: [
+          "You can now play in Latvian, Lithuanian, Slovak, Estonian, Greek, Hebrew, Irish and Maltese: a translation model, downloaded once, translates the game on your device.",
+          "In Swedish, a translation model on your device now also translates the names and descriptions of scenarios and maps.",
+        ],
+      },
+    ],
+  },
+  {
+    // "get rid of this and instead have the country send you a message requesting assistance and the buttons appear
+    // there. it should not explain what happens if you choose each option as that breaks immersion" (the owner,
+    // 2026-11-06): the card over the map is gone; the ally that was attacked asks in a message (AI/gameplay.js) and
+    // is answered under it (GameUI/warAndPeace.jsx CallToArmsCard).
+    id: "2026-11-calls-to-arms-by-message",
+    kind: "minor",
+    date: "2026-11-05",
+    channel: "beta",
+    banners: [
+      {
+        title: "Calls to arms come by message",
+        items: [
+          "An ally that is attacked now writes to you itself, and you answer it in the chat.",
+        ],
+      },
+    ],
+  },
+  {
+    // "it doesnt look like missile strikes actually ever happen despite the feature technically existing" / "make story
+    // events be able to do strikes" (the owner, 2026-11-05): a strike was a battlefield line only (frontOrders), read
+    // with Fronts on and a war under way. Events now carry their own (impacts.strikes), placed by frontTurn.js
+    // placeStrikes and kept for the map whatever the battlefields do.
+    id: "2026-11-strikes-on-the-map",
+    kind: "minor",
+    date: "2026-11-05",
+    channel: "beta",
+    banners: [
+      {
+        title: "Missile strikes on the map",
+        items: [
+          "Missile launches and bombing runs the story tells of are now drawn on the map in every game, not only on a battlefield.",
+        ],
+      },
+    ],
+  },  {
+    // "while scrolling, sometimes some ui elements trail behind for some reason creating a really wierd effect" (the
+    // owner, 2026-11-05): a wheel scroll moved lists under a still cursor, and every row and button that passed under
+    // it lit up and eased back out (styles.css control transitions). runtime/scrollHoverFreeze.js holds hover still
+    // while a list scrolls; the menu cards' badges lost a blur that lagged their card.
+    id: "2026-11-smoother-scrolling",
+    kind: "minor",
+    date: "2026-11-05",
+    channel: "beta",
+    banners: [
+      {
+        title: "Smoother scrolling",
+        items: [
+          "Rows and buttons in the menu, Settings and other lists no longer light up and trail behind as they scroll past the cursor.",
+        ],
+      },
+    ],
+  },
+  {
+    // The HUD's glass and its buttons take the theme (runtime/uiTheme.js --oh-hud-bg…, --oh-ui-glass-*; the owner's
+    // screenshots of the dock, date widget, map-mode switch and top bar, 2026-11-06). The translation model never
+    // downloaded on Android: the app's http origin has no Cache Storage, so it is kept in IndexedDB
+    // there (runtime/modelStore.js; a player's report, Arabic, Android stable #26).
+    id: "2026-11-hud-themes",
+    kind: "minor",
+    date: "2026-11-05",
+    channel: "beta",
+    banners: [
+      {
+        title: "Themed map controls",
+        items: [
+          "Your theme now colours the controls over the map too: the menu button, the top bar and Exit Game, the date, the dock, search, the Advisor button and the Political and Diplomatic switch.",
+          "On Android, the translation model for your language downloads again. It failed every time before.",
+        ],
+      },
+    ],
+  },
+  {
+    // Opus-MT en-cs and en-fi (runtime/translationModels.js): tried on the game's own kind of text, 2026-11-05.
+    // Latvian and Slovene had no model that read right (en-mul) or that the browser can fetch (en-bat, en-sla).
+    id: "2026-11-czech-finnish",
+    kind: "minor",
+    date: "2026-11-05",
+    channel: "beta",
+    banners: [
+      {
+        title: "Czech and Finnish",
+        items: [
+          "You can now play in Czech and Finnish: a translation model, downloaded once, translates the game on your device.",
+        ],
+      },
+    ],
+  },
+  {
     // The interface themes (runtime/uiTheme.js, kernely's PR #955) reach the main menu (libraryBar.jsx), the popups
     // and the translation prompt; the first-time setup (GameUI/FirstSetup.jsx) asks for a language and a theme before
     // the vault door; the language changes where the player is (runtime/translator.js switchLanguage), a language

@@ -1734,7 +1734,7 @@ const SettingsButton = ({ onToggle, topOffset = "0.5rem", hidden = false }) => {
             fontSize: isMobile ? "1.3rem" : "1.2rem",
             fontWeight: 800,
             borderRadius: isMobile ? "12px" : "12px",
-            background: "rgba(35,35,39,0.53)",
+            background: "var(--oh-ui-glass-pill, rgba(35,35,39,0.53))",
             opacity: hidden ? 0 : 1,
             pointerEvents: hidden ? "none" : "auto",
             transition: "opacity 180ms ease 40ms",

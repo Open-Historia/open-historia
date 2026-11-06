@@ -46,7 +46,6 @@ import {
 import { FallbackSwitchNotice } from "./fallbackSwitchNotice.jsx";
 import { AgentWaitingNotice } from "./agentWaitingNotice.jsx";
 import { BordersFallbackNotice } from "./bordersFallbackNotice.jsx";
-import { WarAndPeaceCards } from "./warAndPeace.jsx";
 import { PLAYER_ACTIVITY_EVENTS, createPlayerActivity } from "../../runtime/playerActivity.js";
 import { inSharedGame, sharedGameRole, subscribeSharedGameRole } from "../../multiplayer/client/sharedGameBridge.js";
 
@@ -240,8 +239,8 @@ const AdvisorButton = ({ isAdvisorOpen, isMobile, dockStyle, onToggle }) => (
       fontSize: isMobile ? "1.25rem" : "1.5rem",
       borderRadius: isMobile ? "12px" : "14px",
       background: isAdvisorOpen
-        ? "rgba(255,255,255,0.085)"
-        : "rgba(35,35,39,0.53)",
+        ? "var(--oh-ui-glass-active, rgba(255,255,255,0.085))"
+        : "var(--oh-ui-glass-pill, rgba(35,35,39,0.53))",
       transition: `${dockStyle.transition}, background 0.15s ease`,
     }}
   >
@@ -1007,8 +1006,6 @@ const Main = ({
       <BordersFallbackNotice />
       <FallbackSwitchNotice />
       <AgentWaitingNotice />
-      {/* An offer of peace or a call to arms that waits for the player's answer. */}
-      <WarAndPeaceCards />
     </>
   );
 };

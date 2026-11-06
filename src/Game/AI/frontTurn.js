@@ -468,6 +468,52 @@ export const engineNamer = (renames, known = []) => {
 // "country: Russia" in a field that takes a country or a group is Russia.
 const withoutKind = (value) => clean(value).replace(/^(?:country|group|polity|nation|state|side)\s*:\s*/i, "");
 
+// A turn's strikes placed (runtime/strikes.js): each with its places where they can be found, among the places of
+// the event that tells of it, the map's cities, the world's structures and its formations, and then as the game finds
+// any place a model names (a city by another of its names, a country, a region). One launched from nowhere that is
+// named sets off from what its owner has on the map for it, and failing that from a city of its own. The battlefield
+// turn places those its frontOrders wrote; the turn itself those its events carry (impacts.strikes), Fronts on or off.
+//   struck        strike records (nativeFrontLedger.js), each bound to its event by eventIds
+//   strikePlaces  the game's own reader of places (gameplay.js createStrikePlaceReader), or null
+//   idPrefix      what sets the ids apart from another batch of the same turn
+export const placeStrikes = async (struck, { events = [], cities = [], world = null, strikePlaces = null, fromDate = "", toDate = "", idPrefix = "strike" } = {}) => {
+  const lookedFor = async (ask) => {
+    try {
+      return (await ask()) ?? null;
+    } catch (error) {
+      console.warn("[strikes] a strike's place could not be looked for; the map finds it by name when it plays the strike.", error);
+      return null;
+    }
+  };
+  const placed = [];
+  const told = new Map(asArray(events).map((event) => [clean(event?.id), event]));
+  const found = async (text, known) => findStrikePlace(text, known) ?? (typeof strikePlaces?.find === "function" ? lookedFor(() => strikePlaces.find(text)) : null);
+  for (const [at, order] of asArray(struck).entries()) {
+    const event = asArray(order.eventIds).map((id) => told.get(id)).find(Boolean) ?? null;
+    const owner = clean(withoutKind(order.side));
+    const known = { places: asArray(event?.places), cities: asArray(cities), markers: asArray(world?.markers), units: asArray(world?.units) };
+    const target = await found(order.objective, known);
+    const launch = clean(order.from) ? await found(order.from, known) : null;
+    const picked = launch
+      ? null
+      : pickStrikeOrigin({ weapon: order.weapon, owner, to: target, markers: known.markers, units: known.units })
+        // (A submarine with no fleet to stand for it: the battlefield turn puts it to sea; elsewhere the map draws it from its owner's country.)
+        ?? (order.weapon !== "submarine missile" && typeof strikePlaces?.origin === "function" ? await lookedFor(() => strikePlaces.origin({ owner, weapon: order.weapon, to: target })) : null);
+    placed.push({
+      id: `${idPrefix}:${clean(toDate) || clean(fromDate)}:${at}`,
+      eventId: clean(event?.id),
+      date: clean(event?.date) || clean(toDate),
+      owner,
+      weapon: order.weapon,
+      count: order.count,
+      down: order.down,
+      from: launch ? { name: clean(order.from), ...launch } : picked ?? (clean(order.from) ? { name: clean(order.from) } : null),
+      to: { name: clean(order.objective), ...(target ?? {}) },
+    });
+  }
+  return placed;
+};
+
 // ---- what the events themselves say of the war ---------------------------------------
 
 // A change of control the turn's events carry for a region that lies on a
@@ -1031,33 +1077,7 @@ export const runTurnFronts = async ({
       return null;
     }
   };
-  if (struck.length > 0) {
-    const told = new Map(list.map((event) => [clean(event?.id), event]));
-    const found = async (text, known) => findStrikePlace(text, known) ?? (typeof strikePlaces?.find === "function" ? lookedFor(() => strikePlaces.find(text)) : null);
-    for (const [at, order] of struck.entries()) {
-      const event = asArray(order.eventIds).map((id) => told.get(id)).find(Boolean) ?? null;
-      const owner = clean(withoutKind(order.side));
-      const known = { places: asArray(event?.places), cities: asArray(map?.cities), markers: asArray(world?.markers), units: asArray(world?.units) };
-      const target = await found(order.objective, known);
-      const launch = clean(order.from) ? await found(order.from, known) : null;
-      const picked = launch
-        ? null
-        : pickStrikeOrigin({ weapon: order.weapon, owner, to: target, markers: known.markers, units: known.units })
-          // (A submarine with no fleet to stand for it is put to sea, below.)
-          ?? (order.weapon !== "submarine missile" && typeof strikePlaces?.origin === "function" ? await lookedFor(() => strikePlaces.origin({ owner, weapon: order.weapon, to: target })) : null);
-      strikes.push({
-        id: `strike:${clean(toDate) || clean(fromDate)}:${at}`,
-        eventId: clean(event?.id),
-        date: clean(event?.date) || clean(toDate),
-        owner,
-        weapon: order.weapon,
-        count: order.count,
-        down: order.down,
-        from: launch ? { name: clean(order.from), ...launch } : picked ?? (clean(order.from) ? { name: clean(order.from) } : null),
-        to: { name: clean(order.objective), ...(target ?? {}) },
-      });
-    }
-  }
+  if (struck.length > 0) strikes.push(...await placeStrikes(struck, { events: list, cities: asArray(map?.cities), world, strikePlaces, fromDate, toDate }));
   // The air strikes the war room ordered (runtime/fronts/airStrike.js), flown as the period begins: who rose
   // against each and the air battle fought here, and their bombs on the battlefields in the engine's run below.
   // The same in the run made before the story and the one that applies it. (None in a scenario without air units.)
