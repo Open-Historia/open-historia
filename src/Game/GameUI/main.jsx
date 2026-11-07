@@ -47,6 +47,7 @@ import {
 import { FallbackSwitchNotice } from "./fallbackSwitchNotice.jsx";
 import { AgentWaitingNotice } from "./agentWaitingNotice.jsx";
 import { BordersFallbackNotice } from "./bordersFallbackNotice.jsx";
+import { PromptLimitNotice } from "./promptLimitNotice.jsx";
 import { PLAYER_ACTIVITY_EVENTS, createPlayerActivity } from "../../runtime/playerActivity.js";
 import { inSharedGame, sharedGameRole, subscribeSharedGameRole } from "../../multiplayer/client/sharedGameBridge.js";
 
@@ -1015,6 +1016,7 @@ const Main = ({
       {/* Same place on screen: the lasting borders note goes first so a
           passing fallback-switch notice draws over it, not under it. */}
       <BordersFallbackNotice />
+      <PromptLimitNotice />
       <FallbackSwitchNotice />
       <AgentWaitingNotice />
     </>

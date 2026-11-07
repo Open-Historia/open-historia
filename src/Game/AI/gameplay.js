@@ -10,7 +10,8 @@ import { FALLBACK_SUGGESTION_TOPICS, fallbackTurnText } from "../../runtime/fall
 import { describePuppetBriefing, puppetBriefingFor } from "../../runtime/puppets.js";
 import { regionTypeRules, regionTypesHaveRules, waterTypeIds } from "../../runtime/regionTypes.js";
 import { answerableDemandOf, demandCheckContext, demandCheckPrompt, interpretDemandCheck, openDemandOf } from "../../runtime/demandCheck.js";
-import { NATIVE_GAME_MASTER_PROMPT, normalizePromptPack } from "./gameplayPrompts.js";
+import { NATIVE_GAME_MASTER_PROMPT, guardPromptTemplate, normalizePromptPack } from "./gameplayPrompts.js";
+import { notePromptsOverLimit } from "../../runtime/promptLimitNotice.js";
 import {
   normalizePrehistoryEvent,
   normalizeScenarioPrehistory,
@@ -643,8 +644,13 @@ const sentenceCase = (value) => {
 
 export { extractJsonPayload } from "./jsonSalvage.js";
 
-const loadPromptCatalog = async ({ force = false } = {}) =>
-  normalizePromptPack(await readJson(JSON_URLS.prompts, { defaultValue: {}, force }));
+// A passage over the length limit is left out of the pack (the default runs
+// in its place) and the player is told, once (runtime/promptLimitNotice.js).
+const loadPromptCatalog = async ({ force = false } = {}) => {
+  const pack = normalizePromptPack(await readJson(JSON_URLS.prompts, { defaultValue: {}, force }));
+  notePromptsOverLimit(pack.overLimit);
+  return pack;
+};
 
 // International reputation the AI evolves each turn (world.internationalReputation),
 // surfaced to prompts (standingContext.js): the player's, falling back to its
@@ -3241,7 +3247,7 @@ const buildTaskSystemPrompt = async (taskKey, { variables, lookups = null, remin
   // Groups switched off for this game: the contract without its groups rule.
   const promptTemplate = taskKey === "gameMaster"
     ? (isActiveFeatureEnabled("groups") ? NATIVE_GAME_MASTER_PROMPT : gameMasterPromptWithoutGroups())
-    : prompts.tasks[taskKey];
+    : guardPromptTemplate(taskKey, prompts.tasks[taskKey]);
   // A time skip's live records go INTO its template, at ${JUMP_LIVE_STATE}.
   const jumpTask = JUMP_TASK_KEYS.has(taskKey);
   if (jumpTask) {

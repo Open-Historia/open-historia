@@ -52,7 +52,8 @@ import {
 } from "../../runtime/diplomaticEnvelope.js";
 import { chatLanguageDirective, languageDirective } from "../../runtime/i18n.js";
 import { withDifficultyPriority } from "../../runtime/difficulty.js";
-import { normalizePromptPack } from "./gameplayPrompts.js";
+import { guardPromptTemplate, normalizePromptPack } from "./gameplayPrompts.js";
+import { notePromptsOverLimit } from "../../runtime/promptLimitNotice.js";
 import { promptTranslationsVersion } from "../../runtime/promptTranslations.js";
 import {
     busyProviderMessage,
@@ -3467,6 +3468,7 @@ async function ensurePromptsLoaded() {
         promptsReady = readJson(JSON_URLS.prompts, { defaultValue: {} })
         .then((data) => {
             promptPack = normalizePromptPack(data);
+            notePromptsOverLimit(promptPack.overLimit);
             return promptPack;
         })
         .catch((error) => {
@@ -3927,7 +3929,7 @@ async function buildAdvisorSystemPrompt({ recipient = null } = {}) {
     // The briefing and the rules also ride inside the world summary; keep one
     // copy of each, as runJsonTask does for the gameplay tasks.
     const rendered = collapseRepeatedWorldContext(
-        renderConversationTemplate(promptPack.advisor, { ...variables, ...helperValues }),
+        renderConversationTemplate(guardPromptTemplate("advisor", promptPack.advisor), { ...variables, ...helperValues }),
         variables,
     );
     const groupLookups = advisorGroupLookups({ world: worldData, player: gameData?.country || "" });
@@ -4116,7 +4118,7 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry, spea
 
     // One copy each of the briefing and the rules (see buildAdvisorSystemPrompt).
     const rendered = collapseRepeatedWorldContext(
-        renderConversationTemplate(promptPack.leader, { ...variables, ...helperValues }),
+        renderConversationTemplate(guardPromptTemplate("leader", promptPack.leader), { ...variables, ...helperValues }),
         variables,
     );
     const politicalDecision = buildDiplomaticPoliticalContext({

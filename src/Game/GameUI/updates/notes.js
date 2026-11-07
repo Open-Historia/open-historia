@@ -54,6 +54,23 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // The owner, 2026-11-07: "add a character limit to prompts so they can at most be 20% larger than the built in
+    // defaults" (AI/promptGuidance.js guidanceCharLimit; the Prompts tab's counter; runtime/promptLimitNotice.js).
+    id: "2026-11-prompt-length-limit",
+    kind: "minor",
+    date: "2026-11-07",
+    channel: "beta",
+    banners: [
+      {
+        title: "A length limit for edited prompts",
+        items: [
+          "An edited prompt passage can now be up to 20% longer than the built-in one. The Prompts tab counts each passage as you type, and Save waits until a passage that is too long is shortened or reset.",
+          "A passage that was already longer, in a save, a scenario or an imported prompt pack, is never cut: the AI uses the built-in passage in its place until you shorten it, and the game tells you once.",
+        ],
+      },
+    ],
+  },
+  {
     // The AI setup prompt's three choices (GameUI/apiSetupPrompt.jsx, the owner 2026-11-07): Gemini, Command Code
     // (its GOAT plan, GLM-5.3 Flash filled in: AI/providerConfig.js COMMANDCODE_TEMPLATE) and Custom.
     id: "2026-11-ai-setup-three-choices",
