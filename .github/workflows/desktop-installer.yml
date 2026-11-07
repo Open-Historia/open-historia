@@ -34,6 +34,8 @@ jobs:
           - os: ubuntu-latest
             args: --linux
     runs-on: ${{ matrix.os }}
+    # A build takes 3 to 15 minutes; a hang stops here instead of at six hours.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
 
@@ -190,6 +192,7 @@ jobs:
     needs: build
     if: ${{ !cancelled() && (github.event_name == 'push' || inputs.tag != '') }}
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
