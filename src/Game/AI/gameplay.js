@@ -267,8 +267,8 @@ import { PLACEMENT_DIRECTIVE, describeApproximatePlacement, describeOtherKind, d
 import { loadWorldCities } from "./worldCities.js";
 import { FOOTPRINT_KM, obstaclesOf, spaceOut } from "../../runtime/featureSpacing.js";
 import { restorePointsWithin } from "../../runtime/restorePointBudget.js";
-import { LOOKUP_DIRECTIVE, buildLookupContext, executeLookup, lookupDirective, lookupToolsFor, placesNamedIn, withSimilarEvents } from "./lookupTools.js";
-import { findRelatedForSkip, installRelatedEventsIndexer, similarEventsSearch } from "./relatedEventsSearch.js";
+import { LOOKUP_DIRECTIVE, buildLookupContext, executeLookup, lookupDirective, lookupToolsFor, placesNamedIn, withPastTalks, withSimilarEvents } from "./lookupTools.js";
+import { findPastTalks, findRelatedForSkip, installRelatedEventsIndexer, pastTalksSearch, similarEventsSearch } from "./relatedEventsSearch.js";
 import { FRONT_ORDER_FUNCTION, withFrontOrderFunction } from "./frontOrderFunction.js";
 import { carriedRoundCount, createLookupCarry } from "./toolTurns.js";
 import {
@@ -1838,12 +1838,14 @@ const buildTaskLookups = (bundle, { maxRounds, audience = SIMULATION_AUDIENCE, m
   if (!lookupFunctionsEnabled()) return null;
   const context = lazyLookupContext(bundle, { audience, mapSource });
   // similar_events beside them once the related-events model has loaded
-  // (relatedEventsSearch.js); not for a Workshop scenario.
-  return withSimilarEvents({
+  // (relatedEventsSearch.js), and past_talks while some chat is kept on file
+  // (chatArchive.js); not for a Workshop scenario.
+  return withPastTalks(withSimilarEvents({
     tools: lookupToolsFor({ groups: isActiveFeatureEnabled("groups") }),
     ...(Number.isInteger(maxRounds) ? { maxRounds } : {}),
     execute: async (name, args) => executeLookup(await context(), name, args),
-  }, mapSource ? null : similarEventsSearch(bundle, { campaignId: activeCampaignId() }));
+  }, mapSource ? null : similarEventsSearch(bundle, { campaignId: activeCampaignId() })),
+  mapSource ? null : pastTalksSearch(bundle, { campaignId: activeCampaignId() }));
 };
 
 // The map and the campaign indexed for answering questions (lookupTools.js
@@ -19211,12 +19213,17 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
   if (dateStep >= 1 && parseIsoDate(originDate) && targetDate === originDate) {
     throw new Error("The requested jump exceeds the supported date range.");
   }
-  // The past events nearest to this turn, found on this device
-  // (relatedEventsSearch.js): a moment at most, never a request.
-  const relatedEvents = await findRelatedForSkip(bundle, { campaignId: activeCampaignId() });
+  // The past events nearest to this turn, and the passages of the older
+  // conversations kept on file (chatArchive.js), found on this device side by
+  // side (relatedEventsSearch.js): a moment at most, never a request.
+  const [relatedEvents, pastTalks] = await Promise.all([
+    findRelatedForSkip(bundle, { campaignId: activeCampaignId() }),
+    findPastTalks(bundle),
+  ]);
   const variables = await buildTemplateVariables(bundle, {
     lookups: true,
     relatedEvents,
+    pastTalks,
     taskKey: mode === "auto" ? "autoJumpForward" : "jumpForward",
     consolidatedHistoryMaxChars: WORLD_SIMULATION_CONSOLIDATED_HISTORY_MAX_CHARS,
     consolidatedHistorySelection: "coverage",

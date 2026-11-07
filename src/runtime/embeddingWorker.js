@@ -8,7 +8,7 @@
 // WebAssembly is part of the build (vite.config.ts). The text never leaves the
 // device.
 //
-// Messages in:  { type: "embed", id, texts }   → (ready | error, the first time), then
+// Messages in:  { type: "embed", id, texts, maxTokens? } → (ready | error, the first time), then
 //                                                { type: "result", id, vectors, dims } (vectors: one Float32Array, row after row)
 
 import ortWasm from "oh-ort-transformers/ort-wasm-simd-threaded.wasm?url";
@@ -79,10 +79,12 @@ self.onmessage = (event) => {
   if (message.type === "embed") {
     const { id } = message;
     const texts = Array.isArray(message.texts) ? message.texts.map((text) => String(text ?? "")) : [];
+    // A chunk of an older conversation reads further than an event (embeddingModels.js CHAT_CHUNK_MAX_TOKENS).
+    const maxTokens = Number.isInteger(message.maxTokens) && message.maxTokens > 0 ? Math.min(message.maxTokens, EMBEDDING_MODEL.maxSequence) : EMBEDDING_MODEL.maxTokens;
     chain = chain.then(async () => {
       try {
         await load();
-        const vectors = await embedWith(loaded, texts);
+        const vectors = await embedWith(loaded, texts, { maxTokens });
         post({ type: "result", id, vectors, dims: EMBEDDING_MODEL.dims }, [vectors.buffer]);
       } catch (error) {
         post({ type: "result", id, vectors: null, error: String(error?.message || error) });

@@ -1621,3 +1621,35 @@ export const withSimilarEvents = (lookups, search) => {
     execute: async (name, args) => (clean(name) === SIMILAR_EVENTS_FUNCTION ? search(args ?? {}) : execute(name, args)),
   };
 };
+
+// ---------------------------------------------------------------------------
+// past_talks: the older conversations kept on file (chatArchive.js), found by
+// meaning on the player's device (relatedEventsSearch.js pastTalksSearch).
+// Offered as similar_events is, once the model has loaded this session, and
+// only while some chat is kept on file. chat_history still reads any thread
+// whole, these among them.
+export const PAST_TALKS_FUNCTION = "past_talks";
+export const PAST_TALKS_TOOL = Object.freeze({
+  name: PAST_TALKS_FUNCTION,
+  description:
+    "The player's older diplomatic conversations kept on file (not used for over a game year), searched by meaning: "
+    + "the passages closest to a description, with who they were with and when. Use it to find what was once agreed, "
+    + "promised, threatened or refused with a power, when the prompt only counts those conversations.",
+  schema: object("What to look for.", {
+    query: text("What the talks were about, in a sentence: who, what."),
+    with: text("Optional: only the talks with this power (its exact name)."),
+    limit: integer("How many passages (default 4, max 8)."),
+  }, ["query"]),
+});
+
+// `lookups` with past_talks added, answered by `search(args)`; unchanged when
+// there is no search (the model not loaded, no chat kept on file).
+export const withPastTalks = (lookups, search) => {
+  if (!lookups || typeof search !== "function") return lookups;
+  const execute = lookups.execute;
+  return {
+    ...lookups,
+    tools: [...(Array.isArray(lookups.tools) ? lookups.tools : []), PAST_TALKS_TOOL],
+    execute: async (name, args) => (clean(name) === PAST_TALKS_FUNCTION ? search(args ?? {}) : execute(name, args)),
+  };
+};

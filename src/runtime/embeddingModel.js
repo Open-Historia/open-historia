@@ -57,8 +57,9 @@ const send = (message) => current?.worker.postMessage(message);
 let nextId = 0;
 
 // One vector (Float32Array, length one) per text. Loads the model first if it
-// is not loaded.
-export const embedTexts = async (texts) => {
+// is not loaded. `maxTokens`: how many word pieces of each text are read (an
+// event's default; a chunk of an older conversation's is CHAT_CHUNK_MAX_TOKENS).
+export const embedTexts = async (texts, { maxTokens = 0 } = {}) => {
   if (typeof Worker === "undefined") throw new Error("This device cannot run the related-events model.");
   if (!texts.length) return [];
   nextId += 1;
@@ -73,7 +74,7 @@ export const embedTexts = async (texts) => {
         reject(new Error(message.message || "The related-events model failed."));
       }
     });
-    send({ type: "embed", id, texts });
+    send({ type: "embed", id, texts, ...(maxTokens ? { maxTokens } : {}) });
   });
   if (!(reply.vectors instanceof Float32Array)) throw new Error(reply.error || "The related-events model failed.");
   return splitVectors(reply.vectors, reply.dims || EMBEDDING_MODEL.dims);

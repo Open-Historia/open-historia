@@ -3,6 +3,14 @@
 // Usage:
 //   node scripts/prompt-size.mjs <save> [--task jumpForward|autoJumpForward] [--days 30]
 //        [--regions regions.geojson] [--cities cities.geojson] [--json out.json] [--dump prompt.txt]
+//        [--past-talks]
+//
+// --past-talks: the older conversations kept on file (Game/AI/chatArchive.js)
+// are indexed and searched as the game does it, by the model that ships with
+// the game (public/models), run here under Node from those files; the skip's
+// PAST DIPLOMACY is then what the player's device would give it. Without it,
+// the chats kept on file are counted and their binding word kept, but no
+// excerpt is recalled (as before the model has loaded).
 //
 // <save> is a Game export (the game.json inside the zip, or the folder it was
 // unpacked into) or a folder holding game.json / world.json / events.json and
@@ -41,6 +49,31 @@ if (!savePath) {
 }
 const taskKey = flag("task", "jumpForward");
 const days = Number(flag("days", taskKey === "autoJumpForward" ? 365 : 30));
+const pastTalks = args.includes("--past-talks");
+
+// ---- The on-device model, under Node (--past-talks) -----------------------------------
+// Loaded before the fetch stand-in below: the model and its tokenizer are read
+// from public/models by path, never over a network.
+let nodeEmbedder = null;
+if (pastTalks) {
+  const { BertTokenizer, AutoModel, env } = await import(pathToFileURL(path.join(root, "node_modules/@huggingface/transformers/dist/transformers.node.mjs")).href);
+  const { EMBEDDING_MODEL, embedWith, splitVectors } = await import(pathToFileURL(path.join(root, "src/runtime/embeddingModels.js")).href);
+  const modelsDir = path.join(root, "public", "models");
+  env.allowRemoteModels = false;
+  env.allowLocalModels = true;
+  env.localModelPath = modelsDir + path.sep;
+  env.useBrowserCache = false;
+  env.useFSCache = false;
+  const readModelJson = (file) => JSON.parse(fs.readFileSync(path.join(modelsDir, EMBEDDING_MODEL.dir, file), "utf8"));
+  const tokenizer = new BertTokenizer(readModelJson("tokenizer.json"), readModelJson("tokenizer_config.json"));
+  const model = await AutoModel.from_pretrained(EMBEDDING_MODEL.dir, { local_files_only: true, dtype: "q8", device: "cpu" });
+  nodeEmbedder = {
+    embedTexts: async (texts, { maxTokens = 0 } = {}) => splitVectors(
+      await embedWith({ tokenizer, model }, texts, maxTokens ? { maxTokens } : {}),
+      EMBEDDING_MODEL.dims,
+    ),
+  };
+}
 
 // ---- The save, as the runtime JSON assets the game reads ---------------------------
 const readJsonFile = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
@@ -271,6 +304,39 @@ const gameplay = await load("src/Game/AI/gameplay.js");
 ({ measurePromptSections } = await load("src/Game/AI/contextDiagnostics.js"));
 template = JSON.parse(fs.readFileSync(path.join(root, "src/Game/AI/defaultPrompts.json"), "utf8")).tasks[taskKey] || "";
 const originalExit = process.exit.bind(process);
+
+// --past-talks: the archived chats indexed into a store in memory, as the game
+// indexes them while idle (relatedEventsSearch.js), then searched by the skip.
+if (nodeEmbedder) {
+  const search = await load("src/Game/AI/relatedEventsSearch.js");
+  const memoryStore = (idOf) => {
+    const rows = new Map();
+    return {
+      readGame: async () => new Map(rows),
+      write: async (gameId, list) => { for (const row of list) rows.set(idOf(row), { ...row }); },
+      remove: async (gameId, keys) => { for (const key of keys) rows.delete(key); },
+    };
+  };
+  const chatStore = memoryStore((row) => `${row.chatId}:${row.chunk}`);
+  search.setRelatedEventsDepsForTests({
+    model: async () => nodeEmbedder,
+    // Events are not searched here: the skip's related events need the library's game id.
+    store: () => null,
+    chatStore: () => chatStore,
+    campaign: () => "prompt-size",
+    readEvents: async () => [],
+    readChatBundle: async () => ({ chats: assets.chat ?? [], game: assets.game ?? {}, world: assets.world ?? {} }),
+    openChat: () => "",
+    busy: () => false,
+  });
+  const started = Date.now();
+  // The map's regions, which a game in play has loaded long before its first
+  // skip: the search ranks the powers in view from them, within its 1.5 s.
+  await (await load("src/runtime/assets.js")).loadRegionCatalog().catch(() => []);
+  await search.indexOpenGame();
+  const indexed = (await chatStore.readGame()).size;
+  process.stderr.write(`prompt-size: ${indexed} chunk(s) of the chats kept on file indexed in ${Date.now() - started} ms\n`);
+}
 
 const run = taskKey === "autoJumpForward"
   ? () => gameplay.simulateAutoJump({ days })
