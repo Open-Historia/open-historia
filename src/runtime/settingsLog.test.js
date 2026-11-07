@@ -30,6 +30,16 @@ test("AI lookup functions: the file says when Save AI requests is keeping them o
     assert.equal(await line("AI lookup functions"), "AI lookup functions: off");
 });
 
+test("Unlimited requests: off on a fresh install, and on reads as Save AI requests off", async () => {
+    assert.equal(await line("Unlimited requests"), "Unlimited requests: off");
+    requestSettings.setSaveRequests(true);
+    requestSettings.setUnlimited(true);
+    assert.equal(await line("Unlimited requests"), "Unlimited requests: on");
+    assert.equal(await line("Save AI requests"), "Save AI requests: off");
+    requestSettings.setUnlimited(false);
+    assert.equal(await line("Save AI requests"), "Save AI requests: on", "as the player last set it");
+});
+
 test("Performance mode: the profile running, why, and what a reload would change it to", async () => {
     // Node has no touch screen and reports no memory: the full path.
     assert.equal(await line("Performance mode"), "Performance mode: full (memory not reported)");

@@ -54,6 +54,25 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // Unlimited requests (AI/requestBudget.js; Settings → AI → AI requests), for a paid key or a local model: a skip may
+    // be up to eight requests with six rounds of lookups, the prompt is slimmer (promptContext.js leanLookups), and on
+    // Anthropic each round reads the one before from the cache (toolTurns.js withCachedHistory).
+    id: "2026-11-unlimited-requests",
+    kind: "minor",
+    date: "2026-11-07",
+    channel: "beta",
+    banners: [
+      {
+        title: "Unlimited requests",
+        items: [
+          "A new setting in Settings → AI → AI requests, for a paid key or a local model: Unlimited requests. It is off unless you turn it on.",
+          "With it on, the AI looks things up as it needs them instead of being sent everything up front: a time skip can use up to 8 requests, with up to 6 rounds of questions, and each request sends less.",
+          "Save AI requests is off while Unlimited requests is on.",
+        ],
+      },
+    ],
+  },
+  {
     // The owner, 2026-11-06: "when entering a game thats already opened ... dont do the whole music ramp up
     // thing. make it just go to the ingame music once your in" (runtime/ambientMusic.js gameDrawnBefore,
     // GameUI/main.jsx reopening).

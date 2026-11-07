@@ -309,8 +309,10 @@ test("nothing after a skip is a request of its own: no director, no agent, no at
   // What a skip may spend on is one list (requestBudget.js), and no budget is
   // without a cap: nothing in the game can ask for one.
   const requests = functionBody("createJumpRequests");
-  assert.match(requests, /createJumpBudget\(\{ cap: jumpRequestCap\(\{ segments: pieces \}\), only: SKIP_SPENDERS \}\);/);
-  assert.equal(/\bunlimited\b/.test(gameplaySource), false);
+  assert.match(requests, /createJumpBudget\(\{ cap: jumpRequestCap\(\{ segments: pieces, unlimited \}\), only: SKIP_SPENDERS \}\);/);
+  // Unlimited requests raises the cap (requestBudget.js); it never takes it away.
+  assert.match(requests, /const unlimited = unlimitedRequests\(\);/);
+  assert.equal(/createJumpBudget\(\{(?![^}]*cap:)/.test(gameplaySource), false, "every budget has a cap");
   assert.match(requests, /budget\.reserve\("jump", pieces\);/, "every segment keeps its own request");
   // Upkeep already due keeps its request, one at a time, the history first.
   assert.ok(requests.includes('if (upkeep?.history) budget.reserve("history", 1);') && requests.includes('else if (upkeep?.stats) budget.reserve("stats", 1);'));
@@ -323,7 +325,9 @@ test("nothing after a skip is a request of its own: no director, no agent, no at
 
 test("function calling inside a skip spends the skip's budget: a round is a request", () => {
   const task = functionBody("runJsonTask");
-  assert.match(task, /const lookupRounds = budget && Array\.isArray\(lookups\?\.tools\) && lookups\.tools\.length\s*\n\s*\? carriedRoundCount\(lookupCarry\) \+ budget\.free\s*\n\s*: null;/);
+  // What the budget has free, and never past the mode's own limit (three, or
+  // six with Unlimited requests on).
+  assert.match(task, /const lookupRounds = budget && Array\.isArray\(lookups\?\.tools\) && lookups\.tools\.length\s*\n\s*\? Math\.min\(carriedRoundCount\(lookupCarry\) \+ budget\.free, lookupRoundLimit\(\{ unlimited: unlimitedRequests\(\) \}\)\)\s*\n\s*: null;/);
   assert.match(task, /maxRounds: Number\.isInteger\(lookups\.maxRounds\) \? Math\.min\(lookups\.maxRounds, lookupRounds\) : lookupRounds/);
   assert.match(task, /budget\?\.take\(`\$\{spender \|\| taskKey\}Lookup`\);/, "recorded as it is made");
   // Decided after the attempt's own request is taken, so `free` is what is left.
@@ -395,7 +399,9 @@ test("the time panel says one request, and three only while function calling can
   assert.match(caption, /const \[saving, setSaving\] = useState\(\(\) => savingRequests\(\)\);/);
   assert.match(caption, /setSaving\(savingRequests\(\)\);/);
   assert.match(caption, /const lookupsOn = useMapSettingValue\(MAP_SETTING_KEYS\.lookupFunctions, "1"\) !== "0";/);
-  assert.match(caption, /const cost = describeJumpCost\(\{ lookups: !saving && lookupsOn \}\);/);
+  assert.match(caption, /const \[unlimited, setUnlimited\] = useState\(\(\) => unlimitedRequests\(\)\);/);
+  assert.match(caption, /setUnlimited\(unlimitedRequests\(\)\);/);
+  assert.match(caption, /const cost = describeJumpCost\(\{ lookups: !saving && lookupsOn, unlimited \}\);/);
   for (const line of [
     "\"a skip uses 1 request\"",
     "\"a skip uses 1 request, plus one per extra segment\"",

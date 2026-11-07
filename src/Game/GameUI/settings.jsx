@@ -1524,6 +1524,7 @@ const RequestBudgetSection = () => {
     const [activeAiRequests, setActiveAiRequests] = useState(() => getActiveAiRequestCount());
     const [cancelNotice, setCancelNotice] = useState("");
     const [saving, setSaving] = useState(() => requestSettings.saveRequests());
+    const [unlimited, setUnlimited] = useState(() => requestSettings.unlimited());
     const [background, setBackground] = useState(() => requestSettings.backgroundAi());
     const [dailyLimit, setDailyLimit] = useState(() => String(requestSettings.dailyLimit()));
     const [backgroundCap, setBackgroundCap] = useState(() => String(requestSettings.backgroundDailyCap()));
@@ -1550,8 +1551,18 @@ const RequestBudgetSection = () => {
             ? `Player cancelled ${cancelled} active AI request${cancelled === 1 ? "" : "s"} from Settings.`
             : "Player pressed Cancel all AI requests, but none were active.");
     };
-    // The most a skip is when function calling may add to it (Save AI requests off).
+    // The most a skip is when function calling may add to it (Save AI requests off),
+    // and with Unlimited requests on: the cap, and the rounds of questions.
     const lookupCap = describeJumpCost({ lookups: true }).max;
+    const unlimitedCost = describeJumpCost({ lookups: true, unlimited: true });
+    const unlimitedCap = unlimitedCost.max;
+    const unlimitedRounds = unlimitedCost.rounds;
+    // The two switches read each other (requestBudget.js): unlimited on is saving
+    // off, and saving on turns unlimited off.
+    const readSwitches = () => {
+        setSaving(requestSettings.saveRequests());
+        setUnlimited(requestSettings.unlimited());
+    };
     const share = day.limit > 0 ? Math.min(1, day.used / day.limit) : 0;
     const barColor = share >= 0.9 ? "#f87171" : share >= 0.7 ? "#fbbf24" : "#60a5fa";
 
@@ -1626,16 +1637,33 @@ const RequestBudgetSection = () => {
             enabled={saving}
             onToggle={() => {
                 const next = !saving;
-                setSaving(next);
                 apply(`Save AI requests turned ${next ? "on" : "off"}.`, () => requestSettings.setSaveRequests(next));
+                readSwitches();
             }}
             />
             {/* One sentence group per state, each a single string, so a language
                 pack translates it whole (docs/i18n.md). */}
             <div style={settingsHelper}>
-                {saving
+                {unlimited
+                    ? "Off while Unlimited requests is on (below)."
+                    : saving
                     ? "On (default): a time skip is one request. Each event arrives as soon as it is written, already carrying what it changed: the map, your units and structures, your orders and your Projects board. Your spies' reports come back in the same answer, and so does the history document when older events are due to be folded into it. The model is handed the names it needs instead of looking them up, and a small mistake in its answer is cut out rather than asked for again. A skip takes a second request only when its answer could not be used at all, when a provider refuses the single-request form, or on a turn where something you switched on yourself falls due: the automatic Stats refresh, or NPC votes in an institution."
                     : `Off: for a key with no daily limit. A time skip is still one request, and with AI lookup functions on (below) the model may look things up before it answers: each round of questions is another request, two at most, so a skip never uses more than ${lookupCap}. On Gemini such a skip shows its events together at the end instead of one at a time. Outside a skip, a task may look things up in up to three extra requests, and a flawed answer is sent back to be redone instead of being cut down.`}
+            </div>
+
+            <Toggle
+            label="Unlimited requests"
+            enabled={unlimited}
+            onToggle={() => {
+                const next = !unlimited;
+                apply(`Unlimited requests turned ${next ? "on" : "off"}.`, () => requestSettings.setUnlimited(next));
+                readSwitches();
+            }}
+            />
+            <div style={settingsHelper}>
+                {unlimited
+                    ? `On: for a paid key or a local model. The AI looks things up as it needs them instead of being sent everything, which can mean more requests but less sent in each. A time skip may use up to ${unlimitedCap} requests, with up to ${unlimitedRounds} rounds of questions. Save AI requests is off while this is on.`
+                    : "Off (default). For a paid key or a local model: the AI can look things up as it needs them instead of being sent everything, which can mean more requests but less sent in each."}
             </div>
 
             <div style={fieldGroupStyle}>

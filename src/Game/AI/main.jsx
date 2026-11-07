@@ -16,7 +16,7 @@ import {
     updateEntry,
 } from "./providerConfig.js";
 import { formatResetTime, runWithFallback } from "./fallbackRunner.js";
-import { BACKGROUND_REQUEST, PLAYER_REQUEST, requestLedger, savingRequests } from "./requestBudget.js";
+import { BACKGROUND_REQUEST, PLAYER_REQUEST, lookupRoundLimit, requestLedger, savingRequests, unlimitedRequests } from "./requestBudget.js";
 import { requestActivity } from "./requestActivity.js";
 import { agentClient } from "./agentConnection.js";
 import { onSimulationsIdle } from "./simulationStatus.js";
@@ -121,6 +121,7 @@ import {
     lookupCallsFromOpenAI,
     lookupRoundCount,
     openAiMessagesFromHistory,
+    withCachedHistory,
     withCarriedRounds,
 } from "./toolTurns.js";
 import { GROUP_LOOKUP_TOOLS, buildLookupContext, executeLookup } from "./lookupTools.js";
@@ -2186,6 +2187,12 @@ const anthropicModelMax = new Map(); // model -> learned output ceiling
 // some 70,000 tokens on a long campaign (a Discord test game, 2026-10-27). A
 // request with no such function is answered in one call, and writing its tail
 // to the cache would only cost more.
+//
+// A round that follows lookups is a follow-up too, the last one included (it
+// may no longer offer a lookup, so without this it unpinned the tail and paid
+// for it again in full). And the conversation so far gets a breakpoint of its
+// own on its last block (toolTurns.js withCachedHistory, the third of four), so
+// the next round reads the earlier rounds from the cache as well.
 function buildAnthropicSystemContent(systemPrompt, staticPrefixEnd, { followUp = false } = {}) {
     const split = splitSystemPromptForCache(systemPrompt, staticPrefixEnd);
     const pinned = followUp ? { cache_control: { type: "ephemeral" } } : {};
@@ -2290,10 +2297,11 @@ async function callAnthropic(systemPrompt, history, {
         // A model that refuses a forced tool_choice is asked for the call in words.
         const forceTool = forcesToolChoice(model, samplingKey);
         const lookupsAllowed = lookupDeclarations.length > 0 && !requireOutputTool;
-        const messages = toAnthropicMessages(chatToolsRefused ? flattenLookupRounds(history) : history);
+        const followUp = lookupsAllowed || chatTools.length > 0 || lookupRoundCount(history) > 0;
+        const messages = withCachedHistory(toAnthropicMessages(chatToolsRefused ? flattenLookupRounds(history) : history), { followUp });
         const body = {
             model,
-            system: buildAnthropicSystemContent(systemPrompt, staticPrefixEnd, { followUp: lookupsAllowed || chatTools.length > 0 }),
+            system: buildAnthropicSystemContent(systemPrompt, staticPrefixEnd, { followUp }),
             max_tokens: requestedMaxTokens,
             ...(thinks ? { thinking: thinkingFor({ adaptive: thinksAdaptive(model) || adaptiveThinkingLearned.has(samplingKey) }) } : {}),
             ...temperatureBody(taskKey, { enabled: !thinks && !temperatureRefused }),
@@ -2608,10 +2616,11 @@ async function callAnthropicCompatible(systemPrompt, history, {
         // A model that refuses a forced tool_choice is asked for the call in words.
         const forceTool = forcesToolChoice(model, samplingKey);
         const lookupsAllowed = lookupDeclarations.length > 0 && !requireOutputTool;
-        const messages = toAnthropicMessages(chatToolsRefused ? flattenLookupRounds(history) : history);
+        const followUp = lookupsAllowed || chatTools.length > 0 || lookupRoundCount(history) > 0;
+        const messages = withCachedHistory(toAnthropicMessages(chatToolsRefused ? flattenLookupRounds(history) : history), { followUp });
         const body = {
             model,
-            system: buildAnthropicSystemContent(requestSystemPrompt, staticPrefixEnd, { followUp: lookupsAllowed || chatTools.length > 0 }),
+            system: buildAnthropicSystemContent(requestSystemPrompt, staticPrefixEnd, { followUp }),
             max_tokens: requestedMaxTokens,
             ...(thinks ? { thinking: thinkingFor({ adaptive: thinksAdaptive(model) || adaptiveThinkingLearned.has(samplingKey) }) } : {}),
             ...temperatureBody(taskKey, { enabled: !thinks && !temperatureRefused }),
@@ -2894,7 +2903,10 @@ const entryOutputLimit = (entry, maxTokens, koboldCpp) => {
 // Three, not more: every round re-sends the whole prompt, and a model that
 // asks one question per round spent seven rounds and three hundred thousand
 // prompt tokens on one jump. The directive tells it to ask everything at once.
-const DEFAULT_LOOKUP_ROUNDS = 3;
+// Six with Unlimited requests on (requestBudget.js lookupRoundLimit): the
+// prompt is slimmer there, and on Anthropic every round reads the one before
+// from the cache (withCachedHistory).
+const defaultLookupRounds = () => lookupRoundLimit({ unlimited: unlimitedRequests() });
 
 // A chat's round comes back as { chatText, lookupCalls } when the model asked
 // (chatLookupsFor); once it stops asking, what the caller gets is the text.
@@ -2916,7 +2928,7 @@ const chatAnswer = (result) => (result && typeof result === "object" && typeof r
 async function runWithLookups(lookups, history, dispatch, { label, provider, onRound = null, carry = null, outputToolName = "" }) {
     const tools = Array.isArray(lookups?.tools) ? lookups.tools.filter((entry) => entry?.name && entry?.schema) : [];
     if (!tools.length || typeof lookups?.execute !== "function") return dispatch(history, {});
-    const maxRounds = Number.isInteger(lookups.maxRounds) && lookups.maxRounds >= 0 ? lookups.maxRounds : DEFAULT_LOOKUP_ROUNDS;
+    const maxRounds = Number.isInteger(lookups.maxRounds) && lookups.maxRounds >= 0 ? lookups.maxRounds : defaultLookupRounds();
     const baseHistory = Array.isArray(history) ? history : [];
     const carried = carriedRoundCount(carry);
     if (carried) {

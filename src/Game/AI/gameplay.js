@@ -261,7 +261,7 @@ import { PLACEMENT_DIRECTIVE, describeApproximatePlacement, describeOtherKind, d
 import { loadWorldCities } from "./worldCities.js";
 import { FOOTPRINT_KM, obstaclesOf, spaceOut } from "../../runtime/featureSpacing.js";
 import { restorePointsWithin } from "../../runtime/restorePointBudget.js";
-import { LOOKUP_DIRECTIVE, buildLookupContext, executeLookup, lookupToolsFor, placesNamedIn } from "./lookupTools.js";
+import { LOOKUP_DIRECTIVE, buildLookupContext, executeLookup, lookupDirective, lookupToolsFor, placesNamedIn } from "./lookupTools.js";
 import { FRONT_ORDER_FUNCTION, withFrontOrderFunction } from "./frontOrderFunction.js";
 import { carriedRoundCount, createLookupCarry } from "./toolTurns.js";
 import {
@@ -270,8 +270,10 @@ import {
   backgroundAiAllowance,
   createJumpBudget,
   jumpRequestCap,
+  lookupRoundLimit,
   requestLedger,
   savingRequests,
+  unlimitedRequests,
 } from "./requestBudget.js";
 import { describeSchemaRemoval, salvageBySchema } from "./schemaSalvage.js";
 import {
@@ -1327,6 +1329,9 @@ const perfNow = () =>
     : Date.now();
 
 // The rows are standingContext.js's, which the advisor and the leaders read too.
+// With lookups 24 of them, and with Unlimited requests on fewer still: the rest
+// are behind the functions either way.
+const LEAN_TERRITORIAL_ROWS = 12;
 const buildTerritorialControlContext = async (worldLike, { maxRows = 80, viaLookups = false } = {}) => {
   const catalog = await loadRegionCatalog().catch(() => []);
   return describeTerritorialRows(territorialControlRows(normalizeWorldState(worldLike), catalog), { maxRows, viaLookups });
@@ -1497,9 +1502,12 @@ const buildTemplateVariables = async (bundle, options = {}) => {
   // A task that declares the lookup functions gets the slim prompt (the
   // functions carry the detail); with the setting off it gets the full one.
   const lookups = Boolean(options?.lookups) && lookupFunctionsEnabled();
+  // With Unlimited requests on, slimmer still: the model may ask more rounds, so
+  // less is sent up front (promptContext.js `leanLookups`).
+  const leanLookups = lookups && unlimitedRequests();
   // Background work hands in nextTask: nobody is waiting on it, and the map may be moving.
   const pause = options?.pause;
-  const variables = await buildPromptContext(bundle, { ...options, lookups, requiredKeys, taskKey });
+  const variables = await buildPromptContext(bundle, { ...options, lookups, leanLookups, requiredKeys, taskKey });
   await nextTask();
   // The diplomatic slice is bounded to the player plus, for a chat task, the
   // polities in the thread; wars are few enough to show whole.
@@ -1519,7 +1527,7 @@ const buildTemplateVariables = async (bundle, options = {}) => {
   }
   await pause?.();
   if (wants("territorialControlContext")) {
-    variables.territorialControlContext = await buildTerritorialControlContext(bundle.world, lookups ? { maxRows: 24, viaLookups: true } : {});
+    variables.territorialControlContext = await buildTerritorialControlContext(bundle.world, lookups ? { maxRows: leanLookups ? LEAN_TERRITORIAL_ROWS : 24, viaLookups: true } : {});
   }
   // Groups switched off for this game (server/gameFeatures.js): no task is
   // given them, which also leaves out the time skip's [Groups] rule and the
@@ -1752,6 +1760,12 @@ const abortableWait = (ms, signal) => new Promise((resolve, reject) => {
 // The player's own Agent calls them as tools of the game's MCP server while it
 // answers (ADR 0008), so they are on for it exactly as for an API entry.
 const lookupFunctionsEnabled = () => !savingRequests() && getMapSettingDefaultOn(MAP_SETTING_KEYS.lookupFunctions);
+
+// Unlimited requests (requestBudget.js): more rounds, and the directive says how
+// many. Off, the directive is the one it always was.
+const activeLookupDirective = () => (unlimitedRequests()
+  ? lookupDirective({ rounds: lookupRoundLimit({ unlimited: true }) })
+  : LOOKUP_DIRECTIVE);
 
 // audience: who is asking (audience.js). Every task that carries lookups today is
 // the narrator - the jump, the directors, the game master - so that is the
@@ -3029,7 +3043,7 @@ Write spiesOnPlayer: the polities, by exact name and comma-separated, that would
   }
 
   // (The function that gives a player's troops their orders is no lookup: the [Fronts] block says what it is for.)
-  if (Array.isArray(lookups?.tools) && lookups.tools.some((tool) => tool?.name !== FRONT_ORDER_FUNCTION)) blocks.push(LOOKUP_DIRECTIVE);
+  if (Array.isArray(lookups?.tools) && lookups.tools.some((tool) => tool?.name !== FRONT_ORDER_FUNCTION)) blocks.push(activeLookupDirective());
   if (historyJob) blocks.push(historyJob);
 
   return blocks.filter(Boolean).join("\n\n");
@@ -3515,7 +3529,7 @@ This live instruction supersedes older frozen country-stat prompts and all earli
   // so it stands next to the output contract rather than under the campaign.
   // (government_background is no lookup: the list of governments says what it is for.)
   if (!jumpTask && Array.isArray(lookups?.tools) && lookups.tools.some((tool) => tool?.name !== GOVERNMENT_BACKGROUND_FUNCTION)) {
-    systemPrompt = `${systemPrompt}\n\n${LOOKUP_DIRECTIVE}`;
+    systemPrompt = `${systemPrompt}\n\n${activeLookupDirective()}`;
   }
 
   // The player's standing goal (runtime/playerGoal.js): how the player's own
@@ -3874,7 +3888,7 @@ const runJsonTask = async (taskKey, {
       // Rounds an earlier attempt already had answered are carried, not asked
       // again, so they count toward the limit without costing anything now.
       const lookupRounds = budget && Array.isArray(lookups?.tools) && lookups.tools.length
-        ? carriedRoundCount(lookupCarry) + budget.free
+        ? Math.min(carriedRoundCount(lookupCarry) + budget.free, lookupRoundLimit({ unlimited: unlimitedRequests() }))
         : null;
       const lastChance = outputAttempt === 2 || salvageFirst;
       // Observational only, and off unless enabled from DevTools: measures the
@@ -17978,8 +17992,10 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
 // for being asked again.
 const createJumpRequests = ({ segments = 1, reserveInstitutionBallot = false, upkeep = null } = {}) => {
   const saving = savingRequests();
+  // Unlimited requests: up to eight, for six rounds of lookups (requestBudget.js).
+  const unlimited = unlimitedRequests();
   const pieces = Math.max(1, Math.round(Number(segments) || 1));
-  const budget = createJumpBudget({ cap: jumpRequestCap({ segments: pieces }), only: SKIP_SPENDERS });
+  const budget = createJumpBudget({ cap: jumpRequestCap({ segments: pieces, unlimited }), only: SKIP_SPENDERS });
   budget.reserve("jump", pieces);
   if (reserveInstitutionBallot) budget.reserve("institutionBallots", 1);
   if (upkeep?.history) budget.reserve("history", 1);
