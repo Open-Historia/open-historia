@@ -16208,7 +16208,10 @@ export const runChatActionBatch = async ({
     ? []
     : aiParticipants.map((speaker) => describePeaceTalk({ world: bundle.world, speaker, player, form: "field" })).filter(Boolean);
   const variables = {
-    ...(await buildTemplateVariables(bundle, { taskKey: "chatActions" })),
+    // A conversation writes no regionTransfers: its world summary gives region
+    // counts by power and names only for the player (promptContext.js
+    // buildWorldSummary `conversation`), not the skip's vocabulary.
+    ...(await buildTemplateVariables(bundle, { taskKey: "chatActions", conversation: true })),
     chatParticipants: rosterText,
     chatHistory: transcript || "(nothing said yet)",
     CHAT_OPEN_POLLS: pollText,
@@ -16454,7 +16457,8 @@ export const runPostTurnInstitutionBallots = async ({
       });
       const institutionIds = [...new Set(work.map((item) => item.institutionId))];
       const variables = {
-        ...(await buildTemplateVariables(bundle, { taskKey: "chatActions" })),
+        // A ballot pass is a conversation too: no region vocabulary.
+        ...(await buildTemplateVariables(bundle, { taskKey: "chatActions", conversation: true })),
         chatParticipants: [
           ...actors.map((name) => `- ${name} — AI-controlled: you act for it`),
           `- ${player} — HUMAN-controlled (the player): never speak or act for it`,

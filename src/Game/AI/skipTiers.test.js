@@ -205,3 +205,20 @@ test("a skip's structures are a table too: what they are, whose, where; the rota
   assert.ok(lines.includes("- Zenda Dam: dam, Atlantis, under_construction; 40.00, 10.00"), "an open structure is in full wherever it is");
   assert.ok(lines.includes("- Old Lighthouse: landmark, Atlantis"), "a quiet one out of view is named");
 });
+
+// Group chats and the ballot pass talk; they never write regionTransfers, and
+// the region vocabulary of up to 480 names was most of their world summary.
+test("group chats and ballots are built as conversations, without the region vocabulary", async () => {
+  const fs = await import("node:fs");
+  const source = fs.readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
+  const calls = source.match(/buildTemplateVariables\(bundle, \{ taskKey: "chatActions"[^}]*\}\)/g) ?? [];
+  assert.equal(calls.length, 2);
+  for (const call of calls) assert.match(call, /conversation: true/);
+  const { regions, world } = bigWorld();
+  const bundle = { game, world, events: [], actions: [], chats: [] };
+  const chat = await buildPromptContext(bundle, { requiredKeys: ["worldSummary"], taskKey: "chatActions", conversation: true, mapSource: { regionCatalog: regions, nationTags: {} } });
+  assert.doesNotMatch(chat.worldSummary, /region vocabulary for regionTransfers/);
+  assert.doesNotMatch(chat.worldSummary, /Slavonia province 0/);
+  assert.match(chat.worldSummary, /Ruritania province 0/, "the player's own regions by name");
+  assert.ok(regions.length > 0);
+});
