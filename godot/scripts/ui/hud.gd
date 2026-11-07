@@ -139,20 +139,30 @@ func _theme_rim(frame: Control, source: Control, corner: float) -> Panel:
 	rim.visible = false
 	rim.set_meta("theme_rim", true)
 	frame.add_child(rim)
-	var paint := func() -> void:
-		var ring := UI.box(Color(0, 0, 0, 0), UiTheme.pick("accent", Color(0, 0, 0, 0)), int(corner) + 2, 1)
-		ring.set_expand_margin_all(2)
-		rim.add_theme_stylebox_override("panel", ring)
-		rim.visible = UiTheme.themed() and bool(rim.get_meta("hovered", false)) and not (source is BaseButton and (source as BaseButton).disabled)
-	source.mouse_entered.connect(func() -> void:
-		rim.set_meta("hovered", true)
-		paint.call())
-	source.mouse_exited.connect(func() -> void:
-		rim.set_meta("hovered", false)
-		rim.visible = false)
-	UiTheme.events().changed.connect(paint)
-	paint.call()
+	source.mouse_entered.connect(_rim_hover.bind(rim, source, corner, true))
+	source.mouse_exited.connect(_rim_hover.bind(rim, source, corner, false))
+	UiTheme.events().changed.connect(_paint_rim.bind(rim, source, corner))
+	_paint_rim(rim, source, corner)
 	return rim
+
+
+func _rim_hover(rim: Panel, source: Control, corner: float, hovered: bool) -> void:
+	if not is_instance_valid(rim):
+		return
+	rim.set_meta("hovered", hovered)
+	if hovered:
+		_paint_rim(rim, source, corner)
+	else:
+		rim.visible = false
+
+
+func _paint_rim(rim: Panel, source: Control, corner: float) -> void:
+	if not is_instance_valid(rim) or not is_instance_valid(source):
+		return
+	var ring := UI.box(Color(0, 0, 0, 0), UiTheme.pick("accent", Color(0, 0, 0, 0)), int(corner) + 2, 1)
+	ring.set_expand_margin_all(2)
+	rim.add_theme_stylebox_override("panel", ring)
+	rim.visible = UiTheme.themed() and bool(rim.get_meta("hovered", false)) and not (source is BaseButton and (source as BaseButton).disabled)
 
 
 func _build_top_left() -> void:
