@@ -24,8 +24,25 @@ test("GM revision includes the prior exact transaction, not merely the amendment
   assert.match(lazy, /previewGameMasterRevision = hostOnly/);
 });
 
+test("Auto-selected GM previews retain routing authority through deterministic revisions", () => {
+  const start = gameplay.indexOf("export const previewGameMasterRevision = async");
+  const end = gameplay.indexOf("export const applyGameMasterPreview = async", start);
+  const source = gameplay.slice(start, end);
+  assert.ok(start > 0 && end > start);
+  assert.match(source, /validateGameMasterModeSelection\(\{\s*requestedMode: prior\?\.requestedMode \|\| mode,\s*selectedMode: mode,\s*request: prior\.request,\s*countryStatPatches: candidate\.countryStatPatches,/);
+  assert.match(source, /if \(routingError\) return `GM mode authorization failed:/);
+  assert.ok(source.indexOf("validateGameMasterModeSelection(") < source.indexOf("validateGameMasterPreviewPayload(candidate"),
+    "Auto route validation must run before accepting revised operations");
+  assert.match(source, /return \{\s*\.\.\.prior,/, "the revision preserves requestedMode and modeReason");
+  assert.match(gameplay, /requestedMode: preview\?\.requestedMode \|\| mode,/);
+});
+
 test("Edit Preview is compact, keeps the old preview while editing and only replaces it after success", () => {
   assert.match(consoleSource, /gmEditOpen, setGmEditOpen/);
+  assert.match(consoleSource, /\[gmMode, setGmMode\] = useState\("auto"\)/,
+    "GM Auto remains the default while Edit Preview is enabled");
+  assert.match(consoleSource, /gmPreview\.requestedMode === "auto"/,
+    "the selected concrete Auto mode remains visible beside Edit Preview");
   assert.match(consoleSource, /\{gmEditOpen \? "Cancel Edit" : "Edit Preview"\}/);
   assert.match(consoleSource, /rows=\{3\}/);
   const call = consoleSource.indexOf("const result = await previewGameMasterRevision(gmPreview, gmEditText.trim())");

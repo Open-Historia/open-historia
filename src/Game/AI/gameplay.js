@@ -153,6 +153,7 @@ import {
   validatePregameBootstrapCoverage,
 } from "./pregameBootstrapCoverage.js";
 import { validateGameMasterRequestedPuppetCompleteness, requestExplicitlyInstallsPuppet } from "./gameMasterRequestCompleteness.js";
+import { GAME_MASTER_MODES, GM_AUTO_MODE, validateGameMasterModeSelection } from "./gameMasterAutoMode.js";
 import { GAME_MASTER_EDIT_TOOL, applyGameMasterPreviewEdits, validateGameMasterEditResponse } from "./gameMasterPreviewEdit.js";
 import { generatedInstitutionOutcomeIntegrityIssue } from "./institutionOutcomeIntegrity.js";
 import { POLITICAL_TRAIT_KEYS } from "../../runtime/politicalTraitRegistry.js";
@@ -19531,7 +19532,7 @@ export const retryHeldPlayerEvents = async ({ keep = false, onEvents, onProgress
 // The AI plans a structured transaction; native code validates it against the
 // live world, shows every operation to the administrator, and only Apply
 // persists exactly that preview. Direct prose execution no longer exists.
-const GAME_MASTER_MODE_SET = new Set(["direct", "exact-event", "world-intervention"]);
+const GAME_MASTER_MODE_SET = new Set(GAME_MASTER_MODES);
 
 const relationPairKeyForHistory = (a, b) => [normalizeString(a), normalizeString(b)]
   .filter(Boolean)
@@ -20305,11 +20306,13 @@ const pruneOrphanedGameMasterHistory = (historyInput, eventsInput) => {
 // Generate and validate a GM transaction WITHOUT persisting it. Preview receives
 // stable transaction/event ids now so Apply persists exactly the object the
 // administrator inspected; Apply never asks the AI to reinterpret it.
-export const previewGameMasterCommand = async (requestText, { mode = "world-intervention" } = {}) => {
+export const previewGameMasterCommand = async (requestText, { mode = GM_AUTO_MODE } = {}) => {
   const request = normalizeString(requestText);
   const selectedMode = normalizeString(mode).toLowerCase();
   if (!request) throw new Error("Enter a GM request first.");
-  if (!GAME_MASTER_MODE_SET.has(selectedMode)) throw new Error(`Unsupported GM mode "${selectedMode}".`);
+  if (selectedMode !== GM_AUTO_MODE && !GAME_MASTER_MODE_SET.has(selectedMode)) {
+    throw new Error(`Unsupported GM mode "${selectedMode}".`);
+  }
 
   beginSimulation();
   try {
@@ -20333,9 +20336,19 @@ export const previewGameMasterCommand = async (requestText, { mode = "world-inte
       userMessage: `Generate a ${selectedMode} GM transaction preview for the administrator request. Do not apply anything.`,
       // Each answer's notes are its own: the last one checked is the one kept.
       validatePayload: (candidate, { finalAttempt } = {}) => {
+        const effectiveMode = selectedMode === GM_AUTO_MODE
+          ? normalizeString(candidate?.mode).toLowerCase()
+          : selectedMode;
+        const routingError = validateGameMasterModeSelection({
+          requestedMode: selectedMode,
+          selectedMode: effectiveMode,
+          request,
+          countryStatPatches: candidate?.countryStatPatches,
+        });
+        if (routingError) return routingError;
         notes = [];
         return validateGameMasterPreviewPayload(candidate, {
-          mode: selectedMode,
+          mode: effectiveMode,
           world: bundle.world,
           game: bundle.game,
           request,
@@ -20347,6 +20360,9 @@ export const previewGameMasterCommand = async (requestText, { mode = "world-inte
       variables,
     });
 
+    const effectiveMode = selectedMode === GM_AUTO_MODE
+      ? normalizeString(payload?.mode).toLowerCase()
+      : selectedMode;
     const transactionId = createGameMasterTransactionId();
     const storylineUpdates = decodeWorldStorylineUpdates(payload?.storylineUpdates);
     const events = attachStorylineIdsByIndexes(
@@ -20367,7 +20383,9 @@ export const previewGameMasterCommand = async (requestText, { mode = "world-inte
 
     return {
       id: transactionId,
-      mode: selectedMode,
+      mode: effectiveMode,
+      requestedMode: selectedMode,
+      modeReason: normalizeString(payload?.modeReason).slice(0, 240),
       request,
       date: bundle.game.gameDate || bundle.game.startDate || "",
       round: bundle.game.round || 0,
@@ -20376,7 +20394,7 @@ export const previewGameMasterCommand = async (requestText, { mode = "world-inte
       notes,
       transaction: {
         id: transactionId,
-        mode: selectedMode,
+        mode: effectiveMode,
         summary: normalizeString(payload?.summary),
         events,
         countryStatPatches,
@@ -20467,6 +20485,16 @@ Retain all unaffected operations and the original authored event. Output only yo
       try { amended = applyGameMasterPreviewEdits(prior.transaction, response); }
       catch (error) { return error.message; }
       const candidate = gameMasterTransactionCandidate(amended);
+      // Revising an Auto-selected preview must not bypass its original
+      // concrete-mode authority. A field-level edit can otherwise smuggle
+      // absolute Stats patches into a narrative transaction before Apply.
+      const routingError = validateGameMasterModeSelection({
+        requestedMode: prior?.requestedMode || mode,
+        selectedMode: mode,
+        request: prior.request,
+        countryStatPatches: candidate.countryStatPatches,
+      });
+      if (routingError) return `GM mode authorization failed: ${routingError}`;
       const beforeValidation = JSON.stringify(candidate);
       const error = await validateGameMasterPreviewPayload(candidate, {
         mode,
@@ -20525,6 +20553,13 @@ export const applyGameMasterPreview = async (preview) => {
     throw new Error("This GM preview is missing its transaction identity. Generate a fresh preview.");
   }
   if (!GAME_MASTER_MODE_SET.has(mode)) throw new Error(`Unsupported GM mode "${mode}".`);
+  const routingError = validateGameMasterModeSelection({
+    requestedMode: preview?.requestedMode || mode,
+    selectedMode: mode,
+    request,
+    countryStatPatches: preview?.transaction?.countryStatPatches,
+  });
+  if (routingError) throw new Error(`GM mode authorization failed: ${routingError}`);
   if (!normalizeString(preview?.baseFingerprint)) {
     throw new Error("This preview carries no safety fingerprint. Generate a fresh preview before applying.");
   }
