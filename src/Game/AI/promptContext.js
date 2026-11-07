@@ -1468,8 +1468,15 @@ export const buildPlannedActionsWithIdsText = (actions) => {
 // neglected programme moved along, and it cannot be argued with — it is a
 // function of the calendar, not of anyone's memory.
 const FULL_DETAIL_PROJECTS = 20;
+// Finished and abandoned entries are named, newest first, up to this many; the
+// rest are counted. A long campaign closed 110 and listed every one, id and
+// all, on every skip: 13,000 characters of entries the model is only told not
+// to re-open.
+export const CLOSED_PROJECTS_LISTED = 15;
 
-export const buildProjectsSummaryText = (world, game) => {
+// `compact` (a time skip): an open entry without its tags, which steer the
+// panel's filters and nothing a skip decides.
+export const buildProjectsSummaryText = (world, game, { compact = false, closedLimit = CLOSED_PROJECTS_LISTED } = {}) => {
   const projects = normalizeArray(world?.projects);
   if (projects.length === 0) {
     return "No projects or operations are being tracked yet.";
@@ -1545,9 +1552,9 @@ export const buildProjectsSummaryText = (world, game) => {
     const roundsSince = round > 0 && project.updatedRound > 0 ? round - project.updatedRound : 0;
     const warnings = warningsOf(project, flags);
     return [
-      `- ${titleOf(project)} [id ${project.id}]${priorityNote(project)}, ${ownerOf(project)}, ${project.status}, ${project.progress}% complete.`,
+      `- ${titleOf(project)} [id ${project.id}]${priorityNote(project)}, ${ownerOf(project)}, ${project.status}, ${project.progress}%${compact ? "" : " complete"}.`,
       project.summary,
-      project.tags.length ? `Tags: ${project.tags.join(", ")}.` : "",
+      !compact && project.tags.length ? `Tags: ${project.tags.join(", ")}.` : "",
       timeline,
       next,
       project.lastUpdate ? `Last reported: ${project.lastUpdate}` : "",
@@ -1558,7 +1565,7 @@ export const buildProjectsSummaryText = (world, game) => {
 
   // Everything the model needs to ADDRESS a project and judge whether it needs
   // touching, minus the prose it only needs to reason about one in depth.
-  const compact = (project) => {
+  const compactLine = (project) => {
     const flags = deriveProjectFlags(project, gameDate, round);
     const warnings = warningsOf(project, flags);
     const next = flags.nextMilestone
@@ -1583,13 +1590,18 @@ export const buildProjectsSummaryText = (world, game) => {
 
   const sections = detailed.length > 0 ? [detailed.map(full).join("\n")] : [];
   if (brief.length > 0) {
-    sections.push(`Also running (same rules apply — use these ids to update them):\n${brief.map(compact).join("\n")}`);
+    sections.push(`Also running (same rules apply — use these ids to update them):\n${brief.map(compactLine).join("\n")}`);
   }
   if (stalled.length > 0) {
-    sections.push(`Stalled, waiting on the player — leave these alone: no event and no projectOps about them, unless an order this period names one (then use its id):\n${stalled.map(compact).join("\n")}`);
+    sections.push(`Stalled, waiting on the player — leave these alone: no event and no projectOps about them, unless an order this period names one (then use its id):\n${stalled.map(compactLine).join("\n")}`);
   }
   if (closed.length > 0) {
-    sections.push(`Finished or abandoned — do not re-open these:\n${closed.map(compact).join("\n")}`);
+    const newest = [...closed].sort((a, b) =>
+      normalizeString(b.updatedAt).localeCompare(normalizeString(a.updatedAt)));
+    const listed = newest.slice(0, Math.max(0, closedLimit));
+    const more = closed.length - listed.length;
+    sections.push(`Finished or abandoned — do not re-open these:\n${listed.map(compactLine).join("\n")}`
+      + (more > 0 ? `\nand ${more} more finished or abandoned (older; do not start any of them again under a new name)` : ""));
   }
 
   // The engine's own verdict on what has gone quiet, restated at the END as a
@@ -2887,7 +2899,7 @@ export const buildPromptContext = async (bundle, {
     result.plannedActionsWithIds = buildPlannedActionsWithIdsText(bundle.actions);
   }
   if (wants("projectsSummary")) {
-    result.projectsSummary = buildProjectsSummaryText(bundle.world, bundle.game);
+    result.projectsSummary = buildProjectsSummaryText(bundle.world, bundle.game, { compact: SKIP_TASKS.has(taskKey) });
   }
 
   const worldBeforeRoundOne =

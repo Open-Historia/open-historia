@@ -178,6 +178,8 @@ import {
   HIGH_PRIORITY_ASSESSMENT_RULE,
   buildBoardPassDirective,
   buildJumpProjectsDirective,
+  buildJumpProjectsRules,
+  JUMP_PROJECTS_RULES_HEADING,
 } from "./projectsDirective.js";
 import { filterBoundLedgerUpdatesToKeptEvents } from "./ledgerEventBinding.js";
 import { createTurnReplay, replayAnswer } from "./heldTurnReplay.js";
@@ -2879,6 +2881,10 @@ const buildJumpStaticRules = async (variables = {}) => {
     unitsOnTheMapBlock(game?.gameDate, eraSettingOf(world)),
     `[Military Feasibility]\n${MILITARY_FEASIBILITY}`,
     TAKING_GROUND_BLOCK,
+    // How the board is kept, once there is a board (projectsDirective.js).
+    normalizeArray(world.projects).length > 0
+      ? `${JUMP_PROJECTS_RULES_HEADING}\n${buildJumpProjectsRules({ folded: Boolean(variables?.foldedSkip) })}`
+      : "",
     isActiveFeatureEnabled("groups") ? `${GROUPS_RULE_HEADING}\n${GROUPS_RULE}` : "",
     `${WAR_LEDGER_RULES_HEADING}\n${warLedgerRules(playerName)}`,
     `${DIPLOMATIC_LEDGER_RULES_HEADING}\n${diplomaticLedgerRules(playerName)}`,
@@ -3052,6 +3058,9 @@ ${pending}`);
   const foldedSkip = Boolean(variables.foldedSkip);
   const board = buildJumpProjectsDirective(variables.projectsSummary, {
     folded: foldedSkip,
+    // The rules are above, among the standing ones, when the board had entries
+    // as the opening was built (buildJumpStaticRules).
+    rulesAbove: rulesAbove && normalizeArray(world.projects).length > 0,
     doubted: normalizeString(variables.foldedBoardDoubts),
   });
   if (board) blocks.push(board);
