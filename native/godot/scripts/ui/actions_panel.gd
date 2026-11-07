@@ -158,6 +158,7 @@ func _init() -> void:
 
 
 func _ready() -> void:
+	UiTheme.events().changed.connect(_paint_controls)
 	get_viewport().size_changed.connect(func() -> void:
 		if _open:
 			offset_top = -BOTTOM_GAP - _height()
@@ -305,7 +306,7 @@ func _style_tabs() -> void:
 	for key in _tab_buttons:
 		var tab: Button = _tab_buttons[key]
 		var chosen: bool = key == _tab
-		var style := UI.box(GREY_SELECTED if chosen else Color(1, 1, 1, 0.025), GREY_BORDER_STRONG if chosen else Color(1, 1, 1, 0.07), 8, 1)
+		var style := UI.box(UiTheme.pick("active", GREY_SELECTED) if chosen else Color(1, 1, 1, 0.025), UiTheme.pick("accent", GREY_BORDER_STRONG) if chosen else Color(1, 1, 1, 0.07), 8, 1)
 		for state in ["normal", "hover", "pressed", "hover_pressed", "focus", "disabled"]:
 			tab.add_theme_stylebox_override(state, style)
 		var ink := UI.WHITE if chosen else Color(1, 1, 1, 0.48)
@@ -502,13 +503,13 @@ static func _send_key(event: InputEvent) -> int:
 func _build_buttons() -> Control:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 8)
-	_brainstorm = _styled_button("Brainstorm", 13, 500, ZINC, _style(Color(1, 1, 1, 0.05), Color(1, 1, 1, 0.2), 10, Vector4(16, 9, 16, 9)), _style(UiTheme.pick("line", Color(1, 1, 1, 0.1)), Color(1, 1, 1, 0.28), 10, Vector4(16, 9, 16, 9)))
+	_brainstorm = _styled_button("Brainstorm", 13, 500, ZINC, _style(UiTheme.pick("overlay_card", Color(1, 1, 1, 0.05)), UiTheme.pick("line", Color(1, 1, 1, 0.2)), 10, Vector4(16, 9, 16, 9)), _style(UiTheme.pick("hover", Color(1, 1, 1, 0.1)), UiTheme.pick("accent", Color(1, 1, 1, 0.28)), 10, Vector4(16, 9, 16, 9)))
 	_brainstorm.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_brainstorm.size_flags_stretch_ratio = 1.0
 	_brainstorm.custom_minimum_size.y = 37
 	_brainstorm.pressed.connect(func() -> void: open_advisor.emit(BRAINSTORM_TEXT))
 	row.add_child(_brainstorm)
-	_suggest_button = _styled_button("", 13, 400, Color(1, 1, 1, 0.82), _style(Color(1, 1, 1, 0.05), Color(1, 1, 1, 0.12), 10, Vector4(16, 8, 16, 8)), _style(Color(1, 1, 1, 0.09), UiTheme.pick("line", Color(1, 1, 1, 0.18)), 10, Vector4(16, 8, 16, 8)))
+	_suggest_button = _styled_button("", 13, 400, Color(1, 1, 1, 0.82), _style(UiTheme.pick("overlay_card", Color(1, 1, 1, 0.05)), UiTheme.pick("line", Color(1, 1, 1, 0.12)), 10, Vector4(16, 8, 16, 8)), _style(UiTheme.pick("hover", Color(1, 1, 1, 0.09)), UiTheme.pick("accent", Color(1, 1, 1, 0.18)), 10, Vector4(16, 8, 16, 8)))
 	_suggest_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_suggest_button.size_flags_stretch_ratio = 1.0
 	_suggest_button.custom_minimum_size.y = 37
@@ -545,10 +546,8 @@ func _build_composer() -> Control:
 	holder.custom_minimum_size.y = 62
 	_composer = _text_edit(COMPOSER_HINT, 13)
 	_composer.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	_composer_style = _style(Color(0, 0, 0, 0.2), UiTheme.pick("line", Color(1, 1, 1, 0.15)), 10, Vector4(14, 11, 45, 11))
-	_composer.add_theme_stylebox_override("normal", _composer_style)
-	_composer.add_theme_stylebox_override("focus", _style(Color(0, 0, 0, 0.2), Color(1, 1, 1, 0.25), 10, Vector4(14, 11, 45, 11)))
-	_composer.focus_exited.connect(func() -> void: _composer_style.border_color = Color(1, 1, 1, 0.12))
+	_paint_composer()
+	_composer.focus_exited.connect(func() -> void: _composer_style.border_color = UiTheme.pick("line", Color(1, 1, 1, 0.12)))
 	_composer.get_v_scroll_bar().modulate.a = 0.0
 	_composer.text_changed.connect(_update_composer)
 	_composer.gui_input.connect(_on_composer_key)
@@ -602,14 +601,36 @@ func _build_composer() -> Control:
 	return bar
 
 
+func _paint_composer() -> void:
+	_composer_style = _style(UiTheme.pick("overlay_strong", Color(0, 0, 0, 0.2)), UiTheme.pick("line", Color(1, 1, 1, 0.15)), 10, Vector4(14, 11, 45, 11))
+	_composer.add_theme_stylebox_override("normal", _composer_style)
+	_composer.add_theme_stylebox_override("focus", _style(UiTheme.pick("overlay_strong", Color(0, 0, 0, 0.2)), UiTheme.pick("focus", Color(1, 1, 1, 0.25)), 10, Vector4(14, 11, 45, 11)))
+
+
+func _paint_controls() -> void:
+	if not is_instance_valid(_composer):
+		return
+	_style_tabs()
+	_paint_composer()
+	var pairs := [[_brainstorm, Color(1, 1, 1, 0.05), Color(1, 1, 1, 0.2), Color(1, 1, 1, 0.1), Color(1, 1, 1, 0.28), Vector4(16, 9, 16, 9)], [_suggest_button, Color(1, 1, 1, 0.05), Color(1, 1, 1, 0.12), Color(1, 1, 1, 0.09), Color(1, 1, 1, 0.18), Vector4(16, 8, 16, 8)]]
+	for pair in pairs:
+		var button: Button = pair[0]
+		var normal := _style(UiTheme.pick("overlay_card", pair[1]), UiTheme.pick("line", pair[2]), 10, pair[5])
+		var lit := _style(UiTheme.pick("hover", pair[3]), UiTheme.pick("accent", pair[4]), 10, pair[5])
+		for state in [["normal", normal], ["focus", normal], ["disabled", normal], ["hover", lit], ["pressed", lit], ["hover_pressed", lit]]:
+			button.add_theme_stylebox_override(state[0], state[1])
+	_update_composer()
+
+
 func _update_composer() -> void:
 	var filled := not _composer.text.strip_edges().is_empty()
 	var can_send := filled and not _is_submitting and not _is_improving
-	_improve_button.icon = _glyph("stop" if _is_improving else "sparkle", 16, ZINC if _is_improving or filled else Color(1, 1, 1, 0.45))
+	_improve_button.icon = _glyph("stop" if _is_improving else "sparkle", 16, UiTheme.pick("accent", ZINC) if _is_improving or filled else Color(1, 1, 1, 0.45))
 	_improve_button.tooltip_text = "Stop generating" if _is_improving else "Improve action text"
 	_improve_button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND if _is_improving or filled else Control.CURSOR_ARROW
-	var normal := UI.box(BLUE if can_send else BLUE_DIM, Color(0, 0, 0, 0), 10, 0)
-	var hover := UI.box(BLUE_HOVER if can_send else BLUE_DIM, Color(0, 0, 0, 0), 10, 0)
+	var ring := 1 if UiTheme.themed() else 0
+	var normal := UI.box(UiTheme.pick("active", BLUE) if can_send else UiTheme.pick("overlay_card", BLUE_DIM), UiTheme.pick("accent", Color(0, 0, 0, 0)), 10, ring)
+	var hover := UI.box(UiTheme.pick("hover", BLUE_HOVER) if can_send else UiTheme.pick("overlay_card", BLUE_DIM), UiTheme.pick("accent", Color(0, 0, 0, 0)), 10, ring)
 	for state in [["normal", normal], ["focus", normal], ["disabled", normal], ["hover", hover], ["pressed", hover], ["hover_pressed", hover]]:
 		_submit_button.add_theme_stylebox_override(state[0], state[1])
 	_submit_button.disabled = not can_send

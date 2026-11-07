@@ -164,6 +164,7 @@ func _run() -> void:
 	await _clear_shell()
 	await _theme_runtime()
 	await _settings_part()
+	await _library_part()
 	await _setup_part()
 	await _release_part()
 	await _history_part()
@@ -229,6 +230,9 @@ func _settings_part() -> void:
 	_check(UiTheme.preset == "midnight", "a preset card applies its palette")
 	var card: PanelContainer = (workspace as Control).get("_card")
 	_check(_same(_bg(card), Color("#111D2A")), "Settings itself takes the palette")
+	var primaries: Array = _find_all(workspace, func(item: Node) -> bool: return item is Button and item.has_meta("settings_primary"), [])
+	var primary_style := (primaries[0] as Button).get_theme_stylebox("normal") as StyleBoxFlat if not primaries.is_empty() else null
+	_check(primary_style == null or (_same(primary_style.bg_color, UiTheme.pick("active", Color())) and _same(primary_style.border_color, UiTheme.pick("accent", Color()))), "Settings' primary actions follow the palette, not blue", str(primaries.size()))
 	_check(page != null, "the settings page is there")
 	settings = _find_all(workspace, func(item: Node) -> bool: return item is ThemeSettings, [])[0]
 	_check(bool(_theme_button(settings, "midnight").get_meta("pressed")), "the chosen card is marked")
@@ -253,6 +257,37 @@ func _settings_part() -> void:
 	await _until(func() -> bool: return not (workspace as Control).is_visible_in_tree(), 5.0)
 	_check(not (workspace as Control).is_visible_in_tree(), "Settings closes")
 	await _wait(0.4)
+
+
+func _library_part() -> void:
+	var menu: Variant = main.menu
+	for preset in ["default", "forest"]:
+		UiTheme.select(preset)
+		await _frames(4)
+		menu.call("_show_page", "scenarios")
+		await _wait(1.0)
+		var rail := (menu.get("_rail_panel") as Control).get_theme_stylebox("panel") as StyleBoxFlat
+		_check(rail != null and rail.border_width_right == 1 and (_same(rail.border_color, UiTheme.pick("line", Color(1, 1, 1, 0.08))) or _same(_border_of(rail), UiTheme.pick("line", Color(1, 1, 1, 0.08))) or _same(rail.border_color, UiTheme.pick("header", UI.RAIL).blend(Color(1, 1, 1, 0.08)))), "the menu rail has its edge in %s" % preset, "%s %s" % [str(rail.border_width_right if rail else -1), str(rail.border_color if rail else Color())])
+		var edit: Array = _find_all(menu, func(item: Node) -> bool: return item is Button and (item as Button).is_visible_in_tree() and not _labels(item, "Edit").is_empty(), [])
+		var edit_style := (edit[0] as Button).get_theme_stylebox("normal") as StyleBoxFlat if not edit.is_empty() else null
+		_check(edit_style != null and _same(edit_style.bg_color, UiTheme.pick("overlay_card", Color(1, 1, 1, 0.06))) and _same(edit_style.border_color, UiTheme.pick("line", Color(1, 1, 1, 0.12))), "a scenario card's Edit takes the palette's card and line in %s" % preset)
+		var tile: Button = (menu.get("_tiles") as Dictionary)["games"]
+		var tile_hover := tile.get_theme_stylebox("hover") as StyleBoxFlat
+		var rim := Color(UiTheme.pick("accent", Color(1, 1, 1)), 0.38) if preset != "default" else Color(1, 1, 1, 0.12)
+		_check(tile_hover != null and _same(tile_hover.border_color, rim), "a rail tile's hover rim in %s" % preset, str(tile_hover.border_color if tile_hover else Color()))
+		await _shoot("look-%s-library-scenarios" % preset)
+		menu.call("_show_page", "community")
+		await _wait(2.0)
+		await _shoot("look-%s-library-community" % preset)
+		menu.call("_show_page", "lobbies")
+		await _wait(1.0)
+		var fields: Array = _find_all(menu, func(item: Node) -> bool: return item is LineEdit and (item as LineEdit).is_visible_in_tree(), [])
+		var field_style := (fields[0] as LineEdit).get_theme_stylebox("normal") as StyleBoxFlat if not fields.is_empty() else null
+		_check(field_style != null and _same(field_style.bg_color, UiTheme.pick("overlay_card", Color(1, 1, 1, 0.04))) and _same(field_style.border_color, UiTheme.pick("line", Color(1, 1, 1, 0.1))), "a lobby field takes the palette in %s" % preset)
+		await _shoot("look-%s-library-lobbies" % preset)
+	menu.call("_show_page", "games")
+	UiTheme.reset()
+	await _frames(4)
 
 
 func _scroll_into_view(workspace: Variant, control: Control) -> void:
@@ -563,6 +598,23 @@ func _themed_panels() -> void:
 		for name in ["chat", "actions", "history"]:
 			main.hud.set_active_panel(name)
 			await _wait(1.2)
+			if name == "actions":
+				var actions: Variant = main.hud.get("panels").get("actions")
+				var chosen: Button = (actions.get("_tab_buttons") as Dictionary)[actions.get("_tab")]
+				var tab_style := chosen.get_theme_stylebox("normal") as StyleBoxFlat
+				_check(tab_style != null and _same(tab_style.bg_color, UiTheme.pick("active", Color())) and _same(tab_style.border_color, UiTheme.pick("accent", Color())), "the chosen Actions tab takes the palette in %s" % preset)
+				var brainstorm: Button = actions.get("_brainstorm")
+				var brainstorm_style := brainstorm.get_theme_stylebox("normal") as StyleBoxFlat
+				_check(brainstorm_style != null and _same(brainstorm_style.bg_color, UiTheme.pick("overlay_card", Color())) and _same(brainstorm_style.border_color, UiTheme.pick("line", Color())), "Brainstorm takes the palette's card and line in %s" % preset)
+				var composer: TextEdit = actions.get("_composer")
+				composer.text = "Fund the rail network."
+				composer.text_changed.emit()
+				await _frames(2)
+				var send_style := (actions.get("_submit_button") as Button).get_theme_stylebox("normal") as StyleBoxFlat
+				_check(send_style != null and _same(send_style.bg_color, UiTheme.pick("active", Color())) and _same(send_style.border_color, UiTheme.pick("accent", Color())) and send_style.border_width_left == 1, "the send button is the palette's active tone with an accent ring in %s" % preset)
+				await _shoot("look-%s-actions-typed" % preset)
+				composer.text = ""
+				composer.text_changed.emit()
 			await _shoot("look-%s-%s" % [preset, name])
 		main.hud.set_active_panel("")
 		await _wait(0.5)
@@ -604,6 +656,22 @@ func _map_controls() -> void:
 			"diplo": Color(accent, 0.22), "diplo_ink": Color(UiTheme.mix(str(palette["accent"]), "#FFFFFF", 0.3)), "diplo_line": Color(accent, 0.45),
 			"open": Color(accent, 0.22), "rest": Color(Color(UiTheme.mix(str(palette["surface"]), "#FFFFFF", 0.08)), 0.42),
 		}
+	for preset in ["default", "forest"]:
+		UiTheme.select(preset)
+		hud.open_drawer_named("advisor")
+		await _wait(0.9)
+		var line_open := UiTheme.pick("glass_active_line", UiTheme.pick("hud_border", UI.HUD_BORDER))
+		_check(_same(advisor_frame.border, line_open), "the open Advisor button takes the active line in %s" % preset, str(advisor_frame.border))
+		var advisor_button: Button = hud.get("_advisor_button")
+		advisor_button.mouse_entered.emit()
+		await _frames(2)
+		var rims: Array = _find_all(advisor_frame, func(item: Node) -> bool: return item.has_meta("theme_rim"), [])
+		_check(rims.size() == 1 and (rims[0] as Control).visible == (preset != "default"), "a HUD control is ringed in the accent on hover only with a palette (%s)" % preset)
+		await _shoot("look-%s-advisor-open-hover" % preset)
+		advisor_button.mouse_exited.emit()
+		hud.close_drawer()
+		await _wait(0.6)
+		_check(_same(advisor_frame.border, UiTheme.pick("hud_border", UI.HUD_BORDER)), "the closed Advisor button keeps the HUD line in %s" % preset)
 	for preset in ["default", "forest", "oxblood"]:
 		UiTheme.select(preset)
 		((hud.get("_mode_buttons") as Dictionary)["diplomatic"] as Button).pressed.emit()

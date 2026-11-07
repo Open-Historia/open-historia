@@ -205,8 +205,8 @@ static func panel(bg: Color, border: Color, radius: int, pad: Vector4) -> PanelC
 
 
 static func pill_button(caption: String, options := {}) -> Button:
-	var bg: Color = options.get("bg", PILL_BG)
-	var border: Color = options.get("border", PILL_BORDER)
+	var bg: Color = options.get("bg", UiTheme.pick("overlay_card", PILL_BG))
+	var border: Color = options.get("border", UiTheme.pick("line", PILL_BORDER))
 	var ink: Color = options.get("ink", PILL_INK)
 	var size: int = options.get("size", 13)
 	var weight: int = options.get("weight", 600)
@@ -258,7 +258,7 @@ static func input(placeholder: String, width: float, size := 13, height := 32.0,
 	field.placeholder_text = placeholder
 	field.custom_minimum_size = Vector2(width, height)
 	field.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	var normal := style(PILL_BG, PILL_BORDER, 9, Vector4(pad, 0, pad, 0))
+	var normal := style(UiTheme.pick("overlay_card", PILL_BG), UiTheme.pick("line", PILL_BORDER), 9, Vector4(pad, 0, pad, 0))
 	field.add_theme_stylebox_override("normal", normal)
 	field.add_theme_stylebox_override("focus", normal)
 	field.add_theme_stylebox_override("read_only", normal)
@@ -272,7 +272,7 @@ static func input(placeholder: String, width: float, size := 13, height := 32.0,
 
 
 static func set_field_border(field: LineEdit, border: Color, pad := 14.0) -> void:
-	var normal := style(PILL_BG, border, 9, Vector4(pad, 0, pad, 0))
+	var normal := style(UiTheme.pick("overlay_card", PILL_BG), border, 9, Vector4(pad, 0, pad, 0))
 	field.add_theme_stylebox_override("normal", normal)
 	field.add_theme_stylebox_override("focus", normal)
 

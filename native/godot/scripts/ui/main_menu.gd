@@ -73,7 +73,10 @@ func _ready() -> void:
 
 func _on_theme_changed() -> void:
 	_page_bg.color = UiTheme.pick("bg", UI.PAGE)
-	_rail_panel.add_theme_stylebox_override("panel", UI.box(UiTheme.pick("header", UI.RAIL), Color(0, 0, 0, 0), 0, 0, Vector4(12, 16, 12, 16)))
+	_rail_panel.add_theme_stylebox_override("panel", _rail_style())
+	for tile_key in _tiles.keys():
+		var tile: Button = _tiles[tile_key]
+		_style_tile(tile, tile_key == _page)
 	var key := _page
 	_page = ""
 	_show_page(key)
@@ -187,7 +190,7 @@ func set_status(text: String, problem := false) -> void:
 func _build_rail() -> void:
 	var rail := PanelContainer.new()
 	_rail_panel = rail
-	rail.add_theme_stylebox_override("panel", UI.box(UiTheme.pick("header", UI.RAIL), Color(0, 0, 0, 0), 0, 0, Vector4(12, 16, 12, 16)))
+	rail.add_theme_stylebox_override("panel", _rail_style())
 	rail.anchor_bottom = 1.0
 	rail.offset_right = 110
 	add_child(rail)
@@ -229,6 +232,25 @@ func _build_rail() -> void:
 	column.add_child(settings)
 
 
+func _rail_style() -> StyleBoxFlat:
+	var style := UI.box(UiTheme.pick("header", UI.RAIL), UiTheme.pick("line", Color(1, 1, 1, 0.08)), 0, 0, Vector4(12, 16, 12, 16))
+	style.border_width_right = 1
+	return style
+
+
+func _theme_button(button: Button) -> Button:
+	if not UiTheme.themed():
+		return button
+	for state in ["normal", "focus", "disabled", "hover", "pressed", "hover_pressed"]:
+		var lifted := button.get_theme_stylebox(state)
+		if lifted is StyleBoxFlat:
+			var style := (lifted as StyleBoxFlat).duplicate() as StyleBoxFlat
+			style.bg_color = UiTheme.pick("overlay_card", style.bg_color)
+			style.border_color = UiTheme.pick("line", style.border_color)
+			button.add_theme_stylebox_override(state, style)
+	return button
+
+
 func _rail_tile(key: String, text: String) -> Button:
 	var tile := Button.new()
 	tile.focus_mode = Control.FOCUS_NONE
@@ -265,6 +287,9 @@ func _style_tile(tile: Button, active: bool) -> void:
 	if not active:
 		hover.bg_color = Color(1, 1, 1, 0.07)
 		hover.border_color = Color(1, 1, 1, 0.12)
+	if UiTheme.themed():
+		var rim := Color(UiTheme.pick("accent", Color(1, 1, 1)), 0.38)
+		hover.border_color = hover.border_color.blend(rim) if active else rim
 	for state in ["normal", "focus", "disabled"]:
 		tile.add_theme_stylebox_override(state, style)
 	for state in ["hover", "pressed", "hover_pressed"]:
@@ -1114,7 +1139,7 @@ func _game_card(game: Dictionary, active: bool) -> Control:
 		return card
 	var buttons := HBoxContainer.new()
 	buttons.add_theme_constant_override("separation", 7)
-	var archive := UI.button("Unarchive", "small", "archive")
+	var archive := _theme_button(UI.button("Unarchive", "small", "archive"))
 	archive.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	archive.tooltip_text = "Move back into your library"
 	archive.pressed.connect(func() -> void: _archive_game(game))
@@ -1508,11 +1533,11 @@ func _scenario_card(scenario: Dictionary) -> Control:
 		stack.add_child(start)
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 7)
-	var edit := UI.button("Edit", "small", "edit")
+	var edit := _theme_button(UI.button("Edit", "small", "edit"))
 	edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	edit.pressed.connect(func() -> void: edit_scenario.emit(id))
 	row.add_child(edit)
-	var clone := UI.button("Clone Scenario", "small", "clone")
+	var clone := _theme_button(UI.button("Clone Scenario", "small", "clone"))
 	clone.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	clone.size_flags_stretch_ratio = 1.25
 	clone.pressed.connect(func() -> void: clone_scenario.emit(scenario))
@@ -1557,7 +1582,8 @@ class DashedCard extends Control:
 	func _draw() -> void:
 		var rect := Rect2(Vector2(1, 1), size - Vector2(2, 2))
 		var radius := 24.0
-		var ink := Color(1, 1, 1, 0.22)
+		draw_style_box(UI.box(UiTheme.pick("overlay_card", Color(0, 0, 0, 0)), Color(0, 0, 0, 0), 24, 0), rect)
+		var ink := UiTheme.pick("line", Color(1, 1, 1, 0.22))
 		var edges := [
 			[Vector2(rect.position.x + radius, rect.position.y), Vector2(rect.end.x - radius, rect.position.y)],
 			[Vector2(rect.end.x, rect.position.y + radius), Vector2(rect.end.x, rect.end.y - radius)],

@@ -710,8 +710,10 @@ func _nav_button(key: String) -> Button:
 	node.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	node.custom_minimum_size.y = 37
 	node.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	var normal := UI.box(Color(1, 1, 1, 0.1) if active else Color(0, 0, 0, 0), Color(1, 1, 1, 0.18) if active else Color(0, 0, 0, 0), 9, 1, Vector4(11, 0, 11, 0))
-	var hover := UI.box(Color(1, 1, 1, 0.1) if active else Color(1, 1, 1, 0.05), Color(1, 1, 1, 0.18) if active else Color(0, 0, 0, 0), 9, 1, Vector4(11, 0, 11, 0))
+	var chosen_bg := UiTheme.pick("active", Color(1, 1, 1, 0.1))
+	var chosen_edge := UiTheme.pick("accent", Color(1, 1, 1, 0.18))
+	var normal := UI.box(chosen_bg if active else Color(0, 0, 0, 0), chosen_edge if active else Color(0, 0, 0, 0), 9, 1, Vector4(11, 0, 11, 0))
+	var hover := UI.box(chosen_bg if active else Color(1, 1, 1, 0.05), chosen_edge if active else Color(0, 0, 0, 0), 9, 1, Vector4(11, 0, 11, 0))
 	for state in [["normal", normal], ["hover", hover], ["pressed", hover], ["hover_pressed", hover], ["focus", normal]]:
 		node.add_theme_stylebox_override(state[0], state[1])
 	var ink := UI.WHITE if active else NAV_INK
