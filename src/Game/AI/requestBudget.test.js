@@ -366,10 +366,10 @@ test("a segmented skip pays one request per segment and the cap moves with it", 
 });
 
 test("what a skip is said to cost: one request, and up to the cap only with function calling", () => {
-    assert.deepEqual(describeJumpCost(), { min: 1, max: 1, lookups: false });
-    assert.deepEqual(describeJumpCost({ lookups: false, segments: 3 }), { min: 3, max: 3, lookups: false });
-    assert.deepEqual(describeJumpCost({ lookups: true }), { min: 1, max: 3, lookups: true });
-    assert.deepEqual(describeJumpCost({ lookups: true, segments: 3 }), { min: 3, max: 5, lookups: true });
+    assert.deepEqual(describeJumpCost(), { min: 1, max: 1, lookups: false, rounds: 0, unlimited: false });
+    assert.deepEqual(describeJumpCost({ lookups: false, segments: 3 }), { min: 3, max: 3, lookups: false, rounds: 0, unlimited: false });
+    assert.deepEqual(describeJumpCost({ lookups: true }), { min: 1, max: 3, lookups: true, rounds: 3, unlimited: false });
+    assert.deepEqual(describeJumpCost({ lookups: true, segments: 3 }), { min: 3, max: 5, lookups: true, rounds: 3, unlimited: false });
 });
 
 test("the day is described for the panel: used, left, and never less than nothing left", () => {

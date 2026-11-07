@@ -191,6 +191,7 @@ registerSettingsSnapshot("AI requests", () => {
     const tasks = Object.entries(day.byTask).sort((a, b) => b[1] - a[1]).map(([task, count]) => `${task} ${count}`).join(", ");
     return [
         ["Save AI requests", onOff(requestSettings.saveRequests())],
+        ["Unlimited requests", onOff(requestSettings.unlimited())],
         ["Requests a day your key allows", String(day.limit)],
         ["Background AI", onOff(requestSettings.backgroundAi())],
         ["Background requests a day, at most", String(day.backgroundCap)],

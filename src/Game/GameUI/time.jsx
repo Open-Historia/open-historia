@@ -23,7 +23,7 @@ import { AI_REQUEST_CONTROL_EVENT } from "../AI/aiRequestControl.js";
 import { acceptStructuredModeSuggestion, declineStructuredModeSuggestion, getStructuredModeSuggestion } from "../AI/main.jsx";
 import { agentHasEntryBelow, fallbackStateStore, getResolvedFallbackList } from "../AI/providerConfig.js";
 import { describeUnavailable, fallbackAvailability } from "../AI/fallbackRunner.js";
-import { describeJumpCost, requestDay, savingRequests } from "../AI/requestBudget.js";
+import { describeJumpCost, requestDay, savingRequests, unlimitedRequests } from "../AI/requestBudget.js";
 import { REQUEST_AGENT, describeRequestActivity, formatElapsedClock, requestActivity } from "../AI/requestActivity.js";
 import { agentClient, openAgentFolder } from "../AI/agentConnection.js";
 import { AGENT_BUTTON_STYLE } from "./agentWaitingNotice.jsx";
@@ -1101,10 +1101,13 @@ const RequestsTodayCaption = () => {
     // one the compiler keeps from the first render, so this line went on saying
     // what a skip cost under the setting it was first drawn with.
     const [saving, setSaving] = useState(() => savingRequests());
+    // Unlimited requests on: more rounds of lookups, so a higher most.
+    const [unlimited, setUnlimited] = useState(() => unlimitedRequests());
     useEffect(() => {
         const refresh = () => {
             setDay(requestDay());
             setSaving(savingRequests());
+            setUnlimited(unlimitedRequests());
         };
         window.addEventListener("ai:request-budget", refresh);
         const timer = setInterval(refresh, 60000);
@@ -1117,7 +1120,7 @@ const RequestsTodayCaption = () => {
     // AI: Save AI requests off, with the lookup functions on), up to `cost.max`.
     // That switch is on unless it was turned off.
     const lookupsOn = useMapSettingValue(MAP_SETTING_KEYS.lookupFunctions, "1") !== "0";
-    const cost = describeJumpCost({ lookups: !saving && lookupsOn });
+    const cost = describeJumpCost({ lookups: !saving && lookupsOn, unlimited });
     // A long skip split into segments (Settings → AI) pays one request a segment.
     const segmented = useMapSetting(MAP_SETTING_KEYS.chunkLongJumps);
     const nearlyOut = day.left <= Math.max(3, Math.ceil(day.limit * 0.1));

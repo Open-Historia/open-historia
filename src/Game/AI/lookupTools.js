@@ -343,6 +343,17 @@ export const LOOKUP_DIRECTIVE = [
   "6. Then call the output function once with the complete answer. Do not narrate your lookups.",
 ].join("\n");
 
+// The directive with the number of rounds the task really has in rule 5:
+// LOOKUP_DIRECTIVE as it is for three, the number written out otherwise (six
+// with Unlimited requests on, requestBudget.js lookupRoundLimit).
+const ROUND_WORDS = ["NO", "ONE", "TWO", "THREE", "FOUR", "FIVE", "SIX", "SEVEN", "EIGHT", "NINE", "TEN"];
+export const lookupDirective = ({ rounds = 3 } = {}) => {
+  const count = Math.max(0, Math.round(Number(rounds) || 0));
+  if (count === 3) return LOOKUP_DIRECTIVE;
+  const word = ROUND_WORDS[count] ?? String(count);
+  return LOOKUP_DIRECTIVE.replace("at most THREE lookup rounds", `at most ${word} lookup round${count === 1 ? "" : "s"}`);
+};
+
 // ---------------------------------------------------------------------------
 // Context: the indexes the executor answers from. Built once per task by the
 // caller from the bundle, the rendered region catalog and the cities.

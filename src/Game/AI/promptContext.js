@@ -1635,6 +1635,10 @@ export const rankFocusPowers = (regions, world, bundle, { playerName, actorNames
 
 export const POLITY_SUMMARY_LIMIT = 16;
 export const TAG_SUMMARY_LIMIT = 40;
+// With Unlimited requests on (`leanLookups`): the recent events in view, and the
+// territorial changes listed, before the lookup functions carry the rest.
+export const LEAN_RECENT_EVENTS = 4;
+export const LEAN_TERRITORY_CHANGES = 20;
 
 // `items` with the powers in `focusCodes` (rankFocusPowers' order) first, in
 // that order, and everything else after them in its own order. `namesOf`
@@ -1657,6 +1661,11 @@ export const orderByFocus = (items, namesOf, focusCodes) => {
 // `regionListsViaTools`: the task has the lookup functions (lookupTools.js),
 // so the summary names the powers with their region counts and leaves the
 // region names and ids to find_region / list_regions / map_around.
+//
+// `countsOnly`: Unlimited requests is on (requestBudget.js), so the model may
+// look up more and is sent less: each power with its region count and nothing
+// else (no territories), and the territorial changes cut shorter, with what was
+// left out counted. Only with `regionListsViaTools`.
 //
 // `conversation`: the advisor or a leader, which talk and never write
 // regionTransfers. They get each power's region count, the region names (no
@@ -1706,6 +1715,7 @@ const regionBordersOfThisMap = () => {
 
 export const buildWorldSummary = async (bundle, regionCatalog = null, {
   regionListsViaTools = false,
+  countsOnly = false,
   conversation = false,
   speakingAs = "",
   nationTags = null,
@@ -1724,13 +1734,18 @@ export const buildWorldSummary = async (bundle, regionCatalog = null, {
     if (!baked) return true;
     return canonicalOwnerName(baked, bakedAliases).toLowerCase() !== canonicalOwnerName(ownerCode, bakedAliases).toLowerCase();
   });
+  const leanSummary = regionListsViaTools && countsOnly;
+  const territoryCap = leanSummary ? LEAN_TERRITORY_CHANGES : 60;
   const territorySummary = territoryEntries.length === 0
     ? "No territorial changes from the base scenario are currently recorded."
-    : territoryEntries.slice(0, 60).map(([regionId, ownerCode]) => {
+    : territoryEntries.slice(0, territoryCap).map(([regionId, ownerCode]) => {
       const region = regionLookup.get(regionId);
       const bakedOwner = region?.country ? canonicalOwnerName(region.country, bakedAliases) : "";
       return `- ${region?.name || regionId}${bakedOwner ? ` (${bakedOwner})` : ""} -> ${ownerCode}`;
-    }).join("\n");
+    }).join("\n")
+      + (leanSummary && territoryEntries.length > territoryCap
+        ? `\n(+${territoryEntries.length - territoryCap} more; region_info and map_around say who holds a region now)`
+        : "");
   const polities = Object.values(world.polityOverrides);
 
   // The region vocabulary the jump prompt promises ("every ... region ... separated
@@ -1804,7 +1819,7 @@ export const buildWorldSummary = async (bundle, regionCatalog = null, {
     : buildRegionOwnershipText(regions, world.regionOwnershipOverrides, {
         focusCodes,
         polityNames,
-        ...(regionListsViaTools ? { focusTotalCap: 0, rosterCap: 120 } : {}),
+        ...(regionListsViaTools ? { focusTotalCap: 0, rosterCap: 120, ...(countsOnly ? { territories: false } : {}) } : {}),
       });
 
   // The wild land beside each power (regionVocab.js): the lists above name only
@@ -1896,6 +1911,11 @@ export const buildPromptContext = async (bundle, {
   // The task has the lookup functions: the prompt keeps the overview and the
   // functions carry the detail (region lists, older events, full chats).
   lookups = false,
+  // ...and Unlimited requests is on (requestBudget.js): the model may ask more
+  // rounds, so the overview is slimmer still. Four recent events instead of
+  // eight, region counts only, fewer territorial changes. The history document
+  // is never cut for it. Read only with `lookups`.
+  leanLookups = false,
   // The advisor or a leader in conversation (buildPromptVariables, main.jsx):
   // the world summary's map section is sized and worded for talk, not for a
   // jump's regionTransfers (buildWorldSummary).
@@ -1942,6 +1962,7 @@ export const buildPromptContext = async (bundle, {
   if (wants("worldSummary", "worldSummaryNoCity")) {
     worldSummary = await buildWorldSummary(bundle, regionCatalog, {
       regionListsViaTools: lookups,
+      countsOnly: Boolean(lookups && leanLookups),
       conversation,
       speakingAs: respondingPolityName,
       nationTags: mapSource?.nationTags ?? null,
@@ -2024,8 +2045,9 @@ export const buildPromptContext = async (bundle, {
     if (wants("recentEventsLong")) {
       const campaignRecentEvents = buildEventHistoryText(bundle.events, { currentDate: bundle.game?.gameDate,
         // With lookups, the last eight events in view and recent_events for
-        // the rest; a caller's own tighter cap still wins.
-        limit: lookups ? Math.min(longEventLimit, 8) : longEventLimit,
+        // the rest (four with Unlimited requests on); a caller's own tighter
+        // cap still wins.
+        limit: lookups ? Math.min(longEventLimit, leanLookups ? LEAN_RECENT_EVENTS : 8) : longEventLimit,
         maxChars: lookups && !longEventHistoryMaxChars ? 3000 : longEventHistoryMaxChars,
         world: bundle.world,
       });

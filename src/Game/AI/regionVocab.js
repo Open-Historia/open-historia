@@ -326,6 +326,8 @@ export const buildRegionOwnershipText = (regionCatalog, overrides, options = {})
   const rosterCap = Number.isFinite(options.rosterCap) ? options.rosterCap : 80;
   const polityNames = options.polityNames || {};
   const withIds = options.regionIds === true;
+  // `territories: false`: a power's count alone, without its territories.
+  const withTerritories = options.territories !== false;
   const focusIntro = options.focusIntro || FOCUS_INTRO;
   const rosterIntro = options.rosterIntro || ROSTER_INTRO;
 
@@ -349,7 +351,7 @@ export const buildRegionOwnershipText = (regionCatalog, overrides, options = {})
   };
   const regionWord = (n) => `${n} region${n === 1 ? "" : "s"}`;
   // "; territories: Greenland (18 regions), Faroe Islands (4 regions)", or "".
-  const territoriesOf = (group) => (group.territories.length
+  const territoriesOf = (group) => (withTerritories && group.territories.length
     ? `; territories: ${group.territories.map((territory) => `${territory.name} (${regionWord(territory.regions.length)})`).join(", ")}`
     : "");
 
