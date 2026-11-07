@@ -109,6 +109,7 @@ import {
   DIPLOMATIC_STATE_HEADING,
   decodeWorldStorylineUpdates,
   describeAntiStasisObjectiveRule,
+  directorRegionIds,
   findSkipStorylineMotionIssues,
   mergeSkipAttentionStorylines,
   motionRepairSkipReason,
@@ -322,6 +323,7 @@ import {
   filterToRenderedRegions,
   formatDateReadable,
   joinPolityNames,
+  promptRegionNamer,
   refreshPromptReference,
   resolveHelperValues,
 } from "./promptContext.js";
@@ -1382,11 +1384,13 @@ const groupInViewTest = (bundle, world, catalog, inView) => {
 };
 
 // Groups (runtime/groups.js) as the model reads them: each exact name, what it
-// is, and the regions it controls, by name with the id a groupOps entry copies.
-// Empty when the world has none, so a game without groups pays nothing.
+// is, and the regions it controls, each by its name (nameRefs.js regionNamer:
+// "region: X" where the name alone could be another region or a country),
+// which is what a groupOps entry writes. Empty when the world has none, so a
+// game without groups pays nothing.
 //
-// A release names the region ids it gives up, and lookups are off while Save AI
-// requests is on (the default), so the ids a release may name are shown here:
+// A release names the regions it gives up, and lookups are off while Save AI
+// requests is on (the default), so the regions a release may name are shown here:
 // GROUP_REGIONS_IN_PROMPT shared among the groups, never fewer than twelve each.
 // A group larger than its share ends "+N more" (list_regions with a group when
 // lookups are on).
@@ -1397,9 +1401,8 @@ const buildGroupsContext = async (worldLike, { regionCatalog = null, inView = nu
   const count = Object.keys(world.groups).length;
   if (!count) return "";
   const catalog = regionCatalog ?? await loadRegionCatalog().catch(() => []);
-  const names = new Map(catalog.map((region) => [region.id, region.name]));
   return describeGroupsForPrompt(world, {
-    regionName: (id) => names.get(id) || id,
+    regionName: await promptRegionNamer(world, catalog),
     maxRegions: Math.max(12, Math.floor(GROUP_REGIONS_IN_PROMPT / count)),
     ...(inView instanceof Set ? { inView: groupInViewTest(bundle, world, catalog, inView) } : {}),
   });
@@ -1411,8 +1414,7 @@ const buildPlayerGroupContext = async (worldLike, playerName, { regionCatalog = 
   if (!worldLike?.groups || !normalizeString(playerName)) return "";
   const world = normalizeWorldState(worldLike);
   const catalog = regionCatalog ?? await loadRegionCatalog().catch(() => []);
-  const names = new Map(catalog.map((region) => [region.id, region.name]));
-  return describePlayerGroupForPrompt(world, playerName, { regionName: (id) => names.get(id) || id });
+  return describePlayerGroupForPrompt(world, playerName, { regionName: await promptRegionNamer(world, catalog) });
 };
 
 const buildGameMasterStorylineContext = (worldLike) => {
@@ -5254,7 +5256,7 @@ const historyConsolidationVariables = async (bundle, events, chats, actions = []
       limit: actions.length || 1,
     }),
     chatsToConsolidate: buildDetailedChatHistoryText(chats, { limit: chats.length || 1, messageLimit: 100 }),
-    eventsToConsolidate: buildEventHistoryText(events, { limit: events.length || 1 }),
+    eventsToConsolidate: buildEventHistoryText(events, { limit: events.length || 1, regionName: await promptRegionNamer(bundle.world) }),
   })),
   historyDocumentContext: buildHistoryDocumentDirective(bundle.world, { span: yearSpanOf(events) }),
 });
@@ -17631,9 +17633,14 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
         game: { ...bundle.game, gameDate: state.segmentOrigin },
         world: ledgerWorld,
       };
+      // The regions it names, by name (a plain object: it goes to the worker).
+      const directorRegionNamer = await promptRegionNamer(ledgerWorld);
+      const directorRegionNames = Object.fromEntries(directorRegionIds(ledgerWorld)
+        .map((regionId) => [regionId, directorRegionNamer(regionId)])
+        .filter(([, name]) => name));
       const worldInitiative = await buildWorldInitiativeContextBackground(
         segmentBundle,
-        { targetDate: segmentTarget, playerFocus: focusContext.focus },
+        { targetDate: segmentTarget, playerFocus: focusContext.focus, regionNames: directorRegionNames },
         signal,
       );
       console.info(

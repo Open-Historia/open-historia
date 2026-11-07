@@ -14,7 +14,7 @@
 // caller builds (lookupContext), so it runs in node tests and in the harness.
 
 import { foldRegionKey, matchRegionName, stripRegionAffixes, editDistance } from "./regionMatch.js";
-import { readNameRef } from "./nameRefs.js";
+import { readNameRef, regionNamer } from "./nameRefs.js";
 import { baseCountryOf, buildAreaIndex, findArea, splitTerritories } from "./namedAreas.js";
 import { toCountryName } from "../../runtime/ownerNames.js";
 import { getPoliticalProfile } from "../../runtime/politicalActors.js";
@@ -580,8 +580,16 @@ export const buildLookupContext = ({ regions = [], world = {}, cities = [], even
   const eventList = (Array.isArray(events) ? events : Object.values(events ?? {}).flat())
     .filter((event) => event && typeof event === "object");
 
+  // A region an answer names from a record that keys it by id (an event's map
+  // changes, a project's effects): its name, "region: X" where that could be
+  // another region or a country (nameRefs.js). Made when first asked for.
+  let namer = null;
+  const regionRef = (record) => (namer ??= regionNamer(rows, {
+    countries: Object.entries(polities).flatMap(([token, entry]) => [token, entry?.name]),
+  }))(record?.regionId) || writtenRegion(record);
+
   return {
-    rows, byId, ownerRows, landless, resolveOwner, areaNamed, territoriesOf, neighboursOf, cityRows, regionOfCity, placeCity, citiesInRegion,
+    rows, byId, regionRef, ownerRows, landless, resolveOwner, areaNamed, territoriesOf, neighboursOf, cityRows, regionOfCity, placeCity, citiesInRegion,
     world, polities, claimants, sovereignty, events: eventList, chats: array(chats), units: array(units), player: clean(player),
     audience: normalizeAudience(audience),
     ...(groups ? {} : { groupsOff: true }),
@@ -796,12 +804,15 @@ const mentions = (record, name) => {
   return key && stringsIn(record).some((value) => foldRegionKey(value) === key);
 };
 
-const eventBrief = (event) => {
+// `regionRef(record)`: what the region a record keys by id is called
+// (buildLookupContext), never the id.
+const writtenRegion = (record) => clean(record?.regionName) || "an unnamed region";
+const eventBrief = (event, regionRef = writtenRegion) => {
   const impacts = event?.impacts ?? {};
   const moved = [
-    ...array(impacts.regionTransfers).map((t) => `${t.regionName || t.regionId} -> ${t.toCode}`),
-    ...array(impacts.regionControlOps).map((op) => `${op.op}: ${op.regionName || op.regionId}${op.toCode ? ` -> ${op.toCode}` : ""}`),
-    ...array(impacts.regionClaims).map((c) => `${c.drop ? "claim dropped" : "claim"}: ${c.regionName || c.regionId} by ${c.claimantCode}`),
+    ...array(impacts.regionTransfers).map((t) => `${regionRef(t)} -> ${t.toCode}`),
+    ...array(impacts.regionControlOps).map((op) => `${op.op}: ${regionRef(op)}${op.toCode ? ` -> ${op.toCode}` : ""}`),
+    ...array(impacts.regionClaims).map((c) => `${c.drop ? "claim dropped" : "claim"}: ${regionRef(c)} by ${c.claimantCode}`),
   ];
   return {
     id: clean(event.id),
@@ -838,11 +849,11 @@ const warBetween = (war, a, b) => {
   return (has(sideA, a) && has(sideB, b)) || (has(sideA, b) && has(sideB, a));
 };
 
-const projectBrief = (project) => {
+const projectBrief = (project, regionRef = writtenRegion) => {
   const effects = project?.onComplete && typeof project.onComplete === "object" ? project.onComplete : null;
   const mapEffects = effects ? [
-    ...array(effects.regionTransfers).map((t) => `transfer ${t.regionName || t.regionId} -> ${t.toCode}`),
-    ...array(effects.regionClaims).map((c) => `claim ${c.regionName || c.regionId} by ${c.claimantCode}`),
+    ...array(effects.regionTransfers).map((t) => `transfer ${regionRef(t)} -> ${t.toCode}`),
+    ...array(effects.regionClaims).map((c) => `claim ${regionRef(c)} by ${c.claimantCode}`),
     ...array(effects.polityChanges).map((p) => `polity ${p.code || p.name}`),
   ] : [];
   return {
@@ -1229,7 +1240,7 @@ export const executeLookup = (context, name, args = {}) => {
       const about = clean(a.about);
       const filtered = about ? context.events.filter((event) => mentions({ t: event.title, d: event.description, i: event.impacts }, about)
         || foldRegionKey(`${event.title} ${event.description}`).includes(foldRegionKey(about))) : context.events;
-      return { total: filtered.length, events: filtered.slice(-limit).map(eventBrief) };
+      return { total: filtered.length, events: filtered.slice(-limit).map((event) => eventBrief(event, context.regionRef)) };
     }
     case "war_ledger": {
       const world = context.world ?? {};
@@ -1322,7 +1333,7 @@ export const executeLookup = (context, name, args = {}) => {
         // all. A blank ownerCode is the player's (world-state.md).
         .map((project) => projectAsSeenBy(audience, project, context.player))
         .filter(Boolean);
-      return { ...(owner ? { owner } : {}), status, count: projects.length, projects: projects.slice(0, 60).map(projectBrief) };
+      return { ...(owner ? { owner } : {}), status, count: projects.length, projects: projects.slice(0, 60).map((project) => projectBrief(project, context.regionRef)) };
     }
     case "relations_between": {
       const first = context.resolveOwner(a.a);
