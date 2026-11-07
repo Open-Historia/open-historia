@@ -263,7 +263,8 @@ import { PLACEMENT_DIRECTIVE, describeApproximatePlacement, describeOtherKind, d
 import { loadWorldCities } from "./worldCities.js";
 import { FOOTPRINT_KM, obstaclesOf, spaceOut } from "../../runtime/featureSpacing.js";
 import { restorePointsWithin } from "../../runtime/restorePointBudget.js";
-import { LOOKUP_DIRECTIVE, buildLookupContext, executeLookup, lookupDirective, lookupToolsFor, placesNamedIn } from "./lookupTools.js";
+import { LOOKUP_DIRECTIVE, buildLookupContext, executeLookup, lookupDirective, lookupToolsFor, placesNamedIn, withSimilarEvents } from "./lookupTools.js";
+import { findRelatedForSkip, installRelatedEventsIndexer, similarEventsSearch } from "./relatedEventsSearch.js";
 import { FRONT_ORDER_FUNCTION, withFrontOrderFunction } from "./frontOrderFunction.js";
 import { carriedRoundCount, createLookupCarry } from "./toolTurns.js";
 import {
@@ -1825,11 +1826,13 @@ const activeLookupDirective = () => (unlimitedRequests()
 const buildTaskLookups = (bundle, { maxRounds, audience = SIMULATION_AUDIENCE, mapSource = null } = {}) => {
   if (!lookupFunctionsEnabled()) return null;
   const context = lazyLookupContext(bundle, { audience, mapSource });
-  return {
+  // similar_events beside them while Find related past events is on and its
+  // model has loaded (relatedEventsSearch.js); not for a Workshop scenario.
+  return withSimilarEvents({
     tools: lookupToolsFor({ groups: isActiveFeatureEnabled("groups") }),
     ...(Number.isInteger(maxRounds) ? { maxRounds } : {}),
     execute: async (name, args) => executeLookup(await context(), name, args),
-  };
+  }, mapSource ? null : similarEventsSearch(bundle, { campaignId: activeCampaignId() }));
 };
 
 // The map and the campaign indexed for answering questions (lookupTools.js
@@ -5631,6 +5634,8 @@ const leftCampaign = (campaign) => campaignChanged(campaign, activeCampaignId())
 const stillCampaign = (campaignId) => !campaignChanged(campaignId, activeCampaignId());
 // A held or parked turn keeps only its own campaign busy (simulationStatus.js).
 setCampaignResolver(activeCampaignId);
+// The related-events index fills while the game is idle (relatedEventsSearch.js).
+installRelatedEventsIndexer();
 
 // activeSimulations and the held turns (HELD_TURN) moved to
 // simulationStatus.js so the HUD can poll isSimulationBusy() without importing
@@ -19173,8 +19178,12 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
   if (dateStep >= 1 && parseIsoDate(originDate) && targetDate === originDate) {
     throw new Error("The requested jump exceeds the supported date range.");
   }
+  // The past events nearest to this turn, found on this device while the
+  // setting is on (relatedEventsSearch.js): a moment at most, never a request.
+  const relatedEvents = await findRelatedForSkip(bundle, { campaignId: activeCampaignId() });
   const variables = await buildTemplateVariables(bundle, {
     lookups: true,
+    relatedEvents,
     taskKey: mode === "auto" ? "autoJumpForward" : "jumpForward",
     consolidatedHistoryMaxChars: WORLD_SIMULATION_CONSOLIDATED_HISTORY_MAX_CHARS,
     consolidatedHistorySelection: "coverage",

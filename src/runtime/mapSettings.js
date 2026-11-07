@@ -75,6 +75,12 @@ export const MAP_SETTING_KEYS = {
     // provider handles tool calls badly, or who wants the single cheaper
     // request per task, turns them off from Settings → AI.
     lookupFunctions: "ai_lookup_functions",
+    // Find related past events on this device (AI/relatedEvents.js): a small
+    // model on the device finds the past events nearest to each skip's orders,
+    // wars and storylines, and the skip is shown them. OFF by default — read
+    // with getMapSetting — and on only once the player has said yes to the
+    // model's download. Settings → AI.
+    relatedEvents: "ai_related_events",
     // A skip's events on the Events panel as the model writes them
     // (AI/streamedEvents.js). ON by default; off leaves the skip behind the
     // Timeline panel's spinner.
@@ -194,6 +200,7 @@ const SETTING_LABELS = {
     [MAP_SETTING_KEYS.batchBackgroundTasks]: "Batch background AI tasks",
     [MAP_SETTING_KEYS.chunkLongJumps]: "Generate long time skips in segments",
     [MAP_SETTING_KEYS.lookupFunctions]: "AI lookup functions",
+    [MAP_SETTING_KEYS.relatedEvents]: "Find related past events on this device",
     [MAP_SETTING_KEYS.liveSkipEvents]: "Show time skip events as they are written",
     [MAP_SETTING_KEYS.stopOnPlayerFailures]: "Stop when my events fail",
     [MAP_SETTING_KEYS.discordPresence]: "Show what I am playing on Discord",
