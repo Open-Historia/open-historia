@@ -302,6 +302,7 @@ import { activeSpies, applySpyOps, espionageBrief, intelligenceOf, isIntelligenc
 import { assertPoliticalLandscapeConsistency, describeElectionsDue, ideologyListText, normalizePoliticalLandscape } from "../../runtime/politics.js";
 import { foldLandscapeIntoActor } from "../../runtime/politicalLandscapeFold.js";
 import { buildSpyOrdersDirective } from "./spyOrdersDirective.js";
+import { FRONT_ORDER_LINES_BLOCK } from "./frontPrompt.js";
 import { collectionOrders, covertOperationsBlock, untracedTargets } from "./covertOperationsDirective.js";
 import { AGENT_REPORT_EVERY_ROUNDS, agentsDueToReport, agentsReportingWithSkip } from "./agentReports.js";
 import { assignAgentReports, boardOpsOf, liftBoardOps, providerRefusedContract, withoutBoardOps } from "./foldedSkip.js";
@@ -434,6 +435,7 @@ import {
   bindAgreementUpdatesToEvents,
   bindRelationUpdatesToEvents,
   buildBoundedDiplomaticContext,
+  DIPLOMATIC_SLICE_RULES,
   decodeAgreementUpdates,
   decodeRelationUpdates,
   migrateLegacyDiplomaticState,
@@ -675,16 +677,32 @@ const relationStatusForScore = (value) => {
   return "rival";
 };
 
-const buildWarLedgerDirective = (variables) => {
+// How the war ledger is written: the same on every skip of a campaign, so a
+// skip states it once, in the part of its prompt that never changes
+// (buildJumpStaticRules), and its [Wars] block points there (`rulesAbove`).
+const WAR_LEDGER_RULES_HEADING = "[How Wars Are Recorded]";
+const warLedgerRules = (playerName) => `Only this ledger makes polities belligerents: tension or a mobilisation does not, and an alliance does only through the game, which itself enters here those bound to defend a country that is attacked (see ${PEACE_BLOCK_HEADING} below). A war real history holds begins here only when you open it, with a warUpdates record and the event that starts it. Every battle, offensive, invasion, bombardment, siege or front carries event.warId and event.combatants naming both sides. If you write fighting, open the war in the same answer: a declaration, an entry, an exit, a ceasefire, a resumption or a peace each needs a warUpdates record and an event carrying the same warId, or the engine strips the war from the fighting and records peace. Two sides genuinely trading blows are at war; if you cannot say who is fighting whom, it is unrest, a raid or a deployment, so write it as that. A polity at peace does not live under war conditions — rationing, war taxes, mobilisation — because others are fighting, unless the war reaches it through something concrete (lost imports, refugees, sanctions). Nobody may join a war on ${playerName}'s behalf; another power declaring war on ${playerName} is that power's decision, and yours to write.
+warUpdates is one string, one record per line, fields separated by ~ (never inside a field): warId~op~actorsCSV~opponentsCSV~eventNumbersCSV~note. op is start, join-a, join-b, leave, ceasefire, resume or end; for start the actors are side A and the opponents side B; for join and leave the actors are the polities joining or leaving, and for a join the opponents are the polities it fights (join-a joins SIDE A, against SIDE B); eventNumbersCSV is the number in this answer's events (1 for the first) of the event that makes the change, never a date or an id. A start's note may open with the war's name, as Title: <name>; then its cause. Give a war a stable id (war-france-germany-1914) and reuse it. An empty string when nothing changes.`;
+
+const buildWarLedgerDirective = (variables, { rulesAbove = false } = {}) => {
   const playerName = normalizeString(variables?.playerPolity) || "the player's polity";
   const canonicalWarContext = normalizeString(variables?.canonicalWarContext);
   return `[Wars]
 ${canonicalWarContext || "No wars are recorded."}
-Only this ledger makes polities belligerents: tension or a mobilisation does not, and an alliance does only through the game, which itself enters here those bound to defend a country that is attacked (see ${PEACE_BLOCK_HEADING} below). A war real history holds begins here only when you open it, with a warUpdates record and the event that starts it. Every battle, offensive, invasion, bombardment, siege or front carries event.warId and event.combatants naming both sides. If you write fighting, open the war in the same answer: a declaration, an entry, an exit, a ceasefire, a resumption or a peace each needs a warUpdates record and an event carrying the same warId, or the engine strips the war from the fighting and records peace. Two sides genuinely trading blows are at war; if you cannot say who is fighting whom, it is unrest, a raid or a deployment, so write it as that. A polity at peace does not live under war conditions — rationing, war taxes, mobilisation — because others are fighting, unless the war reaches it through something concrete (lost imports, refugees, sanctions). Nobody may join a war on ${playerName}'s behalf; another power declaring war on ${playerName} is that power's decision, and yours to write.
-warUpdates is one string, one record per line, fields separated by ~ (never inside a field): warId~op~actorsCSV~opponentsCSV~eventNumbersCSV~note. op is start, join-a, join-b, leave, ceasefire, resume or end; for start the actors are side A and the opponents side B; for join and leave the actors are the polities joining or leaving, and for a join the opponents are the polities it fights (join-a joins SIDE A, against SIDE B); eventNumbersCSV is the number in this answer's events (1 for the first) of the event that makes the change, never a date or an id. A start's note may open with the war's name, as Title: <name>; then its cause. Give a war a stable id (war-france-germany-1914) and reuse it. An empty string when nothing changes.`;
+${rulesAbove ? `A war is opened, joined, left, halted or ended as ${WAR_LEDGER_RULES_HEADING} above says.` : warLedgerRules(playerName)}`;
 };
 
-const buildDiplomaticLedgerDirective = (variables) => {
+// The same for relations, agreements and client states.
+const DIPLOMATIC_LEDGER_RULES_HEADING = "[How Relations and Agreements Are Recorded]";
+const diplomaticLedgerRules = (playerName) => `A relation is the lasting political climate between two polities — friendly, cordial, neutral, cautious, strained, hostile or rival. It is a strong prior for how they deal with each other, never a veto: a friendly government can refuse a dangerous demand and a hostile one can cooperate under necessity. Formal agreements, warmth and war are separate facts. Other powers make their own diplomacy with each other, without waiting for ${playerName}, and it goes on the timeline as events.
+relationUpdates is one string, one record per line: A~B~score~status~eventNumbersCSV~summary — the new absolute score from -100 to 100, status blank to derive it from the score — only when an event changes the climate, never because time passed. agreementUpdates is one string, one record per line: agreementId~op~type~partiesCSV~eventNumbersCSV~title~terms, where op is start, update, suspend, resume, end or expire, and type is alliance, mutual_defense, guarantee, non_aggression, friendship_consultation, trade_economic, military_cooperation, military_access, neutrality, peace_settlement or other; give it a stable id (franco-russian-alliance-1894) and reuse it; only start needs the type, parties and title. Every record needs an event that causes it, named by its number in this answer's events (1 for the first) in eventNumbersCSV: never a date or an id there.
+puppetUpdates is one string, one record per line: op~overlord~puppet~kind~loyalty~secrecy~eventNumbersCSV~note, for one polity directing another's will while it stays a separate country with its own land. op is install, reclassify (a new kind), loyalty (move the score), reveal (covert becomes open, for good), release, annex, revolt (thrown off) or suppress (a rising crushed; loyalty forced up, the overlord's reputation down). kind is protectorate (surrenders foreign policy), satellite (formal sovereignty, no real independence) or client (a bought or installed government) — which powers the overlord holds, not how tightly; loyalty is 0-100; secrecy is open or covert; only install needs kind, loyalty and secrecy. A polity has one overlord at most, and a puppet holds no puppets of its own. A puppet is a separate country with its own interests: it may refuse its overlord, loyalty says how likely that is, and a puppet whose loyalty has collapsed may rise (revolt) or be crushed (suppress) — unrest an overlord with an agent inside it or a strong service would see coming. The engine already charges an overlord's reputation for annexing its own puppet and a puppet's loyalty for refusing a demand in a chat; do not charge either again. A covert puppet acts as a fully independent country toward everyone outside the arrangement.
+Any event that makes one polity the puppet, vassal, protectorate, satellite, client state or tributary of another — by treaty, surrender terms, an installed government, a forced submission, or the player's own order succeeding — gets the matching install line in puppetUpdates, with that event's number; a polity founded in the same event as someone's puppet is installed there too. An event that frees, annexes or sees a puppet throw off its overlord gets a release, annex or revolt line the same way. These lines, like every relation, agreement and war record, are the answer's own, beside its events: never inside an event or its impacts. Without the line the story says it and the world never records it: the overlord has no puppet.
+A deal both sides accepted in a chat is an agreement from the moment it is made: an agreementUpdates start records it, naming by number the event that reports it, unless the ledger above already has it, with the terms written out in full — what each side does and by when. Chats fade from view after a while; the ledger does not, so a deal left out of it is forgotten.
+The terms of an active agreement are commitments. One that promises something still to happen (a hand-over or annexation, a withdrawal, a payment, a delivery, a vote, a meeting) happens when it falls due, in an event whose impacts carry the operations that make it real (an impacts.regionTransfers entry for land, an impacts.unitOps move for troops), or an event says why it did not and the agreement is suspended or ended with a record. Never let a due term pass in silence. Once every term is carried out, an update records it in the terms.
+Empty strings when nothing changes.`;
+
+const buildDiplomaticLedgerDirective = (variables, { rulesAbove = false } = {}) => {
   const playerName = normalizeString(variables?.playerPolity) || "the player's polity";
   const canonicalDiplomacy = normalizeString(variables?.canonicalDiplomaticContext);
   // The world director's context (jump tasks) already carries this slice, built
@@ -696,13 +714,7 @@ const buildDiplomaticLedgerDirective = (variables) => {
     : (canonicalDiplomacy || "No bilateral relations or formal agreements are recorded yet.");
   return `[Relations and Agreements]
 ${state}
-A relation is the lasting political climate between two polities — friendly, cordial, neutral, cautious, strained, hostile or rival. It is a strong prior for how they deal with each other, never a veto: a friendly government can refuse a dangerous demand and a hostile one can cooperate under necessity. Formal agreements, warmth and war are separate facts. Other powers make their own diplomacy with each other, without waiting for ${playerName}, and it goes on the timeline as events.
-relationUpdates is one string, one record per line: A~B~score~status~eventNumbersCSV~summary — the new absolute score from -100 to 100, status blank to derive it from the score — only when an event changes the climate, never because time passed. agreementUpdates is one string, one record per line: agreementId~op~type~partiesCSV~eventNumbersCSV~title~terms, where op is start, update, suspend, resume, end or expire, and type is alliance, mutual_defense, guarantee, non_aggression, friendship_consultation, trade_economic, military_cooperation, military_access, neutrality, peace_settlement or other; give it a stable id (franco-russian-alliance-1894) and reuse it; only start needs the type, parties and title. Every record needs an event that causes it, named by its number in this answer's events (1 for the first) in eventNumbersCSV: never a date or an id there.
-puppetUpdates is one string, one record per line: op~overlord~puppet~kind~loyalty~secrecy~eventNumbersCSV~note, for one polity directing another's will while it stays a separate country with its own land. op is install, reclassify (a new kind), loyalty (move the score), reveal (covert becomes open, for good), release, annex, revolt (thrown off) or suppress (a rising crushed; loyalty forced up, the overlord's reputation down). kind is protectorate (surrenders foreign policy), satellite (formal sovereignty, no real independence) or client (a bought or installed government) — which powers the overlord holds, not how tightly; loyalty is 0-100; secrecy is open or covert; only install needs kind, loyalty and secrecy. A polity has one overlord at most, and a puppet holds no puppets of its own. A puppet is a separate country with its own interests: it may refuse its overlord, loyalty says how likely that is, and a puppet whose loyalty has collapsed may rise (revolt) or be crushed (suppress) — unrest an overlord with an agent inside it or a strong service would see coming. The engine already charges an overlord's reputation for annexing its own puppet and a puppet's loyalty for refusing a demand in a chat; do not charge either again. A covert puppet acts as a fully independent country toward everyone outside the arrangement.
-Any event that makes one polity the puppet, vassal, protectorate, satellite, client state or tributary of another — by treaty, surrender terms, an installed government, a forced submission, or the player's own order succeeding — gets the matching install line in puppetUpdates, with that event's number; a polity founded in the same event as someone's puppet is installed there too. An event that frees, annexes or sees a puppet throw off its overlord gets a release, annex or revolt line the same way. These lines, like every relation, agreement and war record, are the answer's own, beside its events: never inside an event or its impacts. Without the line the story says it and the world never records it: the overlord has no puppet.
-A deal both sides accepted in a chat is an agreement from the moment it is made: an agreementUpdates start records it, naming by number the event that reports it, unless the ledger above already has it, with the terms written out in full — what each side does and by when. Chats fade from view after a while; the ledger does not, so a deal left out of it is forgotten.
-The terms of an active agreement are commitments. One that promises something still to happen (a hand-over or annexation, a withdrawal, a payment, a delivery, a vote, a meeting) happens when it falls due, in an event whose impacts carry the operations that make it real (an impacts.regionTransfers entry for land, an impacts.unitOps move for troops), or an event says why it did not and the agreement is suspended or ended with a record. Never let a due term pass in silence. Once every term is carried out, an update records it in the terms.
-Empty strings when nothing changes.`;
+${rulesAbove ? `Relations, agreements and client states are recorded as ${DIPLOMATIC_LEDGER_RULES_HEADING} above says.` : diplomaticLedgerRules(playerName)}`;
 };
 
 const IDLE_RELATION_DECISION_MODEL = `[Diplomatic Relation Decision Model]
@@ -2770,6 +2782,74 @@ const JUMP_LIVE_STATE_BANNER = [
   "============================================================",
 ].join("\n");
 
+// The one line that stands where the rules used to be, when they are above.
+const JUMP_RULES_ABOVE_POINTER = "How each change is recorded (the levers, what every event carries, the war and diplomatic records, front orders) is under HOW THE ANSWER IS RECORDED above. These are the records as they stand.";
+
+// [Units and Structures on the Map] and [Taking Ground]: always sent, whatever
+// the player's prompts say. Without the first the map stays empty while the
+// story raises armies and builds bases (a live game, 2026-09-27: thirteen
+// rounds of military and construction events carried not one unit or structure
+// change); it is the shortest form of the unit guidance the skip template used
+// to carry, not a copy of it. The second: "make sure the simulation ai is able
+// to say that a region is taken by an army which causes the nearest troops to
+// move accordingly so when that event happens, the region has been taken" (the
+// owner, 2026-10-28). The map follows: on a battlefield the taker's nearest
+// troops stand in it and the other side's fall back (fronts/engine.js
+// marchInto); off one, its nearest formation marches in (marchCapturersIn).
+const unitsOnTheMapBlock = (gameDate, era) => `[Units and Structures on the Map]
+When an event raises, moves, reinforces or wears down a force, that event carries the unitOps that show it. When an event builds or establishes something that stands in one place, it carries a markerOps build at a place the map knows, with its country.
+${describeTravelPace(gameDate, era)}`;
+const TAKING_GROUND_BLOCK = `[Taking Ground]
+An army may take a region in this period wherever what has led up to it makes that likely, or where history took it at this time and nothing in this game has turned that aside. Tell it in the event that takes it, and put the region in the taker's hands on that event: a regionControlOps control entry, basis occupation, the region by name. Move the formation that took it there in the same event when it has one on the map. A region is taken only where enough of the taker's troops stand near it, more for a larger region: where too few do, move them up first, in an earlier event, or the region stays where it was. From that event's date the map follows: the taker's nearest troops stand in the region, and the other side's fall back out of it.`;
+const whoSpiesOnThePlayerBlock = (spiedOn) => `[Who Spies on the Player]
+Write spiesOnPlayer: the polities, by exact name and comma-separated, that would really try to place an agent in ${spiedOn} this period. Choose them as the world stands: enemies and rivals, powers with a real stake in ${spiedOn}'s affairs, a patron keeping watch on a client. A polity with no reason to, no reach, or no intelligence service to speak of sends nobody. An empty string when none would.`;
+
+// ---- A time skip's standing rules ---------------------------------------------
+// Everything a skip is told about how its answer is recorded that no turn of a
+// campaign changes: the levers, what a folded skip's events carry, the war and
+// diplomatic ledgers' line formats, how the diplomatic slice is read, how a
+// front order is written, who spies on the player. It is rendered into the
+// template at ${JUMP_STATIC_RULES}, inside the part of the prompt that opens
+// every skip of the campaign identically (promptLayout.js), so a provider's
+// prompt cache reads it at a fraction of the price from the second skip on; the
+// live records below keep only the data, each with a pointer to its rules.
+// Built from what a campaign does not change (the player, the game's features,
+// the era of its date); the one skip that is not folded (foldedSkip.js) is
+// built without the consequences, and simply misses the cache.
+const buildJumpStaticRules = async (variables = {}) => {
+  const playerName = normalizeString(variables?.playerPolity) || "the player's polity";
+  let world = {};
+  let game = {};
+  try {
+    const [rawWorld, rawGame] = await Promise.all([readWorldState({ force: false }), readGameData()]);
+    world = normalizeWorldState(rawWorld);
+    game = rawGame || {};
+  } catch {
+    // The rules stand without the save; only the travel pace is the era's.
+  }
+  const espionage = isActiveFeatureEnabled("espionage");
+  const spiedOn = normalizeString(game?.country);
+  return [
+    [
+      "============================================================",
+      "HOW THE ANSWER IS RECORDED",
+      "============================================================",
+    ].join("\n"),
+    // Groups switched off for this game: their lever goes with their rule.
+    isActiveFeatureEnabled("groups") ? JUMP_LEVERS : withoutGroupOpsLines(JUMP_LEVERS),
+    // One request, so the events finish themselves.
+    variables?.foldedSkip ? FOLDED_SKIP_CONSEQUENCES : "",
+    unitsOnTheMapBlock(game?.gameDate, eraSettingOf(world)),
+    TAKING_GROUND_BLOCK,
+    `${WAR_LEDGER_RULES_HEADING}\n${warLedgerRules(playerName)}`,
+    `${DIPLOMATIC_LEDGER_RULES_HEADING}\n${diplomaticLedgerRules(playerName)}`,
+    `[Reading the Diplomatic Ledger]\n${DIPLOMATIC_SLICE_RULES}`,
+    frontsOn() ? FRONT_ORDER_LINES_BLOCK : "",
+    espionage && spiedOn ? whoSpiesOnThePlayerBlock(spiedOn) : "",
+    espionage ? buildSpyOrdersDirective(playerName) : "",
+  ].filter(Boolean).join("\n\n");
+};
+
 // Groups switched off for this game (server/gameFeatures.js): a tool shown to
 // the model without groupOps (gameplaySchemas.js withoutGroupOps), and the Game
 // Master's contract without the lines that teach them, built once.
@@ -2819,7 +2899,9 @@ const buildJumpGroupsBlock = (groupsContext) => [
   normalizeString(groupsContext) || "No groups exist yet.",
 ].join("\n");
 
-const buildJumpLiveState = async ({ variables = {}, lookups = null, reminders = true, stats = {} } = {}) => {
+// `rulesAbove`: the template carries ${JUMP_STATIC_RULES} (buildJumpStaticRules),
+// so the rules it states are not repeated here, only pointed at.
+const buildJumpLiveState = async ({ variables = {}, lookups = null, reminders = true, stats = {}, rulesAbove = false } = {}) => {
   const playerName = normalizeString(variables?.playerPolity) || "the player's polity";
   let world = {};
   let game = {};
@@ -2830,7 +2912,7 @@ const buildJumpLiveState = async ({ variables = {}, lookups = null, reminders = 
   } catch {
     // Without the save the records the variables carry still go out.
   }
-  const blocks = [JUMP_LIVE_STATE_BANNER];
+  const blocks = [rulesAbove ? `${JUMP_LIVE_STATE_BANNER}\n${JUMP_RULES_ABOVE_POINTER}` : JUMP_LIVE_STATE_BANNER];
 
   // How this world relates to real history (futureHistoryBoundary.js).
   try {
@@ -2849,10 +2931,15 @@ const buildJumpLiveState = async ({ variables = {}, lookups = null, reminders = 
 
   // What is in motion: storylines, pressures, economies and the diplomatic
   // slice (nativeWorldDirector.js), built per segment.
-  const director = normalizeString(variables.worldInitiativeContext);
+  // How the slice of the diplomatic ledger is read is stated once, above.
+  const director = rulesAbove
+    ? normalizeString(variables.worldInitiativeContext).replace(`\n${DIPLOMATIC_SLICE_RULES}`, "")
+    : normalizeString(variables.worldInitiativeContext);
   if (director) blocks.push(director);
-  blocks.push(buildWarLedgerDirective(variables));
-  blocks.push(buildDiplomaticLedgerDirective(variables));
+  blocks.push(buildWarLedgerDirective(variables, { rulesAbove }));
+  blocks.push(buildDiplomaticLedgerDirective(rulesAbove
+    ? { ...variables, canonicalDiplomaticContext: normalizeString(variables.canonicalDiplomaticContext).replace(`\n${DIPLOMATIC_SLICE_RULES}`, "") }
+    : variables, { rulesAbove }));
 
   // What earlier chats agreed, promised, threatened or declared.
   const continuity = normalizeString(variables.diplomaticContinuity);
@@ -2906,21 +2993,12 @@ ${pending}`);
   const unseenWars = describeWarsWithoutFormations(world);
   if (unseenWars) blocks.push(unseenWars);
 
-  // Always sent, whatever the player's prompts say: without it the map stays
-  // empty while the story raises armies and builds bases. Seen in a live game
-  // (2026-09-27): thirteen rounds of military and construction events carried
-  // not one unit or structure change. The shortest form of the unit guidance
-  // the skip template used to carry, not a copy of it.
-  blocks.push(`[Units and Structures on the Map]
-When an event raises, moves, reinforces or wears down a force, that event carries the unitOps that show it. When an event builds or establishes something that stands in one place, it carries a markerOps build at a place the map knows, with its country.
-${describeTravelPace(game?.gameDate, eraSettingOf(world))}`);
-
-  // "make sure the simulation ai is able to say that a region is taken by an army which causes the nearest troops to
-  // move accordingly so when that event happens, the region has been taken" (the owner, 2026-10-28). The map follows:
-  // on a battlefield the taker's nearest troops stand in it and the other side's fall back (fronts/engine.js
-  // marchInto); off one, its nearest formation marches in (marchCapturersIn).
-  blocks.push(`[Taking Ground]
-An army may take a region in this period wherever what has led up to it makes that likely, or where history took it at this time and nothing in this game has turned that aside. Tell it in the event that takes it, and put the region in the taker's hands on that event: a regionControlOps control entry, basis occupation, the region by name. Move the formation that took it there in the same event when it has one on the map. A region is taken only where enough of the taker's troops stand near it, more for a larger region: where too few do, move them up first, in an earlier event, or the region stays where it was. From that event's date the map follows: the taker's nearest troops stand in the region, and the other side's fall back out of it.`);
+  // Units on the map and taking ground: above, with the rules, where the
+  // template has them (buildJumpStaticRules); here otherwise.
+  if (!rulesAbove) {
+    blocks.push(unitsOnTheMapBlock(game?.gameDate, eraSettingOf(world)));
+    blocks.push(TAKING_GROUND_BLOCK);
+  }
 
   // A folded skip keeps the board itself (projectsDirective.js); otherwise the
   // board is context, and its own pass moves it.
@@ -2951,10 +3029,7 @@ ${brief}`);
     // seems like spys are coming from random countries, instead make it so the ai makes them come from sources that
     // make sense" (the owner, 2026-10-28). The game rolls only for the polities named here (spycraft.js).
     const spiedOn = normalizeString(game?.country);
-    if (spiedOn) {
-      blocks.push(`[Who Spies on the Player]
-Write spiesOnPlayer: the polities, by exact name and comma-separated, that would really try to place an agent in ${spiedOn} this period. Choose them as the world stands: enemies and rivals, powers with a real stake in ${spiedOn}'s affairs, a patron keeping watch on a client. A polity with no reason to, no reach, or no intelligence service to speak of sends nobody. An empty string when none would.`);
-    }
+    if (spiedOn && !rulesAbove) blocks.push(whoSpiesOnThePlayerBlock(spiedOn));
   }
 
   // The Political World's elections that fall due (runtime/politics.js describeElectionsDue): the Politics tab's
@@ -2976,12 +3051,13 @@ Write spiesOnPlayer: the polities, by exact name and comma-separated, that would
     if (backends) blocks.push(backends);
   } else if (stats.customStatIndices) blocks.push(scenarioStatIndicesDirective(stats.statIndexRows));
 
-  // Groups switched off for this game: their lever goes with their rule.
-  blocks.push(isActiveFeatureEnabled("groups") ? JUMP_LEVERS : withoutGroupOpsLines(JUMP_LEVERS));
+  // Groups switched off for this game: their lever goes with their rule. Above,
+  // with the rules, where the template has them (buildJumpStaticRules).
+  if (!rulesAbove) blocks.push(isActiveFeatureEnabled("groups") ? JUMP_LEVERS : withoutGroupOpsLines(JUMP_LEVERS));
   // One request, so the events finish themselves (FOLDED_SKIP_CONSEQUENCES), and
   // keep to the map's own rules for where a unit may go and a thing be built,
   // which only the directors were told.
-  if (foldedSkip) blocks.push(FOLDED_SKIP_CONSEQUENCES);
+  if (foldedSkip && !rulesAbove) blocks.push(FOLDED_SKIP_CONSEQUENCES);
   const regionTypes = foldedSkip ? regionTypesBlock(variables.foldedRegionTypeRules) : "";
   if (regionTypes) blocks.push(regionTypes);
   // The battlefields and the orders a skip gives them (frontApply.js), after
@@ -2989,7 +3065,7 @@ Write spiesOnPlayer: the polities, by exact name and comma-separated, that would
   // them. "" with fronts off. Where the period was fought before this was
   // asked for (simulateTimelineJump), they are told as it leaves them, with
   // what happened on them by date.
-  const fronts = frontsLiveBlock(world, game, variables.frontsForecast ?? null);
+  const fronts = frontsLiveBlock(world, game, variables.frontsForecast ?? null, { orderLines: !rulesAbove });
   if (fronts) blocks.push(fronts);
   // What its wars are fought without (the Wars feature): "" when the scenario has air units and navies.
   const warParts = warPartsOffBlock();
@@ -3004,7 +3080,7 @@ Write spiesOnPlayer: the polities, by exact name and comma-separated, that would
   // What agents have carried off of the players' planned movements there.
   const stolenPlans = await frontPlansBlock(world, game);
   if (stolenPlans) blocks.push(stolenPlans);
-  if (isActiveFeatureEnabled("espionage")) blocks.push(buildSpyOrdersDirective(playerName));
+  if (isActiveFeatureEnabled("espionage") && !rulesAbove) blocks.push(buildSpyOrdersDirective(playerName));
   // And the agents whose reports are due ride on it (prepareFoldedSkip).
   const agentReports = foldedSkip ? normalizeString(variables.foldedAgentReports) : "";
   if (agentReports) blocks.push(agentReports);
@@ -3085,13 +3161,18 @@ const buildTaskSystemPrompt = async (taskKey, { variables, lookups = null, remin
   // A time skip's live records go INTO its template, at ${JUMP_LIVE_STATE}.
   const jumpTask = JUMP_TASK_KEYS.has(taskKey);
   if (jumpTask) {
+    // The rules no turn changes go into the static part of the template, where
+    // it has a place for them (buildJumpStaticRules).
+    const rulesAbove = String(promptTemplate ?? "").includes("${JUMP_STATIC_RULES}");
     variables = {
       ...variables,
+      jumpStaticRules: rulesAbove ? await buildJumpStaticRules(variables) : "",
       jumpLiveState: await buildJumpLiveState({
         variables,
         lookups,
         reminders,
         stats: { customFullStatSheet, statSheetDefinition, customStatIndices, statIndexRows },
+        rulesAbove,
       }),
     };
   }
@@ -3114,6 +3195,9 @@ const buildTaskSystemPrompt = async (taskKey, { variables, lookups = null, remin
   });
   let systemPrompt = rendered.text;
   const staticPromptPrefix = rendered.text.slice(0, rendered.staticPrefixEnd);
+  // The part of that prefix another task opens with too (the time skip and the
+  // auto-jump: promptLayout.js CACHE_BREAK_KEY), or "" where there is none.
+  const sharedPromptPrefix = rendered.sharedPrefixEnd == null ? "" : rendered.text.slice(0, rendered.sharedPrefixEnd);
 
   // The chosen difficulty decides how things go for the player
   // (runtime/difficulty.js). Its priority line opens EVERY task's system prompt:
@@ -3582,7 +3666,7 @@ This live instruction supersedes older frozen country-stat prompts and all earli
   // The scenario's stats contract, loaded above for the prompt; runJsonTask
   // picks the tool and checks the answer by it.
   const statContract = { statSheetDefinition, customFullStatSheet, customStatRows, customStatKeys, statIndexRows, statIndexKeys, customStatIndices };
-  return { prompts, promptTemplate, staticPromptPrefix, systemPrompt, statContract };
+  return { prompts, promptTemplate, staticPromptPrefix, sharedPromptPrefix, systemPrompt, statContract };
 };
 
 // Who is shown the reminders. Left out: the tasks that only reshape text
@@ -3706,7 +3790,7 @@ const runJsonTask = async (taskKey, {
   // run in the Workshop (generateScenarioPrehistory).
   promptPack = null,
 }) => {
-  const { prompts, promptTemplate, staticPromptPrefix, systemPrompt: baseSystemPrompt, statContract } = await buildTaskSystemPrompt(taskKey, { variables, lookups, promptPack });
+  const { prompts, promptTemplate, staticPromptPrefix, sharedPromptPrefix, systemPrompt: baseSystemPrompt, statContract } = await buildTaskSystemPrompt(taskKey, { variables, lookups, promptPack });
   const systemPrompt = systemPromptSuffix ? `${baseSystemPrompt}\n\n${systemPromptSuffix}` : baseSystemPrompt;
   const checkToolPayload = (candidate) => (customToolPayload && typeof validateToolPayload === "function"
     ? validateToolPayload(candidate)
@@ -3725,6 +3809,9 @@ const runJsonTask = async (taskKey, {
         customId,
         history: [{ role: "user", parts: [{ text: userMessage }] }],
         systemPrompt,
+        // A batched request is billed at half price, and its cacheable prefix
+        // read from the cache on top of that (main.jsx submitAIBatch).
+        staticPrefixEnd: staticPrefixEndOf(systemPrompt, staticPromptPrefix),
         taskKey,
         tool: batchTool,
       });
@@ -3775,7 +3862,10 @@ const runJsonTask = async (taskKey, {
   // And the social posts after all of it, or none where the game has no Rostra
   // (gameplaySchemas.js withSocialPosts).
   const taskTool = JUMP_TASK_KEYS.has(taskKey)
-    ? withSocialPosts(advisedTool, isActiveFeatureEnabled("socialMedia"), { polls: Number(variables?.rostraOpenPolls) > 0 })
+    // Its poll answers whether or not a poll is open, so the function stays the
+    // same from turn to turn (a provider caches it with the prompt); answers to
+    // polls that are not open are dropped (socialFeed.js readSkipPollResults).
+    ? withSocialPosts(advisedTool, isActiveFeatureEnabled("socialMedia"), { polls: true })
     : advisedTool;
   // A first reading's sheet can carry the service's rating, in the same request
   // (generateCountryStatSheet rateIntelligence, gameplaySchemas.js
@@ -3991,6 +4081,12 @@ const runJsonTask = async (taskKey, {
           // cache_control block; OpenAI and Gemini cache identical prefixes on
           // their own, so the layout alone helps them.
           staticPrefixEnd: staticPrefixEndOf(systemPrompt, staticPromptPrefix),
+          // Where the part of it another task shares ends (the time skip and the
+          // auto-jump), so Anthropic can pin that part on its own too.
+          sharedPrefixEnd: staticPrefixEndOf(systemPrompt, sharedPromptPrefix),
+          // The provider's own name for the prefix (OpenAI prompt_cache_key):
+          // one per campaign and kind of request, the skip's two modes as one.
+          promptCacheKey: promptCacheKeyFor(taskKey),
           __debug: { taskKey, attempt: outputAttempt, maxAttempts: 2, simulatedDays: computeSimulatedDays(variables) },
           __debugSink: attemptSink,
           ...(requestKind ? { requestKind } : {}),
@@ -5420,6 +5516,18 @@ const activeCampaignId = () => {
   } catch {
     return "";
   }
+};
+
+// The name a provider is given for a request's cacheable prefix (OpenAI's
+// prompt_cache_key): the requests that open alike share one, so they are
+// routed to the same cache. The campaign, hashed (nothing of the save leaves
+// in it), and the kind of request; the time skip and the auto-jump open with
+// the same text (defaultPrompts.json ${CACHE_BREAK}), so they share one too.
+const promptCacheKeyFor = (taskKey) => {
+  const campaign = activeCampaignId();
+  if (!campaign) return "";
+  const kind = JUMP_TASK_KEYS.has(taskKey) ? "skip" : normalizeString(taskKey) || "task";
+  return `oh-${placementHash(campaign).toString(36)}-${kind}`.slice(0, 64);
 };
 
 // The same check for work nobody is waiting on — the idle pulse, spy reports,
@@ -17501,7 +17609,13 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
           statuses.push(Number(status));
           spend.onRequest?.(status);
         },
-        ...(folded ? { toolTransform: (tool) => foldJumpTool(tool, { board: Boolean(state.foldedPrep?.board), agentReports: agentJobs.length > 0, history: Boolean(historyJob) }) } : {}),
+        // The same contract on every folded skip of a game, whether or not this one
+        // has a board to keep, agents due or a history fold: a provider caches the
+        // functions with the prompt, and a function that changes from turn to
+        // turn throws the cached prompt away with it. A rider with no job in the
+        // prompt is left empty, and its answer is read only where there is one
+        // (the agents' and the history's below; foldedTurnReview for the board).
+        ...(folded ? { toolTransform: (tool) => foldJumpTool(tool, { board: true, agentReports: isActiveFeatureEnabled("espionage"), history: true }) } : {}),
         // Only a single-call jump falls back on its own. A failing SEGMENT throws
         // instead, so the catch below can hold the turn and hand the player the
         // choice rather than quietly deciding for them.
@@ -17775,7 +17889,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
       // The agents' reports leave the payload here (foldedTurnReview files
       // them); nothing between this and the write reads the field.
       if (payload && typeof payload === "object" && AGENT_REPORTS_FIELD in payload) {
-        if (state.folded && segmentGeneration?.source !== "fallback") state.foldedAgentAnswer = payload[AGENT_REPORTS_FIELD];
+        if (state.folded && agentJobs.length && segmentGeneration?.source !== "fallback") state.foldedAgentAnswer = payload[AGENT_REPORTS_FIELD];
         delete payload[AGENT_REPORTS_FIELD];
       }
       // And the players' advice (seatAdvice.js): the last segment's, kept on the

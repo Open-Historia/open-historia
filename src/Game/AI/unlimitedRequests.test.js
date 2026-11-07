@@ -228,7 +228,8 @@ test("main.jsx pins the tail and the conversation on every round after a lookup,
   const calls = main.split("const followUp = lookupsAllowed || chatTools.length > 0 || lookupRoundCount(history) > 0;").length - 1;
   assert.equal(calls, 2, "both Anthropic paths");
   assert.equal(main.split("withCachedHistory(toAnthropicMessages(chatToolsRefused ? flattenLookupRounds(history) : history), { followUp })").length - 1, 2);
-  assert.equal(main.split("staticPrefixEnd, { followUp }),").length - 1, 2);
+  // (With the shared prefix's boundary beside it: promptCache.test.js.)
+  assert.equal((main.match(/buildAnthropicSystemContent\((?:system|requestSystem)Prompt, staticPrefixEnd, \{\s*followUp,/g) || []).length, 2);
   assert.equal(main.includes("{ followUp: lookupsAllowed || chatTools.length > 0 }"), false);
 });
 

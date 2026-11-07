@@ -223,7 +223,9 @@ test("every skip is folded, with Save AI requests on or off, decided once", () =
   assert.match(body, /if \(state\.folded === undefined\) state\.folded = !foldedSkipRefused;/);
   assert.equal(/state\.requests\?\.saving/.test(body), false, "whether requests are being saved no longer decides what a skip asks");
   assert.match(body, /if \(state\.folded && !state\.foldedPrep\) state\.foldedPrep = await prepareFoldedSkip\(/);
-  assert.match(body, /toolTransform: \(tool\) => foldJumpTool\(tool, \{ board: Boolean\(state\.foldedPrep\?\.board\), agentReports: agentJobs\.length > 0, history: Boolean\(historyJob\) \}\)/);
+  // The same contract on every folded skip of a game (a provider caches the function with the prompt).
+  assert.match(body, /toolTransform: \(tool\) => foldJumpTool\(tool, \{ board: true, agentReports: isActiveFeatureEnabled\("espionage"\), history: true \}\)/);
+  assert.match(body, /if \(state\.folded && agentJobs\.length && segmentGeneration\?\.source !== "fallback"\) state\.foldedAgentAnswer = payload\[AGENT_REPORTS_FIELD\];/, "reports are read only where agents were due");
   assert.match(body, /const agentJobs = state\.folded && isFinalSegment \?/, "the agents report once, with the last segment");
   assert.match(body, /const historyJob = state\.folded && isFinalSegment \? buildSkipHistoryJob\(state\.foldedPrep\?\.history\?\.brief\) : "";/, "and so does the history fold");
   // One request in every mode: a flawed answer is cut down, never sent back.
@@ -366,6 +368,7 @@ test("a folded skip is told the map's own rules for moving and placing, as the d
   const live = functionBody("buildJumpLiveState");
   assert.match(live, /const regionTypes = foldedSkip \? regionTypesBlock\(variables\.foldedRegionTypeRules\) : "";\s*\n\s*if \(regionTypes\) blocks\.push\(regionTypes\);/);
   assert.ok(live.indexOf("blocks.push(FOLDED_SKIP_CONSEQUENCES)") < live.indexOf("regionTypesBlock(variables.foldedRegionTypeRules)"), "after the rule that the events place things themselves");
+  assert.ok(functionBody("buildJumpStaticRules").includes("variables?.foldedSkip ? FOLDED_SKIP_CONSEQUENCES"), "or above, with the rules");
   // One wording for both readers.
   const block = functionBody("regionTypesBlock");
   assert.match(block, /\[Region types\]\\nThe scenario's author gave these kinds of region rules for moving units and placing things\. Keep every move, new unit and structure to them:/);
@@ -376,7 +379,9 @@ test("a folded skip is told the map's own rules for moving and placing, as the d
 test("the folded rules reach the prompt only for a folded skip", () => {
   const body = functionBody("buildJumpLiveState");
   assert.match(body, /const foldedSkip = Boolean\(variables\.foldedSkip\);/);
-  assert.match(body, /if \(foldedSkip\) blocks\.push\(FOLDED_SKIP_CONSEQUENCES\);/);
+  assert.match(body, /if \(foldedSkip && !rulesAbove\) blocks\.push\(FOLDED_SKIP_CONSEQUENCES\);/);
+  // Where the template has a place for the standing rules, they are stated there instead, folded or not.
+  assert.match(functionBody("buildJumpStaticRules"), /variables\?\.foldedSkip \? FOLDED_SKIP_CONSEQUENCES : "",/);
   assert.match(body, /folded: foldedSkip,/);
   assert.match(body, /const agentReports = foldedSkip \? normalizeString\(variables\.foldedAgentReports\) : "";/);
   const rules = gameplaySource.slice(gameplaySource.indexOf("const FOLDED_SKIP_CONSEQUENCES = ["), gameplaySource.indexOf("].join(\"\\n\");", gameplaySource.indexOf("const FOLDED_SKIP_CONSEQUENCES = [")));

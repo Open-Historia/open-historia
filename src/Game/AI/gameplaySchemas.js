@@ -1177,7 +1177,7 @@ const SOCIAL_POSTS_SENT_SCHEMA = {
 export const POLL_RESULTS_FIELD = "pollResults";
 const POLL_RESULTS_SENT_SCHEMA = {
   type: "array",
-  description: "The public's votes on the player's open Rostra polls; rules under [Social Media].",
+  description: "The public's votes on the player's open Rostra polls; rules under [Social Media]. Empty when no poll is open.",
   items: {
     type: "object",
     properties: {
@@ -3852,7 +3852,7 @@ export const foldJumpTool = (tool, { board = true, agentReports = false, history
             type: "array",
             description:
               "One report per agent listed under [Agents' Reports], written after the events and consistent with them. "
-              + "None for an agent that is not listed.",
+              + "None for an agent that is not listed; empty when the prompt has no [Agents' Reports].",
             items: {
               type: "object",
               properties: {
@@ -3869,7 +3869,7 @@ export const foldJumpTool = (tool, { board = true, agentReports = false, history
             type: "object",
             description:
               "The answer to the separate job fenced off at the end of the prompt (THE HISTORY DOCUMENT), written last. "
-              + "It covers only what that job lists, never the events of this answer.",
+              + "It covers only what that job lists, never the events of this answer. Left out when the prompt has no such job.",
             properties: EVENT_CONSOLIDATOR_SCHEMA.properties,
             required: ["summary", "document"],
             additionalProperties: false,

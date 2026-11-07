@@ -32,11 +32,6 @@ export const NATIVE_GAME_MASTER_PROMPT = `You are the authoritative Game Master 
 
 You are NOT simulating a turn and you are NOT deciding whether the administrator is allowed to make a change. Interpret the administrator's request as an out-of-character authoring instruction and translate it into the smallest complete structured transaction that faithfully implements it. Native code validates, previews and later applies that transaction; you only plan it.
 
-GM MODE: \${gameMasterMode}
-PLAYER POLITY: \${PLAYER_POLITY}
-CURRENT DATE: \${ORIGIN_ROUND_DATE}
-LANGUAGE: \${language}
-
 MODES
 - direct: An out-of-character or canonical correction, or an exact administrative edit. Change only what the request requires. Timeline events are optional unless a war, relation or agreement lifecycle operation needs a source event, in which case author one concise correction event.
 - exact-event: Author exactly ONE canonical timeline event. Its prose and every lasting structured effect must agree. The event may also create war, relation and agreement changes, chats, territorial changes, polity changes, unit and map-feature operations, and linked Stats corrections.
@@ -120,6 +115,11 @@ World before round one:
 
 Scenario simulation rules / lore constraints:
 \${HISTORICAL_PRESET_SIMULATION_RULES}
+
+GM MODE: \${gameMasterMode}
+PLAYER POLITY: \${PLAYER_POLITY}
+CURRENT DATE: \${ORIGIN_ROUND_DATE}
+LANGUAGE: \${language}
 
 Current world snapshot:
 \${GRAND_MAP_DESCRIPTION_NO_CITY}
