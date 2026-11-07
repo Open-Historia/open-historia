@@ -27,7 +27,7 @@ New to the codebase? Read **[Architecture Overview](architecture.md)** first —
 - [Prompt-Making Guide](ai-prompts.md) — The reference for authoring and editing AI prompts: every variable, all tasks, end-to-end assembly, and the override/frozen-prompt model.
 - [AI Return Schemas & Validation](ai-schemas.md) — AI JSON return schemas, the two-layer validator, and the `runJsonTask` strict/salvage retry discipline.
 - [Prompt Budget](prompt-budget.md) — What a time skip sends, part by part, and how much a provider can cache: `scripts/prompt-size.mjs`, and the sizes before and after each change of the prompt compression (Phases 0 to 2).
-- [Prompt Compression: the Quality A/B](prompt-compression-ab.md) — Whether the smaller skips read any worse: five saves through Gemini, code checks, a retention probe and a judge; the two open findings (the spotlight, the empty history tiers).
+- [Prompt Compression: the Quality A/B](prompt-compression-ab.md) — Whether the smaller skips read any worse: five saves through Gemini, code checks, a retention probe and a judge; round 2 measures the fixes (no spotlight, relevant countries in view, places, history tiers, the one-line list).
 
 ### Editor
 - [Map Editor](map-editor.md) — The OpenLayers map editor: tools, region/owner/flag/tag editing, tier-1/tier-2 game-seed export, and how edits reach the game.

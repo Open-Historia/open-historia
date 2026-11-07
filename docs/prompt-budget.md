@@ -306,12 +306,58 @@ five saves, gemini-3.5-flash-lite). What it was asked to look at, change by chan
   skip, once the model has loaded (opt-in then, built in and always on since
   2026-11-07); the runs above
   are without it.
-- **Two findings of [the quality A/B](prompt-compression-ab.md) are open**, and
-  the code is unchanged for them: the spotlight sentence acts as a quota and
-  fills about a quarter of a skip with events for random small powers; and the
-  skip's `history.years`, `canon` and `eras` are declared as arrays of objects
-  with no properties, so Gemini returns them empty and a fold keeps only its
-  document. Both are in [ai-prompts.md §6a and §7.6](ai-prompts.md#6a-the-time-skips-prompt-since-2026-09-26).
+- **The quality A/B's findings are fixed**: see [the fixes of 2026-11-07](#the-quality-ab-fixes-2026-11-07) below and
+  [round 2 of the A/B](prompt-compression-ab.md#round-2-the-fixes).
+
+## The quality A/B fixes (2026-11-07)
+
+[The quality A/B](prompt-compression-ab.md) found five things; each is a commit
+on beta:
+
+| Commit | Fix |
+|---|---|
+| `dec54c13` | No spotlight. Idle diplomacy's relevant countries (`rankRelevantPolities`, twenty) are in view, scored as neighbours. |
+| `5572ef54` | Places: the gazetteer ranks a region by the country it lies in on the base map; the places rule says where region names come from and whose country a place is; [City Coordinates] says what it is for; the region names fill their budget (480) with the next powers by rank after the powers in view. |
+| `73006564` | A skip with no fold due is told to leave `history` out (one line, in the live part). |
+| `ebf9318e` | The fold's `years`, `canon` and `eras` name their fields (+443 characters of schema as Gemini gets it). |
+| `094dc518` | Each power in the one-line list carries its leader, wars, alliances, agreements, latest peace and who holds its land; a line says who holds a region the description never names; overrides for regions the map lacks are no longer printed as ids. |
+
+Measured with `scripts/prompt-size.mjs` on the same seven requests, beta
+`b48491a2` (before) against the fixes (after):
+
+| Save | Run | System prompt | Cacheable prefix (share) | User msg | Schema (Gemini) | Whole request | Not cacheable |
+|---|---|---:|---:|---:|---:|---:|---:|
+| Modern Day 2026 (copy), Italy, r130 | before | 223.9k | 95.1k (42%) | 12.2k | 32.1k | 269.5k | 140.9k |
+| | after | 226.7k (+1.3%) | 95.5k (42%) | 12.2k | 32.5k | 272.8k (+1.2%) | 143.4k (+1.8%) |
+| Modern Day (built-in), Brazil, r67 | before | 170.4k | 74.3k (44%) | 3441 | 29.6k | 205.0k | 99.6k |
+| | after | 170.5k (+0.1%) | 74.6k (44%) | 3441 | 30.1k | 205.5k (+0.2%) | 99.3k (-0.3%) |
+| New Dawn, Germany, r30 | before | 167.0k | 103.0k (62%) | 5152 | 29.6k | 204.8k | 69.2k |
+| | after | 168.8k (+1.1%) | 103.3k (61%) | 5152 | 30.1k | 207.0k (+1.1%) | 70.6k (+2.0%) |
+| New Dawn, Germany, r30 — auto-jump | before | 168.7k | 104.6k (62%) | 5232 | 29.6k | 206.6k | 69.3k |
+| | after | 170.4k (+1.0%) | 105.0k (62%) | 5232 | 30.1k | 208.8k (+1.1%) | 70.7k (+2.0%) |
+| Battle of Europe, UK, r7 | before | 114.3k | 65.9k (58%) | 1910 | 29.6k | 147.4k | 50.3k |
+| | after | 118.9k (+4.0%) | 66.3k (56%) | 1910 | 30.1k | 152.4k (+3.4%) | 54.5k (+8.3%) |
+| Modern Day, Poland, r2 | before | 90.1k | 54.9k (61%) | 1602 | 29.6k | 122.8k | 36.8k |
+| | after | 90.9k (+0.9%) | 55.2k (61%) | 1602 | 30.1k | 124.1k (+1.1%) | 37.3k (+1.4%) |
+| 1836 Victorian Era, Ottomans, r1 | before | 247.0k | 213.4k (86%) | 12.0k | 29.6k | 290.1k | 45.6k |
+| | after | 246.0k (-0.4%) | 213.7k (87%) | 12.0k | 30.1k | 289.6k (-0.2%) | 44.2k (-3.1%) |
+
+- The whole request is 0.2 to 3.4% larger on six saves and 0.2% smaller on
+  the 1836 save; the part a provider cannot cache moves -3% to +8%. Against
+  the requests before the plan (the `before` run at the top), every save is
+  still smaller: Battle of Europe's whole request is 152.4k against 160.1k,
+  its uncached part 54.5k against 110.0k.
+- Where it went: the one-line list's records (most on the round-130
+  campaign, whose political world names a leader for most powers; nothing on
+  saves without leaders, alliances or treaties on record), the region names
+  filling their budget (Battle of Europe's powers in view hold 156 region
+  names of the 480, so +4.2k there), the history items in the schema (+443 on
+  every request) and the places rule (cached). The spotlight's sentence went,
+  and so did the round-67 save's 120 region ids in its territorial changes
+  (about 700 characters).
+- Gemini's own count of the skips sent in [round 2](prompt-compression-ab.md#round-2-the-fixes):
+  239,462 prompt tokens over the five, against 249,998 for the old prompt and
+  236,662 for round 1's new one.
 
 ## By section
 

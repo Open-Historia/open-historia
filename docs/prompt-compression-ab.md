@@ -6,6 +6,8 @@ skips any worse? This compares a real skip with the old prompt and with the
 new one on five saves, through gemini-3.5-flash-lite on the owner's key, run on
 2026-11-07.
 
+**Round 2** ([below](#round-2-the-fixes)) measures the fixes of every finding here.
+
 **Short answer.** The new prompt is no worse on everything the code can check:
 valid answers, region transfers, dead leaders, closed projects and wars. It
 still recalls nearly as many facts about the world. One thing is worse, and the
@@ -349,7 +351,7 @@ Not caused by the compression, but found on the way:
 
 ## What to fix
 
-None of this is changed here. The owner decides.
+None of this was changed in round 1. All of it was fixed afterwards: see [round 2](#round-2-the-fixes).
 
 1. **The spotlight** (`promptContext.js` line 2208, `promptFocus.js`
    `pickSpotlight`). Options, cheapest first:
@@ -375,3 +377,210 @@ None of this is changed here. The owner decides.
      custom stats' bounds.
    - Leave `history` undeclared when no fold is due, if the cache does not
      depend on it.
+
+## Round 2: the fixes
+
+The owner asked for every finding above to be fixed (2026-11-07), and the fixed
+prompt was measured against the old one again, on the same five saves and the
+same model.
+
+### What changed
+
+| Commit | Finding | Fix |
+|---|---|---|
+| `dec54c13` | Spotlight filler | No spotlight: `pickSpotlight` and its sentence are gone. In their place, idle diplomacy's relevant countries (`rankRelevantPolities`, `idlePoliticalDiplomacyContext.js`: the twenty latest to have had something happen to them or to have dealt with the player) score as neighbours do and are in view: their regions or roster line, units, structures, contested regions and groups. A map without political profiles ranks them among its own powers. The owner: "don't do the filler events at all, instead just provide the same amount of info for relevant countries to bordering countries". |
+| `5572ef54` | Places the game could not match | See [the places](#places) below. |
+| `73006564` | `history` filled with no fold due | A folded skip with no fold due is told, last, "No history job rides on this answer: leave the "history" field out" (`NO_SKIP_HISTORY_JOB`), and the field's description says it too. The function itself still offers the field on every turn: varying it would throw away the provider's cached prompt, functions and opening, on every turn a fold rides and the turn after; the line costs about 110 characters of the live part, and an ignored rule costs only output. |
+| `ebf9318e` | History tiers empty on Gemini | `years`, `canon` and `eras` take the consolidator's entry shapes (`{year, text}`, `{date, kind, text, key}`, `{from, to, text}`), shared between the two schemas. The turn-to-turn function is 30,088 characters as Gemini gets it (under the 30,435 that went through). |
+| `094dc518` | Recall of powers shown in one line | Each entry of the one-line list carries, where the records have them, its leader, wars, alliances, agreements, latest peace and who holds its land; the map description says a region it never names is held as on the scenario's map but for the changes it lists. |
+| `1b8e5a91` | | Today's notice no longer promises "a few distant countries in turn". |
+
+#### Places
+
+The round-1 count of unresolved places (2 → 7 of 22) came from the rig's own
+check, which looked a `region:` name up in the save's geojson. Round 2 asks the
+game's own finder (`resolveEventPlaces`, through `ab-places.mjs`), on the same
+maps, for every `region:`, `city:` and `country:` place of every answer. By it,
+round 1 was:
+
+| Save | Old | New (round 1) |
+|---|---|---|
+| Italy r130 | 2 of 31 (Kidal, Provence: not regions of the map) | 5 of 13 |
+| Brazil r67 | 0 of 7 | 0 of 11 |
+| Germany r30 | none named | none named |
+| UK r7 | 1 of 11 (Dublin) | 1 of 19 (Dublin) |
+| Poland r2 | 3 of 13 (Warsaw twice, "Washington, District of Columbia") | 0 of 18 |
+| **All five** | **6 of 62** | **6 of 61** |
+
+So outside the round-130 skip the two prompts were alike; "region: England",
+which the rig counted twice against the new prompt, is a region of that map and
+was found. The round-130 skip's five were:
+
+- "region: Métropole du Grand Paris, country: France": a real region, held by
+  Italy on that map. The finder held a region said with a country to that
+  country, and knew France only as the holder or by a stock map's ISO3 id;
+  this map's ids are its own. **Fix:** the finder also ranks a region by the
+  country it lies in on the base map (the row's `base`), after its holder. No
+  name matching is loosened.
+- "region: Ile-de-France, country: France", "region: Zaporizhzhia, country:
+  Russian Federation", "region: Kayin State, country: Republic of the Union of
+  Myanmar": not regions of that map (its France is departments and
+  métropoles, its Ukraine raions). Myanmar's regions were not listed (a power
+  in view past the region names' budget); Ukraine's and Italy's were.
+  **Fixes:** the places rule (`EVENT_PLACES_RULE`) now says a region is one
+  [Game Map Description] lists by name, a power listed without its regions is
+  placed by one of its cities or as the country, and the country after a place
+  is the power that holds it now; the in-view powers whose regions are not
+  listed are told the same in their own intro (`TIERED_ROSTER_INTRO`), where
+  they used to be told the engine corrects a guessed region on a retry that a
+  one-request skip never makes; [City Coordinates] says its names are what a
+  place, a unit's `at` and a structure use.
+- "region: Gao, country: Republic of Mali": that map's Gao is a province of
+  Burkina Faso. The old prompt's "region: Gao" (no country) was "found", in the
+  wrong country. Left as it is: a place held to the country it was given is the
+  finder's rule.
+- And the region names now fill their budget (480): the powers in view first,
+  then the next by rank, as the untiered summary does. On a small campaign
+  whose powers in view hold few regions this lists the regions an event might
+  name; on the long campaigns the powers in view already fill it.
+
+### Method
+
+- **The prompts:** old as in round 1 (the `pb-base` tree, unchanged); fixed:
+  beta `b48491a2` with the five fixes (`094dc518`), captured by the same rig.
+- **Old answers are round 1's.** The old prompt did not change, the requests
+  are byte for byte round 1's, and every request is at temperature 0, so its
+  skips and its retention answers are reused rather than asked again; the
+  25-request cap would not fit both arms (5 + 5 skips, 5 + 5 probes and 10
+  judge verdicts is 30).
+- **The fixed arm:** the round-130 skip was sent in the game's JSON-text form,
+  as in round 1 (its function-call form is refused there by both arms). New
+  Dawn's first answer was an `order_troops` call ("Germany-Czechia
+  front~Germany~withdraw~all"), as in round 1; the rig answered it with that
+  call and sent the game's second request.
+- **Retention:** round 1's own fifty questions, asked of the fixed arm's
+  system prompt.
+- **Judge:** the same judge and fact sheet, old against fixed, in both orders.
+- **Places:** the game's own finder, as above. Poland's and New Dawn's maps
+  get the built-in seed's cities (the Modern Day map's own), which round 1's
+  check did not have.
+
+### Requests
+
+25, the cap.
+
+| Purpose | Requests | Refused or retried |
+|---|---:|---|
+| Skips, fixed arm | 8 | 2 × 429 (waited out and retried); New Dawn took 2 (an `order_troops` round) |
+| Retention probe, fixed arm | 5 | none |
+| Judge, both orders | 12 | 2 × 429 (waited out and retried) |
+
+The 44 notice translation requests (one line into 22 packs, then the redo
+pass's 22) were separate and are not counted here. The ledger, requests and answers are in the
+scratchpad (`ab-results2/`).
+
+### The skips
+
+| Save | Arm | Valid | Events | Description chars | Output tokens | Prompt tokens |
+|---|---|---|---:|---:|---:|---:|
+| Italy r130 | old | yes (JSON text) | 10 | 7,128 | 3,865 | 73,978 |
+| | fixed | yes (JSON text) | 10 | 6,293 | 5,023 | 66,693 |
+| Brazil r67 | old | yes | 10 | 4,413 | 5,809 | 54,037 |
+| | fixed | yes | 9 | 3,669 | 3,074 | 51,784 |
+| Germany r30 | old | yes | 8 | 2,190 | 2,145 | 50,536 |
+| | fixed | yes (2nd request) | 8 | 2,219 | 2,164 | 50,579 |
+| UK r7 | old | yes | 11 | 4,229 | 3,805 | 41,461 |
+| | fixed | yes | 10 | 5,412 | 3,260 | 39,885 |
+| Poland r2 | old | yes | 10 | 4,875 | 3,220 | 29,986 |
+| | fixed | yes | 10 | 6,072 | 4,757 | 30,521 |
+| **All five** | old | 5/5 | 49 | 22,835 | 18,844 | 249,998 |
+| | fixed | 5/5 | 47 | 23,665 | 18,278 | 239,462 (−4%) |
+
+### What the answers did
+
+| Check | Old | New (round 1) | Fixed |
+|---|---|---|---|
+| Powers acting (in view of the fixed prompt / out of view) | 28 (25 / 3) | 36, 13 of them the spotlight's | 31 (27 / 4) |
+| Spotlight or filler events (an event naming only powers out of view, moving nothing) | 1 (Indonesia's drills, Poland) | 13 spotlight powers acting | 1 ("Italian Central Bank", UK r7) |
+| Places unresolved, by the game's finder | 6 of 62 | 6 of 61 | **6 of 63**; 0 of 18 on Italy r130 (5 of 13 in round 1) |
+| Region ops: bad region / bad polity / "from" not the owner | 10: 0 / 0 / 5 | 6: 0 / 0 / 1 | 6: 0 / 0 / 0 |
+| Gone leaders in office | 0 | 0 | 0 |
+| Closed projects restarted | 0 | 0 | 0 |
+| War issues | 1 (r30 ends the player's war by fiat) | 1 | 1 (the same, r30) |
+| History on the fold (Brazil r67) | document (1,019 words) taken | document taken; years and canon `{}` | **2 years and 1 canon fact taken**, as tiers; a 141-word document beside them, not needed |
+| History on the 4 skips with no fold | not offered | filled on 3 | **filled on 0** |
+
+The six places the fixed arm left unfound are all cities the map spells
+another way or lacks: "Warsaw" and "Lisboa" (the map writes Warszawa and
+Lisbon), "Prague" and "Plzeň" (Praha; Plzeň is not on it), and Dublin twice
+(not on Battle of Europe's map, or the built-in one). The old arm missed
+Warsaw and Dublin the same way. That is the event-places finder not reading
+the world town list the unit placement uses for such names
+(`worldCities.js`); it is not new and is not changed here.
+
+### Retention probe
+
+| Save | Old | New (round 1) | Fixed | Where the fixed arm differs from the old |
+|---|---:|---:|---:|---|
+| Italy r130 | 7/10 | 8/10 | 7/10 | different misses: an ended war and a relation "unknown", an old event a year early |
+| Brazil r67 | 8/10 | 6/10 | 6/10 | Borski (Serbia) and the year of a 2016 event neither prompt carries: "unknown" |
+| Germany r30 | 9/10 | 8/10 | 8/10 | Chaouia - Ouardigha (Morocco): "unknown" |
+| UK r7 | 10/10 | 9/10 | 10/10 | |
+| Poland r2 | 10/10 | 8/10 | 9/10 | Las Piedras (Puerto Rico): "unknown" |
+| **All five** | **44/50 = 88%** (76–94%) | **39/50 = 78%** (65–87%) | **40/50 = 80%** (67–89%) | |
+| Without the five one-line region-holder questions | 39/45 = 87% (74–94%) | 38/45 = 84% (71–92%) | 37/45 = 82% (69–91%) | |
+
+95% Wilson intervals. By kind (old / new / fixed right):
+
+| Question | n | Old | New | Fixed |
+|---|---:|---:|---:|---:|
+| Who holds a region of a power shown in one line | 5 | 5 | 1 | 3 |
+| Who holds a region that changed hands | 5 | 5 | 5 | 5 |
+| Who holds another region | 3 | 3 | 2 | 2 |
+| At war, no (an ended war) | 3 | 1 | 2 | 1 |
+| Year of an old event | 5 | 3 | 2 | 2 |
+| Relation status | 4 | 3 | 3 | 3 |
+| Peace treaty date | 1 | 0 | 0 | 0 |
+| The other seven kinds (22 questions) | 22 | 22 | 22 | 22 |
+
+Recall is not back to the old prompt's: 40 against 44, with the intervals
+overlapping almost whole. The fixed arm got back two of the four
+one-line region holders round 1 lost (UK r7's Anhui and Poland r2's Aerodrom,
+both now listed by the budget's fill). The three still "unknown" are regions
+of powers neither in view nor reached by the budget: Serbia and Morocco on the
+long campaigns, whose powers in view fill it, and Puerto Rico on Poland r2; the line saying an unnamed region is held as on the scenario's
+map did not move the model to answer from geography when the probe asked for
+"the records in your instructions only". Getting them back means listing those
+powers' regions, which is the size the compression took out. The fixed arm
+never answered a question wrong that the old one had right, except two years
+of old events that neither prompt carries (2025 for 2026; "unknown" for 2016).
+
+### Judge
+
+| Save | A=old | A=fixed | Consistent winner |
+|---|---|---|---|
+| Italy r130 | old | fixed | none (each order prefers its first answer) |
+| Brazil r67 | fixed | fixed | **fixed**: "tighter, better-paced … without inventing redundant filler missions" |
+| Germany r30 | old | old | **old**: it "ends the active war in the ledger" (the end the engine refuses, as in round 1) and the fixed answer has "an unprompted Turkish Central Bank event" |
+| UK r7 | fixed | old | none (each order prefers its second answer) |
+| Poland r2 | fixed | old | none (each order prefers its second answer) |
+| **10 verdicts** | | | **overall old 5, fixed 5**; consistent: fixed 1, old 1, none 3 |
+
+By criterion over the ten verdicts: consistency old 4, fixed 4, tie 2;
+plausibility old 4, fixed 5, tie 1; agency old 6, fixed 4; continuity old 5,
+fixed 5; writing old 5, fixed 5. Round 1 was old 9 of 10 overall, every round
+but one naming the spotlight's powers. Now one reason names an event it
+calls unprompted (a Turkish central bank on Germany r30; Turkey is in view
+there, as one of its relevant countries).
+
+### Verdict
+
+| Finding | Round 1 | Fixed |
+|---|---|---|
+| Spotlight filler | 13 spotlight powers acting; judge old 9 of 10 | gone; judge old 5, fixed 5, no consistent preference on 3 saves of 5 |
+| Places | 6 of 61 unfound by the game's finder (5 of 13 on Italy r130) | 6 of 63; 0 of 18 on Italy r130; the rest are city exonyms both arms miss |
+| History with no fold due | filled on 3 of 4 | filled on 0 of 4 |
+| History tiers on the fold | `{}` | 2 years and 1 canon fact taken |
+| Recall | 78% | 80%, old 88%: not back to the old level; within the noise |
+| Prompt tokens (Gemini, five skips) | 236,662 (−5%) | 239,462 (−4%) |
+| Size by the rig ([prompt budget](prompt-budget.md#the-quality-ab-fixes-2026-11-07)) | | +0.2% to +3.4% on six requests, −0.2% on the seventh |
