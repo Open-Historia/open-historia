@@ -288,7 +288,7 @@ test("the skip fights its period before it asks, and the turn it writes says so"
   assert.match(skip, /const frontsForecast = foughtBefore \? \{ \.\.\.foughtBefore \} : null;/);
   assert.ok(skip.indexOf("await forecastTurnFronts(") < skip.indexOf("const jumpContext = {"));
   assert.match(skip, /variables: frontsForecast \? \{ \.\.\.variables, frontsForecast \} : variables,/);
-  assert.match(gameplay, /const fronts = frontsLiveBlock\(world, game, variables\.frontsForecast \?\? null\);/);
+  assert.match(gameplay, /const fronts = frontsLiveBlock\(world, game, variables\.frontsForecast \?\? null, \{ orderLines: !rulesAbove \}\);/);
   // The turn carries whether it was, so that a turn kept and applied later is applied the same way.
   assert.match(gameplay, /frontsForetold: Boolean\(context\.variables\?\.frontsForecast\),/);
   assert.match(gameplay, /foretold: result\.frontsForetold === true,/);

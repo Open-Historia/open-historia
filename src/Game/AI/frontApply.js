@@ -906,7 +906,9 @@ export const withFrontUnits = (world, fronts) => {
 // prompt is then exactly what it was. `foreseen` is what forecastTurnFronts
 // gave for the turn, when it gave anything: the block then tells the
 // battlefields as the period leaves them and what happened on them.
-export const frontsLiveBlock = (world, game, foreseen = null) => [landBlock(world, game, foreseen), seasLiveBlock(world, game, foreseen), airStrikesLiveBlock(foreseen)].filter(Boolean).join("\n\n");
+// `options.orderLines: false` where the prompt states how an order line is
+// written elsewhere (frontPrompt.js FRONT_ORDER_LINES_BLOCK).
+export const frontsLiveBlock = (world, game, foreseen = null, options = {}) => [landBlock(world, game, foreseen, options), seasLiveBlock(world, game, foreseen), airStrikesLiveBlock(foreseen)].filter(Boolean).join("\n\n");
 // The war room's air strikes as the period's run flew them (runtime/fronts/airStrike.js): "" when none flew, or the
 // period was not fought before the story (they are flown when the turn is applied all the same, and told the next).
 export const airStrikesLiveBlock = (foreseen = null) => (frontsOn() && airOn() ? airStrikesBlock(foreseen?.airStrikes) : "");
@@ -918,8 +920,8 @@ export const seasLiveBlock = (world, game, foreseen = null) => (frontsOn() && na
   ? buildSeasBlock({ sea: foreseen?.sea ?? null, units: world?.units, wars: world?.wars, players: humanCountriesOf(game), date: clean(game?.gameDate || game?.startDate), blockades: world?.blockades, era: eraSettingOf(world) })
   : "");
 
-const landBlock = (world, game, foreseen = null) => (frontsOn()
-  ? buildFrontsBlock({ battlefields: world?.battlefields, players: humanCountriesOf(game), period: foreseen, transports: world?.transports, difficulty: normalizeDifficulty(game?.difficulty), orderFunction: foreseen?.orderFunction === true })
+const landBlock = (world, game, foreseen = null, { orderLines = true } = {}) => (frontsOn()
+  ? buildFrontsBlock({ battlefields: world?.battlefields, players: humanCountriesOf(game), period: foreseen, transports: world?.transports, difficulty: normalizeDifficulty(game?.difficulty), orderFunction: foreseen?.orderFunction === true, orderLines })
   : "");
 
 // The battlefields of a period fought again with a player's orders, with no

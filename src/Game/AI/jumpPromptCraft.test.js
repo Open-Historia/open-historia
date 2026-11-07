@@ -3,10 +3,14 @@
 //
 // The two jump templates were rewritten on 2026-09-26 into one brief: real
 // history as the default, more events, the rules once each, the live records
-// rendered into the template at ${JUMP_LIVE_STATE}, and the prompt ending on how
-// an event is written. These hold that shape: which passages both templates
-// carry and where, which of them an author can edit, which rules came through
-// the rewrite on purpose, and what must never come back.
+// rendered into the template at ${JUMP_LIVE_STATE}. On 2026-11-07 they were laid
+// out for the prompt cache: everything a campaign never changes first, and the
+// same in both up to ${CACHE_BREAK} (the brief, how the world and the answer are
+// recorded, how an event is written, the scenario's lore and rules), then what
+// is the mode's own (what to simulate, where an auto-jump stops, the output),
+// then the game's details and the live records. These hold that shape: which
+// passages both templates carry and where, which of them an author can edit,
+// which rules came through the rewrite on purpose, and what must never come back.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -45,7 +49,7 @@ test("both jump templates carry every passage, once each", () => {
   }
 });
 
-test("the brief comes first, the records after it, and the writing brief last", () => {
+test("the brief comes first, the mode's own part after it, and the records last", () => {
   for (const task of JUMP_TASKS) {
     const text = template(task);
     const at = (needle) => text.indexOf(needle);
@@ -53,17 +57,33 @@ test("the brief comes first, the records after it, and the writing brief last", 
     assert.ok(at(EDITABLE.role) < at(EDITABLE.history), task);
     assert.ok(at(EDITABLE.history) < at(EDITABLE.agency), task);
     assert.ok(at(EDITABLE.agency) < at(EDITABLE.orders), task);
-    assert.ok(at(EDITABLE.orders) < at(EDITABLE.scope), task);
-    assert.ok(at(EDITABLE.scope) < at(EDITABLE.reactions), task);
+    assert.ok(at(EDITABLE.orders) < at(EDITABLE.reactions), task);
+    // How the world and the answer are recorded, then how an event is written.
+    assert.ok(at(EDITABLE.reactions) < at("[The Map]"), task);
+    assert.ok(at("[The Map]") < at("${JUMP_STATIC_RULES}"), task);
+    assert.ok(at("${JUMP_STATIC_RULES}") < at(EDITABLE.quality), task);
     // The lore, then how much it counts for, then the scenario's own rules.
+    assert.ok(at(EDITABLE.quality) < at("[The World Before Round 1]"), task);
     assert.ok(at("[The World Before Round 1]") < at(TECHNICAL), task);
     assert.ok(at(TECHNICAL) < at("[Extra Simulation Rules for This Preset]"), task);
-    // The game's details, the live records, the output, and the writing brief.
+    // Then the mode's own part, the game's details and the live records, last.
+    assert.ok(at("[Extra Simulation Rules for This Preset]") < at("${CACHE_BREAK}"), task);
+    assert.ok(at("${CACHE_BREAK}") < at(EDITABLE.scope), task);
+    assert.ok(at(EDITABLE.scope) < at("[Output]"), task);
+    assert.ok(at("[Output]") < at("[Event History of This Game]"), task);
     assert.ok(at("[Event History of This Game]") < at(LIVE_STATE), task);
-    assert.ok(at(LIVE_STATE) < at("[Output]"), task);
-    assert.ok(at("[Output]") < at(EDITABLE.quality), task);
-    // Nothing follows the writing brief but its own example.
-    assert.equal(text.lastIndexOf("\n["), at(EDITABLE.quality) - 1, `${task}: a section follows the writing brief`);
+    assert.equal(text.trimEnd().endsWith(LIVE_STATE), true, `${task}: something follows the live records`);
+  }
+});
+
+// The time skip and the auto-jump open with the same text, so a player who
+// switches between them still reads it from a provider's prompt cache.
+test("both jump templates open identically up to the shared break, and nothing per-turn comes before it", () => {
+  const shared = (task) => template(task).slice(0, template(task).indexOf("${CACHE_BREAK}"));
+  assert.ok(shared("jumpForward").length > 15000);
+  assert.equal(shared("jumpForward"), shared("autoJumpForward"));
+  for (const [, key] of shared("jumpForward").matchAll(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g)) {
+    assert.ok(STATIC_PROMPT_KEYS.has(key), `${key} changes from turn to turn`);
   }
 });
 

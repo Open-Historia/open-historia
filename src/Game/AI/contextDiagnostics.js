@@ -209,12 +209,24 @@ const measureHistoryChars = (history) => array(history).reduce((total, entry) =>
   return total + roleChars + partChars;
 }, 0);
 
+// A variable's size is the size of the text it puts into the prompt. Only a
+// string, a number or a flag is ever rendered as itself; an object is a raw
+// record the builders read and describe (the fronts forecast, the stat sheets),
+// and its JSON never reaches the model, so it is left out rather than measured
+// as a JSON nobody sends (player logs of 2026-11 read frontsForecast as one of
+// the largest parts of a skip for that reason).
+const renderedVariableChars = (value) => {
+  if (value == null) return 0;
+  if (typeof value === "object") return null;
+  return stringifyForMeasurement(value).length;
+};
+
 const measureVariables = (variables) => Object.entries(
   variables && typeof variables === "object" ? variables : {},
-).map(([key, value]) => ({
-  key,
-  chars: stringifyForMeasurement(value).length,
-})).sort((left, right) => right.chars - left.chars);
+).filter(([key]) => !key.startsWith("__"))
+  .map(([key, value]) => ({ key, chars: renderedVariableChars(value) }))
+  .filter((entry) => entry.chars !== null)
+  .sort((left, right) => right.chars - left.chars);
 
 const approximateTokens = (chars) => Math.ceil(Math.max(0, Number(chars) || 0) / 4);
 
@@ -246,12 +258,76 @@ const measurePart = (value) => {
   return { chars: text.length, hash: shortHash(text) };
 };
 
+// ---------------------------------------------------------------------------
+// The prompt as it was sent, by section
+// ---------------------------------------------------------------------------
+// A section is what a [Heading] at the start of a line opens, up to the next
+// one; what comes before the first heading is "(opening)". A heading opens with
+// a capital letter: "[24 June 2029] Italy: ..." is a chat line and "[181 more
+// features omitted]" a note, not sections. A heading's name is cut at " — ",
+// where the game puts the dates and the polity a section is about.
+const SECTION_HEADING = /^\[([A-Z][^\]\n]{1,100})\]/;
+
+const sectionName = (heading) => clean(String(heading).split(" — ")[0]);
+
+export const promptSections = (text) => {
+  const sections = [];
+  let current = { name: "(opening)", text: "" };
+  for (const line of String(text ?? "").split("\n")) {
+    const heading = SECTION_HEADING.exec(line);
+    if (heading) {
+      if (current.text) sections.push(current);
+      current = { name: sectionName(heading[1]), text: "" };
+    }
+    current.text += `${line}\n`;
+  }
+  if (current.text) sections.push(current);
+  return sections.map((section) => ({ name: section.name, text: section.text.slice(0, -1) }));
+};
+
+// The headings the game itself writes into a time skip's live records and
+// directives (gameplay.js buildJumpLiveState and its helpers). A heading that
+// is neither one of these nor in the task's template came from the campaign (a
+// scenario's lore, an event's text) and is reported unnamed: the fingerprint
+// carries no campaign text.
+export const GAME_SECTION_HEADINGS = Object.freeze([
+  "PRIORITY", "This Game and Real History", "Occupied and Contested Regions", "Groups", "What Is in Motion",
+  "Canonical Diplomatic State", "Storyline Records", "Wars", "Relations and Agreements", "Diplomatic Memory",
+  "Social Media", "Standing and Intelligence", "Military Strength", "Standing Unit Orders", "Units and Structures on the Map",
+  "Taking Ground", "Projects & Operations", "Espionage", "Who Spies on the Player", "Reports on File",
+  "Scenario National Stats Sheet", "Hidden Backend", "Levers", "Every Event Carries Its Consequences", "Fronts", "Seas",
+  "Air Strikes", "War Weariness, Peace and Alliances", "Figures the War Needs", "Espionage Orders", "Player Focus",
+  "The World's Share", "Agents' Reports", "Region types", "Lookup Functions", "Player Goal", "Front Orders",
+  "How Wars Are Recorded", "How Relations and Agreements Are Recorded", "Reading the Diplomatic Ledger", "Also This Period",
+  "Language", "Elections Due", "Institutional Mandates", "Reports", "Peace", "Real History", "Advisor",
+]);
+
+const sectionLabel = (name, template) => {
+  if (name === "(opening)") return name;
+  const known = GAME_SECTION_HEADINGS.some((heading) => name === heading || name.startsWith(`${heading} `))
+    || String(template ?? "").includes(`[${name}`);
+  return known && /^[A-Za-z0-9 &'’,.()-]+$/.test(name) ? name : "(campaign section)";
+};
+
+// Each rendered section's size and hash, in order. `template` decides which
+// names may be shown (sectionLabel).
+export const measurePromptSections = (systemPrompt, { template = "" } = {}) => promptSections(systemPrompt)
+  .map((section) => ({ name: sectionLabel(section.name, template), ...measurePart(section.text) }));
+
+// The output function as the provider is sent it; its name is the game's own.
+const measureTool = (tool) => {
+  if (!tool || typeof tool !== "object") return null;
+  return { name: clean(tool.name), schema: measurePart(tool.schema ?? tool.parameters ?? null) };
+};
+
 export const buildPromptFingerprint = ({
   history = [],
   promptTemplate = "",
   systemPrompt = "",
   userMessage = "",
   variables = {},
+  tool = null,
+  staticPrefixEnd = null,
 } = {}) => ({
   prompt: measurePart(systemPrompt),
   template: measurePart(promptTemplate),
@@ -261,12 +337,23 @@ export const buildPromptFingerprint = ({
     ...measurePart(array(history).map((entry) => `${clean(entry?.role)}:${array(entry?.parts)
       .map((part) => stringifyForMeasurement(part?.text ?? part)).join("")}`).join("\n")),
   },
-  // Every filled-in section, by variable name, in a stable order. Keys starting
-  // "__" are build metadata riding along with the variables, not prompt text.
+  // How much of the prompt opens identically on every call of the campaign:
+  // what a provider's prompt cache can take (promptLayout.js).
+  cacheablePrefixChars: staticPrefixEnd != null && Number.isFinite(Number(staticPrefixEnd)) ? Number(staticPrefixEnd) : 0,
+  // The output function's schema: on a time skip a large part of the request.
+  tool: measureTool(tool),
+  // The prompt as it was sent, by [Section]: what each part of it really costs.
+  rendered: measurePromptSections(systemPrompt, { template: promptTemplate }),
+  // Every filled-in variable, by name, in a stable order, as the text it puts
+  // in the prompt. Keys starting "__" are build metadata riding along with the
+  // variables, not prompt text; an object is a record the builders read, never
+  // sent as JSON, and is listed without a size.
   sections: Object.keys(variables && typeof variables === "object" ? variables : {})
     .filter((key) => !key.startsWith("__"))
     .sort()
-    .map((key) => ({ key, ...measurePart(variables[key]) })),
+    .map((key) => (variables[key] && typeof variables[key] === "object"
+      ? { key, record: true }
+      : { key, ...measurePart(variables[key]) })),
 });
 
 
@@ -921,6 +1008,12 @@ export const logContextDiagnostics = ({
     approximateInputTokens: approximateTokens(totalInputChars),
     variableChars: variableSizes.reduce((sum, entry) => sum + entry.chars, 0),
     largestVariables: variableSizes.slice(0, 16),
+    // The prompt as it is sent, by [Section], largest first: the variables
+    // above are what was built, these are what each part really costs.
+    largestSections: measurePromptSections(systemPrompt, { template: promptTemplate })
+      .sort((left, right) => right.chars - left.chars)
+      .slice(0, 24)
+      .map(({ name, chars }) => ({ name, chars, approxTokens: approximateTokens(chars) })),
     demand,
     contextBuild:
       variables && typeof variables === "object" && variables.__ohContextBuildMeta
@@ -1073,8 +1166,12 @@ export const logContextDiagnostics = ({
       }
     }
 
+    if (report.largestSections.length > 0) {
+      console.log("Largest sections of the prompt as sent:");
+      console.table(report.largestSections);
+    }
     if (report.largestVariables.length > 0) {
-      console.log("Largest ACTUAL candidate variables constructed today:");
+      console.log("Largest ACTUAL candidate variables constructed today (rendered text only):");
       console.table(report.largestVariables);
     }
     console.log("Rolling reports: globalThis.__OH_CONTEXT_DIAGNOSTICS_HISTORY__");

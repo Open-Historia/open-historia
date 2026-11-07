@@ -38,7 +38,20 @@ export const STATIC_PROMPT_KEYS = Object.freeze(new Set([
   "DIFFICULTY_DESCRIPTION_JUMP_FORWARD",
   "STARTING_ROUND_DATE",
   "NUMBER_OF_REGIONS",
+  // A time skip's own rules for recording its answer (gameplay.js
+  // buildJumpStaticRules): built at call time from what a campaign never
+  // changes (the player, the game's features), so the same on every skip.
+  "jumpStaticRules",
+  "JUMP_STATIC_RULES",
+  // Where a prefix shared by several tasks ends (CACHE_BREAK_KEY below).
+  "CACHE_BREAK",
 ]));
+
+// A placeholder that renders as nothing and marks where the part of a prompt
+// that several tasks share ends: the time skip and the auto-jump open with the
+// same text up to it, so switching between them still reads that part from a
+// provider's cache. renderTemplateCached reports where it falls.
+export const CACHE_BREAK_KEY = "CACHE_BREAK";
 
 // Anthropic ignores a cache breakpoint on a block shorter than its minimum
 // (1024 tokens on most models); splitting the system prompt into two content
@@ -60,21 +73,28 @@ const render = (template, variables) =>
 // exactly as renderTemplate (promptContext.js) does, so a value that itself
 // contains "${...}" text is never re-rendered — the prefix is simply the
 // leading part of the same result, which is what makes it byte-identical.
+//
+// `sharedPrefixEnd` is where the last ${CACHE_BREAK} inside that prefix falls
+// (null without one): the end of the part the prefix shares with other tasks.
 export const renderTemplateCached = (template, variables, staticKeys = STATIC_PROMPT_KEYS) => {
   const source = String(template ?? "");
   const placeholder = new RegExp(PLACEHOLDER_SOURCE, "g");
   let boundary = source.length;
+  let shared = -1;
   for (let match = placeholder.exec(source); match; match = placeholder.exec(source)) {
     if (!staticKeys.has(match[1])) {
       boundary = match.index;
       break;
     }
+    if (match[1] === CACHE_BREAK_KEY) shared = match.index;
   }
-  const text = render(source, variables);
+  const values = { ...variables, [CACHE_BREAK_KEY]: "" };
+  const text = render(source, values);
   const staticPrefixEnd = boundary === source.length
     ? text.length
-    : render(source.slice(0, boundary), variables).length;
-  return { text, staticPrefixEnd };
+    : render(source.slice(0, boundary), values).length;
+  const sharedPrefixEnd = shared >= 0 ? render(source.slice(0, shared), values).length : null;
+  return { text, staticPrefixEnd, sharedPrefixEnd };
 };
 
 // The offset to hand a provider for a prompt that may have been rewritten
@@ -89,9 +109,17 @@ export const staticPrefixEndOf = (systemPrompt, staticPrefix) => {
 // Split a system prompt into the cacheable prefix and the per-turn tail, or
 // null when there is nothing worth pinning: no boundary, a boundary outside
 // the text, or a prefix too short for the provider's minimum.
-export const splitSystemPromptForCache = (systemPrompt, staticPrefixEnd, { minChars = MIN_CACHEABLE_PREFIX_CHARS } = {}) => {
+//
+// `sharedPrefixEnd`, where it falls inside the prefix and is long enough to be
+// cached on its own, splits the prefix again: `shared` is the part another task
+// opens with too, `prefix` all of it (`shared` included).
+export const splitSystemPromptForCache = (systemPrompt, staticPrefixEnd, { minChars = MIN_CACHEABLE_PREFIX_CHARS, sharedPrefixEnd = null } = {}) => {
   const text = String(systemPrompt ?? "");
   const end = Number(staticPrefixEnd);
   if (!Number.isFinite(end) || end < minChars || end >= text.length) return null;
-  return { prefix: text.slice(0, end), tail: text.slice(end) };
+  const shared = sharedPrefixEnd == null ? NaN : Number(sharedPrefixEnd);
+  const split = { prefix: text.slice(0, end), tail: text.slice(end) };
+  return Number.isFinite(shared) && shared >= minChars && shared < end
+    ? { ...split, shared: text.slice(0, shared) }
+    : split;
 };
