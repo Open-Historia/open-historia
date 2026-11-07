@@ -38,6 +38,30 @@ node scripts/prompt-size.mjs <save> [--task jumpForward|autoJumpForward] [--days
   section it sits in. Detailed logging's prompt fingerprint names the same sections
   (`contextDiagnostics.js` `measurePromptSections`).
 
+### Phase 0: the rig, and the logs measuring what was sent
+
+The rig and the fingerprint came first (`7db0ca1d`), so that every later change
+was measured the same way.
+
+- `scripts/prompt-size.mjs` loads the game's own modules under Node (a loader
+  lets Node read `main.jsx`, the JSON prompts and `import.meta.env`): it serves
+  the save from memory through a stand-in `fetch` and `window`/`localStorage`,
+  points the provider at Anthropic with a dummy key, and answers the provider's
+  URL itself, so nothing is written and nothing leaves the machine. It prints the system prompt by
+  section, the user message, the output function as Anthropic and as Gemini get
+  it (`toGeminiSchema`), the cacheable prefix and its share; `--json` keeps the
+  numbers and `--dump` the prompt itself. The same rig builds the skip
+  `promptNamesNotIds.test.js` scans.
+- Detailed logging's prompt fingerprint (`buildPromptFingerprint`) now measures
+  what was sent: the rendered prompt by `[Section]` (`measurePromptSections`;
+  a heading the campaign wrote is reported as `(campaign section)`, so no
+  campaign text reaches the log), the output function's schema
+  (`tool.schema`) and the cacheable prefix (`cacheablePrefixChars`). A variable
+  that is a record the builders read rather than text (the fronts forecast,
+  the stat sheets) is listed without a size: it used to be measured as JSON
+  nobody sends, which made `frontsForecast` look like one of the largest parts
+  of a skip in the players' logs of 2026-11.
+
 ### The saves
 
 | Save | Where it came from | Map |
@@ -269,6 +293,24 @@ five saves, gemini-3.5-flash-lite). What it was asked to look at, change by chan
 - **The story so far and the polity lore in the opening.** The model reads them
   before the game's details now: check it still treats the records under
   [Game Map Description] and the ledgers as what is true now.
+
+## After Phase 2
+
+- **Names, never ids** (`40a19bd5`, after the runs above): the event history's
+  impact lines, the groups' areas, the World Director's pressures and the
+  lookups name regions instead of printing their ids. Measured with the rig:
+  the round-130 skip is 806 characters smaller (nineteen groups' areas lose
+  their ids), New Dawn 23 smaller, Battle of Europe 15 larger, Poland
+  unchanged.
+- **Related past events** (`92e3f141`) adds at most about 2,000 characters to a
+  skip, and only with the opt-in switch on and the model loaded; the runs above
+  are without it.
+- **Two findings of [the quality A/B](prompt-compression-ab.md) are open**, and
+  the code is unchanged for them: the spotlight sentence acts as a quota and
+  fills about a quarter of a skip with events for random small powers; and the
+  skip's `history.years`, `canon` and `eras` are declared as arrays of objects
+  with no properties, so Gemini returns them empty and a fold keeps only its
+  document. Both are in [ai-prompts.md §6a and §7.6](ai-prompts.md#6a-the-time-skips-prompt-since-2026-09-26).
 
 ## By section
 

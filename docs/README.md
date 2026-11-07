@@ -26,6 +26,8 @@ New to the codebase? Read **[Architecture Overview](architecture.md)** first —
 - [AI System Overview](ai-overview.md) — Transport/provider dispatch, key/relay security, streaming vs buffered, token caps, and the `runJsonTask` strict/salvage task pipeline.
 - [Prompt-Making Guide](ai-prompts.md) — The reference for authoring and editing AI prompts: every variable, all tasks, end-to-end assembly, and the override/frozen-prompt model.
 - [AI Return Schemas & Validation](ai-schemas.md) — AI JSON return schemas, the two-layer validator, and the `runJsonTask` strict/salvage retry discipline.
+- [Prompt Budget](prompt-budget.md) — What a time skip sends, part by part, and how much a provider can cache: `scripts/prompt-size.mjs`, and the sizes before and after each change of the prompt compression (Phases 0 to 2).
+- [Prompt Compression: the Quality A/B](prompt-compression-ab.md) — Whether the smaller skips read any worse: five saves through Gemini, code checks, a retention probe and a judge; the two open findings (the spotlight, the empty history tiers).
 
 ### Editor
 - [Map Editor](map-editor.md) — The OpenLayers map editor: tools, region/owner/flag/tag editing, tier-1/tier-2 game-seed export, and how edits reach the game.
@@ -34,12 +36,12 @@ New to the codebase? Read **[Architecture Overview](architecture.md)** first —
 - [Server & API](server.md) — The Node/Express game server: routes, data-dir layout, asset serving, owner migration, and portability.
 - [Map Data & Assets](assets-and-data.md) — Map-data & asset handling from GitHub-Release download through server override resolution to the browser caching/warming model.
 - [Runtime Services](runtime-services.md) — Library/scenario/game stores, the country-name resolver, i18n/translator, and tags/labels/community-flags/map-settings services.
-- [Languages & Translation](i18n.md) — Shipped language packs for the interface and the prompts' guidance, AI translation of content only, the pattern and run lookup, writing UI code that translates, regenerating the packs.
+- [Languages & Translation](i18n.md) — Shipped language packs for the interface and the prompts' guidance, translation models on the device, Translate with my AI, a scenario's own language packs, the pattern and run lookup, writing UI code that translates (and what the extractor reads), regenerating the packs with Gemini.
 
 ### Web & Mobile
 - [Web Build (openhistoria.com)](web-build.md) — The browser-only `VITE_OH_WEB` build: fetch-interceptor fake backend, IndexedDB stores, the map files the build carries under its own `/assets`; saves stay in the browser and move by export/import.
-- [Android App](mobile.md) — The Capacitor app with everything on the device: the `--mode android` bundle, the map inside the APK, file saving through the share sheet, native HTTP for LAN models, the `android` release channel and the build.
+- [Android App](mobile.md) — The Capacitor app with everything on the device: the `--mode android` bundle, the map inside the APK, file saving through the share sheet, native HTTP for LAN models, the `android` release channel and the build, and the move to the new app id with its handover build.
 
 ### Delivery
 - [The Player Wiki](wiki.md) — Maintaining openhistoria.com/wiki/: the markdown-to-HTML generator, `npm run wiki:check` for spotting when it has gone stale, the screenshot harness, and the main-vs-beta rules.
-- [Delivery, Deploy & Releases](delivery-and-deploy.md) — Full CI/release/deploy topology: build scripts, main/beta/alpha channels + PR-triplet, the release assets, the desktop, Android, site and test workflows, `build:site`, the admin-panel deploy engine, and the Workers.
+- [Delivery, Deploy & Releases](delivery-and-deploy.md) — Full CI/release/deploy topology: build scripts, main/beta/alpha channels + PR-triplet, releasing beta to main without multiplayer, the release assets, the desktop, Android, site and test workflows, `build:site`, the admin-panel deploy engine, and the Workers.
