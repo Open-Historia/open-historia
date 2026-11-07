@@ -12,9 +12,13 @@ import {
   PROMPT_MODEL_VERSION,
   buildGuidanceDefaults,
   composePrompt,
+  guidanceCharLimit,
+  guidanceSegmentsFor,
   hasGuidance,
   materializePackGuidance,
   normalizePackGuidance,
+  overLimitPackGuidance,
+  promptCharCount,
 } from "./promptGuidance.js";
 
 const PROMPT_ADVISOR_DEFAULT = DEFAULT_PROMPTS.advisor;
@@ -350,6 +354,10 @@ export const normalizePromptGuidance = (rawPack) => {
 // the defaults; they are the technical placeholder map. Each passage the
 // author left alone is the default in the player's language; each one they
 // wrote is theirs, whatever language they wrote it in.
+//
+// `overLimit` lists the passages left out because they are longer than their
+// limit (overLimitPromptPassages): the game runs the default in their place
+// and tells the player once (runtime/promptLimitNotice.js).
 export const normalizePromptPack = (rawPrompts) => {
   const guidance = normalizePromptGuidance(rawPrompts);
   const localized = localizedGuidanceDefaults();
@@ -357,6 +365,7 @@ export const normalizePromptPack = (rawPrompts) => {
   return {
     promptModel: PROMPT_MODEL_VERSION,
     guidance,
+    overLimit: overLimitPromptPassages(rawPrompts),
     advisor: composePrompt("advisor", PROMPT_ADVISOR_DEFAULT, passages(localized.advisor, guidance.advisor)),
     helpers: { ...PROMPT_HELPER_DEFAULTS },
     leader: composePrompt("leader", PROMPT_LEADER_DEFAULT, passages(localized.leader, guidance.leader)),
@@ -364,6 +373,108 @@ export const normalizePromptPack = (rawPrompts) => {
       PROMPT_TASK_KEYS.map((key) => [key, composePrompt(key, PROMPT_TASK_DEFAULTS[key], passages(localized.tasks?.[key], guidance.tasks[key]))]),
     ),
   };
+};
+
+// ---------------------------------------------------------------------------
+// The length limit (promptGuidance.js guidanceCharLimit): every edited passage
+// may be at most 20% longer than the longest built-in version of it.
+
+const sectionDefaults = (tree, sectionKey) =>
+  (sectionKey === "advisor" || sectionKey === "leader" ? tree?.[sectionKey] : tree?.tasks?.[sectionKey]) ?? {};
+
+// The most characters a passage may have, by section and segment id.
+export const guidanceLimitFor = (sectionKey, segmentId) =>
+  guidanceCharLimit(sectionDefaults(PROMPT_GUIDANCE_DEFAULTS, sectionKey)[segmentId]);
+
+const sectionLabelOf = (sectionKey) =>
+  PROMPT_SECTION_DEFINITIONS.find((section) => section.key === sectionKey)?.label ?? sectionKey;
+const segmentLabelOf = (sectionKey, segmentId) =>
+  guidanceSegmentsFor(sectionKey).find((segment) => segment.id === segmentId)?.label ?? segmentId;
+
+// The passages of a stored pack that are longer than their limit, with the
+// names the Prompts tab gives them: { sectionKey, sectionLabel, segmentId,
+// segmentLabel, text, length, limit }.
+export const overLimitPromptPassages = (rawPack) =>
+  overLimitPackGuidance(rawPack, PROMPT_GUIDANCE_DEFAULTS).map((entry) => ({
+    ...entry,
+    sectionLabel: sectionLabelOf(entry.sectionKey),
+    segmentLabel: segmentLabelOf(entry.sectionKey, entry.segmentId),
+  }));
+
+// The pack the Prompts tab edits: the runtime pack, with each passage that is
+// over its limit put back in its place, so the author sees their own text
+// beside its count and can shorten it. The game never runs one (the composed
+// prompts here leave them out), and Save waits until each is within its limit
+// or reset.
+export const editablePromptPack = (rawPrompts) => {
+  const pack = normalizePromptPack(rawPrompts);
+  if (!pack.overLimit.length) return pack;
+  const guidance = {
+    advisor: { ...pack.guidance.advisor },
+    leader: { ...pack.guidance.leader },
+    tasks: Object.fromEntries(Object.entries(pack.guidance.tasks ?? {}).map(([key, bucket]) => [key, { ...bucket }])),
+  };
+  for (const { sectionKey, segmentId, text } of pack.overLimit) {
+    if (sectionKey === "advisor" || sectionKey === "leader") guidance[sectionKey][segmentId] = text;
+    else guidance.tasks[sectionKey] = { ...(guidance.tasks[sectionKey] ?? {}), [segmentId]: text };
+  }
+  return { ...pack, guidance };
+};
+
+// The passages of an editor's guidance ({ advisor, leader, tasks }, as typed,
+// untrimmed) that are over their limit: [{ sectionKey, segmentId, length, limit }].
+export const overLimitEdits = (guidance) => {
+  const found = [];
+  const check = (sectionKey, bucket) => {
+    for (const [segmentId, text] of Object.entries(bucket ?? {})) {
+      if (typeof text !== "string") continue;
+      const limit = guidanceLimitFor(sectionKey, segmentId);
+      const length = promptCharCount(text);
+      if (length > limit) found.push({ sectionKey, segmentId, length, limit });
+    }
+  };
+  check("advisor", guidance?.advisor);
+  check("leader", guidance?.leader);
+  for (const [key, bucket] of Object.entries(guidance?.tasks ?? {})) check(key, bucket);
+  return found;
+};
+
+// The default text of a prompt: the template with every passage in the
+// player's language, as an unedited pack composes it.
+const defaultTemplateFor = (sectionKey) => {
+  const defaultText = sectionKey === "advisor"
+    ? PROMPT_ADVISOR_DEFAULT
+    : sectionKey === "leader" ? PROMPT_LEADER_DEFAULT : PROMPT_TASK_DEFAULTS[sectionKey];
+  const localized = localizedGuidanceDefaults();
+  return composePrompt(sectionKey, defaultText, localized === PROMPT_GUIDANCE_DEFAULTS ? {} : sectionDefaults(localized, sectionKey));
+};
+
+// The longest a composed prompt template can be with every passage at its
+// limit: the default template, plus each passage's allowance over its English
+// default. A prompt with no editable passages can only be its default.
+export const promptTemplateLimit = (sectionKey) => {
+  const defaultText = sectionKey === "advisor"
+    ? PROMPT_ADVISOR_DEFAULT
+    : sectionKey === "leader" ? PROMPT_LEADER_DEFAULT : PROMPT_TASK_DEFAULTS[sectionKey];
+  if (typeof defaultText !== "string") return 0;
+  let limit = promptCharCount(defaultText);
+  for (const [segmentId, passage] of Object.entries(sectionDefaults(PROMPT_GUIDANCE_DEFAULTS, sectionKey))) {
+    limit += Math.max(0, guidanceLimitFor(sectionKey, segmentId) - promptCharCount(passage));
+  }
+  return limit;
+};
+
+// The last guard, where a template is rendered for a request (gameplay.js
+// buildTaskSystemPrompt, main.jsx's advisor and leaders): a template longer
+// than its section's limit never goes out; the default template does. Every
+// pack the game loads is composed within the limit (normalizePromptPack), so
+// this only ever catches a template that came some other way.
+export const guardPromptTemplate = (sectionKey, template) => {
+  if (typeof template !== "string") return template;
+  const limit = promptTemplateLimit(sectionKey);
+  if (!limit || promptCharCount(template) <= limit) return template;
+  console.warn(`[prompts] the ${sectionKey} prompt is ${promptCharCount(template)} characters, over its limit of ${limit}; the default is used`);
+  return defaultTemplateFor(sectionKey);
 };
 
 // What a scenario or game stores: the edits alone.

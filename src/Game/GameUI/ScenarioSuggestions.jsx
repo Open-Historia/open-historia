@@ -39,10 +39,10 @@ import {
   readSuggestionFile,
   suggestionFileName,
 } from "../../runtime/scenarioSuggestion.js";
-import { applyToSnapshot, buildDetailSave, detailChangeStatus, detailStatuses, detailValueIn, diffWords, inverseOf } from "../../runtime/suggestionApply.js";
+import { applyToSnapshot, buildDetailSave, detailChangeStatus, detailStatuses, detailValueIn, diffWords, inverseOf, promptChangeOverLimit } from "../../runtime/suggestionApply.js";
 import { openHubSuggestions } from "../../../server/hubProvenance.js";
 import { FEATURE_DEFINITIONS } from "../../../server/gameFeatures.js";
-import { PROMPT_EDITOR_SECTIONS } from "../AI/gameplayPrompts.js";
+import { PROMPT_EDITOR_SECTIONS, PROMPT_GUIDANCE_DEFAULTS } from "../AI/gameplayPrompts.js";
 import { guidanceSegmentsFor } from "../AI/promptGuidance.js";
 import { REVIEW_SECTIONS, sectionOfChange } from "../../runtime/suggestionSections.js";
 import { MUSIC_SITUATION_LABELS, SCENARIO_MUSIC_SITUATIONS, normalizeScenarioMusic, scenarioMusicVolumes } from "../../runtime/scenarioMusic.js";
@@ -757,7 +757,7 @@ export const SuggestionReviewDialog = ({ scenario, source, onClose, onReviewMap,
   const applyChanges = async (list) => {
     if (!list.length) return;
     const details = await loadScenarioDetails(scenario.id);
-    const { patch, uploads, clears } = buildDetailSave(list, details);
+    const { patch, uploads, clears } = buildDetailSave(list, details, { guidanceDefaults: PROMPT_GUIDANCE_DEFAULTS });
     // One catalog refresh for the whole batch, not one per write.
     await withSingleLibraryRefresh(async () => {
       if (Object.keys(patch).length) await saveScenario(scenario.id, patch, { refresh: false });
@@ -772,8 +772,15 @@ export const SuggestionReviewDialog = ({ scenario, source, onClose, onReviewMap,
   };
 
   const accept = async (list) => {
-    const pending = list.filter((change) => !decided.has(change.id) && statuses[change.id] !== "applied");
-    if (!pending.length) return;
+    const open = list.filter((change) => !decided.has(change.id) && statuses[change.id] !== "applied");
+    // A prompt passage over the length limit is not accepted: the game would
+    // not use it. It stays open, for the author to reject.
+    const tooLong = open.filter((change) => promptChangeOverLimit(change, PROMPT_GUIDANCE_DEFAULTS));
+    const pending = open.filter((change) => !tooLong.includes(change));
+    if (!pending.length) {
+      if (tooLong.length) setError("This suggested prompt passage is more than 20% longer than the built-in one, so it cannot be accepted.");
+      return;
+    }
     setBusy(true);
     setError("");
     try {
@@ -789,6 +796,7 @@ export const SuggestionReviewDialog = ({ scenario, source, onClose, onReviewMap,
       // Applied already: a review that fails to save cannot take it back.
       await decide({ accepted: new Set([...decisions.accepted, ...pending.map((change) => change.id)]), rejected: decisions.rejected })
         .catch((nextError) => { throw new Error(`Your scenario was changed, but the decision could not be saved: ${errorText(nextError)}`); });
+      if (tooLong.length) setError("Some suggested prompt passages are more than 20% longer than the built-in ones, so they were not accepted.");
     } catch (nextError) {
       setError(errorText(nextError));
     } finally {

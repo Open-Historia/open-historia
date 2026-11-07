@@ -58,8 +58,8 @@ test("OpenAI is told which requests share a prefix, and no compatible gateway is
 });
 
 test("the advisor's and the leaders' prompts are sent with the prefix they were rendered with", () => {
-  assert.match(main, /renderConversationTemplate\(promptPack\.advisor, \{ \.\.\.variables, \.\.\.helperValues \}\)/);
-  assert.match(main, /renderConversationTemplate\(promptPack\.leader, \{ \.\.\.variables, \.\.\.helperValues \}\)/);
+  assert.match(main, /renderConversationTemplate\(guardPromptTemplate\("advisor", promptPack\.advisor\), \{ \.\.\.variables, \.\.\.helperValues \}\)/);
+  assert.match(main, /renderConversationTemplate\(guardPromptTemplate\("leader", promptPack\.leader\), \{ \.\.\.variables, \.\.\.helperValues \}\)/);
   assert.match(main, /if \(providerOpts\.staticPrefixEnd == null\) \{\n\s*const known = conversationPrefixEnd\(systemPrompt\);/);
 });
 
