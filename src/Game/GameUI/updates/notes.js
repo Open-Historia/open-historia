@@ -54,6 +54,22 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // The AI setup prompt's three choices (GameUI/apiSetupPrompt.jsx, the owner 2026-11-07): Gemini, Command Code
+    // (its GOAT plan, GLM-5.3 Flash filled in: AI/providerConfig.js COMMANDCODE_TEMPLATE) and Custom.
+    id: "2026-11-ai-setup-three-choices",
+    kind: "minor",
+    date: "2026-11-07",
+    channel: "beta",
+    banners: [
+      {
+        title: "Three ways to set up the AI",
+        items: [
+          "Setting up the AI now offers three choices: Gemini, the best free option; Command Code, the best quality option, where you only paste a key from its $10 GOAT plan and GLM 5.3 Flash is set up for you; and Custom, for any provider and any model, or a local model.",
+        ],
+      },
+    ],
+  },
+  {
     // On-device similar-event search (the token-cutting plan's item 13, 2026-11-07): Settings → AI → Find related
     // past events on this device, off by default (AI/relatedEvents.js, relatedEventsSearch.js,
     // runtime/embeddingWorker.js; all-MiniLM-L6-v2, 24 MB, downloaded after a yes).
