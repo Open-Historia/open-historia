@@ -1397,6 +1397,17 @@ export const createMusicDirector = ({
   };
 };
 
+// The games drawn in this session. Going back into one opens it at once, so
+// its opening has no build-up: "when entering a game thats already opened,
+// opening the game is super fast so dont do the whole music ramp up thing.
+// make it just go to the ingame music once your in" (the owner, 2026-11-06).
+// The screen then reports no loading for it (GameUI/main.jsx), and the menu's
+// music gives way straight to the game's, as a game drawn from the menu does.
+// A game's first opening keeps its build, however fast.
+const drawnThisSession = new Set();
+export const noteGameDrawn = (gameId) => { if (gameId) drawnThisSession.add(String(gameId)); };
+export const gameDrawnBefore = (gameId) => Boolean(gameId) && drawnThisSession.has(String(gameId));
+
 // The scene, from what the game's screen knows (GameUI/main.jsx).
 export const musicSceneOf = ({ inMenu = false, loading = false, atWar = false, war = false } = {}) => {
   if (inMenu) return "menu";

@@ -54,6 +54,23 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // The owner, 2026-11-06: "when entering a game thats already opened ... dont do the whole music ramp up
+    // thing. make it just go to the ingame music once your in" (runtime/ambientMusic.js gameDrawnBefore,
+    // GameUI/main.jsx reopening).
+    id: "2026-11-straight-back-into-the-music",
+    kind: "minor",
+    date: "2026-11-06",
+    channel: "beta",
+    banners: [
+      {
+        title: "Straight back into the game’s music",
+        items: [
+          "Going back into a game you already opened this session skips the opening music’s build-up: the game’s own music starts as soon as you are in.",
+        ],
+      },
+    ],
+  },
+  {
     // MapLibre 6.16 with the game's own changes (Open-Historia/maplibre-gl-js, OPEN-HISTORIA.md): placement paced, sources
     // sharing their tile walks, clipping masks kept, tiles stored compactly. Measured on the production builds with the CPU
     // slowed 6x: panning 24 to 46 fps with terrain, 29 to 49 without; memory 3.1 GB to 1.9 GB. The land mask waits until the
