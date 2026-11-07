@@ -4,7 +4,7 @@ import { callAI, providerSupportsBatch, restoreAIBatch, retrieveAIBatch, sendDip
 import { forgetBatch, readStoredBatches, rememberBatch } from "./batchRegistry.js";
 import { jumpDayStep, jumpTargetDate } from "../../runtime/jumpDates.js";
 import { clampTimelineDates, validatePregameEvents, validateTimelineDates } from "./timelineDates.js";
-import { buildMilitaryFeasibilityText } from "./militaryFeasibility.js";
+import { MILITARY_FEASIBILITY, buildMilitaryFeasibilityText } from "./militaryFeasibility.js";
 import { looksLikeChatRequest } from "./chatHints.js";
 import { FALLBACK_SUGGESTION_TOPICS, fallbackTurnText } from "../../runtime/fallbackTurnText.js";
 import { describePuppetBriefing, puppetBriefingFor } from "../../runtime/puppets.js";
@@ -178,6 +178,8 @@ import {
   HIGH_PRIORITY_ASSESSMENT_RULE,
   buildBoardPassDirective,
   buildJumpProjectsDirective,
+  buildJumpProjectsRules,
+  JUMP_PROJECTS_RULES_HEADING,
 } from "./projectsDirective.js";
 import { filterBoundLedgerUpdatesToKeptEvents } from "./ledgerEventBinding.js";
 import { createTurnReplay, replayAnswer } from "./heldTurnReplay.js";
@@ -314,15 +316,18 @@ import {
   buildDetailedChatHistoryText,
   buildEventHistoryText,
   buildPromptContext,
+  buildWorldPromptSnapshot,
   filterToRenderedRegions,
   formatDateReadable,
   joinPolityNames,
+  refreshPromptReference,
   resolveHelperValues,
 } from "./promptContext.js";
 import { SHARED_WORLD_TASKS } from "./sharedGameDirective.js";
 import { SEAT_ADVICE_FIELD, mergeSeatAdvice, withSeatAdvice } from "./seatAdvice.js";
 import {
   HISTORY_CONSOLIDATION,
+  HISTORY_TIERS_OUTPUT,
   applyHistoryDocumentUpdate,
   buildHistoryDocumentDirective,
   HISTORY_JOB_FENCES,
@@ -332,7 +337,9 @@ import {
   judgeSkipHistoryAnswer,
   planHistoryConsolidation,
   seedHistoryDocumentText,
+  yearSpanOf,
 } from "./historyConsolidation.js";
+import { eraWordCount, yearOfDate } from "../../runtime/historyTiers.js";
 import {
   expandBakedRegionsForRename,
   renamePolityInActions,
@@ -527,11 +534,13 @@ import { unseenEvents, withoutUnseenMessages } from "../../runtime/unseenEvents.
 import { canRewindInteractiveTo, isSceneInProgress, openInteractive, recordInteractiveBeat, rewindInteractive } from "./interactiveRewind.js";
 import { chooseInteractiveOffer, offeredEvent } from "../../runtime/interactiveOffer.js";
 import { buildCrossChatKnowledge } from "./crossChatKnowledge.js";
+import { isPendingAction } from "./regionFocus.js";
 import {
   describeIntelligenceStanding,
   describeLeaderStanding,
   describeReputationStanding,
   describeTerritorialRows,
+  describeTerritorialRowsGrouped,
   describeTerritoryForConversation,
   territorialControlRows,
 } from "./standingContext.js";
@@ -1344,9 +1353,30 @@ const perfNow = () =>
 // With lookups 24 of them, and with Unlimited requests on fewer still: the rest
 // are behind the functions either way.
 const LEAN_TERRITORIAL_ROWS = 12;
-const buildTerritorialControlContext = async (worldLike, { maxRows = 80, viaLookups = false } = {}) => {
+// A time skip's `inView` (promptContext.js buildPromptFocus): the rows grouped
+// by who holds what, those of the powers in view in full.
+const buildTerritorialControlContext = async (worldLike, { maxRows = 80, viaLookups = false, inView = null } = {}) => {
   const catalog = await loadRegionCatalog().catch(() => []);
-  return describeTerritorialRows(territorialControlRows(normalizeWorldState(worldLike), catalog), { maxRows, viaLookups });
+  const rows = territorialControlRows(normalizeWorldState(worldLike), catalog);
+  return inView instanceof Set
+    ? describeTerritorialRowsGrouped(rows, { inView, maxNames: Math.max(maxRows * 3, 60), viaLookups })
+    : describeTerritorialRows(rows, { maxRows, viaLookups });
+};
+
+// Whether a group is one a time skip is about: it holds land in a power in view,
+// or the recent events, the orders still waiting, a war or a live storyline name
+// it. `world` is normalised.
+const groupInViewTest = (bundle, world, catalog, inView) => {
+  const owners = new Map(catalog.map((region) => [region.id, normalizeString(region.country)]));
+  const ownerOf = (id) => normalizeString(world.regionOwnershipOverrides?.[id]) || owners.get(id) || "";
+  const text = [
+    ...normalizeArray(bundle?.events).slice(-12).map((event) => `${event?.title ?? ""} ${event?.description ?? ""}`),
+    ...normalizeArray(bundle?.actions).filter(isPendingAction).map((action) => `${action?.title ?? ""} ${action?.description ?? ""} ${action?.rawInput ?? action?.text ?? ""}`),
+    ...normalizeArray(world.wars).filter((war) => normalizeString(war?.status).toLowerCase() !== "ended").map((war) => JSON.stringify(war)),
+    ...normalizeArray(world.storylines).filter((entry) => ["active", "dormant"].includes(normalizeString(entry?.status).toLowerCase() || "active")).map((entry) => JSON.stringify(entry)),
+  ].join("\n").toLowerCase();
+  return (name, regionIds) => regionIds.some((id) => inView.has(ownerOf(id).toLowerCase()))
+    || (normalizeString(name).length >= 3 && text.includes(normalizeString(name).toLowerCase()));
 };
 
 // Groups (runtime/groups.js) as the model reads them: each exact name, what it
@@ -1359,7 +1389,7 @@ const buildTerritorialControlContext = async (worldLike, { maxRows = 80, viaLook
 // A group larger than its share ends "+N more" (list_regions with a group when
 // lookups are on).
 const GROUP_REGIONS_IN_PROMPT = 400;
-const buildGroupsContext = async (worldLike, { regionCatalog = null } = {}) => {
+const buildGroupsContext = async (worldLike, { regionCatalog = null, inView = null, bundle = null } = {}) => {
   if (!worldLike?.groups || !Object.keys(worldLike.groups).length) return "";
   const world = normalizeWorldState(worldLike);
   const count = Object.keys(world.groups).length;
@@ -1369,6 +1399,7 @@ const buildGroupsContext = async (worldLike, { regionCatalog = null } = {}) => {
   return describeGroupsForPrompt(world, {
     regionName: (id) => names.get(id) || id,
     maxRegions: Math.max(12, Math.floor(GROUP_REGIONS_IN_PROMPT / count)),
+    ...(inView instanceof Set ? { inView: groupInViewTest(bundle, world, catalog, inView) } : {}),
   });
 };
 
@@ -1539,14 +1570,20 @@ const buildTemplateVariables = async (bundle, options = {}) => {
   }
   await pause?.();
   if (wants("territorialControlContext")) {
-    variables.territorialControlContext = await buildTerritorialControlContext(bundle.world, lookups ? { maxRows: leanLookups ? LEAN_TERRITORIAL_ROWS : 24, viaLookups: true } : {});
+    variables.territorialControlContext = await buildTerritorialControlContext(bundle.world, {
+      ...(lookups ? { maxRows: leanLookups ? LEAN_TERRITORIAL_ROWS : 24, viaLookups: true } : {}),
+      // A time skip: grouped, the powers it has in view in full (promptContext.js buildPromptFocus).
+      inView: variables.promptFocus?.inView ?? null,
+    });
   }
   // Groups switched off for this game (server/gameFeatures.js): no task is
   // given them, which also leaves out the time skip's [Groups] rule and the
   // Game Master's block (both read these).
   await pause?.();
   const groupsOn = isActiveFeatureEnabled("groups");
-  variables.groupsContext = groupsOn ? await buildGroupsContext(bundle.world, { regionCatalog: options?.mapSource?.regionCatalog }) : "";
+  variables.groupsContext = groupsOn
+    ? await buildGroupsContext(bundle.world, { regionCatalog: options?.mapSource?.regionCatalog, inView: variables.promptFocus?.inView ?? null, bundle })
+    : "";
   await pause?.();
   variables.playerGroupContext = groupsOn
     ? await buildPlayerGroupContext(bundle.world, bundle.game?.country, { regionCatalog: options?.mapSource?.regionCatalog })
@@ -1574,7 +1611,8 @@ const buildTemplateVariables = async (bundle, options = {}) => {
   if (wants("playerPolityMilitaryContext")) {
     variables.playerPolityMilitaryContext = describeMilitaryStanding(bundle.world && typeof bundle.world === "object" ? bundle.world : {}, normalizeString(bundle.game.country));
   }
-  if (wants("unitsSummary")) {
+  // A time skip states the doctrine once, among its standing rules.
+  if (wants("unitsSummary") && !JUMP_TASK_KEYS.has(taskKey)) {
     variables.unitsSummary =
       normalizeString(variables.unitsSummary) +
       buildMilitaryFeasibilityText(bundle.world, bundle.actions);
@@ -2844,7 +2882,13 @@ const buildJumpStaticRules = async (variables = {}) => {
     // One request, so the events finish themselves.
     variables?.foldedSkip ? FOLDED_SKIP_CONSEQUENCES : "",
     unitsOnTheMapBlock(game?.gameDate, eraSettingOf(world)),
+    `[Military Feasibility]\n${MILITARY_FEASIBILITY}`,
     TAKING_GROUND_BLOCK,
+    // How the board is kept, once there is a board (projectsDirective.js).
+    normalizeArray(world.projects).length > 0
+      ? `${JUMP_PROJECTS_RULES_HEADING}\n${buildJumpProjectsRules({ folded: Boolean(variables?.foldedSkip) })}`
+      : "",
+    isActiveFeatureEnabled("groups") ? `${GROUPS_RULE_HEADING}\n${GROUPS_RULE}` : "",
     `${WAR_LEDGER_RULES_HEADING}\n${warLedgerRules(playerName)}`,
     `${DIPLOMATIC_LEDGER_RULES_HEADING}\n${diplomaticLedgerRules(playerName)}`,
     `[Reading the Diplomatic Ledger]\n${DIPLOMATIC_SLICE_RULES}`,
@@ -2898,9 +2942,13 @@ const describeWarsWithoutFormations = (world) => {
   ].join("\n");
 };
 
-const buildJumpGroupsBlock = (groupsContext) => [
+const GROUPS_RULE = "Groups are actors that are not countries — an insurgency, a cartel, a militia, a warlord's band, a cult, a zombie outbreak — each controlling an area of regions that stay their countries'. Found, change, move or erase them with groupOps whenever an event has one appear, spread, lose ground, change or be destroyed. A group taking a region moves no border; when a group becomes a state that governs its land, found the state with regionTransfers instead. A side in a war or a rising that is not a country on the map is a group too, even when none is listed below yet: found it the first time an event has it holding ground, so that its later gains and losses have something on the map to change.";
+const GROUPS_RULE_HEADING = "[How Groups Are Recorded]";
+// `rulesAbove`: the rule is in the skip's standing rules (buildJumpStaticRules),
+// and the live block points at it.
+const buildJumpGroupsBlock = (groupsContext, { rulesAbove = false } = {}) => [
   "[Groups]",
-  "Groups are actors that are not countries — an insurgency, a cartel, a militia, a warlord's band, a cult, a zombie outbreak — each controlling an area of regions that stay their countries'. Found, change, move or erase them with groupOps whenever an event has one appear, spread, lose ground, change or be destroyed. A group taking a region moves no border; when a group becomes a state that governs its land, found the state with regionTransfers instead. A side in a war or a rising that is not a country on the map is a group too, even when none is listed below yet: found it the first time an event has it holding ground, so that its later gains and losses have something on the map to change.",
+  rulesAbove ? `Recorded as ${GROUPS_RULE_HEADING} above says.` : GROUPS_RULE,
   normalizeString(groupsContext) || "No groups exist yet.",
 ].join("\n");
 
@@ -2930,7 +2978,7 @@ const buildJumpLiveState = async ({ variables = {}, lookups = null, reminders = 
   // priority line opens the system prompt (main.jsx callAI).
 
   blocks.push(`[Occupied and Contested Regions]\n${normalizeString(variables.territorialControlContext) || "None."}`);
-  if (isActiveFeatureEnabled("groups")) blocks.push(buildJumpGroupsBlock(variables.groupsContext));
+  if (isActiveFeatureEnabled("groups")) blocks.push(buildJumpGroupsBlock(variables.groupsContext, { rulesAbove }));
   // The player leads a group rather than a country (runtime/groups.js).
   if (normalizeString(variables.playerGroupContext)) blocks.push(`${variables.playerGroupContext}\n${PLAYER_GROUP_JUMP_RULE}`);
 
@@ -3013,6 +3061,9 @@ ${pending}`);
   const foldedSkip = Boolean(variables.foldedSkip);
   const board = buildJumpProjectsDirective(variables.projectsSummary, {
     folded: foldedSkip,
+    // The rules are above, among the standing ones, when the board had entries
+    // as the opening was built (buildJumpStaticRules).
+    rulesAbove: rulesAbove && normalizeArray(world.projects).length > 0,
     doubted: normalizeString(variables.foldedBoardDoubts),
   });
   if (board) blocks.push(board);
@@ -3253,7 +3304,7 @@ const buildTaskSystemPrompt = async (taskKey, { variables, lookups = null, remin
     systemPrompt = `${systemPrompt}\n\n[Durable Canon]\nThe history document REPLACES the material it covers: once consolidated, those events, conversations and player orders are never sent to the simulation again, so whatever the document omits is lost permanently. Carry forward explicitly, as standing facts rather than narration:\n1. How this world has DIVERGED from real history — states that never formed, wars that never happened, rulers who never fell, borders that never moved. Name them. A later model that sees only a gap fills it from real history and invents powers this campaign does not contain.\n2. The lasting CONSEQUENCES of the player's own orders, not the orders themselves.\n3. Commitments still in force: treaties, alliances, occupations, debts, standing grievances.\nBrevity matters, but never at the cost of a divergence or a commitment that is still true.`;
     const documentDirective = normalizeString(variables?.historyDocumentContext);
     if (documentDirective) {
-      systemPrompt = `${systemPrompt}\n\n${documentDirective}\n\nOutput both fields, always: {"summary": "<this period's compressed history>", "document": "<the whole revised history document>"}.`;
+      systemPrompt = `${systemPrompt}\n\n${documentDirective}\n\nOutput: ${HISTORY_TIERS_OUTPUT}, with "eras" too where the directive above asks for them.`;
     }
     const resolvedOrders = normalizeString(variables?.actionsToConsolidate);
     if (resolvedOrders && !resolvedOrders.startsWith("No ")) {
@@ -5201,7 +5252,15 @@ const historyConsolidationVariables = async (bundle, events, chats, actions = []
     chatsToConsolidate: buildDetailedChatHistoryText(chats, { limit: chats.length || 1, messageLimit: 100 }),
     eventsToConsolidate: buildEventHistoryText(events, { limit: events.length || 1 }),
   })),
-  historyDocumentContext: buildHistoryDocumentDirective(bundle.world),
+  historyDocumentContext: buildHistoryDocumentDirective(bundle.world, { span: yearSpanOf(events) }),
+});
+
+// What a pass in tiers needs besides its answer (runtime/historyTiers.js): the
+// years its material covers, and the year the campaign began (a document from
+// before the tiers becomes the era up to the first year written).
+const historyTierContext = (bundle, events) => ({
+  span: yearSpanOf(events),
+  startYear: yearOfDate(bundle?.game?.startDate),
 });
 
 // A pass's boundary as plain JSON: what its ledger entry records, and what a
@@ -5215,6 +5274,7 @@ const consolidationResume = (plan, bundle, { campaignId, world }) => ({
   throughEventId: plan.throughEvent?.id || "",
   throughRound: bundle.game.round,
   baseRevision: world.historyDocument?.revision ?? 0,
+  ...historyTierContext(bundle, plan.eventsToConsolidate),
   eventCount: plan.eventsToConsolidate.length,
   chatCount: plan.closedChats.length,
 });
@@ -5251,8 +5311,16 @@ const prepareSkipHistoryFold = async (bundle, { campaignId = activeCampaignId() 
     resume: consolidationResume(plan, bundle, { campaignId, world }),
     baseRevision: world.historyDocument?.revision ?? 0,
     currentText: seedHistoryDocumentText(world),
+    span: yearSpanOf(plan.eventsToConsolidate),
+    eraWords: eraWordCount(world.historyDocument),
   };
 };
+
+// A pass's tiers as its answer gave them, or null (applyHistoryDocumentUpdate
+// judges each entry).
+const historyTiersOf = (payload) => (payload && (Array.isArray(payload.years) || Array.isArray(payload.eras) || Array.isArray(payload.canon))
+  ? { years: payload.years ?? [], eras: payload.eras ?? null, canon: payload.canon ?? [] }
+  : null);
 
 const consolidateHistoryBatch = async (bundle, events, chats, actions = [], { onBatchResult, batchResume = null, onRequest, signal, campaignId = "", spender = "" } = {}) => {
   // The document this pass revises, and the revision it was read at: a pass
@@ -5289,6 +5357,7 @@ const consolidateHistoryBatch = async (bundle, events, chats, actions = [], { on
     generation,
     summary: normalizeString(payload?.summary),
     document: normalizeString(payload?.document),
+    tiers: historyTiersOf(payload),
     baseRevision,
   };
 };
@@ -5345,12 +5414,16 @@ const deferredConsolidationApplier = (resume) => async (resultPayload, source) =
       throughEventId: entry.throughEventId,
       throughRound: entry.throughRound,
       baseRevision: resume?.baseRevision ?? 0,
+      tiers: historyTiersOf(resultPayload),
+      span: Array.isArray(resume?.span) ? resume.span : null,
+      startYear: Number(resume?.startYear),
     });
     appliedMode = documentUpdate.mode;
     return normalizeWorldState({
       ...latestWorld,
       consolidatedHistory: [...latestWorld.consolidatedHistory, entry],
       historyDocument: documentUpdate.historyDocument,
+      canonFacts: documentUpdate.canonFacts,
     });
   });
   if (appliedMode) {
@@ -5390,12 +5463,16 @@ const compactHistoryIfNeeded = async (bundle, { force = false, requests = null, 
         throughEventId: entry.throughEventId,
         throughRound: entry.throughRound,
         baseRevision: skipFold.baseRevision,
+        tiers: skipFold.tiers ?? null,
+        span: Array.isArray(skipFold.resume?.span) ? skipFold.resume.span : null,
+        startYear: Number(skipFold.resume?.startYear),
       });
       logDebugEvent("ai", `History consolidated in the time skip's own answer: ${skipFold.resume?.eventCount ?? 0} events, ${skipFold.resume?.chatCount ?? 0} chats folded; history document ${documentUpdate.mode}.${skipFold.reason ? ` (${skipFold.reason})` : ""}`);
       return normalizeWorldState({
         ...world,
         consolidatedHistory: [...world.consolidatedHistory, entry],
         historyDocument: documentUpdate.historyDocument,
+        canonFacts: documentUpdate.canonFacts,
       });
     }
     const waiting = planHistoryConsolidation(bundle).unconsolidatedEvents.length;
@@ -5457,7 +5534,7 @@ const compactHistoryIfNeeded = async (bundle, { force = false, requests = null, 
     );
   });
   if (!consolidated?.summary) return world;
-  const { generation, summary, document, baseRevision } = consolidated;
+  const { generation, summary, document, baseRevision, tiers = null } = consolidated;
 
   const entry = consolidationEntryFor(resume, summary, generation.source, world.consolidatedHistory);
   const documentUpdate = applyHistoryDocumentUpdate(world, {
@@ -5468,12 +5545,16 @@ const compactHistoryIfNeeded = async (bundle, { force = false, requests = null, 
     throughEventId: entry.throughEventId,
     throughRound: entry.throughRound,
     baseRevision,
+    tiers,
+    span: Array.isArray(resume?.span) ? resume.span : null,
+    startYear: Number(resume?.startYear),
   });
   logDebugEvent("ai", `History consolidated (${generation.source}): ${eventsToConsolidate.length} events, ${closedChats.length} chats folded; history document ${documentUpdate.mode}.`);
   return normalizeWorldState({
     ...world,
     consolidatedHistory: [...world.consolidatedHistory, entry],
     historyDocument: documentUpdate.historyDocument,
+    canonFacts: documentUpdate.canonFacts,
   });
 };
 
@@ -10519,6 +10600,21 @@ const applySimulationResult = async ({
   }
 
   if (result.mode === "jump" || result.mode === "auto") {
+    // What the next skip reads as changed since this one: the world this one
+    // started from, as its prompt read it (promptContext.js buildPromptFocus),
+    // and the polity lore the cached opening carries, renewed now and then
+    // (refreshPromptReference). Neither is needed for the turn itself.
+    try {
+      const snapshot = await buildWorldPromptSnapshot({ world: baseWorld, game: baseGame });
+      worldWithImpacts = {
+        ...worldWithImpacts,
+        promptSnapshot: snapshot,
+        promptReference: refreshPromptReference(normalizeWorldState(baseWorld), Number(baseGame?.round) || 0),
+      };
+      nextWorld = worldWithImpacts;
+    } catch (error) {
+      console.warn("[ai] the next skip will read nothing as unchanged: the world could not be measured.", error);
+    }
     try {
       phases?.enter("history");
       nextWorld = await compactHistoryIfNeeded({
@@ -16154,7 +16250,10 @@ export const runChatActionBatch = async ({
     ? []
     : aiParticipants.map((speaker) => describePeaceTalk({ world: bundle.world, speaker, player, form: "field" })).filter(Boolean);
   const variables = {
-    ...(await buildTemplateVariables(bundle, { taskKey: "chatActions" })),
+    // A conversation writes no regionTransfers: its world summary gives region
+    // counts by power and names only for the player (promptContext.js
+    // buildWorldSummary `conversation`), not the skip's vocabulary.
+    ...(await buildTemplateVariables(bundle, { taskKey: "chatActions", conversation: true })),
     chatParticipants: rosterText,
     chatHistory: transcript || "(nothing said yet)",
     CHAT_OPEN_POLLS: pollText,
@@ -16400,7 +16499,8 @@ export const runPostTurnInstitutionBallots = async ({
       });
       const institutionIds = [...new Set(work.map((item) => item.institutionId))];
       const variables = {
-        ...(await buildTemplateVariables(bundle, { taskKey: "chatActions" })),
+        // A ballot pass is a conversation too: no region vocabulary.
+        ...(await buildTemplateVariables(bundle, { taskKey: "chatActions", conversation: true })),
         chatParticipants: [
           ...actors.map((name) => `- ${name} — AI-controlled: you act for it`),
           `- ${player} — HUMAN-controlled (the player): never speak or act for it`,
@@ -16557,6 +16657,7 @@ export const consolidateHistoryNow = async () => {
           ...latest,
           consolidatedHistory: [...history, ...nextWorld.consolidatedHistory.slice(before)],
           historyDocument: nextWorld.historyDocument,
+          canonFacts: nextWorld.canonFacts,
         });
       });
     }
@@ -16565,7 +16666,7 @@ export const consolidateHistoryNow = async () => {
       events: plan.eventsToConsolidate.length,
       chats: plan.closedChats.length,
       retained,
-      documentWords: countWords(nextWorld.historyDocument?.text),
+      documentWords: countWords(seedHistoryDocumentText(nextWorld)),
       documentRevision: nextWorld.historyDocument?.revision ?? 0,
     };
   } finally {
@@ -17271,7 +17372,7 @@ const foldedTurnReview = ({ context, merged, state }) => {
       due: true,
       resume: fold.resume,
       baseRevision: fold.baseRevision,
-      ...judgeSkipHistoryAnswer(state.foldedHistoryAnswer, { currentText: fold.currentText }),
+      ...judgeSkipHistoryAnswer(state.foldedHistoryAnswer, { currentText: fold.currentText, span: fold.span, eraWords: fold.eraWords }),
     };
   }
 

@@ -160,8 +160,8 @@ test("the history fold is the last field of the contract, and only when a fold i
   assert.equal(HISTORY_FIELD in foldJumpTool(lean, { agentReports: true }).schema.properties, false, "no fold due, no field");
   const all = foldJumpTool(lean, { agentReports: true, history: true });
   assert.deepEqual(Object.keys(all.schema.properties).slice(-2), [AGENT_REPORTS_FIELD, HISTORY_FIELD], "after the reports: the one an answer cut short can best do without");
-  assert.deepEqual(all.schema.properties[HISTORY_FIELD].required, ["summary", "document"]);
-  assert.deepEqual(Object.keys(all.schema.properties[HISTORY_FIELD].properties), ["summary", "document"], "the consolidator's own two fields");
+  assert.deepEqual(all.schema.properties[HISTORY_FIELD].required, ["summary"]);
+  assert.deepEqual(Object.keys(all.schema.properties[HISTORY_FIELD].properties), ["summary", "years", "canon", "eras", "document"], "the consolidator's own fields, the history in tiers among them");
   const historyOnly = foldJumpTool(lean, { board: false, history: true });
   assert.equal(HISTORY_FIELD in historyOnly.schema.properties, true, "a skip with no board and no agents still carries a fold that is due");
   assert.equal("projectOps" in historyOnly.schema.properties.events.items.properties.impacts.properties, false);
@@ -247,7 +247,7 @@ test("the history a skip folds is planned before it and written from its own ans
   const review = functionBody("foldedTurnReview");
   assert.match(review, /if \(!fold\?\.separate\) review\.history = \{ due: false \};/);
   assert.ok(review.indexOf("review.history = { due: false }") < review.indexOf("if (normalizeString(state.generation?.source) === \"fallback\") return review;"), "a canned turn folds nothing and asks for nothing");
-  assert.match(review, /\.\.\.judgeSkipHistoryAnswer\(state\.foldedHistoryAnswer, \{ currentText: fold\.currentText \}\),/);
+  assert.match(review, /\.\.\.judgeSkipHistoryAnswer\(state\.foldedHistoryAnswer, \{ currentText: fold\.currentText, span: fold\.span, eraWords: fold\.eraWords \}\),/);
 
   // Read by the pass that used to make the request.
   assert.match(gameplaySource, /\{ requests, signal: projects\?\.signal, campaignId, replay, skipFold: review\?\.history \?\? null \}\);/);

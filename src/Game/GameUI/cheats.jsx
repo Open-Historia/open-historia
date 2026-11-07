@@ -44,7 +44,7 @@ import { PUPPET_KIND_OPTIONS, PUPPET_SECRECY_OPTIONS } from "../../Editor/scenar
 import { applyGmPuppetChange, gmPuppetRows } from "./puppetStatesTool.js";
 import { DIFFICULTY_LEVELS, normalizeDifficulty } from "../../runtime/difficulty.js";
 import { applyGameMasterPreview, consolidateHistoryNow, previewGameMasterCommand, previewGameMasterRevision } from "../AI/gameplayLazy.js";
-import { HISTORY_CONSOLIDATION, countWords, describeHistoryConsolidation, planHistoryConsolidation } from "../AI/historyConsolidation.js";
+import { HISTORY_CONSOLIDATION, countWords, describeHistoryConsolidation, planHistoryConsolidation, seedHistoryDocumentText } from "../AI/historyConsolidation.js";
 import {
     POLITICAL_TRAIT_REGISTRY,
     canonicalPoliticalTraitKey,
@@ -3308,7 +3308,10 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
             totalEvents: Array.isArray(events) ? events.length : 0,
         };
         setItems(data);
-        setFields({ document: data.document?.text ?? "" });
+        // In tiers (runtime/historyTiers.js), the eras and years as one text:
+        // saved by hand, it is one document again, and the next fold makes it
+        // the first era.
+        setFields({ document: data.document ? seedHistoryDocumentText(world) : "" });
         return data;
     };
 
@@ -4253,6 +4256,9 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
             const world = await readWorldState({ force: true });
             const current = world?.historyDocument ?? null;
             const text = draft.trim();
+            if (current && text === seedHistoryDocumentText(world).trim()) {
+                return "The history document is unchanged.";
+            }
             const next = text
                 ? {
                     text,
@@ -4265,7 +4271,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                 }
                 : null;
             await writeWorldState({ ...world, historyDocument: next });
-            if ((current?.text ?? "").trim() !== text) {
+            if ((current ? seedHistoryDocumentText(world) : "").trim() !== text) {
                 await noteGmChange("history", next
                     ? "Rewrote the history document by hand; it is the account of the past to go by."
                     : "Cleared the history document by hand.");

@@ -1,4 +1,6 @@
 /*! Open Historia — portions (troop deployments + era troop types) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
+import { normalizePromptReference, normalizePromptSnapshot } from "./promptSnapshot.js";
+import { normalizeCanonFacts, normalizeHistoryEras, normalizeHistoryYears } from "./historyTiers.js";
 import { JSON_URLS, getPrimedScenarioRegionCatalog, loadTurnRestorePoint, primeJson, publishJsonWriteBatch, readJson, reportPerfOperation, writeJson } from "./assets.js";
 import { withMapClaims } from "./mapClaims.js";
 import { populationFigureOf } from "./populationFigure.js";
@@ -100,6 +102,13 @@ export const WORLD_DEFAULTS = {
   // The living history document the AI is shown in place of the folded events
   // (AI/historyConsolidation.js); null until the first consolidation pass.
   historyDocument: null,
+  // The facts of the campaign that never fade: treaties, deaths, regime and
+  // border changes, office holders, each dated (runtime/historyTiers.js).
+  canonFacts: [],
+  // What the last time skip's prompt read, and the polity lore its cached
+  // opening carries (runtime/promptSnapshot.js); null until a skip writes them.
+  promptSnapshot: null,
+  promptReference: null,
   // Per-polity international reputation (0-100), evolved by the AI each turn via
   // polityChanges and fed back into prompts. Authoritative, unlike the on-demand
   // stat sheet it was first read from.
@@ -3914,13 +3923,19 @@ const normalizeActionSuggestions = (value) =>
 
 // The living history document (AI/historyConsolidation.js). The text is the
 // point; the rest records which pass wrote it and how far it reaches.
+// `years` and `eras`: the document in tiers (runtime/historyTiers.js); a
+// document from before them has its text alone, and one in tiers may have none.
 const normalizeHistoryDocument = (value) => {
   if (!value || typeof value !== "object") return null;
   const text = normalizeTextLike(value.text);
-  if (!text) return null;
+  const years = normalizeHistoryYears(value.years);
+  const eras = normalizeHistoryEras(value.eras);
+  if (!text && !years.length && !eras.length) return null;
   const throughRound = Math.trunc(Number(value.throughRound) || 0);
   return {
     text,
+    ...(years.length ? { years } : {}),
+    ...(eras.length ? { eras } : {}),
     revision: Math.max(1, Math.trunc(Number(value.revision) || 1)),
     updatedAt: normalizeOptionalString(value.updatedAt) || new Date().toISOString(),
     source: normalizeOptionalString(value.source) || "ai",
@@ -4499,6 +4514,9 @@ export const normalizeWorldState = (world) => {
       : 0,
     consolidatedHistory: normalizeConsolidatedHistory(nextWorld.consolidatedHistory),
     historyDocument: normalizeHistoryDocument(nextWorld.historyDocument),
+    canonFacts: normalizeCanonFacts(nextWorld.canonFacts),
+    promptSnapshot: normalizePromptSnapshot(nextWorld.promptSnapshot),
+    promptReference: normalizePromptReference(nextWorld.promptReference),
     internationalReputation,
     intelligence,
     spies,
