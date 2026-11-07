@@ -18,26 +18,31 @@ const line = async (label) => {
     return report.split("\n").find((row) => row.trim().startsWith(`${label}:`))?.trim() ?? "";
 };
 
-test("AI lookup functions: the file says when Save AI requests is keeping them off", async () => {
-    // A fresh install: the switch is on and requests are saved, so no task
+test("AI lookup functions: the file says when a key with a request limit is keeping them off", async () => {
+    // A fresh install: the lookups are on and requests are saved, so no task
     // declares a lookup.
-    assert.equal(await line("AI lookup functions"), "AI lookup functions: on (inactive: Save AI requests)");
-    requestSettings.setSaveRequests(false);
+    assert.equal(await line("AI lookup functions"), "AI lookup functions: on (inactive: the key has a request limit)");
+    requestSettings.setNoRequestLimit(true);
     assert.equal(await line("AI lookup functions"), "AI lookup functions: on");
     localStorage.setItem(MAP_SETTING_KEYS.lookupFunctions, "0");
     assert.equal(await line("AI lookup functions"), "AI lookup functions: off");
-    requestSettings.setSaveRequests(true);
-    assert.equal(await line("AI lookup functions"), "AI lookup functions: off");
+    requestSettings.setNoRequestLimit(false);
+    assert.equal(await line("AI lookup functions"), "AI lookup functions: on (inactive: the key has a request limit)", "put back as it was before the switch");
 });
 
-test("Unlimited requests: off on a fresh install, and on reads as Save AI requests off", async () => {
-    assert.equal(await line("Unlimited requests"), "Unlimited requests: off");
-    requestSettings.setSaveRequests(true);
-    requestSettings.setUnlimited(true);
-    assert.equal(await line("Unlimited requests"), "Unlimited requests: on");
-    assert.equal(await line("Save AI requests"), "Save AI requests: off");
-    requestSettings.setUnlimited(false);
-    assert.equal(await line("Save AI requests"), "Save AI requests: on", "as the player last set it");
+test("My key has no request limit: one line, off on a fresh install; on, the limits are marked unused", async () => {
+    assert.equal(await line("My key has no request limit"), "My key has no request limit: off");
+    assert.equal(await line("Save AI requests"), "", "the two old switches have no lines");
+    assert.equal(await line("Unlimited requests"), "");
+    assert.equal(await line("Requests a day your key allows"), "Requests a day your key allows: 500");
+    assert.match(await line("Used today"), /^Used today: \d+ of 500 \(/);
+    requestSettings.setNoRequestLimit(true);
+    assert.equal(await line("My key has no request limit"), "My key has no request limit: on");
+    assert.equal(await line("Requests a day your key allows"), "Requests a day your key allows: 500 (not used: no request limit)");
+    assert.equal(await line("Background requests a day, at most"), "Background requests a day, at most: 30 (not used: no request limit)");
+    assert.match(await line("Used today"), /^Used today: \d+ \(background /);
+    requestSettings.setNoRequestLimit(false);
+    assert.equal(await line("My key has no request limit"), "My key has no request limit: off");
 });
 
 test("Performance mode: the profile running, why, and what a reload would change it to", async () => {

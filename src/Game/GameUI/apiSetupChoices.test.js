@@ -240,3 +240,61 @@ test("the logos ship with the game, and their sizes match", () => {
   const svg = fs.readFileSync(new URL("../../../public/brands/commandcode.svg", import.meta.url), "utf8");
   assert.match(svg, /^<svg fill="none" height="137" viewBox="0 0 137 137" width="137"/, "Command Code's logomark, square");
 });
+
+// ---- My key has no request limit, set by the choice -----------------------
+//
+// Command Code's GOAT plan is a paid key and a server of the player's own a
+// local model: both turn Settings → AI → AI requests' switch on. Gemini's free
+// key leaves it off. Shown as already set, with no question to answer.
+
+const SWITCH_KEY = "ai_no_request_limit";
+const switchRow = /data-setup-no-request-limit="on"/;
+
+test("Command Code turns the switch on, and its steps say so without asking", () => {
+  const html = render({ initialChoice: "commandcode" });
+  assert.match(html, switchRow);
+  assert.match(words(html), /My key has no request limit On/);
+  assert.equal(/<input[^>]*type="checkbox"/.test(html), false, "nothing to answer");
+  assert.equal(store.get(SWITCH_KEY), undefined, "drawing the steps sets nothing");
+  saveSetupChoice("commandcode", { apiKey: "fake-command-code-key-4" });
+  assert.equal(store.get(SWITCH_KEY), "1");
+  assert.equal(store.get("ai_background_activity"), "1", "with everything it turns on");
+  assert.equal(store.get("ai_lookup_functions"), "1");
+});
+
+test("a local server through Custom turns it on; a hosted one leaves it as it was", () => {
+  assert.equal(loaded.noRequestLimitFor("custom", { provider: "openai-compatible", endpoint: "http://localhost:11434/v1" }), true);
+  assert.equal(loaded.noRequestLimitFor("custom", { provider: "openai-compatible", endpoint: "192.168.1.20:1234/v1" }), true);
+  assert.equal(loaded.noRequestLimitFor("custom", { provider: "anthropic-compatible", endpoint: "http://127.0.0.1:4000/v1" }), true);
+  assert.equal(loaded.noRequestLimitFor("custom", { provider: "openai-compatible", endpoint: "https://openrouter.ai/api/v1" }), null);
+  assert.equal(loaded.noRequestLimitFor("custom", { provider: "openai", endpoint: "" }), null);
+  assert.equal(loaded.noRequestLimitFor("custom", { provider: "gemini" }), null);
+  assert.equal(loaded.noRequestLimitFor("commandcode"), true);
+  assert.equal(loaded.noRequestLimitFor("gemini"), false);
+
+  // The Custom card opens on a local server, so it shows the switch set.
+  assert.match(render({ initialChoice: "custom" }), switchRow);
+  saveSetupChoice("custom", { provider: "openai-compatible", endpoint: "http://localhost:11434/v1", model: "llama3.3" });
+  assert.equal(store.get(SWITCH_KEY), "1");
+
+  store.set(SWITCH_KEY, "0");
+  saveSetupChoice("custom", { provider: "openai", apiKey: "sk-fake-key-for-the-test-000" });
+  assert.equal(store.get(SWITCH_KEY), "0", "a hosted provider says nothing about the limit");
+});
+
+test("Gemini's free key leaves it off, and its steps show nothing about it", () => {
+  assert.equal(switchRow.test(render({ initialChoice: "gemini" })), false);
+  saveSetupChoice("gemini", { apiKey: "AIzaFAKEKEYFORTHETEST000" });
+  assert.equal(store.get(SWITCH_KEY), "0");
+  assert.equal(store.get("ai_background_activity"), undefined, "nothing else is touched for a limited key");
+  assert.equal(store.get("ai_lookup_functions"), undefined);
+  // A player who had turned it on and then sets up a free key is back on the free key's settings.
+  store.set(SWITCH_KEY, "1");
+  saveSetupChoice("gemini", { apiKey: "AIzaFAKEKEYFORTHETEST000" });
+  assert.equal(store.get(SWITCH_KEY), "0");
+});
+
+test("a setup that could not be saved sets no switch", () => {
+  assert.throws(() => saveSetupChoice("commandcode", { apiKey: "  " }), /Paste an API key first/);
+  assert.equal(store.get(SWITCH_KEY), undefined);
+});

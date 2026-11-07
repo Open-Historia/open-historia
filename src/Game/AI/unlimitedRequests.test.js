@@ -3,10 +3,11 @@
 //
 // Needs a full install: promptContext.js -> assets.js -> maplibre-gl.
 //
-// Unlimited requests (Settings → AI → AI requests) is for a paid key or a local
-// model: the model looks things up as it needs them instead of being sent
-// everything. On, a skip may be up to eight requests with six rounds of
-// questions, the lookup directive says six, and the prompt is slimmer. Off,
+// My key has no request limit (Settings → AI → AI requests; the code calls it
+// unlimited) is for a paid key or a local model: the model looks things up as
+// it needs them instead of being sent everything. On, a skip may be up to eight
+// requests with six rounds of questions, the lookup directive says six, and
+// the prompt is slimmer. Off,
 // which is every install until the player turns it on, nothing of that is
 // different: each test below says so too.
 
@@ -39,31 +40,25 @@ const source = (path) => readFileSync(new URL(path, import.meta.url), "utf8").re
 
 // ---- The setting ------------------------------------------------------------
 
-test("off on a fresh install; on, Save AI requests reads off, and turning saving on turns it off", () => {
+test("off on a fresh install; the switch on is unlimited and saving off, and off again the reverse", () => {
   const storage = createMemoryStorage();
   const settings = createRequestSettings({ storage });
   assert.equal(settings.unlimited(), false);
   assert.equal(settings.saveRequests(), true);
 
-  settings.setUnlimited(true);
-  assert.equal(storage.getItem(REQUEST_BUDGET_KEYS.unlimited), "1");
+  settings.setNoRequestLimit(true);
+  assert.equal(storage.getItem(REQUEST_BUDGET_KEYS.noRequestLimit), "1");
   assert.equal(settings.unlimited(), true);
-  assert.equal(settings.saveRequests(), false, "unlimited is saving off");
+  assert.equal(settings.saveRequests(), false, "no request limit is saving off");
 
-  settings.setUnlimited(false);
-  assert.equal(settings.saveRequests(), true, "off again, saving is as the player last set it");
-
-  settings.setSaveRequests(false);
-  settings.setUnlimited(true);
-  settings.setSaveRequests(true);
-  assert.equal(settings.unlimited(), false, "saving on turns unlimited off");
+  settings.setNoRequestLimit(false);
+  assert.equal(settings.unlimited(), false);
   assert.equal(settings.saveRequests(), true);
-  assert.equal(storage.getItem(REQUEST_BUDGET_KEYS.unlimited), "0");
 });
 
 test("only an explicit \"1\" turns it on", () => {
   for (const value of [null, "", "0", "true", "yes"]) {
-    const settings = createRequestSettings({ storage: createMemoryStorage(value === null ? {} : { [REQUEST_BUDGET_KEYS.unlimited]: value }) });
+    const settings = createRequestSettings({ storage: createMemoryStorage(value === null ? {} : { [REQUEST_BUDGET_KEYS.noRequestLimit]: value }) });
     assert.equal(settings.unlimited(), false, String(value));
   }
 });

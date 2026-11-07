@@ -345,7 +345,7 @@ export const LOOKUP_DIRECTIVE = [
 
 // The directive with the number of rounds the task really has in rule 5:
 // LOOKUP_DIRECTIVE as it is for three, the number written out otherwise (six
-// with Unlimited requests on, requestBudget.js lookupRoundLimit).
+// with no request limit, requestBudget.js lookupRoundLimit).
 const ROUND_WORDS = ["NO", "ONE", "TWO", "THREE", "FOUR", "FIVE", "SIX", "SEVEN", "EIGHT", "NINE", "TEN"];
 export const lookupDirective = ({ rounds = 3 } = {}) => {
   const count = Math.max(0, Math.round(Number(rounds) || 0));

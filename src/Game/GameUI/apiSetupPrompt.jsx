@@ -16,6 +16,8 @@ import {
   getRecentModels,
   providerSetupRequirement,
 } from "../AI/providerConfig.js";
+import { endpointIsLocal } from "../AI/localEndpoint.js";
+import { setNoRequestLimit } from "../AI/requestBudget.js";
 import { useBrowserOnline } from "../../runtime/networkStatus.js";
 
 // Shown when a game starts and the selected AI provider has nothing to call
@@ -39,6 +41,12 @@ import { useBrowserOnline } from "../../runtime/networkStatus.js";
 // Each is saved into the Connections and the Fallback list (providerConfig.js
 // applyQuickAiSetup, applyTemplateAiSetup), at the top, and main.jsx closes the
 // prompt once the list can answer.
+//
+// Each also sets Settings → AI → AI requests' one switch, "My key has no request
+// limit" (requestBudget.js), without asking: on for Command Code (the GOAT plan
+// is a paid key) and for a server on the player's own machine or network
+// through Custom (a local model), off for Gemini's free key. The steps show it
+// as already set. Any other Custom provider leaves it as it is.
 
 const TUTORIAL_VIDEO_ID = "YdalQ8UqMR4";
 const TUTORIAL_VIDEO_URL = `https://www.youtube.com/watch?v=${TUTORIAL_VIDEO_ID}`;
@@ -307,13 +315,37 @@ const KeyField = ({ id, label, value, onChange, onEnter, placeholder, helper }) 
   );
 };
 
-// What saving each choice writes: Gemini and Custom the provider, key or
-// endpoint, and model typed; Command Code its template with the key.
-export const saveSetupChoice = (choice, { provider, apiKey = "", endpoint = "", model = "" } = {}) => {
-  if (choice === "commandcode") return applyTemplateAiSetup(COMMANDCODE_TEMPLATE, apiKey);
-  if (choice === "gemini") return applyQuickAiSetup({ provider: "gemini", apiKey, model });
-  return applyQuickAiSetup({ provider, apiKey, endpoint, model });
+// Whether the key a choice sets up has no request limit: true, false, or null
+// for a choice that says nothing about it (a hosted provider through Custom).
+export const noRequestLimitFor = (choice, { provider = "", endpoint = "" } = {}) => {
+  if (choice === "commandcode") return true;
+  if (choice === "gemini") return false;
+  if (choice === "custom" && providerSetupRequirement(provider) === "endpoint" && endpointIsLocal(endpoint)) return true;
+  return null;
 };
+
+// What saving each choice writes: Gemini and Custom the provider, key or
+// endpoint, and model typed; Command Code its template with the key. Then the
+// switch, once the setup itself was saved.
+export const saveSetupChoice = (choice, { provider, apiKey = "", endpoint = "", model = "" } = {}) => {
+  const saved = choice === "commandcode"
+    ? applyTemplateAiSetup(COMMANDCODE_TEMPLATE, apiKey)
+    : choice === "gemini"
+    ? applyQuickAiSetup({ provider: "gemini", apiKey, model })
+    : applyQuickAiSetup({ provider, apiKey, endpoint, model });
+  const noLimit = noRequestLimitFor(choice, { provider, endpoint });
+  if (noLimit !== null) setNoRequestLimit(noLimit);
+  return saved;
+};
+
+// The switch as the choice sets it, shown on the steps of a choice that turns
+// it on: a fact, with nothing to answer.
+const NoRequestLimitRow = () => (
+  <div data-setup-no-request-limit="on" style={{ alignItems: "baseline", display: "flex", flexWrap: "wrap", gap: "0.45rem" }}>
+    <span style={{ ...labelStyle, display: "inline", marginBottom: 0 }}>My key has no request limit</span>
+    <span style={{ fontSize: "0.84rem", fontWeight: 750 }}>On</span>
+  </div>
+);
 
 // The tutorial's place on the card: a button until it is pressed, the YouTube
 // player after. Nothing is asked of YouTube before the press, and the button
@@ -537,6 +569,7 @@ export const ApiSetupPrompt = ({ providerLabel = "the selected provider", missin
           <span style={{ ...labelStyle, display: "inline", marginBottom: 0 }}>Model</span>
           <span data-no-translate style={{ fontSize: "0.84rem", fontWeight: 750 }}>GLM 5.3 Flash</span>
         </div>
+        <NoRequestLimitRow />
       </div>
     </>
   );
@@ -591,6 +624,7 @@ export const ApiSetupPrompt = ({ providerLabel = "the selected provider", missin
           `Stored only in this browser. It is sent to ${meta.label} and nowhere else.`,
         )}
         {modelField}
+        {noRequestLimitFor("custom", { provider, endpoint }) && <NoRequestLimitRow />}
       </div>
     </>
   );

@@ -10,7 +10,8 @@
 // anything stops at a daily cap, and at nothing when the player turns it off.
 //
 // Three parts, all plain data and rules:
-//   - the SETTINGS a player chooses (save requests, background AI, the limits);
+//   - the SETTINGS a player chooses (whether their key has a request limit,
+//     background AI, the limits);
 //   - the LEDGER of what today has cost, counted where the requests are made
 //     (main.jsx tells it about every provider response);
 //   - the JUMP BUDGET one time skip spends from, in a fixed order of priority.
@@ -33,14 +34,16 @@ export const BACKGROUND_RESERVE_SHARE = 0.1;
 // two rounds of function calling.
 export const JUMP_REQUEST_CAP = 3;
 
-// Unlimited requests (Settings → AI → AI requests; off unless the player turns
-// it on): for a paid key or a local model, where requests do not run out and
+// "My key has no request limit" (Settings → AI → AI requests; off unless the
+// player turns it on, or the first-run setup does for Command Code or a local
+// server): for a paid key or a local model, where requests do not run out and
 // what each one sends is what costs. The model looks things up as it needs them
 // instead of being handed everything, so a skip may ask more rounds and its
 // prompt is slimmer (promptContext.js `leanLookups`). A skip is still one
 // request when the model looks nothing up; with lookups it may be up to this
 // many: the skip itself, six rounds of questions, and one more for being asked
-// again or for upkeep.
+// again or for upkeep. In the code the switch on is `unlimited`, and off is
+// saving requests.
 export const UNLIMITED_JUMP_REQUEST_CAP = 8;
 // The rounds of function calling one task may ask (main.jsx runWithLookups),
 // and in a skip never more than its budget has free (gameplay.js runJsonTask).
@@ -80,17 +83,33 @@ export const SKIP_SPENDERS = Object.freeze(["jump", "review", "history", "stats"
 export const spenderBase = (spender) => String(spender || "other").replace(/(?:Retry|Lookup)$/, "") || "other";
 
 export const REQUEST_BUDGET_KEYS = Object.freeze({
-    // ON unless the player turned it off ("0"): an absent key saves requests.
-    saveRequests: "ai_save_requests",
+    // "My key has no request limit": "1" on, "0" off. Absent, it is read from
+    // the two switches it replaced (LEGACY_REQUEST_KEYS).
+    noRequestLimit: "ai_no_request_limit",
     // ON unless the player turned it off ("0"), within its daily cap.
     backgroundAi: "ai_background_activity",
-    // OFF unless the player turned it on ("1"). On means Save AI requests is
-    // off, whatever that key says (createRequestSettings).
-    unlimited: "ai_unlimited_requests",
     dailyLimit: "ai_daily_request_limit",
     backgroundDailyCap: "ai_background_daily_cap",
     ledger: "ai_request_ledger",
+    // What the switch changed when it was turned on, as it was before, so
+    // turning it off gives the player their own choices back.
+    beforeNoRequestLimit: "ai_before_no_request_limit",
 });
+
+// The two switches "My key has no request limit" replaced (2026-11-07): "Save
+// AI requests", on unless turned off, and "Unlimited requests", off unless
+// turned on. Read only while the new key is absent: Unlimited requests on, or
+// Save AI requests off (which said it was for a key with no daily limit), is
+// the switch on. Removed once the player sets the switch.
+export const LEGACY_REQUEST_KEYS = Object.freeze({
+    saveRequests: "ai_save_requests",
+    unlimited: "ai_unlimited_requests",
+});
+
+// The AI lookup functions' own key (runtime/mapSettings.js
+// MAP_SETTING_KEYS.lookupFunctions, which this module does not import): on
+// unless turned off, and used only while the switch is on.
+export const LOOKUP_FUNCTIONS_KEY = "ai_lookup_functions";
 
 // There were six more, `ai_review_units` and its siblings: a switch for each
 // check a time skip got after it was written. They are gone (2026-10). The
@@ -144,6 +163,12 @@ const writeItem = (storage, key, value) => {
     }
 };
 
+const removeItem = (storage, key) => {
+    try {
+        storage.removeItem?.(key);
+    } catch { /* refused: the key is simply left */ }
+};
+
 const wholeNumber = (value, { min, max, fallback }) => {
     const number = Math.round(Number(value));
     if (value === null || value === undefined || value === "" || !Number.isFinite(number)) return fallback;
@@ -152,14 +177,38 @@ const wholeNumber = (value, { min, max, fallback }) => {
 
 // --- The settings ---
 
-// Unlimited requests and Save AI requests cannot both be on: unlimited on reads
-// as saving off, and turning saving on turns unlimited off. Turning unlimited
-// off again leaves Save AI requests as the player last set it.
-const unlimitedOn = (storage) => readItem(storage, REQUEST_BUDGET_KEYS.unlimited) === "1";
+// One switch, "My key has no request limit". Everything that saves requests
+// reads it: saving requests is the switch off, unlimited the switch on.
+// Turning it on also turns on what a limited key does without, Background AI
+// and the AI lookup functions, and keeps them as they were, so turning the
+// switch off again puts back what the player had chosen.
+const readNoRequestLimit = (storage) => {
+    const stored = readItem(storage, REQUEST_BUDGET_KEYS.noRequestLimit);
+    if (stored === "1") return true;
+    if (stored === "0") return false;
+    return readItem(storage, LEGACY_REQUEST_KEYS.unlimited) === "1"
+        || readItem(storage, LEGACY_REQUEST_KEYS.saveRequests) === "0";
+};
+
+// What turning the switch on sets to on.
+const NO_LIMIT_TURNS_ON = Object.freeze({
+    backgroundAi: REQUEST_BUDGET_KEYS.backgroundAi,
+    lookups: LOOKUP_FUNCTIONS_KEY,
+});
+
+const readBefore = (storage) => {
+    try {
+        const value = JSON.parse(readItem(storage, REQUEST_BUDGET_KEYS.beforeNoRequestLimit) ?? "null");
+        return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+    } catch {
+        return null;
+    }
+};
 
 export const createRequestSettings = ({ storage = defaultStorage() } = {}) => ({
-    saveRequests: () => !unlimitedOn(storage) && readItem(storage, REQUEST_BUDGET_KEYS.saveRequests) !== "0",
-    unlimited: () => unlimitedOn(storage),
+    noRequestLimit: () => readNoRequestLimit(storage),
+    saveRequests: () => !readNoRequestLimit(storage),
+    unlimited: () => readNoRequestLimit(storage),
     backgroundAi: () => readItem(storage, REQUEST_BUDGET_KEYS.backgroundAi) !== "0",
     dailyLimit: () => wholeNumber(readItem(storage, REQUEST_BUDGET_KEYS.dailyLimit), {
         min: 1, max: 1000000, fallback: DEFAULT_DAILY_REQUEST_LIMIT,
@@ -167,12 +216,42 @@ export const createRequestSettings = ({ storage = defaultStorage() } = {}) => ({
     backgroundDailyCap: () => wholeNumber(readItem(storage, REQUEST_BUDGET_KEYS.backgroundDailyCap), {
         min: 0, max: 1000000, fallback: DEFAULT_BACKGROUND_DAILY_CAP,
     }),
-    setSaveRequests: (on) => {
-        if (on) writeItem(storage, REQUEST_BUDGET_KEYS.unlimited, "0");
-        return writeItem(storage, REQUEST_BUDGET_KEYS.saveRequests, on ? "1" : "0");
+    // On: Background AI and the lookup functions on, what they were kept. Off:
+    // what was kept put back (null, an absent key: its default). Only a change
+    // of the switch does either.
+    setNoRequestLimit: (on) => {
+        const was = readNoRequestLimit(storage);
+        if (!writeItem(storage, REQUEST_BUDGET_KEYS.noRequestLimit, on ? "1" : "0")) return false;
+        removeItem(storage, LEGACY_REQUEST_KEYS.saveRequests);
+        removeItem(storage, LEGACY_REQUEST_KEYS.unlimited);
+        if (on && !was) {
+            const before = {};
+            for (const [name, key] of Object.entries(NO_LIMIT_TURNS_ON)) {
+                before[name] = readItem(storage, key);
+                writeItem(storage, key, "1");
+            }
+            writeItem(storage, REQUEST_BUDGET_KEYS.beforeNoRequestLimit, JSON.stringify(before));
+        } else if (!on && was) {
+            const before = readBefore(storage) ?? {};
+            for (const [name, key] of Object.entries(NO_LIMIT_TURNS_ON)) {
+                if (!Object.prototype.hasOwnProperty.call(before, name)) continue;
+                if (before[name] === null) removeItem(storage, key);
+                else writeItem(storage, key, String(before[name]));
+            }
+            removeItem(storage, REQUEST_BUDGET_KEYS.beforeNoRequestLimit);
+        }
+        return true;
     },
-    setUnlimited: (on) => writeItem(storage, REQUEST_BUDGET_KEYS.unlimited, on ? "1" : "0"),
-    setBackgroundAi: (on) => writeItem(storage, REQUEST_BUDGET_KEYS.backgroundAi, on ? "1" : "0"),
+    // Background AI set by the player while the switch is on is their choice:
+    // turning the switch off leaves it as they set it.
+    setBackgroundAi: (on) => {
+        const before = readBefore(storage);
+        if (before && Object.prototype.hasOwnProperty.call(before, "backgroundAi")) {
+            delete before.backgroundAi;
+            writeItem(storage, REQUEST_BUDGET_KEYS.beforeNoRequestLimit, JSON.stringify(before));
+        }
+        return writeItem(storage, REQUEST_BUDGET_KEYS.backgroundAi, on ? "1" : "0");
+    },
     setDailyLimit: (value) => writeItem(storage, REQUEST_BUDGET_KEYS.dailyLimit,
         String(wholeNumber(value, { min: 1, max: 1000000, fallback: DEFAULT_DAILY_REQUEST_LIMIT }))),
     setBackgroundDailyCap: (value) => writeItem(storage, REQUEST_BUDGET_KEYS.backgroundDailyCap,
@@ -298,9 +377,12 @@ export const createRequestLedger = ({ storage = defaultStorage(), now = Date.now
 // Anything the game would do with nobody pressing a button: a country writing
 // to the player unprompted, an agent filing a report on a timer, a first
 // reading of a service nobody asked about. On unless the player turns it off,
-// capped for the day, and never out of the last tenth of the allowance.
+// capped for the day, and never out of the last tenth of the allowance. With
+// no request limit there is no allowance to keep, so neither the cap nor the
+// reserve applies.
 export const backgroundAllowance = ({ settings, ledger }) => {
     if (!settings.backgroundAi()) return { allowed: false, reason: "off", remaining: 0 };
+    if (settings.noRequestLimit?.()) return { allowed: true, reason: "", remaining: Infinity };
     const day = ledger.today();
     const cap = settings.backgroundDailyCap();
     const remaining = Math.max(0, cap - day.background);
@@ -322,7 +404,7 @@ export const backgroundAllowance = ({ settings, ledger }) => {
 
 // A skip generated in segments (Settings → AI) pays one request per segment:
 // the player chose that, so the cap moves with it rather than breaking the skip.
-// `unlimited`: Unlimited requests is on, and the skip may look up more.
+// `unlimited`: the switch is on, and the skip may look up more.
 export const jumpRequestCap = ({ segments = 1, unlimited = false } = {}) => (unlimited ? UNLIMITED_JUMP_REQUEST_CAP : JUMP_REQUEST_CAP)
     + Math.max(0, Math.round(Number(segments) || 1) - 1);
 
@@ -409,8 +491,8 @@ export const createJumpBudget = ({ cap = JUMP_REQUEST_CAP, only = null, state = 
 
 // What the time panel says a skip will cost before the player presses it: one
 // request (one per segment), and up to the cap only when function calling may
-// add rounds to it, which is Save AI requests off with the lookup functions on
-// (`lookups`); the higher cap with Unlimited requests on (`unlimited`).
+// add rounds to it (`lookups`: the switch on, with the lookup functions on);
+// the higher cap with the switch on (`unlimited`).
 export const describeJumpCost = ({ lookups = false, segments = 1, unlimited = false } = {}) => {
     const pieces = Math.max(1, Math.round(Number(segments) || 1));
     return {
@@ -430,6 +512,8 @@ export const describeDay = ({ settings, ledger }) => {
         used: day.used,
         limit,
         left: Math.max(0, limit - day.used),
+        // No request limit: there is no day's allowance to count against.
+        noLimit: Boolean(settings.noRequestLimit?.()),
         background: day.background,
         backgroundCap: settings.backgroundDailyCap(),
         refused: day.refused,
@@ -473,6 +557,18 @@ export const requestLedger = createRequestLedger({ onChange: announce });
 
 export const savingRequests = () => requestSettings.saveRequests();
 export const unlimitedRequests = () => requestSettings.unlimited();
+export const noRequestLimit = () => requestSettings.noRequestLimit();
+// The switch, for Settings and the first-run setup. What it changed is told to
+// whoever listens for the request budget, and for the map settings, where the
+// lookup functions are.
+export const setNoRequestLimit = (on) => {
+    const saved = requestSettings.setNoRequestLimit(Boolean(on));
+    announce();
+    try {
+        window.dispatchEvent(new Event("mapSettings:updated"));
+    } catch { /* no window (tests, the harness) */ }
+    return saved;
+};
 export const backgroundAiAllowance = () => backgroundAllowance({ settings: requestSettings, ledger: requestLedger });
 export const requestDay = () => describeDay({ settings: requestSettings, ledger: requestLedger });
 export const announceRequestBudgetChange = announce;

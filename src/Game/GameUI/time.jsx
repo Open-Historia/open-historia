@@ -1101,7 +1101,7 @@ const RequestsTodayCaption = () => {
     // one the compiler keeps from the first render, so this line went on saying
     // what a skip cost under the setting it was first drawn with.
     const [saving, setSaving] = useState(() => savingRequests());
-    // Unlimited requests on: more rounds of lookups, so a higher most.
+    // My key has no request limit on: more rounds of lookups, so a higher most.
     const [unlimited, setUnlimited] = useState(() => unlimitedRequests());
     useEffect(() => {
         const refresh = () => {
@@ -1117,19 +1117,22 @@ const RequestsTodayCaption = () => {
         };
     }, []);
     // A skip is one request; function calling is what can add to it (Settings →
-    // AI: Save AI requests off, with the lookup functions on), up to `cost.max`.
-    // That switch is on unless it was turned off.
+    // AI: My key has no request limit on, with the lookup functions on), up to
+    // `cost.max`. The lookup functions are on unless turned off.
     const lookupsOn = useMapSettingValue(MAP_SETTING_KEYS.lookupFunctions, "1") !== "0";
     const cost = describeJumpCost({ lookups: !saving && lookupsOn, unlimited });
     // A long skip split into segments (Settings → AI) pays one request a segment.
     const segmented = useMapSetting(MAP_SETTING_KEYS.chunkLongJumps);
-    const nearlyOut = day.left <= Math.max(3, Math.ceil(day.limit * 0.1));
+    // With no request limit there is no allowance to run short of.
+    const nearlyOut = !day.noLimit && day.left <= Math.max(3, Math.ceil(day.limit * 0.1));
     return (
         <div
         title="Counted on this device since midnight Pacific time. Change what the game spends in Settings → AI → AI requests."
         style={{ color: nearlyOut ? "#fbbf24" : "rgba(255,255,255,0.42)", fontSize: "0.68rem", lineHeight: 1.45, marginTop: "0.45rem", textAlign: "center", width: "12.5rem" }}
         >
-            <span data-no-translate>{day.used}</span> of <span data-no-translate>{day.limit}</span> AI requests used today
+            {day.noLimit
+                ? <><span data-no-translate>{day.used}</span> AI requests used today</>
+                : <><span data-no-translate>{day.used}</span> of <span data-no-translate>{day.limit}</span> AI requests used today</>}
             <br />
             {/* A whole line, one string, in an element of its own, so a language
                 pack translates the sentence and not its pieces (docs/i18n.md). */}

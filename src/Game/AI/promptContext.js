@@ -2044,7 +2044,7 @@ const notesSinceReference = (world) => {
 
 export const POLITY_SUMMARY_LIMIT = 16;
 export const TAG_SUMMARY_LIMIT = 40;
-// With Unlimited requests on (`leanLookups`): the recent events in view, and the
+// With no request limit (`leanLookups`): the recent events in view, and the
 // territorial changes listed, before the lookup functions carry the rest.
 export const LEAN_RECENT_EVENTS = 4;
 export const LEAN_TERRITORY_CHANGES = 20;
@@ -2071,7 +2071,7 @@ export const orderByFocus = (items, namesOf, focusCodes) => {
 // so the summary names the powers with their region counts and leaves the
 // region names and ids to find_region / list_regions / map_around.
 //
-// `countsOnly`: Unlimited requests is on (requestBudget.js), so the model may
+// `countsOnly`: My key has no request limit is on (requestBudget.js), so the model may
 // look up more and is sent less: each power with its region count and nothing
 // else (no territories), and the territorial changes cut shorter, with what was
 // left out counted. Only with `regionListsViaTools`.
@@ -2519,7 +2519,7 @@ export const buildPromptContext = async (bundle, {
   // The task has the lookup functions: the prompt keeps the overview and the
   // functions carry the detail (region lists, older events, full chats).
   lookups = false,
-  // ...and Unlimited requests is on (requestBudget.js): the model may ask more
+  // ...and My key has no request limit is on (requestBudget.js): the model may ask more
   // rounds, so the overview is slimmer still. Four recent events instead of
   // eight, region counts only, fewer territorial changes. The history document
   // is never cut for it. Read only with `lookups`.
@@ -2695,7 +2695,7 @@ export const buildPromptContext = async (bundle, {
 
     if (wants("recentEventsLong")) {
       // With lookups, the last eight events in view and recent_events for
-      // the rest (four with Unlimited requests on); a caller's own tighter
+      // the rest (four with no request limit); a caller's own tighter
       // cap still wins.
       const recentEventLimit = lookups ? Math.min(longEventLimit, leanLookups ? LEAN_RECENT_EVENTS : 8) : longEventLimit;
       const recentAlsoListed = SKIP_TASKS.has(taskKey) && !lookups ? 40 : 0;
