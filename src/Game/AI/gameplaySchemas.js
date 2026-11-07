@@ -1136,6 +1136,14 @@ export const AGENT_REPORTS_FIELD = "agentReports";
 // And the one its fold of the history document comes back in, when one is due
 // (historyConsolidation.js buildSkipHistoryJob).
 export const HISTORY_FIELD = "history";
+// What a folded skip with no fold due is told, last, where the job would be
+// (gameplay.js buildJumpLiveState). The function offers the field on every turn
+// (a function that changed on the turns a fold rides would throw the
+// provider's cached prompt away on each of them, functions and opening alike),
+// and flash-lite filled it on 3 skips of 4 that had no job (the quality A/B of
+// 2026-11-07): an answer the game throws away, at the price of its output
+// tokens. One line in the live part costs less than either.
+export const NO_SKIP_HISTORY_JOB = `No history job rides on this answer: leave the "${HISTORY_FIELD}" field out. Anything written in it is thrown away.`;
 
 // And Rostra's posts of the period (runtime/socialFeed.js readSkipPosts): the
 // people who make the news on its events, their answers to the player's posts,
@@ -3910,8 +3918,8 @@ export const foldJumpTool = (tool, { board = true, agentReports = false, history
           [HISTORY_FIELD]: {
             type: "object",
             description:
-              "The answer to the job fenced off at the end of the prompt (THE HISTORY DOCUMENT), written last: only what that job lists. "
-              + "Left out when there is no such job.",
+              "Only for the job fenced off at the end of the prompt (THE HISTORY DOCUMENT), written last: what that job lists. "
+              + "With no such job, leave this field out: it is thrown away.",
             // The consolidator's fields and entry shapes, without their
             // descriptions: the skip's contract is near the size Gemini takes,
             // the job in the prompt says what each tier is, and each entry is

@@ -213,6 +213,7 @@ import {
   getGameplayToolForStatIndices,
   HISTORY_FIELD,
   INTELLIGENCE_RATING_FIELD,
+  NO_SKIP_HISTORY_JOB,
   SOCIAL_POSTS_FIELD,
   normalizeGameplayPayload,
   validateGameplayPayload,
@@ -3186,7 +3187,10 @@ ${brief}`);
 
   // (The function that gives a player's troops their orders is no lookup: the [Fronts] block says what it is for.)
   if (Array.isArray(lookups?.tools) && lookups.tools.some((tool) => tool?.name !== FRONT_ORDER_FUNCTION)) blocks.push(activeLookupDirective());
+  // Without one, a line saying the history field is to be left out: the
+  // function offers it on every turn (gameplaySchemas.js NO_SKIP_HISTORY_JOB).
   if (historyJob) blocks.push(historyJob);
+  else if (foldedSkip) blocks.push(NO_SKIP_HISTORY_JOB);
 
   return blocks.filter(Boolean).join("\n\n");
 };
