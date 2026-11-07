@@ -160,8 +160,8 @@ test("the history fold is the last field of the contract, and only when a fold i
   assert.equal(HISTORY_FIELD in foldJumpTool(lean, { agentReports: true }).schema.properties, false, "no fold due, no field");
   const all = foldJumpTool(lean, { agentReports: true, history: true });
   assert.deepEqual(Object.keys(all.schema.properties).slice(-2), [AGENT_REPORTS_FIELD, HISTORY_FIELD], "after the reports: the one an answer cut short can best do without");
-  assert.deepEqual(all.schema.properties[HISTORY_FIELD].required, ["summary", "document"]);
-  assert.deepEqual(Object.keys(all.schema.properties[HISTORY_FIELD].properties), ["summary", "document"], "the consolidator's own two fields");
+  assert.deepEqual(all.schema.properties[HISTORY_FIELD].required, ["summary"]);
+  assert.deepEqual(Object.keys(all.schema.properties[HISTORY_FIELD].properties), ["summary", "years", "canon", "eras", "document"], "the consolidator's own fields, the history in tiers among them");
   const historyOnly = foldJumpTool(lean, { board: false, history: true });
   assert.equal(HISTORY_FIELD in historyOnly.schema.properties, true, "a skip with no board and no agents still carries a fold that is due");
   assert.equal("projectOps" in historyOnly.schema.properties.events.items.properties.impacts.properties, false);
@@ -223,7 +223,9 @@ test("every skip is folded, with Save AI requests on or off, decided once", () =
   assert.match(body, /if \(state\.folded === undefined\) state\.folded = !foldedSkipRefused;/);
   assert.equal(/state\.requests\?\.saving/.test(body), false, "whether requests are being saved no longer decides what a skip asks");
   assert.match(body, /if \(state\.folded && !state\.foldedPrep\) state\.foldedPrep = await prepareFoldedSkip\(/);
-  assert.match(body, /toolTransform: \(tool\) => foldJumpTool\(tool, \{ board: Boolean\(state\.foldedPrep\?\.board\), agentReports: agentJobs\.length > 0, history: Boolean\(historyJob\) \}\)/);
+  // The same contract on every folded skip of a game (a provider caches the function with the prompt).
+  assert.match(body, /toolTransform: \(tool\) => foldJumpTool\(tool, \{ board: true, agentReports: agentJobs\.length > 0, history: true \}\)/);
+  assert.match(body, /if \(state\.folded && agentJobs\.length && segmentGeneration\?\.source !== "fallback"\) state\.foldedAgentAnswer = payload\[AGENT_REPORTS_FIELD\];/, "reports are read only where agents were due");
   assert.match(body, /const agentJobs = state\.folded && isFinalSegment \?/, "the agents report once, with the last segment");
   assert.match(body, /const historyJob = state\.folded && isFinalSegment \? buildSkipHistoryJob\(state\.foldedPrep\?\.history\?\.brief\) : "";/, "and so does the history fold");
   // One request in every mode: a flawed answer is cut down, never sent back.
@@ -245,7 +247,7 @@ test("the history a skip folds is planned before it and written from its own ans
   const review = functionBody("foldedTurnReview");
   assert.match(review, /if \(!fold\?\.separate\) review\.history = \{ due: false \};/);
   assert.ok(review.indexOf("review.history = { due: false }") < review.indexOf("if (normalizeString(state.generation?.source) === \"fallback\") return review;"), "a canned turn folds nothing and asks for nothing");
-  assert.match(review, /\.\.\.judgeSkipHistoryAnswer\(state\.foldedHistoryAnswer, \{ currentText: fold\.currentText \}\),/);
+  assert.match(review, /\.\.\.judgeSkipHistoryAnswer\(state\.foldedHistoryAnswer, \{ currentText: fold\.currentText, span: fold\.span, eraWords: fold\.eraWords \}\),/);
 
   // Read by the pass that used to make the request.
   assert.match(gameplaySource, /\{ requests, signal: projects\?\.signal, campaignId, replay, skipFold: review\?\.history \?\? null \}\);/);
@@ -309,8 +311,10 @@ test("nothing after a skip is a request of its own: no director, no agent, no at
   // What a skip may spend on is one list (requestBudget.js), and no budget is
   // without a cap: nothing in the game can ask for one.
   const requests = functionBody("createJumpRequests");
-  assert.match(requests, /createJumpBudget\(\{ cap: jumpRequestCap\(\{ segments: pieces \}\), only: SKIP_SPENDERS \}\);/);
-  assert.equal(/\bunlimited\b/.test(gameplaySource), false);
+  assert.match(requests, /createJumpBudget\(\{ cap: jumpRequestCap\(\{ segments: pieces, unlimited \}\), only: SKIP_SPENDERS \}\);/);
+  // Unlimited requests raises the cap (requestBudget.js); it never takes it away.
+  assert.match(requests, /const unlimited = unlimitedRequests\(\);/);
+  assert.equal(/createJumpBudget\(\{(?![^}]*cap:)/.test(gameplaySource), false, "every budget has a cap");
   assert.match(requests, /budget\.reserve\("jump", pieces\);/, "every segment keeps its own request");
   // Upkeep already due keeps its request, one at a time, the history first.
   assert.ok(requests.includes('if (upkeep?.history) budget.reserve("history", 1);') && requests.includes('else if (upkeep?.stats) budget.reserve("stats", 1);'));
@@ -323,7 +327,9 @@ test("nothing after a skip is a request of its own: no director, no agent, no at
 
 test("function calling inside a skip spends the skip's budget: a round is a request", () => {
   const task = functionBody("runJsonTask");
-  assert.match(task, /const lookupRounds = budget && Array\.isArray\(lookups\?\.tools\) && lookups\.tools\.length\s*\n\s*\? carriedRoundCount\(lookupCarry\) \+ budget\.free\s*\n\s*: null;/);
+  // What the budget has free, and never past the mode's own limit (three, or
+  // six with Unlimited requests on).
+  assert.match(task, /const lookupRounds = budget && Array\.isArray\(lookups\?\.tools\) && lookups\.tools\.length\s*\n\s*\? Math\.min\(carriedRoundCount\(lookupCarry\) \+ budget\.free, lookupRoundLimit\(\{ unlimited: unlimitedRequests\(\) \}\)\)\s*\n\s*: null;/);
   assert.match(task, /maxRounds: Number\.isInteger\(lookups\.maxRounds\) \? Math\.min\(lookups\.maxRounds, lookupRounds\) : lookupRounds/);
   assert.match(task, /budget\?\.take\(`\$\{spender \|\| taskKey\}Lookup`\);/, "recorded as it is made");
   // Decided after the attempt's own request is taken, so `free` is what is left.
@@ -362,6 +368,7 @@ test("a folded skip is told the map's own rules for moving and placing, as the d
   const live = functionBody("buildJumpLiveState");
   assert.match(live, /const regionTypes = foldedSkip \? regionTypesBlock\(variables\.foldedRegionTypeRules\) : "";\s*\n\s*if \(regionTypes\) blocks\.push\(regionTypes\);/);
   assert.ok(live.indexOf("blocks.push(FOLDED_SKIP_CONSEQUENCES)") < live.indexOf("regionTypesBlock(variables.foldedRegionTypeRules)"), "after the rule that the events place things themselves");
+  assert.ok(functionBody("buildJumpStaticRules").includes("variables?.foldedSkip ? FOLDED_SKIP_CONSEQUENCES"), "or above, with the rules");
   // One wording for both readers.
   const block = functionBody("regionTypesBlock");
   assert.match(block, /\[Region types\]\\nThe scenario's author gave these kinds of region rules for moving units and placing things\. Keep every move, new unit and structure to them:/);
@@ -372,7 +379,9 @@ test("a folded skip is told the map's own rules for moving and placing, as the d
 test("the folded rules reach the prompt only for a folded skip", () => {
   const body = functionBody("buildJumpLiveState");
   assert.match(body, /const foldedSkip = Boolean\(variables\.foldedSkip\);/);
-  assert.match(body, /if \(foldedSkip\) blocks\.push\(FOLDED_SKIP_CONSEQUENCES\);/);
+  assert.match(body, /if \(foldedSkip && !rulesAbove\) blocks\.push\(FOLDED_SKIP_CONSEQUENCES\);/);
+  // Where the template has a place for the standing rules, they are stated there instead, folded or not.
+  assert.match(functionBody("buildJumpStaticRules"), /variables\?\.foldedSkip \? FOLDED_SKIP_CONSEQUENCES : "",/);
   assert.match(body, /folded: foldedSkip,/);
   assert.match(body, /const agentReports = foldedSkip \? normalizeString\(variables\.foldedAgentReports\) : "";/);
   const rules = gameplaySource.slice(gameplaySource.indexOf("const FOLDED_SKIP_CONSEQUENCES = ["), gameplaySource.indexOf("].join(\"\\n\");", gameplaySource.indexOf("const FOLDED_SKIP_CONSEQUENCES = [")));
@@ -395,7 +404,9 @@ test("the time panel says one request, and three only while function calling can
   assert.match(caption, /const \[saving, setSaving\] = useState\(\(\) => savingRequests\(\)\);/);
   assert.match(caption, /setSaving\(savingRequests\(\)\);/);
   assert.match(caption, /const lookupsOn = useMapSettingValue\(MAP_SETTING_KEYS\.lookupFunctions, "1"\) !== "0";/);
-  assert.match(caption, /const cost = describeJumpCost\(\{ lookups: !saving && lookupsOn \}\);/);
+  assert.match(caption, /const \[unlimited, setUnlimited\] = useState\(\(\) => unlimitedRequests\(\)\);/);
+  assert.match(caption, /setUnlimited\(unlimitedRequests\(\)\);/);
+  assert.match(caption, /const cost = describeJumpCost\(\{ lookups: !saving && lookupsOn, unlimited \}\);/);
   for (const line of [
     "\"a skip uses 1 request\"",
     "\"a skip uses 1 request, plus one per extra segment\"",

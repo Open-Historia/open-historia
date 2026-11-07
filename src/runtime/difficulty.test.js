@@ -202,7 +202,8 @@ test("every call the game sends is led in callAI, and a batched one in submitAIB
   // In front of everything else callAI adds: the language directive goes at the end.
   assert.ok(led < callAI.indexOf("systemPrompt = `${systemPrompt}\\n\\n${directive}`;"));
   const batch = main.slice(main.indexOf("export async function submitAIBatch("), main.indexOf("export function restoreAIBatch("));
-  assert.ok(batch.includes("systemPrompt = withDifficultyPriority({ systemPrompt, taskKey, difficulty: savedGame?.difficulty }).systemPrompt;"));
+  assert.ok(batch.includes("const led = withDifficultyPriority({ systemPrompt, taskKey, difficulty: savedGame?.difficulty, staticPrefixEnd });"));
+  assert.ok(batch.includes("systemPrompt = led.systemPrompt;"));
   // The advisor and a leader go out through callAI with their task named.
   assert.match(main, /taskKey: "advisor"/);
   assert.match(main, /taskKey: "diplomacy"/);

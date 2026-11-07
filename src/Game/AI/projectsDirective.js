@@ -81,35 +81,26 @@ const FOLDED_BOARD_PROPORTION =
 
 // `folded`: the skip keeps the board itself (above). `doubted`: the entries a
 // fresh agent can now settle, as describeDoubtedForPrompt writes them.
-export const buildJumpProjectsDirective = (projectsSummary, { folded = false, doubted = "" } = {}) => {
-  const board = String(projectsSummary ?? "").trim();
-  if (!board || board.startsWith(EMPTY_BOARD_PREFIX)) return "";
-  if (folded) {
-    const settle = String(doubted ?? "").trim();
-    return [
-      JUMP_PROJECTS_DIRECTIVE_HEADER,
-      "The player keeps a board of long-running efforts - research and industrial programmes, construction projects, "
-        + "military and covert operations, sustained political campaigns. The board as it stands:",
-      board,
-      FOLDED_BOARD_OPS,
-      "What you decide is what HAPPENS to these efforts, in terms of what each one actually IS according to its summary: "
-        + "a recruitment drive is not a missile test, and a shipyard is not a treaty. An effort the player's orders name, "
-        + "and every entry on the \"Needs a decision this jump\" list, gets an op this jump saying which of four things happened: "
-        + "it advanced (update, with a real progress figure), it is stuck (update with status stalled and a lastUpdate NAMING the blocker), "
-        + "it reached or missed a checkpoint (milestone), or it is over (complete, cancel or fail). "
-        + HIGH_PRIORITY_ASSESSMENT_RULE + " For an assessment with no material change, use op update with a lastUpdate saying so, and leave progress where it is. "
-        + "Entries marked THEIRS belong to another power: they move because their owner moved them and the player's services observed as much, "
-        + "never because the player wished them stopped, and are reported from outside, never narrated from inside.",
-      FOLDED_BOARD_PROPORTION,
-      BOARD_ENTRY_NOT_STORYLINE,
-      ...(settle ? [`These doubted entries can now be settled, because a fresh agent is in place:\n${settle}`] : []),
-    ].join("\n");
-  }
-  return [
-    JUMP_PROJECTS_DIRECTIVE_HEADER,
-    "The player keeps a board of long-running efforts - research and industrial programmes, construction projects, "
-      + "military and covert operations, sustained political campaigns. The board as it stands:",
-    board,
+// How the board is kept, which no turn changes: a time skip states it once,
+// among its standing rules in the cached opening (gameplay.js
+// buildJumpStaticRules), under JUMP_PROJECTS_RULES_HEADING, and its live
+// [Projects & Operations] block points at it (`rulesAbove`).
+export const JUMP_PROJECTS_RULES_HEADING = "[How the Board Is Kept]";
+export const buildJumpProjectsRules = ({ folded = false } = {}) => (folded
+  ? [
+    FOLDED_BOARD_OPS,
+    "What you decide is what HAPPENS to these efforts, in terms of what each one actually IS according to its summary: "
+      + "a recruitment drive is not a missile test, and a shipyard is not a treaty. An effort the player's orders name, "
+      + "and every entry on the \"Needs a decision this jump\" list, gets an op this jump saying which of four things happened: "
+      + "it advanced (update, with a real progress figure), it is stuck (update with status stalled and a lastUpdate NAMING the blocker), "
+      + "it reached or missed a checkpoint (milestone), or it is over (complete, cancel or fail). "
+      + HIGH_PRIORITY_ASSESSMENT_RULE + " For an assessment with no material change, use op update with a lastUpdate saying so, and leave progress where it is. "
+      + "Entries marked THEIRS belong to another power: they move because their owner moved them and the player's services observed as much, "
+      + "never because the player wished them stopped, and are reported from outside, never narrated from inside.",
+    FOLDED_BOARD_PROPORTION,
+    BOARD_ENTRY_NOT_STORYLINE,
+  ]
+  : [
     "You do not return projectOps: a separate pass after this jump records the board from the events you write. "
       + "What you decide is what HAPPENS to these efforts. An effort the player's orders name, "
       + "or one on the \"Needs a decision this jump\" list advances, stalls for a named reason, reaches or misses its "
@@ -121,6 +112,19 @@ export const buildJumpProjectsDirective = (projectsSummary, { folded = false, do
       + "belong to another power: report what the player's services observed of them, never narrate them from "
       + "inside. Name each effort exactly as the board names it, so the pass can find it. "
       + BOARD_ENTRY_NOT_STORYLINE,
+  ]).join("\n");
+
+export const buildJumpProjectsDirective = (projectsSummary, { folded = false, doubted = "", rulesAbove = false } = {}) => {
+  const board = String(projectsSummary ?? "").trim();
+  if (!board || board.startsWith(EMPTY_BOARD_PREFIX)) return "";
+  const settle = folded ? String(doubted ?? "").trim() : "";
+  return [
+    JUMP_PROJECTS_DIRECTIVE_HEADER,
+    "The player keeps a board of long-running efforts - research and industrial programmes, construction projects, "
+      + "military and covert operations, sustained political campaigns. The board as it stands:",
+    board,
+    rulesAbove ? `Kept as ${JUMP_PROJECTS_RULES_HEADING} above says.` : buildJumpProjectsRules({ folded }),
+    ...(settle ? [`These doubted entries can now be settled, because a fresh agent is in place:\n${settle}`] : []),
   ].join("\n");
 };
 

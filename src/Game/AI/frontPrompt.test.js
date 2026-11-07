@@ -12,7 +12,7 @@ import { FRONT_EFFORTS, FRONT_ORDERS, FRONT_RESULTS, MAX_BATTLEFIELDS } from "..
 import { createFrontRun } from "../../runtime/fronts/engine.js";
 import { enlarge, syntheticMap } from "../../runtime/fronts/syntheticMap.js";
 import { decodeFrontOrders } from "./nativeFrontLedger.js";
-import { FRONTS_BLOCK_HEADING, FRONTS_BLOCK_MAX, alliesRule, battlefieldPowers, buildFrontsBlock } from "./frontPrompt.js";
+import { FRONTS_BLOCK_HEADING, FRONTS_BLOCK_MAX, FRONT_ORDER_LINES_BLOCK, FRONT_ORDER_LINES_HEADING, alliesRule, battlefieldPowers, buildFrontsBlock } from "./frontPrompt.js";
 import { runTurnFronts } from "./frontTurn.js";
 
 const legend = { A: "Aland", B: "Borduria", "~": null };
@@ -188,4 +188,23 @@ test("who a battlefield fields: the members of the sides of every one fought on 
     { ...ended, name: "An old front", status: "closed", sides: [["Syldavia"], ["Borduria"]] },
   ]), ["Aland", "Borduria", "Cisland"]);
   assert.deepEqual(battlefieldPowers(undefined), []);
+});
+
+// A time skip states how an order line is written once, in the part of its
+// prompt that never changes (gameplay.js buildJumpStaticRules), and its
+// [Fronts] block points there: the battlefields keep the room they had.
+test("the order lines can be stated elsewhere, and the battlefields keep their room", async () => {
+  const record = await fought();
+  const full = buildFrontsBlock({ battlefields: [record], players: ["Neutralia"] });
+  const pointed = buildFrontsBlock({ battlefields: [record], players: ["Neutralia"], orderLines: false });
+  assert.ok(FRONT_ORDER_LINES_BLOCK.startsWith(`${FRONT_ORDER_LINES_HEADING}\n`));
+  for (const line of FRONT_ORDER_LINES_BLOCK.split("\n").slice(1)) {
+    assert.ok(full.includes(line), "every order line is in the block that states them");
+    assert.equal(pointed.includes(line), false, "and in none of the block that points at them");
+  }
+  assert.match(pointed, /is under \[Front Orders\] above; here, for this period:/);
+  assert.ok(pointed.includes("- eventNumbers:"), "the fields that differ by period stay with the period");
+  const battlefieldsOf = (block) => block.slice(block.indexOf("Battlefields open now:"));
+  assert.equal(battlefieldsOf(pointed), battlefieldsOf(full));
+  assert.ok(pointed.length < full.length - 3000);
 });

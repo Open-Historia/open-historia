@@ -173,7 +173,8 @@ test("a patch that moves a country's own values moves its backend in the same pa
   const rule = statsBackendTurnRule({ Roma: sheet, Parthia: { customStats: { legions: 20 } } });
   assert.match(rule, /^\[Hidden Backend\]\n/);
   assert.match(rule, /The two are moved TOGETHER, in this one answer: when an event changes a polity's values above for a reason that also moves its people or its economy \(a war's losses, a plague, a famine, a boom, a default\), write the backend's new figures in the same stats patch, as `backend`, beside its customStats\./);
-  assert.ok(rule.endsWith('- Roma: {"population":5200000,"gdp":3000000000,"budgetBalance":-2,"publicDebt":35}'), "only a polity that has one is shown");
+  assert.ok(rule.endsWith("- Roma: 5.2 million, 3 billion, -2%, 35%"), "only a polity that has one is shown, its figures readable");
+  assert.match(rule, /Each polity: population, gdp, budgetBalance, publicDebt/);
   assert.equal(statsBackendTurnRule({ Parthia: { customStats: { legions: 20 } } }), "");
   const turn = read("../Game/AI/gameplay.js");
   assert.ok(turn.includes("    const backends = statsBackendTurnRule(world?.countryStats);\n    if (backends) blocks.push(backends);"));

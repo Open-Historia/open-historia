@@ -2479,6 +2479,16 @@ const relationDisplay = (relation, world) =>
 
 const politySetKey = (value) => lower(value);
 
+// How the slice is read, the same under every slice: a time skip states it
+// once, in the part of its prompt that never changes (gameplay.js
+// buildJumpStaticRules), and takes it out of the slice it is sent.
+export const DIPLOMATIC_SLICE_RULES = [
+  "A Puppet is a SEPARATE COUNTRY: it holds its own territory and its own sovereignty, and only its will is directed. A COVERT subordination is known only to the two parties and anyone listed; a covert Puppet speaking to anyone else must present itself as fully independent. Loyalty is never public knowledge, not even for an open arrangement.",
+  "Sparse-ledger rule: an untracked pair is NOT secretly hostile and is NOT a numeric score of zero. It only means no material bilateral state has yet been canonically recorded.",
+  "Formal commitments and bilateral warmth are different facts. An alliance may be strained; friendly countries may have no alliance.",
+  "world.wars remains the sole authority for actual belligerency. A hostile relation does not itself start a war. An alliance, a mutual defence agreement or a guarantee binds: when a party is attacked the game itself enters the others in that war, and one that will not come has broken the treaty and pays for it in reputation.",
+].join("\n");
+
 export const buildBoundedDiplomaticContext = (
   worldLike,
   {
@@ -2593,10 +2603,7 @@ export const buildBoundedDiplomaticContext = (
     "",
     "SUBORDINATIONS (who directs whom)",
     puppets.length ? puppets.map((row) => puppetDisplay(row, world)).join("\n") : "No polity here directs another.",
-    "A Puppet is a SEPARATE COUNTRY: it holds its own territory and its own sovereignty, and only its will is directed. A COVERT subordination is known only to the two parties and anyone listed; a covert Puppet speaking to anyone else must present itself as fully independent. Loyalty is never public knowledge, not even for an open arrangement.",
-    "Sparse-ledger rule: an untracked pair is NOT secretly hostile and is NOT a numeric score of zero. It only means no material bilateral state has yet been canonically recorded.",
-    "Formal commitments and bilateral warmth are different facts. An alliance may be strained; friendly countries may have no alliance.",
-    "world.wars remains the sole authority for actual belligerency. A hostile relation does not itself start a war. An alliance, a mutual defence agreement or a guarantee binds: when a party is attacked the game itself enters the others in that war, and one that will not come has broken the treaty and pays for it in reputation.",
+    DIPLOMATIC_SLICE_RULES,
   ].join("\n");
 
   return { actors, relations, agreements, puppets, text };

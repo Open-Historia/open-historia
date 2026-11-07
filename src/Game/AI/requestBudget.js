@@ -33,6 +33,21 @@ export const BACKGROUND_RESERVE_SHARE = 0.1;
 // two rounds of function calling.
 export const JUMP_REQUEST_CAP = 3;
 
+// Unlimited requests (Settings → AI → AI requests; off unless the player turns
+// it on): for a paid key or a local model, where requests do not run out and
+// what each one sends is what costs. The model looks things up as it needs them
+// instead of being handed everything, so a skip may ask more rounds and its
+// prompt is slimmer (promptContext.js `leanLookups`). A skip is still one
+// request when the model looks nothing up; with lookups it may be up to this
+// many: the skip itself, six rounds of questions, and one more for being asked
+// again or for upkeep.
+export const UNLIMITED_JUMP_REQUEST_CAP = 8;
+// The rounds of function calling one task may ask (main.jsx runWithLookups),
+// and in a skip never more than its budget has free (gameplay.js runJsonTask).
+export const DEFAULT_LOOKUP_ROUNDS = 3;
+export const UNLIMITED_LOOKUP_ROUNDS = 6;
+export const lookupRoundLimit = ({ unlimited = false } = {}) => (unlimited ? UNLIMITED_LOOKUP_ROUNDS : DEFAULT_LOOKUP_ROUNDS);
+
 // What a time skip may spend a request on at all (the owner's rule, 2026-10:
 // "at most 3 api calls per skip, and that's for the function calling").
 //
@@ -69,6 +84,9 @@ export const REQUEST_BUDGET_KEYS = Object.freeze({
     saveRequests: "ai_save_requests",
     // ON unless the player turned it off ("0"), within its daily cap.
     backgroundAi: "ai_background_activity",
+    // OFF unless the player turned it on ("1"). On means Save AI requests is
+    // off, whatever that key says (createRequestSettings).
+    unlimited: "ai_unlimited_requests",
     dailyLimit: "ai_daily_request_limit",
     backgroundDailyCap: "ai_background_daily_cap",
     ledger: "ai_request_ledger",
@@ -134,8 +152,14 @@ const wholeNumber = (value, { min, max, fallback }) => {
 
 // --- The settings ---
 
+// Unlimited requests and Save AI requests cannot both be on: unlimited on reads
+// as saving off, and turning saving on turns unlimited off. Turning unlimited
+// off again leaves Save AI requests as the player last set it.
+const unlimitedOn = (storage) => readItem(storage, REQUEST_BUDGET_KEYS.unlimited) === "1";
+
 export const createRequestSettings = ({ storage = defaultStorage() } = {}) => ({
-    saveRequests: () => readItem(storage, REQUEST_BUDGET_KEYS.saveRequests) !== "0",
+    saveRequests: () => !unlimitedOn(storage) && readItem(storage, REQUEST_BUDGET_KEYS.saveRequests) !== "0",
+    unlimited: () => unlimitedOn(storage),
     backgroundAi: () => readItem(storage, REQUEST_BUDGET_KEYS.backgroundAi) !== "0",
     dailyLimit: () => wholeNumber(readItem(storage, REQUEST_BUDGET_KEYS.dailyLimit), {
         min: 1, max: 1000000, fallback: DEFAULT_DAILY_REQUEST_LIMIT,
@@ -143,7 +167,11 @@ export const createRequestSettings = ({ storage = defaultStorage() } = {}) => ({
     backgroundDailyCap: () => wholeNumber(readItem(storage, REQUEST_BUDGET_KEYS.backgroundDailyCap), {
         min: 0, max: 1000000, fallback: DEFAULT_BACKGROUND_DAILY_CAP,
     }),
-    setSaveRequests: (on) => writeItem(storage, REQUEST_BUDGET_KEYS.saveRequests, on ? "1" : "0"),
+    setSaveRequests: (on) => {
+        if (on) writeItem(storage, REQUEST_BUDGET_KEYS.unlimited, "0");
+        return writeItem(storage, REQUEST_BUDGET_KEYS.saveRequests, on ? "1" : "0");
+    },
+    setUnlimited: (on) => writeItem(storage, REQUEST_BUDGET_KEYS.unlimited, on ? "1" : "0"),
     setBackgroundAi: (on) => writeItem(storage, REQUEST_BUDGET_KEYS.backgroundAi, on ? "1" : "0"),
     setDailyLimit: (value) => writeItem(storage, REQUEST_BUDGET_KEYS.dailyLimit,
         String(wholeNumber(value, { min: 1, max: 1000000, fallback: DEFAULT_DAILY_REQUEST_LIMIT }))),
@@ -294,7 +322,9 @@ export const backgroundAllowance = ({ settings, ledger }) => {
 
 // A skip generated in segments (Settings → AI) pays one request per segment:
 // the player chose that, so the cap moves with it rather than breaking the skip.
-export const jumpRequestCap = ({ segments = 1 } = {}) => JUMP_REQUEST_CAP + Math.max(0, Math.round(Number(segments) || 1) - 1);
+// `unlimited`: Unlimited requests is on, and the skip may look up more.
+export const jumpRequestCap = ({ segments = 1, unlimited = false } = {}) => (unlimited ? UNLIMITED_JUMP_REQUEST_CAP : JUMP_REQUEST_CAP)
+    + Math.max(0, Math.round(Number(segments) || 1) - 1);
 
 // `only`: the spenders this budget serves at all (SKIP_SPENDERS for a time
 // skip); null serves anyone. `state` is what `state` below gave out: a skip
@@ -380,10 +410,16 @@ export const createJumpBudget = ({ cap = JUMP_REQUEST_CAP, only = null, state = 
 // What the time panel says a skip will cost before the player presses it: one
 // request (one per segment), and up to the cap only when function calling may
 // add rounds to it, which is Save AI requests off with the lookup functions on
-// (`lookups`).
-export const describeJumpCost = ({ lookups = false, segments = 1 } = {}) => {
+// (`lookups`); the higher cap with Unlimited requests on (`unlimited`).
+export const describeJumpCost = ({ lookups = false, segments = 1, unlimited = false } = {}) => {
     const pieces = Math.max(1, Math.round(Number(segments) || 1));
-    return { min: pieces, max: lookups ? jumpRequestCap({ segments: pieces }) : pieces, lookups: Boolean(lookups) };
+    return {
+        min: pieces,
+        max: lookups ? jumpRequestCap({ segments: pieces, unlimited }) : pieces,
+        lookups: Boolean(lookups),
+        rounds: lookups ? lookupRoundLimit({ unlimited }) : 0,
+        unlimited: Boolean(unlimited),
+    };
 };
 
 // "37 of 500 today" — and what is left, never below zero.
@@ -436,6 +472,7 @@ export const requestSettings = createRequestSettings();
 export const requestLedger = createRequestLedger({ onChange: announce });
 
 export const savingRequests = () => requestSettings.saveRequests();
+export const unlimitedRequests = () => requestSettings.unlimited();
 export const backgroundAiAllowance = () => backgroundAllowance({ settings: requestSettings, ledger: requestLedger });
 export const requestDay = () => describeDay({ settings: requestSettings, ledger: requestLedger });
 export const announceRequestBudgetChange = announce;

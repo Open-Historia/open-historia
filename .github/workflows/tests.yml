@@ -22,9 +22,17 @@ on:
 permissions:
   contents: read
 
+# A newer push to the same branch, or a newer commit on the same pull request,
+# supersedes the run before it: the suite answers for the newest tree only.
+concurrency:
+  group: tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
+    # The suite takes about three minutes; a hung test stops here.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
 

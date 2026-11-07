@@ -393,7 +393,10 @@ const MATERIAL_HEADINGS = {
   milestone: "Coming up",
 };
 
-export const buildPlayerFocusDirective = ({ focus, worldShare = 0, material = [], playerName = "" } = {}) => {
+// `ordersAbove`: the prompt lists the orders with their ids and words already
+// (a time skip's [This Round], promptContext.js buildActionHistoryText ids), so
+// they are named here by id alone.
+export const buildPlayerFocusDirective = ({ focus, worldShare = 0, material = [], playerName = "", ordersAbove = false } = {}) => {
   const level = levelOf(focus);
   const player = asText(playerName) || "the player's polity";
   const items = asArray(material);
@@ -411,8 +414,8 @@ export const buildPlayerFocusDirective = ({ focus, worldShare = 0, material = []
       + `The share is a minimum only as far as the items below allow, not a quota to fill: never invent business for ${player} to reach it, and when these run out the world fills the period within its usual number of events.`,
   ];
   if (orders.length) {
-    lines.push("", `ORDERS — every one gets an outcome this period (success, partial success, delay or failure), in an event that lists its id in actionIds. One event may answer several orders when they are genuinely the same thing.`);
-    for (const order of orders) lines.push(`- [${order.id}] ${order.label}${order.overdue ? " (OVERDUE: carried over unanswered from the last period; answer it first)" : ""}`);
+    lines.push("", `ORDERS${ordersAbove ? " (their words are under [This Round] above, by the same ids)" : ""} — every one gets an outcome this period (success, partial success, delay or failure), in an event that lists its id in actionIds. One event may answer several orders when they are genuinely the same thing.`);
+    for (const order of orders) lines.push(`- [${order.id}]${ordersAbove ? "" : ` ${order.label}`}${order.overdue ? " (OVERDUE: carried over unanswered from the last period; answer it first)" : ""}`);
   }
   if (due.length) {
     lines.push("", `DUE THIS PERIOD — each gets an outcome in an event that names the Project exactly: reached, slipped or missed. Never leave a date behind with nothing said.`);

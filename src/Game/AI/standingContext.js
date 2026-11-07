@@ -273,6 +273,54 @@ export const describeTerritorialRows = (rows, { maxRows = 80, viaLookups = false
     : "");
 };
 
+// A time skip's [Occupied and Contested Regions]: the same rows, those with the
+// same sovereign, controller and claimants in one line. The lines that involve a
+// power in view (`inView`, lower-case names: promptFocus.js) come first and name
+// every region; the rest name the first few and count the others, so every
+// region the untiered list showed is still at least counted, under who holds it.
+export const TERRITORIAL_BRIEF_NAMES = 6;
+export const describeTerritorialRowsGrouped = (rows, { inView = new Set(), maxNames = 240, maxBriefLines = 40, viaLookups = false, empty = NO_TERRITORIAL_ROWS } = {}) => {
+  if (!rows.length) return empty;
+  const fold = (value) => asText(value).toLowerCase();
+  const groups = new Map();
+  for (const row of rows) {
+    const claimants = [...row.claimants].sort((a, b) => a.localeCompare(b));
+    const key = [fold(row.sovereign), fold(row.controller), ...claimants.map(fold)].join("|");
+    const group = groups.get(key) ?? { sovereign: row.sovereign, controller: row.controller, claimants, names: [] };
+    group.names.push(row.name);
+    groups.set(key, group);
+  }
+  const involves = (group) => [group.sovereign, group.controller, ...group.claimants].some((name) => inView.has(fold(name)));
+  const ordered = [...groups.values()]
+    .map((group, index) => ({ group, index, viewed: involves(group) }))
+    .sort((a, b) => Number(b.viewed) - Number(a.viewed) || b.group.names.length - a.group.names.length || a.index - b.index);
+  let room = maxNames;
+  let unnamed = 0;
+  let briefLines = 0;
+  let skipped = 0;
+  const lines = [];
+  for (const { group, viewed } of ordered) {
+    if (!viewed && briefLines >= maxBriefLines) {
+      skipped += group.names.length;
+      continue;
+    }
+    if (!viewed) briefLines += 1;
+    const want = viewed ? group.names.length : Math.min(TERRITORIAL_BRIEF_NAMES, group.names.length);
+    const shown = group.names.slice(0, Math.max(0, Math.min(want, room)));
+    room -= shown.length;
+    const more = group.names.length - shown.length;
+    unnamed += more;
+    const who = fold(group.sovereign) === fold(group.controller)
+      ? `sovereign and controller ${group.sovereign || "unknown"}`
+      : `sovereign ${group.sovereign || "unknown"}, controller ${group.controller || "unknown"}`;
+    const claims = group.claimants.length ? `, claimed by ${group.claimants.join(", ")}` : "";
+    lines.push(`- ${who}${claims} (${group.names.length} region${group.names.length === 1 ? "" : "s"}): ${shown.join(", ")}${more > 0 ? `${shown.length ? ", " : ""}(+${more} more)` : ""}`);
+  }
+  return lines.join("\n")
+    + (skipped > 0 ? `\n(+${skipped} more non-normal territorial states among powers not in play omitted${viaLookups ? "; contested_regions lists them all" : ""})` : "")
+    + (unnamed > 0 && !skipped && viaLookups ? "\n(contested_regions lists every region)" : "");
+};
+
 // The advisor's and a leader's [Occupied and Contested Regions]: the rows that
 // involve the given polities, bounded. "" when there are none, so a world at
 // peace pays nothing.

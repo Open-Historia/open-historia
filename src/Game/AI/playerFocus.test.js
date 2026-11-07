@@ -413,3 +413,19 @@ test("a Project named in Cyrillic is the player's or another's by its owner, and
   assert.equal(spare({ title: "Проект Левиафан: установлен энергетический блок", impacts: {} }), true);
   assert.equal(spare({ title: "Министерство пересматривает дорожные нормы", impacts: {} }), false);
 });
+
+// A time skip's [This Round] lists the orders with their ids and words
+// (promptContext.js buildActionHistoryText ids): the focus names them by id.
+test("where the orders are listed above, the focus names them by id and does not repeat their words", async () => {
+  const material = [
+    { kind: "order", id: "a1", label: "Fund the shipyard", required: true },
+    { kind: "order", id: "a2", label: "Recall the ambassador", required: true, overdue: true },
+  ];
+  const text = buildPlayerFocusDirective({ focus: "balanced", material, playerName: PLAYER, ordersAbove: true });
+  assert.match(text, /ORDERS \(their words are under \[This Round\] above, by the same ids\) — every one gets an outcome this period/);
+  assert.match(text, /^- \[a2\] \(OVERDUE: carried over unanswered from the last period; answer it first\)$/m, "the overdue order first, by id");
+  assert.match(text, /^- \[a1\]$/m);
+  assert.equal(text.includes("Fund the shipyard") || text.includes("Recall the ambassador"), false);
+  const { readFileSync } = await import("node:fs");
+  assert.match(readFileSync(new URL("./gameplay.js", import.meta.url), "utf8"), /playerFocusDirective: buildPlayerFocusDirective\(\{[\s\S]{0,400}?ordersAbove: true,/);
+});

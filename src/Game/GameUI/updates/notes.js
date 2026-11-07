@@ -54,6 +54,78 @@ import { RELEASES } from "./notesReleases.js";
 // make UPDATES, newest first by date.
 const NEW_UPDATES = [
   {
+    // On-device similar-event search (the token-cutting plan's item 13, 2026-11-07): Settings → AI → Find related
+    // past events on this device, off by default (AI/relatedEvents.js, relatedEventsSearch.js,
+    // runtime/embeddingWorker.js; all-MiniLM-L6-v2, 24 MB, downloaded after a yes).
+    id: "2026-11-related-past-events",
+    kind: "minor",
+    date: "2026-11-07",
+    channel: "beta",
+    banners: [
+      {
+        title: "Related past events",
+        items: [
+          "A new setting in Settings → AI, Find related past events on this device, off unless you turn it on: a small model on your device (a 24 MB download, after you say yes) finds the old events closest to each time skip’s orders, wars and storylines, and the skip is shown up to six of them, so threads from long ago are picked up again.",
+          "It makes no AI requests, and your events never leave your device for it. With AI lookup functions on, the AI can also search your past events itself.",
+        ],
+      },
+    ],
+  },
+  {
+    // The prompt budget (docs/prompt-budget.md): the skip's unchanging rules first and cached, nothing sent twice,
+    // older events by a one-line digest, a slimmer output function. Phase 2 (promptFocus.js, runtime/historyTiers.js):
+    // what the turn is about in full and the rest in a line, compact tables, the history in tiers and its canon.
+    id: "2026-11-time-skips-cost-less",
+    kind: "minor",
+    date: "2026-11-07",
+    channel: "beta",
+    banners: [
+      {
+        title: "Time skips cost less",
+        items: [
+          "Time skips send the AI less: nothing is sent twice, older events go as one line each, and the part of the request that never changes is kept by the AI service, so each skip costs less and runs faster.",
+          "Long campaigns send even less: each skip gives the AI in full what the turn is about (your country, your neighbours, every war, everything your orders name, and a few distant countries in turn, so they keep making news) and the rest of the world in a line. Your campaign's treaties, deaths, changes of government and borders are now kept for good, however long it runs.",
+        ],
+      },
+    ],
+  },
+  {
+    // Unlimited requests (AI/requestBudget.js; Settings → AI → AI requests), for a paid key or a local model: a skip may
+    // be up to eight requests with six rounds of lookups, the prompt is slimmer (promptContext.js leanLookups), and on
+    // Anthropic each round reads the one before from the cache (toolTurns.js withCachedHistory).
+    id: "2026-11-unlimited-requests",
+    kind: "minor",
+    date: "2026-11-07",
+    channel: "beta",
+    banners: [
+      {
+        title: "Unlimited requests",
+        items: [
+          "A new setting in Settings → AI → AI requests, for a paid key or a local model: Unlimited requests. It is off unless you turn it on.",
+          "With it on, the AI looks things up as it needs them instead of being sent everything up front: a time skip can use up to 8 requests, with up to 6 rounds of questions, and each request sends less.",
+          "Save AI requests is off while Unlimited requests is on.",
+        ],
+      },
+    ],
+  },
+  {
+    // The owner, 2026-11-06: "when entering a game thats already opened ... dont do the whole music ramp up
+    // thing. make it just go to the ingame music once your in" (runtime/ambientMusic.js gameDrawnBefore,
+    // GameUI/main.jsx reopening).
+    id: "2026-11-straight-back-into-the-music",
+    kind: "minor",
+    date: "2026-11-06",
+    channel: "beta",
+    banners: [
+      {
+        title: "Straight back into the game’s music",
+        items: [
+          "Going back into a game you already opened this session skips the opening music’s build-up: the game’s own music starts as soon as you are in.",
+        ],
+      },
+    ],
+  },
+  {
     // PR #969 (a contributor's, rebuilt on beta): the desktop app on a port the system picks once every port near the
     // usual one is taken (electron/main.cjs findFreePort), where it used not to open (2026-11-06). Its right-to-left
     // plugin was dropped: MapLibre 6 (the package built from Open-Historia/maplibre-gl-js) shapes Arabic and orders right-to-left text itself.

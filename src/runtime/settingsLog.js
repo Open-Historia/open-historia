@@ -174,6 +174,7 @@ registerSettingsSnapshot("AI", () => {
         ["Limit AI generation", onOff(getMapSetting(MAP_SETTING_KEYS.limitAiGeneration))],
         ["Generate long time skips in segments", onOff(getMapSetting(MAP_SETTING_KEYS.chunkLongJumps))],
         ["AI lookup functions", lookupFunctionsState()],
+        ["Find related past events on this device", onOff(getMapSetting(MAP_SETTING_KEYS.relatedEvents))],
         ["Show time skip events as they are written", onOff(getMapSettingDefaultOn(MAP_SETTING_KEYS.liveSkipEvents))],
         ["Stop when my events fail", onOff(getMapSetting(MAP_SETTING_KEYS.stopOnPlayerFailures))],
         ["Batch background AI tasks", onOff(getMapSetting(MAP_SETTING_KEYS.batchBackgroundTasks))],
@@ -191,6 +192,7 @@ registerSettingsSnapshot("AI requests", () => {
     const tasks = Object.entries(day.byTask).sort((a, b) => b[1] - a[1]).map(([task, count]) => `${task} ${count}`).join(", ");
     return [
         ["Save AI requests", onOff(requestSettings.saveRequests())],
+        ["Unlimited requests", onOff(requestSettings.unlimited())],
         ["Requests a day your key allows", String(day.limit)],
         ["Background AI", onOff(requestSettings.backgroundAi())],
         ["Background requests a day, at most", String(day.backgroundCap)],

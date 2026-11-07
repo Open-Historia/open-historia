@@ -39,6 +39,7 @@ permissions:
 jobs:
   apk:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       # A dispatch run picks its own branch from a dropdown, and `main` is in that
       # dropdown too — a run from there would package the released code, call it
@@ -70,14 +71,24 @@ jobs:
             exit 1
           fi
 
+      # The npm cache is keyed by package-lock.json alone, the same key the
+      # Tests and website workflows use, so it adds nothing to the cache storage.
       - uses: actions/setup-node@v5
         with:
+          cache: npm
           node-version: 24
 
+      # Gradle's dependencies and wrapper, kept between builds by the Android
+      # project's build files instead of downloaded again every run.
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "21"
+          cache: gradle
+          cache-dependency-path: |
+            mobile/android/*.gradle*
+            mobile/android/app/*.gradle*
+            mobile/android/gradle/wrapper/gradle-wrapper.properties
 
       # VITE_APP_BUILD is the number the update banner compares against
       # latest.json; VITE_APP_TRACK=beta points the banner at the beta's own feed.

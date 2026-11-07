@@ -88,6 +88,14 @@ const BETA_UPDATE_MANIFEST =
 const BETA_DOWNLOAD_URL = process.platform === "win32"
   ? "https://github.com/Open-Historia/open-historia/releases/download/desktop-beta/Open-Historia-Beta-Setup.exe"
   : "https://github.com/Open-Historia/open-historia/releases/tag/desktop-beta";
+// The native app (the Godot build), offered on the same screen and recommended
+// there ("make it say native or beta ... with the native button being
+// highlighted"): its installer for this system, as the website links it.
+const NATIVE_DOWNLOAD_URL = process.platform === "win32"
+  ? "https://github.com/Open-Historia/open-historia/releases/download/native-experimental/Open-Historia-Native-Setup.exe"
+  : process.platform === "darwin"
+    ? "https://github.com/Open-Historia/open-historia/releases/download/native-experimental/Open-Historia-Native-macOS.dmg"
+    : "https://github.com/Open-Historia/open-historia/releases/download/native-experimental/Open-Historia-Native-Linux-x86_64.tar.gz";
 
 // Everything the app writes lives under Electron's per-user data directory.
 // Program Files is read-only for a normal user and the app bundle is read-only
@@ -1272,4 +1280,5 @@ if (!app.requestSingleInstanceLock()) {
   // the download is where they can see it. Nothing about this launch changes:
   // the update goes on installing.
   ipcMain.handle("setup:open-beta", () => shell.openExternal(BETA_DOWNLOAD_URL));
+  ipcMain.handle("setup:open-native", () => shell.openExternal(NATIVE_DOWNLOAD_URL));
 }

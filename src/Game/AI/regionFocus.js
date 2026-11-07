@@ -108,6 +108,14 @@ export const FOCUS_WEIGHTS = Object.freeze({
   claimant: 12,
   sizeCap: 15,
   sizeDivisor: 20,
+  // What a time skip adds to put the powers it shows in full in view
+  // (promptFocus.js): the player's neighbours, the powers that changed since the
+  // last skip, the parties to a storyline still running, and the rotating
+  // spotlight on a few distant powers.
+  neighbour: 50,
+  changed: 40,
+  storyline: 55,
+  spotlight: 30,
 });
 
 /**
@@ -135,6 +143,13 @@ export const selectFocusPowers = ({
   ownerOfRegion = () => "",
   regions = [],
   recentEvents = 12,
+  // Names (any case) of the player's neighbours, the powers changed since the
+  // last skip, those in a live storyline and those in the spotlight. Each is
+  // matched by the power's exact names, as everything else here is.
+  neighbours = [],
+  changed = [],
+  storylines = [],
+  spotlight = [],
   weights = FOCUS_WEIGHTS,
 } = {}) => {
   const entries = owners
@@ -218,6 +233,18 @@ export const selectFocusPowers = ({
       if (holder && holder !== playerEntry) credit(holder, weights.claimant, "holds contested land");
     }
   }
+
+  const creditNames = (names, points, reason) => {
+    const seen = new Set();
+    for (const name of Array.isArray(names) ? names : names instanceof Set ? [...names] : []) {
+      const entry = findExact(name);
+      if (entry && !seen.has(entry)) { seen.add(entry); credit(entry, points, reason); }
+    }
+  };
+  creditNames(neighbours, weights.neighbour ?? 0, "neighbour");
+  creditNames(changed, weights.changed ?? 0, "changed since the last skip");
+  creditNames(storylines, weights.storyline ?? 0, "in a live storyline");
+  creditNames(spotlight, weights.spotlight ?? 0, "spotlight");
 
   for (const entry of entries) {
     entry.score += Math.min(weights.sizeCap, Math.floor((Number(entry.owner.regions) || 0) / weights.sizeDivisor));

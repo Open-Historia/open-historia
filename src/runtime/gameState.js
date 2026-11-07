@@ -1,4 +1,6 @@
 /*! Open Historia — portions (troop deployments + era troop types) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
+import { normalizePromptReference, normalizePromptSnapshot } from "./promptSnapshot.js";
+import { normalizeCanonFacts, normalizeHistoryEras, normalizeHistoryYears } from "./historyTiers.js";
 import { JSON_URLS, getPrimedScenarioRegionCatalog, loadTurnRestorePoint, primeJson, publishJsonWriteBatch, readJson, reportPerfOperation, writeJson } from "./assets.js";
 import { withMapClaims } from "./mapClaims.js";
 import { populationFigureOf } from "./populationFigure.js";
@@ -100,6 +102,13 @@ export const WORLD_DEFAULTS = {
   // The living history document the AI is shown in place of the folded events
   // (AI/historyConsolidation.js); null until the first consolidation pass.
   historyDocument: null,
+  // The facts of the campaign that never fade: treaties, deaths, regime and
+  // border changes, office holders, each dated (runtime/historyTiers.js).
+  canonFacts: [],
+  // What the last time skip's prompt read, and the polity lore its cached
+  // opening carries (runtime/promptSnapshot.js); null until a skip writes them.
+  promptSnapshot: null,
+  promptReference: null,
   // Per-polity international reputation (0-100), evolved by the AI each turn via
   // polityChanges and fed back into prompts. Authoritative, unlike the on-demand
   // stat sheet it was first read from.
@@ -3723,6 +3732,20 @@ const normalizeEventNpcReaction = (value) => {
   };
 };
 
+// An event's one-line digest (the time skip writes one beside each event): the
+// line a later skip's history shows of it once it is no longer the newest
+// (promptContext.js buildEventHistoryText). One line, at most
+// EVENT_DIGEST_MAX_CHARS; "" when there is none, as on every event written
+// before digests and every event of the Event Editor.
+export const EVENT_DIGEST_MAX_CHARS = 140;
+export const normalizeEventDigest = (value) => {
+  const line = typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
+  if (line.length <= EVENT_DIGEST_MAX_CHARS) return line;
+  const cut = line.slice(0, EVENT_DIGEST_MAX_CHARS - 1);
+  const space = cut.lastIndexOf(" ");
+  return `${(space > EVENT_DIGEST_MAX_CHARS * 0.6 ? cut.slice(0, space) : cut).trimEnd()}…`;
+};
+
 export const normalizeEventEntry = (entry, index = 0) => {
   if (typeof entry === "string") {
     const title = normalizeString(entry);
@@ -3772,11 +3795,14 @@ export const normalizeEventEntry = (entry, index = 0) => {
   // The places the event said it is about, as the engine found them on the
   // map (runtime/eventPlaces.js): what its card links to.
   const places = normalizeEventPlaces(entry.places);
+  const digest = normalizeEventDigest(entry.digest);
 
   return {
     createdAt: normalizeOptionalString(entry.createdAt) || new Date().toISOString(),
     date: normalizeOptionalString(entry.date),
     description: presentation.description,
+    // Only when present, so an event without one saves exactly as before.
+    ...(digest ? { digest } : {}),
     ...(presentation.quote ? { quote: presentation.quote } : {}),
     // Only when present, so an event without one saves exactly as before.
     ...(npcReaction ? { npcReaction } : {}),
@@ -3897,13 +3923,19 @@ const normalizeActionSuggestions = (value) =>
 
 // The living history document (AI/historyConsolidation.js). The text is the
 // point; the rest records which pass wrote it and how far it reaches.
+// `years` and `eras`: the document in tiers (runtime/historyTiers.js); a
+// document from before them has its text alone, and one in tiers may have none.
 const normalizeHistoryDocument = (value) => {
   if (!value || typeof value !== "object") return null;
   const text = normalizeTextLike(value.text);
-  if (!text) return null;
+  const years = normalizeHistoryYears(value.years);
+  const eras = normalizeHistoryEras(value.eras);
+  if (!text && !years.length && !eras.length) return null;
   const throughRound = Math.trunc(Number(value.throughRound) || 0);
   return {
     text,
+    ...(years.length ? { years } : {}),
+    ...(eras.length ? { eras } : {}),
     revision: Math.max(1, Math.trunc(Number(value.revision) || 1)),
     updatedAt: normalizeOptionalString(value.updatedAt) || new Date().toISOString(),
     source: normalizeOptionalString(value.source) || "ai",
@@ -4482,6 +4514,9 @@ export const normalizeWorldState = (world) => {
       : 0,
     consolidatedHistory: normalizeConsolidatedHistory(nextWorld.consolidatedHistory),
     historyDocument: normalizeHistoryDocument(nextWorld.historyDocument),
+    canonFacts: normalizeCanonFacts(nextWorld.canonFacts),
+    promptSnapshot: normalizePromptSnapshot(nextWorld.promptSnapshot),
+    promptReference: normalizePromptReference(nextWorld.promptReference),
     internationalReputation,
     intelligence,
     spies,

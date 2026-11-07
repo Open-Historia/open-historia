@@ -343,6 +343,17 @@ export const LOOKUP_DIRECTIVE = [
   "6. Then call the output function once with the complete answer. Do not narrate your lookups.",
 ].join("\n");
 
+// The directive with the number of rounds the task really has in rule 5:
+// LOOKUP_DIRECTIVE as it is for three, the number written out otherwise (six
+// with Unlimited requests on, requestBudget.js lookupRoundLimit).
+const ROUND_WORDS = ["NO", "ONE", "TWO", "THREE", "FOUR", "FIVE", "SIX", "SEVEN", "EIGHT", "NINE", "TEN"];
+export const lookupDirective = ({ rounds = 3 } = {}) => {
+  const count = Math.max(0, Math.round(Number(rounds) || 0));
+  if (count === 3) return LOOKUP_DIRECTIVE;
+  const word = ROUND_WORDS[count] ?? String(count);
+  return LOOKUP_DIRECTIVE.replace("at most THREE lookup rounds", `at most ${word} lookup round${count === 1 ? "" : "s"}`);
+};
+
 // ---------------------------------------------------------------------------
 // Context: the indexes the executor answers from. Built once per task by the
 // caller from the bundle, the rendered region catalog and the cities.
@@ -1568,3 +1579,34 @@ export const executeLookup = (context, name, args = {}) => {
 };
 
 export const isLookupToolName = (name) => LOOKUP_TOOL_NAMES.includes(clean(name));
+
+// ---------------------------------------------------------------------------
+// similar_events: past events found by meaning, on the player's device
+// (relatedEventsSearch.js). Not among LOOKUP_TOOLS: it is offered only while
+// Settings → AI → Find related past events on this device is on and its model
+// has loaded, so a task adds it with withSimilarEvents. Its answer is computed
+// outside the context the other lookups read (a vector search, asynchronous).
+export const SIMILAR_EVENTS_FUNCTION = "similar_events";
+export const SIMILAR_EVENTS_TOOL = Object.freeze({
+  name: SIMILAR_EVENTS_FUNCTION,
+  description:
+    "Past events of this campaign closest in meaning to a description, from the whole timeline (events folded into the "
+    + "history included): date, title and a one-line summary, closest first. Use it to find an earlier war, treaty, crisis "
+    + "or decision this turn continues, when you know what happened but not when.",
+  schema: object("What to look for.", {
+    query: text("What the events were about, in a sentence: who, what, where."),
+    limit: integer("How many events (default 6, max 12)."),
+  }, ["query"]),
+});
+
+// `lookups` with similar_events added, answered by `search(args)`; unchanged
+// when there is no search (the setting off, or the model not loaded).
+export const withSimilarEvents = (lookups, search) => {
+  if (!lookups || typeof search !== "function") return lookups;
+  const execute = lookups.execute;
+  return {
+    ...lookups,
+    tools: [...(Array.isArray(lookups.tools) ? lookups.tools : []), SIMILAR_EVENTS_TOOL],
+    execute: async (name, args) => (clean(name) === SIMILAR_EVENTS_FUNCTION ? search(args ?? {}) : execute(name, args)),
+  };
+};

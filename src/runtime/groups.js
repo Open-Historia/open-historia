@@ -229,19 +229,41 @@ export const applyGroupOps = ({ groups = {}, groupAreas = {} } = {}, ops = []) =
 
 // One line per group for a prompt: exact name, what it is, where it holds.
 // `regionName(id)` turns an id into the name the model should read.
-export const describeGroupsForPrompt = (world, { regionName = (id) => id, maxRegions = 12 } = {}) => {
+//
+// `inView(name, regionIds)`: a time skip's test for a group the turn is about
+// (gameplay.js buildGroupsContext). A group out of view keeps its name and its
+// area, which an op on it needs, and its description is cut to its first
+// sentence; the groups in view come first.
+export const GROUP_BRIEF_DESCRIPTION = 160;
+export const briefDescription = (text, max = GROUP_BRIEF_DESCRIPTION) => {
+  const flat = String(text ?? "").replace(/\s+/g, " ").trim();
+  if (flat.length <= max) return flat;
+  const sentence = /^(.{20,}?[.!?])\s/.exec(flat)?.[1] ?? "";
+  if (sentence && sentence.length <= max) return sentence;
+  return `${flat.slice(0, max - 1).replace(/\s+\S*$/, "")}…`;
+};
+export const describeGroupsForPrompt = (world, { regionName = (id) => id, maxRegions = 12, inView = null } = {}) => {
   const groups = normalizeGroups(world?.groups);
   const names = Object.keys(groups);
   if (!names.length) return "";
   const areas = groupRegions(normalizeGroupAreas(world?.groupAreas, groups));
-  return names.map((name) => {
+  const viewed = typeof inView === "function"
+    ? new Set(names.filter((name) => inView(name, areas[name] ?? [])))
+    : null;
+  const ordered = viewed ? [...names.filter((name) => viewed.has(name)), ...names.filter((name) => !viewed.has(name))] : names;
+  return ordered.map((name) => {
     const group = groups[name];
     const regions = areas[name] ?? [];
     const shown = regions.slice(0, maxRegions).map((id) => `${regionName(id)} (${id})`);
     const where = regions.length
       ? `controls ${regions.length} region${regions.length === 1 ? "" : "s"}: ${shown.join(", ")}${regions.length > shown.length ? `, +${regions.length - shown.length} more` : ""}`
       : "controls no area on the map";
-    return `- ${name}${group.description ? ` — ${group.description.replace(/\n+/g, " ")}` : ""} [${where}]`;
+    const description = !group.description
+      ? ""
+      : viewed && !viewed.has(name)
+        ? briefDescription(group.description)
+        : group.description.replace(/\n+/g, " ");
+    return `- ${name}${description ? ` — ${description}` : ""} [${where}]`;
   }).join("\n");
 };
 

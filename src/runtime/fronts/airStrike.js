@@ -553,11 +553,35 @@ export const describeAirStrike = (strike) => {
   return `${parts.join("; ")}.`;
 };
 
-// The block a time skip's prompt is given: "" when nothing flew.
-export const airStrikesBlock = (strikes) => {
-  const lines = normalizeAirStrikes(strikes).map(describeAirStrike).filter(Boolean);
-  if (lines.length === 0) return "";
-  return [AIR_STRIKES_HEADING, AIR_STRIKES_RULE, ...lines.map((line) => `- ${line}`)].join("\n");
+// The block a time skip's prompt is given: "" when nothing flew. At most
+// AIR_STRIKES_MAX_CHARS of strikes: those that did the most first (a structure
+// destroyed, people killed, troops hit), then the rest in the order they flew;
+// what did not fit is counted, so a long air war never reads as a short one.
+export const AIR_STRIKES_MAX_CHARS = 6000;
+const strikeWeight = (strike) => (strike.outcome === "turned back" ? 0 : 1)
+  + (strike.status === "destroyed" ? 4 : strike.status === "damaged" ? 2 : 0)
+  + (strike.dead > 0 ? 3 : 0)
+  + (strike.hits.length ? 2 : 0)
+  + (strike.kind === "city" ? 1 : 0);
+export const airStrikesBlock = (strikes, { maxChars = AIR_STRIKES_MAX_CHARS } = {}) => {
+  const described = normalizeAirStrikes(strikes)
+    .map((strike, index) => ({ index, weight: strikeWeight(strike), line: describeAirStrike(strike) }))
+    .filter((entry) => entry.line);
+  if (described.length === 0) return "";
+  const kept = new Set();
+  let used = 0;
+  for (const entry of [...described].sort((a, b) => b.weight - a.weight || a.index - b.index)) {
+    if (kept.size > 0 && used + entry.line.length + 3 > maxChars) continue;
+    kept.add(entry);
+    used += entry.line.length + 3;
+  }
+  const left = described.length - kept.size;
+  return [
+    AIR_STRIKES_HEADING,
+    AIR_STRIKES_RULE,
+    ...described.filter((entry) => kept.has(entry)).map((entry) => `- ${entry.line}`),
+    ...(left > 0 ? [`(+${left} more air strike${left === 1 ? "" : "s"} this period, of lesser effect, not listed)`] : []),
+  ].join("\n");
 };
 
 // What a country's war stats say of the air war lately (Game/AI/warStatsPrompt.js): "" for none.

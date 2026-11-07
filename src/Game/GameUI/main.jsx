@@ -14,7 +14,7 @@ import { useRuntimeState } from "../../runtime/useRuntimeState.js";
 import { brushedMetalUrl } from "./brushedMetal.js";
 import { fightingIn, playerFrontsKey } from "./warRoomData.js";
 import { presenceFor, useDiscordPresence } from "../../runtime/discordPresence.js";
-import { musicSceneOf, setMusicScene } from "../../runtime/ambientMusic.js";
+import { gameDrawnBefore, musicSceneOf, noteGameDrawn, setMusicScene } from "../../runtime/ambientMusic.js";
 import { followScenarioMusic } from "../../runtime/scenarioMusic.js";
 import { useScenarioLanguagePack } from "../../runtime/useScenarioLanguagePack.js";
 import { useWarRoom } from "../Map/warRoomStore.js";
@@ -702,7 +702,12 @@ const Main = ({
   // and the war room or a battlefield being shown, which the war room's own
   // store knows.
   const battlefieldShown = useWarRoom((room) => room.open || Boolean(room.battlefield));
-  const musicScene = musicSceneOf({ inMenu: mainMenuOpen || hasNoGames, loading: showGameLoading, atWar: atWar || inWar, war: battlefieldShown });
+  // A game drawn once this session opens again at once: no build-up for it.
+  const reopening = gameDrawnBefore(activeGame?.id);
+  useEffect(() => {
+    if (gameEntered && activeGame?.id && !showGameLoading) noteGameDrawn(activeGame.id);
+  }, [gameEntered, activeGame?.id, showGameLoading]);
+  const musicScene = musicSceneOf({ inMenu: mainMenuOpen || hasNoGames, loading: showGameLoading && !reopening, atWar: atWar || inWar, war: battlefieldShown });
   useEffect(() => { setMusicScene(musicScene); }, [musicScene]);
   const closeWarRoomPanel = useCallback(() => setIsWarRoomOpen(false), []);
   const toggleWarRoom = () => {

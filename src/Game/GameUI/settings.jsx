@@ -70,6 +70,7 @@ import {
     getStoredLanguage,
     setStoredChatLanguage,
 } from "../../runtime/i18n.js";
+import { formatEmbeddingSize } from "../../runtime/embeddingModels.js";
 import { LABEL_FONT_SUGGESTIONS, MAP_SETTING_KEYS, getMapSetting, getMapSettingDefaultOn, setMapSetting, setMapSettingValue, useMapSetting, useMapSettingValue, useSystemReducedMotion } from "../../runtime/mapSettings.js";
 import { SCENARIO_TERRAIN_PAINTED } from "../Map/scenarioTerrain.js";
 // The Map Editor's basemap window, opened here to browse, download and manage
@@ -1524,6 +1525,7 @@ const RequestBudgetSection = () => {
     const [activeAiRequests, setActiveAiRequests] = useState(() => getActiveAiRequestCount());
     const [cancelNotice, setCancelNotice] = useState("");
     const [saving, setSaving] = useState(() => requestSettings.saveRequests());
+    const [unlimited, setUnlimited] = useState(() => requestSettings.unlimited());
     const [background, setBackground] = useState(() => requestSettings.backgroundAi());
     const [dailyLimit, setDailyLimit] = useState(() => String(requestSettings.dailyLimit()));
     const [backgroundCap, setBackgroundCap] = useState(() => String(requestSettings.backgroundDailyCap()));
@@ -1550,8 +1552,18 @@ const RequestBudgetSection = () => {
             ? `Player cancelled ${cancelled} active AI request${cancelled === 1 ? "" : "s"} from Settings.`
             : "Player pressed Cancel all AI requests, but none were active.");
     };
-    // The most a skip is when function calling may add to it (Save AI requests off).
+    // The most a skip is when function calling may add to it (Save AI requests off),
+    // and with Unlimited requests on: the cap, and the rounds of questions.
     const lookupCap = describeJumpCost({ lookups: true }).max;
+    const unlimitedCost = describeJumpCost({ lookups: true, unlimited: true });
+    const unlimitedCap = unlimitedCost.max;
+    const unlimitedRounds = unlimitedCost.rounds;
+    // The two switches read each other (requestBudget.js): unlimited on is saving
+    // off, and saving on turns unlimited off.
+    const readSwitches = () => {
+        setSaving(requestSettings.saveRequests());
+        setUnlimited(requestSettings.unlimited());
+    };
     const share = day.limit > 0 ? Math.min(1, day.used / day.limit) : 0;
     const barColor = share >= 0.9 ? "#f87171" : share >= 0.7 ? "#fbbf24" : "#60a5fa";
 
@@ -1626,16 +1638,33 @@ const RequestBudgetSection = () => {
             enabled={saving}
             onToggle={() => {
                 const next = !saving;
-                setSaving(next);
                 apply(`Save AI requests turned ${next ? "on" : "off"}.`, () => requestSettings.setSaveRequests(next));
+                readSwitches();
             }}
             />
             {/* One sentence group per state, each a single string, so a language
                 pack translates it whole (docs/i18n.md). */}
             <div style={settingsHelper}>
-                {saving
+                {unlimited
+                    ? "Off while Unlimited requests is on (below)."
+                    : saving
                     ? "On (default): a time skip is one request. Each event arrives as soon as it is written, already carrying what it changed: the map, your units and structures, your orders and your Projects board. Your spies' reports come back in the same answer, and so does the history document when older events are due to be folded into it. The model is handed the names it needs instead of looking them up, and a small mistake in its answer is cut out rather than asked for again. A skip takes a second request only when its answer could not be used at all, when a provider refuses the single-request form, or on a turn where something you switched on yourself falls due: the automatic Stats refresh, or NPC votes in an institution."
                     : `Off: for a key with no daily limit. A time skip is still one request, and with AI lookup functions on (below) the model may look things up before it answers: each round of questions is another request, two at most, so a skip never uses more than ${lookupCap}. On Gemini such a skip shows its events together at the end instead of one at a time. Outside a skip, a task may look things up in up to three extra requests, and a flawed answer is sent back to be redone instead of being cut down.`}
+            </div>
+
+            <Toggle
+            label="Unlimited requests"
+            enabled={unlimited}
+            onToggle={() => {
+                const next = !unlimited;
+                apply(`Unlimited requests turned ${next ? "on" : "off"}.`, () => requestSettings.setUnlimited(next));
+                readSwitches();
+            }}
+            />
+            <div style={settingsHelper}>
+                {unlimited
+                    ? `On: for a paid key or a local model. The AI looks things up as it needs them instead of being sent everything, which can mean more requests but less sent in each. A time skip may use up to ${unlimitedCap} requests, with up to ${unlimitedRounds} rounds of questions. Save AI requests is off while this is on.`
+                    : "Off (default). For a paid key or a local model: the AI can look things up as it needs them instead of being sent everything, which can mean more requests but less sent in each."}
             </div>
 
             <div style={fieldGroupStyle}>
@@ -2631,6 +2660,100 @@ const ExperimentalPill = ({ children = "Experimental" }) => (
 
 const settingsHelper = { ...helperStyle, marginTop: "-0.45rem", marginBottom: "0.75rem" };
 
+// --- Find related past events on this device ------------------------------------
+// Off by default (AI/relatedEvents.js). Turning it on asks first: the model is a
+// download, so the card says how big and waits for Download, as the
+// translator's model card does (runtime/translator.js askForModel). Declining
+// leaves the setting off. A model already on this device needs no asking.
+// Turning it off removes the model and the vectors from this device.
+const RelatedEventsSetting = () => {
+    const on = useMapSetting(MAP_SETTING_KEYS.relatedEvents);
+    // null, or the card: "ask", "downloading", "failed".
+    const [card, setCard] = useState(null);
+    const [progress, setProgress] = useState(0);
+    const size = formatEmbeddingSize();
+    const modelModule = () => import("../../runtime/embeddingModel.js");
+
+    const download = async () => {
+        setCard("downloading");
+        setProgress(0);
+        try {
+            const { loadEmbeddingModel } = await modelModule();
+            await loadEmbeddingModel(({ loaded, total }) => setProgress(total ? Math.max(0, Math.min(100, Math.floor((loaded / total) * 100))) : 0));
+            setCard(null);
+            setMapSetting(MAP_SETTING_KEYS.relatedEvents, true);
+        } catch (error) {
+            console.warn(`[related events] the model did not download (${error?.message || "unknown"}).`);
+            setCard("failed");
+        }
+    };
+    const decline = () => {
+        setCard(null);
+        setMapSetting(MAP_SETTING_KEYS.relatedEvents, false);
+    };
+    const toggle = async () => {
+        if (card) return;
+        if (on) {
+            setMapSetting(MAP_SETTING_KEYS.relatedEvents, false);
+            const [{ forgetEmbeddingModel }, { closeEventVectorStore, deleteEventVectors }] = await Promise.all([modelModule(), import("../../runtime/eventVectorStore.js")]);
+            await closeEventVectorStore();
+            await Promise.all([forgetEmbeddingModel(), deleteEventVectors()]).catch(() => {});
+            return;
+        }
+        const { embeddingModelCached } = await modelModule();
+        if (await embeddingModelCached()) setMapSetting(MAP_SETTING_KEYS.relatedEvents, true);
+        else setCard("ask");
+    };
+
+    const cardButton = (label, primary, onClick) => (
+        <button
+        type="button"
+        onClick={onClick}
+        style={{ ...smallButtonStyle, fontWeight: 650, ...(primary ? { backgroundColor: "var(--oh-ui-text, #f4f4f5)", color: "var(--oh-ui-bg, #0b0b0d)", border: "1px solid var(--oh-ui-text, #f4f4f5)" } : null) }}
+        >
+        {label}
+        </button>
+    );
+    return (
+        <>
+        <Toggle label="Find related past events on this device" enabled={on || Boolean(card)} onToggle={toggle} />
+        {card && (
+            <div role="group" style={{ background: "var(--oh-ui-surface, #1b1b1e)", border: "1px solid var(--oh-ui-line, rgba(255,255,255,0.14))", borderRadius: "10px", color: "var(--oh-ui-text, #f4f4f5)", fontSize: "0.8rem", lineHeight: 1.45, margin: "-0.3rem 0 0.75rem", padding: "0.8rem 0.9rem" }}>
+            {card === "ask" && (
+                <>
+                <p style={{ margin: "0 0 0.7rem" }}>{`Finding related past events needs a one-time download of a small model (${size}) from Hugging Face. It runs on this device, and your events never leave it.`}</p>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", justifyContent: "flex-end" }}>
+                {cardButton("Cancel", false, decline)}
+                {cardButton("Download", true, download)}
+                </div>
+                </>
+            )}
+            {card === "downloading" && (
+                <div role="status">
+                <p style={{ margin: "0 0 0.6rem" }}>{`Downloading the related-events model… ${progress}%`}</p>
+                <div style={{ background: "rgba(255,255,255,0.12)", borderRadius: "2px", height: "4px", overflow: "hidden" }}>
+                <span style={{ background: "var(--oh-ui-text, #f4f4f5)", display: "block", height: "100%", transition: "width .25s", width: `${progress}%` }} />
+                </div>
+                </div>
+            )}
+            {card === "failed" && (
+                <>
+                <p style={{ margin: "0 0 0.7rem" }}>The related-events model could not be downloaded.</p>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", justifyContent: "flex-end" }}>
+                {cardButton("Cancel", false, decline)}
+                {cardButton("Try again", true, download)}
+                </div>
+                </>
+            )}
+            </div>
+        )}
+        <div style={settingsHelper}>
+        {`Off (default): nothing is downloaded. On: a small model on this device (${size}, downloaded once) finds the past events closest to each time skip's orders, wars and storylines, and the skip is shown up to six of them beside the history, so old threads are not forgotten. No AI request is made for it, and with AI lookup functions on the model can search past events too. Turning it off removes the model and what it found from this device.`}
+        </div>
+        </>
+    );
+};
+
 // --- Sound ---------------------------------------------------------------------
 // The music a scenario played is downloaded once and kept on this device, so
 // the same song is not fetched again for another scenario (runtime/keptMusic.js;
@@ -3141,6 +3264,7 @@ const SettingsWorkspace = ({
                     <div style={settingsHelper}>
                     Only used while Save AI requests (above) is off, because every lookup is a whole extra request. On: before it answers, the model can call lookup functions — the exact power and region names, a region's neighbours, the war ledger, a chat — in up to three extra requests per task, and two inside a time skip. Off: one request per task, with the region lists and ledgers written into the prompt instead. Needs a provider that supports function calling.
                     </div>
+                    <RelatedEventsSetting />
                     <Toggle label="Show time skip events as they are written" enabled={mapSettings.liveSkipEvents} onToggle={() => updateMapSetting("liveSkipEvents", MAP_SETTING_KEYS.liveSkipEvents, !mapSettings.liveSkipEvents)} />
                     <div style={settingsHelper}>
                     On (default): a skip opens the Events panel and fills it as the model writes, with the spinner and Cancel underneath. Reveal with Next event as they arrive, and the map and camera follow; wherever you get to is kept when the turn lands. Off: the skip stays behind the Timeline panel's spinner and the round appears at the end. The turn itself is the same either way. On Gemini, a skip that may look things up (Save AI requests off) still arrives all at once.
