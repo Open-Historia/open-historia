@@ -64,6 +64,6 @@ test("the advisor's and the leaders' prompts are sent with the prefix they were 
 });
 
 test("the skip's function is the same from turn to turn", () => {
-  assert.match(gameplay, /foldJumpTool\(tool, \{ board: true, agentReports: isActiveFeatureEnabled\("espionage"\), history: true \}\)/);
+  assert.match(gameplay, /foldJumpTool\(tool, \{ board: true, agentReports: agentJobs\.length > 0, history: true \}\)/);
   assert.match(gameplay, /withSocialPosts\(advisedTool, isActiveFeatureEnabled\("socialMedia"\), \{ polls: true \}\)/);
 });

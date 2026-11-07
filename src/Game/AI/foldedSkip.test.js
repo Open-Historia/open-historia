@@ -224,7 +224,7 @@ test("every skip is folded, with Save AI requests on or off, decided once", () =
   assert.equal(/state\.requests\?\.saving/.test(body), false, "whether requests are being saved no longer decides what a skip asks");
   assert.match(body, /if \(state\.folded && !state\.foldedPrep\) state\.foldedPrep = await prepareFoldedSkip\(/);
   // The same contract on every folded skip of a game (a provider caches the function with the prompt).
-  assert.match(body, /toolTransform: \(tool\) => foldJumpTool\(tool, \{ board: true, agentReports: isActiveFeatureEnabled\("espionage"\), history: true \}\)/);
+  assert.match(body, /toolTransform: \(tool\) => foldJumpTool\(tool, \{ board: true, agentReports: agentJobs\.length > 0, history: true \}\)/);
   assert.match(body, /if \(state\.folded && agentJobs\.length && segmentGeneration\?\.source !== "fallback"\) state\.foldedAgentAnswer = payload\[AGENT_REPORTS_FIELD\];/, "reports are read only where agents were due");
   assert.match(body, /const agentJobs = state\.folded && isFinalSegment \?/, "the agents report once, with the last segment");
   assert.match(body, /const historyJob = state\.folded && isFinalSegment \? buildSkipHistoryJob\(state\.foldedPrep\?\.history\?\.brief\) : "";/, "and so does the history fold");

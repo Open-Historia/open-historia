@@ -23,6 +23,15 @@ test("the folded skip with everything a game can send stays under what Gemini to
   assert.ok(!JSON.stringify(sent).includes("partyOps"));
 });
 
+// Since 2026-11-07 a folded skip is offered the board, the history fold and the
+// poll answers on every turn, so its function is the same from turn to turn (a
+// provider caches it with the prompt): that contract too stays under what went through.
+test("the folded skip's turn-to-turn contract stays under what Gemini took", () => {
+  const stable = foldJumpTool(withSocialPosts(withWarFigures(withFrontOrders(withEventImpacts(withEventAudience(getGameplayTool("jumpForward"), false)))), true, { polls: true }), { board: true, history: true });
+  const size = JSON.stringify(toGeminiSchema(stable.schema)).length;
+  assert.ok(size < 30435, `the folded skip's stable contract is ${size} characters`);
+});
+
 test("a skip asked the old way keeps a request for its checks", () => {
   const gameplay = fs.readFileSync(new URL("./gameplay.js", import.meta.url), "utf8").split("\r\n").join("\n");
   assert.match(gameplay, /if \(state\.folded === undefined\) state\.folded = !foldedSkipRefused;\n[^\n]*\n[^\n]*\n  if \(!state\.folded\) state\.requests\?\.budget\?\.reserve\?\.\("review", 1\);/);

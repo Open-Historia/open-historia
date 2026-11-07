@@ -57,7 +57,7 @@ const actionSchema = {
 // and are the engine's to fill (buildGeneratedChat); they rode on every jump.
 const createdChatSchema = {
   type: "object",
-  description: "A chat opened toward the player. The initiating polity speaks first, so title and openingMessage are required.",
+  description: "A chat opened toward the player; the initiating polity speaks first.",
   properties: {
     title: nonEmptyTextSchema("Short title naming the purpose (e.g. 'French mediation offer')."),
     countries: {
@@ -105,12 +105,12 @@ const outreachChatSchema = {
 // name because saved turns and previews carry it; what goes in it is
 // "region: <name>", or "country: <name>" for the whole of a country, a
 // territory or a dependency (AI/namedAreas.js).
-const regionIdSchema = textSchema("The region's NAME as the map spells it: \"region: Hamhung\". All of a country or territory: \"country: Puerto Rico\". Never an id.");
+const regionIdSchema = textSchema("The region's NAME as the map spells it, \"region: Hamhung\", or \"country: <name>\" for all of it. Never an id.");
 const regionNameSchema = textSchema("Region name, when known.");
 
 const regionTransferSchema = {
   type: "object",
-  description: "Legal sovereignty of one region passes to a polity. Wartime occupation is regionControlOps.",
+  description: "Legal sovereignty of one region passes; wartime occupation is regionControlOps.",
   properties: {
     regionId: regionIdSchema,
     regionName: regionNameSchema,
@@ -123,9 +123,8 @@ const regionTransferSchema = {
     wholeCountry: {
       type: "boolean",
       description:
-        "True ONLY when one polity takes EVERY region another still holds (total conquest, "
-        + "annexation, unification, partition): fromCode is the losing polity's full name and "
-        + "regionId repeats it; the engine expands this to every region it holds. Unset transfers one region.",
+        "True ONLY when one polity takes EVERY region another still holds: fromCode is the losing "
+        + "polity's full name and regionId repeats it. Unset moves one region.",
     },
   },
   required: ["regionId", "toCode"],
@@ -156,7 +155,7 @@ const regionClaimSchema = {
 const statPct = (description) => ({ type: "integer", minimum: 0, maximum: 100, description });
 const statsUpdateSchema = {
   type: "object",
-  description: "Only the fields that changed this period; every omitted field keeps its value. Absolute values, not deltas.",
+  description: "Only the fields that changed, as absolute values.",
   properties: {
     capital: textSchema("Capital, only when it changes."),
     continent: textSchema("Continent / broad region, only when it changes."),
@@ -165,7 +164,7 @@ const statsUpdateSchema = {
     stability: statPct("National stability 0-100."),
     indices: {
       type: "object",
-      description: "Strategic indices for the standard Stats sheet. Custom full-sheet scenarios use customStats instead.",
+      description: "The standard sheet's strategic indices that changed.",
       properties: {
         sovereignty: statPct("Practical political sovereignty."),
         foodAutonomy: statPct("Domestic food autonomy."),
@@ -179,7 +178,7 @@ const statsUpdateSchema = {
     },
     customStats: {
       type: "object",
-      description: "Scenario-defined full-sheet numeric Stats updates. The live tool declaration supplies the exact allowed keys and ranges.",
+      description: "The scenario's own stats that changed, by the keys and ranges declared here.",
       maxProperties: 60,
       additionalProperties: { type: "number" },
     },
@@ -240,7 +239,7 @@ const regionControlOpSchema = {
         basis: { type: "string", enum: [...TERRITORY_BASIS_ENUM], description: TERRITORY_BASIS_DESCRIPTION_SHORT },
         wholeCountry: {
           type: "boolean",
-          description: "True only when the new controller takes EVERY region the previous one still holds; regionId repeats that polity's name.",
+          description: "True only when the new controller takes EVERY region the other still holds; regionId repeats its name.",
         },
       },
       required: ["op", "regionId", "fromCode", "toCode"],
@@ -265,18 +264,17 @@ const regionControlOpSchema = {
 
 const polityChangeSchema = {
   type: "object",
-  description: "One polity operation. update targets an EXISTING polity; only create and restore may introduce one.",
+  description: "One polity operation; only create and restore introduce a polity.",
   properties: {
     operation: {
       type: "string",
       description:
-        "update = metadata or stats of an existing polity; create = a genuinely new polity (a breakaway, an independence); "
-        + "rename = a new full name, same polity; restore = a dormant or dissolved polity returns; "
-        + "dissolve = a polity ends, once its territory is settled.",
+        "update: an existing polity's data; create: a genuinely new polity; rename: a new full name, same polity; "
+        + "restore: a dormant polity returns; dissolve: it ends, once its land is settled.",
       enum: ["update", "create", "rename", "restore", "dissolve"],
     },
-    code: textSchema("The polity's exact FULL current name, never a code — the one changed, renamed or dissolved; for create/restore, the identity established."),
-    name: textSchema("rename: the NEW full name (required). create/restore: may repeat code. update: only when the display name itself changes."),
+    code: textSchema("The polity's exact FULL current name, never a code; for create or restore, the new one."),
+    name: textSchema("rename: the NEW full name (required); otherwise only when the display name changes."),
     color: textSchema("New six-digit hex colour, only when it changes."),
     aliases: stringArraySchema("Alternative names."),
     // The prompt asks for this and gameState normalizes/clamps/writes it, but it
@@ -289,7 +287,7 @@ const polityChangeSchema = {
     },
     intelligence: {
       type: "number",
-      description: "Intelligence service 0-100, only when it changes (a purge, a defector, a new bureau): how much of others' diplomacy it reads, and keeps of its own.",
+      description: "Intelligence service 0-100, only when it changes: how much of others' diplomacy it reads and keeps of its own.",
     },
     // Wars and Fronts Pt.2 (runtime/militaryStats.js): a change, not a figure, so the model needs
     // none it was not shown. Its five keys named in words: the schema's size guard (projectOpSchema.test.js).
@@ -299,8 +297,7 @@ const polityChangeSchema = {
       additionalProperties: { type: "number" },
     },
     tags: stringArraySchema(
-      "Defining traits after this change — ideology, alignment, posture (socialist, authoritarian, anti-nato). "
-      + "Only when they change, and then the COMPLETE list, not a delta.",
+      "Defining traits (ideology, alignment, posture), only when they change, and then the COMPLETE list.",
     ),
     note: textSchema("Brief reason."),
     stats: statsUpdateSchema,
@@ -324,7 +321,7 @@ const polityChangeSchema = {
 // grammar would spend it.
 // The country after the comma is not optional: two countries have a Montana.
 // Each name is said with its kind (AI/nameRefs.js): Georgia is a country and a state.
-const atSchema = { type: "string", description: "Where, in words, each name with its kind and its country: \"region: Montana, country: United States\" — see [Placing Things]. Preferred to lng/lat." };
+const atSchema = { type: "string", description: "Where, in words, each name with its kind: \"region: Montana, country: United States\". Preferred to lng/lat." };
 
 const unitSchema = {
   type: "object",
@@ -340,7 +337,7 @@ const unitSchema = {
     ownerCode: nonEmptyTextSchema("Owning polity's FULL country name (\"Spain\"), never a country code."),
     strength: {
       type: "integer",
-      description: "Percentage of ESTABLISHED strength: 100 fresh, 60 worn down, 20 a shell. Not a power score — the real size goes in composition.",
+      description: "Percent of ESTABLISHED strength (100 fresh, 20 a shell), not a power score: the size goes in composition.",
       minimum: 1,
       maximum: 100,
     },
@@ -356,7 +353,7 @@ const unitSchema = {
     },
     posture: {
       type: "string",
-      description: "What it is DOING. patrol is special: the engine keeps a patrolling unit on station turn after turn, so say it once.",
+      description: "What it is DOING; the engine keeps a patrolling unit on station, so say it once.",
       enum: ["holding", "massing", "patrol", "transit", "exercise", "blockade", "withdrawing", "assaulting"],
     },
     note: textSchema("One present-tense sentence on what it is doing and where; shown to the player."),
@@ -366,7 +363,7 @@ const unitSchema = {
 };
 
 const unitOpSchema = {
-  description: "A unit mutation. Use op spawn, move, strength, or remove and fill the fields that op needs.",
+  description: "op spawn, move, strength or remove, with the fields that op needs.",
   anyOf: [
     {
       type: "object",
@@ -963,16 +960,15 @@ const impactsSchema = {
     regionTransfers: {
       type: "array",
       description:
-        "Ownership changes — REQUIRED whenever the text says territory changed hands (captured, "
-        + "annexed, ceded, liberated), one entry per region, or the map will not match the story.",
+        "Ownership changes: REQUIRED whenever the text says territory changed hands, one entry per "
+        + "region, or the map will not match the story.",
       items: regionTransferSchema,
     },
     regionControlOps: {
       type: "array",
       description:
-        "DE-FACTO control, not sovereignty: contest = an active disputed front; control = capture, occupation "
-        + "or retaking; clear_contest = a ceasefire, withdrawal or settlement ends the contest. A border that "
-        + "legally moves is regionTransfers; a claim is regionClaims.",
+        "DE-FACTO control, not sovereignty: control = capture or occupation; contest = an active front; "
+        + "clear_contest = a ceasefire, withdrawal or settlement ends it.",
       items: regionControlOpSchema,
     },
     unitOps: {
@@ -982,45 +978,43 @@ const impactsSchema = {
     },
     markerOps: {
       type: "array",
-      description: "Structures built, destroyed, renamed or resized: whenever the event founds, builds or destroys a named place, or a city's population changes.",
+      description: "Structures built, destroyed or renamed, and a city's new population, whenever the event changes a named place.",
       items: markerOpSchema,
     },
     spyOps: {
       type: "array",
-      description: "The player's own espionage orders this event executes (deploy or recall an agent), only when their queued actions or chat ordered it; never for other powers.",
+      description: "The player's own espionage orders this event carries out (deploy or recall an agent), only when their actions or a chat ordered it.",
       items: spyOpSchema,
     },
     institutionLifecycleOps: {
       type: "array",
       description:
-        "Institution lifecycle acts enacted by AI-controlled governments in this event: found/invite/apply/respond/withdraw or formal discipline/dissolution proposals. Use current PWv2, relations, institution purpose/scope/obligations and threat model to decide whether the act makes political sense. Never make a sovereign membership decision for the human player. Invitations aimed at the player are allowed; the player must answer them.",
+        "Institution acts of AI-controlled governments in this event (found/invite/apply/respond/withdraw, discipline, dissolution), each judged by PWv2, relations and the institution's purpose/scope/obligations. Never make a sovereign membership decision for the human player; an invitation to the player is allowed, and the player answers it.",
       items: institutionLifecycleImpactOpSchema,
     },
     reports: {
       type: "array",
       description:
-        "Documents this event produces — a secret protocol, a private letter, an intelligence assessment, a treaty's articles — held only by the polities named in each one. See [Reports]. "
-        + "Most events have none; never restate the public event as a report.",
+        "Documents this event produces (a secret protocol, a letter, an assessment, a treaty's articles), "
+        + "held by the polities named in each. Most events have none.",
       items: reportOpSchema,
     },
     regionClaims: {
       type: "array",
       description:
-        "Territory CLAIMED but not held — an irredentist declaration, a proclaimed union, a contested border, "
-        + "a government-in-exile's title. The region shows as disputed WITHOUT the border moving; land that "
-        + "changed hands is regionTransfers.",
+        "Territory CLAIMED but not held: the region shows as disputed and the border stays.",
       items: regionClaimSchema,
     },
     strikes: {
       type: "array",
-      description: "Missiles and bombing runs this event tells of, drawn on the map, one line each: side~weapon~from~target~count~shot down.",
+      description: "Missiles and bombing runs this event tells of, one line each: side~weapon~from~target~count~shot down.",
       items: { type: "string" },
     },
     groupOps: {
       type: "array",
       description:
-        "Groups - actors that are not countries - founded, changed, erased, or taking or losing control of regions. "
-        + "The regions stay their countries'; a group's area is drawn over them.",
+        "Groups (actors that are not countries) founded, changed, erased, or taking or losing regions; "
+        + "the regions stay their countries'.",
       items: groupOpSchema,
     },
     projectOps: {
@@ -1118,8 +1112,8 @@ const FOLDED_PROJECT_OP_OMITS = new Set(["priority", "startedAt", "linkedUnitIds
 const foldedProjectOpsSchema = compactJumpImpactSchema({
   type: "array",
   description:
-    "The Projects & Operations board, moved by THIS event: one op per effort the event itself started, advanced, "
-    + "set back, completed or ended. Shapes and rules under [Projects & Operations]. Most events have none.",
+    "The board, moved by THIS event: one op per effort it started, advanced, set back, completed or ended. "
+    + "Rules under [Projects & Operations]. Most events have none.",
   items: {
     ...projectOpSchema,
     properties: Object.fromEntries(
@@ -1194,7 +1188,7 @@ const POLL_RESULTS_SENT_SCHEMA = {
 // Category tags (runtime/eventTags.js): the timeline's filter chips.
 const eventTagsSchema = {
   type: "array",
-  description: "Categorization tags for the timeline's filter chips: Military, Diplomacy, Economy, Politics, Culture or Disaster (up to three).",
+  description: "Up to three of: Military, Diplomacy, Economy, Politics, Culture, Disaster.",
   items: { type: "string", enum: [...EVENT_TAG_ENUM] },
   maxItems: MAX_EVENT_TAGS,
 };
@@ -1271,12 +1265,12 @@ const eventSchema = {
       items: { type: "string" },
     },
     warId: textSchema(
-      "Canonical world.wars id for this event when it declares/joins/ends a war or depicts actual combat. Blank for non-war events.",
+      "The world.wars id when it declares, joins or ends a war or shows combat; blank otherwise.",
     ),
     combatants: {
       type: "array",
       description:
-        "For actual battlefield combat, the polity names directly fighting in this event. Must include belligerents from both sides of warId.",
+        "For actual combat: the polities fighting in it, from both sides of warId.",
       maxItems: 8,
       items: nonEmptyTextSchema("One canonical belligerent polity name."),
     },
@@ -3859,8 +3853,8 @@ export const foldJumpTool = (tool, { board = true, agentReports = false, history
           [AGENT_REPORTS_FIELD]: {
             type: "array",
             description:
-              "One report per agent listed under [Agents' Reports], written after the events and consistent with them. "
-              + "None for an agent that is not listed; empty when the prompt has no [Agents' Reports].",
+              "One report per agent under [Agents' Reports], after the events and consistent with them; "
+              + "none for any other, and empty without [Agents' Reports].",
             items: {
               type: "object",
               properties: {
@@ -3876,8 +3870,8 @@ export const foldJumpTool = (tool, { board = true, agentReports = false, history
           [HISTORY_FIELD]: {
             type: "object",
             description:
-              "The answer to the separate job fenced off at the end of the prompt (THE HISTORY DOCUMENT), written last. "
-              + "It covers only what that job lists, never the events of this answer. Left out when the prompt has no such job.",
+              "The answer to the job fenced off at the end of the prompt (THE HISTORY DOCUMENT), written last: only what that job lists. "
+              + "Left out when there is no such job.",
             properties: EVENT_CONSOLIDATOR_SCHEMA.properties,
             required: ["summary", "document"],
             additionalProperties: false,
