@@ -303,7 +303,8 @@ five saves, gemini-3.5-flash-lite). What it was asked to look at, change by chan
   their ids), New Dawn 23 smaller, Battle of Europe 15 larger, Poland
   unchanged.
 - **Related past events** (`92e3f141`) adds at most about 2,000 characters to a
-  skip, and only with the opt-in switch on and the model loaded; the runs above
+  skip, once the model has loaded (opt-in then, built in and always on since
+  2026-11-07); the runs above
   are without it.
 - **Two findings of [the quality A/B](prompt-compression-ab.md) are open**, and
   the code is unchanged for them: the spotlight sentence acts as a quota and

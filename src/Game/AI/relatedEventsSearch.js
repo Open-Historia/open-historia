@@ -1,24 +1,23 @@
 /*! Open Historia — related past events: the index and the search © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-// The runtime side of Find related past events (relatedEvents.js says what it
-// is for). Three jobs:
+// The runtime side of related past events (relatedEvents.js says what it is
+// for). Always on: the model ships with the game (runtime/embeddingModels.js).
+// Three jobs:
 //
 // - INDEX. Every event of the open game gets a vector, kept on this device
 //   (runtime/eventVectorStore.js). Filled while the game is idle: when a game
-//   is opened (so a game started before the setting gets all of its events
-//   once), after each turn, and when the setting is turned on. Like every
-//   piece of work outside a turn it waits for the simulation to be idle
-//   (simulationStatus.js) before each batch, and stops when the player
-//   switches games; the model runs in a worker, so the page never waits for it.
+//   is opened (so a game played before this gets all of its events once) and
+//   after each turn. Like every piece of work outside a turn it waits for the
+//   simulation to be idle (simulationStatus.js) before each batch, and stops
+//   when the player switches games; the model runs in a worker, so the page
+//   never waits for it.
 // - SEARCH for a skip (findRelatedForSkip): the turn's queries embedded and
 //   ranked against the vectors. Given a short time and no more: a model that
 //   is not loaded yet, or a device that is slow, leaves the skip as it was.
 // - LOOKUP (similarEventsSearch): the similar_events function
-//   (lookupTools.js), offered while the setting is on and the model has loaded
-//   this session.
+//   (lookupTools.js), offered once the model has loaded this session.
 
-import { MAP_SETTING_KEYS, getMapSetting } from "../../runtime/mapSettings.js";
 import { logDebugEvent } from "../../runtime/debugLog.js";
-import { contentHash } from "../../runtime/embeddingModels.js";
+import { OLD_EMBEDDING_MODEL_CACHE, contentHash } from "../../runtime/embeddingModels.js";
 import { eventVectorStore } from "../../runtime/eventVectorStore.js";
 import { loadRegionCatalog } from "../../runtime/assets.js";
 import { getLibraryState } from "../../runtime/library.js";
@@ -71,13 +70,11 @@ export const setRelatedEventsDepsForTests = (overrides) => {
   indexing = null;
 };
 
-export const relatedEventsOn = () => getMapSetting(MAP_SETTING_KEYS.relatedEvents);
-
 // The model answered once this session. The lookup is offered from then on
 // (not only while the worker happens to be warm), so the skip's list of
 // functions stays the same from one skip to the next.
 let modelLoaded = false;
-export const relatedEventsReady = () => relatedEventsOn() && modelLoaded;
+export const relatedEventsReady = () => modelLoaded;
 
 const embed = async (texts) => {
   const vectors = await (await deps.model()).embedTexts(texts);
@@ -100,10 +97,10 @@ const within = async (promise, ms) => {
 // Search.
 
 // The ranked candidates for a skip ([{ id, score }], best first), or null:
-// the setting off, nothing indexed yet, the model not ready within the time.
+// nothing indexed yet, the model not ready within the time.
 // Never throws.
 export const findRelatedForSkip = async (bundle, { campaignId, timeoutMs = SKIP_SEARCH_TIMEOUT_MS } = {}) => {
-  if (!relatedEventsOn() || !campaignId) return null;
+  if (!campaignId) return null;
   const started = Date.now();
   const search = (async () => {
     const focusPowers = await Promise.resolve().then(() => deps.focusPowers(bundle)).catch(() => []);
@@ -163,7 +160,6 @@ export const indexOpenGame = () => {
   indexing = (async () => {
     do {
       again = false;
-      if (!relatedEventsOn()) return;
       await waitForIdle();
       const campaignId = await deps.campaign();
       const store = deps.store();
@@ -184,9 +180,9 @@ export const indexOpenGame = () => {
       let done = 0;
       for (let at = 0; at < todo.length; at += INDEX_BATCH) {
         await waitForIdle();
-        // The player left this game, or turned the setting off: stop; the
-        // next opening or turn picks up where this left off.
-        if (!relatedEventsOn() || (await deps.campaign()) !== campaignId) break;
+        // The player left this game: stop; the next opening or turn picks up
+        // where this left off.
+        if ((await deps.campaign()) !== campaignId) break;
         const batch = todo.slice(at, at + INDEX_BATCH);
         const vectors = await embed(batch.map((entry) => entry.text));
         await store.write(campaignId, batch.map((entry, index) => ({ eventId: entry.id, hash: entry.hash, vector: vectors[index] })));
@@ -207,25 +203,45 @@ export const indexOpenGame = () => {
 let scheduled = null;
 // After a moment, so a turn's own follow-up writes land first.
 export const scheduleRelatedIndexing = ({ delayMs = INDEX_DELAY_MS } = {}) => {
-  if (!relatedEventsOn() || scheduled) return;
+  if (scheduled) return;
   scheduled = setTimeout(() => {
     scheduled = null;
     void indexOpenGame();
   }, delayMs);
 };
 
-// Wired once, by gameplay.js: the turns, the game being opened or switched,
-// and the setting turned on.
+// Before 2026-11-07 the feature was a setting, off by default, and turning it
+// on downloaded the model from Hugging Face into a store of its own. The model
+// ships with the game now: the old setting's key goes, and with it the copy
+// downloaded then (Cache Storage, or IndexedDB in the Android app; assets.js
+// sweeps the former anyway). Only where the key is found, so once.
+export const OLD_SETTING_KEY = "ai_related_events";
+export const forgetOldDownload = async ({
+  storage = globalThis.localStorage,
+  deleteCache = async (name) => (await import("../../runtime/modelStore.js")).deleteModelCache(name),
+} = {}) => {
+  try {
+    const stored = storage?.getItem?.(OLD_SETTING_KEY);
+    if (stored === null || stored === undefined) return false;
+    storage.removeItem(OLD_SETTING_KEY);
+    await deleteCache(OLD_EMBEDDING_MODEL_CACHE);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+// Wired once, by gameplay.js: the turns, and the game being opened or switched.
 let installed = false;
 export const installRelatedEventsIndexer = () => {
   if (installed || typeof window === "undefined") return;
   installed = true;
+  void forgetOldDownload();
   const kick = () => {
     if (hasEnteredGame()) scheduleRelatedIndexing();
   };
   window.addEventListener("oh:turn-complete", kick);
   window.addEventListener("oh:active-game-changed", kick);
-  window.addEventListener("mapSettings:updated", kick);
   subscribeGameEntry(kick);
   kick();
 };

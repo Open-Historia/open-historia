@@ -1,10 +1,10 @@
 /*! Open Historia — the on-device model that finds related past events © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-// Settings → AI → Find related past events on this device (off by default):
-// each event of a game is turned into a vector by a small sentence-embedding
-// model on this device, and a time skip is shown the past events nearest to
-// what is happening now (Game/AI/relatedEvents.js). The model is downloaded
-// once, after the player has seen its size and said yes; the events never
-// leave the device for it.
+// Related past events, always on: each event of a game is turned into a vector
+// by a small sentence-embedding model on this device, and a time skip is shown
+// the past events nearest to what is happening now (Game/AI/relatedEvents.js).
+// The model ships with the game (public/models/all-MiniLM-L6-v2): it is read
+// from the game's own files, never downloaded from a model host, and the
+// events never leave the device for it.
 //
 // The model is all-MiniLM-L6-v2 (Microsoft's MiniLM, fine-tuned for sentence
 // similarity by the sentence-transformers project; Apache-2.0), in the ONNX
@@ -19,10 +19,15 @@
 // and the tests call it.
 
 export const EMBEDDING_MODEL = Object.freeze({
+  // Where the files came from: the model host's repository at this revision
+  // (public/models/all-MiniLM-L6-v2/README.md). It names the model in
+  // EMBEDDING_MODEL_ID; nothing is fetched from there.
   repo: "Xenova/all-MiniLM-L6-v2",
   revision: "751bff37182d3f1213fa05d7196b954e230abad9",
-  // The files Transformers.js reads, with their sizes on the model host at the
-  // pinned revision; `bytes` is their sum.
+  // The folder under public/models/ the game carries the files in.
+  dir: "all-MiniLM-L6-v2",
+  // The files Transformers.js reads, with their sizes at the pinned revision;
+  // `bytes` is their sum. A test holds the copies in public/ to them.
   files: Object.freeze({
     "config.json": 650,
     "tokenizer.json": 711661,
@@ -37,14 +42,23 @@ export const EMBEDDING_MODEL = Object.freeze({
   maxTokens: 128,
 });
 
-export const EMBEDDING_MODEL_HOST = "https://huggingface.co";
-// The store the files are kept in (modelStore.js), named in assets.js too, whose
-// sweep of old caches leaves it.
-export const EMBEDDING_MODEL_CACHE = "oh-embed-model-v1";
+// The folder the game serves its models from: public/models/ in the source,
+// models/ beside index.html in every build (the desktop's local server, the
+// Android app's www/, the website's /play/). `base` is the build's base path
+// (import.meta.env.BASE_URL), `origin` the page's or the worker's origin.
+export const embeddingModelRoot = (base = "/", origin = "") => {
+  const path = `${String(base || "/").replace(/\/?$/, "/")}models/`;
+  return origin ? new URL(path, origin).href : path;
+};
 
-// Where Transformers.js fetches a file from, which is also its key in the cache.
-export const embeddingFileUrl = (file, model = EMBEDDING_MODEL) =>
-  `${EMBEDDING_MODEL_HOST}/${model.repo}/resolve/${model.revision}/${file}`;
+// One of the model's files, as the game serves it.
+export const embeddingFileUrl = (file, { base = "/", origin = "" } = {}, model = EMBEDDING_MODEL) =>
+  `${embeddingModelRoot(base, origin)}${model.dir}/${file}`;
+
+// The store an older version kept the model in, downloaded from Hugging Face
+// once the player had said yes (modelStore.js: Cache Storage, or IndexedDB in
+// the Android app). Deleted once (relatedEventsSearch.js).
+export const OLD_EMBEDDING_MODEL_CACHE = "oh-embed-model-v1";
 
 // Which model made a vector: a vector of another is not compared with it.
 export const EMBEDDING_MODEL_ID = `${EMBEDDING_MODEL.repo}@${EMBEDDING_MODEL.revision.slice(0, 12)}`;
@@ -134,6 +148,3 @@ export const embedWith = async ({ tokenizer, model }, texts, { maxTokens = EMBED
   }
   return out;
 };
-
-// "24 MB", as the translation models' sizes are given (translationModels.js).
-export const formatEmbeddingSize = (bytes = EMBEDDING_MODEL.bytes) => `${Math.max(1, Math.round((Number(bytes) || 0) / 1e6))} MB`;

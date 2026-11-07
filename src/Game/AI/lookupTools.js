@@ -1593,9 +1593,9 @@ export const isLookupToolName = (name) => LOOKUP_TOOL_NAMES.includes(clean(name)
 
 // ---------------------------------------------------------------------------
 // similar_events: past events found by meaning, on the player's device
-// (relatedEventsSearch.js). Not among LOOKUP_TOOLS: it is offered only while
-// Settings → AI → Find related past events on this device is on and its model
-// has loaded, so a task adds it with withSimilarEvents. Its answer is computed
+// (relatedEventsSearch.js). Not among LOOKUP_TOOLS: it is offered only once
+// the model that ships with the game has loaded this session, so a task adds it
+// with withSimilarEvents. Its answer is computed
 // outside the context the other lookups read (a vector search, asynchronous).
 export const SIMILAR_EVENTS_FUNCTION = "similar_events";
 export const SIMILAR_EVENTS_TOOL = Object.freeze({
@@ -1611,7 +1611,7 @@ export const SIMILAR_EVENTS_TOOL = Object.freeze({
 });
 
 // `lookups` with similar_events added, answered by `search(args)`; unchanged
-// when there is no search (the setting off, or the model not loaded).
+// when there is no search (the model not loaded).
 export const withSimilarEvents = (lookups, search) => {
   if (!lookups || typeof search !== "function") return lookups;
   const execute = lookups.execute;

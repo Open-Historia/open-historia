@@ -1830,8 +1830,8 @@ const activeLookupDirective = () => (unlimitedRequests()
 const buildTaskLookups = (bundle, { maxRounds, audience = SIMULATION_AUDIENCE, mapSource = null } = {}) => {
   if (!lookupFunctionsEnabled()) return null;
   const context = lazyLookupContext(bundle, { audience, mapSource });
-  // similar_events beside them while Find related past events is on and its
-  // model has loaded (relatedEventsSearch.js); not for a Workshop scenario.
+  // similar_events beside them once the related-events model has loaded
+  // (relatedEventsSearch.js); not for a Workshop scenario.
   return withSimilarEvents({
     tools: lookupToolsFor({ groups: isActiveFeatureEnabled("groups") }),
     ...(Number.isInteger(maxRounds) ? { maxRounds } : {}),
@@ -19187,8 +19187,8 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
   if (dateStep >= 1 && parseIsoDate(originDate) && targetDate === originDate) {
     throw new Error("The requested jump exceeds the supported date range.");
   }
-  // The past events nearest to this turn, found on this device while the
-  // setting is on (relatedEventsSearch.js): a moment at most, never a request.
+  // The past events nearest to this turn, found on this device
+  // (relatedEventsSearch.js): a moment at most, never a request.
   const relatedEvents = await findRelatedForSkip(bundle, { campaignId: activeCampaignId() });
   const variables = await buildTemplateVariables(bundle, {
     lookups: true,

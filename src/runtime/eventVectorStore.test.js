@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { EVENT_VECTOR_DB, deleteEventVectors, openEventVectorStore, vectorKey } from "./eventVectorStore.js";
+import { EVENT_VECTOR_DB, openEventVectorStore, vectorKey } from "./eventVectorStore.js";
 
 // Just enough IndexedDB for the store: object stores by key, and an index on
 // one field of the value (getAll and getAllKeys by that field).
@@ -88,7 +88,7 @@ test("vectors are kept per game, keyed gameId:eventId, with the hash of what was
   assert.deepEqual([...(await store.readGame("game-a")).keys()], ["e1"]);
 });
 
-test("deleting a game removes only its vectors; turning the feature off removes them all", async () => {
+test("deleting a game removes only its vectors", async () => {
   const idb = fakeIndexedDb();
   const store = openEventVectorStore(idb);
   await store.write("game-a", [{ eventId: "e1", hash: "h", vector: vector(1) }]);
@@ -97,8 +97,6 @@ test("deleting a game removes only its vectors; turning the feature off removes 
   assert.equal((await store.readGame("game-a")).size, 0);
   assert.equal((await store.readGame("game-b")).size, 1);
   await store.close();
-  await deleteEventVectors(idb);
-  assert.equal(idb.databases.has(EVENT_VECTOR_DB), false);
 });
 
 test("no IndexedDB, no store: the feature finds nothing instead of failing", () => {

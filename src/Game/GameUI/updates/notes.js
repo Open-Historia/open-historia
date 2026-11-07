@@ -70,9 +70,9 @@ const NEW_UPDATES = [
     ],
   },
   {
-    // On-device similar-event search (the token-cutting plan's item 13, 2026-11-07): Settings → AI → Find related
-    // past events on this device, off by default (AI/relatedEvents.js, relatedEventsSearch.js,
-    // runtime/embeddingWorker.js; all-MiniLM-L6-v2, 24 MB, downloaded after a yes).
+    // On-device similar-event search (the token-cutting plan's item 13, 2026-11-07): first an opt-in setting that
+    // downloaded the model, then the same day built in and always on: all-MiniLM-L6-v2 (24 MB) ships in
+    // public/models/ (AI/relatedEvents.js, relatedEventsSearch.js, runtime/embeddingWorker.js).
     id: "2026-11-related-past-events",
     kind: "minor",
     date: "2026-11-07",
@@ -81,7 +81,7 @@ const NEW_UPDATES = [
       {
         title: "Related past events",
         items: [
-          "A new setting in Settings → AI, Find related past events on this device, off unless you turn it on: a small model on your device (a 24 MB download, after you say yes) finds the old events closest to each time skip’s orders, wars and storylines, and the skip is shown up to six of them, so threads from long ago are picked up again.",
+          "Related past events is built into the game and always on: a small model that ships with the game (24 MB, nothing to download or turn on) finds the old events closest to each time skip’s orders, wars and storylines, and the skip is shown up to six of them, so threads from long ago are picked up again.",
           "It makes no AI requests, and your events never leave your device for it. With AI lookup functions on, the AI can also search your past events itself.",
         ],
       },
