@@ -7156,7 +7156,7 @@
  "Long Island City",
  "Long Xuyên",
  "Long campaigns keep their restore points: the oldest are let go once the archive grows too large to save, so undo keeps working.",
- "Long campaigns send even less: each skip gives the AI in full what the turn is about (your country, your neighbours, every war, everything your orders name, and a few distant countries in turn, so they keep making news) and the rest of the world in a line. Your campaign's treaties, deaths, changes of government and borders are now kept for good, however long it runs.",
+ "Long campaigns send even less: each skip gives the AI in full what the turn is about (your country, your neighbours, the countries most in the news or in dealings with you, every war, everything your orders name) and the rest of the world in a line. Your campaign's treaties, deaths, changes of government and borders are now kept for good, however long it runs.",
  "Long time skips are written in parts, and a part that fails is held for a retry instead of lost.",
  "Long time skips on Gemini",
  "Longba",
